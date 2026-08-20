@@ -1,6 +1,6 @@
 /**
  * Every text role must meet WCAG AA against every surface it can land on, in
- * BOTH modes.
+ * every theme — both palettes × both modes.
  *
  * This is the defect the design audit measured and the owner saw: light mode
  * shipped `--c-text-3` at 2.90:1 behind 10–11px meta text, and the accent and
@@ -10,7 +10,10 @@
  *
  * Tokens are read out of `index.css` rather than restated here, so the test
  * measures what actually ships and a palette edit is checked by the same run
- * that makes it.
+ * that makes it. The four themes are assembled by REPLAYING the cascade: every
+ * palette block in the stylesheet carries specificity (0,1,0) — `:root` is a
+ * pseudo-class, the others are attribute selectors — so source order alone
+ * decides, and a selector list in source order is a faithful model of it.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -53,28 +56,47 @@ function parse(css: string): Rgb {
   throw new Error(`palette token is not a hex or rgb() literal: ${css}`);
 }
 
-/** The two `:root` / `[data-mode="light"]` blocks, as name → value. Values
- *  that indirect through another token are resolved one level, which is all
- *  the palette uses. */
-function palette(mode: 'dark' | 'light') {
-  const text = readFileSync(INDEX_CSS, 'utf8');
-  // `:root` holds the dark set; the light block overrides a subset of it, so
-  // light is dark-with-overrides exactly as the cascade computes it.
-  const block = (selector: string) => {
-    const start = text.indexOf(selector);
-    if (start === -1) throw new Error(`no ${selector} block in index.css`);
-    const open = text.indexOf('{', start);
-    let depth = 0, i = open;
-    for (; i < text.length; i++) {
-      if (text[i] === '{') depth++;
-      else if (text[i] === '}' && --depth === 0) break;
-    }
-    return Object.fromEntries(
-      [...text.slice(open, i).matchAll(/(--c-[a-z0-9-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1]!, m[2]!.trim()]),
-    );
-  };
-  const merged = block('\n:root {');
-  if (mode === 'light') Object.assign(merged, block('[data-mode="light"] {'));
+/** Each theme, and the palette blocks that apply to it in source order. `:root`
+ *  holds umber dark; each later block overrides a subset (umber light) or the
+ *  whole set (silk). */
+const CASCADE = [
+  { theme: 'umber dark', blocks: [':root'] },
+  { theme: 'umber light', blocks: [':root', '[data-mode="light"]'] },
+  { theme: 'silk dark', blocks: [':root', '[data-palette="silk"]'] },
+  // `[data-mode="light"]` still MATCHES silk light and sits between the two
+  // silk blocks in source order, so it is part of that cascade even though silk
+  // is expected to overwrite every token it sets. Modelling it is what lets the
+  // completeness test below prove that expectation rather than assume it.
+  {
+    theme: 'silk light',
+    blocks: [':root', '[data-mode="light"]', '[data-palette="silk"]', '[data-palette="silk"][data-mode="light"]'],
+  },
+] as const;
+
+/** One palette block, as name → value, `--c-*` only. Anchored at the start of
+ *  a line so `[data-palette="silk"]` cannot match the compound selector or a
+ *  mention of itself in a comment. */
+function block(css: string, selector: string) {
+  const at = css.search(new RegExp(`^${selector.replace(/[[\]"().*+?^${}|\\]/g, '\\$&')}\\s*\\{`, 'm'));
+  if (at === -1) throw new Error(`no ${selector} block in index.css`);
+  const open = css.indexOf('{', at);
+  let depth = 0, i = open;
+  for (; i < css.length; i++) {
+    if (css[i] === '{') depth++;
+    else if (css[i] === '}' && --depth === 0) break;
+  }
+  return Object.fromEntries(
+    [...css.slice(open, i).matchAll(/(--c-[a-z0-9-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1]!, m[2]!.trim()]),
+  );
+}
+
+/** The theme as the browser would compute it: every matching block applied in
+ *  source order, then one level of `var(--c-…)` indirection resolved, which is
+ *  all the palette uses. */
+function palette(blocks: readonly string[]) {
+  const css = readFileSync(INDEX_CSS, 'utf8');
+  const merged: Record<string, string> = {};
+  for (const selector of blocks) Object.assign(merged, block(css, selector));
   for (const [k, v] of Object.entries(merged)) {
     const ref = v.match(/^var\((--c-[a-z0-9-]+)\)$/);
     if (ref) merged[k] = merged[ref[1]!]!;
@@ -105,9 +127,27 @@ function contrast(fgCss: string, bgCss: string): number {
 const AA = 4.5;
 
 describe('palette contrast', () => {
-  for (const mode of ['dark', 'light'] as const) {
-    describe(mode, () => {
-      const p = palette(mode);
+  /** A silk block that forgot a token does not fail to render: it inherits
+   *  whichever earlier block declared it last, so silk light would quietly
+   *  serve a dark-face value or an umber one. That is the cascade hazard the
+   *  four-way matrix creates, and it is checked structurally rather than left
+   *  to whether the omitted token happens to fail a contrast pair. */
+  test('each silk block declares the whole palette, not a diff over another one', () => {
+    const css = readFileSync(INDEX_CSS, 'utf8');
+    const roles = Object.keys(block(css, ':root')).sort();
+    for (const selector of ['[data-palette="silk"]', '[data-palette="silk"][data-mode="light"]']) {
+      const declared = Object.keys(block(css, selector)).sort();
+      expect({ selector, missing: roles.filter((t) => !declared.includes(t)) })
+        .toEqual({ selector, missing: [] });
+      // The other direction: a typo'd role name is a token nothing reads.
+      expect({ selector, unknown: declared.filter((t) => !roles.includes(t)) })
+        .toEqual({ selector, unknown: [] });
+    }
+  });
+
+  for (const { theme, blocks } of CASCADE) {
+    describe(theme, () => {
+      const p = palette(blocks);
 
       test('every token the roles need is declared', () => {
         // Guards the guard: a renamed token would otherwise make the loops

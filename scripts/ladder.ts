@@ -824,31 +824,34 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts',
     tier: 'ci',
-    seconds: 23,
+    seconds: 30,
     catches: 'the two UI gates\' own decision logic, including the one that would have '
       + 'caught `--radius` being undefined at `:root` while 191 `rounded-*` sites '
       + 'computed 0px. Both self-tests ran in NO tier until this line: the gates were '
       + 'built, deliberately kept off the deploy path for their Chrome cost, and their '
       + 'logic was then guarded by nothing anywhere. Now also the THEME axis, which had '
-      + 'no coverage at all: `gallery.html:8-15` resolves the initial `data-mode` from '
-      + '`prefers-color-scheme` and the harness never pinned that media query, so every '
-      + 'token assertion here was made against whichever palette the Chromium build '
-      + 'happened to prefer — measured dark on this one, and silently the other on a '
-      + 'build or CI image that answered differently. The four cascade scenarios now pin '
-      + 'dark AND assert they got it, since a pin nobody reads back is not a pin, and one '
-      + 'pass drives the real "Switch to light mode" control and audits the light palette '
-      + '(`index.css:300-388`) — a structurally distinct palette carrying its own record '
-      + 'of "three passes of complaint, all the same one", never once audited before, '
-      + 'where an unmapped role token renders as Kumo\'s uncustomised brand colour instead '
-      + 'of throwing.',
+      + 'no coverage at all: `gallery.html:7-22` resolves the initial `data-mode` and '
+      + '`data-palette` from `prefers-color-scheme` and localStorage, and the harness '
+      + 'never pinned either, so every token assertion here was made against whichever '
+      + 'theme the Chromium build happened to prefer — measured dark on this one, and '
+      + 'silently the other on a build or CI image that answered differently. The four '
+      + 'cascade scenarios now pin the default theme AND assert they got it, since a pin '
+      + 'nobody reads back is not a pin, and three further passes drive the real "Switch '
+      + 'to light mode" and "Switch to the silk palette" controls to audit the other '
+      + 'three themes: umber light (`index.css:300-388`), silk dark and silk light '
+      + '(`index.css:389-589`). Each is a structurally distinct palette rather than a '
+      + 'filter over another, umber light carries its own record of "three passes of '
+      + 'complaint, all the same one", and in any of them an unmapped role token renders '
+      + 'as Kumo\'s uncustomised brand colour instead of throwing.',
     blind: 'the gallery render itself. `gate:computed-style` boots vite and Chrome over '
-      + '19 frames at ~68s and stays a standalone run — a gate that fails because Chrome '
-      + 'is missing fails for a reason unrelated to the change under test. Also MOST OF '
-      + 'THE GALLERY: only `shell`, `streaming` and `environment` carry any assertion '
-      + 'here, while gallery.tsx dispatches ~29 frames, so the rest are proven to mount '
-      + 'and nothing more. The light palette is audited on `shell` alone. And the signed-in '
-      + 'SPA is unreachable in this environment — no OAuth provider is configured — so '
-      + 'everything past sign-in is unmeasured rather than green.',
+      + '21 frames × 4 themes and stays a standalone run — a gate that fails because '
+      + 'Chrome is missing fails for a reason unrelated to the change under test. Also '
+      + 'MOST OF THE GALLERY: only `shell`, `streaming` and `environment` carry any '
+      + 'assertion here, while gallery.tsx dispatches ~29 frames, so the rest are proven '
+      + 'to mount and nothing more. The three non-default themes are audited on `shell` '
+      + 'alone. And the signed-in SPA is unreachable in this environment — no OAuth '
+      + 'provider is configured — so everything past sign-in is unmeasured rather than '
+      + 'green.',
   },
   {
     run: 'bun run layergate',
