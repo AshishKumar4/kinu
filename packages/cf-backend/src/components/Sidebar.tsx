@@ -16,14 +16,14 @@
  */
 import { useEffect, useState, useCallback, useRef, type FormEvent } from "react";
 import { Link, NavLink, useMatch, useNavigate } from "react-router-dom";
-import { BrainIcon, PlusIcon, GearIcon, GithubLogoIcon, TrashIcon, SignOutIcon, CaretRightIcon, PencilSimpleIcon, CheckIcon, XIcon, SunIcon, MoonIcon } from "@phosphor-icons/react";
+import { BrainIcon, PlusIcon, GearIcon, GithubLogoIcon, TrashIcon, SignOutIcon, CaretRightIcon, PencilSimpleIcon, CheckIcon, XIcon, SunIcon, MoonIcon, SwatchesIcon } from "@phosphor-icons/react";
 import { Button } from "@cloudflare/kumo";
 import { btnSmCls } from "@/components/ui/form";
 import { listWorkspaces, removeWorkspace, getProfile, type WorkspaceEntry, type UserProfile } from "../lib/user-api";
 import { useWorkspaceRpc } from "../hooks/use-proteus";
-import { useTheme, toggleTheme } from "../hooks/use-theme";
+import { useTheme, toggleMode, togglePalette } from "../hooks/use-theme";
 import { CreateWorkspaceModal } from "./CreateWorkspaceModal";
-import { ModeToggle } from "./mode-toggle";
+import { ModeToggle, PaletteToggle } from "./theme-toggle";
 import { Modal } from "./ui/Modal";
 import * as v from "valibot";
 import { renderCauseChain, renderThrownChain } from "@proteus/core/obs";
@@ -124,7 +124,7 @@ export default function Sidebar() {
     ? sectionMatch.params.agentId
     : undefined;
   const navigate = useNavigate();
-  const mode = useTheme();
+  const { mode, palette } = useTheme();
   const [workspaces, setWorkspaces] = useState<WorkspaceEntry[]>([]);
   const [listError, setListError] = useState(false);
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -299,7 +299,7 @@ export default function Sidebar() {
         </ul>
       </div>
 
-      {/* User dropdown — pinned to bottom, with a visible theme toggle */}
+      {/* User dropdown — pinned to bottom, with both theme axes visible */}
       <div className="px-2 py-2 border-t p-border relative" ref={userMenuRef}>
         <div className="flex items-center gap-1">
           <button
@@ -316,7 +316,16 @@ export default function Sidebar() {
           </button>
           <button
             type="button"
-            onClick={toggleTheme}
+            onClick={togglePalette}
+            className="shrink-0 flex size-9 items-center justify-center rounded-lg p-text-3 p-card-hover hover:p-text transition-colors"
+            title={palette === 'silk' ? 'Switch to the umber palette' : 'Switch to the silk palette'}
+            aria-label={palette === 'silk' ? 'Switch to the umber palette' : 'Switch to the silk palette'}
+          >
+            <SwatchesIcon size={15} />
+          </button>
+          <button
+            type="button"
+            onClick={toggleMode}
             className="shrink-0 flex size-9 items-center justify-center rounded-lg p-text-3 p-card-hover hover:p-text transition-colors"
             title={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
             aria-label={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
@@ -332,6 +341,7 @@ export default function Sidebar() {
               <span>Account settings</span>
             </Link>
             <ModeToggle />
+            <PaletteToggle />
             <a
               href="/logout"
               className="flex items-center gap-2 px-2 py-1.5 text-sm rounded-sm p-card-hover"
