@@ -187,20 +187,23 @@ export function printAgentList(agents: Array<{
   console.log(`${BRAND} ${DIM(`— ${agents.length} workspace${agents.length === 1 ? '' : 's'}`)}`);
   console.log('');
 
-  // Adaptive column widths
+  // Adaptive column widths. NAME is an IDENTIFIER: it is what the user pastes
+  // into `proteus debug <name>`, so it is never clipped — a silently truncated
+  // name is a different valid-looking name, and one such clip sent a session
+  // chasing a phantom "not in your registry" defect. PURPOSE is prose and
+  // absorbs the squeeze instead.
   const maxName = Math.max(4, ...agents.map(a => a.name.length));
-  const nameW = Math.min(maxName + 2, 22);
+  const nameW = maxName + 2;
   const modeW = 8;
-  const purposeW = Math.max(20, termWidth() - nameW - modeW - 24);
+  const purposeW = Math.max(12, termWidth() - nameW - modeW - 24);
 
   const hdr = `  ${MUTED('NAME'.padEnd(nameW))}${MUTED('MODE'.padEnd(modeW))}${MUTED('PURPOSE'.padEnd(purposeW))} ${MUTED('VER')}  ${MUTED('SIZE')}`;
   console.log(hdr);
   console.log(`  ${DIM('─'.repeat(termWidth() - 4))}`);
 
   for (const a of agents) {
-    // Clip as well as pad: a name longer than the column would otherwise run
-    // into MODE and shear the whole table.
-    const name = ACCENT(a.name.slice(0, nameW - 1).padEnd(nameW));
+    // PURPOSE clips (prose); NAME only pads (identifier).
+    const name = ACCENT(a.name.padEnd(nameW));
     const mode = DIM(a.mode.padEnd(modeW));
     const purpose = DIM(a.purpose.slice(0, purposeW - 2).padEnd(purposeW));
     const ver = `v${a.scaffoldVersion}`.padEnd(4);

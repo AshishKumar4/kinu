@@ -34,6 +34,7 @@
 
 import { appendFileSync } from 'node:fs';
 import { writeSecretFile } from '@proteus/cli-backend';
+import { renderThrownChain } from '@proteus/core/obs';
 import {
   addUsage, decodeJsonValue, JsonObjectSchema, JsonValueSchema, pageSchema, projectJsonValue,
   usageReported, UsageSchema,
@@ -305,7 +306,11 @@ function cloudDebugSource(cloudName: string, auth: { origin: string; token: stri
     identity: () => rpc('getWorkspaceSnapshot', WorkspaceSnapshotSchema).then((snapshot) => snapshot.status),
     messages: (limit) => rpc('getChatHistoryPage', v.object({ items: JsonRowsSchema }), [{ limit }])
       .then((page) => page.items),
-    runs: (limit) => rpc('listRuns', v.array(DebugRunSchema), [limit]),
+    // listRuns moved to Page<RunListEntry> + PageRequest; the old positional
+    // [limit] parsed as a request object whose fields are all absent, and the
+    // array schema then refused the page envelope — every bundle read "Runs (0)"
+    // until section failures became visible.
+    runs: (limit) => rpc('listRuns', pageSchema(DebugRunSchema), [{ limit }]).then((page) => [...page.items]),
     runEvents: (runId, since, limit) => rpc('getRunEvents', v.array(DebugRunEventSchema), [runId, { since, limit }]),
     headRuns: (limit) => rpc('getHeadRuns', v.array(DebugHeadRunSchema), [limit]),
     mctsSearchRuns: (limit) => rpc('getMctsSearchRuns', v.array(DebugMctsSearchRunSchema), [limit]),
@@ -500,6 +505,7 @@ interface DebugSummary {
   gepaRunCount: number;
   factCount: number;
   errors: Array<{ runId: string; message: string }>;
+  sectionFailures: Array<{ section: string; message: string }>;
 }
 
 /** Fold one run's raw events into the stats a debugging read actually wants:
@@ -633,27 +639,43 @@ export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<
     identity: {}, messageCount: 0, runs: [], headRuns: [], mctsSearches: [],
     backgroundJobs: [], changelogUnseen: 0, scaffoldVersionCount: 0, gepaRunCount: 0,
     recordObjectives: [],
-    factCount: 0, errors: [],
+    factCount: 0, errors: [], sectionFailures: [],
+  };
+
+  /** A section that cannot be read is a FINDING, never an empty section. This
+   *  tool exists to diagnose, and a bare `catch { return fallback }` here made
+   *  a failing RPC indistinguishable from an empty workspace: two cloud
+   *  workspaces read "messages 0" while every call was throwing. The bundle
+   *  carries the failure row and the summary prints the chain. */
+  const safe = async <T>(section: string, p: Promise<T>, fallback: T): Promise<T> => {
+    try {
+      return await p;
+    } catch (caught) {
+      const message = renderThrownChain({ cause: caught });
+      summary.sectionFailures.push({ section, message });
+      writer.write({ t: 'section_error', section, error: message });
+      return fallback;
+    }
   };
 
   try {
-    const identity = await safe(source.identity(), {});
+    const identity = await safe('identity', source.identity(), {});
     summary.identity = identity;
     writer.write({ t: 'identity', workspace: target.name, mode: target.mode, ...identity });
 
-    const messages = await safe(source.messages(sectionLimit), []);
+    const messages = await safe('messages', source.messages(sectionLimit), []);
     summary.messageCount = messages.length;
     for (const m of messages) writer.write({ t: 'message', ...m });
 
     // Runs + their full event ledger — paginated per run via `since`, so a
     // run with thousands of events never sits fully in memory at once.
-    const runs = await safe(source.runs(runLimit), []);
+    const runs = await safe('runs', source.runs(runLimit), []);
     for (const run of runs) {
       writer.write({ t: 'run', ...run });
       const events: DebugRunEvent[] = [];
       let since = 0;
       for (;;) {
-        const page = await safe(source.runEvents(run.runId, since, DEFAULT_EVENT_PAGE), []);
+        const page = await safe('run_events', source.runEvents(run.runId, since, DEFAULT_EVENT_PAGE), []);
         if (page.length === 0) break;
         for (const e of page) writer.write(runEventRecord(e));
         events.push(...page);
@@ -665,13 +687,13 @@ export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<
       for (const message of stats.errors) summary.errors.push({ runId: run.runId, message });
     }
 
-    const headRuns = await safe(source.headRuns(runLimit), []);
+    const headRuns = await safe('head_runs', source.headRuns(runLimit), []);
     summary.headRuns = headRuns;
     for (const run of headRuns) writer.write({ t: 'head_run', ...run });
 
     const [mctsSearches, mctsNodes] = await Promise.all([
-      safe(source.mctsSearchRuns(runLimit), []),
-      safe(source.mctsNodes(), []),
+      safe('mcts_search_runs', source.mctsSearchRuns(runLimit), []),
+      safe('mcts_nodes', source.mctsNodes(), []),
     ]);
     for (const s of mctsSearches) writer.write({ t: 'mcts_search_run', ...s });
     for (const n of mctsNodes) writer.write({ t: 'mcts_node', ...n });
@@ -682,13 +704,13 @@ export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<
     // a bundle row carrying a bare real is a number a reader has to guess the
     // meaning of, which is the whole reason the store now records what it
     // measured. Occupants are PAGED — a cell's population has no bound.
-    summary.recordObjectives = await safe(source.recordObjectives(sectionLimit), []);
+    summary.recordObjectives = await safe('record_objectives', source.recordObjectives(sectionLimit), []);
     for (const objective of summary.recordObjectives) {
       writer.write(recordObjectiveRecord(objective));
       const objectiveHandle = {
         objectiveId: objective.objectiveId, floorDigest: objective.floorDigest,
       };
-      const cells = await safe(source.recordCells(objectiveHandle, sectionLimit), []);
+      const cells = await safe('record_cells', source.recordCells(objectiveHandle, sectionLimit), []);
       for (const cell of cells) {
         writer.write({
           t: 'record_cell', objectiveId: objective.objectiveId,
@@ -699,6 +721,7 @@ export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<
         let cursor: SeekCursor | null = null;
         for (let page = 0; page < RECORD_PAGE_CAP; page += 1) {
           const occupants: Page<ExplorationRecord> = await safe(
+            'record_occupants',
             source.recordOccupants(handle, cursor, DEFAULT_RECORD_PAGE),
             { status: 'end', items: [] },
           );
@@ -709,39 +732,39 @@ export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<
       }
     }
 
-    const jobs = await safe(source.backgroundJobs(sectionLimit), []);
+    const jobs = await safe('background_jobs', source.backgroundJobs(sectionLimit), []);
     summary.backgroundJobs = jobs;
     for (const j of jobs) writer.write({ t: 'background_job', ...j });
 
-    const changelog = await safe(source.changelog(sectionLimit), { entries: [], unseenCount: 0, seenAt: 0 });
+    const changelog = await safe('changelog', source.changelog(sectionLimit), { entries: [], unseenCount: 0, seenAt: 0 });
     summary.changelogUnseen = changelog.unseenCount;
     for (const entry of changelog.entries) writer.write({ t: 'changelog_entry', ...entry });
 
-    const scaffoldVersions = await safe(source.scaffoldVersions(sectionLimit), []);
+    const scaffoldVersions = await safe('scaffold_versions', source.scaffoldVersions(sectionLimit), []);
     summary.scaffoldVersionCount = scaffoldVersions.length;
     for (const v of scaffoldVersions) writer.write({ t: 'scaffold_version', ...v });
 
-    const gepaRuns = await safe(source.gepaRuns(sectionLimit), []);
+    const gepaRuns = await safe('gepa_runs', source.gepaRuns(sectionLimit), []);
     summary.gepaRunCount = gepaRuns.length;
     for (const g of gepaRuns) writer.write({ t: 'gepa_run', ...g });
 
-    const releaseBoard = await safe(source.releaseBoard(sectionLimit), null);
+    const releaseBoard = await safe('release_board', source.releaseBoard(sectionLimit), null);
     if (releaseBoard) writer.write({ t: 'release_board', ...asRecord({ value: releaseBoard }) });
 
-    const triggers = await safe(source.triggers(), null);
+    const triggers = await safe('triggers', source.triggers(), null);
     if (triggers) writer.write({ t: 'triggers', ...asRecord({ value: triggers }) });
 
-    const tools = await safe(source.toolDescriptions(), null);
+    const tools = await safe('tools', source.toolDescriptions(), null);
     if (tools) writer.write({ t: 'tools', ...asRecord({ value: tools }) });
 
-    const facts = await safe(source.facts(sectionLimit), []);
+    const facts = await safe('facts', source.facts(sectionLimit), []);
     summary.factCount = facts.length;
     for (const f of facts) writer.write({ t: 'fact', ...f });
 
-    const memory = await safe(source.memoryContent(), '');
+    const memory = await safe('memory', source.memoryContent(), '');
     if (memory) writer.write({ t: 'memory', content: memory });
 
-    const activity = await safe(source.activitySnapshot(), null);
+    const activity = await safe('activity_snapshot', source.activitySnapshot(), null);
     if (activity) writer.write({ t: 'activity_snapshot', ...activity });
 
     writer.write({ t: 'end', workspace: target.name, mode: target.mode, generatedAt: Date.now() });
@@ -754,10 +777,6 @@ export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<
   } else {
     printHumanSummary(target.name, target.mode, summary, outPath);
   }
-}
-
-async function safe<T>(p: Promise<T>, fallback: T): Promise<T> {
-  try { return await p; } catch { return fallback; }
 }
 
 function asRecord(input: { value: JsonValue }): JsonObject {
@@ -891,6 +910,10 @@ function printHumanSummary(name: string, mode: string, summary: DebugSummary, ou
   if (summary.errors.length > 0) {
     console.log(`\n${ERR('Errors')} (${summary.errors.length})`);
     for (const e of summary.errors.slice(0, 20)) console.log(`  ${DIM(e.runId.slice(0, 8))} ${e.message.slice(0, 140)}`);
+  }
+  if (summary.sectionFailures.length > 0) {
+    console.log(`\n${ERR('Section failures')} (${summary.sectionFailures.length}) — these sections are MISSING from the bundle, not empty`);
+    for (const s of summary.sectionFailures.slice(0, 20)) console.log(`  ${ACCENT(s.section)} ${s.message.slice(0, 200)}`);
   }
   console.log('');
 }
