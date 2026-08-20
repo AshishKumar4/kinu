@@ -761,7 +761,12 @@ export function SwarmTree({
 				// rest.
 				name.title = meta?.title ?? "";
 				const note = document.createElement("span");
-				note.className = "min-w-0 shrink-0 truncate text-[9px] font-mono p-text-3";
+				// Shrinks four times faster than the name. Both have to give on a
+				// narrow canvas, and the NAME is what identifies the band — with the
+				// note holding its width the name was squeezed to a single glyph,
+				// while the note repeats what the resolution panel above already
+				// states in full.
+				note.className = "min-w-0 shrink-[4] truncate text-[9px] font-mono p-text-3";
 				note.textContent = meta?.note ?? "";
 				note.title = meta?.note ?? "";
 				el.appendChild(name);
@@ -1198,12 +1203,19 @@ function positionBandTitles(
 	for (const el of overlay.querySelectorAll<HTMLElement>(":scope > div")) {
 		const x = transform.applyX(Number(el.dataset.x));
 		const y = transform.applyY(Number(el.dataset.y));
-		el.style.transform = `translate(${x}px,${y}px)`;
-		// The room a caption has is the canvas to the right of where the caption
-		// starts, which moves with the pan. It was a flat 22rem, so on a 313px
-		// column the title truncated mid-word while a wide canvas left it short of
-		// the edge it could have used.
-		el.style.maxWidth = `${Math.max(0, width - x - BAND_PAD)}px`;
+		// Clamped to the left edge, unlike the vertical axis. A band spans the
+		// whole scene width, so a caption held at the left edge is still over its
+		// OWN band and still names the right search — which is exactly the
+		// argument that forbids clamping it vertically, where the band below would
+		// get someone else's name. Unclamped, panning right walked every caption
+		// off the left of the canvas a glyph at a time.
+		const left = Math.max(BAND_PAD, x);
+		el.style.transform = `translate(${left}px,${y}px)`;
+		// The room a caption has is the canvas to the right of where it starts,
+		// which moves with the pan. It was a flat 22rem, so on a 313px column the
+		// title truncated mid-word while a wide canvas left it short of the edge
+		// it could have used.
+		el.style.maxWidth = `${Math.max(0, width - left - BAND_PAD)}px`;
 		el.style.visibility = y < RULER_H || y > height - 12 ? "hidden" : "visible";
 	}
 }
