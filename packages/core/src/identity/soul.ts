@@ -10,7 +10,7 @@
  * Its MISSION, separately, is a column on `workspace_identity`. That is not a
  * second copy of the document — it is the one line a listing needs, maintained
  * by {@link writeSoul} and by nothing else. The alternative was to boot a whole
- * filesystem to render `proteus list`, which both costs a filesystem per
+ * filesystem to render `kinu list`, which both costs a filesystem per
  * workspace listed and MUTATES each one on the way past (the process-generation
  * counter advances on every open). A listing must not do either.
  */
@@ -133,7 +133,7 @@ export function summarizeSoul(markdown: string | null | undefined, maxLength = 2
  * The soul document, or null when the workspace has none.
  *
  * Reads the file, so it needs a filesystem — which every caller inside a turn
- * has. A read-only inspection (`proteus list`, `proteus status`) deliberately
+ * has. A read-only inspection (`kinu list`, `kinu status`) deliberately
  * does not call this: it reads {@link readMission} instead.
  *
  * "No soul" is asked, not caught: a workspace whose SOUL.md is unreadable for

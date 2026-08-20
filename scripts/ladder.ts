@@ -759,7 +759,7 @@ export const LADDER: readonly Gate[] = [
     // The CREDENTIALED cost, because that is the cost this gate actually incurs
     // where it runs. `scripts/eval-tier.sh` borrows the signed-in CLI session
     // when the environment names no target, so a deploy from a machine that has
-    // run `proteus auth` pays this — and it was declared at 0.3s, the
+    // run `kinu auth` pays this — and it was declared at 0.3s, the
     // credential-free path where every live test skips. A deploy gate whose
     // declared cost is four orders of magnitude under its measured one makes the
     // tier-cost line below fiction, and the push budget above it unenforceable.

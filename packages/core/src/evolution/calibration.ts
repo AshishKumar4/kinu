@@ -303,7 +303,7 @@ export function renderLabelingFile(items: ReadonlyArray<LabelingItem>): string {
     '# In vim:  /^verdict:  then  n  to step, then  A <letter> Esc.',
     '# When you are done, save and run:',
     '#',
-    '#     proteus label ingest <agent> <this file>',
+    '#     kinu label ingest <agent> <this file>',
     '',
   ];
   items.forEach((item, index) => {
@@ -613,7 +613,7 @@ export function renderCalibrationReport(report: CalibrationReport): string {
       `  ${gap === null ? 'uncalibrated — no hand-labeled turns yet' : describeCalibrationGap(gap)}`,
       `  ${report.universe} classifier-graded turn${report.universe === 1 ? '' : 's'} are waiting to be checked; ` +
         `${report.labeled} labeled so far.`,
-      '  Draw a calibration set with:  proteus label export <agent>',
+      '  Draw a calibration set with:  kinu label export <agent>',
     );
     return lines.join('\n');
   }

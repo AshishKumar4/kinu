@@ -51,7 +51,7 @@ describe('createHubDeviceTransport', () => {
     });
 
     expect((await transport.refreshStatus())).toEqual({ connected: false, registered: true, toolchain: null });
-    connected = true; // the user runs `proteus connect` between turns
+    connected = true; // the user runs `kinu connect` between turns
     expect((await transport.refreshStatus())).toEqual({ connected: true, registered: true, toolchain: null });
     expect(transport.status().connected).toBe(true);
   });

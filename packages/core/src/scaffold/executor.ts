@@ -463,7 +463,7 @@ export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRun
   const execPromise = exec.execute(wrapperCode, providers, { timeoutMs });
   // The timer is cleared once the race settles. A live timer is invisible on
   // the DO, but it pins a CLI process open for the whole budget after every
-  // scaffold turn — `proteus exec` hung for five minutes past its answer.
+  // scaffold turn — `kinu exec` hung for five minutes past its answer.
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<{ result: JsonValue | undefined; error: string }>((resolve) => {
     timer = setTimeout(

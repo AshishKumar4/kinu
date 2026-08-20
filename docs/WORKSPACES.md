@@ -69,7 +69,7 @@ agents are the actors that work inside it.
     subordinate run, and it takes as many turns as it needs. A tool call that
     outlives the surface's threshold moves to the background, and the node is
     woken when that work settles: 30 s in an interactive session, 300 s under
-    `proteus exec` (`BACKGROUND_POLICY`, `core/src/jobs/threshold.ts:70-73`).
+    `kinu exec` (`BACKGROUND_POLICY`, `core/src/jobs/threshold.ts:70-73`).
     The node reports a candidate, and the caller's registered verifier scores
     that report.
 
@@ -123,7 +123,7 @@ agents are the actors that work inside it.
 | Surface | Shape |
 |---|---|
 | Web routes | `/workspace/<name>`, `/api/workspaces/<name>/*`, `/api/user/workspaces` |
-| CLI | `proteus create <name>`, `proteus exec --workspace <name>`, `/api/cli/workspaces/*` |
+| CLI | `kinu create <name>`, `kinu exec --workspace <name>`, `/api/cli/workspaces/*` |
 | Access-token scopes | `workspace.read`, `workspace.exec` |
 | MCP resources | `proteus://workspace/<name>/{memory,scaffold}` |
 | Identity API (core) | `createWorkspace` / `openWorkspace` / `forkWorkspaceStorage` |

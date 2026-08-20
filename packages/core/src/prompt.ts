@@ -225,7 +225,7 @@ function renderExecutorLine(exec: PromptExecutorInfo, backend?: PromptBackend): 
 /** A registered-but-offline laptop is still listed (the user can bring it
  *  back), unlike other unavailable executors, which are omitted entirely. */
 function renderOfflineLaptopLine(): string {
-  return '- **laptop** / `runtime: "laptop"` (registered, currently OFFLINE): the user\'s own PC is registered but not connected right now. Do not call it; if the user wants it used, tell them to run `proteus connect` on their machine.';
+  return '- **laptop** / `runtime: "laptop"` (registered, currently OFFLINE): the user\'s own PC is registered but not connected right now. Do not call it; if the user wants it used, tell them to run `kinu connect` on their machine.';
 }
 
 function offlineLaptop(executors: readonly PromptExecutorInfo[]): PromptExecutorInfo | undefined {

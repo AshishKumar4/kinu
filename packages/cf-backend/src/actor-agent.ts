@@ -298,7 +298,7 @@ function readCliCwd(body?: JsonObject): string | null {
 
 /**
  * Turn continuity for the arriving message (core's TurnContinuity). The CLI's
- * one-shot surfaces (`proteus exec`/`proteus run` against a cloud workspace)
+ * one-shot surfaces (`kinu exec`/`kinu run` against a cloud workspace)
  * stamp `oneShot` on the chat request body: each invocation is an independent
  * task by a process that never saw the previous answer, so its prompt is not a
  * verdict on the previous turn. Everything else — the web chat, the API, the
@@ -1277,7 +1277,7 @@ export abstract class ActorAgent extends Think<Env> {
    * lane via settleEvolution(), and the cadence session-evolution pass via
    * runDueSessionEvolution(). The DO is the host that CAN afford the heavy
    * pass — keepAlive is exactly the mechanism a one-shot CLI process lacks —
-   * so unlike `proteus exec` it waits for it rather than carrying it forward.
+   * so unlike `kinu exec` it waits for it rather than carrying it forward.
    */
   protected settleEvolutionInBackground(): void {
     if (this._evolutionSettling) return;
@@ -1774,7 +1774,7 @@ export abstract class ActorAgent extends Think<Env> {
       this._jobRunner = new BackgroundJobRunner({
         store: this.jobs,
         // The background policy follows the TURN's surface, not the DO: one
-        // workspace serves human-watched web chat, one-shot `proteus exec`
+        // workspace serves human-watched web chat, one-shot `kinu exec`
         // invocations, and autonomous drains, and the detach threshold has to
         // match the caller. 30s keeps chat responsive; anything with nobody
         // watching wants its work finished in-turn.
@@ -1948,7 +1948,7 @@ export abstract class ActorAgent extends Think<Env> {
   private readonly dynamicLedger = new DynamicContextLedger();
   protected _cliCwd: string | null = null;
   /** Whether the message that opened the CURRENT turn was a conversational
-   *  reply or an independent one-shot task (`proteus exec` against this
+   *  reply or an independent one-shot task (`kinu exec` against this
    *  workspace). Set in beforeTurn from the chat request; read at turn end to
    *  decide whether this turn may be parked awaiting a follow-up verdict.
    *  Defaults to a conversation — every non-CLI surface (web chat, API, the
@@ -3012,7 +3012,7 @@ export abstract class ActorAgent extends Think<Env> {
     // ── Per-turn device awareness ────────────────────────────────
     // One authoritative hub check (a cheap DO-to-DO RPC) so the executor list
     // below reflects the CURRENT device state — the transport's TTL-cached
-    // snapshot can lag a mid-session `proteus connect` by a turn. The persisted
+    // snapshot can lag a mid-session `kinu connect` by a turn. The persisted
     // watermark is only a diff anchor for the one-turn change notice; the hub
     // stays the single source of truth.
     let deviceNotice: string | null = null;

@@ -15,7 +15,7 @@ on every push that touches `lean/` or a package source file.
 
 > Docs in this repo are edited & maintained by Claude and presented as-is; verify against the code when precision matters.
 
-**Live:** [proteus.ashishkumarsingh.com](https://proteus.ashishkumarsingh.com)
+**Live:** [kinu.run](https://kinu.run)
 
 ## The swarm
 
@@ -77,7 +77,7 @@ Delegation is one tool with seven actions. `swarm` runs a tree search that settl
 ## Key Features
 
 - **Durable subordinates and peer workspaces** — `hire` creates a subordinate with its own turn loop, its own context and a share of this workspace's files. `ask`, `send`, `reply`, `list` and `dismiss` reach it, and reach the owner's *other* workspaces, through one set of names. A busy agent is never blocked on; the message is spliced into the turn it is already running.
-- **3-timescale evolution** — turn-level (quality → reflection), session-level (pattern consolidation → scaffold mutation), lifetime (`runMCTS`). The MCTS engine is unchanged: `core/src/evolution/engine.ts` and `proteus evolve` call it, and the `agents` tool does not.
+- **3-timescale evolution** — turn-level (quality → reflection), session-level (pattern consolidation → scaffold mutation), lifetime (`runMCTS`). The MCTS engine is unchanged: `core/src/evolution/engine.ts` and `kinu evolve` call it, and the `agents` tool does not.
 - **CraftStore** — learns reusable tools from conversations. EMA scoring with time decay. FTS5-indexed for search.
 - **Mutable scaffold** — the agent's agentic loop is code it can rewrite, validated through 4 structural gates
 - **One real filesystem** — the workspace file plane is Nimbus over the backend's own SQLite: a durable POSIX filesystem, a real shell, ~95 coreutils, and language runtimes installed on demand. The same component runs on Workers and on your machine.
@@ -98,46 +98,46 @@ CLOUDFLARE_ACCOUNT_ID=<your-id> npx vite dev --port 5173 --host 0.0.0.0
 ### CLI
 
 ```bash
-curl -fsSL 'https://proteus.ashishkumarsingh.com/install.sh' | bash
-proteus setup
-proteus create jarvis --mode cloud --alias jarvis --purpose "A helpful coding assistant"
+curl -fsSL 'https://kinu.run/install.sh' | bash
+kinu setup
+kinu create jarvis --mode cloud --alias jarvis --purpose "A helpful coding assistant"
 jarvis "summarize this repository"
 ```
 
-`proteus setup` opens the browser OAuth flow, stores the app session locally,
+`kinu setup` opens the browser OAuth flow, stores the app session locally,
 and can also configure local provider keys for fully local workspaces.
 
 ### Headless / CI
 
-`proteus exec` is the non-interactive face of the CLI: it runs one task and
+`kinu exec` is the non-interactive face of the CLI: it runs one task and
 exits 0 only when the turn completed cleanly (nonzero on errors or denied
 device consents; it never prompts). Mint a scoped access token from an
 interactive session (sign in within the last 5 minutes), store it as a CI
 secret, and pipe the line-delimited JSON events wherever you need them:
 
 ```bash
-proteus tokens create --name ci --scopes workspace.exec,workspace.read  # printed once
+kinu tokens create --name ci --scopes workspace.exec,workspace.read  # printed once
 # in the pipeline:
 export PROTEUS_TOKEN=pta_…                                       # from CI secrets
-proteus exec --workspace jarvis --json "triage the failing tests" | tee events.jsonl
+kinu exec --workspace jarvis --json "triage the failing tests" | tee events.jsonl
 ```
 
 Access tokens are scoped: `workspace.exec` runs tasks,
 `workspace.read` inspects state, and everything else (webhooks, device
 registration, workspace creation, consent decisions) stays interactive-only
-and is enforced server-side. `proteus tokens list` shows last use; `proteus tokens revoke ci`
+and is enforced server-side. `kinu tokens list` shows last use; `kinu tokens revoke ci`
 kills one immediately.
 
 ## Models & providers
 
 I wanted model choice to be flexible without forcing anyone into a single vendor, so a workspace can run on any of these:
 
-- **Your own Cloudflare account** — one browser sign-in (`proteus auth`) attaches your Cloudflare account, and from that single login you get both Workers AI and your AI Gateway. Workers AI models resolve as `workers-ai/<model>` and your gateway as `my-gateway/{author}/{model}`. The OAuth consent needs the `aig.write` scope for AI Gateway; if you connected before that was added, run `proteus auth` again to re-grant it.
+- **Your own Cloudflare account** — one browser sign-in (`kinu auth`) attaches your Cloudflare account, and from that single login you get both Workers AI and your AI Gateway. Workers AI models resolve as `workers-ai/<model>` and your gateway as `my-gateway/{author}/{model}`. The OAuth consent needs the `aig.write` scope for AI Gateway; if you connected before that was added, run `kinu auth` again to re-grant it.
 - **Workers AI in signed-in local workspaces** — if you're signed in, a *local* workspace you create gets Workers AI through the `/api/user/ai/v1` proxy with no separate API key. New local workspaces default to `workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813`; this model requires paid Workers access or prepaid AI Gateway credits.
-- **Bring your own keys** — OpenAI, Anthropic, OpenRouter, and your ChatGPT Codex subscription, plus any OpenAI-compatible endpoint (Ollama, vLLM, …). Connect with `proteus providers connect <name>`.
-- **Local Claude subscription** — if you use Claude Code, `proteus create --model claude/claude-opus-4-x` (or `-sonnet-`/`-haiku-`) drives the official `claude` binary with your own Claude Code login. Kinu never reads your credentials or calls the API directly; the binary is the auth boundary, which is what keeps this compliant. It is local only: cloud workspaces must use an Anthropic API key (`proteus providers connect anthropic`), not the subscription.
+- **Bring your own keys** — OpenAI, Anthropic, OpenRouter, and your ChatGPT Codex subscription, plus any OpenAI-compatible endpoint (Ollama, vLLM, …). Connect with `kinu providers connect <name>`.
+- **Local Claude subscription** — if you use Claude Code, `kinu create --model claude/claude-opus-4-x` (or `-sonnet-`/`-haiku-`) drives the official `claude` binary with your own Claude Code login. Kinu never reads your credentials or calls the API directly; the binary is the auth boundary, which is what keeps this compliant. It is local only: cloud workspaces must use an Anthropic API key (`kinu providers connect anthropic`), not the subscription.
 
-`proteus providers list` shows what's connected and each provider's status inline. Pick a model per workspace with `--model`, or switch mid-conversation from the `/model` picker (searchable); a chosen model persists as your default for new workspaces. Set reasoning effort (low, medium, high) with `/effort` or `proteus effort`, mapped to each provider's native knob.
+`kinu providers list` shows what's connected and each provider's status inline. Pick a model per workspace with `--model`, or switch mid-conversation from the `/model` picker (searchable); a chosen model persists as your default for new workspaces. Set reasoning effort (low, medium, high) with `/effort` or `kinu effort`, mapped to each provider's native knob.
 
 ## Documentation
 

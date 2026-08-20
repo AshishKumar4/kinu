@@ -339,7 +339,7 @@ describe('calibrationReport', () => {
     const rendered = renderCalibrationReport(report);
     expect(rendered).toContain('uncalibrated — no hand-labeled turns yet');
     expect(rendered).toContain('252 classifier-graded turns are waiting');
-    expect(rendered).toContain('proteus label export');
+    expect(rendered).toContain('kinu label export');
   });
 
   test('a partially labeled ledger names the verdict it cannot correct', () => {

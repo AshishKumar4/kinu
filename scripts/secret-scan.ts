@@ -71,7 +71,7 @@ export const PATTERNS: readonly SecretPattern[] = [
   },
   {
     // Kinu's OWN credentials were the one shape this scan did not cover, and
-    // they are the shape most likely to leak from this repo: `proteus tokens
+    // they are the shape most likely to leak from this repo: `kinu tokens
     // create` prints the value once, so it gets pasted — into a chat, a CI
     // config, a scratch file. The precedent is already in the ledger: an
     // OpenRouter key pasted in plaintext into a transcript has never been

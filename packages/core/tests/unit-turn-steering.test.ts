@@ -568,7 +568,7 @@ describe('turn-start trigger', () => {
   });
 
   test('it does not spend the reactive slot: the 25-step recovery steer still fires, and both rows are recorded', () => {
-    // The whole reason the hint has its own slot. A one-shot `proteus exec` run
+    // The whole reason the hint has its own slot. A one-shot `kinu exec` run
     // is ONE turn and it is always the session's first, so a shared slot would
     // have cost that run every recovery steer it has.
     const orch = newTurn();

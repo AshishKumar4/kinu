@@ -162,7 +162,7 @@ export type ExecutionVerdict = 'succeeded' | 'failed';
 
 /**
  * The ENVIRONMENT's verdict on a turn — the only evidence available for the
- * turns no user will ever grade (a one-shot `proteus exec`, a reactor or job
+ * turns no user will ever grade (a one-shot `kinu exec`, a reactor or job
  * wake). Deterministic: no model is asked, and nothing the model WROTE is read.
  *
  * The evidence is the tool-execution record the turn already carries, read

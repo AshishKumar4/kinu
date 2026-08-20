@@ -140,7 +140,7 @@ describe('GEPA runs on the local backend', () => {
     expect(result.seedScore!.n).toBe(result.selection!.heldOutNegatives + result.selection!.guards);
     expect(result.bestScore).toBeDefined();
 
-    // The lineage `proteus gepa` and the web surface read.
+    // The lineage `kinu gepa` and the web surface read.
     const runs = listGepaRuns(rt.storage.sql, 10);
     expect(runs.length).toBe(1);
     expect(runs[0]!.runId).toBe(result.runId!);

@@ -146,7 +146,7 @@ export {
   type ReplayEvalSummary, type ReplayInstanceResult, type RunReplayEvalOpts,
 } from './evolution/replay';
 // The durable evolution window + pending outcome review — the state neither
-// backend's instance outlives (one process per `proteus exec`; DO eviction).
+// backend's instance outlives (one process per `kinu exec`; DO eviction).
 export {
   initSessionWindowTable, createSessionWindowStore, type SessionWindowStore, type ClaimedWindow,
 } from './evolution/session-window';

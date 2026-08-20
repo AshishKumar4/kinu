@@ -69,7 +69,7 @@ export const AGENT_CONFIG_KEYS = {
   changelogSeenAt: 'changelog_seen_at',
   /** Session windows this agent has closed over its lifetime — the pace the
    *  lifetime timescale (replay eval → consolidation → MCTS) runs at. Durable
-   *  because no agent instance outlives it: a `proteus exec` process handles
+   *  because no agent instance outlives it: a `kinu exec` process handles
    *  one turn, and a Durable Object is evicted between requests. */
   closedSessionWindows: 'closed_session_windows',
   /** Total outcome-labeled instances a GEPA run draws into its train/val

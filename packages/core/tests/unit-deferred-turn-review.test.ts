@@ -1,7 +1,7 @@
 /**
  * The deferred turn-review queue — the one-shot host's turn-lane exit.
  *
- * A `proteus exec` process cannot afford to JOIN the outcome review it owes
+ * A `kinu exec` process cannot afford to JOIN the outcome review it owes
  * (evolution/review-queue.ts records the measurement), so it writes one durable
  * row and the next host runs it. The contract these tests hold is that
  * deferring changes WHEN the review runs and nothing else: same call, same

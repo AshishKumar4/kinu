@@ -17,7 +17,7 @@
 // The precedence rule is `liveModelFallback`, tested next to the resolver it
 // completes. Whether a session exists at all is the CLI's own question, answered
 // by the CLI's own reader, so an expired session is refused here exactly as it is
-// by `proteus chat`.
+// by `kinu chat`.
 import { liveModelFallback } from '../packages/test-utils/src/live-model';
 import { resolveCloudSession } from '../packages/cli/src/config';
 

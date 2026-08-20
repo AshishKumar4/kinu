@@ -200,7 +200,7 @@ function recoveredNotice(deps: MonitorDeps, rows: IncidentRow[]): Notice {
  *  worth reading at 2am. */
 const IMPACT = new Map([
   ['health', 'the API is down, or the worker and its assets are from different deploys.'],
-  ['downloads', 'a new install and every `proteus update` fail on the checksum.'],
+  ['downloads', 'a new install and every `kinu update` fail on the checksum.'],
   ['login', 'nobody can sign in to the web app.'],
 ]);
 

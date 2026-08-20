@@ -639,7 +639,7 @@ const CAVEAT = [
   '> and toolset than the ledger the classifier runs on, and calibration does not',
   '> transport across distributions. Nothing here licenses a corrected rate, and',
   '> nothing here substitutes for the on-distribution hand-labeling pass',
-  '> (`proteus label export`). This is a second, free, independent read — not a',
+  '> (`kinu label export`). This is a second, free, independent read — not a',
   '> replacement for the first one.',
 ].join('\n');
 
@@ -680,7 +680,7 @@ function raterSection(score: RaterScore): string[] {
 /**
  * The whole report as markdown — the corpus's composition first, then each
  * rater against it. The mining half is printed even when no rater ran, because
- * `proteus label mine` produces exactly that half and it costs nothing.
+ * `kinu label mine` produces exactly that half and it costs nothing.
  */
 export function renderCorpusReport(
   report: CorpusEvalReport,

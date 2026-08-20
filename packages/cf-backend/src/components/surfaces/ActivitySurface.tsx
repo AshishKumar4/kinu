@@ -4,7 +4,7 @@
  * The raw `activity_log` dump that used to close this panel is gone. Event
  * name + detail + ms is telemetry, and everything in it a person should read
  * already lands in chat, in the Work tab's journal, or in the meters above —
- * the same argument that retired the Run Timeline. `proteus debug` prints the
+ * the same argument that retired the Run Timeline. `kinu debug` prints the
  * rows for anyone who wants them; the table and its RPC are untouched.
  *
  * Provider-reported tokens and cache reads are authoritative and labelled

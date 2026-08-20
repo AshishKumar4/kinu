@@ -111,7 +111,7 @@ export interface WorkspaceSnapshot {
    *  its own tree, so first paint draws every tree rather than only the newest.
    *  One row per fork, so nothing here can be re-associated wrongly. */
   exploration: Page<ExplorationCanvasRun>;
-  /** Still returned by the server for `proteus inspect`; no UI reads it. */
+  /** Still returned by the server for `kinu inspect`; no UI reads it. */
   timeline: TimelineSpan[];
   executors: ExecutorInfo[];
   executorOutputs: Array<{ name: string; outputs: ExecutorOutput[] }>;

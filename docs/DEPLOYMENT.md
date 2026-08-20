@@ -4,9 +4,8 @@
 
 ## Live Instance
 
-**Production:** https://proteus.ashishkumarsingh.com  
-**New name:** https://kinu.run — declared in `wrangler.jsonc`, pending the
-one-time domain binding below  
+**Production:** https://kinu.run  
+**Staging:** https://staging.kinu.run  
 **Preview hosts:** one capability hostname per exposed Workspace or Sandbox port
 under `<PREVIEW_HOST_SUFFIX>`
 
@@ -18,47 +17,28 @@ preview-host trust boundary. The suffix needs a wildcard DNS record.
 `packages/cf-backend/src/lib/preview-origin.ts` has the reasoning and the
 remaining Public Suffix List prerequisite for complete cookie-site isolation.
 
-### Adding an app origin
+### One origin per environment
 
-The product is renamed to Kinu, and `kinu.run` is declared as a second custom
-domain. Both origins serve the same Worker. `CLI_PUBLIC_ORIGIN` stays the
-CANONICAL one — links, redirects and the install script are built from it — and
-`PUBLIC_ORIGINS` names every origin so transport security covers all of them.
-A custom domain absent from `PUBLIC_ORIGINS` serves the app in cleartext with
-no HSTS.
+Each environment has exactly one app origin. Production answers on `kinu.run`,
+staging answers on `staging.kinu.run`, and `workers_dev` is false in both. So
+`CLI_PUBLIC_ORIGIN` is the whole app-origin set rather than the preferred entry
+in a larger one.
 
-A NEW custom domain takes one action outside the deploy, exactly once, and the
-order is forced rather than preferred. `gate:infra` observes a custom domain by
-asking `https://<host>/api/health` for a build stamp, and `scripts/deploy.sh`
-runs that gate as REQUIRED. So a domain that is declared but not yet bound makes
-`bun run deploy` fail closed, and `custom_domain: true` never gets to create the
-record because the deploy does not start. Bind it against the Worker that is
-ALREADY deployed:
+Transport security keys on that. The Worker redirects cleartext to HTTPS and
+sends HSTS for the `CLI_PUBLIC_ORIGIN` host and for the preview subtree under
+`PREVIEW_HOST_SUFFIX`. A hostname that reaches the Worker and is neither is not
+an app origin, and the Worker does not serve it as one.
 
-> Cloudflare dashboard → Workers & Pages → `proteus` → Settings → Domains &
-> Routes → Add → Custom domain → `kinu.run`.
+Production's preview suffix is `kinu.run` itself, so every preview host is a
+strict subdomain of the app host. The wildcard route `*.kinu.run/*` therefore
+matches previews and never the app. Staging leaves `PREVIEW_HOST_SUFFIX` empty,
+because `staging.kinu.run` is not a wildcard parent, so staging serves no
+previews.
 
-That creates the proxied DNS record and the hostname binding together. The
-currently deployed Worker starts answering immediately, so:
-
-```bash
-curl -s https://kinu.run/api/health
-# {"ok":true,"build":{"version":"0.2.0+<sha>","sha":"<sha>","builtAt":"..."},"features":[...],...}
-```
-
-`ok: true` and a `build.sha` are what `gate:infra` reads; anything else — an
-HTML page, a 5xx, a JSON body with no build stamp — it reports as a hostname
-that resolves to something other than this Worker. Once that curl answers,
-`bun run deploy` is green again and every later deploy reconciles the domain
-normally.
-
-Nothing about the existing hostname changes. It keeps its DNS, its route, its
-previews and its mail. The cutover is a separate, deliberate edit: point
-`CLI_PUBLIC_ORIGIN`, `CLI_APPROVAL_ORIGIN`, `PREVIEW_HOST_SUFFIX` and
-`EMAIL_DOMAIN` at the new zone, add the preview wildcard route and its DNS
-record there, then drop the old origin from `PUBLIC_ORIGINS` when nothing links
-to it. Previews need that wildcard: `kinu.run`'s Universal SSL covers
-`*.kinu.run` but no deeper label.
+Staging is bound as a ROUTE (`pattern: "staging.kinu.run"`, `zone_name:
+"kinu.run"`) and not as a custom domain. Production's preview wildcard already
+claims `*.kinu.run/*`, and an exact route beating a wildcard route is the only
+precedence rule Cloudflare documents unambiguously.
 
 ## Local Development
 
@@ -105,14 +85,14 @@ entirely for headless work.
 ### CLI
 
 ```bash
-curl -fsSL 'https://proteus.ashishkumarsingh.com/install.sh' | bash
-proteus setup
-proteus create jarvis --mode cloud --alias jarvis --purpose "A helpful coding assistant"
+curl -fsSL 'https://kinu.run/install.sh' | bash
+kinu setup
+kinu create jarvis --mode cloud --alias jarvis --purpose "A helpful coding assistant"
 jarvis "summarize this checkout"
 ```
 
 For a source checkout, use `bun run cli -- setup` and `bun run cli -- ...`.
-The CLI app origin defaults to `https://proteus.ashishkumarsingh.com`. Use
+The CLI app origin defaults to `https://kinu.run`. Use
 `--origin` or `PROTEUS_ORIGIN` only for alternate deployments.
 
 ## Zero to production
@@ -121,7 +101,7 @@ Everything below assumes an EMPTY Cloudflare account. Three commands do the
 work, and a fourth proves it:
 
 ```bash
-bun run infra:provision      # D1, its schema, R2 buckets, the Vectorize index
+bun run infra:provision      # the R2 buckets and the Vectorize indexes
 bun run deploy               # the Worker, its DO namespaces, container, routes, cron
 bun run infra:provision      # the secrets — `wrangler secret put` needs the Worker to exist
 bun run gate:infra           # every declared resource exists and is bound
@@ -146,24 +126,29 @@ re-checks each one.
 | --- | --- |
 | A Cloudflare account on the **Workers Paid** plan | SQLite Durable Objects, Containers, `worker_loaders` and 7-day Workers Logs retention are all plan-gated. No wrangler command reports or changes a plan. |
 | The `account_id`, in `packages/cf-backend/wrangler.jsonc` | It names the account. It does not create one. |
-| A wrangler login (`npx wrangler login`) with Workers, D1, R2, Vectorize, Containers and Email scopes | Every command below rides it. `npx wrangler whoami` lists what you have. |
-| A **zone** you control, and the DNS records under it | `zone_name` in `routes` assumes an active zone. wrangler has no DNS command at all. |
-| A proxied wildcard DNS record `*.proteus` on that zone | The `pattern + zone_name` route matches requests. It does not make the hostname resolve. Without it every preview URL is NXDOMAIN while the route reads as present. |
+| A wrangler login (`npx wrangler login`) with Workers, KV, R2, Vectorize, Containers and Email scopes | Every command below rides it. `npx wrangler whoami` lists what you have. |
+| The `kinu.run` **zone**, active on the account the Worker runs in | `zone_name` in `routes` assumes an active zone, and a Workers custom domain only lands in a zone that account holds. wrangler has no DNS command at all. |
+| A proxied wildcard DNS record `*.kinu.run` | The `*.kinu.run/*` route matches preview requests. It does not make a preview hostname resolve. Without it every preview URL is NXDOMAIN while the route reads as present. `custom_domain: true` cannot express a wildcard, so this record is made by hand. |
+| A proxied DNS record `staging.kinu.run` | Staging is bound as a route. A route matches requests to a hostname that already resolves; it does not create one. |
+| Two **KV namespaces**, `kinu-auth` and `kinu-auth-staging` | The session store, one per environment. `wrangler kv namespace create <title>` prints an id you paste into `kv_namespaces`. Provisioning will not run it: KV titles are not unique, so a second run makes a second namespace instead of finding the first. |
 | An **AI Gateway** in the same account, named in `AI_GATEWAY_URL` | wrangler has no `ai-gateway` command. Checked 2026-08-19 against both versions this tree installs, 4.97.0 at the root and 4.123.0 in `packages/cf-backend`: the only `ai-gateway` strings in either binary belong to the bundled REST client. The wrangler OAuth session also carries no `aig` scope, so the REST API answers 403. Dashboard only. |
 | OAuth applications at Google, GitHub and/or Cloudflare | Created on three other websites. See § OAuth Setup for the exact redirect URLs and scopes. |
 | Email Routing onboarding for `EMAIL_DOMAIN` | MX records, a verified destination, and a rule delivering to this Worker. The `send_email` binding is OUTBOUND only. See `docs/EMAIL-INGRESS.md`. |
 
+Universal SSL on `kinu.run` covers `kinu.run` and `*.kinu.run`, which is the app
+host, staging, and every preview host. No Advanced Certificate Manager is needed.
+
 ### What each command does
 
 **`bun run infra:provision`** reads the inventory out of `wrangler.jsonc`. There
-is no second list. It creates what is missing, in dependency order: D1
-databases, their migrations, R2 buckets, the Vectorize index. It prints
-`CREATED` or `existed` per resource, so a second run is visibly a no-op. A
-resource whose lookup FAILED is refused rather than created, because "the
-network was down" and "it does not exist" are different states, and creating a
-bucket on the first one is how an account ends up with two answers to which
-bucket holds the snapshots. Everything wrangler cannot create is printed as a
-manual worklist, every run, green or not.
+is no second list. It creates what is missing, in dependency order: the R2
+buckets, then the Vectorize indexes. It prints `CREATED` or `existed` per
+resource, so a second run is visibly a no-op. A resource whose lookup FAILED is
+refused rather than created, because "the network was down" and "it does not
+exist" are different states, and creating a bucket on the first one is how an
+account ends up with two answers to which bucket holds the snapshots.
+Everything wrangler cannot create is printed as a manual worklist, every run,
+green or not.
 
 **`bun run gate:infra`** checks that every declared resource exists **and that
 the deployed Worker is bound to it**, and exits non-zero when it is not. It is
@@ -187,11 +172,11 @@ Without a Cloudflare session the gate reports BLOCKED and exits non-zero.
 
 **`bun run infra:teardown <environment>`** deletes what provisioning created, in
 reverse dependency order, and refuses without a typed sentence naming the
-environment (`destroy proteus production`). It prints WHAT IS INSIDE every
+environment (`destroy kinu production`). It prints WHAT IS INSIDE every
 data-bearing resource before asking. It will not delete a resource another
-environment binds: `proteus-backups` and `nimbus-runtime-cache` are held by
-both, so tearing down one environment retains them and says who still holds
-them. Nothing imports it and no other command can reach it.
+environment binds: `nimbus-runtime-cache` is held by both, so tearing down one
+environment retains it and says who still holds it. Nothing imports it and no
+other command can reach it.
 
 ### Every value the Worker reads, and where it comes from
 
@@ -204,8 +189,8 @@ only. Cloudflare never returns a value, and nothing here asks for one.
 | --- | --- | --- | --- |
 | `CREDENTIAL_ENCRYPTION_KEY` | **prompt**: paste one, or press enter and provisioning generates 32 random bytes and displays them **once** | yes, everywhere | Every signed-in surface answers 503 while public routes answer 200, so the site looks healthy. |
 | `CLOUDFLARE_OAUTH_CLIENT_SECRET` | **prompt** | where `CLOUDFLARE_OAUTH_CLIENT_ID` is a var | Chat falls back to the platform gateway and bills the **platform** account instead of each user's. |
-| `GOOGLE_OAUTH_CLIENT_SECRET` | **prompt** | where `GOOGLE_OAUTH_CLIENT_ID` is a var | Google is not on `/login`. **Absent on production today.** |
-| `GITHUB_OAUTH_CLIENT_SECRET` | **prompt** | where `GITHUB_OAUTH_CLIENT_ID` is a var | GitHub is not on `/login`. **Absent on production today.** |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | **prompt** | where `GOOGLE_OAUTH_CLIENT_ID` is a var | Google is not on `/login`. Unset on both environments. |
+| `GITHUB_OAUTH_CLIENT_SECRET` | **prompt** | where `GITHUB_OAUTH_CLIENT_ID` is a var | GitHub is not on `/login`. Unset on both environments. |
 | `CREDENTIAL_ENCRYPTION_KEY_PREVIOUS` | **out of band**: the outgoing key, during a rotation | no | Nothing. It is the read-only half of a rotation. |
 | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | **out of band**: an R2 API token from the dashboard; wrangler cannot mint one | no | Snapshots move through the `BACKUP_BUCKET` binding and restore by extracting rather than mounting. All four presigned-mode values are all-or-nothing. |
 | `BACKUP_BUCKET_NAME`, `CLOUDFLARE_R2_ACCOUNT_ID` | **config var**: plain values in `vars`, not secrets | no | As above. |
@@ -222,31 +207,38 @@ displayed exactly once.
 ### What the binding manifest cannot express
 
 `wrangler.jsonc` is the inventory, and these are the dependencies it has no
-field for. Each was verified against the live account on 2026-08-18 rather than
-inferred, and `scripts/infra-manifest.ts` carries the same list with the command
-that re-checks each one.
+field for. These were verified against the live account on 2026-08-18 rather
+than inferred, except where an entry names its own date, and
+`scripts/infra-manifest.ts` carries the same list with the command that
+re-checks each one.
 
-- **The AI Gateway `proteus-ai-gateway`** exists only as a substring of the
+- **The AI Gateway `kinu-ai-gateway`** exists only as a substring of the
   `AI_GATEWAY_URL` var. Neither creatable nor readable by anything here.
-- **The Vectorize index's geometry.** The manifest names `proteus-memory` and
+- **The Vectorize index's geometry.** The manifest names `kinu-memory` and
   stops. Creating it needs `--dimensions=384 --metric=cosine`, and an index at
   the wrong width binds fine and rejects every insert. Provisioning reads the
   dimension back out of the embedder in `packages/cf-backend/src/runtime.ts` so
   the two cannot drift. The metric appears only in a wrangler.jsonc comment.
-- **The proxied wildcard DNS record** and **the zone itself.** wrangler has no
-  DNS command, and the zone DNS API answers 403 under the wrangler OAuth token.
-  Verification resolves a probe hostname instead.
-- **Email Routing.** Measured 2026-08-18: routing and sending are enabled on
-  `ashishkumarsingh.com`, its catch-all forwards to a mailbox, and its three
-  custom rules point at a different Worker. **No rule delivers to `proteus`**, so
-  Mission Inbox inbound mail does not arrive today even though the binding, the
-  var and the `email()` handler are all present and correct.
+- **The proxied DNS records** — the `*` wildcard for previews and `staging` for
+  the staging route — and **the zone itself.** wrangler has no DNS command, and
+  the zone DNS API answers 403 under the wrangler OAuth token. Verification
+  resolves each name instead.
+- **The KV namespace titles.** `kv_namespaces` binds by id and has no title
+  field, so `kinu-auth` and `kinu-auth-staging` exist only in the account and in
+  the command that created them. `npx wrangler kv namespace list` shows both, and
+  is how verification reports a title for a namespace the manifest can only name
+  by id.
+- **Email Routing.** Verified 2026-08-20: the `kinu.run` zone holds zero DNS
+  records, and neither Email Routing nor Email Sending is onboarded. So no
+  inbound agent mail arrives and no outbound mail leaves, even though the
+  binding, the var and the `email()` handler are all present and correct.
+  Onboarding is a one-time owner action; `docs/EMAIL-INGRESS.md` has the steps.
 - **The cron trigger.** `wrangler deploy` writes it from `triggers.crons`. No
   wrangler command reads it back. A declared blind spot.
 - **The container image being pullable and matching `@cloudflare/sandbox` in
-  `package.json`.** Measured 2026-08-18: production runs 0.12.7 and matches;
-  staging still runs 0.11.0 against a staging manifest that declares 0.12.7,
-  because a container image is only reconciled by a deploy of that environment.
+  `package.json`.** A container image is only reconciled by a deploy of that
+  environment, so the two can disagree for as long as one of them has not been
+  deployed since the version moved. Neither has been deployed yet.
 - **An R2 lifecycle rule on the `backups/` prefix.** Not expressible in
   `wrangler.jsonc`. Without it the bucket grows without bound, since the Sandbox
   SDK enforces snapshot TTL at restore time only.
@@ -315,8 +307,8 @@ bun run deploy                # the only supported production deploy path
 That runs `scripts/deploy.sh` (see § Deploy Script). Do not deploy production
 with a bare `wrangler deploy`. It uploads a Worker without checking that the CLI
 download assets were built, and production has already shipped that way once.
-The site was fine while `/downloads/proteus-source.tar.gz`, its `.sha256`, and
-`proteus-version.json` all answered with the SPA shell, so every fresh install
+The site was fine while `/downloads/kinu-source.tar.gz`, its `.sha256`, and
+`kinu-version.json` all answered with the SPA shell, so every fresh install
 and update died on a checksum mismatch.
 
 ### 4. Custom Domain (Optional)
@@ -327,12 +319,12 @@ Use the Cloudflare Workers Custom Domains API:
 curl -X PUT "https://api.cloudflare.com/client/v4/accounts/<account-id>/workers/domains" \
   -H "Authorization: Bearer <api-token>" \
   -H "Content-Type: application/json" \
-  -d '{"hostname":"proteus.yourdomain.com","zone_id":"<zone-id>","service":"proteus","environment":"production"}'
+  -d '{"hostname":"kinu.yourdomain.com","zone_id":"<zone-id>","service":"kinu","environment":"production"}'
 ```
 
 Do not put the custom domain behind Cloudflare Access. Kinu serves a public
 landing page and protects the dashboard with its own OAuth session. If an Access
-application is attached to `proteus.ashishkumarsingh.com`, unauthenticated users
+application is attached to `kinu.run`, unauthenticated users
 will see the Access login page before the Worker can serve `/`.
 
 ## OAuth Setup
@@ -346,9 +338,9 @@ The Worker matches `/auth/<provider>/callback` (`auth/routes.ts:82`). Register
 these exact redirect URLs on each provider:
 
 ```text
-https://proteus.ashishkumarsingh.com/auth/google/callback
-https://proteus.ashishkumarsingh.com/auth/github/callback
-https://proteus.ashishkumarsingh.com/auth/cloudflare/callback
+https://kinu.run/auth/google/callback
+https://kinu.run/auth/github/callback
+https://kinu.run/auth/cloudflare/callback
 ```
 
 ### Cloudflare OAuth
@@ -408,7 +400,7 @@ account. Don't.
 To set up the platform AI Gateway:
 
 1. Go to [Cloudflare Dashboard > AI > AI Gateway](https://dash.cloudflare.com/?to=/:account/ai/ai-gateway)
-2. Create a new gateway (e.g., `proteus-ai-gateway`) **in the same account as
+2. Create a new gateway (e.g., `kinu-ai-gateway`) **in the same account as
    the Worker**. The binding resolves gateway names in-account only.
 3. Set `AI_GATEWAY_URL` in wrangler vars to `https://gateway.ai.cloudflare.com/v1/<account-id>/<gateway-name>/workers-ai/v1`
 
@@ -520,12 +512,12 @@ declare. Read it from `wrangler.jsonc`, not from the type.
 | `MonitorDO` | Durable Object | Synthetic monitoring: open incidents + the alert outbox (one instance, `site`) |
 | `NIMBUS_SESSION` | Durable Object | `NimbusSession` from `@nimbus-sh/sdk`; built-in lightweight sandbox (local DO class, deployed with this Worker) |
 | `Sandbox` | Durable Object + Container | `ProteusSandbox` (@cloudflare/sandbox); one container per agent |
-| `AUTH_DB` | D1 database | OAuth users, sessions, one-time OAuth state, and CLI browser approval state |
+| `AUTH_KV` | KV namespace | Sessions, one-time OAuth state, and CLI browser approval state — all of it expiring. `kinu-auth`, and `kinu-auth-staging` in staging |
 | `LOADER` | Worker Loader | Sandboxed code execution (codemode) |
 | `AI` | Workers AI | Platform-side embeddings (chat models use the user's OAuth credential) |
-| `MEMORY_VECTORS` | Vectorize | `proteus-memory` (384-dim, cosine); optional hybrid recall on top of FTS5 |
+| `MEMORY_VECTORS` | Vectorize | `kinu-memory`, and `kinu-memory-staging` in staging (384-dim, cosine); optional hybrid recall on top of FTS5 |
 | `EMAIL` | `send_email` | Outbound Mission Inbox replies and owner notifications |
-| `BACKUP_BUCKET` | R2 bucket | Sandbox `/workspace` backups (squashfs archives) |
+| `BACKUP_BUCKET` | R2 bucket | Sandbox `/workspace` backups (squashfs archives). `kinu-backups`, and `kinu-backups-staging` in staging, so eval snapshots never land beside real archives |
 | `NIMBUS_RUNTIME_CACHE` | R2 bucket | `nimbus-runtime-cache`, the artifact store a hosted workspace installs its toolchain from. Absent means a hosted `python3`, `ruby` or `clang` exits 127 |
 | `ASSETS` | Static assets | `dist/client` SPA bundle + CLI source archive downloads |
 
@@ -546,7 +538,7 @@ re-specified there.
 ## Deploy Script
 
 `scripts/deploy.sh` is the deploy path, reached by `bun run deploy` at the repo
-root. Everything ships as one Worker (name `proteus`). `NimbusSession` is a
+root. Everything ships as one Worker (name `kinu`). `NimbusSession` is a
 local DO class deployed with it, so there is no separate Nimbus deploy.
 
 ```bash
@@ -588,14 +580,14 @@ root `node_modules`.
    Cloudflare session, and the `npx wrangler whoami` check above already fails
    the deploy in that case.
 2. **Build.** `vite build`, then `scripts/build-cli-source-archive.sh` (CLI
-   source tarball, `.sha256`, `proteus-version.json`). Fails if any of the three
+   source tarball, `.sha256`, `kinu-version.json`). Fails if any of the three
    is missing from `packages/cf-backend/dist/client/downloads/`.
 3. **Deploy.** `npx wrangler deploy`. Verifies the `ProteusSandbox` binding
    appears in wrangler output, and that the assets directory wrangler reports
    reading is the one the downloads were staged into.
 4. **Smoke test.** Asserts HTTP 200 and app content on the production URL, that
    `/api/health` reports the build stamp of the commit being deployed, that
-   `/downloads/proteus-version.json` parses as JSON for that same build, that
+   `/downloads/kinu-version.json` parses as JSON for that same build, that
    the CLI shim points at the deployed source archive, that the archive
    downloads and lists expected files, and that the published `.sha256` matches
    the served archive. The stamp checks retry with backoff, because edge
@@ -633,11 +625,11 @@ There is exactly one assets directory: `packages/cf-backend/dist/client`.
 
 `wrangler deploy` follows the redirect the Vite plugin writes to
 `packages/cf-backend/.wrangler/deploy/config.json` and deploys the generated
-`dist/proteus/wrangler.json`, whose `assets.directory` is `../client`. The
+`dist/kinu/wrangler.json`, whose `assets.directory` is `../client`. The
 hand-written `wrangler.jsonc` says `dist/client`. Both resolve to the same
 place, so the choice of config does not change which files are published.
 
-`dist/proteus/assets/` holds the Worker bundle's code-split chunk output, which
+`dist/kinu/assets/` holds the Worker bundle's code-split chunk output, which
 wrangler attaches as Worker modules. It is not an assets directory, and nothing
 written there is ever served over HTTP.
 
@@ -649,7 +641,7 @@ shipping an assetless site.
 ### Build stamp
 
 `scripts/build-cli-source-archive.sh` stamps the short HEAD sha into the CLI
-package version (`0.1.0+<sha>`) and writes `dist/client/downloads/proteus-version.json`
+package version (`0.1.0+<sha>`) and writes `dist/client/downloads/kinu-version.json`
 (`{version, sha, builtAt}`) from that same stamped `package.json`. The Worker
 reads that file back through the `ASSETS` binding and reports it as `build` on
 `GET /api/health`, so one unauthenticated GET answers both "which commit is
@@ -666,9 +658,10 @@ the stamp names a commit that does not describe what shipped.
 
 ### Staging
 
-A fully isolated second deployment (`proteus-staging`, own DO namespaces and
-D1 database, `DEV_USER_EMAIL` headless identity) is configured under
-`env.staging` in `wrangler.jsonc`:
+A fully isolated second deployment (`kinu-staging`, own DO namespaces and KV
+session store, `DEV_USER_EMAIL` headless identity) answers on
+https://staging.kinu.run and is configured under `env.staging` in
+`wrangler.jsonc`:
 
 ```bash
 bun run --cwd packages/cf-backend deploy:staging
@@ -689,8 +682,8 @@ through the Mission Inbox's outbound path when something breaks.
 
 | Probe | Passes when |
 |-------|-------------|
-| `health` | `/api/health` returns `ok:true` JSON with a build identifier that matches the one `/downloads/proteus-version.json` advertises |
-| `downloads` | `/downloads/proteus-source.tar.gz` hashes to exactly what `…​.sha256` declares. This is the check the installer itself makes |
+| `health` | `/api/health` returns `ok:true` JSON with a build identifier that matches the one `/downloads/kinu-version.json` advertises |
+| `downloads` | `/downloads/kinu-source.tar.gz` hashes to exactly what `…​.sha256` declares. This is the check the installer itself makes |
 | `login` | `/login` renders the sign-in page with at least one provider link |
 
 One email per incident, not per tick. A failing probe opens an incident with one
@@ -721,9 +714,9 @@ stamp must name the commit you rolled back to, and the CLI download path must
 still verify:
 
 ```bash
-curl -s https://proteus.ashishkumarsingh.com/api/health | jq '.ok, .build'
-curl -fsSL https://proteus.ashishkumarsingh.com/downloads/proteus-source.tar.gz -o /tmp/p.tgz
-curl -fsSL https://proteus.ashishkumarsingh.com/downloads/proteus-source.tar.gz.sha256
+curl -s https://kinu.run/api/health | jq '.ok, .build'
+curl -fsSL https://kinu.run/downloads/kinu-source.tar.gz -o /tmp/p.tgz
+curl -fsSL https://kinu.run/downloads/kinu-source.tar.gz.sha256
 sha256sum /tmp/p.tgz
 ```
 

@@ -521,8 +521,8 @@ function DeviceAccessCard({ agentName }: { agentName: string }) {
 
 // ── Workspace backup ─────────────────────────────────────────────
 
-/** Download this workspace's archive — the same format `proteus export`
- *  writes and `proteus import` restores. The export RPC answers one bounded
+/** Download this workspace's archive — the same format `kinu export`
+ *  writes and `kinu import` restores. The export RPC answers one bounded
  *  page at a time, so the browser walks the cursor and assembles the file
  *  locally; a workspace with a long history takes several pages, and the
  *  record count is shown while it does. */
@@ -575,7 +575,7 @@ function WorkspaceBackupCard({
       <p className="p-meta p-text-3">
         Download everything this workspace holds (transcripts, memory, files, evolution
         history) as a portable archive. Restore it on any machine with{" "}
-        <code className="font-mono">proteus import &lt;file&gt;</code>. Take one before you
+        <code className="font-mono">kinu import &lt;file&gt;</code>. Take one before you
         delete a workspace: deletion is permanent. The archive contains your workspace's
         full contents, so keep it somewhere you'd keep a password.
       </p>

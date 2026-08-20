@@ -138,7 +138,7 @@ export function initUserTables(sql: SqlExec, tagged: SqlExecutor): void {
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_mcp_servers_name ON user_mcp_servers (name)`);
 
   // User-level connected devices (laptops/PCs). One row per device the user has
-  // linked via `proteus connect`. The reverse-WS tunnel + the live socket live
+  // linked via `kinu connect`. The reverse-WS tunnel + the live socket live
   // on THIS UserDO (the user-level hub) so every one of the user's agents can
   // request the device. `token_hash` is the device's connect secret; raw tokens
   // are returned only once to the authenticated CLI and never stored.

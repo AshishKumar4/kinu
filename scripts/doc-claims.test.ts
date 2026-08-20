@@ -120,9 +120,9 @@ describe('a path a document names', () => {
     // workspace VFS, `/install.sh` is served by a route, `dist/` is build output.
     // Governing any of them would make the gate wrong about a true sentence.
     expect(audit('The agent reads `SOUL.md` and runs `agent.js`.')).toEqual([]);
-    expect(audit('Fetch `/downloads/proteus-version.json`, then run `/install.sh`.'))
+    expect(audit('Fetch `/downloads/kinu-version.json`, then run `/install.sh`.'))
       .toEqual([]);
-    expect(audit('The bundle lands in `dist/proteus/wrangler.json`.')).toEqual([]);
+    expect(audit('The bundle lands in `dist/kinu/wrangler.json`.')).toEqual([]);
   });
 });
 

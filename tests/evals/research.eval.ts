@@ -11,8 +11,8 @@
  * either carries or does not. Scoring is string and number equality against the
  * corpus module — no LLM judge, no rubric, no opinion.
  *
- * WHY THE SPAWNED CLI. The agent under eval is the `proteus` process a user
- * runs — `proteus create --mode local`, then `proteus exec --workspace <name>
+ * WHY THE SPAWNED CLI. The agent under eval is the `kinu` process a user
+ * runs — `kinu create --mode local`, then `kinu exec --workspace <name>
  * --json` — never an in-process `LocalAgentSession`. An eval drives the WHOLE
  * agent through a SHIPPED surface, and driving the session class directly would
  * skip the CLI's own turn assembly, its client seam, and — the part this family
@@ -360,11 +360,11 @@ describe('Research evals — a live retrieval from a controlled MCP source', () 
     // the run, and reading a retrieval verdict off a torn episode would report
     // an agent failure for a harness one.
     expect(outcome.timedOut,
-      `the child \`proteus exec\` was killed at ${String(EPISODE_TIMEOUT_MS)}ms — a hung episode, `
+      `the child \`kinu exec\` was killed at ${String(EPISODE_TIMEOUT_MS)}ms — a hung episode, `
       + `not a wrong answer${outcome.stderr.trim() === '' ? '' : `; stderr: ${outcome.stderr.trim()}`}`)
       .toBe(false);
     expect(outcome.exitCode,
-      `the child \`proteus exec\` exited non-zero, so the episode never completed`
+      `the child \`kinu exec\` exited non-zero, so the episode never completed`
       + `${outcome.stderr.trim() === '' ? '' : `; stderr: ${outcome.stderr.trim()}`}`)
       .toBe(0);
     expect(outcome.unparsedLines,

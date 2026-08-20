@@ -197,7 +197,7 @@ export type ShadowTrialQueueOutcome = 'queued' | 'not_sampled' | 'no_pending' | 
  * The trial itself — a whole candidate turn plus two judge calls, minutes of
  * wall clock — is NOT run here. It used to be, on the turn's own lane, which
  * meant the promotion gate resolved candidates against the user's clock: a
- * `proteus exec` process waited up to its settle bound for a rollout, and a
+ * `kinu exec` process waited up to its settle bound for a rollout, and a
  * Durable Object ran a full extra inference beside the next request. What runs
  * the queue is the cadence lane ({@link runQueuedShadowTrials}), and until it
  * does the gate simply has less evidence — which `decidePromotion` already has

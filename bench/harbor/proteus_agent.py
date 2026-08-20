@@ -4,7 +4,7 @@
         --agent bench.harbor.proteus_agent:ProteusAgent \
         --path ./terminal-bench-2.1 \
         --ak evolve=false \
-        --allow-agent-host proteus.ashishkumarsingh.com
+        --allow-agent-host kinu.run
 
 The adapter defaults to native Workers AI DeepSeek V4 Pro 0813 through
 Kinu's signed-in inference proxy. Export ``PROTEUS_TOKEN`` before launching
@@ -17,7 +17,7 @@ new runs measure. Each corpus carries a ``corpus.json`` and every trial logs and
 records which one it ran (see ``bench/harbor/corpus.py``).
 
 Glue only: the adapter installs the CLI, creates a local workspace, and hands
-the task instruction to ``proteus exec``. It changes nothing about how the
+the task instruction to ``kinu exec``. It changes nothing about how the
 agent reasons — the only knob it exposes is ``evolve``, the switch a paired
 evolving/non-evolving comparison needs.
 
@@ -56,7 +56,7 @@ from bench.model_endpoint import (
 )
 
 INSTALL_ROOT = PurePosixPath("/installed-agent")
-INSTALL_PATH = INSTALL_ROOT / "proteus"
+INSTALL_PATH = INSTALL_ROOT / "kinu"
 #: The trial's PROTEUS_HOME. One per container, and a container is one trial —
 #: fixed rather than randomized so a resumed trial finds the state it left.
 HOME_PATH = INSTALL_ROOT / "proteus-home"
@@ -78,7 +78,7 @@ DEFAULT_MISSION = (
 
 
 class ProteusAgent(BaseInstalledAgent):
-    """Kinu, driven headlessly through ``proteus exec`` in local mode."""
+    """Kinu, driven headlessly through ``kinu exec`` in local mode."""
 
     SUPPORTS_ATIF: bool = True
 
@@ -247,7 +247,7 @@ class ProteusAgent(BaseInstalledAgent):
         )
 
         evolve_flag = "" if self._evolve else "--no-auto-evolve "
-        # `</dev/null` is required, not defensive: `proteus exec` folds piped
+        # `</dev/null` is required, not defensive: `kinu exec` folds piped
         # stdin into the prompt, so an open stdin would block the turn forever.
         # stderr goes to its own file rather than into the pipe: a tool result
         # longer than PIPE_BUF can be interleaved with a diagnostic line, and a

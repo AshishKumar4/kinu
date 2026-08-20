@@ -1,6 +1,6 @@
 // The Node `execute_tools` factory runs the model's code in-process. Two
 // behaviours it must match the CF codemode sandbox on: capture console.* (so it
-// never leaks to the CLI's stdout, which under `proteus exec --json` IS the
+// never leaks to the CLI's stdout, which under `kinu exec --json` IS the
 // event stream) and return it as `logs`; and implicit-return a trailing bare
 // expression so the model gets its value instead of undefined. Code is
 // multi-line — one statement per line — as the model actually writes it, which

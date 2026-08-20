@@ -657,7 +657,7 @@ describe('buildSystemPromptSync', () => {
     });
 
     expect(prompt).toContain('currently OFFLINE');
-    expect(prompt).toContain('proteus connect');
+    expect(prompt).toContain('kinu connect');
     expect(prompt).toContain('Do not call it');
     // Offline ≠ selectable: no laptop.* namespace advertised for calls.
     expect(prompt).not.toContain('laptop.***');

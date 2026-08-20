@@ -66,7 +66,7 @@
  * hint at step 0 and, twenty-five steps later, the recovery steer for the
  * shape the hint failed to prevent. One shared slot would have cost either the
  * recovery steer on the session's first turn — the only turn a one-shot
- * `proteus exec` run has — or the count of hints that did NOT convert, which
+ * `kinu exec` run has — or the count of hints that did NOT convert, which
  * is the number the whole comparison rests on.
  *
  * Every steer is a HINT. The message says so, nothing gates on it, and the

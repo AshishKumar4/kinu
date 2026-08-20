@@ -5,7 +5,7 @@
  * `ensureSchema` on the subordinate DO, an eleven-call block in the CLI
  * session constructor, and `openWorkspaceCLI` each named their own subset, and
  * the subsets disagreed: `craft_scores` was never created by any local path
- * except `proteus create`, so every EMA read on a workspace opened any other
+ * except `kinu create`, so every EMA read on a workspace opened any other
  * way silently no-opped; `imported_experience` was never created on cf, so the
  * `experience` tool's import action hard-errored in production. Neither is a
  * platform difference — both are a list someone forgot to copy.

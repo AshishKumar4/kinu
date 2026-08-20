@@ -16,7 +16,7 @@ code about our agent; CL-Bench is cloned separately and left unmodified.
 
 ```
 bench/clbench/
-  proteus/            the `proteus` CL-Bench system (symlinked into a checkout)
+  kinu/            the `kinu` CL-Bench system (symlinked into a checkout)
   configs/            run configs covering both axes
 ```
 
@@ -56,11 +56,11 @@ clbench setup database_exploration   # ~800 MB from Hugging Face, free
 
 The default is native Workers AI DeepSeek V4 Pro 0813 through Kinu's
 signed-in `/api/user/ai/v1` proxy. The adapter reads `$PROTEUS_TOKEN` first,
-then the session written by `proteus auth` in `~/.proteus/config.json`. For a
+then the session written by `kinu auth` in `~/.proteus/config.json`. For a
 long benchmark, mint a scoped token and keep it in the run environment:
 
 ```bash
-proteus tokens create --name clbench --scopes ai.proxy
+kinu tokens create --name clbench --scopes ai.proxy
 export PROTEUS_TOKEN=pta_…
 ```
 
@@ -119,7 +119,7 @@ each system gets its own throwaway home, so "stateless" really is a v0
 workspace. `persist_workspace=False` covers the *within-run* case, resetting the
 workspace at every instance boundary so a single rollout can be its own control.
 
-**Self-evolution.** `auto_evolve=False` passes `proteus exec --no-auto-evolve`,
+**Self-evolution.** `auto_evolve=False` passes `kinu exec --no-auto-evolve`,
 which turns off turn- and session-level evolution while leaving durable state
 intact. Persistent state with evolution off is the control that says how much of
 any gain is evolution rather than plain memory.
@@ -131,7 +131,7 @@ latest observation.
 
 ## How a turn actually works
 
-One benchmark turn is one `proteus exec --json`. Kinu runs its full agentic
+One benchmark turn is one `kinu exec --json`. Kinu runs its full agentic
 loop inside that turn — its own tools, memory, and scaffold, in its own
 throwaway working directory — and returns one structured action.
 

@@ -19,8 +19,8 @@
  * `packages/cf-backend/src/{orchestrator,actor-agent}.ts` are 9,466 lines with no
  * shared turn implementation, so "the agent takes a turn" is TWO claims. The
  * hosted one runs inside the deployed Worker's Durable Object, reached over the
- * same ticket-authenticated websocket `proteus chat` uses; the local one runs
- * in-process through the same spine as `proteus exec`. Neither substitutes for
+ * same ticket-authenticated websocket `kinu chat` uses; the local one runs
+ * in-process through the same spine as `kinu exec`. Neither substitutes for
  * the other.
  *
  * COST. Both turns run on `@cf/deepseek-ai/deepseek-v4-pro-0813` through the
@@ -98,7 +98,7 @@ describe('Live Smoke — one real turn per backend', () => {
           await deleteCloudAgent(origin, token, name);
         } catch (err) {
           console.warn(`[live-smoke] cloud agent ${name} was NOT deleted and may still exist `
-            + `on the account — delete it with \`proteus delete ${name}\`: ${String(err)}`);
+            + `on the account — delete it with \`kinu delete ${name}\`: ${String(err)}`);
         }
       }
     }
@@ -233,7 +233,7 @@ describe('Live Smoke — one real turn per backend', () => {
       console.log(`    cli durable: ${String(messages)} message row(s)`);
       expect(messages).toBeGreaterThanOrEqual(2);
     } finally {
-      // `proteus exec`'s own one-shot sequence, and it is not optional. The
+      // `kinu exec`'s own one-shot sequence, and it is not optional. The
       // session detaches durable fibers, and `end()` documents the hazard
       // exactly: closing the database out from under one aborts its settle write
       // mid-flight. Measured here before this existed — the suite printed

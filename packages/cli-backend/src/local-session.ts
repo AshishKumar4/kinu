@@ -244,7 +244,7 @@ export interface LocalAgentSessionOpts {
   onEvent: (event: SessionEvent) => void;
   /** Disable auto-evolution (turn + session reflection). Default: enabled. */
   noAutoEvolve?: boolean;
-  /** This process runs ONE task turn and exits (`proteus exec`/`proteus run`).
+  /** This process runs ONE task turn and exits (`kinu exec`/`kinu run`).
    *  Two consequences, both about honesty rather than throttling:
    *    • the next invocation's prompt is NOT a conversational follow-up, so it
    *      never grades the previous turn (it would read as `accepted`);
@@ -477,7 +477,7 @@ export class LocalAgentSession implements BackendHost {
 
     // Every table a workspace has, on any backend — one list, in core. A
     // session can be constructed against a database that no open path touched
-    // (a benchmark harness, `proteus exec` on a fresh clone), so it runs here
+    // (a benchmark harness, `kinu exec` on a fresh clone), so it runs here
     // too rather than trusting an earlier caller.
     const hubSql = makeSqlExec(opts.db);
     initWorkspaceSchema({ execRaw: this.rt.storage.execRaw, sql: this.rt.storage.sql, exec: hubSql });
@@ -588,7 +588,7 @@ export class LocalAgentSession implements BackendHost {
     // RunEvent union the cloud backend records, over local SQLite — is written…
     // …and forwarded to the frontends as it is written. The table alone is
     // observable only to something that outlives the database, which a
-    // benchmark container or a one-shot `proteus exec` does not.
+    // benchmark container or a one-shot `kinu exec` does not.
     this.eventRecorder.observe((event) => this.emit({ type: 'run-event', event }));
 
     // The cumulative spend governor — a scheduled run or a fork opts into a
@@ -1190,7 +1190,7 @@ export class LocalAgentSession implements BackendHost {
    * Run the session/lifetime evolution pass the durable window is due for, to
    * completion. This is the CADENCE LANE (AgentOrchestrator's exit contract),
    * and this method is how a host that CAN afford it claims the work a
-   * one-shot `proteus exec` process deliberately left behind: the scheduler
+   * one-shot `kinu exec` process deliberately left behind: the scheduler
    * daemon calls it on its tick, in a process whose wall clock is charged to
    * nobody's task.
    *
@@ -1318,7 +1318,7 @@ export class LocalAgentSession implements BackendHost {
       `${this.backgroundFibers.size} background job(s) did not finish in time and were interrupted by this ` +
       'exit. They are checkpointed, so this workspace resumes them the next time it starts — including ' +
       'unattended, under the local scheduler daemon — and a resumed job runs commands and writes files on ' +
-      `this machine. Cancel with: proteus jobs ${this.agentName()} cancel <id>.` +
+      `this machine. Cancel with: kinu jobs ${this.agentName()} cancel <id>.` +
       (roster ? ` Interrupted: ${roster}.` : '');
     this.emit({ type: 'evolution', event: 'bg_jobs_abandoned', message });
     diagnostics.failure('jobs.abandoned_at_exit', new ProteusError('timeout', message), {
@@ -1338,7 +1338,7 @@ export class LocalAgentSession implements BackendHost {
    * tells the agent through the one signal seam.
    *
    * Then the turn reviews a previous one-shot process deferred. Same reason as
-   * the jobs: `proteus exec` exits before the outcome review it owes, so the
+   * the jobs: `kinu exec` exits before the outcome review it owes, so the
    * review is a durable row and this is the next host that can afford it
    * (core's AgentOrchestrator.runDeferredTurnReviews — a one-shot session
    * declines it there, so the cost never lands back on an exec invocation).
@@ -1506,7 +1506,7 @@ export class LocalAgentSession implements BackendHost {
    * wakes actually run (enqueueTurn only skips once ended) — and because a
    * settled fiber awaits its own wake turn (host.enqueueTurn resolves when that
    * turn finishes), awaiting the fibers awaits the wakes too. A one-shot
-   * `proteus run`/`exec` calls this after its turn and before it stops
+   * `kinu run`/`exec` calls this after its turn and before it stops
    * listening/closes, so a turn that backgrounded work streams its second half
    * instead of being cut off at process exit.
    *
@@ -1975,7 +1975,7 @@ export class LocalAgentSession implements BackendHost {
       // The turn's contribution to the promotion gate: one row recording the
       // task, the answer, and the conversation it was asked in. The rollout it
       // pays for runs on the cadence lane, which is why this is not tracked —
-      // a `proteus exec` process no longer waits out a candidate turn before
+      // a `kinu exec` process no longer waits out a candidate turn before
       // it can exit.
       if (this.turnWorkMode !== 'plan') this.engine.queueShadowTrial(turn, liveTurnOpts.history);
       this.emit({ type: 'turn-end', turn });
@@ -2383,7 +2383,7 @@ export class LocalAgentSession implements BackendHost {
    *  no trace of a fork, and 4-of-5 empty forks had to be found by reading
    *  trajectories by hand. The recorder streams every row it writes as a
    *  `run-event`, so recording IS the fan-out; broadcasting a second copy put
-   *  the split through `proteus exec --json` twice and reached no other
+   *  the split through `kinu exec --json` twice and reached no other
    *  reader — no CLI surface consumes a head phase as a broadcast.
    *
    *  `runId` is the run captured at fork DISPATCH (buildAgentsForkDeps'
@@ -2525,7 +2525,7 @@ export class LocalAgentSession implements BackendHost {
     this.cachedModel = model;
     this.cachedModelSpec = spec;
     // Start the catalog lookup at claim time rather than at first use. A CLI
-    // process is short-lived — `proteus exec` runs ONE turn — so a lookup that
+    // process is short-lived — `kinu exec` runs ONE turn — so a lookup that
     // only starts when the first turn assembles would never land in time and
     // that turn would budget against the static table. Still non-blocking:
     // whatever has not landed falls back exactly as before.

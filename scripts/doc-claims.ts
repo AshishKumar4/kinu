@@ -553,7 +553,7 @@ function spellings(path: string, seen: Claims): string[] {
  * Whether a path claim is about this repository at all: its leading segment has to
  * be a directory the tree has.
  *
- * `/install.sh` is a served route, `dist/proteus/wrangler.json` is build output, and
+ * `/install.sh` is a served route, `dist/kinu/wrangler.json` is build output, and
  * `SOUL.md` or `agent.js` is a file the system writes into a workspace VFS. All
  * three are true sentences about paths this repository does not contain, and all
  * three are stated as blind spots.
@@ -863,7 +863,7 @@ function blindSpots(seen: Claims): string {
     + ' gate could give.',
     '  8. NOT EVERY PATH SHAPE IS A CLAIM ABOUT THIS TREE. A bare basename names no'
     + ' location and is skipped; so is a path whose first segment is no directory'
-    + ' here. `/install.sh` is a served route and `dist/proteus/wrangler.json` is'
+    + ' here. `/install.sh` is a served route and `dist/kinu/wrangler.json` is'
     + ' build output.',
     '  9. A NAME WITHOUT A CASE BOUNDARY is not governed. A single lowercase word in'
     + ' backticks is an action, a column or an English word far more often than a'

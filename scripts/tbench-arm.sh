@@ -72,7 +72,7 @@ exec harbor run \
   "${TASK_FLAGS[@]}" \
   -m "$MODEL" \
   --ak "evolve=$EVOLVE" \
-  --allow-agent-host proteus.ashishkumarsingh.com \
+  --allow-agent-host kinu.run \
   --jobs-dir "$JOBS_DIR" \
   --job-name "$JOB_NAME" \
   -n "$CONCURRENCY" \

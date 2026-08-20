@@ -11,7 +11,7 @@
  *   When user message N+1 arrives IN THE SAME CONVERSATION, turn N is graded
  *   from the user's actual follow-up (accepted / corrected / frustrated). A
  *   turn no follow-up can grade — a programmatic wake, or a one-shot
- *   `proteus exec` whose next invocation is an unrelated task — records no
+ *   `kinu exec` whose next invocation is an unrelated task — records no
  *   outcome: an honest absence, never a constant, and never an `accepted`
  *   inferred from the fact that something else happened next.
  *   The outcome populates turn.feedback, drives craft EMA, gates reflection
@@ -230,7 +230,7 @@ export class EvolutionEngine {
     // both backends (and tests) get them without per-backend schema wiring.
     // `craft_scores` joins them: the engine writes it from the turn clock and
     // the in-episode clock writes it through `craftLedger`, and it was ensured
-    // at actor attach on cf but only at `proteus create` on the CLI — so a
+    // at actor attach on cf but only at `kinu create` on the CLI — so a
     // workspace that predated the table, or one built over a bare database,
     // silently scored nothing at all.
     initCraftScoreTables(rt.storage.execRaw);
@@ -318,7 +318,7 @@ export class EvolutionEngine {
    * the result. `followup` is the NEXT user message; null means no
    * conversational follow-up can grade this turn — a programmatic turn (the
    * reactor and job wakes carry no user verdict) or a one-shot invocation
-   * (`proteus exec`, where the next prompt is a different task, written by a
+   * (`kinu exec`, where the next prompt is a different task, written by a
    * caller who never saw this answer) — and the turn records no outcome at all.
    *
    * One signal pipeline: explicit thumbs (recorded before the follow-up)
@@ -900,7 +900,7 @@ export class EvolutionEngine {
 
   /**
    * Run a full MCTS evolution cycle. Happens automatically every N conversations.
-   * Also callable manually via `proteus evolve`.
+   * Also callable manually via `kinu evolve`.
    */
   async onLifetimeEvolution(session?: SessionWriter): Promise<void> {
     const purpose = summarizeSoul(await readSoul(this.rt.storage.vfs)) || 'be a helpful assistant';

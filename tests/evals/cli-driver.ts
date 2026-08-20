@@ -1,12 +1,12 @@
 /**
- * The shipped-surface driver: the agent under eval is the SPAWNED `proteus`
+ * The shipped-surface driver: the agent under eval is the SPAWNED `kinu`
  * CLI on a real workspace, never an in-process runtime.
  *
  * The precedent is bench/harbor/proteus_agent.py, which calls itself "glue
  * only: installs the CLI, creates a local workspace, and hands the task
- * instruction to `proteus exec`. It changes nothing about how the agent
- * reasons." This module is the same glue for the eval tier: `proteus create
- * --mode local`, then `proteus exec --workspace <name> --json`, in a scratch
+ * instruction to `kinu exec`. It changes nothing about how the agent
+ * reasons." This module is the same glue for the eval tier: `kinu create
+ * --mode local`, then `kinu exec --workspace <name> --json`, in a scratch
  * PROTEUS_HOME, configured the way a user's process is configured — the
  * PROTEUS_BASE_URL/PROTEUS_AUTH/PROTEUS_MODEL direct-endpoint override and, for
  * MCP, the `mcpServers` block of the home's own config.json. Driving
@@ -50,7 +50,7 @@ export interface CliWorkspaceOptions {
   readonly workspace: string;
   readonly purpose: string;
   readonly llm: LLMProviderConfig;
-  /** Written into the home's config.json — the same file `proteus chat` reads. */
+  /** Written into the home's config.json — the same file `kinu chat` reads. */
   readonly mcpServers?: Readonly<Record<string, CliMcpServer>>;
 }
 
@@ -125,7 +125,7 @@ function childFailure(reason: string, exitCode: number | null, stderr: string): 
 }
 
 /**
- * `proteus create <workspace> --mode local`: the shipped birth path, in the
+ * `kinu create <workspace> --mode local`: the shipped birth path, in the
  * scratch home. Also writes the home's config.json when MCP servers are named,
  * BEFORE any CLI process runs, so every invocation sees one configuration.
  *
@@ -156,12 +156,12 @@ export async function createCliWorkspace(opts: CliWorkspaceOptions): Promise<voi
     proc.exited, new Response(proc.stdout).text(), new Response(proc.stderr).text(),
   ]);
   if (exitCode !== 0) {
-    throw childFailure(`proteus create ${opts.workspace} failed`, exitCode, `${stdout}\n${stderr}`);
+    throw childFailure(`kinu create ${opts.workspace} failed`, exitCode, `${stdout}\n${stderr}`);
   }
 }
 
 /**
- * `proteus exec --workspace <name> --json`: one headless task turn through the
+ * `kinu exec --workspace <name> --json`: one headless task turn through the
  * exact process a user runs. stdin is closed — `exec` folds piped stdin into
  * the prompt — and stdout is parsed as the line-delimited event stream.
  */

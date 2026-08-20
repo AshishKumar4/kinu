@@ -34,7 +34,7 @@ Evolution happens at three timescales simultaneously, each feeding into the next
 
 ## 2. Web Version Applications
 
-The web version runs on Cloudflare Workers with Durable Objects, accessible at [proteus.ashishkumarsingh.com](https://proteus.ashishkumarsingh.com).
+The web version runs on Cloudflare Workers with Durable Objects, accessible at [kinu.run](https://kinu.run).
 
 ### Research Platform & Live Demo
 
@@ -94,8 +94,8 @@ The CLI version runs locally with bun:sqlite, providing the same core capabiliti
 ### Local Development Agent
 
 ```bash
-proteus create dev-helper --purpose "A TypeScript development assistant"
-proteus chat dev-helper
+kinu create dev-helper --purpose "A TypeScript development assistant"
+kinu chat dev-helper
 # Agent has access to execute_tools, run, file, agents, memory, tasks, web
 # Evolution happens locally — crafted tools persist in ~/.proteus/dev-helper/agent.db
 ```
@@ -110,13 +110,13 @@ The CLI agent can:
 
 ```bash
 # Night job: run evolution cycle
-proteus evolve dev-helper --budget 5
+kinu evolve dev-helper --budget 5
 
 # Export agent state for sharing
-proteus export dev-helper -o dev-helper-v2.agent.db
+kinu export dev-helper -o dev-helper-v2.agent.db
 
 # Import on another machine
-proteus import dev-helper-v2.agent.db --name dev-helper
+kinu import dev-helper-v2.agent.db --name dev-helper
 ```
 
 Agent state is a single SQLite file. Export, backup, version control, and share agents like code artifacts.
@@ -220,7 +220,7 @@ the orchestrator.
 
 - **Turn-level** works well — pattern extraction fires reliably after an accepted turn that used tools
 - **Session-level** needs 5 turns *and* a turn that errored or drew negative feedback; scaffold mutation additionally needs 3+ conversations
-- **Lifetime** fires every 5 closed session windows (`lifetimeEvolutionInterval: 5`), which is 25 turns; `proteus evolve` runs a search on demand
+- **Lifetime** fires every 5 closed session windows (`lifetimeEvolutionInterval: 5`), which is 25 turns; `kinu evolve` runs a search on demand
 - The LLM's ability to generalize tool patterns into reusable code is inconsistent
 
 ### Evaluation exists; coverage is thin

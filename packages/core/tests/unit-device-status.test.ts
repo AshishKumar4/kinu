@@ -49,13 +49,13 @@ describe('deviceChangeNotice', () => {
     const notice = deviceChangeNotice('connected', 'offline');
     expect(notice).toContain('## Context update');
     expect(notice).toContain('disconnected');
-    expect(notice).toContain('proteus connect');
+    expect(notice).toContain('kinu connect');
   });
 
   test('announces a revocation without the reconnect instruction', () => {
     const notice = deviceChangeNotice('connected', 'none');
     expect(notice).toContain('no longer registered');
-    expect(notice).not.toContain('proteus connect');
+    expect(notice).not.toContain('kinu connect');
   });
 
   test('stays silent when nothing changed or on the first observation', () => {
@@ -78,7 +78,7 @@ describe('observeDevicePresence', () => {
     // Turn 1: no device yet — first observation seeds the watermark silently.
     expect(observeDevicePresence(store, { connected: false, registered: false, toolchain: null }))
       .toEqual({ presence: 'none', notice: null });
-    // The user runs `proteus connect` between turns.
+    // The user runs `kinu connect` between turns.
     const turn2 = observeDevicePresence(store, { connected: true, registered: true, toolchain: null });
     expect(turn2.presence).toBe('connected');
     expect(turn2.notice).toContain('just connected');

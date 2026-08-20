@@ -290,7 +290,7 @@ idempotent and its per-turn statement count is pinned by
 
 The canonical read is `getChatHistoryPage` in
 `packages/core/src/read-models/status.ts`. It serves the web chat pane
-(`pages/WorkspacePage.tsx:491`), the cloud client, `proteus debug messages`, and
+(`pages/WorkspacePage.tsx:491`), the cloud client, `kinu debug messages`, and
 its local peer `getLocalChatHistory`.
 
 **Spec §11.4 Auto registration: SHIPPED.** No implicit creation remains in the server
@@ -314,8 +314,8 @@ forked CLI session. A cloud workspace calls the `forkAgent` RPC
 (`orchestrator.ts:3168`) and hands back a sibling client for the new workspace
 (`cloud-agent-client.ts:391-410`). Forking is refused while a turn is in flight.
 
-**Recorded session fork.** `--fork <idOrPath>` on `proteus chat` and
-`proteus run` forks a recorded CLI session into a new one
+**Recorded session fork.** `--fork <idOrPath>` on `kinu chat` and
+`kinu run` forks a recorded CLI session into a new one
 (`packages/cli/src/program.ts:206,221`, and [CLI.md](CLI.md)).
 
 **The delegation action is gone.** `AGENTS_TOOL_ACTIONS` in
@@ -381,7 +381,7 @@ All four are answered in code.
    consumption from the stored bearer hash. See §7 of this file.
 3. **Fork cut-point migration: RESOLVED.** The cut point is a canonical chat
    message id over the session-tree projection. See §11 and §12 of this file.
-4. **Cloud `/sessions` semantics: RESOLVED.** `proteus sessions` lists recorded
+4. **Cloud `/sessions` semantics: RESOLVED.** `kinu sessions` lists recorded
    terminal logs and nothing else (`packages/cli/src/commands/sessions.ts`). On
    the cloud client `listSessions()` returns those logs and
    `resumeConversation()` swaps which log is being written, leaving Durable

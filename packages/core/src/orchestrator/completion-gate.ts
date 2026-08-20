@@ -3,8 +3,8 @@
  * model's own say-so.
  *
  * On the interactive surface a human reads the answer and pushes back, so the
- * model deciding it is done is fine. On the one-shot surface (`proteus exec`,
- * `proteus run`) nobody reads it: the process exits, whatever is on disk is the
+ * model deciding it is done is fine. On the one-shot surface (`kinu exec`,
+ * `kinu run`) nobody reads it: the process exits, whatever is on disk is the
  * deliverable, and the next thing to look at it is a grader or a CI step. The
  * measured failure class there is the near-miss — a stray build artifact left
  * behind, a violated output constraint, a transposed column, a self-consistent

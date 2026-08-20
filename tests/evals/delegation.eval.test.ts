@@ -9,7 +9,7 @@
  * this. It would report `0 eligible` and look like a pass.
  *
  * So this drives `LocalAgentSession` in-process. That is the same spine the CLI
- * uses (`proteus exec` → `runOneShot` → `LocalAgentSession.processTurn` →
+ * uses (`kinu exec` → `runOneShot` → `LocalAgentSession.processTurn` →
  * `closeTurnRun`), with no subprocess, no `PROTEUS_HOME`, no daemon guard and no
  * stdout parsing. The rows land in the workspace's own SQLite, which is exactly
  * what the scorer reads.

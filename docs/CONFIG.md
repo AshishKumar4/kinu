@@ -2,15 +2,15 @@
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
-Every CLI setting lives in one JSON file. `proteus setup`, `proteus auth`,
-`proteus providers connect` and `proteus create` write it for you; this page is
+Every CLI setting lives in one JSON file. `kinu setup`, `kinu auth`,
+`kinu providers connect` and `kinu create` write it for you; this page is
 for when you want to read or edit it yourself. The authoritative shape is
 `ProteusConfig` in `packages/cli/src/config.ts`.
 
 ```
 ~/.proteus/                 mode 0700
   config.json               mode 0600, everything below
-  bin/                      the proteus command + your workspace alias shims
+  bin/                      the kinu command + your workspace alias shims
   source/                   the CLI source cache the launcher runs
   <workspace>/agent.db      one per LOCAL workspace: its entire state
   sessions/                 recorded CLI sessions
@@ -28,13 +28,13 @@ an export archive, land where you point them and are the one exception.
 
 | Field | Type | What it is |
 | --- | --- | --- |
-| `origin` | string | The Kinu deployment this CLI talks to. Defaults to `https://proteus.ashishkumarsingh.com`; `PROTEUS_ORIGIN` and `--origin` override it. |
-| `accessToken` | string | The interactive session token from `proteus auth`. Treat it as a password. |
+| `origin` | string | The Kinu deployment this CLI talks to. Defaults to `https://kinu.run`; `PROTEUS_ORIGIN` and `--origin` override it. |
+| `accessToken` | string | The interactive session token from `kinu auth`. Treat it as a password. |
 | `tokenExpiresAt` | ISO date | When that token expires. The CLI refuses it after this and asks you to re-auth. |
-| `user` | `{id, email, displayName?}` | Who the token belongs to. `proteus whoami` prints it. |
+| `user` | `{id, email, displayName?}` | Who the token belongs to. `kinu whoami` prints it. |
 
 `PROTEUS_TOKEN` overrides `accessToken` for CI, where a scoped token from
-`proteus tokens create` is the right thing to use rather than a session token.
+`kinu tokens create` is the right thing to use rather than a session token.
 
 ## Workspaces
 
@@ -47,7 +47,7 @@ an export archive, land where you point them and are the one exception.
 | `agents.<name>.displayName` | string | The human name shown in the web app. |
 | `agents.<name>.alias` | string | The alias shim created for it, if any. |
 | `agents.<name>.createdAt` / `updatedAt` | ISO date | Bookkeeping. |
-| `aliases` | map | `alias → workspace name`. `proteus alias` / `unalias` maintain it, and each alias also has a shim in `bin/`. |
+| `aliases` | map | `alias → workspace name`. `kinu alias` / `unalias` maintain it, and each alias also has a shim in `bin/`. |
 
 Workspace and alias names are `[A-Za-z0-9][A-Za-z0-9_-]{0,63}`, and an alias may
 not shadow a built-in command name.
@@ -61,7 +61,7 @@ not shadow a built-in command name.
 
 ## Providers
 
-**`proteus provider connect` no longer writes a key here by default.** Signed
+**`kinu provider connect` no longer writes a key here by default.** Signed
 in, the key goes to your Kinu account, where it is encrypted at rest, and
 this machine reaches it through the provider proxy without holding a copy. Pass
 `--local` to keep one here instead, for offline use or an endpoint only this
@@ -89,7 +89,7 @@ account session the local store is the only source.
 | `providers.openai.apiKey` | OpenAI API key. |
 | `providers.anthropic.apiKey` | Anthropic API key. |
 | `providers.openrouter.apiKey` | OpenRouter API key. |
-| `providers.codex` | The ChatGPT device-flow tokens (`accessToken`, `refreshToken`, `expiresAt`, `metadata`), written by `proteus providers connect codex`. |
+| `providers.codex` | The ChatGPT device-flow tokens (`accessToken`, `refreshToken`, `expiresAt`, `metadata`), written by `kinu providers connect codex`. |
 | `providers.openaiCompat.<name>` | An OpenAI-compatible endpoint: `{baseURL, apiKey?, headers?, extraHeaders?}`. |
 
 The Claude subscription provider stores nothing here. Kinu drives Anthropic's
@@ -121,7 +121,7 @@ by local workspaces. Cloud workspaces get MCP servers from your account instead.
 
 ## Environment variables
 
-Six apply to every command, and `proteus --help` lists exactly these.
+Six apply to every command, and `kinu --help` lists exactly these.
 
 | Variable | What it does |
 | --- | --- |

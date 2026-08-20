@@ -148,7 +148,7 @@ export function deviceChangeNotice(prev: DevicePresence | null, current: DeviceP
     return '## Context update\n' +
       "Your user's PC just disconnected — the `laptop` runtime is offline" +
       (current === 'offline'
-        ? '. The user can reconnect it by running `proteus connect` on their machine.'
+        ? '. The user can reconnect it by running `kinu connect` on their machine.'
         : ' and the device is no longer registered.');
   }
   return null;

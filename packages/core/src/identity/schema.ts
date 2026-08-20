@@ -168,8 +168,8 @@ export function initAllTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
 /**
  * Bring a workspace created against an older schema up to the current one.
  * Idempotent, and it writes — every workspace-open path runs it right after
- * initAllTables, which is what keeps the read paths (`proteus list`,
- * `proteus status`, both of which open the database readonly) pure reads.
+ * initAllTables, which is what keeps the read paths (`kinu list`,
+ * `kinu status`, both of which open the database readonly) pure reads.
  */
 export function migrateWorkspaceStorage(sql: SqlExecutor, execRaw: RawSqlExec): void {
   adoptLegacyAgentIdentity(sql);

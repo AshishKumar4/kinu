@@ -441,7 +441,7 @@ put `console.log` on an event and `console.error` on a failure. It is gone
 deliberately, because stdout is not free in the CLI process:
 `cli/src/acp/agent.ts` carries ACP JSON-RPC on it,
 `cli-backend/src/executor.ts` carries one `{ok,result}` line, and
-`proteus exec --json` carries the event stream.
+`kinu exec --json` carries the event stream.
 
 Envelope keys are ours and the caller's fields are nested, so no field name can
 displace the classification. `createRecordingLogger()` is the assertable fake,

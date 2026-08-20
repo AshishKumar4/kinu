@@ -2,7 +2,7 @@ import { JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, parseJsonValue, type JsonValu
 import { tolerate } from '@kinu/core/obs';
 import * as v from 'valibot';
 
-const origin = (process.env.PROTEUS_SMOKE_ORIGIN ?? 'https://proteus-staging.ashishkmr472.workers.dev').replace(/\/+$/, '');
+const origin = (process.env.PROTEUS_SMOKE_ORIGIN ?? 'https://staging.kinu.run').replace(/\/+$/, '');
 const agentName = process.env.PROTEUS_SMOKE_AGENT ?? `smoke-workspace-${Date.now().toString(36)}`;
 const mission = process.env.PROTEUS_SMOKE_MISSION ?? `Verify workspace websocket and snapshot ${new Date().toISOString()}`;
 const keepAgent = process.env.PROTEUS_SMOKE_KEEP_AGENT === '1';

@@ -670,7 +670,7 @@ describe('each executor tool files its own failure in the right part', () => {
     expect(census.byKey).toEqual([['run·unavailable', 1]]);
     expect(parts(census)).toEqual(onlyPart('runtimeMissing'));
     // And the instruction the user needs survives inside the payload.
-    expect(payload).toContain('proteus connect');
+    expect(payload).toContain('kinu connect');
   });
 
   test('parent: the errno the parent raised is the class, and it is not re-guessed', async () => {

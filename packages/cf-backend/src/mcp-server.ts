@@ -7,7 +7,7 @@
  * straight to this handler, bypassing the browser-session gate external
  * clients can never pass):
  *   • `Authorization: Bearer ptc_…` — the caller's CLI token (the per-user
- *     credential external MCP clients obtain via `proteus auth`).
+ *     credential external MCP clients obtain via `kinu auth`).
  *   • Otherwise the browser session / DEV_USER_EMAIL identity.
  * Every request then runs the same ownership claim as the rest of the
  * per-agent API (registry membership + claimOwner).
@@ -485,7 +485,7 @@ async function authenticateMcpCaller(request: Request, env: Env): Promise<{ user
     if (result.identity.kind !== 'session') {
       // Scoped CI access tokens are CLI-API-only; the MCP surface stays
       // bound to interactive session tokens.
-      return withCors(Response.json({ error: 'MCP requires an interactive CLI session token. Sign in with: proteus auth' }, { status: 403 }));
+      return withCors(Response.json({ error: 'MCP requires an interactive CLI session token. Sign in with: kinu auth' }, { status: 403 }));
     }
     return { userId: result.identity.userId };
   }

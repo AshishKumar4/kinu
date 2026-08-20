@@ -1,4 +1,4 @@
-"""Convert ``proteus exec --json`` output into an ATIF trajectory.
+"""Convert ``kinu exec --json`` output into an ATIF trajectory.
 
 Kinu emits a line-delimited event stream (see ``jsonEvents`` in
 ``packages/cli/src/commands/run.ts``)::
@@ -272,7 +272,7 @@ def build_trajectory(
             total_cached_tokens=summary.usage.get("cacheRead") if summary.usage else None,
             extra=final_extra or None,
         ),
-        notes="Converted from proteus exec --json events to ATIF",
+        notes="Converted from kinu exec --json events to ATIF",
     )
     return trajectory, summary
 

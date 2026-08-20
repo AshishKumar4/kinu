@@ -37,7 +37,7 @@ process.env.PROTEUS_HOME = home;
 // The throwaway home isolates a suite from the developer's CONFIG FILE. This is
 // the same property for the ENVIRONMENT, which was the half nobody had done:
 // `resolveCloudSession()` prefers `PROTEUS_TOKEN` over that config file, so a
-// shell that had run `bun run test:eval` or `proteus chat` silently moved ten of
+// shell that had run `bun run test:eval` or `kinu chat` silently moved ten of
 // `bun test packages/cli/`'s tests onto their signed-in branch and left them
 // red. See packages/test-utils/src/ambient-env.ts for the measurement.
 //

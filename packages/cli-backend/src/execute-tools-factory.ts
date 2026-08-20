@@ -86,7 +86,7 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
       execute: async (args, options) => {
         // `console` is shadowed by a capturing stand-in: this factory runs the
         // model's code in-process, so a real console.* would write straight to
-        // the CLI's stdout — which, under `proteus exec --json`, IS the event
+        // the CLI's stdout — which, under `kinu exec --json`, IS the event
         // stream. Capture the output and return it as `logs` (the CF codemode
         // sandbox's contract), so the model gets what it printed and the stream
         // stays clean. Declared out here so the catch below can return partial

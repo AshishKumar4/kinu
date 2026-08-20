@@ -24,7 +24,7 @@ describe('createSandboxedExecutor', () => {
 
   // The TB2.1 nginx hang: the craft probe's code daemonized a server, the
   // daemon kept the inherited stdout pipe open after the probe exited, and the
-  // EOF-bound read held `proteus exec` until the harness cap killed it. With
+  // EOF-bound read held `kinu exec` until the harness cap killed it. With
   // file-backed stdio the read completes at EXIT. The daemonization below is
   // the same shape (sh backgrounds a child holding the wrapper's stdio and
   // exits); a hang outlives bun's 5s default test timeout and fails red.

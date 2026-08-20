@@ -336,7 +336,7 @@ function PcConnectCta() {
         hint={registered
           ? <>
               {labels} {devices.length > 1 ? "are" : "is"} registered but the daemon is not running.
-              Restart it on that machine with <code className="font-mono p-fill px-1 rounded-sm">proteus connect</code>.
+              Restart it on that machine with <code className="font-mono p-fill px-1 rounded-sm">kinu connect</code>.
             </>
           : "Link a laptop or PC to your account so your agents can run commands, read files, and serve previews on it, with your consent. One device serves all your agents."}
       >

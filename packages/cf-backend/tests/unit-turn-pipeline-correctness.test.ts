@@ -495,7 +495,7 @@ describe('turn-pipeline correctness wiring', () => {
     // The DO holds BOTH lanes: the turn lane (settleEvolution) and the
     // cadence-heavy session pass (runDueSessionEvolution). It is the host that
     // CAN afford the heavy pass — keepAlive is exactly what a one-shot
-    // `proteus exec` process lacks, which is why that one defers it instead.
+    // `kinu exec` process lacks, which is why that one defers it instead.
     const settle = actor.slice(
       actor.indexOf('protected settleEvolutionInBackground(): void'),
       actor.indexOf("   * The completed turn's evolution spine"),

@@ -1869,7 +1869,7 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /** One node, its ancestry and its children (core read-models/search-tree.ts).
-   *  The CLI serves the same projection over bun:sqlite, so `proteus inspect
+   *  The CLI serves the same projection over bun:sqlite, so `kinu inspect
    *  mcts <id>` formats one shape however it reached it. */
   @callable() async getMctsNodeDetail(nodeId: string): Promise<SearchNodeDetail | null> {
     return readSearchNodeDetail(this.boundSql, nodeId);
@@ -2207,7 +2207,7 @@ export class OrchestratorAgent extends ActorAgent {
       return v.parse(CheckpointAvailabilitySchema, result === undefined ? undefined : JSON.parse(result));
     } catch (err) {
       if (isDeviceNotConnectedError(err)) {
-        return { available: false, reason: 'no device connected — connect one with `proteus connect`' };
+        return { available: false, reason: 'no device connected — connect one with `kinu connect`' };
       }
       throw err;
     }
@@ -2565,7 +2565,7 @@ export class OrchestratorAgent extends ActorAgent {
   /**
    * One page of this workspace's portable archive — the owner's own copy of
    * everything the workspace durably holds, in the same format the local
-   * backend writes and `proteus import` reads.
+   * backend writes and `kinu import` reads.
    *
    * Paged because a workspace's SQL rows and Nimbus files have no bounded
    * size, and neither a DO response nor an isolate's memory should have to hold
@@ -3524,7 +3524,7 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /** Recent events, newest first — `events_v` ordering (received_at desc).
-   *  Reached two ways: `proteus events` over the CLI RPC transport, and
+   *  Reached two ways: `kinu events` over the CLI RPC transport, and
    *  `GET /api/workspaces/<name>/events` through the wire form below. The CLI
    *  formats it through the one row formatter its four sibling list reads go
    *  through, so this answers a bare list of rows and never an envelope. The

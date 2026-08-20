@@ -61,7 +61,7 @@ def _compile(repo_root: Path) -> Path:
     # separate mount.
     out_dir = Path(tempfile.mkdtemp(prefix=".harbor-build-", dir=repo_root))
     atexit.register(shutil.rmtree, out_dir, True)
-    binary = out_dir / "proteus"
+    binary = out_dir / "kinu"
 
     result = subprocess.run(
         ["bun", "build", "--compile", str(entrypoint), "--outfile", str(binary)],

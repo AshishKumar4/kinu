@@ -132,7 +132,7 @@ describe('E2E Full Lifecycle', () => {
     // "execute_tools is not configured on this runtime" — measured live, while
     // step 4 ("code execution") still passed, because it asserts only that the
     // reply is non-empty. `openWorkspaceCLI` builds `createCLIRuntime`, the same
-    // spine `proteus exec` runs, so the tool the prompt names actually exists.
+    // spine `kinu exec` runs, so the tool the prompt names actually exists.
     await createWorkspace(db, {
       name: 'lifecycle-test',
       purpose: 'A coding assistant that helps write and test JavaScript code.',

@@ -1,7 +1,7 @@
 // The deferred turn-review queue — the TURN LANE's answer to the question the
 // CADENCE LANE already answered.
 //
-// A one-shot host (`proteus exec` / `proteus run`) is one process per task. It
+// A one-shot host (`kinu exec` / `kinu run`) is one process per task. It
 // never STARTS the cadence lane, because it cannot finish it; the turn writes
 // one durable row and the daemon or the next interactive open runs the work
 // (scaffold/shadow.ts, `scaffold_trial_queue`). The turn lane had no such
@@ -24,7 +24,7 @@
 //
 // Two bounds, for two different failure modes:
 //   • MAX_QUEUED_TURN_REVIEWS caps the table, for the workspace that is only
-//     ever driven by `proteus exec` with no daemon running and no interactive
+//     ever driven by `kinu exec` with no daemon running and no interactive
 //     open — nothing there ever drains, so the queue needs a ceiling rather
 //     than a promise.
 //   • MAX_TURN_REVIEWS_PER_OPEN caps ONE drain, so a backlog cannot stall the

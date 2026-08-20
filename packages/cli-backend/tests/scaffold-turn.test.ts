@@ -64,7 +64,7 @@ async function setup(defaultAnswer: string, opts: { provisionScaffold?: boolean 
   const rt = createCLIRuntime(db, {
     dbPath: scratchPath('scaffold-turn', 'agent.db'), llm: DUMMY_LLM,
   });
-  // What `proteus create` provisions (identity/create.ts): the scaffold
+  // What `kinu create` provisions (identity/create.ts): the scaffold
   // tables, agent_config, and the v0 scaffold file + archive row — so the
   // session's cold-start heal is a deterministic no-op here. The
   // shadow-rollout ledger is deliberately NOT created — LocalAgentSession

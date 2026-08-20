@@ -266,7 +266,7 @@ describe('the cloud backend selects its background policy per turn', () => {
     // A CLI one-shot invocation AND a signal-driven autonomous turn both have
     // nobody watching a stream. Continuity alone misses the whole autonomous
     // population — the population the one-shot policy was measured on — and
-    // the event metadata alone misses `proteus exec` against a cloud
+    // the event metadata alone misses `kinu exec` against a cloud
     // workspace. The discriminators are the ones every other decision already
     // reads; there is no third notion of "autonomous".
     expect(surface![1]).toContain('turnUserMessageEvent');

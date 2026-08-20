@@ -12,7 +12,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 DEFAULT_WORKERS_AI_MODEL_ID = "@cf/deepseek-ai/deepseek-v4-pro-0813"
-DEFAULT_PROTEUS_ORIGIN = "https://proteus.ashishkumarsingh.com"
+DEFAULT_PROTEUS_ORIGIN = "https://kinu.run"
 DEFAULT_PROTEUS_AI_BASE_URL = f"{DEFAULT_PROTEUS_ORIGIN}/api/user/ai/v1"
 
 _PROVIDER_KEY_ENVS = {
@@ -80,15 +80,15 @@ def resolve_bearer_token(
             expires_at = _string_at(config, "tokenExpiresAt")
             if token and expires_at and _is_expired(expires_at):
                 raise ValueError(
-                    "The stored Kinu session has expired. Run `proteus auth` "
+                    "The stored Kinu session has expired. Run `kinu auth` "
                     "again, or set PROTEUS_TOKEN to an access token with ai.proxy."
                 )
         if token:
             return token
         raise ValueError(
             "No Kinu credential for the Workers AI proxy. Set PROTEUS_TOKEN "
-            "(mint one with `proteus tokens create --name bench --scopes ai.proxy`) "
-            "or run `proteus auth` to create a stored session."
+            "(mint one with `kinu tokens create --name bench --scopes ai.proxy`) "
+            "or run `kinu auth` to create a stored session."
         )
 
     if _is_direct_workers_ai(base_url):

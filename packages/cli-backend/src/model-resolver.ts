@@ -159,7 +159,7 @@ export interface LocalModelResolverConfig {
   codexAuthStore?: LocalCodexAuthStore;
   /** Signed-in session. When present, workers-ai + my-gateway resolve through
    *  the worker's AI proxy; when absent they list as unavailable with a
-   *  `proteus auth` hint. */
+   *  `kinu auth` hint. */
   cloud?: LocalCloudSession;
   fetch?: typeof fetch;
   onCodexRefresh?: (credential: OAuthCredential) => void;
@@ -680,7 +680,7 @@ function createCloudProxyProvider(opts: {
 /** Honest placeholder when the user is not signed in: the providers stay
  *  visible in /model with the exact step that unlocks them. */
 function createSignedOutCloudProvider(id: CloudProxyProviderId, label: string): ModelProvider {
-  const reason = 'Sign in with `proteus auth` to use your Cloudflare AI for local agents.';
+  const reason = 'Sign in with `kinu auth` to use your Cloudflare AI for local agents.';
   return {
     id,
     label,

@@ -29,7 +29,7 @@ export interface WorkspaceResumeConfig {
   judge?: LLMProviderConfig;
 }
 
-/** What `proteus status` and the local chat header read about an open
+/** What `kinu status` and the local chat header read about an open
  *  workspace. One identifier: `name`, the permanent slug. `workspace_identity.id`
  *  stays internal — it is the runtime's `agentId` and fork provenance, and
  *  showing it beside the name showed the workspace's address twice. */

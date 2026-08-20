@@ -3,7 +3,7 @@
  * The research eval's controlled source, as a REAL stdio MCP server.
  *
  * The eval spawns this through `LocalAgentSession.connectMcp` — the same
- * `connectMcpServers` path `proteus chat` takes for a user's configured servers
+ * `connectMcpServers` path `kinu chat` takes for a user's configured servers
  * — so what is under test is the product's own MCP client: discovery, the
  * `mcp_<server>_<tool>` keying, the result clamp, and the turn surface merge.
  * A workspace-file stand-in would test none of that, and the file tool instead.

@@ -101,7 +101,7 @@ export interface BackgroundJobRunnerDeps {
   /** How long work may run before it detaches, and how long teardown waits on
    *  it — the surface's policy, resolved per read. A thunk because the surface
    *  is not always session-scoped: the CLI pins one policy per process, but a
-   *  cf workspace DO serves human-watched web chat, one-shot `proteus exec`
+   *  cf workspace DO serves human-watched web chat, one-shot `kinu exec`
    *  invocations, and unwatched email/timer/peer drains through the SAME
    *  runner, so only the turn in flight knows which it is. Read at threshold
    *  time. Defaults to the interactive policy. */

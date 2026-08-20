@@ -1,4 +1,4 @@
-"""Tests for reading the `proteus exec --json` NDJSON stream.
+"""Tests for reading the `kinu exec --json` NDJSON stream.
 
 Run from the repo root with no dependencies and no CL-Bench checkout:
 
@@ -40,7 +40,7 @@ turn_usage = events.turn_usage
 usage_reported = events.usage_reported
 usage_total = events.usage_total
 
-# One real turn as `proteus exec --json` emitted it, text-deltas elided.
+# One real turn as `kinu exec --json` emitted it, text-deltas elided.
 REAL_TURN = "\n".join(
     json.dumps(event)
     for event in [
@@ -336,7 +336,7 @@ class ReadGrading(unittest.TestCase):
         return path
 
     def test_an_execution_graded_turn_is_read_from_the_ledger(self) -> None:
-        # Verbatim shape of `proteus alignment <ws> --json` on a live flash turn
+        # Verbatim shape of `kinu alignment <ws> --json` on a live flash turn
         # that edited a file and ran its own verifier: two graded turns, no user.
         grading = events.read_grading(self.write({
             "alignment": {"overall": {"turns": 0, "negatives": 0, "abandoned": 0,

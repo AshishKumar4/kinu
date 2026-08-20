@@ -636,20 +636,20 @@ verifier. DeepSWE and Terminal-Bench are the two corpora it has been pointed at.
 export PATH="$HOME/.local/bin:$PATH"          # harbor
 export PYTHONPATH="$PWD"                      # so harbor can import bench.harbor
 # Mint once from a fresh interactive sign-in, then load it from your secret store.
-# proteus tokens create --name harbor --scopes ai.proxy
+# kinu tokens create --name harbor --scopes ai.proxy
 export PROTEUS_TOKEN=pta_…
 
 harbor run \
   --agent bench.harbor.proteus_agent:ProteusAgent \
   --path ./deep-swe -i <task-name> \
   --ak evolve=false \
-  --allow-agent-host proteus.ashishkumarsingh.com \
+  --allow-agent-host kinu.run \
   --jobs-dir /tmp/harbor-jobs -n 1 -y
 ```
 
 `--ak evolve=true|false` is the experiment. It holds the adapter, the task and
 the model fixed, and turns the three-timescale evolution machinery on or off. It
-reaches `proteus exec --no-auto-evolve`, which is the CLI's switch over the
+reaches `kinu exec --no-auto-evolve`, which is the CLI's switch over the
 `EvolutionEngine`'s `enabled` flag, the same one `agent` versus `agent-evolving`
 flips internally.
 
@@ -657,7 +657,7 @@ Other kwargs are `workspace` (workspace name, default `harbor`), `mission` (the
 workspace's opening mission) and `proteus_repo` (which checkout to build from).
 The default model is native Workers AI `@cf/deepseek-ai/deepseek-v4-pro-0813`,
 reached through Kinu's signed-in `/api/user/ai/v1` proxy with `PROTEUS_TOKEN`,
-or the session from `proteus auth`. A long-lived access token needs the
+or the session from `kinu auth`. A long-lived access token needs the
 `ai.proxy` scope. A direct Cloudflare endpoint uses `CLOUDFLARE_API_TOKEN`, and
 explicit BYO runs can still set `PROTEUS_BASE_URL`, `PROTEUS_AUTH` and `-m`
 together.
@@ -718,7 +718,7 @@ whatever a registry serves. The agent phase still needs `--allow-agent-host` for
 the model endpoint.
 
 Inside the container the adapter creates a fresh local workspace per trial and
-hands the task instruction to `proteus exec --json`, teed to
+hands the task instruction to `kinu exec --json`, teed to
 `/logs/agent/proteus.jsonl`. `populate_context_post_run` converts that stream to
 an ATIF `trajectory.json` and reports the turn's token usage. `cost_usd` stays
 unset, because Kinu reports tokens and not prices.

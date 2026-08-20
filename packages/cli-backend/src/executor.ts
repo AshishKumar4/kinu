@@ -109,7 +109,7 @@ async function executeWithInterpreter(
  *
  * stdio goes to temp files, read after exit. With pipes, `new Response(stdout)`
  * resolves only at EOF, and a grandchild the code left running (a daemonized
- * server) inherits the write end — so a finished probe held `proteus exec`
+ * server) inherits the write end — so a finished probe held `kinu exec`
  * open until the harness cap killed it (TB2.1 nginx trial, 2026-08-20).
  */
 async function runToCompletion(
@@ -170,7 +170,7 @@ async function executeInSubprocess(code: string, timeoutMs: number): Promise<Exe
     }
   `;
 
-  // A compiled `proteus` binary is not the bun CLI and usually ships without
+  // A compiled `kinu` binary is not the bun CLI and usually ships without
   // one beside it (TB2.1: turn review failed in every container-less deploy).
   // With no subprocess runtime, in-process execution is the real remaining
   // executor — same code, no isolation, stated here rather than guessed at.

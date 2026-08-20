@@ -69,7 +69,7 @@ describe('the patterns catch what they are for', () => {
   // the suite proving the scanner that catches it.
   test('a truncated token fragment is a finding, ellipsis and all', () => {
     const fragment = ['pta', '0123456789abcdef'].join('_');
-    expect(scanText('f.md', `PROTEUS_TOKEN=${fragment}\u2026 proteus exec`).map((f) => f.pattern))
+    expect(scanText('f.md', `PROTEUS_TOKEN=${fragment}\u2026 kinu exec`).map((f) => f.pattern))
       .toEqual(['proteus-token']);
   });
 

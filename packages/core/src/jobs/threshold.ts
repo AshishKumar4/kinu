@@ -62,7 +62,7 @@ export interface BackgroundPolicy {
  * its result IS the point, and no wake can arrive to deliver one — so letting
  * it cross the threshold guaranteed the worst outcome available: the model got
  * a handle instead of an answer, the search kept running unread, and teardown
- * abandoned it 120s later. A `settle=mcts` fork under `proteus exec` did
+ * abandoned it 120s later. A `settle=mcts` fork under `kinu exec` did
  * exactly that — 4 of 40 iterations, `bg_jobs_abandoned`, and a model left to
  * narrate a convergence over rival approaches it never saw. `wakesAfterTurn`
  * is what stops it: no wake, no detach, the turn waits for its own answer.

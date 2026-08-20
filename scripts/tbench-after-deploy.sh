@@ -28,7 +28,7 @@ SHA_FILE="${1:?path to a file holding the sha /api/health must serve}"
 shift
 WAIT_CAP=${TBENCH_WAIT_CAP:-5400}
 SETTLE=${TBENCH_SETTLE:-120}
-HEALTH=https://proteus.ashishkumarsingh.com/api/health
+HEALTH=https://kinu.run/api/health
 WORKTREE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 served() {

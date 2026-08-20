@@ -112,7 +112,7 @@ const summarize = (node: DetailRow): SearchNodeSummary => ({
 });
 
 /**
- * One node, its ancestry and its children — what `proteus inspect mcts <id>`
+ * One node, its ancestry and its children — what `kinu inspect mcts <id>`
  * and the tree view's node pane both show.
  *
  * This existed twice, once per backend, under two names and over two SQL

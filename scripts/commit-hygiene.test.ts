@@ -217,12 +217,12 @@ describe('a message that narrates the session or argues in the first person is r
     }
   });
 
-  test('`I/O` is not first person, and `proteus label mine` is not a comparison', () => {
+  test('`I/O` is not first person, and `kinu label mine` is not a comparison', () => {
     // Both are real corpus spellings and both would be false positives under the
     // obvious pattern. `I/O` occurs in technical prose; `mine` is a subcommand.
     expect(inspect('fix(core): bound the I/O on the init gate\n\nThe I/O moved off onStart.',
       isCode)).toEqual([]);
-    expect(inspect('feat(cli): add proteus label mine\n\n`mine` walks the transcripts.', isCode))
+    expect(inspect('feat(cli): add kinu label mine\n\n`mine` walks the transcripts.', isCode))
       .toEqual([]);
   });
 

@@ -406,7 +406,7 @@ graph TB
         Utils["agent-utils/<br/>MemoryStore (FTS5) · CraftStore (FTS5)<br/>VFS types · path addressing · abort helpers"]
         Compact["compaction/<br/>vendored better-compact ladder + Kinu codec"]
         CF["cf-backend/<br/>ActorAgent → OrchestratorAgent + SubordinateAgent,<br/>ExplorationAgent (Facets), UserDO, React UI"]
-        CLI["cli/<br/>proteus create/chat/exec/evolve/…"]
+        CLI["cli/<br/>kinu create/chat/exec/evolve/…"]
         CLIB["cli-backend/<br/>LocalAgentSession, bun:sqlite,<br/>subprocess sandbox, child_process branches"]
         PC["pc-agent/<br/>reverse-WS device daemon → laptop.*"]
         TU["test-utils/<br/>shared test fakes + fixtures"]
@@ -487,7 +487,7 @@ Two policies live at this seam and apply to every provider:
   throwing.
 
 **Reasoning effort** is user-settable rather than baked in: `/effort` in chat or
-`proteus effort <workspace> <level>` stores `reasoning_effort` in the workspace's
+`kinu effort <workspace> <level>` stores `reasoning_effort` in the workspace's
 `agent_config`, with `~/.proteus/config.json` holding the CLI-side default for
 new workspaces. `core/src/strategy/effort.ts` maps the level onto each provider
 family's native knob — `reasoning_effort` for Workers AI, `reasoningEffort` for

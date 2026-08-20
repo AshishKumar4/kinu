@@ -1,6 +1,6 @@
 """Kinu as a Continual Learning Bench system.
 
-One benchmark turn is one `proteus exec` — the CLI's headless surface — against
+One benchmark turn is one `kinu exec` — the CLI's headless surface — against
 a local workspace that lives in a throwaway ``PROTEUS_HOME``. Kinu runs its
 own agentic loop inside that turn (its tools, memory, CraftStore, scaffold);
 the benchmark environment is reached the way every CL-Bench system reaches it,
@@ -15,7 +15,7 @@ is two claims and they need separating:
   one system per instance, so each gets its own home. ``persist_workspace``
   additionally controls the *within-run* case, so a stateful rollout can be
   re-run with the workspace reset at every instance boundary.
-* **Self-evolution** — ``auto_evolve`` maps to ``proteus exec
+* **Self-evolution** — ``auto_evolve`` maps to ``kinu exec
   --no-auto-evolve``, which turns off turn- and session-level evolution while
   leaving durable state intact. Persistent state without evolution is the
   control that says how much of any gain is evolution rather than memory.
@@ -136,7 +136,7 @@ def _resolve_api_key(provider: str, base_url: str, api_key_env: Optional[str]) -
 
 @register_system("proteus")
 class ProteusSystem(ContinualLearningSystem):
-    """Kinu driven one benchmark turn at a time through `proteus exec`."""
+    """Kinu driven one benchmark turn at a time through `kinu exec`."""
 
     def __init__(
         self,
@@ -249,7 +249,7 @@ class ProteusSystem(ContinualLearningSystem):
         )
         if result.returncode != 0:
             raise RuntimeError(
-                f"proteus create failed ({result.returncode}): "
+                f"kinu create failed ({result.returncode}): "
                 f"{(result.stderr or result.stdout).strip()[:500]}"
             )
         self._workspace_ready = True
@@ -292,7 +292,7 @@ class ProteusSystem(ContinualLearningSystem):
     def _run_turn(self, prompt: str) -> list[dict[str, Any]]:
         self._ensure_workspace()
         logger.info(
-            "proteus exec (interaction %d, prompt %d chars, resume=%s)",
+            "kinu exec (interaction %d, prompt %d chars, resume=%s)",
             self._interaction_count + 1,
             len(prompt),
             self._session_id if self._single_conversation else None,
@@ -305,20 +305,20 @@ class ProteusSystem(ContinualLearningSystem):
         if resumed:
             self._session_id = resumed
 
-        # `proteus exec` exits 1 whenever any tool call in the turn failed, even
+        # `kinu exec` exits 1 whenever any tool call in the turn failed, even
         # when the turn still produced its answer. Treat a stream that reached
         # an assistant message as a turn; only a stream that never did is fatal.
         if result.returncode != 0:
             detail = (result.stderr or result.stdout).strip()[:500]
             if has_answer(events):
                 logger.warning(
-                    "proteus exec exited %d after a completed turn: %s",
+                    "kinu exec exited %d after a completed turn: %s",
                     result.returncode,
                     detail,
                 )
             else:
                 raise RuntimeError(
-                    f"proteus exec failed ({result.returncode}): {detail}"
+                    f"kinu exec failed ({result.returncode}): {detail}"
                 )
         return events
 

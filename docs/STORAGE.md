@@ -308,9 +308,9 @@ narrative over it.
 `initWorkspaceSchema()` (`core/src/identity/workspace-schema.ts`) is the one
 answer to which tables a workspace has. Every composition root calls it: the
 orchestrator DO's `ensureSchema()`, the subordinate DO's, `openWorkspaceCLI`,
-the local session constructor, and `proteus create`. It used to be four
+the local session constructor, and `kinu create`. It used to be four
 disagreeing lists, and the disagreements were real bugs. `craft_scores` was
-never created except by `proteus create`, so every EMA read on a workspace
+never created except by `kinu create`, so every EMA read on a workspace
 opened any other way silently no-opped.
 
 The pass runs in this order:

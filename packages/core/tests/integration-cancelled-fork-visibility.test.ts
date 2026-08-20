@@ -73,7 +73,7 @@ function workspace() {
       budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: now },
     });
   }
-  // The operator cancel, as `proteus stop` / the repair path writes it: the job
+  // The operator cancel, as `kinu stop` / the repair path writes it: the job
   // registry only. Nothing reaches the heads, because the process that owned
   // them is gone.
   jobs.cancel('bgjob-fork', 0, now + 1_000);

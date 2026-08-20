@@ -248,7 +248,7 @@ export interface QueuedShadowTrial {
  * Queued trials one pending version may accumulate.
  *
  * The queue only buffers between cadence passes, so depth is normally 1-2. The
- * ceiling exists for the host that never drains — a one-shot `proteus exec`
+ * ceiling exists for the host that never drains — a one-shot `kinu exec`
  * process, which by the evolution exit contract starts no cadence work at all
  * — and is set at the trial ceiling itself: past `maxTrials` there is already
  * more queued work than the gate below can consume.

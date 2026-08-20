@@ -126,7 +126,7 @@ describe('MCTS per-iteration checkpoint logging', () => {
   });
 
   // Regression: the heartbeat used to go to stdout, which under
-  // `proteus exec --json` IS the NDJSON event stream — four corrupt,
+  // `kinu exec --json` IS the NDJSON event stream — four corrupt,
   // unparseable lines per run for any CI consumer. Workers Logs capture stderr
   // just the same, so one channel serves both surfaces.
   test('the heartbeat never touches stdout, which is the CLI machine channel', async () => {

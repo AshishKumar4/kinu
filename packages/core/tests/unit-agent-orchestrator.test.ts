@@ -291,7 +291,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
 });
 
 describe('AgentOrchestrator — the durable session window', () => {
-  // `proteus exec` is one process per turn: a fresh orchestrator every time,
+  // `kinu exec` is one process per turn: a fresh orchestrator every time,
   // against the same workspace database. The window and the pending review
   // have to live in that database or headless usage never evolves at all.
   test('the window accumulates across orchestrator instances and fires at the interval', async () => {
@@ -345,7 +345,7 @@ describe('AgentOrchestrator — the durable session window', () => {
     const eventLog = newEventLog();
     const { host } = fakeHost();
     new AgentOrchestrator({ host, engine, eventLog }).recordTurn(aTurn(0), 'conversation');
-    // `proteus exec` against the same workspace: its prompt is a fresh task
+    // `kinu exec` against the same workspace: its prompt is a fresh task
     // written by a caller who never saw turn 0's answer.
     new AgentOrchestrator({ host, engine, eventLog, oneShot: true })
       .observeUserTurn('unrelated task', 'independent_task');

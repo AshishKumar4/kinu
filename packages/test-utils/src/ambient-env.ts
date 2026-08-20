@@ -52,7 +52,7 @@ export const LIVE_MODEL_ENV = {
  *
  * `PROTEUS_MODEL` and the gateway model belong here even though a model id is
  * not a secret: it selects which provider a workspace resolves through, which
- * is precisely what `proteus create`'s "no connected provider" warning reports
+ * is precisely what `kinu create`'s "no connected provider" warning reports
  * on.
  */
 export const AMBIENT_CREDENTIAL_ENV: readonly string[] = Object.values(LIVE_MODEL_ENV).flat();
