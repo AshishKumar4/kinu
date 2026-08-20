@@ -33,7 +33,7 @@ const MIN_SLEEP_MS = 500;
 const STOP_GRACE_MS = 5_000;
 const STOP_FORCE_MS = 2_000;
 
-export async function daemonCommand(action: string | undefined): Promise<void> {
+export async function daemonCommand(action: string | undefined, workspace?: string): Promise<void> {
   const sub = action ?? 'status';
   if (sub === 'start') {
     const pid = startDaemon();
@@ -73,7 +73,21 @@ export async function daemonCommand(action: string | undefined): Promise<void> {
     await runDaemonLoop();
     return;
   }
-  throw new Error('Usage: proteus daemon [start|stop|restart|status|logs|run]');
+  // One foreground pass of the daemon's own per-workspace work — deferred turn
+  // reviews, due evolution — for hosts with no resident daemon (a bench
+  // container drains the reviews its `exec` trials queued, OUTSIDE the agent
+  // cap). Exactly tickAgent, exactly once, then exit.
+  if (sub === 'tick') {
+    ensureAgentHome();
+    const names = workspace ? [workspace] : listAgentDirs();
+    const now = Date.now();
+    for (const name of names) {
+      await tickAgent(name, now);
+      console.log(`${OK('✓')} ticked ${name}`);
+    }
+    return;
+  }
+  throw new Error('Usage: proteus daemon [start|stop|restart|status|logs|run|tick [workspace]]');
 }
 
 export function ensureLocalDaemonRunning(): void {

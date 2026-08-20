@@ -452,9 +452,9 @@ export function buildProgram(): Command {
     .action(wrapAction(desktopCommand));
 
   program
-    .command('daemon [action]')
+    .command('daemon [action] [workspace]')
     .helpGroup(THIS_COMPUTER)
-    .description('Manage the local scheduler daemon: start, stop, restart, status, logs')
+    .description('Manage the local scheduler daemon: start, stop, restart, status, logs, tick')
     .action(wrapAction(daemonCommand));
 
   program
