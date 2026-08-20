@@ -396,7 +396,7 @@ function parseRecord(nodeId: string, json: string): SwarmNodeRecord {
  * A step that neither said nor called anything is dropped rather than sent as an empty
  * assistant turn, which several providers reject outright.
  */
-export function reconstructedTurns(steps: readonly HeadStep[]): ModelMessage[] {
+function reconstructedTurns(steps: readonly HeadStep[]): ModelMessage[] {
   const turns: ModelMessage[] = [];
   for (const step of steps) {
     const parts: string[] = [];

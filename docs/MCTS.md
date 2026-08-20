@@ -36,8 +36,11 @@ programmatically:
   so re-entering the engine on the same task continues that tree rather than
   starting a new one. That ledger is shared with the swarm runner
   (`strategy/swarm-run.ts`), which writes a row per run under `engine: 'swarm'`
-  and has no resume of its own — the resume query is scoped to `engine: 'mcts'`
-  rows, so a swarm's tree can never be re-entered by this loop.
+  and re-enters its own rows through a lookup of its own
+  (`findRunningSwarms`, applied by `strategy/swarm-resume.ts`). Each loop's
+  query is scoped to its own engine's rows, so neither can be handed the
+  other's tree — a swarm's is scored against an objective this loop has no seam
+  for, and this loop's branches are judged.
 
 Everything below describes live code.
 

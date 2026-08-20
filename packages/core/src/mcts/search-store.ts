@@ -233,10 +233,13 @@ export class MctsSearchStore {
    * The most recently-updated still-running MCTS search for a task — the resume
    * source when an evicted tree search is re-driven.
    *
-   * Scoped to this engine's own rows: a swarm has no resume, and its tree is scored
-   * against an objective this loop has no seam for, so re-entering one here would
-   * grow a swarm's tree with judged branches and report the result under the
-   * swarm's root id.
+   * Scoped to this engine's own rows. The swarm has a resume of its own now
+   * ({@link findRunningSwarms}), so the scoping is no longer about which engine can be
+   * resumed at all: it is that neither loop can execute the other's tree faithfully. A
+   * swarm's is scored against an objective this loop has no seam for, so re-entering one
+   * here would grow it with judged branches and report the result under the swarm's own
+   * root id — and a swarm's stored config parses as a persisted MCTS config, so nothing
+   * downstream would notice.
    */
   findResumable(task: string, mode: WorkMode = 'build'): ResumableSearch | null {
     const rows = this.sql<Row>`SELECT root_id, task, root_msg_id, config_json, iteration, budget, status, epoch

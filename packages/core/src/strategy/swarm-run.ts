@@ -205,7 +205,7 @@ const SWARM_FIRST_LEDGER_EPOCH = 0;
  * cause: the row said "spawned, never reported", and this run found nothing left that
  * could report it.
  */
-export const RESUMED_SWARM_NODE_REASON =
+const RESUMED_SWARM_NODE_REASON =
   'Interrupted before it reported. This search was re-entered from its durable rows, '
   + 'and the nodes after it are the continuation.';
 
@@ -2850,6 +2850,18 @@ export async function runSwarm(
     searchLedger.checkpoint(
       rootId, ledgerEpoch, candidates.length, budget.remaining, Date.now(),
     );
+    // AND IT IS SAID OUT LOUD, the way `mcts.checkpoint_reached` is. The ledger row is
+    // the only real heartbeat a hosted search has, and the MCTS half of that lesson was
+    // learned once already: a durably-checkpointed search ran for hours and produced
+    // nothing in Workers Logs per iteration, so nobody could tell a working search from
+    // a hung one. A swarm now checkpoints, so it says so.
+    log.event('swarm.checkpoint_reached', {
+      preset: resolved.preset,
+      root_id: rootId,
+      epoch: ledgerEpoch,
+      expansions: candidates.length,
+      remaining: budget.remaining,
+    });
   }
 
   // THE SWEEP. Every THOUGHT node's proposal that selection never reached is answered
