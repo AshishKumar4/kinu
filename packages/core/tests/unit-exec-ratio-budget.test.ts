@@ -28,9 +28,11 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { createTestRuntime } from './helpers';
+import { archiveCellOf } from '../src/strategy/archive';
+import { resolveVerifier } from '../src/strategy/verifier-registry';
 import { runRatioMeasurement, SOLUTION_FILE } from '../src/strategy/exec-ratio';
 import type { RatioMeasurement } from '../src/strategy/exec-ratio';
-import type { MeasurementContext } from '../src/strategy/objective';
+import type { Measurement, MeasurementContext } from '../src/strategy/objective';
 
 /**
  * The reference's spend, exactly.
@@ -153,5 +155,74 @@ describe('the call landing exactly on the oracle budget is the last one allowed'
     expect(overBudget.correct).toBe(false);
     expect(overBudget.failure).toContain('oracle budget');
     expect(overBudget.candOps).toBe(limit + 1);
+  }, 60_000);
+});
+
+/**
+ * THE PREMISE THAT MAKES ONE ENGINE REFUSAL UNREACHABLE, asserted where it belongs.
+ *
+ * An `advance:'archive'` run checks its `key` twice. Once against the BASELINE's reported
+ * quantities, before a candidate exists, refusing a key the instrument does not witness.
+ * Once per candidate at the settle barrier, where a candidate it cannot bin is refused as
+ * `unwitnessed` — a branch whose own comment says reaching it means "the instrument
+ * reported it for the baseline and not for this candidate".
+ *
+ * With one registered kind those two checks cannot disagree, because the instrument
+ * reports the SAME quantity set for the workspace as found and for every candidate. That
+ * is a fact about the instrument rather than about the engine, so it is asserted here,
+ * beside the instrument, rather than left as a paragraph in the runner. The sweep's
+ * `record-refused-cause` entry is retired against this test: if a second verifier kind
+ * ever reports a quantity for only one of the two, this goes red and that mutation
+ * becomes measurable again instead of quietly reachable.
+ */
+describe('every quantity the instrument reports is a key an archive can bin', () => {
+  test('the workspace as found and a measured candidate report the same finite quantities', async () => {
+    const { rt } = createTestRuntime();
+    const { shell } = rt;
+    if (!shell) throw new Error('this runtime has no shell, so nothing can run a measurement in it');
+    const ctx: MeasurementContext = { vfs: rt.storage.vfs, exec: (command) => shell.exec(command) };
+    const instrument = resolveVerifier({
+      kind: 'exec-ratio',
+      spec: {
+        params: { n: REFERENCE_CALLS },
+        reference: REFERENCE,
+        body: BODY,
+        targetOps: REFERENCE_CALLS,
+        lowerBoundOps: 1,
+      },
+    });
+    if ('reason' in instrument) throw new Error(`the one registered kind must resolve: ${instrument.error}`);
+
+    // THE WORKSPACE AS FOUND, which for this kind is the seeded reference — the same
+    // measurement `runSwarm` takes as its baseline before any candidate exists.
+    await rt.storage.vfs.writeFile(SOLUTION_FILE, REFERENCE);
+    const asFound: Measurement = await instrument.verify(ctx);
+    // AND A CANDIDATE, worse and correct, so both sides really did produce a measurement
+    // rather than agreeing by both failing.
+    await rt.storage.vfs.writeFile(SOLUTION_FILE, candidateSpending(REFERENCE_CALLS * 2));
+    const candidate: Measurement = await instrument.verify(ctx);
+    expect(asFound.kind).toBe('measured');
+    expect(candidate.kind).toBe('measured');
+
+    // THE SAME KEYS, and the baseline key this kind names is one of them — which is what
+    // lets a caller read a baseline without knowing the kind.
+    const found = Object.keys(asFound.measured ?? {}).sort();
+    expect(found.length).toBeGreaterThan(0);
+    expect(Object.keys(candidate.measured ?? {}).sort()).toEqual(found);
+    // This kind names a baseline key, and the key it names is one of the quantities it
+    // reports — which is what lets a caller read a run's baseline without knowing which
+    // kind produced it.
+    const { baselineKey } = instrument;
+    if (baselineKey === null) throw new Error('this kind declares a measured baseline, so it must name its key');
+    expect(found).toContain(baselineKey);
+
+    // AND EVERY ONE OF THEM BINS, on both sides. `archiveCellOf` answers `unwitnessed`
+    // for an absent OR non-finite coordinate, so this is the whole of what the settle
+    // barrier needs: a key that passed the baseline check can place every candidate the
+    // instrument measured.
+    for (const key of found) {
+      expect(archiveCellOf(key, asFound.measured).kind).toBe('cell');
+      expect(archiveCellOf(key, candidate.measured).kind).toBe('cell');
+    }
   }, 60_000);
 });

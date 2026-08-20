@@ -212,6 +212,7 @@ export const CATALOGUE: readonly Mutation[] = [
     replace: 'const nodeSteps = deps.maxSteps || DEFAULT_MAX_STEPS;',
     decision: 'a caller-supplied step budget of 0 is honoured, not replaced by the default',
     symbol: 'runSwarm',
+    control: 'unit-swarm-incomplete-node.test.ts',
   },
   {
     id: 'node-wallclock-zero-honoured',
@@ -220,6 +221,7 @@ export const CATALOGUE: readonly Mutation[] = [
     replace: 'maxWallClockMs: deps.maxWallClockMs || nodeWallClockEnvelopeMs(nodeSteps),',
     decision: 'a caller-supplied wall clock of 0 is honoured, not replaced by the envelope',
     symbol: 'runSwarm',
+    control: 'unit-swarm-incomplete-node.test.ts',
   },
   {
     id: 'judged-rank-direction',
@@ -228,15 +230,21 @@ export const CATALOGUE: readonly Mutation[] = [
     replace: "const rankDirection: ObjectiveDirection = measured?.direction ?? 'minimise';",
     decision: 'a judged run ranks a median score as a quality, so higher wins',
     symbol: 'runSwarm',
+    control: 'unit-swarm-depth.test.ts',
   },
-  {
-    id: 'record-refused-cause',
-    file: 'packages/core/src/strategy/swarm-run.ts',
-    find: "refused({ cause: 'unwitnessed', occupant: '', distance: -1 });",
-    replace: "refused({ cause: 'not-better', occupant: '', distance: -1 });",
-    decision: 'a candidate the instrument never binned is refused as unwitnessed, not as not-better',
-    symbol: 'runSwarm',
-  },
+  // RETIRED, and not because the decision is unimportant: the branch it mutates cannot
+  // be reached, so both readings are observationally identical and a test there could not
+  // fail. `VERIFIER_KINDS` has ONE member; `exec-ratio`'s `MeasurementSchema` requires
+  // refOps, candOps, refMs and candMs and rejects a non-finite one, so every measurement
+  // it returns carries the same four finite quantities; `runSwarm`'s baseline check
+  // (swarm-run.ts:1606) refuses any `key` outside the BASELINE's map before a candidate
+  // exists; and a candidate with no measurement is skipped earlier at the settle barrier.
+  // So `archiveCellOf` at the barrier is always handed a key it can bin, and
+  // `cause: 'unwitnessed'` is unreachable while one instrument measures both the baseline
+  // and the candidates. Same class as the four equivalent mutants named above.
+  // `unit-exec-ratio-budget.test.ts` holds the premise — every quantity the instrument
+  // reports is a key an archive can bin — so this becomes measurable again, rather than
+  // silently reachable, if a second kind ever reports a quantity for only one of the two.
   // FOUND BY THIS SWEEP AND FIXED, so the entry now runs the other way: it restores the
   // `>=` the tree shipped with, and `unit-swarm-depth.test.ts` must reject it. It is a
   // control rather than a question because the answer is now defended.
@@ -266,6 +274,7 @@ export const CATALOGUE: readonly Mutation[] = [
     replace: 'const BUDGET_MULTIPLE = 1;',
     decision: "a candidate may spend four times the reference's oracle calls before it is cut off",
     symbol: 'runRatioMeasurement',
+    control: 'unit-exec-ratio-budget.test.ts',
   },
   {
     id: 'exec-ratio-limit-strictness',
@@ -276,6 +285,7 @@ export const CATALOGUE: readonly Mutation[] = [
       + "+ ' calls exhausted');",
     decision: 'the call landing exactly on the oracle budget is the last one allowed',
     symbol: 'runRatioMeasurement',
+    control: 'unit-exec-ratio-budget.test.ts',
   },
   {
     id: 'effort-judge-rung',
@@ -284,6 +294,7 @@ export const CATALOGUE: readonly Mutation[] = [
     replace: "  judge: 'low',",
     decision: 'a judge call gets the medium reasoning rung',
     symbol: 'REASONING_EFFORT_FOR_STAGE',
+    control: 'unit-strategy.test.ts',
   },
   {
     id: 'provider-options-override-wins',
@@ -292,6 +303,7 @@ export const CATALOGUE: readonly Mutation[] = [
     replace: '    merged[provider] = { ...options, ...base[provider] };',
     decision: 'inside one provider namespace the override wins over the base',
     symbol: 'mergeProviderOptions',
+    control: 'unit-strategy.test.ts',
   },
 
   /* ── The node seam ────────────────────────────────────────────────────────── */
@@ -302,6 +314,7 @@ export const CATALOGUE: readonly Mutation[] = [
     replace: "    mergeStrategy: input.settle === 'best' ? 'synthesize' : 'best_of',",
     decision: "a node's journal row records best_of exactly when the search settles by best",
     symbol: 'runNodeAgent',
+    control: 'unit-node-host.test.ts',
   },
   {
     id: 'empty-report-falls-back',
@@ -310,6 +323,7 @@ export const CATALOGUE: readonly Mutation[] = [
     replace: '  const conclusion = input.reported?.content.trim() ?? input.report.summary.trim();',
     decision: 'a node reporting whitespace has reported nothing, so the loop summary stands',
     symbol: 'runNodeAgent',
+    control: 'unit-node-host.test.ts',
   },
   {
     id: 'provisioned-node-runs-as-itself',
