@@ -48,32 +48,45 @@ fi
 
 # Mirror one node_modules directory: every entry symlinked to the donor's, except
 # the workspace scope, which is rebuilt locally against THIS tree's packages.
+# The workspace scope is DERIVED from this tree's own packages, never
+# hardcoded: the product scope has already been renamed once (@proteus ->
+# @kinu), and a hardcoded scope leaves every fresh worktree after such a
+# rename with an empty scope directory that fails workspace resolution.
+SCOPES="$(sed -n 's|.*"name"[[:space:]]*:[[:space:]]*"\(@[^/"]*\)/[^"]*".*|\1|p' "$TREE"/packages/*/package.json | sort -u)"
+if [ -z "$SCOPES" ]; then
+  echo "No workspace scope found in $TREE/packages/*/package.json - refusing to mirror blind." >&2
+  exit 1
+fi
+
 mirror() {
   local src="$1" dst="$2"
   # A pre-existing wholesale symlink is exactly the failure mode being repaired.
   [ -L "$dst" ] && rm -f "$dst"
   mkdir -p "$dst"
-  local entry name
+  local entry name scope pkg
   for entry in "$src"/* "$src"/.[!.]*; do
     [ -e "$entry" ] || continue
     name="$(basename "$entry")"
-    if [ "$name" = "@proteus" ]; then continue; fi
+    case " $SCOPES " in *" $name "*) continue ;; esac
     # Replace rather than link-into: `ln -sfn` onto an existing real directory
     # would nest the link inside it.
     rm -rf "${dst:?}/$name"
     ln -s "$entry" "$dst/$name"
   done
-  if [ -d "$src/@proteus" ]; then
-    rm -rf "$dst/@proteus"
-    mkdir -p "$dst/@proteus"
-    local pkg
+  for scope in $SCOPES; do
+    # Only where the donor HAS the scope (the top-level node_modules): a nested
+    # per-package node_modules never carries it, and the ../../packages link
+    # depth below is only correct from the top level.
+    [ -d "$src/$scope" ] || continue
+    rm -rf "${dst:?}/$scope"
+    mkdir -p "$dst/$scope"
     for pkg in "$TREE"/packages/*/; do
       [ -f "$pkg/package.json" ] || continue
-      name="$(sed -n 's|.*"name"[[:space:]]*:[[:space:]]*"@proteus/\([^"]*\)".*|\1|p' "$pkg/package.json" | head -1)"
+      name="$(sed -n 's|.*"name"[[:space:]]*:[[:space:]]*"'"$scope"'/\([^"]*\)".*|\1|p' "$pkg/package.json" | head -1)"
       [ -n "$name" ] || continue
-      ln -sfn "../../packages/$(basename "$pkg")" "$dst/@proteus/$name"
+      ln -sfn "../../packages/$(basename "$pkg")" "$dst/$scope/$name"
     done
-  fi
+  done
 }
 
 mirror "$MAIN/node_modules" "$TREE/node_modules"
@@ -94,4 +107,4 @@ bun test packages/*/tests/workspace-resolution.test.ts >/dev/null
 # remembers to run it.
 bun scripts/ladder.ts --install-hooks
 
-echo "Worktree ready: @proteus/* resolves inside $TREE"
+echo "Worktree ready: workspace scope(s) $SCOPES resolve inside $TREE"
