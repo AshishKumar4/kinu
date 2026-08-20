@@ -9,7 +9,7 @@ import {
 } from '../device-connect';
 import { ACCENT, DIM, ERR, OK } from '../display';
 import { authCommand } from './auth';
-import { renderThrownChain } from '@proteus/core/obs';
+import { renderThrownChain } from '@kinu/core/obs';
 
 export async function desktopCommand(action: string | undefined, opts: { label?: string }): Promise<void> {
   const sub = action ?? 'status';

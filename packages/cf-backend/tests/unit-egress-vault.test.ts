@@ -3,7 +3,7 @@
 // so the encryption and the AAD binding are exercised rather than faked.
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { EGRESS_PLACEHOLDER_PREFIX, isEgressPlaceholder } from '@proteus/core';
+import { EGRESS_PLACEHOLDER_PREFIX, isEgressPlaceholder } from '@kinu/core';
 import { createCredentialCipher } from '../src/user/credential-envelope';
 import {
   initEgressVaultTables, listEgressSecrets, putEgressSecret,

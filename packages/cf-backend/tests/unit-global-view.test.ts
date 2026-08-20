@@ -40,7 +40,7 @@ import {
   MAIN_AGENT,
   SESSION_UID,
   WORKSPACE_ROOT,
-} from '@proteus/core';
+} from '@kinu/core';
 import {
   ensureProgrammaticReady,
   rpcExec,

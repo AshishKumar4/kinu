@@ -61,7 +61,7 @@ import {
   liveChatModel, liveModelTarget, preRegister, reportLiveModelSpend, TASK_OUTCOME, UNCONFIGURED_LLM,
   writeRunRecord,
   type EvalArmState, type EvalObservation, type EvalRunRecord, type EvalTier,
-} from '@proteus/test-utils';
+} from '@kinu/test-utils';
 import { DegenerateRunError, runBehaviourTask, type BehaviourOutput } from './harness';
 import { resolveArtifactRoot } from '../../scripts/bench-retention';
 

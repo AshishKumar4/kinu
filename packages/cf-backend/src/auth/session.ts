@@ -6,7 +6,7 @@
 // Local/staging dev: if `env.DEV_USER_EMAIL` is set, we synthesize an identity
 // from that email. Production must leave that variable unset.
 
-import { DEVICE_CONNECT_PATH } from '@proteus/core';
+import { DEVICE_CONNECT_PATH } from '@kinu/core';
 import { readD1Bookmark, verifySession } from './d1-store';
 import { sha256Hex } from '../lib/crypto';
 import type { AccessTokenScope } from '../cli/access-token-store';

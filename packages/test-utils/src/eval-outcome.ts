@@ -32,7 +32,7 @@
  * it is checkable.
  */
 import * as v from 'valibot';
-import type { ExecOutcome, VFS } from '@proteus/core';
+import type { ExecOutcome, VFS } from '@kinu/core';
 import type { EvalScoreRow } from './eval-run';
 
 /**

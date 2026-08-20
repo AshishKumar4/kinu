@@ -10,8 +10,8 @@ import {
   isReasoningEffort,
   normalizeUsage,
   type ReasoningEffort,
-} from '@proteus/core';
-import { diagnostics, toProteusError } from '@proteus/core/obs';
+} from '@kinu/core';
+import { diagnostics, toProteusError } from '@kinu/core/obs';
 import type { OrchestratorAgent } from '../orchestrator';
 import { createAgentProviderRegistry } from '../providers/agent-registry';
 import type { UserCredentialClient } from '../providers/agent-registry';

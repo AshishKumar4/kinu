@@ -361,7 +361,7 @@ bottom of this file) starts here.
 ### Changed
 
 - **One shared spine.** The turn pipeline, prompting, compaction ladder and
-  context budget live in `@proteus/core`; the Cloudflare and CLI backends are
+  context budget live in `@kinu/core`; the Cloudflare and CLI backends are
   thin adapters over it instead of two drifting implementations.
 - **Tool surface consolidated** to 11 built-ins (`BUILTIN_TOOLS` in
   `packages/core/src/tools/registry.ts`). Filesystem work folds into the

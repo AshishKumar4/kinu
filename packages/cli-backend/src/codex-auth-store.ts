@@ -8,7 +8,7 @@ import {
   createCodexOAuthClient,
   type AuthResolution,
   type OAuthCredential,
-} from '@proteus/core';
+} from '@kinu/core';
 import * as v from 'valibot';
 import {
   closeSync,
@@ -20,7 +20,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname } from 'node:path';
-import { tolerate } from '@proteus/core/obs';
+import { tolerate } from '@kinu/core/obs';
 import { writeSecretFile } from './secret-file';
 
 const storedCodexCredentialSchema = v.object({

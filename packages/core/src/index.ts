@@ -1,4 +1,4 @@
-// @proteus/core — barrel export
+// @kinu/core — barrel export
 
 // Identity system
 export { initActorTables, initAllTables, migrateWorkspaceStorage, tableExists } from './identity/schema';
@@ -873,7 +873,7 @@ export {
 } from './execution/index';
 
 // Client-safe workspace addressing and VFS contracts. The embedded Nimbus
-// workspace host is exported separately from `@proteus/core/workspace` so a
+// workspace host is exported separately from `@kinu/core/workspace` so a
 // browser import of the main barrel cannot pull the server runtime into its
 // bundle.
 export {
@@ -1190,6 +1190,7 @@ export {
   deriveChildBudget, budgetExhausted,
   initHeadsTables,
   HeadJournal, type HeadJournalRow, type LiveHeadRun, type AbandonedHeadRun,
+  LiveHeadJournal, type AnnounceHeadActivity,
   reconcileInterruptedForks, forkInterruptedWake,
   FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
   HeadController, type HeadRuntime, type HeadGrounding, type SpawnedHead, type MergeLLMFn,

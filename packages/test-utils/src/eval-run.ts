@@ -32,7 +32,7 @@ import type { LiveModelSpend } from './live-model';
 import {
   BUILTIN_TOOLS, minimumPairsForSignificance, requiredPairs,
   type SqlExecutor,
-} from '@proteus/core';
+} from '@kinu/core';
 import { gitEnv } from './git';
 import { BEHAVIOUR_SCORERS, type BehaviourScorer } from './agent-evals';
 import { TASK_OUTCOME, isCovariateRow } from './eval-outcome';

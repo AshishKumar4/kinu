@@ -1,9 +1,9 @@
 import { existsSync, statSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
-import type { AgentRuntime, SessionSurface, ShellApprovalMode, ReasoningEffort, JsonObject } from '@proteus/core';
-import type { WorkspaceInfo } from '@proteus/core/identity';
-import { applyWorkspaceTitle, createAgentConfigStore, initAgentConfigTable, readLatestSearchTree, BACKGROUND_POLICY, decodeJsonValue, usageReported, type GepaOptimizationResult } from '@proteus/core';
-import { diagnostics, toProteusError } from '@proteus/core/obs';
+import type { AgentRuntime, SessionSurface, ShellApprovalMode, ReasoningEffort, JsonObject } from '@kinu/core';
+import type { WorkspaceInfo } from '@kinu/core/identity';
+import { applyWorkspaceTitle, createAgentConfigStore, initAgentConfigTable, readLatestSearchTree, BACKGROUND_POLICY, decodeJsonValue, usageReported, type GepaOptimizationResult } from '@kinu/core';
+import { diagnostics, toProteusError } from '@kinu/core/obs';
 import {
   LOCAL_MAX_INLINE_ATTACHMENT_BYTES,
   LocalAgentSession,
@@ -13,7 +13,7 @@ import {
   type LocalModelResolver,
   type McpServerConfig,
   type SessionEvent,
-} from '@proteus/cli-backend';
+} from '@kinu/cli-backend';
 import {
   CONFIG_PATH,
   agentDbPath,

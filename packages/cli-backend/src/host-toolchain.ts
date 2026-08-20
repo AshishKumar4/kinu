@@ -32,7 +32,7 @@
 import {
   TOOLCHAIN_PROBE_BINARIES, TOOLCHAIN_UNPROBEABLE, toolchainCapabilities,
   type ExecutorCapability,
-} from '@proteus/core';
+} from '@kinu/core';
 
 /** True by construction rather than by probe — properties of this executor's own
  *  wiring, which no PATH lookup could confirm or deny:

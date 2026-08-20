@@ -24,7 +24,7 @@ import {
   censusToolFailures, listForkRuns, parseStoredRunEvent, STEER_BRANCH_RUN_ID_PREFIX,
   tableExists,
   type ForkRunSummary, type RunEvent, type SqlExecutor,
-} from '@proteus/core';
+} from '@kinu/core';
 
 // ── (a) A search tree reached, branched, and ranked ──────────────
 

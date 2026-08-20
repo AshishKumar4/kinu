@@ -7,9 +7,9 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { buildBuiltinTools, DEFAULT_TOOL_RESULT_MAX_CHARS } from '@proteus/core';
+import { buildBuiltinTools, DEFAULT_TOOL_RESULT_MAX_CHARS } from '@kinu/core';
 import { createCLIRuntime } from '../src/runtime';
-import { scratchPath, toolExecute } from '@proteus/test-utils';
+import { scratchPath, toolExecute } from '@kinu/test-utils';
 
 function localRuntime() {
   const db = new Database(':memory:');

@@ -20,7 +20,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as v from 'valibot';
-import { TOOLCHAIN_PROBE_BINARIES, toolchainCapabilities } from '@proteus/core';
+import { TOOLCHAIN_PROBE_BINARIES, toolchainCapabilities } from '@kinu/core';
 
 /** The `which` frame the hub sends: a fixed list of bare binary names. */
 interface WhichFrame {

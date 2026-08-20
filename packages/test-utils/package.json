@@ -1,5 +1,5 @@
 {
-  "name": "@proteus/test-utils",
+  "name": "@kinu/test-utils",
   "version": "0.1.0",
   "type": "module",
   "main": "src/index.ts",
@@ -9,8 +9,8 @@
     "./turn-model": "./src/turn-model.ts"
   },
   "dependencies": {
-    "@proteus/core": "workspace:*",
-    "@proteus/agent-utils": "workspace:*"
+    "@kinu/core": "workspace:*",
+    "@kinu/agent-utils": "workspace:*"
   },
   "scripts": {
     "check": "tsc --noEmit"

@@ -1,5 +1,5 @@
 import { statSync } from 'node:fs';
-import { diagnostics, renderThrownChain, toProteusError } from '@proteus/core/obs';
+import { diagnostics, renderThrownChain, toProteusError } from '@kinu/core/obs';
 import { listCloudAgents } from '../cloud-api';
 import { reconcileAgentRefs } from '../agent-list';
 import { agentDbPath, listAgentDirs, loadConfigFile, resolveCloudSession } from '../config';

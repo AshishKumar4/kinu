@@ -5,7 +5,7 @@ import {
   shouldCheckForUpdate,
   updateNotice,
 } from '../src/version-check';
-import type { JsonValue } from '@proteus/core';
+import type { JsonValue } from '@kinu/core';
 
 const served = (version: string) => ({ version });
 

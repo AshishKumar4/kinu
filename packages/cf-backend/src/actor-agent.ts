@@ -26,12 +26,12 @@ import type { SubordinateActivityEvent } from './lib/protocol';
 import { parseProtocolMessage } from "agents/chat";
 import { CLI_SCOPES_HEADER, cliScopesConnectionTag, rejectOutOfScopeRpc } from "./cli/rpc-gate";
 import { createWorkersTracer } from "./obs/cf-tracer";
-import { createAgentTracing, renderThrownChain, type AgentTracing } from "@proteus/core/obs";
+import { createAgentTracing, renderThrownChain, type AgentTracing } from "@kinu/core/obs";
 import {
   createCompactionExtension, createVfsTranscriptStore,
   createCompactionStateStore, createModelSummarizer,
   type CompactionStateStore, type Logger as CompactionLogger,
-} from "@proteus/compaction";
+} from "@kinu/compaction";
 import { Think, Session } from "@cloudflare/think";
 import { streamText, tool, jsonSchema, stepCountIs } from "ai";
 import type { LanguageModel, ModelMessage, SystemModelMessage, ToolSet, UIMessage } from "ai";
@@ -86,7 +86,7 @@ import {
   ACTIVE_TOOLS,
   nanoid,
   // Branching heads
-  HeadController, type HeadJournal,
+  HeadController, type HeadJournal, LiveHeadJournal,
   type HeadId, type HeadInput, type HeadReport, type MergeStrategy,
   type SerializedMessage, type SplitPhaseEvent, type HeadRuntime, type HeadGrounding, type MergeResult,
   type NodeLoopHost, type NodeArbiter, type BranchProposal, type BranchDecision,
@@ -162,7 +162,7 @@ import {
   // memory.* / tasks.* — codemode projections of the same-named native tools
   createMemoryCodemodeProvider, createTasksCodemodeProvider,
   JsonObjectSchema, JsonValueSchema, projectJsonValue, type JsonObject, type JsonValue,
-} from "@proteus/core";
+} from "@kinu/core";
 import { bindAgentSql, createCFRuntime, type CFRuntime } from "./runtime";
 import { createExecuteToolsTool } from "./execute-tools";
 import { createHeadRuntime } from "./head-runtime";
@@ -173,9 +173,9 @@ import {
   // Prompt-cache breakpoints — single source in core prompting/cache-breakpoints.ts
   promptCachePlan, hasCacheMarkers, markLastToolForAnthropicCache,
   type PromptCacheStrategy,
-} from "@proteus/core";
-import type { CodemodeProvider, DeferredApprovalChannel } from "@proteus/core";
-import { diagnostics, ProteusError, toProteusError, tolerate } from "@proteus/core/obs";
+} from "@kinu/core";
+import type { CodemodeProvider, DeferredApprovalChannel } from "@kinu/core";
+import { diagnostics, ProteusError, toProteusError, tolerate } from "@kinu/core/obs";
 import type { UserDO } from "./user/user-do";
 import type { UserCaller } from "./user/workspace-capability";
 import { sha256Hex } from "./lib/crypto";
@@ -1242,12 +1242,11 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   async headJournalRecordReport(report: HeadReport): Promise<void> {
+    // The announcement is the JOURNAL's now, not this method's. It used to
+    // broadcast here, which made a branch's last write — the summary, the status
+    // and the wall clock — live for a recursive split and for nothing else,
+    // because this RPC is only reachable from a facet calling its parent.
     this.headJournal.recordReport(report);
-    // Same channel as the per-step announcement, because a reader watching a
-    // branch needs its LAST write most: the summary, the status and the wall
-    // clock all land here, AFTER the final step. Announcing only steps left an
-    // open transcript stuck one write short of the answer it was waiting for.
-    this.broadcast(JSON.stringify({ type: 'head_activity', headId: report.id }));
   }
 
   async headJournalCacheMerge(rootId: HeadId, result: MergeResult, strategy: MergeStrategy): Promise<void> {
@@ -1566,10 +1565,31 @@ export abstract class ActorAgent extends Think<Env> {
    *  it be built here rather than in the constructor body. */
   private readonly stores = createAgentStores(() => this.boundSql);
 
-  // The orchestrator's view of head activity (journal + runs + steps). Shared by
-  // getHeadController (write path) and getHeadRuns (read path).
+  private _liveHeadJournal: LiveHeadJournal | null = null;
+
+  /**
+   * The orchestrator's view of head activity (journal + runs + steps). Shared by
+   * getHeadController (write path) and getHeadRuns (read path).
+   *
+   * ANNOUNCING, and that is the whole of the liveness fix. This handed out the
+   * raw store, so every write core made through it — a node's spawn, its steps
+   * on the unhosted path, its report, the settle — landed durably and told
+   * nobody. Wrapping the one instance both paths already share is what makes a
+   * search live without a line in `packages/core`, whose swarm runner carries no
+   * progress seam to hang a callback on.
+   */
   protected get headJournal(): HeadJournal {
-    return this.stores.headJournal;
+    return (this._liveHeadJournal ??= new LiveHeadJournal(
+      this.boundSql,
+      (headId) => this.announceHeadActivity(headId),
+    ));
+  }
+
+  /** Tell every open client that one branch's ledger moved. Ordering and
+   *  failure isolation belong to {@link LiveHeadJournal}, which calls this only
+   *  after its write has returned and never lets a throw here reach core. */
+  private announceHeadActivity(headId: string): void {
+    this.broadcast(JSON.stringify({ type: 'head_activity', headId }));
   }
 
   // Durable run-event recorder (Flue-style discriminated union, SSE-resumable).
@@ -1634,7 +1654,7 @@ export abstract class ActorAgent extends Think<Env> {
   //   - TriggerRegistry durable subscriptions (webhooks, timers, watches)
   //   - ReplyChannelStore  durable reply-channel rows + dispatchers
   // Spec: docs/ARCHITECTURE.md — "Events and ingress"
-  private _eventLog: import('@proteus/core').EventLog | null = null;
+  private _eventLog: import('@kinu/core').EventLog | null = null;
   protected get eventLog(): EventLog {
     if (!this._eventLog) {
       this._eventLog = new EventLog(this.ctx.storage.sql);
@@ -2315,7 +2335,7 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /**
-   * Delegates to @proteus/core's canonical prompt builder (F1 fix: documents
+   * Delegates to @kinu/core's canonical prompt builder (F1 fix: documents
    * `codemode.*` — the real namespace crafted tools land in — instead of the
    * former `tools.*` lie). Cached across turns; invalidated when the soul
    * text or the registered executor set changes.
@@ -2900,7 +2920,7 @@ export abstract class ActorAgent extends Think<Env> {
   // edit, list, find, grep, delete) with ours, bloating the request by ~2800 tokens.
   // activeTools restricts the model to the built-in tools + session context tools,
   // preventing Think's workspace tools from being sent in the request payload.
-  // ACTIVE_TOOLS is sourced from @proteus/core/tools/registry (single truth).
+  // ACTIVE_TOOLS is sourced from @kinu/core/tools/registry (single truth).
 
   async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
     // The scaffold and the soul are both files this turn is about to read, and

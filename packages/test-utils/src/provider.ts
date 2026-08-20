@@ -1,6 +1,6 @@
 // ExplorationStrategy fixtures — stub strategies for the registry contract
 // tests. Providers are mocked at the fetch seam instead (network.ts).
-import type { ExplorationStrategy, StrategyContext, StrategyResult } from '@proteus/core';
+import type { ExplorationStrategy, StrategyContext, StrategyResult } from '@kinu/core';
 
 export interface TestStrategyOptions {
   id: string;

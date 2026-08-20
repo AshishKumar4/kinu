@@ -3,15 +3,15 @@
  * FTS5 memory search, the Nimbus workspace filesystem, and proper CraftStore.
  *
  * Implements the same primitives as cf-backend via adapter wrappers
- * that bridge agent-utils types to @proteus/core's interfaces.
+ * that bridge agent-utils types to @kinu/core's interfaces.
  */
 
-import type { AgentRuntime, CraftStore as CoreCraftStore, Shell } from '@proteus/core';
+import type { AgentRuntime, CraftStore as CoreCraftStore, Shell } from '@kinu/core';
 import type {
   Schedule, Memory, VFS, SqlExec, SqlExecutor, SqlValue, RawSqlExec, WorkspaceSchemaSql,
-} from '@proteus/core';
-import type { ExecutorProvider, ResourceLimits } from '@proteus/core';
-import type { RequestShellApproval, ShellApprovalPolicy } from '@proteus/core';
+} from '@kinu/core';
+import type { ExecutorProvider, ResourceLimits } from '@kinu/core';
+import type { RequestShellApproval, ShellApprovalPolicy } from '@kinu/core';
 import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
@@ -25,18 +25,18 @@ import {
   withApprovalGatedShell,
   selectFastModel, createAgentConfigStore, initAgentConfigTable, initActorTables,
   type ModelCallSink, type NodeHomeHost,
-} from '@proteus/core';
+} from '@kinu/core';
 import {
   createWorkspace as createWorkspaceFilesystem,
   nextWorkspaceGeneration,
   workspaceToolchainCapabilities,
-} from '@proteus/core/workspace';
-import { tolerate, tolerateAsync } from '@proteus/core/obs';
+} from '@kinu/core/workspace';
+import { tolerate, tolerateAsync } from '@kinu/core/obs';
 import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
 import bashRuntime from '@nimbus-sh/runtime-bash';
 import cpythonRuntime from '@nimbus-sh/runtime-cpython';
-import { MemoryStore } from '@proteus/agent-utils';
-import { CraftStore as AgentUtilsCraftStore } from '@proteus/agent-utils';
+import { MemoryStore } from '@kinu/agent-utils';
+import { CraftStore as AgentUtilsCraftStore } from '@kinu/agent-utils';
 import { createSandboxedExecutor } from './executor';
 import { createHostCheckpoints } from './checkpoints';
 import { hostResourceLimits } from './cgroup-limits';
@@ -48,8 +48,8 @@ import {
   createLocalModelResolver, createLocalProviderLLM, type LocalProviderCredentials,
 } from './model-resolver';
 import type { LocalCodexAuthStore } from './codex-auth-store';
-import type { OAuthCredential, FileCheckpoints } from '@proteus/core';
-import { diagnostics, ProteusError } from '@proteus/core/obs';
+import type { OAuthCredential, FileCheckpoints } from '@kinu/core';
+import { diagnostics, ProteusError } from '@kinu/core/obs';
 import type { Database, SQLQueryBindings } from 'bun:sqlite';
 import * as v from 'valibot';
 
@@ -192,7 +192,7 @@ export function localTransactions(db: Database): WorkspaceTransactions {
 /**
  * The runtimes a local workspace can install into itself.
  *
- * Named here rather than in `@proteus/core` because these are the bytes: 40 MB
+ * Named here rather than in `@kinu/core` because these are the bytes: 40 MB
  * of wasm read through `node:fs`, which the deployed Worker can neither bundle
  * nor open. A hosted session gets the same runtimes from R2 through
  * `nimbus install`; this is the same publisher for a host that has a disk.

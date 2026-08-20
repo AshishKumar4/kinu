@@ -31,12 +31,22 @@ import {
   isPresetPoint, NAMED_SWARM_PRESETS, settleOf, SWARM_PRESET_POINTS,
   type HeadRunView, type NamedSwarmPreset, type SwarmConfig, type SwarmPresetRow,
   type SwarmSettle,
-} from "@proteus/core";
+} from "@kinu/core";
+
+/**
+ * The six axes by NAME.
+ *
+ * A union rather than a string, so a table keyed on them — the surface's gloss for
+ * each — is exhaustive by construction rather than by inspection. {@link
+ * swarmAxisRows} below is the one place that has to stay in step with it, and it is
+ * the next function in this file.
+ */
+export type SwarmAxis = "unit" | "context" | "expand" | "score" | "advance" | "carry";
 
 /** One axis and the value it resolved to, with the parameter that belongs to that
  *  value tagged onto it rather than printed as a field beside it. */
 export interface SwarmAxisRow {
-  readonly axis: string;
+  readonly axis: SwarmAxis;
   readonly value: string;
 }
 

@@ -19,9 +19,16 @@ export default {
 };
 `;
 
+/** The guest reports itself on the runtime's diagnostic channel: the same
+ *  script runs as the one-Worker baseline and as the last hop of the composed
+ *  route, so its line is the control the leak assertion at the end is measured
+ *  against. See the comment there. */
+const GUEST_REACHED = 'nimbus capability guest reached';
+
 const guestScript = `
 export default {
   fetch(request) {
+    console.error('${GUEST_REACHED}');
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     server.accept();
@@ -50,20 +57,42 @@ const buildResult = await build({
   external: ['cloudflare:workers', 'cloudflare:sockets'],
 });
 const sessionScript = buildResult.outputFiles[0].text;
-let runtimeStderr = '';
 
-const miniflare = new Miniflare({
-  compatibilityDate: '2026-06-05',
-  log: new NoOpLog(),
-  handleRuntimeStdio(stdout, stderr) {
-    stdout.resume();
-    stderr.setEncoding('utf8');
-    stderr.on('data', (chunk) => { runtimeStderr += chunk; });
+/** miniflare 5: a worker is `{ config }` carrying its own compat date and its
+ *  modules (`manifest`), and a service binding is a `worker` arm in `config.env`
+ *  naming the target worker. */
+const worker = (name, code, env) => ({
+  config: {
+    name,
+    type: 'worker',
+    compatibilityDate: '2026-06-05',
+    manifest: {
+      mainModule: 'index.mjs',
+      modulesRoot: '/',
+      modules: { 'index.mjs': { type: 'esm', contents: code } },
+    },
+    env,
   },
+});
+
+/** miniflare 5 replaced `handleRuntimeStdio` with parsed structured logs: one
+ *  call per runtime log line, so the runtime diagnostics are rejoined here. */
+const diagnosticSink = () => {
+  const lines = [];
+  return {
+    handle: ({ level, message }) => { lines.push(`${level}: ${message}`); },
+    text: () => lines.join('\n'),
+  };
+};
+
+const runtimeDiagnostics = diagnosticSink();
+const miniflare = new Miniflare({
+  log: new NoOpLog(),
+  handleStructuredLogs: runtimeDiagnostics.handle,
   workers: [
-    { name: 'edge', modules: true, script: edgeScript, serviceBindings: { NIMBUS: 'session' } },
-    { name: 'session', modules: true, script: sessionScript, serviceBindings: { GUEST: 'guest' } },
-    { name: 'guest', modules: true, script: guestScript },
+    worker('edge', edgeScript, { NIMBUS: { type: 'worker', workerName: 'session' } }),
+    worker('session', sessionScript, { GUEST: { type: 'worker', workerName: 'guest' } }),
+    worker('guest', guestScript),
   ],
 });
 
@@ -134,16 +163,11 @@ try {
   await miniflare.dispose();
 }
 
-let baselineStderr = '';
+const baselineDiagnostics = diagnosticSink();
 const baseline = new Miniflare({
-  compatibilityDate: '2026-06-05',
   log: new NoOpLog(),
-  handleRuntimeStdio(stdout, stderr) {
-    stdout.resume();
-    stderr.setEncoding('utf8');
-    stderr.on('data', (chunk) => { baselineStderr += chunk; });
-  },
-  workers: [{ name: 'edge', modules: true, script: guestScript }],
+  handleStructuredLogs: baselineDiagnostics.handle,
+  workers: [worker('edge', guestScript)],
 });
 try {
   const response = await baseline.dispatchFetch('https://baseline.example/socket', {
@@ -169,11 +193,21 @@ try {
   await baseline.dispose();
 }
 
-// Current workerd reports this diagnostic when a test-owned accepted socket is
-// torn down with the whole Miniflare runtime. Prove the diagnostic against the
-// one-Worker echo baseline before accepting it from the composed Nimbus route.
-const teardownDiagnostic = /^workerd\/server\/server\.c\+\+:5535: error: Uncaught exception: .*detected that your Worker's code had hung and would never generate a response\..*\nstack: .+\n$/s;
-assert.match(baselineStderr, teardownDiagnostic);
-assert.match(runtimeStderr, teardownDiagnostic);
-assert.doesNotMatch(runtimeStderr, /Tried to access method|RPC|TypeError|501/);
+// This used to pin workerd's "your Worker's code had hung" teardown diagnostic
+// (server.c++:5535). That failure mode is gone, not moved: miniflare 5 no
+// longer leaves the socket's request outstanding when the runtime goes down, so
+// nothing is cancelled and nothing is logged. Measured rather than assumed —
+// workerd 1.20260820.1 driven under the pre-5 raw-stdio path still prints it
+// (at server.c++:6573 now), while the same binary under miniflare 5 writes zero
+// bytes to stdout and stderr for this flow, taken from a tee wrapper on the
+// runtime's own streams via MINIFLARE_WORKERD_PATH.
+//
+// So the control is the guest's own line instead of platform noise: the
+// one-Worker baseline proves the channel carries runtime diagnostics at all,
+// and the composed route proves the same channel is live there — without which
+// the leak assertion below would pass on an empty string.
+const guestReached = new RegExp(`^error: ${GUEST_REACHED}$`, 'm');
+assert.match(baselineDiagnostics.text(), guestReached);
+assert.match(runtimeDiagnostics.text(), guestReached);
+assert.doesNotMatch(runtimeDiagnostics.text(), /Tried to access method|RPC|TypeError|501/);
 process.stdout.write('Nimbus capability WebSocket workerd probe passed\n');

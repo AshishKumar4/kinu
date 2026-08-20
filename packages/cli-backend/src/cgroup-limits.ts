@@ -21,8 +21,8 @@
  */
 
 import { readFileSync } from 'node:fs';
-import type { ResourceLimits } from '@proteus/core';
-import { tolerate } from '@proteus/core/obs';
+import type { ResourceLimits } from '@kinu/core';
+import { tolerate } from '@kinu/core/obs';
 
 export interface CgroupSource {
   /** cgroupfs mount point. */

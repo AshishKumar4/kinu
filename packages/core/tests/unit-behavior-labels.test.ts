@@ -8,7 +8,7 @@
  * model-versus-model agreement.
  */
 import { describe, expect, test } from 'bun:test';
-import { createScriptedLLM } from '@proteus/test-utils';
+import { createScriptedLLM } from '@kinu/test-utils';
 import {
   BEHAVIOR_RULES, corpusStats, renderCorpusReport, runCorpusEval, weakLabel,
   type CorpusTurn, type TurnSignals,

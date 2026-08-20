@@ -1,4 +1,4 @@
-import type { SessionSurface } from '@proteus/core';
+import type { SessionSurface } from '@kinu/core';
 import { requireAuthConfig } from './config';
 import type { AgentTarget } from './agent-target';
 import type { AgentClient } from './agent-client';

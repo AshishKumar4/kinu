@@ -1,6 +1,6 @@
 // SessionWindow — the durable evolution window + pending outcome review.
 import { describe, test, expect } from 'bun:test';
-import { createTestSql } from '@proteus/test-utils';
+import { createTestSql } from '@kinu/test-utils';
 import { initSessionWindowTable, createSessionWindowStore, type SessionWindowStore } from '../src/evolution/session-window';
 import type { CompletedTurn } from '../src/evolution/types';
 

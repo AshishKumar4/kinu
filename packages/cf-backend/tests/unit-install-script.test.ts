@@ -10,7 +10,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { tolerate } from '@proteus/core/obs';
+import { tolerate } from '@kinu/core/obs';
 import * as v from 'valibot';
 import { handleCliRequest } from '../src/cli/routes';
 

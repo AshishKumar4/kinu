@@ -2,7 +2,7 @@
 // tools. Previously the whole AbortSignal chain was a silent no-op: createShell
 // dropped the signal and every remote executor ignored the trailing options.
 import { describe, test, expect } from 'bun:test';
-import { toolExecute } from '@proteus/test-utils';
+import { toolExecute } from '@kinu/test-utils';
 import * as v from 'valibot';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { createSandboxExecutor, type SandboxHandle } from '../src/execution/sandbox';

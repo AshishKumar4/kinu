@@ -14,7 +14,7 @@ import { execFileSync } from 'node:child_process';
 import { describe, expect, spyOn, test } from 'bun:test';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { git, initRepo, scratchDir } from '@proteus/test-utils';
+import { git, initRepo, scratchDir } from '@kinu/test-utils';
 import { enumerateRepository, isTextSource, readRepositoryFile } from './sources';
 import { scanText } from './secret-scan';
 

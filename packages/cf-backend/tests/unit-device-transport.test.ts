@@ -2,7 +2,7 @@
 // over the user-level device hub. This is what beforeTurn refreshes so the
 // turn's context reflects a device that connected mid-session.
 import { describe, expect, test } from 'bun:test';
-import type { DeviceStatus, JsonValue } from '@proteus/core';
+import type { DeviceStatus, JsonValue } from '@kinu/core';
 import {
   createHubDeviceTransport,
   type DeviceHubClient,

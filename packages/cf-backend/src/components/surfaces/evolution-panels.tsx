@@ -15,7 +15,7 @@ import { DatabaseIcon, GaugeIcon } from "@phosphor-icons/react";
 import {
   DEFAULT_QUALITY_THRESHOLD, describeCalibrationGap, lossInterval, scoreInterval,
   type AlignmentConvergence, type CalibrationReport, type ScoreInterval,
-} from "@proteus/core";
+} from "@kinu/core";
 import type { Rpc } from "@/lib/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";

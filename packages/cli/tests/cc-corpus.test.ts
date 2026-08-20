@@ -17,8 +17,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { weakLabel, type JsonObject, type JsonValue } from '@proteus/core';
-import { gitEnv } from '@proteus/test-utils';
+import { weakLabel, type JsonObject, type JsonValue } from '@kinu/core';
+import { gitEnv } from '@kinu/test-utils';
 import { defaultTranscriptRoot, mineTranscripts, renderMineSkips } from '../src/cc-transcript';
 import * as v from 'valibot';
 

@@ -68,7 +68,7 @@ import { dirname, join, normalize } from 'node:path';
 import * as v from 'valibot';
 
 import { assertMeasured, finding, reconcile, report, writeLock } from './gate-ratchet';
-import { isParseable, readSources } from './sources';
+import { isParseable, readSources, workspaceScope } from './sources';
 import {
   declarationOf, declaredName, identifierText, isOptionalMember, moduleSpecifiers, parse,
   type SyntaxNode, walk,
@@ -143,7 +143,7 @@ export interface Asymmetry {
  * instance: `components/tool-call-summary.ts`, 453 lines of tool-call argument
  * vocabulary (`Edited b.ts — 3 replacements`, `Ran the tests`), against which
  * the CLI's `printToolCall` joins raw argument VALUES and clips the line at 70
- * characters. Nothing in the file touches Cloudflare; it imports `@proteus/core`
+ * characters. Nothing in the file touches Cloudflare; it imports `@kinu/core`
  * and `valibot`.
  */
 export interface Movable {
@@ -405,7 +405,13 @@ function attribute(site: Site, contracts: readonly Contract[]): Contract | undef
    two runtimes' globals, kept current forever, to pre-empt a failure the next
    command already produces, is the wrong trade. */
 
-const SHARED_PACKAGE = /^@proteus\/(core|agent-utils|compaction)(\/|$)/;
+/** The shared packages either backend may import, derived from the live
+ *  workspace scope so a scope rename cannot quietly widen this to nothing —
+ *  a regex that matches no specifier reports every shared import as a blocker,
+ *  which reads as "no module is movable" rather than as a broken gate. */
+const SHARED_PACKAGE = new RegExp(
+  `^${workspaceScope()}/(core|agent-utils|compaction)(/|$)`,
+);
 
 const TsconfigSchema = v.object({
   compilerOptions: v.optional(v.object({

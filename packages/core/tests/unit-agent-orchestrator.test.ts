@@ -3,7 +3,7 @@
 // were extracted from the cf-backend OrchestratorAgent's onChatResponse.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { createTestSql } from '@proteus/test-utils';
+import { createTestSql } from '@kinu/test-utils';
 import * as v from 'valibot';
 import { AgentOrchestrator, type AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
 import { initSessionWindowTable, createSessionWindowStore } from '../src/evolution/session-window';

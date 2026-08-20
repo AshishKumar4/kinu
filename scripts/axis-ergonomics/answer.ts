@@ -15,7 +15,7 @@
  *            thing being measured.
  */
 import * as v from 'valibot';
-import { extractJsonObject } from '@proteus/core';
+import { extractJsonObject } from '@kinu/core';
 
 const OptText = v.fallback(v.nullable(v.string()), null);
 const OptMap = v.fallback(v.record(v.string(), v.string()), {});

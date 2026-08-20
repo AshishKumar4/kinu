@@ -7,9 +7,9 @@
 // selection and reuses core's filterByEffectiveScore, so a score-retired tool
 // disappears from the sandbox preamble too.
 import { describe, test, expect, mock } from "bun:test";
-import type { CraftedTool, CraftStore } from "@proteus/core";
-import { craftFailureMarker, initCraftScoreTables } from "@proteus/core";
-import { createTestSql } from "@proteus/test-utils";
+import type { CraftedTool, CraftStore } from "@kinu/core";
+import { craftFailureMarker, initCraftScoreTables } from "@kinu/core";
+import { createTestSql } from "@kinu/test-utils";
 
 // @cloudflare/codemode (the DWE import) needs the workerd-only module.
 mock.module("cloudflare:workers", () => ({ RpcTarget: class {}, WorkerEntrypoint: class {}, DurableObject: class {} }));

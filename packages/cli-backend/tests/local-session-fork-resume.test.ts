@@ -16,12 +16,12 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { TestLanguageModelV2 } from './test-language-model';
-import { HeadJournal, initHeadsTables, initBackgroundJobsTable } from '@proteus/core';
-import type { LLMProviderConfig } from '@proteus/core';
+import { HeadJournal, initHeadsTables, initBackgroundJobsTable } from '@kinu/core';
+import type { LLMProviderConfig } from '@kinu/core';
 import { createCLIRuntime } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import { makeExecRaw, makeSql } from '../src/runtime';
-import { scratchPath } from '@proteus/test-utils';
+import { scratchPath } from '@kinu/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',

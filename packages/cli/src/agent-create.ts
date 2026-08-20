@@ -11,9 +11,9 @@ import {
   type LLMProviderConfig,
   type ReasoningEffort,
   type SuggestedWorkspaceIdentity,
-} from '@proteus/core';
-import { createWorkspace } from '@proteus/core/identity';
-import { makeWorkspaceSchemaSql } from '@proteus/cli-backend';
+} from '@kinu/core';
+import { createWorkspace } from '@kinu/core/identity';
+import { makeWorkspaceSchemaSql } from '@kinu/cli-backend';
 import {
   agentDbPath,
   agentDir,

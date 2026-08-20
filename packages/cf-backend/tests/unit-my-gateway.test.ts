@@ -14,7 +14,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { generateText } from 'ai';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry';
-import { asFetchFunction, parseJsonObject, type JsonValue } from '@proteus/core';
+import { asFetchFunction, parseJsonObject, type JsonValue } from '@kinu/core';
 import {
   CLOUDFLARE_AI_GATEWAY_CRED_KEY,
   cloudflareAccountAPIRoot,

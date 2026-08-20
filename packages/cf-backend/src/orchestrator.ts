@@ -9,7 +9,7 @@
  * teams, email + webhook ingress, release changes, and fork.
  *
  * Tool factory, system prompt, and crafted-tool injection all live in
- * @proteus/core so the CLI surface shares them verbatim.
+ * @kinu/core so the CLI surface shares them verbatim.
  */
 
 import { callable, type AgentContext, type SubAgentClass } from "agents";
@@ -167,7 +167,7 @@ import {
   admitPlanReviewAnnotations,
   type PlanEdit, type PlanReview, type PlanReviewAnnotation, type PlanReviewDecision,
   type PlanReviewResult, type WorkMode,
-} from "@proteus/core";
+} from "@kinu/core";
 import * as v from 'valibot';
 import { ActorAgent, type ActorToolDeps } from "./actor-agent";
 import { resolveEnsembleJudgeSelection } from "./providers/judge-model";
@@ -181,9 +181,9 @@ import {
   DeferredApprovalQueue, DeferredApprovalStore,
   type DeferredApproval, type DeferredApprovalAnswer, type DeferredApprovalChannel,
   type DeferredApprovalNotice, type ApprovalGrant,
-} from "@proteus/core";
-import type { CodemodeProvider, MctsSearchRunSummary } from "@proteus/core";
-import { diagnostics, renderThrownChain, toProteusError } from "@proteus/core/obs";
+} from "@kinu/core";
+import type { CodemodeProvider, MctsSearchRunSummary } from "@kinu/core";
+import { diagnostics, renderThrownChain, toProteusError } from "@kinu/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import { deliverCloudFork } from "./user/workspace-fork";
 import { createNimbusWorkspaceSandbox, nimbusWorkspaceArchiveFiles } from './nimbus-route';
@@ -366,8 +366,8 @@ export class OrchestratorAgent extends ActorAgent {
   // Takes when the turn completes (onChatResponse).
   private _pendingBranches: PendingBranch[] = [];
 
-  private _triggerRegistry: import('@proteus/core').TriggerRegistry | null = null;
-  private _replyChannels: import('@proteus/core').ReplyChannelStore | null = null;
+  private _triggerRegistry: import('@kinu/core').TriggerRegistry | null = null;
+  private _replyChannels: import('@kinu/core').ReplyChannelStore | null = null;
   /** Per-activation guard so the full table-init DDL runs once, not on every
    *  onStart + claimOwner. Resets on DO eviction, so a cold start always
    *  re-creates any newly-added tables (no schema-version bookkeeping). */
@@ -998,7 +998,7 @@ export class OrchestratorAgent extends ActorAgent {
   ): Promise<void> {
     try {
       if (!this.config.getSleepTimeComputeEnabled()) return;
-      const { runSleepTimeCompute, applySleepTimeUpdate } = await import('@proteus/core');
+      const { runSleepTimeCompute, applySleepTimeUpdate } = await import('@kinu/core');
       const currentFacts = this.facts.all()
         .sort((a, b) => b.lastObservedAt - a.lastObservedAt)
         .map(f => ({ key: f.key, value: f.value, confidence: f.confidence }));
@@ -2554,8 +2554,10 @@ export class OrchestratorAgent extends ActorAgent {
     return await this.tracing.invocation('rpc', 'head.record_step', async (_invocation, span) => {
       span.setAttribute('proteus.head_id', headId);
       span.setAttribute('proteus.step_seq', seq);
+      // The announcement rides the journal write itself (LiveHeadJournal), so
+      // it happens once whether a step arrives through this RPC from a hosted
+      // facet or straight from an in-isolate node that has no facet at all.
       this.headJournal.appendStep(headId, seq, step);
-      this.broadcast(JSON.stringify({ type: 'head_activity', headId }));
       return { ok: true };
     });
   }
@@ -2824,7 +2826,7 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   @callable() async getToolDescriptions() {
-    // Descriptions AND reach sourced from @proteus/core/tools/registry — one
+    // Descriptions AND reach sourced from @kinu/core/tools/registry — one
     // truth for both. Reach used to be guessed here as
     // `nativeNames.has(name) ? 'native' : 'codemode'`, a binary that cannot
     // express "this actor has it on neither surface": `report` is the one

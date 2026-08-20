@@ -25,7 +25,7 @@
 
 import { sha256Hex } from '../lib/crypto';
 import * as v from 'valibot';
-import { renderThrownChain } from '@proteus/core/obs';
+import { renderThrownChain } from '@kinu/core/obs';
 
 const BuildStampSchema = v.looseObject({
   sha: v.optional(v.string()),

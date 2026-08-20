@@ -11,7 +11,7 @@ import type { ProteusSandbox } from "./src/proteus-sandbox";
 import type { UserDO } from "./src/user/user-do";
 import type { MonitorDO } from "./src/monitor/monitor-do";
 import type { NimbusSession } from "@nimbus-sh/sdk/worker";
-import type { VectorizeIndex as ProteusVectorizeIndex } from "@proteus/core";
+import type { VectorizeIndex as ProteusVectorizeIndex } from "@kinu/core";
 
 // This file has top-level imports (for the DO class generics below), which
 // makes it a module — so `interface Env` here would be module-scoped, not

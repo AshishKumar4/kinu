@@ -1,7 +1,7 @@
 // Behavior tests for the file-manager plumbing: each executor's own file view
 // and the writeExecutorFileOp seam over it.
 import { describe, test, expect } from "bun:test";
-import { sortDirEntries, writeExecutorFileOp, type VFS } from "@proteus/core";
+import { sortDirEntries, writeExecutorFileOp, type VFS } from "@kinu/core";
 
 describe("sortDirEntries", () => {
   test("dirs before files, alphabetical within each group", () => {
@@ -110,7 +110,7 @@ describe("writeExecutorFileOp", () => {
 
 describe("CLOUD_MAX_INLINE_ATTACHMENT_BYTES", () => {
   test("a max-size attachment message fits the agents SDK row guard, under the platform row cap", async () => {
-    const { CLOUD_MAX_INLINE_ATTACHMENT_BYTES, PLATFORM_CATALOG } = await import("@proteus/core");
+    const { CLOUD_MAX_INLINE_ATTACHMENT_BYTES, PLATFORM_CATALOG } = await import("@kinu/core");
     const { ROW_MAX_BYTES } = await import("agents/chat");
     // Chat messages persist as ONE DO SQLite row; the SDK truncates to
     // ROW_MAX_BYTES but can shrink only TEXT parts — file parts ride through

@@ -5,7 +5,7 @@ import {
   DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED,
   mergeConsentScope, parseConsentScope, summarizeDeviceAction,
   type JsonValue,
-} from '@proteus/core';
+} from '@kinu/core';
 import { handleUserRequest } from '../src/user/routes';
 import type { AuthIdentity } from '../src/auth/session';
 import type { UserCaller } from '../src/user/workspace-capability';

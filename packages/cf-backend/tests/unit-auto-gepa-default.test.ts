@@ -9,7 +9,7 @@
 // it actually left in the agent's own storage.
 import { describe, expect, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';
-import { AGENT_CONFIG_KEYS, DEFAULT_AUTO_GEPA_EVERY_N_TURNS } from '@proteus/core';
+import { AGENT_CONFIG_KEYS, DEFAULT_AUTO_GEPA_EVERY_N_TURNS } from '@kinu/core';
 import { orchestratorHarness } from './helpers/actor-harness';
 
 const storedCadence = (db: Database): string | null =>

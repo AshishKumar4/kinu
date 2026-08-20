@@ -18,7 +18,7 @@
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import type { AgentContext } from 'agents';
 import type { ToolSet } from 'ai';
-import type { IngressDescriptor, SqlExecRow, SqlValue, SubordinateRosterStore } from '@proteus/core';
+import type { IngressDescriptor, SqlExecRow, SqlValue, SubordinateRosterStore } from '@kinu/core';
 import * as v from 'valibot';
 import { mockAgentsSdk } from './agents-sdk';
 import { platformGatewayEnv } from './platform-gateway';

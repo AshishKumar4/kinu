@@ -4,9 +4,9 @@ import {
   decodeJsonValue,
   decodeCodexAccountId,
   tokensToCredential,
-} from '@proteus/core';
-import { renderThrownChain, tolerate } from '@proteus/core/obs';
-import { checkClaudeAvailability, checkOpenCodeAvailability, createOpenCodeProvider } from '@proteus/cli-backend';
+} from '@kinu/core';
+import { renderThrownChain, tolerate } from '@kinu/core/obs';
+import { checkClaudeAvailability, checkOpenCodeAvailability, createOpenCodeProvider } from '@kinu/cli-backend';
 import { setCloudCredential } from '../cloud-api';
 import { loadConfigFile, resolveCloudSession, saveConfigFile, setDefaultModel, updateConfigFile, type ProteusConfig } from '../config';
 import { ACCENT, DIM, OK, WARN } from '../display';
@@ -162,7 +162,7 @@ export async function setupCommand(opts: {
       return;
     }
     // Storing nothing is deliberate: the platform default is one constant in
-    // @proteus/core, and an unset model reads it at resolve time instead of
+    // @kinu/core, and an unset model reads it at resolve time instead of
     // pinning a copy that would go stale.
     updateConfigFile((config) => { delete config.model; });
     console.log(`${OK('✓')} Using Cloudflare Workers AI`);

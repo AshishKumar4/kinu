@@ -953,6 +953,35 @@ body { background: var(--c-bg); color: var(--c-text); }
 .mcts-labels[data-lod] .mcts-label,
 .mcts-label[data-pinned] { visibility: visible; }
 
+/* A node whose journal just moved — the ONE piece of motion on this canvas.
+
+   It marks a state CHANGE and not a state: the attribute is written when a
+   node's write counter moves and cleared when it stops, so a settled search
+   sits still. The ring rides the pointer hit-area circle every node already
+   has, so a live search of 520 nodes adds no elements.
+
+   `stroke` is set inside the keyframes rather than on the rule, because the
+   circle is `fill: transparent` with no stroke at rest and the animation is
+   the only thing that should ever give it one. */
+.mcts-node[data-working] > circle.mcts-halo {
+  animation: mcts-working 1.2s ease-out infinite;
+}
+@keyframes mcts-working {
+  from { stroke: var(--c-warning); stroke-opacity: 0.55; stroke-width: 1; }
+  to   { stroke: var(--c-warning); stroke-opacity: 0;    stroke-width: 6; }
+}
+/* A reader who asked for less motion still gets the FACT: a steady ring says
+   the same thing the pulse does, and saying nothing would hide which node is
+   working from exactly the people who need the picture to hold still. */
+@media (prefers-reduced-motion: reduce) {
+  .mcts-node[data-working] > circle.mcts-halo {
+    animation: none;
+    stroke: var(--c-warning);
+    stroke-opacity: 0.6;
+    stroke-width: 1.5;
+  }
+}
+
 /* Streaming label shimmer — live work reads as light moving through text. */
 .p-shimmer {
   background: linear-gradient(90deg, var(--c-text-3) 0%, var(--c-text) 50%, var(--c-text-3) 100%);

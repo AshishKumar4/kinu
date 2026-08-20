@@ -35,13 +35,13 @@ import type {
   ReleaseSource,
   Rpc,
 } from "@/lib/protocol";
-import { deployTargetAsCommand } from "@proteus/core";
+import { deployTargetAsCommand } from "@kinu/core";
 import { isPreviewUrl } from "@/lib/preview-origin";
 import { releaseSubstrate, type ExecutorInfo } from "@/lib/executors";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { EmptyState } from "./shared";
-import { renderThrownChain } from "@proteus/core/obs";
+import { renderThrownChain } from "@kinu/core/obs";
 
 /**
  * How many changes the board carries.

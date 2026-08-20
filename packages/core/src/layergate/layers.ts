@@ -37,7 +37,7 @@ import type { RunEventInput } from '../events/types';
 import type { AgentSignal } from '../types/signals';
 
 /** A single deterministic observation of the pipeline. Generic over the
- *  subjects record so a dependent package (e.g. @proteus/compaction) can
+ *  subjects record so a dependent package (e.g. @kinu/compaction) can
  *  define its own slice against the same gate machinery. */
 export interface Probe<S = PipelineSubjects> {
   /** `<layer>/<name>` — the baseline key. Stable across runs and machines. */
@@ -1437,7 +1437,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
     subjects: [],
     probes: [],
     unmeasuredBecause:
-      '@proteus/compaction depends on @proteus/core, so core cannot import it without a cycle. Its slice lives IN ' +
+      '@kinu/compaction depends on @kinu/core, so core cannot import it without a cycle. Its slice lives IN ' +
       'that package (src/layergate.ts, same Layer contract, own locked baseline); scripts/layergate.ts merges it ' +
       'into the report, replacing this placeholder row.',
   },

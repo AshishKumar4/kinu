@@ -11,10 +11,10 @@ import { Database } from 'bun:sqlite';
 import { afterEach, describe, expect, test } from 'bun:test';
 import type { LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
-import { hmacSha256Hex, type LLMProviderConfig, type WebhookDelivery } from '@proteus/core';
+import { hmacSha256Hex, type LLMProviderConfig, type WebhookDelivery } from '@kinu/core';
 import { createCLIRuntime } from '../src/runtime';
 import { LocalAgentSession } from '../src/local-session';
-import { scratchPath } from '@proteus/test-utils';
+import { scratchPath } from '@kinu/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',

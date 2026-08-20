@@ -4,8 +4,8 @@
 import { describe, test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildDrainBatch, WORKSPACE_CREATED_EVENT, workspaceGenesisSignal } from '@proteus/core';
-import type { JsonValue, ProteusEvent } from '@proteus/core';
+import { buildDrainBatch, WORKSPACE_CREATED_EVENT, workspaceGenesisSignal } from '@kinu/core';
+import type { JsonValue, ProteusEvent } from '@kinu/core';
 import {
   applySignalCard, classifyProgrammaticTurn, eventVariantLabel, messageSignalId,
   parseDrainedEvents, parseSignalCardEvent, type SignalCard,

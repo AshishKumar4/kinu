@@ -23,7 +23,7 @@ import {
   type JsonObject, type JsonValue,
   type ProviderDeps, type AuthResolution, type CacheRetention,
 } from '../src/index';
-import { createMockFetch, type MockFetchHandle } from '@proteus/test-utils';
+import { createMockFetch, type MockFetchHandle } from '@kinu/test-utils';
 
 function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch): ProviderDeps {
   const store = new Map(Object.entries(creds));

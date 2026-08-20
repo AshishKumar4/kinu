@@ -25,7 +25,7 @@ tester.run("anti-slop/no-untyped-console", noUntypedConsoleRule, {
     // neither Workers Logs nor the daemon journal.
     { code: "console.error(`[ErrorBoundary]`, error, info.componentStack);", filename: "packages/cf-backend/src/components/ErrorBoundary.tsx" },
     { code: "console.warn('[sidebar] listWorkspaces:', err.message);", filename: "packages/cf-backend/src/components/Sidebar.tsx" },
-    // Standalone plain JavaScript with no build and no @proteus/core dependency.
+    // Standalone plain JavaScript with no build and no @kinu/core dependency.
     { code: "console.log(new Date().toISOString(), ...a);", filename: "packages/pc-agent/src/index.js" },
     // Outside `packages/<pkg>/src` entirely: a gate script printing its findings is doing its job.
     { code: "console.log(`tracing: ok — ${measured}`);", filename: "scripts/tracing-gate.ts" },

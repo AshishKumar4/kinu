@@ -8,9 +8,9 @@
 
 import type {
   BranchHandle, BranchExploration, BranchReflection, SpawnBranch, AbortBranch,
-} from '@proteus/core';
-import type { CraftedTool, LLMProviderConfig, WorkMode } from '@proteus/core';
-import { TURN_WALL_CLOCK_ENVELOPE_MS } from '@proteus/core';
+} from '@kinu/core';
+import type { CraftedTool, LLMProviderConfig, WorkMode } from '@kinu/core';
+import { TURN_WALL_CLOCK_ENVELOPE_MS } from '@kinu/core';
 import { fork, type ChildProcess } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';

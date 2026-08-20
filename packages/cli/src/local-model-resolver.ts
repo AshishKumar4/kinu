@@ -1,12 +1,12 @@
-import { createLocalModelResolver, type LocalModelResolver } from '@proteus/cli-backend';
-import { agentAffinityKey, parseModelSpec, type LLMProviderConfig } from '@proteus/core';
+import { createLocalModelResolver, type LocalModelResolver } from '@kinu/cli-backend';
+import { agentAffinityKey, parseModelSpec, type LLMProviderConfig } from '@kinu/core';
 import {
   createCodexAuthStore,
   resolveCloudSession,
   resolveLLMConfig,
   resolveProviderCredentials,
 } from './config';
-import { renderThrownChain } from '@proteus/core/obs';
+import { renderThrownChain } from '@kinu/core/obs';
 
 export interface LocalModelResolverOptions {
   model?: string;

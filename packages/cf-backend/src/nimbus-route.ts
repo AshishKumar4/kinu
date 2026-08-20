@@ -1,5 +1,5 @@
 import { Nimbus } from '@nimbus-sh/sdk';
-import { SOUL_PATH, type ArchiveFileSource } from '@proteus/core';
+import { SOUL_PATH, type ArchiveFileSource } from '@kinu/core';
 import { createHash, createHmac } from 'node:crypto';
 import { previewHostSuffix } from './lib/preview-origin';
 import { timingSafeEqual } from './lib/crypto';

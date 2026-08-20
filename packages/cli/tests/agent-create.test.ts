@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { workspaceSlug } from '@proteus/core';
+import { workspaceSlug } from '@kinu/core';
 import {
   createCloudAgentFromMission,
   suggestAgentIdentityFromMission,

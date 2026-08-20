@@ -1,4 +1,4 @@
-// @proteus/test-utils — shared fixtures for the project's test suite.
+// @kinu/test-utils — shared fixtures for the project's test suite.
 // Mock at real seams (LLM, HTTP, SQL), never at internal functions.
 export * from './sql';
 export * from './scratch';

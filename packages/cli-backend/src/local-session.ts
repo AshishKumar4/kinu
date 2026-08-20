@@ -19,7 +19,7 @@ import {
   createCompactionExtension, createVfsTranscriptStore,
   createCompactionStateStore, createModelSummarizer,
   type CompactionStateStore,
-} from '@proteus/compaction';
+} from '@kinu/compaction';
 import type {
   ChatOptions, ChatEvent,
   LLMProviderConfig, CompletedTurn, TurnContinuity, FiberCtx,
@@ -35,7 +35,7 @@ import type {
   FileCheckpoints, FileCheckpointListing, FileRestorePlan, FileRestoreResult,
   CheckpointAvailability,
   WorkMode,
-} from '@proteus/core';
+} from '@kinu/core';
 import {
   AgentOrchestrator,
   createAgentStores, type AgentStores, collectDynamicContext,
@@ -113,8 +113,8 @@ import {
   type EvolutionChangelogView,
   getRunEvents, listRuns, type RunListEntry, type Page, type PageRequest,
   priceCall, WORKSPACE_RUN_ID,
-} from '@proteus/core';
-import { diagnostics, ProteusError, renderThrownChain, toProteusError } from '@proteus/core/obs';
+} from '@kinu/core';
+import { diagnostics, ProteusError, renderThrownChain, toProteusError } from '@kinu/core/obs';
 import { makeSqlExec, type CLIRuntime } from './runtime';
 import { discoverAgentsMd } from './agents-md';
 import { createNodeCraftedExecute } from './craft-executor';
@@ -2622,7 +2622,7 @@ export class LocalAgentSession implements BackendHost {
   }
 }
 
-export { serializeContentForHeads } from '@proteus/core';
+export { serializeContentForHeads } from '@kinu/core';
 
 interface PromptInputParts {
   text: string;

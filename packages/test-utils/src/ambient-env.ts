@@ -33,7 +33,7 @@
  *
  * The names are `LIVE_MODEL_ENV`'s, and they live here rather than in
  * `live-model.ts` so that the preload can read them without pulling
- * `@proteus/core` and the AI SDK into all 400+ test files.
+ * `@kinu/core` and the AI SDK into all 400+ test files.
  */
 
 /** The env vars the live-model resolver reads, so its failure messages and the

@@ -17,7 +17,7 @@ import {
 } from "@phosphor-icons/react";
 import type { Rpc, BackgroundJob } from "@/lib/protocol";
 import { timeAgo } from "./shared";
-import { renderThrownChain } from "@proteus/core/obs";
+import { renderThrownChain } from "@kinu/core/obs";
 
 function statusMeta(status: BackgroundJob["status"]) {
   switch (status) {

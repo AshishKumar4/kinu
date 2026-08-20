@@ -1,6 +1,6 @@
 import { resolveCloudOrigin } from './config';
-import { decodeJsonValue, JsonValueSchema, type JsonValue, type ReasoningEffort } from '@proteus/core';
-import { tolerateAsync } from '@proteus/core/obs';
+import { decodeJsonValue, JsonValueSchema, type JsonValue, type ReasoningEffort } from '@kinu/core';
+import { tolerateAsync } from '@kinu/core/obs';
 import * as v from 'valibot';
 
 export interface CliAuthStart {

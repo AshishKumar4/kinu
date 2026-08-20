@@ -185,7 +185,7 @@ flowchart TB
     end
 
     subgraph Host["ExtensionHost (core/src/extension.ts) — both backends"]
-        Comp["compaction — @proteus/compaction (transformContext)"]
+        Comp["compaction — @kinu/compaction (transformContext)"]
         Inj["proteus.signals — prepareStep"]
     end
 
@@ -211,7 +211,7 @@ What the boxes are:
 
 The two default registrants attach at construction on both backends:
 
-- **Compaction** (`@proteus/compaction`, `createCompactionExtension`) is the
+- **Compaction** (`@kinu/compaction`, `createCompactionExtension`) is the
   default `transformContext`: the vendored better-compact staged-pruning ladder
   (`compaction/src/engine/`) plus the Proteus codec (`compaction/src/codec.ts`,
   AI-SDK `ModelMessage[]` ⇄ ladder `Turn[]`). It runs once per turn assembly over

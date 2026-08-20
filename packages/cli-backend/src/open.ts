@@ -7,12 +7,12 @@
  * display compatibility with CLI commands.
  */
 
-import type { LLMProviderConfig } from '@proteus/core';
-import type { OAuthCredential } from '@proteus/core';
+import type { LLMProviderConfig } from '@kinu/core';
+import type { OAuthCredential } from '@kinu/core';
 import {
   initWorkspaceBaselineTable, initWorkspaceSchema, readSoul, summarizeSoul,
   getCurrentScaffoldVersion, memoryBytes,
-} from '@proteus/core';
+} from '@kinu/core';
 import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql, type CLIRuntime } from './runtime';
 import type { LocalProviderCredentials } from './model-resolver';
 import type { LocalCodexAuthStore } from './codex-auth-store';

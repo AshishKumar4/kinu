@@ -16,7 +16,7 @@ import {
   createGatewayBindingFetch,
   parseGatewayTarget,
   type GatewayTarget,
-} from '@proteus/core';
+} from '@kinu/core';
 import { createWorkersAIProvider } from '../src/providers/workers-ai';
 import { createMyGatewayProvider } from '../src/providers/my-gateway';
 import { createAIGatewayProvider, resolvePlatformGateway } from '../src/providers/ai-gateway';

@@ -38,7 +38,7 @@ import {
   addUsage, cloudProxyBaseURL, createChatModel, DEFAULT_WORKERS_AI_MODEL_ID, normalizeUsage,
   RunEventRecorder, usageReported, workspaceSpend, WORKSPACE_RUN_ID,
   type LLMProviderConfig, type ModelCallSink, type SqlExecutor, type Usage,
-} from '@proteus/core';
+} from '@kinu/core';
 import type { LanguageModel, LanguageModelUsage } from 'ai';
 import { appendFileSync } from 'node:fs';
 import { LIVE_MODEL_ENV } from './ambient-env';

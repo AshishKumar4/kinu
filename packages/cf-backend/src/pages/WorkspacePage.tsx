@@ -13,11 +13,11 @@ import type { FileUIPart } from "ai";
 import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES, mergeTranscript, pageSchema,
   isPlaceholderMission, planReviewAwaitingDecision, summarizeRestorePlan,
-} from "@proteus/core";
+} from "@kinu/core";
 import type {
   AlternateTakeSet, ChatHistoryEntry, FileCheckpointEntry, FileCheckpointListing,
   FileRestoreChange, FileRestorePlan, Page, TakePickOutcome,
-} from "@proteus/core";
+} from "@kinu/core";
 import * as v from "valibot";
 import { useProteus, type SteerRun } from "@/hooks/use-proteus";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
@@ -40,7 +40,7 @@ import { WorkspaceBar, type Altitude } from "@/components/WorkspaceBar";
 import { Composer } from "@/components/Composer";
 import { dataUrlRawBytes } from "@/components/AttachmentChip";
 import type { PendingConsent, SubordinateActivityEvent } from "@/lib/protocol";
-import { renderThrownChain } from "@proteus/core/obs";
+import { renderThrownChain } from "@kinu/core/obs";
 // The model picker reads /api/user/models (which unions the connected
 // providers' menus); the result is cached for the SPA session (see user-api).
 

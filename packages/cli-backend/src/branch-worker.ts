@@ -29,8 +29,8 @@ import {
   type ExploreToolHint,
   type JsonValue,
   type LLMProviderConfig,
-} from '@proteus/core';
-import { diagnostics, ProteusError, renderThrownChain } from '@proteus/core/obs';
+} from '@kinu/core';
+import { diagnostics, ProteusError, renderThrownChain } from '@kinu/core/obs';
 import * as v from 'valibot';
 import { createLocalModelResolver, type LocalProviderCredentials } from './model-resolver';
 import { createFileCodexAuthStore } from './codex-auth-store';

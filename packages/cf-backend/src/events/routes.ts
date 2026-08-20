@@ -24,12 +24,12 @@
 import { getAgentByName } from 'agents';
 import type { OrchestratorAgent } from '../orchestrator';
 import { readWebhookBodyText } from './body';
-import { normalizeWebhookRateLimitPerMin } from '@proteus/core';
+import { normalizeWebhookRateLimitPerMin } from '@kinu/core';
 import { err, json, safeJson } from '../lib/http';
 import { isFreshAuthTime } from '../auth/session';
 import { decodeJsonWire } from '../lib/orchestrator-wire';
 import * as v from 'valibot';
-import { renderThrownChain } from '@proteus/core/obs';
+import { renderThrownChain } from '@kinu/core/obs';
 
 const WebhookRequestSchema = v.object({
   label: v.optional(v.string()),

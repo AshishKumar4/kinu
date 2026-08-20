@@ -5,7 +5,7 @@
  * carries on.
  */
 import { describe, expect, test } from 'bun:test';
-import type { MCTSProgressEvent } from '@proteus/core';
+import type { MCTSProgressEvent } from '@kinu/core';
 import { formatMctsProgress } from '../src/commands/evolve';
 
 /** The renderer colours for a terminal; these tests assert its WORDS. Stripping

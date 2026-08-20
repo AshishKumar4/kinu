@@ -38,7 +38,7 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
 import * as v from 'valibot';
-import { scriptedTurnModel } from '@proteus/test-utils';
+import { scriptedTurnModel } from '@kinu/test-utils';
 import { createTestRuntime, makeExecRaw, makeSql } from './helpers';
 import { MissionGovernor } from '../src/mission-budget';
 import { MctsSearchStore, initMctsSearchTable } from '../src/mcts/search-store';

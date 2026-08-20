@@ -20,7 +20,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { git } from '@proteus/test-utils';
+import { git } from '@kinu/test-utils';
 import * as v from 'valibot';
 import {
   CI_EXEMPT, HOOKS_DIR, LADDER, TIERS, bunIgnoredPatterns, bunWouldSkip, claims, deployGates,

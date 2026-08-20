@@ -50,7 +50,7 @@ export function scoreHead(): void {
 `;
 
 /** The same code after the migration: a stable dotted name, a classified error, scalar fields. */
-const MIGRATED_SHAPE = `import { diagnostics, toProteusError } from '@proteus/core/obs';
+const MIGRATED_SHAPE = `import { diagnostics, toProteusError } from '@kinu/core/obs';
 
 declare const outcome: { reason: unknown };
 declare const headId: string;

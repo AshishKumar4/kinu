@@ -39,6 +39,7 @@ export { initHeadsTables } from './schema';
 export {
   HeadJournal, type HeadJournalRow, type LiveHeadRun, type AbandonedHeadRun,
 } from './journal';
+export { LiveHeadJournal, type AnnounceHeadActivity } from './live-journal';
 export {
   reconcileInterruptedForks, forkInterruptedWake,
   FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,

@@ -16,6 +16,7 @@ import { attemptPassed } from '../packages/core/src/index';
 import type { AttemptBudget, BenchCheck, BenchTask, CheckOutcome } from '../packages/core/src/index';
 import { tolerate } from '../packages/core/src/obs/index';
 import { ARTIFACT_DIRNAME } from './bench-retention';
+import { workspaceScope } from './sources';
 
 /** Paths never copied into a sandbox. `tests/bench` is the seal's outermost
  *  ring: an agent that cannot read the corpus cannot read the held-out tasks,
@@ -37,8 +38,11 @@ const SANDBOX_EXCLUDES = [
  *  solver's cross-package edits be seen, so those must be copied. */
 const SANDBOX_EXCLUDED_NAMES = new Set(['.git']);
 
-/** Workspace scope whose links must be re-pointed into the sandbox copy. */
-const WORKSPACE_SCOPE = '@proteus';
+/** Workspace scope whose links must be re-pointed into the sandbox copy. Read
+ *  from the manifests, not spelled here: a stale literal skips the re-pointing
+ *  below, and every solver edit is then graded against the real repo instead of
+ *  the sandbox copy — silently, because the donor's links still resolve. */
+const WORKSPACE_SCOPE = workspaceScope();
 const NESTED_CHECKOUT_DIRS = ['.claude', 'external'] as const;
 
 const OUTPUT_TAIL_BYTES = 4000;
@@ -82,7 +86,7 @@ export interface CreateSandboxOptions {
  * but whose workspace packages resolve into THIS copy.
  *
  * Symlinking the whole directory would be cheaper and is what this used to do,
- * but bun hoists the workspace links to the root, so `@proteus/core` ->
+ * but bun hoists the workspace links to the root, so `@kinu/core` ->
  * `../../packages/core` then resolved relative to the REAL repo's node_modules
  * — every workspace import inside a sandbox read pristine code, and a solver's
  * cross-package edits were graded as if they had never been made.
@@ -130,7 +134,7 @@ export function createAttemptSandbox(opts: CreateSandboxOptions): AttemptSandbox
     recursive: true,
     dereference: false,
     // Without this, cpSync REWRITES every relative symlink to an absolute path
-    // into the source tree — so packages/*/node_modules/@proteus/* would point
+    // into the source tree — so packages/*/node_modules/@kinu/* would point
     // back at the pristine repo and a solver's cross-package edits would be
     // invisible to any test that imports through a workspace specifier.
     verbatimSymlinks: true,

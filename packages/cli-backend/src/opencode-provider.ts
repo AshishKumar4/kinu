@@ -18,10 +18,10 @@ import { createOpenAI } from '@ai-sdk/openai';
 import {
   asFetchFunction, JsonObjectSchema, withRateLimitRetry,
   type JsonObject, type JsonValue,
-} from '@proteus/core';
+} from '@kinu/core';
 import type { LanguageModel } from 'ai';
-import type { ModelProvider, ModelInfo } from '@proteus/core';
-import { diagnostics, ProteusError, renderThrownChain } from '@proteus/core/obs';
+import type { ModelProvider, ModelInfo } from '@kinu/core';
+import { diagnostics, ProteusError, renderThrownChain } from '@kinu/core/obs';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';

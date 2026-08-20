@@ -7,7 +7,7 @@
 // dropped for one backend — fails here rather than in whichever agent noticed
 // its context had gone quiet.
 import { describe, test, expect } from 'bun:test';
-import { createTestRuntime } from '@proteus/test-utils';
+import { createTestRuntime } from '@kinu/test-utils';
 import { collectDynamicContext } from '../src/state/dynamic-context';
 import { createAgentStores } from '../src/state/agent-stores';
 import { initWorkspaceSchema } from '../src/identity/workspace-schema';

@@ -79,6 +79,7 @@
         "entry": [
           "src/index.ts!",
           "src/gallery.tsx!",
+          "src/gallery-agent-stub.ts!",
           "tests/**/*.test.ts"
         ]
       },
@@ -115,7 +116,7 @@
     "typescript": "7.0.2",
     "vitest": "^4.1.10",
     "vitest-evals": "0.16.1",
-    "wrangler": "^4.95.0"
+    "wrangler": "^4.125.0"
   },
   "patchedDependencies": {
     "@plannotator/ui@0.30.0": "patches/@plannotator%2Fui@0.30.0.patch"

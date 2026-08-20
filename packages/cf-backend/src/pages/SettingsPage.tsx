@@ -15,7 +15,7 @@ import {
 import {
   WORKSPACE_ARCHIVE_EXTENSION, formatScoreInterval,
   type ApprovalGrant, type ArchiveCursor, type ArchivePage, type JsonValue,
-} from "@proteus/core";
+} from "@kinu/core";
 import { executorLabel } from "@/lib/executors";
 import { useProteus } from "@/hooks/use-proteus";
 import {
@@ -29,7 +29,7 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
 import type { Rpc } from '@/lib/protocol';
 import * as v from 'valibot';
-import { renderThrownChain } from '@proteus/core/obs';
+import { renderThrownChain } from '@kinu/core/obs';
 
 const ArchiveCursorSchema = v.variant('phase', [
   v.object({ phase: v.literal('sql'), table: v.string(), after: v.nullable(v.number()), rows: v.number() }),

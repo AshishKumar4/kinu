@@ -1,5 +1,5 @@
 /**
- * @proteus/compaction — the staged context-pruning compaction engine.
+ * @kinu/compaction — the staged context-pruning compaction engine.
  *
  * One deep module: the published better-compact ladder core, the Proteus
  * ModelMessage codec, the

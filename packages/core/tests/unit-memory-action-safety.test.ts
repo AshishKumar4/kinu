@@ -20,7 +20,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import { buildBuiltinTools } from '../src/tools/builtins';
-import { toolExecute } from '@proteus/test-utils';
+import { toolExecute } from '@kinu/test-utils';
 import { createTestRuntime } from './helpers';
 import type { Fact, FactsStore } from '../src/memory/facts';
 import type { JsonValue } from '../src/utils/json';

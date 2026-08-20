@@ -16,8 +16,8 @@
  */
 import {
   minimumDetectableEffect, requiredPairs, minimumPairsForSignificance, fmtPp,
-} from '@proteus/core';
-import { compareRuns, readRunRecord } from '@proteus/test-utils';
+} from '@kinu/core';
+import { compareRuns, readRunRecord } from '@kinu/test-utils';
 
 function usage(): never {
   console.error('usage: bun scripts/eval-dispersion.ts <runA.json> <runB.json> [--target-pp N]');

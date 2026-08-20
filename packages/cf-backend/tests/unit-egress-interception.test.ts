@@ -11,7 +11,7 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import {
   EGRESS_PLACEHOLDER_PREFIX, type EgressSecretBinding, type SandboxHandle,
-} from '@proteus/core';
+} from '@kinu/core';
 import type { EgressInjectionResult } from '../src/user/egress-vault';
 import type { OutboundHandlerContext } from '@cloudflare/containers';
 import type { ProteusEgressParams } from '../src/egress/outbound';

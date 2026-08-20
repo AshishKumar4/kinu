@@ -100,7 +100,7 @@ export const CONSOLE_ALLOWED = [
  *  tree — 479 chalk-styled writes to a terminal a human is reading. The three genuine diagnostics
  *  that were hiding in it (`commands/list.ts`, `local-agent-client.ts`, `acp/agent.ts`) were moved to
  *  the typed logger instead of the tree being converted. `packages/pc-agent` is likewise absent: it
- *  is standalone plain JavaScript with no build and no `@proteus/core` dependency, so it cannot
+ *  is standalone plain JavaScript with no build and no `@kinu/core` dependency, so it cannot
  *  import the logger without becoming a different kind of package. `packages/test-utils` and every
  *  `tests/`, `scripts/` and `tools/` path are outside `packages/<pkg>/src` and so outside the scope
  *  check — a gate script printing its findings to stdout is doing its job. */
@@ -119,7 +119,7 @@ export const noUntypedConsoleRule = defineRule({
 		},
 		messages: {
 			untypedConsole:
-				"`console.{{method}}` carries no event name, so this failure is not greppable in Workers Logs or the CLI journal, and its second argument is not checked for a secret. Use the typed logger: `import { diagnostics, toProteusError } from '@proteus/core/obs'` (relative `../obs/index.js` inside core), then `diagnostics.failure('<subsystem>.<outcome>', toProteusError({ doing, cause, otherwise }), { … })` for a handled failure, or `diagnostics.event('<subsystem>.<outcome>', { … })` for a non-failure fact. If this line is the product's OUTPUT rather than a diagnostic, it does not belong in this package — see the boundary in `no-untyped-console.ts`.",
+				"`console.{{method}}` carries no event name, so this failure is not greppable in Workers Logs or the CLI journal, and its second argument is not checked for a secret. Use the typed logger: `import { diagnostics, toProteusError } from '@kinu/core/obs'` (relative `../obs/index.js` inside core), then `diagnostics.failure('<subsystem>.<outcome>', toProteusError({ doing, cause, otherwise }), { … })` for a handled failure, or `diagnostics.event('<subsystem>.<outcome>', { … })` for a non-failure fact. If this line is the product's OUTPUT rather than a diagnostic, it does not belong in this package — see the boundary in `no-untyped-console.ts`.",
 		},
 	},
 	createOnce(context) {

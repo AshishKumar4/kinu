@@ -32,13 +32,13 @@ import {
   PROVIDER_PROXY_PATH,
   PROXY_CRED_HEADER, PROXY_DENIED_CRED_KEYS, PROXY_TARGET_HEADER,
   providerProxyBaseURL, proxyTargetAllowed,
-} from '@proteus/core';
+} from '@kinu/core';
 import type { UserDO } from './user-do';
 import { errorResponse } from '../providers/cloudflare-ai-fetch';
 import { json } from '../lib/http';
 import { ownerCaller, type UserCaller } from './workspace-capability';
 import { validateCredentialKey } from './validate';
-import { renderCauseChain } from '@proteus/core/obs';
+import { renderCauseChain } from '@kinu/core/obs';
 
 export const USER_AI_PROXY_FORWARD_PREFIX = PROVIDER_PROXY_PATH;
 

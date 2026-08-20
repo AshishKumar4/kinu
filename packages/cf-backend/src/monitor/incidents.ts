@@ -15,7 +15,7 @@
  * fails — the ledger never has to own retries.
  */
 
-import { argumentDigest, type SqlExec } from '@proteus/core';
+import { argumentDigest, type SqlExec } from '@kinu/core';
 import { sendOwnerEmail } from '../email/outbound';
 import type { EmailOutbox } from '../email/outbox';
 import type { ProbeOutcome } from './probes';

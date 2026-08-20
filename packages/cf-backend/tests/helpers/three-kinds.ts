@@ -66,9 +66,9 @@ import {
   type NodeAgentInput,
   type NodeRun,
   type Usage,
-} from '@proteus/core';
-import { createRecordingLogger, renderCauseChain } from '@proteus/core/obs';
-import { createTestRuntime } from '@proteus/test-utils';
+} from '@kinu/core';
+import { createRecordingLogger, renderCauseChain } from '@kinu/core/obs';
+import { createTestRuntime } from '@kinu/test-utils';
 import type { Database } from 'bun:sqlite';
 import { createAgentProviderRegistry } from '../../src/providers/agent-registry';
 import {

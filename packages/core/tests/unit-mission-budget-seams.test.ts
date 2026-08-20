@@ -10,7 +10,7 @@
 
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { scriptedTurnModel } from '@proteus/test-utils';
+import { scriptedTurnModel } from '@kinu/test-utils';
 import * as v from 'valibot';
 import { createTestRuntime, makeExecRaw, makeSql } from './helpers';
 import {

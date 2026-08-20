@@ -9,7 +9,7 @@ import {
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { basename, join, resolve } from 'node:path';
-import { JsonValueSchema, parseJsonValue, type JsonObject, type JsonValue } from '@proteus/core';
+import { JsonValueSchema, parseJsonValue, type JsonObject, type JsonValue } from '@kinu/core';
 import * as v from 'valibot';
 import { AGENT_HOME } from './config';
 import type { AgentTranscriptMessage } from './agent-client';

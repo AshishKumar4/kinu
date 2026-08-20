@@ -1,5 +1,5 @@
 /**
- * Browser stubs for node builtins reached through @proteus/core imports in the
+ * Browser stubs for node builtins reached through @kinu/core imports in the
  * design gallery (gallery.vite.config.ts only). The gallery renders components
  * with mock data and never executes these paths; calling them is a bug.
  */

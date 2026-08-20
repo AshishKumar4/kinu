@@ -17,7 +17,7 @@
  */
 
 import * as v from 'valibot';
-import { isAbortError, raceAbort } from '@proteus/agent-utils';
+import { isAbortError, raceAbort } from '@kinu/agent-utils';
 import type { ExecutorProvider, ExecutorCapability } from './types';
 import { readExecSignal } from './signal';
 import { formatExecResult, refusalText } from './exec-result';

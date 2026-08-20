@@ -6,7 +6,7 @@
  * Architecture reference: docs/ARCHITECTURE.md — "Backends and the AgentRuntime contract"
  */
 
-import type { SqlExecutor, SqlValue } from '@proteus/agent-utils';
+import type { SqlExecutor, SqlValue } from '@kinu/agent-utils';
 import type { ToolSet as AiToolSet } from 'ai';
 import type { JsonObject, JsonValue } from '../utils/json';
 
@@ -14,12 +14,12 @@ import type { JsonObject, JsonValue } from '../utils/json';
  * The tagged-template SQL primitive. Both DO sql and better-sqlite3 satisfy it.
  * For DDL (CREATE TABLE etc), use execRaw below, which accepts a plain string.
  *
- * Defined in `@proteus/agent-utils` rather than here: core already depends on
+ * Defined in `@kinu/agent-utils` rather than here: core already depends on
  * that package and it sits at the bottom of the DAG, so it is the only place
  * one definition can serve both. Re-exported here because this file is the
  * portability layer a backend author reads.
  */
-export type { SqlValue, SqlExecutor } from '@proteus/agent-utils';
+export type { SqlValue, SqlExecutor } from '@kinu/agent-utils';
 
 /**
  * Raw SQL execution for DDL statements that don't use parameter binding.

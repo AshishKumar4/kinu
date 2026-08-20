@@ -1,7 +1,7 @@
 // Behavior tests for the `memory` tool's `sessions` action — the LLM-facing
 // surface over SessionSearchStore (one implementation, both backends).
 import { describe, test, expect } from 'bun:test';
-import { createTestRuntime, toolExecute } from '@proteus/test-utils';
+import { createTestRuntime, toolExecute } from '@kinu/test-utils';
 import * as v from 'valibot';
 import {
   buildBuiltinTools,

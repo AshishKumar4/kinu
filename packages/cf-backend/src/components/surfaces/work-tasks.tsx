@@ -15,7 +15,7 @@
  */
 import { Badge } from "@cloudflare/kumo";
 import { CircleIcon, CircleDashedIcon, CheckCircleIcon, ProhibitIcon } from "@phosphor-icons/react";
-import type { AgentTask, AgentTaskTree, TaskStatus } from "@proteus/core";
+import type { AgentTask, AgentTaskTree, TaskStatus } from "@kinu/core";
 
 const STATUS_META = {
   open: { icon: CircleDashedIcon, tone: "p-text-3", label: "Open" },

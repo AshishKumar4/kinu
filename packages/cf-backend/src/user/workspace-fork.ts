@@ -1,4 +1,4 @@
-import type { ForkSnapshot } from '@proteus/core';
+import type { ForkSnapshot } from '@kinu/core';
 import type { UserCaller } from './workspace-capability';
 import type { WorkspaceEntry } from './user-do';
 

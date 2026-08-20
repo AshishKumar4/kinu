@@ -5,6 +5,6 @@
 import { test } from 'bun:test';
 import { assertWorkspaceResolution } from '../../test-utils/src/workspace-resolution';
 
-test('@proteus/* resolves inside this checkout', () => {
+test('@kinu/* resolves inside this checkout', () => {
   assertWorkspaceResolution(import.meta.dir);
 });

@@ -131,7 +131,7 @@ workspace's `agent_config` table carries the overrides on top of it. A swarm
 takes its shape from the call instead, through `preset` and the six axes.
 
 ```typescript
-import { createAgentConfigStore } from '@proteus/core';
+import { createAgentConfigStore } from '@kinu/core';
 
 const config = createAgentConfigStore(sql);
 config.setMctsOverrides({

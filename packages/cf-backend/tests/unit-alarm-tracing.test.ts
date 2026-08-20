@@ -33,7 +33,7 @@ import {
   createAgentTracing, createRecordingTracer, ProteusError, renderCauseChain,
   SPAN_ATTR_ERROR, SPAN_ATTR_INVOCATION, SPAN_ATTR_ISOLATE_GEN, SPAN_ATTR_SELF_PATH,
   type AgentTracing, type RecordingTracer, type SpanAttributeValue, type TracedInvocation,
-} from '@proteus/core/obs';
+} from '@kinu/core/obs';
 
 /** The four phases, in the order `_proteusTimerTick` runs them. Named here so a
  *  phase silently dropped from the method fails rather than shrinking the tree. */

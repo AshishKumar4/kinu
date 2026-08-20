@@ -13,8 +13,8 @@ import {
   eventContentPath, renderForLLM, PeerHub, JsonValueSchema,
   type PeerAgentPayload, type ReplyDispatcher, type ReplyChannelKind,
   type PeerMessage, type ProteusEvent, type ReceiveResult, type SqlExec,
-} from '@proteus/core';
-import { createMemoryVfs } from '@proteus/test-utils';
+} from '@kinu/core';
+import { createMemoryVfs } from '@kinu/test-utils';
 import { sqlExec } from './helpers/user-do';
 
 function makeSql(): SqlExec {

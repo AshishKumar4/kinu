@@ -64,14 +64,14 @@ import type {
   RunListEntry,
   ShadowStatus,
   ToolListEntry,
-} from "@proteus/core";
-import { RELEASE_STATUSES, isEngineOwnedTransitionTarget } from "@proteus/core";
+} from "@kinu/core";
+import { RELEASE_STATUSES, isEngineOwnedTransitionTarget } from "@kinu/core";
 import type { OrchestratorAgent } from "./orchestrator";
 import { AuthError, authenticateRequest } from "./auth/session";
 import { authenticateCliToken, readBearer } from "./cli/auth-store";
 import { claimOwnedWorkspace } from "./user/workspace-access";
 import { decodeRunEventWire, decodeScaffoldRunWire } from './lib/orchestrator-wire';
-import { renderThrownChain } from '@proteus/core/obs';
+import { renderThrownChain } from '@kinu/core/obs';
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",

@@ -41,7 +41,7 @@
 import { describe, expect, test } from 'bun:test';
 import { tool, jsonSchema } from 'ai';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
-import { scriptedTurnModel } from '@proteus/test-utils';
+import { scriptedTurnModel } from '@kinu/test-utils';
 import { createTestRuntime } from './helpers';
 import { createRecordingLogger } from '../src/obs/index';
 import { HeadJournal } from '../src/heads/journal';

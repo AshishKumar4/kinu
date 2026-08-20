@@ -33,15 +33,15 @@
  */
 
 import { appendFileSync } from 'node:fs';
-import { writeSecretFile } from '@proteus/cli-backend';
-import { renderThrownChain } from '@proteus/core/obs';
+import { writeSecretFile } from '@kinu/cli-backend';
+import { renderThrownChain } from '@kinu/core/obs';
 import {
   addUsage, decodeJsonValue, JsonObjectSchema, JsonValueSchema, pageSchema, projectJsonValue,
   usageReported, UsageSchema,
   type ExplorationRecord, type JsonObject, type JsonValue, type Page,
   type RecordCellHandle, type RecordCellSummary, type RecordObjectiveHandle,
   type RecordObjectiveSummary, type SeekCursor, type Usage,
-} from '@proteus/core';
+} from '@kinu/core';
 import * as v from 'valibot';
 import { resolveAgentTarget } from '../agent-target';
 import { requireAuthConfig } from '../config';

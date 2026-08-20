@@ -3,7 +3,7 @@ import type { UserDO } from '../user/user-do';
 import { randomToken, sha256Hex } from '../lib/crypto';
 import { parseAccessTokenUserId, type AccessTokenScope } from './access-token-store';
 import { ownerCaller, type OwnerCapabilityEnv } from '../user/workspace-capability';
-import { renderThrownChain } from '@proteus/core/obs';
+import { renderThrownChain } from '@kinu/core/obs';
 
 /** Thrown when a CLI auth rate limit trips — routes map this (and only
  *  this) to HTTP 429; every other failure is a real error. */

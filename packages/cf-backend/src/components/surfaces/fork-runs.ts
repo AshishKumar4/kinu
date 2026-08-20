@@ -19,10 +19,10 @@
  *     drain or an autonomous turn, none of which stream through this tab's chat
  *     socket.
  */
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import type {
   ExplorationCanvasRun, ForkRunParams, ForkRunSummary, HeadRunView, Page, SeekCursor,
-} from "@proteus/core";
+} from "@kinu/core";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { usePagedScroll } from "@/hooks/use-paged-scroll";
 import { buildTree } from "@/lib/fork-tree-rows";
@@ -30,6 +30,10 @@ import type { BackgroundJob, ForkNode, Rpc } from "@/lib/protocol";
 import { swarmResolutionOf, type SwarmResolution } from "./swarm-resolution";
 
 export const FORK_RUN_LIMIT = 30;
+
+/** One allocation for a caller with no activity channel — the CLI-facing reads
+ *  and every test that only wants the polled halves. */
+const EMPTY_ACTIVITY: ReadonlyMap<string, number> = new Map();
 
 /** Matches the run timeline's mid-turn cadence: fast enough to read as live,
  *  slow enough that a long fork is not a poll storm. */
@@ -52,6 +56,37 @@ export function hasActiveForkWork(
   backgroundJobs: readonly BackgroundJob[],
 ): boolean {
   return isStreaming || backgroundJobs.some((job) => job.status === "running");
+}
+
+/**
+ * Roots that just moved and whose movement the polled list cannot explain.
+ *
+ * The canvas draws its bands by walking the POLLED list and looking up each
+ * run's tree, so a live tree or a live journal write for a root the list does not
+ * carry draws nothing at all — and the list is on its idle clock exactly when
+ * this matters, because a search it has never heard of and a search it believes
+ * is over are both searches it has no reason to poll fast for.
+ *
+ * Two shapes, and the second is not about new searches. A root the list has
+ * NEVER heard of is a new search. A root it holds in a state that is not
+ * `running` is a search it believes is finished — which is what a RESUMED run
+ * looks like the instant it re-enters, because a resume reuses its rootId and
+ * flips a reclaimed row back to running.
+ *
+ * Sorted, so a caller can use the answer as a memo key and re-read once per
+ * CHANGE of this set rather than once per journal write. `null` entries mean the
+ * list has not loaded, and nothing is unexplained until there is an answer to
+ * contradict.
+ */
+export function unexplainedForkRoots(
+  entries: readonly ExplorationCanvasRun[] | null,
+  moved: Iterable<string>,
+): readonly string[] {
+  if (entries === null) return [];
+  const live = new Set(entries
+    .filter((entry) => entry.run.status === "running")
+    .map((entry) => entry.run.id));
+  return [...new Set(moved)].filter((rootId) => !live.has(rootId)).sort();
 }
 
 /** An explicit permalink never falls through to a different run. */
@@ -133,6 +168,10 @@ export function useExplorationCanvas(
   isStreaming: boolean,
   backgroundJobs: readonly BackgroundJob[],
   liveTrees: ReadonlyMap<string, ForkNode>,
+  /** Per-branch write counters from the `head_activity` broadcast. Read here
+   *  only as a SIGNAL that some search moved — the rows come from the read
+   *  below, never from the wire. */
+  headActivity: ReadonlyMap<string, number> = EMPTY_ACTIVITY,
 ) {
   const hasActiveWork = hasActiveForkWork(isStreaming, backgroundJobs);
   // One read per page, both halves of every fork on it. The canvas draws EVERY
@@ -197,6 +236,29 @@ export function useExplorationCanvas(
     for (const [rootId, tree] of liveTrees) folded.set(rootId, tree);
     return folded;
   }, [entries, liveTrees]);
+
+  /**
+   * A search moved in a way the list cannot explain, so read it again NOW rather
+   * than waiting out the idle clock. Measured on the live frame: 13.2 seconds
+   * from the ledger gaining the row to the row appearing, against a 1.5s budget.
+   *
+   * Keyed on the SET, so this fires once per change of it rather than once per
+   * step — a run the list already holds AS RUNNING is not news, and re-reading
+   * per journal write would be a poll storm dressed as a push.
+   */
+  const unexplained = useMemo(
+    () => unexplainedForkRoots(
+      entries,
+      [...liveTrees.keys(), ...headActivity.keys()],
+    ).join("\u0000"),
+    [entries, liveTrees, headActivity],
+  );
+  const reloadedFor = useRef("");
+  useEffect(() => {
+    if (unexplained === "" || reloadedFor.current === unexplained) return;
+    reloadedFor.current = unexplained;
+    reload();
+  }, [unexplained, reload]);
 
   const params = useMemo(() => {
     const byRoot = new Map<string, ForkRunParams>();

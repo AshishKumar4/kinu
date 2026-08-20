@@ -39,8 +39,35 @@ export function cleanNodeLabel(value: string | null | undefined, fallback: strin
 	return cleaned.length > 0 ? cleaned : fallback;
 }
 
-export function truncate(text: string, max: number): string {
-	return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+/**
+ * `text`, clipped with an ellipsis to the pixels it is allowed, as `advance`
+ * measures it.
+ *
+ * A WIDTH, never a character count. The clip was a flat 20 characters, and the
+ * room a label has is neither flat nor countable in characters: it is the pitch
+ * to the next column for a node that has one, the rest of the scene for a leaf
+ * that does not, and the face is proportional either way. So `Reconcile the
+ * cache…` was cut with 170px of empty canvas beside it — 127 of the 178 labels
+ * on the 106-node search were clipped, and most of them fitted.
+ *
+ * `advance` is handed in rather than measured here so this stays pure: the
+ * caller owns the one canvas context that knows what the cascade resolved the
+ * label face to.
+ */
+export function clipToWidth(text: string, room: number, advance: (text: string) => number): string {
+	if (room <= 0) return "";
+	if (advance(text) <= room) return text;
+	// The ellipsis is part of what has to fit, so the search is over the kept
+	// prefix. Bisection rather than a ratio: one measurement is not a scale
+	// factor for a proportional face, and a ratio overshoots on wide glyphs.
+	let keep = 0;
+	let high = text.length;
+	while (keep < high) {
+		const mid = (keep + high + 1) >> 1;
+		if (advance(`${text.slice(0, mid)}…`) <= room) keep = mid;
+		else high = mid - 1;
+	}
+	return keep === 0 ? "" : `${text.slice(0, keep)}…`;
 }
 
 /**

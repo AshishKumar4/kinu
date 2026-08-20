@@ -37,8 +37,8 @@ import {
   type AgentsToolInput,
   type JsonValue,
   type LLMProviderConfig,
-} from '@proteus/core';
-import { scriptedTurnModel, scratchPath, toolExecute } from '@proteus/test-utils';
+} from '@kinu/core';
+import { scriptedTurnModel, scratchPath, toolExecute } from '@kinu/test-utils';
 import { createCLIRuntime, type CLIRuntime } from '../src/runtime';
 
 const DUMMY_LLM: LLMProviderConfig = {

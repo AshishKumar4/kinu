@@ -27,7 +27,7 @@
  *     all. Measured on bun 1.3.14: `build.onLoad` is never invoked for a `.ts` file,
  *     so the suite ran against pristine source and reported a false survivor.
  *   - A sandbox copy of the tree, the way Stryker works. Measured 2026-08-19: 60 core
- *     suites and 23 core sources import `@proteus/*`, which inside a copy resolves
+ *     suites and 23 core sources import `@kinu/*`, which inside a copy resolves
  *     through the donor's `node_modules` to the PRISTINE package. The mutation would
  *     be invisible to two thirds of its own defenders — a false-survivor generator,
  *     which is the exact defect this program exists to find.
@@ -61,7 +61,7 @@
  * surviving, which is 48 minutes rather than the 74 that 25 survivors would have cost.
  *
  * Transitive-import reachability was tried as the tier-1 filter and abandoned on
- * measurement: `@proteus/core`'s barrel puts 344 of 558 suites in the transitive
+ * measurement: `@kinu/core`'s barrel puts 344 of 558 suites in the transitive
  * closure of `strategy/mcts.ts`, so the graph says two thirds of the repository is a
  * candidate defender of every core file. It is the same structural fact that makes
  * `gate:dead-code` treat a barrel line as a reference.

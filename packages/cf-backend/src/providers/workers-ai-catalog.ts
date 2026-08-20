@@ -1,4 +1,4 @@
-import { DEFAULT_WORKERS_AI_MODEL_ID, type ModelInfo } from '@proteus/core';
+import { DEFAULT_WORKERS_AI_MODEL_ID, type ModelInfo } from '@kinu/core';
 
 // Prefix-cache pricing (verified 2026-08-15 against the account model catalog;
 // affinity behavior was separately confirmed with live two-shot probes):

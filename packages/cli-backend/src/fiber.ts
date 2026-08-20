@@ -8,8 +8,8 @@
  * table for orphaned rows (equivalent to Agent.onFiberRecovered).
  */
 
-import { decodeJsonValue, parseJsonValue } from '@proteus/core';
-import type { Schedule, FiberCtx, JsonValue, RawSqlExec, SqlExecutor } from '@proteus/core';
+import { decodeJsonValue, parseJsonValue } from '@kinu/core';
+import type { Schedule, FiberCtx, JsonValue, RawSqlExec, SqlExecutor } from '@kinu/core';
 
 export interface OrphanedFiber {
   id: string;

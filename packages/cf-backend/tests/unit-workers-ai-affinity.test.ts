@@ -9,7 +9,7 @@ import { describe, test, expect } from 'bun:test';
 import { userCredentialSource } from './helpers/user-credentials';
 import { generateText } from 'ai';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry';
-import { agentAffinityKey, asFetchFunction } from '@proteus/core';
+import { agentAffinityKey, asFetchFunction } from '@kinu/core';
 
 const ACCOUNT_BASE_URL = 'https://api.cloudflare.com/client/v4/accounts/abc123abc123abc1/ai/v1';
 

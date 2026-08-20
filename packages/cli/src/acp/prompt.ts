@@ -8,7 +8,7 @@
  */
 
 import type { ContentBlock } from '@agentclientprotocol/sdk';
-import type { PromptFile } from '@proteus/core';
+import type { PromptFile } from '@kinu/core';
 import type { AgentPrompt } from '../agent-client';
 
 /** Text of a single block, or null when it carries no readable text. */

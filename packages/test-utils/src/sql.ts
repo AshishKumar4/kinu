@@ -1,14 +1,14 @@
 // In-memory SQL fixture — bun:sqlite + template-tag wrapper that matches the
-// `SqlExecutor` signature used throughout @proteus/core.
+// `SqlExecutor` signature used throughout @kinu/core.
 //
 // Tests previously each defined this setup inline; centralising it kills ~120
 // lines of duplication across unit-facts / unit-curriculum / unit-sleep-time /
 // unit-eval / etc.
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
-import type { SqlExecutor, SqlValue } from '@proteus/core';
+import type { SqlExecutor, SqlValue } from '@kinu/core';
 
 export interface TestSql {
-  /** Tagged-template SQL — matches `SqlExecutor` shape from @proteus/core. */
+  /** Tagged-template SQL — matches `SqlExecutor` shape from @kinu/core. */
   sql: SqlExecutor;
   /** Raw DDL executor — for schema setup. */
   execRaw: (ddl: string) => void;

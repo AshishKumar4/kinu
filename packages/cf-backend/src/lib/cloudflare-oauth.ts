@@ -1,5 +1,5 @@
-import { JsonObjectSchema, type JsonObject, type OAuthCredential } from '@proteus/core';
-import { diagnostics, toProteusError } from '@proteus/core/obs';
+import { JsonObjectSchema, type JsonObject, type OAuthCredential } from '@kinu/core';
+import { diagnostics, toProteusError } from '@kinu/core/obs';
 import * as v from 'valibot';
 
 const CloudflareAccountSchema = v.object({ id: v.string(), name: v.optional(v.string()) });

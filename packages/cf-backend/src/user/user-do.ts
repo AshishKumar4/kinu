@@ -76,14 +76,14 @@ import {
   type EgressSecretBinding,
   JsonObjectSchema,
   decodeJsonValue,
-} from '@proteus/core';
+} from '@kinu/core';
 import {
   diagnostics,
   ProteusError,
   renderThrownChain,
   tolerate,
   toProteusError,
-} from '@proteus/core/obs';
+} from '@kinu/core/obs';
 import * as v from 'valibot';
 import { initUserTables } from './schema';
 import { bindAgentSql } from '../runtime';
@@ -114,7 +114,7 @@ import {
   DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED,
   mergeConsentScope, parseConsentScope, summarizeDeviceAction,
   type DeviceConsentScope, type DeviceConsentDecision, type DeviceStatus,
-} from '@proteus/core';
+} from '@kinu/core';
 import {
   validateMcpServerInput, parseAllowedTools, mapConnectionStatus,
   parseMcpHeaders, buildMcpHeaderTransportOpts,

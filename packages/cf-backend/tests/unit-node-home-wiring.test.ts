@@ -35,7 +35,7 @@ import {
   type NodeIdentity,
   type NodeWorkspace,
   type NodeWorkspaceProvisioner,
-} from '@proteus/core';
+} from '@kinu/core';
 import {
   ensureProgrammaticReady,
   rpcExec,

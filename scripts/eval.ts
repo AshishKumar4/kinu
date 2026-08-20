@@ -32,7 +32,7 @@ import type {
   EvalCase, ExplorationStrategy, StrategyContext, StrategyResult, JudgeFn, Verdict,
 } from '../packages/core/src/index';
 import { createConfiguredLocalModelResolver } from '../packages/cli/src/local-model-resolver';
-import { createTestRuntime } from '@proteus/test-utils';
+import { createTestRuntime } from '@kinu/test-utils';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 const DEFAULT_CORPUS = join(REPO_ROOT, 'tests/eval/corpus/seed.jsonl');

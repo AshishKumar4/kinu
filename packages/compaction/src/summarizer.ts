@@ -13,7 +13,7 @@
  */
 
 import { generateText, type LanguageModel } from 'ai';
-import { normalizeUsage, TURN_WALL_CLOCK_ENVELOPE_MS, type ModelCallSpend } from '@proteus/core';
+import { normalizeUsage, TURN_WALL_CLOCK_ENVELOPE_MS, type ModelCallSpend } from '@kinu/core';
 
 /**
  * It was 60_000 — half what the judge seam gives one completion, for a prompt

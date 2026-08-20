@@ -6,7 +6,7 @@ import {
   normalizeWebhookRateLimitPerMin,
   tryConsumeWebhookRateLimit,
   type SqlExec,
-} from '@proteus/core';
+} from '@kinu/core';
 import { sqlExec } from './helpers/user-do';
 
 function sqlFor(db: Database): SqlExec {

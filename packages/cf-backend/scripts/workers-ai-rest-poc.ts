@@ -19,7 +19,7 @@ import {
   isJsonObject,
   parseJsonValue,
   type JsonValue,
-} from '@proteus/core';
+} from '@kinu/core';
 
 const accountId = cleanEnv("CLOUDFLARE_ACCOUNT_ID");
 const token = cleanEnv("CLOUDFLARE_API_TOKEN")

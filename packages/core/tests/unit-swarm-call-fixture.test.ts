@@ -44,7 +44,7 @@
 // "Validity over the resolved configuration", "Accepted and ignored", "Settle is
 // derived", "Arbitration" and "Inherited context".
 import { describe, test, expect } from 'bun:test';
-import { HARD_TASKS, type HardTask } from '@proteus/test-utils';
+import { HARD_TASKS, type HardTask } from '@kinu/test-utils';
 import * as v from 'valibot';
 import * as objectiveModule from '../src/strategy/objective';
 import * as swarmModule from '../src/strategy/swarm';

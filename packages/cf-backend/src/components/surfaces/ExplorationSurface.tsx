@@ -25,8 +25,8 @@ import { useState, useCallback, useMemo } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import { GitForkIcon, TreeStructureIcon, ArrowsOutIcon, XIcon } from "@phosphor-icons/react";
-import type { ForkRunParams, ForkRunSummary, HeadRunView } from "@proteus/core";
-import { SwarmTree } from "@/components/swarm-tree";
+import type { ForkRunParams, ForkRunSummary, HeadRunView } from "@kinu/core";
+import { SwarmTree, naturalCanvasHeight } from "@/components/swarm-tree";
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { type ExplorerSelection } from "@/components/swarm-tree-model";
 import { buildTree, type MctsRow } from "@/lib/fork-tree-rows";
@@ -43,7 +43,7 @@ import {
 } from "./fork-runs";
 import {
   fanInVertices, nodeRationales, runRefusal, swarmAxisRows, swarmResolutionOf,
-  type RunRefusal, type SwarmResolution,
+  type RunRefusal, type SwarmAxis, type SwarmResolution,
 } from "./swarm-resolution";
 
 export interface ExplorationSurfaceProps {
@@ -77,7 +77,7 @@ export function ExplorationSurface({
   const {
     resource, reload, runs, params, trees, journals, resolutions,
     exhausted, loadingMore, pageError, loadMore,
-  } = useExplorationCanvas(rpc, isStreaming, backgroundJobs, liveTrees);
+  } = useExplorationCanvas(rpc, isStreaming, backgroundJobs, liveTrees, headActivity);
   // The list is the scroll container in both layouts, so the trigger lives on it
   // rather than on the canvas beside it.
   const listRef = useGrowingScroll<HTMLDivElement>({
@@ -129,6 +129,7 @@ export function ExplorationSurface({
           <ForkCanvas
             runs={runs} params={params} trees={trees} journals={journals} resolutions={resolutions}
             focusedId={focused.id} selection={selection}
+            activity={headActivity}
             onFocus={setFocusedRunId}
             onSelectNode={setSelection}
             expandTo={agentId ? `/mcts/${agentId}?run=${encodeURIComponent(focused.id)}` : null}
@@ -385,6 +386,10 @@ function ForkBranchView({
   );
 }
 
+/** The canvas card's hairline, top and bottom — the difference between the box
+ *  the column measures and the box the graph is laid out in. */
+const CARD_BORDER = 2;
+
 /**
  * The canvas: every tree the workspace has grown, on ONE surface.
  *
@@ -404,6 +409,7 @@ function ForkBranchView({
  */
 function ForkCanvas({
   runs, params, trees, journals, resolutions, focusedId, selection, onFocus, onSelectNode, expandTo,
+  activity,
 }: {
   runs: readonly ForkRunSummary[];
   params: ReadonlyMap<string, ForkRunParams>;
@@ -417,7 +423,18 @@ function ForkCanvas({
   onSelectNode: (selection: ExplorerSelection) => void;
   /** Full-screen permalink for the focused run, or null outside a workspace. */
   expandTo: string | null;
+  /** Per-node journal write counters — what makes a working node visible IN THE
+   *  PICTURE. This reached the branch panel and stopped there, so the canvas
+   *  could not say which of a hundred nodes was moving. */
+  activity: ReadonlyMap<string, number>;
 }) {
+  /** Three measurements, each of a box that cannot be the one it constrains.
+   *  `cell` is the column's whole height and never shrinks, so it is a stable
+   *  budget; `chrome` is the header stack above the graph; `size` is the graph
+   *  box, read for its WIDTH only — its height is set here, so measuring it for
+   *  height would be a loop that could only ever ratchet down. */
+  const { attach: attachCell, size: cell } = useElementSize();
+  const { attach: attachChrome, size: chrome } = useElementSize();
   const { attach, size } = useElementSize();
 
   // Memoised on the identities the render actually depends on: the tree objects
@@ -446,57 +463,99 @@ function ForkCanvas({
   const focusedResolution = resolutions.get(focusedId);
   const paramRows = forkParamRows(params.get(focusedId));
   const refusal = focused === null ? null : runRefusal(focused, journals.get(focusedId) ?? null);
+  /** What the searches WANT, measured off the same layout the canvas draws with
+   *  — never a second stacking rule that could disagree with it. Null where
+   *  there is no tree to want anything: the box then holds a sentence, and a
+   *  sentence is centred in the room it is given. */
+  const natural = useMemo(
+    () => (regions.length === 0 ? null : naturalCanvasHeight(regions)),
+    [regions],
+  );
+  /** The column's remaining height, capped at that. Zero until the cell has
+   *  been measured, which the graph box below renders as "sizing" rather than
+   *  as an empty canvas.
+   *
+   *  The card's own hairline is subtracted because `cell` is measured OUTSIDE
+   *  it and the graph is laid out inside: without it the graph is two pixels
+   *  taller than the card can hold and `overflow-hidden` takes them off the
+   *  bottom of the key. */
+  const budget = Math.max(0, cell.h - CARD_BORDER - chrome.h);
+  const canvasH = natural === null ? budget : Math.min(budget, natural);
 
   return (
-    <div className="h-full min-h-0 flex flex-col rounded-lg border p-border p-surface overflow-hidden">
-      <div className="shrink-0 flex items-center gap-3 px-3 py-1.5 border-b p-border">
-        <span className="text-[10px] uppercase tracking-normal p-text-3">
-          {regions.length === 1 ? "1 search" : `${regions.length} searches`}
-        </span>
-        <span className="text-[10px] p-text-3 truncate">{focused?.task ?? ""}</span>
-        {paramRows.length > 0 && (
-          <div className="hidden @xl:flex items-center gap-x-3 shrink-0 text-[10px] p-text-3 font-mono">
-            {paramRows.map((row) => (
-              <span key={row.label}>{row.label} <span className="p-text-2">{row.value}</span></span>
-            ))}
+    // Two boxes, not one. The outer is the column's whole height and is what
+    // the canvas budget is measured against; the card inside HUGS what it
+    // holds, so a workspace of short searches no longer draws a bordered box
+    // with several hundred pixels of nothing under its trees.
+    <div ref={attachCell} className="h-full min-h-0">
+      <div className="flex max-h-full flex-col rounded-lg border p-border p-surface overflow-hidden">
+        <div ref={attachChrome} className="shrink-0">
+          {/* The header WRAPS as a group. Every part of it was on one line with a
+              single truncating title between fixed neighbours, so at a 313px
+              column the count label broke over two lines, the parameters were
+              hidden outright below `@xl`, and the task was cut mid-word with the
+              rest of it nowhere. */}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-3 py-1.5 border-b p-border">
+            <span className="shrink-0 whitespace-nowrap text-[10px] uppercase tracking-normal p-text-3">
+              {regions.length === 1 ? "1 search" : `${regions.length} searches`}
+            </span>
+            <span className="min-w-0 flex-1 truncate text-[10px] p-text-3" title={focused?.task ?? ""}>
+              {focused?.task ?? ""}
+            </span>
+            {expandTo && (
+              <Link to={expandTo} title="Open the selected search full-screen"
+                className="shrink-0 flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-md p-text-3 hover:p-text transition-colors">
+                <ArrowsOutIcon size={11} />Expand
+              </Link>
+            )}
+            {/* The dispatch parameters, wrapping with the rest rather than
+                disappearing below a container width. They are the only thing on
+                this row that tells two runs of the same task apart, so hiding
+                them narrow was hiding the answer on the surface most likely to
+                be read narrow. */}
+            {paramRows.length > 0 && (
+              <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] p-text-3 font-mono @xl:w-auto">
+                {paramRows.map((row) => (
+                  <span key={row.label} className="whitespace-nowrap">
+                    {row.label} <span className="p-text-2">{row.value}</span>
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
-        )}
-        {expandTo && (
-          <Link to={expandTo} title="Open the selected search full-screen"
-            className="ml-auto shrink-0 flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-md p-text-3 hover:p-text transition-colors">
-            <ArrowsOutIcon size={11} />Expand
-          </Link>
-        )}
-      </div>
-      {/* The resolution the focused run resolved, above the tree it produced. Its own
-          row rather than another clause in the header's sentence: six axes and a
-          derived settle do not fit beside a task title, and a reader comparing two
-          runs of one task is reading exactly this. */}
-      <SwarmResolutionPanel resolution={focusedResolution} judges={judgeEnsembleLabel(params.get(focusedId))} />
-      {/* A run that reached nothing says so HERE, above its own band, and the canvas
-          below keeps every band it had. Replacing the canvas would hide the other
-          searches because one of them was refused, and the whole point of one canvas
-          is that the comparison stays on screen. */}
-      {refusal !== null && <RunRefusalNote refusal={refusal} />}
-      {/* The graph gets the entire remaining height of the column — the whole
-          point of one canvas — and measures the element that is actually
-          mounted. */}
-      <div ref={attach} className="flex-1 min-h-0 relative">
-        {regions.length === 0 ? (
-          <div className="h-full flex items-center justify-center px-6 text-center text-[11px] p-text-3">
-            No branch was ever written for these searches. Each stopped before its first
-            expansion landed.
-          </div>
-        ) : size.w > 0 && size.h > 0 ? (
-          <SwarmTree
-            regions={regions} width={size.w} height={size.h}
-            selectedRunId={focusedId} selection={selection}
-            onSelectRun={onFocus}
-            onSelectNode={onSelectNode}
-          />
-        ) : (
-          <div className="h-full flex items-center justify-center text-[11px] p-text-3">Sizing canvas…</div>
-        )}
+          {/* The resolution the focused run resolved, above the tree it produced. Its own
+              row rather than another clause in the header's sentence: six axes and a
+              derived settle do not fit beside a task title, and a reader comparing two
+              runs of one task is reading exactly this. */}
+          <SwarmResolutionPanel resolution={focusedResolution} judges={judgeEnsembleLabel(params.get(focusedId))} />
+          {/* A run that reached nothing says so HERE, above its own band, and the canvas
+              below keeps every band it had. Replacing the canvas would hide the other
+              searches because one of them was refused, and the whole point of one canvas
+              is that the comparison stays on screen. */}
+          {refusal !== null && <RunRefusalNote refusal={refusal} />}
+        </div>
+        {/* The graph gets every pixel the searches can USE and no more: the
+            column's remaining height, capped at what the scene wants at 1:1.
+            `flex-1` alone gave a three-node merge the whole column, which is the
+            fixed-height-card defect from the other direction. */}
+        <div ref={attach} className="relative shrink-0 min-h-0" style={{ height: canvasH }}>
+          {regions.length === 0 ? (
+            <div className="h-full flex items-center justify-center px-6 text-center text-[11px] p-text-3">
+              No branch was ever written for these searches. Each stopped before its first
+              expansion landed.
+            </div>
+          ) : size.w > 0 && canvasH > 0 ? (
+            <SwarmTree
+              regions={regions} width={size.w} height={canvasH}
+              selectedRunId={focusedId} selection={selection}
+              activity={activity}
+              onSelectRun={onFocus}
+              onSelectNode={onSelectNode}
+            />
+          ) : (
+            <div className="h-full flex items-center justify-center text-[11px] p-text-3">Sizing canvas…</div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -522,47 +581,91 @@ export function SwarmResolutionPanel(
   { resolution, judges = null }: { resolution: SwarmResolution | undefined; judges?: string | null },
 ) {
   if (resolution === undefined) return null;
+  const caps = resolution.kind === "preset"
+    ? `depth ${resolution.depth} · branches ${resolution.branches}`
+    : null;
   return (
     <div data-swarm-resolution={resolution.kind}
-      className="shrink-0 flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-1.5 border-b p-border text-[10px]">
-      <span className="font-mono p-accent-fg shrink-0">
-        {resolution.kind === "custom" ? `custom "${resolution.label}"` : `preset=${resolution.preset}`}
-      </span>
-      {resolution.kind === "preset" && (
-        <>
-          {swarmAxisRows(resolution.config).map((row) => (
-            <span key={row.axis} className="font-mono p-text-3 whitespace-nowrap">
-              {row.axis}:<span className="p-text-2">{row.value}</span>
-            </span>
-          ))}
-          <span className="font-mono p-text-3 whitespace-nowrap">
-            settle:<span className="p-text-2">{resolution.settle}</span>
-            <span className="p-text-3"> (derived)</span>
-          </span>
-          <span className="font-mono p-text-3 whitespace-nowrap">
-            preset caps <span className="p-text-2">depth {resolution.depth} · branches {resolution.branches}</span>
-          </span>
-        </>
-      )}
-      {resolution.kind === "undeclared" && (
-        <span className="p-warning leading-snug min-w-0">
-          This preset does not resolve, so the run has no axis tuple to show — {resolution.undeclared}.
+      className="shrink-0 border-b p-border px-3 py-2">
+      {/* One line naming the run, and ONE accent on it. Everything else in this
+          panel is a fact about the tuple; the name is the thing a reader is
+          looking for, so it is the only thing coloured. */}
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+        <span className="text-[9px] uppercase tracking-wider p-text-3 shrink-0">
+          {resolution.kind === "custom" ? "composition" : "preset"}
         </span>
+        <span className="font-mono text-[11px] font-medium p-accent-fg min-w-0 break-words">
+          {resolution.kind === "custom" ? resolution.label : resolution.preset}
+        </span>
+        {resolution.kind === "preset" && (
+          <span className="ml-auto shrink-0 rounded-sm px-1.5 py-0.5 font-mono text-[10px] p-badge-neutral"
+            title="Derived from the score and advance axes rather than chosen — settleOf(config), the same total function the engine reads.">
+              settle {resolution.settle}
+          </span>
+        )}
+      </div>
+
+      {/* THE TUPLE, as a tuple. Six `axis:value` chips in one wrapping sentence
+          read as a run of mono text at any width and as a wall of it at 313px,
+          which is the crowding the owner named. A grid of labelled cells fitted
+          to the available width — no breakpoint, `auto-fit` decides — gives every
+          axis its own column, so a value has room to WRAP rather than truncate
+          and no axis is ever the one that got hidden. */}
+      {resolution.kind === "preset" && (
+        <dl className="mt-1.5 grid gap-x-3 gap-y-1.5 [grid-template-columns:repeat(auto-fit,minmax(5.25rem,1fr))]">
+          {swarmAxisRows(resolution.config).map((row) => (
+            <div key={row.axis} className="min-w-0" title={`${row.axis} — ${AXIS_MEANING[row.axis]}`}>
+              <dt className="text-[9px] uppercase tracking-wider p-text-3">{row.axis}</dt>
+              <dd className="font-mono text-[11px] p-text break-words">{row.value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+
+      {resolution.kind === "undeclared" && (
+        <p className="mt-1.5 text-[10px] p-warning leading-snug">
+          This preset does not resolve, so the run has no axis tuple to show — {resolution.undeclared}.
+        </p>
       )}
       {resolution.kind === "custom" && (
-        <span className="p-text-3 leading-snug min-w-0">
+        <p className="mt-1.5 text-[10px] p-text-3 leading-snug">
           A composition's resolved axes are digested into its records row, which has no
           read model, so only the provenance label reached this surface.
-        </span>
+        </p>
       )}
-      {judges !== null && (
-        <span className="font-mono p-text-3 whitespace-nowrap" data-swarm-judges>
-          judges <span className="p-text-2">{judges}</span>
-        </span>
+
+      {(caps !== null || judges !== null) && (
+        <div className="mt-1.5 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 font-mono text-[10px] p-text-3">
+          {caps !== null && (
+            <span className="whitespace-nowrap" title="The caps the preset resolved, not the caps this run spent.">
+              caps <span className="p-text-2">{caps}</span>
+            </span>
+          )}
+          {judges !== null && (
+            <span className="whitespace-nowrap" data-swarm-judges>
+              judges <span className="p-text-2">{judges}</span>
+            </span>
+          )}
+        </div>
       )}
     </div>
   );
 }
+
+/**
+ * What each axis DECIDES, one line each, quoted from the declarations in
+ * `core/src/strategy/swarm.ts` rather than paraphrased here — the panel is the
+ * only place a first-time reader meets these six words, and a gloss that drifts
+ * from the axis it names is worse than none.
+ */
+const AXIS_MEANING = {
+  unit: "what one node produces",
+  context: "what a child starts from",
+  expand: "how children are produced — `aggregate` is fan-in, k parents into one child",
+  score: "how a node is valued",
+  advance: "where the next unit of budget goes",
+  carry: "what survives across iterations",
+} as const satisfies Record<SwarmAxis, string>;
 
 /**
  * A run that reached nothing, said as a refusal rather than left to a picture of

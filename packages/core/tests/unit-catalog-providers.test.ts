@@ -14,7 +14,7 @@ import {
   type ProviderDeps, type AuthResolution, type ModelProvider,
 } from '../src/index';
 import { describeProviderError } from '../src/providers/util';
-import { createMockFetch, CHAT_COMPLETION_BODY } from '@proteus/test-utils';
+import { createMockFetch, CHAT_COMPLETION_BODY } from '@kinu/test-utils';
 
 const CATALOG = {
   groq: {

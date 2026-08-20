@@ -3,7 +3,7 @@
  * comparison (AlternateTakes.tsx renders it). Kept separate so the cycling,
  * labeling, and evidence formatting are unit-testable without a DOM.
  */
-import type { AlternateTakeSet } from '@proteus/core';
+import type { AlternateTakeSet } from '@kinu/core';
 
 /** The candidate currently serving as the answer: the user's pick when one
  *  exists, else the convergence winner. */

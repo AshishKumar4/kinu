@@ -33,8 +33,8 @@ import {
   type JsonValue,
   type SubordinateHandoff,
   type WebSearchProvider,
-} from '@proteus/core';
-import { ROOT_DELEGATION_BUDGET } from '@proteus/core';
+} from '@kinu/core';
+import { ROOT_DELEGATION_BUDGET } from '@kinu/core';
 import * as v from 'valibot';
 import type { AgentProviderRegistry } from '../src/providers/agent-registry';
 
@@ -43,7 +43,7 @@ const codemodeHandoff: SubordinateHandoff = {
   eventId: 'evt-1', delivery: 'starts_now',
   phase: { busy: false, lastActivityAt: null, workingOn: null },
 };
-import { createTestRuntime, scriptedTurnModel } from '@proteus/test-utils';
+import { createTestRuntime, scriptedTurnModel } from '@kinu/test-utils';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
 mockAgentsSdk();

@@ -6,9 +6,9 @@
 // "4 calls" and "5 calls" while the agent works is worse than no headline.
 import { describe, test, expect } from 'bun:test';
 import type { ReasoningUIPart, TextUIPart, ToolUIPart, UIMessage } from 'ai';
-import type { JsonValue } from '@proteus/core';
+import type { JsonValue } from '@kinu/core';
 import { groupMessageParts } from '../src/components/tool-call-grouping';
-import { describeCommand, describeToolCall, summarizeToolRun } from '@proteus/core';
+import { describeCommand, describeToolCall, summarizeToolRun } from '@kinu/core';
 
 type Part = UIMessage['parts'][number];
 

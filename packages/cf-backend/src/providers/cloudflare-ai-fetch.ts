@@ -4,9 +4,9 @@
 // proxy. One implementation of resolve-auth → placeholder-URL rewrite →
 // refresh-on-401 retry → error mapping, so the request shape cannot drift
 // between the three consumers.
-import type { AuthResolution, AuthResolver } from '@proteus/core';
-import { asFetchFunction, withRateLimitRetry } from '@proteus/core';
-import { tolerate } from '@proteus/core/obs';
+import type { AuthResolution, AuthResolver } from '@kinu/core';
+import { asFetchFunction, withRateLimitRetry } from '@kinu/core';
+import { tolerate } from '@kinu/core/obs';
 import { repairSseCachedUsage } from './stream-usage-repair';
 import * as v from 'valibot';
 
