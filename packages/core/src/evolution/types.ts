@@ -7,6 +7,7 @@ import type { ModelMessage } from 'ai';
 import type { MCTSProgressEvent } from '../types/mcts';
 import type { Usage } from '../usage';
 import type { JsonObject, JsonValue } from '../utils/json';
+import type { MissionGovernor } from '../mission-budget';
 
 /** A tool call as reported by the AI SDK's structured result */
 export interface ToolCallRecord {
@@ -54,6 +55,21 @@ export interface CompletedTurn {
   /** What the turn spent, as the provider reported it per step. Absent when
    *  the provider reported no usage at all. */
   usage?: Usage;
+  /**
+   * The mission labels the turn ran under, stamped by the orchestrator from the
+   * governor's active scope at the moment the turn ended.
+   *
+   * Carried BY THE TURN rather than read from a governor at review time,
+   * because a review need not run in the process — or the decade — the turn ran
+   * in: a one-shot host defers it to a durable row and the next capable host
+   * drains it, by which point no scope is active and the wrong one may be.
+   * This is the only thing that lets the review's own model calls debit the
+   * mission that caused them.
+   *
+   * Absent on an unbudgeted turn, which is every ordinary session. Absent means
+   * ungoverned: a review must never invent a label.
+   */
+  missionLabels?: readonly string[];
 }
 
 /** A completed session — sequence of turns */
@@ -120,6 +136,17 @@ export interface EvolutionConfig {
    *  host runs no trials; the queue is durable, so the next host that can
    *  afford them runs the same rows. */
   shadowTrialRunner?: () => Promise<ShadowTrialDrain>;
+  /**
+   * The actor's mission budget governor — the same object the swarm's model-call
+   * seam holds, so a turn review is bounded by exactly the cap that bounds the
+   * work it reviews.
+   *
+   * Reached only for a turn that carries {@link CompletedTurn.missionLabels}, so
+   * an ordinary unbudgeted session never queries the ledger and never sees a
+   * refusal. Absent = this host wires no governor and every review is
+   * ungoverned, which is what every backend did before this field existed.
+   */
+  governor?: MissionGovernor;
 }
 
 export const DEFAULT_EVOLUTION_CONFIG: EvolutionConfig = {

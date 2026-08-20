@@ -32,6 +32,7 @@ import {
   memoryCommand,
   releaseCommand,
   stateCommand,
+  spendCommand,
   stopCommand,
   timelineCommand,
   webhookCommand,
@@ -340,6 +341,14 @@ export function buildProgram(): Command {
     .description('Show the durable workspace state snapshot')
     .option('--json', 'Print raw JSON')
     .action(wrapAction(stateCommand));
+
+  program
+    .command('spend <name>')
+    .helpGroup(INSPECT)
+    .description('Show what the whole workspace spent, by producer and by mission')
+    .option('--limit <n>', 'Event rows read per row type (default 2000)')
+    .option('--json', 'Print raw JSON')
+    .action(wrapAction(spendCommand));
 
   program
     .command('memory <name> [query...]')

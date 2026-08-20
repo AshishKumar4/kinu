@@ -568,6 +568,10 @@ export class OrchestratorAgent extends ActorAgent {
     if (!this._engine) {
       this._engine = new EvolutionEngine(this.rt, {
         enabled: true,
+        // The turn review's own model calls debit the mission the reviewed turn
+        // ran under — the same ledger, through the same seam, as the work it
+        // reviews. Unbudgeted turns never reach it.
+        governor: this.budget,
         // The same sink an agent-initiated agents(action:'swarm') uses — one
         // broadcast for every search this workspace runs (ActorAgent).
         onMctsProgress: (event) => this.onMctsProgress(event),
@@ -2729,8 +2733,12 @@ export class OrchestratorAgent extends ActorAgent {
       // silent ones into `stepsWithoutUsage` so the totals carry their own
       // denominator instead of quietly under-counting.
       telemetry: summarizeSteps(steps, { windowLimit }),
+      // Both axes of the same money, from one read: the producer rows and the
+      // per-mission rows. `this.budget.snapshot()` is deliberately NOT read
+      // beside it — it answers a narrower question (the labels the turn in
+      // flight is under) out of the same ledger, and two mission figures on one
+      // panel is how a reader learns to distrust both.
       spend: workspaceSpend({ events: this.eventRecorder, sql: this.boundSql }, { windowLimit }),
-      budgets: this.budget.snapshot(),
       log: readActivityLog(this.boundSql, logLimit),
     };
   }

@@ -105,6 +105,10 @@ export const CompletedTurnSchema: v.GenericSchema<CompletedTurn> = v.object({
   sessionId: v.optional(v.string()),
   origin: v.optional(v.picklist(['user', 'programmatic'])),
   usage: v.optional(UsageSchema),
+  // The label its review debits. Persisted with the turn rather than beside it,
+  // so the deferred-review row already carries what the drain has to know: the
+  // scope that ran the turn is long gone by then.
+  missionLabels: v.optional(v.array(v.pipe(v.string(), v.nonEmpty()))),
 });
 
 export function createSessionWindowStore(sql: SqlExecutor): SessionWindowStore {

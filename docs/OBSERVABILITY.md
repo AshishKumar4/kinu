@@ -236,7 +236,7 @@ across a whole handler.
 The four rules it complements are proven red-to-green through the real `oxlint`
 binary in `tools/oxlint/anti-slop/no-swallow.gate.test.ts`.
 
-## Turn-review spend: metered once, read by two of four consumers
+## Turn-review spend: metered once, governed, read by three of four consumers
 
 The evolution TURN LANE — the outcome review, `EvolutionEngine.reviewTurn`
 (`packages/core/src/evolution/engine.ts:331`) — makes up to three fast-model
@@ -268,18 +268,53 @@ provider's usage before narrowing the result and reports it through a
 under the `fast` and `reflection` producers, which is what the Activity cost
 panel renders. **So review spend is not missing from the workspace total.**
 
-**Two consumers do not see it, for two different reasons.**
+`workspaceSpend()` now reports that total on TWO axes. `producers` groups it by
+what kind of work made the call, over the named window. `missions` groups it by
+which declared label it was made for, read out of `mission_budget` — the ledger
+the caps are enforced against, so the panel's per-mission figure and a refusal
+can never disagree, and no second per-mission tally exists to drift from it.
+The two axes cover different scopes on purpose: a producer row is the window, a
+mission row is the label's whole life, because a cap is cumulative. `offTurnShare`
+is the share of measured tokens no turn of the agent spent. The Activity cost
+panel renders all of it as one table, and `kinu spend <name>` prints the same
+read model in the terminal for local and cloud workspaces alike. The panel's
+separate "Mission budgets" list is gone with `ActivitySnapshot.budgets`: it read
+the same ledger through a narrower question (the labels the turn in flight is
+under), and two mission figures on one panel is how a reader learns to distrust
+both.
 
-1. **`MissionGovernor` never guards it.** `.govern(llm, labels)` has exactly ONE
-   call site in the tree — `packages/core/src/tools/agents-tool.ts:937`, the
-   `agents`/`swarm` path. `AgentRuntime` (`types/agent-runtime.ts:124-142`) and
-   `EvolutionConfig` (`evolution/types.ts:102`) carry no governor field, and
-   every construction site passes `rt` unwrapped
-   (`cli-backend/src/local-session.ts:451`, `cf-backend/src/orchestrator.ts:549`,
-   `cf-backend/src/subordinate-agent.ts:162`). Review spend is therefore never
-   debited and no budget cap can stop it. This is a policy gap, not a plumbing
-   one: wiring the governor here needs a decision about which label evolution
-   debits, which no ticket has made.
+**One consumer sees it now. One still does not.**
+
+1. **`MissionGovernor` guards it, and the label comes off the TURN.** The
+   review's three fast completions go through `govern(llm, labels)` — the same
+   seam the swarm's model calls take (`tools/agents-tool.ts`), reached from
+   `EvolutionEngine.reviewLlm` (`evolution/engine.ts`). The labels are
+   `CompletedTurn.missionLabels`, stamped once by
+   `AgentOrchestrator.recordTurn` from the governor's active scope at the moment
+   the turn ended, and carried with the turn into the session window and the
+   deferred-review row. They are read off the turn rather than off the governor
+   because a review need not run in the process that ran the turn: a one-shot
+   host defers it, and the host that drains the row has either no active scope
+   or a later turn's. `EvolutionConfig.governor` is wired at all three
+   construction sites (`cli-backend/src/local-session.ts`,
+   `cf-backend/src/orchestrator.ts`, `cf-backend/src/subordinate-agent.ts`).
+
+   An unlabelled turn stays ungoverned: `missionLabels` is absent, `govern`
+   returns the `LLM` unwrapped, and the ledger is never queried. No label is
+   invented for a turn that ran without one.
+
+   A spent cap refuses the CALL and never corrupts the queue. The governed seam
+   throws `MissionBudgetExhausted` before the request leaves;
+   `runDeferredTurnReviews` names that row `{reason: 'budget'}` and LEAVES it
+   queued, because the turn is sound and a raised cap makes the review runnable
+   again. An unreadable row is the other refusal and is retired, as before. The
+   two are counted apart rather than as one number
+   (`evolution/review-queue.ts` `RefusedTurnReview`).
+
+   **What this does NOT cover.** The cadence lane — the session reflection, the
+   scaffold proposal, GEPA — is triggered by a turn COUNT rather than by one
+   turn, so no single mission caused it and none is debited. That spend is
+   visible on the `reflection` producer row and is outside every cap.
 
 2. **`turn_end.usage` cannot carry it, so the external bench does not count
    it.** `closeTurnRun` writes `turn_end` from the TurnAccumulator's in-loop

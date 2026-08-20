@@ -342,14 +342,32 @@ export class AgentOrchestrator {
    */
   recordTurn(turn: CompletedTurn, continuity: TurnContinuity): void {
     if (!this.turnEvolutionEnabled) return;
+    const scoped = this.scopeTurn(turn);
     const awaitsFollowup = turn.origin !== 'programmatic' && continuity === 'conversation';
-    this.window.append(turn, { awaitsFollowup });
+    this.window.append(scoped, { awaitsFollowup });
     if (!awaitsFollowup) {
-      this.dispatchReview(turn, null);
+      this.dispatchReview(scoped, null);
     }
     // A one-shot host is about to exit — it must not open work it cannot
     // finish. The window keeps the turns; the daemon runs the pass.
     if (!this.deps.oneShot) void this.runDueSessionEvolution();
+  }
+
+  /**
+   * Stamp the mission the turn ran under, so its review debits that mission
+   * wherever and whenever the review actually runs.
+   *
+   * Read here because here is the last moment the answer is knowable: the
+   * governor's active scope belongs to the turn that just ended, and the next
+   * `beginTurn` replaces it. A review dispatched at the next user message, or
+   * drained by a different process a day later, has no way back to it.
+   *
+   * An unscoped turn is returned untouched — no field, no empty array. Absent
+   * means ungoverned, and a review must never invent a label.
+   */
+  private scopeTurn(turn: CompletedTurn): CompletedTurn {
+    const labels = this.deps.budget?.scope ?? [];
+    return labels.length === 0 ? turn : { ...turn, missionLabels: [...labels] };
   }
 
   /**
@@ -389,7 +407,7 @@ export class AgentOrchestrator {
    * row for the next open.
    */
   async runDeferredTurnReviews(): Promise<DeferredReviewDrain> {
-    if (this.deps.oneShot) return { reviewed: 0, refused: 0 };
+    if (this.deps.oneShot) return { reviewed: 0, refused: [] };
     return await this.deps.engine.runDeferredTurnReviews();
   }
 

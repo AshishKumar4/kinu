@@ -96,7 +96,7 @@ import type { ExecutorInfo } from "@/lib/executors";
 import type {
   ChatHistoryEntry, ContextComposition, DirEntry, ExplorationCanvasRun, ForkRunParams,
   ForkRunSummary, HeadRunView, MountInfo, NodeTranscriptView, Page, PageRequest,
-  PendingAction, ProducerSpend, RunSummary, SearchNode, Usage,
+  PendingAction, ProducerSpend, RunSummary, SearchNode, Usage, WorkspaceSpend,
 } from "@kinu/core";
 import type { ModelMenuEntry } from "@/lib/user-api";
 import * as v from "valibot";
@@ -2730,11 +2730,22 @@ const ACTIVITY_CACHE_HIT = {
   samples: 344, last: 0.94, ema: 0.91, mean: 0.88, p95: 0.97, emaAlpha: 0.2,
 };
 
-const ACTIVITY_BUDGETS: ActivitySnapshot["budgets"] = [{
-  label: "checkout-fixes", parent: null, limits: { usd: 25 },
-  spent: { tokens: 24_222_394, usd: 16.26 }, remaining: { usd: 8.74 },
-  pricing: { blendedTokens: 0, source: "catalog" }, calls: 747, spawns: 3, exhausted: false,
-}];
+/** Two labels, one nested inside the other and one already spent — the mission
+ *  half of the breakdown, and the cases its cells have to survive: a cap in
+ *  dollars, a cap in tokens, blended pricing, and a `spent` badge. */
+const ACTIVITY_MISSIONS: WorkspaceSpend["missions"] = [
+  {
+    label: "checkout-fixes", parent: null, limits: { usd: 25 },
+    spent: { tokens: 24_222_394, usd: 16.26 }, remaining: { usd: 8.74 },
+    pricing: { blendedTokens: 0, source: "catalog" }, calls: 747, spawns: 3, exhausted: false,
+  },
+  {
+    label: "checkout-fixes/regression-sweep", parent: "checkout-fixes",
+    limits: { tokens: 2_000_000 },
+    spent: { tokens: 2_004_118, usd: 1.42 }, remaining: { tokens: 0 },
+    pricing: { blendedTokens: 118_400, source: "mixed" }, calls: 96, spawns: 0, exhausted: true,
+  },
+];
 
 /**
  * The panel's own question, photographed: `$11.98 over 344 priced steps` is the
@@ -2762,10 +2773,12 @@ const ACTIVITY_SNAPSHOT: ActivitySnapshot = {
     coverage: {
       calls: 747, measured: 654, reported: 654 / 747, silent: ["platform"], partial: ["head"],
     },
+    // (23_551_044 + 671_350 - 21_480_312 - 512_884) / (23_551_044 + 671_350)
+    offTurnShare: 0.09203045743537984,
+    missions: ACTIVITY_MISSIONS,
     windowLimit: 2000,
     complete: false,
   },
-  budgets: ACTIVITY_BUDGETS,
   log: [],
 };
 
@@ -2785,6 +2798,9 @@ const ACTIVITY_CLEAN: ActivitySnapshot = {
       },
     },
     coverage: { calls: 616, measured: 616, reported: 1, silent: [], partial: [] },
+    // (23_166_830 + 627_444 - 21_480_312 - 512_884) / (23_166_830 + 627_444)
+    offTurnShare: 0.07569375724596598,
+    missions: [],
     windowLimit: 2000,
     complete: true,
   },
@@ -2805,10 +2821,11 @@ const ACTIVITY_FRESH: ActivitySnapshot = {
     producers: [],
     total: { calls: 0, callsWithoutUsage: 0, usage: {}, unpricedCalls: 0 },
     coverage: { calls: 0, measured: 0, reported: null, silent: [], partial: [] },
+    offTurnShare: null,
+    missions: [],
     windowLimit: 2000,
     complete: true,
   },
-  budgets: [],
   log: [],
 };
 

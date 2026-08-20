@@ -390,6 +390,9 @@ export {
   // on who asked.
   priceCall,
   localMissionScope,
+  // Every label's cumulative spend, for a read-only surface that holds no
+  // governor: the CLI's `kinu spend`, the workspace cost panel.
+  listMissionSpend,
   type MissionBudgetPort,
   type MissionScope,
   type MissionBudgetLimits,

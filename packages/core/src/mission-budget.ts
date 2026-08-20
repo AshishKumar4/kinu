@@ -216,27 +216,12 @@ export class MissionBudgetLedger {
   }
 
   get(label: string): MissionRow | null {
-    const rows = this.sql<{
-      label: string; parent_label: string | null; limit_usd: number | null; limit_tokens: number | null;
-      spent_tokens: number; spent_usd: number; blended_tokens: number;
-      calls: number; spawns: number; exhausted_at: number | null;
-    }>`SELECT label, parent_label, limit_usd, limit_tokens, spent_tokens, spent_usd, blended_tokens,
-              calls, spawns, exhausted_at
+    const rows = this.sql<MissionBudgetColumns>`
+      SELECT label, parent_label, limit_usd, limit_tokens, spent_tokens, spent_usd, blended_tokens,
+             calls, spawns, exhausted_at
        FROM mission_budget WHERE label = ${label}`;
     const row = rows[0];
-    if (!row) return null;
-    return {
-      label: row.label,
-      parent: row.parent_label,
-      limitUsd: row.limit_usd,
-      limitTokens: row.limit_tokens,
-      tokens: row.spent_tokens,
-      usd: row.spent_usd,
-      blendedTokens: row.blended_tokens,
-      calls: row.calls,
-      spawns: row.spawns,
-      exhaustedAt: row.exhausted_at,
-    };
+    return row ? toRow(row) : null;
   }
 
   /** The label and its ancestors, innermost first. Unknown labels yield []. */
@@ -272,6 +257,62 @@ export class MissionBudgetLedger {
     void this.sql`UPDATE mission_budget SET exhausted_at = ${now}
              WHERE label = ${label} AND exhausted_at IS NULL`;
   }
+}
+
+/** The ledger's stored columns. Named because two readers decode them — the
+ *  governor's own `get`, and the read-only workspace surface below — and two
+ *  decoders over one storage shape is how one of them comes to drop a field. */
+interface MissionBudgetColumns {
+  label: string; parent_label: string | null; limit_usd: number | null; limit_tokens: number | null;
+  spent_tokens: number; spent_usd: number; blended_tokens: number;
+  calls: number; spawns: number; exhausted_at: number | null;
+}
+
+function toRow(row: MissionBudgetColumns): MissionRow {
+  return {
+    label: row.label,
+    parent: row.parent_label,
+    limitUsd: row.limit_usd,
+    limitTokens: row.limit_tokens,
+    tokens: row.spent_tokens,
+    usd: row.spent_usd,
+    blendedTokens: row.blended_tokens,
+    calls: row.calls,
+    spawns: row.spawns,
+    exhaustedAt: row.exhausted_at,
+  };
+}
+
+/**
+ * Every label the ledger holds, dearest first.
+ *
+ * The ONE per-mission spend figure. This is the ledger the caps are enforced
+ * against, so a surface that answered "what did mission X cost" from anywhere
+ * else would be a second answer to a question that already has one.
+ *
+ * A pure read — no DDL, no governor, no writes — because the workspace spend
+ * surface runs in processes that declare no budget of their own: a CLI
+ * inspection over a read-only database, a panel fetch.
+ *
+ * The table's absence is a real answer, not an error, and it is asked about
+ * rather than caught. The ledger is OPT-IN by construction: an actor that never
+ * declared a budget never built a governor, so nothing ever ran the DDL, and no
+ * mission spend exists to report. Reaching that state through a thrown
+ * `no such table` would make an ordinary unbudgeted workspace look broken.
+ *
+ * CUMULATIVE AND LIFETIME, unlike the windowed row types beside it. A cap is
+ * cumulative, so a windowed slice of the ledger would be a number no cap is
+ * read against. The surface states which scope each half of its table is on.
+ */
+export function listMissionSpend(sql: SqlExecutor): MissionBudgetSnapshot[] {
+  const present = sql<{ name: string }>`
+    SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'mission_budget'`;
+  if (present.length === 0) return [];
+  return sql<MissionBudgetColumns>`
+    SELECT label, parent_label, limit_usd, limit_tokens, spent_tokens, spent_usd, blended_tokens,
+           calls, spawns, exhausted_at
+     FROM mission_budget
+     ORDER BY spent_usd DESC, spent_tokens DESC, label ASC`.map((row) => toSnapshot(toRow(row)));
 }
 
 /** True when the row is at or over either of its caps. */
