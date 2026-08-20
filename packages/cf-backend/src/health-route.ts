@@ -12,10 +12,11 @@
 import { ORCHESTRATOR_AGENT_SLUG } from '@kinu/core';
 import { readBuildStamp } from './lib/deployed-assets';
 
+// A hand list, so it can lie: the three d1-* entries survived the D1 removal
+// by a day. When a feature dies here, delete its line in the same commit.
 const FEATURES: ReadonlyArray<string> = [
-  'd1-oauth-session-auth',
-  'd1-read-replica-sessions',
-  'd1-cli-auth-state',
+  'kv-oauth-session-auth',
+  'kv-cli-auth-state',
   'user-do',
   'multi-tenant',
   'multi-provider-registry',
