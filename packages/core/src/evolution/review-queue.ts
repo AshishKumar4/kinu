@@ -85,24 +85,36 @@ export interface DeferredTurnReview {
   readonly queuedAt: number;
 }
 
-/** A row the drain would not run, and why. Named rather than skipped: the row
- *  is this module's own write, so an unreadable one is a corrupt database, and
- *  reviewing a default in its place would write a `turn_outcomes` verdict
- *  against a turn nobody can read. */
+/**
+ * A row the drain would not run, and why. Named rather than skipped, and each
+ * reason states its own disposition, because a review that vanishes without one
+ * is the failure this queue exists to prevent.
+ *
+ * `unreadable` RETIRES the row: it is this module's own write, so an undecodable
+ * one is a corrupt database, and reviewing a default in its place would write a
+ * `turn_outcomes` verdict against a turn nobody can read. One corrupt row must
+ * not wedge the queue behind it either.
+ *
+ * `budget` RE-QUEUES it: the mission the turn ran under is over its cap, so the
+ * host declined the review's model call. Nothing about the row is wrong and the
+ * owner can raise the cap, so retiring it would throw away evidence the mission
+ * already paid to produce. The queue's own ceiling bounds what that can cost.
+ */
 export interface RefusedTurnReview {
   readonly id: string;
-  readonly reason: 'unreadable';
+  readonly reason: 'unreadable' | 'budget';
 }
 
 /** What {@link queueTurnReview} did. `queue_full` and `unserializable` are
  *  refusals: the review does not exist and no later host will find it. */
 export type TurnReviewQueueOutcome = 'queued' | 'queue_full' | 'unserializable';
 
-/** What one drain of the queue accomplished. `refused` counts rows that were
- *  retired without being reviewed — see {@link RefusedTurnReview}. */
+/** What one drain of the queue accomplished. `refused` names the rows it would
+ *  not review and why — a count alone cannot say whether a row is gone or still
+ *  owed, and those are different facts about the same number. */
 export interface DeferredReviewDrain {
   readonly reviewed: number;
-  readonly refused: number;
+  readonly refused: readonly RefusedTurnReview[];
 }
 
 export interface TakenTurnReviews {

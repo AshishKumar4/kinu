@@ -395,9 +395,11 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
 
     for (const head of view.heads) {
       // A READABLE TRANSCRIPT: ordered steps, each with what the node said and what it
-      // called. This is what R13 renders and what makes a node auditable.
-      expect(head.steps.length).toBeGreaterThan(0);
-      const toolNames = head.steps.flatMap((step) => step.toolCalls.map((call) => call.name));
+      // called. This is what R13 renders and what makes a node auditable. Read per head,
+      // because the run view carries lifecycle and the journal carries the prose.
+      const steps = journal.readSteps(head.id);
+      expect(steps.length).toBeGreaterThan(0);
+      const toolNames = steps.flatMap((step) => step.toolCalls.map((call) => call.name));
       // Every node finishes through its own report, and the journal holds the call.
       expect(toolNames).toContain('report');
       // The node reported, and the journal holds what it said.
@@ -413,7 +415,7 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
     const firstLevel = modelWritten.filter((node) => node.depth === 1).map((node) => node.id);
     for (const id of firstLevel) {
       const head = view.heads.find((candidate) => candidate.id === id);
-      const fileStep = head?.steps.find(
+      const fileStep = head && journal.readSteps(head.id).find(
         (step) => step.toolCalls.some((call) => call.name === 'file'),
       );
       expect(fileStep).toBeDefined();
@@ -422,7 +424,7 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
 
     // And exactly one of them asked for a branch, through the tool.
     const proposals = view.heads.flatMap(
-      (head) => head.steps.flatMap(
+      (head) => journal.readSteps(head.id).flatMap(
         (step) => step.toolCalls.filter((call) => call.name === PROPOSE_BRANCH_TOOL),
       ),
     );

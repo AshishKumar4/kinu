@@ -34,10 +34,9 @@
  *   - Per-step time: `ms` is per observation; where time goes INSIDE an episode
  *     is in the transcripts, not in this report.
  */
-import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  readRunRecord, TASK_OUTCOME,
+  readRunRecord, runRecordPaths, TASK_OUTCOME,
   type EvalObservation, type EvalRunRecord,
 } from '../packages/test-utils/src/index';
 
@@ -71,21 +70,6 @@ function parseArgs(argv: readonly string[]): CliOptions | null {
   return { roots, family };
 }
 
-/** Every record path under a root: `<root>/<run>/run-record.json` for artifact
- *  roots, `<root>/*.json` for the published-records directory. */
-function recordPaths(root: string): string[] {
-  if (!existsSync(root)) return [];
-  const paths: string[] = [];
-  for (const entry of readdirSync(root, { withFileTypes: true })) {
-    if (entry.isDirectory()) {
-      const candidate = join(root, entry.name, 'run-record.json');
-      if (existsSync(candidate)) paths.push(candidate);
-    } else if (entry.name.endsWith('.json')) {
-      paths.push(join(root, entry.name));
-    }
-  }
-  return paths;
-}
 
 type Scored = Extract<EvalObservation, { outcome: 'scored' }>;
 
@@ -165,7 +149,7 @@ function main(argv: readonly string[]): number {
   const refusals: { readonly path: string; readonly error: string }[] = [];
   const records: EvalRunRecord[] = [];
   for (const root of options.roots) {
-    for (const path of recordPaths(root)) {
+    for (const path of runRecordPaths(root)) {
       try {
         records.push(readRunRecord(path));
       } catch (error) {

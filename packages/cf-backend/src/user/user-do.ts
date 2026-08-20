@@ -1,6 +1,6 @@
 /**
  * UserDO — per-user Durable Object. Keyed by the stable Kinu userId.
- * OAuth identities are mapped by the D1 auth store before requests reach this DO.
+ * OAuth identities are resolved to that userId by auth/store.ts before requests reach this DO.
  *
  * Owns:
  *   - identity (email, displayName, last_seen)
@@ -149,9 +149,6 @@ const DEVICE_TOKEN_IDLE_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days
 const DEVICE_CONNECT_TICKET_TTL_MS = 60 * 1000;
 const CLI_AGENT_CONNECT_TICKET_TTL_MS = 60 * 1000;
 const CLI_AGENT_WEBSOCKET_CAPABILITY = 'agent.websocket' as const;
-
-/** `user_schema_meta` key retiring the one-shot capability backfill. */
-const BACKFILL_MARKER = 'workspace_capability_backfill';
 
 /** Stable per-user OAuth callback path. The full URL is built from the
  *  request origin at add-time so it works in any environment without
@@ -351,41 +348,6 @@ export class UserDO extends Agent<Env> {
     })();
     this._provisioning.set(workspaceName, task);
     try { await task; } finally { this._provisioning.delete(workspaceName); }
-  }
-
-  /** One-shot repair for workspaces that predate this boundary. They are owned
-   *  but identity-less, and a workspace runs without anyone opening it — an
-   *  alarm, an inbound email, a webhook, a peer's task — so waiting for a human
-   *  to visit each one would fail those turns. Runs once per user, off the
-   *  request's critical path. */
-  async backfillWorkspaceCapabilities(caller: UserCaller): Promise<{ provisioned: number }> {
-    await this.requireTier(caller, 'workspaces.write');
-    if (this.sqlx(`SELECT 1 AS x FROM user_schema_meta WHERE key = ?`, BACKFILL_MARKER)[0]) {
-      return { provisioned: 0 };
-    }
-    const names = this.sqlx<{ name: string }>(`SELECT name FROM user_workspaces`).map((r) => r.name);
-    const settled = await Promise.allSettled(names.map(async (name) => {
-      // Ask each workspace what it holds so an already-provisioned one is left
-      // alone; rotating a live token would invalidate the copies its facets
-      // hold until the parent pushes again.
-      const stub = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(name));
-      const presentedHash = await stub.getWorkspaceCapabilityHash();
-      await this.ensureWorkspaceCapability(name, presentedHash);
-    }));
-    const failed = settled.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
-    for (const failure of failed) {
-      diagnostics.failure('capability.backfill_failed', toProteusError({
-        doing: "backfilling a workspace's capability token",
-        cause: failure.reason,
-        otherwise: 'unavailable',
-      }));
-    }
-    // Only a clean sweep retires the marker; a partial one retries next boot.
-    if (failed.length === 0) {
-      this.sqlx(`INSERT INTO user_schema_meta (key, value) VALUES (?, ?)
-                 ON CONFLICT(key) DO UPDATE SET value = excluded.value`, BACKFILL_MARKER, String(Date.now()));
-    }
-    return { provisioned: names.length - failed.length };
   }
 
   private releases() {

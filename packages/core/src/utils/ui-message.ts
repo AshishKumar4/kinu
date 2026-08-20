@@ -30,7 +30,7 @@
 import type { UIMessage } from 'ai';
 import * as v from 'valibot';
 import { tolerate } from '../obs/index';
-import { parseJsonValue } from './json';
+import { JsonObjectSchema, parseJsonValue, type JsonObject } from './json';
 import type { ChatHistoryEntry } from '../read-models/status';
 
 const UiMessageSchema = v.object({
@@ -38,6 +38,7 @@ const UiMessageSchema = v.object({
     type: v.string(),
     text: v.optional(v.string()),
   }))),
+  metadata: v.optional(JsonObjectSchema),
 });
 
 /**
@@ -53,35 +54,123 @@ const UiMessageSchema = v.object({
 export const PROGRAMMATIC_MESSAGE_ID_PREFIX = 'programmatic:';
 
 /**
+ * WHO WROTE THE WORDS in a turn. Stamped by the seam that enqueues the turn,
+ * read by every surface that renders or attributes it.
+ *
+ * This exists because the alternative was tried and drifted. Provenance used to
+ * be re-derived per surface from the EVENT NAME: the chat pane recognised four
+ * of them (`background_job`, `event_drain`, `workspace_created`,
+ * `deferred_approval`) and rendered everything else in the operator's bubble,
+ * so every event kind added after that list — `fork_interrupted`,
+ * `completion_gate`, `take_pick`, `overflow_retry` — silently became something
+ * the owner appeared to have typed. Measured on the owner's live workspaces on
+ * 2026-08-20: five `fork_interrupted` rows across `sunlit-stone-4a20`,
+ * `stone-ash-71f2` and `principal-machine-f1296946`, each reading "23 head(s)
+ * across 6 fork run(s) were still marked running…" in the owner's own bubble.
+ *
+ * So the default is inverted and the writer decides. A turn the harness
+ * enqueues is the harness speaking unless its producer says otherwise, and the
+ * one producer that does say otherwise is the one carrying words the operator
+ * really wrote (an MCP client's `run_task`, a leftover steer re-run as its own
+ * turn). A new event kind is therefore attributed correctly the day it is
+ * added, without touching any renderer.
+ */
+export const TURN_AUTHOR_METADATA_KEY = 'proteusAuthor';
+
+export type TurnAuthor = 'harness' | 'operator';
+
+const TurnAuthorSchema = v.looseObject({
+  [TURN_AUTHOR_METADATA_KEY]: v.optional(v.picklist(['harness', 'operator'])),
+  proteusEvent: v.optional(v.string()),
+});
+
+/**
+ * Event names that predate {@link TURN_AUTHOR_METADATA_KEY} and carry the
+ * operator's own words. Rows written before the stamp existed are read through
+ * this; nothing new belongs here, because a new producer stamps instead.
+ */
+const LEGACY_OPERATOR_EVENTS = { mcp: true } satisfies Record<string, true>;
+
+/**
+ * The metadata a programmatic turn's durable row carries. Call it at the seam
+ * that writes the row, so the stamp cannot be forgotten by a producer.
+ *
+ * Idempotent, and the producer's own answer wins: a caller that has already
+ * named itself `operator` keeps that through every later funnel it passes.
+ */
+export function stampTurnAuthor(metadata?: JsonObject): JsonObject {
+  const parsed = v.safeParse(TurnAuthorSchema, metadata ?? {});
+  const declared = parsed.success ? parsed.output[TURN_AUTHOR_METADATA_KEY] : undefined;
+  return { ...metadata, [TURN_AUTHOR_METADATA_KEY]: declared ?? 'harness' };
+}
+
+/**
+ * Who wrote a stored row, from written markers only — never from its prose.
+ *
+ * The stamp answers it outright. Rows written before the stamp existed are read
+ * from the two markers they do carry: the `proteusEvent` metadata a queued
+ * signal has always stamped, and the {@link PROGRAMMATIC_MESSAGE_ID_PREFIX}
+ * both backends have always derived a programmatic row's id from. One legacy
+ * shape stays genuinely ambiguous — a metadata-less row under the programmatic
+ * id prefix, which is what a leftover steer re-run as its own turn used to
+ * write — and it resolves to `harness`, the direction that cannot put the
+ * harness's words in the owner's mouth. Every such turn written from now on
+ * stamps `operator` and is exact.
+ */
+export function turnAuthor<Metadata>(row: { id?: string; metadata?: Metadata }): TurnAuthor {
+  const parsed = v.safeParse(TurnAuthorSchema, row.metadata ?? {});
+  if (!parsed.success) return 'operator';
+  const stamped = parsed.output[TURN_AUTHOR_METADATA_KEY];
+  if (stamped) return stamped;
+  const event = parsed.output.proteusEvent;
+  if (event !== undefined) return Object.hasOwn(LEGACY_OPERATOR_EVENTS, event) ? 'operator' : 'harness';
+  return row.id?.startsWith(PROGRAMMATIC_MESSAGE_ID_PREFIX) ? 'harness' : 'operator';
+}
+
+/**
  * The role a stored row takes in the TRANSCRIPT — what a surface renders, what
  * an operator reads back, and what the walk-back fork pivots on.
  *
- * A programmatic turn is reported `system`: the harness speaking in the
- * conversation, which is exactly what `identity/fork.ts` already writes its own
- * synthetic marker row as, and what `findForkPivot` already declines to pivot
- * on. The STORED role is untouched — the model's history still reads it as the
- * user turn it has to be — so this changes what we claim about a row, never
- * what the model is sent.
+ * A harness-authored turn is reported `system`, which is exactly what
+ * `identity/fork.ts` already writes its own synthetic marker row as, and what
+ * `findForkPivot` already declines to pivot on. The STORED role is untouched —
+ * the model's history still reads it as the user turn it has to be — so this
+ * changes what we claim about a row, never what the model is sent.
  */
-export function transcriptRole(
+export function transcriptRole<Metadata>(
   id: string,
   role: 'user' | 'assistant' | 'system',
+  metadata?: Metadata,
 ): 'user' | 'assistant' | 'system' {
-  return role === 'user' && id.startsWith(PROGRAMMATIC_MESSAGE_ID_PREFIX) ? 'system' : role;
+  return role === 'user' && turnAuthor({ id, metadata }) === 'harness' ? 'system' : role;
 }
 
-/** Flatten a stored UIMessage-JSON content string to plain text.
- *  `assistant_messages` rows hold the serialized UI message and `messages` rows
- *  hold plain text; both reach this, so text that is not JSON is a value here
- *  and nothing else is. */
-export function uiMessageText(content: string): string {
+/** A stored conversation row projected for a transcript: its plain text, and
+ *  the provenance metadata that decides who wrote it. */
+export interface StoredRowProjection {
+  text: string;
+  metadata?: JsonObject;
+}
+
+/** A stored row's plain text and the provenance metadata beside it, from ONE
+ *  parse. `assistant_messages` rows hold the serialized UI message and
+ *  `messages` rows hold plain text; both reach this, so text that is not JSON
+ *  is a value here and nothing else is. */
+export function uiMessageRow(content: string): StoredRowProjection {
   const decoded = tolerate(() => parseJsonValue(content), 'malformed-input');
-  if (decoded === undefined) return content;
+  if (decoded === undefined) return { text: content };
   const parsed = v.safeParse(UiMessageSchema, decoded);
-  if (!parsed.success || !parsed.output.parts) return content;
-  return parsed.output.parts
+  if (!parsed.success || !parsed.output.parts) return { text: content };
+  const text = parsed.output.parts
     .flatMap((part) => part.type === 'text' && part.text !== undefined ? [part.text] : [])
     .join('');
+  const metadata = parsed.output.metadata;
+  return metadata === undefined ? { text } : { text, metadata };
+}
+
+/** {@link uiMessageRow}'s text half, for the callers that need nothing else. */
+export function uiMessageText(content: string): string {
+  return uiMessageRow(content).text;
 }
 
 /**

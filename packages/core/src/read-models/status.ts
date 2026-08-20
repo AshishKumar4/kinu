@@ -16,7 +16,7 @@ import type { CraftStore } from '../types/agent-runtime';
 import type { VFS, SqlExecutor } from '../types/primitives';
 import type { CraftedTool } from '../types/craft';
 import type { ReasoningEffort } from '../strategy/effort';
-import { transcriptRole, uiMessageText } from '../utils/ui-message';
+import { transcriptRole, uiMessageRow, type StoredRowProjection } from '../utils/ui-message';
 import { mapPage, seekPage, StaleCursorError, type Page, type PageRequest } from './page';
 
 /** Widest transcript page a surface may ask for. */
@@ -125,8 +125,9 @@ export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus
  * rich table first and falling back keeps one shape for both.
  *
  * A row the harness enqueued is reported as `system`, not as the operator's
- * words — see {@link transcriptRole}. Both branches apply it, because the
- * provenance is the row id and both tables carry the same one.
+ * words — see {@link transcriptRole}. Both branches apply it: the rich table
+ * carries the author stamp inside its serialized message, and the plain mirror
+ * carries the row id the same rule falls back to.
  *
  * ── Why the cursor is rowid and not created_at ───────────────────────────────
  * `assistant_messages.created_at` is `DATETIME DEFAULT CURRENT_TIMESTAMP` —
@@ -162,7 +163,7 @@ export function getChatHistoryPage(
         SELECT id, role, content, created_at FROM assistant_messages
         WHERE role IN ('user', 'assistant', 'system') AND rowid < ${from}
         ORDER BY rowid DESC LIMIT ${over}`,
-      limit, rowId), uiMessageText);
+      limit, rowId), uiMessageRow);
   } catch (err) {
     // A stale cursor is this read failing, not the rich table being absent.
     // Falling through would answer the mirror's rows under a cursor minted
@@ -179,7 +180,7 @@ export function getChatHistoryPage(
         SELECT id, role, content, created_at FROM messages
         WHERE session_id = ${'default'} AND role IN ('user', 'assistant', 'system') AND rowid < ${from}
         ORDER BY rowid DESC LIMIT ${over}`,
-      limit, rowId), (content) => content);
+      limit, rowId), (content) => ({ text: content }));
   }
 }
 
@@ -211,17 +212,18 @@ function anchorRowid(found: { seek: number }[], after: string): number {
  */
 function chronological(
   page: Page<TranscriptRow>,
-  text: (content: string) => string,
+  project: (content: string) => StoredRowProjection,
 ): Page<ChatHistoryEntry> {
   return mapPage(page, (rows) => rows.flatMap((row) => {
     const role = normalizeUiRole(row.role);
     if (!role) return [];
     // A row the harness enqueued reports as `system`, never as the operator's
     // words. One place, because both the transcript and the mirror branch land
-    // here — the provenance is the row id, which both tables carry.
+    // here — and one rule, the same `turnAuthor` the chat pane renders from.
+    const { text, metadata } = project(row.content);
     return [{
-      id: row.id, role: transcriptRole(row.id, role),
-      content: text(row.content), createdAt: row.created_at,
+      id: row.id, role: transcriptRole(row.id, role, metadata),
+      content: text, createdAt: row.created_at,
     }];
   }).reverse());
 }

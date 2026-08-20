@@ -56,11 +56,10 @@ import type { LanguageModel } from 'ai';
 import type { EvalCase, LLMProviderConfig } from '../../packages/core/src/index';
 import { minimumPairsForSignificance, parseCorpus } from '../../packages/core/src/index';
 import {
-  assembleRunRecord, EVAL_MODELS, formatRunRecord, FULL_TOOL_SURFACE,
-  hardTaskCases, hardTaskFor,
-  liveChatModel, liveModelTarget, preRegister, reportLiveModelSpend, TASK_OUTCOME, UNCONFIGURED_LLM,
-  writeRunRecord,
-  type EvalArmState, type EvalObservation, type EvalRunRecord, type EvalTier,
+  EVAL_MODELS, FULL_TOOL_SURFACE, hardTaskCases, hardTaskFor,
+  liveChatModel, liveModelTarget, preRegister, publishRunRecord, reportLiveModelSpend,
+  TASK_OUTCOME, UNCONFIGURED_LLM,
+  type EvalArmState, type EvalObservation, type EvalTier,
 } from '@kinu/test-utils';
 import { DegenerateRunError, runBehaviourTask, type BehaviourOutput } from './harness';
 import { resolveArtifactRoot } from '../../scripts/bench-retention';
@@ -291,23 +290,11 @@ beforeAll(() => {
 
 afterAll(() => {
   const spend = reportLiveModelSpend('Behaviour Evals');
-  const record: EvalRunRecord = assembleRunRecord({
+  publishRunRecord({
     family: 'behaviour', tier: TIER, modelId: LLM.model, repeats: REPEATS, seed: SEED,
     arm: ARM, declaredTasks: CORPUS.map((c) => c.id), observations, spend,
     transcripts: TRANSCRIPTS, repoRoot: REPO_ROOT,
   });
-  // Beside the stores it cites, not in the repo. The default used to be
-  // `tests/eval/runs/<runId>.json`, a TRACKED directory, so every local run —
-  // including a scripted-model one that costs nothing and proves nothing —
-  // dirtied the working tree; one such record reached the primary checkout and
-  // blocked a deploy, because `deploy.sh` correctly refuses a dirty tree.
-  // `tests/eval/runs/` holds PUBLISHED records (`flash-a`, `flash-b` — the
-  // baseline `eval-run.ts` reads), committed deliberately by whoever publishes
-  // the number. A run that nobody publishes leaves nothing behind but its own
-  // artifact directory, under `bench-artifacts/` retention.
-  const out = process.env.PROTEUS_EVAL_RECORD ?? join(TRANSCRIPTS, 'run-record.json');
-  writeRunRecord(out, record);
-  console.log(`\n${formatRunRecord(record)}\n\nrecord: ${out}\n`);
 
   // Closed, not deleted. Closing is what checkpoints each store's WAL, so the
   // retained file is readable by the next process; deleting is what made every

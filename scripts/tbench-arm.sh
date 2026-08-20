@@ -35,18 +35,34 @@ JOB_NAME="tb21-seed${SEED}-evolve${EVOLVE}-${SHA}"
 # 40 trials in with "No credential rule for provider 'custom' at ." — which is
 # what an operator trying to CLEAR the variable actually produces. A guard that
 # measured emptiness would have governed the wrong set.
-for trap_var in PROTEUS_BASE_URL PROTEUS_AUTH PROTEUS_MODEL PROTEUS_HOME; do
+# PROTEUS_EVAL_TOKEN belongs to the same set for the same reason, and it is
+# supplied below rather than inherited: a scored run's identity is not a fact
+# about whoever's shell launched it.
+for trap_var in PROTEUS_BASE_URL PROTEUS_AUTH PROTEUS_MODEL PROTEUS_HOME PROTEUS_EVAL_TOKEN; do
   if [ -n "${!trap_var+set}" ]; then
     echo "REFUSING: $trap_var is set in this shell (value: '${!trap_var}'). The" >&2
-    echo "adapter resolves its own endpoint and home; an inherited one — empty or" >&2
-    echo "not — is an unrecorded variable in a scored run. Unset it, do not blank" >&2
-    echo "it: an empty PROTEUS_BASE_URL overrides the adapter's default." >&2
+    echo "adapter resolves its own endpoint, identity and home; an inherited one —" >&2
+    echo "empty or not — is an unrecorded variable in a scored run. Unset it, do not" >&2
+    echo "blank it: an empty PROTEUS_BASE_URL overrides the adapter's default." >&2
     exit 2
   fi
 done
 
-PROTEUS_TOKEN="$(cat "$HOME/.config/proteus/bench-token")"
-export PROTEUS_TOKEN
+# The eval-service credential, from a file only this operator can read. It used
+# to be exported as PROTEUS_TOKEN, which the CLI also reads as a SIGNED-IN
+# SESSION — so whichever account minted the file became the account every scored
+# run acted as. The eval identity has its own variable so that cannot recur, and
+# `bench/model_endpoint.py` reads no other.
+EVAL_TOKEN_FILE="$HOME/.config/proteus/eval-service-token"
+if [ ! -r "$EVAL_TOKEN_FILE" ]; then
+  echo "REFUSING: no eval-service credential at $EVAL_TOKEN_FILE." >&2
+  echo "Mint one against staging and write it there:" >&2
+  echo "  kinu auth --origin https://staging.kinu.run" >&2
+  echo "  kinu tokens create --name tbench --scopes ai.proxy" >&2
+  exit 2
+fi
+PROTEUS_EVAL_TOKEN="$(cat "$EVAL_TOKEN_FILE")"
+export PROTEUS_EVAL_TOKEN
 export PATH="$HOME/.local/bin:$PATH"
 export PYTHONPATH="$WORKTREE"
 
@@ -72,7 +88,7 @@ exec harbor run \
   "${TASK_FLAGS[@]}" \
   -m "$MODEL" \
   --ak "evolve=$EVOLVE" \
-  --allow-agent-host kinu.run \
+  --allow-agent-host staging.kinu.run \
   --jobs-dir "$JOBS_DIR" \
   --job-name "$JOB_NAME" \
   -n "$CONCURRENCY" \

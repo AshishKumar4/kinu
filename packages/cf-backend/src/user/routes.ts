@@ -110,7 +110,6 @@ export async function handleUserRequest(
       }), { step, userId: identity.userId });
     };
     ctx.waitUntil(stub.userMcp_warmConnections(caller).catch(reportBootstrapFailure('mcp_warm')));
-    ctx.waitUntil(stub.backfillWorkspaceCapabilities(caller).catch(reportBootstrapFailure('capability_backfill')));
   }
 
   // ── Profile ────────────────────────────────────────────────────────

@@ -315,7 +315,7 @@ function PlaneRows({ plane, measuredChars }: { plane: BreakdownPlane; measuredCh
 /* ── cost ───────────────────────────────────────────────────────── */
 
 function CostBlock({ snap }: { snap: ActivitySnapshot }) {
-  const { telemetry, budgets, spend } = snap;
+  const { telemetry, spend } = snap;
   const priced = telemetry.pricedSteps > 0;
   return (
     <section>
@@ -363,34 +363,19 @@ function CostBlock({ snap }: { snap: ActivitySnapshot }) {
       )}
 
       <WorkspaceSpendBlock spend={spend} />
-
-      {budgets.length > 0 && (
-        <div className="mt-3 pt-2.5 border-t p-border">
-          <h4 className="text-[11px] font-semibold p-text-2 mb-1.5">Mission budgets</h4>
-          {budgets.map((budget) => (
-            <div key={budget.label} className="flex items-baseline gap-2 py-0.5">
-              <span className="text-[11px] p-text truncate">{budget.label}</span>
-              <span
-                className={`text-[9px] px-1 rounded-sm ${budget.pricing.source === "catalog" ? "p-badge-neutral" : "p-badge-warning"}`}
-                title={budget.pricing.source === "catalog"
-                  ? "Every token priced from the models.dev catalog."
-                  : `${budget.pricing.blendedTokens.toLocaleString()} tokens priced at the blended fallback rate, not catalog rates.`}
-              >{budget.pricing.source}</span>
-              {budget.exhausted && <span className="text-[9px] px-1 rounded-sm p-badge-danger">exhausted</span>}
-              <Num className="text-[11px] p-text ml-auto">{fmtUsd(budget.spent.usd)}</Num>
-              {budget.limits.usd !== undefined && (
-                <Num className="text-[10px] p-text-3">/ {fmtUsd(budget.limits.usd)}</Num>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
     </section>
   );
 }
 
 /**
- * The workspace total, grouped by the producer that spent it.
+ * The workspace total, on both of its axes: what KIND of work spent the money,
+ * and which declared MISSION it was spent on.
+ *
+ * One table, because it is one sum read two ways, and two tables would invite
+ * the reader to add them. The producer rows and the mission rows do not sum
+ * together and the table says so where it turns: the producer half is the window
+ * named in the header, the mission half is each label's whole life, because that
+ * is the figure its cap is enforced against.
  *
  * The figure above this block is the turn loop's own, and a reader who stops
  * there has no way to know a judge ensemble or an evolution pass ran at all.
@@ -492,6 +477,65 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
                 />
               </tr>
             </tbody>
+            {spend.missions.length > 0 && (
+              <tbody>
+                <tr>
+                  <th
+                    colSpan={neurons ? 5 : 4}
+                    className="text-left font-normal pt-3 pb-1 text-[10px] p-text-3 uppercase tracking-wide"
+                    title="Read from mission_budget, the ledger the caps are enforced against. Every label's whole life, not the window above — a cap is cumulative, so a windowed figure would be one no cap is read against."
+                  >
+                    By mission · whole life
+                  </th>
+                </tr>
+                {spend.missions.map((mission) => (
+                  <tr key={mission.label} className="border-t p-border">
+                    <td className="py-1 pr-2">
+                      <span className="flex items-baseline gap-1">
+                        <span
+                          className="text-[11px] p-text truncate"
+                          title={mission.parent === null
+                            ? "A top-level mission. Everything it delegates debits it."
+                            : `Nested under "${mission.parent}", which every debit here also charges.`}
+                        >{mission.label}</span>
+                        <span className="text-[11px] p-text-3 shrink-0">×{mission.calls}</span>
+                        {mission.exhausted && (
+                          <span className="text-[9px] px-1 rounded-sm p-badge-danger shrink-0">spent</span>
+                        )}
+                      </span>
+                    </td>
+                    <td className="py-1 text-right w-20">
+                      <Num
+                        className="text-[11px] p-text"
+                        title={mission.limits.tokens === undefined
+                          ? "Metered, uncapped in tokens."
+                          : `${mission.remaining.tokens?.toLocaleString() ?? 0} of ${mission.limits.tokens.toLocaleString()} tokens left.`}
+                      >{fmtTokens(mission.spent.tokens)}</Num>
+                    </td>
+                    <td className="py-1 text-right w-12">
+                      <Num
+                        className="text-[11px] p-text-3"
+                        title="A share of the windowed total above would be wrong here: this row is cumulative and that one is a window."
+                      >—</Num>
+                    </td>
+                    {neurons && <td className="py-1 text-right w-16"><Num className="text-[11px] p-text-3">—</Num></td>}
+                    <td className="py-1 text-right w-16">
+                      <Num
+                        className="text-[11px] p-text-2"
+                        title={mission.pricing.source === "catalog"
+                          ? "Every token priced from the models.dev catalog."
+                          : `${mission.pricing.blendedTokens.toLocaleString()} of these tokens were priced at the blended fallback rate, not catalog rates.`}
+                      >
+                        {fmtUsd(mission.spent.usd)}
+                        {mission.limits.usd !== undefined && (
+                          <span className="p-text-3"> / {fmtUsd(mission.limits.usd)}</span>
+                        )}
+                      </Num>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            )}
           </table>
 
           <p className="text-[10px] p-text-3 leading-relaxed mt-2.5 pt-2.5 border-t p-border">
@@ -503,6 +547,14 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
             {caveat === null
               && " Nothing qualifies these totals: they are the workspace's whole spend over its whole log."}
           </p>
+
+          {spend.offTurnShare !== null && (
+            <p className="text-[10px] p-text-3 leading-relaxed mt-1.5">
+              <Num className="p-text-2">{fmtPct(spend.offTurnShare, 1)}</Num> of the measured tokens
+              went on work no turn of this agent ran — judges, the fast tier, the evolution engine,
+              heads, rollouts. The hero figure above this block counts none of it.
+            </p>
+          )}
 
           {neurons && (
             <p className="text-[10px] p-text-3 leading-relaxed mt-1.5">

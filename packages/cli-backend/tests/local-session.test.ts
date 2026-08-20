@@ -1845,7 +1845,7 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
     expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM turn_review_queue`).get()?.c).toBe(0);
     const drained = events.flatMap((e) =>
       e.type === 'evolution' && e.event === 'deferred_reviews_drained' ? [e.message] : []);
-    expect(drained).toEqual(['0 deferred turn review(s) run, 1 unreadable row(s) refused']);
+    expect(drained).toEqual(['0 deferred turn review(s) run, 1 unreadable row(s) dropped']);
     await next.end();
   });
 

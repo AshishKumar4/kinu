@@ -63,7 +63,7 @@ describe('EvolutionEngine.deferTurnReview — the one-shot turn-lane exit', () =
     expect(deferred.engine.deferTurnReview(makeTurn(), followup)).toBe('queued');
     // Deferring records nothing by itself: the verdict does not exist yet.
     expect(listTurnOutcomes(deferred.rt.storage.sql)).toEqual([]);
-    expect(await deferred.engine.runDeferredTurnReviews()).toEqual({ reviewed: 1, refused: 0 });
+    expect(await deferred.engine.runDeferredTurnReviews()).toEqual({ reviewed: 1, refused: [] });
 
     const inlineRows = listTurnOutcomes(inline.rt.storage.sql);
     const deferredRows = listTurnOutcomes(deferred.rt.storage.sql);
@@ -110,7 +110,8 @@ describe('EvolutionEngine.deferTurnReview — the one-shot turn-lane exit', () =
     void rt.storage.sql`INSERT INTO turn_review_queue (id, turn, followup, queued_at)
       VALUES ('rev-corrupt', ${'{not json at all'}, ${'a follow-up'}, 1)`;
 
-    expect(await engine.runDeferredTurnReviews()).toEqual({ reviewed: 0, refused: 1 });
+    expect(await engine.runDeferredTurnReviews())
+      .toEqual({ reviewed: 0, refused: [{ id: 'rev-corrupt', reason: 'unreadable' }] });
     // No verdict was fabricated from an empty turn, and no model was paid to
     // grade one.
     expect(listTurnOutcomes(rt.storage.sql)).toEqual([]);
@@ -135,11 +136,11 @@ describe('EvolutionEngine.deferTurnReview — the one-shot turn-lane exit', () =
     engine.deferTurnReview(makeTurn(), 'that broke the build');
     const reviewTurn = engine.reviewTurn.bind(engine);
     engine.reviewTurn = async () => { throw new Error('the classifier host is down'); };
-    expect(await engine.runDeferredTurnReviews()).toEqual({ reviewed: 0, refused: 0 });
+    expect(await engine.runDeferredTurnReviews()).toEqual({ reviewed: 0, refused: [] });
     expect(countQueuedTurnReviews(rt.storage.sql)).toBe(1);   // carried forward
 
     engine.reviewTurn = reviewTurn;
-    expect(await engine.runDeferredTurnReviews()).toEqual({ reviewed: 1, refused: 0 });
+    expect(await engine.runDeferredTurnReviews()).toEqual({ reviewed: 1, refused: [] });
     expect(listTurnOutcomes(rt.storage.sql)).toHaveLength(1);
   });
 
@@ -150,7 +151,7 @@ describe('EvolutionEngine.deferTurnReview — the one-shot turn-lane exit', () =
       engine.deferTurnReview(makeTurn({ turnId: `msg-${i}` }), `follow-up ${i}`);
     }
     expect(await engine.runDeferredTurnReviews())
-      .toEqual({ reviewed: MAX_TURN_REVIEWS_PER_OPEN, refused: 0 });
+      .toEqual({ reviewed: MAX_TURN_REVIEWS_PER_OPEN, refused: [] });
     expect(countQueuedTurnReviews(rt.storage.sql)).toBe(3);   // the rest waits for the next open
     // Oldest first: a later turn's lesson is worth more with the earlier one's
     // already in the ledger.
@@ -189,6 +190,6 @@ describe('EvolutionEngine.deferTurnReview — the one-shot turn-lane exit', () =
     const engine = new EvolutionEngine(rt, { enabled: false });
     engine.deferTurnReview(makeTurn(), 'anything');
     expect(countQueuedTurnReviews(rt.storage.sql)).toBe(0);
-    expect(await engine.runDeferredTurnReviews()).toEqual({ reviewed: 0, refused: 0 });
+    expect(await engine.runDeferredTurnReviews()).toEqual({ reviewed: 0, refused: [] });
   });
 });

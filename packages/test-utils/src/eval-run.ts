@@ -26,8 +26,8 @@
  */
 import { execFileSync } from 'node:child_process';
 import * as v from 'valibot';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import type { LiveModelSpend } from './live-model';
 import {
   BUILTIN_TOOLS, minimumPairsForSignificance, requiredPairs,
@@ -128,9 +128,9 @@ export type EvalObservation =
      * `file` produced no gradable edit signal however well it did the task.
      *
      * Optional for exactly one reason: `tests/eval/runs/flash-a.json` and
-     * `flash-b.json` were written before it was recorded, and they are the only
-     * baseline this tier has. Every record written from now on sets it. Read it
-     * with `?? []` rather than assuming presence.
+     * `flash-b.json` were written before it was recorded, and both are still
+     * read — as history, not as baselines. Every record written from now on sets
+     * it. Read it with `?? []` rather than assuming presence.
      */
     readonly toolNames?: readonly string[];
     readonly tokensIn: number;
@@ -206,10 +206,9 @@ export interface EvalRunRecord {
    * population and averaging them would answer no one's question.
    *
    * Optional for exactly one reason: `tests/eval/runs/flash-a.json` and
-   * `flash-b.json` were written before it existed, and they are the only
-   * baseline this tier has, under hand-named runIds (`flash-a`) a reader cannot
-   * derive a family from. Every record written from now on sets it; absence
-   * reads as pre-family, never as a guessed name.
+   * `flash-b.json` were written before it existed, under hand-named runIds
+   * (`flash-a`) a reader cannot derive a family from. Every record written from
+   * now on sets it; absence reads as pre-family, never as a guessed name.
    */
   readonly family?: string;
   /** The commit the code under test was at, and whether the tree was dirty.
@@ -240,6 +239,12 @@ export interface EvalRunRecord {
    * published tool-failure count named no call and could not be investigated at
    * all. `resolveArtifactRoot` (scripts/bench-retention.ts) is what refuses a
    * swept location, and there is no opt-out.
+   *
+   * The two stored baselines do not carry it, which is why neither could be
+   * upgraded and both were retired: the directory that would explain their one
+   * inert attempt was deleted by the teardown described above. `readRunRecord`
+   * validates the envelope only, so their absence is a value the triage
+   * instrument reports rather than a crash.
    */
   readonly transcripts: string;
 }
@@ -417,7 +422,7 @@ export interface RunRecordInputs {
   readonly repoRoot: string;
 }
 
-export function assembleRunRecord(inputs: RunRecordInputs): EvalRunRecord {
+function assembleRunRecord(inputs: RunRecordInputs): EvalRunRecord {
   return {
     schema: 1,
     runId: `${inputs.family}-${inputs.tier}-${String(Date.now())}`,
@@ -446,9 +451,49 @@ export function assembleRunRecord(inputs: RunRecordInputs): EvalRunRecord {
   };
 }
 
-export function writeRunRecord(path: string, record: EvalRunRecord): void {
+function writeRunRecord(path: string, record: EvalRunRecord): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(record, null, 2)}\n`);
+}
+
+/**
+ * Publish a run's record, or say why there is none. The ONLY path that writes
+ * one.
+ *
+ * A run that attempted nothing is not evidence, and a record of one is worse
+ * than no record at all: 81 of the corpus's first 89 records were that shape.
+ * Every case skipped for want of a credential — `skipIf(!TARGET)` — and each
+ * arm's `afterAll` wrote the record regardless, so the largest group the triage
+ * instrument found was one fact repeated 45 times, over runs that never ran.
+ *
+ * The guard lives here, not in three `afterAll` blocks, and `assembleRunRecord`
+ * and `writeRunRecord` are module-private behind it. That is what makes the
+ * shape structurally unavailable rather than merely fixed in the three families
+ * that have it today: a fourth family cannot reintroduce it without editing
+ * this function.
+ *
+ * The destination is `PROTEUS_EVAL_RECORD` when set, and otherwise the run's own
+ * transcripts directory — the record beside the trajectories its scores were
+ * computed from. `tests/eval/runs/` holds PUBLISHED records, committed
+ * deliberately by whoever publishes the number; the default used to point there
+ * and one local scripted-model run reached the primary checkout and blocked a
+ * deploy, because `deploy.sh` correctly refuses a dirty tree.
+ *
+ * Returns the record it wrote, or null when it wrote nothing.
+ */
+export function publishRunRecord(inputs: RunRecordInputs): EvalRunRecord | null {
+  if (inputs.observations.length === 0) {
+    console.warn(`\nNO RECORD: the ${inputs.family} run attempted 0 of `
+      + `${String(inputs.declaredTasks.length)} declared task(s), so it measured nothing and `
+      + 'the corpus takes no record of it. Every case skipped — with no credential that is '
+      + "the tier's normal credential-free pass, and `[skip]` above says which reason.\n");
+    return null;
+  }
+  const record = assembleRunRecord(inputs);
+  const out = process.env.PROTEUS_EVAL_RECORD ?? join(inputs.transcripts, 'run-record.json');
+  writeRunRecord(out, record);
+  console.log(`\n${formatRunRecord(record)}\n\nrecord: ${out}\n`);
+  return record;
 }
 
 /** The version marker every stored record must carry. Validated rather than
@@ -468,6 +513,28 @@ export function readRunRecord(path: string): EvalRunRecord {
   // from an `EvalRunRecord`. Re-validating every nested field would restate the
   // whole type as a second declaration free to drift from the first.
   return raw as EvalRunRecord;
+}
+
+/**
+ * Every record path under a root: `<root>/<run>/run-record.json` for an artifact
+ * root, `<root>/*.json` for the published-records directory.
+ *
+ * Both readers need the same answer — `scripts/eval-report.ts` renders the
+ * corpus and `scripts/eval-triage.ts` triages it — and a second copy of this
+ * walk is how one reader comes to read a corpus the other cannot see.
+ */
+export function runRecordPaths(root: string): string[] {
+  if (!existsSync(root)) return [];
+  const paths: string[] = [];
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      const candidate = join(root, entry.name, 'run-record.json');
+      if (existsSync(candidate)) paths.push(candidate);
+    } else if (entry.name.endsWith('.json')) {
+      paths.push(join(root, entry.name));
+    }
+  }
+  return paths.sort();
 }
 
 /**

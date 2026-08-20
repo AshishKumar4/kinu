@@ -2,14 +2,14 @@
 // Cloudflare IdP must attach the Workers AI credential (with its refresh
 // token) to the user's UserDO in the same authorization — one login grants
 // both app access and AI. Drives the real /auth/cloudflare/callback handler
-// against the real D1 auth schema, faking only the network seams.
+// against the real KV auth store, faking only the network seams.
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
 import { handleAuthRequest } from '../src/auth/routes';
-import { createOAuthState } from '../src/auth/d1-store';
+import { createOAuthState } from '../src/auth/store';
 import { CLOUDFLARE_WORKERS_AI_SCOPES } from '../src/lib/cloudflare-oauth';
 import { asFetchFunction, DEFAULT_WORKERS_AI_MODEL_SPEC, type OAuthCredential } from '@kinu/core';
-import { createAuthDatabase, makeD1 } from './helpers/d1';
+import { makeKv, type FakeKv } from './helpers/kv';
 import type { UserCaller } from '../src/user/workspace-capability';
 
 const ORIGIN = 'https://proteus.example.com';
@@ -20,7 +20,7 @@ interface TestNamespace<Stub> {
 }
 
 interface CloudflareLoginTestBindings<UserStub, AgentStub> {
-  AUTH_DB: D1Database;
+  AUTH_KV: FakeKv;
   UserDO: TestNamespace<UserStub>;
   OrchestratorAgent: TestNamespace<AgentStub>;
   CLOUDFLARE_OAUTH_CLIENT_ID: string;
@@ -31,12 +31,13 @@ interface CloudflareLoginTestBindings<UserStub, AgentStub> {
 function testEnv<UserStub, AgentStub>(bindings: CloudflareLoginTestBindings<UserStub, AgentStub>): Env {
   const env: Partial<Env> = {};
   Object.assign(env, bindings);
-  // SAFETY: The callback reads exactly the constructed D1 database, namespaces,
+  // SAFETY: The callback reads exactly the constructed KV namespace, namespaces,
   // OAuth client values, and credential key; every reachable binding is present above.
   return env as Env;
 }
 
 function setupEnv() {
+  const kv = makeKv();
   const credentials: Array<{ key: string; credential: OAuthCredential }> = [];
   const config = new Map<string, string>();
   const userDO = {
@@ -49,14 +50,14 @@ function setupEnv() {
     async listWorkspaces(_caller: UserCaller) { return []; },
   };
   const env = testEnv({
-    AUTH_DB: makeD1(createAuthDatabase()),
+    AUTH_KV: kv,
     UserDO: { idFromName: (name: string) => name, get: () => userDO },
     OrchestratorAgent: { idFromName: (name: string) => name, get: () => ({ async onCredentialsChanged() {} }) },
     CLOUDFLARE_OAUTH_CLIENT_ID: 'cf-client-id',
     CLOUDFLARE_OAUTH_CLIENT_SECRET: 'cf-client-secret',
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   });
-  return { env, credentials, config };
+  return { env, kv, credentials, config };
 }
 
 function fakeCloudflareNetwork(tokens: { access_token: string; refresh_token?: string }) {
@@ -96,8 +97,8 @@ function fakeCloudflareNetwork(tokens: { access_token: string; refresh_token?: s
   return { fetchFake, tokenRequests };
 }
 
-async function loginViaCloudflare(env: Env): Promise<Response> {
-  const { state } = await createOAuthState(env.AUTH_DB, {
+async function loginViaCloudflare(env: Env, kv: FakeKv): Promise<Response> {
+  const { state } = await createOAuthState(kv, {
     provider: 'cloudflare',
     codeVerifier: 'test-code-verifier-test-code-verifier-test-1',
     nonce: null,
@@ -114,7 +115,7 @@ async function loginViaCloudflare(env: Env): Promise<Response> {
 
 describe('Cloudflare IdP login attaches the Workers AI credential', () => {
   test('one login grants both the app session and a refreshable AI credential', async () => {
-    const { env, credentials, config } = setupEnv();
+    const { env, kv, credentials, config } = setupEnv();
     const { fetchFake, tokenRequests } = fakeCloudflareNetwork({
       access_token: 'cf-access-1',
       refresh_token: 'cf-refresh-1',
@@ -122,7 +123,7 @@ describe('Cloudflare IdP login attaches the Workers AI credential', () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = fetchFake;
     try {
-      const response = await loginViaCloudflare(env);
+      const response = await loginViaCloudflare(env, kv);
       expect(response.status).toBe(302);
       expect(response.headers.get('location')).toBe(`${ORIGIN}/`);
       expect(response.headers.get('set-cookie')).toContain('__Host-proteus_session=');
@@ -150,13 +151,13 @@ describe('Cloudflare IdP login attaches the Workers AI credential', () => {
   });
 
   test('re-login re-attaches a fresh credential over the stored one', async () => {
-    const { env, credentials } = setupEnv();
+    const { env, kv, credentials } = setupEnv();
     const originalFetch = globalThis.fetch;
     try {
       globalThis.fetch = fakeCloudflareNetwork({ access_token: 'cf-access-1', refresh_token: 'cf-refresh-1' }).fetchFake;
-      await loginViaCloudflare(env);
+      await loginViaCloudflare(env, kv);
       globalThis.fetch = fakeCloudflareNetwork({ access_token: 'cf-access-2', refresh_token: 'cf-refresh-2' }).fetchFake;
-      await loginViaCloudflare(env);
+      await loginViaCloudflare(env, kv);
       expect(credentials.map((c) => c.credential.accessToken)).toEqual(['cf-access-1', 'cf-access-2']);
       expect(credentials[1].credential.refreshToken).toBe('cf-refresh-2');
     } finally {

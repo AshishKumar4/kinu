@@ -1,7 +1,9 @@
 import {
   decodeJsonValue, formatScoreInterval, JsonArraySchema, JsonObjectSchema, JsonValueSchema,
-  renderAlignmentConvergence, renderCalibrationReport,
-  type AlignmentConvergence, type GepaOptimizationResult, type JsonObject, type JsonValue, type SearchNode,
+  renderAlignmentConvergence, renderCalibrationReport, SPEND_SOURCES, SPEND_SOURCE_LABEL, UsageSchema, usageTotal,
+  type AlignmentConvergence, type GepaOptimizationResult, type JsonObject, type JsonValue,
+  type MissionBudgetSnapshot, type ProducerSpend, type SearchNode, type Usage,
+  type WorkspaceSpend,
 } from '@kinu/core';
 import * as v from 'valibot';
 import { resolveAgentTarget } from '../agent-target';
@@ -13,6 +15,7 @@ import { ACCENT, DIM, ERR, OK, printSearchTree, WARN } from '../display';
 import {
   executeLocalExecutor,
   getLocalAgentState,
+  getLocalWorkspaceSpend,
   getLocalAlignment,
   getLocalGepaRun,
   getLocalMctsNode,
@@ -84,6 +87,44 @@ const ExecutorOutputSchema: v.GenericSchema<ExecutorOutput> = v.object({
   stdout: v.optional(v.string()), stderr: v.optional(v.string()), exitCode: v.optional(v.number()), error: v.optional(v.string()),
 });
 
+/** The cost half of `getActivitySnapshot`, as this CLI parses it off the wire.
+ *
+ *  `v.GenericSchema<T>` against core's own types is what stops this drifting:
+ *  a field added to `WorkspaceSpend` fails to compile here until it is parsed,
+ *  rather than being silently dropped from the terminal's copy of the panel.
+ *  Only `spend` is declared — the snapshot's other halves are the web panel's
+ *  and parsing them here would be a second mirror of them with no reader. */
+const ProducerSpendSchema: v.GenericSchema<ProducerSpend> = v.object({
+  source: v.picklist(SPEND_SOURCES), calls: v.number(), callsWithoutUsage: v.number(),
+  usage: UsageSchema, usd: v.optional(v.number()), unpricedCalls: v.number(),
+});
+const MissionBudgetSnapshotSchema: v.GenericSchema<MissionBudgetSnapshot> = v.object({
+  label: v.string(), parent: v.nullable(v.string()),
+  limits: v.object({ usd: v.optional(v.number()), tokens: v.optional(v.number()) }),
+  spent: v.object({ tokens: v.number(), usd: v.number() }),
+  remaining: v.object({ tokens: v.optional(v.number()), usd: v.optional(v.number()) }),
+  pricing: v.object({
+    blendedTokens: v.number(), source: v.picklist(['catalog', 'blended', 'mixed']),
+  }),
+  calls: v.number(), spawns: v.number(), exhausted: v.boolean(),
+});
+const WorkspaceSpendSchema: v.GenericSchema<WorkspaceSpend> = v.object({
+  producers: v.array(ProducerSpendSchema),
+  total: v.object({
+    calls: v.number(), callsWithoutUsage: v.number(), usage: UsageSchema,
+    usd: v.optional(v.number()), unpricedCalls: v.number(),
+  }),
+  coverage: v.object({
+    calls: v.number(), measured: v.number(), reported: v.nullable(v.number()),
+    silent: v.array(v.picklist(SPEND_SOURCES)), partial: v.array(v.picklist(SPEND_SOURCES)),
+  }),
+  offTurnShare: v.nullable(v.number()),
+  missions: v.array(MissionBudgetSnapshotSchema),
+  windowLimit: v.number(),
+  complete: v.boolean(),
+});
+const ActivitySpendSchema = v.object({ spend: WorkspaceSpendSchema });
+
 export async function stopCommand(name: string, opts: InspectOpts = {}): Promise<void> {
   const target = resolveAgentTarget(name);
   if (target.mode === 'cloud') {
@@ -114,6 +155,91 @@ export async function stateCommand(name: string, opts: InspectOpts = {}): Promis
     local: () => decodeJsonValue({ value: getLocalAgentState(target.localName) }),
   });
   printData(data, opts);
+}
+
+/**
+ * What the WHOLE workspace spent, on both axes — the terminal's copy of the web
+ * panel's cost block, over the same read model and the same window.
+ *
+ * The default hero figure everywhere else is the turn loop's own cost, and a
+ * reader who stops there cannot tell that a judge ensemble, an evolution pass or
+ * a fork of exploration heads ran at all. This prints what each KIND of work
+ * spent, what each declared MISSION spent, and the share that went on work no
+ * turn ran.
+ */
+export async function spendCommand(name: string, opts: InspectOpts = {}): Promise<void> {
+  const target = resolveAgentTarget(name);
+  const windowLimit = parseLimit(opts.limit, SPEND_WINDOW);
+  const spend = await readTarget<WorkspaceSpend>(target, {
+    cloud: async (auth) => (await callAgentRpc(
+      auth.origin, auth.token, target.cloudName,
+      'getActivitySnapshot', ActivitySpendSchema, [{ steps: windowLimit }],
+    )).spend,
+    local: () => getLocalWorkspaceSpend(target.localName, windowLimit),
+  });
+  if (opts.json) {
+    printJson(decodeJsonValue({ value: spend }));
+    return;
+  }
+  printSpend(spend);
+}
+
+/** The window the web panel reads over (cf ACTIVITY_STEP_WINDOW). One number for
+ *  both surfaces, so the same workspace does not report two totals. */
+const SPEND_WINDOW = 2000;
+
+function printSpend(spend: WorkspaceSpend): void {
+  const measured = usageTotal(spend.total.usage);
+  const scope = spend.complete ? 'whole log' : `newest ${spend.windowLimit} rows of each kind`;
+  console.log(`${ACCENT('Workspace spend')} ${DIM(`${plural(spend.coverage.calls, 'call')} · ${scope}`)}`);
+  if (spend.coverage.calls === 0) {
+    console.log(DIM('No model call has been attributed yet.'));
+    return;
+  }
+
+  console.log(DIM('By producer'));
+  for (const p of spend.producers) {
+    console.log(`  ${ACCENT(SPEND_SOURCE_LABEL[p.source].padEnd(18))} ${spendCells(p.usage, p.usd, p.calls)}`);
+  }
+  console.log(`  ${ACCENT('Total'.padEnd(18))} ${spendCells(spend.total.usage, spend.total.usd, spend.total.calls)}`);
+
+  if (spend.missions.length > 0) {
+    // Cumulative, not windowed: a cap is cumulative, so this is the figure the
+    // cap is read against. Stated because the two halves must not be added.
+    console.log(DIM('By mission (whole life, not the window above)'));
+    for (const m of spend.missions) {
+      const cap = m.limits.usd !== undefined ? ` / $${m.limits.usd.toFixed(2)}`
+        : m.limits.tokens !== undefined ? ` / ${m.limits.tokens.toLocaleString()} tokens` : '';
+      const state = m.exhausted ? ` ${ERR('spent')}` : '';
+      console.log(`  ${ACCENT(m.label.padEnd(18))} ${m.spent.tokens.toLocaleString()} tokens  `
+        + `$${m.spent.usd.toFixed(4)}${cap}  ${DIM(`${plural(m.calls, 'call')} · ${m.pricing.source}`)}${state}`);
+    }
+  }
+
+  const reported = spend.coverage.reported;
+  if (reported !== null) {
+    console.log(DIM(`${(reported * 100).toFixed(reported === 1 ? 0 : 1)}% of ${spend.coverage.calls} known calls reported usage`
+      + (spend.coverage.silent.length > 0
+        ? `; nothing at all was measured from ${spend.coverage.silent.map((s) => SPEND_SOURCE_LABEL[s]).join(', ')}`
+        : '')));
+  }
+  if (spend.offTurnShare !== null) {
+    console.log(DIM(`${(spend.offTurnShare * 100).toFixed(1)}% of the ${(measured ?? 0).toLocaleString()} measured `
+      + 'tokens went on work no turn of this agent ran'));
+  }
+  if (!spend.complete) {
+    console.log(WARN(`The log is longer than ${spend.windowLimit} rows, so these producer figures are a floor.`));
+  }
+}
+
+const plural = (n: number, noun: string): string => `${n} ${noun}${n === 1 ? '' : 's'}`;
+
+/** One producer row's numbers. An absent count is printed as an em dash, never
+ *  as 0 — a provider that reported nothing did not report nothing spent. */
+function spendCells(usage: Usage, usd: number | undefined, calls: number): string {
+  const tokens = usageTotal(usage);
+  return `${tokens === undefined ? DIM('unmeasured') : `${tokens.toLocaleString()} tokens`}  `
+    + `${usd === undefined ? DIM('unpriced') : `$${usd.toFixed(4)}`}  ${DIM(plural(calls, 'call'))}`;
 }
 
 export async function memoryCommand(name: string, queryParts: string[] = [], opts: InspectOpts = {}): Promise<void> {

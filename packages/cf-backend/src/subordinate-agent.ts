@@ -161,6 +161,10 @@ export class SubordinateAgent extends ActorAgent {
     if (!this._engine) {
       this._engine = new EvolutionEngine(this.rt, {
         enabled: true,
+        // The turn review's own model calls debit the mission the reviewed turn
+        // ran under — the same ledger, through the same seam, as the work it
+        // reviews. Unbudgeted turns never reach it.
+        governor: this.budget,
         ...this.shadowTrialPorts,
       });
     }

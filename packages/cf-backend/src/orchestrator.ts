@@ -41,7 +41,6 @@ import {
   TOOL_REACH,
   updateCraftScores,
   feedbackToQuality,
-  migrateCraftedToolDuplicates,
   // Fork feature
   forkWorkspace, writeForkSnapshot,
   type ForkTransport, type ForkSnapshot,
@@ -181,6 +180,7 @@ import {
   DeferredApprovalQueue, DeferredApprovalStore,
   type DeferredApproval, type DeferredApprovalAnswer, type DeferredApprovalChannel,
   type DeferredApprovalNotice, type ApprovalGrant,
+  TURN_AUTHOR_METADATA_KEY,
 } from "@kinu/core";
 import type { CodemodeProvider, MctsSearchRunSummary } from "@kinu/core";
 import { diagnostics, renderThrownChain, toProteusError } from "@kinu/core/obs";
@@ -211,6 +211,26 @@ const STALE_SCHEDULE_HORIZON_MS = 24 * 60 * 60 * 1000;
 // means something and shallow enough to stay one cheap indexed read.
 const ACTIVITY_STEP_WINDOW = 400;
 const ACTIVITY_LOG_WINDOW = 200;
+
+/**
+ * Widest single stream one terminal row carries out of `executor_output`.
+ *
+ * 16 KiB is roughly 200 lines at 80 columns — deeper than any command output a
+ * person reads in the pane, and three orders of magnitude below what the read
+ * was actually answering with: 12.89 MiB across 36 rows on one production
+ * workspace, measured 2026-08-20, five rows over 1.7 MiB each. The clip is
+ * always declared, never silent — see {@link OrchestratorAgent.getExecutorOutput}.
+ */
+const EXECUTOR_OUTPUT_CLIP = 16 * 1024;
+
+/** One clipped `executor_output` row. `stdout_len`/`stderr_len` are the STORED
+ *  lengths, so a reader can tell a short command from a clipped one. */
+interface ExecutorOutputRow {
+  id: string; executor: string; command: string;
+  stdout: string; stdout_len: number;
+  stderr: string; stderr_len: number;
+  exit_code: number; created_at: number;
+}
 
 const FileRestoreChangeSchema = v.object({
   path: v.string(),
@@ -548,6 +568,10 @@ export class OrchestratorAgent extends ActorAgent {
     if (!this._engine) {
       this._engine = new EvolutionEngine(this.rt, {
         enabled: true,
+        // The turn review's own model calls debit the mission the reviewed turn
+        // ran under — the same ledger, through the same seam, as the work it
+        // reviews. Unbudgeted turns never reach it.
+        governor: this.budget,
         // The same sink an agent-initiated agents(action:'swarm') uses — one
         // broadcast for every search this workspace runs (ActorAgent).
         onMctsProgress: (event) => this.onMctsProgress(event),
@@ -1449,7 +1473,6 @@ export class OrchestratorAgent extends ActorAgent {
    *  it is visible in the diff; `scripts/do-init-gate.ts` is what refuses the
    *  widening. */
   onStart(): void {
-    const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
     this.ensureSchema();
     // Runs inside `Agent.alarm()`'s initialization, i.e. before the SDK reads
     // the due rows — so a backlog is pruned rather than dispatched in one go.
@@ -1468,26 +1491,6 @@ export class OrchestratorAgent extends ActorAgent {
     } catch (err) {
       diagnostics.failure('event.stale_delivery_unbind_failed', toProteusError({
         doing: 'unbinding event deliveries a dead activation left leased',
-        cause: err,
-        otherwise: 'io',
-      }));
-    }
-
-    // one-time per-agent migration that merges case-collision
-    // duplicates in crafted_tools + craft_scores left over from older
-    // code that lowercased names. Gated by _v2_codegen_migration_done.
-    try {
-      const report = migrateCraftedToolDuplicates(this.boundSql, execRaw);
-      if (report.ranMigration && report.mergedGroups > 0) {
-        diagnostics.event('tool.duplicates_merged', {
-          groups: report.mergedGroups,
-          craftedToolRows: report.rowsDeletedCraftedTools,
-          craftScoreRows: report.rowsDeletedCraftScores,
-        });
-      }
-    } catch (err) {
-      diagnostics.failure('tool.duplicate_merge_failed', toProteusError({
-        doing: 'merging case-collision duplicates in the crafted-tool store',
         cause: err,
         otherwise: 'io',
       }));
@@ -2730,8 +2733,12 @@ export class OrchestratorAgent extends ActorAgent {
       // silent ones into `stepsWithoutUsage` so the totals carry their own
       // denominator instead of quietly under-counting.
       telemetry: summarizeSteps(steps, { windowLimit }),
+      // Both axes of the same money, from one read: the producer rows and the
+      // per-mission rows. `this.budget.snapshot()` is deliberately NOT read
+      // beside it — it answers a narrower question (the labels the turn in
+      // flight is under) out of the same ledger, and two mission figures on one
+      // panel is how a reader learns to distrust both.
       spend: workspaceSpend({ events: this.eventRecorder, sql: this.boundSql }, { windowLimit }),
-      budgets: this.budget.snapshot(),
       log: readActivityLog(this.boundSql, logLimit),
     };
   }
@@ -2745,12 +2752,16 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /** MCP `run_task`: deliver a task signal through the SAME seam the event→turn
-   *  reactor and background-job wake use. Not a new execution path. */
+   *  reactor and background-job wake use. Not a new execution path.
+   *
+   *  The words are whoever is driving the MCP client — the operator, not the
+   *  harness — so the signal names its author and the chat keeps its bubble. */
   async runTaskFromMcp(text: string): Promise<EnqueueTurnResult> {
     const trimmed = text.trim();
     if (!trimmed) throw new Error('run_task requires non-empty text');
     const outcome = await this.orch.signals.deliver({
       kind: 'mcp', text: trimmed,
+      metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator' },
     });
     return { status: outcome === 'undelivered' ? 'skipped' : 'queued' };
   }
@@ -2960,30 +2971,58 @@ export class OrchestratorAgent extends ActorAgent {
     return this.getTeamToolDeps().dismiss({ name, requestedBy: 'user' });
   }
 
+  /**
+   * Recent commands on one executor, with each stream CLIPPED to
+   * {@link EXECUTOR_OUTPUT_CLIP} characters and its true length beside it.
+   *
+   * The clip is the fix for a measured unbounded read, not a nicety. `stdout`
+   * holds whatever a command printed, an agent's command may print a file, and
+   * this read is on the workspace's initial load: one production workspace
+   * answered 12.89 MiB across 36 rows on 2026-08-20, five of them over 1.7 MiB
+   * each, against a median row of 0.3 KiB. A terminal cannot render that and
+   * the reader never asked for it.
+   *
+   * `stdout_len` is the whole row's length, so the pane states what it is not
+   * showing instead of presenting a prefix as the output. SQLite counts TEXT in
+   * characters for both `length` and `substr`, so the two agree.
+   */
   async getExecutorOutput(executorId: string, limit: number = 50) {
-    return this.sql`SELECT id, executor, command, stdout, stderr, exit_code, created_at
+    return this.sql<ExecutorOutputRow>`SELECT id, executor, command,
+        substr(stdout, 1, ${EXECUTOR_OUTPUT_CLIP}) AS stdout, length(stdout) AS stdout_len,
+        substr(stderr, 1, ${EXECUTOR_OUTPUT_CLIP}) AS stderr, length(stderr) AS stderr_len,
+        exit_code, created_at
       FROM executor_output WHERE executor = ${executorId}
       ORDER BY created_at DESC LIMIT ${limit}`;
   }
 
   /**
-   * One-round-trip initial load. Composes the per-surface read RPCs (status,
-   * tools, memory, the exploration canvas, timeline, executors + their recent
-   * output) into a single payload, so the workspace first-paint is one WS call
-   * instead of 6 + N. A read that fails fails the snapshot: an empty Timeline or
-   * an empty tool list is a claim about the workspace, and a per-field fallback
-   * makes a broken read indistinguishable from a quiet one. Live updates still
-   * arrive via the granular refresh + events.
+   * One-round-trip initial load: what the workspace IS (status, tools, memory),
+   * what it can run (executors and their recent output), and whether a plan is
+   * waiting on the owner. A read that fails fails the snapshot — an empty tool
+   * list is a claim about the workspace, and a per-field fallback makes a broken
+   * read indistinguishable from a quiet one. Live updates arrive via the
+   * granular refresh + events.
+   *
+   * TWO FIELDS WERE REMOVED HERE AND NEITHER IS COMING BACK AS A SEED. This
+   * payload used to carry `getExplorationCanvas()` and `getRunTimeline({limit:
+   * 250})`. Measured against production on 2026-08-20, the canvas page was 499
+   * KiB on one workspace and 824 KiB on another — a page composes thirty runs
+   * and every one of their heads — and it seeded exactly one thing: the tree map
+   * the Exploration surface then rebuilds from its OWN `getExplorationCanvas`
+   * read the moment it mounts. The timeline was 250 merged spans that no
+   * component reads at all; `kinu timeline` calls `getRunTimeline` itself.
+   * The chat pane paid both on every workspace open while showing neither. A
+   * surface that is not open does not get to be on the critical path of the one
+   * that is.
    */
   @callable()
   async getWorkspaceSnapshot() {
-    const [status, tools, memoryContent, exploration, timeline, executors] = await Promise.all([
+    const [status, tools, memoryContent, executors, activePlan] = await Promise.all([
       this.getAgentStatus(),
       this.getToolDescriptions(),
       this.getMemoryContent(),
-      this.getExplorationCanvas(),
-      this.getRunTimeline({ limit: 250 }),
       this.getExecutors(),
+      this.getActivePlanReview(),
     ]);
     const executorOutputs = await Promise.all(
       executors.map(async (e) => ({
@@ -2992,7 +3031,7 @@ export class OrchestratorAgent extends ActorAgent {
       })),
     );
     const lastActiveExecutor = this.config.getLastActiveExecutor();
-    return { status, tools, memoryContent, exploration, timeline, executors, executorOutputs, lastActiveExecutor };
+    return { status, tools, memoryContent, executors, executorOutputs, lastActiveExecutor, activePlan };
   }
 
   @callable() async executeInExecutor(executorId: string, command: string) {

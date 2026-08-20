@@ -76,8 +76,9 @@ import {
 import {
   initTurnReviewQueueTable, queueTurnReview, takeQueuedTurnReviews, dropQueuedTurnReview,
   countQueuedTurnReviews, MAX_TURN_REVIEWS_PER_OPEN,
-  type TurnReviewQueueOutcome, type DeferredReviewDrain,
+  type TurnReviewQueueOutcome, type DeferredReviewDrain, type RefusedTurnReview,
 } from './review-queue';
+import { MissionBudgetExhausted } from '../mission-budget';
 import { formatScoreInterval, lossInterval } from '../utils/stats';
 import { buildChangelog } from './changelog';
 import { delegationFeatures, renderDelegationFeatures } from './delegation-features';
@@ -260,6 +261,31 @@ export class EvolutionEngine {
     return this.rt.fastLlm ?? this.rt.llm;
   }
 
+  /**
+   * The mechanical tier, bounded by the mission that caused the work.
+   *
+   * A turn review is spend the user never asked for and never sees: three fast
+   * completions fired after the answer, on a lane the turn accumulator has
+   * already closed. Under a declared mission that spend is the mission's, so it
+   * goes through the SAME `govern` seam the swarm's model calls do — one
+   * enforcement path, one ledger, one refusal.
+   *
+   * The labels come off the TURN, never off the governor's active scope. A
+   * deferred review runs in another process at another time, where the active
+   * scope is either empty or some later turn's, and debiting a mission for work
+   * it did not cause is worse than not debiting at all.
+   *
+   * An unlabelled turn gets the bare model: `govern` returns the `LLM` unwrapped
+   * for an empty scope, so an ordinary session issues no query and cannot be
+   * refused.
+   */
+  private reviewLlm(turn: CompletedTurn): LLM {
+    const labels = turn.missionLabels ?? [];
+    return labels.length === 0
+      ? this.fastLlm
+      : this.config.governor?.govern(this.fastLlm, labels) ?? this.fastLlm;
+  }
+
   /** Whether auto-evolution is on for this workspace session. Read by
    *  AgentOrchestrator so a `--no-auto-evolve` run records no evolution state
    *  at all, rather than buffering turns for a later host to evolve. */
@@ -352,7 +378,7 @@ export class EvolutionEngine {
     } else if (isTrivialTurn(turn)) {
       return; // pre-filter: nothing to accept or correct, no LLM call
     } else if (followup !== null) {
-      const c: OutcomeClassification | null = await classifyTurnOutcome(this.fastLlm, {
+      const c: OutcomeClassification | null = await classifyTurnOutcome(this.reviewLlm(turn), {
         userMessage: turn.userMessage,
         assistantResponse: turn.assistantResponse,
         followup,
@@ -540,18 +566,28 @@ export class EvolutionEngine {
    * A row is retired only once its review has RUN. A review that throws leaves
    * its row for the next open rather than consuming it for work that failed —
    * the same carry-forward rule the session window applies to a host that died
-   * mid-pass. An undecodable row is a different thing and is refused by name in
-   * the reader (never reviewed as a default), which is why the count comes back
-   * separately.
+   * mid-pass. Two of those throws are not faults and are named instead of
+   * logged: an undecodable row is refused by the reader and retired there
+   * (never reviewed as a default), and a mission over its cap is refused by the
+   * governor and left queued. Both come back in `refused`, each carrying the
+   * disposition its reason states.
    */
   async runDeferredTurnReviews(): Promise<DeferredReviewDrain> {
-    if (!this.config.enabled) return { reviewed: 0, refused: 0 };
+    if (!this.config.enabled) return { reviewed: 0, refused: [] };
     const taken = takeQueuedTurnReviews(this.rt.storage.sql, MAX_TURN_REVIEWS_PER_OPEN);
+    const refused: RefusedTurnReview[] = [...taken.refused];
     let reviewed = 0;
     for (const row of taken.reviews) {
       try {
         await this.reviewTurn(row.turn, row.followup);
       } catch (err) {
+        // The governor declining a call is a decision, not a failure. The row
+        // stays exactly where it is: the turn is sound, the mission is simply
+        // spent, and a raised cap makes this review runnable again.
+        if (err instanceof MissionBudgetExhausted) {
+          refused.push({ id: row.id, reason: 'budget' });
+          continue;
+        }
         diagnostics.failure(
           'evolution.deferred_review_failed',
           toProteusError({ doing: 'run a deferred turn review', cause: err, otherwise: 'unavailable' }),
@@ -562,7 +598,7 @@ export class EvolutionEngine {
       dropQueuedTurnReview(this.rt.storage.sql, row.id);
       reviewed++;
     }
-    return { reviewed, refused: taken.refused.length };
+    return { reviewed, refused };
   }
 
   /**
@@ -1030,7 +1066,7 @@ export class EvolutionEngine {
       ? `Tools used: ${turn.toolCalls.map(tc => tc.name).join(', ')}`
       : 'No tools used';
 
-    return this.fastLlm.complete(
+    return this.reviewLlm(turn).complete(
       `A recent interaction landed ${outcome ?? 'unobserved'} at ${quality.toFixed(2)}/1.0 quality.\n` +
       `User asked: "${evidenceWindow(turn.userMessage, EVIDENCE_BUDGETS.outcomeUserMessage)}"\n` +
       `Response: "${summary}"\n` +
@@ -1056,7 +1092,7 @@ export class EvolutionEngine {
       .join('\n');
 
     // Ask the LLM to generalize into a reusable function
-    const generalized = await this.fastLlm.complete(
+    const generalized = await this.reviewLlm(turn).complete(
       `A successful interaction used these tool calls:\n${callSummary}\n\n` +
       `The user asked: "${evidenceWindow(turn.userMessage, EVIDENCE_BUDGETS.outcomeUserMessage)}"\n\n` +
       `Extract a reusable pattern as a JavaScript async arrow function.\n` +

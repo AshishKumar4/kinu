@@ -67,6 +67,7 @@ kinu <command> [options]
 | [`kinu evolve <name>`](#kinu-evolve-name) | Trigger an MCTS evolution cycle |
 | [`kinu jobs <name> [action] [id]`](#kinu-jobs-name-action-id) | List or cancel background jobs |
 | [`kinu state <name>`](#kinu-state-name) | Show the durable workspace state snapshot |
+| [`kinu spend <name>`](#kinu-spend-name) | Show what the whole workspace spent, by producer and by mission |
 | [`kinu memory <name> [query...]`](#kinu-memory-name-query) | Read or search workspace memory |
 | [`kinu events <name>`](#kinu-events-name) | List recent workspace events |
 | [`kinu timeline <name>`](#kinu-timeline-name) | List the run/evolution/MCTS timeline |
@@ -387,6 +388,15 @@ Show the durable workspace state snapshot.
 
 | Option | What it does |
 | --- | --- |
+| `--json` | Print raw JSON |
+
+### kinu spend <name>
+
+Show what the whole workspace spent, by producer and by mission.
+
+| Option | What it does |
+| --- | --- |
+| `--limit <n>` | Event rows read per row type (default 2000) |
 | `--json` | Print raw JSON |
 
 ### kinu memory <name> [query...]

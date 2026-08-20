@@ -1,9 +1,19 @@
+// The CLI device-authorization flow: a terminal asks for a code, a signed-in
+// browser approves it, the terminal polls until a token comes back.
+//
+// Every record here is short-lived by construction — a request is dead ten
+// minutes after it is created, whatever happens to it — so all of it lives in
+// KV under its own expiry and there is no sweep to run. The one durable thing
+// the flow produces, the CLI token, is minted by and stored in the user's own
+// Durable Object.
+
 import type { AuthIdentity } from '../auth/session';
 import type { UserDO } from '../user/user-do';
 import { randomToken, sha256Hex } from '../lib/crypto';
+import { readKvJson, writeKvJson, type KvStore } from '../lib/kv';
 import { parseAccessTokenUserId, type AccessTokenScope } from './access-token-store';
 import { ownerCaller, type OwnerCapabilityEnv } from '../user/workspace-capability';
-import { renderThrownChain } from '@kinu/core/obs';
+import * as v from 'valibot';
 
 /** Thrown when a CLI auth rate limit trips — routes map this (and only
  *  this) to HTTP 429; every other failure is a real error. */
@@ -24,7 +34,9 @@ export class CliAuthCodeError extends Error {
 }
 
 const AUTH_TTL_MS = 10 * 60 * 1000;
-const CLEANUP_RETENTION_MS = 10 * 60 * 1000;
+/** How long a finished request stays readable past its deadline, so a late
+ *  poll is told "already delivered" instead of "unknown request". */
+const RETENTION_MS = 10 * 60 * 1000;
 const POLL_INTERVAL_SECONDS = 5;
 const RATE_WINDOW_MS = 10 * 60 * 1000;
 
@@ -54,20 +66,26 @@ export interface CliAuthRequestInfo {
   user?: { id: string; email: string };
 }
 
-type CliAuthRow = {
-  user_code: string;
-  device_name: string;
-  status: string;
-  origin: string;
-  user_id: string | null;
-  user_email: string | null;
-  token_exp: string | null;
-  expires_at: number;
-  approved_at: number | null;
-};
+/** `expired` is never stored: a request's deadline is in the record and its key
+ *  is gone soon after, so expiry is read off `expiresAt` rather than written. */
+const CliAuthRecordSchema = v.object({
+  userCode: v.string(),
+  deviceName: v.string(),
+  status: v.picklist(['pending', 'approved', 'consumed']),
+  origin: v.string(),
+  userId: v.nullable(v.string()),
+  userEmail: v.nullable(v.string()),
+  createdAt: v.number(),
+  expiresAt: v.number(),
+  approvedAt: v.nullable(v.number()),
+});
+type CliAuthRecord = v.InferOutput<typeof CliAuthRecordSchema>;
+
+const CodePointerSchema = v.object({ deviceHash: v.string() });
+const RateBucketSchema = v.object({ count: v.number(), resetAt: v.number() });
 
 type CliAuthEnv = OwnerCapabilityEnv & {
-  AUTH_DB: D1Database;
+  AUTH_KV: KvStore;
   UserDO: DurableObjectNamespace<UserDO>;
 };
 
@@ -150,119 +168,93 @@ export async function startCliAuth(
   clientKey?: string,
 ): Promise<CliAuthStartResult> {
   const now = Date.now();
-  await cleanupExpiredCliAuthRows(env.AUTH_DB, now);
-  await rateLimit(env.AUTH_DB, `start:${cleanRateKey(clientKey)}`, 20, RATE_WINDOW_MS, now);
+  await rateLimit(env.AUTH_KV, `start:${cleanRateKey(clientKey)}`, 20, RATE_WINDOW_MS, now);
 
   const expiresAt = now + AUTH_TTL_MS;
-  const session = primarySession(env.AUTH_DB);
   for (let attempt = 0; attempt < 10; attempt += 1) {
     const deviceToken = randomToken(32);
     const userCode = createUserCode();
-    try {
-      await session.prepare(
-        `INSERT INTO cli_auth_requests
-           (device_hash, user_code, device_name, status, origin, created_at, expires_at)
-         VALUES (?, ?, ?, 'pending', ?, ?, ?)`,
-      ).bind(
-        await sha256Hex(deviceToken),
-        userCode,
-        cleanDeviceName(deviceName),
-        cleanOrigin(origin),
-        now,
-        expiresAt,
-      ).run();
-      return {
-        deviceToken,
-        userCode,
-        verificationUrl: `${cleanOrigin(approvalOrigin)}/cli/auth?code=${encodeURIComponent(userCode)}`,
-        expiresAt: new Date(expiresAt).toISOString(),
-        intervalSeconds: POLL_INTERVAL_SECONDS,
-      };
-    } catch (e) {
-      // Retry only on a code/token collision; anything else (missing table,
-      // D1 outage, …) is a real failure that must surface, not loop 10x.
-      if (!isUniqueConstraintError(e)) throw e;
-    }
+    // A code is one in 32^8, so this reads to prove the claim rather than to
+    // expect a clash; KV has no unique key to lean on instead.
+    if (await readKvJson(env.AUTH_KV, codeKey(userCode), CodePointerSchema) !== null) continue;
+
+    const deviceHash = await sha256Hex(deviceToken);
+    const record: CliAuthRecord = {
+      userCode,
+      deviceName: cleanDeviceName(deviceName),
+      status: 'pending',
+      origin: cleanOrigin(origin),
+      userId: null,
+      userEmail: null,
+      createdAt: now,
+      expiresAt,
+      approvedAt: null,
+    };
+    // Record before pointer: a pointer is what the browser resolves, and one
+    // that outran its record would read as an unknown code either way.
+    await writeKvJson(env.AUTH_KV, deviceKey(deviceHash), record, expiresAt + RETENTION_MS);
+    await writeKvJson(env.AUTH_KV, codeKey(userCode), { deviceHash }, expiresAt + RETENTION_MS);
+
+    return {
+      deviceToken,
+      userCode,
+      verificationUrl: `${cleanOrigin(approvalOrigin)}/cli/auth?code=${encodeURIComponent(userCode)}`,
+      expiresAt: new Date(expiresAt).toISOString(),
+      intervalSeconds: POLL_INTERVAL_SECONDS,
+    };
   }
   throw new Error('Could not allocate a CLI auth code.');
 }
 
-export async function inspectCliAuth(db: D1Database, userCode: string): Promise<CliAuthRequestInfo | null> {
-  const code = normalizeUserCode(userCode);
-  const session = primarySession(db);
-  const row = await session.prepare(
-    `SELECT user_code, device_name, status, origin, user_id, user_email, token_exp, expires_at, approved_at
-       FROM cli_auth_requests WHERE user_code = ?`,
-  ).bind(code).first<CliAuthRow>();
-  if (!row) return null;
-  const status = currentStatus(row.status, row.expires_at);
-  if (status === 'expired' && row.status !== 'expired') {
-    await session.prepare(`UPDATE cli_auth_requests SET status = 'expired' WHERE user_code = ?`).bind(code).run();
-  }
+export async function inspectCliAuth(kv: KvStore, userCode: string): Promise<CliAuthRequestInfo | null> {
+  const found = await readByUserCode(kv, userCode);
+  if (!found) return null;
+  const { record } = found;
   return {
-    userCode: row.user_code,
-    deviceName: row.device_name,
-    status,
-    expiresAt: new Date(row.expires_at).toISOString(),
-    approvedAt: row.approved_at ? new Date(row.approved_at).toISOString() : undefined,
-    user: row.user_id && row.user_email ? { id: row.user_id, email: row.user_email } : undefined,
+    userCode: record.userCode,
+    deviceName: record.deviceName,
+    status: currentStatus(record),
+    expiresAt: new Date(record.expiresAt).toISOString(),
+    approvedAt: record.approvedAt ? new Date(record.approvedAt).toISOString() : undefined,
+    user: record.userId && record.userEmail ? { id: record.userId, email: record.userEmail } : undefined,
   };
 }
 
 export async function pollCliAuth(env: CliAuthEnv, deviceToken: string, clientKey?: string): Promise<CliAuthPollResult> {
   const now = Date.now();
-  await cleanupExpiredCliAuthRows(env.AUTH_DB, now);
-  await rateLimit(env.AUTH_DB, `poll-ip:${cleanRateKey(clientKey)}`, 300, RATE_WINDOW_MS, now);
+  await rateLimit(env.AUTH_KV, `poll-ip:${cleanRateKey(clientKey)}`, 300, RATE_WINDOW_MS, now);
 
   const hash = await sha256Hex(deviceToken);
-  await rateLimit(env.AUTH_DB, `poll-device:${hash}`, 180, RATE_WINDOW_MS, now);
+  await rateLimit(env.AUTH_KV, `poll-device:${hash}`, 180, RATE_WINDOW_MS, now);
 
-  const session = primarySession(env.AUTH_DB);
-  const row = await session.prepare(
-    `SELECT user_code, device_name, status, origin, user_id, user_email, token_exp, expires_at, approved_at
-       FROM cli_auth_requests WHERE device_hash = ?`,
-  ).bind(hash).first<CliAuthRow>();
-  if (!row) return { status: 'expired', message: 'Unknown CLI auth request.' };
+  const record = await readKvJson(env.AUTH_KV, deviceKey(hash), CliAuthRecordSchema);
+  if (!record) return { status: 'expired', message: 'Unknown CLI auth request.' };
 
-  const status = currentStatus(row.status, row.expires_at);
-  if (status === 'expired') {
-    await session.prepare(`UPDATE cli_auth_requests SET status = 'expired', token_exp = NULL WHERE device_hash = ?`).bind(hash).run();
-    return { status: 'expired', message: 'CLI auth request expired.' };
-  }
+  const status = currentStatus(record, now);
+  if (status === 'expired') return { status: 'expired', message: 'CLI auth request expired.' };
   if (status === 'pending') return { status: 'pending' };
   if (status === 'consumed') {
     return { status: 'expired', message: 'CLI auth token was already delivered. Run kinu auth again if it was not saved.' };
   }
-  if (!row.user_id || !row.user_email) {
-    await session.prepare(`UPDATE cli_auth_requests SET status = 'expired', token_exp = NULL WHERE device_hash = ?`).bind(hash).run();
+  if (!record.userId || !record.userEmail) {
     return { status: 'expired', message: 'CLI auth approval is incomplete. Run kinu auth again.' };
   }
 
-  const consumed = await session.prepare(
-    `UPDATE cli_auth_requests
-        SET status = 'consumed'
-      WHERE device_hash = ? AND status = 'approved'
-      RETURNING origin, device_name, user_id, user_email`,
-  ).bind(hash).first<{ origin: string; device_name: string; user_id: string; user_email: string }>();
-  if (!consumed) {
-    return { status: 'expired', message: 'CLI auth token was already delivered. Run kinu auth again if it was not saved.' };
-  }
+  // Consume BEFORE minting, so a token that was minted was always minted
+  // against a request already marked spent.
+  await writeKvJson(
+    env.AUTH_KV, deviceKey(hash), { ...record, status: 'consumed' }, record.expiresAt + RETENTION_MS,
+  );
 
   // SAFETY: Env.UserDO is generated from the UserDO binding, whose stubs implement UserDO RPC methods.
-  const userDO = env.UserDO.get(env.UserDO.idFromName(consumed.user_id)) as DurableObjectStub<UserDO>;
-  const minted = await userDO.mintCliToken(await ownerCaller(env), consumed.user_id, consumed.device_name);
-  const tokenExpiresAt = new Date(minted.expiresAt).toISOString();
-  await session.prepare(
-    `UPDATE cli_auth_requests
-        SET token_exp = ?
-      WHERE device_hash = ? AND status = 'consumed'`,
-  ).bind(tokenExpiresAt, hash).run();
+  const userDO = env.UserDO.get(env.UserDO.idFromName(record.userId)) as DurableObjectStub<UserDO>;
+  const minted = await userDO.mintCliToken(await ownerCaller(env), record.userId, record.deviceName);
   return {
     status: 'approved',
-    origin: consumed.origin,
+    origin: record.origin,
     token: minted.token,
-    expiresAt: tokenExpiresAt,
-    user: { id: consumed.user_id, email: consumed.user_email },
+    expiresAt: new Date(minted.expiresAt).toISOString(),
+    user: { id: record.userId, email: record.userEmail },
   };
 }
 
@@ -273,94 +265,86 @@ export async function approveCliAuth(
   clientKey?: string,
 ): Promise<{ ok: true; status: 'approved'; user: { id: string; email: string } }> {
   const now = Date.now();
-  await cleanupExpiredCliAuthRows(env.AUTH_DB, now);
-  await rateLimit(env.AUTH_DB, `approve:${identity.userId}:${cleanRateKey(clientKey)}`, 30, RATE_WINDOW_MS, now);
+  await rateLimit(env.AUTH_KV, `approve:${identity.userId}:${cleanRateKey(clientKey)}`, 30, RATE_WINDOW_MS, now);
 
-  const code = normalizeUserCode(userCode);
-  const session = primarySession(env.AUTH_DB);
-  const row = await session.prepare(
-    `SELECT user_code, device_name, status, origin, user_id, user_email, token_exp, expires_at, approved_at
-       FROM cli_auth_requests WHERE user_code = ?`,
-  ).bind(code).first<CliAuthRow>();
-  if (!row) throw new CliAuthCodeError('Unknown CLI auth code.');
+  const found = await readByUserCode(env.AUTH_KV, userCode);
+  if (!found) throw new CliAuthCodeError('Unknown CLI auth code.');
+  const { deviceHash, record } = found;
 
-  const status = currentStatus(row.status, row.expires_at);
+  const status = currentStatus(record, now);
   if (status === 'approved' || status === 'consumed') {
     // Idempotent replay only for the original approver. Anyone else
     // presenting an already-approved code must not learn whose it is.
-    if (row.user_id !== identity.userId) {
+    if (record.userId !== identity.userId) {
       throw new CliAuthCodeError('CLI auth code already used.');
     }
     return {
       ok: true,
       status: 'approved',
-      user: { id: identity.userId, email: row.user_email ?? identity.email },
+      user: { id: identity.userId, email: record.userEmail ?? identity.email },
     };
   }
   if (status !== 'pending') {
-    await session.prepare(`UPDATE cli_auth_requests SET status = 'expired', token_exp = NULL WHERE user_code = ?`).bind(code).run();
     throw new CliAuthCodeError('CLI auth code expired. Run kinu auth again.');
   }
 
   // SAFETY: Env.UserDO is generated from the UserDO binding, whose stubs implement UserDO RPC methods.
   const userDO = env.UserDO.get(env.UserDO.idFromName(identity.userId)) as DurableObjectStub<UserDO>;
   await userDO.ensureProfile(await ownerCaller(env), identity.email);
-  await session.prepare(
-    `UPDATE cli_auth_requests
-        SET status = 'approved', user_id = ?, user_email = ?, approved_at = ?
-      WHERE user_code = ?`,
-  ).bind(identity.userId, identity.email, now, code).run();
+  await writeKvJson(env.AUTH_KV, deviceKey(deviceHash), {
+    ...record,
+    status: 'approved',
+    userId: identity.userId,
+    userEmail: identity.email,
+    approvedAt: now,
+  }, record.expiresAt + RETENTION_MS);
+
   return { ok: true, status: 'approved', user: { id: identity.userId, email: identity.email } };
 }
 
-export async function cleanupExpiredCliAuthRows(db: D1Database, now = Date.now()): Promise<void> {
-  const cutoff = now - CLEANUP_RETENTION_MS;
-  const session = primarySession(db);
-  await session.batch([
-    session.prepare(
-      `UPDATE cli_auth_requests
-          SET status = 'expired', token_exp = NULL
-        WHERE status IN ('pending', 'approved') AND expires_at <= ?`,
-    ).bind(now),
-    session.prepare(
-      `DELETE FROM cli_auth_requests
-        WHERE (status = 'expired' AND expires_at <= ?)
-           OR (status = 'consumed' AND COALESCE(approved_at, expires_at) <= ?)`,
-    ).bind(cutoff, cutoff),
-    session.prepare(`DELETE FROM cli_auth_rate WHERE reset_at <= ?`).bind(now),
-  ]);
-}
-
-async function rateLimit(db: D1Database, key: string, limit: number, windowMs: number, now: number): Promise<void> {
-  const session = primarySession(db);
-  const row = await session.prepare(
-    `SELECT count, reset_at FROM cli_auth_rate WHERE key = ?`,
-  ).bind(key).first<{ count: number; reset_at: number }>();
-  if (!row || row.reset_at <= now) {
-    await session.prepare(
-      `INSERT INTO cli_auth_rate (key, count, reset_at) VALUES (?, 1, ?)
-       ON CONFLICT(key) DO UPDATE SET count = 1, reset_at = excluded.reset_at`,
-    ).bind(key, now + windowMs).run();
+/** Abuse ceiling per client key and window.
+ *
+ *  KV serves reads from the colo's own cache, so a burst spread across colos
+ *  can see a stale count and this ceiling is per-region rather than exact.
+ *  That is the right shape for what it defends: flooding pending requests and
+ *  hammering the approve endpoint, neither of which the exactness would
+ *  change — a user code is one in 32^8 and cannot be guessed inside a window
+ *  at any rate. */
+async function rateLimit(
+  kv: KvStore, key: string, limit: number, windowMs: number, now: number,
+): Promise<void> {
+  const bucketKey = `cli-auth-rate:${key}`;
+  const bucket = await readKvJson(kv, bucketKey, RateBucketSchema);
+  if (!bucket || bucket.resetAt <= now) {
+    const resetAt = now + windowMs;
+    await writeKvJson(kv, bucketKey, { count: 1, resetAt }, resetAt);
     return;
   }
-  if (row.count >= limit) throw new RateLimitError();
-  await session.prepare(`UPDATE cli_auth_rate SET count = count + 1 WHERE key = ?`).bind(key).run();
+  if (bucket.count >= limit) throw new RateLimitError();
+  await writeKvJson(kv, bucketKey, { count: bucket.count + 1, resetAt: bucket.resetAt }, bucket.resetAt);
 }
 
-function primarySession(db: D1Database): D1DatabaseSession {
-  return db.withSession('first-primary');
+async function readByUserCode(
+  kv: KvStore, userCode: string,
+): Promise<{ deviceHash: string; record: CliAuthRecord } | null> {
+  const pointer = await readKvJson(kv, codeKey(normalizeUserCode(userCode)), CodePointerSchema);
+  if (!pointer) return null;
+  const record = await readKvJson(kv, deviceKey(pointer.deviceHash), CliAuthRecordSchema);
+  if (!record) return null;
+  return { deviceHash: pointer.deviceHash, record };
 }
 
-/** Matched over the whole cause chain, not `e.message`: the constraint failure
- *  arrives wrapped by whatever statement ran it, and reading only the outermost
- *  frame reported a duplicate row as an unknown write failure. */
-function isUniqueConstraintError<Thrown>(e: Thrown): boolean {
-  return /UNIQUE constraint failed/iu.test(renderThrownChain({ cause: e }));
+function deviceKey(deviceHash: string): string {
+  return `cli-auth:device:${deviceHash}`;
 }
 
-function currentStatus(status: string, expiresAt: number): CliAuthRequestInfo['status'] {
-  if ((status === 'pending' || status === 'approved') && Date.now() > expiresAt) return 'expired';
-  return status === 'pending' || status === 'approved' || status === 'consumed' ? status : 'expired';
+function codeKey(userCode: string): string {
+  return `cli-auth:code:${userCode}`;
+}
+
+function currentStatus(record: CliAuthRecord, now = Date.now()): CliAuthRequestInfo['status'] {
+  if (record.status !== 'consumed' && now > record.expiresAt) return 'expired';
+  return record.status;
 }
 
 function cleanDeviceName(input?: string): string {

@@ -15,7 +15,8 @@ import { RunEventRecorder } from '../src/events/recorder';
 import { WORKSPACE_RUN_ID } from '../src/events/model-call';
 import { HeadJournal } from '../src/heads/journal';
 import { workspaceSpend } from '../src/read-models/workspace-spend';
-import type { Usage } from '../src/usage';
+import { MissionGovernor } from '../src/mission-budget';
+import { usageTotal, type Usage } from '../src/usage';
 import { createTestWorkspace } from './helpers';
 
 const WINDOW = 50;
@@ -226,5 +227,76 @@ describe('workspaceSpend', () => {
     // real run beside it is what makes this decidable: an empty list would read
     // the same whether the exclusion held or the query failed.
     expect(events.listRunsBefore(null, WINDOW).map((r) => r.runId)).toEqual(['run-1']);
+  });
+});
+
+describe('workspaceSpend — the breakdown', () => {
+  test('the off-turn share is every measured token no turn of this agent spent', () => {
+    const { ws, events } = rig();
+    step(events, { input: 700, output: 100 });          // agent: 800
+    events.emit(WORKSPACE_RUN_ID, {
+      type: 'model_call', source: 'reflection', usage: { input: 150, output: 10 },
+    });
+    events.emit(WORKSPACE_RUN_ID, {
+      type: 'model_call', source: 'judge', usage: { input: 30, output: 10 },
+    });
+
+    const spend = workspaceSpend({ events, sql: ws.sql }, { windowLimit: WINDOW });
+
+    expect(usageTotal(spend.total.usage)).toBe(1000);
+    expect(spend.offTurnShare).toBeCloseTo(0.2, 10);
+  });
+
+  test('a workspace whose only spend is its own turns has an off-turn share of zero', () => {
+    const { ws, events } = rig();
+    step(events, { input: 700, output: 100 });
+
+    expect(workspaceSpend({ events, sql: ws.sql }, { windowLimit: WINDOW }).offTurnShare).toBe(0);
+  });
+
+  test('nothing measured has NO share — absent, never 0%', () => {
+    const { ws, events } = rig();
+    events.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'platform' });
+
+    // The producer is counted, so this is a workspace that spent something and
+    // measured none of it: 0% off-turn would read as "all of it was the agent".
+    const spend = workspaceSpend({ events, sql: ws.sql }, { windowLimit: WINDOW });
+    expect(spend.coverage.calls).toBe(1);
+    expect(spend.offTurnShare).toBeNull();
+  });
+
+  test('missions come from the ledger the caps are enforced against, dearest first', () => {
+    const { ws, events } = rig();
+    step(events, { input: 700, output: 100 });
+    const governor = new MissionGovernor({ storage: { sql: ws.sql, execRaw: ws.execRaw } });
+    governor.declare('checkout-fixes', { usd: 25 }, {});
+    governor.declare('sweep', { tokens: 5_000 }, { parent: 'checkout-fixes' });
+    governor.debit(4_000, { labels: ['sweep'], calls: 2 });
+    governor.debit(100, { labels: ['checkout-fixes'], calls: 1 });
+
+    const spend = workspaceSpend({ events, sql: ws.sql }, { windowLimit: WINDOW });
+
+    // The parent carries the child's debit as well as its own — the ledger rolls
+    // a debit up the whole chain, which is exactly why it is the one figure a
+    // per-mission surface may read.
+    expect(spend.missions.map((m) => [m.label, m.parent, m.spent.tokens, m.calls]))
+      .toEqual([
+        ['checkout-fixes', null, 4_100, 3],
+        ['sweep', 'checkout-fixes', 4_000, 2],
+      ]);
+    expect(spend.missions[1]!.remaining.tokens).toBe(1_000);
+    expect(spend.missions[1]!.exhausted).toBe(false);
+    // The two axes are NOT the same sum: the mission rows are cumulative over
+    // the label's life, the producer rows are the window.
+    expect(usageTotal(spend.total.usage)).toBe(800);
+  });
+
+  test('a workspace that declared no budget reports no missions and does not fail', () => {
+    const { ws, events } = rig();
+    step(events, { input: 700, output: 100 });
+
+    // No governor was ever built here, so `mission_budget` does not exist. An
+    // unbudgeted workspace is the common case and must not read as broken.
+    expect(workspaceSpend({ events, sql: ws.sql }, { windowLimit: WINDOW }).missions).toEqual([]);
   });
 });

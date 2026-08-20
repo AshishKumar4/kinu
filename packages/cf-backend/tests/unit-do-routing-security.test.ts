@@ -6,7 +6,7 @@ import {
   extractTicketOrchestratorAgentName,
   isForeignAgentNamespacePath,
 } from '../src/agent-routing';
-import { deriveUserId } from '../src/auth/session';
+import { deriveUserId } from '../src/auth/store';
 
 /**
  * F1 account-takeover regression.
@@ -110,7 +110,7 @@ describe('F1 defense 1 — the /agents/* transport is pinned to the orchestrator
     const claim = src.indexOf('ensureAgentOwnership(env, identity, agentName)');
     const route = src.indexOf('routeAgentRequest(reqWithId, env)');
     expect(pin).toBeGreaterThan(-1);
-    expect(src).toContain("return withD1Bookmark(err(404, 'Not found'), identity);");
+    expect(src).toContain("return err(404, 'Not found');");
     expect(pin).toBeLessThan(claim);
     expect(claim).toBeLessThan(route);
   });

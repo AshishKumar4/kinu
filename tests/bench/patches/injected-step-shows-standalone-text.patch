@@ -1,8 +1,8 @@
 diff --git a/packages/core/src/orchestrator/signals.ts b/packages/core/src/orchestrator/signals.ts
-index 9f27f0d..fcfd60b 100644
+index 39982f7b..04fdf5a6 100644
 --- a/packages/core/src/orchestrator/signals.ts
 +++ b/packages/core/src/orchestrator/signals.ts
-@@ -207,7 +207,7 @@ export class SignalDelivery implements SignalDeliverer {
+@@ -239,7 +239,7 @@ export class SignalDelivery implements SignalDeliverer {
    }
  }
  
@@ -10,4 +10,4 @@ index 9f27f0d..fcfd60b 100644
 +const stepBody = (signal: AgentSignal): string => signal.text;
  
  /** The turn metadata a signal carries: its `proteusEvent` provenance, the
-  *  reply binding its source rows are bound to, and the producer's own. */
+  *  reply binding its source rows are bound to, and the producer's own.

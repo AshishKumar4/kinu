@@ -9,11 +9,6 @@ export function randomToken(bytes: number): string {
   return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
 
-/** Lowercase hex string from `bytes` of CSPRNG output. */
-export function randomHex(bytes: number): string {
-  return Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (b) => b.toString(16).padStart(2, '0')).join('');
-}
-
 export async function sha256Hex(input: string | ArrayBuffer): Promise<string> {
   const bytes = input instanceof ArrayBuffer ? input : new TextEncoder().encode(input);
   const digest = await crypto.subtle.digest('SHA-256', bytes);

@@ -8,7 +8,6 @@ import {
   ORCHESTRATOR_AGENT_SLUG, SUBORDINATE_AGENT_SLUG,
   type AgentViewSummary, type PendingAction, type PlanReview,
 } from "@kinu/core";
-import type { ExplorationCanvasRun, Page, TimelineSpan } from "@kinu/core";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import type { FileUIPart, UIMessage } from "ai";
 import * as v from "valibot";
@@ -36,8 +35,15 @@ import { renderThrownChain } from "@kinu/core/obs";
 
 export type { ExecutorInfo };
 
+/** One command's row in the executor terminal's scrollback.
+ *
+ *  `stdout`/`stderr` are CLIPPED by the server; `stdout_len`/`stderr_len` are the
+ *  stored lengths. The pane needs both because it must say what it withheld —
+ *  showing a prefix as if it were the output is the lie this pair prevents. */
 export interface ExecutorOutput {
-  id: string; command: string; stdout: string; stderr: string;
+  id: string; command: string;
+  stdout: string; stdout_len: number;
+  stderr: string; stderr_len: number;
   exit_code: number; created_at: number;
 }
 
@@ -80,6 +86,18 @@ export interface SteerRun {
   status: "queued" | "landed";
 }
 
+/** A turn that ended without an answer, and whether the server is REPLAYING an
+ *  older one rather than reporting this session's.
+ *
+ *  The distinction is the whole difference between "your turn just failed" and
+ *  "the last thing that happened here failed, some time ago". The server keeps
+ *  its terminal record until a later turn supersedes it, so a workspace left
+ *  after a failure re-serves it on every connect. */
+export interface ChatTurnError {
+  body: string;
+  replayed: boolean;
+}
+
 export interface ForkLineage {
   sourceWorkspaceId: string;
   sourceWorkspaceName: string;
@@ -102,20 +120,25 @@ export interface AgentStatus {
   forkLineage: ForkLineage | null;
 }
 
-/** One-round-trip initial-load payload (server: getWorkspaceSnapshot). */
+/** One-round-trip initial-load payload (server: getWorkspaceSnapshot).
+ *
+ *  Everything a workspace needs before the chat pane can paint, and nothing a
+ *  surface that is not open needs. The exploration canvas and the run timeline
+ *  used to ride along and were 95% of the bytes on every workspace open; the
+ *  Exploration surface reads its own canvas page and nothing read the timeline
+ *  at all. See the server RPC's note for the measurements. */
 export interface WorkspaceSnapshot {
   status: AgentStatus;
   tools: ToolDescResult;
   memoryContent: string;
-  /** The first page of the canvas — every fork on it with its own parameters and
-   *  its own tree, so first paint draws every tree rather than only the newest.
-   *  One row per fork, so nothing here can be re-associated wrongly. */
-  exploration: Page<ExplorationCanvasRun>;
-  /** Still returned by the server for `kinu inspect`; no UI reads it. */
-  timeline: TimelineSpan[];
+
   executors: ExecutorInfo[];
   executorOutputs: Array<{ name: string; outputs: ExecutorOutput[] }>;
   lastActiveExecutor: string | null;
+  /** The plan waiting on the owner, if any. On the snapshot because it decides
+   *  the composer's mode and the opening surface: fetching it a beat later made
+   *  a plan-gated workspace paint in build mode and then jump. */
+  activePlan: unknown;
 }
 
 const PlanAnnotationTextPositionSchema = v.object({
@@ -196,10 +219,21 @@ const SubordinateActivityEventSchema = v.object({
 
 const SocketMessageSchema = v.variant("type", [
   v.object({ type: v.literal("workspace_renamed"), displayName: v.optional(v.string()) }),
+  // The server's statement of what this conversation IS, sent unconditionally
+  // on an idle connect (`Think._buildIdleConnectMessages`). Its ARRIVAL is what
+  // the chat pane waits on — the payload is the SDK's business, so nothing is
+  // parsed out of it here.
+  v.looseObject({ type: v.literal("cf_agent_chat_messages") }),
   v.object({
     type: v.literal("cf_agent_use_chat_response"),
     error: v.optional(v.boolean()), done: v.optional(v.boolean()), body: v.optional(v.string()),
+    id: v.optional(v.string()),
   }),
+  // The server announcing which request id it is about to resume. For a
+  // RETAINED terminal record that id is the failed turn's, and the error frame
+  // that follows carries the same one — which is how a replay is told from a
+  // live failure without guessing.
+  v.object({ type: v.literal("cf_agent_stream_resuming"), id: v.string() }),
   v.object({
     type: v.literal("mcts-progress"), rootId: v.string(), nodes: v.array(MctsRowSchema),
   }),
@@ -548,12 +582,35 @@ export function useProteus(target?: string | ProteusActorAddress) {
   // on-connect `cf_agent_use_chat_response` replay frame (whose request id is
   // no longer active, so the ws transport drops it — the reason a reload used
   // to show nothing). Cleared on the next send.
-  const [chatError, setChatError] = useState<string | null>(null);
+  //
+  // `replayed` separates the two, because they are not the same claim. The
+  // server RETAINS its last terminal record until a later turn supersedes it
+  // (agents SDK `_replayTerminalOnAck`), so a workspace whose last turn failed
+  // and has not been used since re-serves that failure to every client that
+  // connects, forever. Measured on `sunlit-stone-4a20`: a turn that ended
+  // 2026-08-17T19:08:41Z still answers a resume ACK today with
+  // `{"body":"Unauthorized","done":true,"error":true}`, and the card called it
+  // "the last turn" as though it had just happened. It IS the last turn — it is
+  // just not recent, and a card that cannot say so is a card that misdates the
+  // workspace's state.
+  //
+  // The discriminator is the server's own: it announces the pending record's
+  // request id in a `cf_agent_stream_resuming` frame and only then replays the
+  // terminal for that same id. An id this connection saw announced is a replay;
+  // anything else is this session's turn failing live.
+  const resumedRequestIds = useRef(new Set<string>());
+  const [chatError, setChatError] = useState<ChatTurnError | null>(null);
   const [subordinates, setSubordinates] = useState<SubordinateRosterEntry[]>([]);
   const [subordinateEvents, setSubordinateEvents] = useState<SubordinateActivityEvent[]>([]);
   /** Background-event cards, from the delivery seam's own lifecycle stream. */
   const [signalCards, setSignalCards] = useState<readonly SignalCard[]>([]);
   const [activePlan, setActivePlan] = useState<PlanReview | null>(null);
+  // Has the server said what this conversation is? Set by the connect frame,
+  // and the ONLY thing that entitles the pane to draw an empty conversation: a
+  // workspace with four hundred messages spent the whole wake-plus-transfer
+  // window claiming it had none, and then replaced that claim with the
+  // transcript. False is "not yet", never "nothing".
+  const [transcriptSeeded, setTranscriptSeeded] = useState(false);
 
   const agentOptions: Parameters<typeof useAgent>[0] = {
     agent: ORCHESTRATOR_AGENT_SLUG,
@@ -577,12 +634,17 @@ export function useProteus(target?: string | ProteusActorAddress) {
           setAgentStatus((prev) => prev ? { ...prev, displayName } : prev);
         }
         window.dispatchEvent(new CustomEvent("proteus:workspace-renamed"));
+      } else if (data?.type === "cf_agent_stream_resuming") {
+        resumedRequestIds.current.add(data.id);
       } else if (data?.type === "cf_agent_use_chat_response" && data.error === true && data.done === true) {
         // Terminal-error frame. During a live stream the transport also
         // surfaces it as useChat's `error`; on connect the server REPLAYS
         // the last terminal error with a stale request id the transport
         // drops — this handler is the only place that frame is seen.
-        setChatError(data.body?.trim() ? data.body : "The turn failed with an unknown error.");
+        setChatError({
+          body: data.body?.trim() ? data.body : "The turn failed with an unknown error.",
+          replayed: data.id !== undefined && resumedRequestIds.current.has(data.id),
+        });
       }
     }, []),
   };
@@ -608,9 +670,10 @@ export function useProteus(target?: string | ProteusActorAddress) {
 
   // The live-stream error channel: the ws transport turns an in-band
   // `error:true` frame into useChat's `error` state — fold it into the same
-  // exposed chat-error surface as the on-connect replay.
+  // exposed chat-error surface as the on-connect replay. This one is always
+  // live: the transport only reaches it for a request id still in flight.
   useEffect(() => {
-    if (streamError) setChatError(streamError.message || String(streamError));
+    if (streamError) setChatError({ body: streamError.message || String(streamError), replayed: false });
   }, [streamError]);
 
   // ── A2: resume the durable stream on EVERY reconnect, not just first mount.
@@ -771,7 +834,9 @@ export function useProteus(target?: string | ProteusActorAddress) {
     const handler = (event: MessageEvent) => {
       const msg = parseSocketMessage(event.data);
       if (!msg) return;
-        if (msg.type === "mcts-progress") {
+        if (msg.type === "cf_agent_chat_messages") {
+          setTranscriptSeeded(true);
+        } else if (msg.type === "mcts-progress") {
           setMctsTreeFromRows(msg.rootId, msg.nodes);
         } else if (msg.type === "device_consent") {
           setPendingConsents((prev) => prev.some((c) => c.consentId === msg.consentId) ? prev
@@ -941,9 +1006,16 @@ export function useProteus(target?: string | ProteusActorAddress) {
     return () => clearInterval(interval);
   }, [isConnected, isSubordinate, refreshLiveData]);
 
-  // Initial load — ONE round-trip (getWorkspaceSnapshot) instead of 6 + N. The
-  // server guards each field independently, so a single failing read degrades
-  // that surface only. Live updates continue via refreshLiveData + events.
+  // Initial load — ONE round-trip, and it stays one: the active plan used to be
+  // a second awaited RPC here, so a plan-gated workspace painted its composer in
+  // build mode and moved a beat later.
+  //
+  // The exploration canvas is deliberately NOT seeded from here any more. It was
+  // the largest thing on this path (499-824 KiB per workspace, measured against
+  // production 2026-08-20) and its only effect was to pre-fill a tree map that
+  // the Exploration surface rebuilds from its own `getExplorationCanvas` when it
+  // mounts, and that `useForkRunTree` fetches per run when it does not. Live
+  // trees still arrive on the `mcts_update` broadcast.
   async function loadAllData(isCurrent: () => boolean): Promise<void> {
     const snap = await rpc<WorkspaceSnapshot>("getWorkspaceSnapshot", []);
     if (!isCurrent()) return;
@@ -951,22 +1023,14 @@ export function useProteus(target?: string | ProteusActorAddress) {
     setTools(mapToolDescriptions(snap.tools));
     setMemoryContent(snap.memoryContent);
     if (snap.memoryContent) setMemory(parseMemoryContent(snap.memoryContent));
-    // Every tree, not just the newest: a workspace can have several searches in
-    // flight, and the canvas draws all of them from first paint. Each fork
-    // carries its own rows, so there is no grouping pass and no chance of
-    // folding one search's nodes into another's root.
-    for (const entry of snap.exploration.items) {
-      if (entry.tree.length > 0) setMctsTreeFromRows(entry.run.id, [...entry.tree]);
-    }
     setExecutors(snap.executors);
     setLastActiveExecutor(snap.lastActiveExecutor);
     const outputs = new Map<string, ExecutorOutput[]>();
     for (const eo of snap.executorOutputs) outputs.set(eo.name, eo.outputs.slice().reverse());
     setExecutorOutputs(outputs);
+    setActivePlan(parsePlanReview(snap.activePlan));
     void refreshExposedPorts();
     void refreshPendingActions();
-    const plan = await rpc<unknown>("getActivePlanReview", []);
-    if (isCurrent()) setActivePlan(parsePlanReview(plan));
   }
 
   async function loadSubordinateData(isCurrent: () => boolean): Promise<void> {
@@ -1181,9 +1245,16 @@ export function useProteus(target?: string | ProteusActorAddress) {
           setExecutorOutputs(prev => {
             const next = new Map(prev);
             const existing = next.get(msg.executor) ?? [];
+            // The live echo is the whole output of a command that just ran, so
+            // the stored length IS what is shown — nothing was withheld here.
+            // A reload reads the same row back through the clipped SQL and the
+            // pane says so then.
+            const stdout = msg.stdout ?? "";
+            const stderr = msg.stderr ?? "";
             next.set(msg.executor, [...existing, {
               id: crypto.randomUUID(), command: msg.command,
-              stdout: msg.stdout ?? "", stderr: msg.stderr ?? "",
+              stdout, stdout_len: stdout.length,
+              stderr, stderr_len: stderr.length,
               exit_code: msg.exitCode ?? 0, created_at: msg.timestamp,
             }]);
             return next;
@@ -1197,6 +1268,9 @@ export function useProteus(target?: string | ProteusActorAddress) {
   return {
     messages,
     isStreaming,
+    /** True once the server has stated this conversation's contents. Until then
+     *  `messages` being empty means "not delivered", not "there is nothing". */
+    transcriptSeeded,
     connectionStatus,
     /** The sticky load/action failure, if any — never auto-expires. */
     error,

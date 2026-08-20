@@ -29,6 +29,7 @@ import {
   loadGepaCandidates,
   nextCronFire,
   releaseSqlFromExec,
+  workspaceSpend,
   runCorpusEval,
   runEnsemble,
   sampleForLabeling,
@@ -78,6 +79,7 @@ import {
   type RecordObjectiveHandle,
   type RecordObjectiveSummary,
   type SeekCursor,
+  type WorkspaceSpend,
 } from '@kinu/core';
 import {
   makeSql, makeSqlExec, createHostShell, hostToolchainCapabilities,
@@ -174,6 +176,21 @@ export function getLocalAgentState(name: string): LocalAgentState {
     executors: listLocalExecutors(),
     release: getLocalReleaseBoard(name, 20),
   }));
+}
+
+/**
+ * What this local workspace spent, on both axes, from the same read model the
+ * cloud panel renders — never a second query written here.
+ *
+ * The window matches the panel's default so the two surfaces answer the same
+ * question about the same rows. A workspace with a longer log than that reports
+ * `complete: false`, which is the surface's job to print.
+ */
+export function getLocalWorkspaceSpend(name: string, windowLimit: number): WorkspaceSpend {
+  return withLocalDb(name, (db) => {
+    const sql = makeSql(db);
+    return workspaceSpend({ events: new RunEventRecorder(sql), sql }, { windowLimit });
+  });
 }
 
 export function getLocalAgentInfo(name: string): LocalAgentInfoSnapshot {

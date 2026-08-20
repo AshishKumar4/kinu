@@ -512,7 +512,7 @@ declare. Read it from `wrangler.jsonc`, not from the type.
 | `MonitorDO` | Durable Object | Synthetic monitoring: open incidents + the alert outbox (one instance, `site`) |
 | `NIMBUS_SESSION` | Durable Object | `NimbusSession` from `@nimbus-sh/sdk`; built-in lightweight sandbox (local DO class, deployed with this Worker) |
 | `Sandbox` | Durable Object + Container | `ProteusSandbox` (@cloudflare/sandbox); one container per agent |
-| `AUTH_KV` | KV namespace | Sessions, one-time OAuth state, and CLI browser approval state — all of it expiring. `kinu-auth`, and `kinu-auth-staging` in staging |
+| `AUTH_KV` | KV namespace | Sessions, one-time OAuth state, and CLI browser approval state — all of it expiring on its own; identities live in `UserDO`. `kinu-auth`, and `kinu-auth-staging` in staging |
 | `LOADER` | Worker Loader | Sandboxed code execution (codemode) |
 | `AI` | Workers AI | Platform-side embeddings (chat models use the user's OAuth credential) |
 | `MEMORY_VECTORS` | Vectorize | `kinu-memory`, and `kinu-memory-staging` in staging (384-dim, cosine); optional hybrid recall on top of FTS5 |

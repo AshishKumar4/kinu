@@ -16,7 +16,7 @@ import {
 } from '../src/lib/cloudflare-oauth';
 import { buildCliInstallCommand } from '../src/cli/install-command';
 import { handleCliRequest } from '../src/cli/routes';
-import { sanitizeReturnTo } from '../src/auth/d1-store';
+import { sanitizeReturnTo } from '../src/auth/store';
 
 const root = join(import.meta.dir, '..');
 
@@ -310,7 +310,6 @@ describe('auth and desktop security invariants', () => {
       email: 'ashish@example.com',
       emailVerified: true,
       displayName: 'ashish',
-      avatarUrl: null,
     });
 
     expect(cloudflareUserResultToProfile({
@@ -358,31 +357,37 @@ describe('auth and desktop security invariants', () => {
   test('OAuth sessions are HttpOnly host cookies and state is server-side', () => {
     const routes = source('src/auth/routes.ts');
     const session = source('src/auth/session.ts');
-    const d1Store = source('src/auth/d1-store.ts');
+    const store = source('src/auth/store.ts');
     // The cookie name has exactly one home (auth/session.ts); routes reuse it.
     expect(session).toContain("export const SESSION_COOKIE_NAME = '__Host-proteus_session'");
     expect(routes).toContain('SESSION_COOKIE_NAME');
     expect(routes).not.toContain('__Host-proteus_session');
     expect(routes).toContain('HttpOnly; Secure; SameSite=Lax');
-    expect(d1Store).toContain('DELETE FROM auth_oauth_states');
-    expect(d1Store).toContain('RETURNING provider, code_verifier');
+    // The browser holds a handle, never the state: the state token is hashed
+    // into the key, and the record is burned on the way out.
+    expect(store).toContain('`oauth-state:${await sha256Hex(state)}`');
+    expect(store).toContain('await kv.delete(key)');
   });
 
-  test('browser and CLI auth use D1 Sessions for replica-aware state, not auth Durable Objects', () => {
+  test('browser and CLI auth keep expiring state in KV and durable identity in the UserDO', () => {
     const wrangler = source('wrangler.jsonc');
-    const access = source('src/auth/session.ts');
-    const d1Store = source('src/auth/d1-store.ts');
+    const session = source('src/auth/session.ts');
+    const store = source('src/auth/store.ts');
     const cliRoutes = source('src/cli/routes.ts');
-    expect(wrangler).toContain('"binding": "AUTH_DB"');
+    expect(wrangler).toContain('"binding": "AUTH_KV"');
+    // No D1 anywhere, and no auth Durable Object either: a singleton DO in
+    // front of every sign-in is the chokepoint this deployment removed.
+    expect(wrangler).not.toContain('d1_databases');
+    expect(wrangler).not.toContain('AUTH_DB');
     expect(wrangler).not.toContain('CLIAuthDO');
     expect(wrangler).not.toContain('AuthDO');
-    expect(wrangler).not.toContain('"name": "AuthDO"');
-    expect(access).toContain('verifySession(env.AUTH_DB');
+    expect(session).toContain('verifySession(env.AUTH_KV');
     expect(cliRoutes).toContain('startCliAuth(env');
     expect(cliRoutes).not.toContain('authDO(env)');
-    expect(d1Store).toContain("db.withSession(bookmark || 'first-unconstrained')");
-    expect(d1Store).toContain("db.withSession('first-primary')");
-    expect(d1Store).not.toContain('last_seen_at');
+    // Nothing in KV is a source of truth: every write carries an expiry, and
+    // the identity itself is addressed by derivation, not by a stored index.
+    expect(store).toContain('userDO.ensureProfile(');
+    expect(store).not.toContain('kv.put(');
   });
 
   test('browser auth no longer accepts Cloudflare Access as a session', () => {
@@ -536,7 +541,7 @@ describe('sanitizeReturnTo (single strict implementation)', () => {
     expect(sanitizeReturnTo('')).toBe('/');
   });
 
-  test('rejects redirect loops back into the auth flow (strict rules apply on the D1 path too)', () => {
+  test('rejects redirect loops back into the auth flow, on the stored state too', () => {
     expect(sanitizeReturnTo('/auth/github/start')).toBe('/');
     expect(sanitizeReturnTo('/login')).toBe('/');
     expect(sanitizeReturnTo('/logout')).toBe('/');

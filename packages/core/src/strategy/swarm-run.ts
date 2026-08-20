@@ -142,7 +142,7 @@ import type { NodeAgentDeps, NodeLoopHost } from './node-agent';
 import { SwarmBudget, type BranchDecision, type BranchGrant } from './swarm-budget';
 import { sha256Hex } from '../safety/argument-digest';
 import type { NodeWorkspaceProvisioner } from './node-workspace';
-import type { SerializedMessage } from '../heads/types';
+import type { HeadReport, SerializedMessage } from '../heads/types';
 import { missionMeter, type MissionScope } from '../mission-budget';
 import type { WebSearchProvider } from '../web/index';
 import { resolveVerifier, type ResolvedVerifier } from './verifier-registry';
@@ -1050,6 +1050,18 @@ function inheritedAsSerialized(prefix: readonly ModelMessage[]): SerializedMessa
 }
 
 /**
+ * HOW A NODE STOPPED SHORT: the report's own status, and the line a reader gets.
+ *
+ * `completed` is excluded by the type rather than by a convention, because a stop is
+ * exactly what a node that finished does not have.
+ */
+interface NodeStop {
+  readonly status: Exclude<HeadReport['status'], 'completed'>;
+  /** The status, the steps and the clock, as the caller reads them off the candidate. */
+  readonly detail: string;
+}
+
+/**
  * One expanded child, before it is measured.
  *
  * Its spend IS here now, unlike the flat version's unused per-child copy: an agent
@@ -1089,8 +1101,16 @@ interface Expansion {
    * Non-null therefore means "do not measure this": the scoring loop short-circuits, no
    * reward is backpropagated, and the caller is told which node stopped and why. Always
    * null for a thought node, whose one `generateText` either returns an answer or throws.
+   *
+   * THE STATUS RIDES WITH THE DETAIL because the level barrier needs the two apart. A
+   * node that BROKE and a node that was CUT are both unmeasurable and the caller reads
+   * the same field for both, but a level of nodes that all broke is a dead provider the
+   * run must refuse rather than re-select against, while a level the caller's own
+   * deadline cut is a run reporting what each node had reached. Deriving that from the
+   * detail STRING would be the drift-prone half of this pair; the report's own
+   * vocabulary is not.
    */
-  readonly incomplete: string | null;
+  readonly incomplete: NodeStop | null;
   /**
    * The node's output AS WRITTEN, code fences intact — what a JUDGE grades.
    *
@@ -2074,21 +2094,24 @@ export async function runSwarm(
       isolation: run.isolation,
       reported: run.reportedItself ? 'self' : 'final-text',
     });
-    // A NODE THAT ERRORED IS NOT A CANDIDATE, and this is where that becomes a fact
-    // the barrier can read. Its journal row is already terminal — `recordReport`
-    // wrote the status, the cause and whatever it spent — so nothing is lost by
-    // rejecting here; what is gained is that the level counts it as one fewer
-    // candidate instead of scoring an error message as an answer. That is also the
-    // outcome the deleted level clock was reaching for, without a clock: three nodes
-    // whose provider never answers now each end their own turn, each write their own
-    // reason, and the level ends the run because it produced nothing usable.
-    if (run.report.status === 'errored') {
-      throw toProteusError({
-        doing: `measure node ${id} of this search`,
-        cause: new Error(run.report.errorMessage ?? run.report.summary),
-        otherwise: 'unavailable',
-      });
-    }
+    // A NODE THAT REPORTED IS A CANDIDATE, whatever its report says — and `errored` is
+    // not the exception it used to be here. This function threw on that status, so a node
+    // that ran for four minutes, wrote its work and then met an expired credential
+    // reached the barrier as a REJECTION: dropped from `candidates`, counted in `lost`,
+    // and disclosed to the caller only as a smaller number. A live `preset:'ideate'` run
+    // of three nodes returned `candidates: 1` and `stop:'budget'` that way, with nothing
+    // in the result naming the other two or saying why, and their answers recoverable
+    // only out of the workspace.
+    //
+    // The throw predates {@link Expansion.incomplete}, which is the mechanism for exactly
+    // this and already names `errored` in its own docstring: an unfinished node is
+    // carried, is NOT measured, is NOT scored, is NOT backpropagated, and says on its own
+    // row why it stopped. So the two disagreed and the older one won. What the throw
+    // guarded — an error message scored as an answer — `incomplete` guards for every
+    // status alike, and one mechanism for "this node did not finish" is the point.
+    //
+    // A node that produced NO REPORT still rejects, from `runNodeAgent`: a transport that
+    // failed before the loop has nothing to carry, and that is what `lost` counts.
     return {
       id, parentId: parent.id, depth: atDepth, aggregated: edges,
       artifact: run.candidate,
@@ -2099,9 +2122,12 @@ export async function runSwarm(
       // on step 1" for whoever reads the report.
       incomplete: run.report.status === 'completed'
         ? null
-        : `${run.report.status} after ${String(run.report.stepCount)} step(s) in `
-          + `${String(run.report.wallClockMs)} ms`
-          + (run.report.errorMessage ? `: ${run.report.errorMessage}` : ''),
+        : {
+          status: run.report.status,
+          detail: `${run.report.status} after ${String(run.report.stepCount)} step(s) in `
+            + `${String(run.report.wallClockMs)} ms`
+            + (run.report.errorMessage ? `: ${run.report.errorMessage}` : ''),
+        },
       // An agent node REPORTS its candidate, so what it wrote and what the
       // instrument measures are the same string and there is nothing to strip.
       answer: run.candidate,
@@ -2560,39 +2586,59 @@ export async function runSwarm(
     );
 
     const expansions: Expansion[] = [];
-    /** Why each member of this level failed, in order — the text the run's own refusal
-     *  quotes when the level produced nothing. A count alone made a dead level report
-     *  `best: null` with the cause nowhere in it. */
-    const failures: string[] = [];
+    /**
+     * Why each member of this level produced no usable candidate, in order — the text
+     * the run's own refusal quotes when the whole level did. A count alone made a dead
+     * level report `best: null` with the cause nowhere in it.
+     *
+     * TWO KINDS SIT HERE UNDER ONE NAME, because "this branch produced nothing the search
+     * can continue from" is one fact: a member the barrier rejected left no report at
+     * all, and a member that reported `incomplete` left a status line rather than an
+     * answer. The second kind used to be the first — an `errored` node was thrown — and
+     * collapsing them again in the other direction would put a node the caller can read
+     * back into the bucket for the ones that vanished.
+     */
+    const unusable: string[] = [];
     for (const { id, answer } of answers) {
+      /**
+       * WHY THIS MEMBER PRODUCED NOTHING THE LEVEL CAN CONTINUE FROM, or null where it
+       * produced an answer.
+       *
+       * Read for both kinds before either is handled, so the attribution below has ONE
+       * call site: two sites raising one event name are two vocabularies for one fact.
+       */
+      const stopped = answer.kind === 'failed'
+        ? renderCauseChain(answer.error)
+        : answer.expansion.incomplete?.detail ?? null;
       if (answer.kind === 'failed') {
-        // Named, never counted: a branch lost to a provider error is one fewer
-        // candidate and the report's `stop` has to be able to say the search ran
-        // narrower than it was configured to.
+        // LOST IS THE NARROWER CLAIM: the search holds NOTHING for this node, so the
+        // report's `stop` says it ran narrower than it was configured to. An incomplete
+        // member is carried with its reason on its own candidate and is therefore not
+        // lost — the run has it, and says what happened to it.
         lost += 1;
-        const chain = renderCauseChain(answer.error);
-        failures.push(`${id}: ${chain}`);
-        log.event('swarm.branch_failed', {
-          preset: resolved.preset,
-          depth: childDepth,
-          node: id,
-          error: chain,
-        });
-        continue;
+      } else {
+        const expansion = answer.expansion;
+        usage = addUsage(usage, expansion.usage);
+        // THIS CANDIDATE's spend, retained for its own record. The run's total would
+        // attribute every node's tokens to every row, which is a number a leaderboard
+        // would quote and be wrong about; null where the provider reported nothing,
+        // because an unmeasured spend is not a free one.
+        spentBy.set(expansion.id, usageTotal(expansion.usage) ?? null);
+        if (expansion.modelId !== null) {
+          deps.reportModelCall?.({
+            source: 'swarm', usage: expansion.usage, modelId: expansion.modelId,
+          });
+        }
+        expansions.push(expansion);
       }
-      const expansion = answer.expansion;
-      usage = addUsage(usage, expansion.usage);
-      // THIS CANDIDATE's spend, retained for its own record. The run's total would
-      // attribute every node's tokens to every row, which is a number a leaderboard
-      // would quote and be wrong about; null where the provider reported nothing,
-      // because an unmeasured spend is not a free one.
-      spentBy.set(expansion.id, usageTotal(expansion.usage) ?? null);
-      if (expansion.modelId !== null) {
-        deps.reportModelCall?.({
-          source: 'swarm', usage: expansion.usage, modelId: expansion.modelId,
-        });
-      }
-      expansions.push(expansion);
+      if (stopped === null) continue;
+      unusable.push(`${id}: ${stopped}`);
+      log.event('swarm.branch_failed', {
+        preset: resolved.preset,
+        depth: childDepth,
+        node: id,
+        error: stopped,
+      });
     }
     // A LEVEL THAT PRODUCED NO USABLE CANDIDATE ENDS THE RUN, by name. This is a fact
     // about the level's OUTCOME and needs no timer: continuing would select the same
@@ -2601,7 +2647,15 @@ export async function runSwarm(
     // reporting `best: null` with no cause anywhere in it. The causes are quoted rather
     // than summarised, because a level's failure is only actionable if the reader can see
     // which node said what.
-    if (failures.length > 0 && expansions.length === 0) {
+    //
+    // WHAT ENDS IT IS A LEVEL THAT BROKE, and that is narrower than a level that produced
+    // no answer. A node whose provider failed left nothing to learn and the next wave
+    // would meet the same provider; a node the caller's own deadline CUT, or one that ran
+    // out of steps, is a node the run reports as it found it — the caller knows what
+    // stopped it and reads each candidate's own stop. So the test is the report's status
+    // rather than the absence of an answer, and a level holding one broken node and one
+    // cut one settles instead of refusing.
+    if (unusable.length > 0 && expansions.every((child) => child.incomplete?.status === 'errored')) {
       // THE LEDGER IS SETTLED ON THE WAY OUT, as it is on every other refusal past
       // `begin`. A refused run left `running` used to be merely untidy; now it is a
       // RESUME TARGET — the next re-drive of this task would re-enter a tree whose run
@@ -2609,7 +2663,7 @@ export async function runSwarm(
       // silently continues.
       searchLedger.fail(rootId, ledgerEpoch, Date.now());
       return unavailable(`the level at depth ${String(childDepth)} produced no candidate: all `
-        + `${String(width)} of its nodes failed. ${failures.join(' | ')}`);
+        + `${String(width)} of its nodes failed. ${unusable.join(' | ')}`);
     }
     if (grant) {
       reportVerdict(log, {
@@ -2662,7 +2716,7 @@ export async function runSwarm(
       // instrument is not asked, the ensemble is not sampled, and the run pays for
       // neither — a node the clock stopped has nothing for either to look at.
       const outcome = expansion.incomplete !== null
-        ? { kind: 'incomplete' as const, detail: expansion.incomplete }
+        ? { kind: 'incomplete' as const, detail: expansion.incomplete.detail }
         : measures && verifier && ctx && measured && baseline !== null
           ? await measureChild({ ctx, verifier, measured, baseline, artifact: expansion.artifact })
           : judgeSamples !== null

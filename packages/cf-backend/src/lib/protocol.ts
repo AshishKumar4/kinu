@@ -3,7 +3,7 @@
  */
 
 import type {
-	ActivityLogEntry, ContextComposition, MissionBudgetSnapshot, StepTelemetry, Usage,
+	ActivityLogEntry, ContextComposition, StepTelemetry, Usage,
 	WorkspaceSpend,
 } from "@kinu/core";
 
@@ -265,14 +265,16 @@ export interface ActivitySnapshot {
 	 *  to the whole workspace — a judge's cold prompt in this window would read
 	 *  as a cache regression the agent never had. `spend` below is the workspace. */
 	telemetry: StepTelemetry;
-	/** Every model call the workspace can account for, grouped by producer, with
-	 *  its own coverage fraction. This is the answer to "is this ALL of the
-	 *  usage": `spend.coverage.reported` says what share of known calls the
-	 *  providers measured, and `spend.coverage.silent` names the producers that
-	 *  measured none. */
+	/** Every model call the workspace can account for, on both axes: grouped by
+	 *  the producer that spent it, and grouped by the mission it was spent on.
+	 *  This is the answer to "is this ALL of the usage": `spend.coverage.reported`
+	 *  says what share of known calls the providers measured, and
+	 *  `spend.coverage.silent` names the producers that measured none.
+	 *
+	 *  `spend.missions` is the ONE mission-spend figure the panel reads. It comes
+	 *  from `mission_budget`, the ledger the caps are enforced against, and it
+	 *  covers every declared label rather than only the ones the turn in flight
+	 *  happens to be running under. */
 	spend: WorkspaceSpend;
-	/** Mission budgets, empty when the workspace runs under no mission label
-	 *  (the default). `pricing.source` says how honest each USD figure is. */
-	budgets: MissionBudgetSnapshot[];
 	log: ActivityLogEntry[];
 }

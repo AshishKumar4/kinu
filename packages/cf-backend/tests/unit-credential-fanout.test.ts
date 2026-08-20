@@ -20,7 +20,6 @@ function setup() {
   const stub = {
     async ensureProfile() {},
     async userMcp_warmConnections() { return { servers: 0 }; },
-    async backfillWorkspaceCapabilities() { return { provisioned: 0 }; },
     async setCredential() {},
     async deleteCredential() {},
     async disconnectCodex() {},

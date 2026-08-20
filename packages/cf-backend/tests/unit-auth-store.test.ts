@@ -1,18 +1,11 @@
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
-import { describe, expect, test } from 'bun:test';
-import { createSession, verifySession, type OAuthProfile } from '../src/auth/d1-store';
-import { createAuthDatabase, makeD1 } from './helpers/d1';
+import { describe, expect, setSystemTime, test } from 'bun:test';
+import {
+  consumeOAuthState, createOAuthState, createSession, deriveUserId, revokeSession, verifySession,
+  type OAuthProfile,
+} from '../src/auth/store';
+import { makeKv, type FakeKv } from './helpers/kv';
 import type { UserCaller } from '../src/user/workspace-capability';
-import * as v from 'valibot';
-
-const AuthUserSchema = v.object({ id: v.string(), email: v.string() });
-const AuthEmailLinkSchema = v.object({ email: v.string(), user_id: v.string() });
-const AuthSessionSchema = v.object({
-  user_id: v.string(),
-  provider: v.string(),
-  provider_account_id: v.string(),
-});
-const AuthAccountSchema = v.object({ user_id: v.string() });
 
 interface TestNamespace<Stub> {
   idFromName(name: string): string;
@@ -20,7 +13,7 @@ interface TestNamespace<Stub> {
 }
 
 interface AuthStoreTestBindings<Stub> {
-  AUTH_DB: D1Database;
+  AUTH_KV: FakeKv;
   UserDO: TestNamespace<Stub>;
   CREDENTIAL_ENCRYPTION_KEY: string;
 }
@@ -28,26 +21,26 @@ interface AuthStoreTestBindings<Stub> {
 function testEnv<Stub>(bindings: AuthStoreTestBindings<Stub>): Env {
   const env: Partial<Env> = {};
   Object.assign(env, bindings);
-  // SAFETY: createSession and verifySession read exactly the constructed D1
-  // database, UserDO namespace, and credential key; every reachable binding is present.
+  // SAFETY: createSession and verifySession read exactly the constructed KV
+  // namespace, UserDO namespace, and credential key; every reachable binding is present.
   return env as Env;
 }
 
 function setupEnv() {
-  const db = createAuthDatabase();
+  const kv = makeKv();
   const ensuredProfiles: string[] = [];
   const userDO = {
     async ensureProfile(_caller: UserCaller, email: string, displayName?: string) {
       ensuredProfiles.push(`${email}:${displayName ?? ''}`);
-      return { email, displayName };
+      return { email, displayName: displayName ?? null, createdAt: 1, lastSeenAt: 1 };
     },
   };
 
   return {
-    db,
+    kv,
     ensuredProfiles,
     env: testEnv({
-      AUTH_DB: makeD1(db),
+      AUTH_KV: kv,
       UserDO: {
         idFromName(name: string) { return name; },
         get() { return userDO; },
@@ -55,9 +48,13 @@ function setupEnv() {
   };
 }
 
-describe('D1-backed browser auth store', () => {
-  test('first verified OAuth login creates user before email link and session', async () => {
-    const { db, env, ensuredProfiles } = setupEnv();
+function profile(provider: OAuthProfile['provider'], providerSub: string, email: string): OAuthProfile {
+  return { provider, providerSub, email, emailVerified: true, displayName: null };
+}
+
+describe('KV-backed browser auth store', () => {
+  test('a verified login yields a session that verifies back to the same identity', async () => {
+    const { kv, env, ensuredProfiles } = setupEnv();
 
     const created = await createSession(env, {
       provider: 'cloudflare',
@@ -65,106 +62,114 @@ describe('D1-backed browser auth store', () => {
       email: 'Ashish@Example.com',
       emailVerified: true,
       displayName: 'Ashish',
-      avatarUrl: null,
     });
 
     expect(created.token).toStartWith('ps_');
     expect(created.identity.email).toBe('ashish@example.com');
+    expect(created.identity.userId).toBe(await deriveUserId('ashish@example.com'));
+    // The durable half of the identity went to the user's own DO, not to KV.
     expect(ensuredProfiles).toEqual(['ashish@example.com:Ashish']);
 
-    const user = v.parse(AuthUserSchema, db.prepare('SELECT id, email FROM auth_users').get());
-    const link = v.parse(AuthEmailLinkSchema, db.prepare('SELECT email, user_id FROM auth_email_links').get());
-    const session = v.parse(
-      AuthSessionSchema,
-      db.prepare('SELECT user_id, provider, provider_account_id FROM auth_sessions').get(),
-    );
-
-    expect(user.id).toBe(created.identity.userId);
-    expect(user.email).toBe('ashish@example.com');
-    expect(link).toEqual({ email: 'ashish@example.com', user_id: created.identity.userId });
-    expect(session).toEqual({
-      user_id: created.identity.userId,
+    const verified = await verifySession(kv, created.token);
+    expect(verified).toMatchObject({
+      userId: created.identity.userId,
+      email: 'ashish@example.com',
       provider: 'cloudflare',
-      provider_account_id: 'cf-user-1',
+      sub: 'cf-user-1',
+      displayName: 'Ashish',
     });
-
-    const verified = await verifySession(env.AUTH_DB, created.token, created.bookmark);
-    expect(verified.identity?.userId).toBe(created.identity.userId);
+    expect(verified?.authTime).toBe(created.identity.authTime);
   });
 
-  test('verified email link reuses the same Kinu user across providers', async () => {
-    const { db, env } = setupEnv();
+  test('the same verified email is the same Kinu user across providers', async () => {
+    const { kv, env } = setupEnv();
     const first = await createSession(env, profile('cloudflare', 'cf-user-1', 'person@example.com'));
     const second = await createSession(env, profile('google', 'google-user-1', 'PERSON@example.com'));
 
     expect(second.identity.userId).toBe(first.identity.userId);
-    expect(db.prepare('SELECT COUNT(*) as count FROM auth_users').get()).toEqual({ count: 1 });
-    expect(db.prepare('SELECT COUNT(*) as count FROM auth_accounts').get()).toEqual({ count: 2 });
-    expect(db.prepare('SELECT COUNT(*) as count FROM auth_sessions').get()).toEqual({ count: 2 });
+    // Two sessions, one identity — and no third record standing for the user.
+    expect(kv.keys().filter((key) => key.startsWith('session:'))).toHaveLength(2);
+    expect(kv.keys().filter((key) => !key.startsWith('session:'))).toEqual([]);
+  });
+
+  test('an unverified email is refused rather than given an identity of its own', async () => {
+    const { env } = setupEnv();
+    expect(createSession(env, {
+      provider: 'github',
+      providerSub: 'gh-1',
+      email: 'person@example.com',
+      emailVerified: false,
+      displayName: null,
+    })).rejects.toThrow(/did not report this email address as verified/);
+  });
+
+  test('a session stops verifying once its lifetime is up', async () => {
+    const { kv, env } = setupEnv();
+    const created = await createSession(env, profile('cloudflare', 'cf-1', 'person@example.com'));
+    expect(await verifySession(kv, created.token)).not.toBeNull();
+
+    try {
+      setSystemTime(new Date(created.expiresAt + 1_000));
+      expect(await verifySession(kv, created.token)).toBeNull();
+    } finally {
+      setSystemTime();
+    }
+  });
+
+  test('a revoked session stops verifying, and a token that is not one is refused unread', async () => {
+    const { kv, env } = setupEnv();
+    const created = await createSession(env, profile('cloudflare', 'cf-1', 'person@example.com'));
+
+    await revokeSession(kv, created.token);
+    expect(await verifySession(kv, created.token)).toBeNull();
+    expect(await verifySession(kv, 'not-a-proteus-token')).toBeNull();
   });
 });
 
-function profile(provider: OAuthProfile['provider'], providerSub: string, email: string): OAuthProfile {
-  return {
-    provider,
-    providerSub,
-    email,
-    emailVerified: true,
-    displayName: null,
-    avatarUrl: null,
-  };
-}
-
-describe('resolveOrCreateIdentity efficiency and orphan safety', () => {
-  function envWithCounter(db: ReturnType<typeof createAuthDatabase>, onQuery?: (q: string) => void) {
-    const userDO = { async ensureProfile() {} };
-    return testEnv({
-      AUTH_DB: makeD1(db, onQuery),
-      UserDO: { idFromName(name: string) { return name; }, get() { return userDO; } },
-      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+describe('OAuth handoff state', () => {
+  test('state round-trips once and only once', async () => {
+    const kv = makeKv();
+    const { state } = await createOAuthState(kv, {
+      provider: 'cloudflare',
+      codeVerifier: 'verifier',
+      nonce: null,
+      returnTo: '/workspaces/jarvis',
+      redirectUri: 'https://proteus.example.com/auth/cloudflare/callback',
     });
-  }
 
-  test('exactly one auth_users upsert per login', async () => {
-    const db = createAuthDatabase();
-    let userUpserts = 0;
-    const env = envWithCounter(db, (q) => { if (q.includes('INSERT INTO auth_users')) userUpserts += 1; });
+    const consumed = await consumeOAuthState(kv, state, 'cloudflare');
+    expect(consumed).toMatchObject({
+      provider: 'cloudflare',
+      codeVerifier: 'verifier',
+      returnTo: '/workspaces/jarvis',
+    });
 
-    await createSession(env, profile('cloudflare', 'cf-user-1', 'person@example.com'));
-    expect(userUpserts).toBe(1);
-
-    userUpserts = 0;
-    await createSession(env, profile('google', 'google-user-1', 'person@example.com'));
-    expect(userUpserts).toBe(1);
+    expect(consumeOAuthState(kv, state, 'cloudflare')).rejects.toThrow(/invalid or already used/);
   });
 
-  test('losing a concurrent email-link race leaves no orphan auth_users row', async () => {
-    const db = createAuthDatabase();
-    const winnerId = 'f'.repeat(32);
-    let raceArmed = true;
-    const env = envWithCounter(db, (q) => {
-      // Just before this login claims the email link, a concurrent login
-      // for the same verified email wins the race.
-      if (raceArmed && q.includes('INSERT INTO auth_email_links')) {
-        raceArmed = false;
-        db.prepare(
-          `INSERT INTO auth_users (id, email, email_verified, created_at, updated_at) VALUES (?, ?, 1, 1, 1)`,
-        ).run(winnerId, 'person@example.com');
-        db.prepare(
-          `INSERT INTO auth_email_links (email, user_id, created_at, updated_at) VALUES (?, ?, 1, 1)`,
-        ).run('person@example.com', winnerId);
-      }
+  test('a callback from another provider cannot spend this state', async () => {
+    const kv = makeKv();
+    const { state } = await createOAuthState(kv, {
+      provider: 'cloudflare',
+      codeVerifier: 'verifier',
+      nonce: null,
+      returnTo: '/',
+      redirectUri: 'https://proteus.example.com/auth/cloudflare/callback',
     });
 
-    const created = await createSession(env, profile('github', 'gh-user-1', 'person@example.com'));
+    expect(consumeOAuthState(kv, state, 'github')).rejects.toThrow(/provider mismatch/);
+  });
 
-    expect(created.identity.userId).toBe(winnerId);
-    // The provisional row minted by the losing login must be gone.
-    expect(db.prepare('SELECT COUNT(*) as count FROM auth_users').get()).toEqual({ count: 1 });
-    const account = v.parse(
-      AuthAccountSchema,
-      db.prepare('SELECT user_id FROM auth_accounts WHERE provider = ?').get('github'),
-    );
-    expect(account.user_id).toBe(winnerId);
+  test('a hostile return_to is neutralised on the way in, not just on the way out', async () => {
+    const kv = makeKv();
+    const { state } = await createOAuthState(kv, {
+      provider: 'cloudflare',
+      codeVerifier: 'verifier',
+      nonce: null,
+      returnTo: '//evil.example.com/steal',
+      redirectUri: 'https://proteus.example.com/auth/cloudflare/callback',
+    });
+
+    expect((await consumeOAuthState(kv, state, 'cloudflare')).returnTo).toBe('/');
   });
 });

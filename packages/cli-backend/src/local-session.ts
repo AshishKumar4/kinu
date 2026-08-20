@@ -448,8 +448,23 @@ export class LocalAgentSession implements BackendHost {
     this.fallbackModelSpec = opts.modelSpec ?? 'local/static';
     this.modelResolver = opts.modelResolver ?? null;
 
+    // The cumulative spend governor — a scheduled run or a fork opts into a
+    // label, and its refusals land in this run's durable event log. No label
+    // means no cap, which is every ordinary session.
+    this.budget = new MissionGovernor({
+      storage: this.rt.storage,
+      // Real USD: the catalog rates for whatever model the next turn resolves
+      // to. Null until the lookup lands — the ledger then blends, and says so.
+      pricing: () => this.modelCatalog.pricing(),
+      onExhausted: ({ error: _error, ...refusal }) =>
+        this.recordRunEvent({ type: 'budget_exhausted', ...refusal }),
+    });
     this.engine = new EvolutionEngine(this.rt, {
       enabled: !opts.noAutoEvolve,
+      // The turn review's own model calls debit the mission the reviewed turn
+      // ran under — the same ledger, through the same seam, as the work it
+      // reviews. Unbudgeted turns never reach it.
+      governor: this.budget,
       // Replay-eval rollout: the current system prompt (lessons/facts/soul) +
       // model, tools disabled. Unlike the DO's sandboxed scaffold rollout, a
       // local re-run with tools would re-execute shell work on the user's
@@ -591,17 +606,6 @@ export class LocalAgentSession implements BackendHost {
     // benchmark container or a one-shot `kinu exec` does not.
     this.eventRecorder.observe((event) => this.emit({ type: 'run-event', event }));
 
-    // The cumulative spend governor — a scheduled run or a fork opts into a
-    // label, and its refusals land in this run's durable event log. No label
-    // means no cap, which is every ordinary session.
-    this.budget = new MissionGovernor({
-      storage: this.rt.storage,
-      // Real USD: the catalog rates for whatever model the next turn resolves
-      // to. Null until the lookup lands — the ledger then blends, and says so.
-      pricing: () => this.modelCatalog.pricing(),
-      onExhausted: ({ error: _error, ...refusal }) =>
-        this.recordRunEvent({ type: 'budget_exhausted', ...refusal }),
-    });
     this.orch = new AgentOrchestrator({
       host: this,
       engine: this.engine,
@@ -1367,11 +1371,16 @@ export class LocalAgentSession implements BackendHost {
       logActivity: (event, detail) => this.emit({ type: 'evolution', event, message: detail ?? '' }),
     });
     const reviews = await this.orch.runDeferredTurnReviews();
-    if (reviews.reviewed > 0 || reviews.refused > 0) {
+    if (reviews.reviewed > 0 || reviews.refused.length > 0) {
+      // Each reason states a different fate for the row, so they are counted
+      // apart: an unreadable row is gone, a budget-refused one is still owed.
+      const unreadable = reviews.refused.filter((r) => r.reason === 'unreadable').length;
+      const overBudget = reviews.refused.length - unreadable;
       this.emit({
         type: 'evolution', event: 'deferred_reviews_drained',
-        message: `${reviews.reviewed} deferred turn review(s) run` +
-          (reviews.refused > 0 ? `, ${reviews.refused} unreadable row(s) refused` : ''),
+        message: `${reviews.reviewed} deferred turn review(s) run`
+          + (unreadable > 0 ? `, ${unreadable} unreadable row(s) dropped` : '')
+          + (overBudget > 0 ? `, ${overBudget} left queued: the mission is over its budget` : ''),
       });
     }
     const orphans = detectOrphanedFibers(this.rt.storage.sql);

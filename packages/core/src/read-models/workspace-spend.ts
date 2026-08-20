@@ -35,6 +35,12 @@
  * same reason it does there: a total whose window you cannot see is a total you
  * cannot check. Heads are per-run rather than per-step, so the journal is read
  * whole — a workspace has orders of magnitude fewer heads than steps.
+ *
+ * TWO AXES OVER ONE SUM. `producers` groups the spend by what KIND of work made
+ * the call; `missions` groups it by which declared piece of work it was made
+ * FOR, read out of the same ledger the budget caps are enforced against. They
+ * cover different scopes on purpose — a producer row is windowed, a mission row
+ * is the label's whole life — and the surface that renders them says so.
  */
 
 import type { RunEventRecorder } from '../events/recorder';
@@ -43,6 +49,7 @@ import type { SqlExecutor } from '../types/primitives';
 import { addUsage, usageReported, usageTotal, type Usage } from '../usage';
 import { storedUsage } from '../heads/journal';
 import type { StoredHeadUsage } from '../heads/schema';
+import { listMissionSpend, type MissionBudgetSnapshot } from '../mission-budget';
 
 /** What one producer spent, and what it could not account for. */
 export interface ProducerSpend {
@@ -92,6 +99,33 @@ export interface WorkspaceSpend {
   readonly coverage: SpendCoverage;
   /** The bound on `step_finish` and `model_call` rows read. */
   readonly windowLimit: number;
+  /**
+   * Share of the measured tokens no turn of this agent spent — everything the
+   * owner did not watch happen: judges, the fast tier, the evolution engine,
+   * heads, rollouts, an embedder.
+   *
+   * Derived from the same producer rows rather than counted a second time, so
+   * it cannot disagree with the table it sits under. Null when nothing was
+   * measured: a share of no tokens is absent, never 0.
+   */
+  readonly offTurnShare: number | null;
+  /**
+   * What each mission label has spent, dearest first — the OTHER axis of the
+   * same money. A producer row says what KIND of work spent it; a mission row
+   * says which declared piece of work it was spent ON, including everything
+   * that work delegated (the ledger rolls a debit up the whole label chain).
+   *
+   * Read from `mission_budget`, the ledger the caps are enforced against, so
+   * this figure and a refusal can never disagree. Empty on the workspace that
+   * declared no budget, which is every ordinary session.
+   *
+   * TWO SCOPES IN ONE RESULT, and this is the second: the rows above are the
+   * window named by `windowLimit`, these are cumulative over the label's whole
+   * life. A cap is cumulative, so a windowed mission figure would be a number
+   * no cap is ever read against. The surface says which is which; do not add
+   * the two axes together.
+   */
+  readonly missions: readonly MissionBudgetSnapshot[];
   /**
    * The window reached the end of the log rather than filling up.
    *
@@ -209,6 +243,10 @@ export function workspaceSpend(
   }
 
   const measured = total.calls - total.callsWithoutUsage;
+  const measuredTokens = usageTotal(total.usage);
+  // The turn loop's own tokens, absent when it measured none. `agent` is the one
+  // producer the owner watched happen, so everything else is the off-turn half.
+  const turnTokens = usageTotal(producers.find((p) => p.source === 'agent')?.usage ?? {}) ?? 0;
   return {
     producers,
     total: finishTotal(total),
@@ -221,6 +259,10 @@ export function workspaceSpend(
         .filter((p) => p.callsWithoutUsage > 0 && p.callsWithoutUsage < p.calls)
         .map((p) => p.source),
     },
+    offTurnShare: measuredTokens === undefined || measuredTokens === 0
+      ? null
+      : (measuredTokens - turnTokens) / measuredTokens,
+    missions: listMissionSpend(deps.sql),
     windowLimit: opts.windowLimit,
     complete,
   };

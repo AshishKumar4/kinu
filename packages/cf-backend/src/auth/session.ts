@@ -1,14 +1,14 @@
 // Browser authentication for Kinu.
 //
-// Primary path: app-owned OAuth/OIDC sessions stored in D1. Browser cookies
-// are opaque, HttpOnly session handles; D1 stores only hashes.
+// Primary path: app-owned OAuth/OIDC sessions in KV. Browser cookies are
+// opaque, HttpOnly session handles; KV stores only hashes.
 //
 // Local/staging dev: if `env.DEV_USER_EMAIL` is set, we synthesize an identity
 // from that email. Production must leave that variable unset.
 
 import { DEVICE_CONNECT_PATH } from '@kinu/core';
-import { readD1Bookmark, verifySession } from './d1-store';
-import { sha256Hex } from '../lib/crypto';
+import { deriveUserId, verifySession } from './store';
+import type { KvStore } from '../lib/kv';
 import type { AccessTokenScope } from '../cli/access-token-store';
 
 export const SESSION_COOKIE_NAME = '__Host-proteus_session';
@@ -24,8 +24,6 @@ export interface AuthIdentity {
   displayName?: string | null;
   /** App-session auth time in epoch ms, used for step-up checks. */
   authTime?: number;
-  /** Latest D1 session bookmark for sequentially consistent replica reads. */
-  d1Bookmark?: string | null;
   /** Present only for connect-ticket identities backed by a scoped `pta_…`
    *  access token — the agent websocket pins the connection to these scopes.
    *  Absent for browser sessions and interactive CLI session tokens. */
@@ -54,11 +52,6 @@ export class AuthError extends Error {
   }
 }
 
-/** Deterministic dev user id: sha256(email) truncated to 32 hex chars. */
-export async function deriveUserId(email: string): Promise<string> {
-  return (await sha256Hex(email.trim().toLowerCase())).slice(0, 32);
-}
-
 export function readSessionToken(request: Request): string | null {
   const cookie = request.headers.get('cookie');
   if (!cookie) return null;
@@ -70,7 +63,7 @@ export function readSessionToken(request: Request): string | null {
 }
 
 export interface AuthEnv {
-  AUTH_DB?: D1Database;
+  AUTH_KV?: KvStore;
   DEV_USER_EMAIL?: string;
 }
 
@@ -83,9 +76,8 @@ export interface AuthEnv {
 export async function authenticateRequest(request: Request, env: AuthEnv): Promise<AuthIdentity> {
   const sessionToken = readSessionToken(request);
   if (sessionToken) {
-    if (!env.AUTH_DB) throw new AuthError(500, 'AUTH_DB binding is not configured');
-    const verified = await verifySession(env.AUTH_DB, sessionToken, readD1Bookmark(request));
-    const identity = verified.identity;
+    if (!env.AUTH_KV) throw new AuthError(500, 'AUTH_KV binding is not configured');
+    const identity = await verifySession(env.AUTH_KV, sessionToken);
     if (identity) return identity;
     throw new AuthError(401, 'Kinu session expired. Sign in again.');
   }
@@ -100,8 +92,8 @@ export async function authenticateRequest(request: Request, env: AuthEnv): Promi
     };
   }
 
-  if (!env.AUTH_DB) {
-    throw new AuthError(500, 'Browser auth is not configured (AUTH_DB binding missing)');
+  if (!env.AUTH_KV) {
+    throw new AuthError(500, 'Browser auth is not configured (AUTH_KV binding missing)');
   }
   throw new AuthError(401, 'No Kinu session in request');
 }

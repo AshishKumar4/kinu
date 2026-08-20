@@ -8,6 +8,9 @@
  *   /gallery.html?frame=chat     → chat column inventory
  *   /gallery.html?frame=chatempty → a workspace before its first turn: the
  *                                  mission it was created for, not a message
+ *   /gallery.html?frame=chatloading → a workspace WITH a history, before the
+ *                                  transcript has arrived — the state that used
+ *                                  to render as `chatempty` and lie
  *   /gallery.html?frame=toolcalls → every tool-call render state, pre-expanded
  *                                    (quiet failure, protocol failure, a
  *                                    multi-line `run`, an MCP tool, a failing
@@ -76,7 +79,7 @@ import { EmptyState, MarkdownContent } from "@/components/surfaces/shared";
 import { SubordinateTabs } from "@/components/SubordinateTabs";
 import { Modal } from "@/components/ui/Modal";
 import { MessageView } from "@/components/MessageView";
-import { DeviceConsentCard, ChatErrorCard, EmptyConversation, HistoryBoundary } from "@/pages/WorkspacePage";
+import { ConversationSkeleton, DeviceConsentCard, ChatErrorCard, EmptyConversation, HistoryBoundary } from "@/pages/WorkspacePage";
 import { usePagedScroll } from "@/hooks/use-paged-scroll";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { useTheme } from "@/hooks/use-theme";
@@ -93,7 +96,7 @@ import type { ExecutorInfo } from "@/lib/executors";
 import type {
   ChatHistoryEntry, ContextComposition, DirEntry, ExplorationCanvasRun, ForkRunParams,
   ForkRunSummary, HeadRunView, MountInfo, NodeTranscriptView, Page, PageRequest,
-  PendingAction, ProducerSpend, RunSummary, SearchNode, Usage,
+  PendingAction, ProducerSpend, RunSummary, SearchNode, Usage, WorkspaceSpend,
 } from "@kinu/core";
 import type { ModelMenuEntry } from "@/lib/user-api";
 import * as v from "valibot";
@@ -440,6 +443,23 @@ const MESSAGES: UIMessage[] = [
     metadata: { proteusEvent: "event_drain" },
     parts: [{ type: "text", text: "While you were idle:\n- [subordinate_report] from subordinate (coupon-tester): All 14 checkout regression tests green after the migration patch. [the sender awaits your answer]\n- [webhook] from github (AshishKumar4/shop): PR #212 review requested" }],
   }),
+  // The row the incident was, copied from production: `sunlit-stone-4a20` and
+  // `stone-ash-71f2` hold five of these, written before the author stamp
+  // existed, so a bare UUID id and the event name are the only markers on them
+  // — and until the classifier stopped being an allowlist of four names, all
+  // five were drawn in the owner's bubble, above things they had typed.
+  msg({
+    id: "f8798675-5e9a-4d13-aac2-293f4557f1c1", role: "user",
+    metadata: { proteusEvent: "fork_interrupted", runs: ["6xrijuf933p0jclpctw59"], heads: 23 },
+    parts: [{ type: "text", text: "23 head(s) across 6 fork run(s) were still marked running from an activation that has ended, so nothing is executing them and no report will arrive. They have been released; re-run the ones you still need." }],
+  }),
+  // The same class, written the new way: the seam stamped the author, so the
+  // event name is no longer load-bearing for the decision.
+  msg({
+    id: "programmatic:completion-gate-1", role: "user",
+    metadata: { proteusEvent: "completion_gate", proteusAuthor: "harness" },
+    parts: [{ type: "text", text: "[Runtime check — a mechanical gate from the Proteus harness, not written by the user.]\n\nYou said the task is done. Here is the current state of the working directory, read after you stopped." }],
+  }),
   msg({
     id: "a2", role: "assistant", createdAt: NOW - 3 * 60e3,
     parts: [
@@ -629,7 +649,7 @@ function swarmNode(
   return {
     id, task, rationale, status: "completed", summary: null, errorMessage: null,
     usage: { input: 6_200, output: 480 }, wallClockMs: 12_400,
-    spawnedAt: NOW - 21e5, lastStepAt: NOW - 20e5, decisions: [], steps: [],
+    spawnedAt: NOW - 21e5, lastStepAt: NOW - 20e5, decisions: [],
     ...extra,
   };
 }
@@ -832,38 +852,31 @@ const MERGED_RUN: HeadRunView = {
       errorMessage: null, usage: { input: 8_420, output: 610 }, wallClockMs: 14_200,
       spawnedAt: NOW - 52e5, lastStepAt: NOW - 51e5,
       decisions: [{ question: "Guard at the edge or at the reader?", choice: "at the reader", rationale: "the edge would still let a null through the cart serializer" }],
-      steps: [
-        { text: "Reading the handler and its two callers.", reasoning: "The 500 is a deref, so the fix has to be where the deref is.", toolCalls: [{ name: "file", input: { action: "read", path: "packages/checkout/src/apply-coupon.ts" }, output: "…" }] },
-        { text: "Both call sites take the same shape. One guard covers them.", toolCalls: [{ name: "run", input: { command: "bun test packages/checkout" }, output: "exit=0" }] },
-      ],
     },
     {
       id: "root-merge-1-h1", task: "packages/cart/src/serializer.ts", rationale: "the lazy path",
       status: "completed", summary: "One read, already null-safe — no change needed here.",
       errorMessage: null, usage: { input: 5_110, output: 240 }, wallClockMs: 9_800,
       spawnedAt: NOW - 52e5, lastStepAt: NOW - 515e4, decisions: [],
-      steps: [{ text: "Already uses the optional chain.", toolCalls: [{ name: "file", input: { action: "read", path: "packages/cart/src/serializer.ts" }, output: "…" }] }],
     },
     {
       id: "root-merge-1-h2", task: "packages/admin/src/coupon-report.ts", rationale: "the reporting path",
       status: "errored", summary: null,
       errorMessage: "the admin package is not checked out in this sandbox",
       usage: { input: 1_020, output: 0 }, wallClockMs: 2_100,
-      spawnedAt: NOW - 52e5, lastStepAt: null, decisions: [], steps: [],
+      spawnedAt: NOW - 52e5, lastStepAt: null, decisions: [],
     },
     {
       id: "root-merge-1-h3", task: "packages/checkout/src/pricing.ts", rationale: "the discount maths",
       status: "completed", summary: "Indexes by kind twice inside the percentage path; both reads are behind the same guard.",
       errorMessage: null, usage: { input: 6_240, output: 380 }, wallClockMs: 11_400,
       spawnedAt: NOW - 52e5, lastStepAt: NOW - 512e4, decisions: [],
-      steps: [{ text: "The percentage branch reads rules[kind] before the null check.", toolCalls: [{ name: "file", input: { action: "read", path: "packages/checkout/src/pricing.ts" }, output: "…" }] }],
     },
     {
       id: "root-merge-1-h4", task: "packages/api/src/coupon-routes.ts", rationale: "the public surface",
       status: "running", summary: null, errorMessage: null,
       usage: { input: 3_180, output: 90 }, wallClockMs: 4_600,
       spawnedAt: NOW - 52e5, lastStepAt: NOW - 51e5, decisions: [],
-      steps: [{ text: "Walking the route handlers for a kind lookup.", toolCalls: [] }],
     },
   ],
   merge: {
@@ -995,7 +1008,7 @@ const TRANSCRIPTS = {
         text: "Checking whether Tuesday's migration reached staging at all.",
         reasoning: "If staging never ran it, the null `kind` column there proves nothing about production and the whole comparison is off.",
         toolCalls: [
-          { name: "run", input: { command: "wrangler d1 migrations list proteus-staging" }, output: "0007_coupon_kind.sql  applied 2026-08-11" },
+          { name: "run", input: { command: "./scripts/migrations.sh status --env staging" }, output: "0007_coupon_kind.sql  applied 2026-08-11" },
         ],
       },
       {
@@ -1463,9 +1476,11 @@ function GalleryComposer({ notices = [] }: { notices?: readonly ComposerNotice[]
 
 function ChatMessages() {
   return (
-    <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8">
+    <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8" data-gallery-chat>
       {MESSAGES.map((m, i) => (
-        <MessageView key={m.id} message={m} isLast={i === MESSAGES.length - 1} isStreaming={false} onFork={() => {}} />
+        <div key={m.id} data-chat-row={m.id}>
+          <MessageView message={m} isLast={i === MESSAGES.length - 1} isStreaming={false} onFork={() => {}} />
+        </div>
       ))}
       <DeviceConsentCard
         consent={{
@@ -1475,6 +1490,10 @@ function ChatMessages() {
         onResolve={() => {}}
       />
       <ChatErrorCard message="fetch failed: provider stream reset before completion (anthropic/claude-opus-4)" streaming={false} onRetry={() => {}} onDismiss={() => {}} />
+      {/* The same card re-serving an OLDER turn's outcome. `sunlit-stone-4a20`
+          answers a resume ACK with exactly this body today, from a turn that
+          ended 2026-08-17 — the state the owner opens an idle workspace into. */}
+      <ChatErrorCard message="Unauthorized" replayed streaming={false} onRetry={() => {}} onDismiss={() => {}} />
     </div>
   );
 }
@@ -1600,6 +1619,25 @@ function ChatEmptyFrame() {
         <GalleryChatTabs clearable={false} />
         <div className="flex-1 overflow-y-auto px-6 py-5 lg:px-8">
           <EmptyConversation mission={BRAIN_STATUS.purpose} />
+        </div>
+        <GalleryComposer />
+      </div>
+    </div>
+  );
+}
+
+/* What EVERY workspace with a history opens on, for as long as the wake and the
+   transfer take — 0.8-3.8 seconds against production, measured 2026-08-20.
+   Photographed beside ChatEmptyFrame on purpose: the two used to be the same
+   picture, and that is the defect. One says "there is nothing here", the other
+   says "not yet", and only one of them is true of a workspace with messages. */
+function ChatLoadingFrame() {
+  return (
+    <div className="flex h-screen justify-center p-bg p-text">
+      <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
+        <GalleryChatTabs clearable={false} />
+        <div className="flex-1 overflow-y-auto px-6 py-5 lg:px-8">
+          <ConversationSkeleton />
         </div>
         <GalleryComposer />
       </div>
@@ -1899,7 +1937,7 @@ function LandingV2() {
     <div className="p-bg min-h-screen flex flex-col">
       <header className="flex h-16 items-center justify-between px-6 border-b p-border">
         <span className="flex items-center gap-2.5">
-          <span className="flex size-6 items-center justify-center rounded-md p-accent-bg p-accent font-mono text-[13px] font-bold">P</span>
+          <span className="flex size-6 items-center justify-center rounded-md p-accent-bg p-accent font-mono text-[13px] font-bold">K</span>
           <span className="font-mono text-[13px] font-semibold tracking-[0.14em] p-text">PROTEUS</span>
         </span>
         <nav className="flex items-center gap-2">
@@ -2692,11 +2730,22 @@ const ACTIVITY_CACHE_HIT = {
   samples: 344, last: 0.94, ema: 0.91, mean: 0.88, p95: 0.97, emaAlpha: 0.2,
 };
 
-const ACTIVITY_BUDGETS: ActivitySnapshot["budgets"] = [{
-  label: "checkout-fixes", parent: null, limits: { usd: 25 },
-  spent: { tokens: 24_222_394, usd: 16.26 }, remaining: { usd: 8.74 },
-  pricing: { blendedTokens: 0, source: "catalog" }, calls: 747, spawns: 3, exhausted: false,
-}];
+/** Two labels, one nested inside the other and one already spent — the mission
+ *  half of the breakdown, and the cases its cells have to survive: a cap in
+ *  dollars, a cap in tokens, blended pricing, and a `spent` badge. */
+const ACTIVITY_MISSIONS: WorkspaceSpend["missions"] = [
+  {
+    label: "checkout-fixes", parent: null, limits: { usd: 25 },
+    spent: { tokens: 24_222_394, usd: 16.26 }, remaining: { usd: 8.74 },
+    pricing: { blendedTokens: 0, source: "catalog" }, calls: 747, spawns: 3, exhausted: false,
+  },
+  {
+    label: "checkout-fixes/regression-sweep", parent: "checkout-fixes",
+    limits: { tokens: 2_000_000 },
+    spent: { tokens: 2_004_118, usd: 1.42 }, remaining: { tokens: 0 },
+    pricing: { blendedTokens: 118_400, source: "mixed" }, calls: 96, spawns: 0, exhausted: true,
+  },
+];
 
 /**
  * The panel's own question, photographed: `$11.98 over 344 priced steps` is the
@@ -2724,10 +2773,12 @@ const ACTIVITY_SNAPSHOT: ActivitySnapshot = {
     coverage: {
       calls: 747, measured: 654, reported: 654 / 747, silent: ["platform"], partial: ["head"],
     },
+    // (23_551_044 + 671_350 - 21_480_312 - 512_884) / (23_551_044 + 671_350)
+    offTurnShare: 0.09203045743537984,
+    missions: ACTIVITY_MISSIONS,
     windowLimit: 2000,
     complete: false,
   },
-  budgets: ACTIVITY_BUDGETS,
   log: [],
 };
 
@@ -2747,6 +2798,9 @@ const ACTIVITY_CLEAN: ActivitySnapshot = {
       },
     },
     coverage: { calls: 616, measured: 616, reported: 1, silent: [], partial: [] },
+    // (23_166_830 + 627_444 - 21_480_312 - 512_884) / (23_166_830 + 627_444)
+    offTurnShare: 0.07569375724596598,
+    missions: [],
     windowLimit: 2000,
     complete: true,
   },
@@ -2767,10 +2821,11 @@ const ACTIVITY_FRESH: ActivitySnapshot = {
     producers: [],
     total: { calls: 0, callsWithoutUsage: 0, usage: {}, unpricedCalls: 0 },
     coverage: { calls: 0, measured: 0, reported: null, silent: [], partial: [] },
+    offTurnShare: null,
+    missions: [],
     windowLimit: 2000,
     complete: true,
   },
-  budgets: [],
   log: [],
 };
 
@@ -3040,6 +3095,7 @@ async function mount() {
   else if (frame === "markdown") node = <MarkdownFrame />;
   else if (frame === "chat") node = <ChatFrame />;
   else if (frame === "chatempty") node = <ChatEmptyFrame />;
+  else if (frame === "chatloading") node = <ChatLoadingFrame />;
   else if (frame === "chathistory") node = <ChatHistoryFrame />;
   else if (frame === "toolcalls") node = <ToolCallsFrame />;
   else if (frame === "streaming") node = <StreamingFrame />;

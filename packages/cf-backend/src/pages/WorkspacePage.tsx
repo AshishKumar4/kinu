@@ -79,6 +79,47 @@ export function EmptyConversation({ mission }: { mission: string }) {
   );
 }
 
+/** The bars a loading transcript draws. Fixed rather than random: a skeleton
+ *  that reflows on every render is a second animation nobody asked for. */
+const SKELETON_ROWS: readonly { mine: boolean; width: string }[] = [
+  { mine: true, width: "38%" },
+  { mine: false, width: "82%" },
+  { mine: false, width: "64%" },
+  { mine: true, width: "46%" },
+  { mine: false, width: "74%" },
+];
+
+/**
+ * The chat pane between connect and the transcript arriving.
+ *
+ * This state exists because the pane had no way to say "not yet". A workspace
+ * whose conversation had not been delivered rendered {@link EmptyConversation}
+ * — "Send the first message to start", under the mission — and then replaced it
+ * with four hundred messages. Measured against production on 2026-08-20 that
+ * window was 0.8-3.8 seconds of the app stating the opposite of the truth, and
+ * it is the whole of what "clicking a workspace takes forever" felt like: the
+ * page had painted, and what it had painted was wrong.
+ *
+ * Shaped like a transcript rather than centred like a spinner, so the messages
+ * land where the bars already are instead of shifting the pane under the
+ * reader.
+ */
+export function ConversationSkeleton() {
+  return (
+    <div className="space-y-5" role="status" aria-busy="true" data-testid="conversation-skeleton">
+      <span className="sr-only">Loading this conversation…</span>
+      {SKELETON_ROWS.map((row, index) => (
+        <div key={index} className={`flex ${row.mine ? "justify-end" : "justify-start"}`} aria-hidden>
+          <div className="max-w-[82%] space-y-2" style={{ width: row.width }}>
+            <div className="p-skeleton-bar h-3.5 rounded-md" />
+            <div className="p-skeleton-bar h-3.5 w-[70%] rounded-md" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /**
  * The top of the transcript: what is above the oldest message on screen.
  *
@@ -151,7 +192,7 @@ export function DeviceConsentCard({ consent, onResolve }: {
 }
 
 /**
- * Terminal chat error — the turn failed (provider error, stream break) and
+ * Terminal chat error — a turn failed (provider error, stream break) and
  * produced no visible answer.
  *
  * The retry RE-RUNS that turn rather than asking the same thing again: the
@@ -159,23 +200,39 @@ export function DeviceConsentCard({ consent, onResolve }: {
  * on every press and three attempts left three identical turns in the
  * transcript. The error body is shown verbatim; the hook clears the card on
  * the next send.
+ *
+ * A REPLAYED failure is not the same claim and does not get the same words.
+ * The server retains its last terminal record until a later turn supersedes
+ * it, so a workspace parked after a failure re-serves that failure to every
+ * client that opens it — `sunlit-stone-4a20` still answers with the
+ * `Unauthorized` its 2026-08-17 turn ended on. Presenting that as "the last
+ * turn failed" reads as something that just happened, and sends the owner
+ * chasing a fault that may be three days gone.
  */
-export function ChatErrorCard({ message, streaming, onRetry, onDismiss }: {
+export function ChatErrorCard({ message, replayed, streaming, onRetry, onDismiss }: {
   message: string;
+  /** The server is re-serving an older turn's outcome, not reporting a live one. */
+  replayed?: boolean;
   streaming: boolean;
   onRetry: () => void;
   onDismiss: () => void;
 }) {
   return (
-    <div className="rounded-xl border p-3 animate-fade-in p-elevated" style={{ borderColor: "var(--c-danger)" }}>
+    <div className="rounded-xl border p-3 animate-fade-in p-elevated" data-chat-error={replayed ? "replayed" : "live"}
+      style={{ borderColor: replayed ? "var(--c-border)" : "var(--c-danger)" }}>
       <div className="flex items-start gap-2">
-        <WarningCircleIcon size={16} className="p-danger shrink-0 mt-0.5" weight="fill" />
+        <WarningCircleIcon size={16} className={`shrink-0 mt-0.5 ${replayed ? "p-text-3" : "p-danger"}`} weight="fill" />
         <div className="min-w-0 flex-1">
-          <div className="text-xs p-text font-medium">The last turn failed and produced no answer</div>
+          <div className="text-xs p-text font-medium">
+            {replayed
+              ? "This workspace was last left on a failed turn"
+              : "The last turn failed and produced no answer"}
+          </div>
           <code className="block mt-1 text-[11px] p-text-2 font-mono break-all p-card rounded-sm px-2 py-1 max-h-28 overflow-y-auto">{message}</code>
           <div className="text-[10px] p-text-3 mt-1.5">
-            Retrying runs the same turn again against the same conversation. It does not send your
-            message a second time.
+            {replayed
+              ? "Nothing is failing right now — this is the outcome the server kept from the last turn that ran here, and it will keep reporting it until another turn does. Retrying re-runs that turn."
+              : "Retrying runs the same turn again against the same conversation. It does not send your message a second time."}
           </div>
         </div>
       </div>
@@ -395,7 +452,8 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
           {liveSteers.map((s) => <SteerBubble key={s.steerId} steer={s} />)}
           {state.chatError && (
             <ChatErrorCard
-              message={state.chatError}
+              message={state.chatError.body}
+              replayed={state.chatError.replayed}
               streaming={state.isStreaming}
               onRetry={state.retryLastMessage}
               onDismiss={state.clearChatError}
@@ -500,6 +558,12 @@ export default function WorkspacePage() {
   const transcript = useMemo(
     () => mergeTranscript(history.fetched, state.messages),
     [history.fetched, state.messages]);
+
+  // Two clauses, both load-bearing. The connect frame settles the ordinary case
+  // whatever the transcript turns out to hold, including empty. It is NOT sent
+  // when a stream was already running at connect — that path goes through the
+  // resume handshake instead — and there the arriving messages are the proof.
+  const transcriptPending = !state.transcriptSeeded && transcript.length === 0;
 
   const messagesRef = useGrowingScroll<HTMLDivElement>({
     grows: "up",
@@ -876,7 +940,8 @@ export default function WorkspacePage() {
                 whitescreen the chat. (STABILITY-AUDIT §D2.) */}
             <ErrorBoundary label="Chat">
             <div ref={messagesRef} className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8">
-              {transcript.length === 0 && !state.isStreaming && (
+              {transcriptPending && <ConversationSkeleton />}
+              {!transcriptPending && transcript.length === 0 && !state.isStreaming && (
                 <EmptyConversation mission={as?.purpose ?? ""} />
               )}
               {transcript.length > 0 && (
@@ -923,7 +988,8 @@ export default function WorkspacePage() {
               ))}
               {state.chatError && (
                 <ChatErrorCard
-                  message={state.chatError}
+                  message={state.chatError.body}
+                  replayed={state.chatError.replayed}
                   streaming={state.isStreaming}
                   onRetry={state.retryLastMessage}
                   onDismiss={state.clearChatError}

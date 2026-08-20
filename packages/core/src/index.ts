@@ -390,6 +390,9 @@ export {
   // on who asked.
   priceCall,
   localMissionScope,
+  // Every label's cumulative spend, for a read-only surface that holds no
+  // governor: the CLI's `kinu spend`, the workspace cost panel.
+  listMissionSpend,
   type MissionBudgetPort,
   type MissionScope,
   type MissionBudgetLimits,
@@ -828,7 +831,6 @@ export { craftFailureMarker, CRAFT_NEUTRAL_PRIOR } from './craft/in-episode';
 export { maybeStoreCraftedTool } from './craft/discovery';
 export { periodicCraftConsolidation } from './craft/consolidation';
 export { checkConflictsBeforeAdding, upsertCraftedTool } from './craft/conflict';
-export { migrateCraftedToolDuplicates, type MigrationReport } from './craft/migrate-duplicates';
 
 // Execution layer
 export {
@@ -1384,9 +1386,11 @@ export type {
   ProducerSpend, SpendCoverage, WorkspaceSpend, WorkspaceSpendDeps,
 } from './read-models/workspace-spend';
 export {
-  censusToolFailures, classifyToolFailure, toolFailureKey,
+  censusToolFailures, classifyToolFailure, toolFailureKey, toolFailurePartOfKey,
 } from './read-models/tool-failures';
-export type { ToolFailure, ToolFailureCensus } from './read-models/tool-failures';
+export type {
+  ToolFailure, ToolFailureCensus, ToolFailurePart,
+} from './read-models/tool-failures';
 export {
   getExecutorDiff, getWorkspaceDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline,
   walkWorkspaceTextFiles,
@@ -1441,8 +1445,10 @@ export { getAgentStatus, getChatHistoryPage, getToolList } from './read-models/s
 export { mapPage, pageSchema, seekPage, SeekCursorSchema, StaleCursorError } from './read-models/page';
 export type { Page, PageRequest, SeekCursor } from './read-models/page';
 export {
-  mergeTranscript, uiMessageText, transcriptRole, PROGRAMMATIC_MESSAGE_ID_PREFIX,
+  mergeTranscript, uiMessageRow, uiMessageText, transcriptRole,
+  PROGRAMMATIC_MESSAGE_ID_PREFIX, TURN_AUTHOR_METADATA_KEY, stampTurnAuthor, turnAuthor,
 } from './utils/ui-message';
+export type { TurnAuthor, StoredRowProjection } from './utils/ui-message';
 export type { PendingAction, PendingActionKind, PendingActionInputs } from './read-models/pending-actions';
 export type {
   AgentStatus, AgentStatusDeps, ChatHistoryEntry, ToolListEntry,

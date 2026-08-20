@@ -29,7 +29,7 @@ function node(id: string, rationale: string, errorMessage: string | null = null)
     id, task: 'reduce p95', rationale,
     status: errorMessage === null ? 'completed' : 'errored',
     summary: null, errorMessage, usage: {}, wallClockMs: 1,
-    spawnedAt: 1, lastStepAt: null, decisions: [], steps: [],
+    spawnedAt: 1, lastStepAt: null, decisions: [],
   };
 }
 

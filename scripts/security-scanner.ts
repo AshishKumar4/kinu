@@ -282,12 +282,6 @@ export const REVIEWED_ADVISORIES = {
       + 'pin blocks until it moves.',
     ids: [1112706],
   },
-  esbuild: {
-    reason: 'transitive: wrangler 4.97.0 pins esbuild 0.27.3 exactly. Arbitrary file read via '
-      + 'the esbuild DEV SERVER on Windows; the bundler here only ever runs one-shot builds, on '
-      + 'Linux. Needs a wrangler bump.',
-    ids: [1120680],
-  },
   'extract-zip': {
     reason: 'transitive: @puppeteer/browsers <- puppeteer (dev). Unvalidated symlink path '
       + 'traversal while unpacking; the only archive it unpacks is the Chrome build puppeteer '
@@ -342,12 +336,6 @@ export const REVIEWED_ADVISORIES = {
       + 'a lockfile refresh clears all five: accepted until that refresh, not indefinitely.',
     ids: [1124268, 1124271, 1124272, 1124276, 1138769],
   },
-  sharp: {
-    reason: 'transitive: miniflare 4.20260601.0 pins sharp 0.34.5 exactly <- wrangler and '
-      + '@cloudflare/vite-plugin (dev). Inherited libvips CVEs. The fix is 0.35.0 — the 0.35.2 '
-      + 'copy already in this tree is unaffected — and the exact pin blocks it here.',
-    ids: [1124066],
-  },
   'shell-quote': {
     reason: 'declared by @kinu/agent-utils (^1.8.3) and imported by NO tracked source, so the '
       + 'quadratic parse() is called nowhere here. No fixed release exists either: the advisory '
@@ -355,30 +343,12 @@ export const REVIEWED_ADVISORIES = {
       + 'remove this entry.',
     ids: [1123944],
   },
-  undici: {
-    reason: 'transitive: miniflare 4.20260601.0 pins undici 7.24.8 exactly <- wrangler 4.97.0 '
-      + 'and @cloudflare/vite-plugin (dev). The other two copies here, 8.9.0 and 7.29.0, match '
-      + 'none of these twelve. Cache, cookie and SOCKS5 proxy defects inside the local workerd '
-      + 'dev harness; deployed code uses the Workers runtime fetch, not undici. Exact pin, so '
-      + 'clearing them needs a miniflare bump.',
-    ids: [
-      1121187, 1121241, 1121244, 1121247, 1121254, 1121428,
-      1130715, 1130718, 1130726, 1130729, 1130731, 1137242,
-    ],
-  },
   valibot: {
     reason: 'direct: the root manifest and @kinu/cf-backend both require ^1.4.1. record() '
       + 'issue paths can make flatten() throw for an inherited Object property name, and '
       + 'flatten() is called in no package src. `bun update --dry-run` resolves 1.4.2, outside '
       + 'the vulnerable <=1.4.1 — the next lockfile refresh clears it.',
     ids: [1124298],
-  },
-  ws: {
-    reason: 'transitive: @cloudflare/vite-plugin and miniflare 4.20260601.0 both pin ws 8.20.1 '
-      + 'exactly (dev). Memory-exhaustion DoS from tiny fragments, on the socket the local dev '
-      + 'harness uses to talk to workerd. Fixed in 8.21.0, which the other copy in this tree '
-      + 'already uses; the exact pin blocks it here.',
-    ids: [1123259],
   },
 } satisfies Record<string, ReviewedPackage>;
 

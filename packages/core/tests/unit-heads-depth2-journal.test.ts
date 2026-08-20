@@ -190,7 +190,7 @@ describe('C2 — a depth-2 head is readable from the root', () => {
     expect(run).not.toBeNull();
     const rendered = run!.heads.find((h) => h.id === depth2Id);
     expect(rendered).toBeDefined();
-    expect(rendered!.steps.length).toBe(2);
+    expect(journal.readSteps(depth2Id).length).toBe(2);
     // `lastStepAt` is `MAX(head_steps.created_at)` over the LEFT JOIN in
     // assembleRun. It is the field that reads null — and renders as "STEPS 0",
     // no progress, a branch that looks dead — whenever the head row and its

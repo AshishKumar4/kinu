@@ -6,6 +6,7 @@ import { Database } from 'bun:sqlite';
 import { createTestSql } from '@kinu/test-utils';
 import * as v from 'valibot';
 import { AgentOrchestrator, type AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
+import { MissionGovernor } from '../src/mission-budget';
 import { initSessionWindowTable, createSessionWindowStore } from '../src/evolution/session-window';
 import {
   initTurnReviewQueueTable, queueTurnReview, takeQueuedTurnReviews, dropQueuedTurnReview,
@@ -76,7 +77,7 @@ function fakeEngine(opts?: { enabled?: boolean }) {
         await reviewTurn(row.turn, row.followup);
         dropQueuedTurnReview(sql, row.id);
       }
-      return { reviewed: taken.reviews.length, refused: taken.refused.length };
+      return { reviewed: taken.reviews.length, refused: taken.refused };
     },
   };
   return { engine, reviews, sessions, crafted, observed, trials, sql };
@@ -121,6 +122,28 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     }
     expect(sessions).toEqual([3, 3]);         // reflected at turn 3 and 6 (window closes)
     expect(orch.sessionTurnIndex).toBe(1);    // 7th turn left 1 in the new window
+  });
+
+  // The turn's review runs later, and often elsewhere: at the next user message,
+  // or drained from a durable row by a different process. The governor's active
+  // scope is gone by then, so the answer has to be carried by the turn.
+  test('the turn carries the mission scope active when it ended, and an unscoped turn carries none', () => {
+    const { engine, reviews } = fakeEngine();
+    const { host } = fakeHost();
+    const { sql, execRaw } = createTestSql();
+    const budget = new MissionGovernor({ storage: { sql, execRaw } });
+    budget.declare('checkout-fixes', { tokens: 1_000_000 }, {});
+    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog(), budget });
+
+    orch.beginTurn(Date.now(), { missionLabels: ['checkout-fixes'] });
+    orch.recordTurn(aTurn(1, 'programmatic'), 'independent_task');
+    orch.beginTurn(Date.now(), {});
+    orch.recordTurn(aTurn(2, 'programmatic'), 'independent_task');
+
+    // Absent, not `[]`, on the unscoped turn: a review must never be handed a
+    // label, and an empty one is a label-shaped thing to reason about.
+    expect(reviews.map((r) => [r.turn.turnId, r.turn.missionLabels]))
+      .toEqual([['m1', ['checkout-fixes']], ['m2', undefined]]);
   });
 
   test('a partial window survives the session ending — it is not force-closed or graded', async () => {
@@ -223,7 +246,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     // The next host that can afford the work — the daemon or an interactive
     // session — drains it through the SAME reviewTurn path.
     const next = new AgentOrchestrator({ host, engine, eventLog });
-    expect(await next.runDeferredTurnReviews()).toEqual({ reviewed: 1, refused: 0 });
+    expect(await next.runDeferredTurnReviews()).toEqual({ reviewed: 1, refused: [] });
     expect(reviews).toHaveLength(1);
     expect(reviews[0].turn.turnId).toBe('m7');
     expect(reviews[0].followup).toBeNull();
@@ -237,7 +260,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     new AgentOrchestrator({ host, engine, eventLog, oneShot: true })
       .recordTurn(aTurn(0), 'independent_task');
     const nextExec = new AgentOrchestrator({ host, engine, eventLog, oneShot: true });
-    expect(await nextExec.runDeferredTurnReviews()).toEqual({ reviewed: 0, refused: 0 });
+    expect(await nextExec.runDeferredTurnReviews()).toEqual({ reviewed: 0, refused: [] });
     expect(reviews).toEqual([]);
     expect(countQueuedTurnReviews(sql)).toBe(1);       // still owed, for a host that can pay
   });
@@ -452,7 +475,10 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
     expect(broadcasts).toEqual([
       {
         type: 'signal_card', id: cardId, state: 'pending',
-        metadata: { proteusEvent: 'event_drain', drainTurnId: injected[0]!.replyTurnId! },
+        metadata: {
+          proteusEvent: 'event_drain', proteusAuthor: 'harness',
+          drainTurnId: injected[0]!.replyTurnId!,
+        },
         text: injected[0]!.stepText,
       },
       { type: 'signal_card', id: cardId, state: 'shown' },
@@ -475,7 +501,10 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
     const signalId = v.parse(v.string(), enqueued[0]?.metadata?.signalId);
     expect(broadcasts).toEqual([{
       type: 'signal_card', id: signalId, state: 'pending',
-      metadata: { proteusEvent: 'event_drain', drainTurnId: expect.any(String) },
+      metadata: {
+        proteusEvent: 'event_drain', proteusAuthor: 'harness',
+        drainTurnId: expect.any(String),
+      },
       text: enqueued[0]!.text,
     }]);
   });

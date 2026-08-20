@@ -304,7 +304,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
     const heads = run?.heads ?? [];
     expect(heads).toHaveLength(2);
     for (const head of heads) {
-      expect(head.steps.length).toBeGreaterThan(0);
+      expect(journal.readSteps(head.id).length).toBeGreaterThan(0);
       expect(head.lastStepAt).not.toBeNull();
     }
   });
@@ -448,7 +448,7 @@ function scratchProbeModel(arrive: () => Promise<void>): LanguageModel {
  */
 function readBack(journal: HeadJournal, rootId: string, headId: string): string {
   const head = journal.readRun(rootId)?.heads.find((h) => h.id === headId);
-  return (head?.steps ?? [])
+  return (head === undefined ? [] : journal.readSteps(head.id))
     .flatMap((s) => s.toolCalls)
     .filter((c) => c.name === 'file')
     .map((c) => JSON.stringify(c.output ?? ''))

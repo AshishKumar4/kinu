@@ -21,17 +21,19 @@
  */
 
 import {
-  JsonObjectSchema, SIGNAL_ID_METADATA_KEY,
+  JsonObjectSchema, SIGNAL_ID_METADATA_KEY, turnAuthor,
   type JsonObject, type SignalCardEvent, type SignalCardState,
 } from "@kinu/core";
 import * as v from 'valibot';
 
-/** A turn the backend enqueued, never typed by the operator. */
+/** A turn the backend enqueued, never typed by the operator. `system_event` is
+ *  the rest: harness-authored, with no card of its own. */
 export type ProgrammaticTurn =
   | { kind: "event_drain" }
   | { kind: "workspace_created" }
   | { kind: "background_job"; jobKind: string; status: string }
-  | { kind: "deferred_approval"; decision: string; count: number };
+  | { kind: "deferred_approval"; decision: string; count: number }
+  | { kind: "system_event"; event: string };
 
 const ProgrammaticMetadataSchema = v.looseObject({
   proteusEvent: v.optional(v.string()),
@@ -51,10 +53,18 @@ const SignalCardEventSchema = v.variant('state', [
 /**
  * The provenance of a message, or null when the operator really did type it.
  *
- * Only the events that arrive *on the agent's behalf* get a card. The other
- * programmatic turns (`mcp` — the operator talking through an MCP client,
- * `take_pick`, `overflow_retry`) are the operator's own words or a mechanical
- * re-send of them, so they keep the user bubble.
+ * The decision is `turnAuthor`'s and is made from written markers — the author
+ * stamp the enqueue seam puts on every programmatic row, or, on rows written
+ * before that stamp existed, the `proteusEvent` metadata and the
+ * `programmatic:` id prefix. Nothing here reads the prose.
+ *
+ * Four events have a card that says what happened without the harness's
+ * wording; everything else harness-authored is `system_event`, which shows the
+ * event's name and keeps its words folded away. That fallback is the point:
+ * this used to be an allowlist of those four, so every event kind added after
+ * it — `fork_interrupted`, `completion_gate`, `take_pick`, `overflow_retry` —
+ * arrived in the owner's own bubble, and five `fork_interrupted` rows were
+ * sitting in the owner's live transcripts saying so.
  *
  * `deferred_approval` is the odd one: the OWNER did decide it, in the queue.
  * But the words in the turn are the harness's, not theirs, and rendering them
@@ -66,10 +76,12 @@ const SignalCardEventSchema = v.variant('state', [
  * and reaches the agent through the system prompt. What lands in the transcript
  * is the harness telling the agent it is open, so it wears a card too.
  */
-export function classifyProgrammaticTurn<Metadata>(metadata: Metadata): ProgrammaticTurn | null {
+export function classifyProgrammaticTurn<Metadata>(
+  metadata: Metadata, id?: string,
+): ProgrammaticTurn | null {
+  if (turnAuthor({ id, metadata }) === "operator") return null;
   const parsed = v.safeParse(ProgrammaticMetadataSchema, metadata);
-  if (!parsed.success) return null;
-  const turn = parsed.output;
+  const turn = parsed.success ? parsed.output : {};
   switch (turn.proteusEvent) {
     case "event_drain":
       return { kind: "event_drain" };
@@ -88,7 +100,7 @@ export function classifyProgrammaticTurn<Metadata>(metadata: Metadata): Programm
         count: turn.count ?? 1,
       };
     default:
-      return null;
+      return { kind: "system_event", event: turn.proteusEvent || "system" };
   }
 }
 

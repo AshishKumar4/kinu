@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "verdicts": [
+    {
+      "group": "pre-family/pairing/refused on baseline.admissibility/*",
+      "verdict": "eval-defect",
+      "reviewed": "2026-08-20",
+      "read": "compareRuns(flash-a, flash-b) after both baselines were republished: the comparator refuses on baseline.admissibility and candidate.admissibility, naming the missing task_outcome row; tests/eval-corpus-quality.test.ts:118-125 asserts the refusal and the same 12 unverified attempts and 1 inert one the drops used to report",
+      "note": "Confirmed, and this REPLACES the baseline-unverified and baseline-not-scored groups. Those two counted 13 dropped pairs, which was one root fact counted per pair: neither run checked whether a task was solved. The refusal states that fact once, before any pairing. It is the retirement of both baselines as baselines, and it is enforced by the shipped comparator rather than by a convention."
+    },
+    {
+      "group": "pre-family/pairing/refused on candidate.admissibility/*",
+      "verdict": "eval-defect",
+      "reviewed": "2026-08-20",
+      "read": "the same refusal, on the candidate side of the same pair",
+      "note": "Confirmed, and the same fact as the baseline-side refusal. Both runs of this arm measured activity only, so either one as a candidate is refused for the reason it is refused as a baseline."
+    },
+    {
+      "group": "pre-family/attempt/inert/tool-001",
+      "verdict": "eval-defect",
+      "reviewed": "2026-08-20",
+      "read": "tests/evals/harness.ts:515-521 (DegenerateRunError when turns === 0 or toolCalls === 0) against both reasons in the records: flash-a 0 turns / 12 tool calls, flash-b 0 turns / 19 tool calls",
+      "note": "Confirmed as an instrument failure at the level of the record: the attempt called tools and the ledger closed no turn, so nothing was gradable. The cause is not decidable from what survives. A turn loop that never wrote turn_end and a run that was cut off produce the same record, and no transcript survives for either baseline. A re-run with retained trajectories settles it, and no re-run is possible on these two: both are retired. tests/eval-corpus-quality.test.ts:125 records this task as inert in both runs."
+    },
+    {
+      "group": "pre-family/run/no observation carried a task_outcome row/*",
+      "verdict": "eval-defect",
+      "reviewed": "2026-08-20",
+      "read": "packages/test-utils/src/eval-run.ts:365-368 (today's rule) against the score names in both records, which hold eight covariates and no task_outcome",
+      "note": "Confirmed. Both baselines measure activity only. They are not evidence about task performance."
+    },
+    {
+      "group": "pre-family/run/the record names no transcripts directory/*",
+      "verdict": "eval-defect",
+      "reviewed": "2026-08-20",
+      "read": "jq has(\"transcripts\") is false for both baselines; EvalRunRecord declares the field required (packages/test-utils/src/eval-run.ts:244) and readRunRecord validates the envelope only (:499-511)",
+      "note": "Confirmed, and it stays open. It is why the inert tool-001 attempt cannot be explained, and it is one of the three reasons no honest upgrade of these two records exists: the tier deleted its stores in teardown at the time, so the directory the field would name is gone. Validating the field on read would reject both records and force a republish that nobody can perform. Both were retired instead — republished under today's admissibility policy, which is a recomputation over their own observations, so the comparator refuses them as baselines. A record written today carries the field, because publishRunRecord is the only writer and RunRecordInputs requires it."
+    },
+    {
+      "group": "pre-family/scorer/tool_outcomes/ws-split-audit",
+      "verdict": "flake",
+      "reviewed": "2026-08-20",
+      "read": "the four tool_outcomes rows for this task: flash-a rep0 7/9 fails, flash-a rep1 6/6 passes, flash-b rep0 7/7 passes, flash-b rep1 16/17 fails; both records carry gitSha f26d3ae8 and the same arm",
+      "note": "Confirmed as dispersion. One commit and one arm produced both verdicts, so this is the corpus's own noise. It cannot be SIZED from these two records: scripts/eval-dispersion.ts goes through compareRuns, which now refuses both as inadmissible, and psi over zero pairs was never a measurement anyway. Size it on a credentialed same-arm pair that records task_outcome, and read no movement on this task before then."
+    },
+    {
+      "group": "pre-family/scorer/tool_outcomes/ws-fix-broken",
+      "verdict": "eval-defect",
+      "reviewed": "2026-08-20",
+      "read": "the four tool_outcomes details for this task (flash-a 14/17 and 30/39, flash-b 21/25 and 7/8): each names a tool USAGE histogram and no failure key; packages/test-utils/src/agent-evals.ts documents the same defect at the scorer",
+      "note": "Overridden. The machine classes this as behaviour because it has no attribution to read. ws-fix-broken is a repair task, where a failing command is the agent finding the broken test, and the record cannot separate that from a tool that broke. The actionable item is the missing failure mix, which belongs to the instrument. Re-run this task on today's scorer before reading the rate."
+    }
+  ]
+}

@@ -4,7 +4,10 @@
 import { describe, test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildDrainBatch, WORKSPACE_CREATED_EVENT, workspaceGenesisSignal } from '@kinu/core';
+import {
+  buildDrainBatch, COMPLETION_GATE_EVENT, FORK_INTERRUPTED_SIGNAL, OVERFLOW_RETRY_EVENT,
+  WORKSPACE_CREATED_EVENT, workspaceGenesisSignal,
+} from '@kinu/core';
 import type { JsonValue, ProteusEvent } from '@kinu/core';
 import {
   applySignalCard, classifyProgrammaticTurn, eventVariantLabel, messageSignalId,
@@ -25,14 +28,47 @@ describe('programmatic turn provenance', () => {
   });
 
   test('the operator\'s own words keep the user bubble', () => {
-    // `mcp` is the operator through an MCP client; `take_pick` and
-    // `overflow_retry` are mechanical re-sends of what they already said.
+    // `mcp` is the operator driving an MCP client, and its producer stamps that
+    // (cf-backend/src/orchestrator.ts runTaskFromMcp). It is also read
+    // correctly off the pre-stamp rows, which carry only the event name.
+    expect(classifyProgrammaticTurn({ proteusEvent: 'mcp', proteusAuthor: 'operator' })).toBeNull();
     expect(classifyProgrammaticTurn({ proteusEvent: 'mcp' })).toBeNull();
-    expect(classifyProgrammaticTurn({ proteusEvent: 'take_pick' })).toBeNull();
-    expect(classifyProgrammaticTurn({ proteusEvent: 'overflow_retry' })).toBeNull();
+    // No markers at all, whatever the id: the operator typed it.
     expect(classifyProgrammaticTurn(undefined)).toBeNull();
     expect(classifyProgrammaticTurn({})).toBeNull();
     expect(classifyProgrammaticTurn('event_drain')).toBeNull();
+    expect(classifyProgrammaticTurn({ proteusMode: 'build' }, 'XV4blLw0hI10XYRG')).toBeNull();
+    // A steer re-run as its own turn goes through the programmatic funnel and
+    // gets its id prefix, so the stamp is the only thing keeping it a bubble.
+    expect(classifyProgrammaticTurn({ proteusAuthor: 'operator' }, 'programmatic:abc')).toBeNull();
+  });
+
+  test('a harness event with no card of its own is still not the owner', () => {
+    // THE REGRESSION. This used to be an allowlist of four event names and
+    // everything else fell through to the owner's bubble. Measured 2026-08-20
+    // on the owner's live workspaces: `fork_interrupted` rows reading "23
+    // head(s) across 6 fork run(s) were still marked running…" in
+    // sunlit-stone-4a20, stone-ash-71f2 and principal-machine-f1296946.
+    expect(classifyProgrammaticTurn({ proteusEvent: FORK_INTERRUPTED_SIGNAL, heads: 23 }))
+      .toEqual({ kind: 'system_event', event: 'fork_interrupted' });
+    // The other three the allowlist missed. `take_pick` and `overflow_retry`
+    // were called the operator's own words here and are not: the take
+    // continuation speaks ABOUT the user in the third person
+    // (mcts/takes.ts buildTakeContinuationPrompt) and the overflow retry is
+    // harness prose about a compaction (turn-failure.ts OVERFLOW_RETRY_TEXT).
+    expect(classifyProgrammaticTurn({ proteusEvent: COMPLETION_GATE_EVENT }))
+      .toEqual({ kind: 'system_event', event: 'completion_gate' });
+    expect(classifyProgrammaticTurn({ proteusEvent: 'take_pick' }))
+      .toEqual({ kind: 'system_event', event: 'take_pick' });
+    expect(classifyProgrammaticTurn({ proteusEvent: OVERFLOW_RETRY_EVENT }))
+      .toEqual({ kind: 'system_event', event: 'overflow_retry' });
+    // An event name nobody has written yet is covered the day it is added —
+    // that is the whole reason the default is inverted.
+    expect(classifyProgrammaticTurn({ proteusEvent: 'a_kind_invented_tomorrow' }))
+      .toEqual({ kind: 'system_event', event: 'a_kind_invented_tomorrow' });
+    // Stamped harness with no event name at all still loses the bubble.
+    expect(classifyProgrammaticTurn({ proteusAuthor: 'harness' }))
+      .toEqual({ kind: 'system_event', event: 'system' });
   });
 
   // Genesis: the card and the signal that produces it must agree on ONE string.

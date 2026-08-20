@@ -394,7 +394,7 @@ async function renderBrowserApproval(request: Request, env: Env): Promise<Respon
   const url = new URL(request.url);
   const code = url.searchParams.get('code');
   if (!code) return html('Kinu CLI Auth', '<p>Missing CLI auth code.</p>', 400);
-  const requestInfo = await inspectCliAuth(env.AUTH_DB, code);
+  const requestInfo = await inspectCliAuth(env.AUTH_KV, code);
   if (!requestInfo) {
     return html('Kinu CLI Auth', '<p>Unknown or expired CLI auth code.</p>', 400);
   }
@@ -657,7 +657,7 @@ function installPageResponse(origin: string): Response {
 <body>
   <div class="shell">
     <header>
-      <a class="brand" href="/" aria-label="Kinu home"><span class="mark">P</span><span>Kinu</span></a>
+      <a class="brand" href="/" aria-label="Kinu home"><span class="mark">K</span><span>Kinu</span></a>
       <nav class="nav">
         <a href="/login">Dashboard</a>
         <a class="button" href="/login">Sign in</a>
@@ -1029,7 +1029,7 @@ exec bun run packages/cli/bin/cli.ts "$@"
 }
 
 /** Rate limits are 429, caller-correctable code failures are 400, and
- *  everything else (D1 outage, UserDO failure, …) is a real 500. */
+ *  everything else (KV outage, UserDO failure, …) is a real 500. */
 function cliAuthError(e: Error): Response {
   if (e instanceof RateLimitError) return err(429, e.message);
   if (e instanceof CliAuthCodeError) return err(400, e.message);

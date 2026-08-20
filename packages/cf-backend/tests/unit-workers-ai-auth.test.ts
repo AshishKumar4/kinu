@@ -14,7 +14,17 @@ import { generateText } from 'ai';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry';
 import { CloudflareOAuthTokenError, refreshCloudflareCredential } from '../src/lib/cloudflare-oauth';
 import { asFetchFunction } from '@kinu/core';
+import * as v from 'valibot';
 
+
+/** What a rejected `generateText` hands back: the AI SDK's error, whose
+ *  `message` and `responseBody` are the two places the owner-visible text can
+ *  land. Parsed rather than asserted — a rejection is an I/O boundary. */
+const ModelRejectionSchema = v.looseObject({
+  message: v.optional(v.string()),
+  responseBody: v.optional(v.string()),
+});
+type ModelRejection = v.InferOutput<typeof ModelRejectionSchema>;
 const ACCOUNT_BASE_URL = 'https://api.cloudflare.com/client/v4/accounts/abc123abc123abc1/ai/v1';
 
 function chatCompletionResponse(): Response {
@@ -127,6 +137,52 @@ describe('Workers AI credential refresh', () => {
     expect(result.text).toBe('ok');
     expect(wire).toEqual(['Bearer cf-stale', 'Bearer cf-fresh']);
     expect(authCalls).toEqual([false, true]);
+  });
+
+  test('a 401 that SURVIVES the refresh says what to do, not the word "Unauthorized"', async () => {
+    // Production, 2026-08-17: six runs across `stone-ash-71f2` and
+    // `sunlit-stone-4a20` ended `run_end {reason:'error', error:'Unauthorized'}`
+    // and the chat's failed-turn card printed that single word. Cloudflare
+    // answers a rejected credential with the plain text `Unauthorized`, and the
+    // shared fetch passed non-ok responses to `mapError` — which `workers-ai.ts`
+    // does not supply — so the raw body went to the model client untouched. The
+    // actionable sentence existed the whole time, in the gateway mapper only.
+    const stub = userCredentialSource({
+      getAuthHeaders: async (key: string) => (
+        key === 'cloudflare.oauth' ? { authorization: 'Bearer cf-dead' } : null
+      ),
+      listCredentials: async () => [{ key: 'cloudflare.oauth', kind: 'oauth', createdAt: 0, updatedAt: 0 }],
+      getCredentialBaseURL: async (key: string) => (key === 'cloudflare.oauth' ? ACCOUNT_BASE_URL : null),
+    });
+    let attempts = 0;
+    const reg = createAgentProviderRegistry({
+      env: {},
+      userDO: stub,
+      fetch: asFetchFunction(async () => {
+        attempts += 1;
+        return new Response('Unauthorized', { status: 401, headers: { 'content-type': 'text/plain' } });
+      }),
+    });
+
+    // `String(err)` on an AI SDK error is just its NAME — asserting against
+    // that would make the negative below unable to fail, which is the same as
+    // not having it. The body the owner is shown is `responseBody`/`message`.
+    const failure = await generateText({
+      model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6'),
+      prompt: 'ping',
+    }).then(() => '', (rejection: ModelRejection) => {
+      const parsed = v.safeParse(ModelRejectionSchema, rejection);
+      return parsed.success
+        ? `${parsed.output.message ?? ''}\n${parsed.output.responseBody ?? ''}`
+        : String(rejection);
+    });
+
+    expect(failure).toContain('Reconnect Cloudflare in User settings');
+    // The bare upstream word is what the owner was shown; it must not survive.
+    expect(failure).not.toMatch(/(^|\W)Unauthorized(\W|$)/);
+    // Still exactly one forced-refresh retry — the fix reports the failure, it
+    // does not add another attempt against a credential already refused twice.
+    expect(attempts).toBe(2);
   });
 
   test('an unrefreshable credential stops advertising Workers AI (CTA fallback)', async () => {

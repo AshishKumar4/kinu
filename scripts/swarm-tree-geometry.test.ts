@@ -137,7 +137,24 @@ interface Beat {
   readonly nodes: number;
   /** Nodes currently marked as working. */
   readonly working: number;
-  /** What the list says became of the run. */
+  /**
+   * What the RUN ROW says became of the run.
+   *
+   * Read off `[data-fork-run]` and not off `document.body.innerText`, which is
+   * where this probe used to look. The swarm liveness notice sits above the run
+   * list and says "23 head(s) across 6 fork run(s) were still marked running
+   * from an activation that has ended", so a body-wide scan matched `running`
+   * at character 1543 on EVERY stage — including the settled one, whose row
+   * read `· settled` correctly two thousand characters further down. Both
+   * liveness arms failed on that one word while the surface was right: the
+   * settled assertion read the banner, and the watch loop, whose break is
+   * `outcome === 'settled'`, never broke and ran on past the frame's wrap back
+   * to stage 1, comparing 1 node against 1.
+   *
+   * Scoping it to the row is stricter, not looser: no prose anywhere else on
+   * the page can satisfy this assertion or defeat it. `settle=search` in the
+   * same row is not a false positive — the alternation needs `settled`.
+   */
   readonly outcome: string | null;
 }
 
@@ -201,7 +218,8 @@ function readBeat(page: Page): Promise<Beat> {
     rows: document.querySelectorAll('[data-fork-run]').length,
     nodes: document.querySelectorAll('g.mcts-node').length,
     working: document.querySelectorAll('g.mcts-node[data-working]').length,
-    outcome: /settled|running|stopped without an answer/.exec(document.body.innerText)?.[0] ?? null,
+    outcome: /settled|running|stopped without an answer/
+      .exec(document.querySelector('[data-fork-run]')?.textContent ?? '')?.[0] ?? null,
   }));
 }
 
