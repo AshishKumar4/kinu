@@ -13,12 +13,13 @@
  * carries the reason it is unknown, and nothing in this file ever collapses one
  * into the other.
  *
- * ONE LIST CALL PER FAMILY, not one probe per resource. `wrangler d1 info <name>`
- * exits non-zero both for "no such database" and for "your token expired", and
- * separating those means reading error prose. A single `list` either succeeds —
- * in which case membership is decided, present or absent, with no ambiguity — or
- * fails, in which case EVERY resource of that family is `unknown` and says so.
- * The list is memoised, so an inventory of twenty resources costs five calls.
+ * ONE LIST CALL PER FAMILY, not one probe per resource. `wrangler vectorize info
+ * <name>` exits non-zero both for "no such index" and for "your token expired",
+ * and separating those means reading error prose. A single `list` either
+ * succeeds — in which case membership is decided, present or absent, with no
+ * ambiguity — or fails, in which case EVERY resource of that family is `unknown`
+ * and says so. The list is memoised, so an inventory of twenty resources costs
+ * five calls.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -178,23 +179,25 @@ class Catalog<TSchema extends v.GenericSchema> {
 }
 
 const NamedRows = v.array(v.object({ name: v.string() }));
-const D1Rows = v.array(v.object({ name: v.string(), uuid: v.string() }));
+const KvRows = v.array(v.object({ id: v.string(), title: v.string() }));
 const VectorizeRows = v.array(v.object({
   name: v.string(),
   config: v.object({ dimensions: v.number(), metric: v.string() }),
 }));
 const ContainerRows = v.array(v.object({ name: v.string(), image: v.string(), id: v.string() }));
 
-const d1Catalog = new Catalog('D1', ['d1', 'list', '--json'], D1Rows);
+const kvCatalog = new Catalog('KV', ['kv', 'namespace', 'list'], KvRows);
 const vectorizeCatalog = new Catalog('Vectorize', ['vectorize', 'list', '--json'], VectorizeRows);
 const containerCatalog = new Catalog('Containers', ['containers', 'list', '--json'], ContainerRows);
 
-/** Observed D1 databases, or the reason the catalogue could not be read. */
-export function d1(name: string): Observation {
-  const loaded = d1Catalog.load();
+/** Observed KV namespaces, or the reason the catalogue could not be read.
+ *  Matched on the namespace id, because that is the only thing wrangler.jsonc
+ *  names — KV titles are not unique and two of them can answer to one name. */
+export function kvNamespace(id: string): Observation {
+  const loaded = kvCatalog.load();
   if ('failure' in loaded) return unknown(loaded.failure);
-  const row = loaded.rows.find((entry) => entry.name === name);
-  return row === undefined ? absent : present(row.uuid);
+  const row = loaded.rows.find((entry) => entry.id === id);
+  return row === undefined ? absent : present(row.title);
 }
 
 export function vectorize(name: string, dimensions: number, metric: string): Observation {
@@ -262,10 +265,9 @@ const VersionView = v.object({
       name: v.string(),
       type: v.string(),
       class_name: v.optional(v.string()),
-      namespace_id: v.optional(v.string()),
       bucket_name: v.optional(v.string()),
       index_name: v.optional(v.string()),
-      database_id: v.optional(v.string()),
+      namespace_id: v.optional(v.string()),
     })),
   }),
 });
@@ -273,7 +275,7 @@ const VersionView = v.object({
 export interface DeployedBinding {
   readonly name: string;
   readonly type: string;
-  /** The thing the binding points at — a class, a bucket, an index, a database.
+  /** The thing the binding points at — a class, a bucket, an index, a namespace.
    *  Explicitly `| undefined` rather than optional: a binding that names nothing
    *  is a real, common case (`AI`, `ASSETS`), not an absent field. */
   readonly target: string | undefined;
@@ -337,7 +339,7 @@ export function deployment(environment: string | undefined): Deployment {
           name: binding.name,
           type: binding.type,
           target: binding.class_name ?? binding.bucket_name ?? binding.index_name
-            ?? binding.database_id,
+            ?? binding.namespace_id,
         };
       }),
     };
@@ -419,34 +421,44 @@ export async function servesWorker(hostname: string): Promise<Observation> {
   }
 }
 
+/** The label prepended to a suffix to ask a wildcard record whether it exists.
+ *  Exported because verification also asks the same synthetic host over HTTP,
+ *  and the two probes have to name one host. */
+export const PROBE_LABEL = 'infra-verify-probe';
+
 /**
- * Whether a hostname under the preview suffix resolves.
+ * Whether a hostname resolves at all.
  *
- * The `pattern + zone_name` route form needs a proxied wildcard DNS record that
- * wrangler can neither create nor read — the zone DNS API answers 403 under the
- * wrangler OAuth token. DNS itself is the check that needs no credential at all:
- * a probe host under the suffix either resolves or the record is not there.
- * NXDOMAIN is `absent`; any other resolver failure is `unknown`, because "the
- * resolver timed out" is not "the record does not exist".
+ * The `pattern + zone_name` route form needs a proxied DNS record that wrangler
+ * can neither create nor read — the zone DNS API answers 403 under the wrangler
+ * OAuth token. DNS itself is the check that needs no credential at all: the name
+ * either resolves or the record is not there. NXDOMAIN is `absent`; any other
+ * resolver failure is `unknown`, because "the resolver timed out" is not "the
+ * record does not exist".
  */
-export async function wildcardDns(suffix: string): Promise<Observation> {
-  const probe = `infra-verify-probe.${suffix}`;
+export async function hostResolves(hostname: string): Promise<Observation> {
   try {
-    const addresses = await resolveHostname(probe, 'A');
+    const addresses = await resolveHostname(hostname, 'A');
     return addresses.length > 0
-      ? present(`${probe} → ${addresses.join(', ')}`)
-      : unknown(`${probe} resolved to no address`);
+      ? present(`${hostname} → ${addresses.join(', ')}`)
+      : unknown(`${hostname} resolved to no address`);
   } catch (error) {
     const code = error instanceof Error && 'code' in error ? String(error.code) : '';
     if (code === 'ENOTFOUND' || code === 'NXDOMAIN') return absent;
-    return unknown(`${probe}: ${code.length > 0 ? code : String(error)}`);
+    return unknown(`${hostname}: ${code.length > 0 ? code : String(error)}`);
   }
 }
+
+/** A wildcard record cannot be resolved by its own name, so an arbitrary child
+ *  of the suffix is asked instead. Any name under it answers iff the record is
+ *  there, which is the whole property. */
+export const wildcardDns = async (suffix: string): Promise<Observation> =>
+  hostResolves(`${PROBE_LABEL}.${suffix}`);
 
 /**
  * Whether anything at all answers on a hostname under the preview suffix.
  *
- * Separate from `wildcardDns` because the two failures are separate and look
+ * Separate from `hostResolves` because the two failures are separate and look
  * identical from the outside otherwise: no DNS record is NXDOMAIN, while a
  * record with no route reaching it is a Cloudflare error page. Any HTTP status
  * counts as present — a preview host with no live preview answers 404 on
@@ -462,26 +474,6 @@ export async function edgeResponds(hostname: string): Promise<Observation> {
     if (code === 'ENOTFOUND' || code === 'ECONNREFUSED') return absent;
     return unknown(`https://${hostname}/: ${error instanceof Error ? error.message : String(error)}`);
   }
-}
-
-/**
- * Whether every migration in the database's `migrations_dir` has been applied.
- *
- * `wrangler d1 migrations list` prints the UNAPPLIED ones and says so in prose
- * when there are none, which is the sentence matched here. It resolves the
- * database through wrangler.jsonc, so it also fails loudly for a database the
- * manifest does not declare — a state this inventory cannot produce.
- */
-export function d1MigrationsApplied(database: string, environment: string | undefined): Observation {
-  const flag = environment === undefined ? [] : ['--env', environment];
-  const run = wrangler(['d1', 'migrations', 'list', database, '--remote', ...flag]);
-  if (!run.ok) {
-    return unknown(`\`wrangler d1 migrations list ${database} --remote\` failed: ${why(run)}`);
-  }
-  // `absent` and not `unknown`: wrangler answered, and what it answered is that
-  // migrations remain. That is a thing provisioning fixes, not a thing it failed
-  // to look at.
-  return run.stdout.includes('No migrations to apply') ? present('schema up to date') : absent;
 }
 
 /* ── Email routing ────────────────────────────────────────────────────── */

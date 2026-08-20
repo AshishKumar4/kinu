@@ -15,11 +15,10 @@
  * data-bearing resource — a list of names tells an operator nothing about what
  * they are about to lose.
  *
- * IT REFUSES TO DELETE SHARED RESOURCES. `proteus-backups` and
- * `nimbus-runtime-cache` are bound by production AND staging, so tearing down one
- * environment must not take them: they are reported as retained, with the
- * environment that still holds them. `exclusiveTo` is the whole of that rule and
- * it comes from the manifest, not from a list here.
+ * IT REFUSES TO DELETE SHARED RESOURCES. `nimbus-runtime-cache` is bound by
+ * production AND staging, so tearing down one environment must not take it: it is
+ * reported as retained, with the environment that still holds it. `exclusiveTo`
+ * is the whole of that rule and it comes from the manifest, not from a list here.
  *
  * ORDER IS THE REVERSE OF PROVISIONING, and the Worker goes first for a reason:
  * deleting it releases every Durable Object namespace and all their storage,
@@ -53,11 +52,10 @@ export function confirmationPhrase(workerName: string, environment: string): str
  *
  * The Worker first: it holds the Durable Object namespaces, and a DO namespace
  * has no delete command of its own. Then the container application, then the
- * index, then buckets, then the database last, because it is the one whose loss
- * is least recoverable and the operator should have had every chance to
- * interrupt.
+ * index, then buckets, then the session store last, because it is the store an
+ * operator is likeliest to be signed in through while confirming.
  */
-const ORDER: readonly string[] = ['worker', 'container', 'vectorize', 'r2', 'd1'];
+const ORDER: readonly string[] = ['worker', 'container', 'vectorize', 'r2', 'kv'];
 
 export interface Partition {
   /** Deleted by their own wrangler command, in the order given. */
@@ -93,9 +91,9 @@ export function partition(resources: readonly Resource[]): Partition {
 }
 
 /** What the operator is about to lose. A data-bearing resource is named with its
- *  CONTENTS, because "proteus-auth will be deleted" and "every signed-in
- *  identity and every live session will be deleted" are different sentences and
- *  only one of them stops a mistake. */
+ *  CONTENTS, because "kinu-backups will be deleted" and "every sandbox workspace
+ *  snapshot will be deleted" are different sentences and only one of them stops a
+ *  mistake. */
 function describe(deleted: readonly Resource[], swept: readonly Resource[]): void {
   console.log(`\n${RED}${BOLD}THIS DELETES DATA${NC}\n`);
   console.log('  Deleted directly, in this order:');
@@ -113,9 +111,6 @@ function describe(deleted: readonly Resource[], swept: readonly Resource[]): voi
     }
   }
   if (inert.length > 0) {
-    // Not all of these go with the WORKER — a D1 database takes its applied
-    // schema with it — so the heading says "as a consequence" rather than
-    // naming a mechanism that is only true of most of them.
     console.log('\n  Also removed as a consequence, holding no data of their own: '
       + inert.map((resource) => resource.id).join(', '));
   }

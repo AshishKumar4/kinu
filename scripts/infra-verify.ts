@@ -42,9 +42,9 @@
 
 import { assertMeasured, blocked, finding } from './gate-ratchet';
 import {
-  type Deployment, type Observation, authenticated, container, d1, d1MigrationsApplied,
-  deployment, edgeResponds, emailRoutingToWorker, r2, secretNames, servesWorker, vectorize,
-  wildcardDns,
+  type Deployment, type Observation, PROBE_LABEL, authenticated, container, deployment,
+  edgeResponds, emailRoutingToWorker, hostResolves, kvNamespace, r2, secretNames, servesWorker,
+  vectorize, wildcardDns,
 } from './infra-cloudflare';
 import {
   type InfraEnvironment, type Infrastructure, type Resource, SUPPLY, UNCAPTURED, UNOBSERVABLE,
@@ -73,8 +73,8 @@ export interface Row {
 const DEPLOYED_TYPE = new Map<string, string>([
   ['ai', 'Workers AI'],
   ['assets', 'static assets'],
-  ['d1', 'D1'],
   ['durable_object_namespace', 'Durable Object'],
+  ['kv_namespace', 'KV'],
   ['r2_bucket', 'R2'],
   ['send_email', 'Email Sending'],
   ['vectorize', 'Vectorize'],
@@ -111,6 +111,11 @@ function unobservableRow(resource: Resource): Row {
   };
 }
 
+/** The hostname a route pattern claims, without the wildcard label and without
+ *  the path — neither of which DNS or an HTTP probe can be given. */
+const routeHost = (pattern: string): string =>
+  pattern.replace(/^\*\./u, '').replace(/\/.*$/u, '');
+
 /**
  * One resource, observed.
  *
@@ -140,10 +145,8 @@ async function observe(
   };
 
   switch (resource.kind) {
-    case 'd1':
-      return row(resource, d1(resource.name));
-    case 'd1-migrations':
-      return row(resource, d1MigrationsApplied(resource.name, environment.wranglerEnv));
+    case 'kv':
+      return row(resource, kvNamespace(resource.name));
     case 'r2':
       return row(resource, r2(resource.name));
     case 'vectorize': {
@@ -163,10 +166,20 @@ async function observe(
       return row(resource, bound(resource.boundBy[0]?.binding ?? '', undefined));
     case 'custom-domain':
       return row(resource, await servesWorker(resource.name));
-    case 'zone-route':
-      return row(resource, await edgeResponds(`infra-verify-probe.${resource.name.replace(/^\*\./u, '').replace(/\/.*$/u, '')}`));
+    case 'zone-route': {
+      const host = routeHost(resource.name);
+      // A wildcard route is asked whether ANYTHING answers under it, because a
+      // preview host with no live preview answers 404 on purpose. An exact route
+      // claims one origin, so it is asked the stronger question the custom
+      // domain is asked: does this hostname reach THIS Worker.
+      return row(resource, resource.name.startsWith('*.')
+        ? await edgeResponds(`${PROBE_LABEL}.${host}`)
+        : await servesWorker(host));
+    }
     case 'wildcard-dns':
-      return row(resource, await wildcardDns(resource.name.replace(/^\*\./u, '')));
+      return row(resource, await wildcardDns(routeHost(resource.name)));
+    case 'dns-record':
+      return row(resource, await hostResolves(resource.name));
     case 'email-routing':
       return row(resource, emailRoutingToWorker(resource.name, environment.workerName));
     default:

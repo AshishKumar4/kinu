@@ -8,14 +8,14 @@
  * refusal. Everything below drives a pure function against a fixture, so none of
  * it touches an account.
  *
- * What it does NOT prove: that a `wrangler d1 create` actually creates a
- * database. That needs an account and is what `bun run gate:infra` is for.
+ * What it does NOT prove: that a `wrangler r2 bucket create` actually creates a
+ * bucket. That needs an account and is what `bun run gate:infra` is for.
  */
 
 import { describe, expect, test } from 'bun:test';
 import {
-  SUPPLY, UNCAPTURED, UNOBSERVABLE, deriveInfrastructure, envFields, exclusiveTo, readSites,
-  requiredIn, supplyCensus, vectorizeGeometry,
+  type Resource, SUPPLY, UNCAPTURED, UNOBSERVABLE, deriveInfrastructure, envFields, exclusiveTo,
+  readSites, requiredIn, supplyCensus, vectorizeGeometry,
 } from './infra-manifest';
 import { type Row, audit, supplyDrift, unobservableDrift } from './infra-verify';
 import { confirmationPhrase, partition } from './infra-teardown';
@@ -23,6 +23,17 @@ import { plan } from './infra-provision';
 import { isProductSource, readMatching } from './sources';
 
 const infrastructure = deriveInfrastructure();
+
+/** The auth store for one environment. Named by NAMESPACE ID, the way the
+ *  manifest names it: `kv_namespaces` carries no title (see UNCAPTURED) and both
+ *  environments bind the same AUTH_KV, so the id is the only thing that keeps
+ *  production's sessions and staging's apart. */
+function authStore(environment: string): Resource {
+  const found = infrastructure.resources.find((resource) =>
+    resource.kind === 'kv' && resource.environments.includes(environment));
+  if (found === undefined) throw new Error(`fixture lost ${environment}'s auth store`);
+  return found;
+}
 
 function row(id: string, verdict: Row['verdict'], required: boolean): Row {
   return { id, verdict, detail: 'fixture', required, purpose: 'fixture' };
@@ -41,39 +52,58 @@ describe('the inventory is derived from the manifest, not written beside it', ()
     const ids = infrastructure.resources.map((resource) => resource.id);
     // Named, not counted: a count cannot say WHICH resource the manifest lost.
     // These are the ones whose absence breaks a specific, named thing.
-    expect(ids).toContain('d1.proteus-auth');
-    expect(ids).toContain('d1.proteus-auth-staging');
-    expect(ids).toContain('r2.proteus-backups');
+    expect(ids).toContain('r2.kinu-backups');
+    expect(ids).toContain('r2.kinu-backups-staging');
     expect(ids).toContain('r2.nimbus-runtime-cache');
-    expect(ids).toContain('vectorize.proteus-memory');
-    expect(ids).toContain('ai-gateway.proteus-ai-gateway');
-    expect(ids).toContain('wildcard-dns.*.proteus.ashishkumarsingh.com');
-    expect(ids).toContain('custom-domain.proteus.ashishkumarsingh.com');
-    expect(ids).toContain('durable-object.proteus:ProteusSandbox');
+    expect(ids).toContain('vectorize.kinu-memory');
+    expect(ids).toContain('vectorize.kinu-memory-staging');
+    expect(ids).toContain('ai-gateway.kinu-ai-gateway');
+    expect(ids).toContain('custom-domain.kinu.run');
+    expect(ids).toContain('wildcard-dns.*.kinu.run');
+    // Staging takes its hostname as a route, which matches a request and does
+    // not make the name resolve — so the record is its own row.
+    expect(ids).toContain('dns-record.staging.kinu.run');
+    expect(ids).toContain('email-routing.kinu.run');
+    expect(ids).toContain('durable-object.kinu:ProteusSandbox');
+    // One auth store per environment, each keyed by its own namespace id.
+    expect(authStore('production').environments).toEqual(['production']);
+    expect(authStore('staging').environments).toEqual(['staging']);
+    expect(authStore('production').id).not.toBe(authStore('staging').id);
     expect(new Set(ids).size).toBe(ids.length);
   });
 
   test('a resource two environments bind is one resource with two holders', () => {
-    // The property teardown safety rests on. Both environments declare
-    // `nimbus-runtime-cache`, and a per-environment inventory would have made
-    // tearing down production delete staging's runtime store.
+    // The property teardown safety rests on. `nimbus-runtime-cache` is the one
+    // resource both environments declare — its blobs are content-addressed and
+    // immutable, so reading the same ones is the point — and a per-environment
+    // inventory would have made tearing down production delete staging's
+    // runtime store.
     const shared = infrastructure.resources.find((resource) => resource.id === 'r2.nimbus-runtime-cache');
     expect(shared?.environments).toEqual(['production', 'staging']);
     expect(shared?.boundBy.map((ref) => ref.environment)).toEqual(['production', 'staging']);
 
+    // Everything else is one environment's own, snapshots and memory included:
+    // staging writing eval snapshots into production's bucket is the shape this
+    // separation exists to refuse.
     const exclusive = exclusiveTo(infrastructure, 'production').map((resource) => resource.id);
-    expect(exclusive).toContain('d1.proteus-auth');
+    expect(exclusive).toContain(authStore('production').id);
+    expect(exclusive).toContain('r2.kinu-backups');
+    expect(exclusive).toContain('vectorize.kinu-memory');
     expect(exclusive).not.toContain('r2.nimbus-runtime-cache');
-    expect(exclusive).not.toContain('r2.proteus-backups');
+    expect(exclusive).not.toContain('r2.kinu-backups-staging');
+    const staging = exclusiveTo(infrastructure, 'staging').map((resource) => resource.id);
+    expect(staging).toContain('r2.kinu-backups-staging');
+    expect(staging).toContain('vectorize.kinu-memory-staging');
+    expect(staging).not.toContain('r2.nimbus-runtime-cache');
   });
 
   test('requiredness comes from `Env`, not from an opinion here', () => {
     const required = (id: string): boolean | undefined =>
       infrastructure.resources.find((resource) => resource.id === id)?.required;
-    // AUTH_DB is not optional in Env; BACKUP_BUCKET and MEMORY_VECTORS are.
-    expect(required('d1.proteus-auth')).toBe(true);
-    expect(required('r2.proteus-backups')).toBe(false);
-    expect(required('vectorize.proteus-memory')).toBe(false);
+    // AUTH_KV is not optional in Env; BACKUP_BUCKET and MEMORY_VECTORS are.
+    expect(authStore('production').required).toBe(true);
+    expect(required('r2.kinu-backups')).toBe(false);
+    expect(required('vectorize.kinu-memory')).toBe(false);
     // And the derivation actually consulted Env rather than defaulting: the
     // optional set is non-empty and is a strict subset.
     const optional = infrastructure.resources.filter((resource) => !resource.required);
@@ -91,7 +121,7 @@ describe('the inventory is derived from the manifest, not written beside it', ()
   test('`Env` parses, and a member it cannot read is a throw rather than a skip', () => {
     const fields = envFields();
     expect(fields.length).toBeGreaterThan(30);
-    expect(fields.find((field) => field.name === 'AUTH_DB')?.optional).toBe(false);
+    expect(fields.find((field) => field.name === 'AUTH_KV')?.optional).toBe(false);
     expect(fields.find((field) => field.name === 'BACKUP_BUCKET')?.optional).toBe(true);
     // A census that silently dropped the line it could not read would report the
     // healthiest possible number about a population nobody looked at.
@@ -148,7 +178,7 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
   // equality in both directions: a fixture that omitted one would be red for
   // the stale-declaration reason and every count below would be off by one.
   const clean: readonly Row[] = [
-    row('d1.proteus-auth', 'present', true),
+    row(authStore('production').id, 'present', true),
     ...[...UNOBSERVABLE.keys()].map((id) => row(id, 'unobservable', true)),
   ];
 
@@ -180,9 +210,9 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
     expect(undeclared.findings[0]).toContain('nothing declares that');
 
     // UNOBSERVABLE names rows that did not come back unobservable.
-    const stale = audit(infrastructure, [row('d1.proteus-auth', 'present', true)], [], []);
+    const stale = audit(infrastructure, [row(authStore('production').id, 'present', true)], [], []);
     expect(stale.findings.length).toBe(UNOBSERVABLE.size);
-    expect(stale.findings.join('\n')).toContain('ai-gateway.proteus-ai-gateway');
+    expect(stale.findings.join('\n')).toContain('ai-gateway.kinu-ai-gateway');
   });
 
   test('the declared blind spots are exactly the ones observation reports', () => {
@@ -210,11 +240,11 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
 });
 
 describe('provisioning is idempotent, and refuses what it cannot see', () => {
-  const bucket = infrastructure.resources.find((resource) => resource.id === 'r2.proteus-backups');
-  if (bucket === undefined) throw new Error('fixture lost r2.proteus-backups');
+  const bucket = infrastructure.resources.find((resource) => resource.id === 'r2.kinu-backups');
+  if (bucket === undefined) throw new Error('fixture lost r2.kinu-backups');
 
   test('a resource that exists is a no-op that says so', () => {
-    const second = plan(bucket, { state: 'present', detail: 'proteus-backups' }, undefined);
+    const second = plan(bucket, { state: 'present', detail: 'kinu-backups' }, undefined);
     expect(second.action).toBe('skip');
     // The whole of idempotence: a second run issues no argv at all, so it cannot
     // create a duplicate and cannot fail on "already exists".
@@ -223,10 +253,10 @@ describe('provisioning is idempotent, and refuses what it cannot see', () => {
 
   test('a resource that does not exist is created, once, with the manifest argv', () => {
     const first = plan(bucket, { state: 'absent' }, undefined);
-    expect(first).toEqual({ action: 'create', argv: ['r2', 'bucket', 'create', 'proteus-backups'] });
+    expect(first).toEqual({ action: 'create', argv: ['r2', 'bucket', 'create', 'kinu-backups'] });
     expect(plan(bucket, { state: 'absent' }, 'staging')).toEqual({
       action: 'create',
-      argv: ['r2', 'bucket', 'create', 'proteus-backups', '--env', 'staging'],
+      argv: ['r2', 'bucket', 'create', 'kinu-backups', '--env', 'staging'],
     });
   });
 
@@ -239,7 +269,7 @@ describe('provisioning is idempotent, and refuses what it cannot see', () => {
 
   test('a resource no wrangler command creates is refused, not skipped silently', () => {
     // A silently-skipped resource is how the assetless deploy shipped.
-    const gateway = infrastructure.resources.find((resource) => resource.id === 'ai-gateway.proteus-ai-gateway');
+    const gateway = infrastructure.resources.find((resource) => resource.id === 'ai-gateway.kinu-ai-gateway');
     if (gateway === undefined) throw new Error('fixture lost the AI Gateway');
     const refused = plan(gateway, { state: 'absent' }, undefined);
     expect(refused.action).toBe('refuse');
@@ -251,17 +281,20 @@ describe('teardown refuses by default and never takes a shared resource', () => 
   test('the confirmation names the worker and the environment', () => {
     // A `-y` can be produced by a shell that answers yes to everything, and a
     // generic "yes, delete" can be pasted from a runbook for another deployment.
-    expect(confirmationPhrase('proteus', 'production')).toBe('destroy proteus production');
-    expect(confirmationPhrase('proteus-staging', 'staging')).toBe('destroy proteus-staging staging');
-    expect(confirmationPhrase('proteus', 'production'))
-      .not.toBe(confirmationPhrase('proteus-staging', 'staging'));
+    expect(confirmationPhrase('kinu', 'production')).toBe('destroy kinu production');
+    expect(confirmationPhrase('kinu-staging', 'staging')).toBe('destroy kinu-staging staging');
+    expect(confirmationPhrase('kinu', 'production'))
+      .not.toBe(confirmationPhrase('kinu-staging', 'staging'));
   });
 
-  test('the order is worker first, database last, and only deletable resources', () => {
-    const kinds = partition(exclusiveTo(infrastructure, 'production')).deleted
-      .map((resource) => resource.kind);
+  test('the order is worker first, session store last, and only deletable resources', () => {
+    const deleted = partition(exclusiveTo(infrastructure, 'production')).deleted;
+    const kinds = deleted.map((resource) => resource.kind);
     expect(kinds[0]).toBe('worker');
-    expect(kinds.at(-1)).toBe('d1');
+    expect(kinds.at(-1)).toBe('kv');
+    // Production's own bucket and index go with it; the shared one does not
+    // reach here at all.
+    expect(deleted.map((resource) => resource.id)).toContain('r2.kinu-backups');
     // A Durable Object namespace has no delete command; it goes away with its
     // Worker. Anything with no `destroy` must not appear here at all, or the run
     // reports a deletion it never attempted.
@@ -281,7 +314,7 @@ describe('teardown refuses by default and never takes a shared resource', () => 
     expect(new Set(covered).size).toBe(mine.length);
 
     const sweptIds = fate.swept.map((resource) => resource.id);
-    expect(sweptIds).toContain('durable-object.proteus:UserDO');
+    expect(sweptIds).toContain('durable-object.kinu:UserDO');
     for (const resource of fate.swept) {
       if (resource.kind !== 'durable-object') continue;
       expect(resource.holds).toContain('SQLite storage');
@@ -295,7 +328,6 @@ describe('teardown refuses by default and never takes a shared resource', () => 
       const fate = partition(exclusiveTo(infrastructure, key));
       const ids = [...fate.deleted, ...fate.swept, ...fate.outlives].map((resource) => resource.id);
       expect(ids).not.toContain('r2.nimbus-runtime-cache');
-      expect(ids).not.toContain('r2.proteus-backups');
     }
   });
 
@@ -305,7 +337,7 @@ describe('teardown refuses by default and never takes a shared resource', () => 
     const bearing = infrastructure.resources.filter((resource) => resource.holds !== undefined);
     expect(bearing.length).toBeGreaterThan(4);
     for (const resource of bearing) expect((resource.holds ?? '').length).toBeGreaterThan(40);
-    for (const kind of ['d1', 'r2', 'vectorize', 'durable-object']) {
+    for (const kind of ['kv', 'r2', 'vectorize', 'durable-object']) {
       expect(bearing.some((resource) => resource.kind === kind)).toBe(true);
     }
   });
@@ -329,7 +361,13 @@ describe('what the manifest cannot express is recorded rather than assumed', () 
 
   test('every wrangler-creatable resource carries the argv that creates it', () => {
     const creatable = infrastructure.resources.filter((resource) => resource.origin === 'wrangler-cli');
-    expect(creatable.length).toBeGreaterThan(3);
+    // Named rather than counted, and this is the whole set: the KV namespace is
+    // NOT here, because `wrangler kv namespace create` makes a second namespace
+    // instead of finding the first one — see the manifest's `manual` note.
+    expect(creatable.map((resource) => resource.id).sort()).toEqual([
+      'r2.kinu-backups', 'r2.kinu-backups-staging', 'r2.nimbus-runtime-cache',
+      'vectorize.kinu-memory', 'vectorize.kinu-memory-staging',
+    ]);
     for (const resource of creatable) {
       expect((resource.create ?? []).length).toBeGreaterThan(1);
       // No shell, so no quoting: a name reaches wrangler as one argv element.
