@@ -345,12 +345,20 @@ export function TranscriptBody({ view, onSelect }: {
  * mid-turn branch chip knows its head id by derivation (`branchHeadId`) and
  * needs the same fetch without a canvas selection around it.
  */
-export function useNodeTranscript({ runId, nodeId, rpc, headActivity }: {
+/** The fallback cadence for an OPEN transcript on a WORKING node. Slower than
+ *  the fork list's, because the push is the live channel and this is only the
+ *  net under it. */
+const TRANSCRIPT_FALLBACK_MS = 4_000;
+
+export function useNodeTranscript({ runId, nodeId, rpc, headActivity, running = false }: {
   runId: string | null;
   nodeId: string | null;
   rpc: Rpc;
   /** Per-branch write counter from `useProteus`. */
   headActivity: ReadonlyMap<string, number>;
+  /** Whether the node is still working. Arms the fallback clock below; a
+   *  finished node has nothing further to poll for. */
+  running?: boolean;
 }) {
   const load = useCallback(
     () => runId === null || nodeId === null
@@ -359,7 +367,19 @@ export function useNodeTranscript({ runId, nodeId, rpc, headActivity }: {
     [rpc, runId, nodeId],
   );
   const subject = `${runId}:${nodeId}`;
-  const { resource, reload } = useAsyncResource(load, undefined, subject);
+  /**
+   * A clock UNDER the push, not instead of it.
+   *
+   * The push is the live channel and stays the fast one — but it is a socket,
+   * and a subscriber that missed a frame had no way back: an open transcript on
+   * a working node sat frozen until the reader clicked a different node. Armed
+   * only while the node is running, so a settled branch reads once and stops.
+   */
+  const revalidate = useCallback(
+    () => (running ? TRANSCRIPT_FALLBACK_MS : null),
+    [running],
+  );
+  const { resource, reload } = useAsyncResource(load, revalidate, subject);
 
   const tick = nodeId === null ? 0 : headActivity.get(nodeId) ?? 0;
   const seen = useRef({ subject, tick });
@@ -394,11 +414,15 @@ export function NodeTranscript({ selection, trees, rpc, headActivity, onSelect }
 }) {
   const runId = selection?.runId ?? null;
   const nodeId = selection?.nodeId ?? null;
-  const { view, resource, reload } = useNodeTranscript({ runId, nodeId, rpc, headActivity });
   // Whatever the TREE calls this node — the only name left when the store has
   // no record of it, so the absent-node state can still say which one it means.
+  // The tree also answers whether the node is still working, which is what arms
+  // the transcript's fallback clock.
   const drawnRoot = runId === null ? undefined : trees.get(runId);
   const drawn = drawnRoot && nodeId !== null ? findForkNode(drawnRoot, nodeId) : null;
+  const { view, resource, reload } = useNodeTranscript({
+    runId, nodeId, rpc, headActivity, running: drawn?.status === "running",
+  });
   const drawnLabel = cleanNodeLabel(drawn?.action, nodeId ?? "this branch");
 
   if (selection === null) {

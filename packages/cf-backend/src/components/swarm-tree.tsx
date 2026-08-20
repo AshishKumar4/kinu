@@ -117,6 +117,17 @@ interface Props {
 	selection: ExplorerSelection | null;
 	onSelectRun?: (runId: string) => void;
 	onSelectNode?: (selection: ExplorerSelection) => void;
+	/**
+	 * Per-node journal write counters, from the `head_activity` broadcast.
+	 *
+	 * A SIGNAL, never a row: what the number means is "this node's ledger moved",
+	 * and the only thing the picture does with it is mark the nodes that are
+	 * working right now. Kept OUT of `regions` on purpose — a region identity
+	 * that changed per step would rebuild the whole scene several times a second,
+	 * and at 520 nodes that is the one thing this renderer cannot afford. It is
+	 * applied as an attribute update, like selection and hover.
+	 */
+	activity?: ReadonlyMap<string, number>;
 }
 
 /** Row pitch. One text line plus air — labels cannot collide at any tree size. */
@@ -168,6 +179,15 @@ const LEGEND_H = 30;
 /** Air inside a band's boundary, and the line of type naming the search. */
 const BAND_PAD = 10;
 const BAND_TITLE_H = 26;
+/**
+ * How long a node keeps its working mark after its last journal write.
+ *
+ * A node that stops working announces nothing further, so the mark has to time
+ * out rather than be turned off. Long enough that a node thinking between two
+ * tool calls does not flicker, short enough that a settled search stops moving
+ * while the reader is still looking at it.
+ */
+const WORKING_MS = 2_500;
 /** Between two boundaries. A hairline of separation, not a gutter — the whole
  *  point of one canvas is that the space between trees is not wasted. */
 const BAND_GAP = 6;
@@ -478,8 +498,24 @@ function applyEmphasis(
 		.attr("data-pinned", (d) => (selectedId === d.data.id || hoverId === d.data.id ? "" : null));
 }
 
+/** No node is working. One allocation, so a settled canvas allocates nothing. */
+const NO_WORKING: ReadonlySet<string> = new Set<string>();
+
+/**
+ * Mark the nodes that are working, as a pure attribute update — the same
+ * discipline as {@link applyEmphasis}, and for the same reason: this is called
+ * from a broadcast handler, and a layer rebuild per journal write would tear the
+ * tree down under the reader's pointer several times a second.
+ */
+function applyWorking(scene: SVGGElement | null, working: ReadonlySet<string>): void {
+	if (scene === null) return;
+	d3.select(scene).selectAll<SVGGElement, PointNode>("g.mcts-node")
+		.attr("data-working", (d) => (working.has(d.data.id) ? "" : null));
+}
+
 export function SwarmTree({
 	regions, width = 800, height = 600, selectedRunId, selection, onSelectRun, onSelectNode,
+	activity = EMPTY_NODE_MAP,
 }: Props) {
 	const svgRef = useRef<SVGSVGElement>(null);
 	const gRef = useRef<SVGGElement | null>(null);
@@ -821,7 +857,10 @@ export function SwarmTree({
 				.attr("stroke-width", 1.25);
 
 			// A generous invisible hit area: a 3.5px dot is not a pointer target.
-			nodeG.append("circle").attr("r", ROW / 2).attr("fill", "transparent");
+			// It doubles as the working pulse's ring — one element per node either
+			// way, so a live search of 520 nodes adds none.
+			nodeG.append("circle").attr("class", "mcts-halo")
+				.attr("r", ROW / 2).attr("fill", "transparent");
 
 			// Labels reach into the next column's space, so they must never swallow
 			// a pointer: only the fold handle inside them is interactive.
@@ -919,6 +958,9 @@ export function SwarmTree({
 				hover?.runId === region.runId ? hover.nodeId : null,
 			);
 		}
+		// The rebuild above replaced every node element, so the working marks went
+		// with them. Same restoration `applyEmphasis` gets, for the same reason.
+		applyWorking(rootGroup, workingRef.current);
 
 		const transform = d3.zoomTransform(svgRef.current!);
 		// The titles were just rebuilt at their scene anchors and have never been
@@ -989,6 +1031,63 @@ export function SwarmTree({
 				.scale(t.k),
 		);
 	}, [selection, collapsed, width, sceneH]);
+
+	/**
+	 * Which nodes are WORKING, as an attribute update.
+	 *
+	 * `head_activity` fires on every journal write a node makes, so this runs
+	 * often. It must never rebuild a layer: the scene is torn down and redrawn on
+	 * `regions`, and doing that per step at 520 nodes would drop the frame budget
+	 * on the floor and take pan and tooltip with it. So it walks the existing
+	 * nodes and toggles one attribute, exactly the way selection and hover do.
+	 *
+	 * MOTION ONLY WHERE STATE CHANGED, and the state is RECENCY: a node is
+	 * working while its counter has moved inside the last {@link WORKING_MS}. Not
+	 * "has a counter" — a settled search's counters are all non-zero and it must
+	 * sit still, or the mark stops meaning "working" and starts meaning "exists".
+	 *
+	 * Recency rather than a remembered delta, and that is the load-bearing
+	 * choice. A ref holding "the map I last reacted to" is not idempotent, and an
+	 * effect in this tree is invoked twice: React's StrictMode mounts, unmounts
+	 * and remounts, so the second pass saw its own recorded map, found no delta,
+	 * and the very first delivery of a live search was marked on a scene that had
+	 * already been thrown away. Timestamps survive that: the second pass
+	 * recomputes the same answer from them and re-applies it.
+	 */
+	const movedAt = useRef(new Map<string, number>());
+	const lastCount = useRef(new Map<string, number>());
+	const workingRef = useRef<ReadonlySet<string>>(NO_WORKING);
+	const workingTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+	/** Recompute who is working, paint it, and come back when the next mark
+	 *  expires. Self-scheduling, so a node that stops working stops pulsing
+	 *  without anything having to notice that it stopped. */
+	const sweepWorking = useCallback(function sweep(): void {
+		const now = Date.now();
+		const working = new Set<string>();
+		let soonest = Number.POSITIVE_INFINITY;
+		for (const [id, at] of movedAt.current) {
+			const left = WORKING_MS - (now - at);
+			if (left <= 0) continue;
+			working.add(id);
+			soonest = Math.min(soonest, left);
+		}
+		workingRef.current = working;
+		applyWorking(gRef.current, working);
+		clearTimeout(workingTimer.current);
+		workingTimer.current = Number.isFinite(soonest)
+			? setTimeout(sweep, soonest)
+			: undefined;
+	}, []);
+	useEffect(() => {
+		const now = Date.now();
+		for (const [id, count] of activity) {
+			if (lastCount.current.get(id) === count) continue;
+			lastCount.current.set(id, count);
+			movedAt.current.set(id, now);
+		}
+		sweepWorking();
+	}, [activity, sweepWorking]);
+	useEffect(() => () => { clearTimeout(workingTimer.current); }, []);
 
 	const selectedRegion = stateRef.current?.regions.find((r) => r.runId === selectedRunId);
 	const competedSelected = selectedRegion?.competed ?? true;

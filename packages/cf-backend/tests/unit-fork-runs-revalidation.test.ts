@@ -112,7 +112,14 @@ describe('fork revalidation policy', () => {
     // The embedded surface draws EVERY tree, so it reads the canvas projection —
     // one request carrying the runs, their dispatch parameters and every tree's
     // rows. The full page drills into one run and needs only the list.
-    expect(embedded).toContain('useExplorationCanvas(rpc, isStreaming, backgroundJobs, liveTrees)');
+    //
+    // `headActivity` is the fifth argument and it is not a datum: the hook reads
+    // it only to notice a search the POLLED list has never heard of, and to read
+    // the list again at once instead of waiting out the 15s idle cadence. A
+    // swarm dispatched with no streaming turn and no background job left
+    // `hasActiveWork` false, so a live search could sit invisible that long.
+    expect(embedded)
+      .toContain('useExplorationCanvas(rpc, isStreaming, backgroundJobs, liveTrees, headActivity)');
     expect(embedded).not.toContain('useLiveForkRuns(');
     expect(fullPage).toMatch(/useLiveForkRuns\(\s*state\.rpc,\s*state\.isStreaming,\s*state\.backgroundJobs,?\s*\)/);
     expect(workSurface).toContain('backgroundJobs={props.backgroundJobs}');

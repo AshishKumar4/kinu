@@ -77,7 +77,7 @@ export function ExplorationSurface({
   const {
     resource, reload, runs, params, trees, journals, resolutions,
     exhausted, loadingMore, pageError, loadMore,
-  } = useExplorationCanvas(rpc, isStreaming, backgroundJobs, liveTrees);
+  } = useExplorationCanvas(rpc, isStreaming, backgroundJobs, liveTrees, headActivity);
   // The list is the scroll container in both layouts, so the trigger lives on it
   // rather than on the canvas beside it.
   const listRef = useGrowingScroll<HTMLDivElement>({
@@ -129,6 +129,7 @@ export function ExplorationSurface({
           <ForkCanvas
             runs={runs} params={params} trees={trees} journals={journals} resolutions={resolutions}
             focusedId={focused.id} selection={selection}
+            activity={headActivity}
             onFocus={setFocusedRunId}
             onSelectNode={setSelection}
             expandTo={agentId ? `/mcts/${agentId}?run=${encodeURIComponent(focused.id)}` : null}
@@ -408,6 +409,7 @@ const CARD_BORDER = 2;
  */
 function ForkCanvas({
   runs, params, trees, journals, resolutions, focusedId, selection, onFocus, onSelectNode, expandTo,
+  activity,
 }: {
   runs: readonly ForkRunSummary[];
   params: ReadonlyMap<string, ForkRunParams>;
@@ -421,6 +423,10 @@ function ForkCanvas({
   onSelectNode: (selection: ExplorerSelection) => void;
   /** Full-screen permalink for the focused run, or null outside a workspace. */
   expandTo: string | null;
+  /** Per-node journal write counters — what makes a working node visible IN THE
+   *  PICTURE. This reached the branch panel and stopped there, so the canvas
+   *  could not say which of a hundred nodes was moving. */
+  activity: ReadonlyMap<string, number>;
 }) {
   /** Three measurements, each of a box that cannot be the one it constrains.
    *  `cell` is the column's whole height and never shrinks, so it is a stable
@@ -542,6 +548,7 @@ function ForkCanvas({
             <SwarmTree
               regions={regions} width={size.w} height={canvasH}
               selectedRunId={focusedId} selection={selection}
+              activity={activity}
               onSelectRun={onFocus}
               onSelectNode={onSelectNode}
             />

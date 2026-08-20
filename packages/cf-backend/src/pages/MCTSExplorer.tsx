@@ -8,7 +8,7 @@
  * rendering: the tree, its loader, its resolution panel and the adapters are the
  * surface's own, imported rather than re-implemented.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useSearchParams, Link } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import { ArrowLeftIcon, GitForkIcon, TreeStructureIcon } from "@phosphor-icons/react";
@@ -42,7 +42,22 @@ export default function MCTSExplorer() {
     state.backgroundJobs,
   );
   const exact = useExactForkRun(state.rpc, runId, hasActiveWork);
-  const run = runId === null ? selectForkRun(runs, null) : exact.run;
+  /**
+   * With no `?run=`, the newest search is what the reader came to look at — but
+   * only the FIRST time. `runs[0]` moves the moment a newer search lands, and
+   * `ExplorerBody` is keyed on the run's id, so a poll during a live workspace
+   * tore the whole tree and transcript down and rebuilt them on a different
+   * search, taking the reader's node selection with it. Column C already states
+   * this rule for itself: focused on arrival, and a later poll must not move it.
+   */
+  const [implied, setImplied] = useState<string | null>(null);
+  const newest = selectForkRun(runs, null);
+  useEffect(() => {
+    if (implied === null && newest !== null) setImplied(newest.id);
+  }, [implied, newest]);
+  const run = runId === null
+    ? (runs?.find((entry) => entry.id === implied) ?? newest)
+    : exact.run;
   const selectionResource = runId === null ? resource : exact.resource;
   const reloadSelection = runId === null ? reload : exact.reload;
   const requestedRunMissing = runId !== null

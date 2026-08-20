@@ -19,7 +19,7 @@
  *     drain or an autonomous turn, none of which stream through this tab's chat
  *     socket.
  */
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import type {
   ExplorationCanvasRun, ForkRunParams, ForkRunSummary, HeadRunView, Page, SeekCursor,
 } from "@proteus/core";
@@ -30,6 +30,10 @@ import type { BackgroundJob, ForkNode, Rpc } from "@/lib/protocol";
 import { swarmResolutionOf, type SwarmResolution } from "./swarm-resolution";
 
 export const FORK_RUN_LIMIT = 30;
+
+/** One allocation for a caller with no activity channel — the CLI-facing reads
+ *  and every test that only wants the polled halves. */
+const EMPTY_ACTIVITY: ReadonlyMap<string, number> = new Map();
 
 /** Matches the run timeline's mid-turn cadence: fast enough to read as live,
  *  slow enough that a long fork is not a poll storm. */
@@ -133,6 +137,10 @@ export function useExplorationCanvas(
   isStreaming: boolean,
   backgroundJobs: readonly BackgroundJob[],
   liveTrees: ReadonlyMap<string, ForkNode>,
+  /** Per-branch write counters from the `head_activity` broadcast. Read here
+   *  only as a SIGNAL that some search moved — the rows come from the read
+   *  below, never from the wire. */
+  headActivity: ReadonlyMap<string, number> = EMPTY_ACTIVITY,
 ) {
   const hasActiveWork = hasActiveForkWork(isStreaming, backgroundJobs);
   // One read per page, both halves of every fork on it. The canvas draws EVERY
@@ -197,6 +205,39 @@ export function useExplorationCanvas(
     for (const [rootId, tree] of liveTrees) folded.set(rootId, tree);
     return folded;
   }, [entries, liveTrees]);
+
+  /**
+   * A search this list has never heard of just moved — so read the list again,
+   * now, instead of waiting out the idle clock.
+   *
+   * The canvas draws its bands by walking the POLLED run list and looking up
+   * each run's tree, so a live tree or a live journal write for a root the list
+   * does not carry draws nothing at all. A swarm dispatched with no streaming
+   * turn and no background job leaves `hasActiveWork` false, which puts the
+   * cadence at FORK_IDLE_REVALIDATE_MS: measured, the owner's new search could
+   * sit invisible for fifteen seconds while its nodes were already working.
+   *
+   * Guarded on the SET of unknown ids, so this fires once per genuinely new
+   * search rather than once per step. A root the list already holds — including
+   * one it holds as settled, which a resumed run flips back to running — is not
+   * news here: the fast cadence covers it, and re-reading per step would be a
+   * poll storm dressed as a push.
+   */
+  const unknown = useMemo(() => {
+    if (entries === null) return "";
+    const listed = new Set(entries.map((entry) => entry.run.id));
+    const missing = [
+      ...[...liveTrees.keys()].filter((rootId) => !listed.has(rootId)),
+      ...[...headActivity.keys()].filter((id) => !listed.has(id)),
+    ];
+    return missing.sort().join("\u0000");
+  }, [entries, liveTrees, headActivity]);
+  const reloadedFor = useRef("");
+  useEffect(() => {
+    if (unknown === "" || reloadedFor.current === unknown) return;
+    reloadedFor.current = unknown;
+    reload();
+  }, [unknown, reload]);
 
   const params = useMemo(() => {
     const byRoot = new Map<string, ForkRunParams>();
