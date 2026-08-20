@@ -80,7 +80,7 @@
   <text class="band" x="58" y="240">ASSEMBLED ONCE PER TURN</text>
   <rect x="58" y="252" width="412" height="46" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b mono" x="70" y="273" text-anchor="start">buildSystemPromptSync()</text>
-  <text class="s" x="70" y="288" text-anchor="start">eight parts, fixed order — the byte-stable cache prefix</text>
+  <text class="s" x="70" y="288" text-anchor="start">nine parts, fixed order; the byte-stable cache prefix</text>
   <path d="M264 298 L264 318" fill="none" stroke="var(--ruleStrong)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a)"/>
   <rect x="58" y="318" width="412" height="94" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b mono" x="70" y="339" text-anchor="start">assembleTurnMessages()</text>
@@ -133,9 +133,9 @@
   <text class="xs" x="512" y="355" text-anchor="start">the executors section</text>
   <text class="xs" x="512" y="371" text-anchor="start">agent state — persistence, memory, delegation,</text>
   <text class="xs" x="512" y="387" text-anchor="start">background work, verification, output format</text>
-  <text class="xs" x="512" y="403" text-anchor="start">AGENTS.md, then the index of available skills</text>
-  <text class="xs" x="512" y="419" text-anchor="start">active skill bodies — activation reasons stripped,</text>
-  <text class="xs" x="512" y="435" text-anchor="start">because those would move the bytes every turn</text>
+  <text class="xs" x="512" y="403" text-anchor="start">AGENTS.md</text>
+  <text class="xs" x="512" y="419" text-anchor="start">the index of available skills</text>
+  <text class="xs" x="512" y="435" text-anchor="start">active skill bodies, reasons stripped for byte stability</text>
   <path d="M472 275 L476 275 L476 271 L497 271" class="edge-lite" stroke-dasharray="3 3" marker-end="url(#a)"/>
   <rect x="500" y="457" width="384" height="218" rx="7" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
   <text class="b" x="512" y="477" text-anchor="start" fill="var(--orange)">Compaction ladder</text>
@@ -161,7 +161,7 @@
   <text class="xs" x="680" y="637"></text>
   <path d="M472 386 L483 386 L483 473 L497 473" class="edge-lite" stroke-dasharray="3 3" marker-end="url(#a)"/>
   <rect x="500" y="691" width="384" height="122" rx="7" fill="var(--pinkFill)" stroke="var(--pinkLine)"/>
-  <text class="b" x="512" y="711" text-anchor="start" fill="var(--pink)">Signals — the one async-wake seam</text>
+  <text class="b" x="512" y="711" text-anchor="start" fill="var(--pink)">Signals — the one async wake path</text>
   <text class="xs" x="512" y="727" text-anchor="start">webhook · email · timer · peer message · file change ·</text>
   <text class="xs" x="512" y="743" text-anchor="start">subordinate report · MCP task · job completion · retry</text>
   <text class="xs" x="512" y="759" text-anchor="start"></text>
