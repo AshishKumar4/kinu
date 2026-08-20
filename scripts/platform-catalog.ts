@@ -358,8 +358,6 @@ function report(): string {
   const out: string[] = [
     '# Cloudflare platform catalog',
     '',
-    '> Edited & maintained by Claude. Presented as-is.',
-    '',
     '**Generated** by `bun scripts/platform-catalog.ts --report` from '
     + `\`${CATALOG_MODULE}\`. Do not commit this file — the module is the source of truth `
     + 'and a committed copy would drift from it, which is the exact failure this catalog '

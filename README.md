@@ -1,101 +1,19 @@
-# Kinu
+<h1 align="center">Kinu.run</h1>
 
-Kinu answers a task by searching a tree of agents. You give it the task and
-a way to measure an answer. It runs the tree and measures every candidate the
-way you said. A measured search writes its results to `exploration_records`,
-so a later search starts from them.
+<p align="center">
+  Agent workspaces that answer a hard task by searching a tree of agents,<br>
+  and keep what worked for the next task.
+</p>
 
-That agent lives in a workspace: a durable container with its own filesystem,
-execution environments and sessions. The agent also learns reusable tools from
-its own conversations and can rewrite its own agentic loop. It runs in the
-cloud on Cloudflare's [Think](https://github.com/cloudflare/agents) framework
-with Durable Objects, or entirely on your own machine. The agent is the same
-either way. A Lean 4 corpus models selected core algorithms, and CI checks it
-on every push that touches `lean/` or a package source file.
+<p align="center">
+  <a href="https://kinu.run"><b>kinu.run</b></a> &nbsp;·&nbsp;
+  <a href="QUICKSTART.md">Quick start</a> &nbsp;·&nbsp;
+  <a href="docs/USER-GUIDE.md">User guide</a> &nbsp;·&nbsp;
+  <a href="docs/EXPLORATION.md">Tree swarm</a> &nbsp;·&nbsp;
+  <a href="docs/CLI.md">CLI reference</a>
+</p>
 
-> Docs in this repo are edited & maintained by Claude and presented as-is; verify against the code when precision matters.
-
-**Live:** [kinu.run](https://kinu.run)
-
-## The swarm
-
-The search is one action on one tool. `agents({action:'swarm', …})` runs it.
-The other six actions are `hire`, `ask`, `send`, `reply`, `list` and
-`dismiss`, and they address agents that already exist.
-
-**You declare the measurement.** An `objective` names a metric, a unit, a
-direction and a target. It also names the verifier that measures a candidate.
-The verifier kind resolves through a closed registry, so a name nobody
-registered refuses the run instead of inventing a score. Under
-`score:'verify'` a candidate's number is the number that instrument reported.
-
-**A `preset` fixes the shape of the search.** There are seven values. Six are
-named searches, `prove` among them, and `custom` composes your own. Six axes
-carry the rest: `unit`, `context`, `expand`, `score`, `advance`
-and `carry`. `expand:'aggregate'` fans a level in and merges its members in
-dependency order. `advance:'archive'` keeps a grid of cells and one elite per
-coordinate.
-
-**A node is a whole agent.** It runs the same turn loop the workspace agent
-runs (`runChat`), and it takes several turns. Inside the one
-workspace filesystem it holds its own directory under `/home`, its own
-credential and its own `/tmp`. Work still running at 30 s detaches into a
-background job, and the node wakes when the job settles.
-
-**The engine says what it cannot do.** `advance:'pareto'` refuses, and the
-refusal names what is missing: a per-instance measurement path and a dominance
-comparison.
-
-[docs/EXPLORATION.md](docs/EXPLORATION.md) has the axes, the refusals, the
-publication seal and the records store in full.
-
-## Architecture
-
-Everything the agent decides lives in `packages/core`, which is platform-clean: it depends on `@nimbus-sh/core` and `@kinu/agent-utils`, and it imports nothing from `agents`, `@cloudflare/*` or `cloudflare:workers`. Under it sits a seam of two interfaces: `AgentRuntime` for resource primitives (storage, memory, llm, schedule, …) and `BackendHost` for the few loop capabilities that are genuinely platform-shaped. Two backends implement that seam: Cloudflare Durable Objects, one per workspace, built on [Think](https://github.com/cloudflare/agents); and your own machine, on `bun:sqlite` and real processes. Both drive the same orchestrator, so the cloud and the CLI cannot drift into two pipelines.
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/seam-dark.svg">
-  <img alt="Clients and autonomous ingress feed packages/core, which owns the turn pipeline, tools, delegation, evolution, context, the canonical workspace file plane, the execution router and the event log. Below it, the AgentRuntime and BackendHost interfaces form the backend seam, implemented twice: by cf-backend on Cloudflare Durable Objects and by cli-backend on your own machine." src="docs/diagrams/seam.svg" width="900">
-</picture>
-
-The turn pipeline itself is `core/orchestrator`. A turn arrives either from a person or from the reactor (a drained event, a finished background job) and is assembled once: a system prompt of nine parts in a fixed order, three of them conditional, then the durable history passed through the extension chain, which is where the compaction ladder fires. After that it is a step loop. At each step boundary a dynamic-context block is re-rendered from live state and appended only when its bytes actually change, the cache tail is marked last so no earlier breakpoint moves, and anything asynchronous splices in through one seam rather than N.
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/turn-dark.svg">
-  <img alt="A turn arrives from a user message or a programmatic wake and is queued one at a time. It is assembled once — system prompt plus transformed history, where the compaction ladder fires — then runs a step loop that re-weaves dynamic context, marks the cache tail and calls tools. Signals splice into the running step or queue the next turn. On settle the turn is snapshotted, recorded and reviewed, and pending events wake the next turn." src="docs/diagrams/turn.svg" width="900">
-</picture>
-
-Delegation is one tool with seven actions. `swarm` runs a tree search that settles back into this turn; `hire` creates a subordinate that outlives it; `ask`, `send`, `reply`, `list` and `dismiss` address agents that already exist. The two spawn actions differ on lifetime and on who decides: a swarm's candidates are measured against the caller's own `objective`, and a subordinate answers in its own words.
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/delegation-dark.svg">
-  <img alt="One agents tool with seven actions. Swarm runs a configured tree search that settles back into this turn, and its candidates are scored by the verifier the caller declared in its own objective rather than judged by a model. Hire creates a persistent subordinate that outlives the turn and reports back as an event. Ask, send, reply, list and dismiss address agents that already exist: subordinates here, or the owner's other workspaces as peers." src="docs/diagrams/delegation.svg" width="900">
-</picture>
-
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) has the detail these leave out: the workspace object model, message flow, events and ingress, and the Think lifecycle.
-
-## Key Features
-
-- **Durable subordinates and peer workspaces** — `hire` creates a subordinate with its own turn loop, its own context and a share of this workspace's files. `ask`, `send`, `reply`, `list` and `dismiss` reach it, and reach the owner's *other* workspaces, through one set of names. A busy agent is never blocked on; the message is spliced into the turn it is already running.
-- **3-timescale evolution** — turn-level (quality → reflection), session-level (pattern consolidation → scaffold mutation), lifetime (`runMCTS`). The MCTS engine is unchanged: `core/src/evolution/engine.ts` and `kinu evolve` call it, and the `agents` tool does not.
-- **CraftStore** — learns reusable tools from conversations. EMA scoring with time decay. FTS5-indexed for search.
-- **Mutable scaffold** — the agent's agentic loop is code it can rewrite, validated through 4 structural gates
-- **One real filesystem** — the workspace file plane is Nimbus over the backend's own SQLite: a durable POSIX filesystem, a real shell, ~95 coreutils, and language runtimes installed on demand. The same component runs on Workers and on your machine.
-- **Web search & fetch** — the built-in `web` tool (`search` and `fetch` actions) works with zero keys (DuckDuckGo search + Cloudflare's markdown service); add a Tavily key for ranked, answer-augmented search.
-- **Portable** — same core runs on Cloudflare Workers (Think + DOs) or local CLI (bun:sqlite)
-
-## Quick Start
-
-### Web UI
-
-```bash
-bun install
-cd packages/cf-backend
-# Create .dev.vars with AI Gateway credentials (see docs/DEPLOYMENT.md)
-CLOUDFLARE_ACCOUNT_ID=<your-id> npx vite dev --port 5173 --host 0.0.0.0
-```
-
-### CLI
+## Install
 
 ```bash
 curl -fsSL 'https://kinu.run/install.sh' | bash
@@ -104,40 +22,217 @@ kinu create jarvis --mode cloud --alias jarvis --purpose "A helpful coding assis
 jarvis "summarize this repository"
 ```
 
-`kinu setup` opens the browser OAuth flow, stores the app session locally,
-and can also configure local provider keys for fully local workspaces.
+`kinu setup` opens a browser sign-in and stores the session on this machine. It also
+takes provider keys, which is what a fully local workspace needs.
 
-### Headless / CI
+A workspace runs in the cloud on Cloudflare Durable Objects, or on your own machine
+on `bun:sqlite`. Choose with `--mode cloud` or `--mode local`. The agent is the same
+either way. `kinu export` backs either one up to a portable archive, and
+`kinu import` restores that archive into a local workspace.
 
-`kinu exec` is the non-interactive face of the CLI: it runs one task and
-exits 0 only when the turn completed cleanly (nonzero on errors or denied
-device consents; it never prompts). Mint a scoped access token from an
-interactive session (sign in within the last 5 minutes), store it as a CI
-secret, and pipe the line-delimited JSON events wherever you need them:
+To serve the web UI yourself:
+
+```bash
+bun install
+cd packages/cf-backend
+# .dev.vars needs AI Gateway credentials; see docs/DEPLOYMENT.md
+CLOUDFLARE_ACCOUNT_ID=<your-id> npx vite dev --port 5173 --host 0.0.0.0
+```
+
+## What a workspace is
+
+A workspace is a durable container. It holds one POSIX filesystem, a real shell,
+execution environments, sessions, memory and an event log.
+
+An agent lives inside it and keeps it for as long as you do. The agent learns
+reusable tools from its own conversations and stores them with a quality score. It
+can rewrite the agentic loop it runs on. You reach it from the terminal, from the
+browser, from your editor over the Agent Client Protocol, or by email.
+
+## The tree swarm
+
+One tool action runs a search. `agents({action:'swarm', …})` takes a task and an
+objective, builds a tree whose nodes are agents, and measures every candidate the
+way you said.
+
+You declare the measurement. An `objective` names a metric, a unit, a direction and
+a target, and it names the verifier that measures a candidate. A verifier is code.
+It runs in this workspace and reports a raw number, and that number picks the
+winner. Verifier kinds resolve through a closed registry, so a name nobody
+registered fails the run. Ask for `score:'judge'` instead and you get the median of
+a model ensemble, which ranks candidates without measuring anything, and nothing
+from a judged run persists as a record.
+
+A `preset` fixes the shape of the search. `ideate` is flat by construction, at depth
+1 and 5 branches, and nothing ranks its results. `optimise` climbs one measured
+number with UCT selection, at depth 5 and 3 branches. `prove` searches deepest, at
+depth 7, because a checker refutes a wrong branch early. `custom` takes the six axes,
+`unit` `context` `expand` `score` `advance` `carry`, and composes your own.
+`expand:'aggregate'` fans a level in and
+merges its members in dependency order. `advance:'archive'` keeps a grid of cells
+and one elite per coordinate.
+
+Every node is a whole agent. It runs the same turn loop the workspace agent runs
+(`runChat`), and it takes several turns to answer. Inside the one workspace
+filesystem it holds its own directory under `/home`, its own credential and its own
+`/tmp`. Work still running at 30 s detaches into a background job, and the node
+wakes when the job settles.
+
+What a measured run reaches persists in `exploration_records`, so the next search of
+the same objective starts from it rather than rediscovering it.
+
+The same tool has six more actions. `hire` creates a subordinate agent that outlives
+the turn, with its own context and a share of this workspace's files. `ask`, `send`,
+`reply`, `list` and `dismiss` address agents that already exist: subordinates here,
+or your other workspaces as peers. No caller ever blocks on a busy agent, because a
+message splices into the turn that agent is already running.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/delegation-dark.svg">
+  <img alt="One agents tool with seven actions. Swarm runs a configured tree search that settles back into this turn, and the verifier the caller declared in its objective scores the candidates instead of a model judging them. Hire creates a persistent subordinate that outlives the turn and reports back as an event. Ask, send, reply, list and dismiss address agents that already exist: subordinates here, or the owner's other workspaces as peers." src="docs/diagrams/delegation.svg" width="900">
+</picture>
+
+[docs/EXPLORATION.md](docs/EXPLORATION.md) has the six axes, the seven presets, what
+the engine refuses, the publication seal and the records store in full.
+
+## Architecture
+
+The agent lives in `packages/core` and does not know what platform it runs on.
+Two small interfaces carry everything platform-specific: `AgentRuntime` provides
+storage, memory, models and scheduling, and `BackendHost` provides the few things
+a turn loop needs from its host. Two backends implement them: Cloudflare Durable
+Objects, one per workspace, built on [Think](https://github.com/cloudflare/agents),
+and your own machine, on `bun:sqlite` and real processes. The cloud and the CLI
+run the same code, so they cannot drift apart.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/backend-dark.svg">
+  <img alt="Clients and autonomous ingress feed packages/core, which owns the turn pipeline, tools, delegation, evolution, context, the canonical workspace file plane, the execution router and the event log. Below it the AgentRuntime and BackendHost interfaces are implemented twice: by cf-backend on Cloudflare Durable Objects, and by cli-backend on your own machine." src="docs/diagrams/backend.svg" width="900">
+</picture>
+
+A turn arrives from a person, a schedule, or a finished background job. It is
+assembled once: the system prompt, then the conversation history, compacted when
+it outgrows the context window. After that it is a step loop. Between steps the
+agent re-reads live workspace state, and everything asynchronous, from a finished
+job to a message from another agent, joins the turn through one path.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/turn-dark.svg">
+  <img alt="A turn arrives from a user message or a programmatic wake and is queued one at a time. It is assembled once, as a system prompt plus transformed history, where the compaction ladder fires, then runs a step loop that re-weaves dynamic context, marks the cache tail and calls tools. Signals splice into the running step or queue the next turn. On settle the turn is snapshotted, recorded and reviewed, and pending events wake the next turn." src="docs/diagrams/turn.svg" width="900">
+</picture>
+
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) has what these leave out: the workspace
+object model, message flow, events and ingress, and the Think lifecycle.
+
+## What else is in the box
+
+**One real filesystem.** The workspace file plane is Nimbus over the backend's own
+SQLite. It is a durable POSIX filesystem with a real shell, ~95 coreutils, and
+language runtimes installed on demand. The same component runs on Workers and on
+your machine.
+
+**Executors.** Work runs in the workspace, in a Linux container sandbox, on your own
+laptop over a WebSocket tunnel behind consent, or in the workspace a fork came from.
+The capability set of each one is rendered into the agent's own prompt, so the model
+knows where to send a job.
+
+**Crafted tools.** `CraftStore` keeps the tools an agent writes for itself, scores
+them with a time-decayed EMA, and indexes them with FTS5 so the agent can find them
+again.
+
+**A mutable scaffold.** The agentic loop is code the agent can rewrite. Four structural
+gates validate a mutation before it runs.
+
+**Evolution on three timescales.** Per turn, quality scoring then reflection. Per
+session, pattern consolidation then scaffold mutation. Per lifetime, `kinu evolve`
+runs a full tree search over the scaffold itself.
+
+**Web search and fetch.** The `web` tool works with zero keys, over DuckDuckGo
+search and Cloudflare's markdown service. A Tavily key adds ranked,
+answer-augmented search.
+
+**Triggers.** A schedule, a webhook or an email reaches a workspace with nobody at
+the keyboard.
+
+**Formal models.** A Lean 4 corpus models selected core algorithms. Measured
+2026-08-19: 330 theorems and 43 requirements, with 0 `sorry`. CI checks the corpus on
+every push that touches `lean/` or a package source file.
+
+## Models and providers
+
+I wanted model choice to be flexible without forcing anyone into a single vendor, so
+a workspace can run on any of these:
+
+- **Your own Cloudflare account.** One browser sign-in (`kinu auth`) attaches your
+  Cloudflare account, and that single login gives you both Workers AI and your AI
+  Gateway. Workers AI models resolve as `workers-ai/<model>` and your gateway as
+  `my-gateway/{author}/{model}`. The OAuth consent needs the `aig.write` scope for AI
+  Gateway; if you connected before that scope was added, run `kinu auth` again to
+  re-grant it.
+- **Workers AI in signed-in local workspaces.** If you are signed in, a *local*
+  workspace you create gets Workers AI through the `/api/user/ai/v1` proxy with no
+  separate API key. New local workspaces default to
+  `workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813`, which needs paid Workers access
+  or prepaid AI Gateway credits.
+- **Bring your own keys.** OpenAI, Anthropic, OpenRouter, your ChatGPT Codex
+  subscription, and any OpenAI-compatible endpoint (Ollama, vLLM, …). Connect with
+  `kinu providers connect <name>`.
+- **A local Claude subscription.** If you use Claude Code,
+  `kinu create --model claude/claude-opus-4-x` (or `-sonnet-`/`-haiku-`) drives the
+  official `claude` binary with your own Claude Code login. Kinu never reads your
+  credentials and never calls the API directly. The binary is the auth boundary,
+  which is what keeps this compliant. It is local only. A cloud workspace needs an
+  Anthropic API key (`kinu providers connect anthropic`).
+
+`kinu providers list` shows what is connected and each provider's status inline. Pick
+a model per workspace with `--model`, or switch mid-conversation from the searchable
+`/model` picker; a chosen model becomes your default for new workspaces. Set
+reasoning effort (low, medium, high) with `/effort` or `kinu effort`, mapped to each
+provider's native knob.
+
+## Headless and CI
+
+`kinu exec` is the non-interactive face of the CLI. It runs one task and exits 0 only
+when the turn completed cleanly, nonzero on an error or a denied device consent, and
+it never prompts. Mint a scoped access token from an interactive session (signed in
+within the last 5 minutes), store it as a CI secret, and pipe the line-delimited
+JSON events wherever you need them:
 
 ```bash
 kinu tokens create --name ci --scopes workspace.exec,workspace.read  # printed once
 # in the pipeline:
-export PROTEUS_TOKEN=pta_…                                       # from CI secrets
+export KINU_TOKEN=pta_…                                             # from CI secrets
 kinu exec --workspace jarvis --json "triage the failing tests" | tee events.jsonl
 ```
 
-Access tokens are scoped: `workspace.exec` runs tasks,
-`workspace.read` inspects state, and everything else (webhooks, device
-registration, workspace creation, consent decisions) stays interactive-only
-and is enforced server-side. `kinu tokens list` shows last use; `kinu tokens revoke ci`
-kills one immediately.
+Access tokens are scoped. `workspace.exec` runs tasks and `workspace.read` inspects
+state. Webhooks, device registration, workspace creation and consent decisions stay
+interactive-only, enforced server-side. `kinu tokens list` shows last use, and
+`kinu tokens revoke ci` kills one immediately.
 
-## Models & providers
+## Status
 
-I wanted model choice to be flexible without forcing anyone into a single vendor, so a workspace can run on any of these:
+The CLI is at 0.2.0 (`packages/cli/package.json`, which is what `kinu --version`
+reports). I use it daily and it is not finished. What I would want to know before
+trying it:
 
-- **Your own Cloudflare account** — one browser sign-in (`kinu auth`) attaches your Cloudflare account, and from that single login you get both Workers AI and your AI Gateway. Workers AI models resolve as `workers-ai/<model>` and your gateway as `my-gateway/{author}/{model}`. The OAuth consent needs the `aig.write` scope for AI Gateway; if you connected before that was added, run `kinu auth` again to re-grant it.
-- **Workers AI in signed-in local workspaces** — if you're signed in, a *local* workspace you create gets Workers AI through the `/api/user/ai/v1` proxy with no separate API key. New local workspaces default to `workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813`; this model requires paid Workers access or prepaid AI Gateway credits.
-- **Bring your own keys** — OpenAI, Anthropic, OpenRouter, and your ChatGPT Codex subscription, plus any OpenAI-compatible endpoint (Ollama, vLLM, …). Connect with `kinu providers connect <name>`.
-- **Local Claude subscription** — if you use Claude Code, `kinu create --model claude/claude-opus-4-x` (or `-sonnet-`/`-haiku-`) drives the official `claude` binary with your own Claude Code login. Kinu never reads your credentials or calls the API directly; the binary is the auth boundary, which is what keeps this compliant. It is local only: cloud workspaces must use an Anthropic API key (`kinu providers connect anthropic`), not the subscription.
-
-`kinu providers list` shows what's connected and each provider's status inline. Pick a model per workspace with `--model`, or switch mid-conversation from the `/model` picker (searchable); a chosen model persists as your default for new workspaces. Set reasoning effort (low, medium, high) with `/effort` or `kinu effort`, mapped to each provider's native knob.
+- **The self-evolution machine has no measured effect yet.** Measured 2026-08-19:
+  15,645 lines of non-test TypeScript across `core/src/evolution`, `core/src/mcts`,
+  `core/src/scaffold` and `core/src/craft`, and no live-model run has scored any of
+  it. [docs/BENCH.md](docs/BENCH.md) is the instrument built to produce that number:
+  159 seeded-defect tasks scored by this repository's own checks, a held-out split,
+  no model in the scoring path, and rejection by default. If the answer turns out to
+  be that evolution does nothing, that is the answer I want.
+- **Three of the seven search presets refuse to resolve.** `research` and `audit`
+  need a `carry:'artifacts'` threshold and `redteam` needs an `advance:'archive'`
+  threshold. The preset table states neither, so `resolveSwarm` refuses the call and
+  names the missing threshold. Use `custom` and state the axes yourself.
+- **`advance:'pareto'` is not implemented.** It needs a per-instance measurement path
+  and a dominance comparison, and the error names both.
+- **`python` does not work in a hosted workspace.** Hosted runtimes come from R2 via
+  `NIMBUS_RUNTIME_CACHE`, which is currently unbound. Local workspaces install
+  `python3` and `pip` on demand. The container sandbox has no `python3` either; it
+  has git, npm, node, bun and jq.
 
 ## Documentation
 
@@ -145,10 +240,10 @@ I wanted model choice to be flexible without forcing anyone into a single vendor
 
 | Document | Description |
 |----------|-------------|
-| [Quick start](QUICKSTART.md) | Install, sign in, first workspace — the two-minute version |
+| [Quick start](QUICKSTART.md) | Install, sign in, first workspace: the two-minute version |
 | [User guide](docs/USER-GUIDE.md) | The path from install to daily use: talking to a workspace, giving it your machine, triggers, backup, troubleshooting |
 | [CLI reference](docs/CLI.md) | Every command and flag, generated from the command registry |
-| [Configuration](docs/CONFIG.md) | `~/.proteus/config.json` fields and environment variables |
+| [Configuration](docs/CONFIG.md) | `~/.kinu/config.json` fields and environment variables |
 
 **How it works**
 
@@ -156,30 +251,30 @@ I wanted model choice to be flexible without forcing anyone into a single vendor
 |----------|-------------|
 | [Workspaces](docs/WORKSPACES.md) | The object model: workspace = container (file plane, identity, sessions), agents = actors inside it |
 | [Architecture](docs/ARCHITECTURE.md) | System design, message flow, package structure, Think lifecycle |
+| [Exploration](docs/EXPLORATION.md) | The six search axes, the node contract, the publication seal, settle and merge-back |
 | [Evolution](docs/EVOLUTION.md) | 3-timescale self-evolution, CraftStore lifecycle, scaffold mutation |
 | [MCTS](docs/MCTS.md) | Monte Carlo Tree Search, UCT formula, branch isolation, convergence |
-| [Exploration](docs/EXPLORATION.md) | The six search axes, the node contract, the publication seal, settle and merge-back |
 | [Tools](docs/TOOLS.md) | The eight builtin tools, the file plane, the `agents` delegation surface, the codemode sandbox and crafted tools |
 | [Context budget](docs/CONTEXT-BUDGET.md) | The reference-plus-digest invariant: where bulk spills, the turn-cumulative clamp, and the trip counters |
 | [Observability](docs/OBSERVABILITY.md) | The failure classification, the typed logger and its reserved-field ban, what is wired and what is not |
 | [Storage](docs/STORAGE.md) | Data model, workspace files over the Nimbus VFS, MemoryStore FTS5, table schemas |
 | [Deployment](docs/DEPLOYMENT.md) | Local dev, Cloudflare deploy, AI Gateway setup, secrets |
-| [Formal Spec](docs/FORMAL-SPEC.md) | Lean 4 abstract models, assumptions, traceability, and CI gates |
+| [Formal spec](docs/FORMAL-SPEC.md) | Lean 4 abstract models, assumptions, traceability, and CI gates |
 | [Bench](docs/BENCH.md) | Machine-scored harness for whether self-evolution helps: sealed split, paired stats, rejection by default |
-| [Testing](docs/TESTING.md) | Conventions, what "all tests" actually runs, and the eval tier — the arm that calls a real model and bills the signed-in session |
+| [Testing](docs/TESTING.md) | Conventions, what "all tests" actually runs, and the eval tier that calls a real model and bills the signed-in session |
 | [Changelog](CHANGELOG.md) | What changed in each version, and the release checklist every user-visible change runs |
 
 ## Packages
 
 | Package | Description |
 |---------|-------------|
-| `core/` | The shared brain (platform-independent): turn pipeline + `ExtensionHost`, canonical VFS + ExecutionRouter, the swarm engine, MCTS engine, EvolutionEngine, CraftStore, scaffold, the eight builtin tools, EventLog + SignalDelivery, types |
+| `core/` | The shared brain, platform-independent: turn pipeline and `ExtensionHost`, canonical VFS and `ExecutionRouter`, the swarm engine, MCTS engine, `EvolutionEngine`, `CraftStore`, scaffold, the eight builtin tools, `EventLog` and `SignalDelivery`, types |
 | `agent-utils/` | MemoryStore (FTS5), CraftStore (FTS5), the shared VFS types, path addressing and small abort/encoding helpers |
-| `compaction/` | The default `transformContext` extension: vendored better-compact ladder + the Kinu AI-SDK⇄ladder codec |
-| `cf-backend/` | Cloudflare Workers: OrchestratorAgent (thin Think adapter), ExplorationAgent + SubordinateAgent (Facets), UserDO, React UI |
+| `compaction/` | The default `transformContext` extension: the vendored better-compact ladder and the Kinu AI-SDK codec for it |
+| `cf-backend/` | Cloudflare Workers: OrchestratorAgent (a thin Think adapter), ExplorationAgent and SubordinateAgent (Facets), UserDO, React UI |
 | `cli/` | CLI commands: create, chat, exec, evolve, status, list, export, import |
 | `cli-backend/` | Local runtime: `LocalAgentSession`, bun:sqlite, subprocess sandbox, child_process MCTS branches |
-| `pc-agent/` | The device agent that attaches a user's own machine as the `laptop` executor (connect + consent) |
+| `pc-agent/` | The device agent that attaches your own machine as the `laptop` executor (connect and consent) |
 | `test-utils/` | Shared test fakes and fixtures |
 
 ## Development
@@ -189,6 +284,10 @@ bun install
 bun run check                    # type-check every package (+ pc-agent syntax)
 bun test --cwd packages/core     # unit tests (also: cf-backend, cli, cli-backend, agent-utils)
 ```
+
+Contributions are welcome. [AGENTS.md](AGENTS.md) carries the rules this repository
+runs on, for people and for agents: the gate discipline, the worktree rules, the
+commit vocabulary and how to write a doc here.
 
 ## License
 

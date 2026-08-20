@@ -1,7 +1,5 @@
 # Kinu user guide — install, first workspace, daily use
 
-> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
-
 This is the path I actually use: get it installed, make one workspace, then live
 with it. [QUICKSTART.md](../QUICKSTART.md) is the two-minute version and
 [docs/CLI.md](CLI.md) is the generated reference for every command and flag.
@@ -99,9 +97,9 @@ kinu connect          # link this computer, with a consent prompt
 kinu desktop status   # is it attached?
 ```
 
-Consent is asked once per workspace and remembered. By default the agent sees
-the folder you consented to; the wider grant (whole filesystem) is a deliberate
-switch in the web app's workspace settings, under Device access.
+Kinu asks for consent once per workspace and remembers it. By default the agent
+sees the folder you consented to; the wider grant (whole filesystem) is a
+deliberate switch in the web app's workspace settings, under Device access.
 
 `kinu executors <name>` lists the places a workspace can run commands (the
 canonical workspace, a sandbox container, or your connected machine), and
@@ -125,10 +123,9 @@ Each workspace also has an email address once the mail domain is set up,
 starts a turn, and the reply comes back on the thread.
 
 Compatible background signals that arrive while a turn is running are spliced
-into its next step. Delegated Plan or Build work keeps its trusted mode and is
-queued immediately for its own homogeneous turn instead of being mixed into
-unrelated work, so a busy workspace still admits the message without blocking
-the sender.
+into its next step. Delegated Plan or Build work keeps its trusted mode and
+queues immediately for its own homogeneous turn, so a busy workspace still
+admits the message without blocking the sender.
 
 ## 6. Watching it think
 
@@ -152,14 +149,14 @@ its files and its terminal. The gauge at the far right of the strip carries the
 run's own meters: context, cost and cache-hit rate.
 
 Anything the agent needs a decision on is counted on the **Work** tab and listed
-at the top of it. A release awaiting approval, a rewrite of its own scaffold
-sitting under trial, a failed job, changes to itself you have not read: each row
-takes you to where the decision is actually made.
+at the top of it. Each row takes you to where the decision is actually made: a
+release awaiting approval, a rewrite of its own scaffold sitting under trial, a
+failed job, or changes to itself you have not read.
 
 **Exploration** is where I go when the agent tried more than one thing. The
 `agents` tool's `swarm` action is the only verb that grows one of these. A swarm
-is a configured tree search over agent nodes: a preset fixes the shape of the
-search and an objective says what is measured. Each node is a whole agent with
+is a configured tree search over agent nodes. A preset fixes the shape of the
+search, and an objective says what is measured. Each node is a whole agent with
 its own home directory, running the same loop as the agent you talk to. A
 candidate can be scored by a verifier you registered rather than judged by a
 model, so what the tab compares is measured. Every search the workspace has run

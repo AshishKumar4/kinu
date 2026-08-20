@@ -1,11 +1,8 @@
 # Agent Client Architecture
 
-> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
-
 > Written June 2026 as a proposed implementation spec. Every numbered item it
 > proposed has shipped. Nothing in it was abandoned and nothing is still open.
 > Re-checked against the code on 2026-08-19. This file now records what runs.
-> The file asks for no work.
 >
 > **Spec §N** marks an item from the June 2026 draft and gives its verdict. A
 > bare **§N** points at a section of this file.

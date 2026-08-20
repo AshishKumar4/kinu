@@ -1,14 +1,11 @@
 # Branch Archive — what makes a branch safe to delete
 
-> Maintained by Claude (AI-edited documentation, presented as-is); verify against
-> the tags themselves when precision matters.
-
 Some unmerged branches hold file content that exists nowhere in `main`'s history.
 Deleting those branches is safe only because an `archive/*` tag pins the same
 commits, and nothing in the repository recorded which tag covered which branch.
 A prune that deleted a tag it did not know was load-bearing would destroy
-content silently. No test fails, no gate fires, the blobs simply become
-unreachable and the next `git gc` collects them.
+content silently. No test fails, no gate fires, the blobs become unreachable
+and the next `git gc` collects them.
 
 This file is that record. It exists so the mapping cannot be lost, not because
 archive tags are interesting.
@@ -89,7 +86,7 @@ comm -23 /tmp/ref.objs /tmp/main.objs \
 ```
 
 Compare against `main`'s whole history, never its tip. The question is whether
-`main` ever held those bytes, not whether it holds them now.
+`main` ever held those bytes.
 
 Blobs no other ref reaches, for one tag:
 
@@ -128,8 +125,8 @@ carries the same provenance under `edge.websocket_idle_reap_ms`, labelled
 SPECULATIVE, and `scripts/platform-catalog.ts` fails any provenance string that
 points at the deleted file.
 
-`archive/nimbus-measure` is the one tag where a single file was worth keeping:
-its measurement write-up. That write-up is deliberately out of this repository.
+`archive/nimbus-measure` is the only tag holding a file worth keeping, its
+measurement write-up. That write-up is deliberately out of this repository.
 It went with the other internal design records, and its load-bearing figures
 were carried into AGENTS.md § Deploy Discipline first: the 185-252 ms Worker
 startup range measured 2026-08-04 against Cloudflare's 1-second startup limit,

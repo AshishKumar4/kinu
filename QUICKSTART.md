@@ -1,7 +1,5 @@
 # Kinu Quick Start
 
-> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
-
 ## CLI
 
 ```bash
@@ -36,7 +34,7 @@ Signed in, a **local** workspace gets Workers AI with no separate key (it defaul
 `workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813`, which requires paid Workers
 access or prepaid AI Gateway credits). Your AI Gateway shows up as
 `my-gateway/{author}/{model}` once the OAuth grant includes the `aig.write`
-scope — run `kinu auth` again if you connected before it was added.
+scope. Run `kinu auth` again if you connected before it was added.
 
 **Claude subscription** (local only, via your Claude Code login):
 
@@ -46,7 +44,7 @@ kinu providers connect claude          # status check + next steps (no key is st
 kinu create jarvis --mode local --model claude/claude-opus-4-x
 ```
 
-Kinu drives the official `claude` binary, which owns its own login — it never
+Kinu drives the official `claude` binary, which owns its own login. Kinu never
 reads your credentials. Cloud workspaces can't use the subscription; give them an
 Anthropic API key (`kinu providers connect anthropic`) instead.
 

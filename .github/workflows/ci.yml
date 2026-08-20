@@ -20,7 +20,7 @@ name: CI
 
 on:
   push:
-    branches: [main, worktree-proteus-v2-runtime]
+    branches: [main]
   pull_request:
     branches: [main]
 

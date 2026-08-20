@@ -1,7 +1,5 @@
 # Kinu — Agent Development Guide
 
-> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
-
 ## Project Overview
 
 Self-evolving agent framework with MCTS parallel exploration, mutable scaffolding,
@@ -185,9 +183,13 @@ model-facing prompt string, every commit body, and every changelog entry.
   doing no work. Brevity: the shortest version that keeps the meaning. Clarity: the reader gets it
   on one pass. Humanity: it sounds like a person who cares, not a company.
 
-Two conventions this repository already had, and they survive unchanged: a doc that lands here
-carries a visible line at the top saying it is AI-edited and presented as-is, and user-facing prose
-is in the owner's own first-person voice.
+One convention this repository already had, and it survives: user-facing prose is in the owner's own
+first-person voice.
+
+**Docs here carry no AI-edited disclaimer line.** 31 of the 32 tracked `.md` files carried one until
+2026-08-20, when the owner removed the convention. Two generators printed it and no longer do:
+`packages/cli/src/cli-reference.ts` (which writes `docs/CLI.md`) and `scripts/platform-catalog.ts`.
+Do not add the line back.
 
 Where Simplified Technical English and readable English pull apart, the reader wins — keep the STE
 discipline that carries the weight (one idea, one word per meaning, active voice, short) and drop

@@ -1,7 +1,5 @@
 # Nimbus Integration
 
-> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
-
 Nimbus is the hosted backend's one authoritative workspace. The code this page
 describes lives in `packages/cf-backend/src/runtime.ts` and
 `packages/cf-backend/src/nimbus-route.ts`.
@@ -67,8 +65,8 @@ Core interfaces:
 
 The Cloudflare backend registers the provider only as `workspace`
 (`runtime.ts:433`). There is no product `nimbus` row and no `nimbus.*`
-namespace. The optional `sandbox` and `laptop` providers stay genuinely
-different machines with their own filesystems.
+namespace. The optional `sandbox` and `laptop` providers stay different machines
+with their own filesystems.
 
 The local CLI does not use `NIMBUS_SESSION`. Its `workspace` provider executes
 against the local workspace over `bun:sqlite` state.

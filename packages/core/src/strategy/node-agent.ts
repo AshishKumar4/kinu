@@ -2,7 +2,7 @@
  * ONE NODE OF A SWARM, AS AN AGENT.
  *
  * Specified by docs/EXPLORATION.md — "A node is an agent", "Node identity",
- * "Inherited context", "The report seam", "Arbitration", "Isolation" and "The
+ * "Inherited context", "The report contract", "Arbitration", "Isolation" and "The
  * journal read model".
  *
  * A node used to be one `generateText` call whose whole output was text. It is an

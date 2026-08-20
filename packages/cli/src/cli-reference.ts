@@ -10,10 +10,6 @@
 import type { Command, Option } from 'commander';
 import { commandEntries, GLOBAL_ENVIRONMENT, HELP_EXAMPLES } from './display';
 
-const DISCLAIMER =
-  '> Maintained by Claude (AI-edited documentation, presented as-is); '
-  + 'verify against the code when precision matters.';
-
 export function renderCliReference(program: Command): string {
   const cli = program.name();
   const entries = commandEntries(program);
@@ -21,8 +17,6 @@ export function renderCliReference(program: Command): string {
   const lines: string[] = [
     '# Kinu CLI reference',
     '',
-    DISCLAIMER,
-    '>',
     '> Generated from the command registry (`packages/cli/src/program.ts`) by',
     '> `bun run docs:cli`. Edit the registration, not this file.',
     '',

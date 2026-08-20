@@ -1,7 +1,5 @@
 # Data Model
 
-> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
-
 A hosted workspace has two explicit durable authorities. `NIMBUS_SESSION` owns
 the workspace files and execution state. The `OrchestratorAgent` Durable
 Object's SQLite owns relational actor state. The schema is split across several
@@ -103,7 +101,7 @@ erDiagram
         REAL canary_score "Canary evaluation score"
         REAL baseline_score "Baseline comparison score"
         TEXT status "current/pending/rolled_back/historical"
-        INTEGER parent_version "DGM lineage — the version this branched from"
+        INTEGER parent_version "DGM lineage, the version this branched from"
         TEXT pathology "The failure cell this version was written to fix"
     }
     craft_scores {
@@ -134,9 +132,9 @@ erDiagram
         INTEGER created_at "Epoch ms"
     }
     messages {
-        TEXT id PK "Message ID — the SDK's id, so it is what the UI can point at"
+        TEXT id PK "Message ID from the SDK, so the UI can point at it"
         TEXT session_id "Session ('default' chat, 'mcts' search)"
-        TEXT parent_id "Parent message — these edges ARE the session tree"
+        TEXT parent_id "Parent message. These edges ARE the session tree"
         TEXT role "user/assistant/system"
         TEXT content "Plain text (flattened for FTS and the outcome joins)"
         INTEGER created_at "Epoch ms"
@@ -200,8 +198,8 @@ Both backends now run Nimbus's workspace filesystem over their own SQLite.
   the session's own database (`cli-backend/src/runtime.ts:370-380`).
 
 Nimbus owns those bytes and their tables. `core/src/conformance/manifest.ts`
-declares the exact set. That set is what `NimbusWorkspace.destroy()` drops, and
-an addition to it means the dependency changed its storage contract:
+declares the exact set. That set is what `NimbusWorkspace.destroy()` drops, so
+an addition to it means the dependency changed its storage contract. The set is
 `inodes`, `file_chunks`, `content_lifecycle`, `vfs_schema_migrations`,
 `vfs_append_receipts`, `vfs_append_writer_state`, `vfs_append_module_state`,
 `vfs_append_pid_revocations`, `vfs_append_acked_gaps`, plus Kinu's own

@@ -1,7 +1,5 @@
 # Applications & Research Positioning
 
-> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
-
 ## 1. What Kinu Is
 
 Kinu is a general-purpose AI agent that improves itself over time. It:
@@ -10,7 +8,7 @@ Kinu is a general-purpose AI agent that improves itself over time. It:
 - **Learns reusable tools** from successful conversations and applies them in future ones
 - **Rewrites its own execution logic** (scaffold) based on observed performance patterns
 - **Remembers everything** in a persistent, FTS5-searchable memory
-- **Includes CI-gated Lean 4 models** — 330 theorems over 43 requirements check selected abstract invariants, with assumptions and implementation-evidence gaps tracked explicitly
+- **Includes CI-gated Lean 4 models**: 330 theorems over 43 requirements check selected abstract invariants, with assumptions and implementation-evidence gaps tracked explicitly
 
 ```mermaid
 graph LR
@@ -24,7 +22,7 @@ graph LR
     style B5 fill:#0f3460
 ```
 
-Evolution happens at three timescales simultaneously, each feeding into the next:
+Evolution happens at three timescales at once, and each one feeds the next:
 
 | Timescale | Frequency | What Evolves |
 |-----------|-----------|-------------|
@@ -55,16 +53,14 @@ The web UI exposes the agent's internal state across six surfaces: Output, Work,
 
 Each workspace is a Durable Object with its own SQLite database, hosting its default agent. Conversations persist across sessions. The agent builds up:
 
-- **Long-term memory** (MEMORY.md) — reflections, notes, learned facts
-- **Crafted tools** — reusable code patterns extracted from successful problem-solving
-- **Scaffold improvements** — the agent's own execution logic gets better over time
-
-A Kinu agent that helped you debug TypeScript yesterday remembers the patterns it learned and applies them today.
+- **Long-term memory** (MEMORY.md): reflections, notes, learned facts
+- **Crafted tools**: reusable code patterns extracted from successful problem-solving
+- **Scaffold improvements**: the agent's own execution logic gets better over time
 
 ### Multi-Model Comparison
 
-The model selector supports switching between models mid-conversation, across
-every connected provider — not just Workers AI. On Workers AI the usual spread is:
+The model selector switches models mid-conversation, across every connected
+provider. On Workers AI the usual spread is:
 
 | Model | Description | Best For |
 |-------|-------------|----------|
@@ -73,9 +69,9 @@ every connected provider — not just Workers AI. On Workers AI the usual spread
 | Nemotron 3 Super 120B / GPT OSS 120B | Reasoning models, 256k / 128k context | Alternate reasoning trajectories |
 | Llama 4 Scout | General-purpose instruction model | Quick tasks, simple questions, iteration |
 
-Different models produce different evolution trajectories — a reasoning model
+Different models produce different evolution trajectories. A reasoning model
 tends to extract more complex tool patterns than an instruction model. Reasoning
-effort is a separate dial: `/effort low|medium|high` maps onto each provider
+effort is a separate dial. `/effort low|medium|high` maps onto each provider
 family's native knob, so the same model can be run cheap or deep.
 
 ### Hosted Development Environment
@@ -97,7 +93,7 @@ The CLI version runs locally with bun:sqlite, providing the same core capabiliti
 kinu create dev-helper --purpose "A TypeScript development assistant"
 kinu chat dev-helper
 # Agent has access to execute_tools, run, file, agents, memory, tasks, web
-# Evolution happens locally — crafted tools persist in ~/.proteus/dev-helper/agent.db
+# Evolution happens locally; crafted tools persist in ~/.proteus/dev-helper/agent.db
 ```
 
 The CLI agent can:
@@ -119,16 +115,16 @@ kinu export dev-helper -o dev-helper-v2.agent.db
 kinu import dev-helper-v2.agent.db --name dev-helper
 ```
 
-Agent state is a single SQLite file. Export, backup, version control, and share agents like code artifacts.
+Agent state is a single SQLite file, so you can export it, back it up, put it in version control, and share it.
 
 ### Research Experimentation
 
-The CLI provides fast iteration on evolution parameters without network latency:
+The CLI has no network latency, so you can try evolution parameters quickly.
 
-MCTS parameters are durable per-workspace state, not a config object passed at
-construction: `DEFAULT_CONFIG` is frozen and read at import time, and the
-workspace's `agent_config` table carries the overrides on top of it. A swarm
-takes its shape from the call instead, through `preset` and the six axes.
+MCTS parameters are durable per-workspace state. `DEFAULT_CONFIG` is frozen and
+read at import time, and the workspace's `agent_config` table carries the
+overrides on top of it. A swarm takes its shape from the call instead, through
+`preset` and the six axes.
 
 ```typescript
 import { createAgentConfigStore } from '@kinu/core';
@@ -196,7 +192,7 @@ graph TB
 
 1. **Three-timescale evolution with machine-checked abstract models.** The Lean corpus checks selected properties of hand-maintained models; it does not prove the deployed TypeScript implementation. CI gates compilation, consistency, axiom closure, and traceability, while model-to-code differential fixtures remain planned.
 
-2. **Scaffold mutation with structural validation.** The agent rewrites its own agentic loop (the async generator that controls how it processes tasks). This is genuine self-modifying code, but guarded by 4 validation gates that prevent syntax errors, forbidden patterns, and data loss.
+2. **Scaffold mutation with structural validation.** The agent rewrites its own agentic loop (the async generator that controls how it processes tasks). This is self-modifying code, guarded by 4 validation gates that prevent syntax errors, forbidden patterns, and data loss.
 
 3. **CraftStore with automatic lifecycle management.** Learned tools are scored via exponential moving average, time-decayed for relevance, and automatically retired when they stop being useful.
 
@@ -218,7 +214,7 @@ the orchestrator.
 
 ### Evolution is Slow in Practice
 
-- **Turn-level** works well — pattern extraction fires reliably after an accepted turn that used tools
+- **Turn-level** works well; pattern extraction fires reliably after an accepted turn that used tools
 - **Session-level** needs 5 turns *and* a turn that errored or drew negative feedback; scaffold mutation additionally needs 3+ conversations
 - **Lifetime** fires every 5 closed session windows (`lifetimeEvolutionInterval: 5`), which is 25 turns; `kinu evolve` runs a search on demand
 - The LLM's ability to generalize tool patterns into reusable code is inconsistent
@@ -229,20 +225,20 @@ There is now a runnable quality benchmark (`scripts/eval.ts` over
 `core/src/eval/`) that scores a candidate model against a baseline with an LLM
 judge and exits non-zero below a committed floor, plus a replay eval
 (`runReplayEval`) that re-runs labeled past turns through the live scaffold to
-produce a loss curve. That is a real measurable signal, and it is what the
-shadow-veto promotion decision leans on. What is still missing is breadth — the
-seed corpus is small, and these metrics remain unmeasured:
+produce a loss curve. That is a real measurable signal, and the shadow-veto
+promotion decision leans on it. Breadth is still missing. The seed corpus is
+small, and these metrics remain unmeasured:
 
 - Task completion rate before vs after evolution
 - Tool reuse frequency
-- Memory utilization efficiency
+- How much of stored memory a turn actually reads
 
 ### Scaffold Mutation Rarely Triggers
 
 The scaffold mutation pipeline exists and is fully implemented (4-gate validation, version history, rollback), but in practice:
 - Requires 3+ session reflections to trigger
 - The LLM often produces scaffolds that fail structural validation (forbidden patterns like `import`)
-- Successful mutations are rare — most conversations don't generate enough data for meaningful scaffold improvements
+- Successful mutations are rare; most conversations don't generate enough data for meaningful scaffold improvements
 
 ### The search explorer
 
@@ -272,9 +268,9 @@ original idea:
 ### Evaluation Benchmarks
 
 Broaden the existing harness beyond its seed corpus:
-- **CryptoHack** (308 crypto challenges) — CTF-style verification with known flags
-- **SWE-bench** — software engineering tasks with automated verification
-- **Custom evolution benchmarks** — measure tool extraction rate, scaffold improvement, memory utilization
+- **CryptoHack** (308 crypto challenges): CTF-style verification with known flags
+- **SWE-bench**: software engineering tasks with automated verification
+- **Custom evolution benchmarks**: measure tool extraction rate, scaffold improvement, and memory reads
 
 ### Lean-to-TypeScript Evidence
 
