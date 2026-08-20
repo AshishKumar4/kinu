@@ -1337,6 +1337,13 @@ export class LocalAgentSession implements BackendHost {
    * of every model step forever. reconcileInterruptedForks settles them and
    * tells the agent through the one signal seam.
    *
+   * Then the turn reviews a previous one-shot process deferred. Same reason as
+   * the jobs: `proteus exec` exits before the outcome review it owes, so the
+   * review is a durable row and this is the next host that can afford it
+   * (core's AgentOrchestrator.runDeferredTurnReviews — a one-shot session
+   * declines it there, so the cost never lands back on an exec invocation).
+   * Bounded per open, so a backlog is not this session's first turn's latency.
+   *
    * Then two passes over the jobs, because the fiber rows and the job registry
    * each know something the other does not. An interrupted bg:* fiber row says
    * its job's executor died AFTER settling, which is the only way a lost wake
@@ -1359,6 +1366,14 @@ export class LocalAgentSession implements BackendHost {
       runEvents: this.eventRecorder,
       logActivity: (event, detail) => this.emit({ type: 'evolution', event, message: detail ?? '' }),
     });
+    const reviews = await this.orch.runDeferredTurnReviews();
+    if (reviews.reviewed > 0 || reviews.refused > 0) {
+      this.emit({
+        type: 'evolution', event: 'deferred_reviews_drained',
+        message: `${reviews.reviewed} deferred turn review(s) run` +
+          (reviews.refused > 0 ? `, ${reviews.refused} unreadable row(s) refused` : ''),
+      });
+    }
     const orphans = detectOrphanedFibers(this.rt.storage.sql);
     for (const o of orphans) {
       if (o.name.startsWith('bg:')) await this.jobRunner.recover(o.snapshot);

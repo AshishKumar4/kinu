@@ -320,6 +320,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
 
     // ── core evolution stores created at engine/session construction ──
     session_window: EVERYWHERE,
+    turn_review_queue: EVERYWHERE,
     replay_evals: EVERYWHERE,
     mission_budget: EVERYWHERE,
 

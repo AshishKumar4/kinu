@@ -203,11 +203,12 @@ async function tickAgent(name: string, now: number): Promise<number | null> {
   try {
     const nextBefore = nextTriggerAt(db);
     const triggersDue = nextBefore !== null && nextBefore <= now;
-    // The daemon is also the host for the cadence-heavy evolution pass a
-    // one-shot `proteus exec` process cannot afford to finish (see
-    // AgentOrchestrator's exit contract). Both are checked with plain SQL so a
-    // workspace with nothing to do costs one query, not a session.
-    const evolutionDue = sessionEvolutionDue(db);
+    // The daemon is also the host for the evolution work a one-shot `proteus
+    // exec` process cannot afford to finish (see AgentOrchestrator's exit
+    // contract): the cadence pass its window is due, and the turn reviews it
+    // deferred. Both are checked with plain SQL so a workspace with nothing to
+    // do costs two queries, not a session.
+    const evolutionDue = sessionEvolutionDue(db) || deferredReviewsDue(db);
     if (!triggersDue && !evolutionDue) return nextBefore;
 
     const { llmConfig, resolver: modelResolver } = createConfiguredLocalModelResolver({ agentName: name });
@@ -261,6 +262,21 @@ function sessionEvolutionDue(db: Database): boolean {
   if (!table) return false;
   const row = db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM session_window WHERE in_window = 1').get();
   return (row?.n ?? 0) >= DEFAULT_SESSION_REFLECTION_INTERVAL;
+}
+
+/**
+ * Whether any one-shot process left a turn review undrained
+ * (evolution/review-queue.ts). Read the same way and for the same reason as the
+ * window above — and it is a SEPARATE test, because a workspace driven only by
+ * `proteus exec` accumulates reviews long before its window reaches the
+ * reflection interval, and gating the tick on the window alone left exactly
+ * those reviews with no host at all.
+ */
+function deferredReviewsDue(db: Database): boolean {
+  const table = db.query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'turn_review_queue'`).get();
+  if (!table) return false;
+  const row = db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM turn_review_queue').get();
+  return (row?.n ?? 0) > 0;
 }
 
 function nextTriggerAt(db: Database): number | null {

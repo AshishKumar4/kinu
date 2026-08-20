@@ -7,6 +7,10 @@ import { createTestSql } from '@proteus/test-utils';
 import * as v from 'valibot';
 import { AgentOrchestrator, type AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
 import { initSessionWindowTable, createSessionWindowStore } from '../src/evolution/session-window';
+import {
+  initTurnReviewQueueTable, queueTurnReview, takeQueuedTurnReviews, dropQueuedTurnReview,
+  countQueuedTurnReviews,
+} from '../src/evolution/review-queue';
 import { initEventsHubTables, EventLog, type IngressDescriptor } from '../src/events/hub/index';
 import type { BackendHost, BroadcastEvent, ProgrammaticTurn } from '../src/types/backend-host';
 import type { AgentSignal } from '../src/types/signals';
@@ -40,10 +44,14 @@ function fakeEngine(opts?: { enabled?: boolean }) {
   const trials: number[] = [];
   const { sql, execRaw } = createTestSql();
   initSessionWindowTable(execRaw);
+  initTurnReviewQueueTable(execRaw);
   // The crafted-tool ledger the engine owns in production, over a real store,
   // so the in-episode clock is exercised through the same seam.
   const crafted: string[] = [];
   const observed: Array<{ names: string[]; quality: number }> = [];
+  const reviewTurn = async (turn: CompletedTurn, followup: string | null): Promise<void> => {
+    reviews.push({ turn, followup });
+  };
   const engine: AgentOrchestratorDeps['engine'] = {
     enabled: opts?.enabled ?? true,
     sessionWindow: createSessionWindowStore(sql),
@@ -54,12 +62,24 @@ function fakeEngine(opts?: { enabled?: boolean }) {
         return [];
       },
     },
-    reviewTurn: async (turn: CompletedTurn, followup: string | null) => { reviews.push({ turn, followup }); },
+    reviewTurn,
     onSessionComplete: async (s: { turns: CompletedTurn[] }) => { sessions.push(s.turns.length); },
     runDueShadowTrials: async () => { trials.push(Date.now()); },
     recordRecovery: () => {},
+    // The real queue, so a deferral is exercised against the durable table and
+    // the drain replays through the SAME reviewTurn above — exactly the
+    // production wiring.
+    deferTurnReview: (turn, followup) => queueTurnReview(sql, { turn, followup }),
+    runDeferredTurnReviews: async () => {
+      const taken = takeQueuedTurnReviews(sql, 5);
+      for (const row of taken.reviews) {
+        await reviewTurn(row.turn, row.followup);
+        dropQueuedTurnReview(sql, row.id);
+      }
+      return { reviewed: taken.reviews.length, refused: taken.refused.length };
+    },
   };
-  return { engine, reviews, sessions, crafted, observed, trials };
+  return { engine, reviews, sessions, crafted, observed, trials, sql };
 }
 function fakeHost(opts?: { activeTurn?: boolean }) {
   const enqueued: ProgrammaticTurn[] = [];
@@ -159,6 +179,88 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     expect(daemon.sessionTurnIndex).toBe(0);
   });
 
+  test('a one-shot host DEFERS the turn review — settle waits on nothing, a durable row is owed', async () => {
+    const { engine, reviews, sql } = fakeEngine();
+    const { host } = fakeHost();
+    // A review that never finishes: on a host that joins the lane this is the
+    // whole settle bound, which is exactly the 64.9s exit tail being removed.
+    engine.reviewTurn = () => new Promise<void>(() => {});
+    const orch = new AgentOrchestrator({
+      host, engine, eventLog: newEventLog(), oneShot: true, settleTimeoutMs: 5_000,
+    });
+    orch.recordTurn(aTurn(0), 'independent_task');
+
+    const startedAt = Date.now();
+    await orch.settleEvolution();
+    expect(Date.now() - startedAt).toBeLessThan(100);   // the lane is EMPTY, not waited out
+    expect(reviews).toEqual([]);                        // nothing ran in the exec process
+    expect(countQueuedTurnReviews(sql)).toBe(1);        // and the review is owed, durably
+  });
+
+  test('an interactive host still runs the review inline — the settle bound is what it costs', async () => {
+    const { engine, sql } = fakeEngine();
+    const { host } = fakeHost();
+    engine.reviewTurn = () => new Promise<void>(() => {});
+    const orch = new AgentOrchestrator({
+      host, engine, eventLog: newEventLog(), settleTimeoutMs: 50,
+    });
+    orch.recordTurn(aTurn(0), 'independent_task');
+    const startedAt = Date.now();
+    await orch.settleEvolution();
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(50);  // it JOINED the lane
+    expect(countQueuedTurnReviews(sql)).toBe(0);                // nothing was deferred
+  });
+
+  test('the deferred review is re-driven at the next open, with the same inputs', async () => {
+    const { engine, reviews, sql } = fakeEngine();
+    const { host } = fakeHost();
+    const eventLog = newEventLog();
+    const exec = new AgentOrchestrator({ host, engine, eventLog, oneShot: true });
+    exec.recordTurn(aTurn(7), 'independent_task');
+    await exec.settleEvolution();
+    expect(reviews).toEqual([]);
+
+    // The next host that can afford the work — the daemon or an interactive
+    // session — drains it through the SAME reviewTurn path.
+    const next = new AgentOrchestrator({ host, engine, eventLog });
+    expect(await next.runDeferredTurnReviews()).toEqual({ reviewed: 1, refused: 0 });
+    expect(reviews).toHaveLength(1);
+    expect(reviews[0].turn.turnId).toBe('m7');
+    expect(reviews[0].followup).toBeNull();
+    expect(countQueuedTurnReviews(sql)).toBe(0);       // retired once it ran
+  });
+
+  test('a one-shot host does not re-drive either — that would only move the cost', async () => {
+    const { engine, reviews, sql } = fakeEngine();
+    const { host } = fakeHost();
+    const eventLog = newEventLog();
+    new AgentOrchestrator({ host, engine, eventLog, oneShot: true })
+      .recordTurn(aTurn(0), 'independent_task');
+    const nextExec = new AgentOrchestrator({ host, engine, eventLog, oneShot: true });
+    expect(await nextExec.runDeferredTurnReviews()).toEqual({ reviewed: 0, refused: 0 });
+    expect(reviews).toEqual([]);
+    expect(countQueuedTurnReviews(sql)).toBe(1);       // still owed, for a host that can pay
+  });
+
+  test('a deferred review carries the follow-up that grades it, not a re-guess', async () => {
+    const { engine, reviews } = fakeEngine();
+    const { host } = fakeHost();
+    const eventLog = newEventLog();
+    const chat = new AgentOrchestrator({ host, engine, eventLog });
+    chat.recordTurn(aTurn(1), 'conversation');          // parked awaiting a follow-up
+
+    // A LATER one-shot process picks up that parked turn. Its own prompt is a
+    // different task, so the review is deferred with no follow-up …
+    const exec = new AgentOrchestrator({ host, engine, eventLog, oneShot: true });
+    exec.observeUserTurn('unrelated next task', 'independent_task');
+    await exec.settleEvolution();
+    expect(reviews).toEqual([]);
+    const next = new AgentOrchestrator({ host, engine, eventLog });
+    await next.runDeferredTurnReviews();
+    expect(reviews).toHaveLength(1);
+    expect(reviews[0].followup).toBeNull();             // … and it stays absent
+  });
+
   test('settleEvolution abandons the turn lane at its bound rather than waiting forever', async () => {
     const { engine } = fakeEngine();
     const { host } = fakeHost();
@@ -220,23 +322,25 @@ describe('AgentOrchestrator — the durable session window', () => {
     expect(reviews).toEqual([{ turn: aTurn(0), followup: 'that broke the build' }]);
   });
 
-  test('a one-shot turn is graded NOW on execution signal — never parked for the next task', () => {
+  test('a one-shot turn is graded on execution signal — never parked for the next task', async () => {
     const { engine, reviews } = fakeEngine();
     const eventLog = newEventLog();
     const { host } = fakeHost();
     const exec = new AgentOrchestrator({ host, engine, eventLog, oneShot: true });
     exec.recordTurn(aTurn(0), 'independent_task');
-    // Reviewed immediately, with NO follow-up: the environment's verdict is the
-    // only evidence, and it is all in already.
-    expect(reviews).toEqual([{ turn: aTurn(0), followup: null }]);
+    // Reviewed with NO follow-up — the environment's verdict is the only
+    // evidence, and it is all in already — but DEFERRED rather than run here:
+    // this process is about to exit (see the exit contract).
+    expect(reviews).toEqual([]);
     // Nothing is left waiting, so the next invocation's unrelated prompt has
     // nothing to be misread as a verdict on.
     new AgentOrchestrator({ host, engine, eventLog, oneShot: true })
       .observeUserTurn('a completely different task', 'independent_task');
-    expect(reviews).toHaveLength(1);
+    await new AgentOrchestrator({ host, engine, eventLog }).runDeferredTurnReviews();
+    expect(reviews).toEqual([{ turn: aTurn(0), followup: null }]);
   });
 
-  test('a turn parked by a conversation is NOT graded from a one-shot prompt', () => {
+  test('a turn parked by a conversation is NOT graded from a one-shot prompt', async () => {
     const { engine, reviews } = fakeEngine();
     const eventLog = newEventLog();
     const { host } = fakeHost();
@@ -245,6 +349,7 @@ describe('AgentOrchestrator — the durable session window', () => {
     // written by a caller who never saw turn 0's answer.
     new AgentOrchestrator({ host, engine, eventLog, oneShot: true })
       .observeUserTurn('unrelated task', 'independent_task');
+    await new AgentOrchestrator({ host, engine, eventLog }).runDeferredTurnReviews();
     expect(reviews).toEqual([{ turn: aTurn(0), followup: null }]);
   });
 });

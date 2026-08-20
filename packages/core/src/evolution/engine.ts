@@ -73,6 +73,11 @@ import { initReplayTables, runReplayEval, type ReplayEvalSummary } from './repla
 import {
   initSessionWindowTable, createSessionWindowStore, type SessionWindowStore,
 } from './session-window';
+import {
+  initTurnReviewQueueTable, queueTurnReview, takeQueuedTurnReviews, dropQueuedTurnReview,
+  countQueuedTurnReviews, MAX_TURN_REVIEWS_PER_OPEN,
+  type TurnReviewQueueOutcome, type DeferredReviewDrain,
+} from './review-queue';
 import { formatScoreInterval, lossInterval } from '../utils/stats';
 import { buildChangelog } from './changelog';
 import { delegationFeatures, renderDelegationFeatures } from './delegation-features';
@@ -232,6 +237,7 @@ export class EvolutionEngine {
     initTurnOutcomeTables(rt.storage.execRaw, rt.storage.sql);
     initReplayTables(rt.storage.execRaw, rt.storage.sql);
     initSessionWindowTable(rt.storage.execRaw);
+    initTurnReviewQueueTable(rt.storage.execRaw);
     initAgentConfigTable(rt.storage.execRaw);
     this.agentConfig = createAgentConfigStore(rt.storage.sql);
     this.sessionWindow = createSessionWindowStore(rt.storage.sql);
@@ -489,6 +495,74 @@ export class EvolutionEngine {
     if (outcome === 'accepted' && turn.toolCalls.length > 0) {
       await this.extractPattern(turn, quality);
     }
+  }
+
+  /**
+   * Defer this turn's review to the next host that can afford it, instead of
+   * running it now.
+   *
+   * The one-shot exit path (see evolution/review-queue.ts for the measurement
+   * that put it there). Everything `reviewTurn` would have received is written
+   * durably — the snapshotted turn and the follow-up that grades it — so the
+   * drain replays the same call with the same inputs rather than re-deriving
+   * them from a workspace that has moved on.
+   *
+   * Returns the queue's answer, so the caller can state a refusal rather than
+   * report a deferral that did not happen.
+   */
+  deferTurnReview(turn: CompletedTurn, followup: string | null): TurnReviewQueueOutcome {
+    if (!this.config.enabled) return 'queued';
+    const outcome = queueTurnReview(this.rt.storage.sql, { turn, followup });
+    if (outcome !== 'queued') {
+      diagnostics.failure(
+        'evolution.turn_review_not_deferred',
+        toProteusError({
+          doing: 'defer a turn review for the next host',
+          cause: new Error(outcome === 'queue_full'
+            ? `the review queue is full (${countQueuedTurnReviews(this.rt.storage.sql)} owed) — nothing has drained it`
+            : 'the turn does not serialize'),
+          otherwise: outcome === 'queue_full' ? 'unavailable' : 'bad_input',
+        }),
+      );
+    }
+    return outcome;
+  }
+
+  /**
+   * Run the reviews a one-shot host deferred, through the SAME `reviewTurn`
+   * path an inline review takes — so the `turn_outcomes` row, the craft EMA,
+   * the lesson and the extracted pattern land exactly as they would have.
+   *
+   * Bounded at {@link MAX_TURN_REVIEWS_PER_OPEN} per call: this runs at session
+   * open, ahead of the turn the host was opened for, so an accumulated backlog
+   * must not become that turn's latency. What is not drained stays queued.
+   *
+   * A row is retired only once its review has RUN. A review that throws leaves
+   * its row for the next open rather than consuming it for work that failed —
+   * the same carry-forward rule the session window applies to a host that died
+   * mid-pass. An undecodable row is a different thing and is refused by name in
+   * the reader (never reviewed as a default), which is why the count comes back
+   * separately.
+   */
+  async runDeferredTurnReviews(): Promise<DeferredReviewDrain> {
+    if (!this.config.enabled) return { reviewed: 0, refused: 0 };
+    const taken = takeQueuedTurnReviews(this.rt.storage.sql, MAX_TURN_REVIEWS_PER_OPEN);
+    let reviewed = 0;
+    for (const row of taken.reviews) {
+      try {
+        await this.reviewTurn(row.turn, row.followup);
+      } catch (err) {
+        diagnostics.failure(
+          'evolution.deferred_review_failed',
+          toProteusError({ doing: 'run a deferred turn review', cause: err, otherwise: 'unavailable' }),
+          { reviewId: row.id },
+        );
+        continue;
+      }
+      dropQueuedTurnReview(this.rt.storage.sql, row.id);
+      reviewed++;
+    }
+    return { reviewed, refused: taken.refused.length };
   }
 
   /**
