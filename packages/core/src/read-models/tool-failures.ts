@@ -119,6 +119,49 @@ const EXEC_REASON_BY_EXIT = new Map([
  */
 const RUNTIME_ABSENT_REASON = 'command_not_found';
 
+/**
+ * Which part of the census a failure belongs to.
+ *
+ * The four are disjoint and the whole finding is which one a number sits in:
+ * `refused` is the fail-loudly contract working, `work-failed` is a command that
+ * ran and found something broken, `runtime-absent` is a platform gap, and `broke`
+ * is the only part that is a candidate defect.
+ */
+export type ToolFailurePart = 'refused' | 'work-failed' | 'runtime-absent' | 'broke';
+
+/**
+ * The part a REASON belongs to — the one place that decision is made.
+ *
+ * `classifyToolFailure` sets `ToolFailure`'s three booleans from this, and
+ * `toolFailurePartOfKey` reads it back off a persisted key, so a published
+ * failure mix in a run record and the live census cannot disagree about what a
+ * reason means. It used to be three expressions in three branches below, which
+ * is how a platform gap once landed in `broke`.
+ *
+ * A reason outside the shared vocabulary reads as `broke`, which is where
+ * `unclassified` and `threw` belong anyway: this cannot explain it, and it says
+ * so rather than guessing a kinder part.
+ */
+function partOfReason(reason: string): ToolFailurePart {
+  if (/^exit_-?\d+$/.test(reason)) return 'work-failed';
+  if (reason === RUNTIME_ABSENT_REASON) return 'runtime-absent';
+  const known = v.safeParse(ToolReasonSchema, reason);
+  if (!known.success) return 'broke';
+  if (known.output === 'unavailable') return 'runtime-absent';
+  return REASON_IS_REFUSAL[known.output] ? 'refused' : 'broke';
+}
+
+/** The reason and its three flags, so a branch below states the reason once. */
+function attribute(reason: string): Pick<ToolFailure, 'reason' | 'refused' | 'workFailed' | 'runtimeMissing'> {
+  const part = partOfReason(reason);
+  return {
+    reason,
+    refused: part === 'refused',
+    workFailed: part === 'work-failed',
+    runtimeMissing: part === 'runtime-absent',
+  };
+}
+
 /** One attributed failure. */
 export interface ToolFailure {
   readonly tool: string;
@@ -197,12 +240,7 @@ export function classifyToolFailure(
 ): ToolFailure | null {
   const args = v.safeParse(JsonObjectSchema, row.args);
   const action = args.success ? v.safeParse(v.string(), args.output.action) : null;
-  // `runtimeMissing` defaults false here so only a branch that can PROVE it —
-  // the shell's own 127, or a tool that classified its own failure
-  // `unavailable` — ever sets it.
-  const base = {
-    tool: row.name, action: action?.success ? action.output : null, runtimeMissing: false,
-  };
+  const base = { tool: row.name, action: action?.success ? action.output : null };
 
   const threw = row.error != null && row.error !== '';
   const resultText = v.safeParse(v.string(), row.result);
@@ -217,18 +255,7 @@ export function classifyToolFailure(
   const failingObject = object !== null && object.error !== undefined;
   if (!threw && !failingResult && !failingObject) return null;
 
-  if (objectReason?.success) {
-    const reason = objectReason.output;
-    return {
-      ...base,
-      reason,
-      refused: REASON_IS_REFUSAL[reason] === true,
-      workFailed: false,
-      // The tool said the environment was not there. Same fact as an exit 127
-      // and the same bucket — a platform gap, not a defect and not the work.
-      runtimeMissing: reason === 'unavailable',
-    };
-  }
+  if (objectReason?.success) return { ...base, ...attribute(objectReason.output) };
 
   const exit = text !== null ? exitCodeOf(text) : null;
   if (text !== null && exit !== null && exit !== 0) {
@@ -236,37 +263,38 @@ export function classifyToolFailure(
     // denial arrives as an ordinary non-zero exit and would otherwise read as
     // the work failing. It is the clearest correct refusal there is: the command
     // never ran because policy said it must not.
-    if (citesApprovalDenial(text)) {
-      return { ...base, reason: 'denied', refused: true, workFailed: false };
-    }
-    const named = EXEC_REASON_BY_EXIT.get(exit);
-    return {
-      ...base,
-      reason: named ?? `exit_${String(exit)}`,
-      refused: false,
-      // A named shell code means the work never ran. Any other non-zero exit is
-      // the work itself failing — which on a repair task is the finding.
-      workFailed: named === undefined,
-      // 127 is the workspace lacking the program outright — a platform gap, and
-      // the reason `bun test …` must not be counted as a failing suite.
-      runtimeMissing: named === RUNTIME_ABSENT_REASON,
-    };
+    if (citesApprovalDenial(text)) return { ...base, ...attribute('denied') };
+    // A named shell code means the work never ran; any other non-zero exit is
+    // the work itself failing, which on a repair task is the finding. 127 is the
+    // workspace lacking the program outright, and `partOfReason` is where both
+    // of those verdicts live.
+    return { ...base, ...attribute(EXEC_REASON_BY_EXIT.get(exit) ?? `exit_${String(exit)}`) };
   }
 
   if (threw) {
     return {
       ...base,
-      reason: row.error === FAILURE_WITHOUT_ERROR ? 'failed_without_error' : 'threw',
-      refused: false,
-      workFailed: false,
+      ...attribute(row.error === FAILURE_WITHOUT_ERROR ? 'failed_without_error' : 'threw'),
     };
   }
-  // The tool answered with an error instead of raising one. Its own bucket
+  // The tool answered with an error instead of raising one. Its own reason
   // rather than the residual: WHY is unknown, but WHERE is not, and calling that
   // unclassified would hide a whole class — every `execute_tools` block that
   // failed inside a runtime missing the method it called arrived exactly here.
-  if (failingObject) return { ...base, reason: 'returned_error', refused: false, workFailed: false };
-  return { ...base, reason: 'unclassified', refused: false, workFailed: false };
+  return { ...base, ...attribute(failingObject ? 'returned_error' : 'unclassified') };
+}
+
+/**
+ * The part a PERSISTED key belongs to — `toolFailureKey`'s own output, read back.
+ *
+ * A run record publishes the census as `tool·action·reason×N` text
+ * (`toolOutcomes` in test-utils/agent-evals.ts), and a later reader — eval
+ * triage — has to know which part each key sat in to say whether a failure is a
+ * defect, a platform gap or the work failing. Reading it back through the same
+ * policy the census used is what keeps the two verdicts one verdict.
+ */
+export function toolFailurePartOfKey(key: string): ToolFailurePart {
+  return partOfReason(key.slice(key.lastIndexOf('·') + 1));
 }
 
 /**

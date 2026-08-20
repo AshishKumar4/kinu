@@ -1383,9 +1383,11 @@ export type {
   ProducerSpend, SpendCoverage, WorkspaceSpend, WorkspaceSpendDeps,
 } from './read-models/workspace-spend';
 export {
-  censusToolFailures, classifyToolFailure, toolFailureKey,
+  censusToolFailures, classifyToolFailure, toolFailureKey, toolFailurePartOfKey,
 } from './read-models/tool-failures';
-export type { ToolFailure, ToolFailureCensus } from './read-models/tool-failures';
+export type {
+  ToolFailure, ToolFailureCensus, ToolFailurePart,
+} from './read-models/tool-failures';
 export {
   getExecutorDiff, getWorkspaceDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline,
   walkWorkspaceTextFiles,

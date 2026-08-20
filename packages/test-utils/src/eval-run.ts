@@ -26,8 +26,8 @@
  */
 import { execFileSync } from 'node:child_process';
 import * as v from 'valibot';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import type { LiveModelSpend } from './live-model';
 import {
   BUILTIN_TOOLS, minimumPairsForSignificance, requiredPairs,
@@ -468,6 +468,28 @@ export function readRunRecord(path: string): EvalRunRecord {
   // from an `EvalRunRecord`. Re-validating every nested field would restate the
   // whole type as a second declaration free to drift from the first.
   return raw as EvalRunRecord;
+}
+
+/**
+ * Every record path under a root: `<root>/<run>/run-record.json` for an artifact
+ * root, `<root>/*.json` for the published-records directory.
+ *
+ * Both readers need the same answer — `scripts/eval-report.ts` renders the
+ * corpus and `scripts/eval-triage.ts` triages it — and a second copy of this
+ * walk is how one reader comes to read a corpus the other cannot see.
+ */
+export function runRecordPaths(root: string): string[] {
+  if (!existsSync(root)) return [];
+  const paths: string[] = [];
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      const candidate = join(root, entry.name, 'run-record.json');
+      if (existsSync(candidate)) paths.push(candidate);
+    } else if (entry.name.endsWith('.json')) {
+      paths.push(join(root, entry.name));
+    }
+  }
+  return paths.sort();
 }
 
 /**

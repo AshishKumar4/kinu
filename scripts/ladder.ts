@@ -805,12 +805,21 @@ export const LADDER: readonly Gate[] = [
       + '`detached_work_failed / Request Timeout` signature as an outage.',
   },
   {
-    run: 'bun test scripts/eval.test.ts',
+    run: 'bun test scripts/eval.test.ts scripts/eval-triage.test.ts',
     tier: 'ci',
     seconds: 1,
-    catches: 'the eval gate\'s own logic, credential-free. The live-model benchmark runs '
-      + 'in the separate gated eval.yml.',
-    blind: 'anything a model actually does.',
+    catches: 'the eval gate\'s own logic, credential-free, plus how the triage instrument '
+      + 'CLASSES a failure: which census part makes a failed call a product defect, that a '
+      + 'correct refusal never enters the worklist, that dispersion counts only inside one '
+      + 'commit and one arm, and — the one that would have mattered most — that a legacy '
+      + '`tool_outcomes` detail carrying a tool USAGE histogram yields no attribution at all. '
+      + 'Reading `run×29` as 29 broken calls would have filed the whole baseline corpus as a '
+      + 'product defect. All three directions were proven red by mutation. The live-model '
+      + 'benchmark runs in the separate gated eval.yml.',
+    blind: 'anything a model actually does, and whether a hand VERDICT in '
+      + 'scripts/eval-triage.verdicts.json is right. A verdict is a written argument about a '
+      + 'trajectory, so nothing here can check one; what is checked is that a stale verdict '
+      + 'and an unverified group both print.',
   },
   {
     run: 'bun test scripts/bench*.test.ts',

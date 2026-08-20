@@ -136,7 +136,7 @@ run_required_gate "Cloudflare backend and conformance suite" bun test packages/c
 run_required_gate "Durable Object semantics under workerd" bun run test:workerd
 run_required_gate "CLI backend and conformance suite" bun test packages/cli-backend/
 run_required_gate "Full production CLI suite" bun test packages/cli/
-run_required_gate "Evaluation gate logic" bun test scripts/eval.test.ts
+run_required_gate "Evaluation gate logic" bun test scripts/eval.test.ts scripts/eval-triage.test.ts
 run_required_gate "Benchmark harness guarantees" bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts
 run_required_gate "Secret scanner self-test" bun test scripts/secret-scan.test.ts scripts/sources.test.ts
 run_required_gate "Secret scan" bun scripts/secret-scan.ts

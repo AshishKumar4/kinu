@@ -632,6 +632,45 @@ export const spillRetrieval: BehaviourScorer = {
 // ── (k) Tool calls that worked ───────────────────────────────────
 
 /**
+ * The label the failure mix is written behind, and read back from.
+ *
+ * A run record carries the census as prose because `EvalScoreRow` has one
+ * `detail` string, so the mix is the only durable record of WHICH calls failed.
+ * `scripts/eval-triage.ts` reads it back to rank a defect against its key, and a
+ * reader that guessed at this format would read the LEGACY detail — a usage
+ * histogram carrying no failure attribution at all, which is why the label is
+ * matched rather than the shape.
+ */
+const FAILURE_MIX_LABEL = 'failed: ';
+
+/** The failure mix as the record stores it: `tool·action·reason×N`, heaviest first. */
+export function formatFailureMix(byKey: readonly (readonly [string, number])[]): string {
+  return FAILURE_MIX_LABEL + byKey.map(([key, n]) => `${key}×${String(n)}`).join(', ');
+}
+
+/**
+ * The mix back out of a `tool_outcomes` detail, empty when the record names none.
+ *
+ * Empty means one of two different things and the caller must keep them apart:
+ * the run had no failing call, or the record predates the mix. `flash-a` and
+ * `flash-b` are the second — they published `103/126` and could not say which 23
+ * failed. A malformed entry THROWS rather than being skipped: this parses what
+ * this repository wrote, so a shape it does not recognise is drift, not data.
+ */
+export function parseFailureMix(detail: string): readonly (readonly [string, number])[] {
+  const segment = detail.split('; ').find((part) => part.startsWith(FAILURE_MIX_LABEL));
+  if (segment === undefined) return [];
+  return segment.slice(FAILURE_MIX_LABEL.length).split(', ').map((entry) => {
+    const separator = entry.lastIndexOf('×');
+    const count = Number.parseInt(entry.slice(separator + 1), 10);
+    if (separator <= 0 || !Number.isInteger(count)) {
+      throw new Error(`tool_outcomes failure mix is not "key×N": ${entry}`);
+    }
+    return [entry.slice(0, separator), count] as const;
+  });
+}
+
+/**
  * Did the agent's tool calls succeed — and where they did not, WHY?
  *
  * TWO KINDS OF FAILURE, and counting only the first is a defect this scorer
@@ -676,9 +715,7 @@ export const toolOutcomes: BehaviourScorer = {
       `${String(census.refused)} refused, ${String(census.workFailed)} work failed, `
         + `${String(census.runtimeMissing)} runtime absent, ${String(census.broke)} broke`,
     ];
-    if (census.byKey.length > 0) {
-      detail.push(`failed: ${census.byKey.map(([key, n]) => `${key}×${String(n)}`).join(', ')}`);
-    }
+    if (census.byKey.length > 0) detail.push(formatFailureMix(census.byKey));
     return verdict(rows.length, rows.length - failed, detail.join('; '));
   },
 };

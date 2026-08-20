@@ -299,6 +299,57 @@ read the same way by the research and optimization arms):
 | `PROTEUS_EVAL_EVOLUTION=0` | turns evolution off |
 | `PROTEUS_EVAL_RECORD` | where the run record is written; default is beside the retained transcripts under `bench-artifacts/` |
 
+### Triaging a run, after every `bun run evals:full`
+
+A run record says what failed. It does not say what KIND of failure each one is,
+and the four kinds need four different repairs. `bun scripts/eval-triage.ts`
+reads the same records as the reader above, groups every failure by scorer, by
+`tool·action·reason` failure key and by task, and gives each group a class and a
+ranked position:
+
+| Class | What it means | Who acts |
+|---|---|---|
+| `product-defect` | a tool broke, or an attempt raised out of the code under test | the product owner |
+| `eval-defect` | the instrument produced no evidence: a run that attempted nothing, a turn that never closed, an outcome nothing checked, a program the workspace does not have | the instrument owner |
+| `flake` | one commit and one arm gave this task and scorer both verdicts | nobody yet; measure ψ with `scripts/eval-dispersion.ts` |
+| `model-behaviour` | the mechanism had its opportunity and the model did not take it | nobody; this is the finding |
+
+The standing process:
+
+1. Run the tier: `bun run evals:full`.
+2. Run `bun scripts/eval-triage.ts`. With no arguments it reads
+   `bench-artifacts/` and `tests/eval/runs/`. It exits 0 and gates nothing.
+3. Read the top of the worklist. Open the evidence pointer on each group you
+   intend to act on. A group prints as `UNVERIFIED` until somebody rules on it.
+4. Write your ruling into `scripts/eval-triage.verdicts.json`: the group key, the
+   class, the date, what you READ, and the note. The verdict annotates the group.
+   It never hides one, and a verdict naming a group that no failure produced
+   prints as `STALE VERDICT` on the next run.
+5. Act by class. A `product-defect` group becomes a fix in the code under test. An
+   `eval-defect` group becomes a fix in the harness, the corpus or the scorer. A
+   `flake` group becomes a repeat and a ψ measurement. A `model-behaviour` group
+   is the result, and it is reported, not repaired.
+
+Two things to know when reading it. It RECOMPUTES
+admissibility instead of trusting the stored verdict, because a stored verdict is
+the policy the run was written under: both published baselines say
+`admissible: true` and fail today's rule. And it reads a failure key's census
+part through `toolFailurePartOfKey`, the same policy the census wrote, so a
+published mix and a live census cannot disagree.
+
+It also prints its blind spot on the success path. A record written before the
+failure mix existed names no failing call, so no product defect is findable in it
+at all. An empty `product-defect` class over such records means unmeasured, not
+clean.
+
+The first triage, on 2026-08-20, read 89 records and produced 24 groups: no
+product defect, 10 eval defects, 2 flakes, and 12 mechanism findings. The largest
+group is 45 records that attempted nothing and wrote a record anyway. Only two of
+the 89 are tracked: `bench-artifacts/` is gitignored and grows with every local
+run, so the record count moves and the group SHAPES are the stable part.
+`scripts/eval-triage.verdicts.json` holds the twelve hand-checked rulings, one of
+which overrides the machine.
+
 ### What it costs and how long it takes
 
 Every figure below came from a run whose log said so. A cell that has not been
