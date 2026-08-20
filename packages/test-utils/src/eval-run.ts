@@ -28,6 +28,7 @@ import { execFileSync } from 'node:child_process';
 import * as v from 'valibot';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import type { LiveModelSpend } from './live-model';
 import {
   BUILTIN_TOOLS, minimumPairsForSignificance, requiredPairs,
   type SqlExecutor,
@@ -198,6 +199,19 @@ export interface EvalRunRecord {
   readonly schema: 1;
   readonly runId: string;
   readonly createdAt: string;
+  /**
+   * Which eval family produced this record — `behaviour`, `research`,
+   * `optimization`. The reader (`scripts/eval-report.ts`) groups on it, because
+   * a research retrieval verdict and a behaviour mechanism rate are not one
+   * population and averaging them would answer no one's question.
+   *
+   * Optional for exactly one reason: `tests/eval/runs/flash-a.json` and
+   * `flash-b.json` were written before it existed, and they are the only
+   * baseline this tier has, under hand-named runIds (`flash-a`) a reader cannot
+   * derive a family from. Every record written from now on sets it; absence
+   * reads as pre-family, never as a guessed name.
+   */
+  readonly family?: string;
   /** The commit the code under test was at, and whether the tree was dirty.
    *  A dirty tree makes a run unreproducible and must be visible in the record,
    *  not discovered later. */
@@ -381,6 +395,57 @@ export function gitProvenance(cwd: string): GitProvenance {
   return { gitSha: git('rev-parse', 'HEAD'), gitDirty: git('status', '--porcelain') !== '' };
 }
 
+/** Everything a family's suite KNOWS about its run; the rest of a record is
+ *  derived. One assembly point so the runId format, the git provenance, the
+ *  admissibility verdict and the spend flattening are one policy across every
+ *  family rather than three afterAll blocks free to drift. */
+export interface RunRecordInputs {
+  readonly family: string;
+  readonly tier: EvalTier;
+  /** The model DRIVEN, read from the config the session was built with rather
+   *  than re-derived from the tier. A record's model id has to be a fact about
+   *  the run, not a second computation that can disagree with it. */
+  readonly modelId: string;
+  readonly repeats: number;
+  readonly seed: number;
+  readonly arm: EvalArmState;
+  readonly declaredTasks: readonly string[];
+  readonly observations: readonly EvalObservation[];
+  readonly spend: LiveModelSpend;
+  readonly transcripts: string;
+  /** Where `gitProvenance` runs — the repo under test. */
+  readonly repoRoot: string;
+}
+
+export function assembleRunRecord(inputs: RunRecordInputs): EvalRunRecord {
+  return {
+    schema: 1,
+    runId: `${inputs.family}-${inputs.tier}-${String(Date.now())}`,
+    createdAt: new Date().toISOString(),
+    ...gitProvenance(inputs.repoRoot),
+    family: inputs.family,
+    tier: inputs.tier,
+    modelId: inputs.modelId,
+    repeats: inputs.repeats,
+    seed: inputs.seed,
+    arm: inputs.arm,
+    declaredTasks: inputs.declaredTasks,
+    executedTasks: [...new Set(inputs.observations.map((o) => o.taskId))],
+    observations: inputs.observations,
+    admissibility: assessAdmissibility(inputs.declaredTasks, inputs.observations),
+    // FIELD RENAME ONLY: LiveModelSpend carries `usage: Usage` instead of flat
+    // inputTokens/outputTokens. The `?? 0` and the tokensIn/tokensOut spelling
+    // are EvalsInfra's agreed follow-up (spend becomes
+    // { calls, callsWithoutUsage, input, output }); this keeps the build green.
+    spend: {
+      calls: inputs.spend.calls,
+      tokensIn: inputs.spend.usage.input ?? 0,
+      tokensOut: inputs.spend.usage.output ?? 0,
+    },
+    transcripts: inputs.transcripts,
+  };
+}
+
 export function writeRunRecord(path: string, record: EvalRunRecord): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(record, null, 2)}\n`);
@@ -417,7 +482,8 @@ export function readRunRecord(path: string): EvalRunRecord {
 export function formatRunRecord(record: EvalRunRecord): string {
   const a = record.admissibility;
   const lines = [
-    `run ${record.runId} — ${record.tier} (${record.modelId})`,
+    `run ${record.runId} — ${record.family ?? '(pre-family record)'}, `
+      + `${record.tier} (${record.modelId})`,
     `  commit ${record.gitSha.slice(0, 9)}${record.gitDirty ? ' [DIRTY — unreproducible]' : ''}`,
     `  arm: evolution ${record.arm.evolution ? 'ON' : 'OFF'}, settle ${record.arm.settle}, `
       + `${String(record.arm.tools.length)} tools`,

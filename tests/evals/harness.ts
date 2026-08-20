@@ -167,8 +167,10 @@ export async function seedWorkspaceTree(rt: AgentRuntime): Promise<void> {
  *  events) would silently truncate a multi-turn task into a smaller
  *  denominator, which reads as an agent that acted less rather than a reader
  *  that stopped looking. */
-/** What the ledger says one episode did. */
-interface LedgerTotals {
+/** What the ledger says one episode did. EXPORTED because the research and
+ *  optimization families read the same episode facts off their own stores, and
+ *  a second walk would be a second thing to keep in step with the recorder. */
+export interface LedgerTotals {
   turns: number;
   toolCalls: number;
   toolNames: string[];
@@ -186,7 +188,7 @@ interface LedgerTotals {
   failures: string[];
 }
 
-function readLedgerTotals(db: Database): LedgerTotals {
+export function readLedgerTotals(db: Database): LedgerTotals {
   const recorder = new RunEventRecorder(makeSql(db));
   // A WALK, not a window. This is the whole ledger of a trial and a truncated
   // one would understate the trial's own totals — the previous `listRuns(10_000)`
