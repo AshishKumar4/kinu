@@ -50,8 +50,6 @@
  * evaluating. Rollouts here therefore run to HORIZON trials and report
  * `unresolved` separately — a category the double-win rule makes materially
  * more likely, and one that the "12 trials and it's settled" reading hid.
- *
- * NOTE: doc edited & maintained by Claude, presented as-is.
  */
 
 import {

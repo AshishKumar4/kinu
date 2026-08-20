@@ -1,7 +1,5 @@
 # Kinu CLI reference
 
-> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
->
 > Generated from the command registry (`packages/cli/src/program.ts`) by
 > `bun run docs:cli`. Edit the registration, not this file.
 

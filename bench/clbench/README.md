@@ -1,7 +1,5 @@
 # Kinu on Continual Learning Bench
 
-> This document is edited and maintained by Claude and is presented as-is.
-
 [Continual Learning Bench](https://github.com/pgasawa/continual-learning-bench)
 (Berkeley/Snorkel, [arXiv:2606.05661](https://arxiv.org/abs/2606.05661)) measures
 one thing I care about more than any benchmark we wrote ourselves: **`mean_gain`,
