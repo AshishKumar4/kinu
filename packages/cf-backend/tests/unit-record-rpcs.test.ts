@@ -20,8 +20,8 @@ import { describe, expect, test } from 'bun:test';
 import {
   recordExploration,
   type ExplorationWrite, type Floor, type ObjectiveIdentity, type PublicationState,
-} from '@proteus/core';
-import { sqlOver } from '@proteus/test-utils';
+} from '@kinu/core';
+import { sqlOver } from '@kinu/test-utils';
 import { orchestratorHarness } from './helpers/actor-harness';
 
 const OPEN: PublicationState = { kind: 'open' };

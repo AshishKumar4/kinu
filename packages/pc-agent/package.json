@@ -1,5 +1,5 @@
 {
-  "name": "@proteus/pc-agent",
+  "name": "@kinu/pc-agent",
   "version": "0.1.0",
   "private": true,
   "type": "commonjs",

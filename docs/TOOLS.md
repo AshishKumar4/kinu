@@ -5,7 +5,7 @@
 The agent exposes a small set of **built-in top-level tools** to the LLM (the canonical list is `BUILTIN_TOOLS` in `packages/core/src/tools/registry.ts` — 8 names). The surface is deliberately this small not to save tokens but to keep the model's *decision surface* small: every native tool is a standing choice weighed on every turn it is not the answer to, and selection accuracy degrades with choice count. Files are read and changed through the `file` tool; the same operations are also available as `workspace.*` APIs inside the `execute_tools` codemode sandbox. Crafted tools from the CraftStore are injected into the same sandbox as `codemode.*` (the default namespace exposed by `@cloudflare/codemode`'s `createCodeTool`) and, via the preamble, as `tools.<name>`.
 
 Both surfaces (Cloudflare Workers and CLI) consume the same factory
-`buildBuiltinTools` from `@proteus/core/tools`. The registry and descriptions
+`buildBuiltinTools` from `@kinu/core/tools`. The registry and descriptions
 live in `packages/core/src/tools/registry.ts`; neither the CF orchestrator nor
 the CLI chat loop hand-builds tools anymore. Only `execute_tools`, `run`, `file`,
 `memory` and `tasks` are unconditional; every other tool is registered only when
@@ -399,7 +399,7 @@ const result = await codemode.my_custom_parser({ input: "data" });
 ```
 
 **How injection works** (`buildCraftedToolSetFromExecute` in
-`@proteus/core/tools/builtins.ts`):
+`@kinu/core/tools/builtins.ts`):
 1. `craftStore.list()` reads all crafted tools from SQLite.
 2. Each row is filtered by effective score (`DEFAULT_CONFIG.craftStore.minEffectiveScoreForInjection`, default 0.2) so decayed or low-quality tools never reach the LLM.
 3. Each passing tool dispatches through `deps.craftedToolExecute` — the LOADER Worker on CF, a Node adapter on the CLI. There is no host-side codegen: nothing is compiled inside `builtins.ts`, because a `new Function()` would break in a V8 isolate.
@@ -478,7 +478,7 @@ async () => {
 
 There is deliberately no in-process fallback. The CF backend requires the
 `LOADER` Worker Loader binding and throws without it; the CLI supplies its own
-Node adapter (`createNodeExecuteToolFactory` in `@proteus/cli-backend`). If
+Node adapter (`createNodeExecuteToolFactory` in `@kinu/cli-backend`). If
 neither is wired, `execute_tools` still registers but returns a sharp
 "not configured" error rather than quietly compiling code with `new Function()`,
 which would break in a V8 isolate anyway.

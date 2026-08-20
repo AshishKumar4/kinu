@@ -39,10 +39,10 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { useAsyncResource, lastValue } from "@/hooks/use-async-resource";
 import { fmtTokens, fmtUsd, fmtPct } from "@/lib/format";
 import type { ActivitySnapshot, Rpc } from "@/lib/protocol";
-import { SPEND_SOURCE_DETAIL, SPEND_SOURCE_LABEL, usageTotal } from "@proteus/core";
+import { SPEND_SOURCE_DETAIL, SPEND_SOURCE_LABEL, usageTotal } from "@kinu/core";
 import type {
   ContextComposition, ContextPlane, ProducerSpend, SpendSource, WorkspaceSpend,
-} from "@proteus/core";
+} from "@kinu/core";
 import { breakdownView, shareOfMeasured, type BreakdownPlane, type BreakdownRow } from "./activity-breakdown";
 
 /** Live surface: a turn in flight re-measures every step. */

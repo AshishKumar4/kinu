@@ -22,8 +22,8 @@
  */
 
 import { routeAgentRequest } from "agents";
-import { ORCHESTRATOR_AGENT_SLUG } from "@proteus/core";
-import { diagnostics, renderThrownChain, toProteusError } from "@proteus/core/obs";
+import { ORCHESTRATOR_AGENT_SLUG } from "@kinu/core";
+import { diagnostics, renderThrownChain, toProteusError } from "@kinu/core/obs";
 import {
   extractOrchestratorAgentName,
   extractTicketOrchestratorAgentName,

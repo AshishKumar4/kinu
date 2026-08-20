@@ -60,11 +60,11 @@ import {
   type EgressRequestFacts,
   type EgressSecretBinding,
   type ScrubReplacement,
-} from '@proteus/core';
+} from '@kinu/core';
 import type { OrchestratorAgent } from '../orchestrator';
 import { ownerCaller, type UserCaller } from '../user/workspace-capability';
 import type { EgressInjection, EgressInjectionResult } from '../user/egress-vault';
-import { renderThrownChain } from '@proteus/core/obs';
+import { renderThrownChain } from '@kinu/core/obs';
 
 /**
  * The virtual host a container posts its own events to.

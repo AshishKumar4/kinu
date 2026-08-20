@@ -13,7 +13,7 @@
  */
 
 import * as readline from 'node:readline';
-import { renderChangelogText } from '@proteus/core';
+import { renderChangelogText } from '@kinu/core';
 import { EMPTY_MODEL_MENU } from './model-catalog';
 import { forkCandidates, type AgentClient, type AgentClientEvent } from './agent-client';
 import { describeBranchStatus, executeSlashCommand, isBranchStatusEvent, performUndo, renderStatusLines, renderTakesText, type SlashOutcome } from './slash-commands';
@@ -32,7 +32,7 @@ import {
   printToolCall, printToolResult, printEvolutionEvent, createTypingIndicator, formatFailure,
   ACCENT, DIM, MUTED, ERR, OK, WARN,
 } from './display';
-import { renderThrownChain } from '@proteus/core/obs';
+import { renderThrownChain } from '@kinu/core/obs';
 
 export interface ChatLoopOpts {
   client: AgentClient;

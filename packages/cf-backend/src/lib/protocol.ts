@@ -5,7 +5,7 @@
 import type {
 	ActivityLogEntry, ContextComposition, MissionBudgetSnapshot, StepTelemetry, Usage,
 	WorkspaceSpend,
-} from "@proteus/core";
+} from "@kinu/core";
 
 /**
  * One branch of a fork, as the tree view draws it.

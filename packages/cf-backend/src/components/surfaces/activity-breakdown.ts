@@ -4,7 +4,7 @@
  * model: providers do not attribute tokens to prompt sections, and converting
  * characters with a heuristic would make estimated category counts look real.
  */
-import type { ContextComposition, ContextPlane, ContextSegment } from "@proteus/core";
+import type { ContextComposition, ContextPlane, ContextSegment } from "@kinu/core";
 
 export interface BreakdownRow {
 	readonly label: string;

@@ -109,7 +109,7 @@ import {
   promptCachePlan,
   type BranchProposal,
   type NodeAgentInput,
-} from '@proteus/core';
+} from '@kinu/core';
 import {
   cacheControlsOn,
   capturingWorkersAIModel,

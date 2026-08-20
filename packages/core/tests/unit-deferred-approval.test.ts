@@ -9,7 +9,7 @@
 // reported as a success, and an approval is never reported as an effect.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { toolExecute } from '@proteus/test-utils';
+import { toolExecute } from '@kinu/test-utils';
 import {
   DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable,
   DEFERRED_APPROVAL_SIGNAL, withApprovalGatedShell, buildBuiltinTools,

@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { toolExecute } from '@proteus/test-utils';
+import { toolExecute } from '@kinu/test-utils';
 import * as v from 'valibot';
 import { applyFileEdits, readFileSlice } from '../src/tools/file-edit';
 import { TurnFileLedger } from '../src/tools/file-ledger';

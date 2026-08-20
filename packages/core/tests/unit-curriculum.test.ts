@@ -2,7 +2,7 @@ import { describe, test, expect } from 'bun:test';
 import {
   proposeNextTasks, listProposedTasks, updateProposedTaskStatus,
 } from '../src/curriculum/proposer';
-import { createScriptedLLM, createJSONLLM } from '@proteus/test-utils';
+import { createScriptedLLM, createJSONLLM } from '@kinu/test-utils';
 import { createTestRuntime, makeSqlExec } from './helpers';
 import { initWorkspaceSchema } from '../src/identity/workspace-schema';
 

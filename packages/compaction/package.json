@@ -1,5 +1,5 @@
 {
-  "name": "@proteus/compaction",
+  "name": "@kinu/compaction",
   "version": "0.1.0",
   "type": "module",
   "main": "src/index.ts",
@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@better-compact/core": "^0.1.0",
-    "@proteus/core": "workspace:*",
+    "@kinu/core": "workspace:*",
     "ai": "^6.0.182"
   },
   "scripts": {

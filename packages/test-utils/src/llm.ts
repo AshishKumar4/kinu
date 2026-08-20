@@ -1,5 +1,5 @@
 // LLM fixtures — scripted responses without hitting an actual model.
-import type { JsonValue, LLM } from '@proteus/core';
+import type { JsonValue, LLM } from '@kinu/core';
 import type { ToolExecutionOptions } from 'ai';
 import * as v from 'valibot';
 

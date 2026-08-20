@@ -8,7 +8,7 @@
  */
 
 import * as v from 'valibot';
-import { isAbortError, raceAbort } from '@proteus/agent-utils';
+import { isAbortError, raceAbort } from '@kinu/agent-utils';
 import type { VFS } from '../types/primitives';
 import type { Shell } from '../types/primitives';
 import { createInlineExecutor, type InlineExecutorDeps } from './inline';

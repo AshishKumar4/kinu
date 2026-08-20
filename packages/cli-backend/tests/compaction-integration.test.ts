@@ -33,16 +33,16 @@ import {
   initWorkspaceSchema,
   runChat,
   type ChatOptions,
-} from '@proteus/core';
+} from '@kinu/core';
 import {
   createCompactionExtension,
   createCompactionStateStore,
   createVfsTranscriptStore,
   type CompactionOutcomeEvent,
   type Logger,
-} from '@proteus/compaction';
+} from '@kinu/compaction';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
-import { scratchPath } from '@proteus/test-utils';
+import { scratchPath } from '@kinu/test-utils';
 
 const SESSION = 'proteus-itest:default';
 const silentLogger: Logger = { info() {}, debug() {}, warn() {}, error() {} };

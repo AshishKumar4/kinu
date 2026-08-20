@@ -25,9 +25,9 @@ import type {
   CraftedToolSet,
   ExecutorProvider,
   JsonValue,
-} from '@proteus/core';
-import { diagnostics, renderThrownChain, toProteusError } from '@proteus/core/obs';
-import { decodeJsonValue, explainNativeToolReferenceError, renderExecuteToolsDescription } from '@proteus/core';
+} from '@kinu/core';
+import { diagnostics, renderThrownChain, toProteusError } from '@kinu/core/obs';
+import { decodeJsonValue, explainNativeToolReferenceError, renderExecuteToolsDescription } from '@kinu/core';
 import { tool, jsonSchema } from 'ai';
 import { addImplicitReturn } from './executor';
 import * as v from 'valibot';

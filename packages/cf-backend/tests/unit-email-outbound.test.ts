@@ -11,8 +11,8 @@ import {
   AgentOrchestrator, EvolutionEngine, acceptInboundEmail,
   type BackendHost,
   type SqlExec,
-} from '@proteus/core';
-import { createMemoryVfs, createTestRuntime } from '@proteus/test-utils';
+} from '@kinu/core';
+import { createMemoryVfs, createTestRuntime } from '@kinu/test-utils';
 import {
   createEmailThreadDispatcher, dispatchEmailRepliesForTurn, sendOwnerEmail,
   threadingHeaders,

@@ -51,7 +51,7 @@ publication seal and the records store in full.
 
 ## Architecture
 
-Everything the agent decides lives in `packages/core`, which is platform-clean: it depends on `@nimbus-sh/core` and `@proteus/agent-utils`, and it imports nothing from `agents`, `@cloudflare/*` or `cloudflare:workers`. Under it sits a seam of two interfaces: `AgentRuntime` for resource primitives (storage, memory, llm, schedule, …) and `BackendHost` for the few loop capabilities that are genuinely platform-shaped. Two backends implement that seam: Cloudflare Durable Objects, one per workspace, built on [Think](https://github.com/cloudflare/agents); and your own machine, on `bun:sqlite` and real processes. Both drive the same orchestrator, so the cloud and the CLI cannot drift into two pipelines.
+Everything the agent decides lives in `packages/core`, which is platform-clean: it depends on `@nimbus-sh/core` and `@kinu/agent-utils`, and it imports nothing from `agents`, `@cloudflare/*` or `cloudflare:workers`. Under it sits a seam of two interfaces: `AgentRuntime` for resource primitives (storage, memory, llm, schedule, …) and `BackendHost` for the few loop capabilities that are genuinely platform-shaped. Two backends implement that seam: Cloudflare Durable Objects, one per workspace, built on [Think](https://github.com/cloudflare/agents); and your own machine, on `bun:sqlite` and real processes. Both drive the same orchestrator, so the cloud and the CLI cannot drift into two pipelines.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/seam-dark.svg">

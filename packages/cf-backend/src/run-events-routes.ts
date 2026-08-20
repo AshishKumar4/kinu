@@ -16,12 +16,12 @@
 
 import { getAgentByName } from "agents";
 import type { OrchestratorAgent } from "./orchestrator";
-import type { RunEventQuery, RunEventType } from "@proteus/core";
+import type { RunEventQuery, RunEventType } from "@kinu/core";
 import * as v from 'valibot';
 import {
   decodeRunEventWire, resumeIndexFromLastEventId, type RunEventWire,
 } from './lib/orchestrator-wire';
-import { renderThrownChain } from '@proteus/core/obs';
+import { renderThrownChain } from '@kinu/core/obs';
 
 const SSE_POLL_MS = 500;
 const SSE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes

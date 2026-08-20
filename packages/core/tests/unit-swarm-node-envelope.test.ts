@@ -20,7 +20,7 @@
  * STEP, and a step is the unit the bound is built out of.
  */
 import { describe, expect, test } from 'bun:test';
-import { scriptedTurnModel } from '@proteus/test-utils';
+import { scriptedTurnModel } from '@kinu/test-utils';
 import { createTestRuntime } from './helpers';
 import { createRecordingLogger } from '../src/obs/index';
 import { HeadJournal } from '../src/heads/journal';

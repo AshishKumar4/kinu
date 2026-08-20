@@ -11,7 +11,7 @@
  */
 
 import PostalMime from 'postal-mime';
-import { normalizeEmailAddress, type EmailAttachmentMeta } from '@proteus/core';
+import { normalizeEmailAddress, type EmailAttachmentMeta } from '@kinu/core';
 
 /** Agent-name charset — mirrors identity/naming.ts slugs (`scout-a1b2c3`). */
 const AGENT_NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;

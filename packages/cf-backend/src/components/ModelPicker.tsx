@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge, Combobox } from "@cloudflare/kumo";
 import { ArrowsClockwiseIcon, WarningCircleIcon } from "@phosphor-icons/react";
-import { formatContextWindow } from "@proteus/core";
+import { formatContextWindow } from "@kinu/core";
 import {
   cloudflareReconnectPath, listAvailableModels,
   type ModelMenu, type ModelMenuEntry, type ProviderFailure,

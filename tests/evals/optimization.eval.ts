@@ -59,7 +59,7 @@ import {
   hardTaskFor, liveModelTarget, recordLiveModelEpisode, reportLiveModelSpend, seedHardTask,
   TASK_OUTCOME, UNCONFIGURED_LLM, verifyHardTask, writeRunRecord,
   type EvalArmState, type EvalObservation, type EvalScoreRow, type EvalTier, type HardTask,
-} from '@proteus/test-utils';
+} from '@kinu/test-utils';
 import { resolveArtifactRoot } from '../../scripts/bench-retention';
 
 const SUITE = 'Optimization Evals';

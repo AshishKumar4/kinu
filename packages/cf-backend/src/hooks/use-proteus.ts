@@ -7,8 +7,8 @@ import { useAgent } from "agents/react";
 import {
   ORCHESTRATOR_AGENT_SLUG, SUBORDINATE_AGENT_SLUG,
   type AgentViewSummary, type PendingAction, type PlanReview,
-} from "@proteus/core";
-import type { ExplorationCanvasRun, Page, TimelineSpan } from "@proteus/core";
+} from "@kinu/core";
+import type { ExplorationCanvasRun, Page, TimelineSpan } from "@kinu/core";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import type { FileUIPart, UIMessage } from "ai";
 import * as v from "valibot";
@@ -26,13 +26,13 @@ import type {
 } from "../lib/protocol";
 import type { ExecutorInfo } from "../lib/executors";
 import { applySignalCard, parseSignalCardEvent, type SignalCard } from "../components/background-event";
-import { tolerate } from "@proteus/core/obs";
+import { tolerate } from "@kinu/core/obs";
 import {
   reconcilePreviewPorts,
   type ExecutorPortRefresh,
   type PinnedPreviewPort,
 } from "../lib/preview-ports";
-import { renderThrownChain } from "@proteus/core/obs";
+import { renderThrownChain } from "@kinu/core/obs";
 
 export type { ExecutorInfo };
 

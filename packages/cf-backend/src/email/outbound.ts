@@ -12,10 +12,10 @@
  *     (Evolution Changelog digests, background-job completions).
  */
 
-import { JsonValueSchema, type EmailThreadAddr, type EventLog, type JsonValue, type ReplyChannelStore } from '@proteus/core';
+import { JsonValueSchema, type EmailThreadAddr, type EventLog, type JsonValue, type ReplyChannelStore } from '@kinu/core';
 import { agentEmailAddress } from './inbound';
 import type { EmailOutbox } from './outbox';
-import { diagnostics, ProteusError } from '@proteus/core/obs';
+import { diagnostics, ProteusError } from '@kinu/core/obs';
 import * as v from 'valibot';
 
 const EmailThreadAddrSchema = v.object({
@@ -68,7 +68,7 @@ function payloadText(payload: JsonValue): string {
 /** The `email_thread` ReplyDispatcher registered on the ReplyChannelStore. */
 export function createEmailThreadDispatcher(
   getContext: () => EmailSendContext,
-): import('@proteus/core').ReplyDispatcher {
+): import('@kinu/core').ReplyDispatcher {
   return {
     async dispatch(channel, payload) {
       const ctx = getContext();

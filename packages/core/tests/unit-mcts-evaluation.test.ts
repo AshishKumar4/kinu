@@ -7,7 +7,7 @@ import { describe, test, expect } from 'bun:test';
 import { evaluateWithMultiModelJudging } from '../src/index';
 import { executionObservation, isParseFailure, judgeCallBudget } from '../src/mcts/evaluation';
 import { DEFAULT_CONFIG } from '../src/config';
-import { createScriptedLLM, createJSONLLM } from '@proteus/test-utils';
+import { createScriptedLLM, createJSONLLM } from '@kinu/test-utils';
 import type { Executor, LLM } from '../src/index';
 
 function exec(verdict: { error?: string } = {}, languages: readonly [string, ...string[]] = ['javascript']): Executor {

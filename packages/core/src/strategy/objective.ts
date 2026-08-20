@@ -18,7 +18,7 @@
  *
  * WHY THE CONTEXT TYPE IS DUPLICATED AND WHERE THE DUPLICATION DIES. `test-utils`
  * declares a structurally identical `VerifierContext` (eval-outcome.ts:95-98).
- * `@proteus/core` cannot import `@proteus/test-utils` — the dependency arrow runs
+ * `@kinu/core` cannot import `@kinu/test-utils` — the dependency arrow runs
  * the other way — so the canonical declaration has to be here and test-utils has
  * to be re-pointed at it when this is wired. That re-pointing is a WIRING step,
  * deliberately not taken in this commit, and it is recorded here rather than in a

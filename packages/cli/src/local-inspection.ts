@@ -78,11 +78,11 @@ import {
   type RecordObjectiveHandle,
   type RecordObjectiveSummary,
   type SeekCursor,
-} from '@proteus/core';
+} from '@kinu/core';
 import {
   makeSql, makeSqlExec, createHostShell, hostToolchainCapabilities,
   type LocalModelResolver,
-} from '@proteus/cli-backend';
+} from '@kinu/cli-backend';
 import * as v from 'valibot';
 import { agentDbPath } from './config';
 import { createConfiguredLocalModelResolver } from './local-model-resolver';

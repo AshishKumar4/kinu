@@ -54,7 +54,7 @@ import { requireSandboxedExecutors } from './evals/harness';
 import {
   liveChatModel, liveModelCallSink, liveModelTarget, recordLiveModelEpisode,
   recordLiveModelSpend, reportLiveModelSpend, UNCONFIGURED_LLM,
-} from '@proteus/test-utils';
+} from '@kinu/test-utils';
 
 // Proof against a real model, so a target is required. `liveModelTarget` states
 // which target and cost basis this run used, or why it is skipping — and throws

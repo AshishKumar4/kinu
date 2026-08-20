@@ -5,7 +5,7 @@
  * stdout, picker overlay vs printed list).
  */
 
-import { isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type BranchStatusEvent, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@proteus/core';
+import { isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type BranchStatusEvent, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu/core';
 import type { AgentChangelogView, AgentClient, AgentClientStatus, AgentSearchNode } from './agent-client';
 import { setDefaultModel, setDefaultReasoningEffort } from './config';
 

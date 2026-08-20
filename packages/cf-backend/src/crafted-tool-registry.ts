@@ -25,9 +25,9 @@
  */
 
 import { DynamicWorkerExecutor, normalizeCode } from '@cloudflare/codemode';
-import { craftFailureMarker, filterByEffectiveScore, explainNativeToolReferenceError } from '@proteus/core';
-import type { CraftStore, SqlExecutor } from '@proteus/core';
-import { renderThrownChain } from '@proteus/core/obs';
+import { craftFailureMarker, filterByEffectiveScore, explainNativeToolReferenceError } from '@kinu/core';
+import type { CraftStore, SqlExecutor } from '@kinu/core';
+import { renderThrownChain } from '@kinu/core/obs';
 
 /** Codemode's resolved provider shape. */
 type DynamicProviderInput = Parameters<DynamicWorkerExecutor['execute']>[1];

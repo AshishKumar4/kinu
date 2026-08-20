@@ -6,7 +6,7 @@
 // the machine instead of describing a machine like it. `git` and `npm` used to
 // be claimed unconditionally.
 import { describe, expect, test } from 'bun:test';
-import { renderDynamicContextBlock } from '@proteus/core';
+import { renderDynamicContextBlock } from '@kinu/core';
 import { hostToolchainCapabilities, HOST_UNMEASURED_CAPABILITIES } from '../src/host-toolchain';
 
 const STRUCTURAL_ONLY =

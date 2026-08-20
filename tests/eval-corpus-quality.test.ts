@@ -18,7 +18,7 @@ import { minimumPairsForSignificance } from '../packages/core/src/index';
 import {
   TASK_OUTCOME, compareRuns, readRunRecord,
   type EvalObservation, type EvalRunRecord,
-} from '@proteus/test-utils';
+} from '@kinu/test-utils';
 
 const RUNS = join(import.meta.dirname, 'eval/runs');
 const flashA = readRunRecord(join(RUNS, 'flash-a.json'));

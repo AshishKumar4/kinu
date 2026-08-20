@@ -8,8 +8,8 @@ import {
   UsageSchema,
   type JsonObject,
   type JsonValue,
-} from "@proteus/core";
-import { tolerate } from "@proteus/core/obs";
+} from "@kinu/core";
+import { tolerate } from "@kinu/core/obs";
 import * as v from "valibot";
 
 /** Bytes to assertable text. Decoration and line endings are the invoking

@@ -35,7 +35,7 @@
  * through code that presents a workspace token, and is therefore attenuated by
  * tier no matter which tool gate someone forgets.
  */
-import { nanoid, type SqlExec } from '@proteus/core';
+import { nanoid, type SqlExec } from '@kinu/core';
 import { hmacSha256Hex, sha256Hex, timingSafeEqual } from '../lib/crypto';
 import * as v from 'valibot';
 

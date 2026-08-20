@@ -121,7 +121,7 @@ export const NON_REPOSITORY_SCANS = new Map<string, string>([
   ],
   [
     'scripts/bench-sandbox.ts',
-    'copies the tree into a solver sandbox and re-points `node_modules/@proteus/*` symlinks. '
+    'copies the tree into a solver sandbox and re-points `node_modules/@kinu/*` symlinks. '
     + '`git ls-files` does not list `node_modules`, so the set it needs is exactly the set no '
     + 'enumerator here can produce.',
   ],

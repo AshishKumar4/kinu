@@ -15,7 +15,7 @@
 // Real sandbox execution (node `new Function`, cf `createCodeTool`) is covered
 // in the two backend suites; here the surface itself is the subject.
 import { describe, expect, test } from 'bun:test';
-import { createTestRuntime } from '@proteus/test-utils';
+import { createTestRuntime } from '@kinu/test-utils';
 import { MockLanguageModelV3 } from 'ai/test';
 import * as v from 'valibot';
 import {

@@ -19,7 +19,7 @@
 import { describe, test, expect } from 'bun:test';
 import { userCredentialSource } from './helpers/user-credentials';
 import { streamText } from 'ai';
-import { DEFAULT_WORKERS_AI_MODEL_ID, normalizeUsage } from '@proteus/core';
+import { DEFAULT_WORKERS_AI_MODEL_ID, normalizeUsage } from '@kinu/core';
 import { repairSseCachedUsage } from '../src/providers/stream-usage-repair';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry';
 

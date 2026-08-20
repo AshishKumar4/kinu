@@ -24,14 +24,14 @@
  */
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { createTestRuntime } from '@proteus/test-utils';
+import { createTestRuntime } from '@kinu/test-utils';
 import { SwarmConfigSchema } from '../src/tools/swarm-input';
 import {
   resolveSwarm, swarmValidity, SWARM_CONTEXTS, SWARM_UNITS,
   type BranchContext, type SwarmUnitSetting,
 } from '../src/strategy/swarm';
 import { runSwarm } from '../src/strategy/swarm-run';
-import { scriptedTurnModel } from '@proteus/test-utils';
+import { scriptedTurnModel } from '@kinu/test-utils';
 
 /** A composition legal in every respect except the axis under test, so a refusal can
  *  only ever be about `unit` or `context`. */

@@ -62,7 +62,7 @@ import { makeSql, makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/
 import {
   hardTaskFor, recordLiveModelEpisode, scoreTrajectory, seedHardTask, verifyHardTask,
   type EvalArmState, type EvalScoreRow, type HardTask,
-} from '@proteus/test-utils';
+} from '@kinu/test-utils';
 
 /**
  * What one task run produced, as the WIRE shape a judge receives.

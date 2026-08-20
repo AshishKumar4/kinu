@@ -25,7 +25,7 @@ whole is data loss.
 | Documents the model *can* accept, over 1 MiB | reference text part | same | same |
 | Pasted user text over 8 KiB | 2,000-char head + address | same | same |
 | Subordinate reports / peer replies | 600-char brief | `.proteus/event-content/<hash>.txt` | `core/src/events/hub/content-spill.ts` |
-| Compacted history ranges | checkpoint summary | `.proteus/compaction/<session>/<range>.md` | `@proteus/compaction` `stores.ts` |
+| Compacted history ranges | checkpoint summary | `.proteus/compaction/<session>/<range>.md` | `@kinu/compaction` `stores.ts` |
 
 `SPILL_DIRS` in `core/src/context-budget.ts` is the single source of truth for
 those four directories, and every producer builds its paths from it. The paths

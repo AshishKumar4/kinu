@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { asFetchFunction } from '@proteus/core';
+import { asFetchFunction } from '@kinu/core';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { cloudflareTokenJsonToResponse, cloudflareUserResultToProfile } from '../src/auth/routes';

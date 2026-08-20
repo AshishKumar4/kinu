@@ -12,14 +12,14 @@
 // logged-in user's account, and a binding call would silently move it here.
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
-import type { ModelProvider, ModelInfo, ProviderEnv, WorkersAIBinding, GatewayTarget } from '@proteus/core';
+import type { ModelProvider, ModelInfo, ProviderEnv, WorkersAIBinding, GatewayTarget } from '@kinu/core';
 import {
   DEFAULT_WORKERS_AI_MODEL_SPEC,
   createGatewayBindingFetch,
   listModelsDevProviderModels,
   parseGatewayTarget,
   withRateLimitRetry,
-} from '@proteus/core';
+} from '@kinu/core';
 import {
   WORKERS_AI_FALLBACK_MODEL_CATALOG,
   WORKERS_AI_PREFERRED_MODEL_IDS,

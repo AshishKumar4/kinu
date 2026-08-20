@@ -16,8 +16,8 @@ import {
   MissionGovernor, CRAFT_NEUTRAL_PRIOR,
   type HeadInput, type WebSearchProvider, type AgentRuntime, type JsonObject,
   type ModelCallReport,
-} from '@proteus/core';
-import { scratchDir, scratchPath, toolExecute } from '@proteus/test-utils';
+} from '@kinu/core';
+import { scratchDir, scratchPath, toolExecute } from '@kinu/test-utils';
 import { createCLIHeadRuntime, type CLIHeadRuntimeDeps } from '../src/head-runtime';
 import { makeSql, makeExecRaw, createCLIRuntime, buildCLIHeadRuntime } from '../src/runtime';
 

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { memberBody } from '@proteus/test-utils';
+import { memberBody } from '@kinu/test-utils';
 import {
   orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';

@@ -39,15 +39,15 @@
  */
 
 import * as v from 'valibot';
-import type { SqlExec } from '@proteus/core';
-import { diagnostics, toProteusError } from '@proteus/core/obs';
+import type { SqlExec } from '@kinu/core';
+import { diagnostics, toProteusError } from '@kinu/core/obs';
 import {
   EGRESS_PLACEHOLDER_BYTES,
   isEgressPlaceholder,
   planEgress,
   type EgressRequestFacts,
   type EgressSecretBinding,
-} from '@proteus/core';
+} from '@kinu/core';
 import { randomToken } from '../lib/crypto';
 import type { CredentialCipher } from './credential-envelope';
 

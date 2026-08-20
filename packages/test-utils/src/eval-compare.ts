@@ -45,7 +45,7 @@ import {
   DEFAULT_ALPHA, binomialTwoSidedP, floorPValue, fmtPp, minimumDetectableEffect,
   minimumPairsForSignificance, pairedBinaryComparison, pairedBootstrapCI, requiredPairs,
   type BootstrapOptions, type Interval, type PairedBinaryStats, type PairedOutcome,
-} from '@proteus/core';
+} from '@kinu/core';
 import { observationKey, type EvalObservation, type EvalRunRecord } from './eval-run';
 import { TASK_OUTCOME, isCovariateRow } from './eval-outcome';
 

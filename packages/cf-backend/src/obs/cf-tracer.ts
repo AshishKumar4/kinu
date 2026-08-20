@@ -55,7 +55,7 @@ import {
   type SpanAttributeValue,
   type SpanOpenAttributes,
   type Tracer,
-} from '@proteus/core/obs';
+} from '@kinu/core/obs';
 
 export function createWorkersTracer(): Tracer {
   return {

@@ -31,7 +31,7 @@ import { AGENT_RPC_ACCESS } from '../src/cli/rpc-gate';
 import { declaredClassMembers, isInternalMember } from './helpers/declared-members';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { decodeJsonValue, type JsonValue } from '@proteus/core';
+import { decodeJsonValue, type JsonValue } from '@kinu/core';
 import * as v from 'valibot';
 
 type UserDOInstance = ReturnType<typeof createTestUserDO>['userDO'];

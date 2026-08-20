@@ -21,8 +21,8 @@ import {
   DeviceTunnel, EXECUTOR_CAPABILITIES, TOOLCHAIN_PROBE_BINARIES, isDeviceUnknownMethodError,
   deviceToolchainAnswer, freshDeviceToolchain,
   type DeviceToolchain, type JsonValue, type TunnelSocket,
-} from '@proteus/core';
-import { diagnostics, ProteusError, toProteusError } from '@proteus/core/obs';
+} from '@kinu/core';
+import { diagnostics, ProteusError, toProteusError } from '@kinu/core/obs';
 import * as v from 'valibot';
 
 /** WebSocket.OPEN is 1 across every implementation. */

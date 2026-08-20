@@ -34,7 +34,7 @@ import {
   type ApprovalGrant,
   type EgressSecretBinding,
   type SandboxHandle,
-} from '@proteus/core';
+} from '@kinu/core';
 import {
   CONTAINER_EVENT_HOST, EGRESS_HANDLER, EVENT_HANDLER, type ProteusEgressParams,
 } from './outbound';

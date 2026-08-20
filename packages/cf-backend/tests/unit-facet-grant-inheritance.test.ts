@@ -17,7 +17,7 @@ import {
   createInheritedApprovalPolicy, decideApproval, egressSecretRule,
   grantsAreSubset, resolveInheritedGrants, reviewEgressBinding,
   type ApprovalGrant, type ShellApprovalMode,
-} from '@proteus/core';
+} from '@kinu/core';
 import { AGENT_RPC_ACCESS } from '../src/cli/rpc-gate';
 import { ORCHESTRATOR_RPC_SURFACE } from '../src/rpc-surface';
 

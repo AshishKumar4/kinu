@@ -1,5 +1,5 @@
 {
-  "name": "@proteus/cli-backend",
+  "name": "@kinu/cli-backend",
   "version": "0.1.0",
   "type": "module",
   "main": "src/index.ts",
@@ -11,10 +11,10 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@nimbus-sh/runtime-bash": "5.2.37",
     "@nimbus-sh/runtime-cpython": "3.13.14",
-    "@proteus/core": "workspace:*",
-    "@proteus/agent-utils": "workspace:*",
+    "@kinu/core": "workspace:*",
+    "@kinu/agent-utils": "workspace:*",
     "ai": "^6.0.196",
-    "@proteus/compaction": "workspace:*"
+    "@kinu/compaction": "workspace:*"
   },
   "scripts": {
     "build": "tsc",

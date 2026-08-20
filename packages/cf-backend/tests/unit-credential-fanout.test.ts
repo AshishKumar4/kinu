@@ -5,7 +5,7 @@ import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, test, expect } from 'bun:test';
 import { handleUserRequest } from '../src/user/routes';
 import type { AuthIdentity } from '../src/auth/session';
-import type { JsonValue } from '@proteus/core';
+import type { JsonValue } from '@kinu/core';
 
 const IDENTITY: AuthIdentity = {
   userId: '0123456789abcdef0123456789abcdef',

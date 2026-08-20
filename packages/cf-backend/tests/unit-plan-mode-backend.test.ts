@@ -6,7 +6,7 @@ import {
   type JsonValue,
   type PlanReviewAnnotation,
   type ProgrammaticTurn,
-} from '@proteus/core';
+} from '@kinu/core';
 import { orchestratorHarness } from './helpers/actor-harness';
 import * as v from 'valibot';
 

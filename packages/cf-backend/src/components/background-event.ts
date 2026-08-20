@@ -23,7 +23,7 @@
 import {
   JsonObjectSchema, SIGNAL_ID_METADATA_KEY,
   type JsonObject, type SignalCardEvent, type SignalCardState,
-} from "@proteus/core";
+} from "@kinu/core";
 import * as v from 'valibot';
 
 /** A turn the backend enqueued, never typed by the operator. */

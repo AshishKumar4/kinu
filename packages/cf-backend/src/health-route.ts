@@ -9,7 +9,7 @@
 // cheerfully true. (A `vite dev` server has no stamp either, correctly: it
 // cannot serve the CLI downloads.)
 
-import { ORCHESTRATOR_AGENT_SLUG } from '@proteus/core';
+import { ORCHESTRATOR_AGENT_SLUG } from '@kinu/core';
 import { readBuildStamp } from './lib/deployed-assets';
 
 const FEATURES: ReadonlyArray<string> = [

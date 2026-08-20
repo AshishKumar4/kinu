@@ -1,6 +1,6 @@
 /** Model catalog entries as both backends expose them through AgentClient. */
 
-import { DEFAULT_WORKERS_AI_MODEL_SPEC, type ProviderFailure } from '@proteus/core';
+import { DEFAULT_WORKERS_AI_MODEL_SPEC, type ProviderFailure } from '@kinu/core';
 import * as v from 'valibot';
 
 const ModelMenuPayloadSchema = v.object({

@@ -22,7 +22,7 @@
 // listeners must not fail a durable write).
 
 import { describe, expect, test } from 'bun:test';
-import { createTestSql } from '@proteus/test-utils';
+import { createTestSql } from '@kinu/test-utils';
 import {
   HeadJournal, initHeadsTables, LiveHeadJournal, type HeadInput, type HeadReport,
 } from '../src/index';

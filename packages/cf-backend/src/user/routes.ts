@@ -37,8 +37,8 @@
  */
 import type { AuthIdentity } from '../auth/session';
 import type { UserDO } from './user-do';
-import { DEVICE_CONSENT_SCOPE, DEVICE_CONSENT_SCOPE_FULL_FS, JsonValueSchema } from '@proteus/core';
-import { diagnostics, renderThrownChain, toProteusError } from '@proteus/core/obs';
+import { DEVICE_CONSENT_SCOPE, DEVICE_CONSENT_SCOPE_FULL_FS, JsonValueSchema } from '@kinu/core';
+import { diagnostics, renderThrownChain, toProteusError } from '@kinu/core/obs';
 import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '../cli/install-command';
 import { listAvailableModels, listProviderCatalog } from './available-models';
 import { handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged } from './workspace-access';

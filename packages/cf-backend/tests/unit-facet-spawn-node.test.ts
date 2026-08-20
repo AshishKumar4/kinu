@@ -11,7 +11,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import type { HeadReport, NodeLoopResult, NodeRunSpec } from '@proteus/core';
+import type { HeadReport, NodeLoopResult, NodeRunSpec } from '@kinu/core';
 import type { FacetHost } from '../src/facet-spawn';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 

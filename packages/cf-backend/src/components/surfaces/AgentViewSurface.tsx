@@ -25,11 +25,11 @@ import {
   JsonArraySchema, JsonValueSchema, ViewSpecSchema, resolveViewPath,
   type JsonValue,
   type ViewBlock, type ViewColumn, type ViewLeafBlock, type ViewSource, type ViewSpec,
-} from "@proteus/core";
+} from "@kinu/core";
 import type { Rpc } from "@/lib/protocol";
 import { EmptyState, MarkdownContent, Section } from "./shared";
 import * as v from 'valibot';
-import { renderThrownChain } from "@proteus/core/obs";
+import { renderThrownChain } from "@kinu/core/obs";
 
 type SourceState = { data: JsonValue } | { error: string };
 const AgentViewResponseSchema = v.object({

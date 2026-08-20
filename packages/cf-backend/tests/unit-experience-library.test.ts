@@ -9,7 +9,7 @@
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
 import type { UserCaller } from '../src/user/workspace-capability';
-import type { PublishableCandidate } from '@proteus/core';
+import type { PublishableCandidate } from '@kinu/core';
 
 const ALPHA = 'workspace-a';
 const BETA = 'workspace-b';

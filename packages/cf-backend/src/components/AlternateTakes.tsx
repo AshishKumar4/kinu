@@ -12,8 +12,8 @@ import {
   ArrowLeftIcon, ArrowRightIcon, CaretDownIcon, CaretRightIcon, GitBranchIcon,
   CheckCircleIcon, WarningCircleIcon, XIcon,
 } from "@phosphor-icons/react";
-import type { AlternateTakeSet, TakePickOutcome } from "@proteus/core";
-import { branchHeadId, takeEvidence } from "@proteus/core";
+import type { AlternateTakeSet, TakePickOutcome } from "@kinu/core";
+import { branchHeadId, takeEvidence } from "@kinu/core";
 import type { BranchRun } from "@/hooks/use-proteus";
 import type { Rpc } from "@/lib/protocol";
 import { Modal } from "@/components/ui/Modal";
@@ -22,7 +22,7 @@ import { MarkdownContent } from "@/components/surfaces/shared";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { TranscriptBody, useNodeTranscript } from "@/components/NodeTranscript";
 import { currentTakeIndex, cycleTakeIndex, takeChipLabel } from "./alternate-takes-logic";
-import { renderThrownChain } from "@proteus/core/obs";
+import { renderThrownChain } from "@kinu/core/obs";
 
 export function TakesChip({ set, onPick }: {
   set: AlternateTakeSet;

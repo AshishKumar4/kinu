@@ -143,7 +143,7 @@ export interface Asymmetry {
  * instance: `components/tool-call-summary.ts`, 453 lines of tool-call argument
  * vocabulary (`Edited b.ts — 3 replacements`, `Ran the tests`), against which
  * the CLI's `printToolCall` joins raw argument VALUES and clips the line at 70
- * characters. Nothing in the file touches Cloudflare; it imports `@proteus/core`
+ * characters. Nothing in the file touches Cloudflare; it imports `@kinu/core`
  * and `valibot`.
  */
 export interface Movable {

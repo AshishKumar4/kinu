@@ -9,7 +9,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { toolExecute } from '@proteus/test-utils';
+import { toolExecute } from '@kinu/test-utils';
 import { createTestRuntime } from './helpers';
 import {
   buildBuiltinTools,
@@ -36,7 +36,7 @@ const createTestCraftedExecute = (): CraftedToolExecute => (source) => async (ar
 
 // Minimal Node createExecuteTool factory — sandboxes LLM code with a
 // `codemode` binding holding pre-materialised crafted-tool executes.
-// Mirrors @proteus/cli-backend/createNodeExecuteToolFactory at the level
+// Mirrors @kinu/cli-backend/createNodeExecuteToolFactory at the level
 // this test needs.
 function createTestExecFactory(
   invoke: (tools: CraftedToolSet) => Promise<JsonValue | undefined>,

@@ -36,7 +36,7 @@ import {
   toolModelMessageSchema,
   userModelMessageSchema,
 } from 'ai';
-import { fnv1a64 } from '@proteus/core';
+import { fnv1a64 } from '@kinu/core';
 import * as v from 'valibot';
 import {
   assistantRunsStage,

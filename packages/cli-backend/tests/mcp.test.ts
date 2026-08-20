@@ -4,11 +4,11 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
-import { mcpToolKey, type LLMProviderConfig } from '@proteus/core';
+import { mcpToolKey, type LLMProviderConfig } from '@kinu/core';
 import { createCLIRuntime } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import { connectMcpServers } from '../src/mcp';
-import { scratchPath, toolExecute } from '@proteus/test-utils';
+import { scratchPath, toolExecute } from '@kinu/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',

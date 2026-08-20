@@ -3,9 +3,9 @@ import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@cloudflare/kumo";
 import { btnSmCls } from "@/components/ui/form";
 import { HouseIcon, PlusIcon, TrashIcon, UserPlusIcon } from "@phosphor-icons/react";
-import type { SubordinateRosterEntry } from "@proteus/core";
+import type { SubordinateRosterEntry } from "@kinu/core";
 import { Modal } from "./ui/Modal";
-import { renderThrownChain } from "@proteus/core/obs";
+import { renderThrownChain } from "@kinu/core/obs";
 
 interface SpawnResult {
   name: string;

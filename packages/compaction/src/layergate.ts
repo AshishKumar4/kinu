@@ -15,7 +15,7 @@
  */
 
 import type { ModelMessage } from 'ai';
-import type { Fault, Layer } from '@proteus/core';
+import type { Fault, Layer } from '@kinu/core';
 import {
   buildPlan,
   matchesPlanSnapshot,

@@ -14,7 +14,7 @@
  */
 
 import PC_AGENT_DAEMON_SOURCE from "../../pc-agent/src/index.js?raw";
-import { DEVICE_CONNECT_PATH } from "@proteus/core";
+import { DEVICE_CONNECT_PATH } from "@kinu/core";
 import { json, safeJson } from "./lib/http";
 import { ownerCaller } from "./user/workspace-capability";
 import * as v from "valibot";

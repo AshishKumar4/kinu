@@ -1,4 +1,4 @@
-import { JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, USER_AI_PROXY_PATH, timingSafeEqual, type JsonValue } from '@proteus/core';
+import { JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, USER_AI_PROXY_PATH, timingSafeEqual, type JsonValue } from '@kinu/core';
 import type { AuthIdentity } from '../auth/session';
 import { AuthError, authenticateRequest, isFreshAuthTime } from '../auth/session';
 import { publicHtmlHeaders } from '../lib/security-headers';
@@ -21,7 +21,7 @@ import { handleUserAIProxyRequest } from '../user/ai-proxy';
 import { USER_AI_PROXY_FORWARD_PREFIX, handleUserProviderProxyRequest } from '../user/provider-proxy';
 import { OwnerCapabilityUnavailableError, ownerCaller } from '../user/workspace-capability';
 import * as v from 'valibot';
-import { renderThrownChain } from '@proteus/core/obs';
+import { renderThrownChain } from '@kinu/core/obs';
 
 const OptionalLabelSchema = v.object({ label: v.optional(v.string()) });
 const WebhookRequestSchema = v.object({

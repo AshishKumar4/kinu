@@ -39,7 +39,7 @@ export const SPILL_DIRS = {
   attachments: 'attachments',
   /** Oversize event payloads (events/hub/content-spill.ts). */
   eventContent: '.proteus/event-content',
-  /** Compaction transcripts (@proteus/compaction stores.ts). */
+  /** Compaction transcripts (@kinu/compaction stores.ts). */
   compaction: '.proteus/compaction',
 } as const;
 

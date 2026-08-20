@@ -228,7 +228,7 @@ fixture for the archive reader. No product path creates or reads it.
 
 ## MemoryStore (FTS5 Search)
 
-From `@proteus/agent-utils`. Provides full-text search over markdown files stored in the workspace filesystem.
+From `@kinu/agent-utils`. Provides full-text search over markdown files stored in the workspace filesystem.
 
 **Schema:** `memory_chunks` table with `memory_chunks_fts` FTS5 virtual table (external content via `content='memory_chunks'`). `initMemoryChunkTables` is the one DDL; `MemoryStore.ensureSchema()` delegates to it.
 
@@ -280,7 +280,7 @@ same `initWorkspaceSchema()` pass:
 | Release lane | `release_sources`, `release_changes`, `release_checks`, `release_approvals`, `release_deployments` | `core/src/release/sql-store.ts` (CLI session; on cf the board lives in the owner's UserDO) |
 | Agent views | `agent_views` (one row per published version; the specs themselves live in the workspace filesystem at `views/<slug>.json[.vN]`) | `core/src/views/store.ts` |
 | Imported experience | `imported_experience` (staged until a turn outcome settles it) | `core/src/experience/imports.ts` |
-| Compaction | `compaction_state`, `compaction_archive` | `core/src/identity/workspace-schema.ts` (the DDL lives in core because `@proteus/compaction` sits above it in the dependency graph) |
+| Compaction | `compaction_state`, `compaction_archive` | `core/src/identity/workspace-schema.ts` (the DDL lives in core because `@kinu/compaction` sits above it in the dependency graph) |
 | Typed config | `agent_config` | `core/src/config/store.ts` |
 | Crafted-tool migration marker | `_v2_codegen_migration_done` (hosted orchestrator only) | `core/src/craft/migrate-duplicates.ts` |
 

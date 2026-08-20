@@ -26,7 +26,7 @@ interface FtsRow { id: string; path: string; start_line: number; end_line: numbe
 
 /** A memory chunk with its verbatim text — the unit a semantic index embeds.
  *  Structurally matches core's `VectorMemoryChunk`; kept local so agent-utils
- *  stays free of a @proteus/core dependency (core depends on agent-utils). */
+ *  stays free of a @kinu/core dependency (core depends on agent-utils). */
 export interface IndexedChunk {
 	id: string;
 	path: string;

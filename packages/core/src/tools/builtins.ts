@@ -104,7 +104,7 @@ export type CraftedToolSet =
 
 /**
  * Narrow local shape of the CLI's codemode tool factory
- * (@proteus/cli-backend/execute-tools-factory). Duck-typed so core has no peer
+ * (@kinu/cli-backend/execute-tools-factory). Duck-typed so core has no peer
  * dep on a codemode implementation.
  */
 export type CreateExecuteToolFactory = (opts: {
@@ -419,7 +419,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // no core-level fallback. Callers MUST supply the tool one way or the other
   // (CF: preBuiltExecuteTool, built from @cloudflare/codemode in
   // cf-backend/execute-tools.ts; CLI: a Node adapter from
-  // @proteus/cli-backend/execute-tools-factory). If neither is wired,
+  // @kinu/cli-backend/execute-tools-factory). If neither is wired,
   // execute_tools returns a sharp error — a silent in-process compile
   // would break in any V8 isolate.
   if (!tools.execute_tools) {
@@ -438,7 +438,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           'execute_tools is not configured on this runtime. The backend must supply ' +
           'deps.preBuiltExecuteTool or deps.createExecuteTool to buildBuiltinTools ' +
           '(CF: cf-backend/createExecuteToolsTool; CLI: ' +
-          '@proteus/cli-backend/createNodeExecuteToolFactory).',
+          '@kinu/cli-backend/createNodeExecuteToolFactory).',
       }),
     });
   }

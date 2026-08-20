@@ -1,7 +1,7 @@
 /**
  * Proteus EventsHub — barrel export.
  *
- * Public surface for the @proteus/core consumer (cf-backend or future
+ * Public surface for the @kinu/core consumer (cf-backend or future
  * adapters). The hub is composed of two layers:
  *
  *   data:        types, schema, ulid, dedupe, trust, visibility

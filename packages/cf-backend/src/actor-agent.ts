@@ -26,12 +26,12 @@ import type { SubordinateActivityEvent } from './lib/protocol';
 import { parseProtocolMessage } from "agents/chat";
 import { CLI_SCOPES_HEADER, cliScopesConnectionTag, rejectOutOfScopeRpc } from "./cli/rpc-gate";
 import { createWorkersTracer } from "./obs/cf-tracer";
-import { createAgentTracing, renderThrownChain, type AgentTracing } from "@proteus/core/obs";
+import { createAgentTracing, renderThrownChain, type AgentTracing } from "@kinu/core/obs";
 import {
   createCompactionExtension, createVfsTranscriptStore,
   createCompactionStateStore, createModelSummarizer,
   type CompactionStateStore, type Logger as CompactionLogger,
-} from "@proteus/compaction";
+} from "@kinu/compaction";
 import { Think, Session } from "@cloudflare/think";
 import { streamText, tool, jsonSchema, stepCountIs } from "ai";
 import type { LanguageModel, ModelMessage, SystemModelMessage, ToolSet, UIMessage } from "ai";
@@ -162,7 +162,7 @@ import {
   // memory.* / tasks.* — codemode projections of the same-named native tools
   createMemoryCodemodeProvider, createTasksCodemodeProvider,
   JsonObjectSchema, JsonValueSchema, projectJsonValue, type JsonObject, type JsonValue,
-} from "@proteus/core";
+} from "@kinu/core";
 import { bindAgentSql, createCFRuntime, type CFRuntime } from "./runtime";
 import { createExecuteToolsTool } from "./execute-tools";
 import { createHeadRuntime } from "./head-runtime";
@@ -173,9 +173,9 @@ import {
   // Prompt-cache breakpoints — single source in core prompting/cache-breakpoints.ts
   promptCachePlan, hasCacheMarkers, markLastToolForAnthropicCache,
   type PromptCacheStrategy,
-} from "@proteus/core";
-import type { CodemodeProvider, DeferredApprovalChannel } from "@proteus/core";
-import { diagnostics, ProteusError, toProteusError, tolerate } from "@proteus/core/obs";
+} from "@kinu/core";
+import type { CodemodeProvider, DeferredApprovalChannel } from "@kinu/core";
+import { diagnostics, ProteusError, toProteusError, tolerate } from "@kinu/core/obs";
 import type { UserDO } from "./user/user-do";
 import type { UserCaller } from "./user/workspace-capability";
 import { sha256Hex } from "./lib/crypto";
@@ -1654,7 +1654,7 @@ export abstract class ActorAgent extends Think<Env> {
   //   - TriggerRegistry durable subscriptions (webhooks, timers, watches)
   //   - ReplyChannelStore  durable reply-channel rows + dispatchers
   // Spec: docs/ARCHITECTURE.md — "Events and ingress"
-  private _eventLog: import('@proteus/core').EventLog | null = null;
+  private _eventLog: import('@kinu/core').EventLog | null = null;
   protected get eventLog(): EventLog {
     if (!this._eventLog) {
       this._eventLog = new EventLog(this.ctx.storage.sql);
@@ -2335,7 +2335,7 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /**
-   * Delegates to @proteus/core's canonical prompt builder (F1 fix: documents
+   * Delegates to @kinu/core's canonical prompt builder (F1 fix: documents
    * `codemode.*` — the real namespace crafted tools land in — instead of the
    * former `tools.*` lie). Cached across turns; invalidated when the soul
    * text or the registered executor set changes.
@@ -2920,7 +2920,7 @@ export abstract class ActorAgent extends Think<Env> {
   // edit, list, find, grep, delete) with ours, bloating the request by ~2800 tokens.
   // activeTools restricts the model to the built-in tools + session context tools,
   // preventing Think's workspace tools from being sent in the request payload.
-  // ACTIVE_TOOLS is sourced from @proteus/core/tools/registry (single truth).
+  // ACTIVE_TOOLS is sourced from @kinu/core/tools/registry (single truth).
 
   async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
     // The scaffold and the soul are both files this turn is about to read, and

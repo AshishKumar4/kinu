@@ -31,7 +31,7 @@ import { existsSync, readFileSync, readdirSync, statSync, statfsSync } from 'nod
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { assertMeasured, finding } from './gate-ratchet';
-import { SCRATCH_PREFIXES } from '@proteus/test-utils';
+import { SCRATCH_PREFIXES } from '@kinu/test-utils';
 
 /** This checkout, so the merge-state probe reads THIS tree's git directory
  *  rather than whatever directory the gate happened to be invoked from. */
@@ -110,7 +110,7 @@ export const PROJECT_MARKERS = [
   '.git', 'package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'Makefile', '.hg',
 ] as const;
 
-/* Scratch prefixes come from `@proteus/test-utils` (src/scratch.ts), which is
+/* Scratch prefixes come from `@kinu/test-utils` (src/scratch.ts), which is
  * also what MINTS them — `judge` counts orphans and `reclaim` removes them from
  * that one list, so a prefix the harness knows and this file does not is
  * simultaneously uncollected and invisible. It was a hand-written copy here,

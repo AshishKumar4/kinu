@@ -52,7 +52,7 @@ import { requireSandboxedExecutors } from './evals/harness';
 import {
   infraBoundary, liveChatModel, liveModelTarget, recordLiveModelEpisode, recordLiveModelSpend,
   reportLiveModelSpend, scratchDir, UNCONFIGURED_LLM, type LiveModelSession,
-} from '@proteus/test-utils';
+} from '@kinu/test-utils';
 
 const TARGET = liveModelTarget('Live Smoke');
 const LLM_CONFIG: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;

@@ -7,14 +7,14 @@
  * (`consents`, `localControls`, `checkpoints`) and is null elsewhere.
  */
 
-import { JsonObjectSchema } from '@proteus/core';
+import { JsonObjectSchema } from '@kinu/core';
 import type {
   BroadcastEvent, ChangelogEntry, ChangelogRevertResult, PromptFile, ShellApprovalMode,
   FileCheckpointListing, FileRestorePlan, FileRestoreResult,
   AlternateTakeSet, TakePickOutcome,
   ReasoningEffort, Usage, RunEvent, JsonObject, JsonValue,
-} from '@proteus/core';
-import type { ShellApprovalHandler } from '@proteus/cli-backend';
+} from '@kinu/core';
+import type { ShellApprovalHandler } from '@kinu/cli-backend';
 import type { CliSession, CliSessionInfo } from './session';
 import type { AgentModelMenu } from './model-catalog';
 import * as v from 'valibot';
@@ -224,7 +224,7 @@ export interface FileCheckpointSurface {
   /** `turnId` narrows in the STORE, which is the only way to read one turn
    *  completely: `limit` is global across working directories while retention is
    *  per directory, so a window can hold part of a turn. See
-   *  FileCheckpoints.list in @proteus/core. */
+   *  FileCheckpoints.list in @kinu/core. */
   list(limit?: number, turnId?: string): Promise<FileCheckpointListing>;
   plan(dir: string, id: string): Promise<FileRestorePlan>;
   restore(dir: string, id: string): Promise<FileRestoreResult>;

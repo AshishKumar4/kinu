@@ -9,7 +9,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { between } from '@proteus/test-utils';
+import { between } from '@kinu/test-utils';
 
 const hook = readFileSync(join(import.meta.dir, '..', 'src', 'hooks', 'use-proteus.ts'), 'utf8');
 const page = readFileSync(join(import.meta.dir, '..', 'src', 'pages', 'WorkspacePage.tsx'), 'utf8');

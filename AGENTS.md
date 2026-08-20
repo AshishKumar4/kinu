@@ -91,19 +91,19 @@ it — once — before anything else.**
 
 Do NOT symlink or copy the main checkout's `node_modules` wholesale. Everything
 inside it, `@proteus` included, then resolves through the main checkout, so
-`@proteus/core` is *main's* core: cross-package tests and `bun run check` run
+`@kinu/core` is *main's* core: cross-package tests and `bun run check` run
 green against source nobody edited, and the branch under test is never loaded.
 That has silently cost us a bench run (solver edits graded as if never made),
 the harbor adapter, and a week of agent worktrees.
 
 The script links third-party dependencies per entry and gives the tree its own
-real `@proteus/` scope directory pointing at its own `packages/`. It refuses to
+real `@kinu/` scope directory pointing at its own `packages/`. It refuses to
 run when the branch changed `bun.lock` — run `bun install` in the worktree then,
 because borrowed modules would be the wrong ones.
 
 The invariant is enforced, not just documented: every package's suite carries
 `tests/workspace-resolution.test.ts`, which fails loudly with the fix command
-whenever `@proteus/*` resolves outside the tree it is running in
+whenever `@kinu/*` resolves outside the tree it is running in
 (`packages/test-utils/src/workspace-resolution.ts`).
 
 **Agents and delegated sessions NEVER edit the primary checkout.** Work in a
@@ -215,7 +215,7 @@ in a code-derived gate gives the gate a second failure mode and its own drift su
 
 ```
 packages/
-  core/         @proteus/core — abstract interfaces, MCTS, evolution, scaffold, craft
+  core/         @kinu/core — abstract interfaces, MCTS, evolution, scaffold, craft
   cf-backend/   Cloudflare Workers backend — Think DOs, React UI, Vite+Wrangler
   agent-utils/  MemoryStore, CraftStore, VFS types, addressing, walk, encoding
   cli/          CLI frontend (commander-based)
@@ -298,10 +298,10 @@ available bindings. `getProviders()` filters to available-only for `createExecut
 - All DDL uses `IF NOT EXISTS` — schema init is idempotent
 - Vercel AI SDK v6: `tool()` + `jsonSchema()` for tool definitions
 - `ToolSet` type from `ai` package for tool collections
-- **The AI SDK is not a preference and replacing it is not an option** — asked and answered 2026-08-17, do not reopen without new evidence. `ai` is a REQUIRED peer of `@cloudflare/think` (only `@ai-sdk/react`, `@chat-adapter/telegram`, `react` and `vite` are optional there), `ActorAgent extends Think<Env>`, and every override point is SDK-typed: `getModel(): LanguageModel`, `getTools(): ToolSet`, `beforeTurn(TurnContext{ModelMessage[], ToolSet, LanguageModel})`, `TurnConfig.stopWhen: StopCondition<ToolSet>`. Think does not merely import it — `think.js:7` does `import * as aiSdk from "ai"`, `:301` feature-detects `"registerTelemetry" in aiSdk`, and `:2827` calls `wrapAISDK(aiSdk, …).streamText`, so it branches on which MAJOR of `ai` is installed at runtime. Nor is the CLI the cheap side to swap: `cli-backend/src/local-session.ts:63` drives `runChat` from `@proteus/core`, which IS `core/src/chat.ts`, and core holds 54 of the 86 SDK source files. Plus ~1,423 lines of `LanguageModelV2` implementations (`claude-cli-provider.ts`, `opencode-provider.ts`, `providers/codex.ts`) exist only because an SDK model is BEHAVIOUR; alternatives model it as data. Reasoning of record: maximum code reuse across backends, with most logic in core. Full audit: `docs/research/sdk-dependency.md` (gitignored)
+- **The AI SDK is not a preference and replacing it is not an option** — asked and answered 2026-08-17, do not reopen without new evidence. `ai` is a REQUIRED peer of `@cloudflare/think` (only `@ai-sdk/react`, `@chat-adapter/telegram`, `react` and `vite` are optional there), `ActorAgent extends Think<Env>`, and every override point is SDK-typed: `getModel(): LanguageModel`, `getTools(): ToolSet`, `beforeTurn(TurnContext{ModelMessage[], ToolSet, LanguageModel})`, `TurnConfig.stopWhen: StopCondition<ToolSet>`. Think does not merely import it — `think.js:7` does `import * as aiSdk from "ai"`, `:301` feature-detects `"registerTelemetry" in aiSdk`, and `:2827` calls `wrapAISDK(aiSdk, …).streamText`, so it branches on which MAJOR of `ai` is installed at runtime. Nor is the CLI the cheap side to swap: `cli-backend/src/local-session.ts:63` drives `runChat` from `@kinu/core`, which IS `core/src/chat.ts`, and core holds 54 of the 86 SDK source files. Plus ~1,423 lines of `LanguageModelV2` implementations (`claude-cli-provider.ts`, `opencode-provider.ts`, `providers/codex.ts`) exist only because an SDK model is BEHAVIOUR; alternatives model it as data. Reasoning of record: maximum code reuse across backends, with most logic in core. Full audit: `docs/research/sdk-dependency.md` (gitignored)
 - `@earendil-works/pi-*` is a BENCH SUBJECT only (`scripts/bench-pi-worker.ts`), never a runtime dependency. Ideas may be borrowed with citation; a second AI stack may not be added. **Two different codebases have been cited under one name — keep them apart.** `@earendil-works/pi-*` is UPSTREAM **pi** (Mario Zechner), which ships no sub-agents at all (its `README.md:500`: "**No sub-agents.** … Spawn pi instances via tmux, or build your own with extensions"), so nothing about delegation may be attributed to it. **oh-my-pi** is `can1357/oh-my-pi`, a hard fork at 17.3.7, and it is the source of the `hashline` and `task`-`context` citations
 - `@callable()` decorator for RPC methods exposed to the React UI
-- A tool that cannot do what it was asked answers with a CLASS, never with prose alone: `{ reason: ErrorCode, error: string }`, reason first. `ProteusError`/`ErrorCode`/`toProteusError` in `@proteus/core/obs` build it, `refusalText` (`execution/exec-result.ts`) puts it on the string channel every executor tool answers on, and `read-models/tool-failures.ts` is the reader that branches on the class. All five executor tools are converted — `sandbox`, `nimbus`, `parent`, `device-tunnel-executor`, `inline` — so a returned `exec error: …` string is now a regression, not a convention to copy. The residue is listed and reasoned in [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) § "What is NOT converted"; `neverthrow` was REJECTED with evidence and must not be added — see § "Why not neverthrow"
+- A tool that cannot do what it was asked answers with a CLASS, never with prose alone: `{ reason: ErrorCode, error: string }`, reason first. `ProteusError`/`ErrorCode`/`toProteusError` in `@kinu/core/obs` build it, `refusalText` (`execution/exec-result.ts`) puts it on the string channel every executor tool answers on, and `read-models/tool-failures.ts` is the reader that branches on the class. All five executor tools are converted — `sandbox`, `nimbus`, `parent`, `device-tunnel-executor`, `inline` — so a returned `exec error: …` string is now a regression, not a convention to copy. The residue is listed and reasoned in [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) § "What is NOT converted"; `neverthrow` was REJECTED with evidence and must not be added — see § "Why not neverthrow"
 - Executor tools use positional args (`positionalArgs: true`) for codemode
 - maxSteps = 500 default, configurable via `PROTEUS_MAX_STEPS`
 
@@ -316,8 +316,8 @@ No `catch` may discard its error. `catch {}`, `catch { return null }` and `catch
 - A handler is only as honest as the statements it spans. `fork.ts` wrapped a `CREATE TABLE` *and* the twenty-statement `INSERT` loop under it in one catch commented "table may be absent", so a constraint violation on message #400 reported as a missing table and the fork returned success with the owner's whole conversation gone. One catch, one condition
 - Prefer asking over catching. `tableExists(sql, name)` and `PRAGMA table_info` turn "absent" into a value; a `catch` cannot tell a missing table from a locked one. DDL by swallowed exception is prohibited — `reconcileColumns` for a column, `initWorkspaceSchema` for a table
 - A production `catch` may never accommodate a test-only condition. If a table would be missing in tests, the harness builds the production schema (`createTestWorkspace`), it does not earn a swallow in shipped code
-- Where an absence is genuinely expected, name it: `tolerate(op, 'enoent')` / `classify({ cause })` from `@proteus/core/obs`. Anything the matcher does not recognise rethrows
-- Never log a secret, and never log an object you have not looked inside: no `apiKey`, `authorization`, `body`, `content`, `credential`, `header(s)`, `password`, `prompt`, `secret`, `soul`, `systemPrompt`, `token`. `ReservedLogField` in `@proteus/core/obs` makes that a type: a log call carrying one fails to COMPILE, through a variable, an interface, a spread or an index signature alike. A cast still defeats it, and `require-safety-comment-for-type-assertion` makes the cast a written admission
+- Where an absence is genuinely expected, name it: `tolerate(op, 'enoent')` / `classify({ cause })` from `@kinu/core/obs`. Anything the matcher does not recognise rethrows
+- Never log a secret, and never log an object you have not looked inside: no `apiKey`, `authorization`, `body`, `content`, `credential`, `header(s)`, `password`, `prompt`, `secret`, `soul`, `systemPrompt`, `token`. `ReservedLogField` in `@kinu/core/obs` makes that a type: a log call carrying one fails to COMPILE, through a variable, an interface, a spread or an index signature alike. A cast still defeats it, and `require-safety-comment-for-type-assertion` makes the cast a written admission
 - Every log carries a stable dotted event name (`capability.read_failed`) — that is what makes a failure greppable across Workers Logs and the CLI journal
 - Enforced mechanically by the `no-empty-catch`, `no-sentinel-catch`, `require-cause-on-rethrow` and `no-ddl-in-catch` anti-slop rules. Never add an `oxlint-disable` to pass one
 - A refusal carries its classification, reason FIRST — `{ reason: ErrorCode, error }` via `refusalOf` — because every seam that shows a result to a human or hashes it for steering bounds it to a head slice, and the prose is the long part. Precedents: `tools/file-tool.ts:82`, `execution/inline.ts:398`, `tools/agents-tool.ts:458`
@@ -332,7 +332,7 @@ No `catch` may discard its error. `catch {}`, `catch { return null }` and `catch
   lifecycle hooks, sessions and fibers. Proteus overrides the loop's inputs
   (`getModel` / `getSystemPrompt` / `getTools` / `beforeTurn`) and leaves Think's
   own workspace, skills, actions, channels and scheduled tasks unused
-- `getModel()` resolves from `agent_config` table, default: `@cf/deepseek-ai/deepseek-v4-pro-0813` (`DEFAULT_WORKERS_AI_MODEL_ID` in `@proteus/core`)
+- `getModel()` resolves from `agent_config` table, default: `@cf/deepseek-ai/deepseek-v4-pro-0813` (`DEFAULT_WORKERS_AI_MODEL_ID` in `@kinu/core`)
 - `getTools()` builds the 8-builtin ToolSet (`BUILTIN_TOOLS` in `core/src/tools/registry.ts`): `execute_tools`, `run`, `file`, `agents`, `memory`, `tasks`, `web`, `report`; results are cached per CraftStore version
 - **How the model reaches a capability is DECLARED, not derived**: `TOOL_REACH` in `core/src/tools/registry.ts` gives each capability `{ native, codemode }`, where `codemode` is the sandbox NAMESPACE (not a boolean — `run` and `file` reach the sandbox through the shared `workspace` primitives, so they own no namespace). `BuiltinToolName` is derived from it, every `*-codemode.ts` factory takes its provider `name` from it, `explainNativeToolReferenceError` reads it to tell the model where a capability actually is, and `getToolDescriptions` reports it instead of guessing from ToolSet keys. Reach is not permission: what an actor gets is reach ∩ its wired deps, and `getToolDescriptions` reports those two facts separately (`exposure` + `wired`). Adding a native row grows the 8-tool surface, which `core/tests/unit-tool-reach.test.ts` pins by both name set and count
 - `agents`, `web`, and `report` are dependency-gated native builtins. `report` appears only on a subordinate's assigned turn, while the `agents` action schema is derived from the actor's wired fork/team/peer capabilities. Release is codemode-only and mechanically omitted in Plan mode. See [docs/TOOLS.md](docs/TOOLS.md)

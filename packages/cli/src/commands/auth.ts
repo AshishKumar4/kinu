@@ -3,7 +3,7 @@ import { hostname, platform } from 'node:os';
 import { defaultOrigin, logout, pollCliAuth, startCliAuth, whoami } from '../cloud-api';
 import { loadConfigFile, saveConfigFile } from '../config';
 import { ACCENT, DIM, OK, WARN } from '../display';
-import { renderThrownChain } from '@proteus/core/obs';
+import { renderThrownChain } from '@kinu/core/obs';
 
 export async function authCommand(opts: { origin?: string }): Promise<void> {
   const origin = defaultOrigin(opts);

@@ -24,7 +24,7 @@ import type {
   DeferredApprovalChannel,
   WriteObserver,
   ModelCallSink, SpendSource,
-} from "@proteus/core";
+} from "@kinu/core";
 import {
   nimbusSessionFiles, nimbusSessionShell,
   observeWrites,
@@ -40,14 +40,14 @@ import {
   effortFor,
   createAgentConfigStore, initAgentConfigTable, initActorTables, selectFastModel,
   type VectorStore,
-} from "@proteus/core";
-import type { SandboxHandle } from "@proteus/core";
-import { diagnostics, renderThrownChain, toProteusError } from "@proteus/core/obs";
+} from "@kinu/core";
+import type { SandboxHandle } from "@kinu/core";
+import { diagnostics, renderThrownChain, toProteusError } from "@kinu/core/obs";
 import { getSandbox } from "@cloudflare/sandbox";
 import { configureContainerEgress, withConfiguredEgress } from "./egress/configure";
 import { previewHostSuffix } from "./lib/preview-origin";
-import { MemoryStore } from "@proteus/agent-utils/memory";
-import { CraftStore as AgentUtilsCraftStore } from "@proteus/agent-utils/stores";
+import { MemoryStore } from "@kinu/agent-utils/memory";
+import { CraftStore as AgentUtilsCraftStore } from "@kinu/agent-utils/stores";
 import { generateText, type LanguageModelUsage } from "ai";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import type { Agent } from "agents";
@@ -66,7 +66,7 @@ import {
 import { resolveJudgeModelSelection } from "./providers/judge-model";
 import { ownerCaller, type UserCaller } from "./user/workspace-capability";
 import { adaptMemory, backfillMemoryVectors } from "./memory-sync";
-import { agentAffinityKey, explorePrompt, formatInheritedContext, normalizeUsage, reflectionPrompt } from "@proteus/core";
+import { agentAffinityKey, explorePrompt, formatInheritedContext, normalizeUsage, reflectionPrompt } from "@kinu/core";
 import type { ProteusSandbox } from "./proteus-sandbox";
 import {
   createNimbusWorkspaceSandbox,
@@ -259,7 +259,7 @@ export type CFRuntime = AgentRuntime & {
    *  start so the turn's context reflects the CURRENT device state. */
   deviceTransport: DeviceTransport;
   /** Vectorize-backed semantic memory. Noop fallback when no binding. */
-  vectorStore: import("@proteus/core").VectorStore;
+  vectorStore: import("@kinu/core").VectorStore;
   /** The live sandbox container handle (for /workspace backup/restore), or null
    *  when no Sandbox binding / preview host. Single source for the orchestrator. */
   sandboxHandle: SandboxHandle | null;

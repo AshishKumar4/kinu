@@ -1,6 +1,6 @@
 import { mock } from 'bun:test';
 import type { AgentContext } from 'agents';
-import type { SqlValue } from '@proteus/core';
+import type { SqlValue } from '@kinu/core';
 
 /**
  * Stub the Agent SDK so bun can import the DO-layer src modules that depend on

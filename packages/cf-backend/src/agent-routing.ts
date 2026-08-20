@@ -1,4 +1,4 @@
-import { ORCHESTRATOR_AGENT_SLUG, SUBORDINATE_AGENT_SLUG } from "@proteus/core";
+import { ORCHESTRATOR_AGENT_SLUG, SUBORDINATE_AGENT_SLUG } from "@kinu/core";
 
 /**
  * The `/agents/*` transport boundary — the single policy for which requests may

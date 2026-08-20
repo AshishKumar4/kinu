@@ -9,13 +9,13 @@ import {
   initEventsHubTables, EventLog, ReplyChannelStore, buildDrainBatch,
   acceptInboundEmail, inboundEmailDropNotice, normalizeEmailAddress,
   type EmailIngressDeps, type IncomingEmail, type ProteusEvent, type SqlExec,
-} from '@proteus/core';
+} from '@kinu/core';
 import {
   agentEmailAddress, agentNameFromRecipient,
   parseInboundMime, stripQuotedReply,
 } from '../src/email/inbound';
 import { routeInboundEmail, type EmailDeliveryTarget } from '../src/email/route';
-import { createMemoryVfs } from '@proteus/test-utils';
+import { createMemoryVfs } from '@kinu/test-utils';
 import { sqlExec } from './helpers/user-do';
 
 function makeSql(): SqlExec {

@@ -17,7 +17,7 @@
  */
 
 import * as v from 'valibot';
-import { isAbortError, raceAbort } from '@proteus/agent-utils';
+import { isAbortError, raceAbort } from '@kinu/agent-utils';
 import type { VFS } from '../types/primitives';
 import { makeVfsError } from '../vfs/errno';
 import { shellQuote } from '../utils/shell';

@@ -86,7 +86,7 @@ export interface CreateSandboxOptions {
  * but whose workspace packages resolve into THIS copy.
  *
  * Symlinking the whole directory would be cheaper and is what this used to do,
- * but bun hoists the workspace links to the root, so `@proteus/core` ->
+ * but bun hoists the workspace links to the root, so `@kinu/core` ->
  * `../../packages/core` then resolved relative to the REAL repo's node_modules
  * — every workspace import inside a sandbox read pristine code, and a solver's
  * cross-package edits were graded as if they had never been made.
@@ -134,7 +134,7 @@ export function createAttemptSandbox(opts: CreateSandboxOptions): AttemptSandbox
     recursive: true,
     dereference: false,
     // Without this, cpSync REWRITES every relative symlink to an absolute path
-    // into the source tree — so packages/*/node_modules/@proteus/* would point
+    // into the source tree — so packages/*/node_modules/@kinu/* would point
     // back at the pristine repo and a solver's cross-package edits would be
     // invisible to any test that imports through a workspace specifier.
     verbatimSymlinks: true,

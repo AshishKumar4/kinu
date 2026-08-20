@@ -18,7 +18,7 @@ import {
   renderDynamicContextBlock, buildSystemPromptSync,
   deviceToolchainAnswer, DEVICE_TOOLCHAIN_TTL_MS,
 } from '../src/index';
-import { createTestRuntime } from '@proteus/test-utils';
+import { createTestRuntime } from '@kinu/test-utils';
 
 /** The rows the real projection (`DefaultExecutionRouter.listExecutors`) hands
  *  the prompt for one real provider. */

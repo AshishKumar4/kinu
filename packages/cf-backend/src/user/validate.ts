@@ -1,11 +1,11 @@
 // Runtime validator for credential payloads sent over HTTP. Mirrors the
-// `Credential` union from @proteus/core but rejects unknown shapes so a bad
+// `Credential` union from @kinu/core but rejects unknown shapes so a bad
 // request can't write garbage into UserDO storage.
 import {
   JsonObjectSchema,
   JsonValueSchema,
   type Credential,
-} from '@proteus/core';
+} from '@kinu/core';
 import * as v from 'valibot';
 
 const CredentialKindSchema = v.object({

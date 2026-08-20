@@ -7,8 +7,8 @@ import {
   DEFAULT_WORKERS_AI_MODEL_ID,
   DEFAULT_WORKERS_AI_MODEL_SPEC,
   parseModelSpec,
-} from '@proteus/core';
-import { createTestRuntime } from '@proteus/test-utils';
+} from '@kinu/core';
+import { createTestRuntime } from '@kinu/test-utils';
 import { createAgentProviderRegistry, type AgentProviderRegistry } from '../src/providers/agent-registry';
 import { pickInitialModel } from '../src/user/workspace-create';
 import type { ModelMenuEntry } from '../src/user/available-models';

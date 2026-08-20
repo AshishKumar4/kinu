@@ -23,9 +23,9 @@ import {
   restoreWorkspaceArchive,
   type ArchiveCursor,
   type ArchivePage,
-} from '@proteus/core';
-import { tolerate } from '@proteus/core/obs';
-import { createInlineWorkspace } from '@proteus/core/identity';
+} from '@kinu/core';
+import { tolerate } from '@kinu/core/obs';
+import { createInlineWorkspace } from '@kinu/core/identity';
 import { agentDbPath, agentDir, ensureAgentHome, requireStoredAuthConfig } from '../config';
 import { resolveAgentTarget } from '../agent-target';
 import { callAgentRpc } from '../cloud-api';

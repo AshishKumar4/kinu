@@ -56,7 +56,7 @@ describe("resolveWorkspaceTitle — roster precedence", () => {
 });
 
 // Where the workspace DO hangs the shared titling policy. The decision and the
-// apply loop are proven in @proteus/core; these pin the wiring that a DO test
+// apply loop are proven in @kinu/core; these pin the wiring that a DO test
 // harness cannot reach.
 describe("workspace titling wiring (OrchestratorAgent)", () => {
   const orchestrator = readFileSync(join(import.meta.dir, "../src/orchestrator.ts"), "utf8");

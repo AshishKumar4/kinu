@@ -18,8 +18,8 @@ import {
   type LLMProviderConfig,
   type JsonObject,
   type ReasoningEffort,
-} from '@proteus/core';
-import { tolerate } from '@proteus/core/obs';
+} from '@kinu/core';
+import { tolerate } from '@kinu/core/obs';
 import {
   CLOUD_PROXY_PROVIDER_IDS,
   cloudProxyBaseURL,
@@ -31,7 +31,7 @@ import {
   type LocalCodexAuthStore,
   type LocalProviderCredentials,
   type McpServerConfig,
-} from '@proteus/cli-backend';
+} from '@kinu/cli-backend';
 import * as v from 'valibot';
 
 export const AGENT_HOME = proteusHome();

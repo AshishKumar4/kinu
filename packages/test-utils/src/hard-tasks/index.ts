@@ -16,7 +16,7 @@
  * cases from {@link HARD_TASKS} makes the drift impossible rather than merely
  * unlikely, and it is why `hardTaskCases` returns cases instead of being a file.
  */
-import type { EvalCase, VFS } from '@proteus/core';
+import type { EvalCase, VFS } from '@kinu/core';
 import { outcomeRow, ratioOutcome, type VerifierContext } from '../eval-outcome';
 import type { EvalScoreRow } from '../eval-run';
 import type { HardTask } from './cost-model';

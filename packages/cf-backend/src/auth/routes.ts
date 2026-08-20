@@ -17,8 +17,8 @@ import {
   isCloudflareCredentialUsable,
   type CloudflareTokenPayload,
 } from '../lib/cloudflare-oauth';
-import { DEFAULT_WORKERS_AI_MODEL_SPEC, JsonObjectSchema, JsonValueSchema, type JsonObject } from '@proteus/core';
-import { diagnostics, toProteusError } from '@proteus/core/obs';
+import { DEFAULT_WORKERS_AI_MODEL_SPEC, JsonObjectSchema, JsonValueSchema, type JsonObject } from '@kinu/core';
+import { diagnostics, toProteusError } from '@kinu/core/obs';
 import { notifyWorkspacesCredentialsChanged } from '../user/workspace-access';
 import { ownerCaller } from '../user/workspace-capability';
 import * as v from 'valibot';

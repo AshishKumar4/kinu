@@ -24,7 +24,7 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import * as v from 'valibot';
-import { JsonArraySchema } from '@proteus/core';
+import { JsonArraySchema } from '@kinu/core';
 import { orchestratorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 
 const INSPECT_SOURCE = resolve(import.meta.dir, '../../cli/src/commands/inspect.ts');

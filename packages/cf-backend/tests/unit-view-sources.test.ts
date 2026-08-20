@@ -20,7 +20,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { RESERVED_VIEW_TITLES, VIEW_DATA_SOURCES, normalizeViewTitle } from '@proteus/core';
+import { RESERVED_VIEW_TITLES, VIEW_DATA_SOURCES, normalizeViewTitle } from '@kinu/core';
 import { AGENT_RPC_ACCESS, requiredRpcAccess } from '../src/cli/rpc-gate';
 
 const SRC = join(import.meta.dir, '..', 'src');

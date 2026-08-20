@@ -7,7 +7,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
-import { CONTEXT_CHECKPOINT_PREFIX, type TransformContext } from '@proteus/core';
+import { CONTEXT_CHECKPOINT_PREFIX, type TransformContext } from '@kinu/core';
 import {
   createCompactionExtension,
   proteusCodec,

@@ -1,11 +1,11 @@
-import { checkClaudeAvailability, checkOpenCodeAvailability } from '@proteus/cli-backend';
+import { checkClaudeAvailability, checkOpenCodeAvailability } from '@kinu/cli-backend';
 import { deleteCloudCredential, listCloudCredentials, type CloudCredentialSummary } from '../cloud-api';
 import { loadConfigFile, resolveCloudSession, updateConfigFile, type ProteusConfig } from '../config';
 import { ACCENT, DIM, OK, WARN } from '../display';
 import { authCommand } from './auth';
 import { setupCommand } from './setup';
 import * as v from 'valibot';
-import { renderThrownChain } from '@proteus/core/obs';
+import { renderThrownChain } from '@kinu/core/obs';
 
 type ProviderAction = 'list' | 'connect' | 'disconnect';
 const ProviderNameSchema = v.picklist([

@@ -12,7 +12,7 @@ parallel plugin API.
 For the wider seams (model provider, exploration strategy, actor kind), see
 [EXTENSIBILITY.md](./EXTENSIBILITY.md). This document covers the per-turn hooks.
 
-Source: `packages/core/src/extension.ts`, exported from `@proteus/core`.
+Source: `packages/core/src/extension.ts`, exported from `@kinu/core`.
 
 Two files in this tree export something called an extension, and they mean
 different things. `packages/core/src/extension.ts` holds the contract: the
@@ -28,7 +28,7 @@ An extension is a set of optional hooks plus a stable `name`. The name appears
 in errors. Implement only the hooks you need.
 
 ```ts
-import { ExtensionHost, type ProteusExtension } from '@proteus/core';
+import { ExtensionHost, type ProteusExtension } from '@kinu/core';
 
 const logger: ProteusExtension = {
   name: 'my.logger',
@@ -105,7 +105,7 @@ Within one hook, every registered extension runs in registration order.
 
 Both backends register the same three extensions, in the same order.
 
-1. **`compaction`**, from `createCompactionExtension` in `@proteus/compaction`.
+1. **`compaction`**, from `createCompactionExtension` in `@kinu/compaction`.
    It is the default `transformContext` registrant. It runs the better-compact
    staged pruning ladder once per turn assembly, over shared stores. Raw
    transcripts land in the canonical workspace VFS at

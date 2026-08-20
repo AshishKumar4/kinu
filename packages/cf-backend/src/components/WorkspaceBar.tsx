@@ -20,7 +20,7 @@ import { Link } from "react-router-dom";
 import { CheckIcon, GearSixIcon, GitBranchIcon, PencilSimpleIcon, XIcon } from "@phosphor-icons/react";
 import { ConnectionIndicator } from "@/components/connection-indicator";
 import type { ConnectionStatus } from "@/hooks/use-proteus";
-import { renderCauseChain } from '@proteus/core/obs';
+import { renderCauseChain } from '@kinu/core/obs';
 
 export const ALTITUDES = ["run", "supervise"] as const;
 export type Altitude = (typeof ALTITUDES)[number];

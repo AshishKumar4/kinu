@@ -8,12 +8,12 @@ import {
   parseJsonValue,
   type JsonObject,
   type JsonValue,
-} from '@proteus/core';
-import { renderThrownChain, tolerate } from '@proteus/core/obs';
+} from '@kinu/core';
+import { renderThrownChain, tolerate } from '@kinu/core/obs';
 import type {
   CheckpointAvailability, FileCheckpointEntry, FileCheckpointListing,
   FileRestorePlan, FileRestoreResult,
-} from '@proteus/core';
+} from '@kinu/core';
 import {
   callAgentRpc,
   CloudAgentStatusSchema,
@@ -32,8 +32,8 @@ import {
 } from './session';
 import { SessionRecorder } from './session-recorder';
 import { normalizeModelMenu, type AgentModelMenu } from './model-catalog';
-import { pageSchema, type Page, type SeekCursor } from '@proteus/core';
-import type { AlternateTakeSet, BranchStatusEvent, ChangelogEntry, ChangelogRevertResult, ReasoningEffort, TakePickOutcome } from '@proteus/core';
+import { pageSchema, type Page, type SeekCursor } from '@kinu/core';
+import type { AlternateTakeSet, BranchStatusEvent, ChangelogEntry, ChangelogRevertResult, ReasoningEffort, TakePickOutcome } from '@kinu/core';
 import {
   asRecord,
   createUserUiMessage,

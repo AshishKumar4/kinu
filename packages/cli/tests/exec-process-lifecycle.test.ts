@@ -27,9 +27,9 @@
 import { readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
-import { JsonObjectSchema, decodeJsonValue, parseJsonObject, type JsonObject, type JsonValue } from '@proteus/core';
-import { tolerate } from '@proteus/core/obs';
-import { scratchDir } from '@proteus/test-utils';
+import { JsonObjectSchema, decodeJsonValue, parseJsonObject, type JsonObject, type JsonValue } from '@kinu/core';
+import { tolerate } from '@kinu/core/obs';
+import { scratchDir } from '@kinu/test-utils';
 import * as v from 'valibot';
 
 const repoRoot = resolve(import.meta.dir, "../../..");

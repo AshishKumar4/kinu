@@ -5,8 +5,8 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES } from '@proteus/core';
-import { LOCAL_MAX_INLINE_ATTACHMENT_BYTES } from '@proteus/cli-backend';
+import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES } from '@kinu/core';
+import { LOCAL_MAX_INLINE_ATTACHMENT_BYTES } from '@kinu/cli-backend';
 import {
   describePromptAttachment,
   extractPathTokens,

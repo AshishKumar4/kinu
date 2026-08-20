@@ -1,6 +1,6 @@
 // Pure picker logic — grouping, filtering, badge shaping.
 import { describe, test, expect } from 'bun:test';
-import { formatContextWindow } from '@proteus/core';
+import { formatContextWindow } from '@kinu/core';
 import {
   badgeCapabilities, groupModelMenu, modelMatchesQuery,
 } from '../src/components/model-picker-options';

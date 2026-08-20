@@ -10,9 +10,9 @@
 // This lives in cli-backend (the local backend). The cloud server must never
 // drive subscription calls, so nothing here is reachable from cf-backend.
 import type { LanguageModelV2, LanguageModelV2CallOptions, LanguageModelV2StreamPart, LanguageModelV2Usage } from '@ai-sdk/provider';
-import { JsonObjectSchema, usageTotal } from '@proteus/core';
-import { diagnostics, ProteusError, tolerate } from '@proteus/core/obs';
-import type { JsonObject, ModelProvider, ModelInfo, ProviderDeps, Usage } from '@proteus/core';
+import { JsonObjectSchema, usageTotal } from '@kinu/core';
+import { diagnostics, ProteusError, tolerate } from '@kinu/core/obs';
+import type { JsonObject, ModelProvider, ModelInfo, ProviderDeps, Usage } from '@kinu/core';
 import { spawn as nodeSpawn } from 'node:child_process';
 import * as v from 'valibot';
 

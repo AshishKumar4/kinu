@@ -22,8 +22,8 @@ import {
   HeadCapture, runHeadInference, buildHeadToolSet, HeadController, HeadJournal, initHeadsTables,
   extractJsonObject, MergeOutputSchema, normalizeUsage, reasoningEffortOptions,
   resolveMaxSteps, localMissionScope,
-} from '@proteus/core';
-import { diagnostics, toProteusError } from '@proteus/core/obs';
+} from '@kinu/core';
+import { diagnostics, toProteusError } from '@kinu/core/obs';
 import { Database } from 'bun:sqlite';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';

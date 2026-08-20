@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { toolExecute } from '@proteus/test-utils';
+import { toolExecute } from '@kinu/test-utils';
 import { Database } from 'bun:sqlite';
 import {
   MAX_PLAN_CONTENT_BYTES,

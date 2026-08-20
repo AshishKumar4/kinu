@@ -5,7 +5,7 @@
 // its own slice. Cross-layer isolation against the CORE layers is proven by
 // the merged matrix in scripts/layergate.ts --matrix.
 import { describe, expect, test } from 'bun:test';
-import { observePipeline, runLayerGate, runFaultMatrix, LOCALIZATION_OWN_MIN_PP } from '@proteus/core';
+import { observePipeline, runLayerGate, runFaultMatrix, LOCALIZATION_OWN_MIN_PP } from '@kinu/core';
 import {
   COMPACTION_LAYERS, COMPACTION_FAULTS, COMPACTION_LOCKED_BASELINE,
   createCompactionLadderSubjects,

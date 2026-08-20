@@ -1,1 +1,1 @@
-export { nextAlarmTime, nextCronFire } from '@proteus/core';
+export { nextAlarmTime, nextCronFire } from '@kinu/core';

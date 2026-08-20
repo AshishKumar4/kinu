@@ -15,8 +15,8 @@ import {
   initBackgroundJobsTable, initExplorationRecordsTable, initHeadsTables, initMctsSearchTable,
   initRunEventTables, initSearchTables, recordExploration,
   type ExplorationWrite, type ObjectiveIdentity,
-} from '@proteus/core';
-import { makeSql } from '@proteus/cli-backend';
+} from '@kinu/core';
+import { makeSql } from '@kinu/cli-backend';
 import { redactSecrets } from '../src/commands/debug';
 import * as v from 'valibot';
 

@@ -1,7 +1,7 @@
 // Shared HTTP helpers for cf-backend route modules — one home instead of a
 // per-route-file clone of json/err/safeJson/escapeHtml.
-import { projectJsonValue } from '@proteus/core';
-import { tolerateAsync } from '@proteus/core/obs';
+import { projectJsonValue } from '@kinu/core';
+import { tolerateAsync } from '@kinu/core/obs';
 import * as v from 'valibot';
 
 export function json<Body>(body: Body, init: ResponseInit = {}): Response {

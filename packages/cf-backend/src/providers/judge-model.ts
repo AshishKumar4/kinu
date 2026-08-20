@@ -7,7 +7,7 @@
 import {
   availableJudgeSpecs, selectEnsembleJudges, selectJudgeModel,
   type EnsembleJudgeSelection, type JudgeModelSelection,
-} from '@proteus/core';
+} from '@kinu/core';
 import type { AgentProviderRegistry } from './agent-registry';
 
 const candidatesFor = (registry: AgentProviderRegistry) => (): Promise<string[]> =>

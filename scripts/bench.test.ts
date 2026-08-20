@@ -603,7 +603,7 @@ describe('createAttemptSandbox', () => {
   // Existence is not the property that matters: a workspace link that still
   // RESOLVES to the pristine repo makes every cross-package import read the
   // source tree instead of the copy, so a solver's edits — and a task's defect —
-  // are invisible to any test that imports through '@proteus/*'. This caught
+  // are invisible to any test that imports through '@kinu/*'. This caught
   // facts-confidence-default-zero validating as "breaks nothing".
   test('workspace links resolve inside the copy, not back into the real repo', () => {
     const runRoot = tempDir('bench-ws-');
@@ -611,7 +611,7 @@ describe('createAttemptSandbox', () => {
     // Bun hoists workspace links to the ROOT node_modules — the per-package
     // paths this used to check have not existed for some time, so it ENOENTed
     // instead of catching the leak it was written to catch.
-    for (const link of ['node_modules/@proteus/core', 'node_modules/@proteus/test-utils']) {
+    for (const link of ['node_modules/@kinu/core', 'node_modules/@kinu/test-utils']) {
       const resolved = realpathSync(join(sandbox.dir, link));
       expect(resolved.startsWith(realpathSync(sandbox.dir))).toBe(true);
     }

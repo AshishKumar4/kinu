@@ -14,7 +14,7 @@ import {
   // report.* — codemode projection of the native `report` tool.
   createReportCodemodeProvider, type CodemodeProvider,
   type DelegationBudget,
-} from '@proteus/core';
+} from '@kinu/core';
 import {
   ActorAgent,
   type ActorToolDeps,
@@ -28,8 +28,8 @@ import {
   subordinateRelaysTurnEnd,
   type SubordinateLiveStatus,
   type SubordinateReportOrigin,
-} from '@proteus/core';
-import { diagnostics, toProteusError } from '@proteus/core/obs';
+} from '@kinu/core';
+import { diagnostics, toProteusError } from '@kinu/core/obs';
 
 /** The workspace root's class name, which is also its Durable Object binding
  *  name — the equality the SDK itself relies on when it resolves a top-level

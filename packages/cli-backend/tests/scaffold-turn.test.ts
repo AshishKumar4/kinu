@@ -17,15 +17,15 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
-import type { AgentRuntime, LLM, LLMProviderConfig } from '@proteus/core';
+import type { AgentRuntime, LLM, LLMProviderConfig } from '@kinu/core';
 import {
   initScaffoldTables, createAgentConfigStore, initAgentConfigTable,
   getPendingScaffold, getCurrentScaffoldVersion, listScaffoldArchive,
   INITIAL_SCAFFOLD_SOURCE,
-} from '@proteus/core';
+} from '@kinu/core';
 import { createCLIRuntime } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
-import { scratchPath } from '@proteus/test-utils';
+import { scratchPath } from '@kinu/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',

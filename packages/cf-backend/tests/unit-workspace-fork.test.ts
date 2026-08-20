@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { ForkSnapshot } from '@proteus/core';
+import type { ForkSnapshot } from '@kinu/core';
 import { deliverCloudFork, type CloudForkRegistry, type CloudForkTarget } from '../src/user/workspace-fork';
 import type { UserCaller } from '../src/user/workspace-capability';
 

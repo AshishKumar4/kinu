@@ -10,7 +10,7 @@
  * (never thrown) so they survive the Worker→DO RPC boundary with their
  * meaning intact; thrown errors are real infra failures.
  */
-import { nanoid, type SqlExec } from '@proteus/core';
+import { nanoid, type SqlExec } from '@kinu/core';
 import { sha256Hex } from '../lib/crypto';
 import * as v from 'valibot';
 

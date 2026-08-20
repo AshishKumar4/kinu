@@ -13,7 +13,7 @@ import {
   compareSurface, normalizeObservedTables, observedActionEnum,
   renderConformanceFindings,
   type ConformanceRoot, type ObservedSurface,
-} from '@proteus/core';
+} from '@kinu/core';
 import { orchestratorHarness, subordinateHarness, type ActorHarness } from './helpers/actor-harness';
 
 interface RawToolsAgent { observeRawTools(): ToolSet }

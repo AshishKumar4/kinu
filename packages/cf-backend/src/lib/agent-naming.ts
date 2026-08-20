@@ -1,1 +1,1 @@
-export { deriveWorkspaceTitle, resolveWorkspaceTitle, slugifyName } from "@proteus/core";
+export { deriveWorkspaceTitle, resolveWorkspaceTitle, slugifyName } from "@kinu/core";

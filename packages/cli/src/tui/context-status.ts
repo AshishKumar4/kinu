@@ -1,4 +1,4 @@
-import { contextWindowForModel } from '@proteus/core';
+import { contextWindowForModel } from '@kinu/core';
 
 export interface TextForContextEstimate {
   content: string;

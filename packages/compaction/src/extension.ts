@@ -30,13 +30,13 @@
  */
 
 import type { ModelMessage, TextPart } from 'ai';
-import type { ProteusExtension, TransformContext } from '@proteus/core';
+import type { ProteusExtension, TransformContext } from '@kinu/core';
 import {
   buildCompactionSummaryPrompt,
   stripCheckpointPreamble,
   wrapCompactionSummary,
   CONTEXT_CHECKPOINT_PREFIX,
-} from '@proteus/core';
+} from '@kinu/core';
 import {
   buildPlan,
   createSummaryScheduler,
@@ -63,7 +63,7 @@ import {
   withArchiveManifest,
   type ArchiveIndexStore,
 } from './manifest';
-import { renderThrownChain } from '@proteus/core/obs';
+import { renderThrownChain } from '@kinu/core/obs';
 
 export interface CompactionOutcomeEvent {
   sessionKey: string;

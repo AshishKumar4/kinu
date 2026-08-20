@@ -4,7 +4,7 @@
 // HTTP headers rather than raw Credential values. UserDO is the production
 // implementation; this file gives tests the equivalent shape without
 // spinning up a DO.
-import type { AuthResolution, AuthResolver } from '@proteus/core';
+import type { AuthResolution, AuthResolver } from '@kinu/core';
 
 export interface TestAuth {
   getAuth: AuthResolver;

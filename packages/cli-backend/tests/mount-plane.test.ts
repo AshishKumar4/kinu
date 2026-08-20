@@ -9,7 +9,7 @@ import { Database } from 'bun:sqlite';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createCLIRuntime } from '../src/runtime';
-import { scratchDir, scratchPath } from '@proteus/test-utils';
+import { scratchDir, scratchPath } from '@kinu/test-utils';
 
 function freshRuntime() {
   const db = new Database(':memory:');

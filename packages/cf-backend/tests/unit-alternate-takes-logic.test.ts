@@ -3,8 +3,8 @@
 import { describe, test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { AlternateTakeSet } from '@proteus/core';
-import { takeEvidence } from '@proteus/core';
+import type { AlternateTakeSet } from '@kinu/core';
+import { takeEvidence } from '@kinu/core';
 import {
   currentTakeIndex, cycleTakeIndex, hasComparableTakes, takeChipLabel,
 } from '../src/components/alternate-takes-logic';

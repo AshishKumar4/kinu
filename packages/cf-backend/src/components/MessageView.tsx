@@ -20,10 +20,10 @@ import type { UIMessage, FileUIPart } from "ai";
 import {
   JsonObjectSchema, JsonValueSchema,
   describeToolCall, isToolCallFailed, summarizeToolCall, summarizeToolRun,
-} from "@proteus/core";
-import type { JsonObject, JsonValue } from "@proteus/core";
+} from "@kinu/core";
+import type { JsonObject, JsonValue } from "@kinu/core";
 import * as v from "valibot";
-import { tolerate } from "@proteus/core/obs";
+import { tolerate } from "@kinu/core/obs";
 import { PreviewFrame } from "@/components/PreviewFrame";
 import { MarkdownContent, CodeBlock } from "@/components/surfaces/shared";
 import { AttachmentChip } from "@/components/AttachmentChip";

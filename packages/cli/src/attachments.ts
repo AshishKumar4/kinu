@@ -13,8 +13,8 @@
 import { stat, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, extname, resolve } from 'node:path';
-import type { PromptFile } from '@proteus/core';
-import { renderThrownChain, tolerateAsync } from '@proteus/core/obs';
+import type { PromptFile } from '@kinu/core';
+import { renderThrownChain, tolerateAsync } from '@kinu/core/obs';
 import { formatBytes } from './display';
 
 /** File types worth inlining as model-visible parts. Everything else is

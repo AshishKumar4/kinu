@@ -2,15 +2,15 @@ import { closeSync, openSync, readFileSync, unlinkSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { Database } from 'bun:sqlite';
-import { DEFAULT_SESSION_REFLECTION_INTERVAL } from '@proteus/core';
-import { renderThrownChain, tolerate } from '@proteus/core/obs';
+import { DEFAULT_SESSION_REFLECTION_INTERVAL } from '@kinu/core';
+import { renderThrownChain, tolerate } from '@kinu/core/obs';
 import {
   LocalAgentSession,
   openWorkspaceCLI,
   resolveChatModel,
   writeSecretFile,
   type SessionEvent,
-} from '@proteus/cli-backend';
+} from '@kinu/cli-backend';
 import {
   AGENT_HOME,
   agentDbPath,

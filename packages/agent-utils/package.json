@@ -1,5 +1,5 @@
 {
-  "name": "@proteus/agent-utils",
+  "name": "@kinu/agent-utils",
   "version": "0.1.0",
   "type": "module",
   "exports": {

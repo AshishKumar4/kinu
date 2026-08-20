@@ -2,7 +2,7 @@ import {
   decodeJsonValue, formatScoreInterval, JsonArraySchema, JsonObjectSchema, JsonValueSchema,
   renderAlignmentConvergence, renderCalibrationReport,
   type AlignmentConvergence, type GepaOptimizationResult, type JsonObject, type JsonValue, type SearchNode,
-} from '@proteus/core';
+} from '@kinu/core';
 import * as v from 'valibot';
 import { resolveAgentTarget } from '../agent-target';
 import { fetchReport } from './label';
