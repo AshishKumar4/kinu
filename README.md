@@ -97,29 +97,24 @@ the engine refuses, the publication seal and the records store in full.
 
 ## Architecture
 
-Everything the agent decides lives in `packages/core`, which stays platform-clean.
-It depends on `@nimbus-sh/core` and `@kinu/agent-utils`, and it imports nothing from
-`agents`, `@cloudflare/*` or `cloudflare:workers`. Two interfaces sit under it.
-`AgentRuntime` carries the resource primitives: storage, memory, llm, schedule.
-`BackendHost` carries the few loop capabilities that are genuinely platform-shaped.
-Two backends implement both: Cloudflare Durable Objects, one per
-workspace, built on [Think](https://github.com/cloudflare/agents), and your own
-machine, on `bun:sqlite` and real processes. Both drive the same orchestrator, so
-the cloud and the CLI cannot drift into two pipelines.
+The agent lives in `packages/core` and does not know what platform it runs on.
+Two small interfaces carry everything platform-specific: `AgentRuntime` provides
+storage, memory, models and scheduling, and `BackendHost` provides the few things
+a turn loop needs from its host. Two backends implement them: Cloudflare Durable
+Objects, one per workspace, built on [Think](https://github.com/cloudflare/agents),
+and your own machine, on `bun:sqlite` and real processes. The cloud and the CLI
+run the same code, so they cannot drift apart.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/backend-dark.svg">
   <img alt="Clients and autonomous ingress feed packages/core, which owns the turn pipeline, tools, delegation, evolution, context, the canonical workspace file plane, the execution router and the event log. Below it the AgentRuntime and BackendHost interfaces are implemented twice: by cf-backend on Cloudflare Durable Objects, and by cli-backend on your own machine." src="docs/diagrams/backend.svg" width="900">
 </picture>
 
-The turn pipeline is `core/orchestrator`. A turn arrives from a person or from the
-reactor, which drains an event or a finished background job, and the pipeline
-assembles it once: a system prompt of nine parts in a fixed order, three of them
-conditional, then the durable history passed through the extension chain, where the
-compaction ladder fires. After that it is a step loop. At each step boundary a
-dynamic-context block is re-rendered from live state and appended only when its
-bytes change, the cache tail is marked last so no earlier breakpoint moves, and
-anything asynchronous splices in through one place instead of many.
+A turn arrives from a person, a schedule, or a finished background job. It is
+assembled once: the system prompt, then the conversation history, compacted when
+it outgrows the context window. After that it is a step loop. Between steps the
+agent re-reads live workspace state, and everything asynchronous, from a finished
+job to a message from another agent, joins the turn through one path.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/turn-dark.svg">
@@ -149,9 +144,8 @@ again.
 gates validate a mutation before it runs.
 
 **Evolution on three timescales.** Per turn, quality scoring then reflection. Per
-session, pattern consolidation then scaffold mutation. Per lifetime, `runMCTS`.
-`core/src/evolution/engine.ts` and `kinu evolve` call the MCTS engine; the `agents`
-tool does not.
+session, pattern consolidation then scaffold mutation. Per lifetime, `kinu evolve`
+runs a full tree search over the scaffold itself.
 
 **Web search and fetch.** The `web` tool works with zero keys, over DuckDuckGo
 search and Cloudflare's markdown service. A Tavily key adds ranked,
