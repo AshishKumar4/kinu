@@ -169,7 +169,21 @@ const SNIPPETS: readonly (readonly [src: string, snippet: string])[] = [
  * up" and "the defended assertion went false" are different facts, and only the second is
  * evidence.
  */
-const ASSERTION_FAILED = 'expect(received)';
+const ASSERTION_FAILED = /expect\(.{0,24}?received/s;
+// Why TEXT at all: bun's assertion errors carry no structural identity — measured
+// 2026-08-19, `name: "Error"`, constructor `Error`, zero own keys, no
+// `matcherResult` — so the message is the only channel this boundary offers.
+// Why not the literal 'expect(received)': under a TTY bun colours the message and
+// the codes land BETWEEN the tokens, so the literal matched in every piped run
+// and failed in every real deploy. Both production deploys today failed on
+// exactly these nine proofs; the first was misattributed to node_modules
+// contention. The tokens themselves stay contiguous under colouring, so this
+// matches them without encoding the decoration — `no-control-regex` refused the
+// version that spelled the escape codes, correctly. The bounded gap keeps a
+// crash from matching by accident across a long message: a ReferenceError or a
+// SQL error contains no `expect(` at all, which is the distinction this constant
+// exists for — "the mutant blew up" and "the defended assertion went false" are
+// different facts, and only the second is evidence.
 
 /* ── The tests each mutation must turn red ────────────────────────────────── */
 
