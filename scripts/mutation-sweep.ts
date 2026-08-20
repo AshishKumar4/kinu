@@ -56,7 +56,9 @@
  *   2. Whole `packages/core`, for anything that survived tier 1.
  *   3. The five other packages that own suites, for anything that survived tier 2.
  * Every survivor therefore pays the full 177 s, and a survivor is a claim that no
- * suite in this repository defends the decision. Kills pay almost nothing.
+ * suite in this repository defends the decision. Kills pay almost nothing. Measured
+ * over the whole catalogue on 2026-08-19: 25 mutations in 2865 s, 12 killed and 13
+ * surviving, which is 48 minutes rather than the 74 that 25 survivors would have cost.
  *
  * Transitive-import reachability was tried as the tier-1 filter and abandoned on
  * measurement: `@proteus/core`'s barrel puts 344 of 558 suites in the transitive
