@@ -313,9 +313,12 @@ const SettleTimingsSchema = v.object({
 
 /** The `session.settle_timings` diagnostic `end()` emits — the instrument the
  *  exit tail is measured with, read from the stream it actually writes to
- *  rather than re-timed by the test. A line naming that event and failing to
- *  parse is a logger defect, so it throws rather than being skipped. */
-async function captureSettleTimings(run: () => Promise<void>): Promise<{ evolutionMs: number }> {
+ *  rather than re-timed by the test. It is QUIET under 1s by contract (the
+ *  --json stderr promise), so on a fast exit its absence IS the measurement:
+ *  null means the whole tail fit under the threshold. A line naming the event
+ *  and failing to parse is a logger defect, so it throws rather than being
+ *  skipped. */
+async function captureSettleTimings(run: () => Promise<void>): Promise<{ evolutionMs: number } | null> {
   const original = console.error;
   let timings: { evolutionMs: number } | null = null;
   console.error = (...args: unknown[]) => {
@@ -331,7 +334,6 @@ async function captureSettleTimings(run: () => Promise<void>): Promise<{ evoluti
   } finally {
     console.error = original;
   }
-  if (!timings) throw new Error('end() emitted no session.settle_timings');
   return timings;
 }
 
@@ -1786,10 +1788,11 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
     await session.send('run the build and report');
 
     const timings = await captureSettleTimings(() => session.end());
-    // The named instrument. It is ~0 because the lane is EMPTY — and what makes
-    // that a fact rather than a coincidence of a fast stub is the line below:
-    // no review call was issued at all.
-    expect(timings.evolutionMs).toBeLessThan(100);
+    // The named instrument, quiet under 1s: a silent exit means the whole tail
+    // fit under the threshold, and a loud one must still show an empty lane.
+    // What makes that a fact rather than a coincidence of a fast stub is the
+    // line below: no review call was issued at all.
+    if (timings) expect(timings.evolutionMs).toBeLessThan(100);
     expect(completions).toEqual([]);
     // Nothing was graded here, and the review is owed — durably, to whoever
     // opens this workspace next.
