@@ -422,7 +422,12 @@ export class AgentOrchestrator {
    * the module header). Neither window needs flushing: both are durable.
    */
   async settleEvolution(): Promise<void> {
-    const deadline = Date.now() + this.settleTimeoutMs;
+    const started = Date.now();
+    const deadline = started + this.settleTimeoutMs;
+    // Named on the SUCCESS path too: an exit tail is silent exactly when it is
+    // slow, and 100-600s of unattributed post-answer wall has been chased
+    // across environments twice (TB2.1, 2026-08-20).
+    const waitedOn = [...new Set(this.inFlight.values())];
     while (this.inFlight.size > 0) {
       const remaining = deadline - Date.now();
       if (remaining <= 0) {
@@ -439,6 +444,10 @@ export class AgentOrchestrator {
         return;
       }
       await this.raceInFlight(remaining);
+    }
+    const waitedMs = Date.now() - started;
+    if (waitedMs > 1_000) {
+      diagnostics.event('evolution.settled', { waitedMs, waitedOn: waitedOn.join(', ') });
     }
   }
 
