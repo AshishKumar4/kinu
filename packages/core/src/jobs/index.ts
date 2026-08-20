@@ -13,6 +13,8 @@ export {
   BACKGROUND_POLICY,
   SPAWN_STARTED_OPTION,
   readSpawnStarted,
+  RESUME_REDRIVE_OPTION,
+  readResumeRedrive,
   type BackgroundHandle,
   type BackgroundRefusal,
   type BackgroundPolicy,

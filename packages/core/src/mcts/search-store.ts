@@ -42,11 +42,14 @@ const PersistedMCTSConfigSchema: v.GenericSchema<PersistedMCTSConfig> = v.object
  *
  * `mcts` is `mcts/engine.ts` — a judged search with a resume loop. `swarm` is
  * `strategy/swarm-run.ts` — an objective-scored search whose nodes are agents, and
- * which has no resume: it settles or it is gone. The discriminator is load-bearing
- * rather than descriptive. {@link MctsSearchStore.findResumable} keys on
- * `status='running' AND task=?`, so without it a swarm that died mid-run would be
- * handed to the MCTS loop as a resumable search of the same task, which would then
- * expand the swarm's tree with judged branches under the swarm's own root id.
+ * which has a resume loop of its own ({@link MctsSearchStore.findResumableSwarm}).
+ * The discriminator is load-bearing rather than descriptive, and it is what keeps the
+ * two loops from re-entering each other's trees: both key on
+ * `status='running' AND task=?`, so without the column a swarm that died mid-run
+ * would be handed to the MCTS loop as a resumable search of the same task, which
+ * would then expand the swarm's tree with judged branches under the swarm's own root
+ * id — and a swarm's config parses as a persisted MCTS config, so nothing downstream
+ * would notice.
  */
 export type SearchEngine = 'mcts' | 'swarm';
 
@@ -84,7 +87,33 @@ export interface ResumableSearch {
   epoch: number;
 }
 
-type SearchStatus = 'running' | 'converged' | 'failed';
+/**
+ * One still-running SWARM row, as {@link MctsSearchStore.findRunningSwarms} hands it
+ * back.
+ *
+ * The progress columns are the swarm's own units — `iteration` is children finished
+ * and `budget` is children unspent — and they are the ledger's LAST WORD rather than
+ * the truth: a swarm checkpoints at its level barriers, so a run cut inside a level
+ * left the row reading the level before it. The tree is what a re-entry counts spent
+ * expansions from; these two are carried so a caller can say what the ledger believed.
+ */
+export interface ResumableSwarm {
+  readonly rootId: string;
+  readonly iteration: number;
+  readonly budget: number;
+  /** Current lease epoch, pre-reclaim. */
+  readonly epoch: number;
+}
+
+type SearchStatus = 'running' | 'converged' | 'failed' | 'superseded';
+
+/** The stored status, narrowed. Anything a writer of this table never wrote reads as
+ *  `running`, which is the column's own default and the only reading that cannot
+ *  invent an outcome: a row whose status is unrecognised has not been settled by
+ *  anything here. */
+function readStatus(raw: string): SearchStatus {
+  return raw === 'converged' || raw === 'failed' || raw === 'superseded' ? raw : 'running';
+}
 
 interface Row {
   root_id: string; task: string; root_msg_id: string; config_json: string;
@@ -98,8 +127,8 @@ export interface MctsSearchRunSummary {
   rootId: string;
   task: string;
   /** Which engine ran it. Two do, and their rows differ in what the progress
-   *  columns mean: a swarm never checkpoints, so its `iteration` is the children it
-   *  finished and its `budget` is what it had left when it settled. */
+   *  columns mean: a swarm's `iteration` is the children it finished at its last
+   *  level barrier and its `budget` is what it had left there. */
   engine: SearchEngine;
   status: SearchStatus;
   iteration: number;
@@ -232,6 +261,67 @@ export class MctsSearchStore {
     return null;
   }
 
+  /**
+   * Every still-running SWARM row for a task, NEWEST FIRST — the read a re-driven
+   * `agents.swarm` job re-enters its own search from, instead of starting another.
+   *
+   * WHY THE TASK IS A SAFE KEY. A durable job row carries the tool INPUT and nothing
+   * else: no root id, because the root is minted inside the run. So the only identity
+   * a re-drive can present is the one the caller gave, and `task` is that identity —
+   * `resumableAgentsInput` refuses a stored row with no `task` outright, so a re-drive
+   * that reaches here always has one. It is also the key {@link findResumable} has
+   * used since B6 and the key `HeadJournal.findResumableRun` adopted for the same
+   * reason, and that matters more than the key itself: three resume paths keyed three
+   * ways is three sets of collision behaviour to reason about.
+   *
+   * WHY PLURAL, AND THE COLLISION RULE. `task` is not unique among `running` rows: two
+   * `agents.swarm` calls with the same task can both be in flight in one workspace, and
+   * two earlier attempts can both have been evicted. So the rows are handed back whole
+   * and the RULE lives with the re-entry that applies it (`strategy/swarm-resume.ts`):
+   * the newest running row wins and every older one is retired by {@link supersede}.
+   *
+   *   - NEWEST, because a re-drive continues the most recent attempt; the older rows
+   *     are what earlier evictions left behind, and leaving them `running` is the
+   *     defect that had two rows reading `running iter=0/5` eleven hours after their
+   *     search died.
+   *   - SUPERSEDED rather than failed, because `failed` says the search broke while
+   *     these were taken over — different things to whoever reads the ledger, and they
+   *     send an operator looking for different causes.
+   *   - AND A FRESH CALL NEVER RE-ENTERS AT ALL. This is what keeps the rule from
+   *     absorbing a LIVE sibling: re-entry is gated on the call being a re-drive
+   *     (`jobs/threshold.ts`'s re-drive marker), so a second `agents.swarm` with the
+   *     same task gets its own root while the first is still expanding. What remains is
+   *     two RE-DRIVES of two evicted identical-task attempts converging on the newest
+   *     tree — one continued search rather than two abandoned ones, which is the outcome
+   *     this whole path exists to produce. {@link findResumable} has no such gate and
+   *     accepts the wider collision; the swarm's is narrower on purpose.
+   *
+   * A READ, and only a read: a finder that writes cannot be used to ask what would
+   * happen. Every write the rule needs is {@link supersede} and {@link reclaim}.
+   */
+  findRunningSwarms(task: string): readonly ResumableSwarm[] {
+    return this.sql<Row & { created_at: number }>`
+      SELECT root_id, task, root_msg_id, config_json, iteration, budget, status, epoch, created_at
+      FROM mcts_search_runs WHERE status='running' AND task=${task} AND engine='swarm'
+      ORDER BY updated_at DESC, created_at DESC, root_id DESC`
+      .map((row) => ({
+        rootId: row.root_id,
+        iteration: row.iteration,
+        budget: row.budget,
+        epoch: row.epoch,
+      }));
+  }
+
+  /** Retire a `running` row a newer attempt of the same task took over. Terminal and
+   *  distinct from {@link fail}: the run did not break, it was superseded, and a
+   *  reader that cannot tell those apart looks for a fault that never happened.
+   *  Unfenced on purpose — the executor that held this row is gone by construction,
+   *  which is why it is being superseded. */
+  supersede(rootId: string, now: number): void {
+    void this.sql`UPDATE mcts_search_runs SET status='superseded', updated_at=${now}
+      WHERE root_id=${rootId} AND status='running'`;
+  }
+
   /** Claim a still-running search for a resume: bump the lease epoch (fencing
    *  any executor still holding the old one) and return it. Null if not running. */
   reclaim(rootId: string): number | null {
@@ -259,8 +349,7 @@ export class MctsSearchStore {
       FROM mcts_search_runs WHERE root_id=${rootId} LIMIT 1`;
     const r = rows[0];
     if (!r) return null;
-    const status: SearchStatus = r.status === 'converged' || r.status === 'failed' ? r.status : 'running';
-    return { status, iteration: r.iteration, budget: r.budget, epoch: r.epoch };
+    return { status: readStatus(r.status), iteration: r.iteration, budget: r.budget, epoch: r.epoch };
   }
 
   /** Recent search runs, newest-updated first — the run-level ledger a
@@ -276,7 +365,7 @@ export class MctsSearchStore {
       rootId: r.root_id,
       task: r.task,
       engine: r.engine === 'swarm' ? 'swarm' : 'mcts',
-      status: r.status === 'converged' || r.status === 'failed' ? r.status : 'running',
+      status: readStatus(r.status),
       iteration: r.iteration,
       budget: r.budget,
       epoch: r.epoch,

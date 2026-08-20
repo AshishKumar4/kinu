@@ -46,6 +46,7 @@ import { initScaffoldTables } from '../scaffold/schemas';
 import { initShadowTables } from '../scaffold/shadow';
 import { initTaskListTable } from '../tasks/store';
 import { initExplorationRecordsTable } from '../strategy/records';
+import { initSwarmNodeRecords } from '../strategy/swarm-resume';
 
 /**
  * The three SQL handles onto one workspace database.
@@ -189,6 +190,11 @@ export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
   // it, and `no such table` on a workspace that has merely never searched is a
   // fault dressed as an empty leaderboard.
   initExplorationRecordsTable(execRaw, sql);
+  // The per-node content a swarm RE-ENTRY reads. Created on every root rather than only
+  // by the first swarm run, for the same reason the two above are: the conformance
+  // harness observes `sqlite_master` on a workspace that has never searched, and a
+  // table only a search creates would be a declared capability nothing could measure.
+  initSwarmNodeRecords(execRaw);
   initScaffoldTables(execRaw, sql);
   initCraftScoreTables(execRaw);
   // The R3 outcome ledger, including its take_pick CHECK-widening rebuild.

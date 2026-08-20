@@ -191,6 +191,10 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // into the same workspace, so a table only the first swarm run creates would
     // make an unsearched workspace's leaderboard a `no such table` throw.
     exploration_records: EVERYWHERE,
+    // The per-node content a swarm re-entry reads back after an eviction, on every root
+    // for the same reason: `initWorkspaceSchema` creates it, and a swarm forked down
+    // into a local session re-enters the same rows.
+    swarm_node_records: EVERYWHERE,
 
     // ── events hub ──
     agent_log: EVERYWHERE,

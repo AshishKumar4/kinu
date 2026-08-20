@@ -43,7 +43,7 @@ import { runSwarm, type SwarmRunDeps } from '../strategy/swarm-run';
 import type { NodeLoopHost } from '../strategy/node-agent';
 import type { NamedSwarmPreset, SwarmConfig, SwarmPreset } from '../strategy/swarm';
 import type { Objective } from '../strategy/objective';
-import { readSpawnStarted } from '../jobs/threshold';
+import { readResumeRedrive, readSpawnStarted } from '../jobs/threshold';
 import {
   localMissionScope, readMissionLimits,
   type MissionGovernor, type MissionScope,
@@ -956,6 +956,12 @@ async function runSwarmAction(
   // every node report the shared plane instead of a home it does not have.
   const nodeHome = deps.nodeHome;
   if (nodeHome) Object.assign(runDeps, { provisionHome: agentHomeNodeProvisioner(nodeHome()) });
+  // THIS CALL IS A RE-DRIVE, or it is not — and only a re-drive re-enters an
+  // interrupted search. Read off the options bag rather than the input for the reason
+  // `RESUME_REDRIVE_OPTION` states: the input IS the durable row, and a re-drive
+  // replays it verbatim, so nothing in it could distinguish the two. Assigned only when
+  // true, so a first call leaves the key absent.
+  if (readResumeRedrive(toolOptions)) Object.assign(runDeps, { redrive: true });
   readSpawnStarted(toolOptions)?.();
   const result = await runSwarm(runDeps, resolved);
   if ('reason' in result) return result;
