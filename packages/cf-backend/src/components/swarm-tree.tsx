@@ -364,7 +364,11 @@ export function SwarmTree({
 	 *  control below. */
 	const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set<string>());
 	const [tooltip, setTooltip] = useState<TooltipState | null>(null);
-	const mode = useTheme();
+	/** The scene is drawn with `var(--c-*)` strokes, but the score ramp is
+	 *  interpolated from RESOLVED token values (`scoreRamp`), so a redraw is what
+	 *  re-reads them. Keyed to the whole theme, not just the mode: a palette
+	 *  switch changes the same tokens. */
+	const theme = useTheme();
 
 	/**
 	 * Fit the SELECTED search, not the whole canvas: the reader chose one, and
@@ -754,7 +758,7 @@ export function SwarmTree({
 			g.selectAll("g.mcts-labels").attr("data-lod", transform.k >= LABEL_MIN_SCALE ? "" : null);
 			positionRuler(d3.select(rulerRef.current!), state, transform);
 		}
-	}, [regions, width, height, collapsed, mode, selectedRunId, fit]);
+	}, [regions, width, height, collapsed, theme, selectedRunId, fit]);
 
 	// Selection is an attribute update, plus the two things that make a node
 	// chosen from the inspector actually appear: open the folds hiding it, then

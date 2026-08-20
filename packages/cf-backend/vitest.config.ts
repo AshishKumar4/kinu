@@ -55,6 +55,7 @@ export default defineConfig({
           TRANSACTION: { className: 'TransactionDO', useSQLite: true },
           SOCKET: { className: 'SocketDO', useSQLite: true },
           ALARMED: { className: 'AlarmDO', useSQLite: true },
+          STEER_PROBE: { className: 'SteerProbeDO', useSQLite: true },
         },
       },
     }),
@@ -65,5 +66,8 @@ export default defineConfig({
     // default per-file parallelism would have two of them contend for the same
     // runtime and turn a latency assertion into a flake.
     fileParallelism: false,
+    // steer-chain's condition-bound waits carry a 15s diagnostic deadline that
+    // must expire INSIDE the test to name what the client saw; 5s cut it off.
+    testTimeout: 30_000,
   },
 });

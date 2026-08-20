@@ -41,7 +41,7 @@ export interface ExecutorTerminalProps {
 }
 
 export function ExecutorTerminal({ executor, outputs, onExecute }: ExecutorTerminalProps) {
-  const mode = useTheme();
+  const theme = useTheme();
   const ref = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -58,7 +58,7 @@ export function ExecutorTerminal({ executor, outputs, onExecute }: ExecutorTermi
       fontSize: 12,
       cursorBlink: true,
       convertEol: true,
-      theme: terminalTheme(mode),
+      theme: terminalTheme(theme.mode),
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -129,12 +129,13 @@ export function ExecutorTerminal({ executor, outputs, onExecute }: ExecutorTermi
   }, []);
 
   // xterm can't read CSS variables, so the palette is applied imperatively —
-  // and re-applied on every toggle. Baking it into the mount-once effect left
-  // a dark terminal sitting in a light page.
+  // and re-applied on every toggle of EITHER axis. Baking it into the
+  // mount-once effect left a dark terminal sitting in a light page; keying it
+  // to the mode alone left an umber terminal sitting in a silk one.
   useEffect(() => {
     const t = termRef.current;
-    if (t) t.options.theme = terminalTheme(mode);
-  }, [mode]);
+    if (t) t.options.theme = terminalTheme(theme.mode);
+  }, [theme]);
 
   // Re-fit when the executor changes (label in the prompt + reset buffer).
   useEffect(() => {

@@ -40,8 +40,18 @@
  * WITH a fallback is legal by design and is skipped — the fallback is the
  * author saying the token is optional.
  *
- *   bun scripts/computed-style.ts            # every gallery frame
- *   bun scripts/computed-style.ts chat forks # named frames only
+ * Every frame is audited under every THEME the stylesheet declares — two
+ * palettes (umber, silk) × two modes — because a palette block is exactly where
+ * an unmapped role token hides, and an unmapped token does not throw: it
+ * renders as Kumo's uncustomised brand colour. Auditing one theme and calling
+ * the stylesheet clean measures a quarter of what it governs. Each pass reads
+ * `data-mode`/`data-palette` back off the document and fails if the page is not
+ * on the theme the pass claims, since a pin nobody reads back is not a pin.
+ *
+ *   bun scripts/computed-style.ts                     # every frame, four themes
+ *   bun scripts/computed-style.ts chat forks          # named frames only
+ *   bun scripts/computed-style.ts --palette silk      # one palette, both modes
+ *   bun scripts/computed-style.ts --mode dark chat    # one theme, one frame
  */
 
 import { withGallery } from './gallery-harness';
@@ -56,6 +66,21 @@ const FRAMES = [
   'settings', 'forks', 'forkmerge', 'forkfull',
 ] as const;
 
+/** Palette × mode. `umber` is the shipped default and selects no palette block
+ *  at all (`:root` is it); `silk` selects the two `[data-palette="silk"]`
+ *  blocks. Both are named here so the attribute assertion can be exact. */
+export interface Theme {
+  readonly palette: 'umber' | 'silk';
+  readonly mode: 'dark' | 'light';
+}
+
+export const THEMES: readonly Theme[] = [
+  { palette: 'umber', mode: 'dark' },
+  { palette: 'umber', mode: 'light' },
+  { palette: 'silk', mode: 'dark' },
+  { palette: 'silk', mode: 'light' },
+];
+
 export interface Unresolved {
   /** The custom property that computed to nothing. */
   readonly token: string;
@@ -66,6 +91,8 @@ export interface Unresolved {
   /** A matched element, as `tag.class`, so the failure is findable. */
   readonly element: string;
   readonly frame: string;
+  /** `silk light`, and so on — which of the four themes was on screen. */
+  readonly theme: string;
 }
 
 /** What one page yielded: the defects, and how many token resolutions were
@@ -73,7 +100,7 @@ export interface Unresolved {
  *  denominator of zero is `tool-construction`'s `0/0, score null` reported as
  *  100% — this repo has already shipped that mistake once. */
 export interface PageAudit {
-  readonly findings: readonly Omit<Unresolved, 'frame'>[];
+  readonly findings: readonly Omit<Unresolved, 'frame' | 'theme'>[];
   readonly checked: number;
 }
 
@@ -88,7 +115,7 @@ export interface PageAudit {
  * and watch this report it, without a hook in the gate for tests to pull.
  */
 export function auditPage(): PageAudit {
-  const out: Omit<Unresolved, 'frame'>[] = [];
+  const out: Omit<Unresolved, 'frame' | 'theme'>[] = [];
   const seen = new Set<string>();
   let checked = 0;
 
@@ -163,32 +190,60 @@ export function auditPage(): PageAudit {
 
 export interface Audit {
   readonly found: readonly Unresolved[];
-  /** Total token resolutions performed across every frame. */
+  /** Total token resolutions performed across every frame and theme. */
   readonly checked: number;
+  /** Per-theme denominators. A theme that measured nothing is a theme whose
+   *  clean verdict means nothing, and the totals hide that. */
+  readonly perTheme: readonly { readonly theme: string; readonly checked: number }[];
 }
 
-export async function audit(frames: readonly string[]): Promise<Audit> {
+export async function audit(frames: readonly string[], themes: readonly Theme[] = THEMES): Promise<Audit> {
   return withGallery(async ({ browser, origin }) => {
     const found: Unresolved[] = [];
+    const perTheme: { theme: string; checked: number }[] = [];
     let checked = 0;
-    for (const frame of frames) {
-      const page = await browser.newPage();
-      await page.setViewport({ width: 1280, height: 1100 });
-      await page.goto(`${origin}/gallery.html?frame=${frame}`, { waitUntil: 'networkidle0' });
-      // React renders after the mock RPC stubs resolve; the mock is async.
-      await Bun.sleep(600);
-      const pageAudit = await page.evaluate(auditPage);
-      checked += pageAudit.checked;
-      for (const hit of pageAudit.findings) found.push({ ...hit, frame });
-      await page.close();
+    for (const theme of themes) {
+      const label = `${theme.palette} ${theme.mode}`;
+      let themeChecked = 0;
+      for (const frame of frames) {
+        const page = await browser.newPage();
+        await page.setViewport({ width: 1280, height: 1100 });
+        // The mode rides `prefers-color-scheme`, which is what the pre-paint
+        // script reads absent a stored choice; the palette has no media query,
+        // so it is seeded into the storage that same script reads. Both are set
+        // before navigation because the script runs once, at load, and installs
+        // no listener.
+        await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: theme.mode }]);
+        await page.evaluateOnNewDocument((p: string) => { localStorage.setItem('palette', p); }, theme.palette);
+        await page.goto(`${origin}/gallery.html?frame=${frame}`, { waitUntil: 'networkidle0' });
+        // React renders after the mock RPC stubs resolve; the mock is async.
+        await Bun.sleep(600);
+        const applied = await page.evaluate(() => ({
+          mode: document.documentElement.dataset.mode,
+          palette: document.documentElement.dataset.palette,
+        }));
+        if (applied.mode !== theme.mode || applied.palette !== theme.palette) {
+          await page.close();
+          throw new Error(
+            `computed-style: asked for ${label} on ${frame}, document is on `
+            + `${applied.palette} ${applied.mode} — the pass would have reported against the wrong theme`,
+          );
+        }
+        const pageAudit = await page.evaluate(auditPage);
+        themeChecked += pageAudit.checked;
+        for (const hit of pageAudit.findings) found.push({ ...hit, frame, theme: label });
+        await page.close();
+      }
+      perTheme.push({ theme: label, checked: themeChecked });
+      checked += themeChecked;
     }
-    return { found, checked };
+    return { found, checked, perTheme };
   });
 }
 
 /** Collapse to one row per (token, property): the same missing token under 30
- *  selectors is one defect, and the frame list is what tells you how much of
- *  the product it takes down. */
+ *  selectors is one defect, and the frame and theme lists are what tell you how
+ *  much of the product it takes down and in which themes. */
 export function summarise(found: readonly Unresolved[]): string[] {
   const byToken = new Map<string, Unresolved[]>();
   for (const hit of found) {
@@ -199,26 +254,44 @@ export function summarise(found: readonly Unresolved[]): string[] {
   }
   return [...byToken.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([key, hits]) => {
     const frames = [...new Set(hits.map((h) => h.frame))].sort();
-    return `  ${key} — unresolved at ${hits.length} rule(s) across ${frames.length} frame(s): `
-      + `${frames.join(', ')}\n      e.g. \`${hits[0]!.selector}\` on <${hits[0]!.element}>`;
+    const themes = [...new Set(hits.map((h) => h.theme))].sort();
+    return `  ${key} — unresolved at ${hits.length} rule(s) across ${frames.length} frame(s) `
+      + `in ${themes.join(' / ')}: ${frames.join(', ')}\n      e.g. \`${hits[0]!.selector}\` on <${hits[0]!.element}>`;
   });
 }
 
 if (import.meta.main) {
-  const named = process.argv.slice(2).filter((a) => !a.startsWith('--'));
-  const frames = named.length > 0 ? named : FRAMES;
-  const { found, checked } = await audit(frames);
-  // A denominator of zero means the page never rendered or the selectors never
-  // matched, and silence would read as a pass. It is a failure.
-  if (checked === 0) {
-    console.error(`computed-style: resolved 0 tokens across ${frames.length} frame(s) — nothing was measured`);
+  const argv = process.argv.slice(2);
+  const flag = (name: string): string | undefined => {
+    const at = argv.indexOf(`--${name}`);
+    return at === -1 ? undefined : argv[at + 1];
+  };
+  const palette = flag('palette');
+  const mode = flag('mode');
+  const themes = THEMES.filter((t) => (!palette || t.palette === palette) && (!mode || t.mode === mode));
+  if (themes.length === 0) {
+    console.error(`computed-style: --palette ${palette} --mode ${mode} names no theme`);
     process.exit(1);
   }
+  const named = argv.filter((a, i) => !a.startsWith('--') && argv[i - 1] !== '--palette' && argv[i - 1] !== '--mode');
+  const frames = named.length > 0 ? named : FRAMES;
+  const { found, checked, perTheme } = await audit(frames, themes);
+  // A denominator of zero means the page never rendered or the selectors never
+  // matched, and silence would read as a pass. It is a failure — per theme, not
+  // just in total, or three good themes would cover a fourth that measured
+  // nothing at all.
+  const empty = perTheme.filter((t) => t.checked === 0);
+  if (checked === 0 || empty.length > 0) {
+    const which = empty.length > 0 ? empty.map((t) => t.theme).join(', ') : 'every theme';
+    console.error(`computed-style: resolved 0 tokens in ${which} across ${frames.length} frame(s) — nothing was measured`);
+    process.exit(1);
+  }
+  const breakdown = perTheme.map((t) => `${t.theme} ${t.checked}`).join(', ');
   if (found.length === 0) {
-    console.log(`computed-style: ok — ${checked} token resolutions across ${frames.length} frames`);
+    console.log(`computed-style: ok — ${checked} token resolutions across ${frames.length} frames × ${themes.length} themes (${breakdown})`);
     process.exit(0);
   }
-  console.error(`computed-style: ${found.length} of ${checked} token reference(s) unresolved\n`);
+  console.error(`computed-style: ${found.length} of ${checked} token reference(s) unresolved (${breakdown})\n`);
   for (const line of summarise(found)) console.error(line);
   process.exit(1);
 }
