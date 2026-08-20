@@ -386,6 +386,208 @@ html, body, #root {
   --color-kumo-shadow-drop: rgba(43, 26, 4, 0.14);
 }
 
+/* ════════════════════════════════════════════════════════════════════
+   SILK (v2) — 絹, the product's own name, as a palette.
+
+   Selected by `data-palette="silk"` on <html>, which `use-theme.ts` sets
+   from the same store that sets `data-mode`. Absent the attribute the
+   umber palette above is what renders, so v1 remains the default and
+   this is a deviation from it rather than a replacement of it.
+
+   ── The idea ─────────────────────────────────────────────────────
+   Silk is one continuous filament with a triangular cross-section, and
+   that is why it has SHEEN: the same dyed cloth reads as two different
+   colours depending on whether you are looking along the warp or across
+   the weft. Shot silk makes that explicit — warp dyed one colour, weft
+   another, and the fabric changes as it moves.
+
+   So this palette is two threads, not one hue with steps:
+
+     the dye    藍, indigo — the traditional dye for 絹
+     the fibre  raw undyed silk, a warm pearl
+
+   and the modes are the two faces of the same cloth. DARK is the dyed
+   face: an indigo ground with the pale fibre catching the light, so the
+   accent is the BRIGHTEST thing on screen. LIGHT is the undyed face: a
+   raw-silk ground with the dye as the only saturated thing on it, so the
+   accent is the DARKEST. The two threads swap which one is ground and
+   which one is accent, which is why light here is not dark inverted —
+   the accent changes hue family between modes on purpose, and each
+   ladder is built against its own ground.
+
+   Sheen is the one gradient in the design and it is not painted: it is
+   the gap between `--c-accent` (the thread) and `--c-accent-fg` (the
+   light on the thread). The pair always moves AWAY from the ground —
+   brighter than it in dark, deeper than it in light.
+
+   The motif lands on something real without a line of new drawing code:
+   `swarm-tree.tsx` already strokes every link in `--c-border-strong` and
+   the winning line in `--c-accent`, so the tree is literally threads
+   with one of them catching light. Nothing there had to change.
+
+   ── What this rejects ────────────────────────────────────────────
+   · Deriving light from dark. The umber palette's own comment records
+     three passes of complaint from exactly that method. Deriving one
+     PALETTE from another is the same mistake on a different axis, so
+     both faces are declared complete and independently measured.
+   · Iridescence — gradient meshes, blurred glass, a shimmer animation
+     "because silk shines". Real sheen is narrow and directional; spread
+     over every panel it is just glassmorphism. It is rationed to two
+     tokens on one axis instead.
+   · A woven background texture. A tiled weave is a picture of the idea
+     rather than the idea, and it would sit under a workspace where the
+     hairlines are already the weave.
+   · A second accent hue for "warp vs weft" as a categorical pair. This
+     product has no categorical palette by policy (see the Kumo badge
+     mapping above) — a second accent would need a meaning, and there
+     is none to give it.
+   · Monochrome-plus-one-accent, the safe editorial answer. A greyscale
+     ground is what Kumo ships by default and what the umber palette
+     deliberately left, and it throws away the relationship between the
+     two modes that the whole direction is built on.
+
+   ── DARK — the dyed face ──────────────────────────────────────────
+   Ladder steps, as WCAG luminance ratios: recessed→bg 1.06, bg→sidebar
+   1.08, sidebar→surface 1.06, surface→elevated 1.08, elevated→overlay
+   1.10 — every rung at least as separated as umber's (1.06/1.04/1.04/
+   1.09/1.09), so the same "hierarchy from surface steps plus hairlines,
+   never shadows" rule still holds up. Worst-case text ratio across all
+   seven surfaces: text 11.4, text-2 6.5, text-3 4.8, accent-fg 10.3,
+   danger 5.1. ══ */
+[data-palette="silk"] {
+  --c-recessed: #0C1219;   /* wells, tracks, inset code */
+  --c-bg:       #111923;   /* the canvas — indigo at reading depth */
+  --c-sidebar:  #16202C;   /* chrome: rails, panel headers */
+  --c-surface:  #1A2532;   /* card */
+  --c-elevated: #1F2B3A;   /* raised: composer, dialogs, menus */
+  --c-overlay:  #243244;   /* dialogs */
+  /* Same argument as umber: moving up a dark ladder reads as both
+     "raised" and "a plane inside a card", so the two roles are one
+     value here and only diverge on paper. */
+  --c-fill:     #1F2B3A;
+
+  /* Hairlines are the FIBRE at low alpha, not the dye — a warm line on a
+     cool ground is what makes the weave visible at all. Umber draws its
+     rules the same structural way (accent alpha); the colour is what
+     tells the two palettes apart at a glance. */
+  --c-border:        rgba(227, 210, 174, 0.14);
+  --c-border-strong: rgba(227, 210, 174, 0.28);
+  --c-input-border:  rgba(227, 210, 174, 0.22);
+
+  --c-text:     #F4EFE6;   /* raw silk        15.5:1 on bg */
+  --c-text-2:   #BFB6A9;   /* spun            8.8:1 */
+  --c-text-3:   #A69C8E;   /* dim             6.5:1 on bg, 4.8:1 on overlay */
+
+  --c-accent:    #E3D2AE;  /* the thread — fills, strokes, the winning line */
+  --c-accent-fg: #F1E4C6;  /* the sheen — links, brand ink, active labels */
+  --c-accent-on: #131C27;  /* dye ink on the thread, 11.5:1 */
+  --c-accent-subtle: rgba(227, 210, 174, 0.14);
+
+  /* Status hues are silk dye colours — 若竹 bamboo, 山吹 amber, 紅 safflower,
+     and a muted teal for info. Info deliberately leaves the blue family:
+     on an indigo ground a blue status tone is the ground. */
+  --c-success:  #9BC7A2;   /* 9.3:1 */
+  --c-warning:  #DFAE72;   /* 8.8:1 */
+  --c-danger:   #E38A8A;   /* 7.0:1 */
+  --c-info:     #93BFC8;   /* 8.9:1 */
+
+  --c-success-tint: rgba(155, 199, 162, 0.14);
+  --c-warning-tint: rgba(223, 174, 114, 0.14);
+  --c-danger-tint:  rgba(227, 138, 138, 0.14);
+  --c-info-tint:    rgba(147, 191, 200, 0.14);
+  --c-neutral-tint: rgba(244, 239, 230, 0.07);
+
+  /* The user's turn is the dye at full strength — the one plane that is
+     more saturated than the canvas rather than lighter than it. */
+  --c-user-bg:     #17273D;
+  --c-user-border: rgba(227, 210, 174, 0.20);
+
+  --c-code:     #D8CBA4;   /* one thread tone on a well, 11.7:1 */
+  --c-code-bg:  var(--c-recessed);
+
+  --c-scrim: rgba(5, 9, 14, 0.58);
+
+  --shadow-card: none;
+  --shadow-overlay: 0 18px 44px -12px rgba(3, 7, 12, 0.62), 0 2px 8px rgba(3, 7, 12, 0.40);
+  --shadow-menu:    0 10px 28px -10px rgba(3, 7, 12, 0.55);
+  --shadow-composer: 0 -6px 24px -16px rgba(3, 7, 12, 0.50);
+}
+
+/* ── LIGHT — the undyed face ───────────────────────────────────────
+   Raw silk is not white: it is a warm cream with a faint grey cast, so
+   the ground is that and paper is a tinted off-white rather than #FFF.
+   The structure follows the rule umber's light mode arrived at after
+   three attempts — near-neutral ground, PAPER cards, hairlines you can
+   actually see, real elevation — because that rule was right and only
+   its hue was ours to choose. Measured steps: paper:canvas 1.14,
+   canvas:chrome 1.12, paper:fill 1.22, canvas:recessed 1.17; the
+   hairline is 1.42:1 on paper, matching umber's 1.43 rather than the
+   1.19 that vanished. Worst-case text across all seven surfaces: text
+   10.3, text-2 5.1, text-3 4.7, accent-fg 7.2.
+
+   Every token umber's light block declares is declared again here.
+   `[data-mode="light"]` and `[data-palette="silk"]` carry equal
+   specificity, so a token this pair left out would fall back to
+   whichever of those two declared it last — silk's dark value, or
+   umber's light one. Completeness is what makes the cascade
+   deterministic, and `unit-palette-contrast` asserts it. ── */
+[data-palette="silk"][data-mode="light"] {
+  --c-recessed: #E0DACB;   /* wells, tracks, code */
+  --c-sidebar:  #E4DFD1;   /* chrome: rails, panel headers */
+  --c-fill:     #E9E4D7;   /* chips, segments, tracks, hover */
+  --c-bg:       #EFEBE0;   /* the canvas — undyed silk */
+  --c-surface:  #FCFAF4;   /* cards — paper, tinted, never #FFF */
+  --c-elevated: #FCFAF4;   /* raised — paper, lifted by shadow */
+  --c-overlay:  #FCFAF4;   /* dialogs — paper, lifted further */
+
+  /* Borders swap thread: on the undyed face the line is the DYE, which is
+     the same reading as dark (the line is whichever thread the ground is
+     not) and keeps a rule looking like the same rule in both modes. */
+  --c-border:        rgba(35, 63, 96, 0.20);
+  --c-border-strong: rgba(35, 63, 96, 0.34);
+  --c-input-border:  rgba(35, 63, 96, 0.26);
+
+  --c-text:     #202B36;   /* 13.8:1 on paper */
+  --c-text-2:   #4C5A66;   /*  6.8:1 */
+  --c-text-3:   #545F69;   /*  6.3:1 on paper, 4.7:1 on recessed */
+
+  --c-accent:    #2F5480;  /* the dye — fills, strokes, the winning line */
+  --c-accent-fg: #234465;  /* deeper dye for ink, 9.6:1 on paper */
+  --c-accent-on: #FBF7EE;  /* fibre ink on the dye, 7.3:1 */
+  --c-accent-subtle: rgba(47, 84, 128, 0.16);
+
+  --c-success:  #2E6337;
+  --c-warning:  #7B5310;
+  --c-danger:   #9C3527;
+  --c-info:     #16606B;
+
+  --c-success-tint: rgba(46, 99, 55, 0.11);
+  --c-warning-tint: rgba(123, 83, 16, 0.12);
+  --c-danger-tint:  rgba(156, 53, 39, 0.11);
+  --c-info-tint:    rgba(22, 96, 107, 0.11);
+  --c-neutral-tint: rgba(32, 43, 54, 0.08);
+
+  /* The user's turn stays the dye, at the strength cream can carry. */
+  --c-user-bg:     #E4EAF3;
+  --c-user-border: rgba(35, 68, 101, 0.22);
+
+  --c-code:     #22405E;   /* dye ink deepened for the well, 7.7:1 on it */
+  --c-code-bg:  var(--c-recessed);
+
+  --c-scrim: rgba(18, 26, 38, 0.34);
+
+  /* Shadows are cool ink here, and they are the whole reason a paper card
+     on a cream canvas reads as an object. */
+  --shadow-card:    0 1px 2px rgba(24, 34, 48, 0.05), 0 2px 6px -2px rgba(24, 34, 48, 0.07);
+  --shadow-overlay: 0 16px 40px -14px rgba(18, 26, 38, 0.20), 0 2px 8px rgba(18, 26, 38, 0.07);
+  --shadow-menu:    0 10px 24px -10px rgba(18, 26, 38, 0.18), 0 1px 3px rgba(18, 26, 38, 0.06);
+  --shadow-composer: 0 -6px 20px -16px rgba(18, 26, 38, 0.14), 0 1px 2px rgba(24, 34, 48, 0.05);
+
+  /* Same single escape umber's light block makes: Kumo's drop shadow has no
+     palette equivalent, and black over cream is a smudge. */
+  --color-kumo-shadow-drop: rgba(18, 26, 38, 0.14);
+}
+
 body { background: var(--c-bg); color: var(--c-text); }
 
 /* ── Scrollbars — calm at rest, visible on interaction ───────────────
