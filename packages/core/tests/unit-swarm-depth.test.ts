@@ -35,6 +35,7 @@ import { initSearchTables } from '../src/mcts/schemas';
 import { insertSearchNode } from '../src/mcts/record-node';
 import { backpropagate } from '../src/mcts/backpropagation';
 import { selectFrontierNode, type FrontierPolicy } from '../src/mcts/frontier';
+import { diversityAngle } from '../src/mcts/diversity';
 import { runSwarm } from '../src/strategy/swarm-run';
 import { SOLUTION_FILE } from '../src/strategy/exec-ratio';
 import { readExplorationCanvas } from '../src/read-models/exploration-canvas';
@@ -50,7 +51,7 @@ import { resolveVerifier } from '../src/strategy/verifier-registry';
 import type { Floor, Objective, ObjectiveIdentity } from '../src/strategy/objective';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { SearchNode } from '../src/types/mcts';
-import type { SqlExecutor } from '../src/types/primitives';
+import type { LLM, SqlExecutor } from '../src/types/primitives';
 
 /* ── The arbiter, against the theorems ────────────────────────────────────── */
 
@@ -1826,5 +1827,161 @@ describe("the archive's own region, and the refusal `pareto` now carries alone",
     // The cause it no longer shares with the archive, and the archive it no longer names.
     expect(refusal.error).not.toContain('front or an archive');
     expect(refusal.error).not.toContain('no writer for');
+  }, 60_000);
+});
+
+/* ── The direction a judged run ranks in ──────────────────────────────────── */
+
+/**
+ * A JUDGED RUN CROWNS THE HIGHEST MEDIAN, and what is asserted here is the ORDER.
+ *
+ * The judged tests above assert `best.score > 0`, which every candidate of every judged
+ * run in this repository satisfies: `rt.judgeModel` is the shared mock and it answers
+ * 0.5 to every prompt, so a whole wave TIES and the comparison is unobservable. Read the
+ * other way this run would crown the WORST approach and report a positive number for it,
+ * which is a failure that reads exactly like a search that worked.
+ *
+ * So each sibling below gets a DIFFERENT median, keyed off the diversity angle the engine
+ * handed it, and the highest sits in the MIDDLE of the wave. The placement is the point:
+ * an ordering asserted over a set whose maximum is also its first or its last member is
+ * equally satisfied by "take the first" and by "take the last", and neither of those is
+ * the rule. `awaitLevel` returns the order it was given, so a candidate's position in
+ * `result.candidates` is its branch index rather than an artefact of scheduling.
+ *
+ * PROSE, DELIBERATELY. A judged prose candidate scores `PROSE_CONFIDENCE × median`, which
+ * is strictly monotone in the median and spends no executor call — so the medians are the
+ * only thing separating these candidates, and what the assertions reach is the engine's
+ * own comparison rather than the evaluator's band arithmetic.
+ */
+describe("a judged run's winner is the highest median, not the lowest", () => {
+  /** One median per branch. Five of them, all distinct so that "the maximum" names
+   *  exactly one, and the maximum at index 2 so it is neither the first candidate the
+   *  wave produced nor the last. */
+  const MEDIANS = [0.20, 0.55, 0.95, 0.40, 0.10] as const;
+
+  /** Whose median is highest. Named because three assertions are about this one branch
+   *  and a repeated literal could come to disagree with the table above it. */
+  const WINNER = 2;
+
+  /** What a branch writes into its answer so the judge — and then the assertions — can
+   *  tell which branch produced it. */
+  const MARK = 'MEDIAN-MARK-';
+
+  test('the wave is ranked highest-first, and the crown goes to the interior maximum', async () => {
+    // A PROSE ANSWER PER BRANCH, keyed off the angle the engine handed it and never off a
+    // call counter: the wave runs under one `Promise.all`, so a counter would decide which
+    // branch is which by scheduling. Only a branch's OWN angle is introduced by
+    // `Your angle:` — its siblings' angles arrive as a numbered calibration block — so the
+    // match names exactly one branch.
+    const model = new MockLanguageModelV3({
+      provider: 'fake',
+      modelId: 'fake-judged-wave',
+      doGenerate: async ({ prompt }) => {
+        const sent = JSON.stringify(prompt);
+        const branch = MEDIANS.findIndex(
+          (_unused, index) => sent.includes(`Your angle: ${diversityAngle(index, MEDIANS.length)}.`),
+        );
+        if (branch === -1) throw new Error('a node was expanded with no angle, so no branch can be named');
+        return {
+          content: [{
+            type: 'text' as const,
+            text: 'Bound the loop by the running maximum instead of comparing every pair. '
+              + `${MARK}${String(branch)}`,
+          }],
+          finishReason: { unified: 'stop' as const, raw: undefined },
+          usage: {
+            inputTokens: { total: 11, noCache: 11, cacheRead: undefined, cacheWrite: undefined },
+            outputTokens: { total: 22, text: 22, reasoning: undefined },
+          },
+          warnings: [],
+        };
+      },
+    });
+
+    // THE JUDGE FOR THIS RUN, answering per CANDIDATE rather than per call. Every sibling's
+    // text is in the prompt too — the ensemble is asked to calibrate against them — so a
+    // search over the whole prompt would hand every candidate the same median and rebuild
+    // the tie this test exists to break. The prompt's own section header bounds the read.
+    const judgeModel: LLM = {
+      // eslint-disable-next-line require-yield -- an ensemble only ever calls `complete`.
+      async *stream(): AsyncIterable<string> {
+        throw new Error('the judge was streamed, which no ensemble does');
+      },
+      async complete(prompt: string): Promise<string> {
+        const candidate = prompt.split('Candidate approach:\n')[1]?.split('\nSibling approaches')[0] ?? '';
+        const branch = MEDIANS.findIndex((_unused, index) => candidate.includes(`${MARK}${String(index)}`));
+        if (branch === -1) {
+          throw new Error(`the judge could not tell which candidate it was given: ${candidate.slice(0, 200)}`);
+        }
+        return JSON.stringify({ score: MEDIANS[branch], rationale: 'scored by branch' });
+      },
+    };
+
+    const call = resolveSwarm({
+      preset: 'custom',
+      label: 'judged-rank',
+      task: 'Say in prose how to find the largest token with fewer comparisons.',
+      // FLAT and ONE sample: `advance:'none'` has no selection step, so the marginalisation
+      // floor does not apply and the realised ensemble is exactly one — which makes the
+      // median the single number this test chose rather than an aggregate over noise.
+      config: treeConfig({ score: { kind: 'judge', samples: 1 }, advance: { kind: 'none' } }),
+      depth: 1,
+      branches: MEDIANS.length,
+    });
+    if ('reason' in call) throw new Error(`the suite's own composition does not resolve: ${call.error}`);
+    expect(swarmValidity(call)).toBeNull();
+
+    const { rt } = createTestRuntime();
+    const result = await runSwarm(
+      { rt: { ...rt, judgeModel }, model, mode: 'build', logger: createRecordingLogger() },
+      call,
+    );
+    if ('reason' in result) throw new Error(`the run must not refuse: ${result.error}`);
+
+    // THE DENOMINATORS, each load-bearing. Five candidates, one per branch, each
+    // identifiable; one judge sample, so a candidate's score really is the median chosen
+    // for it; and five DISTINCT scores, because a direction asserted over a tie is
+    // asserted over nothing at all — which is the gap this test closes.
+    expect(result.report.judgeEnsemble).toEqual({ requested: 1, realised: 1 });
+    expect(result.candidates).toHaveLength(MEDIANS.length);
+    const byBranch = new Map<number, number>();
+    for (const candidate of result.candidates) {
+      const branch = MEDIANS.findIndex(
+        (_unused, index) => candidate.artifact.includes(`${MARK}${String(index)}`),
+      );
+      if (branch === -1) throw new Error(`a candidate carried no branch mark: ${candidate.artifact}`);
+      if (candidate.score === null) throw new Error(`branch ${String(branch)} was not scored at all`);
+      byBranch.set(branch, candidate.score);
+    }
+    expect(byBranch.size).toBe(MEDIANS.length);
+    expect(new Set(byBranch.values()).size).toBe(MEDIANS.length);
+
+    // THE ORDER, over every pair rather than at the extremes: the run's own score is
+    // monotone in the median the judge returned. Without this the crown below would also
+    // hold of a scorer that ignored the judge entirely.
+    for (const [i, mine] of MEDIANS.entries()) {
+      for (const [j, theirs] of MEDIANS.entries()) {
+        if (mine <= theirs) continue;
+        const higher = byBranch.get(i);
+        const lower = byBranch.get(j);
+        if (higher === undefined || lower === undefined) throw new Error('a branch went unscored');
+        expect(higher).toBeGreaterThan(lower);
+      }
+    }
+
+    // AND THE RUN CROWNED THE MAXIMUM. Branch 2 holds the highest median and is interior to
+    // the wave, so no "first" or "last" rule satisfies this; ranked the other way the crown
+    // lands on branch 4 and the run reports its worst approach as its answer.
+    expect(Math.max(...MEDIANS)).toBe(MEDIANS[WINNER]);
+    expect(WINNER).toBeGreaterThan(0);
+    expect(WINNER).toBeLessThan(MEDIANS.length - 1);
+    const best = result.best;
+    if (!best) throw new Error('a judged wave that scored five candidates must crown one of them');
+    expect(best.artifact).toContain(`${MARK}${String(WINNER)}`);
+    expect(best.score).toBe(Math.max(...byBranch.values()));
+    for (const [branch, score] of byBranch) {
+      if (branch === WINNER) continue;
+      expect(best.score ?? 0).toBeGreaterThan(score);
+    }
   }, 60_000);
 });
