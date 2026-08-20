@@ -97,6 +97,7 @@ export interface BehaviourOutput {
   scores: BehaviourScoreJson[];
   tokensIn: number;
   tokensOut: number;
+  reasoningOut: number;
   [key: string]: JsonValue;
 }
 
@@ -173,6 +174,7 @@ interface LedgerTotals {
   toolNames: string[];
   tokensIn: number;
   tokensOut: number;
+  reasoningOut: number;
   /** Model steps the episode closed, counted from `step_finish`. Compared against
    *  the pre-registered step cap to decide whether the episode was TRUNCATED —
    *  which is the one number that keeps a cap from silently changing what a run
@@ -198,7 +200,7 @@ function readLedgerTotals(db: Database): LedgerTotals {
     if (page.status === 'end') break;
     cursor = page.next;
   }
-  let turns = 0, toolCalls = 0, tokensIn = 0, tokensOut = 0, steps = 0;
+  let turns = 0, toolCalls = 0, tokensIn = 0, tokensOut = 0, reasoningOut = 0, steps = 0;
   const toolNames: string[] = [];
   // Why a turn produced nothing. A degenerate run that cannot say why is a dead
   // end for whoever reads the record: "0 tool calls" is equally consistent with
@@ -215,6 +217,7 @@ function readLedgerTotals(db: Database): LedgerTotals {
       // mid-flight; this edit only keeps the build green.
       tokensIn += event.usage?.input ?? 0;
       tokensOut += event.usage?.output ?? 0;
+      reasoningOut += event.usage?.reasoning ?? 0;
     } else if (event.type === 'tool_call_end') {
       toolCalls += 1;
       toolNames.push(event.name);
@@ -227,7 +230,7 @@ function readLedgerTotals(db: Database): LedgerTotals {
       failures.push(`run_end: ${event.error}`);
     }
   }
-  return { turns, toolCalls, toolNames, tokensIn, tokensOut, steps, failures };
+  return { turns, toolCalls, toolNames, tokensIn, tokensOut, reasoningOut, steps, failures };
 }
 
 /**
@@ -539,5 +542,6 @@ export async function runBehaviourTask(
     scores: toScoreJson([...outcome, stepCapRow(totals.steps), ...scoreTrajectory(makeSql(db))]),
     tokensIn: totals.tokensIn,
     tokensOut: totals.tokensOut,
+    reasoningOut: totals.reasoningOut,
   };
 }
