@@ -58,6 +58,7 @@ import { StepInjections } from '../prompting/step-injections';
 import { nanoid } from '../utils/nanoid';
 import { isWorkMode, type WorkMode } from '../prompting/surface';
 import type { JsonObject } from '../utils/json';
+import { stampTurnAuthor } from '../utils/ui-message';
 import { diagnostics, ProteusError, toProteusError } from '../obs/index';
 
 const SignalIdMetadataSchema = v.object({
@@ -241,12 +242,16 @@ export class SignalDelivery implements SignalDeliverer {
 const stepBody = (signal: AgentSignal): string => signal.stepText ?? signal.text;
 
 /** The turn metadata a signal carries: its `proteusEvent` provenance, the
- *  reply binding its source rows are bound to, and the producer's own. */
+ *  reply binding its source rows are bound to, and the producer's own.
+ *
+ *  The author stamp goes on LAST, after the producer's metadata, so the seam
+ *  owns it: a producer says it carries the operator's words by naming the
+ *  author, never by overwriting the stamp underneath the seam. */
 const turnMetadata = (signal: AgentSignal): JsonObject => {
   const metadata: JsonObject = { proteusEvent: signal.kind };
   if (signal.replyTurnId) metadata.drainTurnId = signal.replyTurnId;
   Object.assign(metadata, signal.metadata);
-  return metadata;
+  return stampTurnAuthor(metadata);
 };
 
 function reportRedeliveryFailure(kind: string) {

@@ -88,7 +88,7 @@ describe('SignalDelivery — one delivery time: the next step', () => {
     expect(signals.prepareStep({ stepNumber: 1, messages: [user('q')] })).toBeUndefined();
     expect(queued).toEqual([{
       text: 'mail from bob',
-      metadata: { proteusEvent: 'event_drain', signalId: cards[0]!.id },
+      metadata: { proteusEvent: 'event_drain', proteusAuthor: 'harness', signalId: cards[0]!.id },
     }]);
   });
 
@@ -111,7 +111,7 @@ describe('SignalDelivery — one delivery time: the next step', () => {
       metadata: { jobId: 'bgjob-1', status: 'completed' },
     })).toBe('queued');
     expect(idle.queued[0]!.metadata).toEqual({
-      proteusEvent: 'background_job', jobId: 'bgjob-1', status: 'completed',
+      proteusEvent: 'background_job', proteusAuthor: 'harness', jobId: 'bgjob-1', status: 'completed',
       signalId: idle.cards[0]!.id,
     });
   });
@@ -155,7 +155,7 @@ describe('SignalDelivery — one delivery time: the next step', () => {
     const queuedPath = setup({ turnInFlight: false });
     await queuedPath.signals.deliver(wake('drain', { replyTurnId: 'evt-1' }));
     expect(queuedPath.queued[0]!.metadata).toEqual({
-      proteusEvent: 'event_drain', drainTurnId: 'evt-1', signalId: queuedPath.cards[0]!.id,
+      proteusEvent: 'event_drain', proteusAuthor: 'harness', drainTurnId: 'evt-1', signalId: queuedPath.cards[0]!.id,
     });
   });
 });
@@ -170,7 +170,7 @@ describe('SignalDelivery — the user\'s card', () => {
     const opened = cards[0]!;
     expect(opened).toMatchObject({
       type: 'signal_card', state: 'pending',
-      metadata: { proteusEvent: 'event_drain' },
+      metadata: { proteusEvent: 'event_drain', proteusAuthor: 'harness' },
       // What the agent will actually read on this path, not the other one's.
       text: 'mid-turn: mail from bob',
     });
@@ -285,7 +285,7 @@ describe('SignalDelivery — settlement', () => {
     await Promise.resolve();
     expect(queued).toEqual([{
       text: 'arrived at the final step',
-      metadata: { proteusEvent: 'event_drain', drainTurnId: 'evt-late', signalId: cards[0]!.id },
+      metadata: { proteusEvent: 'event_drain', proteusAuthor: 'harness', drainTurnId: 'evt-late', signalId: cards[0]!.id },
     }]);
     // Settle reset the state — the next turn starts clean.
     expect(signals.prepareStep({ stepNumber: 0, messages: [user('next')] })).toBeUndefined();

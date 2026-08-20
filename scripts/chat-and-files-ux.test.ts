@@ -59,13 +59,65 @@ interface TailFrame {
   readonly runningDots: number;
 }
 
+/** One chat row, as the browser placed and drew it. */
+interface ChatRow {
+  /** The owner's bubble, by the class only the user branch draws. */
+  readonly userBubbles: number;
+  /** The generic harness-event card's event name, or null when there is none. */
+  readonly systemEvent: string | null;
+  /** The card body clipped to one line — "collapsed by default", measured as
+   *  content that does not fit rather than as a class name. */
+  readonly folded: boolean;
+  /** Row centre minus column centre, in px. The owner's bubble is pushed right;
+   *  an event card is centred. Sign and size are the whole difference a reader
+   *  sees at a glance, so they are what is measured. */
+  readonly offsetFromCentrePx: number;
+}
+
 interface Observed {
   readonly tails: TailFrame[];
+  readonly chat: Record<string, ChatRow>;
+  readonly forkInterruptedAfterClick: ChatRow;
+  /** The failed-turn card's headline, keyed by whether it is a replay. */
+  readonly chatErrorHeadings: Record<string, string>;
   readonly filesHome: string;
   readonly filesAfterUp: string;
   readonly filesAfterUpEntries: string[];
   readonly capabilityChips: string[];
   readonly capabilityAbsences: string;
+}
+
+/** The gallery ids the provenance assertions address (gallery.tsx MESSAGES). */
+const LEGACY_FORK_ROW = 'f8798675-5e9a-4d13-aac2-293f4557f1c1';
+const STAMPED_GATE_ROW = 'programmatic:completion-gate-1';
+const TYPED_ROW = 'u1';
+const DRAIN_ROW = 'd1';
+
+async function readChatRows(page: Page): Promise<Record<string, ChatRow>> {
+  return page.$$eval('[data-chat-row]', (rows) => {
+    const measured: Record<string, {
+      userBubbles: number; systemEvent: string | null; folded: boolean; offsetFromCentrePx: number;
+    }> = {};
+    for (const row of rows) {
+      const card = row.querySelector('[data-system-event]');
+      // The drawn box, not the full-width row: a centred card and a
+      // right-pushed bubble both live inside a full-width block.
+      const drawn = card ?? row.querySelector('.p-user-bubble') ?? row.firstElementChild ?? row;
+      const column = row.parentElement ?? row;
+      const drawnBox = drawn.getBoundingClientRect();
+      const columnBox = column.getBoundingClientRect();
+      const body = card?.querySelector('.truncate, .whitespace-pre-wrap') ?? null;
+      measured[row.getAttribute('data-chat-row') ?? ''] = {
+        userBubbles: row.querySelectorAll('.p-user-bubble').length,
+        systemEvent: card?.getAttribute('data-system-event') ?? null,
+        folded: body === null ? false : body.scrollWidth > body.clientWidth,
+        offsetFromCentrePx: Math.round(
+          (drawnBox.left + drawnBox.width / 2) - (columnBox.left + columnBox.width / 2),
+        ),
+      };
+    }
+    return measured;
+  });
 }
 
 async function readTails(page: Page): Promise<TailFrame[]> {
@@ -98,6 +150,38 @@ async function run(): Promise<Observed> {
     await stream.waitForSelector('[data-gallery-stream] .p-streaming');
     const tails = await readTails(stream);
     await stream.close();
+
+    const chatPage = await browser.newPage();
+    await chatPage.setViewport({ width: 1280, height: 1600 });
+    await chatPage.goto(`${origin}/gallery.html?frame=chat`, { waitUntil: 'networkidle0' });
+    await chatPage.reload({ waitUntil: 'networkidle0' });
+    await chatPage.waitForSelector(`[data-chat-row="${LEGACY_FORK_ROW}"]`);
+    const chat = await readChatRows(chatPage);
+    // Folded by DEFAULT, not folded permanently: the words are still reachable,
+    // which is what makes hiding them by default honest rather than lossy.
+    //
+    // Guarded, because a regression that puts this row back in the owner's
+    // bubble removes the button too, and a `beforeAll` that throws on a missing
+    // selector reports the whole file red — including the streaming and file
+    // panes, which such a regression does not touch. The named assertions below
+    // carry the failure instead, and say which wire broke.
+    const toggle = `[data-chat-row="${LEGACY_FORK_ROW}"] [data-system-event] button`;
+    if (await chatPage.$(toggle) !== null) {
+      await chatPage.click(toggle);
+      await chatPage.waitForFunction(
+        (selector: string) => document.querySelector(selector)?.getAttribute('aria-expanded') === 'true',
+        { timeout: 10_000 }, toggle,
+      );
+    }
+    const forkInterruptedAfterClick = (await readChatRows(chatPage))[LEGACY_FORK_ROW]!;
+    const chatErrorHeadings = Object.fromEntries(await chatPage.$$eval(
+      '[data-chat-error]',
+      (cards) => cards.map((card) => [
+        card.getAttribute('data-chat-error') ?? '',
+        card.querySelector('.font-medium')?.textContent ?? '',
+      ]),
+    ));
+    await chatPage.close();
 
     const files = await browser.newPage();
     await files.setViewport({ width: 1280, height: 1100 });
@@ -146,7 +230,8 @@ async function run(): Promise<Observed> {
     await files.close();
 
     return {
-      tails, filesHome, filesAfterUp, filesAfterUpEntries,
+      tails, chat, forkInterruptedAfterClick, chatErrorHeadings,
+      filesHome, filesAfterUp, filesAfterUpEntries,
       capabilityChips, capabilityAbsences,
     };
   });
@@ -213,6 +298,66 @@ describe('the streaming turn, as a browser lays it out', () => {
 
   test('a turn actively writing text is never also announced as thinking', () => {
     expect(observed.tails[TEXT]!.thinkingRows).toBe(0);
+  });
+});
+
+describe('a turn the harness wrote, as the browser attributes it', () => {
+  test('it measures something — every addressed row is on the page', () => {
+    for (const id of [LEGACY_FORK_ROW, STAMPED_GATE_ROW, TYPED_ROW, DRAIN_ROW]) {
+      expect(observed.chat[id]).toBeDefined();
+    }
+  });
+
+  test('the owner\'s own message is still the owner\'s bubble, pushed right', () => {
+    // The denominator. Without it, a change that turned EVERY row into an event
+    // card would satisfy every assertion below.
+    const typed = observed.chat[TYPED_ROW]!;
+    expect(typed.userBubbles).toBe(1);
+    expect(typed.systemEvent).toBeNull();
+    expect(typed.offsetFromCentrePx).toBeGreaterThan(20);
+  });
+
+  test('the fork-interrupted row wears an event card, never the owner\'s bubble', () => {
+    // THE INCIDENT, as a browser draws it. This row is the production shape:
+    // a bare UUID id and `proteusEvent: fork_interrupted`, no author stamp,
+    // which is what five rows in the owner's live workspaces look like. Under
+    // the four-name allowlist this rendered right-aligned in `.p-user-bubble`.
+    const fork = observed.chat[LEGACY_FORK_ROW]!;
+    expect(fork.userBubbles).toBe(0);
+    expect(fork.systemEvent).toBe('fork_interrupted');
+    expect(Math.abs(fork.offsetFromCentrePx)).toBeLessThan(20);
+  });
+
+  test('a stamped harness turn lands the same way, without its event name mattering', () => {
+    const gate = observed.chat[STAMPED_GATE_ROW]!;
+    expect(gate.userBubbles).toBe(0);
+    expect(gate.systemEvent).toBe('completion_gate');
+    expect(Math.abs(gate.offsetFromCentrePx)).toBeLessThan(20);
+  });
+
+  test('the harness\'s words are folded away, and open when asked', () => {
+    // Collapsed by default is a measurement here, not a class name: the body
+    // holds more than it shows. Clicking it makes the row taller and stops it
+    // overflowing, which is the difference between folded and truncated.
+    expect(observed.chat[LEGACY_FORK_ROW]!.folded).toBe(true);
+    expect(observed.forkInterruptedAfterClick.folded).toBe(false);
+  });
+
+  test('an event kind that HAS a card keeps it — the fallback did not swallow them', () => {
+    // `event_drain` renders its parsed events, not the generic card. A fallback
+    // that captured everything would read as green here while erasing four
+    // purpose-built renderings.
+    const drain = observed.chat[DRAIN_ROW]!;
+    expect(drain.systemEvent).toBeNull();
+    expect(drain.userBubbles).toBe(0);
+  });
+
+  test('a replayed failure does not claim to be a live one', () => {
+    // `sunlit-stone-4a20` still answers a resume ACK with
+    // {"body":"Unauthorized","done":true,"error":true} from a turn that ended
+    // 2026-08-17. Both states are on the page, and they must not read alike.
+    expect(observed.chatErrorHeadings.live).toBe('The last turn failed and produced no answer');
+    expect(observed.chatErrorHeadings.replayed).toBe('This workspace was last left on a failed turn');
   });
 });
 

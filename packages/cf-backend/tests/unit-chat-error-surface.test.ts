@@ -17,13 +17,21 @@ const page = readFileSync(join(import.meta.dir, '..', 'src', 'pages', 'Workspace
 describe('use-proteus chat-error wiring', () => {
   test('consumes the useAgentChat stream error and folds it into chatError', () => {
     expect(hook).toContain('error: streamError');
-    expect(hook).toContain('if (streamError) setChatError(streamError.message || String(streamError))');
+    // Live by construction: the transport only reaches this channel for a
+    // request id still in flight, so it is never a replay.
+    expect(hook).toContain('setChatError({ body: streamError.message || String(streamError), replayed: false })');
   });
 
   test('catches the on-connect terminal-error replay frame in the raw onMessage handler', () => {
     const handler = hook.slice(hook.indexOf('onMessage: useCallback'), hook.indexOf('const {'));
     expect(handler).toContain('data?.type === "cf_agent_use_chat_response" && data.error === true && data.done === true');
     expect(handler).toContain('setChatError(');
+    // And it must be able to SAY it is a replay. The server keeps its last
+    // terminal record until a later turn supersedes it, so an idle workspace
+    // re-serves an old failure on every connect; the id it announced in
+    // `cf_agent_stream_resuming` is what tells the two apart.
+    expect(handler).toContain('resumedRequestIds.current.add(data.id)');
+    expect(handler).toContain('replayed: data.id !== undefined && resumedRequestIds.current.has(data.id)');
   });
 
   test('clears the error on the next send and on workspace switch; exposes retry + clear + state', () => {

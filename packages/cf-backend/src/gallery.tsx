@@ -440,6 +440,23 @@ const MESSAGES: UIMessage[] = [
     metadata: { proteusEvent: "event_drain" },
     parts: [{ type: "text", text: "While you were idle:\n- [subordinate_report] from subordinate (coupon-tester): All 14 checkout regression tests green after the migration patch. [the sender awaits your answer]\n- [webhook] from github (AshishKumar4/shop): PR #212 review requested" }],
   }),
+  // The row the incident was, copied from production: `sunlit-stone-4a20` and
+  // `stone-ash-71f2` hold five of these, written before the author stamp
+  // existed, so a bare UUID id and the event name are the only markers on them
+  // — and until the classifier stopped being an allowlist of four names, all
+  // five were drawn in the owner's bubble, above things they had typed.
+  msg({
+    id: "f8798675-5e9a-4d13-aac2-293f4557f1c1", role: "user",
+    metadata: { proteusEvent: "fork_interrupted", runs: ["6xrijuf933p0jclpctw59"], heads: 23 },
+    parts: [{ type: "text", text: "23 head(s) across 6 fork run(s) were still marked running from an activation that has ended, so nothing is executing them and no report will arrive. They have been released; re-run the ones you still need." }],
+  }),
+  // The same class, written the new way: the seam stamped the author, so the
+  // event name is no longer load-bearing for the decision.
+  msg({
+    id: "programmatic:completion-gate-1", role: "user",
+    metadata: { proteusEvent: "completion_gate", proteusAuthor: "harness" },
+    parts: [{ type: "text", text: "[Runtime check — a mechanical gate from the Proteus harness, not written by the user.]\n\nYou said the task is done. Here is the current state of the working directory, read after you stopped." }],
+  }),
   msg({
     id: "a2", role: "assistant", createdAt: NOW - 3 * 60e3,
     parts: [
@@ -1463,9 +1480,11 @@ function GalleryComposer({ notices = [] }: { notices?: readonly ComposerNotice[]
 
 function ChatMessages() {
   return (
-    <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8">
+    <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8" data-gallery-chat>
       {MESSAGES.map((m, i) => (
-        <MessageView key={m.id} message={m} isLast={i === MESSAGES.length - 1} isStreaming={false} onFork={() => {}} />
+        <div key={m.id} data-chat-row={m.id}>
+          <MessageView message={m} isLast={i === MESSAGES.length - 1} isStreaming={false} onFork={() => {}} />
+        </div>
       ))}
       <DeviceConsentCard
         consent={{
@@ -1475,6 +1494,10 @@ function ChatMessages() {
         onResolve={() => {}}
       />
       <ChatErrorCard message="fetch failed: provider stream reset before completion (anthropic/claude-opus-4)" streaming={false} onRetry={() => {}} onDismiss={() => {}} />
+      {/* The same card re-serving an OLDER turn's outcome. `sunlit-stone-4a20`
+          answers a resume ACK with exactly this body today, from a turn that
+          ended 2026-08-17 — the state the owner opens an idle workspace into. */}
+      <ChatErrorCard message="Unauthorized" replayed streaming={false} onRetry={() => {}} onDismiss={() => {}} />
     </div>
   );
 }

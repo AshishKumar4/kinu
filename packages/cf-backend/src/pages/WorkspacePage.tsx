@@ -151,7 +151,7 @@ export function DeviceConsentCard({ consent, onResolve }: {
 }
 
 /**
- * Terminal chat error — the turn failed (provider error, stream break) and
+ * Terminal chat error — a turn failed (provider error, stream break) and
  * produced no visible answer.
  *
  * The retry RE-RUNS that turn rather than asking the same thing again: the
@@ -159,23 +159,39 @@ export function DeviceConsentCard({ consent, onResolve }: {
  * on every press and three attempts left three identical turns in the
  * transcript. The error body is shown verbatim; the hook clears the card on
  * the next send.
+ *
+ * A REPLAYED failure is not the same claim and does not get the same words.
+ * The server retains its last terminal record until a later turn supersedes
+ * it, so a workspace parked after a failure re-serves that failure to every
+ * client that opens it — `sunlit-stone-4a20` still answers with the
+ * `Unauthorized` its 2026-08-17 turn ended on. Presenting that as "the last
+ * turn failed" reads as something that just happened, and sends the owner
+ * chasing a fault that may be three days gone.
  */
-export function ChatErrorCard({ message, streaming, onRetry, onDismiss }: {
+export function ChatErrorCard({ message, replayed, streaming, onRetry, onDismiss }: {
   message: string;
+  /** The server is re-serving an older turn's outcome, not reporting a live one. */
+  replayed?: boolean;
   streaming: boolean;
   onRetry: () => void;
   onDismiss: () => void;
 }) {
   return (
-    <div className="rounded-xl border p-3 animate-fade-in p-elevated" style={{ borderColor: "var(--c-danger)" }}>
+    <div className="rounded-xl border p-3 animate-fade-in p-elevated" data-chat-error={replayed ? "replayed" : "live"}
+      style={{ borderColor: replayed ? "var(--c-border)" : "var(--c-danger)" }}>
       <div className="flex items-start gap-2">
-        <WarningCircleIcon size={16} className="p-danger shrink-0 mt-0.5" weight="fill" />
+        <WarningCircleIcon size={16} className={`shrink-0 mt-0.5 ${replayed ? "p-text-3" : "p-danger"}`} weight="fill" />
         <div className="min-w-0 flex-1">
-          <div className="text-xs p-text font-medium">The last turn failed and produced no answer</div>
+          <div className="text-xs p-text font-medium">
+            {replayed
+              ? "This workspace was last left on a failed turn"
+              : "The last turn failed and produced no answer"}
+          </div>
           <code className="block mt-1 text-[11px] p-text-2 font-mono break-all p-card rounded-sm px-2 py-1 max-h-28 overflow-y-auto">{message}</code>
           <div className="text-[10px] p-text-3 mt-1.5">
-            Retrying runs the same turn again against the same conversation. It does not send your
-            message a second time.
+            {replayed
+              ? "Nothing is failing right now — this is the outcome the server kept from the last turn that ran here, and it will keep reporting it until another turn does. Retrying re-runs that turn."
+              : "Retrying runs the same turn again against the same conversation. It does not send your message a second time."}
           </div>
         </div>
       </div>
@@ -395,7 +411,8 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
           {liveSteers.map((s) => <SteerBubble key={s.steerId} steer={s} />)}
           {state.chatError && (
             <ChatErrorCard
-              message={state.chatError}
+              message={state.chatError.body}
+              replayed={state.chatError.replayed}
               streaming={state.isStreaming}
               onRetry={state.retryLastMessage}
               onDismiss={state.clearChatError}
@@ -923,7 +940,8 @@ export default function WorkspacePage() {
               ))}
               {state.chatError && (
                 <ChatErrorCard
-                  message={state.chatError}
+                  message={state.chatError.body}
+                  replayed={state.chatError.replayed}
                   streaming={state.isStreaming}
                   onRetry={state.retryLastMessage}
                   onDismiss={state.clearChatError}

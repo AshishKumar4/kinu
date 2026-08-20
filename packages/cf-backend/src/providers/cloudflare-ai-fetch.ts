@@ -40,6 +40,13 @@ export interface CloudflareAIFetchOptions {
   mapError?: (res: Response, resolved: AuthResolution) => Promise<Response> | Response;
 }
 
+/** A Cloudflare credential still rejected after the forced-refresh retry. One
+ *  sentence, two decision points: the shared path answers with it when the
+ *  consumer has no mapper, and {@link mapGatewayError} answers with it when no
+ *  gateway-specific code claimed the failure first. */
+export const DEAD_CLOUDFLARE_LOGIN =
+  'Your Cloudflare login is no longer valid. Reconnect Cloudflare in User settings.';
+
 export function createCloudflareAIFetch(opts: CloudflareAIFetchOptions): typeof globalThis.fetch {
   // Retry the raw provider response before auth/error/stream processing so
   // usage repair only ever sees the final response selected by this layer.
@@ -74,6 +81,19 @@ export function createCloudflareAIFetch(opts: CloudflareAIFetchOptions): typeof 
       }
     }
     if (!res.ok && opts.mapError) return opts.mapError(res, resolved);
+    // A 401 that survived the forced refresh is a dead Cloudflare login, and it
+    // belongs to the SHARED credential rather than to any one consumer — so the
+    // consumers with no mapper of their own are answered here. A consumer that
+    // HAS one keeps first refusal above, because a gateway 401 can carry a more
+    // specific cause (2021 BYOK/credits) that this sentence would bury.
+    //
+    // Without this, `workers-ai.ts` — which passes no mapper, and is the
+    // provider the owner's workspaces run on — let the upstream body through
+    // untouched: Cloudflare answers a rejected credential with the plain text
+    // `Unauthorized`, which is what reached `run_end {reason:'error',
+    // error:'Unauthorized'}` on six runs in `stone-ash-71f2` and
+    // `sunlit-stone-4a20` on 2026-08-17, and the chat's failed-turn card.
+    if (res.status === 401) return errorResponse(401, DEAD_CLOUDFLARE_LOGIN);
     // The endpoint's trailing duplicate usage chunk can zero cached_tokens
     // (see stream-usage-repair.ts) — repair it so cache accounting survives.
     return repairSseCachedUsage(res);
@@ -96,8 +116,8 @@ export async function mapGatewayError(res: Response, modelId: string, gatewayId:
   } else if (code === 2021 || /invalid user credentials/i.test(message ?? '') || /insufficient.*(credit|balance)/i.test(message ?? '')) {
     friendly = `${gateway} has no working credentials for "${author}" — add a ${author} key under AI Gateway → Provider Keys (BYOK), or load Unified Billing credits in your Cloudflare account.`;
   } else if (res.status === 401) {
-    // Still 401 AFTER the forced-refresh retry → the Cloudflare login is dead.
-    friendly = 'Your Cloudflare login is no longer valid. Reconnect Cloudflare in User settings.';
+    // Still 401 AFTER the forced-refresh retry, and no gateway code claimed it.
+    friendly = DEAD_CLOUDFLARE_LOGIN;
   }
   if (!friendly) {
     // Unknown failure — keep the original payload intact for the caller.

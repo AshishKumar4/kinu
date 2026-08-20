@@ -1442,8 +1442,10 @@ export { getAgentStatus, getChatHistoryPage, getToolList } from './read-models/s
 export { mapPage, pageSchema, seekPage, SeekCursorSchema, StaleCursorError } from './read-models/page';
 export type { Page, PageRequest, SeekCursor } from './read-models/page';
 export {
-  mergeTranscript, uiMessageText, transcriptRole, PROGRAMMATIC_MESSAGE_ID_PREFIX,
+  mergeTranscript, uiMessageRow, uiMessageText, transcriptRole,
+  PROGRAMMATIC_MESSAGE_ID_PREFIX, TURN_AUTHOR_METADATA_KEY, stampTurnAuthor, turnAuthor,
 } from './utils/ui-message';
+export type { TurnAuthor, StoredRowProjection } from './utils/ui-message';
 export type { PendingAction, PendingActionKind, PendingActionInputs } from './read-models/pending-actions';
 export type {
   AgentStatus, AgentStatusDeps, ChatHistoryEntry, ToolListEntry,

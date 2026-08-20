@@ -13,7 +13,7 @@ import {
   BrainIcon, GitBranchIcon, CheckCircleIcon, ClockIcon,
   WarningCircleIcon, ProhibitIcon,
   ClockCounterClockwiseIcon, LightningIcon,
-  StackIcon, SparkleIcon, ArrowBendUpRightIcon,
+  StackIcon, SparkleIcon, ArrowBendUpRightIcon, GearSixIcon,
 } from "@phosphor-icons/react";
 import { isToolUIPart, getToolName } from "ai";
 import type { UIMessage, FileUIPart } from "ai";
@@ -471,6 +471,44 @@ function WorkspaceCreatedCard({ state }: { state: CardState }) {
   );
 }
 
+/**
+ * Every other turn the harness enqueued: the ones with no card of their own —
+ * a fork whose heads were left running, a context-overflow retry, the one-shot
+ * completion gate, the take the owner picked being handed back.
+ *
+ * Collapsed, because the words are the harness talking to the model and the
+ * owner needs to know one happened far more often than they need to read it.
+ * Never a bubble: this row is exactly the population that used to arrive in the
+ * owner's own, four lines above things they had actually typed.
+ */
+function SystemEventCard({ event, text, state }: {
+  event: string; text: string; state: CardState;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="flex justify-center animate-fade-in py-1" data-system-event={event}>
+      <div className="w-full max-w-[85%] rounded-xl border p-border p-elevated px-3 py-2">
+        <button
+          type="button"
+          onClick={() => setExpanded(!expanded)}
+          className="w-full flex items-center gap-1.5 text-left text-[10px] p-text-3"
+          aria-expanded={expanded}
+        >
+          <GearSixIcon size={11} className="shrink-0 p-text-3" weight="fill" />
+          <span className="font-medium p-text-2">{event.replace(/_/g, " ")}</span>
+          <ShownCaption state={state} />
+          <span className="ml-auto shrink-0">
+            {expanded ? <CaretDownIcon size={10} /> : <CaretRightIcon size={10} />}
+          </span>
+        </button>
+        <div className={`mt-1 text-[11px] p-text-2 ${expanded ? "whitespace-pre-wrap break-words" : "truncate"}`}>
+          {text}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** One programmatic turn as the chat shows it — the durable message a queued
  *  signal became, or the live card of one spliced into a running turn. Same
  *  classifier, same cards, one rendering. */
@@ -485,6 +523,9 @@ export function ProgrammaticTurnCard({ turn, text, state }: {
   }
   if (turn.kind === "deferred_approval") {
     return <DeferredApprovalCard decision={turn.decision} count={turn.count} state={state} />;
+  }
+  if (turn.kind === "system_event") {
+    return <SystemEventCard event={turn.event} text={text} state={state} />;
   }
   return <DrainedEventsCard text={text} state={state} />;
 }
@@ -539,7 +580,9 @@ export const MessageView = memo(function MessageView({
   // Turns the backend enqueued on the agent's behalf are stored as `user`
   // messages so the model reads them as its input — but the operator did not
   // type them, so they get their own presentation instead of a user bubble.
-  const programmatic = classifyProgrammaticTurn(message.metadata);
+  // The id goes in too: it is the provenance marker on rows written before the
+  // author stamp existed, and the owner's oldest workspaces are full of them.
+  const programmatic = classifyProgrammaticTurn(message.metadata, message.id);
   if (programmatic) {
     return (
       <ProgrammaticTurnCard

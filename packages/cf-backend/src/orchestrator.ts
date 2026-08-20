@@ -180,6 +180,7 @@ import {
   DeferredApprovalQueue, DeferredApprovalStore,
   type DeferredApproval, type DeferredApprovalAnswer, type DeferredApprovalChannel,
   type DeferredApprovalNotice, type ApprovalGrant,
+  TURN_AUTHOR_METADATA_KEY,
 } from "@kinu/core";
 import type { CodemodeProvider, MctsSearchRunSummary } from "@kinu/core";
 import { diagnostics, renderThrownChain, toProteusError } from "@kinu/core/obs";
@@ -2723,12 +2724,16 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /** MCP `run_task`: deliver a task signal through the SAME seam the event→turn
-   *  reactor and background-job wake use. Not a new execution path. */
+   *  reactor and background-job wake use. Not a new execution path.
+   *
+   *  The words are whoever is driving the MCP client — the operator, not the
+   *  harness — so the signal names its author and the chat keeps its bubble. */
   async runTaskFromMcp(text: string): Promise<EnqueueTurnResult> {
     const trimmed = text.trim();
     if (!trimmed) throw new Error('run_task requires non-empty text');
     const outcome = await this.orch.signals.deliver({
       kind: 'mcp', text: trimmed,
+      metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator' },
     });
     return { status: outcome === 'undelivered' ? 'skipped' : 'queued' };
   }

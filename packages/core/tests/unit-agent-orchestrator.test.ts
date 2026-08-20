@@ -452,7 +452,10 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
     expect(broadcasts).toEqual([
       {
         type: 'signal_card', id: cardId, state: 'pending',
-        metadata: { proteusEvent: 'event_drain', drainTurnId: injected[0]!.replyTurnId! },
+        metadata: {
+          proteusEvent: 'event_drain', proteusAuthor: 'harness',
+          drainTurnId: injected[0]!.replyTurnId!,
+        },
         text: injected[0]!.stepText,
       },
       { type: 'signal_card', id: cardId, state: 'shown' },
@@ -475,7 +478,10 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
     const signalId = v.parse(v.string(), enqueued[0]?.metadata?.signalId);
     expect(broadcasts).toEqual([{
       type: 'signal_card', id: signalId, state: 'pending',
-      metadata: { proteusEvent: 'event_drain', drainTurnId: expect.any(String) },
+      metadata: {
+        proteusEvent: 'event_drain', proteusAuthor: 'harness',
+        drainTurnId: expect.any(String),
+      },
       text: enqueued[0]!.text,
     }]);
   });

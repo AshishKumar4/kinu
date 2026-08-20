@@ -80,6 +80,18 @@ export interface SteerRun {
   status: "queued" | "landed";
 }
 
+/** A turn that ended without an answer, and whether the server is REPLAYING an
+ *  older one rather than reporting this session's.
+ *
+ *  The distinction is the whole difference between "your turn just failed" and
+ *  "the last thing that happened here failed, some time ago". The server keeps
+ *  its terminal record until a later turn supersedes it, so a workspace left
+ *  after a failure re-serves it on every connect. */
+export interface ChatTurnError {
+  body: string;
+  replayed: boolean;
+}
+
 export interface ForkLineage {
   sourceWorkspaceId: string;
   sourceWorkspaceName: string;
@@ -199,7 +211,13 @@ const SocketMessageSchema = v.variant("type", [
   v.object({
     type: v.literal("cf_agent_use_chat_response"),
     error: v.optional(v.boolean()), done: v.optional(v.boolean()), body: v.optional(v.string()),
+    id: v.optional(v.string()),
   }),
+  // The server announcing which request id it is about to resume. For a
+  // RETAINED terminal record that id is the failed turn's, and the error frame
+  // that follows carries the same one — which is how a replay is told from a
+  // live failure without guessing.
+  v.object({ type: v.literal("cf_agent_stream_resuming"), id: v.string() }),
   v.object({
     type: v.literal("mcts-progress"), rootId: v.string(), nodes: v.array(MctsRowSchema),
   }),
@@ -548,7 +566,24 @@ export function useProteus(target?: string | ProteusActorAddress) {
   // on-connect `cf_agent_use_chat_response` replay frame (whose request id is
   // no longer active, so the ws transport drops it — the reason a reload used
   // to show nothing). Cleared on the next send.
-  const [chatError, setChatError] = useState<string | null>(null);
+  //
+  // `replayed` separates the two, because they are not the same claim. The
+  // server RETAINS its last terminal record until a later turn supersedes it
+  // (agents SDK `_replayTerminalOnAck`), so a workspace whose last turn failed
+  // and has not been used since re-serves that failure to every client that
+  // connects, forever. Measured on `sunlit-stone-4a20`: a turn that ended
+  // 2026-08-17T19:08:41Z still answers a resume ACK today with
+  // `{"body":"Unauthorized","done":true,"error":true}`, and the card called it
+  // "the last turn" as though it had just happened. It IS the last turn — it is
+  // just not recent, and a card that cannot say so is a card that misdates the
+  // workspace's state.
+  //
+  // The discriminator is the server's own: it announces the pending record's
+  // request id in a `cf_agent_stream_resuming` frame and only then replays the
+  // terminal for that same id. An id this connection saw announced is a replay;
+  // anything else is this session's turn failing live.
+  const resumedRequestIds = useRef(new Set<string>());
+  const [chatError, setChatError] = useState<ChatTurnError | null>(null);
   const [subordinates, setSubordinates] = useState<SubordinateRosterEntry[]>([]);
   const [subordinateEvents, setSubordinateEvents] = useState<SubordinateActivityEvent[]>([]);
   /** Background-event cards, from the delivery seam's own lifecycle stream. */
@@ -577,12 +612,17 @@ export function useProteus(target?: string | ProteusActorAddress) {
           setAgentStatus((prev) => prev ? { ...prev, displayName } : prev);
         }
         window.dispatchEvent(new CustomEvent("proteus:workspace-renamed"));
+      } else if (data?.type === "cf_agent_stream_resuming") {
+        resumedRequestIds.current.add(data.id);
       } else if (data?.type === "cf_agent_use_chat_response" && data.error === true && data.done === true) {
         // Terminal-error frame. During a live stream the transport also
         // surfaces it as useChat's `error`; on connect the server REPLAYS
         // the last terminal error with a stale request id the transport
         // drops — this handler is the only place that frame is seen.
-        setChatError(data.body?.trim() ? data.body : "The turn failed with an unknown error.");
+        setChatError({
+          body: data.body?.trim() ? data.body : "The turn failed with an unknown error.",
+          replayed: data.id !== undefined && resumedRequestIds.current.has(data.id),
+        });
       }
     }, []),
   };
@@ -608,9 +648,10 @@ export function useProteus(target?: string | ProteusActorAddress) {
 
   // The live-stream error channel: the ws transport turns an in-band
   // `error:true` frame into useChat's `error` state — fold it into the same
-  // exposed chat-error surface as the on-connect replay.
+  // exposed chat-error surface as the on-connect replay. This one is always
+  // live: the transport only reaches it for a request id still in flight.
   useEffect(() => {
-    if (streamError) setChatError(streamError.message || String(streamError));
+    if (streamError) setChatError({ body: streamError.message || String(streamError), replayed: false });
   }, [streamError]);
 
   // ── A2: resume the durable stream on EVERY reconnect, not just first mount.

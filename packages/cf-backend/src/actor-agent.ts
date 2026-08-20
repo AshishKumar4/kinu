@@ -159,6 +159,7 @@ import {
   collectWorkspaceAgentsMd,
   mergeProviderOptions, reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE,
   uiMessageText, tableExists, PROGRAMMATIC_MESSAGE_ID_PREFIX,
+  TURN_AUTHOR_METADATA_KEY, stampTurnAuthor,
   // memory.* / tasks.* — codemode projections of the same-named native tools
   createMemoryCodemodeProvider, createTasksCodemodeProvider,
   JsonObjectSchema, JsonValueSchema, projectJsonValue, type JsonObject, type JsonValue,
@@ -968,15 +969,19 @@ export abstract class ActorAgent extends Think<Env> {
 
   /**
    * Steers that never saw a step boundary (the model was already writing its
-   * final answer) rerun as a USER-origin turn — no `proteusEvent` metadata, so
-   * every provenance decision downstream reads them as the user's own next
-   * message, which is what they are. Detached: a turn must never block on the
-   * next one's queue slot.
+   * final answer) rerun as a USER-origin turn. It carries the operator's own
+   * words, so it says so: without the stamp the enqueue seam would read a row
+   * with no author and the programmatic id prefix it gives every row, and file
+   * the operator's sentence as the harness's. Detached: a turn must never block
+   * on the next one's queue slot.
    */
   private rerunLeftoverSteers(): void {
     const leftover = this.userSteer.takeLeftover();
     if (leftover.length === 0) return;
-    void this.host.enqueueTurn({ text: leftover.map((steer) => steer.text).join('\n\n') })
+    void this.host.enqueueTurn({
+      text: leftover.map((steer) => steer.text).join('\n\n'),
+      metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator' },
+    })
       .catch((err) =>
         diagnostics.failure('steer.rerun_failed', toProteusError({
           doing: 'enqueuing leftover steers as their own user turn',
@@ -1453,17 +1458,21 @@ export abstract class ActorAgent extends Think<Env> {
           const drainTurnId = v.is(v.string(), metadata?.drainTurnId)
             ? metadata.drainTurnId
             : null;
-          // The id is the row's provenance (core transcriptRole): every turn the
-          // harness enqueues is prefixed, keyed or not, so the transcript and the
-          // walk-back fork can tell it from something the operator typed. Where
-          // the producer named the FACT, the id is that name — and the message
+          // The id is the row's provenance FALLBACK (core transcriptRole): every
+          // turn the harness enqueues is prefixed, keyed or not. Where the
+          // producer named the FACT, the id is that name — and the message
           // store's primary key is then what makes a re-announcement land on the
           // row the first one wrote instead of beside it.
+          //
+          // The AUTHOR is stamped here rather than left to the producer, because
+          // this is the seam every programmatic row is written through: a turn
+          // that reaches it without saying who wrote it is the harness speaking,
+          // and the chat pane must never draw it as the owner's bubble.
           const message: UIMessage = {
             id: `${PROGRAMMATIC_MESSAGE_ID_PREFIX}${idempotencyKey ?? crypto.randomUUID()}`,
             role: 'user' as const, parts: [{ type: 'text' as const, text }],
+            metadata: stampTurnAuthor(metadata),
           };
-          if (metadata) message.metadata = metadata;
           if (idempotencyKey) {
             const result = await this.submitMessages([message], { idempotencyKey, metadata });
             return {

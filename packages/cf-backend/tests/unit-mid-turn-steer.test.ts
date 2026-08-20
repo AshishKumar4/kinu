@@ -236,12 +236,19 @@ describe('a steer that never saw a step boundary', () => {
       message: { id: 'assistant-1', role: 'assistant', parts: [{ type: 'text', text: 'deployed' }] },
     });
 
-    expect(h.enqueued).toEqual([{ text: 'one more thing' }]);
-    // NO proteusEvent metadata: every provenance decision downstream reads this
-    // as the user's own next message, which is what it is. Stamping an event
-    // here would make it a programmatic turn — one-shot surface, no outcome
-    // review, a card instead of a bubble.
-    expect(h.enqueued[0]).not.toHaveProperty('metadata');
+    expect(h.enqueued).toEqual([{
+      text: 'one more thing',
+      metadata: { proteusAuthor: 'operator' },
+    }]);
+    // NO proteusEvent: every provenance decision downstream reads this as the
+    // user's own next message, which is what it is. Stamping an event here
+    // would make it a programmatic turn — one-shot surface, no outcome review,
+    // a card instead of a bubble.
+    expect(h.enqueued[0]).not.toHaveProperty('metadata.proteusEvent');
+    // And it must SAY it is the operator's, because the enqueue seam gives
+    // every row it writes the `programmatic:` id prefix. Left silent, the
+    // provenance fallback reads that prefix and files the owner's own sentence
+    // as the harness's.
   });
 
   test('is not rerun twice — the turn that takes it drains it', async () => {
