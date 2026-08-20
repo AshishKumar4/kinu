@@ -158,29 +158,32 @@ rather than in a bill.
 no session to borrow, so it is free there and everything live skips. On your
 machine it is not.
 
-### The three arms
+### The five arms
 
 Two arms exist because two runners are needed and neither can see the other's
 files: `bun test` matches only `*.test.ts` / `*_test.*` / `*.spec.*`, never
-`*.eval.ts`. The third is one file on the vitest side, split off for cost
-accounting. An arm is the unit a spend file is written per, so an arm is also
-the unit liveness can be asserted per.
+`*.eval.ts`. The other three are single files on the vitest side, split off for
+cost accounting. An arm is the unit a spend file is written per, so an arm is
+also the unit liveness can be asserted per.
 
 | Arm | What runs | What it measures |
 |---|---|---|
-| bun suites | `bun test ./tests/` | end-to-end lifecycle, evolution across sessions, MCTS reached and durably ranked, delegation conversion, one real turn per backend |
-| behaviour evals | `vitest --config vitest.evals.config.ts`, excluding the swarm file | 17 corpus tasks × 2 repetitions = 34 full agent episodes, graded by eight scorers over the `run_events` ledger |
-| live swarm | `vitest --config vitest.evals.config.ts tests/evals/swarm.eval.ts` | one `agents({action:'swarm'})` call through the real tool surface: a `depth:2 branches:3` verifier-scored search with `expand:'aggregate'`, graded on the caller's own `exec-ratio` instrument |
+| bun suites | `bun test ./tests/` | end-to-end lifecycle (a five-turn conversation with a threaded history, judged on content per turn), evolution across sessions, MCTS reached and durably ranked, delegation conversion, one real turn per backend |
+| behaviour evals | `vitest --config vitest.evals.config.ts`, excluding the three single-family files | 17 corpus tasks × 2 repetitions = 34 full agent episodes, graded by eight scorers over the `run_events` ledger |
+| live swarm | `vitest … tests/evals/swarm.eval.ts` | one `agents({action:'swarm'})` call through the real tool surface: a `depth:2 branches:3` verifier-scored search with `expand:'aggregate'`, graded on the caller's own `exec-ratio` instrument |
+| research | `vitest … tests/evals/research.eval.ts` | one agent episode whose only source for a fictional topic is a controlled MCP archive this repo serves (`tests/evals/fixtures/`); scored by exact match on planted numbers and a canary token — reading proven, fabrication named, no LLM judge |
+| optimization | `vitest … tests/evals/optimization.eval.ts` | one agent episode against the swarm arm's own metered instrument (`hard-majority-vote`), full tool surface offered, held to a pre-registered `task_outcome ≥ 0.5`; swarm use and tree shape recorded, never dictated |
 
-**Why the swarm eval is its own arm.** `scripts/eval-spend.ts --expect-live`
-sums the lines in the spend file it is given, so a swarm eval sharing a file
-with five paid suites could stop reaching a model entirely and the tier would
-still report `proven`. The arm whose whole subject is a live search is the one
-arm whose zero has to be its own failure, so it gets its own spend file and its
-own assertion, driven by the same `EXPECT_LIVE` the banner printed. The line you
-read and the assertion the run is held to cannot disagree.
+**Why each single-family eval is its own arm.** `scripts/eval-spend.ts
+--expect-live` sums the lines in the spend file it is given, so a single-subject
+eval sharing a file with five paid suites could stop reaching a model entirely
+and the tier would still report `proven`. An arm whose whole subject is one live
+claim — a search, a retrieval from a controlled source, a measured episode — is
+an arm whose zero has to be its own failure, so each gets its own spend file and
+its own assertion, driven by the same `EXPECT_LIVE` the banner printed. The line
+you read and the assertion the run is held to cannot disagree.
 
-Everything that arm asserts is measured rather than judged: a winner crowned,
+Everything the swarm arm asserts is measured rather than judged: a winner crowned,
 its artifact's oracle-call count against the run's own measured baseline,
 `exploration_records` rows read back through the store's own reader under the
 objective's identity and floor digest, and the `judgeEnsemble` / `fanIn` /
@@ -188,8 +191,105 @@ objective's identity and floor digest, and the `judgeEnsemble` / `fanIn` /
 credential-free half runs at every tier: the action is offered, and the strict
 parse refuses an unknown field, naming the field it meant.
 
+The research arm's controlled corpus lives in ONE module
+(`tests/evals/fixtures/veldmar-corpus.ts`): the planted values, the canary and
+the served text, with the eval importing its expected answers from it. Its
+credential-free half runs at every tier: the corpus-integrity test (facts in
+the archive, none in the prompt, the canary in exactly one entry — delete the
+canary and this goes red naming it before anything is spent) and the MCP
+handshake through the product's own `connectMcpServers` client. The optimization
+arm's credential-free half asserts the threshold is a bar something can clear
+and something can miss.
+
+#### The two new families drive the SPAWNED CLI
+
+The research and optimization arms do not build a runtime and call into it.
+They run `proteus create <name> --mode local`, then `proteus exec --workspace
+<name> --json`, in a scratch `PROTEUS_HOME`, and judge the child's own event
+stream plus the ledgers in `$home/<workspace>/agent.db`. The glue is
+`tests/evals/cli-driver.ts`; the precedent is `bench/harbor/proteus_agent.py`.
+
+That is the rule, not a preference: an eval drives the WHOLE agent through a
+shipped surface. Driving `LocalAgentSession` in-process would skip the CLI's
+turn assembly, its client seam and — for the research family specifically — MCP
+config resolution, which is the thing that family is about. A user's servers
+reach the agent because `resolveMcpServers()` reads the `mcpServers` block of
+`~/.proteus/config.json` and `LocalAgentClient` connects them; a suite that
+hands `connectMcp` its own servers proves none of that.
+
+One measured trap, worth knowing before writing a third family: the workspace
+must be CREATED with the same child environment it is later exec'd with.
+`create` persists the resolved provider config into the store and `exec` prefers
+what the store carries, so a workspace born under a different endpoint keeps
+answering from it — measured 2026-08-20, a workspace created with a wrong base
+URL then exec'd with the right one still failed every turn with `Your
+Cloudflare login is no longer valid` while that endpoint answered a direct
+request fine.
+
+#### What the five-turn conversation certifies, and a finding about judging it
+
+`tests/e2e-lifecycle.test.ts` certifies the CORE TURN LOOP: soul and memory
+reach the model, native tool calling round-trips, the conversation accumulates,
+and evolution and MCTS run over the turns. It is an inner API by construction —
+no turn assembly, no reactor, no backgrounding wakes, no prompt cache — so the
+shipped-surface arms above are what cover the product. The suite's header says
+both, and names them.
+
+It used to send `messages: [user]`, one message per turn with no history: five
+one-turn conversations wearing the title of one. Turn 5 asked "Summarize what we
+discussed", the model answered that nothing had been discussed, and the test
+passed, because the only per-turn assertion was `length > 0`.
+
+Threading the history is half the fix. The other half is a finding, measured
+2026-08-20: **content assertions cannot prove threading on this agent.** The
+`memory` builtin exposes session search over the very `messages` table the suite
+writes (`core/src/tools/memory-tool.ts:92-101` over
+`core/src/memory/session-search.ts`), so a later turn can RETRIEVE the
+conversation it was never handed. With the history deliberately unthreaded, turn
+5 still answered "Here's a summary of our previous discussion" and reproduced
+turn 1's code verbatim, while the injected knowledge was 118 characters holding
+only turn 3's note; two such runs scored 6/0 and 5/1. So the content assertions
+are real but non-deterministic as a red.
+
+The suite therefore asserts on both, and says which is which. The MECHANISM
+assertions read the message list each turn HANDED the model — the one witness a
+second channel cannot satisfy — and unthreading the history makes them red every
+time, naming the turn: `turn 2 was handed 1 message(s) but should carry every
+earlier exchange plus its own prompt`. The BEHAVIOUR assertions read the replies
+and prove the model used what it was given. Neither alone is enough: mechanism
+only would pass a model that ignored its context, content only passes a model
+that went and fetched it.
+
+Two things that did NOT turn out to be defects, recorded so nobody re-opens
+them. Turn 4's memory search finds turn 3's note despite the prompt saying
+"validation" and the note saying "validate" — FTS stemming handles it, measured
+green repeatedly. And the test's 600 s cap was raised to 1,800 s on a
+measurement, not to clear a red: threading lengthens every turn, and two
+consecutive runs hit the old cap at 600,008 ms and 600,003 ms with turn 2 alone
+spending 12 tool calls.
+
+### The run records and the reader
+
+Every vitest eval arm writes a `run-record.json` (schema 1, `EvalRunRecord` in
+`packages/test-utils/src/eval-run.ts`) beside its retained transcripts under
+`bench-artifacts/`, carrying the eval family, per-observation verdicts, wall
+`ms`, turns, tool calls and names, tokens, spend, and — for optimization runs —
+the swarm tree shape (`swarm_use.measured`: nodes, depth, records written) and
+`threshold_attained`. `bun scripts/eval-report.ts` renders every accumulated
+record, grouped by family, into one comparison.
+
+What the accumulated data can answer: did task outcomes move between runs of one
+family and arm; did swarm use correlate with attainment on the optimization
+instrument (a 2×2 the report prints); where the tier's time and spend go, per
+family; and which tools an episode called, with the transcripts one hop away for
+"why did that call fail". What it cannot answer yet: significance for the
+single-observation families (one pair accrues per run), causal swarm
+attribution (`swarm_use` is the agent's own choice, not an assigned arm), and
+per-step time (that lives in each record's transcripts directory).
+
 The behaviour arm's own knobs, documented nowhere else
-(`tests/evals/behaviour.eval.ts:81-83,111,327`):
+(`tests/evals/behaviour.eval.ts:81-83,111,303`; the tier and record knobs are
+read the same way by the research and optimization arms):
 
 | Variable | Effect |
 |---|---|
@@ -202,18 +302,20 @@ The behaviour arm's own knobs, documented nowhere else
 ### What it costs and how long it takes
 
 Every figure below came from a run whose log said so. A cell that has not been
-measured says so instead of carrying a guess. The two bun-arm rows and the
-credential-free row are corroborated by `scripts/ladder.ts:654-670`. No
-measurement date is recorded for any of these runs, so treat each as "the run
-whose spend file survives" rather than as today's cost.
+measured says so instead of carrying a guess. The two bun-arm rows are
+corroborated by `scripts/ladder.ts`'s evals-gate declaration. Rows without a
+date predate the tier recording one, so treat each as "the run whose spend file
+survives" rather than as today's cost.
 
 | | wall clock | model calls | input tokens |
 |---|---|---|---|
-| whole tier, credential-free | 3 s | 0 | — |
+| whole tier, credential-free (2026-08-19, five arms) | 9 s | 0 | — |
 | bun suites, credentialed | 2,745 s | 48 | 601.6k |
 | bun suites, credentialed (second run) | 3,843 s | 49 | 600.8k |
 | behaviour evals, credentialed | not measured | not measured | not measured |
 | live swarm, credentialed | 1,338 s | 3 | 2,453.4k (134.1k out) |
+| research, credentialed (2026-08-20) | 263 s | 4 | 81.1k (1.3k out) |
+| optimization, credentialed (2026-08-20) | 669 s | 18 | 1,143.8k (50.8k out) |
 | `tests/live-smoke.test.ts` alone | 74 s | 3 | 55.6k |
 
 The two bun-half rows are the two runs whose spend files still exist.
@@ -223,6 +325,26 @@ run whose artifact does not survive. Both surviving runs show ~48 calls and
 The 3,843 s run also contains 1,200 s of tests being killed rather than working:
 a 900 s exploration timeout and a 300 s MCTS one, both since fixed, those same
 steps now completing in 437 s and 456 s. Do not derive a post-fix cost from it.
+
+The research and optimization rows were measured on 2026-08-20 against
+`@cf/deepseek-ai/deepseek-v4-flash-0731` through the worker proxy, each arm a
+single agent episode driven as the SPAWNED `proteus` CLI. Both passed on that
+run. What the episodes did, from their own run records:
+
+- **research** — 2 turns, 6 tool calls, ALL SIX to the controlled archive, 4
+  steps, 260 s in the episode. The reply carried all three planted numbers
+  exactly (1847, 96.4, 27.3) and the canary verbatim.
+- **optimization** — 2 turns, 17 tool calls, 18 steps, 666 s in the episode.
+  `task_outcome` 1.000 against the pre-registered bar of 0.5: 2,972 oracle calls
+  where the handed reference costs 2,880,000 and the corpus target is 2,992, so
+  the agent BEAT the target and the log-scale score clamped from 1.0010. It used
+  NO swarm — 0 search nodes, 0 `agents` calls. One run is one run; that is the
+  first row of the swarm-versus-attainment table, not a conclusion.
+
+Costs vary widely with what the model chooses to do. The optimization arm spent
+14× the research arm's input tokens on the same credential, and the 5-turn e2e
+conversation was measured twice at 5 calls / 20.0k in and 9 calls / 39.8k in —
+the second run's turn 2 alone made 12 tool calls. Budget from the larger figure.
 
 The behaviour arm is 34 full agent episodes and dominates the tier. Its wall
 clock is the number that row is waiting on. The tier now reports per arm, and
