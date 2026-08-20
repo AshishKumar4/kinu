@@ -7,7 +7,7 @@ All notable changes to Kinu are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 The version that matters to a user is `packages/cli/package.json` — it is what
-`proteus --version`, `proteus doctor` and the served `proteus-version.json`
+`kinu --version`, `kinu doctor` and the served `kinu-version.json`
 report. `scripts/build-cli-source-archive.sh` appends `+<sha>` build metadata at
 deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 `0.2.0` part.
@@ -71,6 +71,29 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   and the chat model where it does not.
 
 ### Changed
+
+- **The product is Kinu, and it runs at https://kinu.run.** Formerly Proteus,
+  at a hostname on the author's personal zone. This is the only place that name
+  appears: kinu.run is a new deployment on a dedicated zone, not a rename of a
+  running one, so nothing migrates and no redirect, alias or compatibility path
+  exists from the old origin.
+
+  The command is `kinu`. There is no `proteus` alias and no deprecation
+  warning, because a new deployment has no installed base to keep working. The
+  served install assets follow it: `/downloads/kinu`,
+  `kinu-source.tar.gz` and `kinu-version.json`. The npm scope is `@kinu/*`.
+
+  Data does not carry over. Sessions live in a KV namespace instead of D1,
+  identities in `UserDO`, and the snapshot bucket and memory index are new and
+  empty — reusing the old ones would have handed a fresh deployment the
+  previous one's rows, keyed to user ids this deployment does not assign.
+  Staging is a real second environment at https://staging.kinu.run with its own
+  stores, and it is the only target tests and evals may run against.
+
+  What deliberately keeps the old spelling is machine state on the owner's own
+  disk, not product copy: the `PROTEUS_*` environment variables, `~/.proteus`
+  and the workspace archives under it. Breaking a local install is not what
+  "nothing migrates" means.
 
 - The reason recorded on a head retired by that reconciliation no longer names
   a mechanism it cannot know. It read `settled at start of life, having

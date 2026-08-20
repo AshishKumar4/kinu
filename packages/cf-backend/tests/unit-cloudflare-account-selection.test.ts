@@ -160,7 +160,6 @@ function routeHarness(selectFails = false) {
   const stub = {
     async ensureProfile() {},
     async userMcp_warmConnections() { return { servers: 0 }; },
-    async backfillWorkspaceCapabilities() { return { provisioned: 0 }; },
     async listWorkspaces() {
       return [{ name: 'jarvis', displayName: 'Jarvis', createdAt: 1, lastVisited: 1, archivedAt: null }];
     },

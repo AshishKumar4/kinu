@@ -203,7 +203,6 @@ function inheritedDescriptor<Instance extends object>(instance: Instance, name: 
  * `UserDO` gets no facet surface: it is neither a facet nor spawns one.
  */
 const USER_DO_METHODS = [
-  'backfillWorkspaceCapabilities',
   'createReleaseChange',
   'decideReleaseApproval',
   'deleteCredential',

@@ -10,11 +10,6 @@ import { initAccessTokenTable } from '../cli/access-token-store';
 import { initEgressVaultTables } from './egress-vault';
 import { initWorkspaceCapabilityTables } from './workspace-capability';
 
-/** One-shot migration ledger version. Bump it when adding a migration that
- *  must run exactly once (anything destructive or shape-changing); the
- *  idempotent CREATE + reconcileColumns statements below need no version. */
-const USER_SCHEMA_VERSION = 1;
-
 /** `tagged` is the same storage as `sql`, as the tagged-template primitive:
  *  `reconcileColumns` asks `pragma_table_info` which columns are present rather
  *  than adding them and swallowing the duplicate-column error. */
@@ -25,8 +20,6 @@ export function initUserTables(sql: SqlExec, tagged: SqlExecutor): void {
       value TEXT NOT NULL
     )
   `);
-  const fromVersion = schemaVersion(sql);
-
   // Profile: one row per UserDO instance (this user).
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_profile (
@@ -142,7 +135,6 @@ export function initUserTables(sql: SqlExec, tagged: SqlExecutor): void {
   // on THIS UserDO (the user-level hub) so every one of the user's agents can
   // request the device. `token_hash` is the device's connect secret; raw tokens
   // are returned only once to the authenticated CLI and never stored.
-  if (fromVersion < 1) resetRawTokenTable(sql, 'user_devices');
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_devices (
       id            TEXT PRIMARY KEY,
@@ -168,7 +160,6 @@ export function initUserTables(sql: SqlExec, tagged: SqlExecutor): void {
   // CLI bearer tokens minted by the browser device-code approval flow. Tokens
   // include the UserDO id as a routing hint, but only their SHA-256 hash is
   // stored. The CLI presents the raw token as Authorization: Bearer <token>.
-  if (fromVersion < 1) resetRawTokenTable(sql, 'user_cli_tokens');
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_cli_tokens (
       token_hash  TEXT PRIMARY KEY,
@@ -245,31 +236,5 @@ export function initUserTables(sql: SqlExec, tagged: SqlExecutor): void {
   // one workspace proved and published for the owner's others to reuse.
   initExperienceLibraryTables(sql);
 
-  if (fromVersion < USER_SCHEMA_VERSION) {
-    sql.exec(
-      `INSERT INTO user_schema_meta (key, value) VALUES ('version', ?)
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-      String(USER_SCHEMA_VERSION),
-    );
-  }
 }
 
-function schemaVersion(sql: SqlExec): number {
-  const row = sql.exec(`SELECT value FROM user_schema_meta WHERE key = 'version'`).toArray()[0];
-  const version = Number(row?.value);
-  return Number.isInteger(version) && version > 0 ? version : 0;
-}
-
-
-/** v1 (one-shot): pre-release builds stored raw tokens or lacked the hash
- *  column. Those rows cannot be safely migrated in a Worker SQLite boot hook,
- *  and retaining them would preserve the old security flaw — so the affected
- *  token tables are reset. Gated on the migration ledger so this destructive
- *  path can never re-trigger against a future table shape. */
-function resetRawTokenTable(sql: SqlExec, table: 'user_devices' | 'user_cli_tokens'): void {
-  const rows = sql.exec(`PRAGMA table_info(${table})`).toArray();
-  if (rows.length === 0) return;
-  const names = new Set(rows.map((r) => String(r.name)));
-  if (names.has('token_hash') && !names.has('token')) return;
-  sql.exec(`DROP TABLE ${table}`);
-}

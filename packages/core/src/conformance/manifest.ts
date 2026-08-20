@@ -151,11 +151,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     messages: EVERYWHERE,
     crafted_tools: EVERYWHERE,
     craft_scores: EVERYWHERE,
-    _v2_codegen_migration_done: {
-      'cf-orchestrator': WIRED,
-      'cf-subordinate': { absent: 'the one-time crafted-tool duplicate migration runs only on the orchestrator' },
-      cli: { absent: 'the one-time crafted-tool duplicate migration runs only on the hosted orchestrator' },
-    },
     search_nodes: EVERYWHERE,
     fibers: EVERYWHERE,
     evolution_events: EVERYWHERE,

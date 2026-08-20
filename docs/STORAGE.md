@@ -288,7 +288,6 @@ same `initWorkspaceSchema()` pass:
 | Imported experience | `imported_experience` (staged until a turn outcome settles it) | `core/src/experience/imports.ts` |
 | Compaction | `compaction_state`, `compaction_archive` | `core/src/identity/workspace-schema.ts` (the DDL lives in core because `@kinu/compaction` sits above it in the dependency graph) |
 | Typed config | `agent_config` | `core/src/config/store.ts` |
-| Crafted-tool migration marker | `_v2_codegen_migration_done` (hosted orchestrator only) | `core/src/craft/migrate-duplicates.ts` |
 
 Five more groups are created outside that pass, by the root that owns each:
 

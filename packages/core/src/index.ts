@@ -828,7 +828,6 @@ export { craftFailureMarker, CRAFT_NEUTRAL_PRIOR } from './craft/in-episode';
 export { maybeStoreCraftedTool } from './craft/discovery';
 export { periodicCraftConsolidation } from './craft/consolidation';
 export { checkConflictsBeforeAdding, upsertCraftedTool } from './craft/conflict';
-export { migrateCraftedToolDuplicates, type MigrationReport } from './craft/migrate-duplicates';
 
 // Execution layer
 export {

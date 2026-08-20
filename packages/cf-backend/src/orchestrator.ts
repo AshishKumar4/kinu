@@ -41,7 +41,6 @@ import {
   TOOL_REACH,
   updateCraftScores,
   feedbackToQuality,
-  migrateCraftedToolDuplicates,
   // Fork feature
   forkWorkspace, writeForkSnapshot,
   type ForkTransport, type ForkSnapshot,
@@ -1449,7 +1448,6 @@ export class OrchestratorAgent extends ActorAgent {
    *  it is visible in the diff; `scripts/do-init-gate.ts` is what refuses the
    *  widening. */
   onStart(): void {
-    const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
     this.ensureSchema();
     // Runs inside `Agent.alarm()`'s initialization, i.e. before the SDK reads
     // the due rows — so a backlog is pruned rather than dispatched in one go.
@@ -1468,26 +1466,6 @@ export class OrchestratorAgent extends ActorAgent {
     } catch (err) {
       diagnostics.failure('event.stale_delivery_unbind_failed', toProteusError({
         doing: 'unbinding event deliveries a dead activation left leased',
-        cause: err,
-        otherwise: 'io',
-      }));
-    }
-
-    // one-time per-agent migration that merges case-collision
-    // duplicates in crafted_tools + craft_scores left over from older
-    // code that lowercased names. Gated by _v2_codegen_migration_done.
-    try {
-      const report = migrateCraftedToolDuplicates(this.boundSql, execRaw);
-      if (report.ranMigration && report.mergedGroups > 0) {
-        diagnostics.event('tool.duplicates_merged', {
-          groups: report.mergedGroups,
-          craftedToolRows: report.rowsDeletedCraftedTools,
-          craftScoreRows: report.rowsDeletedCraftScores,
-        });
-      }
-    } catch (err) {
-      diagnostics.failure('tool.duplicate_merge_failed', toProteusError({
-        doing: 'merging case-collision duplicates in the crafted-tool store',
         cause: err,
         otherwise: 'io',
       }));
