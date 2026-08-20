@@ -51,7 +51,6 @@
   "packages/cf-backend/src/hooks/use-proteus.ts#parsePlanReview (unreached-export)",
   "packages/cf-backend/src/hooks/use-proteus.ts#refreshLiveResource (unreached-export)",
   "packages/cf-backend/src/hooks/use-proteus.ts#resolvePendingConsent (unreached-export)",
-  "packages/cf-backend/src/hooks/use-theme.ts#setTheme (unreached-export)",
   "packages/cf-backend/src/lib/cloudflare-oauth.ts#DEFAULT_CLOUDFLARE_AI_GATEWAY_ID (unreached-export)",
   "packages/cf-backend/src/lib/cloudflare-oauth.ts#fetchCloudflareAccounts (unreached-export)",
   "packages/cf-backend/src/lib/cloudflare-oauth.ts#requestCloudflareOAuthToken (unreached-export)",

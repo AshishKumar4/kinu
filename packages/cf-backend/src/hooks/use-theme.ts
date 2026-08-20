@@ -70,7 +70,7 @@ mql.addEventListener("change", () => {
   if (!storedMode()) commit({ ...snapshot, mode: osMode() });
 });
 
-export function setMode(mode: ThemeMode): void {
+function setMode(mode: ThemeMode): void {
   localStorage.setItem(MODE_KEY, mode);
   commit({ ...snapshot, mode });
 }
@@ -79,7 +79,7 @@ export function toggleMode(): void {
   setMode(snapshot.mode === "dark" ? "light" : "dark");
 }
 
-export function setPalette(palette: ThemePalette): void {
+function setPalette(palette: ThemePalette): void {
   localStorage.setItem(PALETTE_KEY, palette);
   commit({ ...snapshot, palette });
 }
