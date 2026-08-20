@@ -19,7 +19,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   assessAdmissibility, TASK_OUTCOME,
   type EvalObservation, type EvalRunRecord, type EvalScoreRow,
-} from '@proteus/test-utils';
+} from '@kinu/test-utils';
 import { render, triage, type Loaded, type Triage, type Verdict } from './eval-triage';
 
 function row(over: Partial<EvalScoreRow> & { name: string }): EvalScoreRow {

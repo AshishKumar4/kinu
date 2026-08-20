@@ -52,12 +52,12 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import * as v from 'valibot';
-import { toolFailurePartOfKey } from '@proteus/core';
+import { toolFailurePartOfKey } from '@kinu/core';
 import {
   assessAdmissibility, compareRuns, observationKey, parseFailureMix, readRunRecord,
   runRecordPaths, toolOutcomes, TASK_OUTCOME,
   type EvalObservation, type EvalRunRecord,
-} from '@proteus/test-utils';
+} from '@kinu/test-utils';
 
 const REPO_ROOT = new URL('..', import.meta.url).pathname;
 
