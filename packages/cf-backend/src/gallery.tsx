@@ -43,6 +43,11 @@
  *   /gallery.html?frame=forkfull → the same competition in the full-screen explorer
  *   /gallery.html?frame=forkswarmfull → the fan-in swarm, full-screen
  *   /gallery.html?frame=forkbig  → the scale probe: 520 nodes, depth 9
+ *   /gallery.html?frame=forklive → the SAME search as it happens, in five stages.
+ *                                  `&stage=N` pins one; without it the frame
+ *                                  advances itself. Liveness is a pair of moments,
+ *                                  so a frame that only animated could not be
+ *                                  asserted about without asserting about a clock.
  *
  * Network: /api/user/* GETs are stubbed in-page; everything else passes through.
  */
@@ -1273,6 +1278,118 @@ const swarmFanInRpc = focusRun("sw000");
 /** A search that started and reached nothing. Never an empty tree: a refusal. */
 const refusedRunRpc = focusRun("rf000");
 
+/* ── one search, as it happens ──────────────────────────────────── */
+
+/**
+ * The five states a live search passes through, as five READABLE stages.
+ *
+ * Liveness is the one property this gallery could not photograph. A frame is a
+ * moment, and "the tree grew without a refresh" is a pair of moments — so a
+ * frame that animated on a timer would be a frame a test has to race, and every
+ * assertion about it would be about the clock.
+ *
+ * So the stage is a PARAMETER: `?frame=forklive&stage=2` renders the search
+ * exactly two beats in, deterministically, and a browser gate walks the stages
+ * in one page and asserts what changed between them. With no `stage` the frame
+ * advances itself, which is the version a person watches.
+ *
+ * The tree is the real 106-node fixture, revealed a prefix at a time, rather
+ * than a second tree invented for this frame: a live search IS the same rows
+ * arriving in order, and a fixture that grew differently from the one every
+ * other fork frame photographs would be a fixture testing itself.
+ */
+const LIVE_STAGE_ROWS = [0, 1, 4, 12, MCTS_ROWS.length] as const;
+export const LIVE_STAGES = LIVE_STAGE_ROWS.length;
+
+/** The run row as the ledger holds it at `stage` — the fact the list renders,
+ *  and the one that decides whether the surface polls fast or idles. */
+function liveRun(stage: number): ForkRunSummary {
+  const rows = LIVE_STAGE_ROWS[Math.min(stage, LIVE_STAGES - 1)] ?? 0;
+  const settled = stage >= LIVE_STAGES - 1;
+  return {
+    id: "live000",
+    task: "Find why the SAVE20 coupon 500s",
+    startedAt: NOW - 3e4,
+    status: settled ? "completed" : "running",
+    hasSearchTree: true,
+    hasNodeTranscripts: true,
+    branches: Math.max(0, rows - 1),
+    winnerScore: settled ? 0.91 : null,
+  };
+}
+
+/** The canvas row for `stage`: the run, its parameters, and the prefix of its
+ *  tree that has landed so far. Stage 0 has NO ROW AT ALL — a search the ledger
+ *  has not written yet is the state the surface used to sit in for fifteen
+ *  seconds while its nodes were already working. */
+function liveCanvasRows(stage: number): readonly ExplorationCanvasRun[] {
+  if (stage <= 0) return [];
+  const rows = LIVE_STAGE_ROWS[Math.min(stage, LIVE_STAGES - 1)] ?? 0;
+  return [{
+    run: liveRun(stage),
+    params: FORK_PARAMS.find((entry) => entry.rootId === "n000") ?? null,
+    tree: MCTS_ROWS.slice(0, rows).map((row) => asSearchNode(row, "live000")),
+    head: null,
+  }];
+}
+
+/** What the `head_activity` broadcast has told the client by `stage`: one tick
+ *  per node that has written to its journal. The newest nodes are the ones the
+ *  picture marks as working, which is the whole point of the channel. */
+function liveActivity(stage: number): ReadonlyMap<string, number> {
+  const rows = LIVE_STAGE_ROWS[Math.min(stage, LIVE_STAGES - 1)] ?? 0;
+  const ticks = new Map<string, number>();
+  for (const row of MCTS_ROWS.slice(0, rows)) ticks.set(row.id, stage);
+  return ticks;
+}
+
+/**
+ * One transport for the whole run, answering whatever stage is current.
+ *
+ * STABLE, and that is not a detail. `useAsyncResource` keys its load effect on
+ * the `rpc` identity, so an rpc rebuilt per stage would reload the run list at
+ * every beat and the frame would appear to be live for a reason the product does
+ * not have. In the app the transport is one socket and the DATA changes
+ * underneath it, so the fixture reads its stage from a ref at call time.
+ */
+function liveRpcOver(stageRef: { readonly current: number }): Rpc {
+  return async <T,>(method: string, args?: unknown[]): Promise<T> => {
+    const rows = liveCanvasRows(stageRef.current);
+    if (method === "getSearchTree") return rpcResult(rows[0]?.tree ?? []).json<T>();
+    return EXPLORATION_READS.has(method)
+      ? rpcResult(explorationRead(method, args ?? [], rows)).json<T>()
+      : stubRpc<T>(method, args);
+  };
+}
+
+/**
+ * The Exploration surface over a search that is happening.
+ *
+ * Advances itself when the frame asked for no particular stage, so the thing a
+ * person opens actually moves; pinned when it did, so the thing a gate opens
+ * cannot move under it.
+ */
+function ForkLiveFrame({ pinned }: { pinned: number | null }) {
+  const [stage, setStage] = useState(pinned ?? 0);
+  const stageRef = useRef(stage);
+  stageRef.current = stage;
+  const rpc = useMemo(() => liveRpcOver(stageRef), []);
+  const activity = useMemo(() => liveActivity(stage), [stage]);
+  useEffect(() => {
+    if (pinned !== null) return;
+    const id = setInterval(
+      () => setStage((current) => (current + 1) % LIVE_STAGES),
+      1_800,
+    );
+    return () => clearInterval(id);
+  }, [pinned]);
+  return (
+    <div data-live-stage={stage} className="contents">
+      <Shell surface="Exploration" rpc={rpc} headActivity={activity} backgroundJobs={[]} />
+    </div>
+  );
+}
+
 /* ── Compositions (markup mirrors WorkspacePage) ────────────────── */
 
 /* The one identity row, as the app renders it — the real component, not a
@@ -1363,8 +1480,21 @@ function ChatMessages() {
 }
 
 function Shell(
-  { surface = "Output", mctsTrees = EMPTY_TREES, rpc = stubRpc, pendingActions = [] }:
-  { surface?: SurfaceKind; mctsTrees?: ReadonlyMap<string, ForkNode>; rpc?: Rpc; pendingActions?: PendingAction[] },
+  {
+    surface = "Output", mctsTrees = EMPTY_TREES, rpc = stubRpc, pendingActions = [],
+    headActivity = NO_HEAD_ACTIVITY, backgroundJobs = BACKGROUND_JOBS,
+  }:
+  {
+    surface?: SurfaceKind; mctsTrees?: ReadonlyMap<string, ForkNode>; rpc?: Rpc;
+    pendingActions?: PendingAction[];
+    /** Per-node journal write counters, as the `head_activity` broadcast
+     *  delivers them. Static for every frame but the live one. */
+    headActivity?: ReadonlyMap<string, number>;
+    /** Detached work. EMPTY is the state that matters for liveness: with no
+     *  running job and no streaming turn the fork list drops to its idle
+     *  cadence, which is the condition a new search used to be invisible under. */
+    backgroundJobs?: BackgroundJob[];
+  },
 ) {
   return (
     <div className="flex h-screen w-screen flex-col p-bg p-text overflow-hidden md:flex-row">
@@ -1383,9 +1513,9 @@ function Shell(
             <div className="flex-1 min-w-0">
               <WorkSurface
                 surface={surface} onSurface={() => {}} pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} agentStatus={null} tools={[]}
-                memory={[]} memoryContent="" onSearchMemory={() => {}} mctsTrees={mctsTrees} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
+                memory={[]} memoryContent="" onSearchMemory={() => {}} mctsTrees={mctsTrees} headActivity={headActivity} isStreaming={false}
                 executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
-                backgroundJobs={BACKGROUND_JOBS} onRefreshJobs={() => {}} pendingActions={pendingActions}
+                backgroundJobs={backgroundJobs} onRefreshJobs={() => {}} pendingActions={pendingActions}
                 rpc={rpc}
               />
             </div>
@@ -2881,6 +3011,14 @@ async function mount() {
   else if (frame === "forkpreset") node = <Shell surface="Exploration" rpc={provePresetRpc} />;
   else if (frame === "forkfanin") node = <Shell surface="Exploration" rpc={swarmFanInRpc} />;
   else if (frame === "forkrefused") node = <Shell surface="Exploration" rpc={refusedRunRpc} />;
+  else if (frame === "forklive") {
+    // `?stage=N` pins the beat. Absent, the frame advances itself — see
+    // ForkLiveFrame for why liveness needs both.
+    const asked = new URLSearchParams(location.search).get("stage");
+    const wanted = asked === null ? Number.NaN : Number(asked);
+    node = <ForkLiveFrame
+      pinned={Number.isFinite(wanted) ? Math.max(0, Math.min(LIVE_STAGES - 1, wanted)) : null} />;
+  }
   else if (frame === "forkfull" || frame === "forkbig" || frame === "forkswarmfull") {
     // The one dynamic import in this dispatch, and it stays one: the page pulls d3
     // and the whole tree renderer, so every frame that does not open it must not
