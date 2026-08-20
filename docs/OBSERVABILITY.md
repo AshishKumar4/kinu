@@ -236,6 +236,84 @@ across a whole handler.
 The four rules it complements are proven red-to-green through the real `oxlint`
 binary in `tools/oxlint/anti-slop/no-swallow.gate.test.ts`.
 
+## Turn-review spend: metered once, read by two of four consumers
+
+The evolution TURN LANE — the outcome review, `EvolutionEngine.reviewTurn`
+(`packages/core/src/evolution/engine.ts:331`) — makes up to three fast-model
+completions per graded turn: the classifier
+(`classifyTurnOutcome`, `evolution/outcomes.ts:265`, calling at `:269`), the one-sentence
+reflection (`engine.ts:1033`) and pattern extraction's generalize call
+(`engine.ts:1059`). All three resolve through one seam, the `fastLlm` getter
+(`engine.ts:259-261`: `return this.rt.fastLlm ?? this.rt.llm`).
+
+**It IS metered.** `LLM.complete` returns a bare string
+(`packages/core/src/types/primitives.ts:157`), so no caller in `evolution/`
+ever sees a token count — but every backend's implementation captures the
+provider's usage before narrowing the result and reports it through a
+`ModelCallSink`:
+
+- CLI: `createLocalProviderLLM.complete` reports at
+  `packages/cli-backend/src/model-resolver.ts:253`; the runtime binds
+  `spend: { source: 'reflection' }` for `rt.llm` and `{ source: 'fast' }` for
+  `rt.fastLlm` (`packages/cli-backend/src/runtime.ts:328`, `:357`), and the sink
+  writes a durable `model_call` run event
+  (`packages/cli-backend/src/local-session.ts:322-355`).
+- cf: `createFastLLM` / `createDualPathLLM` report through `reportCall`
+  (`packages/cf-backend/src/runtime.ts:878-895`, wired at `:579-580`), landing
+  in the same row type via `ActorAgent.reportModelCall`
+  (`packages/cf-backend/src/actor-agent.ts:1607-1626`).
+
+`workspaceSpend()` reads exactly those rows
+(`packages/core/src/read-models/workspace-spend.ts:182-187`) and buckets them
+under the `fast` and `reflection` producers, which is what the Activity cost
+panel renders. **So review spend is not missing from the workspace total.**
+
+**Two consumers do not see it, for two different reasons.**
+
+1. **`MissionGovernor` never guards it.** `.govern(llm, labels)` has exactly ONE
+   call site in the tree — `packages/core/src/tools/agents-tool.ts:937`, the
+   `agents`/`swarm` path. `AgentRuntime` (`types/agent-runtime.ts:124-142`) and
+   `EvolutionConfig` (`evolution/types.ts:102`) carry no governor field, and
+   every construction site passes `rt` unwrapped
+   (`cli-backend/src/local-session.ts:451`, `cf-backend/src/orchestrator.ts:549`,
+   `cf-backend/src/subordinate-agent.ts:162`). Review spend is therefore never
+   debited and no budget cap can stop it. This is a policy gap, not a plumbing
+   one: wiring the governor here needs a decision about which label evolution
+   debits, which no ticket has made.
+
+2. **`turn_end.usage` cannot carry it, so the external bench does not count
+   it.** `closeTurnRun` writes `turn_end` from the TurnAccumulator's in-loop
+   usage (`orchestrator/turn-lifecycle.ts:74-125`) and the run is closed and
+   nulled (`cli-backend/src/local-session.ts:1562`) BEFORE the review is
+   ever dispatched — the review fires on the NEXT turn, or at
+   `recordTurn`
+   (`orchestrator/agent-orchestrator.ts:317`, `:348`). `model_call` and
+   `turn_end` are separate row types (`events/recorder.ts` `RunEventSchema`),
+   never merged. And the Terminal-Bench adapter sums `turn_end` ONLY —
+   `turn_usage` at `bench/clbench/proteus/events.py:222-243` — which feeds
+   `ArmSpend.billableTokens`, the denominator of the equal-spend ratio
+   (`scripts/bench-external.ts:177-185`, `:389`, `:480-482`). **The 2026-08-20 TB2.1
+   figure of 1,248,337 turn-scoped input tokens therefore excludes review spend,
+   and the equal-spend claim is computed without it.**
+
+   The INTERNAL bench does count it, because it meters somewhere else entirely:
+   an attempt-local HTTP proxy every model config points at
+   (`scripts/bench-agent-worker.ts:32-37`, totalled at `:110`), so a fast-model
+   call is counted whoever made it. Two instruments, two answers — and the
+   external one is the lower bound.
+
+**What the one-shot deferral changes here.** A `oneShot` host now queues the
+review instead of running it (`evolution/review-queue.ts`), and only a daemon or
+an interactive open drains it. A Terminal-Bench trial is a fresh workspace in a
+container that dies at the end of the trial, with no daemon and no interactive
+open — so its reviews are never drained, and `ArmSpend.executionGradedTurns`
+(`scripts/bench-external.ts:197`, `:161`, probed through `turn_outcomes`) reads 0 for
+an `evolve=true` arm. That is truthful rather than broken: the turn genuinely was
+not graded inside the trial. It does mean a preregistered arm's grading figure
+is not comparable across this change, and the `bench-agent-worker.ts` session is
+unaffected because it is built on the interactive surface (no `oneShot`), so it
+still reviews inline and its proxy still counts the tokens.
+
 ## `ErrorCode` and the vocabulary its nine classes share
 
 ```
