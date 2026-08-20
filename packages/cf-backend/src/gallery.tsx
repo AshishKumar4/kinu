@@ -74,6 +74,7 @@ import { MessageView } from "@/components/MessageView";
 import { DeviceConsentCard, ChatErrorCard, EmptyConversation, HistoryBoundary } from "@/pages/WorkspacePage";
 import { usePagedScroll } from "@/hooks/use-paged-scroll";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
+import { useTheme } from "@/hooks/use-theme";
 import { SupervisePage } from "@/pages/SupervisePage";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
 import {
@@ -1683,25 +1684,27 @@ const SURFACE_STEPS = [
   ["recessed", "--c-recessed"], ["base", "--c-bg"], ["panel", "--c-sidebar"],
   ["card", "--c-surface"], ["raised", "--c-elevated"], ["overlay", "--c-overlay"],
 ] as const;
+/** Role names only. These lines used to carry a `dark / light` contrast ratio
+ *  each, measured once against one palette — so on any other palette the plate
+ *  captioned numbers that were not true of what it was showing. The ratios are
+ *  asserted per theme by `unit-palette-contrast`, which is where a number can
+ *  fail rather than merely be read. */
 const TEXT_STEPS = [
-  ["ink", "--c-text", "15.4 / 15.7"], ["mid", "--c-text-2", "8.8 / 7.3"],
-  ["dim", "--c-text-3", "5.7 / 5.1"], ["accent-ink", "--c-accent-fg", "10.7 / 6.7"],
+  ["ink", "--c-text"], ["mid", "--c-text-2"], ["dim", "--c-text-3"], ["accent-ink", "--c-accent-fg"],
 ] as const;
-const STATUS_STEPS = [
-  ["success", "--c-success", "8.5 / 5.4"], ["warning", "--c-warning", "9.4 / 5.8"],
-  ["danger", "--c-danger", "6.8 / 6.1"], ["info", "--c-info", "8.3 / 5.6"],
-] as const;
+const STATUS_STEPS = ["success", "warning", "danger", "info"] as const;
 
 function Palette() {
+  const { mode, palette } = useTheme();
   return (
     <div className="p-bg min-h-screen p-8 space-y-8 max-w-3xl">
       <div>
-        <div className="p-eyebrow mb-1">Proteus v2 · Workshop at night</div>
-        <h1 className="p-title p-text" style={{ fontSize: 22, lineHeight: "28px" }}>Surface ladder, text roles, brass intent, status</h1>
-        <p className="p-meta p-text-3 mt-1">Contrast ratios shown as dark / light vs the base surface. All text roles are WCAG AA or better.</p>
+        <div className="p-eyebrow mb-1">{palette} · {mode}</div>
+        <h1 className="p-title p-text" style={{ fontSize: 22, lineHeight: "28px" }}>Surface ladder, text roles, accent intent, status</h1>
+        <p className="p-meta p-text-3 mt-1">The plate names the theme it is drawn in, and every value below is read from the live cascade — so it shows whichever of the four themes the toggles are on.</p>
       </div>
       <div>
-        <div className="p-eyebrow mb-2">Surfaces — six warm steps</div>
+        <div className="p-eyebrow mb-2">Surfaces — six steps</div>
         <div className="flex rounded-lg overflow-hidden border p-border">
           {SURFACE_STEPS.map(([name, v]) => (
             <div key={name} className="flex-1 h-24 flex items-end p-2" style={{ background: `var(${v})` }}>
@@ -1713,16 +1716,13 @@ function Palette() {
       <div>
         <div className="p-eyebrow mb-2">Text roles</div>
         <div className="space-y-1.5">
-          {TEXT_STEPS.map(([name, v, ratio]) => (
-            <div key={name} className="flex items-baseline gap-3">
-              <span className="p-body" style={{ color: `var(${v})` }}>The agent resumed turn 41 from step 3 — {name}</span>
-              <span className="p-num text-[11px] p-text-3">{ratio}</span>
-            </div>
+          {TEXT_STEPS.map(([name, v]) => (
+            <div key={name} className="p-body" style={{ color: `var(${v})` }}>The agent resumed turn 41 from step 3 — {name}</div>
           ))}
         </div>
       </div>
       <div>
-        <div className="p-eyebrow mb-2">Brass carries intent only</div>
+        <div className="p-eyebrow mb-2">The accent carries intent only</div>
         <div className="flex items-center gap-3 flex-wrap">
           <button className="p-btn px-3.5 h-9 p-row-text inline-flex items-center gap-2">Primary action</button>
           <button className="p-btn-quiet px-3.5 h-8 p-row-text inline-flex items-center">Secondary</button>
@@ -1735,10 +1735,10 @@ function Palette() {
         </div>
       </div>
       <div>
-        <div className="p-eyebrow mb-2">Status — AA in both modes</div>
+        <div className="p-eyebrow mb-2">Status — AA in every theme</div>
         <div className="flex items-center gap-2 flex-wrap">
-          {STATUS_STEPS.map(([name, _contrastValue, ratio]) => (
-            <span key={name} className={`px-2 py-0.5 p-badge-${name}`}>{name} <span className="p-num">{ratio}</span></span>
+          {STATUS_STEPS.map((name) => (
+            <span key={name} className={`px-2 py-0.5 p-badge-${name}`}>{name}</span>
           ))}
         </div>
       </div>
