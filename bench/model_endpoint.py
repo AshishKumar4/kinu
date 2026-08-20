@@ -1,4 +1,4 @@
-"""Model endpoint defaults shared by Proteus benchmark adapters."""
+"""Model endpoint defaults shared by Kinu benchmark adapters."""
 
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ def resolve_bearer_token(
 ) -> str:
     """Resolve only the credential belonging to *base_url*.
 
-    The product proxy uses a Proteus session/access token, direct Workers AI
+    The product proxy uses a Kinu session/access token, direct Workers AI
     uses a Cloudflare API token, and explicitly selected BYO providers use
     their provider key. Unknown endpoints require ``api_key_env`` so an
     unrelated ambient credential can never be sent to them by accident.
@@ -80,13 +80,13 @@ def resolve_bearer_token(
             expires_at = _string_at(config, "tokenExpiresAt")
             if token and expires_at and _is_expired(expires_at):
                 raise ValueError(
-                    "The stored Proteus session has expired. Run `proteus auth` "
+                    "The stored Kinu session has expired. Run `proteus auth` "
                     "again, or set PROTEUS_TOKEN to an access token with ai.proxy."
                 )
         if token:
             return token
         raise ValueError(
-            "No Proteus credential for the Workers AI proxy. Set PROTEUS_TOKEN "
+            "No Kinu credential for the Workers AI proxy. Set PROTEUS_TOKEN "
             "(mint one with `proteus tokens create --name bench --scopes ai.proxy`) "
             "or run `proteus auth` to create a stored session."
         )

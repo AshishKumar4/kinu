@@ -5,7 +5,7 @@
  * (different lineages, distinct per-instance winners) and constructs a
  * child that combines the best version of each module from each parent.
  *
- * Proteus's primary GEPA target is the scaffold source — a single file,
+ * Kinu's primary GEPA target is the scaffold source — a single file,
  * not a multi-module system. The paper's structural Merge (pick module
  * `j` from lineage A, module `k` from lineage B) doesn't apply directly.
  * The honest analogue for single-file artifacts is **reflective merge**:

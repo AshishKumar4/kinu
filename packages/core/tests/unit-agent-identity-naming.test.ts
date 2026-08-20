@@ -174,8 +174,8 @@ describe('automatic workspace titling — the decision', () => {
     expect(planWorkspaceTitle({ ...legacy, mission: '' })).toBe(null);
     expect(planWorkspaceTitle({ ...legacy, mission: '   \n ' })).toBe(null);
     // The generic missions seeded for workspaces created without one describe
-    // Proteus, not the workspace — titling from them would be noise.
-    expect(planWorkspaceTitle({ ...legacy, mission: summarizeSoul(renderSoulMarkdown({ name: 'Proteus' })) })).toBe(null);
+    // Kinu, not the workspace — titling from them would be noise.
+    expect(planWorkspaceTitle({ ...legacy, mission: summarizeSoul(renderSoulMarkdown({ name: 'Kinu' })) })).toBe(null);
     expect(planWorkspaceTitle({ ...legacy, mission: summarizeSoul(DEFAULT_SOUL_MD) })).toBe(null);
   });
 

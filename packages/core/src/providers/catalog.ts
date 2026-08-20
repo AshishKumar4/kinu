@@ -1,5 +1,5 @@
 // Dynamic models.dev catalog source — serves every models.dev provider whose
-// auth shape Proteus can satisfy with a stored API key: an OpenAI-surface
+// auth shape Kinu can satisfy with a stored API key: an OpenAI-surface
 // endpoint (`api` base URL, openai-compat/openai SDK) driven through the
 // openai-compat wire path. Bespoke providers (anthropic, openai, openrouter,
 // codex, workers-ai, …) are statically registered and always take precedence —
@@ -95,7 +95,7 @@ function createCatalogProvider(providerId: string): ModelProvider {
         credKey,
         missingCredentialError: `No API key for ${providerId} (cred key: ${credKey})`,
         resolveBaseURL: () => compatBaseURL(deps),
-        missingBaseURLError: `Provider ${providerId} is not in the models.dev catalog (or has no API endpoint Proteus can drive with an API key).`,
+        missingBaseURLError: `Provider ${providerId} is not in the models.dev catalog (or has no API endpoint Kinu can drive with an API key).`,
         mutate: ({ url, auth }) => auth.baseURL && url.startsWith(placeholder)
           ? auth.baseURL.replace(/\/+$/, '') + url.slice(placeholder.length)
           : url,

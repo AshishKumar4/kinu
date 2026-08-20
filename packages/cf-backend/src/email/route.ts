@@ -46,7 +46,7 @@ export async function routeInboundEmail(
   if (!agentName) {
     return { outcome: 'dropped', reason: `unroutable recipient ${message.to}` };
   }
-  // Drop auto-replies (RFC 3834) before waking a turn: Proteus replies
+  // Drop auto-replies (RFC 3834) before waking a turn: Kinu replies
   // on-thread, so admitting a vacation responder or peer agent would loop.
   if (isAutoReplyEmail(message.headers)) {
     return { outcome: 'dropped', agent: agentName, reason: 'auto-reply (RFC 3834)' };

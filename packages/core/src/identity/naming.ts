@@ -251,7 +251,7 @@ export const WORKSPACE_TITLE_SYSTEM_PROMPT = 'You create short, useful names for
 
 export function workspaceTitlePrompt(mission: string): string {
   return [
-    'Title a Proteus workspace from the mission it was created for.',
+    'Title a Kinu workspace from the mission it was created for.',
     '',
     'Return a concise JSON object with:',
     '- title: 1-5 words, Title Case, specific to the mission or persona.',

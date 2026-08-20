@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * WebSocket test harness for Proteus E2E tests.
+ * WebSocket test harness for Kinu E2E tests.
  *
  * Connects to the Durable Object via WebSocket, sends RPC calls
  * and chat messages, and validates responses. Outputs TAP-like

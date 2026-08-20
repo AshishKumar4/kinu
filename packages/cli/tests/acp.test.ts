@@ -295,7 +295,7 @@ describe('proteus acp — prompt turn', () => {
 });
 
 describe('proteus acp — prompt content', () => {
-  test('text, resource context and an image all cross into one Proteus prompt', async () => {
+  test('text, resource context and an image all cross into one Kinu prompt', async () => {
     const fake = fakeClient();
     const prompt: ContentBlock[] = [
       { type: 'text', text: 'explain this' },

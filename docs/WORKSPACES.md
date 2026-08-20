@@ -2,7 +2,7 @@
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
-In Proteus you create **workspaces**, not agents. A workspace is the container;
+In Kinu you create **workspaces**, not agents. A workspace is the container;
 agents are the actors that work inside it.
 
 ```

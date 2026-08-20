@@ -18,8 +18,8 @@
  * corrections", and requires the claim a second time. One forced re-look at
  * fresh state, on every single trial.
  *
- * Proteus had prose instead (a Verification section in the system prompt), and
- * Proteus's own telemetry says what prose is worth: written doctrine converted
+ * Kinu had prose instead (a Verification section in the system prompt), and
+ * Kinu's own telemetry says what prose is worth: written doctrine converted
  * 0% of benchmark trials to the behaviour it asked for, while a mechanical
  * splice converted 24%. So this is a mechanism, and it is built so a claim
  * cannot satisfy it:
@@ -50,7 +50,7 @@ export const COMPLETION_GATE_EVENT = 'completion_gate';
 /** Marks the turn as runtime-authored, exactly as the mid-turn steering splice
  *  does: the model must never read a harness check as something the user typed. */
 export const COMPLETION_GATE_HEADER =
-  '[Runtime check — a mechanical gate from the Proteus harness, not written by the user.]';
+  '[Runtime check — a mechanical gate from the Kinu harness, not written by the user.]';
 
 /**
  * What the harness looks at: where it is, what is there, and what changed —

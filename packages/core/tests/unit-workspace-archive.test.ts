@@ -266,9 +266,9 @@ describe('workspace archive', () => {
   test('a file that is not an archive is refused by its first line', async () => {
     const target = fresh();
     await expect(restoreWorkspaceArchive(target.archive, ['SQLite format 3']))
-      .rejects.toThrow(/not a Proteus workspace archive/);
+      .rejects.toThrow(/not a Kinu workspace archive/);
     await expect(restoreWorkspaceArchive(target.archive, ['{"t":"row","table":"messages","values":{}}']))
-      .rejects.toThrow(/not a Proteus workspace archive/);
+      .rejects.toThrow(/not a Kinu workspace archive/);
   });
 
   test('an empty workspace archives and restores to an empty workspace', async () => {

@@ -16,7 +16,7 @@ import { authCommand, openBrowser } from './auth';
 /**
  * Where a provider secret is written.
  *
- * Signed in, the answer is the Proteus account: sealed at rest there, reachable
+ * Signed in, the answer is the Kinu account: sealed at rest there, reachable
  * from every machine through the provider proxy, and no second copy of the same
  * secret sitting in a config file on this disk. A local key remains an explicit
  * choice (`--local`) for working offline or against an endpoint only this
@@ -55,7 +55,7 @@ export async function storeProviderSecret(opts: {
     // surprise this whole change exists to remove. Say what happened and what
     // to do about it, and leave nothing behind.
     throw new Error(
-      `Your Proteus account did not accept the key (${renderThrownChain({ cause: err })}). `
+      `Your Kinu account did not accept the key (${renderThrownChain({ cause: err })}). `
       + 'Nothing was saved. Try again, or re-run with --local to keep the key on this machine.',
       { cause: err },
     );
@@ -65,7 +65,7 @@ export async function storeProviderSecret(opts: {
   return 'account';
 }
 
-/** Whether the Proteus Worker could reach this endpoint at all: https, and not
+/** Whether the Kinu Worker could reach this endpoint at all: https, and not
  *  a loopback or link-local host. */
 function reachableFromTheInternet(baseURL: string): boolean {
   const url = tolerate(() => new URL(baseURL), 'malformed-input');
@@ -76,7 +76,7 @@ function reachableFromTheInternet(baseURL: string): boolean {
 
 function reportStored(where: 'account' | 'local', label: string, model: string): void {
   console.log(where === 'account'
-    ? `${OK('✓')} Connected ${label} to your Proteus account — no key stored on this machine.`
+    ? `${OK('✓')} Connected ${label} to your Kinu account — no key stored on this machine.`
     : `${OK('✓')} Saved ${label} credentials to this machine.`);
   console.log(DIM(`Default model: ${model}`));
 }
@@ -93,7 +93,7 @@ export async function setupCommand(opts: {
   local?: boolean;
 }): Promise<void> {
   console.log('');
-  console.log(ACCENT('Proteus setup'));
+  console.log(ACCENT('Kinu setup'));
   console.log(DIM('Connect your account, Cloudflare Workers AI billing, and optional local providers.'));
   console.log('');
 
@@ -117,11 +117,11 @@ export async function setupCommand(opts: {
 
   if (opts.accountOnly) {
     if (cloudReady) {
-      console.log(`${OK('✓')} Proteus account ready.`);
+      console.log(`${OK('✓')} Kinu account ready.`);
       console.log(DIM('Cloud workspaces can use Workers AI through your Cloudflare account when Cloudflare sign-in granted AI permissions.'));
       console.log(DIM('Run proteus provider connect codex for local workspaces that should use your ChatGPT Codex subscription.'));
     } else {
-      console.log(`${WARN('!')} Proteus account was not connected.`);
+      console.log(`${WARN('!')} Kinu account was not connected.`);
       console.log(DIM(`Run proteus auth${opts.origin ? ` --origin ${opts.origin}` : ''} when you are ready.`));
     }
     return;
@@ -129,10 +129,10 @@ export async function setupCommand(opts: {
 
   if (!opts.yes && !opts.provider && !opts.localModel && !canPrompt()) {
     if (cloudReady) {
-      console.log(`${OK('✓')} Proteus account ready.`);
+      console.log(`${OK('✓')} Kinu account ready.`);
       console.log(DIM('Workers AI is tied to the Cloudflare account used during browser sign-in.'));
     } else {
-      console.log(`${WARN('!')} Proteus account was not connected (no interactive terminal).`);
+      console.log(`${WARN('!')} Kinu account was not connected (no interactive terminal).`);
       console.log(DIM(`Run proteus auth${opts.origin ? ` --origin ${opts.origin}` : ''} when you are ready.`));
     }
     console.log(DIM('Run proteus provider connect <provider> to configure local workspace model access.'));
@@ -150,7 +150,7 @@ export async function setupCommand(opts: {
 
   if (provider === 'workers-ai') {
     if (!cloudReady) {
-      console.log(`${WARN('!')} Workers AI needs a signed-in Proteus account.`);
+      console.log(`${WARN('!')} Workers AI needs a signed-in Kinu account.`);
       console.log(DIM(`Run proteus auth${opts.origin ? ` --origin ${opts.origin}` : ''}, then proteus setup again.`));
       return;
     }
@@ -167,7 +167,7 @@ export async function setupCommand(opts: {
     updateConfigFile((config) => { delete config.model; });
     console.log(`${OK('✓')} Using Cloudflare Workers AI`);
     console.log(DIM(`Default model: ${DEFAULT_WORKERS_AI_MODEL_SPEC}`));
-    console.log(DIM('No API key on this machine — requests go through your Proteus account.'));
+    console.log(DIM('No API key on this machine — requests go through your Kinu account.'));
     return;
   }
 
@@ -344,7 +344,7 @@ function withProvider(config: ProteusConfig, patch: Pick<ProteusConfig, 'model' 
 
 async function chooseProvider(cloudReady: boolean): Promise<string> {
   console.log(DIM('Local model provider:'));
-  console.log(`  ${ACCENT('1')} Cloudflare Workers AI through your Proteus account ${DIM('(recommended)')}`);
+  console.log(`  ${ACCENT('1')} Cloudflare Workers AI through your Kinu account ${DIM('(recommended)')}`);
   console.log(`  ${ACCENT('2')} ChatGPT Codex subscription`);
   console.log(`  ${ACCENT('3')} OpenAI API key`);
   console.log(`  ${ACCENT('4')} OpenRouter`);

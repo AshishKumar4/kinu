@@ -1,6 +1,6 @@
-# Proteus
+# Kinu
 
-Proteus answers a task by searching a tree of agents. You give it the task and
+Kinu answers a task by searching a tree of agents. You give it the task and
 a way to measure an answer. It runs the tree and measures every candidate the
 way you said. A measured search writes its results to `exploration_records`,
 so a later search starts from them.
@@ -135,7 +135,7 @@ I wanted model choice to be flexible without forcing anyone into a single vendor
 - **Your own Cloudflare account** — one browser sign-in (`proteus auth`) attaches your Cloudflare account, and from that single login you get both Workers AI and your AI Gateway. Workers AI models resolve as `workers-ai/<model>` and your gateway as `my-gateway/{author}/{model}`. The OAuth consent needs the `aig.write` scope for AI Gateway; if you connected before that was added, run `proteus auth` again to re-grant it.
 - **Workers AI in signed-in local workspaces** — if you're signed in, a *local* workspace you create gets Workers AI through the `/api/user/ai/v1` proxy with no separate API key. New local workspaces default to `workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813`; this model requires paid Workers access or prepaid AI Gateway credits.
 - **Bring your own keys** — OpenAI, Anthropic, OpenRouter, and your ChatGPT Codex subscription, plus any OpenAI-compatible endpoint (Ollama, vLLM, …). Connect with `proteus providers connect <name>`.
-- **Local Claude subscription** — if you use Claude Code, `proteus create --model claude/claude-opus-4-x` (or `-sonnet-`/`-haiku-`) drives the official `claude` binary with your own Claude Code login. Proteus never reads your credentials or calls the API directly; the binary is the auth boundary, which is what keeps this compliant. It is local only: cloud workspaces must use an Anthropic API key (`proteus providers connect anthropic`), not the subscription.
+- **Local Claude subscription** — if you use Claude Code, `proteus create --model claude/claude-opus-4-x` (or `-sonnet-`/`-haiku-`) drives the official `claude` binary with your own Claude Code login. Kinu never reads your credentials or calls the API directly; the binary is the auth boundary, which is what keeps this compliant. It is local only: cloud workspaces must use an Anthropic API key (`proteus providers connect anthropic`), not the subscription.
 
 `proteus providers list` shows what's connected and each provider's status inline. Pick a model per workspace with `--model`, or switch mid-conversation from the `/model` picker (searchable); a chosen model persists as your default for new workspaces. Set reasoning effort (low, medium, high) with `/effort` or `proteus effort`, mapped to each provider's native knob.
 
@@ -175,7 +175,7 @@ I wanted model choice to be flexible without forcing anyone into a single vendor
 |---------|-------------|
 | `core/` | The shared brain (platform-independent): turn pipeline + `ExtensionHost`, canonical VFS + ExecutionRouter, the swarm engine, MCTS engine, EvolutionEngine, CraftStore, scaffold, the eight builtin tools, EventLog + SignalDelivery, types |
 | `agent-utils/` | MemoryStore (FTS5), CraftStore (FTS5), the shared VFS types, path addressing and small abort/encoding helpers |
-| `compaction/` | The default `transformContext` extension: vendored better-compact ladder + the Proteus AI-SDK⇄ladder codec |
+| `compaction/` | The default `transformContext` extension: vendored better-compact ladder + the Kinu AI-SDK⇄ladder codec |
 | `cf-backend/` | Cloudflare Workers: OrchestratorAgent (thin Think adapter), ExplorationAgent + SubordinateAgent (Facets), UserDO, React UI |
 | `cli/` | CLI commands: create, chat, exec, evolve, status, list, export, import |
 | `cli-backend/` | Local runtime: `LocalAgentSession`, bun:sqlite, subprocess sandbox, child_process MCTS branches |

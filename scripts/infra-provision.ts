@@ -226,7 +226,7 @@ async function main(): Promise<number> {
   }
 
   const infrastructure = deriveInfrastructure();
-  console.log(`${BOLD}Proteus infrastructure provisioning${NC}`);
+  console.log(`${BOLD}Kinu infrastructure provisioning${NC}`);
   console.log(`Account:      ${infrastructure.accountId}`);
   console.log(`Environments: ${infrastructure.environments.map((environment) => environment.key).join(', ')}`);
 

@@ -1,7 +1,7 @@
 /**
  * Egress interception totality — no container has an un-intercepted way out.
  *
- * Proteus removes the owner's secrets from the agent's container and replaces
+ * Kinu removes the owner's secrets from the agent's container and replaces
  * them with placeholders, substituting the real value outside the container on
  * the way out. That trade is only safe if the interception is TOTAL. A path
  * that leaves without passing a handler is worse than having no vault at all:

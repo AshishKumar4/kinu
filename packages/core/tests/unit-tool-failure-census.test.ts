@@ -239,7 +239,7 @@ describe('a refusal, a failing job, a missing runtime and a broken tool are four
   test('127 is the WORKSPACE lacking the program, and only 127 is', () => {
     // Measured through the agent's own `run` tool: `bun`, `npm`, `git`,
     // `python3`, `sh`, `bash`, `make`, `tsc` and `jq` all exit 127, because
-    // Proteus never asks Nimbus to install a runtime. That is a platform gap, so
+    // Kinu never asks Nimbus to install a runtime. That is a platform gap, so
     // it must not be counted against the tool OR read as the work failing.
     expect(classifyToolFailure(call({
       name: 'run', toolCallId: 't1', args: { command: 'bun test src/broken.test.ts' },
@@ -406,7 +406,7 @@ describe('the classification the `run` tool actually produced reaches the reader
    *
    * Before the classification existed this row was `returned_error` with
    * `refused: false` — filed in `broke`, the one bucket that is a candidate
-   * defect. A runtime that Proteus never provisioned is a platform gap the agent
+   * defect. A runtime that Kinu never provisioned is a platform gap the agent
    * did nothing to cause, and it was being counted against the tool.
    */
   async function refuseEscalation(runtime: string): Promise<{
@@ -508,7 +508,7 @@ const PART_BY_CODE = {
   bad_input: 'refused',
   denied: 'refused',
   unsupported: 'refused',
-  // The environment the call addressed is not there. A platform gap: Proteus never
+  // The environment the call addressed is not there. A platform gap: Kinu never
   // provisioned it, so it is neither a defect nor the work.
   unavailable: 'runtimeMissing',
   // Nothing decided these and nothing here proves the environment was absent, so
@@ -609,7 +609,7 @@ describe('each executor tool files its own failure in the right part', () => {
 
   test('sandbox: admission control that outlived its retries is also a platform gap', async () => {
     // 429 on the container start-rate burst. `withSandboxRetry` has already spent
-    // three attempts, so what reaches the census is a container Proteus could not
+    // three attempts, so what reaches the census is a container Kinu could not
     // get — `unavailable`. Filed `io` it would have been a candidate defect in
     // this tool, which is the platform's capacity ceiling wearing our name.
     const census = censusOf(await escalate(createSandboxExecutor({
@@ -625,7 +625,7 @@ describe('each executor tool files its own failure in the right part', () => {
   test('sandbox: a transport fault is NOT a platform gap', async () => {
     // The contrast that makes the case above mean something. Both used to be one
     // prose string; pooling them would put every container fault in the bucket
-    // that says "Proteus never provisioned this".
+    // that says "Kinu never provisioned this".
     const census = censusOf(await escalate(createSandboxExecutor({
       exec: async () => { throw new Error('the container hung up mid-write'); },
       readFile: async () => ({}), writeFile: async () => {}, listFiles: async () => ({ files: [] }),

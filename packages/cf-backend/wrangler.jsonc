@@ -64,14 +64,14 @@
     "bindings": [
       { "class_name": "OrchestratorAgent", "name": "OrchestratorAgent" },
       // Per-user DO: profile + agent registry + credentials + defaults.
-      // Keyed by stable Proteus userId assigned by AUTH_DB.
+      // Keyed by stable Kinu userId assigned by AUTH_DB.
       { "class_name": "UserDO", "name": "UserDO" },
       // Synthetic monitoring — one instance ("site"), driven by the cron
       // trigger below. Holds open incidents (so an outage alerts once, not
       // every tick) and the alert outbox.
       { "class_name": "MonitorDO", "name": "MonitorDO" },
       // Nimbus SDK session DO. Used directly through Nimbus.fromEnv() — no
-      // endpoint/token secrets are required for Proteus's built-in Nimbus
+      // endpoint/token secrets are required for Kinu's built-in Nimbus
       // executor.
       { "class_name": "NimbusSession", "name": "NIMBUS_SESSION" },
       // Sandbox — @cloudflare/sandbox DO + Container. One container per agent
@@ -132,9 +132,9 @@
   //
   // PREVIEW_HOST_SUFFIX is the zone Workspace and Sandbox previews are served
   // under. Each exposed port gets its own capability hostname: the Sandbox SDK
-  // mints its host shape and Proteus binds Nimbus ports to their session
+  // mints its host shape and Kinu binds Nimbus ports to their session
   // capabilities. Every host under the suffix except this Worker's own serves
-  // previews and NOTHING else — no SPA, no login — so no Proteus session ever
+  // previews and NOTHING else — no SPA, no login — so no Kinu session ever
   // exists on them.
   //
   // A hostname per port isolates origin-scoped storage and same-origin fetch

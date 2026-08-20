@@ -2,7 +2,7 @@
  * Layer gate — the deterministic, no-LLM regression gate over the turn
  * pipeline.
  *
- * Proteus can rewrite its own agentic loop, and until now it validated a
+ * Kinu can rewrite its own agentic loop, and until now it validated a
  * change two ways: four structural gates, and an LLM judge. Nothing in
  * between. A real behavioural regression therefore showed up, if at all, as a
  * movement of a point or two in an aggregate that a single user's traffic can

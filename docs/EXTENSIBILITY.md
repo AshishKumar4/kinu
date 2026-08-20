@@ -1,4 +1,4 @@
-# Proteus extensibility
+# Kinu extensibility
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
@@ -7,7 +7,7 @@ provider, an exploration strategy, an actor kind, or a turn extension.
 
 ## The seams
 
-Proteus exposes four seams, so a new idea plugs in at the right altitude.
+Kinu exposes four seams, so a new idea plugs in at the right altitude.
 
 | Seam | Interface | Lives in | Adds | Example use cases |
 |---|---|---|---|---|

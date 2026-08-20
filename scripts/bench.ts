@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// The Proteus bench harness — a machine-scored answer to "does any of this
+// The Kinu bench harness — a machine-scored answer to "does any of this
 // help?", with rejection by default and a held-out split.
 //
 //   bun scripts/bench.ts validate
@@ -186,8 +186,8 @@ function agentVariant(spec: string): AgentVariant {
   return {
     id: spec,
     description: evolving
-      ? 'Proteus with evolution live and state carried across the sequence'
-      : 'Proteus from a fresh v0 workspace per task',
+      ? 'Kinu with evolution live and state carried across the sequence'
+      : 'Kinu from a fresh v0 workspace per task',
     state: evolving ? 'shared' : 'fresh',
     autoEvolve: evolving,
   };
@@ -901,7 +901,7 @@ async function cmdGain(args: Map<string, string>, common: CommonOptions): Promis
   return 0;
 }
 
-const USAGE = `Proteus bench harness — machine-scored, sealed-split, rejection by default
+const USAGE = `Kinu bench harness — machine-scored, sealed-split, rejection by default
 
 Usage:
   bun scripts/bench.ts validate  --run-root <dir> [--id a,b] [--limit n] [--validate-retries n]
@@ -922,8 +922,8 @@ Variants:
   noisy:<rate>      synthetic solver with a known success rate, seeded
   pi:vanilla        official Pi coding agent, native read/bash/edit/write (V0)
   pi:retry          Pi V0 plus one machine-verifier feedback retry (V1)
-  agent             Proteus from a fresh v0 workspace per task
-  agent-evolving    Proteus with evolution live, state carried across the sequence
+  agent             Kinu from a fresh v0 workspace per task
+  agent-evolving    Kinu with evolution live, state carried across the sequence
   panel:self        fork panel whose members all use the analyst model
   panel:mixed       fork panel with one configured model per vendor family
 

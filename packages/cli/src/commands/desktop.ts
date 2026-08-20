@@ -62,7 +62,7 @@ async function requireAuthOrLogin(): Promise<{ origin: string; token: string; us
     if (!/Not authenticated/.test(renderThrownChain({ cause: err }))) throw err;
   }
   const origin = resolveCloudOrigin();
-  console.log(`${DIM('Not signed in. Starting Proteus login...')}`);
+  console.log(`${DIM('Not signed in. Starting Kinu login...')}`);
   await authCommand({ origin });
   return requireAuthConfig();
 }

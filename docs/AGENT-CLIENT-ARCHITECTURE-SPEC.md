@@ -12,7 +12,7 @@
 
 ## 1. What runs
 
-Proteus has two agent backends.
+Kinu has two agent backends.
 
 - A cloud workspace is an `OrchestratorAgent` Durable Object on Cloudflare. It
   owns Think / Agents SDK chat, storage, callable RPC, tools, background jobs,

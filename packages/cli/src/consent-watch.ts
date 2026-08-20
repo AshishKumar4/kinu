@@ -129,7 +129,7 @@ export function watchTerminalConsents(
     present: (consent, signal) => {
       if (!tty) {
         console.log(`\n${WARN('PC access requested')} (${consent.method} on ${consent.deviceLabel}: ${consent.command || 'command'}).`);
-        console.log(MUTED(`  Approve or deny from the Proteus app, or run: proteus chat ${agentName}`));
+        console.log(MUTED(`  Approve or deny from the Kinu app, or run: proteus chat ${agentName}`));
         return Promise.resolve(null);
       }
       return promptConsentDecision(consent, askLine, signal);
@@ -152,7 +152,7 @@ export function watchHeadlessConsents(
   agentName: string,
   opts: { json: boolean; onDenied(): void },
 ): { stop(): void } {
-  const instructions = `Pre-authorize with "always allow" via proteus chat ${agentName} or the Proteus app, then re-run.`;
+  const instructions = `Pre-authorize with "always allow" via proteus chat ${agentName} or the Kinu app, then re-run.`;
   return watchDeviceConsents(consents, {
     present: (consent) => {
       opts.onDenied();

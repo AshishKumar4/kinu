@@ -20,7 +20,7 @@ MODEL="${4:?model id}"
 CONCURRENCY="${5:?concurrent trials}"
 
 WORKTREE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CORPUS=/home/mrwhite0racle/Proteus/terminal-bench-2.1
+CORPUS=/home/mrwhite0racle/Kinu/terminal-bench-2.1
 JOBS_DIR=/var/tmp/tbench-jobs
 SHA="$(git -C "$WORKTREE" rev-parse --short=9 HEAD)"
 JOB_NAME="tb21-seed${SEED}-evolve${EVOLVE}-${SHA}"

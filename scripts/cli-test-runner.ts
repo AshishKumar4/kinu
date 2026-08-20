@@ -256,7 +256,7 @@ async function testDbIntegrity() {
 // ── Main ─────────────────────────────────────────────────────────
 
 async function main() {
-  console.log("Proteus CLI E2E Tests");
+  console.log("Kinu CLI E2E Tests");
   console.log(`Agent: ${AGENT_NAME}`);
   console.log("────────────────────────────────────");
 

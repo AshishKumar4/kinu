@@ -1,5 +1,5 @@
 // UserDO SQL schema. All tables live inside a single Durable Object instance
-// keyed by the stable Proteus userId resolved by the D1 auth store.
+// keyed by the stable Kinu userId resolved by the D1 auth store.
 // Idempotent — safe to call on every DO boot.
 
 import {

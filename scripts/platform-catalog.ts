@@ -244,7 +244,7 @@ const QUANTITY = /\b\d[\d_,.]*\s?(?:ms|s|KB|KiB|MB|MiB|GB|GiB)\b/g;
 /** Vocabulary that makes a quantity a claim about the platform rather than
  *  about us. Narrow on purpose, and narrowed once already: `the runtime` was in
  *  this list and matched `tools/registry.ts`, where a 2 GB cgroup is a container
- *  fact and `runtime` is a Proteus domain noun (`runtime: "workspace"`). A gate
+ *  fact and `runtime` is a Kinu domain noun (`runtime: "workspace"`). A gate
  *  with false positives gets disabled, which is worse than no gate, so an
  *  ambiguous cue is dropped rather than special-cased. `RPC` and `timeout` are
  *  excluded for the same reason — ours as often as theirs. */

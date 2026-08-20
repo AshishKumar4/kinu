@@ -1,7 +1,7 @@
-"""Proteus as a Continual Learning Bench system.
+"""Kinu as a Continual Learning Bench system.
 
 One benchmark turn is one `proteus exec` — the CLI's headless surface — against
-a local workspace that lives in a throwaway ``PROTEUS_HOME``. Proteus runs its
+a local workspace that lives in a throwaway ``PROTEUS_HOME``. Kinu runs its
 own agentic loop inside that turn (its tools, memory, CraftStore, scaffold);
 the benchmark environment is reached the way every CL-Bench system reaches it,
 by returning one structured action per turn.
@@ -22,7 +22,7 @@ is two claims and they need separating:
 
 ``single_conversation`` is the direct analogue of the Codex adapter's flag: the
 CLI session id is captured from the first turn and replayed with ``--resume``
-so Proteus sees its own prior turns, not just the task's latest observation.
+so Kinu sees its own prior turns, not just the task's latest observation.
 """
 
 from __future__ import annotations
@@ -101,7 +101,7 @@ _DEFAULT_PURPOSE = (
 
 
 def _resolve_repo_root(explicit: Optional[str]) -> Path:
-    """Locate the Proteus checkout holding the CLI entrypoint.
+    """Locate the Kinu checkout holding the CLI entrypoint.
 
     Defaults to the repo this file lives in, resolved through any symlink —
     the package is normally linked into ``clbench/src/systems/proteus``.
@@ -114,14 +114,14 @@ def _resolve_repo_root(explicit: Optional[str]) -> Path:
     )
     if not (root / "packages" / "cli" / "bin" / "cli.ts").is_file():
         raise FileNotFoundError(
-            f"No Proteus CLI at {root}/packages/cli/bin/cli.ts. "
-            "Pass repo_root, or set PROTEUS_REPO to the Proteus checkout."
+            f"No Kinu CLI at {root}/packages/cli/bin/cli.ts. "
+            "Pass repo_root, or set PROTEUS_REPO to the Kinu checkout."
         )
     return root
 
 
 def _resolve_api_key(provider: str, base_url: str, api_key_env: Optional[str]) -> str:
-    """Read the provider key from the environment, else the Proteus config.
+    """Read the provider key from the environment, else the Kinu config.
 
     Never accepted as a system param and never passed on argv — a benchmark
     config is a committed file and a command line is world-readable.
@@ -136,7 +136,7 @@ def _resolve_api_key(provider: str, base_url: str, api_key_env: Optional[str]) -
 
 @register_system("proteus")
 class ProteusSystem(ContinualLearningSystem):
-    """Proteus driven one benchmark turn at a time through `proteus exec`."""
+    """Kinu driven one benchmark turn at a time through `proteus exec`."""
 
     def __init__(
         self,
@@ -193,7 +193,7 @@ class ProteusSystem(ContinualLearningSystem):
         return self._root / "work"
 
     def _env(self) -> dict[str, str]:
-        """A clean environment: the operator's own Proteus home can never leak
+        """A clean environment: the operator's own Kinu home can never leak
         into a measured run, and the key travels here rather than on argv."""
         env = {k: v for k, v in os.environ.items() if not k.startswith("PROTEUS_")}
         env["HOME"] = str(self._home)
@@ -253,7 +253,7 @@ class ProteusSystem(ContinualLearningSystem):
                 f"{(result.stderr or result.stdout).strip()[:500]}"
             )
         self._workspace_ready = True
-        logger.info("Proteus workspace ready at %s", self._home / _WORKSPACE_NAME)
+        logger.info("Kinu workspace ready at %s", self._home / _WORKSPACE_NAME)
 
     def _destroy_workspace(self) -> None:
         """Stop the workspace daemon and delete every trace of the run's state."""
@@ -261,7 +261,7 @@ class ProteusSystem(ContinualLearningSystem):
             try:
                 self._run_cli(["daemon", "stop"], timeout=30)
             except (subprocess.SubprocessError, OSError) as exc:
-                logger.warning("Could not stop the Proteus daemon: %s", exc)
+                logger.warning("Could not stop the Kinu daemon: %s", exc)
         shutil.rmtree(self._home, ignore_errors=True)
         shutil.rmtree(self._cwd, ignore_errors=True)
         self._workspace_ready = False

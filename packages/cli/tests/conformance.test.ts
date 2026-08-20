@@ -54,7 +54,7 @@ const OFFLINE_PROVIDER = {
 if (resolve(AGENT_HOME) === resolve(join(homedir(), '.proteus'))
   || !resolve(AGENT_HOME).startsWith(resolve(tmpdir()))) {
   throw new Error(
-    `conformance suite refuses to run against a real Proteus home (${AGENT_HOME}). `
+    `conformance suite refuses to run against a real Kinu home (${AGENT_HOME}). `
     + 'Run it as `bun test packages/cli/tests/conformance.test.ts` from the repo root so '
     + 'scripts/test-preload.ts provides a throwaway PROTEUS_HOME.',
   );

@@ -2,7 +2,7 @@
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
-Every Proteus agent is reachable by email. Mail to `<workspace-name>@EMAIL_DOMAIN`
+Every Kinu agent is reachable by email. Mail to `<workspace-name>@EMAIL_DOMAIN`
 wakes the agent for a turn, and the agent's answer comes back as a real reply
 on the same thread. Evolution Changelog digests and background-job completions
 arrive in the owner's inbox over the same outbound path, and
@@ -86,7 +86,7 @@ Notes:
   in `core/src/events/hub/types.ts` (`EmailAttachmentMeta`).
 - A body larger than the brief budget is spilled to a workspace path, so the
   woken turn can read the whole message it was woken by.
-- RFC 3834 auto-replies and bulk mail are dropped inbound. Proteus auto-replies
+- RFC 3834 auto-replies and bulk mail are dropped inbound. Kinu auto-replies
   on-thread, so admitting another machine's vacation responder would loop the
   two forever.
 

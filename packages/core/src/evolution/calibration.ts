@@ -288,7 +288,7 @@ export function renderLabelingEvidence(item: LabelingItem): string {
 /** Render a drawn calibration set as the file a human fills in. */
 export function renderLabelingFile(items: ReadonlyArray<LabelingItem>): string {
   const lines = [
-    `# Proteus outcome calibration — ${items.length} turn${items.length === 1 ? '' : 's'}`,
+    `# Kinu outcome calibration — ${items.length} turn${items.length === 1 ? '' : 's'}`,
     '#',
     "# For each turn, judge what the user's FOLLOW-UP shows about how the agent's",
     '# answer landed. Put ONE letter after `verdict:` —',
@@ -369,7 +369,7 @@ export function parseLabelingFile(text: string): ParsedLabelFile {
     labels.push({ outcomeId: current, label });
   });
 
-  if (blocks === 0) errors.push('no turns found — is this a Proteus labeling file?');
+  if (blocks === 0) errors.push('no turns found — is this a Kinu labeling file?');
   return { labels, skipped: verdicts - labels.length, errors };
 }
 

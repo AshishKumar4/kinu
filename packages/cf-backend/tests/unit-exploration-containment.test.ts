@@ -295,7 +295,7 @@ describe('MCTS branch mode stays isolated', () => {
  * dist reaches `cloudflare:*` modules that exist only inside workerd. bun keeps
  * one mock per specifier and the first registration wins, so it runs before the
  * dynamic imports. The mock never participates in the assertions that matter:
- * those compare real Proteus classes to each other.
+ * those compare real Kinu classes to each other.
  */
 describe('head containment is structural', () => {
   mockAgentsSdk();

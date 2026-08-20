@@ -4,7 +4,7 @@
  * Agent-KB (arXiv:2507.06229) is the evidence that experience transfers
  * between agents at all: a shared hierarchical knowledge base moved GAIA and
  * SWE-bench by double digits, and auto-refined knowledge nearly matched
- * hand-written knowledge. Proteus already earns three kinds of experience per
+ * hand-written knowledge. Kinu already earns three kinds of experience per
  * workspace and shares none of it — crafted tools, corroborated lessons, and
  * keyed facts.
  *

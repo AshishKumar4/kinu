@@ -31,7 +31,7 @@
  *    POPULATIONS: these turns come from a different agent (Claude Code), a
  *    different scaffold, different tools and a different model. A profile
  *    measured here describes a rater's behaviour on Claude Code transcripts and
- *    says nothing quantitative about its behaviour on a Proteus ledger. The
+ *    says nothing quantitative about its behaviour on a Kinu ledger. The
  *    C8 hand-labeling pass remains the only thing that licenses a corrected
  *    rate, and this corpus is a complement to it, never a substitute.
  *

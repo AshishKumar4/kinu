@@ -195,7 +195,7 @@ import { EmailOutbox } from "./email/outbox";
 
 const STALE_EVENT_DELIVERY_MS = 10 * 60 * 1000;
 
-/** The one agents-SDK schedule row that carries every Proteus-owned wake
+/** The one agents-SDK schedule row that carries every Kinu-owned wake
  *  (triggers, peer outbox, email outbox). Public because `Agent.schedule()`
  *  types the callback as `keyof this`, which excludes private members. */
 const PROTEUS_TIMER_CALLBACK = '_proteusTimerTick';
@@ -483,7 +483,7 @@ export class OrchestratorAgent extends ActorAgent {
     return this._peerHub;
   }
 
-  /** Idempotent soonest-wins arm of Proteus's own wake-up, expressed as the
+  /** Idempotent soonest-wins arm of Kinu's own wake-up, expressed as the
    *  agents-SDK schedule row `PROTEUS_TIMER_CALLBACK`. A Durable Object has a
    *  single alarm slot and the SDK owns it (`_scheduleNextAlarm` deletes any
    *  alarm it does not recognise), so this must never call `setAlarm` itself.
@@ -1555,7 +1555,7 @@ export class OrchestratorAgent extends ActorAgent {
 
   // ── Timer ingress ──────────────────────────────────────────────
   //
-  // Proteus's own wake-up, dispatched by `Agent.alarm()` from the SDK's
+  // Kinu's own wake-up, dispatched by `Agent.alarm()` from the SDK's
   // `cf_agents_schedules` table (see `armTimer`). NOT an `alarm()` override:
   // the DO's single alarm slot belongs to the SDK, which also drives fiber
   // recovery, facet schedules and the keepAlive heartbeat off the same wake.
@@ -2615,7 +2615,7 @@ export class OrchestratorAgent extends ActorAgent {
       await sb.destroy();
     }
     await createNimbusWorkspaceSandbox(this.env, ownerUserId, this.name).destroy({
-      reason: 'Proteus workspace deleted',
+      reason: 'Kinu workspace deleted',
     });
     await this.destroy(); // agents base: drops SDK tables + deleteAlarm + deleteAll + aborts the isolate
     return { ok: true };

@@ -25,7 +25,7 @@ export function PreviewFrame({ url, label }: {
     return (
       <div className="h-full flex items-center justify-center p-4 text-center">
         <span className="text-[11px] p-text-3 font-mono break-all">
-          Refused to preview a URL that is not a Proteus preview: {url}
+          Refused to preview a URL that is not a Kinu preview: {url}
         </span>
       </div>
     );

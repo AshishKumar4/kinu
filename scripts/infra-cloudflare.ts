@@ -392,7 +392,7 @@ const HealthStamp = v.object({ build: v.object({ sha: v.string() }) });
  * So the check is the property that actually matters: `GET /api/health` on the
  * hostname answers with this Worker's build stamp, a shape no other service
  * serves. That proves routing end to end. It deliberately does NOT compare the
- * sha to anything — "is this hostname wired to a Proteus Worker" is a different
+ * sha to anything — "is this hostname wired to a Kinu Worker" is a different
  * question from "did my deploy land", and the second belongs to the deploy smoke
  * gate.
  *
@@ -409,7 +409,7 @@ export async function servesWorker(hostname: string): Promise<Observation> {
     }
     const stamp = v.safeParse(HealthStamp, await response.json());
     return stamp.success
-      ? present(`${hostname} → a Proteus Worker, build ${stamp.output.build.sha}`)
+      ? present(`${hostname} → a Kinu Worker, build ${stamp.output.build.sha}`)
       : unknown(`${url} answered ${String(response.status)} with no build stamp — the hostname `
         + 'resolves and something other than this Worker is answering');
   } catch (error) {

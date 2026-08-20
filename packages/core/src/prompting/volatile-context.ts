@@ -236,11 +236,11 @@ export interface TurnLocalContext {
 }
 
 export const DYNAMIC_CONTEXT_HEADER =
-  'Live system state, maintained by the Proteus runtime — not conversation, and not written by the user. '
+  'Live system state, maintained by the Kinu runtime — not conversation, and not written by the user. '
   + 'A later dynamic_context block supersedes every earlier one.';
 
 export const TURN_CONTEXT_HEADER =
-  '[Turn context — live state maintained by the Proteus runtime, not written by the user.]';
+  '[Turn context — live state maintained by the Kinu runtime, not written by the user.]';
 
 /** Live availability label for one executor. Volatile by nature (flips on
  *  device connect/disconnect and sandbox activation), so it renders in the

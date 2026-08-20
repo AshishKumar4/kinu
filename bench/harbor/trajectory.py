@@ -1,6 +1,6 @@
 """Convert ``proteus exec --json`` output into an ATIF trajectory.
 
-Proteus emits a line-delimited event stream (see ``jsonEvents`` in
+Kinu emits a line-delimited event stream (see ``jsonEvents`` in
 ``packages/cli/src/commands/run.ts``)::
 
     {"type":"session","id":...,"workspace":...,"backend":"local","cwd":...}
@@ -54,7 +54,7 @@ from harbor.models.trajectories import (
 _EVENTS_PATH = Path(__file__).resolve().parents[1] / "clbench" / "proteus" / "events.py"
 _SPEC = importlib.util.spec_from_file_location("proteus_events", _EVENTS_PATH)
 if _SPEC is None or _SPEC.loader is None:
-    raise ImportError(f"Cannot load the Proteus event reader from {_EVENTS_PATH}")
+    raise ImportError(f"Cannot load the Kinu event reader from {_EVENTS_PATH}")
 _events = importlib.util.module_from_spec(_SPEC)
 # Registered before execution because @dataclass resolves its own module to read
 # annotations.
@@ -266,7 +266,7 @@ def build_trajectory(
         steps=builder.steps,
         final_metrics=FinalMetrics(
             total_steps=len(builder.steps),
-            # Proteus prices nothing, so total_cost_usd stays unset.
+            # Kinu prices nothing, so total_cost_usd stays unset.
             total_prompt_tokens=summary.usage.get("input") if summary.usage else None,
             total_completion_tokens=summary.usage.get("output") if summary.usage else None,
             total_cached_tokens=summary.usage.get("cacheRead") if summary.usage else None,

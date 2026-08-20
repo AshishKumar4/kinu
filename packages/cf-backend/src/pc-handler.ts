@@ -52,11 +52,11 @@ DIR="$HOME/.proteus"
 mkdir -p "$DIR"
 chmod 700 "$DIR"
 if [ ! -f "$DIR/device.json" ]; then
-  echo "No Proteus device config found at $DIR/device.json."
+  echo "No Kinu device config found at $DIR/device.json."
   echo "Run: proteus auth --origin $PROTEUS_ORIGIN && proteus connect"
   exit 1
 fi
-echo "Downloading Proteus device daemon…"
+echo "Downloading Kinu device daemon…"
 curl -fsSL "$PROTEUS_ORIGIN${DAEMON_JS_URL}" -o "$DIR/pc-agent.js"
 chmod 600 "$DIR/device.json"
 
@@ -68,7 +68,7 @@ else
   echo "Node.js required. Install https://nodejs.org/ then re-run."
   exit 1
 fi
-echo "Proteus device connected. Check the Environment tab. It should flip to connected within a few seconds."
+echo "Kinu device connected. Check the Environment tab. It should flip to connected within a few seconds."
 `;
   return new Response(script, {
     status: 200,

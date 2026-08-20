@@ -145,7 +145,7 @@ async function main(): Promise<number> {
   const fate = partition(exclusiveTo(infrastructure, environment.key));
   const doomed = fate.deleted;
 
-  console.log(`${BOLD}Proteus infrastructure teardown — ${environment.key} (${environment.workerName})${NC}`);
+  console.log(`${BOLD}Kinu infrastructure teardown — ${environment.key} (${environment.workerName})${NC}`);
   describe(doomed, fate.swept);
 
   if (shared.length > 0) {

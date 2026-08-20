@@ -1,5 +1,5 @@
 // The Activity surface's breakdown view model. Category attribution is exact
-// in the unit Proteus measures (composed-content characters); it must never be
+// in the unit Kinu measures (composed-content characters); it must never be
 // presented as provider token attribution.
 import { describe, test, expect } from "bun:test";
 import type { ContextComposition, ContextSegment } from "@kinu/core";

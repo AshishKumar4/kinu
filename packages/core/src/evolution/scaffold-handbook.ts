@@ -4,7 +4,7 @@
  *
  * Harness Handbook (arXiv:2607.13285) measured the thing this fixes: an agent
  * editing its own harness works better from a behaviour→implementation map
- * than from raw source, and plans it in fewer tokens. Proteus's proposal
+ * than from raw source, and plans it in fewer tokens. Kinu's proposal
  * prompt showed the scaffold source and the `host.*` d.ts and nothing else —
  * no map of what the loop it is rewriting actually sits on.
  *

@@ -261,7 +261,7 @@ export function HomeApp({ opts }: { opts: HomeTuiOptions }) {
     >
       <box style={{ width: panelWidth, marginBottom: 1 }}>
         <text>
-          <strong fg={tuiColors.accentStrong}>Proteus</strong>{' '}
+          <strong fg={tuiColors.accentStrong}>Kinu</strong>{' '}
           <span fg={tuiColors.muted}>workspaces · cli {VERSION}</span>
         </text>
       </box>
@@ -284,7 +284,7 @@ export function HomeApp({ opts }: { opts: HomeTuiOptions }) {
           <strong fg={tuiColors.textStrong}>{agents.length === 0 ? 'What is this workspace for?' : 'Open a workspace, or start a new one'}</strong>{'\n'}
           <span fg={tuiColors.muted}>
             {setupRequired
-              ? 'Connect Proteus once, then this screen can create and open workspaces directly.'
+              ? 'Connect Kinu once, then this screen can create and open workspaces directly.'
               : agents.length === 0
               ? "Describe what the workspace is for. It becomes the workspace's SOUL.md and its name; nothing runs until you send the first message."
               : 'Select a workspace, or write a mission to create a new one.'}

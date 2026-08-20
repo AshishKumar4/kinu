@@ -4,7 +4,7 @@
  * Both `execute_tools` sandboxes (CF: PreambleCraftedExecutor over
  * DynamicWorkerExecutor; CLI: the Node `new Function` factory) bind a fixed
  * set of namespaces — `workspace`, `codemode`, `tools`, plus whatever
- * ExecutionRouter/CodemodeProvider namespaces the actor registers. Proteus's
+ * ExecutionRouter/CodemodeProvider namespaces the actor registers. Kinu's
  * OWN top-level tool NAMES are not in that scope: they are separate tool
  * calls, not codemode members. But a model reaching for one from inside a code
  * block is an easy, recurring mistake — `run` in particular reads as a
@@ -35,7 +35,7 @@ import { isBuiltinToolName, TOOL_REACH } from '../tools/registry';
 const UNDEFINED_IDENTIFIER = /^([A-Za-z_$][\w$]*) is not defined$/;
 
 /**
- * If `error` is exactly a ReferenceError naming one of Proteus's own native
+ * If `error` is exactly a ReferenceError naming one of Kinu's own native
  * tools, append the correction; otherwise return it unchanged.
  */
 export function explainNativeToolReferenceError(error: string): string {
@@ -45,6 +45,6 @@ export function explainNativeToolReferenceError(error: string): string {
   // execute_tools declares no codemode reach because it IS the sandbox; it
   // names no other tool, so there is nothing to correct toward.
   if (!namespace) return error;
-  return `${error} — "${name}" is a native Proteus tool, not a codemode member.`
+  return `${error} — "${name}" is a native Kinu tool, not a codemode member.`
     + ` Call \`${name}\` directly as its own top-level tool call, or reach the same capability from in here through the \`${namespace}\` namespace — its members are declared in this sandbox's type block.`;
 }

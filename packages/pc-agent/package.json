@@ -7,5 +7,5 @@
   "bin": {
     "proteus-pc-agent": "src/index.js"
   },
-  "description": "Proteus PC executor — reverse-WS daemon. Runs on the user's laptop, connects out to the Proteus Worker, executes commands locally."
+  "description": "Kinu PC executor — reverse-WS daemon. Runs on the user's laptop, connects out to the Kinu Worker, executes commands locally."
 }

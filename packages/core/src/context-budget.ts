@@ -3,13 +3,13 @@
  * crosses into the root's token stream, and the cap that tightens as the turn
  * gets heavy.
  *
- * Proteus's spill producers each honour the reference-plus-digest invariant
+ * Kinu's spill producers each honour the reference-plus-digest invariant
  * on their own (clamped tool results, spilled attachments, event content),
  * but each one only knows about ITSELF: eight 39k-char tool results sail
  * through a 40k per-result cap and land ~78k tokens of bulk in one turn's
  * durable history. RLMEnv's answer is mechanical rather than advisory — the
  * root sees at most a fixed slice of REPL output per iteration — and this is
- * that rule at the seam Proteus already owns: once a turn has admitted
+ * that rule at the seam Kinu already owns: once a turn has admitted
  * {@link DEFAULT_TURN_ADMIT_BUDGET_CHARS} of tool-result text, the per-result
  * cap for the REMAINDER of the turn drops to {@link TIGHTENED_RESULT_MAX_CHARS}.
  * Full text is still spilled, the marker recipe is unchanged, so nothing is
@@ -28,7 +28,7 @@
  * is its own root.
  */
 
-/** Every directory a Proteus spill lands in — the single source of truth for
+/** Every directory a Kinu spill lands in — the single source of truth for
  *  the addresses a "go read the rest" recipe resolves to. Producers build
  *  their paths from here, and {@link citesSpillAddress} recognises a tool call
  *  that went back for one. */

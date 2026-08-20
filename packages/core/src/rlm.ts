@@ -6,7 +6,7 @@
 // This unlocks "context-as-variable" — the LLM treats prompt material as a
 // REPL value it can grep, partition, summarize.
 //
-// In Proteus, the LLM-authored code inside execute_tools already runs in a
+// In Kinu, the LLM-authored code inside execute_tools already runs in a
 // codemode sandbox where workspace.* / sandbox.* / codemode.* are in scope.
 // `llm.query(...)` joins that surface as one more provider — the LLM can
 // write code like:

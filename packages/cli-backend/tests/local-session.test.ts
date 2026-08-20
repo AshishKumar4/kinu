@@ -569,7 +569,7 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(system).toBeDefined();
     const text = String(system!.content);
     expect(text).toContain('laptop.*');
-    expect(text).toContain('the local machine the Proteus CLI is running on');
+    expect(text).toContain('the local machine the Kinu CLI is running on');
     expect(text).not.toContain('device tunnel');
     expect(text).not.toContain('asks the user for consent');
     expect(text).not.toContain('OFFLINE');

@@ -42,7 +42,7 @@ import {
 
 const NOT_CONNECTED =
   'No device connected. Connect your machine once at the user level ' +
-  '(Devices / Executors tab → "Connect a device", or run the Proteus CLI: `proteus connect`).';
+  '(Devices / Executors tab → "Connect a device", or run the Kinu CLI: `proteus connect`).';
 
 /** True by construction rather than by probe — properties of this executor's
  *  own wiring, which no answer from the machine could confirm or deny. Read the

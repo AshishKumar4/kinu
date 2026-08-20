@@ -103,7 +103,7 @@ function startDaemon(opts: { quiet?: boolean } = {}): number | null {
 
   const entry = process.argv[1];
   if (!entry) {
-    if (!opts.quiet) throw new Error('Cannot locate Proteus CLI entrypoint for daemon startup.');
+    if (!opts.quiet) throw new Error('Cannot locate Kinu CLI entrypoint for daemon startup.');
     return null;
   }
 

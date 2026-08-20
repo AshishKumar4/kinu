@@ -1,4 +1,4 @@
-# Proteus on Continual Learning Bench
+# Kinu on Continual Learning Bench
 
 > This document is edited and maintained by Claude and is presented as-is.
 
@@ -6,10 +6,10 @@
 (Berkeley/Snorkel, [arXiv:2606.05661](https://arxiv.org/abs/2606.05661)) measures
 one thing I care about more than any benchmark we wrote ourselves: **`mean_gain`,
 the stateful system's reward minus the reward of the same system run stateless**.
-That is Proteus's central claim, scored by someone else's harness on someone
+That is Kinu's central claim, scored by someone else's harness on someone
 else's tasks.
 
-This directory is the adapter. It stays in the Proteus repo because it is our
+This directory is the adapter. It stays in the Kinu repo because it is our
 code about our agent; CL-Bench is cloned separately and left unmodified.
 
 ## Layout
@@ -54,7 +54,7 @@ clbench setup database_exploration   # ~800 MB from Hugging Face, free
 
 ## Credentials
 
-The default is native Workers AI DeepSeek V4 Pro 0813 through Proteus's
+The default is native Workers AI DeepSeek V4 Pro 0813 through Kinu's
 signed-in `/api/user/ai/v1` proxy. The adapter reads `$PROTEUS_TOKEN` first,
 then the session written by `proteus auth` in `~/.proteus/config.json`. For a
 long benchmark, mint a scoped token and keep it in the run environment:
@@ -83,7 +83,7 @@ which is worth knowing before blaming one for a result: `PROTEUS_MAX_STEPS` was
 suspected of causing the first run's one-step turns and was ruled out on exactly
 this filter, leaving the default of 500 steps against 1 used. That home goes through `bench/isolation.py`, the
 one rule both benchmark adapters share: it refuses an unset or relative home,
-your real `~/.proteus`, and anything inside the Proteus checkout.
+your real `~/.proteus`, and anything inside the Kinu checkout.
 
 ## Running
 
@@ -126,12 +126,12 @@ any gain is evolution rather than plain memory.
 
 `single_conversation` (the direct analogue of the Codex adapter's flag, on by
 default) captures the CLI session id from the first turn and replays it with
-`--resume`, so Proteus sees its own prior turns rather than only the task's
+`--resume`, so Kinu sees its own prior turns rather than only the task's
 latest observation.
 
 ## How a turn actually works
 
-One benchmark turn is one `proteus exec --json`. Proteus runs its full agentic
+One benchmark turn is one `proteus exec --json`. Kinu runs its full agentic
 loop inside that turn — its own tools, memory, and scaffold, in its own
 throwaway working directory — and returns one structured action.
 
@@ -139,7 +139,7 @@ Worth being clear about, because it is easy to expect otherwise: **no CL-Bench
 task hands a system a live handle on its environment.** `Query` carries a
 prompt, a Pydantic schema, and the previous observation; every task, including
 the containerized ones, is driven one structured action per turn, and the task
-owns the container. So Proteus's tool calls happen in *its* workspace, and the
+owns the container. So Kinu's tool calls happen in *its* workspace, and the
 benchmark environment is reached through the returned action. The built-in
 `codex` and `claude` systems work exactly the same way.
 

@@ -83,7 +83,7 @@ export function parseArgs(argv: string[]): EvalOptions {
   return opts;
 }
 
-const USAGE = `Proteus single-shot model A/B
+const USAGE = `Kinu single-shot model A/B
 
 Usage: bun scripts/eval.ts --baseline-model <spec> [options]
 

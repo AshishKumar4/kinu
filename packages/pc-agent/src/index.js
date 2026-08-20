@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Proteus PC agent — reverse-WebSocket daemon.
+// Kinu PC agent — reverse-WebSocket daemon.
 // Node 18+. No external deps (uses global fetch + WebSocket polyfill via ws fallback).
 'use strict';
 const fs = require('node:fs');
@@ -131,9 +131,9 @@ function createCheckpoints(opts = {}) {
     env.GIT_CONFIG_GLOBAL = os.devNull;
     env.GIT_CONFIG_SYSTEM = os.devNull;
     env.GIT_CONFIG_NOSYSTEM = '1';
-    env.GIT_AUTHOR_NAME = 'Proteus Checkpoint';
+    env.GIT_AUTHOR_NAME = 'Kinu Checkpoint';
     env.GIT_AUTHOR_EMAIL = 'checkpoints@proteus.local';
-    env.GIT_COMMITTER_NAME = 'Proteus Checkpoint';
+    env.GIT_COMMITTER_NAME = 'Kinu Checkpoint';
     env.GIT_COMMITTER_EMAIL = 'checkpoints@proteus.local';
     // So `diagnoseStaging` parses git's own words rather than a translation of
     // them: a localized warning would read as an unexplained staging failure.

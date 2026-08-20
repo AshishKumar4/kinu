@@ -196,7 +196,7 @@ describe('the execute_tools docstring the model receives', () => {
     // and the `file` tool address the same bytes.
     expect(description).toContain('canonical durable workspace');
     expect(description).not.toContain('Execute code to achieve a goal.');
-    // The vendor's example named a member Proteus makes throw.
+    // The vendor's example named a member Kinu makes throw.
     expect(description).not.toContain('codemode.searchWeb');
   });
 

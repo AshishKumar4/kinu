@@ -1,4 +1,4 @@
-# Proteus Quick Start
+# Kinu Quick Start
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
@@ -46,7 +46,7 @@ proteus providers connect claude          # status check + next steps (no key is
 proteus create jarvis --mode local --model claude/claude-opus-4-x
 ```
 
-Proteus drives the official `claude` binary, which owns its own login — it never
+Kinu drives the official `claude` binary, which owns its own login — it never
 reads your credentials. Cloud workspaces can't use the subscription; give them an
 Anthropic API key (`proteus providers connect anthropic`) instead.
 

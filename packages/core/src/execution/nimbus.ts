@@ -4,7 +4,7 @@
  * Core stays dependency-clean: the Cloudflare backend constructs the real
  * @nimbus-sh/sdk sandbox handle with Nimbus.fromEnv(...).sandbox(...), then
  * passes that handle here. This adapter only maps the handle's stable SDK
- * shape into Proteus's ExecutorProvider contract.
+ * shape into Kinu's ExecutorProvider contract.
  */
 
 import * as v from 'valibot';
@@ -678,7 +678,7 @@ declare namespace ${namespace} {
 }
 
 /**
- * Compose Proteus's durable workspace tools with the process/runtime/port
+ * Compose Kinu's durable workspace tools with the process/runtime/port
  * surface of the same Nimbus session. Hosted runtimes register this provider
  * once as `workspace`; there is no second Nimbus namespace or filesystem.
  */

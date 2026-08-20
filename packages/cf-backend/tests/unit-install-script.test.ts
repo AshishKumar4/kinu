@@ -132,10 +132,10 @@ describe('install.sh terminal handling', () => {
     const result = await runHeadlessInstall(script, home, stubBin);
 
     expect(result.timedOut).toBe(false);
-    expect(result.output).toContain('Proteus installed.');
+    expect(result.output).toContain('Kinu installed.');
     expect(result.output).toContain('Setup was not started because no interactive terminal is attached.');
     expect(result.output).toContain(`setup --origin ${ORIGIN}`);
-    expect(result.output).toContain('Proteus CLI is ready.');
+    expect(result.output).toContain('Kinu CLI is ready.');
     expect(result.output).not.toContain('STUB-SETUP-RAN');
     expect(result.output).not.toContain('/dev/tty');
     expect(result.exitCode).toBe(0);

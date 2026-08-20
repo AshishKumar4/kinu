@@ -191,7 +191,7 @@ export interface ProviderProxyFetchOptions {
   /** Absolute URL of the server's forward route. */
   forwardURL: string;
   /** Value for the `authorization` header identifying the caller to the
-   *  server (a Proteus CLI bearer). Not a provider credential. */
+   *  server (a Kinu CLI bearer). Not a provider credential. */
   authorization: string;
   /** Extra headers to attach to proxied requests only (e.g. session affinity). */
   headers?: Record<string, string>;

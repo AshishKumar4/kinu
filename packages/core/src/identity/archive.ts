@@ -566,12 +566,12 @@ export async function restoreWorkspaceArchive(
     try {
       record = v.parse(ArchiveRecordSchema, JSON.parse(trimmed));
     } catch (error) {
-      throw new Error('This file is not a Proteus workspace archive (unparsable line).', { cause: error });
+      throw new Error('This file is not a Kinu workspace archive (unparsable line).', { cause: error });
     }
     if (!header) {
       if (record.t !== 'header' || record.proteus_workspace_archive !== WORKSPACE_ARCHIVE_VERSION) {
         throw new Error(
-          `This file is not a Proteus workspace archive v${WORKSPACE_ARCHIVE_VERSION}.`,
+          `This file is not a Kinu workspace archive v${WORKSPACE_ARCHIVE_VERSION}.`,
         );
       }
       header = record;
@@ -629,7 +629,7 @@ export async function restoreWorkspaceArchive(
     }
   }
 
-  if (!header) throw new Error('This file is not a Proteus workspace archive (no header).');
+  if (!header) throw new Error('This file is not a Kinu workspace archive (no header).');
   if (!end) throw new Error('This archive is incomplete — the export did not finish.');
   if (end.rows !== rows) {
     throw new Error(`This archive is damaged: it declares ${end.rows} rows but carries ${rows}.`);

@@ -593,7 +593,7 @@ function CodexConnect({ status, onChanged }: { status: CodexStatus | null; onCha
   return (
     <div className="space-y-3">
       <p className="text-xs p-text-2">
-        Use your ChatGPT subscription as Proteus's chat backend.
+        Use your ChatGPT subscription as Kinu's chat backend.
         Authorize a device once. Every agent you create can pick a Codex model afterward.
       </p>
       <button

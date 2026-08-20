@@ -39,12 +39,12 @@ class ThrowawayHomeTest(unittest.TestCase):
             assert_throwaway_home("scratch/home")
 
     def test_refuses_the_real_proteus_home(self) -> None:
-        with self.assertRaisesRegex(ValueError, "real Proteus home"):
+        with self.assertRaisesRegex(ValueError, "real Kinu home"):
             assert_throwaway_home(isolation.REAL_HOME)
-        with self.assertRaisesRegex(ValueError, "real Proteus home"):
+        with self.assertRaisesRegex(ValueError, "real Kinu home"):
             assert_throwaway_home(os.path.join(isolation.REAL_HOME, "sessions"))
         # Normalized before it is judged, so a detour cannot walk back in.
-        with self.assertRaisesRegex(ValueError, "real Proteus home"):
+        with self.assertRaisesRegex(ValueError, "real Kinu home"):
             assert_throwaway_home(os.path.join(isolation.REAL_HOME, "x", "..", "y"))
 
     def test_refuses_a_home_inside_the_repo(self) -> None:

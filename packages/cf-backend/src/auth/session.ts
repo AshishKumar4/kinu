@@ -1,4 +1,4 @@
-// Browser authentication for Proteus.
+// Browser authentication for Kinu.
 //
 // Primary path: app-owned OAuth/OIDC sessions stored in D1. Browser cookies
 // are opaque, HttpOnly session handles; D1 stores only hashes.
@@ -14,7 +14,7 @@ import type { AccessTokenScope } from '../cli/access-token-store';
 export const SESSION_COOKIE_NAME = '__Host-proteus_session';
 
 export interface AuthIdentity {
-  /** Stable Proteus user id. */
+  /** Stable Kinu user id. */
   userId: string;
   /** Verified email from the active identity provider. */
   email: string;
@@ -87,7 +87,7 @@ export async function authenticateRequest(request: Request, env: AuthEnv): Promi
     const verified = await verifySession(env.AUTH_DB, sessionToken, readD1Bookmark(request));
     const identity = verified.identity;
     if (identity) return identity;
-    throw new AuthError(401, 'Proteus session expired. Sign in again.');
+    throw new AuthError(401, 'Kinu session expired. Sign in again.');
   }
 
   if (env.DEV_USER_EMAIL) {
@@ -103,7 +103,7 @@ export async function authenticateRequest(request: Request, env: AuthEnv): Promi
   if (!env.AUTH_DB) {
     throw new AuthError(500, 'Browser auth is not configured (AUTH_DB binding missing)');
   }
-  throw new AuthError(401, 'No Proteus session in request');
+  throw new AuthError(401, 'No Kinu session in request');
 }
 
 /** Methods a site can be made to issue cross-site without reading the reply. */

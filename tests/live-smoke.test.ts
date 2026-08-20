@@ -60,14 +60,14 @@ const liveTest = test.skipIf(!TARGET);
 
 /**
  * The hosted arm needs a WORKER, not merely a model. An `AI_GATEWAY_*` pair
- * resolves a live target with no Proteus deployment behind it, and there is
+ * resolves a live target with no Kinu deployment behind it, and there is
  * nothing to drive a Durable Object turn on — so that arm states the difference
  * instead of failing as though the deployment were broken.
  */
 const HOSTED = TARGET?.via === 'worker-proxy' ? TARGET : null;
 if (TARGET && !HOSTED) {
   console.warn('[skip] Live Smoke (hosted) — the resolved target is an AI Gateway, which fronts a '
-    + 'model but no Proteus deployment. Set PROTEUS_ORIGIN + PROTEUS_TOKEN to reach the worker.');
+    + 'model but no Kinu deployment. Set PROTEUS_ORIGIN + PROTEUS_TOKEN to reach the worker.');
 }
 const hostedTest = test.skipIf(!HOSTED);
 

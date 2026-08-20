@@ -1,4 +1,4 @@
-# Proteus user guide — install, first workspace, daily use
+# Kinu user guide — install, first workspace, daily use
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
@@ -46,8 +46,8 @@ proteus providers list                 # what's connected, and where each key li
 proteus providers connect openai       # or anthropic, openrouter, codex, openai-compatible
 ```
 
-Signed in, the key goes to your Proteus account rather than this disk, and this
-machine uses it through Proteus without holding a copy. The same key then works
+Signed in, the key goes to your Kinu account rather than this disk, and this
+machine uses it through Kinu without holding a copy. The same key then works
 from every machine you sign in on, and connecting a provider in the web UI is
 enough. Add `--local` to keep a key on this machine instead, for offline work or
 an endpoint only this machine can reach. Which one answers a turn depends on the
@@ -170,12 +170,12 @@ carry across runs, so a later search starts from what an earlier one proved.
 [docs/EXPLORATION.md](EXPLORATION.md) is the spec, with the six axes, the
 presets and what a refusal means.
 
-Proteus can add surfaces of its own. Ask it for a dashboard and it publishes a
+Kinu can add surfaces of its own. Ask it for a dashboard and it publishes a
 **view**: a tab, after the six, marked with a sparkle and labelled *Written by
-Proteus*. A view is data. It reads workspace state you can already see and draws
+Kinu*. A view is data. It reads workspace state you can already see and draws
 it with the same components everything else uses, so it can show you numbers but
 can never ask you for anything. It also cannot wear the name of any surface
-Proteus ships, including ones we have retired. "View source" shows exactly what
+Kinu ships, including ones we have retired. "View source" shows exactly what
 it wrote, and the Work tab's journal reverts it.
 
 ## 7. Backup, and moving a workspace

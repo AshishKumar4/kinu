@@ -58,7 +58,7 @@ export const PATTERNS: readonly SecretPattern[] = [
     message: 'hardcoded secret assignment',
   },
   {
-    // Proteus is a public repository. Cloudflare-internal research reached this
+    // Kinu is a public repository. Cloudflare-internal research reached this
     // ecosystem once already: ~/Nimbus kept dossiers under a gitignored
     // `docs/research/`, compiled from Cloudflare's internal repository and wiki,
     // and their SECTION CITATIONS still shipped inside a public production
@@ -70,7 +70,7 @@ export const PATTERNS: readonly SecretPattern[] = [
     message: 'Cloudflare-internal source reference (public repo — cite the measurement instead)',
   },
   {
-    // Proteus's OWN credentials were the one shape this scan did not cover, and
+    // Kinu's OWN credentials were the one shape this scan did not cover, and
     // they are the shape most likely to leak from this repo: `proteus tokens
     // create` prints the value once, so it gets pasted — into a chat, a CI
     // config, a scratch file. The precedent is already in the ledger: an
@@ -92,7 +92,7 @@ export const PATTERNS: readonly SecretPattern[] = [
     id: 'proteus-token',
     regex: /\bp(?:ta|tc|dt)_[0-9a-f]{8,}/g,
     benign: /<your-|\bp(?:ta|tc|dt)_(?:\.\.\.|…)/,
-    message: 'Proteus access/CLI/device token (rotate it — a printed-once value that reached a file is compromised)',
+    message: 'Kinu access/CLI/device token (rotate it — a printed-once value that reached a file is compromised)',
   },
   {
     // The shapes GITHUB blocks on. Learned the hard way: a push of 96 verified

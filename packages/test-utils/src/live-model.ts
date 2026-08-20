@@ -13,7 +13,7 @@
  * Two ways to reach a real model, in preference order:
  *
  *   1. WORKER PROXY — `PROTEUS_ORIGIN` + `PROTEUS_TOKEN`. A deployed or preview
- *      Proteus worker fronts the owner's Cloudflare credential at
+ *      Kinu worker fronts the owner's Cloudflare credential at
  *      `/api/user/ai/v1` (cf-backend/src/user/ai-proxy.ts), so the test needs a
  *      CLI bearer and no Cloudflare token at all. `proteus tokens create
  *      --scope ai.proxy` mints one. This is the cheap path: native Workers AI.

@@ -70,7 +70,7 @@ describe('Think still routes every turn through the scaffold seam', () => {
   });
 });
 
-describe('Proteus holds up its end of the seam', () => {
+describe('Kinu holds up its end of the seam', () => {
   const actorAgent = readFileSync(new URL('../src/actor-agent.ts', import.meta.url), 'utf8');
   const orchestrator = readFileSync(new URL('../src/orchestrator.ts', import.meta.url), 'utf8');
   const subordinate = readFileSync(new URL('../src/subordinate-agent.ts', import.meta.url), 'utf8');

@@ -138,7 +138,7 @@ function structuredError<Thrown>(
  * (Phase B). Dispatcher serialization preserves the object across the
  * sandbox RPC boundary; the LLM sees `{error: true, message, stack, toolName}`.
  *
- * Proteus-specific — the reference prior-art implementation passes bare
+ * Kinu-specific — the reference prior-art implementation passes bare
  * `err.message`; we send the structured envelope for agent observability.
  */
 function wrapProvidersWithStructuredErrors(providers: ResolvedProvider[]): ResolvedProvider[] {

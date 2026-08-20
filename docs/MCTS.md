@@ -52,7 +52,7 @@ the citation is defensible, so it is stated rather than implied.
 
 LATS's headline domains (HotPotQA, WebShop) build nodes out of ReAct steps: an
 action goes to an environment, an observation comes back, and the trajectory
-grows one interaction at a time. Proteus does not do that, and a reader who
+grows one interaction at a time. Kinu does not do that, and a reader who
 checks the paper against `explore()` — a single `generateText` with no
 `ToolSet` — will conclude the citation is wrong. It is not, because LATS's
 programming setup is itself not ReAct-shaped. Verbatim, §5.2:
@@ -419,4 +419,4 @@ Two MCTS requirements deliberately have **no** theorems and stay
 production selector is a global argmax with visit-count plateaus and root
 self-parenting, which defeats a naive self-antitonic claim) and convergence of
 the production search. Modeling a different textbook algorithm would not be
-evidence about Proteus.
+evidence about Kinu.

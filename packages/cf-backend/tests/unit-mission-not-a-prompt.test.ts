@@ -57,7 +57,7 @@ describe("the creation box is a mission, not a first prompt", () => {
 
     expect(page).toContain("<EmptyConversation mission={as?.purpose ?? \"\"} />");
     // A workspace created without a mission carries the generic seeded one,
-    // which describes Proteus rather than the workspace — showing it as a
+    // which describes Kinu rather than the workspace — showing it as a
     // brief would be noise.
     expect(page).toContain("isPlaceholderMission(mission) ? null : mission.trim()");
   });

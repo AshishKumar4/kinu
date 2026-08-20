@@ -82,7 +82,7 @@ export interface LocalProviderCredentials {
   openaiCompat?: Record<string, LocalOpenAICompatCredential>;
 }
 
-/** The signed-in Proteus session — lets local agents run on the user's
+/** The signed-in Kinu session — lets local agents run on the user's
  *  Cloudflare AI (Workers AI + their AI Gateway) through the worker's
  *  /api/user/ai/v1 proxy, with no Cloudflare token on this machine. */
 export interface LocalCloudSession {
@@ -311,7 +311,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
         cloud,
         menu,
         defaultModel: DEFAULT_WORKERS_AI_MODEL_ID,
-        unavailableReason: 'Connect Cloudflare in your Proteus user settings to use Workers AI.',
+        unavailableReason: 'Connect Cloudflare in your Kinu user settings to use Workers AI.',
         fetch: opts.fetch,
       }));
     }
@@ -320,7 +320,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
       label: 'Your AI Gateway',
       cloud,
       menu,
-      unavailableReason: 'Connect Cloudflare and select an AI Gateway in your Proteus user settings.',
+      unavailableReason: 'Connect Cloudflare and select an AI Gateway in your Kinu user settings.',
       fetch: opts.fetch,
     }));
   } else {
@@ -335,7 +335,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
   registry.register(createCodexProvider());
   registry.register(createOpenAIProvider());
   registry.register(createAnthropicProvider());
-  registry.register(createOpenRouterProvider({ appTitle: 'Proteus CLI' }));
+  registry.register(createOpenRouterProvider({ appTitle: 'Kinu CLI' }));
   registry.register(createOpenAICompatProvider());
 
   for (const name of Object.keys(credentials.openaiCompat ?? {}).sort()) {
@@ -596,7 +596,7 @@ function createProxyCredentialSource(
         providerIds = new Set();
         return value;
       }
-      if (!res.ok) throw new Error(`the Proteus provider proxy returned HTTP ${res.status}`);
+      if (!res.ok) throw new Error(`the Kinu provider proxy returned HTTP ${res.status}`);
       const body = v.parse(proxiedCredentialsSchema, await res.json());
       const byKey = new Map<string, { baseURL?: string }>();
       for (const { key, baseURL } of body.credentials) {
@@ -611,7 +611,7 @@ function createProxyCredentialSource(
       if (cached) return cached.value;
       return {
         byKey: new Map(),
-        error: `Could not reach your Proteus account to list connected providers (${renderThrownChain({ cause: err })}).`,
+        error: `Could not reach your Kinu account to list connected providers (${renderThrownChain({ cause: err })}).`,
       };
     }
   };

@@ -1,4 +1,4 @@
-# Proteus CLI reference
+# Kinu CLI reference
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 >
@@ -19,9 +19,9 @@ proteus <command> [options]
 | --- | --- |
 | [`proteus setup`](#proteus-setup) | Connect your account; optionally configure local-only model credentials |
 | [`proteus provider [action] [name]`](#proteus-provider-action-name) | List, connect, or disconnect model and account providers |
-| [`proteus auth`](#proteus-auth) | Sign the CLI into your Proteus account |
-| [`proteus whoami`](#proteus-whoami) | Show the signed-in Proteus account |
-| [`proteus logout`](#proteus-logout) | Sign out of the Proteus CLI |
+| [`proteus auth`](#proteus-auth) | Sign the CLI into your Kinu account |
+| [`proteus whoami`](#proteus-whoami) | Show the signed-in Kinu account |
+| [`proteus logout`](#proteus-logout) | Sign out of the Kinu CLI |
 | [`proteus tokens [action] [name]`](#proteus-tokens-action-name) | Manage long-lived CI access tokens (list, create, revoke) |
 
 ### Workspaces
@@ -85,9 +85,9 @@ proteus <command> [options]
 | [`proteus connect`](#proteus-connect) | Link this computer as the desktop execution daemon (the link renews itself while the daemon connects; re-run this after 180 idle days) |
 | [`proteus desktop [action]`](#proteus-desktop-action) | Connect or inspect the local desktop execution daemon |
 | [`proteus daemon [action] [workspace]`](#proteus-daemon-action-workspace) | Manage the local scheduler daemon: start, stop, restart, status, logs, tick |
-| [`proteus doctor`](#proteus-doctor) | Inspect local Proteus CLI installation state |
-| [`proteus update [target]`](#proteus-update-target) | Update the installed Proteus command |
-| [`proteus uninstall`](#proteus-uninstall) | Remove the installed Proteus command |
+| [`proteus doctor`](#proteus-doctor) | Inspect local Kinu CLI installation state |
+| [`proteus update [target]`](#proteus-update-target) | Update the installed Kinu command |
+| [`proteus uninstall`](#proteus-uninstall) | Remove the installed Kinu command |
 
 ## Reference
 
@@ -97,11 +97,11 @@ Connect your account; optionally configure local-only model credentials.
 
 | Option | What it does |
 | --- | --- |
-| `--origin <url>` | Proteus app origin |
+| `--origin <url>` | Kinu app origin |
 | `--provider <name>` | Provider: codex, openai, openrouter, anthropic, openai-compatible, skip |
 | `--model <id>` | Default model for the selected provider |
 | `--local-model` | Configure credentials for local-only agents |
-| `--local` | Keep the provider key on this machine instead of your Proteus account |
+| `--local` | Keep the provider key on this machine instead of your Kinu account |
 | `-y, --yes` | Accept recommended setup choices where possible |
 | `--skip-cloud` | Skip account sign-in |
 
@@ -113,33 +113,33 @@ Also: `proteus providers`
 
 | Option | What it does |
 | --- | --- |
-| `--origin <url>` | Proteus app origin |
+| `--origin <url>` | Kinu app origin |
 | `--model <id>` | Default model for the selected provider |
-| `--local` | Keep the provider key on this machine instead of your Proteus account |
+| `--local` | Keep the provider key on this machine instead of your Kinu account |
 
 ### proteus auth
 
-Sign the CLI into your Proteus account.
+Sign the CLI into your Kinu account.
 
 | Option | What it does |
 | --- | --- |
-| `--origin <url>` | Proteus app origin |
+| `--origin <url>` | Kinu app origin |
 
 ### proteus whoami
 
-Show the signed-in Proteus account.
+Show the signed-in Kinu account.
 
 | Option | What it does |
 | --- | --- |
-| `--origin <url>` | Proteus app origin |
+| `--origin <url>` | Kinu app origin |
 
 ### proteus logout
 
-Sign out of the Proteus CLI.
+Sign out of the Kinu CLI.
 
 | Option | What it does |
 | --- | --- |
-| `--origin <url>` | Proteus app origin |
+| `--origin <url>` | Kinu app origin |
 
 ### proteus tokens [action] [name]
 
@@ -160,7 +160,7 @@ Create a new workspace.
 | `--purpose <text>` | Mission — what this workspace is for (seeds SOUL.md) |
 | `--mode <mode>` | Workspace mode: cloud or local |
 | `--alias <name>` | Create an executable alias command |
-| `--origin <url>` | Proteus app origin for first-use sign-in |
+| `--origin <url>` | Kinu app origin for first-use sign-in |
 | `--no-alias-shim` | Do not create an alias shim |
 | `--model <id>` | Model ID (env: PROTEUS_MODEL) |
 | `--base-url <url>` | LLM API base URL (env: PROTEUS_BASE_URL) |
@@ -513,20 +513,20 @@ Manage the local scheduler daemon: start, stop, restart, status, logs, tick.
 
 ### proteus doctor
 
-Inspect local Proteus CLI installation state.
+Inspect local Kinu CLI installation state.
 
 ### proteus update [target]
 
-Update the installed Proteus command.
+Update the installed Kinu command.
 
 | Option | What it does |
 | --- | --- |
-| `--origin <url>` | Proteus app origin |
+| `--origin <url>` | Kinu app origin |
 | `--force` | Reinstall even if already current |
 
 ### proteus uninstall
 
-Remove the installed Proteus command.
+Remove the installed Kinu command.
 
 | Option | What it does |
 | --- | --- |
@@ -539,7 +539,7 @@ These apply to every command.
 | Variable | What it does |
 | --- | --- |
 | `PROTEUS_HOME` | Workspace + config directory (default ~/.proteus) |
-| `PROTEUS_ORIGIN` | Proteus app origin |
+| `PROTEUS_ORIGIN` | Kinu app origin |
 | `PROTEUS_TOKEN` | Account access token (CI) |
 | `PROTEUS_MODEL` | Default model ID |
 | `PROTEUS_BASE_URL` | LLM API base URL |

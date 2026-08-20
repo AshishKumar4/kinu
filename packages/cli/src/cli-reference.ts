@@ -18,7 +18,7 @@ export function renderCliReference(program: Command): string {
   const entries = commandEntries(program);
   const headings = [...new Set(entries.map((e) => e.heading))];
   const lines: string[] = [
-    '# Proteus CLI reference',
+    '# Kinu CLI reference',
     '',
     DISCLAIMER,
     '>',

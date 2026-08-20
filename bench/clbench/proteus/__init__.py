@@ -1,4 +1,4 @@
-"""Proteus system package for Continual Learning Bench."""
+"""Kinu system package for Continual Learning Bench."""
 
 from .system import ProteusSystem
 

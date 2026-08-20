@@ -3,7 +3,7 @@
  *
  * arXiv:2505.22954 (Darwin Gödel Machine): the breakthroughs came from
  * branching off ARCHIVED variants, not only the current best — diversity in
- * the archive is what makes later jumps reachable. Proteus already persists
+ * the archive is what makes later jumps reachable. Kinu already persists
  * every scaffold version (`scaffold_versions` rows + `agent.js.vN` VFS
  * files); this module is the read model over that single source of truth —
  * lineage (parent_version), shadow-eval scores (aggregated live from
@@ -239,7 +239,7 @@ function cladeScores(archive: ReadonlyArray<ScaffoldArchiveEntry>): Map<number, 
  * Weng names diversity collapse as a top open problem in evolutionary agent
  * loops, and the quality-diversity line (GSME's WHERE×WHY archive, CodeEvolve's
  * islands) answers it by keeping the search spread across niches instead of
- * pouring it into whichever one is currently winning. Proteus's niches are the
+ * pouring it into whichever one is currently winning. Kinu's niches are the
  * pathology cells a proposal names (evolution/pathology.ts), so coverage falls
  * straight out of the archive: 1/(1+n) over the versions sharing a cell, in the
  * same decaying shape as the novelty bonus beside it.

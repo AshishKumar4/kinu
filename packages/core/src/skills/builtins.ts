@@ -1,5 +1,5 @@
 /**
- * Built-in skills shipped with Proteus core. Discovered automatically and
+ * Built-in skills shipped with Kinu core. Discovered automatically and
  * merged with any VFS-stored skills the agent has authored. VFS skills
  * shadow built-ins with the same name — the agent can override us.
  *

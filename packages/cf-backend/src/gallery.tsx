@@ -1913,7 +1913,7 @@ function LandingV2() {
           Agents that keep<br />working after you close<br />the tab.
         </h1>
         <p className="p-body p-text-2 mt-5 max-w-xl" style={{ fontSize: 17, lineHeight: 1.55 }}>
-          Proteus agents hold state across sessions, run from the dashboard or your terminal, and use your own machine when local access matters.
+          Kinu agents hold state across sessions, run from the dashboard or your terminal, and use your own machine when local access matters.
         </p>
         <div className="flex items-center gap-3 mt-8">
           <button className="p-btn px-4 h-10 p-body inline-flex items-center font-semibold">Sign in</button>
@@ -1937,7 +1937,7 @@ function LandingV2() {
         </div>
       </main>
       <footer className="flex h-14 items-center justify-between px-6 border-t p-border">
-        <span className="p-meta p-text-3">Proteus on GitHub</span>
+        <span className="p-meta p-text-3">Kinu on GitHub</span>
         <span className="p-meta p-text-3">Durable agents, local execution, user-controlled automation.</span>
       </footer>
     </div>
@@ -2118,7 +2118,7 @@ function ViewBlocksFrame() {
 const RELEASE_BOARD = {
   bindings: [{
     id: "src_1", kind: "local", label: "proteus", repoUrl: null, defaultBranch: "main",
-    localDeviceId: null, localRoot: "~/Proteus", deployTarget: "bunx wrangler deploy --env production",
+    localDeviceId: null, localRoot: "~/Kinu", deployTarget: "bunx wrangler deploy --env production",
     createdAt: NOW - 9 * 864e5, updatedAt: NOW - 9 * 864e5,
   }],
   changes: [{
@@ -2250,7 +2250,7 @@ const PENDING_ACTIONS: PendingAction[] = [
   {
     id: "defer-9y2n8ixor8", kind: "deferred_action", at: NOW - 40 * 60e3,
     title: "Approve: a command the agent wants to run on laptop",
-    detail: "cd ~/Proteus && rm -rf node_modules && bun install",
+    detail: "cd ~/Kinu && rm -rf node_modules && bun install",
   },
   {
     id: "defer-4k1m2pqw7z", kind: "deferred_action", at: NOW - 36 * 60e3,

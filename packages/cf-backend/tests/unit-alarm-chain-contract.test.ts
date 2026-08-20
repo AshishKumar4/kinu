@@ -83,7 +83,7 @@ describe('DO alarm chain', () => {
   test('nothing writes the DO alarm slot behind the SDK', () => {
     // A DO has one alarm slot and _scheduleNextAlarm() deletes any alarm it
     // does not recognise, so a direct write and the SDK scheduler silently
-    // destroy each other. All Proteus wakes go through cf_agents_schedules.
+    // destroy each other. All Kinu wakes go through cf_agents_schedules.
     const direct = sources
       .filter(({ text }) => /\.\s*(?:setAlarm|deleteAlarm)\s*\(/.test(text))
       .map(({ path }) => path);
@@ -91,7 +91,7 @@ describe('DO alarm chain', () => {
   });
 });
 
-describe('the Proteus timer rides the SDK scheduler', () => {
+describe('the Kinu timer rides the SDK scheduler', () => {
   const orchestrator = readFileSync(join(SRC, 'orchestrator.ts'), 'utf8');
   const armTimer = orchestrator.slice(
     orchestrator.indexOf('private async armTimer('),

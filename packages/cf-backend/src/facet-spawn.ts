@@ -2,7 +2,7 @@
  * Exploration-facet spawning — the one path from a facet id to a live worker,
  * and back again to reclaimed storage.
  *
- * Proteus's parallel workers (MCTS branches and heads) all run as the same
+ * Kinu's parallel workers (MCTS branches and heads) all run as the same
  * Cloudflare Facet: `subAgent(host.explorationFacet(), id)` resolves-or-creates a
  * co-located child DO, then a short bootstrap sequence seeds the identity it
  * needs. Every bootstrap RPC persists into the FACET's own SQLite, so a facet

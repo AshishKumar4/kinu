@@ -32,7 +32,7 @@ describe('buildSystemPromptSync', () => {
   test('uses fallback SOUL.md when SOUL.md is missing', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
-    expect(prompt).toMatch(/Proteus/);                 // identity self-id
+    expect(prompt).toMatch(/Kinu/);                 // identity self-id
     expect(prompt).toMatch(/self-evolving/i);          // general-purpose, not code-centric
   });
 
@@ -445,7 +445,7 @@ describe('buildSystemPromptSync', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt, { soulOverride: 'CUSTOM ROLE TEXT' });
     expect(prompt).toContain('CUSTOM ROLE TEXT');
-    expect(prompt).not.toMatch(/^You are Proteus/);   // fallback NOT used
+    expect(prompt).not.toMatch(/^You are Kinu/);   // fallback NOT used
   });
 
   test('renders every BUILTIN_TOOL with its description', () => {
@@ -514,9 +514,9 @@ describe('buildSystemPromptSync', () => {
     // exactly where it always was: the codemode namespace.
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
-    expect(prompt).not.toContain('## Proteus release changes');
+    expect(prompt).not.toContain('## Kinu release changes');
     expect(prompt).not.toContain('Release mode:');
-    expect(prompt).not.toContain('Never deploy Proteus release changes');
+    expect(prompt).not.toContain('Never deploy Kinu release changes');
   });
 
   test('the ambient skills index renders name + description for every available skill, active or not', () => {
@@ -690,7 +690,7 @@ describe('buildSystemPromptSync', () => {
     });
 
     expect(prompt).toContain('laptop.*');
-    expect(prompt).toContain('the local machine the Proteus CLI is running on');
+    expect(prompt).toContain('the local machine the Kinu CLI is running on');
     expect(prompt).toContain('no tunnel or consent prompt');
     expect(prompt).not.toContain('device tunnel');
   });

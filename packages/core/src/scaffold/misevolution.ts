@@ -2,7 +2,7 @@
  * Misevolution gate — a FIXED safety eval over evolved artifacts.
  *
  * Grounded in arXiv:2509.26354 ("misevolution": alignment decays through the
- * agent's own memory/tool/prompt evolution — exactly the pathways Proteus
+ * agent's own memory/tool/prompt evolution — exactly the pathways Kinu
  * mutates). The structural gates (SCAFFOLD_FORBIDDEN_PATTERNS) keep evolved
  * code inside the sandbox; THIS gate keeps it from weakening the safety
  * machinery around it. It runs at every acceptance point:
@@ -25,7 +25,7 @@
  * import core modules, and evolved code that merely references this
  * machinery is itself vetoed). They are textual tripwires, not proofs:
  * determined obfuscation can evade a regex, but every known-bad construct a
- * Proteus surface can literally express trips a veto with a recorded reason.
+ * Kinu surface can literally express trips a veto with a recorded reason.
  */
 
 import type { SqlExecutor } from '../types/primitives';

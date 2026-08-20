@@ -73,7 +73,7 @@
 }
 
 /* ════════════════════════════════════════════════════════════════════
-   Proteus design language — the landing page, applied to the app.
+   Kinu design language — the landing page, applied to the app.
 
    The signed-out landing page (`landing-route.ts`) is the reference, and
    it is not a second design system to be absorbed: it is THE one. Its
@@ -264,7 +264,7 @@ html, body, #root {
   --color-kumo-tip-stroke: var(--c-border);
 
   /* Kumo's badge hues are a categorical set (red/orange/green/teal/blue/
-     purple). Proteus has no categorical palette — a badge means a status —
+     purple). Kinu has no categorical palette — a badge means a status —
      so each maps onto the status role it stands for, and the two hues with
      no status meaning (teal, purple) fold into neutral rather than staying
      the only cyan and violet on screen. */
@@ -1056,7 +1056,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 
 /* Plannotator is hosted as a document primitive, not as a second app or theme.
    Its semantic contract is confined to this surface and resolves through the
-   same Proteus tokens as the rest of Outputs. */
+   same Kinu tokens as the rest of Outputs. */
 [data-proteus-plan-review],
 body > [data-comment-popover="true"],
 body > .annotation-toolbar {

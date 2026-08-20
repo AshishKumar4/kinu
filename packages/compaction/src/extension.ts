@@ -1,5 +1,5 @@
 /**
- * The compaction extension — Proteus's `transformContext` adapter over the
+ * The compaction extension — Kinu's `transformContext` adapter over the
  * published better-compact ladder engine.
  *
  * Encode the durable history to IR turns, run the engine (cached-plan replay
@@ -10,7 +10,7 @@
  *
  *  - assistant runs use the core per-run prompt already embedded in each
  *    summary job by the ladder;
- *  - the first prefix summary uses Proteus's tuned handoff template
+ *  - the first prefix summary uses Kinu's tuned handoff template
  *    (`buildCompactionSummaryPrompt` — Active Task verbatim → Remaining Work,
  *    recall-first, secret redaction, iterative updates), the single summary
  *    spec the old single-shot path used, wrapped in the [CONTEXT CHECKPOINT]

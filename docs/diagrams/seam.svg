@@ -3,7 +3,7 @@
        is the same geometry under a different :root palette, and the README picks
        between the two with <picture>. Everything below the palette block must
        stay byte-identical in both, so edit them together. -->
-  <title id="t">Proteus: one core, two backends</title>
+  <title id="t">Kinu: one core, two backends</title>
   <desc id="d">Clients and autonomous ingress feed a platform-clean core package that owns the turn pipeline, tools, delegation, evolution, context, the canonical workspace file plane, the execution router and the event log. Below it a seam of two interfaces — AgentRuntime for resource primitives and BackendHost for loop capabilities — is implemented twice: by the Cloudflare backend, where a workspace is a Durable Object, and by the local CLI backend running on your own machine.</desc>
   <style>
     :root {

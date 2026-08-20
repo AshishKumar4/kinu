@@ -1,6 +1,6 @@
 /**
  * `/api/user/*` HTTP routes. All operations are user-scoped — the auth
- * middleware resolves the caller's Proteus `userId` before any of these
+ * middleware resolves the caller's Kinu `userId` before any of these
  * handlers run.
  *
  * Routes:

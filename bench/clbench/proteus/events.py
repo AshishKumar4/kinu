@@ -222,7 +222,7 @@ def _reported_fields(usage: dict[str, Any]) -> Usage:
 def turn_usage(events: list[Event]) -> Usage:
     """Token usage, summed over every `turn_end` in the stream.
 
-    Proteus reports per turn rather than cumulatively, so these add rather than
+    Kinu reports per turn rather than cumulatively, so these add rather than
     delta. ``input`` is cache-inclusive and ``cacheRead`` is its cache-read
     share, which is the convention CL-Bench's ``build_usage_event`` prices
     against.
@@ -288,7 +288,7 @@ def run_events(events: list[Event], *kinds: str) -> list[Event]:
 
 
 def tool_calls(events: list[Event]) -> list[str]:
-    """Names of the tools Proteus called, in order."""
+    """Names of the tools Kinu called, in order."""
     return [
         str(event.get("toolName", ""))
         for event in events

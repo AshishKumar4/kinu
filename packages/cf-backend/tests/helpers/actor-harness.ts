@@ -212,7 +212,7 @@ function instantiate<T extends object>(Actor: new (ctx: AgentContext, env: Env) 
 function ensureActorSchema(
   agent: InstanceType<typeof OrchestratorAgent> | InstanceType<typeof SubordinateAgent>,
 ): void {
-  // `onStart` is synchronous on every Proteus Durable Object (it runs inside
+  // `onStart` is synchronous on every Kinu Durable Object (it runs inside
   // `blockConcurrencyWhile`), so the production override can simply be called:
   // its whole schema is in place when it returns.
   if (agent instanceof OrchestratorAgent) {

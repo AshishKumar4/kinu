@@ -2,7 +2,7 @@
  * Preview-origin containment.
  *
  * A previewed app is HTML the agent wrote from sources it does not control. The
- * invariant under test is that it never runs as the Proteus app: not on the
+ * invariant under test is that it never runs as the Kinu app: not on the
  * app's origin and not with the app's session cookie. Cross-preview cookie-site
  * isolation remains an explicit deployment prerequisite below.
  *
@@ -31,7 +31,7 @@ import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 
 // The SDK's entry point pulls in `cloudflare:workers`, which only exists inside
 // workerd. proxyToSandbox is the seam the Worker delegates preview routing to,
-// so standing in for it here leaves everything Proteus owns under test.
+// so standing in for it here leaves everything Kinu owns under test.
 let sdkResponse: Response | null = null;
 let sdkRequest: Request | null = null;
 // `mock.module` replaces the whole module for the rest of the run, so the stub
@@ -242,7 +242,7 @@ describe('serving the preview host', () => {
     expect(res.headers.get('set-cookie')).toBeNull();
   });
 
-  test('strips Proteus credentials before the Sandbox SDK reaches guest code', async () => {
+  test('strips Kinu credentials before the Sandbox SDK reaches guest code', async () => {
     sdkResponse = new Response(null, { status: 204 });
     sdkRequest = null;
     const res = await servePreviewRequest(new Request(PREVIEW_URL, {
@@ -326,7 +326,7 @@ describe('serving the preview host', () => {
 });
 
 describe('serving a Nimbus preview host', () => {
-  test('routes all HTTP methods at the origin root without forwarding Proteus credentials', async () => {
+  test('routes all HTTP methods at the origin root without forwarding Kinu credentials', async () => {
     let forwarded: Request | null = null;
     let durableObjectName = '';
     let routedPort = 0;
@@ -406,7 +406,7 @@ describe('serving a Nimbus preview host', () => {
     expect(routed.headers.get('authorization')).toBe('Bearer guest-token');
   });
 
-  test('strips Proteus device bearer auth before forwarding to a guest app', async () => {
+  test('strips Kinu device bearer auth before forwarding to a guest app', async () => {
     let forwarded: Request | null = null;
     const env = testEnv({
       ...ENV,

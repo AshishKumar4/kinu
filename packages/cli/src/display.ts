@@ -13,7 +13,7 @@ import cliPackage from '../package.json' with { type: 'json' };
 
 // ── Brand ────────────────────────────────────────────────────────
 
-const BRAND = chalk.bold.cyan('🔱 Proteus');
+const BRAND = chalk.bold.cyan('🔱 Kinu');
 const VERSION = cliPackage.version;
 const DIM = chalk.dim;
 const ACCENT = chalk.cyan;
@@ -312,7 +312,7 @@ const UNGROUPED_HEADING = 'Other commands:';
  *  deliberately not repeated here — `proteus <command> --help` owns those. */
 export const GLOBAL_ENVIRONMENT: ReadonlyArray<readonly [string, string]> = [
   ['PROTEUS_HOME', 'Workspace + config directory (default ~/.proteus)'],
-  ['PROTEUS_ORIGIN', 'Proteus app origin'],
+  ['PROTEUS_ORIGIN', 'Kinu app origin'],
   ['PROTEUS_TOKEN', 'Account access token (CI)'],
   ['PROTEUS_MODEL', 'Default model ID'],
   ['PROTEUS_BASE_URL', 'LLM API base URL'],

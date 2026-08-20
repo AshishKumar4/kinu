@@ -109,7 +109,7 @@ describe('the run tool', () => {
     const first = await run.execute({ command: "sed -i 's/a/b/' one.ts" });
     const second = await run.execute({ command: "sed -i 's/c/d/' two.ts" });
     expect(first).toContain('an in-place stream edit');
-    expect(second).not.toContain('Proteus note');
+    expect(second).not.toContain('Kinu note');
     expect(second).toBe("ran: sed -i 's/c/d/' two.ts");
   });
 

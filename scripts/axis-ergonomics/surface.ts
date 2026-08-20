@@ -3,7 +3,7 @@
  *
  * This is not the implementation. `swarm` does not exist yet; the design is
  * `local://mcts-as-lats-design.md` and the spec is mid-authoring by
- * `ObjectiveSpec`. What a caller model actually receives from a Proteus tool is
+ * `ObjectiveSpec`. What a caller model actually receives from a Kinu tool is
  * `renderToolSchemaDescription(spec)` plus a JSON schema (registry.ts:651-658),
  * so that pair IS the surface, and it is testable before a single line of
  * engine work exists. Rendering it here, from one source, is what makes the

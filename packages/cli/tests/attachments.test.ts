@@ -195,7 +195,7 @@ describe('the inline cap belongs to the backend, not to the CLI', () => {
 });
 
 describe('a quoted sentence is prose, not a path', () => {
-  // Measured on the first CL-Bench rollout Proteus ever ran: TOKEN_RE treats any
+  // Measured on the first CL-Bench rollout Kinu ever ran: TOKEN_RE treats any
   // double-quoted single-line string as a path candidate, and stat() answered
   // ENAMETOOLONG rather than ENOENT, which is not the tolerated failure, so it
   // escaped resolvePromptAttachments and killed `proteus exec` mid-turn:

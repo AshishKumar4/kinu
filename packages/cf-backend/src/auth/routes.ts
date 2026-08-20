@@ -111,7 +111,7 @@ async function renderLogin(request: Request, env: Env): Promise<Response> {
     ? buttons
     : `<p>No OAuth providers are configured yet.</p>`;
 
-  return html('Sign in to Proteus', `
+  return html('Sign in to Kinu', `
     <p class="lede">Choose a sign-in method.</p>
     <div class="providers">${body}</div>
   `, { headers: { 'cache-control': 'no-store' } });
@@ -420,7 +420,7 @@ async function fetchGitHubProfile(accessToken: string): Promise<OAuthProfile> {
   const headers = {
     accept: 'application/vnd.github+json',
     authorization: `Bearer ${accessToken}`,
-    'user-agent': 'Proteus',
+    'user-agent': 'Kinu',
     'x-github-api-version': '2022-11-28',
   };
   const userRes = await fetch('https://api.github.com/user', { headers });
@@ -683,7 +683,7 @@ function html(title: string, body: string, init: ResponseInit = {}): Response {
 </head>
 <body>
   <div class="shell">
-    <header><a class="brand" href="/"><span class="mark">P</span><span>Proteus</span></a></header>
+    <header><a class="brand" href="/"><span class="mark">P</span><span>Kinu</span></a></header>
     <main><h1>${escapeHtml(title)}</h1>${body}</main>
   </div>
 </body>

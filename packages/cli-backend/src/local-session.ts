@@ -1,5 +1,5 @@
 /**
- * LocalAgentSession — the local backend's realization of the Proteus agent loop.
+ * LocalAgentSession — the local backend's realization of the Kinu agent loop.
  *
  * The cf-backend runs the agent inside a @cloudflare/think Durable Object; this
  * is its peer for a local Bun process. It owns the SAME core orchestration
@@ -151,7 +151,7 @@ function olderHistoryNotice(omitted: number, sessionId: string): ModelMessage {
   return {
     role: 'user',
     content:
-      `[Runtime note — written by the Proteus harness, not by the user.]\n\n`
+      `[Runtime note — written by the Kinu harness, not by the user.]\n\n`
       + `${omitted} earlier message${omitted === 1 ? '' : 's'} from this session `
       + `are not in your context: the transcript is longer than this model's context window, `
       + `so it was restored from the newest end. They are not lost — they are in this `

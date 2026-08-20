@@ -2,7 +2,7 @@
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
-Proteus has one Lean 4 project in `lean/`. Measured on 2026-08-19 it compiles
+Kinu has one Lean 4 project in `lean/`. Measured on 2026-08-19 it compiles
 **330 named theorems** over **43 requirements**, with **0 `sorry`**, across
 hand-maintained abstract models of selected agent, evolution, execution,
 exploration, MCTS, safety, and storage behaviour. These are machine-checked
@@ -74,7 +74,7 @@ verifier (`PR-EXPL-002`).
 
 The first two stay unmodelled until the production selection algorithm is
 settled; proving a different textbook algorithm would not add evidence about
-Proteus. The other three each need something the abstract model does not have —
+Kinu. The other three each need something the abstract model does not have —
 a semantics for a verifier, a concurrent step relation, or a distribution over
 candidate quality — and each says so in its own `remainingEvidence`.
 

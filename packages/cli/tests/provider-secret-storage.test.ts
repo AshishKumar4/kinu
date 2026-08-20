@@ -1,5 +1,5 @@
 // Where a provider secret is written when `proteus provider connect` captures
-// one. The default is the owner's Proteus account — sealed at rest there and
+// one. The default is the owner's Kinu account — sealed at rest there and
 // reachable from every machine through the provider proxy — so that this disk
 // does not end up holding a second copy of the same key.
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

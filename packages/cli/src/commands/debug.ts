@@ -386,14 +386,14 @@ function parseLocal<T>(schema: v.GenericSchema<T>, input: { value: unknown }): T
 
 // ── Redaction ────────────────────────────────────────────────────
 
-/** Proteus's own bearer-token shapes (pta_ access, ptc_ session, pdt_
+/** Kinu's own bearer-token shapes (pta_ access, ptc_ session, pdt_
  *  device — cli/access-token-store.ts, auth-store.ts, user-do.ts) plus the
  *  common provider-key and generic key=secret shapes. One function, applied
  *  to every string leaf written into the bundle — not a per-table allowlist,
  *  because a secret can land in free text (a tool result, a pasted token in
  *  chat) that no schema marks as sensitive. */
 const SECRET_PATTERNS: RegExp[] = [
-  /\bpt[a-z]_[A-Za-z0-9_-]{16,}\b/g, // Proteus session/access/device tokens
+  /\bpt[a-z]_[A-Za-z0-9_-]{16,}\b/g, // Kinu session/access/device tokens
   /\bsk-ant-[A-Za-z0-9_-]{20,}\b/g, // Anthropic
   /\bsk-[A-Za-z0-9]{20,}\b/g, // OpenAI-shaped
   /\bAKIA[0-9A-Z]{16}\b/g, // AWS access key id

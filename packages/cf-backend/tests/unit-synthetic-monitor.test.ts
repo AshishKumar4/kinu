@@ -47,7 +47,7 @@ function site(broken: Partial<Record<string, () => Response>> = {}): ProbeDeps['
         return new Response(`${await tarballSha()}  proteus-source.tar.gz\n`);
       case '/login':
         return new Response(
-          '<html><title>Sign in to Proteus</title><a class="provider" href="/auth/github/start">Continue</a></html>',
+          '<html><title>Sign in to Kinu</title><a class="provider" href="/auth/github/start">Continue</a></html>',
           { headers: { 'content-type': 'text/html' } },
         );
       default:
@@ -113,7 +113,7 @@ describe('synthetic probes', () => {
 
   test('a sign-in page with no provider is caught', async () => {
     const outcomes = await probe({
-      '/login': () => new Response('<html><title>Sign in to Proteus</title><p>No OAuth providers</p></html>'),
+      '/login': () => new Response('<html><title>Sign in to Kinu</title><p>No OAuth providers</p></html>'),
     });
     expect(outcome(outcomes, 'login').ok).toBe(false);
     expect(outcome(outcomes, 'login').detail).toContain('nobody can sign in');

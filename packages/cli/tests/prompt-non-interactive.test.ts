@@ -69,7 +69,7 @@ describe("setup without any terminal", () => {
     );
     expect(result.timedOut).toBe(false);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("Proteus account was not connected");
+    expect(result.stdout).toContain("Kinu account was not connected");
     expect(result.stdout).toContain("proteus auth --origin https://proteus.example.com");
   }, 30_000);
 

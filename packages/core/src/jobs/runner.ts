@@ -25,7 +25,7 @@ import { diagnostics, renderThrownChain, toProteusError } from '../obs/index';
 /** The terminal error a non-recoverable job records when it is interrupted by a
  *  DO eviction (no durable checkpoint / not safe to re-run).
  *
- *  Proteus stamps this itself because `do.evict.no_signal` says the platform
+ *  Kinu stamps this itself because `do.evict.no_signal` says the platform
  *  delivers nothing: a `running` row with nothing in this isolate owning it IS
  *  an orphan, whatever became of the fiber, and that inference is the only
  *  evidence available. */

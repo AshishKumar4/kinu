@@ -148,7 +148,7 @@ const NOT_CONFIGURED =
   'wrangler.jsonc first (see docs/EXECUTION-LAYER-SPEC.md).';
 
 const DEFAULT_WORK_ROOT = '/workspace/releases';
-const GIT = `git -c user.name=Proteus -c user.email=proteus@agent -c core.hooksPath=/dev/null`;
+const GIT = `git -c user.name=Kinu -c user.email=proteus@agent -c core.hooksPath=/dev/null`;
 const OUTPUT_CAP = 20_000;
 const APPLY_TIMEOUT_MS = 120_000;
 const CLONE_TIMEOUT_MS = 300_000;

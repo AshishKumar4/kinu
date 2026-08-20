@@ -28,7 +28,7 @@ an export archive, land where you point them and are the one exception.
 
 | Field | Type | What it is |
 | --- | --- | --- |
-| `origin` | string | The Proteus deployment this CLI talks to. Defaults to `https://proteus.ashishkumarsingh.com`; `PROTEUS_ORIGIN` and `--origin` override it. |
+| `origin` | string | The Kinu deployment this CLI talks to. Defaults to `https://proteus.ashishkumarsingh.com`; `PROTEUS_ORIGIN` and `--origin` override it. |
 | `accessToken` | string | The interactive session token from `proteus auth`. Treat it as a password. |
 | `tokenExpiresAt` | ISO date | When that token expires. The CLI refuses it after this and asks you to re-auth. |
 | `user` | `{id, email, displayName?}` | Who the token belongs to. `proteus whoami` prints it. |
@@ -62,7 +62,7 @@ not shadow a built-in command name.
 ## Providers
 
 **`proteus provider connect` no longer writes a key here by default.** Signed
-in, the key goes to your Proteus account, where it is encrypted at rest, and
+in, the key goes to your Kinu account, where it is encrypted at rest, and
 this machine reaches it through the provider proxy without holding a copy. Pass
 `--local` to keep one here instead, for offline use or an endpoint only this
 machine can see.
@@ -92,7 +92,7 @@ account session the local store is the only source.
 | `providers.codex` | The ChatGPT device-flow tokens (`accessToken`, `refreshToken`, `expiresAt`, `metadata`), written by `proteus providers connect codex`. |
 | `providers.openaiCompat.<name>` | An OpenAI-compatible endpoint: `{baseURL, apiKey?, headers?, extraHeaders?}`. |
 
-The Claude subscription provider stores nothing here. Proteus drives Anthropic's
+The Claude subscription provider stores nothing here. Kinu drives Anthropic's
 official `claude` binary, which owns its own login.
 
 ## MCP servers
@@ -113,7 +113,7 @@ by local workspaces. Cloud workspaces get MCP servers from your account instead.
 
 | Field | Type | Default | What it does |
 | --- | --- | --- | --- |
-| `updateCheck` | boolean | `true` | The once-a-day "newer Proteus available" notice in an interactive terminal. Set `false` to silence it. |
+| `updateCheck` | boolean | `true` | The once-a-day "newer Kinu available" notice in an interactive terminal. Set `false` to silence it. |
 | `updateCheckedAt` | number | — | Throttle state for that notice. A cache, never a version source. |
 | `updateLatestSeen` | string | — | The newest served version the notice has seen. |
 | `deviceConnectPromptDismissed` | boolean | `false` | "Don't ask again" for the chat device-connect prompt. |
@@ -126,7 +126,7 @@ Six apply to every command, and `proteus --help` lists exactly these.
 | Variable | What it does |
 | --- | --- |
 | `PROTEUS_HOME` | Workspace + config directory (default `~/.proteus`). |
-| `PROTEUS_ORIGIN` | Proteus app origin. |
+| `PROTEUS_ORIGIN` | Kinu app origin. |
 | `PROTEUS_TOKEN` | Account access token, for CI. |
 | `PROTEUS_MODEL` | Default model ID. |
 | `PROTEUS_BASE_URL` | LLM API base URL. |

@@ -41,7 +41,7 @@ const CLAUDE_READY = 'Claude subscription ready — use proteus create --model c
 export async function providersCommand(actionOrProvider: string | undefined, providerArg: string | undefined, opts: {
   origin?: string;
   model?: string;
-  /** Keep the secret on this machine instead of the Proteus account. */
+  /** Keep the secret on this machine instead of the Kinu account. */
   local?: boolean;
 }): Promise<void> {
   const { action, provider, raw } = parseArgs(actionOrProvider, providerArg);
@@ -163,7 +163,7 @@ function parseArgs(actionOrProvider: string | undefined, providerArg: string | u
 
 /** The credential a provider stores in ~/.proteus/config.json, and the env
  *  vars that would keep supplying it after the file entry is gone. Providers
- *  absent from this map hold no Proteus-owned credential. */
+ *  absent from this map hold no Kinu-owned credential. */
 const LOCAL_CREDENTIALS = new Map<ProviderName, LocalCredential>([
   ['codex', {
     clear: (p) => deleteKey(p, 'codex'),
@@ -217,23 +217,23 @@ const MODEL_SPEC_PREFIXES = new Map<ProviderName, readonly string[]>([
 /**
  * The inverse of `provider connect`: remove the stored credential.
  *
- * Only the providers Proteus stores a credential FOR can be disconnected
- * here. The Proteus account is `proteus logout`, and the two subscription
- * bridges (claude, opencode) are other tools' logins — Proteus holds nothing
+ * Only the providers Kinu stores a credential FOR can be disconnected
+ * here. The Kinu account is `proteus logout`, and the two subscription
+ * bridges (claude, opencode) are other tools' logins — Kinu holds nothing
  * to delete, and saying so beats pretending the command did something.
  */
 async function disconnectProvider(provider: ProviderName): Promise<void> {
   console.log('');
   if (provider === 'cloudflare') {
-    console.log(`${WARN('!')} The Cloudflare/Workers AI connection rides your Proteus account.`);
+    console.log(`${WARN('!')} The Cloudflare/Workers AI connection rides your Kinu account.`);
     console.log(DIM('  Sign out with: proteus logout'));
-    console.log(DIM('  To disconnect Cloudflare itself, revoke it in your Proteus account settings.'));
+    console.log(DIM('  To disconnect Cloudflare itself, revoke it in your Kinu account settings.'));
     return;
   }
   if (provider === 'claude' || provider === 'opencode') {
     const tool = provider === 'claude' ? 'Claude Code' : 'opencode';
     const command = provider === 'claude' ? 'claude logout' : 'opencode auth logout';
-    console.log(`${WARN('!')} Proteus stores no ${tool} credential — it drives the ${tool} login.`);
+    console.log(`${WARN('!')} Kinu stores no ${tool} credential — it drives the ${tool} login.`);
     console.log(DIM(`  Sign out of ${tool} itself: ${command}`));
     clearDefaultModelFor(provider);
     return;
@@ -255,10 +255,10 @@ async function disconnectProvider(provider: ProviderName): Promise<void> {
   if (cloud && credential.credKey) {
     try {
       await deleteCloudCredential(cloud.origin, cloud.token, credential.credKey);
-      console.log(`${OK('✓')} Removed the ${ACCENT(provider)} credential from your Proteus account.`);
+      console.log(`${OK('✓')} Removed the ${ACCENT(provider)} credential from your Kinu account.`);
       removed = true;
     } catch (e) {
-      console.log(`${WARN('!')} Could not reach your Proteus account: ${renderThrownChain({ cause: e })}`);
+      console.log(`${WARN('!')} Could not reach your Kinu account: ${renderThrownChain({ cause: e })}`);
     }
   }
 
@@ -288,10 +288,10 @@ async function disconnectAccountProvider(name: string): Promise<void> {
   const credKey = `${name.trim().toLowerCase()}.bearer`;
   const connected = (await listCloudCredentials(cloud.origin, cloud.token)).some((c) => c.key === credKey);
   if (!connected) {
-    throw new Error(`Neither this machine nor your Proteus account has a "${name}" credential. Run \`proteus provider list\` to see what is connected.`);
+    throw new Error(`Neither this machine nor your Kinu account has a "${name}" credential. Run \`proteus provider list\` to see what is connected.`);
   }
   await deleteCloudCredential(cloud.origin, cloud.token, credKey);
-  console.log(`${OK('✓')} Removed the ${ACCENT(name)} credential from your Proteus account.`);
+  console.log(`${OK('✓')} Removed the ${ACCENT(name)} credential from your Kinu account.`);
   clearDefaultModelPrefixes([`${name}/`]);
 }
 
@@ -382,15 +382,15 @@ async function printProviders(): Promise<void> {
   };
 
   console.log('');
-  console.log(ACCENT('Proteus providers'));
+  console.log(ACCENT('Kinu providers'));
   console.log('');
 
   if (config.accessToken) {
-    connected('Proteus account', config.user?.email);
+    connected('Kinu account', config.user?.email);
     console.log(`    ${DIM('Cloud workspaces use your Cloudflare Workers AI quota when Cloudflare sign-in granted AI permissions.')}`);
     console.log(`    ${DIM('Signed-in local workspaces reach the same Workers AI through the proxy, with no key on this machine.')}`);
   } else {
-    missing('Proteus account', 'proteus provider connect cloudflare');
+    missing('Kinu account', 'proteus provider connect cloudflare');
   }
   if ('unreachable' in account) {
     console.log(`    ${WARN('!')} Could not read the keys stored in your account (${account.unreachable}).`);
@@ -436,7 +436,7 @@ async function printProviders(): Promise<void> {
   else missing('OpenCode', 'proteus provider connect opencode');
 
   console.log('');
-  console.log(DIM('  Keys connect to your Proteus account by default — no copy on this disk.'));
+  console.log(DIM('  Keys connect to your Kinu account by default — no copy on this disk.'));
   console.log(DIM('  Keep one here instead: proteus provider connect <name> --local'));
   console.log(DIM('  Remove a stored credential: proteus provider disconnect <name>'));
   console.log('');

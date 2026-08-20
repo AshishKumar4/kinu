@@ -1,5 +1,5 @@
 /**
- * ActorAgent — the actor-agnostic substrate beneath every full-loop Proteus
+ * ActorAgent — the actor-agnostic substrate beneath every full-loop Kinu
  * actor on the Cloudflare backend.
  *
  * OrchestratorAgent (the top-level workspace DO) and any future facet actor
@@ -783,7 +783,7 @@ export abstract class ActorAgent extends Think<Env> {
   private readonly ownedModelServices = new OwnedModelServices({
     env: this.env,
     agentName: () => this.name,
-    appTitle: 'Proteus',
+    appTitle: 'Kinu',
     ownerRequired: true,
     getOwnerUserId: () => this.getOwnerUserId(),
     getUserCaller: () => this.userCaller(),
@@ -2003,7 +2003,7 @@ export abstract class ActorAgent extends Think<Env> {
    * LAZY, and that is what makes `isolateGen` correct rather than merely present.
    * The generation is bumped on FIRST use inside an activation, so exactly one
    * bump happens per construction — including the case a boot-time counter cannot
-   * see, `ctx.facets.abort()`, which reuses the isolate and is how a Proteus fork
+   * see, `ctx.facets.abort()`, which reuses the isolate and is how a Kinu fork
    * most commonly dies. It is deliberately NOT bumped in `onStart`: that runs
    * inside `ctx.blockConcurrencyWhile`, where every added write stalls every
    * request on this object and 30s of it RESETS the object

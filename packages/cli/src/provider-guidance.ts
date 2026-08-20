@@ -3,7 +3,7 @@
  *
  * Every CLI surface used to render `err.message` and stop there, so a provider
  * rejection arrived as whatever the endpoint happened to say — often a JSON
- * body with no hint of which Proteus command fixes it. This module keeps the
+ * body with no hint of which Kinu command fixes it. This module keeps the
  * provider's own words (they are the evidence) and appends the exact next
  * command for the failure class it recognises.
  *

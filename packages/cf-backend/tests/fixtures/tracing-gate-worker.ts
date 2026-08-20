@@ -7,7 +7,7 @@
  * and the runtime, and a reimplementation would route around exactly that.
  *
  * Nested on purpose: a child span opened inside a parent's callback is the shape
- * every instrumented Proteus path will use, and it is the shape whose recording
+ * every instrumented Kinu path will use, and it is the shape whose recording
  * a local run CAN prove even though its nesting it cannot.
  */
 import { createWorkersTracer } from '../../src/obs/cf-tracer';

@@ -419,7 +419,7 @@ describe('auth and desktop security invariants', () => {
     expect(installPage?.headers.get('content-type')).toContain('text/html');
     expect(installPage?.headers.get('content-security-policy')).toContain('https://static.cloudflareinsights.com');
     const html = await installPage!.text();
-    expect(html).toContain('Install Proteus CLI');
+    expect(html).toContain('Install Kinu CLI');
     expect(html).toContain('curl -fsSL');
     expect(html).toContain('https://proteus.example.com/install.sh');
     expect(html).toContain('| bash');
@@ -453,7 +453,7 @@ describe('auth and desktop security invariants', () => {
     expect(script).toContain('SRC_DIR="$SOURCE_ROOT/current"');
     expect(script).toContain('https://proteus.example.com/downloads/proteus-source.tar.gz');
     expect(script).not.toContain('github.com');
-    expect(script).not.toContain('Proteus-main');
+    expect(script).not.toContain('Kinu-main');
     // Default verification fetches the published .sha256 asset; the env var
     // is only a pin override.
     expect(script).toContain('"$TARBALL_URL.sha256"');

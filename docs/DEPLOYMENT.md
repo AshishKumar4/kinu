@@ -286,14 +286,14 @@ curl -X PUT "https://api.cloudflare.com/client/v4/accounts/<account-id>/workers/
   -d '{"hostname":"proteus.yourdomain.com","zone_id":"<zone-id>","service":"proteus","environment":"production"}'
 ```
 
-Do not put the custom domain behind Cloudflare Access. Proteus serves a public
+Do not put the custom domain behind Cloudflare Access. Kinu serves a public
 landing page and protects the dashboard with its own OAuth session. If an Access
 application is attached to `proteus.ashishkumarsingh.com`, unauthenticated users
 will see the Access login page before the Worker can serve `/`.
 
 ## OAuth Setup
 
-Proteus supports Google, GitHub, and Cloudflare OAuth. A provider is shown on
+Kinu supports Google, GitHub, and Cloudflare OAuth. A provider is shown on
 `/login` only when both its client id and client secret are configured.
 
 ### Callback URLs
@@ -312,7 +312,7 @@ https://proteus.ashishkumarsingh.com/auth/cloudflare/callback
 Use response type `Code`, grant type `Authorization Code, Refresh Token`, and
 the token authentication method configured by `CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD`
 (`client_secret_basic` in production). Do not request `openid` for Cloudflare
-OAuth. Proteus requests these scopes so user-owned Cloudflare billing can power
+OAuth. Kinu requests these scopes so user-owned Cloudflare billing can power
 Workers AI and AI Gateway calls:
 
 ```text

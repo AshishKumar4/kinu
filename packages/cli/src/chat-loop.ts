@@ -349,7 +349,7 @@ async function maybeOfferDeviceConnect(rl: readline.Interface, tty: boolean): Pr
   }
   console.log(`${WARN('Let this agent use this PC?')}`);
   console.log(MUTED('  No PC is connected to your account yet. Cloud agents run local commands'));
-  console.log(MUTED('  through the Proteus daemon, asking consent per command.'));
+  console.log(MUTED('  through the Kinu daemon, asking consent per command.'));
   await promptDeviceConnect(rl, { allowDismiss: true });
   console.log('');
 }

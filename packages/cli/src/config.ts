@@ -94,7 +94,7 @@ export interface ProteusConfig {
   aliases?: Record<string, string>;
   model?: string;
   reasoningEffort?: ReasoningEffort;
-  /** Set false to silence the once-a-day "newer Proteus available" notice. */
+  /** Set false to silence the once-a-day "newer Kinu available" notice. */
   updateCheck?: boolean;
   /** Throttle state for that notice — never a version source, just a cache. */
   updateCheckedAt?: number;
@@ -221,7 +221,7 @@ export function loadConfigFile(): ProteusConfig {
   } catch (error) {
     // Defaulting silently here would discard the whole file — model, aliases, agents, session —
     // because of one bad field, and look identical to a first run.
-    throw new Error(`${CONFIG_PATH} is not a valid Proteus config; fix or remove it.`, { cause: error });
+    throw new Error(`${CONFIG_PATH} is not a valid Kinu config; fix or remove it.`, { cause: error });
   }
 }
 
@@ -272,7 +272,7 @@ function storedAuthConfig(missingTokenMessage: string): CloudAuthConfig {
     throw new Error(missingTokenMessage);
   }
   if (sessionExpired(config)) {
-    throw new Error('Your Proteus CLI session has expired. Run: proteus auth');
+    throw new Error('Your Kinu CLI session has expired. Run: proteus auth');
   }
   return { origin: resolveCloudOrigin(), token, user: config.user };
 }
@@ -544,7 +544,7 @@ function deriveLLMConfigFromProviderCredentials(file: ProteusConfig, model: stri
       baseURL: OPENROUTER_BASE_URL,
       headers: {
         Authorization: `Bearer ${openrouterKey}`,
-        'X-Title': 'Proteus CLI',
+        'X-Title': 'Kinu CLI',
       },
       model: stripProvider(providerModel, 'openrouter'),
     };

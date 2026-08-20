@@ -3,7 +3,7 @@
        is the same geometry under a different :root palette, and the README picks
        between the two with <picture>. Everything below the palette block must
        stay byte-identical in both, so edit them together. -->
-  <title id="t">Life of a turn in Proteus</title>
+  <title id="t">Life of a turn in Kinu</title>
   <desc id="d">A turn arrives from a user message or a programmatic wake and is queued one at a time. It is assembled once — system prompt plus a transformed history, which is where the compaction ladder fires — then runs a step loop that re-weaves a dynamic-context block, marks the cache tail and calls tools. Async signals splice into the running step or queue the next turn. On settle the turn is snapshotted, recorded, reviewed, and any pending events wake the next turn.</desc>
   <style>
     :root {
@@ -139,7 +139,7 @@
   <path d="M472 275 L476 275 L476 271 L497 271" class="edge-lite" stroke-dasharray="3 3" marker-end="url(#a)"/>
   <rect x="500" y="457" width="384" height="218" rx="7" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
   <text class="b" x="512" y="477" text-anchor="start" fill="var(--orange)">Compaction ladder</text>
-  <text class="xs" x="512" y="493" text-anchor="start">@better-compact/core, driven by a Proteus codec + spec.</text>
+  <text class="xs" x="512" y="493" text-anchor="start">@better-compact/core, driven by a Kinu codec + spec.</text>
   <text class="xs" x="512" y="509" text-anchor="start">Fires at 85% of the context window, targets 35%.</text>
   <text class="xs" x="512" y="525" text-anchor="start"></text>
   <text class="xs" x="512" y="541" text-anchor="start">First, above every stage: drop the superseded</text>

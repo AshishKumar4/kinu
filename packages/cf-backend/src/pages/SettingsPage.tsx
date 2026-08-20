@@ -410,7 +410,7 @@ export function StandingApprovalsCard({ rpc }: { rpc: Rpc }) {
   return (
     <Card title="Standing approvals" icon={ShieldIcon}>
       <p className="p-meta p-text-3">
-        Answers you gave with “Always”. Each one stops Proteus asking about that check on that
+        Answers you gave with “Always”. Each one stops Kinu asking about that check on that
         environment again. None of them gives it access it did not already have.
       </p>
       {resource.status === "error" && grants === null ? (

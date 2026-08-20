@@ -1,5 +1,5 @@
 /**
- * Proteus MCP server surface.
+ * Kinu MCP server surface.
  *
  *   GET /mcp/v1/<agentName> / POST / DELETE → MCP streamable-HTTP transport
  *
@@ -16,15 +16,15 @@
  * "WebStandardStreamableHTTPServerTransport" pattern in
  * external/agents/examples/mcp-server). Each request:
  *   1. Builds a fresh McpServer instance
- *   2. Registers Proteus tools that proxy back to the OrchestratorAgent DO
+ *   2. Registers Kinu tools that proxy back to the OrchestratorAgent DO
  *      by `agentName` via getAgentByName (using @callable RPCs already
  *      defined on the orchestrator)
  *   3. Connects the transport, handles the request, returns the response
  *
- * This makes Proteus a real MCP server — external clients (Cursor, Claude
+ * This makes Kinu a real MCP server — external clients (Cursor, Claude
  * Code, browser AI, other agents) can connect, list tools, invoke them,
  * read memory, trigger splits, manage scaffold versions. The distribution
- * play: Proteus becomes a tool other agents can use, not just a chat app.
+ * play: Kinu becomes a tool other agents can use, not just a chat app.
  *
  * v1 read tools:
  *   • search_memory      — FTS over agent memory

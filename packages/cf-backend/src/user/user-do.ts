@@ -1,5 +1,5 @@
 /**
- * UserDO — per-user Durable Object. Keyed by the stable Proteus userId.
+ * UserDO — per-user Durable Object. Keyed by the stable Kinu userId.
  * OAuth identities are mapped by the D1 auth store before requests reach this DO.
  *
  * Owns:
@@ -266,7 +266,7 @@ export function parseCliAgentConnectTicketUserId(ticket: string): string | null 
 
 function cleanCliTokenLabel(label?: string): string {
   const trimmed = (label ?? '').trim().replace(/\s+/g, ' ');
-  return trimmed ? trimmed.slice(0, 80) : 'Proteus CLI';
+  return trimmed ? trimmed.slice(0, 80) : 'Kinu CLI';
 }
 
 function parseCapabilityList(value: string): string[] {

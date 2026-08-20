@@ -1,13 +1,13 @@
-"""Host-side build of the Proteus CLI as a single self-contained binary.
+"""Host-side build of the Kinu CLI as a single self-contained binary.
 
 The DeepSWE and Terminal-Bench task images are network-isolated
 (``allow_internet = false``), and the install phase runs under the environment
 baseline policy — before any agent-phase allowlist applies. So installing bun
-and the Proteus sources from inside the container is not an option: nothing
+and the Kinu sources from inside the container is not an option: nothing
 can be downloaded there.
 
 ``bun build --compile`` embeds the bun runtime (including ``bun:sqlite``, which
-Proteus's local backend needs) into one x86-64 ELF binary, which is uploaded
+Kinu's local backend needs) into one x86-64 ELF binary, which is uploaded
 into the container instead. That also pins the measurement to the working tree
 under test rather than to whatever a package registry happens to serve.
 """
@@ -47,12 +47,12 @@ def _compile(repo_root: Path) -> Path:
     entrypoint = repo_root / CLI_ENTRYPOINT
     if not entrypoint.exists():
         raise FileNotFoundError(
-            f"Proteus CLI entrypoint not found at {entrypoint}. "
-            "Point the agent at a Proteus checkout with proteus_repo=<path>."
+            f"Kinu CLI entrypoint not found at {entrypoint}. "
+            "Point the agent at a Kinu checkout with proteus_repo=<path>."
         )
     if shutil.which("bun") is None:
         raise RuntimeError(
-            "bun is required on the host to build the Proteus binary. "
+            "bun is required on the host to build the Kinu binary. "
             "See https://bun.com/docs/installation."
         )
 

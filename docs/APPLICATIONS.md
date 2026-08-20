@@ -2,9 +2,9 @@
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
-## 1. What Proteus Is
+## 1. What Kinu Is
 
-Proteus is a general-purpose AI agent that improves itself over time. It:
+Kinu is a general-purpose AI agent that improves itself over time. It:
 
 - **Searches a tree of agents** against an objective the caller declares, and scores every candidate by running that objective's verifier
 - **Learns reusable tools** from successful conversations and applies them in future ones
@@ -14,7 +14,7 @@ Proteus is a general-purpose AI agent that improves itself over time. It:
 
 ```mermaid
 graph LR
-    subgraph "Proteus"
+    subgraph "Kinu"
         B1[Learned Tools<br/>CraftStore + EMA scoring] --> B2[Persistent Memory<br/>FTS5 search + reflections]
         B2 --> B3[Tree swarm<br/>candidates measured by a verifier]
         B3 --> B4[Self-Modifying Scaffold<br/>4-gate validated]
@@ -59,7 +59,7 @@ Each workspace is a Durable Object with its own SQLite database, hosting its def
 - **Crafted tools** — reusable code patterns extracted from successful problem-solving
 - **Scaffold improvements** — the agent's own execution logic gets better over time
 
-A Proteus agent that helped you debug TypeScript yesterday remembers the patterns it learned and applies them today.
+A Kinu agent that helped you debug TypeScript yesterday remembers the patterns it learned and applies them today.
 
 ### Multi-Model Comparison
 
@@ -167,7 +167,7 @@ graph TB
         AC[AlphaCode<br/>Li 2022]
     end
 
-    subgraph "Proteus (this work)"
+    subgraph "Kinu (this work)"
         P[Combines all three<br/>+ CI-gated Lean models<br/>+ persistent state<br/>+ scaffold mutation]
     end
 
@@ -190,7 +190,7 @@ graph TB
 | **Self-Refine** (Madaan 2023) | No | No | Iterative refinement | No | No |
 | **OMNI** (Zhang 2024) | Tool creation | No | Yes | No | No |
 | **Tree of Thoughts** (Yao 2023) | No | BFS/DFS | No | No | No |
-| **Proteus** | CraftStore + EMA | Tree swarm + MCTS | Scaffold mutation | 330 theorems over 43 abstract-model requirements; 1 documented SQLite assumption | DO SQLite |
+| **Kinu** | CraftStore + EMA | Tree swarm + MCTS | Scaffold mutation | 330 theorems over 43 abstract-model requirements; 1 documented SQLite assumption | DO SQLite |
 
 ### Design choices
 
@@ -255,7 +255,7 @@ id rather than only through the recent-run window.
 
 ### Preview-site Isolation
 
-Capability hosts already isolate preview origins and strip Proteus credentials.
+Capability hosts already isolate preview origins and strip Kinu credentials.
 Complete cookie-site isolation between sibling previews additionally requires a
 preview suffix on a Public Suffix List boundary; that is a DNS/domain deployment
 prerequisite rather than an application fallback.

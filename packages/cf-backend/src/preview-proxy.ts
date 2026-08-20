@@ -5,7 +5,7 @@
  * `https://<port>-<sandbox>-<token>.<PREVIEW_HOST_SUFFIX>/` and
  * `proxyToSandbox` parses that hostname back into a sandbox, validates the
  * port's secret token inside the Durable Object, and forwards to the container
- * (WebSocket upgrades included). Proteus adds only what the SDK has no opinion
+ * (WebSocket upgrades included). Kinu adds only what the SDK has no opinion
  * about: this host serves previews and nothing else, responses are contained
  * (lib/preview-origin.ts), and a failed forward gets a page a user can act on
  * instead of a bare `Proxy routing error`.

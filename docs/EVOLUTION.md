@@ -2,7 +2,7 @@
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
-Proteus evolves across four timescales. Each one runs independently, and shorter
+Kinu evolves across four timescales. Each one runs independently, and shorter
 timescales feed data to longer ones. The engine is
 `core/src/evolution/engine.ts`. The shortest timescale is the only one that
 ticks inside a single long autonomous turn, and it has two channels:

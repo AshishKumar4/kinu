@@ -1,5 +1,5 @@
 /**
- * Proteus codec — AI SDK v6 `ModelMessage[]` ⇄ ladder `Turn[]`.
+ * Kinu codec — AI SDK v6 `ModelMessage[]` ⇄ ladder `Turn[]`.
  *
  * Items are views with handles: every encoded item carries its native payload
  * (a content part, or the whole message for string-content/unknown shapes)
@@ -14,7 +14,7 @@
  * item, so when the ladder drops it the full native footprint disappears —
  * the call part, the result part, and the carrier tool message if emptied.
  *
- * Identity is id-less (Proteus ModelMessages carry no ids): content-hash keys
+ * Identity is id-less (Kinu ModelMessages carry no ids): content-hash keys
  * with occurrence ordinals, stable across requests because durable history is
  * append-only. The turn stamp is derived from the deduped key — stamps feed
  * `assistantRunKey` (`role:stamp` seeds), so they must be content-derived and
@@ -96,7 +96,7 @@ export const proteusCodec: Codec<ModelMessage> = {
     return turns.flatMap(decodeTurn);
   },
 
-  // Chars/4 over the content Proteus actually serializes for the model —
+  // Chars/4 over the content Kinu actually serializes for the model —
   // the shared estimation scale (core countTokens); the engine's
   // measured provider-overhead delta corrects for what chars cannot see.
   estimateTurns(turns) {
@@ -133,7 +133,7 @@ export const proteusCodec: Codec<ModelMessage> = {
         '```',
       ].join('\n');
     });
-    return `# Proteus Compaction Raw Transcript\n\n${blocks.join('\n\n')}\n`;
+    return `# Kinu Compaction Raw Transcript\n\n${blocks.join('\n\n')}\n`;
   },
 };
 

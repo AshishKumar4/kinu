@@ -56,7 +56,7 @@ export interface AttemptBudget {
  * with headroom; an attempt that genuinely runs away still terminates.
  *
  * `wallClockMs`: the identical argument, which this field did NOT have. It was
- * 300_000 while sharing the sentence above, and an attempt is one whole Proteus
+ * 300_000 while sharing the sentence above, and an attempt is one whole Kinu
  * turn against the sandbox — measured at up to 509 s
  * ({@link TURN_WALL_CLOCK_ENVELOPE_MS}). So the tighter arm of the pair was the
  * clock, breaching on exactly the attempts that explored longest and scoring

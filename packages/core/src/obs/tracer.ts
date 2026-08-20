@@ -45,7 +45,7 @@ export interface SpanOpenAttributes {
   /** Bumped once per genuine construction of this object and persisted, so a
    *  discontinuity between two spans on one `selfPath` is a positive reset
    *  signal rather than an inferred one. Never derived from boot identity:
-   *  `ctx.facets.abort()` reuses the isolate, and abort is how a Proteus fork
+   *  `ctx.facets.abort()` reuses the isolate, and abort is how a Kinu fork
    *  most commonly dies. */
   readonly isolateGen: number;
   /** Root-first ancestor chain including self, rendered by `renderSelfPath`. */

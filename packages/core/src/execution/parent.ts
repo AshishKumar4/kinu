@@ -162,7 +162,7 @@ export function createParentExecutor(deps: {
   return {
     name: 'parent',
     kind: 'parent',
-    // The parent is a Proteus workspace, so its shell starts where every
+    // The parent is a Kinu workspace, so its shell starts where every
     // workspace shell starts.
     homeDir: async () => WORKSPACE_ROOT,
     capabilities: new Set<ExecutorCapability>(['shell', 'fs_shared']),

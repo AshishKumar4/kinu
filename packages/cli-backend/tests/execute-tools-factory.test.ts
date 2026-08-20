@@ -60,7 +60,7 @@ describe('createNodeExecuteToolFactory — console capture + implicit return', (
   test('calling the native `run` tool from inside execute_tools gets an actionable hint, not a bare ReferenceError', async () => {
     const out = await makeTool()({ code: 'return await run({ runtime: "sandbox", command: "ls" });' });
     expect(out.error).toContain('run is not defined');
-    expect(out.error).toContain('"run" is a native Proteus tool, not a codemode member');
+    expect(out.error).toContain('"run" is a native Kinu tool, not a codemode member');
     // Where the capability actually is now comes from TOOL_REACH, so the
     // pointer is the namespace rather than one hand-picked member — and it is
     // right for all eight native tools instead of only `run`.
@@ -70,7 +70,7 @@ describe('createNodeExecuteToolFactory — console capture + implicit return', (
   test('an unrelated ReferenceError for a name that is not a native tool stays a bare message', async () => {
     const out = await makeTool()({ code: 'return totallyUndefinedThing;' });
     expect(out.error).toContain('totallyUndefinedThing is not defined');
-    expect(out.error).not.toContain('native Proteus tool');
+    expect(out.error).not.toContain('native Kinu tool');
   });
 });
 

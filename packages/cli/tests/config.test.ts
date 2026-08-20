@@ -77,7 +77,7 @@ describe("CLI config safety", () => {
     expect(out.config).toMatchObject({ model: "openai/gpt-5.5", reasoningEffort: "high" });
     // A config file with one invalid field is reported, not silently replaced by
     // defaults: defaulting would discard the whole file and read as a first run.
-    expect(out.invalidRejection).toContain('is not a valid Proteus config');
+    expect(out.invalidRejection).toContain('is not a valid Kinu config');
   });
 });
 

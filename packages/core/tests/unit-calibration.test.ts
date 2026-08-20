@@ -270,7 +270,7 @@ describe('the labeling file', () => {
   });
 
   test('a file that is not a labeling file says so', () => {
-    expect(parseLabelingFile('some notes I took').errors).toEqual(['no turns found — is this a Proteus labeling file?']);
+    expect(parseLabelingFile('some notes I took').errors).toEqual(['no turns found — is this a Kinu labeling file?']);
   });
 });
 

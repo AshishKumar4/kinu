@@ -427,7 +427,7 @@ export function DeviceConnectOverlay({ prompt, terminal }: DeviceConnectOverlayP
       {prompt.phase === 'ask' ? (
         <>
           <PaletteLine text={prompt.statusLine} width={innerWidth} color={tuiColors.text} />
-          <PaletteLine text="Cloud agents run local commands through the Proteus daemon," width={innerWidth} color={tuiColors.muted} />
+          <PaletteLine text="Cloud agents run local commands through the Kinu daemon," width={innerWidth} color={tuiColors.muted} />
           <PaletteLine text="asking consent per command." width={innerWidth} color={tuiColors.muted} />
           <PaletteLine text="C connect & keep connected · S this session only" width={innerWidth} color={tuiColors.accentStrong} />
           <PaletteLine text="N not now · D don't ask again" width={innerWidth} color={tuiColors.muted} />

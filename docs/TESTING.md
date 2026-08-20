@@ -1,8 +1,8 @@
-# Testing Proteus
+# Testing Kinu
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
-Proteus runs most of its tests on Bun, across the shared core, the Cloudflare
+Kinu runs most of its tests on Bun, across the shared core, the Cloudflare
 backend, the local backend and the CLI. Two things Bun cannot do have their own
 runners: the Durable Object suites run under vitest inside workerd, and the
 behavioural eval arms run under vitest. The two UI gates run under `bun test`

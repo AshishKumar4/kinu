@@ -393,22 +393,22 @@ async function renderBrowserApproval(request: Request, env: Env): Promise<Respon
   catch (e) { return accessError(toError(e), request); }
   const url = new URL(request.url);
   const code = url.searchParams.get('code');
-  if (!code) return html('Proteus CLI Auth', '<p>Missing CLI auth code.</p>', 400);
+  if (!code) return html('Kinu CLI Auth', '<p>Missing CLI auth code.</p>', 400);
   const requestInfo = await inspectCliAuth(env.AUTH_DB, code);
   if (!requestInfo) {
-    return html('Proteus CLI Auth', '<p>Unknown or expired CLI auth code.</p>', 400);
+    return html('Kinu CLI Auth', '<p>Unknown or expired CLI auth code.</p>', 400);
   }
   if (requestInfo.status === 'expired') {
-    return html('Proteus CLI Auth', '<p>This CLI auth code expired. Run <code>proteus auth</code> again.</p>', 400);
+    return html('Kinu CLI Auth', '<p>This CLI auth code expired. Run <code>proteus auth</code> again.</p>', 400);
   }
   if (requestInfo.status === 'approved' || requestInfo.status === 'consumed') {
-    return html('Proteus CLI Auth', '<p>This CLI auth request has already been approved. You can return to your terminal.</p>');
+    return html('Kinu CLI Auth', '<p>This CLI auth request has already been approved. You can return to your terminal.</p>');
   }
 
   const csrf = randomToken(32);
   const expiresAt = new Date(requestInfo.expiresAt).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
-  return html('Approve Proteus CLI', `
-    <p>Sign in this terminal to your Proteus account.</p>
+  return html('Approve Kinu CLI', `
+    <p>Sign in this terminal to your Kinu account.</p>
     <dl>
       <div><dt>Terminal</dt><dd>${escapeHtml(requestInfo.deviceName)}</dd></div>
       <div><dt>Code</dt><dd><code>${escapeHtml(requestInfo.userCode)}</code></dd></div>
@@ -434,28 +434,28 @@ async function approveFromBrowser(request: Request, env: Env): Promise<Response>
   try { identity = await authenticateRequest(request, env); }
   catch (e) { return accessError(toError(e), request); }
   if (!isSameOriginPost(request)) {
-    return html('Proteus CLI Auth', '<p>Invalid approval origin.</p>', 403);
+    return html('Kinu CLI Auth', '<p>Invalid approval origin.</p>', 403);
   }
   let form: FormData;
   try { form = await request.formData(); }
-  catch { return html('Proteus CLI Auth', '<p>Invalid approval form.</p>', 400); }
+  catch { return html('Kinu CLI Auth', '<p>Invalid approval form.</p>', 400); }
   const code = String(form.get('userCode') ?? '');
   const csrf = String(form.get('csrf') ?? '');
   const cookieCsrf = readCookie(request, 'proteus_cli_auth_csrf');
   if (!csrf || !cookieCsrf || !timingSafeEqual(csrf, cookieCsrf)) {
-    return html('Proteus CLI Auth', '<p>Invalid or expired approval session. Refresh the approval page and try again.</p>', 403);
+    return html('Kinu CLI Auth', '<p>Invalid or expired approval session. Refresh the approval page and try again.</p>', 403);
   }
-  if (!code) return html('Proteus CLI Auth', '<p>Missing CLI auth code.</p>', 400);
+  if (!code) return html('Kinu CLI Auth', '<p>Missing CLI auth code.</p>', 400);
   try {
     await approveCliAuth(env, code, identity, clientKey(request));
-    return html('Proteus CLI Auth', '<p>CLI connected. You can return to your terminal.</p>', 200, {
+    return html('Kinu CLI Auth', '<p>CLI connected. You can return to your terminal.</p>', 200, {
       headers: {
         'set-cookie': clearCsrfCookie(),
         'cache-control': 'no-store',
       },
     });
   } catch (e) {
-    return html('Proteus CLI Auth', `<p>${escapeHtml(toError(e).message)}</p>`, 400);
+    return html('Kinu CLI Auth', `<p>${escapeHtml(toError(e).message)}</p>`, 400);
   }
 }
 
@@ -466,7 +466,7 @@ function installPageResponse(origin: string): Response {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Install Proteus CLI</title>
+  <title>Install Kinu CLI</title>
   <style>
     :root {
       color-scheme: dark;
@@ -657,7 +657,7 @@ function installPageResponse(origin: string): Response {
 <body>
   <div class="shell">
     <header>
-      <a class="brand" href="/" aria-label="Proteus home"><span class="mark">P</span><span>Proteus</span></a>
+      <a class="brand" href="/" aria-label="Kinu home"><span class="mark">P</span><span>Kinu</span></a>
       <nav class="nav">
         <a href="/login">Dashboard</a>
         <a class="button" href="/login">Sign in</a>
@@ -666,8 +666,8 @@ function installPageResponse(origin: string): Response {
     <main>
       <section class="hero" aria-labelledby="install-title">
         <p class="eyebrow">Terminal setup</p>
-        <h1 id="install-title">Install Proteus CLI</h1>
-        <p class="lede">Run one command on macOS or Linux. Proteus installs into <code>~/.proteus</code>, adds the command to your PATH, then starts browser sign-in and local setup when a terminal is available.</p>
+        <h1 id="install-title">Install Kinu CLI</h1>
+        <p class="lede">Run one command on macOS or Linux. Kinu installs into <code>~/.proteus</code>, adds the command to your PATH, then starts browser sign-in and local setup when a terminal is available.</p>
       </section>
 
       <section aria-label="Install command">
@@ -678,7 +678,7 @@ function installPageResponse(origin: string): Response {
       </section>
 
       <section class="grid" aria-label="What the installer sets up">
-        <div class="cell"><strong>Account connection</strong><span>The setup flow opens browser approval and stores the CLI session under your local Proteus home directory.</span></div>
+        <div class="cell"><strong>Account connection</strong><span>The setup flow opens browser approval and stores the CLI session under your local Kinu home directory.</span></div>
         <div class="cell"><strong>Cloud or local agents</strong><span>Create persistent cloud agents or fully local agents from the same command line, then add aliases for the agents you use often.</span></div>
         <div class="cell"><strong>Desktop execution</strong><span>Connect this machine so agents can run commands, read files, and serve previews on it, with your approval.</span></div>
       </section>
@@ -752,7 +752,7 @@ done
 PROTEUS_ORIGIN="\${PROTEUS_ORIGIN%/}"
 
 say() { printf '%s\\n' "$*"; }
-die() { printf 'Proteus install error: %s\\n' "$*" >&2; exit 1; }
+die() { printf 'Kinu install error: %s\\n' "$*" >&2; exit 1; }
 
 case "$(uname -s)" in
   Darwin|Linux) ;;
@@ -765,7 +765,7 @@ if [ "$UNINSTALL" = "1" ]; then
   fi
   rm -f "$BIN_PATH"
   if [ "$PURGE" = "1" ]; then rm -rf "$PROTEUS_HOME"; fi
-  say "Proteus CLI removed."
+  say "Kinu CLI removed."
   exit 0
 fi
 
@@ -813,7 +813,7 @@ run_setup_if_requested() {
     say "Run: $BIN_PATH setup --origin $PROTEUS_ORIGIN"
     return 0
   fi
-  say "Starting Proteus setup..."
+  say "Starting Kinu setup..."
   if [ "$YES" = "1" ]; then
     run_on_tty "$BIN_PATH" setup --origin "$PROTEUS_ORIGIN" --account-only --yes
   else
@@ -839,12 +839,12 @@ run_connect_if_requested() {
 }
 
 prepare_cli_source() {
-  say "Preparing Proteus CLI..."
+  say "Preparing Kinu CLI..."
   # </dev/null: under curl|bash our stdin is the unread remainder of this
   # script — a child that reads stdin would consume it mid-execution.
-  help="$(PROTEUS_HOME="$PROTEUS_HOME" PROTEUS_REFRESH_SOURCE=1 "$BIN_PATH" --help </dev/null)" || die "Proteus CLI source setup failed."
+  help="$(PROTEUS_HOME="$PROTEUS_HOME" PROTEUS_REFRESH_SOURCE=1 "$BIN_PATH" --help </dev/null)" || die "Kinu CLI source setup failed."
   printf '%s\\n' "$help" | grep -Eq '^[[:space:]]+setup[[:space:]]' \
-    || die "Downloaded Proteus CLI is missing setup. Retry after the deployment has finished."
+    || die "Downloaded Kinu CLI is missing setup. Retry after the deployment has finished."
 }
 
 mkdir -p "$BIN_DIR"
@@ -854,7 +854,7 @@ install_bun_if_missing
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-say "Installing Proteus CLI..."
+say "Installing Kinu CLI..."
 curl -fsSL "$PROTEUS_ORIGIN/downloads/proteus" -o "$tmp/proteus"
 chmod 755 "$tmp/proteus"
 mv "$tmp/proteus" "$BIN_PATH"
@@ -883,7 +883,7 @@ case ":$PATH:" in
         :
       else
         {
-          printf '\\n# Proteus CLI\\n'
+          printf '\\n# Kinu CLI\\n'
           printf '%s\\n' "$profile_line"
         } >> "$profile"
         say "Added $BIN_DIR to $profile."
@@ -895,7 +895,7 @@ case ":$PATH:" in
     ;;
 esac
 
-say "Proteus installed."
+say "Kinu installed."
 run_setup_if_requested
 run_connect_if_requested
 
@@ -904,7 +904,7 @@ if [ "$NO_SETUP" = "1" ] && [ "$CONNECT" != "1" ]; then
   say "  proteus setup --origin $PROTEUS_ORIGIN"
   say "  proteus create"
 else
-  say "Proteus CLI is ready."
+  say "Kinu CLI is ready."
 fi
 `;
   return new Response(head ? null : script, {
@@ -961,13 +961,13 @@ TARBALL_SHA256="\${PROTEUS_SOURCE_SHA256:-}"
 
 need_bun() {
   if command -v bun >/dev/null 2>&1; then return 0; fi
-  echo "Bun is required for this Proteus CLI build."
+  echo "Bun is required for this Kinu CLI build."
   echo "Run the installer again so it can install Bun, or install Bun from https://bun.sh."
   exit 1
 }
 
 die() {
-  echo "Proteus update error: $*" >&2
+  echo "Kinu update error: $*" >&2
   exit 1
 }
 
@@ -984,7 +984,7 @@ verify_tarball() {
   elif command -v shasum >/dev/null 2>&1; then
     actual="$(shasum -a 256 "$file" | awk '{print $1}')"
   else
-    die "sha256sum or shasum is required to verify the Proteus source download."
+    die "sha256sum or shasum is required to verify the Kinu source download."
   fi
   [ "$actual" = "$expected" ] || die "Source checksum mismatch."
 }

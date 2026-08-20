@@ -183,7 +183,7 @@ async function probeLogin(deps: ProbeDeps): Promise<ProbeOutcome> {
   }
   if (response.status !== 200) return fail(`GET /login returned HTTP ${response.status}`);
   const body = await response.text();
-  if (!body.includes('Sign in to Proteus')) {
+  if (!body.includes('Sign in to Kinu')) {
     return fail('GET /login did not render the sign-in page');
   }
   if (!body.includes('href="/auth/')) {

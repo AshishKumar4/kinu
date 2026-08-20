@@ -50,7 +50,7 @@ export interface ProxyableCredential {
   baseURL?: string;
 }
 
-/** Request headers that must not be replayed upstream: the caller's Proteus
+/** Request headers that must not be replayed upstream: the caller's Kinu
  *  bearer (replaced by the provider credential), the proxy's own control
  *  headers, the hop-by-hop set the runtime owns, and the edge headers
  *  Cloudflare adds on the way in — `cf-connecting-ip` and friends would tell a
@@ -136,7 +136,7 @@ async function forwardUpstream(
 
   const auth = await userDO.getAuthHeaders(owner, credKey);
   if (!auth) {
-    return errorResponse(401, `No usable credential is connected for "${credKey}". Connect it in your Proteus user settings.`);
+    return errorResponse(401, `No usable credential is connected for "${credKey}". Connect it in your Kinu user settings.`);
   }
 
   const headers = new Headers(request.headers);

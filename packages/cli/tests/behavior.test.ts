@@ -178,7 +178,7 @@ describe("CLI behavior", () => {
 
     expect(proc.exitCode).toBe(0);
     expect(stderr).toBe("");
-    expect(stdout).toContain("Proteus account ready");
+    expect(stdout).toContain("Kinu account ready");
     expect(stdout).not.toContain("Local model provider");
     expect(stdout).not.toContain("OpenAI API key");
   });
@@ -198,7 +198,7 @@ describe("CLI behavior", () => {
     expect(proc.exitCode).toBe(0);
     expect(stdout).toContain("Local model provider");
     // Native Workers AI is the recommendation and the default answer; Skip is 8.
-    expect(stdout).toContain("1 Cloudflare Workers AI through your Proteus account");
+    expect(stdout).toContain("1 Cloudflare Workers AI through your Kinu account");
     expect(stdout).toContain("(recommended)");
     expect(stdout).toContain("Choice [1]");
     expect(stdout).toContain("Skipped local model setup");
@@ -239,8 +239,8 @@ describe("CLI behavior", () => {
     const stdout = toText(proc.stdout);
 
     expect(proc.exitCode).toBe(0);
-    expect(stdout).toContain("Proteus providers");
-    expect(stdout).toContain("Proteus account");
+    expect(stdout).toContain("Kinu providers");
+    expect(stdout).toContain("Kinu account");
     expect(stdout).toContain("Codex");
     expect(stdout).toContain("OpenAI");
     expect(stdout).not.toContain("sk-secret");
@@ -721,7 +721,7 @@ function startInBandErrorLlm(payload: JsonValue) {
   return { port: server.port!, stop: () => server.stop(true) };
 }
 
-/** The Proteus worker as far as the CLI's provider registry cares: a model
+/** The Kinu worker as far as the CLI's provider registry cares: a model
  *  menu. An empty one is a signed-in account whose Cloudflare AI was never
  *  granted — the case that produced a workspace nothing could run. */
 function startEmptyModelMenuOrigin() {

@@ -1,5 +1,5 @@
 /**
- * Every Kumo colour token must be re-pointed at the Proteus palette.
+ * Every Kumo colour token must be re-pointed at the Kinu palette.
  *
  * Kumo's components ship compiled: `bg-kumo-brand`, `border-kumo-hairline`
  * and friends are baked into its dist bundle, so a call site cannot restyle
@@ -63,7 +63,7 @@ describe('Kumo token coverage', () => {
     expect(importChain(KUMO_ENTRY).has(KUMO_THEME)).toBe(true);
   });
 
-  test('every Kumo colour token is re-pointed at the Proteus palette', () => {
+  test('every Kumo colour token is re-pointed at the Kinu palette', () => {
     const unmapped = [...vendor].filter((t) => !ours.has(t)).sort();
 
     // Named in the failure so the fix is "add these lines", not "go diff two

@@ -1,4 +1,4 @@
-"""Harbor agent adapter — runs Proteus inside a Harbor task container.
+"""Harbor agent adapter — runs Kinu inside a Harbor task container.
 
     PYTHONPATH=<proteus-repo> harbor run \
         --agent bench.harbor.proteus_agent:ProteusAgent \
@@ -7,7 +7,7 @@
         --allow-agent-host proteus.ashishkumarsingh.com
 
 The adapter defaults to native Workers AI DeepSeek V4 Pro 0813 through
-Proteus's signed-in inference proxy. Export ``PROTEUS_TOKEN`` before launching
+Kinu's signed-in inference proxy. Export ``PROTEUS_TOKEN`` before launching
 Harbor; a long-lived token needs the ``ai.proxy`` scope. ``-m`` and
 ``PROTEUS_BASE_URL`` remain explicit override surfaces for comparison runs.
 
@@ -60,7 +60,7 @@ INSTALL_PATH = INSTALL_ROOT / "proteus"
 #: The trial's PROTEUS_HOME. One per container, and a container is one trial —
 #: fixed rather than randomized so a resumed trial finds the state it left.
 HOME_PATH = INSTALL_ROOT / "proteus-home"
-#: The run environment, sourced by every Proteus invocation. Never on argv.
+#: The run environment, sourced by every Kinu invocation. Never on argv.
 ENV_PATH = INSTALL_ROOT / "proteus.env"
 LOG_NAME = "proteus.jsonl"
 STDERR_LOG_NAME = "proteus-stderr.txt"
@@ -78,7 +78,7 @@ DEFAULT_MISSION = (
 
 
 class ProteusAgent(BaseInstalledAgent):
-    """Proteus, driven headlessly through ``proteus exec`` in local mode."""
+    """Kinu, driven headlessly through ``proteus exec`` in local mode."""
 
     SUPPORTS_ATIF: bool = True
 
@@ -131,9 +131,9 @@ class ProteusAgent(BaseInstalledAgent):
         await self.exec_as_agent(environment, command=f"{INSTALL_PATH} --version")
 
     def _resolve_run_env(self) -> dict[str, str]:
-        """The environment every Proteus invocation in the container runs under.
+        """The environment every Kinu invocation in the container runs under.
 
-        Proteus reads ``PROTEUS_BASE_URL``/``PROTEUS_AUTH``/``PROTEUS_MODEL`` as
+        Kinu reads ``PROTEUS_BASE_URL``/``PROTEUS_AUTH``/``PROTEUS_MODEL`` as
         a direct-endpoint override, which needs no ``~/.proteus/config.json``
         and no account — exactly what a throwaway container wants. ``PROTEUS_HOME``
         completes it: without one, everything durable a trial writes lands in
@@ -203,7 +203,7 @@ class ProteusAgent(BaseInstalledAgent):
     @staticmethod
     def _with_run_env(command: str) -> str:
         """Run *command* under the uploaded environment. The one way this
-        adapter gives Proteus its configuration, so there is no second path a
+        adapter gives Kinu its configuration, so there is no second path a
         credential could take back onto the command line."""
         return f"set -a; . {ENV_PATH}; set +a; {command}"
 
@@ -305,12 +305,12 @@ class ProteusAgent(BaseInstalledAgent):
     def populate_context_post_run(self, context: AgentContext) -> None:
         log_path = self.logs_dir / LOG_NAME
         if not log_path.exists():
-            self.logger.debug(f"No Proteus event log at {log_path}")
+            self.logger.debug(f"No Kinu event log at {log_path}")
             return
 
         events = read_events(log_path)
         if not events:
-            self.logger.debug(f"Proteus event log {log_path} held no events")
+            self.logger.debug(f"Kinu event log {log_path} held no events")
             return
 
         trajectory, summary = build_trajectory(
@@ -328,7 +328,7 @@ class ProteusAgent(BaseInstalledAgent):
                 encoding="utf-8",
             )
         except OSError as exc:
-            self.logger.debug(f"Failed to write Proteus trajectory: {exc}")
+            self.logger.debug(f"Failed to write Kinu trajectory: {exc}")
 
         grading = read_grading(self.logs_dir / ALIGNMENT_NAME)
         if grading is None:
@@ -353,7 +353,7 @@ class ProteusAgent(BaseInstalledAgent):
                 context.n_cache_tokens = summary.usage["cacheRead"]
             if "output" in summary.usage:
                 context.n_output_tokens = summary.usage["output"]
-        # cost_usd stays unset: Proteus reports tokens, not prices, and an
+        # cost_usd stays unset: Kinu reports tokens, not prices, and an
         # invented number is worse than a missing one.
         context.metadata = {
             "corpus": self._corpus_identity.as_dict() if self._corpus_identity else None,

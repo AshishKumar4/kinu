@@ -5,11 +5,11 @@
  *
  * GEPA targets any string-addressable artifact: a scaffold source file, a
  * crafted-tool implementation, a system-prompt section, even a SKILL.md
- * body. Proteus's first integration target is the SCAFFOLD because that's
+ * body. Kinu's first integration target is the SCAFFOLD because that's
  * the highest-leverage thing the agent owns + the audit-confirmed weakest
  * link in the existing evolution stack.
  *
- * Design choices Proteus makes (deviating slightly from DSPy.GEPA):
+ * Design choices Kinu makes (deviating slightly from DSPy.GEPA):
  *   - The metric returns both `{score, feedback}` per instance — the
  *     feedback text is what drives the reflective mutation (DSPy calls
  *     this `μ_f`).

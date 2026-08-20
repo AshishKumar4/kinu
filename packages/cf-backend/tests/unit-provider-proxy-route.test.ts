@@ -200,7 +200,7 @@ describe('POST /forward', () => {
     expect(seen[0]?.body).toBe('{"model":"anthropic/claude"}');
     expect(seen[0]?.headers.get('authorization')).toBe('Bearer sk-or-real');
     // Attribution and content headers survive; the proxy's own control
-    // headers and the caller's Proteus bearer do not.
+    // headers and the caller's Kinu bearer do not.
     expect(seen[0]?.headers.get('http-referer')).toBe('https://proteus.example.com');
     expect(seen[0]?.headers.get('x-proteus-proxy-cred')).toBeNull();
     expect(seen[0]?.headers.get('x-proteus-proxy-target')).toBeNull();
