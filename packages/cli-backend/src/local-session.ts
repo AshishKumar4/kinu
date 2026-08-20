@@ -1216,11 +1216,14 @@ export class LocalAgentSession implements BackendHost {
     const t2 = Date.now();
     await this.mcpClose?.();
     const t3 = Date.now();
-    // The exit tail, attributed: see evolution.settled for WHAT the first
-    // phase waited on.
-    diagnostics.event('session.settle_timings', {
-      evolutionMs: t1 - t0, fibersMs: t2 - t1, mcpMs: t3 - t2,
-    });
+    // The exit tail, attributed — see evolution.settled for WHAT the first
+    // phase waited on. Quiet under 1s: a fast exit stays silent (the --json
+    // contract promises an empty stderr), a slow tail still names itself.
+    if (t3 - t0 > 1_000) {
+      diagnostics.event('session.settle_timings', {
+        evolutionMs: t1 - t0, fibersMs: t2 - t1, mcpMs: t3 - t2,
+      });
+    }
   }
 
   /** Durable fibers detached from a turn — a backgrounded tool call, or an
@@ -1334,6 +1337,13 @@ export class LocalAgentSession implements BackendHost {
    * of every model step forever. reconcileInterruptedForks settles them and
    * tells the agent through the one signal seam.
    *
+   * Then the turn reviews a previous one-shot process deferred. Same reason as
+   * the jobs: `proteus exec` exits before the outcome review it owes, so the
+   * review is a durable row and this is the next host that can afford it
+   * (core's AgentOrchestrator.runDeferredTurnReviews — a one-shot session
+   * declines it there, so the cost never lands back on an exec invocation).
+   * Bounded per open, so a backlog is not this session's first turn's latency.
+   *
    * Then two passes over the jobs, because the fiber rows and the job registry
    * each know something the other does not. An interrupted bg:* fiber row says
    * its job's executor died AFTER settling, which is the only way a lost wake
@@ -1356,6 +1366,14 @@ export class LocalAgentSession implements BackendHost {
       runEvents: this.eventRecorder,
       logActivity: (event, detail) => this.emit({ type: 'evolution', event, message: detail ?? '' }),
     });
+    const reviews = await this.orch.runDeferredTurnReviews();
+    if (reviews.reviewed > 0 || reviews.refused > 0) {
+      this.emit({
+        type: 'evolution', event: 'deferred_reviews_drained',
+        message: `${reviews.reviewed} deferred turn review(s) run` +
+          (reviews.refused > 0 ? `, ${reviews.refused} unreadable row(s) refused` : ''),
+      });
+    }
     const orphans = detectOrphanedFibers(this.rt.storage.sql);
     for (const o of orphans) {
       if (o.name.startsWith('bg:')) await this.jobRunner.recover(o.snapshot);

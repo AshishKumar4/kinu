@@ -150,6 +150,12 @@ export {
 export {
   initSessionWindowTable, createSessionWindowStore, type SessionWindowStore, type ClaimedWindow,
 } from './evolution/session-window';
+export {
+  initTurnReviewQueueTable, queueTurnReview, takeQueuedTurnReviews, dropQueuedTurnReview,
+  countQueuedTurnReviews, MAX_TURN_REVIEWS_PER_OPEN,
+  type DeferredTurnReview, type RefusedTurnReview, type TakenTurnReviews,
+  type TurnReviewQueueOutcome, type DeferredReviewDrain,
+} from './evolution/review-queue';
 // Evolution Changelog — the "what I changed about myself" digest over the
 // durable ledgers, with real revert dispatch (the autonomy-flip transparency).
 export {

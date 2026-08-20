@@ -84,7 +84,11 @@ export interface SessionWindowStore {
 }
 
 interface WindowRow { id: string; turn: string; created_at: number }
-const CompletedTurnSchema: v.GenericSchema<CompletedTurn> = v.object({
+/** The durable mirror of {@link CompletedTurn} — one schema for every table
+ *  that stores a snapshotted turn (this window and the deferred-review queue),
+ *  because two mirrors of one type drift and the drift shows up as a turn that
+ *  silently will not decode. */
+export const CompletedTurnSchema: v.GenericSchema<CompletedTurn> = v.object({
   userMessage: v.string(),
   assistantResponse: v.string(),
   toolCalls: v.array(v.object({

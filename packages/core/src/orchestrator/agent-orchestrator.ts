@@ -24,6 +24,14 @@
 //     `settleTimeoutMs` (default DEFAULT_SETTLE_TIMEOUT_MS); whatever is still
 //     running when the bound expires is LOGGED by label and abandoned, never
 //     silently waited on forever.
+//     A `oneShot` host does not run it at all. Joining it was the largest item
+//     on that process's exit tail — 64.9s of `evolution.settled
+//     waitedOn:"Turn review"` against a 27.4s turn (TB2.1, 2026-08-20) — so the
+//     turn writes one durable row (evolution/review-queue.ts) carrying exactly
+//     `reviewTurn`'s two inputs, and the next host that can afford the work
+//     drains it through the SAME code path at session open
+//     (`runDeferredTurnReviews`). Deferred, never dropped: same call, same
+//     inputs, same `turn_outcomes` row, on somebody else's wall clock.
 //
 //   CADENCE LANE — the whole session/lifetime chain (queued scaffold trials →
 //     session reflection → scaffold proposal → replay eval → craft
@@ -59,6 +67,7 @@ import type { PrepareStepContext, ProteusExtension } from '../extension';
 import type { BackendHost } from '../types/backend-host';
 import type { AgentSignal } from '../types/signals';
 import type { EvolutionEngine } from '../evolution/engine';
+import type { DeferredReviewDrain } from '../evolution/review-queue';
 import type { ClaimedWindow } from '../evolution/session-window';
 import type { RecoveryFinding } from '../evolution/recovery';
 import type { CompletedTurn } from '../evolution/types';
@@ -112,6 +121,8 @@ export interface AgentOrchestratorDeps {
     | 'craftLedger'
     | 'recordRecovery'
     | 'reviewTurn'
+    | 'deferTurnReview'
+    | 'runDeferredTurnReviews'
     | 'onSessionComplete'
     | 'runDueShadowTrials'
   >;
@@ -303,7 +314,7 @@ export class AgentOrchestrator {
     const previous = this.window.takePendingReview();
     if (!previous) return;
     const followup = continuity === 'conversation' ? userText : null;
-    this.detach(this.deps.engine.reviewTurn(previous, followup), 'Turn review');
+    this.dispatchReview(previous, followup);
   }
 
   /**
@@ -334,11 +345,52 @@ export class AgentOrchestrator {
     const awaitsFollowup = turn.origin !== 'programmatic' && continuity === 'conversation';
     this.window.append(turn, { awaitsFollowup });
     if (!awaitsFollowup) {
-      this.detach(this.deps.engine.reviewTurn(turn, null), 'Turn review');
+      this.dispatchReview(turn, null);
     }
     // A one-shot host is about to exit — it must not open work it cannot
     // finish. The window keeps the turns; the daemon runs the pass.
     if (!this.deps.oneShot) void this.runDueSessionEvolution();
+  }
+
+  /**
+   * The TURN LANE's one decision point: run this review now, or defer it.
+   *
+   * An interactive session and the Durable Object detach it and join it at
+   * exit — they outlive the call, so paying for it inline costs nobody
+   * anything. A one-shot host cannot: it is about to exit, so `settleEvolution`
+   * would charge the whole classifier→reflection→extraction chain to the
+   * process that has already answered the user. It writes one durable row
+   * instead and the next host that can afford the work runs it, which is
+   * exactly what the cadence lane's shadow-trial queue already does.
+   *
+   * The mode is structural — `deps.oneShot`, fixed at construction from the
+   * host's SessionSurface (jobs/threshold.ts) — never sniffed at the call site.
+   */
+  private dispatchReview(turn: CompletedTurn, followup: string | null): void {
+    if (this.deps.oneShot) {
+      this.deps.engine.deferTurnReview(turn, followup);
+      return;
+    }
+    this.detach(this.deps.engine.reviewTurn(turn, followup), 'Turn review');
+  }
+
+  /**
+   * Run the reviews one-shot hosts deferred — the re-driver, called at session
+   * open by the hosts that can afford the work (the interactive client's
+   * connect, the scheduler daemon's tick), alongside the interrupted-job
+   * recovery that runs there for the same reason.
+   *
+   * A one-shot host does NOT re-drive: draining at its startup would move the
+   * cost from one task's exit to the next task's start, which is not a saving.
+   * That is what the queue's own ceiling is for — see
+   * MAX_QUEUED_TURN_REVIEWS.
+   *
+   * Never rejects: the engine absorbs each review's failure and leaves that
+   * row for the next open.
+   */
+  async runDeferredTurnReviews(): Promise<DeferredReviewDrain> {
+    if (this.deps.oneShot) return { reviewed: 0, refused: 0 };
+    return await this.deps.engine.runDeferredTurnReviews();
   }
 
   /**

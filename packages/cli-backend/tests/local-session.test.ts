@@ -21,7 +21,7 @@ import type { LLMProviderConfig } from '@proteus/core';
 import {
   DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, createAgentsCodemodeProvider,
   initSearchTables, initAlternateTakesTable, captureAlternateTakes, MAX_CONCURRENT_DETACHED_JOBS,
-  JsonObjectSchema, WORKSPACE_RUN_ID,
+  JsonObjectSchema, WORKSPACE_RUN_ID, BACKGROUND_POLICY,
   type AgentsToolDeps, type ModelInfo, type JsonObject, type JsonValue,
   type ModelCallSink,
   createAgentSelfProvider,
@@ -304,6 +304,37 @@ async function waitFor(pred: () => boolean, timeoutMs = 1000): Promise<void> {
     if (performance.now() - start > timeoutMs) throw new Error('waitFor timeout');
     await new Promise<void>((r) => setTimeout(r, 2));
   }
+}
+
+const SettleTimingsSchema = v.object({
+  event: v.literal('session.settle_timings'),
+  fields: v.object({ evolutionMs: v.number() }),
+});
+
+/** The `session.settle_timings` diagnostic `end()` emits — the instrument the
+ *  exit tail is measured with, read from the stream it actually writes to
+ *  rather than re-timed by the test. It is QUIET under 1s by contract (the
+ *  --json stderr promise), so on a fast exit its absence IS the measurement:
+ *  null means the whole tail fit under the threshold. A line naming the event
+ *  and failing to parse is a logger defect, so it throws rather than being
+ *  skipped. */
+async function captureSettleTimings(run: () => Promise<void>): Promise<{ evolutionMs: number } | null> {
+  const original = console.error;
+  let timings: { evolutionMs: number } | null = null;
+  console.error = (...args: unknown[]) => {
+    // The logger writes ONE JSON string per call; anything else on this stream
+    // belongs to another writer and is parsed away rather than narrowed.
+    const line = v.safeParse(v.string(), args[0]);
+    if (!line.success || !line.output.includes('"session.settle_timings"')) return;
+    const parsed = v.parse(SettleTimingsSchema, JSON.parse(line.output));
+    timings = { evolutionMs: parsed.fields.evolutionMs };
+  };
+  try {
+    await run();
+  } finally {
+    console.error = original;
+  }
+  return timings;
 }
 
 function jobColumn(db: Database, id: string, column: 'status' | 'error' | 'result'): string {
@@ -1630,7 +1661,12 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 });
 
 describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)', () => {
-  function setupWithEvolution(classifierJson: string) {
+  /** `gate`, when given, is awaited before the classifier answers — a review
+   *  that has not come back yet, which is what the exit tail was paying for. */
+  function setupWithEvolution(
+    classifierJson: string,
+    opts: { oneShot?: boolean; gate?: Promise<void>; model?: LanguageModel } = {},
+  ) {
     const db = new Database(':memory:');
     db.exec(`CREATE TABLE IF NOT EXISTS messages (
       id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
@@ -1639,18 +1675,29 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
     const rt = createCLIRuntime(db, { dbPath: scratchPath('local-session-review', 'agent.db'), llm: DUMMY_LLM });
     // The classifier + reflection ride rt.llm.complete — stub it so the review
     // runs without a network LLM.
+    const completions: string[] = [];
     Object.defineProperty(rt, 'llm', { value: {
       stream: rt.llm.stream.bind(rt.llm),
-      complete: async (prompt: string) =>
-        prompt.includes('Classify what the follow-up reveals')
+      complete: async (prompt: string) => {
+        completions.push(prompt);
+        if (opts.gate) await opts.gate;
+        return prompt.includes('Classify what the follow-up reveals')
           ? classifierJson
-          : 'verify the cluster name before rotating keys',
+          : 'verify the cluster name before rotating keys';
+      },
     } });
     const events: SessionEvent[] = [];
-    const session = new LocalAgentSession({
-      rt, db, model: fakeModel('rotated the production keys'), onEvent: (e) => events.push(e),
-    });
-    return { db, rt, session, events };
+    const sessionOpts: LocalAgentSessionOpts = {
+      rt, db,
+      model: opts.model ?? fakeModel('rotated the production keys'),
+      onEvent: (e) => events.push(e),
+    };
+    if (opts.oneShot) {
+      sessionOpts.oneShot = true;
+      sessionOpts.backgroundPolicy = BACKGROUND_POLICY['one-shot'];
+    }
+    const session = new LocalAgentSession(sessionOpts);
+    return { db, rt, session, events, completions };
   }
 
   test('the next user message grades the previous turn into the durable outcome ledger', async () => {
@@ -1725,6 +1772,98 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
     expect(db.query<{ c: number }, []>(
       `SELECT count(*) AS c FROM session_window WHERE in_window = 1`,
     ).get()?.c).toBe(2);
+  });
+
+  // A one-shot process cannot afford to JOIN its own outcome review: measured
+  // on a one-line task, `evolution.settled waitedOn:"Turn review"` was 64.9s
+  // against a 27.4s turn (TB2.1, 2026-08-20). It defers the review instead.
+  test('a one-shot end() waits ~0ms on the turn lane while the review sits durably owed', async () => {
+    // A turn that ACTED, so a review WOULD reach a model call: the execution
+    // verdict is `accepted`, and an accepted turn with tool calls runs pattern
+    // extraction through `rt.llm.complete`.
+    const { db, session, completions } = setupWithEvolution(
+      '{"outcome":"accepted","confidence":0.9,"evidence":"x"}',
+      { oneShot: true, model: runThenAnswerModel() },
+    );
+    await session.send('run the build and report');
+
+    const timings = await captureSettleTimings(() => session.end());
+    // The named instrument, quiet under 1s: a silent exit means the whole tail
+    // fit under the threshold, and a loud one must still show an empty lane.
+    // What makes that a fact rather than a coincidence of a fast stub is the
+    // line below: no review call was issued at all.
+    if (timings) expect(timings.evolutionMs).toBeLessThan(100);
+    expect(completions).toEqual([]);
+    // Nothing was graded here, and the review is owed — durably, to whoever
+    // opens this workspace next.
+    expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM turn_outcomes`).get()?.c).toBe(0);
+    expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM turn_review_queue`).get()?.c)
+      .toBeGreaterThanOrEqual(1);
+  });
+
+  test('the next open of the same workspace runs the deferred review', async () => {
+    const classifierJson = '{"outcome":"corrected","confidence":0.9,"evidence":"user re-asked"}';
+    // A turn that DID tool work: the execution verdict is the only evidence a
+    // headless turn carries, and it needs an acting call to read.
+    const { db, rt, session } = setupWithEvolution(classifierJson,
+      { oneShot: true, model: runThenAnswerModel() });
+    await session.send('run the build and report');
+    await session.end();
+    const owed = db.query<{ c: number }, []>(`SELECT count(*) AS c FROM turn_review_queue`).get()?.c ?? 0;
+    expect(owed).toBeGreaterThanOrEqual(1);
+    expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM turn_outcomes`).get()?.c).toBe(0);
+
+    // An interactive session (or the scheduler daemon) opening this workspace —
+    // both drive `recoverBackgroundJobs`, which is the re-driver.
+    const events: SessionEvent[] = [];
+    const next = new LocalAgentSession({
+      rt, db, model: fakeModel('here is the runbook'), onEvent: (e) => events.push(e),
+    });
+    await next.recoverBackgroundJobs();
+
+    const row = db.query<{ outcome: string; source: string; followup: string | null }, []>(
+      `SELECT outcome, source, followup FROM turn_outcomes`,
+    ).get();
+    expect(row).toEqual({ outcome: 'accepted', source: 'execution', followup: null });
+    expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM turn_review_queue`).get()?.c).toBe(0);
+    expect(events.some((e) => e.type === 'evolution' && e.event === 'deferred_reviews_drained')).toBe(true);
+    await next.end();
+  });
+
+  test('a corrupt deferred row is refused at the next open — no verdict is invented', async () => {
+    const { db, rt } = setupWithEvolution('{"outcome":"accepted","confidence":0.9,"evidence":"x"}');
+    db.query(`INSERT INTO turn_review_queue (id, turn, followup, queued_at) VALUES (?, ?, ?, ?)`)
+      .run('rev-corrupt', '{truncated', null, 1);
+
+    const events: SessionEvent[] = [];
+    const next = new LocalAgentSession({
+      rt, db, model: fakeModel('ok'), onEvent: (e) => events.push(e),
+    });
+    await next.recoverBackgroundJobs();
+
+    expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM turn_outcomes`).get()?.c).toBe(0);
+    expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM turn_review_queue`).get()?.c).toBe(0);
+    const drained = events.flatMap((e) =>
+      e.type === 'evolution' && e.event === 'deferred_reviews_drained' ? [e.message] : []);
+    expect(drained).toEqual(['0 deferred turn review(s) run, 1 unreadable row(s) refused']);
+    await next.end();
+  });
+
+  test('a one-shot open does NOT re-drive — the cost would only move to the next task', async () => {
+    const { db, rt, session } = setupWithEvolution('{"outcome":"accepted","confidence":0.9,"evidence":"x"}',
+      { oneShot: true });
+    await session.send('write the report');
+    await session.end();
+    expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM turn_review_queue`).get()?.c).toBe(1);
+
+    const nextExec = new LocalAgentSession({
+      rt, db, model: fakeModel('ok'), onEvent: () => {}, oneShot: true,
+      backgroundPolicy: BACKGROUND_POLICY['one-shot'],
+    });
+    await nextExec.recoverBackgroundJobs();
+    expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM turn_review_queue`).get()?.c).toBe(1);
+    expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM turn_outcomes`).get()?.c).toBe(0);
+    await nextExec.end();
   });
 });
 

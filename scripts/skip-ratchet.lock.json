@@ -111,5 +111,13 @@
   {
     "key": "tests/evals/swarm.eval.ts › Swarm evals — a live measured search through the settled tool surface > MEASURED: a live swarm crowns a winner that beats its own measured baseline",
     "reason": "needs a live model BY DEFINITION: it drives agents({action:'swarm'}) through the real tool surface and grades the tree on the caller's own exec-ratio verifier — a winner crowned, its artifact measured against the run's own measured baseline, exploration_records rows reachable under the objective's key, and the judgeEnsemble/fanIn/carry disclosures consistent with the axes in force. A mock model writes whatever the fixture scripts, so 'did a real search beat the reference' is not a question one can answer. The credential-free half of the same file — the action is offered, and the strict parse refuses an unknown field naming the field it meant — runs at every tier, and the engine's own tree, arbiter, DAG and records behaviour is covered credential-free at packages/core/tests/unit-swarm-depth.test.ts. Runs in the eval tier's own live swarm arm, which is held to its own liveness assertion."
+  },
+  {
+    "key": "tests/evals/research.eval.ts › Research evals — a live retrieval from a controlled MCP source > MEASURED: the agent reads the archive and its report carries the planted facts and the canary",
+    "reason": "needs a live model BY DEFINITION: it drives one real agent episode whose only source for a fictional topic is the controlled MCP archive this suite serves, and scores the structured reply by exact match against the planted numbers and the canary token — a mock model would be this eval answering itself. The credential-free half of the same file runs at every tier: the corpus-integrity test (facts in the archive, none in the prompt, the canary in exactly one entry) and the MCP handshake through the product's own connectMcpServers client. Runs in the eval tier: `bun run evals:full`."
+  },
+  {
+    "key": "tests/evals/optimization.eval.ts › Optimization evals — a measured challenge with a pre-registered threshold > MEASURED: the agent attains the threshold on the metered instrument",
+    "reason": "needs a live model BY DEFINITION: one real agent episode against the metered hard-majority-vote instrument, held to the pre-registered task_outcome threshold of 0.5 on the exec-ratio log scale, with swarm use recorded off the episode's own store rather than dictated. A mock model cannot attain or miss a measured oracle-call bar. The threshold's own sanity (a bar something can clear and something can miss) is asserted credential-free in the same file. Runs in the eval tier: `bun run evals:full`."
   }
 ]

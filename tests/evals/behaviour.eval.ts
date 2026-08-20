@@ -56,7 +56,7 @@ import type { LanguageModel } from 'ai';
 import type { EvalCase, LLMProviderConfig } from '../../packages/core/src/index';
 import { minimumPairsForSignificance, parseCorpus } from '../../packages/core/src/index';
 import {
-  assessAdmissibility, EVAL_MODELS, formatRunRecord, FULL_TOOL_SURFACE, gitProvenance,
+  assembleRunRecord, EVAL_MODELS, formatRunRecord, FULL_TOOL_SURFACE,
   hardTaskCases, hardTaskFor,
   liveChatModel, liveModelTarget, preRegister, reportLiveModelSpend, TASK_OUTCOME, UNCONFIGURED_LLM,
   writeRunRecord,
@@ -189,6 +189,11 @@ let model: LanguageModel;
  * unexercised mechanism would be this library's own `ToolCallJudge` defect
  * inverted: instead of certifying inertness as success it would certify an
  * untouched mechanism as failure.
+ *
+ * It lives HERE, beside its one caller, rather than in a shared module. The
+ * research and optimization families score mechanically off their own episode
+ * and assert directly; they never build a judge panel, so a shared bridge would
+ * have exactly one consumer and one aspirational docstring.
  */
 function ledgerJudge(name: string) {
   return createJudge<EvalInput, BehaviourOutput>(
@@ -286,35 +291,11 @@ beforeAll(() => {
 
 afterAll(() => {
   const spend = reportLiveModelSpend('Behaviour Evals');
-  const declared = CORPUS.map((c) => c.id);
-  const record: EvalRunRecord = {
-    schema: 1,
-    runId: `behaviour-${TIER}-${String(Date.now())}`,
-    createdAt: new Date().toISOString(),
-    ...gitProvenance(REPO_ROOT),
-    tier: TIER,
-    // The model DRIVEN, read from the config the session was built with rather
-    // than re-derived from the tier. A record's model id has to be a fact about
-    // the run, not a second computation that can disagree with it.
-    modelId: LLM.model,
-    repeats: REPEATS,
-    seed: SEED,
-    arm: ARM,
-    declaredTasks: declared,
-    executedTasks: [...new Set(observations.map((o) => o.taskId))],
-    observations,
-    admissibility: assessAdmissibility(declared, observations),
-    // FIELD RENAME ONLY: LiveModelSpend now carries `usage: Usage` instead of
-    // flat inputTokens/outputTokens. The `?? 0` and the tokensIn/tokensOut
-    // spelling are EvalsInfra's agreed follow-up (spend becomes
-    // { calls, callsWithoutUsage, input, output }); this keeps the build green.
-    spend: {
-      calls: spend.calls,
-      tokensIn: spend.usage.input ?? 0,
-      tokensOut: spend.usage.output ?? 0,
-    },
-    transcripts: TRANSCRIPTS,
-  };
+  const record: EvalRunRecord = assembleRunRecord({
+    family: 'behaviour', tier: TIER, modelId: LLM.model, repeats: REPEATS, seed: SEED,
+    arm: ARM, declaredTasks: CORPUS.map((c) => c.id), observations, spend,
+    transcripts: TRANSCRIPTS, repoRoot: REPO_ROOT,
+  });
   // Beside the stores it cites, not in the repo. The default used to be
   // `tests/eval/runs/<runId>.json`, a TRACKED directory, so every local run —
   // including a scripted-model one that costs nothing and proves nothing —

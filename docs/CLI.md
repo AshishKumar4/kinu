@@ -84,7 +84,7 @@ proteus <command> [options]
 | --- | --- |
 | [`proteus connect`](#proteus-connect) | Link this computer as the desktop execution daemon (the link renews itself while the daemon connects; re-run this after 180 idle days) |
 | [`proteus desktop [action]`](#proteus-desktop-action) | Connect or inspect the local desktop execution daemon |
-| [`proteus daemon [action]`](#proteus-daemon-action) | Manage the local scheduler daemon: start, stop, restart, status, logs |
+| [`proteus daemon [action] [workspace]`](#proteus-daemon-action-workspace) | Manage the local scheduler daemon: start, stop, restart, status, logs, tick |
 | [`proteus doctor`](#proteus-doctor) | Inspect local Proteus CLI installation state |
 | [`proteus update [target]`](#proteus-update-target) | Update the installed Proteus command |
 | [`proteus uninstall`](#proteus-uninstall) | Remove the installed Proteus command |
@@ -507,9 +507,9 @@ Connect or inspect the local desktop execution daemon.
 | --- | --- |
 | `--label <name>` | Device label |
 
-### proteus daemon [action]
+### proteus daemon [action] [workspace]
 
-Manage the local scheduler daemon: start, stop, restart, status, logs.
+Manage the local scheduler daemon: start, stop, restart, status, logs, tick.
 
 ### proteus doctor
 

@@ -786,10 +786,14 @@ export const LADDER: readonly Gate[] = [
       + 'is 34 full agent episodes (17 corpus tasks x 2 repeats) and dominates the tier; '
       + 'the tier now reports each arm\'s own seconds and tokens, which is what replaced '
       + '"add roughly an hour for the vitest behaviour arm" — a sentence that stood in '
-      + 'for a measurement for as long as that arm produced no report at all. '
-      + 'Credential-free the whole tier is 3s across both arms, not the 0.3s once '
-      + 'declared, which timed only the bun half; everything skips, which is the path '
-      + 'that reproduces anywhere.',
+      + 'for a measurement for as long as that arm produced no report at all. Two more '
+      + 'single-family vitest arms — research (a controlled MCP archive, exact-match '
+      + 'scored) and optimization (a metered corpus instrument with a pre-registered '
+      + 'threshold) — each hold their own spend file and their own liveness assertion, '
+      + 'and each writes a run record `scripts/eval-report.ts` reads. '
+      + 'Credential-free the whole tier is 9s across all five arms (measured '
+      + '2026-08-19), not the 0.3s once declared, which timed only the bun half; '
+      + 'everything skips, which is the path that reproduces anywhere.',
     blind: 'the cf runtime, for everything except the Live Smoke hosted arm. The rest '
       + 'drive core and the CLI\'s local session in-process, so a defect that only '
       + 'appears in workerd — a rejected cross-DO RPC inside background work that only '
