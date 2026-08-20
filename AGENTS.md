@@ -106,6 +106,27 @@ The invariant is enforced, not just documented: every package's suite carries
 whenever `@proteus/*` resolves outside the tree it is running in
 (`packages/test-utils/src/workspace-resolution.ts`).
 
+**Agents and delegated sessions NEVER edit the primary checkout.** Work in a
+worktree — an existing one for your branch, or a fresh one via the script
+above. Eight stray-edit incidents in one day came from one mechanism: a
+repo-relative `edit`/`write` path resolves against the SESSION cwd (the
+primary checkout) and reports success while your worktree stays untouched.
+The nastiest variant: a `read` with an ABSOLUTE worktree path followed by an
+edit whose section header is the RELATIVE spelling — the tag matches, the
+edit lands in the primary, no error anywhere. So:
+
+- Every `edit`/`write` path is absolute, under YOUR worktree, and an edit's
+  section header carries the SAME absolute path the tag was read from.
+- After the first edit of any file, `git -C <your-worktree> status` must show
+  it changed; if `git -C ~/Proteus status` shows your file instead, stop,
+  extract your diff with `git diff -- <paths>`, apply it in your worktree,
+  and revert the primary path-scoped. Never a bare checkout or reset there —
+  other agents' work may be in flight beside yours.
+
+A fresh worktree whose branch changed `bun.lock` needs its own `bun install`,
+and that install needs the security scanner's own imports resolvable before
+anything is installed — the script pre-seeds them; do not delete that step.
+
 Branches get pruned; the `archive/*` tags are what make that safe. Before deleting
 anything under `refs/tags/archive/`, read [docs/BRANCH-ARCHIVE.md](docs/BRANCH-ARCHIVE.md).
 Four of the five tags pin file content that exists nowhere in `main`'s history —

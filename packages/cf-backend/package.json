@@ -5,7 +5,7 @@
   "main": "src/server.ts",
   "scripts": {
     "start": "vite dev --host 0.0.0.0",
-    "//deploy": "Production deploys go through scripts/deploy.sh (`bun run deploy` at the repo root) — it is the only path with the pre-deploy asset check and the post-deploy smoke gate. A bare `wrangler deploy` here once shipped production without the CLI download assets.",
+    "//deploy": "Production deploys go through scripts/deploy.sh (`bun run deploy` at the repo root) \u2014 it is the only path with the pre-deploy asset check and the post-deploy smoke gate. A bare `wrangler deploy` here once shipped production without the CLI download assets.",
     "deploy:staging": "CLOUDFLARE_ENV=staging vite build && bash ../../scripts/build-cli-source-archive.sh && wrangler deploy && vite build",
     "smoke:workspace": "bun scripts/smoke-workspace.ts",
     "types": "wrangler types env.d.ts --include-runtime false"
@@ -52,8 +52,8 @@
   "devDependencies": {
     "@proteus/test-utils": "workspace:*",
     "@babel/plugin-proposal-decorators": "^7.25.9",
-    "@cloudflare/vite-plugin": "^1.32.2",
-    "@cloudflare/vitest-pool-workers": "^0.21.3",
+    "@cloudflare/vite-plugin": "^1.53.1",
+    "@cloudflare/vitest-pool-workers": "^0.22.0",
     "@cloudflare/workers-types": "^4.20260414.1",
     "@rolldown/plugin-babel": "^0.2.3",
     "@tailwindcss/vite": "^4",
@@ -64,6 +64,6 @@
     "tailwindcss": "^4.2.2",
     "typescript": "7.0.2",
     "vite": "^8.0.8",
-    "wrangler": "^4.82.2"
+    "wrangler": "^4.125.0"
   }
 }

@@ -57,9 +57,8 @@
  */
 import { readFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
-import type { Readable } from 'node:stream';
 import { build } from 'esbuild';
-import { Miniflare, NoOpLog } from 'miniflare';
+import { Miniflare, NoOpLog, type WorkerOptions } from 'miniflare';
 import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
 
@@ -265,21 +264,31 @@ export async function observeSpans(): Promise<SpanObservations> {
   // call, so it cannot re-enter the worker it observes.
   const sinkScript = 'export default { tail() {} };';
 
-  const run = async (attachSink: boolean): Promise<readonly RuntimeObservation[]> => {
-    const traced = attachSink
-      ? { name: 'traced', modules: true, script, tails: ['sink'] }
-      : { name: 'traced', modules: true, script };
-    const workers = attachSink
-      ? [traced, { name: 'sink', modules: true, script: sinkScript }]
-      : [traced];
-    const mf = new Miniflare({
-      compatibilityDate: '2025-12-01',
-      compatibilityFlags: ['nodejs_compat'],
-      log: new NoOpLog(),
-      handleRuntimeStdio(stdout: Readable, stderr: Readable) {
-        stdout.resume();
-        stderr.resume();
+  // miniflare 5: a worker is `{ config }` with compat + modules per worker
+  // (`manifest`), and a tail attachment is `tailConsumers: [{ workerName }]`.
+  const worker = (name: string, code: string, tailConsumers?: { workerName: string }[]): WorkerOptions => {
+    const options: WorkerOptions = {
+      config: {
+        name,
+        type: 'worker',
+        compatibilityDate: '2025-12-01',
+        compatibilityFlags: ['nodejs_compat'],
+        manifest: {
+          mainModule: 'index.mjs',
+          modulesRoot: '/',
+          modules: { 'index.mjs': { type: 'esm', contents: code } },
+        },
       },
+    };
+    if (tailConsumers) options.config.tailConsumers = tailConsumers;
+    return options;
+  };
+  const run = async (attachSink: boolean): Promise<readonly RuntimeObservation[]> => {
+    const workers: WorkerOptions[] = attachSink
+      ? [worker('traced', script, [{ workerName: 'sink' }]), worker('sink', sinkScript)]
+      : [worker('traced', script)];
+    const mf = new Miniflare({
+      log: new NoOpLog(),
       workers,
     });
     try {

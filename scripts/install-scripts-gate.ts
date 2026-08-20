@@ -48,7 +48,6 @@ export const ALLOWED_INSTALL_SCRIPTS = {
   esbuild: 'downloads its platform binary; vite and the bundler chain cannot build without it',
   workerd: 'downloads the Cloudflare runtime binary that `vitest-pool-workers` and `wrangler dev` execute',
   puppeteer: 'resolves a browser for the `browser` tool and the screenshot gates',
-  sharp: 'native image pipeline used by the thumbnail/preview path; falls back to a local compile',
 } satisfies InstallScriptAllowlist;
 
 /** Reason this package's lifecycle script may run, or undefined when unlisted. */
