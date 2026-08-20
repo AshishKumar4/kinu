@@ -12,6 +12,17 @@ import {
 import { tolerate } from "@proteus/core/obs";
 import * as v from "valibot";
 
+/** Bytes to assertable text. Decoration and line endings are the invoking
+ *  terminal talking, not the CLI's answer: both production deploys failed on
+ *  tests that inherited a PTY no local run had, with colour codes landing
+ *  between the tokens the assertions bind. `Bun.stripANSI` is structural — no
+ *  regex, no control characters, maintained beside the renderer that emits
+ *  the codes. */
+function toText(bytes: Buffer): string {
+  return Bun.stripANSI(bytes.toString()).replaceAll('\r\n', '\n');
+}
+
+
 const tempDirs: string[] = [];
 const repoRoot = resolve(__dirname, "../../..");
 const cliBin = join(repoRoot, "packages/cli/bin/cli.ts");
@@ -162,8 +173,8 @@ describe("CLI behavior", () => {
     });
 
     const proc = runCli(["setup", "--account-only"], { home });
-    const stdout = proc.stdout.toString();
-    const stderr = proc.stderr.toString();
+    const stdout = toText(proc.stdout);
+    const stderr = toText(proc.stderr);
 
     expect(proc.exitCode).toBe(0);
     expect(stderr).toBe("");
@@ -182,7 +193,7 @@ describe("CLI behavior", () => {
     });
 
     const proc = runCliInPty(["setup"], { home, stdin: "8\n" });
-    const stdout = proc.stdout.toString();
+    const stdout = toText(proc.stdout);
 
     expect(proc.exitCode).toBe(0);
     expect(stdout).toContain("Local model provider");
@@ -203,7 +214,7 @@ describe("CLI behavior", () => {
     });
 
     const proc = runCli(["setup", "--local-model", "--provider", "skip"], { home });
-    const stdout = proc.stdout.toString();
+    const stdout = toText(proc.stdout);
 
     expect(proc.exitCode).toBe(0);
     expect(stdout).toContain("Skipped local model setup");
@@ -225,7 +236,7 @@ describe("CLI behavior", () => {
     });
 
     const proc = runCli(["provider", "list"], { home });
-    const stdout = proc.stdout.toString();
+    const stdout = toText(proc.stdout);
 
     expect(proc.exitCode).toBe(0);
     expect(stdout).toContain("Proteus providers");
@@ -238,7 +249,7 @@ describe("CLI behavior", () => {
 
   test("no-arg CLI keeps a non-interactive help fallback", () => {
     const proc = runCli([]);
-    const stdout = proc.stdout.toString();
+    const stdout = toText(proc.stdout);
 
     expect(proc.exitCode).toBe(0);
     expect(stdout).toContain("Usage:");
@@ -247,7 +258,7 @@ describe("CLI behavior", () => {
 
   test("subcommand help reaches the selected command instead of root help", () => {
     const proc = runCli(["run", "--help"]);
-    const out = proc.stdout.toString();
+    const out = toText(proc.stdout);
 
     expect(proc.exitCode).toBe(0);
     expect(out).toContain("Usage: proteus run");
@@ -257,7 +268,7 @@ describe("CLI behavior", () => {
 
   test("chat exposes first-class session controls", () => {
     const proc = runCli(["chat", "--help"]);
-    const out = proc.stdout.toString();
+    const out = toText(proc.stdout);
 
     expect(proc.exitCode).toBe(0);
     expect(out).toContain("Usage: proteus chat");
@@ -287,7 +298,7 @@ describe("CLI behavior", () => {
     });
 
     const proc = runCli(["chat"], { home, stdin: "/exit\n" });
-    const stderr = proc.stderr.toString();
+    const stderr = toText(proc.stderr);
 
     expect(proc.exitCode).toBe(0);
     expect(stderr).not.toContain("No agents found");
@@ -301,7 +312,7 @@ describe("proteus exec (headless)", () => {
 
     const proc = runCli(["exec"], { home });
     expect(proc.exitCode).toBe(1);
-    expect(proc.stderr.toString()).toContain("A task prompt is required");
+    expect(toText(proc.stderr)).toContain("A task prompt is required");
   });
 
   test("demands --workspace when several workspaces are configured", () => {
@@ -317,7 +328,7 @@ describe("proteus exec (headless)", () => {
 
     const proc = runCli(["exec", "do something"], { home });
     expect(proc.exitCode).toBe(1);
-    const stderr = proc.stderr.toString();
+    const stderr = toText(proc.stderr);
     expect(stderr).toContain("Multiple workspaces configured");
     expect(stderr).toContain("alpha");
     expect(stderr).toContain("beta");
@@ -341,10 +352,10 @@ describe("proteus exec (headless)", () => {
       expect(created.exitCode).toBe(0);
 
       const proc = await runCliAsync(["exec", "--workspace", "smokey", "--json", "Say hello"], { home, env });
-      expect(proc.stderr.toString()).toBe("");
+      expect(toText(proc.stderr)).toBe("");
       expect(proc.exitCode).toBe(0);
 
-      const events = proc.stdout.toString().trim().split("\n").map(parseJsonObject);
+      const events = toText(proc.stdout).trim().split("\n").map(parseJsonObject);
       expect(events[0]).toMatchObject({ type: "session", workspace: "smokey", backend: "local" });
       expect(events).toContainEqual(expect.objectContaining({ type: "turn_start", kind: "user", text: "Say hello" }));
       expect(events).toContainEqual(expect.objectContaining({ type: "message_end", role: "assistant", text: "Hello from mock." }));
@@ -393,7 +404,7 @@ describe("proteus exec (headless)", () => {
       expect(resumed.exitCode).toBe(0);
       const resumedHeader = v.parse(
         SessionEventSchema,
-        parseJsonObject(resumed.stdout.toString().trim().split("\n")[0]!),
+        parseJsonObject(toText(resumed.stdout).trim().split("\n")[0]!),
       );
       expect(resumedHeader.id).toBe(sessionId);
     } finally {
@@ -419,7 +430,7 @@ describe("proteus exec (headless)", () => {
         env: { ...goodEnv, PROTEUS_BASE_URL: `http://127.0.0.1:${bad.port}` },
       });
       expect(proc.exitCode).toBe(1);
-      const events = proc.stdout.toString().trim().split("\n").map(parseJsonObject);
+      const events = toText(proc.stdout).trim().split("\n").map(parseJsonObject);
       expect(events.some((e) => e.type === "error" || (e.type === "turn_end" && e.hadError === true))).toBe(true);
     } finally {
       good.stop();
@@ -442,9 +453,9 @@ describe("proteus exec (headless)", () => {
       expect((await runCliAsync(["create", "smokey", "--mode", "local", "--purpose", "smoke"], { home, env })).exitCode).toBe(0);
 
       const proc = await runCliAsync(["exec", "--workspace", "smokey", "--json", "--no-auto-evolve", "Say hello"], { home, env });
-      expect(proc.stderr.toString()).toBe("");
+      expect(toText(proc.stderr)).toBe("");
       expect(proc.exitCode).toBe(0);
-      const events = proc.stdout.toString().trim().split("\n").map(parseJsonObject);
+      const events = toText(proc.stdout).trim().split("\n").map(parseJsonObject);
       expect(events).toContainEqual(expect.objectContaining({ type: "message_end", role: "assistant", text: "Hello from mock." }));
       expect(events.some((e) => e.type === "evolution")).toBe(false);
     } finally {
@@ -468,7 +479,7 @@ describe("proteus exec (headless)", () => {
 
     const proc = runCli(["exec", "--workspace", "jarvis", "--json", "--no-auto-evolve", "Say hello"], { home });
     expect(proc.exitCode).toBe(1);
-    expect(proc.stderr.toString()).toContain("--no-auto-evolve applies to local workspaces");
+    expect(toText(proc.stderr)).toContain("--no-auto-evolve applies to local workspaces");
   });
 });
 
@@ -496,7 +507,7 @@ describe("proteus exec --json — the delegation nudge is observable from outsid
       expect((await runCliAsync(["create", "nudgey", "--mode", "local", "--purpose", "smoke"], { home, env })).exitCode).toBe(0);
 
       const proc = await runCliAsync(["exec", "--workspace", "nudgey", "--json", "--no-auto-evolve", "Fix it"], { home, env });
-      const lines = proc.stdout.toString().trim().split("\n");
+      const lines = toText(proc.stdout).trim().split("\n");
       const events = lines.map(parseJsonObject);
 
       const steers = events.flatMap((event) => {
@@ -553,7 +564,7 @@ describe("proteus exec --json — the turn-end usage payload", () => {
 
       const proc = await runCliAsync(["exec", "--workspace", "quiet", "--json", "--no-auto-evolve", "Say hello"], { home, env });
       expect(proc.exitCode).toBe(0);
-      const events = proc.stdout.toString().trim().split("\n").map(parseJsonObject);
+      const events = toText(proc.stdout).trim().split("\n").map(parseJsonObject);
 
       const turnEnd = events.find((e) => e.type === "turn_end");
       expect(turnEnd).toMatchObject({ hadError: false });
@@ -750,7 +761,7 @@ describe("proteus create — an unusable model is named at creation", () => {
       });
 
       expect(proc.exitCode).toBe(0);
-      const stdout = proc.stdout.toString();
+      const stdout = toText(proc.stdout);
       expect(stdout).toContain("has no connected provider");
       expect(stdout).toContain("proteus provider connect");
     } finally {
@@ -773,7 +784,7 @@ describe("proteus create — an unusable model is named at creation", () => {
       });
 
       expect(proc.exitCode).toBe(0);
-      expect(proc.stdout.toString()).not.toContain("has no connected provider");
+      expect(toText(proc.stdout)).not.toContain("has no connected provider");
     } finally {
       server.stop();
     }
@@ -806,7 +817,7 @@ describe("proteus exec — provider failures are legible and actionable", () => 
         env: { ...env, PROTEUS_BASE_URL: `http://127.0.0.1:${bad.port}` },
       });
 
-      const output = `${proc.stdout.toString()}${proc.stderr.toString()}`;
+      const output = `${toText(proc.stdout)}${toText(proc.stderr)}`;
       expect(proc.exitCode).toBe(1);
       expect(output).not.toContain("[object Object]");
       expect(output.split("Your account is not active.").length - 1).toBe(1);
@@ -836,7 +847,7 @@ describe("proteus exec — provider failures are legible and actionable", () => 
       });
 
       expect(proc.exitCode).toBe(1);
-      const events = proc.stdout.toString().trim().split("\n").map(parseJsonObject);
+      const events = toText(proc.stdout).trim().split("\n").map(parseJsonObject);
       const error = events.flatMap((event) => {
         const parsed = v.safeParse(ErrorEventSchema, event);
         return parsed.success ? [parsed.output] : [];

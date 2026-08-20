@@ -58,8 +58,23 @@ export const LIVE_MODEL_ENV = {
 export const AMBIENT_CREDENTIAL_ENV: readonly string[] = Object.values(LIVE_MODEL_ENV).flat();
 
 /**
- * Remove the ambient credentials from `env`, and return the names that were
- * actually there.
+ * Ambient TERMINAL DECORATION vars, stripped by the same policy and at the same
+ * seam as the credentials, because they are the same hazard in a different
+ * channel: behaviour that varies with the invoking shell rather than with the
+ * code under test. `FORCE_COLOR=1` in the environment colours every child a
+ * suite spawns, and colour codes land BETWEEN the tokens a content assertion
+ * binds — both production deploys on 2026-08-19 failed on tests that had only
+ * ever run in pipes. Tests that assert on DECORATION set these themselves, on
+ * the child they spawn, which an ambient strip does not touch.
+ *
+ * `NO_COLOR` is stripped too: a test that passes only because the developer's
+ * shell disables colour is the same false green in the other direction.
+ */
+export const AMBIENT_DECORATION_ENV: readonly string[] = ['FORCE_COLOR', 'CLICOLOR_FORCE', 'CLICOLOR', 'NO_COLOR'];
+
+/**
+ * Remove the ambient credentials and decoration vars from `env`, and return the
+ * names that were actually there.
  *
  * Mutates, because the only caller that matters mutates `process.env` before
  * any test file loads — every child process a suite spawns inherits from it, so
@@ -72,7 +87,7 @@ export const AMBIENT_CREDENTIAL_ENV: readonly string[] = Object.values(LIVE_MODE
  */
 export function stripAmbientCredentials(env: Record<string, string | undefined>): readonly string[] {
   const removed: string[] = [];
-  for (const name of AMBIENT_CREDENTIAL_ENV) {
+  for (const name of [...AMBIENT_CREDENTIAL_ENV, ...AMBIENT_DECORATION_ENV]) {
     if (!(name in env)) continue;
     removed.push(name);
     delete env[name];
