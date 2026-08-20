@@ -1,26 +1,25 @@
 # Kinu turn extensions
 
-> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
-
-The extension seam is the public API for observing and extending one agent turn
+The extension API is the public way to observe and extend one agent turn
 without importing engine internals. Both backends fire the same hook path. On
 the CLI that is the shared chat engine, `runChat`. In the cloud it is the
 Durable Object's Think hook bridge on `ActorAgent`. Internal consumers and
 external plugins ride the same mechanism, so no private callback runs beside a
 parallel plugin API.
 
-For the wider seams (model provider, exploration strategy, actor kind), see
-[EXTENSIBILITY.md](./EXTENSIBILITY.md). This document covers the per-turn hooks.
+For the wider extension points (model provider, exploration strategy, actor
+kind), see [EXTENSIBILITY.md](./EXTENSIBILITY.md). This document covers the
+per-turn hooks.
 
 Source: `packages/core/src/extension.ts`, exported from `@kinu/core`.
 
 Two files in this tree export something called an extension, and they mean
-different things. `packages/core/src/extension.ts` holds the contract: the
+different things. `packages/core/src/extension.ts` holds the contract, the
 `ProteusExtension` interface and the `ExtensionHost` that drives it.
 `packages/compaction/src/extension.ts` holds one implementation of that
 contract, `createCompactionExtension`, which returns a `ProteusExtension` whose
-`name` is `compaction`. Read the first for the seam and the second for a worked
-registrant.
+`name` is `compaction`. Read the first for the contract and the second for a
+worked registrant.
 
 ## The shape
 
@@ -53,7 +52,7 @@ Three more hooks go beyond observation.
   prompt-cache tail markers last, through one shared pipeline
   (`composePrepareStep` in `core/src/prompting/prepare-step.ts`).
 - **`transformContext(ctx): Promise<ModelMessage[] | undefined>`** is the
-  awaited context transform, and the seam the compaction plugin uses. It fires
+  awaited context transform, and the hook the compaction plugin uses. It fires
   once per turn assembly, before the model streams. `ctx` carries
   `sessionKey`, the durable `messages`, `system`, `contextWindow`, an optional
   `providerReportedTokens`, and `trigger: 'auto' | 'force'`. It chains like
@@ -134,7 +133,7 @@ splice must not shift the indices the steer drain replays into durable history.
 
 The host lives on `ActorAgent` (`cf-backend/src/actor-agent.ts`), the abstract
 base that `OrchestratorAgent` and `SubordinateAgent` both extend. A subordinate
-therefore gets the same seam, the same compaction and the same event injection
+therefore gets the same hooks, the same compaction and the same event injection
 as the workspace's own agent, with no second code path. One persistent
 `ExtensionHost` per activation bridges Think's subclass hooks onto the contract
 above. `packages/cf-backend/package.json` depends on `@cloudflare/think` at
@@ -166,11 +165,11 @@ tools or its MCP tools is dropped before the merge
   run on the turn's hot path.
 - `onToolResult.result` is the tool's full rendered output, the same string
   the streamed `tool-result` event and the durable turn record carry. It is
-  not bounded here, because the built-in consumer keys on it: the turn
+  not bounded here, because the built-in consumer keys on it. The turn
   steering hashes it as the call's identity, and a head slice makes two
   different results look like one. Bound it in your own render.
   `evidenceWindow` keeps both ends and states what it dropped.
-- The seam is small on purpose. It observes a turn and lightly rewrites it.
+- The API is small on purpose. It observes a turn and lightly rewrites it.
   Replacing the inference loop is the mutable scaffold's job
   (`core/src/scaffold/inference-transform.ts`), which rides Think's
   `_transformInferenceResult` rather than this host.

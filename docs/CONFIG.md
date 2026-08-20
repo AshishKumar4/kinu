@@ -1,7 +1,5 @@
 # Configuration — `~/.proteus/config.json` and the environment
 
-> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
-
 Every CLI setting lives in one JSON file. `kinu setup`, `kinu auth`,
 `kinu providers connect` and `kinu create` write it for you; this page is
 for when you want to read or edit it yourself. The authoritative shape is
@@ -33,8 +31,8 @@ an export archive, land where you point them and are the one exception.
 | `tokenExpiresAt` | ISO date | When that token expires. The CLI refuses it after this and asks you to re-auth. |
 | `user` | `{id, email, displayName?}` | Who the token belongs to. `kinu whoami` prints it. |
 
-`PROTEUS_TOKEN` overrides `accessToken` for CI, where a scoped token from
-`kinu tokens create` is the right thing to use rather than a session token.
+`PROTEUS_TOKEN` overrides `accessToken` for CI. In CI, use a scoped token from
+`kinu tokens create`.
 
 ## Workspaces
 
@@ -114,7 +112,7 @@ by local workspaces. Cloud workspaces get MCP servers from your account instead.
 | Field | Type | Default | What it does |
 | --- | --- | --- | --- |
 | `updateCheck` | boolean | `true` | The once-a-day "newer Kinu available" notice in an interactive terminal. Set `false` to silence it. |
-| `updateCheckedAt` | number | — | Throttle state for that notice. A cache, never a version source. |
+| `updateCheckedAt` | number | — | Throttle state for that notice. Nothing reads a version from it. |
 | `updateLatestSeen` | string | — | The newest served version the notice has seen. |
 | `deviceConnectPromptDismissed` | boolean | `false` | "Don't ask again" for the chat device-connect prompt. |
 | `checkpointKeep` | number | `50` | Shadow-git file checkpoints kept per working directory. `/undo` restores from them. |

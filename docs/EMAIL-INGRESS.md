@@ -1,13 +1,11 @@
 # Mission Inbox — Email Ingress & Outbound
 
-> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
-
 Every Kinu agent is reachable by email. Mail to `<workspace-name>@EMAIL_DOMAIN`
 wakes the agent for a turn, and the agent's answer comes back as a real reply
 on the same thread. Evolution Changelog digests and background-job completions
 arrive in the owner's inbox over the same outbound path, and
-synthetic-monitoring alerts use it to reach `OPS_ALERT_EMAIL`. Email is the ambient
-channel for an always-on durable agent, with no app open and no session.
+synthetic-monitoring alerts use it to reach `OPS_ALERT_EMAIL`. Email reaches an
+always-on durable agent with no app open and no session.
 
 ## Flow
 
@@ -76,7 +74,7 @@ Notes:
 - All senders combined share one inbound rate-limit window of **30 messages per
   minute per agent** (`EMAIL_INBOUND_RATE_PER_MIN`, verified 2026-08-19). A
   refused window also publishes one internal `email_inbound_rate_limited`
-  event, so the agent can say it is deaf rather than silently missing mail.
+  event, so the agent can report the refusal rather than silently miss mail.
 - Retried deliveries dedupe on `Message-ID`, enforced by a UNIQUE index on
   `agent_log.dedupe_key`. Mail carrying no `Message-ID` falls back to a hash of
   from, to, subject and body, bucketed in 5-minute windows. Verified
@@ -143,10 +141,11 @@ so the Mission Inbox stays off there.
   the CHECK-widening rebuild for live DOs.
 - `packages/cf-backend/tests/unit-email-ingress.test.ts`: addressing, MIME
   parse + quote stripping, the sender gate (owner / allowlist / dropped /
-  rate limit / duplicate), and the Worker routing seam.
+  rate limit / duplicate), and Worker routing.
 - `packages/cf-backend/tests/unit-email-outbound.test.ts`: the full inbound →
-  turn → threaded-reply flow at the seams, threading headers, failure/retry
-  audit, and owner notifications. The only mock is the send binding.
+  turn → threaded-reply flow at its boundaries, threading headers,
+  failure/retry audit, and owner notifications. The only mock is the send
+  binding.
 - `packages/cf-backend/tests/unit-email-outbox.test.ts`: the write-ahead
   intent log: idempotency keys, the stable Message-ID, and the reconciliation
   sweep that re-drives a send left pending by a crash.

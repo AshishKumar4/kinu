@@ -1,7 +1,5 @@
 # Bench — measuring whether self-evolution does anything
 
-> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
-
 Kinu carries a large self-evolution machine with no measured effect attached
 to it. Measured 2026-08-19: 15,645 lines of non-test TypeScript across
 `core/src/evolution`, `core/src/mcts`, `core/src/scaffold` and `core/src/craft`,
@@ -10,8 +8,8 @@ live-model run has scored any of it yet.
 
 This harness is the instrument for producing that number. It has one
 machine-checked metric, rejection by default, a held-out split, and no model
-anywhere in the scoring path. A gain of zero is a result, and the harness says
-so.
+anywhere in the scoring path. A gain of zero is a result, and the harness reports
+it as one.
 
 ```
 bun scripts/bench.ts validate --run-root /tmp/bench
@@ -114,7 +112,8 @@ measures.
 
 Regenerating the corpus as a sweep is the other tempting answer, and it has the
 same flaw with more machinery. It would produce patches that apply, and nothing
-about "it applies" says the task still measures what its prompt claims.
+about "it applies" establishes that the task still measures what its prompt
+claims.
 
 If the code a defect was data about is genuinely gone, retire it in
 `tests/bench/retired.jsonl`, but only after establishing that no live code still
@@ -144,12 +143,11 @@ Three outcomes, kept distinct rather than collapsed to a boolean:
 | `FLKY` | failed, then passed on a retry, so non-deterministic | 0, reported loudly |
 | `BAD` | failed every attempt, so genuinely broken | 1 |
 
-`FLKY` is not papered over. The summary lists every flaky task and says why it
-matters. The same non-determinism that made it pass on a retry can make a scored
-`compare` run record a false fail on it, which is what `--repeats` is for. The
-sealed split reports flaky ids alongside invalid ones, because well-formedness
-is a property of the task rather than of any variant, so neither leaks
-performance signal.
+The summary lists every flaky task and why it matters. The same non-determinism
+that made it pass on a retry can make a scored `compare` run record a false fail
+on it, which is what `--repeats` is for. The sealed split reports flaky ids
+alongside invalid ones, because well-formedness is a property of the task rather
+than of any variant, so neither leaks performance signal.
 
 `BENCH_SUITES` in `scripts/bench-corpus.ts` also defines a `lean` suite over
 `scripts/verify-lean.sh`. The check mechanism is an argv and an exit code, so the
@@ -234,7 +232,7 @@ The dev comparison and the stateful-gain report publish three cost numbers per
 variant, because a variant that wins by spending twice as much has not won the
 same thing.
 
-- **tokens/task.** The mean over tasks of the per-attempt total, so it says what
+- **tokens/task.** The mean over tasks of the per-attempt total, so it is what
   an attempt costs. An observed zero is zero, and an attempt nobody metered makes
   the whole row `unreported`.
 - **model calls/task.** The mean of observed inference requests per attempt. An
@@ -242,7 +240,7 @@ same thing.
   `unreported` and never converted to zero.
 - **peak prompt tokens.** The largest per-turn prompt the provider actually
   priced, over the whole ask sequence, read from provider wire usage by the
-  shared meter. It says how big the working set got.
+  shared meter. It is how big the working set got.
 
 A context-discipline change should reduce the peak without increasing total
 tokens. The call count shows whether it traded a few large calls for many small
@@ -321,11 +319,11 @@ Each task runs `n` times per variant. Repeats reduce run-to-run noise within a
 task, which is the only power they buy, and the statistics have to stay honest
 about that.
 
-**The unit of pairing is the task, not the attempt.** Repeats of one task share
-its difficulty, its defect and its checks, so they are not independent
-observations. Feeding `k·n` attempt pairs to an exact test as though they were
-`k·n` independent pairs is pseudoreplication, and it inflates significance
-multiplicatively. The reported p goes from 2·0.5ⁿ to 2·0.5^(k·n).
+**The unit of pairing is the task.** Repeats of one task share its difficulty,
+its defect and its checks, so they are not independent observations. Feeding
+`k·n` attempt pairs to an exact test as though they were `k·n` independent pairs
+is pseudoreplication, and it inflates significance multiplicatively. The reported
+p goes from 2·0.5ⁿ to 2·0.5^(k·n).
 
 That is not hypothetical. A recorded 4-task, 3-repeat run here (`oracle` versus
 `noisy:0.5`, seed 7) had the baseline sweep 12/12 and the candidate take 5/12:
@@ -351,7 +349,7 @@ anything else runs, and:
   shrinkage is the only power gain repeats buy, and `pairs` stays the task count,
   so the reported resolution can never be inflated by running more attempts.
 
-The verdict string says this out loud. For that run it reads: *"3 repeats × 4
+The verdict string states this. For that run it reads: *"3 repeats × 4
 tasks = 12 attempts per variant, but still 4 independent pairs — repeats buy
 precision within a task, never more tasks"*.
 
@@ -366,19 +364,17 @@ Both are reported, for both variants:
 - **pass^k** is the fraction of tasks solved in all k attempts, so it is
   reliability.
 
-They can disagree, and that disagreement is the point. In the run above the
-candidate scored pass@1 41.7% and pass^3 0%. It looked passable on one shot and
-could not solve a single task reliably. At `k=1` they are identical by
-construction.
+They can disagree. In the run above the candidate scored pass@1 41.7% and pass^3
+0%. It looked passable on one shot and could not solve a single task reliably. At
+`k=1` they are identical by construction.
 
 ### Flakiness is surfaced, not averaged
 
-A task whose repeats disagree is telling you something, and an unstable task
-folded into a pass rate is a finding being hidden. Every unstable task is marked
-`~unstable` in its row and listed again under `UNSTABLE on dev`, with counts
-(`unstable: 4/4 task(s) (A=0, B=4)`) in the stats block. The sealed split reports
-those counts and never the ids, because instability is aggregate signal like
-everything else that leaves the seal.
+An unstable task folded into a pass rate hides a finding. Every unstable task is
+marked `~unstable` in its row and listed again under `UNSTABLE on dev`, with
+counts (`unstable: 4/4 task(s) (A=0, B=4)`) in the stats block. The sealed split
+reports those counts and never the ids, because instability is aggregate signal
+like everything else that leaves the seal.
 
 ## The statistics
 
@@ -400,7 +396,7 @@ At 157 paired tasks and ψ=0.20, α=0.05 and 80% power, this design resolves
 ≈10pp. A 3pp difference at that n is not detectable, and would need 1,745 pairs.
 Both numbers are pinned by `packages/core/tests/unit-bench-stats.test.ts`.
 
-This corpus is far smaller, and the harness says so rather than letting anyone
+This corpus is far smaller, and the harness reports it rather than letting anyone
 over-read it. Split sizes measured 2026-08-19:
 
 | split | tasks | smallest p if every task differed |
@@ -416,12 +412,13 @@ rejects outright when it is false. A large task count is an upper bound on the
 decidable set rather than the decidable set.
 
 Below 10 discordant pairs the normal-approximation MDE is loose and the verdict
-says so. The exact p-value is still exact.
+reports it. The exact p-value is still exact.
 
 ### The acceptance rule
 
 Rejection by default. A variant is kept only when the held-out number improves
-and the exact test says so. `decideBenchOutcome` checks in this order:
+and the exact test reaches significance. `decideBenchOutcome` checks in this
+order:
 
 1. no sealed measurement, so reject (a dev-split win never justifies keeping anything)
 2. held-out split empty, so reject
@@ -471,8 +468,9 @@ call.
 **Calibrate expectations.** CL-Bench's leader reaches 22.3% normalized reward and
 25.4% gain, and dedicated memory systems there *lose* to naive in-context
 learning. A gain near zero is the normal outcome rather than a harness bug. The
-verdict string says "the evolution state showed no measurable contribution" when
-the interval spans zero, and "the stateful arm did WORSE" when it is negative.
+verdict string reads "the evolution state showed no measurable contribution"
+when the interval spans zero, and "the stateful arm did WORSE" when it is
+negative.
 
 ## Variants
 
@@ -739,8 +737,8 @@ copy.
 
 The measurements ride on these rows:
 
-- **`turn_steering`** says which mechanical trigger fired and whether the model
-  then did what the steer asked. Five triggers exist. They are declared in
+- **`turn_steering`** records which mechanical trigger fired and whether the
+  model then did what the steer asked. Five triggers exist. They are declared in
   `core/src/events/types.ts` and produced by
   `core/src/orchestrator/turn-steering.ts`. Four read the turn's own tool traffic,
   and the first of them to fire owns the turn:
@@ -757,8 +755,8 @@ The measurements ride on these rows:
   compaction folded the whole transcript. So a turn writes at most two rows.
 - **`context_budget`** carries the turn's admitted and omitted characters and its
   per-producer bulk trip counters.
-- **`budget_exhausted`** names which mission cap stopped which run: the seam, the
-  label, the scope, the limit and the spend.
+- **`budget_exhausted`** names which mission cap stopped which run: the `seam`
+  field, the label, the scope, the limit and the spend.
 - **`head_split`** opens a delegation and carries `rootId`, `headIds` and
   `rationale`. Whichever of `head_merge` and `head_abandoned` arrives closes
   it. `head_merge` carries
@@ -811,5 +809,5 @@ paired run answers the narrower question.
 $0.61 of model spend for the four runs, including one capped probe. Both DeepSWE
 arms finished their turn on their own, with no timeout and no error, and failed
 the task's own tests. That is a real result rather than an instrument failure. At
-n=1 per arm it says nothing about the gain, and nothing here is a measurement of
-Kinu yet.
+n=1 per arm it establishes nothing about the gain, and nothing here is a
+measurement of Kinu yet.

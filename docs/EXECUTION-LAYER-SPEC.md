@@ -1,7 +1,5 @@
 # Execution Layer Architecture
 
-> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
-
 > The source of truth is `packages/core/src/execution/` and each backend's
 > runtime assembly. Everything below describes behaviour that ships. Re-checked
 > against the code on 2026-08-19. The escalation rule in
@@ -24,7 +22,7 @@ planned work and nothing in it was abandoned. Four items need naming.
   escalation decision, which is written down on purpose. The last paragraph of
   "When to leave the workspace for the container" says why.
 - **The seven-step procedure at the end is open by design.** It is guidance for
-  the next provider, not a task list.
+  the next provider.
 
 ## One canonical workspace, explicit external environments
 
@@ -162,7 +160,7 @@ its own PATH. The mechanism has to differ, because only a host can look at its
 own PATH. The shared table stops the policy drifting, and the two resolvers must
 also return the same answer for the same PATH.
 `cli-backend/tests/path-resolver-parity.test.ts` holds them to it. They had
-already diverged once: an executable directory named `bun` satisfied the
+already diverged once. An executable directory named `bun` satisfied the
 daemon's access check, so a machine with no interpreter at all declared
 `javascript` and `typescript`.
 
@@ -171,7 +169,7 @@ inside the answer's declared scope that the answer does not name was looked for
 and not found. A capability outside that scope was never measured. An install
 too old to answer the probe is not a machine without Python. Only the first
 state is claimed, and only the third is reported as unknown, so the model reads
-`— not measured here: …` and knows to try rather than to rule out. `gpu` and
+`— not measured here: …` and can try rather than rule out. `gpu` and
 `docker` sit permanently in the third state. Nothing on a PATH establishes usable
 hardware, and a `docker` client is not a reachable daemon
 (`core/src/execution/toolchain.ts:45-52`). Omitting those two rows would be
@@ -216,14 +214,14 @@ short list, and every entry is structural rather than a matter of degree.
 - **Running a native Linux binary.** Nimbus executes wasm32-wasi and
   JavaScript. A prebuilt ELF executable, a native Node addon (`.node`) or a
   native Python wheel is `native-unsupported` by ABI, not by configuration. This
-  is the `native_binary` capability. The scope is narrow: the container can run
+  is the `native_binary` capability. The scope is narrow. The container can run
   a native binary and cannot build one, because it has no `gcc`, `clang` or
   `make`. "Compile this C" is unavailable on both.
 - **Real parallelism.** Nimbus threads are cooperative and correct, and they are
   not parallel. Work whose point is using more than one core, such as a sharded
   test run, gets nothing from the workspace. The container is 2 vCPU.
 - **More memory or disk than an isolate has.** Measured inside the deployed
-  container rather than read off the isolate family: `free -m` reported 6185 MiB
+  container rather than read off the isolate family. `free -m` reported 6185 MiB
   total, `df -h /` reported 7.3G, `nproc` reported 2. That agrees with the
   binding's declared `vcpu 2 / memory_mib 6144 / disk_mb 8000`
   (`cf-backend/wrangler.jsonc:94-100`), where 6185 observed against 6144
@@ -283,9 +281,9 @@ too quickly answers HTTP 429 with "you are requesting too many containers per
 second". Neither waits for a slot. `withSandboxRetry` treats both as transient
 (`core/src/execution/sandbox.ts:88-104,176-189`), but its budget is three
 attempts with 500ms and 1000ms of backoff, which is 1.5s in total and shorter
-than one cold provision. So a forty-way parallel workload does not become forty
-containers, and it does not become a queue either. It becomes failures. Size the
-work to one instance before splitting it across instances that do not exist.
+than one cold provision. So a forty-way parallel workload fails instead of
+becoming forty containers or a queue. Size the work to one instance before
+splitting it across instances that do not exist.
 
 This rule is written down rather than automated on purpose. A heuristic that
 guesses "this looks compute-heavy" is unauditable and wrong in both directions.
@@ -331,7 +329,7 @@ authority to remove an old preview
   never weakens a Plan turn into a build one
   (`core/src/prompting/surface.ts:85-89`). A head or a subordinate under Plan
   reports research back to its parent instead of owning the `submit_plan`
-  boundary. Plan exploration is judge-only: it spends no executor call and
+  boundary. Plan exploration is judge-only. It spends no executor call and
   writes no evolution state (`core/src/mcts/engine.ts:294`,
   `core/src/strategy/swarm-run.ts:1421-1423`).
 

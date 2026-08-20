@@ -1,7 +1,5 @@
 # Deployment
 
-> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
-
 ## Live Instance
 
 **Production:** https://kinu.run  
@@ -21,8 +19,7 @@ remaining Public Suffix List prerequisite for complete cookie-site isolation.
 
 Each environment has exactly one app origin. Production answers on `kinu.run`,
 staging answers on `staging.kinu.run`, and `workers_dev` is false in both. So
-`CLI_PUBLIC_ORIGIN` is the whole app-origin set rather than the preferred entry
-in a larger one.
+`CLI_PUBLIC_ORIGIN` names the whole app-origin set.
 
 Transport security keys on that. The Worker redirects cleartext to HTTPS and
 sends HSTS for the `CLI_PUBLIC_ORIGIN` host and for the preview subtree under
@@ -61,7 +58,7 @@ bun install
 ```bash
 cd packages/cf-backend
 
-# Create .dev.vars. The platform AI Gateway needs NO token: its transport is the
+# Create .dev.vars. The platform AI Gateway needs NO token. Its transport is the
 # Workers AI binding, which is pre-authenticated inside your own account.
 cat > .dev.vars << EOF
 AI_GATEWAY_URL=https://gateway.ai.cloudflare.com/v1/<account-id>/<gateway-name>/workers-ai/v1
@@ -103,14 +100,14 @@ work, and a fourth proves it:
 ```bash
 bun run infra:provision      # the R2 buckets and the Vectorize indexes
 bun run deploy               # the Worker, its DO namespaces, container, routes, cron
-bun run infra:provision      # the secrets — `wrangler secret put` needs the Worker to exist
+bun run infra:provision      # the secrets; `wrangler secret put` needs the Worker to exist
 bun run gate:infra           # every declared resource exists and is bound
 ```
 
 `wrangler secret put` refuses on a Worker that does not exist yet, so on a fresh
 account the root secret can only be installed after the first deploy. That is
-why provisioning runs twice. The first run says so rather than appearing to have
-succeeded, and the second creates nothing the first created.
+why provisioning runs twice. The first run prints that, and the second creates
+nothing the first created.
 
 `bun run deploy` is the only supported production deploy path. Provisioning
 creates the account-level resources the deploy binds, and never deploys anything
@@ -144,9 +141,9 @@ host, staging, and every preview host. No Advanced Certificate Manager is needed
 is no second list. It creates what is missing, in dependency order: the R2
 buckets, then the Vectorize indexes. It prints `CREATED` or `existed` per
 resource, so a second run is visibly a no-op. A resource whose lookup FAILED is
-refused rather than created, because "the network was down" and "it does not
-exist" are different states, and creating a bucket on the first one is how an
-account ends up with two answers to which bucket holds the snapshots.
+refused rather than created. "The network was down" and "it does not exist" are
+different states, and creating a bucket on the first one is how an account ends
+up with two answers to which bucket holds the snapshots.
 Everything wrangler cannot create is printed as a manual worklist, every run,
 green or not.
 
@@ -155,8 +152,7 @@ the deployed Worker is bound to it**, and exits non-zero when it is not. It is
 the last of the 49 required gates `scripts/deploy.sh` runs, and the only one
 that talks to Cloudflare. It reports a verdict per resource rather than dying on
 the first problem, because the next move depends on which resource is affected.
-There are four verdicts, and `scripts/infra-verify.ts` explains why there are
-four rather than two:
+There are four verdicts, and `scripts/infra-verify.ts` has the reasoning:
 
 | Verdict | Meaning |
 | --- | --- |
@@ -175,7 +171,7 @@ reverse dependency order, and refuses without a typed sentence naming the
 environment (`destroy kinu production`). It prints WHAT IS INSIDE every
 data-bearing resource before asking. It will not delete a resource another
 environment binds: `nimbus-runtime-cache` is held by both, so tearing down one
-environment retains it and says who still holds it. Nothing imports it and no
+environment retains it and prints who still holds it. Nothing imports it and no
 other command can reach it.
 
 ### Every value the Worker reads, and where it comes from
@@ -219,8 +215,8 @@ re-checks each one.
   the wrong width binds fine and rejects every insert. Provisioning reads the
   dimension back out of the embedder in `packages/cf-backend/src/runtime.ts` so
   the two cannot drift. The metric appears only in a wrangler.jsonc comment.
-- **The proxied DNS records** — the `*` wildcard for previews and `staging` for
-  the staging route — and **the zone itself.** wrangler has no DNS command, and
+- **The proxied DNS records** (the `*` wildcard for previews and `staging` for
+  the staging route) and **the zone itself.** wrangler has no DNS command, and
   the zone DNS API answers 403 under the wrangler OAuth token. Verification
   resolves each name instead.
 - **The KV namespace titles.** `kv_namespaces` binds by id and has no title
@@ -263,14 +259,14 @@ Set your `account_id` in `packages/cf-backend/wrangler.jsonc`:
 cd packages/cf-backend
 
 # REQUIRED, and the first thing to set. This is the Worker's root secret for
-# the user plane: it encrypts the credential store (every provider API key and
+# the user plane. It encrypts the credential store (every provider API key and
 # OAuth token a user connects) and derives the owner capability that authorizes
 # every privileged call. Without it the Worker cannot serve a signed-in user at
 # all. Sign-in, the CLI, and credentials all return 503; public routes still
-# answer. Keep a copy: losing it means every user reconnects every provider.
+# answer. Keep a copy. If you lose it, every user reconnects every provider.
 openssl rand -base64 32 | bunx wrangler secret put CREDENTIAL_ENCRYPTION_KEY
 
-# No AI Gateway token: the platform gateway rides the Workers AI binding.
+# No AI Gateway token. The platform gateway rides the Workers AI binding.
 
 # OAuth providers appear only when both id and secret are configured.
 # Client ids can live in wrangler vars; client secrets must be Wrangler secrets.
@@ -282,7 +278,7 @@ printf '<cloudflare-client-secret>' | bunx wrangler secret put CLOUDFLARE_OAUTH_
 #### Rotating CREDENTIAL_ENCRYPTION_KEY
 
 Stored credentials name the key that sealed them, so a rotation is a two-key
-window rather than a downtime:
+window with no downtime:
 
 ```bash
 # 1. keep the outgoing key readable, 2. install the new one
@@ -380,7 +376,7 @@ The production client id and token auth method are non-secret vars in
 
 ## Model Providers
 
-Who pays, per provider. The provider split exists for this property:
+Who pays, per provider. Billing is the reason the providers are split.
 
 | Provider | Credential | Billed to |
 | --- | --- | --- |
@@ -512,7 +508,7 @@ declare. Read it from `wrangler.jsonc`, not from the type.
 | `MonitorDO` | Durable Object | Synthetic monitoring: open incidents + the alert outbox (one instance, `site`) |
 | `NIMBUS_SESSION` | Durable Object | `NimbusSession` from `@nimbus-sh/sdk`; built-in lightweight sandbox (local DO class, deployed with this Worker) |
 | `Sandbox` | Durable Object + Container | `ProteusSandbox` (@cloudflare/sandbox); one container per agent |
-| `AUTH_KV` | KV namespace | Sessions, one-time OAuth state, and CLI browser approval state — all of it expiring on its own; identities live in `UserDO`. `kinu-auth`, and `kinu-auth-staging` in staging |
+| `AUTH_KV` | KV namespace | Sessions, one-time OAuth state, and CLI browser approval state, all of it expiring on its own; identities live in `UserDO`. `kinu-auth`, and `kinu-auth-staging` in staging |
 | `LOADER` | Worker Loader | Sandboxed code execution (codemode) |
 | `AI` | Workers AI | Platform-side embeddings (chat models use the user's OAuth credential) |
 | `MEMORY_VECTORS` | Vectorize | `kinu-memory`, and `kinu-memory-staging` in staging (384-dim, cosine); optional hybrid recall on top of FTS5 |
@@ -566,15 +562,16 @@ root `node_modules`.
    policy and committed-patch parity; Layergate conformance and its
    fault-localization matrix; behavioural evals; and the full Lean proof,
    consistency and traceability gate. `gate:computed-style` is deliberately
-   absent: it boots Vite and Chrome over 19 gallery frames and would fail this
+   absent. It boots Vite and Chrome over 19 gallery frames and would fail this
    pipeline for environmental reasons, so only its decision logic is guarded
    here. `gate:bench-corpus` runs the cheap half of the bench corpus check, 159
    `git apply --check` invocations measured at 0.15 s for the whole corpus. The
    other half, `bench.ts validate`, actually runs each task's checks and is a
-   separate nightly run. The last gate is the only one that talks to Cloudflare:
-   `bun run gate:infra` checks that every resource `wrangler.jsonc` declares for
-   **production** exists and that the deployed Worker is bound to it. Everything
-   above it proves the source is deployable; that one proves the account is. Any
+   separate nightly run. The last gate, `bun run gate:infra`, is the only one
+   that talks to Cloudflare. It checks that every resource `wrangler.jsonc`
+   declares for **production** exists and that the deployed Worker is bound to
+   it. Everything above it proves the source is deployable; that one proves the
+   account is. Any
    failure exits before Vite, archive generation, or Wrangler. No variable skips
    a gate on this path. `PROTEUS_INFRA_ACK` only acknowledges a missing
    Cloudflare session, and the `npx wrangler whoami` check above already fails
@@ -647,8 +644,8 @@ reads that file back through the `ASSETS` binding and reports it as `build` on
 `GET /api/health`, so one unauthenticated GET answers both "which commit is
 live?" and "did the asset half of the deploy land?". `/api/health` reports
 `ok: false` when there is no build stamp, because a deployment without one has
-broken CLI download endpoints. Deploying from a dirty worktree prints a warning:
-the stamp names a commit that does not describe what shipped.
+broken CLI download endpoints. Deploying from a dirty worktree prints a warning,
+because the stamp names a commit that does not describe what shipped.
 
 ### Environment variables
 
@@ -686,13 +683,13 @@ through the Mission Inbox's outbound path when something breaks.
 | `downloads` | `/downloads/kinu-source.tar.gz` hashes to exactly what `…​.sha256` declares. This is the check the installer itself makes |
 | `login` | `/login` renders the sign-in page with at least one provider link |
 
-One email per incident, not per tick. A failing probe opens an incident with one
+Each incident gets one email. A failing probe opens an incident with one
 alert, stays open silently while it keeps failing, and closes with one recovery
 notice. Delivery rides `EmailOutbox`, so a send that fails is re-driven with the
 same Message-ID rather than lost or duplicated.
 
 Unset `OPS_ALERT_EMAIL` (as in staging) leaves the monitor recording incidents
-but silent. Staging also has no cron trigger: its sign-in providers and mail
+but silent. Staging also has no cron trigger. Its sign-in providers and mail
 route are absent on purpose, so probing it would report a site that is missing
 by design.
 

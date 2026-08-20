@@ -1,7 +1,5 @@
 # Context Budget — the reference-plus-digest invariant, enforced
 
-> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
-
 One rule governs every payload that can reach the model's token stream.
 
 > **Anything bulk that enters the root's context arrives as a bounded digest plus a resolvable reference to the lossless whole.** Below the threshold it inlines untouched. Making a root fetch its own ordinary material costs a round trip and buys nothing.
@@ -30,7 +28,7 @@ whole is data loss.
 `SPILL_DIRS` in `core/src/context-budget.ts` is the single source of truth for
 those four directories, and every producer builds its paths from it. The paths
 are written unrooted, so they resolve at the workspace root for every surface
-that reads them. A `file` read is the one producer that writes nothing: the
+that reads them. A `file` read is the one producer that writes nothing. The
 whole text is already addressable at its own path, so the marker names the
 offset that continues it instead.
 
@@ -51,7 +49,7 @@ clamp is also **turn-cumulative** (`TurnContextBudget`):
   reads that open a turn.
 - After that, the per-result cap for the remainder of the turn drops to **8,000
   chars**. Full text is still spilled and the marker recipe is unchanged; the
-  root simply stops paying for the bulk inline.
+  root stops paying for the bulk inline.
 - The cap for result N is a pure function of the sizes of results 1..N-1, so a
   replayed turn clamps identically.
 - The budget is **per root**. Every toolset build either receives its root's
@@ -65,13 +63,13 @@ in `buildNodeToolSet` (`core/src/strategy/node-agent.ts`) and passes no
 writes no `context_budget` row, because that row comes from an actor's settle
 spine and a node has none.
 
-The clamp explains itself at the trip rather than in the system prompt.
 `clampToolResult` appends the reason to the truncation marker when the cap has
-tightened, so the fact reaches the model where it is actionable and costs
-nothing on the turns that never reach the floor.
+tightened, rather than stating it in the system prompt. The fact reaches the
+model where it is actionable and costs nothing on the turns that never reach
+the floor.
 
 This is RLMEnv's "the root sees a bounded slice of REPL output per iteration"
-made deterministic at the seam Kinu already owned, with no new subsystem,
+made deterministic at the point Kinu already owned, with no new subsystem,
 mode or flag.
 
 ## The counters
@@ -88,7 +86,7 @@ admitted nor spilled bulk writes no row.
 | `trips` | spill count per producer (`run`, `file_read`, `web_fetch`, `execute_tools`, `external_tool`, `attachment`, `pasted_text`) |
 | `referenced` | trips whose spill write landed, so the reference resolves |
 | `tightened` | trips clamped at the floor because the turn's admit budget was spent |
-| `followUps` | tool calls this turn that cited a spill address (the recipe being *used*, not just emitted) |
+| `followUps` | tool calls this turn that cited a spill address (the recipe being *used* rather than emitted) |
 
 Query them like any other run event (`RunEventRecorder.read(runId, { types:
 ['context_budget'] })`). `followUps` counts any call whose arguments name a

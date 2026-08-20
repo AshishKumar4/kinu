@@ -1,7 +1,5 @@
 # MCTS Exploration
 
-> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
-
 The Monte Carlo Tree Search engine. It explores a tree of solution approaches in
 parallel, and each branch is an isolated Durable Object facet with its own SQLite
 database. No tool reaches it.
@@ -16,9 +14,9 @@ below gets a refusal or a different engine.
 Tree search on the model-facing surface is `action:'swarm'` with a `depth`. Its
 candidates are measured against the caller's own `objective` through the verifier
 registry, and its runner is `strategy/swarm-run.ts`. That is a separate engine.
-The two share tree machinery — `uct.ts` for selection, `backpropagation.ts` for
-the ancestor mean, `record-node.ts` for the one INSERT, `pruning.ts` for
-retirement — and they share no dispatch. When the caller is a model, read
+The two share tree machinery: `uct.ts` for selection, `backpropagation.ts` for
+the ancestor mean, `record-node.ts` for the one INSERT, and `pruning.ts` for
+retirement. They share no dispatch. When the caller is a model, read
 [EXPLORATION.md](./EXPLORATION.md) instead of this file.
 
 This engine is registered rather than vestigial, and it is reached
@@ -39,22 +37,22 @@ programmatically:
   and re-enters its own rows through a lookup of its own
   (`findRunningSwarms`, applied by `strategy/swarm-resume.ts`). Each loop's
   query is scoped to its own engine's rows, so neither can be handed the
-  other's tree — a swarm's is scored against an objective this loop has no seam
-  for, and this loop's branches are judged.
+  other's tree. A swarm's is scored against an objective this loop cannot read,
+  and this loop's branches are judged.
 
 Everything below describes live code.
 
 ## Which paper this is
 
 **LATS ([arXiv:2310.04406](https://arxiv.org/abs/2310.04406)), the programming
-instantiation — §5.2, not the ReAct one.** The distinction is the whole reason
-the citation is defensible, so it is stated rather than implied.
+instantiation from §5.2, not the ReAct one.** The distinction is the whole
+reason the citation is defensible, so it is stated rather than implied.
 
 LATS's headline domains (HotPotQA, WebShop) build nodes out of ReAct steps: an
 action goes to an environment, an observation comes back, and the trajectory
 grows one interaction at a time. Kinu does not do that, and a reader who
-checks the paper against `explore()` — a single `generateText` with no
-`ToolSet` — will conclude the citation is wrong. It is not, because LATS's
+checks the paper against `explore()` (a single `generateText` with no
+`ToolSet`) will conclude the citation is wrong. It is not, because LATS's
 programming setup is itself not ReAct-shaped. Verbatim, §5.2:
 
 > We use individual solutions as the action space and test suite and compiler
@@ -73,12 +71,12 @@ Two honest qualifications:
 - **`plan` mode has no environment.** `executionPolicy: 'judge-only'` means
   nothing is run and the value function is the judge alone. A plan-mode search
   is Tree of Thoughts ([arXiv:2305.10601](https://arxiv.org/abs/2305.10601))
-  with UCT and backpropagation — LATS's own §5.4 CoT variant, and the setting
+  with UCT and backpropagation, LATS's own §5.4 CoT variant, and the setting
   the paper says is the weaker one. Read a plan-mode score as an opinion.
-- **Reward is banded around the pass fraction, not the raw fraction.** LATS
+- **Reward is banded around the pass fraction.** LATS
   backpropagates `passed_test_count / len(tests)` directly. We use it to
   position inside the fail band, and let a pass into a separate, strictly higher
-  band — so a branch that runs clean can never be outscored by one that does
+  band, so a branch that runs clean can never be outscored by one that does
   not, whatever a judge thinks. See "Scoring".
 
 ## Search Flow
@@ -125,7 +123,7 @@ Where:
 - `parent_visits` = number of times the parent was visited
 - `node_visits` = number of times this node was visited
 
-Implemented in SQL (`mcts/uct.ts`). Selection is a **global argmax over every open node**, not a root-down descent — one self-join to look up parent visits, one `ORDER BY … LIMIT 1`:
+Implemented in SQL (`mcts/uct.ts`). Selection is a **global argmax over every open node** rather than a root-down descent, one self-join to look up parent visits and one `ORDER BY … LIMIT 1`:
 ```sql
 SELECT
   s.*,
@@ -146,12 +144,12 @@ Three things in that query are deliberate:
 
 - SQLite's `log()` is log₁₀, so natural log is computed as `log(x) / log(exp(1.0))`.
 - **Root re-widening.** The root has no parent, so a literal `ln(N(parent))`
-  would be `ln(1) = 0` — the root's exploration term collapses and it is never
+  would be `ln(1) = 0`. The root's exploration term collapses and it is never
   re-selected after the first expansion, permanently freezing breadth at
   `branches`. The root instead uses its own visit count as a synthetic
   parent-visit, floored at 2, so it stays selectable but decays as visits
   accrue and the tree deepens over time.
-- **The depth cap is a `WHERE` clause**, not an abort. A node at depth `d`
+- **The depth cap is a `WHERE` clause rather than an abort.** A node at depth `d`
   expands children at `d+1`, so only nodes below `maxDepth` can still produce
   in-bounds children; selection skips the capped ones and keeps spending budget
   on the shallower frontier instead of dying when the argmax happens to be deep.
@@ -167,7 +165,7 @@ exploration weight per workspace through `agent_config`.
 ## Scoring — execution picks the band, and inside the fail band it positions too
 
 The single scorer (`mcts/evaluation.ts`) is used by every backend. Execution
-outcome and judge score are **not** averaged: whether the branch's code ran and
+outcome and judge score are **not** averaged. Whether the branch's code ran and
 passed selects a score band, and only then is anything asked where inside that
 band the branch lands.
 
@@ -179,8 +177,8 @@ band the branch lands.
 | Prose only, no sibling wrote code | `0.75 · j` | 0.00 – 0.75 |
 | Prose only, a sibling **did** write code | `0.30 · j` | 0.00 – 0.30 |
 
-`f` is the **measured** share of generated checks the code satisfied —
-`passedChecks / totalChecks` — and it is LATS's backpropagated reward
+`f` is the **measured** share of generated checks the code satisfied,
+`passedChecks / totalChecks`, and it is LATS's backpropagated reward
 (`passed_test_count / len(tests)`). `j` is the **median** of `judgeSamples` judge
 calls; samples that fail to parse are dropped rather than scored zero, and if
 every sample fails the branch falls to its band floor. An empty trajectory scores
@@ -197,11 +195,11 @@ suite, so the ensemble gets what is left. `judgeCallBudget`
 |---|---|---|
 | code the executor can run | `min(judgeSamples, maxEvalLLMCalls − 1)` | 3 |
 | prose only, or `plan` mode | `min(judgeSamples, maxEvalLLMCalls)` | 3 |
-| `maxEvalLLMCalls: 1` | 1 — no check suite is bought | 1 |
+| `maxEvalLLMCalls: 1` | 1, no check suite is bought | 1 |
 
 A request above the ceiling is realised AT the ceiling, so `judgeSamples: 20` on
 shipped defaults runs a **3**-sample ensemble on every code branch. That is not
-silent: the realised size comes back on each evaluation as
+silent. The realised size comes back on each evaluation as
 `BranchEvaluation.judgeSamplesAttempted`, the engine logs
 `mcts.judge_ensemble_clamped` (`judgeSamplesRequested` / `judgeSamplesRealised` /
 `maxEvalLLMCalls`) once per realised size per search, the heads path logs
@@ -210,9 +208,9 @@ ledger row: `mcts_search_runs.config_json` holds the RESOLVED knobs the request
 came from, and `mcts_search_runs.judge_samples_realised` holds the smallest
 ensemble any branch was OBSERVED to sample, folded in SQL as it happens. The run
 read model (`read-models/fork-params.ts`) reports requested-versus-realised off
-those two afterwards, and it never predicts the realised size from the knobs —
-the table above is a CEILING, which an evaluation that short-circuits before
-judging does not reach. Raising the request alone buys nothing —
+those two afterwards, and it never predicts the realised size from the knobs.
+The table above is a CEILING, which an evaluation that short-circuits before
+judging does not reach. Raising the request alone buys nothing.
 `maxEvalLLMCalls` has to move with it.
 
 `judgeSamplesAttempted` is also what separates two facts a single count used to
@@ -223,23 +221,23 @@ short-circuited before the ensemble was asked at all.
 **Why the fail band is positioned by `f` and not by `j`.** The judge is asked
 nothing there. A whole suite appended into one run stops at the first throw, so
 "three of four aspects correct" and "nothing works" produced the identical
-observation and were separated only by judge noise — a binary reward, which this
-repo measured degenerates a search toward best-of-n
+observation and were separated only by judge noise. That is a binary reward,
+which this repo measured degenerates a search toward best-of-n
 (`test-utils/src/eval-outcome.ts`) and which FunSearch names as a scope
 condition ("a 'rich' scoring feedback … as opposed to a binary signal"). The
 judge keeps the pass band, where `f` is 1 by construction and carries nothing.
 
 The suite is generated once (one LLM call, only when at least two eval calls
 remain in the budget) and asks for up to `MAX_GENERATED_CHECKS` = 4 independent
-checks, matching LATS's four generated tests. Each runs as its own execution:
-executor calls cost no tokens, so the fraction is bought with sandbox
+checks, matching LATS's four generated tests. Each runs as its own execution.
+Executor calls cost no tokens, so the fraction is bought with sandbox
 round-trips rather than spend. No suite means no `f`, and the judge positions
-instead — `passedChecks`/`totalChecks` are then **absent**, which is not the
+instead. `passedChecks`/`totalChecks` are then **absent**, which is not the
 same claim as a fraction of zero.
 
-This is why a branch cannot talk its way to a good score: the ceiling for prose
+This is why a branch cannot talk its way to a good score. The ceiling for prose
 when a sibling actually produced running code is 0.30, below
-`minAcceptableScore`. The other thresholds are pinned to the same bands —
+`minAcceptableScore`. The other thresholds are pinned to the same bands:
 `craftExtractionThreshold` 0.80 is the pass-band midpoint, `minAcceptableScore`
 0.30 is the fail ceiling, `reflectionThreshold` 0.35 sits just above it, and
 `pruneThreshold` 0.25 sits inside the fail band.
@@ -274,7 +272,7 @@ Each MCTS branch runs in an isolated environment:
 
 | Platform | Mechanism | Isolation |
 |----------|-----------|-----------|
-| CF Workers | `agent.subAgent(ExplorationAgent, branchId)` — Facets | Separate DO with own SQLite. Proven in Lean: `StorageIsolated` invariant. |
+| CF Workers | `agent.subAgent(ExplorationAgent, branchId)`, Facets | Separate DO with own SQLite. Proven in Lean: `StorageIsolated` invariant. |
 | CF Workers (fallback) | Inline LLM calls | No storage access at all. Captures only LLM config, never agent reference. |
 | CLI | `child_process.fork('branch-worker.ts')` | Separate OS process with its own SQLite file under `~/.proteus/<agent>/branches/` |
 
@@ -282,8 +280,8 @@ Branches only **explore**; scoring is engine-level, so both backends score
 through the same `evaluation.ts` and the reward is execution-grounded either
 way. `ExplorationAgent`'s MCTS-mode `@callable()` methods are:
 
-- `explore(history, craftedTools, languages, mode, siblingAngles)` — propose one approach under the parent's trusted work mode
-- `generateReflection(task, outcome?)` — explain what went wrong (for pruned branches), given the environment's verdict on the attempt
+- `explore(history, craftedTools, languages, mode, siblingAngles)`: propose one approach under the parent's trusted work mode
+- `generateReflection(task, outcome?)`: explain what went wrong (for pruned branches), given the environment's verdict on the attempt
 
 plus `setOwner` / `setSharedParent` for bootstrap. Siblings are pushed apart by
 `mcts/diversity.ts`, which hands each branch index a different framing angle, so
@@ -291,7 +289,7 @@ three branches don't converge on the same idea.
 
 ### The observation loop
 
-A node is recorded **after** it is evaluated, not before, because a node's
+A node is recorded **after** it is evaluated, because a node's
 observation is the environment's reply to its action and cannot be written
 before the environment has answered. The execution verdict therefore reaches
 the two places LATS puts it, for no extra model call:
@@ -300,14 +298,14 @@ the two places LATS puts it, for no extra model call:
   `session.getHistory(node.msg_id)`, and the recorded message is now
   `[Node id] <proposal>` followed by `Observation: the proposed code ran against
   generated assertions and FAILED: <error>`. Without it, deepening the tree
-  re-reads what the parent *proposed* and is never told that it threw — so
+  re-reads what the parent *proposed* and is never told that it threw, so
   search could not fix a concrete runtime error, only re-guess around it.
 - **The post-mortem.** `generateReflection` receives that same verdict, so the
   lesson written to `MEMORY.md` is about how the attempt ended rather than about
   what it intended.
 
-`search_nodes.observation` still holds the branch's own proposal text — that is
-what the alternate-takes ledger compares (`mcts/takes.ts`) — and a branch that
+`search_nodes.observation` still holds the branch's own proposal text, which is
+what the alternate-takes ledger compares (`mcts/takes.ts`). A branch that
 never reached the environment (prose, plan mode, an unrunnable language) carries
 no observation line rather than an invented one.
 
@@ -316,7 +314,7 @@ no observation line rather than an invented one.
 A branch here is deliberately one model call with no `ToolSet` and no runtime.
 That is the other half of a pair rather than an unfinished subagent. The `heads`
 strategy (`core/src/strategy/heads.ts`) is the half whose branches **are** full
-agentic loops — the same `ExplorationAgent` class in head mode, scored by this
+agentic loops, the same `ExplorationAgent` class in head mode, scored by this
 same `evaluation.ts` through `HeadController.scoreHeads`.
 
 The two differ on the axis that matters for search:
@@ -324,20 +322,20 @@ The two differ on the axis that matters for search:
 | | `mcts` | `heads` |
 |---|---|---|
 | Branch | one `generateText`, no tools | multi-step loop, `execute_tools`/`run`/`file`/`web` |
-| Isolation | structural — separate DO/process, no filesystem (`StorageIsolation.lean`) | prompt-level — heads share the canonical workspace and are *asked* to make their own git worktree |
+| Isolation | structural: separate DO/process, no filesystem (`StorageIsolation.lean`) | prompt-level: heads share the canonical workspace and are *asked* to make their own git worktree |
 | Branches per run | tens (budget × branches, re-expanded by UCT) | a handful, spawned once |
 | Relationship | rivals; most are pruned | collaborators; all are merged |
 
 Pointing MCTS expansion at `runAsHead` would collapse that pair. Tens of
 concurrent heads mutate one shared workspace with no structural isolation, and
 "grade a branch by what it changed" is unanswerable when every branch changed the
-same tree — while the file-level isolation that would fix it is exactly the
+same tree, while the file-level isolation that would fix it is exactly the
 per-branch workspace the toolless design does not need.
 
 A swarm node is a third shape again, and it resolves that tension differently. A
 swarm node is a full agent, and it is graded on the candidate it **reports**,
-never on a diff of the tree. See [EXPLORATION.md](./EXPLORATION.md) — "A node is
-an agent".
+never on a diff of the tree. See "A node is an agent" in
+[EXPLORATION.md](./EXPLORATION.md).
 
 `initHead` / `runAsHead` / `abortHead` are the head-mode `@callable()`s on the
 same class. See [ARCHITECTURE.md](./ARCHITECTURE.md) for why that class
@@ -352,12 +350,12 @@ reflection that explains the failure is written first, at the slightly higher
 `reflectionThreshold` (0.35).
 
 Winner selection (`mcts/convergence.ts`) takes the argmax over `terminal` and
-`open` nodes by value, then applies a **test-based tie-break**: rivals within
+`open` nodes by value, then applies a **test-based tie-break**. Rivals within
 `takesEpsilon` (0.1) of the leader are run against one shared generated check
 suite and compared on the share each satisfied, so a near-tie the judge could
 not resolve is settled by how much of the task each candidate actually did.
 (Comparing shares rather than a pass bit is what makes the tie-break usable at
-all — all-pass and all-fail used to be dead ends that fell back to value order.)
+all; all-pass and all-fail used to be dead ends that fell back to value order.)
 
 Two conditions then refuse to declare a winner:
 
@@ -365,10 +363,10 @@ Two conditions then refuse to declare a winner:
 - **Undifferentiated.** Two or more textually distinct approaches carry the
   *exact* same value. With no value signal every node holds the same number, so
   `ORDER BY value DESC` is row order and the "winner" is whichever row came
-  back first — while the shared value happily clears the bar. Exact equality,
-  not an epsilon: a near-tie is a real result the alternate-takes ledger exists
-  to record, whereas two different proposals scoring byte-identically means the
-  scorer is not a function of the proposal.
+  back first, while the shared value happily clears the bar. The test is exact
+  equality rather than an epsilon. A near-tie is a real result the
+  alternate-takes ledger exists to record, whereas two different proposals
+  scoring byte-identically means the scorer is not a function of the proposal.
 
 Either way the search reports `converged: false`, writes a lesson naming which
 condition fired, and marks the open nodes failed rather than shipping an answer
@@ -397,7 +395,7 @@ it did not earn.
 
 Eleven of the corpus's 330 published theorems live in `lean/Proteus/MCTS/`
 (counted 2026-08-19). The backpropagation model is exact scaled-integer
-arithmetic, so these are statements about that model — SQLite backpropagates in
+arithmetic, so these are statements about that model. SQLite backpropagates in
 IEEE-754 `REAL`. See [FORMAL-SPEC.md](./FORMAL-SPEC.md) for the claim taxonomy and
 what each status does and does not assert.
 

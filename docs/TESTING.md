@@ -1,7 +1,5 @@
 # Testing Kinu
 
-> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
-
 Kinu runs most of its tests on Bun, across the shared core, the Cloudflare
 backend, the local backend and the CLI. Two things Bun cannot do have their own
 runners: the Durable Object suites run under vitest inside workerd, and the
@@ -51,7 +49,7 @@ Measured 2026-08-19: `bun test packages/cli/tests` runs 312 tests and
 Name the directory when you mean the directory.
 
 `--cwd` has a second trap. There is no `bunfig.toml` under any package, so
-`bun test --cwd packages/cf-backend` reads no config: it loses the root
+`bun test --cwd packages/cf-backend` reads no config. It loses the root
 `preload` and the root `pathIgnorePatterns`, and then walks into
 `tests/workerd/`, whose files import `cloudflare:workers` and fail instantly
 outside the Workers runtime. Run the directory from the repo root instead:
@@ -149,7 +147,7 @@ deliberate. The tier previously asked for two environment variables nothing on
 the owner's own machine ever exported, so it ran to completion reporting
 `TOTAL: 0 model call(s)` with every live test skipped, and passed a deploy gate.
 It is also why the script prints the target and the cost basis before spending
-anything: a run that goes somewhere unexpected is visible at the top of the log
+anything. A run that goes somewhere unexpected is visible at the top of the log
 rather than in a bill.
 
 `bun run test:eval` is a ci-tier and deploy-tier gate. `bun scripts/ladder.ts
@@ -171,16 +169,16 @@ also the unit liveness can be asserted per.
 | bun suites | `bun test ./tests/` | end-to-end lifecycle (a five-turn conversation with a threaded history, judged on content per turn), evolution across sessions, MCTS reached and durably ranked, delegation conversion, one real turn per backend |
 | behaviour evals | `vitest --config vitest.evals.config.ts`, excluding the three single-family files | 17 corpus tasks × 2 repetitions = 34 full agent episodes, graded by eight scorers over the `run_events` ledger |
 | live swarm | `vitest … tests/evals/swarm.eval.ts` | one `agents({action:'swarm'})` call through the real tool surface: a `depth:2 branches:3` verifier-scored search with `expand:'aggregate'`, graded on the caller's own `exec-ratio` instrument |
-| research | `vitest … tests/evals/research.eval.ts` | one agent episode whose only source for a fictional topic is a controlled MCP archive this repo serves (`tests/evals/fixtures/`); scored by exact match on planted numbers and a canary token — reading proven, fabrication named, no LLM judge |
+| research | `vitest … tests/evals/research.eval.ts` | one agent episode whose only source for a fictional topic is a controlled MCP archive this repo serves (`tests/evals/fixtures/`); scored by exact match on planted numbers and a canary token. That proves reading, names fabrication, and needs no LLM judge |
 | optimization | `vitest … tests/evals/optimization.eval.ts` | one agent episode against the swarm arm's own metered instrument (`hard-majority-vote`), full tool surface offered, held to a pre-registered `task_outcome ≥ 0.5`; swarm use and tree shape recorded, never dictated |
 
 **Why each single-family eval is its own arm.** `scripts/eval-spend.ts
 --expect-live` sums the lines in the spend file it is given, so a single-subject
 eval sharing a file with five paid suites could stop reaching a model entirely
 and the tier would still report `proven`. An arm whose whole subject is one live
-claim — a search, a retrieval from a controlled source, a measured episode — is
-an arm whose zero has to be its own failure, so each gets its own spend file and
-its own assertion, driven by the same `EXPECT_LIVE` the banner printed. The line
+claim (a search, a retrieval from a controlled source, a measured episode) is an
+arm whose zero has to be its own failure, so each gets its own spend file and its
+own assertion, driven by the same `EXPECT_LIVE` the banner printed. The line
 you read and the assertion the run is held to cannot disagree.
 
 Everything the swarm arm asserts is measured rather than judged: a winner crowned,
@@ -195,7 +193,7 @@ The research arm's controlled corpus lives in ONE module
 (`tests/evals/fixtures/veldmar-corpus.ts`): the planted values, the canary and
 the served text, with the eval importing its expected answers from it. Its
 credential-free half runs at every tier: the corpus-integrity test (facts in
-the archive, none in the prompt, the canary in exactly one entry — delete the
+the archive, none in the prompt, the canary in exactly one entry; delete the
 canary and this goes red naming it before anything is spent) and the MCP
 handshake through the product's own `connectMcpServers` client. The optimization
 arm's credential-free half asserts the threshold is a bar something can clear
@@ -209,19 +207,19 @@ They run `kinu create <name> --mode local`, then `kinu exec --workspace
 stream plus the ledgers in `$home/<workspace>/agent.db`. The glue is
 `tests/evals/cli-driver.ts`; the precedent is `bench/harbor/proteus_agent.py`.
 
-That is the rule, not a preference: an eval drives the WHOLE agent through a
-shipped surface. Driving `LocalAgentSession` in-process would skip the CLI's
-turn assembly, its client seam and — for the research family specifically — MCP
-config resolution, which is the thing that family is about. A user's servers
+That is the rule. An eval drives the WHOLE agent through a shipped surface.
+Driving `LocalAgentSession` in-process would skip the CLI's turn assembly, its
+client boundary and, for the research family specifically, MCP config
+resolution, which is the thing that family is about. A user's servers
 reach the agent because `resolveMcpServers()` reads the `mcpServers` block of
 `~/.proteus/config.json` and `LocalAgentClient` connects them; a suite that
 hands `connectMcp` its own servers proves none of that.
 
-One measured trap, worth knowing before writing a third family: the workspace
+One measured trap, worth knowing before writing a third family. The workspace
 must be CREATED with the same child environment it is later exec'd with.
 `create` persists the resolved provider config into the store and `exec` prefers
 what the store carries, so a workspace born under a different endpoint keeps
-answering from it — measured 2026-08-20, a workspace created with a wrong base
+answering from it. Measured 2026-08-20: a workspace created with a wrong base
 URL then exec'd with the right one still failed every turn with `Your
 Cloudflare login is no longer valid` while that endpoint answered a direct
 request fine.
@@ -230,18 +228,18 @@ request fine.
 
 `tests/e2e-lifecycle.test.ts` certifies the CORE TURN LOOP: soul and memory
 reach the model, native tool calling round-trips, the conversation accumulates,
-and evolution and MCTS run over the turns. It is an inner API by construction —
-no turn assembly, no reactor, no backgrounding wakes, no prompt cache — so the
-shipped-surface arms above are what cover the product. The suite's header says
-both, and names them.
+and evolution and MCTS run over the turns. It is an inner API by construction
+(no turn assembly, no reactor, no backgrounding wakes, no prompt cache), so the
+shipped-surface arms above are what cover the product. The suite's header names
+both.
 
-It used to send `messages: [user]`, one message per turn with no history: five
-one-turn conversations wearing the title of one. Turn 5 asked "Summarize what we
-discussed", the model answered that nothing had been discussed, and the test
-passed, because the only per-turn assertion was `length > 0`.
+It used to send `messages: [user]`, one message per turn with no history. That is
+five one-turn conversations wearing the title of one. Turn 5 asked "Summarize
+what we discussed", the model answered that nothing had been discussed, and the
+test passed, because the only per-turn assertion was `length > 0`.
 
 Threading the history is half the fix. The other half is a finding, measured
-2026-08-20: **content assertions cannot prove threading on this agent.** The
+2026-08-20. **Content assertions cannot prove threading on this agent.** The
 `memory` builtin exposes session search over the very `messages` table the suite
 writes (`core/src/tools/memory-tool.ts:92-101` over
 `core/src/memory/session-search.ts`), so a later turn can RETRIEVE the
@@ -251,20 +249,20 @@ turn 1's code verbatim, while the injected knowledge was 118 characters holding
 only turn 3's note; two such runs scored 6/0 and 5/1. So the content assertions
 are real but non-deterministic as a red.
 
-The suite therefore asserts on both, and says which is which. The MECHANISM
-assertions read the message list each turn HANDED the model — the one witness a
-second channel cannot satisfy — and unthreading the history makes them red every
+The suite therefore asserts on both, and labels which is which. The MECHANISM
+assertions read the message list each turn HANDED the model (the one witness a
+second channel cannot satisfy), and unthreading the history makes them red every
 time, naming the turn: `turn 2 was handed 1 message(s) but should carry every
 earlier exchange plus its own prompt`. The BEHAVIOUR assertions read the replies
-and prove the model used what it was given. Neither alone is enough: mechanism
-only would pass a model that ignored its context, content only passes a model
-that went and fetched it.
+and prove the model used what it was given. Neither alone is enough. Mechanism
+only would pass a model that ignored its context, and content only passes a
+model that went and fetched it.
 
 Two things that did NOT turn out to be defects, recorded so nobody re-opens
 them. Turn 4's memory search finds turn 3's note despite the prompt saying
-"validation" and the note saying "validate" — FTS stemming handles it, measured
+"validation" and the note saying "validate". FTS stemming handles it, measured
 green repeatedly. And the test's 600 s cap was raised to 1,800 s on a
-measurement, not to clear a red: threading lengthens every turn, and two
+measurement rather than to clear a red. Threading lengthens every turn, and two
 consecutive runs hit the old cap at 600,008 ms and 600,003 ms with turn 2 alone
 spending 12 tool calls.
 
@@ -274,13 +272,13 @@ Every vitest eval arm that attempted at least one task writes a `run-record.json
 (schema 1, `EvalRunRecord` in `packages/test-utils/src/eval-run.ts`) beside its
 retained transcripts under `bench-artifacts/`, carrying the eval family,
 per-observation verdicts, wall `ms`, turns, tool calls and names, tokens, spend,
-and — for optimization runs — the swarm tree shape (`swarm_use.measured`: nodes,
+and, for optimization runs, the swarm tree shape (`swarm_use.measured`: nodes,
 depth, records written) and `threshold_attained`. `bun scripts/eval-report.ts`
 renders every accumulated record, grouped by family, into one comparison.
 
 `publishRunRecord` is the only path that writes a record, and it writes NOTHING
 for a run with no observations. Without a credential every case skips and each
-arm's `afterAll` used to write the record regardless: 81 of the corpus's first 89
+arm's `afterAll` used to write the record regardless. 81 of the corpus's first 89
 records reported zero observations, and no reader could use one. The guard lives
 in the writer rather than in the three arms, so a fourth family cannot bring the
 shape back.
@@ -309,8 +307,8 @@ same way by the research and optimization arms):
 
 ### Triaging a run, after every `bun run evals:full`
 
-A run record says what failed. It does not say what KIND of failure each one is,
-and the four kinds need four different repairs. `bun scripts/eval-triage.ts`
+A run record names what failed. It does not name what KIND of failure each one
+is, and the four kinds need four different repairs. `bun scripts/eval-triage.ts`
 reads the same records as the reader above, groups every failure by scorer, by
 `tool·action·reason` failure key and by task, and gives each group a class and a
 ranked position:
@@ -336,47 +334,47 @@ The standing process:
 5. Act by class. A `product-defect` group becomes a fix in the code under test. An
    `eval-defect` group becomes a fix in the harness, the corpus or the scorer. A
    `flake` group becomes a repeat and a ψ measurement. A `model-behaviour` group
-   is the result, and it is reported, not repaired.
+   is the result. Report it rather than repair it.
 
-Two things to know when reading it. It RECOMPUTES
-admissibility instead of trusting the stored verdict, because a stored verdict is
-the policy the run was written under: both published baselines said
-`admissible: true` and failed today's rule until they were republished under it.
+Two things to know when reading it. It RECOMPUTES admissibility instead of
+trusting the stored verdict, because a stored verdict is the policy the run was
+written under. Both published baselines recorded `admissible: true` and failed
+today's rule until they were republished under it.
 And it reads a failure key's census part through `toolFailurePartOfKey`, the same
 policy the census wrote, so a published mix and a live census cannot disagree.
 
 It also prints its blind spot on the success path. A record written before the
 failure mix existed names no failing call, so no product defect is findable in it
-at all. An empty `product-defect` class over such records means unmeasured, not
-clean.
+at all. An empty `product-defect` class over such records means unmeasured rather
+than clean.
 
 The first triage, on 2026-08-20, read 89 records and produced 24 groups: no
 product defect, 10 eval defects, 2 flakes, and 12 mechanism findings. The largest
 group was 45 records that attempted nothing and wrote a record anyway. The writer
 refuses those now, so that group can only hold records written before the fix.
-Only two of the 89 are tracked: `bench-artifacts/` is gitignored and grows with
+Only two of the 89 are tracked. `bench-artifacts/` is gitignored and grows with
 every local run, so the record count moves and the group SHAPES are the stable
 part. Over the two tracked records alone the same triage reads 19 groups.
 
-Those two records — `flash-a` and `flash-b` — are RETIRED as baselines. No task
+Those two records, `flash-a` and `flash-b`, are RETIRED as baselines. No task
 either declares is in the hard-task corpus, so no verifier exists to run; no
 score row carries a `measured` payload; and neither names a transcripts
 directory, because the tier deleted its stores in teardown at the time. So no
 `task_outcome` row can be derived from anything they carry, and inventing one
 would be a fact about the agent that nothing measured. Both were republished
 under today's admissibility policy instead, which recomputes over their own
-observations and adds nothing: `compareRuns` refuses them by name rather than
+observations and adds nothing. `compareRuns` refuses them by name rather than
 pairing 13 attempts and dropping all 13. The tier therefore has NO baseline until
 a credentialed run publishes one. `scripts/eval-triage.verdicts.json` holds seven
 hand-checked rulings, one of which overrides the machine.
 
 ### What it costs and how long it takes
 
-Every figure below came from a run whose log said so. A cell that has not been
-measured says so instead of carrying a guess. The two bun-arm rows are
-corroborated by `scripts/ladder.ts`'s evals-gate declaration. Rows without a
-date predate the tier recording one, so treat each as "the run whose spend file
-survives" rather than as today's cost.
+Every figure below came from a run whose log recorded it. A cell with no
+measurement reads "not measured" instead of carrying a guess. The two bun-arm
+rows are corroborated by `scripts/ladder.ts`'s evals-gate declaration. Rows
+without a date predate the tier recording one, so treat each as "the run whose
+spend file survives" rather than as today's cost.
 
 | | wall clock | model calls | input tokens |
 |---|---|---|---|
@@ -402,20 +400,20 @@ The research and optimization rows were measured on 2026-08-20 against
 single agent episode driven as the SPAWNED `kinu` CLI. Both passed on that
 run. What the episodes did, from their own run records:
 
-- **research** — 2 turns, 6 tool calls, ALL SIX to the controlled archive, 4
+- **research**: 2 turns, 6 tool calls, ALL SIX to the controlled archive, 4
   steps, 260 s in the episode. The reply carried all three planted numbers
   exactly (1847, 96.4, 27.3) and the canary verbatim.
-- **optimization** — 2 turns, 17 tool calls, 18 steps, 666 s in the episode.
+- **optimization**: 2 turns, 17 tool calls, 18 steps, 666 s in the episode.
   `task_outcome` 1.000 against the pre-registered bar of 0.5: 2,972 oracle calls
   where the handed reference costs 2,880,000 and the corpus target is 2,992, so
   the agent BEAT the target and the log-scale score clamped from 1.0010. It used
-  NO swarm — 0 search nodes, 0 `agents` calls. One run is one run; that is the
-  first row of the swarm-versus-attainment table, not a conclusion.
+  NO swarm: 0 search nodes, 0 `agents` calls. One run is one run; that is the
+  first row of the swarm-versus-attainment table rather than a conclusion.
 
 Costs vary widely with what the model chooses to do. The optimization arm spent
 14× the research arm's input tokens on the same credential, and the 5-turn e2e
-conversation was measured twice at 5 calls / 20.0k in and 9 calls / 39.8k in —
-the second run's turn 2 alone made 12 tool calls. Budget from the larger figure.
+conversation was measured twice at 5 calls / 20.0k in and 9 calls / 39.8k in.
+The second run's turn 2 alone made 12 tool calls. Budget from the larger figure.
 
 The behaviour arm is 34 full agent episodes and dominates the tier. Its wall
 clock is the number that row is waiting on. The tier now reports per arm, and
@@ -430,14 +428,14 @@ the reference counting every token against every other, on both instances),
 `stop: aborted`, `expansions: 3`, no winner, `records.written: 0`, and
 `fanIn.levels: 0` with all three parents unusable. The eval failed on its first
 assertion, `expect(report.stop).not.toBe('aborted')`, which is the bound
-working: a run that did not settle is refused rather than measured. What is
+working. A run that did not settle is refused rather than measured. What is
 still owed is a run that SETTLES, and with it the winner and the
 winner/baseline ratio.
 
 Three earlier attempts, each stopped for a stated reason:
 
 1. Refused before any model call. The objective's floor was sent camelCase and
-   `SwarmObjectiveSchema` answered `Invalid key: Expected "best_known_honest"`.
+   `SwarmObjectiveSchema` returned `Invalid key: Expected "best_known_honest"`.
    The wire boundary worked; the eval's transform is now in one named place.
 2. The worker proxy's upstream Cloudflare login had expired. Three depth-1 heads
    errored in ~1 s with `Your Cloudflare login is no longer valid … (upstream:
@@ -449,7 +447,7 @@ Three earlier attempts, each stopped for a stated reason:
    reference, found the measure harness, and wrote and ran their own benchmark.
    Then one step ran 26 minutes on the 50,000-token `hard-select-kth` instance
    while the runner held 91% CPU. The eval now uses `hard-majority-vote`
-   (n=1200) for that measured reason: instance size is what a node's own
+   (n=1200) for that measured reason. Instance size is what a node's own
    experimentation costs, and the workspace substrate executes in-process.
 
 ### Sizing this arm before you run it
@@ -486,7 +484,7 @@ floor on the demand rather than a typical cost, and how many steps a node needs
 to FINISH on this model is not measured. `depth × branches` bounds the shape of
 the search; a node's own loop is bounded by the two budgets above.
 
-The caller's `abortSignal` is the third bound, and it works: all three nodes
+The caller's `abortSignal` is the third bound, and it works. All three nodes
 settled `status:'aborted'` with their step counts recorded when the 20-minute
 envelope fired. That envelope was the defect the derived wall clock replaced.
 1,200,000 ms is under `nodeWallClockEnvelopeMs(26)` by a factor of 13, so the
@@ -517,7 +515,7 @@ Four different things, kept apart because they need opposite repairs.
 
 - **A suite failed.** Either the model answered wrongly, which is a finding, or
   the environment never answered, which is an outage. The tier does not guess. A
-  failure counts as infrastructure only where the code raising it said so
+  failure counts as infrastructure only where the code raising it marked it
   through `infraBoundary` (`packages/test-utils/src/live-model.ts`), and the
   skip ratchet prints the two lists separately. An unmarked failure lands in the
   behavioural list, which under-claims outages rather than over-claiming them.
@@ -531,8 +529,8 @@ Four different things, kept apart because they need opposite repairs.
   because a tier-wide sum cannot fail on one arm's behalf.
 - **Nothing at all, loudly.** With no credential anywhere the tier still runs
   and still passes. Every live test skips, the ratchet proves the skips are the
-  declared ones, and the liveness assertion says it has nothing to prove. That
-  is the path that reproduces anywhere.
+  declared ones, and the liveness assertion reports that it has nothing to
+  prove. That is the path that reproduces anywhere.
 
 ### Credentials, if you want to point it somewhere else
 
@@ -596,19 +594,19 @@ packages/
 │  └─ helpers.ts              (package-local helpers)
 ├─ cf-backend/tests/          (139 files; bun runs 134)
 │  ├─ unit-agent-registry.test.ts  (provider registry composition)
-│  ├─ unit-alarm-tracing.test.ts   (the span seam on the alarm and RPC paths)
+│  ├─ unit-alarm-tracing.test.ts   (the tracing spans on the alarm and RPC paths)
 │  ├─ unit-auth-security.test.ts   (browser OAuth and CLI auth invariants)
 │  ├─ unit-cli-auth-store.test.ts  (KV-backed device-code flow)
 │  ├─ unit-webhook-ingress.test.ts (webhook body/rate-limit helpers)
-│  └─ workerd/                (5 files — vitest inside workerd, not bun)
+│  └─ workerd/                (5 files: vitest inside workerd, not bun)
 ├─ cli-backend/tests/         (32 files)
 │  ├─ local-session.test.ts        (local agent session behavior)
 │  ├─ model-resolver.test.ts       (provider/model selection)
 │  └─ executor.test.ts             (local execution tools)
-├─ cli/tests/                 (43 files — CLI commands, config, TUI)
-├─ agent-utils/tests/         (5 files — memory absence, append, index delta,
+├─ cli/tests/                 (43 files: CLI commands, config, TUI)
+├─ agent-utils/tests/         (5 files: memory absence, append, index delta,
 │                              search ranking, workspace resolution)
-├─ compaction/tests/          (7 files — the ladder, the codec, the stores)
+├─ compaction/tests/          (7 files: the ladder, the codec, the stores)
 └─ test-utils/src/
    ├─ sql.ts            ── createTestSql()
    ├─ llm.ts            ── createScriptedLLM / createJSONLLM / createEchoLLM
@@ -641,10 +639,10 @@ workspace-resolution ones listed above.
 
 ## Mocking philosophy
 
-Mock at real seams, never at internal functions. Internal mocks couple tests to
-implementation and produce false confidence.
+Mock at real boundaries rather than at internal functions. Internal mocks couple
+tests to implementation and produce false confidence.
 
-| Seam | Mock how |
+| Boundary | Mock how |
 |---|---|
 | LLM calls | `createScriptedLLM(['answer 1', 'answer 2'])`: predictable, deterministic |
 | Structured-output LLM | `createJSONLLM({ /* the JSON */ })` |

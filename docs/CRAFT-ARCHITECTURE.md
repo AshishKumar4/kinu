@@ -1,7 +1,5 @@
 # Kinu Crafted-Tool Architecture — Prior-Art Comparison
 
-> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
-
 ## 0. Background
 
 Three user-visible failures motivated this analysis. All three are described as
@@ -20,7 +18,7 @@ sandbox arrow. On the CLI, `createNodeCraftedExecute`
 file named in failure (2) above is gone; the only `craft-executor.ts` left in
 the tree is the CLI's.
 
-A production reference implementation solves (1)–(3) almost for free by adopting
+A production reference implementation solves (1)–(3) by adopting
 a *preamble-injection* pattern on top of upstream codemode's
 `DynamicWorkerExecutor`. Sections 1–4 describe that reference design; §5
 describes Kinu's pre-refactor state; §6–§9 cover the delta, the phased
@@ -45,16 +43,16 @@ The reference implementation defers the sandbox Worker module to upstream `@clou
 
 - Errors surface as **bare strings** (`err.message`), not a structured `{error, stack, toolName}` envelope. Stream emission and codemode builder rethrow both propagate only the message.
 - **Logs DO surface** through a different channel. Codemode's module stubs override `console.log/warn/error` to push into `__logs[]`, and the host reads that array back as `logs` on the `CodemodeResult`. The LLM can thus `console.log` inside a crafted tool and see the output on the next turn.
-- No `stack` is sent back. No `toolName` attribution. The reference has chosen "logs for positive signal, short strings for failures".
+- No `stack` and no `toolName` attribution come back. The reference has chosen "logs for positive signal, short strings for failures".
 
 ## 3. Reference Tool Registry
 
 The reference treats the SQL `CraftStore` as the single source of truth, with no in-memory mirror. Kinu adopted the pattern and both of its backends now follow it.
 
 - **No in-memory mutation cache.** `craft_tool` → `store.create()` → SQL `INSERT`.
-- **Same-turn visibility via re-read, not via mutation.** The executor calls `craftStore.list()` fresh on every `execute()`. There is no registry and no subscription, just a query per call. On CF that read is `selectInjectableCraftedTools`, which also applies `filterByEffectiveScore`. That is the same EMA cutoff core's tool builder applies, so the advertised set and the callable set cannot disagree.
-- **Next-step, not next-arrow.** A newly saved tool is callable in the NEXT codemode invocation, in the same turn but a later step. Within a single `execute_tools` arrow the tool set is frozen, because the preamble is built once from that read. On both backends `createExecuteTool` takes a `craftedTools()` resolver rather than a snapshot, and the CLI binds that record under both `codemode` and `tools`. On CF only `tools.<name>` is callable, because the body lives in the preamble rather than in the dispatcher. `codemode.<name>` is still reachable there, so `craftedDispatcherEntry` (`cf-backend/src/execute-tools.ts`) makes it THROW and name the form that works, rather than return an error object the model would read as a result.
-- **A crafted tool's failure names itself.** Both paths wrap the body so a throw leaves the sandbox stamped `[crafted:<name>] <message>` (`craftFailureMarker`, `core/src/craft/in-episode.ts`). See docs/EVOLUTION.md, "In-Episode Evolution".
+- **Same-turn visibility via re-read.** The executor calls `craftStore.list()` fresh on every `execute()`. There is no registry and no subscription; each call runs one query. On CF that read is `selectInjectableCraftedTools`, which also applies `filterByEffectiveScore`. That is the same EMA cutoff core's tool builder applies, so the advertised set and the callable set cannot disagree.
+- **Next-step visibility.** A newly saved tool is callable in the NEXT codemode invocation, in the same turn but a later step. Within a single `execute_tools` arrow the tool set is frozen, because the preamble is built once from that read. On both backends `createExecuteTool` takes a `craftedTools()` resolver rather than a snapshot, and the CLI binds that record under both `codemode` and `tools`. On CF only `tools.<name>` is callable, because the body lives in the preamble rather than in the dispatcher. `codemode.<name>` is still reachable there, so `craftedDispatcherEntry` (`cf-backend/src/execute-tools.ts`) makes it THROW and name the form that works, rather than return an error object the model would read as a result.
+- **A crafted tool's failure carries its name.** Both paths wrap the body so a throw leaves the sandbox stamped `[crafted:<name>] <message>` (`craftFailureMarker`, `core/src/craft/in-episode.ts`). See docs/EVOLUTION.md, "In-Episode Evolution".
 - **MCP tools follow the same re-read rule by a different route.** `buildUserMcpTools` (`cf-backend/src/actor-agent.ts`) rebuilds the whole MCP `ToolSet` whenever the user's server watermark changes, so a mid-turn connection lands. Those tools are top-level AI SDK entries rather than a codemode namespace, clamped through the same turn budget (`withClampedToolResults`, producer `external_tool`).
 - **Surfacing.** Crafted tools are ONLY available inside codemode as `tools.<name>`. They are NOT surfaced as top-level AI SDK tools; `BUILTIN_TOOLS` is a fixed list of eight names. The LLM is told so by the system prompt.
 - **LLM-visible namespace docs.** The `execute_tools` summary names the namespaces: "Run JavaScript against active executor namespaces, codemode.\* providers, tools.\<name\> crafted tools, and agent helpers." The full contract for all of them is the `Namespace contract` comment above `BUILTIN_TOOL_SPECS` in `core/src/tools/registry.ts`.
@@ -85,7 +83,7 @@ const injected = code.replace(
 
 Normalization of stored code is a single `.trim()`. No semicolon stripping, no declaration→expression rewriting, no parenthesization. The stored form is already a legal expression because the `craft_tool` signature gate enforces it.
 
-**Kinu's shipped version diverges from both snippets above, and the divergence is the point of each change.**
+**Kinu's shipped version diverges from both snippets above.**
 
 - `buildToolsPreamble` wraps every body in an IIFE that re-throws with `craftFailureMarker(name)` prefixed, so a failure names the tool that raised it and the in-episode fitness signal can score the right artifact. The body sits alone between parentheses on its own lines, because a model-authored body ending in a `//` comment would otherwise swallow the rest of the wrapper and turn the whole preamble into a syntax error.
 - `injectPreamble` does not splice. It normalizes with codemode's own `normalizeCode` and then WRAPS: `async () => { <preamble>return await (<normalized>)(); }`. The regex splice silently dropped the preamble whenever the model's code was not already an `async (…) => {` arrow, which is exactly what `BUILTIN_TOOL_SPECS.execute_tools.example` teaches and what `normalizeCode` wraps for you. On every such call the whole crafted-tool surface was undefined with no error naming why.
@@ -140,7 +138,7 @@ All five links are gone. `PreambleCraftedExecutor` reads `craftStore.list()` at 
 
 ### 5.6 Error format (pre-refactor)
 
-Kinu also returned string-form errors, consistently: bare `err.message` at every layer. No stack, no `toolName`. Phase B replaced this on the CF path with the flat envelope in §7.
+Kinu also returned string-form errors consistently, bare `err.message` at every layer, with no stack and no `toolName`. Phase B replaced this on the CF path with the flat envelope in §7.
 
 ### 5.7 In-sandbox cross-namespace access from crafted tool bodies
 
@@ -217,7 +215,7 @@ dispatch happens through the preamble.
 
 **Before.** An error surfaced as a string, `{ error: "something broke" }`, with no stack and no attribution.
 
-**After (as shipped).** The envelope is **flat**, not nested: `{ error: true, message, stack?, toolName?, providerName? }`. The LLM sees which tool failed and a truncated stack (first 10 frames). Errors are *returned as values* rather than thrown, so a failing crafted tool does not abort the surrounding arrow, and codemode's dispatcher reports the call as having returned. An executor-level failure (sandbox spawn, timeout) behaves differently. It comes back as a non-empty `error` string, which `createCodeTool` turns into a thrown AI SDK error.
+**After (as shipped).** The envelope is **flat** rather than nested: `{ error: true, message, stack?, toolName?, providerName? }`. The LLM sees which tool failed and a truncated stack (first 10 frames). Errors are *returned as values* rather than thrown, so a failing crafted tool does not abort the surrounding arrow, and codemode's dispatcher reports the call as having returned. An executor-level failure (sandbox spawn, timeout) behaves differently. It comes back as a non-empty `error` string, which `createCodeTool` turns into a thrown AI SDK error.
 
 **Empirical test.**
 - Create a tool `async () => { throw new Error("boom") }`. Call it. The tool-output-available payload carries `message` containing `boom`, `toolName`, and a `stack` starting with `Error: boom`.

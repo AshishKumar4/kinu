@@ -1,7 +1,5 @@
 # Evolution System
 
-> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
-
 Kinu evolves across four timescales. Each one runs independently, and shorter
 timescales feed data to longer ones. The engine is
 `core/src/evolution/engine.ts`. The shortest timescale is the only one that
@@ -15,8 +13,9 @@ crafted-tool fitness (`core/src/orchestrator/craft-cycle.ts` over
 
 The other three timescales are conversational. The next user message grades a
 turn, five turns close a window, five windows close a lifetime. One long agentic
-episode is one turn: one prompt, hours of steps, nobody watching. None of the
-conversational clocks fire inside it. The in-episode loop is the one that does.
+episode is one turn, with one prompt, hours of steps, and nobody watching. None
+of the conversational clocks fire inside it. The in-episode loop is the one that
+does.
 
 | | |
 |---|---|
@@ -26,8 +25,8 @@ conversational clocks fire inside it. The in-episode loop is the one that does.
 | **Timescale** | One synchronous SQL update as the block settles. No model call, no await, no turn boundary. A tool that keeps raising drops out of the callable set for the rest of the same episode, because both backends re-read the store per execute. |
 
 Observations land in `craft_scores` through the same `updateCraftScores` EMA the
-turn clock uses (`core/src/craft/ema.ts:68`). One score per tool, not a parallel
-one. Invocations are priced on their own band, `CRAFT_INVOCATION_QUALITY`
+turn clock uses (`core/src/craft/ema.ts:68`). One score per tool.
+Invocations are priced on their own band, `CRAFT_INVOCATION_QUALITY`
 (`core/src/craft/in-episode.ts:93`), which is 0.7 for ran and 0.1 for raised.
 The positive pole sits strictly inside what a person's verdict reaches, 0.9 for
 a thumbs up, so no volume of self-dealing lets a crafted tool outrank one a
@@ -38,10 +37,10 @@ under the floor, and one success pulls it back to 0.347.
 
 Each turn writes at most one `craft_cycle` run event, carrying `crafted`,
 `invoked`, `reused`, `returned`, `raised` and `dropped`, with `turn_end` as the
-denominator. `reused` is the numerator that matters: a tool crafted this turn
+denominator. `reused` is the numerator that matters. A tool crafted this turn
 and then called by a LATER block is the loop actually closing.
 
-**The ceiling, stated plainly.** Execution-grounded fitness measures "it ran and
+**The ceiling.** Execution-grounded fitness measures "it ran and
 did not raise". It cannot measure "it did the right thing". That needs a
 verifier the agent did not choose, which the sealed bench has and production
 does not. So this channel feeds tool injection and nothing with a wider blast
@@ -65,7 +64,7 @@ dynamic-context block.
 That makes it the one knowledge plane that moves DURING a long turn. Facts and
 the MEMORY.md tail are frozen at turn assembly, while a finding recorded at step
 40 rides step 41. It also survives compaction, continuation turns and instance
-death, which is where in-context learning dies.
+death, where in-context learning does not.
 
 The fitness discipline is the same. Both halves are the runtime's own records,
 using the same failing-result predicate the steer trusts. No model is asked. A
@@ -78,7 +77,7 @@ forever, bound to no turn, so lesson corroboration can never admit it to
 MEMORY.md and the experience library can never export it.
 
 Each turn with a broken streak writes one `execution_recovery` run event
-carrying `tool`, `failures` and `failedSignature`. The falsifier is a query: the
+carrying `tool`, `failures` and `failedSignature`. The falsifier is a query. The
 same `failedSignature` failing again in a later turn is a finding that did not
 take.
 
@@ -118,7 +117,7 @@ sequenceDiagram
     Agent->>Lifetime: onLifetimeEvolution()
     Lifetime->>Lifetime: periodicCraftConsolidation()
     Lifetime->>Lifetime: Retire low-scoring tools (EMA + time decay)
-    Lifetime->>Lifetime: runReplayEval() — measured loss vs labeled turns
+    Lifetime->>Lifetime: runReplayEval(), measured loss vs labeled turns
     Lifetime->>Lifetime: runMCTS(task, budget 2, branches 2)
 ```
 
@@ -158,8 +157,8 @@ still recorded, as a `turn_complete` event with `graded: false`.
 turn that also errored. An LLM call generates a lesson, which is always recorded
 in the `lessons` table. It is appended to `memory/MEMORY.md` only when the
 lesson is corroborated, and corroboration requires a negative verdict from a
-user source. An `execution` verdict deliberately does not corroborate: "the turn
-hit an error" is not a reader confirming the lesson drawn from it. An
+user source. An `execution` verdict deliberately does not corroborate, because
+"the turn hit an error" is not a reader confirming the lesson drawn from it. An
 uncorroborated lesson stays `provisional` until a later user outcome
 corroborates it.
 
@@ -218,8 +217,8 @@ the classifier and the truth agree.
 
 A profile measured against last quarter's classifier says nothing about this
 quarter's, so calibration has to be redone. Thirty minutes a time is the kind of
-cost that quietly stops being paid. `core/src/evolution/ensemble.ts` asks
-whether that job can be handed over, and answers with a measurement.
+cost that quietly stops being paid. `core/src/evolution/ensemble.ts` measures
+whether that job can be handed over.
 
 ```
 kinu label ensemble <agent>          # two cross-family judges, same turns
@@ -256,7 +255,7 @@ Whether the panel may stand in is decided by three conditions written into
 κ(you↔panel) needs a lower bound at or above 0.60. κ(you↔panel) must be at least
 κ(you↔classifier) on the same turns. Negative-class recall needs a lower bound
 at or above 0.70 with specificity at or above 0.90, which keeps the Rogan–Gladen
-denominator at or above 0.60. The second condition is the one that matters: a
+denominator at or above 0.60. The second condition is the one that matters. A
 panel no closer to you than the classifier already is would be measuring one
 flawed rater with another. Below the bar the report says the panel cannot stand
 in and nothing changes. Above it, nothing switches on either. What it buys is
@@ -502,7 +501,7 @@ Extraction happens from three places: an accepted turn (`extractPattern`), an
 MCTS iteration scoring above `craftExtractionThreshold` (0.8,
 `core/src/mcts/engine.ts:468`), and MCTS convergence when the winner scores
 above the same threshold (`core/src/mcts/convergence.ts:135`). Only the MCTS
-paths carry a size gate, and it is a floor: `maybeStoreCraftedTool` returns
+paths carry a size gate, and it is a floor. `maybeStoreCraftedTool` returns
 early below 50 characters (`core/src/craft/discovery.ts:49`). There is no upper
 ceiling. A 1500-char ceiling used to sit there and was removed, because it
 silently excluded every substantial win from the craft loop; the prompt budget
@@ -532,5 +531,5 @@ This table is one of four sources the Run Timeline read model merges
 (`core/src/read-models/timeline.ts:147-194`). The others are the per-run
 `run_events` log, the MCTS `search_nodes` tree, and detached background jobs.
 The merge is server-side, and nothing in it is backend-shaped, so a timeline is
-a capability any backend has rather than one the Durable Object grew.
+a capability any backend has rather than one specific to the Durable Object.
 `kinu status` reads the same table locally.

@@ -1,15 +1,14 @@
 # Kinu extensibility
 
-> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
-
 How to plug in a new agentic idea without touching the orchestrator: a model
 provider, an exploration strategy, an actor kind, or a turn extension.
 
-## The seams
+## The four extension points
 
-Kinu exposes four seams, so a new idea plugs in at the right altitude.
+Kinu exposes four extension points, so a new idea plugs in at the right
+altitude.
 
-| Seam | Interface | Lives in | Adds | Example use cases |
+| Extension point | Interface | Lives in | Adds | Example use cases |
 |---|---|---|---|---|
 | **`ModelProvider`** | `core/providers/types.ts` | `packages/core/src/providers/` (runtime-agnostic) and `packages/cf-backend/src/providers/` (CF-specific) | A new LLM backend | Anthropic direct, Google Gemini, Groq, Bedrock, local Ollama |
 | **`ExplorationStrategy`** | `core/strategy/types.ts` | `packages/core/src/strategy/` | A search or sampling policy over candidate continuations | MCTS, Heads, Tree-of-Thoughts, Graph-of-Thoughts, Reflexion-rollouts |
@@ -23,9 +22,9 @@ per-call state flowing through `ProviderDeps` and `StrategyContext`.
 
 ## Registration is not reachability
 
-A seam earns its callers from the code that dispatches it. Registering an
-implementation only makes it findable. The `ExplorationStrategy` seam is the
-clearest case in the tree, so read this before you add a strategy.
+An interface earns its callers from the code that dispatches it. Registering an
+implementation only makes it findable. `ExplorationStrategy` is the clearest
+case in the tree, so read this before you add a strategy.
 
 `buildStrategyForkDeps` (`core/src/orchestrator/fork-deps.ts:106-135`) creates
 one `StrategyRegistry` and registers three strategies into it: single-shot
@@ -62,8 +61,9 @@ worktree:
   constructed at `core/src/orchestrator/fork-deps.ts:108-110` and in tests.
   Nowhere else.
 
-What actually runs reaches the engines directly, not the strategy adapters.
-Lifetime evolution calls `runMCTS` at `core/src/evolution/engine.ts:862`.
+What actually runs reaches the engines directly and bypasses the strategy
+adapters. Lifetime evolution calls `runMCTS` at
+`core/src/evolution/engine.ts:862`.
 Branching heads run through a `HeadController` constructed at
 `cf-backend/src/actor-agent.ts:2501`, `cf-backend/src/exploration.ts:574`,
 `cli-backend/src/head-runtime.ts:229`, and
@@ -88,7 +88,7 @@ those is a delegation action a model can name.
 option on `buildBuiltinTools` (`core/src/tools/builtins.ts:174`), and a grep for
 the name finds that one file. No backend passes it and no test exercises it.
 
-## Two seams that no longer exist
+## Two extension points that no longer exist
 
 There is no `InferenceLoop` and no `packages/core/src/loops/`. Replacing the
 turn's inference loop is the mutable scaffold's job, through Think's
@@ -102,8 +102,8 @@ credential.
 
 ## Adding a new actor kind
 
-`ActorAgent` (`cf-backend/src/actor-agent.ts:392`) is the seam for a new kind of
-agent. Extend it and supply seven members:
+`ActorAgent` (`cf-backend/src/actor-agent.ts:392`) is the base class for a new
+kind of agent. Extend it and supply seven members:
 
 ```ts
 export class MyAgent extends ActorAgent {
@@ -163,7 +163,7 @@ constructs it with `ownerRequired: true` (`cf-backend/src/actor-agent.ts:787`).
        async isAvailable(deps) { /* check stored credential */ },
        async listModels(deps) { /* live catalog, static list as fallback */ },
        createModel(modelId, deps): LanguageModel {
-         /* return a Vercel AI SDK LanguageModel — auth happens in customFetch */
+         /* return a Vercel AI SDK LanguageModel; auth happens in customFetch */
        },
        unavailableReason(deps) { /* optional: why the UI should grey it out */ },
      };
@@ -186,7 +186,7 @@ Do not hardcode `listModels`. Hydrate from the live models.dev catalog
 5-minute cache) and pass a static `FALLBACK_MODELS` array for when that fetch
 fails, returns a non-200, or filters to nothing. The Anthropic and OpenAI
 providers both do exactly that. If your provider already appears in models.dev,
-you may not need a hand-written provider at all: `registry.registerDynamic`
+you may not need a hand-written provider at all. `registry.registerDynamic`
 (`cf-backend/src/providers/agent-registry.ts:125`) makes every catalog id usable
 once the user stores a `<id>.bearer` credential. Wrap your fetch in
 `withRateLimitRetry`, or build it with the shared `createAuthedFetch`, which
@@ -220,7 +220,7 @@ because no tool field selects a strategy today.
 ## Replacing the inference loop
 
 There is no `InferenceLoop` registry. Think's `_runInferenceLoop` is private, so
-the seam is `_transformInferenceResult`
+the hook is `_transformInferenceResult`
 (`core/src/scaffold/inference-transform.ts`, overridden at
 `cf-backend/src/actor-agent.ts:1424`). When the workspace has an evolved
 `scaffold/agent.js` at a version above 0, that generator becomes the turn's
@@ -228,14 +228,15 @@ inference loop. An un-evolved agent gets the default result back untouched, the
 same object, with zero overhead.
 
 `host.defaultInference()` is what makes this safe. The scaffold receives the one
-already-prepared stream, so a scaffold that simply delegates is byte-faithful by
+already-prepared stream, so a scaffold that only delegates is byte-faithful by
 construction. A second call to `defaultInference()` surfaces as a
 `defaultInference failed` event. A scaffold that never delegates gets the
 eagerly-fired default stream cancelled rather than left running.
 
-Selection is the scaffold version, not a config key. The path to a new loop is
-the evolution pipeline: propose, pass the 4 gates and the misevolution veto,
-survive shadow evaluation, and get promoted. See [EVOLUTION.md](./EVOLUTION.md).
+The scaffold version selects the loop, and there is no config key. The path to a
+new loop is the evolution pipeline: propose, pass the 4 gates and the
+misevolution veto, survive shadow evaluation, and get promoted. See
+[EVOLUTION.md](./EVOLUTION.md).
 
 ### Reading the conversation with `host.history()`
 
@@ -375,7 +376,7 @@ rejected because tools are agent-self-authored, there is no external attacker,
 and the cap truncates useful "when to use" guidance.
 
 - **Rate-limit resilience on every model fetch.** `withRateLimitRetry`
-  (`core/src/providers/rate-limit-retry.ts`) wraps the fetch seam of every
+  (`core/src/providers/rate-limit-retry.ts`) wraps the fetch of every
   provider: the shared `createAuthedFetch`, Workers AI, the AI Gateway, codex
   and opencode. It allows up to 6 attempts inside a 180 s budget on 429, 529
   and overload-shaped 503s. It honours `Retry-After` when the server sends one,
@@ -481,7 +482,7 @@ the codemode sandbox.
   `listCurriculumTasks` and `setCurriculumTaskStatus`
   (`cf-backend/src/orchestrator.ts:3104-3112`).
 - **Sleep-time compute**, `core/memory/sleep-time-compute.ts`. Background
-  memory compression over the facts store and nothing else: a
+  memory compression over the facts store and nothing else. A
   `SleepTimeUpdate` is exactly `{ upserts, decay }`, and `applySleepTimeUpdate`
   touches only `agent_facts`. It fires fire-and-forget from `onChatResponse`
   and is on by default, through `agent_config.sleep_time_compute`, which

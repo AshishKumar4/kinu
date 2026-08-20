@@ -1,7 +1,5 @@
 # Formal Specification
 
-> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
-
 Kinu has one Lean 4 project in `lean/`. Measured on 2026-08-19 it compiles
 **330 named theorems** over **43 requirements**, with **0 `sorry`**, across
 hand-maintained abstract models of selected agent, evolution, execution,
@@ -36,10 +34,9 @@ Counts are `#print axioms` entries in `lean/Proteus/Axioms.lean` grouped by
 namespace, measured 2026-08-19. Every one of the 330 is claimed by a requirement
 in the traceability map, which the checker holds in both directions.
 
-**Two denominators, and confusing them is the mistake this section exists to
-prevent.** A status is declared on a REQUIREMENT and inherited by every theorem
-that requirement claims, so the same four words count twice over two different
-totals. Name the denominator every time.
+**Two denominators.** A status is declared on a REQUIREMENT and inherited by
+every theorem that requirement claims, so the same four words count twice over
+two different totals. Name the denominator every time.
 
 By theorem, over 330: **256 `proved-in-abstract-model`** and **74
 `by-construction-witness`**. Near-definitional statements such as nonnegativity of
@@ -55,14 +52,14 @@ theorem total cannot, because five requirements claim no theorem at all.
 
 Every requirement has exactly one status:
 
-- `proved-in-abstract-model` — Lean proves a substantive invariant of the
+- `proved-in-abstract-model`: Lean proves a substantive invariant of the
   stated abstract model. Implementation correspondence remains separate.
-- `by-construction-witness` — the statement follows mainly from the model's
+- `by-construction-witness`: the statement follows mainly from the model's
   constructors, result type, or declared transition postconditions. It is kept
   as a checked design witness, not advertised as a deep proof.
-- `trusted-model-assumption` — the claim concerns an external system Lean does
+- `trusted-model-assumption`: the claim concerns an external system Lean does
   not model and is admitted explicitly, with missing evidence recorded.
-- `specified-not-modeled` — the desired property is tracked, but no Lean model
+- `specified-not-modeled`: the desired property is tracked, but no Lean model
   or theorem exists.
 
 Five requirements have no theorems and stay `specified-not-modeled`:
@@ -74,9 +71,9 @@ verifier (`PR-EXPL-002`).
 
 The first two stay unmodelled until the production selection algorithm is
 settled; proving a different textbook algorithm would not add evidence about
-Kinu. The other three each need something the abstract model does not have —
-a semantics for a verifier, a concurrent step relation, or a distribution over
-candidate quality — and each says so in its own `remainingEvidence`.
+Kinu. The other three each need something the abstract model does not have: a
+semantics for a verifier, a concurrent step relation, or a distribution over
+candidate quality. Each says so in its own `remainingEvidence`.
 
 ## Axiom boundary
 
@@ -134,17 +131,19 @@ citation:
 
 - **A theorem name is the only shape this gate can verify.** It resolves the name
   against the declaration, so a rename turns the gate red.
-- **A line citation is bounded, not verified.** Both endpoints of a range must sit
-  inside the module, and nothing checks that those lines still hold the claimed
-  content. An insertion above a cited range slides it onto different code and the
-  gate stays green. That is why this document cites by name.
+- **The gate bounds a line citation without verifying it.** Both endpoints of a
+  range must sit inside the module, and nothing checks that those lines still
+  hold the claimed content. An insertion above a cited range slides it onto
+  different code and the gate stays green. That is why this document cites by
+  name.
 - **25 citations carry an author-declared category** (`CITATION_ILLUSTRATIVE`).
-  The declaration is TRUSTED, not verified: the gate checks only that the site
-  behaves like an illustration, never that the author was right to declare one.
-  The gallery fixture naming a Lean module that does not exist is one of the 25.
+  The gate trusts that declaration without checking it. It checks only that the
+  site behaves like an illustration, never that the author was right to declare
+  one. The gallery fixture naming a Lean module that does not exist is one of
+  the 25.
 - **1 theorem name carries no underscore** and is invisible to the name scanner,
   so a rename of that one is not caught. The blind spot is enrolled rather than
-  discovered, so a new one fails the gate naming itself.
+  discovered, so a new one fails the gate and the failure names it.
 
 ## Implementation correspondence
 
@@ -153,7 +152,7 @@ could not show whether Lean and TypeScript still computed the same thing. It
 has been removed. The current gate makes proof claims and assumptions
 auditable, but the models are still maintained independently from the code.
 
-WP-F4 is the remaining bridge: executable differential fixtures and
+WP-F4 is the remaining bridge. Executable differential fixtures and
 property-based tests will run the Lean-modeled behavior and production
 TypeScript on shared inputs. Until those fixtures exist, the traceability file
 states the gap explicitly for every requirement.

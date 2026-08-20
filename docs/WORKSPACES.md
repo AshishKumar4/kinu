@@ -1,21 +1,19 @@
 # Workspaces — the container / agent object model
 
-> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
-
-In Kinu you create **workspaces**, not agents. A workspace is the container;
+In Kinu you create **workspaces**. A workspace is the container, and
 agents are the actors that work inside it.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  WORKSPACE  (the container — 1 per name; 1:1 with an OrchestratorAgent   │
+│  WORKSPACE  (the container, 1 per name; 1:1 with an OrchestratorAgent    │
 │              Durable Object on the cloud backend)                        │
 │                                                                          │
-│   identity   workspace_identity(id, name, owner_user_id) — the           │
+│   identity   workspace_identity(id, name, owner_user_id) is the          │
 │              ownership root, read on every model call                    │
 │   file plane one authoritative Nimbus filesystem, durable, with a real   │
 │              shell, runtimes, processes and ports over the same bytes.   │
-│              The ONLY one: there is no mount table.                      │
-│   exec plane ExecutionRouter — every OTHER environment, each its own     │
+│              The ONLY one. There is no mount table.                      │
+│   exec plane ExecutionRouter: every OTHER environment, each its own      │
 │              filesystem in its own native paths:                         │
 │                sandbox.*   full Linux container   (when configured)      │
 │                laptop.*    the user's own machine  (connect + consent)   │
@@ -25,16 +23,16 @@ agents are the actors that work inside it.
 │                                                                          │
 │   ┌───────────────────────────────────────────────────────────────────┐  │
 │   │  AGENTS  (actors)                                                 │  │
-│   │   orchestrator — the DEFAULT agent, always present. Answers       │  │
+│   │   orchestrator: the DEFAULT agent, always present. Answers        │  │
 │   │     chat, runs tools, evolves the workspace.                      │  │
-│   │   subordinates — DURABLE teammates hired by `agents`.             │  │
+│   │   subordinates: DURABLE teammates hired by `agents`.              │  │
 │   │     Each is its own facet running the full turn loop on an        │  │
 │   │     independent workstream, sharing the workspace's canonical     │  │
 │   │     files and reporting assigned work back as events.             │  │
-│   │   swarm nodes — EPHEMERAL agents of one configured tree search.   │  │
+│   │   swarm nodes: EPHEMERAL agents of one configured tree search.    │  │
 │   │     Each runs the same turn loop over the workspace's canonical   │  │
 │   │     files, and hands back a candidate the caller measures.        │  │
-│   │   peers — agents of the owner's OTHER workspaces, addressed       │  │
+│   │   peers: agents of the owner's OTHER workspaces, addressed        │  │
 │   │     through the same `agents` surface.                            │  │
 │   └───────────────────────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────────────────────────┘
@@ -88,15 +86,15 @@ agents are the actors that work inside it.
     the three host-owned members it needs, and `runSwarmAction` builds the
     provisioner from them. `createCLIRuntime` supplies those members from
     `WorkspaceBundle.privileged()`, because that workspace is an in-isolate
-    `NimbusWorkspace`: measured 2026-08-19, a shipped `agents.swarm` run there
+    `NimbusWorkspace`. Measured 2026-08-19, a shipped `agents.swarm` run there
     reports `private-home`. The hosted backend supplies none and has nothing to
-    supply — it reaches its workspace by RPC to a Nimbus Durable Object, where a
+    supply. It reaches its workspace by RPC to a Nimbus Durable Object, where a
     filesystem call arriving without a pid acts as the session user and
     `confinePrincipal` has no RPC form at all, so two of the three members do
     not exist on that side. A hosted node therefore works in the parent's home
     and reports `shared-origin-plane`, which is a permanent asymmetry rather
     than an unfinished one. `docs/EXPLORATION.md` is the spec for the six axes,
-    the presets, the report seam and the isolation states.
+    the presets, the report contract and the isolation states.
   - **Subordinates** (`agents`, `action: 'hire'`) are durable. Each is a
     `SubordinateAgent` facet with its own SQL history and full turn loop, using
     the canonical workspace files and the parent's sandbox/laptop planes.
@@ -105,7 +103,7 @@ agents are the actors that work inside it.
   - **Peers** are the owner's other workspace agents, addressed through
     `agents` actions `ask`, `send`, `reply`, and `list`. `hire` with
     `scope: 'workspace'` spawns a whole specialist workspace instead of a
-    subordinate, and only the workspace orchestrator may do it: a fresh
+    subordinate, and only the workspace orchestrator may do it. A fresh
     workspace is the root of its own delegation tree, so a subordinate that
     could call it would escape the depth cap.
 
@@ -135,7 +133,7 @@ Actor-sense names stay: the `OrchestratorAgent` / `SubordinateAgent` /
 `ExplorationAgent` DO classes (and the wire paths
 `/agents/orchestrator-agent/<name>` and
 `…/sub/subordinate-agent/<sub>` the agents SDK routes, which are internal
-rather than user-facing), `AgentRuntime`/`AgentClient`/`AgentTarget` seams,
-the `agent.*` self-improvement tool namespace, per-agent device consent, peer
-messaging ("this agent wants to use your PC" is the actor asking), and
-`AGENTS.md` discovery (a repo convention).
+rather than user-facing), the `AgentRuntime`/`AgentClient`/`AgentTarget`
+interfaces, the `agent.*` self-improvement tool namespace, per-agent device
+consent, peer messaging ("this agent wants to use your PC" is the actor
+asking), and `AGENTS.md` discovery (a repo convention).
