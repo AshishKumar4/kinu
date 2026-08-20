@@ -23,12 +23,23 @@
  * textbook Boyer–Moore pairing ≈0.93), matching the handed reference scores 0,
  * and a wrong answer scores 0 whatever it cost. Solvable, not vacuous.
  *
- * EVERYTHING ELSE IS THE BEHAVIOUR HARNESS, reused rather than restated:
- * `runBehaviourTask` opens the workspace the production way, refuses degenerate
- * and unsandboxed runtimes before spending, seeds the corpus task, drives the
- * one-shot session, and verifies the workspace left behind with the corpus's
- * own instrument. This file adds the threshold, the swarm telemetry, and the
- * run record.
+ * WHY THE SPAWNED CLI. The agent under eval is the `proteus` process a user
+ * runs — `proteus create --mode local`, then `proteus exec --workspace <name>
+ * --json`, per bench/harbor/proteus_agent.py. The instrument sits either side
+ * of that process: the task's seed files are written into the workspace BEFORE
+ * the child starts, and the verifier measures the workspace the child left
+ * behind AFTER it exits. Both halves go through the OPENED runtime
+ * (`openWorkspaceCLI`) rather than the birth one, for the reason harness.ts
+ * states at length — the birth runtime registers no executors, so its shell
+ * cannot run the `exec-ratio` measurement and every attempt would read as
+ * unmeasurable. The store is closed between seeding and the child, and
+ * reopened after: two processes never hold it at once.
+ *
+ * WHAT IS JUDGED: the workspace, not the transcript. The corpus's own verifier
+ * runs the metered oracle over the files the agent left, so the score is a
+ * measurement rather than an opinion about an answer. The CLI's event stream
+ * and the workspace ledgers supply the covariates — turns, tool calls, steps,
+ * tokens, swarm shape.
  */
 import { mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -37,13 +48,17 @@ import { afterAll, describe, expect, test } from 'vitest';
 import { Database } from 'bun:sqlite';
 
 import type { EvalCase, LLMProviderConfig } from '../../packages/core/src/index';
+import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import { makeSql } from '../../packages/cli-backend/src/runtime';
-import { runBehaviourTask } from './harness';
+import { cliWorkspaceDbPath, createCliWorkspace, execCliTask } from './cli-driver';
+import {
+  readLedgerTotals, requireExecutorSurface, requireSandboxedExecutors, requireVerifierShell,
+} from './harness';
 import {
   assembleRunRecord, EVAL_MODELS, formatRunRecord, FULL_TOOL_SURFACE, hardTaskCases,
-  liveChatModel, liveModelTarget, reportLiveModelSpend, TASK_OUTCOME, UNCONFIGURED_LLM,
-  writeRunRecord,
-  type EvalArmState, type EvalObservation, type EvalScoreRow, type EvalTier,
+  hardTaskFor, liveModelTarget, recordLiveModelEpisode, reportLiveModelSpend, seedHardTask,
+  TASK_OUTCOME, UNCONFIGURED_LLM, verifyHardTask, writeRunRecord,
+  type EvalArmState, type EvalObservation, type EvalScoreRow, type EvalTier, type HardTask,
 } from '@proteus/test-utils';
 import { resolveArtifactRoot } from '../../scripts/bench-retention';
 
@@ -61,6 +76,13 @@ const TASK_ID = 'hard-majority-vote';
 /** The pre-registered bar. A run that changes it is a different family and owes
  *  a new baseline — the number is part of what `threshold_attained` records. */
 const THRESHOLD = 0.5;
+
+/** The workspace the child CLI is told to create, and the wall it gets. Longer
+ *  than the research family's: this episode is a search over a metered
+ *  instrument, and the swarm path is the expensive branch it is allowed to
+ *  take. A hung child becomes a named red, never a runner timeout. */
+const WORKSPACE = 'optimization-eval';
+const EPISODE_TIMEOUT_MS = 1_800_000;
 
 function corpusCase(id: string): EvalCase {
   const found = hardTaskCases().find((candidate) => candidate.id === id);
@@ -174,45 +196,89 @@ describe('Optimization evals — a measured challenge with a pre-registered thre
 
   liveTest('MEASURED: the agent attains the threshold on the metered instrument', async () => {
     mkdirSync(TRANSCRIPTS, { recursive: true });
+    const home = join(TRANSCRIPTS, 'home');
+    const workspace = {
+      home, workspace: WORKSPACE, llm: LLM,
+      purpose: 'A senior engineer working in the given workspace. Prefer real tool calls over '
+        + 'describing what you would do, and break independent work apart.',
+    };
+    const hard: HardTask | undefined = hardTaskFor(CASE);
+    if (hard === undefined) {
+      throw new Error(`${TASK_ID} is not a hard-task corpus entry, so it carries no seed files and `
+        + 'no verifier — this family would grade nothing');
+    }
+    const dbPath = cliWorkspaceDbPath(home, WORKSPACE);
+
+    // Birth through the shipped CLI, then SEED and pre-flight through the
+    // opened runtime, then CLOSE: the child must be the only process holding
+    // the store while it runs.
+    await createCliWorkspace(workspace);
+    {
+      const seedDb = new Database(dbPath);
+      try {
+        const { rt } = await openWorkspaceCLI(seedDb, dbPath, { llm: LLM, hostRoot: null });
+        // Before anything is spent: a runtime that cannot execute is not a
+        // measurement of an agent that can, and one that can execute on the
+        // developer's machine is not a measurement either. The verifier's own
+        // shell is required here rather than discovered at grading time, so a
+        // shell-less workspace costs nothing instead of reading as an agent
+        // that solved nothing.
+        requireExecutorSurface(TASK_ID, rt);
+        requireSandboxedExecutors(TASK_ID, rt);
+        requireVerifierShell(TASK_ID, rt);
+        await seedHardTask(hard, rt.storage.vfs);
+      } finally {
+        seedDb.close();
+      }
+    }
+
     const startedAt = Date.now();
-    let output;
+    let child;
     try {
-      output = await runBehaviourTask(CASE, {
-        dir: TRANSCRIPTS, model: liveChatModel(LLM), llm: LLM, arm: ARM, opened,
+      child = await execCliTask({
+        ...workspace, prompt: CASE.task,
+        noAutoEvolve: !ARM.evolution, timeoutMs: EPISODE_TIMEOUT_MS,
       });
     } catch (error) {
-      // `inert` and `errored` are different facts — one is an agent that did
-      // nothing, the other a harness that broke — and the harness's own error
-      // types already say which; the record keeps the sentence.
       observations.push({
-        taskId: TASK_ID, repetition: 0,
-        outcome: error instanceof Error && error.name === 'DegenerateRunError' ? 'inert' : 'errored',
+        taskId: TASK_ID, repetition: 0, outcome: 'errored',
         reason: error instanceof Error ? error.message : String(error),
       });
       throw error;
     }
     const ms = Date.now() - startedAt;
 
-    const db = opened[opened.length - 1];
-    if (!db) throw new Error('runBehaviourTask returned without registering its store — nothing to measure');
-    const agentsCalls = output.toolNames.filter((name) => name === 'agents').length;
+    // The child's own store, reopened after it exited. `recordLiveModelEpisode`
+    // is what puts the child's spend on this arm's spend file — the usage lives
+    // in the workspace, so the liveness assertion works over a subprocess.
+    const db = new Database(dbPath);
+    opened.push(db);
+    recordLiveModelEpisode(makeSql(db));
+    const totals = readLedgerTotals(db);
+    const agentsCalls = totals.toolNames.filter((name) => name === 'agents').length;
     const swarmRow = swarmTelemetry(db, agentsCalls);
 
-    const outcome = output.scores.find((row) => row.name === TASK_OUTCOME);
-    const attained = outcome !== undefined && outcome.rate !== null && outcome.rate >= THRESHOLD;
-    const thresholdMeasured: EvalScoreRow['measured'] = outcome !== undefined && outcome.rate !== null
+    // The OUTCOME, measured over the workspace the agent left behind and
+    // nothing else — no transcript, no model, no judge. Measured through a
+    // freshly opened runtime because the verifier runs commands in its shell.
+    const { rt: verifyRt } = await openWorkspaceCLI(db, dbPath, { llm: LLM, hostRoot: null });
+    const shell = requireVerifierShell(TASK_ID, verifyRt);
+    const outcome = await verifyHardTask(hard, {
+      vfs: verifyRt.storage.vfs,
+      exec: (command) => shell.exec(command),
+    });
+    const attained = outcome.rate !== null && outcome.rate >= THRESHOLD;
+    const thresholdMeasured: EvalScoreRow['measured'] = outcome.rate !== null
       ? { threshold: THRESHOLD, score: outcome.rate }
       : { threshold: THRESHOLD };
     const thresholdRow: EvalScoreRow = {
       name: 'threshold_attained',
-      asserts: `task_outcome reached the pre-registered bar of ${String(THRESHOLD)} — the pass/fail `
+      asserts: `${TASK_OUTCOME} reached the pre-registered bar of ${String(THRESHOLD)} — the pass/fail `
         + 'this family gates on, kept beside the continuous score it was derived from',
       eligible: 1,
       passed: attained ? 1 : 0,
       rate: attained ? 1 : 0,
-      detail: outcome === undefined
-        ? 'no task_outcome row — the instrument never measured'
-        : `score ${String(outcome.rate)} vs threshold ${String(THRESHOLD)} — ${outcome.detail}`,
+      detail: `score ${String(outcome.rate)} vs threshold ${String(THRESHOLD)} — ${outcome.detail}`,
       measured: thresholdMeasured,
     };
 
@@ -220,23 +286,35 @@ describe('Optimization evals — a measured challenge with a pre-registered thre
     // must keep, or the accumulated data only ever shows successes.
     observations.push({
       taskId: TASK_ID, repetition: 0, outcome: 'scored',
-      scores: [...output.scores, swarmRow, thresholdRow],
-      turns: output.turns, toolCalls: output.toolCalls, toolNames: output.toolNames,
-      tokensIn: output.tokensIn, tokensOut: output.tokensOut, ms,
+      scores: [outcome, swarmRow, thresholdRow],
+      turns: totals.turns, toolCalls: totals.toolCalls, toolNames: totals.toolNames,
+      tokensIn: totals.tokensIn, tokensOut: totals.tokensOut, ms,
     });
-    console.log(`    ${String(output.turns)} turn(s), ${String(output.toolCalls)} tool call(s), `
-      + `${(ms / 1000).toFixed(1)}s, ${String(output.tokensIn)} in / ${String(output.tokensOut)} out tokens`);
+    console.log(`    ${String(totals.turns)} turn(s), ${String(totals.toolCalls)} tool call(s), `
+      + `${String(totals.steps)} step(s), ${(ms / 1000).toFixed(1)}s, `
+      + `${String(totals.tokensIn)} in / ${String(totals.tokensOut)} out tokens`);
     console.log(`    ${swarmRow.detail}`);
     console.log(`    ${thresholdRow.detail}`);
 
     // ── Denominators first ─────────────────────────────────────────────────
-    // The harness has already refused a wholly degenerate run; the instrument
-    // must also have MEASURED, or the threshold comparison below is over nothing.
-    if (outcome === undefined) {
-      throw new Error(`${TASK_ID}: no task_outcome row reached the scores — the verifier never ran, `
-        + 'so there is no measurement to hold to the threshold');
-    }
-    expect(outcome.eligible, `${TASK_ID}: task_outcome has a zero denominator — "0 of 0" is not a verdict`)
+    // The CHILD before the agent: a killed or crashed process is a fact about
+    // the run, and holding a torn episode to the threshold would report an
+    // agent failure for a harness one.
+    expect(child.timedOut,
+      `the child \`proteus exec\` was killed at ${String(EPISODE_TIMEOUT_MS)}ms — a hung episode, `
+      + `not a missed threshold${child.stderr.trim() === '' ? '' : `; stderr: ${child.stderr.trim()}`}`)
+      .toBe(false);
+    expect(child.exitCode,
+      'the child `proteus exec` exited non-zero, so the episode never completed'
+      + `${child.stderr.trim() === '' ? '' : `; stderr: ${child.stderr.trim()}`}`)
+      .toBe(0);
+    // A trajectory that produced nothing is `inert`, never a zero on the bar.
+    expect(totals.turns, `${TASK_ID}: the episode closed no turn — nothing ran`).toBeGreaterThan(0);
+    expect(totals.toolCalls,
+      `${TASK_ID}: the episode made no tool call, so it never touched the workspace it is graded on`
+      + (totals.failures.length > 0 ? ` (recorded failures: ${totals.failures.join(' | ')})` : ''))
+      .toBeGreaterThan(0);
+    expect(outcome.eligible, `${TASK_ID}: ${TASK_OUTCOME} has a zero denominator — "0 of 0" is not a verdict`)
       .toBeGreaterThan(0);
 
     // ── The bar ────────────────────────────────────────────────────────────

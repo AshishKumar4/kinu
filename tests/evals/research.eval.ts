@@ -11,14 +11,31 @@
  * either carries or does not. Scoring is string and number equality against the
  * corpus module — no LLM judge, no rubric, no opinion.
  *
+ * WHY THE SPAWNED CLI. The agent under eval is the `proteus` process a user
+ * runs — `proteus create --mode local`, then `proteus exec --workspace <name>
+ * --json` — never an in-process `LocalAgentSession`. An eval drives the WHOLE
+ * agent through a SHIPPED surface, and driving the session class directly would
+ * skip the CLI's own turn assembly, its client seam, and — the part this family
+ * is ABOUT — MCP config resolution: a user's servers reach the agent because
+ * `resolveMcpServers()` reads the `mcpServers` block of ~/.proteus/config.json
+ * (cli/src/config.ts:513-515) and `LocalAgentClient` connects them
+ * (cli/src/local-agent-client.ts:103, :270-271). A suite that hands
+ * `connectMcp` its servers itself proves none of that. `tests/evals/cli-driver.ts`
+ * is the glue, and bench/harbor/proteus_agent.py is its precedent.
+ *
  * WHY MCP AND NOT WORKSPACE FILES OR A WEB FIXTURE. The owner's design names
  * MCP as the channel, and the plumbing is real product surface with no live
- * coverage anywhere: `LocalAgentSession.connectMcp` is the same
- * `connectMcpServers` path a user's configured servers take — child process,
- * discovery, `mcp_<server>_<tool>` keying, result clamp, turn-surface merge —
- * and until this file nothing ever put a model behind it. Workspace files would
- * exercise the file tool instead, and a web-fetch fixture would test a stub of
- * the network rather than any shipped path.
+ * coverage anywhere: the configured-server path is child process, discovery,
+ * `mcp_<server>_<tool>` keying, result clamp and turn-surface merge — and until
+ * this file nothing ever put a model behind it. Workspace files would exercise
+ * the file tool instead, and a web-fetch fixture would test a stub of the
+ * network rather than any shipped path.
+ *
+ * WHAT IS JUDGED: the CLI's OWN OUTPUT — the `message_end` assistant text on the
+ * `--json` event stream — plus the workspace's own ledgers, read off
+ * `$home/<workspace>/agent.db` after the process exits. Two independent
+ * witnesses: the answer says what the agent reported, the ledger says whether it
+ * called the archive at all.
  *
  * WHY THE ANSWER IS A STRUCTURED SELF-REPORT. The prompt asks for
  * `{status: "OK", ...}` and the suite PARSES it; it never greps prose. A reply
@@ -41,17 +58,13 @@ import { afterAll, describe, expect, test } from 'vitest';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 
-import { initWorkspaceSchema, type LLMProviderConfig } from '../../packages/core/src/index';
-import { createWorkspace } from '../../packages/core/src/identity/index';
-import { LocalAgentSession } from '../../packages/cli-backend/src/local-session';
+import type { LLMProviderConfig } from '../../packages/core/src/index';
 import { connectMcpServers } from '../../packages/cli-backend/src/mcp';
-import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
-import { makeSql, makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime';
+import { makeSql } from '../../packages/cli-backend/src/runtime';
+import { cliWorkspaceDbPath, createCliWorkspace, execCliTask } from './cli-driver';
+import { readLedgerTotals } from './harness';
 import {
-  readLedgerTotals, requireExecutorSurface, requireSandboxedExecutors,
-} from './harness';
-import {
-  assembleRunRecord, EVAL_MODELS, formatRunRecord, FULL_TOOL_SURFACE, liveChatModel,
+  assembleRunRecord, EVAL_MODELS, formatRunRecord, FULL_TOOL_SURFACE,
   liveModelTarget, recordLiveModelEpisode, reportLiveModelSpend, subgoalOutcome, outcomeRow,
   UNCONFIGURED_LLM, writeRunRecord,
   type EvalArmState, type EvalObservation, type EvalScoreRow, type EvalTier,
@@ -70,6 +83,17 @@ const SERVER_PATH = join(import.meta.dirname, 'fixtures/veldmar-mcp-server.ts');
 const SERVER_NAME = 'veldmar';
 const SEARCH_TOOL = `mcp_${SERVER_NAME}_archive_search`;
 const READ_TOOL = `mcp_${SERVER_NAME}_archive_read`;
+
+/** The workspace the child CLI is told to create, and the wall the child gets.
+ *  A hung child must become a named red rather than a runner timeout, so the
+ *  driver kills it and the outcome says `timedOut`. */
+const WORKSPACE = 'research-eval';
+const EPISODE_TIMEOUT_MS = 900_000;
+
+/** The `mcpServers` block written into the scratch home's config.json — the
+ *  same file and the same key a user configures. Named once: the driver writes
+ *  it and the credential-free fixture test connects the identical entry. */
+const MCP_SERVERS = { [SERVER_NAME]: { command: 'bun', args: [SERVER_PATH] } } as const;
 
 const TIER: EvalTier = process.env.PROTEUS_EVAL_TIER === 'pro' ? 'pro' : 'flash';
 const LLM: LLMProviderConfig = TARGET === null
@@ -118,27 +142,30 @@ const PLANTED_FIELDS = [
 ] as const satisfies readonly (keyof typeof PLANTED)[];
 
 /**
- * The newest assistant message that parses to the reply contract.
+ * The newest assistant text that parses to the reply contract.
  *
- * Newest FIRST because `oneShot` arms the completion gate, whose confirming
- * turn may close after the answer — the report scored is the latest one the
- * agent stood behind. Fenced and bare JSON are both accepted: the contract is
- * the OBJECT, and a model that fences it has not refused the shape.
+ * The texts are the CLI's OWN `message_end` payloads, in turn order, so this
+ * judges what the shipped process actually printed rather than what a store
+ * happens to hold. Newest FIRST because the completion gate's confirming turn
+ * may close after the answer — the report scored is the latest one the agent
+ * stood behind. Fenced and bare JSON are both accepted: the contract is the
+ * OBJECT, and a model that fences it has not refused the shape.
  */
-function latestContractAnswer(db: Database): { answer: OkAnswer } | { refusal: string } {
-  const sql = makeSql(db);
-  const rows = sql<{ content: string }>`
-    SELECT content FROM messages WHERE role = 'assistant' ORDER BY created_at DESC, rowid DESC`;
-  if (rows.length === 0) return { refusal: 'the episode persisted no assistant message at all' };
-  for (const row of rows) {
-    for (const candidate of jsonCandidates(row.content)) {
+function latestContractAnswer(
+  texts: readonly string[],
+): { answer: OkAnswer } | { refusal: string } {
+  if (texts.length === 0) {
+    return { refusal: 'the episode printed no assistant message at all — the CLI produced no answer' };
+  }
+  for (const text of [...texts].reverse()) {
+    for (const candidate of jsonCandidates(text)) {
       const parsed = v.safeParse(OkAnswerSchema, candidate);
       if (parsed.success) return { answer: parsed.output };
     }
   }
   return {
     refusal: `no assistant message carried the {"status":"OK",...} reply shape over `
-      + `${String(rows.length)} message(s) — the agent did not follow the reply contract, `
+      + `${String(texts.length)} message(s) — the agent did not follow the reply contract, `
       + 'which is the finding, not a parsing accident',
   };
 }
@@ -245,60 +272,47 @@ describe('Research evals — a live retrieval from a controlled MCP source', () 
 
   liveTest('MEASURED: the agent reads the archive and its report carries the planted facts and the canary', async () => {
     mkdirSync(TRANSCRIPTS, { recursive: true });
-    const dbPath = join(TRANSCRIPTS, 'agent.db');
-    const db = new Database(dbPath);
-    db.exec('PRAGMA journal_mode = WAL');
-    opened.push(db);
-
-    // Birth, then OPEN — the two steps production takes, for the reason
-    // harness.ts states at length: the birth runtime registers no executors.
-    await createWorkspace(db, {
-      name: 'research-eval',
+    const home = join(TRANSCRIPTS, 'home');
+    const workspace = {
+      home, workspace: WORKSPACE, llm: LLM, mcpServers: MCP_SERVERS,
       purpose: 'A careful researcher who reads sources before reporting and never invents a figure.',
-      llm: LLM,
-    });
-    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    const { rt } = await openWorkspaceCLI(db, dbPath, { llm: LLM, hostRoot: null });
-    requireExecutorSurface(RESEARCH_TASK_ID, rt);
-    requireSandboxedExecutors(RESEARCH_TASK_ID, rt);
+    };
 
-    const session = new LocalAgentSession({
-      rt, db, model: liveChatModel(LLM), onEvent: () => {},
-      noAutoEvolve: !ARM.evolution, oneShot: true,
-    });
+    // Birth through the shipped CLI, with the archive already in the home's
+    // config.json: the child resolves its own MCP servers exactly as a user's
+    // process does. Created with the SAME child env it is exec'd with — `create`
+    // persists the resolved provider config and `exec` prefers it (see
+    // cli-driver.ts).
+    await createCliWorkspace(workspace);
 
     const startedAt = Date.now();
+    let outcome;
     try {
-      await session.connectMcp({ [SERVER_NAME]: { command: 'bun', args: [SERVER_PATH] } });
-      // BEFORE the model is driven, so a fixture that missed its startup budget
-      // costs nothing: the archive's tools are on this session's surface.
-      const surface = session.describeTools().map((tool) => tool.name);
-      expect(surface, 'the archive tools never reached the turn surface — nothing to research with')
-        .toEqual(expect.arrayContaining([SEARCH_TOOL, READ_TOOL]));
-
-      await session.send(RESEARCH_PROMPT);
-      await session.settleBackgroundWork();
+      outcome = await execCliTask({
+        ...workspace, prompt: RESEARCH_PROMPT,
+        noAutoEvolve: !ARM.evolution, timeoutMs: EPISODE_TIMEOUT_MS,
+      });
     } catch (error) {
       observations.push({
         taskId: RESEARCH_TASK_ID, repetition: 0, outcome: 'errored',
         reason: error instanceof Error ? error.message : String(error),
       });
       throw error;
-    } finally {
-      // Kills the archive child process; the workspace db stays open for the
-      // record and is closed in afterAll.
-      await session.end();
     }
     const ms = Date.now() - startedAt;
 
-    // What the episode COST, before any verdict can throw: a failed retrieval
-    // still burned what it burned.
+    // The child's own store, opened AFTER it exited: its ledgers are the second
+    // witness, and `recordLiveModelEpisode` is what puts the child's spend on
+    // this arm's spend file — the liveness assertion works over a subprocess
+    // because the usage lives in the workspace, not in this process.
+    const db = new Database(cliWorkspaceDbPath(home, WORKSPACE));
+    opened.push(db);
     recordLiveModelEpisode(makeSql(db));
     const totals = readLedgerTotals(db);
     const sourceCalls = totals.toolNames.filter((name) => name.startsWith(`mcp_${SERVER_NAME}_`));
 
     // EVERY verdict, computed before ANY assertion throws.
-    const parsed = latestContractAnswer(db);
+    const parsed = latestContractAnswer(outcome.assistantTexts);
     const fieldVerdicts = PLANTED_FIELDS.map((field) => ({
       field,
       expected: PLANTED[field],
@@ -342,6 +356,21 @@ describe('Research evals — a live retrieval from a controlled MCP source', () 
     console.log(`    verdict: ${detail}`);
 
     // ── Denominators first ─────────────────────────────────────────────────
+    // The CHILD before the agent: a killed or crashed process is a fact about
+    // the run, and reading a retrieval verdict off a torn episode would report
+    // an agent failure for a harness one.
+    expect(outcome.timedOut,
+      `the child \`proteus exec\` was killed at ${String(EPISODE_TIMEOUT_MS)}ms — a hung episode, `
+      + `not a wrong answer${outcome.stderr.trim() === '' ? '' : `; stderr: ${outcome.stderr.trim()}`}`)
+      .toBe(false);
+    expect(outcome.exitCode,
+      `the child \`proteus exec\` exited non-zero, so the episode never completed`
+      + `${outcome.stderr.trim() === '' ? '' : `; stderr: ${outcome.stderr.trim()}`}`)
+      .toBe(0);
+    expect(outcome.unparsedLines,
+      'the --json stream carried lines that are not JSON objects, so the event stream a caller '
+      + 'is told to parse is torn')
+      .toEqual([]);
     expect(totals.turns, 'the episode closed no turn — nothing ran').toBeGreaterThan(0);
     expect(sourceCalls.length,
       'the agent never called the controlled archive — whatever the answer says, it was not research'

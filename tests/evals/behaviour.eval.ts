@@ -189,6 +189,11 @@ let model: LanguageModel;
  * unexercised mechanism would be this library's own `ToolCallJudge` defect
  * inverted: instead of certifying inertness as success it would certify an
  * untouched mechanism as failure.
+ *
+ * It lives HERE, beside its one caller, rather than in a shared module. The
+ * research and optimization families score mechanically off their own episode
+ * and assert directly; they never build a judge panel, so a shared bridge would
+ * have exactly one consumer and one aspirational docstring.
  */
 function ledgerJudge(name: string) {
   return createJudge<EvalInput, BehaviourOutput>(
