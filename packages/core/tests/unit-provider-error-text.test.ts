@@ -9,6 +9,7 @@
 //
 // These pin both: the thrown message carries the provider's words, and the
 // turn does not write the payload to the console behind our back.
+import { stepCountIs } from 'ai';
 import { describe, test, expect, spyOn } from 'bun:test';
 import { APICallError, type LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import type { LanguageModel } from 'ai';
@@ -42,7 +43,7 @@ async function runToCompletion(model: LanguageModel): Promise<void> {
     system: 'sys',
     history: [{ role: 'user', content: 'go' }],
     tools: {},
-    maxSteps: 1,
+    stopWhen: stepCountIs(1),
   })) { /* drain */ }
 }
 

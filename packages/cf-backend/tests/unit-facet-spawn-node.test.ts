@@ -48,7 +48,7 @@ function nodeSpec(): NodeRunSpec {
     messages: [{ role: 'user', content: 'probe the parser' }],
     isolation: 'shared-origin-plane',
     home: '/workspace',
-    maxSteps: 8,
+
     canPropose: false,
   };
 }

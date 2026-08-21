@@ -55,7 +55,7 @@ import type { CostModel } from '../mcts/cost';
 import type { WorkMode } from '../prompting/surface';
 import { nanoid } from '../utils/nanoid';
 import { diagnostics, renderThrownChain } from '../obs/index';
-import { TURN_WALL_CLOCK_ENVELOPE_MS } from '../config';
+import { LLM_CALL_TIMEOUT_MS } from '../config';
 import {
   delegationDepthRefusal,
   delegationExhausted,
@@ -216,23 +216,26 @@ export const PEER_REPLY_TOPIC = 'peer_reply';
 
 /**
  * How long an `ask` (or a `hire scope=workspace`) waits for the addressed agent
- * to answer — its whole turn, not a completion.
+ * to answer — several of its model calls, not one.
  *
  * This was 120_000 default / 600_000 ceiling. 120_000 is the same number, on the
  * same workload, that `branch-process.ts` measured wrong: on the default model
  * every peer whose turn took 151-509 s answered a caller that had already been
  * told `no_reply`. Softer than the branch case — the real reply is not lost, it
  * lands later as an event — but the calling turn concludes on a false premise and
- * may route around a peer that was working. So the default IS the measured
- * envelope, and so is the ceiling: a caller asking for more than one turn's worth
- * of waiting is asking to hold its own turn open indefinitely.
+ * may route around a peer that was working.
  *
- * There is no floor. It was 5_000, which silently overrode a caller that asked
- * for one second, and nothing depends on it: a tiny timeout returns `no_reply`
- * with the note saying the answer arrives later as an event, which is honest.
- * Zero is the floor a duration has anyway.
+ * The ceiling rides the sanctioned per-call bound {@link LLM_CALL_TIMEOUT_MS}
+ * rather than any turn figure, because there is no turn figure any more (owner
+ * ruling, 2026-08-21): an ask is a synchronous convenience over another agent's
+ * work, and waiting longer than one LLM call's window belongs in the background
+ * lane, where the reply arrives as an event anyway. There is no floor. It was
+ * 5_000, which silently overrode a caller that asked for one second, and nothing
+ * depends on it: a tiny timeout returns `no_reply` with the note saying the
+ * answer arrives later as an event, which is honest. Zero is the floor a
+ * duration has anyway.
  */
-const ASK_TIMEOUT_CEILING_MS = TURN_WALL_CLOCK_ENVELOPE_MS;
+const ASK_TIMEOUT_CEILING_MS = LLM_CALL_TIMEOUT_MS;
 
 function askTimeoutMs(timeoutSeconds: number | undefined): number {
   if (timeoutSeconds === undefined || !Number.isFinite(timeoutSeconds)) return ASK_TIMEOUT_CEILING_MS;
@@ -1103,7 +1106,7 @@ function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
         description: 'For action=hire: subordinate (default) hires into THIS workspace; workspace creates (or reuses by name) a specialist workspace of its own, sends `message` to it, and awaits the result.',
       },
       topic: { type: 'string', maxLength: 80, description: 'Optional short label for a peer ask/send (default "message").' },
-      timeout_seconds: { type: 'number', description: `For a peer ask / hire scope=workspace: seconds to wait for the reply (default and max ${TURN_WALL_CLOCK_ENVELOPE_MS / 1000}, which is one measured agent turn). On timeout the reply still arrives later as an event.` },
+      timeout_seconds: { type: 'number', description: `For a peer ask / hire scope=workspace: seconds to wait for the reply (default and max ${LLM_CALL_TIMEOUT_MS / 1000}). On timeout the reply still arrives later as an event.` },
       event_id: { type: 'string', description: 'For action=reply: the agent message event id you were given.' },
     });
   }

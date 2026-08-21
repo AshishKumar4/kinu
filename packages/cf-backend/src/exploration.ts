@@ -46,7 +46,7 @@
 import { Agent, callable, type AgentContext, type SubAgentClass } from "agents";
 import { EXPLORATION_RPC_SURFACE, sealRpcSurface } from "./rpc-surface";
 import { generateText } from "ai";
-import { explorePrompt, formatInheritedContext, isWorkMode, normalizeUsage, reflectionPrompt, resolveMaxSteps } from "@kinu.run/core";
+import { explorePrompt, formatInheritedContext, isWorkMode, normalizeUsage, reflectionPrompt } from "@kinu.run/core";
 import type { OrchestratorAgent } from "./orchestrator";
 import {
   type CraftedTool,
@@ -351,9 +351,6 @@ export class ExplorationAgent extends Agent<Env> {
           tools: this.buildHeadTools(input, capture),
           capture,
           workspaceLayout: 'shared-workspace',
-          // The same envelope the parent turn runs to — ActorAgent.maxSteps reads
-          // this identical Worker var. A fork of a turn gets the turn's room.
-          maxSteps: resolveMaxSteps(this.env.KINU_MAX_STEPS),
           isAborted: () => this.headAborted,
           abortReason: () => this.headAbortReason,
         };

@@ -19,7 +19,8 @@
  */
 
 import { safeValidateTypes } from '@ai-sdk/provider-utils';
-import { streamText, stepCountIs, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
+import { streamText, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
+import { UNBOUNDED_STEPS } from '../chat';
 import { evidenceWindow } from '../prompts/evidence-window';
 import type { ModelCallSpend } from '../events/model-call';
 import { normalizeUsage } from '../usage';
@@ -44,8 +45,6 @@ export interface ScaffoldBridgeOpts {
   model: LanguageModel;
   /** The live tool surface, resolved per call so mid-turn rebuilds land. */
   tools: () => ToolSet;
-  /** Step budget when the scaffold names none (cf: 50; cli: resolveMaxSteps). */
-  defaultMaxSteps: number;
   /** Provider options for the scaffold's calls (cf spreads
    *  effortFor('scaffold_mutation')). `{}` when the backend adds none — safe
    *  to spread unconditionally. */
@@ -53,9 +52,8 @@ export interface ScaffoldBridgeOpts {
   /** Where this loop reports what it cost, and as whose spend — `scaffold` for a
    *  live or candidate scaffold driving its own inference. One field, both
    *  halves, like every other seam that hands its result to more than one kind of
-   *  caller. It runs up to `defaultMaxSteps` model calls per invocation and none
-   *  of them is a turn step, so before this it was the largest producer the panel
-   *  could not see. Absent means a scaffold's spend is attributed to nothing. */
+   *  caller, so a scaffold's spend is attributed to something. Absent means it is
+   *  attributed to nothing. */
   spend?: ModelCallSpend;
 }
 
@@ -70,7 +68,11 @@ export function createScaffoldLLMStream(opts: ScaffoldBridgeOpts): ScaffoldRunOp
       system: call.system,
       messages: call.messages,
       tools: toolSet,
-      stopWhen: stepCountIs(call.maxSteps ?? opts.defaultMaxSteps),
+      // NO STEP CAP here either: a scaffold's loop runs until its model stops
+      // calling tools, exactly like the live turn it may replace (owner ruling,
+      // 2026-08-21). Spend is governed by the mission ledger at the spend seam,
+      // not by a step count.
+      stopWhen: UNBOUNDED_STEPS,
       ...opts.streamOptions,
     });
     for await (const chunk of result.textStream) yield chunk;

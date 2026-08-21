@@ -47,7 +47,7 @@ import { createRecordingLogger } from '../src/obs/index';
 import { HeadJournal } from '../src/heads/journal';
 import { initHeadsTables } from '../src/heads/schema';
 import {
-  NODE_BUILTIN_TOOLS, NODE_WITHHELD_TOOLS, nodeWallClockEnvelopeMs, runNodeAgent,
+  NODE_BUILTIN_TOOLS, NODE_WITHHELD_TOOLS, runNodeAgent,
 } from '../src/strategy/node-agent';
 import type { NodeAgentDeps, NodeAgentInput, NodeRun } from '../src/strategy/node-agent';
 import { BUILTIN_TOOLS } from '../src/tools/registry';
@@ -202,10 +202,10 @@ function fixture(over: {
   };
   const deps: NodeAgentDeps = {
     rt, model: over.model, journal,
-    maxSteps: NODE_STEPS,
-    maxWallClockMs: nodeWallClockEnvelopeMs(NODE_STEPS),
+
+    maxWallClockMs: 60_000,
     logger: createRecordingLogger(),
-    stallTimeoutMs: STALL_MS,
+    callTimeoutMs: STALL_MS,
     backgroundPolicy: () => ({
       detachAfterMs: DETACH_MS, settleGraceMs: SETTLE_MS, wakesAfterTurn: true,
     }),

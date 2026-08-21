@@ -28,7 +28,7 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { scratchPath } from '@kinu.run/test-utils';
-import { tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
+import { stepCountIs, tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { z } from 'zod';
 import { runChat, INTERRUPTED_TURN, type ChatEvent } from '../src/chat';
 import { createChatModel } from '../src/llm';
@@ -133,7 +133,7 @@ async function drive({ model, acc, cutAfterSteps }: {
   try {
     for await (const ev of runChat({
       model, system: 'sys', history: [{ role: 'user', content: 'do the thing' }],
-      tools, maxSteps: 20, signal: abort.signal,
+      tools, stopWhen: stepCountIs(20), signal: abort.signal,
     })) {
       events.push(ev);
       if (ev.type === 'step-finish') {
@@ -191,7 +191,7 @@ describe('a completed step is durable at the moment it completes', () => {
       const abort = new AbortController();
       for await (const ev of runChat({
         model: provider.model, system: 'sys', history: [{ role: 'user', content: 'go' }],
-        tools, maxSteps: 20, signal: abort.signal,
+        tools, stopWhen: stepCountIs(20), signal: abort.signal,
       })) {
         if (ev.type !== 'step-finish') continue;
         acc.recordStep({ response: { messages: ev.responseMessages } });
@@ -340,7 +340,7 @@ describe('the durable record and the history the caller persists are one constru
       const cutTurn = async (): Promise<void> => {
         for await (const ev of runChat({
           model: provider.model, system: 'sys', history: [{ role: 'user', content: 'go' }],
-          tools, maxSteps: 20, signal: abort.signal,
+          tools, stopWhen: stepCountIs(20), signal: abort.signal,
         })) {
           if (ev.type === 'step-finish') acc.recordStep({ response: { messages: ev.responseMessages } });
           if (ev.type === 'tool-call') { calls += 1; if (calls === 2) abort.abort(); }

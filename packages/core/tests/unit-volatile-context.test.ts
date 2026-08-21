@@ -11,7 +11,7 @@
 //    per-turn tail message, never captured by the ledger's append gate.
 //  - fnv1a64 (the telemetry + fingerprint hash) changes only on real events.
 import { describe, test, expect } from 'bun:test';
-import { tool, type ModelMessage } from 'ai';
+import { stepCountIs, tool, type ModelMessage } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import * as v from 'valibot';
@@ -889,7 +889,7 @@ describe('the ledger + turn-local split through real runChat turns', () => {
         dynamicContext: { ledger, snapshot: () => state },
         turnLocal: tail ? [tail] : undefined,
         tools: {},
-        maxSteps: 1,
+        stopWhen: stepCountIs(1),
       })) {
         if (ev.type === 'done') for (const m of ev.responseMessages) history.push(m);
       }
@@ -931,7 +931,7 @@ describe('the ledger + turn-local split through real runChat turns', () => {
         history,
         dynamicContext: { ledger, snapshot: () => ({ factsBlock }) },
         tools: {},
-        maxSteps: 1,
+        stopWhen: stepCountIs(1),
       })) {
         if (ev.type === 'done') for (const m of ev.responseMessages) history.push(m);
       }
@@ -965,7 +965,7 @@ describe('the ledger + turn-local split through real runChat turns', () => {
         snapshot: () => ({ factsBlock: '- k = v' }),
       },
       tools: {},
-      maxSteps: 1,
+      stopWhen: stepCountIs(1),
     })) { /* drain */ }
 
     const texts = promptTexts(prompts[0]!);
@@ -1041,7 +1041,7 @@ describe('the per-step weave (the cache-coherence proof)', () => {
       history: [{ role: 'user', content: 'go' }],
       dynamicContext: { ledger, snapshot: () => ({ factsBlock: '- k = v' }) },
       tools: PING,
-      maxSteps: 5,
+      stopWhen: stepCountIs(5),
     })) { /* drain */ }
 
     expect(prompts).toHaveLength(3);
@@ -1075,7 +1075,7 @@ describe('the per-step weave (the cache-coherence proof)', () => {
       // Anthropic markers: the rolling tail breakpoints are what make the
       // prefix claim measurable rather than notional.
       cache: { providerId: 'anthropic', sessionKey: 'sess' },
-      maxSteps: 5,
+      stopWhen: stepCountIs(5),
     })) { /* drain */ }
 
     expect(prompts).toHaveLength(3);
@@ -1111,7 +1111,7 @@ describe('the per-step weave (the cache-coherence proof)', () => {
       dynamicContext: { ledger, snapshot: () => ({ factsBlock: `- step = ${step++}` }) },
       tools: PING,
       cache: { providerId: 'anthropic', sessionKey: 'sess' },
-      maxSteps: 5,
+      stopWhen: stepCountIs(5),
     })) { /* drain */ }
 
     for (const prompt of prompts) {

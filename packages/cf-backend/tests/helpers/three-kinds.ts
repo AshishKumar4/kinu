@@ -62,7 +62,6 @@ import {
   initHeadsTables,
   isBackgroundHandle,
   keepBuiltins,
-  nodeWallClockEnvelopeMs,
   runNodeAgent,
   runNodeLoop,
   NODE_BUILTIN_TOOLS,
@@ -405,7 +404,6 @@ export interface NodeFixtureOptions {
   readonly inherited?: NodeAgentInput['inherited'];
   readonly context?: NodeAgentInput['context'];
   readonly messages?: readonly ModelMessage[];
-  readonly maxSteps?: number;
   readonly host?: NodeAgentDeps['host'];
   /** A ready-made `execute_tools` entry, through the same dep the CF backend uses
    *  (`BuiltinToolDeps.preBuiltExecuteTool`). Supplied where an assertion needs a
@@ -453,10 +451,8 @@ export function nodeDeps(model: LanguageModel, opts?: NodeDepsOptions): NodeSeam
   // column measures a store no swarm ever has.
   initHeadsTables(rt.storage.execRaw, rt.storage.sql);
   const journal = new HeadJournal(rt.storage.sql);
-  const maxSteps = opts?.maxSteps ?? 4;
   const deps: NodeAgentDeps = {
-    rt, model, journal, maxSteps,
-    maxWallClockMs: nodeWallClockEnvelopeMs(maxSteps),
+    rt, model, journal,
     logger: createRecordingLogger(),
   };
   if (opts?.mission) deps.mission = missionScope(opts.mission);

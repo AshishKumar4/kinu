@@ -52,7 +52,6 @@ export interface NodeRunSpec {
   readonly messages: readonly ModelMessage[];
   readonly isolation: NodeIsolation;
   readonly home: string;
-  readonly maxSteps: number;
   /**
    * Whether a proposal could be granted at all — the BUILD-TIME half of the
    * arbitration rule. A request that can only ever be refused must not be

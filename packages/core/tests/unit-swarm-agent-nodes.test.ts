@@ -315,7 +315,7 @@ async function run(input: {
   const { model, script } = workingNode({ proposeAtDepth1: input.proposeAtDepth1 });
   const startedAt = Date.now();
   const result = await runSwarm(
-    { rt, model, mode: 'build', logger, maxSteps: 6 },
+    { rt, model, mode: 'build', logger, },
     resolved(input.depth, input.branches),
   );
   const wallClockMs = Date.now() - startedAt;

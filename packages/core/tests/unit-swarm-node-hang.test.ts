@@ -45,7 +45,7 @@
  * waiting, and now that a node can background work and await a wake, no elapsed-time
  * instrument can.
  *
- * WHAT IS UNDER TEST IS BOUNDEDNESS AND ATTRIBUTION, never a magnitude. `stallTimeoutMs`
+ * WHAT IS UNDER TEST IS BOUNDEDNESS AND ATTRIBUTION, never a magnitude. `callTimeoutMs`
  * is a fixture value here for the reason the judge-call timeout is one in its own suite: a
  * bound whose only value is five minutes cannot be exercised by a test that has to finish.
  * The relationship asserted — a step where nothing flows ends, names itself, and leaves no
@@ -65,7 +65,7 @@ import { createTestRuntime } from './helpers';
 import { createRecordingLogger } from '../src/obs/index';
 import type { RecordingLogger, Refusal } from '../src/obs/index';
 import { HeadJournal } from '../src/heads/journal';
-import { nodeWallClockEnvelopeMs, runNodeAgent } from '../src/strategy/node-agent';
+import { runNodeAgent } from '../src/strategy/node-agent';
 import type { NodeAgentDeps, NodeAgentInput } from '../src/strategy/node-agent';
 import { runSwarm } from '../src/strategy/swarm-run';
 import { resolveSwarm, swarmValidity } from '../src/strategy/swarm';
@@ -357,13 +357,13 @@ function nodeFixture(over?: { readonly host?: NodeAgentDeps['host'] }): NodeFixt
     rt,
     model: RAISING_MODEL,
     journal,
-    maxSteps: NODE_STEPS,
+
     // The node's own deadline, which neither arm here reaches: both providers fail or
     // stall on the first call, so nothing gets far enough to run a clock down. Declared
     // rather than omitted because a node with no deadline has no clock at all. Taken
     // from the shared derivation rather than re-multiplied here, so a change to how a
     // node's envelope is derived reaches this fixture instead of passing it by.
-    maxWallClockMs: nodeWallClockEnvelopeMs(NODE_STEPS),
+    maxWallClockMs: 60_000,
     logger: createRecordingLogger(),
   };
   if (over?.host !== undefined) deps.host = over.host;
@@ -441,7 +441,7 @@ const STALL_MS = 250;
 async function runWith(
   model: MockLanguageModelV3,
   call: ResolvedSwarm = resolved(),
-  stallTimeoutMs: number = STALL_MS,
+  callTimeoutMs: number = STALL_MS,
 ): Promise<SilentRun> {
   const { rt } = createTestRuntime();
   // A real file, so a node that reads before it answers reads something. The read is what
@@ -452,7 +452,7 @@ async function runWith(
   const logger = createRecordingLogger();
   const startedAt = Date.now();
   const result = await runSwarm(
-    { rt, model, mode: 'build', logger, maxSteps: NODE_STEPS, stallTimeoutMs },
+    { rt, model, mode: 'build', logger, callTimeoutMs },
     call,
   );
   const elapsedMs = Date.now() - startedAt;

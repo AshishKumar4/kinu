@@ -25,7 +25,7 @@
 // assembleTurnMessages) and the follow-up turn throws
 // AI_MissingToolResultsError, which is what test 1 and test 3 assert against.
 import { describe, test, expect } from 'bun:test';
-import { tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
+import { stepCountIs, tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { z } from 'zod';
 import { runChat, INTERRUPTED_TURN, type ChatEvent } from '../src/chat';
 import { INTERRUPTED_TOOL_RESULT } from '../src/prompting/interrupted-tool-calls';
@@ -105,7 +105,7 @@ async function interruptedTurn(
   const persisted = [...history];
   try {
     for await (const ev of runChat({
-      model, system: 'sys', history, tools, maxSteps: 20, signal: abort.signal,
+      model, system: 'sys', history, tools, stopWhen: stepCountIs(20), signal: abort.signal,
     })) {
       events.push(ev);
       if (ev.type === 'tool-call') abort.abort();
@@ -131,7 +131,7 @@ describe('a turn interrupted between a tool call and its result', () => {
       first.persisted.push({ role: 'user', content: 'what did you find?' });
       const replies: string[] = [];
       for await (const ev of runChat({
-        model: provider.model, system: 'sys', history: first.persisted, tools, maxSteps: 20,
+        model: provider.model, system: 'sys', history: first.persisted, tools, stopWhen: stepCountIs(20),
       })) {
         if (ev.type === 'done') replies.push(ev.text);
       }
@@ -177,7 +177,7 @@ describe('a turn interrupted between a tool call and its result', () => {
       let calls = 0;
       const cutTurn = async (): Promise<void> => {
         for await (const ev of runChat({
-          model: provider.model, system: 'sys', history: [...persisted], tools, maxSteps: 20,
+          model: provider.model, system: 'sys', history: [...persisted], tools, stopWhen: stepCountIs(20),
           signal: abort.signal,
         })) {
           if (ev.type === 'tool-call') { calls += 1; if (calls === 2) abort.abort(); }
@@ -218,7 +218,7 @@ describe('a history that already holds an orphaned call', () => {
     try {
       const replies: string[] = [];
       for await (const ev of runChat({
-        model: provider.model, system: 'sys', history: bricked, tools, maxSteps: 20,
+        model: provider.model, system: 'sys', history: bricked, tools, stopWhen: stepCountIs(20),
       })) {
         if (ev.type === 'done') replies.push(ev.text);
       }
@@ -234,7 +234,7 @@ describe('a history that already holds an orphaned call', () => {
     const before = JSON.stringify(bricked);
     try {
       for await (const _ of runChat({
-        model: provider.model, system: 'sys', history: bricked, tools, maxSteps: 20,
+        model: provider.model, system: 'sys', history: bricked, tools, stopWhen: stepCountIs(20),
       })) { /* drain */ }
       expect(JSON.stringify(bricked)).toBe(before);
     } finally {

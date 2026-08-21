@@ -73,7 +73,7 @@ import { fencedBlocks, readProposalCode } from '../execution/code-fence';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
 import { renderThrownChain, tolerate } from '../obs/index';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
-import { DEFAULT_CONFIG, TURN_WALL_CLOCK_ENVELOPE_MS } from '../config';
+import { DEFAULT_CONFIG, LLM_CALL_TIMEOUT_MS } from '../config';
 
 /** Score bands. Execution verdicts dominate: fail ceiling < pass floor, and
  *  prose confidence is capped below a passing branch with a median judge.
@@ -109,14 +109,14 @@ const PROSE_CONFIDENCE = 0.75;
  * dropped: it propagates to the engine's allSettled, which reports branch-failed
  * with the reason and scores the branch 0.
  *
- * So one completion gets the same envelope as the whole turn it is part of —
- * {@link TURN_WALL_CLOCK_ENVELOPE_MS}, whose 509 s longest measured turn is an
- * upper bound on any single call inside one. This was 120_000, which is under
- * every turn in that measurement and was never checked against a completion's
- * latency at all. Override per-evaluation via
+ * So one completion gets the sanctioned per-call bound — {@link LLM_CALL_TIMEOUT_MS},
+ * the owner-fixed silence window every LLM call runs under (a judge call IS an LLM
+ * call; there is no other wall clock in the tree to borrow). This was 120_000, which
+ * was under every turn in that measurement and was never checked against a
+ * completion's latency at all. Override per-evaluation via
  * EvaluateBranchOptions.judgeCallTimeoutMs.
  */
-export const DEFAULT_JUDGE_CALL_TIMEOUT_MS = TURN_WALL_CLOCK_ENVELOPE_MS;
+export const DEFAULT_JUDGE_CALL_TIMEOUT_MS = LLM_CALL_TIMEOUT_MS;
 
 /** `judge.complete`, bounded. Returns null when the provider does not answer
  *  within `timeoutMs` — the timeout is the ensemble's own envelope, so it is a

@@ -113,7 +113,7 @@
 import { generateText } from 'ai';
 import type { LanguageModel, ModelMessage } from 'ai';
 import * as v from 'valibot';
-import { DEFAULT_CONFIG, DEFAULT_MAX_STEPS } from '../config';
+import { DEFAULT_CONFIG } from '../config';
 import { diversityAngle, siblingAngles } from '../mcts/diversity';
 import { explorePrompt, type ExplorePrompt } from '../mcts/explore-prompt';
 import { initSearchTables } from '../mcts/schemas';
@@ -137,7 +137,7 @@ import { estimateTokens } from '../llm';
 import { contextWindowForModel } from '../context-window';
 import { HeadJournal } from '../heads/journal';
 import { initHeadsTables } from '../heads/schema';
-import { nodeWallClockEnvelopeMs, runNodeAgent } from './node-agent';
+import { runNodeAgent } from './node-agent';
 import type { NodeAgentDeps, NodeLoopHost } from './node-agent';
 import { SwarmBudget, type BranchDecision, type BranchGrant } from './swarm-budget';
 import { sha256Hex } from '../safety/argument-digest';
@@ -231,34 +231,26 @@ export interface SwarmRunDeps {
    */
   readonly logger?: Logger;
   /**
-   * The step envelope one agent node runs to. Defaults to the shipped turn
-   * envelope, because a node is the origin running on the same workspace and gets
-   * the same room — the same argument `HeadInferenceDeps.maxSteps` records for a
-   * fork. Ignored entirely by `unit:'thought'`, which has one step by construction.
-   */
-  readonly maxSteps?: number;
-  /**
-   * The wall clock ONE agent node runs to, observed at its step boundaries.
-   *
-   * Absent takes {@link nodeWallClockEnvelopeMs} of `maxSteps`, which is the only
-   * wall clock consistent with the step envelope above: a node cut before its step
-   * budget is a node the clock stopped for reasons that have nothing to do with its
-   * work, and a whole live swarm crowned nothing that way. Present is a caller
-   * declaring a tighter deadline, and a test declaring one small enough to prove a
-   * stall in under a second.
+   * A caller-declared wall clock for ONE agent node, observed at its step
+   * boundaries. OPTIONAL — there is no default clock over a node's work (owner
+   * ruling, 2026-08-21: no per-turn bounds). Absent, a node runs until its work
+   * is done; present is a search or a test declaring a tighter deadline. The
+   * derived-default this field used to fall back to was the product of a deleted
+   * step cap and a deleted turn envelope — the exact per-turn bounds the ruling
+   * removed.
    */
   readonly maxWallClockMs?: number;
   /**
-   * Stream-inactivity watchdog override for a node's turns, in ms.
+   * Per-call silence window override for a node's turns, in ms.
    *
-   * The bound is the turn loop's own {@link STALL_TIMEOUT_MS}, derived there against
-   * the 30 s background-detach threshold and firing only when NOTHING flows. Declared
-   * here for the reason `EvaluateBranchOptions.judgeCallTimeoutMs` is: a bound whose
-   * only value is five minutes cannot be exercised by a test that has to finish, so
-   * the arm proving a node cuts its own silent step would either not exist or take
-   * five minutes. What a caller overrides is the MAGNITUDE.
+   * The bound is the turn loop's own {@link LLM_CALL_TIMEOUT_MS} — the sanctioned
+   * per-call bound, firing only when NOTHING flows. Declared here for the reason
+   * `EvaluateBranchOptions.judgeCallTimeoutMs` is: a bound whose only value is ten
+   * minutes cannot be exercised by a test that has to finish, so the arm proving a
+   * node cuts its own silent step would either not exist or take ten minutes. What
+   * a caller overrides is the MAGNITUDE.
    */
-  readonly stallTimeoutMs?: number;
+  readonly callTimeoutMs?: number;
   /**
    * The mission ledger this run charges, per model call, as the calls happen.
    *
@@ -1168,7 +1160,7 @@ interface Expansion {
  * manufactures false diagnoses.
  *
  * What replaces it is not another bound. A node now runs on the shared turn loop, whose
- * stall watchdog ({@link STALL_TIMEOUT_MS}) cuts a step where NOTHING flows — no
+ * stall watchdog ({@link LLM_CALL_TIMEOUT_MS}) cuts a call where NOTHING flows — no
  * provider chunk, no tool result — from INSIDE the node, at a value derived against the
  * 30 s background-detach threshold rather than guessed at the level above. So a member
  * that cannot start now fails, with a named reason, and the barrier has a settled
@@ -2126,18 +2118,17 @@ export async function runSwarm(
    * wired nothing", and that distinction is what decides whether a node's surface holds a
    * tool at all.
    */
-  const nodeSteps = deps.maxSteps ?? DEFAULT_MAX_STEPS;
   const nodeDeps: NodeAgentDeps = {
     rt: deps.rt, model: deps.model, journal, logger: log,
-    maxSteps: nodeSteps,
-    // UNCONDITIONAL, unlike every optional below it: a node with no deadline of its own
-    // leaves the run's abort signal as the only wall clock, and that signal cuts a whole
-    // WAVE at once — which is how three nodes that were each inside their step budget
-    // were all stopped mid-flight and the search crowned nothing.
-    maxWallClockMs: deps.maxWallClockMs ?? nodeWallClockEnvelopeMs(nodeSteps),
+    // The wall clock is OPT-IN (deps.maxWallClockMs, wired below when declared):
+    // there is no default clock over a node's work any more. What bounds it lives
+    // inside every node turn — the per-call silence window and the mission
+    // governor — not in a product over deleted constants.
   };
   if (deps.signal !== undefined) nodeDeps.signal = deps.signal;
   if (deps.reportModelCall !== undefined) nodeDeps.reportModelCall = deps.reportModelCall;
+  if (deps.callTimeoutMs !== undefined) nodeDeps.callTimeoutMs = deps.callTimeoutMs;
+  if (deps.maxWallClockMs !== undefined) nodeDeps.maxWallClockMs = deps.maxWallClockMs;
   if (deps.mission !== undefined) nodeDeps.mission = deps.mission;
   if (deps.provisionHome !== undefined) nodeDeps.provisionHome = deps.provisionHome;
   // Only reached by an agent node: the toolless `thought` branch below never
@@ -2146,7 +2137,7 @@ export async function runSwarm(
   if (deps.host !== undefined) nodeDeps.host = deps.host;
   if (deps.executeTool !== undefined) nodeDeps.executeTool = deps.executeTool;
   if (deps.webSearch !== undefined) nodeDeps.webSearch = deps.webSearch;
-  if (deps.stallTimeoutMs !== undefined) nodeDeps.stallTimeoutMs = deps.stallTimeoutMs;
+  if (deps.callTimeoutMs !== undefined) nodeDeps.callTimeoutMs = deps.callTimeoutMs;
   // THE REPORT CONTRACT, wired exactly where an instrument exists. A judged run gets no
   // gate at all — an absent key, because a check that passed and a check that never
   // existed are different facts — and the ABSENCE is what makes a judged node's report

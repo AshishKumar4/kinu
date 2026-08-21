@@ -10,7 +10,6 @@ import type {
   BranchHandle, BranchExploration, BranchReflection, SpawnBranch, AbortBranch,
 } from '@kinu.run/core';
 import type { CraftedTool, LLMProviderConfig, WorkMode } from '@kinu.run/core';
-import { TURN_WALL_CLOCK_ENVELOPE_MS } from '@kinu.run/core';
 import { fork, type ChildProcess } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -20,27 +19,23 @@ import type { LocalProviderCredentials } from './model-resolver';
 const activeBranches = new Map<string, ChildProcess>();
 
 /**
- * Wall clock on ONE branch RPC — an `explore` is a whole agent turn, not a single
- * completion, so it gets {@link TURN_WALL_CLOCK_ENVELOPE_MS} and no number of its
- * own. That constant carries the measurement this bound was raised by; it used to
- * be restated here, which made this file the only place in the tree the numbers
- * lived.
+ * A branch RPC carries NO wall clock any more.
  *
- * It was 120_000, commented "2 minutes per exploration", and the damage was silent
- * rather than loud: every rollout hit the ceiling, the engine scores a failed
- * branch 0 (mcts/engine.ts:351), every node keeps the DDL's `value = 0`, and
- * `converge` then correctly refuses to crown a winner over a zero-signal tree and
- * abandons it (mcts/convergence.ts:96-113). A CLI search therefore returned no
- * winner and said only that nothing scored, which is why this was invisible until
- * a driven eval wired `onProgress` and read the branch failures.
+ * It carried core's former per-turn envelope — "an `explore` is a whole agent
+ * turn" — and that constant is gone by owner ruling (2026-08-21): no wall
+ * clock over a turn, only one LLM call's silence window plus its retries, which
+ * lives inside every branch worker's own loop and fails the explore from there.
  *
- * It stays a BOUND rather than becoming unbounded, because the judge seam
- * documents the failure it prevents: an upstream that accepts a request and never
- * answers leaves a promise pending inside a background fiber that carries no wall
- * clock, and the stall is permanent (mcts/evaluation.ts
- * DEFAULT_JUDGE_CALL_TIMEOUT_MS).
+ * What makes a clock unnecessary is wiring, not patience: the two ways a promise
+ * here could hang are both handled at their cause. A child that DIES has its
+ * pending RPCs rejected by the exit hook in `rpc` below (this file previously let
+ * them dangle — the clock was silently doing that job too). A child that LIVES but
+ * stops answering is bounded from inside its own turns, and its failure arrives as
+ * an error message over this same pipe. The residue — a live worker wedged outside
+ * every instrumented await — is the same residue every unbounded surface carries
+ * under the ruling, disclosed rather than papered over with a number nobody
+ * measured.
  */
-export const BRANCH_RPC_TIMEOUT_MS = TURN_WALL_CLOCK_ENVELOPE_MS;
 
 export interface BranchSpawnerConfig {
   /** The parent's default endpoint for bare ids — null when nothing derives
@@ -132,15 +127,22 @@ export function createBranchSpawner(
 
     const rpc = <T>(method: string, args: BranchRpcArgs): Promise<T> => {
       const { promise, resolve, reject } = Promise.withResolvers<T>();
-      const timeout = setTimeout(() => {
-        child.off('message', handler);
-        reject(new Error(`Branch RPC timeout: ${method}`));
-      }, BRANCH_RPC_TIMEOUT_MS);
-
+      let settled = false;
+      // A DEAD CHILD ENDS ITS PENDING RPCS. Without this a worker that exits
+      // mid-call leaves its caller's promise pending forever — the removed wall
+      // clock was silently doing this job, and this is the job: liveness at the
+      // cause, not timekeeping.
+      const onExit = () => {
+        if (settled) return;
+        settled = true;
+        reject(new Error(`Branch worker exited before answering ${method}`));
+      };
+      child.once('exit', onExit);
       const handler = (msg: { method: string; result?: T; error?: string }) => {
         if (msg.method === method) {
-          clearTimeout(timeout);
           child.off('message', handler);
+          child.off('exit', onExit);
+          settled = true;
           // Presence, not truthiness: an error whose message is empty is
           // still a failure, and treating it as success used to surface far
           // away as a TypeError inside the search loop.

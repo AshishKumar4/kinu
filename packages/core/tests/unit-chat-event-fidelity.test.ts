@@ -6,7 +6,7 @@
 // made a cold prefix indistinguishable from a provider that says nothing. These
 // tests pin all of it through the public runChat interface.
 import { describe, test, expect } from 'bun:test';
-import { tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
+import { stepCountIs, tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import { z } from 'zod';
@@ -67,7 +67,7 @@ async function collect(model: LanguageModel, tools: ToolSet, extensions?: Extens
     system: 'sys',
     history: [{ role: 'user', content: 'go' }] satisfies ModelMessage[],
     tools,
-    maxSteps: 3,
+    stopWhen: stepCountIs(3),
   };
   const stream = extensions === undefined
     ? runChat(request)

@@ -11,7 +11,7 @@
 // step_finish activity-log line. cacheRead/input is the cache-read ratio these
 // markers exist to raise.
 import { describe, test, expect } from 'bun:test';
-import { tool, type ToolSet } from 'ai';
+import { stepCountIs, tool, type ToolSet } from 'ai';
 import * as v from 'valibot';
 import { z } from 'zod';
 import {
@@ -164,7 +164,7 @@ describe('Anthropic cache breakpoints on the wire', () => {
       system: 'You are Kinu.',
       history: [...HISTORY],
       tools: chatTools(retention),
-      maxSteps: 3,
+      stopWhen: stepCountIs(3),
       cache: {
         providerId: 'anthropic', modelId: 'claude-opus-4-7', sessionKey: 'kinu-test',
         retention,

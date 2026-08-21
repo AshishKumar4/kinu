@@ -180,7 +180,6 @@ function emptyWorkspaceSession() {
  *  present-but-inert: deps construction captures them; using them throws. */
 function makeEnv(): Env {
   const bindings = {
-    KINU_MAX_STEPS: '10',
     LOADER: { get: () => { throw new Error('harness LOADER: codemode is not executable under bun'); } },
     NIMBUS_SESSION: emptyWorkspaceSession(),
     // The platform gateway is the harness's model provider: a parseable gateway

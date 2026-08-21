@@ -271,7 +271,6 @@ describe('the composition that was permanently refused is no longer refused', ()
         }),
       }),
       mode: 'build',
-      maxSteps: 2,
     }, (() => {
       const resolved = resolveSwarm(unitCall({ unit: { kind: 'answer' }, context: 'fresh' }));
       if ('reason' in resolved) throw new Error(`the fixture must resolve: ${resolved.error}`);

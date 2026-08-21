@@ -73,8 +73,6 @@ export interface ScaffoldDefaults {
 
 /** Full agent configuration */
 export interface AgentConfig {
-  /** Maximum agentic steps per LLM call (tool-call loops). Default 500. */
-  maxSteps: number;
   mcts: MCTSDefaults;
   heads: HeadsDefaults;
   craftStore: CraftStoreDefaults;
@@ -82,44 +80,33 @@ export interface AgentConfig {
 }
 
 /**
- * How long ONE agent turn's worth of model work is measured to take, and the
- * single bound every turn-scoped and model-call-scoped timeout in this
- * repository derives from.
+ * How long ONE LLM call may sit silent before it is dead: no provider chunk and
+ * no tool result for this long ends the call. This is the repository's ONLY
+ * wall-clock bound on model work, fixed by owner ruling (2026-08-21): the former
+ * per-turn envelope (600 s over a whole turn) and the per-turn step cap
+ * (`DEFAULT_MAX_STEPS` / `KINU_MAX_STEPS`) are gone — a turn runs until its work
+ * is done, and what bounds it from inside is one call's silence window, applied
+ * per call, with {@link LLM_CALL_MAX_RETRIES} retries of a call the window killed.
  *
- * Measured against `@cf/deepseek-ai/deepseek-v4-pro-0813` in one eval-tier run
- * (`20984b4e`): single turns of 151 s and 294 s, a five-turn conversation of
- * 509 s, eight algorithmic challenges averaging 92 s each, and one converged
- * MCTS terminal node of 437 s over five model calls. 509 s is the longest turn
- * on record here, so it is the FLOOR any such bound has to clear.
- *
- * The CEILING is `PLATFORM_CATALOG['do.alarm.wall_ms']` — a turn resumed from a
- * Durable Object alarm gets 15 minutes and no more — which is also the ceiling
- * the live suites give one search. A bound sitting AT the ceiling is killed by
- * the platform (or by the test runner) before it can report itself, so the
- * envelope sits inside the window rather than on its edge.
- *
- * Six separate timeouts were 120_000 with no measurement behind any of them,
- * which is under every turn measured above. On the CLI backend that made MCTS
- * silently non-functional: every rollout hit its ceiling, the engine scored each
- * failed branch 0, and `converge` then correctly refused to crown a winner over
- * a zero-signal tree — so a search returned no winner and said only that nothing
- * scored. Nothing was broken except the number.
- *
- * Re-measure rather than re-reason. A faster default model lowers the floor and
- * a slower one raises it, and neither is visible from this file.
- * `unit-turn-envelope.test.ts` holds the window — the 509 s floor and the 900 s
- * ceiling — and holds every bound that claims to derive from this to the same
- * value. Re-measuring means moving the figures above AND that test's floor; the
- * floor is not exported, because an exported measurement with no production reader
- * is a constant only its own test can reach.
+ * The window is SILENCE, never total duration: a call that keeps flowing is never
+ * cut, however long it runs. Measured call latencies sit far inside it (the
+ * longest single completion on record is a converged MCTS judge node at well
+ * under half the window), and the value itself is the owner's number, not a
+ * derived one.
  */
-export const TURN_WALL_CLOCK_ENVELOPE_MS = 600_000;
+export const LLM_CALL_TIMEOUT_MS = 600_000;
 
-export const DEFAULT_MAX_STEPS = 500;
+/**
+ * How many times a call the silence window killed is re-issued before the failure
+ * surfaces as a turn error. Owner ruling, paired with {@link LLM_CALL_TIMEOUT_MS}:
+ * up to 3 retries on a failed or timed-out call. Transport-level failures keep
+ * their own policies (the SDK's `maxRetries`, provider rate-limit pacing,
+ * overflow recovery) — this count governs the timeout path only.
+ */
+export const LLM_CALL_MAX_RETRIES = 3;
 
 /** Sensible defaults — all tunable, zero secrets */
 export const DEFAULT_CONFIG: AgentConfig = {
-  maxSteps: DEFAULT_MAX_STEPS,
   mcts: {
     budget: 5,
     branches: 3,
@@ -161,7 +148,6 @@ export const DEFAULT_CONFIG: AgentConfig = {
 export function mergeConfig(overrides?: Partial<AgentConfig>): AgentConfig {
   if (!overrides) return DEFAULT_CONFIG;
   return {
-    maxSteps: overrides.maxSteps ?? DEFAULT_CONFIG.maxSteps,
     mcts: { ...DEFAULT_CONFIG.mcts, ...overrides.mcts },
     heads: { ...DEFAULT_CONFIG.heads, ...overrides.heads },
     craftStore: { ...DEFAULT_CONFIG.craftStore, ...overrides.craftStore },
@@ -169,13 +155,3 @@ export function mergeConfig(overrides?: Partial<AgentConfig>): AgentConfig {
   };
 }
 
-/**
- * Resolve the step budget from a backend-supplied setting.
- *
- * The setting itself lives on the host — a shell variable on the CLI, a Worker
- * var on Cloudflare — so the backend reads it and passes it in. Core owns only
- * the interpretation, which is why there is one parser and not one per backend.
- */
-export function resolveMaxSteps(configured?: string | null): number {
-  return configured ? parseInt(configured, 10) : DEFAULT_MAX_STEPS;
-}

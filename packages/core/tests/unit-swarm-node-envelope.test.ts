@@ -22,10 +22,10 @@
 import { describe, expect, test } from 'bun:test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import { createTestRuntime } from './helpers';
+import { LLM_CALL_TIMEOUT_MS } from '../src/config';
 import { createRecordingLogger } from '../src/obs/index';
 import { HeadJournal } from '../src/heads/journal';
-import { DEFAULT_MAX_STEPS, TURN_WALL_CLOCK_ENVELOPE_MS } from '../src/config';
-import { nodeWallClockEnvelopeMs, runNodeAgent } from '../src/strategy/node-agent';
+import { runNodeAgent } from '../src/strategy/node-agent';
 import type { NodeRun } from '../src/strategy/node-agent';
 
 /** The three nodes of that run, exactly as it reported them. */
@@ -46,50 +46,15 @@ const MOST_STEPS_MEASURED = 26;
  *  a failing assertion rather than a paragraph. */
 const RUN_ENVELOPE_THAT_ABORTED_MS = 1_200_000;
 
-describe('a node envelope is derived from a step, not chosen', () => {
-  test('it is exactly the step cap times the measured turn envelope', () => {
-    // THE DERIVATION, as an equality rather than a magnitude. Editing either side
-    // without the other fails here.
-    expect(nodeWallClockEnvelopeMs(1)).toBe(TURN_WALL_CLOCK_ENVELOPE_MS);
-    expect(nodeWallClockEnvelopeMs(MOST_STEPS_MEASURED))
-      .toBe(MOST_STEPS_MEASURED * TURN_WALL_CLOCK_ENVELOPE_MS);
-    expect(nodeWallClockEnvelopeMs(DEFAULT_MAX_STEPS))
-      .toBe(DEFAULT_MAX_STEPS * TURN_WALL_CLOCK_ENVELOPE_MS);
-  });
-
-  test('the per-step term is not contradicted by any measured node', () => {
-    // The multiplicand has to be a bound on ONE step, so every measured node's mean
-    // step must fit inside it. The largest is 1_216_358 / 22 = 55_289 ms, which is
-    // under a ninth of the turn envelope — the same envelope this tree already gives
-    // one model call inside a turn.
-    const means = MEASURED_NODES.map((node) => Math.ceil(node.wallClockMs / node.steps));
-    expect(means).toEqual([55_289, 52_403, 51_417]);
-    for (const mean of means) expect(mean).toBeLessThan(TURN_WALL_CLOCK_ENVELOPE_MS);
-  });
-
-  test('a node total of ONE turn envelope is below a real node — which is why it scales', () => {
-    // The error in the other direction, named rather than implied. A node is many turns:
-    // pinning its whole clock at the turn envelope would have killed all three healthy
-    // nodes above, which is the 120_000-shaped defect with the sign flipped.
-    expect(TURN_WALL_CLOCK_ENVELOPE_MS).toBeLessThan(LONGEST_MEASURED_NODE_MS);
-    expect(nodeWallClockEnvelopeMs(MOST_STEPS_MEASURED))
-      .toBeGreaterThan(LONGEST_MEASURED_NODE_MS);
-  });
-
-  test('the envelope that aborted the run is below the one its own step cap implies', () => {
-    // THE DEFECT, as arithmetic. 1_200_000 is under the envelope 26 measured steps
-    // already imply, and far under the one the shipped step cap does — the two bounds
-    // were in different units and had never been compared, so the clock was measuring
-    // the step cap's shadow.
-    expect(RUN_ENVELOPE_THAT_ABORTED_MS)
-      .toBeLessThan(nodeWallClockEnvelopeMs(MOST_STEPS_MEASURED));
-    expect(RUN_ENVELOPE_THAT_ABORTED_MS)
-      .toBeLessThan(nodeWallClockEnvelopeMs(DEFAULT_MAX_STEPS));
-    // And it is below the work of every individual node it was asked to bound, which is
-    // the plainest statement of it: the bound was smaller than one node.
-    for (const node of MEASURED_NODES) {
-      expect(RUN_ENVELOPE_THAT_ABORTED_MS).toBeLessThan(node.wallClockMs);
-    }
+describe('a node has NO clock but the one its caller declares', () => {
+  test('the shipped deps carry no wall clock and no step cap', () => {
+    // The new contract, pinned at the type seam: NodeAgentDeps has neither
+    // maxSteps nor a required maxWallClockMs any more, and swarm-run wires
+    // maxWallClockMs ONLY when its caller declared one (owner ruling,
+    // 2026-08-21). What bounds a node lives inside its own turns — the per-call
+    // silence window (LLM_CALL_TIMEOUT_MS) and the mission governor.
+    const measuredMeanSteps = [55_289, 52_403, 51_417];
+    for (const mean of measuredMeanSteps) expect(mean).toBeLessThan(LLM_CALL_TIMEOUT_MS);
   });
 });
 
@@ -145,7 +110,6 @@ async function nodeUnderDeadline(
       },
     }),
     journal,
-    maxSteps: 40,
     maxWallClockMs,
     logger: createRecordingLogger(),
   });
