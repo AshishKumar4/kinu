@@ -728,13 +728,10 @@ export interface PromptSectionOptimizationResult {
  * SELECTED on. A section optimised against the turns it was selected on has
  * learned those turns, not the job.
  */
-export async function runPromptSectionGepaOptimization(
+async function runPromptSectionGepaOptimization(
   control: ScaffoldControl,
   opts: { sectionId: string; maxIterations?: number; evalSize?: number; maxMetricCalls?: number },
 ): Promise<PromptSectionOptimizationResult> {
-  if (!findPromptSectionTarget(opts.sectionId)) {
-    return { ok: false, error: `"${opts.sectionId}" is not a registered prompt section` };
-  }
   const evalSize = clampGepaEvalBudget(opts.evalSize ?? control.config.getGepaEvalBudget());
   const split = buildOutcomeEvalSplit(control.sql, evalSize);
   if (split.degeneracy === 'no_labeled_turns' || split.degeneracy === 'no_negatives') {
@@ -824,7 +821,7 @@ export interface PromptSectionTrialResult {
  * IS — no queue, because a section trial needs no live turn to ride on. It
  * needs a labeled turn, and the ledger already has those.
  */
-export async function runPromptSectionTrials(
+async function runPromptSectionTrials(
   control: ScaffoldControl,
   sectionId: string,
   opts?: { trials?: number },
@@ -898,7 +895,7 @@ export async function runPromptSectionTrials(
  * on the registry's own order, so two never-passed sections resolve the way
  * `PROMPT_SECTIONS` declares them.
  */
-export function nextPromptSectionTarget(sql: SqlExecutor): PromptSection<string> | null {
+function nextPromptSectionTarget(sql: SqlExecutor): PromptSection<string> | null {
   const lastPass = lastGepaRunPerTarget(sql, 'prompt_section');
   let next: PromptSection<string> | null = null;
   let nextAt = Number.POSITIVE_INFINITY;
