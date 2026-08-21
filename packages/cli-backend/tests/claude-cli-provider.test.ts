@@ -13,7 +13,7 @@ import {
 import { createLocalModelResolver } from '../src/model-resolver';
 import { createCLIRuntime } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
-import type { LanguageModelV2, LanguageModelV2CallOptions, LanguageModelV2Usage } from '@ai-sdk/provider';
+import type { LanguageModelV2, LanguageModelV2CallOptions, LanguageModelV2StreamPart, LanguageModelV2Usage } from '@ai-sdk/provider';
 import { scratchPath } from '@kinu.run/test-utils';
 
 // ─── stream-json fixtures (captured from the real `claude` binary) ───────────
@@ -457,5 +457,132 @@ describe('claude-cli provider — tool loop composition', () => {
     const pCall = calls.find((a) => a[0] === '-p')!;
     expect(pCall[pCall.indexOf('--model') + 1]).toBe('opus');
     session.end();
+  });
+});
+
+// ─── tool calls through the subscription ─────────────────────────────────────
+
+describe('claude-cli provider — tool calls', () => {
+  /** What a Claude model with no formal tool parameter emits when it wants to
+   *  act: its trained antml call block, inline in the text stream. */
+  const FC_BLOCK = [
+    'Let me look that up.',
+    '<function_calls>',
+    '<invoke name="lookup">',
+    '<parameter name="query">capital of France</parameter>',
+    '</invoke>',
+    '</function_calls>',
+  ].join('\n');
+
+  function modelDeps() { return { env: {}, getAuth: async () => null, hasCredential: async () => false }; }
+
+  test('a function_calls block becomes a real tool call the SDK executes', async () => {
+    const { spawn } = availableSpawn(FC_BLOCK);
+    const provider = createClaudeCliProvider({ spawn });
+    const model = provider.createModel('claude-opus-4-x', modelDeps());
+
+    let executed: { query: string } | undefined;
+    const result = await generateText({
+      model,
+      prompt: 'what is the capital of France?',
+      tools: {
+        lookup: tool({
+          description: 'look up a fact',
+          inputSchema: z.object({ query: z.string() }),
+          execute: async (args) => { executed = args; return 'Paris'; },
+        }),
+      },
+      stopWhen: stepCountIs(2),
+    });
+
+    expect(executed).toEqual({ query: 'capital of France' });
+    expect(result.text).not.toContain('<function_calls>');
+    expect(result.text).toContain('Let me look that up.');
+  });
+
+  test('doStream emits tool-call parts and finishes tool-calls', async () => {
+    const { spawn } = availableSpawn(FC_BLOCK);
+    const provider = createClaudeCliProvider({ spawn });
+    const model = provider.createModel('claude-opus-4-x', modelDeps());
+    const { stream } = await model.doStream({
+      prompt: [{ role: 'user', content: [{ type: 'text', text: 'q' }] }],
+      includeRawChunks: false,
+    });
+
+    const parts: LanguageModelV2StreamPart[] = [];
+    const reader = stream.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parts.push(value);
+    }
+
+    const calls = parts.filter((p) => p.type === 'tool-call');
+    expect(calls).toHaveLength(1);
+    if (calls[0].type !== 'tool-call') throw new Error('unreachable');
+    expect(calls[0].toolName).toBe('lookup');
+    expect(JSON.parse(calls[0].input)).toEqual({ query: 'capital of France' });
+    expect(calls[0].toolCallId.length).toBeGreaterThan(0);
+
+    const finish = parts.find((p) => p.type === 'finish');
+    if (!finish || finish.type !== 'finish') throw new Error('no finish part');
+    expect(finish.finishReason).toBe('tool-calls');
+
+    const deltas = parts.filter((p) => p.type === 'text-delta').map((p) => p.delta).join('');
+    expect(deltas).not.toContain('<function_calls>');
+    expect(deltas).toContain('Let me look that up.');
+  });
+
+  test('text after a closed block still streams, and two blocks yield two calls', async () => {
+    const twoBlocks = [
+      '<function_calls>',
+      '<invoke name="lookup">',
+      '<parameter name="query">first</parameter>',
+      '</invoke>',
+      '</function_calls>',
+      'Checking the second one now.',
+      '<function_calls>',
+      '<invoke name="lookup">',
+      '<parameter name="query">second</parameter>',
+      '</invoke>',
+      '</function_calls>',
+    ].join('\n');
+    const { spawn } = availableSpawn(twoBlocks);
+    const provider = createClaudeCliProvider({ spawn });
+    const model = provider.createModel('claude-opus-4-x', modelDeps());
+    const { stream } = await model.doStream({
+      prompt: [{ role: 'user', content: [{ type: 'text', text: 'q' }] }],
+      includeRawChunks: false,
+    });
+
+    const parts: LanguageModelV2StreamPart[] = [];
+    const reader = stream.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parts.push(value);
+    }
+
+    const calls = parts.filter((p) => p.type === 'tool-call');
+    expect(calls).toHaveLength(2);
+    const deltas = parts.filter((p) => p.type === 'text-delta').map((p) => p.delta).join('');
+    expect(deltas).toContain('Checking the second one now.');
+    expect(deltas).not.toContain('<function_calls>');
+  });
+
+  test('the prompt teaches the exact block format the parser reads', () => {
+    const built = buildClaudePrompt({
+      prompt: [{ role: 'user', content: [{ type: 'text', text: 'q' }] }],
+      tools: [{
+        type: 'function',
+        name: 'lookup',
+        description: 'look up a fact',
+        inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
+      }],
+    });
+    expect(built.system).toContain('lookup');
+    expect(built.system).toContain('<function_calls>');
+    expect(built.system).toContain('<invoke name="TOOL_NAME">');
+    expect(built.system).toContain('<parameter name="PARAM_NAME">');
   });
 });
