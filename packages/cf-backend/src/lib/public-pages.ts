@@ -150,7 +150,7 @@ const DEPLOY_STEPS: ReadonlyArray<readonly [num: string, title: string, body: st
  *  placeholder that reads as proof and cannot carry an invented one. */
 const SOCIAL_PROOF: ReadonlyArray<{ readonly quote: string; readonly name: string; readonly role: string }> = [];
 
-export function proofSection(entries: ReadonlyArray<{ readonly quote: string; readonly name: string; readonly role: string }>): string {
+function proofSection(entries: ReadonlyArray<{ readonly quote: string; readonly name: string; readonly role: string }>): string {
   return `<section class="section" id="proof">
     <p class="label"><b>§ 08</b>Who vouches for it</p>
     <h2 class="title">People who run it, in their own words.</h2>
@@ -169,7 +169,10 @@ function specRows(rows: ReadonlyArray<readonly [term: string, value: string]>): 
 
 /** The page as text. `install` is the command for THIS origin, so a preview
  *  deployment shows its own. */
-export function landingDocument(install: string): string {
+export function landingDocument(
+  install: string,
+  proof: ReadonlyArray<{ readonly quote: string; readonly name: string; readonly role: string }> = SOCIAL_PROOF,
+): string {
   const deployUrl = `https://deploy.workers.cloudflare.com/?url=${REPO_URL}`;
   const guideUrl = `${REPO_URL}/blob/main/docs/SELF-HOSTING.md`;
   return publicPage({
@@ -326,7 +329,7 @@ export function landingDocument(install: string): string {
       ])}
     </div>
   </section>
-  ${SOCIAL_PROOF.length > 0 ? proofSection(SOCIAL_PROOF) : ''}
+  ${proof.length > 0 ? proofSection(proof) : ''}
 </main>
 `,
     script: `${COPY_SCRIPT}\n${INSTALL_PANEL_SCRIPT}\n${TAGLINE_SCRIPT}\n${GROW_SCRIPT}\n${WEAVE_SCRIPT}\n${CLI_FILM_SCRIPT}`,

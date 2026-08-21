@@ -86,7 +86,7 @@ const membershipProven = new Set<string>();
 const MEMBERSHIP_PROOF_LIMIT = 10_000;
 
 /** Discard a membership proof; the next request re-reads the registry. */
-export function forgetWorkspaceMembership(userId: string, workspaceName: string): void {
+function forgetWorkspaceMembership(userId: string, workspaceName: string): void {
   membershipProven.delete(`${userId}\u0000${workspaceName}`);
 }
 
