@@ -25,6 +25,7 @@ import type {
 } from "../lib/protocol";
 import type { ExecutorInfo } from "../lib/executors";
 import { applySignalCard, parseSignalCardEvent, type SignalCard } from "../components/background-event";
+import type { InlineSteer } from "@kinu.run/core";
 import { tolerate } from "@kinu.run/core/obs";
 import {
   reconcilePreviewPorts,
@@ -79,12 +80,11 @@ export interface BranchRun {
  *  `queued` and `landed` are deliberately separate: "we took your words" and
  *  "the model is reading them" are different facts, and collapsing them is how
  *  a composer ends up silently swallowing input. A `returned` steer is removed
- *  outright — an interrupt dropped it and it goes back to the composer. */
-export interface SteerRun {
-  steerId: string;
-  text: string;
-  status: "queued" | "landed";
-}
+ *  outright — an interrupt dropped it and it goes back to the composer.
+ *
+ *  The same shape the durable rows resolve to, so the thread places a live
+ *  steer and the row it becomes through one function. See read-models/transcript.ts. */
+export type { InlineSteer as SteerRun } from "@kinu.run/core";
 
 /** A turn that ended without an answer, and whether the server is REPLAYING an
  *  older one rather than reporting this session's.
@@ -253,6 +253,9 @@ const SocketMessageSchema = v.variant("type", [
   v.object({
     type: v.literal("steer_status"), steerId: v.string(), text: v.string(),
     status: v.picklist(["queued", "landed", "returned"]),
+    /** Present on `landed`: the step of the running turn the model read it in,
+     *  which is where the thread draws it. */
+    atStep: v.optional(v.number()),
   }),
   v.looseObject({ type: v.literal("signal_card") }),
   v.object({ type: v.literal("plan_updated"), plan: PlanReviewSchema }),
@@ -575,7 +578,7 @@ export function useKinu(target?: string | KinuActorAddress) {
   // Mid-turn steers — what the user typed while the agent was working, shown in
   // the thread from the moment the server takes it until the durable user row
   // it becomes arrives in `messages`.
-  const [steerRuns, setSteerRuns] = useState<SteerRun[]>([]);
+  const [steerRuns, setSteerRuns] = useState<InlineSteer[]>([]);
   // Chat-turn error — the turn failed (provider error, stream break) and the
   // error card in the thread shows the honest body. Fed by BOTH channels a
   // terminal error can arrive on: useChat's live stream error, and the
@@ -883,10 +886,13 @@ export function useKinu(target?: string | KinuActorAddress) {
           // it back, so leaving a bubble in the thread would claim the agent
           // was given something it never saw.
           setSteerRuns((prev) => msg.status === "returned"
-            ? prev.filter((s) => s.steerId !== msg.steerId)
+            ? prev.filter((s) => s.id !== msg.steerId)
             : [
-              ...prev.filter((s) => s.steerId !== msg.steerId),
-              { steerId: msg.steerId, text: msg.text, status: msg.status },
+              ...prev.filter((s) => s.id !== msg.steerId),
+              {
+                id: msg.steerId, text: msg.text, state: msg.status,
+                atStep: msg.atStep ?? null,
+              },
             ]);
         } else if (msg.type === "signal_card") {
           const card = parseSignalCardEvent(msg);

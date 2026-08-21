@@ -71,7 +71,8 @@ import {
   type DynamicContext, type MissingCapability,
   // Public extension seam — the SAME host contract runChat drives on the CLI
   ExtensionHost, composePrepareStep,
-  UserSteerDrain, type UserSteer, type UserSteerOutcome, type SteerStatusEvent,
+  UserSteerDrain, STEER_METADATA_KEY, STEER_STEP_METADATA_KEY,
+  type UserSteer, type UserSteerOutcome, type SteerStatusEvent, type SteerStatusDetail,
   // Overflow recovery — the shared turn-failure policy (see turn-failure.ts)
   OVERFLOW_RETRY_EVENT,
   // Shared turn lifecycle (run bracket, prompt-token trigger, overflow apply)
@@ -911,7 +912,7 @@ export abstract class ActorAgent extends Think<Env> {
     const id = `steer-${nanoid(12)}`;
     const outcome = this.userSteer.accept({ id, text: body });
     if (outcome === 'mid-turn') {
-      this.broadcastSteerStatus('queued', id, body);
+      this.broadcastSteerStatus({ status: 'queued', steerId: id, text: body });
       this.logActivity('steer_queued', body.slice(0, 120));
     }
     return outcome;
@@ -929,16 +930,22 @@ export abstract class ActorAgent extends Think<Env> {
    *
    * The row keeps the steer's own id, so the live chip and the durable message
    * are the same thing to the chat pane and it renders one, never both.
+   *
+   * It also keeps `atStep`. A turn is ONE assistant message — Think persists it
+   * once, after the stream drains — so a row appended beside it sorts before or
+   * after the whole turn and nowhere else. The step index is the only durable
+   * statement of where inside the turn the model actually read this, and both
+   * the live splice and the reloaded transcript place the bubble from it.
    */
-  private recordLandedSteers(steers: readonly UserSteer[]): void {
+  private recordLandedSteers(steers: readonly UserSteer[], atStep: number): void {
     for (const steer of steers) {
-      if (steer.id) this.broadcastSteerStatus('landed', steer.id, steer.text);
+      if (steer.id) this.broadcastSteerStatus({ status: 'landed', steerId: steer.id, text: steer.text, atStep });
     }
     void this.addMessages(steers.map((steer) => ({
       id: steer.id ?? `steer-${nanoid(12)}`,
       role: 'user' as const,
       parts: [{ type: 'text' as const, text: steer.text }],
-      metadata: { kinuSteer: true },
+      metadata: { [STEER_METADATA_KEY]: true, [STEER_STEP_METADATA_KEY]: atStep },
     }))).catch((err) =>
       diagnostics.failure('steer.persist_failed', toKinuError({
         doing: 'persisting a mid-turn steer as a durable user row',
@@ -957,7 +964,7 @@ export abstract class ActorAgent extends Think<Env> {
   protected interruptUserSteers(): string[] {
     const dropped = this.userSteer.interrupt();
     for (const steer of dropped) {
-      if (steer.id) this.broadcastSteerStatus('returned', steer.id, steer.text);
+      if (steer.id) this.broadcastSteerStatus({ status: 'returned', steerId: steer.id, text: steer.text });
     }
     return dropped.map((steer) => steer.text);
   }
@@ -965,8 +972,8 @@ export abstract class ActorAgent extends Think<Env> {
   /** The one place a steer's lifecycle reaches connected surfaces. Written as a
    *  literal so the broadcast-wiring gate can see the channel it must prove has
    *  a consumer. */
-  private broadcastSteerStatus(status: SteerStatusEvent['status'], steerId: string, text: string): void {
-    this.broadcast(JSON.stringify({ type: 'steer_status', status, steerId, text } satisfies SteerStatusEvent));
+  private broadcastSteerStatus(detail: SteerStatusDetail): void {
+    this.broadcast(JSON.stringify({ type: 'steer_status', ...detail } satisfies SteerStatusEvent));
   }
 
   /**
@@ -1994,7 +2001,7 @@ export abstract class ActorAgent extends Think<Env> {
     // something the model has. Both halves of saying so happen here: the
     // durable user row (so the fork and every read model see it) and the
     // broadcast every open surface renders it from.
-    onDrain: (texts) => this.recordLandedSteers(texts),
+    onDrain: (steers, atStep) => this.recordLandedSteers(steers, atStep),
   });
 
   /** The public extension seam on the cloud backend — the SAME ExtensionHost

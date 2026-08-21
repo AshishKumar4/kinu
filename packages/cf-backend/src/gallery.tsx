@@ -87,7 +87,8 @@ import { AgentSurface } from "@/components/surfaces/AgentSurface";
 import { EmptyState, MarkdownContent } from "@/components/surfaces/shared";
 import { SubordinateTabs } from "@/components/SubordinateTabs";
 import { Modal } from "@/components/ui/Modal";
-import { MessageView } from "@/components/MessageView";
+import { MessageView, SteerBubble } from "@/components/MessageView";
+import { buildTranscript } from "@kinu.run/core";
 import { ConversationSkeleton, DeviceConsentCard, ChatErrorCard, EmptyConversation, HistoryBoundary } from "@/pages/WorkspacePage";
 import { usePagedScroll } from "@/hooks/use-paged-scroll";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
@@ -1829,6 +1830,91 @@ function ChatFrame() {
   );
 }
 
+/* The production shapes, as they reach the renderer.
+
+   `steer-a` is the durable row `recordLandedSteers` writes: the operator's own
+   words, and the step of the turn the model read them at.
+
+   `f8798675…` is the fork-interrupted notice, restored by the history walk
+   with its metadata — which is the half that was being dropped.
+
+   `sys-1` is the same class with no markers left at all: the read model reports
+   it `system` from the row's shape, and the renderer has to have somewhere to
+   put a role that is neither the operator nor the agent. */
+const STEERED_THREAD: UIMessage[] = [
+  msg({
+    id: "su1", role: "user", createdAt: NOW - 9 * 60e3,
+    parts: [{ type: "text", text: "Research the current state of the art in LLM post-training and tell me what fits flaxdiff." }],
+  }),
+  msg({
+    id: "steer-a", role: "user", createdAt: NOW - 6 * 60e3,
+    metadata: { kinuSteer: true, kinuSteerAtStep: 2 },
+    parts: [{ type: "text", text: "Can you actually use the research swarm for researching these topics and the project and other stuff?" }],
+  }),
+  msg({
+    id: "sa1", role: "assistant", createdAt: NOW - 5 * 60e3,
+    parts: [
+      { type: "step-start" },
+      { type: "reasoning", text: "Two decisions to make before searching: which post-training family actually ports to JAX, and whether flaxdiff's trainer can host an RL loop at all." },
+      { type: "tool-web", toolCallId: "s1", state: "output-available", input: { action: "search", query: "LLM post-training 2026 RLVR GRPO agentic" }, output: "12 results" },
+      { type: "step-start" },
+      { type: "tool-web", toolCallId: "s2", state: "output-available", input: { action: "fetch", url: "https://github.com/volcengine/verl" }, output: "…" },
+      { type: "text", text: "veRL is the dominant RL post-training stack, and Levanter has merged into the marin monorepo as the JAX pretraining path." },
+      { type: "step-start" },
+      { type: "reasoning", text: "The steer changes the shape of this: run it as a measured search rather than answering directly." },
+      { type: "tool-agents", toolCallId: "s3", state: "output-available", input: { action: "swarm", preset: "ideate", task: "Distinct designs for extending flaxdiff into a unified JAX platform" }, output: "5 candidates" },
+      { type: "text", text: "Kicked off an ideate swarm over the design space — five nodes, each returning a distinct approach rather than a ranked one." },
+    ],
+  }),
+  msg({
+    id: "f8798675-5e9a-4d13-aac2-293f4557f1c1", role: "system", createdAt: NOW - 4 * 60e3,
+    metadata: { kinuEvent: "fork_interrupted", runs: ["6xrijuf933p0jclpctw59"], heads: 9 },
+    parts: [{ type: "text", text: "9 head(s) across 1 fork run(s) were still marked running from an activation that has ended, so nothing is executing them and no report will arrive." }],
+  }),
+  msg({
+    id: "sys-1", role: "system", createdAt: NOW - 3 * 60e3,
+    parts: [{ type: "text", text: "The workspace was reactivated and its pending work re-driven." }],
+  }),
+];
+
+/* Two reports in one picture.
+
+   A message typed mid-turn (#210): the operator asked for the swarm while the
+   agent was four steps into a search, and the bubble was drawn under the whole
+   turn with the composer still promising to deliver it. Here it sits between
+   the work that preceded it and the work it changed, and the composer says
+   nothing because the model has it.
+
+   A harness row walked back out of storage (#222): the `fork_interrupted`
+   notice from `sunlit-stone-4a20`, restored by the history walk rather than
+   the socket. It kept its card, which it could not before — the walk dropped
+   the metadata the card is drawn from and the row landed in the owner's own
+   bubble. Beside it, the same row with no markers at all, reported `system` by
+   the read model: not the operator, not the agent. */
+function ChatSteerFrame() {
+  const thread = buildTranscript(STEERED_THREAD, [
+    { id: "steer-live", text: "actually, cap it at three heads", state: "queued", atStep: null },
+  ]);
+  return (
+    <div className="flex h-screen justify-center p-bg p-text">
+      <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
+        <GalleryChatTabs />
+        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8" data-gallery-chat>
+          {thread.entries.map(({ message, steers }, i) => (
+            <div key={message.id} data-chat-row={message.id}>
+              <MessageView
+                message={message} steers={steers}
+                isLast={i === thread.entries.length - 1} isStreaming={false} onFork={() => {}} />
+            </div>
+          ))}
+          {thread.trailing.map((steer) => <SteerBubble key={steer.id} steer={steer} />)}
+        </div>
+        <GalleryComposer />
+      </div>
+    </div>
+  );
+}
+
 /* What every new workspace opens on. The mission is shown as the standing
    brief it is — it is deliberately NOT sent as an opening message, so this
    state is the first thing anyone sees after creating a workspace. */
@@ -1943,12 +2029,14 @@ function ChatHistoryFrame() {
   const history = usePagedScroll<ChatHistoryEntry>({
     grows: "up",
     fetchPage: useCallback(async (cursor) => {
-      setCalls((prev) => [...prev, cursor.after]);
+      setCalls((prev) => [...prev, cursor?.after ?? "newest"]);
       const settled = Promise.withResolvers<void>();
       setTimeout(settled.resolve, HISTORY_LATENCY);
       await settled.promise;
       if (failed.current) { failed.current = false; throw new Error("stub failure"); }
-      const end = STORED_HISTORY.findIndex((row) => row.id === cursor.after);
+      const end = cursor === undefined
+        ? STORED_HISTORY.length
+        : STORED_HISTORY.findIndex((row) => row.id === cursor.after);
       const from = end < 0 ? STORED_HISTORY.length : end;
       const start = Math.max(0, from - HISTORY_PAGE);
       const items = STORED_HISTORY.slice(start, from);
@@ -3475,6 +3563,7 @@ async function mount() {
   else if (frame === "tabs") node = <TabsFrame />;
   else if (frame === "markdown") node = <MarkdownFrame />;
   else if (frame === "chat") node = <ChatFrame />;
+  else if (frame === "chatsteer") node = <ChatSteerFrame />;
   else if (frame === "chatempty") node = <ChatEmptyFrame />;
   else if (frame === "chatloading") node = <ChatLoadingFrame />;
   else if (frame === "composer") node = <ComposerFrame />;

@@ -284,6 +284,30 @@ describe('agent status', () => {
     db.close();
   });
 
+  test('a harness row walks back with the markers its card is drawn from', () => {
+    // The production row, verbatim in shape: sunlit-stone-4a20's
+    // `fork_interrupted` notice. Reporting it `system` is half the answer — the
+    // chat draws the CARD from `kinuEvent`, and a page that reports the role
+    // and drops the marker leaves the renderer with a system row it can say
+    // nothing about.
+    const { db, sql, execRaw } = workspace();
+    execRaw(SDK_SESSION_DDL);
+    seedTranscript(sql, [{
+      id: 'f8798675-5e9a-4d13-aac2-293f4557f1c1', role: 'user',
+      content: JSON.stringify({
+        parts: [{ type: 'text', text: '9 head(s) across 1 fork run(s)…' }],
+        metadata: { kinuEvent: 'fork_interrupted', heads: 9 },
+      }),
+    }]);
+
+    expect(getChatHistoryPage(sql).items).toEqual([{
+      id: 'f8798675-5e9a-4d13-aac2-293f4557f1c1', role: 'system',
+      content: '9 head(s) across 1 fork run(s)…', createdAt: '2026-01-01 00:00:00',
+      metadata: { kinuEvent: 'fork_interrupted', heads: 9 },
+    }]);
+    db.close();
+  });
+
   /**
    * The defect a bare `LIMIT` has: it answers a truncated window and a complete
    * one with the identical shape, so a caller cannot tell "that is all there

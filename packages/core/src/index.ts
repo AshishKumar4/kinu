@@ -731,9 +731,16 @@ export {
 // next step. Not a signal: it persists verbatim, comes back on interrupt, and
 // reruns as a user-origin turn (see user-steer.ts).
 export {
-  UserSteerDrain, steerUserMessage,
-  type UserSteer, type UserSteerOutcome, type SteerStatusEvent,
+  UserSteerDrain, steerUserMessage, STEER_METADATA_KEY, STEER_STEP_METADATA_KEY,
+  type UserSteer, type UserSteerOutcome, type SteerStatusEvent, type SteerStatusDetail,
 } from './orchestrator/user-steer';
+// Where a steer sits in the transcript — the read side of the same drain, and
+// pure, so both backends place it identically.
+export {
+  buildTranscript, segmentBySteers, steerRowStep,
+  type InlineSteer, type PlacedSteer, type Transcript, type TranscriptEntry,
+  type TranscriptPart, type TurnSegment,
+} from './read-models/transcript';
 
 // Schemas
 export { initSearchTables } from './mcts/schemas';

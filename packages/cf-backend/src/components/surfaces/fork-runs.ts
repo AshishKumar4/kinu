@@ -193,7 +193,7 @@ export function useExplorationCanvas(
   const first = lastValue(resource);
 
   const fetchPage = useCallback(
-    (cursor: SeekCursor) =>
+    (cursor: SeekCursor | undefined) =>
       rpc<Page<ExplorationCanvasRun>>("getExplorationCanvas", [{ cursor, limit: FORK_RUN_LIMIT }]),
     [rpc],
   );

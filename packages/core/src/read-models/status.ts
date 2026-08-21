@@ -17,6 +17,7 @@ import type { VFS, SqlExecutor } from '../types/primitives';
 import type { CraftedTool } from '../types/craft';
 import type { ReasoningEffort } from '../strategy/effort';
 import { transcriptRole, uiMessageRow, type StoredRowProjection } from '../utils/ui-message';
+import type { JsonObject } from '../utils/json';
 import { mapPage, seekPage, StaleCursorError, type Page, type PageRequest } from './page';
 
 /** Widest transcript page a surface may ask for. */
@@ -52,6 +53,16 @@ export interface ChatHistoryEntry {
   role: 'user' | 'assistant' | 'system';
   content: string;
   createdAt: string | number;
+  /**
+   * The stored row's own metadata, where the row carried any.
+   *
+   * The chat classifies a programmatic turn from written markers — the author
+   * stamp, the `kinuEvent` name — and for a row that arrived by this walk
+   * rather than over the socket, this is the only place those markers can come
+   * from. Dropping them is why a fork-interrupted notice kept its card while it
+   * was live and lost it the moment the operator scrolled back to it.
+   */
+  metadata?: JsonObject;
 }
 
 export interface ToolListEntry {
@@ -221,10 +232,12 @@ function chronological(
     // words. One place, because both the transcript and the mirror branch land
     // here — and one rule, the same `turnAuthor` the chat pane renders from.
     const { text, metadata } = project(row.content);
-    return [{
+    const entry: ChatHistoryEntry = {
       id: row.id, role: transcriptRole(row.id, role, metadata),
       content: text, createdAt: row.created_at,
-    }];
+    };
+    if (metadata !== undefined) entry.metadata = metadata;
+    return [entry];
   }).reverse());
 }
 

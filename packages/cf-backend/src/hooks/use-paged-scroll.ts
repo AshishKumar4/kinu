@@ -37,16 +37,40 @@ export interface PagedScrollOptions<Item> {
    * its presentation order and each page belongs below.
    */
   grows: "up" | "down";
-  fetchPage: (cursor: SeekCursor) => Promise<Page<Item>>;
+  fetchPage: (cursor: SeekCursor | undefined) => Promise<Page<Item>>;
   /**
    * Where to resume when nothing has been fetched yet.
    *
    * A thunk, not a value, because the chat's first anchor is the oldest message
    * the LIVE list is currently showing — seeded by the SDK's own `get-messages`
    * route, which issues no cursor — and that is not known until the socket has
-   * delivered it. Returning null means "nothing to page back from yet".
+   * delivered it.
+   *
+   * Three answers, because there are three states and collapsing two of them
+   * is a defect this codebase has already paid for: an anchor to walk back
+   * from, `"newest"` for "no anchor, read the newest page" — a live list that
+   * came up empty has no anchor, and the store may still hold the whole
+   * conversation — and `null` for "not ready, ask again". Answering `null` for
+   * both of the last two is how a chat draws an empty conversation over a full
+   * one and never asks.
    */
-  startFrom: () => SeekCursor | null;
+  startFrom: () => SeekCursor | "newest" | null;
+}
+
+/**
+ * Where a walk backwards over a live-seeded list begins.
+ *
+ * `anchor` is the oldest item the live list holds; `delivered` is whether the
+ * server has stated that list's contents at all. Three inputs, three answers,
+ * and the middle one is the whole point: a DELIVERED empty list is not a
+ * finished conversation, it is a live view that came up with nothing, and the
+ * store is the only thing that can say which.
+ */
+export function walkStart(
+  anchor: string | undefined, delivered: boolean,
+): SeekCursor | "newest" | null {
+  if (anchor !== undefined) return { after: anchor };
+  return delivered ? "newest" : null;
 }
 
 export function usePagedScroll<Item>({
@@ -68,10 +92,10 @@ export function usePagedScroll<Item>({
   const loadMore = useCallback(() => {
     if (inFlight.current || exhausted) return;
     const from = cursor.current ?? latest.current.startFrom();
-    if (!from) return;
+    if (from === null) return;
     inFlight.current = true;
     setLoading(true);
-    void latest.current.fetchPage(from).then((page) => {
+    void latest.current.fetchPage(from === "newest" ? undefined : from).then((page) => {
       setFetched((prev) => grows === "up" ? [...page.items, ...prev] : [...prev, ...page.items]);
       setError(null);
       if (page.status === "end") setExhausted(true);

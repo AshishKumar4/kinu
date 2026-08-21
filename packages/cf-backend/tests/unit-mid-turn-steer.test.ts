@@ -28,6 +28,7 @@ const SteerFrameSchema = v.object({
   status: v.picklist(['queued', 'landed', 'returned']),
   steerId: v.string(),
   text: v.string(),
+  atStep: v.optional(v.number()),
 });
 
 /** The `steer_status` frames the actor fanned out, in order. */
@@ -149,21 +150,29 @@ describe('a message typed while the agent is working', () => {
     expect(landed[1]!.steerId).toBe(landed[0]!.steerId);
   });
 
-  test('persists as a VERBATIM user row carrying the id the surface already has', async () => {
+  test('persists as a VERBATIM user row carrying the id and the step it landed in', async () => {
     const h = steerHarness();
     h.startTurn();
     await h.agent.steerTurn('also check staging');
-    stepMessages(h.agent, 0, HISTORY);
+    stepMessages(h.agent, 4, HISTORY);
 
     // A user row, not a card and not a rewritten summary: the walk-back fork
     // cuts the conversation at a user message, so a steer the model acted on
     // has to be one of those or the fork cannot reach it.
+    //
+    // And it records WHICH step. A turn is one assistant message, so without
+    // the index a reader can only be told the steer happened somewhere in it —
+    // which is how the operator's words ended up drawn under twenty steps of
+    // work that preceded them.
     expect(h.appended).toEqual([[{
       id: steerFrames(h.frames)[0]!.steerId,
       role: 'user',
       parts: [{ type: 'text', text: 'also check staging' }],
-      metadata: { kinuSteer: true },
+      metadata: { kinuSteer: true, kinuSteerAtStep: 4 },
     }]]);
+    // The live broadcast states the same position, so a surface watching the
+    // turn puts the bubble where the reload will.
+    expect(steerFrames(h.frames)[1]).toMatchObject({ status: 'landed', atStep: 4 });
   });
 
   test('two steers merge into one user message but persist as two rows', async () => {

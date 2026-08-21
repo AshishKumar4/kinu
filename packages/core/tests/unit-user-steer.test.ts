@@ -25,12 +25,12 @@ const HISTORY: ModelMessage[] = [
 ];
 
 function drain(inFlight = true) {
-  const drained: UserSteer[][] = [];
+  const drained: Array<{ steers: UserSteer[]; atStep: number }> = [];
   return {
     drained,
     drain: new UserSteerDrain({
       turnInFlight: () => inFlight,
-      onDrain: (steers) => drained.push([...steers]),
+      onDrain: (steers, atStep) => drained.push({ steers: [...steers], atStep }),
     }),
   };
 }
@@ -68,11 +68,27 @@ describe('UserSteerDrain — draining into the step', () => {
     ]);
     // One drain, both texts — and the drain is announced exactly once, because
     // "the model has it" is one event however many lines were typed.
-    expect(drained).toEqual([[
-      { text: 'also check staging' },
-      { text: 'and the logs' },
-    ]]);
+    expect(drained).toEqual([{
+      steers: [{ text: 'also check staging' }, { text: 'and the logs' }],
+      atStep: 0,
+    }]);
     expect(d.pendingCount).toBe(0);
+  });
+
+  test('the drain reports WHICH step it landed in, not just that it landed', () => {
+    // A turn is one assistant message, so "it landed" places a steer before or
+    // after the whole turn and nowhere else. The step index is the only thing
+    // that can put the operator's words where the model actually read them —
+    // which is the report: seen at the next step, drawn at the bottom.
+    const { drain: d, drained } = drain();
+    d.beginTurn();
+    d.prepareStep(step(0, HISTORY));
+    d.accept({ text: 'use the swarm for this' });
+    d.prepareStep(step(7, HISTORY));
+
+    expect(drained).toEqual([{
+      steers: [{ text: 'use the swarm for this' }], atStep: 7,
+    }]);
   });
 
   test('a step with nothing pending re-applies earlier steers at the index the model first saw them', () => {

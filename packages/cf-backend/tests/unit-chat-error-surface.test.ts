@@ -72,7 +72,10 @@ describe('WorkspacePage error-card wiring', () => {
     expect(card).toContain('var(--c-danger)');
     expect(card).not.toMatch(/text-red-\d|border-red-\d|bg-red-\d/);
 
-    const thread = page.slice(page.indexOf('{state.messages.map'), page.indexOf('Device-consent cards'));
+    // The workspace column's thread, bounded by the block after it. Anchored on
+    // the map that draws the transcript — `thread.entries` since the steer
+    // placement moved the list behind one builder.
+    const thread = page.slice(page.lastIndexOf('{thread.entries.map'), page.indexOf('Device-consent cards'));
     expect(thread).toContain('state.chatError && (');
     expect(thread).toContain('onRetry={state.retryLastMessage}');
     expect(thread).toContain('onDismiss={state.clearChatError}');

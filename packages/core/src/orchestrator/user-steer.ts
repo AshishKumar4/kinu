@@ -64,10 +64,16 @@ export interface UserSteerDrainDeps {
    *  `prepareStep` drains it. */
   readonly turnInFlight: () => boolean;
   /** Fired with the steers of a drain that actually happened — the moment they
-   *  stop being "queued" and become something the model has. A backend uses it
-   *  to persist the verbatim user rows and to tell every open surface they
-   *  landed. Never fired for an empty drain. */
-  readonly onDrain?: (steers: readonly UserSteer[]) => void;
+   *  stop being "queued" and become something the model has — and the index of
+   *  the step they were spliced into. A backend uses it to persist the verbatim
+   *  user rows and to tell every open surface they landed. Never fired for an
+   *  empty drain.
+   *
+   *  `atStep` is the whole difference between a transcript that shows a steer
+   *  where the model read it and one that shows it after the turn: a turn is
+   *  ONE assistant message, so a row appended beside it can only sort before or
+   *  after the entire thing. The step index is the position inside it. */
+  readonly onDrain?: (steers: readonly UserSteer[], atStep: number) => void;
 }
 
 export class UserSteerDrain {
@@ -106,7 +112,7 @@ export class UserSteerDrain {
     const rewritten = this.injections.drain(ctx, [{
       message: steerUserMessage(drained), texts: drained.map((steer) => steer.text),
     }]);
-    this.deps.onDrain?.(drained);
+    this.deps.onDrain?.(drained, ctx.stepNumber);
     return rewritten;
   }
 
@@ -162,15 +168,29 @@ export function steerUserMessage(drained: ReadonlyArray<UserSteer>): ModelMessag
   };
 }
 
+/** Metadata on the durable row a landed steer becomes: that it WAS a steer, so
+ *  the thread can say why a user bubble appears inside another turn's work. */
+export const STEER_METADATA_KEY = 'kinuSteer';
+
+/** The step index the steer was spliced into, on that same row — the durable
+ *  half of what {@link SteerStatusEvent} carries live, so the position a
+ *  reader sees during the turn is the position they see after a reload. */
+export const STEER_STEP_METADATA_KEY = 'kinuSteerAtStep';
+
+/** Where one steer is in its life, as a backend states it. */
+export type SteerStatusDetail =
+  /** Buffered — it lands at the running turn's next step boundary. */
+  | { status: 'queued'; steerId: string; text: string }
+  /** The model has it: it was spliced into the step `atStep` started. That
+   *  index is what lets a surface draw the steer inside the assistant message
+   *  the turn is still writing, rather than under it. */
+  | { status: 'landed'; steerId: string; text: string; atStep: number }
+  /** An interrupt dropped it before the model saw it — the composer takes it
+   *  back. */
+  | { status: 'returned'; steerId: string; text: string };
+
 /** The progress event both backends broadcast for a user steer, so every open
  *  surface shows the same thing: the text was accepted, then the model saw it,
  *  or an interrupt handed it back. Compatible with BroadcastEvent's
  *  `{ type: string; … }` shape. */
-export type SteerStatusEvent =
-  /** Buffered — it lands at the running turn's next step boundary. */
-  | { type: 'steer_status'; status: 'queued'; steerId: string; text: string }
-  /** The model has it: it was spliced into the step that just started. */
-  | { type: 'steer_status'; status: 'landed'; steerId: string; text: string }
-  /** An interrupt dropped it before the model saw it — the composer takes it
-   *  back. */
-  | { type: 'steer_status'; status: 'returned'; steerId: string; text: string };
+export type SteerStatusEvent = SteerStatusDetail & { type: 'steer_status' };
