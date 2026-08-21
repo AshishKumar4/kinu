@@ -29,7 +29,7 @@ import { createWorkersTracer } from "./obs/cf-tracer";
 import { createAgentTracing, renderThrownChain, type AgentTracing } from "@kinu.run/core/obs";
 import {
   createCompactionExtension, createSharedPrefixCompactor, createVfsTranscriptStore,
-  createCompactionStateStore, createModelSummarizer,
+  createCompactionStateStore, createModelSummarizer, COMPACTION_PRESETS,
   type CompactionStateStore, type Logger as CompactionLogger,
 } from "@kinu.run/compaction";
 import { Think, Session } from "@cloudflare/think";
@@ -1966,6 +1966,11 @@ export abstract class ActorAgent extends Think<Env> {
           summarize: createModelSummarizer(() => this.getModel(), undefined, {
             source: 'compaction', report: (report) => this.reportModelCall(report),
           }),
+          // The swarm half compacts on the same policy every other production
+          // path runs — the light preset — chosen here rather than inherited
+          // from an internal default, because this is the one construction
+          // site of the seam.
+          profile: COMPACTION_PRESETS.light,
         }),
       }),
       budget: this.budget,
