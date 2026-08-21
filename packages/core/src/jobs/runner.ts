@@ -473,9 +473,13 @@ export class BackgroundJobRunner {
    */
   private async settleBounded(jobId: string, epoch: number, why: string): Promise<void> {
     const job = this.deps.store.get(jobId);
-    const partial = job ? await this.harvestOf(job) : null;
+    const harvested = job ? await this.harvestOf(job) : { ok: true, value: null } as const;
     const now = Date.now();
-    if (partial === null) {
+    if (!harvested.ok) {
+      this.deps.store.fail(jobId, epoch, `${EVICTION_INTERRUPT_ERROR} — ${why}, and reading `
+        + `what it had produced failed: ${harvested.error}`, now);
+      this.deps.logActivity?.('bg_job_bounded', `${jobId} failed unreadable — ${why}`);
+    } else if (harvested.value === null) {
       this.deps.store.fail(jobId, epoch, `${EVICTION_INTERRUPT_ERROR} — ${why}, and it had `
         + 'produced no partial result to hand back', now);
       this.deps.logActivity?.('bg_job_bounded', `${jobId} failed empty — ${why}`);
@@ -485,7 +489,7 @@ export class BackgroundJobRunner {
         why: `This result is PARTIAL: ${why}. It is what the work had completed, not a `
           + 'finished answer — say so if you use it.',
         generation: (job?.resumeAttempts ?? 0) + 1,
-        result: partial,
+        result: harvested.value,
       }), now);
       this.deps.logActivity?.('bg_job_bounded', `${jobId} settled partial — ${why}`);
     }
@@ -493,26 +497,31 @@ export class BackgroundJobRunner {
     await this.wake(jobId);
   }
 
-  /** The harvest, or null — never a throw into the settle path. A harvester that
-   *  fails must not turn a job that could settle partially into one that cannot
-   *  settle at all. */
-  private async harvestOf(job: BackgroundJob): Promise<JsonValue | null> {
+  /** The harvest as a value that says which of the three cases held: something to
+   *  settle, genuinely nothing, or a read that failed. Never a throw into the
+   *  settle path — a harvester that fails must not turn a job that could settle
+   *  partially into one that cannot settle at all — and never a bare null, which
+   *  would report a blown read as "this search produced nothing". */
+  private async harvestOf(job: BackgroundJob): Promise<
+    { ok: true; value: JsonValue | null } | { ok: false; error: string }
+  > {
     const harvest = this.deps.harvest;
-    if (!harvest) return null;
+    if (!harvest) return { ok: true, value: null };
     const raw = this.deps.store.getInput(job.id);
     let input: JsonValue = null;
     if (raw !== null) {
       try { input = parseJsonValue(raw); }
       catch { input = raw; }
     }
-    try { return await harvest(job.kind, input); }
-    catch (err) {
+    try {
+      return { ok: true, value: await harvest(job.kind, input) };
+    } catch (err) {
       diagnostics.failure(
         'jobs.harvest_failed',
         toKinuError({ doing: 'read what a bounded-out background job already produced', cause: err, otherwise: 'io' }),
         { jobId: job.id, kind: job.kind },
       );
-      return null;
+      return { ok: false, error: renderThrownChain({ cause: err }) };
     }
   }
 
