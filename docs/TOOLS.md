@@ -617,12 +617,12 @@ refuses.
 
 ## experience — cross-workspace transfer
 
-The owner's workspaces each earn their own crafted tools, lessons and facts, and
-`experience` is the one path between them: `publish` offers what THIS workspace
-proved, `search` retrieves what the owner's others proved, `import` stages one
-entry here. `experience` is owner-facing. Sharing proven work across workspaces
-is a rare, deliberate, owner-shaped decision that an agent should not weigh on
-every turn, so it runs as the `experienceAction` RPC
+The owner's workspaces each earn their own crafted tools, lessons, facts and
+agent loop, and `experience` is the one path between them: `publish` offers what
+THIS workspace proved, `search` retrieves what the owner's others proved,
+`import` stages one entry here. `experience` is owner-facing. Sharing proven
+work across workspaces is a rare, deliberate, owner-shaped decision that an
+agent should not weigh on every turn, so it runs as the `experienceAction` RPC
 (`cf-backend/orchestrator.ts`), with no `experience` tool and no
 `experience.*` codemode namespace. The web UI drives it, over the same
 `runExperienceAction` dispatcher (`core/src/experience/actions.ts`). The
@@ -635,8 +635,13 @@ Nothing crosses on assertion. Publishing is gated on local evidence, which
 travels with the entry: a crafted tool needs real uses and a time-decayed score
 at or above the same bar its own injection filter uses, a lesson must be
 CORROBORATED (a provisional one is already kept out of this workspace's
-MEMORY.md), a fact must clear its confidence bar
-(`core/src/experience/publishable.ts`).
+MEMORY.md), a fact must clear its confidence bar, and a scaffold must be the
+LIVE version, promoted on a shadow record that still clears `decidePromotion`,
+with `DEFAULT_SHADOW_CONFIG.minTrials` graded turns served since promotion and
+no misevolution veto recorded in that window
+(`core/src/experience/publishable.ts`). The probation reuses the promotion
+gate's own number, so a loop crosses only after the user has lived through as
+many turns of it as the offline judge demanded trials.
 
 Importing reuses the two mechanisms the agent already trusts
 (`core/src/experience/imports.ts`):
@@ -651,6 +656,13 @@ Importing reuses the two mechanisms the agent already trusts
    outcome decides. Accepted promotes it into the CraftStore / MEMORY.md /
    `agent_facts`; corrected or frustrated discards it; an ungraded turn leaves it
    waiting. `EvolutionEngine.reviewTurn` is the only place this happens.
+
+An imported scaffold is the one kind whose adoption is not the end of its
+journey. Promoting it hands the code to `modifyScaffold`, the same 4-gate
+pipeline a locally-proposed mutation takes, so it lands as a PENDING version and
+the live `scaffold/agent.js` is untouched. This workspace's own shadow trials
+and promotion gate then decide whether it ever runs. There is no other route: an
+imported loop is a proposal here, whatever it proved elsewhere.
 
 ## CraftStore Lifecycle
 

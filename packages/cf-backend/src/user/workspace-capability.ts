@@ -106,9 +106,9 @@ export const WORKSPACE_CAPABILITY_TIERS = {
   'workspaces.rename_self': 'shared',
   /** Cross-owner peer admission grants. */
   'peers.grants': 'full',
-  /** Reading the owner's experience library — the crafts, lessons and facts
-   *  the owner's OTHER workspaces published. Hits carry their source workspace
-   *  and their content, so this is the same leak `workspaces.read` is. */
+  /** Reading the owner's experience library — the crafts, lessons, facts and
+   *  agent loops the owner's OTHER workspaces published. Hits carry their source
+   *  workspace and their content, so this is the same leak `workspaces.read` is. */
   'experience.read': 'full',
   /** Publishing into that library. A shared workspace's knowledge is partly
    *  a guest's; letting it flow into the owner's other workspaces would carry

@@ -232,8 +232,8 @@ export function initUserTables(sql: SqlExec, tagged: SqlExecutor): void {
 
   initReleaseTables(sql);
 
-  // The owner's cross-workspace experience library: crafts, lessons and facts
-  // one workspace proved and published for the owner's others to reuse.
+  // The owner's cross-workspace experience library: the crafts, lessons, facts
+  // and agent loops one workspace proved and published for the owner's others.
   initExperienceLibraryTables(sql);
 
 }

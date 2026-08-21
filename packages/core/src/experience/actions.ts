@@ -12,6 +12,7 @@
  */
 import * as v from 'valibot';
 import {
+  EXPERIENCE_KINDS,
   describePayload,
   type ExperienceEntry,
   type ExperienceKind,
@@ -19,6 +20,7 @@ import {
 } from './types';
 import { findPublishable, listPublishable } from './publishable';
 import { stageImport } from './imports';
+import { readScaffoldVersion } from '../scaffold/shadow';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { FactsStore } from '../memory/facts';
 import { renderThrownChain } from '../obs/index';
@@ -53,7 +55,7 @@ export interface ExperienceActionInput {
 
 const ExperienceActionInputSchema: v.GenericSchema<ExperienceActionInput> = v.object({
   action: v.picklist(EXPERIENCE_ACTIONS),
-  kind: v.optional(v.picklist(['craft', 'lesson', 'fact'])),
+  kind: v.optional(v.picklist(EXPERIENCE_KINDS)),
   key: v.optional(v.string()),
   query: v.optional(v.string()),
   limit: v.optional(v.number()),
@@ -94,17 +96,22 @@ export async function runExperienceAction<Input>(
     const subject = attempted.success ? `action "${attempted.output.action}"` : 'action';
     return { error: `${subject} is not available. Available: ${EXPERIENCE_ACTIONS.join(', ')}` };
   }
-  const sources = { sql: deps.rt.storage.sql, craftStore: deps.rt.craftStore, facts: deps.facts };
+  const sources = {
+    sql: deps.rt.storage.sql,
+    craftStore: deps.rt.craftStore,
+    facts: deps.facts,
+    readScaffoldVersion: (version: number) => readScaffoldVersion(deps.rt, version),
+  };
   try {
     switch (request.output.action) {
       case 'publish': {
         if (!request.output.kind || !request.output.key) {
-          const candidates = listPublishable(sources);
+          const candidates = await listPublishable(sources);
           return candidates.length === 0
-            ? { publishable: [], note: 'Nothing here has earned publication yet — a craft needs real uses, a lesson needs corroboration, a fact needs confidence.' }
+            ? { publishable: [], note: 'Nothing here has earned publication yet — a craft needs real uses, a lesson needs corroboration, a fact needs confidence, a scaffold needs a promotion it earned and graded turns behind it.' }
             : { publishable: candidates.map(summarizeCandidate), note: 'Publish one with kind + key.' };
         }
-        const candidate = findPublishable(sources, request.output.kind, request.output.key);
+        const candidate = await findPublishable(sources, request.output.kind, request.output.key);
         if ('refused' in candidate) return { error: candidate.refused };
         return { published: summarize(await deps.library.publish(candidate)) };
       }
@@ -130,7 +137,9 @@ export async function runExperienceAction<Input>(
           imported: summarize(entry),
           status: 'provisional',
           payload: entry.payload,
-          note: 'Staged provisionally: it becomes part of this workspace once this turn is accepted.',
+          note: entry.kind === 'scaffold'
+            ? 'Staged provisionally: once this turn is accepted it is PROPOSED as a pending scaffold version here, and it has to win this workspace\'s own shadow trial before it ever runs.'
+            : 'Staged provisionally: it becomes part of this workspace once this turn is accepted.',
         };
       }
     }

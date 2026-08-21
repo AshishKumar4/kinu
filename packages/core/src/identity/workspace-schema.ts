@@ -239,7 +239,7 @@ export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
   initMctsSearchTable(execRaw, sql);
   // Experience-import staging ledger, settled by the shared EvolutionEngine on
   // every root — not only where the `experience` tool happens to be wired.
-  initImportedExperienceTable(execRaw);
+  initImportedExperienceTable(execRaw, sql);
   initCompactionStateTables(execRaw, sql);
   // Typed key/value config: model spec, reasoning effort, always-active skills.
   initAgentConfigTable(execRaw);

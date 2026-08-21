@@ -24,11 +24,20 @@
  * is its assistant message, which does not exist while the turn is running. So
  * an unbound import attaches to the first turn this workspace actually grades
  * after it was staged, and that turn's verdict settles it.
+ *
+ * An imported SCAFFOLD is the one kind whose adoption is not the end of its
+ * journey, and deliberately so: "promoting" it hands the code to
+ * `modifyScaffold`, the same 4-gate pipeline a locally-proposed mutation goes
+ * through, so it lands as a PENDING version and the live `scaffold/agent.js` is
+ * untouched. This workspace's own shadow trials and promotion gate then decide
+ * whether it ever runs. There is no other route: an imported loop is a proposal
+ * here, whatever it proved elsewhere.
  */
 
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import { checkMisevolution, recordMisevolutionVeto } from '../scaffold/misevolution';
+import { modifyScaffold } from '../scaffold/modify';
 import { upsertCraftedTool } from '../craft/conflict';
 import { createFactsStore } from '../memory/facts';
 import { nanoid } from '../utils/nanoid';
@@ -62,8 +71,8 @@ export interface ImportedExperienceRow {
   corroboratedAt: number | null;
 }
 
-export function initImportedExperienceTable(execRaw: RawSqlExec): void {
-  execRaw(`CREATE TABLE IF NOT EXISTS imported_experience (
+export function initImportedExperienceTable(execRaw: RawSqlExec, sql: SqlExecutor): void {
+  const ddl = `(
     id               TEXT PRIMARY KEY,
     library_id       TEXT NOT NULL UNIQUE,
     kind             TEXT NOT NULL CHECK (kind IN (${EXPERIENCE_KINDS.map((k) => `'${k}'`).join(',')})),
@@ -76,7 +85,33 @@ export function initImportedExperienceTable(execRaw: RawSqlExec): void {
     turn_ids         TEXT NOT NULL,
     imported_at      INTEGER NOT NULL,
     corroborated_at  INTEGER
-  )`);
+  )`;
+  const storedDdl = (name: string): string | null =>
+    sql<{ sql: string }>`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ${name}`[0]?.sql
+      ?? null;
+
+  // Resume an interrupted rebuild first: a crash mid-sequence leaves the rows
+  // in `imported_experience_legacy` while a bare CREATE IF NOT EXISTS would
+  // silently start an empty ledger. Same discipline as turn_outcomes
+  // (evolution/outcomes.ts) — SQLite cannot ALTER a CHECK, so widening one is
+  // an in-place rebuild, and the resume branch makes it idempotent at every
+  // crash point.
+  if (storedDdl('imported_experience_legacy') !== null) {
+    execRaw(`CREATE TABLE IF NOT EXISTS imported_experience ${ddl}`);
+    execRaw(`INSERT OR IGNORE INTO imported_experience SELECT * FROM imported_experience_legacy`);
+    execRaw(`DROP TABLE imported_experience_legacy`);
+  }
+  execRaw(`CREATE TABLE IF NOT EXISTS imported_experience ${ddl}`);
+  // A table created before a kind was added carries a narrower CHECK that
+  // rejects the new kind's rows. The probe is the kind LIST itself, so adding a
+  // member is the only edit ever needed here.
+  const current = storedDdl('imported_experience');
+  if (current !== null && EXPERIENCE_KINDS.some((kind) => !current.includes(`'${kind}'`))) {
+    execRaw(`ALTER TABLE imported_experience RENAME TO imported_experience_legacy`);
+    execRaw(`CREATE TABLE imported_experience ${ddl}`);
+    execRaw(`INSERT OR IGNORE INTO imported_experience SELECT * FROM imported_experience_legacy`);
+    execRaw(`DROP TABLE imported_experience_legacy`);
+  }
 }
 
 interface RawImportRow {
@@ -219,7 +254,16 @@ export async function settleImportsForTurn(
  * public write path this workspace's own experience takes, so an imported
  * artifact is indistinguishable from a home-grown one once adopted (and, for a
  * craft, passes the misevolution gate a second time inside upsertCraftedTool).
- * Returns false only when the craft conflict gate declined the write.
+ *
+ * A scaffold's "store" is the version archive, entered the only way anything
+ * enters it: `modifyScaffold`. That leaves a PENDING version and the live loop
+ * untouched, so adoption here means "this workspace will now try it", not "this
+ * workspace now runs it".
+ *
+ * Returns false when the receiving write path declined — the craft conflict
+ * gate, or any of modifyScaffold's four gates (a rollout already in flight, a
+ * rationale too short, its own misevolution veto). A declined import is
+ * discarded rather than left staged, and the library entry stays importable.
  */
 async function promoteImport(rt: AgentRuntime, row: ImportedExperienceRow): Promise<boolean> {
   const from = `imported from workspace "${row.sourceWorkspace}" (${row.evidence})`;
@@ -248,6 +292,17 @@ async function promoteImport(rt: AgentRuntime, row: ImportedExperienceRow): Prom
         source: `experience:${row.sourceWorkspace}`,
       });
       return true;
+    }
+    case 'scaffold': {
+      // Provenance in the rationale, because that is what scaffold_versions
+      // stores, the day log records and the Evolution Changelog shows the
+      // operator — the same place a local proposal states its case.
+      const proposed = await modifyScaffold(
+        rt,
+        `Imported scaffold, ${from}. Its rationale there: ${row.payload.rationale}`,
+        row.payload.code,
+      );
+      return proposed.ok;
     }
   }
 }
