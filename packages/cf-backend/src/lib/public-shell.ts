@@ -367,6 +367,7 @@ font-size:17px;font-weight:500;letter-spacing:-0.015em}
 .nav{display:flex;align-items:center;gap:4px}
 .nav .quiet{padding:6px 10px;color:var(--c-text-2);border-radius:var(--r-control);
 font-family:var(--font-mono);font-size:11.5px;letter-spacing:0.07em;text-transform:uppercase}
+.nav .quiet b{color:var(--c-accent-fg);font-weight:inherit;margin-right:7px}
 .nav .quiet:hover{color:var(--c-text);background:var(--c-fill)}
 .icon{display:inline-flex;padding:7px;color:var(--c-text-3);border-radius:var(--r-control)}
 .icon:hover{color:var(--c-text);background:var(--c-fill)}
@@ -388,8 +389,8 @@ font-size:11.5px;letter-spacing:0.09em;text-transform:uppercase}
 .label b{color:var(--c-accent-fg);font-weight:inherit;margin-right:10px}
 .anno{color:var(--c-text-3);opacity:0.85}
 
-h1{margin:16px 0 0;font-family:var(--font-display);font-size:clamp(37px,5.6vw,66px);
-line-height:1.02;font-weight:500;letter-spacing:-0.022em;max-width:22ch}
+h1{margin:16px 0 0;font-family:var(--font-display);font-size:clamp(36px,5.4vw,62px);
+line-height:1.02;font-weight:500;letter-spacing:-0.026em;max-width:22ch}
 h2{margin:0;font-family:var(--font-display);font-size:19px;font-weight:500;letter-spacing:-0.012em}
 .lede{margin:22px 0 0;max-width:52ch;color:var(--c-text-2);font-size:17px;line-height:1.62}
 .dim{color:var(--c-text-3);font-size:13px;line-height:1.55}

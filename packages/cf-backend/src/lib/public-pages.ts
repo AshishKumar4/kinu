@@ -12,6 +12,8 @@
  */
 
 import { escapeHtml } from './http';
+import { CLI_FILM_SCRIPT, cliFilmFigure } from './cli-film';
+import { WEAVE_SCRIPT, weaveLayer } from './hero-weave';
 import {
   COPY_SCRIPT, GITHUB_ICON, HERO_FACTS, REPO_URL, heroFigure, mark, publicFooter, publicPage,
 } from './public-shell';
@@ -158,12 +160,13 @@ export function landingDocument(install: string): string {
     styles: LANDING_CSS,
     nav: [
       `<a class="icon" href="${REPO_URL}" target="_blank" rel="noopener noreferrer" aria-label="Kinu on GitHub">${GITHUB_ICON}</a>`,
-      '<a class="quiet" href="#deploy">Deploy your own</a>',
-      '<a class="quiet" href="#install" data-install-toggle aria-expanded="false">Install CLI</a>',
+      '<a class="quiet" href="#deploy"><b>06</b>Deploy your own</a>',
+      '<a class="quiet" href="#install" data-install-toggle aria-expanded="false"><b>01</b>Install CLI</a>',
       '<a class="btn solid" href="/login">Sign in</a>',
     ].join(''),
     body: `<main>
   <section class="hero">
+    ${weaveLayer()}
     <div class="say">
       <p class="eyebrow">The self-evolving agent platform</p>
       <h1 class="taglines" data-taglines>
@@ -226,6 +229,7 @@ export function landingDocument(install: string): string {
     <div class="grid two">
       ${CLIENTS.map(([title, body]) => `<div class="cell"><h2>${title}</h2><p>${body}</p></div>`).join('\n      ')}
     </div>
+    ${cliFilmFigure()}
     <p class="dim foot">Schedules, webhooks, and finished background jobs start turns the same way.</p>
   </section>
 
@@ -248,6 +252,11 @@ export function landingDocument(install: string): string {
         ['Records', '<code>exploration_records</code>, per objective'],
       ])}
     </div>
+    <figure class="film">
+      <div class="anno ruled"><span>Web · swarm run · design gallery, fixture transport</span><span>home · agent · search · work</span></div>
+      <img class="webfilm" src="/assets/kinu-film-web.webp" width="1280" height="800" loading="lazy" decoding="async"
+        alt="Four recorded views of the Kinu web app: a new workspace's mission, an agent mid-task, the search explorer, and the work queue." />
+    </figure>
   </section>
 
   <section class="section">
@@ -302,15 +311,26 @@ export function landingDocument(install: string): string {
 </main>
 `,
     footer: publicFooter(),
-    script: `${COPY_SCRIPT}\n${INSTALL_PANEL_SCRIPT}\n${TAGLINE_SCRIPT}\n${GROW_SCRIPT}`,
+    script: `${COPY_SCRIPT}\n${INSTALL_PANEL_SCRIPT}\n${TAGLINE_SCRIPT}\n${GROW_SCRIPT}\n${WEAVE_SCRIPT}\n${CLI_FILM_SCRIPT}`,
   });
 }
 
 const LANDING_CSS = `
 main{display:flex;flex-direction:column}
-.hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.04fr);
+.hero{position:relative;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.04fr);
 gap:calc(var(--gutter) * 1.05);align-items:center;
 padding:calc(var(--gutter) * 1.5) var(--gutter);border-bottom:var(--rule)}
+/* The silk. A ground layer under the hero's two columns: the SVG still is
+   what the server sends, the canvas is the same field once the script wakes
+   it, and the cross-fade between them is the only transition. Content sits
+   above on its own stacking level, and the layer takes no events. */
+.hero>.say,.hero>.show{position:relative;z-index:1}
+.weave{position:absolute;inset:0;overflow:hidden;pointer-events:none}
+.weave svg,.weave canvas{position:absolute;inset:0;width:100%;height:100%}
+.weave canvas{opacity:0;transition:opacity 1600ms var(--ease)}
+.weave[data-live] canvas{opacity:1}
+.weave[data-live] .weave-still{opacity:0;transition:opacity 1600ms var(--ease)}
+@media (prefers-reduced-motion:reduce){.weave canvas{display:none}}
 h1 em{font-style:italic}
 /* The rotating headline. Every variant is stacked on one grid cell, so the
    hero is sized by the tallest line once and never reflows on a swap. A
@@ -364,6 +384,27 @@ border-bottom:var(--rule)}
 .tree[data-growing] .e,.tree[data-growing] .n{opacity:0}
 .tree[data-growing] [data-shown]{opacity:1;transition:opacity 300ms var(--ease)}
 
+/* The films. Both carry the hero's own annotation rails. The terminal player
+   is text: it ships finished, plays back on approach, and every line of it is
+   held against the recording by the gate. The web film is one lazy animated
+   image below the fold, sized in the markup so its arrival shifts nothing. */
+.film{margin:26px 0 0}
+.term{margin:0;padding:16px 18px;max-height:430px;overflow-y:auto;
+border:1px solid var(--c-input-border);border-radius:var(--r-row);background:var(--c-recessed);
+font-family:var(--font-mono);font-size:12px;line-height:1.75;
+white-space:pre-wrap;overflow-wrap:anywhere}
+.term .line{display:block}
+.term .line[data-kind="cmd"] b{color:var(--c-text-3);font-weight:inherit}
+.term .line[data-kind="call"]{margin-top:12px;color:var(--c-text-2)}
+.term .line[data-kind="call"] b{color:var(--c-accent-fg);font-weight:inherit}
+.term .line[data-kind="why"]{color:var(--c-text-3)}
+.term .line[data-kind="out"]{margin-top:4px;color:var(--c-text-2)}
+.term .line[data-kind="text"]{margin-top:10px}
+.term[data-playing] .line:not([data-shown]){display:none}
+.term[data-playing] [data-typed]::after{content:"▋";color:var(--c-accent-fg)}
+.webfilm{display:block;width:100%;height:auto;margin-top:14px;
+border:1px solid var(--c-input-border);border-radius:var(--r-row)}
+
 @media (max-width:880px){
 .hero{grid-template-columns:1fr;gap:32px;padding:32px var(--gutter) 36px}
 .actions{margin-top:24px}
@@ -373,6 +414,7 @@ border-bottom:var(--rule)}
 .spec dd{text-align:left}
 .spec>div{flex-direction:column;gap:5px}
 .tree{padding:16px 0}
+.term{max-height:360px;font-size:11px}
 }
 `;
 
