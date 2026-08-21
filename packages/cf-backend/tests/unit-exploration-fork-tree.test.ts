@@ -145,3 +145,92 @@ describe('explorationForkTree — a running swarm', () => {
     expect(explorationForkTree({ tree: [], head: null })).toBeNull();
   });
 });
+
+/**
+ * THE RUN AS PRODUCTION HELD IT, at the moment the owner's canvas drew one
+ * vertex at 0%.
+ *
+ * Root `2rye1eyny1efm9583sqye`: one `search_nodes` root row, `mcts_search_runs`
+ * status `running` at epoch 2, and FIFTEEN `head_journal` rows over three spawn
+ * generations — 2 completed carrying real summaries, 5 running with `lastStepAt`
+ * advancing past `spawnedAt`, 2 errored, 6 aborted. Each earlier generation was
+ * retired when its activation died and re-spawned from zero, which is why one
+ * search holds fifteen rows for five live nodes.
+ *
+ * A harder case than a clean wave in two ways, and both are the point. The two
+ * FINISHED candidates were shadowed as completely as the live ones, so the run
+ * had answers a reader could not reach. And six of the fifteen rows are dead:
+ * drawing those as live would replace one silence with a worse lie, so the census
+ * is asserted status by status rather than only by count.
+ */
+const GENERATIONS = [
+  { spawnedAt: 1_787_284_776_338, ids: ['a1', 'a2', 'a3', 'a4', 'a5'], status: 'aborted' },
+  { spawnedAt: 1_787_284_797_212, ids: ['b1'], status: 'aborted' },
+  { spawnedAt: 1_787_285_712_156, ids: ['c1', 'c2', 'c3', 'c4', 'c5'], status: 'running' },
+] as const;
+
+function productionCensus(): HeadRunView {
+  const heads = GENERATIONS.flatMap((generation) => generation.ids.map((id) => head(id, generation.status, {
+    spawnedAt: generation.spawnedAt,
+    // The five live nodes are demonstrably working: their last step is later than
+    // their spawn. That is the fact the canvas had and did not draw.
+    lastStepAt: generation.status === 'running' ? 1_787_285_894_585 : null,
+  })));
+  return journal([
+    ...heads,
+    head('cbf7hl3o5n0r52j716zeh', 'completed', {
+      spawnedAt: 1_787_285_712_156,
+      summary: "mcp.ts:229 takes a user-controlled URL and fetches it with no redirect:'manual'",
+    }),
+    head('q5ghadns41o1shnpl3vfh', 'completed', {
+      spawnedAt: 1_787_285_712_156,
+      summary: 'the detached lane amplifies one request into N Durable Object wakes',
+    }),
+    head('e1', 'errored', { spawnedAt: 1_787_285_712_156, errorMessage: 'Turn stalled: nothing flowed for 300s' }),
+    head('e2', 'errored', { spawnedAt: 1_787_285_712_156, errorMessage: 'Turn stalled: nothing flowed for 300s' }),
+  ]);
+}
+
+describe('explorationForkTree — the run as production held it', () => {
+  test('fifteen journalled nodes and a root-only tree draw sixteen vertices', () => {
+    const tree = explorationForkTree({ tree: [rootRow()], head: productionCensus() });
+    expect(productionCensus().heads).toHaveLength(15);
+    expect(vertices(tree)).toHaveLength(16);
+    // Not one of them was drawn. The run header counted fifteen from the same
+    // response, which is how the two numbers came to contradict each other on one
+    // screen.
+    expect(tree!.children).toHaveLength(15);
+  });
+
+  test('the two finished candidates reach the canvas with their answers', () => {
+    const tree = explorationForkTree({ tree: [rootRow()], head: productionCensus() });
+    const finished = tree!.children.filter((child) => child.status === 'open');
+    expect(finished.map((child) => child.id).sort())
+      .toEqual(['cbf7hl3o5n0r52j716zeh', 'q5ghadns41o1shnpl3vfh']);
+    expect(finished[0]!.observation).toContain('mcp.ts:229');
+  });
+
+  test('the dead rows are drawn dead — six aborted and two errored, none of them live', () => {
+    const tree = explorationForkTree({ tree: [rootRow()], head: productionCensus() });
+    const byStatus = new Map<string, number>();
+    for (const child of tree!.children) {
+      byStatus.set(child.status, (byStatus.get(child.status) ?? 0) + 1);
+    }
+    // `aborted` and `errored` are both terminal and both failures, so the tree's
+    // own vocabulary has one word for them. What matters is that eight rows are
+    // NOT running: replacing an invisible node with a fake live one would be a
+    // worse defect than the one being fixed.
+    expect(byStatus.get('failed')).toBe(8);
+    expect(byStatus.get('running')).toBe(5);
+    expect(byStatus.get('open')).toBe(2);
+    expect(byStatus.get('terminal')).toBeUndefined();
+  });
+
+  test('no node claims a score, because none of these rows carries one', () => {
+    const tree = explorationForkTree({ tree: [rootRow()], head: productionCensus() });
+    for (const child of tree!.children) {
+      expect(child.value).toBeNull();
+      expect(child.visits).toBeNull();
+    }
+  });
+});

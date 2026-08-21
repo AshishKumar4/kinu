@@ -259,6 +259,41 @@ export class RunEventRecorder {
     return null;
   }
 
+  /**
+   * Runs this ledger opened and never closed — a `run_start` with no `run_end`.
+   *
+   * WHAT AN UNTERMINATED RUN IS. A run is closed by `closeTurnRun`, which runs
+   * in the turn's own frame; nothing writes a terminal row when the platform
+   * destroys that frame. So a Durable Object eviction leaves the row open
+   * forever, and the durable ledger cannot then distinguish a turn that is
+   * running from one that was killed. Measured on the owner's workspace: six
+   * `run_start` rows against three `run_end`, including the turn that dispatched
+   * the swarm this whole reconciliation is about.
+   *
+   * The same argument the fork journal makes about a `running` head applies here
+   * and is why this is a start-of-life read: an activation that has just started
+   * is executing none of these, so every one of them was left by an earlier one.
+   *
+   * Newest first, bounded, and matched client-side over the `type` index for the
+   * reason {@link read} gives: `payload` is opaque TEXT to every SqlExecutor this
+   * runs on.
+   */
+  unterminatedRuns(window = 500): string[] {
+    const rows = this.sql<{ run_id: string; type: string }>`
+      SELECT run_id, type FROM run_events
+      WHERE type = 'run_start' OR type = 'run_end'
+      ORDER BY ts DESC LIMIT ${window}`;
+    const closed = new Set(rows.filter((row) => row.type === 'run_end').map((row) => row.run_id));
+    const open: string[] = [];
+    const seen = new Set<string>();
+    for (const row of rows) {
+      if (row.type !== 'run_start' || closed.has(row.run_id) || seen.has(row.run_id)) continue;
+      seen.add(row.run_id);
+      open.push(row.run_id);
+    }
+    return open;
+  }
+
   /** Replay all events strictly after `afterIndex` — for SSE Last-Event-ID resume. */
   readSince(runId: string, afterIndex: number, limit = 500): RunEvent[] {
     const rows = this.sql<{ payload: string }>`

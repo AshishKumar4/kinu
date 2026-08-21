@@ -155,6 +155,7 @@ import {
   type DirEntry, type ExecutorWriteResult,
   cancelBackgroundJob, clearBackgroundJobs, dismissBackgroundJob,
   jobResult, listBackgroundJobs, retryBackgroundJob, reconcileInterruptedForks,
+  jobRedriveResumeGate, resumableForkRoots,
   type CancelWorkOutcome, type RetryOutcome,
   getAlwaysActiveSkills, getEvolutionConfig, getMctsConfig, getReasoningEffort,
   getShellApprovalMode, getShellApprovalGrants, revokeShellApprovalGrants,
@@ -1519,24 +1520,48 @@ export class OrchestratorAgent extends ActorAgent {
     // provably stale: nothing in this isolate is executing one, and
     // `head_journal.status` had no writer for that — so `listLive()` kept
     // feeding "N of M heads running" into every model step's dynamic-context
-    // block for the life of the workspace. Settle them and tell the agent, on
-    // the one signal seam. Sibling of the schedule sweep above by design: both
-    // are start-of-life reconciliations of state a dead activation left behind.
+    // block for the life of the workspace.
     //
-    // Detached, not awaited: settling the journal is a synchronous SQL write
-    // that lands in this method's own frame (it is `reconcileInterruptedForks`'s
-    // first statement), so it still precedes anything that could resume a fork —
-    // but TELLING the agent goes through the signal seam, which queues a turn
-    // via `Think.saveMessages`, and that resolves only when the turn ENDS.
-    // Awaiting a whole agent turn inside the init gate is the 30s object reset.
+    // BUT CORRECTING THAT CLAIM IS NOT RETIRING THE WORK, and this used to do
+    // both in one write, unconditionally, as the first thing an activation did.
+    // Meanwhile the only thing that could re-enter an interrupted search —
+    // `recoverOrphans()` — was reachable ONLY from `onFiberRecovered` for a
+    // surviving `bg:*` fiber, and a fiber row can die with the activation that
+    // owned it (that is the case `jobs/runner.ts` documents its registry sweep
+    // for). So the retirement was guaranteed and the re-entry was conditional,
+    // and the retirement won every eviction: five heads of a live search were
+    // recorded `aborted` with "nothing left that could run it" while the durable
+    // job that could run it was still re-drivable, and the agent, told its work
+    // was gone, re-forked by hand.
+    //
+    // The reconciliation now owns the order. It marks the stale rows
+    // `interrupted` — non-terminal, so the roster stops lying without discarding
+    // the run — then offers their roots to the job sweep, and retires only what
+    // the sweep refused. The sweep runs HERE rather than only on a fiber
+    // callback, which is what the CLI has always done (`local-session.ts`); it
+    // is idempotent, because every recovery reclaims under a fresh lease and a
+    // job this isolate is already driving is skipped.
+    //
+    // Detached, not awaited: the journal writes are synchronous and land in this
+    // method's own frame, but TELLING the agent goes through the signal seam,
+    // which queues a turn via `Think.saveMessages` and resolves only when that
+    // turn ENDS. Awaiting a whole agent turn inside the init gate is the 30s
+    // object reset.
     void reconcileInterruptedForks({
       journal: this.headJournal,
       signals: this.orch.signals,
       runEvents: this.eventRecorder,
+      resume: jobRedriveResumeGate({
+        recoverOrphans: () => this.jobRunner.recoverOrphans(),
+        inputOf: (jobId) => this.jobs.getInput(jobId),
+        rootsForTask: (task) => resumableForkRoots(
+          { ledger: this.mctsSearchStore, journal: this.headJournal }, task,
+        ),
+      }),
       logActivity: (event, detail) => this.logActivity(event, detail),
     }).catch((err) => {
       diagnostics.failure('head.journal_reconcile_failed', toKinuError({
-        doing: 'settling fork-journal heads a dead activation left running',
+        doing: 'reconciling fork-journal heads a dead activation left running',
         cause: err,
         otherwise: 'io',
       }), { workspace: this.name });

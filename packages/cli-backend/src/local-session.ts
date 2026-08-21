@@ -56,6 +56,7 @@ import {
   listProposedTasks, updateProposedTaskStatus,
   buildStrategyForkDeps, agentsActionsFor,
   HeadController, type HeadJournal, reconcileInterruptedForks,
+  jobRedriveResumeGate, resumableForkRoots,
   skillsVfsOver, resolveTurnSkills, filterToolSetBySkills, renderFactsForTurn,
   recordGroundedHeadsTake, inheritedContextFromHistory, headPhaseRunEvent,
   ModelCatalogSession,
@@ -1338,43 +1339,58 @@ export class LocalAgentSession implements BackendHost {
   }
 
   /**
-   * Recover the work a previous CLI exit interrupted: the fork journal, then
-   * the background-job registry.
+   * Recover the work a previous CLI exit interrupted: the fork journal and the
+   * background-job registry, in ONE pass rather than two.
    *
-   * Forks first, and before anything can resume one. `head_journal.status =
-   * 'running'` means "spawned, no report recorded", and nothing carries a head
-   * across a process exit — so at this instant every such row is stale, and
-   * left alone it feeds "N of M heads running" into the dynamic-context block
-   * of every model step forever. reconcileInterruptedForks settles them and
-   * tells the agent through the one signal seam.
+   * They used to be sequential, and the order was the defect. `head_journal.status
+   * = 'running'` means "spawned, no report recorded", nothing carries a head across
+   * a process exit, and left alone that row feeds "N of M heads running" into every
+   * model step forever — so the journal has to be reconciled. But retiring a run is
+   * not the same act as correcting that claim, and doing both first meant a search
+   * whose durable job was still re-drivable was told, in the agent's own
+   * conversation, that nothing was left to run it. `reconcileInterruptedForks` now
+   * marks the stale rows non-terminally, hands their roots to the job sweep, and
+   * retires only the runs that sweep refused.
    *
-   * Then the turn reviews a previous one-shot process deferred. Same reason as
-   * the jobs: `kinu exec` exits before the outcome review it owes, so the
-   * review is a durable row and this is the next host that can afford it
-   * (core's AgentOrchestrator.runDeferredTurnReviews — a one-shot session
-   * declines it there, so the cost never lands back on an exec invocation).
-   * Bounded per open, so a backlog is not this session's first turn's latency.
+   * Fiber rows are read first, because an interrupted `bg:*` fiber row says its
+   * job's executor died AFTER settling, which is the only way a lost wake can be
+   * re-delivered (DO onFiberRecovered parity). The registry sweep inside the gate
+   * then names every job still `running`, including the ones whose fiber row did
+   * not survive: a settlement whose database was closed under it at teardown wrote
+   * neither its outcome nor its force-fail, and a fiber-keyed recovery can never
+   * reach that row. Stale fiber rows are cleared as they are read — a resume runs
+   * in a NEW fiber row, so this never deletes it.
    *
-   * Then two passes over the jobs, because the fiber rows and the job registry
-   * each know something the other does not. An interrupted bg:* fiber row says
-   * its job's executor died AFTER settling, which is the only way a lost wake
-   * can be re-delivered (DO onFiberRecovered parity); the registry says which
-   * jobs are still `running` at all, including the ones whose fiber row did
-   * not survive. Stale fiber rows from the prior run are cleared as they are
-   * read — a resume runs in a NEW fiber row, so this never deletes it.
+   * Then the turn reviews a previous one-shot process deferred. Same reason as the
+   * jobs: `kinu exec` exits before the outcome review it owes, so the review is a
+   * durable row and this is the next host that can afford it (core's
+   * AgentOrchestrator.runDeferredTurnReviews — a one-shot session declines it
+   * there, so the cost never lands back on an exec invocation). Bounded per open,
+   * so a backlog is not this session's first turn's latency.
    *
    * Call once at startup: no fibers are live yet, so every row is an orphan.
    *
    * Nothing here is optional. Each step used to absorb its own failure, so a
-   * workspace whose fiber rows could not be read recovered NOTHING and then
-   * looked exactly like one that had no interrupted work — while the notice the
-   * previous exit printed promised the operator these jobs would resume.
+   * workspace whose fiber rows could not be read recovered NOTHING and then looked
+   * exactly like one that had no interrupted work — while the notice the previous
+   * exit printed promised the operator these jobs would resume.
    */
   async recoverBackgroundJobs(): Promise<void> {
+    for (const orphan of detectOrphanedFibers(this.rt.storage.sql)) {
+      if (orphan.name.startsWith('bg:')) await this.jobRunner.recover(orphan.snapshot);
+      void this.rt.storage.sql`DELETE FROM fibers WHERE id = ${orphan.id}`;
+    }
     await reconcileInterruptedForks({
       journal: this.headJournal,
       signals: this.orch.signals,
       runEvents: this.eventRecorder,
+      resume: jobRedriveResumeGate({
+        recoverOrphans: () => this.jobRunner.recoverOrphans(),
+        inputOf: (jobId) => this.jobs.getInput(jobId),
+        rootsForTask: (task) => resumableForkRoots(
+          { ledger: this.mctsSearchStore, journal: this.headJournal }, task,
+        ),
+      }),
       logActivity: (event, detail) => this.emit({ type: 'evolution', event, message: detail ?? '' }),
     });
     const reviews = await this.orch.runDeferredTurnReviews();
@@ -1390,18 +1406,6 @@ export class LocalAgentSession implements BackendHost {
           + (overBudget > 0 ? `, ${overBudget} left queued: the mission is over its budget` : ''),
       });
     }
-    const orphans = detectOrphanedFibers(this.rt.storage.sql);
-    for (const o of orphans) {
-      if (o.name.startsWith('bg:')) await this.jobRunner.recover(o.snapshot);
-      void this.rt.storage.sql`DELETE FROM fibers WHERE id = ${o.id}`;
-    }
-    // Fiber rows are not the source of truth for job liveness. A settlement
-    // whose database was closed under it at teardown writes neither its outcome
-    // nor its force-fail, and its fiber row dies with the process — leaving a
-    // `running` row no orphan fiber points at, which the loop above can never
-    // reach. Nothing in this process owns a job yet, so every remaining
-    // `running` row is an orphan too.
-    await this.jobRunner.recoverOrphans();
   }
 
   /** Re-drive a background job interrupted by a previous process exit — the

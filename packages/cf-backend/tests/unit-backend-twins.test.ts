@@ -356,14 +356,22 @@ describe('backend twin methods', () => {
  * Start-of-life reconciliation, which is the OTHER half of this file's subject:
  * not logic duplicated across backends, but logic wired into only one of them.
  *
- * Both defect classes have the same cause — nothing asserts the two
- * composition surfaces agree — and both have hit this repo. The one this gate
- * exists for: `head_journal.status = 'running'` had a single writer that
- * cleared it (the happy-path report), so an interrupted fork's heads stayed
- * 'running' forever and the dynamic-context block told the model "N of M heads
- * running" on every step for the life of the workspace, while the job registry
- * said `cancelled by operator`. The fix is one core function; a fix wired into
- * one backend only would leave the other lying, silently, exactly as before.
+ * Both defect classes have the same cause — nothing asserts the two composition
+ * surfaces agree — and both have hit this repo. Twice, now, in the same place.
+ *
+ * The first: `head_journal.status = 'running'` had a single writer that cleared
+ * it (the happy-path report), so an interrupted fork's heads stayed 'running'
+ * forever and the dynamic-context block told the model "N of M heads running" on
+ * every step for the life of the workspace, while the job registry said
+ * `cancelled by operator`.
+ *
+ * The second: the fix for the first retired those heads, and the RESUME that
+ * could have continued them was wired into one backend's start of life and not
+ * the other's. The CLI swept its job registry unconditionally; the Durable Object
+ * reached that sweep only from `onFiberRecovered` for a surviving `bg:*` fiber,
+ * and a fiber row can die with the activation that owned it. So the retirement
+ * was guaranteed and the re-entry was conditional, and a live search was recorded
+ * `aborted` with "nothing left that could run it".
  */
 describe('interrupted work is reconciled at start of life on BOTH backends', () => {
   const { cfBodies, cliBody } = scanTwins();
@@ -373,18 +381,51 @@ describe('interrupted work is reconciled at start of life on BOTH backends', () 
     expect(cfBodies.some((body) => delegatesTo(body, 'reconcileInterruptedForks'))).toBe(true);
   });
 
-  test('the CLI reconciles BEFORE it can resume a fork', () => {
-    // Order is load-bearing: a resume re-spawns heads under the same journal,
-    // so a sweep that ran after it would settle the LIVE attempt. Asserted on
-    // source position because the two calls sit in one method and no runtime
-    // observation distinguishes them.
-    const reconcile = cliBody.indexOf('reconcileInterruptedForks({');
-    const resume = cliBody.indexOf('this.jobRunner.recover(');
-    const sweep = cliBody.indexOf('this.jobRunner.recoverOrphans()');
-    expect(reconcile).toBeGreaterThan(-1);
-    expect(resume).toBeGreaterThan(-1);
-    expect(sweep).toBeGreaterThan(-1);
-    expect(reconcile).toBeLessThan(resume);
-    expect(reconcile).toBeLessThan(sweep);
+  test('each surface hands that reconciler a RESUME GATE, so neither retires what can resume', () => {
+    // The parity that was missing. Without a gate the reconciler retires every
+    // interrupted run, which is correct only for a caller with no durable resume
+    // path — and both of these have one.
+    expect(delegatesTo(cliBody, 'jobRedriveResumeGate')).toBe(true);
+    expect(cfBodies.some((body) => delegatesTo(body, 'jobRedriveResumeGate'))).toBe(true);
+  });
+
+  test('neither surface sweeps the job registry outside that gate', () => {
+    // The ordering used to be asserted on SOURCE POSITION here — reconcile before
+    // resume, within one method — because no runtime observation distinguished
+    // them. It is now structural instead: the reconciler marks the stale rows,
+    // calls the gate, and retires what the gate refused, so the order is one
+    // function's control flow and cannot be got wrong by an edit at a call site.
+    // What a composition surface must NOT do is sweep the registry beside the
+    // gate, because a job re-driven before the marking is a job the gate then has
+    // nothing to report, and the run it was continuing gets retired.
+    //
+    // `onFiberRecovered` is exempt and is why this reads the recovery method
+    // rather than the whole file: that callback delivers a wake only the fiber row
+    // knows was lost, and it is a different entry point from start of life.
+    const cliRecovery = methodBody(cliBody, 'recoverBackgroundJobs');
+    expect(cliRecovery).not.toBe('');
+    // Inside the gate the sweep is a THUNK the reconciler calls. Awaiting it at
+    // the call site is the shape that runs it beside the marking instead of after
+    // it, and it is the only shape that can get the order wrong.
+    expect(cliRecovery).toContain('jobRedriveResumeGate({');
+    expect(cliRecovery).not.toContain('await this.jobRunner.recoverOrphans()');
   });
 });
+
+/** One method's body out of a scanned composition surface, by brace depth.
+ *  Empty when the surface declares no such method. */
+function methodBody(body: string, name: string): string {
+  const start = body.indexOf(`async ${name}(`);
+  if (start < 0) return '';
+  const open = body.indexOf('{', start);
+  if (open < 0) return '';
+  let depth = 0;
+  for (let i = open; i < body.length; i += 1) {
+    if (body[i] === '{') depth += 1;
+    else if (body[i] === '}') {
+      depth -= 1;
+      if (depth === 0) return body.slice(open, i + 1);
+    }
+  }
+  return body.slice(open);
+}

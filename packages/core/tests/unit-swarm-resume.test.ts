@@ -49,6 +49,9 @@ import { resumeBackgroundJob } from '../src/orchestrator/background-tools';
 import { BackgroundJobRunner } from '../src/jobs/runner';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store';
 import { SignalDelivery } from '../src/orchestrator/signals';
+import {
+  reconcileInterruptedForks, FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
+} from '../src/heads/reconcile';
 import { runSwarm } from '../src/strategy/swarm-run';
 import { resolveSwarm, swarmValidity } from '../src/strategy/swarm';
 import type { ResolvedSwarm, SwarmConfig } from '../src/strategy/swarm';
@@ -535,6 +538,140 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
     expect(notified).toEqual(['completed']);
     expect(treeOf(sql)).toHaveLength(tree.length);
     expect(ledger.list(10).filter((row) => row.engine === 'swarm')).toHaveLength(1);
+  }, 300_000);
+});
+
+/**
+ * THE OTHER HALF OF THE SAME WAKE, which the suite above leaves out: a real cold
+ * activation does not run only `recoverOrphans()`. It also reconciles the fork
+ * journal, because a `running` head row cannot be executing in an isolate that
+ * has just started, and that reconciliation used to be the FIRST thing an
+ * activation did.
+ *
+ * MEASURED ON THE OWNER'S WORKSPACE, the run before the one the suite above
+ * pins: five heads spawned, none reported, and the next activation retired all
+ * five with `no executor: spawned, never reported, and retired when a later
+ * activation found nothing left that could run it`. The re-entry never ran. The
+ * agent was told its work was gone and re-forked by hand.
+ *
+ * The order was not a race. The sweep was unconditional and synchronous at start
+ * of life while the re-drive was conditional — so the sweep won every eviction,
+ * and its own message asserted that nothing could run the heads at the moment
+ * something still could.
+ *
+ * Both halves of one activation, in the order an activation runs them.
+ */
+describe('the start-of-life sweep does not retire a swarm the re-drive can re-enter', () => {
+  test('the run is re-entered, and the agent is told nothing was lost', async () => {
+    const { rt, db } = await workspace();
+    const sql = rt.storage.sql;
+    const ledger = new MctsSearchStore(sql);
+    const journal = new HeadJournal(sql);
+
+    // ── ATTEMPT ONE, killed inside its level-2 wave ────────────────────────
+    const first = nodeModel({ freezeFromStart: 3 });
+    const frozen = runSwarm(
+      { rt, model: first.model, mode: 'build', maxSteps: 6, logger: createRecordingLogger() },
+      resolved(),
+    );
+    expect(frozen).toBeInstanceOf(Promise);
+    await first.script.frozen;
+
+    const rootId = firstRoot(sql)?.root_id ?? '';
+    expect(rootId).not.toBe('');
+    expect(ledger.get(rootId)).toMatchObject({ status: 'running' });
+    expect(journal.listLive().find((run) => run.rootId === rootId)?.running).toBe(FROZEN_NODES);
+
+    // ── THE NEXT ACTIVATION ────────────────────────────────────────────────
+    const second = nodeModel();
+    initBackgroundJobsTable(makeExecRaw(db), makeSql(db));
+    const jobs = new BackgroundJobStore(makeSql(db));
+    const agent = idleAgent();
+    const { fiber, settled } = inlineFiber();
+    const agents = createAgentsTool({ mode: 'build', fork: { rt, model: second.model } });
+    const runner = new BackgroundJobRunner({
+      store: jobs,
+      fiber,
+      signals: agent.signals,
+      resume: (kind, input, mode, signal) =>
+        resumeBackgroundJob(() => ({ agents }), kind, input, mode, signal),
+    });
+    jobs.create({
+      id: 'bgjob-swarm', kind: 'agents', workMode: 'build', now: Date.now(),
+      input: JSON.stringify(swarmCall()),
+    });
+
+    // The activation's own reconciliation, with the resume gate it is supposed to
+    // consult. Nothing here calls `reenterSwarm`: the gate is the real runner.
+    const retired = await reconcileInterruptedForks({
+      journal,
+      signals: agent.signals,
+      resume: async () => {
+        await runner.recoverOrphans();
+        return [rootId];
+      },
+    });
+    await settled();
+
+    // NOTHING WAS RETIRED, because the re-drive claimed the run.
+    expect(retired).toEqual([]);
+    // …and the agent was told nothing. A card saying work was retired is the
+    // wrong thing to say about work that is being continued, and it is what sent
+    // the owner's agent off to re-fork by hand.
+    expect(agent.enqueued.map((turn) => turn.metadata?.kinuEvent))
+      .not.toContain(FORK_INTERRUPTED_SIGNAL);
+    // No head carries the retirement reason, on either attempt's rows.
+    expect(sql<{ n: number }>`
+      SELECT COUNT(*) AS n FROM head_journal
+      WHERE error_message = ${FORK_INTERRUPTED_REASON}`[0]?.n).toBe(0);
+
+    // THE RUN WAS RE-ENTERED: one root, the first attempt's, grown rather than
+    // restarted.
+    const tree = treeOf(sql);
+    expect(new Set(tree.map((node) => node.root_id))).toEqual(new Set([rootId]));
+    expect(tree.filter((node) => node.depth === 2)).toHaveLength(2);
+    expect(ledger.list(10).filter((row) => row.engine === 'swarm').map((row) => row.rootId))
+      .toEqual([rootId]);
+
+    // AND THE ROSTER STOPPED LYING ANYWAY. The two frozen nodes are no longer
+    // counted as running — that was the whole point of the sweep and it is not
+    // given up to keep the run alive.
+    expect(journal.listLive().find((run) => run.rootId === rootId)?.running ?? 0)
+      .not.toBe(FROZEN_NODES);
+  }, 300_000);
+
+  test('a run the re-drive REFUSED is retired, and the agent is told', async () => {
+    // The other side of the same gate: no durable job exists, so nothing can ever
+    // re-enter this run. That is the case the retirement message describes
+    // truthfully, and it must still fire — otherwise a genuinely dead fork sits in
+    // the roster forever, which is the defect the sweep was built for.
+    const { rt, db } = await workspace();
+    const sql = rt.storage.sql;
+    const journal = new HeadJournal(sql);
+    const first = nodeModel({ freezeFromStart: 3 });
+    void runSwarm(
+      { rt, model: first.model, mode: 'build', maxSteps: 6, logger: createRecordingLogger() },
+      resolved(),
+    );
+    await first.script.frozen;
+    const rootId = firstRoot(sql)?.root_id ?? '';
+    initBackgroundJobsTable(makeExecRaw(db), makeSql(db));
+    const agent = idleAgent();
+
+    const retired = await reconcileInterruptedForks({
+      journal,
+      signals: agent.signals,
+      // The gate ran and claimed nothing: there was no job to re-drive.
+      resume: async () => [],
+    });
+
+    expect(retired.map((run) => run.rootId)).toEqual([rootId]);
+    expect(retired[0]?.abandoned).toBe(FROZEN_NODES);
+    expect(agent.enqueued.map((turn) => turn.metadata?.kinuEvent)).toContain(FORK_INTERRUPTED_SIGNAL);
+    expect(sql<{ n: number }>`
+      SELECT COUNT(*) AS n FROM head_journal
+      WHERE error_message = ${FORK_INTERRUPTED_REASON}`[0]?.n).toBe(FROZEN_NODES);
+    expect(journal.listLive()).toEqual([]);
   }, 300_000);
 });
 
