@@ -172,7 +172,9 @@ async function readTails(page: Page): Promise<TailFrame[]> {
       heightCostPx,
       thinkingRows: row.querySelectorAll('[aria-live="polite"]').length,
       shimmerLabels: row.querySelectorAll('.p-shimmer').length,
-      runningDots: row.querySelectorAll('.animate-pulse').length,
+      // The one shipped spelling after the reduced-motion cutover; counting the
+      // old ad-hoc class would read a regression back to it as zero dots too.
+      runningDots: row.querySelectorAll('.p-dot-pulse').length,
     };
   }));
 }
