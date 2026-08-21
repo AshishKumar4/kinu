@@ -376,6 +376,11 @@ function idleAgent() {
  *  one would let the test read the journal between the two `insertSpawn` writes. */
 const FROZEN_NODES = 2;
 
+/** The sanctioned per-call silence window the frozen runs are given, small enough that
+ *  a node stuck on its never-settling model ends (retries exhausted) while the test
+ *  still owns the clock. No step cap exists to do that any more. */
+const FROZEN_CALL_TIMEOUT_MS = 250;
+
 const MISSION_LABEL = 'nightly';
 
 function treeOf(sql: SqlExecutor): SearchNode[] {
@@ -692,7 +697,7 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
     const journal = new HeadJournal(sql);
     const first = nodeModel({ freezeFromStart: 3 });
     void runSwarm(
-      { rt, model: first.model, mode: 'build', maxSteps: 6, logger: createRecordingLogger() },
+      { rt, model: first.model, mode: 'build', callTimeoutMs: FROZEN_CALL_TIMEOUT_MS, logger: createRecordingLogger() },
       resolved(),
     );
     await first.script.frozen;
@@ -722,7 +727,7 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
     const journal = new HeadJournal(sql);
     const first = nodeModel({ freezeFromStart: 3 });
     void runSwarm(
-      { rt, model: first.model, mode: 'build', maxSteps: 6, logger: createRecordingLogger() },
+      { rt, model: first.model, mode: 'build', callTimeoutMs: FROZEN_CALL_TIMEOUT_MS, logger: createRecordingLogger() },
       resolved(),
     );
     await first.script.frozen;
@@ -801,7 +806,7 @@ describe('a named swarm is called by its name', () => {
     if ('reason' in named) throw new Error(`the suite's own composition does not resolve: ${named.error}`);
     const model = nodeModel();
     await runSwarm(
-      { rt, model: model.model, mode: 'build', maxSteps: 6, logger: createRecordingLogger() },
+      { rt, model: model.model, mode: 'build', logger: createRecordingLogger() },
       named,
     );
 
@@ -819,7 +824,7 @@ describe('a named swarm is called by its name', () => {
     const sql = rt.storage.sql;
     const model = nodeModel();
     await runSwarm(
-      { rt, model: model.model, mode: 'build', maxSteps: 6, logger: createRecordingLogger() },
+      { rt, model: model.model, mode: 'build', logger: createRecordingLogger() },
       resolved(),
     );
     const rootId = firstRoot(sql)?.root_id ?? '';

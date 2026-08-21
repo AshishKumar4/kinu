@@ -533,22 +533,6 @@ describe('hard-task wiring — env resolves to a seeded task and a scored outcom
     // it as a zero would turn a missing verifier into a fact about the agent.
     expect(scores.find((s) => s.name === 'task_outcome')).toBeUndefined();
   }, 30_000);
-
-  test('step_cap_reached counts real steps, so the pre-registered cap is measurable', async () => {
-    const scores = await run('wiring-stepcap', [
-      { tool: 'file', input: { action: 'write', path: 'a.txt', content: '1' } },
-      { tool: 'file', input: { action: 'write', path: 'b.txt', content: '2' } },
-    ]);
-
-    const cap = scoreOf(scores, 'step_cap_reached');
-    expect(cap.eligible).toBe(1);
-    // `step_finish` is emitted at local-session.ts:560. A covariate that reports 0
-    // of N steps forever is the "declared and emitted by nothing" failure, and
-    // this is the assertion that would catch it.
-    expect(cap.detail).toMatch(/^[1-9]\d* of \d+ steps closed/);
-    // Nowhere near the default 500-step budget, so this episode was not truncated.
-    expect(cap.passed).toBe(0);
-  }, 30_000);
 });
 
 /**

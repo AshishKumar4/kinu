@@ -867,6 +867,7 @@ function nodeLoopDeps(input: NodeAgentInput, deps: NodeAgentDeps): NodeLoopDeps 
   if (deps.mission !== undefined) loop.mission = deps.mission;
   if (deps.executeTool !== undefined) loop.executeTool = deps.executeTool;
   if (deps.webSearch !== undefined) loop.webSearch = deps.webSearch;
+  if (deps.gradeReport !== undefined) loop.gradeReport = deps.gradeReport;
   if (deps.callTimeoutMs !== undefined) loop.callTimeoutMs = deps.callTimeoutMs;
   if (deps.backgroundPolicy !== undefined) loop.backgroundPolicy = deps.backgroundPolicy;
   return loop;

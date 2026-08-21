@@ -599,10 +599,6 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   // second's. A step with no prose, reasoning or tool call is padding and is not
   // recorded, exactly as the whole-run walk used to drop it.
   let recorded = 0;
-  // The LAST turn's step count and finish reason — the two facts that say
-  // whether this run was cut off at the envelope rather than choosing to stop.
-  let stepsThisTurn = 0;
-  let finishReason = '';
   // `extractFinalText`'s two inputs, tracked as the steps land: the last
   // text-bearing step's prose, and the last reasoning. A whole-run walk is not
   // available here — the turn body reports steps as they finish — and it was
@@ -648,8 +644,6 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   let failure: unknown;
 
   const onStep = async (step: StepResult<ToolSet>): Promise<void> => {
-    stepsThisTurn = step.stepNumber + 1;
-    finishReason = step.finishReason;
     if (step.text.trim()) lastText = step.text;
     if (step.reasoningText?.trim()) lastReasoning = step.reasoningText;
     const traced = toHeadStep(step);
@@ -689,7 +683,6 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       // spawned into an already-spent mission must not get one free inference
       // out of it, and neither must a resumed one.
       if (await outOfBudget()) break;
-      stepsThisTurn = 0;
       const turn: ChatOptions = {
         model: deps.model,
         system,

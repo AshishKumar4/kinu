@@ -53,7 +53,7 @@ import type {
   AgentRuntime, EvalCase, LLMProviderConfig, RunEvent, SeekCursor, Shell,
 } from '../../packages/core/src/index';
 import {
-  RunEventRecorder, initWorkspaceSchema, listRuns, resolveMaxSteps,
+  RunEventRecorder, initWorkspaceSchema, listRuns,
 } from '../../packages/core/src/index';
 import { createWorkspace } from '../../packages/core/src/identity/index';
 import { LocalAgentSession } from '../../packages/cli-backend/src/local-session';
@@ -233,41 +233,6 @@ export function readLedgerTotals(db: Database): LedgerTotals {
     }
   }
   return { turns, toolCalls, toolNames, tokensIn, tokensOut, reasoningOut, steps, failures };
-}
-
-/**
- * The pre-registered step cap, recorded as a COVARIATE.
- *
- * WHY A CAP AT ALL. A prior paired run had arm B billing 7.1x arm A, because the
- * mechanism under test is itself a token consumer. Dividing the effect by tokens
- * would have changed the estimand; the successor design is a cap applied
- * IDENTICALLY to both arms, with the rate at which it bites reported as data. A
- * cap whose bite is unmeasured is a silent change to what the run measured.
- *
- * WHY IT IS A SCORE ROW AND NOT A NEW FIELD. `EvalScoreRow` already flows through
- * persistence, the comparator and admissibility, and `isCovariateRow` is a total
- * rule — anything not named `task_outcome` is a covariate — so putting the cap
- * here makes it MECHANICALLY unable to reach a headline, rather than merely
- * conventionally. A new observation field would have needed a schema bump and
- * would still have been eligible for a headline somebody assembled by hand.
- *
- * The cap is read from the same `resolveMaxSteps` the session drives its own
- * `stopWhen` from (local-session.ts:1658), so the number compared against here
- * cannot drift from the number enforced.
- */
-function stepCapRow(steps: number): EvalScoreRow {
-  const cap = resolveMaxSteps(process.env.KINU_MAX_STEPS);
-  const reached = steps >= cap;
-  return {
-    name: 'step_cap_reached',
-    asserts: 'the episode consumed its entire pre-registered step budget, so its work was '
-      + 'truncated rather than finished',
-    eligible: 1,
-    passed: reached ? 1 : 0,
-    rate: reached ? 1 : 0,
-    detail: `${String(steps)} of ${String(cap)} steps closed`
-      + (reached ? ' — TRUNCATED by the cap' : ''),
-  };
 }
 
 export interface BehaviourHarnessOptions {
@@ -541,7 +506,7 @@ export async function runBehaviourTask(
     turns: totals.turns,
     toolCalls: totals.toolCalls,
     toolNames: totals.toolNames,
-    scores: toScoreJson([...outcome, stepCapRow(totals.steps), ...scoreTrajectory(makeSql(db))]),
+    scores: toScoreJson([...outcome, ...scoreTrajectory(makeSql(db))]),
     tokensIn: totals.tokensIn,
     tokensOut: totals.tokensOut,
     reasoningOut: totals.reasoningOut,

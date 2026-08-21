@@ -52,7 +52,6 @@ import {
 import type { NodeAgentDeps, NodeAgentInput, NodeRun } from '../src/strategy/node-agent';
 import { BUILTIN_TOOLS } from '../src/tools/registry';
 
-const NODE_STEPS = 8;
 /** Sub-second so the arms finish; see the header for why a magnitude is a fixture. */
 const DETACH_MS = 60;
 const SETTLE_MS = 200;
