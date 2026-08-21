@@ -398,8 +398,13 @@ font-size:11.5px;letter-spacing:0.09em;text-transform:uppercase}
 .label b{color:var(--c-accent-fg);font-weight:inherit;margin-right:10px}
 .anno{color:var(--c-text-3);opacity:0.85}
 
-h1{margin:16px 0 0;font-family:var(--font-display);font-size:clamp(36px,5.4vw,62px);
-line-height:1.02;font-weight:500;letter-spacing:-0.026em;max-width:22ch}
+/* Sized for Fraunces' wider advance: at the old 62px peak the longest
+   tagline ran four lines in the hero column and buried the panel. The
+   page column caps at 1200px, so the fix is size: measured in the
+   506px column, 46px is the largest size that holds every tagline to
+   three lines; 45px ships one notch inside that edge. */
+h1{margin:16px 0 0;font-family:var(--font-display);font-size:clamp(32px,4vw,45px);
+line-height:1.05;font-weight:500;letter-spacing:-0.03em;max-width:30ch}
 h2{margin:0;font-family:var(--font-display);font-size:19px;font-weight:500;letter-spacing:-0.012em}
 /* The one gradient in the design: sheen along the thread, rationed to a single
    hero phrase (never body text, never a panel). It runs accent → accent-ink →
