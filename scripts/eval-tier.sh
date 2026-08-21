@@ -64,10 +64,17 @@
 # the owner's own session, leaving 23 test workspaces on the account among his 28.
 #
 # For models the account proxy does not front, an AI Gateway is still accepted
-# directly: AI_GATEWAY_BASE_URL + AI_GATEWAY_AUTH (KINU_BASE_URL +
-# KINU_AUTH are read as the same pair — `LIVE_MODEL_ENV` knows both spellings,
-# and .github/workflows/eval.yml sets the second). A gateway fronts a model and
-# no Kinu deployment, so it creates nothing and is not target-checked.
+# directly: AI_GATEWAY_BASE_URL + AI_GATEWAY_AUTH (KINU_BASE_URL + KINU_AUTH are
+# read as the same pair — `LIVE_MODEL_ENV` knows both spellings). A gateway
+# fronts a model and no Kinu deployment, so it creates nothing and is not
+# target-checked.
+#
+# A value in either variable that names a DEPLOYMENT is target-checked, though.
+# `eval-identity.ts`'s `evalModelEndpointVerdict` rules on the origin first and
+# falls back to the deployment's own inference route, and
+# `scripts/eval-credentials.ts` stops this script when the answer is a refusal.
+# Until that existed, `KINU_BASE_URL=https://kinu.run/api/user/ai/v1` announced
+# itself as an AI Gateway and set EXPECT_LIVE=1 while pointing at production.
 #
 # With no credential ANYWHERE, this script still runs and still passes: every
 # live test skips, the ratchet proves the skips are the declared ones, the tier
