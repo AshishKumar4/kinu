@@ -822,9 +822,16 @@ export const LADDER: readonly Gate[] = [
       + 'and an unverified group both print.',
   },
   {
-    run: 'bun test scripts/bench*.test.ts',
+    // The COMMAND deploy.sh runs, spelled identically. It used to stop at the
+    // `scripts/bench*` glob while deploy.sh also passed the core bench units, so
+    // the wider command matched no LADDER entry, `gatesFor('deploy')` synthesized
+    // it at a declared cost of ZERO, and the four core bench suites were governed
+    // by an entry that did not name them.
+    run: 'bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts',
     tier: 'ci',
-    seconds: 5.2,
+    // 4.4s: 216 tests over 9 files, median of 4.50 / 4.38 / 4.33 on the 24-thread
+    // box, 2026-08-21.
+    seconds: 4.4,
     catches: 'the bench harness guarantees — sandbox isolation, the seal, '
       + 'anti-self-scoring, budget enforcement, corpus well-formedness — plus the '
       + 'census `gate:bench-corpus` runs at commit tier proven able to FAIL, which the '
@@ -1061,6 +1068,33 @@ export const LADDER: readonly Gate[] = [
       + 'unit-agents-tool.test.ts, so this gate deliberately does not build a tool.',
   },
   {
+    run: 'bun run verify:lean',
+    tier: 'deploy',
+    // 2.2s WARM, median of 2.19 / 2.20 on the 24-thread box, 2026-08-21: `lake
+    // build` is a no-op once `lean/.lake` holds the build, so this figure sits on
+    // the same basis as every other one here, a prepared checkout.
+    //
+    // COLD IT IS ~15 MINUTES, and that is what CI pays: the lean-verify workflow
+    // caches `~/.elan` and not `lean/.lake`, so a runner rebuilds 330 theorems
+    // every time. That is why CI_EXEMPT keeps it off the ci tier, and why both
+    // figures are written down rather than averaged into one that describes
+    // neither machine.
+    //
+    // Declared at ZERO until 2026-08-21, which made the deploy tier's cost line
+    // fiction and its budget unenforceable.
+    seconds: 2.2,
+    catches: 'a Lean module that stops compiling, an axiom set that makes the model '
+      + 'inconsistent, a requirement in lean/traceability.yaml with no theorem behind it, '
+      + 'and a TypeScript comment citing a theorem no module defines. `check-no-false.sh` '
+      + 'tries to derive False from the removed axioms and REQUIRES that attempt to fail, '
+      + 'so the consistency claim cannot pass by proving nothing.',
+    blind: 'whether a theorem models the thing its name says. 25 citations carry an '
+      + 'author-declared CITATION_ILLUSTRATIVE category, which is trusted rather than '
+      + 'checked, and a line citation is checked only for both endpoints being inside the '
+      + 'module — an insertion above a cited range slides it onto different code and stays '
+      + 'green. A theorem NAME is the only citation shape this can verify.',
+  },
+  {
     run: 'bun run gate:infra',
     tier: 'deploy',
     seconds: 43,
@@ -1093,6 +1127,35 @@ export const LADDER: readonly Gate[] = [
 ];
 
 /**
+ * The deploy gates that MUST NOT run beside another gate, each with the reason.
+ *
+ * Everything not named here is independent, and `scripts/deploy.sh` runs it
+ * concurrently. That claim is checkable rather than hopeful: no gate writes into
+ * the working tree (`gate:bench-corpus` uses `git apply --check`, `gate:patch-parity`
+ * copies into a throwaway tree, every `tsc` is `--noEmit`), every test process gets
+ * its own `mkdtemp` KINU_HOME from scripts/test-scratch-home.ts, and the four gates
+ * that boot vite and Chrome take a free port from `freePort(5199)` rather than a
+ * fixed one. So the ordered set is these two, and a third would need a reason
+ * written here.
+ *
+ * `deploy.test.ts` asserts deploy.sh puts a barrier around exactly these, so the
+ * policy and the pipeline cannot drift apart.
+ */
+export const SERIAL_GATES = {
+  'bun scripts/preflight.ts':
+    'runs alone and FIRST. Its subject is the environment every other gate reports through: '
+    + 'an exhausted $TMPDIR inode table surfaces later as a 5-second timeout inside an '
+    + 'unrelated filesystem test, which reads as a code regression and is not one. A gate '
+    + 'running beside it could report that regression before the preflight had said the '
+    + 'machine was unfit to be reported on.',
+  'bun run gate:infra':
+    'runs alone and LAST. It is the only gate that talks to Cloudflare, `npx wrangler whoami` '
+    + 'is its precondition, and its place in the order carries meaning: everything before it '
+    + 'proves the SOURCE is deployable and it proves the ACCOUNT is. Running it early would '
+    + 'spend account calls on a tree that has not been shown to compile.',
+} satisfies Record<string, string>;
+
+/**
  * The deploy tier, read out of deploy.sh. A parse of the authoritative list,
  * never a copy: a gate added there appears here on the next run, and
  * `ladder.test.ts` fails if this parse ever returns nothing — a parser that
@@ -1108,6 +1171,37 @@ export function deployGates(
     if (match?.[1] !== undefined) gates.push(match[1]);
   }
   return gates;
+}
+
+/**
+ * The deploy gates GROUPED BY THE WAVE THEY RUN IN, read out of the same file.
+ *
+ * deploy.sh enqueues gates and runs each queue at a `flush_gates` line, so a wave
+ * is the run of gates between two flushes and every gate in one wave runs beside
+ * the others. That makes "runs alone" a property of this grouping rather than of
+ * a log, which matters: the first version of the assertion read the ORDER off a
+ * stub log, and deleting a barrier left it green because the scheduler happened
+ * to launch index 0 first. A test that cannot fail is not a gate.
+ *
+ * A trailing enqueue with no flush after it is a gate nobody runs, so it comes
+ * back as its own final wave and `deploy.test.ts` refuses it.
+ */
+export function deployWaves(
+  source = readFileSync(resolve(root, 'scripts/deploy.sh'), 'utf8'),
+): string[][] {
+  const waves: string[][] = [];
+  let wave: string[] = [];
+  for (const line of source.split('\n')) {
+    if (/^flush_gates\s*$/.test(line)) {
+      if (wave.length > 0) waves.push(wave);
+      wave = [];
+      continue;
+    }
+    const match = /^run_required_gate\s+"[^"]*"\s+(.+?)\s*$/.exec(line);
+    if (match?.[1] !== undefined) wave.push(match[1]);
+  }
+  if (wave.length > 0) waves.push(wave);
+  return waves;
 }
 
 /**
