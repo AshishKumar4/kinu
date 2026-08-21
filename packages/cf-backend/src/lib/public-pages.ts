@@ -269,17 +269,6 @@ export function landingDocument(
         <p class="body">What you get back is the winner plus the record: every branch, its score, and the verifier number behind each pick. Results persist per objective, so the next search starts from the record instead of from zero.</p>
         <p class="dim">The tree in the header is a recorded search.</p>
       </div>
-      <details class="config">
-        <summary>The configuration, spelled out</summary>
-        ${specRows([
-          ['One action', "<code>agents({action:'swarm'})</code>"],
-          ['Axes', 'unit · context · expand · score · advance · carry'],
-          ['Presets', 'ideate · research · audit · redteam · optimise · prove · custom'],
-          ['Depth', 'ideate 1 · optimise 5 · prove 7'],
-          ['Score', 'a code verifier, or a judge ensemble'],
-          ['Records', '<code>exploration_records</code>, per objective'],
-        ])}
-      </details>
     </div>
     <figure class="film">
       <div class="anno ruled"><span>Web · swarm run · design gallery, fixture transport</span><span>home · agent · search · work</span></div>
@@ -370,10 +359,13 @@ h1 em{font-style:italic}
    hidden variant is invisible to the accessibility tree, and with no script
    the first line simply stays. */
 h1.taglines{display:grid}
+/* Sequential, never a crossfade: variants have different line counts, so two
+   visible at once render each other's tails as ghost lines. The outgoing span
+   is fully gone before the incoming one starts. */
 h1.taglines>span{grid-area:1/1;visibility:hidden;opacity:0;
-transition:opacity 460ms var(--ease),visibility 0s 460ms}
+transition:opacity 180ms var(--ease),visibility 0s 180ms}
 h1.taglines>span[data-shown]{visibility:visible;opacity:1;
-transition:opacity 460ms var(--ease)}
+transition:opacity 320ms var(--ease) 220ms,visibility 0s 220ms}
 .actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:32px}
 /* Four claims across, or two, never three with an orphan under them. The
    claim is the display face at reading size, the support is plain prose: a
