@@ -612,8 +612,8 @@ that did not start returns a refusal. Those are two shapes on purpose. A caller
 branching on `reason` asks a different question from one reading a report.
 
 [EXPLORATION.md](./EXPLORATION.md) is the normative document for the search
-itself: the six axes, the seven presets, what a node is, and what the engine
-refuses.
+itself: the six axes, the seven presets, what a node is, and the rules a call
+must satisfy.
 
 ## experience: cross-workspace transfer
 

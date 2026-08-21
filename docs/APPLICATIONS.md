@@ -1,4 +1,4 @@
-# Applications & Research Positioning
+# Applications
 
 ## 1. What Kinu Is
 
@@ -8,7 +8,7 @@ Kinu is a self-evolving agent platform that improves with use. It:
 - **Learns reusable tools** from successful conversations and applies them in future ones
 - **Rewrites its own execution logic** (scaffold) from observed performance patterns
 - **Remembers everything** in a persistent, FTS5-searchable memory
-- **Ships CI-gated Lean 4 models**: 330 theorems over 43 requirements check selected abstract invariants, with assumptions and implementation-evidence gaps tracked explicitly
+- **Ships CI-gated Lean 4 models** of selected mechanisms, with assumptions and implementation-evidence gaps tracked explicitly
 
 ```mermaid
 graph LR
@@ -19,7 +19,6 @@ graph LR
         B4 --> B5[Lean 4 Models<br/>CI-gated traceability]
     end
 
-    style B5 fill:#0f3460
 ```
 
 Evolution happens at four timescales at once, and each one feeds the next:
@@ -140,56 +139,7 @@ config.setMctsOverrides({
 `config.getMctsOverrides()` is what the search reads, so a change takes effect on
 the next turn without a restart, and it survives one.
 
-## 4. Research Positioning
-
-### Comparison with Existing Work
-
-```mermaid
-graph TB
-    subgraph "Tool Learning"
-        TF[Toolformer<br/>Schick 2023]
-        CR[CREATOR<br/>Qian 2023]
-        TB[ToolBench<br/>Qin 2023]
-    end
-
-    subgraph "Self-Evolution"
-        VY[Voyager<br/>Wang 2023]
-        SR[Self-Refine<br/>Madaan 2023]
-        OM[OMNI<br/>Zhang 2024]
-    end
-
-    subgraph "MCTS + LLM"
-        LATS[LATS<br/>Zhou 2023]
-        TOT[Tree of Thoughts<br/>Yao 2023]
-        AC[AlphaCode<br/>Li 2022]
-    end
-
-    subgraph "Kinu (this work)"
-        P[Combines all three<br/>+ CI-gated Lean models<br/>+ persistent state<br/>+ scaffold mutation]
-    end
-
-    TF -.->|"tool discovery"| P
-    VY -.->|"skill library"| P
-    LATS -.->|"MCTS structure"| P
-    SR -.->|"reflection"| P
-
-    style P fill:#0f3460
-```
-
-### Detailed Comparison
-
-| System | Tool Learning | Parallel Search | Self-Modification | Formal Proofs | Persistent State |
-|--------|:---:|:---:|:---:|:---:|:---:|
-| **Voyager** (Wang 2023) | Skill library | No | No | No | In-game |
-| **LATS** (Zhou 2023) | No | MCTS | No | No | No |
-| **Toolformer** (Schick 2023) | From annotations | No | No | No | No |
-| **CREATOR** (Qian 2023) | LLM creates tools | No | No | No | No |
-| **Self-Refine** (Madaan 2023) | No | No | Iterative refinement | No | No |
-| **OMNI** (Zhang 2024) | Tool creation | No | Yes | No | No |
-| **Tree of Thoughts** (Yao 2023) | No | BFS/DFS | No | No | No |
-| **Kinu** | CraftStore + EMA | Tree swarm + MCTS | Scaffold mutation | 330 theorems over 43 abstract-model requirements; 1 documented SQLite assumption | DO SQLite |
-
-### Design choices
+## 4. Design Choices
 
 1. **Four-timescale evolution with machine-checked abstract models.** The Lean corpus checks selected properties of hand-maintained models; it does not prove the deployed TypeScript implementation. CI gates compilation, consistency, axiom closure, and traceability, while model-to-code differential fixtures remain planned.
 
