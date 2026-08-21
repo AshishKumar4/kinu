@@ -296,8 +296,8 @@ function UnavailableMount({ mount, exec }: { mount: MountInfo; exec: ExecutorInf
   // mount name left this branch — the whole connect call-to-action — dead.
   if (mount.name === "laptop") return <PcConnectCta />;
   const docs = mount.name === "sandbox"
-      ? { text: "The Sandbox gives your agent a full Linux container with live previews. It isn't enabled on this deployment. Your agent can still use the Workspace shell and every capability listed for it.", href: "https://github.com/AshishKumar4/Proteus/blob/main/docs/EXECUTION-LAYER-SPEC.md" }
-      : { text: mount.reason ?? exec?.reason ?? "This environment isn't enabled on this deployment.", href: "https://github.com/AshishKumar4/Proteus/blob/main/docs/EXECUTION-LAYER-SPEC.md" };
+      ? { text: "The Sandbox gives your agent a full Linux container with live previews. It isn't enabled on this deployment. Your agent can still use the Workspace shell and every capability listed for it.", href: "https://github.com/AshishKumar4/kinu/blob/main/docs/EXECUTION-LAYER-SPEC.md" }
+      : { text: mount.reason ?? exec?.reason ?? "This environment isn't enabled on this deployment.", href: "https://github.com/AshishKumar4/kinu/blob/main/docs/EXECUTION-LAYER-SPEC.md" };
   return (
     <div className="h-full flex items-center justify-center p-6">
       <div className="max-w-md text-center space-y-3">

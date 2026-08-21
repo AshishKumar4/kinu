@@ -48,7 +48,7 @@ precedence rule Cloudflare documents unambiguously.
 ### Setup
 
 ```bash
-git clone https://github.com/AshishKumar4/Proteus.git
+git clone https://github.com/AshishKumar4/kinu.git
 cd Proteus
 bun install
 ```
