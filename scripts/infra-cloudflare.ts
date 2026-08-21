@@ -378,7 +378,11 @@ export function secretNames(environment: string | undefined): Observation & { re
 /* ── Routes, domains and DNS ──────────────────────────────────────────── */
 
 /** `/api/health`'s build stamp. Only the field that identifies the Worker. */
-const HealthStamp = v.object({ build: v.object({ sha: v.string() }) });
+// `build` is null until the first FULL deploy stamps the assets — a stampless
+// Kinu is still THIS Worker (the smoke gate owns sha equality, deploy.sh:315),
+// and refusing it made the first gated deploy impossible: the gate demanded a
+// stamp only the deploy it was blocking could create.
+const HealthStamp = v.object({ build: v.nullable(v.object({ sha: v.string() })) });
 
 /**
  * Whether a hostname reaches THIS Worker, asked of the internet rather than of
@@ -410,10 +414,13 @@ export async function servesWorker(hostname: string): Promise<Observation> {
       return unknown(`${url} answered ${String(response.status)} — reachable but unwell`);
     }
     const stamp = v.safeParse(HealthStamp, await response.json());
-    return stamp.success
-      ? present(`${hostname} → a Kinu Worker, build ${stamp.output.build.sha}`)
-      : unknown(`${url} answered ${String(response.status)} with no build stamp — the hostname `
-        + 'resolves and something other than this Worker is answering');
+    if (!stamp.success) {
+      return unknown(`${url} answered ${String(response.status)} without the health document — `
+        + 'the hostname resolves and something other than this Worker is answering');
+    }
+    return present(stamp.output.build === null
+      ? `${hostname} → a Kinu Worker, stampless (no full deploy has landed yet)`
+      : `${hostname} → a Kinu Worker, build ${stamp.output.build.sha}`);
   } catch (error) {
     const code = error instanceof Error && 'code' in error ? String(error.code) : '';
     if (code === 'ENOTFOUND' || code === 'ECONNREFUSED') return absent;
