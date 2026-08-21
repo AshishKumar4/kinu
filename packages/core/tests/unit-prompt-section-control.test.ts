@@ -21,6 +21,8 @@ import {
   findPromptSectionTarget, recordTurnOutcome, buildOutcomeEvalSplit,
   EvolutionEngine,
   runPromptSectionGepaOptimization, runPromptSectionTrials,
+  advancePromptSectionLane, nextPromptSectionTarget, PROMPT_SECTION_TARGETS,
+  startGepaRun,
   type ScaffoldControl,
 } from '../src/index';
 import { getPendingPromptSection, initPromptSectionTables } from '../src/prompting/section-store';
@@ -285,6 +287,91 @@ describe('runPromptSectionGepaOptimization — scored on the turn-outcome ledger
     expect(buildSystemPromptSync(rt, {
       sectionOverrides: activePromptSectionOverrides(rt.storage.sql),
     })).toContain(INCUMBENT);
+  }, 30_000);
+});
+
+/**
+ * The rotation, and why it is derived.
+ *
+ * It used to be a Durable Object field. Measured on the real actor: the cursor
+ * advanced on ticks 25, 50 and 75 of one activation and appeared in no durable
+ * table — `agent_config` held one key, the cadence — so every activation
+ * restarted at the first section. Against a joint idle-eviction window measured
+ * at 2-5 minutes, `guidance/operating` received every pass and the other eight
+ * needed 225 consecutive turns without a pause.
+ */
+describe('nextPromptSectionTarget — the rotation an eviction cannot reset', () => {
+  const firstTwo = PROMPT_SECTION_TARGETS.slice(0, 2).map((section) => section.id);
+
+  test('with nothing passed yet, the registry order decides', () => {
+    const rt = evolvableRuntime();
+    expect(nextPromptSectionTarget(rt.storage.sql)?.id).toBe(firstTwo[0]);
+  });
+
+  test('a pass moves the rotation on, and holds no state that could be lost', () => {
+    const rt = evolvableRuntime();
+    startGepaRun(rt.storage.sql, { target: 'prompt_section', targetRef: firstTwo[0] });
+
+    // Two independent reads over the same workspace. There is no instance here
+    // to evict: the answer is a function of the ledger, so a second caller
+    // cannot disagree with the first, which is the property the in-memory
+    // cursor could not hold.
+    expect(nextPromptSectionTarget(rt.storage.sql)?.id).toBe(firstTwo[1]);
+    expect(nextPromptSectionTarget(rt.storage.sql)?.id).toBe(firstTwo[1]);
+  });
+
+  test('every section gets one before any gets a second', () => {
+    const rt = evolvableRuntime();
+    const seen: string[] = [];
+    for (let i = 0; i < PROMPT_SECTION_TARGETS.length; i++) {
+      const section = nextPromptSectionTarget(rt.storage.sql);
+      expect(section).not.toBeNull();
+      seen.push(section!.id);
+      startGepaRun(rt.storage.sql, { target: 'prompt_section', targetRef: section!.id });
+    }
+    expect(seen).toEqual(PROMPT_SECTION_TARGETS.map((section) => section.id));
+    // A full round done, the rotation comes back inside the same nine rather
+    // than answering null or a tenth thing.
+    const roundTwo = nextPromptSectionTarget(rt.storage.sql);
+    expect(roundTwo).not.toBeNull();
+    expect(seen).toContain(roundTwo?.id ?? '');
+  });
+
+  test('a scaffold run is not a section pass, and never moves the rotation', () => {
+    const rt = evolvableRuntime();
+    startGepaRun(rt.storage.sql, { target: 'scaffold' });
+    expect(nextPromptSectionTarget(rt.storage.sql)?.id).toBe(firstTwo[0]);
+  });
+});
+
+describe('advancePromptSectionLane — trials before a new proposal', () => {
+  test('a candidate under trial is finished before any section is proposed', async () => {
+    const rt = evolvableRuntime();
+    seedLedger(rt, { failures: 6, guards: 4 });
+    const { control } = scriptedControl(rt, (candidate) => (candidate === CANDIDATE ? 0.9 : 0.2));
+
+    const proposed = await runPromptSectionGepaOptimization(control, {
+      sectionId: TARGET_ID, maxIterations: 2, maxMetricCalls: 60,
+    });
+    expect(proposed.proposed).toBe(true);
+
+    const step = await advancePromptSectionLane(control);
+    expect(step.step).toBe('trials');
+    expect(step).toMatchObject({ sectionId: TARGET_ID });
+  }, 30_000);
+
+  test('with nothing pending, the lane runs the rotation\'s own next section', async () => {
+    const rt = evolvableRuntime();
+    seedLedger(rt, { failures: 6, guards: 4 });
+    const { control } = scriptedControl(rt, () => 0.5);
+    const expected = nextPromptSectionTarget(rt.storage.sql);
+
+    const step = await advancePromptSectionLane(control);
+    expect(step.step).toBe('pass');
+    expect(step).toMatchObject({ sectionId: expected?.id });
+    // The pass it ran is the row the next tick reads, so the lane advances
+    // itself with no cursor in between.
+    expect(nextPromptSectionTarget(rt.storage.sql)?.id).not.toBe(expected?.id);
   }, 30_000);
 });
 

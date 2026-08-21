@@ -1348,10 +1348,12 @@ export {
   previewScaffoldLive, proposeScaffold, queueTurnShadowTrial, runQueuedShadowTrials,
   runScaffoldCaptureText, runScaffoldGepaOptimization, runScaffoldOnce,
   runPromptSectionGepaOptimization, runPromptSectionTrials,
+  advancePromptSectionLane, nextPromptSectionTarget,
   type GepaOptimizationResult, type JsonGenerator, type ScaffoldControl,
   type ScaffoldDecisionResult, type ScaffoldReplayContext, type ScaffoldSurface,
   type ScaffoldVersionView, type ShadowStatus, type ShadowTrialQueueOutcome,
   type PromptSectionOptimizationResult, type PromptSectionTrialResult,
+  type PromptSectionLaneStep,
 } from './evolution/control';
 export {
   runGepa, runScaffoldGepa, runSectionGepa,
