@@ -52,7 +52,7 @@ import {
   floorMargin, type Floor, type ScalarObjective, type VerifierSpec,
 } from '../src/strategy/objective';
 import {
-  SWARM_PRESETS, SWARM_PRESET_POINTS, isPresetPoint, resolveSwarm, settleOf, swarmValidity,
+  NAMED_SWARM_PRESETS, SWARM_PRESETS, SWARM_PRESET_POINTS, resolveSwarm, settleOf, swarmValidity,
   type SwarmAdvance, type SwarmConfig, type SwarmInput,
 } from '../src/strategy/swarm';
 import { VERIFIER_KINDS, resolveVerifier, unregisteredKindRefusal } from '../src/strategy/verifier-registry';
@@ -312,9 +312,14 @@ describe('validity over entry zero, as far as the document defines it', () => {
     const keyed = resolveSwarm({ ...entry, key: 'coverage' });
     if ('reason' in keyed) throw new Error('a named preset must resolve, and this one refused');
     expect(swarmValidity(keyed)).toMatchObject({ reason: 'bad_input' });
-    // And the one field it REQUIRES, missing.
-    expect(resolveSwarm({ preset: 'optimise', task: entry.task }))
-      .toMatchObject({ reason: 'bad_input' });
+    // And the one field it REQUIRES, missing. Checked on the RESOLVED configuration
+    // for `key`'s exact reason, and that MOVED here in the preset fix: `objective` is
+    // required by `score:'verify'`, which is now four presets rather than `optimise`
+    // alone, so requiring it by preset name would be four names spelling a rule the
+    // validity table already states once.
+    const unmeasured = resolveSwarm({ preset: 'optimise', task: entry.task });
+    if ('reason' in unmeasured) throw new Error('a named preset must resolve, and this one refused');
+    expect(swarmValidity(unmeasured)).toMatchObject({ reason: 'bad_input' });
   });
 
   test('*Validity over the resolved configuration*: entry zero is LEGAL', () => {
@@ -473,8 +478,15 @@ describe('the implementation, asserted where absences used to be pinned', () => 
     // Still a SET assertion rather than a containment check, and for the same
     // reason: an export added without a thought is the pass-by-omission this file is
     // about, so growth stays a decision.
+    //
+    // GROWN BY ONE: `VERIFIER_KINDS` MOVED here from `verifier-registry.ts`. The
+    // vocabulary belongs to `VerifierSpec.kind`, which this module declares; the
+    // implementations stay in the registry. Keeping them together made the membership
+    // rule unreachable from `swarmValidity` without closing an import cycle, so the
+    // registry could only be consulted once a run had started — while
+    // `VerifierSpec.kind`'s own docstring promised a CALL-TIME refusal.
     expect(Object.keys(objectiveModule).sort()).toEqual([
-      'PUBLICATION_SURFACES', 'PUBLISHING_CARRIES', 'admitsPublication',
+      'PUBLICATION_SURFACES', 'PUBLISHING_CARRIES', 'VERIFIER_KINDS', 'admitsPublication',
       'carrySuppression', 'floorMargin', 'isBetter', 'normalisedScore',
     ]);
     // GROWN BY FOUR since *Arbitration*'s arbiter landed. `arbitrateBranch` is the executable
@@ -498,13 +510,19 @@ describe('the implementation, asserted where absences used to be pinned', () => 
     // what the novelty floor's unit is, and where a second level would have been selected
     // from — shared by `swarmValidity` and by `runSwarm`'s in-process check so the two
     // cannot drift apart in the direction that lets an unrunnable shape through.
+    //
+    // NET UNCHANGED in the preset fix, and the swap is the fix in one line.
+    // `isPresetPoint` LEFT: every row is a point, so there is nothing to narrow and the
+    // undeclared arm it guarded is gone. `judgeCallPool` ARRIVED: the per-evaluation
+    // call pool a judged run funds, derived from the ensemble validity admitted rather
+    // than borrowed from the MCTS engine's dial.
     expect(Object.keys(swarmModule).sort()).toEqual([
       'BRANCH_PROPOSAL_WIDTH', 'BRANCH_REFUSAL_POLICIES',
       'JUDGE_MARGINALISATION_MIN', 'NAMED_SWARM_PRESETS', 'SWARM_ADVANCES', 'SWARM_CARRIES',
       'SWARM_CONTEXTS', 'SWARM_EXPANDS',
       'SWARM_PRESETS', 'SWARM_PRESET_POINTS', 'SWARM_SCORES', 'SWARM_TREE_ADVANCES',
       'SWARM_UNITS', 'arbitrateBranch', 'archiveRegionRefusal', 'configDigestOf',
-      'isPresetPoint', 'isTreeAdvance',
+      'isTreeAdvance', 'judgeCallPool',
       'judgeMarginalisationRefusal', 'resolveSwarm', 'settleOf', 'swarmValidity',
     ]);
   });
@@ -533,33 +551,34 @@ describe('the implementation, asserted where absences used to be pinned', () => 
     }
   });
 
-  test('*Presets*: a row the document does not state is REFUSED, never resolved to a guess', () => {
-    // The gap this fixture found while flipping: the preset rows give `research` and
-    // `audit` `carry:'artifacts'` (*Presets*), whose admission threshold nothing states, so
-    // neither row can be constructed as printed. It is declared undeclared and the
-    // resolver refuses it naming the missing parameter — which is the same rule this
-    // file already applied to `branches` and `depth`: a number the specification
-    // never set is not the implementation's to invent.
+  test('*Presets*: EVERY row is stated, so every named preset resolves', () => {
+    // This assertion is the inverse of the one it replaces. The fixture found the gap
+    // while flipping — `research` and `audit` were given `carry:'artifacts'` with no
+    // threshold and `redteam` an `archive` with no novelty, so three rows could not be
+    // constructed as printed and the resolver refused them naming the missing
+    // parameter. That refusal was accurate and left three advertised presets unusable,
+    // which *Presets* forbids: a named preset is unrefusable.
+    //
+    // The parameters are declared now, and neither was invented here. `novelty: 0.4` is
+    // Rainbow Teaming's τ=0.6 converted from a similarity ceiling to this axis's
+    // distance floor; `threshold: 0.8` is `craftExtractionThreshold`, the pass-band
+    // midpoint this repository already publishes search artifacts at.
+    for (const preset of NAMED_SWARM_PRESETS) {
+      expect(SWARM_PRESET_POINTS[preset].config).toBeDefined();
+    }
+    for (const preset of ['research', 'audit', 'redteam'] as const) {
+      const resolved = resolveSwarm({ preset, task: 'x', key: 'k' });
+      expect(resolved).not.toMatchObject({ reason: 'bad_input' });
+      if ('reason' in resolved) throw new Error(resolved.error);
+      expect(resolved.config.advance).toEqual({ kind: 'archive', novelty: 0.4 });
+    }
+    // And the carry split that separates them: a research finding is for publication,
+    // an exploit corpus is not.
     for (const preset of ['research', 'audit'] as const) {
-      const row = SWARM_PRESET_POINTS[preset];
-      expect(isPresetPoint(row)).toBe(false);
-      const refusal = resolveSwarm({ preset, task: 'x', key: 'k' });
-      expect(refusal).toMatchObject({ reason: 'bad_input' });
-      expect('error' in refusal ? refusal.error : '').toContain('carry:\'artifacts\'');
+      expect(SWARM_PRESET_POINTS[preset].config.carry)
+        .toEqual({ kind: 'artifacts', threshold: 0.8 });
     }
-    // `redteam` JOINED them, and this is the assertion that records the cost. It
-    // resolved until `novelty` re-homed onto `advance:'archive'` as a required
-    // parameter; no preset row states a threshold for it, so the row stopped being
-    // constructible. The same rule, newly reaching a third row.
-    expect(isPresetPoint(SWARM_PRESET_POINTS.redteam)).toBe(false);
-    const redteam = resolveSwarm({ preset: 'redteam', task: 'x', key: 'k' });
-    expect(redteam).toMatchObject({ reason: 'bad_input' });
-    expect('error' in redteam ? redteam.error : '').toContain("advance:'archive'");
-    // And the preset rows that ARE stated resolve, so the refusals above are about the
-    // document rather than about the resolver.
-    for (const preset of ['ideate', 'optimise', 'prove'] as const) {
-      expect(isPresetPoint(SWARM_PRESET_POINTS[preset])).toBe(true);
-    }
+    expect(SWARM_PRESET_POINTS.redteam.config.carry).toEqual({ kind: 'elites' });
   });
 });
 

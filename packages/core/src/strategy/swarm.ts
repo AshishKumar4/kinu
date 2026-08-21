@@ -27,9 +27,10 @@
 
 import { KinuError, refusalOf } from '../obs/error';
 import { argumentDigest } from '../safety/argument-digest';
-import { floorMargin } from './objective';
+import { VERIFIER_KINDS, floorMargin } from './objective';
 import type {
   CarrySuppression, Floor, MeasuredValue, Objective, ObjectiveDirection, PublicationState,
+  VerifierSpec,
 } from './objective';
 import type { ExplorationRecordsReport } from './records';
 
@@ -502,26 +503,24 @@ export interface SwarmPresetPoint {
 }
 
 /**
- * A preset whose row cannot be CONSTRUCTED as printed, naming exactly what
- * the document has not stated.
+ * A row of the preset table. Every row is a POINT.
  *
- * Not a placeholder and not a deferral: {@link resolveSwarm} REFUSES this preset
- * and quotes this sentence. Supplying the number here would make this file the
- * source of truth for a quantity the specification never set — the absent-default
- * defect `ExplorationRecord.configDigest` is written against, committed by the
- * implementation instead of by the document, and undetectable afterwards because
- * the record would carry a shape nobody declared.
+ * THERE USED TO BE A SECOND ARM. A row could be `{undeclared}` — a preset naming a
+ * tagged axis value whose parameter the table declined to state — and
+ * {@link resolveSwarm} refused that preset quoting the missing declaration. Three
+ * rows sat in it and the refusal was honest, but *Presets* requires a named preset to
+ * be UNREFUSABLE, and a preset that cannot be constructed is not a preset. The arm
+ * also poisoned the one escape hatch its own refusal text recommended: `custom` with
+ * `from` naming an undeclared row inherited the refusal, so the way out named by the
+ * error did not work.
+ *
+ * The three parameters are now declared, each converted or adopted from a number this
+ * repository already holds rather than chosen here — see the rows. With no row left to
+ * refuse, the arm is REMOVED rather than left empty and guarded: an unconstructible
+ * row can no longer be written down, which is strictly stronger than refusing one, and
+ * it is the same move that put `novelty` onto the archive arm.
  */
-export interface SwarmPresetUndeclared {
-  readonly undeclared: string;
-}
-
-export type SwarmPresetRow = SwarmPresetPoint | SwarmPresetUndeclared;
-
-/** Whether the table declares this row completely enough to resolve. */
-export function isPresetPoint(row: SwarmPresetRow): row is SwarmPresetPoint {
-  return 'config' in row;
-}
+export type SwarmPresetRow = SwarmPresetPoint;
 
 /**
  * The tuple table *Presets* requires, normatively `resolve(preset) → SwarmConfig`
@@ -530,23 +529,31 @@ export function isPresetPoint(row: SwarmPresetRow): row is SwarmPresetPoint {
  * no `custom` row: `config` IS the override and `from` names the base, and a second
  * row would be the second spelling *One spelling per axis* exists to prevent.
  *
- * THREE ROWS ARE UNDECLARED AND ALL THREE ARE THE SAME GAP — a tagged arm whose
- * parameter the table never states. `research` and `audit` were already here for
- * `carry:'artifacts'`. `redteam` JOINED THEM in this change, and that is a cost
- * rather than a tidy-up: it used to resolve. Its `advance:'archive'` now requires
- * the novelty rejection test that re-homed off `score` (see
- * {@link SwarmAdvanceSetting}), and τ=0.6 is Rainbow Teaming's measured
- * filter offered as evidence that a rejection test is NEEDED — it is not a
- * threshold this specification declares for a preset. So there is nothing to put
- * there, and this table says so instead of inventing it.
+ * EVERY ROW IS DECLARED. Three of them — `research`, `audit`, `redteam` — used to be
+ * `{undeclared}`, each naming a tagged arm whose parameter the table did not state,
+ * and each therefore refused. That refusal was accurate and the preset was still
+ * useless: the shapes all three describe were reachable through `custom` on the same
+ * axes on the same day, so the table was declining to name a tuple the engine already
+ * ran. Naming it is not inventing it.
  *
- * `prove` is declared rather than undeclared even though it too takes an
- * `artifacts` threshold, and the difference is not special pleading: it is the one
- * preset whose admission rule is DERIVED rather than chosen. Its checker accepts
- * or it does not, so an artifact is kept exactly when the checker accepted it, and
- * the normalised threshold for that is 1. `research` and `audit` have no checker
- * and therefore no derivation — which is precisely why their number would have to
- * be invented.
+ * NEITHER NUMBER IS CHOSEN HERE, and that is the whole reason they may now be written:
+ *
+ *  - `novelty: 0.4` is Rainbow Teaming's τ=0.6 CONVERTED. τ is a similarity ceiling
+ *    and this axis is a distance floor, and {@link archiveRegionRefusal} already
+ *    states the conversion in the text it refuses with — "a filter quoted as a
+ *    similarity ceiling is one MINUS that number here". 0.6 written into this column
+ *    unconverted would be a stricter archive than the evidence describes, which is the
+ *    error that text exists to catch.
+ *  - `threshold: 0.8` is `craftExtractionThreshold`, and that number is itself DERIVED
+ *    rather than picked: it is the pass band's midpoint, PASS_FLOOR 0.60 + ½·PASS_SPAN
+ *    0.40, reachable only by executed code carrying an at-or-above-median judge and
+ *    unreachable by any prose branch, which caps at 0.75. It is already this
+ *    repository's bar for publishing an artifact derived from a search winner, and a
+ *    coverage finding is the same kind of object answering the same question. Two bars
+ *    for one question is how they come to disagree.
+ *
+ * `prove`'s own threshold stays 1 and stays derived from its own instrument: its
+ * checker accepts or it does not, so an artifact is kept exactly when it accepted.
  */
 export const SWARM_PRESET_POINTS = {
   ideate: {
@@ -563,23 +570,63 @@ export const SWARM_PRESET_POINTS = {
     depth: 1,
     branches: 5,
   },
+  /**
+   * The three COVERAGE rows. They are archive runs and they differ on two things
+   * only: what their `key` means to a caller — an information-gathering dimension, a
+   * finding class, a tactic — and where their survivors go.
+   *
+   * `fresh` rather than `fork`: a probe of a new coverage cell wants the parent's
+   * RESULTS, not its transcript.
+   *
+   * `verify` rather than `judge`, and this is where the shipped engine overrode the
+   * shape these rows were first drawn in. A cell is keyed by the objective's identity
+   * and its population ordered by the objective's direction, so a judged archive has
+   * nothing to bin under and nothing to rank by — {@link archiveRegionRefusal} refuses
+   * the pair. A coverage preset therefore needs a measurable objective. A caller who
+   * wants distinct approaches over a quantity nothing can measure wants `ideate`,
+   * which is honest about having no value signal.
+   *
+   * Depth 1 BY CONSTRUCTION, the same way `ideate`'s is: an archive bins at the settle
+   * barrier, so within one run there is nothing to select a second level from. The
+   * illumination loop runs ACROSS runs, and `carry` is what makes the next one start
+   * from this one's occupants.
+   */
   research: {
-    undeclared: "the preset table gives `research` carry:'artifacts', whose admission "
-      + "threshold the table does not state. τ=0.6 is Rainbow Teaming's measured filter, not this "
-      + "preset's declared threshold, so the row cannot be constructed as printed",
+    config: {
+      unit: { kind: 'answer' }, context: 'fresh',
+      expand: 'sample',
+      score: { kind: 'verify' }, advance: { kind: 'archive', novelty: 0.4 },
+      // `artifacts` and not `elites`, which is the one axis separating these rows from
+      // `redteam`: a research finding is FOR publication, and that is what this arm
+      // buys — a cross-workspace write the elites arm does not make.
+      carry: { kind: 'artifacts', threshold: 0.8 },
+    },
+    depth: 1,
+    branches: 4,
   },
   audit: {
-    undeclared: "the preset table gives `audit` carry:'artifacts', whose admission threshold "
-      + 'the table does not state — the same absence as `research`, whose tuple this one '
-      + 'collides with',
+    config: {
+      unit: { kind: 'answer' }, context: 'fresh',
+      expand: 'sample',
+      score: { kind: 'verify' }, advance: { kind: 'archive', novelty: 0.4 },
+      carry: { kind: 'artifacts', threshold: 0.8 },
+    },
+    depth: 1,
+    branches: 4,
   },
   redteam: {
-    undeclared: "the preset table gives `redteam` advance:'archive', whose novelty rejection "
-      + 'test is now a parameter of that arm rather than a `score` value, and the table '
-      + 'states no threshold '
-      + 'for it. This row USED TO RESOLVE: it resolved while an archive without a rejection '
-      + "test was merely refused, and it stops resolving now that it is unconstructible. τ=0.6 "
-      + 'is Rainbow Teaming\'s measured filter, not this preset\'s declared threshold',
+    config: {
+      unit: { kind: 'answer' }, context: 'fresh',
+      expand: 'sample',
+      score: { kind: 'verify' }, advance: { kind: 'archive', novelty: 0.4 },
+      // `elites`, DELIBERATELY not `artifacts`. The artifacts arm publishes
+      // cross-workspace, and an exploit corpus is the one search output that must not
+      // leave the workspace that asked for it. What this run produces is the best
+      // member of each tactic cell, which is what `elites` keeps.
+      carry: { kind: 'elites' },
+    },
+    depth: 1,
+    branches: 4,
   },
   optimise: {
     config: {
@@ -648,6 +695,33 @@ export function isTreeAdvance(advance: SwarmAdvance): boolean {
  * sits below the smallest arm the paper measured.
  */
 export const JUDGE_MARGINALISATION_MIN = 20;
+
+/**
+ * The per-evaluation LLM-call pool a swarm funds so an ensemble of `samples` is the
+ * ensemble that actually runs.
+ *
+ * WHY THIS EXISTS AT ALL. `judgeCallBudget` splits ONE pool between the generated
+ * check suite and the ensemble, so an ensemble is bounded by what the pool leaves:
+ * `min(samples, pool − 1)` on a code-bearing candidate. The swarm's judged path used
+ * to hand it `DEFAULT_CONFIG.mcts.maxEvalLLMCalls` — 4, the MCTS ENGINE's dial, sized
+ * for that engine's own `judgeSamples: 3` default — so every judged swarm realised 3
+ * however many {@link JUDGE_MARGINALISATION_MIN} demanded. A run admitted at 20 and
+ * executed at 3 is the accepted-and-ignored shape in its purest form, and it was
+ * DISCLOSED rather than fixed: `swarm.judge_ensemble_clamped` said so on the way past.
+ *
+ * The floor is not what moved. It is a claim about ensemble size, measured, and
+ * lowering it to meet a borrowed dial is the one move forbidden here. What moved is
+ * the funding: the pool is now DERIVED from the request the validity table already
+ * admitted, so the two numbers cannot disagree.
+ *
+ * `samples + 1` and not a larger figure: the one extra call is exactly the check
+ * suite `judgeCallBudget` documents, bought on a code-bearing candidate and left
+ * unspent on a prose one. Nothing here is a spend ceiling — the mission budget is,
+ * and it is checked where spend is checked.
+ */
+export function judgeCallPool(samples: number): number {
+  return samples + 1;
+}
 
 /** Where a resolved cap's number came from. A cap the CALLER set and a cap
  *  INHERITED from a preset row are different facts about a run, and no record can
@@ -797,16 +871,14 @@ function requiredFieldRefusal(input: SwarmInput): SwarmRefusal | null {
         + 'measured and then ignored, which is a silent lie about what the run did. Use '
         + 'preset:"optimise" to measure something, or drop `objective`.');
     }
-    // `key` is NOT checked here. The rule prohibits it on `ideate` and on `optimise`
-    // and requires it on the three archive presets — *Accepted and ignored* — which is
-    // one rule about the resolved `advance` rather than four about preset names, so it
-    // lives in {@link swarmValidity} beside the archive rule, where `custom` gets the
-    // same verdict for the same reason.
-    if (input.preset === 'optimise' && !input.objective) {
-      return badInput('`optimise` measures something and this call did not say what. Supply `objective` '
-        + 'with a `metric`, a `unit`, a `direction` and a `target`. `ideate` needs none; '
-        + 'research/audit/redteam need a coverage `key` instead.');
-    }
+    // NEITHER `key` NOR `objective` IS CHECKED HERE, and for one reason. Both are
+    // rules about the RESOLVED configuration — `key` about `advance:'archive'`,
+    // `objective` about `score:'verify'` — and both live in {@link swarmValidity},
+    // where `custom` gets the same verdict for the same reason. `objective` used to be
+    // required here by preset NAME, on `optimise` alone. That was one rule about one
+    // name while it was the only verifying preset; with `prove` and the three coverage
+    // rows all scoring by `verify` it would have become five names spelling a rule the
+    // validity table already states once.
   }
   return null;
 }
@@ -817,8 +889,8 @@ function requiredFieldRefusal(input: SwarmInput): SwarmRefusal | null {
  *
  * Validity is stated over the RESOLVED configuration — *Validity over the resolved
  * configuration* — so this is the function that gives the predicate an input at all.
- * It is deliberately total over `SwarmPreset`: an undeclared row is refused with the
- * missing declaration quoted, never resolved to something plausible.
+ * It is deliberately total over `SwarmPreset`: every row is a point, so a named preset
+ * always resolves and a composition seeded with `from` always has a base to inherit.
  */
 export function resolveSwarm(input: SwarmInput): ResolvedSwarm | SwarmRefusal {
   const required = requiredFieldRefusal(input);
@@ -827,17 +899,11 @@ export function resolveSwarm(input: SwarmInput): ResolvedSwarm | SwarmRefusal {
   const baseName: NamedSwarmPreset | null = input.preset === 'custom'
     ? input.from ?? null
     : input.preset;
-  let base: SwarmPresetPoint | null = null;
-  if (baseName) {
-    const row: SwarmPresetRow = SWARM_PRESET_POINTS[baseName];
-    if (!isPresetPoint(row)) {
-      return badInput(`preset "${baseName}" has no resolvable point: ${row.undeclared}. `
-        + 'A preset whose row is absent is not a preset, so this call cannot be checked for '
-        + 'validity — use preset:"custom" and state the axes, including the parameter that is '
-        + 'missing, under a `label`.');
-    }
-    base = row;
-  }
+  // Every row is a point, so this is a lookup and not a decision. It used to be a
+  // decision, and the arm it chose between REFUSED — which reached `custom` too, so a
+  // composition seeded from an undeclared row was refused for its base's gap rather
+  // than judged on the axes the caller stated. See {@link SwarmPresetRow}.
+  const base: SwarmPresetPoint | null = baseName ? SWARM_PRESET_POINTS[baseName] : null;
 
   const merged = { ...base?.config, ...input.config };
   if (!namesEveryAxis(merged)) {
@@ -923,6 +989,27 @@ function floorsOf(objective: Objective): readonly { floor: Floor; direction: Obj
   if (objective.kind === 'vector') return objective.components.flatMap(floorsOf);
   if (objective.kind === 'witness') return objective.proxy ? floorsOf(objective.proxy) : [];
   return objective.floor ? [{ floor: objective.floor, direction: objective.direction }] : [];
+}
+
+/**
+ * Every instrument a resolved objective NAMES, written as data.
+ *
+ * Walks the same three composite shapes {@link floorsOf} does, and for the same
+ * reason: a `vector` declares one per component and a `witness` declares its own check
+ * plus its proxy's, so a membership rule cannot be written over a single field.
+ *
+ * The CLOSURE arm is skipped rather than refused. A closure cannot fail to resolve, so
+ * there is no registry question to ask of it — and it is unauthorable from the tool
+ * surface anyway, which is where a fabricated name would come from.
+ */
+function verifierSpecsOf(objective: Objective): readonly VerifierSpec[] {
+  if (objective.kind === 'vector') return objective.components.flatMap(verifierSpecsOf);
+  const named = objective.kind === 'witness'
+    ? [objective.check, ...(objective.proxy ? [objective.proxy.verify] : [])]
+    : [objective.verify];
+  // Narrowed on the DOMAIN and not on the representation: a `VerifierSpec` is the arm
+  // that declares a `kind`, and the closure arm declares nothing.
+  return named.filter((source): source is VerifierSpec => 'kind' in source);
 }
 
 /**
@@ -1055,8 +1142,27 @@ export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
   }
   if (config.score.kind === 'verify' && !objective) {
     return badInput('score:"verify" measures something and this composition did not say what. Supply '
-      + '`objective` with a `metric`, a `unit`, a `direction` and a `target` — or score:"none" for a flat '
-      + 'run with no value signal.');
+      + '`objective` with a `metric`, a `unit`, a `direction`, a `target`, and `verify` as '
+      + `{kind, spec} naming one of the registered instruments: ${VERIFIER_KINDS.join(', ')}. `
+      + 'Or score:"none" for a flat run with no value signal.');
+  }
+  // THE CHECKER IS NAMED AT CALL TIME, which is what `VerifierSpec.kind` already claims
+  // ("an unregistered kind is a CALL-TIME `bad_input` naming the registered kinds") and
+  // what nothing enforced: the registry was consulted at the top of `runSwarm`, so a
+  // fabricated kind was a refusal a caller only met once the run had begun.
+  //
+  // It is also what makes `prove` honest. That preset resolves to score:"verify" and
+  // promises a checker, and it used to resolve without one being nameable here — a
+  // preset resolving into a scoring path that cannot score it. Now a `prove` call
+  // states its instrument to be legal at all, and the closed set says which exist.
+  if (objective) {
+    for (const spec of verifierSpecsOf(objective)) {
+      if (!VERIFIER_KINDS.some((registered) => registered === spec.kind)) {
+        return badInput(`no verifier kind "${spec.kind}" is registered, so score:"verify" names an `
+          + 'instrument that cannot run and this composition would measure nothing. `kind` must be one '
+          + `of: ${VERIFIER_KINDS.join(', ')}.`);
+      }
+    }
   }
   if (advance === 'archive' && !resolved.key) {
     // WHAT THE KEY HAS TO NAME MOVED when the archive started running: the cell is

@@ -441,6 +441,7 @@ const STALL_MS = 250;
 async function runWith(
   model: MockLanguageModelV3,
   call: ResolvedSwarm = resolved(),
+  stallTimeoutMs: number = STALL_MS,
 ): Promise<SilentRun> {
   const { rt } = createTestRuntime();
   // A real file, so a node that reads before it answers reads something. The read is what
@@ -451,7 +452,7 @@ async function runWith(
   const logger = createRecordingLogger();
   const startedAt = Date.now();
   const result = await runSwarm(
-    { rt, model, mode: 'build', logger, maxSteps: NODE_STEPS, stallTimeoutMs: STALL_MS },
+    { rt, model, mode: 'build', logger, maxSteps: NODE_STEPS, stallTimeoutMs },
     call,
   );
   const elapsedMs = Date.now() - startedAt;
@@ -549,7 +550,18 @@ describe('a level whose nodes never answer', () => {
     // is ever silent for one, so a flat deadline would cut all three off mid-work while
     // the watchdog lets them finish. Without this arm a refactor to a runtime bound passes.
     const pauseMs = Math.floor(STALL_MS / 2);
-    const { result, rows } = await runWith(slowSteppingProvider(pauseMs));
+    // THE STALL BOUND THIS ARM RUNS UNDER IS ITS OWN, and the arithmetic is why. Every
+    // node here finishes through `report`, and the report contract now runs the
+    // objective's instrument inside that call, on one lane because every candidate is
+    // written to the same path. Measured: ~154 ms per exec-ratio pass, three branches,
+    // so the last node is silent for ~460 ms of queued instrument work — above the
+    // 250 ms fixture that was chosen when a report was a no-op. The RELATIONSHIP under
+    // test is untouched: the model still pauses half a stall envelope per step, every
+    // node still outlives one envelope in total, and none is ever silent for one. A
+    // flat runtime deadline would still cut all three off, which is the substitution
+    // this arm exists to fail.
+    const stallMs = 4 * STALL_MS;
+    const { result, rows } = await runWith(slowSteppingProvider(pauseMs), resolved(), stallMs);
 
     expect('reason' in result).toBe(false);
     expect(rows.length).toBe(BRANCHES);

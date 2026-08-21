@@ -122,6 +122,26 @@ export type Measurement = MeasuredValue | Unmeasurable;
 export type Verifier = (ctx: MeasurementContext) => Promise<Measurement>;
 
 /**
+ * Every verifier kind that resolves. The set {@link VerifierSpec.kind} is closed over,
+ * and the list a refusal prints.
+ *
+ * One member, and that is a statement rather than a stub: a kind is a real instrument
+ * with a real spec schema, and the corpus that pays for this one (`exec-ratio`) is the
+ * only measurement substrate the tree currently owns. A second member arrives with its
+ * implementation, not before it.
+ *
+ * IT LIVES BESIDE THE TYPE IT CLOSES rather than inside the registry that resolves it,
+ * and the difference is load-bearing: the VOCABULARY belongs to `VerifierSpec`, the
+ * IMPLEMENTATIONS belong to `verifier-registry.ts`. Keeping them together made the
+ * membership rule unreachable from {@link swarmValidity} — importing it there would
+ * have closed a cycle — so the registry check could only happen once a run had already
+ * started, and the docstring below claims it is a CALL-TIME refusal. Now it is one.
+ */
+export const VERIFIER_KINDS = ['exec-ratio'] as const;
+
+export type VerifierKind = (typeof VERIFIER_KINDS)[number];
+
+/**
  * A verifier declared as DATA, which is what makes {@link ObjectiveIdentity}'s
  * digest definable at all.
  *

@@ -160,13 +160,17 @@ describe('the surface has SIX axes, and each cut value is refused by its own nam
       .toMatchObject({ advance: { kind: 'archive', novelty: 0.6 } });
   });
 
-  test('the three archive presets stopped resolving, and say why rather than guessing', () => {
-    // The cost stated plainly: `redteam` USED to resolve and now does not, because
-    // no preset row declares the threshold its archive arm now requires (*Presets*).
+  test('the three archive presets resolve, at the CONVERTED Rainbow filter', () => {
+    // This test used to pin the opposite and record it as a cost: all three refused,
+    // because no row declared the threshold the archive arm requires. The threshold is
+    // now declared — τ=0.6 is a similarity CEILING and this axis is a distance FLOOR,
+    // so the row states 1 − 0.6 — and the presets resolve. The conversion is the point:
+    // 0.6 written here unconverted is a stricter archive than the evidence describes.
     for (const preset of ['research', 'audit', 'redteam'] as const) {
       const resolved = resolveSwarm({ preset, task: 'probe it', key: 'behaviour' });
-      if (!('reason' in resolved)) throw new Error(`${preset} must be refused as undeclared`);
-      expect(resolved.error).toContain(preset);
+      if ('reason' in resolved) throw new Error(`${preset} must resolve: ${resolved.error}`);
+      expect(resolved.config.advance).toEqual({ kind: 'archive', novelty: 0.4 });
+      expect(resolved.settle).toBe('archive');
     }
   });
 

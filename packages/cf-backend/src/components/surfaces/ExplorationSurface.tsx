@@ -941,11 +941,6 @@ function SwarmResolutionBody(
         </dl>
       )}
 
-      {resolution.kind === "undeclared" && (
-        <p className="mt-1.5 text-[10px] p-warning leading-snug">
-          This preset does not resolve, so the run has no axis tuple to show — {resolution.undeclared}.
-        </p>
-      )}
       {resolution.kind === "custom" && (
         <p className="mt-1.5 text-[10px] p-text-3 leading-snug">
           A composition's resolved axes are digested into its records row, which has no

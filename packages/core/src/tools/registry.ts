@@ -279,7 +279,7 @@ export const DELEGATION_CONVERSE =
   'A busy agent is never blocked on — your message is queued immediately for its own mode-homogeneous turn, so send follow-ups as soon as you have them.';
 
 /**
- * What each preset IS, and which of them the table can actually construct.
+ * What each preset IS and when to reach for it.
  *
  * ONE enumeration, rendered by every surface a model can learn the preset set
  * from — the `preset` property, the missing-`preset` refusal, and the
@@ -287,18 +287,20 @@ export const DELEGATION_CONVERSE =
  * `prove` came to be reachable in the enum and named in none of them, while
  * three presets that stopped resolving went on being described as working.
  *
- * The unconstructible three are stated rather than omitted BECAUSE they are
- * still in the advertised enum: `SWARM_PRESET_POINTS` records the gap instead
- * of inventing a threshold, and `resolveSwarm` refuses the row with the missing
- * declaration quoted. A model that can select one and is told nothing spends a
- * turn discovering that; one line here is cheaper than the turn.
+ * IT USED TO CARRY A LINE ABOUT THREE PRESETS THAT COULD NOT RUN. `research`,
+ * `audit` and `redteam` were advertised and refused, so the honest thing was to
+ * say so and spend one line rather than one of the model's turns. All six
+ * resolve now, and the line is gone rather than reworded: doctrine describes
+ * the surface, and describing an absence that no longer exists is the drift
+ * this constant was made one copy to prevent.
  */
 export const SWARM_PRESET_DOCTRINE = [
-  'optimise beats a number you can measure (a cost, a runtime, a count) and REQUIRES `objective`.',
-  'prove drives a checker that accepts or does not, so `objective` names that checker; it searches deepest, because a wrong branch is refuted rather than carried down by a plausible score.',
-  'ideate is deliberately flat — no value signal, so no `objective` — and returns a set of distinct approaches, unranked.',
-  'custom states all six axes in `config` under a `label`, optionally seeded from `from`.',
-  'research, audit and redteam are named but UNCONSTRUCTIBLE: each needs a threshold the preset table does not state, so a call naming one is refused, naming what is missing. State the axes as custom instead.',
+  'optimise climbs one number you can measure — a cost, a runtime, a count. It requires `objective`.',
+  'prove drives a checker that accepts a candidate or does not. `objective` names that checker, and the name must be a registered verifier kind. It searches deepest, because a checker refutes a wrong branch instead of letting a plausible score carry it down.',
+  'ideate is deliberately flat: no value signal, so no `objective`, and it returns a set of distinct approaches, unranked. Reach for it when the thing you want is not measurable.',
+  'research, audit and redteam COVER a space instead of climbing it. Each keeps one cell per value of the coverage `key` and keeps the best member of each, so ten variants of one finding stay one finding. All three require `objective` and `key`, and all three run one level — the grid is written at the end of the run, and a later run starts from this one\'s occupants.',
+  'The three differ in what `key` means to you — a subject, a finding class, a tactic — and in where survivors go: research and audit publish theirs, redteam keeps its corpus in this workspace.',
+  'custom states all six axes in `config` under a `label`, optionally seeded from `from`. Reach for it when no preset names the shape you want.',
 ] as const;
 
 // ── Durable-state doctrine (single source) ──────────────────────────────────

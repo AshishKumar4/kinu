@@ -1032,14 +1032,18 @@ describe('the records store: what one run reached, the next one starts from', ()
 
 // The refusal said judge "needs the marginalised ensemble the shipped tree owns", and the
 // tree owns one: `mcts/evaluation.ts` samples a judge `k` times over one prompt and takes
-// the median. These prove the swarm path REACHES it, and that the clamp between what a
-// caller asks for and what the call budget funds stays visible.
+// the median. These prove the swarm path REACHES it, and that the ensemble validity
+// admitted is the ensemble that runs.
+//
+// THESE THREE USED TO PIN THE OPPOSITE. They asserted `{requested: 20, realised: 3}` and
+// a `swarm.judge_ensemble_clamped` event, because the judged path handed the evaluator
+// `DEFAULT_CONFIG.mcts.maxEvalLLMCalls` — the MCTS engine's dial, 4, sized for that
+// engine's own `judgeSamples: 3`. So a judged tree was admitted at the marginalisation
+// floor of 20 and executed at 3, disclosed and non-functional. The pool is now derived
+// from the request (`judgeCallPool`), the floor is untouched, and the clamp event is
+// gone because it can no longer bind.
 describe("score:'judge' reaches the ensemble the tree already owns", () => {
-  test('A JUDGED TREE RUNS, and the run record states 3 realised against 20 requested', async () => {
-    // The two numbers the measurement fixed. 20 is the marginalisation floor a judged
-    // tree must ask for; 3 is what the shipped per-evaluation call budget funds on a
-    // code-bearing candidate, `min(20, 4 - 1)`. A wiring that let the clamp bind in
-    // silence would report 20 here, or nothing.
+  test('A JUDGED TREE RUNS at the ensemble it was admitted at', async () => {
     const { result } = await run({
       depth: 1, branches: 2, proposeWidth: null,
       config: { score: { kind: 'judge', samples: 20 } },
@@ -1047,7 +1051,7 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
     expect('reason' in result).toBe(false);
     if ('reason' in result) return;
 
-    expect(result.report.judgeEnsemble).toEqual({ requested: 20, realised: 3 });
+    expect(result.report.judgeEnsemble).toEqual({ requested: 20, realised: 20 });
     // It genuinely SCORED: a judged candidate carries the ensemble's number and no
     // measurement, because the median is not a value in any objective's unit.
     expect(result.candidates.length).toBeGreaterThan(0);
@@ -1059,11 +1063,13 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
     expect(result.report.records).toBeNull();
   }, 120_000);
 
-  test('the clamp is PERSISTED, so a reader can state it once the call has returned', async () => {
-    // The clamp was computed, disclosed in the settle report, and written nowhere — so no
-    // surface could show it however well rendered, which is the accepted-and-ignored shape
-    // *Accepted and ignored* refuses: a measurement taken and dropped. It is now folded
-    // onto the run's own ledger row as the smallest ensemble any candidate reached.
+  test('the realised ensemble is PERSISTED, so a reader can state it once the call has returned', async () => {
+    // The figure was computed, disclosed in the settle report, and written nowhere — so
+    // no surface could show it however well rendered, which is the accepted-and-ignored
+    // shape *Accepted and ignored* refuses: a measurement taken and dropped. It is
+    // folded onto the run's own ledger row as the smallest ensemble any candidate
+    // reached, and it is worth keeping now that it equals the request: the row is the
+    // evidence that the pool held, not a record of a downgrade.
     const { rt } = createTestRuntime();
     const { result } = await run({
       depth: 1, branches: 2, proposeWidth: null,
@@ -1071,7 +1077,7 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
     });
     expect('reason' in result).toBe(false);
     if ('reason' in result) return;
-    expect(result.report.judgeEnsemble).toEqual({ requested: 20, realised: 3 });
+    expect(result.report.judgeEnsemble).toEqual({ requested: 20, realised: 20 });
 
     const page = readExplorationCanvas(rt.storage.sql);
     expect(page.items).toHaveLength(1);
@@ -1080,7 +1086,7 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
     // all: `readForkRunParams` answered a swarm with the transcript half alone.
     expect(entry.params?.search).toMatchObject({
       budget: 2, branches: 2, maxDepth: 1, mode: 'build',
-      judgeSamplesRequested: 20, judgeSamplesRealised: 3,
+      judgeSamplesRequested: 20, judgeSamplesRealised: 20,
     });
     // The persisted number and the disclosed one are the same number, which is the
     // property that makes one of them a projection of the other rather than a second
@@ -1096,17 +1102,18 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
     expect(entry.head).toBeNull();
   }, 120_000);
 
-  test('the clamp is DISCLOSED once per realised size, not left to be inferred', async () => {
+  test('no clamp is disclosed, because none can bind', async () => {
+    // The inverse of the assertion this replaces. `swarm.judge_ensemble_clamped` was
+    // emitted once per distinct realised size below the request; with the pool sized
+    // from the request there is no such size, and a shortfall is now an instrument
+    // fault that fails the run rather than an event on the way past.
     const { logger, result } = await run({
       depth: 1, branches: 2, proposeWidth: null,
       config: { score: { kind: 'judge', samples: 20 } },
     });
     expect('reason' in result).toBe(false);
-    const clamped = logger.emitted.filter((line) => line.event === 'swarm.judge_ensemble_clamped');
-    expect(clamped).toHaveLength(1);
-    expect(clamped[0]?.fields).toMatchObject({
-      judge_samples_requested: 20, judge_samples_realised: 3, max_eval_llm_calls: 4,
-    });
+    expect(logger.emitted.filter((line) => line.event === 'swarm.judge_ensemble_clamped'))
+      .toHaveLength(0);
   }, 120_000);
 
   test('a judged tree BELOW the marginalisation floor is refused, by the in-process entry point too', async () => {

@@ -239,10 +239,10 @@ trying it:
   159 seeded-defect tasks scored by this repository's own checks, a held-out split,
   no model in the scoring path, and rejection by default. If the answer turns out to
   be that evolution does nothing, that is the answer I want.
-- **Three of the seven search presets refuse to resolve.** `research` and `audit`
-  need a `carry:'artifacts'` threshold and `redteam` needs an `advance:'archive'`
-  threshold. The preset table states neither, so `resolveSwarm` refuses the call and
-  names the missing threshold. Use `custom` and state the axes yourself.
+- **`archive` coverage runs need a measurable objective.** `research`, `audit` and
+  `redteam` keep a grid of cells and rank each cell by the objective's own
+  instrument, so all three require `objective` and a coverage `key`. A search over
+  something no instrument can measure is `ideate`, which is flat and says so.
 - **`advance:'pareto'` is not implemented.** It needs a per-instance measurement path
   and a dominance comparison, and the error names both.
 - **`python` does not work in a hosted workspace.** Hosted runtimes come from R2 via
