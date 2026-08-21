@@ -67,6 +67,29 @@ export function notifyWorkspacesCredentialsChanged(
 export type OwnedWorkspaceResult =
   | { ok: true; agent: DurableObjectStub<OrchestratorAgent> }
   | { ok: false; status: number; error: string };
+/** Positive registry-membership answers this Worker isolate has proven, keyed
+ *  `${userId}\u0000${workspaceName}`. A proof is earned only by a real
+ *  `hasWorkspace` answer, and `claimOwner` still verifies the caller IS the
+ *  stored owner afterwards — a proof only ever skips the registry READ, never
+ *  the identity check, and exists only for a pair that passed both. Removal
+ *  happens in the UserDO, which this isolate learns only when
+ *  `ensureWorkspaceCapability`'s own registry re-check contradicts the proof;
+ *  that eviction is what keeps a deleted workspace deleted.
+ */
+const membershipProven = new Set<string>();
+
+/** Bound the proof set: a long-lived isolate otherwise accumulates one small
+ *  entry per (user, workspace) it ever saw. Overflow drops every proof, so
+ *  each caller simply re-reads its registry once — the uncached path. The
+ *  value is a memory bound on this set only; it does not tune
+ *  MAX_RATE_LIMIT_PER_MIN (core events ingress), which shares the number by
+ *  coincidence. */
+const MEMBERSHIP_PROOF_LIMIT = 10_000;
+
+/** Discard a membership proof; the next request re-reads the registry. */
+export function forgetWorkspaceMembership(userId: string, workspaceName: string): void {
+  membershipProven.delete(`${userId}\u0000${workspaceName}`);
+}
 
 /** Verify `userId` owns `workspaceName` (registry membership + claimOwner on
  *  the orchestrator's own identity). 404 when the workspace isn't in the
@@ -80,20 +103,33 @@ export async function claimOwnedWorkspace(
   workspaceName: string,
 ): Promise<OwnedWorkspaceResult> {
   const userDO = env.UserDO.get(env.UserDO.idFromName(userId));
-  // Every one of the three calls below runs on EVERY authenticated request for
-  // this workspace, and every one is idempotent — a membership read, a claim
-  // that converges on the same owner, and a reconcile that returns immediately
-  // once the two sides agree. A connection the platform dropped between the
-  // Worker and either object is not a statement about the request.
+  // These calls run on every authenticated request for this workspace, and
+  // every one is idempotent — a membership read (skipped when this isolate
+  // still holds a positive proof), a claim that converges on the same owner,
+  // and a reconcile that returns immediately once the two sides agree. A
+  // connection the platform dropped between the Worker and either object is
+  // not a statement about the request.
   const owner = await ownerCaller(env);
-  const member = await retryTransientDO('hasWorkspace',
-    () => userDO.hasWorkspace(owner, workspaceName));
-  if (!member) {
-    return {
-      ok: false,
-      status: 404,
-      error: `Workspace ${workspaceName} not in your registry. Create it via POST /api/user/workspaces first.`,
-    };
+  // The wake-guard half of the gate, and its order IS the security property:
+  // hasWorkspace must answer before claimOwner for anyone unproven, or a
+  // crafted workspace name would wake an arbitrary OrchestratorAgent. A
+  // proven member skips straight to the claim.
+  const membershipKey = `${userId}\u0000${workspaceName}`;
+  if (!membershipProven.has(membershipKey)) {
+    const member = await retryTransientDO('hasWorkspace',
+      () => userDO.hasWorkspace(owner, workspaceName));
+    if (!member) {
+      // A concurrent request may have proven membership moments ago; a fresh
+      // removal answer outranks it.
+      membershipProven.delete(membershipKey);
+      return {
+        ok: false,
+        status: 404,
+        error: `Workspace ${workspaceName} not in your registry. Create it via POST /api/user/workspaces first.`,
+      };
+    }
+    if (membershipProven.size >= MEMBERSHIP_PROOF_LIMIT) membershipProven.clear();
+    membershipProven.add(membershipKey);
   }
   const agent = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(workspaceName));
   let claim: { owner: string; capabilityHash: string | null };
@@ -121,6 +157,14 @@ export async function claimOwnedWorkspace(
       () => userDO.ensureWorkspaceCapability(workspaceName, claim.capabilityHash));
   } catch (e) {
     const message = renderThrownChain({ cause: e });
+    // The UserDO re-checks the registry on every reconcile; its contradiction
+    // is the authoritative refutation of a cached proof — the workspace was
+    // removed after this isolate proved membership. Evict and report 404 so
+    // deletion sticks with no cross-isolate invalidation channel.
+    if (/not in your registry/i.test(message)) {
+      forgetWorkspaceMembership(userId, workspaceName);
+      return { ok: false, status: 404, error: message };
+    }
     const transient = classifyTransientDO({ cause: e });
     diagnostics.failure('workspace.capability_provisioning_failed', toKinuError({
       doing: "provisioning the workspace's capability token",

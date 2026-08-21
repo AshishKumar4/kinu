@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createCloudWorkspaceForUser } from '../src/user/workspace-create';
 import { claimOwnedWorkspace } from '../src/user/workspace-access';
+import { HarnessOrchestratorAgent, orchestratorHarness } from './helpers/actor-harness';
 import type { UserCaller } from '../src/user/workspace-capability';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
@@ -377,6 +378,52 @@ describe('cloud agent ownership safety', () => {
 
       expect(result).toMatchObject({ ok: false, status: 500 });
       if (!result.ok) expect(result.error).toContain('storage unavailable');
+    });
+  });
+
+  describe('claimOwner — the scaffold probe and the connect path', () => {
+    // Production telemetry over 48h (#222): claimOwner median 6ms but p90
+    // 1170ms / max 2456ms. The tail is ensureOwnedScaffold's Nimbus network
+    // probe (`vfs.exists`) running whenever `_scaffoldReady` is false — every
+    // cold activation — inside the RPC every authenticated request calls.
+    // The owned branch must not probe: beforeTurn awaits the same latch
+    // before anything reads the workspace files, so an interrupted first
+    function spyScaffoldExists(agent: HarnessOrchestratorAgent) {
+      const scaffold = agent.observeRuntime().identity.scaffold;
+      let seen = 0;
+      const real = scaffold.exists.bind(scaffold);
+      scaffold.exists = async () => {
+        seen += 1;
+        return real();
+      };
+      return { calls: () => seen };
+    }
+
+    test('an already-owned claim does not touch the Nimbus filesystem', async () => {
+      const harness = orchestratorHarness();
+      harness.agent.forgetActivationLatches();
+      const probe = spyScaffoldExists(harness.agent);
+
+      const claim = await harness.agent.claimOwner('harness-owner');
+
+      expect(claim.owner).toBe('harness-owner');
+      expect(probe.calls()).toBe(0);
+    });
+
+    test('the first claim still bootstraps the scaffold through Nimbus', async () => {
+      const harness = orchestratorHarness();
+      harness.db.prepare(
+        "UPDATE workspace_identity SET owner_user_id = '' WHERE id = 'harness-actor'",
+      ).run();
+      // Same cold activation as production: nothing has latched the scaffold.
+      harness.agent.forgetActivationLatches();
+      const probe = spyScaffoldExists(harness.agent);
+
+      const claim = await harness.agent.claimOwner('first-claim-user');
+
+      expect(claim.owner).toBe('first-claim-user');
+      expect(probe.calls()).toBeGreaterThan(0);
+      expect(await harness.agent.observeRuntime().identity.scaffold.exists()).toBe(true);
     });
   });
 

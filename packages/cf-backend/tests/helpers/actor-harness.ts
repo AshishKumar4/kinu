@@ -40,6 +40,9 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   observeRuntime(): AgentRuntime { return this.rt; }
   setObservedSoul(text: string): void { this._cachedSoulText = text; }
   declareScaffoldPresent(): void { this._scaffoldReady = true; }
+  /** A cold activation: the owner row persists in SQL, in-memory latches do
+   *  not — the state every claimOwner RPC meets on a freshly-activated DO. */
+  forgetActivationLatches(): void { this._scaffoldReady = false; }
   /** The parent-side roster the facet gate consults. Exposed rather than
    *  wrapped: the production store IS the API a test seeds a subordinate
    *  through, and a hand-written INSERT would be a second copy of its
