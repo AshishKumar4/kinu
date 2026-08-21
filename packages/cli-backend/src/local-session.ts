@@ -61,6 +61,7 @@ import {
   ModelCatalogSession,
   BUILTIN_TOOL_NAMES, isMcpToolKey,
   buildActorTools, withClampedToolResults, buildSystemPromptSync, currentDateForPrompt,
+  activePromptSectionOverrides,
   turnProvenanceForMetadata, workModeForTurnMetadata,
   createChatModel, runChat, resolveMaxSteps, estimateTokens,
   parseModelSpec, agentAffinityKey,
@@ -1704,6 +1705,10 @@ export class LocalAgentSession implements BackendHost {
       model: { id: this.effectiveModelSpec() },
       cwd: this.cwd,
       currentDate: currentDateForPrompt(),
+      // Prompt sections the evolution loop promoted. Read here, not inside the
+      // builder: the builder is the byte-stable cacheable prefix and does no
+      // I/O, exactly as with the soul.
+      sectionOverrides: activePromptSectionOverrides(this.rt.storage.sql),
     };
     if (agentsMd.length > 0) systemPromptOptions.agentsMd = agentsMd;
     if (availableSkills.length > 0) systemPromptOptions.availableSkills = availableSkills;

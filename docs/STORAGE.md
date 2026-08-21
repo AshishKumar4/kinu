@@ -265,7 +265,7 @@ same `initWorkspaceSchema()` pass:
 
 | Subsystem | Tables | Owner |
 |---|---|---|
-| Events hub | `agent_log`, `reply_channels`, `triggers`, `peer_outbox` (+ views `events_v`, `run_event_v`, `turn_phase_log_v`) | `core/src/events/hub/schema.ts` |
+| Events hub | `agent_log`, `reply_channels`, `triggers` (+ views `events_v`, `run_event_v`, `turn_phase_log_v`) | `core/src/events/hub/schema.ts` |
 | Run-event log | `run_events` | `core/src/events/recorder.ts` |
 | Turn outcomes | `turn_outcomes`, `lessons`, `outcome_labels`, `outcome_ensemble_labels` | `core/src/evolution/outcomes.ts` |
 | Replay eval | `replay_evals` | `core/src/evolution/replay.ts` |
@@ -294,11 +294,17 @@ Five more groups are created outside that pass, by the root that owns each:
 | Subordinates | `workspace_subordinates` (every actor that can hire), `subordinate_identity` (child DO) | `core/src/subordinates/support.ts` |
 | Workspace-diff baseline | `vfs_baseline` | `core/src/read-models/workspace-diff.ts`, called by each root's schema pass |
 | Orchestrator-local | `turn_feedback`, `turn_craft_usage` | `cf-backend/src/orchestrator.ts`, inline |
-| Email + webhooks | `email_outbox` | `cf-backend/src/email/outbox.ts` |
+| Email + webhooks | (no boot DDL — the outbound mail rows are the shared outbox's `outbox_email`) | `cf-backend/src/email/outbox.ts` |
 | Ingress gates | `webhook_rate_windows`, `webhook_secrets` (both backends) | `core/src/events/ingress/rate-limit.ts`, `secrets.ts` |
 
 `session_window` and `mission_budget` are created lazily, by the evolution
 engine's constructor and by the mission governor's first write.
+
+The two durable retry outboxes — `outbox_peer` (the peer transport) and
+`outbox_email` (outbound mail) — are created lazily too, by
+`@nimbus-sh/fabric` on the first queue or drain. Their schema belongs to the
+library, not to this repository: `core/src/events/outbox.ts` is the port that
+supplies the SQL handle and the alarm.
 
 `core/src/conformance/manifest.ts` declares every one of these per root
 (`cf-orchestrator`, `cf-subordinate`, `cli`), as wired or as deliberately absent

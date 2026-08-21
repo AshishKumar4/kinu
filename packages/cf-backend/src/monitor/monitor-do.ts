@@ -29,7 +29,6 @@ export class MonitorDO extends DurableObject<Env> {
     // No retry timer: the cron tick IS the sweep, and it reconciles the outbox
     // every run — an alarm would be a second scheduler for the same job.
     this.outbox = new EmailOutbox(ctx.storage.sql);
-    this.outbox.ensureSchema();
     ensureMonitorSchema(ctx.storage.sql);
   }
 

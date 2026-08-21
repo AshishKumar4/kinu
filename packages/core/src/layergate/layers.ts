@@ -1089,7 +1089,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         id: 'evolution-gate/promotion-regression-veto',
         asserts: 'more decisive losses than allowed rolls back regardless of win rate',
         observe: (s) => s.decidePromotion(
-          { version: 3, writtenAt: 0, rationale: 'r', trialsSoFar: 12, pendingWins: 9, currentWins: 2, ties: 1 },
+          { trialsSoFar: 12, pendingWins: 9, currentWins: 2 },
           DEFAULT_SHADOW_CONFIG,
         ),
       },
@@ -1102,7 +1102,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           { trialsSoFar: 6, pendingWins: 5, currentWins: 1, ties: 0 },
           { trialsSoFar: 6, pendingWins: 1, currentWins: 1, ties: 4 },
           { trialsSoFar: 12, pendingWins: 4, currentWins: 1, ties: 7 },
-        ].map((pending) => s.decidePromotion({ version: 2, writtenAt: 0, rationale: 'r', ...pending }, DEFAULT_SHADOW_CONFIG)),
+        ].map((pending) => s.decidePromotion(pending, DEFAULT_SHADOW_CONFIG)),
       },
       {
         id: 'evolution-gate/archive-explore-vs-exploit',

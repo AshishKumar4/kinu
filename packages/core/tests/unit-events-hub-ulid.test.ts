@@ -1,5 +1,7 @@
 // ULID monotonic mode — `ORDER BY id` must equal creation order even within
-// one millisecond (the peer outbox's per-receiver ordering rides on this).
+// one millisecond (`agent_log`'s id-ordered scans ride on this: the latest
+// phase is `ORDER BY received_at DESC, id DESC LIMIT 1` and a step trace is
+// `ORDER BY step_idx, id` — hub/log.ts:572,589).
 import { describe, test, expect } from 'bun:test';
 import { ulid, ulidTime, ulidCompare } from '../src/events/hub/ulid';
 

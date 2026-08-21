@@ -231,3 +231,25 @@ export function renderDelegationFeatures(features: DelegationFeatures): string {
     `${features.executeToolsCalls} execute_tools, ${compactDuration(features.wallClockMs)} wall clock` +
     (path.length > 0 ? `. Wasted motion: ${path.join(', ')} tool calls` : '');
 }
+
+/**
+ * What a reader of the evidence above is asked to DO with it.
+ *
+ * Both readers of {@link renderDelegationFeatures} state this rubric — the turn
+ * reflection (evolution/engine.ts) and the GEPA reflector (gepa/mutate.ts) — and
+ * they used to state it in two independently-edited sentences that had already
+ * drifted into two vocabularies for one ladder: `team`/`think`/`heads` in one and
+ * `hire`/`search` in the other, neither of them the words the evidence line above
+ * actually prints. One string, printed beside the counts it reads.
+ *
+ * One clause per line, because they are three separate rules keyed on three
+ * different turn outcomes. Fused into one sentence, a reader looking for the rule
+ * that applies to ITS turn has to parse all three to find out that two do not.
+ */
+export const DELEGATION_RUBRIC = [
+  'Delegation rubric, against the counts above:',
+  '- A corrected or frustrated turn with 2+ independent parts, ground through inline with no hiring',
+  '  and no exploration, is a lesson to decompose the work and delegate it.',
+  '- An accepted turn that hired or explored effectively earns credit for having done so.',
+  '- Spawns that contributed nothing are delegation overhead, and count against the turn.',
+].join('\n');

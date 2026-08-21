@@ -103,7 +103,7 @@ export default function UserSettingsPage() {
       <Link to="/" className="text-xs p-text-3 flex items-center gap-1 hover:p-text mb-2">
         <ArrowLeftIcon size={12} /> Back
       </Link>
-      <h1 className="text-2xl font-semibold">Account settings</h1>
+      <h1 className="p-display text-2xl">Account settings</h1>
       <p className="text-xs p-text-3 mt-1">
         Account-level: credentials apply to every agent you own.
       </p>

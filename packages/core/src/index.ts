@@ -1002,6 +1002,19 @@ export {
   type RunEventQuery,
 } from './events/index';
 
+// The one durable retry outbox — write-ahead intent, backoff, per-key
+// ordering, dedupe and a dead-letter state, over `@nimbus-sh/fabric`.
+// Spec: `events/outbox.ts`.
+export {
+  scheduledOutbox,
+  type Outbox,
+  type OutboxDeadLetter,
+  type OutboxDisposition,
+  type OutboxDrainResult,
+  type OutboxRecord,
+  type ScheduledOutboxPolicy,
+} from './events/index';
+
 // EventsHub — events / triggers / turn runner / reply channels.
 // Builds the agent_log ledger plus the trust, channel, trigger and budget
 // primitives around it. Spec: docs/ARCHITECTURE.md — "Events and ingress".
@@ -1322,12 +1335,15 @@ export {
   applyScaffoldDecision, createJsonJudge, createLlmJsonJudge, getShadowStatus, listScaffoldVersions,
   previewScaffoldLive, proposeScaffold, queueTurnShadowTrial, runQueuedShadowTrials,
   runScaffoldCaptureText, runScaffoldGepaOptimization, runScaffoldOnce,
+  runPromptSectionGepaOptimization, runPromptSectionTrials,
   type GepaOptimizationResult, type JsonGenerator, type ScaffoldControl,
   type ScaffoldDecisionResult, type ScaffoldReplayContext, type ScaffoldSurface,
   type ScaffoldVersionView, type ShadowStatus, type ShadowTrialQueueOutcome,
+  type PromptSectionOptimizationResult, type PromptSectionTrialResult,
 } from './evolution/control';
 export {
-  runGepa, runScaffoldGepa,
+  runGepa, runScaffoldGepa, runSectionGepa,
+  PROMPT_SECTION_TARGETS, findPromptSectionTarget,
   DEFAULT_GEPA_BUDGET,
   // SQL persistence — needed by the orchestrator to create tables + run.
   initGepaTables, startGepaRun, finishGepaRun,
@@ -1338,8 +1354,17 @@ export type {
   GepaCandidate, GepaConstraints, GepaBudget, GepaConfig,
   GepaIterationState, GepaResult,
   RunScaffoldGepaOpts, RunScaffoldGepaResult,
+  RunSectionGepaOpts, RunSectionGepaResult,
   GepaRunSummary,
 } from './evolution/gepa/index';
+// Evolved prompt sections. A backend needs two things: the promoted wording to
+// hand `buildSystemPromptSync` as `sectionOverrides`, and the type of that map.
+// Everything else — the gates, the trial ledger, the archive — is reached
+// through the control-plane drivers above, which is where the discipline lives.
+export {
+  activePromptSectionOverrides, firstPendingPromptSection,
+} from './prompting/section-store';
+export type { PromptSectionOverrides } from './prompting/section-templates';
 
 // ── Layer gate ──
 // Deterministic, no-LLM per-layer regression scoring over the turn pipeline.

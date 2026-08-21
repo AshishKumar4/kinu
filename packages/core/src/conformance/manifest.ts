@@ -217,10 +217,12 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     swarm_node_records: EVERYWHERE,
 
     // ── events hub ──
+    // `outbox_peer` is deliberately not here: the shared outbox creates its
+    // own table on first use, so no root's boot schema produces it and there
+    // is nothing for a root to wire or refuse.
     agent_log: EVERYWHERE,
     reply_channels: EVERYWHERE,
     triggers: EVERYWHERE,
-    peer_outbox: EVERYWHERE,
     run_events: EVERYWHERE,
 
     // ── durable state ──
@@ -246,6 +248,13 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     gepa_runs: EVERYWHERE,
     gepa_candidates: EVERYWHERE,
     gepa_pareto_membership: EVERYWHERE,
+
+    // ── evolved prompt sections ──
+    // The promoted rows are read by the prompt builder on every turn, on every
+    // root, so the table is EVERYWHERE for the same reason `alternate_takes`
+    // is: a reader that finds no table is a fault, not an empty result.
+    prompt_section_versions: EVERYWHERE,
+    prompt_section_evaluations: EVERYWHERE,
 
     // ── agent-authored views ──
     // One table per workspace, wherever a workspace lives: `initViewTables` is

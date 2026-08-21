@@ -305,6 +305,44 @@ describe('the prompt', () => {
   test('a turn that called no tools says so instead of showing an empty list', () => {
     expect(buildAdvisorPrompt(aTurn({ toolCalls: [] }))).toContain('(none)');
   });
+
+  test('enumerates the classes it must stay silent on, each with the reason it exists', () => {
+    // The gap this closes. The suppression rules in review.ts stop a note being
+    // REPEATED; nothing stopped it being about scope, backwards compatibility or
+    // a request for clarification, which is what a turn-end reviewer reaches for
+    // when the turn was fine. Ported from oh-my-pi's watchdog prompt
+    // (prompts/advisor/system.md), whose emission-guard mechanism this file
+    // already cites — the mechanism came over, the negative space did not.
+    expect(prompt).toContain('Stay silent on these, however plainly you notice them:');
+    expect(prompt).toContain('is usually what was asked for');
+    expect(prompt).toContain('quote the instruction when you do');
+    expect(prompt).toContain('Backwards compatibility, unless the user or a standing project rule asked for it');
+    expect(prompt).toContain('Deleting the');
+    expect(prompt).toContain('Never tell the agent to confirm scope, restate the ask, or check in');
+    expect(prompt).toContain('A decision the agent understood and committed to');
+    expect(prompt).toContain('a failing test, a type error, a lint message in the record');
+  });
+
+  test('the windowed record is named UNKNOWN rather than inferred from', () => {
+    // renderToolCall bounds every argument and result at patternToolCall (800
+    // chars). A reviewer that treats a window's tail as absence asserts values
+    // the record never showed it.
+    expect(prompt).toContain('what a window drops is');
+    expect(prompt).toContain('never assert a value the record does not show');
+  });
+
+  test('each severity carries a worked note inside the length bound it will be cut to', () => {
+    // Severity calibration had one clause per tier and no instance, while note
+    // CONTENT had a cap, a dedupe window and a content-free filter. Three
+    // examples give the tier the same rigour, and each is a note that would
+    // survive parseAdvisorReply's slice unchanged.
+    const examples = [...prompt.matchAll(/^ {2}e\.g\. "(.+)"$/gm)].map((match) => match[1]!);
+    expect(examples).toHaveLength(ADVISOR_SEVERITIES.length);
+    for (const example of examples) expect(example.length).toBeLessThanOrEqual(ADVISOR_NOTE_MAX_CHARS);
+    expect(prompt).toContain('could have been one edit');
+    expect(prompt).toContain('its text starts `Error (exit 3)`');
+    expect(prompt).toContain('Stop and confirm a backup exists before continuing.');
+  });
 });
 
 describe('the missed-capability class', () => {

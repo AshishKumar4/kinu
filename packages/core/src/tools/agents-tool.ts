@@ -181,8 +181,9 @@ export interface TeamToolDeps {
 
 // ── Peers (cross-workspace agents) deps contract ────────────────────────────
 // The deps implementation rides the existing EventsHub peer transport:
-// enqueueOutboundPeer → receiver's receivePeerMessage → EventLog → turn, with
-// replies routed back through the receiver's peer-back reply channel.
+// PeerHub queues an `outbox_peer` row → receiver's receivePeerMessage →
+// EventLog → turn, with replies routed back through the receiver's peer-back
+// reply channel.
 
 export type PeerSendOutcome =
   | { status: 'delivered' | 'queued'; message_id: string }

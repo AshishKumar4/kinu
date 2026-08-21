@@ -20,6 +20,10 @@ import { getPendingScaffold, applyPromotionDecision } from '../scaffold/shadow';
 import { rollbackScaffold } from '../scaffold/rollback';
 import { revertView } from '../views/store';
 import { listGepaRuns } from './gepa/persistence';
+import {
+  applyPromptSectionDecision, getPendingPromptSection,
+  listPromptSectionVersions, promptSectionTrialRecord,
+} from '../prompting/section-store';
 import { listReplayEvals } from './replay';
 import {
   listTurnOutcomes, TURN_OUTCOMES, TURN_OUTCOME_SOURCES,
@@ -35,14 +39,18 @@ const ScaffoldRunEventSchema = v.object({
   toVersion: v.optional(v.number()),
 });
 
-export type ChangelogEntryKind = 'scaffold' | 'tool' | 'view' | 'fact' | 'gepa' | 'replay' | 'outcomes';
+export type ChangelogEntryKind =
+  'scaffold' | 'tool' | 'view' | 'fact' | 'gepa' | 'replay' | 'outcomes' | 'prompt_section';
 
 export type ChangelogRevertAction =
   | { type: 'scaffold_rollback'; target: string }
   | { type: 'craft_retire'; target: string }
   | { type: 'view_revert'; target: string }
   | { type: 'fact_forget'; target: string }
-  | { type: 'fact_forget_many'; targets: string[] };
+  | { type: 'fact_forget_many'; targets: string[] }
+  /** `<sectionId>:<version>` — a section's versions are numbered per section,
+   *  so neither half identifies a row on its own. */
+  | { type: 'prompt_section_rollback'; target: string };
 
 
 export interface ChangelogEntry {
@@ -276,6 +284,45 @@ function gepaEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
     }));
 }
 
+/** Evolved prompt sections. The one self-change that moves what the model reads
+ *  on every turn, so the evidence line leads with the byte trade — the operator
+ *  auditing prompt growth should not have to open a diff to see it. */
+function promptSectionEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
+  const trials = promptSectionTrialRecord(sql);
+  return listPromptSectionVersions(sql, limit).map((row) => {
+    const bytes = Buffer.byteLength(row.source, 'utf8');
+    const delta = bytes - row.incumbentBytes;
+    const size = `${delta >= 0 ? '+' : ''}${String(delta)} bytes (${String(row.incumbentBytes)} → ${String(bytes)})`;
+    const record = trials.get(`${row.sectionId}:${String(row.version)}`);
+    const trial = record && record.wins + record.losses + record.ties > 0
+      ? `shadow ${String(record.wins)}W-${String(record.losses)}L-${String(record.ties)}T`
+      : 'shadow untried';
+    const verb =
+      row.status === 'current' ? 'Promoted'
+      : row.status === 'pending' ? 'Proposed'
+      : row.status === 'rolled_back' ? 'Rolled back'
+      : 'Superseded';
+    const summary =
+      row.status === 'current' ? `I reworded my own ${row.sectionId} guidance`
+      : row.status === 'pending' ? `I am testing new wording for my ${row.sectionId} guidance`
+      : row.status === 'rolled_back' ? `I reverted new wording for my ${row.sectionId} guidance`
+      : `I replaced earlier wording for my ${row.sectionId} guidance`;
+    const entry: ChangelogEntry = {
+      id: `prompt_section:${row.sectionId}:v${String(row.version)}:${row.status}`,
+      kind: 'prompt_section',
+      at: row.writtenAt,
+      summary,
+      evidence: `${verb} ${row.sectionId} v${String(row.version)} — ${row.rationale} · ${size} · ${trial}`,
+    };
+    // Informational once it is already off: a rolled_back or historical row is
+    // not in the prompt, so there is nothing to take back.
+    if (row.status === 'current' || row.status === 'pending') {
+      entry.revert = { type: 'prompt_section_rollback', target: `${row.sectionId}:${String(row.version)}` };
+    }
+    return entry;
+  });
+}
+
 function replayEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
   const rows = listReplayEvals(sql, limit + 1);
   return rows.slice(0, limit).map((r, index) => {
@@ -388,6 +435,7 @@ export function buildChangelog(sql: SqlExecutor, opts: BuildChangelogOptions = {
     ...viewEntries(sql, limit),
     ...gepaEntries(sql, limit),
     ...replayEntries(sql, limit),
+    ...promptSectionEntries(sql, limit),
   ].filter((e) => opts.since === undefined || e.at > opts.since);
   const facts = factAggregate(sql, limit, opts.since);
   if (facts) entries.push(facts);
@@ -422,6 +470,7 @@ export function countUnseenChangelog(sql: SqlExecutor, seenAt: number): number {
 
 const KIND_GLYPH = {
   scaffold: '⟳', tool: '⚒', view: '▦', fact: '✦', gepa: '◬', replay: '⏱', outcomes: '☑',
+  prompt_section: '✎',
 } satisfies Record<ChangelogEntryKind, string>;
 
 export function renderChangelogText(
@@ -493,6 +542,49 @@ async function revertScaffoldVersion(rt: AgentRuntime, version: number): Promise
   return { ok: true, detail: `rolled back to v${prev.version}` };
 }
 
+/**
+ * Take back an evolved prompt section.
+ *
+ * A pending one is discarded through the same decision machinery that would
+ * have promoted it. A promoted one falls back to the version it superseded, or
+ * — when it superseded nothing — to the template compiled into the bundle,
+ * which is what `incumbentSectionSource` returns once no row is current. There
+ * is no file to restore either way: the source IS the row.
+ */
+function revertPromptSection(
+  sql: SqlExecutor,
+  sectionId: string,
+  version: number,
+): ChangelogRevertResult {
+  const row = sql<{ status: string }>`
+    SELECT status FROM prompt_section_versions
+    WHERE section_id = ${sectionId} AND version = ${version} LIMIT 1`[0];
+  if (!row) return { ok: false, error: `prompt section ${sectionId} v${String(version)} not found` };
+
+  if (row.status === 'pending') {
+    const pending = getPendingPromptSection(sql, sectionId);
+    if (!pending || pending.version !== version) {
+      return { ok: false, error: `${sectionId} v${String(version)} is no longer the pending under trial` };
+    }
+    applyPromptSectionDecision(sql, pending, 'rollback');
+    return { ok: true, detail: `discarded pending ${sectionId} v${String(version)}` };
+  }
+  if (row.status !== 'current') {
+    return { ok: false, error: `${sectionId} v${String(version)} is already ${row.status} — nothing to revert` };
+  }
+
+  const prev = sql<{ version: number }>`
+    SELECT version FROM prompt_section_versions
+    WHERE section_id = ${sectionId} AND version < ${version} AND status = 'historical'
+    ORDER BY version DESC LIMIT 1`[0];
+  void sql`UPDATE prompt_section_versions SET status = 'rolled_back'
+    WHERE section_id = ${sectionId} AND version = ${version}`;
+  if (!prev) return { ok: true, detail: `${sectionId} is back on its built-in wording` };
+  void sql`UPDATE prompt_section_versions SET status = 'current'
+    WHERE section_id = ${sectionId} AND version = ${prev.version}`;
+  return { ok: true, detail: `rolled ${sectionId} back to v${String(prev.version)}` };
+}
+
 /** Execute one entry's revert action against the real machinery. */
 export async function executeChangelogRevert(
   ctx: ChangelogRevertContext,
@@ -505,6 +597,14 @@ export async function executeChangelogRevert(
         return { ok: false, error: `invalid scaffold version: ${action.target}` };
       }
       return revertScaffoldVersion(ctx.rt, version);
+    }
+    case 'prompt_section_rollback': {
+      const [sectionId, raw] = action.target.split(':');
+      const version = Number(raw);
+      if (!sectionId || !Number.isInteger(version) || version <= 0) {
+        return { ok: false, error: `invalid prompt-section target: ${action.target}` };
+      }
+      return revertPromptSection(ctx.rt.storage.sql, sectionId, version);
     }
     case 'craft_retire': {
       if (!ctx.rt.craftStore.get(action.target)) {

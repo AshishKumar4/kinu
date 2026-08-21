@@ -234,6 +234,23 @@ const OutcomeClassificationSchema = v.object({
   evidence: v.optional(v.string()),
 });
 
+/**
+ * The classifier's prompt.
+ *
+ * Each outcome definition carries a one-line worked example, and the terse-reply
+ * block under them teaches the boundary this verdict is actually wrong on: a flat
+ * "no" and an exasperated "again?!" are the same length and are different rows in
+ * the ledger. Everything downstream counts these judgements rather than what
+ * happened — "if the classifier misses a third of the corrections, all of those
+ * numbers are wrong by an unknown amount in an unknown direction"
+ * (docs/EVOLUTION.md) — so the boundary is shown by contrast instead of left to be
+ * inferred from three one-line definitions by a model that reads them literally.
+ *
+ * `confidence` is named as the home for a follow-up that settles nothing. Without
+ * that, a model asked for one of three labels answers with one of three labels,
+ * and the calibration profile (calibration.ts) measures a rater that never admits
+ * doubt — which is the one thing its estimator cannot correct for.
+ */
 export function buildOutcomeClassifierPrompt(input: {
   userMessage: string;
   assistantResponse: string;
@@ -247,10 +264,23 @@ export function buildOutcomeClassifierPrompt(input: {
     `Assistant response:\n"${evidenceWindow(input.assistantResponse, EVIDENCE_BUDGETS.outcomeAssistantResponse)}"\n\n` +
     `User's follow-up message:\n"${evidenceWindow(input.followup, EVIDENCE_BUDGETS.outcomeFollowup)}"\n\n` +
     `Outcomes:\n` +
-    `- "accepted": the user moved on, built on the answer, or asked something new that presumes it worked.\n` +
+    `- "accepted": the user moved on, built on the answer, or asked something new that presumes it ` +
+    `worked. ("great, now add the retry" — the next step only makes sense if the last one landed.)\n` +
     `- "corrected": the user re-asked the same thing, fixed a mistake, contradicted the answer, or had to ` +
-    `re-state what they already asked for.\n` +
-    `- "frustrated": the user expressed explicit dissatisfaction or negative emotion about the response.\n\n` +
+    `re-state what they already asked for. ("no, I said STAGING" — the same ask, restated because the ` +
+    `answer missed it.)\n` +
+    `- "frustrated": the user expressed explicit dissatisfaction or negative emotion about the response. ` +
+    `("why do you keep breaking the build" — a complaint about the response, not about the build.)\n\n` +
+    `A terse follow-up is the one this gets wrong. Read what it is ABOUT, not how sharp it sounds:\n` +
+    `- "no" / "wrong file" / "not that one" → corrected. A flat contradiction carries no complaint.\n` +
+    `- "no, seriously?" / "again?!" → frustrated. The complaint is about the response itself.\n` +
+    `- "ok" / "thanks" → accepted. A short acknowledgement is still an acknowledgement.\n` +
+    `- "hm" / "what about the other one?" → nothing is settled. Answer with the outcome the disputed ` +
+    `request supports, at a LOW confidence.\n\n` +
+    `Not evidence the answer worked: a follow-up that changes the subject while the ask still stands, ` +
+    `or one where the user does the work themselves. Moving on and being satisfied are different things.\n` +
+    `An unsettled follow-up belongs in confidence rather than in a firmer verdict — an honest 0.4 is ` +
+    `worth more than a 0.9 that is wrong, because this field is what the calibration profile measures.\n\n` +
     `JSON shape: {"outcome":"accepted"|"corrected"|"frustrated","confidence":<0..1>,"evidence":"<short reason>"}\n` +
     jsonObjectOnlyInstruction()
   );

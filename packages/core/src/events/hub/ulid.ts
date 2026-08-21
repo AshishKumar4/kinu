@@ -2,8 +2,8 @@
  * Crockford-base32 ULID — monotonic (spec's monotonic mode), sortable by
  * creation time. Within one process, ids minted in the same millisecond
  * increment the random suffix instead of re-rolling it, so `ORDER BY id`
- * is true creation order — the peer outbox's per-receiver ordering and the
- * hub's id-ordered scans rely on this.
+ * is true creation order — the hub's id-ordered scans rely on this
+ * (`log.ts:572` latest phase, `log.ts:589` step trace).
  *
  * Format: 10 chars timestamp (48-bit ms since epoch) + 16 chars random.
  * All EventsHub primary keys use this. Keep one canonical implementation.

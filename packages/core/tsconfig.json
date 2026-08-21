@@ -5,6 +5,6 @@
     "types": ["bun", "node"]
   },
   "include": ["src", "tests"],
-  "//": "tests/fixtures/log-ban is deliberately uncompilable — it is the red half of the reserved-log-field proof, and unit-obs-log-ban.test.ts runs tsc over its own project to read the diagnostics.",
-  "exclude": ["tests/fixtures/log-ban"]
+  "//": "tests/fixtures/log-ban and tests/fixtures/template-flags are deliberately uncompilable — they are the red halves of the reserved-log-field and typed-conditional proofs, and unit-obs-log-ban.test.ts / unit-prompt-template-flags.test.ts run tsc over their own projects to read the diagnostics.",
+  "exclude": ["tests/fixtures/log-ban", "tests/fixtures/template-flags"]
 }

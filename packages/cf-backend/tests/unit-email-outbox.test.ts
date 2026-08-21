@@ -4,9 +4,14 @@
  *   - the intent row is committed `pending` BEFORE the binding.send lands;
  *   - a replay under the same idempotency key is a no-op (never re-sends);
  *   - a stable Message-ID rides every attempt (so a re-send is deduped, not new);
+ *   - a failing send backs off by the declared curve, 30s doubling per attempt;
  *   - an indeterminate intent (crash mid-send) is RECONCILED — re-driven with the
  *     same key/Message-ID — rather than blind-retried or lost;
- *   - a permanent failure dead-letters after the attempt budget.
+ *   - a permanent failure dead-letters ON the 8th attempt, not the 9th.
+ *
+ * The rows are the shared outbox's (`outbox_email`), so these read fabric's
+ * columns: `dedupe_key` is the idempotency key and the Message-ID rides the
+ * stored message's own headers rather than a column beside it.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -36,9 +41,9 @@ type Sent = v.InferOutput<typeof SentSchema>;
 type SendEmailBuilder = Parameters<SendEmail['send']>[0];
 const OutboxTestRowSchema = v.object({
   state: v.picklist(['pending', 'sent', 'dlq']),
-  message_id: v.string(),
-  payload_digest: v.string(),
+  message: v.string(),
   attempt_count: v.number(),
+  next_attempt_at: v.number(),
 });
 
 /** A capture fake for the send_email binding.
@@ -70,14 +75,22 @@ function message(overrides: Partial<OutboundEmailMessage> = {}): OutboundEmailMe
 
 function outbox() {
   const { sql } = makeSql();
-  const box = new EmailOutbox(sql);
-  box.ensureSchema();
-  return { box, sql };
+  return { box: new EmailOutbox(sql), sql };
 }
 
+/** The stored row plus the Message-ID riding its message. Every intent is
+ *  stamped before it is queued, so a row without one is a defect, not a shape
+ *  the caller has to narrow. */
 function rowFor(sql: SqlExec, key: string) {
-  const row = sql.exec(`SELECT * FROM email_outbox WHERE idempotency_key = ?`, key).toArray()[0];
-  return row === undefined ? undefined : v.parse(OutboxTestRowSchema, row);
+  const row = sql.exec(
+    `SELECT state, message, attempt_count, next_attempt_at FROM outbox_email WHERE dedupe_key = ?`, key,
+  ).toArray()[0];
+  if (row === undefined) return undefined;
+  const parsed = v.parse(OutboxTestRowSchema, row);
+  const stored = v.parse(SentSchema, JSON.parse(parsed.message));
+  const messageId = stored.headers?.['Message-ID'];
+  if (messageId === undefined) throw new Error(`stored intent ${key} carries no Message-ID`);
+  return { ...parsed, messageId };
 }
 
 describe('EmailOutbox — write-ahead intent', () => {
@@ -96,8 +109,8 @@ describe('EmailOutbox — write-ahead intent', () => {
     const row = rowFor(sql, 'k1');
     if (!row) throw new Error('expected persisted outbox row');
     expect(row.state).toBe('sent');
-    expect(row.message_id).toMatch(/^<kinu\.[0-9a-f]{64}@agents\.example\.com>$/);
-    expect(String(row.payload_digest)).toMatch(/^[0-9a-f]{64}$/);
+    expect(row.messageId).toMatch(/^<kinu\.[0-9a-f]{64}@agents\.example\.com>$/);
+    expect(result.messageId).toBe(row.messageId);
   });
 });
 
@@ -115,6 +128,19 @@ describe('EmailOutbox — idempotency key', () => {
     expect(sent).toHaveLength(1);
   });
 
+  test('a sent key stays deduped however many times it is replayed', async () => {
+    const { box, sql } = outbox();
+    const { binding, sent } = fakeBinding();
+    await box.send(binding, 'dup', message(), 1_000);
+
+    for (let replay = 0; replay < 5; replay++) {
+      expect((await box.send(binding, 'dup', message(), 2_000 + replay)).status).toBe('deduped');
+    }
+
+    expect(sent).toHaveLength(1);
+    expect(rowFor(sql, 'dup')?.attempt_count).toBe(1);
+  });
+
   test('distinct keys each send and get distinct Message-IDs', async () => {
     const { box } = outbox();
     const { binding, sent } = fakeBinding();
@@ -124,6 +150,33 @@ describe('EmailOutbox — idempotency key', () => {
 
     expect(sent).toHaveLength(2);
     expect(a.messageId).not.toBe(b.messageId);
+  });
+});
+
+describe('EmailOutbox — retry backoff', () => {
+  test('each failed attempt doubles the wait from the 30s base', async () => {
+    const { box, sql } = outbox();
+    const failing = fakeBinding(() => { throw new Error('down'); });
+
+    await box.send(failing.binding, 'curve', message(), 0);
+    expect(rowFor(sql, 'curve')?.next_attempt_at).toBe(30_000);      // 30_000 · 2⁰
+
+    await box.reconcile(failing.binding, 30_000);
+    expect(rowFor(sql, 'curve')?.next_attempt_at).toBe(90_000);      // + 30_000 · 2¹
+
+    await box.reconcile(failing.binding, 90_000);
+    expect(rowFor(sql, 'curve')?.next_attempt_at).toBe(210_000);     // + 30_000 · 2²
+  });
+
+  test('a row still inside its backoff is not re-driven', async () => {
+    const { box } = outbox();
+    const failing = fakeBinding(() => { throw new Error('down'); });
+    await box.send(failing.binding, 'early', message(), 0);
+    expect(failing.sent).toHaveLength(0);   // the throw happens before the push
+
+    const redriven = await box.reconcile(failing.binding, 29_999);
+
+    expect(redriven).toBe(0);
   });
 });
 
@@ -140,7 +193,7 @@ describe('EmailOutbox — reconciliation of an indeterminate', () => {
     if (!pending) throw new Error('expected pending outbox row');
     expect(pending.state).toBe('pending');          // indeterminate, not lost
     expect(pending.attempt_count).toBe(1);
-    const boundMessageId = pending.message_id;
+    const boundMessageId = pending.messageId;
 
     // The alarm sweep re-drives due pending intents; now the binding accepts.
     const ok = fakeBinding();
@@ -181,21 +234,21 @@ describe('EmailOutbox — reconciliation of an indeterminate', () => {
     const { sql } = makeSql();
     const armed: number[] = [];
     const box = new EmailOutbox(sql, async (at) => { armed.push(at); });
-    box.ensureSchema();
     const failing = fakeBinding(() => { throw new Error('down'); });
 
     await box.send(failing.binding, 'arm', message(), 1_000);
 
     const next = box.nextRetryAt();
     if (next === null) throw new Error('expected a scheduled retry');
-    expect(armed).toEqual([next]);
+    // Admission arms too: delivery is owed to the alarm even when the caller
+    // never drains inline. The LAST arm is the backoff this failure earned.
+    expect(armed).toEqual([1_000, next]);
   });
 
   test('a dead-lettered intent arms nothing — there is no next attempt', async () => {
     const { sql } = makeSql();
     const armed: number[] = [];
     const box = new EmailOutbox(sql, async (at) => { armed.push(at); });
-    box.ensureSchema();
     const failing = fakeBinding(() => { throw new Error('permanent'); });
     await box.send(failing.binding, 'dead', message(), 0);
     for (let i = 1; i < 10; i++) await box.reconcile(failing.binding, i * 1_000_000_000);
@@ -206,9 +259,10 @@ describe('EmailOutbox — reconciliation of an indeterminate', () => {
     expect(armed).toHaveLength(settled);   // dead-lettered: nothing left to wake for
   });
 
-  test('a permanently failing intent dead-letters after the attempt budget', async () => {
+  test('a permanently failing intent dead-letters ON the 8th attempt', async () => {
     const { box, sql } = outbox();
-    const failing = fakeBinding(() => { throw new Error('permanent'); });
+    let attempts = 0;
+    const failing = fakeBinding(() => { attempts++; throw new Error('permanent'); });
     await box.send(failing.binding, 'dead', message(), 0);
     // Advance `now` past each backoff so every reconcile actually re-drives,
     // exhausting the attempt budget.
@@ -217,6 +271,25 @@ describe('EmailOutbox — reconciliation of an indeterminate', () => {
     const row = rowFor(sql, 'dead');
     if (!row) throw new Error('expected dead-lettered outbox row');
     expect(row.state).toBe('dlq');
+    expect(row.attempt_count).toBe(8);
+    expect(attempts).toBe(8);              // the 8th is the last one tried
     expect(box.nextRetryAt()).toBeNull();
+  });
+
+  test('re-sending a dead-lettered key re-admits it and buys one more attempt', async () => {
+    // fabric's `onDuplicate: retry-now`: a caller asking again is new intent.
+    // The old hand-built outbox re-delivered a dlq row on the same path.
+    const { box, sql } = outbox();
+    const failing = fakeBinding(() => { throw new Error('permanent'); });
+    await box.send(failing.binding, 'revive', message(), 0);
+    for (let i = 1; i < 10; i++) await box.reconcile(failing.binding, i * 1_000_000_000);
+    expect(rowFor(sql, 'revive')?.state).toBe('dlq');
+
+    const ok = fakeBinding();
+    const result = await box.send(ok.binding, 'revive', message(), 20_000_000_000);
+
+    expect(result.status).toBe('sent');
+    expect(ok.sent).toHaveLength(1);
+    expect(rowFor(sql, 'revive')?.state).toBe('sent');
   });
 });

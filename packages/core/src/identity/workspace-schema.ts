@@ -45,6 +45,7 @@ import { initFactsTable } from '../memory/facts';
 import { initScaffoldTables } from '../scaffold/schemas';
 import { initShadowTables } from '../scaffold/shadow';
 import { initTaskListTable } from '../tasks/store';
+import { initPromptSectionTables } from '../prompting/section-store';
 import { initExplorationRecordsTable } from '../strategy/records';
 import { initSwarmNodeRecords } from '../strategy/swarm-resume';
 
@@ -207,8 +208,8 @@ export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
   // outcome ledger above: the read path runs before anything constructs the
   // engine, and a read that cannot reach the table has to say so, not shrug.
   initReplayTables(execRaw, sql);
-  // agent_log + reply_channels + triggers + peer_outbox, their partial indexes
-  // and views. Spec: docs/ARCHITECTURE.md — "Events and ingress".
+  // agent_log + reply_channels + triggers, their partial indexes and views.
+  // Spec: docs/ARCHITECTURE.md — "Events and ingress".
   initEventsHubTables(exec);
   // Branching-heads journal: head_journal, head_evidence, head_merge_results.
   initHeadsTables(execRaw, sql);
@@ -240,6 +241,12 @@ export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
   // Experience-import staging ledger, settled by the shared EvolutionEngine on
   // every root — not only where the `experience` tool happens to be wired.
   initImportedExperienceTable(execRaw, sql);
+  // Evolved prompt sections: proposed replacements and their shadow trials.
+  // Created on every root because `buildSystemPromptSync` reads the promoted
+  // rows on every turn everywhere — a table only the optimiser creates would
+  // make the prompt builder's own read a `no such table` on a workspace that
+  // has merely never optimised.
+  initPromptSectionTables(execRaw);
   initCompactionStateTables(execRaw, sql);
   // Typed key/value config: model spec, reasoning effort, always-active skills.
   initAgentConfigTable(execRaw);

@@ -160,7 +160,6 @@ function ledger(alertEmail: string | null = 'owner@example.com') {
   }
   const binding: SendEmail = { send };
   const outbox = new EmailOutbox(sql);
-  outbox.ensureSchema();
   const deps = (now: number): MonitorDeps => ({
     sql, outbox, email: binding, emailDomain: 'kinu.test', alertEmail,
     origin: 'https://kinu.test', now,

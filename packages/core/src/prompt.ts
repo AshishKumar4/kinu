@@ -2,6 +2,12 @@
  * Canonical system-prompt builder. Both CF and CLI surfaces call this so the
  * model sees one backend-agnostic Kinu contract, with backend/model/mode
  * details layered in only when they are actually true for the current turn.
+ *
+ * The prose is not here. Every section's wording lives in
+ * `prompting/section-templates.ts` as an addressable template; this file decides
+ * which branch each section takes and what its slots are worth. That split is
+ * what makes a section evolvable (`evolution/gepa/section-bridge.ts`) without
+ * making the branch conditions evolvable with it.
  */
 
 import type { AgentRuntime } from './types/agent-runtime';
@@ -23,7 +29,27 @@ import {
 } from './prompting/surface';
 import { DEFAULT_SOUL_MD } from './identity/soul';
 import { renderAgentsMdSection, type AgentsMdFile } from './prompting/agents-md';
-import { BUILTIN_TOOL_LINE } from './prompting/section-templates';
+import {
+  BACKGROUND_WORK_SECTION,
+  BUILTIN_TOOL_LINE,
+  CODE_EXECUTION_SECTION,
+  DELEGATION_SECTION,
+  EXECUTORS_SECTION,
+  EXTERNAL_TOOL_LINE,
+  GENERIC_EXECUTOR_LINE,
+  LAPTOP_EXECUTOR_LINE,
+  OFFLINE_LAPTOP_LINE,
+  OPERATING_GUIDANCE,
+  OUTPUT_FORMAT_SECTION,
+  PERSISTENCE_SECTION,
+  SANDBOX_EXECUTOR_LINE,
+  TOOLS_SECTION,
+  VERIFICATION_SECTION,
+  WORKSPACE_EXECUTOR_LINE,
+  sectionRenderer,
+  type PromptSectionOverrides,
+  type RenderSection,
+} from './prompting/section-templates';
 import { WORKSPACE_ROOT } from './vfs/workspace-path';
 import { PLATFORM_CATALOG } from './platform-catalog';
 
@@ -59,6 +85,13 @@ export interface SystemPromptOptions extends PromptSurfaceOptions {
   /** Date-only string (YYYY-MM-DD, see currentDateForPrompt). Date-only is
    *  byte-stable for a full day, so prompt cache prefixes survive the turn. */
   currentDate?: string;
+  /** Promoted replacements for named prompt sections, read by the backend from
+   *  `prompting/section-store.ts` once per activation. Passed in rather than
+   *  read here for the same reason `soulOverride` is: this builder is the
+   *  byte-stable cacheable prefix and does no I/O. Absent — the default, and
+   *  what the layergate prefix digest is locked against — renders every section
+   *  from its built-in source. */
+  sectionOverrides?: PromptSectionOverrides;
 }
 
 /** The canonical `currentDate` value: date-only, never time. Both backends
@@ -75,6 +108,9 @@ export const FALLBACK_PURPOSE = DEFAULT_SOUL_MD;
 // user as Auto) it announced a mode with no branch at all — a 19-byte
 // insertion ~350 bytes into the CACHEABLE prefix that split the prompt cache
 // between a chat turn and an identical Auto turn for no behavioural gain.
+//
+// Not a template: this is four key-value pairs over runtime facts, none of
+// which is prose anybody would rewrite.
 function renderRuntimeContext(opts: SystemPromptOptions): string {
   const lines: string[] = [];
   if (opts.backend) lines.push(`- Backend: ${opts.backend}`);
@@ -84,107 +120,41 @@ function renderRuntimeContext(opts: SystemPromptOptions): string {
   return lines.length ? `## Runtime context\n${lines.join('\n')}` : '';
 }
 
-/**
- * The turn's guidance, in three independent layers.
- *
- * Permission (workMode), provenance and stance are separate facts and each
- * renders on its own: a background-job wake is a resume AND it is plan or
- * build work, and the stance is neither. Collapsing them into one value is
- * what made the resume overlay unreachable — see prompting/surface.ts.
- *
- * Two of the three render nothing in their default state, on purpose: `build`
- * (Auto) is the absence of constraint, and so is the `general` stance.
- */
-function renderOperatingGuidance(surface: PromptSurface): string {
+function renderOperatingGuidance(surface: PromptSurface, render: RenderSection): string {
   const family = surface.model.family;
-  const lines = [
-    '- Treat ambiguous "do this" requests as work to perform.',
-    '- Inspect current code, state, logs, or tool results before making claims about them.',
-    '- Keep changes scoped to the user request and the existing architecture.',
-    '- If a required fact is unavailable, say exactly what is missing and stop.',
-  ];
-
-  if (family === 'kimi') {
-    lines.push(
-      '- Kimi K2.6 works best when tool use is concrete and continuous: preserve tool/result context and continue from each observation.',
-      '- For long-horizon coding, write durable decisions down with `memory`.',
-    );
-  } else if (family === 'gpt') {
-    lines.push(
-      '- GPT/Codex-style reasoning models do best with direct success criteria: state assumptions briefly, use tools for current facts, and keep final answers outcome-focused.',
-      '- For machine-readable tasks, take the schema-backed output whenever a schema or tool offers one.',
-    );
-  }
-
-  for (const line of AGENT_STANCE_SPECS[surface.stance].guidance) lines.push(`- ${line}`);
-
-  if (surface.provenance === 'background_resume') {
-    lines.push('- Background-resume mode: fetch the referenced job result first, synthesize it, then continue or close the original work.');
-  }
-
-  if (surface.workMode === 'plan') {
-    lines.push(
-      surface.planSubmissionAvailable
-        ? '- Plan mode: investigate deeply, then submit a concrete Markdown plan with affected files, risks, and verification through `submit_plan`.'
-        : '- Plan mode: investigate deeply and report concrete findings to the parent Plan turn; the parent owns the reviewed plan.',
-      '- Do not change files, system state, releases, or deployments. Ordinary tools remain available for inspection; use mutating operations only after approval starts a Build turn.',
-      surface.planSubmissionAvailable
-        ? '- Do not expose ports or produce preview or output links. The submitted plan is the only plan-mode output surface.'
-        : '- Do not expose ports or produce preview or output links. Your report is research input for the parent plan, not a separate user-facing output.',
-      surface.planSubmissionAvailable
-        ? '- Do not begin implementation until the plan is approved. End by calling `submit_plan`, or ask a question only when the missing answer must come from the user.'
-        : '- Do not begin implementation. Return your research and recommendations to the parent without calling or inventing `submit_plan`.',
-    );
-  }
-
-  return `## Operating guidance\n${lines.join('\n')}`;
+  return render(OPERATING_GUIDANCE, {
+    kimi: family === 'kimi',
+    gpt: family === 'gpt',
+    // Pre-joined with their leading newlines so the default stance (`general`,
+    // which has none) contributes no bytes at all. Iteration stays here because
+    // the specs are a typed table, not prose.
+    stanceGuidance: AGENT_STANCE_SPECS[surface.stance].guidance
+      .map((line) => `\n- ${line}`).join(''),
+    backgroundResume: surface.provenance === 'background_resume',
+    planMode: surface.workMode === 'plan',
+    planSubmission: surface.planSubmissionAvailable,
+  });
 }
 
-// The when-to-use doctrine lives in the JSON-schema tool descriptions
-// (registry.ts renderToolSchemaDescription). The prompt indexes the names and
-// shows one real call each: a concrete argument shape is what a model actually
-// copies, and it teaches the same thing an anti-pattern would without spending
-// the model's attention on a way of calling it we do not want.
-function renderBuiltinToolLine(name: BuiltinToolName): string {
+function renderBuiltinToolLine(name: BuiltinToolName, render: RenderSection): string {
   const spec = BUILTIN_TOOL_SPECS[name];
-  return BUILTIN_TOOL_LINE.render({ name, summary: spec.summary, example: spec.example });
+  return render(BUILTIN_TOOL_LINE, { name, summary: spec.summary, example: spec.example });
 }
 
-function renderExternalToolLine(tool: PromptExternalToolInfo): string {
+function renderExternalToolLine(tool: PromptExternalToolInfo, render: RenderSection): string {
   const source = tool.source === 'mcp' ? 'MCP' : tool.source ?? 'external';
   const description = tool.description ? ` — ${tool.description}` : '';
-  return `- **${tool.name}** (${source})${description}`;
+  return render(EXTERNAL_TOOL_LINE, { name: tool.name, source, description });
 }
 
-// One index for every model family. The kimi branch this replaced stripped the
-// per-tool lines on the claim that prompt prose about tool usage interferes
-// with that family's selection — sourced to a retired, K2.5-scoped Moonshot
-// page that no live source states. What the live K3 guidance does say is
-// "avoid repeating tool behavior in a long system prompt", which is an
-// argument against duplication for everyone (handled above: doctrine is
-// schema-only) and not for a family branch. The branch could not have done
-// what it claimed either: the schemas are family-neutral, so kimi received
-// every byte of the doctrine the index was stripped to protect it from.
-function renderToolsSection(surface: PromptSurface): string {
-  const builtins = surface.builtinTools.length === 0
-    ? '(none)'
-    : surface.builtinTools.map(renderBuiltinToolLine).join('\n');
-  const external = surface.externalTools.length === 0
-    ? ''
-    : [
-        '',
-        '### External tools',
-        'These tools are exposed by connected external providers for this turn. Use them when their names/descriptions match the task.',
-        surface.externalTools.map(renderExternalToolLine).join('\n'),
-      ].join('\n');
-  return [
-    '## Tools available this turn',
-    'Call the tools listed here and in this turn\'s model tool schema. That list is live — read it to see which tools and runtimes you have.',
-    '',
-    '### Built-in tools',
-    builtins,
-    external,
-  ].join('\n');
+function renderToolsSection(surface: PromptSurface, render: RenderSection): string {
+  return render(TOOLS_SECTION, {
+    builtins: surface.builtinTools.length === 0
+      ? '(none)'
+      : surface.builtinTools.map((name) => renderBuiltinToolLine(name, render)).join('\n'),
+    hasExternal: surface.externalTools.length > 0,
+    externalLines: surface.externalTools.map((tool) => renderExternalToolLine(tool, render)).join('\n'),
+  });
 }
 
 /** The number the workspace sentence tells the model, from `worker.isolate.memory`.
@@ -192,40 +162,25 @@ function renderToolsSection(surface: PromptSurface): string {
  *  drift the catalog exists to stop. */
 const WORKSPACE_MEMORY_MB = PLATFORM_CATALOG['worker.isolate.memory'].limit.value / (1000 * 1000);
 
-/** Doctrine only — live availability labels render in the per-turn volatile
- *  context message (prompting/volatile-context.ts), never in this cacheable
- *  prefix, so a sandbox waking up doesn't re-prefill the whole conversation. */
-function renderExecutorLine(exec: PromptExecutorInfo, backend?: PromptBackend): string {
+/** Which namespace's prose a selectable executor gets. The switch is here rather
+ *  than in the template because the arms are four different sections, not four
+ *  values of one. */
+function renderExecutorLine(
+  exec: PromptExecutorInfo,
+  render: RenderSection,
+  backend?: PromptBackend,
+): string {
+  const cliLocal = backend === 'cli-local';
   switch (exec.name) {
-      // What the `workspace` shell is differs by backend. Hosted, it is the
-      // authoritative Nimbus session: files, runtimes and resident processes
-      // are one environment rather than a second executor beside storage. Its
-      // ceiling is prose, not a `resourceLimits` declaration — it is a platform
-      // fact rather than a cgroup this process measured, and ResourceLimits is
-      // reserved for measured values (execution/types.ts). Rendered from
-      // `worker.isolate.memory` so the sentence the model reads cannot drift
-      // from the catalog; note that entry is the PUBLISHED figure and
-      // `do.isolate.oom_catchable` measured the real wall far higher, so this
-      // sentence understates the workspace in the agent's favour.
       case 'workspace':
-        return backend === 'cli-local'
-          ? '- **workspace.*** / `runtime: "workspace"`: your own durable workspace filesystem and a real shell over it. The machine the CLI is running on is `laptop.*`, in the machine\'s own paths.'
-          : `- **workspace.*** / \`runtime: "workspace"\`: the agent's own durable Nimbus workspace — one filesystem and real POSIX shell with node, npm, git, resident background processes, logs, and exposable ports. Additional interpreter/toolchain support is listed in its live capabilities. Its shell runs inside a Worker isolate, so ~${WORKSPACE_MEMORY_MB} MB of memory is what bounds any one command: it fits editing, scripts, package installs, running services, and repositories that clone within that.`;
+        return render(WORKSPACE_EXECUTOR_LINE, { cliLocal, memoryMb: String(WORKSPACE_MEMORY_MB) });
       case 'sandbox':
-        return '- **sandbox.*** / `runtime: "sandbox"`: a full Linux container with its own CPU, memory and disk — heavier installs, longer-running processes, large clones and builds, bulk data, and user-visible port-listening apps. It provisions on first use, so moving a job here the moment it outgrows the workspace is the normal step.';
+        return render(SANDBOX_EXECUTOR_LINE, {});
       case 'laptop':
-        return backend === 'cli-local'
-          ? '- **laptop.*** / `runtime: "laptop"`: the local machine the Kinu CLI is running on — direct access, no tunnel or consent prompt.'
-          : "- **laptop.*** / `runtime: \"laptop\"`: the user's OWN PC, connected through the Kinu device tunnel. Use it when the task targets local files, local commands, or the user's desktop environment. Its first use asks the user for consent — that prompt is expected, not an error.";
+        return render(LAPTOP_EXECUTOR_LINE, { cliLocal });
       default:
-        return `- **${exec.name}.***: available executor namespace.`;
+        return render(GENERIC_EXECUTOR_LINE, { name: exec.name });
   }
-}
-
-/** A registered-but-offline laptop is still listed (the user can bring it
- *  back), unlike other unavailable executors, which are omitted entirely. */
-function renderOfflineLaptopLine(): string {
-  return '- **laptop** / `runtime: "laptop"` (registered, currently OFFLINE): the user\'s own PC is registered but not connected right now. Do not call it; if the user wants it used, tell them to run `kinu connect` on their machine.';
 }
 
 function offlineLaptop(executors: readonly PromptExecutorInfo[]): PromptExecutorInfo | undefined {
@@ -233,7 +188,7 @@ function offlineLaptop(executors: readonly PromptExecutorInfo[]): PromptExecutor
     exec.name === 'laptop' && exec.configured === true && !executorIsSelectable(exec));
 }
 
-function renderExecutorSection(surface: PromptSurface): string {
+function renderExecutorSection(surface: PromptSurface, render: RenderSection): string {
   const tools = surface.builtinTools;
   if (!hasTool(tools, 'execute_tools') && !hasTool(tools, 'run')) return '';
 
@@ -244,238 +199,61 @@ function renderExecutorSection(surface: PromptSurface): string {
   const workspace = executors.find((exec) => exec.name === 'workspace');
   const devices = executors.filter((exec) => exec.name !== 'workspace');
   const lines = [
-    ...devices.map((exec) => renderExecutorLine(exec, surface.backend)),
-    ...(laptopOffline ? [renderOfflineLaptopLine()] : []),
-    ...(workspace ? [renderExecutorLine(workspace, surface.backend)] : []),
+    ...devices.map((exec) => renderExecutorLine(exec, render, surface.backend)),
+    ...(laptopOffline ? [render(OFFLINE_LAPTOP_LINE, {})] : []),
+    ...(workspace ? [renderExecutorLine(workspace, render, surface.backend)] : []),
   ];
-
-  const parts = [
-    '## Execution environments',
-    'The environments listed here are the ones selectable in this turn; a namespace is available exactly when it appears below.',
-    'This list reflects live state at the start of THIS turn — trust it over assumptions or earlier turns; it can change when the user connects or disconnects a device.',
-    'Choose the runtime that matches the task; keep reads/writes in the same runtime unless you intentionally copy data between runtimes.',
-    '',
-    ...lines,
-  ];
-  // No backend conditional: the workspace filesystem is the same durable
-  // component everywhere, and every other runtime is a different machine. That
-  // used to be untrue on cli-local, where the workspace and laptop executors
-  // shared one host shell, and the prompt had to carry the exception.
-  if (executors.length > 1) {
-    parts.push('', 'These runtimes have separate filesystems. Use the same runtime to read back files you wrote.');
-  }
-  // The file doctrine. Every environment is its own filesystem addressed in its
-  // own native paths — there is no mount table and no path that means two
-  // places. The workspace's filesystem is the one the file tools address, and
-  // the workspace shell is a real shell over exactly those bytes.
-  parts.push(
-    '',
-    `Your own workspace is a durable POSIX filesystem at ${WORKSPACE_ROOT}, and the \`workspace\` runtime is a real shell over it — `
-    + 'the same bytes the `file` tool and `workspace.*` file ops read, by the same paths. Relative paths resolve there; `cd` persists between commands.',
-  );
-  if (devices.length > 0) {
-    parts.push(
-      'The other environments above are SEPARATE machines with separate filesystems, reached only through their own namespaces '
-      + `(${devices.map((exec) => `\`${exec.name}.*\``).join(', ')}) in THEIR native paths. To move a file between two of them, read it from one and write it to the other.`,
-    );
-  }
   const previewExecutors = executors.filter((exec) => exec.capabilities?.includes('net_inbound'));
-  if (previewExecutors.length > 0) {
-    const exposeCalls = previewExecutors.map((exec) => `${exec.name}.exposePort(port)`).join(' or ');
-    parts.push(
-      '',
-      '### Showing a running app',
-      `For a user-visible web app, keep its files and server in one preview-capable environment, start the server bound to 0.0.0.0 in the background, wait for it to bind, then call ${exposeCalls} for the environment you chose. If exposePort fails, inspect that environment's server log and retry after the server is actually listening.`,
-    );
-  }
-  // The approvals doctrine, stated ONCE, and only on turns that have a shell.
-  // A parked tool result used to repeat all of it on every call (222 tokens
-  // each); it is a standing fact about this surface, so it lives here and the
-  // result is now one line (safety/deferred-approval.ts). Names no executor:
-  // which ones exist this turn is the list above.
-  parts.push(
-    '',
-    '### Approvals',
-    'Commands that touch a machine which is not your own, or reach outside it — a force-push, a publish, reading the user\'s secrets — need their decision. '
-    + 'Your own workspace and sandbox are not gated: clean up, install and delete there freely.',
-    'A parked command returns one line, `NOT RUN — queued for owner approval (<id>)`. Nothing ran, and re-issuing returns the same line. '
-    + 'A decision wakes you either way, so carry on with independent work or end your turn.',
-  );
-  return parts.join('\n');
+
+  return render(EXECUTORS_SECTION, {
+    executorLines: lines.join('\n'),
+    manyRuntimes: executors.length > 1,
+    workspaceRoot: WORKSPACE_ROOT,
+    hasDevices: devices.length > 0,
+    deviceNamespaces: devices.map((exec) => `\`${exec.name}.*\``).join(', '),
+    hasPreview: previewExecutors.length > 0,
+    exposeCalls: previewExecutors.map((exec) => `${exec.name}.exposePort(port)`).join(' or '),
+  });
 }
 
 function hasTool(tools: readonly BuiltinToolName[], name: BuiltinToolName): boolean {
   return tools.includes(name);
 }
 
-function renderAgentStateSection(surface: PromptSurface): string {
+function renderAgentStateSection(surface: PromptSurface, render: RenderSection): string {
   const tools = surface.builtinTools;
-  // llm.query gates on surface.rlmAvailable (wired by both backends); the
-  // scaffold self-provider ships on both since the shared-spine parity.
-  const parts: string[] = [];
-
-  parts.push([
-    '## Persistence',
-    'You are NOT stateless between turns. Conversation history, durable memory, keyed facts, crafted tools, scaffold versions, background jobs, and event triggers persist in storage.',
-    'Your context window is automatically compacted as it approaches its limit, so work each task through to completion and save durable progress to facts/memory as you go.',
-    'Your self-changes (crafted tools, learned facts, scaffold promotions) are recorded in an Evolution Changelog the user can review and revert line-by-line — evolve freely and report honestly; nothing you change about yourself is hidden or permanent.',
-  ].join('\n'));
+  const parts: string[] = [render(PERSISTENCE_SECTION, {})];
 
   if (hasTool(tools, 'execute_tools')) {
-    parts.push([
-      '## Code execution and learned capabilities',
-      '- Before building from scratch, check `workspace.listTools()` and `memory` search for existing tools and prior lessons.',
-      '- When you have built a reusable routine, save it with `workspace.createTool` — saved tools become callable as `codemode.<name>(args)` / `tools.<name>(args)` on your next execute_tools call.',
-      ...(surface.rlmAvailable ? ['- `llm.query(text, { model?, reasoning_effort? })` is available inside execute_tools for one-level decomposition over large inputs: read the file, slice it, `llm.query` each slice (cheap at low reasoning_effort), aggregate in code. Handle either a string result or `{ error }`. For slices that themselves need decomposition, delegate the whole shape instead (`agents` action=swarm) — its nodes run their own full tool loops.'] : []),
-      '- `agent.proposeCurriculum(count?)` proposes self-improvement tasks; `agent.listCurriculum(status?)` / `agent.acceptCurriculumTask(id)` manage them.',
-      '- `agent.proposeScaffold(rationale, code, baseVersion?)` proposes a new version of your own agentic-loop scaffold; it must pass the validation gates and win shadow evaluation before going live. `agent.scaffoldVersions(limit?)` lists your scaffold archive (lineage + shadow record) — you may branch from any archived version via `baseVersion`.',
-      '- `agent.schedule({ cron | atMs, label?, payload? })` can create a future autonomous wake; use it only when the user or task genuinely calls for recurrence or a reminder. Add `budget_usd`/`budget_tokens` when the owner names a spending limit — the host then caps that whole run cumulatively; `agent.budget()` reads what is left.',
-      '- `agent.jobResult(jobId)` reads a settled background job\'s full result — the wake that announces a job settled names the id to read; `agent.backgroundJobs(limit?)` lists recent jobs.',
-      '- `agent.compactNow()` folds the conversation at a phase boundary instead of waiting for the token trigger: the finished range is archived verbatim and stays listed in the checkpoint\'s Compaction Archive manifest, so you can still read it back.',
-    ].join('\n'));
+    parts.push(render(CODE_EXECUTION_SECTION, { rlmAvailable: surface.rlmAvailable }));
   }
 
   if (hasTool(tools, 'agents') || hasTool(tools, 'report')) {
-    // ONE ladder, keyed on lifetime, behind ONE tool — the only axis the
-    // model has to decide on. The rungs are INDEXED here and specified in the
-    // `agents` schema: each rung's triggers are selection doctrine, which the
-    // schema owns (registry.ts renderToolSchemaDescription) and every family
-    // reads. What stays is the prompt-only operational doctrine no tool schema
-    // carries — the frame, the turn output budget, the node artifact trail,
-    // the coordination loop, the codemode namespace. Rungs gate on the actions
-    // this actor's deps actually wire (surface.agentsActions), exactly like
-    // the tool's enum.
+    // The rungs gate on the actions this actor's deps actually wire
+    // (surface.agentsActions), exactly like the tool's enum.
     const actions = surface.agentsActions;
     const has = (action: (typeof actions)[number]) => actions.includes(action);
-    const lines = ['## Delegation'];
-    if (actions.length > 0) {
-      lines.push(
-        'Delegation is one tool — `agents` — and one question: how long does the helper need to live?'
-        // The zeroth rung is not an agent at all: flat map-reduce sub-calls.
-        // Weight-ordered, it sits between doing it yourself and searching, and
-        // it renders only where the llm provider is actually wired.
-        + (surface.rlmAvailable
-          ? ' The cheapest helper is not an agent: for bulk text that needs no tools, slice it and `llm.query` each slice inside execute_tools — reach for the ladder only when the work needs tool loops.'
-          : ''),
-        // The turn-cumulative clamp explained itself here, thousands of tokens
-        // before any result could trip it. It says so in its own marker now
-        // (tools/clamp.ts), at the trip, where the fact is actionable — and
-        // costs nothing on the turns that never reach the floor.
-        // The ladder's DEFAULT, where the zeroth rung used to be listed first.
-        // A bullet reading "- Do it yourself" made rung 0 the visually first
-        // choice and turned the section into a classification: the model had to
-        // positively recognise 2+ angles before it acted, so every ambiguous
-        // turn failed closed to doing it alone — measured 0% conversion on
-        // doctrine against 24% for the mechanical splice. The exemptions are
-        // the same three facts, stated last and stated as things to DO, so an
-        // unrecognised shape now falls the other way.
-        'Delegate once the shape of the work is settled: naming the parts is yours, running them is theirs. Work alone on a single coherent change in one file, on a direct answer that needs no change, and on a command the user asked you to run; work with two or more independent parts goes to the ladder.',
-      );
-    }
-    if (has('swarm')) {
-      // The rung said what a search IS and never what work calls for one. The
-      // schema's Breadth/Doubt triggers are selection doctrine and stay there;
-      // what belongs here is the SHAPE test, because deciding the work has
-      // parts is upstream of picking a tool. Compressed to a clause rather
-      // than restated: turn-steering already says this mechanically, but only
-      // at 25 steps, which is after the shape was already chosen wrong.
-      lines.push('- Ephemeral search (action=swarm) — nodes of you, each running its own tool loop in parallel, whose candidates are measured and settled back this turn. Reach for it when the work already has 2+ independent angles, or when one step is uncertain enough to be worth two attempts at once.');
-    }
-    if (has('hire')) {
-      // The CONTEXT half of the index, which is the half that decides which rung
-      // a task wants: a node may inherit the caller's window, a hire never does,
-      // one takes a one-line brief and the other takes a written one. The rung
-      // itself (DELEGATION_RUNGS.hire) carries the mechanism; this is the index.
-      lines.push('- Persistent subordinate (action=hire) — a helper that outlives this turn and stays in your roster. It starts with a blank context, so its mission is the whole brief; hire when the work needs its own memory across turns rather than one answer now.');
-    }
-    if (has('swarm')) {
-      lines.push(
-        // Per-node `models` routing is named as a case and never a default: panel
-        // quality tracks the AVERAGE member (Self-MoA, arXiv 2502.00674), so
-        // the caveat rides the parameter in agents-tool.ts, where it is read
-        // at the moment the field is being filled.
-        // The line that decides the rung is who WRITES the candidates and whether
-        // anything MEASURES them, because "spawn several and pick the best"
-        // describes several things and only one of them runs a verifier.
-        "A search writes its own competing candidates from `task` and scores each one with the verifier you named in `objective` — you supply what counts, not the angles. `models` puts a different vendor on a genuinely open question; a weaker model added for variety measurably subtracts.",
-        // The sibling-visibility half of this line went to the field that is read
-        // when the task is being WRITTEN: DELEGATION_INHERITANCE.swarm.brief names
-        // what a node can lean on, on `task` itself. Repeating it thousands of
-        // tokens earlier bought nothing the field does not already say at the
-        // moment it matters. What stays is the artifact trail, which no schema
-        // carries.
-        'Nodes recurse up to search depth 3 and leave durable findings under `shared/findings/` — read them after the settle for detail beyond the summary.',
-      );
-    }
-    // The rungs are also a codemode namespace, so a multi-step plan is code
-    // rather than a tool-call-at-a-time grind. Gated on the same actions the
-    // tool exposes: both backends build the `agents.*` provider from the deps
-    // that produced surface.agentsActions, so it exists exactly when they do.
-    if (actions.length > 0 && hasTool(tools, 'execute_tools')) {
-      lines.push(
-        // What `workspace.createTool` produces is the Code-execution section's
-        // own bullet; what belongs here is only that a delegated plan is one
-        // of the scripts worth saving.
-        'The same rungs are callable inside execute_tools as `agents.<action>`, so a multi-step plan can be one script — loop, branch, Promise.all — and `workspace.createTool` saves that script as a reusable workflow. A search started there rides that call, which does not resume after an eviction.',
-      );
-    }
-    if (has('hire')) {
-      // The loop is the prompt-only half: an ORDER of operations no schema
-      // field can hold. The roster/re-engage/dismiss half that followed it was
-      // DELEGATION_RUNGS.hire said a second time, so it went where the rungs
-      // themselves went.
-      lines.push(
-        'Run the coordination loop: hire the needed roles → ask each an independent workstream → integrate their reports as they arrive as events that wake you.',
-        "Subordinates share this workspace's files and sandbox.",
-      );
-    }
-    // Peer addressing is DELEGATION_CONVERSE, which the `agents` docstring
-    // already composes from the same deps that decide these actions exist
-    // (renderAgentsToolDescription) — every clause of the line that stood here
-    // was a paraphrase of it.
-    if (hasTool(tools, 'report')) {
-      // The frame only. When to report and what turn-end relays are the
-      // `report` schema's whenToUse/whenNotToUse, verbatim.
-      lines.push('You are a subordinate agent of this workspace: the workspace is your world, whoever hired you assigns your work, and `report` carries progress back to them.');
-    }
-    parts.push(lines.join('\n'));
+    parts.push(render(DELEGATION_SECTION, {
+      hasActions: actions.length > 0,
+      rlmAvailable: surface.rlmAvailable,
+      hasSwarm: has('swarm'),
+      hasHire: has('hire'),
+      // Both backends build the `agents.*` codemode provider from the deps that
+      // produced surface.agentsActions, so the namespace exists exactly when
+      // they do and execute_tools is on the surface.
+      rungsInCode: actions.length > 0 && hasTool(tools, 'execute_tools'),
+      hasReport: hasTool(tools, 'report'),
+    }));
   }
 
   if (hasTool(tools, 'run') || hasTool(tools, 'execute_tools') || hasTool(tools, 'agents')) {
-    parts.push([
-      '## Background work',
-      'Work moves to the background two ways: a search backgrounds the moment it spawns on a live session, and a long `execute_tools` or `run` call backgrounds once it outruns the surface threshold. Either way the call returns `{ background: true, jobId }` and the work KEEPS RUNNING unwatched — never start the same work again; the running copy will land its effects.',
-      'A background job needs nothing from you while it runs, and you are woken with its full result when it settles — mid-turn if you are still working, as a fresh turn if you are idle. Finish whatever other work you have, then end your turn; the wake is how the result arrives.',
-    ].join('\n'));
+    parts.push(render(BACKGROUND_WORK_SECTION, {}));
   }
 
-  // Last doctrine before the answer, because that is when it applies. Each
-  // line targets an observed failure where the model solved the problem and
-  // then fumbled the deliverable: reasoning the causal structure out correctly
-  // and writing every row of it transposed; building an API to its own
-  // convenient signature and self-grading it green against its own tests.
-  //
-  // Deliberately NOT here: a "check your work before calling it done" framing
-  // sentence. The CompletionGate is that instruction as a mechanism — it shows
-  // the harness's own reading of the working directory and asks for it to be
-  // checked against the task — and a generic re-check prompt is the one
-  // Anthropic's Opus 5 guidance says to delete because it over-verifies. What
-  // survives is what the gate does not say and cannot: the exact SHAPE the
-  // request named, and the interface it will be called through.
-  const verification = [
-    '## Verification',
-    "- Re-read the artifact itself — the file, the diff, the final answer — against the request's own words: every deliverable it names, and the exact shape it names (column order, direction, units, filenames).",
-    '- Build to the interface the task states: exercise your own work the way the task says it will be called, with the signature, entry point, and arguments it specifies.',
-  ];
-  if (hasTool(tools, 'run') || hasTool(tools, 'execute_tools')) {
-    verification.push('- Run the real check and report what passed or failed. A result is something you executed.');
-  }
-  parts.push(verification.join('\n'));
-
-  parts.push([
-    '## Output format',
-    'Final replies are plain markdown. Keep user-visible reasoning concise, name important files/checks, and summarize tool output in prose (raw JSON when asked).',
-  ].join('\n'));
+  parts.push(render(VERIFICATION_SECTION, {
+    hasShell: hasTool(tools, 'run') || hasTool(tools, 'execute_tools'),
+  }));
+  parts.push(render(OUTPUT_FORMAT_SECTION, {}));
 
   return parts.join('\n\n');
 }
@@ -513,13 +291,14 @@ export function buildSystemPromptSync(
   opts: SystemPromptOptions = {},
 ): string {
   const surface = compilePromptSurface(opts);
+  const render = sectionRenderer(opts.sectionOverrides);
   return [
     readSoulForPrompt(opts.soulOverride),
     renderRuntimeContext(opts),
-    renderOperatingGuidance(surface),
-    renderToolsSection(surface),
-    renderExecutorSection(surface),
-    renderAgentStateSection(surface),
+    renderOperatingGuidance(surface, render),
+    renderToolsSection(surface, render),
+    renderExecutorSection(surface, render),
+    renderAgentStateSection(surface, render),
     opts.agentsMd?.length ? renderAgentsMdSection(opts.agentsMd) : '',
     opts.availableSkills?.length ? renderSkillsIndexSection(opts.availableSkills).trim() : '',
     opts.activeSkills ? renderActiveSkillsSection(stableActiveSkills(opts.activeSkills)).trim() : '',

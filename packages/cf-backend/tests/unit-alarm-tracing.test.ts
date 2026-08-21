@@ -39,8 +39,8 @@ import {
  *  phase silently dropped from the method fails rather than shrinking the tree. */
 const PHASES = [
   'alarm.due_triggers',
-  'alarm.peer_outbox',
-  'alarm.email_outbox',
+  'alarm.peer_dispatch',
+  'alarm.email_reconcile',
   'alarm.timer_rearm',
 ] as const;
 
@@ -135,8 +135,8 @@ describe('alarm tick tracing', () => {
       [
         'alarm.tick  [isolate_gen=1 invocation=1]',
         '  alarm.due_triggers  [isolate_gen=1 invocation=1 triggers_fired=0]',
-        '  alarm.peer_outbox  [isolate_gen=1 invocation=1]',
-        '  alarm.email_outbox  [isolate_gen=1 invocation=1]',
+        '  alarm.peer_dispatch  [isolate_gen=1 invocation=1]',
+        '  alarm.email_reconcile  [isolate_gen=1 invocation=1]',
         '  alarm.timer_rearm  [isolate_gen=1 invocation=1 rearmed=false]',
       ].join('\n'),
     );

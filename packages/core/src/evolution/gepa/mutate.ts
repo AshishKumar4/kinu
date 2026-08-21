@@ -12,6 +12,7 @@ import type {
 import { renderInput, truncate } from './text';
 import { stripMarkdownFences } from '../../prompts/structured';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../../prompts/evidence-window';
+import { DELEGATION_RUBRIC } from '../delegation-features';
 
 export { stripMarkdownFences } from '../../prompts/structured';
 
@@ -45,7 +46,14 @@ export async function rolloutMinibatch<I, E>(
 }
 
 /** Render the reflection prompt the LM uses to propose a new candidate.
- *  Exposed for testing + so callers can override format if needed. */
+ *  Exposed for testing + so callers can override format if needed.
+ *
+ *  The rich per-instance trace below is the point of the operator and is never
+ *  shortened — GEPA's own result is that natural-language feedback over whole
+ *  trajectories beats a scalar reward (arXiv:2507.19457). What that result does
+ *  not license is naming "a SPECIFIC defect" and never showing one: the contrast
+ *  block does that, and the regression line states the half of the eval set the
+ *  prompt cannot show. Both are artifact-agnostic, because `desc` varies. */
 export function renderReflectionPrompt<I, E>(opts: {
   parent: GepaCandidate;
   minibatch: ReadonlyArray<EvalInstance<I, E>>;
@@ -54,9 +62,7 @@ export function renderReflectionPrompt<I, E>(opts: {
   artifactDescription?: string;
 }): string {
   const desc = opts.artifactDescription ?? 'candidate artifact';
-  const processRubric = desc === 'scaffold source'
-    ? '\n\nProcess rubric: For corrected/frustrated requests with 2+ independent parts, consider long zero-team/think linear grinds for decomposition and hiring/heads; reinforce effective team/think on accepted turns; treat non-contributing spawns as delegation overhead.'
-    : '';
+  const processRubric = desc === 'scaffold source' ? `\n\n${DELEGATION_RUBRIC}` : '';
 
   const outcomeById = new Map(opts.rollout.outcomes.map(o => [o.instanceId, o.outcome]));
   const traceLines: string[] = [];
@@ -78,7 +84,13 @@ export function renderReflectionPrompt<I, E>(opts: {
 
   return `You are improving a ${desc}. The current version scored sub-optimally on the following instances.
 
-Read each instance's input + evidence + feedback. Identify a SPECIFIC defect that explains the failures, then propose a revised ${desc} that fixes it without regressing on other axes. Keep the revision tightly scoped — large rewrites get rejected by downstream gates.${processRubric}
+Read each instance's input + evidence + feedback. Identify a SPECIFIC defect that explains the failures, then propose a revised ${desc} that fixes it without regressing on other axes. Keep the revision tightly scoped — large rewrites get rejected by downstream gates.
+
+Specific and tightly scoped, by contrast:
+  Good: "i2 and i5 both stop as soon as a tool result comes back empty — treat an empty result as a step to continue from rather than a reason to finish." One defect, one edit, named instances.
+  Bad: "it is too rigid; restructure it and add error handling." No instance named, no defect named, and a rewrite the downstream gate rejects on size alone.
+
+You are shown only the instances that scored badly. The rest of the eval set is scored too, and you cannot see it — so do not remove or weaken anything the failures above do not implicate. A revision that trades one instance for another scores worse, not better.${processRubric}
 
 Current ${desc}:
 \`\`\`

@@ -26,6 +26,11 @@ export {
   type RunScaffoldGepaOpts, type RunScaffoldGepaResult,
 } from './scaffold-bridge';
 export {
+  runSectionGepa, findPromptSectionTarget,
+  PROMPT_SECTION_TARGETS,
+  type RunSectionGepaOpts, type RunSectionGepaResult,
+} from './section-bridge';
+export {
   initGepaTables, startGepaRun, finishGepaRun,
   persistGepaCandidate, persistGepaParetoSnapshot,
   updateGepaRunCounters,

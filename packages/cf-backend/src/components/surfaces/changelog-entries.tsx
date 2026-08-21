@@ -19,6 +19,7 @@ import { Button, Loader } from "@cloudflare/kumo";
 import {
   GitBranchIcon, PackageIcon, BrainIcon,
   SparkleIcon, TimerIcon, ChecksIcon, CheckIcon, XIcon, GitDiffIcon, SquaresFourIcon,
+  NotePencilIcon,
   CaretDownIcon, CaretRightIcon,
 } from "@phosphor-icons/react";
 import type { ChangelogEntry, ChangelogEntryKind, DiffLine } from "@kinu.run/core";
@@ -40,6 +41,7 @@ const KIND_ICON = {
   gepa: SparkleIcon,
   replay: TimerIcon,
   outcomes: ChecksIcon,
+  prompt_section: NotePencilIcon,
 } satisfies Record<ChangelogEntryKind, ComponentType<{ size?: number; className?: string }>>;
 
 /**

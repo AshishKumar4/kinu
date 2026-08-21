@@ -45,7 +45,7 @@ export default function HomePage() {
             </div>
             <div className="min-w-0">
               <p className="text-xs font-medium uppercase tracking-[0.18em] p-accent">Kinu</p>
-              <h1 className="mt-1 text-3xl font-semibold leading-tight tracking-normal p-text sm:text-4xl">
+              <h1 className="p-display mt-1 text-3xl leading-tight p-text sm:text-4xl">
                 What is this workspace for?
               </h1>
             </div>

@@ -1,0 +1,202 @@
+/**
+ * The surfaces the system prompt is frozen against.
+ *
+ * Sectionising `prompt.ts` moved every line of its prose out of the builder and
+ * into `prompting/section-templates.ts`. That is a change of REPRESENTATION, so
+ * the landing condition is that not one byte of any rendered prompt moved — the
+ * layergate `context-assembly/system-prefix` digest included.
+ *
+ * A conversion like that is only proven by a matrix, because the bytes are the
+ * easy half: every branch in the builder has to keep taking the same branch, and
+ * a branch nobody renders is a branch nobody checked. So this list covers each
+ * conditional the nine sections carry at least once in each direction — the two
+ * plan-submission spellings, both model-family overlays, each stance, the
+ * background-resume overlay, an offline laptop, a preview-capable executor, the
+ * empty tool surface, and the delegation rungs one at a time.
+ *
+ * `fixtures/prompt-golden.json` holds what these rendered BEFORE the conversion,
+ * generated from the pre-change builder. Regenerate it only when a prompt change
+ * is the point (`bun run scripts/prompt-golden.ts`), never to make a red test
+ * green.
+ */
+
+import type { SystemPromptOptions } from '../../src/prompt';
+import { AGENT_STANCES, BUILTIN_TOOLS } from '../../src/tools/registry';
+import type { PromptExecutorInfo } from '../../src/prompting/surface';
+import type { ParsedSkill } from '../../src/skills/types';
+
+const WORKSPACE: PromptExecutorInfo = {
+  name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active',
+};
+const SANDBOX: PromptExecutorInfo = {
+  name: 'sandbox', kind: 'sandbox', capabilities: ['net_inbound'], available: true, configured: true, active: true, status: 'active',
+};
+const LAPTOP: PromptExecutorInfo = {
+  name: 'laptop', kind: 'device', available: true, configured: true, active: true, status: 'active',
+};
+const LAPTOP_OFFLINE: PromptExecutorInfo = {
+  name: 'laptop', kind: 'device', available: false, configured: true, active: false, status: 'disconnected',
+};
+const CUSTOM: PromptExecutorInfo = {
+  name: 'gpu', kind: 'device', available: true, configured: true, active: true, status: 'active',
+};
+
+const SKILL: ParsedSkill = {
+  name: 'deploy-runbook',
+  description: 'How this project deploys.',
+  allowed_tools: [],
+  keywords: ['deploy'],
+  auto_activate: false,
+  disable_model_invocation: false,
+  user_invocable: true,
+  body: 'Body of the deploy runbook.',
+  ext: {},
+  source: 'builtin',
+};
+
+const ALL_TOOLS = [...BUILTIN_TOOLS];
+
+export interface PromptCase {
+  readonly name: string;
+  readonly opts: SystemPromptOptions;
+}
+
+export const PROMPT_MATRIX: readonly PromptCase[] = [
+  { name: 'defaults', opts: {} },
+  {
+    name: 'cf-full-surface',
+    opts: {
+      soulOverride: 'You are Kinu.',
+      availableTools: ALL_TOOLS,
+      executors: [WORKSPACE, SANDBOX, LAPTOP],
+      backend: 'cf',
+      workMode: 'build',
+      rlmAvailable: true,
+      model: { id: 'claude-sonnet-4-7', provider: 'anthropic' },
+      currentDate: '2026-01-01',
+      cwd: '/workspace',
+      agentsMd: [{ path: '/AGENTS.md', content: 'Root rules.' }],
+      availableSkills: [SKILL],
+      activeSkills: { active: [SKILL], reasons: [] },
+    },
+  },
+  {
+    name: 'cli-local-full-surface',
+    opts: {
+      soulOverride: 'You are Kinu.',
+      availableTools: ALL_TOOLS,
+      executors: [WORKSPACE, SANDBOX, LAPTOP],
+      backend: 'cli-local',
+      rlmAvailable: false,
+      model: { id: 'gpt-5-codex', provider: 'openai' },
+      currentDate: '2026-01-01',
+    },
+  },
+  {
+    name: 'family-kimi',
+    opts: {
+      availableTools: ['run', 'memory'],
+      backend: 'cf',
+      model: { id: 'kimi-k3-instruct', provider: 'moonshot' },
+      currentDate: '2026-01-01',
+    },
+  },
+  {
+    name: 'family-gpt',
+    opts: {
+      availableTools: ['run', 'memory'],
+      backend: 'cf',
+      model: { id: 'gpt-5-codex', provider: 'openai' },
+      currentDate: '2026-01-01',
+    },
+  },
+  {
+    name: 'plan-mode-with-submission',
+    opts: {
+      availableTools: ALL_TOOLS,
+      executors: [WORKSPACE],
+      backend: 'cf',
+      workMode: 'plan',
+      planSubmissionAvailable: true,
+    },
+  },
+  {
+    name: 'plan-mode-without-submission',
+    opts: {
+      availableTools: ALL_TOOLS,
+      executors: [WORKSPACE],
+      backend: 'cf',
+      workMode: 'plan',
+      planSubmissionAvailable: false,
+    },
+  },
+  {
+    name: 'background-resume',
+    opts: { availableTools: ['run'], provenance: 'background_resume', backend: 'cf' },
+  },
+  ...AGENT_STANCES.map((stance) => ({
+    name: `stance-${stance}`,
+    opts: { availableTools: ['memory'] as const, stance, backend: 'cf' as const },
+  })).map((entry) => ({ name: entry.name, opts: { ...entry.opts, availableTools: [...entry.opts.availableTools] } })),
+  {
+    name: 'no-tools',
+    opts: { availableTools: [], executors: [WORKSPACE], backend: 'cf' },
+  },
+  {
+    name: 'external-tools',
+    opts: {
+      availableTools: ['run'],
+      externalTools: [{ name: 'jira', source: 'mcp', description: 'Issue tracker.' }, 'linear'],
+      backend: 'cf',
+    },
+  },
+  {
+    name: 'executors-workspace-only',
+    opts: { availableTools: ['run'], executors: [WORKSPACE], backend: 'cf' },
+  },
+  {
+    name: 'executors-offline-laptop',
+    opts: { availableTools: ['run'], executors: [WORKSPACE, LAPTOP_OFFLINE], backend: 'cf' },
+  },
+  {
+    name: 'executors-preview-capable',
+    opts: { availableTools: ['run'], executors: [WORKSPACE, SANDBOX], backend: 'cf' },
+  },
+  {
+    name: 'executors-unnamed-namespace',
+    opts: { availableTools: ['run'], executors: [WORKSPACE, CUSTOM], backend: 'cf' },
+  },
+  {
+    name: 'executors-cli-local-laptop',
+    opts: { availableTools: ['run'], executors: [WORKSPACE, LAPTOP], backend: 'cli-local' },
+  },
+  {
+    name: 'delegation-swarm-only',
+    opts: { availableTools: ['agents'], agentsActions: ['swarm'], registeredExecutors: [] },
+  },
+  {
+    name: 'delegation-hire-only',
+    opts: { availableTools: ['agents'], agentsActions: ['hire'], registeredExecutors: [] },
+  },
+  {
+    name: 'delegation-swarm-with-codemode',
+    opts: {
+      availableTools: ['agents', 'execute_tools'],
+      agentsActions: ['swarm'],
+      rlmAvailable: true,
+      registeredExecutors: [],
+    },
+  },
+  {
+    name: 'delegation-report-subordinate',
+    opts: { availableTools: ['report'], registeredExecutors: [] },
+  },
+  {
+    name: 'code-execution-without-rlm',
+    opts: { availableTools: ['execute_tools'], rlmAvailable: false, registeredExecutors: [] },
+  },
+  {
+    name: 'code-execution-with-rlm',
+    opts: { availableTools: ['execute_tools'], rlmAvailable: true, registeredExecutors: [] },
+  },
+];

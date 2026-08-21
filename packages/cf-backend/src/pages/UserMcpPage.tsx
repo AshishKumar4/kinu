@@ -97,7 +97,7 @@ export default function UserMcpPage() {
           </Link>
           <div className="flex items-center justify-between gap-4">
             <div>
-              <h1 className="text-2xl font-semibold">MCP servers</h1>
+              <h1 className="p-display text-2xl">MCP servers</h1>
               <p className="text-xs p-text-3 mt-1">
                 Model Context Protocol servers add hosted
                 tools (GitHub, Notion, your own internal MCP, …). Connect once; every agent you
