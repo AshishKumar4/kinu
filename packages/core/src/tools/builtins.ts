@@ -91,13 +91,7 @@ import { createTasksDispatcher, type TasksToolInput } from './tasks-tool';
 import { WebFetchError, type WebSearchProvider, type WebSearchResponse } from '../web/index';
 import type { PlanEdit, SubmitPlanToolDeps } from '../plans/review';
 import type { JsonValue } from '../utils/json';
-<<<<<<< HEAD
-import {
-  createConsoleLogger, diagnostics, KinuError, renderThrownChain, toKinuError, type Logger,
-} from '../obs/index';
-=======
-import { diagnostics, KinuError, toKinuError, type Logger } from '../obs/index';
->>>>>>> 03e1bfd5 (feat(cli): the terminal speaks silk, and a refusal reads as prose)
+import { diagnostics, KinuError, renderThrownChain, toKinuError, type Logger } from '../obs/index';
 
 type ToolExecutionOptions = Parameters<NonNullable<ToolSet[string]['execute']>>[1];
 type ExecutableToolEntry = NonNullable<ToolSet[string]>;
