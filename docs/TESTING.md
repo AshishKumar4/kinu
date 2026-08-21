@@ -136,25 +136,31 @@ the developer's real home before it existed.
 bun run test:eval                        # every arm, and it RESOLVES A CREDENTIAL BY ITSELF
 ```
 
-Read the next paragraph before running that.
+**Who it runs as.** The tier authenticates as the `eval-service` account against
+the staging deployment. `scripts/eval-credentials.ts` resolves `KINU_EVAL_TOKEN`
+and `KINU_EVAL_ORIGIN` once, then exports the pair `resolveLiveModel` reads. No
+person's credential is ever borrowed: that script used to read
+`~/.kinu/config.json` and stopped. A machine with no eval credential skips every
+live suite, and an origin outside the allowlist is refused.
 
-**It spends your money without being asked to.** If the environment names no
-model target, `scripts/eval-tier.sh` borrows the signed-in CLI session via
-`scripts/eval-credentials.ts`. That is the same `~/.kinu/config.json`
-credential `kinu chat` uses. On any machine that has run `kinu auth`,
-`bun run test:eval` bills the token owner's Cloudflare account. That is
-deliberate. The tier previously asked for two environment variables nothing on
-the owner's own machine ever exported, so it ran to completion reporting
-`TOTAL: 0 model call(s)` with every live test skipped, and passed a deploy gate.
-It is also why the script prints the target and the cost basis before spending
-anything. A run that goes somewhere unexpected is visible at the top of the log
-rather than in a bill.
+Mint the credential against staging:
 
-`bun run test:eval` is a ci-tier and deploy-tier gate. `bun scripts/ladder.ts
---tier=ci` runs it, the CI workflow runs that on every push and PR, and
-`scripts/deploy.sh` runs it as "Behavioural evals". On a GitHub runner there is
-no session to borrow, so it is free there and everything live skips. On your
-machine it spends.
+```bash
+kinu auth --origin https://staging.kinu.run
+kinu tokens create --name evals --scopes ai.proxy
+```
+
+Staging synthesizes one fixed identity for every request, so that session is
+`eval-service` and no personal account is involved.
+
+**Where it runs.** `bun run test:eval` is the terminal `evals` tier. It is not a
+commit, push, CI or deploy gate — a deploy runs smoke only — so you run it on
+purpose.
+
+The script prints its target and its cost basis before it spends anything. It
+once asked for two environment variables nothing exported, ran to completion
+reporting `TOTAL: 0 model call(s)` with every live test skipped, and passed a
+deploy gate that way.
 
 ### The five arms
 
