@@ -30,7 +30,6 @@
  * and the model is scripted, for the reason the agent-node suite records: the
  * measurement is the part that must not be faked and the model is the part that must be
  * controlled.
- *
  * Specified by docs/EXPLORATION.md — "A node is an agent", "Inherited context" and
  * "Budget conservation"; docs/MCTS.md for the shared search ledger.
  */
@@ -49,6 +48,7 @@ import { resumeBackgroundJob } from '../src/orchestrator/background-tools';
 import { BackgroundJobRunner } from '../src/jobs/runner';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store';
 import { SignalDelivery } from '../src/orchestrator/signals';
+import { readForkRun } from '../src/read-models/fork-runs';
 import {
   reconcileInterruptedForks, FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
 } from '../src/heads/reconcile';
@@ -672,6 +672,115 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
       SELECT COUNT(*) AS n FROM head_journal
       WHERE error_message = ${FORK_INTERRUPTED_REASON}`[0]?.n).toBe(FROZEN_NODES);
     expect(journal.listLive()).toEqual([]);
+  }, 300_000);
+});
+
+/**
+ * THE STALE-RUNNING DEFECT, AS A TEST: a swarm whose job settled `failed` — the
+ * resume cap exhausted, five evictions, "gave up" — left its `mcts_search_runs`
+ * row claiming a live executor forever. Measured on the owner's workspace:
+ * root `2rye1eyny1efm9583sqye` read `running · 2 reported · 18 stopped · last
+ * step 11h ago`, because the only writers of that row sit inside the executor
+ * the platform had already destroyed, and the start-of-life sweep closed the
+ * journal rows but never the ledger row beside them.
+ */
+describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
+  test('a refused run\'s ledger row is failed, and the surface stops calling it running', async () => {
+    const { rt } = await workspace();
+    const sql = rt.storage.sql;
+    const ledger = new MctsSearchStore(sql);
+    const journal = new HeadJournal(sql);
+    const first = nodeModel({ freezeFromStart: 3 });
+    void runSwarm(
+      { rt, model: first.model, mode: 'build', maxSteps: 6, logger: createRecordingLogger() },
+      resolved(),
+    );
+    await first.script.frozen;
+    const rootId = firstRoot(sql)?.root_id ?? '';
+    expect(ledger.get(rootId)).toMatchObject({ status: 'running' });
+    const agent = idleAgent();
+
+    const retired = await reconcileInterruptedForks({
+      journal,
+      signals: agent.signals,
+      search: ledger,
+      // The gate ran and claimed nothing: this job is past its resume cap.
+      resume: async () => [],
+    });
+
+    expect(retired.map((run) => run.rootId)).toEqual([rootId]);
+    expect(ledger.get(rootId)?.status).toBe('failed');
+    // The read model is what the exploration surface renders; through it, a run
+    // whose every node stopped is never `running` again.
+    expect(readForkRun(sql, rootId)?.status).not.toBe('running');
+  }, 300_000);
+
+  test('a claimed run keeps its ledger row for the re-entry to settle', async () => {
+    const { rt } = await workspace();
+    const sql = rt.storage.sql;
+    const ledger = new MctsSearchStore(sql);
+    const journal = new HeadJournal(sql);
+    const first = nodeModel({ freezeFromStart: 3 });
+    void runSwarm(
+      { rt, model: first.model, mode: 'build', maxSteps: 6, logger: createRecordingLogger() },
+      resolved(),
+    );
+    await first.script.frozen;
+    const rootId = firstRoot(sql)?.root_id ?? '';
+    const agent = idleAgent();
+
+    await reconcileInterruptedForks({
+      journal,
+      signals: agent.signals,
+      search: ledger,
+      resume: async () => [rootId],
+    });
+
+    // Still the re-drive's row to close or converge; closing it here would
+    // fail a search that is about to continue.
+    expect(ledger.get(rootId)?.status).toBe('running');
+  }, 300_000);
+
+  test('a row with no journalled heads closes too, on its own evidence', async () => {
+    // A `unit:'thought'` swarm journals no head rows, so the journal sweep has
+    // nothing to find and used to return before anything looked at the ledger.
+    const { rt } = await workspace();
+    const sql = rt.storage.sql;
+    const ledger = new MctsSearchStore(sql);
+    const journal = new HeadJournal(sql);
+    beganSwarm(ledger, 'root-thought-only', Date.now() - 1_000);
+    const agent = idleAgent();
+
+    await reconcileInterruptedForks({
+      journal,
+      signals: agent.signals,
+      search: ledger,
+      resume: async () => [],
+    });
+
+    expect(ledger.get('root-thought-only')?.status).toBe('failed');
+  }, 300_000);
+
+  test('a gate that throws closes nothing', async () => {
+    const { rt } = await workspace();
+    const sql = rt.storage.sql;
+    const ledger = new MctsSearchStore(sql);
+    const journal = new HeadJournal(sql);
+    beganSwarm(ledger, 'root-ungated', Date.now() - 1_000);
+    const agent = idleAgent();
+
+    await reconcileInterruptedForks({
+      journal,
+      signals: agent.signals,
+      search: ledger,
+      resume: async () => {
+        throw new Error('the gate could not answer');
+      },
+    });
+
+    // An unanswered gate is not a refusal. The row survives until an activation
+    // whose gate answers decides its fate.
+    expect(ledger.get('root-ungated')?.status).toBe('running');
   }, 300_000);
 });
 

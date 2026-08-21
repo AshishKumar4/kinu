@@ -23,6 +23,7 @@
  */
 
 import type { RunEventInput } from '../events/types';
+import type { MctsSearchStore } from '../mcts/search-store';
 import type { SignalDeliverer } from '../types/signals';
 import type { AbandonedHeadRun, HeadJournal } from './journal';
 import * as v from 'valibot';
@@ -244,6 +245,15 @@ export async function reconcileInterruptedForks(deps: {
   readonly journal: Pick<HeadJournal, 'markInterrupted' | 'abandonRunning'>;
   readonly signals: SignalDeliverer;
   /**
+   * The search-run ledger, when the caller has one. A swarm's row in
+   * `mcts_search_runs` claims a live executor exactly as its journal rows do,
+   * and it dies the same way: nothing closes it when the durable job driving
+   * the search gives up, so the exploration surface reads `running` for a run
+   * whose every node stopped hours ago. When present, rows the resume gate did
+   * not claim are closed `failed` beside the journal sweep.
+   */
+  readonly search?: Pick<MctsSearchStore, 'runningSwarmCount' | 'closeUnclaimed'>;
+  /**
    * The resume gate: re-drive what can continue these roots, and name the ones
    * claimed. Absent means a caller with no durable resume path at all, and then
    * every interrupted run is refused — which is this reconciliation's old
@@ -267,15 +277,42 @@ export async function reconcileInterruptedForks(deps: {
   // could not.
   closeUnterminatedRuns(deps.runEvents, deps.logActivity);
   const interrupted = deps.journal.markInterrupted({ spawnedBefore: startedAt }, startedAt);
+  if (interrupted.length > 0) {
+    deps.logActivity?.(
+      'fork_runs_interrupted',
+      interrupted.map((run) => `${run.rootId} (${run.abandoned}/${run.total})`).join(', '),
+    );
+  }
+
+  // THE GATE, ONCE. It re-drives durable work under a fresh lease, so a second
+  // call would reclaim a job out from under the executor the first call started.
+  // It fires when the journal sweep found heads, and also when it found none but
+  // a search row still claims an executor — `unit:'thought'` nodes journal no
+  // rows, so a dead thought-swarm's ledger claim is the only evidence left.
+  const gateNeeded = interrupted.length > 0
+    || (deps.search !== undefined && deps.search.runningSwarmCount() > 0);
+  const outcome: ResumeOutcome = gateNeeded
+    ? await resumeOutcome(deps.resume, interrupted)
+    : { kind: 'absent', claimed: new Set<string>() };
+
+  // THE LEDGER'S HALF of the same sweep: close every running swarm row the gate
+  // did not claim. A gate that threw answered nothing, so nothing closes here —
+  // retiring on an unknown would destroy work a later activation could have
+  // continued, which is why `gate-failed` reads as protected everywhere below.
+  if (deps.search && gateNeeded && outcome.kind !== 'gate-failed') {
+    const closed = deps.search.closeUnclaimed(outcome.claimed, startedAt);
+    if (closed.length > 0) deps.logActivity?.('swarm_runs_closed', closed.join(', '));
+  }
+
   if (interrupted.length === 0) return [];
-  deps.logActivity?.(
-    'fork_runs_interrupted',
-    interrupted.map((run) => `${run.rootId} (${run.abandoned}/${run.total})`).join(', '),
-  );
-  const claimed = await claimedRoots(deps.resume, interrupted);
   const runs = deps.journal.abandonRunning(
     FORK_INTERRUPTED_REASON,
-    { spawnedBefore: startedAt, exceptRoots: claimed },
+    {
+      spawnedBefore: startedAt,
+      exceptRoots: outcome.kind === 'answered' ? [...outcome.claimed]
+        : outcome.kind === 'gate-failed' ? interrupted.map((run) => run.rootId)
+        : [],
+    },
     startedAt,
   );
   if (runs.length === 0) return runs;
@@ -331,36 +368,39 @@ function closeUnterminatedRuns(
 }
 
 /**
- * What the resume gate claimed, or nothing.
+ * What the resume gate answered, as both halves of the sweep read it.
  *
- * A THROWING GATE CLAIMS NOTHING, and the failure is named rather than swallowed.
- * Retiring on a gate failure is the safe direction — the alternative is leaving a
- * run `interrupted` with no card and no re-entry, which is the silence this whole
- * ticket is about — but it is a DEGRADED reading of the truth, so it must appear in
- * production's own evidence rather than only in the retirement card.
+ * Three cases, because two would lie. `answered` carries the claimed roots: the
+ * journal keeps them `interrupted` for the re-entry, and the ledger keeps their
+ * rows running until that re-entry settles them. `absent` means this caller has
+ * no durable resume path at all — every run is refused, the same reading the
+ * journal arm has always made. `gate-failed` means the gate THREW, which is not
+ * an answer and must not read like a refusal: every root stays protected, and
+ * the failure appears in production's own evidence rather than only in the
+ * retirement card.
  */
-async function claimedRoots(
+type ResumeOutcome =
+  | { readonly kind: 'answered' | 'absent'; readonly claimed: ReadonlySet<string> }
+  | { readonly kind: 'gate-failed' };
+
+async function resumeOutcome(
   resume: ((roots: readonly string[]) => Promise<readonly string[]>) | undefined,
   interrupted: readonly AbandonedHeadRun[],
-): Promise<readonly string[]> {
-  if (!resume) return [];
+): Promise<ResumeOutcome> {
+  if (!resume) return { kind: 'absent', claimed: new Set<string>() };
   const roots = interrupted.map((run) => run.rootId);
   try {
-    return await resume(roots);
+    return { kind: 'answered', claimed: new Set(await resume(roots)) };
   } catch (err) {
-    // A gate that THREW has not refused, and the two must not read alike here:
-    // `claimed` becomes `exceptRoots`, so an empty answer retires every run this
-    // sweep found. Retiring on an unknown destroys work no later activation can
-    // recover, while leaving the rows interrupted costs one more sweep. So every
-    // root is protected until a gate actually answers.
     diagnostics.failure('head.resume_gate_failed', toKinuError({
       doing: 'offering interrupted fork runs to the resume gate',
       cause: err,
       otherwise: 'io',
     }), { runs: roots.length, protected: roots.length });
-    return roots;
+    return { kind: 'gate-failed' };
   }
 }
+
 
 /** Close each dead fork's span in the run-event ledger.
  *

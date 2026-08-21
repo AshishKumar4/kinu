@@ -1556,6 +1556,7 @@ export class OrchestratorAgent extends ActorAgent {
     void reconcileInterruptedForks({
       journal: this.headJournal,
       signals: this.orch.signals,
+      search: this.mctsSearchStore,
       runEvents: this.eventRecorder,
       resume: jobRedriveResumeGate({
         recoverOrphans: () => this.jobRunner.recoverOrphans(),

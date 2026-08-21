@@ -314,6 +314,46 @@ export class MctsSearchStore {
         epoch: row.epoch,
       }));
   }
+  /** How many SWARM rows still claim a live executor. The start-of-life
+   *  reconciliation reads this so a dead search's row reaches its closer even
+   *  when the search journalled no heads of its own (`unit:'thought'` nodes
+   *  write none) — the case the journal sweep cannot see. */
+  runningSwarmCount(): number {
+    return this.sql<{ n: number }>`
+      SELECT COUNT(*) AS n FROM mcts_search_runs WHERE status='running' AND engine='swarm'`[0]?.n ?? 0;
+  }
+
+  /**
+   * Close every `running` SWARM row EXCEPT the named roots, as `failed`, and
+   * return the root ids it closed.
+   *
+   * THE SEAM A FAILED JOB WAS MISSING. A search's own loop writes converge/fail
+   * from inside its executor; when the durable job driving it gives up — the
+   * resume cap exhausted, the kind not re-drivable — that executor is gone and
+   * nothing ever writes the terminal row. Measured on the owner's workspace:
+   * `2rye1eyny1efm9583sqye` read `running` eleven hours after its job had
+   * settled `failed`, because the only writers left were fenced on an epoch
+   * whose holder would never wake.
+   *
+   * Unfenced on purpose, exactly like {@link supersede}: this runs at the start
+   * of an activation, after the resume gate answered, so a row still `running`
+   * here was held by an executor that no longer exists by construction. The
+   * except-set is what makes it safe rather than broad — a root the gate claimed
+   * is being re-entered right now and keeps its row until the re-entry settles
+   * it. `failed`, not superseded: nothing took the work over; the work died.
+   */
+  closeUnclaimed(exceptRoots: ReadonlySet<string>, now: number): readonly string[] {
+    const candidates = this.sql<{ root_id: string }>`
+      SELECT root_id FROM mcts_search_runs WHERE status='running' AND engine='swarm'`
+      .map((row) => row.root_id)
+      .filter((rootId) => !exceptRoots.has(rootId));
+    for (const rootId of candidates) {
+      void this.sql`UPDATE mcts_search_runs SET status='failed', updated_at=${now}
+        WHERE root_id=${rootId} AND status='running' AND engine='swarm'`;
+    }
+    return candidates;
+  }
+
 
   /** Retire a `running` row a newer attempt of the same task took over. Terminal and
    *  distinct from {@link fail}: the run did not break, it was superseded, and a
