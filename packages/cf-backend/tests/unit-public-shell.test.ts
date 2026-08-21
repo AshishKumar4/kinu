@@ -303,3 +303,55 @@ describe('the mark', () => {
     }
   });
 });
+
+/**
+ * The README film is the real app, held to the same honesty as the landing's.
+ *
+ * `docs/assets/kinu-film-readme.webp` is cut by `scripts/web-film.ts` from the
+ * gallery's fixture transport. Nothing here can re-run that shoot, so the
+ * gates hold the committed artefact to its three claims: it MOVES, every
+ * frame marker is verbatim gallery fixture text (a fixture that moves breaks
+ * this gate instead of silently restaging the film), and the pair of films
+ * stays inside the media budget. The embed itself is checked for the width
+ * and height that keep arrival from shifting the page.
+ */
+describe('the README film', () => {
+  const FILM = readFileSync(resolve(import.meta.dir, '../../../docs/assets/kinu-film-readme.webp'));
+  const LANDING_FILM = readFileSync(resolve(import.meta.dir, '../public/assets/kinu-film-web.webp'));
+  // The text the mounted app renders: the gallery fixtures, plus the pages
+  // and surfaces a frame mounts whole.
+  const GALLERY = [
+    '../src/gallery.tsx', '../src/pages/HomePage.tsx', '../src/pages/MCTSExplorer.tsx',
+    '../src/components/surfaces/WorkTab.tsx',
+  ].map((file) => readFileSync(resolve(import.meta.dir, file), 'utf8')).join('\n');
+  const SHOOT = readFileSync(resolve(import.meta.dir, '../../../scripts/web-film.ts'), 'utf8');
+  const README = readFileSync(resolve(import.meta.dir, '../../../README.md'), 'utf8');
+
+  test('it is an animation, not a poster', () => {
+    expect(FILM.includes('ANIM'), 'no animation header').toBeTrue();
+    let frames = 0;
+    for (let at = FILM.indexOf('ANMF'); at !== -1; at = FILM.indexOf('ANMF', at + 4)) frames += 1;
+    expect(frames, 'a film of one frame is a poster').toBeGreaterThan(1);
+  });
+
+  test('every frame marker is fixture text the app renders', () => {
+    const markers = [...SHOOT.matchAll(/settled: '([^']+)'/g)].map((m) => m[1]);
+    expect(markers.length, 'the shoot declares no markers').toBeGreaterThan(0);
+    for (const marker of markers) {
+      expect(GALLERY, `not fixture text the app renders: ${marker.slice(0, 60)}`).toContain(marker);
+    }
+  });
+
+  test('both films hold the weight budget', () => {
+    expect(FILM.byteLength + LANDING_FILM.byteLength, 'combined film assets over 2.5 MB').toBeLessThan(2_500_000);
+  });
+
+  test('the README carries it under the banner, sized against layout shift', () => {
+    const embed = /<img alt="[^"]+" src="docs\/assets\/kinu-film-readme\.webp" width="\d+" height="\d+">/.exec(README);
+    expect(embed, 'the film is not embedded with explicit dimensions').not.toBeNull();
+    // Position, not just presence: the film sits under the banner, before the
+    // tagline block.
+    expect(README.indexOf('kinu-film-readme.webp'))
+      .toBeLessThan(README.indexOf('A self-evolving agent platform'));
+  });
+});
