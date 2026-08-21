@@ -36,8 +36,8 @@
 ```bash
 curl -fsSL 'https://kinu.run/install.sh' | bash
 kinu setup
-kinu create jarvis --mode cloud --alias jarvis --purpose "A helpful coding assistant"
-jarvis "summarize this repository"
+kinu create triage --mode cloud
+kinu run triage "find the slowest query"
 ```
 
 `kinu setup` opens a browser sign-in and stores the session on this machine. It also
@@ -85,8 +85,10 @@ no measured record.
 A `preset` fixes the shape of the search. `ideate` is flat by construction, at depth
 1 and 5 branches, and hands back every candidate unranked. `optimise` climbs one measured
 number with UCT selection, at depth 5 and 3 branches. `prove` searches deepest, at
-depth 7, because a checker refutes a wrong branch early. `custom` takes the six axes,
-`unit` `context` `expand` `score` `advance` `carry`.
+depth 7, because a checker refutes a wrong branch early. `research`, `audit` and
+`redteam` cover a grid of cells at depth 1 and 4 branches, ranked by the objective's
+own instrument, so all three require `objective` and a coverage `key`. `custom` takes
+the six axes, `unit` `context` `expand` `score` `advance` `carry`.
 `expand:'aggregate'` fans a level in and
 merges its members in dependency order. `advance:'archive'` keeps a grid of cells
 and one elite per coordinate.
@@ -111,8 +113,9 @@ the turn it is already running, so the caller keeps working.
   <img alt="One agents tool with seven actions. Swarm runs a configured tree search that settles back into this turn, and the verifier the caller declared in its objective scores the candidates instead of a model judging them. Hire creates a persistent subordinate that outlives the turn and reports back as an event. Ask, send, reply, list and dismiss address agents that already exist: subordinates here, or the owner's other workspaces as peers." src="docs/diagrams/delegation.svg" width="900">
 </picture>
 
-[docs/EXPLORATION.md](docs/EXPLORATION.md) has the six axes, the seven presets, what
-the engine refuses, the publication seal and the records store in full.
+[docs/EXPLORATION.md](docs/EXPLORATION.md) has the six axes, the seven presets and
+their shapes, the rules a call must satisfy, the publication seal and the records
+store in full.
 
 ## Architecture
 
@@ -218,7 +221,7 @@ as a CI secret, and pipe the line-delimited JSON events wherever you need them:
 kinu tokens create --name ci --scopes workspace.exec,workspace.read  # printed once
 # in the pipeline:
 export KINU_TOKEN=pta_…                                             # from CI secrets
-kinu exec --workspace jarvis --json "triage the failing tests" | tee events.jsonl
+kinu exec --workspace triage --json "triage the failing tests" | tee events.jsonl
 ```
 
 Access tokens are scoped. `workspace.exec` runs tasks and `workspace.read` inspects
