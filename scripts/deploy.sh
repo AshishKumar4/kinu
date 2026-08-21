@@ -106,7 +106,7 @@ json_field() {
 # ── The gate queue ───────────────────────────────────────────────
 #
 # `run_required_gate` ENQUEUES; `flush_gates` runs the queue concurrently and
-# waits. The 52 gates used to run one after another for no reason: 400s of
+# waits. The gates used to run one after another for no reason: 400s of
 # declared cost on a 24-thread box that sat idle for all of it.
 #
 # Two gates may not share the machine, and `SERIAL_GATES` in scripts/ladder.ts
@@ -120,7 +120,7 @@ json_field() {
 # a deploy runs, and collapsing them into a loop would leave the ladder reading
 # an empty tier.
 #
-# Three more gates may not run beside EACH OTHER, though they may run beside
+# Four more gates may not run beside EACH OTHER, though they may run beside
 # anything else. This table is that rule and `EXCLUSION_GROUPS` in
 # scripts/ladder.ts carries the measured reason; deploy.test.ts holds the two
 # equal.
@@ -128,6 +128,7 @@ declare -A GATE_GROUP=(
   ['bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts']=gallery
   ['bun test scripts/public-pages.test.ts']=gallery
   ['bun test scripts/swarm-tree-geometry.test.ts']=gallery
+  ['bun test scripts/chat-scroll.test.ts']=gallery
 )
 GATE_LABELS=()
 GATE_CMDS=()

@@ -61,6 +61,11 @@ export interface ChatHistoryEntry {
    * rather than over the socket, this is the only place those markers can come
    * from. Dropping them is why a fork-interrupted notice kept its card while it
    * was live and lost it the moment the operator scrolled back to it.
+   *
+   * The CLI closure declares no schema over this contract: its reader
+   * (`getLocalChatHistory`) returns these rows verbatim, so nothing on that
+   * path can drop the field. Locked as
+   * `ChatHistoryEntry.metadata#absent-in-cli` in capability-parity.lock.json.
    */
   metadata?: JsonObject;
 }

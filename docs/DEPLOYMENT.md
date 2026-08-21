@@ -149,7 +149,7 @@ green or not.
 
 **`bun run gate:infra`** checks that every declared resource exists **and that
 the deployed Worker is bound to it**, and exits non-zero when it is not. It is
-the last of the 52 required gates `scripts/deploy.sh` runs, the only one that
+the last of the 53 required gates `scripts/deploy.sh` runs, the only one that
 talks to Cloudflare, and the only one that runs alone. It checks the environment
 being deployed: `KINU_DEPLOY_ENV` when `scripts/deploy.sh` sets it, an explicit
 argv otherwise, production by default. So a staging deploy is not refused for a
@@ -568,11 +568,11 @@ environment preflight, verifies Wrangler authentication, and installs the locked
 dependency graph with `bun install --frozen-lockfile` when a checkout has no
 root `node_modules`.
 
-1. **Required pre-deploy gates.** 52 gates, every one unconditional. Each is a
+1. **Required pre-deploy gates.** 53 gates, every one unconditional. Each is a
    `run_required_gate` line in `scripts/deploy.sh`, which is the full list. Those
    lines enqueue; `flush_gates` runs the queue, up to `nproc / 2` at a time. Two
    gates run alone, and `SERIAL_GATES` in `scripts/ladder.ts` names them with the
-   reason: the environment preflight first, `gate:infra` last. The other 50 run
+   reason: the environment preflight first, `gate:infra` last. The other 51 run
    in one wave. They cover `bun run check`; the deploy contract test; the
    agent-utils, core,
    compaction, test-utils, Cloudflare-backend, workerd, CLI-backend, full

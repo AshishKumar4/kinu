@@ -7,6 +7,7 @@
   "asymmetry ArchiveExportOptions.files#absent-in-cli",
   "asymmetry BackgroundJobRunnerDeps.onSettled#absent-in-cli",
   "asymmetry BroadcastEvent.metadata#absent-in-cli",
+  "asymmetry ChatHistoryEntry.metadata#absent-in-cli",
   "asymmetry ExecutorProvider.files#absent-in-cf",
   "asymmetry ForkDepsWiring.nodeHome#absent-in-cf",
   "asymmetry ForkDepsWiring.nodeHost#absent-in-cli",
