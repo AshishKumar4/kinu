@@ -464,18 +464,12 @@ their derived default (`core/src/strategy/swarm-run.ts:1776-1785`):
   `runNodeLoop` ends when its model stops calling tools.
 - **Wall clock.** `deps.maxWallClockMs` when the caller declares one;
   otherwise absent — a node runs to completion under the shared loop's
-  per-call silence window (`LLM_CALL_TIMEOUT_MS`).
-  assigned unconditionally, because a node with no deadline of its own leaves
-  the run's abort signal as the only clock, and that signal cuts a whole WAVE at
-  once. `core/tests/unit-swarm-node-envelope.test.ts` holds the wall clock and
-  the step cap in the same equality, so moving either fails a test rather than
-  drifting.
+  per-call silence window (`LLM_CALL_TIMEOUT_MS`). The caller-declared
+  deadline is observed between steps by `runHeadInference`'s `stopWhen`.
 
-Both are observed at STEP BOUNDARIES. `runHeadInference`'s `stopWhen` asks
-`budgetExhausted` between steps, so a node inside one long step observes nothing
-and the binding bound on its work is the step cap. A stream-inactivity watchdog
-sits beside them at `STALL_TIMEOUT_MS`, 300,000 ms
-(`core/src/chat.ts:170`), and fires only when nothing flows.
+The binding bound inside one step is the call's silence window:
+`LLM_CALL_TIMEOUT_MS`, 600,000 ms (`core/src/chat.ts`), and it fires only
+when nothing flows. A node inside one long step observes no other bound.
 
 `AGENTS_ACTION_FIELDS.swarm` (`core/src/tools/agents-tool.ts:440-446`) records
 that an iteration cap and a wall-clock cap are absent from the tool's INPUT
@@ -487,7 +481,8 @@ tool calls per node; 1,216-1,337 s each; ~2.45M input tokens between them; and
 not one measurable candidate. No node in that run finished, so 26 steps is a
 floor on the demand rather than a typical cost, and how many steps a node needs
 to FINISH on this model is not measured. `depth × branches` bounds the shape of
-the search; a node's own loop is bounded by the two budgets above.
+the search; each request inside a node's turn is bounded by the per-call
+silence window, and nothing bounds the step count.
 
 The caller's `abortSignal` is a bound, and it works. All three nodes settled
 `status:'aborted'` with their step counts recorded when the 20-minute envelope
