@@ -6,7 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModel } from 'ai';
-import type { ModelCallReport } from '@kinu/core';
+import type { ModelCallReport } from '@kinu.run/core';
 import type { LanguageModelV3GenerateResult } from '@ai-sdk/provider';
 import { createCompactionExtension, createModelSummarizer } from '../src/index';
 import type { CompactionProfile } from '../src/index';
