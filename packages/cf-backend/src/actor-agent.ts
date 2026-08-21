@@ -119,7 +119,7 @@ import {
   // Background-job system (#173 — auto-background past the surface threshold)
   BackgroundJobRunner, BACKGROUND_POLICY, type SessionSurface,
   type BackgroundJobStore, type TaskListStore,
-  wrapToolsForBackground, BACKGROUNDABLE_TOOLS, resumeBackgroundJob,
+  wrapToolsForBackground, BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob,
   // The control plane both roots expose over the same core implementations.
   cancelCurrentWork, getStoredModelSpec, setModel,
   type CancelWorkOutcome,
@@ -1859,6 +1859,13 @@ export abstract class ActorAgent extends Think<Env> {
         // Side-effecting kinds (execute_tools / run) are not safe to blindly
         // re-execute, so they decline and fall back to the eviction failure.
         resume: (kind, input, mode, signal) => this.resumeBackgroundJob(kind, input, mode, signal),
+        // What a bounded-out job already produced. Same predicate as `resume` above,
+        // so a kind that cannot be re-driven has nothing partial to read either —
+        // and a SEARCH does, which is the case that used to settle empty over two
+        // completed candidates.
+        harvest: (kind, input) => Promise.resolve(harvestBackgroundJob(
+          { sql: this.boundSql, ledger: this.mctsSearchStore }, kind, input,
+        )),
       });
     }
     return this._jobRunner;

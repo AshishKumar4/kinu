@@ -33,6 +33,17 @@ export interface BackgroundJob {
   epoch: number;
   /** How many times evict-recovery has re-driven this job (bounds resume loops). */
   resumeAttempts: number;
+  /**
+   * When the attempt CURRENTLY driving this job began — `createdAt` for a first
+   * drive, bumped by every {@link BackgroundJobStore.reclaim}.
+   *
+   * The job's own lifetime was previously unreadable: `createdAt` says when the work
+   * was first asked for and `settledAt` is null while it runs, so nothing could
+   * answer "how long has this generation been going" and nothing bounded it. A live
+   * job was measured `running` 28 minutes into its third generation with two
+   * completed candidates its caller could not see.
+   */
+  attemptStartedAt: number;
 }
 
 /** The result of claiming a job for an evict-recovery re-drive. */
@@ -47,7 +58,7 @@ interface Row {
   id: string; kind: string; label: string | null; status: string;
   work_mode: string;
   result: string | null; error: string | null; created_at: number; settled_at: number | null;
-  epoch: number; resume_attempts: number;
+  epoch: number; resume_attempts: number; attempt_started_at: number | null;
 }
 
 function toJob(r: Row): BackgroundJob {
@@ -57,7 +68,11 @@ function toJob(r: Row): BackgroundJob {
   return {
     id: r.id, kind: r.kind, label: r.label, workMode: r.work_mode === 'plan' ? 'plan' : 'build', status,
     result: r.result, error: r.error, createdAt: r.created_at, settledAt: r.settled_at,
-    epoch: r.epoch ?? 0, resumeAttempts: r.resume_attempts ?? 0,
+    epoch: r.epoch ?? 0,
+    resumeAttempts: r.resume_attempts ?? 0,
+    // Null for a row written before this column existed. `created_at` is the honest
+    // reading there: its first attempt is the only one anything recorded.
+    attemptStartedAt: r.attempt_started_at ?? r.created_at,
   };
 }
 
@@ -87,6 +102,7 @@ export function initBackgroundJobsTable(execRaw: RawSqlExec, sql: SqlExecutor): 
     input_json  TEXT,
     epoch       INTEGER NOT NULL DEFAULT 0,
     resume_attempts INTEGER NOT NULL DEFAULT 0,
+    attempt_started_at INTEGER,
     created_at  INTEGER NOT NULL,
     settled_at  INTEGER
   )`);
@@ -95,6 +111,7 @@ export function initBackgroundJobsTable(execRaw: RawSqlExec, sql: SqlExecutor): 
     input_json: 'TEXT',
     epoch: 'INTEGER NOT NULL DEFAULT 0',
     resume_attempts: 'INTEGER NOT NULL DEFAULT 0',
+    attempt_started_at: 'INTEGER',
   });
   execRaw(`CREATE INDEX IF NOT EXISTS idx_background_jobs_status ON background_jobs(status)`);
 }
@@ -103,8 +120,8 @@ export class BackgroundJobStore {
   constructor(private readonly sql: SqlExecutor) {}
 
   create(opts: { id: string; kind: string; workMode: WorkMode; label?: string; input?: string; now: number }): void {
-    void this.sql`INSERT OR IGNORE INTO background_jobs (id, kind, label, work_mode, status, input_json, epoch, resume_attempts, created_at)
-      VALUES (${opts.id}, ${opts.kind}, ${opts.label ?? null}, ${opts.workMode}, 'running', ${opts.input ?? null}, 0, 0, ${opts.now})`;
+    void this.sql`INSERT OR IGNORE INTO background_jobs (id, kind, label, work_mode, status, input_json, epoch, resume_attempts, created_at, attempt_started_at)
+      VALUES (${opts.id}, ${opts.kind}, ${opts.label ?? null}, ${opts.workMode}, 'running', ${opts.input ?? null}, 0, 0, ${opts.now}, ${opts.now})`;
   }
 
   /** Mark a running job completed. No-op if already settled (idempotent wake) or
@@ -129,11 +146,17 @@ export class BackgroundJobStore {
   }
 
   /** Claim a still-running job for an evict-recovery re-drive: bump the lease
-   *  epoch (fencing any executor still holding the old one) and the resume-attempt
-   *  counter, atomically. Returns the new epoch + attempt count, or null when the
-   *  job is no longer running (already settled/cancelled, or gone). */
-  reclaim(id: string): JobClaim | null {
-    void this.sql`UPDATE background_jobs SET epoch = epoch + 1, resume_attempts = resume_attempts + 1
+   *  epoch (fencing any executor still holding the old one), the resume-attempt
+   *  counter and the attempt clock, atomically. Returns the new epoch + attempt
+   *  count, or null when the job is no longer running (already settled/cancelled,
+   *  or gone).
+   *
+   *  `attempt_started_at` moves with the epoch because they name the same event: a
+   *  new lease IS a new generation, and a generation with no start time is one
+   *  nothing can bound. */
+  reclaim(id: string, now = Date.now()): JobClaim | null {
+    void this.sql`UPDATE background_jobs
+      SET epoch = epoch + 1, resume_attempts = resume_attempts + 1, attempt_started_at = ${now}
       WHERE id=${id} AND status='running'`;
     const rows = this.sql<{ epoch: number; resume_attempts: number; status: string }>`
       SELECT epoch, resume_attempts, status FROM background_jobs WHERE id=${id} LIMIT 1`;
@@ -167,13 +190,13 @@ export class BackgroundJobStore {
   }
 
   get(id: string): BackgroundJob | null {
-    const rows = this.sql<Row>`SELECT id, kind, label, work_mode, status, result, error, created_at, settled_at, epoch, resume_attempts
+    const rows = this.sql<Row>`SELECT id, kind, label, work_mode, status, result, error, created_at, settled_at, epoch, resume_attempts, attempt_started_at
       FROM background_jobs WHERE id=${id} LIMIT 1`;
     return rows[0] ? toJob(rows[0]) : null;
   }
 
   list(limit = 20): BackgroundJob[] {
-    return this.sql<Row>`SELECT id, kind, label, work_mode, status, result, error, created_at, settled_at, epoch, resume_attempts
+    return this.sql<Row>`SELECT id, kind, label, work_mode, status, result, error, created_at, settled_at, epoch, resume_attempts, attempt_started_at
       FROM background_jobs ORDER BY created_at DESC LIMIT ${limit}`.map(toJob);
   }
 
@@ -197,7 +220,7 @@ export class BackgroundJobStore {
   /** Only the jobs still in flight, newest first — the dynamic-context roster.
    *  Narrower than `list`, which a settled backlog can crowd out entirely. */
   listRunning(limit = 20): BackgroundJob[] {
-    return this.sql<Row>`SELECT id, kind, label, work_mode, status, result, error, created_at, settled_at, epoch, resume_attempts
+    return this.sql<Row>`SELECT id, kind, label, work_mode, status, result, error, created_at, settled_at, epoch, resume_attempts, attempt_started_at
       FROM background_jobs WHERE status='running' ORDER BY created_at DESC LIMIT ${limit}`.map(toJob);
   }
 }

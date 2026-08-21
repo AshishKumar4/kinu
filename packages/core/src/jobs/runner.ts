@@ -21,6 +21,7 @@ import type { WorkMode } from '../prompting/surface';
 import * as v from 'valibot';
 import { parseJsonValue, type JsonValue } from '../utils/json';
 import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
+import { TURN_WALL_CLOCK_ENVELOPE_MS } from '../config';
 
 /** The terminal error a non-recoverable job records when it is interrupted by a
  *  DO eviction (no durable checkpoint / not safe to re-run).
@@ -84,7 +85,51 @@ export type JobResumer = (
  *  that evicts on every activation can't loop forever. MCTS makes monotonic
  *  progress (budget strictly decreases per resume) so it converges well within
  *  this; the cap only bounds pathological non-progressing kinds. */
-const MAX_RESUME_ATTEMPTS = 5;
+export const MAX_RESUME_ATTEMPTS = 5;
+
+/**
+ * THE LONGEST ONE ATTEMPT OF A JOB MAY RUN.
+ *
+ * The attempt cap above bounds how many GENERATIONS a job may have; it bounds
+ * nothing about how long one of them takes, and there was no other bound either.
+ * Measured on the owner's live workspace: `bgjob-5irynqgciwkrmk4m77yo5`, kind
+ * `agents`, `running` 28 minutes into generation 3 with two completed candidates its
+ * caller could not see. The owner asked, in these words, "Why isn't it giving up
+ * it's turn?" — and the honest answer was that nothing could make it.
+ *
+ * DERIVED, from the two quantities that already govern the thing being bounded: a
+ * background job exists because its work outlived the detach threshold, and
+ * {@link TURN_WALL_CLOCK_ENVELOPE_MS} is this repository's one MEASURED answer to
+ * "how long does one agent turn take" (509 s longest observed). A re-driven job is a
+ * sequence of such turns, at most {@link MAX_RESUME_ATTEMPTS} generations of them, so
+ * the product is the ceiling on the whole job and one generation may have all of it.
+ *
+ * IT IS A BACKSTOP, NOT A SCHEDULE. Every legitimate stopping condition is inside the
+ * work: a node has its own wall-clock envelope, a turn has the stall watchdog, a
+ * search has its expansion budget. This exists because none of those runs in the
+ * runner's process when the executor is gone, and because a caller is entitled to an
+ * answer even when the work will not produce one. Reaching it is a disclosure, never a
+ * silent kill: the job settles with {@link BackgroundJobRunnerDeps.harvest}'s partial
+ * result and the wake says which generation gave up.
+ */
+export const MAX_JOB_ATTEMPT_MS = MAX_RESUME_ATTEMPTS * TURN_WALL_CLOCK_ENVELOPE_MS;
+
+/**
+ * What a job has already produced, for a job that will not be driven again.
+ *
+ * PARTIAL CANDIDATES ARE RESULTS, and that is the whole reason this seam exists. The
+ * bounded-out and force-fail paths used to settle with an eviction string, so the
+ * incident's job reported nothing while its search held two completed candidates with
+ * real content. A harvester answers "what does this work have RIGHT NOW", read out of
+ * the durable rows the work already wrote.
+ *
+ * Null when the kind has nothing partial to give, which is the honest answer for a
+ * side-effecting call: `run` and `execute_tools` either happened or did not.
+ */
+export type JobHarvester = (
+  kind: string,
+  input: JsonValue,
+) => Promise<JsonValue | null>;
 
 /**
  * Ceiling on jobs detached at once. Every detached job is a live process tree
@@ -136,6 +181,32 @@ export interface BackgroundJobRunnerDeps {
    *  running job is failed (legacy behavior); when present, the runner reclaims
    *  the job under a fresh lease epoch and re-drives it in a new durable fiber. */
   resume?: JobResumer;
+  /**
+   * What this job already has, for the paths that will not drive it again — the
+   * attempt bound and the resume cap.
+   *
+   * Absent means "settle with nothing", which is what every one of those paths used
+   * to do unconditionally. Present, the job settles `completed` carrying the partial
+   * result, because a search that measured two of five answers measured two answers.
+   * Never throws into the fiber: a harvester that fails leaves the job settling the
+   * way it would have without one.
+   */
+  harvest?: JobHarvester;
+}
+
+/**
+ * Stop a pending timer from holding the host's event loop open, where the host has
+ * that notion at all.
+ *
+ * Node and Bun return a Timeout object with `unref`; Workers returns a number and
+ * needs none, because an isolate is not kept alive by a pending timer. Declared as a
+ * narrow domain operation rather than checked inline: the fact being established is
+ * "this timer must not outlive the work it watches", and it is the same fact at every
+ * call site.
+ */
+function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
+  const handle = v.safeParse(v.object({ unref: v.function() }), timer);
+  if (handle.success) handle.output.unref();
 }
 
 /** What the model reads when a detach is refused. Honest about what happened to
@@ -311,8 +382,8 @@ export class BackgroundJobRunner {
    *  or the wake's durable retry breadcrumb fails; runToSettlement owns that. */
   private async settleAndWake<T>(jobId: string, exec: () => Promise<T>): Promise<void> {
     const epoch = this.deps.store.epochOf(jobId) ?? 0;
-    let outcome: { ok: true; result: T } | { ok: false; error: string };
-    try { outcome = { ok: true, result: await exec() }; }
+    let outcome: { ok: true; result: T } | { ok: false; error: string } | { ok: false; bound: true };
+    try { outcome = await this.raceAttemptBound(jobId, exec); }
     catch (err) {
       // A kind the resumer can't re-drive is a clean interruption, not a crash:
       // record the same eviction message a non-resumable job always has.
@@ -324,6 +395,14 @@ export class BackgroundJobRunner {
     // A cancelled job was already marked; its promise rejects with the abort,
     // which we must NOT relabel as a generic failure.
     if (this.deps.store.get(jobId)?.status === 'cancelled') return;
+    // THE BOUND IS NOT A FAILURE OF THE WORK, so it does not take the failure path:
+    // it settles with whatever the work has, and only says `failed` when the work has
+    // nothing at all.
+    if (!outcome.ok && 'bound' in outcome) {
+      await this.settleBounded(jobId, epoch, `its attempt passed the ${
+        String(Math.round(MAX_JOB_ATTEMPT_MS / 60_000))}-minute bound on one attempt`);
+      return;
+    }
     if (outcome.ok) this.deps.store.settle(jobId, epoch, serializeJobResult(outcome.result), Date.now());
     else this.deps.store.fail(jobId, epoch, outcome.error, Date.now());
     // The lifecycle's OTHER end: start/refuse/cancel/resume already reach
@@ -334,6 +413,107 @@ export class BackgroundJobRunner {
     this.deps.logActivity?.('bg_job_settled', outcome.ok ? `${jobId} completed` : `${jobId} failed — ${outcome.error}`);
     this.notifySettled(jobId);
     await this.wake(jobId);
+  }
+
+  /**
+   * The work, or the attempt bound, whichever comes first.
+   *
+   * The bound is armed HERE rather than checked by a sweep, because a sweep only runs
+   * when something else wakes the process and the case being bounded is precisely one
+   * where nothing does. Reaching it ABORTS the work: the caller is about to be told
+   * this attempt is over, and leaving the process tree running past that is the
+   * absent-versus-broken confusion with the store taking the wrong side.
+   */
+  private async raceAttemptBound<T>(jobId: string, exec: () => Promise<T>): Promise<
+    { ok: true; result: T } | { ok: false; bound: true }
+  > {
+    const startedAt = this.deps.store.get(jobId)?.attemptStartedAt ?? Date.now();
+    const remainingMs = MAX_JOB_ATTEMPT_MS - (Date.now() - startedAt);
+    const work = exec().then((result) => ({ ok: true as const, result }));
+    if (remainingMs <= 0) {
+      this.abortAttempt(jobId);
+      return { ok: false, bound: true };
+    }
+    const bound = Promise.withResolvers<{ ok: false; bound: true }>();
+    const timer = setTimeout(() => { bound.resolve({ ok: false, bound: true }); }, remainingMs);
+    // UNREFERENCED WHERE THE HOST HAS THE NOTION, because this timer outlives the
+    // thing it is watching by design: the case it exists for is work that never
+    // settles, and then the `finally` below never runs. A referenced 50-minute timer
+    // therefore holds the event loop open, and `end()` — which exists precisely to
+    // give up on work that never settles — waits for it. Measured: it hung four
+    // cli-backend teardown tests at their 5 s ceiling. Workers has no `unref`, and
+    // needs none: an isolate is not kept alive by a pending timer.
+    unrefTimer(timer);
+    try {
+      const settled = await Promise.race([work, bound.promise]);
+      if (settled.ok) return settled;
+      this.abortAttempt(jobId);
+      return settled;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** Stop the work of an attempt the runner is giving up on, without marking the JOB
+   *  cancelled — an operator did not cancel it, and the job is about to settle with
+   *  what it has. */
+  private abortAttempt(jobId: string): void {
+    this.controllers.get(jobId)?.abort(new Error('the job attempt passed its bound'));
+  }
+
+  /**
+   * Settle a job nothing will drive again, carrying what it already has.
+   *
+   * `completed` when the harvest yields something, and that is the decision the
+   * incident turned on: root `2rye1eyny1efm9583sqye` held two completed candidates
+   * with real content while its job reported nothing, so the owner was handed an empty
+   * failure over work that had really been done. `failed` only when there is genuinely
+   * nothing — a side-effecting kind, an absent harvester, or a search that had not
+   * measured one answer yet.
+   */
+  private async settleBounded(jobId: string, epoch: number, why: string): Promise<void> {
+    const job = this.deps.store.get(jobId);
+    const partial = job ? await this.harvestOf(job) : null;
+    const now = Date.now();
+    if (partial === null) {
+      this.deps.store.fail(jobId, epoch, `${EVICTION_INTERRUPT_ERROR} — ${why}, and it had `
+        + 'produced no partial result to hand back', now);
+      this.deps.logActivity?.('bg_job_bounded', `${jobId} failed empty — ${why}`);
+    } else {
+      this.deps.store.settle(jobId, epoch, serializeJobResult({
+        partial: true,
+        why: `This result is PARTIAL: ${why}. It is what the work had completed, not a `
+          + 'finished answer — say so if you use it.',
+        generation: (job?.resumeAttempts ?? 0) + 1,
+        result: partial,
+      }), now);
+      this.deps.logActivity?.('bg_job_bounded', `${jobId} settled partial — ${why}`);
+    }
+    this.notifySettled(jobId);
+    await this.wake(jobId);
+  }
+
+  /** The harvest, or null — never a throw into the settle path. A harvester that
+   *  fails must not turn a job that could settle partially into one that cannot
+   *  settle at all. */
+  private async harvestOf(job: BackgroundJob): Promise<JsonValue | null> {
+    const harvest = this.deps.harvest;
+    if (!harvest) return null;
+    const raw = this.deps.store.getInput(job.id);
+    let input: JsonValue = null;
+    if (raw !== null) {
+      try { input = parseJsonValue(raw); }
+      catch { input = raw; }
+    }
+    try { return await harvest(job.kind, input); }
+    catch (err) {
+      diagnostics.failure(
+        'jobs.harvest_failed',
+        toKinuError({ doing: 'read what a bounded-out background job already produced', cause: err, otherwise: 'io' }),
+        { jobId: job.id, kind: job.kind },
+      );
+      return null;
+    }
   }
 
   /** Last-resort terminal write for a job the settlement path left running, and
@@ -373,9 +553,17 @@ export class BackgroundJobRunner {
   async wake(jobId: string): Promise<void> {
     const job = this.deps.store.get(jobId);
     if (!job) return;
+    // HOW MANY GENERATIONS IT TOOK, where that is more than one. The count was
+    // durable all along and appeared nowhere a reader could see it: the owner watched
+    // a job sit `running` through three generations and asked why it would not give up
+    // its turn, with nothing in the conversation able to answer him.
+    const generation = job.resumeAttempts > 0
+      ? ` (generation ${String(job.resumeAttempts + 1)} — it was interrupted and re-driven)`
+      : '';
     const text = job.status === 'completed'
-      ? `Background ${job.kind} job ${jobId} completed. Read the full result with ` +
-        `agent.jobResult('${jobId}'), then synthesize it / continue the work you backgrounded.`
+      ? `Background ${job.kind} job ${jobId} completed${generation}. Read the full result with ` +
+        `agent.jobResult('${jobId}'), then synthesize it / continue the work you backgrounded. ` +
+        `The result says whether it is COMPLETE or PARTIAL — say which when you report it.`
       // A cancel is neither a success nor a crash: the work is GONE, no result
       // will arrive, and the agent had been told to wait for one. Saying so is
       // the only thing that stops it reasoning from its own transcript.
@@ -383,8 +571,14 @@ export class BackgroundJobRunner {
         ? `Background ${job.kind} job ${jobId} was CANCELLED by the operator and is no longer ` +
           `running. There is no result to collect. Re-run that work if you still need it, or ` +
           `continue without it and say what is missing.`
-        : `Background ${job.kind} job ${jobId} failed${job.error ? ` (${job.error})` : ''}. ` +
-          `Decide whether to retry or report the failure.`;
+        // NOT "decide whether to retry". That sentence is how the duplicate-root defect
+        // happened: the model retried by calling the tool again, over a search that was
+        // still running, and got a second tree. The engine refuses that now, so advising
+        // it would be advising a refusal.
+        : `Background ${job.kind} job ${jobId} failed${generation}` +
+          `${job.error ? ` (${job.error})` : ''}. Report the failure and what it cost. Do not ` +
+          `re-spawn the same work: a search keeps its tree, so a genuine retry continues that ` +
+          `one rather than starting another, and an identical spawn is refused.`;
     const base = {
       kind: 'background_job',
       text,
@@ -580,14 +774,27 @@ export class BackgroundJobRunner {
    * checkpoint-backed, it is reclaimed under a fresh lease epoch (fencing the
    * dead executor) and re-driven in a new durable fiber from its durable
    * checkpoint (MCTS continues its remaining search budget; heads re-run).
-   * Without a resumer — or past the resume-attempt cap — it is failed with the
-   * eviction message.
+   *
+   * PAST A BOUND IT SETTLES WITH WHAT IT HAS. Two bounds reach here — the
+   * resume-attempt cap, and a total lifetime that {@link MAX_JOB_ATTEMPT_MS}
+   * measures across every generation — and both used to write an eviction string
+   * over work that had really been done. The incident's job was one reclaim short
+   * of the cap with two completed candidates in its journal, so the next eviction
+   * would have discarded them. Both now go through {@link settleBounded}.
+   *
+   * The LIFETIME check is separate from the per-attempt race in
+   * {@link raceAttemptBound} and neither subsumes the other: the race bounds a
+   * generation this process is driving, and this bounds the job across generations
+   * this process never saw. A job evicted every four minutes never trips the race.
    *
    * A job THIS runner is already driving is left alone. Both entry points can
    * name the same job in one activation — a resume leaves its own fiber row, so
    * a cold start can recover two fibers for one job, and the registry sweep
    * names every running row besides — and re-driving one twice would reclaim it
    * out from under the executor that is making progress on it.
+   *
+   * Every refusal returns null, so a caller using this as a resume gate reads one
+   * fact with one spelling rather than inferring it from a timeout.
    */
   private async recoverJob(jobId: string): Promise<BackgroundJob | null> {
     if (this.controllers.has(jobId)) return null;
@@ -601,25 +808,25 @@ export class BackgroundJobRunner {
       const claim = this.deps.store.reclaim(jobId);
       if (!claim) return null; // lost the race — another activation already reclaimed it
       if (claim.attempts > MAX_RESUME_ATTEMPTS) {
-        this.deps.store.fail(
-          jobId, claim.epoch,
-          `${EVICTION_INTERRUPT_ERROR} (gave up after ${MAX_RESUME_ATTEMPTS} resume attempts)`,
-          Date.now(),
-        );
-        this.notifySettled(jobId);
-        await this.wake(jobId);
+        await this.settleBounded(jobId, claim.epoch,
+          `it was re-driven ${String(MAX_RESUME_ATTEMPTS)} times without finishing, so it gave up`);
         return null;
       }
+      // NO WALL-CLOCK CHECK HERE, and that is a decision rather than an omission.
+      // Time since `createdAt` is the wrong quantity: a Durable Object evicted
+      // overnight was not WORKING overnight, and bounding a job on it would make a
+      // workspace resumed after an idle night discard a search instead of continuing
+      // it. The time bound belongs where the time is real — {@link raceAttemptBound},
+      // on the attempt this process is actually driving, measured from a clock the
+      // reclaim above just wrote. Across generations, the cap is the bound.
       this.deps.logActivity?.('bg_job_resume', `${job.kind} → ${jobId} (attempt ${claim.attempts}, epoch ${claim.epoch})`);
       this.driveResume(job);
       return job;
     }
 
-    // No resumer: fail the orphan with the eviction message (fencing the write on
-    // the job's current epoch so a zombie can't later overwrite it).
-    this.deps.store.fail(jobId, job.epoch, EVICTION_INTERRUPT_ERROR, Date.now());
-    this.notifySettled(jobId);
-    await this.wake(jobId);
+    // No resumer: this job's work is gone and nothing will re-run it. It still
+    // settles with whatever it produced rather than with the eviction string alone.
+    await this.settleBounded(jobId, job.epoch, 'its executor was lost and this kind cannot be re-driven');
     return null;
   }
 

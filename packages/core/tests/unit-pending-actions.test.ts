@@ -20,6 +20,7 @@ function job(over: Partial<BackgroundJob>): BackgroundJob {
   return {
     id: 'bgjob-1', kind: 'run', label: 'bun test', workMode: 'build', status: 'completed',
     result: null, error: null, createdAt: 1000, settledAt: 1100, epoch: 0, resumeAttempts: 0,
+    attemptStartedAt: 1000,
     ...over,
   };
 }

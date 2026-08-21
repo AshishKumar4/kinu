@@ -4,7 +4,10 @@
 // the real signal-delivery seam on a fake BackendHost, with no DO.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { BackgroundJobRunner, JobNotResumable, MAX_CONCURRENT_DETACHED_JOBS, type JobResumer } from '../src/jobs/runner';
+import {
+  BackgroundJobRunner, JobNotResumable, MAX_CONCURRENT_DETACHED_JOBS, MAX_JOB_ATTEMPT_MS,
+  MAX_RESUME_ATTEMPTS, type JobHarvester, type JobResumer,
+} from '../src/jobs/runner';
 import { SignalDelivery } from '../src/orchestrator/signals';
 import {
   BackgroundJobStore, initBackgroundJobsTable, BACKGROUND_POLICY,
@@ -54,7 +57,9 @@ function fakeHost() {
 /** One process's view of the lifecycle. `db` is threaded when a test needs a
  *  SECOND process over the same durable rows — a restart, which is the only
  *  place orphan recovery can happen. */
-function setup(opts: { resume?: JobResumer; policy?: BackgroundPolicy; db?: Database } = {}) {
+function setup(opts: {
+  resume?: JobResumer; policy?: BackgroundPolicy; db?: Database; harvest?: JobHarvester;
+} = {}) {
   const db = opts.db ?? new Database(':memory:');
   initBackgroundJobsTable(makeExecRaw(db), makeSql(db));
   // The registry behind a switchable fault, so a test can reproduce the one
@@ -83,6 +88,7 @@ function setup(opts: { resume?: JobResumer; policy?: BackgroundPolicy; db?: Data
     onSettled: (job: BackgroundJob) => notified.push({ id: job.id, status: job.status }),
     resume: opts.resume,
     policy: opts.policy ? () => opts.policy! : undefined,
+    harvest: opts.harvest,
   };
   const runner = new BackgroundJobRunner(runnerDeps);
   return {
@@ -305,7 +311,7 @@ describe('BackgroundJobRunner.cancel — operator hard-cancel', () => {
 // handles went with the process that held them.
 describe('BackgroundJobRunner.recover — evict mid-flight', () => {
   const orphanRow = (store: BackgroundJobStore, id: string): string => {
-    store.create({ id, kind: 'think', workMode: 'build', input: '{}', now: 1 });
+    store.create({ id, kind: 'think', workMode: 'build', input: '{}', now: Date.now() });
     return id;
   };
 
@@ -365,7 +371,7 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
     };
     const { runner, store, enqueued, settled, notified, logs } = setup({ resume });
     // A job created with its tool input, then interrupted mid-flight (stashed running).
-    store.create({ id: 'jr', kind: 'think', workMode: 'plan', input: '{"strategy":"mcts","task":"t"}', now: 1 });
+    store.create({ id: 'jr', kind: 'think', workMode: 'plan', input: '{"strategy":"mcts","task":"t"}', now: Date.now() });
 
     await runner.recover({ jobId: 'jr', phase: 'running' });
     await settled(); // let the re-drive fiber finish
@@ -387,7 +393,7 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
   test('a kind the resumer cannot re-drive falls back to the eviction failure', async () => {
     const resume: JobResumer = async (kind) => { throw new JobNotResumable(kind); };
     const { runner, store, enqueued, settled } = setup({ resume });
-    store.create({ id: 'jn', kind: 'run', workMode: 'build', input: '{}', now: 1 });
+    store.create({ id: 'jn', kind: 'run', workMode: 'build', input: '{}', now: Date.now() });
 
     await runner.recover({ jobId: 'jn', phase: 'running' });
     await settled();
@@ -400,7 +406,7 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
   test('a job that evicts on every activation is failed after the resume-attempt cap', async () => {
     const resume: JobResumer = () => new Promise<never>(() => {}); // never settles ⇒ evicted again
     const first = setup({ resume });
-    first.store.create({ id: 'jc', kind: 'think', workMode: 'build', input: '{}', now: 1 });
+    first.store.create({ id: 'jc', kind: 'think', workMode: 'build', input: '{}', now: Date.now() });
 
     // One activation per recovery — a re-drive lives in the activation that
     // started it, and the next eviction brings up a new one.
@@ -422,7 +428,7 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
     // SAME job to recover() twice — and the registry sweep names it as well.
     const resume: JobResumer = () => new Promise<never>(() => {});
     const { runner, store } = setup({ resume });
-    store.create({ id: 'jd', kind: 'agents', workMode: 'build', input: '{}', now: 1 });
+    store.create({ id: 'jd', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
 
     await runner.recover({ jobId: 'jd', phase: 'running' });
     await runner.recover({ jobId: 'jd', phase: 'running' });
@@ -471,7 +477,7 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
   test('resuming is bounded: repeated restarts end in a terminal status, not another re-drive', async () => {
     const resume: JobResumer = () => new Promise<never>(() => {}); // never settles ⇒ orphaned again
     const first = setup({ resume });
-    first.store.create({ id: 'jz', kind: 'agents', workMode: 'build', input: '{}', now: 1 });
+    first.store.create({ id: 'jz', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
 
     // Each restart finds the row, reclaims it, and re-drives — until the cap.
     for (let start = 0; start < 6; start++) {
@@ -581,5 +587,182 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
       .thresholdDeps('run', {}, 'build', new AbortController())
       .onThreshold('run', new Promise(() => { /* still running */ }));
     expect(outcome.detached).toBe(true);
+  });
+});
+
+/**
+ * A JOB'S LIFETIME IS BOUNDED AND TRUTHFUL ACROSS RE-ENTRY.
+ *
+ * Measured on the owner's live workspace: `bgjob-5irynqgciwkrmk4m77yo5`, kind
+ * `agents`, `running` 28 minutes later at `epoch=4 resumeAttempts=4` — one reclaim
+ * short of the cap — while the search it wrapped had TWO completed candidates with
+ * real content. Every re-entry kept the job open, so the settle wake never arrived,
+ * and the owner asked in these words: "Why isn't it giving up it's turn?"
+ *
+ * Two things were wrong and each has its own arm below. The job could not be made to
+ * stop, because the attempt cap bounds GENERATIONS and nothing bounded TIME. And when
+ * it did stop it would have settled with an eviction string, discarding candidates it
+ * had really measured.
+ *
+ * THE DESIGN DECISION, since the ticket asked for one either way: ONE JOB CONTINUES
+ * across re-entries rather than each generation settling and a new job starting. The
+ * search itself is durable and re-enterable, and the job is the caller's handle on
+ * that search — a job per generation would split one search across N rows each
+ * holding a fragment, which is the same shape the search layer already rejected when
+ * it stopped minting a second root. So identity stays, and what changes is that the
+ * lifetime is bounded, the generation count is disclosed, and the terminal state
+ * carries what the work has.
+ *
+ * `MAX_JOB_ATTEMPT_MS` is not exercised at its real value here for the reason the
+ * stall watchdog's suite gives about `STALL_TIMEOUT_MS`: a bound of fifty minutes
+ * cannot be reached by a test that has to finish. What is under test is the
+ * RELATIONSHIP — a bound exists, it settles rather than hangs, and it carries the
+ * partial — and the derivation of the number lives on the constant.
+ */
+describe('a background job gives up its turn, and hands over what it has', () => {
+  /** A row whose CURRENT attempt began longer ago than any attempt may run. Written
+   *  as SQL because that is the state a long-running generation reaches on disk, and
+   *  no public write produces it directly. */
+  function staleAttempt(db: Database, id: string) {
+    const longAgo = Date.now() - MAX_JOB_ATTEMPT_MS - 60_000;
+    db.exec("INSERT INTO background_jobs (id, kind, work_mode, status, input_json, created_at, attempt_started_at) "
+      + `VALUES ('${id}', 'agents', 'build', 'running', '{}', ${String(longAgo)}, ${String(longAgo)})`);
+  }
+
+  test('the attempt clock is a column, and a reclaim starts a new generation on it', () => {
+    // The reading nothing could do before: `createdAt` says when the work was first
+    // asked for and `settledAt` is null while it runs, so "how long has THIS
+    // generation been going" had no answer and nothing could bound it.
+    const { store } = setup();
+    store.create({ id: 'j1', kind: 'agents', workMode: 'build', input: '{}', now: 1_000 });
+    expect(store.get('j1')?.attemptStartedAt).toBe(1_000);
+
+    store.reclaim('j1', 5_000);
+    expect(store.get('j1')).toMatchObject({
+      attemptStartedAt: 5_000, resumeAttempts: 1, epoch: 1,
+    });
+  });
+
+  test('an attempt past its time bound is settled with its partial result', async () => {
+    const harvested = { rootId: 'root-1', candidates: [{ nodeId: 'n1', score: 0.6 }] };
+    const { runner, store, enqueued, settled, notified, db } = setup({
+      harvest: async () => harvested,
+    });
+    staleAttempt(db, 'bgjob-old');
+    // Work that never settles — the case nothing could previously stop. Before this
+    // bound the fiber body simply awaited it forever and the job stayed `running`.
+    runner.detach('bgjob-old', 'agents', new Promise(() => { /* never */ }));
+    await settled();
+
+    // SETTLED, and settled COMPLETED rather than failed — because it has something.
+    const job = store.get('bgjob-old');
+    expect(job?.status).toBe('completed');
+    expect(notified.map((n) => n.status)).toEqual(['completed']);
+
+    // Carrying the partial, LABELLED as partial. A caller handed a partial it cannot
+    // tell from a finished answer will report it as finished.
+    const stored: unknown = JSON.parse(job?.result ?? 'null');
+    expect(stored).toMatchObject({
+      partial: true,
+      result: harvested,
+      why: expect.stringContaining('PARTIAL'),
+    });
+
+    // And the caller's turn arrives. The whole complaint was that it never did.
+    expect(enqueued).toHaveLength(1);
+  });
+
+  test('past the resume cap it also settles with the partial, instead of an eviction string', async () => {
+    const { runner, store, settled } = setup({
+      resume: async () => 'never reached',
+      harvest: async () => ({ rootId: 'root-2', candidates: [{ nodeId: 'n1', score: 0.4 }] }),
+    });
+    store.create({ id: 'bgjob-capped', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
+    // Drive it to the cap. The incident's job was at exactly attempts=4, so the next
+    // reclaim is the one that used to discard its two completed candidates.
+    for (let i = 0; i < MAX_RESUME_ATTEMPTS; i++) store.reclaim('bgjob-capped');
+    expect(store.get('bgjob-capped')?.resumeAttempts).toBe(MAX_RESUME_ATTEMPTS);
+
+    await runner.recoverOrphans();
+    await settled();
+
+    const job = store.get('bgjob-capped');
+    expect(job?.status).toBe('completed');
+    expect(job?.error).toBeNull();
+    expect(String(job?.result)).toContain('root-2');
+  });
+
+  test('with nothing to hand over it fails — and says the bound, not just "evicted"', async () => {
+    // The other direction. A bound reached over work that produced nothing is a
+    // failure, and it must not pretend to be a partial success.
+    const { runner, store, settled, db } = setup({ harvest: async () => null });
+    staleAttempt(db, 'bgjob-empty');
+    runner.detach('bgjob-empty', 'agents', new Promise(() => { /* never */ }));
+    await settled();
+
+    const job = store.get('bgjob-empty');
+    expect(job?.status).toBe('failed');
+    expect(job?.error ?? '').toContain('no partial result');
+    expect(job?.result).toBeNull();
+  });
+
+  test('a harvester that throws leaves the job settling, never hanging', async () => {
+    // The seam is on the settle path, so a failing harvester must degrade to the
+    // behaviour of having none rather than stranding the job `running` forever —
+    // which is the exact state this whole ticket exists to remove.
+    const { runner, store, settled, db } = setup({
+      harvest: async () => { throw new Error('the ledger is unreadable'); },
+    });
+    staleAttempt(db, 'bgjob-throws');
+    runner.detach('bgjob-throws', 'agents', new Promise(() => { /* never */ }));
+    await settled();
+
+    expect(store.get('bgjob-throws')?.status).toBe('failed');
+  });
+
+  test('a job within its bound is still re-driven, so the bound cannot stop honest work', async () => {
+    // The guard. Without this arm a change that bounds everything passes the tests
+    // above, and every resume in the product stops working.
+    let resumeCalls = 0;
+    const { runner, store, settled } = setup({
+      resume: async () => { resumeCalls += 1; return 'continued'; },
+      harvest: async () => ({ never: 'read' }),
+    });
+    store.create({ id: 'bgjob-young', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
+
+    await runner.recoverOrphans();
+    await settled();
+
+    expect(resumeCalls).toBe(1);
+    expect(store.get('bgjob-young')?.status).toBe('completed');
+    expect(String(store.get('bgjob-young')?.result)).toContain('continued');
+  });
+
+  test('the wake states which generation settled, so a re-driven job is not silently one attempt', async () => {
+    const { runner, store, enqueued, settled } = setup({
+      resume: async () => 'continued at last',
+    });
+    store.create({ id: 'bgjob-gen', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
+    store.reclaim('bgjob-gen');
+    store.reclaim('bgjob-gen');
+
+    await runner.recoverOrphans();
+    await settled();
+
+    // Three generations: two prior reclaims plus the one recovery just took.
+    expect(store.get('bgjob-gen')?.resumeAttempts).toBe(3);
+    expect(enqueued[0]?.text ?? '').toContain('generation 4');
+  });
+
+  test('a failed job is not told to retry — that advice is what minted a second search', async () => {
+    const { runner, store, enqueued, settled } = setup();
+    const id = runner.create('agents', { action: 'swarm' }, 'build', new AbortController());
+    runner.detach(id, 'agents', Promise.reject(new Error('the provider refused')));
+    await settled();
+
+    expect(store.get(id)?.status).toBe('failed');
+    const text = enqueued[0]?.text ?? '';
+    expect(text).toMatch(/do not\s+re-spawn/i);
+    expect(text).not.toMatch(/whether to retry/i);
   });
 });

@@ -12,13 +12,23 @@
  */
 
 import type { ToolExecutionOptions, ToolSet } from 'ai';
+import * as v from 'valibot';
 import { CONFINED_BACKGROUNDABLE_TOOLS, type BackgroundableTool } from '../jobs/background-wrap';
 import { RESUME_REDRIVE_OPTION } from '../jobs/threshold';
 import { JobNotResumable } from '../jobs/runner';
 import type { WorkMode } from '../prompting/surface';
 import { resumableAgentsInput } from '../tools/agents-tool';
+import { harvestSwarm } from '../strategy/swarm-resume';
+import type { MctsSearchStore } from '../mcts/search-store';
+import type { SqlExecutor } from '../types/primitives';
 import { nanoid } from '../utils/nanoid';
 import { decodeJsonValue, type JsonValue } from '../utils/json';
+
+/** The durable rows a swarm harvest reads. The backend already holds both. */
+export interface SwarmHarvestDeps {
+  readonly sql: SqlExecutor;
+  readonly ledger: MctsSearchStore;
+}
 
 /** The detach gate and the resume gate are ONE predicate, deliberately: a call
  *  that could not be re-driven after an eviction must never be detached into a
@@ -87,4 +97,42 @@ export async function resumeBackgroundJob(
   };
   const result = await exec(resumed, execOptions);
   return result === undefined ? undefined : decodeJsonValue({ value: result });
+}
+
+/**
+ * WHAT AN UNFINISHED `agents` JOB ALREADY HAS, for the paths that will not drive it
+ * again — the resume cap and the lifetime bound in `jobs/runner.ts`.
+ *
+ * The gate is the SAME predicate the detach and the resume use, deliberately: a kind
+ * that could not be re-driven has no durable state to read either, so a third
+ * predicate would drift from the two. `run` and `execute_tools` therefore return null,
+ * which is the honest answer — a side-effecting call either happened or did not, and
+ * there is no half of it to hand over.
+ *
+ * A SEARCH IS DIFFERENT and that is the whole point. Its tree, its per-node records
+ * and its scores are durable, so a search cut at four of five candidates HAS four
+ * candidates. The incident settled a job with an eviction string while its root held
+ * two completed candidates with real content, and the owner was handed nothing.
+ */
+export function harvestBackgroundJob(
+  deps: SwarmHarvestDeps,
+  kind: string,
+  input: JsonValue,
+): JsonValue | null {
+  const resumed = resumableAgentsInput(kind, input);
+  if (!resumed) return null;
+  // PARSED, not duck-typed: `resumed` is a durable row this build did not write, and
+  // the task string is the key the whole harvest is read by. A row with no readable
+  // task has nothing to harvest, which is a refusal rather than a guess.
+  const task = v.safeParse(v.pipe(v.string(), v.minLength(1)), resumed.task);
+  if (!task.success) return null;
+  const harvest = harvestSwarm(deps, task.output);
+  if (!harvest) return null;
+  return {
+    rootId: harvest.rootId,
+    generations: harvest.generations,
+    iteration: harvest.iteration,
+    best: harvest.best === null ? null : { ...harvest.best },
+    candidates: harvest.candidates.map((candidate) => ({ ...candidate })),
+  };
 }

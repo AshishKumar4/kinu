@@ -40,7 +40,7 @@ import {
   AgentOrchestrator,
   createAgentStores, type AgentStores, collectDynamicContext,
   type BackgroundJobStore, BackgroundJobRunner, type TaskListStore,
-  wrapToolsForBackground, BACKGROUNDABLE_TOOLS, resumeBackgroundJob,
+  wrapToolsForBackground, BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob,
   BACKGROUND_POLICY, type BackgroundPolicy,
   type MctsSearchStore, createDurableMctsSession,
   EventLog, ReplyChannelStore,
@@ -643,6 +643,12 @@ export class LocalAgentSession implements BackendHost {
       // Process exit is the local analogue of a DO eviction: re-drive an
       // interrupted job from its durable checkpoint instead of failing it.
       resume: (kind, input, mode, signal) => this.resumeBackgroundJob(kind, { value: input }, mode, signal),
+      // What a bounded-out job already produced. Same predicate as `resume`, so a
+      // side-effecting kind has nothing partial to read and a SEARCH does — the case
+      // that used to settle empty over candidates it had really measured.
+      harvest: (kind, input) => Promise.resolve(harvestBackgroundJob(
+        { sql: this.rt.storage.sql, ledger: this.mctsSearchStore }, kind, input,
+      )),
     });
     // Scaffold cold-start heal (the DO's onStart parity): a workspace created
     // before scaffold bootstrap landed has no scaffold/agent.js, and
