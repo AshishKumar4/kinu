@@ -20,7 +20,6 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
-import { DEFAULT_MAX_STEPS } from '../src/config';
 import { DEFAULT_HEAD_BUDGET, type HeadInput } from '../src/heads/types';
 import { runHeadInference, HeadCapture, buildHeadAccumulatorTools } from '../src/heads/head-inference';
 import {
@@ -81,7 +80,6 @@ async function runHead(mission: MissionScope | null, opts: { stopAfter?: number 
     tools: buildHeadAccumulatorTools(capture),
     capture,
     workspaceLayout: 'shared-workspace',
-    maxSteps: DEFAULT_MAX_STEPS,
     isAborted: () => false,
   };
   if (mission) deps.mission = mission;

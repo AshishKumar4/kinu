@@ -22,7 +22,7 @@ import {
   AGENTS_TOOL_ACTIONS, BUILTIN_TOOL_DESCRIPTIONS, DELEGATION_INHERITANCE, DELEGATION_RUNGS,
   delegationBudgetAtDepth, ROOT_DELEGATION_BUDGET,
   SWARM_PRESET_DOCTRINE,
-  PEER_REPLY_TOPIC, SPAWN_STARTED_OPTION, TURN_WALL_CLOCK_ENVELOPE_MS,
+  LLM_CALL_TIMEOUT_MS, PEER_REPLY_TOPIC, SPAWN_STARTED_OPTION,
   classifyToolFailure, JsonObjectSchema,
   type AgentsToolInput,
   type AgentsForkDeps, type AgentsToolDeps, type PeersToolDeps,
@@ -741,7 +741,7 @@ describe('agents tool — peer workspace actions', () => {
     // the 5_000 floor that used to raise it silently overrode a deliberate request,
     // and a `no_reply` whose note says the answer lands later as an event is honest.
     expect(peerInputs.map((input) => input.timeoutMs))
-      .toEqual([TURN_WALL_CLOCK_ENVELOPE_MS, 1_000, TURN_WALL_CLOCK_ENVELOPE_MS]);
+      .toEqual([LLM_CALL_TIMEOUT_MS, 1_000, LLM_CALL_TIMEOUT_MS]);
     expect(peerInputs[0]?.topic).toBe('message');
   });
 
@@ -763,7 +763,7 @@ describe('agents tool — peer workspace actions', () => {
     expect(result).toMatchObject({ agent: 'specialist', created: true, status: 'replied' });
     expect(calls[0].input).toMatchObject({
       purpose: 'summarize research papers', message: 'Summarize X',
-      timeoutMs: TURN_WALL_CLOCK_ENVELOPE_MS,
+      timeoutMs: LLM_CALL_TIMEOUT_MS,
       mode: 'build',
     });
   });

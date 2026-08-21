@@ -97,8 +97,6 @@ declare global {
     /** Local dev backdoor — synthesize an authenticated identity for this
      *  email without an OAuth browser session. Production must leave this unset. */
     DEV_USER_EMAIL?: string;
-    /** Per-turn tool-call step ceiling. OPTIONAL — unset means core's default. */
-    KINU_MAX_STEPS?: string;
     /** Cloudflare Email Sending binding (`send_email` in wrangler.jsonc).
      *  OPTIONAL — without it, outbound email (thread replies, owner
      *  notifications) skips quietly. */

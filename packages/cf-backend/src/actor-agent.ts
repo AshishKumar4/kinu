@@ -33,7 +33,7 @@ import {
   type CompactionStateStore, type Logger as CompactionLogger,
 } from "@kinu.run/compaction";
 import { Think, Session } from "@cloudflare/think";
-import { streamText, tool, jsonSchema, stepCountIs } from "ai";
+import { streamText, tool, jsonSchema } from "ai";
 import type { LanguageModel, ModelMessage, SystemModelMessage, ToolSet, UIMessage } from "ai";
 import {
   SerializableToolDescriptorSchema,
@@ -49,14 +49,13 @@ import type {
 } from "@cloudflare/think";
 import {
   EvolutionEngine, type EvolutionConfig,
-  resolveMaxSteps,
   // Scaffold loop closure — the evolved inference loop + its sampled
   // shadow rollout. Shared by every actor that carries an EvolutionEngine.
   scaffoldInferenceTransform, type ScaffoldRunOptions,
   createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory,
   queueTurnShadowTrial, runQueuedShadowTrials, createJsonJudge, type ScaffoldControl,
+  effortFor, type CompletedTurn, type TurnContinuity, UNBOUNDED_STEPS,
   SCAFFOLD_TURN_TIMEOUT_MS,
-  effortFor, type CompletedTurn, type TurnContinuity,
   runAdvisorLane,
   // canonical tool + prompt surface — single source of truth
   buildActorTools,
@@ -785,7 +784,6 @@ export abstract class ActorAgent extends Think<Env> {
     }, input, Date.now());
   }
 
-  override maxSteps = resolveMaxSteps(this.env.KINU_MAX_STEPS);
 
   private readonly ownedModelServices = new OwnedModelServices({
     env: this.env,
@@ -1428,7 +1426,6 @@ export abstract class ActorAgent extends Think<Env> {
             ? settleUnpairedToolCalls(context) ?? [...context]
             : [{ role: 'user', content: task }],
           tools: this.getRawTools(),
-          stopWhen: stepCountIs(this.maxSteps),
           ...effortFor('scaffold_mutation'),
         }).toUIMessageStream()),
       }),
@@ -1439,15 +1436,13 @@ export abstract class ActorAgent extends Think<Env> {
 
   /** The scaffold's host.llmStream bridge (core scaffold-host): tool names
    *  resolve against the RAW surface per call, multi-step, scaffold-stage
-   *  reasoning effort. The step budget is the turn's own — a scaffold that
-   *  delegates through this bridge is doing the turn's work, and giving it
-   *  less room than the default loop makes every comparison between them a
-   *  measurement of the handicap. */
+   *  reasoning effort. No step cap here — the scaffold's loop runs exactly as
+   *  long as the live turn it may replace would (owner ruling, 2026-08-21), so
+   *  comparisons between them measure the scaffold, not a handicap. */
   protected makeScaffoldLLMStream(): ScaffoldRunOptions['llmStream'] {
     return createScaffoldLLMStream({
       model: this.getModel(),
       tools: () => this.getRawTools(),
-      defaultMaxSteps: this.maxSteps,
       streamOptions: effortFor('scaffold_mutation'),
     });
   }
@@ -3296,7 +3291,7 @@ export abstract class ActorAgent extends Think<Env> {
       messages: cfg.messages,
       tools: { ...ctx.tools, ...cfg.tools },
       activeTools: cfg.activeTools,
-      stopWhen: stepCountIs(this.maxSteps),
+      stopWhen: UNBOUNDED_STEPS,
     };
     if (providerOptions) lastTurnOpts.providerOptions = providerOptions;
     this._lastTurnOpts = lastTurnOpts;

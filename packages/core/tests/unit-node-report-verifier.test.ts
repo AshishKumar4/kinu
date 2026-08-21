@@ -32,7 +32,7 @@ import { createTestRuntime } from './helpers';
 import { createRecordingLogger } from '../src/obs/index';
 import { HeadJournal } from '../src/heads/journal';
 import { initHeadsTables } from '../src/heads/schema';
-import { nodeWallClockEnvelopeMs, runNodeAgent } from '../src/strategy/node-agent';
+import { runNodeAgent } from '../src/strategy/node-agent';
 import type { NodeAgentDeps, NodeAgentInput } from '../src/strategy/node-agent';
 
 const NODE_STEPS = 8;
@@ -128,10 +128,10 @@ function fixture(over: {
   };
   const deps: NodeAgentDeps = {
     rt, model: over.model, journal,
-    maxSteps: NODE_STEPS,
-    maxWallClockMs: nodeWallClockEnvelopeMs(NODE_STEPS),
+
+    maxWallClockMs: 60_000,
     logger: createRecordingLogger(),
-    stallTimeoutMs: STALL_MS,
+    callTimeoutMs: STALL_MS,
   };
   if (over.gradeReport !== undefined) deps.gradeReport = over.gradeReport;
   return { input, deps };

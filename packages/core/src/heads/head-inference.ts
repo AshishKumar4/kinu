@@ -430,14 +430,6 @@ export interface HeadInferenceDeps {
   /** Shared findings accumulator — the tools mutate this same instance. */
   capture: HeadCapture;
   /**
-   * The step envelope of the turn this head forked, supplied by the backend
-   * because only the backend can read the host setting (`KINU_MAX_STEPS`;
-   * core owns the parser, see resolveMaxSteps). A head is its parent running on
-   * the same workspace, so it gets its parent's envelope — not a smaller one
-   * derived from a private token pool.
-   */
-  maxSteps: number;
-  /**
    * Whether the spawner has cancelled this run. Polled at step boundaries and
    * read for the final status. Still needed alongside {@link signal}: a host
    * hands its facet an RPC-shaped flag rather than an AbortSignal, which does
@@ -456,18 +448,16 @@ export interface HeadInferenceDeps {
   /** Abort reason, surfaced in errorMessage. */
   abortReason?: () => string | null;
   /**
-   * Stream-inactivity watchdog override, in ms. Default {@link STALL_TIMEOUT_MS}.
+   * Per-call silence window override, in ms. Default {@link LLM_CALL_TIMEOUT_MS}.
    *
    * The bound itself is not this module's and is not a new one: it is the turn
-   * loop's, derived there against the 30 s background-detach threshold, and it
-   * fires only when NOTHING flows — no provider chunk, no tool result. This field
-   * exists for the reason the turn loop's own does: a bound whose only value is
-   * five minutes cannot be exercised by a test that has to finish, so the arm
-   * proving a node cuts its own silent step would either not exist or take five
-   * minutes. What a caller overrides is the MAGNITUDE; the relationship is the one
-   * the default runs.
+   * loop's — the sanctioned per-call bound, firing only when NOTHING flows (no
+   * provider chunk, no tool result). This field exists for the reason the turn
+   * loop's own does: a bound whose only value is ten minutes cannot be exercised
+   * by a test that has to finish. What a caller overrides is the MAGNITUDE; the
+   * relationship is the one the default runs.
    */
-  stallTimeoutMs?: number;
+  callTimeoutMs?: number;
   /**
    * The mission ledger this head charges, when it runs under one.
    *
@@ -589,7 +579,7 @@ const ConstructedModelSchema = v.object({ modelId: v.string(), provider: v.strin
  * treats a thrown run() as budget_exceeded and that is a different claim.
  */
 export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps): Promise<HeadReport> {
-  const { capture, maxSteps, mission } = deps;
+  const { capture, mission } = deps;
   const startedAt = Date.now();
 
   // The mission refusal that stopped this head, if one did. Held so the report
@@ -705,7 +695,6 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
         system,
         history,
         tools: deps.tools,
-        maxSteps,
         modelContext,
         stopWhen: async () => {
           if (deps.isAborted()) return true;
@@ -714,8 +703,8 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
         },
         onStep,
       };
-        if (deps.signal !== undefined) turn.signal = deps.signal;
-      if (deps.stallTimeoutMs !== undefined) turn.stallTimeoutMs = deps.stallTimeoutMs;
+      if (deps.signal !== undefined) turn.signal = deps.signal;
+      if (deps.callTimeoutMs !== undefined) turn.callTimeoutMs = deps.callTimeoutMs;
       for await (const event of runChat(turn)) {
         if (event.type !== 'done') continue;
         settled = true;
@@ -744,11 +733,6 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
 
   const budgetGate = budgetExhausted(input.budget);
   const aborted = deps.isAborted();
-  // A run that used the whole step envelope without the model ever choosing to
-  // stop was cut off mid-flight — reporting it 'completed' would hand the parent
-  // a mid-flight thought as a finished answer, the exact fabrication
-  // incompleteHeadSummary exists to prevent.
-  const ranOutOfSteps = stepsThisTurn >= maxSteps && finishReason !== 'stop';
   // A throw the abort or the deadline already explains is NOT a failure of the
   // work: the turn body ends a cut turn by yielding `done` and then throwing, so
   // the steps it recorded are already in this report and the throw only says the
@@ -759,7 +743,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
     ? 'errored'
     : aborted
       ? 'aborted'
-      : budgetGate.exhausted || ranOutOfSteps ? 'budget_exceeded' : 'completed';
+      : budgetGate.exhausted ? 'budget_exceeded' : 'completed';
   // THE CAUSE CHAIN, not the bare message. `runNodeAgent`'s transport catch
   // renders one for the same column of the same store, and a run whose LOOP
   // failed used to get the outermost sentence only — so two terminal rows written
@@ -772,7 +756,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
     : deps.abortReason?.()
       ?? (budgetGate.exhausted
         ? `${budgetGate.reason} budget exhausted`
-        : ranOutOfSteps ? `reached the turn step envelope (${maxSteps} steps) without finishing` : null);
+        : null);
   const summary = status === 'completed'
     ? (extractFinalText({ text: lastText, reasoningText: lastReasoning })
       || synthesizeHeadSummary({ decisions: capture.decisions, evidence: capture.evidence, toolCalls: capture.toolCalls })

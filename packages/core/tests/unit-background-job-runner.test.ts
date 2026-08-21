@@ -8,7 +8,6 @@ import {
   BackgroundJobRunner, JobNotResumable, MAX_CONCURRENT_DETACHED_JOBS,
   type JobHarvester, type JobResumer,
 } from '../src/jobs/runner';
-import { TURN_WALL_CLOCK_ENVELOPE_MS } from '../src/config';
 import { SignalDelivery } from '../src/orchestrator/signals';
 import {
   BackgroundJobStore, initBackgroundJobsTable, BACKGROUND_POLICY,
@@ -622,16 +621,6 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
  * partial — and the derivation of each number lives on its constant.
  */
 describe('a background job gives up its turn, and hands over what it has', () => {
-  /** A row whose CURRENT attempt began longer ago than any attempt may run. Written
-   *  as SQL because that is the state a long-running generation reaches on disk, and
-   *  no public write produces it directly. Aged off the repository's measured turn
-   *  envelope — the quantity the bound is derived FROM — many times over, so it is
-   *  past the bound without restating it. */
-  function staleAttempt(db: Database, id: string) {
-    const longAgo = Date.now() - TURN_WALL_CLOCK_ENVELOPE_MS * 100;
-    db.exec("INSERT INTO background_jobs (id, kind, work_mode, status, input_json, created_at, attempt_started_at) "
-      + `VALUES ('${id}', 'agents', 'build', 'running', '{}', ${String(longAgo)}, ${String(longAgo)})`);
-  }
 
   test('the attempt clock is a column, and a reclaim starts a new generation on it', () => {
     // The reading nothing could do before: `createdAt` says when the work was first
@@ -647,33 +636,17 @@ describe('a background job gives up its turn, and hands over what it has', () =>
     });
   });
 
-  test('an attempt past its time bound is settled with its partial result', async () => {
-    const harvested = { rootId: 'root-1', candidates: [{ nodeId: 'n1', score: 0.6 }] };
-    const { runner, store, enqueued, settled, notified, db } = setup({
-      harvest: async () => harvested,
-    });
-    staleAttempt(db, 'bgjob-old');
-    // Work that never settles — the case nothing could previously stop. Before this
-    // bound the fiber body simply awaited it forever and the job stayed `running`.
-    runner.detach('bgjob-old', 'agents', new Promise(() => { /* never */ }));
-    await settled();
-
-    // SETTLED, and settled COMPLETED rather than failed — because it has something.
-    const job = store.get('bgjob-old');
-    expect(job?.status).toBe('completed');
-    expect(notified.map((n) => n.status)).toEqual(['completed']);
-
-    // Carrying the partial, LABELLED as partial. A caller handed a partial it cannot
-    // tell from a finished answer will report it as finished.
-    const stored: unknown = JSON.parse(job?.result ?? 'null');
-    expect(stored).toMatchObject({
-      partial: true,
-      result: harvested,
-      why: expect.stringContaining('PARTIAL'),
-    });
-
-    // And the caller's turn arrives. The whole complaint was that it never did.
-    expect(enqueued).toHaveLength(1);
+  test('a never-settling detached job is NOT killed by a clock — the ruling bound', async () => {
+    // The former per-attempt wall clock (generations x the deleted turn envelope)
+    // is gone by owner ruling, 2026-08-21: no wall clock over a turn-shaped piece
+    // of work; the sanctioned bounds are one LLM call's silence window plus its
+    // retries, and those run INSIDE every re-driven turn. A detached job runs
+    // until its own bounds end it or an operator cancels it. This pin fails if
+    // anyone grows a compensating timer back into this seam.
+    const { runner, store } = setup();
+    runner.detach('bgjob-immortal', 'agents', new Promise(() => { /* never */ }));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(store.get('bgjob-immortal')?.status).toBe('running');
   });
 
   test('past the resume cap it also settles with the partial, instead of an eviction string', async () => {
@@ -702,7 +675,6 @@ describe('a background job gives up its turn, and hands over what it has', () =>
     // The other direction. A bound reached over work that produced nothing is a
     // failure, and it must not pretend to be a partial success.
     const { runner, store, settled, db } = setup({ harvest: async () => null });
-    staleAttempt(db, 'bgjob-empty');
     runner.detach('bgjob-empty', 'agents', new Promise(() => { /* never */ }));
     await settled();
 
@@ -719,7 +691,6 @@ describe('a background job gives up its turn, and hands over what it has', () =>
     const { runner, store, settled, db } = setup({
       harvest: async () => { throw new Error('the ledger is unreadable'); },
     });
-    staleAttempt(db, 'bgjob-throws');
     runner.detach('bgjob-throws', 'agents', new Promise(() => { /* never */ }));
     await settled();
 

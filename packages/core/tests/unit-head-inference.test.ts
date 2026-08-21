@@ -9,7 +9,6 @@ import {
   runHeadInference, HeadCapture, buildHeadAccumulatorTools,
   buildHeadSystemPrompt, buildHeadMessages, type HeadInferenceDeps,
 } from '../src/heads/head-inference';
-import { DEFAULT_MAX_STEPS } from '../src/config';
 import type { Decision, Evidence, HeadInput, SerializedMessage } from '../src/heads/types';
 import {
   inheritedContextFromHistory, inheritedContextFromRows, inheritedContextOmissionNote,
@@ -57,8 +56,7 @@ const deps = (
   model: LanguageModel,
   over?: Partial<HeadInferenceDeps>,
 ): HeadInferenceDeps => ({
-  model, tools: {}, capture: new HeadCapture(),
-  maxSteps: DEFAULT_MAX_STEPS, isAborted: () => false, ...over,
+  model, tools: {}, capture: new HeadCapture(), isAborted: () => false, ...over,
   workspaceLayout: over?.workspaceLayout ?? 'shared-workspace',
 });
 

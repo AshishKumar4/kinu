@@ -396,7 +396,7 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
     const log = createRecordingLogger();
     const first = nodeModel({ freezeFromStart: 3 });
     const frozen = runSwarm(
-      { rt, model: first.model, mode: 'build', maxSteps: 6, logger: log },
+      { rt, model: first.model, mode: 'build',  logger: log },
       resolved(),
     );
     // It is never awaited: an evicted activation's `await` never returns either. Held so
@@ -571,7 +571,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     // ── ATTEMPT ONE, killed inside its level-2 wave ────────────────────────
     const first = nodeModel({ freezeFromStart: 3 });
     const frozen = runSwarm(
-      { rt, model: first.model, mode: 'build', maxSteps: 6, logger: createRecordingLogger() },
+      { rt, model: first.model, mode: 'build',  logger: createRecordingLogger() },
       resolved(),
     );
     expect(frozen).toBeInstanceOf(Promise);
@@ -650,7 +650,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     const journal = new HeadJournal(sql);
     const first = nodeModel({ freezeFromStart: 3 });
     void runSwarm(
-      { rt, model: first.model, mode: 'build', maxSteps: 6, logger: createRecordingLogger() },
+      { rt, model: first.model, mode: 'build',  logger: createRecordingLogger() },
       resolved(),
     );
     await first.script.frozen;
@@ -895,7 +895,7 @@ describe('a second search over a task already running is refused', () => {
 
     const second = nodeModel();
     const result = await runSwarm(
-      { rt, model: second.model, mode: 'build', maxSteps: 6, logger: log },
+      { rt, model: second.model, mode: 'build',  logger: log },
       resolved(),
     );
 

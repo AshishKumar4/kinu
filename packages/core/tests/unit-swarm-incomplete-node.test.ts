@@ -33,8 +33,6 @@ import { createTestRuntime } from './helpers';
 import { createRecordingLogger } from '../src/obs/index';
 import { runSwarm } from '../src/strategy/swarm-run';
 import { resolveSwarm, swarmValidity } from '../src/strategy/swarm';
-import { nodeWallClockEnvelopeMs } from '../src/strategy/node-agent';
-import { DEFAULT_MAX_STEPS } from '../src/config';
 import { diversityAngle } from '../src/mcts/diversity';
 import type { SwarmRunDeps } from '../src/strategy/swarm-run';
 import type { NodeLoopResult, NodeRunSpec } from '../src/strategy/node-host';
@@ -194,7 +192,7 @@ async function run(input: {
     logger,
     host: async (spec): Promise<NodeLoopResult> => {
       budgets.push(spec.headInput.budget.maxWallClockMs);
-      steps.push(spec.maxSteps);
+      steps.push(4); // spec carries no step cap any more; the fixture counts its own
       const outcome = isBranch(spec, 0) ? input.branch0 : input.branch1;
       return {
         report: headReport({
@@ -310,63 +308,34 @@ describe('an aborted node is distinguishable from a badly-measured one', () => {
   }, 60_000);
 });
 
-describe('every node runs to a deadline it can observe', () => {
-  test('the deadline reaching a node is the derived envelope of its own step cap', async () => {
-    // The wiring, at the seam a host actually reads. It used to be an ABSENT key when no
-    // caller declared one, and then the only clock a node had was the search's abort
-    // signal — a run-level bound that cuts a whole wave mid-step, which is how three
-    // nodes inside their step budgets were all stopped at once.
+describe('every node runs to the deadline its caller declared, and to none other', () => {
+  test('nothing declared reaches the node as an ABSENT clock', async () => {
+    // The new contract, at the seam a host actually reads: there is no derived
+    // envelope and no step cap (owner ruling, 2026-08-21 — no per-turn bounds).
+    // An absent key is the default, and what bounds a node lives inside its own
+    // turns: the per-call silence window and the mission governor.
     const { budgets } = await run({
       branch0: { status: 'completed', content: fenced(WASTEFUL), stepCount: 4 },
       branch1: { status: 'completed', content: fenced(WASTEFUL), stepCount: 4 },
-      maxSteps: 9,
     });
-    expect(budgets).toEqual([nodeWallClockEnvelopeMs(9), nodeWallClockEnvelopeMs(9)]);
+    expect(budgets).toEqual([undefined, undefined]);
   }, 60_000);
 
-  test('a bound the caller DECLARED is honoured exactly; only an absent one is derived', async () => {
-    // THE WHOLE OF `runSwarm`'s budget resolution, at the seam a host reads it. Two `??`
-    // decide it and neither was fully asserted: the test above declares a step cap and
-    // reads back the DERIVED clock, so nothing pinned what reaches a node when a caller
-    // declares the clock itself, and nothing pinned the one input on which the two
-    // readings of `??` disagree.
-    //
-    // ZERO IS A DECLARATION, NOT AN ABSENCE, and this tree already says so in the same
-    // vocabulary: `budgetExhausted` treats `maxDepth: 0` as exhausted, and `node-agent.ts`
-    // records that as a deliberate meaning rather than an accident.
-    // `unit-swarm-node-envelope.test.ts` holds the behaviour a zero clock produces. Read
-    // the other way, a caller asking for the NARROWEST bound in the file silently
-    // receives the WIDEST one — a bound that reports as working while governing nothing.
+  test('a clock the caller declared reaches the node verbatim; zero is a declaration', async () => {
+    // THE WHOLE of `runSwarm`'s clock resolution: pass-through or absent, nothing
+    // derived. ZERO IS A DECLARATION, NOT AN ABSENCE — `budgetExhausted` treats
+    // `maxDepth: 0` as exhausted, and `node-agent.ts` records that as a deliberate
+    // meaning rather than an accident. `unit-swarm-node-envelope.test.ts` holds
+    // the behaviour a zero clock produces.
     const settled: Outcome = { status: 'completed', content: fenced(WASTEFUL), stepCount: 4 };
     const cases = [
-      {
-        name: 'nothing declared',
-        declare: {},
-        steps: DEFAULT_MAX_STEPS,
-        clock: nodeWallClockEnvelopeMs(DEFAULT_MAX_STEPS),
-      },
-      {
-        name: 'both declared',
-        declare: { maxSteps: 9, maxWallClockMs: 250 },
-        steps: 9,
-        clock: 250,
-      },
-      {
-        name: 'a step cap of zero',
-        declare: { maxSteps: 0, maxWallClockMs: 250 },
-        steps: 0,
-        clock: 250,
-      },
-      {
-        name: 'a clock of zero',
-        declare: { maxWallClockMs: 0 },
-        steps: DEFAULT_MAX_STEPS,
-        clock: 0,
-      },
+      { name: 'nothing declared', declare: {}, clock: undefined },
+      { name: 'a clock declared', declare: { maxWallClockMs: 250 }, clock: 250 },
+      { name: 'a clock of zero', declare: { maxWallClockMs: 0 }, clock: 0 },
     ] as const;
 
     for (const declaration of cases) {
-      const { result, steps, budgets } = await run({
+      const { result, budgets } = await run({
         branch0: settled, branch1: settled, ...declaration.declare,
       });
       if ('reason' in result) {
@@ -374,9 +343,8 @@ describe('every node runs to a deadline it can observe', () => {
       }
       // BOTH nodes, so a resolution that happened to be right for one node is not
       // mistaken for a run-wide one.
-      expect({ case: declaration.name, steps, budgets }).toEqual({
+      expect({ case: declaration.name, budgets }).toEqual({
         case: declaration.name,
-        steps: [declaration.steps, declaration.steps],
         budgets: [declaration.clock, declaration.clock],
       });
     }

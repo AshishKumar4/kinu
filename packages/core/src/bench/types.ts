@@ -6,7 +6,6 @@
 // process exits 0.
 import { unitHash } from './stats';
 import { normalizeUsage, usageTotal } from '../usage';
-import { TURN_WALL_CLOCK_ENVELOPE_MS } from '../config';
 import type { LanguageModelUsage } from 'ai';
 import * as v from 'valibot';
 
@@ -57,13 +56,19 @@ export interface AttemptBudget {
  *
  * `wallClockMs`: the identical argument, which this field did NOT have. It was
  * 300_000 while sharing the sentence above, and an attempt is one whole Kinu
- * turn against the sandbox — measured at up to 509 s
- * ({@link TURN_WALL_CLOCK_ENVELOPE_MS}). So the tighter arm of the pair was the
- * clock, breaching on exactly the attempts that explored longest and scoring
- * them failed. It gets the measured turn envelope.
+ * turn against the sandbox — measured at up to 509 s. So the tighter arm of the
+ * pair was the clock, breaching on exactly the attempts that explored longest
+ * and scoring them failed. Raised to the measured figure.
+ *
+ * THIS IS A MEASUREMENT-HARNESS BOUND, not a runtime one: production turns carry
+ * no wall clock at all (owner ruling, 2026-08-21 — the only sanctioned bounds are
+ * per LLM call). The budget exists so two variants are provisioned identically
+ * and hashed comparably, and so a runaway attempt ends instead of hanging CI. It
+ * used to derive from core's former per-turn envelope constant; it now stands on
+ * its own measurement, because the runtime number it borrowed no longer exists.
  */
 export const DEFAULT_ATTEMPT_BUDGET: AttemptBudget = {
-  wallClockMs: TURN_WALL_CLOCK_ENVELOPE_MS,
+  wallClockMs: 600_000,
   maxTokens: 600_000,
 };
 

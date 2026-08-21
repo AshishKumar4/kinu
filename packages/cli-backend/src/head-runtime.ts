@@ -21,7 +21,7 @@ import {
   type MissionGovernor, type ModelCallSink,
   HeadCapture, runHeadInference, buildHeadToolSet, HeadController, HeadJournal, initHeadsTables,
   extractJsonObject, MergeOutputSchema, normalizeUsage, reasoningEffortOptions,
-  resolveMaxSteps, localMissionScope,
+  localMissionScope,
 } from '@kinu.run/core';
 import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import { Database } from 'bun:sqlite';
@@ -201,9 +201,6 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, flag: Ab
     const inferenceOptions: Parameters<typeof runHeadInference>[1] = {
       model: headModel(input, deps), tools, capture,
       workspaceLayout: 'private-scratch',
-      // The same envelope the parent session's turn runs to — local-session
-      // reads this identical shell variable. A fork of a turn gets the turn's room.
-      maxSteps: resolveMaxSteps(process.env.KINU_MAX_STEPS),
       isAborted: () => flag.aborted,
       abortReason: () => flag.reason,
       // Each finished step into the session's journal as it lands — the only

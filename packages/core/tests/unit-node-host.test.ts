@@ -25,7 +25,7 @@ import { createTestRuntime } from './helpers';
 import { createRecordingLogger } from '../src/obs/index';
 import { HeadJournal } from '../src/heads/journal';
 import {
-  nodeWallClockEnvelopeMs, PROPOSE_BRANCH_TOOL, readNodeReport, runNodeAgent, runNodeLoop,
+  PROPOSE_BRANCH_TOOL, readNodeReport, runNodeAgent, runNodeLoop,
 } from '../src/strategy/node-agent';
 import type {
   NodeAgentDeps,
@@ -144,11 +144,11 @@ function fixture(opts?: {
     rt,
     model: scriptedReporter(opts?.answer ?? 'sort once instead of comparing every pair', opts?.offered),
     journal,
-    maxSteps: 4,
+
     // Required, and derived rather than picked, for the reason the type now enforces:
     // a node with no deadline of its own leaves the search's abort signal as its only
     // clock, and that signal cuts a whole wave at once.
-    maxWallClockMs: nodeWallClockEnvelopeMs(4),
+    maxWallClockMs: 60_000,
     logger: createRecordingLogger(),
   };
   if (opts?.host !== undefined) deps.host = opts.host;
@@ -392,7 +392,7 @@ describe('the arbiter is offered only when a branch could be granted', () => {
       messages: [{ role: 'user', content: 'Answer.' }],
       isolation: 'shared-origin-plane',
       home: '.',
-      maxSteps: 4,
+
       canPropose: false,
     };
 
@@ -451,7 +451,7 @@ describe('the arbiter is offered only when a branch could be granted', () => {
       messages: [{ role: 'user', content: 'Propose then report.' }],
       isolation: 'shared-origin-plane',
       home: '.',
-      maxSteps: 4,
+
       canPropose: true,
     };
     const inner = fixture();

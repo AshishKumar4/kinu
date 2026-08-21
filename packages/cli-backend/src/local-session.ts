@@ -12,7 +12,7 @@
  * lives here once instead of being duplicated per frontend.
  */
 
-import type { ModelMessage, ToolSet, LanguageModel } from 'ai';
+import { stepCountIs, type ModelMessage, type ToolSet, type LanguageModel } from 'ai';
 import type { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
@@ -64,7 +64,7 @@ import {
   buildActorTools, withClampedToolResults, buildSystemPromptSync, currentDateForPrompt,
   activePromptSectionOverrides,
   turnProvenanceForMetadata, workModeForTurnMetadata,
-  runChat, resolveMaxSteps, estimateTokens,
+  runChat, estimateTokens,
   parseModelSpec, agentAffinityKey,
   OVERFLOW_RETRY_EVENT,
   openTurnRun, closeTurnRun, snapshotCompletedTurn, creditedTurnId,
@@ -1805,7 +1805,6 @@ export class LocalAgentSession implements BackendHost {
       turnLocal: turnLocalMsg ? [turnLocalMsg] : undefined,
       tools: turnTools,
       transformTrigger: measured.trigger,
-      maxSteps: resolveMaxSteps(process.env.KINU_MAX_STEPS),
       cache,
       budget: this.budget,
     };
@@ -2244,7 +2243,6 @@ export class LocalAgentSession implements BackendHost {
       }),
       history: context && context.length > 0 ? [...context] : [{ role: 'user', content: task }],
       tools: this.tools,
-      maxSteps: resolveMaxSteps(process.env.KINU_MAX_STEPS),
     });
     for await (const value of stream) yield { value: projectJsonValue({ value }) };
   }
@@ -2306,7 +2304,7 @@ export class LocalAgentSession implements BackendHost {
   /** `host.llmStream` — the scaffold's inference bridge (core scaffold-host)
    *  over THIS turn's tool surface. */
   private makeScaffoldLLMStream(model: LanguageModel, turnTools: ToolSet): ScaffoldRunOptions['llmStream'] {
-    return createScaffoldLLMStream({ model, tools: () => turnTools, defaultMaxSteps: resolveMaxSteps(process.env.KINU_MAX_STEPS) });
+    return createScaffoldLLMStream({ model, tools: () => turnTools });
   }
 
   /** `host.callTool` — dispatch into THIS turn's tool surface by name (core
@@ -2347,7 +2345,7 @@ export class LocalAgentSession implements BackendHost {
         snapshot: () => ({ factsBlock: this.renderFactsForTurn(), memoryTail }),
       },
       tools: {},
-      maxSteps: 1,
+      stopWhen: stepCountIs(1),
     })) {
       if (ev.type === 'text-delta') text += ev.delta;
       else if (ev.type === 'done' && !text.trim()) text = ev.text;

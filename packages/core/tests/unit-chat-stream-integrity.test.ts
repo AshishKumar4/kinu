@@ -14,12 +14,13 @@
 // contract: a model-chosen stop ends the turn; a dead or stalled stream
 // throws so the caller records the failure.
 import { describe, test, expect } from 'bun:test';
-import { tool, type ToolSet } from 'ai';
+import { stepCountIs, tool, type StopCondition, type ToolSet } from 'ai';
 import { z } from 'zod';
 import {
   runChat, createChatModel, isRateLimitedTurnError,
   type ChatEvent,
 } from '../src/index';
+import { ProviderPacer } from '../src/providers/pacing';
 
 /** The openings the two silent-turn messages actually ship with.
  *
@@ -50,9 +51,12 @@ function healthyToolStep(): Response {
 
 async function driveTurn(
   step2: () => Response,
-  opts: { stallTimeoutMs?: number; step1?: () => Response; maxSteps?: number } = {},
+  opts: { callTimeoutMs?: number; step1?: () => Response; stopWhen?: StopCondition<ToolSet>; pacer?: InstanceType<typeof ProviderPacer> } = {},
 ) {
   let call = 0;
+  // A FRESH pacer per turn: the production default is the isolate-wide
+  // singleton, and another test's mandated wait must never classify this
+  // turn's silence.
   const server = Bun.serve({
     port: 0,
     async fetch() {
@@ -77,8 +81,11 @@ async function driveTurn(
   try {
     for await (const ev of runChat({
       model, system: 'sys', history: [{ role: 'user', content: 'go' }],
-      tools, maxSteps: opts.maxSteps ?? 500,
-      stallTimeoutMs: opts.stallTimeoutMs,
+      tools,
+      stopWhen: opts.stopWhen,
+      stopWhen: opts.stopWhen,
+      callTimeoutMs: opts.callTimeoutMs,
+      pacer: opts.pacer,
     })) events.push(ev);
   } catch (e) {
     threw = e instanceof Error ? e : new Error(String(e));
@@ -153,7 +160,7 @@ describe('an unmapped finish reason alone is not a dead stream', () => {
 
     const { threw, events } = await driveTurn(
       () => { throw new Error('the turn must stop after one step'); },
-      { step1: toolStepEndingOnOther, maxSteps: 1 },
+      { step1: toolStepEndingOnOther, stopWhen: stepCountIs(1) },
     );
 
     expect(threw).toBeNull();
@@ -162,11 +169,11 @@ describe('an unmapped finish reason alone is not a dead stream', () => {
 });
 
 describe('stalled provider stream aborts the turn', () => {
-  test('a stream that never sends anything is aborted by the stall watchdog', async () => {
+  test('a request that never produces a chunk ends the turn inside the silence window', async () => {
     const t0 = performance.now();
     const { threw } = await driveTurn(
       () => new Response(new ReadableStream({ start() { /* stall forever */ } }), { headers: SSE_HEADERS }),
-      { stallTimeoutMs: 400 },
+      { callTimeoutMs: 400 },
     );
     expect(threw?.message ?? '').toContain('stalled');
     expect(performance.now() - t0).toBeLessThan(10_000);
@@ -179,7 +186,7 @@ describe('stalled provider stream aborts the turn', () => {
     // the throw came first and every finished step went with it.
     const { threw, done } = await driveTurn(
       () => new Response(new ReadableStream({ start() { /* stall forever */ } }), { headers: SSE_HEADERS }),
-      { stallTimeoutMs: 400 },
+      { callTimeoutMs: 400 },
     );
     expect(threw?.message ?? '').toContain('stalled');
     const messages = done && done.type === 'done' ? done.responseMessages : [];
@@ -202,11 +209,65 @@ describe('stalled provider stream aborts the turn', () => {
           c.close();
         },
       }), { headers: SSE_HEADERS }),
-      { stallTimeoutMs: 1_000 },
+      { callTimeoutMs: 1_000 },
     );
     expect(threw).toBeNull();
     expect(done).toBeDefined();
   }, 15_000);
+});
+
+// THE RETRY HALF OF THE SANCTIONED BOUNDS (owner ruling, 2026-08-21): a call the
+// silence window killed is re-issued — up to LLM_CALL_MAX_RETRIES times, from the
+// last FINISHED step boundary — before the stall surfaces as the turn error.
+describe('a timed-out call retries before failing the turn', () => {
+  const answer = () => new Response(sse([
+    JSON.stringify({ choices: [{ delta: { content: 'answer after retry' } }] }),
+    JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 20, completion_tokens: 2, total_tokens: 22 } }),
+    '[DONE]',
+  ]), { headers: SSE_HEADERS });
+  const stall = () => new Response(new ReadableStream({ start() { /* silent forever */ } }), { headers: SSE_HEADERS });
+
+  test('one timed-out call is re-issued and the turn completes when the retry answers', async () => {
+    let stepTwoCalls = 0;
+    const { threw, done } = await driveTurn(() => {
+      stepTwoCalls += 1;
+      return stepTwoCalls === 1 ? stall() : answer();
+    }, { callTimeoutMs: 300 });
+    expect(stepTwoCalls).toBe(2);
+    expect(threw).toBeNull();
+    expect(done && done.type === 'done' ? done.text : '').toContain('answer after retry');
+  }, 20_000);
+
+  test('the retry resumes from the last FINISHED step boundary', async () => {
+    // Step 1 completed (a real tool call + result). Step 2 stalls once; the
+    // retried request must carry step 1's messages so the model continues, and
+    // the turn must keep step 1's events exactly once — never duplicated by the
+    // second attempt, never dropped.
+    let stepTwoCalls = 0;
+    const { events, threw, done } = await driveTurn(() => {
+      stepTwoCalls += 1;
+      return stepTwoCalls === 1 ? stall() : answer();
+    }, { callTimeoutMs: 300 });
+    expect(threw).toBeNull();
+    expect(done).toBeDefined();
+    // The durable contract: step 1's tool work survives exactly once in the
+    // history the caller persists, and the retried call's answer completes.
+    const doneEv = done && done.type === 'done' ? done : null;
+    expect((doneEv?.responseMessages ?? []).filter((m) => m.role === 'tool')).toHaveLength(1);
+    expect((doneEv?.responseMessages ?? []).filter((m) => m.role === 'assistant')).toHaveLength(1);
+  }, 20_000);
+
+  test('after LLM_CALL_MAX_RETRIES exhausted attempts, the turn fails naming them', async () => {
+    let stepTwoCalls = 0;
+    const { threw, done } = await driveTurn(() => {
+      stepTwoCalls += 1;
+      return stall();
+    }, { callTimeoutMs: 200 });
+    expect(stepTwoCalls).toBe(4); // the first attempt + LLM_CALL_MAX_RETRIES retries
+    expect(threw?.message ?? '').toContain('stalled');
+    expect(threw?.message ?? '').toContain('4 attempts');
+    expect(done).toBeUndefined();
+  }, 20_000);
 });
 
 // A PROVIDER-MANDATED WAIT IS NOT A STALL.
@@ -248,7 +309,7 @@ describe('a rate-limited turn is not a stalled turn', () => {
     // push its deadline instead of ending the turn — and must then give the
     // RETRIED request a window of its own, because that request is only issued
     // when the wait ends.
-    const { threw, done } = await driveTurn(rateLimitedThenHealthy(1), { stallTimeoutMs: 300 });
+    const { threw, done } = await driveTurn(rateLimitedThenHealthy(1), { callTimeoutMs: 300 });
     expect(threw).toBeNull();
     expect(done && done.type === 'done' ? done.text : '').toContain('answer after the wait');
   }, 20_000);
@@ -265,7 +326,7 @@ describe('a rate-limited turn is not a stalled turn', () => {
         return new Response('rate limited', { status: 429, headers: { 'Retry-After': '1' } });
       }
       return new Response(new ReadableStream({ start() { /* silent after the wait */ } }), { headers: SSE_HEADERS });
-    }, { stallTimeoutMs: 300 });
+    }, { callTimeoutMs: 300 });
     expect(isRateLimitedTurnError(threw?.message ?? '')).toBe(true);
     expect(threw?.message ?? '').not.toContain(STALLED_OPENING);
   }, 20_000);
@@ -275,7 +336,7 @@ describe('a rate-limited turn is not a stalled turn', () => {
     // claim one. Without this a refactor that always blames the provider passes.
     const { threw } = await driveTurn(
       () => new Response(new ReadableStream({ start() { /* stall forever */ } }), { headers: SSE_HEADERS }),
-      { stallTimeoutMs: 300 },
+      { callTimeoutMs: 300 },
     );
     expect(threw?.message ?? '').toContain(STALLED_OPENING);
     expect(isRateLimitedTurnError(threw?.message ?? '')).toBe(false);

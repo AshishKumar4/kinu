@@ -60,7 +60,6 @@ import type { BackgroundPolicy } from '../jobs/threshold';
 import { readProposalCode } from '../execution/code-fence';
 import type { JsonValue } from '../utils/json';
 import { nodeWorkspace, isolationDisclosure } from './node-workspace';
-import { TURN_WALL_CLOCK_ENVELOPE_MS } from '../config';
 import { BRANCH_PROPOSAL_WIDTH, SWARM_CONTEXTS } from './swarm';
 import { renderCauseChain, toKinuError } from '../obs/error';
 import type { Logger } from '../obs/index';
@@ -143,47 +142,6 @@ export const NODE_WITHHELD_TOOLS = {
 /** The node's own branch route. One name, so reading a transcript tells a human
  *  which tool asked for budget. */
 export const PROPOSE_BRANCH_TOOL = 'propose_branch';
-
-/**
- * HOW LONG ONE NODE MAY RUN, derived from the two bounds this repository already
- * measured and declared, and NOT a number of its own.
- *
- * WHY IT IS PER-STEP AND NOT PER-NODE. A node is many turns — one live swarm run of
- * three tool-using nodes on `@cf/deepseek-ai/deepseek-v4-pro-0813` recorded 22, 25 and
- * 26 model steps with 25, 27 and 27 tool calls — so giving a whole node ONE
- * {@link TURN_WALL_CLOCK_ENVELOPE_MS} is the same class of error as the 120_000 that
- * killed every MCTS rollout, only in the other direction: that run's nodes were still
- * working at 1,216,358 / 1,310,061 / 1,336,833 ms, each of which is past 600_000. The
- * unit that run DID measure is a step: 1,216,358 / 22 = 55,289 ms is the largest mean
- * step of the three, and every one of them is inside the turn envelope, which is
- * already this tree's ceiling for one model call inside a turn
- * ({@link DEFAULT_JUDGE_CALL_TIMEOUT_MS}). So the per-step term is the existing
- * constant, unchanged and re-measured rather than re-reasoned, and the node total
- * scales with the node's OWN step cap.
- *
- * WHY `maxSteps` IS THE MULTIPLIER. It is the bound the swarm already runs a node to —
- * `runSwarm` hands every node `deps.maxSteps ?? DEFAULT_MAX_STEPS`. A wall clock below
- * this product cuts a node that is inside its declared step budget, which is exactly
- * what happened: the run above was given 1_200_000 ms, and 1_200_000 is under
- * `nodeWallClockEnvelopeMs(26)` by a factor of 13. The two bounds were in different
- * units and had never been reconciled, so the clock was measuring the step cap's
- * shadow. `unit-swarm-node-envelope.test.ts` holds this equality and the measured
- * floor together, so moving either bound fails a test rather than drifting.
- *
- * WHAT IT DOES NOT DO. It is observed at STEP BOUNDARIES only — `runHeadInference`'s
- * `stopWhen` asks `budgetExhausted` between steps — because a cooperative deadline
- * cannot pre-empt synchronous work, and a node inside one long step observes nothing.
- * That residue is documented rather than papered over; the binding bound on a node's
- * work remains its step cap.
- *
- * PENDING MEASUREMENT: how many steps a node needs to FINISH on this model. No node in
- * the run above ever did, so 26 is a floor on the demand and nothing here is entitled
- * to a step cap below `DEFAULT_MAX_STEPS`. Owed: one run whose nodes are allowed to
- * complete.
- */
-export function nodeWallClockEnvelopeMs(maxSteps: number): number {
-  return maxSteps * TURN_WALL_CLOCK_ENVELOPE_MS;
-}
 
 
 /** What the engine hands one node before it runs. Identity and depth come from the
@@ -269,8 +227,6 @@ export interface NodeAgentDeps {
   /** Where the node's transcript lands. Under *The journal read model* a transcript
    *  is a read model over the node's journal, never a second store. */
   journal: HeadJournal;
-  /** The step envelope this node runs to — the search's, not a private pool. */
-  maxSteps: number;
   logger: Logger;
   signal?: AbortSignal;
   reportModelCall?: ModelCallSink;
@@ -303,19 +259,24 @@ export interface NodeAgentDeps {
   /** The report contract's gate; see {@link NodeLoopDeps.gradeReport}. */
   gradeReport?: (candidate: string) => Promise<string | null>;
   /**
-   * THE DEADLINE THIS NODE RUNS TO, observed between its own steps.
+   * A CALLER-DECLARED deadline for this node, observed between its own steps.
    *
-   * REQUIRED, unlike every other bound-shaped dep here, and that is the fix rather
-   * than a style choice: it was optional, no caller ever set it, and an absent key
-   * left `stopWhen`'s `budgetExhausted` nothing to check — so the search's own abort
-   * signal was a node's only clock, and that signal cuts an entire WAVE at once. A
-   * type that permits no deadline permits that defect again. Callers derive the value
-   * from {@link nodeWallClockEnvelopeMs} and may declare a tighter one.
+   * OPTIONAL — and that is the ruling, not an oversight: there is no default
+   * wall clock over a node's work any more (owner ruling, 2026-08-21 — no
+   * per-turn bounds; the sanctioned bound is one LLM call's silence window plus
+   * its retries). Absent, a node runs until its work is done, bounded from
+   * inside by the per-call window and whatever mission budget it charges.
+   * Present, it is the search (or a test) declaring a tighter deadline, which
+   * `runHeadInference`'s `stopWhen` honours at step boundaries. The former
+   * REQUIRED-with-derived-default shape existed so the abort signal was never a
+   * node's only clock; what replaced that hazard permanently is the per-call
+   * window inside every node turn, not a derived product over a deleted
+   * constant.
    */
-  maxWallClockMs: number;
-  /** Stream-inactivity watchdog override, in ms. Passed straight through to the turn
-   *  loop; see {@link NodeLoopDeps.stallTimeoutMs}. */
-  stallTimeoutMs?: number;
+  maxWallClockMs?: number;
+  /** Per-call silence window override, in ms. Passed straight through to the turn
+   *  loop; see {@link NodeLoopDeps.callTimeoutMs}. */
+  callTimeoutMs?: number;
   /** Detach policy override for a node's tools; see
    *  {@link NodeLoopDeps.backgroundPolicy}. */
   backgroundPolicy?: () => BackgroundPolicy;
@@ -366,15 +327,15 @@ export interface NodeLoopDeps {
    * count declared here would be a second bound with no measurement behind it.
    */
   gradeReport?: (candidate: string) => Promise<string | null>;
-  /** Stream-inactivity watchdog override, in ms — the turn loop's own bound, whose
-   *  default is five minutes and therefore untestable in a suite that has to finish. */
-  stallTimeoutMs?: number;
+  /** Per-call silence window override, in ms — the turn loop's own bound, whose
+   *  default is ten minutes and therefore untestable in a suite that has to finish. */
+  callTimeoutMs?: number;
   /**
    * The detach policy a node's tools run to. Defaults to
    * `BACKGROUND_POLICY.interactive`, which is the right one: a node is a place a wake
    * can arrive, and that is exactly what `wakesAfterTurn` names.
    *
-   * Declared for the reason {@link NodeLoopDeps.stallTimeoutMs} is, and for one more: a
+   * Declared for the reason {@link NodeLoopDeps.callTimeoutMs} is, and for one more: a
    * threshold whose only value is 30 s cannot be exercised by a test that has to
    * finish, so the arm proving a node's turn ENDS with work still running would take
    * half a minute per assertion. What a caller overrides is the MAGNITUDE.
@@ -703,7 +664,6 @@ export async function runNodeLoop(
     // so the two cannot disagree.
     workspaceLayout: spec.isolation === 'private-home' ? 'private-scratch' : 'shared-workspace',
     capture,
-    maxSteps: spec.maxSteps,
     isAborted: () => deps.signal?.aborted ?? false,
     abortReason: () => (deps.signal?.aborted ? 'the search was aborted' : null),
     framing: {
@@ -731,7 +691,7 @@ export async function runNodeLoop(
   if (deps.mission !== undefined) inference.mission = deps.mission;
   if (deps.reportStep !== undefined) inference.reportStep = deps.reportStep;
   if (deps.signal !== undefined) inference.signal = deps.signal;
-  if (deps.stallTimeoutMs !== undefined) inference.stallTimeoutMs = deps.stallTimeoutMs;
+  if (deps.callTimeoutMs !== undefined) inference.callTimeoutMs = deps.callTimeoutMs;
 
   try {
     const report = await runHeadInference(spec.headInput, inference);
@@ -785,11 +745,10 @@ export async function runNodeAgent(
   // stopped before its first step, which is what a depth of 0 would do here
   // (`budgetExhausted` treats it as exhausted).
   //
-  // THE DEADLINE IS ALWAYS PRESENT, and the caller resolved it: one `??` for a node's
-  // clock in the whole tree, so a caller and this function cannot end up disagreeing
-  // about what it is. It used to be an absent key, and then `stopWhen`'s
-  // `budgetExhausted` had nothing to check and the run's abort signal was a node's only
-  // clock — a run-level bound that cuts an entire wave mid-step.
+  // THE DEADLINE IS OPT-IN. Absent is the ruling's default: no wall clock over a
+  // node's work (owner ruling, 2026-08-21). Present, `stopWhen`'s
+  // `budgetExhausted` honours it between steps — the search or a test declaring a
+  // tighter deadline than "until the work is done".
   const nodeBudget: HeadBudget = {
     maxDepth: 1,
     spawnedAt: Date.now(),
@@ -835,7 +794,6 @@ export async function runNodeAgent(
     messages: input.messages,
     isolation: home.isolation,
     home: home.home,
-    maxSteps: deps.maxSteps,
     canPropose: input.arbitrate !== null,
   };
 
@@ -909,8 +867,7 @@ function nodeLoopDeps(input: NodeAgentInput, deps: NodeAgentDeps): NodeLoopDeps 
   if (deps.mission !== undefined) loop.mission = deps.mission;
   if (deps.executeTool !== undefined) loop.executeTool = deps.executeTool;
   if (deps.webSearch !== undefined) loop.webSearch = deps.webSearch;
-  if (deps.gradeReport !== undefined) loop.gradeReport = deps.gradeReport;
-  if (deps.stallTimeoutMs !== undefined) loop.stallTimeoutMs = deps.stallTimeoutMs;
+  if (deps.callTimeoutMs !== undefined) loop.callTimeoutMs = deps.callTimeoutMs;
   if (deps.backgroundPolicy !== undefined) loop.backgroundPolicy = deps.backgroundPolicy;
   return loop;
 }

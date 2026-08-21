@@ -170,8 +170,9 @@ export {
 
 // Configuration
 export {
-  DEFAULT_CONFIG, DEFAULT_MAX_STEPS, resolveMaxSteps, TURN_WALL_CLOCK_ENVELOPE_MS,
+  DEFAULT_CONFIG, LLM_CALL_MAX_RETRIES, LLM_CALL_TIMEOUT_MS,
 } from './config';
+export { UNBOUNDED_STEPS } from './chat';
 export type { AgentConfig, MCTSDefaults, CraftStoreDefaults, ScaffoldDefaults } from './config';
 
 // Typed accessors over the `agent_config` key/value table — collapses ~23

@@ -18,7 +18,7 @@
  * Scaffold contract (v1):
  *
  *   async function run({ rt, task, host, tools }) {
- *     // rt.llm.stream({ system, messages, tools, maxSteps })
+ *     // rt.llm.stream({ system, messages, tools })
  *     //   → for await each chunk: host.emit({ type: 'text_delta', text: chunk })
  *     // host.callTool(name, args) → invokes a parent tool, returns result
  *     // host.emit({ type: 'done', result }) → signals completion
@@ -35,7 +35,6 @@
 import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { Executor } from '../types/primitives';
-import { TURN_WALL_CLOCK_ENVELOPE_MS } from '../config';
 import {
   assertJsonValue,
   isJsonObject,
@@ -69,7 +68,6 @@ export const SCAFFOLD_HOST_TYPES = `declare namespace host {
     system: string;
     messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
     tools?: string[];
-    maxSteps?: number;
   }): Promise<string>;
   /** Run the agent's standard inference (full tools + multi-step) and stream its
    *  output to the user. Delegate here to reuse the default loop. */
@@ -152,12 +150,18 @@ export interface ScaffoldRunResult {
  * constant; nothing sets its own.
  *
  * That argument applies to the MAGNITUDE too, and it was 5 minutes — under the
- * 509 s longest turn {@link TURN_WALL_CLOCK_ENVELOPE_MS} records, so BOTH arms
- * were being cut and the gate was comparing two truncations. A scaffold turn is
- * a whole agentic loop, so it gets the measured turn envelope and nothing of its
- * own to drift from.
+ * 509 s longest turn on record, so BOTH arms were being cut and the gate was
+ * comparing two truncations.
+ *
+ * THIS IS AN EVOLUTION-HARNESS BOUND around the codemode sandbox execution, not a
+ * runtime bound: production turns carry no wall clock at all (owner ruling,
+ * 2026-08-21 — the sanctioned bounds are one LLM call's silence window plus its
+ * retries). A trial needs finite provisioning so candidates compare fairly and a
+ * runaway trial ends instead of hanging the evaluation; the figure is the same
+ * 600 s the former per-turn envelope carried, kept so trial records stay
+ * comparable across the change.
  */
-export const SCAFFOLD_TURN_TIMEOUT_MS = TURN_WALL_CLOCK_ENVELOPE_MS;
+export const SCAFFOLD_TURN_TIMEOUT_MS = 600_000;
 
 /** One host inference chunk before validation at the codemode JSON boundary. */
 export interface ScaffoldDefaultInferenceChunk {
@@ -207,7 +211,6 @@ export interface ScaffoldRunOptions {
     system: string;
     messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
     tools?: string[];
-    maxSteps?: number;
   }) => AsyncIterable<string>;
   /**
    * Tool invoker — when the scaffold calls host.callTool(name, args), this
@@ -268,7 +271,6 @@ const LlmStreamOptionsSchema = v.object({
     content: v.string(),
   })),
   tools: v.optional(v.array(v.string())),
-  maxSteps: v.optional(v.number()),
 });
 
 const HistoryQuerySchema = v.object({

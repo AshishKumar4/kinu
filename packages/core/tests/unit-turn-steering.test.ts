@@ -9,7 +9,7 @@
 // for the fidelity that matters most — a full runChat turn where the steer has
 // to actually reach the model's next request.
 import { describe, expect, test } from 'bun:test';
-import { tool, type ModelMessage } from 'ai';
+import { stepCountIs, tool, type ModelMessage } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import { createTestRuntime } from '@kinu.run/test-utils';
@@ -771,7 +771,7 @@ describe('through a real runChat turn', () => {
       system: 'sys',
       history: followUp('build caffe'),
       tools,
-      maxSteps: 6,
+      stopWhen: stepCountIs(6),
       extensions: new ExtensionHost().register(orch.turnExtension),
     })) { /* drain */ }
 
@@ -808,7 +808,7 @@ describe('through a real runChat turn', () => {
       system: 'sys',
       history: followUp('build it'),
       tools,
-      maxSteps: 6,
+      stopWhen: stepCountIs(6),
       extensions: new ExtensionHost().register(orch.turnExtension),
     })) { /* drain */ }
 
@@ -837,7 +837,7 @@ describe('through a real runChat turn', () => {
       system: 'sys',
       history: followUp('look around'),
       tools,
-      maxSteps: 6,
+      stopWhen: stepCountIs(6),
       extensions: new ExtensionHost().register(orch.turnExtension),
     })) { /* drain */ }
 
@@ -864,7 +864,7 @@ describe('through a real runChat turn', () => {
       system: 'sys',
       history: [user('add caching to the api and update the docs')],
       tools,
-      maxSteps: 4,
+      stopWhen: stepCountIs(4),
       extensions: new ExtensionHost().register(orch.turnExtension),
     })) { /* drain */ }
 
