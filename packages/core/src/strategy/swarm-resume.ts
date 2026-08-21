@@ -414,3 +414,104 @@ function reconstructedTurns(steps: readonly HeadStep[]): ModelMessage[] {
   }
   return turns;
 }
+
+/* ── what an unfinished search already has ────────────────────────────────── */
+
+/** One candidate an unfinished search already measured. */
+export interface HarvestedCandidate {
+  readonly nodeId: string;
+  readonly depth: number;
+  /** The complete answer this node is — `search_nodes.observation`. */
+  readonly artifact: string;
+  /** The [0,1] the tree ranks on, or null for a node the instrument could not turn
+   *  into a number. A null-scored candidate is still content somebody may want. */
+  readonly score: number | null;
+  /** What the outcome was, in the engine's own vocabulary. */
+  readonly outcome: SettledChildOutcome['kind'] | 'unrecorded';
+}
+
+/** Everything an unfinished search can hand its caller. */
+export interface SwarmHarvest {
+  readonly rootId: string;
+  /** How many attempts this search has had. Epoch 0 is the first, so this is
+   *  `epoch + 1` — the same arithmetic the settle report's `attempt` uses. */
+  readonly generations: number;
+  /** Children the ledger had counted at its last level barrier. */
+  readonly iteration: number;
+  readonly candidates: readonly HarvestedCandidate[];
+  /** The best-scoring candidate, or null when nothing scored. Ranked on the
+   *  normalised [0,1] the tree climbs, so no objective direction is needed here —
+   *  the engine already resolved it when it wrote the record. */
+  readonly best: HarvestedCandidate | null;
+}
+
+/**
+ * WHAT AN UNFINISHED SEARCH ALREADY HAS, for a caller that will not get a finished
+ * one.
+ *
+ * A background `agents.swarm` job is bounded: it may be re-driven only so many times
+ * and may live only so long (`jobs/runner.ts`). When a bound is reached the job has to
+ * settle, and the question is what it settles WITH. It used to be nothing — an
+ * eviction message — and that was measured costing the owner real work: root
+ * `2rye1eyny1efm9583sqye` held TWO completed candidates with real content while its
+ * job showed nothing at all, and the owner asked why the turn would not give itself
+ * up. PARTIAL CANDIDATES ARE RESULTS. A search that measured two of five answers
+ * measured two answers.
+ *
+ * READ-ONLY, and deliberately so: this is what the search HAS, not a transition. The
+ * caller that reaches a bound is the one that settles the ledger row, because it is
+ * the one that decided to stop.
+ *
+ * Returns null when there is nothing running for this task — which is the ordinary
+ * case for a job that settled normally, and is why a harvest is never the first thing
+ * tried.
+ */
+export function harvestSwarm(deps: {
+  readonly sql: SqlExecutor;
+  readonly ledger: MctsSearchStore;
+}, task: string): SwarmHarvest | null {
+  const [running] = deps.ledger.findRunningSwarms(task);
+  if (!running) return null;
+
+  const records = new Map<string, SwarmNodeRecord>();
+  for (const row of deps.sql<{ node_id: string; record_json: string }>`
+    SELECT node_id, record_json FROM swarm_node_records WHERE root_id = ${running.rootId}`) {
+    // A row this build cannot read is SKIPPED rather than thrown, and that is the
+    // opposite of `parseRecord`'s rule on purpose: a re-entry that misreads a record
+    // would continue a tree and crown a candidate it never measured, so it must stop.
+    // A harvest is the last thing that will ever be said about this search, and
+    // dropping one unreadable candidate to deliver four readable ones is strictly
+    // better than delivering none.
+    const parsed = v.safeParse(SwarmNodeRecordSchema, JSON.parse(row.record_json));
+    if (parsed.success) records.set(row.node_id, parsed.output);
+  }
+
+  const candidates: HarvestedCandidate[] = [];
+  for (const row of deps.sql<NodeRow>`
+    SELECT id, parent_id, depth, observation FROM search_nodes
+    WHERE root_id = ${running.rootId} AND parent_id IS NOT NULL
+    ORDER BY depth ASC, created_at ASC`) {
+    const outcome = records.get(row.id)?.outcome ?? null;
+    candidates.push({
+      nodeId: row.id,
+      depth: row.depth,
+      artifact: row.observation,
+      score: outcome?.kind === 'scored' || outcome?.kind === 'judged' ? outcome.score : null,
+      outcome: outcome?.kind ?? 'unrecorded',
+    });
+  }
+
+  let best: HarvestedCandidate | null = null;
+  for (const candidate of candidates) {
+    if (candidate.score === null) continue;
+    if (best === null || candidate.score > (best.score ?? Number.NEGATIVE_INFINITY)) best = candidate;
+  }
+
+  return {
+    rootId: running.rootId,
+    generations: running.epoch + 1,
+    iteration: running.iteration,
+    candidates,
+    best,
+  };
+}

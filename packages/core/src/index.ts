@@ -1287,7 +1287,9 @@ export {
   type ScaffoldBridgeOpts, type ScaffoldHistoryQuery, type ScaffoldHistoryReader,
   type ScaffoldHistoryEntry, type ScaffoldHistoryPage,
 } from './orchestrator/scaffold-host';
-export { BACKGROUNDABLE_TOOLS, resumeBackgroundJob } from './orchestrator/background-tools';
+export {
+  BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob, type SwarmHarvestDeps,
+} from './orchestrator/background-tools';
 export {
   wrapToolsForBackground, CONFINED_BACKGROUNDABLE_TOOLS, type BackgroundableTool,
 } from './jobs/background-wrap';
