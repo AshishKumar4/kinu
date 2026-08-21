@@ -1132,6 +1132,88 @@ const TRANSCRIPTS = {
     ],
     codeUsed: null,
   },
+  // Two nodes of the LIVE run: one that reported and one still working. Both are
+  // reachable from the run pane's node list, which is the path the previous
+  // fixture set had no entry for — a real node opened to "this branch is no
+  // longer in the run".
+  lv001: {
+    origin: "head", runId: "lv000", nodeId: "lv001",
+    task: "Walk the cart serializer's null path: every read of coupon.kind in packages/cart/src, and for each one say whether a null kind can reach it and what the caller sees when it does.",
+    rationale: "expansion 1 of 5",
+    status: "completed",
+    spawnedAt: NOW - 40e4, lastStepAt: NOW - 30e4, wallClockMs: 118_000,
+    usage: { input: 9_180, output: 720 },
+    steps: [
+      {
+        text: "Listing the readers before I judge any of them.",
+        reasoning: "The task names one file but the serializer re-exports from two others, so grepping the package is cheaper than reading it and less likely to miss a caller.",
+        toolCalls: [
+          {
+            name: "run",
+            input: { command: "rg -n 'coupon\\.kind|rules\\[' packages/cart/src" },
+            output: "src/serializer.ts:88:  const rule = rules[coupon.kind];\nsrc/serializer.ts:141:  if (coupon.kind === 'fixed') {\nsrc/totals.ts:52:  const pct = rules[coupon.kind].percent;",
+          },
+        ],
+      },
+      {
+        text: "Three reads, two of them unguarded. `serializer.ts:141` compares rather than indexes, so a null kind takes the else branch and is fine.",
+        toolCalls: [
+          {
+            name: "read",
+            input: { path: "packages/cart/src/serializer.ts", offset: 80, limit: 20 },
+            output: "  const rule = rules[coupon.kind];\n  return { ...line, discount: rule.apply(line.subtotal) };",
+          },
+        ],
+      },
+      {
+        text: "Confirmed. `rule` is undefined for a null kind and `.apply` throws before anything is returned to the caller.",
+        toolCalls: [],
+      },
+    ],
+    answer: "`serializeCart` reads `rules[coupon.kind].percent` with no guard — it throws on every percentage coupon written before the migration. `totals.ts:52` has the same shape. `serializer.ts:141` compares instead of indexing and is safe. The guard belongs at both reads, spelled the way `validate.ts` already spells it: `rules[coupon.kind ?? inferKind(coupon)]`.",
+    decisions: [], errorMessage: null,
+    path: [
+      { id: "lv000", label: "Audit every reader of coupon.kind", depth: 0, status: "running" },
+      { id: "lv001", label: "Walk the cart serializer's null path", depth: 1, status: "completed" },
+    ],
+    codeUsed: null,
+  },
+  lv003: {
+    origin: "head", runId: "lv000", nodeId: "lv003",
+    task: "Trace the pricing refactor's readers: which of them index rules by kind, and did the refactor introduce or remove a guard.",
+    rationale: "expansion 3 of 5",
+    status: "running",
+    spawnedAt: NOW - 40e4, lastStepAt: NOW - 4e3, wallClockMs: 0,
+    usage: { input: 4_260, output: 190 },
+    steps: [
+      {
+        text: "Finding the refactor first — the guard may have moved rather than gone.",
+        reasoning: "A read that lost its guard and a read that never had one need different fixes, and only the history tells them apart.",
+        toolCalls: [
+          {
+            name: "run",
+            input: { command: "git log --oneline -S'rules[' -- packages/pricing/src" },
+            output: "8c1f20a1 refactor(pricing): one rate table, read through a resolver",
+          },
+        ],
+      },
+      {
+        // No output: the call this node is in the middle of, which the chat draws
+        // as still running.
+        text: "Reading that commit.",
+        toolCalls: [
+          { name: "run", input: { command: "git show 8c1f20a1 --stat" } },
+        ],
+      },
+    ],
+    answer: null,
+    decisions: [], errorMessage: null,
+    path: [
+      { id: "lv000", label: "Audit every reader of coupon.kind", depth: 0, status: "running" },
+      { id: "lv003", label: "Trace the pricing refactor's readers", depth: 1, status: "running" },
+    ],
+    codeUsed: null,
+  },
 } satisfies Record<string, NodeTranscriptView>;
 
 /** Looked up by an arbitrary node id off the wire, which is what a Map is for. */
