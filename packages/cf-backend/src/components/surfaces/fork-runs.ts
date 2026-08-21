@@ -348,21 +348,6 @@ export function useExactForkRun(
 
 /* ── what the run was dispatched with ──────────────────────────── */
 
-/**
- * Which half of the run the surface leads with, by the name of the store that holds
- * it: `search` for a run with a tree, `transcripts` for one with journalled nodes
- * only.
- *
- * A run is no longer one of two dispatch policies — a swarm whose nodes are agents has
- * BOTH halves — so this names what the run leads with rather than what it "was". The
- * recovered parameters answer it where they survive; the run's own facts answer it
- * where they do not.
- */
-export function settlePolicyOf(run: ForkRunSummary, params: ForkRunParams | undefined): string {
-  const hasSearch = params ? params.search !== null : run.hasSearchTree;
-  return hasSearch ? "search" : "transcripts";
-}
-
 /** One parameter as a label and a value. Empty when the run's parameters are no
  *  longer recorded — the caller says so rather than showing plausible defaults. */
 export interface ForkParamRow {

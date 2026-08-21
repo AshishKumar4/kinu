@@ -19,11 +19,12 @@ import {
 } from "@/components/swarm-tree-model";
 import { EmptyState, EMPTY_HINTS, formatScore } from "@/components/surfaces/shared";
 import {
-  describeSettle, RunRefusalNote, SwarmResolutionPanel, useForkRunTree,
+  runStateLine, RunLivenessPanel, RunRefusalNote, SwarmConfigDisclosure, useForkRunTree,
 } from "@/components/surfaces/ExplorationSurface";
 import {
   selectForkRun, useExactForkRun, useLiveForkRuns,
 } from "@/components/surfaces/fork-runs";
+import { runLiveness } from "@/components/surfaces/swarm-resolution";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { useKinu } from "@/hooks/use-kinu";
 import { useElementSize } from "@/hooks/use-element-size";
@@ -117,8 +118,9 @@ function ExplorerBody({
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const {
-    tree, resolution, fanIn, why, refusal, resource, reload,
+    tree, headRun, resolution, fanIn, why, refusal, resource, reload,
   } = useForkRunTree(run, state.rpc, state.mctsTrees.get(run.id) ?? null, hasActiveWork);
+  const liveness = runLiveness(headRun);
   const stats = tree ? treeStats(tree) : null;
   const winner = tree ? terminalForkNode(tree) : null;
   const selected = tree && selectedId ? findForkNode(tree, selectedId) : null;
@@ -128,31 +130,40 @@ function ExplorerBody({
   const regions = useMemo(
     () => tree
       ? [{
-        runId: run.id, root: tree, title: run.task, note: describeSettle(run, undefined, resolution),
+        runId: run.id, root: tree, title: run.task, note: runStateLine(run, liveness, refusal),
         fanIn, why,
       }]
       : [],
-    [tree, run, resolution, fanIn, why],
+    [tree, run, liveness, refusal, fanIn, why],
   );
   const selection: ExplorerSelection | null =
     selectedId === null ? null : { runId: run.id, nodeId: selectedId };
 
   return (
     <>
-      {/* Which preset this search resolved and the tuple it resolved to, in the
-          same panel Column C uses. Above the canvas rather than in the footer: it
-          describes the whole tree, and the footer describes the node in it.
+      {/* Which preset this search resolved and the tuple it resolved to, BEHIND a
+          disclosure — the same one Column C uses, so the reader meets the config
+          in one place and only when they ask for it. It was an always-open panel
+          laid across the top of the full-screen tree, which is the clutter the
+          owner named on this exact view.
 
           No `judges`: the clamp is a DISPATCH parameter, and this page reads one run
           by id through `getForkRun`, which answers a summary. `getExplorationCanvas`
           is the only read that carries parameters and it is page-scoped, so there is
           no per-run parameter read to make here. Column C shows the clamp because it
           holds that page. */}
-      <SwarmResolutionPanel resolution={resolution} />
+      <div className="shrink-0 border-b p-border px-5 py-1.5">
+        <SwarmConfigDisclosure resolution={resolution} />
+      </div>
       {/* Why this run reached nothing, above its tree rather than instead of it: a
           refused run still has a root and often has branches that failed for a
           reason worth reading. */}
       {refusal !== null && <RunRefusalNote refusal={refusal} />}
+      {/* And for a run that has NOT reached nothing yet, what its nodes are doing.
+          The full-screen view had the same silence as the surface: a `still
+          running` chip in the footer and no statement of how many nodes were
+          working or when anything last happened. */}
+      {liveness !== null && <RunLivenessPanel live={liveness} running={run.status === "running"} />}
       {/* Canvas and transcript side by side WHERE THERE IS ROOM: the whole point
           of a full-screen explorer is room, and a selected node that only
           produced a one-line footer chip was the reason opening one told the

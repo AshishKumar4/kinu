@@ -63,18 +63,32 @@ function linkVertices(vertices: readonly ForkNode[]): ForkNode | null {
 /**
  * Fold search rows into the tree.
  *
- * A search node always carries a score and a rollout count, so these are never
- * null on this path; a node only the journal knows has neither, and reaches
- * `ForkNode` through {@link journalVertex}.
+ * A row that nothing has been backpropagated through carries NO score. Its
+ * `visits` and `value` are both 0 because `SearchNode.value` is a `number`
+ * initialised to 0 at insert, and the engine writes a search's root row at
+ * dispatch — so the root of a search that has evaluated nothing holds a real,
+ * stored 0 and was drawn `0%`. That is the caption in the incident's screenshot,
+ * and it is the same lie as the missing nodes: 0 is the initialiser, not a
+ * measurement.
+ *
+ * `visits === 0` is the store's own way of saying so, so the test is that and not
+ * a rule about zeroes: three rollouts that all returned 0 IS a measurement and
+ * survives, and an unvisited row that somehow carries a value keeps it, because
+ * then the number is the only evidence there is.
  */
 export function buildTree(nodes: MctsRow[]): ForkNode {
-  const vertices = nodes.map((n): ForkNode => ({
-    id: n.id, parentId: n.parent_id, depth: n.depth, visits: n.visits,
-    value: n.value, status: n.status, action: n.action,
-    task: n.task, observation: n.observation, codeUsed: n.code_used,
-    branchAgentKey: n.branch_agent_key, msgId: n.msg_id, createdAt: n.created_at,
-    children: [],
-  }));
+  const vertices = nodes.map((n): ForkNode => {
+    const unevaluated = n.visits === 0 && n.value === 0;
+    return {
+      id: n.id, parentId: n.parent_id, depth: n.depth,
+      visits: unevaluated ? null : n.visits,
+      value: unevaluated ? null : n.value,
+      status: n.status, action: n.action,
+      task: n.task, observation: n.observation, codeUsed: n.code_used,
+      branchAgentKey: n.branch_agent_key, msgId: n.msg_id, createdAt: n.created_at,
+      children: [],
+    };
+  });
   return linkVertices(vertices) ?? NO_TREE;
 }
 

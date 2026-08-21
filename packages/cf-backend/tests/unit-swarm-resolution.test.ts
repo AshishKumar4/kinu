@@ -18,7 +18,8 @@
 import { describe, test, expect } from 'bun:test';
 import type { HeadRunView } from '@kinu.run/core';
 import {
-  fanInArity, fanInVertices, nodeRationales, runRefusal, swarmAxisRows, swarmResolutionOf,
+  fanInArity, fanInVertices, nodeRationales, runLiveness, runRefusal, swarmAxisRows,
+  swarmResolutionOf,
 } from '../src/components/surfaces/swarm-resolution';
 
 /** One journalled node, at the resolution the wire carries. */
@@ -30,6 +31,21 @@ function node(id: string, rationale: string, errorMessage: string | null = null)
     status: errorMessage === null ? 'completed' : 'errored',
     summary: null, errorMessage, usage: {}, wallClockMs: 1,
     spawnedAt: 1, lastStepAt: null, decisions: [],
+  };
+}
+
+/** A node at a chosen lifecycle point — what a LIVE run's journal actually holds,
+ *  which the settled fixture above cannot express. */
+function liveNode(
+  id: string, status: string, at: Partial<Pick<JournalNode, 'depth' | 'spawnedAt' | 'lastStepAt' | 'summary' | 'errorMessage'>> = {},
+): JournalNode {
+  return {
+    ...node(id, 'expansion'), status,
+    depth: at.depth ?? 1,
+    spawnedAt: at.spawnedAt ?? 1_000,
+    lastStepAt: at.lastStepAt ?? null,
+    summary: at.summary ?? null,
+    errorMessage: at.errorMessage ?? null,
   };
 }
 
@@ -167,5 +183,76 @@ describe('a run that reached nothing reads as a refusal', () => {
     // Running is not refused: it has not reached anything YET, which is a different
     // claim from having reached nothing.
     expect(runRefusal({ status: 'running', branches: 0 }, null)).toBeNull();
+  });
+});
+
+/**
+ * What speaks for a run that is still working.
+ *
+ * `runRefusal` returns null while a run is running — correctly, because a run that
+ * has not reached an answer YET has not reached nothing — so on the owner's own
+ * evidence a running search had NOTHING to say about itself: a `running` label and
+ * a picture. This is the fact that replaces it, and the whole of the contract is
+ * that it is computed from the journal rather than from the run's status word.
+ */
+describe('what a running search says about itself', () => {
+  test('the counts are per node lifecycle, not the run status word', () => {
+    const live = runLiveness(
+      journal([
+        liveNode('a', 'running'), liveNode('b', 'running'),
+        liveNode('c', 'completed', { summary: 'found the null kind' }),
+        liveNode('d', 'errored', { errorMessage: 'provider refused' }),
+        liveNode('e', 'aborted', { errorMessage: 'operator stopped it' }),
+      ]),
+    );
+    expect(live).toMatchObject({ running: 2, reported: 1, failed: 2, total: 5 });
+  });
+
+  test('the newest event is the newest STEP, and a node that never stepped falls back to its spawn', () => {
+    // The mixture is the point: a run whose only moving node has stepped is live at
+    // that step, not at the spawn of the sibling that has not.
+    const live = runLiveness(journal([
+      liveNode('a', 'running', { spawnedAt: 1_000, lastStepAt: 9_000 }),
+      liveNode('b', 'running', { spawnedAt: 4_000, lastStepAt: null }),
+    ]));
+    expect(live?.lastEventAt).toBe(9_000);
+
+    const unstarted = runLiveness(journal([
+      liveNode('b', 'running', { spawnedAt: 4_000, lastStepAt: null }),
+    ]));
+    expect(unstarted?.lastEventAt).toBe(4_000);
+  });
+
+  test('levels come from the journal depth, so a deeper search is not flattened', () => {
+    const live = runLiveness(journal([
+      liveNode('a', 'completed', { depth: 1 }), liveNode('b', 'completed', { depth: 1 }),
+      liveNode('c', 'running', { depth: 2 }), liveNode('d', 'running', { depth: 2 }),
+    ]));
+    expect(live?.levels).toEqual([
+      { depth: 1, running: 0, reported: 2, failed: 0, total: 2 },
+      { depth: 2, running: 2, reported: 0, failed: 0, total: 2 },
+    ]);
+  });
+
+  test('a settled run still reports its shape — the panel is not a running-only widget', () => {
+    const live = runLiveness(journal([
+      liveNode('a', 'completed'), liveNode('b', 'completed'),
+    ]));
+    expect(live).toMatchObject({ running: 0, reported: 2, failed: 0, total: 2 });
+  });
+
+  test('no journal is no liveness — never a row of zeroes', () => {
+    // Zeroes would read as "five nodes, none of them doing anything", which is the
+    // exact false statement the owner was shown. Absence is absence.
+    expect(runLiveness(null)).toBeNull();
+    expect(runLiveness(journal([]))).toBeNull();
+  });
+
+  test('an unrecognised status counts as neither reported nor failed, and never as running', () => {
+    // `interrupted` is non-terminal and is not a claim that work is in flight.
+    const live = runLiveness(journal([
+      liveNode('a', 'interrupted'),
+    ]));
+    expect(live).toMatchObject({ running: 0, reported: 0, failed: 0, total: 1 });
   });
 });
