@@ -14,7 +14,8 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { isParseable, isTestFile, trackedFiles } from "../../../scripts/sources.ts";
 
@@ -262,7 +263,15 @@ const BOUNDARY: ReadonlyArray<{
   { file: "m04.test.ts", code: "spawnSync('sh', ['-c', 'git commit -m seed'], { cwd: repo });", caught: false },
 ];
 
-const boundaryDirectory = mkdtempSync(join(repoRoot, ".no-ambient-git-boundary-"));
+// Minted in the system temp directory, NOT under the repo root. Every gate built on
+// scripts/sources.ts enumerates untracked worktree files on purpose, so scratch under
+// the repo root was visible mid-run to all of them — measured 2026-08-21, when
+// `bun run check` ran gates together and ladder.test.ts reported a boundary fixture as
+// "no tier runs this file" while the gate that minted it was still running. The rule
+// scopes by FILENAME alone (TEST_FILE in rules/no-ambient-git-in-tests.ts), so the
+// boundary needs no relation to this repository, and oxlint lints an absolute path
+// outside the project under this config.
+const boundaryDirectory = mkdtempSync(join(tmpdir(), "no-ambient-git-boundary-"));
 try {
   for (const { file, code } of BOUNDARY) {
     const absolute = join(boundaryDirectory, file);
@@ -271,7 +280,7 @@ try {
   }
   const run = spawnSync(
     "./node_modules/.bin/oxlint",
-    ["-c", ".oxlintrc.json", "-f", "json", relative(repoRoot, boundaryDirectory)],
+    ["-c", ".oxlintrc.json", "-f", "json", boundaryDirectory],
     { cwd: repoRoot, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
   );
   assert.ok(run.stdout.length > 0, `oxlint produced no JSON for the boundary table:\n${run.stderr}`);
@@ -298,7 +307,9 @@ try {
   rmSync(boundaryDirectory, { recursive: true, force: true });
 }
 
-const fixtures = mkdtempSync(join(repoRoot, ".no-ambient-git-gate-"));
+// Same reasoning as the boundary table above: the fixtures are scratch, and scratch
+// never lives in the worktree.
+const fixtures = mkdtempSync(join(tmpdir(), "no-ambient-git-gate-"));
 try {
   const badDirectory = join(fixtures, "red");
   const goodDirectory = join(fixtures, "green");
@@ -314,7 +325,7 @@ try {
   const lint = (directory: string): LintReport => {
     const run = spawnSync(
       "./node_modules/.bin/oxlint",
-      ["-c", ".oxlintrc.json", "-f", "json", relative(repoRoot, directory)],
+      ["-c", ".oxlintrc.json", "-f", "json", directory],
       { cwd: repoRoot, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
     );
     assert.ok(run.stdout.length > 0, `oxlint produced no JSON for ${directory}:\n${run.stderr}`);

@@ -100,9 +100,10 @@ const EXEMPT = [
   // first is `packages/core/tests/unit-workspace-diff.test.ts:264-270` verbatim
   // at d9a7daf7c~1, pinned by digest and re-checked against `git show` — so its
   // prefix cannot be recatalogued without making the gate replay a shape that
-  // never shipped. Nothing is hidden: this file's two REAL mints are
-  // `.no-ambient-git-boundary-` and `.no-ambient-git-gate-` under the repo root,
-  // which this scan does not read because it reads `tmpdir()` mints only.
+  // never shipped. The scan reads string bodies as code, so the file stays exempt.
+  // Its two REAL mints — `no-ambient-git-boundary-` and `no-ambient-git-gate-`,
+  // both under `tmpdir()` since the scratch left the worktree — release themselves
+  // in `finally`, so nothing outlives the run that minted it.
   'tools/oxlint/anti-slop/no-ambient-git.gate.test.ts',
 ] as const;
 
