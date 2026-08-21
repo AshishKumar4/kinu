@@ -14,7 +14,7 @@
           ? stored
           : (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
         const saved = localStorage.getItem("palette");
-        const palette = saved === "umber" || saved === "silk" ? saved : "umber";
+        const palette = saved === "umber" || saved === "silk" ? saved : "silk";
         document.documentElement.setAttribute("data-mode", mode);
         document.documentElement.setAttribute("data-palette", palette);
         document.documentElement.style.colorScheme = mode;

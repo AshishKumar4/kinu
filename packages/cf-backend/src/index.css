@@ -207,6 +207,10 @@ html, body, #root {
 
   --c-user-bg:     #2A211A;  /* user turn: warm-tinted raised surface */
   --c-user-border: rgba(224, 164, 88, 0.18);
+  /* The narrow directional highlight the user bubble wears (`.p-user-bubble`)
+     — brass glancing off the top of the turn. Declared per theme because the
+     glint is warm light in dark modes and paper-white in light ones. */
+  --c-user-sheen:  rgba(240, 207, 155, 0.06);
 
   /* The code surface. The landing renders code as one warm tone on a
      recessed panel rather than syntax-coloured, and that is deliberate
@@ -384,6 +388,7 @@ html, body, #root {
      near-neutral field it now reads as brass rather than as more beige. */
   --c-user-bg:     #FBEDD5;
   --c-user-border: rgba(138, 78, 13, 0.22);
+  --c-user-sheen:  rgba(255, 255, 255, 0.60);
 
   --c-code:     #5E3604;   /* the brass ink, deepened for paper */
 
@@ -405,9 +410,10 @@ html, body, #root {
    SILK (v2) — 絹, the product's own name, as a palette.
 
    Selected by `data-palette="silk"` on <html>, which `use-theme.ts` sets
-   from the same store that sets `data-mode`. Absent the attribute the
-   umber palette above is what renders, so v1 remains the default and
-   this is a deviation from it rather than a replacement of it.
+   from the same store that sets `data-mode`. Silk is the shipped default —
+   index.html, gallery.html and the public pages all boot into it — while
+   umber stays on `:root` so an absent or unknown attribute still renders a
+   complete palette, and so every silk token has a fallback to deviate from.
 
    ── The idea ─────────────────────────────────────────────────────
    Silk is one continuous filament with a triangular cross-section, and
@@ -462,32 +468,41 @@ html, body, #root {
      two modes that the whole direction is built on.
 
    ── DARK — the dyed face ──────────────────────────────────────────
-   Ladder steps, as WCAG luminance ratios: recessed→bg 1.06, bg→sidebar
-   1.08, sidebar→surface 1.06, surface→elevated 1.08, elevated→overlay
+   Retuned 2026-08-20 against the README banner (docs/assets/banner-dark.svg):
+   the first pass kept the banner's canvas but let the ladder desaturate as it
+   rose, so cards, composer and event chrome — most of the pixels on a working
+   screen — read slate-grey rather than dyed. Every rung above the canvas now
+   carries at least the canvas's chroma (the dye deepens as the cloth folds),
+   and the fibre hairlines sit a step stronger than umber's, because a warm
+   line on a COOL ground needs more alpha to read as the weave than the same
+   line on a warm one.
+
+   Ladder steps, as WCAG luminance ratios: recessed→bg 1.07, bg→sidebar
+   1.08, sidebar→surface 1.06, surface→elevated 1.10, elevated→overlay
    1.10 — every rung at least as separated as umber's (1.06/1.04/1.04/
    1.09/1.09), so the same "hierarchy from surface steps plus hairlines,
    never shadows" rule still holds up. Worst-case text ratio across all
-   seven surfaces: text 11.4, text-2 6.5, text-3 4.8, accent-fg 10.3,
-   danger 5.1. ══ */
+   seven surfaces: text 11.2, text-2 6.4, text-3 4.7, accent-fg 9.7,
+   danger 5.0. ══ */
 [data-palette="silk"] {
-  --c-recessed: #0C1219;   /* wells, tracks, inset code */
-  --c-bg:       #111923;   /* the canvas — indigo at reading depth */
-  --c-sidebar:  #16202C;   /* chrome: rails, panel headers */
-  --c-surface:  #1A2532;   /* card */
-  --c-elevated: #1F2B3A;   /* raised: composer, dialogs, menus */
-  --c-overlay:  #243244;   /* dialogs */
+  --c-recessed: #0B111C;   /* wells, tracks, inset code */
+  --c-bg:       #111923;   /* the canvas — banner --bg, verbatim */
+  --c-sidebar:  #15202E;   /* chrome: rails, panel headers */
+  --c-surface:  #192536;   /* card */
+  --c-elevated: #1E2C40;   /* raised: composer, dialogs, menus */
+  --c-overlay:  #23334A;   /* dialogs */
   /* Same argument as umber: moving up a dark ladder reads as both
      "raised" and "a plane inside a card", so the two roles are one
      value here and only diverge on paper. */
-  --c-fill:     #1F2B3A;
+  --c-fill:     #1E2C40;
 
   /* Hairlines are the FIBRE at low alpha, not the dye — a warm line on a
      cool ground is what makes the weave visible at all. Umber draws its
      rules the same structural way (accent alpha); the colour is what
      tells the two palettes apart at a glance. */
-  --c-border:        rgba(227, 210, 174, 0.14);
-  --c-border-strong: rgba(227, 210, 174, 0.28);
-  --c-input-border:  rgba(227, 210, 174, 0.22);
+  --c-border:        rgba(227, 210, 174, 0.16);
+  --c-border-strong: rgba(227, 210, 174, 0.32);
+  --c-input-border:  rgba(227, 210, 174, 0.25);
 
   --c-text:     #F4EFE6;   /* raw silk        15.5:1 on bg */
   --c-text-2:   #BFB6A9;   /* spun            8.8:1 */
@@ -516,9 +531,14 @@ html, body, #root {
   --c-neutral-tint: rgba(244, 239, 230, 0.07);
 
   /* The user's turn is the dye at full strength — the one plane that is
-     more saturated than the canvas rather than lighter than it. */
-  --c-user-bg:     #17273D;
-  --c-user-border: rgba(227, 210, 174, 0.20);
+     more saturated than the canvas rather than lighter than it — under a
+     thread border strong enough to catch light. */
+  --c-user-bg:     #1A2C48;
+  --c-user-border: rgba(227, 210, 174, 0.30);
+  /* The sheen the bubble wears: the fibre glancing off the top of the
+     cloth. One narrow directional gradient, per the palette's own rule —
+     never spread over a panel. */
+  --c-user-sheen:  rgba(242, 223, 180, 0.07);
 
   --c-code:     #D8CBA4;   /* one thread tone on a well, 11.7:1 */
   --c-code-bg:  var(--c-recessed);
@@ -585,9 +605,13 @@ html, body, #root {
   --c-info-tint:    rgba(22, 96, 107, 0.11);
   --c-neutral-tint: rgba(32, 43, 54, 0.08);
 
-  /* The user's turn stays the dye, at the strength cream can carry. */
-  --c-user-bg:     #E4EAF3;
-  --c-user-border: rgba(35, 68, 101, 0.22);
+  /* The user's turn stays the dye, a shade deeper than the first pass: on
+     cream, #E4EAF3 read as a generic pastel rather than dyed cloth, and the
+     border was too faint to say "thread". */
+  --c-user-bg:     #DBE4F0;
+  --c-user-border: rgba(35, 68, 101, 0.30);
+  /* On the undyed face the sheen is the light itself — a paper glint. */
+  --c-user-sheen:  rgba(255, 255, 255, 0.65);
 
   --c-code:     #22405E;   /* dye ink deepened for the well, 7.7:1 on it */
   --c-code-bg:  var(--c-recessed);
@@ -688,10 +712,20 @@ body { background: var(--c-bg); color: var(--c-text); }
    compete with it for the same font. Letter-spacing is lower than a
    proportional face needs: mono is already wide. */
 .p-eyebrow  { font-family: var(--font-mono); font-size: 11px; line-height: 16px; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase; color: var(--c-text-3); }
+/* The annotation register — the banner's mono captions, at reading size.
+   Timestamps, provenance marks, the small print beside a fact. Distinct from
+   `.p-eyebrow`: an eyebrow NAMES a section and shouts in uppercase; an
+   annotation sits beside content and stays lowercase. */
+.p-annotation { font-family: var(--font-mono); font-size: 10px; line-height: 14px; letter-spacing: 0.045em; font-variant-numeric: tabular-nums; }
 .p-meta     { font-size: 12px; line-height: 16px; letter-spacing: -0.005em; }
 .p-row-text { font-size: 13px; line-height: 18px; letter-spacing: -0.008em; }
 .p-body     { font-size: 14px; line-height: 21px; letter-spacing: -0.006em; }
 .p-title    { font-size: 15px; line-height: 20px; font-weight: 600; letter-spacing: -0.01em; }
+/* A panel heading — the display face at UI weight. `.p-display` is rationed
+   to page titles at 24px+; this is the same voice for the headings inside a
+   working surface (workspace name, section heads), where 15-17px of the serif
+   reads as the product speaking rather than a dashboard label. */
+.p-heading  { font-family: var(--font-display); font-weight: 500; letter-spacing: -0.015em; }
 /* A numeral *treatment*, not a type role — size comes from the role next to
    it. (These classes are unlayered and so outrank Tailwind's utilities: a
    font-size here silently overrides the `text-[11px]` it is written beside.) */
@@ -718,9 +752,12 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-dot-neutral { background: var(--c-text-3); }
 .p-dot-accent  { background: var(--c-accent); }
 
-/* pill badges — tint + AA text, 11px/500, pill radius */
+/* pill badges — tint + AA text, 11px/500, pill radius. Set in the mono
+   annotation face: a badge is a status ANNOTATION on the thing beside it,
+   the same register the banner writes its captions in. */
 .p-badge-success, .p-badge-warning, .p-badge-danger, .p-badge-info, .p-badge-neutral {
   font-size: 11px; line-height: 16px; font-weight: 500; border-radius: 999px;
+  font-family: var(--font-mono); letter-spacing: 0.01em;
 }
 .p-badge-success { background: var(--c-success-tint); color: var(--c-success); }
 .p-badge-warning { background: var(--c-warning-tint); color: var(--c-warning); }
@@ -828,9 +865,12 @@ body { background: var(--c-bg); color: var(--c-text); }
   overflow-wrap: anywhere;
 }
 
-/* User chat turn */
+/* User chat turn. The ground is the dye; the border is the thread; the sheen
+   is one narrow directional highlight along the top edge — colour and image
+   are separate properties so the gradient rides the theme's own glint token. */
 .p-user-bubble {
-  background: var(--c-user-bg);
+  background-color: var(--c-user-bg);
+  background-image: linear-gradient(180deg, var(--c-user-sheen), transparent 42%);
   border: 1px solid var(--c-user-border);
   color: var(--c-text);
 }

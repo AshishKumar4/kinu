@@ -56,15 +56,15 @@ export type PublicToken =
 export type TokenSet = Readonly<Record<PublicToken, string>>;
 
 const SILK_DARK = {
-  '--c-recessed': '#0C1219',
+  '--c-recessed': '#0B111C',
   '--c-bg': '#111923',
-  '--c-sidebar': '#16202C',
-  '--c-surface': '#1A2532',
-  '--c-elevated': '#1F2B3A',
-  '--c-fill': '#1F2B3A',
-  '--c-border': 'rgba(227, 210, 174, 0.14)',
-  '--c-border-strong': 'rgba(227, 210, 174, 0.28)',
-  '--c-input-border': 'rgba(227, 210, 174, 0.22)',
+  '--c-sidebar': '#15202E',
+  '--c-surface': '#192536',
+  '--c-elevated': '#1E2C40',
+  '--c-fill': '#1E2C40',
+  '--c-border': 'rgba(227, 210, 174, 0.16)',
+  '--c-border-strong': 'rgba(227, 210, 174, 0.32)',
+  '--c-input-border': 'rgba(227, 210, 174, 0.25)',
   '--c-text': '#F4EFE6',
   '--c-text-2': '#BFB6A9',
   '--c-text-3': '#A69C8E',
@@ -186,8 +186,8 @@ export const RADII = {
  * here, and `unit-public-shell.test.ts` evaluates this exact text against
  * stubbed storage to prove the four resolutions.
  *
- * The app's own bootstrap in `index.html` differs in one deliberate place: its
- * default palette is umber, and the public face defaults to silk.
+ * The app's own bootstrap in `index.html` resolves the same way: silk unless
+ * the user has explicitly stored `umber`.
  */
 export const THEME_BOOT = `(() => {
   var root = document.documentElement;

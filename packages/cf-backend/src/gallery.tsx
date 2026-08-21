@@ -11,6 +11,8 @@
  *   /gallery.html?frame=chatloading → a workspace WITH a history, before the
  *                                  transcript has arrived — the state that used
  *                                  to render as `chatempty` and lie
+ *   /gallery.html?frame=composer → the composer alone: at rest, mid-turn
+ *                                  (Stop/Branch/Steer), and with a status row
  *   /gallery.html?frame=toolcalls → every tool-call render state, pre-expanded
  *                                    (quiet failure, protocol failure, a
  *                                    multi-line `run`, an MCP tool, a failing
@@ -1651,6 +1653,48 @@ function ChatLoadingFrame() {
     </div>
   );
 }
+
+/* The composer alone, at reading width — the surface "magical" is won or lost
+   on, so it gets its own sheet: at rest with a draft (send + Branch context),
+   mid-turn (Stop / Branch / Steer, the three named actions), and carrying a
+   status row. All three are the real component with live state. */
+function ComposerFrame() {
+  const [value, setValue] = useState("Ship the coupon fix behind a preview first.");
+  const [mode, setMode] = useState<ChatMode>("build");
+  const [model, setModel] = useState("anthropic/claude-opus-4");
+  const picker = () => (
+    <ModelPicker models={MODEL_STUBS()} value={model} onChange={setModel} size="xs"
+      className="min-w-0 flex-1 basis-32 max-w-44" />
+  );
+  const shared = {
+    onValueChange: setValue,
+    onSend: () => {},
+    onStop: () => {},
+    placeholder: "Send a message...",
+    disabled: false,
+    mode: { value: mode, onChange: setMode, locked: false },
+    attachments: { parts: [], onAdd: () => {}, onRemove: () => {} },
+  } as const;
+  return (
+    <div className="p-bg p-text min-h-screen flex justify-center">
+      <div className="w-full max-w-[640px] space-y-8 py-10">
+        <div className="space-y-1">
+          <div className="p-eyebrow px-4">At rest, with a draft</div>
+          <Composer {...shared} value={value} streaming={false} modelPicker={picker()} />
+        </div>
+        <div className="space-y-1">
+          <div className="p-eyebrow px-4">Mid-turn — Stop, Branch, Steer</div>
+          <Composer {...shared} value={value} streaming onSteer={() => {}} onBranch={() => {}}
+            modelPicker={picker()} />
+        </div>
+        <div className="space-y-1">
+          <div className="p-eyebrow px-4">With a status row</div>
+          <Composer {...shared} value="" streaming={false} modelPicker={picker()} notices={MCTS_NOTICE} />
+        </div>
+      </div>
+    </div>
+  );
+}
 /* ── Chat infinite scroll ───────────────────────────────────────────
 
    The REAL hooks (usePagedScroll + useGrowingScroll), the REAL merge rule and
@@ -2043,6 +2087,18 @@ function MarksFrame() {
               <span style={{ color: "var(--c-accent-on)", fontFamily: "var(--font-display)", fontSize: 17, fontWeight: 500 }}>
                 Kinu.run
               </span>
+            </div>
+            {/* The candidate where the owner will actually meet it: the
+                sidebar lockup, on sidebar chrome, over a live roster row —
+                the context Sidebar.tsx ships (mark 20px + display face). */}
+            <div className="w-60 rounded-lg border p-border p-sidebar px-2 py-2.5 space-y-1.5">
+              <div className="flex items-center gap-2.5 px-2 py-1">
+                <span style={{ color: "var(--c-accent)", lineHeight: 0 }} dangerouslySetInnerHTML={{ __html: mark(20, id) }} />
+                <span className="p-heading text-[17px] p-text">Kinu</span>
+              </div>
+              <div className="p-eyebrow px-2">Workspaces</div>
+              <div className="px-2 py-1.5 rounded-lg p-nav-active p-row-text font-medium">Checkout coupon bug</div>
+              <div className="px-2 py-1.5 p-row-text p-text-2">Perf audit — landing</div>
             </div>
           </div>
         </div>
@@ -3204,6 +3260,7 @@ async function mount() {
   else if (frame === "chat") node = <ChatFrame />;
   else if (frame === "chatempty") node = <ChatEmptyFrame />;
   else if (frame === "chatloading") node = <ChatLoadingFrame />;
+  else if (frame === "composer") node = <ComposerFrame />;
   else if (frame === "chathistory") node = <ChatHistoryFrame />;
   else if (frame === "toolcalls") node = <ToolCallsFrame />;
   else if (frame === "advisor") node = <AdvisorFrame />;

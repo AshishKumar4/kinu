@@ -4,7 +4,7 @@ import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from "reac
 import { Button, Loader } from "@cloudflare/kumo";
 import { btnSmCls } from "@/components/ui/form";
 import {
-  ArrowsClockwiseIcon, BrainIcon, GitBranchIcon, CheckCircleIcon, TrashIcon,
+  ArrowsClockwiseIcon, GitBranchIcon, CheckCircleIcon, TrashIcon,
   ClockIcon, WarningCircleIcon, DesktopTowerIcon, PaperclipIcon,
   ClockCounterClockwiseIcon, UserPlusIcon,
 } from "@phosphor-icons/react";
@@ -34,6 +34,7 @@ import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { hasComparableTakes } from "@/components/alternate-takes-logic";
 import { classifyProgrammaticTurn, messageSignalId } from "@/components/background-event";
 import { WorkSurface, type SurfaceKind } from "@/components/surfaces/WorkSurface";
+import { KinuMark } from "@/components/surfaces/shared";
 import { SupervisePage } from "./SupervisePage";
 import { SubordinateTabs } from "@/components/SubordinateTabs";
 import { WorkspaceBar, type Altitude } from "@/components/WorkspaceBar";
@@ -67,14 +68,14 @@ export function EmptyConversation({ mission }: { mission: string }) {
   const brief = isPlaceholderMission(mission) ? null : mission.trim();
   return (
     <div className="flex h-full flex-col items-center justify-center px-6 text-center">
-      <BrainIcon size={36} className="mb-3 p-text-3" />
+      <KinuMark size={34} className="mb-4 text-[var(--c-accent)] opacity-70" />
       {brief && (
         <>
-          <p className="text-[11px] font-medium uppercase tracking-[0.16em] p-text-3">Mission</p>
-          <p className="mt-1.5 max-w-md whitespace-pre-wrap text-sm leading-relaxed p-text-2">{brief}</p>
+          <p className="p-eyebrow">Mission</p>
+          <p className="mt-2 max-w-md whitespace-pre-wrap p-heading text-[17px] leading-relaxed p-text-2">{brief}</p>
         </>
       )}
-      <p className="mt-3 text-sm p-text-3">Send the first message to start.</p>
+      <p className="mt-4 text-sm p-text-3">Send the first message to start.</p>
     </div>
   );
 }
@@ -436,7 +437,7 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
         <div ref={messagesRef} className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8">
           {state.messages.length === 0 && !state.isStreaming && (
             <div className="flex h-full flex-col items-center justify-center text-center">
-              <BrainIcon size={36} className="p-text-3 mb-3" />
+              <KinuMark size={30} className="mb-3 text-[var(--c-accent)] opacity-60" />
               <p className="text-sm p-text-3">This subordinate's conversation starts here.</p>
               {as?.soul && <p className="mt-2 max-w-sm whitespace-pre-wrap text-xs p-text-3">{as.soul}</p>}
             </div>

@@ -16,7 +16,7 @@
  */
 import { useEffect, useState, useCallback, useRef, type FormEvent } from "react";
 import { Link, NavLink, useMatch, useNavigate } from "react-router-dom";
-import { BrainIcon, PlusIcon, GearIcon, GithubLogoIcon, TrashIcon, SignOutIcon, CaretRightIcon, PencilSimpleIcon, CheckIcon, XIcon, SunIcon, MoonIcon, SwatchesIcon } from "@phosphor-icons/react";
+import { PlusIcon, GearIcon, GithubLogoIcon, TrashIcon, SignOutIcon, CaretRightIcon, PencilSimpleIcon, CheckIcon, XIcon, SunIcon, MoonIcon, SwatchesIcon } from "@phosphor-icons/react";
 import { Button } from "@cloudflare/kumo";
 import { btnSmCls } from "@/components/ui/form";
 import { listWorkspaces, removeWorkspace, getProfile, type WorkspaceEntry, type UserProfile } from "../lib/user-api";
@@ -24,6 +24,7 @@ import { useWorkspaceRpc } from "../hooks/use-kinu";
 import { useTheme, toggleMode, togglePalette } from "../hooks/use-theme";
 import { CreateWorkspaceModal } from "./CreateWorkspaceModal";
 import { ModeToggle, PaletteToggle } from "./theme-toggle";
+import { KinuMark } from "./surfaces/shared";
 import { Modal } from "./ui/Modal";
 import * as v from "valibot";
 import { renderCauseChain, renderThrownChain } from "@kinu.run/core/obs";
@@ -211,9 +212,12 @@ export default function Sidebar() {
       {/* Logo + new workspace */}
       <div className="px-3 pt-4 pb-2 flex flex-col gap-2">
         <div className="flex items-center justify-between">
-          <Link to="/" className="flex items-center gap-2 px-2 py-1.5 rounded-lg p-card-hover transition-colors">
-            <BrainIcon size={22} weight="duotone" className="p-accent" />
-            <span className="font-medium tracking-tight">Kinu</span>
+          <Link to="/" className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg p-card-hover transition-colors">
+            {/* The mark at 20px in the accent — the same lockup the signed-out
+                pages wear, so signing in does not change whose product it is.
+                16px reads as noise beside 15px text; 20px reads as a mark. */}
+            <KinuMark size={20} className="text-[var(--c-accent)]" />
+            <span className="p-heading text-[17px] p-text">Kinu</span>
           </Link>
           <a
             href="https://github.com/AshishKumar4/kinu"

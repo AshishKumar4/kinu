@@ -142,7 +142,7 @@ export function WorkTab({
 
   if (nothingAtAll) {
     return (
-      <EmptyState icon={<PulseIcon size={28} />} title="Nothing has happened yet"
+      <EmptyState title="Nothing has happened yet"
         hint="The plan the agent writes for itself, the work it detaches, and the changes it makes to itself all land here, with anything waiting on you at the top." />
     );
   }
