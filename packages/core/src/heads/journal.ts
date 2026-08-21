@@ -20,6 +20,14 @@ import type {
 import { headProducedFindings } from './head-summary';
 import { USAGE_FIELDS, type Usage } from '../usage';
 import { HEAD_USAGE_COLUMNS, type StoredHeadUsage } from './schema';
+import { mapPage, seekPage, StaleCursorError, type Page, type PageRequest } from '../read-models/page';
+
+
+/** The whole-trace totals a paged transcript reports beside its page. */
+export interface StepTotals {
+  readonly steps: number;
+  readonly toolCalls: number;
+}
 
 const EvidenceKindSchema = v.picklist(['tool_output', 'fact', 'citation', 'artifact']);
 
@@ -366,6 +374,58 @@ export class HeadJournal {
         reasoning: r.reasoning ?? undefined,
         toolCalls: parseArray<HeadStepToolCall>(r.tool_calls_json),
       }));
+  }
+
+  /** Reading bound and default for one trace page. A page is what one click
+   *  opens; the whole trace stays reachable through the cursor. */
+  static readonly STEP_PAGE = { limit: 60, max: 200 } as const;
+
+  /**
+   * One page of a head's recorded trace — newest page first, each page
+   * oldest-first, cursor anchored on the row id (`${headId}-s${seq}`; `seq` is
+   * the total order, so a seek on it cannot tie). The page is built over the
+   * RAW rows and only then reversed, so the cursor is minted on the row the
+   * query actually stopped at, exactly as the chat history's
+   * `chronological` does. `readSteps` stays for the readers that reconstruct
+   * the whole trace server-side (swarm resume); the page is the wire contract.
+   */
+  readStepsPage(headId: HeadId, request: PageRequest = {}): Page<HeadStep> {
+    const limit = Math.max(1, Math.min(HeadJournal.STEP_PAGE.max, Math.floor(request.limit ?? HeadJournal.STEP_PAGE.limit)));
+    const over = limit + 1;
+    const after = request.cursor?.after ?? null;
+    const from = after === null ? null : this.stepAnchor(headId, after);
+    type Row = { id: string; text: string | null; reasoning: string | null; tool_calls_json: string | null };
+    return mapPage(seekPage(from === null
+      ? this.sql<Row>`
+        SELECT id, text, reasoning, tool_calls_json FROM head_steps
+        WHERE head_id = ${headId} ORDER BY seq DESC LIMIT ${over}`
+      : this.sql<Row>`
+        SELECT id, text, reasoning, tool_calls_json FROM head_steps
+        WHERE head_id = ${headId} AND seq < ${from} ORDER BY seq DESC LIMIT ${over}`,
+      limit, (row) => row.id), (rows) => rows.slice().reverse().map((r) => ({
+        text: r.text ?? '',
+        reasoning: r.reasoning ?? undefined,
+        toolCalls: parseArray<HeadStepToolCall>(r.tool_calls_json),
+      })));
+  }
+
+  /** How much trace this head has, steps and tool calls across them — the
+   *  honest totals behind the transcript's metrics when only a page is on the
+   *  wire. Two aggregates, one scan. */
+  countSteps(headId: HeadId): StepTotals {
+    const row = this.sql<StepTotals & { tools: number | null }>`
+      SELECT COUNT(*) AS steps, SUM(json_array_length(tool_calls_json)) AS tools
+      FROM head_steps WHERE head_id = ${headId}`[0];
+    return { steps: row?.steps ?? 0, toolCalls: row?.tools ?? 0 };
+  }
+
+  /** The seq an anchor names, or StaleCursorError when it names nothing — the
+   *  caller restarts the walk rather than resuming from a row that is gone. */
+  private stepAnchor(headId: HeadId, after: string): number {
+    const row = this.sql<{ seq: number }>`
+      SELECT seq FROM head_steps WHERE id = ${after} AND head_id = ${headId}`[0];
+    if (row === undefined) throw new StaleCursorError('trace', after);
+    return row.seq;
   }
 
   insertEvidence(headId: HeadId, ev: Evidence): void {

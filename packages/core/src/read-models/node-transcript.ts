@@ -32,6 +32,7 @@ import type { Usage } from '../usage';
 import type { HeadStep } from '../heads/types';
 import { HeadJournal } from '../heads/journal';
 import { readSearchTree } from './search-tree';
+import type { Page, PageRequest } from './page';
 
 /** Which store recorded this node, and therefore how much there is to show. */
 export type NodeTranscriptOrigin = 'head' | 'rollout';
@@ -70,8 +71,15 @@ export interface NodeTranscriptView {
   readonly wallClockMs: number;
   /** Absent fields mean the provider never reported that count — never zero. */
   readonly usage: Usage;
-  /** The ordered LLM trace. Always empty for a rollout. */
-  readonly steps: readonly HeadStep[];
+  /** The ordered LLM trace, one cursored page of it — newest page first, each
+   *  page oldest-first. Always empty for a rollout. The whole trace stays
+   *  reachable through `steps.next`; `stepCount` is the honest total. */
+  readonly steps: Page<HeadStep>;
+  /** How much trace this branch recorded, whatever the page holds. */
+  readonly stepCount: number;
+  /** Tool calls across the WHOLE trace, not just the page — the Tools metric
+   *  would under-count by exactly what paging left out otherwise. */
+  readonly toolCount: number;
   /** The branch's final answer — a head's report summary, or a rollout's whole
    *  proposal. Null while it is still working. */
   readonly answer: string | null;
@@ -95,8 +103,9 @@ export function readNodeTranscript(
   sql: SqlExecutor,
   runId: string,
   nodeId: string,
+  request: PageRequest = {},
 ): NodeTranscriptView | null {
-  return readHeadTranscript(sql, runId, nodeId) ?? readRolloutTranscript(sql, runId, nodeId);
+  return readHeadTranscript(sql, runId, nodeId, request) ?? readRolloutTranscript(sql, runId, nodeId);
 }
 
 /** A row either store can be walked by: both key their parent the same way. */
@@ -138,6 +147,7 @@ function readHeadTranscript(
   sql: SqlExecutor,
   runId: string,
   nodeId: string,
+  request: PageRequest,
 ): NodeTranscriptView | null {
   const journal = new HeadJournal(sql);
   // The run's head rows carry the parent chain; the trace is its own read. Three
@@ -151,6 +161,7 @@ function readHeadTranscript(
   if (!head) return null;
 
   const path = ancestorCrumbs(row, rows, (head) => head.task);
+  const counted = journal.countSteps(nodeId);
 
   return {
     origin: 'head',
@@ -163,7 +174,9 @@ function readHeadTranscript(
     lastStepAt: head.lastStepAt,
     wallClockMs: head.wallClockMs,
     usage: head.usage,
-    steps: journal.readSteps(nodeId),
+    steps: journal.readStepsPage(nodeId, request),
+    stepCount: counted.steps,
+    toolCount: counted.toolCalls,
     answer: head.summary,
     decisions: head.decisions,
     errorMessage: head.errorMessage,
@@ -199,7 +212,9 @@ function readRolloutTranscript(
     // keeps no per-node column, so this branch cannot report tokens. Absent, not
     // zero: the rollout was not free.
     usage: {},
-    steps: [],
+    steps: { status: 'end', items: [] },
+    stepCount: 0,
+    toolCount: 0,
     answer: node.observation.trim() ? node.observation : null,
     decisions: [],
     errorMessage: null,

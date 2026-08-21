@@ -33,7 +33,7 @@ import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { hasComparableTakes } from "@/components/alternate-takes-logic";
 import { classifyProgrammaticTurn, messageSignalId } from "@/components/background-event";
 import { WorkSurface, type SurfaceKind } from "@/components/surfaces/WorkSurface";
-import { KinuMark } from "@/components/surfaces/shared";
+import { HistoryBoundary, KinuMark } from "@/components/surfaces/shared";
 import { SupervisePage } from "./SupervisePage";
 import { SubordinateTabs } from "@/components/SubordinateTabs";
 import { WorkspaceBar, type Altitude } from "@/components/WorkspaceBar";
@@ -106,46 +106,6 @@ export function ConversationSkeleton() {
           </div>
         </div>
       ))}
-    </div>
-  );
-}
-
-/**
- * The top of the transcript: what is above the oldest message on screen.
- *
- * Four distinct answers, never collapsed into silence. "Failed" in particular
- * has to be its own state — rendering nothing there would tell the reader they
- * had reached the beginning of a conversation the pane simply could not fetch.
- *
- * All four are the same height, including the idle one. This row sits directly
- * above the prepend, so a row that changes size as it changes state moves the
- * transcript under the reader by the difference — measured at 15px per page
- * before it was pinned, which is small, constant, and accumulates once per
- * page for as long as someone keeps scrolling.
- */
-export function HistoryBoundary({ loading, error, exhausted, onRetry }: {
-  loading: boolean;
-  error: string | null;
-  exhausted: boolean;
-  onRetry: () => void;
-}) {
-  return (
-    <div className="flex h-7 items-center justify-center gap-2 text-xs">
-      {error ? (
-        <>
-          <WarningCircleIcon size={13} className="p-danger shrink-0" />
-          <span className="p-text-3">Could not load earlier messages.</span>
-          <button onClick={onRetry} className="p-accent hover:underline">Retry</button>
-        </>
-      ) : loading ? (
-        <span className="flex items-center gap-2 p-text-3"><Loader size="sm" />Loading earlier messages…</span>
-      ) : exhausted ? (
-        <>
-          <span className="h-px flex-1 p-border border-t" />
-          <span className="p-text-3 text-[11px]">Beginning of the conversation</span>
-          <span className="h-px flex-1 p-border border-t" />
-        </>
-      ) : null}
     </div>
   );
 }
