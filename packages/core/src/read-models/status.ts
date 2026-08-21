@@ -61,6 +61,12 @@ export interface ChatHistoryEntry {
    * rather than over the socket, this is the only place those markers can come
    * from. Dropping them is why a fork-interrupted notice kept its card while it
    * was live and lost it the moment the operator scrolled back to it.
+   *
+   * The field's one reader is the served transcript: `getChatHistoryPage`
+   * feeds `mergeTranscript`, and the pane classifies the restored half from
+   * it. The CLI reads stored rows only to rebuild the model's context, and
+   * there the markers ride the row's own text, so it has no reader for this
+   * field. That asymmetry is declared here on purpose, not omitted.
    */
   metadata?: JsonObject;
 }
