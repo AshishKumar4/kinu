@@ -38,6 +38,7 @@ import {
 import { contextWindowForModel } from '../context-window';
 import { clampSerializedToolResult, clampToolResult } from '../tools/clamp';
 import { applyFileEdits, readFileSlice } from '../tools/file-edit';
+import { withMountTable } from '../vfs/mounts';
 import { classifyTurnFailure, planOverflowRecovery } from '../turn-failure';
 import {
   buildCompactionSummaryPrompt,
@@ -161,6 +162,7 @@ export interface PipelineSubjects {
   // ── file plane ──
   readonly applyFileEdits: typeof applyFileEdits;
   readonly readFileSlice: typeof readFileSlice;
+  readonly withMountTable: typeof withMountTable;
 
   // ── execution signal ──
   readonly devicePresence: typeof devicePresence;
@@ -241,6 +243,7 @@ export const SUBJECT_SOURCE = {
 
   applyFileEdits: 'tools/file-edit.ts',
   readFileSlice: 'tools/file-edit.ts',
+  withMountTable: 'vfs/mounts.ts',
 
   devicePresence: 'execution/device-status.ts',
   deviceChangeNotice: 'execution/device-status.ts',
@@ -322,6 +325,7 @@ export function createPipelineSubjects(rt: AgentRuntime): PipelineSubjects {
 
     applyFileEdits,
     readFileSlice,
+    withMountTable,
 
     devicePresence,
     deviceChangeNotice,

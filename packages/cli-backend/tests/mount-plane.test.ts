@@ -1,14 +1,17 @@
-// The local backend's environments. There is no mount table any more: the
-// workspace has its own durable filesystem, and the machine the CLI runs on is
-// the `laptop` EXECUTOR, reached through its own namespace in the machine's own
-// absolute paths. The property this suite has always protected — that the
-// agent can actually reach the host's files, and that they are not silently
-// confused with its own — survives the change and is what is asserted here.
+// The local backend's environments, and the mount table that joins them into
+// one view. The workspace keeps its own durable filesystem; the machine the
+// CLI runs on is the `laptop` EXECUTOR, whose files ALSO appear in the
+// workspace plane at `/pc` (vfs/mounts.ts). The property this suite has always
+// protected — that the agent can actually reach the host's files, and that
+// they are never silently confused with its own — survives as: host files
+// under the mount point, workspace bytes canonical, no container locally.
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createCLIRuntime } from '../src/runtime';
+import { walkRecursive } from '@kinu.run/agent-utils/vfs';
+import { isVfsError } from '@kinu.run/core';
 import { scratchDir, scratchPath } from '@kinu.run/test-utils';
 
 function freshRuntime() {
@@ -19,15 +22,12 @@ function freshRuntime() {
   });
 }
 
-describe('the local backend’s environments', () => {
-  test('the workspace and the machine are separate filesystems', () => {
+describe('the local backend file plane', () => {
+  test('the workspace and the machine stay separate executors with different bytes', () => {
     const rt = freshRuntime();
     const names = rt.executionRouter!.listExecutors().map((e) => e.name).sort();
     expect(names).toEqual(['laptop', 'workspace']);
 
-    // Both carry a file view, and they are different objects addressing
-    // different bytes — which is what stops a host path from being confused
-    // with a workspace path.
     const workspace = rt.executionRouter!.getProvider('workspace')!.files;
     const laptop = rt.executionRouter!.getProvider('laptop')!.files;
     expect(workspace).toBeDefined();
@@ -35,40 +35,49 @@ describe('the local backend’s environments', () => {
     expect(workspace).not.toBe(laptop);
   });
 
-  test('the laptop executor reads and writes the real host filesystem', async () => {
-    const laptop = freshRuntime().executionRouter!.getProvider('laptop')!.files!;
+  test('/pc serves the real host filesystem inside the agent own plane', async () => {
+    const rt = freshRuntime();
     const dir = scratchDir('mount-plane-host');
     writeFileSync(join(dir, 'existing.txt'), 'from the host');
+    const mounted = rt.storage.vfs;
 
-    // The machine's OWN absolute paths — no prefix to add or strip.
-    expect(await laptop.readFile(join(dir, 'existing.txt'), { encoding: 'utf8' }))
+    // The machine's own absolute path, whole, under the mount point.
+    expect(await mounted.readFile(`/pc${join(dir, 'existing.txt')}`, { encoding: 'utf8' }))
       .toBe('from the host');
-    expect(await laptop.readdir(dir)).toEqual(['existing.txt']);
+    expect(await mounted.readdir(`/pc${dir}`)).toEqual(['existing.txt']);
 
-    await laptop.mkdir(join(dir, 'nested'), { recursive: true });
-    await laptop.writeFile(join(dir, 'nested', 'written.txt'), 'from the agent');
-    expect(readFileSync(join(dir, 'nested', 'written.txt'), 'utf8')).toBe('from the agent');
+    // A walk crosses the mount boundary and reports the machine's entries.
+    const walk = await walkRecursive(mounted, `/pc${dir}`, 10, 100);
+    expect(walk.truncated).toBe(false);
+    expect(walk.entries.map((e) => e.path)).toEqual([`/pc${dir}/existing.txt`]);
 
-    const stat = await laptop.stat(join(dir, 'nested'));
-    expect(stat?.isDir).toBe(true);
-    // Core VFS contract: a missing path stats as null rather than throwing.
-    expect(await laptop.stat(join(dir, 'absent'))).toBeNull();
-
-    await laptop.unlink(join(dir, 'existing.txt'));
-    expect(await laptop.exists(join(dir, 'existing.txt'))).toBe(false);
+    // Writes through the plane land on the machine.
+    await mounted.writeFile(`/pc${dir}/written.txt`, 'from the agent');
+    expect(readFileSync(join(dir, 'written.txt'), 'utf8')).toBe('from the agent');
   });
 
-  test("the workspace filesystem is the agent's own, not the host's", async () => {
+  test('/sandbox states its absence: no container binding exists locally', async () => {
+    const mounted = freshRuntime().storage.vfs;
+
+    let error: unknown;
+    try { await mounted.readdir('/sandbox'); } catch (caught) { error = caught; }
+    if (!isVfsError(error)) throw new Error(`expected a classified refusal, got ${String(error)}`);
+    expect(error.code).toBe('ENXIO');
+    expect(error.message).toContain('/sandbox — no Sandbox container bound');
+    expect(await mounted.exists('/sandbox/workspace')).toBe(false);
+    expect(await mounted.stat('/sandbox')).toBeNull();
+  });
+
+  test('the workspace tree stays canonical: host paths name nothing in it', async () => {
     const rt = freshRuntime();
     const dir = scratchDir('mount-plane-host');
     writeFileSync(join(dir, 'host-only.txt'), 'on the machine');
+    const mounted = rt.storage.vfs;
 
-    // A host path names nothing in the workspace: they are separate
-    // filesystems, and the agent is told so rather than silently served the
-    // wrong bytes.
-    expect(await rt.storage.vfs.exists(join(dir, 'host-only.txt'))).toBe(false);
+    // A host path outside the mount point names nothing in the workspace.
+    expect(await mounted.exists(join(dir, 'host-only.txt'))).toBe(false);
 
-    await rt.storage.vfs.writeFile('notes.md', 'in the workspace');
-    expect(await rt.storage.vfs.readFile('notes.md', { encoding: 'utf8' })).toBe('in the workspace');
+    await mounted.writeFile('notes.md', 'in the workspace');
+    expect(await mounted.readFile('notes.md', { encoding: 'utf8' })).toBe('in the workspace');
   });
 });

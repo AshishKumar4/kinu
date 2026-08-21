@@ -109,7 +109,7 @@ describe('tunneled laptop capability row', () => {
     // And none may be reported ABSENT either. The row that replaced this one
     // simply omitted them, which reads to the model exactly like a denial: it
     // would never try python on a machine that may well have python.
-    expect(runs).toBe('- laptop: connected — runs: native_binary, shell, fs_owned, net_outbound, process_spawn');
+    expect(runs).toBe('- laptop: connected — files at /pc — runs: native_binary, shell, fs_owned, net_outbound, process_spawn');
     expect(notMeasured).toBe('javascript, typescript, python, npm, git, docker, gpu');
   });
 
@@ -121,7 +121,7 @@ describe('tunneled laptop capability row', () => {
     const line = runsLine(createDeviceTunnelExecutor(probedDevice(['node', 'python3'])));
 
     expect(line).toBe(
-      '- laptop: connected — runs: javascript, python, native_binary, shell, fs_owned, net_outbound, process_spawn'
+      '- laptop: connected — files at /pc — runs: javascript, python, native_binary, shell, fs_owned, net_outbound, process_spawn'
       + ' — not measured here: docker, gpu',
     );
   });

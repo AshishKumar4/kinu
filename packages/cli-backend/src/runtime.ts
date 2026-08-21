@@ -22,6 +22,7 @@ import {
   createParentExecutor, createParentWorkspaceVfs,
   type ParentWorkspaceHandle, type ParentRpcWrite, type ParentRpcResult,
   DefaultExecutionRouter, createInlineExecutor, formatExecResult,
+  withMountTable, standardMounts,
   withApprovalGatedShell,
   selectFastModel, createAgentConfigStore, initAgentConfigTable, initActorTables,
   type ModelCallSink, type NodeHomeHost,
@@ -476,6 +477,13 @@ export function createCLIRuntime(
   // not spend a snapshot on a command that never ran.
   const shell: Shell = withApprovalGatedShell(workspace.shell, approvalPolicy);
   const executionRouter = new DefaultExecutionRouter(approvalPolicy);
+  // The agent's ONE file plane: the workspace tree extended by the mount
+  // table — /pc for the host machine (this backend's device is the process's
+  // own host), /sandbox absent because no container binding exists locally —
+  // resolved live off this router at every call. The `file` tool and
+  // `workspace.*` take this same object below; memory indexing keeps the base
+  // tree, because the FTS index must never ingest a user's whole machine.
+  const agentVfs = withMountTable(vfs, standardMounts((name) => executionRouter.getProvider(name)));
   // Every executor registered below runs its commands in THIS process's
   // container, so each carries its measured cgroup limits — the truth `nproc`
   // cannot tell the model. Null off a cgroup, and then nothing is claimed.
@@ -484,7 +492,7 @@ export function createCLIRuntime(
   // tool's score prior and writes the misevolution veto trail through it, and
   // listTools quotes real EMA scores from it.
   const inlineOptions: Parameters<typeof createInlineExecutor>[0] = {
-    vfs, memory, craftStore, shell, sql,
+    vfs: agentVfs, memory, craftStore, shell, sql,
     ledger: () => turnFileLedgerProvider?.(),
     toolchain: workspaceToolchainCapabilities(WORKSPACE_RUNTIMES),
   };
@@ -502,7 +510,7 @@ export function createCLIRuntime(
   // channel `buildRuntime` has no slot for is added to the same object every
   // other seam already holds a reference to.
   return Object.assign(buildRuntime({
-    sql, execRaw, vfs, llm, executor: createSandboxedExecutor(), schedule,
+    sql, execRaw, vfs: agentVfs, llm, executor: createSandboxedExecutor(), schedule,
     agentId, agentName, memory, craftStore, judgeModel, fastLlm, advisorLlm,
     spawnBranch: spawn, abortBranch: abort,
     // A CLI branch is a forked child process with its own SQLite FILE, not a
@@ -636,10 +644,13 @@ export function buildCLIHeadRuntime(
   // reach the machine at the parent's cwd. This is the fork's real execution.
   const laptop = parent.executionRouter?.getProvider('laptop');
   if (laptop) executionRouter.register(laptop);
+  // The head's plane carries the same mount table as its parent's — the
+  // inherited `laptop` provider is what /pc resolves to here.
+  const agentVfs = withMountTable(vfs, standardMounts((name) => executionRouter.getProvider(name)));
   const checkpoints = parent.checkpoints;
 
   const runtimeOptions: Parameters<typeof buildRuntime>[0] = {
-    sql, execRaw, vfs, llm: parent.llm, executor: parent.executor, schedule: parent.schedule,
+    sql, execRaw, vfs: agentVfs, llm: parent.llm, executor: parent.executor, schedule: parent.schedule,
     agentId: opts.agentId, agentName: opts.agentName, memory, craftStore, judgeModel: parent.judgeModel,
     // A CLI fork is a child of the same workspace, so it inherits the reviewer
     // the parent built, exactly as it inherits the judge.

@@ -564,7 +564,7 @@ export const BUILTIN_TOOL_SPECS = {
     // stable anchor: the same canonical bytes as `file` and `run` workspace.
     doctrine:
       'workspace.* is the agent\'s canonical durable workspace: the same files addressed by the `file` tool and `run` with runtime "workspace". '
-      + 'A separate container or machine remains a separate filesystem in its own paths; address it through its listed runtime.',
+      + 'A separate container or machine keeps its commands behind its own runtime; when live, its files also sit in the workspace plane at /pc or /sandbox.',
     result: 'Returns whatever the code returns, as a structured result, or a structured error.',
     example: "execute_tools({code:\"const files = await workspace.readdir('reports'); return files.slice(0, 5)\"})",
   },
@@ -592,9 +592,9 @@ export const BUILTIN_TOOL_SPECS = {
   // they mirror (workspace.readFile / writeFile), so there is one vocabulary.
   file: {
     name: 'file',
-    summary: 'Read files, replace exact text inside them, and create them in the agent\'s canonical workspace filesystem.',
+    summary: 'Read files, replace exact text inside them, and create them in the agent\'s canonical workspace filesystem — including its mounts: a connected device\'s files at /pc, a bound container\'s at /sandbox.',
     whenToUse:
-      'Every canonical workspace file you read or change; use a separate environment\'s namespace for files on that environment. '
+      'Every canonical workspace file you read or change; mounted machine files under /pc or /sandbox when live (a namespace call is the alternative for commands there). '
       + 'read pages through a large file with offset/limit. '
       + 'edit replaces old_text with new_text: copy old_text exactly as the read showed it, with enough surrounding lines that it occurs once, and put several changes to one file in one call. '
       + 'write creates a file, or replaces one whole.',

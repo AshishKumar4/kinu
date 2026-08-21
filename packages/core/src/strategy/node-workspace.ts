@@ -119,8 +119,9 @@ export interface NodeHomeHost {
  * The real provisioner: a private home and a private `/tmp` per node.
  *
  * Synchronous underneath and `async` only to satisfy the seam — every substrate
- * call here returns `void`, which is the same fact that makes `/pc` and
- * `/sandbox` executors rather than mounts.
+ * call here returns `void`. The workspace plane's mount table (`vfs/mounts.ts`)
+ * is the file-plane counterpart of that fact: it routes reads and writes, while
+ * anything needing a synchronous substrate call goes through an executor.
  *
  * The host may arrive as a promise, because a filesystem that lives in this
  * isolate BOOTS: a caller that had to resolve the three members up front would

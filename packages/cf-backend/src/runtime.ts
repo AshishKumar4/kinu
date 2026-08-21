@@ -30,6 +30,7 @@ import {
   observeWrites,
   type WorkspaceVFS,
   DefaultExecutionRouter, createNimbusWorkspaceExecutor,
+  withMountTable, standardMounts,
   withApprovalGatedShell, createInheritedApprovalPolicy,
   type ShellApprovalPolicy, type ShellApprovalMode, type ApprovalGrant,
   type EgressSecretBinding,
@@ -430,12 +431,20 @@ export function createCFRuntime(
   // Gated at the Shell object, so what it wraps is transparent to the seam.
   const shell = withApprovalGatedShell(nimbusSessionShell(workspaceBox), approvalPolicy);
   const executionRouter: ExecutionRouter = new DefaultExecutionRouter(approvalPolicy);
+  // The agent's ONE file plane: the workspace tree extended by the mount
+  // table — /pc for a connected device, /sandbox for the bound container —
+  // resolved live off this router at every call. The `file` tool and
+  // `workspace.*` reach foreign machines through this same object (both take
+  // it below); memory indexing and identity provisioning above deliberately
+  // keep the base tree, because services that index or provision workspace
+  // bytes must never cross into a user's device or a container.
+  const agentVfs = withMountTable(vfs, standardMounts((name) => executionRouter.getProvider(name)));
   executionRouter.register(createNimbusWorkspaceExecutor({
     box: workspaceBox,
     runtimeCatalog: env.NIMBUS_RUNTIME_CACHE != null,
     inboundNetwork: nimbusPreviewConfigured(env),
     inline: {
-      vfs, memory, craftStore, shell,
+      vfs: agentVfs, memory, craftStore, shell,
       // sql is used by workspace.listTools() to look up EMA craft_scores.
       sql,
       // Optional eager notification; PreambleCraftedExecutor live-reads CraftStore.
@@ -574,7 +583,7 @@ export function createCFRuntime(
   }));
 
   return {
-    storage: { vfs, sql, execRaw },
+    storage: { vfs: agentVfs, sql, execRaw },
     memory, executor, llm, schedule, identity, craftStore,
     judgeModel: createJudgeLLM(agent, env, actor, sql, hooks.reportModelCall),
     fastLlm: createFastLLM(agent, env, actor, sql, hooks.reportModelCall),

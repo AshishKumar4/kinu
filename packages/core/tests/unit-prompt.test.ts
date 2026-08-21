@@ -587,9 +587,13 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toContain('sandbox.*');
     expect(prompt).toMatch(/Showing a running app/);
     expect(prompt).toMatch(/exposePort/);
-    // With ≥2 executors, warn they're disjoint filesystems (the documented
-    // "wrote in the sandbox, read an empty workspace" confusion).
-    expect(prompt).toMatch(/separate filesystems/i);
+    // With ≥2 executors, state the mount doctrine: separate machines, whose
+    // live files also appear in the agent's own plane at /pc and /sandbox —
+    // and the shell limit that keeps commands routed by namespace.
+    expect(prompt).toMatch(/separate machines/i);
+    expect(prompt).toContain('/pc');
+    expect(prompt).toContain('/sandbox');
+    expect(prompt).toMatch(/cannot see mount points/);
   });
 
   test('teaches the preview workflow for the executor that actually exposes inbound ports', () => {
@@ -606,11 +610,14 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).not.toContain('sandbox.exposePort(port)');
   });
 
-  test('every runtime is its own filesystem, on every backend', () => {
+  test('every runtime is its own machine, on every backend, with mounts named', () => {
     // This used to be a backend conditional: on cli-local the workspace and
     // laptop executors shared one host shell, so "separate filesystems" was
     // false there. The workspace is its own durable filesystem on both
     // backends now, so the fact is unconditional and the exception is gone.
+    // The mount doctrine rides beside it: a live machine's files also appear
+    // in the agent's own plane at /pc (and /sandbox where a container binds),
+    // while the shell stays over workspace bytes only.
     const { rt } = createTestRuntime();
     const executors = [
       { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
@@ -618,8 +625,10 @@ describe('buildSystemPromptSync', () => {
     ];
     for (const backend of ['cli-local', 'cf'] as const) {
       const prompt = buildSystemPromptSync(rt, { backend, executors });
-      expect(prompt).toMatch(/separate filesystems/i);
+      expect(prompt).toMatch(/separate machines/i);
       expect(prompt).not.toContain('the same machine and see the same files');
+      expect(prompt).toContain('/pc');
+      expect(prompt).toMatch(/cannot see mount points/);
     }
   });
 
@@ -756,8 +765,13 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).not.toContain('`nimbus.*`');
     expect(prompt).toContain('`laptop.*`');
     expect(prompt).not.toContain('Nimbus for quick cloud execution');
-    expect(prompt).toContain('THEIR native paths');
-    expect(prompt).not.toContain('mount table');
+    expect(prompt).toMatch(/paths native to each machine/);
+    // The mount doctrine is part of the naming now: a live machine's files sit
+    // in the agent's own plane at /pc or /sandbox, and the shell's limit — it
+    // cannot see mount points — is stated beside them.
+    expect(prompt).toContain('/pc');
+    expect(prompt).toContain('/sandbox');
+    expect(prompt).toMatch(/cannot see mount points/);
   });
 
   test('the doctrine follows the executor list, not the backend', () => {
@@ -1078,23 +1092,17 @@ describe('buildSystemPromptSync', () => {
       // other tool's is, so none of it lands in this section.
       'Tools available this turn': 2350,
       // +2 lines of file doctrine: the workspace filesystem is named by where
-      // it is, and every other environment is a separate machine in its own
-      // native paths — stated once here for all of them, which is why the
-      // per-executor lines never repeat it — deliberate (2026-07).
-      // 2026-08-16: RE-PINNED 2450 → 2700 for TWO additions, measured 2657.
-      //   +374 — the workspace line carries the Worker isolate's ~128 MB
-      //     ceiling and the sandbox line the work that belongs there. A clone
-      //     that died on that ceiling was retried three ways instead of moved,
-      //     and neither flag it tried could have helped: Nimbus already
-      //     defaults --depth to 1, and its bundled git has no blob:none.
-      //   +472 — the Approvals block, which REPLACES a ~222-token paragraph
-      //     that was repeated on every parked tool call; stated once here, the
-      //     per-call result is 31 tokens.
-      // The margin is 43 chars, not the ~10% this table opens with. That note
-      // dates from when sections were rewritten wholesale; 2450 sat 638 chars
-      // above the measured section and would have passed both of these unread,
-      // which is the one thing this gate exists to stop.
-      'Execution environments': 2700,
+      // it is, and every other environment is a separate machine whose commands
+      // stay behind its own namespace — stated once here for all of them.
+      // 2026-08-16: RE-PINNED 2450 → 2700 for TWO additions, measured 2657
+      // (+374 the Worker isolate ceiling and sandbox work doctrine; +472 the
+      // Approvals block replacing a per-call paragraph).
+      // 2026-08-21: RAISED 2700 → 3100 for the mount doctrine, measured 3051.
+      //   +351 — the separate-machines paragraph now states the mount table
+      //     (/pc, /sandbox) with the shell limit that keeps commands routed by
+      //     namespace, and the hasDevices block maps a mounted native path.
+      //     The owner's ruling made the mounts product surface (#36/#142/#143).
+      'Execution environments': 3100,
       'Persistence': 700,
       // 2026-08: −1 line. `execute_tools runs JavaScript against the active
       // executor/codemode namespaces` was the tool's own summary, restated.
