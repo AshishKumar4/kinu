@@ -8,8 +8,8 @@ shell, execution environments, sessions and memory that it keeps.
 ```bash
 curl -fsSL 'https://kinu.run/install.sh' | bash
 kinu setup
-kinu create jarvis --mode cloud --alias jarvis --purpose "A helpful coding assistant"
-jarvis "what changed in this repo?"
+kinu create triage --mode cloud
+kinu run triage "find the slowest query"
 ```
 
 The installer works on macOS and Linux, adds `~/.kinu/bin` to your PATH when

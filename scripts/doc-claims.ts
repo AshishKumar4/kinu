@@ -423,14 +423,15 @@ const ENUMERATIONS: readonly Enumeration[] = [
     reason: 'Every token the `preset` field accepts, `custom` included.',
   },
   {
-    nouns: ['named presets'],
+    nouns: ['named presets', 'named searches'],
     owner: undefined,
     declares: 'packages/core/src/strategy/swarm.ts:NAMED_SWARM_PRESETS',
     members: NAMED_SWARM_PRESETS.length,
     reason: 'Everything `from` may point at. `custom` is excluded because a'
       + ' composition cannot be seeded from "no preset is the base", and the'
       + ' one-off-by-one between these two registers is the defect that put "seven'
-      + ' named presets" into three documents.',
+      + ' named presets" into three documents. "Named searches" is the phrase the'
+      + ' landing and README stat bands use for the same six.',
   },
 ];
 
