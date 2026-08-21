@@ -62,6 +62,7 @@ import {
   type ReleaseSource,
   type ReleaseSourceInput,
   CODEX_CRED_KEY,
+  CodexOAuthTokenError,
   createCodexOAuthClient,
   decodeCodexAccountId,
   tokensToCredential,
@@ -1634,6 +1635,7 @@ export class UserDO extends Agent<Env> {
       const needRefresh = opts?.forceRefresh || accessTokenExpiring(cred.accessToken);
       if (needRefresh) {
         const refreshed = await this.refreshCodexInternal({ ...cred, refreshToken });
+        if (refreshed === 'revoked') return null;
         if (refreshed) cred = refreshed;
         // If refresh failed we keep using the old (possibly-expired) creds —
         // the caller may still succeed, and if not it gets 401 and a clear
@@ -1791,7 +1793,14 @@ export class UserDO extends Agent<Env> {
     }
   }
 
-  private async refreshCodexInternal(current: OAuthCredential & { refreshToken: string }): Promise<OAuthCredential | null> {
+  /** Returns the rotated credential, `'revoked'` when OpenAI rejected the
+   *  refresh token outright (`invalid_grant`), or null on transient failure
+   *  (the current credential stays in place). On `invalid_grant` the whole
+   *  row is deleted — nothing but model calls reads it, unlike the Cloudflare
+   *  credential whose token still serves the management APIs — so the
+   *  credential stops counting as connected and the connect CTA resurfaces,
+   *  instead of advertising a provider whose every call would 401. */
+  private async refreshCodexInternal(current: OAuthCredential & { refreshToken: string }): Promise<OAuthCredential | 'revoked' | null> {
     const client = createCodexOAuthClient();
     try {
       const fresh = await client.refresh(current.refreshToken);
@@ -1805,6 +1814,15 @@ export class UserDO extends Agent<Env> {
       await this.writeCredential(CODEX_CRED_KEY, next);
       return next;
     } catch (err) {
+      if (err instanceof CodexOAuthTokenError && err.oauthError === 'invalid_grant') {
+        diagnostics.failure('credential.codex_refresh_revoked', toKinuError({
+          doing: 'refreshing the Codex credential',
+          cause: err,
+          otherwise: 'denied',
+        }));
+        this.sqlx(`DELETE FROM user_credentials WHERE key = ?`, CODEX_CRED_KEY);
+        return 'revoked';
+      }
       diagnostics.failure('credential.codex_refresh_failed', toKinuError({
         doing: 'refreshing the Codex credential',
         cause: err,
