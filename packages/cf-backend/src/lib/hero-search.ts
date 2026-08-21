@@ -80,8 +80,9 @@ interface Building {
 }
 
 /** mulberry32. Small, seedable, and good enough that the tree has no visible
- *  period — the same generator the gallery fixtures use. */
-function rng(seed: number): () => number {
+ *  period — the same generator the gallery fixtures use. Exported for the
+ *  hero's other seeded picture, the silk field in `hero-weave.ts`. */
+export function rng(seed: number): () => number {
   let a = seed >>> 0;
   return () => {
     a = (a + 0x6D2B79F5) >>> 0;
