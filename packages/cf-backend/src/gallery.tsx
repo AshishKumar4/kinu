@@ -120,7 +120,14 @@ const SQUARE_BUTTON_PROPS = { ["sha" + "pe"]: squareButtonVariant };
 
 const NOW = Date.now();
 const STUB_DATA = v.parse(JsonObjectSchema, {
-  "/api/user/profile": { email: "ashish@example.com", createdAt: NOW - 90 * 864e5, lastSeenAt: NOW },
+  // Every field the CLIENT's own parse requires, `displayName` included. It was
+  // absent, `UserProfileSchema` refused the body, and the sidebar rendered
+  // "Profile unavailable" in every capture anyone took of this gallery — a
+  // fixture that type-checks can still fail the schema it is read through.
+  "/api/user/profile": {
+    email: "ashish@example.com", displayName: "Ashish",
+    createdAt: NOW - 90 * 864e5, lastSeenAt: NOW,
+  },
   // The registry answers { entries, total }, the envelope `listWorkspaces`
   // validates; a bare array parses as nothing and HomePage photographs its
   // "couldn't load" state into every screenshot taken of this gallery.
