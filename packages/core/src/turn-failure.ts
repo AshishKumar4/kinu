@@ -18,8 +18,13 @@
  * problem, whatever the provider called it.
  */
 
-/** Closed classification of a failed turn's provider error. */
-export type TurnFailureClass = 'context_length' | 'rate_limit' | 'transient';
+/** Closed classification of a failed turn's provider error.
+ *
+ *  `auth` is a credential the provider refused — revoked, expired, or never
+ *  connected. It is not `transient`: retrying without re-authenticating can
+ *  only fail again, so nothing may read it as a blip worth another turn. The
+ *  remedy is the re-auth path the error text names. */
+export type TurnFailureClass = 'context_length' | 'rate_limit' | 'auth' | 'transient';
 
 /** Marker metadata value stamped on the ONE enqueued retry turn — a retry
  *  turn that fails again never enqueues another (never loop). */
@@ -50,6 +55,20 @@ const RATE_LIMIT_PATTERNS: readonly RegExp[] = [
   /quota exceeded/i,
 ];
 
+
+/** A credential the provider refused: the HTTP status, the OAuth rejection
+ *  code, the upstream plain text, or the remedy sentence our own wire layer
+ *  answers with. Kept in step with the texts `cloudflare-ai-fetch.ts` and
+ *  `providers/codex.ts` emit. */
+const AUTH_PATTERNS: readonly RegExp[] = [
+  /\b401\b/,
+  /unauthorized/i,
+  /invalid[ _-]?grant/i,
+  /invalid[ _-]?(api[ _-]?)?key/i,
+  /login is no longer valid/i,
+  /(api[ _]?key|credential|token)[^.\n]*(invalid|expired|revoked|not configured)/i,
+];
+
 export interface TurnFailureSignals {
   /** The last provider-reported PER-REQUEST prompt size of the failed turn
    *  (TurnAccumulator.lastPromptTokens) — NOT the turn's cumulative input. */
@@ -69,6 +88,7 @@ export function classifyTurnFailure(error: string, signals: TurnFailureSignals =
       lastPromptTokens > contextWindow * 0.5;
     return oversized ? 'context_length' : 'rate_limit';
   }
+  if (AUTH_PATTERNS.some((re) => re.test(error))) return 'auth';
   return 'transient';
 }
 
