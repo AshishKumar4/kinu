@@ -29,7 +29,7 @@ import {
 import type { UIMessage } from "ai";
 import type { HeadStep, HeadStepToolCall, NodeTranscriptView } from "@kinu.run/core";
 import { usageTotal } from "@kinu.run/core";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
 import { MessageView } from "@/components/MessageView";
 import { DetailSection, EmptyState, HistoryBoundary, MarkdownContent, Metric, timeAgo } from "@/components/surfaces/shared";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -465,8 +465,15 @@ export function useNodeTranscript({ runId, nodeId, rpc, headActivity, running = 
           error: null,
         }));
       } catch (error) {
-        if (walkRef.current !== at) return;
-        setWalk((prev) => ({ ...prev, loading: false, error: renderThrownChain({ cause: error }) }));
+        // One name for every failure of this walk — a reader who moved on
+        // mid-read owns neither the page nor the error, so the failure is
+        // named with its chain either way, and only the walk that still owns
+        // this subject also shows it.
+        diagnostics.event('transcript.older_page_abandoned',
+          { subject: at, error: renderThrownChain({ cause: error }) });
+        if (walkRef.current === at) {
+          setWalk((prev) => ({ ...prev, loading: false, error: renderThrownChain({ cause: error }) }));
+        }
       } finally {
         inFlight.current = false;
       }
