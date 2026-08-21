@@ -13,6 +13,7 @@ import { noReflectApplyRule } from "./rules/no-reflect-apply.ts";
 import { noReflectGetRule } from "./rules/no-reflect-get.ts";
 import { noRuntimeTypeofRule } from "./rules/no-runtime-typeof.ts";
 import { noSentinelCatchRule } from "./rules/no-sentinel-catch.ts";
+import { noUnaccountedCatchRule } from "./rules/no-unaccounted-catch.ts";
 import { noForbiddenTermInSymbolNamesRule } from "./rules/no-shape-in-symbol-names.ts";
 import { noUntypedConsoleRule } from "./rules/no-untyped-console.ts";
 import { noUnknownParametersRule } from "./rules/no-unknown-parameters.ts";
@@ -47,6 +48,7 @@ const antiSlopPlugin = eslintCompatPlugin({
 		"no-reflect-get": noReflectGetRule,
 		"no-runtime-typeof": noRuntimeTypeofRule,
 		"no-sentinel-catch": noSentinelCatchRule,
+		"no-unaccounted-catch": noUnaccountedCatchRule,
 		"no-unsafe-dictionary-type": noUnsafeDictionaryTypeRule,
 		"no-shape-in-symbol-names": noForbiddenTermInSymbolNamesRule,
 		"no-unknown-parameters": noUnknownParametersRule,
