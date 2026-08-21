@@ -21,7 +21,7 @@ import { withRateLimitRetry } from './rate-limit-retry';
 import { authCacheKey, cloneModelInfos, nonEmptyString, positiveInteger } from './util';
 import * as v from 'valibot';
 import { JsonArraySchema, JsonObjectSchema, JsonValueSchema, type JsonValue } from '../utils/json';
-import { diagnostics, KinuError } from '../obs/index';
+import { classify, diagnostics, KinuError, renderThrownChain } from '../obs/index';
 
 export const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex';
 export const CODEX_CRED_KEY = 'codex.oauth';
@@ -79,7 +79,8 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
         if (models.length === 0) return cloneModelInfos(FALLBACK_MODELS);
         modelCache = { at: Date.now(), authKey, models };
         return cloneModelInfos(models);
-      } catch {
+      } catch (error) {
+        diagnostics.event('codex.models_fallback', { error: renderThrownChain({ cause: error }) });
         return cloneModelInfos(FALLBACK_MODELS);
       }
     },
@@ -207,7 +208,8 @@ function normalizeCodexResponsesRequest(init: RequestInit | undefined): RequestI
   let decoded: JsonValue;
   try {
     decoded = v.parse(JsonValueSchema, JSON.parse(serializedBody.output));
-  } catch {
+  } catch (error) {
+    if (classify({ cause: error }) !== 'malformed-input') throw error;
     return init;
   }
   const parsedBody = v.safeParse(JsonObjectSchema, decoded);

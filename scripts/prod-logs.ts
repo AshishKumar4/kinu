@@ -105,7 +105,8 @@ async function live(args: Args): Promise<void> {
       let raw: unknown;
       try {
         raw = JSON.parse(line);
-      } catch {
+      } catch (error) {
+        if (!(error instanceof SyntaxError)) throw error; // JSON.parse's only throw
         continue; // a split frame; the remainder arrives with the next chunk
       }
       const event = v.safeParse(TailEventSchema, raw);

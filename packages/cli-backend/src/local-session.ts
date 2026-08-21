@@ -2125,7 +2125,8 @@ export class LocalAgentSession implements BackendHost {
   private agentName(): string {
     try {
       return this.rt.storage.sql<{ name: string }>`SELECT name FROM workspace_identity LIMIT 1`[0]?.name ?? 'local';
-    } catch {
+    } catch (error) {
+      diagnostics.event('local_session.agent_name_unreadable', { error: renderThrownChain({ cause: error }) });
       return 'local';
     }
   }
@@ -2150,7 +2151,8 @@ export class LocalAgentSession implements BackendHost {
     try {
       const { provider, modelId } = parseModelSpec(spec);
       return { providerId: provider, modelId, sessionKey, retention };
-    } catch {
+    } catch (error) {
+      diagnostics.event('local_session.model_spec_unparseable', { error: renderThrownChain({ cause: error }) });
       return { sessionKey, retention };
     }
   }

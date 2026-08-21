@@ -29,6 +29,7 @@ import { listAvailableModels } from './available-models';
 import { json } from '../lib/http';
 import { ownerCaller } from './workspace-capability';
 import { USER_AI_PROXY_PATH } from '@kinu.run/core';
+import { classify } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 const PROXY_PLACEHOLDER = 'https://kinu-user-ai-proxy.invalid';
@@ -66,7 +67,8 @@ async function proxyChatCompletion(request: Request, env: Env, userDO: DurableOb
   let model: string;
   try {
     model = v.parse(ChatCompletionRouteSchema, JSON.parse(body)).model;
-  } catch {
+  } catch (error) {
+    if (classify({ cause: error }) !== 'malformed-input') throw error;
     return errorResponse(400, 'Body must be JSON with a non-empty model.');
   }
   const workersAI = model.startsWith('@cf/');

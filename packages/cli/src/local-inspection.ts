@@ -81,6 +81,7 @@ import {
   type SeekCursor,
   type WorkspaceSpend,
 } from '@kinu.run/core';
+import { classify } from '@kinu.run/core/obs';
 import {
   makeSql, makeSqlExec, createHostShell, hostToolchainCapabilities,
   type LocalModelResolver,
@@ -934,7 +935,8 @@ function parseJson(value: string | null): JsonValue {
   if (value == null) return null;
   try {
     return parseJsonValue(value);
-  } catch {
+  } catch (error) {
+    if (classify({ cause: error }) !== 'malformed-input') throw error;
     return value;
   }
 }

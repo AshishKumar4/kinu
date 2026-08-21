@@ -166,8 +166,11 @@ export function auditPage(): PageAudit {
       let matched: Element[];
       try {
         matched = [...document.querySelectorAll(rule.selectorText)];
-      } catch {
-        continue; // `::-webkit-…`, `:has()` variants Chrome will not query
+      } catch (error) {
+        // `::-webkit-…`, `:has()` variants Chrome will not query — a selector
+        // Chrome parses but refuses to query is a DOMException named SyntaxError.
+        if (!(error instanceof DOMException && error.name === 'SyntaxError')) throw error;
+        continue;
       }
       if (matched.length === 0) continue;
 

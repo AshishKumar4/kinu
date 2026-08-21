@@ -135,14 +135,15 @@ describe('serializeJobResult', () => {
     expect(serializeJobResult(undefined)).toBe('null');
   });
 
-  test('non-serializable success (BigInt) is String()-coerced, never thrown', () => {
+  test('non-serializable success (BigInt) degrades to a named reason, never thrown', () => {
     // A backgrounded execute_tools can resolve a BigInt — JSON.stringify throws
-    // on it; the helper must degrade to a string so settle() still records it.
-    expect(serializeJobResult(10n)).toBe('10');
+    // on it; the helper must degrade to a string that says so and carries the
+    // thrown reason, so settle() still records it.
+    expect(serializeJobResult(10n)).toMatch(/^unserializable job result: /);
     interface CircularValue { self?: CircularValue }
     const circular: CircularValue = {};
     circular.self = circular;
-    expect(serializeJobResult(circular)).toBe('[object Object]');
+    expect(serializeJobResult(circular)).toMatch(/^unserializable job result: /);
   });
 
   test('an oversize result is stored whole — the wake message promises the full result', () => {

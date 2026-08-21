@@ -1384,7 +1384,8 @@ function errorMessage<ErrorValue>(err: ErrorValue): string {
   if (err instanceof Error && err.message) return renderThrownChain({ cause: err });
   const text = v.safeParse(v.string(), err);
   if (text.success && text.output.trim()) return text.output;
-  try { return JSON.stringify(err) || "unknown error"; } catch { return "unknown error"; }
+  try { return JSON.stringify(err) || "unknown error"; }
+  catch (error) { return `unrenderable error: ${renderThrownChain({ cause: error })}`; }
 }
 
 function formatNaturalList(values: readonly string[]): string {

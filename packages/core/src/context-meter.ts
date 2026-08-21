@@ -29,6 +29,7 @@
 import type { ModelMessage, SystemModelMessage } from 'ai';
 import * as v from 'valibot';
 import { CHARS_PER_TOKEN } from './llm';
+import { diagnostics, renderThrownChain } from './obs/index';
 import { DYNAMIC_CONTEXT_OPEN_TAG, splitPromptSections } from './prompting/sections';
 
 /** The four planes that fill a request. Kept coarse on purpose: these are the
@@ -102,8 +103,8 @@ function toolChars(name: string, def: { description?: string; inputSchema?: unkn
   let schema = 0;
   try {
     schema = def.inputSchema === undefined ? 0 : (JSON.stringify(def.inputSchema)?.length ?? 0);
-  } catch {
-    schema = 0;
+  } catch (error) {
+    diagnostics.event('context_meter.schema_unmeasurable', { error: renderThrownChain({ cause: error }) });
   }
   return name.length + (def.description?.length ?? 0) + schema;
 }

@@ -20,7 +20,7 @@ import { nanoid } from '../utils/nanoid';
 import type { WorkMode } from '../prompting/surface';
 import * as v from 'valibot';
 import { parseJsonValue, type JsonValue } from '../utils/json';
-import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
+import { classify, diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 import { TURN_WALL_CLOCK_ENVELOPE_MS } from '../config';
 
 /** The terminal error a non-recoverable job records when it is interrupted by a
@@ -511,7 +511,10 @@ export class BackgroundJobRunner {
     let input: JsonValue = null;
     if (raw !== null) {
       try { input = parseJsonValue(raw); }
-      catch { input = raw; }
+      catch (error) {
+        if (classify({ cause: error }) !== 'malformed-input') throw error;
+        input = raw;
+      }
     }
     try {
       return { ok: true, value: await harvest(job.kind, input) };
@@ -850,7 +853,10 @@ export class BackgroundJobRunner {
     let input: JsonValue = null;
     if (rawInput !== null) {
       try { input = parseJsonValue(rawInput); }
-      catch { input = rawInput; }
+      catch (error) {
+        if (classify({ cause: error }) !== 'malformed-input') throw error;
+        input = rawInput;
+      }
     }
     this.runToSettlement(job.id, job.kind, () => this.deps.resume!(job.kind, input, job.workMode, controller.signal));
   }

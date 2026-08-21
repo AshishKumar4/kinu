@@ -209,7 +209,10 @@ function createCheckpoints(opts = {}) {
     // process's and user's scratch, none of it this agent's to copy.
     if (abs === path.parse(abs).root || abs === path.resolve(os.homedir())) return true;
     if (UNSNAPSHOTTABLE.has(abs)) return true;
-    try { return !fs.statSync(abs).isDirectory(); } catch { return true; }
+    // Dependency-free spelling of the closed set: a vanished path is the one
+    // expected statSync failure here; anything else must surface.
+    try { return !fs.statSync(abs).isDirectory(); }
+    catch (err) { if (!err || err.code !== 'ENOENT') throw err; return true; }
   };
 
   const storeRefs = (gitDir, workdir) => {
@@ -415,7 +418,7 @@ function createCheckpoints(opts = {}) {
       const abs = path.resolve(p);
       let candidate = abs;
       try { if (!fs.statSync(abs).isDirectory()) candidate = path.dirname(abs); }
-      catch { candidate = path.dirname(abs); }
+      catch (err) { if (!err || err.code !== 'ENOENT') throw err; candidate = path.dirname(abs); }
       const home = path.resolve(os.homedir());
       let probeDir = candidate;
       while (probeDir !== path.dirname(probeDir) && probeDir !== home) {

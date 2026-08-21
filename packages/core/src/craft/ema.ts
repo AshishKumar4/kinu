@@ -9,6 +9,7 @@
 import type { SqlExecutor } from '../types/primitives';
 import { DEFAULT_CONFIG } from '../config';
 import { nowMs } from '../utils/date';
+import { classify } from '../obs/index';
 
 const MS_PER_DAY = 86_400_000;
 
@@ -54,7 +55,8 @@ export function filterByEffectiveScore<T extends { name: string }>(
   try {
     rows = sql<{ tool_name: string; score: number; last_used_at: number }>`
       SELECT tool_name, score, last_used_at FROM craft_scores`;
-  } catch {
+  } catch (error) {
+    if (classify({ cause: error }) !== 'sqlite-missing-table') throw error;
     return [...tools];
   }
   const scores = new Map(rows.map((r) => [r.tool_name, r]));

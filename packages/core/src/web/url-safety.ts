@@ -127,7 +127,10 @@ export function isSafeUrl(url: string): boolean {
 function safeDecode(s: string): string {
   try {
     return decodeURIComponent(s);
-  } catch {
+  } catch (error) {
+    // decodeURIComponent fails only on a malformed escape — expected here, and
+    // unnamed by classify's closed set, so the expected failure is named locally.
+    if (!(error instanceof URIError)) throw error;
     return s;
   }
 }

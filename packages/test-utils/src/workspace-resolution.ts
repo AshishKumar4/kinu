@@ -75,8 +75,8 @@ export function assertWorkspaceResolution(from: string): void {
     let resolved: string;
     try {
       resolved = realpathSync(Bun.resolveSync(name, from));
-    } catch {
-      problems.push(`  ${name}\n    does not resolve at all from ${from}`);
+    } catch (error) {
+      problems.push(`  ${name}\n    does not resolve at all from ${from} (${String(error)})`);
       continue;
     }
     const expected = realpathSync(dir) + sep;

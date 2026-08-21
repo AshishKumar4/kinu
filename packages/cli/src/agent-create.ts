@@ -13,6 +13,7 @@ import {
   type SuggestedWorkspaceIdentity,
 } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/identity';
+import { diagnostics, renderThrownChain } from '@kinu.run/core/obs';
 import { makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
 import {
   agentDbPath,
@@ -84,7 +85,8 @@ export async function suggestAgentIdentityFromMission(
       : await generateTitleJson(mission, opts);
     const title = parseWorkspaceTitle(raw);
     return title ? { ...fallback, displayName: title } : fallback;
-  } catch {
+  } catch (error) {
+    diagnostics.event('agent.title_fallback', { error: renderThrownChain({ cause: error }) });
     return fallback;
   }
 }

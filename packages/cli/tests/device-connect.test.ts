@@ -105,7 +105,11 @@ function connectedDevice(connected: boolean): CloudDevice {
 async function waitForPidExit(pid: number, timeoutMs = 3_000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    try { process.kill(pid, 0); } catch { return true; }
+    // ESRCH is kill(2)'s "no such process" — the exit this loop waits for.
+    try { process.kill(pid, 0); } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'ESRCH')) throw error;
+      return true;
+    }
     await Bun.sleep(25);
   }
   return false;

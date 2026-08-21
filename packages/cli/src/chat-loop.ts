@@ -329,8 +329,11 @@ function ask(rl: readline.Interface, prompt: string, signal?: AbortSignal, prefi
     try {
       rl.question(prompt, settle);
       if (prefill) rl.write(prefill);
-    } catch {
-      settle(null); // readline already closed (stdin hit EOF) — treat as EOF
+    } catch (error) {
+      // Readline closed under us (stdin hit EOF) — settle as EOF. The reason goes
+      // to stderr so stdout keeps carrying only the conversation.
+      process.stderr.write(`note: readline closed before the prompt: ${renderThrownChain({ cause: error })}\n`);
+      settle(null);
     }
   });
 }

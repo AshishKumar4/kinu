@@ -16,6 +16,7 @@
 import { reconcileColumns } from '../identity/columns';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { WorkMode } from '../prompting/surface';
+import { renderThrownChain } from '../obs/index';
 
 export type BackgroundJobStatus = 'running' | 'completed' | 'failed' | 'cancelled';
 
@@ -87,7 +88,10 @@ function toJob(r: Row): BackgroundJob {
  *  string input. Both are model-authored payloads, bounded far below the row
  *  ceiling by the tool-result clamp and provider output limits. */
 export function serializeJobResult<Result>(result: Result): string {
-  try { return JSON.stringify(result ?? null); } catch { return String(result); }
+  try { return JSON.stringify(result ?? null); }
+  catch (error) {
+    return `unserializable job result: ${renderThrownChain({ cause: error })}`;
+  }
 }
 
 export function initBackgroundJobsTable(execRaw: RawSqlExec, sql: SqlExecutor): void {

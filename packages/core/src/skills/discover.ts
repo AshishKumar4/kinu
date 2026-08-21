@@ -4,13 +4,12 @@
  * same name (the operator and the agent can override us).
  *
  * Malformed files are skipped with a warning so one broken skill doesn't
- * stop the rest from loading.
  */
+import { classify, diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 
 import { parseSkillFile } from './parse';
 import { BUILTIN_SKILLS } from './builtins';
 import { SKILLS_DIR, type ParsedSkill } from './types';
-import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 
 /** Minimal VFS shape — duck-typed against any file view. */
 export interface SkillsVfs {
@@ -46,7 +45,8 @@ export async function discoverSkills(
   let entries: string[] = [];
   try {
     if (vfs.readdir) entries = await vfs.readdir(dir);
-  } catch {
+  } catch (error) {
+    if (classify({ cause: error }) !== 'enoent') throw error;
     // No directory yet — return just built-ins.
     return Array.from(byName.values());
   }

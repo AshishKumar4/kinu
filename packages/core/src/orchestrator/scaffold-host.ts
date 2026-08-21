@@ -24,6 +24,7 @@ import { evidenceWindow } from '../prompts/evidence-window';
 import type { ModelCallSpend } from '../events/model-call';
 import { normalizeUsage } from '../usage';
 import { decodeJsonValue } from '../utils/json';
+import { renderThrownChain } from '../obs/index';
 import type {
   ScaffoldHistoryEntry,
   ScaffoldHistoryPage,
@@ -31,7 +32,6 @@ import type {
   ScaffoldHistoryReader,
   ScaffoldRunOptions,
 } from '../scaffold/executor';
-import { renderThrownChain } from '../obs/index';
 
 export type {
   ScaffoldHistoryEntry,
@@ -128,8 +128,10 @@ function renderMessage(message: ModelMessage): string {
 function safeJson<Value>(value: Value): string {
   try {
     return JSON.stringify(value) ?? 'null';
-  } catch {
-    return String(value);
+  } catch (error) {
+    // The clamp precedent: `String()` on a cyclic object is "[object Object]" — the one
+    // string that carries nothing at all — so the reason takes its place.
+    return `unserializable host history part: ${renderThrownChain({ cause: error })}`;
   }
 }
 

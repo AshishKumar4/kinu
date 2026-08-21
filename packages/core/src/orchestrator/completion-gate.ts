@@ -42,6 +42,7 @@ import type { VFS } from '../types/primitives';
 import type { ExecOutcome } from '../execution/exec-result';
 import { formatExecResult } from '../execution/exec-result';
 import { clampToolResult } from '../tools/clamp';
+import { diagnostics, renderThrownChain } from '../obs/index';
 
 /** `kinuEvent` on the turn the gate enqueues — its provenance in the run
  *  log, and how the turn pump recognises the confirming turn as its own. */
@@ -88,7 +89,12 @@ export async function observeCompletionState(deps: {
     let outcome: ExecOutcome;
     try {
       outcome = await deps.exec(command);
-    } catch {
+    } catch (error) {
+      // A probe that cannot run is expected (the shell may lack the binary); the skip is
+      // still named, so a gate that saw nothing never reads as a gate that never looked.
+      diagnostics.event('completion.probe_skipped', {
+        command, error: renderThrownChain({ cause: error }),
+      });
       continue;
     }
     if (command.startsWith('git ') && (outcome.exitCode ?? 0) !== 0) continue;

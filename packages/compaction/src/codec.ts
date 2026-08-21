@@ -37,6 +37,7 @@ import {
   userModelMessageSchema,
 } from 'ai';
 import { fnv1a64 } from '@kinu.run/core';
+import { renderThrownChain } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import {
   assistantRunsStage,
@@ -543,8 +544,10 @@ function reasoningText<Handle>(handle: Handle): string {
 function jsonLength<Value>(value: Value): number {
   try {
     return JSON.stringify(value, binaryReplacer)?.length ?? 0;
-  } catch {
-    return String(value).length;
+  } catch (error) {
+    // A value stringify cannot render degrades downstream to exactly this
+    // marker-prefixed string, so its length is the honest estimate.
+    return `${renderThrownChain({ cause: error })}: ${String(value)}`.length;
   }
 }
 
@@ -592,8 +595,8 @@ function previewJson<Value>(value: Value): string {
       isString(value) ? value : JSON.stringify(value, binaryReplacer),
       TRANSCRIPT_PREVIEW_CHARS,
     );
-  } catch {
-    return truncate(String(value), TRANSCRIPT_PREVIEW_CHARS);
+  } catch (error) {
+    return truncate(`unserializable turn part: ${renderThrownChain({ cause: error })}`, TRANSCRIPT_PREVIEW_CHARS);
   }
 }
 

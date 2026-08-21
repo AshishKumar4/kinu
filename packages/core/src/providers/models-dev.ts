@@ -4,6 +4,7 @@ import type {
 import * as v from 'valibot';
 import { MODEL_INPUT_MODALITIES } from './types';
 import { cloneModelInfos, nonEmptyString, positiveInteger } from './util';
+import { diagnostics, renderThrownChain } from '../obs/index';
 
 const MODELS_DEV_URL = 'https://models.dev/api.json';
 const DEFAULT_TTL_MS = 5 * 60_000;
@@ -122,7 +123,8 @@ export async function listModelsDevProviderModels(
     }
     if (out.length === 0) return cloneModelInfos(opts.fallback);
     return orderModels(out, opts.preferredIds);
-  } catch {
+  } catch (error) {
+    diagnostics.event('models_dev.catalog_fallback', { error: renderThrownChain({ cause: error }) });
     return cloneModelInfos(opts.fallback);
   }
 }

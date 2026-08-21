@@ -22,7 +22,7 @@ import { handleUserAIProxyRequest } from '../user/ai-proxy';
 import { USER_AI_PROXY_FORWARD_PREFIX, handleUserProviderProxyRequest } from '../user/provider-proxy';
 import { OwnerCapabilityUnavailableError, ownerCaller } from '../user/workspace-capability';
 import * as v from 'valibot';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { classify, renderThrownChain } from '@kinu.run/core/obs';
 
 const OptionalLabelSchema = v.object({ label: v.optional(v.string()) });
 const WebhookRequestSchema = v.object({
@@ -439,7 +439,10 @@ async function approveFromBrowser(request: Request, env: Env): Promise<Response>
   }
   let form: FormData;
   try { form = await request.formData(); }
-  catch { return html('Kinu CLI Auth', '<p>Invalid approval form.</p>', 400); }
+  catch (error) {
+    if (classify({ cause: error }) !== 'malformed-input') throw error;
+    return html('Kinu CLI Auth', '<p>Invalid approval form.</p>', 400);
+  }
   const code = String(form.get('userCode') ?? '');
   const csrf = String(form.get('csrf') ?? '');
   const cookieCsrf = readCookie(request, 'kinu_cli_auth_csrf');

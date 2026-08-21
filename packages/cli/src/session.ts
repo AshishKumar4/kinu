@@ -10,6 +10,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import { basename, join, resolve } from 'node:path';
 import { JsonValueSchema, parseJsonValue, type JsonObject, type JsonValue } from '@kinu.run/core';
+import { classify } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { AGENT_HOME } from './config';
 import type { AgentTranscriptMessage } from './agent-client';
@@ -289,7 +290,10 @@ function readSessionRaw(path: string): ParsedSession {
   for (const line of content.split('\n')) {
     if (!line.trim()) continue;
     let decoded: JsonValue;
-    try { decoded = parseJsonValue(line); } catch { continue; }
+    try { decoded = parseJsonValue(line); } catch (error) {
+      if (classify({ cause: error }) !== 'malformed-input') throw error;
+      continue;
+    }
     const parsedHeader = v.safeParse(CliSessionHeaderSchema, decoded);
     if (parsedHeader.success) {
       header = parsedHeader.output;

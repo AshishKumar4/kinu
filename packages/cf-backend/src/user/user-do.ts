@@ -1046,9 +1046,10 @@ export class UserDO extends Agent<Env> {
         scope: DEVICE_CONSENT_SCOPE,
       };
       decision = await stub.awaitDeviceConsent(request);
-    } catch {
+    } catch (error) {
       // The agent could not be reached to raise the card at all — nobody was
       // asked, so this is the unanswered case, not a refusal.
+      diagnostics.event('device.consent_unreachable', { error: renderThrownChain({ cause: error }) });
       return { allowed: false, reason: DEVICE_CONSENT_UNANSWERED };
     }
     // Only "always" is remembered; "once", "deny" and "timeout" are per-call.

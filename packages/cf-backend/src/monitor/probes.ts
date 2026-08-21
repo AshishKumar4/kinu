@@ -104,8 +104,8 @@ async function probeHealth(deps: ProbeDeps): Promise<ProbeOutcome> {
   let body: object;
   try {
     body = v.parse(v.looseObject({}), await response.json());
-  } catch {
-    return fail('GET /api/health did not return JSON — the SPA fallback is answering an API route');
+  } catch (error) {
+    return fail(`GET /api/health did not return JSON (${renderThrownChain({ cause: error })}) — the SPA fallback is answering an API route`);
   }
   if (!v.is(HealthBodySchema, body)) {
     return fail('GET /api/health reports the worker as not ok');

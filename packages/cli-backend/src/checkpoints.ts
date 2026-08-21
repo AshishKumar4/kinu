@@ -372,7 +372,8 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
       let candidate = abs;
       try {
         if (!statSync(abs).isDirectory()) candidate = dirname(abs);
-      } catch {
+      } catch (error) {
+        if (classify({ cause: error }) !== 'enoent') throw error;
         candidate = dirname(abs);
       }
       const home = resolve(homedir());

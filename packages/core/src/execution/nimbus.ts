@@ -237,7 +237,7 @@ function stringifyResult(input: { value: unknown }): string {
   const text = v.safeParse(v.string(), input.value);
   if (text.success) return text.output;
   if (input.value == null) return '';
-  try { return JSON.stringify(input.value, null, 2); } catch { return String(input.value); }
+  try { return JSON.stringify(input.value, null, 2); } catch (error) { return `unserializable process result: ${renderThrownChain({ cause: error })}`; }
 }
 
 /**

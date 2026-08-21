@@ -27,6 +27,7 @@
  */
 
 import type { AssistantModelMessage, ModelMessage, ToolModelMessage, ToolResultPart } from 'ai';
+import { renderThrownChain } from '../obs/index';
 
 /** Prune once the estimated step context exceeds this share of the window. */
 export const STEP_CONTEXT_BUDGET_RATIO = 0.7;
@@ -209,8 +210,8 @@ function estimateMessageTokens(message: ModelMessage): number {
 function safeStringify<Value>(value: Value): string {
   try {
     return JSON.stringify(value, binaryReplacer) ?? '';
-  } catch {
-    return String(value);
+  } catch (error) {
+    return `unserializable step part: ${renderThrownChain({ cause: error })}`;
   }
 }
 

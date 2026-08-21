@@ -41,7 +41,7 @@ import { JsonObjectSchema, type JsonObject } from './utils/json';
 import { normalizeUsage, usageReported, type Usage } from './usage';
 import { providerPacer, type ProviderPacer } from './providers/pacing';
 import { PROVIDER_SDK_RETRIES, PROVIDER_WAIT_BUDGET_MS } from './providers/rate-limit-retry';
-import { diagnostics, KinuError } from './obs/index';
+import { diagnostics, KinuError, renderThrownChain } from './obs/index';
 
 export type ChatEvent =
   | { type: 'text-delta'; delta: string }
@@ -698,5 +698,8 @@ function renderToolResult<T>(raw: T): string {
   const text = v.safeParse(v.string(), raw);
   if (text.success) return text.output;
   if (raw == null) return '';
-  try { return JSON.stringify(raw) ?? String(raw); } catch { return String(raw); }
+  try { return JSON.stringify(raw) ?? String(raw); }
+  catch (error) {
+    return `unserializable value: ${renderThrownChain({ cause: error })}`;
+  }
 }

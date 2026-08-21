@@ -17,6 +17,7 @@ import type { BackgroundJobStore } from '../jobs/store';
 import type { SqlExecutor } from '../types/primitives';
 import type { Usage } from '../usage';
 import { parseJsonValue, type JsonValue } from '../utils/json';
+import { classify } from '../obs/index';
 
 export type TimelineKind =
   | 'llm-turn' | 'tool-call' | 'runtime-exec' | 'mcts' | 'scaffold' | 'shadow-eval'
@@ -41,7 +42,11 @@ export interface TimelineSpan {
 }
 
 export function safeJsonParse(s: string): JsonValue {
-  try { return parseJsonValue(s); } catch { return s; }
+  try { return parseJsonValue(s); }
+  catch (error) {
+    if (classify({ cause: error }) !== 'malformed-input') throw error;
+    return s;
+  }
 }
 
 /** Map a crafted/builtin tool name to a timeline kind. `think` is the

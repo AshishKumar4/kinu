@@ -186,7 +186,7 @@ import {
   TURN_AUTHOR_METADATA_KEY,
 } from "@kinu.run/core";
 import type { CodemodeProvider, MctsSearchRunSummary } from "@kinu.run/core";
-import { diagnostics, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
+import { classify, diagnostics, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import { deliverCloudFork } from "./user/workspace-fork";
 import { createNimbusWorkspaceSandbox, nimbusWorkspaceArchiveFiles } from './nimbus-route';
@@ -465,7 +465,10 @@ export class OrchestratorAgent extends ActorAgent {
   /** Display name for outbound email From headers — never throws pre-schema. */
   private safeDisplayName(): string {
     try { return this.config.getDisplayName() ?? this.name; }
-    catch { return this.name; }
+    catch (error) {
+      diagnostics.event('orchestrator.display_name_unreadable', { error: renderThrownChain({ cause: error }) });
+      return this.name;
+    }
   }
 
   // ── Peer transport endpoint (agent teams) ────────────────────────────────
@@ -2492,7 +2495,10 @@ export class OrchestratorAgent extends ActorAgent {
         SELECT candidate_id, instance_id, score FROM gepa_pareto_membership WHERE run_id = ${runId}`
         .map((r) => ({ candidateId: r.candidate_id, instanceId: r.instance_id, score: r.score }));
       return { run, candidates, pareto };
-    } catch { return { run: null, candidates: [], pareto: [] }; }
+    } catch (error) {
+      if (classify({ cause: error }) !== 'sqlite-missing-table') throw error;
+      return { run: null, candidates: [], pareto: [] };
+    }
   }
 
   /**
@@ -2964,7 +2970,8 @@ export class OrchestratorAgent extends ActorAgent {
     const self = { name: this.name, displayName: this.getDisplayName() };
     try {
       return buildWorkspaceAgents(self, this.subordinateRoster.list());
-    } catch {
+    } catch (error) {
+      diagnostics.event('orchestrator.roster_unreadable', { error: renderThrownChain({ cause: error }) });
       return buildWorkspaceAgents(self, []);
     }
   }

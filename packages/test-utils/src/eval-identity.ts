@@ -33,6 +33,7 @@
  * without a network.
  */
 import { USER_AI_PROXY_PATH } from '@kinu.run/core';
+import { classify } from '@kinu.run/core/obs';
 import { LIVE_MODEL_ENV } from './ambient-env';
 
 /** The three variables that decide identity and target. One object so a failure
@@ -125,11 +126,11 @@ export function evalTargetVerdict(origin: string, env: EnvSource = process.env):
   let hostname: string;
   try {
     hostname = new URL(normalized).hostname;
-  } catch {
+  } catch (error) {
     return {
       kind: 'refused',
       origin: normalized,
-      reason: `${normalized} is not a URL, so no host can be checked against the eval allowlist`,
+      reason: `${normalized} is not a URL (${String(error)}), so no host can be checked against the eval allowlist`,
     };
   }
 
@@ -191,9 +192,10 @@ export function evalModelEndpointVerdict(
   let url: URL;
   try {
     url = new URL(baseUrl.trim());
-  } catch {
+  } catch (error) {
     // Not a URL, so it names no deployment and reaches nothing. The provider
     // stack refuses it on the first call.
+    if (classify({ cause: error }) !== 'malformed-input') throw error;
     return { kind: 'gateway' };
   }
 

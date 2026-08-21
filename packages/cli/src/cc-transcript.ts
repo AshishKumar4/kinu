@@ -43,7 +43,7 @@ import {
   JsonArraySchema, JsonObjectSchema, JsonValueSchema, parseJsonValue,
   type CorpusTurn, type JsonObject, type JsonValue, type ToolCallRecord,
 } from '@kinu.run/core';
-import { tolerate } from '@kinu.run/core/obs';
+import { classify, tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 /** Where Claude Code keeps them. */
@@ -325,7 +325,8 @@ function livePath(lines: ReadonlyArray<string>, skips: MineSkips, versions: Set<
     let parsed: JsonValue;
     try {
       parsed = parseJsonValue(line);
-    } catch {
+    } catch (error) {
+      if (classify({ cause: error }) !== 'malformed-input') throw error;
       skips.unparsableLines++;
       continue;
     }
@@ -384,7 +385,9 @@ function mineSession(
   let lines: string[];
   try {
     lines = readFileSync(file, 'utf8').split('\n');
-  } catch {
+  } catch (error) {
+    // A session listed moments ago can be gone before it is read.
+    if (classify({ cause: error }) !== 'enoent') throw error;
     skips.emptyFiles++;
     return [];
   }
