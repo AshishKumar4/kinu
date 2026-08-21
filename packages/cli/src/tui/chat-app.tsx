@@ -521,7 +521,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
         turnStreamedTextRef.current = false;
         setTurnPhase(event.kind === 'programmatic' ? 'running background work' : 'thinking');
         if (event.kind === 'programmatic') {
-          addMessage({ role: 'evolution', content: `⚡ ${event.event ?? 'event'}: ${event.text.slice(0, 100)}` });
+          addMessage({ role: 'evolution', content: `» ${event.event ?? 'event'}: ${event.text.slice(0, 100)}` });
         }
         break;
       }
@@ -855,12 +855,12 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
           backgroundColor: tuiColors.panelStrong,
           paddingLeft: 1,
         }}
-        title={isProcessing ? '⟳ processing… · Enter steers · Tab queues · Ctrl+B branches · Esc interrupts' : modelPicker ? 'Model picker' : changelogView ? 'Changelog ›' : takesView ? 'Takes ›' : inputState.walkbackOpen ? 'Walk back ›' : sessionPicker ? 'Resume ›' : `${client.agentName} · ${activeSessionId.slice(0, 18)} · Ctrl+P model ›`}
+        title={isProcessing ? '⟳ processing…' : modelPicker ? 'Model picker' : changelogView ? 'Changelog ›' : takesView ? 'Takes ›' : inputState.walkbackOpen ? 'Walk back ›' : sessionPicker ? 'Resume ›' : `${client.agentName} · ${activeSessionId.slice(0, 18)} · Ctrl+P model ›`}
       >
         <textarea
           ref={(value) => { inputRef.current = value; }}
           focused={inputFocused}
-          placeholder={!ready ? 'Connecting…' : isProcessing ? 'Type to steer the running turn… (Tab queues · Ctrl+B branches)' : modelPicker ? 'Select a model or Esc' : changelogView ? 'Enter reverts the selected line · Esc keeps everything' : takesView ? 'Enter uses the selected take · Esc keeps the answer' : inputState.walkbackOpen ? 'Pick a message to walk back to, or Esc' : sessionPicker ? 'Type session number/id or /cancel' : 'Type a message or /help · Shift+Enter for a new line'}
+          placeholder={!ready ? 'Connecting…' : isProcessing ? 'Type to steer · Enter delivers mid-turn · Tab queues · Ctrl+B branches · Esc interrupts' : modelPicker ? 'Select a model or Esc' : changelogView ? 'Enter reverts the selected line · Esc keeps everything' : takesView ? 'Enter uses the selected take · Esc keeps the answer' : inputState.walkbackOpen ? 'Pick a message to walk back to, or Esc' : sessionPicker ? 'Type session number/id or /cancel' : 'Type a message or /help · Shift+Enter for a new line'}
           wrapMode="word"
           keyBindings={[
             { name: 'return', action: 'submit' },
