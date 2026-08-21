@@ -38,7 +38,7 @@ import {
   type AgentsToolAction,
 } from './registry';
 import { SwarmConfigSchema, SwarmObjectiveSchema } from './swarm-input';
-import { resolveSwarm, swarmValidity, NAMED_SWARM_PRESETS, SWARM_PRESETS } from '../strategy/swarm';
+import { type SwarmInput, resolveSwarm, swarmValidity, NAMED_SWARM_PRESETS, SWARM_PRESETS } from '../strategy/swarm';
 import { runSwarm, type SwarmRunDeps } from '../strategy/swarm-run';
 import type { NodeLoopHost } from '../strategy/node-agent';
 import type { NamedSwarmPreset, SwarmConfig, SwarmPreset } from '../strategy/swarm';
@@ -923,15 +923,21 @@ async function runSwarmAction(
     return badInput('swarm needs `task` — what the search is for, in prose. The measured '
       + 'quantity goes in `objective`, never here.');
   }
-  const call = { preset: input.preset, task: input.task };
-  if (input.objective) Object.assign(call, { objective: input.objective });
-  if (input.key) Object.assign(call, { key: input.key });
-  if (input.config) Object.assign(call, { config: input.config });
-  if (input.from) Object.assign(call, { from: input.from });
-  if (input.label) Object.assign(call, { label: input.label });
-  if (input.branches !== undefined) Object.assign(call, { branches: input.branches });
-  if (input.depth !== undefined) Object.assign(call, { depth: input.depth });
-  if (input.name !== undefined) Object.assign(call, { name: input.name });
+  // One typed literal, not an Object.assign chain: every field is checked
+  // against SwarmInput where the assign form checked nothing, and every
+  // field is SUPPLIED where a conditional spread reads as absent.
+  const call: SwarmInput = {
+    preset: input.preset,
+    task: input.task,
+    objective: input.objective,
+    key: input.key,
+    config: input.config,
+    from: input.from,
+    label: input.label,
+    branches: input.branches,
+    depth: input.depth,
+    name: input.name,
+  };
 
   // Resolution first, per *Presets* — *Validity over the resolved configuration* is
   // stated over the resolved tuple and has no input without it.
