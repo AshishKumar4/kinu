@@ -4,8 +4,9 @@
 import { describe, test, expect } from 'bun:test';
 import type { ForkNode } from '../src/lib/protocol';
 import {
-  ancestorIds, cleanNodeLabel, clipToWidth, findForkNode, linkWidth, losingBranchIds, maxVisits,
+  ancestorIds, cleanNodeLabel, clipToWidth, findForkNode, LABEL_MIN_SCALE, linkWidth, losingBranchIds, maxVisits,
   NODE_R_MAX, NODE_R_MIN, nodeRadius, principalVariation, subtreeCount, terminalForkNode, treeStats,
+  viewNoteFor,
 } from '../src/components/swarm-tree-model';
 
 let seq = 0;
@@ -241,4 +242,31 @@ describe('labels', () => {
     expect(clipToWidth('WWWWWW', 45, wide)).toBe('WW…');
     expect(clipToWidth('iiiiii', 45, wide)).toBe('iiiiii');
   });
+});
+
+// ── viewNoteFor ─────────────────────────────────────────────────────────────
+// A canvas that crops or de-labels itself without a word is how a narrow
+// viewport reads as a broken picture (#206). The note names the two states
+// that silently lose information: below the label-legibility zoom, and wider
+// than the view. Legible AND fitting says nothing.
+
+describe('viewNoteFor', () => {
+	const BAND = { x0: 0, x1: 946 };
+
+	test('a legible tree that fits says nothing', () => {
+		expect(viewNoteFor(BAND, 1, 1200)).toBeNull();
+		expect(viewNoteFor(BAND, LABEL_MIN_SCALE, 1200)).toBeNull();
+	});
+
+	test('below the legibility zoom it says so, even when everything fits', () => {
+		expect(viewNoteFor(BAND, 0.4, 1200)).toBe('too small to label · zoom in to read');
+	});
+
+	test('a tree wider than the view points at the pan, even while legible', () => {
+		expect(viewNoteFor(BAND, 1, 600)).toBe('deeper columns continue right · drag to pan');
+	});
+
+	test('both losses name both facts in one line', () => {
+		expect(viewNoteFor(BAND, 0.4, 300)).toBe('too small to label · deeper columns pan right');
+	});
 });

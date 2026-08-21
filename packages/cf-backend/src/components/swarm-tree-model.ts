@@ -237,3 +237,37 @@ export function nodeRadius(visits: number | null, max: number): number {
 export function linkWidth(visits: number | null, max: number): number {
 	return sqrtScale(visits ?? 0, max, LINK_W_MIN, LINK_W_MAX);
 }
+
+/**
+ * Below this zoom a label is under ~8px on screen — noise, not text.
+ *
+ * Lives beside {@link viewNoteFor} because both are the same decision — when
+ * has the view stopped carrying labels? — read at two layers: the renderer
+ * hides them here, and the canvas says so out loud there.
+ */
+export const LABEL_MIN_SCALE = 0.72;
+
+/**
+ * What a cropped or de-labelled view owes the reader: one line that says so,
+ * instead of a silent crop (#206).
+ *
+ * Two facts are lost without a word today. Under {@link LABEL_MIN_SCALE} every
+ * label is hidden by the level-of-detail switch, so the reader sees dots with
+ * no names and no reason why. And a tree wider than the view continues past
+ * the right edge — depth is pannable by design (fitting the bounding box was
+ * measured and rejected; see the fit comment in the component) — but a column
+ * scrolled off is indistinguishable from a column that does not exist. Legible
+ * AND fitting says nothing: an honest canvas is quiet when nothing is lost.
+ */
+export function viewNoteFor(
+	band: { x0: number; x1: number },
+	k: number,
+	availW: number,
+): string | null {
+	const illegible = k < LABEL_MIN_SCALE;
+	const tooWide = (band.x1 - band.x0) * k > availW;
+	if (illegible && tooWide) return "too small to label · deeper columns pan right";
+	if (illegible) return "too small to label · zoom in to read";
+	if (tooWide) return "deeper columns continue right · drag to pan";
+	return null;
+}
