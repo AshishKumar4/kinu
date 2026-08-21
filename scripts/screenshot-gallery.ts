@@ -27,13 +27,40 @@ const REPO = join(import.meta.dir, '..');
 const args = process.argv.slice(2);
 const outIndex = args.indexOf('--out');
 const outDir = outIndex === -1 ? join(REPO, 'docs', 'screenshots', 'gallery') : args[outIndex + 1]!;
-const frames = args.filter((a, i) => !a.startsWith('--') && i !== outIndex + 1 && args[i - 1] !== '--palette');
+const frames = args.filter((a, i) => !a.startsWith('--') && i !== outIndex + 1
+  && args[i - 1] !== '--palette' && args[i - 1] !== '--widths');
 if (frames.length === 0) frames.push('views');
-/** Both widths unless `--desktop`: a three-column shell and a phone are
- *  different designs, and only one of them is ever looked at by default. */
-const WIDTHS = args.includes('--desktop')
-  ? ([{ name: 'desktop', width: 1280, height: 1100 }] as const)
-  : ([{ name: 'desktop', width: 1280, height: 1100 }, { name: 'mobile', width: 390, height: 844 }] as const);
+/**
+ * The widths a frame may be photographed at, by the number a reader would ask
+ * for. Each carries the viewport HEIGHT its width is read at; the shot itself
+ * is full-page, so the height only decides what counts as one screen.
+ */
+const NAMED_WIDTHS = {
+  '390': { name: 'mobile', width: 390, height: 844 },
+  '1280': { name: 'desktop', width: 1280, height: 1100 },
+  '1920': { name: 'wide', width: 1920, height: 1200 },
+  '2560': { name: 'ultrawide', width: 2560, height: 1400 },
+} satisfies Record<string, { name: string; width: number; height: number }>;
+
+const WIDTH_BY_TOKEN = new Map(Object.entries(NAMED_WIDTHS));
+
+function widthSpec(token: string): { name: string; width: number; height: number } {
+  const spec = WIDTH_BY_TOKEN.get(token.trim());
+  if (!spec) {
+    throw new Error(`--widths takes ${[...WIDTH_BY_TOKEN.keys()].join('/')}; got "${token}"`);
+  }
+  return spec;
+}
+
+/** Both default widths unless `--desktop` narrows to one, or `--widths` names
+ *  a list. A three-column shell and a phone are different designs, and the
+ *  third column only exists past 1536px — so a review of it has to say 1920. */
+const WIDTHS = args.includes('--widths')
+  ? (args[args.indexOf('--widths') + 1] ?? '').split(',').map(widthSpec)
+  : args.includes('--desktop')
+    ? [widthSpec('1280')]
+    : [widthSpec('1280'), widthSpec('390')];
+if (WIDTHS.length === 0) throw new Error('--widths names at least one width');
 /** Both palettes unless `--palette` names one. A frame is a different design in
  *  each, not a recolour of the same one, so the default is both. */
 const PALETTES = (['umber', 'silk'] as const).filter((p) => {
