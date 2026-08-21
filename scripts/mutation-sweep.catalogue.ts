@@ -206,13 +206,11 @@ export const CATALOGUE: readonly Mutation[] = [
     symbol: 'runSwarm',
   },
   {
-
-  {
     id: 'node-wallclock-zero-honoured',
     file: 'packages/core/src/strategy/swarm-run.ts',
     find: 'if (deps.maxWallClockMs !== undefined) nodeDeps.maxWallClockMs = deps.maxWallClockMs;',
     replace: 'nodeDeps.maxWallClockMs = deps.maxWallClockMs;',
-    decision: 'an undeclared clock stays an ABSENT key — the ruling bans a default wall clock over node work',
+    decision: 'an undeclared clock stays an ABSENT key — no default wall clock over node work (ruling 2026-08-21)',
     symbol: 'runSwarm',
     control: 'unit-swarm-incomplete-node.test.ts',
   },
