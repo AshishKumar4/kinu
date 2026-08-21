@@ -9,8 +9,8 @@
 //
 // This lives in cli-backend (the local backend). The cloud server must never
 // drive subscription calls, so nothing here is reachable from cf-backend.
-import type { LanguageModelV2, LanguageModelV2CallOptions, LanguageModelV2StreamPart, LanguageModelV2Usage } from '@ai-sdk/provider';
-import { JsonObjectSchema, usageTotal } from '@kinu.run/core';
+import type { LanguageModelV2, LanguageModelV2CallOptions, LanguageModelV2FunctionTool, LanguageModelV2StreamPart, LanguageModelV2Usage } from '@ai-sdk/provider';
+import { JsonObjectSchema, JsonValueSchema, usageTotal, type JsonValue } from '@kinu.run/core';
 import { classify, diagnostics, KinuError, renderThrownChain, tolerate } from '@kinu.run/core/obs';
 import type { JsonObject, ModelProvider, ModelInfo, ProviderDeps, Usage } from '@kinu.run/core';
 import { spawn as nodeSpawn } from 'node:child_process';
@@ -219,8 +219,10 @@ interface ClaudePrompt {
 /** Build the `claude -p` invocation. System turns map to --system-prompt; the
  *  conversation is flattened into the prompt arg with role labels so multi-turn
  *  context (including prior tool results, surfaced by Kinu's own loop as
- *  assistant/tool text) is carried faithfully. Tools are OFF — this provider is
- *  just the brain; Kinu's execute_tools/run loop wraps it. */
+ *  assistant/tool text) is carried faithfully. The binary's own tools stay OFF —
+ *  Kinu's execute_tools/run loop wraps this provider — so requested tools ride
+ *  the system prompt as a manifest in the block form the stream parser reads
+ *  back. */
 export function buildClaudePrompt(options: LanguageModelV2CallOptions): ClaudePrompt {
   const systemParts: string[] = [];
   const turns: string[] = [];
@@ -240,8 +242,12 @@ export function buildClaudePrompt(options: LanguageModelV2CallOptions): ClaudePr
   const prompt = turns.length <= 1
     ? (turns[0] ?? '')
     : `${turns.slice(0, -1).join('\n\n')}\n\n${turns[turns.length - 1]}`;
+  const system = systemParts.length ? systemParts.join('\n\n') : undefined;
+  const tools = (options.tools ?? []).filter((t): t is LanguageModelV2FunctionTool => t.type === 'function');
   return {
-    system: systemParts.length ? systemParts.join('\n\n') : undefined,
+    system: tools.length > 0
+      ? [system, toolProtocol(tools)].filter((part) => part !== undefined).join('\n\n')
+      : system,
     prompt,
   };
 }
@@ -277,6 +283,176 @@ function claudeArgs(alias: string, built: ClaudePrompt): string[] {
   return args;
 }
 
+// ─── tool-call protocol ─────────────────────────────────────────────────────
+//
+// The binary runs with its own tools off; Kinu's loop executes. So the tools
+// ride the PROMPT as a manifest in the block form Claude models are already
+// trained to emit, and the stream parser lifts those blocks back out as real
+// tool-call parts. Without the parser the block reached the transcript as
+// literal agent text and nothing ever executed.
+const OPEN_TAGS = ['<function_calls>', '<antml:function_calls>'] as const;
+
+interface OpenBlock {
+  open: string;
+  close: string;
+  body: string;
+}
+
+/** The prompt-side half of the protocol: what the model is told, verbatim in
+ *  the shape the parser reads back. */
+function toolProtocol(tools: readonly LanguageModelV2FunctionTool[]): string {
+  const manifest = tools.map((t) => {
+    const head = t.description ? `- ${t.name}: ${t.description}` : `- ${t.name}`;
+    return `${head}\n  Parameters (JSON schema): ${JSON.stringify(t.inputSchema)}`;
+  });
+  return [
+    '# Tools',
+    '',
+    'To use a tool, output exactly this block and then stop:',
+    '',
+    '<function_calls>',
+    '<invoke name="TOOL_NAME">',
+    '<parameter name="PARAM_NAME">value</parameter>',
+    '</invoke>',
+    '</function_calls>',
+    '',
+    'The result arrives as the next message. Never invent one.',
+    'Available tools:',
+    ...manifest,
+  ].join('\n');
+}
+
+interface ParsedToolCall {
+  toolCallId: string;
+  toolName: string;
+  input: string;
+}
+
+/** XML-unescape a parameter value; a value that IS a JSON array/object rides
+ *  as that structure, anything else stays a string. */
+function parameterValue(raw: string): JsonValue {
+  const decoded = raw
+    .replaceAll('&lt;', '<')
+    .replaceAll('&gt;', '>')
+    .replaceAll('&quot;', '"')
+    .replaceAll('&apos;', "'")
+    .replaceAll('&amp;', '&');
+  if (/^[[{]/.test(decoded.trim())) {
+    const parsed = tolerate(() => v.parse(JsonValueSchema, JSON.parse(decoded)), 'malformed-input');
+    if (parsed !== undefined) return parsed;
+  }
+  return decoded;
+}
+
+function parseFunctionCalls(block: string, firstId: number): ParsedToolCall[] {
+  const calls: ParsedToolCall[] = [];
+  const invokeRe = /<invoke\s+name="([^"]*)"\s*>([\s\S]*?)<\/invoke>/g;
+  for (let invoke = invokeRe.exec(block); invoke !== null; invoke = invokeRe.exec(block)) {
+    const params: Record<string, JsonValue> = {};
+    const paramRe = /<parameter\s+name="([^"]*)"\s*>([\s\S]*?)<\/parameter>/g;
+    for (let param = paramRe.exec(invoke[2]); param !== null; param = paramRe.exec(invoke[2])) {
+      params[param[1]] = parameterValue(param[2]);
+    }
+    calls.push({
+      toolCallId: `claude-fc-${firstId + calls.length}`,
+      toolName: invoke[1],
+      input: JSON.stringify(params),
+    });
+  }
+  return calls;
+}
+
+/** Longest suffix of `text` that could still grow into a prefix of `tag`. */
+function partialTagTail(text: string, tags: readonly string[]): number {
+  for (let keep = Math.min(text.length, Math.max(...tags.map((t) => t.length)) - 1); keep > 0; keep--) {
+    const tail = text.slice(-keep);
+    if (tags.some((t) => t.startsWith(tail))) return keep;
+  }
+  return 0;
+}
+
+/** One consumed delta's yield: text safe to stream now, plus any calls whose
+ *  blocks closed inside it. */
+interface SplitChunk {
+  text: string;
+  calls: ParsedToolCall[];
+}
+
+/** Splits the model's text stream into plain text and complete function_calls
+ *  blocks. Tags can straddle deltas, so unclassified text is held back only up
+ *  to a length that could still become an open tag — everything else streams
+ *  immediately. */
+class ToolCallSplitter {
+  private pending = '';
+  private block: OpenBlock | null = null;
+  private nextId = 1;
+
+  /** Consume one delta → text safe to stream now, plus completed calls. */
+  push(delta: string): SplitChunk {
+    this.pending += delta;
+    const text: string[] = [];
+    const calls: ParsedToolCall[] = [];
+    for (;;) {
+      if (this.block === null) {
+        const open = OPEN_TAGS
+          .map((tag) => ({ tag, index: this.pending.indexOf(tag) }))
+          .filter((hit) => hit.index >= 0)
+          .sort((a, b) => a.index - b.index)[0];
+        if (!open) {
+          const keep = partialTagTail(this.pending, OPEN_TAGS);
+          const emit = this.pending.slice(0, this.pending.length - keep);
+          if (emit) text.push(emit);
+          this.pending = this.pending.slice(this.pending.length - keep);
+          break;
+        }
+        if (open.index > 0) text.push(this.pending.slice(0, open.index));
+        this.pending = this.pending.slice(open.index + open.tag.length);
+        this.block = {
+          open: open.tag,
+          close: open.tag === '<function_calls>' ? '</function_calls>' : '</antml:function_calls>',
+          body: '',
+        };
+      } else {
+        const close = this.block.close;
+        const idx = this.pending.indexOf(close);
+        if (idx < 0) {
+          const keep = partialTagTail(this.pending, [close]);
+          const take = this.pending.slice(0, this.pending.length - keep);
+          if (take) this.block.body += take;
+          this.pending = this.pending.slice(this.pending.length - keep);
+          break;
+        }
+        this.block.body += this.pending.slice(0, idx);
+        this.pending = this.pending.slice(idx + close.length);
+        const parsed = parseFunctionCalls(this.block.body, this.nextId);
+        this.nextId += parsed.length;
+        calls.push(...parsed);
+        this.block = null;
+      }
+    }
+    return { text: text.join(''), calls };
+  }
+
+  /** What remains when the binary's stream ends: held text, and an
+   *  unterminated block's calls if it parsed — otherwise the block streams as
+   *  the text it visibly is rather than vanishing. */
+  end(): SplitChunk {
+    const text: string[] = [];
+    const calls: ParsedToolCall[] = [];
+    if (this.block !== null) {
+      const parsed = parseFunctionCalls(this.block.body, this.nextId);
+      if (parsed.length > 0) calls.push(...parsed);
+      else text.push(this.block.open + this.block.body);
+      this.block = null;
+    }
+    if (this.pending) {
+      text.push(this.pending);
+      this.pending = '';
+    }
+    return { text: text.join(''), calls };
+  }
+}
+
 type FinishReason = 'stop' | 'length' | 'content-filter' | 'tool-calls' | 'error' | 'other' | 'unknown';
 
 function runClaudeStream(
@@ -300,8 +476,11 @@ function runClaudeStream(
       child.stdin?.end();
 
       controller.enqueue({ type: 'stream-start', warnings: [] });
-      const textId = 'claude-text';
+      const splitter = new ToolCallSplitter();
+      let segment = 0;
+      let textId = '';
       let textOpen = false;
+      let emittedToolCalls = false;
       let usage: Usage | undefined;
       let finishReason: FinishReason = 'stop';
       let stderr = '';
@@ -313,34 +492,63 @@ function runClaudeStream(
           : `<stderr unreadable: ${read.error instanceof Error ? read.error.message : String(read.error)}>`;
       });
 
+      const openText = () => {
+        if (!textOpen) {
+          textId = `claude-text-${segment}`;
+          controller.enqueue({ type: 'text-start', id: textId });
+          textOpen = true;
+        }
+      };
+      const closeText = () => {
+        if (textOpen) {
+          controller.enqueue({ type: 'text-end', id: textId });
+          textOpen = false;
+          segment += 1;
+        }
+      };
+      const emitCalls = (calls: ParsedToolCall[]) => {
+        closeText();
+        for (const call of calls) {
+          controller.enqueue({ type: 'tool-call', toolCallId: call.toolCallId, toolName: call.toolName, input: call.input });
+        }
+        emittedToolCalls ||= calls.length > 0;
+      };
+
       try {
         for await (const event of parseNdjson(child.stdout)) {
           const delta = textDelta(event);
           if (delta !== undefined) {
-            if (!textOpen) {
-              controller.enqueue({ type: 'text-start', id: textId });
-              textOpen = true;
+            const split = splitter.push(delta);
+            if (split.text) {
+              openText();
+              controller.enqueue({ type: 'text-delta', id: textId, delta: split.text });
             }
-            if (delta) controller.enqueue({ type: 'text-delta', id: textId, delta });
+            if (split.calls.length > 0) emitCalls(split.calls);
             continue;
           }
           if (isResult(event)) {
             usage = resultUsage(event);
             finishReason = mapFinishReason(event);
             if (event.is_error === true || event.subtype === 'error_max_turns' || event.subtype === 'error_during_execution') {
-              if (textOpen) { controller.enqueue({ type: 'text-end', id: textId }); textOpen = false; }
+              closeText();
               controller.enqueue({ type: 'error', error: new Error(resultErrorMessage(event)) });
             }
           }
         }
       } catch (error) {
-        if (textOpen) { controller.enqueue({ type: 'text-end', id: textId }); textOpen = false; }
+        closeText();
         if (!options.abortSignal?.aborted) {
           controller.enqueue({ type: 'error', error: error instanceof Error ? error : new Error(String(error)) });
         }
       }
 
-      if (textOpen) controller.enqueue({ type: 'text-end', id: textId });
+      const tail = splitter.end();
+      if (tail.text) {
+        openText();
+        controller.enqueue({ type: 'text-delta', id: textId, delta: tail.text });
+      }
+      if (tail.calls.length > 0) emitCalls(tail.calls);
+      closeText();
       const { code, signal } = await child.exit;
       await collectStderr;
 
@@ -351,6 +559,8 @@ function runClaudeStream(
         controller.enqueue({ type: 'error', error: new Error(exitError(code, stderr)) });
         finishReason = 'error';
       }
+
+      if (emittedToolCalls && finishReason === 'stop') finishReason = 'tool-calls';
 
       controller.enqueue(finishPart(finishReason, usage));
       controller.close();
@@ -496,6 +706,54 @@ function resultErrorMessage(event: ClaudeEvent): string {
   return 'Claude CLI returned an error.';
 }
 
+/** The doGenerate result the v2 spec asks for. The spec types it inline, so
+ *  this local name is the contract's only home. */
+interface ClaudeGenerateResult {
+  content: Array<
+    | { type: 'text'; text: string }
+    | { type: 'tool-call'; toolCallId: string; toolName: string; input: string }
+  >;
+  finishReason: FinishReason;
+  usage: LanguageModelV2Usage;
+  warnings: [];
+}
+
+// ─── doGenerate (wraps doStream) ────────────────────────────────────────────
+
+async function collectGenerate(
+  stream: ReadableStream<LanguageModelV2StreamPart>,
+): Promise<ClaudeGenerateResult> {
+  let text = '';
+  const toolCalls: Array<{ type: 'tool-call'; toolCallId: string; toolName: string; input: string }> = [];
+  let finishReason: FinishReason = 'stop';
+  let usage: LanguageModelV2Usage = {
+    inputTokens: undefined, outputTokens: undefined, totalTokens: undefined,
+  };
+  let error: unknown;
+  const reader = stream.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value.type === 'text-delta') text += value.delta;
+    else if (value.type === 'tool-call') {
+      toolCalls.push({ type: 'tool-call', toolCallId: value.toolCallId, toolName: value.toolName, input: value.input });
+    } else if (value.type === 'finish') {
+      finishReason = value.finishReason;
+      usage = value.usage;
+    } else if (value.type === 'error') error = value.error;
+  }
+  if (error && !text && toolCalls.length === 0) throw error instanceof Error ? error : new Error(String(error));
+  return {
+    content: [
+      ...(text ? [{ type: 'text' as const, text }] : []),
+      ...toolCalls,
+    ],
+    finishReason,
+    usage,
+    warnings: [],
+  };
+}
+
 function numberOf(input: { value: unknown }): number | undefined {
   const parsed = v.safeParse(v.number(), input.value);
   return parsed.success && Number.isFinite(parsed.output) ? parsed.output : undefined;
@@ -526,30 +784,3 @@ function signalExitError(signal: NodeJS.Signals | null, stderr: string): string 
   return `Claude Code terminated by signal ${signal ?? 'unknown'}${detail ? `: ${detail}` : ''}.`;
 }
 
-// ─── doGenerate (wraps doStream) ────────────────────────────────────────────
-
-async function collectGenerate(
-  stream: ReadableStream<LanguageModelV2StreamPart>,
-): Promise<Awaited<ReturnType<LanguageModelV2['doGenerate']>>> {
-  let text = '';
-  let finishReason: FinishReason = 'stop';
-  let usage: LanguageModelV2Usage = {
-    inputTokens: undefined, outputTokens: undefined, totalTokens: undefined,
-  };
-  let error: unknown;
-  const reader = stream.getReader();
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (value.type === 'text-delta') text += value.delta;
-    else if (value.type === 'finish') { finishReason = value.finishReason; usage = value.usage; }
-    else if (value.type === 'error') error = value.error;
-  }
-  if (error && !text) throw error instanceof Error ? error : new Error(String(error));
-  return {
-    content: text ? [{ type: 'text', text }] : [],
-    finishReason,
-    usage,
-    warnings: [],
-  };
-}
