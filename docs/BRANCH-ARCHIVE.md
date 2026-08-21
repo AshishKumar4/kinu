@@ -22,9 +22,9 @@ one, and the two look equally harmless in a prune script.
 
 ## Tag inventory
 
-Eight tags live under `refs/tags/archive/`. All eight are lightweight tags on a
-commit. Both counts below were measured on 2026-08-19 against `main` at
-`5dbc0f1b`, with the commands in the next section.
+Nine tags live under `refs/tags/archive/`. All nine are lightweight tags on a
+commit. Both counts below were measured on 2026-08-21 against `main` at
+`29f654bd`, with the commands in the next section.
 
 - **Blobs `main` lacks** counts blobs reachable from the tag that no commit in
   `main`'s history holds. This is the durable question, because branches get
@@ -35,24 +35,28 @@ commit. Both counts below were measured on 2026-08-19 against `main` at
 
 | Tag | Commit | Commits | Blobs `main` lacks | Sole copy |
 |---|---|---|---|---|
-| `archive/agents-sdk` | `00d7d0e9` | 917 | 372 | 4 |
-| `archive/chat-pagination` | `aa8e4d03` | 1714 | 1560 | 0 |
-| `archive/do-resilience` | `8468735c` | 1133 | 606 | 24 |
-| `archive/latency-instrumentation` | `21dc6d44` | 43 | 1 | 0 |
-| `archive/nimbus-measure` | `dc02ef08` | 917 | 382 | 14 |
-| `archive/one-filesystem-mounts` | `98c4f285` | 1469 | 1323 | 0 |
-| `archive/pre-reroot` | `8e98574c` | 1529 | 1291 | 0 |
-| `archive/stability-audit` | `1a1c9341` | 229 | 14 | 0 |
+| `archive/agents-sdk` | `00d7d0e9` | 917 | 3006 | 4 |
+| `archive/chat-pagination` | `aa8e4d03` | 1714 | 5525 | 0 |
+| `archive/do-resilience` | `8468735c` | 1133 | 3537 | 24 |
+| `archive/latency-instrumentation` | `21dc6d44` | 43 | 196 | 0 |
+| `archive/nimbus-measure` | `dc02ef08` | 917 | 3016 | 14 |
+| `archive/one-filesystem-mounts` | `98c4f285` | 1469 | 4955 | 0 |
+| `archive/pre-launch-history` | `36025045` | 1149 | 4824 | 307 |
+| `archive/pre-reroot` | `8e98574c` | 1529 | 5062 | 0 |
+| `archive/stability-audit` | `1a1c9341` | 229 | 843 | 0 |
 
 Every tag has a nonzero novel-blob count, so by the rule above no archive tag is
-safe to delete today. The counts are large because `main` was re-rooted. It now
-carries 982 commits from a single root, so the pre-rewrite history these tags sit
-on is not in it, and every intermediate revision on those branches counts as a
-blob `main` never held. `archive/pre-reroot` is no exception. It preserves the
-commit graph and authorship of the history that `git filter-repo --mailmap`
-rewrote, and it also holds 1,291 blobs `main`'s history no longer reaches.
+safe to delete today. The counts are large because `main` has been re-rooted
+twice: each rewrite replaced its history with a fresh single-root line (982
+commits after the first, 84 measured 2026-08-21 after the second), so the
+pre-launch history these tags sit on is not in it, and every intermediate
+revision on those branches counts as a blob `main` never held. The second
+rewrite is why every count in the table is larger than its 2026-08-19 reading.
+`archive/pre-reroot` is no exception. It preserves the commit graph and
+authorship of the history that `git filter-repo --mailmap` rewrote, and it holds
+5,062 blobs `main`'s history no longer reaches.
 
-Four tags name the branch they pin. The other four record only their tip commit
+Four tags name the branch they pin. The other five record only their tip commit
 and its subject, and the branch name was never written down.
 
 | Tag | Pins the tip of |
@@ -66,11 +70,19 @@ The `feat/one-filesystem` design was rejected deliberately (AGENTS.md
 § Execution Layer, and `packages/cli-backend/tests/mount-plane.test.ts` enforces
 the rejection), so that branch is safe to delete. Its tag is not.
 
+`archive/pre-launch-history` pins no branch. It pins the tip `main` itself sat
+on until 2026-08-20, when a reset moved `main` back to `7cfdd992` and the
+history rewrite that followed left the old line unreachable. The tag is the only
+ref that still reaches that line: 1,149 commits `main` lacks, the 2026-08-19
+measurement base `5dbc0f1b` among them, and — measured during the 2026-08-20
+prune wave — the tips of 60+ working branches since deleted. It is the most
+load-bearing tag in this table: 307 of its blobs exist nowhere else.
+
 ## Reproducing the test
 
 Ancestry answers nothing here. `git filter-repo --mailmap` rewrote 2,242
 commits, so no pre-rewrite branch is an ancestor of `main`, and that says
-nothing about content. Measured 2026-08-19: none of the eight tags is an
+nothing about content. Measured 2026-08-21: none of the nine tags is an
 ancestor of `main`. The exploitable invariant is that `--mailmap` rewrites
 *commit* objects only. Tree and blob SHAs are untouched, so content identity
 survives the rewrite and compares cleanly across it.
@@ -92,7 +104,7 @@ Blobs no other ref reaches, for one tag:
 
 ```sh
 export LC_ALL=C
-git rev-list --objects --exclude="$REF" --all | cut -d' ' -f1 | sort -u > /tmp/others.objs
+git rev-list --objects --exclude="refs/tags/$REF" --all | cut -d' ' -f1 | sort -u > /tmp/others.objs
 git rev-list --objects "$REF"                 | cut -d' ' -f1 | sort -u > /tmp/ref.objs
 comm -23 /tmp/ref.objs /tmp/others.objs \
   | git cat-file --batch-check | awk '$2 == "blob"' | wc -l
@@ -100,6 +112,12 @@ comm -23 /tmp/ref.objs /tmp/others.objs \
 
 `LC_ALL=C` matters. `comm` compares bytes, so a locale-collated `sort` feeds it
 input it reads as unsorted and the answer is wrong without warning.
+
+`--exclude` needs the FULL refname. A pattern holding a slash matches against
+the whole refname, so `--exclude="archive/$REF"` matches nothing: the tag then
+reaches itself through `--all` and the test reports a sole copy of 0 for every
+tag, which reads as safe to delete. Measured 2026-08-21: the short form reported
+0 for all nine tags; the form above reports the table.
 
 ## What was read and judged, and why none of it was landed
 
