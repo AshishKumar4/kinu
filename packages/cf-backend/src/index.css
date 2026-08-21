@@ -927,8 +927,9 @@ body { background: var(--c-bg); color: var(--c-text); }
    Filled buttons carry their own ink rather than white: brass is a LIGHT
    fill (white on it measures 2.4:1), and so is the dark-mode danger tone.
    Kumo's `primary`/`destructive` variants hardcode `!text-white` and are
-   therefore the one part of its library we do not use — see the call sites,
-   which pair these with `btnSmCls` from components/ui/form.tsx. */
+   therefore the one part of its library we do not use — the call sites
+   render `FilledButton` (components/ui/FilledButton.tsx), which pairs these
+   looks with Kumo's own `size="sm"` box. */
 .p-btn {
   background: var(--c-accent);
   color: var(--c-accent-on);

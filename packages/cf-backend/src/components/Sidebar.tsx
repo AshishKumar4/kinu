@@ -18,7 +18,7 @@ import { useEffect, useState, useCallback, useRef, type FormEvent } from "react"
 import { Link, NavLink, useMatch, useNavigate } from "react-router-dom";
 import { PlusIcon, GearIcon, GithubLogoIcon, TrashIcon, SignOutIcon, CaretRightIcon, PencilSimpleIcon, CheckIcon, XIcon, SunIcon, MoonIcon, SwatchesIcon } from "@phosphor-icons/react";
 import { Button } from "@cloudflare/kumo";
-import { btnSmCls } from "@/components/ui/form";
+import { FilledButton } from "./ui/FilledButton";
 import { listWorkspaces, removeWorkspace, getProfile, type WorkspaceEntry, type UserProfile } from "../lib/user-api";
 import { useWorkspaceRpc } from "../hooks/use-kinu";
 import { useTheme, toggleMode, togglePalette } from "../hooks/use-theme";
@@ -367,9 +367,9 @@ export default function Sidebar() {
           busy={deleteBusy}
           footer={<>
             <Button size="sm" variant="ghost" onClick={() => setDeleteTarget(null)} disabled={deleteBusy}>Cancel</Button>
-            <button className={`p-btn-danger ${btnSmCls}`} onClick={confirmDelete} disabled={deleteBusy}>
+            <FilledButton danger onClick={confirmDelete} disabled={deleteBusy}>
               {deleteBusy ? "Removing…" : "Remove"}
-            </button>
+            </FilledButton>
           </>}
         >
           <p className="text-xs p-text-2 leading-relaxed">

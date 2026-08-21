@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, typ
 import { useParams, useLocation, Link, useNavigate } from "react-router-dom";
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from "react-resizable-panels";
 import { Button, Loader } from "@cloudflare/kumo";
-import { btnSmCls } from "@/components/ui/form";
+import { FilledButton } from "@/components/ui/FilledButton";
 import {
   ArrowsClockwiseIcon, GitBranchIcon, CheckCircleIcon, TrashIcon,
   ClockIcon, WarningCircleIcon, DesktopTowerIcon, PaperclipIcon,
@@ -257,9 +257,9 @@ function ForkModal({
       busy={busy}
       footer={<>
         <Button size="sm" variant="ghost" onClick={onCancel} disabled={busy}>Cancel</Button>
-        <button className={`p-btn ${btnSmCls}`} onClick={submit} disabled={busy}>
+        <FilledButton onClick={submit} disabled={busy}>
           {busy ? <><Loader size="sm" /><span className="ml-1">Forking…</span></> : "Fork"}
-        </button>
+        </FilledButton>
       </>}
     >
       <div className="text-xs p-text-2 leading-relaxed space-y-1.5">
@@ -1087,7 +1087,7 @@ export default function WorkspacePage() {
           onClose={() => setShowClearConfirm(false)}
           footer={<>
             <Button size="sm" variant="ghost" onClick={() => setShowClearConfirm(false)}>Cancel</Button>
-            <button className={`p-btn-danger ${btnSmCls}`} onClick={() => { state.clearHistory(); setShowClearConfirm(false); }}>Clear history</button>
+            <FilledButton danger onClick={() => { state.clearHistory(); setShowClearConfirm(false); }}>Clear history</FilledButton>
           </>}
         >
           <p className="text-xs p-text-2 leading-relaxed">
@@ -1130,9 +1130,9 @@ function RestoreFilesModal({ plan, busy, onCancel, onConfirm }: {
       busy={busy}
       footer={<>
         <Button size="sm" variant="ghost" onClick={onCancel} disabled={busy}>Cancel</Button>
-        <button className={`p-btn ${btnSmCls}`} onClick={onConfirm} disabled={busy}>
+        <FilledButton onClick={onConfirm} disabled={busy}>
           {busy ? <><Loader size="sm" /><span className="ml-1">Restoring…</span></> : `Restore ${plan.files.length} file${plan.files.length === 1 ? "" : "s"}`}
-        </button>
+        </FilledButton>
       </>}
     >
       <div className="space-y-2">

@@ -7,7 +7,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
-import { btnSmCls } from "@/components/ui/form";
+import { FilledButton } from "@/components/ui/FilledButton";
 import {
   ArrowLeftIcon, ArrowRightIcon, CaretDownIcon, CaretRightIcon, GitBranchIcon,
   CheckCircleIcon, WarningCircleIcon, XIcon,
@@ -101,9 +101,9 @@ function TakesComparison({ set, onPick, onClose }: {
       maxWidthClass="max-w-xl"
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Keep current</Button>
-        <button className={`p-btn ${btnSmCls}`} onClick={useTake} disabled={busy || isCurrent}>
+        <FilledButton onClick={useTake} disabled={busy || isCurrent}>
           {busy ? <><Loader size="sm" /><span className="ml-1">Recording…</span></> : isCurrent ? "Current answer" : "Use this take"}
-        </button>
+        </FilledButton>
       </>}
     >
       <p className="text-xs p-text-3 leading-relaxed">

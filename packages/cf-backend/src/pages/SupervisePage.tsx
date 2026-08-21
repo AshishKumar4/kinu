@@ -11,6 +11,7 @@
 import { useState, useCallback } from "react";
 import { useParams } from "react-router-dom";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
+import { FilledButton } from "@/components/ui/FilledButton";
 import {
   GraduationCapIcon, ClockIcon, LightningIcon, PlayIcon, CheckIcon, XIcon,
   PlusIcon, TrashIcon, WarningIcon, PlugIcon,
@@ -23,7 +24,7 @@ import { describeError, lastValue, useAsyncResource } from "@/hooks/use-async-re
 import { usePagedScroll } from "@/hooks/use-paged-scroll";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { Modal } from "@/components/ui/Modal";
-import { btnSmCls, inputCls } from "@/components/ui/form";
+import { inputCls } from "@/components/ui/form";
 import { createDurableWebhook, cancelTrigger, type CreateWebhookResult } from "@/lib/user-api";
 import type { Rpc } from "@/lib/protocol";
 import { fmtTokens, fmtPct } from "@/lib/format";
@@ -159,8 +160,8 @@ function CurriculumBlock({ rpc, onRunTask }: { rpc: Rpc; onRunTask: (t: string) 
                 </div>
                 {t.status === "pending" && (
                   <div className="flex items-center gap-2 mt-2">
-                    <button className={`p-btn ${btnSmCls}`}
-                      onClick={() => void setStatus(t.id, "accepted").then((landed) => { if (landed) onRunTask(t.task); })}><PlayIcon size={12} />Run</button>
+                    <FilledButton
+                      onClick={() => void setStatus(t.id, "accepted").then((landed) => { if (landed) onRunTask(t.task); })}><PlayIcon size={12} />Run</FilledButton>
                     <Button size="sm" variant="ghost" icon={<CheckIcon size={12} />} onClick={() => void setStatus(t.id, "accepted")}>Accept</Button>
                     <Button size="sm" variant="ghost" icon={<XIcon size={12} />} onClick={() => void setStatus(t.id, "rejected")}>Reject</Button>
                   </div>
@@ -484,9 +485,9 @@ function CreateWebhookModal({ agentName, onClose, onCreated }: {
       busy={submitting}
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={submitting}>Cancel</Button>
-        <button className={`p-btn ${btnSmCls}`} onClick={submit} disabled={submitting || !label.trim()}>
+        <FilledButton onClick={submit} disabled={submitting || !label.trim()}>
           {submitting ? <><Loader size="sm" /><span className="ml-1">Creating…</span></> : "Create"}
-        </button>
+        </FilledButton>
       </>}
     >
       <div className="space-y-2">

@@ -1,7 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@cloudflare/kumo";
-import { btnSmCls } from "@/components/ui/form";
+import { FilledButton } from "./ui/FilledButton";
 import { HouseIcon, PlusIcon, TrashIcon, UserPlusIcon } from "@phosphor-icons/react";
 import type { SubordinateRosterEntry } from "@kinu.run/core";
 import { Modal } from "./ui/Modal";
@@ -67,9 +67,9 @@ function SpawnSubordinateDialog({ onClose, onSpawn }: {
       busy={saving}
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
-        <button className={`p-btn ${btnSmCls}`} type="submit" form="spawn-subordinate" disabled={!role.trim() || !mission.trim() || saving}>
+        <FilledButton type="submit" form="spawn-subordinate" disabled={!role.trim() || !mission.trim() || saving}>
           {saving ? "Creating…" : "Create agent"}
-        </button>
+        </FilledButton>
       </>}
     >
       <form id="spawn-subordinate" onSubmit={submit} className="space-y-3">
@@ -188,9 +188,7 @@ export function SubordinateTabs({ workspace, subordinates, activeName, onSpawn, 
           busy={dismissing}
           footer={<>
             <Button size="sm" variant="ghost" disabled={dismissing} onClick={() => setDismissTarget(null)}>Cancel</Button>
-            <button
-              className={`p-btn-danger ${btnSmCls}`}
-              disabled={dismissing}
+            <FilledButton danger disabled={dismissing}
               onClick={async () => {
                 setDismissing(true);
                 setDismissError(null);
@@ -206,7 +204,7 @@ export function SubordinateTabs({ workspace, subordinates, activeName, onSpawn, 
               }}
             >
               {dismissing ? "Dismissing…" : "Dismiss"}
-            </button>
+            </FilledButton>
           </>}
         >
           <p className="text-xs leading-relaxed p-text-2">
