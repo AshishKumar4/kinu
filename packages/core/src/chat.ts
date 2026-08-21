@@ -39,6 +39,9 @@ import { EVIDENCE_BUDGETS, evidenceWindow } from './prompts/evidence-window';
 import * as v from 'valibot';
 import { JsonObjectSchema, type JsonObject } from './utils/json';
 import { normalizeUsage, usageReported, type Usage } from './usage';
+import { providerPacer, type ProviderPacer } from './providers/pacing';
+import { PROVIDER_SDK_RETRIES, PROVIDER_WAIT_BUDGET_MS } from './providers/rate-limit-retry';
+import { diagnostics, KinuError } from './obs/index';
 
 export type ChatEvent =
   | { type: 'text-delta'; delta: string }
@@ -132,6 +135,15 @@ export interface ChatOptions {
   budget?: MissionGovernor;
   /** Stream-inactivity watchdog override (tests). Default STALL_TIMEOUT_MS. */
   stallTimeoutMs?: number;
+  /**
+   * The provider pacer this turn's watchdog reads declared waits from.
+   *
+   * Defaults to the isolate's shared {@link providerPacer}, which is also what
+   * every provider fetch declares into — so production wires itself and nothing
+   * sets this. A suite injects one to drive a mandated wait without waiting out a
+   * real `Retry-After`, the same seam and the same reason as `stallTimeoutMs`.
+   */
+  pacer?: ProviderPacer;
   /**
    * One more reason this turn may stop, ORed with the step cap.
    *
@@ -273,18 +285,90 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   // watchdog resolves a SENTINEL that the drain races each iterator step
   // against, and the abort is what stops the provider afterwards rather than
   // what ends the wait.
+  //
+  // A MANDATED WAIT IS NOT SILENCE, and telling them apart is the whole of the
+  // second mechanism below. `withRateLimitRetry` sleeps INSIDE `fetch`, inside
+  // `model.doStream()`, upstream of every chunk this watchdog waits for — so a
+  // provider that answered "wait 60s" and a provider that died produced the
+  // identical observation here, and the turn was ended with "nothing flowed" in
+  // both. Measured on the owner's live workspace: two heads of one `ideate` run
+  // errored with that text while `wrangler tail` carried `provider.rate_limited`
+  // for the same window. The queue was never a wedge.
+  //
+  // So the retry layer DECLARES its waits (`providers/pacing.ts`) and this timer
+  // asks. THE RULE IS ONE LINE: the deadline is `stallTimeoutMs` after the later
+  // of the last thing that flowed and the end of the last mandated wait. A wait
+  // therefore PUSHES the deadline rather than being deducted from an allowance,
+  // and the retried request the wait was taken for gets a full window of its own
+  // — it has only just been issued when the wait ends, so ending the turn there
+  // would cut it at the exact moment it became able to answer. The waiting one
+  // silence may absorb is bounded by PROVIDER_WAIT_BUDGET_MS, derived from the
+  // retry policy rather than guessed. And a turn ended after a mandated wait says
+  // SO: "the provider rate-limited us" and "this turn is wedged" are different
+  // facts, only one is the turn's fault, and they need different answers from
+  // whoever reads the row.
   const stallTimeoutMs = opts.stallTimeoutMs ?? STALL_TIMEOUT_MS;
+  const pacer = opts.pacer ?? providerPacer;
   const watchdog = new AbortController();
   let stalled = false;
   let stallTimer: ReturnType<typeof setTimeout> | undefined;
   const { promise: stallReached, resolve: reportStall } = Promise.withResolvers<typeof STALLED>();
-  const armStallTimer = () => {
+  /** When the current silence began — the last time ANYTHING flowed. The turn's
+   *  own clock, so a mandated wait is measured against the same origin the stall
+   *  window is. */
+  let lastFlowAt = Date.now();
+  /** The pacer's declared-wait count when this silence began, so a wait that
+   *  opened AND elapsed inside the window is still attributable. Without it a
+   *  turn ended just after a short mandated wait reads as unexplained silence
+   *  while the cause sits in the log. */
+  let declaredAtSilenceStart = 0;
+  /** The longest mandated wait observed in this silence, for the turn's own error
+   *  text. A quantity nobody could previously state about a rate-limited turn. */
+  let mandatedMs = 0;
+  /** Whether the silence being timed was mandated by a provider. */
+  let rateLimited = false;
+  const armAt = (ms: number) => {
     clearTimeout(stallTimer);
-    stallTimer = setTimeout(() => {
-      stalled = true;
-      watchdog.abort();
-      reportStall(STALLED);
-    }, stallTimeoutMs);
+    stallTimer = setTimeout(onDeadline, ms);
+  };
+  const onDeadline = () => {
+    const now = Date.now();
+    const waits = pacer.waits();
+    if (waits.untilMs > now || waits.declared > declaredAtSilenceStart) rateLimited = true;
+    // Honoured only while the waiting asked of THIS silence stays inside the
+    // budget. Past it nothing is holding off under instruction any more, so the
+    // silence stops being explained and the turn ends.
+    const mandated = waits.untilMs - lastFlowAt;
+    const honoured = mandated <= PROVIDER_WAIT_BUDGET_MS ? waits.untilMs : 0;
+    if (mandated > mandatedMs) mandatedMs = Math.min(mandated, PROVIDER_WAIT_BUDGET_MS);
+    const deadline = Math.max(lastFlowAt, honoured) + stallTimeoutMs;
+    if (deadline > now) {
+      if (honoured > now) {
+        diagnostics.event('provider.wait_honoured', {
+          waiting_ms: honoured - now, mandated_ms: mandated, budget_ms: PROVIDER_WAIT_BUDGET_MS,
+        });
+      }
+      armAt(deadline - now);
+      return;
+    }
+    if (rateLimited) {
+      diagnostics.failure(
+        'provider.wait_budget_spent',
+        new KinuError('unavailable',
+          'the provider rate-limited this turn and nothing flowed once its waits elapsed'),
+        { mandated_ms: mandatedMs, budget_ms: PROVIDER_WAIT_BUDGET_MS },
+      );
+    }
+    stalled = true;
+    watchdog.abort();
+    reportStall(STALLED);
+  };
+  const armStallTimer = () => {
+    lastFlowAt = Date.now();
+    mandatedMs = 0;
+    rateLimited = false;
+    declaredAtSilenceStart = pacer.waits().declared;
+    armAt(stallTimeoutMs);
   };
   const clearStallTimer = () => {
     clearTimeout(stallTimer);
@@ -293,9 +377,17 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   // What the caller records. Names what was MEASURED — nothing flowed — rather
   // than only the provider, because a tool call that never returns stalls the
   // same turn through the same silence and used to read as a provider fault.
-  const stallError = () => new Error(
-    `Turn stalled: nothing flowed for ${Math.round(stallTimeoutMs / 1000)}s — no provider chunk `
-    + 'and no tool result — so the turn was ended.',
+  //
+  // CLASSIFIED, because a swarm node whose row said "stalled" sent its reader
+  // looking for a wedge while the log held a rate limit.
+  const stallError = () => new Error(rateLimited
+    ? 'Turn ended by provider rate limiting: the provider asked this turn to wait '
+      + `${Math.round(mandatedMs / 1000)}s against a `
+      + `${Math.round(PROVIDER_WAIT_BUDGET_MS / 1000)}s budget, that wait was taken, and still `
+      + 'nothing flowed — no provider chunk and no tool result. That is a rate limit rather '
+      + 'than a wedged turn.'
+    : `Turn stalled: nothing flowed for ${Math.round(stallTimeoutMs / 1000)}s — no provider chunk `
+      + 'and no tool result — so the turn was ended.',
   );
 
   // The turn's constants for the per-step breakdown: the cache-eligible system
@@ -315,6 +407,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const result = streamText({
     model: opts.model,
     system: cache.system,
+    // OURS, not the vendor's default, and the reason is arithmetic rather than
+    // taste: the watchdog's patience is derived from how many times this request
+    // may re-enter the rate-limit layer, so that count has to be one we set.
+    // See PROVIDER_SDK_RETRIES.
+    maxRetries: PROVIDER_SDK_RETRIES,
     messages: cache.messages,
     tools,
     // The step cap always applies; a fork's driver ORs its own reasons onto it
