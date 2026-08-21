@@ -53,7 +53,7 @@ export function WorkspaceBar({
         {working && (
           <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full px-1.5 py-0.5 p-accent-subtle @[34rem]:px-2" title="The agent is working">
             <span className="size-1.5 rounded-full p-dot-accent animate-pulse" />
-            <span className="hidden p-meta p-accent font-medium @[34rem]:inline">working</span>
+            <span className="hidden p-annotation p-accent @[34rem]:inline">working</span>
           </span>
         )}
         {forkParent && (
@@ -150,7 +150,7 @@ function InlineWorkspaceTitle({ title, onRename }: {
 
   return (
     <div className="group/title flex min-w-0 items-center gap-1">
-      <span className="truncate text-sm font-medium p-text" title={title}>{title}</span>
+      <span className="truncate p-heading text-[15px] p-text" title={title}>{title}</span>
       <button
         type="button"
         onClick={() => setEditing(true)}

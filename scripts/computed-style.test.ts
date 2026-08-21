@@ -13,12 +13,12 @@ interface Scenarios {
   readonly cutRoleToken: ThemeAudit;
   /** `var(--x, fallback)` against a token that does not exist. */
   readonly withFallback: ThemeAudit;
-  /** The light palette, reached the way a person reaches it. */
+  /** Silk's light face, reached the way a person reaches it. */
   readonly lightMode: ThemeAudit;
-  /** Silk's dark face, reached through its own control. */
-  readonly silkDark: ThemeAudit;
-  /** Silk's light face — both controls, the theme furthest from `:root`. */
-  readonly silkLight: ThemeAudit;
+  /** Umber's dark face, reached through its own control. */
+  readonly umberDark: ThemeAudit;
+  /** Umber's light face — both controls, the theme furthest from the default. */
+  readonly umberLight: ThemeAudit;
 }
 
 /**
@@ -117,7 +117,8 @@ async function run(): Promise<Scenarios> {
      * second full palette whose light face is the theme furthest from `:root`,
      * four blocks deep in the cascade. Any token left unmapped in any of them
      * renders as Kumo's uncustomised brand colour rather than throwing, which is
-     * why this has to be measured per theme and not inferred from one.
+     * why this has to be measured per theme and not inferred from one. Silk is
+     * the shipped default, so the controls here reach umber, not silk.
      */
     const throughTheControls = async (want: { mode: 'dark' | 'light'; palette: 'umber' | 'silk' }): Promise<ThemeAudit> => {
       const page = await openShell('dark');
@@ -125,7 +126,7 @@ async function run(): Promise<Scenarios> {
       // on the mode; both are idempotent and neither reads the other.
       const clicks = [
         ...(want.mode === 'light' ? ['[aria-label="Switch to light mode"]'] : []),
-        ...(want.palette === 'silk' ? ['[aria-label="Switch to the silk palette"]'] : []),
+        ...(want.palette === 'umber' ? ['[aria-label="Switch to the umber palette"]'] : []),
       ];
       for (const control of clicks) {
         await page.waitForSelector(control);
@@ -156,9 +157,9 @@ async function run(): Promise<Scenarios> {
       seededRadius: await on('.p-card { border-radius: calc(var(--radius) - 2px); }'),
       cutRoleToken: await on(null, '--r-card'),
       withFallback: await on('.p-card { outline-width: var(--never-declared-anywhere, 1px); }'),
-      lightMode: await throughTheControls({ mode: 'light', palette: 'umber' }),
-      silkDark: await throughTheControls({ mode: 'dark', palette: 'silk' }),
-      silkLight: await throughTheControls({ mode: 'light', palette: 'silk' }),
+      lightMode: await throughTheControls({ mode: 'light', palette: 'silk' }),
+      umberDark: await throughTheControls({ mode: 'dark', palette: 'umber' }),
+      umberLight: await throughTheControls({ mode: 'light', palette: 'umber' }),
     };
   });
 }
@@ -202,7 +203,7 @@ describe('computed-style gate', () => {
     // applying, or move after `goto`, and every assertion above would quietly
     // change which theme it was making a claim about.
     expect({ mode: scenarios.clean.mode, palette: scenarios.clean.palette })
-      .toEqual({ mode: 'dark', palette: 'umber' });
+      .toEqual({ mode: 'dark', palette: 'silk' });
   });
 
   test('the controls switch the document to each of the other three themes', () => {
@@ -211,12 +212,12 @@ describe('computed-style gate', () => {
     // four scenarios above already covered.
     expect([
       { mode: scenarios.lightMode.mode, palette: scenarios.lightMode.palette },
-      { mode: scenarios.silkDark.mode, palette: scenarios.silkDark.palette },
-      { mode: scenarios.silkLight.mode, palette: scenarios.silkLight.palette },
+      { mode: scenarios.umberDark.mode, palette: scenarios.umberDark.palette },
+      { mode: scenarios.umberLight.mode, palette: scenarios.umberLight.palette },
     ]).toEqual([
-      { mode: 'light', palette: 'umber' },
-      { mode: 'dark', palette: 'silk' },
       { mode: 'light', palette: 'silk' },
+      { mode: 'dark', palette: 'umber' },
+      { mode: 'light', palette: 'umber' },
     ]);
   });
 
@@ -227,9 +228,9 @@ describe('computed-style gate', () => {
     // before a gate ever could — and why silk's two blocks are audited here
     // rather than assumed complete because their sibling is.
     const audited = [
-      ['umber light', scenarios.lightMode],
-      ['silk dark', scenarios.silkDark],
-      ['silk light', scenarios.silkLight],
+      ['silk light', scenarios.lightMode],
+      ['umber dark', scenarios.umberDark],
+      ['umber light', scenarios.umberLight],
     ] as const;
     expect(audited.map(([theme, s]) => ({ theme, findings: s.audit.findings, measured: s.audit.checked > 100 })))
       .toEqual(audited.map(([theme]) => ({ theme, findings: [], measured: true })));

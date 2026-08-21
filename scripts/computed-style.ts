@@ -61,7 +61,7 @@ import { withGallery } from './gallery-harness';
  *  meaningful denominator rather than whatever the default frame happens to
  *  show. */
 const FRAMES = [
-  'shell', 'chat', 'chatempty', 'chatloading', 'toolcalls', 'streaming', 'modal', 'home', 'tabs', 'markdown',
+  'shell', 'chat', 'chatempty', 'chatloading', 'composer', 'toolcalls', 'streaming', 'modal', 'home', 'tabs', 'markdown',
   'views', 'viewfail', 'releases', 'work', 'workempty', 'approvals', 'environment', 'supervise',
   'settings', 'forks', 'forkmerge', 'forkfull',
   // The signed-out pages. They are whole documents with their own stylesheet
@@ -71,8 +71,8 @@ const FRAMES = [
   'landing', 'login', 'loginfail', 'install', 'approve', 'marks',
 ] as const;
 
-/** Palette × mode. `umber` is the shipped default and selects no palette block
- *  at all (`:root` is it); `silk` selects the two `[data-palette="silk"]`
+/** Palette × mode. `umber` selects no palette block at all (`:root` is it);
+ *  `silk` — the shipped default — selects the two `[data-palette="silk"]`
  *  blocks. Both are named here so the attribute assertion can be exact. */
 export interface Theme {
   readonly palette: 'umber' | 'silk';

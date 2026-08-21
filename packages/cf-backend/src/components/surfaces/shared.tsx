@@ -3,12 +3,24 @@
  * surfaces — kept in one place so there is a single source of truth (DRY) for
  * markdown rendering, code blocks, and empty states.
  */
-import { memo, useState } from "react";
+import { memo, useState, type ReactNode } from "react";
 import { CaretRightIcon, CopyIcon } from "@phosphor-icons/react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { MAX_LINES_PER_FILE, type DiffLine } from "@kinu.run/core";
 import { copyLabel, useCopy } from "@/hooks/use-copy";
+import { mark } from "@/lib/public-shell";
+
+/** The brush mark, as a React element. One renderer for every in-app use —
+ *  the sidebar lockup, empty states, the gallery's candidate sheet — so the
+ *  mark is always the same paths from `public-shell.ts`, coloured by
+ *  `currentColor` like everywhere else it ships. */
+export function KinuMark({ size = 20, className }: { size?: number; className?: string }) {
+  return (
+    <span aria-hidden className={className} style={{ lineHeight: 0 }}
+      dangerouslySetInnerHTML={{ __html: mark(size) }} />
+  );
+}
 
 /** Render a sequence of diff lines (add/del/ctx) red/green — shared by the
  *  scaffold-version diff (Self) and the workspace change-set (Output).
@@ -99,14 +111,19 @@ export const MarkdownContent = memo(function MarkdownContent({ content }: { cont
   );
 });
 
+/** The register an absence is announced in: the mark where no icon carries a
+ *  more specific meaning, and the title as a mono annotation — the banner's
+ *  own caption grammar, instead of the bare grey icon-and-sentence this was. */
 export function EmptyState({ icon, title, hint, children }: {
-  icon: React.ReactNode; title: string; hint?: React.ReactNode; children?: React.ReactNode;
+  icon?: ReactNode; title: string; hint?: ReactNode; children?: ReactNode;
 }) {
   return (
     <div className="flex flex-col items-center justify-center py-16 text-center">
-      <div className="p-text-3 mb-3 opacity-60">{icon}</div>
-      <p className="text-sm p-text-2">{title}</p>
-      {hint && <p className="text-xs p-text-3 mt-1.5 max-w-xs leading-relaxed">{hint}</p>}
+      <div className={`mb-3 ${icon ? "p-text-3 opacity-60" : "text-[var(--c-accent)] opacity-55"}`}>
+        {icon ?? <KinuMark size={30} />}
+      </div>
+      <p className="p-eyebrow p-text-2">{title}</p>
+      {hint && <p className="text-xs p-text-3 mt-2 max-w-xs leading-relaxed">{hint}</p>}
       {children}
     </div>
   );

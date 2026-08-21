@@ -70,7 +70,7 @@ function MessageTimestamp({ createdAt }: { createdAt?: string | number | Date })
   if (!createdAt) return null;
   const d = createdAt instanceof Date ? createdAt : new Date(createdAt);
   if (isNaN(d.getTime())) return null;
-  return <span className="text-[10px] p-text-3 mt-1 block">{formatTime(d)}</span>;
+  return <span className="p-annotation p-text-3 mt-1 block">{formatTime(d)}</span>;
 }
 
 /**
@@ -85,7 +85,7 @@ function MessageTimestamp({ createdAt }: { createdAt?: string | number | Date })
  */
 function ThinkingRow() {
   return (
-    <div className="flex items-center gap-2 animate-fade-in py-1" aria-live="polite">
+    <div className="flex items-center gap-2 animate-fade-in py-1.5" aria-live="polite">
       <span className="size-1.5 rounded-full p-dot-accent animate-pulse" aria-hidden />
       <span className="p-row-text p-shimmer font-medium">Thinking</span>
     </div>
@@ -95,8 +95,8 @@ function ThinkingRow() {
 function ReasoningBlock({ text, live = false }: { text: string; live?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   return (
-    <div className="my-1.5">
-      <button onClick={() => setExpanded(!expanded)} className="group/reason flex items-center gap-2 p-row-text p-text-3 hover:p-text-2 w-full text-left transition-colors cursor-pointer">
+    <div className="my-2">
+      <button onClick={() => setExpanded(!expanded)} className="group/reason flex items-center gap-2.5 py-0.5 p-row-text p-text-3 hover:p-text-2 w-full text-left transition-colors cursor-pointer">
         {live
           ? <span className="size-1.5 mx-[6px] shrink-0 rounded-full p-dot-accent animate-pulse" aria-hidden />
           : <BrainIcon size={14} className="shrink-0" />}
@@ -105,7 +105,7 @@ function ReasoningBlock({ text, live = false }: { text: string; live?: boolean }
         <CaretRightIcon size={11} className={`shrink-0 transition-transform duration-150 ${expanded ? "rotate-90" : ""} opacity-0 group-hover/reason:opacity-100`} />
       </button>
       {expanded && (
-        <div className="mt-1.5 ml-[7px] border-l p-border pl-4 p-meta p-text-2 whitespace-pre-wrap leading-relaxed">
+        <div className="mt-2 ml-[7px] border-l p-border pl-4 p-meta p-text-2 whitespace-pre-wrap leading-relaxed">
           {text}
         </div>
       )}
@@ -628,7 +628,7 @@ export const MessageView = memo(function MessageView({
     const fileParts = message.parts.filter((p): p is FileUIPart => p.type === "file");
     return (
       <div className="flex flex-col items-end animate-fade-in group">
-        <div className="relative max-w-[75%] px-4 py-2.5 rounded-xl rounded-br-md p-user-bubble p-body whitespace-pre-wrap">
+        <div className="relative max-w-[min(75%,42rem)] px-4 py-2.5 rounded-xl rounded-br-md p-user-bubble p-body whitespace-pre-wrap">
           {fileParts.length > 0 && (
             <div className="flex flex-wrap gap-1.5 mb-1.5">
               {fileParts.map((p, i) => <FilePartView key={i} part={p} />)}

@@ -10,13 +10,14 @@ import { useSyncExternalStore } from "react";
  * localStorage) the app follows the OS `prefers-color-scheme`, live. A manual
  * toggle persists and from then on wins over the OS preference.
  *
- * PALETTE is which set of `--c-*` values the modes are drawn from: `umber`, the
- * landing page's brass on warm dark, or `silk`, the indigo-and-fibre pair named
- * for 絹. It is the same mechanism as mode — an attribute on <html> that
+ * PALETTE is which set of `--c-*` values the modes are drawn from: `silk`, the
+ * indigo-and-fibre pair named for 絹, or `umber`, the landing page's brass on
+ * warm dark. It is the same mechanism as mode — an attribute on <html> that
  * `index.css` selects on — so the two axes compose into four themes with one
- * store, one persistence path and one apply step. `umber` is the default; the
- * silk blocks in `index.css` are deviations from it, so an absent or unknown
- * attribute still renders a complete palette.
+ * store, one persistence path and one apply step. `silk` is the default — the
+ * product is named for it, and the public pages already boot into it — while
+ * `index.css` keeps umber on `:root` so an absent or unknown attribute still
+ * renders a complete palette.
  *
  * The snapshot is cached rather than rebuilt per read: `useSyncExternalStore`
  * re-renders forever if `getSnapshot` returns a fresh object each call.
@@ -55,7 +56,7 @@ function apply(theme: Theme): void {
   root.style.colorScheme = theme.mode;
 }
 
-let snapshot: Theme = { mode: storedMode() ?? osMode(), palette: storedPalette() ?? "umber" };
+let snapshot: Theme = { mode: storedMode() ?? osMode(), palette: storedPalette() ?? "silk" };
 
 const listeners = new Set<() => void>();
 
