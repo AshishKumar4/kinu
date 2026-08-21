@@ -16,7 +16,7 @@ import { classifyErrorCode, createLineLogger, setDiagnosticsSink } from '@kinu.r
 import { AGENT_HOME, ensureAgentHome } from './config';
 import { appendDaemonLog } from './daemon-log';
 
-export const TURN_LOG_PATH = join(AGENT_HOME, 'cli.log');
+const TURN_LOG_PATH = join(AGENT_HOME, 'cli.log');
 
 let installed = false;
 
