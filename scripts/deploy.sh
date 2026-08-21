@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Kinu deploy pipeline — THE deploy path. `bun run deploy` runs this.
+# Kinu deploy pipeline — THE deploy path for BOTH environments.
+#   bun run deploy           → production, https://kinu.run
+#   bun run deploy:staging   → staging, https://staging.kinu.run
 #
 # Deploying any other way is how production once shipped without the CLI
 # download assets: the site was fine, but /downloads/* answered with the SPA
@@ -25,10 +27,20 @@
 #     Writing downloads there publishes nothing.
 # Step 3 asserts this from wrangler's own output rather than trusting it.
 #
+# ONE SCRIPT FOR BOTH ENVIRONMENTS, and that is the whole reason staging is
+# trustworthy. Staging existed and served for days with nothing deploying it:
+# every push went to production and staging drifted. A second script would have
+# been a second place for the asset check and the smoke gate to be absent from,
+# and their absence is what shipped production assetless once. Here the two
+# environments differ in four values — the route, the wrangler `--env` flag, the
+# infrastructure scope and the label — and share every gate, the build, the asset
+# assertion and all six smoke checks by construction.
+#
 # Usage:
-#   bun run deploy                           # preferred
-#   bash scripts/deploy.sh
-#   CLOUDFLARE_ACCOUNT_ID=... scripts/deploy.sh
+#   bun run deploy                           # production
+#   bun run deploy:staging                   # staging
+#   bash scripts/deploy.sh <production|staging>
+#   CLOUDFLARE_ACCOUNT_ID=... scripts/deploy.sh staging
 #
 # Idempotent: safe to re-run. Exits on first failure.
 set -uo pipefail
@@ -44,8 +56,31 @@ cd "$KINU_ROOT" || { echo -e "${RED}Cannot cd to Kinu root${NC}"; exit 1; }
 
 export CLOUDFLARE_ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-f44999d1ddda7012e9a87729eba250f1}"
 
+# ── Which environment ─────────────────────────────────────────
+#
+# The four values that differ. Everything else in this file is shared.
+KINU_ENV="${1:-production}"
+case "$KINU_ENV" in
+  production)
+    KINU_URL="https://kinu.run/"
+    KINU_WRANGLER_ARGS=()
+    ;;
+  staging)
+    KINU_URL="https://staging.kinu.run/"
+    KINU_WRANGLER_ARGS=(--env staging)
+    ;;
+  *)
+    echo -e "${RED}Unknown environment '$KINU_ENV'.${NC}"
+    echo "Usage: scripts/deploy.sh <production|staging>"
+    exit 2
+    ;;
+esac
+# Read by scripts/infra-verify.ts when no environment is given on its argv, so
+# the `bun run gate:infra` line below stays one string for scripts/ladder.ts to
+# parse while still checking the environment being deployed.
+export KINU_DEPLOY_ENV="$KINU_ENV"
+
 # Captured during deploy for final summary
-KINU_URL="https://kinu.run/"
 KINU_VERSION=""
 # The one directory wrangler publishes as static assets (see header).
 KINU_ASSETS_DIR="$KINU_ROOT/packages/cf-backend/dist/client"
@@ -68,20 +103,168 @@ json_field() {
   node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const v=process.argv[1].split(".").reduce((o,k)=>o?.[k],JSON.parse(s));process.stdout.write(v==null?"":String(v))}catch{}})' "$1"
 }
 
+# ── The gate queue ───────────────────────────────────────────────
+#
+# `run_required_gate` ENQUEUES; `flush_gates` runs the queue concurrently and
+# waits. The gates used to run one after another for no reason: 400s of
+# declared cost on a 24-thread box that sat idle for all of it.
+#
+# Two gates may not share the machine, and `SERIAL_GATES` in scripts/ladder.ts
+# names them with the reason. They get their own flush, which is what a barrier
+# looks like here: preflight alone before everything, gate:infra alone after
+# everything. deploy.test.ts asserts the barriers match that declaration, so a
+# third gate cannot be quietly made concurrent.
+#
+# The enqueue lines stay one per gate, spelled `run_required_gate "label" cmd`,
+# because scripts/ladder.ts PARSES them: they are the authoritative list of what
+# a deploy runs, and collapsing them into a loop would leave the ladder reading
+# an empty tier.
+#
+# Four more gates may not run beside EACH OTHER, though they may run beside
+# anything else. This table is that rule and `EXCLUSION_GROUPS` in
+# scripts/ladder.ts carries the measured reason; deploy.test.ts holds the two
+# equal.
+declare -A GATE_GROUP=(
+  ['bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts']=gallery
+  ['bun test scripts/public-pages.test.ts']=gallery
+  ['bun test scripts/swarm-tree-geometry.test.ts']=gallery
+  ['bun test scripts/chat-scroll.test.ts']=gallery
+)
+GATE_LABELS=()
+GATE_CMDS=()
+
 run_required_gate() {
-  local label="$1"
+  GATE_LABELS+=("$1")
   shift
-  echo "Running: $*"
-  if "$@"; then
-    echo -e "${GREEN}✅ $label passed${NC}"
-  else
-    echo -e "${RED}❌ $label failed. The production build and publish steps did not start.${NC}"
+  GATE_CMDS+=("$*")
+}
+
+# How many at once. Derived from the machine rather than declared, because it is
+# a property of the box and not a policy. Halved against the thread count: the
+# heavy members are test suites that already use more than one thread each, and
+# at full width they contend instead of overlapping (measured 2026-08-21 —
+# nproc=24: 12 jobs 96s, 24 jobs 103s).
+gate_jobs() {
+  local threads
+  threads="$(nproc 2>/dev/null || echo 4)"
+  echo "${KINU_DEPLOY_JOBS:-$(( threads / 2 > 0 ? threads / 2 : 1 ))}"
+}
+
+# Run everything enqueued, then clear the queue. Each gate's output goes to its
+# own file and is printed ONLY if it fails: 52 concurrent streams interleaved
+# into one terminal is not a log anybody can read, and the output a reader wants
+# is the failing gate's.
+#
+# On the first failure it stops LAUNCHING and lets the running gates finish. That
+# is deliberate rather than tidy — a wave usually holds more than one real
+# failure, and reporting "these three failed" beats reporting the first one and
+# discarding two diagnostics that have already been paid for.
+flush_gates() {
+  local total=${#GATE_LABELS[@]}
+  if [ "$total" -eq 0 ]; then return 0; fi
+
+  local jobs; jobs="$(gate_jobs)"
+  local dir; dir="$(mktemp -d "${TMPDIR:-/tmp}/kinu-gates.XXXXXX")"
+  local settled=0 failures=0 index status
+  local -a reported=()
+
+  echo "Running $total gate(s), up to $jobs at once"
+  for ((index = 0; index < total; index++)); do
+    reported[index]=0
+    # `$cmd` is split on whitespace on purpose: every gate is a plain argv of
+    # words, which is the same assumption scripts/ladder.ts's parse makes and
+    # deploy.test.ts pins by exact string. A quoted argument would mis-split
+    # silently, so refuse it here instead.
+    case "${GATE_CMDS[index]}" in
+      *\"*|*\'*)
+        echo -e "${RED}❌ gate ${index}: '${GATE_CMDS[index]}' carries a quote.${NC}"
+        echo "   Gate commands must be plain words. scripts/ladder.ts parses these lines"
+        echo "   and this runner splits them; a quoted argument would not survive either."
+        rm -rf "$dir"
+        exit 1
+        ;;
+    esac
+  done
+
+  local -a launched=()
+  local -A busy=()
+  local pick group
+  for ((index = 0; index < total; index++)); do launched[index]=0; done
+
+  while [ "$settled" -lt "$total" ]; do
+    # Take the FIRST gate that is neither launched nor blocked by a peer in its
+    # own group. A plain queue pointer would stall the whole wave behind a
+    # gallery gate waiting for its turn.
+    while [ "$failures" -eq 0 ] && [ "$(jobs -rp | wc -l)" -lt "$jobs" ]; do
+      pick=-1
+      for ((index = 0; index < total; index++)); do
+        if [ "${launched[index]}" -eq 1 ]; then continue; fi
+        group="${GATE_GROUP[${GATE_CMDS[index]}]:-}"
+        if [ -n "$group" ] && [ -n "${busy[$group]:-}" ]; then continue; fi
+        pick=$index
+        break
+      done
+      if [ "$pick" -lt 0 ]; then break; fi
+      group="${GATE_GROUP[${GATE_CMDS[pick]}]:-}"
+      if [ -n "$group" ]; then busy[$group]=1; fi
+      launched[pick]=1
+      # shellcheck disable=SC2086
+      ( ${GATE_CMDS[pick]} > "$dir/$pick.log" 2>&1; echo $? > "$dir/$pick.status" ) &
+    done
+
+    # WAIT ONLY IF SOMETHING IS RUNNING, and never break before settling. An
+    # earlier version broke here the moment `jobs -rp` was empty, and with stub
+    # gates that finish instantly the whole wave could be launched, finish, and be
+    # abandoned unreported — so a failing gate left `failures` at 0 and the build
+    # ran. Nothing is running also means no group is busy, which is exactly when a
+    # gate held back by its group becomes launchable, so an empty job table is a
+    # reason to loop rather than to stop.
+    if [ "$(jobs -rp | wc -l)" -gt 0 ]; then wait -n 2>/dev/null || true; fi
+
+    for ((index = 0; index < total; index++)); do
+      if [ "${launched[index]}" -eq 0 ] || [ "${reported[index]}" -eq 1 ]; then continue; fi
+      if [ ! -f "$dir/$index.status" ]; then continue; fi
+      reported[index]=1
+      settled=$((settled + 1))
+      group="${GATE_GROUP[${GATE_CMDS[index]}]:-}"
+      if [ -n "$group" ]; then unset "busy[$group]"; fi
+      status="$(cat "$dir/$index.status")"
+      if [ "$status" = "0" ]; then
+        echo -e "${GREEN}✅ ${GATE_LABELS[index]}${NC}"
+      else
+        failures=$((failures + 1))
+        echo -e "${RED}❌ ${GATE_LABELS[index]} failed (exit $status)${NC}"
+      fi
+    done
+
+    # The one reason to stop early: a gate failed, so nothing more is launched,
+    # and the gates already running have now all been reported.
+    if [ "$failures" -ne 0 ] && [ "$(jobs -rp | wc -l)" -eq 0 ]; then break; fi
+  done
+
+  if [ "$failures" -ne 0 ]; then
+    for ((index = 0; index < total; index++)); do
+      if [ ! -f "$dir/$index.status" ] || [ "$(cat "$dir/$index.status")" = "0" ]; then continue; fi
+      echo ""
+      echo -e "${BOLD}── ${GATE_LABELS[index]} ──${NC}"
+      echo "Reproduce: ${GATE_CMDS[index]}"
+      cat "$dir/$index.log"
+    done
+    echo ""
+    echo -e "${RED}❌ $failures gate(s) failed. The build and publish steps did not start.${NC}"
+    rm -rf "$dir"
     exit 1
   fi
+
+  rm -rf "$dir"
+  GATE_LABELS=()
+  GATE_CMDS=()
 }
 
 echo -e "${BOLD}Kinu Deploy Pipeline${NC}"
 echo "========================"
+echo "Environment:  $KINU_ENV"
+echo "Target:       $KINU_URL"
 echo "Kinu root: $KINU_ROOT"
 echo "Account:      $CLOUDFLARE_ACCOUNT_ID"
 echo "Build sha:    $KINU_SHA"
@@ -99,6 +282,10 @@ echo ""
 # still left `bun install` and the wrangler auth probe ahead of it. It repairs
 # nothing; `--reclaim` is explicit and separate.
 run_required_gate "Environment preflight" bun scripts/preflight.ts
+# BARRIER. Preflight runs alone, and this is why the queue exists: nothing may
+# report on this machine until the preflight has said the machine is fit to be
+# reported on. See SERIAL_GATES in scripts/ladder.ts.
+flush_gates
 
 # ── Pre-flight: verify npx + wrangler auth ───────────────────────
 if ! command -v npx >/dev/null 2>&1; then
@@ -106,8 +293,14 @@ if ! command -v npx >/dev/null 2>&1; then
   exit 1
 fi
 if ! npx wrangler whoami >/dev/null 2>&1; then
-  echo -e "${RED}Wrangler not authenticated.${NC}"
-  echo "Run: npx wrangler login"
+  echo -e "${RED}Wrangler is not authenticated. Nothing was deployed.${NC}"
+  echo "  On your own machine:  npx wrangler login"
+  echo "  In CI: set the CLOUDFLARE_API_TOKEN secret. Cloudflare dashboard →"
+  echo "  My Profile → API Tokens → Create Token → Edit Cloudflare Workers,"
+  echo "  then add Workers R2 Storage: Edit, Workers KV Storage: Edit and"
+  echo "  Vectorize: Edit, scoped to account $CLOUDFLARE_ACCOUNT_ID."
+  echo "  Only a person with dashboard access can mint it; this script will not"
+  echo "  deploy part of the way without it."
   exit 1
 fi
 
@@ -189,12 +382,20 @@ run_required_gate "Root end-to-end lifecycle suites" bun test ./tests/
 run_required_gate "Layergate conformance" bun run layergate
 run_required_gate "Layergate fault-localization matrix" bun run layergate --matrix
 run_required_gate "Lean proofs, consistency, and traceability" bun run verify:lean
-# Last, and the only gate here that talks to Cloudflare. Everything above proves
-# the SOURCE is deployable; this proves the ACCOUNT is. Production-scoped on
-# purpose: staging drift is a real defect and not a reason to refuse the deploy
-# in front of you. `npx wrangler whoami` above is its precondition — without a
-# session it reports BLOCKED and non-zero rather than skipping.
+
+# BARRIER. Everything above this line is independent and ran concurrently.
+flush_gates
+
+# Alone, and last. Everything above proves the SOURCE is deployable; this proves
+# the ACCOUNT is. Scoped to the environment being deployed (KINU_DEPLOY_ENV), so a
+# staging deploy is not refused for a production defect and a production deploy is
+# not refused for staging drift. `npx wrangler whoami` above is its precondition —
+# without a session it reports BLOCKED and non-zero rather than skipping. See
+# SERIAL_GATES in scripts/ladder.ts.
 run_required_gate "Declared infrastructure exists and is bound" bun run gate:infra
+
+# BARRIER.
+flush_gates
 
 echo ""
 echo -e "${GREEN}All required pre-deploy gates passed.${NC}"
@@ -216,7 +417,7 @@ fi
 echo "Building CLI source archive"
 bash "$KINU_ROOT/scripts/build-cli-source-archive.sh" || { echo -e "${RED}CLI source archive build failed${NC}"; exit 1; }
 
-# Nothing may reach production without the three CLI download assets sitting in
+# Neither environment may ship without the three CLI download assets sitting in
 # the directory wrangler publishes. A deploy missing them bricks every fresh
 # install and update.
 for asset in kinu-source.tar.gz kinu-source.tar.gz.sha256 kinu-version.json; do
@@ -232,9 +433,9 @@ echo ""
 echo -e "${BOLD}Step 3: Deploying Kinu${NC}"
 KINU_DEPLOY_LOG="$(mktemp -t kinu-deploy.XXXXXX.log)"
 echo ""
-echo "Running: npx wrangler deploy (log → $KINU_DEPLOY_LOG)"
+echo "Running: npx wrangler deploy ${KINU_WRANGLER_ARGS[*]} (log → $KINU_DEPLOY_LOG)"
 echo ""
-if npx wrangler deploy 2>&1 | tee "$KINU_DEPLOY_LOG"; then
+if npx wrangler deploy "${KINU_WRANGLER_ARGS[@]}" 2>&1 | tee "$KINU_DEPLOY_LOG"; then
   echo ""
   echo -e "${GREEN}Kinu deploy succeeded.${NC}"
 else
@@ -281,7 +482,7 @@ sleep 10
 
 SMOKE_FAIL=0
 
-# Kinu (production route).
+# The environment's own route.
 LIVE_STATUS=$(curl -so /dev/null -w '%{http_code}' --max-time 15 "$KINU_URL" 2>/dev/null || echo "000")
 if [ "$LIVE_STATUS" = "200" ]; then
   echo -e "${GREEN}✅ Kinu live site returns 200${NC} ($KINU_URL)"
@@ -379,7 +580,7 @@ fi
 
 # ── Step 5: Summary ──────────────────────────────────────────────
 echo ""
-echo -e "${BOLD}Deploy complete.${NC}"
+echo -e "${BOLD}Deploy complete — $KINU_ENV.${NC}"
 echo "================================="
 echo "Kinu:  $KINU_URL"
 echo "          version ${KINU_VERSION:-unknown}"

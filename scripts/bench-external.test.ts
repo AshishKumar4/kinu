@@ -6,19 +6,35 @@
 // nothing in the path from result.json to the printed effect ever asked what the
 // arms actually did. These tests are written against that failure, not against
 // the happy path.
-import { afterAll, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { describe, expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
+import {
+  copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
+import * as v from 'valibot';
+import { git, initRepo, scratchDir } from '@kinu.run/test-utils';
 import {
   admissibility, armSpend, flipAccounting, pairArms, readHarborJob,
 } from './bench-external';
 import type { Admissibility, AdmissibilityCondition } from './bench-external';
 
-const scratch: string[] = [];
-afterAll(() => {
-  for (const dir of scratch) rmSync(dir, { recursive: true, force: true });
+const REPO_ROOT = join(import.meta.dir, '..');
+
+/** The pre-registration this family's corpus check reads, and only the fields it
+ *  reads. A `looseObject` because a ledger row carries a design's whole record and
+ *  this test has no business asserting the rest of it. */
+const TbenchPrereg = v.looseObject({
+  family: v.literal('external:terminal-bench'),
+  kind: v.literal('preregistration'),
+  sample: v.object({
+    seed: v.number(), size: v.number(), tasks: v.array(v.string()),
+  }),
 });
+
+/** What `bench.harbor.corpus sample` prints. Parsed rather than asserted: the
+ *  sampler is another process, so its stdout is a boundary. */
+const DrawnSample = v.object({ tasks: v.array(v.string()) });
 
 interface TrialSpec {
   task: string;
@@ -41,8 +57,7 @@ interface TrialSpec {
 /** A Harbor job directory holding one `result.json` per trial, in the shape the
  *  adapter actually writes — only the fields the reader parses. */
 function job(name: string, trials: readonly TrialSpec[]): string {
-  const root = mkdtempSync(join(tmpdir(), 'bench-external-'));
-  scratch.push(root);
+  const root = scratchDir('bench-external');
   const dir = join(root, name);
   mkdirSync(dir, { recursive: true });
   for (const spec of trials) {
@@ -291,5 +306,94 @@ describe('spend coverage', () => {
     // would make this arm look cheaper than the arm it is equalized against,
     // which is the one direction that claim cannot afford to be wrong in.
     expect(spend.billableTokens).toBeNull();
+  });
+});
+
+/**
+ * The Terminal-Bench arm's own pre-flight, which is the half of this family that
+ * runs before any trial and therefore before any bill.
+ *
+ * Both tests are credential-free and neither starts harbor. They exist because
+ * the arm was unrunnable for a reason no test could see: `CORPUS` was an absolute
+ * path naming the operator's checkout directory, and the rename to Kinu rewrote
+ * that directory inside it. From that commit the arm resolved a corpus that had
+ * never existed, and the sampler's `FileNotFoundError` went into a pipe and came
+ * back out as "the sample returned 0 tasks" — a count where the cause should have
+ * been.
+ */
+describe('the Terminal-Bench arm before it spends anything', () => {
+  const ARM = join(REPO_ROOT, 'scripts/tbench-arm.sh');
+
+  /** The arm's environment, minus everything it refuses to inherit. Built by
+   *  subtraction so the trap list and this fixture cannot drift: whatever the
+   *  script names, an absent variable satisfies. */
+  function armEnv(home: string) {
+    const env: Record<string, string> = {};
+    for (const [key, value] of Object.entries(process.env)) {
+      if (value !== undefined && !key.startsWith('KINU_') && key !== 'TBENCH_CORPUS') {
+        env[key] = value;
+      }
+    }
+    return { ...env, HOME: home };
+  }
+
+  test('the corpus it looks for is inside the tree it runs from', () => {
+    // A throwaway repository holding nothing but the script, so the resolved
+    // path is attributable: whatever the arm names, it derived from THIS tree.
+    // The old absolute literal would have named a directory somewhere else
+    // entirely, which is exactly the regression this asserts against.
+    const tree = realpathSync(scratchDir('tbench-arm'));
+    initRepo(tree);
+    git(tree, 'commit', '--allow-empty', '-qm', 'root');
+    mkdirSync(join(tree, 'scripts'), { recursive: true });
+    copyFileSync(ARM, join(tree, 'scripts/tbench-arm.sh'));
+    const home = join(tree, 'home');
+    mkdirSync(home, { recursive: true });
+
+    const run = spawnSync('bash', [join(tree, 'scripts/tbench-arm.sh'),
+      'false', '20260817', '40', '@cf/deepseek-ai/deepseek-v4-flash-0731', '2'],
+    { env: armEnv(home), encoding: 'utf8' });
+
+    expect(run.status).toBe(2);
+    const named = /^REFUSING: no Terminal-Bench corpus at (.+)\.$/m.exec(run.stderr);
+    expect(named, `the arm refused without naming a corpus: ${run.stderr}`).not.toBeNull();
+    expect(named?.[1]).toBe(join(tree, 'terminal-bench-2.1'));
+    // And it refused HERE rather than at the credential, which is what makes this
+    // refusal provable by anyone: a check reachable only with a token is a check
+    // nobody exercises.
+    expect(run.stderr).not.toContain('eval-service credential');
+  });
+
+  /**
+   * The corpus on disk is the corpus the design was registered against.
+   *
+   * Nothing else asserts this, and it is the assumption every number from
+   * ordinals 6 to 8 rests on. Both sides are DERIVED — the expected list from the
+   * pre-registration, the actual from the one sampler in `bench/harbor/corpus.py`
+   * — so a corpus that was re-fetched, edited or swapped shows up as a
+   * disagreement instead of as a quiet difference in what got measured.
+   *
+   * Skipped without a corpus, which is the ordinary state of a worktree: the
+   * 89 task directories are 60 MB and gitignored. `TBENCH_CORPUS` points at a
+   * shared copy, and it is the same variable the arm reads.
+   */
+  const corpus = process.env.TBENCH_CORPUS ?? join(REPO_ROOT, 'terminal-bench-2.1');
+  const withCorpus = test.skipIf(!existsSync(corpus));
+
+  withCorpus('the seeded sample reproduces the pre-registered task list', () => {
+    const registered = readFileSync(join(REPO_ROOT, 'tests/bench/seal-ledger.jsonl'), 'utf8')
+      .split('\n')
+      .filter((line) => line.trim() !== '' && !line.startsWith('#'))
+      .map((line) => v.safeParse(TbenchPrereg, JSON.parse(line)))
+      .find((parsed) => parsed.success);
+    expect(registered, 'no Terminal-Bench pre-registration carries a sample').toBeDefined();
+    const { seed, size, tasks } = registered!.output!.sample;
+
+    const drawn = spawnSync('python3', ['-m', 'bench.harbor.corpus', 'sample', corpus,
+      '--size', String(size), '--seed', String(seed)],
+    { cwd: REPO_ROOT, env: { ...process.env, PYTHONPATH: REPO_ROOT }, encoding: 'utf8' });
+    expect(drawn.status, drawn.stderr).toBe(0);
+
+    expect(v.parse(DrawnSample, JSON.parse(drawn.stdout)).tasks).toEqual(tasks);
   });
 });

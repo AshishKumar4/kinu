@@ -18,9 +18,12 @@
 import { describe, test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { cloudProxyBaseURL } from '@kinu.run/core';
+import { LIVE_MODEL_ENV } from '../src/ambient-env';
 import {
   EVAL_IDENTITY_ENV, EVAL_SERVICE_ACCOUNT, EVAL_SERVICE_EMAIL, EVAL_STAGING_ORIGIN,
-  EVAL_WORKSPACE_PREFIX, evalTargetVerdict, evalWorkspaceName, resolveEvalIdentity,
+  EVAL_WORKSPACE_PREFIX, evalModelEndpointVerdict, evalTargetVerdict, evalWorkspaceName,
+  refusedEvalEndpoint, resolveEvalIdentity,
 } from '../src/eval-identity';
 
 const WRANGLER = readFileSync(join(import.meta.dirname, '../../cf-backend/wrangler.jsonc'), 'utf8');
@@ -124,6 +127,110 @@ describe('the eval target allowlist — a deployment serving real users is refus
     const verdict = evalTargetVerdict('', {});
     expect(verdict.kind).toBe('refused');
     if (verdict.kind === 'refused') expect(verdict.reason).toContain(EVAL_IDENTITY_ENV.origin);
+  });
+});
+
+/**
+ * A model endpoint arrives as a base URL, and the two variables that carry one
+ * hold either shape. `.env.example` documents an AI Gateway;
+ * `.github/workflows/eval.yml` held `secrets.EVAL_BASE_URL`, which could hold
+ * either.
+ *
+ * Measured on 2026-08-21: with `KINU_BASE_URL` set to production's inference
+ * route and `KINU_AUTH` set to a bearer, `resolveLLMConfig` returns
+ * `{ name: 'workers-ai', baseURL: 'https://kinu.run/api/user/ai/v1',
+ * Authorization: 'Bearer …' }`, and `resolveLiveModel` calls the same URL an
+ * `ai-gateway` target. Neither checked an origin.
+ *
+ * Every deployment URL below is built by `cloudProxyBaseURL`, the one function
+ * that builds that route, so moving the route fails these cases.
+ */
+describe('a model endpoint carrying a deployment gets target-checked', () => {
+  test('production behind the inference route is refused, naming the override', () => {
+    const verdict = evalModelEndpointVerdict(cloudProxyBaseURL(PRODUCTION_ORIGIN), {});
+    expect(verdict.kind).toBe('checked');
+    if (verdict.kind !== 'checked') return;
+    expect(verdict.target.kind).toBe('refused');
+    if (verdict.target.kind === 'refused') {
+      expect(verdict.target.reason).toContain(EVAL_IDENTITY_ENV.allowProd);
+      expect(verdict.target.reason).toContain(PRODUCTION_ORIGIN);
+    }
+  });
+
+  test('the override names the exception here as well', () => {
+    const verdict = evalModelEndpointVerdict(
+      cloudProxyBaseURL(PRODUCTION_ORIGIN), { [EVAL_IDENTITY_ENV.allowProd]: '1' },
+    );
+    expect(verdict.kind).toBe('checked');
+    if (verdict.kind === 'checked') expect(verdict.target.kind).toBe('allowed');
+  });
+
+  // The ORIGIN decides first, so an allowed origin needs no path reasoning: a
+  // staging URL is allowed whether it carries the inference route or not.
+  test.each([
+    cloudProxyBaseURL(EVAL_STAGING_ORIGIN),
+    `${EVAL_STAGING_ORIGIN}/v1`,
+  ])('%s is the allowed deployment', (baseUrl) => {
+    expect(evalModelEndpointVerdict(baseUrl, {})).toEqual({
+      kind: 'checked',
+      target: { kind: 'allowed', origin: EVAL_STAGING_ORIGIN, why: 'staging' },
+    });
+  });
+
+  test('a loopback dev server is local, on any path', () => {
+    expect(evalModelEndpointVerdict('http://127.0.0.1:8787/v1', {})).toEqual({
+      kind: 'checked',
+      target: { kind: 'allowed', origin: 'http://127.0.0.1:8787', why: 'local' },
+    });
+  });
+
+  // An undeclared origin bearing the inference route is refused, which is what
+  // origin-first buys: a set of Kinu hosts would have read this as a gateway and
+  // handed it the credential.
+  test('a host belonging to nobody here is refused when it wears the route', () => {
+    const verdict = evalModelEndpointVerdict(cloudProxyBaseURL('https://attacker.example'), {});
+    expect(verdict.kind).toBe('checked');
+    if (verdict.kind === 'checked') expect(verdict.target.kind).toBe('refused');
+  });
+
+  // A gateway fronts a model and no deployment, so it creates nothing and there
+  // is no origin to rule on. Refusing one would break the path `.env.example`
+  // documents and the tier uses for models the account proxy does not front.
+  // The last case is not a URL, so it names no deployment either.
+  test.each([
+    'https://gateway.ai.cloudflare.com/v1/acct-id/gw-name/workers-ai/v1',
+    'https://api.openai.com/v1',
+    'https://api.anthropic.com/v1',
+    'staging.kinu.run',
+  ])('%s fronts a model, not a deployment', (baseUrl) => {
+    expect(evalModelEndpointVerdict(baseUrl, {})).toEqual({ kind: 'gateway' });
+  });
+
+  // The boundary this leaves, stated rather than hidden: a refused origin on any
+  // other path reads as a gateway. It is not reachable as a model endpoint —
+  // `/api/cli/workspaces` serves no completions — and closing it would need the
+  // list of Kinu hosts that origin-first exists to avoid.
+  test('a refused origin on another path is not classified as a deployment', () => {
+    expect(evalModelEndpointVerdict(`${PRODUCTION_ORIGIN}/api/cli/workspaces`, {}))
+      .toEqual({ kind: 'gateway' });
+  });
+});
+
+describe('refusedEvalEndpoint — the variable an operator has to fix', () => {
+  test.each([...LIVE_MODEL_ENV.gatewayURL])('%s aimed at production is named', (variable) => {
+    const refusal = refusedEvalEndpoint({ [variable]: cloudProxyBaseURL(PRODUCTION_ORIGIN) });
+    expect(refusal?.variable).toBe(variable);
+    expect(refusal?.reason).toContain(PRODUCTION_ORIGIN);
+  });
+
+  test('a gateway URL is not a refusal', () => {
+    expect(refusedEvalEndpoint({
+      [LIVE_MODEL_ENV.gatewayURL[0]]: 'https://gateway.ai.cloudflare.com/v1/a/b/workers-ai/v1',
+    })).toBeNull();
+  });
+
+  test('an environment naming no endpoint refuses nothing', () => {
+    expect(refusedEvalEndpoint({})).toBeNull();
   });
 });
 
