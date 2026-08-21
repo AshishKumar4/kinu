@@ -1,4 +1,4 @@
-# Workspaces — the container / agent object model
+# Workspaces: the container and agent object model
 
 In Kinu you create **workspaces**. A workspace is the container, and
 agents are the actors that work inside it.
@@ -77,10 +77,10 @@ agents are the actors that work inside it.
     PARENT's file plane (`cf-backend/src/exploration.ts:178-191`). Local nodes
     use private scratch and address the canonical parent through `parent.*`.
     MCTS rollouts use the same facet class in a separate toolless mode and
-    never acquire that runtime at all.
+    acquire no runtime.
 
-    A private `/home/node-<id>` per node, with its own credential and its own
-    `/tmp`, is wired on the LOCAL backend and cannot be on the hosted one.
+    The LOCAL backend gives each node a private `/home/node-<id>`, with its own
+    credential and its own `/tmp`.
     `agentHomeNodeProvisioner` and `nodeAgentName` build it
     (`core/src/strategy/node-workspace.ts`), `AgentsForkDeps.nodeHome` carries
     the three host-owned members it needs, and `runSwarmAction` builds the
@@ -90,7 +90,7 @@ agents are the actors that work inside it.
     reports `private-home`. The hosted backend supplies none and has nothing to
     supply. It reaches its workspace by RPC to a Nimbus Durable Object, where a
     filesystem call arriving without a pid acts as the session user and
-    `confinePrincipal` has no RPC form at all, so two of the three members do
+    `confinePrincipal` has no RPC form, so two of the three members do
     not exist on that side. A hosted node therefore works in the parent's home
     and reports `shared-origin-plane`, which is a permanent asymmetry rather
     than an unfinished one. `docs/EXPLORATION.md` is the spec for the six axes,
@@ -108,8 +108,8 @@ agents are the actors that work inside it.
     could call it would escape the depth cap.
 
   `getWorkspaceAgents()` (RPC) returns the roster the UI shows: the default
-  orchestrator first, then this workspace's durable subordinates. Nodes are not
-  on it, because they do not outlive the search that spawned them.
+  orchestrator first, then this workspace's durable subordinates. Nodes stay off
+  it, because they live only for the search that spawned them.
 - **Fork = a new workspace.** Forking copies SOUL.md, messages, and memory to
   a fresh workspace by a new name and records `fork_lineage`
   (`source_workspace_id/name`). `forkWorkspaceStorage`

@@ -2,13 +2,13 @@
 
 ## 1. What Kinu Is
 
-Kinu is a general-purpose AI agent that improves itself over time. It:
+Kinu is a self-evolving agent platform that improves with use. It:
 
 - **Searches a tree of agents** against an objective the caller declares, and scores every candidate by running that objective's verifier
 - **Learns reusable tools** from successful conversations and applies them in future ones
-- **Rewrites its own execution logic** (scaffold) based on observed performance patterns
+- **Rewrites its own execution logic** (scaffold) from observed performance patterns
 - **Remembers everything** in a persistent, FTS5-searchable memory
-- **Includes CI-gated Lean 4 models**: 330 theorems over 43 requirements check selected abstract invariants, with assumptions and implementation-evidence gaps tracked explicitly
+- **Ships CI-gated Lean 4 models**: 330 theorems over 43 requirements check selected abstract invariants, with assumptions and implementation-evidence gaps tracked explicitly
 
 ```mermaid
 graph LR
@@ -22,10 +22,11 @@ graph LR
     style B5 fill:#0f3460
 ```
 
-Evolution happens at three timescales at once, and each one feeds the next:
+Evolution happens at four timescales at once, and each one feeds the next:
 
 | Timescale | Frequency | What Evolves |
 |-----------|-----------|-------------|
+| **In-episode** | Every settled `execute_tools` call | Crafted-tool fitness on the step clock (`core/src/orchestrator/craft-cycle.ts`) |
 | **Turn** | Every response | Tool patterns extracted, quality reflected on |
 | **Session** | Every 5 turns | Patterns consolidated, scaffold mutation proposed |
 | **Lifetime** | Periodic / on-demand | Full MCTS exploration, tool retirement, strategic improvement |
@@ -85,7 +86,7 @@ copy between two workspace stores.
 
 ## 3. CLI Version Applications
 
-The CLI version runs locally with bun:sqlite, providing the same core capabilities without Cloudflare infrastructure.
+The CLI version runs locally on POSIX with bun:sqlite, and provides the same core capabilities.
 
 ### Local Development Agent
 
@@ -119,7 +120,7 @@ Agent state is a single SQLite file, so you can export it, back it up, put it in
 
 ### Research Experimentation
 
-The CLI has no network latency, so you can try evolution parameters quickly.
+The CLI keeps every round trip on your machine, so you can try evolution parameters quickly.
 
 MCTS parameters are durable per-workspace state. `DEFAULT_CONFIG` is frozen and
 read at import time, and the workspace's `agent_config` table carries the
@@ -190,7 +191,7 @@ graph TB
 
 ### Design choices
 
-1. **Three-timescale evolution with machine-checked abstract models.** The Lean corpus checks selected properties of hand-maintained models; it does not prove the deployed TypeScript implementation. CI gates compilation, consistency, axiom closure, and traceability, while model-to-code differential fixtures remain planned.
+1. **Four-timescale evolution with machine-checked abstract models.** The Lean corpus checks selected properties of hand-maintained models; it does not prove the deployed TypeScript implementation. CI gates compilation, consistency, axiom closure, and traceability, while model-to-code differential fixtures remain planned.
 
 2. **Scaffold mutation with structural validation.** The agent rewrites its own agentic loop (the async generator that controls how it processes tasks). This is self-modifying code, guarded by 4 validation gates that prevent syntax errors, forbidden patterns, and data loss.
 

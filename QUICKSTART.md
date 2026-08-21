@@ -1,5 +1,8 @@
 # Kinu Quick Start
 
+Two minutes to an agent with a machine of its own: one POSIX filesystem, a real
+shell, execution environments, sessions and memory that it keeps.
+
 ## CLI
 
 ```bash
@@ -10,7 +13,7 @@ jarvis "what changed in this repo?"
 ```
 
 The installer works on macOS and Linux, adds `~/.kinu/bin` to your PATH when
-needed, and runs setup unless `--no-setup` is passed. `kinu setup` handles
+needed, and runs setup unless you pass `--no-setup`. `kinu setup` handles
 browser login and optional local model-provider credentials.
 
 Use `--mode cloud` for a persistent cloud workspace that uses your desktop daemon
@@ -45,11 +48,11 @@ kinu create jarvis --mode local --model claude/claude-opus-4-x
 ```
 
 Kinu drives the official `claude` binary, which owns its own login. Kinu never
-reads your credentials. Cloud workspaces can't use the subscription; give them an
-Anthropic API key (`kinu providers connect anthropic`) instead.
+reads your credentials. The subscription is local only; a cloud workspace runs on
+an Anthropic API key (`kinu providers connect anthropic`).
 
-**Web search**: the `web` tool's `search` and `fetch` actions need no setup
-(DuckDuckGo + Cloudflare's markdown service). For ranked, answer-augmented
+**Web search**: the `web` tool's `search` and `fetch` actions work with zero keys,
+over DuckDuckGo and Cloudflare's markdown service. For ranked, answer-augmented
 search, store a Tavily key as the `tavily` credential.
 
 ## Web UI Development

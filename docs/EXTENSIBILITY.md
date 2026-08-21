@@ -1,7 +1,7 @@
 # Kinu extensibility
 
-How to plug in a new agentic idea without touching the orchestrator: a model
-provider, an exploration strategy, an actor kind, or a turn extension.
+Add a model provider, an exploration strategy, an actor kind, or a turn
+extension, and the orchestrator stays as it is.
 
 ## The four extension points
 
@@ -10,13 +10,13 @@ altitude.
 
 | Extension point | Interface | Lives in | Adds | Example use cases |
 |---|---|---|---|---|
-| **`ModelProvider`** | `core/providers/types.ts` | `packages/core/src/providers/` (runtime-agnostic) and `packages/cf-backend/src/providers/` (CF-specific) | A new LLM backend | Anthropic direct, Google Gemini, Groq, Bedrock, local Ollama |
+| **`ModelProvider`** | `core/providers/types.ts` | `packages/core/src/providers/` (platform agnostic) and `packages/cf-backend/src/providers/` (CF-specific) | A new LLM backend | Anthropic direct, Google Gemini, Groq, Bedrock, local Ollama |
 | **`ExplorationStrategy`** | `core/strategy/types.ts` | `packages/core/src/strategy/` | A search or sampling policy over candidate continuations | MCTS, Heads, Tree-of-Thoughts, Graph-of-Thoughts, Reflexion-rollouts |
 | **`ActorAgent`** | `cf-backend/src/actor-agent.ts` | `packages/cf-backend/src/` | A new *kind of agent* running the full turn loop | OrchestratorAgent, SubordinateAgent |
 | **`KinuExtension`** | `core/extension.ts` | any package | Per-turn observation and light rewriting | compaction, event injection, CLI steering |
 
-The first two are registries. They hold implementations and no state, with
-per-call state flowing through `ProviderDeps` and `StrategyContext`.
+The first two are registries. They hold implementations and stay stateless.
+Per-call state flows through `ProviderDeps` and `StrategyContext`.
 `ActorAgent` is class-level. `KinuExtension` is per-turn, and
 [EXTENSIONS.md](./EXTENSIONS.md) documents it on its own.
 
@@ -186,7 +186,7 @@ Do not hardcode `listModels`. Hydrate from the live models.dev catalog
 5-minute cache) and pass a static `FALLBACK_MODELS` array for when that fetch
 fails, returns a non-200, or filters to nothing. The Anthropic and OpenAI
 providers both do exactly that. If your provider already appears in models.dev,
-you may not need a hand-written provider at all. `registry.registerDynamic`
+skip the hand-written provider. `registry.registerDynamic`
 (`cf-backend/src/providers/agent-registry.ts:125`) makes every catalog id usable
 once the user stores a `<id>.bearer` credential. Wrap your fetch in
 `withRateLimitRetry`, or build it with the shared `createAuthedFetch`, which
@@ -242,9 +242,8 @@ misevolution veto, survive shadow evaluation, and get promoted. See
 
 A scaffold used to receive one string (`task`) and a prepared default stream.
 That is enough to wrap the default loop and not enough to manage context. An
-inference loop that cannot see its own conversation cannot reshape, reweight or
-navigate it, and a scaffold whose whole idea is context discipline had nothing
-to be disciplined about.
+inference loop has to see its own conversation before it can reshape, reweight or
+navigate it, so a scaffold built for context discipline had nothing to work on.
 
 `host.history(query)` closes that. It is read-only and budgeted
 (`core/src/orchestrator/scaffold-host.ts`, one implementation both backends
@@ -256,7 +255,7 @@ const page = await host.history({ offset: -40, limit: 40, maxChars: 2000 });
 ```
 
 A negative `offset` counts back from the end, and the default is the tail.
-`total` and each entry's `chars` report what you are not being shown, so a
+`total` and each entry's `chars` report how much the page leaves out, so a
 scaffold can ask for more pages instead of asking for everything. The bounds are
 structural rather than advisory: at most `SCAFFOLD_HISTORY_MAX_LIMIT` (100)
 messages, at most `SCAFFOLD_HISTORY_MAX_MESSAGE_CHARS` (8,000) per message, and
@@ -367,13 +366,13 @@ asks for a resolved auth header and never holds the secret.
 
 ## Runtime guarantees
 
-These hold in the runtime today. Two paranoid mechanisms were considered and
-rejected, because each would hurt model UX or performance without addressing a
-real threat. `agent_facts` secret-pattern redaction was rejected because secrets
-the agent sees are already in conversation context, so blocking the keyed-fact
-write rejects legitimate values. Crafted-tool description sanitization was
-rejected because tools are agent-self-authored, there is no external attacker,
-and the cap truncates useful "when to use" guidance.
+These hold in the runtime today. We considered two paranoid mechanisms and
+rejected both, because each would hurt model UX or performance without
+addressing a real threat. `agent_facts` secret-pattern redaction was rejected
+because secrets the agent sees are already in conversation context, so blocking
+the keyed-fact write rejects legitimate values. Crafted-tool description
+sanitization was rejected because tools are agent-self-authored, there is no
+external attacker, and the cap truncates useful "when to use" guidance.
 
 - **Rate-limit resilience on every model fetch.** `withRateLimitRetry`
   (`core/src/providers/rate-limit-retry.ts`) wraps the fetch of every

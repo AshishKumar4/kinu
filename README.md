@@ -23,7 +23,7 @@ jarvis "summarize this repository"
 ```
 
 `kinu setup` opens a browser sign-in and stores the session on this machine. It also
-takes provider keys, which is what a fully local workspace needs.
+takes the provider keys a fully local workspace needs.
 
 A workspace runs in the cloud on Cloudflare Durable Objects, or on your own machine
 on `bun:sqlite`. Choose with `--mode cloud` or `--mode local`. The agent is the same
@@ -41,19 +41,21 @@ CLOUDFLARE_ACCOUNT_ID=<your-id> npx vite dev --port 5173 --host 0.0.0.0
 
 ## What a workspace is
 
-A workspace is a durable container. It holds one POSIX filesystem, a real shell,
-execution environments, sessions, memory and an event log.
+Your agent gets a machine of its own, and it keeps it. A workspace is a durable
+container: one POSIX filesystem, a real shell, execution environments, sessions,
+memory and an event log. The agent lives inside it for as long as you keep it.
 
-An agent lives inside it and keeps it for as long as you do. The agent learns
-reusable tools from its own conversations and stores them with a quality score. It
-can rewrite the agentic loop it runs on. You reach it from the terminal, from the
-browser, from your editor over the Agent Client Protocol, or by email.
+The agent also gets better with use. It learns reusable tools from its own
+conversations and stores them with a quality score, and it can rewrite the agentic
+loop it runs on. You reach it from the terminal, from the browser, from your
+editor over the Agent Client Protocol, or by email.
 
 ## The tree swarm
 
-One tool action runs a search. `agents({action:'swarm', …})` takes a task and an
-objective, builds a tree whose nodes are agents, and measures every candidate the
-way you said.
+Hard tasks get more than one attempt, and code picks the winner. One tool action
+runs the search. `agents({action:'swarm', …})` takes a task and an objective,
+builds a tree whose nodes are agents, and measures every candidate the way you
+said.
 
 You declare the measurement. An `objective` names a metric, a unit, a direction and
 a target, and it names the verifier that measures a candidate. A verifier is code.
@@ -64,7 +66,7 @@ a model ensemble, which ranks candidates without measuring anything, and nothing
 from a judged run persists as a record.
 
 A `preset` fixes the shape of the search. `ideate` is flat by construction, at depth
-1 and 5 branches, and nothing ranks its results. `optimise` climbs one measured
+1 and 5 branches, and hands back every candidate unranked. `optimise` climbs one measured
 number with UCT selection, at depth 5 and 3 branches. `prove` searches deepest, at
 depth 7, because a checker refutes a wrong branch early. `custom` takes the six axes,
 `unit` `context` `expand` `score` `advance` `carry`, and composes your own.
@@ -84,8 +86,8 @@ the same objective starts from it rather than rediscovering it.
 The same tool has six more actions. `hire` creates a subordinate agent that outlives
 the turn, with its own context and a share of this workspace's files. `ask`, `send`,
 `reply`, `list` and `dismiss` address agents that already exist: subordinates here,
-or your other workspaces as peers. No caller ever blocks on a busy agent, because a
-message splices into the turn that agent is already running.
+or your other workspaces as peers. Send to a busy agent and the message splices into
+the turn it is already running, so the caller keeps working.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/delegation-dark.svg">
@@ -97,13 +99,14 @@ the engine refuses, the publication seal and the records store in full.
 
 ## Architecture
 
-The agent lives in `packages/core` and does not know what platform it runs on.
-Two small interfaces carry everything platform-specific: `AgentRuntime` provides
-storage, memory, models and scheduling, and `BackendHost` provides the few things
-a turn loop needs from its host. Two backends implement them: Cloudflare Durable
-Objects, one per workspace, built on [Think](https://github.com/cloudflare/agents),
-and your own machine, on `bun:sqlite` and real processes. The cloud and the CLI
-run the same code, so they cannot drift apart.
+Kinu agents are platform agnostic. They live in `packages/core` and can be extended
+to run on any backend. Two small interfaces carry everything platform-specific:
+`AgentRuntime` provides storage, memory, models and scheduling, and `BackendHost`
+provides the few things a turn loop needs from its host. We implement the pair
+twice: for Cloudflare Durable Objects, one per workspace, built on
+[Think](https://github.com/cloudflare/agents), and for POSIX, on `bun:sqlite` and
+real processes on your own machine. Implement them a third time and the same agent
+runs there. The cloud and the CLI run the same code, so they stay in step.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/backend-dark.svg">
@@ -143,7 +146,8 @@ again.
 **A mutable scaffold.** The agentic loop is code the agent can rewrite. Four structural
 gates validate a mutation before it runs.
 
-**Evolution on three timescales.** Per turn, quality scoring then reflection. Per
+**Evolution on four timescales.** Per step, crafted-tool fitness scored inside one
+long run, with no model call. Per turn, quality scoring then reflection. Per
 session, pattern consolidation then scaffold mutation. Per lifetime, `kinu evolve`
 runs a full tree search over the scaffold itself.
 
@@ -160,8 +164,7 @@ every push that touches `lean/` or a package source file.
 
 ## Models and providers
 
-I wanted model choice to be flexible without forcing anyone into a single vendor, so
-a workspace can run on any of these:
+Model choice is yours. A workspace runs on any of these:
 
 - **Your own Cloudflare account.** One browser sign-in (`kinu auth`) attaches your
   Cloudflare account, and that single login gives you both Workers AI and your AI
@@ -192,11 +195,11 @@ provider's native knob.
 
 ## Headless and CI
 
-`kinu exec` is the non-interactive face of the CLI. It runs one task and exits 0 only
-when the turn completed cleanly, nonzero on an error or a denied device consent, and
-it never prompts. Mint a scoped access token from an interactive session (signed in
-within the last 5 minutes), store it as a CI secret, and pipe the line-delimited
-JSON events wherever you need them:
+Put a workspace in your pipeline. `kinu exec` is the non-interactive face of the
+CLI. It runs one task and exits 0 only when the turn completed cleanly, nonzero on
+an error or a denied device consent, and it never prompts. Mint a scoped access
+token from an interactive session (signed in within the last 5 minutes), store it
+as a CI secret, and pipe the line-delimited JSON events wherever you need them:
 
 ```bash
 kinu tokens create --name ci --scopes workspace.exec,workspace.read  # printed once
@@ -252,7 +255,7 @@ trying it:
 | [Workspaces](docs/WORKSPACES.md) | The object model: workspace = container (file plane, identity, sessions), agents = actors inside it |
 | [Architecture](docs/ARCHITECTURE.md) | System design, message flow, package structure, Think lifecycle |
 | [Exploration](docs/EXPLORATION.md) | The six search axes, the node contract, the publication seal, settle and merge-back |
-| [Evolution](docs/EVOLUTION.md) | 3-timescale self-evolution, CraftStore lifecycle, scaffold mutation |
+| [Evolution](docs/EVOLUTION.md) | 4-timescale self-evolution, CraftStore lifecycle, scaffold mutation |
 | [MCTS](docs/MCTS.md) | Monte Carlo Tree Search, UCT formula, branch isolation, convergence |
 | [Tools](docs/TOOLS.md) | The eight builtin tools, the file plane, the `agents` delegation surface, the codemode sandbox and crafted tools |
 | [Context budget](docs/CONTEXT-BUDGET.md) | The reference-plus-digest invariant: where bulk spills, the turn-cumulative clamp, and the trip counters |
@@ -268,7 +271,7 @@ trying it:
 
 | Package | Description |
 |---------|-------------|
-| `core/` | The shared brain, platform-independent: turn pipeline and `ExtensionHost`, canonical VFS and `ExecutionRouter`, the swarm engine, MCTS engine, `EvolutionEngine`, `CraftStore`, scaffold, the eight builtin tools, `EventLog` and `SignalDelivery`, types |
+| `core/` | The shared brain, platform agnostic: turn pipeline and `ExtensionHost`, canonical VFS and `ExecutionRouter`, the swarm engine, MCTS engine, `EvolutionEngine`, `CraftStore`, scaffold, the eight builtin tools, `EventLog` and `SignalDelivery`, types |
 | `agent-utils/` | MemoryStore (FTS5), CraftStore (FTS5), the shared VFS types, path addressing and small abort/encoding helpers |
 | `compaction/` | The default `transformContext` extension: the vendored better-compact ladder and the Kinu AI-SDK codec for it |
 | `cf-backend/` | Cloudflare Workers: OrchestratorAgent (a thin Think adapter), ExplorationAgent and SubordinateAgent (Facets), UserDO, React UI |

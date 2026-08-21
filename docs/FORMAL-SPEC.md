@@ -23,7 +23,7 @@ running system.
 | Area | Theorems | What is modeled | Important boundary |
 |------|---------:|-----------------|--------------------|
 | Exploration | 246 | the publication seal, monotone records displacement, the descriptor partition and its admission test, the derived fan-in order, verdict rebasing, settle totality, arbitration bounds | Two modules are conditional by their own headers: the descriptor partition is contingent on how a descriptor is produced, and `Isolation.lean` proves a negative. `ArchiveAdmission.lean` reports a refutation rather than a bound |
-| Evolution | 22 | counter postconditions, craft-list operations, a scaled-natural EMA, scaffold lookup and append | The real EMA uses configurable JavaScript floating-point arithmetic, and several transition postconditions are asserted by the model |
+| Evolution | 22 | counter postconditions, craft-list operations, a scaled-natural EMA, scaffold lookup and append | The real EMA uses configurable JavaScript floating-point arithmetic, and the model asserts several transition postconditions |
 | Agent | 18 | lifecycle counters, an abstract turn queue, durable-fiber budget fields | The production queue and SDK persistence semantics are not refined from these models |
 | Execution | 18 | an executor capability lattice, action-to-tool mapping, workspace-call isolation | The capability lattice and tool vocabulary are stale relative to the current provider and the eight-tool builtin surface |
 | MCTS | 11 | exact scaled-integer backpropagation, storage isolation, a natural-number budget measure | SQLite backpropagation uses IEEE-754 REAL values, and transition postconditions are hand-maintained |
@@ -148,9 +148,9 @@ citation:
 ## Implementation correspondence
 
 The old checksum gate only detected that selected TypeScript files changed; it
-could not show whether Lean and TypeScript still computed the same thing. It
-has been removed. The current gate makes proof claims and assumptions
-auditable, but the models are still maintained independently from the code.
+could not show whether Lean and TypeScript still computed the same thing. We
+removed it. The current gate makes proof claims and assumptions auditable, but
+we still maintain the models independently from the code.
 
 WP-F4 is the remaining bridge. Executable differential fixtures and
 property-based tests will run the Lean-modeled behavior and production

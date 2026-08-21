@@ -1,4 +1,4 @@
-# Kinu Crafted-Tool Architecture — Prior-Art Comparison
+# Kinu Crafted-Tool Architecture: Prior-Art Comparison
 
 ## 0. Background
 
@@ -54,7 +54,7 @@ The reference treats the SQL `CraftStore` as the single source of truth, with no
 - **Next-step visibility.** A newly saved tool is callable in the NEXT codemode invocation, in the same turn but a later step. Within a single `execute_tools` arrow the tool set is frozen, because the preamble is built once from that read. On both backends `createExecuteTool` takes a `craftedTools()` resolver rather than a snapshot, and the CLI binds that record under both `codemode` and `tools`. On CF only `tools.<name>` is callable, because the body lives in the preamble rather than in the dispatcher. `codemode.<name>` is still reachable there, so `craftedDispatcherEntry` (`cf-backend/src/execute-tools.ts`) makes it THROW and name the form that works, rather than return an error object the model would read as a result.
 - **A crafted tool's failure carries its name.** Both paths wrap the body so a throw leaves the sandbox stamped `[crafted:<name>] <message>` (`craftFailureMarker`, `core/src/craft/in-episode.ts`). See docs/EVOLUTION.md, "In-Episode Evolution".
 - **MCP tools follow the same re-read rule by a different route.** `buildUserMcpTools` (`cf-backend/src/actor-agent.ts`) rebuilds the whole MCP `ToolSet` whenever the user's server watermark changes, so a mid-turn connection lands. Those tools are top-level AI SDK entries rather than a codemode namespace, clamped through the same turn budget (`withClampedToolResults`, producer `external_tool`).
-- **Surfacing.** Crafted tools are ONLY available inside codemode as `tools.<name>`. They are NOT surfaced as top-level AI SDK tools; `BUILTIN_TOOLS` is a fixed list of eight names. The LLM is told so by the system prompt.
+- **Surfacing.** Crafted tools are ONLY available inside codemode as `tools.<name>`. They are NOT surfaced as top-level AI SDK tools; `BUILTIN_TOOLS` is a fixed list of eight names. The system prompt says so.
 - **LLM-visible namespace docs.** The `execute_tools` summary names the namespaces: "Run JavaScript against active executor namespaces, codemode.\* providers, tools.\<name\> crafted tools, and agent helpers." The full contract for all of them is the `Namespace contract` comment above `BUILTIN_TOOL_SPECS` in `core/src/tools/registry.ts`.
 
 ## 4. Reference LOADER Worker Module
@@ -86,7 +86,7 @@ Normalization of stored code is a single `.trim()`. No semicolon stripping, no d
 **Kinu's shipped version diverges from both snippets above.**
 
 - `buildToolsPreamble` wraps every body in an IIFE that re-throws with `craftFailureMarker(name)` prefixed, so a failure names the tool that raised it and the in-episode fitness signal can score the right artifact. The body sits alone between parentheses on its own lines, because a model-authored body ending in a `//` comment would otherwise swallow the rest of the wrapper and turn the whole preamble into a syntax error.
-- `injectPreamble` does not splice. It normalizes with codemode's own `normalizeCode` and then WRAPS: `async () => { <preamble>return await (<normalized>)(); }`. The regex splice silently dropped the preamble whenever the model's code was not already an `async (…) => {` arrow, which is exactly what `BUILTIN_TOOL_SPECS.execute_tools.example` teaches and what `normalizeCode` wraps for you. On every such call the whole crafted-tool surface was undefined with no error naming why.
+- `injectPreamble` normalizes with codemode's own `normalizeCode` and then WRAPS: `async () => { <preamble>return await (<normalized>)(); }`. It replaces a regex splice that silently dropped the preamble whenever the model's code was not already an `async (…) => {` arrow, which is exactly what `BUILTIN_TOOL_SPECS.execute_tools.example` teaches and what `normalizeCode` wraps for you. On every such call the whole crafted-tool surface was undefined with no error naming why.
 
 Both functions live in `cf-backend/src/crafted-tool-registry.ts` and are exported, so their behaviour is testable without a sandbox.
 

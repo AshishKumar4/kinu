@@ -21,16 +21,16 @@ authoritative Nimbus workspace, and optional embedding recall in the
 source of truth.
 
 `AUTH_KV` holds only expiring records: browser sessions, one-time OAuth handoff
-state, and CLI browser-approval state. Each write carries its own TTL, so
-nothing sweeps them. None of it is a source of truth. A user's identity lives in
-that user's `UserDO`, addressed by a userId derived from the verified email, so
-an emptied namespace costs everyone a fresh sign-in and nothing more.
+state, and CLI browser-approval state. Each write carries its own TTL, so each
+record expires on its own. None of it is a source of truth. A user's identity
+lives in that user's `UserDO`, addressed by a userId derived from the verified
+email, so an emptied namespace costs everyone a fresh sign-in and nothing more.
 
 ## Entity Relationship
 
 The relational workspace tables, as created by the Core schema initializers and
-agent-utils stores. The workspace's files are not here; they live in the Nimbus
-filesystem described below.
+agent-utils stores. The workspace's files live in the Nimbus filesystem
+described below.
 
 ```mermaid
 erDiagram
@@ -181,8 +181,8 @@ The agent's identity document lives at `SOUL.md` in the workspace filesystem, on
 both backends. `readSoul`/`writeSoul`/`seedSoul` (`core/src/identity/soul.ts`)
 are the accessors; the system prompt, evolution engine, and `setSoul` RPC all go
 through them. `writeSoul` also maintains `workspace_identity.mission`, so a
-read-only listing never has to open the file. The owner may edit SOUL.md; the
-agent does not rewrite its own identity.
+read-only listing reads the mission from that row. The owner may edit SOUL.md;
+the agent does not rewrite its own identity.
 
 ## The workspace filesystem
 
@@ -236,7 +236,7 @@ From `@kinu.run/agent-utils`. Provides full-text search over markdown files stor
 
 **Schema:** `memory_chunks` table with `memory_chunks_fts` FTS5 virtual table (external content via `content='memory_chunks'`). `initMemoryChunkTables` is the one DDL; `MemoryStore.ensureSchema()` delegates to it.
 
-**Indexing:** Files are chunked using a line-aware sliding window (`DEFAULT_CHUNK_TARGET_CHARS` 1600, `DEFAULT_CHUNK_OVERLAP_CHARS` 320). Each chunk gets a SHA-256 hash for deduplication, so unchanged chunks are not re-indexed.
+**Indexing:** Files are chunked using a line-aware sliding window (`DEFAULT_CHUNK_TARGET_CHARS` 1600, `DEFAULT_CHUNK_OVERLAP_CHARS` 320). Each chunk gets a SHA-256 hash for deduplication, so the next pass skips unchanged chunks.
 
 **Search:** FTS5 MATCH with BM25 ranking. `sanitizeFtsQuery` removes FTS5 operators and stop words. Falls back to OR-joined tokens if the AND query returns no results.
 

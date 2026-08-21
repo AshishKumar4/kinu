@@ -4,8 +4,8 @@ The extension API is the public way to observe and extend one agent turn
 without importing engine internals. Both backends fire the same hook path. On
 the CLI that is the shared chat engine, `runChat`. In the cloud it is the
 Durable Object's Think hook bridge on `ActorAgent`. Internal consumers and
-external plugins ride the same mechanism, so no private callback runs beside a
-parallel plugin API.
+external plugins ride the same mechanism, and no private callback path runs
+beside it.
 
 For the wider extension points (model provider, exploration strategy, actor
 kind), see [EXTENSIBILITY.md](./EXTENSIBILITY.md). This document covers the
@@ -151,12 +151,12 @@ above. `packages/cf-backend/package.json` depends on `@cloudflare/think` at
 `assembleTurnMessages` that `runChat` calls too. The ordering cannot drift per
 backend.
 
-One thing is worth knowing about `registerTools` here. An actor's `activeTools`
-whitelist is `[...effectiveActiveTools, ...extensionToolNames]`, and
-`actorActiveTools()` has already narrowed `effectiveActiveTools` to the deps
-that actor's profile wired. Extension tools are additive on top of the narrowed
-set and never widen it. A contributed tool whose name is already in the turn's
-tools or its MCP tools is dropped before the merge
+An actor's `activeTools` whitelist is
+`[...effectiveActiveTools, ...extensionToolNames]`, and `actorActiveTools()`
+has already narrowed `effectiveActiveTools` to the deps that actor's profile
+wired. Extension tools are additive on top of the narrowed set and never widen
+it. A contributed tool whose name is already in the turn's tools or its MCP
+tools is dropped before the merge
 (`cf-backend/src/actor-agent.ts:3092-3101`).
 
 ## Notes

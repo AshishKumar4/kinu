@@ -1,16 +1,17 @@
 # Architecture
 
-Kinu is a self-evolving agent **workspace**. You create a workspace (a durable
+Kinu is a self-evolving agent platform. You create a **workspace** (a durable
 container with its own filesystem, execution environments, and sessions) and its
 agent answers chat, runs tools, searches a tree of agent nodes against an
 objective you declare, learns reusable tools, and can rewrite its own agentic
 loop.
 
-The design has one rule: **one shared brain, thin adapters.**
-Everything platform-independent lives in `packages/core`. The cloud backend
-(`packages/cf-backend`, a Durable Object over Cloudflare's [Think](https://github.com/cloudflare/agents))
-and the local backend (`packages/cli-backend`) are thin shells that give the same
-core loop a place to run. This document maps that structure to real modules; file
+The design has one rule: **one shared brain, thin adapters.** Everything platform
+agnostic lives in `packages/core`, and a backend is the thin shell that gives it a
+place to run. We ship two: the cloud backend (`packages/cf-backend`, a Durable
+Object over Cloudflare's [Think](https://github.com/cloudflare/agents)) and the
+local POSIX backend (`packages/cli-backend`). Both run the same core loop. This
+document maps that structure to real modules; file
 paths are cited so you can jump to the source.
 
 ## The workspace object model
@@ -98,7 +99,7 @@ Plan-mode tool construction; `submit_plan` is present only for an orchestrator
 Plan turn.
 
 **`ExplorationAgent` deliberately stays on the bare `Agent`.** It has three
-explicit modes. An MCTS rollout gets no tools or runtime at all. A branching
+explicit modes. An MCTS rollout gets no tools and no runtime. A branching
 head gets the hand-built head surface (evidence, decisions, `execute_tools`,
 `run`, `file`, `web`, and depth-budgeted subheads) over the canonical parent
 workspace. A swarm node arrives as a serialisable `NodeRunSpec` over RPC, and
@@ -144,11 +145,10 @@ private and has no report tool. `dismiss` deletes the facet
 unless `keep_history` is set, in which case only the roster row is marked
 dismissed.
 
-The system prompt (`core/src/prompt.ts`) carries the matching doctrine, the
-delegation ladder that steers the agent to decompose multi-part or multi-hour
-work and hire one subordinate per independent workstream, keeping the
-coordination and integration turn for itself, rather than grinding through
-everything inline.
+The system prompt (`core/src/prompt.ts`) carries the matching doctrine. Its
+delegation ladder steers the agent to decompose multi-part or multi-hour work,
+hire one subordinate per independent workstream, and keep the coordination and
+integration turn for itself.
 
 ## The turn pipeline
 
@@ -159,16 +159,15 @@ on the CLI, `LocalAgentSession` (`cli-backend/src/local-session.ts`) drives
 `runChat` with the same host. There is deliberately no private callback path
 running parallel to the plugin API.
 
-Three kinds of agent run turns here, and there are two turn bodies rather than
-three. `runChat` (`core/src/chat.ts`) is the body for a CLI session and for a
+Three kinds of agent run turns here, on two turn bodies. `runChat`
+(`core/src/chat.ts`) is the body for a CLI session and for a
 swarm node alike, because a node reaches it through `runHeadInference`, which
 owns no loop of its own (`core/src/heads/head-inference.ts`). One implementation
 therefore holds the stall watchdog, the dead-stream detection, the mid-step
 abort, the step-boundary pruning and the unpaired-tool-call repair for both. The
 cloud actor is the exception because its loop belongs to Think. The vendor
 drives the steps and Kinu binds to the hooks below. A node registers no
-extensions, so compaction and signal delivery belong to an actor's turn and
-never to a node's.
+extensions, so compaction and signal delivery belong to an actor's turn alone.
 
 ```mermaid
 flowchart TB
@@ -331,7 +330,7 @@ this (it also names `chat_ws`, `sandbox_cb`, `process_watch`, `file_watch`,
 `mcp_streamable`, `self_emit`, and `reply_request`), but the five above are the
 paths that wake a sleeping workspace from outside its own turn.
 
-## MCP — user-level once-auth, zero token transfer
+## MCP: user-level once-auth, zero token transfer
 
 MCP servers are authenticated **once at the user level** and held by the `UserDO`
 (`cf-backend/src/user/user-do.ts`, `user_mcp_servers` table; OAuth callback at
@@ -373,9 +372,13 @@ forgotten tool gate can route around it.
 
 ## Evolution
 
-The `EvolutionEngine` (`core/src/evolution/engine.ts`) runs across three
-timescales, each feeding the next:
+Evolution runs across four timescales, each feeding the next. The step clock ticks
+inside a single long turn; the other three are conversational and belong to the
+`EvolutionEngine` (`core/src/evolution/engine.ts`):
 
+- **In-episode.** Every settled `execute_tools` call scores crafted-tool fitness
+  into `craft_scores` with one synchronous SQL write and no model call
+  (`core/src/orchestrator/craft-cycle.ts` over `core/src/craft/in-episode.ts`).
 - **Turn-level.** `reviewTurn()` assesses the just-finished turn; a negative
   outcome gates a reflection into memory, a strong one extracts a reusable
   CraftStore tool.
@@ -386,8 +389,8 @@ timescales, each feeding the next:
 
 MCTS branch rewards are **execution-grounded on both backends**. The single
 scorer (`core/src/mcts/evaluation.ts`) lets execution outcome dominate the judge
-for CF Facets, the CF inline fallback, and CLI child-process branches alike. Scaffold
-mutations are guarded before they can take effect: a **misevolution gate**
+for CF Facets, the CF inline fallback, and CLI child-process branches alike. Gates
+run before a scaffold mutation takes effect: a **misevolution gate**
 (`core/src/scaffold/misevolution.ts`) rejects harmful edits by fixed criteria, a
 **shadow-veto** (`core/src/scaffold/shadow.ts`, `maxRegressions: 1`,
 `minDecisiveTrials: 5`, Monte-Carlo-derived) rejects regressions, and a **DGM-style
@@ -437,8 +440,9 @@ graph TB
 
 ## Backends and the AgentRuntime contract
 
-`AgentRuntime` and `BackendHost` are the two interfaces every backend
-implements, so `packages/core` never has to know where it runs. The Cloudflare
+`AgentRuntime` and `BackendHost` are the two interfaces a backend implements, and
+they are the whole contract: implement the pair and `packages/core` runs on your
+platform. The Cloudflare
 backend (`packages/cf-backend`) binds actor state to Durable Object SQLite,
 workspace files and execution to Nimbus, and the turn driver to Think. The local
 CLI backend (`packages/cli-backend`) binds them to `bun:sqlite` and a local
@@ -477,8 +481,8 @@ Two policies apply to every provider:
 - **The catalog is live.** `core/src/providers/models-dev.ts` fetches
   `https://models.dev/api.json` behind a 5-minute cache and derives each model's
   context window and capabilities from it. The static per-provider lists
-  (`WORKERS_AI_FALLBACK_MODEL_CATALOG`, each provider's `FALLBACK_MODELS`) are
-  only what you get when that fetch fails or filters to nothing.
+  (`WORKERS_AI_FALLBACK_MODEL_CATALOG`, each provider's `FALLBACK_MODELS`) serve
+  as the fallback when that fetch fails or filters to nothing.
 - **Every model fetch retries rate limits.** `withRateLimitRetry`
   (`core/src/providers/rate-limit-retry.ts`) wraps the fetch of every provider:
   the shared `createAuthedFetch`, the Workers AI path, the AI Gateway path, and
@@ -489,14 +493,14 @@ Two policies apply to every provider:
   untouched, and an exhausted budget returns the original response rather than
   throwing.
 
-**Reasoning effort** is user-settable rather than baked in. `/effort` in chat or
+**Reasoning effort** is yours to set. `/effort` in chat or
 `kinu effort <workspace> <level>` stores `reasoning_effort` in the workspace's
 `agent_config`, with `~/.kinu/config.json` holding the CLI-side default for
 new workspaces. `core/src/strategy/effort.ts` maps the level onto each provider
 family's native knob: `reasoning_effort` for Workers AI, `reasoningEffort` for
 OpenAI-shaped and OpenRouter providers, and a thinking `budgetTokens`
-(4k/16k/32k) for Anthropic. Internal stages that shouldn't cost chat-grade
-thinking pick their own level from `REASONING_EFFORT_FOR_STAGE`: reflection and
+(4k/16k/32k) for Anthropic. Internal stages carry their own level from
+`REASONING_EFFORT_FOR_STAGE`, sized to the work: reflection and
 MCTS rollouts run `low`, scaffold mutation runs `high`.
 
 ## Storage and formal models

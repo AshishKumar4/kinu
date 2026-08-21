@@ -19,8 +19,7 @@ the ancestor mean, `record-node.ts` for the one INSERT, and `pruning.ts` for
 retirement. They share no dispatch. When the caller is a model, read
 [EXPLORATION.md](./EXPLORATION.md) instead of this file.
 
-This engine is registered rather than vestigial, and it is reached
-programmatically:
+This engine is registered, and code reaches it programmatically:
 
 - `strategy/mcts.ts` is registered in the `StrategyRegistry` on every backend
   (`orchestrator/fork-deps.ts`), so anything dispatching an `ExplorationStrategy`
@@ -35,10 +34,10 @@ programmatically:
   starting a new one. That ledger is shared with the swarm runner
   (`strategy/swarm-run.ts`), which writes a row per run under `engine: 'swarm'`
   and re-enters its own rows through a lookup of its own
-  (`findRunningSwarms`, applied by `strategy/swarm-resume.ts`). Each loop's
-  query is scoped to its own engine's rows, so neither can be handed the
-  other's tree. A swarm's is scored against an objective this loop cannot read,
-  and this loop's branches are judged.
+  (`findRunningSwarms`, applied by `strategy/swarm-resume.ts`). Each query is
+  scoped to its own engine's rows, so neither can be handed the other's tree. A
+  swarm's is scored against an objective this engine cannot read, and this
+  engine's branches are judged.
 
 Everything below describes live code.
 
@@ -162,12 +161,12 @@ runs a smaller search (budget 2, branches 2), and an operator can override
 iterations, depth, branches, judge samples, eval-call ceiling, and the
 exploration weight per workspace through `agent_config`.
 
-## Scoring — execution picks the band, and inside the fail band it positions too
+## Scoring: execution picks the band, and inside the fail band it positions too
 
-The single scorer (`mcts/evaluation.ts`) is used by every backend. Execution
-outcome and judge score are **not** averaged. Whether the branch's code ran and
-passed selects a score band, and only then is anything asked where inside that
-band the branch lands.
+Every backend scores through the single scorer (`mcts/evaluation.ts`). Execution
+outcome and judge score compose in order, never as an average. Whether the
+branch's code ran and passed selects a score band, and only then is anything
+asked where inside that band the branch lands.
 
 | Branch produced | Score | Range |
 |---|---|---|
@@ -198,8 +197,8 @@ suite, so the ensemble gets what is left. `judgeCallBudget`
 | `maxEvalLLMCalls: 1` | 1, no check suite is bought | 1 |
 
 A request above the ceiling is realised AT the ceiling, so `judgeSamples: 20` on
-shipped defaults runs a **3**-sample ensemble on every code branch. That is not
-silent. The realised size comes back on each evaluation as
+shipped defaults runs a **3**-sample ensemble on every code branch. Each clamp
+leaves a record. The realised size comes back on each evaluation as
 `BranchEvaluation.judgeSamplesAttempted`, the engine logs
 `mcts.judge_ensemble_clamped` (`judgeSamplesRequested` / `judgeSamplesRealised` /
 `maxEvalLLMCalls`) once per realised size per search, the heads path logs
@@ -283,9 +282,8 @@ way. `ExplorationAgent`'s MCTS-mode `@callable()` methods are:
 - `explore(history, craftedTools, languages, mode, siblingAngles)`: propose one approach under the parent's trusted work mode
 - `generateReflection(task, outcome?)`: explain what went wrong (for pruned branches), given the environment's verdict on the attempt
 
-plus `setOwner` / `setSharedParent` for bootstrap. Siblings are pushed apart by
-`mcts/diversity.ts`, which hands each branch index a different framing angle, so
-three branches don't converge on the same idea.
+plus `setOwner` / `setSharedParent` for bootstrap. `mcts/diversity.ts` hands each
+branch index a different framing angle, so siblings start apart.
 
 ### The observation loop
 
@@ -312,10 +310,10 @@ no observation line rather than an invented one.
 ### Why branches are toolless, and where the tool-using ones live
 
 A branch here is deliberately one model call with no `ToolSet` and no runtime.
-That is the other half of a pair rather than an unfinished subagent. The `heads`
-strategy (`core/src/strategy/heads.ts`) is the half whose branches **are** full
-agentic loops, the same `ExplorationAgent` class in head mode, scored by this
-same `evaluation.ts` through `HeadController.scoreHeads`.
+It is one half of a pair. The `heads` strategy (`core/src/strategy/heads.ts`) is
+the half whose branches **are** full agentic loops, the same `ExplorationAgent`
+class in head mode, scored by this same `evaluation.ts` through
+`HeadController.scoreHeads`.
 
 The two differ on the axis that matters for search:
 

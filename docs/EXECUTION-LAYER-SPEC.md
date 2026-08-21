@@ -43,7 +43,7 @@ depends on the backend.
 | `laptop` | Cloudflare over the device tunnel (`cf-backend/src/runtime.ts:554`); the CLI over its own host process (`cli-backend/src/runtime.ts:442`) | a separate user machine |
 | `parent` | CLI head runtimes only (`cli-backend/src/runtime.ts:568`) | another workspace authority |
 
-Cloudflare registers no `parent` provider. It supplies the serving half instead.
+Cloudflare supplies the serving half rather than a `parent` provider.
 `ActorAgent` exposes
 `readWorkspaceFile`, `statWorkspaceFile` and `execWorkspaceCommand`, all listed
 in `cf-backend/src/rpc-surface.ts`, and a CLI head calls them across the
@@ -75,8 +75,8 @@ environment:
 
 `ExecutionRouter` (`core/src/execution/router.ts`) registers providers, reports
 their status, and hands codemode only the providers that answer `isAvailable()`.
-It infers nothing about a task and routes nothing automatically. The explicit
-`runtime` argument and the namespaced call are the routing decision.
+The explicit `runtime` argument and the namespaced call are the whole routing
+decision.
 `register()` also gates each provider's shell-reaching tools with the live
 approval policy, through `gateProviderExec` in
 `core/src/execution/approval.ts:100`. So `run`'s dispatch and a codemode
@@ -352,5 +352,5 @@ today already follows it.
    provider list.
 
 The reusable `nimbus` kind and the generic factory in Core are extension points
-for other backends. They do not imply that the Cloudflare product registers a
-second Nimbus environment.
+for other backends. The Cloudflare product itself registers one Nimbus
+environment.

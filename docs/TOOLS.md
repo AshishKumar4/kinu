@@ -1,4 +1,4 @@
-# Agent Tools — Built-in Tool Architecture
+# Agent Tools: Built-in Tool Architecture
 
 The agent exposes a small set of **built-in top-level tools** to the LLM. `BUILTIN_TOOLS` in `packages/core/src/tools/registry.ts` is the canonical list of 8 names. The list stays short to keep the model's *decision surface* small. Every native tool is a standing choice the model weighs on every turn it is not the answer to, and selection accuracy degrades with choice count. Files are read and changed through the `file` tool; the same operations are also available as `workspace.*` APIs inside the `execute_tools` codemode sandbox. Crafted tools from the CraftStore are injected into the same sandbox as `codemode.*` (the default namespace exposed by `@cloudflare/codemode`'s `createCodeTool`) and, via the preamble, as `tools.<name>`.
 
@@ -23,7 +23,7 @@ subordinate gets `report` and never gets the `reply` action of `agents`.
 | `web` | Live web access: `search` returns ranked results (title, url, snippet, date), `fetch` returns one URL as clean, citation-ready markdown. Key-less via DuckDuckGo + the Cloudflare markdown service; a stored `tavily` credential upgrades search |
 | `report` | A subordinate's progress spine back to its orchestrator: `progress \| completed \| blocked` |
 
-### The reach axis — declared, not derived
+### The reach axis: declared, not derived
 
 How the model reaches a capability is a **declared property** of that
 capability, in `TOOL_REACH` (`packages/core/src/tools/registry.ts`):
@@ -96,7 +96,7 @@ than instruments it reaches for:
 | `workspace.createView(name, spec)` | a dashboard tab in the web UI, drawn by the host from declarative JSON |
 | `workspace.editFile(path, edits)` | an exact-match edit, with the SAME gate and, where the backend shares a turn ledger, the SAME read-before-write state as the native `file` tool's `edit` action |
 
-## file — the file plane
+## file: the file plane
 
 There is **one** file tool, with three actions, for the same reason `memory` is
 one tool. Reading a file, replacing text inside it and creating it are one
@@ -161,7 +161,7 @@ line-numbered read format, a snapshot store and 3-way merge, and its published
 gains concentrate on weak models. Exact match captures most of the benefit at no
 prompt cost.
 
-## agents — the delegation surface
+## agents: the delegation surface
 
 There is **one** delegation tool. `think`, `team` and `peers` were three tools
 for one decision; they are now three groups of actions on `agents`, gated by
@@ -330,8 +330,8 @@ that quietly stopped ranking is worse than one that records the loss.
 
 ### The delivery contract
 
-A busy agent is **never blocked on**, and both `ask` and `send` report that in
-their return rather than leaving the sender to guess:
+A busy agent never blocks its sender, and both `ask` and `send` report the
+delivery in their return rather than leaving the sender to guess:
 
 | Field | Meaning |
 |-------|---------|
@@ -348,7 +348,7 @@ trusted Plan/Build mode and queues a separate turn when the target is busy.
 The host stamps the mode. The shared drain and signal-delivery path starts the
 next serialized turn with that same mode.
 
-## execute_tools — Codemode Sandbox
+## execute_tools: Codemode Sandbox
 
 The primary tool. The LLM writes JavaScript code that runs in an isolated Worker via the `LOADER` binding (`@cloudflare/codemode`).
 
@@ -407,10 +407,10 @@ const result = await codemode.my_custom_parser({ input: "data" });
 ### agents.* APIs (delegation, dep-gated)
 
 The `agents` delegation tool is also projected into the sandbox, so a script can
-delegate with ordinary control flow. This is what makes a crafted tool able to
-*be* a workflow: fan out, inspect results, branch, aggregate, then save the
-routine with `workspace.createTool`, and schedule or trigger it like any other
-craft. There is no workflow DSL, graph engine or step store, because
+delegate with ordinary control flow. A crafted tool can be the whole workflow.
+The script fans out, inspects results, branches, aggregates, then saves the
+routine with `workspace.createTool`, and schedules or triggers it like any
+other craft. There is no workflow DSL, graph engine or step store, because
 `CraftStore`, `agent.schedule` and the trigger hub already cover those.
 
 ```javascript
@@ -530,7 +530,7 @@ concise arrow and a block arrow are all equally correct now.
 `packages/cf-backend/tests/unit-crafted-injection.test.ts` runs the injected
 program for each shape.
 
-## file — action reference
+## file: action reference
 
 ```
 file { action: "read",  path, offset?, limit? }   → the content, or a marker naming the next offset
@@ -551,7 +551,7 @@ I/O), the per-turn state is `tools/file-ledger.ts`, and the tool itself is
 that matter (an anchor lands exactly once or not at all, and no read is clipped
 without saying how to continue it) with faults that model each being lost.
 
-## run — Shell Command
+## run: Shell Command
 
 Direct POSIX shell execution over the workspace **file plane**. This is Nimbus's
 own shell over the same bytes the `file` tool and `workspace.*` address, so a
@@ -580,7 +580,7 @@ unless the workspace's shell approval mode is `allow_all`.
 The live executor status is authoritative for which workspace programs and
 runtimes are installed. Do not infer capability from older backend labels.
 
-## agents swarm — the configured-search rung
+## agents swarm: the configured-search rung
 
 `agents` with `action: swarm` resolves the call, checks it, then runs it.
 `runSwarmAction` (`core/src/tools/agents-tool.ts`) dispatches into `runSwarm`
@@ -615,7 +615,7 @@ branching on `reason` asks a different question from one reading a report.
 itself: the six axes, the seven presets, what a node is, and what the engine
 refuses.
 
-## experience — cross-workspace transfer
+## experience: cross-workspace transfer
 
 The owner's workspaces each earn their own crafted tools, lessons, facts and
 agent loop, and `experience` is the one path between them: `publish` offers what

@@ -70,7 +70,7 @@ bun run dev
 ```
 
 `bun run dev` runs `vite dev --host 0.0.0.0` in `packages/cf-backend`. Open
-http://localhost:5173, which is Vite's default port and is not overridden. The
+http://localhost:5173, which is Vite's default port and the one this repo uses. The
 Vite cloudflare() plugin runs real Durable Objects locally through Miniflare.
 
 That URL gets you the platform AI Gateway provider, billed to the account the
@@ -400,8 +400,8 @@ To set up the platform AI Gateway:
    the Worker**. The binding resolves gateway names in-account only.
 3. Set `AI_GATEWAY_URL` in wrangler vars to `https://gateway.ai.cloudflare.com/v1/<account-id>/<gateway-name>/workers-ai/v1`
 
-No API token is required. The Worker reaches the gateway through the `AI`
-binding, which is pre-authenticated inside its own account.
+The Worker reaches the gateway through the `AI` binding, which is
+pre-authenticated inside its own account, so it needs no API token.
 
 ### The provider registry
 
@@ -457,8 +457,8 @@ relying on it.
 ### Rate limits
 
 Every provider fetch goes through `withRateLimitRetry`
-(`core/src/providers/rate-limit-retry.ts`), so a 429 does not surface as a
-failed turn. It retries 429, 529 and overload-shaped 503s up to 6 attempts
+(`core/src/providers/rate-limit-retry.ts`), so a 429 becomes a retry and the
+turn keeps running. It retries 429, 529 and overload-shaped 503s up to 6 attempts
 within a 180-second budget. It honors `Retry-After` verbatim when present, and
 otherwise waits a full-jitter draw under a ceiling that doubles from 2 s to a
 60 s cap. Requests whose body cannot be replayed pass through untouched, and an
@@ -624,7 +624,7 @@ There is exactly one assets directory: `packages/cf-backend/dist/client`.
 `packages/cf-backend/.wrangler/deploy/config.json` and deploys the generated
 `dist/kinu/wrangler.json`, whose `assets.directory` is `../client`. The
 hand-written `wrangler.jsonc` says `dist/client`. Both resolve to the same
-place, so the choice of config does not change which files are published.
+place, so either config publishes the same files.
 
 `dist/kinu/assets/` holds the Worker bundle's code-split chunk output, which
 wrangler attaches as Worker modules. It is not an assets directory, and nothing
@@ -666,8 +666,8 @@ bun run --cwd packages/cf-backend deploy:staging
 
 It rebuilds with `CLOUDFLARE_ENV=staging` so the Vite plugin generates the
 staging config the deploy redirect points at, builds the CLI source archive,
-deploys, then rebuilds for production so the working tree is not left holding a
-staging bundle.
+deploys, then rebuilds for production so the working tree is left holding a
+production bundle.
 
 ### Synthetic monitoring
 

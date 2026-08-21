@@ -98,7 +98,7 @@ site is a cf-backend change rather than a core one. `selfPath` rather than
 `durableObjectId` on the deployed runtime, so an id-keyed trace collapses every
 head and subordinate into one orchestrator.
 
-`tracing.invocation` enforces the absence of trace context across `alarm()`. It
+`tracing.invocation` ends trace context at the `alarm()` boundary. It
 revokes the `TracedInvocation` handle when its method's promise settles, so a
 span opened from anything that escaped the tick throws
 `KinuError('unsupported')`. The turn that armed a trigger finished minutes or
@@ -147,11 +147,11 @@ promise is not a stub. Pipelining is lost and the call becomes a round trip. The
 Six, all from `AGENTS.md`, restated here only where this file adds something the
 rule alone does not give you.
 
-1. **No `catch` discards its error.** Do not catch, wrap-and-rethrow with
-   `cause`, or handle a domain value and record it. Enforced by
-   `no-empty-catch`, `no-sentinel-catch`, `require-cause-on-rethrow` and
-   `no-ddl-in-catch`. Never add an `oxlint-disable` to pass one. Those four are
-   narrow by construction, and `gate:silent-drop` is the census of what they
+1. **No `catch` discards its error.** Three answers are allowed: do not catch,
+   wrap-and-rethrow with `cause`, or handle a domain value and record it.
+   Enforced by `no-empty-catch`, `no-sentinel-catch`, `require-cause-on-rethrow`
+   and `no-ddl-in-catch`. Never add an `oxlint-disable` to pass one. Those four
+   are narrow by construction, and `gate:silent-drop` is the census of what they
    cannot see.
 2. **A refusal carries a classification, reason first.** The shape is
    `{ reason: ErrorCode, error: string }`. Reason first because every path that
@@ -264,7 +264,7 @@ provider's usage before narrowing the result and reports it through a
 `workspaceSpend()` reads exactly those rows
 (`packages/core/src/read-models/workspace-spend.ts:182-187`) and buckets them
 under the `fast` and `reflection` producers, which is what the Activity cost
-panel renders. **So review spend is not missing from the workspace total.**
+panel renders. **So the workspace total includes review spend.**
 
 `workspaceSpend()` now reports that total on TWO axes. `producers` groups it by
 what kind of work made the call, over the named window. `missions` groups it by

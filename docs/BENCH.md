@@ -1,4 +1,4 @@
-# Bench — measuring whether self-evolution does anything
+# Bench: measuring whether self-evolution does anything
 
 Kinu carries a large self-evolution machine with no measured effect attached
 to it. Measured 2026-08-19: 15,645 lines of non-test TypeScript across
@@ -22,10 +22,10 @@ bun scripts/bench.ts validate --run-root /tmp/bench --family longhorizon
 
 ## Two families, one harness
 
-`--family` selects the corpus. The sandbox isolation, the seal, the pairing, the
-statistics, the report and the acceptance rule are shared. The families differ
-in three things: what the corpus is, how a sandbox is seeded, and what the
-controls do.
+`--family` selects the corpus. Both families share the sandbox isolation, the
+seal, the pairing, the statistics, the report and the acceptance rule. They
+differ in three things: what the corpus is, how a sandbox is seeded, and what
+the controls do.
 
 | family | a task is | scored by |
 |---|---|---|
@@ -44,7 +44,7 @@ A task is a seeded defect in this repo, and the score is this repo's own checks.
 `tests/bench/patches/` holds the matching **159 patch files**. Each patch is the
 diff that breaks the code.
 
-An attempt is scored by running two checks in the sandbox:
+The harness scores an attempt by running two checks in the sandbox:
 
 | check | command |
 |---|---|
@@ -59,11 +59,11 @@ Running the full suite rather than only the target test scores collateral damage
 for free. A solver that fixes its own defect but breaks something else does not
 pass.
 
-Every task was chosen by evidence. Each candidate mutation was applied, the suite
-was run, and only mutations that broke a check became tasks. One candidate, a
+We chose every task by evidence. We applied each candidate mutation, ran the
+suite, and kept only the mutations that broke a check. One candidate, a
 `>=` to `>` change in `decidePromotion`, broke nothing because no test covered
-that boundary, so it was dropped rather than shipped as a task nobody could
-fail. `bench validate` re-proves the precondition for all 159: the defect fails,
+that boundary, so we dropped it rather than shipping a task nobody could fail.
+`bench validate` re-proves the precondition for all 159: the defect fails,
 the oracle passes.
 
 ### The corpus goes stale, and that is a routine repair
@@ -129,11 +129,12 @@ passed the next complete run. The failure was never reproduced, and the cause
 was the sandbox rather than the task. A single scored attempt can record a false
 fail.
 
-So a task that fails well-formedness is re-checked, up to `--validate-retries`
-more times. The default is 2, so 3 attempts. The policy is bounded and stops at
-the first success. Unbounded retrying would eventually let any sufficiently
-noisy broken task through, and running every attempt regardless would triple the
-cost of the normal case, which is a corpus that validates first time.
+So the harness re-checks a task that fails well-formedness, up to
+`--validate-retries` more times. The default is 2, so 3 attempts. The policy is
+bounded and stops at the first success. Unbounded retrying would eventually let
+any sufficiently noisy broken task through, and running every attempt regardless
+would triple the cost of the normal case, which is a corpus that validates first
+time.
 
 Three outcomes, kept distinct rather than collapsed to a boolean:
 
@@ -164,18 +165,18 @@ count, in two modes.
 Corpus sizes, generated from the committed parameters and measured 2026-08-19:
 **35,502 / 137,361 / 548,801 / 1,097,628 characters**.
 
-The corpus file holds generator parameters only. The materials, the asks and the
-answer key are all derived from them by `packages/core/src/bench/longhorizon.ts`.
-Nothing in the corpus is a fact somebody wrote down, and the answer key exists
-only as a pure function of a seed.
+The corpus file holds generator parameters only.
+`packages/core/src/bench/longhorizon.ts` derives the materials, the asks and the
+answer key from them. Nothing in the corpus is a fact somebody wrote down, and
+the answer key exists only as a pure function of a seed.
 
 **Mode (a), single-query digestion.** The materials are materialized into the
 sandbox, the agent gets one ask, and it writes `bench-answer.txt`. This is the
 mode every published RLM result uses.
 
-**Mode (b), multi-episode continuation.** The same corpus is delivered across K
-asks on one session. Each part is deleted once its ask is answered. The
-compaction ladder is forced to fold at every episode boundary
+**Mode (b), multi-episode continuation.** The harness delivers the same corpus
+across K asks on one session, and deletes each part once its ask is answered. It
+forces the compaction ladder to fold at every episode boundary
 (`armForcedCompaction` in `scripts/bench-agent-worker.ts`), so the final ask is
 answerable only from what survived. The RLM literature has no instrument of this
 kind, since every one of its results is single-query over an inert corpus. This
@@ -646,7 +647,7 @@ harbor run \
 ```
 
 `--ak evolve=true|false` is the experiment. It holds the adapter, the task and
-the model fixed, and turns the three-timescale evolution machinery on or off. It
+the model fixed, and turns the four-timescale evolution machinery on or off. It
 reaches `kinu exec --no-auto-evolve`, which is the CLI's switch over the
 `EvolutionEngine`'s `enabled` flag, the same one `agent` versus `agent-evolving`
 flips internally.

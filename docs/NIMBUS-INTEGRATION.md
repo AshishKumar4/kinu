@@ -68,8 +68,8 @@ The Cloudflare backend registers the provider only as `workspace`
 namespace. The optional `sandbox` and `laptop` providers stay different machines
 with their own filesystems.
 
-The local CLI does not use `NIMBUS_SESSION`. Its `workspace` provider executes
-against the local workspace over `bun:sqlite` state.
+`NIMBUS_SESSION` belongs to the hosted backend. The local CLI runs its
+`workspace` provider against the local workspace over `bun:sqlite` state.
 
 ## Actor isolation inside a shared workspace
 
