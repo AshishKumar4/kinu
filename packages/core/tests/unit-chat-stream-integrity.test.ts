@@ -244,7 +244,7 @@ describe('a timed-out call retries before failing the turn', () => {
     // the turn must keep step 1's events exactly once — never duplicated by the
     // second attempt, never dropped.
     let stepTwoCalls = 0;
-    const { events, threw, done } = await driveTurn(() => {
+    const { threw, done } = await driveTurn(() => {
       stepTwoCalls += 1;
       return stepTwoCalls === 1 ? stall() : answer();
     }, { callTimeoutMs: 300 });
@@ -261,14 +261,19 @@ describe('a timed-out call retries before failing the turn', () => {
 
   test('after LLM_CALL_MAX_RETRIES exhausted attempts, the turn fails naming them', async () => {
     let stepTwoCalls = 0;
-    const { threw, done } = await driveTurn(() => {
+    const { events, threw, done } = await driveTurn(() => {
       stepTwoCalls += 1;
       return stall();
     }, { callTimeoutMs: 200 });
     expect(stepTwoCalls).toBe(4); // the first attempt + LLM_CALL_MAX_RETRIES retries
     expect(threw?.message ?? '').toContain('stalled');
     expect(threw?.message ?? '').toContain('4 attempts');
-    expect(done).toBeUndefined();
+    // The failure surfaces AFTER `done`, like every cut turn: the step that
+    // finished before the stalls is work the turn did, and the caller persists
+    // history from `done` — dropping it there would lose that work.
+    const doneEv = done && done.type === 'done' ? done : null;
+    expect((doneEv?.responseMessages ?? []).filter((m) => m.role === 'tool').length).toBeGreaterThan(0);
+    expect(events.some((e) => e.type === 'done')).toBe(true);
   }, 20_000);
 });
 

@@ -28,24 +28,6 @@ import { HeadJournal } from '../src/heads/journal';
 import { runNodeAgent } from '../src/strategy/node-agent';
 import type { NodeRun } from '../src/strategy/node-agent';
 
-/** The three nodes of that run, exactly as it reported them. */
-const MEASURED_NODES = [
-  { steps: 22, wallClockMs: 1_216_358 },
-  { steps: 25, wallClockMs: 1_310_061 },
-  { steps: 26, wallClockMs: 1_336_833 },
-] as const;
-
-/** The longest a node was observed still working. A FLOOR, not a duration: it was cut. */
-const LONGEST_MEASURED_NODE_MS = 1_336_833;
-
-/** The most steps a node was observed taking. Also a floor, for the same reason. */
-const MOST_STEPS_MEASURED = 26;
-
-/** The run envelope that measurement was taken under — `swarm.eval.ts:301`, a round
- *  20 minutes whose stated reason is "the budget is 6 nodes". Named so the shortfall is
- *  a failing assertion rather than a paragraph. */
-const RUN_ENVELOPE_THAT_ABORTED_MS = 1_200_000;
-
 describe('a node has NO clock but the one its caller declares', () => {
   test('the shipped deps carry no wall clock and no step cap', () => {
     // The new contract, pinned at the type seam: NodeAgentDeps has neither

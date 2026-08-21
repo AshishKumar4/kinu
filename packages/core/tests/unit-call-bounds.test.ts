@@ -28,7 +28,11 @@ describe('the sanctioned per-call bounds', () => {
     // The SDK's own default is stepCountIs(1); the loop MUST be given something.
     // UNBOUNDED_STEPS never fires, so a turn ends only by model choice, budget,
     // caller stopWhen, or the per-call window.
-    expect(UNBOUNDED_STEPS({ steps: [], stepNumber: 99, maxSteps: undefined } as never)).toBe(false);
+    // SAFETY: this pin declares an invariant: UNBOUNDED_STEPS in src/chat.ts
+    // reads no field and returns false for any input, validated by its own
+    // one-clause body, so the cast fixes only the argument's nominal shape.
+    const impossibleInput = { steps: [], stepNumber: 99, maxSteps: undefined } as never;
+    expect(UNBOUNDED_STEPS(impossibleInput)).toBe(false);
   });
 });
 

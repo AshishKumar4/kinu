@@ -644,6 +644,9 @@ describe('a background job gives up its turn, and hands over what it has', () =>
     // until its own bounds end it or an operator cancels it. This pin fails if
     // anyone grows a compensating timer back into this seam.
     const { runner, store } = setup();
+    // Production mints the row through `create` before any detach can name it;
+    // a fixed id here follows the bgjob-capped test below.
+    store.create({ id: 'bgjob-immortal', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
     runner.detach('bgjob-immortal', 'agents', new Promise(() => { /* never */ }));
     await new Promise((r) => setTimeout(r, 50));
     expect(store.get('bgjob-immortal')?.status).toBe('running');
@@ -674,9 +677,12 @@ describe('a background job gives up its turn, and hands over what it has', () =>
   test('with nothing to hand over it fails — and says the bound, not just "evicted"', async () => {
     // The other direction. A bound reached over work that produced nothing is a
     // failure, and it must not pretend to be a partial success.
-    const { runner, store, settled, db } = setup({ harvest: async () => null });
-    runner.detach('bgjob-empty', 'agents', new Promise(() => { /* never */ }));
-    await settled();
+    const { runner, store } = setup({ harvest: async () => null });
+    store.create({ id: 'bgjob-empty', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
+
+    // The executor was lost and no resumer exists for the kind, so recovery owns
+    // the settlement — nothing bounds live work by time any more to do it.
+    await runner.recoverOrphans();
 
     const job = store.get('bgjob-empty');
     expect(job?.status).toBe('failed');
@@ -685,14 +691,14 @@ describe('a background job gives up its turn, and hands over what it has', () =>
   });
 
   test('a harvester that throws leaves the job settling, never hanging', async () => {
-    // The seam is on the settle path, so a failing harvester must degrade to the
-    // behaviour of having none rather than stranding the job `running` forever —
-    // which is the exact state this whole ticket exists to remove.
-    const { runner, store, settled, db } = setup({
+    // The seam is on the recovery settle path, so a failing harvester must
+    // degrade to the behaviour of having none rather than strand the job as a
+    // hanging `running` row.
+    const { runner, store } = setup({
       harvest: async () => { throw new Error('the ledger is unreadable'); },
     });
-    runner.detach('bgjob-throws', 'agents', new Promise(() => { /* never */ }));
-    await settled();
+    store.create({ id: 'bgjob-throws', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
+    await runner.recoverOrphans();
 
     expect(store.get('bgjob-throws')?.status).toBe('failed');
   });

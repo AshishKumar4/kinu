@@ -143,10 +143,6 @@ function objective(): Objective {
 
 const BRANCHES = 3;
 
-/** A tiny step envelope: every arm here is decided on a node's FIRST call, so a larger
- *  one would only buy the fixture room it never uses. */
-const NODE_STEPS = 4;
-
 function config(): SwarmConfig {
   return {
     // AGENT nodes, which is the only kind that has a journal row to leave lying.

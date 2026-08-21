@@ -35,7 +35,6 @@ import { initHeadsTables } from '../src/heads/schema';
 import { runNodeAgent } from '../src/strategy/node-agent';
 import type { NodeAgentDeps, NodeAgentInput } from '../src/strategy/node-agent';
 
-const NODE_STEPS = 8;
 const STALL_MS = 4_000;
 
 /** What the gate says when it refuses, as the node sees it. */

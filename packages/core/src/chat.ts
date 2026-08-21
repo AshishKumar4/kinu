@@ -8,6 +8,7 @@
  */
 
 import {
+  NoOutputGeneratedError,
   streamText,
   type ModelMessage,
   type ToolSet,
@@ -40,7 +41,7 @@ import { JsonObjectSchema, type JsonObject } from './utils/json';
 import { normalizeUsage, usageReported, type Usage } from './usage';
 import { providerPacer, type ProviderPacer } from './providers/pacing';
 import { PROVIDER_SDK_RETRIES, PROVIDER_WAIT_BUDGET_MS } from './providers/rate-limit-retry';
-import { diagnostics, KinuError, renderThrownChain } from './obs/index';
+import { diagnostics, KinuError, renderThrownChain, toKinuError } from './obs/index';
 
 export type ChatEvent =
   | { type: 'text-delta'; delta: string }
@@ -264,11 +265,12 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   }
   const pendingStepEvents: PendingStepEvent[] = [];
   let stepCount = 0;
-  /** The SDK's cumulative response array as of the last step that FINISHED —
-   *  the one source for the turn's produced messages, on both the natural and
-   *  the cut path. `result.response` says the same thing but only settles on a
-   *  natural finish, and every step's array is cumulative, so reading it here
-   *  costs one assignment and removes the branch. */
+  /** The TURN's cumulative generated array as of the last step that FINISHED —
+   *  every assistant message and paired tool message this turn has produced,
+   *  across retry attempts, on both the natural and the cut path. The SDK
+   *  accumulates `step.response.messages` within one call only and never
+   *  includes the call's input prefix, so a step's capture is the base the
+   *  attempt continued from plus that step's array. */
   let responseSoFar: readonly ModelMessage[] = [];
 
   // The shared turn-context assembly (orchestrator/turn-context.ts): attachment
@@ -366,10 +368,6 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   let mandatedMs = 0;
   /** Whether the silence being timed was mandated by a provider. */
   let rateLimited = false;
-  /** Retries the CURRENT call has consumed. Reset the moment any chunk flows —
-   *  a call that answers has spent its budget, and the next silent call gets a
-   *  fresh one — so the count is per call, never per turn. */
-  let callRetries = 0;
   /** Attempts the LAST exhausted call consumed — read by the error text. */
   let retryAttempts = 0;
   const armAt = (ms: number) => {
@@ -488,7 +486,10 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
    *  its partial content was streamed to the surfaces but no step ever
    *  completed, and a half-step is not history — and a stale error or dead-step
    *  verdict from the killed attempt must not outlive it. */
-  const drive = async function* (messages: ModelMessage[]): AsyncGenerator<ChatEvent, DrainedCall> {
+  const drive = async function* (
+    messages: ModelMessage[],
+    generatedBefore: readonly ModelMessage[],
+  ): AsyncGenerator<ChatEvent, DrainedCall> {
     watchdog = new AbortController();
     ({ promise: stallReached, resolve: reportStall } = Promise.withResolvers<typeof STALLED>());
     stalled = false;
@@ -496,11 +497,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     stepHadOutput = false;
     deadFinalStep = false;
     stepContent = [];
-    // The SDK's `step.response.messages` carries THIS request's full array —
-    // its input prefix plus everything generated, cumulative across the call's
-    // steps — so the capture stays an assignment. A retried attempt is handed
-    // the turn's messages so far as its input, so its own arrays continue the
-    // same sequence rather than restarting it.
+    // The SDK's `step.response.messages` is cumulative WITHIN one call and
+    // holds only what THAT call generated — the input prefix is never part of
+    // it (ai dist: `messages: [...recordedResponseMessages, ...stepMessages]`).
+    // A retried call restarts the SDK's array at zero, so the turn's running
+    // capture is the base this attempt continued from plus the step's array.
 
     const result = streamText({
       model: opts.model,
@@ -546,13 +547,35 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       onStepFinish: async (step) => {
         stepCount++;
         const usage = normalizeUsage(step.usage);
-        responseSoFar = step.response.messages;
+        responseSoFar = [...generatedBefore, ...step.response.messages];
         const event: PendingStepEvent = { stepIndex: stepCount, responseMessages: responseSoFar };
         if (usageReported(usage)) event.usage = usage;
         pendingStepEvents.push(event);
         await opts.onStep?.(step);
       },
     });
+    // A call that never finishes a step — the provider failed before one, or the
+    // silence window or the caller cut the call — makes the SDK REJECT its
+    // deferred accessors (`steps`, `finishReason`, `rawFinishReason`,
+    // `totalUsage`) when the stream ends. The turn reports all of those through
+    // the streamed error or the stall path and never reads the deferrals, and a
+    // rejection nobody reads is an unhandled one that crashes test files and
+    // pollutes DO logs. The zero-steps rejection is classified by type; a cut is
+    // classified by the state that caused it; anything else is recorded, because
+    // a deferred rejecting on a turn that finished naturally would be a defect
+    // here and must be visible.
+    const ignoreDeferred = (error: Error): void => {
+      if (NoOutputGeneratedError.isInstance(error)) return;
+      if (stalled || interrupted || (opts.signal?.aborted ?? false)) return;
+      diagnostics.failure(
+        'llm_call.deferred_rejected',
+        toKinuError({ doing: 'settle an unread stream accessor', cause: error, otherwise: 'io' }),
+      );
+    };
+    result.steps.then(undefined, ignoreDeferred);
+    result.finishReason.then(undefined, ignoreDeferred);
+    result.rawFinishReason.then(undefined, ignoreDeferred);
+    result.totalUsage.then(undefined, ignoreDeferred);
 
     armStallTimer();
     try {
@@ -576,11 +599,8 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         if (arrival.done) break;
         const chunk = arrival.value;
         armStallTimer();
-        // Flow. Whatever call this attempt was issuing is answering now, so its
-        // retry budget is spent and the NEXT silent call gets a fresh one. An
+        // Flow: whatever call this attempt was issuing is answering now. An
         // error chunk is not flow — it is the failure being reported.
-        if (chunk.type !== 'error') callRetries = 0;
-
         switch (chunk.type) {
           case 'text-delta': {
             const delta = chunk.text;
@@ -673,22 +693,25 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   // bound here: no wall clock over the turn, no cap on steps (owner ruling,
   // 2026-08-21).
   let attemptMessages: ModelMessage[] = cache.messages;
-  let drained = yield* drive(attemptMessages);
-  // The loop owns the attempt count; `callRetries` is the per-call budget the
-  // error text reports and the chunk flow resets. Bounding the LOOP on its own
-  // counter is what makes exhaustion terminate even if a killed request's
-  // teardown spuriously re-arms the silence sentinel.
+  let drained = yield* drive(attemptMessages, []);
+  // Bounding the LOOP on its own counter (`retryAttempts`) rather than any
+  // per-chunk state is what makes exhaustion terminate even if a killed
+  // request's teardown spuriously re-arms the silence sentinel.
   while (drained.outcome === 'stalled'
     && !rateLimited
     && retryAttempts < LLM_CALL_MAX_RETRIES
     && !opts.signal?.aborted) {
     retryAttempts++;
-    callRetries = retryAttempts;
     diagnostics.event('llm_call.retried', {
       attempt: retryAttempts, max_retries: LLM_CALL_MAX_RETRIES,
     });
-    attemptMessages = settleUnpairedToolCalls([...responseSoFar]) ?? [...responseSoFar];
-    drained = yield* drive(attemptMessages);
+    const settled = settleUnpairedToolCalls([...responseSoFar]) ?? [...responseSoFar];
+    // The resumed request carries the turn's whole conversation — the assembled
+    // history the first attempt opened with, plus everything the finished steps
+    // produced since — mirroring how the SDK itself continues across steps of
+    // one call (`[...initialMessages, ...responseMessages]`).
+    attemptMessages = [...cache.messages, ...settled];
+    drained = yield* drive(attemptMessages, settled);
   }
 
   // A STALLED turn reports the stall even when the killed request's abort
