@@ -25,7 +25,7 @@ import type {
 } from "@kinu.run/core";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { usePagedScroll } from "@/hooks/use-paged-scroll";
-import { buildTree } from "@/lib/fork-tree-rows";
+import { explorationForkTree } from "@/lib/fork-tree-rows";
 import type { BackgroundJob, ForkNode, Rpc } from "@/lib/protocol";
 import { swarmResolutionOf, type SwarmResolution } from "./swarm-resolution";
 
@@ -223,15 +223,15 @@ export function useExplorationCanvas(
     return rows;
   }, [first, tail.fetched]);
 
-  /** Every search's tree. The search rows are the tree wherever the engine wrote
-   *  any; the journal's depth-1 projection stands in only for a run that has no
-   *  search rows at all. Never chosen by a settle tag: an agent-unit swarm writes
-   *  BOTH stores, so a tag that admits one store per run cannot decide this. */
+  /** Every run's tree, BOTH halves folded through the one fold. Never a choice
+   *  between the stores: a run writes whichever of them its axes call for and an
+   *  agent-unit swarm writes both, so reading one and discarding the other is how
+   *  a search the agent was actively driving drew as its root alone. */
   const trees = useMemo(() => {
     const folded = new Map<string, ForkNode>();
     for (const entry of entries ?? []) {
-      if (entry.tree.length > 0) folded.set(entry.run.id, buildTree([...entry.tree]));
-      else if (entry.head !== null) folded.set(entry.run.id, headRunToTree(entry.head));
+      const tree = explorationForkTree(entry);
+      if (tree !== null) folded.set(entry.run.id, tree);
     }
     for (const [rootId, tree] of liveTrees) folded.set(rootId, tree);
     return folded;
@@ -344,51 +344,6 @@ export function useExactForkRun(
   );
   const entry = lastValue(resource);
   return { resource, reload, run: entry?.run ?? null, entry };
-}
-
-/**
- * A head's lifecycle in the tree's own vocabulary.
- *
- * Never `terminal`: that state means "the branch the fork settled on", and a
- * merge settles on all of them at once. Claiming a winner here would be the
- * one thing this unification must not do.
- */
-function headStatus(status: string): ForkNode["status"] {
-  if (status === "running") return "running";
-  return status === "completed" ? "open" : "failed";
-}
-
-/**
- * One merged fork as a depth-1 tree.
- *
- * `value` and `visits` are null throughout, deliberately: a merge ranks
- * nothing and rolls nothing out, and the renderer drops every encoding that
- * would otherwise be drawn from a zero no head earned.
- */
-export function headRunToTree(run: HeadRunView): ForkNode {
-  return {
-    id: run.rootId,
-    parentId: null,
-    depth: 0,
-    value: null,
-    visits: null,
-    status: run.status === "running" ? "running" : "open",
-    action: run.task || run.rationale || "(fork)",
-    task: run.task,
-    observation: run.merge?.narrative ?? run.rationale,
-    children: run.heads.map((head) => ({
-      id: head.id,
-      parentId: run.rootId,
-      depth: 1,
-      value: null,
-      visits: null,
-      status: headStatus(head.status),
-      action: head.task,
-      task: head.task,
-      observation: head.summary ?? head.errorMessage ?? "",
-      children: [],
-    })),
-  };
 }
 
 /* ── what the run was dispatched with ──────────────────────────── */

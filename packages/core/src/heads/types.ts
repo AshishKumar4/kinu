@@ -217,6 +217,19 @@ export interface HeadReport {
  */
 export interface HeadRunHeadView {
   readonly id: HeadId;
+  /**
+   * This node's own parent, as the journal recorded it — the edge that lets a
+   * RUNNING node be drawn where it really sits.
+   *
+   * Null for a head of a top-level split, whose synthetic root has no journal
+   * row of its own, and for any run that recorded no edge; a reader draws those
+   * under the run. It is carried because the journal is the only record of a
+   * node that has not reported yet, so a reader that flattens every journalled
+   * node to depth 1 misdraws every level of a deeper search.
+   */
+  readonly parentId: HeadId | null;
+  /** This node's depth below the run's root, as the journal recorded it. */
+  readonly depth: number;
   readonly task: string;
   readonly rationale: string;
   readonly status: string;
