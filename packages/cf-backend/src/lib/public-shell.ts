@@ -381,7 +381,7 @@ white-space:nowrap;cursor:pointer;transition:background 150ms var(--ease),border
 
 /* Mono, letterspaced, small: labels name the thing beside them and never
    compete with it. The one typographic device carried through every section. */
-.eyebrow,.label,.anno,.num,.stat span{font-family:var(--font-mono);
+.eyebrow,.label,.anno,.num,.stat span,.spec dt{font-family:var(--font-mono);
 font-size:11.5px;letter-spacing:0.09em;text-transform:uppercase}
 .eyebrow{margin:0;color:var(--c-accent-fg)}
 .label{margin:0 0 20px;color:var(--c-text-3)}
@@ -511,6 +511,7 @@ export function publicFooter(): string {
   <nav>
     <a href="${REPO_URL}" target="_blank" rel="noopener noreferrer">GitHub</a>
     <a href="/install">Install</a>
+    <a href="/#deploy">Deploy your own</a>
     <a href="/login">Sign in</a>
   </nav>
   <span>MIT licensed.</span>

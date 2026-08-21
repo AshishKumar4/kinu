@@ -63,6 +63,15 @@ interface Facts {
   contrast: Contrast[];
   panel?: { hiddenAtFirst: boolean; openAfterClick: boolean; command: string };
   providers?: string[];
+  /** The rotating headline: what it said first, what it said next, how many
+   *  variants it holds, and how many were visible at one moment. */
+  tagline?: { first: string; second: string; variants: number; distinct: number; shownAtOnce: number };
+  /** The same headline under prefers-reduced-motion, read twice across more
+   *  than one rotation period. */
+  taglineStill?: { before: string; after: string };
+  /** Section labels in document order, and the § 06 self-deploy facts. */
+  labels?: string[];
+  deploy?: { button: string | null; guide: string | null; commands: string[] };
 }
 
 let browser: Browser;
@@ -193,6 +202,12 @@ beforeAll(async () => {
           { what: 'copy button', selector: '.copy' },
           { what: 'footer', selector: 'footer span' },
           { what: 'nav link', selector: '.nav .quiet' },
+          { what: 'section title', selector: '.title' },
+          { what: 'deep prose', selector: '.body' },
+          { what: 'spec term', selector: '.spec dt' },
+          { what: 'spec value', selector: '.spec dd' },
+          { what: 'clock kicker', selector: '.cell .num' },
+          { what: 'section foot', selector: '.foot' },
         ];
         /** The first ancestor that actually paints a background. */
         const ground = (node: Element): string => {
@@ -213,6 +228,38 @@ beforeAll(async () => {
         size: row.size,
         ratio: ratio(parseRgb(row.ink), parseRgb(row.paper)),
       })));
+
+      // ── The headline rotates, one line at a time ─────────────────────
+      // "It changes" is a pair of moments, like the tree's growth: read the
+      // line that is up now, then await the moment a DIFFERENT line is up.
+      {
+        const first = await page.evaluate(
+          () => document.querySelector('[data-taglines] > span[data-shown]')?.textContent?.trim() ?? '',
+        );
+        const second = await page.waitForFunction((was: string) => {
+          const now = document.querySelector('[data-taglines] > span[data-shown]')?.textContent?.trim() ?? '';
+          return now !== '' && now !== was ? now : null;
+        }, { polling: 'raf', timeout: 9000 }, first).then((handle) => handle.jsonValue());
+        const stack = await page.evaluate(() => {
+          const spans = [...document.querySelectorAll('[data-taglines] > span')];
+          return {
+            variants: spans.length,
+            distinct: new Set(spans.map((span) => span.textContent?.trim())).size,
+            shownAtOnce: spans.filter((span) => span.hasAttribute('data-shown')).length,
+          };
+        });
+        facts.tagline = { first, second: String(second), ...stack };
+      }
+
+      // ── The page's own table of contents, and § 06's way out ─────────
+      facts.labels = await page.evaluate(
+        () => [...document.querySelectorAll('.label b')].map((label) => label.textContent ?? ''),
+      );
+      facts.deploy = await page.evaluate(() => ({
+        button: document.querySelector('#deploy a[href^="https://deploy.workers.cloudflare.com"]')?.getAttribute('href') ?? null,
+        guide: document.querySelector('#deploy a[href*="SELF-HOSTING"]')?.getAttribute('href') ?? null,
+        commands: [...document.querySelectorAll('#deploy .cmd code')].map((code) => code.textContent?.trim() ?? ''),
+      }));
       await page.close();
     }
 
@@ -236,6 +283,20 @@ beforeAll(async () => {
       const opacities = await page.evaluate(() => [...document.querySelectorAll('#hero-tree .n')]
         .map((node) => Number(getComputedStyle(node).opacity)));
       facts.reducedMotion = { ...facts.reducedMotion, shown: opacities.filter((o) => o > 0.9).length };
+      // A reader who refused motion gets one headline that stays. Read it,
+      // outwait a full rotation period, read it again. A real delay on
+      // purpose: the clock under test is the page's own interval inside a
+      // real browser, which no fake timer in this process can advance.
+      const before = await page.evaluate(
+        () => document.querySelector('[data-taglines] > span[data-shown]')?.textContent?.trim() ?? '',
+      );
+      const rotation = Promise.withResolvers<void>();
+      setTimeout(rotation.resolve, 4300);
+      await rotation.promise;
+      const after = await page.evaluate(
+        () => document.querySelector('[data-taglines] > span[data-shown]')?.textContent?.trim() ?? '',
+      );
+      facts.taglineStill = { before, after };
       await page.close();
     }
 
@@ -343,6 +404,45 @@ describe('the public text is readable', () => {
       const need = size >= 24 ? 3 : 4.5;
       expect(measured, `${what} at ${size}px`).toBeGreaterThanOrEqual(need);
     }
+  });
+});
+
+describe('the headline is alive', () => {
+  test('it changes over time, one line shown at a time', () => {
+    const tagline = facts.tagline!;
+    expect(tagline.variants).toBeGreaterThan(1);
+    expect(tagline.distinct, 'two variants say the same thing').toBe(tagline.variants);
+    expect(tagline.shownAtOnce, 'the stack showed more than one line').toBe(1);
+    expect(tagline.first).not.toBe('');
+    expect(tagline.second, 'the headline never changed').not.toBe(tagline.first);
+    // Every variant completes the same claim, so the page never flashes a
+    // fragment that reads as a different product.
+    expect(tagline.first).toStartWith('An agent of your own that');
+    expect(tagline.second).toStartWith('An agent of your own that');
+  });
+
+  test('refusing motion holds one line still', () => {
+    const still = facts.taglineStill!;
+    expect(still.before).not.toBe('');
+    expect(still.after).toBe(still.before);
+  });
+});
+
+describe('deploy your own is a real path', () => {
+  test('the button forks THIS repository into the visitor\u2019s account', () => {
+    expect(facts.deploy!.button).toBe('https://deploy.workers.cloudflare.com/?url=https://github.com/AshishKumar4/kinu');
+  });
+
+  test('the guide and the three commands are the documented flow', () => {
+    const deploy = facts.deploy!;
+    expect(deploy.guide).toContain('/docs/SELF-HOSTING.md');
+    expect(deploy.commands).toEqual(['bun run infra:provision', 'bun run deploy', 'bun run gate:infra']);
+  });
+});
+
+describe('the page reads as numbered sections', () => {
+  test('the § labels count up without a gap', () => {
+    expect(facts.labels).toEqual(['§ 01', '§ 02', '§ 03', '§ 04', '§ 05', '§ 06', '§ 07']);
   });
 });
 
