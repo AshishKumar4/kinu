@@ -13,6 +13,7 @@
     "no-ddl-in-catch",
     "no-empty-catch",
     "no-sentinel-catch",
+    "no-unaccounted-catch",
     "no-untyped-console",
     "no-wait-until-in-durable-object",
     "require-cause-on-rethrow",
@@ -32,7 +33,8 @@
       "no-ddl-in-catch",
       "no-empty-catch",
       "no-sentinel-catch",
-      "require-cause-on-rethrow"
+      "require-cause-on-rethrow",
+      "no-unaccounted-catch"
     ],
     "no-wait-until.gate.test.ts": [
       "no-wait-until-in-durable-object"
@@ -53,8 +55,8 @@
     },
     "index.ts": {
       "upstream": "d72d7e9f8c8f2c9557f7f8dec613b4235a2e15c9d7f43b8c8fc18688ae1f814f",
-      "local": "b8f15fd88a2adbaa02510c39ce6b37cc6efedbe3c0f29acfd37366b2f0dc3958",
-      "reason": "Registers the Proteus-authored rules (see proteusRules) alongside the vendored ones: the four no-swallow rules, no-wait-until-in-durable-object, no-ambient-git-in-tests, no-copy-rpc-stub, no-untyped-console, and require-runtime-import-extension. Upstream has no equivalent, so index.ts must diverge for a local rule to exist at all."
+      "local": "2ff39accfa9dda7053bb966e2d83cbadb5a16a112ed0aa4ba6c9a9c0eafd5896",
+      "reason": "Registers the Proteus-authored rules (see proteusRules) alongside the vendored ones: the five no-swallow rules, no-wait-until-in-durable-object, no-ambient-git-in-tests, no-copy-rpc-stub, no-untyped-console, and require-runtime-import-extension. Upstream has no equivalent, so index.ts must diverge for a local rule to exist at all."
     },
     "no-ambient-git.gate.test.ts": {
       "proteusOnly": true
@@ -155,6 +157,12 @@
       "proteusOnly": true
     },
     "rules/no-sentinel-catch.ts": {
+      "proteusOnly": true
+    },
+    "rules/no-unaccounted-catch.test.ts": {
+      "proteusOnly": true
+    },
+    "rules/no-unaccounted-catch.ts": {
       "proteusOnly": true
     },
     "rules/no-shape-in-symbol-names.test.ts": {

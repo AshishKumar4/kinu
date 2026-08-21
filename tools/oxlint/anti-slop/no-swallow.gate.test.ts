@@ -161,9 +161,37 @@ export class Corrected {
 }
 `,
   },
+  {
+    rule: "no-unaccounted-catch",
+    // The shape read-models/background-jobs.ts answered operator dismissals with: a catch
+    // whose only act is computing `{ ok: false }` — not empty, not a bare sentinel literal,
+    // so both older rules were silent while the store's failure read as "absent".
+    bad: `export function dismissJob(jobs: { dismiss(jobId: string): void }, jobId: string): { ok: boolean } {
+  try {
+    jobs.dismiss(jobId);
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  }
+}
+`,
+    good: `export function dismissJob(
+  jobs: { dismiss(jobId: string): void },
+  jobId: string,
+  log: { warn: (message: string, detail: { event: string; error: unknown }) => void },
+): { ok: boolean } {
+  try {
+    jobs.dismiss(jobId);
+    return { ok: true };
+  } catch (error) {
+    log.warn('job not dismissed', { event: 'jobs.dismiss_failed', error });
+    return { ok: false };
+  }
+}
+`,
+  },
 ];
-
-/** Ensures the four rules are exactly the ones this gate is assigned. `proteusRuleGates` is the
+/** Ensures the five rules are exactly the ones this gate is assigned. `proteusRuleGates` is the
  *  source of truth rather than a list here, and drift.test.ts asserts those slices partition
  *  `proteusRules` exactly — so a Proteus rule with no gate still fails, and this gate still cannot
  *  quietly stop covering one of its own. */
@@ -248,8 +276,7 @@ try {
     );
     return report;
   };
-
-  // Only the four no-swallow rules; the other 15 also run over these fixtures and their findings
+  // Only the five no-swallow rules; the other 16 also run over these fixtures and their findings
   // are not this gate's subject.
   const ruleOf = (diagnostic: Diagnostic): string | null => {
     const match = /^anti-slop\(([a-z-]+)\)$/u.exec(diagnostic.code ?? "");
