@@ -7,7 +7,8 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { makeSql, makeExecRaw, createMockLLM, createTestWorkspace } from './helpers';
 import {
-  isTrivialTurn, classifyTurnOutcome, outcomeToFeedback, outcomeQuality, feedbackToQuality,
+  isTrivialTurn, classifyTurnOutcome, buildOutcomeClassifierPrompt,
+  outcomeToFeedback, outcomeQuality, feedbackToQuality,
   executionVerdict, executionVerdictOutcome, isUserVerdictSource, isPureLookupCall,
   initTurnOutcomeTables, recordTurnOutcome, listTurnOutcomes, hasNegativeOutcome,
   realOutcomeScaffoldRates, blendRealOutcomeRates, buildOutcomeEvalSplit,
@@ -17,6 +18,7 @@ import {
 import type { ScaffoldArchiveEntry } from '../src/scaffold/archive';
 import { RunEventRecorder } from '../src/events/recorder';
 import type { ToolCallRecord } from '../src/evolution/types';
+import { jsonObjectOnlyInstruction } from '../src/prompts/structured';
 
 /** The PRODUCTION schema, not this module's own tables alone: the eval split
  *  reconstructs process evidence from the message and run-event ledgers, and a
@@ -73,6 +75,55 @@ describe('classifyTurnOutcome — one cheap LLM call', () => {
   test('returns null on unusable output instead of guessing', async () => {
     expect(await classifyTurnOutcome(createMockLLM({ 'Classify': 'not json at all' }), input)).toBeNull();
     expect(await classifyTurnOutcome(createMockLLM({ 'Classify': '{"outcome":"sideways"}' }), input)).toBeNull();
+  });
+});
+
+describe('the classifier prompt', () => {
+  const prompt = buildOutcomeClassifierPrompt({
+    userMessage: 'Summarize the Q3 report',
+    assistantResponse: 'Here is the summary: revenue up 12%...',
+    followup: 'No — I asked for Q3, this is Q2 data. Redo it.',
+  });
+
+  test('teaches the corrected-vs-frustrated boundary by contrast, not by definition alone', () => {
+    // The gap this closes. Three one-line definitions leave a terse follow-up
+    // undecided, and a terse follow-up is most of them: "no" and "again?!" are
+    // the same length and are different rows in the ledger. Everything
+    // downstream counts these judgements rather than what happened — K_align,
+    // the per-scaffold rates, the GEPA split, craft retirement — so a boundary
+    // the prompt leaves to inference is a boundary a literal instruction-follower
+    // gets wrong at an unknown rate (docs/EVOLUTION.md § the classifier).
+    expect(prompt).toContain('A terse follow-up is the one this gets wrong.');
+    expect(prompt).toContain('"no" / "wrong file" / "not that one" → corrected');
+    expect(prompt).toContain('"no, seriously?" / "again?!" → frustrated');
+    expect(prompt).toContain('"ok" / "thanks" → accepted');
+    expect(prompt).toContain('"hm" / "what about the other one?" → nothing is settled');
+  });
+
+  test('every outcome definition carries its own worked example', () => {
+    expect(prompt).toContain('("great, now add the retry"');
+    expect(prompt).toContain('("no, I said STAGING"');
+    expect(prompt).toContain('("why do you keep breaking the build"');
+  });
+
+  test('names the false-accept, so moving on is not read as approval', () => {
+    expect(prompt).toContain('Not evidence the answer worked:');
+    expect(prompt).toContain('changes the subject while the ask still stands');
+    expect(prompt).toContain('the user does the work themselves');
+  });
+
+  test('an unsettled follow-up is directed at `confidence` rather than at a firmer verdict', () => {
+    // Without this the model answers one of three labels whatever it saw, and
+    // calibration.ts measures a rater that never admits doubt.
+    expect(prompt).toContain('An unsettled follow-up belongs in confidence');
+    expect(prompt).toContain('at a LOW confidence');
+  });
+
+  test('keeps the output bound and the evidence windows it always had', () => {
+    expect(prompt).toContain(jsonObjectOnlyInstruction());
+    expect(prompt).toContain('JSON shape: {"outcome":"accepted"|"corrected"|"frustrated"');
+    // The mock-routing key three suites classify through.
+    expect(prompt).toContain('Classify what the follow-up reveals');
   });
 });
 

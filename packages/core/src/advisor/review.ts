@@ -221,6 +221,14 @@ function renderToolCall(call: ToolCallRecord): string {
  * its next step and did not get — and it states silence as the default answer,
  * because a reviewer asked to review will always find something.
  *
+ * Half its budget is negative space, ported from oh-my-pi's own watchdog prompt
+ * (packages/coding-agent/src/prompts/advisor/system.md). The suppression rules in
+ * this file stop a note from being REPEATED; nothing stopped it being about scope,
+ * backwards compatibility, or a request for clarification — the three classes a
+ * reviewer reaches for when the turn was actually fine. Each severity carries a
+ * worked note inside its own length bound, so severity calibration gets the
+ * treatment note content already had.
+ *
  * `reachable` is the capability names the turn genuinely had (the keys of the
  * ToolSet it ran with). It is what makes the missed-capability class checkable
  * rather than speculative: without it a reviewer can only guess that delegation
@@ -251,8 +259,20 @@ export function buildAdvisorPrompt(turn: CompletedTurn, reachable: readonly stri
     '  correction that spells out what they wanted. QUOTE the user\'s own words in the note.',
     '  Their wording is the evidence, and a paraphrase loses what they actually asked for.',
     '',
-    'Judge what the record below shows. Do not guess at what is not there, and do not ask',
-    'for reassurance.',
+    'Stay silent on these, however plainly you notice them:',
+    '- Size and ambition. A large diff, a wholesale rewrite or a growing plan is not a problem by',
+    '  itself, and is usually what was asked for. Object only where it contradicts something the user',
+    '  said in this turn, and quote the instruction when you do.',
+    '- Backwards compatibility, unless the user or a standing project rule asked for it. Deleting the',
+    '  old path and updating every caller is the default correct answer here.',
+    '- Clarification and process. Never tell the agent to confirm scope, restate the ask, or check in',
+    '  before acting. Intent is its lane; informed action is the default.',
+    '- A decision the agent understood and committed to, unless the record below shows it wrong.',
+    '- Anything the agent has already read: a failing test, a type error, a lint message in the record.',
+    '',
+    'Judge what the record below shows. Arguments and results are windowed, and what a window drops is',
+    'UNKNOWN — never assert a value the record does not show. Do not guess at what is not there, and',
+    'do not ask for reassurance.',
     '',
     'Silence is the normal answer. Most turns are fine.',
     '',
@@ -269,8 +289,11 @@ export function buildAdvisorPrompt(turn: CompletedTurn, reachable: readonly stri
     '',
     'Severities:',
     '- "nit": worth recording, not worth interrupting for.',
+    '  e.g. "The three sequential writes to the same module could have been one edit. Nothing to redo — worth knowing next time."',
     '- "concern": the agent should weigh this before its next step.',
+    '  e.g. "You read the run result as a pass, but its text starts `Error (exit 3)`. Confirm the command succeeded before building on it."',
     '- "blocker": continuing without addressing this wastes the work.',
+    '  e.g. "The migration ran against the live database before the suite ran once. Stop and confirm a backup exists before continuing."',
     '',
     'One note, at most 240 characters, addressed to the agent. State the problem and what',
     'to do. No preamble, no praise, no restating the turn.',

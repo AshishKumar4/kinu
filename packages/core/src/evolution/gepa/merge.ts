@@ -77,7 +77,14 @@ export function findComplementaryPair(
 }
 
 /** Render the merge-reflection prompt — the LM sees both parents, their
- *  per-instance score vectors, and the instances each one wins on. */
+ *  per-instance score vectors, and the instances each one wins on.
+ *
+ *  "Do not naively concatenate" names the single likeliest failure mode of a
+ *  merge-two-files task, so it is shown rather than asserted. The survival line
+ *  under it states what `checkConstraints` will refuse downstream — a child that
+ *  loses the entry point or the host bridge is rejected AFTER a full eval-set
+ *  scoring pass has been paid for, and stating the contract up front is cheaper
+ *  than discovering it there. */
 export function renderMergePrompt<I, E>(opts: {
   pair: MergePair;
   evalSet: ReadonlyArray<EvalInstance<I, E>>;
@@ -103,6 +110,15 @@ export function renderMergePrompt<I, E>(opts: {
 solves different inputs better. Synthesise a hybrid that keeps the specialties
 of both. Do not naively concatenate; produce a single coherent ${desc} that
 behaves like A on A's strengths and like B on B's strengths.
+
+Naive concatenation, and what to do instead:
+  Bad: both sources pasted one after the other, or all of A wrapped in a branch on a condition neither parent has. Two artifacts in one file, the entry point defined twice, and neither parent's behaviour intact.
+  Good: ONE artifact carrying the specific mechanism behind each parent's wins — A's handling of the inputs A wins on, B's of B's — and a single definition of everything they both have.
+
+Everything the two parents share structurally must survive intact: the entry point they export, the
+host API they call through, and the shape of what they return. A child that drops one of those is
+refused by the constraint gate downstream, after a full eval-set scoring pass has already been paid
+for it.
 
 Candidate A (aggregate ${opts.pair.a.aggregateScore.toFixed(3)}):
 \`\`\`

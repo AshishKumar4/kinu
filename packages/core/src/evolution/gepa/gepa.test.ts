@@ -17,6 +17,7 @@ import {
   stripMarkdownFences,
   type EvalInstance, type GepaBudget, type GepaCandidate, type MetricOutcome,
 } from './index';
+import { DELEGATION_RUBRIC } from '../delegation-features';
 
 // ── deterministic RNG ────────────────────────────────────────────
 
@@ -192,11 +193,21 @@ describe('renderReflectionPrompt', () => {
     expect(prompt).toContain('task input');
     expect(prompt).toContain('too verbose');
     expect(prompt).toContain('Turn process: 41 sequential steps, 0 team, 0 think');
+    // The rubric is one shared string now (evolution/delegation-features.ts), in
+    // the vocabulary the evidence line above it actually prints — the two inline
+    // copies had drifted into "team/think/heads" here and "hire/search" in the
+    // turn reflection, for one ladder.
+    expect(prompt).toContain(DELEGATION_RUBRIC);
     expect(prompt).toContain(
-      'For corrected/frustrated requests with 2+ independent parts, consider long zero-team/think linear grinds',
+      'ground through inline with no hiring\n  and no exploration, is a lesson to decompose the work and delegate it',
     );
-    expect(prompt).toContain('reinforce effective team/think on accepted turns');
-    expect(prompt).toContain('treat non-contributing spawns as delegation overhead');
+    expect(prompt).toContain('An accepted turn that hired or explored effectively earns credit');
+    expect(prompt).toContain('Spawns that contributed nothing are delegation overhead');
+    // The prohibition is shown, not only named, and the unseen half of the eval
+    // set is stated rather than left for the reflector to infer.
+    expect(prompt).toContain('Specific and tightly scoped, by contrast:');
+    expect(prompt).toContain('One defect, one edit, named instances.');
+    expect(prompt).toContain('do not remove or weaken anything the failures above do not implicate');
     expect(prompt).toContain('Return ONLY the revised');
   });
 
@@ -211,7 +222,7 @@ describe('renderReflectionPrompt', () => {
       },
       artifactDescription: 'crafted tool source',
     });
-    expect(prompt).not.toContain('Process rubric:');
+    expect(prompt).not.toContain('Delegation rubric');
   });
 });
 

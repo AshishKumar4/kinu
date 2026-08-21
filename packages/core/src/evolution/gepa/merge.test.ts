@@ -118,6 +118,17 @@ describe('renderMergePrompt', () => {
     expect(prompt).toContain('first task');
     expect(prompt).toContain('second task');
     expect(prompt).toContain('Return ONLY the merged');
+    // "Do not naively concatenate" was the only anti-pattern the merge operator
+    // named, and naming the likeliest failure mode of a merge-two-files task
+    // without showing it is the weakest form of a prohibition. Shown now, with
+    // the structural contract the downstream constraint gate would otherwise
+    // refuse only after a whole eval-set scoring pass had been paid for.
+    expect(prompt).toContain('Do not naively concatenate');
+    expect(prompt).toContain('Naive concatenation, and what to do instead:');
+    expect(prompt).toContain('the entry point defined twice');
+    expect(prompt).toContain('ONE artifact carrying the specific mechanism behind each parent\'s wins');
+    expect(prompt).toContain('must survive intact: the entry point they export');
+    expect(prompt).toContain('refused by the constraint gate downstream');
   });
 });
 

@@ -84,7 +84,7 @@ import {
 import { MissionBudgetExhausted } from '../mission-budget';
 import { formatScoreInterval, lossInterval } from '../utils/stats';
 import { buildChangelog } from './changelog';
-import { delegationFeatures, renderDelegationFeatures } from './delegation-features';
+import { DELEGATION_RUBRIC, delegationFeatures, renderDelegationFeatures } from './delegation-features';
 import { renderScaffoldHandbook } from './scaffold-handbook';
 import {
   clusterPathologies, labelPathologyClusters, renderPathologyBlock,
@@ -184,7 +184,8 @@ export function buildScaffoldProposalPrompt(
     `Based on these session patterns:\n${evidenceWindow(reflection, EVIDENCE_BUDGETS.reflection)}\n\n` +
     `Propose an improved scaffold. The scaffold MUST:\n` +
     `1. Export exactly \`async function* run(rt, task)\`. There is NO host runtime object in the ` +
-    `sandbox — BOTH parameters receive the task STRING; read the task from either.\n` +
+    `sandbox — BOTH parameters receive the task STRING; read the task from either, e.g. ` +
+    `\`const prompt = task;\`. Neither parameter carries members to reach through.\n` +
     `2. Reach the host ONLY through the global \`host\` bridge:\n` +
     `\`\`\`ts\n${SCAFFOLD_HOST_TYPES}\n\`\`\`\n` +
     `\`await host.defaultInference()\` runs the standard inference loop — build on it or replace it ` +
@@ -202,6 +203,58 @@ export function buildScaffoldProposalPrompt(
         `that do, and cannot show whether that failure ever went away.\n`
       : '') +
     `\nReturn ONLY the JavaScript code, no explanation.`
+  );
+}
+
+/**
+ * The one sentence a corrected, frustrated or errored turn leaves behind.
+ *
+ * Bounded for the same reason the advisor note is (ADVISOR_NOTE_MAX_CHARS): the
+ * answer is stored as a lesson row and, once a user verdict corroborates it,
+ * appended verbatim to `memory/MEMORY.md`, which every later session reads. An
+ * unbounded paragraph there costs context on every future turn, forever, and
+ * "one sentence" without a number is a request a model is free to interpret.
+ */
+const TURN_REFLECTION_MAX_CHARS = 240;
+
+/**
+ * The turn-reflection prompt. Module-private and read by its suite through the
+ * call it renders for (unit-evolution.test.ts captures `llm.complete`), because
+ * an export nothing outside this file imports is an export the wired gate is
+ * right to refuse.
+ *
+ * The good/bad pair is the load-bearing part. Asked for "what should be done
+ * differently", a model writes about the incident it was shown ("should have been
+ * more careful with the rotation"), which is unreadable to the session that
+ * actually gets the lesson — it has the sentence and none of the evidence. The
+ * contrast asks for a trigger and an action instead.
+ */
+function buildTurnReflectionPrompt(input: {
+  turn: CompletedTurn;
+  outcome: TurnOutcome | null;
+  quality: number;
+  followup: string | null;
+}): string {
+  const { turn, outcome, quality, followup } = input;
+  const toolSummary = turn.toolCalls.length > 0
+    ? `Tools used: ${turn.toolCalls.map((call) => call.name).join(', ')}`
+    : 'No tools used';
+  return (
+    `A recent interaction landed ${outcome ?? 'unobserved'} at ${quality.toFixed(2)}/1.0 quality.\n` +
+    `User asked: "${evidenceWindow(turn.userMessage, EVIDENCE_BUDGETS.outcomeUserMessage)}"\n` +
+    `Response: "${evidenceWindow(turn.assistantResponse, EVIDENCE_BUDGETS.outcomeAssistantResponse)}"\n` +
+    `${toolSummary}\n` +
+    `${renderDelegationFeatures(delegationFeatures(turn))}\n` +
+    `${DELEGATION_RUBRIC}\n` +
+    `${turn.hadError ? 'An error occurred.\n' : ''}` +
+    `${followup ? `The user then replied: "${evidenceWindow(followup, EVIDENCE_BUDGETS.outcomeFollowup)}"\n` : ''}\n` +
+    `In one sentence of at most ${String(TURN_REFLECTION_MAX_CHARS)} characters, what specifically ` +
+    `should be done differently next time? It is stored as a lesson and read by later sessions that ` +
+    `have none of the evidence above, so name the trigger and the action, not the incident.\n` +
+    `  Good: "When a run result's text begins \`Error (exit N)\`, treat it as a failure and re-run ` +
+    `before reporting the work done."\n` +
+    `  Bad: "Should have been more careful here." — no trigger, no action, and nothing a later reader ` +
+    `can apply.`
   );
 }
 
@@ -1092,26 +1145,19 @@ export class EvolutionEngine {
   // ── Internal helpers ────────────────────────────────────────────
 
   /** Generate a reflection on a turn that went wrong. The user's follow-up
-   *  (the correction) is the strongest available context when present. */
+   *  (the correction) is the strongest available context when present.
+   *
+   *  The answer is bounded here rather than rejected, for the reason the advisor
+   *  note is (advisor/review.ts): a model that answers longer than it was asked
+   *  is the ordinary case, and this sentence is appended verbatim to durable
+   *  memory on corroboration. */
   private async generateTurnReflection(
     turn: CompletedTurn, outcome: TurnOutcome | null, quality: number, followup: string | null,
   ): Promise<string> {
-    const summary = evidenceWindow(turn.assistantResponse, EVIDENCE_BUDGETS.outcomeAssistantResponse);
-    const toolSummary = turn.toolCalls.length > 0
-      ? `Tools used: ${turn.toolCalls.map(tc => tc.name).join(', ')}`
-      : 'No tools used';
-
-    return this.reviewLlm(turn).complete(
-      `A recent interaction landed ${outcome ?? 'unobserved'} at ${quality.toFixed(2)}/1.0 quality.\n` +
-      `User asked: "${evidenceWindow(turn.userMessage, EVIDENCE_BUDGETS.outcomeUserMessage)}"\n` +
-      `Response: "${summary}"\n` +
-      `${toolSummary}\n` +
-      `${renderDelegationFeatures(delegationFeatures(turn))}\n` +
-      `Delegation rubric: On corrected/frustrated requests with 2+ independent parts, consider a long linear grind with zero delegation a lesson to decompose and hire subordinates or run a search; credit effective hiring/searching on accepted turns; flag delegation overhead when spawned subordinates contributed nothing.\n` +
-      `${turn.hadError ? 'An error occurred.\n' : ''}` +
-      `${followup ? `The user then replied: "${evidenceWindow(followup, EVIDENCE_BUDGETS.outcomeFollowup)}"\n` : ''}\n` +
-      `In one sentence, what specifically should be done differently next time?`,
+    const raw = await this.reviewLlm(turn).complete(
+      buildTurnReflectionPrompt({ turn, outcome, quality, followup }),
     );
+    return raw.trim().slice(0, TURN_REFLECTION_MAX_CHARS);
   }
 
   /** Extract a successful tool usage pattern into a reusable crafted tool.

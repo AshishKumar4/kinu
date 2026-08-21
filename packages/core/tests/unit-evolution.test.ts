@@ -10,6 +10,7 @@ import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import { createTestRuntime } from './helpers';
 import { EvolutionEngine, type EvolutionEvent, type CompletedTurn, type CompletedSession } from '../src/evolution/index';
+import { DELEGATION_RUBRIC } from '../src/evolution/delegation-features';
 import { listTurnOutcomes, listLessons, recordLesson } from '../src/evolution/outcomes';
 import { alignmentConvergence } from '../src/evolution/alignment';
 import { initSearchTables } from '../src/mcts/schemas';
@@ -71,11 +72,13 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     expect(reflectionPrompt).toContain(
       'Turn process: 41 sequential steps, 0 hiring, 0 exploration, 0 messaging, 0 execute_tools, 6.2min wall clock',
     );
-    expect(reflectionPrompt).toContain(
-      'On corrected/frustrated requests with 2+ independent parts, consider a long linear grind with zero delegation',
-    );
-    expect(reflectionPrompt).toContain('credit effective hiring/searching on accepted turns');
-    expect(reflectionPrompt).toContain('flag delegation overhead when spawned subordinates contributed nothing');
+    // One shared rubric string, in the vocabulary the evidence line above it
+    // prints. The two inline copies had drifted into two vocabularies for one
+    // ladder — "hire/search" here, "team/think/heads" in gepa/mutate.ts.
+    expect(reflectionPrompt).toContain(DELEGATION_RUBRIC);
+    expect(reflectionPrompt).toContain('is a lesson to decompose the work and delegate it');
+    expect(reflectionPrompt).toContain('An accepted turn that hired or explored effectively earns credit');
+    expect(reflectionPrompt).toContain('Spawns that contributed nothing are delegation overhead');
   });
 
   test('accepted follow-up: positive feedback, no reflection, extracts a pattern from tool use', async () => {
@@ -430,5 +433,57 @@ describe('EvolutionEngine — Lifetime-level', () => {
     await engine.onLifetimeEvolution();
 
     expect(events.some(e => e.type === 'consolidation')).toBe(true);
+  });
+});
+
+describe('the turn-reflection prompt', () => {
+  /** The prompt as the engine actually renders it, plus what the engine did with
+   *  the answer. Read through the call rather than through an export: the builder
+   *  is module-private, and this is the only surface that proves the prompt's
+   *  stated bound and the code's enforced bound are one number. */
+  async function reflect(answer: string) {
+    const { rt } = createTestRuntime({
+      llmResponses: { ...classifierResponses('corrected'), 'In one sentence': answer },
+    });
+    initCraftScoreTables(rt.storage.execRaw);
+    const prompts: string[] = [];
+    const complete = rt.llm.complete.bind(rt.llm);
+    rt.llm.complete = async (prompt: string) => {
+      prompts.push(prompt);
+      return complete(prompt);
+    };
+    const engine = new EvolutionEngine(rt);
+    await engine.reviewTurn(
+      makeTurn({ steps: 41, durationMs: 372_000 }),
+      'No — that rotates production keys. I said STAGING.',
+    );
+    return {
+      prompt: prompts.find((text) => text.includes('In one sentence')) ?? '',
+      lesson: listLessons(rt.storage.sql, { status: 'corroborated' })[0]?.text ?? '',
+      memory: await rt.memory.read('memory/MEMORY.md'),
+    };
+  }
+
+  test('states a length bound as a number, and the code cuts the answer to that same number', async () => {
+    // "In one sentence" is a request a model is free to interpret, and the answer
+    // is appended verbatim to memory/MEMORY.md once a user verdict corroborates
+    // it — where an unbounded paragraph costs context on every later turn,
+    // permanently. The advisor note already had this pairing (the prompt states
+    // the cap, the parse enforces it); the reflection had neither half. Read from
+    // the prompt so the two cannot drift apart silently.
+    const { prompt, lesson, memory } = await reflect('y'.repeat(2_000));
+    const stated = Number(/at most (\d+) characters/.exec(prompt)?.[1]);
+    expect(stated).toBe(240);
+    expect(lesson).toBe('y'.repeat(stated));
+    expect(memory).toContain('y'.repeat(stated));
+    expect(memory).not.toContain('y'.repeat(stated + 1));
+  });
+
+  test('asks for a trigger and an action by contrast, because the reader has no evidence', async () => {
+    const { prompt } = await reflect('re-run the command before reporting done');
+    expect(prompt).toContain('read by later sessions that have none of the evidence above');
+    expect(prompt).toContain('name the trigger and the action, not the incident');
+    expect(prompt).toContain('Good: "When a run result\'s text begins `Error (exit N)`');
+    expect(prompt).toContain('Bad: "Should have been more careful here."');
   });
 });
