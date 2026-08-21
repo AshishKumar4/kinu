@@ -193,7 +193,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     const resolved = await resolvePromptAttachments(input, { limitBytes: client.inlineAttachmentLimitBytes });
     for (const problem of resolved.errors) console.log(WARN(`  ${problem}`));
     if (resolved.attached.length > 0) {
-      console.log(DIM(`  📎 ${resolved.attached.map(describePromptAttachment).join(' · ')}`));
+      console.log(DIM(`  + ${resolved.attached.map(describePromptAttachment).join(' · ')}`));
     }
     headerPrinted = false;
     turnInFlight = true;
@@ -509,7 +509,7 @@ function renderClientEvent(
       if (event.kind === 'programmatic') {
         status.clear();
         setHeader(false);
-        console.log(`\n${DIM(`⚡ ${event.event ?? 'event'}`)} ${MUTED(clipText(event.text, 80))}`);
+        console.log(`\n${DIM(`» ${event.event ?? 'event'}`)} ${MUTED(clipText(event.text, 80))}`);
         status.show('running background work');
       } else {
         // A cascaded user turn (steer follow-up / queued leftover) gets its

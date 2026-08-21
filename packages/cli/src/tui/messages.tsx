@@ -49,7 +49,7 @@ function UserMessage({ content, attachments, steered, branched }: { content: str
         </text>
         <text><span fg={tuiColors.textBright}>{content}</span></text>
         {attachments?.map((label, i) => (
-          <text key={i}><span fg={tuiColors.muted}>📎 {label}</span></text>
+          <text key={i}><span fg={tuiColors.muted}>+ {label}</span></text>
         ))}
       </box>
     </box>
@@ -89,7 +89,7 @@ function ToolCallMessage({ toolName, args }: { toolName: string; args?: string }
   return (
     <box style={{ paddingLeft: 4, marginBottom: 0 }}>
       <text>
-        <span fg={tuiColors.amberDeep}>⚡ </span>
+        <span fg={tuiColors.amberDeep}>▸ </span>
         <span fg={tuiColors.amber}>{toolName}</span>
         {args ? <span fg={tuiColors.muted}> {clipText(args, 80)}</span> : null}
       </text>

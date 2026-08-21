@@ -7,6 +7,7 @@ import { createTestRenderer } from '@opentui/core/testing';
 import { createRoot } from '@opentui/react';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
+import type { ReactNode } from 'react';
 
 import { SLASH_COMMANDS } from '../src/slash-commands';
 import { CommandHintOverlay, DeviceConnectOverlay, ModelPickerOverlay, WalkbackOverlay } from '../src/tui/overlays';
@@ -147,6 +148,65 @@ describe('CLI TUI layout', () => {
       expect(frame).toContain('14 tools');
       expect(frame).toContain('[Ctrl+P]');
     });
+  });
+
+  // The chrome's glyph language is textual only: box-drawing, geometric shapes,
+  // dingbats, braille. Emoji-presentation code points render unpredictably per
+  // terminal font and read as leftovers of another era, so no frame may carry
+  // one. ★ stays: it is Emoji_Presentation=No and monochrome everywhere.
+  test('TUI chrome renders zero emoji', async () => {
+    // FE0F is checked apart: inside a class it combines with the neighbour
+    // and the lint reads that as a misleading pattern.
+    const EMOJI = /[\u{1F000}-\u{1FFFF}\u{23E9}-\u{23FA}\u{2B00}-\u{2BFF}\u{2600}-\u{26FF}]/gu;
+    const VARIATION_SELECTOR = /\uFE0F/u;
+    const frames: string[] = [];
+    const collect = async (width: number, element: ReactNode) => {
+      const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
+      const root = createRoot(renderer);
+      try {
+        root.render(element);
+        await renderSettled(renderOnce);
+        frames.push(captureCharFrame());
+      } finally {
+        root.render(<box />);
+        renderer.destroy();
+      }
+    };
+    await collect(96, (
+      <StatusBar
+        name="checkout"
+        mode="cloud"
+        model="openai/gpt-5.5"
+        reasoningEffort="high"
+        connected={true}
+        scaffoldVersion={3}
+        toolCount={14}
+        autoEvolve={false}
+        contextTokens={2300}
+        contextWindow={128_000}
+        branchCount={2}
+      />
+    ));
+    await collect(96, (
+      <box style={{ width: '100%', height: '100%', backgroundColor: tuiColors.bg }}>
+        <MessageList
+          messages={[
+            { id: 'u1', role: 'user', content: 'Run the suite', attachments: ['notes.md'] },
+            { id: 'a1', role: 'assistant', content: 'On it.' },
+            { id: 't1', role: 'tool_call', content: '', toolName: 'exec', args: '{"cmd":"bun test"}' },
+            { id: 'r1', role: 'tool_result', content: JSON.stringify({ reason: 'approval_required', error: 'Outside this workspace.' }) },
+            { id: 'e1', role: 'evolution', content: '[reflection] kept the fix minimal' },
+          ]}
+        />
+      </box>
+    ));
+    for (const frame of frames) {
+      const offenders = [...frame.matchAll(EMOJI)]
+        .map((match) => match[0])
+        .filter((char) => char !== '\u2605');
+      expect(offenders).toEqual([]);
+      expect(VARIATION_SELECTOR.test(frame)).toBe(false);
+    }
   });
 
   test('CLI version has package.json as its single source', () => {

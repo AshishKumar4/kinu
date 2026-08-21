@@ -27,7 +27,7 @@ const SILK = {
   dim: '#A69C8E',     // --c-text-3
 } as const;
 
-const BRAND = chalk.bold.hex(SILK.sheen)('🔱 Kinu');
+const BRAND = chalk.bold.hex(SILK.sheen)('Kinu');
 const VERSION = cliPackage.version;
 const DIM = chalk.dim;
 const ACCENT = chalk.hex(SILK.thread);
@@ -295,7 +295,7 @@ export function printSearchTree(nodes: SearchNode[]): void {
  * MCP and crafted tools, whose argument contracts nothing knows.
  */
 export function printToolCall(toolName: string, args: JsonObject): void {
-  console.log(`\n${DIM('  ⚙ ')}${MUTED(toolName)} ${DIM('━'.repeat(Math.max(1, 40 - toolName.length)))}`);
+  console.log(`\n${DIM('  ▸ ')}${MUTED(toolName)} ${DIM('━'.repeat(Math.max(1, 40 - toolName.length)))}`);
   const action = describeToolCall(toolName, args);
   if (action) console.log(`${DIM('  ')}${ACCENT(action)}`);
   const summary = summarizeToolCall(toolName, args);
@@ -328,9 +328,9 @@ export function printToolResult(result: string): void {
 
 // ── Evolution event (for chat) ───────────────────────────────────
 
-const EVOLUTION_ICONS = new Map([
-  ['reflection', '💡'], ['craft_discovered', '🔧'], ['consolidation', '🧹'],
-  ['scaffold_proposed', '🧬'], ['mcts_started', '🔍'], ['mcts_complete', '✓'],
+const EVOLUTION_ICONS = new Map<string, string>([
+  ['reflection', '◔'], ['craft_discovered', '✚'], ['consolidation', '⟳'],
+  ['scaffold_proposed', '✎'], ['mcts_started', '⌕'], ['mcts_complete', '✓'],
 ]);
 
 export function printEvolutionEvent(type: string, message: string): void {
