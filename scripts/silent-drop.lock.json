@@ -17,7 +17,6 @@
   "logged_default/wire packages/cf-backend/src/user/user-do.ts#refreshCodexInternal",
   "logged_default/wire packages/cli-backend/src/claude-cli-provider.ts#start",
   "logged_default/wire packages/cli-backend/src/host-mount.ts#stat",
-  "logged_default/wire packages/cli/src/cc-transcript.ts#mineSession",
   "logged_default/wire packages/cli/src/commands/setup.ts#setupCommand",
   "logged_default/wire packages/cli/src/tui/home-app.tsx#openModelPicker",
   "logged_default/wire packages/cli/src/version-check.ts#runStartupUpdateCheck",
