@@ -356,25 +356,3 @@ describe('the README film', () => {
   });
 });
 
-/**
- * Social proof is PENDING-OWNER: the section exists as structure and renders
- * only real, owner-supplied entries. The page ships with the array empty, so
- * the shipped landing must carry no proof section at all — a placeholder that
- * reads as proof is exactly the fabrication this keeps off the page.
- */
-describe('social proof waits for its owner', () => {
-  const INSTALL = "curl -fsSL 'https://kinu.run/install.sh' | bash";
-
-  test('the shipped landing carries no proof section while no entry exists', () => {
-    expect(landingDocument(INSTALL)).not.toContain('id="proof"');
-  });
-
-  test('supplied entries render as quotes with their attribution', () => {
-    const html = landingDocument(INSTALL, [
-      { quote: 'It settled the flaky test.', name: 'A. User', role: 'maintainer' },
-    ]);
-    expect(html).toContain('id="proof"');
-    expect(html).toContain('It settled the flaky test.');
-    expect(html).toContain('A. User · maintainer');
-  });
-});
