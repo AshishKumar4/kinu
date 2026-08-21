@@ -4,7 +4,7 @@
 // value, so the two properties that matter are: it renders the same bytes the
 // hand-written string did, and it refuses to render silently-wrong bytes.
 import { describe, expect, test } from 'bun:test';
-import { definePromptSection, type TemplateSlots } from '../src/prompting/template';
+import { definePromptSection, templateContract, type TemplateSlots } from '../src/prompting/template';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildSystemPromptSync } from '../src/prompt';
@@ -168,6 +168,189 @@ describe('TemplateSlots — the typed boundary', () => {
     const exact = true satisfies Exact<TemplateSlots<'plain prose'>, {}>;
     expect(exact).toBe(true);
   });
+
+  test('a flag is a required boolean, alongside the text slots', () => {
+    const exact = true satisfies Exact<
+      TemplateSlots<'## V\n- a{{#if hasShell}}\n- b {{note}}{{/if}}'>,
+      { readonly note: string } & { readonly hasShell: boolean }
+    >;
+    expect(exact).toBe(true);
+  });
+
+  test('a flag used twice is one required key, and never leaks in as a text slot', () => {
+    const exact = true satisfies Exact<
+      TemplateSlots<'{{#if on}}a{{/if}}{{#if on}}b{{/if}}'>,
+      { readonly on: boolean }
+    >;
+    expect(exact).toBe(true);
+  });
+
+  test('{{else}} and {{/if}} are block syntax, never contract entries', () => {
+    const exact = true satisfies Exact<
+      TemplateSlots<'{{#if on}}a{{else}}b{{/if}}'>,
+      { readonly on: boolean }
+    >;
+    expect(exact).toBe(true);
+  });
+});
+
+describe('{{#if}} — prose that branches on one declared boolean', () => {
+  const section = definePromptSection(
+    't/if',
+    '## Verification\n- always{{#if hasShell}}\n- only with a shell{{/if}}',
+  );
+
+  test('true renders the branch, false renders nothing at all', () => {
+    expect(section.render({ hasShell: true }))
+      .toBe('## Verification\n- always\n- only with a shell');
+    expect(section.render({ hasShell: false })).toBe('## Verification\n- always');
+  });
+
+  test('the newline-inside-the-block idiom drops a line WITH its separator', () => {
+    // The whole reason a conditional can replace `lines.push()` + `join('\n')`
+    // byte-for-byte: an omitted line must not leave the newline that joined it.
+    expect(section.render({ hasShell: false }).endsWith('- always')).toBe(true);
+    expect(section.render({ hasShell: false })).not.toContain('\n\n');
+  });
+
+  test('{{else}} renders the alternative, and never both', () => {
+    const either = definePromptSection('t/else', 'Plan mode: {{#if submits}}call `submit_plan`{{else}}report to the parent{{/if}}.');
+    expect(either.render({ submits: true })).toBe('Plan mode: call `submit_plan`.');
+    expect(either.render({ submits: false })).toBe('Plan mode: report to the parent.');
+  });
+
+  test('conditionals nest, and an outer false skips the whole inner branch', () => {
+    const nested = definePromptSection(
+      't/nested-if',
+      'A{{#if outer}}B{{#if inner}}C{{else}}D{{/if}}E{{/if}}F',
+    );
+    expect(nested.render({ outer: true, inner: true })).toBe('ABCEF');
+    expect(nested.render({ outer: true, inner: false })).toBe('ABDEF');
+    expect(nested.render({ outer: false, inner: true })).toBe('AF');
+  });
+
+  test('a repeated flag is one contract entry and branches at every position', () => {
+    const twice = definePromptSection('t/if-twice', '{{#if on}}1{{/if}}-{{#if on}}2{{/if}}');
+    expect(twice.render({ on: true })).toBe('1-2');
+    expect(twice.render({ on: false })).toBe('-');
+  });
+
+  test('a flag and a text slot can share a source without colliding', () => {
+    const mixed = definePromptSection('t/mixed', '{{#if show}}{{value}}{{/if}}');
+    expect(mixed.render({ show: true, value: 'x' })).toBe('x');
+    expect(mixed.render({ show: false, value: 'x' })).toBe('');
+  });
+});
+
+describe('{{#if}} — a flag with no value fails loudly, like every other slot', () => {
+  // Same door as the missing-slot tests above: `string` erases the compile-time
+  // contract, which is exactly the shape a promoted candidate arrives in.
+  const fromStore: string = 'A{{#if flag}}B{{/if}}';
+
+  test('an absent flag throws naming it — the section never silently vanishes', () => {
+    const section = definePromptSection('t/flag-absent', fromStore);
+    expect(() => section.render({})).toThrow(
+      /prompt template "t\/flag-absent": flag \{\{#if flag\}\} has no value\. Supplied: \(none\)/,
+    );
+  });
+
+  test('a string where a flag belongs throws, and says which spelling to use', () => {
+    const section = definePromptSection('t/flag-typed', fromStore);
+    // No assertion needed to write this: a runtime source declares no contract,
+    // so the compiler has nothing to object to. That IS the case under test.
+    const stringWhereFlagBelongs = { flag: 'true' };
+    expect(() => section.render(stringWhereFlagBelongs)).toThrow(
+      /flag \{\{#if flag\}\} is a boolean slot but was given a string — write \{\{flag\}\}/,
+    );
+  });
+
+  test('a boolean where a text slot belongs throws the mirror of that', () => {
+    const source: string = 'A{{value}}B';
+    const section = definePromptSection('t/slot-typed', source);
+    const booleanWhereTextBelongs = { value: true };
+    expect(() => section.render(booleanWhereTextBelongs)).toThrow(
+      /slot \{\{value\}\} is a text slot but was given a boolean — write \{\{#if value\}\}/,
+    );
+  });
+});
+
+describe('{{#if}} — a malformed conditional fails at definition', () => {
+  test('rejects a conditional that is never closed', () => {
+    expect(() => definePromptSection('t/unclosed-if', 'A{{#if x}}B')).toThrow(
+      /prompt template "t\/unclosed-if": unclosed \{\{#if x\}\} — every conditional needs its \{\{\/if\}\}/,
+    );
+  });
+
+  test('rejects a close with nothing open', () => {
+    expect(() => definePromptSection('t/stray-close', 'A{{/if}}B')).toThrow(
+      /\{\{\/if\}\} at index 1 with no \{\{#if\}\} open/,
+    );
+  });
+
+  test('rejects {{else}} outside a conditional', () => {
+    expect(() => definePromptSection('t/stray-else', 'A{{else}}B')).toThrow(
+      /\{\{else\}\} at index 1 with no \{\{#if\}\} open/,
+    );
+  });
+
+  test('rejects a second {{else}} in one conditional', () => {
+    expect(() => definePromptSection('t/two-else', '{{#if x}}A{{else}}B{{else}}C{{/if}}')).toThrow(
+      /a second \{\{else\}\} at index 19 in \{\{#if x\}\}/,
+    );
+  });
+
+  test('rejects an expression in the condition — a flag is one declared boolean', () => {
+    expect(() => definePromptSection('t/expr', '{{#if a && b}}x{{/if}}')).toThrow(
+      /malformed flag "\{\{#if a && b\}\}" at index 0 — a flag is \{\{#if name\}\} with one space and no expression/,
+    );
+  });
+
+  test('rejects {{#each}} BY NAME, pointing at where iteration lives', () => {
+    // The tag a writer reaches for next. Swept into "malformed slot" it reads as
+    // a typo; named, it reads as the design decision it is.
+    expect(() => definePromptSection('t/each', '{{#each items}}x{{/each}}')).toThrow(
+      /unknown block tag "\{\{#each items\}\}" at index 0 — .*iteration stays in TypeScript/,
+    );
+  });
+});
+
+describe('renderFrom — the door a promoted candidate comes through', () => {
+  const section = definePromptSection('t/promotable', 'A {{v}}{{#if on}} B{{/if}}');
+
+  test('renders the replacement, not the built-in source', () => {
+    expect(section.renderFrom('Z {{v}}{{#if on}} Y{{/if}}', { v: 'q', on: true })).toBe('Z q Y');
+    expect(section.render({ v: 'q', on: true })).toBe('A q B');
+  });
+
+  test('a replacement that drops a slot is legal; one that invents a slot throws', () => {
+    // The contract check that stops the second case BEFORE a turn renders it is
+    // `templateContract`, used by the promotion gate — this is the backstop.
+    expect(section.renderFrom('static prose', { v: 'q', on: true })).toBe('static prose');
+    expect(() => section.renderFrom('{{invented}}', { v: 'q', on: true })).toThrow(
+      /slot \{\{invented\}\} has no value/,
+    );
+  });
+
+  test('re-rendering the same replacement is byte-stable', () => {
+    const replacement = 'R {{v}}{{#if on}}!{{/if}}';
+    const first = section.renderFrom(replacement, { v: '1', on: false });
+    const second = section.renderFrom(replacement, { v: '1', on: false });
+    expect(second).toBe(first);
+    expect(commonPrefixLength(first, second)).toBe(first.length);
+  });
+});
+
+describe('templateContract — what a candidate must declare', () => {
+  test('reads both slot kinds out of a runtime source, sorted and deduped', () => {
+    expect(templateContract('t/contract', 'x{{b}}{{#if f}}{{a}}{{b}}{{else}}{{#if g}}z{{/if}}{{/if}}'))
+      .toEqual({ slots: ['a', 'b'], flags: ['f', 'g'] });
+  });
+
+  test('a section and its own source agree', () => {
+    const section = definePromptSection('t/self', 'p {{one}}{{#if two}}q{{/if}}');
+    expect(templateContract(section.id, section.source))
+      .toEqual({ slots: ['one'], flags: ['two'] });
+  });
 });
 
 describe('BUILTIN_TOOL_LINE — live in the system prompt', () => {
@@ -204,15 +387,17 @@ describe('BUILTIN_TOOL_LINE — live in the system prompt', () => {
   // Cut-the-wire: byte-identity alone cannot tell a live template from a
   // reverted inline literal, because both produce the same bytes. This asserts
   // the builder actually goes through the section, using the same source-text
-  // idiom as unit-gepa-split-wiring.test.ts.
+  // idiom as unit-gepa-split-wiring.test.ts. The whole-prompt version of this
+  // check — no section prose left anywhere in the builder — is in
+  // unit-prompt-sections.test.ts.
   test('the builder renders the tool line THROUGH the template, not inline', () => {
     const source = readFileSync(join(import.meta.dir, '..', 'src', 'prompt.ts'), 'utf8');
     const start = source.indexOf('function renderBuiltinToolLine(');
     expect(start).toBeGreaterThan(-1);
     const body = source.slice(start, source.indexOf('\n}', start));
-    expect(body).toContain('BUILTIN_TOOL_LINE.render(');
+    expect(body).toContain('render(BUILTIN_TOOL_LINE,');
     // The literal it replaced must be gone, or both paths exist and drift.
     expect(body).not.toContain('- **${name}**');
-    expect(source).toContain("import { BUILTIN_TOOL_LINE } from './prompting/section-templates';");
+    expect(source).toContain('BUILTIN_TOOL_LINE,');
   });
 });
