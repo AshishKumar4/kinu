@@ -30,7 +30,7 @@ import {
   type Mode, type Palette,
 } from '../src/lib/public-shell';
 import {
-  approvalDocument, authDocument, installDocument, landingDocument, loginDocument,
+  approvalDocument, authDocument, installDocument, landingDocument, loginDocument, proofSection,
 } from '../src/lib/public-pages';
 import { heroSearch } from '../src/lib/hero-search';
 
@@ -353,5 +353,25 @@ describe('the README film', () => {
     // tagline block.
     expect(README.indexOf('kinu-film-readme.webp'))
       .toBeLessThan(README.indexOf('A self-evolving agent platform'));
+  });
+});
+
+/**
+ * Social proof is PENDING-OWNER: the section exists as structure and renders
+ * only real, owner-supplied entries. The page ships with the array empty, so
+ * the shipped landing must carry no proof section at all — a placeholder that
+ * reads as proof is exactly the fabrication this keeps off the page.
+ */
+describe('social proof waits for its owner', () => {
+  test('the shipped landing carries no proof section while no entry exists', () => {
+    const html = landingDocument("curl -fsSL 'https://kinu.run/install.sh' | bash");
+    expect(html).not.toContain('id="proof"');
+  });
+
+  test('supplied entries render as quotes with their attribution', () => {
+    const html = proofSection([{ quote: 'It settled the flaky test.', name: 'A. User', role: 'maintainer' }]);
+    expect(html).toContain('id="proof"');
+    expect(html).toContain('It settled the flaky test.');
+    expect(html).toContain('A. User · maintainer');
   });
 });
