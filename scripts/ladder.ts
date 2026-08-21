@@ -757,12 +757,12 @@ export const LADDER: readonly Gate[] = [
     run: 'bun run test:eval',
     tier: 'evals',
     // The CREDENTIALED cost, because that is the cost this gate actually incurs
-    // where it runs. `scripts/eval-tier.sh` borrows the signed-in CLI session
-    // when the environment names no target, so a deploy from a machine that has
-    // run `kinu auth` pays this — and it was declared at 0.3s, the
-    // credential-free path where every live test skips. A deploy gate whose
-    // declared cost is four orders of magnitude under its measured one makes the
-    // tier-cost line below fiction, and the push budget above it unenforceable.
+    // where it runs. `scripts/eval-tier.sh` authenticates as `eval-service`
+    // against staging from KINU_EVAL_TOKEN, so a run that holds that credential
+    // pays this — and it was declared at 0.3s, the credential-free path where
+    // every live test skips. A gate whose declared cost is four orders of
+    // magnitude under its measured one makes the tier-cost line below fiction,
+    // and the push budget above it unenforceable.
     seconds: 3228,
     catches: 'the behavioural evidence nothing else in this ladder can produce: whether '
       + 'the agent reaches for MCTS on a task that warrants it, whether a search opens '
