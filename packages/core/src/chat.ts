@@ -191,10 +191,12 @@ export const STALL_TIMEOUT_MS = 300_000;
  * is a fault to investigate, a rate limit is capacity to wait for or pace
  * against. So the two openings are declared here, once, beside the code that
  * builds them, and a reader asks {@link isRateLimitedTurnError} instead of
- * carrying a regex that a reworded sentence silently breaks.
+ * carrying a regex that a reworded sentence silently breaks. That classifier is
+ * the whole public surface: the prefixes stay module-scoped so no second reader
+ * can grow its own copy of the vocabulary.
  */
-export const STALLED_TURN_PREFIX = 'Turn stalled:';
-export const RATE_LIMITED_TURN_PREFIX = 'Turn ended by provider rate limiting:';
+const STALLED_TURN_PREFIX = 'Turn stalled:';
+const RATE_LIMITED_TURN_PREFIX = 'Turn ended by provider rate limiting:';
 
 /**
  * Whether a turn's recorded failure is the provider having rate-limited it,
@@ -410,10 +412,10 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   // same turn through the same silence and used to read as a provider fault.
   //
   // CLASSIFIED, because a swarm node whose row said "stalled" sent its reader
-  // looking for a wedge while the log held a rate limit. Both texts open with an
-  // exported prefix so a reader classifies through
-  // {@link isRateLimitedTurnError} rather than through a regex of its own — the
-  // classification exists in one place, where it is built.
+  // looking for a wedge while the log held a rate limit. Both texts open with a
+  // declared prefix so a reader classifies through {@link isRateLimitedTurnError}
+  // rather than through a regex of its own — the classification exists in one
+  // place, where it is built.
   const stallError = () => new Error(rateLimited
     ? `${RATE_LIMITED_TURN_PREFIX} the provider asked this turn to wait `
       + `${Math.round(mandatedMs / 1000)}s against a `

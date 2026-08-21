@@ -8,9 +8,17 @@
  * mid-turn". The two rows contradicted each other.
  *
  * The line is a fact about `steerRuns`, so it is read from `steerRuns`.
+ *
+ * Asserted through `useSteerActions`, which is the seam the composer actually
+ * mounts, rather than through the derivation behind it. That is the difference
+ * between proving the rule and proving the product uses it: the derivation was
+ * always correct in isolation, and the defect was a composer reading somewhere
+ * else. Rendering the hook is what catches that.
  */
 import { describe, expect, test } from 'bun:test';
-import { queuedSteerNotice } from '../src/hooks/use-steer-actions';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { useSteerActions, type SteerActionsDeps } from '../src/hooks/use-steer-actions';
 import type { InlineSteer } from '@kinu.run/core';
 
 const queued = (id: string): InlineSteer =>
@@ -18,30 +26,54 @@ const queued = (id: string): InlineSteer =>
 const landed = (id: string, atStep = 3): InlineSteer =>
   ({ id, text: 'use the swarm for this', state: 'landed', atStep });
 
-describe('the queued line', () => {
+/** The composer's notice, as the hook hands it over for a given server state.
+ *
+ *  `renderToStaticMarkup` runs the hook for real — `useState`, `useMemo` and
+ *  every dependency the composer passes — and hands back what a reader would
+ *  see. No effects run, and none are needed: the queued line is derived, which
+ *  is the property under test. */
+function noticeFor(steerRuns: readonly InlineSteer[], hasAttachments = false): string | null {
+  let seen: string | null = null;
+  function Probe() {
+    const deps: SteerActionsDeps = {
+      steerChat: async () => 'mid-turn',
+      abortChat: async () => [],
+      sendChat: () => {},
+      draft: '',
+      setDraft: () => {},
+      hasAttachments,
+      steerRuns,
+      messageIds: [],
+    };
+    const { notice } = useSteerActions(deps);
+    seen = notice === null ? null : notice.text;
+    return null;
+  }
+  renderToStaticMarkup(createElement(Probe));
+  return seen;
+}
+
+describe('the queued line, as the composer receives it', () => {
   test('there is nothing to say when no steer is waiting', () => {
-    expect(queuedSteerNotice([], false)).toBeNull();
+    expect(noticeFor([])).toBeNull();
   });
 
   test('a waiting steer says it lands at the next step', () => {
-    expect(queuedSteerNotice([queued('s1')], false)).toEqual({
-      id: 'steer', tone: 'progress',
-      text: "Queued — it lands at the agent's next step.",
-    });
+    expect(noticeFor([queued('s1')])).toBe("Queued — it lands at the agent's next step.");
   });
 
   test('the line is GONE once the model has it', () => {
     // The defect, stated as the property that closes it: the same steer, one
     // broadcast later, and the composer has nothing left to promise.
-    expect(queuedSteerNotice([landed('s1')], false)).toBeNull();
+    expect(noticeFor([landed('s1')])).toBeNull();
   });
 
   test('one steer still waiting keeps the line while an earlier one has landed', () => {
-    expect(queuedSteerNotice([landed('s1'), queued('s2')], false)?.tone).toBe('progress');
+    expect(noticeFor([landed('s1'), queued('s2')]))
+      .toBe("Queued — it lands at the agent's next step.");
   });
 
   test('a draft carrying attachments says what a steer cannot take with it', () => {
-    expect(queuedSteerNotice([queued('s1')], true)?.text)
-      .toContain('a steer carries text only');
+    expect(noticeFor([queued('s1')], true)).toContain('a steer carries text only');
   });
 });

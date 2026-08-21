@@ -14,7 +14,7 @@ import { describe, expect, test } from 'bun:test';
 import type { UIMessage } from 'ai';
 import { STEER_METADATA_KEY, STEER_STEP_METADATA_KEY } from '../src/orchestrator/user-steer';
 import {
-  buildTranscript, segmentBySteers, steerRowStep,
+  buildTranscript, segmentBySteers,
   type InlineSteer, type PlacedSteer, type TranscriptPart,
 } from '../src/read-models/transcript';
 
@@ -46,16 +46,34 @@ const queued = (id: string, text: string): InlineSteer =>
 
 describe('reading a steer row', () => {
   test('a landed steer names its step; an ordinary user message names nothing', () => {
-    expect(steerRowStep({ [STEER_METADATA_KEY]: true, [STEER_STEP_METADATA_KEY]: 7 })).toBe(7);
-    expect(steerRowStep({ kinuMode: 'build' })).toBeNull();
-    expect(steerRowStep(undefined)).toBeNull();
+    // Read off the placement rather than off the index reader: what a row's
+    // metadata says only matters through where the thread then draws it.
+    const { entries } = buildTranscript([
+      user('u1', 'research flaxdiff'),
+      steerRow('steer-a', 'use the swarm for this', 7),
+      turn('a1', 9),
+    ]);
+    expect(entries.map((entry) => entry.message.id)).toEqual(['u1', 'a1']);
+    expect(entries[1]!.steers.map((steer) => steer.atStep)).toEqual([7]);
+    // The ordinary message stayed a message and collected nothing.
+    expect(entries[0]!.steers).toEqual([]);
   });
 
   test('a steer row written before the index existed keeps its bubble instead of guessing', () => {
     // Every workspace the operator already has is full of these. Placing them
-    // at a made-up step would claim the model read them somewhere it did not.
-    expect(steerRowStep({ [STEER_METADATA_KEY]: true })).toBeNull();
-    expect(steerRowStep({ [STEER_METADATA_KEY]: true, [STEER_STEP_METADATA_KEY]: -1 })).toBeNull();
+    // at a made-up step would claim the model read them somewhere it did not,
+    // so they stay top-level rows and the turn collects nothing.
+    for (const metadata of [
+      { [STEER_METADATA_KEY]: true },
+      { [STEER_METADATA_KEY]: true, [STEER_STEP_METADATA_KEY]: -1 },
+    ]) {
+      const { entries } = buildTranscript([
+        { id: 'old-steer', role: 'user', parts: [{ type: 'text', text: 'wait' }], metadata },
+        turn('a1', 6),
+      ]);
+      expect(entries.map((entry) => entry.message.id)).toEqual(['old-steer', 'a1']);
+      expect(entries[1]!.steers).toEqual([]);
+    }
   });
 });
 

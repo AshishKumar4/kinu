@@ -305,7 +305,6 @@ export {
 // Chat engine (shared between server and CLI)
 export {
   runChat, INTERRUPTED_TURN, isRateLimitedTurnError,
-  RATE_LIMITED_TURN_PREFIX, STALLED_TURN_PREFIX,
   type ChatEvent, type ChatOptions,
 } from './chat';
 
@@ -737,7 +736,7 @@ export {
 // Where a steer sits in the transcript — the read side of the same drain, and
 // pure, so both backends place it identically.
 export {
-  buildTranscript, segmentBySteers, steerRowStep,
+  buildTranscript, segmentBySteers,
   type InlineSteer, type PlacedSteer, type Transcript, type TranscriptEntry,
   type TranscriptPart, type TurnSegment,
 } from './read-models/transcript';

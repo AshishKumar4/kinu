@@ -87,7 +87,7 @@ const SteerRowSchema = v.looseObject({
  * index existed. It stays a top-level bubble rather than being guessed into a
  * position — a wrong position is a worse claim than an honest one at the end.
  */
-export function steerRowStep<Metadata>(metadata: Metadata): number | null {
+function steerRowStep<Metadata>(metadata: Metadata): number | null {
   const parsed = v.safeParse(SteerRowSchema, metadata ?? {});
   if (!parsed.success || parsed.output[STEER_METADATA_KEY] !== true) return null;
   const step = parsed.output[STEER_STEP_METADATA_KEY];

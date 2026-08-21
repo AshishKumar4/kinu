@@ -28,6 +28,7 @@ import {
   GitForkIcon, TreeStructureIcon, ArrowsOutIcon, ArrowLeftIcon, CaretRightIcon, CaretDownIcon,
   XIcon,
 } from "@phosphor-icons/react";
+import { isRateLimitedTurnError } from "@kinu.run/core";
 import type { ForkRunParams, ForkRunSummary, HeadRunView } from "@kinu.run/core";
 import { SwarmTree, naturalCanvasHeight } from "@/components/swarm-tree";
 import { NodeTranscript } from "@/components/NodeTranscript";
@@ -569,10 +570,16 @@ function RunNodeRow({ node, score, moving, onOpen }: {
   onOpen: () => void;
 }) {
   const live = node.status === "running";
+  // The provider told this turn to wait, and it still produced nothing. That is
+  // capacity to pace against, not a wedge to investigate, and the row used to
+  // render it as the same red prose as a fault. Classified through the one
+  // classifier `chat.ts` exports beside the code that writes these messages,
+  // never a regex here — a reworded sentence must not silently reclassify.
+  const rateLimited = node.errorMessage !== null && isRateLimitedTurnError(node.errorMessage);
   return (
     <button type="button" onClick={onOpen} data-run-node={node.id}
       className="w-full flex items-start gap-2 text-left rounded-md px-2 py-1.5 p-card-hover transition-colors">
-      <span className={`mt-1 size-1.5 rounded-full shrink-0 ${NODE_DOT(node.status)} ${live && moving ? "animate-pulse" : ""}`} />
+      <span className={`mt-1 size-1.5 rounded-full shrink-0 ${rateLimited ? "p-dot-warning" : NODE_DOT(node.status)} ${live && moving ? "animate-pulse" : ""}`} />
       <div className="min-w-0 flex-1">
         <div className="text-[11px] p-text-2 truncate" title={node.task}>
           {cleanNodeLabel(node.task, node.id)}
@@ -592,7 +599,11 @@ function RunNodeRow({ node, score, moving, onOpen }: {
           <div className="mt-0.5 text-[10px] p-text-2 line-clamp-2 leading-snug">{node.summary}</div>
         )}
         {node.errorMessage !== null && (
-          <div className="mt-0.5 text-[10px] p-danger line-clamp-2 leading-snug">{node.errorMessage}</div>
+          <div data-node-reason={rateLimited ? "rate-limited" : "failed"}
+            className={`mt-0.5 text-[10px] line-clamp-2 leading-snug ${rateLimited ? "p-warning" : "p-danger"}`}>
+            {rateLimited && <span className="font-medium">Rate limited · </span>}
+            {node.errorMessage}
+          </div>
         )}
       </div>
     </button>

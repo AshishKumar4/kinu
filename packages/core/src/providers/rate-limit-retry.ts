@@ -6,16 +6,18 @@ import { abortableSleep, providerPacer, type ProviderPacer } from './pacing';
 /**
  * How many times ONE request may be told to wait before this layer stops asking.
  *
- * Exported because it is also the turn loop's bound: `chat.ts`'s stall watchdog
- * excuses a silence that a provider mandated, and the number of declared waits a
- * single request can possibly produce is exactly this. So the watchdog's patience
- * is derived from the retry policy rather than being a second guess at it.
+ * The per-request attempt cap, and the default behind
+ * {@link RateLimitRetryOptions.maxAttempts}. It bounds how many 429s a single
+ * request will absorb; it says nothing about wall clock, which is what
+ * {@link RATE_LIMIT_MAX_ELAPSED_MS} bounds, and nothing about the turn loop's
+ * patience, which is {@link PROVIDER_WAIT_BUDGET_MS}.
  */
-export const RATE_LIMIT_MAX_ATTEMPTS = 6;
+const RATE_LIMIT_MAX_ATTEMPTS = 6;
 
 /** The wall clock one request may spend inside this layer's waits. Beyond it the
- *  429 is handed back to the SDK unchanged. */
-export const RATE_LIMIT_MAX_ELAPSED_MS = 180_000;
+ *  429 is handed back to the SDK unchanged. The turn loop's own patience is
+ *  derived from this — see {@link PROVIDER_WAIT_BUDGET_MS}. */
+const RATE_LIMIT_MAX_ELAPSED_MS = 180_000;
 
 /**
  * How many times the AI SDK may re-issue a model request of its own accord.

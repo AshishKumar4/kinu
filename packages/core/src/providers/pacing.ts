@@ -69,7 +69,7 @@ import { PLATFORM_CATALOG } from '../platform-catalog';
  * a `Retry-After` handed to one node is honoured by its siblings instead of
  * being raced past by five requests that never saw it.
  */
-export const PROVIDER_REQUEST_LANES =
+const PROVIDER_REQUEST_LANES =
   PLATFORM_CATALOG['worker.simultaneous_connections'].limit.value;
 
 /** What a caller timing a silence needs to know about provider-declared waits. */

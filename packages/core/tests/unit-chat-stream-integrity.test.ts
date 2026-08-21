@@ -18,9 +18,17 @@ import { tool, type ToolSet } from 'ai';
 import { z } from 'zod';
 import {
   runChat, createChatModel, isRateLimitedTurnError,
-  RATE_LIMITED_TURN_PREFIX, STALLED_TURN_PREFIX,
   type ChatEvent,
 } from '../src/index';
+
+/** The openings the two silent-turn messages actually ship with.
+ *
+ *  Written out rather than imported: the constants are module-scoped now, and
+ *  importing them made the classifier's own test compare a value with itself —
+ *  rewording either sentence would have kept it green while every stored row
+ *  changed shape. Spelled here, a reword fails this file, which is the point. */
+const STALLED_OPENING = 'Turn stalled:';
+const RATE_LIMITED_OPENING = 'Turn ended by provider rate limiting:';
 
 const SSE_HEADERS = { 'content-type': 'text/event-stream' };
 
@@ -259,7 +267,7 @@ describe('a rate-limited turn is not a stalled turn', () => {
       return new Response(new ReadableStream({ start() { /* silent after the wait */ } }), { headers: SSE_HEADERS });
     }, { stallTimeoutMs: 300 });
     expect(isRateLimitedTurnError(threw?.message ?? '')).toBe(true);
-    expect(threw?.message ?? '').not.toContain(STALLED_TURN_PREFIX);
+    expect(threw?.message ?? '').not.toContain(STALLED_OPENING);
   }, 20_000);
 
   test('an ordinary dead stream still reads as a stall, with no rate limit in sight', async () => {
@@ -269,7 +277,7 @@ describe('a rate-limited turn is not a stalled turn', () => {
       () => new Response(new ReadableStream({ start() { /* stall forever */ } }), { headers: SSE_HEADERS }),
       { stallTimeoutMs: 300 },
     );
-    expect(threw?.message ?? '').toContain(STALLED_TURN_PREFIX);
+    expect(threw?.message ?? '').toContain(STALLED_OPENING);
     expect(isRateLimitedTurnError(threw?.message ?? '')).toBe(false);
   }, 20_000);
 
@@ -279,10 +287,10 @@ describe('a rate-limited turn is not a stalled turn', () => {
     // carried — so a classifier anchored at the start of the string would have
     // reported every rate-limited node as unexplained.
     expect(isRateLimitedTurnError(
-      `run agent n1 to a report: ${RATE_LIMITED_TURN_PREFIX} the provider asked this turn to wait 60s`,
+      `run agent n1 to a report: ${RATE_LIMITED_OPENING} the provider asked this turn to wait 60s`,
     )).toBe(true);
     expect(isRateLimitedTurnError(
-      `run agent n1 to a report: ${STALLED_TURN_PREFIX} nothing flowed for 300s`,
+      `run agent n1 to a report: ${STALLED_OPENING} nothing flowed for 300s`,
     )).toBe(false);
   });
 });
