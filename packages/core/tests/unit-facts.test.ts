@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import { renderFactsBlock } from '../src/memory/facts';
-import { createTestFactsStore } from '@kinu/test-utils';
+import { createTestFactsStore } from '@kinu.run/test-utils';
 
 describe('agent_facts', () => {
   test('upsert + recall round-trip', () => {

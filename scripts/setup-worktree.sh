@@ -5,7 +5,7 @@
 # A fresh worktree has no node_modules, and the obvious shortcut — symlinking or
 # copying the main checkout's — is the bug this script exists to prevent: every
 # entry inside that directory, `@kinu` included, then resolves through the
-# main checkout, so `@kinu/core` is MAIN's core and the branch under test is
+# main checkout, so `@kinu.run/core` is MAIN's core and the branch under test is
 # never loaded. Tests and typechecks pass while measuring the wrong tree.
 #
 # So: link third-party dependencies per entry (they are shared and identical),

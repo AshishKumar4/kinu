@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Database } from 'bun:sqlite';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { parseJsonValue, type JsonObject, type JsonValue } from '@kinu/core';
+import { parseJsonValue, type JsonObject, type JsonValue } from '@kinu.run/core';
 
 const tempDirs: string[] = [];
 const repoRoot = resolve(__dirname, '../../..');

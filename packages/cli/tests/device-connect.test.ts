@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { Server, Subprocess } from 'bun';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { parseJsonObject, type JsonObject } from '@kinu/core';
+import { parseJsonObject, type JsonObject } from '@kinu.run/core';
 import type { CloudDevice } from '../src/cloud-api';
 import { CloudAgentClient } from '../src/cloud-agent-client';
 import * as v from 'valibot';

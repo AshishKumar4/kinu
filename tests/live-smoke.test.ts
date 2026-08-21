@@ -53,7 +53,7 @@ import {
   evalWorkspaceName, infraBoundary, liveChatModel, liveModelTarget, recordLiveModelEpisode,
   recordLiveModelSpend, reportLiveModelSpend, scratchDir, UNCONFIGURED_LLM,
   type LiveModelSession,
-} from '@kinu/test-utils';
+} from '@kinu.run/test-utils';
 
 const TARGET = liveModelTarget('Live Smoke');
 const LLM_CONFIG: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;

@@ -82,7 +82,7 @@ import { requireSandboxedExecutors, requireVerifierShell } from './harness';
 import {
   HARD_TASKS, liveChatModel, liveModelTarget, recordLiveModelEpisode, reportLiveModelSpend,
   toolExecute, UNCONFIGURED_LLM, type HardTask,
-} from '@kinu/test-utils';
+} from '@kinu.run/test-utils';
 
 const SUITE = 'Swarm Evals';
 const TARGET = liveModelTarget(SUITE);

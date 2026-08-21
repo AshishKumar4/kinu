@@ -13,8 +13,8 @@ import {
   eventContentPath, renderForLLM, PeerHub, JsonValueSchema,
   type PeerAgentPayload, type ReplyDispatcher, type ReplyChannelKind,
   type PeerMessage, type KinuEvent, type ReceiveResult, type SqlExec,
-} from '@kinu/core';
-import { createMemoryVfs } from '@kinu/test-utils';
+} from '@kinu.run/core';
+import { createMemoryVfs } from '@kinu.run/test-utils';
 import { sqlExec } from './helpers/user-do';
 
 function makeSql(): SqlExec {

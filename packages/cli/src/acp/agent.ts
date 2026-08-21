@@ -23,8 +23,8 @@ import {
   type StopReason,
   type ToolKind,
 } from '@agentclientprotocol/sdk';
-import type { JsonObject, ShellApprovalOutcome, ShellApprovalRequest } from '@kinu/core';
-import { diagnostics, toKinuError } from '@kinu/core/obs';
+import type { JsonObject, ShellApprovalOutcome, ShellApprovalRequest } from '@kinu.run/core';
+import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import type { AgentClient, AgentClientEvent } from '../agent-client';
 import { toAgentPrompt } from './prompt';
 import * as v from 'valibot';

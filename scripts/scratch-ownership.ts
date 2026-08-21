@@ -46,7 +46,7 @@
 
 import { readMatching, isTestFile, isParseable } from './sources';
 import { assertMeasured, finding } from './gate-ratchet';
-import { SCRATCH_PREFIXES, SCRATCH_ROOT_PREFIX } from '@kinu/test-utils';
+import { SCRATCH_PREFIXES, SCRATCH_ROOT_PREFIX } from '@kinu.run/test-utils';
 
 /**
  * The corpus: every enumerated `.ts` this repo owns. `trackedFiles()` via
@@ -261,7 +261,7 @@ export function auditScratchOwnership(sources: ReadonlyMap<string, string>): Scr
       file: path,
       line: lineOf(body, MINTS),
       detail: 'mints temp scratch and never removes it. Use `scratchDir(label)` from '
-        + '@kinu/test-utils, which the preload releases for the whole run — including '
+        + '@kinu.run/test-utils, which the preload releases for the whole run — including '
         + 'a run where this file failed — or remove it in afterEach/afterAll/finally',
     });
   }
@@ -306,7 +306,7 @@ if (import.meta.main) {
         + 'entries in the temp directory in one evening, which then reads as "this test '
         + 'timed out after 5000ms" in whichever suite writes next — never in the one that '
         + 'leaked, and it was blamed for three unrelated failures',
-      fix: 'mint through `scratchDir(label)` from @kinu/test-utils, or remove the '
+      fix: 'mint through `scratchDir(label)` from @kinu.run/test-utils, or remove the '
         + 'directory in afterEach/afterAll/finally so a failing assertion still cleans up',
     }));
   }

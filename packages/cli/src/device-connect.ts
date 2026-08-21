@@ -11,7 +11,7 @@
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { classify, renderThrownChain, tolerate } from '@kinu/core/obs';
+import { classify, renderThrownChain, tolerate } from '@kinu.run/core/obs';
 import { AGENT_HOME, loadConfigFile, requireAuthConfig, resolveCloudSession, updateConfigFile } from './config';
 import { listCloudDevices, registerCloudDevice } from './cloud-api';
 

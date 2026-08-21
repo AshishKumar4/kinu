@@ -12,7 +12,7 @@
  * streamed error event's text in another, and both deserve the same hint.
  */
 
-import { describeProviderError } from '@kinu/core';
+import { describeProviderError } from '@kinu.run/core';
 
 export type ProviderFailure = Parameters<typeof describeProviderError>[0];
 

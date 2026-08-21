@@ -13,7 +13,7 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { EmailOutbox, type OutboundEmailMessage } from '../src/email/outbox';
-import type { SqlExec } from '@kinu/core';
+import type { SqlExec } from '@kinu.run/core';
 import { sqlExec } from './helpers/user-do';
 
 function makeSql() {

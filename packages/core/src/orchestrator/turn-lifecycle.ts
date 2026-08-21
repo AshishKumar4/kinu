@@ -168,7 +168,7 @@ export function snapshotCompletedTurn(acc: TurnAccumulator, opts: {
 }
 
 /** The compaction-state slice this module needs — structural, because the
- *  concrete store lives in @kinu/compaction, which depends on core. */
+ *  concrete store lives in @kinu.run/compaction, which depends on core. */
 export interface CompactionTriggerState {
   savePromptTokens(sessionKey: string, tokens: number, historyLength: number): void;
   armForceCompaction(sessionKey: string): void;

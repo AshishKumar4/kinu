@@ -26,7 +26,7 @@
 
 import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, join, sep } from 'node:path';
-import { parseJsonObject } from '@kinu/core';
+import { parseJsonObject } from '@kinu.run/core';
 import * as v from 'valibot';
 
 /** The one documented way to prepare a checkout that has no node_modules. */

@@ -28,7 +28,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
-import { toolExecute } from '@kinu/test-utils';
+import { toolExecute } from '@kinu.run/test-utils';
 import {
   buildBuiltinTools, censusToolFailures, classifyToolFailure,
   toolFailureKey, FAILURE_WITHOUT_ERROR,

@@ -14,7 +14,7 @@ import {
   // report.* — codemode projection of the native `report` tool.
   createReportCodemodeProvider, type CodemodeProvider,
   type DelegationBudget,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import {
   ActorAgent,
   type ActorToolDeps,
@@ -28,8 +28,8 @@ import {
   subordinateRelaysTurnEnd,
   type SubordinateLiveStatus,
   type SubordinateReportOrigin,
-} from '@kinu/core';
-import { diagnostics, toKinuError } from '@kinu/core/obs';
+} from '@kinu.run/core';
+import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 
 /** The workspace root's class name, which is also its Durable Object binding
  *  name — the equality the SDK itself relies on when it resolves a top-level

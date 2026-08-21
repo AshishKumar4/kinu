@@ -7,8 +7,8 @@ import { join } from 'node:path';
 import {
   buildDrainBatch, COMPLETION_GATE_EVENT, FORK_INTERRUPTED_SIGNAL, OVERFLOW_RETRY_EVENT,
   WORKSPACE_CREATED_EVENT, workspaceGenesisSignal,
-} from '@kinu/core';
-import type { JsonValue, KinuEvent } from '@kinu/core';
+} from '@kinu.run/core';
+import type { JsonValue, KinuEvent } from '@kinu.run/core';
 import {
   applySignalCard, classifyProgrammaticTurn, eventVariantLabel, messageSignalId,
   parseDrainedEvents, parseSignalCardEvent, type SignalCard,

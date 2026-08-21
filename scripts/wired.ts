@@ -189,7 +189,7 @@ function defaultExportName(tree: SyntaxNode): string | undefined {
 const CANDIDATES = ['', '.ts', '.tsx', '/index.ts', '/index.tsx'];
 
 /** This workspace's own packages. */
-const WORKSPACE_SCOPE = '@kinu/';
+const WORKSPACE_SCOPE = '@kinu.run/';
 
 /** A vite import query — `./x.js?raw` addresses the same file as `./x.js`. */
 const QUERY = '?';
@@ -204,7 +204,7 @@ function collapse(path: string): string {
   return stack.join('/');
 }
 
-/** A package's declared subpaths. Parsed rather than guessed: `@kinu/core`
+/** A package's declared subpaths. Parsed rather than guessed: `@kinu.run/core`
  *  publishes `./workspace` as `src/vfs/nimbus-workspace.ts`, so the directory
  *  shape a rename would produce is simply wrong, and a wrong resolution is a
  *  dropped edge. */
@@ -213,7 +213,7 @@ const SubpathSchema = v.object({ exports: v.optional(v.record(v.string(), v.stri
 /** A package's declared path aliases. `packages/cf-backend` declares
  *  `"@/*": ["./src/*"]`, and the whole frontend imports through it: 33 of
  *  `WorkspacePage.tsx`'s specifiers, of which a resolver that knew only
- *  relative paths and `@kinu/*` resolved 3. Measured before this rule
+ *  relative paths and `@kinu.run/*` resolved 3. Measured before this rule
  *  existed, that one gap produced 95 phantom findings — every React component in
  *  the tree, reported as unreached. */
 const AliasSchema = v.object({

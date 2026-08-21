@@ -280,7 +280,7 @@ let implementationId: string | null = null;
  *
  * Computed on first ask and not at module load, which is load-bearing rather than a
  * style choice: `sha256Hex` reaches `node:crypto`, this module is reachable from the
- * `@kinu/core` barrel, and that barrel is imported by the browser bundle. Every
+ * `@kinu.run/core` barrel, and that barrel is imported by the browser bundle. Every
  * other node builtin in core is only ever IMPORTED there and never touched, so the
  * bundler's `node:crypto` shim is never asked for a function; a module-scope digest
  * asked for one during import and threw before React could mount, taking the whole

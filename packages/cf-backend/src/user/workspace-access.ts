@@ -8,7 +8,7 @@ import { createCloudWorkspaceForUser } from './workspace-create';
 import { err, json, safeJson } from '../lib/http';
 import { ownerCaller } from './workspace-capability';
 import { classifyTransientDO, retryTransientDO } from '../lib/do-rpc';
-import { diagnostics, renderThrownChain, toKinuError } from '@kinu/core/obs';
+import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 /** POST /workspaces body → created WorkspaceEntry (201) | mapped error response. */

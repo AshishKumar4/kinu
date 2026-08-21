@@ -17,7 +17,7 @@ import type {
   PendingDeviceConsent,
 } from './agent-client';
 import { DIM, ERR, MUTED, WARN } from './display';
-import { renderThrownChain } from '@kinu/core/obs';
+import { renderThrownChain } from '@kinu.run/core/obs';
 
 const CONSENT_POLL_MS = 750;
 

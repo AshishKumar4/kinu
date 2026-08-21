@@ -17,15 +17,15 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
-import type { AgentRuntime, LLM, LLMProviderConfig } from '@kinu/core';
+import type { AgentRuntime, LLM, LLMProviderConfig } from '@kinu.run/core';
 import {
   initScaffoldTables, createAgentConfigStore, initAgentConfigTable,
   getPendingScaffold, getCurrentScaffoldVersion, listScaffoldArchive,
   INITIAL_SCAFFOLD_SOURCE,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import { createCLIRuntime } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
-import { scratchPath } from '@kinu/test-utils';
+import { scratchPath } from '@kinu.run/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',

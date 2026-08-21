@@ -11,7 +11,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createTestRuntime, createTestSql, memberBody, toolExecute } from '@kinu/test-utils';
+import { createTestRuntime, createTestSql, memberBody, toolExecute } from '@kinu.run/test-utils';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import {
   HeadCapture,
@@ -24,8 +24,8 @@ import {
   type HeadRuntime,
   type MergeOutput,
   type WebSearchProvider,
-} from '@kinu/core';
-import { HEAD_BUILTIN_TOOLS, buildHeadToolSet, type HeadSplitRequest, type HeadSplitResult } from '@kinu/core';
+} from '@kinu.run/core';
+import { HEAD_BUILTIN_TOOLS, buildHeadToolSet, type HeadSplitRequest, type HeadSplitResult } from '@kinu.run/core';
 
 function report(id: string): HeadReport {
   return {

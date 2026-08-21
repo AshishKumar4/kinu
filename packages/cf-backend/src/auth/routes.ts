@@ -16,8 +16,8 @@ import {
   isCloudflareCredentialUsable,
   type CloudflareTokenPayload,
 } from '../lib/cloudflare-oauth';
-import { DEFAULT_WORKERS_AI_MODEL_SPEC, JsonObjectSchema, JsonValueSchema, type JsonObject } from '@kinu/core';
-import { diagnostics, toKinuError } from '@kinu/core/obs';
+import { DEFAULT_WORKERS_AI_MODEL_SPEC, JsonObjectSchema, JsonValueSchema, type JsonObject } from '@kinu.run/core';
+import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import { notifyWorkspacesCredentialsChanged } from '../user/workspace-access';
 import { ownerCaller } from '../user/workspace-capability';
 import * as v from 'valibot';

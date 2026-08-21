@@ -5,7 +5,7 @@
 import type {
 	ActivityLogEntry, ContextComposition, StepTelemetry, Usage,
 	WorkspaceSpend,
-} from "@kinu/core";
+} from "@kinu.run/core";
 
 /**
  * One branch of a fork, as the tree view draws it.

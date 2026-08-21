@@ -24,7 +24,7 @@ import {
 import { createRoot, useKeyboard, useRenderer, useTerminalDimensions } from '@opentui/react';
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 
-import type { AlternateTakeCandidate, AlternateTakeSet, ChangelogEntry } from '@kinu/core';
+import type { AlternateTakeCandidate, AlternateTakeSet, ChangelogEntry } from '@kinu.run/core';
 import {
   findForkPivot,
   forkCandidates,
@@ -66,7 +66,7 @@ import { renderSessionBrowser, selectSession } from './session-browser';
 import { initialInputState, reduceInput, type InputEffect, type InputMachineEvent } from './input-state';
 import { clipText } from './format';
 import { tuiColors } from './theme';
-import { renderThrownChain } from '@kinu/core/obs';
+import { renderThrownChain } from '@kinu.run/core/obs';
 
 export interface ChatAppOpts {
   client: AgentClient;

@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import {
   DEVICE_TOOLCHAIN_TTL_MS, DEVICE_UNKNOWN_METHOD, TOOLCHAIN_PROBE_BINARIES,
   type JsonValue,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import * as v from 'valibot';
 import {
   DeviceSocketHub,
@@ -294,7 +294,7 @@ describe('/pc/connect upgrade wiring', () => {
 
   test('the UserDO intercepts /pc/connect and verifies the ticket inside its own fetch', () => {
     const userDO = read('src/user/user-do.ts');
-    expect(userDO).toContain('DEVICE_CONNECT_PATH,'); // imported from @kinu/core — the single wire-path home
+    expect(userDO).toContain('DEVICE_CONNECT_PATH,'); // imported from @kinu.run/core — the single wire-path home
     expect(userDO).toContain('if (url.pathname === DEVICE_CONNECT_PATH) return this.acceptDeviceSocket(request, url)');
     expect(userDO).toContain('await this.verifyDeviceConnectTicket(await ownerCaller(this.env), ticket)');
     expect(userDO).toContain('return super.fetch(request)');

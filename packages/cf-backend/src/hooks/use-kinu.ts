@@ -7,7 +7,7 @@ import { useAgent } from "agents/react";
 import {
   ORCHESTRATOR_AGENT_SLUG, SUBORDINATE_AGENT_SLUG,
   type AgentViewSummary, type PendingAction, type PlanReview,
-} from "@kinu/core";
+} from "@kinu.run/core";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import type { FileUIPart, UIMessage } from "ai";
 import * as v from "valibot";
@@ -25,13 +25,13 @@ import type {
 } from "../lib/protocol";
 import type { ExecutorInfo } from "../lib/executors";
 import { applySignalCard, parseSignalCardEvent, type SignalCard } from "../components/background-event";
-import { tolerate } from "@kinu/core/obs";
+import { tolerate } from "@kinu.run/core/obs";
 import {
   reconcilePreviewPorts,
   type ExecutorPortRefresh,
   type PinnedPreviewPort,
 } from "../lib/preview-ports";
-import { renderThrownChain } from "@kinu/core/obs";
+import { renderThrownChain } from "@kinu.run/core/obs";
 
 export type { ExecutorInfo };
 

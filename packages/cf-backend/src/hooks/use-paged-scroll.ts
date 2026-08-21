@@ -13,7 +13,7 @@
  * bare `LIMIT` tells, one layer up.
  */
 import { useCallback, useRef, useState } from "react";
-import type { Page, SeekCursor } from "@kinu/core";
+import type { Page, SeekCursor } from "@kinu.run/core";
 import { describeError } from "@/hooks/use-async-resource";
 
 export interface PagedScroll<Item> {

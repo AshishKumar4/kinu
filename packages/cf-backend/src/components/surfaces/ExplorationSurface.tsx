@@ -25,7 +25,7 @@ import { useState, useCallback, useMemo } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import { GitForkIcon, TreeStructureIcon, ArrowsOutIcon, XIcon } from "@phosphor-icons/react";
-import type { ForkRunParams, ForkRunSummary, HeadRunView } from "@kinu/core";
+import type { ForkRunParams, ForkRunSummary, HeadRunView } from "@kinu.run/core";
 import { SwarmTree, naturalCanvasHeight } from "@/components/swarm-tree";
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { type ExplorerSelection } from "@/components/swarm-tree-model";

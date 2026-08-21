@@ -21,13 +21,13 @@ import {
   SparkleIcon, TimerIcon, ChecksIcon, CheckIcon, XIcon, GitDiffIcon, SquaresFourIcon,
   CaretDownIcon, CaretRightIcon,
 } from "@phosphor-icons/react";
-import type { ChangelogEntry, ChangelogEntryKind, DiffLine } from "@kinu/core";
+import type { ChangelogEntry, ChangelogEntryKind, DiffLine } from "@kinu.run/core";
 import type { Rpc } from "@/lib/protocol";
 import { LIVE_DATA_REFRESH_MS } from "@/hooks/use-kinu";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { type AsyncResource, describeError, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
 import { DiffLines, timeAgo } from "./shared";
-import { renderThrownChain } from "@kinu/core/obs";
+import { renderThrownChain } from "@kinu.run/core/obs";
 
 export interface ChangelogView { entries: ChangelogEntry[]; unseenCount: number; seenAt: number }
 interface ScaffoldDiff { version: number; previousVersion: number | null; added: number; removed: number; lines: DiffLine[] }

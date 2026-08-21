@@ -15,8 +15,8 @@ import {
   initBackgroundJobsTable, initExplorationRecordsTable, initHeadsTables, initMctsSearchTable,
   initRunEventTables, initSearchTables, recordExploration,
   type ExplorationWrite, type ObjectiveIdentity,
-} from '@kinu/core';
-import { makeSql } from '@kinu/cli-backend';
+} from '@kinu.run/core';
+import { makeSql } from '@kinu.run/cli-backend';
 import { redactSecrets } from '../src/commands/debug';
 import * as v from 'valibot';
 

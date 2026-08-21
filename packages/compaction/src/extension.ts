@@ -30,13 +30,13 @@
  */
 
 import type { ModelMessage, TextPart } from 'ai';
-import type { KinuExtension, TransformContext } from '@kinu/core';
+import type { KinuExtension, TransformContext } from '@kinu.run/core';
 import {
   buildCompactionSummaryPrompt,
   stripCheckpointPreamble,
   wrapCompactionSummary,
   CONTEXT_CHECKPOINT_PREFIX,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import {
   buildPlan,
   createSummaryScheduler,
@@ -63,7 +63,7 @@ import {
   withArchiveManifest,
   type ArchiveIndexStore,
 } from './manifest';
-import { renderThrownChain } from '@kinu/core/obs';
+import { renderThrownChain } from '@kinu.run/core/obs';
 
 export interface CompactionOutcomeEvent {
   sessionKey: string;

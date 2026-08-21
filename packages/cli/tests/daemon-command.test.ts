@@ -8,7 +8,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { tolerate } from '@kinu/core/obs';
+import { tolerate } from '@kinu.run/core/obs';
 
 const repoRoot = resolve(__dirname, '../../..');
 const cliBin = join(repoRoot, 'packages/cli/bin/cli.ts');

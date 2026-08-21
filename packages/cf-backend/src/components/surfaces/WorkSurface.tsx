@@ -21,7 +21,7 @@ import {
   MonitorIcon, TreeStructureIcon, GitDiffIcon, StackIcon, GaugeIcon,
   PulseIcon, SparkleIcon, FingerprintIcon,
 } from "@phosphor-icons/react";
-import type { AgentViewSummary, PendingAction, PlanReview } from "@kinu/core";
+import type { AgentViewSummary, PendingAction, PlanReview } from "@kinu.run/core";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { tabCls } from "@/components/ui/form";
 import type { AgentStatus, ExecutorOutput } from "@/hooks/use-kinu";

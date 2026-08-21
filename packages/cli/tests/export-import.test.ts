@@ -13,8 +13,8 @@ import { Database } from 'bun:sqlite';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { archiveSqlFromDatabase, readWorkspaceArchivePage, type ArchiveCursor } from '@kinu/core';
-import { JsonArraySchema, JsonObjectSchema } from '@kinu/core';
+import { archiveSqlFromDatabase, readWorkspaceArchivePage, type ArchiveCursor } from '@kinu.run/core';
+import { JsonArraySchema, JsonObjectSchema } from '@kinu.run/core';
 import * as v from 'valibot';
 
 const ArchiveCursorSchema: v.GenericSchema<ArchiveCursor> = v.variant('phase', [

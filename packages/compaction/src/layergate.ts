@@ -15,7 +15,7 @@
  */
 
 import type { ModelMessage } from 'ai';
-import type { Fault, Layer } from '@kinu/core';
+import type { Fault, Layer } from '@kinu.run/core';
 import {
   buildPlan,
   matchesPlanSnapshot,

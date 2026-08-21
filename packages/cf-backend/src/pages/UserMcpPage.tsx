@@ -24,7 +24,7 @@ import {
 } from "../lib/user-api";
 import { inputCls } from "@/components/ui/form";
 import * as v from "valibot";
-import { renderThrownChain } from '@kinu/core/obs';
+import { renderThrownChain } from '@kinu.run/core/obs';
 
 const POLL_MS = 5000;
 

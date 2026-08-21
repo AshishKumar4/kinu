@@ -2,14 +2,14 @@
 // directory name. Opening one heals it: the deterministic title lands before
 // the client is handed back, the model call runs behind it, and both the agent
 // database and ~/.kinu/config.json (what `kinu list` reads) end up with
-// the same title. The decision itself is proven in @kinu/core.
+// the same title. The decision itself is proven in @kinu.run/core.
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { createAgentConfigStore, initAgentConfigTable, type LLMProviderConfig } from '@kinu/core';
-import { createCLIRuntime } from '@kinu/cli-backend';
+import { createAgentConfigStore, initAgentConfigTable, type LLMProviderConfig } from '@kinu.run/core';
+import { createCLIRuntime } from '@kinu.run/cli-backend';
 
 // `AGENT_HOME` is resolved at MODULE LOAD (config.ts), so the only way this file
 // can name its own home is to assign the variable and then import — which is why

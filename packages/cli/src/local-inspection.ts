@@ -80,11 +80,11 @@ import {
   type RecordObjectiveSummary,
   type SeekCursor,
   type WorkspaceSpend,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import {
   makeSql, makeSqlExec, createHostShell, hostToolchainCapabilities,
   type LocalModelResolver,
-} from '@kinu/cli-backend';
+} from '@kinu.run/cli-backend';
 import * as v from 'valibot';
 import { agentDbPath } from './config';
 import { createConfiguredLocalModelResolver } from './local-model-resolver';

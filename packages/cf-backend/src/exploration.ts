@@ -18,7 +18,7 @@
  *               canonical workspace filesystem, Nimbus processes/ports,
  *               sandbox and device consent (see headRuntime()). Its tool surface —
  *               and the containment that keeps the delegation surface off it —
- *               is declared in @kinu/core head-tools.
+ *               is declared in @kinu.run/core head-tools.
  *
  *   NODE mode — one node of a swarm search, HOSTED. initNode() takes core's
  *               NodeRunSpec over RPC and runAsNode() calls the very same
@@ -46,7 +46,7 @@
 import { Agent, callable, type AgentContext, type SubAgentClass } from "agents";
 import { EXPLORATION_RPC_SURFACE, sealRpcSurface } from "./rpc-surface";
 import { generateText } from "ai";
-import { explorePrompt, formatInheritedContext, isWorkMode, normalizeUsage, reflectionPrompt, resolveMaxSteps } from "@kinu/core";
+import { explorePrompt, formatInheritedContext, isWorkMode, normalizeUsage, reflectionPrompt, resolveMaxSteps } from "@kinu.run/core";
 import type { OrchestratorAgent } from "./orchestrator";
 import {
   type CraftedTool,
@@ -72,17 +72,17 @@ import {
   type NodeLoopResult,
   type MissionScope,
   type WorkMode,
-} from "@kinu/core";
+} from "@kinu.run/core";
 import { OwnedModelServices } from "./owned-model-services";
 import { FacetIdentity } from "./facet-identity";
 import { createHeadRuntime } from "./head-runtime";
 import { bindAgentSql, createCFRuntime, type CFRuntime, type CFRuntimeHooks } from "./runtime";
 import { createExecuteToolsTool } from "./execute-tools";
-import { buildHeadToolSet } from "@kinu/core";
+import { buildHeadToolSet } from "@kinu.run/core";
 import {
   createAgentTracing, createConsoleLogger, type AgentTracing,
-} from "@kinu/core/obs";
-import { createAgentConfigStore, initAgentConfigTable } from "@kinu/core";
+} from "@kinu.run/core/obs";
+import { createAgentConfigStore, initAgentConfigTable } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
 
 export class ExplorationAgent extends Agent<Env> {
@@ -328,7 +328,7 @@ export class ExplorationAgent extends Agent<Env> {
 
   /** Run the head's inference loop over the forked runtime and return its
    *  HeadReport. The ToolSet — and what is deliberately absent from it — is
-   *  declared in @kinu/core head-tools.
+   *  declared in @kinu.run/core head-tools.
    *
    *  Traced with the same two phases as `runAsNode`, for the same reason: a head
    *  that produces no report has either failed to acquire its model and tools or
@@ -597,7 +597,7 @@ export class ExplorationAgent extends Agent<Env> {
   }
 
   // The head loop, system prompt, inherited context and report assembly live in
-  // core (runHeadInference); the tool surface lives in @kinu/core head-tools. This
+  // core (runHeadInference); the tool surface lives in @kinu.run/core head-tools. This
   // Facet supplies the three things only it can: the model, the forked runtime,
   // and the facet-spawn substrate behind split_subheads.
 }

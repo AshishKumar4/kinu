@@ -6,7 +6,7 @@
 // the shape of the code, not in any value a behaviour test could observe:
 // a subclass that simply *omits* super.alarm() is a well-formed program.
 import { describe, expect, test } from 'bun:test';
-import { memberBody } from '@kinu/test-utils';
+import { memberBody } from '@kinu.run/test-utils';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 

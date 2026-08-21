@@ -18,7 +18,7 @@
  * belongs to the dev-server e2e tier.
  */
 import { Think } from '@cloudflare/think';
-import { scriptedTurnModel } from '@kinu/test-utils/turn-model';
+import { scriptedTurnModel } from '@kinu.run/test-utils/turn-model';
 import { jsonSchema, tool, type LanguageModel, type ToolSet } from 'ai';
 
 const USAGE = {

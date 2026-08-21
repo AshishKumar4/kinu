@@ -11,7 +11,7 @@
  * environment wants the reason rendered in the pane, not a failed RPC.
  */
 
-import { normalizePath } from '@kinu/agent-utils';
+import { normalizePath } from '@kinu.run/agent-utils';
 import type { VFS } from '../types/primitives';
 import { renderThrownChain } from '../obs/index';
 

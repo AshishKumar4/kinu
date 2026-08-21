@@ -18,7 +18,7 @@ import { VIEW_DATA_SOURCES, initViewTables, listViews, readView } from '../src/v
 import { createFileTool, type FileToolInput } from '../src/tools/file-tool';
 import { TurnFileLedger } from '../src/tools/file-ledger';
 import { TurnContextBudget } from '../src/context-budget';
-import { toolExecute } from '@kinu/test-utils';
+import { toolExecute } from '@kinu.run/test-utils';
 import type { JsonValue } from '../src/utils/json';
 
 const ToolSummarySchema = v.object({

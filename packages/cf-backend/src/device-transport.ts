@@ -14,7 +14,7 @@ import {
   NO_DEVICE_CONNECTED, isDeviceNotConnectedError,
   JsonValueSchema,
   type DeviceCheckpointHint, type DeviceStatus, type DeviceTransport, type JsonValue,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import * as v from 'valibot';
 import { shellQuote } from './cli/install-command';
 import type { UserCaller } from './user/workspace-capability';

@@ -59,7 +59,7 @@ import {
   liveModelTarget, publishRunRecord, recordLiveModelEpisode, reportLiveModelSpend, seedHardTask,
   TASK_OUTCOME, UNCONFIGURED_LLM, verifyHardTask,
   type EvalArmState, type EvalObservation, type EvalScoreRow, type EvalTier, type HardTask,
-} from '@kinu/test-utils';
+} from '@kinu.run/test-utils';
 import { resolveArtifactRoot } from '../../scripts/bench-retention';
 
 const SUITE = 'Optimization Evals';

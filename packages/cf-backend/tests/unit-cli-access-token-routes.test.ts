@@ -4,7 +4,7 @@
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
 import { handleCliRequest } from '../src/cli/routes';
-import type { JsonValue } from '@kinu/core';
+import type { JsonValue } from '@kinu.run/core';
 import type { UserCaller } from '../src/user/workspace-capability';
 import * as v from 'valibot';
 

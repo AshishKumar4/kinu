@@ -650,7 +650,7 @@ tests to implementation and produce false confidence.
 | SQL (DO storage) | `createTestSql()`: bun:sqlite `:memory:` + template tag |
 | Credentials | `createTestAuth({ key: { headers: { Authorization: 'Bearer tok' } } })`: resolved auth headers, not raw secrets |
 | AgentRuntime | `createTestRuntime()`: full minimal AgentRuntime |
-| Crafted-tool sandbox | already mocked by `createNodeCraftedExecute` from `@kinu/cli-backend` |
+| Crafted-tool sandbox | already mocked by `createNodeCraftedExecute` from `@kinu.run/cli-backend` |
 
 Do not mock a pure function inside the same package. If `parseModelSpec` or
 `effortFor` is what you are testing, call it directly.
@@ -680,7 +680,7 @@ describe('myFunction', () => {
 
 ```ts
 import { describe, test, expect } from 'bun:test';
-import { createTestRuntime, createJSONLLM } from '@kinu/test-utils';
+import { createTestRuntime, createJSONLLM } from '@kinu.run/test-utils';
 
 test('auto-judge picks current when scores tie', async () => {
   const { rt } = createTestRuntime();
@@ -695,7 +695,7 @@ test('auto-judge picks current when scores tie', async () => {
 
 ```ts
 import { describe, test, expect } from 'bun:test';
-import { createMockFetch, createTestAuth } from '@kinu/test-utils';
+import { createMockFetch, createTestAuth } from '@kinu.run/test-utils';
 import { createMyProvider, MY_CRED_KEY } from '../src/index.ts';
 
 test('sends Authorization: Bearer', async () => {
@@ -717,7 +717,7 @@ test('sends Authorization: Bearer', async () => {
 ```ts
 import { describe, test, expect } from 'bun:test';
 import { createMyStrategy } from '../src/strategy/my-strategy.ts';
-import { createTestRuntime, createScriptedLLM } from '@kinu/test-utils';
+import { createTestRuntime, createScriptedLLM } from '@kinu.run/test-utils';
 
 test('my-strategy explores within budget', async () => {
   const { rt } = createTestRuntime({
@@ -780,7 +780,7 @@ Areas with intentionally low coverage:
 ## Adding a new package to the test suite
 
 1. Create `packages/<your-pkg>/tests/`, matching the existing pattern.
-2. Add `"@kinu/test-utils": "workspace:*"` to your package's
+2. Add `"@kinu.run/test-utils": "workspace:*"` to your package's
    `devDependencies` so the fixtures resolve.
 3. Update `scripts/test.sh` to include the new test directory.
 4. Write tests using the conventions above.

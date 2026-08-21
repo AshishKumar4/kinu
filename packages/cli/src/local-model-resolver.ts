@@ -1,12 +1,12 @@
-import { createLocalModelResolver, type LocalModelResolver } from '@kinu/cli-backend';
-import { agentAffinityKey, parseModelSpec, type LLMProviderConfig } from '@kinu/core';
+import { createLocalModelResolver, type LocalModelResolver } from '@kinu.run/cli-backend';
+import { agentAffinityKey, parseModelSpec, type LLMProviderConfig } from '@kinu.run/core';
 import {
   createCodexAuthStore,
   resolveCloudSession,
   resolveLLMConfig,
   resolveProviderCredentials,
 } from './config';
-import { renderThrownChain } from '@kinu/core/obs';
+import { renderThrownChain } from '@kinu.run/core/obs';
 
 export interface LocalModelResolverOptions {
   model?: string;

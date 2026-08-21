@@ -354,7 +354,7 @@ function createCheckpoints(opts = {}) {
     // `turnId` filters HERE, before the limit truncates, because retention is
     // per working directory while the limit is global across them: a caller that
     // reads a window and filters by turn itself loses turns whose checkpoint
-    // still exists. See FileCheckpoints.list in @kinu/core.
+    // still exists. See FileCheckpoints.list in @kinu.run/core.
     list(agent, limit, turnId) {
       if (!probe()) return [];
       const agentBase = path.join(base, sanitizeAgent(agent));

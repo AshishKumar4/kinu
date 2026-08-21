@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@kinu/core';
+import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@kinu.run/core';
 import {
   contextWindowForSpec,
   dedupeModelEntries,

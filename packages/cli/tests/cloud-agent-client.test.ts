@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import type { Server, ServerWebSocket } from 'bun';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
-import { JsonArraySchema, JsonObjectSchema, parseJsonObject, type JsonObject } from '@kinu/core';
+import { JsonArraySchema, JsonObjectSchema, parseJsonObject, type JsonObject } from '@kinu.run/core';
 import { CloudAgentClient } from '../src/cloud-agent-client';
 import type { AgentClientEvent } from '../src/agent-client';
 import * as v from 'valibot';

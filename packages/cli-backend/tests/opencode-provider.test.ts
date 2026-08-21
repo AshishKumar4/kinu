@@ -1,8 +1,8 @@
 import { describe, test, expect, mock } from 'bun:test';
 import { generateText } from 'ai';
 import { writeFileSync } from 'node:fs';
-import { scratchPath } from '@kinu/test-utils';
-import { asFetchFunction, JsonObjectSchema, type JsonObject } from '@kinu/core';
+import { scratchPath } from '@kinu.run/test-utils';
+import { asFetchFunction, JsonObjectSchema, type JsonObject } from '@kinu.run/core';
 import * as v from 'valibot';
 import {
   createOpenCodeProvider,

@@ -1,14 +1,14 @@
 // In-memory SQL fixture — bun:sqlite + template-tag wrapper that matches the
-// `SqlExecutor` signature used throughout @kinu/core.
+// `SqlExecutor` signature used throughout @kinu.run/core.
 //
 // Tests previously each defined this setup inline; centralising it kills ~120
 // lines of duplication across unit-facts / unit-curriculum / unit-sleep-time /
 // unit-eval / etc.
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
-import type { SqlExecutor, SqlValue } from '@kinu/core';
+import type { SqlExecutor, SqlValue } from '@kinu.run/core';
 
 export interface TestSql {
-  /** Tagged-template SQL — matches `SqlExecutor` shape from @kinu/core. */
+  /** Tagged-template SQL — matches `SqlExecutor` shape from @kinu.run/core. */
   sql: SqlExecutor;
   /** Raw DDL executor — for schema setup. */
   execRaw: (ddl: string) => void;

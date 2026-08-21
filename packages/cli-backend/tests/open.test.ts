@@ -6,8 +6,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import type { LLMProviderConfig } from '@kinu/core';
-import { createInlineWorkspace } from '@kinu/core/identity';
+import type { LLMProviderConfig } from '@kinu.run/core';
+import { createInlineWorkspace } from '@kinu.run/core/identity';
 import { openWorkspaceCLI } from '../src/open';
 
 const DUMMY_LLM: LLMProviderConfig = {

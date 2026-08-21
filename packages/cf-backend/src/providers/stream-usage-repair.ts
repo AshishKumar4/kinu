@@ -27,7 +27,7 @@
  */
 
 import * as v from 'valibot';
-import { tolerate } from '@kinu/core/obs';
+import { tolerate } from '@kinu.run/core/obs';
 
 /** A usage-bearing chunk. `usage` is required — that is what distinguishes a
  *  usage chunk from a delta — while the cache detail it carries is optional,

@@ -33,16 +33,16 @@ import {
   initWorkspaceSchema,
   runChat,
   type ChatOptions,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import {
   createCompactionExtension,
   createCompactionStateStore,
   createVfsTranscriptStore,
   type CompactionOutcomeEvent,
   type Logger,
-} from '@kinu/compaction';
+} from '@kinu.run/compaction';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
-import { scratchPath } from '@kinu/test-utils';
+import { scratchPath } from '@kinu.run/test-utils';
 
 const SESSION = 'kinu-itest:default';
 const silentLogger: Logger = { info() {}, debug() {}, warn() {}, error() {} };

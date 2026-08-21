@@ -7,7 +7,7 @@ import {
 } from './eval-spend';
 import { parseCorpus } from '../packages/core/src/index';
 import type { EvalCase, ExplorationStrategy, StrategyContext, StrategyResult, JudgeFn } from '../packages/core/src/index';
-import { createTestRuntime } from '@kinu/test-utils';
+import { createTestRuntime } from '@kinu.run/test-utils';
 import { MockLanguageModelV3 } from 'ai/test';
 
 function stubStrategy(id: string, output: string): ExplorationStrategy {

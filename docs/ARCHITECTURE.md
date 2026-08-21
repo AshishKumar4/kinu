@@ -183,7 +183,7 @@ flowchart TB
     end
 
     subgraph Host["ExtensionHost (core/src/extension.ts), both backends"]
-        Comp["compaction: @kinu/compaction (transformContext)"]
+        Comp["compaction: @kinu.run/compaction (transformContext)"]
         Inj["kinu.signals: prepareStep"]
     end
 
@@ -209,7 +209,7 @@ What the boxes are:
 
 The two default registrants attach at construction on both backends:
 
-- **Compaction** (`@kinu/compaction`, `createCompactionExtension`) is the
+- **Compaction** (`@kinu.run/compaction`, `createCompactionExtension`) is the
   default `transformContext`. It is the vendored better-compact staged-pruning
   ladder (`compaction/src/engine/`) plus the Kinu codec
   (`compaction/src/codec.ts`, AI-SDK `ModelMessage[]` ⇄ ladder `Turn[]`). It

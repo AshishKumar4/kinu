@@ -11,8 +11,8 @@ import {
   AgentOrchestrator, EvolutionEngine, acceptInboundEmail,
   type BackendHost,
   type SqlExec,
-} from '@kinu/core';
-import { createMemoryVfs, createTestRuntime } from '@kinu/test-utils';
+} from '@kinu.run/core';
+import { createMemoryVfs, createTestRuntime } from '@kinu.run/test-utils';
 import {
   createEmailThreadDispatcher, dispatchEmailRepliesForTurn, sendOwnerEmail,
   threadingHeaders,

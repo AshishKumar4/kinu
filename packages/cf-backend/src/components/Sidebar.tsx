@@ -26,7 +26,7 @@ import { CreateWorkspaceModal } from "./CreateWorkspaceModal";
 import { ModeToggle, PaletteToggle } from "./theme-toggle";
 import { Modal } from "./ui/Modal";
 import * as v from "valibot";
-import { renderCauseChain, renderThrownChain } from "@kinu/core/obs";
+import { renderCauseChain, renderThrownChain } from "@kinu.run/core/obs";
 
 /** Live per-workspace activity, bridged from the mounted WorkspacePage socket
  *  via a window event (only the open workspace has a live socket, so the roster

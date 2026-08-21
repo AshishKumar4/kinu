@@ -3,7 +3,7 @@
  */
 
 import type { AgentClientMode } from '../agent-client';
-import type { ReasoningEffort } from '@kinu/core';
+import type { ReasoningEffort } from '@kinu.run/core';
 import { useTerminalDimensions } from '@opentui/react';
 import { VERSION } from '../display';
 import { formatContextUsage, modelDisplayName } from './context-status';

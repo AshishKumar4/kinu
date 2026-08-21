@@ -10,10 +10,10 @@
  *                             store existed (idempotent, cursor-paged).
  */
 
-import type { AgentConfigStore, Memory, VectorStore } from "@kinu/core";
-import { AGENT_CONFIG_KEYS } from "@kinu/core";
-import type { IndexedChunk, MemoryStore } from "@kinu/agent-utils/memory";
-import { diagnostics, toKinuError } from '@kinu/core/obs';
+import type { AgentConfigStore, Memory, VectorStore } from "@kinu.run/core";
+import { AGENT_CONFIG_KEYS } from "@kinu.run/core";
+import type { IndexedChunk, MemoryStore } from "@kinu.run/agent-utils/memory";
+import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 
 /** A chunk FTS5 holds and the vector index does not makes the semantic index
  *  incomplete, so the completeness marker must stop claiming otherwise. Clearing

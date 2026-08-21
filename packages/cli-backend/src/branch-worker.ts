@@ -29,8 +29,8 @@ import {
   type ExploreToolHint,
   type JsonValue,
   type LLMProviderConfig,
-} from '@kinu/core';
-import { diagnostics, KinuError, renderThrownChain } from '@kinu/core/obs';
+} from '@kinu.run/core';
+import { diagnostics, KinuError, renderThrownChain } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { createLocalModelResolver, type LocalProviderCredentials } from './model-resolver';
 import { createFileCodexAuthStore } from './codex-auth-store';

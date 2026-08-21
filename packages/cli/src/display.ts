@@ -5,9 +5,9 @@
 
 import chalk from 'chalk';
 import type { Command } from 'commander';
-import { BUILTIN_TOOLS, describeToolCall, summarizeToolCall } from '@kinu/core';
-import type { SearchNode, ReasoningEffort, JsonObject } from '@kinu/core';
-import type { WorkspaceInfo } from '@kinu/core/identity';
+import { BUILTIN_TOOLS, describeToolCall, summarizeToolCall } from '@kinu.run/core';
+import type { SearchNode, ReasoningEffort, JsonObject } from '@kinu.run/core';
+import type { WorkspaceInfo } from '@kinu.run/core/identity';
 import { guideFailure, type ProviderFailure } from './provider-guidance';
 import cliPackage from '../package.json' with { type: 'json' };
 

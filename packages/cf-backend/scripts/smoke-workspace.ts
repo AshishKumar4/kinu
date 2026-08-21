@@ -1,5 +1,5 @@
-import { JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, parseJsonValue, type JsonValue } from '@kinu/core';
-import { tolerate } from '@kinu/core/obs';
+import { JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, parseJsonValue, type JsonValue } from '@kinu.run/core';
+import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 const origin = (process.env.KINU_SMOKE_ORIGIN ?? 'https://staging.kinu.run').replace(/\/+$/, '');

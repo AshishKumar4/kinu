@@ -4,7 +4,7 @@ import { listConfiguredAgentRefs, requireAuthConfig } from '../config';
 import { resolveAgentTarget, type AgentTarget } from '../agent-target';
 import { createAgentClient, type AgentClientFlags } from '../client-factory';
 import type { AgentClient, AgentClientEvent } from '../agent-client';
-import { decodeJsonValue, JsonValueSchema, parseJsonObject, projectJsonValue, usageReported, type JsonObject, type JsonValue } from '@kinu/core';
+import { decodeJsonValue, JsonValueSchema, parseJsonObject, projectJsonValue, usageReported, type JsonObject, type JsonValue } from '@kinu.run/core';
 import * as v from 'valibot';
 import type { CliSessionOptions } from '../session';
 import { chatCommand } from './chat';
@@ -31,7 +31,7 @@ import {
   readLocalMemory,
   searchLocalMemory,
 } from '../local-inspection';
-import { renderThrownChain } from '@kinu/core/obs';
+import { renderThrownChain } from '@kinu.run/core/obs';
 
 /** Session flags as Commander actually delivers them: `--no-session` arrives
  *  as `session: false` on the shared option key, not as `noSession: true`. */

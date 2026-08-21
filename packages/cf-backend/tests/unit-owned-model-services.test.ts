@@ -3,16 +3,16 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { testOwner } from './helpers/user-do';
 import { generateText } from 'ai';
-import { createMockFetch } from '@kinu/test-utils';
+import { createMockFetch } from '@kinu.run/test-utils';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { OwnedModelServices } from '../src/owned-model-services';
-import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@kinu/core';
+import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@kinu.run/core';
 import type { LanguageModel } from 'ai';
 import type { CredentialHeaders } from '../src/user/credential-headers';
 import type { UserCaller } from '../src/user/workspace-capability';
 import { platformGatewayEnv } from './helpers/platform-gateway';
-import type { ProviderEnv } from '@kinu/core';
+import type { ProviderEnv } from '@kinu.run/core';
 
 /** `LanguageModel` is `string | LanguageModelV3`; a resolver hands back the
  *  object half, and these tests read its provider/model ids. */

@@ -18,9 +18,9 @@
  *      re-send (deduped downstream), not a blind new message.
  */
 
-import { argumentDigest, type SqlExec } from '@kinu/core';
+import { argumentDigest, type SqlExec } from '@kinu.run/core';
 import * as v from 'valibot';
-import { renderThrownChain } from '@kinu/core/obs';
+import { renderThrownChain } from '@kinu.run/core/obs';
 
 const EmailAddressSchema = v.object({ email: v.string(), name: v.string() });
 const OutboundEmailMessageSchema = v.object({

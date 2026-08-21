@@ -54,12 +54,12 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import * as v from 'valibot';
-import { toolFailurePartOfKey } from '@kinu/core';
+import { toolFailurePartOfKey } from '@kinu.run/core';
 import {
   assessAdmissibility, compareRuns, observationKey, parseFailureMix, readRunRecord,
   runRecordPaths, toolOutcomes, TASK_OUTCOME,
   type EvalObservation, type EvalRunRecord,
-} from '@kinu/test-utils';
+} from '@kinu.run/test-utils';
 
 const REPO_ROOT = new URL('..', import.meta.url).pathname;
 

@@ -9,7 +9,7 @@ import { lazy, Suspense, useState, useEffect, useCallback, useRef } from "react"
 import { Button, Badge, Loader } from "@cloudflare/kumo";
 import { MonitorIcon, GitDiffIcon, CheckIcon, CaretDownIcon, CaretRightIcon, NotePencilIcon } from "@phosphor-icons/react";
 import type { Rpc } from "@/lib/protocol";
-import { planReviewAwaitingDecision, type FileDiff, type PlanReview } from "@kinu/core";
+import { planReviewAwaitingDecision, type FileDiff, type PlanReview } from "@kinu.run/core";
 import {
   executorLabel, executorSortKey, isActiveExecutionDevice, pickDefaultExecutor, type ExecutorInfo,
 } from "@/lib/executors";

@@ -23,7 +23,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { toolExecute } from '@kinu/test-utils';
+import { toolExecute } from '@kinu.run/test-utils';
 import { tool, jsonSchema } from 'ai';
 import * as v from 'valibot';
 import { createTestRuntime } from './helpers';

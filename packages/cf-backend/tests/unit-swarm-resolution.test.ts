@@ -16,7 +16,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import type { HeadRunView } from '@kinu/core';
+import type { HeadRunView } from '@kinu.run/core';
 import {
   fanInArity, fanInVertices, nodeRationales, runRefusal, swarmAxisRows, swarmResolutionOf,
 } from '../src/components/surfaces/swarm-resolution';

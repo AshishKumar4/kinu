@@ -1,6 +1,6 @@
 // Payload visibility — redaction + LLM rendering.
 import { describe, test, expect } from 'bun:test';
-import { createMemoryVfs } from '@kinu/test-utils';
+import { createMemoryVfs } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
   EVENT_BRIEF_MAX_CHARS, applyVisibilityForStorage, eventContentPath,

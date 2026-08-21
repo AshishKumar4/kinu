@@ -9,7 +9,7 @@
 import { getAgentByName } from 'agents';
 import type { OrchestratorAgent } from '../orchestrator';
 import { routeInboundEmail } from './route';
-import { diagnostics } from '@kinu/core/obs';
+import { diagnostics } from '@kinu.run/core/obs';
 
 export async function handleInboundEmail(
   message: ForwardableEmailMessage,

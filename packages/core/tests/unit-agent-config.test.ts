@@ -4,7 +4,7 @@ import {
   DEFAULT_AUTO_GEPA_EVERY_N_TURNS, DEFAULT_GEPA_EVAL_BUDGET,
   setReasoningEffort,
 } from '../src/index';
-import { createTestSql } from '@kinu/test-utils';
+import { createTestSql } from '@kinu.run/test-utils';
 
 function setup() {
   const { sql, execRaw } = createTestSql();

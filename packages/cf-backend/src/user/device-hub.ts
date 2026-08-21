@@ -21,8 +21,8 @@ import {
   DeviceTunnel, EXECUTOR_CAPABILITIES, TOOLCHAIN_PROBE_BINARIES, isDeviceUnknownMethodError,
   deviceToolchainAnswer, freshDeviceToolchain,
   type DeviceToolchain, type JsonValue, type TunnelSocket,
-} from '@kinu/core';
-import { diagnostics, KinuError, toKinuError } from '@kinu/core/obs';
+} from '@kinu.run/core';
+import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 /** WebSocket.OPEN is 1 across every implementation. */

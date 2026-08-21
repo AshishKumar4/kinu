@@ -7,7 +7,7 @@ import { memo, useState } from "react";
 import { CaretRightIcon, CopyIcon } from "@phosphor-icons/react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { MAX_LINES_PER_FILE, type DiffLine } from "@kinu/core";
+import { MAX_LINES_PER_FILE, type DiffLine } from "@kinu.run/core";
 import { copyLabel, useCopy } from "@/hooks/use-copy";
 
 /** Render a sequence of diff lines (add/del/ctx) red/green — shared by the

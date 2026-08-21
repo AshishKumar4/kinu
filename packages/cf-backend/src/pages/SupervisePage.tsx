@@ -27,9 +27,9 @@ import { btnSmCls, inputCls } from "@/components/ui/form";
 import { createDurableWebhook, cancelTrigger, type CreateWebhookResult } from "@/lib/user-api";
 import type { Rpc } from "@/lib/protocol";
 import { fmtTokens, fmtPct } from "@/lib/format";
-import { addUsage, cacheHitRate, pageSchema, UsageSchema, usageTotal, type SeekCursor, type Usage } from "@kinu/core";
+import { addUsage, cacheHitRate, pageSchema, UsageSchema, usageTotal, type SeekCursor, type Usage } from "@kinu.run/core";
 import * as v from "valibot";
-import { renderThrownChain } from '@kinu/core/obs';
+import { renderThrownChain } from '@kinu.run/core/obs';
 
 const ProposedTaskSchema = v.object({
   id: v.string(), task: v.string(), rationale: v.string(), predictedSuccess: v.number(),

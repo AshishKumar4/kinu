@@ -79,7 +79,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   The command is `kinu`. There is no `kinu` alias and no deprecation
   warning, because a new deployment has no installed base to keep working. The
   served install assets follow it: `/downloads/kinu`,
-  `kinu-source.tar.gz` and `kinu-version.json`. The npm scope is `@kinu/*`.
+  `kinu-source.tar.gz` and `kinu-version.json`. The npm scope is `@kinu.run/*`.
 
   Data does not carry over. Sessions live in a KV namespace instead of D1,
   identities in `UserDO`, and the snapshot bucket and memory index are new and
@@ -382,7 +382,7 @@ bottom of this file) starts here.
 ### Changed
 
 - **One shared spine.** The turn pipeline, prompting, compaction ladder and
-  context budget live in `@kinu/core`; the Cloudflare and CLI backends are
+  context budget live in `@kinu.run/core`; the Cloudflare and CLI backends are
   thin adapters over it instead of two drifting implementations.
 - **Tool surface consolidated** to 11 built-ins (`BUILTIN_TOOLS` in
   `packages/core/src/tools/registry.ts`). Filesystem work folds into the

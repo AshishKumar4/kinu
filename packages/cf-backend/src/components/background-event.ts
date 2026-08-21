@@ -23,7 +23,7 @@
 import {
   JsonObjectSchema, SIGNAL_ID_METADATA_KEY, turnAuthor,
   type JsonObject, type SignalCardEvent, type SignalCardState,
-} from "@kinu/core";
+} from "@kinu.run/core";
 import * as v from 'valibot';
 
 /** A turn the backend enqueued, never typed by the operator. `system_event` is

@@ -495,7 +495,7 @@ replacement shape. The evidence:
 2. **The refusal shape already existed and readers already parse it.** Several
    call sites write `{ reason, error }` and `read-models/tool-failures.ts` reads
    it. `Result` would be a fourth convention beside a working third.
-3. **`@kinu/core` has two runtime dependencies**, `@nimbus-sh/core` and one
+3. **`@kinu.run/core` has two runtime dependencies**, `@nimbus-sh/core` and one
    workspace package. A new one for a type that cannot cross this codebase's own
    boundaries is not a trade worth making.
 

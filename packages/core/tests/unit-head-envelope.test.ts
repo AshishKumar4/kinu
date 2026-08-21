@@ -13,7 +13,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import type { LanguageModel } from 'ai';
-import { scriptedTurnModel } from '@kinu/test-utils';
+import { scriptedTurnModel } from '@kinu.run/test-utils';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
 import { DEFAULT_MAX_STEPS } from '../src/config';
 import {

@@ -1,4 +1,4 @@
-// @kinu/core — barrel export
+// @kinu.run/core — barrel export
 
 // Identity system
 export { initActorTables, initAllTables, migrateWorkspaceStorage, tableExists } from './identity/schema';
@@ -875,7 +875,7 @@ export {
 } from './execution/index';
 
 // Client-safe workspace addressing and VFS contracts. The embedded Nimbus
-// workspace host is exported separately from `@kinu/core/workspace` so a
+// workspace host is exported separately from `@kinu.run/core/workspace` so a
 // browser import of the main barrel cannot pull the server runtime into its
 // bundle.
 export {

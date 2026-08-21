@@ -7,7 +7,7 @@
 // every fresh install died on a checksum mismatch and nothing reported it.
 // So: one place owns "did this deployment actually publish that file?", and
 // the SPA shell is never an acceptable answer for a file we asked for by name.
-import { tolerateAsync } from '@kinu/core/obs';
+import { tolerateAsync } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 /** CLI source archive + its checksum + the served build stamp. Written into

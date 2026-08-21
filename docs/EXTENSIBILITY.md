@@ -294,7 +294,7 @@ Internal stages that should not cost chat-grade thinking take their level from
 `reasoningEffortOptions` when the provider family is not known to be Workers AI.
 
 ```ts
-import { effortFor } from '@kinu/core';
+import { effortFor } from '@kinu.run/core';
 
 // User-facing chat → medium (default)
 streamText({ model, prompt, ...effortFor('chat') });

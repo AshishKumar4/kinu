@@ -3,7 +3,7 @@
 // disk, and a local key still wins.
 import { describe, expect, test } from 'bun:test';
 import { generateText } from 'ai';
-import { asFetchFunction, type LLMProviderConfig } from '@kinu/core';
+import { asFetchFunction, type LLMProviderConfig } from '@kinu.run/core';
 import { createLocalModelResolver } from '../src/model-resolver';
 
 const ORIGIN = 'https://kinu.example.com';

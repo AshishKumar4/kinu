@@ -20,7 +20,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import type { HeadInput, HeadReport } from '@kinu/core';
+import type { HeadInput, HeadReport } from '@kinu.run/core';
 import type { FacetHost } from '../src/facet-spawn';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 

@@ -26,7 +26,7 @@ import type { ESTree } from "@oxlint/plugins";
  * a safeguard that only covers the instances already found is the shape this
  * repository has shipped repeatedly. Hence a rule.
  *
- * The remedy is `git()` / `gitEnv()` / `initRepo()` from `@kinu/test-utils`,
+ * The remedy is `git()` / `gitEnv()` / `initRepo()` from `@kinu.run/test-utils`,
  * which REMOVE the variables rather than blanking them — an empty `GIT_DIR` is
  * still a `GIT_DIR`, and git resolves the repository to the empty path.
  *
@@ -190,7 +190,7 @@ export const noAmbientGitInTestsRule = defineRule({
 		},
 		messages: {
 			ambientGit:
-				"This spawns `git` from a test with the ambient environment. GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE all outrank `cwd`, and a git hook exports them — under `pre-push` this runs against the real checkout, not the scratch repo. It has already left junk commits on a branch and set core.bare on the primary checkout. Use `git()` / `initRepo()` from `@kinu/test-utils`, which remove those variables (removing, not blanking: an empty GIT_DIR is still a GIT_DIR).",
+				"This spawns `git` from a test with the ambient environment. GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE all outrank `cwd`, and a git hook exports them — under `pre-push` this runs against the real checkout, not the scratch repo. It has already left junk commits on a branch and set core.bare on the primary checkout. Use `git()` / `initRepo()` from `@kinu.run/test-utils`, which remove those variables (removing, not blanking: an empty GIT_DIR is still a GIT_DIR).",
 		},
 	},
 	createOnce(context) {

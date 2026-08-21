@@ -10,11 +10,11 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
-import type { LLMProviderConfig, RunEvent } from '@kinu/core';
-import { CRAFT_NEUTRAL_PRIOR } from '@kinu/core';
+import type { LLMProviderConfig, RunEvent } from '@kinu.run/core';
+import { CRAFT_NEUTRAL_PRIOR } from '@kinu.run/core';
 import { createCLIRuntime } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
-import { scratchPath } from '@kinu/test-utils';
+import { scratchPath } from '@kinu.run/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',

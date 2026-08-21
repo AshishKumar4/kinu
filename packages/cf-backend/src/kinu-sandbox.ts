@@ -8,7 +8,7 @@
  *
  * It is an ADAPTER. Every decision — whether to restore, whether a snapshot is
  * due, what a failure means — lives in `createWorkspaceSnapshots` in
- * `@kinu/core`, along with the reasoning for why the container-start hook is
+ * `@kinu.run/core`, along with the reasoning for why the container-start hook is
  * the only correct place for a restore. This file supplies the SDK calls, this
  * object's storage, and the R2 reads, and chooses nothing.
  *
@@ -32,8 +32,8 @@ import {
   createWorkspaceSnapshots, snapshotObjectKeys, withContainerStartDeadline,
   type BackupOptions, type WorkspaceSnapshotPorts,
   type WorkspaceSnapshotState, type WorkspaceSnapshots,
-} from "@kinu/core";
-import { diagnostics, KinuError, toKinuError } from "@kinu/core/obs";
+} from "@kinu.run/core";
+import { diagnostics, KinuError, toKinuError } from "@kinu.run/core/obs";
 import * as v from "valibot";
 import {
   CONTAINER_EVENT_HOST, EGRESS_HANDLER, EVENT_HANDLER,

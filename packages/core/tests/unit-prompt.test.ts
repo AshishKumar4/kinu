@@ -26,7 +26,7 @@ import { AGENTS_ACTION_FIELDS } from '../src/tools/agents-tool';
 import {
   NAMED_SWARM_PRESETS, SWARM_PRESETS, SWARM_PRESET_POINTS, isPresetPoint, resolveSwarm,
 } from '../src/strategy/swarm';
-import { createTestRuntime } from '@kinu/test-utils';
+import { createTestRuntime } from '@kinu.run/test-utils';
 
 describe('buildSystemPromptSync', () => {
   test('uses fallback SOUL.md when SOUL.md is missing', () => {

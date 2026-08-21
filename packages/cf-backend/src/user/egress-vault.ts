@@ -39,15 +39,15 @@
  */
 
 import * as v from 'valibot';
-import type { SqlExec } from '@kinu/core';
-import { diagnostics, toKinuError } from '@kinu/core/obs';
+import type { SqlExec } from '@kinu.run/core';
+import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import {
   EGRESS_PLACEHOLDER_BYTES,
   isEgressPlaceholder,
   planEgress,
   type EgressRequestFacts,
   type EgressSecretBinding,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import { randomToken } from '../lib/crypto';
 import type { CredentialCipher } from './credential-envelope';
 

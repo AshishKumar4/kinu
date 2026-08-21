@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import { runSleepTimeCompute, applySleepTimeUpdate } from '../src/index';
-import { createTestFactsStore, createJSONLLM, createScriptedLLM } from '@kinu/test-utils';
+import { createTestFactsStore, createJSONLLM, createScriptedLLM } from '@kinu.run/test-utils';
 
 describe('Sleep-time compute', () => {
   test('parses valid LLM response', async () => {

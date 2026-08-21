@@ -8,7 +8,7 @@ import {
   type PlanReview,
   type PlanReviewAnnotation,
   type PlanReviewResult,
-} from "@kinu/core";
+} from "@kinu.run/core";
 import { Viewer } from "@plannotator/ui/components/Viewer";
 import { AnnotationPanel } from "@plannotator/ui/components/AnnotationPanel";
 import { AnnotationType, type Annotation, type Block, type EditorMode } from "@plannotator/ui/types";
@@ -17,7 +17,7 @@ import {
 } from "@plannotator/ui/utils/parser";
 import type { Rpc } from "@/lib/protocol";
 import { createPlanAnnotationSaveQueue } from "./plan-annotation-save";
-import { renderThrownChain } from "@kinu/core/obs";
+import { renderThrownChain } from "@kinu.run/core/obs";
 
 function annotationType(value: PlanReviewAnnotation["type"]): AnnotationType {
   if (value === "DELETION") return AnnotationType.DELETION;

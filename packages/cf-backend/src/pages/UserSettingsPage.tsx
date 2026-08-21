@@ -37,7 +37,7 @@ import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { copyLabel, useCopy } from "@/hooks/use-copy";
 import { CopyButton } from "@/components/ui/CopyButton";
 import * as v from "valibot";
-import { renderThrownChain } from '@kinu/core/obs';
+import { renderThrownChain } from '@kinu.run/core/obs';
 
 const ProviderCatalogEntrySchema = v.object({
   id: v.string(),

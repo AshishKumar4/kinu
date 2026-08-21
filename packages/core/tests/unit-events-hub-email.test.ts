@@ -14,7 +14,7 @@ import {
   EmailInbox, EMAIL_INBOUND_RATE_PER_MIN, initWebhookRateLimitTables, setEmailAllowlist,
   type SqlExec,
 } from '../src/index';
-import { createMemoryVfs } from '@kinu/test-utils';
+import { createMemoryVfs } from '@kinu.run/test-utils';
 import { makeSqlExec } from './helpers';
 
 function makeSql(): SqlExec {

@@ -8,12 +8,12 @@ import {
   parseJsonValue,
   type JsonObject,
   type JsonValue,
-} from '@kinu/core';
-import { renderThrownChain, tolerate } from '@kinu/core/obs';
+} from '@kinu.run/core';
+import { renderThrownChain, tolerate } from '@kinu.run/core/obs';
 import type {
   CheckpointAvailability, FileCheckpointEntry, FileCheckpointListing,
   FileRestorePlan, FileRestoreResult,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import {
   callAgentRpc,
   CloudAgentStatusSchema,
@@ -32,8 +32,8 @@ import {
 } from './session';
 import { SessionRecorder } from './session-recorder';
 import { normalizeModelMenu, type AgentModelMenu } from './model-catalog';
-import { pageSchema, type Page, type SeekCursor } from '@kinu/core';
-import type { AlternateTakeSet, BranchStatusEvent, ChangelogEntry, ChangelogRevertResult, ReasoningEffort, TakePickOutcome } from '@kinu/core';
+import { pageSchema, type Page, type SeekCursor } from '@kinu.run/core';
+import type { AlternateTakeSet, BranchStatusEvent, ChangelogEntry, ChangelogRevertResult, ReasoningEffort, TakePickOutcome } from '@kinu.run/core';
 import {
   asRecord,
   createUserUiMessage,

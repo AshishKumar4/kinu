@@ -42,7 +42,7 @@ import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import {
   HARD_TASKS, liveModelSpend, recordLiveModelEpisode, resetLiveModelSpend,
   hardTaskCases, type EvalArmState,
-} from '@kinu/test-utils';
+} from '@kinu.run/test-utils';
 // The two file names belong to the measurement substrate, which moved to core so a
 // registered verifier kind resolves to code the tool surface can reach.
 import { REFERENCE_FILE, SOLUTION_FILE } from '../../packages/core/src/index';
@@ -90,7 +90,7 @@ type ScriptedStep =
  * BOTH derived from the same branch of `LanguageModel` — the type
  * `runBehaviourTask` actually accepts — because that union spans TWO spec
  * versions (`LanguageModelV3 | LanguageModelV2`). Mixing them does not
- * typecheck: `@kinu/test-utils`'s exported `ModelStreamPart` is derived from
+ * typecheck: `@kinu.run/test-utils`'s exported `ModelStreamPart` is derived from
  * the whole union, so it is a cross-spec part union that satisfies neither
  * branch on its own. Naming one branch here keeps the model and its parts in
  * agreement by construction, and needs no assertion.

@@ -8,13 +8,13 @@
  * provider functions cannot be passed across process boundaries.
  */
 
-import { decodeJsonValue, JsonValueSchema } from '@kinu/core';
-import type { Executor, ExecuteResult, JsonValue, ResolvedProvider } from '@kinu/core';
+import { decodeJsonValue, JsonValueSchema } from '@kinu.run/core';
+import type { Executor, ExecuteResult, JsonValue, ResolvedProvider } from '@kinu.run/core';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeFileSync, unlinkSync } from 'node:fs';
 import * as v from 'valibot';
-import { renderThrownChain } from '@kinu/core/obs';
+import { renderThrownChain } from '@kinu.run/core/obs';
 
 const TIMEOUT_MS = 30_000;
 const subprocessResultSchema = v.variant('ok', [

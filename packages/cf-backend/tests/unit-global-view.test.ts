@@ -40,7 +40,7 @@ import {
   MAIN_AGENT,
   SESSION_UID,
   WORKSPACE_ROOT,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import {
   ensureProgrammaticReady,
   rpcExec,

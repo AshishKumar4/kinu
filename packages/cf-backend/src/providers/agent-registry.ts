@@ -4,7 +4,7 @@
 //   1. Cloudflare-specific providers from cf-backend/src/providers/
 //      (workers-ai + my-gateway via the logged-in user's Cloudflare OAuth
 //       credential, ai-gateway env vars)
-//   2. Runtime-agnostic providers from @kinu/core
+//   2. Runtime-agnostic providers from @kinu.run/core
 //      (codex, openai, openrouter, openai-compat, anthropic)
 //   3. The models.dev dynamic catalog source — any other catalog provider
 //      with a stored `<id>.bearer` key resolves through the openai-compat
@@ -20,7 +20,7 @@ import {
   createOpenRouterProvider, createOpenAICompatProvider, createAnthropicProvider,
   createModelsDevCatalogSource,
   type ProviderRegistry, type ProviderDeps, type ProviderEnv, type AuthResolver,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import type { LanguageModel } from 'ai';
 import { createWorkersAIProvider, type WorkersAIOptions } from './workers-ai';
 import { createMyGatewayProvider } from './my-gateway';

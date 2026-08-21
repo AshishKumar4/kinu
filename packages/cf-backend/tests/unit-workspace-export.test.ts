@@ -15,7 +15,7 @@ import { Database } from 'bun:sqlite';
 import {
   archiveSqlFromDatabase, readWorkspaceArchivePage, restoreWorkspaceArchive,
   type ArchiveCursor, type SqlExec,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import {
   AGENT_RPC_ACCESS, cliScopesConnectionTag, rejectOutOfScopeRpc, requiredRpcAccess,
 } from '../src/cli/rpc-gate';

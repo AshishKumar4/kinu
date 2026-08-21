@@ -55,7 +55,7 @@ import { requireSandboxedExecutors } from './harness';
 import {
   liveChatModel, liveModelCallSink, liveModelTarget, recordLiveModelEpisode, recordLiveModelSpend,
   reportLiveModelSpend, scoreExploration, scoreSettleVisibility, UNCONFIGURED_LLM,
-} from '@kinu/test-utils';
+} from '@kinu.run/test-utils';
 
 const TARGET = liveModelTarget('Exploration Evals');
 const liveTest = test.skipIf(!TARGET);

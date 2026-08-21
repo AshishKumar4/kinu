@@ -1,7 +1,7 @@
 import { createCliRenderer, type TextareaRenderable } from '@opentui/core';
 import { createRoot, useKeyboard, useTerminalDimensions } from '@opentui/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ReasoningEffort } from '@kinu/core';
+import type { ReasoningEffort } from '@kinu.run/core';
 import {
   createCliAgent,
   defaultCreateMode,
@@ -26,7 +26,7 @@ import { DeviceConnectOverlay, ModelPickerOverlay } from './overlays';
 import { clipText } from './format';
 import { useDeviceConnectPrompt } from './use-device-connect';
 import { tuiColors } from './theme';
-import { renderThrownChain } from '@kinu/core/obs';
+import { renderThrownChain } from '@kinu.run/core/obs';
 
 export type HomeTuiAction =
   | { type: 'open-agent'; name: string }

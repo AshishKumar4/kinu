@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   DEFAULT_WORKERS_AI_MODEL_ID, JsonObjectSchema, JsonValueSchema, parseJsonValue,
   type JsonObject, type JsonValue,
-} from "@kinu/core";
+} from "@kinu.run/core";
 import { validateAliasName, validateAgentName } from "../src/config";
 import * as v from 'valibot';
 

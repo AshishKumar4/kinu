@@ -2,7 +2,7 @@ import type { LanguageModel } from 'ai';
 import {
   agentAffinityKey, parseModelSpec, reasoningEffortOptions,
   type ReasoningEffort, type WebSearchProvider,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import { buildCfWebSearchProvider } from './lib/web-provider';
 import {
   createAgentProviderRegistry,

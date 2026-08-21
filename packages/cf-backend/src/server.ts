@@ -22,8 +22,8 @@
  */
 
 import { routeAgentRequest } from "agents";
-import { ORCHESTRATOR_AGENT_SLUG } from "@kinu/core";
-import { diagnostics, renderThrownChain, toKinuError } from "@kinu/core/obs";
+import { ORCHESTRATOR_AGENT_SLUG } from "@kinu.run/core";
+import { diagnostics, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
 import {
   extractOrchestratorAgentName,
   extractTicketOrchestratorAgentName,

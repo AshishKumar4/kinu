@@ -1,5 +1,5 @@
-import { JsonObjectSchema, type JsonObject, type OAuthCredential } from '@kinu/core';
-import { diagnostics, toKinuError } from '@kinu/core/obs';
+import { JsonObjectSchema, type JsonObject, type OAuthCredential } from '@kinu.run/core';
+import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 const CloudflareAccountSchema = v.object({ id: v.string(), name: v.optional(v.string()) });

@@ -12,7 +12,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import { WORKSPACE_CREATED_EVENT } from '@kinu/core';
+import { WORKSPACE_CREATED_EVENT } from '@kinu.run/core';
 import { orchestratorHarness } from './helpers/actor-harness';
 
 const MISSION = 'Audit the OAuth callback flow and report what an attacker could reach.';

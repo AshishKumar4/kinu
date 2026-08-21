@@ -1,5 +1,5 @@
 {
-  "name": "@kinu/core",
+  "name": "@kinu.run/core",
   "version": "0.1.0",
   "type": "module",
   "main": "src/index.ts",
@@ -12,10 +12,10 @@
   },
   "dependencies": {
     "@nimbus-sh/core": "0.5.0",
-    "@kinu/agent-utils": "workspace:*"
+    "@kinu.run/agent-utils": "workspace:*"
   },
   "devDependencies": {
-    "@kinu/test-utils": "workspace:*"
+    "@kinu.run/test-utils": "workspace:*"
   },
   "scripts": {
     "build": "tsc",

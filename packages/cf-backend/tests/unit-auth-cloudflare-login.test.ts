@@ -8,7 +8,7 @@ import { describe, expect, test } from 'bun:test';
 import { handleAuthRequest } from '../src/auth/routes';
 import { createOAuthState } from '../src/auth/store';
 import { CLOUDFLARE_WORKERS_AI_SCOPES } from '../src/lib/cloudflare-oauth';
-import { asFetchFunction, DEFAULT_WORKERS_AI_MODEL_SPEC, type OAuthCredential } from '@kinu/core';
+import { asFetchFunction, DEFAULT_WORKERS_AI_MODEL_SPEC, type OAuthCredential } from '@kinu.run/core';
 import { makeKv, type FakeKv } from './helpers/kv';
 import type { UserCaller } from '../src/user/workspace-capability';
 

@@ -18,10 +18,10 @@ import { TestLanguageModelV2 } from './test-language-model';
 import {
   bootstrapScaffold, initWorkspaceSchema, listGepaRuns, recordTurnOutcome, seedSoul,
   type LLMProviderConfig,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession } from '../src/local-session';
-import { scratchPath } from '@kinu/test-utils';
+import { scratchPath } from '@kinu.run/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',

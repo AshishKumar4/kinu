@@ -6,7 +6,7 @@
 import type {
   AgentRuntime, LLM, Memory, Executor, Schedule, Identity, ExecutionRouter,
   CraftStore, BranchHandle, FiberCtx,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import { createTestSql, type TestSql } from './sql';
 import { createEchoLLM } from './llm';
 import { createMemoryVfs } from './vfs';

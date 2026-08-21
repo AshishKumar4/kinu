@@ -1,5 +1,5 @@
 /**
- * @kinu/compaction — the staged context-pruning compaction engine.
+ * @kinu.run/compaction — the staged context-pruning compaction engine.
  *
  * One deep module: the published better-compact ladder core, the Kinu
  * ModelMessage codec, the

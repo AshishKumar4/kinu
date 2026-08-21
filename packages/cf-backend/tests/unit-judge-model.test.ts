@@ -1,16 +1,16 @@
 /**
  * Cross-family judge selection against a real AgentProviderRegistry.
  *
- * The policy lives in core (unit-judge-model.test.ts in @kinu/core covers
+ * The policy lives in core (unit-judge-model.test.ts in @kinu.run/core covers
  * it); what is pinned here is the adapter: which specs the registry actually
  * offers up as judge candidates, and that the choice tracks the owner's
  * connected credentials rather than a hardcoded list.
  */
 
 import { describe, test, expect } from 'bun:test';
-import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@kinu/core';
+import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@kinu.run/core';
 import { userCredentialSource } from './helpers/user-credentials';
-import { createMockFetch } from '@kinu/test-utils';
+import { createMockFetch } from '@kinu.run/test-utils';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry';
 import { resolveJudgeModelSelection } from '../src/providers/judge-model';
 

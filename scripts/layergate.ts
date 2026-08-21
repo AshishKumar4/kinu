@@ -69,7 +69,7 @@ if (process.argv.includes('--lock')) {
   const ladder = await lockBaseline(ladderSubjects, COMPACTION_LAYERS);
   writeBaseline(
     COMPACTION_BASELINE_FILE,
-    ["import type { Baseline } from '@kinu/core';"],
+    ["import type { Baseline } from '@kinu.run/core';"],
     'COMPACTION_LOCKED_BASELINE',
     ladder,
   );

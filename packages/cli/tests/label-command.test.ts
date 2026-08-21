@@ -12,8 +12,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Database } from 'bun:sqlite';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { initTurnOutcomeTables, recordTurnOutcome, seededRandom } from '@kinu/core';
-import { makeSql } from '@kinu/cli-backend';
+import { initTurnOutcomeTables, recordTurnOutcome, seededRandom } from '@kinu.run/core';
+import { makeSql } from '@kinu.run/cli-backend';
 import * as v from 'valibot';
 
 const tempDirs: string[] = [];

@@ -76,14 +76,14 @@ import {
   type EgressSecretBinding,
   JsonObjectSchema,
   decodeJsonValue,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import {
   diagnostics,
   KinuError,
   renderThrownChain,
   tolerate,
   toKinuError,
-} from '@kinu/core/obs';
+} from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { initUserTables } from './schema';
 import { bindAgentSql } from '../runtime';
@@ -114,7 +114,7 @@ import {
   DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED,
   mergeConsentScope, parseConsentScope, summarizeDeviceAction,
   type DeviceConsentScope, type DeviceConsentDecision, type DeviceStatus,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import {
   validateMcpServerInput, parseAllowedTools, mapConnectionStatus,
   parseMcpHeaders, buildMcpHeaderTransportOpts,

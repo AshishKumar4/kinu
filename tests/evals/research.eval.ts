@@ -68,7 +68,7 @@ import {
   liveModelTarget, publishRunRecord, recordLiveModelEpisode, reportLiveModelSpend,
   subgoalOutcome, outcomeRow, UNCONFIGURED_LLM,
   type EvalArmState, type EvalObservation, type EvalScoreRow, type EvalTier,
-} from '@kinu/test-utils';
+} from '@kinu.run/test-utils';
 import { resolveArtifactRoot } from '../../scripts/bench-retention';
 import { CANARY, ENTRIES, PLANTED, RESEARCH_PROMPT, RESEARCH_TASK_ID } from './fixtures/veldmar-corpus';
 

@@ -12,7 +12,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import { auditScratchOwnership, readScannableSources } from './scratch-ownership';
-import { SCRATCH_PREFIXES } from '@kinu/test-utils';
+import { SCRATCH_PREFIXES } from '@kinu.run/test-utils';
 
 /** One file, as the gate reads its corpus. */
 function audit(path: string, source: string) {
@@ -78,7 +78,7 @@ describe('the fixes are accepted', () => {
     // which is the only release mechanism measured to run under this runner —
     // `process.on("exit")` never fires under `bun test`.
     const found = audit('packages/x/tests/a.test.ts', [
-      "import { scratchDir } from '@kinu/test-utils';",
+      "import { scratchDir } from '@kinu.run/test-utils';",
       "const dir = scratchDir('a-suite');",
     ].join('\n'));
     expect(found.problems).toEqual([]);
@@ -105,7 +105,7 @@ describe('what it must NOT fire on', () => {
       ' * Hand-rolling this as `/tmp/kinu-test-${performance.now()}.db` is what',
       ' * put 5,489 directories in /tmp.',
       ' */',
-      "import { scratchDir } from '@kinu/test-utils';",
+      "import { scratchDir } from '@kinu.run/test-utils';",
       "const dir = scratchDir('a-suite');",
     ].join('\n'));
     expect(found.problems).toEqual([]);

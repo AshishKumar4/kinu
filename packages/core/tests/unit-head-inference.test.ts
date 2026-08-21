@@ -3,7 +3,7 @@
 // assembly that used to live inside the cf Facet is locked behind a test both
 // backends rely on.
 import { describe, test, expect } from 'bun:test';
-import { scriptedTurnModel, toolExecute } from '@kinu/test-utils';
+import { scriptedTurnModel, toolExecute } from '@kinu.run/test-utils';
 import type { LanguageModel } from 'ai';
 import {
   runHeadInference, HeadCapture, buildHeadAccumulatorTools,

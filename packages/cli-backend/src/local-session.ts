@@ -19,7 +19,7 @@ import {
   createCompactionExtension, createVfsTranscriptStore,
   createCompactionStateStore, createModelSummarizer,
   type CompactionStateStore,
-} from '@kinu/compaction';
+} from '@kinu.run/compaction';
 import type {
   ChatOptions, ChatEvent,
   LLMProviderConfig, CompletedTurn, TurnContinuity, FiberCtx,
@@ -35,7 +35,7 @@ import type {
   FileCheckpoints, FileCheckpointListing, FileRestorePlan, FileRestoreResult,
   CheckpointAvailability,
   WorkMode,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import {
   AgentOrchestrator,
   createAgentStores, type AgentStores, collectDynamicContext,
@@ -113,8 +113,8 @@ import {
   type EvolutionChangelogView,
   getRunEvents, listRuns, type RunListEntry, type Page, type PageRequest,
   priceCall, WORKSPACE_RUN_ID,
-} from '@kinu/core';
-import { diagnostics, KinuError, renderThrownChain, toKinuError } from '@kinu/core/obs';
+} from '@kinu.run/core';
+import { diagnostics, KinuError, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import { makeSqlExec, type CLIRuntime } from './runtime';
 import { discoverAgentsMd } from './agents-md';
 import { createNodeCraftedExecute } from './craft-executor';
@@ -2631,7 +2631,7 @@ export class LocalAgentSession implements BackendHost {
   }
 }
 
-export { serializeContentForHeads } from '@kinu/core';
+export { serializeContentForHeads } from '@kinu.run/core';
 
 interface PromptInputParts {
   text: string;

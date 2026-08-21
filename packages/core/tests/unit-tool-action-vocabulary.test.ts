@@ -18,7 +18,7 @@
 // which is what the owner saw. This gate makes the whole class impossible: add
 // a dispatcher that answers without its vocabulary and it goes red.
 import { describe, test, expect } from 'bun:test';
-import { createTestRuntime, toolExecute } from '@kinu/test-utils';
+import { createTestRuntime, toolExecute } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
   buildBuiltinTools, initAllTables, initTaskListTable,

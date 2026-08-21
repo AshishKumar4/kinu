@@ -27,7 +27,7 @@ import {
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { useKinu } from "@/hooks/use-kinu";
 import { useElementSize } from "@/hooks/use-element-size";
-import type { ForkRunSummary } from "@kinu/core";
+import type { ForkRunSummary } from "@kinu.run/core";
 
 export default function MCTSExplorer() {
   const { agentId } = useParams();

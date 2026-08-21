@@ -63,7 +63,7 @@
  * knowing what a Durable Object is. Two planes, one classifier each.
  */
 
-import { diagnostics, renderCauseChain, toKinuError } from '@kinu/core/obs';
+import { diagnostics, renderCauseChain, toKinuError } from '@kinu.run/core/obs';
 
 /** Which platform failure a call hit — the value `null` is the absence of one,
  *  and is what makes "the platform dropped this" distinguishable from "your

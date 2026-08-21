@@ -13,7 +13,7 @@
 import { VERSION } from './display';
 import { loadConfigFile, updateConfigFile, type KinuConfig } from './config';
 import * as v from 'valibot';
-import { classify, renderThrownChain, tolerateAsync } from '@kinu/core/obs';
+import { classify, renderThrownChain, tolerateAsync } from '@kinu.run/core/obs';
 
 export const CLI_VERSION_PATH = '/downloads/kinu-version.json';
 const FETCH_TIMEOUT_MS = 1_500;

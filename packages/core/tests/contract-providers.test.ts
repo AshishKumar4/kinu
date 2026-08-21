@@ -23,7 +23,7 @@ import {
 } from '../src/index';
 import {
   createMockFetch, ANTHROPIC_MESSAGE_BODY, CHAT_COMPLETION_BODY, OPENAI_RESPONSES_BODY,
-} from '@kinu/test-utils';
+} from '@kinu.run/test-utils';
 
 const CodexRequestBodySchema = v.object({
   instructions: v.optional(v.string()),

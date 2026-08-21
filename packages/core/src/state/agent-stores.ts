@@ -16,7 +16,7 @@
  * penalising the CLI, whose handle is ready before any store is read.
  *
  * `createCompactionStateStore` is deliberately NOT here: it lives in
- * `@kinu/compaction`, which depends on this package, so importing it would
+ * `@kinu.run/compaction`, which depends on this package, so importing it would
  * invert the layering. Both backends keep constructing that one themselves.
  */
 

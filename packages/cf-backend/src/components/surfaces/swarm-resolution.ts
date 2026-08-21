@@ -31,7 +31,7 @@ import {
   isPresetPoint, NAMED_SWARM_PRESETS, settleOf, SWARM_PRESET_POINTS,
   type HeadRunView, type NamedSwarmPreset, type SwarmConfig, type SwarmPresetRow,
   type SwarmSettle,
-} from "@kinu/core";
+} from "@kinu.run/core";
 
 /**
  * The six axes by NAME.

@@ -9,7 +9,7 @@
  * teams, email + webhook ingress, release changes, and fork.
  *
  * Tool factory, system prompt, and crafted-tool injection all live in
- * @kinu/core so the CLI surface shares them verbatim.
+ * @kinu.run/core so the CLI surface shares them verbatim.
  */
 
 import { callable, type AgentContext, type SubAgentClass } from "agents";
@@ -166,7 +166,7 @@ import {
   admitPlanReviewAnnotations,
   type PlanEdit, type PlanReview, type PlanReviewAnnotation, type PlanReviewDecision,
   type PlanReviewResult, type WorkMode,
-} from "@kinu/core";
+} from "@kinu.run/core";
 import * as v from 'valibot';
 import { ActorAgent, type ActorToolDeps } from "./actor-agent";
 import { resolveEnsembleJudgeSelection } from "./providers/judge-model";
@@ -181,9 +181,9 @@ import {
   type DeferredApproval, type DeferredApprovalAnswer, type DeferredApprovalChannel,
   type DeferredApprovalNotice, type ApprovalGrant,
   TURN_AUTHOR_METADATA_KEY,
-} from "@kinu/core";
-import type { CodemodeProvider, MctsSearchRunSummary } from "@kinu/core";
-import { diagnostics, renderThrownChain, toKinuError } from "@kinu/core/obs";
+} from "@kinu.run/core";
+import type { CodemodeProvider, MctsSearchRunSummary } from "@kinu.run/core";
+import { diagnostics, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import { deliverCloudFork } from "./user/workspace-fork";
 import { createNimbusWorkspaceSandbox, nimbusWorkspaceArchiveFiles } from './nimbus-route';
@@ -386,8 +386,8 @@ export class OrchestratorAgent extends ActorAgent {
   // Takes when the turn completes (onChatResponse).
   private _pendingBranches: PendingBranch[] = [];
 
-  private _triggerRegistry: import('@kinu/core').TriggerRegistry | null = null;
-  private _replyChannels: import('@kinu/core').ReplyChannelStore | null = null;
+  private _triggerRegistry: import('@kinu.run/core').TriggerRegistry | null = null;
+  private _replyChannels: import('@kinu.run/core').ReplyChannelStore | null = null;
   /** Per-activation guard so the full table-init DDL runs once, not on every
    *  onStart + claimOwner. Resets on DO eviction, so a cold start always
    *  re-creates any newly-added tables (no schema-version bookkeeping). */
@@ -1022,7 +1022,7 @@ export class OrchestratorAgent extends ActorAgent {
   ): Promise<void> {
     try {
       if (!this.config.getSleepTimeComputeEnabled()) return;
-      const { runSleepTimeCompute, applySleepTimeUpdate } = await import('@kinu/core');
+      const { runSleepTimeCompute, applySleepTimeUpdate } = await import('@kinu.run/core');
       const currentFacts = this.facts.all()
         .sort((a, b) => b.lastObservedAt - a.lastObservedAt)
         .map(f => ({ key: f.key, value: f.value, confidence: f.confidence }));
@@ -2837,7 +2837,7 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   @callable() async getToolDescriptions() {
-    // Descriptions AND reach sourced from @kinu/core/tools/registry — one
+    // Descriptions AND reach sourced from @kinu.run/core/tools/registry — one
     // truth for both. Reach used to be guessed here as
     // `nativeNames.has(name) ? 'native' : 'codemode'`, a binary that cannot
     // express "this actor has it on neither surface": `report` is the one

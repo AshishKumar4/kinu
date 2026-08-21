@@ -29,9 +29,9 @@ import {
 } from "@phosphor-icons/react";
 import { useParams } from "react-router";
 import type { Rpc } from "@/lib/protocol";
-import { joinDir, parentDir, type DirEntry } from "@kinu/core";
+import { joinDir, parentDir, type DirEntry } from "@kinu.run/core";
 import * as v from "valibot";
-import { renderThrownChain, tolerate } from "@kinu/core/obs";
+import { renderThrownChain, tolerate } from "@kinu.run/core/obs";
 
 interface FileState { content?: string; truncated?: boolean; error?: string }
 interface ExecutorDirectoryResponse { path?: string; entries?: DirEntry[]; error?: string }

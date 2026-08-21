@@ -3,8 +3,8 @@ import {
   archiveSqlFromDatabase,
   restoreWorkspaceArchive,
   type ArchiveCursor,
-} from '@kinu/core';
-import { createInlineWorkspace } from '@kinu/core/identity';
+} from '@kinu.run/core';
+import { createInlineWorkspace } from '@kinu.run/core/identity';
 import { Database } from 'bun:sqlite';
 import { orchestratorHarness } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';

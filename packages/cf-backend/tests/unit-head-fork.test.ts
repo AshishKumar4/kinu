@@ -29,7 +29,7 @@ import {
   type ParentRpcWrite,
   type SqlExecRow,
   type SqlValue,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { platformGatewayEnv } from './helpers/platform-gateway';
 import * as v from 'valibot';

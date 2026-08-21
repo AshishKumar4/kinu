@@ -36,7 +36,7 @@ import {
   EVAL_MODELS, FULL_TOOL_SURFACE, TASK_OUTCOME,
   assessAdmissibility, compareRuns, hardTaskCases, publishRunRecord, readRunRecord, scratchDir,
   type EvalObservation, type EvalRunRecord,
-} from '@kinu/test-utils';
+} from '@kinu.run/test-utils';
 
 const RUNS = join(import.meta.dirname, 'eval/runs');
 const flashA = readRunRecord(join(RUNS, 'flash-a.json'));

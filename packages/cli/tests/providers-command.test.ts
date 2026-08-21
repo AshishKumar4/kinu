@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { parseJsonObject, type JsonObject } from '@kinu/core';
+import { parseJsonObject, type JsonObject } from '@kinu.run/core';
 
 const repoRoot = resolve(__dirname, '../../..');
 const tempDirs: string[] = [];

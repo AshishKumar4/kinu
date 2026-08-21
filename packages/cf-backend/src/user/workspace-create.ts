@@ -10,8 +10,8 @@ import {
   isReasoningEffort,
   normalizeUsage,
   type ReasoningEffort,
-} from '@kinu/core';
-import { diagnostics, toKinuError } from '@kinu/core/obs';
+} from '@kinu.run/core';
+import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import type { OrchestratorAgent } from '../orchestrator';
 import { createAgentProviderRegistry } from '../providers/agent-registry';
 import type { UserCredentialClient } from '../providers/agent-registry';

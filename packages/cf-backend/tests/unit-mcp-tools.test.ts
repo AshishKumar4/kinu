@@ -8,7 +8,7 @@
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
-import type { JsonObject, JsonValue } from '@kinu/core';
+import type { JsonObject, JsonValue } from '@kinu.run/core';
 import type { UserCaller } from '../src/user/workspace-capability';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 

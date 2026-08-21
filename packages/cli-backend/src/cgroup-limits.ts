@@ -21,8 +21,8 @@
  */
 
 import { readFileSync } from 'node:fs';
-import type { ResourceLimits } from '@kinu/core';
-import { tolerate } from '@kinu/core/obs';
+import type { ResourceLimits } from '@kinu.run/core';
+import { tolerate } from '@kinu.run/core/obs';
 
 export interface CgroupSource {
   /** cgroupfs mount point. */

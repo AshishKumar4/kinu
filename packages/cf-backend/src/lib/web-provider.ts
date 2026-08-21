@@ -9,7 +9,7 @@
 import {
   createDefaultWebSearchProvider,
   type AuthResolver, type ModelCallSink, type WebSearchProvider,
-} from "@kinu/core";
+} from "@kinu.run/core";
 
 interface WebProviderEnv {
   readonly AI?: Env['AI'];

@@ -4,7 +4,7 @@
  * external/hermes-agent/tools/checkpoint_manager.py).
  *
  * Store format (constants + subject/ref encoding) lives in
- * @kinu/core/checkpoints/format — the pc-agent daemon writes the same
+ * @kinu.run/core/checkpoints/format — the pc-agent daemon writes the same
  * layout (zero-dep mirror, enforced by tests/checkpoint-parity.test.ts) so a
  * machine's checkpoints are one format regardless of which side wrote them.
  *
@@ -27,8 +27,8 @@ import {
   checkpointReason, diagnoseStaging,
   type CheckpointAvailability, type CheckpointTurnMeta, type FileCheckpoints,
   type FileCheckpointEntry, type FileRestoreChange, type FileRestorePlan, type FileRestoreResult,
-} from '@kinu/core';
-import { classify, tolerateAsync } from '@kinu/core/obs';
+} from '@kinu.run/core';
+import { classify, tolerateAsync } from '@kinu.run/core/obs';
 
 const SHA_RE = /^[0-9a-f]{4,64}$/i;
 const PROJECT_MARKERS = ['.git', 'package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'Makefile', '.hg'];

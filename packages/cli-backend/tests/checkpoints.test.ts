@@ -7,10 +7,10 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, chmodSync } from 'node:fs';
-import { git } from '@kinu/test-utils';
+import { git } from '@kinu.run/test-utils';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { summarizeRestorePlan } from '@kinu/core';
+import { summarizeRestorePlan } from '@kinu.run/core';
 import { createHostCheckpoints } from '../src/checkpoints';
 import { createHostShell, withCheckpointedShell } from '../src/runtime';
 

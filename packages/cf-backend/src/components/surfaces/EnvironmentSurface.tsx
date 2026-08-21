@@ -34,7 +34,7 @@ import {
   HardDrivesIcon, CircleIcon,
   LockSimpleIcon, TerminalIcon, FolderOpenIcon, PlugIcon, GearSixIcon,
 } from "@phosphor-icons/react";
-import type { MountInfo } from "@kinu/core";
+import type { MountInfo } from "@kinu.run/core";
 import type { ExecutorCommandResult, Rpc } from "@/lib/protocol";
 import {
   capabilityLabel, executorForMount, executorLabel, isExecutorActive,

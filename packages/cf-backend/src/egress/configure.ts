@@ -34,7 +34,7 @@ import {
   type ApprovalGrant,
   type EgressSecretBinding,
   type SandboxHandle,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import {
   CONTAINER_EVENT_HOST, EGRESS_HANDLER, EVENT_HANDLER, type KinuEgressParams,
 } from './outbound';

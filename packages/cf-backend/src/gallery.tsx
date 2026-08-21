@@ -58,7 +58,7 @@ import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from "r
 import { createRoot } from "react-dom/client";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { UIMessage } from "ai";
-import { tolerate } from "@kinu/core/obs";
+import { tolerate } from "@kinu.run/core/obs";
 import { Button } from "@cloudflare/kumo";
 import { btnSmCls } from "@/components/ui/form";
 import {
@@ -88,7 +88,7 @@ import { StandingApprovalsCard } from "@/pages/SettingsPage";
 import {
   BUILTIN_TOOLS, BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS, CHARS_PER_TOKEN, TOOL_REACH,
   JsonObjectSchema, JsonValueSchema, mergeTranscript, seekPage, type JsonValue,
-} from "@kinu/core";
+} from "@kinu.run/core";
 import type { ActivitySnapshot, BackgroundJob, ForkNode, Rpc, ToolInfo } from "@/lib/protocol";
 import { buildTree, type MctsRow } from "@/lib/fork-tree-rows";
 import type { AgentStatus } from "@/hooks/use-kinu";
@@ -97,7 +97,7 @@ import type {
   ChatHistoryEntry, ContextComposition, DirEntry, ExplorationCanvasRun, ForkRunParams,
   ForkRunSummary, HeadRunView, MountInfo, NodeTranscriptView, Page, PageRequest,
   PendingAction, ProducerSpend, RunSummary, SearchNode, Usage, WorkspaceSpend,
-} from "@kinu/core";
+} from "@kinu.run/core";
 import type { ModelMenuEntry } from "@/lib/user-api";
 import * as v from "valibot";
 import { serveGalleryRpc } from "@/gallery-agent-stub";

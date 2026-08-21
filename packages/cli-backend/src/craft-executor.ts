@@ -18,8 +18,8 @@
  * user code. That is the same path the CF LOADER executor produces.
  */
 
-import { decodeJsonValue } from '@kinu/core';
-import type { CraftedToolExecute, CraftedToolExecuteFn, JsonValue } from '@kinu/core';
+import { decodeJsonValue } from '@kinu.run/core';
+import type { CraftedToolExecute, CraftedToolExecuteFn, JsonValue } from '@kinu.run/core';
 import * as v from 'valibot';
 
 export function createNodeCraftedExecute(): CraftedToolExecute {

@@ -1,4 +1,4 @@
-import { createChatModel, type LLMProviderConfig } from '@kinu/core';
+import { createChatModel, type LLMProviderConfig } from '@kinu.run/core';
 import {
   CODEX_CRED_KEY,
   DEFAULT_WORKERS_AI_MODEL_ID,
@@ -35,16 +35,16 @@ import {
   type ProviderDeps,
   type ProviderInfo,
   type ModelCallSpend,
-} from '@kinu/core';
-import type { OAuthCredential } from '@kinu/core';
+} from '@kinu.run/core';
+import type { OAuthCredential } from '@kinu.run/core';
 import { generateText, streamText } from 'ai';
 import type { LanguageModel, LanguageModelUsage } from 'ai';
-import type { LLM } from '@kinu/core';
+import type { LLM } from '@kinu.run/core';
 import { createClaudeCliProvider, type ClaudeCliProviderOptions } from './claude-cli-provider';
 import { createOpenCodeProvider, type OpenCodeProviderOptions } from './opencode-provider';
 import type { LocalCodexAuthStore } from './codex-auth-store';
 import * as v from 'valibot';
-import { renderThrownChain } from '@kinu/core/obs';
+import { renderThrownChain } from '@kinu.run/core/obs';
 
 const cloudMenuSchema = v.object({
   models: v.optional(v.array(v.object({
@@ -99,7 +99,7 @@ export interface LocalCloudSession {
 // them from it.
 export {
   CLOUD_PROXY_PROVIDER_IDS, cloudProxyBaseURL, type CloudProxyProviderId,
-} from '@kinu/core';
+} from '@kinu.run/core';
 
 /**
  * Proxy fetch wrappers, memoized per session + underlying fetch.

@@ -3,7 +3,7 @@
  * uses when the conversation prefix is compressed (hermes context_compressor
  * / Codex compact-prompt lineage). This module owns WHAT a compaction
  * summary must say; the boundary/prune/replay machinery is
- * @kinu/compaction (the better-compact ladder), whose last-resort prefix
+ * @kinu.run/compaction (the better-compact ladder), whose last-resort prefix
  * summary builds its prompt here — one content spec, both backends.
  *
  * Tuning order is recall first, then precision: a successor that re-asks a

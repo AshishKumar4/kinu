@@ -1,6 +1,6 @@
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
-import { asFetchFunction } from '@kinu/core';
+import { asFetchFunction } from '@kinu.run/core';
 import { testOwner } from './helpers/user-do';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';

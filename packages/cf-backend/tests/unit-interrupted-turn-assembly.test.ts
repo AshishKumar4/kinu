@@ -13,7 +13,7 @@
 // the shape a bricked workspace is in right now — and asserts what comes out.
 import { describe, expect, test } from 'bun:test';
 import type { ModelMessage, ToolSet } from 'ai';
-import { INTERRUPTED_TOOL_RESULT } from '@kinu/core';
+import { INTERRUPTED_TOOL_RESULT } from '@kinu.run/core';
 import { orchestratorHarness } from './helpers/actor-harness';
 
 const ORPHAN_ID = 'call_ed15d29f352a4735e6b01b5';

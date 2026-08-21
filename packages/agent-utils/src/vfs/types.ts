@@ -1,5 +1,5 @@
 /**
- * Virtual Filesystem abstraction for @kinu/agent-utils.
+ * Virtual Filesystem abstraction for @kinu.run/agent-utils.
  *
  * Provides a POSIX-like async filesystem interface that can be backed by
  * Durable Object SQLite, Cloudflare R2, in-memory storage, or any custom backend.

@@ -5,7 +5,7 @@
 import {
   initExperienceLibraryTables, initReleaseTables, reconcileColumns,
   type SqlExec, type SqlExecutor,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import { initAccessTokenTable } from '../cli/access-token-store';
 import { initEgressVaultTables } from './egress-vault';
 import { initWorkspaceCapabilityTables } from './workspace-capability';

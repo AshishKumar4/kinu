@@ -12,7 +12,7 @@ import {
   type SqlExecutor,
   type SqlValue,
   type VFS,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import {
   compactionTranscriptPath,
   createCompactionStateStore,

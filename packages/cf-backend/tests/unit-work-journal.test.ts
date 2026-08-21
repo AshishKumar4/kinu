@@ -8,7 +8,7 @@
  * same four rooms with the walls painted over.
  */
 import { describe, test, expect } from 'bun:test';
-import type { AgentTaskTree, ChangelogEntry } from '@kinu/core';
+import type { AgentTaskTree, ChangelogEntry } from '@kinu.run/core';
 import type { BackgroundJob } from '../src/lib/protocol';
 import { buildJournal } from '../src/components/surfaces/WorkTab';
 import { CHANGELOG_REVALIDATE_MS } from '../src/components/surfaces/changelog-entries';

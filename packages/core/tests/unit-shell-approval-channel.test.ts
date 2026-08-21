@@ -8,7 +8,7 @@
 // harness wraps a mock `Shell` with the policy under test and hands it to
 // `rt.shell`, exactly as a backend's runtime.ts does at construction.
 import { describe, test, expect } from 'bun:test';
-import { toolExecute } from '@kinu/test-utils';
+import { toolExecute } from '@kinu.run/test-utils';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { createTestRuntime } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';

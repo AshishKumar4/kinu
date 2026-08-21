@@ -127,7 +127,7 @@ overrides on top of it. A swarm takes its shape from the call instead, through
 `preset` and the six axes.
 
 ```typescript
-import { createAgentConfigStore } from '@kinu/core';
+import { createAgentConfigStore } from '@kinu.run/core';
 
 const config = createAgentConfigStore(sql);
 config.setMctsOverrides({

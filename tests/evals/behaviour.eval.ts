@@ -60,7 +60,7 @@ import {
   liveChatModel, liveModelTarget, preRegister, publishRunRecord, reportLiveModelSpend,
   TASK_OUTCOME, UNCONFIGURED_LLM,
   type EvalArmState, type EvalObservation, type EvalTier,
-} from '@kinu/test-utils';
+} from '@kinu.run/test-utils';
 import { DegenerateRunError, runBehaviourTask, type BehaviourOutput } from './harness';
 import { resolveArtifactRoot } from '../../scripts/bench-retention';
 

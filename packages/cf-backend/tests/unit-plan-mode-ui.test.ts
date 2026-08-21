@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { planReviewAwaitingDecision } from '@kinu/core';
+import { planReviewAwaitingDecision } from '@kinu.run/core';
 
 const source = (path: string) => readFileSync(join(import.meta.dir, '..', path), 'utf8');
 const hook = source('src/hooks/use-kinu.ts');

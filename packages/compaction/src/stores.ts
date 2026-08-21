@@ -16,7 +16,7 @@
  * it navigable (manifest.ts).
  */
 
-import { SPILL_DIRS, type SqlExecutor, type VFS } from '@kinu/core';
+import { SPILL_DIRS, type SqlExecutor, type VFS } from '@kinu.run/core';
 import type { PlanSnapshot, PlanStore, TranscriptStore } from '@better-compact/core';
 import type { ArchiveIndexStore, ArchiveRange } from './manifest';
 import * as v from 'valibot';

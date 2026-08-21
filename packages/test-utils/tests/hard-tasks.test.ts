@@ -43,7 +43,7 @@ import {
 // to resolve to code the tool surface can reach, and a kind whose implementation sat in
 // a test package would be a name with nothing behind it in production. The corpus is
 // one caller of it; what stayed in `cost-model.ts` is the eval ladder's own scoring.
-import { REFERENCE_FILE, SOLUTION_FILE, type RatioMeasurement } from '@kinu/core';
+import { REFERENCE_FILE, SOLUTION_FILE, type RatioMeasurement } from '@kinu.run/core';
 
 // Never called. The unroutable baseURL is deliberate: if anything in this file
 // reaches a model, it must fail rather than quietly bill someone.

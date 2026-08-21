@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { scratchDir } from '@kinu/test-utils';
+import { scratchDir } from '@kinu.run/test-utils';
 import { CODEX_CRED_KEY, createFileCodexAuthStore } from '../src/codex-auth-store';
-import { asFetchFunction, JsonObjectSchema, type JsonObject } from '@kinu/core';
+import { asFetchFunction, JsonObjectSchema, type JsonObject } from '@kinu.run/core';
 import * as v from 'valibot';
 
 const savedConfigSchema = v.object({

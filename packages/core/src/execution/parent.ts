@@ -24,7 +24,7 @@
  * one call that greps, instead of a walk that reads every file across the wire.
  */
 
-import { raceAbort } from '@kinu/agent-utils';
+import { raceAbort } from '@kinu.run/agent-utils';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './types';
 import type { VFS } from '../types/primitives';
 import { makeVfsError, type VfsErrorCode } from '../vfs/errno';

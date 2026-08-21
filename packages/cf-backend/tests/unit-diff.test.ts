@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { diffLines, computeWorkspaceDiff, parseGitDiff, MAX_LINES_PER_FILE } from "@kinu/core";
+import { diffLines, computeWorkspaceDiff, parseGitDiff, MAX_LINES_PER_FILE } from "@kinu.run/core";
 
 describe("diffLines", () => {
   test("identical input is all context, zero changes", () => {

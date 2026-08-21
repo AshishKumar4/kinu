@@ -33,15 +33,15 @@
  */
 
 import { appendFileSync } from 'node:fs';
-import { writeSecretFile } from '@kinu/cli-backend';
-import { renderThrownChain } from '@kinu/core/obs';
+import { writeSecretFile } from '@kinu.run/cli-backend';
+import { renderThrownChain } from '@kinu.run/core/obs';
 import {
   addUsage, decodeJsonValue, JsonObjectSchema, JsonValueSchema, pageSchema, projectJsonValue,
   usageReported, UsageSchema,
   type ExplorationRecord, type JsonObject, type JsonValue, type Page,
   type RecordCellHandle, type RecordCellSummary, type RecordObjectiveHandle,
   type RecordObjectiveSummary, type SeekCursor, type Usage,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import * as v from 'valibot';
 import { resolveAgentTarget } from '../agent-target';
 import { requireAuthConfig } from '../config';

@@ -29,7 +29,7 @@
  */
 
 import type { ToolExecutionOptions, ToolSet } from 'ai';
-import { combineAbortSignals } from '@kinu/agent-utils';
+import { combineAbortSignals } from '@kinu.run/agent-utils';
 import { SPAWN_STARTED_OPTION, withBackgroundThreshold, withSpawnDetach } from './threshold';
 import type { BackgroundJobRunner } from './runner';
 import type { WorkMode } from '../prompting/surface';

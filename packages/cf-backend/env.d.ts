@@ -11,7 +11,7 @@ import type { KinuSandbox } from "./src/kinu-sandbox";
 import type { UserDO } from "./src/user/user-do";
 import type { MonitorDO } from "./src/monitor/monitor-do";
 import type { NimbusSession } from "@nimbus-sh/sdk/worker";
-import type { VectorizeIndex as KinuVectorizeIndex } from "@kinu/core";
+import type { VectorizeIndex as KinuVectorizeIndex } from "@kinu.run/core";
 
 // This file has top-level imports (for the DO class generics below), which
 // makes it a module — so `interface Env` here would be module-scoped, not

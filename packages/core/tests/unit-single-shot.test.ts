@@ -2,7 +2,7 @@
 import { describe, test, expect } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
 import { createSingleShotStrategy, type StrategyContext } from '../src/index';
-import { createTestRuntime } from '@kinu/test-utils';
+import { createTestRuntime } from '@kinu.run/test-utils';
 
 // Build a minimal Vercel-AI-compatible LanguageModel stub. generateText only
 // reads `specificationVersion`, `provider`, `modelId`, and doGenerate — we

@@ -2,10 +2,10 @@ import { describe, expect, test } from 'bun:test';
 import { generateText } from 'ai';
 import {
   DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, JsonObjectSchema, usageTotal,
-} from '@kinu/core';
-import type { JsonObject, JsonValue, LLMProviderConfig, ModelCallReport } from '@kinu/core';
+} from '@kinu.run/core';
+import type { JsonObject, JsonValue, LLMProviderConfig, ModelCallReport } from '@kinu.run/core';
 import { cloudProxyBaseURL, createLocalModelResolver, createLocalProviderLLM } from '../src/model-resolver';
-import { asFetchFunction } from '@kinu/core';
+import { asFetchFunction } from '@kinu.run/core';
 import * as v from 'valibot';
 
 describe('createLocalModelResolver', () => {

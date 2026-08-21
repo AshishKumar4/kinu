@@ -4,11 +4,11 @@
 // CLIENT directly over child processes.
 
 import { tool, jsonSchema, type ToolSet } from 'ai';
-import { JsonObjectSchema, mcpToolKey } from '@kinu/core';
+import { JsonObjectSchema, mcpToolKey } from '@kinu.run/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import * as v from 'valibot';
-import { renderThrownChain } from '@kinu/core/obs';
+import { renderThrownChain } from '@kinu.run/core/obs';
 
 /**
  * Startup budget — spawning the child and listing its tools happens inside a

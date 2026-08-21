@@ -1,9 +1,9 @@
 import { existsSync, statSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
-import type { AgentRuntime, SessionSurface, ShellApprovalMode, ReasoningEffort, JsonObject } from '@kinu/core';
-import type { WorkspaceInfo } from '@kinu/core/identity';
-import { applyWorkspaceTitle, createAgentConfigStore, initAgentConfigTable, readLatestSearchTree, BACKGROUND_POLICY, decodeJsonValue, usageReported, type GepaOptimizationResult } from '@kinu/core';
-import { diagnostics, toKinuError } from '@kinu/core/obs';
+import type { AgentRuntime, SessionSurface, ShellApprovalMode, ReasoningEffort, JsonObject } from '@kinu.run/core';
+import type { WorkspaceInfo } from '@kinu.run/core/identity';
+import { applyWorkspaceTitle, createAgentConfigStore, initAgentConfigTable, readLatestSearchTree, BACKGROUND_POLICY, decodeJsonValue, usageReported, type GepaOptimizationResult } from '@kinu.run/core';
+import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import {
   LOCAL_MAX_INLINE_ATTACHMENT_BYTES,
   LocalAgentSession,
@@ -13,7 +13,7 @@ import {
   type LocalModelResolver,
   type McpServerConfig,
   type SessionEvent,
-} from '@kinu/cli-backend';
+} from '@kinu.run/cli-backend';
 import {
   CONFIG_PATH,
   agentDbPath,

@@ -432,7 +432,7 @@ context window and capability flags come from. The static lists,
 non-200, or filters to nothing. OpenRouter is the exception. It queries its own
 `/api/v1/models` instead.
 
-The default model id lives once in `@kinu/core` as
+The default model id lives once in `@kinu.run/core` as
 `DEFAULT_WORKERS_AI_MODEL_ID` / `DEFAULT_WORKERS_AI_MODEL_SPEC`
 (`@cf/deepseek-ai/deepseek-v4-pro-0813`, `core/src/providers/workers-ai.ts:6`),
 and is written into the user's `default_model` config on first Cloudflare

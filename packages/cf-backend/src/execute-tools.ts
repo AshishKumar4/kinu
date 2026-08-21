@@ -16,12 +16,12 @@
  */
 
 import { createCodeTool } from "@cloudflare/codemode/ai";
-import type { AgentsToolDeps, SqlExecutor } from "@kinu/core";
+import type { AgentsToolDeps, SqlExecutor } from "@kinu.run/core";
 import {
   createAgentsCodemodeProvider, createWebCodemodeProvider, createRLMProvider,
   renderExecuteToolsDescription,
   type WebSearchProvider, type CodemodeProvider,
-} from "@kinu/core";
+} from "@kinu.run/core";
 import { PreambleCraftedExecutor, selectInjectableCraftedTools } from "./crafted-tool-registry";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
 import type { CFRuntime } from "./runtime";

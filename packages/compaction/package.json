@@ -1,5 +1,5 @@
 {
-  "name": "@kinu/compaction",
+  "name": "@kinu.run/compaction",
   "version": "0.1.0",
   "type": "module",
   "main": "src/index.ts",
@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@better-compact/core": "^0.1.0",
-    "@kinu/core": "workspace:*",
+    "@kinu.run/core": "workspace:*",
     "ai": "^6.0.182"
   },
   "scripts": {

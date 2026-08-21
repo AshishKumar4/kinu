@@ -12,7 +12,7 @@
 //   - both operations are reachable over HTTP, and a successful switch tells
 //     the user's live workspaces to drop their cached provider state
 import { describe, expect, test } from 'bun:test';
-import { asFetchFunction, type OAuthCredential } from '@kinu/core';
+import { asFetchFunction, type OAuthCredential } from '@kinu.run/core';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY, createTestUserDO, testOwner } from './helpers/user-do';
 import { CLOUDFLARE_OAUTH_CRED_KEY } from '../src/lib/cloudflare-oauth';
 import { handleUserRequest } from '../src/user/routes';

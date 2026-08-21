@@ -35,7 +35,7 @@ import {
   type NodeIdentity,
   type NodeWorkspace,
   type NodeWorkspaceProvisioner,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import {
   ensureProgrammaticReady,
   rpcExec,

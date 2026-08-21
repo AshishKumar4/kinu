@@ -27,8 +27,8 @@ import {
   TreeStructureIcon, WarningCircleIcon,
 } from "@phosphor-icons/react";
 import type { UIMessage } from "ai";
-import type { HeadStep, HeadStepToolCall, NodeTranscriptView } from "@kinu/core";
-import { usageTotal } from "@kinu/core";
+import type { HeadStep, HeadStepToolCall, NodeTranscriptView } from "@kinu.run/core";
+import { usageTotal } from "@kinu.run/core";
 import { MessageView } from "@/components/MessageView";
 import { DetailSection, EmptyState, MarkdownContent, Metric, timeAgo } from "@/components/surfaces/shared";
 import { LoadFailure } from "@/components/ui/LoadFailure";

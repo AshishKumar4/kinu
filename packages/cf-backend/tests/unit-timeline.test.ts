@@ -7,7 +7,7 @@ import { describe, test, expect } from 'bun:test';
 import {
   runEventToSpan, classifyEvolutionType, toolKindFor, safeJsonParse,
   type RunEvent, type RunEventInput, type Usage,
-} from '@kinu/core';
+} from '@kinu.run/core';
 
 function ev(event: RunEventInput): RunEvent {
   return { eventIndex: 0, runId: 'r1', timestamp: '2026-06-01T00:00:00.000Z', ...event };

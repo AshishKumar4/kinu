@@ -5,8 +5,8 @@
 // tests; here we verify the loop: turns stream + persist, programmatic turns run
 // serialized (reactor / job wake), broadcast fans out, end() flushes.
 import { describe, test, expect } from 'bun:test';
-import { createTestSql, scratchDir, scratchPath, toolExecute } from '@kinu/test-utils';
-import { MissionGovernor } from '@kinu/core';
+import { createTestSql, scratchDir, scratchPath, toolExecute } from '@kinu.run/test-utils';
+import { MissionGovernor } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -17,7 +17,7 @@ import type {
   LanguageModelV2CallOptions,
   LanguageModelV2Usage,
 } from '@ai-sdk/provider';
-import type { LLMProviderConfig } from '@kinu/core';
+import type { LLMProviderConfig } from '@kinu.run/core';
 import {
   DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, createAgentsCodemodeProvider,
   initSearchTables, initAlternateTakesTable, captureAlternateTakes, MAX_CONCURRENT_DETACHED_JOBS,
@@ -25,7 +25,7 @@ import {
   type AgentsToolDeps, type ModelInfo, type JsonObject, type JsonValue,
   type ModelCallSink,
   createAgentSelfProvider,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import { createCLIRuntime } from '../src/runtime';
 import { LocalAgentSession, serializeContentForHeads, type LocalAgentSessionOpts, type SessionEvent } from '../src/local-session';
 import { cloudProxyBaseURL, createLocalModelResolver, type LocalModelResolver } from '../src/model-resolver';
@@ -1902,7 +1902,7 @@ describe('LocalAgentSession — AGENTS.md + session transcript recall', () => {
   });
 
   test('persisted turns are searchable through the session-search seam', async () => {
-    const { SessionSearchStore } = await import('@kinu/core');
+    const { SessionSearchStore } = await import('@kinu.run/core');
     const { rt, session } = setup('the staging deploy used wrangler version three');
     await session.send('how did we deploy to staging?');
 

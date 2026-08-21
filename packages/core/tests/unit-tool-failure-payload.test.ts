@@ -22,7 +22,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { toolExecute } from '@kinu/test-utils';
+import { toolExecute } from '@kinu.run/test-utils';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { createInlineExecutor } from '../src/execution/inline';
 import { createTestRuntime } from './helpers';

@@ -11,7 +11,7 @@ import {
   codexAccessTokenExpiring,
   codexCredentialToHeaders,
   type Credential,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY } from '../lib/cloudflare-oauth';
 
 /** The credential-key shapes that resolve to a model provider — the same set

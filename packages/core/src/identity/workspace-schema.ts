@@ -22,7 +22,7 @@
  */
 
 import type { RawSqlExec, SqlExec, SqlExecutor } from '../types/primitives';
-import { initMemoryChunkTables } from '@kinu/agent-utils/memory';
+import { initMemoryChunkTables } from '@kinu.run/agent-utils/memory';
 import { initAllTables, migrateWorkspaceStorage, tableExists } from './schema';
 import { reconcileColumns } from './columns';
 import { initAgentConfigTable } from '../config/store';
@@ -65,7 +65,7 @@ export interface WorkspaceSchemaSql {
 
 /**
  * Compaction's replayable plan snapshot, measured trigger signal and archive
- * index. The tables are read by `@kinu/compaction`'s stores; the DDL lives
+ * index. The tables are read by `@kinu.run/compaction`'s stores; the DDL lives
  * here because a workspace's table set is one list, and that package sits
  * above core in the dependency graph.
  */

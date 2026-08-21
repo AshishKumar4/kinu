@@ -25,9 +25,9 @@ import type {
   CraftedToolSet,
   ExecutorProvider,
   JsonValue,
-} from '@kinu/core';
-import { diagnostics, renderThrownChain, toKinuError } from '@kinu/core/obs';
-import { decodeJsonValue, explainNativeToolReferenceError, renderExecuteToolsDescription } from '@kinu/core';
+} from '@kinu.run/core';
+import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { decodeJsonValue, explainNativeToolReferenceError, renderExecuteToolsDescription } from '@kinu.run/core';
 import { tool, jsonSchema } from 'ai';
 import { addImplicitReturn } from './executor';
 import * as v from 'valibot';

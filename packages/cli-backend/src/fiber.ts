@@ -8,8 +8,8 @@
  * table for orphaned rows (equivalent to Agent.onFiberRecovered).
  */
 
-import { decodeJsonValue, parseJsonValue } from '@kinu/core';
-import type { Schedule, FiberCtx, JsonValue, RawSqlExec, SqlExecutor } from '@kinu/core';
+import { decodeJsonValue, parseJsonValue } from '@kinu.run/core';
+import type { Schedule, FiberCtx, JsonValue, RawSqlExec, SqlExecutor } from '@kinu.run/core';
 
 export interface OrphanedFiber {
   id: string;

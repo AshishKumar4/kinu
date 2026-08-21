@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Database } from 'bun:sqlite';
-import { JsonValueSchema, type JsonValue } from '@kinu/core';
+import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
 import * as v from 'valibot';
 import { createBranchSpawner } from '../src/branch-process';
 

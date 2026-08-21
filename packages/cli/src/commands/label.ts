@@ -41,8 +41,8 @@ import {
   weakLabel,
   type CalibrationReport, type CorpusEvalReport, type EnsembleReport, type EnsembleRunResult,
   type LabelIngestResult, type LabelingItem, type OutcomeLabel, type TurnOutcome,
-} from '@kinu/core';
-import type { JsonValue } from '@kinu/core';
+} from '@kinu.run/core';
+import type { JsonValue } from '@kinu.run/core';
 import * as v from 'valibot';
 import { resolveAgentTarget, type AgentTarget } from '../agent-target';
 import { defaultTranscriptRoot, mineTranscripts, renderMineSkips, type MineResult } from '../cc-transcript';

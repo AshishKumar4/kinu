@@ -2,7 +2,7 @@
 // AI binding (src/providers/gateway-binding-fetch.ts). Availability depends on a
 // parseable gateway URL AND a bound `env.AI`, so every suite that wants
 // `ai-gateway` usable needs both — one place to say so.
-import type { GatewayRunRequest, ProviderEnv, WorkersAIBinding } from '@kinu/core';
+import type { GatewayRunRequest, ProviderEnv, WorkersAIBinding } from '@kinu.run/core';
 
 /** Shape `AI_GATEWAY_URL` must have: {origin}/v1/{account}/{gateway}/{provider}/... */
 export const TEST_GATEWAY_URL =

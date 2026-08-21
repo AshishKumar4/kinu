@@ -535,13 +535,13 @@ export function claims(enumerations: readonly Enumeration[]): Claims {
 
 /**
  * The spellings a path claim can have. Documents write `core/extension.ts` for
- * `packages/core/src/extension.ts` and `@kinu/core/tools/builtins.ts` for the
+ * `packages/core/src/extension.ts` and `@kinu.run/core/tools/builtins.ts` for the
  * same thing under the workspace scope, and both are the tree's own vocabulary
  * rather than a mistake — all twelve `core/…` claims in `docs/EXTENSIBILITY.md`
  * resolve this way and every one of them is true.
  */
 function spellings(path: string, seen: Claims): string[] {
-  const scoped = path.startsWith('@kinu/') ? path.slice('@kinu/'.length) : path;
+  const scoped = path.startsWith('@kinu.run/') ? path.slice('@kinu.run/'.length) : path;
   const cut = scoped.indexOf('/');
   const head = cut === -1 ? scoped : scoped.slice(0, cut);
   if (cut === -1 || !seen.packages.has(head)) return [scoped];

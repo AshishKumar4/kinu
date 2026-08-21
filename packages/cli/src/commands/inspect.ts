@@ -4,7 +4,7 @@ import {
   type AlignmentConvergence, type GepaOptimizationResult, type JsonObject, type JsonValue,
   type MissionBudgetSnapshot, type ProducerSpend, type SearchNode, type Usage,
   type WorkspaceSpend,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import * as v from 'valibot';
 import { resolveAgentTarget } from '../agent-target';
 import { fetchReport } from './label';

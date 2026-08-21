@@ -16,7 +16,7 @@
 // the defect itself so the others cannot pass vacuously.
 
 import { describe, expect, test } from 'bun:test';
-import { createTestSql } from '@kinu/test-utils';
+import { createTestSql } from '@kinu.run/test-utils';
 import {
   HeadController,
   HeadJournal,
@@ -25,7 +25,7 @@ import {
   type HeadReport,
   type HeadRuntime,
   type MergeOutput,
-} from '@kinu/core';
+} from '@kinu.run/core';
 
 const mergeOutput: MergeOutput = {
   narrative: 'merged',

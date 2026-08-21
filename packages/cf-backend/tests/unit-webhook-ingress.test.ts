@@ -6,7 +6,7 @@ import {
   normalizeWebhookRateLimitPerMin,
   tryConsumeWebhookRateLimit,
   type SqlExec,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import { sqlExec } from './helpers/user-do';
 
 function sqlFor(db: Database): SqlExec {

@@ -1,4 +1,4 @@
-import type { SessionSurface } from '@kinu/core';
+import type { SessionSurface } from '@kinu.run/core';
 import { requireAuthConfig } from './config';
 import type { AgentTarget } from './agent-target';
 import type { AgentClient } from './agent-client';

@@ -18,8 +18,8 @@ import {
   type LLMProviderConfig,
   type JsonObject,
   type ReasoningEffort,
-} from '@kinu/core';
-import { tolerate } from '@kinu/core/obs';
+} from '@kinu.run/core';
+import { tolerate } from '@kinu.run/core/obs';
 import {
   CLOUD_PROXY_PROVIDER_IDS,
   cloudProxyBaseURL,
@@ -31,7 +31,7 @@ import {
   type LocalCodexAuthStore,
   type LocalProviderCredentials,
   type McpServerConfig,
-} from '@kinu/cli-backend';
+} from '@kinu.run/cli-backend';
 import * as v from 'valibot';
 
 export const AGENT_HOME = kinuHome();

@@ -1,14 +1,14 @@
 import { existsSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
-import { runMCTS, DEFAULT_CONFIG, type MCTSProgressEvent, type SearchNode } from '@kinu/core';
-import type { AgentRuntime, SessionWriter, SessionMessage } from '@kinu/core';
-import { openWorkspaceCLI } from '@kinu/cli-backend';
+import { runMCTS, DEFAULT_CONFIG, type MCTSProgressEvent, type SearchNode } from '@kinu.run/core';
+import type { AgentRuntime, SessionWriter, SessionMessage } from '@kinu.run/core';
+import { openWorkspaceCLI } from '@kinu.run/cli-backend';
 import { CONFIG_PATH, agentDbPath, createCodexAuthStore, resolveAgentRef, resolveLLMConfig, resolveProviderCredentials } from '../config';
 import {
   printSearchTree, printError, createSpinner,
   BRAND, DIM, OK, WARN, ACCENT, MUTED,
 } from '../display';
-import { renderThrownChain } from '@kinu/core/obs';
+import { renderThrownChain } from '@kinu.run/core/obs';
 
 export async function evolveCommand(name: string, opts: {
   budget?: string; branches?: string; maxCost?: string; model?: string; baseUrl?: string; auth?: string;

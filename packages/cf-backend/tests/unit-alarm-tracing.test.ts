@@ -33,7 +33,7 @@ import {
   createAgentTracing, createRecordingTracer, KinuError, renderCauseChain,
   SPAN_ATTR_ERROR, SPAN_ATTR_INVOCATION, SPAN_ATTR_ISOLATE_GEN, SPAN_ATTR_SELF_PATH,
   type AgentTracing, type RecordingTracer, type SpanAttributeValue, type TracedInvocation,
-} from '@kinu/core/obs';
+} from '@kinu.run/core/obs';
 
 /** The four phases, in the order `_kinuTimerTick` runs them. Named here so a
  *  phase silently dropped from the method fails rather than shrinking the tree. */

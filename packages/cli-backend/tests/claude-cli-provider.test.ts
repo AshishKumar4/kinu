@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { asFetchFunction } from '@kinu/core';
+import { asFetchFunction } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
 import { generateText, streamText, stepCountIs, tool } from 'ai';
 import { z } from 'zod';
-import type { LLMProviderConfig } from '@kinu/core';
+import type { LLMProviderConfig } from '@kinu.run/core';
 import {
   createClaudeCliProvider,
   buildClaudePrompt,
@@ -14,7 +14,7 @@ import { createLocalModelResolver } from '../src/model-resolver';
 import { createCLIRuntime } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import type { LanguageModelV2, LanguageModelV2CallOptions, LanguageModelV2Usage } from '@ai-sdk/provider';
-import { scratchPath } from '@kinu/test-utils';
+import { scratchPath } from '@kinu.run/test-utils';
 
 // ─── stream-json fixtures (captured from the real `claude` binary) ───────────
 
