@@ -21,7 +21,7 @@
 
 <p align="center">
   <b>6</b> named searches &nbsp;·&nbsp; <b>8</b> built-in tools &nbsp;·&nbsp;
-  <b>2</b> backends, one core &nbsp;·&nbsp; <b>330</b> Lean theorems, <b>0</b> <code>sorry</code>
+  <b>2</b> backends, one core &nbsp;·&nbsp; <b>4</b> execution environments
 </p>
 
 <p align="center">
@@ -175,10 +175,6 @@ answer-augmented search.
 
 **Triggers.** A schedule, a webhook or an email reaches a workspace with nobody at
 the keyboard.
-
-**Formal models.** A Lean 4 corpus models selected core algorithms. Measured
-2026-08-19: 330 theorems and 43 requirements, with 0 `sorry`. CI checks the corpus on
-every push that touches `lean/` or a package source file.
 
 ## Models and providers
 

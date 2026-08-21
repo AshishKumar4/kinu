@@ -35,8 +35,8 @@ const STATS: ReadonlyArray<readonly [figure: string, label: string]> = [
 const TAGLINES = [
   'gets better every time it works',
   'searches a tree of agents when the task is hard',
-  'keeps every skill it earns',
-  'runs in your account and answers to you',
+  'remembers what worked',
+  'runs in your cloud, or on your machine',
 ] as const;
 
 /** § 02. One workspace, reached four ways. The claim the whole section makes
@@ -44,19 +44,19 @@ const TAGLINES = [
 const CLIENTS: ReadonlyArray<readonly [title: string, body: string]> = [
   [
     'The browser',
-    'kinu.run opens the workspace with its files, its sessions and every search it has run. The page you are reading is served by the same Worker that runs the agents.',
+    'kinu.run shows your workspaces: files, sessions, and every search they have run.',
   ],
   [
     'The terminal',
-    '<code>kinu chat</code> holds a conversation and <code>kinu run</code> fires one task. The CLI is a client like the others, not the product.',
+    '<code>kinu chat</code> opens a conversation. <code>kinu run</code> executes one task and exits, for scripts and CI.',
   ],
   [
     'Your editor',
-    '<code>kinu acp</code> speaks the Agent Client Protocol, so an ACP editor drives the same workspace agent from a panel.',
+    '<code>kinu acp</code> speaks the Agent Client Protocol, so editors like Zed can drive a workspace from a panel.',
   ],
   [
     'Email',
-    'A workspace has an address, and mail to it wakes the agent for a turn. The answer comes back as a real reply on the same thread. This deployment has not switched its mail route on yet.',
+    'Each workspace has an email address. Mail to it starts a turn, and the reply arrives on the same thread. Not yet enabled on kinu.run.',
   ],
 ];
 
@@ -66,23 +66,23 @@ const CLIENTS: ReadonlyArray<readonly [title: string, body: string]> = [
 const CLOCKS: ReadonlyArray<readonly [kicker: string, title: string, body: string]> = [
   [
     'Per step · every settled tool call',
-    'Tools earn their place',
-    'Inside one long run, a crafted tool is scored on whether it ran, with no model call. A tool that keeps raising drops out of the callable set within the same episode.',
+    'Tool fitness',
+    'Crafted tools are scored every time they run. Tools that keep failing drop out of the callable set mid-run.',
   ],
   [
     'Per turn · the next message',
-    'You are the grader',
-    'Your next message grades the turn. A negative one draws a reflection, and only a corroborated lesson lands in durable memory.',
+    'Turn review',
+    'Each turn is graded against your next message. A lesson persists only when later turns corroborate it.',
   ],
   [
     'Per session · every five turns',
-    'The loop may mutate',
-    'Patterns consolidate into reusable tools, and the scaffold, the agent\u2019s own loop, may be rewritten. Four structural gates and a shadow eval stand between a proposal and promotion.',
+    'Consolidation',
+    'Recurring patterns become reusable tools, and the agent can propose changes to its own loop. Proposals pass four structural gates and a shadow eval before they land.',
   ],
   [
     'Per lifetime · every five windows',
-    'The long game',
-    'Low-scoring tools retire on a time-decayed score. A replay eval measures loss against graded turns, and <code>kinu evolve</code> runs a tree search over the scaffold itself.',
+    'Retirement and search',
+    'Tool scores decay with time, and low scores retire the tool. <code>kinu evolve</code> searches over the loop itself, scored on graded turns.',
   ],
 ];
 
@@ -91,27 +91,27 @@ const CLOCKS: ReadonlyArray<readonly [kicker: string, title: string, body: strin
 const CAPABILITIES: ReadonlyArray<readonly [title: string, body: string]> = [
   [
     'Workspaces that keep working',
-    'A workspace holds its filesystem, sessions and history between turns. Work still running at 30 seconds detaches into a background job, and the agent wakes when the job settles.',
+    'Files, sessions, and history persist between turns. Work that outlives 30 seconds detaches into a background job, and the agent wakes when it settles.',
   ],
   [
-    'The same agent on your machine',
-    'The CLI runs the same core on bun:sqlite and real processes. Cloud and local drive one orchestrator, so the two cannot drift into two products.',
+    'Local mode',
+    'The CLI runs the same core on bun:sqlite and real processes. Cloud and local share one orchestrator.',
   ],
   [
     'One real filesystem',
-    'A durable POSIX filesystem, a real shell, about 95 coreutils, and language runtimes installed when the agent asks for them. The same component runs on Workers and on your laptop.',
+    'POSIX semantics, a real shell, about 95 coreutils, and language runtimes installed on demand. The same component runs on Workers and on your laptop.',
   ],
   [
     'Four executors',
-    'Work runs in the workspace, in a Linux container, on your own machine behind consent, or in the workspace a fork came from. Each executor\u2019s capabilities are rendered into the agent\u2019s prompt, so the model knows where to send a job.',
+    'Work runs in the workspace, in a Linux container, on your own machine behind consent, or in the workspace a fork came from. Each executor\u2019s capabilities are rendered into the agent\u2019s prompt.',
   ],
   [
-    'Web with zero keys',
-    'The web tool searches and fetches with no API key of its own. Add a Tavily key and search comes back ranked and answer-augmented.',
+    'Built-in web search',
+    'The web tool searches and fetches with no API key. Add a Tavily key for ranked, answer-augmented search.',
   ],
   [
-    'Formal models',
-    'A Lean 4 corpus models selected core algorithms. Measured 2026-08-19: 330 theorems, 0 sorry. CI re-checks the corpus on every push that touches them.',
+    'Headless and CI',
+    '<code>kinu run</code> never prompts, exits nonzero on failure, and streams line-delimited JSON. Scoped tokens limit CI to running tasks and reading state.',
   ],
 ];
 
@@ -154,7 +154,7 @@ export function landingDocument(install: string): string {
   const guideUrl = `${REPO_URL}/blob/main/docs/SELF-HOSTING.md`;
   return publicPage({
     title: 'Kinu.run — the self-evolving agent platform',
-    description: 'An agent of your own that gets better every time it works. When a task is hard it searches a tree of agents, measures every candidate the way you said, and keeps every skill it earns. Run it here, or deploy your own.',
+    description: 'Kinu is an open-source agent platform. Agents run in durable workspaces, improve with use, and search a tree of agents on hard tasks. Run it on kinu.run, or deploy your own.',
     styles: LANDING_CSS,
     nav: [
       `<a class="icon" href="${REPO_URL}" target="_blank" rel="noopener noreferrer" aria-label="Kinu on GitHub">${GITHUB_ICON}</a>`,
@@ -169,8 +169,8 @@ export function landingDocument(install: string): string {
       <h1 class="taglines" data-taglines>
         ${TAGLINES.map((line, at) => `<span${at === 0 ? ' data-shown' : ''}>An agent of your own that <em>${line}</em>.</span>`).join('\n        ')}
       </h1>
-      <p class="lede">Give it a task and a way to measure the answer. When the task is hard it runs a tree of agents, measures every candidate the way you said, and keeps the branch that measured best.</p>
-      <p class="lede">Agents live in durable workspaces. Run them in the cloud, or entirely on your own machine.</p>
+      <p class="lede">Give it a task and a way to measure the result. Kinu runs the work, scores each candidate with the measure you set, and keeps the best one.</p>
+      <p class="lede">Workspaces are durable: files, sessions, and memory persist between turns. Run them on Cloudflare or entirely on your own machine.</p>
       <div class="actions">
         <a class="btn solid" href="/login">Sign in</a>
         <a class="btn" href="#install" data-install-toggle aria-expanded="false">Install CLI</a>
@@ -190,7 +190,7 @@ export function landingDocument(install: string): string {
       <div class="anno ruled"><span>Search · UCT</span><span>${HERO_FACTS.rollouts} rollouts · depth ${HERO_FACTS.depth}</span></div>
       ${heroFigure()}
       <div class="anno ruled"><span>Fill · measured score</span><span>${HERO_FACTS.abandoned} branches abandoned</span></div>
-      <figcaption class="dim">Every node is an agent that ran the task its own way. Fill is the score it measured, from worst to best. The bright line is the branch the search kept spending on.</figcaption>
+      <figcaption class="dim">A recorded search. Each node is one agent’s attempt, shaded by its measured score; the bright path is the winning branch.</figcaption>
     </figure>
   </section>
 
@@ -221,23 +221,23 @@ export function landingDocument(install: string): string {
 
   <section class="section">
     <p class="label"><b>§ 02</b>One workspace, every client</p>
-    <h2 class="title">The workspace is the product. Everything else is a door into it.</h2>
-    <p class="lede">The same agent, the same files, the same sessions, whichever door you open.</p>
+    <h2 class="title">Work from the browser, the terminal, your editor, or email.</h2>
+    <p class="lede">Every client opens the same workspace, with the same files and history.</p>
     <div class="grid two">
       ${CLIENTS.map(([title, body]) => `<div class="cell"><h2>${title}</h2><p>${body}</p></div>`).join('\n      ')}
     </div>
-    <p class="dim foot">A schedule, a webhook and a finished background job come through the same door: each one is a turn, with nobody at the keyboard.</p>
+    <p class="dim foot">Schedules, webhooks, and finished background jobs start turns the same way.</p>
   </section>
 
   <section class="section">
     <p class="label"><b>§ 03</b>The tree of agents</p>
-    <h2 class="title">When the task is hard, it runs a search.</h2>
+    <h2 class="title">Run one task as a tree of agents.</h2>
     <div class="duo">
       <div>
-        <p class="lede">One tool action builds a tree whose nodes are whole agents. Each node runs the task its own way, in its own directory, with its own credential.</p>
-        <p class="body">You declare the measurement. An objective names the metric, the unit, the direction and the target, and it names the verifier that scores a candidate. A verifier is code. It runs in the workspace and reports a number, and that number picks the winner. A verifier nobody registered refuses the run instead of inventing a score.</p>
-        <p class="body">What a measured run reaches persists, so the next search of the same objective starts from the record instead of rediscovering it.</p>
-        <p class="dim">The tree at the top of this page is a real UCT search, grown in the order it was built. Nothing in it is hand-placed.</p>
+        <p class="lede">One tool call builds the tree. Each node is a whole agent that attempts the task its own way, in its own directory, with its own credential.</p>
+        <p class="body">You define the objective: a metric, a target, and the verifier code that measures a candidate. The verifier runs in the workspace, and its number picks the winner. Unregistered verifier names fail the run.</p>
+        <p class="body">Results persist per objective, so the next search starts from the record instead of from zero.</p>
+        <p class="dim">The tree in the header is a recorded search.</p>
       </div>
       ${specRows([
         ['One action', "<code>agents({action:'swarm'})</code>"],
@@ -252,12 +252,12 @@ export function landingDocument(install: string): string {
 
   <section class="section">
     <p class="label"><b>§ 04</b>Self-evolution</p>
-    <h2 class="title">Four clocks, one direction.</h2>
-    <p class="lede">Evolution runs on four timescales at once, and the shorter clocks feed the longer ones.</p>
+    <h2 class="title">Evolution on four timescales.</h2>
+    <p class="lede">The shorter clocks feed the longer ones.</p>
     <div class="grid two">
       ${CLOCKS.map(([kicker, title, body]) => `<div class="cell"><span class="num">${kicker}</span><h2>${title}</h2><p>${body}</p></div>`).join('\n      ')}
     </div>
-    <p class="dim foot">The step clock is bounded on purpose. Execution proves a tool ran, not that it was right, so that signal feeds tool injection and nothing wider. No scaffold, prompt or gate is ever promoted on it.</p>
+    <p class="dim foot">Execution evidence feeds tool selection only. Nothing wider is promoted on it.</p>
   </section>
 
   <section class="section">
@@ -269,8 +269,8 @@ export function landingDocument(install: string): string {
 
   <section class="section" id="deploy">
     <p class="label"><b>§ 06</b>Deploy your own</p>
-    <h2 class="title">Your own kinu, in your own account.</h2>
-    <p class="lede">kinu.run is one deployment of an MIT-licensed repository. Deploy the same Worker in your own Cloudflare account, and your agents, their files and their model spend answer to you.</p>
+    <h2 class="title">The same Worker, in your Cloudflare account.</h2>
+    <p class="lede">kinu.run runs the open-source Worker from this repository. Deploy it yourself, and your agents, files, and model spend stay in your account.</p>
     <div class="actions">
       <a class="btn solid" href="${deployUrl}" target="_blank" rel="noopener noreferrer">Deploy to Cloudflare</a>
       <a class="btn" href="${guideUrl}" target="_blank" rel="noopener noreferrer">Read the self-hosting guide</a>
@@ -278,15 +278,15 @@ export function landingDocument(install: string): string {
     <div class="grid three">
       ${DEPLOY_STEPS.map(([num, title, body, id, cmd]) => `<div class="cell"><span class="num">${num}</span><h2>${title}</h2><p>${body}</p><div class="cmd"><code id="${id}">${cmd}</code><button class="copy" type="button" data-copy="${id}">Copy</button></div></div>`).join('\n      ')}
     </div>
-    <p class="dim foot">The button forks the repository into your account and starts a build. It cannot buy the plan, hold a zone, mint the root secret or register the OAuth applications sign-in needs, so it is step zero, not the whole story. The guide says what works today and what still takes an owner at a dashboard.</p>
+    <p class="dim foot">The button forks the repository and starts a build. The plan, the zone, the root secret, and the OAuth apps are manual steps; the guide covers each one.</p>
   </section>
 
   <section class="section">
     <p class="label"><b>§ 07</b>Open source</p>
     <div class="duo">
       <div>
-        <h2 class="title">Every claim on this page is a line in the repo.</h2>
-        <p class="body">The clients, the search, the four clocks and this landing page live in one MIT-licensed repository. The numbers under the headline are counted from that code, and the numbers beside the tree are taken from the tree it draws, so the caption cannot claim a search the picture does not show.</p>
+        <h2 class="title">One MIT-licensed repository.</h2>
+        <p class="body">The agent, both backends, the CLI, and this site are in one repository.</p>
         <div class="actions">
           <a class="btn" href="${REPO_URL}" target="_blank" rel="noopener noreferrer">${GITHUB_ICON}Read the source</a>
         </div>
@@ -294,7 +294,7 @@ export function landingDocument(install: string): string {
       ${specRows([
         ['Licence', 'MIT'],
         ['Source', 'github.com/AshishKumar4/kinu'],
-        ['Formal models', '330 Lean theorems · 0 <code>sorry</code>'],
+        ['Backends', 'Cloudflare Workers · POSIX'],
         ['Docs', 'architecture · exploration · evolution · deployment'],
       ])}
     </div>
