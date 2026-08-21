@@ -17,6 +17,7 @@ import { Database } from 'bun:sqlite';
 import { HeadJournal, initHeadsTables } from '../src/heads/index';
 import {
   reconcileInterruptedForks, FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
+  RUN_INTERRUPTED_REASON,
 } from '../src/heads/reconcile';
 import { RunEventRecorder, initRunEventTables } from '../src/events/recorder';
 import { headPhaseRunEvent } from '../src/orchestrator/heads-support';
@@ -219,6 +220,70 @@ describe('an operator-cancelled fork is not reported as running', () => {
     // The journal is still settled — the ledger is an additional record, never
     // a precondition for retiring a stale head.
     expect(w.journal.listLive()).toEqual([]);
+  });
+
+  /**
+   * A KILLED TURN LEAVES ITS RUN OPEN, and that is the durable face of the
+   * owner's "why will it not give up its turn".
+   *
+   * A run is closed by `closeTurnRun`, which runs in the turn's own frame. Nothing
+   * writes a terminal row when the platform destroys that frame, so the ledger
+   * cannot tell a turn that is running from one that was killed. Measured on the
+   * owner's workspace: six `run_start` rows against three `run_end`, and the
+   * missing ones include the turn that dispatched the search.
+   *
+   * Same start-of-life argument as the journal: this activation is executing none
+   * of these, so each was left by an earlier one.
+   */
+  test('a run a dead activation left open is closed, and a live one is not touched', async () => {
+    const w = workspace();
+    initRunEventTables(makeExecRaw(w.db));
+    const recorder = new RunEventRecorder(makeSql(w.db));
+
+    // The turn that dispatched the fork, cut before it could close itself.
+    recorder.emit(RUN, { type: 'run_start', agentId: 'a' });
+    recorder.emit(RUN, headPhaseRunEvent({
+      kind: 'split', rootId: ROOT, headIds: ['h1', 'h2', 'h3', 'h4'], rationale: RATIONALE,
+    }));
+    // A turn that DID close itself, on the same ledger — the control that makes
+    // the assertion below attributable to being open rather than to being old.
+    recorder.emit('run-that-finished', { type: 'run_start', agentId: 'a' });
+    recorder.emit('run-that-finished', { type: 'run_end', reason: 'complete' });
+
+    await reconcileInterruptedForks({
+      journal: w.journal, signals: idleAgent().signals, runEvents: recorder,
+    });
+
+    const cut = recorder.read(RUN);
+    expect(cut.filter((event) => event.type === 'run_end')).toMatchObject([
+      { type: 'run_end', reason: RUN_INTERRUPTED_REASON },
+    ]);
+    // The reason is not a mechanism. This ledger cannot distinguish an eviction
+    // from a process exit from a crash, and writing a guess into durable history
+    // is what the fork journal's own reason was rewritten to stop doing.
+    expect(RUN_INTERRUPTED_REASON).not.toContain('evict');
+
+    // The closed run keeps its own terminal row, and gains no second one.
+    expect(recorder.read('run-that-finished').map((event) => event.type))
+      .toEqual(['run_start', 'run_end']);
+  });
+
+  test('a second activation closes nothing again', async () => {
+    const w = workspace();
+    initRunEventTables(makeExecRaw(w.db));
+    const recorder = new RunEventRecorder(makeSql(w.db));
+    recorder.emit(RUN, { type: 'run_start', agentId: 'a' });
+
+    await reconcileInterruptedForks({
+      journal: w.journal, signals: idleAgent().signals, runEvents: recorder,
+    });
+    await reconcileInterruptedForks({
+      journal: w.journal, signals: idleAgent().signals, runEvents: recorder,
+    });
+
+    // Idempotent, because a closed run is no longer open. A second terminal row
+    // would make every duration query double-count the wake.
+    expect(recorder.read(RUN).filter((event) => event.type === 'run_end')).toHaveLength(1);
   });
 
   test('a clean start reconciles nothing and wakes nobody', async () => {

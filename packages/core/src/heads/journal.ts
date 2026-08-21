@@ -175,78 +175,137 @@ export class HeadJournal {
   }
 
   /**
-   * Settle heads still marked `running` as `aborted` — the second and last
-   * terminal writer of `head_journal.status`, and the reconciliation both
-   * backends run once at start of life.
+   * Mark heads still claiming to execute as `interrupted` — the FIRST half of a
+   * cold activation's reconciliation, and a non-terminal state.
    *
-   * `running` means "spawned, and no report recorded". Nothing keeps a head
-   * alive across a process exit or a DO eviction, and an operator cancel
-   * settles the fork's background job without the controller ever reaching
-   * {@link recordReport} — so at the start of an activation that predicate is
-   * false for every row still carrying it, whatever became of the executor.
-   * Left alone the row is PERMANENT, and its root then satisfies
+   * `running` means "spawned, and no report recorded". Nothing keeps a head alive
+   * across a process exit or a DO eviction, so at the start of an activation that
+   * predicate is false for every row still carrying it, whatever became of the
+   * executor. Left alone the row is PERMANENT, and its root then satisfies
    * {@link listLive}'s running-head predicate forever, asserting the fork is in
    * flight into every model step for the life of the workspace. That is what it
-   * did: `background_jobs` read `cancelled by operator` while the
-   * dynamic-context block kept rendering "4 of 4 heads running".
+   * did: `background_jobs` read `cancelled by operator` while the dynamic-context
+   * block kept rendering "4 of 4 heads running".
    *
-   * `scope` narrows it, and both narrowings are load-bearing.
+   * WHY THIS IS NOT THE RETIREMENT. Curing that lie and DISCARDING the run are two
+   * different acts, and doing them in one write is what cost the owner a search:
+   * five heads were retired with "nothing left that could run it" while the durable
+   * job that could re-enter them was still re-drivable. `interrupted` says exactly
+   * what is known at this instant — the executor is gone, the outcome is not — so
+   * the roster stops claiming the work is live while the run stays re-enterable.
+   * {@link abandonRunning} is the terminal half, and it runs only for a run the
+   * resume gate refused.
    *
-   * `rootId` narrows to one run, for the re-drive that reclaims that run's
-   * identity: same transition, same `error_message` column, so a reclaim does
-   * not get a second writer of the status this bug was caused by having only
-   * one of. Omitted, it sweeps every run.
+   * `spawnedBefore` bounds it to rows an EARLIER activation spawned, so a head this
+   * activation has already started is outside it whichever order the two run in.
    *
-   * `spawnedBefore` is THE ORDERING RULE between this reconciliation and a
-   * resume, and it is a bound on the WRITE rather than an order on the calls.
-   * The claim above — "at the start of an activation every `running` row is
-   * stale" — is only true of rows spawned by an EARLIER activation, and a
-   * resume spawns heads of its own: a swarm re-entering its interrupted tree
-   * (`strategy/swarm-resume.ts`) re-expands the nodes this transition just
-   * retired, and a fork re-drive spawns a fresh set under the reclaimed root.
-   * Sweeping those would mark live work `aborted` and tell the agent, over the
-   * one signal seam, that work still running had been retired. The two cannot
-   * be ordered from here — the CLI awaits reconciliation before recovery
-   * (`local-session.ts`), while a Durable Object's `onStart` and
-   * `onFiberRecovered` are both dispatched by the SDK and their order is not
-   * ours — so the predicate carries the activation's own start instead, and
-   * holds whichever runs first. Omitted, it sweeps regardless of spawn time,
-   * which is what a `rootId`-scoped reclaim wants: it is retiring exactly the
-   * attempt it is taking over.
+   * Returns the runs it touched, so the caller can hand their roots to the resume
+   * gate. Empty on a clean start, which is the common case.
+   */
+  markInterrupted(
+    scope?: { readonly spawnedBefore?: number },
+    now = Date.now(),
+  ): AbandonedHeadRun[] {
+    const before = scope?.spawnedBefore ?? null;
+    const runs = this.unfinishedRuns(null, null, before);
+    if (runs.length === 0) return [];
+    // No `error_message`: nothing has failed. The column is the retirement's, and
+    // writing a reason here is how a reader would come to believe the run ended.
+    void this.sql`UPDATE head_journal
+      SET status = 'interrupted', completed_at = ${now}
+      WHERE status = 'running' AND (${before} IS NULL OR spawned_at < ${before})`;
+    return runs;
+  }
+
+  /**
+   * Settle heads that are not going to report as `aborted` — the last terminal
+   * writer of `head_journal.status`.
+   *
+   * TWO CALLERS, one meaning: this run is over and nothing will continue it.
+   * The reconciliation calls it for a run the resume gate REFUSED, and a re-entry
+   * calls it `rootId`-scoped for the attempt it is taking over. Same transition and
+   * the same `error_message` column for both, so a reclaim does not become a second
+   * writer of the status this bug was caused by having only one of.
+   *
+   * The predicate covers `interrupted` as well as `running`, because
+   * {@link markInterrupted} runs first on every cold activation: a retirement that
+   * only looked at `running` would find nothing exactly when it is needed.
+   *
+   * `scope` narrows it, and all three narrowings are load-bearing.
+   *
+   * `rootId` narrows to one run — the re-entry's own scoping. Omitted, it sweeps
+   * every run.
+   *
+   * `exceptRoots` spares the runs the resume gate CLAIMED. Those are being
+   * continued, and telling the agent they were retired is both false and expensive:
+   * it is what sent the owner's agent off to re-fork a search that was running.
+   *
+   * `spawnedBefore` bounds the write to rows an earlier activation spawned, so a
+   * re-entry's own fresh heads are never retired by a sweep running beside it.
+   * Omitted, it sweeps regardless of spawn time, which is what a `rootId`-scoped
+   * reclaim wants: it is retiring exactly the attempt it is taking over.
    *
    * Returns the runs it settled so the caller can tell the agent — a fork
-   * disappearing from the roster is not the same as the agent learning it is
-   * gone. Empty on a clean start, which is the common case.
+   * disappearing from the roster is not the same as the agent learning it is gone.
    */
   abandonRunning(
     reason: string,
-    scope?: { readonly rootId?: HeadId; readonly spawnedBefore?: number },
+    scope?: {
+      readonly rootId?: HeadId;
+      readonly spawnedBefore?: number;
+      readonly exceptRoots?: readonly HeadId[];
+    },
     now = Date.now(),
   ): AbandonedHeadRun[] {
     const root = scope?.rootId ?? null;
     const before = scope?.spawnedBefore ?? null;
-    const runs = this.sql<{ root_id: string; rationale: string | null; abandoned: number; total: number }>`
+    const spared = new Set(scope?.exceptRoots ?? []);
+    // Filtered here rather than in the predicate: this executor binds one value per
+    // interpolation, so a set cannot cross into SQL without hand-built placeholders.
+    const runs = this.unfinishedRuns('interrupted', root, before)
+      .filter((run) => !spared.has(run.rootId));
+    // One write per run, for the same reason — and the retiring set is the runs
+    // just read, so the rows a caller is told about are exactly the rows written.
+    for (const run of runs) {
+      void this.sql`UPDATE head_journal
+        SET status = 'aborted', completed_at = ${now}, error_message = ${reason}
+        WHERE root_id = ${run.rootId}
+          AND (status = 'running' OR status = 'interrupted')
+          AND (${before} IS NULL OR spawned_at < ${before})`;
+    }
+    return runs;
+  }
+
+  /**
+   * Runs holding a head that has not reported, with the count this scope covers.
+   *
+   * ONE query for both transitions above, so the rows a caller is told about and
+   * the rows the following write touches cannot come to disagree about a scope.
+   * `alsoState` admits a second unfinished status beside `running` — null admits
+   * none, because null equals nothing in SQL.
+   */
+  private unfinishedRuns(
+    alsoState: string | null,
+    root: HeadId | null,
+    before: number | null,
+  ): AbandonedHeadRun[] {
+    return this.sql<{ root_id: string; rationale: string | null; abandoned: number; total: number }>`
       SELECT j.root_id AS root_id,
              MAX(r.rationale) AS rationale,
-             SUM(CASE WHEN j.status = 'running'
+             SUM(CASE WHEN (j.status = 'running' OR j.status = ${alsoState})
                        AND (${before} IS NULL OR j.spawned_at < ${before})
                       THEN 1 ELSE 0 END) AS abandoned,
              COUNT(*) AS total
       FROM head_journal j LEFT JOIN head_runs r ON r.root_id = j.root_id
       WHERE ${root} IS NULL OR j.root_id = ${root}
       GROUP BY j.root_id HAVING abandoned > 0
-      ORDER BY MIN(j.spawned_at) DESC`;
-    if (runs.length === 0) return [];
-    void this.sql`UPDATE head_journal
-      SET status = 'aborted', completed_at = ${now}, error_message = ${reason}
-      WHERE status = 'running' AND (${root} IS NULL OR root_id = ${root})
-        AND (${before} IS NULL OR spawned_at < ${before})`;
-    return runs.map((row) => ({
-      rootId: row.root_id,
-      rationale: row.rationale ?? '',
-      abandoned: row.abandoned,
-      total: row.total,
-    }));
+      ORDER BY MIN(j.spawned_at) DESC`
+      .map((row) => ({
+        rootId: row.root_id,
+        rationale: row.rationale ?? '',
+        abandoned: row.abandoned,
+        total: row.total,
+      }));
   }
 
   /**

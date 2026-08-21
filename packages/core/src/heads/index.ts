@@ -41,7 +41,7 @@ export {
 } from './journal';
 export { LiveHeadJournal, type AnnounceHeadActivity } from './live-journal';
 export {
-  reconcileInterruptedForks, forkInterruptedWake,
+  reconcileInterruptedForks, forkInterruptedWake, jobRedriveResumeGate, resumableForkRoots, RUN_INTERRUPTED_REASON,
   FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
   type RunEventLedger,
 } from './reconcile';

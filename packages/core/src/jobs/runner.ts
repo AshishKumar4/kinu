@@ -521,11 +521,15 @@ export class BackgroundJobRunner {
   /** Recover an orphaned job after its fiber was evicted mid-flight (called from
    *  the backend's onFiberRecovered for bg:* fibers). The fiber row carries one
    *  fact the registry does not — that this job's executor is dead — which is
-   *  what lets a job that already settled get its lost wake re-delivered. */
-  async recover<T>(snapshot: T): Promise<void> {
+   *  what lets a job that already settled get its lost wake re-delivered.
+   *
+   *  Returns the job if this call RE-DROVE it, so a caller can tell what durable
+   *  work is now in flight. Null covers every other outcome: already driven here,
+   *  already settled, cancelled, or refused. */
+  async recover<T>(snapshot: T): Promise<BackgroundJob | null> {
     const parsed = v.safeParse(v.object({ jobId: v.string(), phase: v.literal('running') }), snapshot);
-    if (!parsed.success) return;
-    await this.recoverJob(parsed.output.jobId);
+    if (!parsed.success) return null;
+    return await this.recoverJob(parsed.output.jobId);
   }
 
   /**
@@ -544,9 +548,27 @@ export class BackgroundJobRunner {
    *
    * Every recovery here goes through the same reclaim, so MAX_RESUME_ATTEMPTS
    * bounds it: at most that many re-drives, then a terminal `failed`.
+   *
+   * Returns every job that is IN FLIGHT when it returns — the ones it re-drove
+   * plus the ones this runner was already driving. That is what makes the sweep
+   * usable as a resume gate by a caller reconciling other durable state: it can
+   * tell which of that state is being continued and which nothing will ever pick
+   * up again, and a refused job is absent, so refusal is a fact rather than a
+   * timeout.
+   *
+   * ALREADY-DRIVING COUNTS AS IN FLIGHT, and the distinction is load-bearing.
+   * `recoverJob` declines a job this runner already holds, because re-driving one
+   * twice would reclaim it out from under the executor making progress on it —
+   * but to a resume gate "another entry point started it a moment ago" and
+   * "nothing will ever run this" are opposite answers. Both entry points can name
+   * the same job in one activation, so reading the decline as a refusal would
+   * retire a fork whose job had just been re-driven by the fiber callback.
    */
-  async recoverOrphans(): Promise<void> {
+  async recoverOrphans(): Promise<readonly BackgroundJob[]> {
     for (const jobId of this.deps.store.runningIds()) await this.recoverJob(jobId);
+    return [...this.controllers.keys()]
+      .map((jobId) => this.deps.store.get(jobId))
+      .filter((job): job is BackgroundJob => job !== null && job !== undefined);
   }
 
   /**
@@ -567,17 +589,17 @@ export class BackgroundJobRunner {
    * names every running row besides — and re-driving one twice would reclaim it
    * out from under the executor that is making progress on it.
    */
-  private async recoverJob(jobId: string): Promise<void> {
-    if (this.controllers.has(jobId)) return;
+  private async recoverJob(jobId: string): Promise<BackgroundJob | null> {
+    if (this.controllers.has(jobId)) return null;
     const job = this.deps.store.get(jobId);
-    if (!job || job.status === 'cancelled') return;
+    if (!job || job.status === 'cancelled') return null;
     // Outcome already persisted before the settle checkpoint landed → just deliver
     // the wake that the dead fiber never reached.
-    if (job.status !== 'running') { await this.wake(jobId); return; }
+    if (job.status !== 'running') { await this.wake(jobId); return null; }
 
     if (this.deps.resume) {
       const claim = this.deps.store.reclaim(jobId);
-      if (!claim) return; // lost the race — another activation already reclaimed it
+      if (!claim) return null; // lost the race — another activation already reclaimed it
       if (claim.attempts > MAX_RESUME_ATTEMPTS) {
         this.deps.store.fail(
           jobId, claim.epoch,
@@ -586,11 +608,11 @@ export class BackgroundJobRunner {
         );
         this.notifySettled(jobId);
         await this.wake(jobId);
-        return;
+        return null;
       }
       this.deps.logActivity?.('bg_job_resume', `${job.kind} → ${jobId} (attempt ${claim.attempts}, epoch ${claim.epoch})`);
       this.driveResume(job);
-      return;
+      return job;
     }
 
     // No resumer: fail the orphan with the eviction message (fencing the write on
@@ -598,6 +620,7 @@ export class BackgroundJobRunner {
     this.deps.store.fail(jobId, job.epoch, EVICTION_INTERRUPT_ERROR, Date.now());
     this.notifySettled(jobId);
     await this.wake(jobId);
+    return null;
   }
 
   /** Re-drive a reclaimed job from its durable checkpoint in a fresh durable
