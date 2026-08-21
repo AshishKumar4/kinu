@@ -29,6 +29,7 @@
   "docs/REQUESTS-LEDGER.md: path docs/TRACEABILITY.md",
   "docs/STORAGE.md: symbol SqliteFS",
   "docs/TESTING.md: symbol SqliteFS",
+  "docs/TOOLS.md: path scaffold/agent.js",
   "docs/TOOLS.md: symbol InlineExecutor",
   "docs/TOOLS.md: symbol craftedToolSet"
 ]
