@@ -1,8 +1,8 @@
 diff --git a/packages/core/src/prompt.ts b/packages/core/src/prompt.ts
-index 77a8b66..3aacd19 100644
+index 468a2a21..d341dfcf 100644
 --- a/packages/core/src/prompt.ts
 +++ b/packages/core/src/prompt.ts
-@@ -183,7 +183,7 @@ function renderOfflineLaptopLine(): string {
+@@ -185,7 +185,7 @@ function renderExecutorLine(
  
  function offlineLaptop(executors: readonly PromptExecutorInfo[]): PromptExecutorInfo | undefined {
    return executors.find((exec) =>
@@ -10,4 +10,4 @@ index 77a8b66..3aacd19 100644
 +    exec.name === 'laptop' && exec.configured === true && executorIsSelectable(exec));
  }
  
- function renderExecutorSection(surface: PromptSurface): string {
+ function renderExecutorSection(surface: PromptSurface, render: RenderSection): string {
