@@ -244,7 +244,7 @@ export function landingDocument(install: string): string {
         ['Axes', 'unit · context · expand · score · advance · carry'],
         ['Presets', 'ideate · optimise · prove · custom'],
         ['Depth', 'ideate 1 · optimise 5 · prove 7'],
-        ['Score', 'your verifier, or a judge ensemble'],
+        ['Score', 'a code verifier, or a judge ensemble'],
         ['Records', '<code>exploration_records</code>, per objective'],
       ])}
     </div>
