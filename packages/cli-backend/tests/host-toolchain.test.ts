@@ -10,7 +10,7 @@ import { renderDynamicContextBlock } from '@kinu.run/core';
 import { hostToolchainCapabilities, HOST_UNMEASURED_CAPABILITIES } from '../src/host-toolchain';
 
 const STRUCTURAL_ONLY =
-  '- laptop: connected — runs: native_binary, shell, fs_shared, net_outbound, process_spawn';
+  '- laptop: connected — files at /pc — runs: native_binary, shell, fs_shared, net_outbound, process_spawn';
 /** What no PATH lookup settles. Declared rather than omitted: an omission reads
  *  to the model exactly like a measured absence. */
 const NOT_MEASURED = ' — not measured here: docker, gpu';

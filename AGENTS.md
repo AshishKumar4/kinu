@@ -256,8 +256,14 @@ Each environment is a codemode `ExecutorProvider` with namespace.* APIs.
 `workspace` is the one authoritative file and execution plane: on the hosted
 backend it is the workspace's `NIMBUS_SESSION`, and on the CLI it is the local
 workspace. Optional sandbox and laptop rows are genuinely different machines
-with their own native paths. There is no mount table and no second Nimbus
-executor or filesystem.
+with their own native paths. The workspace plane carries a MOUNT TABLE
+(`core/src/vfs/mounts.ts`): a live device's files appear at `/pc`, a bound
+container's at `/sandbox`, served through the owning executor's own `files`
+VFS with every boundary it enforces (device consent) intact. The mount table
+extends the one view; there is no second Nimbus executor or filesystem, and no
+copy of workspace bytes behind a mount point. The workspace shell does not see
+mount points — commands reach other machines only through their namespaces.
+Memory indexing and fork snapshots address the base tree alone.
 
 | Executor   | Namespace  | Binding Required          | Capabilities                |
 |-----------|------------|---------------------------|-----------------------------|

@@ -3,9 +3,11 @@
  *
  * Each executor carries its OWN file view over its OWN raw handle
  * (`ExecutorProvider.files`), in that environment's native paths: the workspace
- * is Nimbus, the sandbox is its container, `laptop` is the user's machine. They
- * are separate filesystems and are addressed as such — there is no mount table
- * and no rewriting of one environment's paths into another's namespace.
+ * is Nimbus, the sandbox is its container, `laptop` is the user's machine. The
+ * browser shows them one row at a time, never merged. (The AGENT-facing merge
+ * is the workspace plane's mount table, `vfs/mounts.ts` — a different surface
+ * with a different reader; nothing here rewrites one environment's paths into
+ * another's namespace.)
  *
  * Errors are values here, not throws: a browser asking for a path on an offline
  * environment wants the reason rendered in the pane, not a failed RPC.

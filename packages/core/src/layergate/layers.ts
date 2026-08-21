@@ -24,6 +24,7 @@ import type { CraftLedger } from '../craft/in-episode';
 import { TurnContextBudget } from '../context-budget';
 import { TurnFileLedger } from '../tools/file-ledger';
 import { BUILTIN_TOOLS, BUILTIN_TOOL_SPECS } from '../tools/registry';
+import { isVfsError } from '../vfs/errno';
 import { DEFAULT_SHADOW_CONFIG } from '../scaffold/shadow';
 import { createNoopVectorStore, type VectorSearchHit, type VectorStore } from '../memory/vector-store';
 import type { BackendHost } from '../types/backend-host';
@@ -1237,8 +1238,9 @@ export const LAYERS: readonly Layer[] = Object.freeze([
   {
     id: 'file-plane',
     owns: 'the exact-match file editor and the honest read behind the `file` tool (core tools/file-edit.ts) — ' +
-      'an edit lands exactly once or not at all, and no read is ever clipped without saying how to continue it',
-    subjects: ['applyFileEdits', 'readFileSlice'],
+      'an edit lands exactly once or not at all, and no read is ever clipped without saying how to continue it; ' +
+      'and the mount table that extends that one plane with /pc and /sandbox (vfs/mounts.ts)',
+    subjects: ['applyFileEdits', 'readFileSlice', 'withMountTable'],
     probes: [
       {
         id: 'file-plane/anchor-must-be-unique',
@@ -1287,6 +1289,45 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             ['trailing-newline', s.readFileSlice('a\nb\n', { path: '/f', limit: 2, maxChars: 1000 })],
             ['empty-file', s.readFileSlice('', { path: '/f', maxChars: 1000 })],
             ['sub-line-limit', s.readFileSlice(file, { path: '/f', limit: 0.5, maxChars: 1000 })],
+          ];
+        },
+      },
+      {
+        id: 'file-plane/mount-routes-to-the-owning-machine',
+        asserts: 'a live mount serves its machine\'s entries through the one plane; an absent mount refuses with its stated absence; the workspace tree stays canonical',
+        observe: async (s) => {
+          const tree = (files: Record<string, string>) => {
+            const byPath = new Map(Object.entries(files));
+            return {
+              readFile: async (path: string) => {
+                const content = byPath.get(path);
+                if (content === undefined) throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+                return content;
+              },
+              writeFile: async () => {},
+              readdir: async (path: string) => [...byPath.keys()].filter((k) => k.startsWith(`${path}/`)).map((k) => k.slice(path.length + 1)),
+              stat: async (path: string) => (byPath.has(path) ? { size: 0, mtimeMs: 0, isDir: false } : null),
+              unlink: async () => {},
+              mkdir: async () => {},
+              exists: async (path: string) => byPath.has(path),
+            };
+          };
+          const mounted = s.withMountTable(tree({ '/notes.md': 'workspace' }), [
+            { name: 'pc', files: () => tree({ '/home/dev/a.txt': 'from the device' }), absentReason: () => 'no device connected' },
+            { name: 'sandbox', files: () => null, absentReason: () => 'no Sandbox container bound' },
+          ]);
+          let absentReaddir = 'served an absent mount';
+          try { await mounted.readdir('/sandbox'); } catch (caught) {
+            absentReaddir = isVfsError(caught)
+              ? `${caught.code}: ${caught.message}`
+              : `unclassified: ${String(caught)}`;
+          }
+          return [
+            ['mounted-read', await mounted.readFile('/pc/home/dev/a.txt', { encoding: 'utf8' })],
+            ['root-listing', await mounted.readdir('/')],
+            ['absent-readdir', absentReaddir],
+            ['absent-exists', await mounted.exists('/sandbox/x')],
+            ['foreign-path-stays-base', await mounted.exists('/etc/foreign')],
           ];
         },
       },

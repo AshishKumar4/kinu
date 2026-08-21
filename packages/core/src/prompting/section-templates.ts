@@ -143,16 +143,19 @@ export const GENERIC_EXECUTOR_LINE = definePromptSection(
  * context message (prompting/volatile-context.ts), never in this cacheable
  * prefix, so a sandbox waking up doesn't re-prefill the whole conversation.
  *
- * No backend conditional on the separate-filesystems line: the workspace
+ * No backend conditional on the separate-machines line: the workspace
  * filesystem is the same durable component everywhere, and every other runtime
  * is a different machine. That used to be untrue on cli-local, where the
  * workspace and laptop executors shared one host shell, and the prompt had to
  * carry the exception.
  *
- * The file doctrine that follows says every environment is its own filesystem
- * addressed in its own native paths — there is no mount table and no path that
- * means two places. The workspace's filesystem is the one the file tools
- * address, and the workspace shell is a real shell over exactly those bytes.
+ * The file doctrine states the mount table: a live environment's files appear
+ * in the agent's own plane under its mount point (`/pc`, `/sandbox` —
+ * vfs/mounts.ts), where the `file` tool and `workspace.*` reach them directly.
+ * Which mounts are live RIGHT NOW is volatile state; it renders on the
+ * executor rows in the dynamic-context block, never here. The workspace shell
+ * stays a shell over workspace bytes only — commands do not see mount points,
+ * and that limit is stated so the model routes commands by namespace.
  *
  * The approvals doctrine is stated ONCE, and only on turns that have a shell. A
  * parked tool result used to repeat all of it on every call (222 tokens each);
@@ -169,10 +172,10 @@ Choose the runtime that matches the task; keep reads/writes in the same runtime 
 
 {{executorLines}}{{#if manyRuntimes}}
 
-These runtimes have separate filesystems. Use the same runtime to read back files you wrote.{{/if}}
+These runtimes are separate machines. Run each machine's commands through its own namespace. A live machine's files also appear in your own file plane under a mount point — the user's device at \`/pc\`, a bound container at \`/sandbox\` — where the \`file\` tool and \`workspace.*\` reach them directly. Your workspace shell sees only your own tree; it cannot see mount points.{{/if}}
 
 Your own workspace is a durable POSIX filesystem at {{workspaceRoot}}, and the \`workspace\` runtime is a real shell over it — the same bytes the \`file\` tool and \`workspace.*\` file ops read, by the same paths. Relative paths resolve there; \`cd\` persists between commands.{{#if hasDevices}}
-The other environments above are SEPARATE machines with separate filesystems, reached only through their own namespaces ({{deviceNamespaces}}) in THEIR native paths. To move a file between two of them, read it from one and write it to the other.{{/if}}{{#if hasPreview}}
+The environments above are separate machines. Their commands run only through their own namespaces ({{deviceNamespaces}}), in paths native to each machine. Under the mount point those native paths appear whole: \`/pc/home/user/file\` on the device is the device's own \`/home/user/file\`. To move a file between two machines, read it from one and write it to the other.{{/if}}{{#if hasPreview}}
 
 ### Showing a running app
 For a user-visible web app, keep its files and server in one preview-capable environment, start the server bound to 0.0.0.0 in the background, wait for it to bind, then call {{exposeCalls}} for the environment you chose. If exposePort fails, inspect that environment's server log and retry after the server is actually listening.{{/if}}

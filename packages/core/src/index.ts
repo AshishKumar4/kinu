@@ -905,6 +905,10 @@ export {
   type VfsError, type VfsErrorCode,
 } from './vfs/errno';
 export { observeWrites, type WriteEvent, type WriteObserver } from './vfs/observe';
+export {
+  withMountTable, standardMounts, EXECUTOR_MOUNTS,
+  type VfsMount, type MountableProvider,
+} from './vfs/mounts';
 
 // File checkpoints — the shadow-git snapshot seam (backends implement it)
 export {

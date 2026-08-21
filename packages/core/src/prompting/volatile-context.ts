@@ -47,6 +47,7 @@ import type { ModelMessage } from 'ai';
 import { DYNAMIC_CONTEXT_OPEN_TAG } from './sections';
 import { executorIsSelectable, type PromptExecutorInfo } from './surface';
 import { EXECUTOR_CAPABILITIES } from '../execution/types';
+import { EXECUTOR_MOUNTS } from '../vfs/mounts';
 import type { ActiveSkillSet, ActivationReason } from '../skills/types';
 
 /** Detached work the agent started and has not collected yet — one row of the
@@ -292,6 +293,20 @@ function executorCapabilitySuffix(exec: PromptExecutorInfo): string {
   const ordered = EXECUTOR_CAPABILITIES.filter((capability) => declared.has(capability));
   return ordered.length > 0 ? ` — runs: ${ordered.join(', ')}` : '';
 }
+/**
+ * The mount point this executor's files are served at inside the agent's own
+ * file plane, when the plane mounts that environment (`/pc`, `/sandbox` —
+ * vfs/mounts.ts). Rendered only on selectable rows, which are exactly the
+ * rows whose environment is live, so the suffix never promises a mount that
+ * is not there.
+ */
+function executorMountSuffix(exec: PromptExecutorInfo): string {
+	// Widened READ view only: an executor name outside the table simply has no
+	// mount, and the record shape keeps that lookup total.
+	const byName: Record<string, string | undefined> = EXECUTOR_MOUNTS;
+	const mount = byName[exec.name];
+	return mount ? ` — files at ${mount}` : '';
+}
 
 /** The row's marker and the legend's subject are the same words by
  *  construction — a legend that stops naming what it explains explains
@@ -403,7 +418,7 @@ export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
   const executors = (ctx.executors ?? []).filter(executorIsSelectable);
   if (executors.length > 0) {
     const rows = executors.map((exec) =>
-      `- ${exec.name}: ${executorAvailabilityLabel(exec)}${executorLimitsSuffix(exec)}`
+      `- ${exec.name}: ${executorAvailabilityLabel(exec)}${executorMountSuffix(exec)}${executorLimitsSuffix(exec)}`
       + `${executorCapabilitySuffix(exec)}${executorUnmeasuredSuffix(exec)}`);
     // The legend rides along only when a row actually carries an unknown, so
     // the common case pays nothing for it — and where it does appear, the model

@@ -50,11 +50,16 @@ in `cf-backend/src/rpc-surface.ts`, and a CLI head calls them across the
 boundary. `cf-backend/src/lib/executors.ts:38` still carries the
 `Parent workspace` label for the Environment surface.
 
-There is no mount table, no implicit copy, no file synchronization protocol, no
-automatic failover, and no second Cloudflare `nimbus.*` provider. A caller names
-the runtime it wants. An unavailable runtime returns a truthful error, and `run`
-records the refusal as an escalation decision rather than running the work
-somewhere else.
+The workspace plane carries a mount table (`core/src/vfs/mounts.ts`). A live
+environment's files appear inside the agent's own view under a reserved root:
+the connected device at `/pc`, the bound container at `/sandbox`. A path under
+a mount point routes to that environment's own `files` VFS with the prefix
+stripped, so every boundary that executor enforces travels with it — device
+consent and path scoping included. An absent environment is a stated absence
+(`ENXIO: /pc — no device connected`), never an empty directory. There is no
+implicit copy, no file synchronization protocol, no automatic failover, and no
+second Cloudflare `nimbus.*` provider. A caller names the runtime it wants for
+commands and processes; for files it can also just cross the mount point.
 
 ## Core interfaces
 
@@ -87,8 +92,14 @@ like every other background-process surface.
 
 `AgentRuntime.executor` stays the baseline code-execution primitive that Core
 algorithms use. `AgentRuntime.executionRouter` is the provider registry that
-tools and UI surfaces read. `AgentRuntime.storage.vfs` is always the canonical
-workspace VFS. It is never an aggregate of providers.
+tools and UI surfaces read.
+`AgentRuntime.storage.vfs` is always the canonical workspace VFS, extended by
+the mount table. The workspace tree stays canonical under its own paths;
+memory indexing, fork snapshots and identity provisioning address that base
+tree alone, because services that index or provision workspace bytes must
+never cross into a user's device or a container. The agent-facing surfaces —
+the `file` tool, `workspace.*`, and any walk over `Storage.vfs` — see the one
+extended plane.
 
 ## Capabilities and status
 
@@ -293,8 +304,12 @@ capability sets, which are rendered into the agent's own execution block.
 ## Files, diffs, and Outputs
 
 The Environment surface shows one row per provider, with a raw file view where
-the provider supplies `files`. It never overlays environments into a synthetic
-filesystem.
+the provider supplies `files`. Each row stays that environment's own tree, in
+its own native paths — the surface does not merge them. The agent-facing
+counterpart is the opposite arrangement by design: the workspace plane's mount
+table (`core/src/vfs/mounts.ts`) serves the same trees under `/pc` and
+`/sandbox` inside the one view the `file` tool addresses. One plane for the
+agent, one row per machine for the human; neither overlays the other.
 
 The Outputs Diff reader is read-only. A Git-aware environment uses Git data
 without staging intent-to-add entries and without touching the index. A non-Git

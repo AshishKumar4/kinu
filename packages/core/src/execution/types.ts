@@ -113,9 +113,10 @@ export interface ExecutorProvider {
    * throw a `VFS` caller can switch on. Present only where the environment has a
    * filesystem a host can browse; the file manager is the one consumer.
    *
-   * Deliberately NOT the agent's own `Storage.vfs`, and never merged into it:
-   * one environment, one file view. The agent's own filesystem is Nimbus and
-   * has no mount table.
+   * Never a copy of the agent's own `Storage.vfs` bytes: one environment, one
+   * tree. The workspace plane extends ITS view to this tree through the mount
+   * table (vfs/mounts.ts) — `/pc`, `/sandbox` — which routes to these very
+   * objects, so consent and path scoping hold on mounted paths too.
    */
   readonly files?: VFS;
 

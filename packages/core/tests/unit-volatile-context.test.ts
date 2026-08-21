@@ -180,7 +180,7 @@ describe('renderDynamicContextBlock', () => {
       ],
     })!;
     expect(text).toContain('- workspace: active (cpus=1 mem=2G)');
-    expect(text).toEndWith('- laptop: connected\n</dynamic_context>');
+    expect(text).toEndWith('- laptop: connected — files at /pc\n</dynamic_context>');
   });
 
   test('a half-declared cgroup reports only the half it measured', () => {
