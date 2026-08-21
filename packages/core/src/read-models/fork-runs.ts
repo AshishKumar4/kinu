@@ -53,6 +53,14 @@ export interface ForkRunSummary {
    *  key on. Exactly one summary exists per root id. */
   readonly id: string;
   readonly task: string;
+  /**
+   * What the run is called — the short handle every surface leads with. The
+   * search root's own label when its engine wrote one (the caller's `name`,
+   * or a composition's provenance label), and a derivation from the task
+   * otherwise: a run is never left to present a truncated paragraph as if it
+   * were a title.
+   */
+  readonly name: string;
   /** The first write of either half. */
   readonly startedAt: number;
   readonly status: ForkRunStatus;
@@ -209,15 +217,17 @@ function readRuns(
     // row comes from one of these two stores, and a guard rather than a default
     // because a fabricated row is precisely what this read model must not produce.
     if (status === null) return [];
+    const task = tree?.task?.trim() || transcripts?.rootTask?.trim()
+      || transcripts?.rationale?.trim() || '(exploration run)';
     return [{
       id: position.rootId,
-      // The TREE's root task first: it is a task written by the engine that ran,
-      // whereas `head_runs.rationale` is the split's "why" and carries the preset
-      // name for a swarm. Reading the rationale as the task is what put `optimise`
-      // in the task slot of every swarm run — a swarm journals no row for its root,
-      // so the journal's own task was null and the fallback reached the label.
-      task: tree?.task?.trim() || transcripts?.rootTask?.trim()
-        || transcripts?.rationale?.trim() || '(exploration run)',
+      // The TREE's root task is a task written by the engine that ran, whereas
+      // `head_runs.rationale` is the split's "why" and carries the preset name
+      // for a swarm. Reading the rationale as the task is what put `optimise`
+      // in the task slot of every swarm run — a swarm journals no row for its
+      // root, so the journal's own task was null and the fallback reached it.
+      task,
+      name: runName(tree?.name ?? null, task),
       startedAt: position.startedAt,
       status,
       hasSearchTree: tree !== undefined,
@@ -253,6 +263,8 @@ function runStatus(
 interface TreeHalf {
   readonly branches: number;
   readonly task: string | null;
+  /** The root row's own label — the run's given name, empty when none was. */
+  readonly name: string | null;
   readonly ledgerStatus: string | null;
   readonly terminal: number;
   readonly bestTerminal: number | null;
@@ -271,12 +283,13 @@ function queryTreeHalves(
   wanted: ReadonlySet<string>,
 ): Map<string, TreeHalf> {
   const rows = sql<{
-    root_id: string; branches: number; task: string | null;
+    root_id: string; branches: number; task: string | null; name: string | null;
     status: string | null; terminal: number; best_terminal: number | null;
   }>`
     SELECT n.root_id                                                AS root_id,
            SUM(CASE WHEN n.parent_id IS NOT NULL THEN 1 ELSE 0 END) AS branches,
            MAX(CASE WHEN n.parent_id IS NULL THEN n.task END)       AS task,
+           MAX(CASE WHEN n.parent_id IS NULL THEN n.action END)     AS name,
            MAX(r.status)                                            AS status,
            SUM(CASE WHEN n.status = 'terminal' THEN 1 ELSE 0 END)   AS terminal,
            MAX(CASE WHEN n.status = 'terminal' THEN n.value END)    AS best_terminal
@@ -291,12 +304,40 @@ function queryTreeHalves(
     halves.set(row.root_id, {
       branches: row.branches,
       task: row.task,
+      name: row.name,
       ledgerStatus: row.status,
       terminal: row.terminal,
       bestTerminal: row.best_terminal,
     });
   }
   return halves;
+}
+
+/**
+ * The name a run presents: the label its engine wrote for the root, or a
+ * derivation from the task when it wrote none — legacy trees, journal-only
+ * runs, and callers who named nothing. Total: a surface never falls back to
+ * showing a truncated paragraph where a title belongs.
+ */
+function runName(rootLabel: string | null, task: string): string {
+  const given = rootLabel?.trim();
+  return given || shortName(task);
+}
+
+/** The first clause of a task, cut where the task itself offers a cut — a
+ *  dash, a colon, a sentence end — and at a word boundary inside
+ *  {@link NAME_MAX_CHARS} otherwise. A title, so no ellipsis: what it cuts,
+ *  it cuts cleanly. */
+const NAME_MAX_CHARS = 48;
+export function shortName(task: string): string {
+  const cleaned = task.replace(/\s+/g, ' ').trim();
+  if (!cleaned) return '(exploration run)';
+  const cut = cleaned.search(/[—–:;,|]|\.\s|\.\s*$|\n/);
+  const clause = cut >= 8 ? cleaned.slice(0, cut) : cleaned;
+  if (clause.length <= NAME_MAX_CHARS) return clause.replace(/[\s—–:;,|.]+$/, '');
+  const bound = clause.lastIndexOf(' ', NAME_MAX_CHARS);
+  return (bound >= 20 ? clause.slice(0, bound) : clause.slice(0, NAME_MAX_CHARS))
+    .replace(/[\s—–:;,|.]+$/, '');
 }
 
 function searchStatus(tree: TreeHalf): ForkRunStatus {

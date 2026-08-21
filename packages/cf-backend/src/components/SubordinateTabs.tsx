@@ -29,7 +29,7 @@ function StatusMark({ subordinate }: { subordinate: SubordinateRosterEntry }) {
   }
   return (
     <span
-      className={`size-1.5 shrink-0 rounded-full ${subordinate.status === "working" ? "p-dot-success animate-pulse" : "p-dot-neutral"}`}
+      className={`size-1.5 shrink-0 rounded-full ${subordinate.status === "working" ? "p-dot-success p-dot-pulse" : "p-dot-neutral"}`}
       aria-label={subordinate.status === "working" ? "Working" : "Idle"}
     />
   );

@@ -423,6 +423,10 @@ export interface AgentsToolInput {
   config?: Partial<SwarmConfig>;
   from?: NamedSwarmPreset;
   label?: string;
+  /** What this search is called — the short handle the exploration surface
+   *  shows on the tree root, the run rows and the detail header. Optional;
+   *  a search without one is named from its task. */
+  name?: string;
   branches?: number;
   depth?: number;
   // hire / converse
@@ -473,7 +477,7 @@ export const AGENTS_ACTION_FIELDS = {
   // is TOLD (the field refusal names the actions that read it) instead of quietly
   // ignored. They join this list when something enforces them.
   swarm: [
-    'task', 'preset', 'objective', 'key', 'config', 'from', 'label', 'branches', 'depth',
+    'task', 'preset', 'objective', 'key', 'config', 'from', 'label', 'name', 'branches', 'depth',
     'budget_usd', 'budget_tokens', 'budget_label',
   ],
   hire: ['agent', 'role', 'mission', 'model', 'scope', 'message', 'timeout_seconds'],
@@ -510,6 +514,7 @@ const AgentsInputEntries = {
   config: v.optional(SwarmConfigSchema),
   from: v.optional(v.picklist(NAMED_SWARM_PRESETS)),
   label: v.optional(v.string()),
+  name: v.optional(v.string()),
   branches: v.optional(v.number()),
   depth: v.optional(v.number()),
   agent: v.optional(v.string()),
@@ -926,6 +931,7 @@ async function runSwarmAction(
   if (input.label) Object.assign(call, { label: input.label });
   if (input.branches !== undefined) Object.assign(call, { branches: input.branches });
   if (input.depth !== undefined) Object.assign(call, { depth: input.depth });
+  if (input.name !== undefined) Object.assign(call, { name: input.name });
 
   // Resolution first, per *Presets* — *Validity over the resolved configuration* is
   // stated over the resolved tuple and has no input without it.
@@ -1049,6 +1055,7 @@ function swarmProperties(deps: AgentsToolDeps): SwarmSchemaProperties {
       description: 'For action=swarm with preset:"custom": a named preset to start from, so you state only what differs. It does NOT make this a preset run — the record still says custom, which is the point of having both fields.',
     },
     label: { type: 'string', maxLength: 120, description: 'For action=swarm with preset:"custom": required provenance. A composed shape recorded repeatedly under one label is the evidence for a new preset.' },
+    name: { type: 'string', maxLength: 60, description: 'For action=swarm: a SHORT name for this search — two to four words, what you would call it in a sentence ("repo audit", "coupon 500 hunt"). It is what the exploration surface labels the tree and its row with, so a reader tells two searches apart without reading either task. Omit and the surface derives one from `task`, which is a paragraph and reads like one.' },
     branches: { type: 'integer', minimum: 1, description: 'For action=swarm: candidates per expansion. Omit to take the preset\'s own width.' },
     depth: { type: 'integer', minimum: 1, description: 'For action=swarm: how deep the search may go. Omit to take the preset\'s own depth. depth:1 is one measured expansion; deeper selects down a tree with `advance`, scoring each node against your own `objective`. The literature runs 3-7 (ToT <=3, LATS 7, Koh 5). advance:"none" has no selection step, so it fixes depth at 1 and a deeper cap is refused rather than silently flattened.' },
     budget_usd: { type: 'number', minimum: 0, description: 'For action=swarm: cumulative USD cap for the whole search, including its measurements. Omit for no cap.' },

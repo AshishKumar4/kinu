@@ -1908,7 +1908,14 @@ export async function runSwarm(
   if (!reentry) {
     insertSearchNode(sql, {
       nodeId: rootId, parentNodeId: null, parentMsgId: null, rootId,
-      task: resolved.task, action: '', observation: rootArtifact ?? resolved.task,
+      task: resolved.task,
+      // The root's label is the RUN'S NAME — what the exploration surface
+      // draws where every other node carries its proposal's why. A caller who
+      // named nothing leaves it to a composed configuration's provenance
+      // label; with neither, the read model derives from the task and this
+      // stays empty exactly as it always has.
+      action: resolved.name ?? resolved.label ?? '',
+      observation: rootArtifact ?? resolved.task,
       codeUsed: null, depth: 0, msgId: null,
     });
   }

@@ -82,6 +82,11 @@ export interface SwarmTreeRegion {
 	root: ForkNode;
 	/** What the search was asked to do, written above its tree inside the boundary. */
 	title: string;
+	/** What the search is CALLED — the short handle its root node carries when
+	 *  the engine wrote none of its own. A root is the workspace as found, so it
+	 *  has no action to label it with, and `(root)` is what a reader used to get
+	 *  where the run's own name belongs. */
+	name?: string;
 	/** The shape it resolved to and what it was dispatched with. */
 	note: string;
 	/**
@@ -285,7 +290,7 @@ function nodeLabel(
 	const room = node.data.children.length === 0 || folded ? LABEL_ROOM_LEAF : LABEL_ROOM_INNER;
 	const spend = font.badge(score) + font.badge(badge);
 	const name = clipToWidth(
-		`${score === "" ? "" : " "}${cleanNodeLabel(node.data.action, "(root)")}`,
+		`${score === "" ? "" : " "}${cleanNodeLabel(node.data.action, region.name ?? "(root)")}`,
 		room - spend, font.name,
 	);
 	return { score, name, badge, end: LABEL_X + spend + font.name(name) };
@@ -308,6 +313,9 @@ interface RegionLayout {
 	 *  whether a search had a journal. */
 	fanIn: ReadonlyMap<string, number>;
 	why: ReadonlyMap<string, string>;
+	/** {@link SwarmTreeRegion.name} — what the root node and its tooltip say
+	 *  where a node would say what it did. */
+	name: string | null;
 	/** Each node's label, already clipped to the room its column leaves it. */
 	labels: Map<string, NodeLabel>;
 	/** Rows of this tree, in the tree's own coordinates. */
@@ -368,6 +376,7 @@ function layoutRegions(
 		}
 		placed.push({
 			runId: region.runId, root: region.root, nodes, links: data.links(),
+			name: region.name ?? null,
 			byId: new Map(nodes.map((d) => [d.data.id, d])),
 			pv: principalVariation(region.root),
 			competed: isCompeted(region.root),
@@ -988,6 +997,7 @@ export function SwarmTree({
 						x, y, node: d.data, competed: region.competed,
 						fanIn: region.fanIn.get(d.data.id) ?? null,
 						why: region.why.get(d.data.id) ?? null,
+						runName: region.name ?? null,
 					});
 					applyEmphasis(rg, region, selectedNodeIn(selectionRef.current, region.runId), d.data.id);
 				})
@@ -1349,10 +1359,12 @@ interface TooltipState {
 	readonly fanIn: number | null;
 	/** The node's own reason for existing, verbatim from the journal, or null. */
 	readonly why: string | null;
+	/** The run's name, which the ROOT wears when it carries no action of its own. */
+	readonly runName: string | null;
 }
 
 function NodeTip({ tip, width }: { tip: TooltipState; width: number }) {
-	const { node, competed, fanIn, why } = tip;
+	const { node, competed, fanIn, why, runName } = tip;
 	const TIP_W = 260;
 	const flip = tip.x + TIP_W + 24 > width;
 	return (
@@ -1366,7 +1378,7 @@ function NodeTip({ tip, width }: { tip: TooltipState; width: number }) {
 			}}
 		>
 			<div className="font-medium p-text mb-1.5 leading-snug line-clamp-2">
-				{cleanNodeLabel(node.action, "(root)")}
+				{cleanNodeLabel(node.action, runName ?? "(root)")}
 			</div>
 			<div className="flex items-center gap-2 tabular-nums">
 				{(node.status === "failed" || node.value !== null) && (

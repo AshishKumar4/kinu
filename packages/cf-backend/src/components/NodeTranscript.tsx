@@ -113,7 +113,7 @@ function TaskHeader({ task }: { task: string }) {
             <button onClick={() => setExpanded(!expanded)} aria-expanded={expanded}
               className="mt-1 inline-flex items-center gap-1 text-[10px] p-text-3 hover:p-text transition-colors cursor-pointer">
               {expanded ? <CaretDownIcon size={10} /> : <CaretRightIcon size={10} />}
-              {expanded ? "Show less" : `Show all ${task.length} characters`}
+              {expanded ? "collapse" : "expand"}
             </button>
           )}
         </div>
@@ -298,7 +298,7 @@ export function TranscriptBody({ view, onSelect, older, onLoadOlder }: {
   return (
     <div className="min-h-0 flex-1 flex flex-col">
       <div className="shrink-0 flex items-center gap-2 px-4 py-2 border-b p-border">
-        <span className={`size-1.5 rounded-full shrink-0 ${statusDot(view.status)} ${live ? "animate-pulse" : ""}`} />
+        <span className={`size-1.5 rounded-full shrink-0 ${statusDot(view.status)} ${live ? "p-dot-pulse" : ""}`} />
         <span className="text-[10px] uppercase tracking-normal p-text-3 shrink-0">{view.status}</span>
         <div className="h-3 w-px bg-[var(--c-border)] shrink-0" />
         <SearchPath view={view} onSelect={onSelect} />

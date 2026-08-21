@@ -52,7 +52,7 @@ export function WorkspaceBar({
         <InlineWorkspaceTitle title={title} onRename={onRename} />
         {working && (
           <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full px-1.5 py-0.5 p-accent-subtle @[34rem]:px-2" title="The agent is working">
-            <span className="size-1.5 rounded-full p-dot-accent animate-pulse" />
+            <span className="size-1.5 rounded-full p-dot-accent p-dot-pulse" />
             <span className="hidden p-annotation p-accent @[34rem]:inline">working</span>
           </span>
         )}

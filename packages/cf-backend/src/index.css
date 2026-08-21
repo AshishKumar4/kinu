@@ -752,6 +752,13 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-dot-neutral { background: var(--c-text-3); }
 .p-dot-accent  { background: var(--c-accent); }
 
+/* A running state, said in motion. Opacity only — the fill stays whatever
+   p-dot-* token the status already carries, so a palette retune flows through.
+   The word "running" beside it is the label; this is what makes the label
+   believed. */
+@keyframes dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+.p-dot-pulse { animation: dot-pulse 1.4s ease-in-out infinite; }
+
 /* pill badges — tint + AA text, 11px/500, pill radius. Set in the mono
    annotation face: a badge is a status ANNOTATION on the thing beside it,
    the same register the banner writes its captions in. */
@@ -1135,6 +1142,8 @@ body { background: var(--c-bg); color: var(--c-text); }
   /* The caret still marks where the text is being written; it just holds. */
   .p-streaming > :last-child::after { animation: none; }
   .p-btn:active, .p-btn-quiet:active { transform: none; }
+  /* The dot still marks the run as in progress; it just holds. */
+  .p-dot-pulse { animation: none; }
 }
 
 /* Plannotator is hosted as a document primitive, not as a second app or theme.

@@ -137,6 +137,7 @@ export function ExplorationSurface({
           className="min-h-0 max-h-44 @3xl:max-h-none overflow-y-auto rounded-lg border p-border p-surface p-1.5 space-y-0.5">
           {runs.map((run) => (
             <ForkRunRow key={run.id} run={run}
+              kind={runKind(resolutions.get(run.id))}
               liveness={runLiveness(journals.get(run.id) ?? null)}
               refusal={runRefusal(run, journals.get(run.id) ?? null)}
               selected={focused.id === run.id}
@@ -147,7 +148,7 @@ export function ExplorationSurface({
         </div>
         <div className={`min-h-0 ${inspect === null ? "" : "hidden @6xl:block"}`}>
           <ForkCanvas
-            runs={runs} params={params} trees={trees} journals={journals} resolutions={resolutions}
+            runs={runs} trees={trees} journals={journals}
             focusedId={focused.id} selection={inspect?.nodeId == null ? null : { runId: inspect.runId, nodeId: inspect.nodeId }}
             activity={headActivity}
             onFocus={(runId) => { setFocusedRunId(runId); setInspect({ runId, nodeId: null }); }}
@@ -218,22 +219,32 @@ export function runStateLine(
 }
 
 /**
- * One run, as a row.
+ * What KIND of search a run was, one word — the preset's name, or `custom`
+ * for a composition. The type rides beside a run's name wherever the name
+ * does: two searches of one task differ by their name, and two runs of one
+ * name differ by their kind.
+ */
+function runKind(resolution: SwarmResolution | undefined): string | null {
+  if (resolution === undefined) return null;
+  return resolution.kind === "preset" ? resolution.preset : "custom";
+}
+
+/**
+ * One run, as a row: its NAME and kind, what became of it, and what its
+ * nodes are doing — and NOTHING about how it was dispatched. The row used to
+ * lead with `preset=ideate · settle=merge · 0 branches`, and the owner's
+ * ruling on that is the reason this file changed: *"User doesnt have to be
+ * shoved all these stuff into their faces. They can maybe look at the config
+ * IF they want to."* The resolution and the axes live behind the disclosure
+ * on the selected run.
  *
- * What it says is what became of the run and what its nodes are doing — and
- * NOTHING about how it was dispatched. The row used to lead with
- * `preset=ideate · settle=merge · 0 branches`, and the owner's ruling on that is
- * the reason this file changed: *"User doesnt have to be shoved all these stuff
- * into their faces. They can maybe look at the config IF they want to."* The
- * resolution and the axes now live behind the disclosure on the selected run,
- * where a reader who wants them can ask.
- *
- * A running run leads with its liveness, because "running" on its own is the
- * label the owner read as dead six times. A settled one leads with its outcome.
+ * The name leads because a truncated task paragraph is not an identity; the
+ * full task stays on the row as its tooltip.
  */
 function ForkRunRow(
-  { run, liveness, refusal, selected, onSelect }: {
+  { run, kind, liveness, refusal, selected, onSelect }: {
     run: ForkRunSummary;
+    kind: string | null;
     liveness: RunLiveness | null;
     refusal: RunRefusal | null;
     selected: boolean;
@@ -244,9 +255,12 @@ function ForkRunRow(
     <button type="button" onClick={onSelect} aria-current={selected ? "true" : undefined}
       data-fork-run={run.id}
       className={`w-full flex items-start gap-2 text-left rounded-md px-2 py-1.5 transition-colors ${selected ? "p-fill" : "p-card-hover"}`}>
-      <span className={`mt-1 size-1.5 rounded-full shrink-0 ${RUN_DOT[run.status]} ${run.status === "running" ? "animate-pulse" : ""}`} />
+      <span className={`mt-1 size-1.5 rounded-full shrink-0 ${RUN_DOT[run.status]} ${run.status === "running" ? "p-dot-pulse" : ""}`} />
       <div className="min-w-0 flex-1">
-        <div className="text-[11px] p-text-2 truncate" title={run.task}>{run.task}</div>
+        <div className="text-[11px] p-text truncate" title={run.task}>
+          {run.name}
+          {kind !== null && <span className="p-text-3"> · {kind}</span>}
+        </div>
         <div className="text-[10px] p-text-3 tabular-nums truncate"
           title={refusal === null ? undefined : refusal.error}>
           {runStateLine(run, liveness, refusal)}
@@ -406,8 +420,14 @@ function RunDetailView({
   return (
     <div className="h-full min-h-0 flex flex-col rounded-lg border p-border p-surface overflow-hidden">
       <div className="shrink-0 flex items-start gap-2 border-b p-border px-3 py-2">
-        <span className={`mt-1.5 size-1.5 rounded-full shrink-0 ${RUN_DOT[run.status]} ${run.status === "running" ? "animate-pulse" : ""}`} />
+        <span className={`mt-1.5 size-1.5 rounded-full shrink-0 ${RUN_DOT[run.status]} ${run.status === "running" ? "p-dot-pulse" : ""}`} />
         <div className="min-w-0 flex-1">
+          <div className="flex items-baseline gap-1.5 min-w-0">
+            <span className="text-[11px] font-medium p-text truncate" title={run.task}>{run.name}</span>
+            {runKind(resolution) !== null && (
+              <span className="text-[10px] font-mono p-text-3 shrink-0">· {runKind(resolution)}</span>
+            )}
+          </div>
           <RunObjective task={run.task} />
           <div className="mt-0.5 text-[10px] p-text-3 tabular-nums">
             {/* The tally is stated in the liveness panel below, so the header
@@ -456,7 +476,7 @@ function RunObjective({ task }: { task: string }) {
         <button type="button" onClick={() => setExpanded(!expanded)} aria-expanded={expanded}
           className="mt-0.5 inline-flex items-center gap-1 text-[10px] p-text-3 hover:p-text transition-colors cursor-pointer">
           {expanded ? <CaretDownIcon size={9} /> : <CaretRightIcon size={9} />}
-          {expanded ? "Show less" : `Show all ${task.length} characters`}
+          {expanded ? "collapse" : "expand"}
         </button>
       )}
     </>
@@ -579,7 +599,7 @@ function RunNodeRow({ node, score, moving, onOpen }: {
   return (
     <button type="button" onClick={onOpen} data-run-node={node.id}
       className="w-full flex items-start gap-2 text-left rounded-md px-2 py-1.5 p-card-hover transition-colors">
-      <span className={`mt-1 size-1.5 rounded-full shrink-0 ${rateLimited ? "p-dot-warning" : NODE_DOT(node.status)} ${live && moving ? "animate-pulse" : ""}`} />
+      <span className={`mt-1 size-1.5 rounded-full shrink-0 ${rateLimited ? "p-dot-warning" : NODE_DOT(node.status)} ${live && moving ? "p-dot-pulse" : ""}`} />
       <div className="min-w-0 flex-1">
         <div className="text-[11px] p-text-2 truncate" title={node.task}>
           {cleanNodeLabel(node.task, node.id)}
@@ -695,15 +715,13 @@ const CARD_BORDER = 2;
  * reader open the tab stays on screen.
  */
 function ForkCanvas({
-  runs, params, trees, journals, resolutions, focusedId, selection, onFocus, onSelectNode, expandTo,
+  runs, trees, journals, focusedId, selection, onFocus, onSelectNode, expandTo,
   activity,
 }: {
   runs: readonly ForkRunSummary[];
-  params: ReadonlyMap<string, ForkRunParams>;
   trees: ReadonlyMap<string, ForkNode>;
   /** Per-run node journals — what makes a fan-in vertex visible in the picture. */
   journals: ReadonlyMap<string, HeadRunView>;
-  resolutions: ReadonlyMap<string, SwarmResolution>;
   focusedId: string;
   selection: ExplorerSelection | null;
   onFocus: (runId: string) => void;
@@ -739,7 +757,7 @@ function ForkCanvas({
       if (!root) return [];
       const journal = journals.get(run.id) ?? null;
       return [{
-        runId: run.id, root, title: run.task,
+        runId: run.id, root, title: run.task, name: run.name,
         note: runStateLine(run, runLiveness(journal), runRefusal(run, journal)),
         fanIn: fanInVertices(journal),
         why: nodeRationales(journal),
@@ -749,8 +767,6 @@ function ForkCanvas({
   );
 
   const focused = runs.find((run) => run.id === focusedId) ?? null;
-  const focusedResolution = resolutions.get(focusedId);
-  const paramRows = forkParamRows(params.get(focusedId));
   const refusal = focused === null ? null : runRefusal(focused, journals.get(focusedId) ?? null);
   /** What the searches WANT, measured off the same layout the canvas draws with
    *  — never a second stacking rule that could disagree with it. Null where
@@ -779,39 +795,13 @@ function ForkCanvas({
     <div ref={attachCell} className="h-full min-h-0">
       <div className="flex max-h-full flex-col rounded-lg border p-border p-surface overflow-hidden">
         <div ref={attachChrome} className="shrink-0">
-          {/* The header WRAPS as a group. Every part of it was on one line with a
-              single truncating title between fixed neighbours, so at a 313px
-              column the count label broke over two lines, the parameters were
-              hidden outright below `@xl`, and the task was cut mid-word with the
-              rest of it nowhere. */}
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-3 py-1.5 border-b p-border">
-            <span className="shrink-0 whitespace-nowrap text-[10px] uppercase tracking-normal p-text-3">
-              {regions.length === 1 ? "1 search" : `${regions.length} searches`}
-            </span>
-            <span className="min-w-0 flex-1 truncate text-[10px] p-text-3" title={focused?.task ?? ""}>
-              {focused?.task ?? ""}
-            </span>
-            {expandTo && (
-              <Link to={expandTo} title="Open the selected search full-screen"
-                className="shrink-0 flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-md p-text-3 hover:p-text transition-colors">
-                <ArrowsOutIcon size={11} />Expand
-              </Link>
-            )}
-            {/* The dispatch parameters and the resolved axis tuple, BEHIND a
-                disclosure. They were laid out over the canvas: a labelled grid
-                of six axes, a caps line and a row of dispatch numbers, above
-                every tree, always. The owner's ruling was that this is the
-                user's face being shoved into, and that config is something a
-                reader asks for. So the header keeps one chip naming the run —
-                the one fact that tells two runs of the same task apart — and the
-                rest opens. */}
-            <SwarmConfigDisclosure resolution={focusedResolution}
-              paramRows={paramRows} judges={judgeEnsembleLabel(params.get(focusedId))} />
-          </div>
-          {/* A run that reached nothing says so HERE, above its own band, and the canvas
-              below keeps every band it had. Replacing the canvas would hide the other
-              searches because one of them was refused, and the whole point of one canvas
-              is that the comparison stays on screen. */}
+          {/* The bar the owner stripped: it carried the run count, the focused
+              task and a config chip over every search at once — three facts
+              about ONE run sitting in the GLOBAL area. The count is the list's
+              job, the task is the band caption's, and the resolution lives in
+              the detail pane's disclosure. What remains of the bar is the
+              refusal note when the focused run has one; Expand floats on the
+              canvas itself. */}
           {refusal !== null && <RunRefusalNote refusal={refusal} />}
         </div>
         {/* The graph gets every pixel the searches can USE and no more: the
@@ -839,6 +829,12 @@ function ForkCanvas({
             />
           ) : (
             <div className="h-full flex items-center justify-center text-[11px] p-text-3">Sizing canvas…</div>
+          )}
+          {expandTo && (
+            <Link to={expandTo} title="Open the selected search full-screen"
+              className="absolute right-2 top-2 z-10 flex items-center gap-1 rounded-md border p-border p-surface px-2 py-0.5 text-[10px] p-text-3 hover:p-text transition-colors">
+              <ArrowsOutIcon size={11} />Expand
+            </Link>
           )}
         </div>
       </div>
@@ -910,7 +906,9 @@ function SwarmResolutionBody(
   },
 ) {
   const caps = resolution?.kind === "preset"
-    ? `depth ${resolution.depth} · branches ${resolution.branches}`
+    ? resolution.depth === 1
+      ? `flat · ${resolution.branches} ${resolution.branches === 1 ? "branch" : "branches"}`
+      : `depth ${resolution.depth} · branches ${resolution.branches}`
     : null;
   return (
     <div data-swarm-resolution={resolution?.kind ?? "none"}
