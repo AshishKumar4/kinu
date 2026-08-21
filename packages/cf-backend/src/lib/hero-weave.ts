@@ -146,14 +146,6 @@ export function weaveLayer(field: WeaveField = FIELD): string {
     + `${weaveStill(field)}<canvas class="weave-live"></canvas></div>`;
 }
 
-/** Facts the page may quote about its own ground. Data, taken from the field
- *  that is actually drawn. */
-export const WEAVE_FACTS = {
-  threads: FIELD.threads.length,
-  /** Seconds for the slowest sine term to complete one cycle. */
-  period: Math.round((2 * Math.PI) / Math.min(...FIELD.threads.map((t) => t.w1))),
-} as const;
-
 /**
  * Wake the warp.
  *
