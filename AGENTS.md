@@ -242,7 +242,7 @@ bench/clbench/  Kinu as a system for the external Continual Learning Bench
 | Directory    | Purpose                                                 |
 |-------------|----------------------------------------------------------|
 | identity/   | Workspace creation, reopening, soul (user-editable purpose), DDL |
-| evolution/  | 3-timescale auto-evolution engine, tool building         |
+| evolution/  | 4-timescale auto-evolution engine, tool building         |
 | mcts/       | Monte Carlo Tree Search — UCT, backprop, convergence     |
 | scaffold/   | Agentic loop versioning — bootstrap, modify, rollback    |
 | craft/      | Tool quality store — EMA scoring, discovery, conflict    |
