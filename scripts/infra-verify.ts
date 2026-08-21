@@ -416,7 +416,11 @@ function print(rows: readonly Row[], secrets: readonly SecretRow[]): void {
 }
 
 /**
- * ONE ENVIRONMENT PER RUN, defaulting to production.
+ * ONE ENVIRONMENT PER RUN. An explicit argv wins; failing that the environment
+ * being deployed, which `scripts/deploy.sh` exports as KINU_DEPLOY_ENV; failing
+ * that production. The deploy path needs its gate line to stay ONE string —
+ * `scripts/ladder.ts` parses those lines and matches them against LADDER — so the
+ * environment travels beside the command rather than inside it.
  *
  * The alternative — every environment, one verdict — was measured on the live
  * account and is the wrong shape: staging's deployed version predates the
@@ -435,7 +439,7 @@ async function main(): Promise<number> {
   }
 
   const infrastructure = deriveInfrastructure();
-  const requested = process.argv[2] ?? 'production';
+  const requested = process.argv[2] ?? process.env.KINU_DEPLOY_ENV ?? 'production';
   const selected = infrastructure.environments.filter((entry) => entry.key === requested);
   if (selected.length === 0) {
     console.error(`${GATE}: no environment named \`${requested}\` in the manifest. `

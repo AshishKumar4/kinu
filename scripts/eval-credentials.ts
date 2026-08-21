@@ -27,7 +27,22 @@
 // `eval-tier.sh` runs first and is already the consent boundary — it is the ONE
 // place KINU_EVAL_LIVE is set — so resolving the identity is the same
 // decision, made in the same place.
-import { resolveEvalIdentity } from '../packages/test-utils/src/eval-identity';
+//
+// IT ALSO RULES ON THE MODEL ENDPOINT, because a target can arrive by a second
+// door. `KINU_BASE_URL` / `AI_GATEWAY_BASE_URL` carry a whole base URL, and one
+// of those can be a deployment's own inference route rather than a gateway:
+// `resolveLLMConfig` turns `https://kinu.run/api/user/ai/v1` plus a bearer into
+// an `Authorization` header, which is what production accepts, and
+// `resolveLiveModel` calls the same URL an `ai-gateway` target. Both then take
+// precedence over whatever this script resolved. So the endpoint is ruled on
+// here, by the same allowlist, before an origin is printed.
+import { refusedEvalEndpoint, resolveEvalIdentity } from '../packages/test-utils/src/eval-identity';
+
+const endpoint = refusedEvalEndpoint();
+if (endpoint) {
+  console.error(`eval-credentials: REFUSED — ${endpoint.variable} names a deployment: ${endpoint.reason}`);
+  process.exit(1);
+}
 
 const resolved = resolveEvalIdentity();
 if (resolved.kind === 'refused') {

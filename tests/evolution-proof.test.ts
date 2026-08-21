@@ -6,8 +6,13 @@
  *   Session 2: Agent faces SIMILAR challenges — crafted tools from session 1
  *              should be available and the agent should perform better
  *
- * Challenges are CTF-inspired: crypto, algorithms, code analysis.
- * All verifiable via deterministic outputs.
+ * Challenges are CTF-inspired: crypto, algorithms, ciphers. Each one is DATA,
+ * its prompt is rendered from that data, and its correct answer is computed from
+ * the same data by a solver in this file — so a turn's answer is checked, and
+ * the solvers themselves are checked by a credential-free test at the bottom.
+ * The claim that stood here, "all verifiable via deterministic outputs", was
+ * true of the challenges and false of the test: not one of its assertions
+ * compared an answer, and the correct answers were written down nowhere.
  */
 
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
@@ -36,6 +41,7 @@ import { openWorkspaceCLI } from '../packages/cli-backend/src/open';
 import { makeWorkspaceSchemaSql } from '../packages/cli-backend/src/runtime';
 import { requireSandboxedExecutors } from './evals/harness';
 import {
+  finalIntegerAnswer, letterKey,
   liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, UNCONFIGURED_LLM,
 } from '@kinu.run/test-utils';
 
@@ -114,73 +120,213 @@ async function chatTurn(
   return { text: responseText, toolCalls: tcRecords, steps: stepCount, durationMs: Date.now() - start };
 }
 
-// ── Challenges ───────────────────────────────────────────────────
+// ── Challenges, as DATA ──────────────────────────────────────────
+//
+// Each challenge is its numbers, the prompt is RENDERED from them, and the
+// expected answer is COMPUTED from the same numbers by a solver in this file.
+// Nothing here is transcribed. Before this, the challenges were prose strings,
+// the correct answers appeared nowhere in the file, and none of the suite's 22
+// assertions compared the model's answer to anything — so "all verifiable via
+// deterministic outputs" was a claim about the challenges and not about the
+// test. A prompt that states a parameter beside an oracle that hardcodes the
+// answer to that parameter is two numbers with two places to disagree.
 
-// Challenge 1: RSA with tiny key — factor n, decrypt c
-const RSA_CHALLENGE_1 = `
+/** A textbook RSA challenge: a semiprime modulus, a public exponent, a
+ *  ciphertext. Small enough that trial division factors it. */
+interface RsaChallenge {
+  readonly n: number;
+  readonly e: number;
+  readonly c: number;
+}
+
+/** A weighted directed graph and the pair a distance is asked for. The
+ *  adjacency list is ordered because the prompt is rendered from it. */
+interface GraphChallenge {
+  readonly adjacency: readonly {
+    readonly node: string;
+    readonly out: readonly { readonly to: string; readonly weight: number }[];
+  }[];
+  readonly from: string;
+  readonly to: string;
+}
+
+interface CipherChallenge {
+  readonly ciphertext: string;
+}
+
+const RSA_1: RsaChallenge = { n: 3233, e: 17, c: 2201 };
+const RSA_2: RsaChallenge = { n: 5959, e: 13, c: 2531 };
+
+const GRAPH_1: GraphChallenge = {
+  adjacency: [
+    { node: 'A', out: [{ to: 'B', weight: 4 }, { to: 'C', weight: 2 }] },
+    { node: 'B', out: [{ to: 'D', weight: 3 }, { to: 'C', weight: 1 }] },
+    { node: 'C', out: [{ to: 'B', weight: 1 }, { to: 'D', weight: 5 }] },
+    { node: 'D', out: [] },
+  ],
+  from: 'A',
+  to: 'D',
+};
+
+const GRAPH_2: GraphChallenge = {
+  adjacency: [
+    { node: 'S', out: [{ to: 'A', weight: 7 }, { to: 'B', weight: 2 }, { to: 'C', weight: 3 }] },
+    { node: 'A', out: [{ to: 'B', weight: 3 }, { to: 'D', weight: 4 }] },
+    { node: 'B', out: [{ to: 'A', weight: 3 }, { to: 'C', weight: 4 }, { to: 'D', weight: 1 }] },
+    { node: 'C', out: [{ to: 'D', weight: 5 }] },
+    { node: 'D', out: [] },
+  ],
+  from: 'S',
+  to: 'D',
+};
+
+const CIPHER: CipherChallenge = { ciphertext: 'GSVJF RXLWV RHHVX IVG' };
+
+// ── Solvers: the ground truth, computed ──────────────────────────
+
+function modPow(base: bigint, exponent: bigint, modulus: bigint): bigint {
+  let result = 1n;
+  let factor = base % modulus;
+  let remaining = exponent;
+  while (remaining > 0n) {
+    if (remaining % 2n === 1n) result = (result * factor) % modulus;
+    factor = (factor * factor) % modulus;
+    remaining /= 2n;
+  }
+  return result;
+}
+
+/** The extended Euclidean algorithm, which is also the check: a value with no
+ *  inverse leaves a gcd above one, and that is a broken challenge rather than a
+ *  zero to return. */
+function modInverse(value: bigint, modulus: bigint): bigint {
+  let [remainder, next] = [value % modulus, modulus];
+  let [coefficient, nextCoefficient] = [1n, 0n];
+  while (next !== 0n) {
+    const quotient = remainder / next;
+    [remainder, next] = [next, remainder - quotient * next];
+    [coefficient, nextCoefficient] = [nextCoefficient, coefficient - quotient * nextCoefficient];
+  }
+  if (remainder !== 1n) {
+    throw new Error(`${String(value)} has no inverse mod ${String(modulus)}, so this RSA `
+      + 'challenge has no plaintext');
+  }
+  return ((coefficient % modulus) + modulus) % modulus;
+}
+
+function factorSemiprime(n: number): readonly [number, number] {
+  for (let candidate = 2; candidate * candidate <= n; candidate++) {
+    if (n % candidate === 0) return [candidate, n / candidate];
+  }
+  throw new Error(`${String(n)} is prime, so it is not a product of two primes`);
+}
+
+function rsaPlaintext({ n, e, c }: RsaChallenge): number {
+  const [p, q] = factorSemiprime(n);
+  const totient = BigInt(p - 1) * BigInt(q - 1);
+  const d = modInverse(BigInt(e), totient);
+  return Number(modPow(BigInt(c), d, BigInt(n)));
+}
+
+/** Dijkstra over a positive-weight graph. Linear scan for the nearest unsettled
+ *  node: five nodes need no heap, and a heap here would be code the test cannot
+ *  see the correctness of. */
+function shortestDistance({ adjacency, from, to }: GraphChallenge): number {
+  const out = new Map(adjacency.map(row => [row.node, row.out]));
+  const distance = new Map<string, number>([[from, 0]]);
+  const settled = new Set<string>();
+  for (;;) {
+    let nearest: string | null = null;
+    let nearestDistance = Number.POSITIVE_INFINITY;
+    for (const [node, reached] of distance) {
+      if (settled.has(node) || reached >= nearestDistance) continue;
+      nearest = node;
+      nearestDistance = reached;
+    }
+    if (nearest === null) break;
+    settled.add(nearest);
+    for (const edge of out.get(nearest) ?? []) {
+      if (nearestDistance + edge.weight < (distance.get(edge.to) ?? Number.POSITIVE_INFINITY)) {
+        distance.set(edge.to, nearestDistance + edge.weight);
+      }
+    }
+  }
+  const reached = distance.get(to);
+  if (reached === undefined) throw new Error(`${to} is unreachable from ${from}`);
+  return reached;
+}
+
+const LETTER_A = 'A'.charCodeAt(0);
+const LETTER_Z = 'Z'.charCodeAt(0);
+
+/** Atbash: A maps to Z, B to Y, and so on. Its own inverse, which is what the
+ *  solver test checks it against. */
+function atbash(text: string): string {
+  return [...text.toUpperCase()].map(character => {
+    const code = character.charCodeAt(0);
+    if (code < LETTER_A || code > LETTER_Z) return character;
+    return String.fromCharCode(LETTER_Z - (code - LETTER_A));
+  }).join('');
+}
+
+// ── Prompts, rendered from the data above ────────────────────────
+//
+// One template per family, so the session-1 instance and the session-2 instance
+// differ ONLY in their numbers. That is what makes session 2 a transfer test:
+// the pattern session 1 extracted is the whole of what carries over.
+
+function rsaPrompt({ n, e, c }: RsaChallenge): string {
+  return `
 Solve this RSA crypto challenge. You MUST use execute_tools to compute the answer.
 
 Given:
-  n = 3233 (public modulus, product of two primes)
-  e = 17 (public exponent)
-  c = 2201 (ciphertext)
+  n = ${String(n)} (public modulus, product of two primes)
+  e = ${String(e)} (public exponent)
+  c = ${String(c)} (ciphertext)
 
 Find the plaintext m such that c = m^e mod n.
 Steps: factor n into p*q, compute phi = (p-1)*(q-1), find d = modular inverse of e mod phi, then m = c^d mod n.
 Return ONLY the numeric value of m.
 `;
+}
 
-// Challenge 2: Similar RSA but different numbers — should be faster with pattern
-const RSA_CHALLENGE_2 = `
-Solve this RSA crypto challenge. You MUST use execute_tools to compute the answer.
-
-Given:
-  n = 5959 (public modulus, product of two primes)  
-  e = 13 (public exponent)
-  c = 2531 (ciphertext)
-
-Find the plaintext m such that c = m^e mod n.
-Steps: factor n into p*q, compute phi, find modular inverse d, then m = c^d mod n.
-Return ONLY the numeric value of m.
-`;
-
-// Challenge 3: Dijkstra's algorithm — complex graph problem
-const DIJKSTRA_CHALLENGE_1 = `
+function graphPrompt({ adjacency, from, to }: GraphChallenge): string {
+  const rows = adjacency.map(row => `  ${row.node} -> ${row.out.length === 0
+    ? '(none)'
+    : row.out.map(edge => `${edge.to}:${String(edge.weight)}`).join(', ')}`).join('\n');
+  return `
 Implement Dijkstra's shortest path algorithm and solve this problem. Use execute_tools.
 
 Graph (adjacency list with weights):
-  A -> B:4, C:2
-  B -> D:3, C:1
-  C -> B:1, D:5
-  D -> (none)
+${rows}
 
-Find the shortest distance from A to D. Return ONLY the number.
+Find the shortest distance from ${from} to ${to}. Return ONLY the number.
 `;
+}
 
-// Challenge 4: Similar graph problem — should benefit from previous algorithm
-const DIJKSTRA_CHALLENGE_2 = `
-Find the shortest path using Dijkstra's algorithm. Use execute_tools.
-
-Graph (adjacency list with weights):
-  S -> A:7, B:2, C:3
-  A -> B:3, D:4
-  B -> A:3, C:4, D:1
-  C -> D:5
-  D -> (none)
-
-Find the shortest distance from S to D. Return ONLY the number.
-`;
-
-// Challenge 5: Substitution cipher — decode
-const CIPHER_CHALLENGE = `
+function cipherPrompt({ ciphertext }: CipherChallenge): string {
+  return `
 Decode this substitution cipher. Use execute_tools to try frequency analysis.
 
 The cipher maps each letter to another letter. The ciphertext is:
-"GSVJF RXLWV RHHVX IVG"
+"${ciphertext}"
 
 This is encoded with the Atbash cipher (A=Z, B=Y, C=X, ..., Z=A).
 Decode it and return the plaintext.
 `;
+}
+
+const RSA_CHALLENGE_1 = rsaPrompt(RSA_1);
+const RSA_CHALLENGE_2 = rsaPrompt(RSA_2);
+const DIJKSTRA_CHALLENGE_1 = graphPrompt(GRAPH_1);
+const DIJKSTRA_CHALLENGE_2 = graphPrompt(GRAPH_2);
+const CIPHER_CHALLENGE = cipherPrompt(CIPHER);
+
+const RSA_ANSWER_1 = rsaPlaintext(RSA_1);
+const RSA_ANSWER_2 = rsaPlaintext(RSA_2);
+const DIJKSTRA_ANSWER_1 = shortestDistance(GRAPH_1);
+const DIJKSTRA_ANSWER_2 = shortestDistance(GRAPH_2);
+const CIPHER_ANSWER = atbash(CIPHER.ciphertext);
 
 describe('Evolution Proof', () => {
   let db: InstanceType<typeof Database>;
@@ -238,6 +384,12 @@ describe('Evolution Proof', () => {
     expect(result.text.length).toBeGreaterThan(0);
     expect(result.toolCalls.some(tc => tc.name === 'execute_tools')).toBe(true);
 
+    // THE FLAG. Exactly checkable, and computed by this file's own solver from
+    // the same numbers the prompt above was rendered from.
+    const answered = finalIntegerAnswer(result.text);
+    console.log(`    Answered ${String(answered)}, expected ${String(RSA_ANSWER_1)}`);
+    expect(answered).toBe(RSA_ANSWER_1);
+
     // Fire evolution — should extract pattern from successful tool usage
     await engine.reviewTurn({
       userMessage: RSA_CHALLENGE_1,
@@ -261,6 +413,10 @@ describe('Evolution Proof', () => {
 
     expect(result.text.length).toBeGreaterThan(0);
 
+    const answered = finalIntegerAnswer(result.text);
+    console.log(`    Answered ${String(answered)}, expected ${String(DIJKSTRA_ANSWER_1)}`);
+    expect(answered).toBe(DIJKSTRA_ANSWER_1);
+
     await engine.reviewTurn({
       userMessage: DIJKSTRA_CHALLENGE_1,
       assistantResponse: result.text,
@@ -281,6 +437,14 @@ describe('Evolution Proof', () => {
     console.log(`    Steps: ${result.steps}, Duration: ${result.durationMs}ms`);
 
     expect(result.text.length).toBeGreaterThan(0);
+
+    // A decoded plaintext is compared on its LETTERS: the model keeps or drops
+    // the ciphertext's five-letter grouping as it likes, and that is not part of
+    // the answer. `toContain` because the model states the plaintext inside a
+    // sentence, and the ciphertext cannot satisfy it — Atbash moves every letter
+    // in this string.
+    console.log(`    Expected plaintext ${JSON.stringify(CIPHER_ANSWER)}`);
+    expect(letterKey(result.text)).toContain(letterKey(CIPHER_ANSWER));
 
     await engine.reviewTurn({
       userMessage: CIPHER_CHALLENGE,
@@ -422,6 +586,13 @@ describe('Evolution Proof', () => {
     console.log(`    Duration: ${result.durationMs}ms`);
 
     expect(result.text.length).toBeGreaterThan(0);
+
+    // The transfer has to be a transfer of something CORRECT. A session-2 turn
+    // that reused a crafted tool and answered wrongly is evidence against the
+    // pattern, not for it.
+    const answered = finalIntegerAnswer(result.text);
+    console.log(`    Answered ${String(answered)}, expected ${String(RSA_ANSWER_2)}`);
+    expect(answered).toBe(RSA_ANSWER_2);
   }, 600_000);
 
   liveTest('session 2, turn 2: similar graph challenge (should benefit from pattern)', async () => {
@@ -434,6 +605,10 @@ describe('Evolution Proof', () => {
     console.log(`    Duration: ${result.durationMs}ms`);
 
     expect(result.text.length).toBeGreaterThan(0);
+
+    const answered = finalIntegerAnswer(result.text);
+    console.log(`    Answered ${String(answered)}, expected ${String(DIJKSTRA_ANSWER_2)}`);
+    expect(answered).toBe(DIJKSTRA_ANSWER_2);
   }, 600_000);
 
   // ── Final analysis ─────────────────────────────────────────────
@@ -497,5 +672,120 @@ describe('Evolution Proof', () => {
 
     // 3. Every turn of both sessions is on the session tree
     expect(msgCount).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The oracle itself, guarded — credential-free, so a run with no model still
+ * verifies the instrument.
+ *
+ * Every check below derives its truth INDEPENDENTLY of the solver it checks: an
+ * RSA plaintext is re-encrypted and must give the ciphertext back, a shortest
+ * distance is compared against an exhaustive walk of every simple path, and
+ * Atbash is checked against its own inverse. Nothing is compared against a
+ * number somebody worked out by hand, which is the failure this file already
+ * carried once — a header claiming deterministic verification over a test that
+ * verified nothing.
+ */
+describe('the challenge solvers these turns are graded by', () => {
+  /**
+   * The cheapest simple path, by exhaustive walk. A second implementation, and
+   * a valid oracle for Dijkstra only because every weight is positive — with a
+   * negative edge the cheapest walk can revisit a node and beat every simple
+   * path. That premise is asserted rather than assumed.
+   */
+  const cheapestSimplePath = ({ adjacency, from, to }: GraphChallenge): number => {
+    const out = new Map(adjacency.map(row => [row.node, row.out]));
+    let cheapest = Number.POSITIVE_INFINITY;
+    const walk = (node: string, cost: number, visited: ReadonlySet<string>): void => {
+      if (node === to) {
+        cheapest = Math.min(cheapest, cost);
+        return;
+      }
+      for (const edge of out.get(node) ?? []) {
+        if (visited.has(edge.to)) continue;
+        walk(edge.to, cost + edge.weight, new Set([...visited, edge.to]));
+      }
+    };
+    walk(from, 0, new Set([from]));
+    return cheapest;
+  };
+
+  const RSA_CASES: readonly { readonly challenge: RsaChallenge; readonly answer: number }[] = [
+    { challenge: RSA_1, answer: RSA_ANSWER_1 },
+    { challenge: RSA_2, answer: RSA_ANSWER_2 },
+  ];
+  const GRAPH_CASES: readonly { readonly challenge: GraphChallenge; readonly answer: number }[] = [
+    { challenge: GRAPH_1, answer: DIJKSTRA_ANSWER_1 },
+    { challenge: GRAPH_2, answer: DIJKSTRA_ANSWER_2 },
+  ];
+
+  test('each RSA answer re-encrypts to the ciphertext it was decrypted from', () => {
+    for (const { challenge, answer } of RSA_CASES) {
+      const { n, e, c } = challenge;
+      console.log(`    RSA n=${String(n)} e=${String(e)} c=${String(c)} -> m=${String(answer)}`);
+      // The RSA identity: c = m^e mod n. Satisfying it IS being the plaintext.
+      expect(modPow(BigInt(answer), BigInt(e), BigInt(n))).toBe(BigInt(c));
+      // A residue mod n, so a solver that returned the exponent or the modulus
+      // itself cannot pass by accident.
+      expect(answer).toBeGreaterThanOrEqual(0);
+      expect(answer).toBeLessThan(n);
+      // The modulus really is the product of two primes, which is what makes
+      // the totient above the right one.
+      const [p, q] = factorSemiprime(n);
+      expect(p * q).toBe(n);
+      expect(factorSemiprime(p * q)[0]).toBe(p);
+    }
+  });
+
+  test('each shortest distance equals the cheapest of every simple path', () => {
+    for (const { challenge, answer } of GRAPH_CASES) {
+      const weights = challenge.adjacency.flatMap(row => row.out.map(edge => edge.weight));
+      expect(weights.length).toBeGreaterThan(0);
+      expect(weights.every(weight => weight > 0)).toBe(true);
+      console.log(`    ${challenge.from} -> ${challenge.to} = ${String(answer)}`);
+      expect(answer).toBe(cheapestSimplePath(challenge));
+    }
+  });
+
+  test('the plaintext encodes back to the ciphertext, and Atbash is its own inverse', () => {
+    console.log(`    ${CIPHER.ciphertext} -> ${CIPHER_ANSWER}`);
+    expect(atbash(CIPHER_ANSWER)).toBe(CIPHER.ciphertext.toUpperCase());
+    expect(atbash(atbash(CIPHER.ciphertext))).toBe(CIPHER.ciphertext.toUpperCase());
+    // Every letter MOVED, which is why `toContain` on the live turn cannot be
+    // satisfied by a response that merely quoted the ciphertext back.
+    expect(letterKey(CIPHER_ANSWER)).not.toBe(letterKey(CIPHER.ciphertext));
+    expect(letterKey(CIPHER_ANSWER).length).toBe(letterKey(CIPHER.ciphertext).length);
+  });
+
+  test('every prompt carries the data its answer was computed from', () => {
+    // Rendered rather than transcribed, and this is what holds that true: a
+    // number edited in the data and not in the prose is impossible, because
+    // there is no prose copy of it.
+    for (const { challenge } of RSA_CASES) {
+      const prompt = rsaPrompt(challenge);
+      for (const value of [challenge.n, challenge.e, challenge.c]) {
+        expect(prompt).toContain(String(value));
+      }
+    }
+    for (const { challenge } of GRAPH_CASES) {
+      const prompt = graphPrompt(challenge);
+      for (const row of challenge.adjacency) {
+        for (const edge of row.out) {
+          expect(prompt).toContain(`${edge.to}:${String(edge.weight)}`);
+        }
+      }
+      expect(prompt).toContain(`from ${challenge.from} to ${challenge.to}`);
+    }
+    expect(cipherPrompt(CIPHER)).toContain(CIPHER.ciphertext);
+  });
+
+  test('the two instances of each family differ only in their numbers', () => {
+    // What makes session 2 a transfer test rather than a second warm-up: one
+    // template per family, so the pattern extracted in session 1 is the whole
+    // of what carries over.
+    const skeleton = (prompt: string): string => prompt.replace(/\d+/g, '#');
+    expect(skeleton(RSA_CHALLENGE_1)).toBe(skeleton(RSA_CHALLENGE_2));
+    expect(RSA_CHALLENGE_1).not.toBe(RSA_CHALLENGE_2);
   });
 });

@@ -31,6 +31,7 @@ import { openWorkspaceCLI } from '../packages/cli-backend/src/open';
 import { makeWorkspaceSchemaSql } from '../packages/cli-backend/src/runtime';
 import { requireSandboxedExecutors } from './evals/harness';
 import {
+  finalIntegerAnswer,
   liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, UNCONFIGURED_LLM,
 } from '@kinu.run/test-utils';
 
@@ -48,7 +49,9 @@ const DB_PATH = join(TEST_DIR, 'agent.db');
 interface Problem {
   id: number;
   question: string;
-  answer: number | string;
+  /** One integer, because every question below ends "ONLY the number" and the
+   *  scorer compares numerically. */
+  answer: number;
   difficulty: 'easy' | 'medium' | 'hard';
 }
 
@@ -138,7 +141,7 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
   let model: LanguageModel;
 
   const scorecard: Array<{
-    id: number; difficulty: string; correct: boolean;
+    id: number; difficulty: string; correct: boolean; answered: number | null;
     usedExecuteCode: boolean; toolNames: string[]; responsePreview: string;
   }> = [];
 
@@ -184,22 +187,43 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
       const { response, turn, toolNames } = await solveProblem(model, rt, tools, problem);
       await engine.reviewTurn(turn, null);
 
-      const correct = response.includes(String(problem.answer));
+      // THE ORACLE. `response.includes(String(problem.answer))` stood here and it
+      // was not one: four of these eight answers are single digits and two of
+      // those digits are in their own QUESTION, so a response that echoed the
+      // prompt scored CORRECT. Measured on the questions themselves, an echo
+      // passed problems 8, 3 and 4. `finalIntegerAnswer` states the extraction
+      // rule and the credential-free test below guards it.
+      const answered = finalIntegerAnswer(response);
+      const correct = answered === problem.answer;
       const usedExecuteCode = toolNames.includes('execute_tools');
 
       scorecard.push({
-        id: problem.id, difficulty: problem.difficulty, correct, usedExecuteCode,
+        id: problem.id, difficulty: problem.difficulty, correct, answered, usedExecuteCode,
         toolNames, responsePreview: response.slice(0, 100),
       });
 
       console.log(`  A: ${response.slice(0, 120)}${response.length > 120 ? '...' : ''}`);
       console.log(`  Tools: ${toolNames.length > 0 ? toolNames.join(', ') : 'none'}`);
+      console.log(`  Answered: ${answered === null ? 'nothing extractable' : String(answered)}`);
       console.log(`  Expected: ${problem.answer}`);
       console.log(`  ${correct ? '✅ CORRECT' : '❌ WRONG'} ${usedExecuteCode ? '(used execute_tools)' : '(no code execution)'}`);
     }
 
     const correctCount = scorecard.filter(s => s.correct).length;
     console.log(`\n  Correct: ${correctCount}/${PROBLEMS.length}`);
+    // ONE is a floor on "an answer was really computed", and only now is it that.
+    // Under the substring scorer this line asserted nothing: four of the eight
+    // answers were reachable by echoing the question, so a model that solved
+    // none of them still passed. An extracted integer cannot come from an echo,
+    // so the same number is now a claim.
+    //
+    // Left at one rather than raised to a fraction of eight. The scorecard is
+    // the measurement — eight problems, printed per problem with what each
+    // answered — and this is the liveness floor under it. Eight problems
+    // attempted once each, on whichever tier the run pins, is too small a sample
+    // to carry a higher bar, and a provider failure already reds this suite
+    // through `solveProblem`'s throw rather than through a low count. Raising it
+    // would trade a real floor for a flake on a model wobble.
     expect(correctCount).toBeGreaterThanOrEqual(1);
   }, 1800_000);
 
@@ -212,7 +236,9 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
     for (const s of scorecard) {
       const mark = s.correct ? '✅' : '❌';
       const code = s.usedExecuteCode ? '💻' : '  ';
-      console.log(`  ${mark} ${code} #${s.id} [${s.difficulty.padEnd(6)}] tools=[${s.toolNames.join(',')}]`);
+      const said = s.answered === null ? 'none' : String(s.answered);
+      console.log(`  ${mark} ${code} #${s.id} [${s.difficulty.padEnd(6)}] said=${said} `
+        + `tools=[${s.toolNames.join(',')}]`);
       if (s.correct) correct++;
       if (s.usedExecuteCode) usedCode++;
     }
@@ -230,5 +256,69 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
 
     console.log('  ══════════════════════════════════════════════');
     expect(scorecard.length).toBe(PROBLEMS.length);
+  });
+});
+
+/**
+ * The oracle itself, guarded — credential-free, so a run with no model still
+ * verifies the instrument.
+ *
+ * Every case is a shape a live response takes. The first test is the RED one:
+ * the question echoed back. The substring scorer this replaced returned true
+ * for three of the eight problems on that input, so a model that answered
+ * nothing scored correct and the suite's floor of one was satisfied for free.
+ */
+describe('the answer oracle these problems are scored with', () => {
+  test('an echoed question answers nothing, on every problem whose answer it contains', () => {
+    // Derived from the corpus rather than listed: the hazard IS "the question
+    // states the answer", so the cases are exactly the problems where it does.
+    const echoing = PROBLEMS.filter(p => p.question.includes(String(p.answer)));
+    expect(echoing.map(p => p.id)).toEqual([3, 4, 8]);
+    for (const p of echoing) {
+      expect(finalIntegerAnswer(p.question)).not.toBe(p.answer);
+    }
+  });
+
+  test('a digit inside a larger token is not an answer', () => {
+    // `4x4 grid` is problem 8's own opening and the reason its answer of 4 was
+    // free. A digit welded to a letter is part of a word.
+    expect(finalIntegerAnswer('4x4 grid')).toBeNull();
+    expect(finalIntegerAnswer('run_2 finished')).toBeNull();
+    // A digit inside a longer NUMBER is not the number either, which is the
+    // `42` matches `1042` half of the same defect.
+    expect(finalIntegerAnswer('1042')).toBe(1042);
+  });
+
+  test('the answer the response stood behind is the one extracted', () => {
+    expect(finalIntegerAnswer('1060')).toBe(1060);
+    expect(finalIntegerAnswer('1060.')).toBe(1060);
+    expect(finalIntegerAnswer('The answer is 1060')).toBe(1060);
+    expect(finalIntegerAnswer('1,060')).toBe(1060);
+    // Working first, answer last — including the prompt's own numbers.
+    expect(finalIntegerAnswer('Primes below 100, summed: 1060')).toBe(1060);
+    expect(finalIntegerAnswer('```js\nlet total = 0;\n```\n1060')).toBe(1060);
+    // The converse shape: answer stated, then the code that produced it. The
+    // fence is dropped, so the 100 inside it is not the answer.
+    expect(finalIntegerAnswer('1060\n```js\nfor (let n = 2; n < 100; n++) {}\n```')).toBe(1060);
+    // A fence holding the answer and nothing outside it still answers.
+    expect(finalIntegerAnswer('```\n1060\n```')).toBe(1060);
+  });
+
+  test('a response with no integer answered nothing', () => {
+    expect(finalIntegerAnswer('')).toBeNull();
+    expect(finalIntegerAnswer('I could not compute this.')).toBeNull();
+    // A fraction is not an integer answer, so neither half of it is extracted.
+    expect(finalIntegerAnswer('about 1.5')).toBeNull();
+  });
+
+  test('a negative is not its positive', () => {
+    expect(finalIntegerAnswer('-4')).toBe(-4);
+    // Over the whole corpus rather than one problem: no answer here is negative,
+    // so a response stating the negation of one has not stated it.
+    for (const p of PROBLEMS) {
+      expect(finalIntegerAnswer(`-${String(p.answer)}`)).not.toBe(p.answer);
+    }
+    // A hyphen between digits is a range, so `0-3` states 0 and no negative.
+    expect(finalIntegerAnswer('grid rows 0-3')).toBe(0);
   });
 });

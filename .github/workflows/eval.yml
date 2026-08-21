@@ -9,6 +9,15 @@ name: Quality Eval
 # containing tasks a no-tools single-shot cannot perform. The script now refuses
 # that configuration; the schedule is gone with it.
 #
+# WHO IT RUNS AS, AND WHERE IT POINTS. The `eval-service` account, against the
+# staging deployment. Both come from scripts/eval-credentials.ts over
+# packages/test-utils/src/eval-identity.ts — the resolution every other eval
+# path uses — and a credential aimed at any other deployment is refused there
+# and stops this job. It used to read a base URL and an auth header straight
+# from repository secrets, so one secret could name production and nothing
+# asked. Two vendor keys remain secrets, ANTHROPIC_API_KEY and OPENAI_API_KEY:
+# each buys a model from its vendor, names no deployment, and creates nothing.
+#
 # `validate-corpus` needs no credentials and no model, so it keeps the nightly
 # cadence. It is the measurement instrument's own integrity check: every bench
 # task's defect must break this repo's checks and reversing it must restore
@@ -54,13 +63,32 @@ jobs:
       - name: Verify gate logic (no model calls)
         run: bun test scripts/eval.test.ts packages/core/tests/unit-eval-report.test.ts
 
-      # The live A/B. Provider auth comes from repo secrets/vars; with none
-      # configured the script fails with an honest message (never a hardcoded
-      # key). It also refuses to run when the baseline is not a different model.
+      # The identity and the target, resolved by the one process that resolves
+      # them. Two lines on stdout — origin, then token — or nothing when no eval
+      # credential exists. A NON-ZERO EXIT IS FATAL: it means the credential
+      # named a deployment the allowlist refuses, and `bash -e` stops the job
+      # before anything spends. The token reaches the next step through
+      # $GITHUB_ENV rather than a command line, so it appears in no process
+      # listing.
+      - name: Resolve the eval-service identity
+        shell: bash
+        env:
+          KINU_EVAL_TOKEN: ${{ secrets.EVAL_SERVICE_TOKEN }}
+        run: |
+          RESOLVED="$(bun scripts/eval-credentials.ts)"
+          mapfile -t PAIR <<< "$RESOLVED"
+          if [[ ${#PAIR[@]} -eq 2 ]]; then
+            printf 'KINU_ORIGIN=%s\n' "${PAIR[0]}" >> "$GITHUB_ENV"
+            printf 'KINU_TOKEN=%s\n' "${PAIR[1]}" >> "$GITHUB_ENV"
+          fi
+
+      # The live A/B, over that pair. With no credential anywhere the script
+      # fails with an honest message instead of measuring nothing — this job runs
+      # only when somebody dispatched it or labelled a PR, so a green run that
+      # called no model would answer a question nobody asked. It also refuses to
+      # run when the baseline is not a different model.
       - name: Run model A/B
         env:
-          KINU_BASE_URL: ${{ secrets.EVAL_BASE_URL }}
-          KINU_AUTH: ${{ secrets.EVAL_AUTH }}
           ANTHROPIC_API_KEY: ${{ secrets.EVAL_ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.EVAL_OPENAI_API_KEY }}
           KINU_MODEL: ${{ github.event.inputs.model || vars.EVAL_MODEL }}

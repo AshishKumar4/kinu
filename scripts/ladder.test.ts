@@ -400,8 +400,18 @@ describe('cost, so a tier that stops being run is a decision and not a drift', (
     expect(MEASURED_PUSH_SECONDS).toBeLessThan(180);
   });
 
-  test('every declared gate carries a measured cost and a named blind spot', () => {
-    const vague = LADDER
+  // OVER THE DEPLOY TIER'S REAL MEMBERSHIP, not over LADDER. `gatesFor('deploy')`
+  // appends any deploy.sh line no LADDER entry names, at `seconds: 0` — so for as
+  // long as this filtered LADDER, a gate could join the deploy path and cost
+  // nothing on the tier's own cost line. Two did: `bun run verify:lean`, and the
+  // bench command whose LADDER entry stopped at the `scripts/bench*` glob while
+  // deploy.sh also passed the core bench units. The tier declared 398.8s and ran
+  // 52 gates of which 50 were described.
+  //
+  // Synthesis stays: an undeclared deploy gate must still RUN. This is what makes
+  // it also fail, by name, until somebody measures it.
+  test('every gate the deploy tier runs carries a measured cost and a named blind spot', () => {
+    const vague = gatesFor('deploy', deploy)
       .filter((gate) => gate.seconds <= 0 || gate.blind.length < 20 || gate.catches.length < 20)
       .map((gate) => gate.run);
     expect(vague).toEqual([]);

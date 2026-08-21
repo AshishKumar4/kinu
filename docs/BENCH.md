@@ -669,7 +669,7 @@ documentation defect rather than a property of the arm, so they are listed now.
 
 | Command | What it is |
 |---|---|
-| `scripts/tbench-arm.sh <evolve> <seed> <size> <model-id> <concurrency>` | One Terminal-Bench 2.1 arm. The mechanism behind `seal-ledger.jsonl` ordinals 6 to 8. It REFUSES to start if `KINU_BASE_URL`, `KINU_AUTH`, `KINU_MODEL` or `KINU_HOME` is set in the shell. Unset them; do not blank them. It reads its token from `~/.config/kinu/bench-token`, and a missing file surfaces as bash's own `cat` error, which is the weakest failure message of any arm here. |
+| `scripts/tbench-arm.sh <evolve> <seed> <size> <model-id> <concurrency>` | One Terminal-Bench 2.1 arm. The mechanism behind `seal-ledger.jsonl` ordinals 6 to 8. It refuses to start if `KINU_BASE_URL`, `KINU_AUTH`, `KINU_MODEL`, `KINU_HOME` or `KINU_EVAL_TOKEN` is set in the shell. Unset them; do not blank them. The corpus is `$TBENCH_CORPUS`, or `terminal-bench-2.1` at the root of the tree the script runs from, and an absent one refuses with the fetch command. The token comes from `~/.config/kinu/eval-service-token`. |
 | `scripts/tbench-after-deploy.sh <sha-file> <evolve> <seed> <size> <model> <concurrency>` | The same arm, held until the deployed worker serves a declared commit sha, so the model transport is confirmed rather than mid-deploy. `TBENCH_WAIT_CAP` defaults to 5400 s and `TBENCH_SETTLE` to 120 s. |
 | `bun scripts/bench-external.ts compare --a <job-dir> --b <job-dir>` | Reads retained trials out of Harbor job directories and pairs them through this repo's one statistics path. Also `gain --stateful <dir> --stateless <dir>`. No model and no credential. It computes nothing new, and it reuses the comparator so an external corpus cannot get a second, friendlier one. |
 | `bun scripts/eval-dispersion.ts <runA.json> <runB.json> [--target-pp N]` | The corpus's own noise (ψ), from two runs of the SAME arm. It refuses two records whose arm configuration differs (`evolution` or `settle`), because their difference is an effect and not dispersion. It reads the run records `tests/evals/behaviour.eval.ts` writes. |
@@ -809,5 +809,87 @@ paired run answers the narrower question.
 $0.61 of model spend for the four runs, including one capped probe. Both DeepSWE
 arms finished their turn on their own, with no timeout and no error, and failed
 the task's own tests. That is a real result rather than an instrument failure. At
-n=1 per arm it establishes nothing about the gain, and nothing here is a
-measurement of Kinu yet.
+n=1 per arm it establishes nothing about the gain. The section below records what
+has been scored since.
+
+### Terminal-Bench 2.1: what is on disk, and what a scored arm still needs
+
+Measured 2026-08-21.
+
+The corpus is 89 task directories, 60 MB, content hash `ce880ff2f89c`, fetched
+2026-08-10, and it is gitignored, so it lives in one checkout rather than in
+every worktree. `python3 -m bench.harbor.corpus sample <corpus> --size 40 --seed
+20260817` over it returns the exact 40 task names pre-registered at ledger
+ordinal 6. That equality is asserted by `scripts/bench-external.test.ts`, which
+skips when no corpus is reachable.
+
+Two things stand between that corpus and a scored arm, and neither is the corpus:
+
+- The eval-service credential at `~/.config/kinu/eval-service-token`. Mint it
+  against staging.
+- A container image per task, pulled by Harbor on first run. The pre-registration
+  put 80 trials at about 4.8 hours and 50 to 100 GB of images, and that disk, not
+  the model, is the binding budget.
+
+### The relaunched both-arms run, 2026-08-17
+
+Ledger ordinal 8 discarded the first launch and relaunched it. The relaunch ran
+and no ledger row records it. Its trials are retained in `/var/tmp/tbench-jobs`
+under `tb21-seed20260817-evolve{false,true}-28bc79307`, which is volatile: a
+reboot takes them.
+
+13 of the design's 80 trials completed, on
+`@cf/deepseek-ai/deepseek-v4-flash-0731`. Per-task rewards, read through
+`bun scripts/bench-external.ts compare`:
+
+| task | `evolve=false` | `evolve=true` |
+|---|---|---|
+| `build-pov-ray` | **1.0** | not reached |
+| `hf-model-inference` | **1.0** | **1.0** |
+| `gpt2-codegolf` | 0.0 | 0.0 |
+| `make-doom-for-mips` | 0.0 | 0.0 |
+| `path-tracing-reverse` | 0.0 | 0.0 |
+| `rstan-to-pystan` | 0.0 | 0.0 |
+
+Three passes are the first Terminal-Bench 2.1 rewards this agent has scored on
+more than one task. They carry no claim about self-evolution, and the comparator
+says why: 5 paired tasks, 0 flips, and the pair is INADMISSIBLE because the
+baseline arm billed no measurable tokens, so the pre-registered equal-spend ratio
+does not exist. Two arms of 13 trials also cannot reach the design's own
+six-differing-pair floor.
+
+What the relaunch did settle is the observation the two July runs were built
+wrong to produce: 4 of 5 candidate trials emitted an evolution event and 4 turns
+were execution-graded, while 0 of 6 baseline trials emitted one. The switch under
+test acts, and it is measured acting rather than assumed from the flag.
+
+### Code golf, and the other families with a stated threshold
+
+Measured 2026-08-21 by reading the 89 `instruction.md` files.
+
+The internal instrument for a measured optimization challenge is
+`tests/evals/optimization.eval.ts`. It runs one hard-task corpus instance through
+the shipped CLI, holds the result to a pre-registered `task_outcome` of 0.5, and
+records the wall clock, the turns, the tool calls and the swarm shape beside it.
+It is its own arm of `scripts/eval-tier.sh`, with its own spend file, so a run
+that stopped reaching a model fails instead of hiding in another arm's total.
+
+Terminal-Bench 2.1 adds golf in the literal sense, graded by somebody else's
+verifier against a threshold the instruction states:
+
+| task | the bar it states | in the ordinal 6 sample |
+|---|---|---|
+| `gpt2-codegolf` | a dependency-free C GPT-2 sampler under 5000 bytes | yes |
+| `write-compressor` | at most 2500 bytes | yes |
+| `path-tracing-reverse` | under 2k compressed | yes |
+| `path-tracing` | under 2k compressed | no |
+| `regex-chess` | under 100,000 regex pairs | no |
+| `largest-eigenval` | faster than the reference numpy solution | no |
+| `portfolio-optimization` | faster than the baseline | no |
+
+The corpus also carries 4 tasks tagged `mathematics`, 8 tagged `security` and 1
+tagged `optimization`. Those are the two families the internal hard-task corpus
+turned down, and `packages/test-utils/src/hard-tasks/tasks.ts` says why: scored
+internally they are one bit, and the interesting security categories need
+binaries and a network the workspace cannot reach. Terminal-Bench scores them in
+its own container with its own checker, so neither objection applies there.
