@@ -52,8 +52,7 @@ describe('CLI TUI layout', () => {
       renderer.destroy();
     }
   });
-
-  test('status bar clips model metadata to narrow terminals and retains the CLI version', async () => {
+  test('status bar drops the model control whole on narrow terminals and retains the CLI version', async () => {
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 52, height: 6, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
     try {
@@ -73,8 +72,10 @@ describe('CLI TUI layout', () => {
       await renderSettled(renderOnce);
       const frame = captureCharFrame();
       expect(frame).toContain(`cli ${VERSION}`);
-      expect(frame).toContain('…');
+      // Nothing half-clips: too narrow for even the bare name means the
+      // control is gone, not an ellipsized fragment.
       expect(frame).not.toContain('A Very Long Model Name That Cannot Fit');
+      expect(frame).not.toContain('…');
       for (const line of frame.split('\n')) {
         expect([...line].length).toBeLessThanOrEqual(52);
       }
@@ -150,6 +151,45 @@ describe('CLI TUI layout', () => {
     });
   });
 
+  test('the model control degrades whole — hint, then name, never a clipped bracket', async () => {
+    // Long display names are where the budget runs out; the capture fixture's
+    // Deepseek spelling is the honest worst case.
+    const render = async (width: number, assertions: (frame: string) => void) => {
+      const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width, height: 6, useThread: false, maxFps: Number.POSITIVE_INFINITY });
+      const root = createRoot(renderer);
+      try {
+        root.render(
+          <StatusBar
+            name="checkout"
+            mode="local"
+            model="@cf/deepseek-ai/deepseek-v4-pro-0813"
+            reasoningEffort="high"
+            connected={true}
+            contextTokens={2300}
+            contextWindow={128_000}
+            toolCount={14}
+            autoEvolve={false}
+            branchCount={1}
+          />,
+        );
+        await renderSettled(renderOnce);
+        assertions(captureCharFrame());
+      } finally {
+        root.render(<box />);
+        renderer.destroy();
+      }
+    };
+    await render(88, (frame) => {
+      expect(frame).toContain('[Ctrl+P]');
+    });
+    await render(64, (frame) => {
+      const line = frame.split('\n').find((row) => row.includes('Deepseek V4 Pro'));
+      expect(line).toBeDefined();
+      // A bracket that opens must close: '[Ct…' teaches nobody anything.
+      expect(line?.match(/\[[^\]]*…/)).toBeNull();
+    });
+  });
+
   // The chrome's glyph language is textual only: box-drawing, geometric shapes,
   // dingbats, braille. Emoji-presentation code points render unpredictably per
   // terminal font and read as leftovers of another era, so no frame may carry
@@ -194,7 +234,7 @@ describe('CLI TUI layout', () => {
             { id: 'u1', role: 'user', content: 'Run the suite', attachments: ['notes.md'] },
             { id: 'a1', role: 'assistant', content: 'On it.' },
             { id: 't1', role: 'tool_call', content: '', toolName: 'exec', args: '{"cmd":"bun test"}' },
-            { id: 'r1', role: 'tool_result', content: JSON.stringify({ reason: 'approval_required', error: 'Outside this workspace.' }) },
+            { id: 'r1', role: 'tool_result', content: JSON.stringify({ reason: 'denied', error: 'Outside this workspace.' }) },
             { id: 'e1', role: 'evolution', content: '[reflection] kept the fix minimal' },
           ]}
         />
@@ -318,6 +358,9 @@ describe('CLI TUI layout', () => {
       expect(frame).not.toContain('/helptoShow');
       expect(frame).not.toContain('1 /help');
       expect(frame).not.toContain('2 /status');
+      // The palette's own instructions are copy, not data: they read whole.
+      expect(frame).toContain('Type to filter · Enter runs a completed command');
+      expect(frame).toContain('Keep typing to filter.');
     } finally {
       root.render(<box />);
       renderer.destroy();

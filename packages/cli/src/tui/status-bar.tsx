@@ -3,8 +3,8 @@
  *
  * Segment discipline, widest to narrowest terminal: the identity anchors left
  * (brand, workspace, mode — the mode never silently clips away, the name
- * does), the model control keeps its full width while any room remains, and
- * the middle segments earn their place by liveness — a running branch first,
+ * does), the model control degrades whole — hint, then bare name, then gone —
+ * and the middle segments earn their place by liveness — a running branch first,
  * then context burn, effort, evolve mode, tool count — dropping whole from
  * the right as width runs out.
  */
@@ -58,8 +58,10 @@ export function StatusBar({ name, mode, model, reasoningEffort, onModelSelect, c
 
   // The model control reserves its ideal width up front; metadata spends only
   // what the identity and the control leave behind.
-  const modelControl = ` ${modelDisplayName(model) || 'model'} [Ctrl+P]`;
-  const modelIdeal = Math.min(34, modelControl.length);
+  const modelName = modelDisplayName(model) || 'model';
+  const modelFull = ` ${modelName} [Ctrl+P]`;
+  const modelBare = ` ${modelName}`;
+  const modelIdeal = Math.min(34, modelFull.length);
   const optionalSegments = [
     ...(branchCount > 0 ? [{ text: branchCount > 1 ? `  ⎇ ${branchCount} branches` : '  ⎇ branch', color: tuiColors.amber }] : []),
     { text: `  ${formatContextUsage(model, contextTokens, contextWindow)}`, color: tuiColors.muted },
@@ -76,8 +78,11 @@ export function StatusBar({ name, mode, model, reasoningEffort, onModelSelect, c
     metadataWidth += segment.text.length;
   }
   // Whatever metadata did not spend flows back to the control; the total can
-  // never overflow because both sides are cut from the same leftover.
+  // never overflow because both sides are cut from the same leftover. The
+  // control then degrades whole — hint first, then the name — because a
+  // half-clipped bracket teaches nobody anything.
   const modelBudget = Math.min(modelIdeal, Math.max(0, available - identityWidth - metadataWidth));
+  const modelShown = modelBudget >= modelFull.length ? modelFull : modelBudget >= modelBare.length ? modelBare : '';
   return (
     <box
       style={{
@@ -99,9 +104,9 @@ export function StatusBar({ name, mode, model, reasoningEffort, onModelSelect, c
         <span fg={tuiColors.muted}>{identityTail}</span>
       </text>
       <box style={{ flexDirection: 'row', alignItems: 'center' }}>
-        {modelBudget > 0 && (
+        {modelShown !== '' && (
           <box onMouseDown={onModelSelect} style={{ flexDirection: 'row' }}>
-            <text><span fg={tuiColors.text}>{clipText(modelControl, modelBudget)}</span></text>
+            <text><span fg={tuiColors.text}>{modelShown}</span></text>
           </box>
         )}
         <text>

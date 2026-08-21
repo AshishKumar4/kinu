@@ -860,7 +860,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
         <textarea
           ref={(value) => { inputRef.current = value; }}
           focused={inputFocused}
-          placeholder={!ready ? 'Connecting…' : isProcessing ? 'Type to steer · Enter delivers mid-turn · Tab queues · Ctrl+B branches · Esc interrupts' : modelPicker ? 'Select a model or Esc' : changelogView ? 'Enter reverts the selected line · Esc keeps everything' : takesView ? 'Enter uses the selected take · Esc keeps the answer' : inputState.walkbackOpen ? 'Pick a message to walk back to, or Esc' : sessionPicker ? 'Type session number/id or /cancel' : 'Type a message or /help · Shift+Enter for a new line'}
+          placeholder={!ready ? 'Connecting…' : isProcessing ? 'Type to steer · Tab queues · Ctrl+B branches · Esc interrupts' : modelPicker ? 'Select a model or Esc' : changelogView ? 'Enter reverts the selected line · Esc keeps everything' : takesView ? 'Enter uses the selected take · Esc keeps the answer' : inputState.walkbackOpen ? 'Pick a message to walk back to, or Esc' : sessionPicker ? 'Type session number/id or /cancel' : 'Type a message or /help · Shift+Enter for a new line'}
           wrapMode="word"
           keyBindings={[
             { name: 'return', action: 'submit' },
