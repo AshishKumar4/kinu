@@ -13,7 +13,8 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { readSources } from "../../../scripts/sources.ts";
 
@@ -178,7 +179,10 @@ assert.ok(
   `found ${corpus.producers} stub producers but 0 \`Object.assign\`/spread operations under packages/cf-backend/src; a rule keyed on copying could then never fire`,
 );
 
-const fixtures = mkdtempSync(join(repoRoot, ".no-copy-rpc-stub-gate-"));
+// System temp dir, NOT the repo root: gates built on scripts/sources.ts enumerate untracked
+// worktree files on purpose, so repo-root scratch is visible mid-run to every one of them.
+// oxlint takes the absolute path fine — see no-ambient-git.gate.test.ts.
+const fixtures = mkdtempSync(join(tmpdir(), "no-copy-rpc-stub-gate-"));
 try {
   const badDirectory = join(fixtures, "red");
   const goodDirectory = join(fixtures, "green");
@@ -192,7 +196,7 @@ try {
   const lint = (directory: string): LintReport => {
     const run = spawnSync(
       "./node_modules/.bin/oxlint",
-      ["-c", ".oxlintrc.json", "-f", "json", relative(repoRoot, directory)],
+      ["-c", ".oxlintrc.json", "-f", "json", directory],
       { cwd: repoRoot, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
     );
     assert.ok(run.stdout.length > 0, `oxlint produced no JSON for ${directory}:\n${run.stderr}`);
