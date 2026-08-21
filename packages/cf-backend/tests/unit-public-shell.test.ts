@@ -30,7 +30,7 @@ import {
   type Mode, type Palette,
 } from '../src/lib/public-shell';
 import {
-  approvalDocument, authDocument, installDocument, landingDocument, loginDocument, proofSection,
+  approvalDocument, authDocument, installDocument, landingDocument, loginDocument,
 } from '../src/lib/public-pages';
 import { heroSearch } from '../src/lib/hero-search';
 
@@ -363,13 +363,16 @@ describe('the README film', () => {
  * reads as proof is exactly the fabrication this keeps off the page.
  */
 describe('social proof waits for its owner', () => {
+  const INSTALL = "curl -fsSL 'https://kinu.run/install.sh' | bash";
+
   test('the shipped landing carries no proof section while no entry exists', () => {
-    const html = landingDocument("curl -fsSL 'https://kinu.run/install.sh' | bash");
-    expect(html).not.toContain('id="proof"');
+    expect(landingDocument(INSTALL)).not.toContain('id="proof"');
   });
 
   test('supplied entries render as quotes with their attribution', () => {
-    const html = proofSection([{ quote: 'It settled the flaky test.', name: 'A. User', role: 'maintainer' }]);
+    const html = landingDocument(INSTALL, [
+      { quote: 'It settled the flaky test.', name: 'A. User', role: 'maintainer' },
+    ]);
     expect(html).toContain('id="proof"');
     expect(html).toContain('It settled the flaky test.');
     expect(html).toContain('A. User · maintainer');
