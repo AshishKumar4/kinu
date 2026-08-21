@@ -280,4 +280,26 @@ describe('the mark', () => {
     const onDisk = readFileSync(resolve(import.meta.dir, '../public/assets/kinu-icon.svg'), 'utf8');
     expect(onDisk).toBe(markDocument());
   });
+
+  /**
+   * The README banners carry the shipped mark, not a copy of one.
+   *
+   * `docs/assets/banner*.svg` are hand-authored documents outside the bundle,
+   * so the stroke in them is a LITERAL of the shipping mark's path data.
+   * Nothing regenerates them and nothing read them, so changing which mark
+   * ships moved the favicon, the four public pages and the app, and left the
+   * banner at the top of the README drawing the previous one.
+   *
+   * The path DATA is what is asserted, not the whole element: the banners fill
+   * with `var(--thread)` so their own two themes can colour the stroke, which
+   * is a real difference from `currentColor` and the only one allowed.
+   */
+  test('both README banners draw the mark that ships', () => {
+    const shipped = [...mark(24, KINU_MARK).matchAll(/<path d="([^"]+)"/g)].map((m) => m[1]);
+    expect(shipped, `${KINU_MARK} renders no path`).not.toBeEmpty();
+    for (const file of ['banner.svg', 'banner-dark.svg']) {
+      const svg = readFileSync(resolve(import.meta.dir, '../../../docs/assets', file), 'utf8');
+      for (const d of shipped) expect(svg, `${file} is missing ${KINU_MARK}`).toContain(`<path d="${d}"`);
+    }
+  });
 });
