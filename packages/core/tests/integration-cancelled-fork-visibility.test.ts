@@ -17,7 +17,6 @@ import { Database } from 'bun:sqlite';
 import { HeadJournal, initHeadsTables } from '../src/heads/index';
 import {
   reconcileInterruptedForks, FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
-  RUN_INTERRUPTED_REASON,
 } from '../src/heads/reconcile';
 import { RunEventRecorder, initRunEventTables } from '../src/events/recorder';
 import { headPhaseRunEvent } from '../src/orchestrator/heads-support';
@@ -255,13 +254,14 @@ describe('an operator-cancelled fork is not reported as running', () => {
     });
 
     const cut = recorder.read(RUN);
-    expect(cut.filter((event) => event.type === 'run_end')).toMatchObject([
-      { type: 'run_end', reason: RUN_INTERRUPTED_REASON },
-    ]);
+    const closed = cut.filter((event) => event.type === 'run_end');
+    expect(closed).toMatchObject([{ type: 'run_end', reason: 'interrupted' }]);
     // The reason is not a mechanism. This ledger cannot distinguish an eviction
     // from a process exit from a crash, and writing a guess into durable history
-    // is what the fork journal's own reason was rewritten to stop doing.
-    expect(RUN_INTERRUPTED_REASON).not.toContain('evict');
+    // is what the fork journal's own reason was rewritten to stop doing. Read off
+    // the emitted row, so a production rename fails here instead of agreeing with
+    // itself.
+    expect(closed[0]?.reason).not.toContain('evict');
 
     // The closed run keeps its own terminal row, and gains no second one.
     expect(recorder.read('run-that-finished').map((event) => event.type))

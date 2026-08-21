@@ -55,7 +55,7 @@ export interface RunEventLedger {
  * durable history. `reason` is otherwise the turn's own status, so this reads
  * beside those without pretending to be one.
  */
-export const RUN_INTERRUPTED_REASON = 'interrupted';
+const RUN_INTERRUPTED_REASON = 'interrupted';
 
 /**
  * The resume gate both backends hand {@link reconcileInterruptedForks}: re-drive

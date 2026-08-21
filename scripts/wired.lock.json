@@ -59,7 +59,6 @@
   "packages/cf-backend/src/lib/executors.ts#EXECUTOR_ORDER (unreached-export)",
   "packages/cf-backend/src/lib/fork-tree-rows.ts#MctsRow.branch_agent_key (unsupplied-field)",
   "packages/cf-backend/src/lib/fork-tree-rows.ts#MctsRow.msg_id (unsupplied-field)",
-  "packages/cf-backend/src/lib/protocol.ts#ForkNode.createdAt (unsupplied-field)",
   "packages/cf-backend/src/lib/public-shell.ts#RADII (unreached-export)",
   "packages/cf-backend/src/lib/public-shell.ts#THEME_BLOCKS (unreached-export)",
   "packages/cf-backend/src/lib/public-shell.ts#THEME_BOOT (unreached-export)",
