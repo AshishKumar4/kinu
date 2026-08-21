@@ -20,7 +20,14 @@ MODEL="${4:?model id}"
 CONCURRENCY="${5:?concurrent trials}"
 
 WORKTREE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CORPUS=/home/mrwhite0racle/Kinu/terminal-bench-2.1
+# Where the corpus is, in the one place `.gitignore` and `bench/harbor/kinu_agent.py`
+# already say it is: the repository root. This line used to name an absolute path
+# under the operator's checkout directory, and the rename to Kinu rewrote the
+# directory name inside it, so it pointed at nothing from that commit onward. A
+# path spelled relative to the tree cannot be broken by renaming the product.
+# TBENCH_CORPUS points at a shared copy, which is how one 60 MB fetch serves
+# several worktrees.
+CORPUS="${TBENCH_CORPUS:-$WORKTREE/terminal-bench-2.1}"
 JOBS_DIR=/var/tmp/tbench-jobs
 SHA="$(git -C "$WORKTREE" rev-parse --short=9 HEAD)"
 JOB_NAME="tb21-seed${SEED}-evolve${EVOLVE}-${SHA}"
@@ -47,6 +54,27 @@ for trap_var in KINU_BASE_URL KINU_AUTH KINU_MODEL KINU_HOME KINU_EVAL_TOKEN; do
     exit 2
   fi
 done
+
+# The corpus, checked here rather than through the sampler below. Two reasons and
+# both are about the failure being readable. The sampler's FileNotFoundError goes
+# into a pipe, so an absent corpus used to surface as "the sample returned 0
+# tasks" — a message that names the count and hides the cause, and it hid a corpus
+# path that had been dead since the rename. And this check sits ABOVE the
+# credential one because the corpus is free and public: an operator can prove this
+# refusal fires without holding a token, where a check reachable only with a
+# credential is a check nobody exercises.
+if [ ! -d "$CORPUS" ]; then
+  parent="$(dirname "$CORPUS")"
+  echo "REFUSING: no Terminal-Bench corpus at $CORPUS." >&2
+  echo "The dataset is public. Fetch it, name the directory after the RELEASE, and write" >&2
+  echo "its manifest — the manifest is what ties a score to the task set that produced it:" >&2
+  echo "  harbor datasets download terminal-bench/terminal-bench-2-1@6 -o $parent" >&2
+  echo "  mv $parent/terminal-bench-2-1 $CORPUS   # export mode names the dataset, not the release" >&2
+  echo "  python3 -m bench.harbor.corpus init $CORPUS --name terminal-bench --version 2.1 \\" >&2
+  echo "    --registry-ref terminal-bench/terminal-bench-2-1@6 --fetched-at \$(date -I)" >&2
+  echo "Set TBENCH_CORPUS to share one 60 MB copy across worktrees." >&2
+  exit 2
+fi
 
 # The eval-service credential, from a file only this operator can read. It used
 # to be exported as KINU_TOKEN, which the CLI also reads as a SIGNED-IN
