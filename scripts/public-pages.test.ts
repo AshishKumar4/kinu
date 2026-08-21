@@ -46,6 +46,9 @@ declare global {
 const PHONE = { width: 390, height: 844 } as const;
 const TABLET = { width: 640, height: 900 } as const;
 const DESKTOP = { width: 1280, height: 900 } as const;
+/** The wide screens the page is now designed for, not merely tolerated on. */
+const WIDE = { width: 1920, height: 1000 } as const;
+const WIDER = { width: 2560, height: 1200 } as const;
 
 const PAGES = ['landing', 'login', 'install', 'approve'] as const;
 
@@ -103,11 +106,15 @@ interface Facts {
   cliFilmStill?: { played: boolean; visibleLines: number; total: number };
   /** The web film as fetched from the server the page names. */
   webFilm?: { loading: string | null; status: number; bytes: number; decodedWidth: number };
+  /** What the page does with a wide screen: how much width it takes, how much
+   *  padding a cell keeps, the narrowest mode cell, and whether every glimpse
+   *  still fits the card it sits in. Keyed by viewport width. */
+  wide: Record<string, { pageWidth: number; minPad: number; cellInner: number; glimpseFits: boolean }>;
 }
 
 let browser: Browser;
 let origin: string;
-const facts: Facts = { overflow: {}, targets: {}, contrast: [] };
+const facts: Facts = { overflow: {}, targets: {}, contrast: [], wide: {} };
 
 /** sRGB relative luminance, per WCAG. */
 function luminance(rgb: readonly [number, number, number]): number {
@@ -460,7 +467,9 @@ beforeAll(async () => {
 
     // ── Width, and the size of a thing you tap ────────────────────────
     for (const frame of PAGES) {
-      for (const [label, size] of [['390', PHONE], ['640', TABLET], ['1280', DESKTOP]] as const) {
+      for (const [label, size] of [
+        ['390', PHONE], ['640', TABLET], ['1280', DESKTOP], ['1920', WIDE], ['2560', WIDER],
+      ] as const) {
         const page = await openPage(frame, SILK_DARK, size);
         if (frame === 'landing') {
           await page.waitForFunction(() => !document.querySelector('[data-growing]'), { timeout: 8000 });
@@ -475,6 +484,31 @@ beforeAll(async () => {
             const hits = [...document.querySelectorAll('a.btn, button.copy, a.provider, button[type="submit"]')]
               .filter((hit) => hit.getClientRects().length > 0);
             return Math.min(...hits.map((hit) => hit.getBoundingClientRect().height), Infinity);
+          });
+        }
+        // ── The wide screens: room used, and nothing crammed ──────────
+        // Measured rather than declared: the column's real width, the least
+        // padding any grid cell keeps, the narrowest cell on the page (the
+        // four-across grids at this width, not the mode cells), and whether any
+        // glimpse breaks out of its card.
+        if (frame === 'landing' && (label === '1920' || label === '2560')) {
+          facts.wide[label] = await page.evaluate(() => {
+            const column = document.querySelector('.page')!;
+            const cells = [...document.querySelectorAll('.grid > .cell')];
+            const pad = (cell: Element): number => parseFloat(getComputedStyle(cell).paddingLeft);
+            const fits = [...document.querySelectorAll('[data-glimpse]')].every((glimpse) => {
+              const card = glimpse.closest('.cell');
+              if (card === null) return false;
+              const inner = glimpse.getBoundingClientRect();
+              const outer = card.getBoundingClientRect();
+              return inner.left >= outer.left - 1 && inner.right <= outer.right + 1;
+            });
+            return {
+              pageWidth: column.getBoundingClientRect().width,
+              minPad: Math.min(...cells.map(pad)),
+              cellInner: Math.min(...cells.map((cell) => cell.clientWidth - pad(cell) * 2)),
+              glimpseFits: fits,
+            };
           });
         }
         await page.close();
@@ -665,7 +699,7 @@ describe('the install command is on the page, not behind a navigation', () => {
 });
 
 describe('every public page fits the screen it is on', () => {
-  test('nothing scrolls sideways, at any of the three widths', () => {
+  test('nothing scrolls sideways, at any of the five widths', () => {
     for (const [where, overflow] of Object.entries(facts.overflow)) {
       expect(overflow, where).toBeLessThanOrEqual(0);
     }
@@ -675,6 +709,37 @@ describe('every public page fits the screen it is on', () => {
     for (const [frame, height] of Object.entries(facts.targets)) {
       if (height === Infinity) continue;
       expect(height, `${frame}: smallest control`).toBeGreaterThanOrEqual(34);
+    }
+  });
+});
+
+/**
+ * A 2K or 4K screen is a design, not a leftover. The page widens in steps and
+ * the cells take real padding, so these are the numbers that catch the
+ * complaint they exist for: a column that ignores the room, a cell squeezed
+ * below a legible width, and a glimpse breaking out of the card it sits in.
+ */
+describe('the landing is designed for the wide screens', () => {
+  test('the column uses the room instead of holding one narrow measure', () => {
+    expect(facts.wide['1920']!.pageWidth, 'the page stayed narrow at 1920').toBeGreaterThan(1650);
+    expect(facts.wide['2560']!.pageWidth, 'the page stayed narrow at 2560').toBeGreaterThan(2100);
+    // And it never spills: the overflow pass above covers both widths too.
+    expect(facts.wide['2560']!.pageWidth).toBeLessThanOrEqual(2560);
+  });
+
+  test('nothing crams: cells keep their padding and a mode cell stays legible', () => {
+    for (const at of ['1920', '2560'] as const) {
+      const wide = facts.wide[at]!;
+      expect(wide.minPad, `${at}: least cell padding`).toBeGreaterThanOrEqual(26);
+      // 300px is the width below which a terminal row and a sidebar both stop
+      // being readable, so it is the floor the glimpses are built against.
+      expect(wide.cellInner, `${at}: narrowest mode cell`).toBeGreaterThanOrEqual(300);
+    }
+  });
+
+  test('every glimpse fits the card it sits in', () => {
+    for (const at of ['1920', '2560'] as const) {
+      expect(facts.wide[at]!.glimpseFits, `${at}: a glimpse overflowed its card`).toBeTrue();
     }
   });
 });
