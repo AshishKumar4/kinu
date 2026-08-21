@@ -310,7 +310,7 @@ available bindings. `getProviders()` filters to available-only for `createExecut
 - `@callable()` decorator for RPC methods exposed to the React UI
 - A tool that cannot do what it was asked answers with a CLASS, never with prose alone: `{ reason: ErrorCode, error: string }`, reason first. `KinuError`/`ErrorCode`/`toKinuError` in `@kinu.run/core/obs` build it, `refusalText` (`execution/exec-result.ts`) puts it on the string channel every executor tool answers on, and `read-models/tool-failures.ts` is the reader that branches on the class. All five executor tools are converted — `sandbox`, `nimbus`, `parent`, `device-tunnel-executor`, `inline` — so a returned `exec error: …` string is now a regression, not a convention to copy. The residue is listed and reasoned in [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) § "What is NOT converted"; `neverthrow` was REJECTED with evidence and must not be added — see § "Why not neverthrow"
 - Executor tools use positional args (`positionalArgs: true`) for codemode
-- maxSteps = 500 default, configurable via `KINU_MAX_STEPS`
+- No per-turn bounds (owner ruling 2026-08-21): one LLM call gets `LLM_CALL_TIMEOUT_MS` = 600 s of silence and up to `LLM_CALL_MAX_RETRIES` = 3 retries; the loop runs until the model stops calling tools
 
 ## Errors, Logging & Traceability
 

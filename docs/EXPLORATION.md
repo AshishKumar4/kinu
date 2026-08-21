@@ -469,8 +469,10 @@ it. That is a documented limit rather than a solved problem. Bounding it would
 mean bounding what one step may request, and nothing in the measurement fixes
 that bound. A many-step node IS bounded, and a node is many steps.
 
-Implemented by `nodeWallClockEnvelopeMs` in `strategy/node-agent.ts`, enforced
-through `budgetExhausted` in the shared loop's stop condition.
+No default wall clock exists any more (owner ruling 2026-08-21): a node runs
+to completion, bounded from inside by the shared loop's per-call silence window
+(`LLM_CALL_TIMEOUT_MS`) and whatever deadline a caller explicitly declares
+(`maxWallClockMs`, honoured by `budgetExhausted`).
 
 ## A node that did not finish is not a node that measured badly
 

@@ -460,11 +460,11 @@ Three earlier attempts, each stopped for a stated reason:
 A swarm node gets two budgets, and `runSwarmAction` sets neither, so both take
 their derived default (`core/src/strategy/swarm-run.ts:1776-1785`):
 
-- **Steps.** `deps.maxSteps ?? DEFAULT_MAX_STEPS`, which is 500
-  (`core/src/config.ts:118`).
-- **Wall clock.** `deps.maxWallClockMs ?? nodeWallClockEnvelopeMs(maxSteps)`,
-  which is `maxSteps × TURN_WALL_CLOCK_ENVELOPE_MS` = 500 × 600,000 ms
-  (`core/src/config.ts:116`, `core/src/strategy/node-agent.ts:183`). This one is
+- **Steps.** None — no per-turn step cap exists (owner ruling 2026-08-21);
+  `runNodeLoop` ends when its model stops calling tools.
+- **Wall clock.** `deps.maxWallClockMs` when the caller declares one;
+  otherwise absent — a node runs to completion under the shared loop's
+  per-call silence window (`LLM_CALL_TIMEOUT_MS`).
   assigned unconditionally, because a node with no deadline of its own leaves
   the run's abort signal as the only clock, and that signal cuts a whole WAVE at
   once. `core/tests/unit-swarm-node-envelope.test.ts` holds the wall clock and
@@ -489,12 +489,12 @@ floor on the demand rather than a typical cost, and how many steps a node needs
 to FINISH on this model is not measured. `depth × branches` bounds the shape of
 the search; a node's own loop is bounded by the two budgets above.
 
-The caller's `abortSignal` is the third bound, and it works. All three nodes
-settled `status:'aborted'` with their step counts recorded when the 20-minute
-envelope fired. That envelope was the defect the derived wall clock replaced.
-1,200,000 ms is under `nodeWallClockEnvelopeMs(26)` by a factor of 13, so the
-clock was measuring the step cap's shadow and cut three nodes that were each
-inside their step budget. The signal is consulted between steps too
+The caller's `abortSignal` is a bound, and it works. All three nodes settled
+`status:'aborted'` with their step counts recorded when the 20-minute envelope
+fired — which is exactly why no default node clock exists any more (owner
+ruling 2026-08-21): that envelope cut three healthy nodes mid-work because it
+was smaller than one node's real job. A clock over node work now exists only
+when a caller declares one. The signal is consulted between steps too
 (`core/src/strategy/node-agent.ts:656`, the `isAborted` predicate the inference
 loop calls), which is why attempt 3 saw neither that timer nor vitest's own
 `testTimeout` fire while the substrate executed in-process for 26 minutes.

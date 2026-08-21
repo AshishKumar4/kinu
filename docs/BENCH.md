@@ -605,9 +605,10 @@ Before spending model tokens:
    matched run with `--repeats 3`. Add `--sealed` for the acceptance run.
 
 `DEFAULT_ATTEMPT_BUDGET` is 600,000 tokens and 600,000 ms wall clock per attempt
-(`core/src/bench/types.ts`, read 2026-08-19). The wall-clock half is the measured
-turn envelope `TURN_WALL_CLOCK_ENVELOPE_MS`, raised from 300,000 ms because an
-attempt is one whole Kinu turn and turns were measured at up to 509 s. At
+(`core/src/bench/types.ts`, read 2026-08-19). The wall-clock half was raised from
+300,000 ms because an attempt is one whole Kinu turn and turns were measured at
+up to 509 s; it now stands on that measurement directly — runtime carries no
+turn envelope to borrow since the 2026-08-21 per-call-only ruling. At
 those limits:
 
 | run | attempts | tokens at most | serial wall clock at most |

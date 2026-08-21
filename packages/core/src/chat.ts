@@ -496,6 +496,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     stepHadOutput = false;
     deadFinalStep = false;
     stepContent = [];
+    // The SDK's `step.response.messages` carries THIS request's full array —
+    // its input prefix plus everything generated, cumulative across the call's
+    // steps — so the capture stays an assignment. A retried attempt is handed
+    // the turn's messages so far as its input, so its own arrays continue the
+    // same sequence rather than restarting it.
 
     const result = streamText({
       model: opts.model,
@@ -682,8 +687,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     diagnostics.event('llm_call.retried', {
       attempt: retryAttempts, max_retries: LLM_CALL_MAX_RETRIES,
     });
-    attemptMessages = settleUnpairedToolCalls([...cache.messages, ...responseSoFar])
-      ?? [...cache.messages, ...responseSoFar];
+    attemptMessages = settleUnpairedToolCalls([...responseSoFar]) ?? [...responseSoFar];
     drained = yield* drive(attemptMessages);
   }
 
