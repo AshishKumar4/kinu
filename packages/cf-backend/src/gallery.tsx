@@ -657,6 +657,7 @@ function swarmNode(
 ): HeadRunView["heads"][number] {
   return {
     id, task, rationale, status: "completed", summary: null, errorMessage: null,
+    parentId: null, depth: 1,
     usage: { input: 6_200, output: 480 }, wallClockMs: 12_400,
     spawnedAt: NOW - 21e5, lastStepAt: NOW - 20e5, decisions: [],
     ...extra,
@@ -856,33 +857,33 @@ const MERGED_RUN: HeadRunView = {
   spawnedAt: NOW - 52e5,
   heads: [
     {
-      id: "root-merge-1-h0", task: "packages/checkout/src/apply-coupon.ts", rationale: "the reported 500",
+      id: "root-merge-1-h0", parentId: null, depth: 1, task: "packages/checkout/src/apply-coupon.ts", rationale: "the reported 500",
       status: "completed", summary: "Two more reads of rules[kind]; both guarded by the same ?? inferKind fix.",
       errorMessage: null, usage: { input: 8_420, output: 610 }, wallClockMs: 14_200,
       spawnedAt: NOW - 52e5, lastStepAt: NOW - 51e5,
       decisions: [{ question: "Guard at the edge or at the reader?", choice: "at the reader", rationale: "the edge would still let a null through the cart serializer" }],
     },
     {
-      id: "root-merge-1-h1", task: "packages/cart/src/serializer.ts", rationale: "the lazy path",
+      id: "root-merge-1-h1", parentId: null, depth: 1, task: "packages/cart/src/serializer.ts", rationale: "the lazy path",
       status: "completed", summary: "One read, already null-safe — no change needed here.",
       errorMessage: null, usage: { input: 5_110, output: 240 }, wallClockMs: 9_800,
       spawnedAt: NOW - 52e5, lastStepAt: NOW - 515e4, decisions: [],
     },
     {
-      id: "root-merge-1-h2", task: "packages/admin/src/coupon-report.ts", rationale: "the reporting path",
+      id: "root-merge-1-h2", parentId: null, depth: 1, task: "packages/admin/src/coupon-report.ts", rationale: "the reporting path",
       status: "errored", summary: null,
       errorMessage: "the admin package is not checked out in this sandbox",
       usage: { input: 1_020, output: 0 }, wallClockMs: 2_100,
       spawnedAt: NOW - 52e5, lastStepAt: null, decisions: [],
     },
     {
-      id: "root-merge-1-h3", task: "packages/checkout/src/pricing.ts", rationale: "the discount maths",
+      id: "root-merge-1-h3", parentId: null, depth: 1, task: "packages/checkout/src/pricing.ts", rationale: "the discount maths",
       status: "completed", summary: "Indexes by kind twice inside the percentage path; both reads are behind the same guard.",
       errorMessage: null, usage: { input: 6_240, output: 380 }, wallClockMs: 11_400,
       spawnedAt: NOW - 52e5, lastStepAt: NOW - 512e4, decisions: [],
     },
     {
-      id: "root-merge-1-h4", task: "packages/api/src/coupon-routes.ts", rationale: "the public surface",
+      id: "root-merge-1-h4", parentId: null, depth: 1, task: "packages/api/src/coupon-routes.ts", rationale: "the public surface",
       status: "running", summary: null, errorMessage: null,
       usage: { input: 3_180, output: 90 }, wallClockMs: 4_600,
       spawnedAt: NOW - 52e5, lastStepAt: NOW - 51e5, decisions: [],

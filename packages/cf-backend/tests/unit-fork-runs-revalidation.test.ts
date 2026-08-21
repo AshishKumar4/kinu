@@ -19,8 +19,9 @@ import type {
 import type { BackgroundJob } from '../src/lib/protocol';
 import {
   FORK_IDLE_REVALIDATE_MS, FORK_REVALIDATE_MS, forkRunsRevalidateMs, hasLiveForkRun,
-  hasActiveForkWork, headRunToTree, selectForkRun, forkParamRows, unexplainedForkRoots,
+  hasActiveForkWork, selectForkRun, forkParamRows, unexplainedForkRoots,
 } from '../src/components/surfaces/fork-runs';
+import { explorationForkTree } from '../src/lib/fork-tree-rows';
 import { isCompeted, principalVariation, maxVisits } from '../src/components/swarm-tree-model';
 
 function summary(over: Partial<ForkRunSummary> = {}): ForkRunSummary {
@@ -39,13 +40,13 @@ function headRun(over: Partial<HeadRunView> = {}): HeadRunView {
     spawnedAt: 0,
     heads: [
       {
-        id: 'head-0', task: 'try X', rationale: 'r', status: 'completed',
+        id: 'head-0', parentId: null, depth: 1, task: 'try X', rationale: 'r', status: 'completed',
         summary: 'X works', errorMessage: null,
         usage: { input: 10, output: 5 }, wallClockMs: 100,
         spawnedAt: 0, lastStepAt: null, decisions: [],
       },
       {
-        id: 'head-1', task: 'try Y', rationale: 'r', status: 'errored',
+        id: 'head-1', parentId: null, depth: 1, task: 'try Y', rationale: 'r', status: 'errored',
         summary: null, errorMessage: 'Y blew up',
         usage: { input: 3, output: 0 }, wallClockMs: 20,
         spawnedAt: 0, lastStepAt: null, decisions: [],
@@ -259,9 +260,15 @@ describe('fork permalink selection', () => {
   });
 });
 
+/** A run with journalled nodes and no search rows, folded the one way every
+ *  fork surface folds a run. */
+function journalTree(run: HeadRunView) {
+  return explorationForkTree({ tree: [], head: run })!;
+}
+
 describe('a merge is a tree of depth 1', () => {
   test('the split is the root and each head is a child', () => {
-    const tree = headRunToTree(headRun());
+    const tree = journalTree(headRun());
     expect(tree.id).toBe('root-1');
     expect(tree.depth).toBe(0);
     expect(tree.children.map((c) => [c.id, c.depth, c.action]))
@@ -269,7 +276,7 @@ describe('a merge is a tree of depth 1', () => {
   });
 
   test('no branch carries a score or a rollout count — the merge ranked none of them', () => {
-    const tree = headRunToTree(headRun());
+    const tree = journalTree(headRun());
     for (const node of [tree, ...tree.children]) {
       expect(node.value).toBeNull();
       expect(node.visits).toBeNull();
@@ -281,20 +288,20 @@ describe('a merge is a tree of depth 1', () => {
   test('and therefore no winning line is drawn down an arbitrary head', () => {
     // Every comparison against null is false, so the naive walk would pick
     // children[0] at each level and paint a spine that means nothing.
-    expect([...principalVariation(headRunToTree(headRun()))]).toEqual([]);
+    expect([...principalVariation(journalTree(headRun()))]).toEqual([]);
   });
 
   test('no head is ever terminal — a merge settles on all of them at once', () => {
-    const tree = headRunToTree(headRun());
+    const tree = journalTree(headRun());
     expect(tree.children.map((c) => c.status)).toEqual(['open', 'failed']);
     expect(tree.children.some((c) => c.status === 'terminal')).toBe(false);
   });
 
   test('a running head keeps its own state, and so does the run', () => {
-    const tree = headRunToTree(headRun({
+    const tree = journalTree(headRun({
       status: 'running',
       heads: [{
-        id: 'h', task: 't', rationale: 'r', status: 'running', summary: null, errorMessage: null,
+        id: 'h', parentId: null, depth: 1, task: 't', rationale: 'r', status: 'running', summary: null, errorMessage: null,
         usage: {}, wallClockMs: 0, spawnedAt: 0, lastStepAt: null, decisions: [],
       }],
     }));
@@ -303,7 +310,7 @@ describe('a merge is a tree of depth 1', () => {
   });
 
   test('the merge narrative rides on the root, where the root is what is selected', () => {
-    expect(headRunToTree(headRun()).observation).toBe('X, with Y’s guard rail');
+    expect(journalTree(headRun()).observation).toBe('X, with Y’s guard rail');
   });
 });
 

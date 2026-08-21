@@ -72,14 +72,16 @@ export function storedUsage(row: StoredHeadUsage): Usage {
  * surface while every type still checks.
  */
 interface HeadViewRow extends StoredHeadUsage {
-  id: string; task: string; rationale: string | null; status: string;
+  id: string; parent_id: string | null; depth: number;
+  task: string; rationale: string | null; status: string;
   summary: string | null; error_message: string | null; wall_clock_ms: number;
   spawned_at: number; last_step_at: number | null; decisions_json: string | null;
 }
 
 function headViewOf(row: HeadViewRow): HeadRunHeadView {
   return {
-    id: row.id, task: row.task, rationale: row.rationale ?? '', status: row.status,
+    id: row.id, parentId: row.parent_id, depth: row.depth,
+    task: row.task, rationale: row.rationale ?? '', status: row.status,
     summary: row.summary, errorMessage: row.error_message,
     usage: storedUsage(row), wallClockMs: row.wall_clock_ms,
     spawnedAt: row.spawned_at, lastStepAt: row.last_step_at,
@@ -439,7 +441,7 @@ export class HeadJournal {
    */
   readHeadView(headId: HeadId): HeadRunHeadView | null {
     const row = this.sql<HeadViewRow>`
-      SELECT j.id, j.task, j.rationale, j.status, j.summary, j.error_message,
+      SELECT j.id, j.parent_id, j.depth, j.task, j.rationale, j.status, j.summary, j.error_message,
              j.token_input, j.token_output, j.wall_clock_ms, j.spawned_at,
              j.decisions_json, MAX(s.created_at) AS last_step_at
       FROM head_journal j LEFT JOIN head_steps s ON s.head_id = j.id
@@ -477,7 +479,7 @@ export class HeadJournal {
     // row: the steps ARE the progress record, so a second field could only ever
     // disagree with them.
     const rows = this.sql<HeadViewRow>`
-      SELECT j.id, j.task, j.rationale, j.status, j.summary, j.error_message,
+      SELECT j.id, j.parent_id, j.depth, j.task, j.rationale, j.status, j.summary, j.error_message,
              j.token_input, j.token_output, j.token_cache_read, j.token_cache_write,
              j.token_cache_write_1h, j.token_reasoning, j.neurons,
              j.wall_clock_ms, j.spawned_at,

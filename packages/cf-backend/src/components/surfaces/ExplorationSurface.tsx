@@ -29,7 +29,7 @@ import type { ForkRunParams, ForkRunSummary, HeadRunView } from "@kinu.run/core"
 import { SwarmTree, naturalCanvasHeight } from "@/components/swarm-tree";
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { type ExplorerSelection } from "@/components/swarm-tree-model";
-import { buildTree, type MctsRow } from "@/lib/fork-tree-rows";
+import { explorationForkTree, type MctsRow } from "@/lib/fork-tree-rows";
 import type { BackgroundJob, ForkNode, Rpc } from "@/lib/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { ScrollBoundary } from "@/components/ui/ScrollBoundary";
@@ -38,7 +38,7 @@ import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { useElementSize } from "@/hooks/use-element-size";
 import { EmptyState, EMPTY_HINTS, formatScore } from "./shared";
 import {
-  forkParamRows, FORK_REVALIDATE_MS, headRunToTree, judgeEnsembleLabel, settlePolicyOf,
+  forkParamRows, FORK_REVALIDATE_MS, judgeEnsembleLabel, settlePolicyOf,
   useExplorationCanvas,
 } from "./fork-runs";
 import {
@@ -283,11 +283,11 @@ export function useForkRunDetail(run: ForkRunSummary, rpc: Rpc, hasActiveWork: b
  * and noisier. The canvas does not use this — it has every tree from one
  * projection.
  *
- * The search rows ARE the tree wherever there are any; the journal's depth-1
- * projection stands in only where there are none. Choosing between them by a
- * settle tag drew an agent-unit search as a flat wave of every node it ever
- * expanded, at one depth, because the journal carries no parent edge a client can
- * read.
+ * BOTH halves fold, through the one fold the canvas uses. Choosing between them
+ * — search rows if there are any, the journal only if there are none — drew a
+ * running swarm as its root alone: the root's tree row lands at dispatch, so
+ * "there are search rows" is true from the first millisecond and every node
+ * still working was in the half that was never read.
  */
 export function useForkRunTree(
   run: ForkRunSummary, rpc: Rpc, liveTree: ForkNode | null, hasActiveWork: boolean,
@@ -305,12 +305,10 @@ export function useForkRunTree(
   );
   const { resource, reload } = useAsyncResource(load, revalidate, `search:${run.id}`);
   const rows = lastValue(resource);
-  // The run's own fact, not the arrival of rows: a search still being written has a
-  // tree the reader must wait for rather than a journal to fall back to.
+  // Which half a reader is WAITING on, and the resolution's discriminator. Not
+  // which half the tree is folded from — both are.
   const searched = run.hasSearchTree;
-  const fetched = searched
-    ? (rows && rows.length > 0 ? buildTree(rows) : null)
-    : (detail.headRun ? headRunToTree(detail.headRun) : null);
+  const fetched = explorationForkTree({ tree: rows ?? [], head: detail.headRun });
   return {
     tree: liveTree ?? fetched,
     headRun: detail.headRun,
