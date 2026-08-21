@@ -38,8 +38,8 @@ import {
 import { createWorkspace } from '../packages/core/src/identity/index';
 import { createCLIHeadRuntime } from '../packages/cli-backend/src/head-runtime';
 import { createCLIRuntime, makeSql } from '../packages/cli-backend/src/runtime';
-import { resolveChatModel } from '../packages/cli-backend/src/local-session';
-import { createBenchInferenceProxy } from './bench-inference-proxy';
+
+import { benchChatModel, createBenchInferenceProxy } from './bench-inference-proxy';
 import { parsePanelWorkerInput, type WorkerOutput } from './bench-worker-protocol';
 
 /** The spec a fork carries is its INDEX into the panel list, not a registry
@@ -96,13 +96,13 @@ async function main(): Promise<void> {
   // it, and the runtime writes each head's steps to it as they land.
   const journal = new HeadJournal(makeSql(db));
   const headRuntime = createCLIHeadRuntime({
-    model: resolveChatModel(analyst),
+    model: benchChatModel(analyst),
     parentRuntime: rt,
     cwd: process.cwd(),
     resolveModel: (spec: string) => {
       const cfg = byIndex.get(spec);
       if (!cfg) throw new Error(`panel worker: no provider for fork spec "${spec}"`);
-      return resolveChatModel(cfg);
+      return benchChatModel(cfg);
     },
     webSearch: noWeb,
     codemodeExtras: () => [],

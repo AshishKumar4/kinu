@@ -68,13 +68,17 @@ describe("CLI config safety", () => {
     expect(result.stdout.toString().trim()).toBe(`ok ${ciToken}`);
   });
 
-  test("model and effort selections persist as validated global defaults", () => {
+  test("a /model selection scopes to the workspace; effort stays a validated global default", () => {
     const out = runPreferenceWrite();
     expect(out.modelResult).toEqual({ spec: "openai/gpt-5.5" });
+    // The spec lands on THIS agent only — the global default in config.json
+    // is untouched, so sibling commands and new workspaces never inherit a
+    // model one chat session picked.
+    expect(out.config).toMatchObject({ reasoningEffort: "high" });
+    expect(out.config.model).toBeUndefined();
     expect(out.effortShow).toMatchObject({ kind: "text", text: expect.stringContaining("medium (chat default)") });
     expect(out.effortSet).toEqual({ kind: "effort-set", effort: "high" });
     expect(out.invalid).toMatchObject({ kind: "text", text: expect.stringContaining("Usage") });
-    expect(out.config).toMatchObject({ model: "openai/gpt-5.5", reasoningEffort: "high" });
     // A config file with one invalid field is reported, not silently replaced by
     // defaults: defaulting would discard the whole file and read as a first run.
     expect(out.invalidRejection).toContain('is not a valid Kinu config');
@@ -181,16 +185,56 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
     expect(out).toMatchObject({ name: "openai-compat", baseURL: "https://gateway.example/v1" });
   });
 
-  test("signed out (or expired) with nothing configured points at kinu auth", () => {
-    const signedOut = runResolveLLM({});
-    expect(signedOut).toMatchObject({ error: expect.stringContaining("kinu auth") });
+});
+
+describe("resolveLLMConfig — registry-only providers", () => {
+  test("a claude-subscription spec resolves without any other provider", () => {
+    const out = runResolveLLM({}, { KINU_MODEL: "claude/claude-sonnet-4-x" });
+    expect(out).toEqual({ name: "claude", baseURL: "", headers: {}, model: "claude-sonnet-4-x" });
+  });
+
+  test("an opencode spec resolves through its bridge marker", () => {
+    const out = runResolveLLM({}, { KINU_MODEL: "opencode/openai/gpt-5.6-sol" });
+    expect(out).toEqual({ name: "opencode", baseURL: "", headers: {}, model: "openai/gpt-5.6-sol" });
+  });
+
+  test("nothing configured — signed out or expired — resolves to null", () => {
+    expect(runResolveLLM({})).toBeNull();
 
     const expired = runResolveLLM({
       origin: CLOUD_ORIGIN,
       accessToken: CLOUD_TOKEN,
       tokenExpiresAt: new Date(Date.now() - 60_000).toISOString(),
     });
-    expect(expired).toMatchObject({ error: expect.stringContaining("kinu auth") });
+    expect(expired).toBeNull();
+  });
+
+  test("requireLLMConfig still names the fixes when an endpoint is mandatory", () => {
+    const kinuHome = mkdtempSync(join(tmpdir(), "kinu-cli-llm-req-"));
+    tempDirs.push(kinuHome);
+    writeFileSync(join(kinuHome, "config.json"), JSON.stringify({}), { mode: 0o600 });
+    const script = `
+      import { requireLLMConfig } from './packages/cli/src/config.ts';
+      try { console.log(JSON.stringify(requireLLMConfig())); }
+      catch (err) { console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err) })); }
+    `;
+    const env: NodeJS.ProcessEnv = { ...process.env, KINU_HOME: kinuHome };
+    for (const name of [
+      "KINU_TOKEN", "KINU_ORIGIN", "KINU_MODEL", "KINU_BASE_URL", "KINU_AUTH",
+      "AI_GATEWAY_BASE_URL", "AI_GATEWAY_AUTH", "AI_GATEWAY_MODEL",
+      "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "CODEX_ACCESS_TOKEN",
+    ]) delete env[name];
+    const proc = Bun.spawnSync({
+      cmd: [process.execPath, "-e", script],
+      cwd: resolve(__dirname, "../../.."),
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(proc.exitCode).toBe(0);
+    expect(parseJsonValue(proc.stdout.toString())).toMatchObject({
+      error: expect.stringContaining("claude"),
+    });
   });
 });
 

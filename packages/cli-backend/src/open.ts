@@ -32,7 +32,9 @@ export interface WorkspaceInfo {
 }
 
 export interface CLIOpenConfig {
-  llm: LLMProviderConfig;
+  /** The default endpoint for bare ids — null when nothing derives one.
+   *  Explicit specs resolve through the registry regardless. */
+  llm: LLMProviderConfig | null;
   judge?: LLMProviderConfig;
   providerCredentials?: LocalProviderCredentials;
   codexAuthStore?: LocalCodexAuthStore;

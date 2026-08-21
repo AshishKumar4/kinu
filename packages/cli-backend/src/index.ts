@@ -21,7 +21,7 @@ export { createNodeCraftedExecute } from './craft-executor';
 export { discoverAgentsMd } from './agents-md';
 export { createNodeExecuteToolFactory, type NodeExecuteToolFactoryDeps } from './execute-tools-factory';
 export {
-  LocalAgentSession, resolveChatModel, LOCAL_MAX_INLINE_ATTACHMENT_BYTES,
+  LocalAgentSession, LOCAL_MAX_INLINE_ATTACHMENT_BYTES,
   type LocalAgentSessionOpts, type SessionEvent, type LocalSessionDb,
   type ShellApprovalHandler,
 } from './local-session';
