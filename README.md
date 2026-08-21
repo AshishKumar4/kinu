@@ -6,8 +6,8 @@
 </p>
 
 <p align="center">
-  <strong>An agent of your own that gets better every time it works.<br>
-  When a task is hard it searches a tree of agents, and it keeps every skill it earns.</strong>
+  <strong>A self-evolving agent platform.<br>
+  Your agent keeps a durable workspace of its own, and runs a tree of agents when a task is hard.</strong>
   <strong><a href="https://kinu.run">kinu.run</a></strong>
 </p>
 
