@@ -64,7 +64,7 @@ import {
   type TurnOutcome, type TurnOutcomeSource, type OutcomeClassification,
   initTurnOutcomeTables, isTrivialTurn, isNegativeOutcome, classifyTurnOutcome,
   executionVerdict, executionVerdictOutcome, isUserVerdictSource, isPureLookupCall,
-  outcomeToFeedback, outcomeQuality, feedbackToQuality,
+  outcomeToFeedback, outcomeQuality,
   recordTurnOutcome, hasNegativeOutcome, takePickOutcome,
   listTurnOutcomes, NEGATIVE_TURN_OUTCOMES,
   realOutcomeScaffoldRates, blendRealOutcomeRates,
@@ -92,9 +92,6 @@ import {
   describePathology, parsePathologyTag, PATHOLOGY_TAG_EXAMPLE,
   type PathologyCluster,
 } from './pathology';
-
-// Re-exported here for back-compat: the mapping predates the outcomes module.
-export { feedbackToQuality };
 
 import { modifyScaffold } from '../scaffold/modify';
 import { SCAFFOLD_HOST_TYPES } from '../scaffold/executor';

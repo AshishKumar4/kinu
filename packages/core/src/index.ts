@@ -62,7 +62,7 @@ export {
 
 // Evolution engine (3-timescale auto-evolution)
 export {
-  EvolutionEngine, feedbackToQuality, buildScaffoldProposalPrompt,
+  EvolutionEngine, buildScaffoldProposalPrompt,
   type ProposalArchiveContext,
 } from './evolution/engine';
 export {
@@ -84,7 +84,7 @@ export {
 // Turn-outcome signal pipeline — the durable turn_outcomes/lessons ledgers
 // every evolution surface reads (audit R3: the measurable loss).
 export {
-  outcomeToFeedback, outcomeQuality, isTrivialTurn,
+  outcomeToFeedback, outcomeQuality, feedbackToQuality, isTrivialTurn,
   initTurnOutcomeTables, recordTurnOutcome, listTurnOutcomes, takePickOutcome,
   realOutcomeScaffoldRates, blendRealOutcomeRates, buildOutcomeEvalSplit,
   describeSplitDegeneracy, CRITIC_PROSE,
