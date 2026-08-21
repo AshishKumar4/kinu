@@ -41,6 +41,21 @@ describe('classifyTurnFailure', () => {
     }
   });
 
+  test('auth: a dead or revoked credential is its own class, not noise', () => {
+    for (const error of [
+      // The bare upstream word Cloudflare answers a rejected credential with —
+      // the exact text the owner's failed-turn card showed (audit 2.15).
+      'Unauthorized',
+      'Your Cloudflare login is no longer valid. Reconnect Cloudflare in User settings.',
+      'Your ChatGPT login is no longer valid. Reconnect ChatGPT in User settings, or run `kinu setup` on this machine.',
+      'Codex token refresh failed: 400 {"error":"invalid_grant","error_description":"The provided authorization grant is invalid"}',
+      'Invalid API key provided',
+      'Codex credentials not configured. Connect ChatGPT in User settings, or run `kinu setup` on this machine.',
+    ]) {
+      expect(classifyTurnFailure(error)).toBe('auth');
+    }
+  });
+
   test('transient: anything else stays unclassified noise', () => {
     for (const error of ['ECONNRESET', 'stream error', 'Internal Server Error', '']) {
       expect(classifyTurnFailure(error)).toBe('transient');
@@ -88,6 +103,15 @@ describe('planOverflowRecovery', () => {
     expect(planOverflowRecovery({
       error: 'ECONNRESET', turnWasOverflowRetry: false,
     })).toEqual({ failureClass: 'transient', forceCompaction: false, enqueueRetry: false });
+  });
+
+  test('an auth failure never force-compacts and never enqueues a retry', () => {
+    // Retrying a revoked login without re-authenticating can only fail again —
+    // the remedy is the re-auth path the error names, not another turn.
+    expect(planOverflowRecovery({
+      error: 'Your Cloudflare login is no longer valid. Reconnect Cloudflare in User settings.',
+      turnWasOverflowRetry: false,
+    })).toEqual({ failureClass: 'auth', forceCompaction: false, enqueueRetry: false });
   });
 
   test('no error text → no decision', () => {
