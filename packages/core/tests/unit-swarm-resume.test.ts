@@ -784,6 +784,49 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
   }, 300_000);
 });
 
+/**
+ * THE NAME, END TO END: what the caller passes to `agents.swarm` is what the
+ * exploration surface calls the run. The engine writes it as the search root's
+ * own label — the field a root has always had and never filled, which is why
+ * the tree drew `(root)` — and the read model hands it back.
+ */
+describe('a named swarm is called by its name', () => {
+  test('the name reaches the root row and the run summary', async () => {
+    const { rt } = await workspace();
+    const sql = rt.storage.sql;
+    const named = resolveSwarm({
+      preset: 'custom', label: 'resume-proof', name: 'token duel', task: TASK,
+      objective: objective(), config: config(), depth: 1, branches: 2,
+    });
+    if ('reason' in named) throw new Error(`the suite's own composition does not resolve: ${named.error}`);
+    const model = nodeModel();
+    await runSwarm(
+      { rt, model: model.model, mode: 'build', maxSteps: 6, logger: createRecordingLogger() },
+      named,
+    );
+
+    const rootId = firstRoot(sql)?.root_id ?? '';
+    expect(rootId).not.toBe('');
+    // The root carries it, so the tree draws the name where it drew `(root)`.
+    expect(sql<{ action: string }>`
+      SELECT action FROM search_nodes WHERE id = ${rootId}`[0]?.action).toBe('token duel');
+    // And every surface that reads a run summary gets the same word.
+    expect(readForkRun(sql, rootId)?.name).toBe('token duel');
+  }, 300_000);
+
+  test('a composition with no name falls back to its provenance label', async () => {
+    const { rt } = await workspace();
+    const sql = rt.storage.sql;
+    const model = nodeModel();
+    await runSwarm(
+      { rt, model: model.model, mode: 'build', maxSteps: 6, logger: createRecordingLogger() },
+      resolved(),
+    );
+    const rootId = firstRoot(sql)?.root_id ?? '';
+    expect(readForkRun(sql, rootId)?.name).toBe('resume-proof');
+  }, 300_000);
+});
+
 /** The search this workspace holds, read off the tree rather than off a variable the
  *  first attempt never returned. */
 function firstRoot(sql: SqlExecutor): { root_id: string } | undefined {

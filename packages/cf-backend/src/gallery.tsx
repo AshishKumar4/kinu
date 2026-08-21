@@ -316,7 +316,7 @@ const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
   },
   getStoredModelSpec: "anthropic/claude-opus-4",
   getShellApprovalMode: "strict",
-  getMctsConfig: { explorationConstant: 1.41, maxIterations: 12, maxDepth: 5, branchBudget: 3 },
+  getMctsConfig: { explorationConstant: 1.41, maxIterations: 12, branchBudget: 3 },
   getEvolutionChangelog: { entries: [], unseen: 0 },
 });
 const AGENT_RPC = new Map(Object.entries(AGENT_RPC_DATA));
