@@ -169,7 +169,7 @@ export function landingDocument(install: string): string {
       <h1 class="taglines" data-taglines>
         ${TAGLINES.map((line, at) => `<span${at === 0 ? ' data-shown' : ''}>An agent of your own that <em>${line}</em>.</span>`).join('\n        ')}
       </h1>
-      <p class="lede">Give it a task and a way to measure the result. Kinu runs the work, scores each candidate with the measure you set, and keeps the best one.</p>
+      <p class="lede">Give it a task in chat. When the task is hard, Kinu runs many attempts, measures each one, and keeps the best.</p>
       <p class="lede">Workspaces are durable: files, sessions, and memory persist between turns. Run them on Cloudflare or entirely on your own machine.</p>
       <div class="actions">
         <a class="btn solid" href="/login">Sign in</a>
@@ -235,7 +235,7 @@ export function landingDocument(install: string): string {
     <div class="duo">
       <div>
         <p class="lede">One tool call builds the tree. Each node is a whole agent that attempts the task its own way, in its own directory, with its own credential.</p>
-        <p class="body">You define the objective: a metric, a target, and the verifier code that measures a candidate. The verifier runs in the workspace, and its number picks the winner. Unregistered verifier names fail the run.</p>
+        <p class="body">The agent turns your ask into an objective: a metric, a target, and a verifier. A verifier is code that runs in the workspace, and its number picks the winner. Unregistered verifier names fail the run.</p>
         <p class="body">Results persist per objective, so the next search starts from the record instead of from zero.</p>
         <p class="dim">The tree in the header is a recorded search.</p>
       </div>
