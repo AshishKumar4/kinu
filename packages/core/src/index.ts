@@ -1002,6 +1002,19 @@ export {
   type RunEventQuery,
 } from './events/index';
 
+// The one durable retry outbox — write-ahead intent, backoff, per-key
+// ordering, dedupe and a dead-letter state, over `@nimbus-sh/fabric`.
+// Spec: `events/outbox.ts`.
+export {
+  scheduledOutbox,
+  type Outbox,
+  type OutboxDeadLetter,
+  type OutboxDisposition,
+  type OutboxDrainResult,
+  type OutboxRecord,
+  type ScheduledOutboxPolicy,
+} from './events/index';
+
 // EventsHub — events / triggers / turn runner / reply channels.
 // Builds the agent_log ledger plus the trust, channel, trigger and budget
 // primitives around it. Spec: docs/ARCHITECTURE.md — "Events and ingress".

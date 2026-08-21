@@ -34,6 +34,16 @@ export {
 } from './step-stats';
 
 export {
+  scheduledOutbox,
+  type Outbox,
+  type OutboxDeadLetter,
+  type OutboxDisposition,
+  type OutboxDrainResult,
+  type OutboxRecord,
+  type ScheduledOutboxPolicy,
+} from './outbox';
+
+export {
   SPEND_SOURCES,
   SPEND_SOURCE_LABEL,
   SPEND_SOURCE_DETAIL,

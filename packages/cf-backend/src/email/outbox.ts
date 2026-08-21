@@ -4,32 +4,27 @@
  * external sends driven by a delivery lease that re-runs after crash/eviction;
  * without this, a retry re-sends the same mail.
  *
- * The discipline mirrors the peer outbox:
- *   1. WRITE-AHEAD — the send intent (idempotency key, target, payload digest,
- *      rendered message, stable Message-ID) is committed `state='pending'`
- *      BEFORE the binding.send call.
- *   2. IDEMPOTENCY KEY — the caller's stable key materializes on the wire as a
- *      deterministic `Message-ID`, so the receiver (and our own inbound dedupe,
- *      which keys on Message-ID) treats a redelivery as the same message. A key
- *      already `state='sent'` short-circuits: we never re-send it.
- *   3. RECONCILIATION — SMTP has no "did key X land?" query, so an intent left
- *      `pending` (crash between send and the status write) is re-driven by the
- *      alarm sweep. Because the Message-ID is stable, the re-drive is a SAFE
- *      re-send (deduped downstream), not a blind new message.
+ * The generic half — the write-ahead row, backoff, dead-lettering, the
+ * `nextRetryAt()` alarm fold — is the shared outbox (`@kinu.run/core`'s
+ * `scheduledOutbox`). What is email's own and stays here:
+ *   1. THE STABLE MESSAGE-ID. The caller's idempotency key materializes on the
+ *      wire as a deterministic `Message-ID`, so the receiver (and our own
+ *      inbound dedupe, which keys on Message-ID) treats a redelivery as the
+ *      same message. It is stamped into the stored message, so every re-drive
+ *      carries the id the first attempt carried.
+ *   2. THE BINDING CALL. `send_email` has no "did key X land?" query, so an
+ *      intent left pending (a crash between send and the status write) is
+ *      re-driven by the alarm sweep. Because the Message-ID is stable, the
+ *      re-drive is a SAFE re-send (deduped downstream), not a blind new message.
+ *
+ * The binding is resolved per call rather than closed over at construction —
+ * `MonitorDO` builds its outbox before it has one — so it rides the outbox's
+ * per-drain context.
  */
 
-import { argumentDigest, type SqlExec } from '@kinu.run/core';
+import { argumentDigest, scheduledOutbox, type Outbox, type SqlExec } from '@kinu.run/core';
 import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
-
-const EmailAddressSchema = v.object({ email: v.string(), name: v.string() });
-const OutboundEmailMessageSchema = v.object({
-  from: v.union([v.string(), EmailAddressSchema]),
-  to: v.union([v.string(), EmailAddressSchema, v.array(v.union([v.string(), EmailAddressSchema]))]),
-  subject: v.string(),
-  text: v.string(),
-  headers: v.optional(v.record(v.string(), v.string())),
-});
 
 /** A rendered outbound message — exactly the `send_email` binding's payload. */
 export interface OutboundEmailMessage {
@@ -54,54 +49,35 @@ export type OutboundSendResult =
 const MAX_SEND_ATTEMPTS = 8;
 const RETRY_BASE_MS = 30_000;
 
-export const EMAIL_OUTBOX_DDL = `
-CREATE TABLE IF NOT EXISTS email_outbox (
-  idempotency_key TEXT    PRIMARY KEY,
-  message         TEXT    NOT NULL,
-  message_id      TEXT    NOT NULL,
-  payload_digest  TEXT    NOT NULL,
-  state           TEXT    NOT NULL DEFAULT 'pending'
-                          CHECK (state IN ('pending', 'sent', 'dlq')),
-  attempt_count   INTEGER NOT NULL DEFAULT 0,
-  next_attempt_at INTEGER NOT NULL,
-  created_at      INTEGER NOT NULL,
-  sent_at         INTEGER,
-  last_error      TEXT
-)`;
-
-const EMAIL_OUTBOX_INDEX =
-  `CREATE INDEX IF NOT EXISTS idx_email_outbox_pending
-   ON email_outbox (next_attempt_at) WHERE state = 'pending'`;
-
-interface OutboxDbRow {
-  idempotency_key: string;
-  message: string;
-  message_id: string;
-  state: 'pending' | 'sent' | 'dlq';
-  attempt_count: number;
-}
-const OutboxDbRowSchema = v.object({
-  idempotency_key: v.string(),
-  message: v.string(),
-  message_id: v.string(),
-  state: v.picklist(['pending', 'sent', 'dlq']),
-  attempt_count: v.number(),
-});
+const MESSAGE_ID_HEADER = 'Message-ID';
 
 export class EmailOutbox {
+  private readonly outbox: Outbox<OutboundEmailMessage, SendEmail>;
+
   /** `scheduleRetry` arms the host's timer for a backed-off re-drive. Without
    *  it the outbox has no scheduler of its own and a failed send only retries
    *  if some unrelated timer happens to wake the agent. Awaited: on a Durable
    *  Object arming is a storage write, and an unawaited one is cancelled
    *  silently on reset (`do.wait_until.no_op`). */
-  constructor(
-    private readonly sql: SqlExec,
-    private readonly scheduleRetry: (at: number) => Promise<void> = async () => {},
-  ) {}
-
-  ensureSchema(): void {
-    this.sql.exec(EMAIL_OUTBOX_DDL);
-    this.sql.exec(EMAIL_OUTBOX_INDEX);
+  constructor(sql: SqlExec, scheduleRetry: (at: number) => Promise<void> = async () => {}) {
+    this.outbox = scheduledOutbox<OutboundEmailMessage, SendEmail>(sql, 'email', {
+      maxAttempts: MAX_SEND_ATTEMPTS,
+      baseMs: RETRY_BASE_MS,
+      schedule: scheduleRetry,
+      // No `orderBy`: two unrelated notifications have no order between them,
+      // and one provider outage must not hold the rest of the mail.
+      async send(message, _info, binding) {
+        try {
+          await binding.send(message);
+          return { status: 'sent' };
+        } catch (err) {
+          // A refused send is a value here: the disposition the outbox backs
+          // off on. Rendered rather than rethrown so the stored `last_error`
+          // keeps the whole cause chain.
+          return { status: 'retry', reason: renderThrownChain({ cause: err }) };
+        }
+      },
+    });
   }
 
   /** Idempotent send. Records the intent write-ahead, stamps the stable
@@ -113,112 +89,51 @@ export class EmailOutbox {
     message: OutboundEmailMessage,
     now: number,
   ): Promise<OutboundSendResult> {
-    const existing = this.row(key);
-    if (existing?.state === 'sent') {
-      return { status: 'deduped', messageId: existing.message_id };
+    const stableId = messageIdFor(key, message.from);
+    const stamped: OutboundEmailMessage = {
+      ...message,
+      headers: { ...message.headers, [MESSAGE_ID_HEADER]: stableId },
+    };
+    // `retry-now` re-admits an unsent key: a caller asking again means new
+    // intent, so the row's backoff is cleared and a dead letter returns to
+    // pending with its attempt count kept. A sent key stays final.
+    const { id } = await this.outbox.queue(stamped, { dedupeKey: key, now, onDuplicate: 'retry-now' });
+    const queued = this.outbox.status(id);
+    if (queued?.state === 'sent') {
+      return { status: 'deduped', messageId: messageIdOf(queued.message) ?? stableId };
     }
 
-    const messageId = existing?.message_id ?? this.messageIdFor(key, message.from);
-    if (!existing) {
-      this.sql.exec(
-        `INSERT INTO email_outbox
-           (idempotency_key, message, message_id, payload_digest, state, attempt_count, next_attempt_at, created_at)
-         VALUES (?, ?, ?, ?, 'pending', 0, ?, ?)`,
-        key, JSON.stringify(message), messageId, payloadDigest(message), now, now,
-      );
-    }
-    return this.deliver(binding, key, message, messageId, now);
+    await this.outbox.drain(now, { context: binding });
+    const settled = this.outbox.status(id);
+    const messageId = messageIdOf(settled?.message) ?? stableId;
+    if (settled?.state === 'sent') return { status: 'sent', messageId };
+    return { status: 'failed', messageId, error: settled?.lastError ?? 'the send did not complete' };
   }
 
   /** Alarm-swept reconciliation: re-drive every due `pending` intent. Each
    *  re-drive carries the original Message-ID, so a duplicate is deduped
    *  downstream rather than delivered twice. Returns the count re-driven. */
   async reconcile(binding: SendEmail, now: number): Promise<number> {
-    const due = v.parse(v.array(OutboxDbRowSchema), this.sql.exec(
-      `SELECT idempotency_key, message, message_id, state, attempt_count
-         FROM email_outbox
-        WHERE state = 'pending' AND next_attempt_at <= ?
-        ORDER BY next_attempt_at`,
-      now,
-    ).toArray());
-    for (const row of due) {
-      const message = v.parse(OutboundEmailMessageSchema, JSON.parse(row.message));
-      await this.deliver(binding, row.idempotency_key, message, row.message_id, now);
-    }
-    return due.length;
+    const { sent, retried, deadLettered } = await this.outbox.drain(now, { context: binding });
+    return sent + retried + deadLettered;
   }
 
   /** Soonest pending retry — folded into the DO alarm reschedule. */
   nextRetryAt(): number | null {
-    const rows = v.parse(v.array(v.object({ next: v.nullable(v.number()) })), this.sql.exec(
-      `SELECT MIN(next_attempt_at) AS next FROM email_outbox WHERE state = 'pending'`,
-    ).toArray());
-    return rows[0]?.next ?? null;
-  }
-
-  private async deliver(
-    binding: SendEmail,
-    key: string,
-    message: OutboundEmailMessage,
-    messageId: string,
-    now: number,
-  ): Promise<OutboundSendResult> {
-    try {
-      await binding.send({
-        ...message,
-        headers: { ...message.headers, 'Message-ID': messageId },
-      });
-      this.sql.exec(
-        `UPDATE email_outbox
-            SET state = 'sent', attempt_count = attempt_count + 1, sent_at = ?, last_error = NULL
-          WHERE idempotency_key = ?`,
-        now, key,
-      );
-      return { status: 'sent', messageId };
-    } catch (err) {
-      const error = renderThrownChain({ cause: err });
-      await this.recordFailure(key, error, now);
-      return { status: 'failed', messageId, error };
-    }
-  }
-
-  private async recordFailure(key: string, error: string, now: number): Promise<void> {
-    const row = this.row(key);
-    const attempts = (row?.attempt_count ?? 0) + 1;
-    if (attempts >= MAX_SEND_ATTEMPTS) {
-      this.sql.exec(
-        `UPDATE email_outbox SET state = 'dlq', attempt_count = ?, last_error = ? WHERE idempotency_key = ?`,
-        attempts, `undeliverable after ${attempts} attempts: ${error}`, key,
-      );
-      return;
-    }
-    const next = now + RETRY_BASE_MS * 2 ** (attempts - 1);
-    this.sql.exec(
-      `UPDATE email_outbox SET attempt_count = ?, next_attempt_at = ?, last_error = ? WHERE idempotency_key = ?`,
-      attempts, next, error, key,
-    );
-    await this.scheduleRetry(next);
-  }
-
-  private row(key: string): OutboxDbRow | null {
-    const rows = v.parse(v.array(OutboxDbRowSchema), this.sql.exec(
-      `SELECT idempotency_key, message, message_id, state, attempt_count
-         FROM email_outbox WHERE idempotency_key = ?`, key,
-    ).toArray());
-    return rows[0] ?? null;
-  }
-
-  /** Deterministic Message-ID from the idempotency key: same key → same id, so
-   *  a re-send is recognizably the same message to any receiver. */
-  private messageIdFor(key: string, from: OutboundEmailMessage['from']): string {
-    const domain = emailDomainOf(from);
-    return `<kinu.${argumentDigest(key)}@${domain}>`;
+    return this.outbox.nextRetryAt();
   }
 }
 
-function payloadDigest(message: OutboundEmailMessage): string {
-  const recipients = Array.isArray(message.to) ? message.to.map(emailAddressText) : emailAddressText(message.to);
-  return argumentDigest({ to: recipients, subject: message.subject, text: message.text });
+/** Deterministic Message-ID from the idempotency key: same key → same id, so
+ *  a re-send is recognizably the same message to any receiver. */
+function messageIdFor(key: string, from: OutboundEmailMessage['from']): string {
+  return `<kinu.${argumentDigest(key)}@${emailDomainOf(from)}>`;
+}
+
+/** The Message-ID a stored intent already carries, so a re-drive and a dedupe
+ *  hit both answer with the id the FIRST attempt put on the wire. */
+function messageIdOf(message: OutboundEmailMessage | null | undefined): string | null {
+  return message?.headers?.[MESSAGE_ID_HEADER] ?? null;
 }
 
 function emailDomainOf(from: OutboundEmailMessage['from']): string {

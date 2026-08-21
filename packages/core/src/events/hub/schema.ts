@@ -10,8 +10,8 @@
  *
  * Sibling table `triggers` carries registered triggers.
  *
- * Sibling table `peer_outbox` carries pending outbound peer-agent
- * deliveries (sender side).
+ * Pending outbound peer-agent deliveries live in `outbox_peer`, owned by the
+ * shared outbox (`events/outbox.ts`), which creates its own schema.
  *
  * The DDL is idempotent. Safe to call on every DO boot.
  */
@@ -175,28 +175,6 @@ const TRIGGERS_INDEXES: ReadonlyArray<string> = [
    ON triggers (kind, state)`,
 ];
 
-const PEER_OUTBOX_DDL = `
-CREATE TABLE IF NOT EXISTS peer_outbox (
-  id                  TEXT    PRIMARY KEY,
-  receiver_agent_name TEXT    NOT NULL,
-  receiver_user_id    TEXT    NOT NULL,
-  payload             TEXT    NOT NULL,
-  causality_event_id  TEXT,
-  state               TEXT    NOT NULL DEFAULT 'pending'
-                              CHECK(state IN ('pending', 'delivered', 'failed', 'dlq')),
-  attempt_count       INTEGER NOT NULL DEFAULT 0,
-  next_attempt_at     INTEGER NOT NULL,
-  created_at          INTEGER NOT NULL,
-  delivered_at       INTEGER,
-  last_error          TEXT
-)`;
-
-const PEER_OUTBOX_INDEXES: ReadonlyArray<string> = [
-  `CREATE INDEX IF NOT EXISTS idx_peer_outbox_pending
-   ON peer_outbox (next_attempt_at)
-   WHERE state = 'pending'`,
-];
-
 /** Rebuild a table whose CHECK constraints predate a newly-added enum member.
  *  SQLite bakes CHECK text into the stored table definition, so `CREATE TABLE
  *  IF NOT EXISTS` never refreshes it on live DOs — detect the stale definition
@@ -232,6 +210,4 @@ export function initEventsHubTables(sql: SqlExec): void {
   for (const ix of REPLY_CHANNELS_INDEXES) sql.exec(ix);
   sql.exec(TRIGGERS_DDL);
   for (const ix of TRIGGERS_INDEXES) sql.exec(ix);
-  sql.exec(PEER_OUTBOX_DDL);
-  for (const ix of PEER_OUTBOX_INDEXES) sql.exec(ix);
 }

@@ -50,7 +50,7 @@ Nine phase spans hang off those roots:
 
 | Root | Phases |
 | --- | --- |
-| `alarm.tick` | `alarm.due_triggers`, `alarm.peer_outbox`, `alarm.email_outbox`, `alarm.timer_rearm` (`orchestrator.ts:1582,1606,1623,1642`) |
+| `alarm.tick` | `alarm.due_triggers`, `alarm.peer_dispatch`, `alarm.email_reconcile`, `alarm.timer_rearm` (`orchestrator.ts:1582,1606,1623,1642`) |
 | `rpc.swarm.node` | `swarm.node.deps`, `swarm.node.loop` (`exploration.ts:403,433`) |
 | `rpc.head.run` | `head.deps`, `head.inference` (`exploration.ts:347,366`) |
 | `rpc.mcts.branch` | `mcts.branch.model` (`exploration.ts:283`) |

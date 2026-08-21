@@ -2,13 +2,15 @@
  * PeerAgent transport — always-async agent-to-agent messaging.
  *
  * The one thing a host supplies is `deliver` — the hop that reaches another
- * agent (cross-DO RPC on the cloud backend). Everything the outbox does around
- * that hop is here: ordering, backoff, dead-lettering, dedupe, the ask waiter.
+ * agent (cross-DO RPC on the cloud backend). Everything around that hop —
+ * ordering, backoff, dead-lettering, the write-ahead row — belongs to the
+ * shared outbox (`events/outbox.ts`), which this transport configures with a
+ * policy. The ask waiter is this file's own.
  *
  * Sender side:
- *   `enqueueOutboundPeer(...)` writes a `peer_outbox` row; `PeerHub.dispatchOutbox()`
- *   delivers due rows through that hop in per-receiver order (ULID id order),
- *   with exponential-backoff retries and a dead-letter state for permanent
+ *   `PeerHub.send`/`ask`/`reply` queue an `outbox_peer` row; `dispatchOutbox()`
+ *   drains due rows through that hop in per-receiver order, with
+ *   exponential-backoff retries and a dead-letter state for permanent
  *   refusals. The host's alarm re-drives pending rows, so delivery survives
  *   eviction.
  *
@@ -38,7 +40,7 @@ import type { EventLog } from '../hub/log';
 import type { ReplyChannelStore } from '../hub/reply-channel';
 import type { PeerAgentPayload, ReplyChannelRow } from '../hub/types';
 import { spillEventContent } from '../hub/content-spill';
-import { ulid } from '../hub/ulid';
+import { scheduledOutbox, type Outbox, type OutboxDisposition } from '../outbox';
 import {
   PEER_REPLY_TOPIC,
   type PeerAskOutcome, type PeerReplyOutcome, type PeerSendOutcome,
@@ -47,7 +49,7 @@ import type { SqlExec, VFS } from '../../types/primitives';
 import type { WorkMode } from '../../prompting/surface';
 import {
   JsonValueSchema, parseJsonObject,
-  type JsonObject, type JsonValue,
+  type JsonValue,
 } from '../../utils/json';
 import { renderThrownChain } from '../../obs/index';
 
@@ -72,32 +74,14 @@ export interface ReceiveResult {
 
 // ── Sender side ──────────────────────────────────────────────────
 
-export interface SenderDeps {
-  /** Sender-side outbox row writer (e.g., direct SQL on the sender's DO). */
-  enqueueOutboxRow(row: OutboxRow): void;
-  /** Ask the sender's host to wake up and dispatch the new outbox row. Awaited:
-   *  on the cloud backend this is a Durable Object storage write, and a Durable
-   *  Object has no way to retain an unawaited one (`do.wait_until.no_op`). */
-  scheduleDispatch(at: number): Promise<void>;
-}
-
-export interface OutboxRow {
-  id: string;
-  receiver_agent_name: string;
-  receiver_user_id: string;
-  payload: JsonObject;
-  causality_event_id: string | null;
-  next_attempt_at: number;
-}
-
-export interface SendOptions {
+/** One queued outbound peer message, exactly as the shared outbox stores it. */
+export interface PeerOutboxMessage {
   receiver_agent_name: string;
   receiver_user_id: string;
   topic: string;
   body: JsonValue;
   mode: WorkMode;
-  reply_expected?: boolean;
-  caused_by_event_id?: string;
+  reply_expected: boolean;
 }
 
 const WorkModeSchema = v.picklist(['plan', 'build']);
@@ -111,49 +95,14 @@ const ReplyBodySchema = v.object({
   in_reply_to: v.string(),
   content: v.optional(JsonValueSchema),
 });
-const OutboxDbRowSchema = v.object({
-  id: v.string(),
+const PeerOutboxMessageSchema = v.object({
   receiver_agent_name: v.string(),
   receiver_user_id: v.string(),
-  payload: v.string(),
-  attempt_count: v.number(),
-  next_attempt_at: v.number(),
-});
-const OutboxPayloadSchema = v.object({
   topic: v.string(),
   body: JsonValueSchema,
   mode: WorkModeSchema,
-  reply_expected: v.optional(v.boolean()),
+  reply_expected: v.boolean(),
 });
-const DeliveredOutboxRowSchema = v.object({
-  receiver_agent_name: v.string(),
-  receiver_user_id: v.string(),
-  payload: v.string(),
-});
-const OutboxStateSchema = v.object({
-  state: v.string(),
-  last_error: v.nullable(v.string()),
-});
-const NextRetrySchema = v.object({ next: v.nullable(v.number()) });
-
-/** Sender API: enqueue a peer message. Returns the outbox row id. */
-export async function enqueueOutboundPeer(
-  deps: SenderDeps,
-  opts: SendOptions,
-  now: number,
-): Promise<string> {
-  const id = ulid();
-  deps.enqueueOutboxRow({
-    id,
-    receiver_agent_name: opts.receiver_agent_name,
-    receiver_user_id: opts.receiver_user_id,
-    payload: { topic: opts.topic, body: opts.body, mode: opts.mode, reply_expected: opts.reply_expected ?? false },
-    causality_event_id: opts.caused_by_event_id ?? null,
-    next_attempt_at: now,
-  });
-  await deps.scheduleDispatch(now);
-  return id;
-}
 
 // ── Receiver side ────────────────────────────────────────────────
 
@@ -235,7 +184,7 @@ interface PeerBackHolder {
 }
 
 export interface PeerHubDeps {
-  /** The agent's own storage (peer_outbox lives next to agent_log). */
+  /** The agent's own storage (`outbox_peer` lives next to agent_log). */
   sql: SqlExec;
   log: EventLog;
   replyChannels: ReplyChannelStore;
@@ -251,7 +200,9 @@ export interface PeerHubDeps {
   isSameOwner(sender_user_id: string): Promise<boolean>;
   hasGrant(sender_agent_name: string, sender_user_id: string): Promise<boolean>;
   /** Arm the host's alarm so pending outbox rows are re-driven after eviction.
-   *  Awaited for the same reason as SenderDeps.scheduleDispatch. */
+   *  This is the outbox policy's `schedule` seam. Awaited: on the cloud backend
+   *  it is a Durable Object storage write, and a Durable Object has no way to
+   *  retain an unawaited one (`do.wait_until.no_op`). */
   scheduleDispatch(at: number): Promise<void>;
   /** A new external event was admitted — wake the agent loop (drain). */
   onAdmitted(): void;
@@ -268,9 +219,20 @@ export class PeerHub {
    *  passed, or the agent evicted) stays a pending event and wakes a normal
    *  turn. */
   private readonly waiters = new Map<string, (envelope: { content: JsonValue | undefined }) => void>();
-  private dispatching = false;
+  /** The shared durable outbox this transport's rows live in. */
+  private readonly outbox: Outbox<PeerOutboxMessage>;
 
-  constructor(private readonly deps: PeerHubDeps) {}
+  constructor(private readonly deps: PeerHubDeps) {
+    this.outbox = scheduledOutbox<PeerOutboxMessage>(deps.sql, 'peer', {
+      maxAttempts: MAX_DELIVERY_ATTEMPTS,
+      baseMs: RETRY_BASE_MS,
+      // Per-receiver delivery order: a backed-off head holds the rows queued
+      // behind it for that receiver and for no other.
+      orderBy: (message) => `${message.receiver_user_id}:${message.receiver_agent_name}`,
+      schedule: (at) => deps.scheduleDispatch(at),
+      send: (message, info) => this.deliverOne(message, info.id),
+    });
+  }
 
   private now(): number {
     return this.deps.now?.() ?? Date.now();
@@ -321,23 +283,19 @@ export class PeerHub {
   }
 
   /** True iff `msg` is a reply envelope whose `in_reply_to` names an ask this
-   *  agent DELIVERED to exactly this sender. The outbox ULID is only known to
+   *  agent DELIVERED to exactly this sender. The outbox row id is only known to
    *  that receiver, so the correlation is unforgeable by third parties. */
   private isReplyToMyAsk(msg: PeerMessage): boolean {
     if (msg.topic !== PEER_REPLY_TOPIC) return false;
     const body = v.safeParse(ReplyBodySchema, msg.body);
     if (!body.success) return false;
-    const askId = body.output.in_reply_to;
-    const rows = this.deps.sql.exec(
-      `SELECT receiver_agent_name, receiver_user_id, payload
-       FROM peer_outbox WHERE id = ? AND state = 'delivered'`, askId,
-    ).toArray();
-    const row = rows[0] ? v.parse(DeliveredOutboxRowSchema, rows[0]) : undefined;
-    if (!row) return false;
-    if (row.receiver_agent_name !== msg.sender_agent_name) return false;
-    if (row.receiver_user_id !== msg.sender_user_id) return false;
-    const payload = v.safeParse(OutboxPayloadSchema, parseJsonObject(row.payload));
-    return payload.success && payload.output.reply_expected === true;
+    const record = this.outbox.status(body.output.in_reply_to);
+    if (record?.state !== 'sent') return false;
+    const ask = v.safeParse(PeerOutboxMessageSchema, record.message);
+    if (!ask.success) return false;
+    return ask.output.receiver_agent_name === msg.sender_agent_name
+      && ask.output.receiver_user_id === msg.sender_user_id
+      && ask.output.reply_expected;
   }
 
   /** Match a transport reply envelope to a live ask waiter. */
@@ -358,9 +316,9 @@ export class PeerHub {
   async send(input: { agent: string; userId: string; topic: string; message: string; mode: WorkMode }): Promise<PeerSendOutcome> {
     const id = await this.enqueue(input.agent, input.userId, input.topic, input.message, input.mode, false);
     await this.dispatchOutbox();
-    const row = this.outboxState(id);
-    if (row?.state === 'dlq') return { status: 'rejected', reason: row.last_error ?? 'rejected by receiver' };
-    return { status: row?.state === 'delivered' ? 'delivered' : 'queued', message_id: id };
+    const row = this.outbox.status(id);
+    if (row?.state === 'dlq') return { status: 'rejected', reason: row.lastError ?? 'rejected by receiver' };
+    return { status: row?.state === 'sent' ? 'delivered' : 'queued', message_id: id };
   }
 
   /** Send-and-await over the async transport. */
@@ -368,17 +326,17 @@ export class PeerHub {
     const askId = await this.enqueue(input.agent, input.userId, input.topic, input.message, input.mode, true);
     const wait = this.registerWaiter(askId, input.timeoutMs);
     await this.dispatchOutbox();
-    const row = this.outboxState(askId);
+    const row = this.outbox.status(askId);
     if (row?.state === 'dlq') {
       wait.cancel();
-      return { status: 'rejected', reason: row.last_error ?? 'rejected by receiver' };
+      return { status: 'rejected', reason: row.lastError ?? 'rejected by receiver' };
     }
     const reply = await wait.promise;
     if (reply) return { status: 'replied', from: input.agent, reply: reply.content };
     return {
       status: 'no_reply',
       note: `${input.agent} did not answer within ${Math.round(input.timeoutMs / 1000)}s. ` +
-        `The message was ${row?.state === 'delivered' ? 'delivered' : 'queued for delivery'}; ` +
+        `The message was ${row?.state === 'sent' ? 'delivered' : 'queued for delivery'}; ` +
         'a late answer will arrive as a peer event that wakes you.',
     };
   }
@@ -424,125 +382,62 @@ export class PeerHub {
     mode: WorkMode,
     replyExpected: boolean,
   ): Promise<string> {
-    return await enqueueOutboundPeer({
-      enqueueOutboxRow: (row) => {
-        this.deps.sql.exec(
-          `INSERT INTO peer_outbox
-             (id, receiver_agent_name, receiver_user_id, payload,
-              causality_event_id, next_attempt_at, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          row.id, row.receiver_agent_name, row.receiver_user_id,
-          JSON.stringify(row.payload), row.causality_event_id,
-          row.next_attempt_at, this.now(),
-        );
-      },
-      scheduleDispatch: (at) => this.deps.scheduleDispatch(at),
-    }, {
+    const { id } = await this.outbox.queue({
       receiver_agent_name: receiverAgent,
       receiver_user_id: receiverUserId,
       topic,
       body,
       mode,
       reply_expected: replyExpected,
-    }, this.now());
+    }, { now: this.now() });
+    return id;
   }
 
   // ── Outbox dispatch ────────────────────────────────────────────
 
   /** Deliver due pending outbox rows in per-receiver id order. Transient
    *  failures back off and block that receiver's queue (ordering); receiver
-   *  refusals dead-letter the row. Reentrancy-guarded — the alarm and inline
-   *  tool dispatches can overlap on the same activation. */
+   *  refusals dead-letter the row. Reentrancy-guarded by the outbox — the alarm
+   *  and inline tool dispatches can overlap on the same activation. */
   async dispatchOutbox(now = this.now()): Promise<void> {
-    if (this.dispatching) return;
-    this.dispatching = true;
-    try {
-      const rows = this.deps.sql.exec(
-        `SELECT id, receiver_agent_name, receiver_user_id, payload, attempt_count, next_attempt_at
-         FROM peer_outbox WHERE state = 'pending' ORDER BY id`,
-      ).toArray().map((row) => v.parse(OutboxDbRowSchema, row));
+    await this.outbox.drain(now);
+  }
 
-      const blocked = new Set<string>();
-      for (const row of rows) {
-        const receiverKey = `${row.receiver_user_id}:${row.receiver_agent_name}`;
-        if (blocked.has(receiverKey)) continue;
-        if (row.next_attempt_at > now) {
-          blocked.add(receiverKey);
-          await this.deps.scheduleDispatch(row.next_attempt_at);
-          continue;
-        }
-
-        const parsedPayload = v.safeParse(OutboxPayloadSchema, parseJsonObject(row.payload));
-        if (!parsedPayload.success) {
-          this.deps.sql.exec(
-            `UPDATE peer_outbox SET state = 'dlq', attempt_count = attempt_count + 1, last_error = ? WHERE id = ?`,
-            'peer outbox row is missing a valid work mode', row.id,
-          );
-          continue;
-        }
-        const payload = parsedPayload.output;
-        try {
-          const message: PeerMessage = {
-            sender_event_id: row.id,
-            sender_agent_name: this.deps.selfAgentName(),
-            sender_user_id: this.deps.selfUserId(),
-            topic: payload.topic,
-            body: payload.body,
-            mode: payload.mode,
-          };
-          if (payload.reply_expected) Object.assign(message, { reply_expected: true });
-          const res = await this.deps.deliver(row.receiver_agent_name, message);
-          if (res.admitted || res.event_id) {
-            // Admitted now, or deduped by the receiver (a crash redelivery) —
-            // delivered either way.
-            this.deps.sql.exec(
-              `UPDATE peer_outbox SET state = 'delivered', attempt_count = attempt_count + 1, delivered_at = ? WHERE id = ?`,
-              now, row.id,
-            );
-          } else {
-            // Receiver refused (e.g. no cross-owner grant) — permanent.
-            this.deps.sql.exec(
-              `UPDATE peer_outbox SET state = 'dlq', attempt_count = attempt_count + 1, last_error = ? WHERE id = ?`,
-              res.reason ?? 'rejected by receiver', row.id,
-            );
-          }
-        } catch (err) {
-          const message = renderThrownChain({ cause: err });
-          const attempts = row.attempt_count + 1;
-          if (attempts >= MAX_DELIVERY_ATTEMPTS) {
-            this.deps.sql.exec(
-              `UPDATE peer_outbox SET state = 'dlq', attempt_count = ?, last_error = ? WHERE id = ?`,
-              attempts, `undeliverable after ${attempts} attempts: ${message}`, row.id,
-            );
-          } else {
-            const next = now + RETRY_BASE_MS * 2 ** row.attempt_count;
-            this.deps.sql.exec(
-              `UPDATE peer_outbox SET attempt_count = ?, next_attempt_at = ?, last_error = ? WHERE id = ?`,
-              attempts, next, message, row.id,
-            );
-            await this.deps.scheduleDispatch(next);
-          }
-          blocked.add(receiverKey);   // preserve per-receiver ordering
-        }
-      }
-    } finally {
-      this.dispatching = false;
+  /** One delivery attempt, as the outbox policy's `send`. A resolved refusal is
+   *  permanent (the receiver will refuse the next attempt for the same reason);
+   *  a thrown hop is transport trouble and backs off. */
+  private async deliverOne(message: PeerOutboxMessage, id: string): Promise<OutboxDisposition> {
+    const parsed = v.safeParse(PeerOutboxMessageSchema, message);
+    if (!parsed.success) {
+      return { status: 'poison', reason: 'peer outbox row is missing a valid work mode' };
     }
+    const queued = parsed.output;
+    const wire: PeerMessage = {
+      sender_event_id: id,
+      sender_agent_name: this.deps.selfAgentName(),
+      sender_user_id: this.deps.selfUserId(),
+      topic: queued.topic,
+      body: queued.body,
+      mode: queued.mode,
+    };
+    if (queued.reply_expected) Object.assign(wire, { reply_expected: true });
+    let result: ReceiveResult;
+    try {
+      result = await this.deps.deliver(queued.receiver_agent_name, wire);
+    } catch (err) {
+      // A thrown hop is a value here: the disposition the outbox backs off on.
+      // Rendered rather than rethrown so the stored `last_error` keeps the chain.
+      return { status: 'retry', reason: renderThrownChain({ cause: err }) };
+    }
+    // Admitted now, or deduped by the receiver (a crash redelivery) — sent
+    // either way. Anything else is a refusal (e.g. no cross-owner grant).
+    if (result.admitted || result.event_id) return { status: 'sent' };
+    return { status: 'poison', reason: result.reason ?? 'rejected by receiver' };
   }
 
   /** Soonest pending retry — folded into the host's alarm reschedule. */
   nextRetryAt(): number | null {
-    const rows = this.deps.sql.exec(
-      `SELECT MIN(next_attempt_at) AS next FROM peer_outbox WHERE state = 'pending'`,
-    ).toArray();
-    return rows[0] ? v.parse(NextRetrySchema, rows[0]).next : null;
-  }
-
-  private outboxState(id: string): { state: string; last_error: string | null } | null {
-    const rows = this.deps.sql.exec(
-      `SELECT state, last_error FROM peer_outbox WHERE id = ?`, id,
-    ).toArray();
-    return rows[0] ? v.parse(OutboxStateSchema, rows[0]) : null;
+    return this.outbox.nextRetryAt();
   }
 
   private registerWaiter(askId: string, timeoutMs: number) {

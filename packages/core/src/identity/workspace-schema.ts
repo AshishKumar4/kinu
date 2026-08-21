@@ -207,8 +207,8 @@ export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
   // outcome ledger above: the read path runs before anything constructs the
   // engine, and a read that cannot reach the table has to say so, not shrug.
   initReplayTables(execRaw, sql);
-  // agent_log + reply_channels + triggers + peer_outbox, their partial indexes
-  // and views. Spec: docs/ARCHITECTURE.md — "Events and ingress".
+  // agent_log + reply_channels + triggers, their partial indexes and views.
+  // Spec: docs/ARCHITECTURE.md — "Events and ingress".
   initEventsHubTables(exec);
   // Branching-heads journal: head_journal, head_evidence, head_merge_results.
   initHeadsTables(execRaw, sql);

@@ -25,9 +25,7 @@ function makeSql(): SqlExec {
 }
 
 function freshOutbox(): EmailOutbox {
-  const outbox = new EmailOutbox(makeSql());
-  outbox.ensureSchema();
-  return outbox;
+  return new EmailOutbox(makeSql());
 }
 
 const SentEmailSchema = v.object({
@@ -81,7 +79,6 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
     const log = new EventLog(sql);
     const { binding, sent } = fakeSendBinding(sendOpts);
     const outbox = new EmailOutbox(sql);
-    outbox.ensureSchema();
     const replies = new ReplyChannelStore(sql, {
       email_thread: createEmailThreadDispatcher(() => ({
         email: binding, agentDisplayName: 'Scout', outbox,

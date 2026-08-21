@@ -1,6 +1,7 @@
-// Peer transport behavior — TWO real hubs (EventLog + ReplyChannelStore +
-// peer_outbox over in-memory SQLite) wired back-to-back through PeerHub, the
-// same seams the orchestrator wires to DO RPC. Covers the peers-tool paths:
+// Peer transport behavior — TWO real hubs (EventLog + ReplyChannelStore + the
+// shared outbox's `outbox_peer` over in-memory SQLite) wired back-to-back
+// through PeerHub, the same seams the orchestrator wires to DO RPC. Covers the
+// peers-tool paths:
 // fire-and-forget, send-and-await round-trip, trust-grant enforcement,
 // timeout + late reply, crash redelivery dedupe, per-receiver ordering, the
 // spawn-a-specialist round-trip (fresh peer joins the network mid-flight), and
@@ -38,6 +39,9 @@ interface TestAgent {
   grants: Set<string>;
   /** Simulates the receiver DO being unreachable (RPC throws). */
   online: boolean;
+  /** The hub's clock. Null leaves it on the wall clock; a number pins it so a
+   *  backoff curve can be read as an exact instant. */
+  clock: number | null;
 }
 
 const PeerAgentPayloadSchema: v.GenericSchema<PeerAgentPayload> = v.object({
@@ -52,11 +56,14 @@ const PeerAgentPayloadSchema: v.GenericSchema<PeerAgentPayload> = v.object({
 });
 const PeerOutboxRowSchema = v.object({
   id: v.string(),
-  receiver_agent_name: v.string(),
+  message: v.string(),
+  order_key: v.nullable(v.string()),
   state: v.string(),
   attempt_count: v.number(),
+  next_attempt_at: v.number(),
   last_error: v.nullable(v.string()),
 });
+const QueuedPeerMessageSchema = v.object({ receiver_agent_name: v.string() });
 
 function makeNetwork() {
   const network = new Map<string, TestAgent>();
@@ -92,10 +99,14 @@ function makeNetwork() {
         if (!agent) throw new Error('agent network fixture not initialized');
         agent.wakes++;
       },
+      now: () => {
+        if (!agent) throw new Error('agent network fixture not initialized');
+        return agent.clock ?? Date.now();
+      },
     });
     agent = {
       name, userId, sql, log, replyChannels, files, hub,
-      wakes: 0, retries: [], grants: new Set(), online: true,
+      wakes: 0, retries: [], grants: new Set(), online: true, clock: null,
     };
     // The peer_back reply dispatcher routes answers back over the same outbox
     // (exactly how the orchestrator registers it, lazily bound).
@@ -118,8 +129,12 @@ function peerPayload(event: KinuEvent): PeerAgentPayload {
 
 function outboxRows(agent: TestAgent) {
   return v.parse(v.array(PeerOutboxRowSchema), agent.sql.exec(
-    `SELECT id, receiver_agent_name, state, attempt_count, last_error FROM peer_outbox ORDER BY id`,
-  ).toArray());
+    `SELECT id, message, order_key, state, attempt_count, next_attempt_at, last_error
+     FROM outbox_peer ORDER BY id`,
+  ).toArray()).map((row) => ({
+    ...row,
+    receiver_agent_name: v.parse(QueuedPeerMessageSchema, JSON.parse(row.message)).receiver_agent_name,
+  }));
 }
 
 describe('fire-and-forget (send)', () => {
@@ -148,7 +163,7 @@ describe('fire-and-forget (send)', () => {
     expect(batch.text).toContain('peer agent (alice)');
     expect(batch.text).not.toContain("action:'reply'");
 
-    expect(outboxRows(alice)[0].state).toBe('delivered');
+    expect(outboxRows(alice)[0].state).toBe('sent');
   });
 });
 
@@ -235,7 +250,7 @@ describe('trust-grant enforcement (cross-owner)', () => {
     // Without the reply-to-my-ask correlation this would dead-letter on
     // carol's side (no grant for alice) and the ask could never complete.
     expect(await askPromise).toEqual({ status: 'replied', from: 'alice', reply: '99.99%' });
-    expect(outboxRows(alice).map((r) => r.state)).toEqual(['delivered']);
+    expect(outboxRows(alice).map((r) => r.state)).toEqual(['sent']);
   });
 
   test('an uncorrelated cross-owner "reply" envelope is still rejected (no forged replies)', async () => {
@@ -311,14 +326,14 @@ describe('redelivery dedupe (crash between deliver and mark)', () => {
     // Simulate a crash after delivery but before the delivered-mark landed:
     // the row is pending again and the alarm re-drives it.
     const row = outboxRows(alice)[0];
-    alice.sql.exec(`UPDATE peer_outbox SET state = 'pending', next_attempt_at = 0 WHERE id = ?`, row.id);
+    alice.sql.exec(`UPDATE outbox_peer SET state = 'pending', next_attempt_at = 0 WHERE id = ?`, row.id);
     await alice.hub.dispatchOutbox();
 
     expect(pendingPeerEvents(bob)).toHaveLength(1);          // deduped
     const redelivered = pendingPeerEvents(bob)[0];
     if (!redelivered) throw new Error('expected redelivered peer event');
     expect(peerPayload(redelivered).kinu_mode).toBe('plan');
-    expect(outboxRows(alice)[0].state).toBe('delivered');    // settled again
+    expect(outboxRows(alice)[0].state).toBe('sent');    // settled again
     expect(bob.wakes).toBe(1);                                // no double wake
   });
 });
@@ -347,7 +362,7 @@ describe('per-receiver ordering + retry backoff', () => {
     bob.online = true;
     await alice.hub.dispatchOutbox(Date.now() + 60_000);
 
-    expect(outboxRows(alice).map((r) => r.state)).toEqual(['delivered', 'delivered']);
+    expect(outboxRows(alice).map((r) => r.state)).toEqual(['sent', 'sent']);
     const pending = pendingPeerEvents(bob);
     const bodies = pending.map((event) => peerPayload(event).body);
     expect(bodies).toEqual(['first', 'second']);
@@ -380,8 +395,44 @@ describe('per-receiver ordering + retry backoff', () => {
     // The immediate alarm re-drives the outbox and the delivery lands.
     bob.online = true;
     await alice.hub.dispatchOutbox(later);
-    expect(outboxRows(alice).map((r) => r.state)).toEqual(['delivered']);
+    expect(outboxRows(alice).map((r) => r.state)).toEqual(['sent']);
     expect(pendingPeerEvents(bob)).toHaveLength(1);
+  });
+
+  test('each failed delivery doubles the wait from the 5s base', async () => {
+    const { addAgent } = makeNetwork();
+    const alice = addAgent('alice', 'u1'.padEnd(32, '0'));
+    const bob = addAgent('bob', alice.userId);
+    bob.online = false;
+    alice.clock = 0;
+
+    await alice.hub.send({ mode: 'build', agent: 'bob', userId: bob.userId, topic: 'ping', message: 'hello' });
+    expect(outboxRows(alice)[0].next_attempt_at).toBe(5_000);        // 5_000 · 2⁰
+
+    await alice.hub.dispatchOutbox(5_000);
+    expect(outboxRows(alice)[0].next_attempt_at).toBe(15_000);       // + 5_000 · 2¹
+
+    await alice.hub.dispatchOutbox(15_000);
+    expect(outboxRows(alice)[0].next_attempt_at).toBe(35_000);       // + 5_000 · 2²
+  });
+
+  test('an unreachable receiver dead-letters ON the 8th attempt', async () => {
+    const { addAgent } = makeNetwork();
+    const alice = addAgent('alice', 'u1'.padEnd(32, '0'));
+    const bob = addAgent('bob', alice.userId);
+    bob.online = false;
+    alice.clock = 0;
+
+    await alice.hub.send({ mode: 'build', agent: 'bob', userId: bob.userId, topic: 'ping', message: 'anyone?' });
+    for (let sweep = 1; sweep < 10; sweep++) {
+      await alice.hub.dispatchOutbox(sweep * 1_000_000);
+    }
+
+    const row = outboxRows(alice)[0];
+    expect(row.state).toBe('dlq');
+    expect(row.attempt_count).toBe(8);
+    expect(row.last_error).toContain('undeliverable after 8 attempts');
+    expect(alice.hub.nextRetryAt()).toBeNull();
   });
 });
 

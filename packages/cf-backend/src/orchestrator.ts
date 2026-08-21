@@ -346,11 +346,11 @@ export class OrchestratorAgent extends ActorAgent {
   private _emailOutbox: EmailOutbox | null = null;
 
   /** Outbound-email intent log: write-ahead + idempotency for mission-inbox
-   *  replies and owner notifications (SPEC §7.4). */
+   *  replies and owner notifications (SPEC §7.4). The shared outbox creates
+   *  its own table on first use, so there is nothing to initialize here. */
   private get emailOutbox(): EmailOutbox {
     if (!this._emailOutbox) {
       this._emailOutbox = new EmailOutbox(this.ctx.storage.sql, (at) => this.armTimer(at));
-      this._emailOutbox.ensureSchema();
     }
     return this._emailOutbox;
   }
@@ -460,7 +460,7 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   // ── Peer transport endpoint (agent teams) ────────────────────────────────
-  // Sender: peer_outbox rows dispatched via DO RPC (inline + alarm retry).
+  // Sender: `outbox_peer` rows dispatched via DO RPC (inline + alarm retry).
   // Receiver: the receivePeerMessage cross-DO RPC below. The agents tool's
   // ask/send/reply actions ride this hub; spawn adds the create-agent path.
   private _peerHub: PeerHub | null = null;
@@ -1607,7 +1607,7 @@ export class OrchestratorAgent extends ActorAgent {
       // Re-drive pending outbound peer messages (crash/eviction recovery + the
       // exponential-backoff retry path — inline tool dispatch handles the happy
       // path, this alarm is the durable one).
-      await tick.span('alarm.peer_outbox', async (span) => {
+      await tick.span('alarm.peer_dispatch', async (span) => {
         try {
           await this.peerHub.dispatchOutbox(now);
         } catch (err) {
@@ -1624,7 +1624,7 @@ export class OrchestratorAgent extends ActorAgent {
       // Reconcile indeterminate outbound email: an intent left `pending` (crash
       // between the send and its status write) is safely re-driven here — the
       // stored Message-ID makes the re-send idempotent downstream (SPEC §7.4).
-      await tick.span('alarm.email_outbox', async (span) => {
+      await tick.span('alarm.email_reconcile', async (span) => {
         try {
           if (this.env.EMAIL) await this.emailOutbox.reconcile(this.env.EMAIL, now);
         } catch (err) {

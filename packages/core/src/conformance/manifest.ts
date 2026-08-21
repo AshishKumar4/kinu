@@ -217,10 +217,12 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     swarm_node_records: EVERYWHERE,
 
     // ── events hub ──
+    // `outbox_peer` is deliberately not here: the shared outbox creates its
+    // own table on first use, so no root's boot schema produces it and there
+    // is nothing for a root to wire or refuse.
     agent_log: EVERYWHERE,
     reply_channels: EVERYWHERE,
     triggers: EVERYWHERE,
-    peer_outbox: EVERYWHERE,
     run_events: EVERYWHERE,
 
     // ── durable state ──
