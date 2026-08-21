@@ -258,7 +258,7 @@ export const DELEGATION_RUNGS = {
     // A production deliberation burned ~4k reasoning tokens on what an omitted budget means.
     + 'Spend: `budget_tokens`/`budget_usd` cap everything the search transitively spawns and nest under your own mission scope; omitted means uncapped within that scope, so omit unless the caller gave you a number to enforce. '
     // The delivery contract, stated because it changes how a caller plans the turn.
-    + 'It takes minutes, and on a live session it backgrounds the moment it spawns — the settled result wakes you. '
+    + 'It takes minutes, and on a live session it backgrounds the moment it spawns — the settled result wakes you; never poll a backgrounded job or spawn it twice. '
     + 'It refuses rather than approximates: an illegal composition comes back naming the axis and what to change, and a shape no engine here can run faithfully says so instead of returning a number from a different mechanism.',
   hire:
     'Hire a subordinate (action=hire) whenever the work must outlive this turn — the user asks for several fixes or features at once, or a long-running effort — creating one subordinate per independent workstream and running them in parallel. ' +
