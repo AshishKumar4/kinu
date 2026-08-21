@@ -208,6 +208,7 @@ export function landingDocument(
       </ul>
     </div>
     <figure class="show">
+      <span class="fig">Fig. 01</span>
       <div class="anno ruled"><span>Search · UCT</span><span>${HERO_FACTS.rollouts} rollouts · depth ${HERO_FACTS.depth}</span></div>
       ${heroFigure()}
       <div class="anno ruled"><span>Fill · measured score</span><span>${HERO_FACTS.abandoned} branches abandoned</span></div>
@@ -289,8 +290,10 @@ export function landingDocument(
 
   <section class="section">
     <p class="label"><b>§ 04</b>Self-evolution</p>
-    <h2 class="title">Evolution on four timescales.</h2>
-    <p class="lede">The shorter clocks feed the longer ones. None of it needs your upkeep: scoring, consolidation, and retirement run inside the workspace.</p>
+    <div class="headrow">
+      <h2 class="title">Evolution on four timescales.</h2>
+      <p class="lede aside">The shorter clocks feed the longer ones. None of it needs your upkeep: scoring, consolidation, and retirement run inside the workspace.</p>
+    </div>
     <div class="grid two">
       ${CLOCKS.map(([kicker, title, body]) => `<div class="cell"><span class="num">${kicker}</span><h2>${title}</h2><p>${body}</p></div>`).join('\n      ')}
     </div>
@@ -306,12 +309,14 @@ export function landingDocument(
   </section>
 
   <section class="section" id="deploy">
-    <p class="label"><b>§ 06</b>Deploy your own</p>
-    <h2 class="title">The same Worker, in your Cloudflare account.</h2>
-    <p class="lede">kinu.run runs the open-source Worker from this repository. Deploy it yourself, and your agents, files, and model spend stay in your account.</p>
-    <div class="actions">
-      <a class="btn solid" href="${deployUrl}" target="_blank" rel="noopener noreferrer">Deploy to Cloudflare</a>
-      <a class="btn" href="${guideUrl}" target="_blank" rel="noopener noreferrer">Read the self-hosting guide</a>
+    <div class="banner">
+      <p class="label"><b>§ 06</b>Deploy your own</p>
+      <h2 class="title">The same Worker, in your Cloudflare account.</h2>
+      <p class="lede">kinu.run runs the open-source Worker from this repository. Deploy it yourself, and your agents, files, and model spend stay in your account.</p>
+      <div class="actions">
+        <a class="btn solid" href="${deployUrl}" target="_blank" rel="noopener noreferrer">Deploy to Cloudflare</a>
+        <a class="btn" href="${guideUrl}" target="_blank" rel="noopener noreferrer">Read the self-hosting guide</a>
+      </div>
     </div>
     <div class="grid three">
       ${DEPLOY_STEPS.map(([num, title, body, id, cmd]) => `<div class="cell"><span class="num">${num}</span><h2>${title}</h2><p>${body}</p><div class="cmd"><code id="${id}">${cmd}</code><button class="copy" type="button" data-copy="${id}">Copy</button></div></div>`).join('\n      ')}
@@ -460,6 +465,59 @@ border:1px solid var(--c-input-border);border-radius:var(--r-row)}
 .spec>div{flex-direction:column;gap:5px}
 .tree{padding:16px 0}
 .term{max-height:360px;font-size:11px}
+}
+@media (max-width:880px){.headrow{grid-template-columns:1fr;gap:14px}}
+
+/* Wide screens. The page stops being one 1200px column and uses the room:
+   the column widens in steps, cells take real padding, the type scale steps
+   up with the canvas, and sections breathe the way the reference sites do.
+   Nothing below 1440 moves. */
+.label{display:flex;align-items:center;gap:14px}
+.label::after{content:"";flex:1;height:1px;background:var(--c-border)}
+.fig{font-family:var(--font-mono);font-size:10.5px;letter-spacing:0.09em;
+text-transform:uppercase;color:var(--c-text-3)}
+.headrow{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,400px);
+gap:calc(var(--gutter) * 1.1);align-items:end}
+.headrow .aside{margin:0;font-size:14px}
+.headrow+.grid{margin-top:26px}
+.show .fig{display:block;margin-bottom:9px}
+.banner{border:var(--rule);padding:calc(var(--gutter) * 1.1) calc(var(--gutter) * 1.2);
+margin-bottom:26px;background:
+repeating-linear-gradient(115deg,transparent 0 34px,color-mix(in oklab,var(--c-accent) 5%,transparent) 34px 35px),var(--c-bg)}
+.banner .lede{max-width:58ch}
+@media (min-width:1440px){
+.page{width:min(1408px,100%)}
+.section,.hero{padding-top:calc(var(--gutter) * 1.3);padding-bottom:calc(var(--gutter) * 1.3)}
+}
+@media (min-width:1920px){
+.page{width:min(1728px,100%)}
+h1{font-size:clamp(40px,3.6vw,68px)}
+.title{font-size:clamp(30px,2.5vw,46px)}
+.lede{font-size:18px}
+.stat strong{font-size:24px}
+.cell p{font-size:14px}
+.grid>*{padding:28px}
+/* Both two-column grids hold exactly four cells — the clients and the four
+   clocks — so at this width they become one row instead of a square with
+   half-empty cells. */
+.grid.two{grid-template-columns:repeat(4,minmax(0,1fr))}
+.duo{grid-template-columns:minmax(0,1.35fr) minmax(0,1fr)}
+.section,.hero{padding-top:112px;padding-bottom:112px}
+}
+@media (min-width:2560px){
+.page{width:min(2304px,100%)}
+h1{font-size:clamp(48px,3.2vw,78px)}
+.title{font-size:clamp(34px,2.2vw,52px)}
+.lede{font-size:19px}
+.body{font-size:15.5px}
+.stat strong{font-size:26px}
+.cell p{font-size:14.5px}
+.grid>*{padding:36px}
+.section,.hero{padding-top:152px;padding-bottom:152px}
+}
+@media (min-width:3200px){
+.page{width:min(2560px,100%)}
+.section,.hero{padding-top:184px;padding-bottom:184px}
 }
 `;
 
