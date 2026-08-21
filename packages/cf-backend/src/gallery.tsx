@@ -121,12 +121,18 @@ const SQUARE_BUTTON_PROPS = { ["sha" + "pe"]: squareButtonVariant };
 const NOW = Date.now();
 const STUB_DATA = v.parse(JsonObjectSchema, {
   "/api/user/profile": { email: "ashish@example.com", createdAt: NOW - 90 * 864e5, lastSeenAt: NOW },
-  "/api/user/workspaces": [
-    { name: "checkout-fixes", displayName: "Checkout coupon bug", createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3, archivedAt: null },
-    { name: "perf-audit", displayName: "Perf audit — landing", createdAt: NOW - 3 * 864e5, lastVisited: NOW - 2 * 36e5, archivedAt: null },
-    { name: "email-triage", displayName: "Email triage automation", createdAt: NOW - 30 * 864e5, lastVisited: NOW - 864e5, archivedAt: null },
-    { name: "design-sys", displayName: "Design system v2", createdAt: NOW - 864e5, lastVisited: NOW - 5 * 864e5, archivedAt: null },
-  ],
+  // The registry answers { entries, total }, the envelope `listWorkspaces`
+  // validates; a bare array parses as nothing and HomePage photographs its
+  // "couldn't load" state into every screenshot taken of this gallery.
+  "/api/user/workspaces": {
+    entries: [
+      { name: "checkout-fixes", displayName: "Checkout coupon bug", createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3, archivedAt: null },
+      { name: "perf-audit", displayName: "Perf audit — landing", createdAt: NOW - 3 * 864e5, lastVisited: NOW - 2 * 36e5, archivedAt: null },
+      { name: "email-triage", displayName: "Email triage automation", createdAt: NOW - 30 * 864e5, lastVisited: NOW - 864e5, archivedAt: null },
+      { name: "design-sys", displayName: "Design system v2", createdAt: NOW - 864e5, lastVisited: NOW - 5 * 864e5, archivedAt: null },
+    ],
+    total: 4,
+  },
   // The endpoint returns a ModelMenu, not a bare array. Stubbing the array
   // made `menu.models.length` throw and HomePage rendered as a blank canvas,
   // so the one page a signed-in user lands on was never actually looked at.
