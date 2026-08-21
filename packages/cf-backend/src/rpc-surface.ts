@@ -226,6 +226,7 @@ const USER_DO_METHODS = [
   'issueDeviceConnectTicket',
   'listAIGateways',
   'listAccessTokens',
+  'listActiveWorkspaces',
   'listCliTokens',
   'listCloudflareAccounts',
   'listConfig',

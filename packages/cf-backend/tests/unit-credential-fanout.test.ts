@@ -24,10 +24,10 @@ function setup() {
     async deleteCredential() {},
     async disconnectCodex() {},
     async pollCodexDeviceFlow() { return { connected: true, accountId: 'acc' }; },
-    async listWorkspaces() {
+    async listActiveWorkspaces() {
       return [
-        { name: 'jarvis', displayName: 'Jarvis', createdAt: 1, lastVisited: 1, archivedAt: null },
-        { name: 'old-bot', displayName: 'Old', createdAt: 1, lastVisited: 1, archivedAt: 123 },
+        { name: 'jarvis', displayName: 'Jarvis' },
+        { name: 'old-bot', displayName: 'Old' },
       ];
     },
   };
@@ -64,19 +64,19 @@ async function call(env: Env, ctx: ExecutionContext, path: string, method: strin
 }
 
 describe('credential-change fanout to agent DOs', () => {
-  test('setting a credential notifies active agents only', async () => {
+  test('setting a credential notifies every enumerated agent', async () => {
     const { env, ctx, notified, pending } = setup();
     const res = await call(env, ctx, '/credentials/openai.api', 'POST', { kind: 'bearer', token: 'sk-x' });
     expect(res?.status).toBe(200);
     await Promise.all(pending);
-    expect(notified).toEqual(['jarvis']); // archived old-bot untouched
+    expect(notified).toEqual(['jarvis', 'old-bot']);
   });
 
   test('deleting a credential notifies agents', async () => {
     const { env, ctx, notified, pending } = setup();
     await call(env, ctx, '/credentials/openai.api', 'DELETE');
     await Promise.all(pending);
-    expect(notified).toEqual(['jarvis']);
+    expect(notified).toEqual(['jarvis', 'old-bot']);
   });
 
   test('codex disconnect and successful poll notify agents', async () => {
@@ -84,6 +84,6 @@ describe('credential-change fanout to agent DOs', () => {
     await call(env, ctx, '/codex', 'DELETE');
     await call(env, ctx, '/codex/poll', 'POST', {});
     await Promise.all(pending);
-    expect(notified).toEqual(['jarvis', 'jarvis']);
+    expect(notified).toEqual(['jarvis', 'old-bot', 'jarvis', 'old-bot']);
   });
 });

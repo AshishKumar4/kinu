@@ -47,7 +47,7 @@ function setupEnv() {
     },
     async getConfig(_caller: UserCaller, key: string) { return config.get(key) ?? null; },
     async setConfig(_caller: UserCaller, key: string, value: string) { config.set(key, value); },
-    async listWorkspaces(_caller: UserCaller) { return []; },
+    async listActiveWorkspaces(_caller: UserCaller) { return []; },
   };
   const env = testEnv({
     AUTH_KV: kv,

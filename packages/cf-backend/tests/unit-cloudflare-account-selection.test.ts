@@ -160,8 +160,8 @@ function routeHarness(selectFails = false) {
   const stub = {
     async ensureProfile() {},
     async userMcp_warmConnections() { return { servers: 0 }; },
-    async listWorkspaces() {
-      return [{ name: 'jarvis', displayName: 'Jarvis', createdAt: 1, lastVisited: 1, archivedAt: null }];
+    async listActiveWorkspaces() {
+      return [{ name: 'jarvis', displayName: 'Jarvis' }];
     },
     async listCloudflareAccounts() {
       return { connected: true, selectedId: PERSONAL.id, accounts: [PERSONAL, EMPLOYER] };

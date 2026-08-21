@@ -177,7 +177,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   }
 
   if (path === '/workspaces' && method === 'GET') {
-    return json(await cli.userDO.listWorkspaces(await ownerCaller(env)));
+    return json(await cli.userDO.listActiveWorkspaces(await ownerCaller(env)));
   }
 
   if (path === '/models' && method === 'GET') {

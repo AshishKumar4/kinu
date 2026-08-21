@@ -121,6 +121,7 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'device.manage', name: 'verifyDeviceConnectTicket', run: (u, c) => u.verifyDeviceConnectTicket(c, 'pct_x') },
 
   { capability: 'workspaces.read', name: 'listWorkspaces', run: (u, c) => u.listWorkspaces(c) },
+  { capability: 'workspaces.read', name: 'listActiveWorkspaces', run: (u, c) => u.listActiveWorkspaces(c) },
   { capability: 'workspaces.read', name: 'hasWorkspace', run: (u, c) => u.hasWorkspace(c, OTHER_WORKSPACE) },
 
   { capability: 'workspaces.write', name: 'registerWorkspace', run: (u, c) => u.registerWorkspace(c, 'spawned') },
@@ -274,7 +275,7 @@ describe('a tainted workspace loses exactly the capabilities the matrix cuts', (
     await expect(harness.userDO.setWorkspaceDisplayName(caller, OTHER_WORKSPACE, 'Hijacked'))
       .rejects.toThrow('may only rename itself');
 
-    const names = await harness.userDO.listWorkspaces(await testOwner());
+    const names = (await harness.userDO.listWorkspaces(await testOwner())).entries;
     expect(names.find((w) => w.name === WORKSPACE)?.displayName).toBe('Renamed by itself');
     expect(names.find((w) => w.name === OTHER_WORKSPACE)?.displayName).toBe('Workspace B');
     harness.close();
@@ -287,7 +288,7 @@ describe('a tainted workspace loses exactly the capabilities the matrix cuts', (
     const tainted: UserCaller = { workspaceToken: harness.fullToken };
     const sibling: UserCaller = { workspaceToken: harness.otherToken };
     await expect(harness.userDO.listWorkspaces(tainted)).rejects.toThrow(CapabilityDeniedError);
-    expect(await harness.userDO.listWorkspaces(sibling)).toHaveLength(2);
+    expect((await harness.userDO.listWorkspaces(sibling)).entries).toHaveLength(2);
     harness.close();
   });
 });
@@ -320,7 +321,7 @@ describe('a full workspace behaves exactly as before', () => {
     const caller: UserCaller = { workspaceToken: harness.fullToken };
     await harness.userDO.setCredential(await testOwner(), 'openai.bearer', { kind: 'bearer', token: 'sk-1' });
 
-    expect((await harness.userDO.listWorkspaces(caller)).map((w) => w.name).sort())
+    expect((await harness.userDO.listWorkspaces(caller)).entries.map((w) => w.name).sort())
       .toEqual([WORKSPACE, OTHER_WORKSPACE]);
     expect(await harness.userDO.hasWorkspace(caller, WORKSPACE)).toBe(true);
     expect(await harness.userDO.getAuthHeaders(caller, 'openai.bearer')).toEqual({ Authorization: 'Bearer sk-1' });
@@ -384,7 +385,7 @@ describe('the boundary fails closed', () => {
   test('deleting a workspace kills its token', async () => {
     const harness = await setupWorkspaces();
     const caller: UserCaller = { workspaceToken: harness.otherToken };
-    expect(await harness.userDO.listWorkspaces(caller)).toHaveLength(2);
+    expect((await harness.userDO.listWorkspaces(caller)).entries).toHaveLength(2);
 
     await harness.userDO.removeWorkspace(await testOwner(), OTHER_WORKSPACE, USER_ID);
     expect(harness.destroyedWorkspaces).toEqual([OTHER_WORKSPACE]);
@@ -399,7 +400,7 @@ describe('capability provisioning', () => {
     const token = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
 
     expect(token).toMatch(/^pwc_[A-Za-z0-9_-]{40,}$/);
-    expect(await harness.userDO.listWorkspaces({ workspaceToken: token })).toHaveLength(1);
+    expect((await harness.userDO.listWorkspaces({ workspaceToken: token })).entries).toHaveLength(1);
     harness.close();
   });
 
@@ -410,7 +411,7 @@ describe('capability provisioning', () => {
     await harness.userDO.ensureWorkspaceCapability(WORKSPACE, hash);
 
     expect(harness.installed.get(WORKSPACE)).toBe(harness.fullToken);
-    expect(await harness.userDO.listWorkspaces({ workspaceToken: harness.fullToken })).toHaveLength(2);
+    expect((await harness.userDO.listWorkspaces({ workspaceToken: harness.fullToken })).entries).toHaveLength(2);
     harness.close();
   });
 
@@ -430,7 +431,7 @@ describe('capability provisioning', () => {
     ]);
 
     const installedToken = harness.installed.get(WORKSPACE)!;
-    expect(await harness.userDO.listWorkspaces({ workspaceToken: installedToken })).toHaveLength(1);
+    expect((await harness.userDO.listWorkspaces({ workspaceToken: installedToken })).entries).toHaveLength(1);
     harness.close();
   });
 
@@ -444,7 +445,7 @@ describe('capability provisioning', () => {
 
     const repaired = harness.installed.get(WORKSPACE)!;
     expect(repaired).not.toBe(harness.fullToken);
-    expect(await harness.userDO.listWorkspaces({ workspaceToken: repaired })).toHaveLength(2);
+    expect((await harness.userDO.listWorkspaces({ workspaceToken: repaired })).entries).toHaveLength(2);
     harness.close();
   });
 
@@ -507,9 +508,9 @@ describe('workspace name reservation', () => {
     const reserved = await harness.userDO.reserveWorkspace(owner, 'fork-reservation', 'Fork title');
 
     expect(await harness.userDO.releaseWorkspaceReservation(owner, 'fork-reservation', reserved.entry.createdAt + 1)).toBe(false);
-    expect((await harness.userDO.listWorkspaces(owner)).map((row) => row.name)).toContain('fork-reservation');
+    expect((await harness.userDO.listWorkspaces(owner)).entries.map((row) => row.name)).toContain('fork-reservation');
     expect(await harness.userDO.releaseWorkspaceReservation(owner, 'fork-reservation', reserved.entry.createdAt)).toBe(true);
-    expect((await harness.userDO.listWorkspaces(owner)).map((row) => row.name)).not.toContain('fork-reservation');
+    expect((await harness.userDO.listWorkspaces(owner)).entries.map((row) => row.name)).not.toContain('fork-reservation');
     harness.close();
   });
 });
@@ -565,7 +566,7 @@ describe('facets attenuate with their workspace', () => {
   test('tainting the workspace cuts the facet in the same instant, with no facet bookkeeping', async () => {
     const harness = await setupWorkspaces();
     const facetCaller: UserCaller = { workspaceToken: harness.fullToken };
-    expect(await harness.userDO.listWorkspaces(facetCaller)).toHaveLength(2);
+    expect((await harness.userDO.listWorkspaces(facetCaller)).entries).toHaveLength(2);
 
     setWorkspaceTier(harness.sql, WORKSPACE, 'shared');
 

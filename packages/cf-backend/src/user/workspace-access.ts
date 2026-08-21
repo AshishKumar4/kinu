@@ -50,9 +50,8 @@ export function notifyWorkspacesCredentialsChanged(
   ctx?: ExecutionContext,
 ): void {
   const task = (async () => {
-    const workspaces = await userDO.listWorkspaces(await ownerCaller(env));
+    const workspaces = await userDO.listActiveWorkspaces(await ownerCaller(env));
     await Promise.allSettled(workspaces
-      .filter((a) => a.archivedAt === null)
       .map((a) => env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(a.name)).onCredentialsChanged()));
   })().catch((e) => {
     diagnostics.failure('workspace.credential_fanout_failed', toKinuError({

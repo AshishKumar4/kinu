@@ -645,7 +645,7 @@ export class OrchestratorAgent extends ActorAgent {
       listPeers: async () => {
         requireOwner();
         const { stub, caller } = await this.userHub();
-        return teamPeers(this.name, await stub.listWorkspaces(caller));
+        return teamPeers(this.name, await stub.listActiveWorkspaces(caller));
       },
       ask: async ({ agent, topic, message, timeoutMs, mode }) => {
         await requirePeer(agent);
