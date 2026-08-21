@@ -194,14 +194,16 @@ export type SwarmScoreSetting =
  * an archive without a rejection test cannot be WRITTEN DOWN — the refusal is not
  * relaxed, it is dissolved, which is strictly stronger than being enforced.
  *
- * IT COSTS SOMETHING AND THE COST IS REAL. No preset row ever stated a τ, and
- * *Presets* forbids a preset implicitly declaring one — the 0.6 behind this axis is
- * Rainbow Teaming's measured filter offered as evidence that a
- * rejection test is needed, not a threshold this specification declares — so every
- * preset that resolves to `archive` now has a required parameter the table does
- * not supply, and `redteam` joins `research` and `audit` as an UNDECLARED row.
- * That is three of the archive presets refusing to resolve where one of them used
- * to. Inventing the number here is the one thing this file may not do.
+ * IT COSTS SOMETHING AND THE COST IS REAL. A preset that resolves to `archive`
+ * must state its τ, because *Presets* forbids a preset implicitly declaring
+ * one — the 0.6 behind this axis is Rainbow Teaming's measured filter offered
+ * as evidence that a rejection test is needed, not a threshold this
+ * specification declares. The preset table now pays that cost in the open:
+ * `research`, `audit` and `redteam` each declare their admission threshold
+ * (advance archive ≥0.4) and all three resolve. They spent a season refusing
+ * as UNDECLARED rows until the owner ruled the refusal was the defect and the
+ * declarations landed. Inventing a number here is still the one thing this
+ * file may not do — the table declares it, or the row does not resolve.
  */
 export type SwarmAdvanceSetting =
   | { readonly kind: 'uct' }
