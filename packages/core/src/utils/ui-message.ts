@@ -186,8 +186,13 @@ export function uiMessageText(content: string): string {
  * its anchor, but the anchor is minted from a list the socket keeps extending,
  * and a reconnect can re-seed a wider window — so the same message can
  * legitimately arrive both ways. The live copy wins whenever it does: it
- * carries parts, metadata, tool calls and attachments, where the stored copy
- * has been flattened to text by `uiMessageText` above.
+ * carries the parts — tool calls, reasoning, attachments — that the stored copy
+ * has been flattened out of by `uiMessageRow` above.
+ *
+ * What the restored copy DOES keep is the row's metadata, because that is not
+ * presentation: it is the author stamp and the `kinuEvent` name a surface
+ * decides who wrote the row from. A restored row without them is read as the
+ * operator's own words.
  */
 export function mergeTranscript(
   older: readonly ChatHistoryEntry[],
@@ -202,7 +207,11 @@ export function mergeTranscript(
     // look like a message going missing rather than like a duplicate.
     if (known.has(entry.id)) continue;
     known.add(entry.id);
-    restored.push({ id: entry.id, role: entry.role, parts: [{ type: 'text', text: entry.content }] });
+    const row: UIMessage = {
+      id: entry.id, role: entry.role, parts: [{ type: 'text', text: entry.content }],
+    };
+    if (entry.metadata !== undefined) row.metadata = entry.metadata;
+    restored.push(row);
   }
   return [...restored, ...live];
 }

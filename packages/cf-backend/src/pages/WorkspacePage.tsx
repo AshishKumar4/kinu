@@ -11,7 +11,7 @@ import {
 import { convertFileListToFileUIParts } from "ai";
 import type { FileUIPart } from "ai";
 import {
-  CLOUD_MAX_INLINE_ATTACHMENT_BYTES, mergeTranscript, pageSchema,
+  buildTranscript, CLOUD_MAX_INLINE_ATTACHMENT_BYTES, mergeTranscript, pageSchema,
   isPlaceholderMission, planReviewAwaitingDecision, summarizeRestorePlan,
 } from "@kinu.run/core";
 import type {
@@ -19,9 +19,9 @@ import type {
   FileRestoreChange, FileRestorePlan, Page, TakePickOutcome,
 } from "@kinu.run/core";
 import * as v from "valibot";
-import { useKinu, type SteerRun } from "@/hooks/use-kinu";
+import { useKinu } from "@/hooks/use-kinu";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
-import { usePagedScroll } from "@/hooks/use-paged-scroll";
+import { usePagedScroll, walkStart } from "@/hooks/use-paged-scroll";
 import { useSteerActions } from "@/hooks/use-steer-actions";
 import { touchWorkspace } from "@/lib/user-api";
 import { describeError } from "@/hooks/use-async-resource";
@@ -29,7 +29,7 @@ import { ConnectedModelPicker } from "@/components/ModelPicker";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ConnectionIndicator } from "@/components/connection-indicator";
 import { Modal } from "@/components/ui/Modal";
-import { MessageView, ProgrammaticTurnCard, SteeredMark } from "@/components/MessageView";
+import { MessageView, ProgrammaticTurnCard, SteerBubble } from "@/components/MessageView";
 import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { hasComparableTakes } from "@/components/alternate-takes-logic";
 import { classifyProgrammaticTurn, messageSignalId } from "@/components/background-event";
@@ -249,20 +249,6 @@ export function ChatErrorCard({ message, replayed, streaming, onRetry, onDismiss
   );
 }
 
-/** A steer the server has taken but whose durable user row has not reached the
- *  chat yet. Deliberately the SAME bubble a user message gets: it IS one, and
- *  the only difference worth drawing is whether the model has it yet. */
-function SteerBubble({ steer }: { steer: SteerRun }) {
-  return (
-    <div className="flex flex-col items-end animate-fade-in">
-      <div className="max-w-[75%] px-4 py-2.5 rounded-xl rounded-br-md p-user-bubble p-body whitespace-pre-wrap">
-        {steer.text}
-      </div>
-      <SteeredMark state={steer.status} />
-    </div>
-  );
-}
-
 /** A subordinate's task assignment or progress report, mirrored into the main
  *  chat as a centered marker that links to that subordinate's tab. */
 function SubordinateEventCard({ event, workspace }: { event: SubordinateActivityEvent; workspace: string }) {
@@ -403,6 +389,10 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
     steerRuns: state.steerRuns,
     messageIds,
   });
+  // Same rule as the workspace column: a steer sits inside the turn that read
+  // it, and only an unplaceable one trails.
+  const thread = useMemo(
+    () => buildTranscript(state.messages, liveSteers), [state.messages, liveSteers]);
 
   if (state.connectionStatus === "connecting" && !state.agentStatus) {
     return (
@@ -435,22 +425,23 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
 
       <ErrorBoundary label="Subordinate chat">
         <div ref={messagesRef} className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8">
-          {state.messages.length === 0 && !state.isStreaming && (
+          {thread.entries.length === 0 && !state.isStreaming && (
             <div className="flex h-full flex-col items-center justify-center text-center">
               <KinuMark size={30} className="mb-3 text-[var(--c-accent)] opacity-60" />
               <p className="text-sm p-text-3">This subordinate's conversation starts here.</p>
               {as?.soul && <p className="mt-2 max-w-sm whitespace-pre-wrap text-xs p-text-3">{as.soul}</p>}
             </div>
           )}
-          {state.messages.map((msg, i) => (
+          {thread.entries.map(({ message: msg, steers }, i) => (
             <MessageView
               key={msg.id}
               message={msg}
-              isLast={i === state.messages.length - 1}
+              steers={steers}
+              isLast={i === thread.entries.length - 1}
               isStreaming={state.isStreaming}
             />
           ))}
-          {liveSteers.map((s) => <SteerBubble key={s.steerId} steer={s} />)}
+          {thread.trailing.map((steer) => <SteerBubble key={steer.id} steer={steer} />)}
           {state.chatError && (
             <ChatErrorCard
               message={state.chatError.body}
@@ -543,6 +534,13 @@ export default function WorkspacePage() {
   // `Think.messages`, a bounded newest window governed by hydrationByteBudget)
   // plus everything the socket has streamed since. Anything older than that
   // window exists only in storage and is reached one cursored page at a time.
+  //
+  // The seed can be empty while storage is not — the window is rebuilt from
+  // storage on every activation, and an activation that could not rebuild it
+  // serves nothing. So an empty seed starts the walk at the newest page rather
+  // than not starting it: the store is asked, and "there is nothing here" is
+  // then something the store said instead of something the socket failed to
+  // say. That is the report — a workspace whose conversation was gone.
   const oldest = state.messages[0]?.id;
   const history = usePagedScroll<ChatHistoryEntry>({
     grows: "up",
@@ -551,9 +549,8 @@ export default function WorkspacePage() {
         .then((page) => v.parse(ChatHistoryPageSchema, page)),
       [state.rpc],
     ),
-    // The first anchor is the oldest message the live list is showing: the SDK
-    // seeds without a cursor, so this is the only place the walk can start.
-    startFrom: useCallback(() => oldest ? { after: oldest } : null, [oldest]),
+    startFrom: useCallback(
+      () => walkStart(oldest, state.transcriptSeeded), [oldest, state.transcriptSeeded]),
   });
 
   const transcript = useMemo(
@@ -715,6 +712,13 @@ export default function WorkspacePage() {
     steerRuns: state.steerRuns,
     messageIds,
   });
+
+  // The thread as it is drawn: every steer inside the turn the model read it
+  // in, and only the ones with nowhere to sit yet left under it. One rule for
+  // the live splice and the reloaded row, so the bubble does not move when the
+  // socket's copy is replaced by the stored one.
+  const thread = useMemo(
+    () => buildTranscript(transcript, liveSteers), [transcript, liveSteers]);
 
   // Identity-stable handlers so memo(MessageView) holds across stream ticks.
   const onForkMessage = useCallback((mid: string) => setForkFor(mid), []);
@@ -942,21 +946,22 @@ export default function WorkspacePage() {
             <ErrorBoundary label="Chat">
             <div ref={messagesRef} className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8">
               {transcriptPending && <ConversationSkeleton />}
-              {!transcriptPending && transcript.length === 0 && !state.isStreaming && (
+              {!transcriptPending && thread.entries.length === 0 && !state.isStreaming && (
                 <EmptyConversation mission={as?.purpose ?? ""} />
               )}
-              {transcript.length > 0 && (
+              {thread.entries.length > 0 && (
                 <HistoryBoundary
                   loading={history.loading} error={history.error}
                   exhausted={history.exhausted} onRetry={history.loadMore} />
               )}
-              {transcript.map((msg, i) => {
+              {thread.entries.map(({ message: msg, steers }, i) => {
                 const takes = takesByTurn[msg.id];
                 return (
                   <MessageView
                     key={msg.id}
                     message={msg}
-                    isLast={i === transcript.length - 1}
+                    steers={steers}
+                    isLast={i === thread.entries.length - 1}
                     isStreaming={state.isStreaming}
                     onFork={onForkMessage}
                     onFeedback={onMessageFeedback}
@@ -972,7 +977,7 @@ export default function WorkspacePage() {
               {looseCards.map(({ card, turn }) => (
                 <ProgrammaticTurnCard key={card.id} turn={turn} text={card.text} state={card.state} />
               ))}
-              {liveSteers.map((steer) => <SteerBubble key={steer.steerId} steer={steer} />)}
+              {thread.trailing.map((steer) => <SteerBubble key={steer.id} steer={steer} />)}
               {state.branchRuns.map((run) => (
                 <BranchRunChip
                   key={run.branchId}

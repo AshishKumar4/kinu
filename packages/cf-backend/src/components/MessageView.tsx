@@ -7,7 +7,7 @@
  * a piece of this file: prose, reasoning, tool runs, files, the programmatic
  * turns the backend enqueued, and the per-message affordances.
  */
-import { memo, useState, useRef, useEffect, useCallback, type ReactNode } from "react";
+import { Fragment, memo, useState, useRef, useEffect, useCallback, type ReactNode } from "react";
 import {
   WrenchIcon, CaretDownIcon, CaretRightIcon,
   BrainIcon, GitBranchIcon, CheckCircleIcon, ClockIcon,
@@ -21,7 +21,7 @@ import {
   ADVISOR_SEVERITY_LABEL, JsonObjectSchema, JsonValueSchema,
   describeToolCall, isToolCallFailed, summarizeToolCall, summarizeToolRun,
 } from "@kinu.run/core";
-import type { AdvisorSeverity, JsonObject, JsonValue } from "@kinu.run/core";
+import type { AdvisorSeverity, InlineSteer, JsonObject, JsonValue, PlacedSteer } from "@kinu.run/core";
 import * as v from "valibot";
 import { tolerate } from "@kinu.run/core/obs";
 import { PreviewFrame } from "@/components/PreviewFrame";
@@ -30,6 +30,7 @@ import { AttachmentChip } from "@/components/AttachmentChip";
 import { extractPreviewUrl } from "@/lib/preview-origin";
 import { groupMessageParts, type AnyToolPart } from "@/components/tool-call-grouping";
 import { liveTail } from "@/components/message-live-tail";
+import { segmentBySteers } from "@kinu.run/core";
 import {
   classifyProgrammaticTurn, eventVariantLabel, isSteeredMessage, parseDrainedEvents,
   type DrainedEvent, type ProgrammaticTurn, type SignalCard,
@@ -564,6 +565,39 @@ export function ProgrammaticTurnCard({ turn, text, state }: {
   return <DrainedEventsCard text={text} state={state} />;
 }
 
+/**
+ * A steer as the thread draws it — the SAME bubble a user message gets, because
+ * it IS one. The only difference worth drawing is whether the model has it yet.
+ *
+ * It keeps the fork affordance for the same reason: the steer is a real user
+ * row in the session tree and the walk-back cut can pivot on it, so a steer the
+ * conversation turned on is one of the most useful places to branch from. A
+ * steer with no durable row yet has nothing to fork at, and says so by not
+ * offering it.
+ */
+export function SteerBubble({ steer, onFork }: {
+  steer: InlineSteer;
+  onFork?: (messageId: string) => void;
+}) {
+  return (
+    <div className="group flex flex-col items-end animate-fade-in" data-steer={steer.state}>
+      <div className="relative max-w-[min(75%,42rem)] px-4 py-2.5 rounded-xl rounded-br-md p-user-bubble p-body whitespace-pre-wrap">
+        {steer.text}
+        {onFork && steer.state === "landed" && (
+          <button
+            onClick={() => onFork(steer.id)}
+            className="absolute -left-9 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 text-[11px] p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm"
+            title="Fork from here"
+          >
+            <GitBranchIcon size={12} />
+          </button>
+        )}
+      </div>
+      <SteeredMark state={steer.state === "queued" ? "queued" : "landed"} />
+    </div>
+  );
+}
+
 /** The label a user message carries when it reached the model mid-turn instead
  *  of starting a turn of its own. Without it a user bubble in the middle of an
  *  assistant's work reads like a rendering bug rather than the steer it is. */
@@ -581,7 +615,7 @@ export function SteeredMark({ state }: { state: "queued" | "landed" }) {
 // re-rendering (and re-parsing their markdown) entirely.
 export const MessageView = memo(function MessageView({
   message, isLast, isStreaming, onFork, onFeedback, feedback, onRestoreFiles, takesChip,
-  signalState,
+  signalState, steers,
 }: {
   message: UIMessage;
   isLast: boolean;
@@ -604,6 +638,10 @@ export const MessageView = memo(function MessageView({
    *  the takes data. A slot rather than an import: TakesChip opens a comparison
    *  that renders a node transcript, which renders MessageView. */
   takesChip?: ReactNode;
+  /** Steers the model read INSIDE this turn, each at the step it read them.
+   *  The turn's parts are cut at those boundaries so the operator's words sit
+   *  between the work that preceded them and the work they changed. */
+  steers?: readonly PlacedSteer[];
 }) {
   const isUser = message.role === "user";
   const isLive = isLast && isStreaming && !isUser;
@@ -622,6 +660,15 @@ export const MessageView = memo(function MessageView({
       <ProgrammaticTurnCard
         turn={programmatic} text={getMessageText(message)} state={signalState ?? "shown"} />
     );
+  }
+
+  // A row the transcript walk already reported as the harness's, which is what
+  // it does for a programmatic row whose stored metadata the walk could not
+  // read. It is not the operator and it is not the agent; without this it fell
+  // through to the assistant rendering, complete with a fork affordance.
+  if (message.role === "system") {
+    return <ProgrammaticTurnCard turn={{ kind: "system_event", event: "system" }}
+      text={getMessageText(message)} state={signalState ?? "shown"} />;
   }
 
   if (isUser) {
@@ -664,52 +711,70 @@ export const MessageView = memo(function MessageView({
   // part states rather than inferred from part order. See message-live-tail.ts.
   const tail = isLive ? liveTail(message.parts) : null;
 
+  // Cut at the steers the model read inside this turn. With none — which is
+  // nearly always — this is one segment holding every part, and the rendering
+  // is what it was.
+  const segments = segmentBySteers(message.parts, steers ?? []);
+  // The turn's own fork affordance belongs on the first segment that draws
+  // anything: a steer at step 0 leaves the first segment empty, and hanging the
+  // button off a segment that renders nothing takes it off the message.
+  const forkSegment = segments.findIndex((segment) => segment.parts.length > 0);
+
   return (
-    <div className="group relative max-w-[85%] space-y-1 animate-fade-in">
-      {canFork && (
-        <button
-          onClick={() => onFork!(message.id)}
-          className="absolute -right-9 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 text-[11px] p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm"
-          title="Fork from here"
-        >
-          <GitBranchIcon size={12} />
-        </button>
-      )}
-      {groupMessageParts(message.parts).map((block, i) => {
-        if (block.kind === "tool-run") {
-          const first = block.parts[0];
-          return first ? <ToolCallGroup key={first.toolCallId} parts={block.parts} /> : null;
-        }
-        const part = block.part;
-        const isTailPart = (tail?.kind === "text" || tail?.kind === "reasoning") && tail.part === part;
-        if (part.type === "reasoning") {
-          const t = part.text;
-          return t ? <ReasoningBlock key={i} text={t} live={isTailPart} /> : null;
-        }
-        if (part.type === "file") {
-          return <div key={i} className="my-1.5"><FilePartView part={part} /></div>;
-        }
-        if (part.type === "text") {
-          const t = part.text;
-          if (!t) return null;
-          // `p-streaming` draws the caret inside the last block the markdown
-          // emitted. As a sibling element it landed on a line of its own below
-          // the paragraph, which is the misplacement that was reported.
-          return (
-            <div key={i} className={`prose-chat p-text${isTailPart ? " p-streaming" : ""}`}>
-              <MarkdownContent content={t} />
+    <div className="space-y-1 animate-fade-in">
+      {segments.map((segment, s) => (
+        <Fragment key={s}>
+          {segment.steer && <SteerBubble steer={segment.steer} onFork={onFork} />}
+          {segment.parts.length > 0 && (
+            <div className="group relative max-w-[85%] space-y-1">
+              {s === forkSegment && canFork && (
+                <button
+                  onClick={() => onFork!(message.id)}
+                  className="absolute -right-9 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 text-[11px] p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm"
+                  title="Fork from here"
+                >
+                  <GitBranchIcon size={12} />
+                </button>
+              )}
+              {groupMessageParts(segment.parts).map((block, i) => {
+                if (block.kind === "tool-run") {
+                  const first = block.parts[0];
+                  return first ? <ToolCallGroup key={first.toolCallId} parts={block.parts} /> : null;
+                }
+                const part = block.part;
+                const isTailPart = (tail?.kind === "text" || tail?.kind === "reasoning") && tail.part === part;
+                if (part.type === "reasoning") {
+                  const t = part.text;
+                  return t ? <ReasoningBlock key={i} text={t} live={isTailPart} /> : null;
+                }
+                if (part.type === "file") {
+                  return <div key={i} className="my-1.5"><FilePartView part={part} /></div>;
+                }
+                if (part.type === "text") {
+                  const t = part.text;
+                  if (!t) return null;
+                  // `p-streaming` draws the caret inside the last block the markdown
+                  // emitted. As a sibling element it landed on a line of its own below
+                  // the paragraph, which is the misplacement that was reported.
+                  return (
+                    <div key={i} className={`prose-chat p-text${isTailPart ? " p-streaming" : ""}`}>
+                      <MarkdownContent content={t} />
+                    </div>
+                  );
+                }
+                if (isToolUIPart(part)) return <ToolCallPart key={part.toolCallId} part={part} />;
+                return null;
+              })}
             </div>
-          );
-        }
-        if (isToolUIPart(part)) return <ToolCallPart key={part.toolCallId} part={part} />;
-        return null;
-      })}
+          )}
+        </Fragment>
+      ))}
       {tail?.kind === "thinking" && <ThinkingRow />}
       {!isLive && (
         <div className="flex items-center gap-2">
           <MessageTimestamp createdAt={messageCreatedAt(message)} />
-          {!isUser && takesChip}
-          {!isUser && message.id && onFeedback && (
+          {takesChip}
+          {message.id && onFeedback && (
             <MessageFeedback
               messageId={message.id}
               current={feedback ?? null}

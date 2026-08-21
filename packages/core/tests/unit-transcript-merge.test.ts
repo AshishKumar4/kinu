@@ -63,4 +63,25 @@ describe('transcript merge', () => {
       id: 'm1', role: 'assistant', parts: [{ type: 'text', text: 'hello there' }],
     });
   });
+
+  test('a walked-back programmatic row keeps the markers its card is drawn from', () => {
+    // The production shape: `fork_interrupted` rows in sunlit-stone-4a20 and
+    // stone-ash-71f2. Live they arrive over the socket with their metadata and
+    // draw an event card. Walked back they arrived stripped, so the same row
+    // the operator had just been reading as a card turned into a bare bubble
+    // the moment it scrolled out of the hydration window.
+    const [restored] = mergeTranscript([{
+      id: 'f8798675', role: 'system', content: '9 head(s) across 1 fork run(s)…',
+      createdAt: '2026-01-01 00:00:00',
+      metadata: { kinuEvent: 'fork_interrupted', heads: 9 },
+    }], []);
+
+    expect(restored?.role).toBe('system');
+    expect(restored?.metadata).toEqual({ kinuEvent: 'fork_interrupted', heads: 9 });
+  });
+
+  test('a row that carried no metadata restores without inventing any', () => {
+    const [restored] = mergeTranscript([stored('m1')], []);
+    expect(restored).not.toHaveProperty('metadata');
+  });
 });

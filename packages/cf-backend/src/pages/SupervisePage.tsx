@@ -200,7 +200,7 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
   const first = lastValue(resource);
 
   const fetchPage = useCallback(
-    async (cursor: SeekCursor) => v.parse(
+    async (cursor: SeekCursor | undefined) => v.parse(
       RunPageSchema, await rpc("getRunSummaries", [{ cursor, limit: RUN_HISTORY_PAGE }]),
     ),
     [rpc],
