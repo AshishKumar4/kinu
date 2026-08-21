@@ -9,9 +9,10 @@
  * `getChatHistoryPage`, triggered by scrolling the real container to its top.
  * This script proves that walk loses nothing:
  *
- *   seed  — write ~300 mixed rows (operator turns, replies, steers,
- *           programmatic cards of every kind) straight into the workspace DO's
- *           SQLite, sized so the shipped window provably cuts the oldest rows.
+ *   seed  — write 300 mixed rows (operator turns, replies, steers, and a
+ *           programmatic card of every kind) straight into the workspace DO's
+ *           SQLite. At the default size that is 32.14 MiB, of which the window
+ *           hydrates 224 rows and cuts the oldest 76 — two pages of walk.
  *           Run with the dev server STOPPED.
  *   walk  — cold-load the real client, confirm the initial view IS the
  *           window's tail (the oldest rows missing), scroll to the top until
@@ -38,10 +39,16 @@ import puppeteer, { type Browser, type ElementHandle, type Page } from "puppetee
 const ORIGIN = (process.env.KINU_HISTORY_PROOF_ORIGIN ?? "http://127.0.0.1:5187").replace(/\/+$/, "");
 const WORKSPACE = process.env.KINU_HISTORY_PROOF_WORKSPACE ?? "history-walk-proof";
 const ROWS = Number(process.env.KINU_HISTORY_PROOF_ROWS ?? 300);
-/** Serialized text size for the rows whose text the client actually renders.
- *  Sized so that, against the shipped ~24 MiB hydration window, the oldest
- *  rows of the transcript start OUTSIDE it — the premise the walk disproves. */
-const TEXT_BYTES = Number(process.env.KINU_HISTORY_PROOF_TEXT_BYTES ?? 105_000);
+/**
+ * Serialized text size for the rows whose text the client actually renders.
+ *
+ * Measured against the shipped window at this default: 300 rows seed 32.14 MiB,
+ * the window hydrates the newest 224, and the oldest 76 start outside it — a
+ * walk of two full `CHAT_PAGE_SIZE` pages (+40, +36). That multi-page walk is
+ * the point: the cursor is a rowid seek, so its failure modes live at page
+ * boundaries, and a one-page walk crosses none.
+ */
+const TEXT_BYTES = Number(process.env.KINU_HISTORY_PROOF_TEXT_BYTES ?? 130_000);
 const DB_DIR = process.env.KINU_HISTORY_PROOF_DB_DIR
   ?? "packages/cf-backend/.wrangler/state/v3/do/kinu-OrchestratorAgent";
 const ARTIFACTS = process.env.KINU_HISTORY_PROOF_ARTIFACTS ?? "scripts/artifacts/history-walk";
@@ -160,14 +167,36 @@ export function plan(): SeedRow[] {
 
 /* ── seed ──────────────────────────────────────────────────────────────────── */
 
-function newestWorkspaceDb(): string {
+/**
+ * The workspace's own Durable Object storage.
+ *
+ * The directory also holds miniflare's `metadata.sqlite`, which has no
+ * conversation in it, and one file per addressed DO id. Pick by "carries the
+ * session provider's table", never by name or mtime: the server touches
+ * metadata on every boot, and one wrong pick seeds a transcript nothing reads.
+ */
+function workspaceDb(): string {
   const dir = DB_DIR.startsWith("/") ? DB_DIR : join(process.cwd(), DB_DIR);
   if (!existsSync(dir)) fail(`no Durable Object state under ${dir} — start the dev server once, create the workspace, stop it`);
-  const newest = readdirSync(dir).filter((f) => f.endsWith(".sqlite"))
-    .map((f) => ({ path: join(dir, f), modified: statSync(join(dir, f)).mtimeMs }))
-    .sort((a, b) => b.modified - a.modified)[0];
-  if (newest === undefined) fail(`no *.sqlite under ${dir}`);
-  return newest.path;
+  const candidates = readdirSync(dir)
+    .filter((file) => file.endsWith(".sqlite") && file !== "metadata.sqlite")
+    .map((file) => ({ path: join(dir, file), size: statSync(join(dir, file)).size }))
+    .sort((a, b) => b.size - a.size);
+  const withTranscript = candidates.filter((candidate) => {
+    const db = new Database(candidate.path, { readonly: true });
+    try {
+      return db.query<{ name: string }, []>(
+        `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'assistant_messages'`).get() !== null;
+    } finally {
+      db.close();
+    }
+  });
+  const chosen = (withTranscript.length > 0 ? withTranscript : candidates)[0];
+  if (chosen === undefined) fail(`no workspace *.sqlite under ${dir}`);
+  if (candidates.length > 1) {
+    log(`${candidates.length} workspace databases present — seeding the largest with a transcript table; set KINU_HISTORY_PROOF_DB to choose`);
+  }
+  return chosen.path;
 }
 
 async function seed(): Promise<void> {
@@ -189,7 +218,7 @@ async function seed(): Promise<void> {
     fail(`${ORIGIN} is serving (${servingStatus}) — stop the dev server before writing its SQLite directly`);
   }
 
-  const dbPath = process.env.KINU_HISTORY_PROOF_DB ?? newestWorkspaceDb();
+  const dbPath = process.env.KINU_HISTORY_PROOF_DB ?? workspaceDb();
   log(`seeding ${dbPath}`);
   const db = new Database(dbPath);
   try {
@@ -260,58 +289,90 @@ type DomRow = v.InferOutput<typeof DomRowSchema>;
 /** The walk's state as the page reports it after a scroll to the top. */
 const WalkTickSchema = v.union([v.literal("end"), v.literal("error"), v.number()]);
 
-/** In-page sampler: classify every direct child of the chat scroller. Runs
- *  inside the page, so it is self-contained and mirrors MessageView's own
- *  branch order — data attributes first, then each card's rendered label. */
-const SAMPLE_FN = `
-() => {
-  const scroller = document.querySelector('[data-proof-scroller]');
-  if (!scroller) return null;
-  const classify = (child) => {
-    const t = child.textContent ?? '';
-    if (t.includes('Beginning of the conversation')) return { kind: ':boundary-exhausted', seed: null };
-    if (t.includes('Loading earlier messages')) return { kind: ':boundary-loading', seed: null };
-    if (t.includes('Could not load earlier')) return { kind: ':boundary-error', seed: null };
-    const seedMatch = t.match(/\\[seed (\\d+)\\]/);
-    const seed = seedMatch ? Number(seedMatch[1]) : null;
-    const sys = child.querySelector('[data-system-event]');
-    if (sys) return { kind: 'system_event:' + sys.getAttribute('data-system-event'), seed };
-    const adv = child.querySelector('[data-advisor-severity]');
-    if (adv) return { kind: 'advisor:' + adv.getAttribute('data-advisor-severity'), seed };
-    const job = t.match(/Background (\\S+) task (completed|failed|was cancelled)/);
-    if (job) return { kind: 'background_job:' + job[1], seed };
-    if (t.includes('Workspace created')) return { kind: 'workspace_created', seed };
-    if (/You (approved|denied) \\d+ queued commands?/.test(t)) return { kind: 'deferred_approval', seed };
-    if (t.includes('Background event')) return { kind: 'event_drain', seed };
-    const bubble = child.querySelector('.p-user-bubble');
-    if (bubble) return { kind: t.includes('steered mid-turn') ? 'steer' : 'user', seed };
-    return { kind: 'assistant', seed };
-  };
-  return [...scroller.children].map(classify);
-}`;
+/** Marker attribute the pin puts on the chat scroller, so every later
+ *  evaluation addresses exactly the container the pin found. */
+const SCROLLER_MARK = "data-proof-scroller";
 
-/** The scroller, pinned under a marker attribute so later evaluations address
- *  exactly the container this one found. */
-const PIN_SCROLLER_FN = `
-() => {
-  const candidates = [...document.querySelectorAll('div.overflow-y-auto.space-y-5')];
-  const el = candidates.find((c) => /\\[seed \\d+\\]/.test(c.textContent ?? ''));
-  if (!el) return false;
-  el.setAttribute('data-proof-scroller', '1');
+/**
+ * In-page sampler: the card every direct child of the chat scroller is wearing.
+ *
+ * Mirrors MessageView's own branch order — data attributes first, then each
+ * card's rendered label, then the user bubble — because that order is what
+ * decides the card, and a sampler that guessed differently would report a
+ * disagreement between itself and the surface as a defect in the surface.
+ */
+function sampleScroller(): { kind: string; seed: number | null }[] | null {
+  const scroller = document.querySelector("[data-proof-scroller]");
+  if (scroller === null) return null;
+  return [...scroller.children].map((child) => {
+    const text = child.textContent ?? "";
+    // The walk's own affordance. Idle it renders EMPTY, which is why this is
+    // decided on text at all: every real row carries either a seed marker or a
+    // card's label, so a child with no text is never a message.
+    if (text.trim() === "") return { kind: ":boundary-idle", seed: null };
+    if (text.includes("Beginning of the conversation")) return { kind: ":boundary-exhausted", seed: null };
+    if (text.includes("Loading earlier messages")) return { kind: ":boundary-loading", seed: null };
+    if (text.includes("Could not load earlier")) return { kind: ":boundary-error", seed: null };
+    const marked = text.match(/\[seed (\d+)\]/);
+    const seed = marked === null ? null : Number(marked[1]);
+    // The card's marker attribute sits on the row's OWN root — a card is what
+    // MessageView returns — so a descendant-only lookup reads a system or
+    // advisor row as an ordinary reply.
+    const attributed = (name: string): string | null =>
+      child.matches(`[${name}]`) ? child.getAttribute(name) : child.querySelector(`[${name}]`)?.getAttribute(name) ?? null;
+    const system = attributed("data-system-event");
+    if (system !== null) return { kind: `system_event:${system}`, seed };
+    const advisor = attributed("data-advisor-severity");
+    if (advisor !== null) return { kind: `advisor:${advisor}`, seed };
+    const job = text.match(/Background (\S+) task (completed|failed|was cancelled)/);
+    if (job !== null) return { kind: `background_job:${job[1]}`, seed };
+    if (text.includes("Workspace created")) return { kind: "workspace_created", seed };
+    if (/You (approved|denied) \d+ queued commands?/.test(text)) return { kind: "deferred_approval", seed };
+    if (text.includes("Background event")) return { kind: "event_drain", seed };
+    if (child.querySelector(".p-user-bubble") !== null) {
+      return { kind: text.includes("steered mid-turn") ? "steer" : "user", seed };
+    }
+    return { kind: "assistant", seed };
+  });
+}
+
+/** Pin the chat scroller: the one scroll container already showing seeded rows.
+ *  Returns false until the hydration window has rendered. */
+function pinScrollerInPage(mark: string): boolean {
+  const found = [...document.querySelectorAll("div.overflow-y-auto.space-y-5")]
+    .find((candidate) => /\[seed \d+\]/.test(candidate.textContent ?? ""));
+  if (found === undefined) return false;
+  found.setAttribute(mark, "1");
   return true;
-}`;
+}
 
-/** What the page reports after a scroll to the top: the walk's terminal states,
- *  or the child count, which grows as a page lands. */
-const WALK_TICK_FN = `
-() => {
-  const el = document.querySelector('[data-proof-scroller]');
-  if (!el) return false;
-  const children = [...el.children];
-  if (children.some((c) => (c.textContent ?? '').includes('Could not load earlier'))) return 'error';
-  if (children.some((c) => (c.textContent ?? '').includes('Beginning of the conversation'))) return 'end';
-  return el.children.length;
-}`;
+/**
+ * What the page reports after a scroll to the top, polled until it is truthy:
+ * a terminal state of the walk, or the new child count once a page has landed.
+ *
+ * `previous` is what makes this a wait rather than a read — the count is
+ * always truthy, so returning it unconditionally would report "moved" on the
+ * first poll and the proof would walk past pages it never saw arrive.
+ */
+function walkTickInPage(previous: number): "end" | "error" | number | false {
+  const scroller = document.querySelector("[data-proof-scroller]");
+  if (scroller === null) return false;
+  const children = [...scroller.children];
+  if (children.some((child) => (child.textContent ?? "").includes("Could not load earlier"))) return "error";
+  if (children.some((child) => (child.textContent ?? "").includes("Beginning of the conversation"))) return "end";
+  return children.length > previous ? children.length : false;
+}
+
+/** How many times `needle` appears in the whole scroller. */
+function countInPage(needle: string): number {
+  const scroller = document.querySelector("[data-proof-scroller]");
+  return ((scroller?.textContent ?? "").split(needle).length) - 1;
+}
+
+/** Bring the oldest rendered row into view for the final capture. */
+function showOldestInPage(): void {
+  document.querySelector("[data-proof-scroller]")?.children[0]?.scrollIntoView({ block: "start" });
+}
 
 /** The card signature row `i` must wear, mirroring the sampler's vocabulary. */
 function expectedKind(row: SeedRow): string {
@@ -339,36 +400,72 @@ function renderedRows(sampled: readonly DomRow[]): DomRow[] {
 }
 
 async function sample(page: Page): Promise<DomRow[]> {
-  const sampled = await page.evaluate(SAMPLE_FN);
+  const sampled = await page.evaluate(sampleScroller);
   if (sampled === null) fail("the chat scroller vanished while sampling");
   return v.parse(DomRowsSchema, sampled);
 }
 
 async function pinScroller(page: Page): Promise<ElementHandle<Element>> {
-  await page.waitForFunction(PIN_SCROLLER_FN, { timeout: 300_000, polling: WALK_POLL_MS });
-  const pinned = await page.$("[data-proof-scroller]");
+  await page.waitForFunction(pinScrollerInPage, { timeout: 300_000, polling: WALK_POLL_MS }, SCROLLER_MARK);
+  const pinned = await page.$(`[${SCROLLER_MARK}]`);
   if (pinned === null) fail("could not pin the chat scroller");
   return pinned;
 }
 
-/** How many times `needle` appears in the whole scroller — the duplicate check,
- *  read from the rendered text rather than from the row list. */
+/** The duplicate check, read from the rendered text rather than from the row
+ *  list, so a row drawn twice under one container is still caught. */
 async function occurrences(page: Page, needle: string): Promise<number> {
-  const counted = await page.evaluate(`
-    () => {
-      const el = document.querySelector('[data-proof-scroller]');
-      return (el.textContent ?? '').split(${JSON.stringify(needle)}).length - 1;
-    }`);
-  return v.parse(v.number(), counted);
+  return await page.evaluate(countInPage, needle);
 }
 
+/**
+ * The view once it has stopped changing: the same row list twice in a row.
+ *
+ * A seed of this size renders over several commits, and a sample taken during
+ * one reports a list the client is still building. Measured on this transcript:
+ * the settled view never changes a row's card afterwards (100 samples over 25s,
+ * zero changes), so settling is what separates "the client is still painting"
+ * from "the client lost something" — and only the second is a defect.
+ */
+async function settled(page: Page): Promise<DomRow[]> {
+  let previous = await sample(page);
+  for (let attempt = 0; attempt < 240; attempt++) {
+    await Bun.sleep(WALK_POLL_MS);
+    const current = await sample(page);
+    const same = current.length === previous.length
+      && current.every((row, k) => row.kind === previous[k].kind && row.seed === previous[k].seed);
+    if (same) return current;
+    previous = current;
+  }
+  fail("the transcript never stopped changing — the client kept rewriting rows");
+}
+
+/** Whether the row's card renders the stored text at all. Three of them fold it
+ *  away by design and carry a unique LABEL instead, so they have no marker to
+ *  check — their identity is the label, matched by `expectedKind`. */
+function rendersItsText(row: SeedRow): boolean {
+  return row.kind !== "background_job" && row.kind !== "deferred_approval" && row.kind !== "workspace_created";
+}
+
+/**
+ * The first place the rendered thread stops being the seeded one, or null.
+ *
+ * Every term on the "got" side comes from the DOM. Nothing is filled in from
+ * the expectation — an earlier version substituted the expected row number
+ * whenever a child carried no marker, which reported an empty affordance div as
+ * a seeded row rendering under the wrong card.
+ */
 function firstDivergence(actual: readonly DomRow[], expected: readonly SeedRow[]): string | null {
   for (let k = 0; k < Math.max(actual.length, expected.length); k++) {
-    const want = expected[k] === undefined ? "<absent>" : `${expectedKind(expected[k])}@${expected[k].i}`;
+    const want = expected[k];
     const seen = actual[k];
-    const got = seen === undefined ? "<absent>"
-      : `${seen.kind}@${seen.seed ?? (expected[k] === undefined ? "?" : expected[k].i)}`;
-    if (want !== got) return `position ${k}: want ${want}, got ${got}`;
+    if (want === undefined) return `position ${k}: nothing left to expect, got ${seen?.kind}@${seen?.seed ?? "no marker"}`;
+    const wanted = `${expectedKind(want)}@${want.i}`;
+    if (seen === undefined) return `position ${k}: want ${wanted}, got nothing — the thread ended early`;
+    if (seen.kind !== expectedKind(want)) return `position ${k}: want ${wanted}, got ${seen.kind}@${seen.seed ?? "no marker"}`;
+    if (rendersItsText(want) && seen.seed !== want.i) {
+      return `position ${k}: want ${wanted}, got that card carrying ${seen.seed ?? "no marker"}`;
+    }
   }
   return null;
 }
@@ -385,7 +482,7 @@ async function walk(): Promise<void> {
     log("stage 2: page loaded — waiting for the hydration window to render");
 
     const scroller = await pinScroller(page);
-    const initial = renderedRows(await sample(page));
+    const initial = renderedRows(await settled(page));
 
     // Premise: the shipped window cuts the OLDEST rows, so the initial view is
     // a proper suffix of the transcript. A full view would prove nothing.
@@ -405,15 +502,20 @@ async function walk(): Promise<void> {
     let midWalkCaptured = false;
     let reachedBeginning = false;
     for (let iteration = 1; iteration <= MAX_WALK_ITERATIONS; iteration++) {
-      const before = renderedRows(await sample(page)).length;
+      const before = await sample(page);
+      const renderedBefore = renderedRows(before).length;
       await scroller.evaluate((el) => { el.scrollTop = 0; });
-      const ticked = await page.waitForFunction(WALK_TICK_FN, { timeout: PAGE_WAIT_MS, polling: WALK_POLL_MS })
-        .then((handle) => handle.jsonValue());
-      const tick = v.parse(WalkTickSchema, ticked);
+      // Truthy only once the walk has actually moved: a page landed, or the
+      // store stated an end. A timeout here is a stalled walk, which is the
+      // defect this proof exists to catch.
+      const ticked = await page.waitForFunction(
+        walkTickInPage, { timeout: PAGE_WAIT_MS, polling: WALK_POLL_MS }, before.length,
+      );
+      const tick = v.parse(WalkTickSchema, await ticked.jsonValue());
       if (tick === "error") fail("the page's own HistoryBoundary reported: Could not load earlier messages");
 
-      const rendered = renderedRows(await sample(page));
-      log(`stage 5: page ${iteration} — ${rendered.length}/${ROWS} rows rendered (+${rendered.length - before})`);
+      const rendered = renderedRows(await settled(page));
+      log(`stage 5: page ${iteration} — ${rendered.length}/${ROWS} rows rendered (+${rendered.length - renderedBefore})`);
       if (!midWalkCaptured && rendered.length > initial.length) {
         await page.screenshot({ path: join(ARTIFACTS, "2-mid-walk.png") });
         midWalkCaptured = true;
@@ -426,11 +528,7 @@ async function walk(): Promise<void> {
     }
     if (!reachedBeginning) fail(`the walk never reached the conversation's beginning in ${MAX_WALK_ITERATIONS} pages`);
 
-    await page.evaluate(`
-      () => {
-        const el = document.querySelector('[data-proof-scroller]');
-        el?.children[0]?.scrollIntoView({ block: 'start' });
-      }`);
+    await page.evaluate(showOldestInPage);
     await Bun.sleep(800);
 
     /* ── the assertions ─────────────────────────────────────────────────── */
@@ -447,7 +545,7 @@ async function walk(): Promise<void> {
     for (const row of rows) {
       // The three label-only cards fold their text away by design; their unique
       // labels were matched positionally above.
-      if (row.kind === "background_job" || row.kind === "deferred_approval" || row.kind === "workspace_created") continue;
+      if (!rendersItsText(row)) continue;
       const hits = await occurrences(page, row.marker);
       if (hits !== 1) fail(`row ${row.i} (${row.kind}) renders ${hits} times, expected exactly once`);
     }
