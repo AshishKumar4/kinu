@@ -27,6 +27,7 @@
 import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, join, sep } from 'node:path';
 import { parseJsonObject } from '@kinu.run/core';
+import { renderThrownChain } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 /** The one documented way to prepare a checkout that has no node_modules. */
@@ -76,7 +77,7 @@ export function assertWorkspaceResolution(from: string): void {
     try {
       resolved = realpathSync(Bun.resolveSync(name, from));
     } catch (error) {
-      problems.push(`  ${name}\n    does not resolve at all from ${from} (${String(error)})`);
+      problems.push(`  ${name}\n    does not resolve at all from ${from} (${renderThrownChain({ cause: error })})`);
       continue;
     }
     const expected = realpathSync(dir) + sep;
