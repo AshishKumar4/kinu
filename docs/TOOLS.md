@@ -239,8 +239,8 @@ and `list` address agents by name, and the name decides the transport:
 - **A peer** is one of the owner's *other* workspaces, reached over the
   EventsHub peer transport. Its axis is neither lifetime nor measurement, which
   is why it sits outside the ladder. `ask` waits for the reply, with
-  `timeout_seconds` defaulting to and capped at 600 s, which is one measured agent
-  turn (`TURN_WALL_CLOCK_ENVELOPE_MS`); a late reply still arrives as an event.
+  `timeout_seconds` defaulting to and capped at 600 s — the sanctioned per-call
+  bound (`LLM_CALL_TIMEOUT_MS`); a late reply still arrives as an event.
   `send` does not wait, `reply` answers an agent message event by its `event_id`,
   and `hire` with `scope: workspace` creates or reuses a whole specialist
   workspace.

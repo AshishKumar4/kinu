@@ -195,7 +195,7 @@ only. Cloudflare never returns a value, and nothing here asks for one.
 | `BACKUP_BUCKET_NAME`, `CLOUDFLARE_R2_ACCOUNT_ID` | **config var**: plain values in `vars`, not secrets | no | As above. |
 | `GOOGLE_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_ID` | **config var**, beside their secrets | no | That provider is not on `/login`. |
 | `GOOGLE_OAUTH_SCOPES`, `GITHUB_OAUTH_SCOPES`, `CLOUDFLARE_OAUTH_SCOPES` | **config var**: overrides only | no | The provider default applies (`CLOUDFLARE_WORKERS_AI_SCOPES` in `lib/cloudflare-oauth.ts`). |
-| `KINU_MAX_STEPS` | **config var** | no | Core's `DEFAULT_MAX_STEPS` applies (500, `core/src/config.ts:118`). |
+
 
 There is deliberately no "generate it silently" handling. The only value this
 repository could mint unattended is the root secret, and a key the program
@@ -509,7 +509,7 @@ exhausted budget returns the original response rather than throwing.
 | `KINU_MODEL` | CLI shell env | Override local agent model |
 | `KINU_SOURCE_TARBALL` | CLI shell env | Advanced installer/update source override (`cli/routes.ts:957`) |
 | `KINU_SOURCE_SHA256` | CLI shell env | Pin a SHA-256 for the source tarball (default: published `.sha256` asset, always verified) |
-| `KINU_MAX_STEPS` | CLI shell env / wrangler env var | Max tool-call steps (default: 500) |
+| `KINU_CALL_TIMEOUT_MS`-class tuning | CLI shell env / wrangler env var | None exposed: the per-call silence window (600 s) and its 3 retries are core constants (`core/src/config.ts`), never per-turn |
 
 `SANDBOX_TRANSPORT` is the one `vars` entry `Env` in `env.d.ts` does not
 declare. Read it from `wrangler.jsonc`, not from the type.
