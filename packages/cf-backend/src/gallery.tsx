@@ -65,7 +65,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { UIMessage } from "ai";
 import { tolerate } from "@kinu.run/core/obs";
 import { Button } from "@cloudflare/kumo";
-import { btnSmCls } from "@/components/ui/form";
+import { FilledButton } from "@/components/ui/FilledButton";
 import {
   TrashIcon, BrainIcon,
 } from "@phosphor-icons/react";
@@ -1791,11 +1791,12 @@ function Controls() {
     <div className="space-y-6 max-w-2xl">
       {/* The button hierarchy as it now ships. Kumo's `primary` and
           `destructive` are absent on purpose: they force `!text-white`, which
-          measures 2.4:1 on brass, so every call site uses p-btn/p-btn-danger.
-          Kumo's secondary and ghost stay and inherit the palette. */}
+          measures 2.4:1 on brass, so the filled action is FilledButton —
+          p-btn/p-btn-danger ink over Kumo's own sm box. Kumo's secondary and
+          ghost stay and inherit the palette. */}
       <div className="flex flex-wrap items-center gap-3">
-        <button className={`p-btn ${btnSmCls}`}>p-btn</button>
-        <button className={`p-btn-danger ${btnSmCls}`}>p-btn-danger</button>
+        <FilledButton>FilledButton</FilledButton>
+        <FilledButton danger>danger</FilledButton>
         <Button variant="secondary" size="sm">Kumo secondary</Button>
         <Button variant="ghost" size="sm">Kumo ghost</Button>
         <button className="p-btn-quiet inline-flex h-6.5 items-center gap-1 px-2 text-xs">p-btn-quiet</button>
@@ -2211,7 +2212,7 @@ function GalleryModal() {
         onClose={() => {}}
         footer={<>
           <Button size="sm" variant="ghost">Cancel</Button>
-          <button className={`p-btn-danger ${btnSmCls}`}>Remove</button>
+          <FilledButton danger>Remove</FilledButton>
         </>}
       >
         <p className="text-xs p-text-2 leading-relaxed">

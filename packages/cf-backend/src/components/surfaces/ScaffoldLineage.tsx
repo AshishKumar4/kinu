@@ -14,7 +14,7 @@
  */
 import { useState, useCallback } from "react";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
-import { btnSmCls } from "@/components/ui/form";
+import { FilledButton } from "@/components/ui/FilledButton";
 import { ScalesIcon, PlayIcon, CheckCircleIcon, ArrowUUpLeftIcon } from "@phosphor-icons/react";
 import type { Rpc } from "@/lib/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -196,10 +196,10 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
               {/* Promote / Rollback — only meaningful while this version is pending */}
               {isPending && (
                 <div className="flex items-center gap-2">
-                  <button className={`p-btn ${btnSmCls}`} disabled={!!busy} onClick={() => decide("promote")}>
+                  <FilledButton disabled={!!busy} onClick={() => decide("promote")}>
                     {busy === "promote" ? <Loader size="sm" /> : <CheckCircleIcon size={13} />}
                     Promote v{selected}
-                  </button>
+                  </FilledButton>
                   <Button size="sm" variant="ghost" disabled={!!busy} onClick={() => decide("rollback")}
                     icon={busy === "rollback" ? <Loader size="sm" /> : <ArrowUUpLeftIcon size={13} />}>
                     Roll back
