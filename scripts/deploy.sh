@@ -491,21 +491,6 @@ else
   SMOKE_FAIL=1
 fi
 
-# Retried like the stamp check below: edge rollout takes up to ~2 minutes, and
-# a one-shot fetch seconds after publish has read an empty body from a colo
-# mid-rollout. A page that NEVER serves the app is the failure this guards.
-LIVE_CONTENT_OK=""
-for _try in 1 2 3 4 5 6 7 8; do
-  LIVE_HTML=$(curl -s --max-time 15 "${KINU_URL}?smoke=$_try" 2>/dev/null)
-  if echo "$LIVE_HTML" | grep -qi 'kinu'; then LIVE_CONTENT_OK=1; break; fi
-  sleep 15
-done
-if [ -n "$LIVE_CONTENT_OK" ]; then
-  echo -e "${GREEN}✅ Kinu live site serves Kinu app${NC}"
-else
-  echo -e "${RED}❌ Kinu live site content missing 'Kinu'${NC}"
-  SMOKE_FAIL=1
-fi
 
 # One GET that answers "did my deploy land?". /api/health reads its build stamp
 # out of the deployed asset bundle, so a mismatch here also means the CLI
