@@ -36,7 +36,7 @@ export default function Layout() {
           </Link>
         </div>
         <div className="flex items-center gap-1">
-          <a href="https://github.com/AshishKumar4/Proteus" target="_blank" rel="noopener noreferrer" aria-label="GitHub repository" className="flex size-9 items-center justify-center rounded-md p-text-2 p-card-hover hover:p-text">
+          <a href="https://github.com/AshishKumar4/kinu" target="_blank" rel="noopener noreferrer" aria-label="GitHub repository" className="flex size-9 items-center justify-center rounded-md p-text-2 p-card-hover hover:p-text">
             <GithubLogoIcon size={17} />
           </a>
           <button type="button" onClick={() => setShowCreate(true)} aria-label="New workspace" className="flex size-9 items-center justify-center rounded-md p-text-2 p-card-hover hover:p-text">

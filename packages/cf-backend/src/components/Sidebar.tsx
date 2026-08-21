@@ -216,7 +216,7 @@ export default function Sidebar() {
             <span className="font-medium tracking-tight">Kinu</span>
           </Link>
           <a
-            href="https://github.com/AshishKumar4/Proteus"
+            href="https://github.com/AshishKumar4/kinu"
             target="_blank" rel="noopener noreferrer" aria-label="GitHub repository"
             className="flex size-8 items-center justify-center rounded-md p-text-2 p-card-hover hover:p-text transition-colors"
           >
