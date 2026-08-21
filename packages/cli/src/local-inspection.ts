@@ -55,7 +55,7 @@ import {
   type JsonValue,
   type OutcomeLabel,
   type EventVariant,
-  type ProteusEvent,
+  type KinuEvent,
   type QueryFilter,
   type ReleaseBoard,
   type RunEvent,
@@ -80,11 +80,11 @@ import {
   type RecordObjectiveSummary,
   type SeekCursor,
   type WorkspaceSpend,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import {
   makeSql, makeSqlExec, createHostShell, hostToolchainCapabilities,
   type LocalModelResolver,
-} from '@kinu/cli-backend';
+} from '@kinu.run/cli-backend';
 import * as v from 'valibot';
 import { agentDbPath } from './config';
 import { createConfiguredLocalModelResolver } from './local-model-resolver';
@@ -267,7 +267,7 @@ export function searchLocalMemory(name: string, query: string, limit = 10): Arra
   });
 }
 
-export function listLocalEvents(name: string, opts: { variant?: string; since?: number; limit?: number } = {}): ProteusEvent[] {
+export function listLocalEvents(name: string, opts: { variant?: string; since?: number; limit?: number } = {}): KinuEvent[] {
   return withLocalDb(name, (db) => {
     if (!tableExists(db, 'agent_log')) return [];
     const filter: QueryFilter = { limit: opts.limit ?? 50 };

@@ -31,7 +31,7 @@ import { existsSync, readFileSync, readdirSync, statSync, statfsSync } from 'nod
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { assertMeasured, finding } from './gate-ratchet';
-import { SCRATCH_PREFIXES } from '@kinu/test-utils';
+import { SCRATCH_PREFIXES } from '@kinu.run/test-utils';
 
 /** This checkout, so the merge-state probe reads THIS tree's git directory
  *  rather than whatever directory the gate happened to be invoked from. */
@@ -48,11 +48,11 @@ const repo = new URL('..', import.meta.url).pathname;
  * handler, which is what `--reclaim` is for.
  *
  * The previous comment here read "444 test processes, each given a throwaway
- * PROTEUS_HOME by scripts/test-preload.ts". That was FALSE at the time it was
+ * KINU_HOME by scripts/test-preload.ts". That was FALSE at the time it was
  * written: `bun test --cwd <dir>` makes bun load a bunfig.toml from THAT
  * directory, so the root one — and its `preload` — never applied, and every
  * per-package gate ran with no throwaway home at all. A probe printed
- * `PROTEUS_HOME= undefined` under `--cwd` and a real temp path root-relative.
+ * `KINU_HOME= undefined` under `--cwd` and a real temp path root-relative.
  * Every gate string is root-relative now, so the sentence is true and the
  * measurement above is of the system it describes.
  *
@@ -110,15 +110,15 @@ export const PROJECT_MARKERS = [
   '.git', 'package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'Makefile', '.hg',
 ] as const;
 
-/* Scratch prefixes come from `@kinu/test-utils` (src/scratch.ts), which is
+/* Scratch prefixes come from `@kinu.run/test-utils` (src/scratch.ts), which is
  * also what MINTS them — `judge` counts orphans and `reclaim` removes them from
  * that one list, so a prefix the harness knows and this file does not is
  * simultaneously uncollected and invisible. It was a hand-written copy here,
  * and it drifted exactly that way: measured 2026-08-17, 6,102 of 8,643 of our
  * own entries were counted, so every rising number quoted from this gate all
- * evening was a FLOOR and not a total. `proteus-scaffold-test-`,
- * `proteus-runtimes-`, `proteus-webhook-`, `proteus-vfs-`, `proteus-gepa-`,
- * `proteus-codex-auth-`, `proteus-shared-`, `proteus-mcp-test-` and every
+ * evening was a FLOOR and not a total. `kinu-scaffold-test-`,
+ * `kinu-runtimes-`, `kinu-webhook-`, `kinu-vfs-`, `kinu-gepa-`,
+ * `kinu-codex-auth-`, `kinu-shared-`, `kinu-mcp-test-` and every
  * `agent-core-*` were the invisible part. */
 
 /* There is deliberately no threshold on the orphan COUNT. It was one, at 600,
@@ -198,7 +198,7 @@ export function judge(env: Environment): string[] {
       silently: 'git and every mkdtemp in the suite start failing or crawling, and it '
         + 'surfaces as "this test timed out after 5000ms" in whichever test happens to '
         + 'write first — never in the one that leaked',
-      fix: 'bun scripts/preflight.ts --reclaim   # removes proteus-{test-home,home,mount}-* '
+      fix: 'bun scripts/preflight.ts --reclaim   # removes kinu-{test-home,home,mount}-* '
         + 'older than 2h, then re-run',
     }));
   }

@@ -40,9 +40,9 @@ describe('kinu workspace delete', () => {
         cwd: repoRoot,
         env: {
           ...process.env,
-          PROTEUS_HOME: home,
-          PROTEUS_ORIGIN: `http://127.0.0.1:${server.port}`,
-          PROTEUS_TOKEN: `pta_${'0'.repeat(32)}_${'a'.repeat(44)}`,
+          KINU_HOME: home,
+          KINU_ORIGIN: `http://127.0.0.1:${server.port}`,
+          KINU_TOKEN: `pta_${'0'.repeat(32)}_${'a'.repeat(44)}`,
           NO_COLOR: '1',
         },
         stdout: 'pipe',
@@ -71,11 +71,11 @@ describe('kinu workspace delete', () => {
   });
 
   test('requires explicit confirmation when no terminal is attached', async () => {
-    const home = workspaceHome('https://proteus.invalid');
+    const home = workspaceHome('https://kinu.invalid');
     const proc = Bun.spawn([process.execPath, cliBin, 'workspace', 'delete', 'web-agent'], {
       cwd: repoRoot,
       detached: true,
-      env: { ...process.env, PROTEUS_HOME: home, NO_COLOR: '1' },
+      env: { ...process.env, KINU_HOME: home, NO_COLOR: '1' },
       stdout: 'pipe',
       stderr: 'pipe',
     });
@@ -90,7 +90,7 @@ describe('kinu workspace delete', () => {
 });
 
 function workspaceHome(origin: string): string {
-  const home = mkdtempSync(join(tmpdir(), 'proteus-workspace-delete-'));
+  const home = mkdtempSync(join(tmpdir(), 'kinu-workspace-delete-'));
   tempDirs.push(home);
   writeFileSync(join(home, 'config.json'), JSON.stringify({
     origin,

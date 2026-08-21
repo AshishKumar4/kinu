@@ -7,8 +7,9 @@ import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createHostCheckpoints } from '@kinu/cli-backend';
-import type { FileCheckpointEntry } from '@kinu/core';
+import { createHostCheckpoints } from '@kinu.run/cli-backend';
+import { DEFAULT_ADVISOR_MIN_SEVERITY } from '@kinu.run/core';
+import type { EvolutionConfigView, FileCheckpointEntry } from '@kinu.run/core';
 import { commandsForClient, executeSlashCommand, groupCheckpointsByTurn, performUndo } from '../src/slash-commands';
 import type { AgentClient, FileCheckpointSurface } from '../src/agent-client';
 import { createCliSession } from '../src/session';
@@ -39,12 +40,14 @@ function slashClient(checkpoints: FileCheckpointSurface | null): AgentClient {
     getModelSpec: async () => null, setModel: async (spec) => ({ spec }),
     getReasoningEffort: async () => null, setReasoningEffort: async (effort) => ({ effort }),
     listModels: async () => ({ models: [], failures: [] }),
+    getEvolutionConfig: async () => { throw new Error('not used'); },
+    setEvolutionConfig: async () => { throw new Error('not used'); },
   };
   return client;
 }
 
 function realEngineClient(opts: { gitBin?: string } = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'proteus-undo-'));
+  const root = mkdtempSync(join(tmpdir(), 'kinu-undo-'));
   const work = join(root, 'project');
   mkdirSync(work, { recursive: true });
   const engine = createHostCheckpoints({ agent: 'undo-test', base: join(root, 'shadow'), gitBin: opts.gitBin });
@@ -119,7 +122,7 @@ describe('performUndo', () => {
    * the same condition 200 reaches once enough directories are active.
    */
   test('a turn split across directories is restored whole, not just the part in the window', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'proteus-undo-split-'));
+    const root = mkdtempSync(join(tmpdir(), 'kinu-undo-split-'));
     try {
       const dirs = ['one', 'two', 'three'].map((name) => {
         const dir = join(root, name);
@@ -236,5 +239,73 @@ describe('/undo command surface', () => {
     const client = slashClient(inertCheckpointSurface());
     expect(await executeSlashCommand(client, '/undo')).toEqual({ kind: 'undo', ref: undefined });
     expect(await executeSlashCommand(client, '/undo 3')).toEqual({ kind: 'undo', ref: '3' });
+  });
+});
+
+/**
+ * /advisor — the advisor's only control surface. It drives the evolution-config
+ * RPC pair, so the stub below behaves like the real store: a partial write
+ * lands and the effective config comes back.
+ */
+describe('/advisor command surface', () => {
+  function advisorClient(): AgentClient {
+    const config: EvolutionConfigView = {
+      reviewModel: null,
+      autoPromoteScaffold: false,
+      gepaEvalBudget: 0,
+      shadowSampleRate: 0,
+      scaffoldExploreShare: 0,
+      advisorEnabled: false,
+      advisorMinSeverity: DEFAULT_ADVISOR_MIN_SEVERITY,
+    };
+    return {
+      ...slashClient(null),
+      getEvolutionConfig: async () => config,
+      setEvolutionConfig: async (view) => Object.assign(config, view),
+    };
+  }
+
+  async function advisorText(client: AgentClient, input: string): Promise<string> {
+    const outcome = await executeSlashCommand(client, input);
+    if (outcome.kind !== 'text') throw new Error(`expected text outcome, got ${outcome.kind}`);
+    return outcome.text;
+  }
+
+  test('is offered to every client — both backends serve the config RPCs', () => {
+    for (const checkpoints of [inertCheckpointSurface(), null]) {
+      const commands = commandsForClient({ localControls: null, consents: null, checkpoints });
+      expect(commands.some((command) => command.name === '/advisor')).toBe(true);
+    }
+  });
+
+  test('reports the state, and the report names the floor and the per-turn cost', async () => {
+    expect(await advisorText(advisorClient(), '/advisor')).toBe(
+      `Advisor: off. The minimum severity is ${DEFAULT_ADVISOR_MIN_SEVERITY}. /advisor on adds one model call per turn.`,
+    );
+  });
+
+  test('on, off and severity write through, and each write keeps the other field', async () => {
+    const client = advisorClient();
+    expect(await advisorText(client, '/advisor on')).toBe(
+      `Advisor: on. The minimum severity is ${DEFAULT_ADVISOR_MIN_SEVERITY}. The advisor adds one model call per turn.`,
+    );
+    expect(await advisorText(client, '/advisor')).toContain('Advisor: on.');
+
+    expect(await advisorText(client, '/advisor severity blocker')).toBe(
+      'Advisor: on. The minimum severity is blocker. The advisor adds one model call per turn.',
+    );
+    expect(await advisorText(client, '/advisor off')).toBe(
+      'Advisor: off. The minimum severity is blocker. /advisor on adds one model call per turn.',
+    );
+    expect(await advisorText(client, '/advisor severity nit')).toContain('Advisor: off.');
+  });
+
+  test('an unusable argument answers with the usage line, naming every value', async () => {
+    const client = advisorClient();
+    for (const input of ['/advisor maybe', '/advisor severity', '/advisor severity urgent', '/advisor on off']) {
+      expect(await advisorText(client, input)).toBe('Usage: /advisor on | off | severity <nit | concern | blocker>');
+    }
+    // Nothing was written by any of them.
+    expect(await advisorText(client, '/advisor')).toContain('Advisor: off.');
   });
 });

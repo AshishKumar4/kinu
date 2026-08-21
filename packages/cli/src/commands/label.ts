@@ -41,8 +41,8 @@ import {
   weakLabel,
   type CalibrationReport, type CorpusEvalReport, type EnsembleReport, type EnsembleRunResult,
   type LabelIngestResult, type LabelingItem, type OutcomeLabel, type TurnOutcome,
-} from '@kinu/core';
-import type { JsonValue } from '@kinu/core';
+} from '@kinu.run/core';
+import type { JsonValue } from '@kinu.run/core';
 import * as v from 'valibot';
 import { resolveAgentTarget, type AgentTarget } from '../agent-target';
 import { defaultTranscriptRoot, mineTranscripts, renderMineSkips, type MineResult } from '../cc-transcript';
@@ -288,7 +288,7 @@ async function ensembleLabels(target: AgentTarget, opts: LabelOpts): Promise<voi
  *  and `CC-CORPUS-*.md` for a run deliberately pointed at the repo. */
 function defaultCorpusDir(): string {
   const cache = process.env.XDG_CACHE_HOME ?? join(homedir(), '.cache');
-  return join(cache, 'proteus', 'cc-corpus');
+  return join(cache, 'kinu', 'cc-corpus');
 }
 
 function corpusReportPath(opts: LabelOpts): string {

@@ -1,7 +1,7 @@
 // Map-backed VFS for tests that exercise a real write → read-back path
 // (spills, transcripts, attachments). `mkdir` surfaces EEXIST on repeat, like
 // the real backends can, so callers' idempotency handling is actually tested.
-import type { VFS } from '@kinu/core';
+import type { VFS } from '@kinu.run/core';
 
 export interface MemoryVfs {
   vfs: VFS;

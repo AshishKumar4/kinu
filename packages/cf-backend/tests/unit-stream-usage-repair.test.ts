@@ -19,7 +19,7 @@
 import { describe, test, expect } from 'bun:test';
 import { userCredentialSource } from './helpers/user-credentials';
 import { streamText } from 'ai';
-import { DEFAULT_WORKERS_AI_MODEL_ID, normalizeUsage } from '@kinu/core';
+import { DEFAULT_WORKERS_AI_MODEL_ID, normalizeUsage } from '@kinu.run/core';
 import { repairSseCachedUsage } from '../src/providers/stream-usage-repair';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry';
 
@@ -177,7 +177,7 @@ describe('cached-usage accounting end to end (workers-ai provider)', () => {
         async () => sseResponse(sse(DELTA_CHUNK, MODEL_USAGE_CHUNK, ZEROED_USAGE_CHUNK, 'data: [DONE]')),
         { preconnect: globalThis.fetch.preconnect },
       ),
-      workersAI: { sessionAffinity: 'proteus-jarvis' },
+      workersAI: { sessionAffinity: 'kinu-jarvis' },
     });
     const result = streamText({
       model: reg.resolveModel('workers-ai/@cf/zai-org/glm-5.2'),
@@ -198,7 +198,7 @@ describe('cached-usage accounting end to end (workers-ai provider)', () => {
         async () => sseResponse(sse(DELTA_CHUNK, MODEL_USAGE_CHUNK, DROPPED_USAGE_CHUNK, 'data: [DONE]')),
         { preconnect: globalThis.fetch.preconnect },
       ),
-      workersAI: { sessionAffinity: 'proteus-stone-ash-71f2' },
+      workersAI: { sessionAffinity: 'kinu-stone-ash-71f2' },
     });
     const result = streamText({
       model: reg.resolveModel(`workers-ai/${DEFAULT_WORKERS_AI_MODEL_ID}`),

@@ -9,12 +9,12 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { between } from '@kinu/test-utils';
+import { between } from '@kinu.run/test-utils';
 
-const hook = readFileSync(join(import.meta.dir, '..', 'src', 'hooks', 'use-proteus.ts'), 'utf8');
+const hook = readFileSync(join(import.meta.dir, '..', 'src', 'hooks', 'use-kinu.ts'), 'utf8');
 const page = readFileSync(join(import.meta.dir, '..', 'src', 'pages', 'WorkspacePage.tsx'), 'utf8');
 
-describe('use-proteus chat-error wiring', () => {
+describe('use-kinu chat-error wiring', () => {
   test('consumes the useAgentChat stream error and folds it into chatError', () => {
     expect(hook).toContain('error: streamError');
     // Live by construction: the transport only reaches this channel for a
@@ -35,11 +35,11 @@ describe('use-proteus chat-error wiring', () => {
   });
 
   test('clears the error on the next send and on workspace switch; exposes retry + clear + state', () => {
-    const send = between(hook, 'const sendChat = useCallback', 'const searchMemory', 'use-proteus.ts');
+    const send = between(hook, 'const sendChat = useCallback', 'const searchMemory', 'use-kinu.ts');
     expect(send).toContain('setChatError(null)');
     // The whole workspace-switch effect, bounded by its own dependency array —
     // not a trailing marker that a rename can move out from under it.
-    const reset = between(hook, 'setLoadAttempt(0);', '}, [workspace, subordinate]);', 'use-proteus.ts');
+    const reset = between(hook, 'setLoadAttempt(0);', '}, [workspace, subordinate]);', 'use-kinu.ts');
     expect(reset).toContain('setChatError(null)');
     const returned = hook.slice(hook.indexOf('return {\n    messages'));
     expect(returned).toContain('chatError,');

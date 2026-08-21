@@ -33,7 +33,7 @@ describe('run-events SSE client disconnect', () => {
     const { env, pollCount } = sseEnv();
     const aborter = new AbortController();
     const res = await handleRunEventsRequest(new Request(
-      'https://proteus.example.com/api/workspaces/jarvis/runs/run-1/stream',
+      'https://kinu.example.com/api/workspaces/jarvis/runs/run-1/stream',
       { signal: aborter.signal },
     ), env);
     expect(res?.status).toBe(200);
@@ -54,7 +54,7 @@ describe('run-events SSE client disconnect', () => {
   test('cancelling the response stream stops the DO poll loop', async () => {
     const { env, pollCount } = sseEnv();
     const res = await handleRunEventsRequest(new Request(
-      'https://proteus.example.com/api/workspaces/jarvis/runs/run-1/stream',
+      'https://kinu.example.com/api/workspaces/jarvis/runs/run-1/stream',
     ), env);
     if (!res?.body) throw new Error('Expected an SSE response body');
     const reader = res.body.getReader();

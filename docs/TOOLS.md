@@ -3,7 +3,7 @@
 The agent exposes a small set of **built-in top-level tools** to the LLM. `BUILTIN_TOOLS` in `packages/core/src/tools/registry.ts` is the canonical list of 8 names. The list stays short to keep the model's *decision surface* small. Every native tool is a standing choice the model weighs on every turn it is not the answer to, and selection accuracy degrades with choice count. Files are read and changed through the `file` tool; the same operations are also available as `workspace.*` APIs inside the `execute_tools` codemode sandbox. Crafted tools from the CraftStore are injected into the same sandbox as `codemode.*` (the default namespace exposed by `@cloudflare/codemode`'s `createCodeTool`) and, via the preamble, as `tools.<name>`.
 
 Both surfaces (Cloudflare Workers and CLI) consume the same factory
-`buildBuiltinTools` from `@kinu/core/tools`. The registry and descriptions
+`buildBuiltinTools` from `@kinu.run/core/tools`. The registry and descriptions
 live in `packages/core/src/tools/registry.ts`; neither the CF orchestrator nor
 the CLI chat loop hand-builds tools anymore. Only `execute_tools`, `run`, `file`,
 `memory` and `tasks` are unconditional; every other tool is registered only when
@@ -397,7 +397,7 @@ const result = await codemode.my_custom_parser({ input: "data" });
 ```
 
 **How injection works** (`buildCraftedToolSetFromExecute` in
-`@kinu/core/tools/builtins.ts`):
+`@kinu.run/core/tools/builtins.ts`):
 1. `craftStore.list()` reads all crafted tools from SQLite.
 2. Each row is filtered by effective score (`DEFAULT_CONFIG.craftStore.minEffectiveScoreForInjection`, default 0.2) so decayed or low-quality tools never reach the LLM.
 3. Each passing tool dispatches through `deps.craftedToolExecute`, which is the LOADER Worker on CF and a Node adapter on the CLI. There is no host-side codegen. Nothing is compiled inside `builtins.ts`, because a `new Function()` would break in a V8 isolate.
@@ -476,7 +476,7 @@ async () => {
 
 There is deliberately no in-process fallback. The CF backend requires the
 `LOADER` Worker Loader binding and throws without it; the CLI supplies its own
-Node adapter (`createNodeExecuteToolFactory` in `@kinu/cli-backend`). If
+Node adapter (`createNodeExecuteToolFactory` in `@kinu.run/cli-backend`). If
 neither is wired, `execute_tools` still registers but returns a sharp
 "not configured" error rather than quietly compiling code with `new Function()`,
 which would break in a V8 isolate anyway.
@@ -617,12 +617,12 @@ refuses.
 
 ## experience — cross-workspace transfer
 
-The owner's workspaces each earn their own crafted tools, lessons and facts, and
-`experience` is the one path between them: `publish` offers what THIS workspace
-proved, `search` retrieves what the owner's others proved, `import` stages one
-entry here. `experience` is owner-facing. Sharing proven work across workspaces
-is a rare, deliberate, owner-shaped decision that an agent should not weigh on
-every turn, so it runs as the `experienceAction` RPC
+The owner's workspaces each earn their own crafted tools, lessons, facts and
+agent loop, and `experience` is the one path between them: `publish` offers what
+THIS workspace proved, `search` retrieves what the owner's others proved,
+`import` stages one entry here. `experience` is owner-facing. Sharing proven
+work across workspaces is a rare, deliberate, owner-shaped decision that an
+agent should not weigh on every turn, so it runs as the `experienceAction` RPC
 (`cf-backend/orchestrator.ts`), with no `experience` tool and no
 `experience.*` codemode namespace. The web UI drives it, over the same
 `runExperienceAction` dispatcher (`core/src/experience/actions.ts`). The
@@ -635,8 +635,13 @@ Nothing crosses on assertion. Publishing is gated on local evidence, which
 travels with the entry: a crafted tool needs real uses and a time-decayed score
 at or above the same bar its own injection filter uses, a lesson must be
 CORROBORATED (a provisional one is already kept out of this workspace's
-MEMORY.md), a fact must clear its confidence bar
-(`core/src/experience/publishable.ts`).
+MEMORY.md), a fact must clear its confidence bar, and a scaffold must be the
+LIVE version, promoted on a shadow record that still clears `decidePromotion`,
+with `DEFAULT_SHADOW_CONFIG.minTrials` graded turns served since promotion and
+no misevolution veto recorded in that window
+(`core/src/experience/publishable.ts`). The probation reuses the promotion
+gate's own number, so a loop crosses only after the user has lived through as
+many turns of it as the offline judge demanded trials.
 
 Importing reuses the two mechanisms the agent already trusts
 (`core/src/experience/imports.ts`):
@@ -651,6 +656,13 @@ Importing reuses the two mechanisms the agent already trusts
    outcome decides. Accepted promotes it into the CraftStore / MEMORY.md /
    `agent_facts`; corrected or frustrated discards it; an ungraded turn leaves it
    waiting. `EvolutionEngine.reviewTurn` is the only place this happens.
+
+An imported scaffold is the one kind whose adoption is not the end of its
+journey. Promoting it hands the code to `modifyScaffold`, the same 4-gate
+pipeline a locally-proposed mutation takes, so it lands as a PENDING version and
+the live `scaffold/agent.js` is untouched. This workspace's own shadow trials
+and promotion gate then decide whether it ever runs. There is no other route: an
+imported loop is a proposal here, whatever it proved elsewhere.
 
 ## CraftStore Lifecycle
 

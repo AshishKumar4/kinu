@@ -93,7 +93,7 @@ async function main(): Promise<void> {
     if (input.verifierRetry && proxy.usage().tokens <= input.maxTokens) {
       const verification = await scoreSandbox(input.task, {
         dir: process.cwd(),
-        proteusHome: dirname(input.agentDir),
+        kinuHome: dirname(input.agentDir),
         dispose() {},
       }, input.repoRoot);
       if (!verification.passed) {

@@ -5,8 +5,8 @@
 // tests; here we verify the loop: turns stream + persist, programmatic turns run
 // serialized (reactor / job wake), broadcast fans out, end() flushes.
 import { describe, test, expect } from 'bun:test';
-import { createTestSql, scratchDir, scratchPath, toolExecute } from '@kinu/test-utils';
-import { MissionGovernor } from '@kinu/core';
+import { createTestSql, scratchDir, scratchPath, toolExecute } from '@kinu.run/test-utils';
+import { MissionGovernor } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -17,7 +17,7 @@ import type {
   LanguageModelV2CallOptions,
   LanguageModelV2Usage,
 } from '@ai-sdk/provider';
-import type { LLMProviderConfig } from '@kinu/core';
+import type { LLMProviderConfig } from '@kinu.run/core';
 import {
   DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, createAgentsCodemodeProvider,
   initSearchTables, initAlternateTakesTable, captureAlternateTakes, MAX_CONCURRENT_DETACHED_JOBS,
@@ -25,7 +25,7 @@ import {
   type AgentsToolDeps, type ModelInfo, type JsonObject, type JsonValue,
   type ModelCallSink,
   createAgentSelfProvider,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import { createCLIRuntime } from '../src/runtime';
 import { LocalAgentSession, serializeContentForHeads, type LocalAgentSessionOpts, type SessionEvent } from '../src/local-session';
 import { cloudProxyBaseURL, createLocalModelResolver, type LocalModelResolver } from '../src/model-resolver';
@@ -832,7 +832,7 @@ describe('LocalAgentSession — programmatic turns (reactor / background-job wak
     const { session, events } = setup('ok');
     // Enqueue a user turn and a programmatic wake in the same tick → FIFO, no interleave.
     const userDone = session.send('do it');
-    await session.enqueueTurn({ text: 'job xyz finished', metadata: { proteusEvent: 'background_job', jobId: 'bgjob-1' } });
+    await session.enqueueTurn({ text: 'job xyz finished', metadata: { kinuEvent: 'background_job', jobId: 'bgjob-1' } });
     await userDone;
     // send() resolves on its own turn; the cascaded programmatic turn drains next.
     await waitFor(() => events.filter((e) => e.type === 'turn-end').length === 2);
@@ -845,7 +845,7 @@ describe('LocalAgentSession — programmatic turns (reactor / background-job wak
 
   test('enqueueTurn self-starts the pump when idle (a wake with no user turn)', async () => {
     const { session, events } = setup('woke');
-    await session.enqueueTurn({ text: 'wake up', metadata: { proteusEvent: 'background_job' } });
+    await session.enqueueTurn({ text: 'wake up', metadata: { kinuEvent: 'background_job' } });
     const starts = turnStarts(events);
     expect(starts).toHaveLength(1);
     expect(starts[0]!.kind).toBe('programmatic');
@@ -1902,7 +1902,7 @@ describe('LocalAgentSession — AGENTS.md + session transcript recall', () => {
   });
 
   test('persisted turns are searchable through the session-search seam', async () => {
-    const { SessionSearchStore } = await import('@kinu/core');
+    const { SessionSearchStore } = await import('@kinu.run/core');
     const { rt, session } = setup('the staging deploy used wrangler version three');
     await session.send('how did we deploy to staging?');
 
@@ -2762,7 +2762,7 @@ describe('LocalAgentSession — signed-in cloud proxy turn (zero BYO keys)', () 
           model: DEFAULT_WORKERS_AI_MODEL_ID,
         },
         credentials: {},
-        cloud: { origin, token: TOKEN, sessionAffinity: 'proteus-jarvis' },
+        cloud: { origin, token: TOKEN, sessionAffinity: 'kinu-jarvis' },
       });
       const { db, session, events } = setupWithResolver(resolver);
       expect(session.getEffectiveModelSpec()).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
@@ -2783,7 +2783,7 @@ describe('LocalAgentSession — signed-in cloud proxy turn (zero BYO keys)', () 
 
       expect(completions).toEqual([{
         auth: `Bearer ${TOKEN}`,
-        affinity: 'proteus-jarvis',
+        affinity: 'kinu-jarvis',
         model: DEFAULT_WORKERS_AI_MODEL_ID,
         stream: true,
       }]);
@@ -2962,7 +2962,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
   test('a programmatic turn records its trigger, and each turn is its own run', async () => {
     const { session } = setup('done');
     await session.send('first');
-    await session.enqueueTurn({ text: 'job finished', metadata: { proteusEvent: 'background_job' } });
+    await session.enqueueTurn({ text: 'job finished', metadata: { kinuEvent: 'background_job' } });
     await waitFor(() => session.listRuns().items.length === 2);
 
     const runs = session.listRuns().items;
@@ -3234,7 +3234,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
     `;
     const plan = setup('done', executeToolsModel(probeCode('/workspace/probe/plan-tools.json')));
     await expect(plan.session.enqueueTurn({
-      text: 'research a plan', metadata: { proteusMode: 'plan' },
+      text: 'research a plan', metadata: { kinuMode: 'plan' },
     })).rejects.toThrow('hosted workspace UI');
     expect(await plan.rt.storage.vfs.exists('/workspace/probe/plan-tools.json')).toBe(false);
     await plan.session.end();
@@ -3381,7 +3381,7 @@ describe('LocalAgentSession — the one-shot completion gate', () => {
 // the role:'system' entry off the LanguageModelV2 call.
 describe('LocalAgentSession — provenance and stance reach the model', () => {
   test('a background-job wake carries the resume guidance even though it also carries a work mode', async () => {
-    // jobs/runner.ts stamps BOTH proteusEvent and proteusMode on the wake, and
+    // jobs/runner.ts stamps BOTH kinuEvent and kinuMode on the wake, and
     // `background_jobs.work_mode` is never null. Under the old single-`mode`
     // precedence the work mode won and this guidance — written to stop the
     // agent re-doing or polling work that already settled — never reached a
@@ -3390,7 +3390,7 @@ describe('LocalAgentSession — provenance and stance reach the model', () => {
     const { session } = setup('ok', systemCapturingModel('ok', (s) => { system = s; }));
     await session.enqueueTurn({
       text: 'job bgjob-1 finished',
-      metadata: { proteusEvent: 'background_job', proteusMode: 'build' },
+      metadata: { kinuEvent: 'background_job', kinuMode: 'build' },
     });
     expect(system).toContain('Background-resume mode');
     expect(system).toContain('fetch the referenced job result first');

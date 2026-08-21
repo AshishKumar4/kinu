@@ -1,9 +1,9 @@
-// Every test process gets a throwaway PROTEUS_HOME, no inherited credentials,
+// Every test process gets a throwaway KINU_HOME, no inherited credentials,
 // and one release that runs.
 //
-// `proteusHome()` falls back to `~/.proteus`, and a test that drives the local
+// `kinuHome()` falls back to `~/.kinu`, and a test that drives the local
 // runtime writes there for real: `createCLIRuntime` builds a shadow-git
-// checkpoint engine rooted at `$PROTEUS_HOME/checkpoints`, and every /pc or
+// checkpoint engine rooted at `$KINU_HOME/checkpoints`, and every /pc or
 // /workspace write snapshots into it. That is how packages/cli-backend/tests/
 // mount-plane.test.ts put ~580 checkpoint stores — keyed by its own /tmp scratch
 // directories — into the developer's real home.
@@ -31,28 +31,28 @@ import { join } from 'node:path';
 import { releaseScratch } from '../packages/test-utils/src/scratch';
 import { stripAmbientCredentials } from '../packages/test-utils/src/ambient-env';
 
-const home = mkdtempSync(join(tmpdir(), 'proteus-test-home-'));
-process.env.PROTEUS_HOME = home;
+const home = mkdtempSync(join(tmpdir(), 'kinu-test-home-'));
+process.env.KINU_HOME = home;
 
 // The throwaway home isolates a suite from the developer's CONFIG FILE. This is
 // the same property for the ENVIRONMENT, which was the half nobody had done:
-// `resolveCloudSession()` prefers `PROTEUS_TOKEN` over that config file, so a
+// `resolveCloudSession()` prefers `KINU_TOKEN` over that config file, so a
 // shell that had run `bun run test:eval` or `kinu chat` silently moved ten of
 // `bun test packages/cli/`'s tests onto their signed-in branch and left them
 // red. See packages/test-utils/src/ambient-env.ts for the measurement.
 //
-// PROTEUS_EVAL_LIVE=1 is the exception because it is already the consent
+// KINU_EVAL_LIVE=1 is the exception because it is already the consent
 // boundary for the one tier that means to use these variables: scripts/
 // eval-tier.sh sets it, nothing else does, and `liveModelTarget()` refuses to
 // spend without it. One rule, not two.
 //
 // It says so rather than doing it quietly — a developer whose shell is signed in
 // should not have to infer why their credential is not in play.
-if (process.env.PROTEUS_EVAL_LIVE !== '1') {
+if (process.env.KINU_EVAL_LIVE !== '1') {
   const ignored = stripAmbientCredentials(process.env);
   if (ignored.length > 0) {
     console.warn(`[test-preload] ignoring ambient ${ignored.join(', ')} — a signed-in shell is `
-      + 'not an input to a suite; run the eval tier (PROTEUS_EVAL_LIVE=1) to use them');
+      + 'not an input to a suite; run the eval tier (KINU_EVAL_LIVE=1) to use them');
   }
 }
 
@@ -62,7 +62,7 @@ if (process.env.PROTEUS_EVAL_LIVE !== '1') {
  * Which hook took three probes with filesystem markers to establish.
  * `process.on('exit')` does NOT fire under `bun test` (nor does `beforeExit`) —
  * the preload claimed it did, and consequently stranded one
- * `proteus-test-home-*` per invocation on the PLAIN PASSING PATH: 274 of them on
+ * `kinu-test-home-*` per invocation on the PLAIN PASSING PATH: 274 of them on
  * this box, which the stale sweeper below then quietly absorbed. An `afterAll`
  * registered in a preload applies to every test file in the invocation, fires
  * once at the end, and fires even when a file failed — measured across a
@@ -107,11 +107,11 @@ for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
 //
 // The bound is 30 minutes against a `timeout 600` ceiling, which is 3x headroom;
 // the cost is one readdir plus a stat per entry. It covers the suite-minted
-// `proteus-scratch-*` namespace too, for the same reason and by the same rule.
+// `kinu-scratch-*` namespace too, for the same reason and by the same rule.
 const STALE_HOME_MS = 30 * 60 * 1000;
 const cutoff = Date.now() - STALE_HOME_MS;
 const tmp = tmpdir();
-const ABANDONED = ['proteus-test-home-', 'proteus-scratch-'] as const;
+const ABANDONED = ['kinu-test-home-', 'kinu-scratch-'] as const;
 for (const name of readdirSync(tmp)) {
   if (!ABANDONED.some((prefix) => name.startsWith(prefix)) || join(tmp, name) === home) continue;
   const path = join(tmp, name);

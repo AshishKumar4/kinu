@@ -55,7 +55,7 @@ import {
 import type { EvalInstance, MetricOutcome } from './gepa/types';
 import type { ScoreInterval } from '../utils/stats';
 import { nanoid } from '../utils/nanoid';
-import { diagnostics, renderThrownChain, toProteusError } from '../obs/index';
+import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 
 /**
  * The inference surface a candidate scaffold runs against.
@@ -238,7 +238,7 @@ export function queueTurnShadowTrial(
   } catch (err) {
     diagnostics.failure(
       'evolution.shadow_trial_queue_failed',
-      toProteusError({ doing: 'queue a shadow trial', cause: err, otherwise: 'io' }),
+      toKinuError({ doing: 'queue a shadow trial', cause: err, otherwise: 'io' }),
     );
     return 'failed';
   }
@@ -298,7 +298,7 @@ export async function runQueuedShadowTrials(control: ScaffoldControl): Promise<S
         // wedge on: drop it below and carry on with the rest.
         diagnostics.failure(
           'evolution.shadow_trial_failed',
-          toProteusError({ doing: 'run a queued shadow trial', cause: err, otherwise: 'unavailable' }),
+          toKinuError({ doing: 'run a queued shadow trial', cause: err, otherwise: 'unavailable' }),
           { trialId: trial.id },
         );
       }

@@ -23,7 +23,7 @@ import {
   type JsonObject, type JsonValue,
   type ProviderDeps, type AuthResolution, type CacheRetention,
 } from '../src/index';
-import { createMockFetch, type MockFetchHandle } from '@kinu/test-utils';
+import { createMockFetch, type MockFetchHandle } from '@kinu.run/test-utils';
 
 function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch): ProviderDeps {
   const store = new Map(Object.entries(creds));
@@ -166,7 +166,7 @@ describe('Anthropic cache breakpoints on the wire', () => {
       tools: chatTools(retention),
       maxSteps: 3,
       cache: {
-        providerId: 'anthropic', modelId: 'claude-opus-4-7', sessionKey: 'proteus-test',
+        providerId: 'anthropic', modelId: 'claude-opus-4-7', sessionKey: 'kinu-test',
         retention,
       },
     });
@@ -252,10 +252,10 @@ describe('OpenAI prompt_cache_key on the wire', () => {
     const model = createOpenAIProvider().createModel('gpt-5.5', deps);
     await expect(drain({
       model, system: 'sys', history: [...HISTORY], tools: {},
-      cache: { providerId: 'openai', modelId: 'gpt-5.5', sessionKey: 'proteus-agent:default' },
+      cache: { providerId: 'openai', modelId: 'gpt-5.5', sessionKey: 'kinu-agent:default' },
     })).rejects.toThrow();
     const body = bodyOf(mock, 0);
-    expect(body.prompt_cache_key).toBe('proteus-agent:default');
+    expect(body.prompt_cache_key).toBe('kinu-agent:default');
     expect(body.prompt_cache_retention).toBeUndefined();
     expect(countCacheControl(body)).toBe(0);
   });
@@ -298,14 +298,14 @@ describe('OpenRouter cache addressing on the wire', () => {
     const model = createOpenRouterProvider().createModel(modelId, deps);
     await expect(drain({
       model, system: 'sys', history: [...HISTORY], tools: {},
-      cache: { providerId: 'openrouter', modelId, sessionKey: 'proteus-or' },
+      cache: { providerId: 'openrouter', modelId, sessionKey: 'kinu-or' },
     })).rejects.toThrow();
     return bodyOf(mock, 0);
   }
 
   test('claude behind openrouter: prompt_cache_key + cache_control on system and tail', async () => {
     const body = await runOpenRouterTurn('anthropic/claude-sonnet-4.6');
-    expect(body.prompt_cache_key).toBe('proteus-or');
+    expect(body.prompt_cache_key).toBe('kinu-or');
 
     const messages = field(body, 'messages', OpenAiMessagesSchema);
     const system = messages.find((m) => m.role === 'system');
@@ -318,7 +318,7 @@ describe('OpenRouter cache addressing on the wire', () => {
 
   test('non-anthropic model: prompt_cache_key only, no cache_control markers', async () => {
     const body = await runOpenRouterTurn('meta-llama/llama-4-maverick');
-    expect(body.prompt_cache_key).toBe('proteus-or');
+    expect(body.prompt_cache_key).toBe('kinu-or');
     expect(countCacheControl(body)).toBe(0);
     // System stays a plain string message.
     const messages = field(body, 'messages', OpenAiMessagesSchema);
@@ -337,10 +337,10 @@ describe('openai-compat + no-op providers', () => {
     const model = createOpenAICompatProvider().createModel('llama-4', deps);
     await expect(drain({
       model, system: 'sys', history: [...HISTORY], tools: {},
-      cache: { providerId: 'openai-compat', modelId: 'llama-4', sessionKey: 'proteus-compat' },
+      cache: { providerId: 'openai-compat', modelId: 'llama-4', sessionKey: 'kinu-compat' },
     })).rejects.toThrow();
     const body = bodyOf(mock, 0);
-    expect(body.prompt_cache_key).toBe('proteus-compat');
+    expect(body.prompt_cache_key).toBe('kinu-compat');
     expect(countCacheControl(body)).toBe(0);
   });
 
@@ -355,7 +355,7 @@ describe('openai-compat + no-op providers', () => {
     // workers-ai resolves to the `none` strategy — affinity headers, not body fields.
     await expect(drain({
       model, system: 'sys', history: [...HISTORY], tools: {},
-      cache: { providerId: 'workers-ai', modelId: '@cf/moonshotai/kimi-k2.6', sessionKey: 'proteus-x' },
+      cache: { providerId: 'workers-ai', modelId: '@cf/moonshotai/kimi-k2.6', sessionKey: 'kinu-x' },
     })).rejects.toThrow();
     const body = bodyOf(mock, 0);
     expect(body.prompt_cache_key).toBeUndefined();

@@ -12,10 +12,10 @@
  *     (Evolution Changelog digests, background-job completions).
  */
 
-import { JsonValueSchema, type EmailThreadAddr, type EventLog, type JsonValue, type ReplyChannelStore } from '@kinu/core';
+import { JsonValueSchema, type EmailThreadAddr, type EventLog, type JsonValue, type ReplyChannelStore } from '@kinu.run/core';
 import { agentEmailAddress } from './inbound';
 import type { EmailOutbox } from './outbox';
-import { diagnostics, ProteusError } from '@kinu/core/obs';
+import { diagnostics, KinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 const EmailThreadAddrSchema = v.object({
@@ -68,7 +68,7 @@ function payloadText(payload: JsonValue): string {
 /** The `email_thread` ReplyDispatcher registered on the ReplyChannelStore. */
 export function createEmailThreadDispatcher(
   getContext: () => EmailSendContext,
-): import('@kinu/core').ReplyDispatcher {
+): import('@kinu.run/core').ReplyDispatcher {
   return {
     async dispatch(channel, payload) {
       const ctx = getContext();
@@ -184,7 +184,7 @@ export async function sendOwnerEmail(
   if (result.status === 'failed') {
     diagnostics.failure(
       'email.owner_notification_failed',
-      new ProteusError('unavailable', result.error),
+      new KinuError('unavailable', result.error),
       { workspace: deps.agentName, messageId: result.messageId },
     );
     return false;

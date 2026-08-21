@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import { git, gitEnv, initRepo, scratchDir } from '@kinu/test-utils';
+import { git, gitEnv, initRepo, scratchDir } from '@kinu.run/test-utils';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createWorkspace } from '../src/identity/create';

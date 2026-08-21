@@ -16,7 +16,7 @@ import { deriveUserId } from '../src/auth/store';
  * workspace name. Before the fix, an attacker who registered a victim's userId
  * as a workspace name could reach GET /agents/user-d-o/<victimId> — the victim's
  * UserDO @callable surface (getAuthHeaders / mintCliToken → full account
- * takeover), plus ExplorationAgent / ProteusSandbox / Nimbus*.
+ * takeover), plus ExplorationAgent / KinuSandbox / Nimbus*.
  *
  * Two lines of defense are asserted:
  *   1. the `/agents/*` transport is pinned to the orchestrator namespace
@@ -38,7 +38,7 @@ describe('F1 defense 1 — the /agents/* transport is pinned to the orchestrator
   });
 
   test('every non-orchestrator DO namespace is foreign (→ rejected)', () => {
-    for (const slug of ['user-d-o', 'exploration-agent', 'proteus-sandbox', 'nimbus-preview', 'anything']) {
+    for (const slug of ['user-d-o', 'exploration-agent', 'kinu-sandbox', 'nimbus-preview', 'anything']) {
       expect(isForeignAgentNamespacePath(`/agents/${slug}/some-name`)).toBe(true);
     }
   });

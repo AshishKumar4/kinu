@@ -59,7 +59,7 @@ import { nanoid } from '../utils/nanoid';
 import { isWorkMode, type WorkMode } from '../prompting/surface';
 import type { JsonObject } from '../utils/json';
 import { stampTurnAuthor } from '../utils/ui-message';
-import { diagnostics, ProteusError, toProteusError } from '../obs/index';
+import { diagnostics, KinuError, toKinuError } from '../obs/index';
 
 const SignalIdMetadataSchema = v.object({
   [SIGNAL_ID_METADATA_KEY]: v.optional(v.string()),
@@ -114,10 +114,14 @@ export class SignalDelivery implements SignalDeliverer {
   deliver(signal: AgentSignal): Promise<SignalOutcome> {
     const cardId = signal.idempotencyKey ? `sig:${signal.idempotencyKey}` : `sig-${nanoid()}`;
     const delivered: DeliveredSignal = { ...signal, cardId };
-    const signalMode = signal.metadata?.proteusMode;
+    const signalMode = signal.metadata?.kinuMode;
     const modeMismatch = isWorkMode(signalMode)
       && this.activeWorkMode?.() !== signalMode;
-    if (!this.host.turnInFlight() || signal.requiresOwnTurn || modeMismatch) return this.queue(delivered);
+    // A `blocker` says continuing wastes the work, so it gets its own turn for
+    // the same reason a mode mismatch does: spliced into a step it would be read
+    // beside the work it is telling the agent to stop.
+    const ownTurn = signal.requiresOwnTurn === true || signal.severity === 'blocker';
+    if (!this.host.turnInFlight() || ownTurn || modeMismatch) return this.queue(delivered);
     this.pending.push(delivered);
     this.openCard(delivered, stepBody(delivered));
     this.logActivity?.('signal_injected', `${signal.kind} → live turn`);
@@ -207,14 +211,14 @@ export class SignalDelivery implements SignalDeliverer {
       reason = 'preempted';
       diagnostics.failure(
         'signal.preempted',
-        new ProteusError('unavailable', 'the host pre-empted the signal turn; compensating'),
+        new KinuError('unavailable', 'the host pre-empted the signal turn; compensating'),
         { signal: signal.kind },
       );
     } catch (err) {
       reason = 'failed';
       diagnostics.failure(
         'signal.enqueue_failed',
-        toProteusError({ doing: 'enqueue a signal turn', cause: err, otherwise: 'io' }),
+        toKinuError({ doing: 'enqueue a signal turn', cause: err, otherwise: 'io' }),
         { signal: signal.kind },
       );
     }
@@ -224,7 +228,7 @@ export class SignalDelivery implements SignalDeliverer {
   }
 
   /** The card's opening, at the moment the signal arrived. It carries the same
-   *  `proteusEvent` metadata a queued signal's durable message is stamped with,
+   *  `kinuEvent` metadata a queued signal's durable message is stamped with,
    *  so one classifier renders both, and `text` is THIS delivery's rendering —
    *  what the model will actually read, never the other path's. */
   private openCard(signal: DeliveredSignal, text: string): void {
@@ -241,14 +245,14 @@ export class SignalDelivery implements SignalDeliverer {
 
 const stepBody = (signal: AgentSignal): string => signal.stepText ?? signal.text;
 
-/** The turn metadata a signal carries: its `proteusEvent` provenance, the
+/** The turn metadata a signal carries: its `kinuEvent` provenance, the
  *  reply binding its source rows are bound to, and the producer's own.
  *
  *  The author stamp goes on LAST, after the producer's metadata, so the seam
  *  owns it: a producer says it carries the operator's words by naming the
  *  author, never by overwriting the stamp underneath the seam. */
 const turnMetadata = (signal: AgentSignal): JsonObject => {
-  const metadata: JsonObject = { proteusEvent: signal.kind };
+  const metadata: JsonObject = { kinuEvent: signal.kind };
   if (signal.replyTurnId) metadata.drainTurnId = signal.replyTurnId;
   Object.assign(metadata, signal.metadata);
   return stampTurnAuthor(metadata);
@@ -258,7 +262,7 @@ function reportRedeliveryFailure(kind: string) {
   return <Failure>(failure: Failure): void => {
     diagnostics.failure(
       'signal.redelivery_failed',
-      toProteusError({ doing: 're-deliver a signal', cause: failure, otherwise: 'io' }),
+      toKinuError({ doing: 're-deliver a signal', cause: failure, otherwise: 'io' }),
       { signal: kind },
     );
   };

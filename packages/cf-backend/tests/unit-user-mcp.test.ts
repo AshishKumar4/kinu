@@ -20,7 +20,7 @@ import {
   parseAllowedTools, mapConnectionStatus,
   parseMcpHeaders, buildMcpHeaderTransportOpts,
 } from '../src/user/mcp';
-import { isMcpToolKey, mcpToolKey, type JsonObject, type JsonValue } from '@kinu/core';
+import { isMcpToolKey, mcpToolKey, type JsonObject, type JsonValue } from '@kinu.run/core';
 import { tool, jsonSchema } from 'ai';
 
 // ── 1. validateMcpServerInput ──────────────────────────────────────────────
@@ -227,7 +227,7 @@ describe('buildMcpHeaderTransportOpts', () => {
 
 describe('buildBuiltinTools mcp_ prefix guard', () => {
   test("BUILTIN_TOOLS today don't start with mcp_", async () => {
-    const { BUILTIN_TOOLS } = await import('@kinu/core');
+    const { BUILTIN_TOOLS } = await import('@kinu.run/core');
     for (const n of BUILTIN_TOOLS) {
       expect(isMcpToolKey(n)).toBe(false);
     }

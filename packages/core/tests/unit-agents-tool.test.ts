@@ -11,7 +11,7 @@
 // channels, node runtime) are exercised in cf-backend tests against the real
 // hubs; deps here are recorders.
 import { describe, test, expect } from 'bun:test';
-import { createTestRuntime, toolExecute, scriptedTurnModel } from '@kinu/test-utils';
+import { createTestRuntime, toolExecute, scriptedTurnModel } from '@kinu.run/test-utils';
 
 import * as v from 'valibot';
 import { AGENTS_ACTION_FIELDS } from '../src/tools/agents-tool';

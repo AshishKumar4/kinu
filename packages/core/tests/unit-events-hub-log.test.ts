@@ -151,7 +151,7 @@ describe('EventLog.pending', () => {
           topic: 'research',
           body: { task: 'inspect only' },
           sender_event_id: 'outbox-1',
-          proteus_mode: 'plan',
+          kinu_mode: 'plan',
         },
         same_owner: false,
         receiver_grant_present: true,

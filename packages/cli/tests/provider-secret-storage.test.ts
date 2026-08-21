@@ -6,13 +6,13 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { parseJsonObject, type JsonObject } from '@kinu/core';
+import { parseJsonObject, type JsonObject } from '@kinu.run/core';
 
 const homes: string[] = [];
 afterEach(() => { for (const dir of homes.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
-function proteusHome(config: JsonObject): string {
-  const home = mkdtempSync(join(tmpdir(), 'proteus-secret-home-'));
+function kinuHome(config: JsonObject): string {
+  const home = mkdtempSync(join(tmpdir(), 'kinu-secret-home-'));
   homes.push(home);
   writeFileSync(join(home, 'config.json'), JSON.stringify(config));
   return home;
@@ -22,8 +22,8 @@ function storedConfig(home: string): JsonObject {
   return parseJsonObject(readFileSync(join(home, 'config.json'), 'utf8'));
 }
 
-/** The real command module, run in a child process so PROTEUS_HOME is read
- *  fresh and nothing touches the developer's own ~/.proteus. */
+/** The real command module, run in a child process so KINU_HOME is read
+ *  fresh and nothing touches the developer's own ~/.kinu. */
 async function runStore(home: string, opts: { local: boolean; origin?: string }) {
   const runner = `
     const { storeProviderSecret } = await import('./packages/cli/src/commands/setup.ts');
@@ -47,11 +47,11 @@ async function runStore(home: string, opts: { local: boolean; origin?: string })
   `;
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    PROTEUS_HOME: home, NO_COLOR: '1',
-    OPENROUTER_API_KEY: '', PROTEUS_TOKEN: '',
+    KINU_HOME: home, NO_COLOR: '1',
+    OPENROUTER_API_KEY: '', KINU_TOKEN: '',
   };
-  if (opts.origin) env.PROTEUS_ORIGIN = opts.origin;
-  else delete env.PROTEUS_ORIGIN;
+  if (opts.origin) env.KINU_ORIGIN = opts.origin;
+  else delete env.KINU_ORIGIN;
   const proc = Bun.spawn({
     cmd: [process.execPath, '-e', runner],
     cwd: join(import.meta.dir, '../../..'),
@@ -80,7 +80,7 @@ describe('where a provider secret is written', () => {
       },
     });
     const origin = `http://127.0.0.1:${server.port}`;
-    const home = proteusHome({ origin, accessToken: 'ptc_test_token' });
+    const home = kinuHome({ origin, accessToken: 'ptc_test_token' });
 
     try {
       const res = await runStore(home, { local: false });
@@ -100,7 +100,7 @@ describe('where a provider secret is written', () => {
   });
 
   test('--local keeps it on this machine, for offline use', async () => {
-    const home = proteusHome({ origin: 'http://127.0.0.1:1', accessToken: 'ptc_test_token' });
+    const home = kinuHome({ origin: 'http://127.0.0.1:1', accessToken: 'ptc_test_token' });
     const res = await runStore(home, { local: true });
 
     expect(res.stdout).toContain('WHERE:local');
@@ -108,7 +108,7 @@ describe('where a provider secret is written', () => {
   });
 
   test('signed out, there is nowhere else to put it — the machine keeps working', async () => {
-    const home = proteusHome({});
+    const home = kinuHome({});
     const res = await runStore(home, { local: false });
 
     expect(res.stdout).toContain('WHERE:local');
@@ -123,7 +123,7 @@ describe('when the account will not take it', () => {
       hostname: '127.0.0.1',
       fetch: () => new Response('{"error":"credential rejected"}', { status: 400 }),
     });
-    const home = proteusHome({ origin: `http://127.0.0.1:${server.port}`, accessToken: 'ptc_test_token' });
+    const home = kinuHome({ origin: `http://127.0.0.1:${server.port}`, accessToken: 'ptc_test_token' });
 
     try {
       const res = await runStore(home, { local: false });
@@ -141,7 +141,7 @@ describe('when the account will not take it', () => {
       port: 0, hostname: '127.0.0.1',
       fetch: () => Response.json({ ok: true }, { status: 201 }),
     });
-    const home = proteusHome({
+    const home = kinuHome({
       origin: `http://127.0.0.1:${server.port}`,
       accessToken: 'ptc_test_token',
       providers: { openrouter: { apiKey: 'sk-stale-local' } },

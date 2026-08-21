@@ -57,6 +57,9 @@ import { createCraftLedger, type CraftLedger } from '../craft/in-episode';
 import { recordRecoveryFinding, recoveryFindingText, type RecoveryFinding } from './recovery';
 import { readSoul, summarizeSoul } from '../identity/soul';
 import {
+  ADVISOR_DEDUPE_WINDOW, ADVISOR_EVENT_TYPE, normalizeNote, type AdvisorNote,
+} from '../advisor/review';
+import {
   type TurnOutcome, type TurnOutcomeSource, type OutcomeClassification,
   initTurnOutcomeTables, isTrivialTurn, isNegativeOutcome, classifyTurnOutcome,
   executionVerdict, executionVerdictOutcome, isUserVerdictSource, isPureLookupCall,
@@ -109,7 +112,7 @@ const GeneralizedToolSchema = v.object({
 });
 import { runMCTS } from '../mcts/engine';
 import { createAgentConfigStore, initAgentConfigTable, type AgentConfigStore } from '../config/store';
-import { diagnostics, toProteusError } from '../obs/index';
+import { diagnostics, toKinuError } from '../obs/index';
 
 /** The archive context handed to the proposal prompt: which version the
  *  proposal branches from + the variants it may cite as stepping stones. */
@@ -337,6 +340,38 @@ export class EvolutionEngine {
     });
   }
 
+  /**
+   * The advisor's own row on the audit stream, and the window it dedupes
+   * against.
+   *
+   * Both live here because `evolution_events` has one writer and this is it.
+   * The advisor could have opened its own table for its dedupe window; the
+   * window it actually needs is "what have I already said to this workspace",
+   * and that is a read of the stream the note lands on either way.
+   *
+   * A note reaches this door for one of three reasons: the owner's floor put it
+   * below the conversation, the completion gate held the boundary, or the owner
+   * wants a record of a note the agent was also told. All three are the same
+   * row, because a reader of the Changelog cares what the advisor said, not
+   * which of those it was.
+   */
+  recordAdvisorNote(note: AdvisorNote): void {
+    this.emit({
+      type: ADVISOR_EVENT_TYPE,
+      message: note.note,
+      data: { severity: note.severity },
+    });
+  }
+
+  /** The normalised text of the last `limit` advisor notes, newest first — the
+   *  dedupe window {@link judgeNote} compares a fresh note against. */
+  recentAdvisorNotes(limit = ADVISOR_DEDUPE_WINDOW): readonly string[] {
+    const rows = this.rt.storage.sql<{ message: string }>`
+      SELECT message FROM evolution_events
+      WHERE type = ${ADVISOR_EVENT_TYPE} ORDER BY created_at DESC LIMIT ${limit}`;
+    return rows.map((row) => normalizeNote(row.message));
+  }
+
   // ── Timescale 1: Turn-level (outcome-driven forked review) ──────
 
   /**
@@ -542,7 +577,7 @@ export class EvolutionEngine {
     if (outcome !== 'queued') {
       diagnostics.failure(
         'evolution.turn_review_not_deferred',
-        toProteusError({
+        toKinuError({
           doing: 'defer a turn review for the next host',
           cause: new Error(outcome === 'queue_full'
             ? `the review queue is full (${countQueuedTurnReviews(this.rt.storage.sql)} owed) — nothing has drained it`
@@ -590,7 +625,7 @@ export class EvolutionEngine {
         }
         diagnostics.failure(
           'evolution.deferred_review_failed',
-          toProteusError({ doing: 'run a deferred turn review', cause: err, otherwise: 'unavailable' }),
+          toKinuError({ doing: 'run a deferred turn review', cause: err, otherwise: 'unavailable' }),
           { reviewId: row.id },
         );
         continue;
@@ -771,7 +806,7 @@ export class EvolutionEngine {
     } catch (err) {
       diagnostics.failure(
         'evolution.shadow_trial_drain_failed',
-        toProteusError({ doing: 'drain the due shadow trials', cause: err, otherwise: 'unavailable' }),
+        toKinuError({ doing: 'drain the due shadow trials', cause: err, otherwise: 'unavailable' }),
       );
     }
   }

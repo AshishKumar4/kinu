@@ -1,5 +1,5 @@
 {
-  "name": "@kinu/test-utils",
+  "name": "@kinu.run/test-utils",
   "version": "0.1.0",
   "type": "module",
   "main": "src/index.ts",
@@ -9,8 +9,8 @@
     "./turn-model": "./src/turn-model.ts"
   },
   "dependencies": {
-    "@kinu/core": "workspace:*",
-    "@kinu/agent-utils": "workspace:*"
+    "@kinu.run/core": "workspace:*",
+    "@kinu.run/agent-utils": "workspace:*"
   },
   "scripts": {
     "check": "tsc --noEmit"

@@ -41,12 +41,12 @@ import { hmacSha256Hex } from '../lib/crypto';
 const ENVELOPE_PREFIX = 'pce1.';
 const KEY_ID_LENGTH = 16;
 const IV_BYTES = 12;
-const HKDF_INFO = 'proteus.credential-envelope.v1';
-const HKDF_SALT = 'proteus.credential-envelope.salt';
+const HKDF_INFO = 'kinu.credential-envelope.v1';
+const HKDF_SALT = 'kinu.credential-envelope.salt';
 /** The key id is a PRF of the secret, not a hash of it: every stored row
  *  carries the id in the clear, and a truncated digest of the secret itself
  *  would be an offline oracle for checking guesses against it. */
-const KEY_ID_LABEL = 'proteus.credential-envelope.key-id';
+const KEY_ID_LABEL = 'kinu.credential-envelope.key-id';
 /** Below this a "secret" is a passphrase, and the envelope would be theatre.
  *  32 base64 characters is 24 bytes of a `openssl rand -base64 32` value. */
 const MIN_SECRET_LENGTH = 32;

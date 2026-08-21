@@ -139,7 +139,7 @@ export function agentCred(identity: AgentIdentity): VfsCred {
   return { uid: identity.uid, gid: identity.gid, groups: [identity.gid], umask: 0o022 };
 }
 
-const IDENTITY_TABLE = 'proteus_agent_identity';
+const IDENTITY_TABLE = 'kinu_agent_identity';
 
 /**
  * This agent's uid, allocated once and durable thereafter.

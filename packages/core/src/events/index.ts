@@ -42,4 +42,7 @@ export {
   type ModelCallSpend,
   type ModelCallSink,
   type SpendSource,
+  ROUTED_SPEND_SOURCES,
+  isRoutedSpendSource,
+  type RoutedSpendSource,
 } from './model-call';

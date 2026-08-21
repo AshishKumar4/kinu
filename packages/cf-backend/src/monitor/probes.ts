@@ -25,7 +25,7 @@
 
 import { sha256Hex } from '../lib/crypto';
 import * as v from 'valibot';
-import { renderThrownChain } from '@kinu/core/obs';
+import { renderThrownChain } from '@kinu.run/core/obs';
 
 const BuildStampSchema = v.looseObject({
   sha: v.optional(v.string()),
@@ -73,7 +73,7 @@ async function get(deps: ProbeDeps, path: string): Promise<Response> {
   return deps.fetch(`${deps.origin.replace(/\/+$/, '')}${path}`, {
     // A cached answer would tell us how the site looked, not how it is.
     cache: 'no-store',
-    headers: { 'user-agent': 'proteus-synthetic-monitor' },
+    headers: { 'user-agent': 'kinu-synthetic-monitor' },
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });
 }

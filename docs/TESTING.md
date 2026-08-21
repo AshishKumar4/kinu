@@ -104,14 +104,14 @@ Two suites are not measured today, so do not quote a test count for either:
 ### A signed-in shell no longer changes what a suite measures
 
 `bun test packages/cli/tests` used to depend on whose shell ran it.
-`resolveCloudSession()` prefers `PROTEUS_TOKEN` over the config file and
-`resolveCloudOrigin()` prefers `PROTEUS_ORIGIN` over it, so a shell that had run
+`resolveCloudSession()` prefers `KINU_TOKEN` over the config file and
+`resolveCloudOrigin()` prefers `KINU_ORIGIN` over it, so a shell that had run
 `kinu chat` or `bun run test:eval` moved thirteen tests across six files onto
-their signed-in branch, even though each had built an isolated `PROTEUS_HOME`
+their signed-in branch, even though each had built an isolated `KINU_HOME`
 holding no session. Measured 2026-08-19 at `3ec8eded`, one variable pair changed
 and nothing else (`packages/test-utils/src/ambient-env.ts:12-25`):
 
-    unset PROTEUS_ORIGIN PROTEUS_TOKEN   312 pass,  0 fail
+    unset KINU_ORIGIN KINU_TOKEN   312 pass,  0 fail
     both exported                        302 pass, 10 fail
 
 Which ten of the thirteen went red depended on what the ambient origin answered,
@@ -119,14 +119,14 @@ so the failures moved between runs and read as a defect in the code under test.
 
 `scripts/test-scratch-home.ts` now strips the ambient credentials at preload, in
 every test process, for both runners. It names the variables it removed on
-stderr rather than doing it quietly. `PROTEUS_EVAL_LIVE=1` is the one exception,
+stderr rather than doing it quietly. `KINU_EVAL_LIVE=1` is the one exception,
 because that is already the consent boundary for the tier that means to spend.
 The names come from `LIVE_MODEL_ENV`, so a target the resolver learns to read is
 a target the strip removes on the same commit.
 
-The same preload gives every test process a throwaway `PROTEUS_HOME`. That
+The same preload gives every test process a throwaway `KINU_HOME`. That
 started as a containment fix: `createCLIRuntime` builds a shadow-git checkpoint
-engine under `$PROTEUS_HOME/checkpoints`, and
+engine under `$KINU_HOME/checkpoints`, and
 `packages/cli-backend/tests/mount-plane.test.ts` put ~580 checkpoint stores into
 the developer's real home before it existed.
 
@@ -140,7 +140,7 @@ Read the next paragraph before running that.
 
 **It spends your money without being asked to.** If the environment names no
 model target, `scripts/eval-tier.sh` borrows the signed-in CLI session via
-`scripts/eval-credentials.ts`. That is the same `~/.proteus/config.json`
+`scripts/eval-credentials.ts`. That is the same `~/.kinu/config.json`
 credential `kinu chat` uses. On any machine that has run `kinu auth`,
 `bun run test:eval` bills the token owner's Cloudflare account. That is
 deliberate. The tier previously asked for two environment variables nothing on
@@ -203,16 +203,16 @@ and something can miss.
 
 The research and optimization arms do not build a runtime and call into it.
 They run `kinu create <name> --mode local`, then `kinu exec --workspace
-<name> --json`, in a scratch `PROTEUS_HOME`, and judge the child's own event
+<name> --json`, in a scratch `KINU_HOME`, and judge the child's own event
 stream plus the ledgers in `$home/<workspace>/agent.db`. The glue is
-`tests/evals/cli-driver.ts`; the precedent is `bench/harbor/proteus_agent.py`.
+`tests/evals/cli-driver.ts`; the precedent is `bench/harbor/kinu_agent.py`.
 
 That is the rule. An eval drives the WHOLE agent through a shipped surface.
 Driving `LocalAgentSession` in-process would skip the CLI's turn assembly, its
 client boundary and, for the research family specifically, MCP config
 resolution, which is the thing that family is about. A user's servers
 reach the agent because `resolveMcpServers()` reads the `mcpServers` block of
-`~/.proteus/config.json` and `LocalAgentClient` connects them; a suite that
+`~/.kinu/config.json` and `LocalAgentClient` connects them; a suite that
 hands `connectMcp` its own servers proves none of that.
 
 One measured trap, worth knowing before writing a third family. The workspace
@@ -293,17 +293,17 @@ attribution (`swarm_use` is the agent's own choice, not an assigned arm), and
 per-step time (that lives in each record's transcripts directory).
 
 The behaviour arm's own knobs, documented nowhere else
-(`tests/evals/behaviour.eval.ts:80-82,110`, and `PROTEUS_EVAL_RECORD` in
+(`tests/evals/behaviour.eval.ts:80-82,110`, and `KINU_EVAL_RECORD` in
 `packages/test-utils/src/eval-run.ts:493`; the tier and record knobs are read the
 same way by the research and optimization arms):
 
 | Variable | Effect |
 |---|---|
-| `PROTEUS_EVAL_TIER=flash\|pro` | picks the model; `flash` is the volume arm and the default |
-| `PROTEUS_EVAL_REPEATS` | repetitions per task; default 2 for flash, 1 for pro |
-| `PROTEUS_EVAL_SEED` | the run seed; default 1 |
-| `PROTEUS_EVAL_EVOLUTION=0` | turns evolution off |
-| `PROTEUS_EVAL_RECORD` | where the run record is written; default is beside the retained transcripts under `bench-artifacts/` |
+| `KINU_EVAL_TIER=flash\|pro` | picks the model; `flash` is the volume arm and the default |
+| `KINU_EVAL_REPEATS` | repetitions per task; default 2 for flash, 1 for pro |
+| `KINU_EVAL_SEED` | the run seed; default 1 |
+| `KINU_EVAL_EVOLUTION=0` | turns evolution off |
+| `KINU_EVAL_RECORD` | where the run record is written; default is beside the retained transcripts under `bench-artifacts/` |
 
 ### Triaging a run, after every `bun run evals:full`
 
@@ -506,7 +506,7 @@ with zero steps. That is the same signature as a deployment outage, and neither
 run's wall clock is then the tier's cost.
 
 To prove one thing, run one suite rather than the tier.
-`PROTEUS_EVAL_LIVE=1 bun test ./tests/live-smoke.test.ts` is 74 s and proves the
+`KINU_EVAL_LIVE=1 bun test ./tests/live-smoke.test.ts` is 74 s and proves the
 deployed worker and the local session spine each take a real turn.
 
 ### What a failure means
@@ -537,14 +537,14 @@ Four different things, kept apart because they need opposite repairs.
 Either pair, and an explicit one is never overridden:
 
 ```bash
-PROTEUS_ORIGIN=… PROTEUS_TOKEN=…            # deployed/preview worker proxy; mint with
+KINU_ORIGIN=… KINU_TOKEN=…            # deployed/preview worker proxy; mint with
                                             #   kinu tokens create --scope ai.proxy
 AI_GATEWAY_BASE_URL=… AI_GATEWAY_AUTH=…     # an AI Gateway, for models the proxy does not front
 ```
 
-`PROTEUS_BASE_URL` + `PROTEUS_AUTH` are accepted as aliases of the second pair.
+`KINU_BASE_URL` + `KINU_AUTH` are accepted as aliases of the second pair.
 
-`PROTEUS_EVAL_LIVE=1` is the consent switch, and `scripts/eval-tier.sh` is the
+`KINU_EVAL_LIVE=1` is the consent switch, and `scripts/eval-tier.sh` is the
 only thing that sets it, so a credential sitting in your shell cannot make a
 commit hook bill anyone. Running a live suite by hand means setting it yourself.
 
@@ -650,7 +650,7 @@ tests to implementation and produce false confidence.
 | SQL (DO storage) | `createTestSql()`: bun:sqlite `:memory:` + template tag |
 | Credentials | `createTestAuth({ key: { headers: { Authorization: 'Bearer tok' } } })`: resolved auth headers, not raw secrets |
 | AgentRuntime | `createTestRuntime()`: full minimal AgentRuntime |
-| Crafted-tool sandbox | already mocked by `createNodeCraftedExecute` from `@kinu/cli-backend` |
+| Crafted-tool sandbox | already mocked by `createNodeCraftedExecute` from `@kinu.run/cli-backend` |
 
 Do not mock a pure function inside the same package. If `parseModelSpec` or
 `effortFor` is what you are testing, call it directly.
@@ -680,7 +680,7 @@ describe('myFunction', () => {
 
 ```ts
 import { describe, test, expect } from 'bun:test';
-import { createTestRuntime, createJSONLLM } from '@kinu/test-utils';
+import { createTestRuntime, createJSONLLM } from '@kinu.run/test-utils';
 
 test('auto-judge picks current when scores tie', async () => {
   const { rt } = createTestRuntime();
@@ -695,7 +695,7 @@ test('auto-judge picks current when scores tie', async () => {
 
 ```ts
 import { describe, test, expect } from 'bun:test';
-import { createMockFetch, createTestAuth } from '@kinu/test-utils';
+import { createMockFetch, createTestAuth } from '@kinu.run/test-utils';
 import { createMyProvider, MY_CRED_KEY } from '../src/index.ts';
 
 test('sends Authorization: Bearer', async () => {
@@ -717,7 +717,7 @@ test('sends Authorization: Bearer', async () => {
 ```ts
 import { describe, test, expect } from 'bun:test';
 import { createMyStrategy } from '../src/strategy/my-strategy.ts';
-import { createTestRuntime, createScriptedLLM } from '@kinu/test-utils';
+import { createTestRuntime, createScriptedLLM } from '@kinu.run/test-utils';
 
 test('my-strategy explores within budget', async () => {
   const { rt } = createTestRuntime({
@@ -780,7 +780,7 @@ Areas with intentionally low coverage:
 ## Adding a new package to the test suite
 
 1. Create `packages/<your-pkg>/tests/`, matching the existing pattern.
-2. Add `"@kinu/test-utils": "workspace:*"` to your package's
+2. Add `"@kinu.run/test-utils": "workspace:*"` to your package's
    `devDependencies` so the fixtures resolve.
 3. Update `scripts/test.sh` to include the new test directory.
 4. Write tests using the conventions above.

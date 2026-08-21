@@ -6,7 +6,7 @@
 // the shape of the code, not in any value a behaviour test could observe:
 // a subclass that simply *omits* super.alarm() is a well-formed program.
 import { describe, expect, test } from 'bun:test';
-import { memberBody } from '@kinu/test-utils';
+import { memberBody } from '@kinu.run/test-utils';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -109,14 +109,14 @@ describe('the Kinu timer rides the SDK scheduler', () => {
     expect(orchestrator).toContain('new EmailOutbox(this.ctx.storage.sql, (at) => this.armTimer(at))');
     expect(orchestrator).not.toContain('scheduleTimerAt');
     expect(orchestrator).not.toContain('this.ctx.waitUntil(');
-    expect(orchestrator).toContain('await this.schedule(new Date(desired * 1000), PROTEUS_TIMER_CALLBACK)');
-    expect(orchestrator).toContain("const PROTEUS_TIMER_CALLBACK = '_proteusTimerTick'");
-    expect(orchestrator).toContain('async _proteusTimerTick(): Promise<void>');
+    expect(orchestrator).toContain('await this.schedule(new Date(desired * 1000), KINU_TIMER_CALLBACK)');
+    expect(orchestrator).toContain("const KINU_TIMER_CALLBACK = '_kinuTimerTick'");
+    expect(orchestrator).toContain('async _kinuTimerTick(): Promise<void>');
   });
 
   test('the tick closes the chain by re-arming, awaited', () => {
     const tick = orchestrator.slice(
-      orchestrator.indexOf('async _proteusTimerTick(): Promise<void>'),
+      orchestrator.indexOf('async _kinuTimerTick(): Promise<void>'),
       orchestrator.indexOf('/** Compute the next firing time for a cron expression'),
     );
     expect(tick).toContain('if (next !== null) await this.armTimer(next)');
@@ -128,7 +128,7 @@ describe('the Kinu timer rides the SDK scheduler', () => {
     // currently-firing row as "armed" would make the tick's closing re-arm a
     // no-op against itself, which stops the chain.
     expect(armTimer).toContain('Math.max(Math.ceil(atMs / 1000), nowSec)');
-    expect(armTimer).toContain('row.callback === PROTEUS_TIMER_CALLBACK && row.time > nowSec');
+    expect(armTimer).toContain('row.callback === KINU_TIMER_CALLBACK && row.time > nowSec');
     expect(armTimer).toContain('Math.min(targetSec, ...armed.map((row) => row.time))');
   });
 

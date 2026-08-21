@@ -5,7 +5,7 @@ import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, test, expect } from 'bun:test';
 import { handleUserRequest } from '../src/user/routes';
 import type { AuthIdentity } from '../src/auth/session';
-import type { JsonValue } from '@kinu/core';
+import type { JsonValue } from '@kinu.run/core';
 
 const IDENTITY: AuthIdentity = {
   userId: '0123456789abcdef0123456789abcdef',
@@ -56,7 +56,7 @@ function setup() {
 }
 
 async function call(env: Env, ctx: ExecutionContext, path: string, method: string, body?: JsonValue) {
-  return handleUserRequest(new Request(`https://proteus.example.com/api/user${path}`, {
+  return handleUserRequest(new Request(`https://kinu.example.com/api/user${path}`, {
     method,
     headers: { 'content-type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),

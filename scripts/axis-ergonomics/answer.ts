@@ -15,7 +15,7 @@
  *            thing being measured.
  */
 import * as v from 'valibot';
-import { extractJsonObject } from '@kinu/core';
+import { extractJsonObject } from '@kinu.run/core';
 
 const OptText = v.fallback(v.nullable(v.string()), null);
 const OptMap = v.fallback(v.record(v.string(), v.string()), {});
@@ -82,7 +82,7 @@ export function readAnswer(text: string): ReadAnswer {
 /** The CLI's resolved credential file, read for the one field this study needs.
  *  Parsed rather than indexed, because it is a file on disk written by another
  *  program and that is an I/O boundary like any other. */
-export const ProteusConfigSchema = v.looseObject({
+export const KinuConfigSchema = v.looseObject({
   providers: v.fallback(
     v.looseObject({
       openrouter: v.fallback(v.looseObject({ apiKey: v.fallback(v.string(), '') }), { apiKey: '' }),

@@ -18,7 +18,7 @@ import { VIEW_DATA_SOURCES, initViewTables, listViews, readView } from '../src/v
 import { createFileTool, type FileToolInput } from '../src/tools/file-tool';
 import { TurnFileLedger } from '../src/tools/file-ledger';
 import { TurnContextBudget } from '../src/context-budget';
-import { toolExecute } from '@kinu/test-utils';
+import { toolExecute } from '@kinu.run/test-utils';
 import type { JsonValue } from '../src/utils/json';
 
 const ToolSummarySchema = v.object({
@@ -272,10 +272,10 @@ describe('workspace.editFile — the same gate the native `file` tool enforces',
     const exec = buildExec(rt);
     await exec.tools.readFile.execute('notes.md');
     const result = v.parse(FileSuccessSchema, await exec.tools.editFile.execute('notes.md', [
-      { old_text: 'world', new_text: 'proteus' },
+      { old_text: 'world', new_text: 'kinu' },
     ]));
     expect(result.ok).toBe(true);
-    expect(await rt.storage.vfs.readFile('notes.md', { encoding: 'utf8' })).toBe('Hello proteus');
+    expect(await rt.storage.vfs.readFile('notes.md', { encoding: 'utf8' })).toBe('Hello kinu');
   });
 
   test('writeFile then editFile in the same script: the write counts as having read it', async () => {

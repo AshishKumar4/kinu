@@ -39,7 +39,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   or the experience library; each broken streak is a queryable
   `execution_recovery` run event.
 
-- `proteus exec --json` now carries the agent's durable run-event ledger: one
+- `kinu exec --json` now carries the agent's durable run-event ledger: one
   `run_event` line per row, wrapping the row verbatim. That is where the
   delegation nudge (which trigger fired, and whether the model then reached for
   `agents`), the turn's context budget, and a refused mission budget are
@@ -53,10 +53,10 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   (`steering_live_turn` / `starts_now` / `queued`) and `subordinate_phase`.
   A busy helper is steered at its next step rather than waited on, and the
   return finally says so.
-- `proteus create` warns when the new workspace's model has no connected
+- `kinu create` warns when the new workspace's model has no connected
   provider, instead of leaving the first turn to discover it.
 - Headless turns can now earn a POSITIVE evolution signal, not just a negative
-  one. A `proteus exec` turn that acted on the world and finished clean is
+  one. A `kinu exec` turn that acted on the world and finished clean is
   recorded as an execution-grounded success (`source: execution` in the outcome
   ledger); one that errored is recorded as an execution-grounded failure. User
   feedback is unchanged and still first-class — the two are kept distinguishable
@@ -70,16 +70,16 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Changed
 
-- **The product is Kinu, and it runs at https://kinu.run.** Formerly Proteus,
+- **The product is Kinu, and it runs at https://kinu.run.** Formerly Kinu,
   at a hostname on the author's personal zone. This is the only place that name
   appears: kinu.run is a new deployment on a dedicated zone, not a rename of a
   running one, so nothing migrates and no redirect, alias or compatibility path
   exists from the old origin.
 
-  The command is `kinu`. There is no `proteus` alias and no deprecation
+  The command is `kinu`. There is no `kinu` alias and no deprecation
   warning, because a new deployment has no installed base to keep working. The
   served install assets follow it: `/downloads/kinu`,
-  `kinu-source.tar.gz` and `kinu-version.json`. The npm scope is `@kinu/*`.
+  `kinu-source.tar.gz` and `kinu-version.json`. The npm scope is `@kinu.run/*`.
 
   Data does not carry over. Sessions live in a KV namespace instead of D1,
   identities in `UserDO`, and the snapshot bucket and memory index are new and
@@ -89,7 +89,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   stores, and it is the only target tests and evals may run against.
 
   What deliberately keeps the old spelling is machine state on the owner's own
-  disk, not product copy: the `PROTEUS_*` environment variables, `~/.proteus`
+  disk, not product copy: the `KINU_*` environment variables, `~/.kinu`
   and the workspace archives under it. Breaking a local install is not what
   "nothing migrates" means.
 
@@ -144,7 +144,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   and simply never ran), and `agent.jobResult` described itself without saying
   what hands back a `{ jobId }` in the first place — so a local agent was
   measurably worse at steering itself, with nothing failing to show it.
-- `proteus exec` no longer waits on the heavy evolution cadence before it can
+- `kinu exec` no longer waits on the heavy evolution cadence before it can
   exit. The turn-level work (outcome review, the sampled scaffold trial) is
   still joined, now under a bound that says what it abandoned instead of waiting
   forever; the session/lifetime pass — reflection, scaffold proposal, MCTS — is
@@ -158,10 +158,10 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   rather than buffering turns for a later evolution-enabled session to process.
 - CLI failures render through one guidance layer: the provider's own words
   plus the exact next command for the failure class (credential, billing,
-  unknown model, rate limit, context overflow). `proteus exec --json` carries
+  unknown model, rate limit, context overflow). `kinu exec --json` carries
   the hint as a field.
 - `daemon.log` is capped at 1 MiB with one predecessor kept, and
-  `proteus daemon logs` reads across the roll.
+  `kinu daemon logs` reads across the roll.
 
 - Every executor tool now names the CLASS of its own failure. `sandbox`,
   `nimbus`, `laptop`, `parent` and `workspace` used to answer a descriptive
@@ -223,7 +223,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
-- `proteus events` renders rows against a cloud workspace, not raw JSON. The
+- `kinu events` renders rows against a cloud workspace, not raw JSON. The
   cloud read answered `{ events: [...] }` where its four sibling list reads and
   the local events read all answer a bare array, so the row formatter's array
   parse failed and it dumped the JSON instead — formatted output on one backend,
@@ -233,7 +233,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   of the projection. The `/api/workspaces/<name>/events` HTTP route answers a
   bare array too, being a passthrough of the same read.
 - The row formatter no longer degrades silently. A single record riding it —
-  `proteus gepa <runId>`, the one legitimate user of its raw-JSON fallback —
+  `kinu gepa <runId>`, the one legitimate user of its raw-JSON fallback —
   goes to the record printer, which leaves the formatter one legal input shape,
   so an answer that is not a list of rows is now a named refusal pointing at
   `--json`. A new gate reads the formatter's producer inventory out of the
@@ -299,11 +299,11 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   accepted. Both backends now settle on the delivered result, which is what
   the cloud one already did.
 - A local agent's `head_split` / `head_merge` no longer appears twice in
-  `proteus exec --json`. The split was fanned out both as a broadcast and as a
+  `kinu exec --json`. The split was fanned out both as a broadcast and as a
   run-event row; the broadcast copy reached no reader — no CLI surface renders
   a head phase — so it was a duplicate line and nothing else. The run-event row
   is unchanged, and it is the one the cloud backend has always written.
-- The outcome signal is no longer fabricated in headless use. Every `proteus
+- The outcome signal is no longer fabricated in headless use. Every `kinu
   exec` invocation is an independent task, so the next invocation's prompt was
   being read as a conversational follow-up on the previous turn — and the
   classifier counts "asked something new that presumes it worked" as acceptance,
@@ -325,7 +325,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 - A provider rejection no longer reaches the terminal as a raw object dump
   followed by `error [object Object]`.
-- A failed `proteus create` no longer reports itself with a green check.
+- A failed `kinu create` no longer reports itself with a green check.
 
 ## [0.2.0] — 2026-08-07
 
@@ -365,7 +365,7 @@ bottom of this file) starts here.
 - **CLI as a first-class surface.** `create · chat · run · exec · sessions ·
   daemon · doctor · provider · connect · export/import · acp`, an OpenTUI
   terminal UI, session recording and search, checkpoints with `/undo`,
-  Alternate Takes, steer-as-branch, and `proteus exec` with `--json` for CI.
+  Alternate Takes, steer-as-branch, and `kinu exec` with `--json` for CI.
 - **Agent Client Protocol (ACP)** support, so external editors can drive a
   workspace.
 - **Device tunnel.** User-level (not per-agent) tunnel to the owner's machine
@@ -382,7 +382,7 @@ bottom of this file) starts here.
 ### Changed
 
 - **One shared spine.** The turn pipeline, prompting, compaction ladder and
-  context budget live in `@kinu/core`; the Cloudflare and CLI backends are
+  context budget live in `@kinu.run/core`; the Cloudflare and CLI backends are
   thin adapters over it instead of two drifting implementations.
 - **Tool surface consolidated** to 11 built-ins (`BUILTIN_TOOLS` in
   `packages/core/src/tools/registry.ts`). Filesystem work folds into the
@@ -438,10 +438,10 @@ smoke gate rather than trusting this list).
 4. **Promote `[Unreleased]`** to the new version with today's date, and open a
    fresh empty `[Unreleased]` above it.
 5. **Deploy through `scripts/deploy.sh`.** It builds the source archive, stamps
-   `+<sha>` into the shipped version, publishes `proteus-version.json`, and only
+   `+<sha>` into the shipped version, publishes `kinu-version.json`, and only
    then runs the smoke gate that downloads the tarball and verifies its
    published sha256. A deploy made any other way can ship a tree without
    `downloads/`, which breaks every install and update.
-6. **Verify the served version**: `curl -s <origin>/downloads/proteus-version.json`
-   should report the version you just published, and `proteus doctor` on a
-   throwaway `PROTEUS_HOME` should read `served: <version> (current)`.
+6. **Verify the served version**: `curl -s <origin>/downloads/kinu-version.json`
+   should report the version you just published, and `kinu doctor` on a
+   throwaway `KINU_HOME` should read `served: <version> (current)`.

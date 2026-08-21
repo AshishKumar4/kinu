@@ -1,1 +1,1 @@
-export { nextAlarmTime, nextCronFire } from '@kinu/core';
+export { nextAlarmTime, nextCronFire } from '@kinu.run/core';

@@ -11,9 +11,9 @@ import {
   type LLMProviderConfig,
   type ReasoningEffort,
   type SuggestedWorkspaceIdentity,
-} from '@kinu/core';
-import { createWorkspace } from '@kinu/core/identity';
-import { makeWorkspaceSchemaSql } from '@kinu/cli-backend';
+} from '@kinu.run/core';
+import { createWorkspace } from '@kinu.run/core/identity';
+import { makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
 import {
   agentDbPath,
   agentDir,

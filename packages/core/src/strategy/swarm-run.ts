@@ -128,7 +128,7 @@ import { readProposalCode } from '../execution/code-fence';
 import { extractJsonObject } from '../prompts/structured';
 import { diagnostics, renderThrownChain, type Logger } from '../obs/index';
 import {
-  ProteusError, refusalOf, renderCauseChain, toProteusError, type Refusal,
+  KinuError, refusalOf, renderCauseChain, toKinuError, type Refusal,
 } from '../obs/error';
 import { renderIssues } from '../utils/json';
 import { nanoid } from '../utils/nanoid';
@@ -385,15 +385,15 @@ function measuredHalf(objective: Objective): MeasuredObjective | null {
 }
 
 function unsupported(error: string): Refusal {
-  return refusalOf(new ProteusError('unsupported', error));
+  return refusalOf(new KinuError('unsupported', error));
 }
 
 function unavailable(error: string): Refusal {
-  return refusalOf(new ProteusError('unavailable', error));
+  return refusalOf(new KinuError('unavailable', error));
 }
 
 function badInput(error: string): Refusal {
-  return refusalOf(new ProteusError('bad_input', error));
+  return refusalOf(new KinuError('bad_input', error));
 }
 
 /**
@@ -1169,7 +1169,7 @@ interface Expansion {
  */
 type NodeAnswer =
   | { readonly kind: 'expanded'; readonly expansion: Expansion }
-  | { readonly kind: 'failed'; readonly error: ProteusError };
+  | { readonly kind: 'failed'; readonly error: KinuError };
 
 /** One member of a level as the barrier waits on it: the node's own run, and its id. */
 interface LevelMember {
@@ -1204,7 +1204,7 @@ async function awaitLevel(members: readonly LevelMember[]): Promise<readonly Lev
         id: member.id,
         answer: {
           kind: 'failed',
-          error: toProteusError({
+          error: toKinuError({
             doing: `expand node ${member.id} of this level`, cause, otherwise: 'unavailable',
           }),
         },
@@ -2302,7 +2302,7 @@ export async function runSwarm(
     const reverify: Reverifier = async ({ member, baseDigest }) => {
       const answer = answers.get(member.nodeId);
       if (answer === undefined) {
-        return refusalOf(new ProteusError('unavailable',
+        return refusalOf(new KinuError('unavailable',
           `this fan-in holds no answer for node ${member.nodeId}, so nothing here can re-measure it `
           + 'against the base the members before it moved. A verdict that cannot be revalidated '
           + 'never applies.'));
@@ -2316,7 +2316,7 @@ export async function runSwarm(
         { path: instrument.artifact, base: answer, after: before },
       ]);
       if (outcome.kind === 'instrument-faulted') {
-        return refusalOf(new ProteusError('unavailable',
+        return refusalOf(new KinuError('unavailable',
           `the instrument faulted while re-checking ${member.nodeId} against the base this fan-in `
           + `moved: ${outcome.error}. That is the instrument breaking rather than the member `
           + 'failing, and it refuses the apply instead of guessing.'));
@@ -3316,7 +3316,7 @@ async function reportedMember(input: {
 function singlePathApply(vfs: VFS): MemberApply {
   return async (files) => {
     if (files.length > 1) {
-      throw new ProteusError('unsupported',
+      throw new KinuError('unsupported',
         `this workspace can apply one path atomically and this member has ${
           String(files.length)
         }. A per-file loop would publish a committed prefix if a later file failed, so it is `

@@ -7,14 +7,15 @@
  * (`consents`, `localControls`, `checkpoints`) and is null elsewhere.
  */
 
-import { JsonObjectSchema } from '@kinu/core';
+import { JsonObjectSchema } from '@kinu.run/core';
 import type {
   BroadcastEvent, ChangelogEntry, ChangelogRevertResult, PromptFile, ShellApprovalMode,
   FileCheckpointListing, FileRestorePlan, FileRestoreResult,
   AlternateTakeSet, TakePickOutcome,
+  EvolutionConfigView,
   ReasoningEffort, Usage, RunEvent, JsonObject, JsonValue,
-} from '@kinu/core';
-import type { ShellApprovalHandler } from '@kinu/cli-backend';
+} from '@kinu.run/core';
+import type { ShellApprovalHandler } from '@kinu.run/cli-backend';
 import type { CliSession, CliSessionInfo } from './session';
 import type { AgentModelMenu } from './model-catalog';
 import * as v from 'valibot';
@@ -224,7 +225,7 @@ export interface FileCheckpointSurface {
   /** `turnId` narrows in the STORE, which is the only way to read one turn
    *  completely: `limit` is global across working directories while retention is
    *  per directory, so a window can hold part of a turn. See
-   *  FileCheckpoints.list in @kinu/core. */
+   *  FileCheckpoints.list in @kinu.run/core. */
   list(limit?: number, turnId?: string): Promise<FileCheckpointListing>;
   plan(dir: string, id: string): Promise<FileRestorePlan>;
   restore(dir: string, id: string): Promise<FileRestoreResult>;
@@ -328,6 +329,10 @@ export interface AgentClient {
   setModel(spec: string): Promise<{ spec: string }>;
   getReasoningEffort(): Promise<ReasoningEffort | null>;
   setReasoningEffort(effort: ReasoningEffort): Promise<{ effort: ReasoningEffort }>;
+  /** The self-evolution knobs, including the advisor gate (`/advisor`). */
+  getEvolutionConfig(): Promise<EvolutionConfigView>;
+  /** Set any subset of them; answers with the effective config. */
+  setEvolutionConfig(view: Partial<EvolutionConfigView>): Promise<EvolutionConfigView>;
   listModels(): Promise<AgentModelMenu>;
 }
 

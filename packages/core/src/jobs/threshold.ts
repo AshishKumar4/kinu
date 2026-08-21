@@ -223,7 +223,7 @@ export async function withSpawnDetach<T>(
  *  is the moment {@link withSpawnDetach} detaches. Absent on inline surfaces
  *  (codemode `agents.*`, resume re-drives, the raw eval toolset), where the
  *  same tool simply runs to completion. */
-export const SPAWN_STARTED_OPTION = 'proteusSpawnStarted';
+export const SPAWN_STARTED_OPTION = 'kinuSpawnStarted';
 
 const SpawnStartedOptionsSchema = v.object({
   [SPAWN_STARTED_OPTION]: v.optional(v.function()),
@@ -252,7 +252,7 @@ export function readSpawnStarted<T>(toolOptions: T): (() => void) | undefined {
  * reason: the input is the durable row, and a field this path added to it would be
  * persisted on the next detach and re-read as if the model had sent it.
  */
-export const RESUME_REDRIVE_OPTION = 'proteusResumeRedrive';
+export const RESUME_REDRIVE_OPTION = 'kinuResumeRedrive';
 
 const ResumeRedriveOptionsSchema = v.object({
   [RESUME_REDRIVE_OPTION]: v.optional(v.boolean()),

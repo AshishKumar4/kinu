@@ -3,7 +3,7 @@
 // workspace VFS first — the marker carries the path and the file round-trips
 // through the real file surface, so nothing is irrecoverable.
 import { describe, test, expect } from 'bun:test';
-import { toolExecute } from '@kinu/test-utils';
+import { toolExecute } from '@kinu.run/test-utils';
 import { jsonSchema, tool } from 'ai';
 import * as v from 'valibot';
 import {

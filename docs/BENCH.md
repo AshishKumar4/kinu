@@ -289,8 +289,8 @@ restores every test file from the pristine tree and deletes any the solver
 added. Editing the thing that measures you cannot raise the number.
 
 **Isolation.** `assertScratchRoot` refuses any run root inside `$HOME` or inside
-the repo. Every attempt gets its own sandbox copy and its own `PROTEUS_HOME`, and
-`sandboxEnv` strips inherited `PROTEUS_*` so an operator's ambient environment
+the repo. Every attempt gets its own sandbox copy and its own `KINU_HOME`, and
+`sandboxEnv` strips inherited `KINU_*` so an operator's ambient environment
 cannot reach a scored run. Provider config for agent variants comes from
 `BENCH_BASE_URL`, `BENCH_AUTH` and `BENCH_MODEL` for the same reason.
 
@@ -505,7 +505,7 @@ builds them. The two panel arms exist in the `defect` family only;
 `--family longhorizon` rejects them as unknown variants.
 
 Agent variants run in a subprocess (`scripts/bench-agent-worker.ts`). The local
-shell and laptop executor root themselves at `process.cwd()`, and `PROTEUS_HOME`
+shell and laptop executor root themselves at `process.cwd()`, and `KINU_HOME`
 is read once at module load. An in-process driver would therefore run every
 attempt against the harness's own working directory and home. The worker drives
 a whole ask sequence on one session. A defect task gets one ask. A continuation
@@ -635,10 +635,10 @@ export PATH="$HOME/.local/bin:$PATH"          # harbor
 export PYTHONPATH="$PWD"                      # so harbor can import bench.harbor
 # Mint once from a fresh interactive sign-in, then load it from your secret store.
 # kinu tokens create --name harbor --scopes ai.proxy
-export PROTEUS_TOKEN=pta_…
+export KINU_TOKEN=pta_…
 
 harbor run \
-  --agent bench.harbor.proteus_agent:ProteusAgent \
+  --agent bench.harbor.kinu_agent:KinuAgent \
   --path ./deep-swe -i <task-name> \
   --ak evolve=false \
   --allow-agent-host kinu.run \
@@ -652,12 +652,12 @@ reaches `kinu exec --no-auto-evolve`, which is the CLI's switch over the
 flips internally.
 
 Other kwargs are `workspace` (workspace name, default `harbor`), `mission` (the
-workspace's opening mission) and `proteus_repo` (which checkout to build from).
+workspace's opening mission) and `kinu_repo` (which checkout to build from).
 The default model is native Workers AI `@cf/deepseek-ai/deepseek-v4-pro-0813`,
-reached through Kinu's signed-in `/api/user/ai/v1` proxy with `PROTEUS_TOKEN`,
+reached through Kinu's signed-in `/api/user/ai/v1` proxy with `KINU_TOKEN`,
 or the session from `kinu auth`. A long-lived access token needs the
 `ai.proxy` scope. A direct Cloudflare endpoint uses `CLOUDFLARE_API_TOKEN`, and
-explicit BYO runs can still set `PROTEUS_BASE_URL`, `PROTEUS_AUTH` and `-m`
+explicit BYO runs can still set `KINU_BASE_URL`, `KINU_AUTH` and `-m`
 together.
 
 ### The launchers and the readers
@@ -669,7 +669,7 @@ documentation defect rather than a property of the arm, so they are listed now.
 
 | Command | What it is |
 |---|---|
-| `scripts/tbench-arm.sh <evolve> <seed> <size> <model-id> <concurrency>` | One Terminal-Bench 2.1 arm. The mechanism behind `seal-ledger.jsonl` ordinals 6 to 8. It REFUSES to start if `PROTEUS_BASE_URL`, `PROTEUS_AUTH`, `PROTEUS_MODEL` or `PROTEUS_HOME` is set in the shell. Unset them; do not blank them. It reads its token from `~/.config/proteus/bench-token`, and a missing file surfaces as bash's own `cat` error, which is the weakest failure message of any arm here. |
+| `scripts/tbench-arm.sh <evolve> <seed> <size> <model-id> <concurrency>` | One Terminal-Bench 2.1 arm. The mechanism behind `seal-ledger.jsonl` ordinals 6 to 8. It REFUSES to start if `KINU_BASE_URL`, `KINU_AUTH`, `KINU_MODEL` or `KINU_HOME` is set in the shell. Unset them; do not blank them. It reads its token from `~/.config/kinu/bench-token`, and a missing file surfaces as bash's own `cat` error, which is the weakest failure message of any arm here. |
 | `scripts/tbench-after-deploy.sh <sha-file> <evolve> <seed> <size> <model> <concurrency>` | The same arm, held until the deployed worker serves a declared commit sha, so the model transport is confirmed rather than mid-deploy. `TBENCH_WAIT_CAP` defaults to 5400 s and `TBENCH_SETTLE` to 120 s. |
 | `bun scripts/bench-external.ts compare --a <job-dir> --b <job-dir>` | Reads retained trials out of Harbor job directories and pairs them through this repo's one statistics path. Also `gain --stateful <dir> --stateless <dir>`. No model and no credential. It computes nothing new, and it reuses the comparator so an external corpus cannot get a second, friendlier one. |
 | `bun scripts/eval-dispersion.ts <runA.json> <runB.json> [--target-pp N]` | The corpus's own noise (ψ), from two runs of the SAME arm. It refuses two records whose arm configuration differs (`evolution` or `settle`), because their difference is an effect and not dispersion. It reads the run records `tests/evals/behaviour.eval.ts` writes. |
@@ -683,22 +683,22 @@ nowhere: `BENCH_RUN_ROOT` (fallback for `--run-root`), `BENCH_ARTIFACTS`
 
 Two properties the adapter enforces rather than assumes.
 
-**`PROTEUS_HOME` is set, always.** Everything durable a local run writes lands
-under `$PROTEUS_HOME`: config, the workspace database, sessions, shadow-git
-checkpoints. An unset one means `~/.proteus`. The adapter points it at
-`/installed-agent/proteus-home`, created per container and destroyed with it, and
+**`KINU_HOME` is set, always.** Everything durable a local run writes lands
+under `$KINU_HOME`: config, the workspace database, sessions, shadow-git
+checkpoints. An unset one means `~/.kinu`. The adapter points it at
+`/installed-agent/kinu-home`, created per container and destroyed with it, and
 puts that path through `bench/isolation.py`. That is the Python counterpart of
 `assertScratchRoot`, and it refuses an unset or relative home, the operator's
-real `~/.proteus`, and anything inside this checkout. The CL-Bench adapter
+real `~/.kinu`, and anything inside this checkout. The CL-Bench adapter
 resolves its own home through the same function, so the rule has one definition
 and a launcher that skips it fails loudly.
 
 **The credential never reaches a command line.** Harbor renders per-exec
 environment as `docker compose exec -e KEY=VALUE`, which publishes the value to
 every `ps` on the host and to Harbor's own command log. So the adapter uploads
-the run environment into the container as `/installed-agent/proteus.env`, mode
+the run environment into the container as `/installed-agent/kinu.env`, mode
 0600 and owned by the agent user, and wraps every Kinu invocation in `set -a;
-. /installed-agent/proteus.env; set +a;`. The command line names the path and
+. /installed-agent/kinu.env; set +a;`. The command line names the path and
 nothing else. There is no second way for the adapter to pass configuration, so
 there is no second way for a key to leak back onto argv.
 
@@ -717,11 +717,11 @@ the model endpoint.
 
 Inside the container the adapter creates a fresh local workspace per trial and
 hands the task instruction to `kinu exec --json`, teed to
-`/logs/agent/proteus.jsonl`. `populate_context_post_run` converts that stream to
+`/logs/agent/kinu.jsonl`. `populate_context_post_run` converts that stream to
 an ATIF `trajectory.json` and reports the turn's token usage. `cost_usd` stays
 unset, because Kinu reports tokens and not prices.
 
-Reading the stream is `bench/clbench/proteus/events.py`, one reader for the CLI's
+Reading the stream is `bench/clbench/kinu/events.py`, one reader for the CLI's
 event contract, shared with the CL-Bench adapter. A change to the event shape
 breaks a test instead of quietly degrading two benchmark scores.
 
@@ -730,7 +730,7 @@ breaks a test instead of quietly degrading two benchmark scores.
 The stream also carries the agent's durable run-event ledger. Each `run_event`
 line wraps one row of the agent's `run_events` table, verbatim. That is where
 the harness-side measurements live. `run_events(events, *kinds)` in
-`bench/clbench/proteus/events.py` reads and filters them, and the adapter keeps
+`bench/clbench/kinu/events.py` reads and filters them, and the adapter keeps
 the whole ledger in `trajectory.json` and the trial metadata. The table lives in
 the container's database and dies with the container, so the stream is the only
 copy.
@@ -787,11 +787,11 @@ Harbor gives every trial its own container, and the adapter creates a fresh
 workspace inside it. So `evolve=true` measures the evolution machinery running
 **within a single task**: reflection, scaffold mutation and lesson-writing during
 the turn. It does **not** measure state carried **across** tasks, which is what
-`agent-evolving` tests internally by sharing one `PROTEUS_HOME` over a whole
+`agent-evolving` tests internally by sharing one `KINU_HOME` over a whole
 sequence.
 
 Carrying state across Harbor trials would mean bind-mounting one host
-`~/.proteus` into every container. Concurrent trials would then race on one
+`~/.kinu` into every container. Concurrent trials would then race on one
 SQLite database, and the task order would be whatever the scheduler picked. That
 is a change to the harness rather than a flag, and until it exists an external
 paired run answers the narrower question.

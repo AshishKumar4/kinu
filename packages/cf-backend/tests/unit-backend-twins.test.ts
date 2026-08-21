@@ -167,6 +167,12 @@ const SHARED_TRANSPORTS = {
   resumeBackgroundJob: 'resumeBackgroundJob',
   revertChangelogEntry: 'revertChangelogEntryById',
   revokeShellApprovalGrants: 'revokeShellApprovalGrants',
+  // The whole turn-end policy — enabled, review, the four suppression rules,
+  // deliver-or-record — is core's `runAdvisorLane`. What each body states is
+  // only what its own backend knows: where the governor lives, and whether a
+  // completion gate exists at all (it is the one-shot CLI surface's mechanism,
+  // so cf passes `gateOpen: false` by construction).
+  reviewTurnInBackground: 'runAdvisorLane',
   runScaffoldGepaOptimization: 'runScaffoldGepaOptimization',
   runScaffoldOnce: 'runScaffoldOnce',
   // Accessors over ONE core object (ModelCatalogSession), three lines each.

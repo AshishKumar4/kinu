@@ -9,7 +9,7 @@ import type { AgentContext } from 'agents';
 import { mockAgentsSdk } from './agents-sdk';
 import { sha256Hex } from '../../src/lib/crypto';
 import { ownerCaller, type UserCaller } from '../../src/user/workspace-capability';
-import type { SqlExec, SqlExecRow, SqlExecutor, SqlValue } from '@kinu/core';
+import type { SqlExec, SqlExecRow, SqlExecutor, SqlValue } from '@kinu.run/core';
 
 mockAgentsSdk();
 

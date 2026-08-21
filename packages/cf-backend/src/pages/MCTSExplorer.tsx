@@ -25,15 +25,15 @@ import {
   selectForkRun, useExactForkRun, useLiveForkRuns,
 } from "@/components/surfaces/fork-runs";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { useProteus } from "@/hooks/use-proteus";
+import { useKinu } from "@/hooks/use-kinu";
 import { useElementSize } from "@/hooks/use-element-size";
-import type { ForkRunSummary } from "@kinu/core";
+import type { ForkRunSummary } from "@kinu.run/core";
 
 export default function MCTSExplorer() {
   const { agentId } = useParams();
   const [params] = useSearchParams();
   const runId = params.get("run");
-  const state = useProteus(agentId);
+  const state = useKinu(agentId);
   const { attach, size: dims } = useElementSize();
 
   const { resource, reload, runs, hasActiveWork } = useLiveForkRuns(
@@ -110,7 +110,7 @@ function ExplorerBody({
   run, state, attach, dims, hasActiveWork,
 }: {
   run: ForkRunSummary;
-  state: ReturnType<typeof useProteus>;
+  state: ReturnType<typeof useKinu>;
   attach: (el: HTMLDivElement | null) => void;
   dims: { w: number; h: number };
   hasActiveWork: boolean;

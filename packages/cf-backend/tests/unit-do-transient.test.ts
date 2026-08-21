@@ -8,7 +8,7 @@
 // PLATFORM_CATALOG['do.reset.transient'], the entry the classifier cites, so the
 // two cannot drift apart.
 import { describe, test, expect } from 'bun:test';
-import { PLATFORM_CATALOG } from '@kinu/core';
+import { PLATFORM_CATALOG } from '@kinu.run/core';
 import { retryTransientDO, classifyTransientDO } from '../src/lib/do-rpc';
 import { claimOwnedWorkspace } from '../src/user/workspace-access';
 

@@ -38,7 +38,7 @@ export type WorkMode = 'plan' | 'build';
  * Two values, because two are all that exist. `cron` and `release` were here
  * and neither had a producer: a timer fire is published as an EVENT
  * (`ingress: 'timer_alarm'`, events/ingress/triggers.ts) and reaches the agent
- * through the reactor drain as `proteusEvent: 'event_drain'`, never under a
+ * through the reactor drain as `kinuEvent: 'event_drain'`, never under a
  * timer- or cron-named event; and nothing anywhere stamps a release mode. The
  * guidance written for both of them had therefore never reached a model.
  */
@@ -46,8 +46,8 @@ export type TurnProvenance = 'chat' | 'background_resume';
 
 const WorkModeSchema = v.picklist(['plan', 'build']);
 const TurnMetadataSchema = v.object({
-  proteusMode: v.optional(v.unknown()),
-  proteusEvent: v.optional(v.unknown()),
+  kinuMode: v.optional(v.unknown()),
+  kinuEvent: v.optional(v.unknown()),
 });
 const ExternalToolSchema = v.object({
   name: v.string(),
@@ -60,13 +60,13 @@ export function isWorkMode<Value>(value: Value): value is Value & WorkMode {
 }
 
 /**
- * Why the turn is running, from the `proteusEvent` metadata a programmatic
+ * Why the turn is running, from the `kinuEvent` metadata a programmatic
  * turn carries (BackendHost.enqueueTurn stamps it; a chat turn carries none).
  *
  * Read from the EVENT alone. The work mode stamped beside it answers a
  * different question, and letting that win here is what hid every wake:
- * jobs/runner.ts stamps `proteusEvent: 'background_job'` AND
- * `proteusMode: job.workMode` on the same message, and `work_mode` is never
+ * jobs/runner.ts stamps `kinuEvent: 'background_job'` AND
+ * `kinuMode: job.workMode` on the same message, and `work_mode` is never
  * null, so the resume overlay could not render in production.
  *
  * Shared by BOTH backends: the guidance that tells the agent to collect a
@@ -76,17 +76,17 @@ export function isWorkMode<Value>(value: Value): value is Value & WorkMode {
 export function turnProvenanceForMetadata<Metadata>(metadata: Metadata): TurnProvenance {
   const parsed = v.safeParse(TurnMetadataSchema, metadata);
   if (!parsed.success) return 'chat';
-  return parsed.output.proteusEvent === 'background_job' ? 'background_resume' : 'chat';
+  return parsed.output.kinuEvent === 'background_job' ? 'background_resume' : 'chat';
 }
 
-/** What the turn may do. Only an explicit, recognized `proteusMode` can raise
+/** What the turn may do. Only an explicit, recognized `kinuMode` can raise
  *  the Plan bar; everything else is ordinary unconstrained work. Delegated
  *  children inherit this same value, so a Plan parent propagates its bar and
  *  an autonomous wake never weakens one. */
 export function workModeForTurnMetadata<Metadata>(metadata: Metadata): WorkMode {
   const parsed = v.safeParse(TurnMetadataSchema, metadata);
   if (!parsed.success) return 'build';
-  return parsed.output.proteusMode === 'plan' ? 'plan' : 'build';
+  return parsed.output.kinuMode === 'plan' ? 'plan' : 'build';
 }
 
 export interface PromptExecutorInfo {

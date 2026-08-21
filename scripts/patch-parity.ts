@@ -72,7 +72,7 @@
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { gitEnv, scratchDir } from '@kinu/test-utils';
+import { gitEnv, scratchDir } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
 

@@ -3,13 +3,13 @@
 // config key, the session-daemon lifecycle (spawned tied to the CLI, killed
 // on exit, no-op next to a persistent daemon), connectDevice against a stub
 // cloud origin, and the desktop command staying a thin shell over the module.
-// Env-dependent paths (PROTEUS_HOME) run in subprocesses like config.test.ts.
+// Env-dependent paths (KINU_HOME) run in subprocesses like config.test.ts.
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { Server, Subprocess } from 'bun';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { parseJsonObject, type JsonObject } from '@kinu/core';
+import { parseJsonObject, type JsonObject } from '@kinu.run/core';
 import type { CloudDevice } from '../src/cloud-api';
 import { CloudAgentClient } from '../src/cloud-agent-client';
 import * as v from 'valibot';
@@ -65,7 +65,7 @@ function startStubCloud(opts: { devices?: () => CloudDevice[]; daemonScript?: st
 }
 
 function makeHome(config: JsonObject): string {
-  const home = mkdtempSync(join(tmpdir(), 'proteus-device-'));
+  const home = mkdtempSync(join(tmpdir(), 'kinu-device-'));
   tempDirs.push(home);
   writeFileSync(join(home, 'config.json'), `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
   return home;
@@ -75,7 +75,7 @@ async function runScript(home: string, script: string) {
   const proc = Bun.spawn({
     cmd: [process.execPath, '-e', script],
     cwd: repoRoot,
-    env: { ...process.env, PROTEUS_HOME: home },
+    env: { ...process.env, KINU_HOME: home },
     stdout: 'pipe',
     stderr: 'pipe',
   });
@@ -174,7 +174,7 @@ describe('device-connect daemon lifecycle', () => {
     const daemonScript = `
       const fs = require('node:fs');
       const path = require('node:path');
-      fs.writeFileSync(path.join(process.env.PROTEUS_HOME, 'fake-daemon.pid'), String(process.pid));
+      fs.writeFileSync(path.join(process.env.KINU_HOME, 'fake-daemon.pid'), String(process.pid));
       setInterval(() => {}, 1000);
     `;
     const stub = startStubCloud({ devices: () => [connectedDevice(true)], daemonScript });
@@ -260,7 +260,7 @@ describe('classic cloud chat connect prompt', () => {
     const cliBin = resolve(repoRoot, 'packages/cli/bin/cli.ts');
     const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
     const command = [
-      `PROTEUS_HOME=${quote(home)}`,
+      `KINU_HOME=${quote(home)}`,
       quote(process.execPath),
       quote(cliBin),
       'chat',
@@ -304,7 +304,7 @@ describe('classic cloud chat connect prompt', () => {
     const daemonScript = `
       const fs = require('node:fs');
       const path = require('node:path');
-      fs.writeFileSync(path.join(process.env.PROTEUS_HOME, 'fake-daemon.pid'), String(process.pid));
+      fs.writeFileSync(path.join(process.env.KINU_HOME, 'fake-daemon.pid'), String(process.pid));
       setInterval(() => {}, 1000);
     `;
     const stub = startStubCloud({
@@ -343,7 +343,7 @@ describe('classic cloud chat connect prompt', () => {
       stdin: Buffer.from('/exit\n'),
       stdout: 'pipe',
       stderr: 'pipe',
-      env: { ...process.env, PROTEUS_HOME: home },
+      env: { ...process.env, KINU_HOME: home },
     });
 
     const [stdout, exitCode] = await Promise.all([
@@ -360,7 +360,7 @@ describe('/connect slash command', () => {
   test('is offered to consent-capable clients and returns the device-connect outcome', async () => {
     const { commandsForClient, executeSlashCommand } = await import('../src/slash-commands');
     const clientOptions = {
-      origin: 'https://proteus.invalid', token: 'test', agentName: 'test', cloudName: 'test',
+      origin: 'https://kinu.invalid', token: 'test', agentName: 'test', cloudName: 'test',
       session: { noSession: true },
     };
     const cloudish = new CloudAgentClient(clientOptions);

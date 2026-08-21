@@ -1057,7 +1057,7 @@ export const PLATFORM_CATALOG = {
       + 'destination, so decide BEFORE the clone, with reserve, on the arithmetic '
       + 'X·(N+1) <= quota. A generic internal-storage reset must therefore NOT be filed as '
       + 'unavailable-storage and left there: quota exhaustion is decidable in advance. '
-      + 'BUT NONE OF THAT DESCRIBES PROTEUS TODAY, and reading it as though it did is the error '
+      + 'BUT NONE OF THAT DESCRIBES KINU TODAY, and reading it as though it did is the error '
       + 'this paragraph previously invited. There is NO clone path here — zero `ctx.facets.clone(` '
       + 'call sites outside this file — so a Kinu fork copies nothing: it shares the parent\'s '
       + 'Nimbus file plane and gets an EMPTY private SQLite of 4096 bytes. The clone arithmetic is '
@@ -1461,7 +1461,7 @@ export const PLATFORM_CATALOG = {
     ],
     notes:
       'Parallel exploration is built on facets, so N heads are N isolates on ONE thread. '
-      + 'NO PROTEUS FORK LATENCY HAS BEEN ATTRIBUTED TO THIS MECHANISM, and the current '
+      + 'NO KINU FORK LATENCY HAS BEEN ATTRIBUTED TO THIS MECHANISM, and the current '
       + 'exposure looks weak rather than strong: heads are predominantly I/O-bound, and an '
       + 'awaited generateText yields the thread for nearly all of a head\'s wall clock. This is '
       + 'a forward-looking hazard, catalogued so that a future "why did a trivial head RPC take '
@@ -1679,7 +1679,7 @@ export const PLATFORM_CATALOG = {
       + 'compatibility promise, so building on it is a bet. The quota half is the trap: an O(1) '
       + 'clone is not a cheap clone, and crossing the 10 GB quota with one is a silent reset '
       + 'that leaves the destination empty. '
-      + 'PROTEUS DOES NOT USE THIS TODAY: there are zero `ctx.facets.clone(` call sites outside '
+      + 'KINU DOES NOT USE THIS TODAY: there are zero `ctx.facets.clone(` call sites outside '
       + 'this file, and a fork shares the parent\'s file plane rather than copying it. Catalogued '
       + 'because it is the obvious thing to reach for when someone wants cheap forking, and both '
       + 'its traps — no compatibility promise, full logical bytes against the quota — are '
@@ -1945,7 +1945,7 @@ export const PLATFORM_CATALOG = {
     firstPartySignal: false,
     notes:
       'THE SAME FAILURE AS do.isolate.cotenancy, INSIDE THIS REPO. '
-      + '`packages/cf-backend/src/hooks/use-proteus.ts` ships a live 25 s application-level '
+      + '`packages/cf-backend/src/hooks/use-kinu.ts` ships a live 25 s application-level '
       + 'heartbeat on every open connection and justified it with a bare "STABILITY-AUDIT §A4"; '
       + 'that document is NOT in the working tree — only its screenshots survived the '
       + 'public-repo purge — and its recovered text (git 947c2560:docs/STABILITY-AUDIT.md §A4) '

@@ -212,9 +212,9 @@ describe('wiring invariants (edge → ticket → DO, one policy table)', () => {
   });
 
   test('the header constant has one home', () => {
-    expect(CLI_SCOPES_HEADER).toBe('x-proteus-cli-scopes');
-    expect(source('src/server.ts')).not.toContain("'x-proteus-cli-scopes'");
-    expect(source('src/orchestrator.ts')).not.toContain("'x-proteus-cli-scopes'");
+    expect(CLI_SCOPES_HEADER).toBe('x-kinu-cli-scopes');
+    expect(source('src/server.ts')).not.toContain("'x-kinu-cli-scopes'");
+    expect(source('src/orchestrator.ts')).not.toContain("'x-kinu-cli-scopes'");
   });
 });
 

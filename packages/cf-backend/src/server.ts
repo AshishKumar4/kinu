@@ -22,8 +22,8 @@
  */
 
 import { routeAgentRequest } from "agents";
-import { ORCHESTRATOR_AGENT_SLUG } from "@kinu/core";
-import { diagnostics, renderThrownChain, toProteusError } from "@kinu/core/obs";
+import { ORCHESTRATOR_AGENT_SLUG } from "@kinu.run/core";
+import { diagnostics, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
 import {
   extractOrchestratorAgentName,
   extractTicketOrchestratorAgentName,
@@ -70,7 +70,7 @@ export { OrchestratorAgent } from "./orchestrator";
 // Head mode: initHead() / runAsHead() / abortHead() — multi-step branching heads.
 export { ExplorationAgent } from "./exploration";
 export { SubordinateAgent } from "./subordinate-agent";
-export { ProteusSandbox } from "./proteus-sandbox";
+export { KinuSandbox } from "./kinu-sandbox";
 // REQUIRED for outbound interception, and silent if forgotten. The Sandbox DO
 // builds its interception fetchers from `ctx.exports.ContainerProxy`, so
 // without this export `applyOutboundInterception` throws and no egress handler
@@ -264,7 +264,7 @@ export default {
           });
         }
       } catch (e) {
-        diagnostics.failure('monitor.check_failed', toProteusError({
+        diagnostics.failure('monitor.check_failed', toKinuError({
           doing: 'running the synthetic monitoring tick',
           cause: e,
           otherwise: 'unavailable',
@@ -276,8 +276,8 @@ export default {
 
 function appendIdentityHeaders(h: Headers, identity: AuthIdentity): Headers {
   const next = new Headers(h);
-  next.set('x-proteus-user-id', identity.userId);
-  if (identity.authTime) next.set('x-proteus-auth-time', String(identity.authTime));
+  next.set('x-kinu-user-id', identity.userId);
+  if (identity.authTime) next.set('x-kinu-auth-time', String(identity.authTime));
   // Always rewritten from the verified identity so a client can never smuggle
   // (or strip) the scope restriction the DO websocket boundary enforces.
   next.delete(CLI_SCOPES_HEADER);
@@ -456,7 +456,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     // SECURITY (F1): routeAgentRequest (partyserver) maps EVERY DO namespace
     // binding by slug, and its facet router recursively resolves literal
     // /sub/{class}/{name} segments. The closed-path rejection above keeps
-    // UserDO, ExplorationAgent, ProteusSandbox and Nimbus* worker-side-only.
+    // UserDO, ExplorationAgent, KinuSandbox and Nimbus* worker-side-only.
     const denial = await ensureAgentOwnership(env, identity, agentName);
     if (denial) return denial;
     // Inject the userId so downstream handlers can resolve UserDO without

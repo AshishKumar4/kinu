@@ -16,7 +16,7 @@
  */
 
 import { appendFileSync, copyFileSync, readFileSync, statSync, truncateSync } from 'node:fs';
-import { tolerate } from '@kinu/core/obs';
+import { tolerate } from '@kinu.run/core/obs';
 
 /** Rotate at 1 MiB, keeping exactly one predecessor: ~2 MiB of history is
  *  plenty to explain a misfiring trigger and costs nothing to keep. */

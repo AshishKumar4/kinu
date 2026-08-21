@@ -1,5 +1,5 @@
 /**
- * ProteusSandbox — the Durable Object that owns one agent workspace container.
+ * KinuSandbox — the Durable Object that owns one agent workspace container.
  *
  * `getSandbox(env.Sandbox, id)` returns a handle whose exec / file / port methods
  * are all inherited from `@cloudflare/sandbox`'s `Sandbox`. What this subclass
@@ -8,7 +8,7 @@
  *
  * It is an ADAPTER. Every decision — whether to restore, whether a snapshot is
  * due, what a failure means — lives in `createWorkspaceSnapshots` in
- * `@kinu/core`, along with the reasoning for why the container-start hook is
+ * `@kinu.run/core`, along with the reasoning for why the container-start hook is
  * the only correct place for a restore. This file supplies the SDK calls, this
  * object's storage, and the R2 reads, and chooses nothing.
  *
@@ -32,17 +32,17 @@ import {
   createWorkspaceSnapshots, snapshotObjectKeys, withContainerStartDeadline,
   type BackupOptions, type WorkspaceSnapshotPorts,
   type WorkspaceSnapshotState, type WorkspaceSnapshots,
-} from "@kinu/core";
-import { diagnostics, ProteusError, toProteusError } from "@kinu/core/obs";
+} from "@kinu.run/core";
+import { diagnostics, KinuError, toKinuError } from "@kinu.run/core/obs";
 import * as v from "valibot";
 import {
   CONTAINER_EVENT_HOST, EGRESS_HANDLER, EVENT_HANDLER,
   handleContainerEgress, handleContainerEvent, parseEgressParams,
-  type ProteusEgressParams,
+  type KinuEgressParams,
 } from "./egress/outbound";
 
 /** Storage key for this container's snapshot record. */
-const SNAPSHOT_STATE_KEY = "proteus:workspace-snapshot";
+const SNAPSHOT_STATE_KEY = "kinu:workspace-snapshot";
 /** Scheduled-callback name. Must name a method on this class — `Container.schedule`
  *  rejects anything else. */
 const SNAPSHOT_CALLBACK = "snapshotWorkspaceIfDue";
@@ -50,7 +50,7 @@ const SNAPSHOT_CALLBACK = "snapshotWorkspaceIfDue";
  *  asserted: it is a persisted blob written by another package. */
 const SnapshotMetadataSchema = v.object({ sizeBytes: v.number() });
 
-export class ProteusSandbox extends Sandbox<Env> {
+export class KinuSandbox extends Sandbox<Env> {
   #snapshots: WorkspaceSnapshots | undefined;
 
   /**
@@ -95,7 +95,7 @@ export class ProteusSandbox extends Sandbox<Env> {
    * The Container base persists this configuration to its own storage and
    * re-applies it before each `container.start()`, so it is once per change.
    */
-  async configureEgress(params: ProteusEgressParams): Promise<void> {
+  async configureEgress(params: KinuEgressParams): Promise<void> {
     // Per-host before catch-all: per-host wins at request time, and binding it
     // second would leave a window where a container event took the egress path.
     await this.setOutboundByHost(CONTAINER_EVENT_HOST, EVENT_HANDLER, params);
@@ -109,10 +109,10 @@ export class ProteusSandbox extends Sandbox<Env> {
    */
   onStart(): Promise<void> {
     return withContainerStartDeadline(
-      "ProteusSandbox.onStart",
+      "KinuSandbox.onStart",
       WORKSPACE_RESTORE_DEADLINE_MS,
       () => this.#startWorkspace(),
-      (failure) => diagnostics.failure('sandbox.container_start_overran', toProteusError({
+      (failure) => diagnostics.failure('sandbox.container_start_overran', toKinuError({
         doing: 'completing container-start work within its budget',
         cause: failure.reason,
         otherwise: 'timeout',
@@ -148,7 +148,7 @@ export class ProteusSandbox extends Sandbox<Env> {
     if (outcome.kind === "failed") {
       diagnostics.failure(
         'sandbox.workspace_snapshot_failed',
-        new ProteusError('io', outcome.reason ?? 'unknown'),
+        new KinuError('io', outcome.reason ?? 'unknown'),
         { backupId: outcome.backupId ?? '' },
       );
     }
@@ -270,7 +270,7 @@ function filled(value: string | undefined): boolean {
   return value !== undefined && value.length > 0;
 }
 
-ProteusSandbox.outboundHandlers = {
+KinuSandbox.outboundHandlers = {
   // `ctx.params` is whatever the owning DO passed to `setOutboundHandler` /
   // `setOutboundByHost`. It is trusted input — the container cannot influence
   // it — but it arrives typed `unknown`, so it is PARSED rather than asserted,

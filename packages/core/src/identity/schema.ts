@@ -16,7 +16,7 @@ import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 export const WORKSPACE_IDENTITY_DDL =
   // ── Workspace identity — the ownership root ────────────────────
   // Renamed from agent_identity; hosted deployments are recreated rather than
-  // migrated (owner decision 2026-06-13), but a local ~/.proteus workspace is
+  // migrated (owner decision 2026-06-13), but a local ~/.kinu workspace is
   // a file that outlives the rename, so migrateWorkspaceStorage adopts the
   // legacy row.
   `CREATE TABLE IF NOT EXISTS workspace_identity (
@@ -218,7 +218,7 @@ function adoptLegacyAgentIdentity(sql: SqlExecutor): void {
  *  `source_workspace_name`; the columns were renamed rather than added, so
  *  adding the new ones is not enough — the values live in the old ones, and
  *  readForkLineage selects the new names. Same reason as the identity
- *  adoption above: a local ~/.proteus workspace outlives the rename. */
+ *  adoption above: a local ~/.kinu workspace outlives the rename. */
 function adoptLegacyForkLineage(sql: SqlExecutor, execRaw: RawSqlExec): void {
   const legacy = sql<{ name: string }>`
     SELECT name FROM pragma_table_info('fork_lineage') WHERE name = 'source_agent_id'

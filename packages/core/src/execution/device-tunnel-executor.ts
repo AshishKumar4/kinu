@@ -17,13 +17,13 @@
  */
 
 import * as v from 'valibot';
-import { isAbortError, raceAbort } from '@kinu/agent-utils';
+import { isAbortError, raceAbort } from '@kinu.run/agent-utils';
 import type { VFS } from '../types/primitives';
 import { makeVfsError } from '../vfs/errno';
 import { shellQuote } from '../utils/shell';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { formatExecResult, parseStatLine, refusalText } from './exec-result';
-import { ProteusError, toProteusError } from '../obs/index';
+import { KinuError, toKinuError } from '../obs/index';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './types';
 import {
   freshDeviceToolchain,
@@ -75,14 +75,14 @@ const ASKED_OF_THE_MACHINE: readonly ExecutorCapability[] = [
  * and the Executors terminal drew it as exit 0. A platform condition read as
  * success is worse than one read as a defect: nobody goes looking.
  */
-const NOT_CONNECTED_REFUSAL = refusalText(new ProteusError('unavailable', NOT_CONNECTED));
+const NOT_CONNECTED_REFUSAL = refusalText(new KinuError('unavailable', NOT_CONNECTED));
 
 /** `io` is this seam's own answer for an unrecognised failure — the transport is a
  *  socket to the user's machine, held by the hub. A cause the classifier does
  *  recognise (an abort, a deadline, an errno the daemon reported) keeps the more
  *  precise code it already carries. */
-function deviceFailure(input: { doing: string; cause: unknown }): ProteusError {
-  return toProteusError({ ...input, otherwise: 'io' });
+function deviceFailure(input: { doing: string; cause: unknown }): KinuError {
+  return toKinuError({ ...input, otherwise: 'io' });
 }
 
 /**
@@ -182,7 +182,7 @@ export function createDeviceTunnelExecutor(
       execute: async (...args: unknown[]): Promise<string> => {
         const command = parseInput(StringSchema, { value: args[0] });
         if (command === undefined) {
-          return refusalText(new ProteusError('bad_input', 'laptop exec: command must be a string'));
+          return refusalText(new KinuError('bad_input', 'laptop exec: command must be a string'));
         }
         const signal = readExecSignal({ context: args[1] });
         try {
@@ -213,7 +213,7 @@ export function createDeviceTunnelExecutor(
       execute: async (...args: unknown[]): Promise<string> => {
         const path = parseInput(StringSchema, { value: args[0] });
         if (path === undefined) {
-          return refusalText(new ProteusError('bad_input', 'laptop readFile: path must be a string'));
+          return refusalText(new KinuError('bad_input', 'laptop readFile: path must be a string'));
         }
         try {
           return v.parse(v.string(), await rpc('readFile', [path]));
@@ -230,10 +230,10 @@ export function createDeviceTunnelExecutor(
         const path = parseInput(StringSchema, { value: args[0] });
         const content = parseInput(StringSchema, { value: args[1] });
         if (path === undefined) {
-          return refusalText(new ProteusError('bad_input', 'laptop writeFile: path must be a string'));
+          return refusalText(new KinuError('bad_input', 'laptop writeFile: path must be a string'));
         }
         if (content === undefined) {
-          return refusalText(new ProteusError('bad_input', 'laptop writeFile: content must be a string'));
+          return refusalText(new KinuError('bad_input', 'laptop writeFile: content must be a string'));
         }
         try {
           const result = await rpc('writeFile', [path, content]);
@@ -246,7 +246,7 @@ export function createDeviceTunnelExecutor(
             // happen — its own filesystem said no. `io`, and never `denied`: the
             // daemon reports a refused path and a full disk through the same
             // field, and `denied` is what the approval ladder means.
-            return refusalText(new ProteusError('io', `laptop writeFile ${path}: ${error}`));
+            return refusalText(new KinuError('io', `laptop writeFile ${path}: ${error}`));
           }
           return `Written ${content.length} bytes to ${path}`;
         } catch (err) {
@@ -261,7 +261,7 @@ export function createDeviceTunnelExecutor(
       execute: async (...args: unknown[]): Promise<string[] | string> => {
         const path = parseInput(OptionalStringSchema, { value: args[0] });
         if (args[0] !== undefined && path === undefined) {
-          return refusalText(new ProteusError('bad_input', 'laptop readdir: path must be a string'));
+          return refusalText(new KinuError('bad_input', 'laptop readdir: path must be a string'));
         }
         try {
           const result = v.parse(DeviceListResultSchema, await rpc('listFiles', [path || '/']));
@@ -288,7 +288,7 @@ export function createDeviceTunnelExecutor(
         // the device — neither established anything about the path, and the
         // second one swallowed its error to say so.
         if (path === undefined) {
-          return refusalText(new ProteusError('bad_input', 'laptop exists: path must be a string'));
+          return refusalText(new KinuError('bad_input', 'laptop exists: path must be a string'));
         }
         try {
           return v.parse(v.boolean(), await rpc('exists', [path]));
@@ -349,7 +349,7 @@ export function createDeviceTunnelExecutor(
       } catch (err) {
         // Classified rather than a bare `Error`, so a caller that catches this
         // lifecycle failure reads the same `unavailable` the tools return.
-        if (isDeviceNotConnectedError(err)) throw new ProteusError('unavailable', NOT_CONNECTED, { cause: err });
+        if (isDeviceNotConnectedError(err)) throw new KinuError('unavailable', NOT_CONNECTED, { cause: err });
         throw err;
       }
     },

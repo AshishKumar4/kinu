@@ -47,25 +47,25 @@
 # account and points at the staging deployment. Both are resolved once, by
 # scripts/eval-credentials.ts over packages/test-utils/src/eval-identity.ts:
 #
-#   PROTEUS_EVAL_TOKEN   the eval-service credential. Mint it against staging:
+#   KINU_EVAL_TOKEN   the eval-service credential. Mint it against staging:
 #                          kinu auth --origin https://staging.kinu.run
 #                          kinu tokens create --name evals --scopes ai.proxy
 #                        Staging synthesizes one fixed identity for every request
 #                        (env.staging's DEV_USER_EMAIL), so that session IS
 #                        eval-service and no person's account is involved.
-#   PROTEUS_EVAL_ORIGIN  optional. Defaults to the staging origin; a loopback dev
+#   KINU_EVAL_ORIGIN  optional. Defaults to the staging origin; a loopback dev
 #                        server is the other accepted value.
 #
-# The resolved pair is exported as PROTEUS_ORIGIN + PROTEUS_TOKEN, which is what
+# The resolved pair is exported as KINU_ORIGIN + KINU_TOKEN, which is what
 # `resolveLiveModel` reads. An origin outside that allowlist is REFUSED and this
 # script stops — production is reachable only by naming the exception,
-# PROTEUS_EVAL_ALLOW_PROD=1. That guard is not decoration: this pair reaches the
+# KINU_EVAL_ALLOW_PROD=1. That guard is not decoration: this pair reaches the
 # deployment's whole API, and until it existed the tier ran against production on
 # the owner's own session, leaving 23 test workspaces on the account among his 28.
 #
 # For models the account proxy does not front, an AI Gateway is still accepted
-# directly: AI_GATEWAY_BASE_URL + AI_GATEWAY_AUTH (PROTEUS_BASE_URL +
-# PROTEUS_AUTH are read as the same pair — `LIVE_MODEL_ENV` knows both spellings,
+# directly: AI_GATEWAY_BASE_URL + AI_GATEWAY_AUTH (KINU_BASE_URL +
+# KINU_AUTH are read as the same pair — `LIVE_MODEL_ENV` knows both spellings,
 # and .github/workflows/eval.yml sets the second). A gateway fronts a model and
 # no Kinu deployment, so it creates nothing and is not target-checked.
 #
@@ -82,7 +82,7 @@ cd "$(dirname "$0")/.."
 
 # Root-relative on purpose. `bun test --cwd <dir>` does NOT read the root
 # bunfig.toml, so it loses both scripts/test-preload.ts (the throwaway
-# PROTEUS_HOME that keeps a suite out of the developer's real ~/.proteus) and
+# KINU_HOME that keeps a suite out of the developer's real ~/.kinu) and
 # pathIgnorePatterns (which is what stops bun walking the gitignored external/
 # `./tests/` recurses, so it already selects tests/evals/** — naming both would
 # run every eval twice and double the bill for nothing.
@@ -92,7 +92,7 @@ TARGETS=(./tests/)
 #
 # It is a `*.eval.ts` and so invisible to the bun arm above, which is what makes a
 # THIRD arm possible at all: it gets its own process, therefore its own
-# PROTEUS_EVAL_SPEND_FILE, therefore its own liveness assertion. That last step is
+# KINU_EVAL_SPEND_FILE, therefore its own liveness assertion. That last step is
 # the reason it is separate rather than tidy — `livenessVerdict` sums the lines in
 # the file it is given, so a swarm eval sharing a spend file with five paid suites
 # could stop calling a model entirely and the tier would still report `proven`. The
@@ -124,7 +124,7 @@ OPTIMIZATION_EVAL=tests/evals/optimization.eval.ts
 # and the vitest behaviour arm is the larger half, and until each was timed
 # separately the tier's declared cost carried "add roughly an hour" for the second
 # — a guess standing in for a measurement.
-REPORT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/proteus-eval-tier-XXXXXX")"
+REPORT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/kinu-eval-tier-XXXXXX")"
 JUNIT="$REPORT_DIR/junit-bun.xml"
 JUNIT_EVALS="$REPORT_DIR/junit-vitest.xml"
 JUNIT_SWARM="$REPORT_DIR/junit-swarm.xml"
@@ -146,7 +146,7 @@ trap 'rm -rf "$REPORT_DIR"' EXIT
 # The ONE place this is set. `liveModelTarget` refuses to spend without it, so a
 # credential exported in a developer's shell can no longer make the commit hook
 # bill the owner's account — being driven by this script is the consent.
-export PROTEUS_EVAL_LIVE=1
+export KINU_EVAL_LIVE=1
 
 # Resolve the eval-service identity and put it where `resolveLiveModel` looks.
 # MUST be here rather than inside a suite: `scripts/test-scratch-home.ts` strips
@@ -155,7 +155,7 @@ export PROTEUS_EVAL_LIVE=1
 # none; the token never reaches argv or the log.
 #
 # A NON-ZERO EXIT IS FATAL. It means a credential was aimed at a deployment the
-# allowlist refuses — production, unless PROTEUS_EVAL_ALLOW_PROD=1 names the
+# allowlist refuses — production, unless KINU_EVAL_ALLOW_PROD=1 names the
 # exception — and continuing would run the whole tier against whatever the
 # environment happened to say. `set -e` is still in force here deliberately:
 # this is the one failure that must abort before anything spends or writes.
@@ -165,8 +165,8 @@ export PROTEUS_EVAL_LIVE=1
 RESOLVED_OUT="$(bun scripts/eval-credentials.ts)"
 mapfile -t RESOLVED <<< "$RESOLVED_OUT"
 if [[ ${#RESOLVED[@]} -eq 2 ]]; then
-  export PROTEUS_ORIGIN="${RESOLVED[0]}"
-  export PROTEUS_TOKEN="${RESOLVED[1]}"
+  export KINU_ORIGIN="${RESOLVED[0]}"
+  export KINU_TOKEN="${RESOLVED[1]}"
 fi
 
 # EXPECT_LIVE is this script's answer to the only question `scripts/eval-spend.ts`
@@ -175,14 +175,14 @@ fi
 # run is held to can never disagree.
 EXPECT_LIVE=0
 echo "── eval tier ─────────────────────────────────────────────"
-if [[ -n "${PROTEUS_TOKEN:-}" && -n "${PROTEUS_ORIGIN:-}" ]]; then
-  echo "target:  worker proxy ${PROTEUS_ORIGIN}/api/user/ai/v1"
+if [[ -n "${KINU_TOKEN:-}" && -n "${KINU_ORIGIN:-}" ]]; then
+  echo "target:  worker proxy ${KINU_ORIGIN}/api/user/ai/v1"
   echo "identity: eval-service — no person's session is ever borrowed"
   echo "cost:    native Workers AI, billed to the account behind that deployment"
   echo "assert:  a model call and a token count, or this run FAILS"
   EXPECT_LIVE=1
-elif [[ -n "${AI_GATEWAY_AUTH:-}${PROTEUS_AUTH:-}" ]]; then
-  echo "target:  AI Gateway ${AI_GATEWAY_BASE_URL:-${PROTEUS_BASE_URL:-<unset>}}"
+elif [[ -n "${AI_GATEWAY_AUTH:-}${KINU_AUTH:-}" ]]; then
+  echo "target:  AI Gateway ${AI_GATEWAY_BASE_URL:-${KINU_BASE_URL:-<unset>}}"
   echo "cost:    per the gateway's upstream provider"
   echo "assert:  a model call and a token count, or this run FAILS"
   EXPECT_LIVE=1
@@ -203,7 +203,7 @@ set +e
 # is what the tier costs them, which includes collection, credential resolution
 # and teardown.
 ARM_STARTED=$SECONDS
-export PROTEUS_EVAL_SPEND_FILE="$SPEND_BUN"
+export KINU_EVAL_SPEND_FILE="$SPEND_BUN"
 bun test "${TARGETS[@]}" --reporter=junit --reporter-outfile="$JUNIT"
 TEST_STATUS=$?
 BUN_SECONDS=$((SECONDS - ARM_STARTED))
@@ -226,7 +226,7 @@ BUN_SECONDS=$((SECONDS - ARM_STARTED))
 # default reporter is named alongside it because a JUnit-only run prints no
 # progress at all, and this arm takes hours.
 ARM_STARTED=$SECONDS
-export PROTEUS_EVAL_SPEND_FILE="$SPEND_EVALS"
+export KINU_EVAL_SPEND_FILE="$SPEND_EVALS"
 # `--exclude` PER SINGLE-FAMILY FILE: each is a `*.eval.ts` too, so this config's
 # own `include` selects them, and without the exclusions each would run in this
 # arm as well as its own — one episode, two bills, and a spend file per arm that
@@ -250,7 +250,7 @@ if [[ $TEST_STATUS -eq 0 ]]; then TEST_STATUS=$EVAL_STATUS; fi
 # captured and never allowed to abort for the reason both arms above are: what a
 # failed run cost before it failed is what a reader needs.
 ARM_STARTED=$SECONDS
-export PROTEUS_EVAL_SPEND_FILE="$SPEND_SWARM"
+export KINU_EVAL_SPEND_FILE="$SPEND_SWARM"
 bun --bun ./node_modules/.bin/vitest run --config vitest.evals.config.ts "$SWARM_EVAL" \
   --reporter=default --reporter=junit --outputFile="$JUNIT_SWARM"
 SWARM_STATUS=$?
@@ -262,7 +262,7 @@ if [[ $TEST_STATUS -eq 0 ]]; then TEST_STATUS=$SWARM_STATUS; fi
 # the arms above for the same reasons; its own invocation so its spend file
 # holds exactly this family's lines.
 ARM_STARTED=$SECONDS
-export PROTEUS_EVAL_SPEND_FILE="$SPEND_RESEARCH"
+export KINU_EVAL_SPEND_FILE="$SPEND_RESEARCH"
 bun --bun ./node_modules/.bin/vitest run --config vitest.evals.config.ts "$RESEARCH_EVAL" \
   --reporter=default --reporter=junit --outputFile="$JUNIT_RESEARCH"
 RESEARCH_STATUS=$?
@@ -273,7 +273,7 @@ if [[ $TEST_STATUS -eq 0 ]]; then TEST_STATUS=$RESEARCH_STATUS; fi
 # held to its pre-registered threshold, with swarm use recorded rather than
 # dictated.
 ARM_STARTED=$SECONDS
-export PROTEUS_EVAL_SPEND_FILE="$SPEND_OPTIMIZATION"
+export KINU_EVAL_SPEND_FILE="$SPEND_OPTIMIZATION"
 bun --bun ./node_modules/.bin/vitest run --config vitest.evals.config.ts "$OPTIMIZATION_EVAL" \
   --reporter=default --reporter=junit --outputFile="$JUNIT_OPTIMIZATION"
 OPTIMIZATION_STATUS=$?

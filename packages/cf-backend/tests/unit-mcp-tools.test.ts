@@ -8,7 +8,7 @@
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
-import type { JsonObject, JsonValue } from '@kinu/core';
+import type { JsonObject, JsonValue } from '@kinu.run/core';
 import type { UserCaller } from '../src/user/workspace-capability';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
@@ -72,7 +72,7 @@ function toolCall(agentName: string, name: string, args: JsonObject, token?: str
     'mcp-protocol-version': '2025-03-26',
   });
   if (token) headers.set('authorization', `Bearer ${token}`);
-  return new Request(`https://proteus.example.com/mcp/v1/${agentName}`, {
+  return new Request(`https://kinu.example.com/mcp/v1/${agentName}`, {
     method: 'POST',
     headers,
     body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name, arguments: args } }),

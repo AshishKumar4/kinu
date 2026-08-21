@@ -1,5 +1,5 @@
 /**
- * CLI configuration. App auth is stored in ~/.proteus/config.json after
+ * CLI configuration. App auth is stored in ~/.kinu/config.json after
  * `kinu setup`; direct LLM env vars remain as explicit local overrides.
  */
 
@@ -18,23 +18,23 @@ import {
   type LLMProviderConfig,
   type JsonObject,
   type ReasoningEffort,
-} from '@kinu/core';
-import { tolerate } from '@kinu/core/obs';
+} from '@kinu.run/core';
+import { tolerate } from '@kinu.run/core/obs';
 import {
   CLOUD_PROXY_PROVIDER_IDS,
   cloudProxyBaseURL,
   createFileCodexAuthStore,
   ensureSecretDir,
-  proteusHome,
+  kinuHome,
   writeSecretFile,
   type LocalCloudSession,
   type LocalCodexAuthStore,
   type LocalProviderCredentials,
   type McpServerConfig,
-} from '@kinu/cli-backend';
+} from '@kinu.run/cli-backend';
 import * as v from 'valibot';
 
-export const AGENT_HOME = proteusHome();
+export const AGENT_HOME = kinuHome();
 export const CONFIG_PATH = join(AGENT_HOME, 'config.json');
 export const BIN_DIR = join(AGENT_HOME, 'bin');
 const AGENT_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
@@ -74,7 +74,7 @@ const DEFAULT_ORIGIN = 'https://kinu.run';
 
 export type AgentMode = 'local' | 'cloud';
 
-export interface ProteusAgentConfig {
+export interface KinuAgentConfig {
   name: string;
   mode: AgentMode;
   displayName?: string;
@@ -85,12 +85,12 @@ export interface ProteusAgentConfig {
   updatedAt: string;
 }
 
-export interface ProteusConfig {
+export interface KinuConfig {
   origin?: string;
   accessToken?: string;
   tokenExpiresAt?: string;
   user?: { id: string; email: string; displayName?: string | null };
-  agents?: Record<string, ProteusAgentConfig>;
+  agents?: Record<string, KinuAgentConfig>;
   aliases?: Record<string, string>;
   model?: string;
   reasoningEffort?: ReasoningEffort;
@@ -127,11 +127,11 @@ export interface ProteusConfig {
 export interface CloudAuthConfig {
   origin: string;
   token: string;
-  user?: ProteusConfig['user'];
+  user?: KinuConfig['user'];
 }
 
 const StringMapSchema = v.record(v.string(), v.string());
-const ProteusAgentConfigSchema = v.object({
+const KinuAgentConfigSchema = v.object({
   name: v.string(),
   mode: v.picklist(['local', 'cloud']),
   displayName: v.optional(v.string()),
@@ -153,7 +153,7 @@ const OpenAiCompatConfigSchema = v.object({
   headers: v.optional(StringMapSchema),
   extraHeaders: v.optional(StringMapSchema),
 });
-const ProteusConfigSchema: v.GenericSchema<ProteusConfig> = v.object({
+const KinuConfigSchema: v.GenericSchema<KinuConfig> = v.object({
   origin: v.optional(v.string()),
   accessToken: v.optional(v.string()),
   tokenExpiresAt: v.optional(v.string()),
@@ -162,7 +162,7 @@ const ProteusConfigSchema: v.GenericSchema<ProteusConfig> = v.object({
     email: v.string(),
     displayName: v.optional(v.nullable(v.string())),
   })),
-  agents: v.optional(v.record(v.string(), ProteusAgentConfigSchema)),
+  agents: v.optional(v.record(v.string(), KinuAgentConfigSchema)),
   aliases: v.optional(StringMapSchema),
   model: v.optional(v.string()),
   reasoningEffort: v.optional(v.picklist(['low', 'medium', 'high'])),
@@ -214,10 +214,10 @@ export function listAgentDirs(): string[] {
   });
 }
 
-export function loadConfigFile(): ProteusConfig {
+export function loadConfigFile(): KinuConfig {
   if (!existsSync(CONFIG_PATH)) return {};
   try {
-    return v.parse(ProteusConfigSchema, JSON.parse(readFileSync(CONFIG_PATH, 'utf-8')));
+    return v.parse(KinuConfigSchema, JSON.parse(readFileSync(CONFIG_PATH, 'utf-8')));
   } catch (error) {
     // Defaulting silently here would discard the whole file — model, aliases, agents, session —
     // because of one bad field, and look identical to a first run.
@@ -236,12 +236,12 @@ export function setDefaultReasoningEffort(effort: ReasoningEffort): ReasoningEff
   return effort;
 }
 
-export function saveConfigFile(config: ProteusConfig): void {
+export function saveConfigFile(config: KinuConfig): void {
   ensureAgentHome();
   writeSecretFile(CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`);
 }
 
-export function updateConfigFile(mutator: (config: ProteusConfig) => ProteusConfig | void): ProteusConfig {
+export function updateConfigFile(mutator: (config: KinuConfig) => KinuConfig | void): KinuConfig {
   const config = loadConfigFile();
   const next = mutator(config) ?? config;
   saveConfigFile(next);
@@ -249,16 +249,16 @@ export function updateConfigFile(mutator: (config: ProteusConfig) => ProteusConf
 }
 
 export function resolveCloudOrigin(opts?: { origin?: string }): string {
-  return (opts?.origin ?? process.env.PROTEUS_ORIGIN ?? loadConfigFile().origin ?? DEFAULT_ORIGIN).replace(/\/+$/, '');
+  return (opts?.origin ?? process.env.KINU_ORIGIN ?? loadConfigFile().origin ?? DEFAULT_ORIGIN).replace(/\/+$/, '');
 }
 
 export function requireAuthConfig(): CloudAuthConfig {
   // CI path: a token from the environment (typically a scoped `pta_…` access
   // token from `kinu tokens create`) wins over the stored interactive
   // session. Long-lived by design — the server is the validity authority.
-  const envToken = process.env.PROTEUS_TOKEN?.trim();
+  const envToken = process.env.KINU_TOKEN?.trim();
   if (envToken) return { origin: resolveCloudOrigin(), token: envToken };
-  return storedAuthConfig('Not authenticated. Run: kinu auth (or set PROTEUS_TOKEN)');
+  return storedAuthConfig('Not authenticated. Run: kinu auth (or set KINU_TOKEN)');
 }
 
 export function requireStoredAuthConfig(): CloudAuthConfig {
@@ -277,17 +277,17 @@ function storedAuthConfig(missingTokenMessage: string): CloudAuthConfig {
   return { origin: resolveCloudOrigin(), token, user: config.user };
 }
 
-function sessionExpired(config: ProteusConfig): boolean {
+function sessionExpired(config: KinuConfig): boolean {
   if (!config.tokenExpiresAt) return false;
   const expiresAt = Date.parse(config.tokenExpiresAt);
   return Number.isFinite(expiresAt) && expiresAt <= Date.now();
 }
 
 /** The signed-in session as a model source, or null when signed out / expired.
- *  `PROTEUS_TOKEN` wins here exactly as it does in requireAuthConfig. Asks rather
+ *  `KINU_TOKEN` wins here exactly as it does in requireAuthConfig. Asks rather
  *  than catching: an unreadable config is not a signed-out user. */
 export function resolveCloudSession(): LocalCloudSession | null {
-  const envToken = process.env.PROTEUS_TOKEN?.trim();
+  const envToken = process.env.KINU_TOKEN?.trim();
   if (envToken) return { origin: resolveCloudOrigin(), token: envToken };
   const config = loadConfigFile();
   const token = config.accessToken;
@@ -295,24 +295,24 @@ export function resolveCloudSession(): LocalCloudSession | null {
   return { origin: resolveCloudOrigin(), token };
 }
 
-export function resolveAgentRef(input: string): ProteusAgentConfig | null {
+export function resolveAgentRef(input: string): KinuAgentConfig | null {
   const config = loadConfigFile();
   const canonical = config.aliases?.[input] ?? input;
   return config.agents?.[canonical] ?? null;
 }
 
-export function listConfiguredAgentRefs(): ProteusAgentConfig[] {
+export function listConfiguredAgentRefs(): KinuAgentConfig[] {
   return Object.values(loadConfigFile().agents ?? {})
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export function upsertAgentConfig(agent: Omit<ProteusAgentConfig, 'createdAt' | 'updatedAt'> & Partial<Pick<ProteusAgentConfig, 'createdAt' | 'updatedAt'>>): ProteusAgentConfig {
+export function upsertAgentConfig(agent: Omit<KinuAgentConfig, 'createdAt' | 'updatedAt'> & Partial<Pick<KinuAgentConfig, 'createdAt' | 'updatedAt'>>): KinuAgentConfig {
   validateAgentName(agent.name);
   if (agent.alias) validateAliasName(agent.alias);
   if (agent.localName) validateAgentName(agent.localName);
   if (agent.cloudName) validateAgentName(agent.cloudName);
   const now = new Date().toISOString();
-  let saved!: ProteusAgentConfig;
+  let saved!: KinuAgentConfig;
   updateConfigFile((config) => {
     const existing = config.agents?.[agent.name];
     saved = {
@@ -432,15 +432,15 @@ export function resolveLLMConfig(opts?: {
   // Direct-endpoint overrides come only from explicit flags or env; provider
   // credentials in config.json are the persistent source of truth.
   const baseURL = opts?.baseUrl
-    ?? process.env.PROTEUS_BASE_URL
+    ?? process.env.KINU_BASE_URL
     ?? process.env.AI_GATEWAY_BASE_URL;
 
   const auth = opts?.auth
-    ?? process.env.PROTEUS_AUTH
+    ?? process.env.KINU_AUTH
     ?? process.env.AI_GATEWAY_AUTH;
 
   const model = opts?.model
-    ?? process.env.PROTEUS_MODEL
+    ?? process.env.KINU_MODEL
     ?? process.env.AI_GATEWAY_MODEL
     ?? file.model;
 
@@ -494,7 +494,7 @@ export function resolveLLMConfig(opts?: {
 }
 
 /** Local provider credentials used by the CLI backend's provider registry.
- *  Env wins over ~/.proteus/config.json so temporary shell overrides work. */
+ *  Env wins over ~/.kinu/config.json so temporary shell overrides work. */
 export function resolveProviderCredentials(): LocalProviderCredentials {
   const file = loadConfigFile();
   return {
@@ -510,12 +510,12 @@ export function createCodexAuthStore(fetchFn?: typeof fetch): LocalCodexAuthStor
   return createFileCodexAuthStore(CONFIG_PATH, { fetch: fetchFn });
 }
 
-/** Stdio MCP servers from ~/.proteus/config.json (`mcpServers`). Empty if none. */
+/** Stdio MCP servers from ~/.kinu/config.json (`mcpServers`). Empty if none. */
 export function resolveMcpServers(): Record<string, McpServerConfig> {
   return loadConfigFile().mcpServers ?? {};
 }
 
-function deriveLLMConfigFromProviderCredentials(file: ProteusConfig, model: string | undefined): LLMProviderConfig | null {
+function deriveLLMConfigFromProviderCredentials(file: KinuConfig, model: string | undefined): LLMProviderConfig | null {
   const providerModel = model ?? preferredModelFromCredentials(file);
   const hasCodexCredential = Boolean(process.env.CODEX_ACCESS_TOKEN || file.providers?.codex?.accessToken || file.providers?.codex?.refreshToken);
   if (hasCodexCredential && (!providerModel || providerModel.startsWith('codex/') || !providerModel.includes('/'))) {
@@ -595,7 +595,7 @@ function deriveLLMConfigFromProviderCredentials(file: ProteusConfig, model: stri
   return null;
 }
 
-function preferredModelFromCredentials(file: ProteusConfig): string | undefined {
+function preferredModelFromCredentials(file: KinuConfig): string | undefined {
   if (file.model) return file.model;
   if (file.providers?.codex?.accessToken || file.providers?.codex?.refreshToken || process.env.CODEX_ACCESS_TOKEN) return `codex/${CODEX_DEFAULT_MODEL}`;
   if (file.providers?.openai?.apiKey || process.env.OPENAI_API_KEY) return `openai/${OPENAI_DEFAULT_MODEL}`;

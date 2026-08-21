@@ -61,7 +61,7 @@ function site(broken: Partial<Record<string, () => Response>> = {}): ProbeDeps['
 const spaFallback = () => new Response(SPA_SHELL, { headers: { 'content-type': 'text/html' } });
 
 async function probe(broken: Partial<Record<string, () => Response>> = {}): Promise<ProbeOutcome[]> {
-  return runSyntheticProbes({ origin: 'https://proteus.test', fetch: site(broken) });
+  return runSyntheticProbes({ origin: 'https://kinu.test', fetch: site(broken) });
 }
 
 function outcome(outcomes: ProbeOutcome[], probeName: string): ProbeOutcome {
@@ -124,7 +124,7 @@ describe('synthetic probes', () => {
       throw new Error('connection refused');
     };
     const outcomes = await runSyntheticProbes({
-      origin: 'https://proteus.test',
+      origin: 'https://kinu.test',
       fetch: unavailableFetch,
     });
     expect(outcomes.every((o) => !o.ok)).toBe(true);
@@ -162,8 +162,8 @@ function ledger(alertEmail: string | null = 'owner@example.com') {
   const outbox = new EmailOutbox(sql);
   outbox.ensureSchema();
   const deps = (now: number): MonitorDeps => ({
-    sql, outbox, email: binding, emailDomain: 'proteus.test', alertEmail,
-    origin: 'https://proteus.test', now,
+    sql, outbox, email: binding, emailDomain: 'kinu.test', alertEmail,
+    origin: 'https://kinu.test', now,
   });
   return { sql, sent, deps, breakMail: (on: boolean) => { failSends = on; } };
 }

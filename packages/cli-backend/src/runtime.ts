@@ -3,15 +3,15 @@
  * FTS5 memory search, the Nimbus workspace filesystem, and proper CraftStore.
  *
  * Implements the same primitives as cf-backend via adapter wrappers
- * that bridge agent-utils types to @kinu/core's interfaces.
+ * that bridge agent-utils types to @kinu.run/core's interfaces.
  */
 
-import type { AgentRuntime, CraftStore as CoreCraftStore, Shell } from '@kinu/core';
+import type { AgentRuntime, CraftStore as CoreCraftStore, Shell } from '@kinu.run/core';
 import type {
   Schedule, Memory, VFS, SqlExec, SqlExecutor, SqlValue, RawSqlExec, WorkspaceSchemaSql,
-} from '@kinu/core';
-import type { ExecutorProvider, ResourceLimits } from '@kinu/core';
-import type { RequestShellApproval, ShellApprovalPolicy } from '@kinu/core';
+} from '@kinu.run/core';
+import type { ExecutorProvider, ResourceLimits } from '@kinu.run/core';
+import type { RequestShellApproval, ShellApprovalPolicy } from '@kinu.run/core';
 import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
@@ -25,18 +25,18 @@ import {
   withApprovalGatedShell,
   selectFastModel, createAgentConfigStore, initAgentConfigTable, initActorTables,
   type ModelCallSink, type NodeHomeHost,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import {
   createWorkspace as createWorkspaceFilesystem,
   nextWorkspaceGeneration,
   workspaceToolchainCapabilities,
-} from '@kinu/core/workspace';
-import { tolerate, tolerateAsync } from '@kinu/core/obs';
+} from '@kinu.run/core/workspace';
+import { tolerate, tolerateAsync } from '@kinu.run/core/obs';
 import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
 import bashRuntime from '@nimbus-sh/runtime-bash';
 import cpythonRuntime from '@nimbus-sh/runtime-cpython';
-import { MemoryStore } from '@kinu/agent-utils';
-import { CraftStore as AgentUtilsCraftStore } from '@kinu/agent-utils';
+import { MemoryStore } from '@kinu.run/agent-utils';
+import { CraftStore as AgentUtilsCraftStore } from '@kinu.run/agent-utils';
 import { createSandboxedExecutor } from './executor';
 import { createHostCheckpoints } from './checkpoints';
 import { hostResourceLimits } from './cgroup-limits';
@@ -48,8 +48,8 @@ import {
   createLocalModelResolver, createLocalProviderLLM, type LocalProviderCredentials,
 } from './model-resolver';
 import type { LocalCodexAuthStore } from './codex-auth-store';
-import type { OAuthCredential, FileCheckpoints } from '@kinu/core';
-import { diagnostics, ProteusError } from '@kinu/core/obs';
+import type { OAuthCredential, FileCheckpoints } from '@kinu.run/core';
+import { diagnostics, KinuError } from '@kinu.run/core/obs';
 import type { Database, SQLQueryBindings } from 'bun:sqlite';
 import * as v from 'valibot';
 
@@ -192,7 +192,7 @@ export function localTransactions(db: Database): WorkspaceTransactions {
 /**
  * The runtimes a local workspace can install into itself.
  *
- * Named here rather than in `@kinu/core` because these are the bytes: 40 MB
+ * Named here rather than in `@kinu.run/core` because these are the bytes: 40 MB
  * of wasm read through `node:fs`, which the deployed Worker can neither bundle
  * nor open. A hosted session gets the same runtimes from R2 through
  * `nimbus install`; this is the same publisher for a host that has a disk.
@@ -287,7 +287,7 @@ export function createCLIRuntime(
   if (orphans.length > 0) {
     diagnostics.failure(
       'fiber.orphans_detected',
-      new ProteusError('cancelled', 'fibers from a previous run were interrupted by its exit'),
+      new KinuError('cancelled', 'fibers from a previous run were interrupted by its exit'),
       { orphans: orphans.length },
     );
   }
@@ -343,7 +343,7 @@ export function createCLIRuntime(
   // (see approvalPolicy below).
   const agentConfig = createAgentConfigStore(sql);
   const fast = selectFastModel({
-    fastSpec: agentConfig.getFastModel(),
+    fastSpec: agentConfig.getRoleModel('fast'),
     chatSpec: fastResolver.normalizeSpecSync(null),
     providers: fastResolver.fastModelCandidates(),
   });
@@ -368,6 +368,23 @@ export function createCLIRuntime(
       spend: { source: 'judge', report },
     })
     : undefined;
+
+  // The turn reviewer. Its pin wins; with none it runs on the configured judge
+  // (the same cross-model client, for the same reason — a reviewer sharing the
+  // reviewed model's family agrees with it); with neither it runs on the chat
+  // model, which is a local session's only remaining option and is the honest
+  // one rather than leaving the owner's switch inert.
+  //
+  // Resolved once, like the fast tier: a CLI process is one workspace's session.
+  const advisorSpec = agentConfig.getRoleModel('advisor');
+  const advisorConfig: Parameters<typeof createLocalProviderLLM>[0] = {
+    llm: advisorSpec ? config.llm : config.judge ?? config.llm,
+    credentials: config.providerCredentials,
+    codexAuthStore: config.codexAuthStore, onCodexRefresh: config.onCodexRefresh,
+    spend: { source: 'advisor', report },
+  };
+  if (advisorSpec) advisorConfig.spec = advisorSpec;
+  const advisorLlm = createLocalProviderLLM(advisorConfig);
 
   const schedule: Schedule = {
     after: async (_ms, fn) => { setTimeout(fn, 0); },
@@ -465,7 +482,7 @@ export function createCLIRuntime(
   // other seam already holds a reference to.
   return Object.assign(buildRuntime({
     sql, execRaw, vfs, llm, executor: createSandboxedExecutor(), schedule,
-    agentId, agentName, memory, craftStore, judgeModel, fastLlm,
+    agentId, agentName, memory, craftStore, judgeModel, fastLlm, advisorLlm,
     spawnBranch: spawn, abortBranch: abort,
     // A CLI branch is a forked child process with its own SQLite FILE, not a
     // facet inside a shared durable object. `abort` already does the whole
@@ -603,6 +620,9 @@ export function buildCLIHeadRuntime(
   const runtimeOptions: Parameters<typeof buildRuntime>[0] = {
     sql, execRaw, vfs, llm: parent.llm, executor: parent.executor, schedule: parent.schedule,
     agentId: opts.agentId, agentName: opts.agentName, memory, craftStore, judgeModel: parent.judgeModel,
+    // A CLI fork is a child of the same workspace, so it inherits the reviewer
+    // the parent built, exactly as it inherits the judge.
+    advisorLlm: parent.advisorLlm,
     spawnBranch: parent.spawnBranch, abortBranch: parent.abortBranch,
     releaseBranch: parent.releaseBranch,
     executionRouter, shell,

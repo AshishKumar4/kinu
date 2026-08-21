@@ -21,7 +21,7 @@ import * as v from 'valibot';
 
 /** The storage key `armTimer` commits. Named after the real one so a reader of
  *  orchestrator.ts:542 recognises what is being lost. */
-const ARMED = 'proteus_timer_armed_at';
+const ARMED = 'kinu_timer_armed_at';
 
 /**
  * The historical retention claim from `5183d69d:orchestrator.ts:518-529`,
@@ -383,7 +383,7 @@ export interface AlarmReport {
  * WHY `bun test` CANNOT HOST IT. Nothing outside workerd invokes `alarm()` at
  * all. The bun fake for the Agent SDK has no reference to alarm, schedule or
  * setAlarm, and `unit-alarm-tracing.test.ts` reaches the tick by calling
- * `_proteusTimerTick()` directly — which is the body, never the dispatch. The
+ * `_kinuTimerTick()` directly — which is the body, never the dispatch. The
  * two guards over the dispatch itself are a regex for a shadowed `alarm()`
  * missing `super.alarm()` and an AST walk; both read TEXT. Until this file
  * nothing in CI had ever observed an alarm fire.

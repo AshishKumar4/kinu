@@ -109,7 +109,7 @@ import {
   promptCachePlan,
   type BranchProposal,
   type NodeAgentInput,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import {
   cacheControlsOn,
   capturingWorkersAIModel,
@@ -555,7 +555,7 @@ describe('C9 affinity', () => {
     expect(drive.run?.report.status).toBe('completed');
     expect(captured.length, 'the node issued no provider request at all').toBeGreaterThan(0);
     for (const request of captured) {
-      expect(request.headers.get('x-session-affinity')).toBe('proteus-parent-workspace');
+      expect(request.headers.get('x-session-affinity')).toBe('kinu-parent-workspace');
     }
   });
 
@@ -569,8 +569,8 @@ describe('C9 affinity', () => {
 
     expect(captured.length).toBeGreaterThan(0);
     const key = captured[0]!.headers.get('x-session-affinity');
-    expect(key).toBe('proteus-node-1');
-    expect(key).not.toBe('proteus-parent-workspace');
+    expect(key).toBe('kinu-node-1');
+    expect(key).not.toBe('kinu-parent-workspace');
   });
 
   test('an unpinned model sends no key at all — the denominator', async () => {
@@ -581,7 +581,7 @@ describe('C9 affinity', () => {
   });
 
   test('the key is one function, so no kind can compute a different one', () => {
-    expect(agentAffinityKey('jarvis')).toBe('proteus-jarvis');
+    expect(agentAffinityKey('jarvis')).toBe('kinu-jarvis');
   });
 });
 

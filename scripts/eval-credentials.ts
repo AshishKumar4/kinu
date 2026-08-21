@@ -6,7 +6,7 @@
 // only when a credential names a target it may not reach; that is a refusal, not
 // an absence, and the tier must stop rather than measure something else.
 //
-// WHAT THIS USED TO DO, AND WHY IT STOPPED. It read `~/.proteus/config.json` and
+// WHAT THIS USED TO DO, AND WHY IT STOPPED. It read `~/.kinu/config.json` and
 // promoted the OWNER'S SIGNED-IN SESSION to a live target, on the argument that
 // the tier otherwise had no credential anywhere and reported `TOTAL: 0 model
 // call(s)`. That fixed the false green and created a worse problem: an eval run
@@ -25,7 +25,7 @@
 // ambient credential variables at preload in every test process, so a resolver
 // running inside a suite sees an empty environment no matter how correct it is.
 // `eval-tier.sh` runs first and is already the consent boundary — it is the ONE
-// place PROTEUS_EVAL_LIVE is set — so resolving the identity is the same
+// place KINU_EVAL_LIVE is set — so resolving the identity is the same
 // decision, made in the same place.
 import { resolveEvalIdentity } from '../packages/test-utils/src/eval-identity';
 

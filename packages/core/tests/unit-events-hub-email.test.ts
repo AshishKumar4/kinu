@@ -7,14 +7,14 @@ import {
   initEventsHubTables, EventLog, ReplyChannelStore, TriggerRegistry,
   deriveEventTrust, derivePriority, deriveFields, dedupeKeyFor, renderForLLM,
   buildDrainBatch,
-  type IngressDescriptor, type EmailPayload, type ProteusEvent,
+  type IngressDescriptor, type EmailPayload, type KinuEvent,
   type ReplyDispatcher, type AlarmScheduler,
 } from '../src/events/hub/index';
 import {
   EmailInbox, EMAIL_INBOUND_RATE_PER_MIN, initWebhookRateLimitTables, setEmailAllowlist,
   type SqlExec,
 } from '../src/index';
-import { createMemoryVfs } from '@kinu/test-utils';
+import { createMemoryVfs } from '@kinu.run/test-utils';
 import { makeSqlExec } from './helpers';
 
 function makeSql(): SqlExec {
@@ -90,7 +90,7 @@ describe('email dedupe', () => {
 
   test('missing Message-ID falls back to a content hash bucket', () => {
     const base = emailPayload({ message_id: null });
-    const mk = (received_at: number, body?: string): ProteusEvent => {
+    const mk = (received_at: number, body?: string): KinuEvent => {
       const payload: EmailPayload = { ...base };
       if (body) payload.body_text = body;
       return {

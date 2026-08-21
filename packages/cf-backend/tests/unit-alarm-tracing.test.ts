@@ -3,7 +3,7 @@
  *
  * WHAT THIS PROVES, and what it deliberately does not.
  *
- * PROVEN HERE: `OrchestratorAgent._proteusTimerTick` — the shipped method, not a
+ * PROVEN HERE: `OrchestratorAgent._kinuTimerTick` — the shipped method, not a
  * copy of its shape — opens a span tree when it runs, and the tree has the
  * structure and the attributes the contract requires. Every layer above the
  * platform is production code: `createWorkersTracer`, `createAgentTracing`,
@@ -30,12 +30,12 @@ import {
 import { orchestratorHarness } from './helpers/actor-harness';
 
 import {
-  createAgentTracing, createRecordingTracer, ProteusError, renderCauseChain,
+  createAgentTracing, createRecordingTracer, KinuError, renderCauseChain,
   SPAN_ATTR_ERROR, SPAN_ATTR_INVOCATION, SPAN_ATTR_ISOLATE_GEN, SPAN_ATTR_SELF_PATH,
   type AgentTracing, type RecordingTracer, type SpanAttributeValue, type TracedInvocation,
-} from '@kinu/core/obs';
+} from '@kinu.run/core/obs';
 
-/** The four phases, in the order `_proteusTimerTick` runs them. Named here so a
+/** The four phases, in the order `_kinuTimerTick` runs them. Named here so a
  *  phase silently dropped from the method fails rather than shrinking the tree. */
 const PHASES = [
   'alarm.due_triggers',
@@ -49,7 +49,7 @@ describe('alarm tick tracing', () => {
     const { agent } = orchestratorHarness();
     resetNativeSpans();
 
-    await agent._proteusTimerTick();
+    await agent._kinuTimerTick();
 
     const spans = recordedNativeSpans();
     // FIRST assertion, before any shape check: an empty array is the shape of
@@ -75,7 +75,7 @@ describe('alarm tick tracing', () => {
   test('every span carries the two attributes that identify which fork produced it', async () => {
     const { agent } = orchestratorHarness();
     resetNativeSpans();
-    await agent._proteusTimerTick();
+    await agent._kinuTimerTick();
     const spans = recordedNativeSpans();
     expect(spans.length).toBeGreaterThan(0);
 
@@ -97,8 +97,8 @@ describe('alarm tick tracing', () => {
     const { agent } = orchestratorHarness();
     resetNativeSpans();
 
-    await agent._proteusTimerTick();
-    await agent._proteusTimerTick();
+    await agent._kinuTimerTick();
+    await agent._kinuTimerTick();
 
     const spans = recordedNativeSpans();
     expect(spans.filter((span) => span.parent === null)).toHaveLength(2);
@@ -116,8 +116,8 @@ describe('alarm tick tracing', () => {
   test('isolateGen is bumped once per construction, not once per tick', async () => {
     const first = orchestratorHarness();
     resetNativeSpans();
-    await first.agent._proteusTimerTick();
-    await first.agent._proteusTimerTick();
+    await first.agent._kinuTimerTick();
+    await first.agent._kinuTimerTick();
     const oneObject = new Set(recordedNativeSpans().map((s) => s.attributes.get(SPAN_ATTR_ISOLATE_GEN)));
     // Two ticks, one construction, one generation. A per-tick bump would make a
     // discontinuity meaningless as a reset signal, which is the only thing the
@@ -128,7 +128,7 @@ describe('alarm tick tracing', () => {
   test('the rendered tree is what a reader gets', async () => {
     const { agent } = orchestratorHarness();
     resetNativeSpans();
-    await agent._proteusTimerTick();
+    await agent._kinuTimerTick();
     // Pinned in full: the tree is the deliverable, so a change to it is a change
     // to what an operator sees and belongs in a diff.
     expect(renderNativeSpanTree()).toBe(
@@ -182,7 +182,7 @@ describe('invocation handles are revoked, not merely discouraged', () => {
     // captured during invocation 1 and used after it settled; a span opened here
     // would claim coverage of an unbounded, unmeasured gap in which the isolate may
     // have been reset.
-    expect(() => seat.handle?.span('alarm.late', () => undefined)).toThrow(ProteusError);
+    expect(() => seat.handle?.span('alarm.late', () => undefined)).toThrow(KinuError);
     expect(() => seat.handle?.span('alarm.late', () => undefined)).toThrow(/escaped its invocation/);
   });
 
@@ -202,19 +202,19 @@ describe('invocation handles are revoked, not merely discouraged', () => {
   test('the refusal is classified, reason first', () => {
     const seat = seatFor();
     tracing().invocation('rpc', 'call', (call) => { seat.handle = call; });
-    let refusal: ProteusError | null = null;
+    let refusal: KinuError | null = null;
     try {
       seat.handle?.span('rpc.late', () => undefined);
     } catch (thrown) {
       // Narrowed, not asserted: the classification is the thing being tested, so a
       // cast would be asserting the answer.
-      if (thrown instanceof ProteusError) refusal = thrown;
+      if (thrown instanceof KinuError) refusal = thrown;
       else throw thrown;
     }
     // A refusal carries its classification, reason first: `unsupported`, because
     // opening a span from escaped work is not a runtime condition to retry — it is a
     // programming error, and a retry would produce the same lie.
-    expect(refusal).toBeInstanceOf(ProteusError);
+    expect(refusal).toBeInstanceOf(KinuError);
     expect(refusal?.code).toBe('unsupported');
   });
 
@@ -226,7 +226,7 @@ describe('invocation handles are revoked, not merely discouraged', () => {
     })).toThrow('phase exploded');
     // The `finally` is what makes this hold: a handle left live by a throwing
     // invocation is exactly the one a `.catch()` continuation would reach for.
-    expect(() => seat.handle?.span('fetch.late', () => undefined)).toThrow(ProteusError);
+    expect(() => seat.handle?.span('fetch.late', () => undefined)).toThrow(KinuError);
   });
 });
 
@@ -236,7 +236,7 @@ describe('invocation handles are revoked, not merely discouraged', () => {
  * Adopted from `~/cloudflare-os/packages/backend-utils/src/tracing.ts`: an
  * exception is MARKED and propagates UNCHANGED, and no error TEXT reaches a trace
  * attribute. Both halves are asserted, because the second is the one a future
- * "make the trace more useful" change breaks: `proteus.error_message` was on this
+ * "make the trace more useful" change breaks: `kinu.error_message` was on this
  * span until 2026-08-19, which put an upstream error's message — possibly a
  * secret, certainly unbounded — on a stream `ReservedLogField` cannot reach, and
  * marked ONLY the non-throwing `fail()` path, so a THROWN failure was not marked
@@ -257,7 +257,7 @@ describe('a span marks a failure and changes nothing about it', () => {
     const answer = await tracer.span('work', { isolateGen: 3, selfPath: 'A:a' }, async (span) => {
       order.push('inside');
       await Promise.resolve();
-      span.setAttribute('proteus.rows', 4);
+      span.setAttribute('kinu.rows', 4);
       order.push('after_await');
       return 'done';
     });
@@ -269,8 +269,8 @@ describe('a span marks a failure and changes nothing about it', () => {
     const span = tracer.opened[0];
     expect(span?.name).toBe('work');
     expect(span?.attributes.get(SPAN_ATTR_ISOLATE_GEN)).toBe(3);
-    expect(span?.attributes.get('proteus.rows')).toBe(4);
-    // Closed: no `proteus.error`, and the next span opened is a SIBLING rather
+    expect(span?.attributes.get('kinu.rows')).toBe(4);
+    // Closed: no `kinu.error`, and the next span opened is a SIBLING rather
     // than a child, which is the only observable a scoped span has for "closed".
     expect(span?.attributes.has(SPAN_ATTR_ERROR)).toBe(false);
     tracer.span('after', { isolateGen: 3, selfPath: 'A:a' }, () => undefined);
@@ -279,7 +279,7 @@ describe('a span marks a failure and changes nothing about it', () => {
 
   test('a synchronous throw is marked and propagates UNCHANGED', () => {
     const { tracer, attributes } = spanFor();
-    const thrown = new ProteusError('io', 'writing the ledger', { cause: new Error('disk full') });
+    const thrown = new KinuError('io', 'writing the ledger', { cause: new Error('disk full') });
     // Collected rather than parked in a `let`: the identity of what came out is the
     // assertion, so nothing here may narrow or default it.
     const caught: Error[] = [];
@@ -292,14 +292,14 @@ describe('a span marks a failure and changes nothing about it', () => {
     // IDENTITY, not shape: a wrapped error would satisfy `toThrow(...)` while
     // having destroyed the classification and the chain the caller has to read.
     expect(caught[0]).toBe(thrown);
-    expect(caught[0]).toBeInstanceOf(ProteusError);
+    expect(caught[0]).toBeInstanceOf(KinuError);
     expect(renderCauseChain(thrown)).toBe('writing the ledger: disk full');
     expect(attributes().get(SPAN_ATTR_ERROR)).toBe(true);
   });
 
   test('a rejection is marked and propagates UNCHANGED', async () => {
     const { tracer, attributes } = spanFor();
-    const thrown = new ProteusError('timeout', 'awaiting the node', { cause: new Error('600s idle') });
+    const thrown = new KinuError('timeout', 'awaiting the node', { cause: new Error('600s idle') });
     const rejected: Error[] = [];
     await tracer
       .span('run', { isolateGen: 1, selfPath: 'A:a' }, async () => { await Promise.resolve(); throw thrown; })

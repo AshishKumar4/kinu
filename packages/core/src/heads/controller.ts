@@ -39,7 +39,7 @@ import { DEFAULT_CONFIG } from '../config';
 import type { LLM, Executor } from '../types/primitives';
 import type { WorkMode } from '../prompting/surface';
 import { addUsage, usageTotal, type Usage } from '../usage';
-import { diagnostics, renderThrownChain, toProteusError } from '../obs/index';
+import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 
 /** What the merge LLM should return. Validated by MergeOutputSchema. */
 export type MergeLLMFn = (
@@ -438,7 +438,7 @@ export class HeadController {
       // have an empty message.
       diagnostics.failure(
         'head.score_failed',
-        toProteusError({ doing: 'score a head report', cause: outcome.reason, otherwise: 'unavailable' }),
+        toKinuError({ doing: 'score a head report', cause: outcome.reason, otherwise: 'unavailable' }),
         { headId: r.id },
       );
       return { id: r.id, text: r.summary, status: r.status, score: NO_GROUNDED_SIGNAL, grounding: 'judge' };
@@ -581,7 +581,7 @@ export class HeadController {
       // The reason itself, not its `message` — see scoreHeads.
       diagnostics.failure(
         'merge.sample_score_failed',
-        toProteusError({ doing: 'score a merge sample', cause: outcome.reason, otherwise: 'unavailable' }),
+        toKinuError({ doing: 'score a merge sample', cause: outcome.reason, otherwise: 'unavailable' }),
         { sampleIndex: i },
       );
       return { sample: samples[i]!, score: null };

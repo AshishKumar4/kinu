@@ -5,7 +5,7 @@
  * "State the cost per run" is not answerable with a constant. These suites let
  * the model take up to 500 steps, so the bill is decided by what the model
  * chose to do — which is the thing under test. So each suite process appends its
- * own measured totals to `PROTEUS_EVAL_SPEND_FILE` (see
+ * own measured totals to `KINU_EVAL_SPEND_FILE` (see
  * packages/test-utils/src/live-model.ts `reportLiveModelSpend`) and this sums
  * them into the one number a run reports.
  *

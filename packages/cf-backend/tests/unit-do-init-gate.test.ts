@@ -41,7 +41,7 @@ const { ExplorationAgent } = await import('../src/exploration');
 
 /** Every Kinu class whose `onStart` runs inside `blockConcurrencyWhile`.
  *  UserDO declares no override, MonitorDO is a plain DurableObject with no
- *  partyserver gate, and ProteusSandbox/NimbusSession are third-party bases. */
+ *  partyserver gate, and KinuSandbox/NimbusSession are third-party bases. */
 const GATED_CLASSES = [
   ['OrchestratorAgent', OrchestratorAgent],
   ['SubordinateAgent', SubordinateAgent],

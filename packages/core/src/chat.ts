@@ -18,7 +18,7 @@ import {
   type StepResult,
   type StopCondition,
 } from 'ai';
-import { combineAbortSignals } from '@kinu/agent-utils';
+import { combineAbortSignals } from '@kinu.run/agent-utils';
 import { DEFAULT_MAX_STEPS } from './config';
 import {
   assertToolsSupportedByModel,

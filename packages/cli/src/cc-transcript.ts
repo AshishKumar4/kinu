@@ -42,8 +42,8 @@ import {
   EVIDENCE_BUDGETS, evidenceWindow, isTrivialTurn,
   JsonArraySchema, JsonObjectSchema, JsonValueSchema, parseJsonValue,
   type CorpusTurn, type JsonObject, type JsonValue, type ToolCallRecord,
-} from '@kinu/core';
-import { tolerate } from '@kinu/core/obs';
+} from '@kinu.run/core';
+import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 /** Where Claude Code keeps them. */

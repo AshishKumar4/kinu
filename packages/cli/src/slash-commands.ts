@@ -5,7 +5,7 @@
  * stdout, picker overlay vs printed list).
  */
 
-import { isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type BranchStatusEvent, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu/core';
+import { ADVISOR_SEVERITIES, isAdvisorSeverity, isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type BranchStatusEvent, type EvolutionConfigView, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu.run/core';
 import type { AgentChangelogView, AgentClient, AgentClientStatus, AgentSearchNode } from './agent-client';
 import { setDefaultModel, setDefaultReasoningEffort } from './config';
 
@@ -39,6 +39,7 @@ export const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
   { name: '/undo', description: 'Restore files to before a turn (n = turns back), then offer walk-back', usage: '/undo [n]', requires: 'checkpoints' },
   { name: '/approval', description: 'Show or set shell approval mode', usage: '/approval strict|allow_all|deny_all', requires: 'localControls' },
   { name: '/always', description: 'Manage always-active skills', usage: '/always <name...|none>', requires: 'localControls' },
+  { name: '/advisor', description: 'Show or set the advisor. It is off by default. Turning it on adds one model call per turn.', usage: '/advisor [on|off|severity <nit|concern|blocker>]' },
   { name: '/exit', description: 'Exit chat' },
 ];
 
@@ -100,6 +101,8 @@ export type SlashOutcome =
   | { kind: 'undo'; ref?: string }
   | { kind: 'cancel' }
   | { kind: 'unknown'; command: string };
+
+const ADVISOR_USAGE = `Usage: /advisor on | off | severity <${ADVISOR_SEVERITIES.join(' | ')}>`;
 
 export async function executeSlashCommand(client: AgentClient, input: string): Promise<SlashOutcome> {
   const [rawCmd, ...rest] = input.split(/\s+/);
@@ -219,6 +222,21 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
         return { kind: 'text', text: `Shell approval: ${client.localControls.setShellApprovalMode(arg)}` };
       }
       return { kind: 'text', text: 'Usage: /approval strict | allow_all | deny_all' };
+    }
+    case '/advisor': {
+      const [sub, level, ...extra] = rest.filter((token) => token).map((token) => token.toLowerCase());
+      let config: EvolutionConfigView;
+      if (extra.length > 0) return { kind: 'text', text: ADVISOR_USAGE };
+      if (sub === undefined) config = await client.getEvolutionConfig();
+      else if (level === undefined && (sub === 'on' || sub === 'off')) config = await client.setEvolutionConfig({ advisorEnabled: sub === 'on' });
+      else if (sub === 'severity' && isAdvisorSeverity(level)) config = await client.setEvolutionConfig({ advisorMinSeverity: level });
+      else return { kind: 'text', text: ADVISOR_USAGE };
+      return {
+        kind: 'text',
+        text: config.advisorEnabled
+          ? `Advisor: on. The minimum severity is ${config.advisorMinSeverity}. The advisor adds one model call per turn.`
+          : `Advisor: off. The minimum severity is ${config.advisorMinSeverity}. /advisor on adds one model call per turn.`,
+      };
     }
     case '/mcts':
     case '/tree': {

@@ -7,8 +7,8 @@
 // bearer token are resolved from UserDO inside customFetch on each request.
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
-import type { ModelProvider, ModelInfo } from '@kinu/core';
-import { DEFAULT_WORKERS_AI_MODEL_ID, listModelsDevProviderModels } from '@kinu/core';
+import type { ModelProvider, ModelInfo } from '@kinu.run/core';
+import { DEFAULT_WORKERS_AI_MODEL_ID, listModelsDevProviderModels } from '@kinu.run/core';
 import { CLOUDFLARE_OAUTH_CRED_KEY } from '../lib/cloudflare-oauth';
 import { createCloudflareAIFetch } from './cloudflare-ai-fetch';
 import {
@@ -36,7 +36,7 @@ export function createWorkersAIProvider(opts: WorkersAIOptions = {}): ModelProvi
       preferredIds: WORKERS_AI_PREFERRED_MODEL_IDS,
     }),
     createModel(modelId, deps): LanguageModel {
-      const placeholder = 'https://proteus-workers-ai.invalid';
+      const placeholder = 'https://kinu-workers-ai.invalid';
       const customFetch = createCloudflareAIFetch({
         credKey: CLOUDFLARE_OAUTH_CRED_KEY,
         getAuth: deps.getAuth,

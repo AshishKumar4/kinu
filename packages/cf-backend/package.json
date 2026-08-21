@@ -1,5 +1,5 @@
 {
-  "name": "@kinu/cf-backend",
+  "name": "@kinu.run/cf-backend",
   "version": "0.1.0",
   "type": "module",
   "main": "src/server.ts",
@@ -25,9 +25,9 @@
     "@nimbus-sh/worker": "0.3.0",
     "@phosphor-icons/react": "^2.1.10",
     "@plannotator/ui": "0.30.0",
-    "@kinu/agent-utils": "workspace:*",
-    "@kinu/compaction": "workspace:*",
-    "@kinu/core": "workspace:*",
+    "@kinu.run/agent-utils": "workspace:*",
+    "@kinu.run/compaction": "workspace:*",
+    "@kinu.run/core": "workspace:*",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "agents": "^0.20.1",
@@ -50,7 +50,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@kinu/test-utils": "workspace:*",
+    "@kinu.run/test-utils": "workspace:*",
     "@babel/plugin-proposal-decorators": "^7.25.9",
     "@cloudflare/vite-plugin": "^1.53.1",
     "@cloudflare/vitest-pool-workers": "^0.22.0",

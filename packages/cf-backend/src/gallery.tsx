@@ -15,6 +15,9 @@
  *                                    (quiet failure, protocol failure, a
  *                                    multi-line `run`, an MCP tool, a failing
  *                                    group)
+ *   /gallery.html?frame=advisor  → the advisor's note card, once per severity
+ *                                  (nit / concern / blocker), full ladder in
+ *                                  one column
  *   /gallery.html?frame=modal    → modal open
  *   /gallery.html?frame=home     → HomePage
  *   /gallery.html?frame=tabs     → the agent tab strip, active + idle + working
@@ -58,7 +61,7 @@ import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from "r
 import { createRoot } from "react-dom/client";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { UIMessage } from "ai";
-import { tolerate } from "@kinu/core/obs";
+import { tolerate } from "@kinu.run/core/obs";
 import { Button } from "@cloudflare/kumo";
 import { btnSmCls } from "@/components/ui/form";
 import {
@@ -88,16 +91,16 @@ import { StandingApprovalsCard } from "@/pages/SettingsPage";
 import {
   BUILTIN_TOOLS, BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS, CHARS_PER_TOKEN, TOOL_REACH,
   JsonObjectSchema, JsonValueSchema, mergeTranscript, seekPage, type JsonValue,
-} from "@kinu/core";
+} from "@kinu.run/core";
 import type { ActivitySnapshot, BackgroundJob, ForkNode, Rpc, ToolInfo } from "@/lib/protocol";
 import { buildTree, type MctsRow } from "@/lib/fork-tree-rows";
-import type { AgentStatus } from "@/hooks/use-proteus";
+import type { AgentStatus } from "@/hooks/use-kinu";
 import type { ExecutorInfo } from "@/lib/executors";
 import type {
   ChatHistoryEntry, ContextComposition, DirEntry, ExplorationCanvasRun, ForkRunParams,
   ForkRunSummary, HeadRunView, MountInfo, NodeTranscriptView, Page, PageRequest,
   PendingAction, ProducerSpend, RunSummary, SearchNode, Usage, WorkspaceSpend,
-} from "@kinu/core";
+} from "@kinu.run/core";
 import type { ModelMenuEntry } from "@/lib/user-api";
 import * as v from "valibot";
 import { serveGalleryRpc } from "@/gallery-agent-stub";
@@ -403,7 +406,7 @@ const MESSAGES: UIMessage[] = [
   // message, so this must never wear their bubble.
   msg({
     id: "g1", role: "user", createdAt: NOW - 7 * 60e3,
-    metadata: { proteusEvent: "workspace_created", signalId: "sig-genesis" },
+    metadata: { kinuEvent: "workspace_created", signalId: "sig-genesis" },
     parts: [{ type: "text", text: "This workspace has just been created. This is its first turn and nobody has typed anything yet." }],
   }),
   msg({
@@ -435,12 +438,12 @@ const MESSAGES: UIMessage[] = [
   }),
   msg({
     id: "bg1", role: "user",
-    metadata: { proteusEvent: "background_job", kind: "test-suite", status: "completed" },
+    metadata: { kinuEvent: "background_job", kind: "test-suite", status: "completed" },
     parts: [{ type: "text", text: "background job completed" }],
   }),
   msg({
     id: "d1", role: "user",
-    metadata: { proteusEvent: "event_drain" },
+    metadata: { kinuEvent: "event_drain" },
     parts: [{ type: "text", text: "While you were idle:\n- [subordinate_report] from subordinate (coupon-tester): All 14 checkout regression tests green after the migration patch. [the sender awaits your answer]\n- [webhook] from github (AshishKumar4/shop): PR #212 review requested" }],
   }),
   // The row the incident was, copied from production: `sunlit-stone-4a20` and
@@ -450,15 +453,15 @@ const MESSAGES: UIMessage[] = [
   // five were drawn in the owner's bubble, above things they had typed.
   msg({
     id: "f8798675-5e9a-4d13-aac2-293f4557f1c1", role: "user",
-    metadata: { proteusEvent: "fork_interrupted", runs: ["6xrijuf933p0jclpctw59"], heads: 23 },
+    metadata: { kinuEvent: "fork_interrupted", runs: ["6xrijuf933p0jclpctw59"], heads: 23 },
     parts: [{ type: "text", text: "23 head(s) across 6 fork run(s) were still marked running from an activation that has ended, so nothing is executing them and no report will arrive. They have been released; re-run the ones you still need." }],
   }),
   // The same class, written the new way: the seam stamped the author, so the
   // event name is no longer load-bearing for the decision.
   msg({
     id: "programmatic:completion-gate-1", role: "user",
-    metadata: { proteusEvent: "completion_gate", proteusAuthor: "harness" },
-    parts: [{ type: "text", text: "[Runtime check — a mechanical gate from the Proteus harness, not written by the user.]\n\nYou said the task is done. Here is the current state of the working directory, read after you stopped." }],
+    metadata: { kinuEvent: "completion_gate", kinuAuthor: "harness" },
+    parts: [{ type: "text", text: "[Runtime check — a mechanical gate from Kinu, not written by the user.]\n\nYou said the task is done. Here is the current state of the working directory, read after you stopped." }],
   }),
   msg({
     id: "a2", role: "assistant", createdAt: NOW - 3 * 60e3,
@@ -1938,7 +1941,7 @@ function LandingV2() {
       <header className="flex h-16 items-center justify-between px-6 border-b p-border">
         <span className="flex items-center gap-2.5">
           <span className="flex size-6 items-center justify-center rounded-md p-accent-bg p-accent font-mono text-[13px] font-bold">K</span>
-          <span className="font-mono text-[13px] font-semibold tracking-[0.14em] p-text">PROTEUS</span>
+          <span className="font-mono text-[13px] font-semibold tracking-[0.14em] p-text">KINU</span>
         </span>
         <nav className="flex items-center gap-2">
           <button className="p-btn-ghost px-3 h-8 p-row-text">Install CLI</button>
@@ -2155,7 +2158,7 @@ function ViewBlocksFrame() {
 // this frame is where you check that the owner can actually read it first.
 const RELEASE_BOARD = {
   bindings: [{
-    id: "src_1", kind: "local", label: "proteus", repoUrl: null, defaultBranch: "main",
+    id: "src_1", kind: "local", label: "kinu", repoUrl: null, defaultBranch: "main",
     localDeviceId: null, localRoot: "~/Kinu", deployTarget: "bunx wrangler deploy --env production",
     createdAt: NOW - 9 * 864e5, updatedAt: NOW - 9 * 864e5,
   }],
@@ -2987,6 +2990,37 @@ function ToolCallsFrame() {
   );
 }
 
+/* ── Advisor notes ──────────────────────────────────────────────── */
+
+/** The advisor's one note per finished turn, once per severity — the ladder
+ *  the card has to keep legible: `nit` must stay quiet, `blocker` must be the
+ *  loudest thing in the column, and the note itself is readable without a
+ *  click on all three. Real metadata shape (`proteusEvent` + `advisorSeverity`),
+ *  so the frame exercises the classifier, not a mock of it. */
+const ADVISOR_NOTES = {
+  nit: "The commit message says 'fix typo' but the diff also renames two exported symbols. Split it or say so.",
+  concern: "The retry loop in deploy.sh has no backoff cap. A stuck registry keeps it spinning for the whole turn budget.",
+  blocker: "The migration drops coupons.kind while the old worker is still deployed. Roll the worker first or every checkout 500s.",
+} as const;
+
+const ADVISOR_MESSAGES: UIMessage[] = (["nit", "concern", "blocker"] as const).map((severity) => msg({
+  id: `adv-${severity}`, role: "user",
+  metadata: { proteusEvent: "advisor", advisorSeverity: severity },
+  parts: [{ type: "text", text: ADVISOR_NOTES[severity] }],
+}));
+
+function AdvisorFrame() {
+  return (
+    <div className="flex justify-center p-bg p-text min-h-screen">
+      <div className="@container flex w-full max-w-[640px] flex-col gap-6 border-x p-border px-6 py-6">
+        {ADVISOR_MESSAGES.map((m) => (
+          <MessageView key={m.id} message={m} isLast={false} isStreaming={false} onFork={() => {}} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function AgentFrame() {
   return (
     <div className="p-bg min-h-screen flex justify-center">
@@ -3081,7 +3115,7 @@ async function mount() {
     const { default: MCTSExplorer } = await import("@/pages/MCTSExplorer");
     const run = frame === "forkswarmfull" ? "sw000" : "n000";
     // A PAGE owns its own connection, so it takes no `rpc` prop: it reads through
-    // `useProteus`, and in the gallery that resolves to `gallery-agent-stub`.
+    // `useKinu`, and in the gallery that resolves to `gallery-agent-stub`.
     // Installing the fixture there is what makes these three frames render at all
     // — before it they opened a socket to vite and drew an empty body.
     serveGalleryRpc(focusRun(run));
@@ -3098,6 +3132,7 @@ async function mount() {
   else if (frame === "chatloading") node = <ChatLoadingFrame />;
   else if (frame === "chathistory") node = <ChatHistoryFrame />;
   else if (frame === "toolcalls") node = <ToolCallsFrame />;
+  else if (frame === "advisor") node = <AdvisorFrame />;
   else if (frame === "streaming") node = <StreamingFrame />;
   else if (frame === "agent") node = <AgentFrame />;
   else if (frame === "transcript") node = <TranscriptFrame />;

@@ -8,14 +8,14 @@ import * as v from 'valibot';
 import {
   initEventsHubTables, EventLog, ReplyChannelStore, buildDrainBatch,
   acceptInboundEmail, inboundEmailDropNotice, normalizeEmailAddress,
-  type EmailIngressDeps, type IncomingEmail, type ProteusEvent, type SqlExec,
-} from '@kinu/core';
+  type EmailIngressDeps, type IncomingEmail, type KinuEvent, type SqlExec,
+} from '@kinu.run/core';
 import {
   agentEmailAddress, agentNameFromRecipient,
   parseInboundMime, stripQuotedReply,
 } from '../src/email/inbound';
 import { routeInboundEmail, type EmailDeliveryTarget } from '../src/email/route';
-import { createMemoryVfs } from '@kinu/test-utils';
+import { createMemoryVfs } from '@kinu.run/test-utils';
 import { sqlExec } from './helpers/user-do';
 
 function makeSql(): SqlExec {
@@ -23,7 +23,7 @@ function makeSql(): SqlExec {
 }
 
 const DOMAIN = 'agents.example.com';
-type EmailEvent = Extract<ProteusEvent, { variant: 'email' }>;
+type EmailEvent = Extract<KinuEvent, { variant: 'email' }>;
 
 function requireEmailEvent(log: EventLog, eventId: string): EmailEvent {
   const event = log.get(eventId);

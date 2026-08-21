@@ -43,8 +43,8 @@ function hubEnv() {
 
 function createTriggerRequest(authTime: number | null) {
   const headers = new Headers({ 'content-type': 'application/json' });
-  if (authTime !== null) headers.set('x-proteus-auth-time', String(authTime));
-  return new Request('https://proteus.example.com/api/workspaces/jarvis/triggers', {
+  if (authTime !== null) headers.set('x-kinu-auth-time', String(authTime));
+  return new Request('https://kinu.example.com/api/workspaces/jarvis/triggers', {
     method: 'POST',
     headers,
     body: JSON.stringify({ label: 'github', auth_mode: 'hmac' }),

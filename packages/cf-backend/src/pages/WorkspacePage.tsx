@@ -13,13 +13,13 @@ import type { FileUIPart } from "ai";
 import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES, mergeTranscript, pageSchema,
   isPlaceholderMission, planReviewAwaitingDecision, summarizeRestorePlan,
-} from "@kinu/core";
+} from "@kinu.run/core";
 import type {
   AlternateTakeSet, ChatHistoryEntry, FileCheckpointEntry, FileCheckpointListing,
   FileRestoreChange, FileRestorePlan, Page, TakePickOutcome,
-} from "@kinu/core";
+} from "@kinu.run/core";
 import * as v from "valibot";
-import { useProteus, type SteerRun } from "@/hooks/use-proteus";
+import { useKinu, type SteerRun } from "@/hooks/use-kinu";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { usePagedScroll } from "@/hooks/use-paged-scroll";
 import { useSteerActions } from "@/hooks/use-steer-actions";
@@ -40,7 +40,7 @@ import { WorkspaceBar, type Altitude } from "@/components/WorkspaceBar";
 import { Composer } from "@/components/Composer";
 import { dataUrlRawBytes } from "@/components/AttachmentChip";
 import type { PendingConsent, SubordinateActivityEvent } from "@/lib/protocol";
-import { renderThrownChain } from "@kinu/core/obs";
+import { renderThrownChain } from "@kinu.run/core/obs";
 // The model picker reads /api/user/models (which unions the connected
 // providers' menus); the result is cached for the SPA session (see user-api).
 
@@ -364,7 +364,7 @@ function ForkModal({
  *  the chat switches here. A focused surface: messages, model pick, send/stop
  *  (no fork/feedback/takes/restore — the facet exposes none of those). */
 function SubordinateChatColumn({ workspace, subName }: { workspace: string; subName: string }) {
-  const state = useProteus({ workspace, subordinate: subName });
+  const state = useKinu({ workspace, subordinate: subName });
 
   // The picker is fire-and-forget: setModel records the failure on state.error
   // and rolls the picker back to the stored spec, so this call site has nothing
@@ -506,7 +506,7 @@ export default function WorkspacePage() {
   const { agentId, subName } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
-  const state = useProteus(agentId);
+  const state = useKinu(agentId);
 
   // The picker is fire-and-forget: setModel records the failure on state.error
   // and rolls the picker back to the stored spec, so this call site has nothing
@@ -638,7 +638,7 @@ export default function WorkspacePage() {
   useEffect(() => {
     if (!agentId) return;
     const running = state.isStreaming || state.backgroundJobs.some((j) => j.status === "running");
-    window.dispatchEvent(new CustomEvent("proteus:workspace-activity", {
+    window.dispatchEvent(new CustomEvent("kinu:workspace-activity", {
       detail: { name: agentId, running, unseenChangelog: state.changelogUnseen },
     }));
   }, [agentId, state.isStreaming, state.backgroundJobs, state.changelogUnseen]);
@@ -648,7 +648,7 @@ export default function WorkspacePage() {
   // a second, competing rule over the same signal — two owners of one decision,
   // which is a bug however either of them behaves — and it went with the
   // preview panes it drove.
-  // (Port discovery itself lives in useProteus' live-data poll, so this fires
+  // (Port discovery itself lives in useKinu' live-data poll, so this fires
   // from any surface.)
   const prevPortCountRef = useRef(0);
   useEffect(() => {

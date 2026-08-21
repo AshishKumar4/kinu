@@ -14,9 +14,9 @@
 
 import * as fs from 'node:fs/promises';
 import { dirname } from 'node:path';
-import type { FileCheckpoints, VFS, VfsErrorCode } from '@kinu/core';
-import { ERRNO, makeVfsError } from '@kinu/core';
-import { classify, tolerateAsync } from '@kinu/core/obs';
+import type { FileCheckpoints, VFS, VfsErrorCode } from '@kinu.run/core';
+import { ERRNO, makeVfsError } from '@kinu.run/core';
+import { classify, tolerateAsync } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 const nodeErrorSchema = v.object({

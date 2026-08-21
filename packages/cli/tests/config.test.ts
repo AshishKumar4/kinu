@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   DEFAULT_WORKERS_AI_MODEL_ID, JsonObjectSchema, JsonValueSchema, parseJsonValue,
   type JsonObject, type JsonValue,
-} from "@kinu/core";
+} from "@kinu.run/core";
 import { validateAliasName, validateAgentName } from "../src/config";
 import * as v from 'valibot';
 
@@ -32,10 +32,10 @@ describe("CLI config safety", () => {
     expect(() => validateAliasName("kinu")).toThrow("reserved");
   });
 
-  test("honors PROTEUS_HOME before falling back to the OS home", () => {
-    const home = mkdtempSync(join(tmpdir(), "proteus-cli-home-"));
-    const proteusHome = mkdtempSync(join(tmpdir(), "proteus-cli-config-"));
-    tempDirs.push(home, proteusHome);
+  test("honors KINU_HOME before falling back to the OS home", () => {
+    const home = mkdtempSync(join(tmpdir(), "kinu-cli-home-"));
+    const kinuHome = mkdtempSync(join(tmpdir(), "kinu-cli-config-"));
+    tempDirs.push(home, kinuHome);
 
     const script = "import { AGENT_HOME } from './packages/cli/src/config.ts'; console.log(AGENT_HOME);";
     const proc = Bun.spawnSync({
@@ -44,14 +44,14 @@ describe("CLI config safety", () => {
       env: {
         ...process.env,
         HOME: home,
-        PROTEUS_HOME: proteusHome,
+        KINU_HOME: kinuHome,
       },
       stdout: "pipe",
       stderr: "pipe",
     });
 
     expect(proc.exitCode).toBe(0);
-    expect(proc.stdout.toString().trim()).toBe(resolve(proteusHome));
+    expect(proc.stdout.toString().trim()).toBe(resolve(kinuHome));
   });
 
   test("requireAuthConfig enforces token expiry", () => {
@@ -62,7 +62,7 @@ describe("CLI config safety", () => {
     expect(valid.stdout.toString().trim()).toBe("ok");
   });
 
-  test("PROTEUS_TOKEN env wins over the stored session, even an expired one", () => {
+  test("KINU_TOKEN env wins over the stored session, even an expired one", () => {
     const ciToken = `pta_${"0".repeat(32)}_${"a".repeat(44)}`;
     const result = runRequireAuth(new Date(Date.now() - 60_000).toISOString(), ciToken);
     expect(result.stdout.toString().trim()).toBe(`ok ${ciToken}`);
@@ -81,7 +81,7 @@ describe("CLI config safety", () => {
   });
 });
 
-const CLOUD_ORIGIN = "https://proteus.example.com";
+const CLOUD_ORIGIN = "https://kinu.example.com";
 const CLOUD_TOKEN = "ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz";
 
 describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
@@ -176,7 +176,7 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
   test("an explicit direct endpoint keeps precedence over the signed-in proxy", () => {
     const out = runResolveLLM(
       { origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN },
-      { PROTEUS_BASE_URL: "https://gateway.example/v1", PROTEUS_AUTH: "Bearer direct" },
+      { KINU_BASE_URL: "https://gateway.example/v1", KINU_AUTH: "Bearer direct" },
     );
     expect(out).toMatchObject({ name: "openai-compat", baseURL: "https://gateway.example/v1" });
   });
@@ -194,21 +194,21 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
   });
 });
 
-/** Runs resolveLLMConfig in a clean subprocess (config.ts binds PROTEUS_HOME at
+/** Runs resolveLLMConfig in a clean subprocess (config.ts binds KINU_HOME at
  *  import) with the provider/cloud env scrubbed, returning the config or
  *  { error } as JSON. */
 function runResolveLLM(config: JsonObject, extraEnv: Record<string, string> = {}): JsonValue {
-  const proteusHome = mkdtempSync(join(tmpdir(), "proteus-cli-llm-"));
-  tempDirs.push(proteusHome);
-  writeFileSync(join(proteusHome, "config.json"), JSON.stringify(config), { mode: 0o600 });
+  const kinuHome = mkdtempSync(join(tmpdir(), "kinu-cli-llm-"));
+  tempDirs.push(kinuHome);
+  writeFileSync(join(kinuHome, "config.json"), JSON.stringify(config), { mode: 0o600 });
   const script = `
     import { resolveLLMConfig } from './packages/cli/src/config.ts';
     try { console.log(JSON.stringify(resolveLLMConfig())); }
     catch (err) { console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err) })); }
   `;
-  const env: NodeJS.ProcessEnv = { ...process.env, PROTEUS_HOME: proteusHome, ...extraEnv };
+  const env: NodeJS.ProcessEnv = { ...process.env, KINU_HOME: kinuHome, ...extraEnv };
   for (const name of [
-    "PROTEUS_TOKEN", "PROTEUS_ORIGIN", "PROTEUS_MODEL", "PROTEUS_BASE_URL", "PROTEUS_AUTH",
+    "KINU_TOKEN", "KINU_ORIGIN", "KINU_MODEL", "KINU_BASE_URL", "KINU_AUTH",
     "AI_GATEWAY_BASE_URL", "AI_GATEWAY_AUTH", "AI_GATEWAY_MODEL",
     "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "CODEX_ACCESS_TOKEN",
   ]) {
@@ -226,21 +226,21 @@ function runResolveLLM(config: JsonObject, extraEnv: Record<string, string> = {}
 }
 
 function runRequireAuth(tokenExpiresAt: string, envToken?: string) {
-  const proteusHome = mkdtempSync(join(tmpdir(), "proteus-cli-auth-"));
-  tempDirs.push(proteusHome);
+  const kinuHome = mkdtempSync(join(tmpdir(), "kinu-cli-auth-"));
+  tempDirs.push(kinuHome);
   writeFileSync(
-    join(proteusHome, "config.json"),
+    join(kinuHome, "config.json"),
     JSON.stringify({ accessToken: "ptc_test", tokenExpiresAt }),
     { mode: 0o600 },
   );
   const script = `
     import { requireAuthConfig } from './packages/cli/src/config.ts';
-    try { const auth = requireAuthConfig(); console.log(process.env.PROTEUS_TOKEN ? 'ok ' + auth.token : 'ok'); }
+    try { const auth = requireAuthConfig(); console.log(process.env.KINU_TOKEN ? 'ok ' + auth.token : 'ok'); }
     catch (err) { console.log(err instanceof Error ? err.message : String(err)); }
   `;
-  const env: NodeJS.ProcessEnv = { ...process.env, PROTEUS_HOME: proteusHome };
-  if (envToken) env.PROTEUS_TOKEN = envToken;
-  else delete env.PROTEUS_TOKEN;
+  const env: NodeJS.ProcessEnv = { ...process.env, KINU_HOME: kinuHome };
+  if (envToken) env.KINU_TOKEN = envToken;
+  else delete env.KINU_TOKEN;
   return Bun.spawnSync({
     cmd: [process.execPath, "-e", script],
     cwd: resolve(__dirname, "../../.."),
@@ -269,8 +269,8 @@ const PreferenceWriteResultSchema: v.GenericSchema<PreferenceWriteResult> = v.ob
 });
 
 function runPreferenceWrite(): PreferenceWriteResult {
-  const proteusHome = mkdtempSync(join(tmpdir(), "proteus-cli-preferences-"));
-  tempDirs.push(proteusHome);
+  const kinuHome = mkdtempSync(join(tmpdir(), "kinu-cli-preferences-"));
+  tempDirs.push(kinuHome);
   const script = `
     import { writeFileSync } from 'node:fs';
     import { CONFIG_PATH, loadConfigFile } from './packages/cli/src/config.ts';
@@ -294,7 +294,7 @@ function runPreferenceWrite(): PreferenceWriteResult {
   const proc = Bun.spawnSync({
     cmd: [process.execPath, "-e", script],
     cwd: resolve(__dirname, "../../.."),
-    env: { ...process.env, PROTEUS_HOME: proteusHome },
+    env: { ...process.env, KINU_HOME: kinuHome },
     stdout: "pipe",
     stderr: "pipe",
   });

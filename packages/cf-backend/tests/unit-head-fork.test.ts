@@ -29,7 +29,7 @@ import {
   type ParentRpcWrite,
   type SqlExecRow,
   type SqlValue,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { platformGatewayEnv } from './helpers/platform-gateway';
 import * as v from 'valibot';
@@ -311,7 +311,7 @@ describe('a head forks its parent workspace', () => {
   test("the canonical workspace's files are readable without a parent executor", async () => {
     const { facet, parent } = makeFacet({ 'repo/README.md': '# cloned project' });
     await facet.setOwner('user-1', 'pwc_parent');
-    await facet.setSharedParent('proteus-main');
+    await facet.setSharedParent('kinu-main');
 
     const rt = facet.headRuntime(new HeadCapture());
     const workspace = rt.executionRouter!.getProvider('workspace')!;
@@ -325,7 +325,7 @@ describe('a head forks its parent workspace', () => {
   test('the canonical workspace directory listing reaches the head', async () => {
     const { facet } = makeFacet({ 'repo/src/index.ts': 'x', 'repo/package.json': '{}' });
     await facet.setOwner('user-1', 'pwc_parent');
-    await facet.setSharedParent('proteus-main');
+    await facet.setSharedParent('kinu-main');
 
     const workspace = facet.headRuntime(new HeadCapture()).executionRouter!.getProvider('workspace')!;
     const names = v.parse(v.array(v.string()), await workspace.tools.readdir.execute('repo'));
@@ -335,7 +335,7 @@ describe('a head forks its parent workspace', () => {
   test("searching the workspace is one real shell call, not an RPC file walk", async () => {
     const { facet, parent, nimbus } = makeFacet({ 'repo/a.ts': 'needle here', 'repo/b.ts': 'nothing' });
     await facet.setOwner('user-1', 'pwc_parent');
-    await facet.setSharedParent('proteus-main');
+    await facet.setSharedParent('kinu-main');
 
     const workspace = facet.headRuntime(new HeadCapture()).executionRouter!.getProvider('workspace')!;
     const found = await workspace.tools.exec.execute('grep -rl needle .');
@@ -349,25 +349,25 @@ describe('a head forks its parent workspace', () => {
     requestedSandboxId = null;
     const { facet } = makeFacet();
     await facet.setOwner('user-1', 'pwc_parent');
-    await facet.setSharedParent('proteus-main');
+    await facet.setSharedParent('kinu-main');
 
     facet.headRuntime(new HeadCapture());
 
-    // The container the parent agent works in — `proteus-${workspaceName}` in
-    // runtime.ts — and emphatically not `proteus-head-1`.
-    expect(lastRequestedSandboxId()).toBe('proteus-proteus-main');
+    // The container the parent agent works in — `kinu-${workspaceName}` in
+    // runtime.ts — and emphatically not `kinu-head-1`.
+    expect(lastRequestedSandboxId()).toBe('kinu-kinu-main');
   });
 
   test('a head never decides the restore of the container it only rides', async () => {
     restoresPerformed = 0;
     const { facet, db } = makeFacet();
     await facet.setOwner('user-1', 'pwc_parent');
-    await facet.setSharedParent('proteus-main');
+    await facet.setSharedParent('kinu-main');
 
     const rt = facet.headRuntime(new HeadCapture());
     // A backup handle on the FACET's own storage — `agent_config` is created by
     // the runtime above, and the restore is read at first touch, not at build.
-    // It is not the shared container's history: `proteus-proteus-main` belongs to
+    // It is not the shared container's history: `kinu-kinu-main` belongs to
     // the parent, so acting on it would roll that container back to whatever
     // this head last happened to record.
     db.prepare("INSERT INTO agent_config (key, value) VALUES ('workspace_backup', ?)")
@@ -387,7 +387,7 @@ describe('a head forks its parent workspace', () => {
   test("a head writes the canonical workspace rather than private duplicate bytes", async () => {
     const { facet, parent, nimbus } = makeFacet();
     await facet.setOwner('user-1', 'pwc_parent');
-    await facet.setSharedParent('proteus-main');
+    await facet.setSharedParent('kinu-main');
     const rt = facet.headRuntime(new HeadCapture());
 
     await rt.storage.vfs.writeFile('shared/notes.md', 'visible');
@@ -399,7 +399,7 @@ describe('a head forks its parent workspace', () => {
   test("the head's direct workspace writes are attributed to that head", async () => {
     const { facet } = makeFacet({ 'repo/parser.ts': 'one\ntwo\n' });
     await facet.setOwner('user-1', 'pwc_parent');
-    await facet.setSharedParent('proteus-main');
+    await facet.setSharedParent('kinu-main');
     const capture = new HeadCapture();
     const rt = facet.headRuntime(capture);
 
@@ -424,7 +424,7 @@ describe('a head forks its parent workspace', () => {
   test("the head's own workspace plane scores the tools it crafts", async () => {
     const { facet } = makeFacet();
     await facet.setOwner('user-1', 'pwc_parent');
-    await facet.setSharedParent('proteus-main');
+    await facet.setSharedParent('kinu-main');
 
     const workspace = facet.headRuntime(new HeadCapture()).executionRouter!.getProvider('workspace')!;
 

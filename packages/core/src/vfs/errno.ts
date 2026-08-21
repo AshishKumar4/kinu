@@ -72,7 +72,7 @@ interface VfsErrorLike extends Error {
 /** The addressing correction every file surface appends to a path error. It
  *  lives in agent-utils because the emulated shell down there needs the same
  *  sentence and cannot import core. */
-export { vfsAddressingHint } from '@kinu/agent-utils/vfs';
+export { vfsAddressingHint } from '@kinu.run/agent-utils/vfs';
 
 /** True when `err` carries a code from the closed taxonomy. */
 export function isVfsError<T>(error: T): error is T & VfsErrorLike {

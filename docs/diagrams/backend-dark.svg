@@ -71,7 +71,7 @@
   <text class="s" x="36" y="124" text-anchor="start">React, six work surfaces</text>
   <text class="xs" x="36" y="139" text-anchor="start">chat over WebSocket</text>
   <rect x="313" y="88" width="274" height="56" rx="7" fill="var(--blueFill)" stroke="var(--blueLine)"/>
-  <text class="b" x="325" y="109" text-anchor="start" fill="var(--blue)">proteus CLI</text>
+  <text class="b" x="325" y="109" text-anchor="start" fill="var(--blue)">kinu CLI</text>
   <text class="s" x="325" y="124" text-anchor="start">chat · exec · TUI · ACP</text>
   <text class="xs" x="325" y="139" text-anchor="start">local session or cloud RPC</text>
   <rect x="602" y="88" width="274" height="56" rx="7" fill="var(--pinkFill)" stroke="var(--pinkLine)"/>

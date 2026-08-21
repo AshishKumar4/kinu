@@ -16,7 +16,7 @@
  *      tool result is `{ reason, error }`, reason FIRST, because every seam that
  *      shows a result to a human or hashes it for steering bounds it to a head
  *      slice and the prose is the long part (tools/file-tool.ts:78-84,
- *      execution/inline.ts). `refusalOf` projects a `ProteusError` into exactly
+ *      execution/inline.ts). `refusalOf` projects a `KinuError` into exactly
  *      that shape, so the classification travels on the wire the readers already
  *      parse instead of beside it.
  *   2. The vocabulary is SHARED, not new. `missing`, `io` and `bad_input` are
@@ -113,8 +113,8 @@ export const CODE_IS_REFUSAL = {
  * chains through native `cause` exactly like everything else — the class is an
  * addition to the language's error, never a replacement for it.
  */
-export class ProteusError extends Error {
-  override readonly name = 'ProteusError';
+export class KinuError extends Error {
+  override readonly name = 'KinuError';
 
   constructor(
     readonly code: ErrorCode,
@@ -143,7 +143,7 @@ export type Refusal = {
 };
 
 /** Project a classified failure onto the wire. */
-export function refusalOf(error: ProteusError): Refusal {
+export function refusalOf(error: KinuError): Refusal {
   return { reason: error.code, error: renderCauseChain(error) };
 }
 
@@ -210,7 +210,7 @@ export function renderCauseChain(error: Error): string {
  *   `renderThrownChain({ cause })`     the value is a `catch` binding, a
  *                                      rejection, an RPC payload. The trust
  *                                      boundary, narrowed once.
- *   `renderCauseChain(toProteusError(  you ALSO have a `doing` frame and know
+ *   `renderCauseChain(toKinuError(  you ALSO have a `doing` frame and know
  *     { doing, cause, otherwise }))`   what an unrecognised failure means at
  *                                      THIS seam. Strictly better than the line
  *                                      above — prefer it wherever both fit.
@@ -308,7 +308,7 @@ const OOM_SIGNATURES: readonly RegExp[] = [
 /**
  * Name the class of a caught value, or null when nothing pinned recognises it.
  *
- * Null is the honest answer, and it is why `toProteusError` makes its caller
+ * Null is the honest answer, and it is why `toKinuError` makes its caller
  * supply `otherwise`: a classifier that guessed would file every unrecognised
  * failure under one code, and the code would then mean nothing. The call site
  * knows what an unrecognised failure means AT ITS OWN SEAM — for an exec
@@ -317,7 +317,7 @@ const OOM_SIGNATURES: readonly RegExp[] = [
  */
 export function classifyErrorCode(input: { cause: unknown }): ErrorCode | null {
   const caught = input.cause;
-  if (caught instanceof ProteusError) return caught.code;
+  if (caught instanceof KinuError) return caught.code;
   // A SyntaxError is `classify`'s `malformed-input`, and at this layer malformed
   // input is what it says: the value handed in does not parse.
   if (caught instanceof SyntaxError) return 'bad_input';
@@ -350,9 +350,9 @@ export function classifyErrorCode(input: { cause: unknown }): ErrorCode | null {
  * about the failure than this one does, and re-classifying from the outside is
  * how a precise `oom` becomes a generic `io` on its way up.
  */
-export function toProteusError(
+export function toKinuError(
   input: { doing: string; cause: unknown; otherwise: ErrorCode },
-): ProteusError {
+): KinuError {
   const code = classifyErrorCode({ cause: input.cause }) ?? input.otherwise;
-  return new ProteusError(code, input.doing, { cause: input.cause });
+  return new KinuError(code, input.doing, { cause: input.cause });
 }

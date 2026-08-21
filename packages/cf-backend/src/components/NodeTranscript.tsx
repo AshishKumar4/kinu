@@ -27,8 +27,8 @@ import {
   TreeStructureIcon, WarningCircleIcon,
 } from "@phosphor-icons/react";
 import type { UIMessage } from "ai";
-import type { HeadStep, HeadStepToolCall, NodeTranscriptView } from "@kinu/core";
-import { usageTotal } from "@kinu/core";
+import type { HeadStep, HeadStepToolCall, NodeTranscriptView } from "@kinu.run/core";
+import { usageTotal } from "@kinu.run/core";
 import { MessageView } from "@/components/MessageView";
 import { DetailSection, EmptyState, MarkdownContent, Metric, timeAgo } from "@/components/surfaces/shared";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -354,7 +354,7 @@ export function useNodeTranscript({ runId, nodeId, rpc, headActivity, running = 
   runId: string | null;
   nodeId: string | null;
   rpc: Rpc;
-  /** Per-branch write counter from `useProteus`. */
+  /** Per-branch write counter from `useKinu`. */
   headActivity: ReadonlyMap<string, number>;
   /** Whether the node is still working. Arms the fallback clock below; a
    *  finished node has nothing further to poll for. */
@@ -408,7 +408,7 @@ export function NodeTranscript({ selection, trees, rpc, headActivity, onSelect }
    *  transcript has not arrived yet. */
   trees: ReadonlyMap<string, ForkNode>;
   rpc: Rpc;
-  /** Per-branch write counter from `useProteus`. */
+  /** Per-branch write counter from `useKinu`. */
   headActivity: ReadonlyMap<string, number>;
   onSelect: (nodeId: string) => void;
 }) {

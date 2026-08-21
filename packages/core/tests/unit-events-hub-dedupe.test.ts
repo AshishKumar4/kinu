@@ -1,9 +1,9 @@
 // Dedupe key derivation per variant — pure function.
 import { describe, test, expect } from 'bun:test';
 import { dedupeKeyFor } from '../src/events/hub/index';
-import type { ProteusEvent } from '../src/events/hub/index';
+import type { KinuEvent } from '../src/events/hub/index';
 
-function base(): Extract<ProteusEvent, { variant: 'webhook' }> {
+function base(): Extract<KinuEvent, { variant: 'webhook' }> {
   return {
     id: 'eid',
     trace_id: 'tid',
@@ -54,7 +54,7 @@ describe('dedupeKeyFor — webhook', () => {
 
 describe('dedupeKeyFor — timer', () => {
   test('same trigger + scheduled_fire_at → same key', () => {
-    const e: ProteusEvent = {
+    const e: KinuEvent = {
       ...base(),
       ingress: 'timer_alarm',
       variant: 'timer',
@@ -66,7 +66,7 @@ describe('dedupeKeyFor — timer', () => {
 
 describe('dedupeKeyFor — process_done', () => {
   test('keyed by process_id', () => {
-    const e: ProteusEvent = {
+    const e: KinuEvent = {
       ...base(),
       ingress: 'sandbox_cb',
       variant: 'process_done',
@@ -77,11 +77,11 @@ describe('dedupeKeyFor — process_done', () => {
 });
 
 describe('dedupeKeyFor — peer_agent', () => {
-  const peer = (sender_event_id: string, topic: string): ProteusEvent => ({
+  const peer = (sender_event_id: string, topic: string): KinuEvent => ({
     ...base(),
     ingress: 'peer_async',
     variant: 'peer_agent',
-    payload: { from_agent_name: 'scout', from_user_id: 'u1', topic, body: 'hi', sender_event_id, proteus_mode: 'build' },
+    payload: { from_agent_name: 'scout', from_user_id: 'u1', topic, body: 'hi', sender_event_id, kinu_mode: 'build' },
   });
   test('keyed by (sender, sender_event_id) — a crash redelivery is a no-op', () => {
     expect(dedupeKeyFor(peer('ox1', 'status'))).toBe('peer:scout:ox1');
@@ -93,7 +93,7 @@ describe('dedupeKeyFor — peer_agent', () => {
 
 describe('dedupeKeyFor — non-deduped variants', () => {
   test('chat returns null', () => {
-    const e: ProteusEvent = {
+    const e: KinuEvent = {
       ...base(),
       ingress: 'chat_ws',
       variant: 'chat',
@@ -102,7 +102,7 @@ describe('dedupeKeyFor — non-deduped variants', () => {
     expect(dedupeKeyFor(e)).toBeNull();
   });
   test('internal returns null', () => {
-    const e: ProteusEvent = {
+    const e: KinuEvent = {
       ...base(),
       ingress: 'self_emit',
       variant: 'internal',

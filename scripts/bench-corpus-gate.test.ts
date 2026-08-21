@@ -11,7 +11,7 @@
 import { describe, test, expect, afterAll } from 'bun:test';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { scratchDir } from '@kinu/test-utils';
+import { scratchDir } from '@kinu.run/test-utils';
 import { stalePatches } from './bench-corpus';
 
 /** The fixture's own patch list. `trackedFiles()` answers for THIS repo, so a

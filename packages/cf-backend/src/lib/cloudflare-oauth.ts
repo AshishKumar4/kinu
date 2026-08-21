@@ -1,5 +1,5 @@
-import { JsonObjectSchema, type JsonObject, type OAuthCredential } from '@kinu/core';
-import { diagnostics, toProteusError } from '@kinu/core/obs';
+import { JsonObjectSchema, type JsonObject, type OAuthCredential } from '@kinu.run/core';
+import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 const CloudflareAccountSchema = v.object({ id: v.string(), name: v.optional(v.string()) });
@@ -133,7 +133,7 @@ export async function cloudflareTokenToCredential(
   try {
     accounts = await fetchCloudflareAccounts(accessToken);
   } catch (err) {
-    diagnostics.failure('oauth.cloudflare_account_lookup_failed', toProteusError({
+    diagnostics.failure('oauth.cloudflare_account_lookup_failed', toKinuError({
       doing: "looking up the Cloudflare login's accounts",
       cause: err,
       otherwise: 'unavailable',

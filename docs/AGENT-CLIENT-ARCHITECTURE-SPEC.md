@@ -37,7 +37,7 @@ longer exist.
 
 | Original claim | Verdict | Where it is now |
 |---|---|---|
-| Web connects with `useAgent` / `useAgentChat` | SHIPPED | `packages/cf-backend/src/hooks/use-proteus.ts:409,592,602`. `useAgentChat` imports from `@cloudflare/ai-chat/react`. |
+| Web connects with `useAgent` / `useAgentChat` | SHIPPED | `packages/cf-backend/src/hooks/use-kinu.ts:409,592,602`. `useAgentChat` imports from `@cloudflare/ai-chat/react`. |
 | `/agents/*` routes through `routeAgentRequest()` after auth and ownership | SHIPPED | `packages/cf-backend/src/server.ts:461-485` |
 | CLI bearer auth sits under `/api/cli/*` | SHIPPED | `packages/cf-backend/src/cli/routes.ts` |
 | `cloud-local-turn.ts` prepares a cloud turn and runs `runChat()` locally | REMOVED | The file is deleted. `packages/cli/src/cloud-agent-client.ts` replaced it. |
@@ -291,7 +291,7 @@ The canonical read is `getChatHistoryPage` in
 its local peer `getLocalChatHistory`.
 
 **Spec §11.4 Auto registration: SHIPPED.** No implicit creation remains in the server
-ownership check or in `useProteus()` load time. An unregistered workspace is told
+ownership check or in `useKinu()` load time. An unregistered workspace is told
 to create itself through the explicit route, and the message names that route
 (`user/workspace-access.ts:95`).
 

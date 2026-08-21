@@ -51,6 +51,6 @@ export function git(repo: string, ...args: readonly string[]): string {
  *  fixture does not depend on the developer having one. */
 export function initRepo(repo: string): void {
   git(repo, 'init', '-q');
-  git(repo, 'config', 'user.email', 'proteus@example.invalid');
+  git(repo, 'config', 'user.email', 'kinu@example.invalid');
   git(repo, 'config', 'user.name', 'Kinu Test');
 }

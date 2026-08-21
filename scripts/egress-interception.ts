@@ -46,7 +46,7 @@
  * 5. DNS. Previously reported here as an open residual — "DNS leaves, to
  *    Cloudflare's resolvers, so query LABELS are a low-bandwidth channel
  *    outward". MEASURED FALSE on the deployed worker (0.2.0+28bc79307), inside a
- *    real ProteusSandbox container reached through `executeInExecutor`:
+ *    real KinuSandbox container reached through `executeInExecutor`:
  *
  *      raw UDP/53 to 1.1.1.1, 8.8.8.8 and 2606:4700:4700::1111 — no reply
  *      raw TCP/53 to 1.1.1.1                                   — timeout
@@ -292,7 +292,7 @@ if (import.meta.main) {
       found: 'the catch-all is missing from the registry, or nothing binds it',
       silently: 'only hosts with an explicit per-host handler are intercepted and everything else falls '
         + 'through to enableInternet, so a request to any other host leaves without being seen',
-      fix: 'register EGRESS_HANDLER in ProteusSandbox.outboundHandlers and bind it with setOutboundHandler',
+      fix: 'register EGRESS_HANDLER in KinuSandbox.outboundHandlers and bind it with setOutboundHandler',
     }));
     process.exit(1);
   }
@@ -320,7 +320,7 @@ if (import.meta.main) {
     // Not a failure: upstream turning it on is good news. But our source
     // comments assert the opposite, so say it loudly rather than let them rot.
     console.log('egress-interception: NOTE — @cloudflare/containers no longer defaults '
-      + 'interceptHttps to false. Update the comments in proteus-sandbox.ts and this gate.');
+      + 'interceptHttps to false. Update the comments in kinu-sandbox.ts and this gate.');
   }
   console.log('egress-interception: DNS RESIDUAL — MEASURED CLOSED on the deployed container '
     + '(0.2.0+28bc79307): raw UDP/53 and TCP/53 to public resolvers get no reply, and every name '

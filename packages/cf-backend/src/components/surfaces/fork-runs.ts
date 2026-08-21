@@ -22,7 +22,7 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type {
   ExplorationCanvasRun, ForkRunParams, ForkRunSummary, HeadRunView, Page, SeekCursor,
-} from "@kinu/core";
+} from "@kinu.run/core";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { usePagedScroll } from "@/hooks/use-paged-scroll";
 import { buildTree } from "@/lib/fork-tree-rows";

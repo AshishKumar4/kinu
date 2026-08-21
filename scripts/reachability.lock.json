@@ -1,8 +1,6 @@
 [
   "packages/cf-backend/src/orchestrator.ts#OrchestratorAgent.clearBackgroundJobs",
   "packages/cf-backend/src/orchestrator.ts#OrchestratorAgent.experienceAction",
-  "packages/cf-backend/src/orchestrator.ts#OrchestratorAgent.getEvolutionConfig",
   "packages/cf-backend/src/orchestrator.ts#OrchestratorAgent.getWorkspaceAgents",
-  "packages/cf-backend/src/orchestrator.ts#OrchestratorAgent.listDeferredApprovals",
-  "packages/cf-backend/src/orchestrator.ts#OrchestratorAgent.setEvolutionConfig"
+  "packages/cf-backend/src/orchestrator.ts#OrchestratorAgent.listDeferredApprovals"
 ]

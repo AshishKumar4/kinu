@@ -2,15 +2,15 @@ import { closeSync, openSync, readFileSync, unlinkSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { Database } from 'bun:sqlite';
-import { DEFAULT_SESSION_REFLECTION_INTERVAL } from '@kinu/core';
-import { renderThrownChain, tolerate } from '@kinu/core/obs';
+import { DEFAULT_SESSION_REFLECTION_INTERVAL } from '@kinu.run/core';
+import { renderThrownChain, tolerate } from '@kinu.run/core/obs';
 import {
   LocalAgentSession,
   openWorkspaceCLI,
   resolveChatModel,
   writeSecretFile,
   type SessionEvent,
-} from '@kinu/cli-backend';
+} from '@kinu.run/cli-backend';
 import {
   AGENT_HOME,
   agentDbPath,
@@ -92,7 +92,7 @@ export async function daemonCommand(action: string | undefined, workspace?: stri
 
 export function ensureLocalDaemonRunning(): void {
   // Skip daemon startup when explicitly disabled (e.g. in tests).
-  if (process.env.PROTEUS_SKIP_DAEMON === '1') return;
+  if (process.env.KINU_SKIP_DAEMON === '1') return;
   startDaemon({ quiet: true });
 }
 

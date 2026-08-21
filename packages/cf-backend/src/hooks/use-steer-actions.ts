@@ -14,24 +14,24 @@
 import { useCallback, useMemo, useState } from "react";
 import { describeError } from "@/hooks/use-async-resource";
 import type { ComposerNotice } from "@/components/Composer";
-import type { SteerRun } from "@/hooks/use-proteus";
+import type { SteerRun } from "@/hooks/use-kinu";
 
 /** The notice id both actions write, so one replaces the other rather than
  *  stacking two contradictory statuses over the same draft. */
 const NOTICE_ID = "steer";
 
 export interface SteerActionsDeps {
-  /** `useProteus().steerChat` — resolves with where the text landed. */
+  /** `useKinu().steerChat` — resolves with where the text landed. */
   steerChat: (text: string) => Promise<"mid-turn" | "idle">;
-  /** `useProteus().abortChat` — resolves with the steers the abort dropped. */
+  /** `useKinu().abortChat` — resolves with the steers the abort dropped. */
   abortChat: () => Promise<string[]>;
-  /** `useProteus().sendChat`, for the `idle` race where nothing was buffered. */
+  /** `useKinu().sendChat`, for the `idle` race where nothing was buffered. */
   sendChat: (text: string) => void;
   draft: string;
   setDraft: (update: (current: string) => string) => void;
   /** Whether the draft carries attachments a steer cannot take. */
   hasAttachments?: boolean;
-  /** `useProteus().steerRuns` — the steers the server has taken. */
+  /** `useKinu().steerRuns` — the steers the server has taken. */
   steerRuns: readonly SteerRun[];
   /** Ids of the messages the chat is already rendering durably. */
   messageIds: readonly string[];

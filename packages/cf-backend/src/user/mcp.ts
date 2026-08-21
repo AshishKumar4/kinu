@@ -10,8 +10,8 @@
  *   locally and dispatches each call back to `UserDO.callMcpTool(...)`.
  */
 
-import { JsonArraySchema, JsonObjectSchema, type JsonObject } from '@kinu/core';
-import { tolerate } from '@kinu/core/obs';
+import { JsonArraySchema, JsonObjectSchema, type JsonObject } from '@kinu.run/core';
+import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 export type McpTransport = 'auto' | 'sse' | 'streamable-http';

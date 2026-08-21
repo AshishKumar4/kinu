@@ -29,7 +29,7 @@ import {
   ClockIcon, PulseIcon, WarningCircleIcon, GitBranchIcon,
   RocketLaunchIcon, PackageIcon, SparkleIcon, CaretRightIcon, ShieldWarningIcon,
 } from "@phosphor-icons/react";
-import type { AgentTaskTree, ChangelogEntry, PendingAction, PendingActionKind } from "@kinu/core";
+import type { AgentTaskTree, ChangelogEntry, PendingAction, PendingActionKind } from "@kinu.run/core";
 import type { BackgroundJob, Rpc } from "@/lib/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
@@ -38,7 +38,7 @@ import { isClosedTree, isSettled, PlanProgress, TaskTree } from "./work-tasks";
 import { JobCard } from "./work-jobs";
 import { ChangelogEntryCard, ChangelogFailure, useChangelog } from "./changelog-entries";
 import type { SurfaceKind } from "./WorkSurface";
-import { renderThrownChain } from "@kinu/core/obs";
+import { renderThrownChain } from "@kinu.run/core/obs";
 
 /** Which filter a journal row answers to. `All` is not a filter, it is no
  *  filter — the chips are views over one list. */

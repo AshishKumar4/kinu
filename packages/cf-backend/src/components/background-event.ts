@@ -4,7 +4,7 @@
  * Turns the backend enqueues on the agent's behalf (the reactor draining hub
  * events, a background job returning) are stored as `role: "user"` messages so
  * the model reads them as its turn input. They are not the operator speaking,
- * and rendering them in the user's bubble says they were. `metadata.proteusEvent`
+ * and rendering them in the user's bubble says they were. `metadata.kinuEvent`
  * — stamped by BackendHost.enqueueTurn — is the provenance that tells them
  * apart, and the drain text the reactor composes is itself structured
  * (`- [variant] from source: brief`), so the card can show the events rather
@@ -21,9 +21,10 @@
  */
 
 import {
+  ADVISOR_SIGNAL_KIND, DEFAULT_ADVISOR_MIN_SEVERITY, isAdvisorSeverity,
   JsonObjectSchema, SIGNAL_ID_METADATA_KEY, turnAuthor,
-  type JsonObject, type SignalCardEvent, type SignalCardState,
-} from "@kinu/core";
+  type AdvisorSeverity, type JsonObject, type SignalCardEvent, type SignalCardState,
+} from "@kinu.run/core";
 import * as v from 'valibot';
 
 /** A turn the backend enqueued, never typed by the operator. `system_event` is
@@ -33,10 +34,12 @@ export type ProgrammaticTurn =
   | { kind: "workspace_created" }
   | { kind: "background_job"; jobKind: string; status: string }
   | { kind: "deferred_approval"; decision: string; count: number }
+  | { kind: "advisor"; severity: AdvisorSeverity }
   | { kind: "system_event"; event: string };
 
 const ProgrammaticMetadataSchema = v.looseObject({
-  proteusEvent: v.optional(v.string()),
+  kinuEvent: v.optional(v.string()),
+  advisorSeverity: v.optional(v.string()),
   kind: v.optional(v.string()),
   status: v.optional(v.string()),
   decision: v.optional(v.string()),
@@ -55,10 +58,10 @@ const SignalCardEventSchema = v.variant('state', [
  *
  * The decision is `turnAuthor`'s and is made from written markers — the author
  * stamp the enqueue seam puts on every programmatic row, or, on rows written
- * before that stamp existed, the `proteusEvent` metadata and the
+ * before that stamp existed, the `kinuEvent` metadata and the
  * `programmatic:` id prefix. Nothing here reads the prose.
  *
- * Four events have a card that says what happened without the harness's
+ * Five events have a card that says what happened without the harness's
  * wording; everything else harness-authored is `system_event`, which shows the
  * event's name and keeps its words folded away. That fallback is the point:
  * this used to be an allowlist of those four, so every event kind added after
@@ -75,6 +78,9 @@ const SignalCardEventSchema = v.variant('state', [
  * MISSION in the New workspace dialog, not a message — the mission is the soul
  * and reaches the agent through the system prompt. What lands in the transcript
  * is the harness telling the agent it is open, so it wears a card too.
+ *
+ * The advisor's note gets its own card because its severity is the one thing
+ * a reader needs at a glance, and the `system_event` fold would hide it.
  */
 export function classifyProgrammaticTurn<Metadata>(
   metadata: Metadata, id?: string,
@@ -82,7 +88,7 @@ export function classifyProgrammaticTurn<Metadata>(
   if (turnAuthor({ id, metadata }) === "operator") return null;
   const parsed = v.safeParse(ProgrammaticMetadataSchema, metadata);
   const turn = parsed.success ? parsed.output : {};
-  switch (turn.proteusEvent) {
+  switch (turn.kinuEvent) {
     case "event_drain":
       return { kind: "event_drain" };
     case "workspace_created":
@@ -99,8 +105,13 @@ export function classifyProgrammaticTurn<Metadata>(
         decision: turn.decision || "decided",
         count: turn.count ?? 1,
       };
+    case ADVISOR_SIGNAL_KIND:
+      return {
+        kind: "advisor",
+        severity: isAdvisorSeverity(turn.advisorSeverity) ? turn.advisorSeverity : DEFAULT_ADVISOR_MIN_SEVERITY,
+      };
     default:
-      return { kind: "system_event", event: turn.proteusEvent || "system" };
+      return { kind: "system_event", event: turn.kinuEvent || "system" };
   }
 }
 
@@ -112,19 +123,19 @@ export function messageSignalId<Metadata>(metadata: Metadata): string | null {
 }
 
 /** Whether a durable user row is one the agent was STEERED with mid-turn (the
- *  actor stamps `proteusSteer` when it persists a drained steer). It is a real
+ *  actor stamps `kinuSteer` when it persists a drained steer). It is a real
  *  user message either way — this only decides whether the thread explains why
  *  it appears inside another turn's work. */
 export function isSteeredMessage<Metadata>(metadata: Metadata): boolean {
-  const parsed = v.safeParse(v.looseObject({ proteusSteer: v.optional(v.boolean()) }), metadata);
-  return parsed.success && parsed.output.proteusSteer === true;
+  const parsed = v.safeParse(v.looseObject({ kinuSteer: v.optional(v.boolean()) }), metadata);
+  return parsed.success && parsed.output.kinuSteer === true;
 }
 
 /** One live background-event card: an event that has happened, and whether the
  *  agent has read it yet. */
 export interface SignalCard {
   readonly id: string;
-  /** Classifier input — the same `proteusEvent` metadata a queued signal's
+  /** Classifier input — the same `kinuEvent` metadata a queued signal's
    *  durable message carries. */
   readonly metadata: Readonly<JsonObject>;
   /** The signal as the agent will read it. */

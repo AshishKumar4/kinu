@@ -1,18 +1,18 @@
 /**
  * Cross-family judge selection against a real AgentProviderRegistry.
  *
- * The policy lives in core (unit-judge-model.test.ts in @kinu/core covers
+ * The policy lives in core (unit-judge-model.test.ts in @kinu.run/core covers
  * it); what is pinned here is the adapter: which specs the registry actually
  * offers up as judge candidates, and that the choice tracks the owner's
  * connected credentials rather than a hardcoded list.
  */
 
 import { describe, test, expect } from 'bun:test';
-import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@kinu/core';
+import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@kinu.run/core';
 import { userCredentialSource } from './helpers/user-credentials';
-import { createMockFetch } from '@kinu/test-utils';
+import { createMockFetch } from '@kinu.run/test-utils';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry';
-import { resolveJudgeModelSelection } from '../src/providers/judge-model';
+import { resolveReviewingModelSelection } from '../src/providers/judge-model';
 
 const CLOUDFLARE_BASE = 'https://api.cloudflare.com/client/v4/accounts/acct';
 const KIMI = 'workers-ai/@cf/moonshotai/kimi-k2.6';
@@ -37,11 +37,11 @@ function registryWith(...keys: string[]) {
   });
 }
 
-describe('resolveJudgeModelSelection', () => {
+describe('resolveReviewingModelSelection', () => {
   test('a Cloudflare-only owner gets the documented same-vendor fallback', async () => {
-    const selection = await resolveJudgeModelSelection({
+    const selection = await resolveReviewingModelSelection({
       registry: registryWith('cloudflare.oauth'),
-      reviewSpec: null,
+      pinned: null,
       chatSpec: null, // unset → the workers-ai default, the shipping configuration
     });
     expect(selection).toEqual({
@@ -51,9 +51,9 @@ describe('resolveJudgeModelSelection', () => {
   });
 
   test('connecting a second vendor moves judging off the agent\'s own model', async () => {
-    const selection = await resolveJudgeModelSelection({
+    const selection = await resolveReviewingModelSelection({
       registry: registryWith('cloudflare.oauth', 'anthropic.bearer'),
-      reviewSpec: null,
+      pinned: null,
       chatSpec: null,
     });
     expect(selection.source).toBe('cross-family');
@@ -62,16 +62,16 @@ describe('resolveJudgeModelSelection', () => {
 
   test('candidates come from connected credentials, not from the static roster', async () => {
     // openai is registered ahead of anthropic, but only anthropic is connected.
-    const selection = await resolveJudgeModelSelection({
+    const selection = await resolveReviewingModelSelection({
       registry: registryWith('cloudflare.oauth', 'anthropic.bearer'),
-      reviewSpec: null,
+      pinned: null,
       chatSpec: DEFAULT_WORKERS_AI_MODEL_SPEC,
     });
     expect(selection.spec).toBe('anthropic/claude-opus-4-7');
 
-    const withOpenAI = await resolveJudgeModelSelection({
+    const withOpenAI = await resolveReviewingModelSelection({
       registry: registryWith('cloudflare.oauth', 'anthropic.bearer', 'openai.bearer'),
-      reviewSpec: null,
+      pinned: null,
       chatSpec: DEFAULT_WORKERS_AI_MODEL_SPEC,
     });
     // Registry preference order: openai is offered before anthropic.
@@ -79,9 +79,9 @@ describe('resolveJudgeModelSelection', () => {
   });
 
   test('a GPT chat model refuses the Codex reseller and keeps looking', async () => {
-    const selection = await resolveJudgeModelSelection({
+    const selection = await resolveReviewingModelSelection({
       registry: registryWith('cloudflare.oauth', 'codex.oauth', 'openai.bearer', 'anthropic.bearer'),
-      reviewSpec: null,
+      pinned: null,
       chatSpec: 'openai/gpt-5.5',
     });
     // Workers AI comes first and its native DeepSeek default is a real
@@ -91,9 +91,9 @@ describe('resolveJudgeModelSelection', () => {
   });
 
   test('an explicit review model is honoured and normalized', async () => {
-    const selection = await resolveJudgeModelSelection({
+    const selection = await resolveReviewingModelSelection({
       registry: registryWith('cloudflare.oauth', 'anthropic.bearer'),
-      reviewSpec: '@cf/openai/gpt-oss-120b',
+      pinned: '@cf/openai/gpt-oss-120b',
       chatSpec: KIMI,
     });
     expect(selection).toEqual({ spec: 'workers-ai/@cf/openai/gpt-oss-120b', source: 'configured' });

@@ -19,7 +19,7 @@ import { JsonValueSchema } from '../utils/json';
 import { UsageSchema } from '../usage';
 import { ESCALATION_OUTCOMES } from '../execution/escalation';
 import { SPEND_SOURCES, WORKSPACE_RUN_ID } from './model-call';
-import { diagnostics, toProteusError } from '../obs/index';
+import { diagnostics, toKinuError } from '../obs/index';
 
 /** A stored model message, validated by the AI SDK's OWN schema rather than a
  *  hand-written copy of its part unions — the same predicate the compaction
@@ -182,7 +182,7 @@ export class RunEventRecorder {
       try { l(ev); } catch (err) {
         diagnostics.failure(
           'event.listener_failed',
-          toProteusError({ doing: 'notify a run-event listener', cause: err, otherwise: 'io' }),
+          toKinuError({ doing: 'notify a run-event listener', cause: err, otherwise: 'io' }),
           { runId, eventType: ev.type },
         );
       }

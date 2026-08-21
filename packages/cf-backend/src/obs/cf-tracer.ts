@@ -32,7 +32,7 @@
  *      attribute is neither the place to bound it nor the place to redact it. The
  *      chain belongs to `Logger.failure`, which requires a classification and
  *      renders the whole `cause` chain. THIS FILE USED TO RECORD
- *      `proteus.error_message = error.message` — a secret in an upstream error's
+ *      `kinu.error_message = error.message` — a secret in an upstream error's
  *      message would have been written to the trace stream, where
  *      `ReservedLogField` does not reach, and only on the non-throwing `fail`
  *      path, so a THROWN failure was not marked at all.
@@ -55,7 +55,7 @@ import {
   type SpanAttributeValue,
   type SpanOpenAttributes,
   type Tracer,
-} from '@kinu/core/obs';
+} from '@kinu.run/core/obs';
 
 export function createWorkersTracer(): Tracer {
   return {

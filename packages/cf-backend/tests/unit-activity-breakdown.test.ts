@@ -2,7 +2,7 @@
 // in the unit Kinu measures (composed-content characters); it must never be
 // presented as provider token attribution.
 import { describe, test, expect } from "bun:test";
-import type { ContextComposition, ContextSegment } from "@kinu/core";
+import type { ContextComposition, ContextSegment } from "@kinu.run/core";
 import { breakdownView, shareOfMeasured } from "../src/components/surfaces/activity-breakdown";
 
 const seg = (plane: ContextSegment["plane"], label: string, chars: number, items = 1): ContextSegment =>

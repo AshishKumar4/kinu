@@ -2,13 +2,13 @@
  * The shipped-surface driver: the agent under eval is the SPAWNED `kinu`
  * CLI on a real workspace, never an in-process runtime.
  *
- * The precedent is bench/harbor/proteus_agent.py, which calls itself "glue
+ * The precedent is bench/harbor/kinu_agent.py, which calls itself "glue
  * only: installs the CLI, creates a local workspace, and hands the task
  * instruction to `kinu exec`. It changes nothing about how the agent
  * reasons." This module is the same glue for the eval tier: `kinu create
  * --mode local`, then `kinu exec --workspace <name> --json`, in a scratch
- * PROTEUS_HOME, configured the way a user's process is configured — the
- * PROTEUS_BASE_URL/PROTEUS_AUTH/PROTEUS_MODEL direct-endpoint override and, for
+ * KINU_HOME, configured the way a user's process is configured — the
+ * KINU_BASE_URL/KINU_AUTH/KINU_MODEL direct-endpoint override and, for
  * MCP, the `mcpServers` block of the home's own config.json. Driving
  * `LocalAgentSession` here instead would bypass the CLI's turn assembly, the
  * client seam, consent watching and MCP config resolution, so a judgement over
@@ -21,11 +21,11 @@
  * the episode spent, so the arm's spend file and liveness verdict work
  * unchanged over a child process.
  *
- * The child env is BUILT, not inherited: an inherited PROTEUS_TOKEN would put
+ * The child env is BUILT, not inherited: an inherited KINU_TOKEN would put
  * the child on the cloud-session path while the eval believes it pinned a
  * direct endpoint, and which of the two answered is exactly what must never be
  * ambiguous in a measurement. PATH crosses over because the workspace shell
- * and the MCP fixture spawn real processes; PROTEUS_SKIP_DAEMON=1 because a
+ * and the MCP fixture spawn real processes; KINU_SKIP_DAEMON=1 because a
  * one-shot eval that leaves a daemon behind per run is a process leak, not an
  * agent behaviour.
  */
@@ -38,14 +38,14 @@ import type { LLMProviderConfig } from '../../packages/core/src/index';
 const REPO_ROOT = join(import.meta.dirname, '../..');
 const CLI_BIN = join(REPO_ROOT, 'packages/cli/bin/cli.ts');
 
-/** One stdio MCP server entry, as ~/.proteus/config.json spells it. */
+/** One stdio MCP server entry, as ~/.kinu/config.json spells it. */
 export interface CliMcpServer {
   readonly command: string;
   readonly args: readonly string[];
 }
 
 export interface CliWorkspaceOptions {
-  /** The scratch PROTEUS_HOME this run owns. Created here. */
+  /** The scratch KINU_HOME this run owns. Created here. */
   readonly home: string;
   readonly workspace: string;
   readonly purpose: string;
@@ -109,11 +109,11 @@ function childEnv(opts: CliWorkspaceOptions) {
   return {
     PATH: process.env.PATH ?? '',
     HOME: opts.home,
-    PROTEUS_HOME: opts.home,
-    PROTEUS_SKIP_DAEMON: '1',
-    PROTEUS_BASE_URL: opts.llm.baseURL,
-    PROTEUS_AUTH: auth,
-    PROTEUS_MODEL: opts.llm.model,
+    KINU_HOME: opts.home,
+    KINU_SKIP_DAEMON: '1',
+    KINU_BASE_URL: opts.llm.baseURL,
+    KINU_AUTH: auth,
+    KINU_MODEL: opts.llm.model,
   } satisfies Record<string, string>;
 }
 
@@ -166,7 +166,7 @@ export async function createCliWorkspace(opts: CliWorkspaceOptions): Promise<voi
  * the prompt — and stdout is parsed as the line-delimited event stream.
  */
 export async function execCliTask(opts: CliExecOptions): Promise<CliExecOutcome> {
-  // `--` before the prompt, the shape bench/harbor/proteus_agent.py uses: the
+  // `--` before the prompt, the shape bench/harbor/kinu_agent.py uses: the
   // prompt is variadic (`exec [prompt...]`), so an instruction that happens to
   // begin with a dash would otherwise be parsed as a flag.
   const cmd = [process.execPath, CLI_BIN, 'exec',

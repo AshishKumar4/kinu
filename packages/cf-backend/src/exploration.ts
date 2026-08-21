@@ -18,7 +18,7 @@
  *               canonical workspace filesystem, Nimbus processes/ports,
  *               sandbox and device consent (see headRuntime()). Its tool surface —
  *               and the containment that keeps the delegation surface off it —
- *               is declared in @kinu/core head-tools.
+ *               is declared in @kinu.run/core head-tools.
  *
  *   NODE mode — one node of a swarm search, HOSTED. initNode() takes core's
  *               NodeRunSpec over RPC and runAsNode() calls the very same
@@ -46,7 +46,7 @@
 import { Agent, callable, type AgentContext, type SubAgentClass } from "agents";
 import { EXPLORATION_RPC_SURFACE, sealRpcSurface } from "./rpc-surface";
 import { generateText } from "ai";
-import { explorePrompt, formatInheritedContext, isWorkMode, normalizeUsage, reflectionPrompt, resolveMaxSteps } from "@kinu/core";
+import { explorePrompt, formatInheritedContext, isWorkMode, normalizeUsage, reflectionPrompt, resolveMaxSteps } from "@kinu.run/core";
 import type { OrchestratorAgent } from "./orchestrator";
 import {
   type CraftedTool,
@@ -72,17 +72,17 @@ import {
   type NodeLoopResult,
   type MissionScope,
   type WorkMode,
-} from "@kinu/core";
+} from "@kinu.run/core";
 import { OwnedModelServices } from "./owned-model-services";
 import { FacetIdentity } from "./facet-identity";
 import { createHeadRuntime } from "./head-runtime";
 import { bindAgentSql, createCFRuntime, type CFRuntime, type CFRuntimeHooks } from "./runtime";
 import { createExecuteToolsTool } from "./execute-tools";
-import { buildHeadToolSet } from "@kinu/core";
+import { buildHeadToolSet } from "@kinu.run/core";
 import {
   createAgentTracing, createConsoleLogger, type AgentTracing,
-} from "@kinu/core/obs";
-import { createAgentConfigStore, initAgentConfigTable } from "@kinu/core";
+} from "@kinu.run/core/obs";
+import { createAgentConfigStore, initAgentConfigTable } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
 
 export class ExplorationAgent extends Agent<Env> {
@@ -185,7 +185,7 @@ export class ExplorationAgent extends Agent<Env> {
       ownerUserId: () => this.identity.ownerUserId(),
       workspaceName,
       shellId: `${scope}:${this.name}`,
-      scaffoldPath: `.proteus/${scope}s/${encodeURIComponent(this.name)}/scaffold/agent.js`,
+      scaffoldPath: `.kinu/${scope}s/${encodeURIComponent(this.name)}/scaffold/agent.js`,
       capabilityToken: async () => this.identity.capabilityToken(),
     }, hooks);
   }
@@ -282,7 +282,7 @@ export class ExplorationAgent extends Agent<Env> {
       if (providerOptions) request.providerOptions = providerOptions;
       const { text, usage } = await invocation.span('mcts.branch.model', async (span) => {
         const answer = await generateText(request);
-        span.setAttribute('proteus.output_tokens', answer.usage.outputTokens ?? 0);
+        span.setAttribute('kinu.output_tokens', answer.usage.outputTokens ?? 0);
         return answer;
       });
 
@@ -328,7 +328,7 @@ export class ExplorationAgent extends Agent<Env> {
 
   /** Run the head's inference loop over the forked runtime and return its
    *  HeadReport. The ToolSet — and what is deliberately absent from it — is
-   *  declared in @kinu/core head-tools.
+   *  declared in @kinu.run/core head-tools.
    *
    *  Traced with the same two phases as `runAsNode`, for the same reason: a head
    *  that produces no report has either failed to acquire its model and tools or
@@ -339,7 +339,7 @@ export class ExplorationAgent extends Agent<Env> {
     if (!this.headInput) throw new Error("ExplorationAgent.runAsHead() called before initHead()");
     const input = this.headInput;
     return await this.tracing.invocation('rpc', 'head.run', async (invocation, root) => {
-      root.setAttribute('proteus.head_id', input.id);
+      root.setAttribute('kinu.head_id', input.id);
       const capture = new HeadCapture();
       // The loop + report assembly live in core (runHeadInference); the Facet
       // supplies its model + the forked tool surface. Abort is driven by
@@ -353,7 +353,7 @@ export class ExplorationAgent extends Agent<Env> {
           workspaceLayout: 'shared-workspace',
           // The same envelope the parent turn runs to — ActorAgent.maxSteps reads
           // this identical Worker var. A fork of a turn gets the turn's room.
-          maxSteps: resolveMaxSteps(this.env.PROTEUS_MAX_STEPS),
+          maxSteps: resolveMaxSteps(this.env.KINU_MAX_STEPS),
           isAborted: () => this.headAborted,
           abortReason: () => this.headAbortReason,
         };
@@ -365,7 +365,7 @@ export class ExplorationAgent extends Agent<Env> {
       });
       return await invocation.span('head.inference', async (span) => {
         const report = await runHeadInference(input, headOptions);
-        span.setAttribute('proteus.head_status', report.status);
+        span.setAttribute('kinu.head_status', report.status);
         return report;
       });
     });
@@ -399,7 +399,7 @@ export class ExplorationAgent extends Agent<Env> {
     if (!this.nodeSpec) throw new Error("ExplorationAgent.runAsNode() called before initNode()");
     const spec = this.nodeSpec;
     return await this.tracing.invocation('rpc', 'swarm.node', async (invocation, root) => {
-      root.setAttribute('proteus.node_id', spec.headInput.id);
+      root.setAttribute('kinu.node_id', spec.headInput.id);
       const deps = invocation.span('swarm.node.deps', (): NodeLoopDeps => {
         // Named `parent` like every other acquisition of this stub, and not only for
         // style: unit-rpc-surface.test.ts derives a facet's cross-DO calls by that
@@ -435,8 +435,8 @@ export class ExplorationAgent extends Agent<Env> {
         // The two facts that distinguish every outcome the search cares about
         // from the silent one: a node that never reached a model call reports
         // neither a status nor a report, and this span then has no end at all.
-        span.setAttribute('proteus.node_status', result.report.status);
-        span.setAttribute('proteus.node_reported', result.reported !== null);
+        span.setAttribute('kinu.node_status', result.report.status);
+        span.setAttribute('kinu.node_reported', result.reported !== null);
         return result;
       });
     });
@@ -597,7 +597,7 @@ export class ExplorationAgent extends Agent<Env> {
   }
 
   // The head loop, system prompt, inherited context and report assembly live in
-  // core (runHeadInference); the tool surface lives in @kinu/core head-tools. This
+  // core (runHeadInference); the tool surface lives in @kinu.run/core head-tools. This
   // Facet supplies the three things only it can: the model, the forked runtime,
   // and the facet-spawn substrate behind split_subheads.
 }

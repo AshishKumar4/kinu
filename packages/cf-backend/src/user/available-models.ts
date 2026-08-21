@@ -7,7 +7,7 @@
 import {
   catalogCredKey, listModelsDevProviders, modelsDevCompatBaseURL,
   type ModelsDevProviderInfo, type ProviderFailure,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import type { UserDO } from './user-do';
 import { createAgentProviderRegistry } from '../providers/agent-registry';
 import { retryTransientDO } from '../lib/do-rpc';

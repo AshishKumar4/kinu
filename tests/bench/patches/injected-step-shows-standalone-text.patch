@@ -9,5 +9,5 @@ index 39982f7b..04fdf5a6 100644
 -const stepBody = (signal: AgentSignal): string => signal.stepText ?? signal.text;
 +const stepBody = (signal: AgentSignal): string => signal.text;
  
- /** The turn metadata a signal carries: its `proteusEvent` provenance, the
+ /** The turn metadata a signal carries: its `kinuEvent` provenance, the
   *  reply binding its source rows are bound to, and the producer's own.

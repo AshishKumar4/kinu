@@ -55,13 +55,13 @@ import { requireSandboxedExecutors } from './harness';
 import {
   liveChatModel, liveModelCallSink, liveModelTarget, recordLiveModelEpisode, recordLiveModelSpend,
   reportLiveModelSpend, scoreExploration, scoreSettleVisibility, UNCONFIGURED_LLM,
-} from '@kinu/test-utils';
+} from '@kinu.run/test-utils';
 
 const TARGET = liveModelTarget('Exploration Evals');
 const liveTest = test.skipIf(!TARGET);
 const LLM_CONFIG: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;
 
-const TEST_DIR = join(tmpdir(), 'proteus-eval-exploration-' + String(Date.now()));
+const TEST_DIR = join(tmpdir(), 'kinu-eval-exploration-' + String(Date.now()));
 const DB_PATH = join(TEST_DIR, 'agent.db');
 
 /**

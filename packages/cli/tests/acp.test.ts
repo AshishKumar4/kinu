@@ -19,7 +19,7 @@ import {
   type RequestPermissionResponse,
   type SessionNotification,
 } from '@agentclientprotocol/sdk';
-import type { ShellApprovalHandler } from '@kinu/cli-backend';
+import type { ShellApprovalHandler } from '@kinu.run/cli-backend';
 import { createAcpAgent } from '../src/acp/agent';
 import { createCliSession } from '../src/session';
 import type { AgentClient, AgentClientEvent, AgentPrompt, AgentTurnResult } from '../src/agent-client';
@@ -106,6 +106,8 @@ function fakeClient(opts: FakeOptions = {}): Fake {
     setModel: async (spec) => ({ spec }),
     getReasoningEffort: async () => null,
     setReasoningEffort: async (effort) => ({ effort }),
+    getEvolutionConfig: async () => { throw new Error('no evolution config'); },
+    setEvolutionConfig: async () => { throw new Error('no evolution config'); },
     listModels: async () => ({ models: [], failures: [] }),
   };
 

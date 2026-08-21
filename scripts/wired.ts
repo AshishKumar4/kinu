@@ -189,7 +189,7 @@ function defaultExportName(tree: SyntaxNode): string | undefined {
 const CANDIDATES = ['', '.ts', '.tsx', '/index.ts', '/index.tsx'];
 
 /** This workspace's own packages. */
-const WORKSPACE_SCOPE = '@kinu/';
+const WORKSPACE_SCOPE = '@kinu.run/';
 
 /** A vite import query — `./x.js?raw` addresses the same file as `./x.js`. */
 const QUERY = '?';
@@ -204,7 +204,7 @@ function collapse(path: string): string {
   return stack.join('/');
 }
 
-/** A package's declared subpaths. Parsed rather than guessed: `@kinu/core`
+/** A package's declared subpaths. Parsed rather than guessed: `@kinu.run/core`
  *  publishes `./workspace` as `src/vfs/nimbus-workspace.ts`, so the directory
  *  shape a rename would produce is simply wrong, and a wrong resolution is a
  *  dropped edge. */
@@ -213,7 +213,7 @@ const SubpathSchema = v.object({ exports: v.optional(v.record(v.string(), v.stri
 /** A package's declared path aliases. `packages/cf-backend` declares
  *  `"@/*": ["./src/*"]`, and the whole frontend imports through it: 33 of
  *  `WorkspacePage.tsx`'s specifiers, of which a resolver that knew only
- *  relative paths and `@kinu/*` resolved 3. Measured before this rule
+ *  relative paths and `@kinu.run/*` resolved 3. Measured before this rule
  *  existed, that one gap produced 95 phantom findings — every React component in
  *  the tree, reported as unreached. */
 const AliasSchema = v.object({
@@ -823,6 +823,37 @@ function annotatedTypes(annotation: SyntaxNode | undefined): readonly string[] {
 const annotationOf = (node: SyntaxNode): SyntaxNode | undefined =>
   node.children.find((child) => child.raw.type === 'TSTypeAnnotation');
 
+/**
+ * Expressions a value passes THROUGH on its way out of a `return`.
+ *
+ * A literal returned through one of these is still returned, and a detector
+ * that read only a ReturnStatement's direct children could not see it.
+ * `AgentOrchestrator.scopeTurn` returns
+ * `labels.length === 0 ? turn : { ...turn, missionLabels: [...labels] }`, so
+ * `CompletedTurn.missionLabels` was reported as read at one end and connected
+ * at neither while being genuinely wired at both. That is the finding class
+ * that gets a gate switched off, so the blind spot is the defect, not the code.
+ */
+const PASS_THROUGH: ReadonlySet<string> = new Set([
+  'ConditionalExpression', 'LogicalExpression', 'ParenthesizedExpression',
+  'SequenceExpression', 'TSAsExpression', 'TSSatisfiesExpression',
+  'TSNonNullExpression',
+]);
+
+/** Every object literal a `return` can yield, through however many
+ *  pass-through expressions stand between. */
+function returnedLiterals(statement: SyntaxNode): SyntaxNode[] {
+  const found: SyntaxNode[] = [];
+  const frontier = [...statement.children];
+  while (frontier.length > 0) {
+    const node = frontier.pop();
+    if (node === undefined) continue;
+    if (node.raw.type === 'ObjectExpression') found.push(node);
+    else if (PASS_THROUGH.has(node.raw.type)) frontier.push(...node.children);
+  }
+  return found;
+}
+
 /** What one construction site says about supply. */
 interface Supplied {
   readonly keys: readonly string[];
@@ -998,8 +1029,7 @@ export function measureFields(reachers: ReadonlyMap<string, string>): FieldFacts
         if (returned.length === 0) return;
         walk(node, (inner) => {
           if (inner.raw.type !== 'ReturnStatement') return;
-          const literal = inner.children.find((child) => child.raw.type === 'ObjectExpression');
-          if (literal !== undefined) site(returned, literal);
+          for (const literal of returnedLiterals(inner)) site(returned, literal);
         });
         return;
       }

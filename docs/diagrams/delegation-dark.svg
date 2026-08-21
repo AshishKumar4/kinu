@@ -140,5 +140,5 @@
   <text class="xs" x="38" y="735">A busy agent is never blocked on — the message queues immediately for its own mode-homogeneous turn, so follow-ups go out as soon as you have them.</text>
   <rect x="24" y="747" width="852" height="48" rx="7" fill="var(--surface)" stroke="var(--rule)" stroke-dasharray="4 3"/>
   <text class="xs" x="38" y="766"><tspan font-weight="700" fill="var(--fg)">Tree search is action:swarm, and it has one spelling</tspan> — every configured search of any depth is this one call, measured against your objective.</text>
-  <text class="xs" x="38" y="782">The MCTS engine is unchanged — lifetime evolution and proteus evolve still call runMCTS; the agents tool never reaches it.</text>
+  <text class="xs" x="38" y="782">The MCTS engine is unchanged — lifetime evolution and kinu evolve still call runMCTS; the agents tool never reaches it.</text>
 </svg>

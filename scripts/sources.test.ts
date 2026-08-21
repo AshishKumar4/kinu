@@ -14,7 +14,7 @@ import { execFileSync } from 'node:child_process';
 import { describe, expect, spyOn, test } from 'bun:test';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { git, initRepo, scratchDir } from '@kinu/test-utils';
+import { git, initRepo, scratchDir } from '@kinu.run/test-utils';
 import { enumerateRepository, isTextSource, readRepositoryFile } from './sources';
 import { scanText } from './secret-scan';
 
@@ -146,7 +146,7 @@ test('a tracked+ignored credential with no disk copy is a secret-scan finding; u
     const corpus = enumerateRepository(repo).files.filter(isTextSource);
     expect(corpus).toContain(TRANSCRIPT);
     const findings = corpus.flatMap((f) => scanText(f, readRepositoryFile(repo, f)));
-    expect(findings.map((f) => `${f.pattern}:${f.file}`)).toContain(`proteus-token:${TRANSCRIPT}`);
+    expect(findings.map((f) => `${f.pattern}:${f.file}`)).toContain(`kinu-token:${TRANSCRIPT}`);
 
     git(repo, 'rm', '-q', '--cached', TRANSCRIPT);
     writeFileSync(join(repo, TRANSCRIPT), `the owner pasted ${FAKE_TOKEN} here\n`);

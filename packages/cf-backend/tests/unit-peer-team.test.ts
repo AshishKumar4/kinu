@@ -12,9 +12,9 @@ import {
   EventLog, ReplyChannelStore, initEventsHubTables, buildDrainBatch, nextAlarmTime,
   eventContentPath, renderForLLM, PeerHub, JsonValueSchema,
   type PeerAgentPayload, type ReplyDispatcher, type ReplyChannelKind,
-  type PeerMessage, type ProteusEvent, type ReceiveResult, type SqlExec,
-} from '@kinu/core';
-import { createMemoryVfs } from '@kinu/test-utils';
+  type PeerMessage, type KinuEvent, type ReceiveResult, type SqlExec,
+} from '@kinu.run/core';
+import { createMemoryVfs } from '@kinu.run/test-utils';
 import { sqlExec } from './helpers/user-do';
 
 function makeSql(): SqlExec {
@@ -48,7 +48,7 @@ const PeerAgentPayloadSchema: v.GenericSchema<PeerAgentPayload> = v.object({
   sender_event_id: v.string(),
   reply_expected: v.optional(v.boolean()),
   body_path: v.optional(v.string()),
-  proteus_mode: v.picklist(['plan', 'build']),
+  kinu_mode: v.picklist(['plan', 'build']),
 });
 const PeerOutboxRowSchema = v.object({
   id: v.string(),
@@ -107,11 +107,11 @@ function makeNetwork() {
   return { network, addAgent };
 }
 
-function pendingPeerEvents(agent: TestAgent): ProteusEvent[] {
+function pendingPeerEvents(agent: TestAgent): KinuEvent[] {
   return agent.log.pending({ variant: 'peer_agent' });
 }
 
-function peerPayload(event: ProteusEvent): PeerAgentPayload {
+function peerPayload(event: KinuEvent): PeerAgentPayload {
   if (event.variant !== 'peer_agent') throw new Error(`expected peer event ${event.id}`);
   return v.parse(PeerAgentPayloadSchema, event.payload);
 }
@@ -317,7 +317,7 @@ describe('redelivery dedupe (crash between deliver and mark)', () => {
     expect(pendingPeerEvents(bob)).toHaveLength(1);          // deduped
     const redelivered = pendingPeerEvents(bob)[0];
     if (!redelivered) throw new Error('expected redelivered peer event');
-    expect(peerPayload(redelivered).proteus_mode).toBe('plan');
+    expect(peerPayload(redelivered).kinu_mode).toBe('plan');
     expect(outboxRows(alice)[0].state).toBe('delivered');    // settled again
     expect(bob.wakes).toBe(1);                                // no double wake
   });
@@ -351,7 +351,7 @@ describe('per-receiver ordering + retry backoff', () => {
     const pending = pendingPeerEvents(bob);
     const bodies = pending.map((event) => peerPayload(event).body);
     expect(bodies).toEqual(['first', 'second']);
-    expect(pending.map((event) => peerPayload(event).proteus_mode))
+    expect(pending.map((event) => peerPayload(event).kinu_mode))
       .toEqual(['plan', 'build']);
     expect(buildDrainBatch(pending)).toMatchObject({ mode: 'plan', ids: [pending[0]?.id] });
     expect(buildDrainBatch(pending.slice(1))).toMatchObject({ mode: 'build', ids: [pending[1]?.id] });

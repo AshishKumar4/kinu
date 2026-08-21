@@ -86,7 +86,7 @@ export interface OverflowRecoveryDecision {
    *  context transform with trigger:'force'. */
   forceCompaction: boolean;
   /** Enqueue the ONE overflow retry turn (OVERFLOW_RETRY_TEXT, stamped
-   *  proteusEvent: OVERFLOW_RETRY_EVENT). */
+   *  kinuEvent: OVERFLOW_RETRY_EVENT). */
   enqueueRetry: boolean;
 }
 

@@ -5,7 +5,7 @@ import {
   DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED,
   mergeConsentScope, parseConsentScope, summarizeDeviceAction,
   type JsonValue,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import { handleUserRequest } from '../src/user/routes';
 import type { AuthIdentity } from '../src/auth/session';
 import type { UserCaller } from '../src/user/workspace-capability';
@@ -102,7 +102,7 @@ function consentRoutesSetup() {
   // above; no other Env binding is reachable on these request paths.
   const env = partialEnv as Env;
   const call = (path: string, method: string, body?: JsonValue) =>
-    handleUserRequest(new Request(`https://proteus.example.com/api/user${path}`, {
+    handleUserRequest(new Request(`https://kinu.example.com/api/user${path}`, {
       method,
       headers: { 'content-type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),

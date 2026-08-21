@@ -10,7 +10,7 @@ import {
   DEFAULT_WORKERS_AI_MODEL_SPEC,
   type ModelProvider,
   type ProviderDeps,
-} from "@kinu/core";
+} from "@kinu.run/core";
 
 describe("contextWindowForModel", () => {
   test("the offline Workers AI catalog keeps DeepSeek V4 Pro as the first default", () => {

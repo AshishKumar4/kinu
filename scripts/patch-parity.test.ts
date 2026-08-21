@@ -31,7 +31,7 @@
 import { describe, expect, test } from 'bun:test';
 import { appendFileSync, cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { git, initRepo, scratchDir } from '@kinu/test-utils';
+import { git, initRepo, scratchDir } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
   BLIND_SPOTS,

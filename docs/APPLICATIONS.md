@@ -93,7 +93,7 @@ The CLI version runs locally with bun:sqlite, providing the same core capabiliti
 kinu create dev-helper --purpose "A TypeScript development assistant"
 kinu chat dev-helper
 # Agent has access to execute_tools, run, file, agents, memory, tasks, web
-# Evolution happens locally; crafted tools persist in ~/.proteus/dev-helper/agent.db
+# Evolution happens locally; crafted tools persist in ~/.kinu/dev-helper/agent.db
 ```
 
 The CLI agent can:
@@ -127,7 +127,7 @@ overrides on top of it. A swarm takes its shape from the call instead, through
 `preset` and the six axes.
 
 ```typescript
-import { createAgentConfigStore } from '@kinu/core';
+import { createAgentConfigStore } from '@kinu.run/core';
 
 const config = createAgentConfigStore(sql);
 config.setMctsOverrides({

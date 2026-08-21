@@ -1,5 +1,5 @@
 import { statSync } from 'node:fs';
-import { diagnostics, renderThrownChain, toProteusError } from '@kinu/core/obs';
+import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import { listCloudAgents } from '../cloud-api';
 import { reconcileAgentRefs } from '../agent-list';
 import { agentDbPath, listAgentDirs, loadConfigFile, resolveCloudSession } from '../config';
@@ -49,7 +49,7 @@ export async function listCommand(): Promise<void> {
       const reason = renderThrownChain({ cause: caught });
       diagnostics.failure(
         'workspace.read_failed',
-        toProteusError({ doing: 'reading a local workspace', cause: caught, otherwise: 'io' }),
+        toKinuError({ doing: 'reading a local workspace', cause: caught, otherwise: 'io' }),
         { workspace: name },
       );
       return { name, mode: agent.mode, purpose: `(unreadable: ${reason})`, scaffoldVersion: 0, toolCount: 0 };

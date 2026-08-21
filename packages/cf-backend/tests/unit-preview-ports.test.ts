@@ -53,7 +53,7 @@ describe('preview port refresh reconciliation', () => {
   });
 
   test('the hook rejects stale overlapping refresh completions', () => {
-    const source = readFileSync(join(import.meta.dir, '../src/hooks/use-proteus.ts'), 'utf8');
+    const source = readFileSync(join(import.meta.dir, '../src/hooks/use-kinu.ts'), 'utf8');
     expect(source).toContain('const generation = ++exposedPortsRefreshGeneration.current;');
     expect(source).toContain('if (generation !== exposedPortsRefreshGeneration.current) return;');
     const reset = source.slice(source.indexOf('setLoadAttempt(0);') - 100, source.indexOf('setLoadAttempt(0);') + 100);

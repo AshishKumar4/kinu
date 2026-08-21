@@ -66,9 +66,9 @@ import {
   type NodeAgentInput,
   type NodeRun,
   type Usage,
-} from '@kinu/core';
-import { createRecordingLogger, renderCauseChain } from '@kinu/core/obs';
-import { createTestRuntime } from '@kinu/test-utils';
+} from '@kinu.run/core';
+import { createRecordingLogger, renderCauseChain } from '@kinu.run/core/obs';
+import { createTestRuntime } from '@kinu.run/test-utils';
 import type { Database } from 'bun:sqlite';
 import { createAgentProviderRegistry } from '../../src/providers/agent-registry';
 import {

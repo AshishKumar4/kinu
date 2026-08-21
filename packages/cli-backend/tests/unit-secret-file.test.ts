@@ -17,7 +17,7 @@ import { enforceOwnerOnly, ensureSecretDir, writeSecretFile } from '../src/secre
 
 const roots: string[] = [];
 function scratch(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'proteus-secret-'));
+  const dir = mkdtempSync(join(tmpdir(), 'kinu-secret-'));
   roots.push(dir);
   return dir;
 }

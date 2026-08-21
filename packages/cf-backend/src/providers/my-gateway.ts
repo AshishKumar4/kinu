@@ -15,8 +15,8 @@
 // slash is exactly the wire `author/model` id (e.g. `openai/gpt-4.1`).
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
-import type { ModelProvider, ModelInfo, ProviderDeps } from '@kinu/core';
-import { authCacheKey, cloneModelInfos, listModelsDevProviderModels } from '@kinu/core';
+import type { ModelProvider, ModelInfo, ProviderDeps } from '@kinu.run/core';
+import { authCacheKey, cloneModelInfos, listModelsDevProviderModels } from '@kinu.run/core';
 import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, cloudflareAccountAPIRoot } from '../lib/cloudflare-oauth';
 import { createCloudflareAIFetch, mapGatewayError } from './cloudflare-ai-fetch';
 import * as v from 'valibot';
@@ -86,7 +86,7 @@ export function createMyGatewayProvider(): ModelProvider {
     },
 
     createModel(modelId, deps): LanguageModel {
-      const placeholder = 'https://proteus-my-gateway.invalid';
+      const placeholder = 'https://kinu-my-gateway.invalid';
       const customFetch = createCloudflareAIFetch({
         credKey: CLOUDFLARE_AI_GATEWAY_CRED_KEY,
         getAuth: deps.getAuth,

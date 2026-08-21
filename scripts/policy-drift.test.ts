@@ -20,7 +20,7 @@ describe('policy drift — one name, two numbers', () => {
   test('one home for the name is silent — the same edit, the other direction', () => {
     expect(kinds({
       'packages/core/src/a.ts': 'export const RETRY_BASE_MS = 5_000;\n',
-      'packages/cf-backend/src/b.ts': "import { RETRY_BASE_MS } from '@kinu/core';\nexport const b = RETRY_BASE_MS;\n",
+      'packages/cf-backend/src/b.ts': "import { RETRY_BASE_MS } from '@kinu.run/core';\nexport const b = RETRY_BASE_MS;\n",
     })).toEqual([]);
   });
 
@@ -147,7 +147,7 @@ describe('policy drift — inline literals', () => {
   test('importing the constant instead silences it', () => {
     expect(kinds({
       'packages/core/src/a.ts': 'export const CACHE_TTL_MS = 60_000;\n',
-      'packages/cf-backend/src/b.ts': "import { CACHE_TTL_MS } from '@kinu/core';\nexport const options = { cacheTtlMs: CACHE_TTL_MS };\n",
+      'packages/cf-backend/src/b.ts': "import { CACHE_TTL_MS } from '@kinu.run/core';\nexport const options = { cacheTtlMs: CACHE_TTL_MS };\n",
     })).toEqual([]);
   });
 

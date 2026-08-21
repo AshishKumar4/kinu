@@ -5,7 +5,7 @@
  * here so the vocabulary never drifts across tabs.
  */
 
-import { EXECUTOR_CAPABILITIES, type ExecutorCapability } from "@kinu/core";
+import { EXECUTOR_CAPABILITIES, type ExecutorCapability } from "@kinu.run/core";
 
 /** Live executor row as reported by the orchestrator's getExecutors RPC. */
 export interface ExecutorInfo {

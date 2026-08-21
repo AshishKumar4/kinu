@@ -3,7 +3,7 @@ import {
   setDefaultModel,
   setDefaultReasoningEffort,
 } from '../config';
-import { isReasoningEffort, type ModelMenu, type ReasoningEffort } from '@kinu/core';
+import { isReasoningEffort, type ModelMenu, type ReasoningEffort } from '@kinu.run/core';
 import { resolveAgentTarget } from '../agent-target';
 import {
   cancelLocalJob,
@@ -36,7 +36,7 @@ import {
   validateModelSpec,
   type AgentModelEntry,
 } from '../model-catalog';
-import { renderThrownChain } from '@kinu/core/obs';
+import { renderThrownChain } from '@kinu.run/core/obs';
 
 interface ControlOpts {
   model?: string;

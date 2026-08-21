@@ -43,14 +43,14 @@ import type { ExecOutcome } from '../execution/exec-result';
 import { formatExecResult } from '../execution/exec-result';
 import { clampToolResult } from '../tools/clamp';
 
-/** `proteusEvent` on the turn the gate enqueues — its provenance in the run
+/** `kinuEvent` on the turn the gate enqueues — its provenance in the run
  *  log, and how the turn pump recognises the confirming turn as its own. */
 export const COMPLETION_GATE_EVENT = 'completion_gate';
 
 /** Marks the turn as runtime-authored, exactly as the mid-turn steering splice
  *  does: the model must never read a harness check as something the user typed. */
 export const COMPLETION_GATE_HEADER =
-  '[Runtime check — a mechanical gate from the Kinu harness, not written by the user.]';
+  '[Runtime check — a mechanical gate from Kinu, not written by the user.]';
 
 /**
  * What the harness looks at: where it is, what is there, and what changed —
@@ -139,8 +139,22 @@ export interface TurnCompletionFacts {
 export class CompletionGate {
   private armed = false;
   private fired = false;
+  private settled = false;
   private record: CompletionGateRecord | null = null;
   private taskText = '';
+
+  /**
+   * The gate has asked its question and has not heard back.
+   *
+   * One runtime voice per boundary. The gate is the harness showing the agent
+   * its own working directory and asking whether the task is done; another
+   * producer's note arriving in that window is read as the same speaker
+   * talking over itself. The advisor reads this and records its note instead of
+   * saying it (advisor/review.ts, the `gate-open` rule).
+   */
+  get open(): boolean {
+    return this.fired && !this.settled;
+  }
 
   /** A task turn is starting on a surface that grades what it leaves behind.
    *  The task is held because the turn that trips the gate is not always the
@@ -150,6 +164,7 @@ export class CompletionGate {
   arm(task: string): void {
     this.armed = true;
     this.fired = false;
+    this.settled = false;
     this.record = null;
     this.taskText = task;
   }
@@ -178,6 +193,7 @@ export class CompletionGate {
 
   /** The confirming turn ended: what the agent did with its free re-look. */
   settle(facts: { toolCalls: number }): void {
+    this.settled = true;
     this.record = { converted: facts.toolCalls > 0 };
   }
 

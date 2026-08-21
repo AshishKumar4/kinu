@@ -18,9 +18,9 @@
  *      re-send (deduped downstream), not a blind new message.
  */
 
-import { argumentDigest, type SqlExec } from '@kinu/core';
+import { argumentDigest, type SqlExec } from '@kinu.run/core';
 import * as v from 'valibot';
-import { renderThrownChain } from '@kinu/core/obs';
+import { renderThrownChain } from '@kinu.run/core/obs';
 
 const EmailAddressSchema = v.object({ email: v.string(), name: v.string() });
 const OutboundEmailMessageSchema = v.object({
@@ -212,7 +212,7 @@ export class EmailOutbox {
    *  a re-send is recognizably the same message to any receiver. */
   private messageIdFor(key: string, from: OutboundEmailMessage['from']): string {
     const domain = emailDomainOf(from);
-    return `<proteus.${argumentDigest(key)}@${domain}>`;
+    return `<kinu.${argumentDigest(key)}@${domain}>`;
   }
 }
 
@@ -224,7 +224,7 @@ function payloadDigest(message: OutboundEmailMessage): string {
 function emailDomainOf(from: OutboundEmailMessage['from']): string {
   const address = emailAddressText(from);
   const at = address.lastIndexOf('@');
-  return at >= 0 ? address.slice(at + 1) : 'proteus.local';
+  return at >= 0 ? address.slice(at + 1) : 'kinu.local';
 }
 
 function emailAddressText(address: string | EmailAddress): string {

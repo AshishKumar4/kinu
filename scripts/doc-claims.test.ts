@@ -111,7 +111,7 @@ describe('a path a document names', () => {
   });
 
   test('passes under the workspace scope', () => {
-    expect(audit('Imported from `@kinu/core/tools/registry.ts`.')).toEqual([]);
+    expect(audit('Imported from `@kinu.run/core/tools/registry.ts`.')).toEqual([]);
   });
 
   test('is not governed when it names no location in this tree', () => {

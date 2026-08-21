@@ -20,26 +20,56 @@
  *            confidence is the only honest local signal. The real protection
  *            for the receiver is on the import side: the misevolution gate and
  *            provisional-until-corroborated.
+ *   scaffold — the LIVE version, promoted by this workspace's own shadow gate
+ *            on a record that still clears `decidePromotion`, which has then
+ *            served {@link EXPERIENCE_SCAFFOLD_SURVIVAL_TURNS} graded turns
+ *            with no misevolution flag against anything this workspace wrote in
+ *            that window. Nothing else in the archive qualifies: a pending
+ *            version is mid-trial, a rolled-back one lost, a historical one was
+ *            superseded, and the v0 bootstrap was never judged at all.
  */
 
+import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives';
 import type { CraftStore } from '../types/agent-runtime';
 import type { FactsStore } from '../memory/facts';
 import { effectiveScore } from '../craft/ema';
 import { DEFAULT_CONFIG } from '../config';
 import { isoDate, nowMs } from '../utils/date';
+import { parseJsonValue } from '../utils/json';
 import { getLesson, listLessons } from '../evolution/outcomes';
+import {
+  DEFAULT_SHADOW_CONFIG, decidePromotion, getCurrentScaffoldVersion, readShadowVerdict,
+  type ScaffoldStatus,
+} from '../scaffold/shadow';
 import type { ExperienceKind, PublishableCandidate } from './types';
 
 /** A fact below this confidence has not settled enough to be worth another
  *  agent's context. */
 export const EXPERIENCE_MIN_FACT_CONFIDENCE = 0.8;
 
+/** Graded turns a promoted scaffold must serve here before it may cross into
+ *  another workspace.
+ *
+ *  Not a new number: it is `DEFAULT_SHADOW_CONFIG.minTrials`, the count of
+ *  turns the promotion gate already demands as evidence before it will decide
+ *  anything at all (shadow.ts, Monte-Carlo calibrated). A promoted version has
+ *  won that many trials against the incumbent OFFLINE; this asks for the same
+ *  quantity of evidence again from turns the user actually lived through, which
+ *  is the one signal a shadow judge cannot supply. Sharing a loop that has run
+ *  in anger fewer times than its own gate required to accept it would be
+ *  exporting the judge's opinion, not experience. */
+const EXPERIENCE_SCAFFOLD_SURVIVAL_TURNS = DEFAULT_SHADOW_CONFIG.minTrials;
+
 /** The stores a workspace publishes from. */
 export interface PublishSources {
   sql: SqlExecutor;
   craftStore: CraftStore;
   facts: FactsStore;
+  /** One scaffold version's source, as `scaffold/shadow.ts` reads it. A seam
+   *  rather than the whole runtime: publishing needs exactly this one read out
+   *  of the agent-writable VFS and nothing else from it. */
+  readScaffoldVersion(version: number): Promise<string | null>;
 }
 
 /** Why a named artifact may not be published. Phrased for the agent reading a
@@ -136,30 +166,130 @@ function factCandidate(src: PublishSources, key: string): PublishableCandidate |
   };
 }
 
+interface ScaffoldVersionRow { version: number; status: ScaffoldStatus; rationale: string; written_at: number }
+
+const VetoSurfaceSchema = v.object({ surface: v.optional(v.string()) });
+
+/** Misevolution vetoes recorded in `[from, to]` against something this
+ *  workspace WROTE — a scaffold proposal, an extracted craft, a tool the model
+ *  persisted. Vetoes on the `import` surface are excluded: those are another
+ *  workspace's text refused at this boundary, which says nothing about the loop
+ *  that was running when it arrived. */
+function ownMisevolutionFlags(sql: SqlExecutor, from: number, to: number): number {
+  const rows = sql<{ data: string | null }>`
+    SELECT data FROM evolution_events
+    WHERE type = 'misevolution_veto' AND created_at BETWEEN ${from} AND ${to}`;
+  return rows.filter((row) => {
+    // `data` is recordMisevolutionVeto's own write, so a payload that will not
+    // parse is corruption in our row rather than a foreign format to shrug at —
+    // the same reading scaffold/archive.ts takes of these events.
+    const parsed = v.parse(VetoSurfaceSchema, parseJsonValue(row.data ?? '{}'));
+    return (parsed.surface ?? 'scaffold') !== 'import';
+  }).length;
+}
+
+async function scaffoldCandidate(
+  src: PublishSources,
+  key: string,
+): Promise<PublishableCandidate | PublishRefusal> {
+  const version = Number(key);
+  if (key.trim() === '' || !Number.isInteger(version) || version < 0) {
+    return { refused: `"${key}" is not a scaffold version — a scaffold is published by its version number` };
+  }
+  const row = src.sql<ScaffoldVersionRow>`
+    SELECT version, status, rationale, written_at FROM scaffold_versions
+    WHERE version = ${version} LIMIT 1`[0];
+  if (!row) return { refused: `no scaffold version v${version} in this workspace` };
+  if (row.status !== 'current') {
+    return {
+      refused: `scaffold v${version} is ${row.status}, not the version this workspace runs — `
+        + 'only a loop the local shadow gate promoted has been proven here',
+    };
+  }
+
+  // Promoted, but promoted on WHAT? Re-read the version's own trial record
+  // through the gate that decides promotions, rather than restating its rule:
+  // the v0 bootstrap (never tried) and a hand-forced promote (thin record) both
+  // carry status='current' and neither earned it.
+  const record = readShadowVerdict(src.sql, version).summary;
+  const gate = decidePromotion({
+    version, writtenAt: row.written_at, rationale: row.rationale,
+    trialsSoFar: record.trials, pendingWins: record.pendingWins,
+    currentWins: record.currentWins, ties: record.ties,
+  }, DEFAULT_SHADOW_CONFIG);
+  if (gate.decision !== 'promote') {
+    return {
+      refused: `scaffold v${version} is live but its shadow record does not clear the promotion gate `
+        + `(${record.pendingWins}W-${record.currentWins}L-${record.ties}T over ${record.trials} trial`
+        + `${record.trials === 1 ? '' : 's'}), so nothing here has actually proven it`,
+    };
+  }
+
+  // Probation: the graded turns this version SERVED. `turn_outcomes` stamps the
+  // live version on every verdict, and a version is only live after promotion,
+  // so these rows are exactly "turns since promotion" with no timestamp
+  // bookkeeping of their own.
+  const turns = src.sql<{ created_at: number }>`
+    SELECT created_at FROM turn_outcomes WHERE scaffold_version = ${version}
+    ORDER BY created_at ASC LIMIT ${EXPERIENCE_SCAFFOLD_SURVIVAL_TURNS}`;
+  if (turns.length < EXPERIENCE_SCAFFOLD_SURVIVAL_TURNS) {
+    return {
+      refused: `scaffold v${version} has served ${turns.length} graded turn`
+        + `${turns.length === 1 ? '' : 's'} since promotion, below the `
+        + `${EXPERIENCE_SCAFFOLD_SURVIVAL_TURNS}-turn probation this workspace's own promotion gate `
+        + 'demands as evidence (DEFAULT_SHADOW_CONFIG.minTrials)',
+    };
+  }
+  const flags = ownMisevolutionFlags(src.sql, turns[0].created_at, turns[turns.length - 1].created_at);
+  if (flags > 0) {
+    return {
+      refused: `scaffold v${version} drew ${flags} misevolution veto${flags === 1 ? '' : 'es'} during its `
+        + `${EXPERIENCE_SCAFFOLD_SURVIVAL_TURNS}-turn probation here — a loop that evolves unsafe `
+        + 'artifacts is not one to hand another workspace',
+    };
+  }
+
+  const code = await src.readScaffoldVersion(version);
+  if (code === null) {
+    return { refused: `scaffold v${version} has no source in this workspace's version store, so there is nothing to share` };
+  }
+  const decisive = record.pendingWins + record.currentWins;
+  return {
+    kind: 'scaffold',
+    key: String(version),
+    title: titleOf(`Scaffold v${version} — ${row.rationale}`),
+    payload: { kind: 'scaffold', version, rationale: row.rationale, code },
+    evidence: `promoted here on ${record.pendingWins} of ${decisive} decisive shadow trials `
+      + `(win-rate ${Math.round(gate.winRate * 100)}%), then ${EXPERIENCE_SCAFFOLD_SURVIVAL_TURNS} `
+      + 'graded turns live with no misevolution veto',
+  };
+}
+
 function isRefusal(value: PublishableCandidate | PublishRefusal): value is PublishRefusal {
   return 'refused' in value;
 }
 
 /** Resolve one named artifact into a publishable candidate, or say why not. */
-export function findPublishable(
+export async function findPublishable(
   src: PublishSources,
   kind: ExperienceKind,
   key: string,
   now = nowMs(),
-): PublishableCandidate | PublishRefusal {
+): Promise<PublishableCandidate | PublishRefusal> {
   switch (kind) {
     case 'craft': return craftCandidate(src, key, craftScores(src.sql), now);
     case 'lesson': return lessonCandidate(src, key);
     case 'fact': return factCandidate(src, key);
+    case 'scaffold': return await scaffoldCandidate(src, key);
   }
 }
 
 /** Everything this workspace could share right now, newest evidence first
  *  within each kind. The agent's "what do I have to offer" view. */
-export function listPublishable(
+export async function listPublishable(
   src: PublishSources,
   options: { limit?: number; now?: number } = {},
-): PublishableCandidate[] {
+): Promise<PublishableCandidate[]> {
   const limit = Math.max(1, options.limit ?? 20);
   const now = options.now ?? nowMs();
   const scores = craftScores(src.sql);
@@ -177,5 +307,12 @@ export function listPublishable(
     .map((f) => factCandidate(src, f.key))
     .filter((c): c is PublishableCandidate => !isRefusal(c));
 
-  return [...crafts, ...lessons, ...facts].slice(0, limit);
+  // At most one scaffold: the live version is the only publishable one and
+  // there is exactly one of it. Listed first because it can never be crowded
+  // out of a limit by a workspace with many crafts.
+  const live = getCurrentScaffoldVersion(src.sql);
+  const scaffold = live === null ? null : await scaffoldCandidate(src, String(live));
+  const scaffolds = scaffold !== null && !isRefusal(scaffold) ? [scaffold] : [];
+
+  return [...scaffolds, ...crafts, ...lessons, ...facts].slice(0, limit);
 }

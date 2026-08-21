@@ -34,11 +34,11 @@ Link the adapter in as a system. CL-Bench discovers systems from
 stays here and the checkout stays clean:
 
 ```bash
-ln -s /path/to/Proteus/bench/clbench/proteus src/systems/proteus
-clbench inspect system proteus     # confirms registration + every parameter
+ln -s /path/to/Proteus/bench/clbench/kinu src/systems/kinu
+clbench inspect system kinu     # confirms registration + every parameter
 ```
 
-Point it at a checkout that will still be there. `clbench inspect system proteus`
+Point it at a checkout that will still be there. `clbench inspect system kinu`
 fails on a dangling link, and a symlink into a throwaway agent worktree under
 `.claude/worktrees/` dies the moment that worktree is removed — which is how the
 first install of this adapter was wired. Repoint with `ln -sfn` rather than
@@ -53,13 +53,13 @@ clbench setup database_exploration   # ~800 MB from Hugging Face, free
 ## Credentials
 
 The default is native Workers AI DeepSeek V4 Pro 0813 through Kinu's
-signed-in `/api/user/ai/v1` proxy. The adapter reads `$PROTEUS_TOKEN` first,
-then the session written by `kinu auth` in `~/.proteus/config.json`. For a
+signed-in `/api/user/ai/v1` proxy. The adapter reads `$KINU_TOKEN` first,
+then the session written by `kinu auth` in `~/.kinu/config.json`. For a
 long benchmark, mint a scoped token and keep it in the run environment:
 
 ```bash
 kinu tokens create --name clbench --scopes ai.proxy
-export PROTEUS_TOKEN=pta_…
+export KINU_TOKEN=pta_…
 ```
 
 The credential is read at runtime and never accepted as a system parameter, so
@@ -70,27 +70,27 @@ reads `$CLOUDFLARE_API_TOKEN`. Explicit BYO comparisons remain available by
 setting `model`, `base_url`, and `provider` together; known providers read their
 own key, while a custom endpoint must name its exact `api_key_env`.
 
-Every run gets a throwaway `PROTEUS_HOME`, so your own workspaces are never
-opened, mutated, or measured. `_env()` strips every `PROTEUS_*` variable the
-operator's shell holds and re-adds exactly six: `HOME` and `PROTEUS_HOME` (both,
-so the child cannot fall back to `~/.proteus` even if it ignored the latter),
-`PROTEUS_BASE_URL`, `PROTEUS_MODEL`, `PROTEUS_AUTH` — the resolved bearer, via
+Every run gets a throwaway `KINU_HOME`, so your own workspaces are never
+opened, mutated, or measured. `_env()` strips every `KINU_*` variable the
+operator's shell holds and re-adds exactly six: `HOME` and `KINU_HOME` (both,
+so the child cannot fall back to `~/.kinu` even if it ignored the latter),
+`KINU_BASE_URL`, `KINU_MODEL`, `KINU_AUTH` — the resolved bearer, via
 the environment rather than argv, because a command line is world-readable — and
-`CI=1`. Anything else named `PROTEUS_*` cannot reach a measured run at all,
-which is worth knowing before blaming one for a result: `PROTEUS_MAX_STEPS` was
+`CI=1`. Anything else named `KINU_*` cannot reach a measured run at all,
+which is worth knowing before blaming one for a result: `KINU_MAX_STEPS` was
 suspected of causing the first run's one-step turns and was ruled out on exactly
 this filter, leaving the default of 500 steps against 1 used. That home goes through `bench/isolation.py`, the
 one rule both benchmark adapters share: it refuses an unset or relative home,
-your real `~/.proteus`, and anything inside the Kinu checkout.
+your real `~/.kinu`, and anything inside the Kinu checkout.
 
 ## Running
 
 ```bash
 # Wiring check — one interaction, no trace, no baseline.
-clbench smoke exploitable_poker --system proteus
+clbench smoke exploitable_poker --system kinu
 
 # The smallest slice with a real reward and a real baseline: 5 hands.
-clbench run --config /path/to/Proteus/bench/clbench/configs/exploitable_poker_proteus_quick_test.json \
+clbench run --config /path/to/Proteus/bench/clbench/configs/exploitable_poker_kinu_quick_test.json \
   --runs 1 --max-workers 3
 ```
 
@@ -106,9 +106,9 @@ The configs separate them.
 
 | Config | `persist_workspace` | `auto_evolve` | What it isolates |
 |---|---|---|---|
-| `*_proteus.json` | on | on | the full claim |
-| `*_proteus_no_evolve.json` | on | off | memory without evolution |
-| `*_proteus_fresh_workspace.json` | off | on | evolution without carried state |
+| `*_kinu.json` | on | on | the full claim |
+| `*_kinu_no_evolve.json` | on | off | memory without evolution |
+| `*_kinu_fresh_workspace.json` | off | on | evolution without carried state |
 
 **Workspace persistence.** One durable workspace — memory, lessons, CraftStore,
 the evolved scaffold — carried across the sequence. CL-Bench already drives half

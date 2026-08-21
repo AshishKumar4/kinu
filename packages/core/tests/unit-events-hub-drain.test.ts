@@ -2,38 +2,38 @@
 // turn, excluding the agent's own self-emitted/internal events (anti-self-wake).
 import { describe, test, expect } from 'bun:test';
 import { buildDrainBatch } from '../src/events/hub/index';
-import type { BaseEvent, IngressKind, PeerAgentPayload, ProteusEvent } from '../src/events/hub/index';
+import type { BaseEvent, IngressKind, PeerAgentPayload, KinuEvent } from '../src/events/hub/index';
 
 const EVENT_BASE = {
   trace_id: 'tid', caused_by: null, trust: 'authenticated', priority: 'normal',
   received_at: 0, schema_version: 1, reply_channel: null, dedupe_key: null,
 } satisfies Omit<BaseEvent, 'id' | 'ingress' | 'variant' | 'payload_visibility'>;
 
-function webhook(id: string): ProteusEvent {
+function webhook(id: string): KinuEvent {
   return {
     ...EVENT_BASE, id, ingress: 'webhook_hmac', variant: 'webhook', payload_visibility: 'full',
     payload: { http_method: 'POST', body: {}, webhook_id: 'w', http_headers: {}, delivery_id: 'd' },
   };
 }
 
-function internal(id: string, ingress: Extract<IngressKind, 'self_emit' | 'sandbox_cb'>, data: string): ProteusEvent {
+function internal(id: string, ingress: Extract<IngressKind, 'self_emit' | 'sandbox_cb'>, data: string): KinuEvent {
   return {
     ...EVENT_BASE, id, ingress, variant: 'internal', payload_visibility: 'full',
     payload: { kind: 'note', data },
   };
 }
 
-function timer(id: string): ProteusEvent {
+function timer(id: string): KinuEvent {
   return {
     ...EVENT_BASE, id, ingress: 'timer_alarm', variant: 'timer', payload_visibility: 'full',
     payload: { trigger_id: 'trg-daily', scheduled_fire_at: 0, label: 'daily' },
   };
 }
 
-function peer(id: string, replyExpected = false): ProteusEvent {
+function peer(id: string, replyExpected = false): KinuEvent {
   const payload = {
     from_agent_name: 'scout', from_user_id: 'u1', topic: 'research',
-    body: 'What changed upstream?', sender_event_id: 'ox1', proteus_mode: 'build',
+    body: 'What changed upstream?', sender_event_id: 'ox1', kinu_mode: 'build',
   } satisfies PeerAgentPayload;
   return replyExpected
     ? {

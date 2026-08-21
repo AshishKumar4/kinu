@@ -8,11 +8,11 @@ import { describe, expect, test } from 'bun:test';
 import { handleAuthRequest } from '../src/auth/routes';
 import { createOAuthState } from '../src/auth/store';
 import { CLOUDFLARE_WORKERS_AI_SCOPES } from '../src/lib/cloudflare-oauth';
-import { asFetchFunction, DEFAULT_WORKERS_AI_MODEL_SPEC, type OAuthCredential } from '@kinu/core';
+import { asFetchFunction, DEFAULT_WORKERS_AI_MODEL_SPEC, type OAuthCredential } from '@kinu.run/core';
 import { makeKv, type FakeKv } from './helpers/kv';
 import type { UserCaller } from '../src/user/workspace-capability';
 
-const ORIGIN = 'https://proteus.example.com';
+const ORIGIN = 'https://kinu.example.com';
 
 interface TestNamespace<Stub> {
   idFromName(name: string): string;
@@ -126,7 +126,7 @@ describe('Cloudflare IdP login attaches the Workers AI credential', () => {
       const response = await loginViaCloudflare(env, kv);
       expect(response.status).toBe(302);
       expect(response.headers.get('location')).toBe(`${ORIGIN}/`);
-      expect(response.headers.get('set-cookie')).toContain('__Host-proteus_session=');
+      expect(response.headers.get('set-cookie')).toContain('__Host-kinu_session=');
 
       // The token exchange carried PKCE + the authorization code.
       expect(tokenRequests).toHaveLength(1);

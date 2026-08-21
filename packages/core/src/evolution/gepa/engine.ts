@@ -33,7 +33,7 @@ import {
   type EvalInstance, type GepaCandidate, type GepaConfig, type GepaConstraints,
   type GepaResult, type GepaIterationState, type GepaMetric,
 } from './types';
-import { diagnostics, renderThrownChain, toProteusError } from '../../obs/index';
+import { diagnostics, renderThrownChain, toKinuError } from '../../obs/index';
 
 type ProposalOutcome =
   | { ok: true; source: string; operator: 'mutate' | 'merge'; metricCallsCharged: number; parentSource?: string }
@@ -301,7 +301,7 @@ async function emitIteration(
   try { await hook(state); } catch (err) {
     diagnostics.failure(
       'gepa.iteration_hook_failed',
-      toProteusError({ doing: 'run the GEPA onIteration hook', cause: err, otherwise: 'io' }),
+      toKinuError({ doing: 'run the GEPA onIteration hook', cause: err, otherwise: 'io' }),
       { iteration: state.iteration },
     );
   }

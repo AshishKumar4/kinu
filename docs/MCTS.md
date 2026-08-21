@@ -274,7 +274,7 @@ Each MCTS branch runs in an isolated environment:
 |----------|-----------|-----------|
 | CF Workers | `agent.subAgent(ExplorationAgent, branchId)`, Facets | Separate DO with own SQLite. Proven in Lean: `StorageIsolated` invariant. |
 | CF Workers (fallback) | Inline LLM calls | No storage access at all. Captures only LLM config, never agent reference. |
-| CLI | `child_process.fork('branch-worker.ts')` | Separate OS process with its own SQLite file under `~/.proteus/<agent>/branches/` |
+| CLI | `child_process.fork('branch-worker.ts')` | Separate OS process with its own SQLite file under `~/.kinu/<agent>/branches/` |
 
 Branches only **explore**; scoring is engine-level, so both backends score
 through the same `evaluation.ts` and the reward is execution-grounded either

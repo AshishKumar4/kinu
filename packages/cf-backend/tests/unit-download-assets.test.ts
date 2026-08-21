@@ -16,7 +16,7 @@ import * as v from 'valibot';
 import { handleCliRequest } from '../src/cli/routes';
 import { handleHealthRequest } from '../src/health-route';
 
-const ORIGIN = 'https://proteus.example.com';
+const ORIGIN = 'https://kinu.example.com';
 const SPA_SHELL = '<!doctype html>\n<html lang="en"><head><title>Kinu</title></head><body></body></html>';
 
 const STAMP = { version: '0.1.0+abc1234', sha: 'abc1234', builtAt: '2026-08-07T00:00:00.000Z' };

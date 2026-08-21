@@ -23,7 +23,7 @@ import {
   type HeadRuntime,
   type MergeOutput,
   type ModelCallSink,
-} from "@kinu/core";
+} from "@kinu.run/core";
 import { spawnHeadFacet, type ExplorationFacetIdentity, type FacetHost } from "./facet-spawn";
 import type { OwnedModelServices } from "./owned-model-services";
 

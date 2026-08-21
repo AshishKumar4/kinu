@@ -121,7 +121,7 @@ export const NON_REPOSITORY_SCANS = new Map<string, string>([
   ],
   [
     'scripts/bench-sandbox.ts',
-    'copies the tree into a solver sandbox and re-points `node_modules/@kinu/*` symlinks. '
+    'copies the tree into a solver sandbox and re-points `node_modules/@kinu.run/*` symlinks. '
     + '`git ls-files` does not list `node_modules`, so the set it needs is exactly the set no '
     + 'enumerator here can produce.',
   ],
@@ -235,7 +235,7 @@ export function gatePrograms(commands: readonly string[], tracked: readonly stri
 
   // The live-tree rule gates: `*.gate.test.ts` under tools/ assert over the whole
   // repository rather than over fixtures, so they carry a denominator and are
-  // governed. `upstream.json` already names them `proteusRuleGates`.
+  // governed. `upstream.json` already names them `kinuRuleGates`.
   for (const path of suites) if (path.endsWith('.gate.test.ts')) governed.add(path);
 
   // A gate's enumeration may live in a module it imports, which is where
@@ -259,7 +259,7 @@ export function gatePrograms(commands: readonly string[], tracked: readonly stri
   // A suite's corpus is the fixtures it builds, so a suite is not a gate program.
   // The exception is the live-tree rule gates, which assert over the whole
   // repository and carry a denominator — `upstream.json` already names them
-  // `proteusRuleGates`.
+  // `kinuRuleGates`.
   for (const path of suites) governed.delete(path);
   for (const path of suites) if (path.endsWith('.gate.test.ts')) governed.add(path);
   return { governed: [...governed].sort(), shell: [...shell].sort(), suites: [...suites].sort() };
@@ -316,7 +316,7 @@ const SELECTS = [
   'packages/pc-agent/tests/daemon.test.js', 'tests/evals/delegation.eval.ts', 'tools/x.mjs',
 ];
 const REJECTS = [
-  'plain', 'PROTEUS_HOME', 'https://example.com/v1/models', '@cf/deepseek-ai/deepseek-v4-pro',
+  'plain', 'KINU_HOME', 'https://example.com/v1/models', '@cf/deepseek-ai/deepseek-v4-pro',
   'CREATE TABLE IF NOT EXISTS traces (', 'run_required_gate "Secret scan" bun scripts/x', '42',
 ];
 

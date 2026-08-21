@@ -39,15 +39,15 @@
  */
 
 import * as v from 'valibot';
-import type { SqlExec } from '@kinu/core';
-import { diagnostics, toProteusError } from '@kinu/core/obs';
+import type { SqlExec } from '@kinu.run/core';
+import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import {
   EGRESS_PLACEHOLDER_BYTES,
   isEgressPlaceholder,
   planEgress,
   type EgressRequestFacts,
   type EgressSecretBinding,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import { randomToken } from '../lib/crypto';
 import type { CredentialCipher } from './credential-envelope';
 
@@ -255,7 +255,7 @@ export async function rewrapEgressSecrets(
       deps.sql.exec(`UPDATE user_egress_secrets SET secret = ? WHERE id = ?`, resealed, id);
     } catch (error) {
       clean = false;
-      diagnostics.failure('egress.secret_reseal_failed', toProteusError({
+      diagnostics.failure('egress.secret_reseal_failed', toKinuError({
         doing: 'resealing an egress secret under the current key',
         cause: error,
         otherwise: 'bad_input',

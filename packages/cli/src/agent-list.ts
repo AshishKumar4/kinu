@@ -4,7 +4,7 @@ import {
   requireAuthConfig,
   updateConfigFile,
   type AgentMode,
-  type ProteusAgentConfig,
+  type KinuAgentConfig,
 } from './config';
 import { listCloudAgents, type CloudAgent } from './cloud-api';
 
@@ -18,7 +18,7 @@ export interface ListedAgent {
 
 export function reconcileAgentRefs(
   localAgentNames: readonly string[],
-  configuredAgents: readonly ProteusAgentConfig[],
+  configuredAgents: readonly KinuAgentConfig[],
   cloudAgents: readonly CloudAgent[],
 ): ListedAgent[] {
   const localConfig = new Map(
@@ -81,7 +81,7 @@ export async function syncCloudAgentRefs(): Promise<ListedAgent[]> {
   updateConfigFile((config) => {
     const current = config.agents ?? {};
     const cloudNames = new Set(cloudAgents.map((agent) => agent.name));
-    const next: Record<string, ProteusAgentConfig> = {};
+    const next: Record<string, KinuAgentConfig> = {};
     for (const [name, agent] of Object.entries(current)) {
       if (agent.mode === 'cloud' && !cloudNames.has(agent.cloudName ?? agent.name)) continue;
       next[name] = agent;

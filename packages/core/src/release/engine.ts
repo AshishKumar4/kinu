@@ -9,7 +9,7 @@
  *   apply     → the change's stored unified diff is applied for real in a
  *               per-change git working copy (`/workspace/releases/<id>`),
  *               committed, and the commit sha recorded. For `github` sources
- *               the repo is cloned and a `proteus/<changeId>` branch created.
+ *               the repo is cloned and a `kinu/<changeId>` branch created.
  *   runChecks → declared build/test/lint commands run via sandbox exec; each
  *               check row's pass/fail comes from the ACTUAL exit code. All
  *               green advances validating → preview_ready; any failure blocks.
@@ -148,7 +148,7 @@ const NOT_CONFIGURED =
   'wrangler.jsonc first (see docs/EXECUTION-LAYER-SPEC.md).';
 
 const DEFAULT_WORK_ROOT = '/workspace/releases';
-const GIT = `git -c user.name=Kinu -c user.email=proteus@agent -c core.hooksPath=/dev/null`;
+const GIT = `git -c user.name=Kinu -c user.email=kinu@agent -c core.hooksPath=/dev/null`;
 const OUTPUT_CAP = 20_000;
 const APPLY_TIMEOUT_MS = 120_000;
 const CLONE_TIMEOUT_MS = 300_000;
@@ -306,7 +306,7 @@ export class ReleaseEngine {
       // change branch from the fetched default branch tip.
       const checkout = await this.run(
         exec,
-        `${GIT} reset --hard && ${GIT} clean -fd && ${GIT} checkout -B ${shellQuote(`proteus/${changeId}`)} ${shellQuote(`origin/${branch}`)}`,
+        `${GIT} reset --hard && ${GIT} clean -fd && ${GIT} checkout -B ${shellQuote(`kinu/${changeId}`)} ${shellQuote(`origin/${branch}`)}`,
         { cwd: workdir },
       );
       if (checkout.exitCode !== 0) return `git checkout failed (exit ${checkout.exitCode}):\n${cap(combinedOutput(checkout))}`;

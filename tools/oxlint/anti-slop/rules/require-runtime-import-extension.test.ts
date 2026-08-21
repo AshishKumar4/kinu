@@ -34,7 +34,7 @@ tester.run("anti-slop/require-runtime-import-extension", requireRuntimeImportExt
 		{ code: 'import "./register";', filename: bundled },
 		// A bare package specifier is the package manager's business, not this rule's.
 		{ code: 'import { z } from "zod";', filename: bundled },
-		{ code: 'import { Agent } from "@kinu/core/obs";', filename: bundled },
+		{ code: 'import { Agent } from "@kinu.run/core/obs";', filename: bundled },
 		{ code: 'import { readFileSync } from "node:fs";', filename: bundled },
 		// Extensions that name something other than a phantom build output.
 		{ code: 'import data from "./corpus.json" with { type: "json" };', filename: bundled },

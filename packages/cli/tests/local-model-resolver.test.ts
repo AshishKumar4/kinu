@@ -2,14 +2,14 @@
 // the cli-backend registry. Signed in with zero BYO keys, a local agent must
 // list the worker's model menu and run inference through /api/user/ai/v1 with
 // the CLI bearer and the per-agent affinity pin (signed-in-equals-working).
-// Runs in a subprocess because config.ts binds PROTEUS_HOME at import; the
+// Runs in a subprocess because config.ts binds KINU_HOME at import; the
 // fake worker lives in this process and records what reaches the wire.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
-import { DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC } from "@kinu/core";
-import { JsonObjectSchema } from '@kinu/core';
+import { DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC } from "@kinu.run/core";
+import { JsonObjectSchema } from '@kinu.run/core';
 import * as v from 'valibot';
 
 const CLOUD_TOKEN = "ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz";
@@ -62,9 +62,9 @@ describe("createConfiguredLocalModelResolver — signed in, no BYO keys", () => 
 
     try {
       const origin = `http://127.0.0.1:${server.port}`;
-      const proteusHome = mkdtempSync(join(tmpdir(), "proteus-cli-resolver-"));
-      tempDirs.push(proteusHome);
-      writeFileSync(join(proteusHome, "config.json"), JSON.stringify({ origin, accessToken: CLOUD_TOKEN }), { mode: 0o600 });
+      const kinuHome = mkdtempSync(join(tmpdir(), "kinu-cli-resolver-"));
+      tempDirs.push(kinuHome);
+      writeFileSync(join(kinuHome, "config.json"), JSON.stringify({ origin, accessToken: CLOUD_TOKEN }), { mode: 0o600 });
 
       const script = `
         import { generateText } from 'ai';
@@ -82,9 +82,9 @@ describe("createConfiguredLocalModelResolver — signed in, no BYO keys", () => 
           text: turn.text,
         }));
       `;
-      const env: NodeJS.ProcessEnv = { ...process.env, PROTEUS_HOME: proteusHome };
+      const env: NodeJS.ProcessEnv = { ...process.env, KINU_HOME: kinuHome };
       for (const name of [
-        "PROTEUS_TOKEN", "PROTEUS_ORIGIN", "PROTEUS_MODEL", "PROTEUS_BASE_URL", "PROTEUS_AUTH",
+        "KINU_TOKEN", "KINU_ORIGIN", "KINU_MODEL", "KINU_BASE_URL", "KINU_AUTH",
         "AI_GATEWAY_BASE_URL", "AI_GATEWAY_AUTH", "AI_GATEWAY_MODEL",
         "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "CODEX_ACCESS_TOKEN",
       ]) delete env[name];
@@ -117,7 +117,7 @@ describe("createConfiguredLocalModelResolver — signed in, no BYO keys", () => 
       const completion = requests.find((r) => r.path === "/api/user/ai/v1/chat/completions");
       expect(completion).toMatchObject({
         auth: `Bearer ${CLOUD_TOKEN}`,
-        affinity: "proteus-jarvis",
+        affinity: "kinu-jarvis",
         model: DEFAULT_WORKERS_AI_MODEL_ID,
       });
       for (const request of requests) expect(request.auth).toBe(`Bearer ${CLOUD_TOKEN}`);

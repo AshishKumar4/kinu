@@ -27,7 +27,7 @@ import type { SqlExec, VFS } from '../../types/primitives';
 import type { MissingCapability } from '../../prompting/volatile-context';
 import { argumentDigest } from '../../safety/argument-digest';
 import { tryConsumeWebhookRateLimit } from './rate-limit';
-import { diagnostics, toProteusError } from '../../obs/index';
+import { diagnostics, toKinuError } from '../../obs/index';
 
 /**
  * Inbound-email budget per agent (all senders combined). Email is a wake
@@ -330,7 +330,7 @@ export class EmailInbox {
     } catch (err) {
       diagnostics.failure(
         'email.rate_drop_notice_failed',
-        toProteusError({ doing: 'publish the inbound-email rate-drop notice', cause: err, otherwise: 'io' }),
+        toKinuError({ doing: 'publish the inbound-email rate-drop notice', cause: err, otherwise: 'io' }),
         { limitPerMin: drop.limit },
       );
     }

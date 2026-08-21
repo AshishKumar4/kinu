@@ -140,6 +140,18 @@ export interface AgentRuntime {
    * model the user chose.
    */
   fastLlm?: LLM;
+  /**
+   * The turn reviewer's model (advisor/review.ts). Reviewing work, so its
+   * unset default is the cross-vendor pick — the same reason `judgeModel` is
+   * cross-family, applied to the one producer that speaks into the
+   * conversation.
+   *
+   * Absent when this backend wires no reviewer, and then the advisor lane does
+   * nothing whatever the owner set. That is the state the conformance manifest
+   * declares per root, so a reviewer missing on one backend is a stated fact
+   * rather than a quiet one.
+   */
+  advisorLlm?: LLM;
   /** Platform-specific branch spawning — injected by CF or CLI backend */
   spawnBranch: SpawnBranch;
   abortBranch: AbortBranch;

@@ -214,7 +214,7 @@ const LockEntrySchema = v.object({
    * arm: its 34 cases are `corpus × repeats` from one `it.for`, and the corpus is
    * gated credential-free by its own `the corpus is large enough for significance
    * to be reachable`. Enumerating the 34 would restate that assertion worse and
-   * couple a commit-tier gate to `PROTEUS_EVAL_REPEATS`.
+   * couple a commit-tier gate to `KINU_EVAL_REPEATS`.
    *
    * Spell the whole `<file> › <suite>` prefix. A bare file would declare tests
    * nobody looked at, which is this gate's own defect class.
@@ -314,7 +314,7 @@ export function unmatchedTargets(
  * collects ZERO tests, which would read as a clean arm.
  */
 function runTargets(): readonly string[] {
-  const dir = mkdtempSync(join(tmpdir(), 'proteus-skip-ratchet-'));
+  const dir = mkdtempSync(join(tmpdir(), 'kinu-skip-ratchet-'));
   const arms: readonly { readonly what: string; readonly argv: readonly string[] }[] = [
     { what: 'bun test', argv: ['test', ...SKIP_RATCHET_TARGETS, '--reporter=junit'] },
     {

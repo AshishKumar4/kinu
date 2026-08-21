@@ -21,11 +21,11 @@ Each field is present only if the provider reported it, spelled as
 absent field means "not measured" and is never filled in with a zero, because a
 zero is a measurement and would price an unmetered turn as a free one.
 
-Reading that stream is ``bench/clbench/proteus/events.py`` — one reader for the
+Reading that stream is ``bench/clbench/kinu/events.py`` — one reader for the
 CLI's event contract, shared with the CL-Bench adapter, so a change to the
 event shape breaks a test rather than quietly degrading two benchmark scores.
 It is loaded by path because importing it as a package would run
-``bench/clbench/proteus/__init__.py``, which pulls in the CL-Bench system
+``bench/clbench/kinu/__init__.py``, which pulls in the CL-Bench system
 adapter and only resolves inside a CL-Bench checkout.
 
 Tool calls carry no id, so results are paired to the oldest unanswered call —
@@ -51,8 +51,8 @@ from harbor.models.trajectories import (
     Trajectory,
 )
 
-_EVENTS_PATH = Path(__file__).resolve().parents[1] / "clbench" / "proteus" / "events.py"
-_SPEC = importlib.util.spec_from_file_location("proteus_events", _EVENTS_PATH)
+_EVENTS_PATH = Path(__file__).resolve().parents[1] / "clbench" / "kinu" / "events.py"
+_SPEC = importlib.util.spec_from_file_location("kinu_events", _EVENTS_PATH)
 if _SPEC is None or _SPEC.loader is None:
     raise ImportError(f"Cannot load the Kinu event reader from {_EVENTS_PATH}")
 _events = importlib.util.module_from_spec(_SPEC)
@@ -71,7 +71,7 @@ EVOLUTION_EVENTS = _events.EVOLUTION_EVENTS
 
 
 @dataclass
-class ProteusRunSummary:
+class KinuRunSummary:
     """What the event stream says about the turn, for AgentContext metadata."""
 
     turn_steps: int | None = None
@@ -187,8 +187,8 @@ def build_trajectory(
     agent_version: str,
     model_name: str | None,
     agent_extra: dict[str, Any],
-) -> tuple[Trajectory, ProteusRunSummary]:
-    summary = ProteusRunSummary()
+) -> tuple[Trajectory, KinuRunSummary]:
+    summary = KinuRunSummary()
     builder = _StepBuilder(model_name)
     stream_session_id: str | None = None
 
@@ -221,11 +221,11 @@ def build_trajectory(
             summary.activity_events.append(record)
             if record["event"] in EVOLUTION_EVENTS:
                 summary.evolution_events.append(record)
-            builder.add_dispatch(record["message"], {"proteus_activity": record["event"]})
+            builder.add_dispatch(record["message"], {"kinu_activity": record["event"]})
         elif kind == "error":
             message = str(event.get("message") or "")
             summary.errors.append(message)
-            builder.add_system(message, {"proteus_event": "error"})
+            builder.add_system(message, {"kinu_event": "error"})
 
     # Instrumentation, not conversation: the ledger is recorded whole rather
     # than folded into ATIF steps, which describe what the agent said and did.
@@ -246,7 +246,7 @@ def build_trajectory(
 
     final_extra: dict[str, Any] = {}
     if summary.turn_steps is not None:
-        final_extra["proteus_turn_steps"] = summary.turn_steps
+        final_extra["kinu_turn_steps"] = summary.turn_steps
     if summary.duration_ms is not None:
         final_extra["duration_ms"] = summary.duration_ms
     if summary.had_error is not None:

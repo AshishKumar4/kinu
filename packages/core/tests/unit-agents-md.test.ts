@@ -1,7 +1,7 @@
 // Behavior tests for the AGENTS.md prompt block — one renderer, both backends
 // feed it their discovered files (root-most first, nearest last).
 import { describe, test, expect } from 'bun:test';
-import { createMemoryVfs, createTestRuntime } from '@kinu/test-utils';
+import { createMemoryVfs, createTestRuntime } from '@kinu.run/test-utils';
 import {
   buildSystemPromptSync, collectWorkspaceAgentsMd, renderAgentsMdSection,
 } from '../src/index';

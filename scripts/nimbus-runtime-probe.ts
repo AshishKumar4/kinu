@@ -21,7 +21,7 @@ import { join } from 'node:path';
 import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
 import bashRuntime from '@nimbus-sh/runtime-bash';
 import cpythonRuntime from '@nimbus-sh/runtime-cpython';
-import { createWorkspace, nextWorkspaceGeneration } from '@kinu/core/workspace';
+import { createWorkspace, nextWorkspaceGeneration } from '@kinu.run/core/workspace';
 import { nimbusSql, localTransactions } from '../packages/cli-backend/src/runtime';
 
 const PROBES = [

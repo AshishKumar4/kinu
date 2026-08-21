@@ -18,10 +18,10 @@ import { createOpenAI } from '@ai-sdk/openai';
 import {
   asFetchFunction, JsonObjectSchema, withRateLimitRetry,
   type JsonObject, type JsonValue,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import type { LanguageModel } from 'ai';
-import type { ModelProvider, ModelInfo } from '@kinu/core';
-import { diagnostics, ProteusError, renderThrownChain } from '@kinu/core/obs';
+import type { ModelProvider, ModelInfo } from '@kinu.run/core';
+import { diagnostics, KinuError, renderThrownChain } from '@kinu.run/core/obs';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -517,7 +517,7 @@ async function discoverModels(spawnFn: OpenCodeSpawn): Promise<OpenCodeModelInfo
   if (unreadable.length > 0) {
     diagnostics.failure(
       'model.catalog_entries_unreadable',
-      new ProteusError(
+      new KinuError(
         'bad_input',
         `opencode models --verbose: entries could not be read — ${unreadable.join('; ')}`,
       ),

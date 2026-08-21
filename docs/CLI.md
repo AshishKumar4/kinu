@@ -161,9 +161,9 @@ Create a new workspace.
 | `--alias <name>` | Create an executable alias command |
 | `--origin <url>` | Kinu app origin for first-use sign-in |
 | `--no-alias-shim` | Do not create an alias shim |
-| `--model <id>` | Model ID (env: PROTEUS_MODEL) |
-| `--base-url <url>` | LLM API base URL (env: PROTEUS_BASE_URL) |
-| `--auth <header>` | Auth header value (env: PROTEUS_AUTH) |
+| `--model <id>` | Model ID (env: KINU_MODEL) |
+| `--base-url <url>` | LLM API base URL (env: KINU_BASE_URL) |
+| `--auth <header>` | Auth header value (env: KINU_AUTH) |
 
 ### kinu list
 
@@ -175,9 +175,9 @@ Show workspace state and evolution history.
 
 | Option | What it does |
 | --- | --- |
-| `--model <id>` | Model ID (env: PROTEUS_MODEL) |
-| `--base-url <url>` | LLM API base URL (env: PROTEUS_BASE_URL) |
-| `--auth <header>` | Auth header value (env: PROTEUS_AUTH) |
+| `--model <id>` | Model ID (env: KINU_MODEL) |
+| `--base-url <url>` | LLM API base URL (env: KINU_BASE_URL) |
+| `--auth <header>` | Auth header value (env: KINU_AUTH) |
 
 ### kinu workspace delete <name>
 
@@ -229,9 +229,9 @@ Run a workspace once, or open chat when no prompt is provided.
 | `--session-dir <dir>` | Override CLI session storage directory |
 | `--no-session` | Do not record this CLI run |
 | `-n, --name <label>` | Human-readable session label |
-| `--model <id>` | Model ID (env: PROTEUS_MODEL) |
-| `--base-url <url>` | LLM API base URL (env: PROTEUS_BASE_URL) |
-| `--auth <header>` | Auth header value (env: PROTEUS_AUTH) |
+| `--model <id>` | Model ID (env: KINU_MODEL) |
+| `--base-url <url>` | LLM API base URL (env: KINU_BASE_URL) |
+| `--auth <header>` | Auth header value (env: KINU_AUTH) |
 
 ### kinu chat [name]
 
@@ -246,9 +246,9 @@ Interactive conversation with a workspace.
 | `--fork <idOrPath>` | Fork a recorded CLI session into a new session |
 | `--session-dir <dir>` | Override CLI session storage directory |
 | `--no-session` | Do not record this CLI chat |
-| `--model <id>` | Model ID (env: PROTEUS_MODEL) |
-| `--base-url <url>` | LLM API base URL (env: PROTEUS_BASE_URL) |
-| `--auth <header>` | Auth header value (env: PROTEUS_AUTH) |
+| `--model <id>` | Model ID (env: KINU_MODEL) |
+| `--base-url <url>` | LLM API base URL (env: KINU_BASE_URL) |
+| `--auth <header>` | Auth header value (env: KINU_AUTH) |
 
 ### kinu acp <name>
 
@@ -258,9 +258,9 @@ Serve a workspace over the Agent Client Protocol on stdio (Zed, JetBrains, neovi
 | --- | --- |
 | `--no-auto-evolve` | Run without turn/session auto-evolution (local workspaces) |
 | `--session-dir <dir>` | Override CLI session storage directory |
-| `--model <id>` | Model ID (env: PROTEUS_MODEL) |
-| `--base-url <url>` | LLM API base URL (env: PROTEUS_BASE_URL) |
-| `--auth <header>` | Auth header value (env: PROTEUS_AUTH) |
+| `--model <id>` | Model ID (env: KINU_MODEL) |
+| `--base-url <url>` | LLM API base URL (env: KINU_BASE_URL) |
+| `--auth <header>` | Auth header value (env: KINU_AUTH) |
 
 ### kinu exec [prompt...]
 
@@ -275,9 +275,9 @@ Run one workspace task headlessly and exit (CI-friendly; executor passthrough li
 | `--session-dir <dir>` | Override CLI session storage directory |
 | `--no-session` | Do not record this run |
 | `-n, --name <label>` | Human-readable session label |
-| `--model <id>` | Model ID (env: PROTEUS_MODEL) |
-| `--base-url <url>` | LLM API base URL (env: PROTEUS_BASE_URL) |
-| `--auth <header>` | Auth header value (env: PROTEUS_AUTH) |
+| `--model <id>` | Model ID (env: KINU_MODEL) |
+| `--base-url <url>` | LLM API base URL (env: KINU_BASE_URL) |
+| `--auth <header>` | Auth header value (env: KINU_AUTH) |
 
 ### kinu executors <name> [executor] [command...]
 
@@ -311,9 +311,9 @@ Show or change a workspace model.
 
 | Option | What it does |
 | --- | --- |
-| `--model <id>` | Model ID (env: PROTEUS_MODEL) |
-| `--base-url <url>` | LLM API base URL (env: PROTEUS_BASE_URL) |
-| `--auth <header>` | Auth header value (env: PROTEUS_AUTH) |
+| `--model <id>` | Model ID (env: KINU_MODEL) |
+| `--base-url <url>` | LLM API base URL (env: KINU_BASE_URL) |
+| `--auth <header>` | Auth header value (env: KINU_AUTH) |
 
 ### kinu effort <name> [level]
 
@@ -325,9 +325,9 @@ List a workspace tool surface.
 
 | Option | What it does |
 | --- | --- |
-| `--model <id>` | Model ID (env: PROTEUS_MODEL) |
-| `--base-url <url>` | LLM API base URL (env: PROTEUS_BASE_URL) |
-| `--auth <header>` | Auth header value (env: PROTEUS_AUTH) |
+| `--model <id>` | Model ID (env: KINU_MODEL) |
+| `--base-url <url>` | LLM API base URL (env: KINU_BASE_URL) |
+| `--auth <header>` | Auth header value (env: KINU_AUTH) |
 
 ### kinu triggers <name> [action] [value]
 
@@ -340,9 +340,9 @@ List, schedule, cancel, or create workspace triggers.
 | `--content-type <type>` | Accepted webhook content type |
 | `--rate-limit <n>` | Webhook deliveries per minute |
 | `--json` | Print raw JSON |
-| `--model <id>` | Model ID (env: PROTEUS_MODEL) |
-| `--base-url <url>` | LLM API base URL (env: PROTEUS_BASE_URL) |
-| `--auth <header>` | Auth header value (env: PROTEUS_AUTH) |
+| `--model <id>` | Model ID (env: KINU_MODEL) |
+| `--base-url <url>` | LLM API base URL (env: KINU_BASE_URL) |
+| `--auth <header>` | Auth header value (env: KINU_AUTH) |
 
 ### kinu webhook <name> <label>
 
@@ -365,9 +365,9 @@ Trigger an MCTS evolution cycle.
 | `--budget <n>` | MCTS iterations (default: the engine default) |
 | `--branches <n>` | Branches per expansion (default: the engine default) |
 | `--max-cost <usd>` | Cost ceiling in USD (default: the engine default) |
-| `--model <id>` | Model ID (env: PROTEUS_MODEL) |
-| `--base-url <url>` | LLM API base URL (env: PROTEUS_BASE_URL) |
-| `--auth <header>` | Auth header value (env: PROTEUS_AUTH) |
+| `--model <id>` | Model ID (env: KINU_MODEL) |
+| `--base-url <url>` | LLM API base URL (env: KINU_BASE_URL) |
+| `--auth <header>` | Auth header value (env: KINU_AUTH) |
 
 ### kinu jobs <name> [action] [id]
 
@@ -376,9 +376,9 @@ List or cancel background jobs.
 | Option | What it does |
 | --- | --- |
 | `--json` | Print raw JSON |
-| `--model <id>` | Model ID (env: PROTEUS_MODEL) |
-| `--base-url <url>` | LLM API base URL (env: PROTEUS_BASE_URL) |
-| `--auth <header>` | Auth header value (env: PROTEUS_AUTH) |
+| `--model <id>` | Model ID (env: KINU_MODEL) |
+| `--base-url <url>` | LLM API base URL (env: KINU_BASE_URL) |
+| `--auth <header>` | Auth header value (env: KINU_AUTH) |
 
 ### kinu state <name>
 
@@ -538,7 +538,7 @@ Remove the installed Kinu command.
 
 | Option | What it does |
 | --- | --- |
-| `--purge` | Also remove ~/.proteus data |
+| `--purge` | Also remove ~/.kinu data |
 
 ## Environment
 
@@ -546,12 +546,12 @@ These apply to every command.
 
 | Variable | What it does |
 | --- | --- |
-| `PROTEUS_HOME` | Workspace + config directory (default ~/.proteus) |
-| `PROTEUS_ORIGIN` | Kinu app origin |
-| `PROTEUS_TOKEN` | Account access token (CI) |
-| `PROTEUS_MODEL` | Default model ID |
-| `PROTEUS_BASE_URL` | LLM API base URL |
-| `PROTEUS_AUTH` | LLM auth header value |
+| `KINU_HOME` | Workspace + config directory (default ~/.kinu) |
+| `KINU_ORIGIN` | Kinu app origin |
+| `KINU_TOKEN` | Account access token (CI) |
+| `KINU_MODEL` | Default model ID |
+| `KINU_BASE_URL` | LLM API base URL |
+| `KINU_AUTH` | LLM auth header value |
 
 ## Examples
 

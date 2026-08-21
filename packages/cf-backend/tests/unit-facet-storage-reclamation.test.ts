@@ -20,7 +20,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import type { HeadInput, HeadReport } from '@kinu/core';
+import type { HeadInput, HeadReport } from '@kinu.run/core';
 import type { FacetHost } from '../src/facet-spawn';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
@@ -61,7 +61,7 @@ function headInput(id: string): HeadInput {
   };
 }
 
-const identity = { ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'proteus-main' };
+const identity = { ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'kinu-main' };
 
 /** The class this host creates facets as. Nothing below asserts on it — the
  *  count is keyed by facet id — but `FacetHost` requires the host to supply the

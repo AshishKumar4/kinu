@@ -9,7 +9,7 @@ import { describe, test, expect } from 'bun:test';
 import { userCredentialSource } from './helpers/user-credentials';
 import { generateText } from 'ai';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry';
-import { agentAffinityKey, asFetchFunction } from '@kinu/core';
+import { agentAffinityKey, asFetchFunction } from '@kinu.run/core';
 
 const ACCOUNT_BASE_URL = 'https://api.cloudflare.com/client/v4/accounts/abc123abc123abc1/ai/v1';
 
@@ -56,13 +56,13 @@ async function captureWorkersAIRequest(workersAI?: { sessionAffinity?: string })
 }
 
 describe('Workers AI session affinity (REST path)', () => {
-  test('agentAffinityKey is the stable proteus-<name> scheme', () => {
-    expect(agentAffinityKey('jarvis')).toBe('proteus-jarvis');
+  test('agentAffinityKey is the stable kinu-<name> scheme', () => {
+    expect(agentAffinityKey('jarvis')).toBe('kinu-jarvis');
   });
 
   test('sessionAffinity option is emitted as the x-session-affinity header', async () => {
     const req = await captureWorkersAIRequest({ sessionAffinity: agentAffinityKey('jarvis') });
-    expect(req.headers.get('x-session-affinity')).toBe('proteus-jarvis');
+    expect(req.headers.get('x-session-affinity')).toBe('kinu-jarvis');
     // Credential headers and the account-scoped base URL still apply.
     expect(req.headers.get('authorization')).toBe('Bearer cf-user-token');
     expect(req.url.startsWith(`${ACCOUNT_BASE_URL}/`)).toBe(true);

@@ -15,7 +15,7 @@
  * FTS5 'rebuild' command. No existing table or write path changes.
  */
 
-import { sanitizeFtsQuery } from '@kinu/agent-utils/memory';
+import { sanitizeFtsQuery } from '@kinu.run/agent-utils/memory';
 import type { SqlExecutor } from '../types/primitives';
 
 // session_id 'mcts' holds MCTS tree nodes, not conversation — excluded from

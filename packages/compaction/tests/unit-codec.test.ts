@@ -8,9 +8,9 @@ import { modelMessageSchema, type ModelMessage } from 'ai';
 import * as v from 'valibot';
 import {
   buildPlan,
-  proteusCodec,
-  proteusConventions,
-  proteusSpec,
+  kinuCodec,
+  kinuConventions,
+  kinuSpec,
   transformTurns,
   type Item,
   type Turn,
@@ -18,7 +18,7 @@ import {
 import { assistant, toolCall, toolMessage, toolResult, user } from './helpers';
 
 function roundTrip(messages: ModelMessage[]): ModelMessage[] {
-  return proteusCodec.decode(proteusCodec.encode(messages), messages);
+  return kinuCodec.decode(kinuCodec.encode(messages), messages);
 }
 
 function expectVerbatim(messages: ModelMessage[]): void {
@@ -62,7 +62,7 @@ describe('round-trip identity', () => {
     expectVerbatim([
       user('search please'),
       assistant([
-        toolCall('ws1', 'web_search', { query: 'proteus' }),
+        toolCall('ws1', 'web_search', { query: 'kinu' }),
         toolResult('ws1', 'web_search', 'results...'),
         { type: 'text', text: 'Found it.' },
       ]),
@@ -73,7 +73,7 @@ describe('round-trip identity', () => {
   test('non-adjacent provider-executed results still round-trip verbatim', () => {
     expectVerbatim([
       assistant([
-        toolCall('ws1', 'web_search', { query: 'proteus' }),
+        toolCall('ws1', 'web_search', { query: 'kinu' }),
         { type: 'text', text: 'provider interstitial' },
         toolResult('ws1', 'web_search', 'results...'),
       ]),
@@ -104,7 +104,7 @@ describe('round-trip identity', () => {
 
 describe('encode structure', () => {
   test('tool call + result pair as one item on the assistant turn', () => {
-    const turns = proteusCodec.encode([
+    const turns = kinuCodec.encode([
       user('go'),
       assistant([{ type: 'text', text: 'running' }, toolCall('c1', 'run', { command: 'ls' })]),
       toolMessage([toolResult('c1', 'run', 'out')]),
@@ -116,11 +116,11 @@ describe('encode structure', () => {
     expect(kinds).toEqual(['text', 'tool']);
     const tool = requireToolItem(turns[1].items[1]);
     expect(tool.callId).toBe('c1');
-    expect(proteusCodec.transcriptLine(tool)).toContain('out');
+    expect(kinuCodec.transcriptLine(tool)).toContain('out');
   });
 
   test('headless tool message forms its own assistant-role turn', () => {
-    const turns = proteusCodec.encode([toolMessage([toolResult('x', 'run', 'out')]), user('hi')]);
+    const turns = kinuCodec.encode([toolMessage([toolResult('x', 'run', 'out')]), user('hi')]);
     expect(turns).toHaveLength(2);
     expect(turns[0].role).toBe('assistant');
     expect(turns[0].items[0].kind).toBe('opaque');
@@ -128,8 +128,8 @@ describe('encode structure', () => {
 
   test('keys and stamps are deterministic across encodes and distinct across turns', () => {
     const messages = [user('one'), assistant([{ type: 'text', text: 'a' }]), user('one'), user('two')];
-    const first = proteusCodec.encode(messages);
-    const second = proteusCodec.encode(messages);
+    const first = kinuCodec.encode(messages);
+    const second = kinuCodec.encode(messages);
     expect(first.map((t) => t.key)).toEqual(second.map((t) => t.key));
     expect(first.map((t) => t.stamp)).toEqual(second.map((t) => t.stamp));
     // Duplicate content dedupes with an ordinal, so keys and stamps differ.
@@ -152,13 +152,13 @@ describe('decode after pruning', () => {
   ];
 
   function encoded(): Turn[] {
-    return proteusCodec.encode(messages);
+    return kinuCodec.encode(messages);
   }
 
   test('removing the reasoning item drops only the reasoning part', () => {
     const turns = encoded();
     turns[1].items = turns[1].items.filter((item) => item.kind !== 'reasoning');
-    const decoded = proteusCodec.decode(turns, messages);
+    const decoded = kinuCodec.decode(turns, messages);
     expect(decoded).toHaveLength(4);
     const rebuilt = decoded[1];
     if (rebuilt.role !== 'assistant' || isString(rebuilt.content)) throw new Error('unexpected structure');
@@ -175,7 +175,7 @@ describe('decode after pruning', () => {
   test('removing one tool item drops its call part and its result part', () => {
     const turns = encoded();
     turns[1].items = turns[1].items.filter((item) => !(item.kind === 'tool' && item.callId === 'c1'));
-    const decoded = proteusCodec.decode(turns, messages);
+    const decoded = kinuCodec.decode(turns, messages);
     const rebuiltAssistant = decoded[1];
     if (rebuiltAssistant.role !== 'assistant' || isString(rebuiltAssistant.content)) throw new Error('unexpected structure');
     expect(rebuiltAssistant.content.some((p) => p.type === 'tool-call' && p.toolCallId === 'c1')).toBe(false);
@@ -189,7 +189,7 @@ describe('decode after pruning', () => {
   test('removing all tool items drops the emptied tool message entirely', () => {
     const turns = encoded();
     turns[1].items = turns[1].items.filter((item) => item.kind !== 'tool');
-    const decoded = proteusCodec.decode(turns, messages);
+    const decoded = kinuCodec.decode(turns, messages);
     expect(decoded).toHaveLength(3);
     expect(decoded.map((m) => m.role)).toEqual(['user', 'assistant', 'user']);
   });
@@ -200,7 +200,7 @@ describe('decode after pruning', () => {
       ...turns[1].items.filter((item) => item.kind === 'text'),
       { kind: 'synthetic', key: 'syn', text: '[tool calls/results cleared]' },
     ];
-    const decoded = proteusCodec.decode(turns, messages);
+    const decoded = kinuCodec.decode(turns, messages);
     const rebuilt = decoded[1];
     if (rebuilt.role !== 'assistant' || isString(rebuilt.content)) throw new Error('unexpected structure');
     const last = rebuilt.content[rebuilt.content.length - 1];
@@ -216,7 +216,7 @@ describe('decode after pruning', () => {
       ]),
       toolMessage([toolResult('c1', 'run', '/workspace')]),
     ];
-    const turns = proteusCodec.encode(ordered);
+    const turns = kinuCodec.encode(ordered);
     const toolIndex = turns[0].items.findIndex((item) => item.kind === 'tool');
     turns[0].items[toolIndex] = {
       kind: 'synthetic',
@@ -224,7 +224,7 @@ describe('decode after pruning', () => {
       text: '[tool:run] pwd — ok',
     };
 
-    const decoded = proteusCodec.decode(turns, ordered);
+    const decoded = kinuCodec.decode(turns, ordered);
     expect(decoded).toHaveLength(1);
     const rebuilt = decoded[0];
     if (rebuilt.role !== 'assistant' || isString(rebuilt.content)) throw new Error('unexpected structure');
@@ -238,14 +238,14 @@ describe('decode after pruning', () => {
   test('stubbing another tool preserves a non-adjacent inline result position', () => {
     const ordered: ModelMessage[] = [
       assistant([
-        toolCall('a', 'web_search', { query: 'proteus' }),
+        toolCall('a', 'web_search', { query: 'kinu' }),
         { type: 'text', text: 'between call and provider result' },
         toolResult('a', 'web_search', 'result-a'),
         toolCall('b', 'run', { command: 'pwd' }),
       ]),
       toolMessage([toolResult('b', 'run', '/workspace')]),
     ];
-    const turns = proteusCodec.encode(ordered);
+    const turns = kinuCodec.encode(ordered);
     const toolIndex = turns[0].items.findIndex(
       (item) => item.kind === 'tool' && item.callId === 'b',
     );
@@ -255,7 +255,7 @@ describe('decode after pruning', () => {
       text: '[tool:run] pwd — ok',
     };
 
-    const decoded = proteusCodec.decode(turns, ordered);
+    const decoded = kinuCodec.decode(turns, ordered);
     const rebuilt = decoded[0];
     if (rebuilt.role !== 'assistant' || isString(rebuilt.content)) throw new Error('unexpected structure');
     expect(rebuilt.content.map((part) => {
@@ -272,9 +272,9 @@ describe('decode after pruning', () => {
 
   test('string-content assistant merges synthetic text into the string', () => {
     const stringHistory: ModelMessage[] = [user('q'), { role: 'assistant', content: 'plain answer' }];
-    const turns = proteusCodec.encode(stringHistory);
+    const turns = kinuCodec.encode(stringHistory);
     turns[1].items.push({ kind: 'synthetic', key: 'syn', text: 'note' });
-    const decoded = proteusCodec.decode(turns, stringHistory);
+    const decoded = kinuCodec.decode(turns, stringHistory);
     expect(decoded[1]).toEqual({ role: 'assistant', content: 'plain answer\n\nnote' });
   });
 
@@ -285,7 +285,7 @@ describe('decode after pruning', () => {
       role: 'user',
       items: [{ kind: 'synthetic', key: 'ref', text: '[Better Compact context pruning applied]' }],
     };
-    const decoded = proteusCodec.decode([synthetic], []);
+    const decoded = kinuCodec.decode([synthetic], []);
     expect(decoded).toEqual([{ role: 'user', content: '[Better Compact context pruning applied]' }]);
   });
 
@@ -293,7 +293,7 @@ describe('decode after pruning', () => {
     const compacted = { type: 'text' as const, text: `old requirement ${'x'.repeat(72_000)}` };
     const raw = { type: 'text' as const, text: 'newest requirement stays raw' };
     const messages: ModelMessage[] = [{ role: 'user', content: [compacted, raw] }];
-    const turns = proteusCodec.encode(messages);
+    const turns = kinuCodec.encode(messages);
     const plan = buildPlan(
       turns,
       {
@@ -303,13 +303,13 @@ describe('decode after pruning', () => {
         force: true,
         citablePath: (_sessionKey, hash) => `transcripts/${hash}.md`,
       },
-      proteusSpec,
+      kinuSpec,
     );
     if (!plan) throw new Error('expected a split-turn plan');
     expect(plan.rawTailItemBoundary).toEqual({ itemKey: turns[0].items[1].key, side: 'before' });
 
-    const transformed = transformTurns(turns, plan.rawTailStartIndex, plan, proteusSpec);
-    const decoded = proteusCodec.decode(transformed, messages);
+    const transformed = transformTurns(turns, plan.rawTailStartIndex, plan, kinuSpec);
+    const decoded = kinuCodec.decode(transformed, messages);
     const rebuilt = decoded.at(-1);
     if (!rebuilt || rebuilt.role !== 'user' || isString(rebuilt.content)) {
       throw new Error('expected a multipart raw-tail user message');
@@ -318,7 +318,7 @@ describe('decode after pruning', () => {
     expect(rebuilt.content[0]).toBe(raw);
     expect(JSON.stringify(rebuilt)).not.toContain('old requirement');
 
-    const transcript = proteusCodec.transcriptDocument?.(plan.transcript.turns ?? []) ?? '';
+    const transcript = kinuCodec.transcriptDocument?.(plan.transcript.turns ?? []) ?? '';
     expect(transcript).toContain('old requirement');
     expect(transcript).not.toContain('newest requirement stays raw');
   });
@@ -326,29 +326,29 @@ describe('decode after pruning', () => {
 
 describe('estimation and transcripts', () => {
   test('text prices at chars/4 and media prices flat', () => {
-    const textTurns = proteusCodec.encode([user('x'.repeat(4_000))]);
-    expect(proteusCodec.estimateTurns(textTurns)).toBe(1_000);
-    const imageTurns = proteusCodec.encode([
+    const textTurns = kinuCodec.encode([user('x'.repeat(4_000))]);
+    expect(kinuCodec.estimateTurns(textTurns)).toBe(1_000);
+    const imageTurns = kinuCodec.encode([
       { role: 'user', content: [{ type: 'image', image: new Uint8Array(1_000_000), mediaType: 'image/png' }] },
     ]);
-    expect(proteusCodec.estimateTurns(imageTurns)).toBe(1_200);
+    expect(kinuCodec.estimateTurns(imageTurns)).toBe(1_200);
   });
 
   test('a tool pair prices its input and output', () => {
-    const turns = proteusCodec.encode([
+    const turns = kinuCodec.encode([
       assistant([toolCall('c1', 'run', { command: 'x'.repeat(400) })]),
       toolMessage([toolResult('c1', 'run', 'y'.repeat(4_000))]),
     ]);
     const tool = requireToolItem(turns[0].items[0]);
-    expect(proteusCodec.estimateItem(tool)).toBeGreaterThan(1_000);
+    expect(kinuCodec.estimateItem(tool)).toBeGreaterThan(1_000);
   });
 
   test('transcriptLine renders tool input and output', () => {
-    const turns = proteusCodec.encode([
+    const turns = kinuCodec.encode([
       assistant([toolCall('c1', 'run', { command: 'make test' })]),
       toolMessage([toolResult('c1', 'run', 'all 42 tests passed')]),
     ]);
-    const line = proteusCodec.transcriptLine(turns[0].items[0]);
+    const line = kinuCodec.transcriptLine(turns[0].items[0]);
     expect(line).toContain('[tool:run] callId=c1');
     expect(line).toContain('make test');
     expect(line).toContain('all 42 tests passed');
@@ -367,7 +367,7 @@ describe('estimation and transcripts', () => {
       assistant([toolCall('c1', 'run', { command: 'ls -la' })]),
       toolMessage([toolResult('c1', 'run', 'total 12\ndrwxr-xr-x')]),
     ];
-    const doc = proteusCodec.transcriptDocument?.(proteusCodec.encode(messages)) ?? '';
+    const doc = kinuCodec.transcriptDocument?.(kinuCodec.encode(messages)) ?? '';
     expect(doc).toContain('exact user wording');
     expect(doc).toContain('ls -la');
     expect(doc).toContain('total 12\\ndrwxr-xr-x');
@@ -383,7 +383,7 @@ describe('estimation and transcripts', () => {
 
 describe('conventions', () => {
   test('skills read/invoke calls are skill items; other skills actions and tools are not', () => {
-    const turns = proteusCodec.encode([
+    const turns = kinuCodec.encode([
       assistant([
         toolCall('s1', 'skills', { action: 'read', name: 'deploy' }),
         toolCall('s2', 'skills', { action: 'list' }),
@@ -391,18 +391,18 @@ describe('conventions', () => {
       ]),
     ]);
     const [read, list, run] = turns[0].items;
-    expect(proteusConventions.isSkillItem?.(read)).toBe(true);
-    expect(proteusConventions.isSkillItem?.(list)).toBe(false);
-    expect(proteusConventions.isSkillItem?.(run)).toBe(false);
+    expect(kinuConventions.isSkillItem?.(read)).toBe(true);
+    expect(kinuConventions.isSkillItem?.(list)).toBe(false);
+    expect(kinuConventions.isSkillItem?.(run)).toBe(false);
   });
 
   test('todo and itemNote conventions are intentionally absent', () => {
-    expect(proteusConventions.todo).toBeUndefined();
-    expect(proteusConventions.itemNote).toBeUndefined();
+    expect(kinuConventions.todo).toBeUndefined();
+    expect(kinuConventions.itemNote).toBeUndefined();
   });
 
   test('tool metadata exposes names, inputs, and explicit SDK errors', () => {
-    const turns = proteusCodec.encode([
+    const turns = kinuCodec.encode([
       assistant([toolCall('e1', 'workspace.readFile', { path: '/tmp/missing' })]),
       toolMessage([{
         type: 'tool-result',
@@ -413,7 +413,7 @@ describe('conventions', () => {
     ]);
     const item = turns[0].items[0];
     if (item.kind !== 'tool') throw new Error('expected a tool item');
-    expect(proteusConventions.tool?.(item)).toEqual({
+    expect(kinuConventions.tool?.(item)).toEqual({
       name: 'workspace.readFile',
       input: { path: '/tmp/missing' },
       error: 'ENOENT: /tmp/missing',
@@ -421,7 +421,7 @@ describe('conventions', () => {
   });
 
   test('ladder order enables skills, superseding, and error purging before old tools', () => {
-    expect(proteusSpec.stages.map((stage) => stage.name)).toEqual([
+    expect(kinuSpec.stages.map((stage) => stage.name)).toEqual([
       'skills',
       'supersede-reads',
       'purge-error-inputs',

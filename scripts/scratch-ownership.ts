@@ -18,7 +18,7 @@
  *
  * Three rules, each one a shape that leaked in production:
  *
- *   1. NO UNOWNED UNIQUE NAME. `/tmp/proteus-test-${Date.now()}` is unique,
+ *   1. NO UNOWNED UNIQUE NAME. `/tmp/kinu-test-${Date.now()}` is unique,
  *      unowned and unattributable: 5,489 directories of that shape were on the
  *      box, and the name could not say which file made them. Measured source:
  *      `makeAuthFile` in cli-backend's opencode-provider.test.ts, plus four
@@ -26,9 +26,9 @@
  *   2. EVERY PREFIX IS CATALOGUED. preflight counts and reclaims by prefix, so a
  *      prefix it does not know is simultaneously uncollected and INVISIBLE. Its
  *      hand-written copy of the list drifted exactly that way and under-reported
- *      our own garbage by ~30% (6,102 of 8,643): `proteus-scaffold-test-`,
- *      `proteus-runtimes-`, `proteus-webhook-`, `proteus-vfs-`, `proteus-gepa-`,
- *      `proteus-codex-auth-`, `proteus-shared-`, `proteus-mcp-test-` and every
+ *      our own garbage by ~30% (6,102 of 8,643): `kinu-scaffold-test-`,
+ *      `kinu-runtimes-`, `kinu-webhook-`, `kinu-vfs-`, `kinu-gepa-`,
+ *      `kinu-codex-auth-`, `kinu-shared-`, `kinu-mcp-test-` and every
  *      `agent-core-*` were unseen. The catalogue now lives beside the minting
  *      helper (`packages/test-utils/src/scratch.ts`) and this gate is what keeps
  *      it complete.
@@ -46,7 +46,7 @@
 
 import { readMatching, isTestFile, isParseable } from './sources';
 import { assertMeasured, finding } from './gate-ratchet';
-import { SCRATCH_PREFIXES, SCRATCH_ROOT_PREFIX } from '@kinu/test-utils';
+import { SCRATCH_PREFIXES, SCRATCH_ROOT_PREFIX } from '@kinu.run/test-utils';
 
 /**
  * The corpus: every enumerated `.ts` this repo owns. `trackedFiles()` via
@@ -71,7 +71,7 @@ const isSuiteFile = (file: string): boolean =>
 /**
  * Files whose CONTENT is the defect on purpose.
  *
- * `scripts/test-preload.ts` owns the throwaway PROTEUS_HOME for every test
+ * `scripts/test-preload.ts` owns the throwaway KINU_HOME for every test
  * process AND registers the global release, so holding it to "call the helper"
  * would be circular; its prefix is catalogued, so preflight still sees it.
  *
@@ -86,7 +86,7 @@ const isSuiteFile = (file: string): boolean =>
  * of a defect here.
  */
 const EXEMPT = [
-  // The throwaway PROTEUS_HOME and the global release live here; holding it to
+  // The throwaway KINU_HOME and the global release live here; holding it to
   // "call the helper" would be circular. Its prefix is catalogued, so preflight
   // still counts it. The two entries beside it are three lines each and mint
   // nothing — they exist only to register their own runner's `afterAll`.
@@ -95,6 +95,15 @@ const EXEMPT = [
   'scripts/test-preload-vitest.ts',
   'scripts/scratch-ownership.test.ts',
   'packages/test-utils/src/scratch.ts',
+  // Both `mkdtempSync(join(tmpdir(), …))` matches in this file sit inside
+  // template literals that are oxlint FIXTURE TEXT, never executed, and the
+  // first is `packages/core/tests/unit-workspace-diff.test.ts:264-270` verbatim
+  // at d9a7daf7c~1, pinned by digest and re-checked against `git show` — so its
+  // prefix cannot be recatalogued without making the gate replay a shape that
+  // never shipped. Nothing is hidden: this file's two REAL mints are
+  // `.no-ambient-git-boundary-` and `.no-ambient-git-gate-` under the repo root,
+  // which this scan does not read because it reads `tmpdir()` mints only.
+  'tools/oxlint/anti-slop/no-ambient-git.gate.test.ts',
 ] as const;
 
 /**
@@ -252,7 +261,7 @@ export function auditScratchOwnership(sources: ReadonlyMap<string, string>): Scr
       file: path,
       line: lineOf(body, MINTS),
       detail: 'mints temp scratch and never removes it. Use `scratchDir(label)` from '
-        + '@kinu/test-utils, which the preload releases for the whole run — including '
+        + '@kinu.run/test-utils, which the preload releases for the whole run — including '
         + 'a run where this file failed — or remove it in afterEach/afterAll/finally',
     });
   }
@@ -297,7 +306,7 @@ if (import.meta.main) {
         + 'entries in the temp directory in one evening, which then reads as "this test '
         + 'timed out after 5000ms" in whichever suite writes next — never in the one that '
         + 'leaked, and it was blamed for three unrelated failures',
-      fix: 'mint through `scratchDir(label)` from @kinu/test-utils, or remove the '
+      fix: 'mint through `scratchDir(label)` from @kinu.run/test-utils, or remove the '
         + 'directory in afterEach/afterAll/finally so a failing assertion still cleans up',
     }));
   }

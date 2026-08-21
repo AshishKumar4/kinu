@@ -16,7 +16,7 @@ What you decide on day one is where a workspace lives.
 
 | | `--mode cloud` | `--mode local` |
 | --- | --- | --- |
-| Lives in | a Durable Object on `kinu.run` | `~/.proteus/<name>/agent.db` on this machine |
+| Lives in | a Durable Object on `kinu.run` | `~/.kinu/<name>/agent.db` on this machine |
 | Keeps running when you close the laptop | yes | no |
 | Web UI, email inbox, webhooks, timers | yes | no |
 | Runs commands on your machine | through the desktop daemon you connect | directly |
@@ -180,9 +180,9 @@ it wrote, and the Work tab's journal reverts it.
 A cloud workspace's only copy is the Durable Object it lives in. Take your own:
 
 ```bash
-kinu export jarvis                       # → jarvis.proteus.jsonl
-kinu export jarvis -o ~/backups/jarvis.proteus.jsonl
-kinu import ~/backups/jarvis.proteus.jsonl --name jarvis-restored
+kinu export jarvis                       # → jarvis.kinu.jsonl
+kinu export jarvis -o ~/backups/jarvis.kinu.jsonl
+kinu import ~/backups/jarvis.kinu.jsonl --name jarvis-restored
 ```
 
 `export` works the same for cloud and local workspaces and writes the same
@@ -208,19 +208,19 @@ kinu doctor            # home, installed command, PATH, origin, version vs serve
 kinu update            # update the installed command
 kinu daemon status     # the local scheduler (local workspaces' timers)
 kinu daemon logs
-kinu uninstall         # or --purge to remove ~/.proteus as well
+kinu uninstall         # or --purge to remove ~/.kinu as well
 ```
 
 The CLI checks for a newer served version once a day and mentions it in an
 interactive terminal. Silence it by setting `"updateCheck": false` in
-`~/.proteus/config.json`.
+`~/.kinu/config.json`.
 
 ## 9. Where your things live
 
-Everything is under `~/.proteus` (override with `PROTEUS_HOME`):
+Everything is under `~/.kinu` (override with `KINU_HOME`):
 
 ```
-~/.proteus/
+~/.kinu/
   config.json        account, providers, workspaces, aliases   → docs/CONFIG.md
   bin/               the kinu command and your workspace aliases
   <workspace>/       one directory per LOCAL workspace

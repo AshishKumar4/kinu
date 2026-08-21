@@ -5,8 +5,8 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES } from '@kinu/core';
-import { LOCAL_MAX_INLINE_ATTACHMENT_BYTES } from '@kinu/cli-backend';
+import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES } from '@kinu.run/core';
+import { LOCAL_MAX_INLINE_ATTACHMENT_BYTES } from '@kinu.run/cli-backend';
 import {
   describePromptAttachment,
   extractPathTokens,
@@ -24,7 +24,7 @@ afterEach(() => {
 });
 
 function makeDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'proteus-attach-'));
+  const dir = mkdtempSync(join(tmpdir(), 'kinu-attach-'));
   tempDirs.push(dir);
   return dir;
 }

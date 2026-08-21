@@ -95,7 +95,7 @@ describe('Scaffold modification (4-gate)', () => {
   });
 
   test('pending writes to versioned file, NOT live scaffold/agent.js', async () => {
-    // Closure of `proteus-scaffold-gap`: modifyScaffold used to overwrite the
+    // Closure of `kinu-scaffold-gap`: modifyScaffold used to overwrite the
     // live file at proposal time, which made shadow eval compare a file to
     // itself. The fix routes pending into scaffold/agent.js.v{N} only — the
     // live file remains the current scaffold's content until applyPromotion

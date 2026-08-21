@@ -31,9 +31,9 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
   createRecordingLogger,
-  ProteusError,
+  KinuError,
   RESERVED_LOG_FIELDS,
-  toProteusError,
+  toKinuError,
 } from '../src/obs/index';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -122,7 +122,7 @@ describe('a log call carrying a secret does not compile', () => {
     [6, 'a numeric index signature', 'UninspectedFieldsAreNotLoggable'],
     [7, 'an object nobody looked inside', 'LogFieldValue'],
     [8, 'an event name with no dot', '`${string}.${string}`'],
-    [9, 'a failure log with no classification', 'ProteusError'],
+    [9, 'a failure log with no classification', 'KinuError'],
   ];
 
   const violations = compiled.diagnostics.filter((d) => d.file.endsWith('violations.ts'));
@@ -189,7 +189,7 @@ describe('the logger records what a code path claimed', () => {
     // What makes the log line answer the question the string returns could not:
     // WHICH kind of failure, and what actually failed underneath.
     const log = createRecordingLogger();
-    const failure = toProteusError({
+    const failure = toKinuError({
       doing: 'reading workspace_capability',
       cause: new Error('no such table: workspace_capability'),
       otherwise: 'io',
@@ -207,7 +207,7 @@ describe('the logger records what a code path claimed', () => {
     // Enforced by the signature, so this asserts the runtime half: whatever
     // classification the error carries is what the line reports, with no default.
     const log = createRecordingLogger();
-    log.failure('run.escalation_refused', new ProteusError('unavailable', 'not provisioned'));
+    log.failure('run.escalation_refused', new KinuError('unavailable', 'not provisioned'));
     expect(log.emitted[0]?.code).toBe('unavailable');
     expect(log.emitted[0]?.fields).toEqual({});
   });

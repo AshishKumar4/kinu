@@ -2,7 +2,7 @@
  * How the hard-task tier SCORES a metered-oracle measurement, and how one task is
  * assembled from its problem content.
  *
- * The measurement itself moved to `@kinu/core`'s `strategy/exec-ratio.ts` and this
+ * The measurement itself moved to `@kinu.run/core`'s `strategy/exec-ratio.ts` and this
  * module is now one caller of it. The reason is stated there and it is not a tidiness
  * argument: `VerifierSpec.kind` is closed over a registry the tool surface owns, so the
  * implementation a registered kind resolves to must be reachable from core or the kind
@@ -27,7 +27,7 @@ import {
   runRatioMeasurement,
   type RatioMeasurement,
   type RatioProblem,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import type { VerifierContext } from '../eval-outcome';
 /** A scored ratio, carrying every quantity the score was derived from. */
 export interface RatioScore {

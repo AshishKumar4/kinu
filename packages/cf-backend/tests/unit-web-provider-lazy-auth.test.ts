@@ -4,7 +4,7 @@
 // froze getAuth=undefined and the Tavily upgrade never engaged even after the
 // claim. The fix takes a thunk resolved PER CALL. This pins that behavior.
 import { describe, test, expect, afterEach } from 'bun:test';
-import type { AuthResolver } from '@kinu/core';
+import type { AuthResolver } from '@kinu.run/core';
 import { buildCfWebSearchProvider } from '../src/lib/web-provider';
 
 const DDG_HTML = `

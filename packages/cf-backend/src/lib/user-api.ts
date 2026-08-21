@@ -3,8 +3,8 @@
  * attached automatically by the HttpOnly cookie (or local dev's DEV_USER_EMAIL
  * is synthesized server-side), so these fetches are bare.
  */
-import { JsonObjectSchema, type Credential } from '@kinu/core';
-import { tolerateAsync } from '@kinu/core/obs';
+import { JsonObjectSchema, type Credential } from '@kinu.run/core';
+import { tolerateAsync } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 export interface UserProfile {
@@ -351,7 +351,7 @@ export interface TriggerSummary {
   id: string;
   kind: 'webhook_durable' | 'webhook_ephemeral' | 'timer_oneshot' | 'timer_cron'
       | 'process_watch' | 'file_watch' | 'peer_inbox' | 'mcp_route';
-  spec: import('@kinu/core').JsonObject;
+  spec: import('@kinu.run/core').JsonObject;
   creator_trust: 'external' | 'authenticated' | 'owner' | 'self';
   state: 'active' | 'paused' | 'revoked';
   created_at: number;

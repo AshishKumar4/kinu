@@ -122,7 +122,7 @@ describe('KV-backed browser auth store', () => {
 
     await revokeSession(kv, created.token);
     expect(await verifySession(kv, created.token)).toBeNull();
-    expect(await verifySession(kv, 'not-a-proteus-token')).toBeNull();
+    expect(await verifySession(kv, 'not-a-kinu-token')).toBeNull();
   });
 });
 
@@ -134,7 +134,7 @@ describe('OAuth handoff state', () => {
       codeVerifier: 'verifier',
       nonce: null,
       returnTo: '/workspaces/jarvis',
-      redirectUri: 'https://proteus.example.com/auth/cloudflare/callback',
+      redirectUri: 'https://kinu.example.com/auth/cloudflare/callback',
     });
 
     const consumed = await consumeOAuthState(kv, state, 'cloudflare');
@@ -154,7 +154,7 @@ describe('OAuth handoff state', () => {
       codeVerifier: 'verifier',
       nonce: null,
       returnTo: '/',
-      redirectUri: 'https://proteus.example.com/auth/cloudflare/callback',
+      redirectUri: 'https://kinu.example.com/auth/cloudflare/callback',
     });
 
     expect(consumeOAuthState(kv, state, 'github')).rejects.toThrow(/provider mismatch/);
@@ -167,7 +167,7 @@ describe('OAuth handoff state', () => {
       codeVerifier: 'verifier',
       nonce: null,
       returnTo: '//evil.example.com/steal',
-      redirectUri: 'https://proteus.example.com/auth/cloudflare/callback',
+      redirectUri: 'https://kinu.example.com/auth/cloudflare/callback',
     });
 
     expect((await consumeOAuthState(kv, state, 'cloudflare')).returnTo).toBe('/');

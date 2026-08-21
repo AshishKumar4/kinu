@@ -12,7 +12,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import { auditScratchOwnership, readScannableSources } from './scratch-ownership';
-import { SCRATCH_PREFIXES } from '@kinu/test-utils';
+import { SCRATCH_PREFIXES } from '@kinu.run/test-utils';
 
 /** One file, as the gate reads its corpus. */
 function audit(path: string, source: string) {
@@ -28,7 +28,7 @@ describe('the shapes that leaked', () => {
     for (const unique of ['Date.now()', 'performance.now()', 'crypto.randomUUID()', 'process.pid']) {
       const found = audit('packages/x/tests/a.test.ts', [
         "import { mkdirSync } from 'node:fs';",
-        `const dir = \`/tmp/proteus-test-\${${unique}}\`;`,
+        `const dir = \`/tmp/kinu-test-\${${unique}}\`;`,
         'mkdirSync(dir, { recursive: true });',
       ].join('\n'));
       expect(found.problems.map((p) => p.rule)).toEqual(['unowned-unique']);
@@ -54,7 +54,7 @@ describe('the shapes that leaked', () => {
       "import { mkdtempSync } from 'node:fs';",
       "import { tmpdir } from 'node:os';",
       "import { join } from 'node:path';",
-      "const dir = mkdtempSync(join(tmpdir(), 'proteus-thing-'));",
+      "const dir = mkdtempSync(join(tmpdir(), 'kinu-thing-'));",
     ].join('\n'));
     expect(found.problems.map((p) => p.rule)).toEqual(['released']);
   });
@@ -78,7 +78,7 @@ describe('the fixes are accepted', () => {
     // which is the only release mechanism measured to run under this runner —
     // `process.on("exit")` never fires under `bun test`.
     const found = audit('packages/x/tests/a.test.ts', [
-      "import { scratchDir } from '@kinu/test-utils';",
+      "import { scratchDir } from '@kinu.run/test-utils';",
       "const dir = scratchDir('a-suite');",
     ].join('\n'));
     expect(found.problems).toEqual([]);
@@ -89,7 +89,7 @@ describe('the fixes are accepted', () => {
       "import { mkdtempSync, rmSync } from 'node:fs';",
       "import { tmpdir } from 'node:os';",
       "import { join } from 'node:path';",
-      "const dir = mkdtempSync(join(tmpdir(), 'proteus-thing-'));",
+      "const dir = mkdtempSync(join(tmpdir(), 'kinu-thing-'));",
       'afterAll(() => { rmSync(dir, { recursive: true, force: true }); });',
     ].join('\n'));
     expect(found.problems).toEqual([]);
@@ -102,10 +102,10 @@ describe('what it must NOT fire on', () => {
     // that fires on its own explanation gets the explanation deleted.
     const found = audit('packages/x/tests/a.test.ts', [
       '/**',
-      ' * Hand-rolling this as `/tmp/proteus-test-${performance.now()}.db` is what',
+      ' * Hand-rolling this as `/tmp/kinu-test-${performance.now()}.db` is what',
       ' * put 5,489 directories in /tmp.',
       ' */',
-      "import { scratchDir } from '@kinu/test-utils';",
+      "import { scratchDir } from '@kinu.run/test-utils';",
       "const dir = scratchDir('a-suite');",
     ].join('\n'));
     expect(found.problems).toEqual([]);

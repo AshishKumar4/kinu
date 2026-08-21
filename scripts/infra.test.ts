@@ -64,7 +64,7 @@ describe('the inventory is derived from the manifest, not written beside it', ()
     // not make the name resolve — so the record is its own row.
     expect(ids).toContain('dns-record.staging.kinu.run');
     expect(ids).toContain('email-routing.kinu.run');
-    expect(ids).toContain('durable-object.kinu:ProteusSandbox');
+    expect(ids).toContain('durable-object.kinu:KinuSandbox');
     // One auth store per environment, each keyed by its own namespace id.
     expect(authStore('production').environments).toEqual(['production']);
     expect(authStore('staging').environments).toEqual(['staging']);

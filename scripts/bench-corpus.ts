@@ -9,7 +9,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import * as v from 'valibot';
-import { gitEnv } from '@kinu/test-utils';
+import { gitEnv } from '@kinu.run/test-utils';
 import { isBenchDefectPatch, trackedFiles } from './sources';
 import { partitionCorpus, promptLeaksFix } from '../packages/core/src/index';
 import type { BenchCheck, BenchCorpus, BenchTask, PartitionOptions } from '../packages/core/src/index';

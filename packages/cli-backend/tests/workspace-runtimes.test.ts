@@ -9,12 +9,12 @@
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { scratchPath } from '@kinu/test-utils';
+import { scratchPath } from '@kinu.run/test-utils';
 import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
 import bashRuntime from '@nimbus-sh/runtime-bash';
 import cpythonRuntime from '@nimbus-sh/runtime-cpython';
-import { createWorkspace, nextWorkspaceGeneration } from '@kinu/core/workspace';
-import type { WorkspaceBundle } from '@kinu/core/workspace';
+import { createWorkspace, nextWorkspaceGeneration } from '@kinu.run/core/workspace';
+import type { WorkspaceBundle } from '@kinu.run/core/workspace';
 import { nimbusSql, localTransactions } from '../src/runtime';
 
 const RUNTIMES: readonly RuntimePackage[] = [bashRuntime, cpythonRuntime];
@@ -131,7 +131,7 @@ describe('workspace runtime provisioning', () => {
 
     // Hosted sessions get git from @nimbus-sh/worker (dist/git/commands.js:217),
     // which needs a Durable Object for its network subcommands and is not a
-    // dependency of @kinu/core. This asserts the gap so that closing it has
+    // dependency of @kinu.run/core. This asserts the gap so that closing it has
     // to be deliberate rather than accidental.
     //
     // Asked through the shell's own `type` builtin rather than by running `git`:

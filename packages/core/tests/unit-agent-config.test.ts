@@ -4,7 +4,7 @@ import {
   DEFAULT_AUTO_GEPA_EVERY_N_TURNS, DEFAULT_GEPA_EVAL_BUDGET,
   setReasoningEffort,
 } from '../src/index';
-import { createTestSql } from '@kinu/test-utils';
+import { createTestSql } from '@kinu.run/test-utils';
 
 function setup() {
   const { sql, execRaw } = createTestSql();
@@ -222,14 +222,14 @@ describe('AgentConfigStore — typed accessors', () => {
     expect(() => c.setShadowSampleRate(Number.NaN)).toThrow(/invalid shadow_sample_rate/);
     expect(c.getShadowSampleRate()).toBe(0.5);
 
-    c.setReviewModel('anthropic/claude-opus-4-7');
-    expect(c.getReviewModel()).toBe('anthropic/claude-opus-4-7');
-    c.setReviewModel('  openai/gpt-5  ');
-    expect(c.getReviewModel()).toBe('openai/gpt-5');
-    c.setReviewModel(null);
-    expect(c.getReviewModel()).toBeNull();   // cleared → cross-family auto-pick
-    c.setReviewModel('   ');
-    expect(c.getReviewModel()).toBeNull();
+    c.setRoleModel('judge', 'anthropic/claude-opus-4-7');
+    expect(c.getRoleModel('judge')).toBe('anthropic/claude-opus-4-7');
+    c.setRoleModel('judge', '  openai/gpt-5  ');
+    expect(c.getRoleModel('judge')).toBe('openai/gpt-5');
+    c.setRoleModel('judge', null);
+    expect(c.getRoleModel('judge')).toBeNull();   // cleared → cross-family auto-pick
+    c.setRoleModel('judge', '   ');
+    expect(c.getRoleModel('judge')).toBeNull();
 
     // The budget's bounds are a cost policy, so a setter clamps rather than throws.
     c.setGepaEvalBudget(1000);
@@ -314,8 +314,11 @@ describe('AgentConfigStore — every key has a write path', () => {
     (c) => c.setAutoPromoteScaffold(false),
     (c) => c.setShadowSampleRate(0.5),
     (c) => c.setScaffoldExploreShare(0.3),
-    (c) => c.setReviewModel('anthropic/claude-opus-4-7'),
-    (c) => c.setFastModel('anthropic/claude-haiku-4-5'),
+    (c) => c.setRoleModel('judge', 'anthropic/claude-opus-4-7'),
+    (c) => c.setRoleModel('fast', 'anthropic/claude-haiku-4-5'),
+    (c) => c.setRoleModel('advisor', 'openai/gpt-5-mini'),
+    (c) => c.setAdvisorEnabled(true),
+    (c) => c.setAdvisorMinSeverity('blocker'),
     (c) => c.setAlwaysActiveSkills(['research']),
     (c) => c.setLastActiveExecutor('sandbox'),
     (c) => c.setAutoGepaEveryNTurns(10),

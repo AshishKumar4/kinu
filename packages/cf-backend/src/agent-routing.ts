@@ -1,4 +1,4 @@
-import { ORCHESTRATOR_AGENT_SLUG, SUBORDINATE_AGENT_SLUG } from "@kinu/core";
+import { ORCHESTRATOR_AGENT_SLUG, SUBORDINATE_AGENT_SLUG } from "@kinu.run/core";
 
 /**
  * The `/agents/*` transport boundary — the single policy for which requests may
@@ -6,7 +6,7 @@ import { ORCHESTRATOR_AGENT_SLUG, SUBORDINATE_AGENT_SLUG } from "@kinu/core";
  *
  * `routeAgentRequest` (partyserver) maps EVERY DO namespace binding by kebab-case
  * slug. Only the orchestrator namespace and its direct SubordinateAgent facet
- * are client-facing; UserDO, ProteusSandbox and the Nimbus namespaces are
+ * are client-facing; UserDO, KinuSandbox and the Nimbus namespaces are
  * worker-side-only (reached via `env.<NS>.get(id).method()` stubs, no HTTP
  * route). Without pinning, `/agents/user-d-o/<victimUserId>`
  * would map straight onto a victim's UserDO — the F1 account-takeover hole.

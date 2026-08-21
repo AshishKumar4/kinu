@@ -5,9 +5,9 @@
 
 import chalk from 'chalk';
 import type { Command } from 'commander';
-import { BUILTIN_TOOLS, describeToolCall, summarizeToolCall } from '@kinu/core';
-import type { SearchNode, ReasoningEffort, JsonObject } from '@kinu/core';
-import type { WorkspaceInfo } from '@kinu/core/identity';
+import { BUILTIN_TOOLS, describeToolCall, summarizeToolCall } from '@kinu.run/core';
+import type { SearchNode, ReasoningEffort, JsonObject } from '@kinu.run/core';
+import type { WorkspaceInfo } from '@kinu.run/core/identity';
 import { guideFailure, type ProviderFailure } from './provider-guidance';
 import cliPackage from '../package.json' with { type: 'json' };
 
@@ -311,12 +311,12 @@ const UNGROUPED_HEADING = 'Other commands:';
 /** Environment variables that apply to every command. Per-command options are
  *  deliberately not repeated here — `kinu <command> --help` owns those. */
 export const GLOBAL_ENVIRONMENT: ReadonlyArray<readonly [string, string]> = [
-  ['PROTEUS_HOME', 'Workspace + config directory (default ~/.proteus)'],
-  ['PROTEUS_ORIGIN', 'Kinu app origin'],
-  ['PROTEUS_TOKEN', 'Account access token (CI)'],
-  ['PROTEUS_MODEL', 'Default model ID'],
-  ['PROTEUS_BASE_URL', 'LLM API base URL'],
-  ['PROTEUS_AUTH', 'LLM auth header value'],
+  ['KINU_HOME', 'Workspace + config directory (default ~/.kinu)'],
+  ['KINU_ORIGIN', 'Kinu app origin'],
+  ['KINU_TOKEN', 'Account access token (CI)'],
+  ['KINU_MODEL', 'Default model ID'],
+  ['KINU_BASE_URL', 'LLM API base URL'],
+  ['KINU_AUTH', 'LLM auth header value'],
 ];
 
 export const HELP_EXAMPLES: ReadonlyArray<string> = [

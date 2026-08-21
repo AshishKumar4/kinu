@@ -18,7 +18,7 @@ import {
 } from '../src/events/hub/index';
 import {
   EventLog, JsonObjectSchema, cancelTrigger, createTimerTrigger, fireDueTriggers, listTriggers,
-  type ProteusEvent, type TimerPayload,
+  type KinuEvent, type TimerPayload,
 } from '../src/index';
 import { makeSqlExec } from './helpers';
 
@@ -42,7 +42,7 @@ const TRIGGER_KINDS: TriggerKind[] = [
   'process_watch', 'file_watch', 'peer_inbox', 'mcp_route', 'email_route',
 ];
 
-function timerPayload(event: ProteusEvent): TimerPayload {
+function timerPayload(event: KinuEvent): TimerPayload {
   if (event.variant !== 'timer') throw new Error('expected timer event');
   return v.parse(v.object({
     trigger_id: v.string(),

@@ -3,7 +3,7 @@
 // were extracted from the cf-backend OrchestratorAgent's onChatResponse.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { createTestSql } from '@kinu/test-utils';
+import { createTestSql } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { AgentOrchestrator, type AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
 import { MissionGovernor } from '../src/mission-budget';
@@ -427,7 +427,7 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
     expect(turn.text).toContain('[webhook]');
     // The injected turn is marked programmatic and carries the synthetic turn
     // id the consumed events were bound to — the backend's reply-dispatch key.
-    expect(turn.metadata?.proteusEvent).toBe('event_drain');
+    expect(turn.metadata?.kinuEvent).toBe('event_drain');
     const drainTurnId = v.parse(v.string(), turn.metadata?.drainTurnId);
     // d1/d2 share a body → webhook dedupe admits one event; it is bound here.
     const bound = log.query({ turn_id: drainTurnId });
@@ -476,7 +476,7 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
       {
         type: 'signal_card', id: cardId, state: 'pending',
         metadata: {
-          proteusEvent: 'event_drain', proteusAuthor: 'harness',
+          kinuEvent: 'event_drain', kinuAuthor: 'harness',
           drainTurnId: injected[0]!.replyTurnId!,
         },
         text: injected[0]!.stepText,
@@ -495,14 +495,14 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
     await orch.drainPendingEvents();
     expect(absorb(orch)).toHaveLength(0);
     expect(enqueued).toHaveLength(1);
-    expect(enqueued[0]!.metadata?.proteusEvent).toBe('event_drain');
+    expect(enqueued[0]!.metadata?.kinuEvent).toBe('event_drain');
     // Same card, same moment: the queued path is not a silent one. The turn
     // this signal starts flips it, and it names that card on its own metadata.
     const signalId = v.parse(v.string(), enqueued[0]?.metadata?.signalId);
     expect(broadcasts).toEqual([{
       type: 'signal_card', id: signalId, state: 'pending',
       metadata: {
-        proteusEvent: 'event_drain', proteusAuthor: 'harness',
+        kinuEvent: 'event_drain', kinuAuthor: 'harness',
         drainTurnId: expect.any(String),
       },
       text: enqueued[0]!.text,

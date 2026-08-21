@@ -8,7 +8,7 @@ import { createCloudWorkspaceForUser } from './workspace-create';
 import { err, json, safeJson } from '../lib/http';
 import { ownerCaller } from './workspace-capability';
 import { classifyTransientDO, retryTransientDO } from '../lib/do-rpc';
-import { diagnostics, renderThrownChain, toProteusError } from '@kinu/core/obs';
+import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 /** POST /workspaces body → created WorkspaceEntry (201) | mapped error response. */
@@ -55,7 +55,7 @@ export function notifyWorkspacesCredentialsChanged(
       .filter((a) => a.archivedAt === null)
       .map((a) => env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(a.name)).onCredentialsChanged()));
   })().catch((e) => {
-    diagnostics.failure('workspace.credential_fanout_failed', toProteusError({
+    diagnostics.failure('workspace.credential_fanout_failed', toKinuError({
       doing: 'notifying the user\'s workspaces of a credential change',
       cause: e,
       otherwise: 'unavailable',
@@ -104,7 +104,7 @@ export async function claimOwnedWorkspace(
     const transient = classifyTransientDO({ cause: e });
     const status = /owned by a different user/i.test(message) ? 403 : transient !== null ? 503 : 500;
     if (status !== 403) {
-      diagnostics.failure('workspace.claim_owner_failed', toProteusError({
+      diagnostics.failure('workspace.claim_owner_failed', toKinuError({
         doing: 'claiming workspace ownership',
         cause: e,
         otherwise: 'unavailable',
@@ -122,7 +122,7 @@ export async function claimOwnedWorkspace(
   } catch (e) {
     const message = renderThrownChain({ cause: e });
     const transient = classifyTransientDO({ cause: e });
-    diagnostics.failure('workspace.capability_provisioning_failed', toProteusError({
+    diagnostics.failure('workspace.capability_provisioning_failed', toKinuError({
       doing: "provisioning the workspace's capability token",
       cause: e,
       otherwise: 'unavailable',

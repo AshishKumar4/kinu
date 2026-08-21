@@ -61,7 +61,7 @@ import { readProposalCode } from '../execution/code-fence';
 import { nodeWorkspace, isolationDisclosure } from './node-workspace';
 import { TURN_WALL_CLOCK_ENVELOPE_MS } from '../config';
 import { BRANCH_PROPOSAL_WIDTH, SWARM_CONTEXTS } from './swarm';
-import { renderCauseChain, toProteusError } from '../obs/error';
+import { renderCauseChain, toKinuError } from '../obs/error';
 import type { Logger } from '../obs/index';
 import type { Usage } from '../usage';
 import type { BranchContext, SwarmSettle } from './swarm';
@@ -798,7 +798,7 @@ export async function runNodeAgent(
       ? await runNodeLoop(spec, nodeLoopDeps(input, deps))
       : await deps.host(spec, input.arbitrate);
   } catch (cause) {
-    const failure = toProteusError({
+    const failure = toKinuError({
       doing: `run node ${input.nodeId} of this search`, cause, otherwise: 'unavailable',
     });
     const chain = renderCauseChain(failure);

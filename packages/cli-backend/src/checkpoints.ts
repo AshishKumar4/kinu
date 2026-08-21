@@ -4,7 +4,7 @@
  * external/hermes-agent/tools/checkpoint_manager.py).
  *
  * Store format (constants + subject/ref encoding) lives in
- * @kinu/core/checkpoints/format — the pc-agent daemon writes the same
+ * @kinu.run/core/checkpoints/format — the pc-agent daemon writes the same
  * layout (zero-dep mirror, enforced by tests/checkpoint-parity.test.ts) so a
  * machine's checkpoints are one format regardless of which side wrote them.
  *
@@ -19,7 +19,7 @@ import { execFile } from 'node:child_process';
 import { promises as fs, existsSync, statSync } from 'node:fs';
 import { homedir, devNull, tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
-import { proteusHome } from './home';
+import { kinuHome } from './home';
 import {
   DEFAULT_CHECKPOINT_KEEP, CHECKPOINTS_UNAVAILABLE_NO_GIT,
   CHECKPOINT_REF_PREFIX as REF_PREFIX, CHECKPOINT_WORKDIR_MARKER as WORKDIR_MARKER,
@@ -27,8 +27,8 @@ import {
   checkpointReason, diagnoseStaging,
   type CheckpointAvailability, type CheckpointTurnMeta, type FileCheckpoints,
   type FileCheckpointEntry, type FileRestoreChange, type FileRestorePlan, type FileRestoreResult,
-} from '@kinu/core';
-import { classify, tolerateAsync } from '@kinu/core/obs';
+} from '@kinu.run/core';
+import { classify, tolerateAsync } from '@kinu.run/core/obs';
 
 const SHA_RE = /^[0-9a-f]{4,64}$/i;
 const PROJECT_MARKERS = ['.git', 'package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'Makefile', '.hg'];
@@ -58,7 +58,7 @@ const UNSNAPSHOTTABLE = new Set([tmpdir(), '/tmp', '/var/tmp'].map((dir) => reso
 
 export interface HostCheckpointsOpts {
   agent: string;
-  /** Shadow store root. Default: $PROTEUS_HOME/checkpoints */
+  /** Shadow store root. Default: $KINU_HOME/checkpoints */
   base?: string;
   /** Checkpoints kept per working directory. Default: DEFAULT_CHECKPOINT_KEEP. */
   keep?: number;
@@ -76,7 +76,7 @@ interface StagedTree { tree: string; unreadable: string[] }
 
 export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoints {
   const agent = opts.agent.replace(/[^A-Za-z0-9_-]/g, '_');
-  const base = opts.base ?? join(proteusHome(), 'checkpoints');
+  const base = opts.base ?? join(kinuHome(), 'checkpoints');
   const agentBase = join(base, agent);
   const keep = Math.max(1, opts.keep ?? DEFAULT_CHECKPOINT_KEEP);
   const gitBin = opts.gitBin ?? 'git';
@@ -95,9 +95,9 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     env.GIT_CONFIG_SYSTEM = devNull;
     env.GIT_CONFIG_NOSYSTEM = '1';
     env.GIT_AUTHOR_NAME = 'Kinu Checkpoint';
-    env.GIT_AUTHOR_EMAIL = 'checkpoints@proteus.local';
+    env.GIT_AUTHOR_EMAIL = 'checkpoints@kinu.local';
     env.GIT_COMMITTER_NAME = 'Kinu Checkpoint';
-    env.GIT_COMMITTER_EMAIL = 'checkpoints@proteus.local';
+    env.GIT_COMMITTER_EMAIL = 'checkpoints@kinu.local';
     // Pinned so git's own diagnostics are the strings `diagnoseStaging` parses:
     // a localized `warning: could not open directory` would read as an
     // unexplained failure and fail the mutation it precedes.

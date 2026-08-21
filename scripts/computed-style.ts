@@ -2,7 +2,7 @@
 /**
  * Computed-style gate — every design token must resolve in a browser.
  *
- * `--radius` was declared nowhere but `[data-proteus-plan-review]` while
+ * `--radius` was declared nowhere but `[data-kinu-plan-review]` while
  * `@theme inline` mapped Tailwind's whole radius scale onto
  * `calc(var(--radius) …)`. A `var()` with no declaration and no fallback makes
  * the entire declaration invalid at computed-value time, so `border-radius`

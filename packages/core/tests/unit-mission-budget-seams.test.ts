@@ -10,7 +10,7 @@
 
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { scriptedTurnModel } from '@kinu/test-utils';
+import { scriptedTurnModel } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { createTestRuntime, makeExecRaw, makeSql } from './helpers';
 import {
@@ -32,7 +32,7 @@ function handoff(): SubordinateHandoff {
 }
 import { TurnAccumulator } from '../src/orchestrator/turn-accumulator';
 import { buildDrainBatch } from '../src/events/hub/drain';
-import type { ProteusEvent } from '../src/events/hub/types';
+import type { KinuEvent } from '../src/events/hub/types';
 
 function newGovernor(onExhausted?: (r: MissionBudgetRefusal) => void) {
   const db = new Database(':memory:');
@@ -390,7 +390,7 @@ describe('model-call seam — the turn accumulator is the meter', () => {
 });
 
 describe('mission scope reaches the woken turn', () => {
-  type TimerEvent = Extract<ProteusEvent, { variant: 'timer' }>;
+  type TimerEvent = Extract<KinuEvent, { variant: 'timer' }>;
 
   function timerEvent(id: string, missionLabel?: string): TimerEvent {
     const event: TimerEvent = {

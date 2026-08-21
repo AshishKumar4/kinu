@@ -40,22 +40,22 @@ type LintReport = {
 };
 
 /**
- * The exact shape the census found, 650 times: a `[proteus]` prose prefix, the outcome in English,
+ * The exact shape the census found, 650 times: a `[kinu]` prose prefix, the outcome in English,
  * and a second argument that is an object nobody looked inside. Nothing can key a query on it.
  */
 const HISTORICAL_SHAPE = `declare const outcome: { reason: unknown };
 export function scoreHead(): void {
-  console.warn('[proteus] head could not be scored — reporting no grounded signal:', outcome.reason);
+  console.warn('[kinu] head could not be scored — reporting no grounded signal:', outcome.reason);
 }
 `;
 
 /** The same code after the migration: a stable dotted name, a classified error, scalar fields. */
-const MIGRATED_SHAPE = `import { diagnostics, toProteusError } from '@kinu/core/obs';
+const MIGRATED_SHAPE = `import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 
 declare const outcome: { reason: unknown };
 declare const headId: string;
 export function scoreHead(): void {
-  diagnostics.failure('head.score_failed', toProteusError({
+  diagnostics.failure('head.score_failed', toKinuError({
     doing: 'scoring a head report against the grounded judge',
     cause: outcome.reason,
     otherwise: 'unavailable',

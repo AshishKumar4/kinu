@@ -28,10 +28,10 @@ import { MY_GATEWAY_PROVIDER_ID } from '../providers/my-gateway';
 import { listAvailableModels } from './available-models';
 import { json } from '../lib/http';
 import { ownerCaller } from './workspace-capability';
-import { USER_AI_PROXY_PATH } from '@kinu/core';
+import { USER_AI_PROXY_PATH } from '@kinu.run/core';
 import * as v from 'valibot';
 
-const PROXY_PLACEHOLDER = 'https://proteus-user-ai-proxy.invalid';
+const PROXY_PLACEHOLDER = 'https://kinu-user-ai-proxy.invalid';
 const ChatCompletionRouteSchema = v.object({
   model: v.pipe(v.string(), v.trim(), v.minLength(1)),
 });

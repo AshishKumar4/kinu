@@ -203,7 +203,7 @@ an addition to it means the dependency changed its storage contract. The set is
 `inodes`, `file_chunks`, `content_lifecycle`, `vfs_schema_migrations`,
 `vfs_append_receipts`, `vfs_append_writer_state`, `vfs_append_module_state`,
 `vfs_append_pid_revocations`, `vfs_append_acked_gaps`, plus Kinu's own
-`proteus_workspace_generation`. All ten are declared present on the CLI root and
+`kinu_workspace_generation`. All ten are declared present on the CLI root and
 absent on both hosted roots.
 
 Three properties follow from that layout, and none of them was true of the old
@@ -232,7 +232,7 @@ fixture for the archive reader. No product path creates or reads it.
 
 ## MemoryStore (FTS5 Search)
 
-From `@kinu/agent-utils`. Provides full-text search over markdown files stored in the workspace filesystem.
+From `@kinu.run/agent-utils`. Provides full-text search over markdown files stored in the workspace filesystem.
 
 **Schema:** `memory_chunks` table with `memory_chunks_fts` FTS5 virtual table (external content via `content='memory_chunks'`). `initMemoryChunkTables` is the one DDL; `MemoryStore.ensureSchema()` delegates to it.
 
@@ -284,7 +284,7 @@ same `initWorkspaceSchema()` pass:
 | Release lane | `release_sources`, `release_changes`, `release_checks`, `release_approvals`, `release_deployments` | `core/src/release/sql-store.ts` (CLI session; on cf the board lives in the owner's UserDO) |
 | Agent views | `agent_views` (one row per published version; the specs themselves live in the workspace filesystem at `views/<slug>.json[.vN]`) | `core/src/views/store.ts` |
 | Imported experience | `imported_experience` (staged until a turn outcome settles it) | `core/src/experience/imports.ts` |
-| Compaction | `compaction_state`, `compaction_archive` | `core/src/identity/workspace-schema.ts` (the DDL lives in core because `@kinu/compaction` sits above it in the dependency graph) |
+| Compaction | `compaction_state`, `compaction_archive` | `core/src/identity/workspace-schema.ts` (the DDL lives in core because `@kinu.run/compaction` sits above it in the dependency graph) |
 | Typed config | `agent_config` | `core/src/config/store.ts` |
 
 Five more groups are created outside that pass, by the root that owns each:

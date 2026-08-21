@@ -41,6 +41,8 @@ export interface RuntimeComponents {
   judgeModel?: LLM;
   /** Optional small-tier LLM for the mechanical evolution calls. */
   fastLlm?: LLM;
+  /** Optional reviewing LLM for the turn advisor. */
+  advisorLlm?: LLM;
   /** Branch lifecycle callbacks */
   spawnBranch: SpawnBranch;
   abortBranch: AbortBranch;
@@ -98,6 +100,7 @@ export function buildRuntime(components: RuntimeComponents): AgentRuntime {
     craftStore,
     judgeModel: components.judgeModel,
     fastLlm: components.fastLlm,
+    advisorLlm: components.advisorLlm,
     spawnBranch: components.spawnBranch,
     abortBranch: components.abortBranch,
     releaseBranch: components.releaseBranch,

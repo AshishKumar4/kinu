@@ -17,8 +17,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { weakLabel, type JsonObject, type JsonValue } from '@kinu/core';
-import { gitEnv } from '@kinu/test-utils';
+import { weakLabel, type JsonObject, type JsonValue } from '@kinu.run/core';
+import { gitEnv } from '@kinu.run/test-utils';
 import { defaultTranscriptRoot, mineTranscripts, renderMineSkips } from '../src/cc-transcript';
 import * as v from 'valibot';
 
@@ -484,7 +484,7 @@ describe('kinu label mine', () => {
     const result = Bun.spawnSync({
       cmd: [process.execPath, cliBin, 'label', 'score', 'somewhere-else', '--root', newRoot()],
       cwd: repoRoot,
-      env: { ...process.env, NO_COLOR: '1', PROTEUS_HOME: newRoot() },
+      env: { ...process.env, NO_COLOR: '1', KINU_HOME: newRoot() },
     });
     expect(`${result.stdout.toString()}${result.stderr.toString()}`)
       .toContain('is a cloud agent');
@@ -508,7 +508,7 @@ describe('kinu label mine', () => {
     const result = Bun.spawnSync({
       cmd: [process.execPath, cliBin, 'label', 'score', 'demo', '--root', root],
       cwd: repoRoot,
-      env: { ...process.env, NO_COLOR: '1', PROTEUS_HOME: home },
+      env: { ...process.env, NO_COLOR: '1', KINU_HOME: home },
     });
     expect(`${result.stdout.toString()}${result.stderr.toString()}`)
       .toContain('no rule fired on any mined turn');

@@ -1,6 +1,6 @@
 import { asFetchFunction } from './fetch-shim';
 import * as v from 'valibot';
-import { diagnostics, ProteusError } from '../obs/index';
+import { diagnostics, KinuError } from '../obs/index';
 
 const DEFAULT_MAX_ATTEMPTS = 6;
 const DEFAULT_MAX_ELAPSED_MS = 180_000;
@@ -39,7 +39,7 @@ export function withRateLimitRetry(
   const random = opts.random ?? Math.random;
   const warn = opts.warn ?? ((message: string) => diagnostics.failure(
     'provider.rate_limited',
-    new ProteusError('unavailable', message),
+    new KinuError('unavailable', message),
   ));
 
   return asFetchFunction(async (input, init) => {
@@ -60,7 +60,7 @@ export function withRateLimitRetry(
       if (remainingMs <= 0 || waitMs >= remainingMs) return response;
 
       warn(
-        `[proteus] ${providerHost(input)} rate-limited — waiting ${formatSeconds(waitMs)}s ` +
+        `[kinu] ${providerHost(input)} rate-limited — waiting ${formatSeconds(waitMs)}s ` +
         `(attempt ${attempt}/${maxAttempts})`,
       );
       await sleep(waitMs, init?.signal ?? undefined);

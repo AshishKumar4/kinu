@@ -6,7 +6,7 @@
  * rows, of which 23 were test debris — twenty-two `drill*` workspaces and one
  * `settle-probe`, minted across 2026-08-18/19 by harnesses driving the owner's
  * signed-in session against production. Nothing in the tree had refused either
- * half of that. `scripts/eval-credentials.ts` promoted `~/.proteus/config.json`
+ * half of that. `scripts/eval-credentials.ts` promoted `~/.kinu/config.json`
  * to a live target on purpose, and no surface asked whether the origin it was
  * pointed at served real users. So a test run was indistinguishable from the
  * owner working, on the account that holds his real workspaces.
@@ -36,9 +36,9 @@
 /** The three variables that decide identity and target. One object so a failure
  *  message, a shell script and the docs can name them without a second copy. */
 export const EVAL_IDENTITY_ENV = {
-  token: 'PROTEUS_EVAL_TOKEN',
-  origin: 'PROTEUS_EVAL_ORIGIN',
-  allowProd: 'PROTEUS_EVAL_ALLOW_PROD',
+  token: 'KINU_EVAL_TOKEN',
+  origin: 'KINU_EVAL_ORIGIN',
+  allowProd: 'KINU_EVAL_ALLOW_PROD',
 } as const;
 
 /** The account every eval run acts as. Server-side this is the identity

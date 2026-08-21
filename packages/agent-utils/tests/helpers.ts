@@ -31,7 +31,7 @@ export function createTestDb(): TestDb {
  * The three methods a store here consumes, over a Map.
  *
  * A fixture rather than the real filesystem because that lives in
- * `@kinu/core`, one layer up, and this package cannot import it — and
+ * `@kinu.run/core`, one layer up, and this package cannot import it — and
  * because `ReadWriteVFS` is exactly three methods, so a stand-in for it is
  * honest rather than a stub of something larger.
  */

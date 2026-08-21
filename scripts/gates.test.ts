@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { scratchDir } from '@kinu/test-utils';
+import { scratchDir } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
 import { findDuplicateGroups } from './ast-duplication';

@@ -1,5 +1,5 @@
 {
-  "name": "@kinu/agent-utils",
+  "name": "@kinu.run/agent-utils",
   "version": "0.1.0",
   "type": "module",
   "exports": {

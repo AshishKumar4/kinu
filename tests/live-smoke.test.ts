@@ -53,7 +53,7 @@ import {
   evalWorkspaceName, infraBoundary, liveChatModel, liveModelTarget, recordLiveModelEpisode,
   recordLiveModelSpend, reportLiveModelSpend, scratchDir, UNCONFIGURED_LLM,
   type LiveModelSession,
-} from '@kinu/test-utils';
+} from '@kinu.run/test-utils';
 
 const TARGET = liveModelTarget('Live Smoke');
 const LLM_CONFIG: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;
@@ -68,7 +68,7 @@ const liveTest = test.skipIf(!TARGET);
 const HOSTED = TARGET?.via === 'worker-proxy' ? TARGET : null;
 if (TARGET && !HOSTED) {
   console.warn('[skip] Live Smoke (hosted) — the resolved target is an AI Gateway, which fronts a '
-    + 'model but no Kinu deployment. Set PROTEUS_ORIGIN + PROTEUS_TOKEN to reach the worker.');
+    + 'model but no Kinu deployment. Set KINU_ORIGIN + KINU_TOKEN to reach the worker.');
 }
 const hostedTest = test.skipIf(!HOSTED);
 

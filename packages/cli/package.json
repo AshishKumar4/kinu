@@ -1,5 +1,5 @@
 {
-  "name": "@kinu/cli",
+  "name": "@kinu.run/cli",
   "version": "0.2.0",
   "type": "module",
   "bin": {
@@ -9,8 +9,8 @@
     "@agentclientprotocol/sdk": "^1.3.0",
     "@opentui/core": "^0.1.99",
     "@opentui/react": "^0.1.99",
-    "@kinu/cli-backend": "workspace:*",
-    "@kinu/core": "workspace:*",
+    "@kinu.run/cli-backend": "workspace:*",
+    "@kinu.run/core": "workspace:*",
     "agents": "^0.20.1",
     "react": "^19.2.5"
   },

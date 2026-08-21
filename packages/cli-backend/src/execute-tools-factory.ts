@@ -25,9 +25,9 @@ import type {
   CraftedToolSet,
   ExecutorProvider,
   JsonValue,
-} from '@kinu/core';
-import { diagnostics, renderThrownChain, toProteusError } from '@kinu/core/obs';
-import { decodeJsonValue, explainNativeToolReferenceError, renderExecuteToolsDescription } from '@kinu/core';
+} from '@kinu.run/core';
+import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { decodeJsonValue, explainNativeToolReferenceError, renderExecuteToolsDescription } from '@kinu.run/core';
 import { tool, jsonSchema } from 'ai';
 import { addImplicitReturn } from './executor';
 import * as v from 'valibot';
@@ -206,7 +206,7 @@ function containRejection<T>(run: () => Promise<T>): Promise<T> {
   void call.catch((error) => {
     diagnostics.failure(
       'executor.unawaited_call_rejected',
-      toProteusError({ doing: 'running a tool call the model left unawaited', cause: error, otherwise: 'io' }),
+      toKinuError({ doing: 'running a tool call the model left unawaited', cause: error, otherwise: 'io' }),
     );
   });
   return call;

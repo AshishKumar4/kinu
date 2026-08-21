@@ -8,7 +8,7 @@
 
 import { createWorkspace as createWorkspaceFilesystem, nextWorkspaceGeneration } from '../vfs/nimbus-workspace';
 import type { WorkspaceBundle } from '../vfs/nimbus-workspace';
-import { chunkMarkdown, initMemoryChunkTables } from '@kinu/agent-utils/memory';
+import { chunkMarkdown, initMemoryChunkTables } from '@kinu.run/agent-utils/memory';
 import type { CraftStore } from '../types/agent-runtime';
 import type {
   Executor, FiberCtx, Memory, RawSqlExec, Schedule, SqlExecutor, VFS,

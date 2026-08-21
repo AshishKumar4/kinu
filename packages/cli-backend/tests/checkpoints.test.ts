@@ -7,15 +7,15 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, chmodSync } from 'node:fs';
-import { git } from '@kinu/test-utils';
+import { git } from '@kinu.run/test-utils';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { summarizeRestorePlan } from '@kinu/core';
+import { summarizeRestorePlan } from '@kinu.run/core';
 import { createHostCheckpoints } from '../src/checkpoints';
 import { createHostShell, withCheckpointedShell } from '../src/runtime';
 
 function setup(opts: { keep?: number; gitBin?: string } = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'proteus-ckpt-'));
+  const root = mkdtempSync(join(tmpdir(), 'kinu-ckpt-'));
   const work = join(root, 'project');
   mkdirSync(work, { recursive: true });
   const engine = createHostCheckpoints({
@@ -149,7 +149,7 @@ describe('createHostCheckpoints', () => {
       // refs leaked into it.
       expect(git(work, 'rev-parse', 'HEAD').trim()).toBe(userHeadBefore);
       const refs = git(work, 'for-each-ref');
-      expect(refs).not.toContain('refs/proteus');
+      expect(refs).not.toContain('refs/kinu');
       // And the snapshot itself excluded .git entirely.
       const plan = await engine.plan(work, id!);
       expect(plan.files.every((f) => !f.path.startsWith('.git/'))).toBe(true);

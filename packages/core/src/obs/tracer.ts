@@ -95,12 +95,12 @@ export interface Tracer {
 }
 
 /** Attribute keys. One spelling, so a query and an emitter cannot drift. */
-export const SPAN_ATTR_ISOLATE_GEN = 'proteus.isolate_gen';
-export const SPAN_ATTR_SELF_PATH = 'proteus.self_path';
+export const SPAN_ATTR_ISOLATE_GEN = 'kinu.isolate_gen';
+export const SPAN_ATTR_SELF_PATH = 'kinu.self_path';
 /** Set to `true`, and never to `false`: absent means the span did not fail, which
  *  is what a trace query already reads. A boolean and nothing else — see
  *  `ScopedSpan.fail` for why the message is not here. */
-export const SPAN_ATTR_ERROR = 'proteus.error';
+export const SPAN_ATTR_ERROR = 'kinu.error';
 
 /**
  * `Agent.selfPath` is `ReadonlyArray<{className, name}>`, root-first. Rendered
@@ -126,7 +126,7 @@ export interface RecordedSpan {
    * second ran inside the first nor that the first covered the second's work.
    */
   readonly parent: number | null;
-  /** Everything recorded, including `proteus.error` when the span failed. ONE map
+  /** Everything recorded, including `kinu.error` when the span failed. ONE map
    *  and no separate failure list, because the real tracer records a failure as an
    *  attribute and a fake with a richer failure surface is a fake a test can
    *  assert things about that production never carries. */

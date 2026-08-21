@@ -8,11 +8,11 @@
  */
 
 import { sha256Hex, stableStringify } from '../../safety/argument-digest';
-import type { IngressDescriptor, ProteusEvent, ReadableProteusEvent } from './types';
+import type { IngressDescriptor, KinuEvent, ReadableKinuEvent } from './types';
 import { decodeJsonValue } from '../../utils/json';
 
 /** Map an event to its dedupe key, or null if the variant is not deduped. */
-export function dedupeKeyFor(event: ProteusEvent): string | null {
+export function dedupeKeyFor(event: KinuEvent): string | null {
   if (event.payload_visibility !== 'full' && event.payload_visibility !== 'redact') {
     return event.dedupe_key;
   }
@@ -28,7 +28,7 @@ export function dedupeKeyForDescriptor(
 }
 
 function dedupeReadableEvent(
-  event: ReadableProteusEvent | (IngressDescriptor & { received_at: number }),
+  event: ReadableKinuEvent | (IngressDescriptor & { received_at: number }),
 ): string | null {
   switch (event.variant) {
     case 'webhook': {

@@ -1,5 +1,5 @@
 """Kinu system package for Continual Learning Bench."""
 
-from .system import ProteusSystem
+from .system import KinuSystem
 
-__all__ = ["ProteusSystem"]
+__all__ = ["KinuSystem"]

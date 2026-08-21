@@ -2,13 +2,13 @@ import type { LanguageModel } from 'ai';
 import {
   agentAffinityKey, parseModelSpec, reasoningEffortOptions,
   type ReasoningEffort, type WebSearchProvider,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import { buildCfWebSearchProvider } from './lib/web-provider';
 import {
   createAgentProviderRegistry,
   type AgentProviderRegistry,
 } from './providers/agent-registry';
-import { resolveJudgeModelSelection } from './providers/judge-model';
+import { resolveReviewingModelSelection } from './providers/judge-model';
 import type { UserDO } from './user/user-do';
 import type { UserCaller } from './user/workspace-capability';
 
@@ -99,7 +99,7 @@ export class OwnedModelServices {
     const registry = this.providerRegistry();
     const key = `${opts.reviewSpec ?? ''}\n${opts.chatSpec ?? ''}`;
     if (this.judgeSpecCache?.key !== key) {
-      const { spec } = await resolveJudgeModelSelection({ registry, ...opts });
+      const { spec } = await resolveReviewingModelSelection({ registry, pinned: opts.reviewSpec, chatSpec: opts.chatSpec });
       this.judgeSpecCache = { key, spec };
     }
     return registry.resolveModel(this.judgeSpecCache.spec);

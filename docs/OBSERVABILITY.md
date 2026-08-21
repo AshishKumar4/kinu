@@ -18,12 +18,12 @@ suites that exercise it are in [Testing](TESTING.md).
 | `tolerate` / `tolerateAsync` / `classify`: the tolerable-failure signatures | built | `obs/expected-failure.ts` |
 | `Tracer` / `ScopedSpan`: the span interface | built | `obs/tracer.ts` |
 | `AgentTracing` / `TracedInvocation`: the scoping rules | built, wired on six production paths | `obs/agent-tracing.ts`, `cf-backend/src/obs/cf-tracer.ts` |
-| `ErrorCode` / `ProteusError` / `toProteusError` | built | `obs/error.ts` |
+| `ErrorCode` / `KinuError` / `toKinuError` | built | `obs/error.ts` |
 | `renderCauseChain` / `renderThrownChain`: the chain for an unnarrowed value | built; the count of chain-dropping copies it replaced is not measured today | `obs/error.ts` |
 | `refusalText`: the refusal on the string channel | built, all five executor tools converted | `execution/exec-result.ts:80` |
 | `Logger` / `ReservedLogField`: the typed logger and its ban | built | `obs/log.ts` |
 | `gate:silent-drop`: the census of what the lint rules cannot see | built, ratcheted at 90 instances over 77 sites (2026-08-19) | `scripts/silent-drop.ts` |
-| `Result<T, ProteusError>` via `neverthrow` | rejected, see below | — |
+| `Result<T, KinuError>` via `neverthrow` | rejected, see below | — |
 
 ## Where spans are open
 
@@ -33,7 +33,7 @@ of the four declared invocation classes. Grepped `this.tracing.invocation` on
 
 | File and line | Class | Root span | Entry method |
 | --- | --- | --- | --- |
-| `cf-backend/src/orchestrator.ts:1581` | `alarm` | `alarm.tick` | `OrchestratorAgent._proteusTimerTick` |
+| `cf-backend/src/orchestrator.ts:1581` | `alarm` | `alarm.tick` | `OrchestratorAgent._kinuTimerTick` |
 | `cf-backend/src/orchestrator.ts:2554` | `rpc` | `rpc.head.record_step` | `OrchestratorAgent.recordHeadStep` |
 | `cf-backend/src/actor-agent.ts:2620` | `rpc` | `rpc.swarm.arbitrate` | `ActorAgent.nodeArbitrate` |
 | `cf-backend/src/exploration.ts:267` | `rpc` | `rpc.mcts.branch` | `ExplorationAgent.explore` |
@@ -101,7 +101,7 @@ head and subordinate into one orchestrator.
 `tracing.invocation` enforces the absence of trace context across `alarm()`. It
 revokes the `TracedInvocation` handle when its method's promise settles, so a
 span opened from anything that escaped the tick throws
-`ProteusError('unsupported')`. The turn that armed a trigger finished minutes or
+`KinuError('unsupported')`. The turn that armed a trigger finished minutes or
 days ago, possibly in an isolate since reset, and a span covering both would
 measure an interval nothing observed. There is deliberately no
 `AsyncLocalStorage` context, because an implicit context has no revocation point
@@ -118,7 +118,7 @@ codebase holds to:
    attribute on a call, so the type is the only mechanism that can.
 2. **Tracing only.** Never logs, never mutates anything a caller can see.
 3. **An exception propagates unchanged, marked with a boolean.**
-   `SPAN_ATTR_ERROR` is `proteus.error` (`obs/tracer.ts:103`), set to `true` and
+   `SPAN_ATTR_ERROR` is `kinu.error` (`obs/tracer.ts:103`), set to `true` and
    never to `false`. Error text is deliberately absent. It is unbounded and
    possibly sensitive, and a trace attribute is neither the place to bound it nor
    the place to redact it. The chain goes to `Logger.failure`, which requires a
@@ -128,7 +128,7 @@ codebase holds to:
    returns, before returning it, or the span closes successfully and the
    rejection arrives afterwards.
 
-`cf-tracer.ts` recorded `proteus.error_name` and `proteus.error_message` until
+`cf-tracer.ts` recorded `kinu.error_name` and `kinu.error_message` until
 2026-08-19. That was two defects in one. An upstream error's message reached
 the trace stream, where `ReservedLogField` does not apply and no redaction
 exists. And it was written only by `fail()`, so a thrown failure, which is the
@@ -323,7 +323,7 @@ is how a reader learns to distrust both.
    (`orchestrator/agent-orchestrator.ts:317`, `:348`). `model_call` and
    `turn_end` are separate row types (`events/recorder.ts` `RunEventSchema`),
    never merged. And the Terminal-Bench adapter sums `turn_end` ONLY, through
-   `turn_usage` at `bench/clbench/proteus/events.py:222-243`, which feeds
+   `turn_usage` at `bench/clbench/kinu/events.py:222-243`, which feeds
    `ArmSpend.billableTokens`, the denominator of the equal-spend ratio
    (`scripts/bench-external.ts:177-185`, `:389`, `:480-482`). **The 2026-08-20 TB2.1
    figure of 1,248,337 turn-scoped input tokens therefore excludes review spend,
@@ -378,7 +378,7 @@ anything made.
 ### Classification refuses to guess
 
 `classifyErrorCode({ cause })` returns `ErrorCode | null`. Null is the answer
-when nothing pinned recognises the value, so `toProteusError` requires an
+when nothing pinned recognises the value, so `toKinuError` requires an
 `otherwise` from its caller. Each call site supplies the code its own layer
 needs: `io` for an exec transport, `bad_input` for an argument decoder. A
 classifier that guessed instead would file every unknown failure under
@@ -458,7 +458,7 @@ other members, which are scalar values, the dotted name and the required error.
 ## `Logger`
 
 Two methods. `event` for something a reader may need to find later, and `failure`
-for a failure being handled, which requires a `ProteusError`. A failure log that
+for a failure being handled, which requires a `KinuError`. A failure log that
 could omit the class would be the string-return defect one layer up. A thrown
 error needs no call. Whoever catches it classifies it there.
 
@@ -483,7 +483,7 @@ working unnoticed.
 
 ## Why not `neverthrow`
 
-`AGENTS.md:229` names `Result<T, ProteusError>` via `neverthrow` as a rejected
+`AGENTS.md:229` names `Result<T, KinuError>` via `neverthrow` as a rejected
 replacement shape. The evidence:
 
 1. **The boundary the classification has to cross is JSON.** A `run` result
@@ -495,11 +495,11 @@ replacement shape. The evidence:
 2. **The refusal shape already existed and readers already parse it.** Several
    call sites write `{ reason, error }` and `read-models/tool-failures.ts` reads
    it. `Result` would be a fourth convention beside a working third.
-3. **`@kinu/core` has two runtime dependencies**, `@nimbus-sh/core` and one
+3. **`@kinu.run/core` has two runtime dependencies**, `@nimbus-sh/core` and one
    workspace package. A new one for a type that cannot cross this codebase's own
    boundaries is not a trade worth making.
 
-`ProteusError` extends `Error`, so it throws, prints and chains through native
+`KinuError` extends `Error`, so it throws, prints and chains through native
 `cause` like everything else. Where a failure is a domain value, `refusalOf`
 projects it onto the wire. That is the same two-mode discipline `Result` offers,
 without a type that dies at the first serialization.

@@ -243,7 +243,7 @@ describe('decidePromotion', () => {
 
 describe('applyPromotionDecision — closes the proposal→promote loop', () => {
   test('promote copies the versioned pending code into the live file', async () => {
-    // Regression for `proteus-scaffold-gap`: the pending used to be written
+    // Regression for `kinu-scaffold-gap`: the pending used to be written
     // to the live file at proposal time, so promote was a SQL flag flip with
     // no on-disk effect. After the fix, the pending lives in
     // scaffold/agent.js.v{N}; promote is a real file swap. This test exercises

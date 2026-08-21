@@ -14,7 +14,7 @@ import {
   dismissDeviceConnectPrompt,
   shouldOfferDeviceConnect,
 } from '../device-connect';
-import { renderThrownChain } from '@kinu/core/obs';
+import { renderThrownChain } from '@kinu.run/core/obs';
 
 export type DeviceConnectPromptState =
   | { phase: 'ask'; statusLine: string }

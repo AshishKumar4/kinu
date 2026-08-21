@@ -2,13 +2,13 @@
 // events over RPC (listRuns / getRunEvents) and folds them into the Run
 // Timeline spine; locally there was no run_events table at all, so a local
 // workspace had no run history to read. These cover the CLI's readers over a
-// throwaway PROTEUS_HOME — never the owner's real ~/.proteus.
+// throwaway KINU_HOME — never the owner's real ~/.kinu.
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Database } from 'bun:sqlite';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { parseJsonValue, type JsonObject, type JsonValue } from '@kinu/core';
+import { parseJsonValue, type JsonObject, type JsonValue } from '@kinu.run/core';
 
 const tempDirs: string[] = [];
 const repoRoot = resolve(__dirname, '../../..');
@@ -20,7 +20,7 @@ afterEach(() => {
 /** Seed an agent.db carrying a recorded run, then read it back through the
  *  CLI's local-inspection module in a child process pinned to that home. */
 function readLocal(expression: string): JsonValue {
-  const home = mkdtempSync(join(tmpdir(), 'proteus-run-events-'));
+  const home = mkdtempSync(join(tmpdir(), 'kinu-run-events-'));
   tempDirs.push(home);
   mkdirSync(join(home, 'jarvis'), { recursive: true });
   const db = new Database(join(home, 'jarvis', 'agent.db'));
@@ -44,7 +44,7 @@ function readLocal(expression: string): JsonValue {
   const proc = Bun.spawnSync({
     cmd: [process.execPath, '-e', script],
     cwd: repoRoot,
-    env: { ...process.env, PROTEUS_HOME: home },
+    env: { ...process.env, KINU_HOME: home },
     stdout: 'pipe',
     stderr: 'pipe',
   });

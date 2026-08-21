@@ -1,7 +1,7 @@
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
 import { handleCliRequest } from '../src/cli/routes';
-import { JsonValueSchema, type JsonObject, type JsonValue } from '@kinu/core';
+import { JsonValueSchema, type JsonObject, type JsonValue } from '@kinu.run/core';
 import type { UserCaller } from '../src/user/workspace-capability';
 import * as v from 'valibot';
 
@@ -166,7 +166,7 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
 }
 
 function cliRequest(path: string, init: RequestInit = {}) {
-  return new Request(`https://proteus.example.com${path}`, {
+  return new Request(`https://kinu.example.com${path}`, {
     ...init,
     headers: {
       authorization: `Bearer ${TOKEN}`,

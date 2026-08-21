@@ -43,8 +43,8 @@
  *   • release     — list / create / advance a release request
  *
  * v1 resources:
- *   • proteus://workspace/<name>/memory       — full memory content
- *   • proteus://workspace/<name>/scaffold     — current scaffold code
+ *   • kinu://workspace/<name>/memory       — full memory content
+ *   • kinu://workspace/<name>/scaffold     — current scaffold code
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -64,14 +64,14 @@ import type {
   RunListEntry,
   ShadowStatus,
   ToolListEntry,
-} from "@kinu/core";
-import { RELEASE_STATUSES, isEngineOwnedTransitionTarget } from "@kinu/core";
+} from "@kinu.run/core";
+import { RELEASE_STATUSES, isEngineOwnedTransitionTarget } from "@kinu.run/core";
 import type { OrchestratorAgent } from "./orchestrator";
 import { AuthError, authenticateRequest } from "./auth/session";
 import { authenticateCliToken, readBearer } from "./cli/auth-store";
 import { claimOwnedWorkspace } from "./user/workspace-access";
 import { decodeRunEventWire, decodeScaffoldRunWire } from './lib/orchestrator-wire';
-import { renderThrownChain } from '@kinu/core/obs';
+import { renderThrownChain } from '@kinu.run/core/obs';
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -137,7 +137,7 @@ async function resolveAgent(env: Env, agentName: string): Promise<McpAgentClient
 
 function buildServer(env: Env, agentName: string): McpServer {
   const server = new McpServer({
-    name: `proteus-${agentName}`,
+    name: `kinu-${agentName}`,
     version: "1.0.0",
   });
 
@@ -456,7 +456,7 @@ function buildServer(env: Env, agentName: string): McpServer {
 
   server.registerResource(
     "memory",
-    `proteus://workspace/${agentName}/memory`,
+    `kinu://workspace/${agentName}/memory`,
     {
       title: "Agent memory (MEMORY.md)",
       description: "Full content of the agent's long-term memory file.",

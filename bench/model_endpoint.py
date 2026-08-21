@@ -6,13 +6,13 @@ per language because a benchmark adapter is symlinked into checkouts where the
 TypeScript is not importable:
 
 1. IDENTITY. A run authenticates as the ``eval-service`` account, from
-   ``$PROTEUS_EVAL_TOKEN``. It never reads the signed-in session in
-   ``~/.proteus/config.json``. It used to, and that is how twenty-two ``drill*``
+   ``$KINU_EVAL_TOKEN``. It never reads the signed-in session in
+   ``~/.kinu/config.json``. It used to, and that is how twenty-two ``drill*``
    workspaces and a ``settle-probe`` came to sit on the owner's PRODUCTION
    account among his own twenty-eight, with nothing on the account able to say
    which harness made them.
 2. TARGET. A run reaches the staging deployment or a loopback dev server.
-   Production is refused unless ``PROTEUS_EVAL_ALLOW_PROD=1`` names the
+   Production is refused unless ``KINU_EVAL_ALLOW_PROD=1`` names the
    exception. The default target used to BE production, so a benchmark that
    named no origin measured the live system by default.
 
@@ -43,11 +43,11 @@ EVAL_STAGING_ORIGIN = "https://staging.kinu.run"
 #: The account every scored run acts as. Mirrors EVAL_SERVICE_ACCOUNT.
 EVAL_SERVICE_ACCOUNT = "eval-service"
 #: The credential variable. Mirrors EVAL_IDENTITY_ENV.token.
-EVAL_TOKEN_ENV = "PROTEUS_EVAL_TOKEN"
+EVAL_TOKEN_ENV = "KINU_EVAL_TOKEN"
 #: The one exception, named explicitly. Mirrors EVAL_IDENTITY_ENV.allowProd.
-EVAL_ALLOW_PROD_ENV = "PROTEUS_EVAL_ALLOW_PROD"
+EVAL_ALLOW_PROD_ENV = "KINU_EVAL_ALLOW_PROD"
 
-DEFAULT_PROTEUS_AI_BASE_URL = f"{EVAL_STAGING_ORIGIN}/api/user/ai/v1"
+DEFAULT_KINU_AI_BASE_URL = f"{EVAL_STAGING_ORIGIN}/api/user/ai/v1"
 
 #: Hosts that can only be the operator's own machine. ``urlsplit`` strips IPv6
 #: brackets from ``hostname``, unlike the WHATWG parser the TypeScript uses.
@@ -56,12 +56,12 @@ _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
 #: Origins that ARE a Kinu deployment, and so may be sent a Kinu bearer.
 #:
 #: A DIFFERENT QUESTION from "may an eval point here", and keeping the two apart
-#: is load-bearing. Conflating them means ``PROTEUS_EVAL_ALLOW_PROD=1`` — a
+#: is load-bearing. Conflating them means ``KINU_EVAL_ALLOW_PROD=1`` — a
 #: statement about policy — would also declare every origin on earth a trusted
 #: credential sink, and `https://attacker.example/api/user/ai/v1` would receive
 #: the token. Policy is ``eval_target_allowed``; trust is this set, and no
 #: environment variable widens it.
-_PROTEUS_ORIGINS = frozenset({PRODUCTION_ORIGIN, EVAL_STAGING_ORIGIN})
+_KINU_ORIGINS = frozenset({PRODUCTION_ORIGIN, EVAL_STAGING_ORIGIN})
 
 _PROVIDER_KEY_ENVS = {
     "anthropic": "ANTHROPIC_API_KEY",
@@ -157,8 +157,8 @@ def resolve_bearer_token(
         return _required_env(env, api_key_env, base_url)
 
     if _is_product_proxy(base_url):
-        # $PROTEUS_EVAL_TOKEN and NOTHING ELSE. This branch used to fall back to
-        # ``accessToken`` in ~/.proteus/config.json — the operator's own signed-in
+        # $KINU_EVAL_TOKEN and NOTHING ELSE. This branch used to fall back to
+        # ``accessToken`` in ~/.kinu/config.json — the operator's own signed-in
         # session — which made every scored run act as him on whatever account
         # that session belonged to. The stored session is not read here at all
         # now, so there is no path by which a benchmark becomes a person.
@@ -193,7 +193,7 @@ def resolve_bearer_token(
 def _is_product_proxy(base_url: str) -> bool:
     """Whether *base_url* is a Kinu deployment's own inference proxy.
 
-    Membership of ``_PROTEUS_ORIGINS`` (or a loopback dev server), never equality
+    Membership of ``_KINU_ORIGINS`` (or a loopback dev server), never equality
     with one origin: production, staging and localhost are all Kinu proxies
     and all must receive the Kinu credential, while
     ``https://attacker.example/api/user/ai/v1`` must not — and no environment
@@ -206,7 +206,7 @@ def _is_product_proxy(base_url: str) -> bool:
         return False
     if parsed.hostname in _LOOPBACK_HOSTS:
         return True
-    return f"{parsed.scheme}://{parsed.netloc}" in _PROTEUS_ORIGINS
+    return f"{parsed.scheme}://{parsed.netloc}" in _KINU_ORIGINS
 
 
 def _is_direct_workers_ai(base_url: str) -> bool:
@@ -226,11 +226,11 @@ def _required_env(env: Mapping[str, str], name: str, base_url: str) -> str:
 
 
 def _default_config_path(env: Mapping[str, str]) -> Path:
-    configured_home = env.get("PROTEUS_HOME", "").strip()
+    configured_home = env.get("KINU_HOME", "").strip()
     return (
         Path(configured_home).expanduser() / "config.json"
         if configured_home
-        else Path.home() / ".proteus" / "config.json"
+        else Path.home() / ".kinu" / "config.json"
     )
 
 

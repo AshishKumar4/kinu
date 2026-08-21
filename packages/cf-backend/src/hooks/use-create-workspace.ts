@@ -12,7 +12,7 @@ import { useNavigate } from "react-router-dom";
 import { createWorkspaceFromMission } from "@/lib/create-workspace";
 import { listAvailableModels } from "@/lib/user-api";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
-import { renderThrownChain } from '@kinu/core/obs';
+import { renderThrownChain } from '@kinu.run/core/obs';
 
 /** The creation box's wording, in one place: both surfaces that render it read from here. */
 export const MISSION_LABEL = "Mission";

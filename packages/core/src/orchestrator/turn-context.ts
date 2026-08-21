@@ -48,7 +48,7 @@ export interface TurnContextInput {
 }
 
 /** The read half of the durable compaction state — structural, because the
- *  concrete store lives in @kinu/compaction, which depends on core. */
+ *  concrete store lives in @kinu.run/compaction, which depends on core. */
 export interface CompactionTriggerReader {
   loadPromptTokens(sessionKey: string, historyLength: number): number | null;
   takeForceCompaction(sessionKey: string): boolean;

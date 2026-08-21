@@ -155,7 +155,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
     // read that it was in flight. It gets a turn, not a silence.
     expect(agent.enqueued).toHaveLength(1);
     const turn = agent.enqueued[0]!;
-    expect(turn.metadata?.proteusEvent).toBe(FORK_INTERRUPTED_SIGNAL);
+    expect(turn.metadata?.kinuEvent).toBe(FORK_INTERRUPTED_SIGNAL);
     expect(turn.text).toContain(ROOT);
     expect(turn.text).toContain(RATIONALE);
     expect(turn.text).toContain(`${HEADS} of ${HEADS} heads`);
@@ -248,7 +248,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
     // The next step: one more block at the tail (a superseding one), and the
     // frozen bytes before it untouched — the prefix-cache contract.
     const after = ledger.weave([...history, { role: 'assistant', content: 'working' }], agentDynamicContext({
-      factsBlock: 'workspace = proteus', memoryTail: undefined, recoveryFindings: [], executors: [],
+      factsBlock: 'workspace = kinu', memoryTail: undefined, recoveryFindings: [], executors: [],
       runningJobs: [], openTasks: [], liveHeadRuns: w.journal.listLive(), missingCapabilities: [],
     }));
     expect(ledger.size).toBe(2);

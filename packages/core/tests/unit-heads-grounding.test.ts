@@ -24,7 +24,7 @@ import {
   initAlternateTakesTable, recordHeadsTakeSet, claimAlternateTakesForTurn,
   listAlternateTakeSets, recordTakePick,
 } from '../src/index';
-import { createJSONLLM } from '@kinu/test-utils';
+import { createJSONLLM } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw, createTestWorkspace, captureConsole } from './helpers';
 
 // ── fakes ────────────────────────────────────────────────────────────

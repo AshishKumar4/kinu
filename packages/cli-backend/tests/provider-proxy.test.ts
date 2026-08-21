@@ -3,10 +3,10 @@
 // disk, and a local key still wins.
 import { describe, expect, test } from 'bun:test';
 import { generateText } from 'ai';
-import { asFetchFunction, type LLMProviderConfig } from '@kinu/core';
+import { asFetchFunction, type LLMProviderConfig } from '@kinu.run/core';
 import { createLocalModelResolver } from '../src/model-resolver';
 
-const ORIGIN = 'https://proteus.example.com';
+const ORIGIN = 'https://kinu.example.com';
 const LLM: LLMProviderConfig = {
   name: 'openai-compat',
   baseURL: 'https://unused.example/v1',
@@ -63,7 +63,7 @@ function networkFetch(opts: {
       return Response.json({ credentials });
     }
     if (url === `${ORIGIN}/api/user/ai/proxy/forward`) {
-      return upstream(headers.get('x-proteus-proxy-target') ?? '', true);
+      return upstream(headers.get('x-kinu-proxy-target') ?? '', true);
     }
     return upstream(url, false);
   });
@@ -115,8 +115,8 @@ describe('web-UI-connected providers reach local agents', () => {
     expect(result.text).toBe('proxied');
     const forwarded = recorded.find((r) => r.url.endsWith('/api/user/ai/proxy/forward'));
     expect(forwarded).toBeDefined();
-    expect(forwarded?.headers.get('x-proteus-proxy-cred')).toBe('openrouter.bearer');
-    expect(forwarded?.headers.get('x-proteus-proxy-target')).toBe('https://openrouter.ai/api/v1/chat/completions');
+    expect(forwarded?.headers.get('x-kinu-proxy-cred')).toBe('openrouter.bearer');
+    expect(forwarded?.headers.get('x-kinu-proxy-target')).toBe('https://openrouter.ai/api/v1/chat/completions');
     expect(forwarded?.headers.get('authorization')).toBe('Bearer ptc_test');
     // Usage arrives verbatim, so per-step accounting is unaffected by proxying.
     expect(result.usage.inputTokens).toBe(11);

@@ -6,11 +6,11 @@
 import { describe, test, expect, setSystemTime } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createWorkspaceBundle, makeSql } from '../../core/tests/helpers';
-import { MemoryStore } from '@kinu/agent-utils/memory';
+import { MemoryStore } from '@kinu.run/agent-utils/memory';
 import {
   createAgentConfigStore, createCloudflareVectorStore, VECTOR_BACKEND_COOLDOWN_MS,
   type Embedder, type VectorizeIndex, type VectorStore, type VectorMemoryChunk,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import { adaptMemory, backfillMemoryVectors } from '../src/memory-sync';
 
 function createStore() {

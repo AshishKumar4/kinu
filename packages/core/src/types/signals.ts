@@ -11,6 +11,7 @@
 // it and never picks a mechanism — starting a turn is simply what "next step"
 // means when no turn is running.
 
+import type { AdvisorSeverity } from '../advisor/review';
 import type { JsonObject } from '../utils/json';
 
 /** Why a queued signal never became a turn: 'preempted' = a newer turn
@@ -24,7 +25,7 @@ export type SignalOutcome = 'mid-turn' | 'queued' | 'undelivered';
  *  background job, an overflow retry, a take pick, an MCP task, the turn's own
  *  mechanical steer. */
 export interface AgentSignal {
-  /** The `proteusEvent` name. It is the queued turn's provenance (run
+  /** The `kinuEvent` name. It is the queued turn's provenance (run
    *  `caused_by`), and what makes the chat render the turn as an event card
    *  rather than a user bubble. */
   readonly kind: string;
@@ -38,11 +39,21 @@ export interface AgentSignal {
    *  so the backend dispatches the answering turn's reply to their channels
    *  (email_thread → outbound reply) by one id whichever way it landed. */
   readonly replyTurnId?: string;
-  /** Extra metadata stamped on the queued turn alongside `proteusEvent`. */
+  /** Extra metadata stamped on the queued turn alongside `kinuEvent`. */
   readonly metadata?: Readonly<JsonObject> | undefined;
   /** This signal carries a trusted turn mode and must not be spliced into a
    * differently-modeled live turn. Queue it as its own turn instead. */
   readonly requiresOwnTurn?: boolean | undefined;
+  /**
+   * How strongly the producer asks this to be weighed, when it has an opinion.
+   *
+   * Delivery reads it in exactly one place: a `blocker` gets its own turn, so a
+   * note that says "continuing wastes the work" cannot be folded into a turn
+   * already running in another work mode. Everything below that routes on turn
+   * state exactly as it did before, because how strongly a note is meant and
+   * when the agent can hear it are two different questions.
+   */
+  readonly severity?: AdvisorSeverity | undefined;
   /**
    * Stable identity for the FACT this signal announces, when the producer has
    * one. Forwarded to `BackendHost.enqueueTurn` as its `idempotencyKey`, which
@@ -99,7 +110,7 @@ export type SignalCardState = 'pending' | 'shown' | 'undelivered';
  * takes it in.
  *
  * The opening event carries what a surface needs to render it — `metadata` is
- * the SAME `proteusEvent` shape a queued signal's durable message is stamped
+ * the SAME `kinuEvent` shape a queued signal's durable message is stamped
  * with, so one classifier serves both the live card and the message it becomes.
  * Later events are pure transitions on the same `id`.
  */
@@ -108,7 +119,7 @@ export type SignalCardEvent =
     readonly type: 'signal_card';
     readonly id: string;
     readonly state: 'pending';
-    /** Turn metadata: `proteusEvent` + the producer's own. */
+    /** Turn metadata: `kinuEvent` + the producer's own. */
     readonly metadata: Readonly<JsonObject>;
     /** The signal exactly as this delivery will present it to the model. */
     readonly text: string;

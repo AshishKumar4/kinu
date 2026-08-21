@@ -8,13 +8,13 @@
  * provider functions cannot be passed across process boundaries.
  */
 
-import { decodeJsonValue, JsonValueSchema } from '@kinu/core';
-import type { Executor, ExecuteResult, JsonValue, ResolvedProvider } from '@kinu/core';
+import { decodeJsonValue, JsonValueSchema } from '@kinu.run/core';
+import type { Executor, ExecuteResult, JsonValue, ResolvedProvider } from '@kinu.run/core';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeFileSync, unlinkSync } from 'node:fs';
 import * as v from 'valibot';
-import { renderThrownChain } from '@kinu/core/obs';
+import { renderThrownChain } from '@kinu.run/core/obs';
 
 const TIMEOUT_MS = 30_000;
 const subprocessResultSchema = v.variant('ok', [
@@ -118,7 +118,7 @@ async function runToCompletion(
   extension: string,
   timeoutMs: number,
 ): Promise<{ exitCode: number; stdout: string; stderr: string; error?: string }> {
-  const stem = join(tmpdir(), `proteus-exec-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const stem = join(tmpdir(), `kinu-exec-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const tmpFile = `${stem}${extension}`;
   const outFile = `${stem}.out`;
   const errFile = `${stem}.err`;

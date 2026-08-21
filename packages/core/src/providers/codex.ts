@@ -21,7 +21,7 @@ import { withRateLimitRetry } from './rate-limit-retry';
 import { authCacheKey, cloneModelInfos, nonEmptyString, positiveInteger } from './util';
 import * as v from 'valibot';
 import { JsonArraySchema, JsonObjectSchema, JsonValueSchema, type JsonValue } from '../utils/json';
-import { diagnostics, ProteusError } from '../obs/index';
+import { diagnostics, KinuError } from '../obs/index';
 
 export const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex';
 export const CODEX_CRED_KEY = 'codex.oauth';
@@ -91,7 +91,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
         if (!auth) {
           diagnostics.failure(
             'credential.codex_absent',
-            new ProteusError('missing', 'no Codex credentials; the model call was refused before it left'),
+            new KinuError('missing', 'no Codex credentials; the model call was refused before it left'),
             { model: modelId },
           );
           return new Response(
@@ -133,7 +133,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
               'the WAF.';
             diagnostics.failure(
               'provider.codex_waf_blocked',
-              new ProteusError('unavailable', 'Codex refused this Worker\'s egress as bot traffic'),
+              new KinuError('unavailable', 'Codex refused this Worker\'s egress as bot traffic'),
               { model: modelId },
             );
             return new Response(

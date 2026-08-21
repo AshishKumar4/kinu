@@ -27,9 +27,9 @@ import { btnSmCls, inputCls } from "@/components/ui/form";
 import { createDurableWebhook, cancelTrigger, type CreateWebhookResult } from "@/lib/user-api";
 import type { Rpc } from "@/lib/protocol";
 import { fmtTokens, fmtPct } from "@/lib/format";
-import { addUsage, cacheHitRate, pageSchema, UsageSchema, usageTotal, type SeekCursor, type Usage } from "@kinu/core";
+import { addUsage, cacheHitRate, pageSchema, UsageSchema, usageTotal, type SeekCursor, type Usage } from "@kinu.run/core";
 import * as v from "valibot";
-import { renderThrownChain } from '@kinu/core/obs';
+import { renderThrownChain } from '@kinu.run/core/obs';
 
 const ProposedTaskSchema = v.object({
   id: v.string(), task: v.string(), rationale: v.string(), predictedSuccess: v.number(),
@@ -383,8 +383,8 @@ TS=$(date +%s)
 BODY='{"hello":"world"}'
 SIG=$(printf "%s.%s" "$TS" "$BODY" | openssl dgst -sha256 -hmac "${result.secret ?? "<your-secret>"}" -hex | cut -d' ' -f2)
 curl -X POST '${url}' \\
-  -H "x-proteus-timestamp: $TS" \\
-  -H "x-proteus-signature: $SIG" \\
+  -H "x-kinu-timestamp: $TS" \\
+  -H "x-kinu-signature: $SIG" \\
   -H "content-type: application/json" \\
   -d "$BODY"`
     : result.auth_mode === "bearer"

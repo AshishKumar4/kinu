@@ -14,7 +14,7 @@ import {
   initEventsHubTables, initWebhookRateLimitTables, registerDurableWebhook,
   type SqlExec, type WebhookDelivery,
 } from '../src/index';
-import { createMemoryVfs } from '@kinu/test-utils';
+import { createMemoryVfs } from '@kinu.run/test-utils';
 import { makeSqlExec } from './helpers';
 
 function makeSql(db: Database): SqlExec {

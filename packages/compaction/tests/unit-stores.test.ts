@@ -12,7 +12,7 @@ import {
   type SqlExecutor,
   type SqlValue,
   type VFS,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import {
   compactionTranscriptPath,
   createCompactionStateStore,
@@ -119,10 +119,10 @@ function memoryVfs(): MemoryVfs {
 describe('compactionTranscriptPath', () => {
   test('lives under the hidden /local compaction dir and sanitizes hostile segments', () => {
     expect(compactionTranscriptPath('my-agent', 'deadbeef')).toBe(
-      '.proteus/compaction/my-agent/deadbeef.md',
+      '.kinu/compaction/my-agent/deadbeef.md',
     );
-    expect(compactionTranscriptPath('proteus-agent:session/../x', 'h#1')).toBe(
-      '.proteus/compaction/proteus-agent_session_.._x/h_1.md',
+    expect(compactionTranscriptPath('kinu-agent:session/../x', 'h#1')).toBe(
+      '.kinu/compaction/kinu-agent_session_.._x/h_1.md',
     );
   });
 });
@@ -140,7 +140,7 @@ describe('createVfsTranscriptStore', () => {
 
   test('citablePath survives unbound invocation (the engine passes it around bare)', () => {
     const { citablePath } = createVfsTranscriptStore(() => memoryVfs().vfs);
-    expect(citablePath('s', 'h')).toBe('.proteus/compaction/s/h.md');
+    expect(citablePath('s', 'h')).toBe('.kinu/compaction/s/h.md');
   });
 
   test('a second write into the same directory tolerates mkdir EEXIST', async () => {

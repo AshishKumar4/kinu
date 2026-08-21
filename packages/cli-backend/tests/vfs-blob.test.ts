@@ -5,7 +5,7 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createCLIRuntime } from '../src/runtime';
-import { scratchPath } from '@kinu/test-utils';
+import { scratchPath } from '@kinu.run/test-utils';
 
 function freshVfs() {
   const db = new Database(':memory:');

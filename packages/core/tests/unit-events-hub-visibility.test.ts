@@ -1,6 +1,6 @@
 // Payload visibility — redaction + LLM rendering.
 import { describe, test, expect } from 'bun:test';
-import { createMemoryVfs } from '@kinu/test-utils';
+import { createMemoryVfs } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
   EVENT_BRIEF_MAX_CHARS, applyVisibilityForStorage, eventContentPath,
@@ -144,7 +144,7 @@ describe('renderForLLM', () => {
         ...EVENT_BASE, ingress: 'subordinate', variant: 'subordinate_report', payload_visibility: 'full',
         payload: {
           from_subordinate: 'researcher', status: 'completed', content: longReport, content_path,
-          proteus_mode: 'build',
+          kinu_mode: 'build',
         },
       });
       // Bounded, but it SAYS it is bounded and where the rest lives: head,
@@ -166,7 +166,7 @@ describe('renderForLLM', () => {
         ...EVENT_BASE, ingress: 'subordinate', variant: 'subordinate_report', payload_visibility: 'full',
         payload: {
           from_subordinate: 'researcher', status: 'completed', content: shortReport,
-          task: 'Survey auth', proteus_mode: 'build',
+          task: 'Survey auth', kinu_mode: 'build',
         },
       });
       expect(r.brief).toBe('completed [re: Survey auth]: Survey done — three seams found; note written.');
@@ -183,7 +183,7 @@ describe('renderForLLM', () => {
         ...EVENT_BASE, ingress: 'peer_async', variant: 'peer_agent', payload_visibility: 'full',
         payload: {
           from_agent_name: 'scout', from_user_id: 'u1', topic: 'research',
-          body, sender_event_id: 'se1', body_path, proteus_mode: 'build',
+          body, sender_event_id: 'se1', body_path, kinu_mode: 'build',
         },
       });
       expect(r.brief.startsWith(`research: ${serialized.slice(0, 100)}`)).toBe(true);
@@ -205,7 +205,7 @@ describe('renderForLLM', () => {
         ...EVENT_BASE, ingress: 'peer_async', variant: 'peer_agent', payload_visibility: 'full',
         payload: {
           from_agent_name: 'scout', from_user_id: 'u1', topic: 'status',
-          body: 'shipping today', sender_event_id: 'se1', proteus_mode: 'build',
+          body: 'shipping today', sender_event_id: 'se1', kinu_mode: 'build',
         },
       });
       expect(r.brief).toBe('status: "shipping today"');
@@ -270,7 +270,7 @@ describe('renderForLLM', () => {
       const second = await spillEventContent(vfs, overBudget);
       expect(second).toBe(first!);
       expect([...files.keys()]).toEqual([first!]);
-      expect(first!.startsWith('.proteus/event-content/')).toBe(true);
+      expect(first!.startsWith('.kinu/event-content/')).toBe(true);
     });
   });
 });

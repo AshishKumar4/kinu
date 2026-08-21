@@ -17,7 +17,7 @@
 import type { Memory } from '../types/primitives';
 import type { VectorStore, VectorSearchHit } from './vector-store';
 import { reciprocalRankFusion } from './vector-store';
-import { diagnostics, toProteusError } from '../obs/index';
+import { diagnostics, toKinuError } from '../obs/index';
 
 export interface LexicalHit {
   readonly id: string;
@@ -117,7 +117,7 @@ export async function hybridSearch(
   const lexicalPromise: Promise<LexicalHit[]> = lexicalSearch(query, perSourceK).catch((err) => {
       diagnostics.failure(
         'memory.lexical_search_failed',
-        toProteusError({ doing: 'run the lexical half of a hybrid search', cause: err, otherwise: 'io' }),
+        toKinuError({ doing: 'run the lexical half of a hybrid search', cause: err, otherwise: 'io' }),
       );
       return [];
     });
@@ -125,7 +125,7 @@ export async function hybridSearch(
     ? vectorStore.search(query, perSourceK).catch((err) => {
           diagnostics.failure(
             'memory.semantic_search_failed',
-            toProteusError({ doing: 'run the semantic half of a hybrid search', cause: err, otherwise: 'unavailable' }),
+            toKinuError({ doing: 'run the semantic half of a hybrid search', cause: err, otherwise: 'unavailable' }),
           );
           return [];
         })

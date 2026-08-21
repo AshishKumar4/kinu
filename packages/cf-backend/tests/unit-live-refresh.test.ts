@@ -6,7 +6,7 @@ import {
   resolvePendingConsent,
   type LiveRefreshErrors,
   type LiveRefreshSource,
-} from '../src/hooks/use-proteus';
+} from '../src/hooks/use-kinu';
 
 interface Deferred<Value> {
   promise: Promise<Value>;

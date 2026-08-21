@@ -12,7 +12,7 @@ import { describe, expect, test } from 'bun:test';
 import { tool, type ModelMessage } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
-import { createTestRuntime } from '@kinu/test-utils';
+import { createTestRuntime } from '@kinu.run/test-utils';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { z } from 'zod';

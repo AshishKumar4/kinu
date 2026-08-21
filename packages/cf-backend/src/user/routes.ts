@@ -37,8 +37,8 @@
  */
 import type { AuthIdentity } from '../auth/session';
 import type { UserDO } from './user-do';
-import { DEVICE_CONSENT_SCOPE, DEVICE_CONSENT_SCOPE_FULL_FS, JsonValueSchema } from '@kinu/core';
-import { diagnostics, renderThrownChain, toProteusError } from '@kinu/core/obs';
+import { DEVICE_CONSENT_SCOPE, DEVICE_CONSENT_SCOPE_FULL_FS, JsonValueSchema } from '@kinu.run/core';
+import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '../cli/install-command';
 import { listAvailableModels, listProviderCatalog } from './available-models';
 import { handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged } from './workspace-access';
@@ -103,7 +103,7 @@ export async function handleUserRequest(
     const caller = await ownerCaller(env);
     const reportBootstrapFailure = (step: string) => <Thrown,>(thrown: Thrown): void => {
       warmedMcpUsers.delete(identity.userId);
-      diagnostics.failure('user.bootstrap_failed', toProteusError({
+      diagnostics.failure('user.bootstrap_failed', toKinuError({
         doing: 'bootstrapping the user on first hit in this isolate',
         cause: thrown,
         otherwise: 'unavailable',

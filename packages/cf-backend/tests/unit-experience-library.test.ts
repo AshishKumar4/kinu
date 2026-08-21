@@ -9,7 +9,7 @@
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
 import type { UserCaller } from '../src/user/workspace-capability';
-import type { PublishableCandidate } from '@kinu/core';
+import type { PublishableCandidate } from '@kinu.run/core';
 
 const ALPHA = 'workspace-a';
 const BETA = 'workspace-b';

@@ -28,7 +28,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
-import { toolExecute } from '@kinu/test-utils';
+import { toolExecute } from '@kinu.run/test-utils';
 import {
   buildBuiltinTools, censusToolFailures, classifyToolFailure,
   toolFailureKey, FAILURE_WITHOUT_ERROR,
@@ -38,7 +38,7 @@ import {
   type ExecutorProvider, type ToolFailureCensus,
 } from '../src/index';
 import {
-  classifyErrorCode, createRecordingLogger, ERROR_CODES, ProteusError,
+  classifyErrorCode, createRecordingLogger, ERROR_CODES, KinuError,
   type ErrorCode, type RecordingLogger,
 } from '../src/obs/index';
 import { refusalText } from '../src/execution/exec-result';
@@ -543,7 +543,7 @@ describe('every error class lands in exactly one part of the census', () => {
     for (const code of ERROR_CODES) {
       const census = censusToolFailures([call({
         name: 'run', toolCallId: `t-${code}`, args: { command: 'pytest -q' },
-        result: refusalText(new ProteusError(code, `refused: ${code}`)),
+        result: refusalText(new KinuError(code, `refused: ${code}`)),
       })]);
       expect(census.failures).toHaveLength(1);
       expect(parts(census)).toEqual(onlyPart(PART_BY_CODE[code]));
@@ -556,7 +556,7 @@ describe('every error class lands in exactly one part of the census', () => {
   test('the parts still sum to the failures, over the whole vocabulary at once', () => {
     const census = censusToolFailures(ERROR_CODES.map((code) => call({
       name: 'run', toolCallId: `t-${code}`, args: { command: 'pytest -q' },
-      result: refusalText(new ProteusError(code, `refused: ${code}`)),
+      result: refusalText(new KinuError(code, `refused: ${code}`)),
     })));
     expect(census.failures).toHaveLength(ERROR_CODES.length);
     expect(census.refused + census.workFailed + census.runtimeMissing + census.broke)

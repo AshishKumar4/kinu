@@ -1,4 +1,4 @@
-import { contextWindowForModel } from '@kinu/core';
+import { contextWindowForModel } from '@kinu.run/core';
 
 export interface TextForContextEstimate {
   content: string;

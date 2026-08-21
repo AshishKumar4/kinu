@@ -1,8 +1,9 @@
 /**
  * Cross-workspace experience transfer (Agent-KB, arXiv:2507.06229): the owner's
- * workspaces share crafts, lessons and facts through one owner-scoped library,
- * with every import gated by the misevolution checker and staged provisional
- * until the importing workspace's own turn outcome corroborates it.
+ * workspaces share crafts, lessons, facts and promoted scaffolds through one
+ * owner-scoped library, with every import gated by the misevolution checker and
+ * staged provisional until the importing workspace's own evidence — a turn
+ * outcome, or for a scaffold its own shadow trial — corroborates it.
  */
 
 export {

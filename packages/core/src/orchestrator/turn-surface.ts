@@ -14,7 +14,7 @@ import { unionAllowedTools, toolAllowedBySkills } from '../skills/render';
 import type { ActiveSkillSet, ParsedSkill } from '../skills/types';
 import { renderFactsBlock, type FactsStore } from '../memory/facts';
 import type { VFS } from '../types/primitives';
-import { diagnostics, toProteusError } from '../obs/index';
+import { diagnostics, toKinuError } from '../obs/index';
 
 /** Passthrough SkillsVfs shim over the runtime's Storage.vfs. */
 export function skillsVfsOver(vfs: VFS): SkillsVfs {
@@ -62,7 +62,7 @@ export async function resolveTurnSkills(opts: {
   } catch (err) {
     diagnostics.failure(
       'skills.discovery_failed',
-      toProteusError({ doing: 'discover the turn\'s skills', cause: err, otherwise: 'io' }),
+      toKinuError({ doing: 'discover the turn\'s skills', cause: err, otherwise: 'io' }),
     );
     available = [...BUILTIN_SKILLS];
   }

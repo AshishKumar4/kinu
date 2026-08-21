@@ -50,7 +50,7 @@ function job(name: string, trials: readonly TrialSpec[]): string {
     mkdirSync(trialDir);
     const event = (name: string, count: number) =>
       Array.from({ length: count }, () => ({ event: name, message: name }));
-    // Shaped exactly as bench/harbor/proteus_agent.py writes it. `turn_grading`
+    // Shaped exactly as bench/harbor/kinu_agent.py writes it. `turn_grading`
     // is absent, not zeroed, when the probe reported nothing — which is the
     // distinction half these tests exist to hold.
     const metadata = {

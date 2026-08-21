@@ -10,10 +10,10 @@
  *                             store existed (idempotent, cursor-paged).
  */
 
-import type { AgentConfigStore, Memory, VectorStore } from "@kinu/core";
-import { AGENT_CONFIG_KEYS } from "@kinu/core";
-import type { IndexedChunk, MemoryStore } from "@kinu/agent-utils/memory";
-import { diagnostics, toProteusError } from '@kinu/core/obs';
+import type { AgentConfigStore, Memory, VectorStore } from "@kinu.run/core";
+import { AGENT_CONFIG_KEYS } from "@kinu.run/core";
+import type { IndexedChunk, MemoryStore } from "@kinu.run/agent-utils/memory";
+import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 
 /** A chunk FTS5 holds and the vector index does not makes the semantic index
  *  incomplete, so the completeness marker must stop claiming otherwise. Clearing
@@ -48,7 +48,7 @@ export function adaptMemory(store: MemoryStore, vectorStore: VectorStore, config
         if (delta.deletedIds.length > 0) await vectorStore.deleteChunks(delta.deletedIds);
         if (delta.upserted.length > 0) await vectorStore.upsertChunks(delta.upserted);
       } catch (err) {
-        diagnostics.failure('memory.vector_sync_failed', toProteusError({
+        diagnostics.failure('memory.vector_sync_failed', toKinuError({
           doing: 'syncing the memory chunk delta into the vector index',
           cause: err,
           otherwise: 'unavailable',
@@ -86,7 +86,7 @@ export async function backfillMemoryVectors(
   try {
     chunks = store.allChunksAfter(cursor, cap);
   } catch (err) {
-    diagnostics.failure('memory.vector_backfill_read_failed', toProteusError({
+    diagnostics.failure('memory.vector_backfill_read_failed', toKinuError({
       doing: 'reading memory chunks for the vector backfill',
       cause: err,
       otherwise: 'io',
@@ -105,7 +105,7 @@ export async function backfillMemoryVectors(
     // embed: advancing over a failed page is what let the marker claim a
     // complete semantic index over content it never indexed. The next boot
     // retries this same page.
-    diagnostics.failure('memory.vector_backfill_page_failed', toProteusError({
+    diagnostics.failure('memory.vector_backfill_page_failed', toKinuError({
       doing: 'embedding a page of memory chunks for the vector backfill',
       cause: err,
       otherwise: 'unavailable',

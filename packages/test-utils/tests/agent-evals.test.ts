@@ -14,7 +14,7 @@ import { describe, test, expect } from 'bun:test';
 import {
   initAlternateTakesTable, initHeadsTables, initMctsSearchTable, initRunEventTables,
   initSearchTables, listForkRuns, type JsonObject, type SqlExecutor,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import { createTestSql, type TestSql } from '../src/sql';
 import {
   BEHAVIOUR_SCORERS, completionHonesty, craftReuse, delegationConversion, editLanding,

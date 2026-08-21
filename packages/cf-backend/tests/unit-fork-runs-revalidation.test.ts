@@ -15,7 +15,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type {
   ExplorationCanvasRun, ForkRunParams, ForkRunSummary, HeadRunView, SearchRunParams,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import type { BackgroundJob } from '../src/lib/protocol';
 import {
   FORK_IDLE_REVALIDATE_MS, FORK_REVALIDATE_MS, forkRunsRevalidateMs, hasLiveForkRun,

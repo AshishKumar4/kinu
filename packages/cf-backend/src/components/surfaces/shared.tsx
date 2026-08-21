@@ -7,7 +7,7 @@ import { memo, useState } from "react";
 import { CaretRightIcon, CopyIcon } from "@phosphor-icons/react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { MAX_LINES_PER_FILE, type DiffLine } from "@kinu/core";
+import { MAX_LINES_PER_FILE, type DiffLine } from "@kinu.run/core";
 import { copyLabel, useCopy } from "@/hooks/use-copy";
 
 /** Render a sequence of diff lines (add/del/ctx) red/green — shared by the
@@ -172,7 +172,7 @@ export function Section({ id, title, icon, badge, defaultOpen = true, children }
   defaultOpen?: boolean;
   children: React.ReactNode;
 }) {
-  const key = `proteus.section.${id}`;
+  const key = `kinu.section.${id}`;
   // Read once on mount and write only on toggle: an effect that mirrored state
   // would stamp every default into storage on first paint, which then looks
   // like a choice the user made and freezes the defaults forever.

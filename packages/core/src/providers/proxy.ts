@@ -33,9 +33,9 @@ import type { AuthResolution, ProviderDeps } from './types';
 /** Names the credential the server must attach. Present on a request means
  *  "this one is proxied"; absent means the caller resolved real auth and the
  *  request goes out directly. Never carries secret material. */
-export const PROXY_CRED_HEADER = 'x-proteus-proxy-cred';
+export const PROXY_CRED_HEADER = 'x-kinu-proxy-cred';
 /** The upstream URL the proxied request was built for. */
-export const PROXY_TARGET_HEADER = 'x-proteus-proxy-target';
+export const PROXY_TARGET_HEADER = 'x-kinu-proxy-target';
 /** The route both sides agree on. Owned here so the client that builds the
  *  URL and the server that mounts it cannot drift. */
 export const PROVIDER_PROXY_PATH = '/api/user/ai/proxy';

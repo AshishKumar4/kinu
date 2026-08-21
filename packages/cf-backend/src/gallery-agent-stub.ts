@@ -8,7 +8,7 @@
  * import that resolves outside the tracked source set as a module with no
  * dependencies at all — which would report the gallery as movable when it is not. Frames that mount a SURFACE are
  * handed an `Rpc` as a prop and need none of this; frames that mount a PAGE are
- * not — a page owns its own connection through `useProteus`, so without a stand-in
+ * not — a page owns its own connection through `useKinu`, so without a stand-in
  * for the socket there is no seam a fixture can reach at all.
  *
  * That is not hypothetical. `?frame=forkfull`, `?frame=forkbig` and
@@ -25,7 +25,7 @@
 
 import { useEffect, useMemo, useRef } from "react";
 
-/** The one method surface `useProteus` uses off the agent connection. */
+/** The one method surface `useKinu` uses off the agent connection. */
 export interface GalleryAgent {
 	readonly readyState: number;
 	call<T>(method: string, args?: unknown[]): Promise<T>;
@@ -50,7 +50,7 @@ type GalleryRpc = <T>(method: string, args?: unknown[]) => Promise<T>;
  *
  * Registered rather than imported: the stub stands in for a module the app
  * imports, so importing the gallery back would close the cycle
- * `gallery -> page -> use-proteus -> agents/react -> gallery`, and
+ * `gallery -> page -> use-kinu -> agents/react -> gallery`, and
  * `import/no-cycle` is an error at zero across this repo.
  */
 let served: GalleryRpc | null = null;
@@ -89,7 +89,7 @@ export function useAgent(options: AgentHandlers): GalleryAgent {
 			close: () => { listeners.clear(); },
 		};
 	}, []);
-	// One open, on mount. `useProteus` gates its whole snapshot fetch on the
+	// One open, on mount. `useKinu` gates its whole snapshot fetch on the
 	// connected status, so a stub that never opens is a stub that never loads.
 	useEffect(() => { handlers.current.onOpen?.(new Event("open")); }, []);
 	return agent;

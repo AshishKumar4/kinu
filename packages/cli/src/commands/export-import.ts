@@ -23,9 +23,9 @@ import {
   restoreWorkspaceArchive,
   type ArchiveCursor,
   type ArchivePage,
-} from '@kinu/core';
-import { tolerate } from '@kinu/core/obs';
-import { createInlineWorkspace } from '@kinu/core/identity';
+} from '@kinu.run/core';
+import { tolerate } from '@kinu.run/core/obs';
+import { createInlineWorkspace } from '@kinu.run/core/identity';
 import { agentDbPath, agentDir, ensureAgentHome, requireStoredAuthConfig } from '../config';
 import { resolveAgentTarget } from '../agent-target';
 import { callAgentRpc } from '../cloud-api';

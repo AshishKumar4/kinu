@@ -4,7 +4,7 @@
  * The load-bearing claim is one format: a CLOUD workspace exported over the
  * paged RPC restores through the SAME `kinu import` a local export does,
  * with its content intact. Both directions run the real CLI binary against a
- * throwaway PROTEUS_HOME — the cloud side against a stub origin that answers
+ * throwaway KINU_HOME — the cloud side against a stub origin that answers
  * the export RPC out of a real SQLite workspace.
  */
 
@@ -13,8 +13,8 @@ import { Database } from 'bun:sqlite';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { archiveSqlFromDatabase, readWorkspaceArchivePage, type ArchiveCursor } from '@kinu/core';
-import { JsonArraySchema, JsonObjectSchema } from '@kinu/core';
+import { archiveSqlFromDatabase, readWorkspaceArchivePage, type ArchiveCursor } from '@kinu.run/core';
+import { JsonArraySchema, JsonObjectSchema } from '@kinu.run/core';
 import * as v from 'valibot';
 
 const ArchiveCursorSchema: v.GenericSchema<ArchiveCursor> = v.variant('phase', [
@@ -58,7 +58,7 @@ function seedWorkspace(path: string): void {
 function runCli(home: string, args: string[], env: Record<string, string> = {}) {
   return Bun.spawn([process.execPath, cliBin, ...args], {
     cwd: repoRoot,
-    env: { ...process.env, PROTEUS_HOME: home, NO_COLOR: '1', ...env },
+    env: { ...process.env, KINU_HOME: home, NO_COLOR: '1', ...env },
     stdout: 'pipe',
     stderr: 'pipe',
   });
@@ -79,12 +79,12 @@ function restoredDb(home: string, name: string): Database {
 
 describe('kinu export / import', () => {
   test('a local workspace round-trips through an archive', async () => {
-    const home = scratch('proteus-export-local-');
-    const out = scratch('proteus-export-out-');
+    const home = scratch('kinu-export-local-');
+    const out = scratch('kinu-export-out-');
     writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: {}, aliases: {} }));
     seedWorkspace(join(mkdirp(home, 'scout'), 'agent.db'));
 
-    const archive = join(out, 'scout.proteus.jsonl');
+    const archive = join(out, 'scout.kinu.jsonl');
     const exported = await result(runCli(home, ['export', 'scout', '-o', archive]));
     expect(exported.stderr).toBe('');
     expect(exported.exitCode).toBe(0);
@@ -107,7 +107,7 @@ describe('kinu export / import', () => {
   });
 
   test('a cloud workspace exports over the paged RPC and imports locally', async () => {
-    const cloudDir = scratch('proteus-export-cloud-db-');
+    const cloudDir = scratch('kinu-export-cloud-db-');
     const cloudDb = join(cloudDir, 'cloud.db');
     seedWorkspace(cloudDb);
     const source = archiveSqlFromDatabase(new Database(cloudDb, { readonly: true }));
@@ -136,8 +136,8 @@ describe('kinu export / import', () => {
       },
     });
 
-    const home = scratch('proteus-export-cloud-');
-    const out = scratch('proteus-export-cloud-out-');
+    const home = scratch('kinu-export-cloud-');
+    const out = scratch('kinu-export-cloud-out-');
     writeFileSync(join(home, 'config.json'), JSON.stringify({
       origin: `http://127.0.0.1:${server.port}`,
       accessToken: 'ptc_stored_session',
@@ -148,9 +148,9 @@ describe('kinu export / import', () => {
     }));
 
     try {
-      const archive = join(out, 'skywriter.proteus.jsonl');
+      const archive = join(out, 'skywriter.kinu.jsonl');
       const exported = await result(runCli(home, ['export', 'skywriter', '-o', archive], {
-        PROTEUS_ORIGIN: `http://127.0.0.1:${server.port}`,
+        KINU_ORIGIN: `http://127.0.0.1:${server.port}`,
       }));
       expect(exported.stderr).toBe('');
       expect(exported.exitCode).toBe(0);
@@ -176,8 +176,8 @@ describe('kinu export / import', () => {
   });
 
   test('a database file from an older export still restores', async () => {
-    const home = scratch('proteus-export-legacy-');
-    const out = scratch('proteus-export-legacy-out-');
+    const home = scratch('kinu-export-legacy-');
+    const out = scratch('kinu-export-legacy-out-');
     writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: {}, aliases: {} }));
     const legacy = join(out, 'oldbot.agent.db');
     seedWorkspace(legacy);
@@ -192,12 +192,12 @@ describe('kinu export / import', () => {
   });
 
   test('a truncated archive leaves no workspace behind', async () => {
-    const home = scratch('proteus-export-damaged-');
-    const out = scratch('proteus-export-damaged-out-');
+    const home = scratch('kinu-export-damaged-');
+    const out = scratch('kinu-export-damaged-out-');
     writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: {}, aliases: {} }));
     seedWorkspace(join(mkdirp(home, 'scout'), 'agent.db'));
 
-    const archive = join(out, 'scout.proteus.jsonl');
+    const archive = join(out, 'scout.kinu.jsonl');
     await result(runCli(home, ['export', 'scout', '-o', archive]));
     const lines = readFileSync(archive, 'utf8').split('\n').filter(Boolean);
     writeFileSync(archive, `${lines.slice(0, lines.length - 1).join('\n')}\n`);

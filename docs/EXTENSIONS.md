@@ -11,13 +11,13 @@ For the wider extension points (model provider, exploration strategy, actor
 kind), see [EXTENSIBILITY.md](./EXTENSIBILITY.md). This document covers the
 per-turn hooks.
 
-Source: `packages/core/src/extension.ts`, exported from `@kinu/core`.
+Source: `packages/core/src/extension.ts`, exported from `@kinu.run/core`.
 
 Two files in this tree export something called an extension, and they mean
 different things. `packages/core/src/extension.ts` holds the contract, the
-`ProteusExtension` interface and the `ExtensionHost` that drives it.
+`KinuExtension` interface and the `ExtensionHost` that drives it.
 `packages/compaction/src/extension.ts` holds one implementation of that
-contract, `createCompactionExtension`, which returns a `ProteusExtension` whose
+contract, `createCompactionExtension`, which returns a `KinuExtension` whose
 `name` is `compaction`. Read the first for the contract and the second for a
 worked registrant.
 
@@ -27,9 +27,9 @@ An extension is a set of optional hooks plus a stable `name`. The name appears
 in errors. Implement only the hooks you need.
 
 ```ts
-import { ExtensionHost, type ProteusExtension } from '@kinu/core';
+import { ExtensionHost, type KinuExtension } from '@kinu.run/core';
 
-const logger: ProteusExtension = {
+const logger: KinuExtension = {
   name: 'my.logger',
   onTurnStart({ system, history }) { /* before the model is streamed */ },
   onToolCall({ toolName, args }) { /* each tool call the model emits */ },
@@ -104,23 +104,23 @@ Within one hook, every registered extension runs in registration order.
 
 Both backends register the same three extensions, in the same order.
 
-1. **`compaction`**, from `createCompactionExtension` in `@kinu/compaction`.
+1. **`compaction`**, from `createCompactionExtension` in `@kinu.run/compaction`.
    It is the default `transformContext` registrant. It runs the better-compact
    staged pruning ladder once per turn assembly, over shared stores. Raw
    transcripts land in the canonical workspace VFS at
-   `.proteus/compaction/<sessionKey>/<rangeHash>.md`, readable back through
+   `.kinu/compaction/<sessionKey>/<rangeHash>.md`, readable back through
    the agent's own file tools. The replayable plan and the measured
    prompt-token trigger share one `compaction_state` row. Its `onOutcome`
    callback resets the dynamic-context ledger when the model-visible stream
    changed shape, which is the `planned` and `invalidated` outcomes. A
    byte-stable replay keeps the frozen block positions valid, so it resets
    nothing.
-2. **The user steer drain.** It is registered as `proteus.steering` on the CLI
-   (`cli-backend/src/local-session.ts:1715`) and as `proteus.user-steer` in
+2. **The user steer drain.** It is registered as `kinu.steering` on the CLI
+   (`cli-backend/src/local-session.ts:1715`) and as `kinu.user-steer` in
    the cloud (`cf-backend/src/actor-agent.ts:846`). Both are one `prepareStep`
    hook over the same `UserSteerDrain`. It drains pending steers into a single
    user message appended after the latest tool results.
-3. **`proteus.signals`**, the orchestrator's own turn extension
+3. **`kinu.signals`**, the orchestrator's own turn extension
    (`core/src/orchestrator/agent-orchestrator.ts:161`). It observes tool calls
    for the turn's mechanical steering, and it drains every signal delivered
    for the live turn into that turn's next step. A background event and a

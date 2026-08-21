@@ -6,8 +6,8 @@
 // multi-line — one statement per line — as the model actually writes it, which
 // is what the shared addImplicitReturn is built for.
 import { describe, expect, test } from 'bun:test';
-import type { CodemodeProvider, CraftedToolSet, JsonValue } from '@kinu/core';
-import { toolExecute } from '@kinu/test-utils';
+import type { CodemodeProvider, CraftedToolSet, JsonValue } from '@kinu.run/core';
+import { toolExecute } from '@kinu.run/test-utils';
 import { createNodeExecuteToolFactory } from '../src/execute-tools-factory';
 
 interface ExecuteToolResult {

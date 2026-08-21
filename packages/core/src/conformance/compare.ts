@@ -56,6 +56,7 @@ function declaredEntries(
     case 'agents-action': return Object.entries(manifest['agents-action']);
     case 'memory-action': return Object.entries(manifest['memory-action']);
     case 'table': return Object.entries(manifest.table);
+    case 'producer': return Object.entries(manifest.producer);
   }
 }
 
@@ -142,6 +143,24 @@ export function observedActionEnum<Tool>(tool: Tool): Set<string> {
   const raw = schemaJson(parsedTool.output.inputSchema);
   const parsedAction = v.safeParse(ActionEnumSchema, raw);
   return new Set(parsedAction.success ? parsedAction.output.properties.action.enum : []);
+}
+
+/**
+ * Which {@link CONFORMANCE_PRODUCERS} the root actually built a client for,
+ * read off the assembled runtime.
+ *
+ * The observation is `!== undefined` because that is the whole contract: every
+ * consumer of these fields branches on presence, and a field left unset IS the
+ * "apply your documented fallback" instruction. `fastLlm` is deliberately not
+ * observed — see CONFORMANCE_PRODUCERS for the measurement that says why.
+ */
+export function wiredProducers(rt: {
+  judgeModel?: unknown; advisorLlm?: unknown;
+}): Set<string> {
+  const wired = new Set<string>();
+  if (rt.judgeModel !== undefined) wired.add('judge');
+  if (rt.advisorLlm !== undefined) wired.add('advisor');
+  return wired;
 }
 
 /** Unwrap an AI-SDK schema wrapper (jsonSchema(...) carries the raw object on

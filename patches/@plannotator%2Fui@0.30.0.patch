@@ -1481,7 +1481,7 @@ index 2072dc366d992240a0d1a12d00a25d61522a3662..ce3270009dc36862cdcd2270b72a1216
 +  );
 +};
 +
-+/** Proteus's intentionally narrow Plannotator document surface. */
++/** Kinu's intentionally narrow Plannotator document surface. */
  export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
    blocks,
    markdown,
@@ -2772,7 +2772,7 @@ index a51ea6e888f4baaa8295d1a4e78fddbacd22ba67..8e9f91fa776e8e83697a9cb7db5b5132
 - * only the name is. The `language-*` class alongside it is still how
 - * `blockTargeting` reads a block's language back out of the DOM.
 - */
-+/** Plain-text code fences for the embedded Proteus plan reviewer. */
++/** Plain-text code fences for the embedded Kinu plan reviewer. */
  export const CODE_BLOCK_CLASS = 'pn-code';
  
  export function codeBlockClassName(language?: string): string {

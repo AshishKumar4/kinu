@@ -1,4 +1,4 @@
-// openWorkspaceCLI — the local workspace resume path. A ~/.proteus workspace is
+// openWorkspaceCLI — the local workspace resume path. A ~/.kinu workspace is
 // a file that outlives schema changes, so opening one created against an older
 // schema must upgrade it in place instead of rejecting it.
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -6,8 +6,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import type { LLMProviderConfig } from '@kinu/core';
-import { createInlineWorkspace } from '@kinu/core/identity';
+import type { LLMProviderConfig } from '@kinu.run/core';
+import { createInlineWorkspace } from '@kinu.run/core/identity';
 import { openWorkspaceCLI } from '../src/open';
 
 const DUMMY_LLM: LLMProviderConfig = {
@@ -24,7 +24,7 @@ afterEach(() => {
  *  rename to `workspace_identity`. Its SOUL.md is an ordinary file, because a
  *  workspace's files have only ever been files. */
 async function legacyWorkspace(): Promise<{ db: Database; dbPath: string }> {
-  const dir = mkdtempSync(join(tmpdir(), 'proteus-open-legacy-'));
+  const dir = mkdtempSync(join(tmpdir(), 'kinu-open-legacy-'));
   tempDirs.push(dir);
   const dbPath = join(dir, 'agent.db');
   const db = new Database(dbPath);

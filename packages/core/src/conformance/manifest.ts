@@ -27,6 +27,24 @@
 
 import { AGENTS_TOOL_ACTIONS, BUILTIN_TOOLS, MEMORY_FACT_ACTIONS, MEMORY_NOTE_ACTIONS } from '../tools/registry';
 import type { AgentsToolAction, BuiltinToolName, MemoryToolAction } from '../tools/registry';
+import type { RoutedSpendSource } from '../events/model-call';
+
+/**
+ * Producers whose client a composition root builds UNCONDITIONALLY, so its
+ * presence is a wiring fact a root can be held to.
+ *
+ * `fast` is deliberately not here, and the reason is MEASURED rather than
+ * assumed: `createFastLLM` and its CLI twin answer undefined when the chat
+ * vendor declares no smaller tier, so whether `rt.fastLlm` exists is a property
+ * of the workspace's MODEL and not of the backend. Observed 2026-08-20 against
+ * this repository's own harnesses: absent on cf-orchestrator, cf-subordinate and
+ * cli alike, because their fixtures pin no model and the default vendor declares
+ * no smaller tier. Declaring it here would put a config outcome in a wiring
+ * manifest, and the first workspace on a vendor with a small tier would
+ * contradict it.
+ */
+export const CONFORMANCE_PRODUCERS = ['judge', 'advisor'] as const satisfies readonly RoutedSpendSource[];
+export type ConformanceProducer = (typeof CONFORMANCE_PRODUCERS)[number];
 
 /** The composition roots that assemble a model-facing surface. cf splits by
  *  actor profile because the profiles deliberately differ (`actorToolDeps`);
@@ -45,7 +63,7 @@ export type RootStatuses = Readonly<Record<ConformanceRoot, CapabilityStatus>>;
 /** Shorthand: wired on every root. */
 const EVERYWHERE = { 'cf-orchestrator': WIRED, 'cf-subordinate': WIRED, cli: WIRED } satisfies RootStatuses;
 
-export const CONFORMANCE_PLANES = ['tool', 'agents-action', 'memory-action', 'table'] as const;
+export const CONFORMANCE_PLANES = ['tool', 'agents-action', 'memory-action', 'table', 'producer'] as const;
 export type ConformancePlane = (typeof CONFORMANCE_PLANES)[number];
 
 export interface ConformanceManifest {
@@ -61,6 +79,13 @@ export interface ConformanceManifest {
    *  (there is no closed table type); the observed-but-undeclared direction is
    *  what forces new tables into this record. */
   readonly table: Readonly<Record<string, RootStatuses>>;
+  /** Model producers whose client the root actually BUILT
+   *  ({@link CONFORMANCE_PRODUCERS}). Not model-facing like the three planes
+   *  above, and here for exactly the disease this file names: a reviewer that
+   *  was never wired on one backend is indistinguishable from one left out on
+   *  purpose, and "the advisor does nothing on the CLI" is the sentence this
+   *  plane makes impossible to arrive at by accident. */
+  readonly producer: Readonly<Record<ConformanceProducer, RootStatuses>>;
 }
 
 // ── Recurring reasons ────────────────────────────────────────────────────────
@@ -243,7 +268,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // ── the workspace filesystem ──
     // The local CLI retains the embedded SQLite workspace. Hosted actors use
     // NIMBUS_SESSION directly and never create this second filesystem.
-    proteus_workspace_generation: NIMBUS_BASE,
+    kinu_workspace_generation: NIMBUS_BASE,
     // The filesystem itself. This is the exact set NimbusWorkspace.destroy()
     // drops — the namespace the library commits to owning inside a host's
     // database — so an addition here is a signal that the dependency changed
@@ -326,6 +351,23 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       cli: { absent: NO_USER_PLANE('the workspace capability token') },
     },
   },
+
+  producer: {
+    // Built unconditionally by createCFRuntime for both actor profiles. On a
+    // local session it exists only when the operator configured a second model:
+    // the CLI has no credential catalogue to search for a cross-family one, so
+    // core's documented same-model fallback is what runs, and every consumer
+    // states that fallback rather than hiding it here.
+    judge: {
+      'cf-orchestrator': WIRED,
+      'cf-subordinate': WIRED,
+      cli: { absent: 'wired only when the operator configured a second model; consumers apply core’s documented same-model fallback otherwise' },
+    },
+    // The turn reviewer, everywhere. Whether it RUNS is the owner's switch, read
+    // per turn — never a wiring decision, because a workspace that turns the
+    // advisor on must not need a redeploy to get one.
+    advisor: EVERYWHERE,
+  },
 };
 
 /** What a conformance harness measured on one root. A plane a harness cannot
@@ -343,4 +385,5 @@ export const PLANE_UNIVERSE = {
   tool: BUILTIN_TOOLS,
   'agents-action': AGENTS_TOOL_ACTIONS,
   'memory-action': [...MEMORY_NOTE_ACTIONS, ...MEMORY_FACT_ACTIONS],
+  producer: CONFORMANCE_PRODUCERS,
 } satisfies Partial<Record<ConformancePlane, readonly string[]>>;

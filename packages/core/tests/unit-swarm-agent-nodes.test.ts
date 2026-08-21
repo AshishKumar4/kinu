@@ -34,7 +34,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import type { MockLanguageModelV3 } from 'ai/test';
-import { scriptedTurnModel } from '@kinu/test-utils';
+import { scriptedTurnModel } from '@kinu.run/test-utils';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';

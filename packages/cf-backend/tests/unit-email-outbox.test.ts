@@ -13,7 +13,7 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { EmailOutbox, type OutboundEmailMessage } from '../src/email/outbox';
-import type { SqlExec } from '@kinu/core';
+import type { SqlExec } from '@kinu.run/core';
 import { sqlExec } from './helpers/user-do';
 
 function makeSql() {
@@ -96,7 +96,7 @@ describe('EmailOutbox — write-ahead intent', () => {
     const row = rowFor(sql, 'k1');
     if (!row) throw new Error('expected persisted outbox row');
     expect(row.state).toBe('sent');
-    expect(row.message_id).toMatch(/^<proteus\.[0-9a-f]{64}@agents\.example\.com>$/);
+    expect(row.message_id).toMatch(/^<kinu\.[0-9a-f]{64}@agents\.example\.com>$/);
     expect(String(row.payload_digest)).toMatch(/^[0-9a-f]{64}$/);
   });
 });

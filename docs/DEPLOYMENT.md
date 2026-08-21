@@ -90,7 +90,7 @@ jarvis "summarize this checkout"
 
 For a source checkout, use `bun run cli -- setup` and `bun run cli -- ...`.
 The CLI app origin defaults to `https://kinu.run`. Use
-`--origin` or `PROTEUS_ORIGIN` only for alternate deployments.
+`--origin` or `KINU_ORIGIN` only for alternate deployments.
 
 ## Zero to production
 
@@ -192,7 +192,7 @@ only. Cloudflare never returns a value, and nothing here asks for one.
 | `BACKUP_BUCKET_NAME`, `CLOUDFLARE_R2_ACCOUNT_ID` | **config var**: plain values in `vars`, not secrets | no | As above. |
 | `GOOGLE_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_ID` | **config var**, beside their secrets | no | That provider is not on `/login`. |
 | `GOOGLE_OAUTH_SCOPES`, `GITHUB_OAUTH_SCOPES`, `CLOUDFLARE_OAUTH_SCOPES` | **config var**: overrides only | no | The provider default applies (`CLOUDFLARE_WORKERS_AI_SCOPES` in `lib/cloudflare-oauth.ts`). |
-| `PROTEUS_MAX_STEPS` | **config var** | no | Core's `DEFAULT_MAX_STEPS` applies (500, `core/src/config.ts:118`). |
+| `KINU_MAX_STEPS` | **config var** | no | Core's `DEFAULT_MAX_STEPS` applies (500, `core/src/config.ts:118`). |
 
 There is deliberately no "generate it silently" handling. The only value this
 repository could mint unattended is the root secret, and a key the program
@@ -416,7 +416,7 @@ rather than as a registered provider (`user/available-models.ts:55-66`).
 
 The CLI registers a different list (`cli-backend/src/model-resolver.ts:286-351`):
 `workers-ai` and `my-gateway` against the signed-in cloud proxy, or against a
-direct local endpoint when `PROTEUS_BASE_URL` names one; then `claude` (which
+direct local endpoint when `KINU_BASE_URL` names one; then `claude` (which
 drives your own Claude Code binary), `opencode`, `codex`, `openai`, `anthropic`,
 `openrouter` and `openai-compat`; then one `openai-compat:<name>` per extra
 named credential; and the same models.dev dynamic source the cloud uses.
@@ -432,7 +432,7 @@ context window and capability flags come from. The static lists,
 non-200, or filters to nothing. OpenRouter is the exception. It queries its own
 `/api/v1/models` instead.
 
-The default model id lives once in `@kinu/core` as
+The default model id lives once in `@kinu.run/core` as
 `DEFAULT_WORKERS_AI_MODEL_ID` / `DEFAULT_WORKERS_AI_MODEL_SPEC`
 (`@cf/deepseek-ai/deepseek-v4-pro-0813`, `core/src/providers/workers-ai.ts:6`),
 and is written into the user's `default_model` config on first Cloudflare
@@ -488,13 +488,13 @@ exhausted budget returns the original response rather than throwing.
 | `EMAIL_DOMAIN` | wrangler.jsonc `vars` | Mission Inbox domain; unset disables email entirely (as on staging) |
 | `OPS_ALERT_EMAIL` | wrangler.jsonc `vars` | Where synthetic-monitoring alerts go; unset leaves the monitor silent (as on staging) |
 | `DEV_USER_EMAIL` | wrangler env var | Local/staging-only synthetic auth identity. Production must leave this unset. |
-| `PROTEUS_ORIGIN` | CLI shell env | Override CLI app origin for alternate deployments |
-| `PROTEUS_BASE_URL` | CLI shell env | Advanced direct LLM override for local agents |
-| `PROTEUS_AUTH` | CLI shell env | Advanced direct LLM auth override for local agents |
-| `PROTEUS_MODEL` | CLI shell env | Override local agent model |
-| `PROTEUS_SOURCE_TARBALL` | CLI shell env | Advanced installer/update source override (`cli/routes.ts:957`) |
-| `PROTEUS_SOURCE_SHA256` | CLI shell env | Pin a SHA-256 for the source tarball (default: published `.sha256` asset, always verified) |
-| `PROTEUS_MAX_STEPS` | CLI shell env / wrangler env var | Max tool-call steps (default: 500) |
+| `KINU_ORIGIN` | CLI shell env | Override CLI app origin for alternate deployments |
+| `KINU_BASE_URL` | CLI shell env | Advanced direct LLM override for local agents |
+| `KINU_AUTH` | CLI shell env | Advanced direct LLM auth override for local agents |
+| `KINU_MODEL` | CLI shell env | Override local agent model |
+| `KINU_SOURCE_TARBALL` | CLI shell env | Advanced installer/update source override (`cli/routes.ts:957`) |
+| `KINU_SOURCE_SHA256` | CLI shell env | Pin a SHA-256 for the source tarball (default: published `.sha256` asset, always verified) |
+| `KINU_MAX_STEPS` | CLI shell env / wrangler env var | Max tool-call steps (default: 500) |
 
 `SANDBOX_TRANSPORT` is the one `vars` entry `Env` in `env.d.ts` does not
 declare. Read it from `wrangler.jsonc`, not from the type.
@@ -507,7 +507,7 @@ declare. Read it from `wrangler.jsonc`, not from the type.
 | `UserDO` | Durable Object | Per-user profile, CLI tokens, devices, release changes |
 | `MonitorDO` | Durable Object | Synthetic monitoring: open incidents + the alert outbox (one instance, `site`) |
 | `NIMBUS_SESSION` | Durable Object | `NimbusSession` from `@nimbus-sh/sdk`; built-in lightweight sandbox (local DO class, deployed with this Worker) |
-| `Sandbox` | Durable Object + Container | `ProteusSandbox` (@cloudflare/sandbox); one container per agent |
+| `Sandbox` | Durable Object + Container | `KinuSandbox` (@cloudflare/sandbox); one container per agent |
 | `AUTH_KV` | KV namespace | Sessions, one-time OAuth state, and CLI browser approval state, all of it expiring on its own; identities live in `UserDO`. `kinu-auth`, and `kinu-auth-staging` in staging |
 | `LOADER` | Worker Loader | Sandboxed code execution (codemode) |
 | `AI` | Workers AI | Platform-side embeddings (chat models use the user's OAuth credential) |
@@ -525,7 +525,7 @@ registration and a binding are separate things.
 
 `compatibility_date` is `2025-12-01` with `nodejs_compat`. Durable Object
 migrations are three tags in production (`v1` registering `OrchestratorAgent`,
-`ExplorationAgent`, `ProteusSandbox`, `UserDO`; `v2` adding `NimbusSession`;
+`ExplorationAgent`, `KinuSandbox`, `UserDO`; `v2` adding `NimbusSession`;
 `v3` adding `MonitorDO`) and a **different five-tag sequence** under
 `env.staging`, because the two deployments registered their classes in a
 different order. Wrangler does not inherit `env.*` config, so every binding is
@@ -573,13 +573,13 @@ root `node_modules`.
    it. Everything above it proves the source is deployable; that one proves the
    account is. Any
    failure exits before Vite, archive generation, or Wrangler. No variable skips
-   a gate on this path. `PROTEUS_INFRA_ACK` only acknowledges a missing
+   a gate on this path. `KINU_INFRA_ACK` only acknowledges a missing
    Cloudflare session, and the `npx wrangler whoami` check above already fails
    the deploy in that case.
 2. **Build.** `vite build`, then `scripts/build-cli-source-archive.sh` (CLI
    source tarball, `.sha256`, `kinu-version.json`). Fails if any of the three
    is missing from `packages/cf-backend/dist/client/downloads/`.
-3. **Deploy.** `npx wrangler deploy`. Verifies the `ProteusSandbox` binding
+3. **Deploy.** `npx wrangler deploy`. Verifies the `KinuSandbox` binding
    appears in wrangler output, and that the assets directory wrangler reports
    reading is the one the downloads were staged into.
 4. **Smoke test.** Asserts HTTP 200 and app content on the production URL, that

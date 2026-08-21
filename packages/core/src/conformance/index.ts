@@ -13,6 +13,7 @@
 export {
   BACKEND_CONFORMANCE,
   CONFORMANCE_PLANES,
+  CONFORMANCE_PRODUCERS,
   CONFORMANCE_ROOTS,
   PLANE_UNIVERSE,
   WIRED,
@@ -29,6 +30,7 @@ export {
   observedActionEnum,
   phantomCallables,
   renderConformanceFindings,
+  wiredProducers,
   type ConformanceFinding,
   type ConformanceFindingKind,
   type ConformanceReport,

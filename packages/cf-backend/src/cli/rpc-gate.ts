@@ -32,8 +32,8 @@
  * out-of-scope `{type:'rpc'}` frames before the agents-SDK dispatcher sees
  * them.
  */
-import { JsonValueSchema } from '@kinu/core';
-import { tolerate } from '@kinu/core/obs';
+import { JsonValueSchema } from '@kinu.run/core';
+import { tolerate } from '@kinu.run/core/obs';
 import type { OrchestratorAgent } from '../orchestrator';
 import {
   ACCESS_TOKEN_SCOPES, type AccessTokenScope, normalizeAccessTokenScopes,
@@ -42,7 +42,7 @@ import * as v from 'valibot';
 
 /** Worker→DO header carrying the verified connect-ticket scopes. Always
  *  rewritten by the edge after authentication so clients cannot smuggle it. */
-export const CLI_SCOPES_HEADER = 'x-proteus-cli-scopes';
+export const CLI_SCOPES_HEADER = 'x-kinu-cli-scopes';
 
 /** Connection tag persisting the scope restriction across hibernation. */
 const CLI_SCOPES_TAG_PREFIX = 'cli-scopes:';
@@ -164,6 +164,7 @@ export const AGENT_RPC_ACCESS = {
   getFacts: 'interactive',
   getEvolutionConfig: 'interactive',
   getMctsConfig: 'interactive',
+  getModelRoles: 'interactive',
   getReplayEvals: 'interactive',
   // Raw per-run events: full tool-call arguments/results and every turn's
   // context-budget/steering/file-edit telemetry. Same sensitivity class as
@@ -204,6 +205,7 @@ export const AGENT_RPC_ACCESS = {
   setDisplayName: 'interactive',
   setEvolutionConfig: 'interactive',
   setMctsConfig: 'interactive',
+  setModelRoles: 'interactive',
   setModel: 'interactive',
   setReasoningEffort: 'interactive',
   setShellApprovalMode: 'interactive',

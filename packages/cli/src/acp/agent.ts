@@ -23,8 +23,8 @@ import {
   type StopReason,
   type ToolKind,
 } from '@agentclientprotocol/sdk';
-import type { JsonObject, ShellApprovalOutcome, ShellApprovalRequest } from '@kinu/core';
-import { diagnostics, toProteusError } from '@kinu/core/obs';
+import type { JsonObject, ShellApprovalOutcome, ShellApprovalRequest } from '@kinu.run/core';
+import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import type { AgentClient, AgentClientEvent } from '../agent-client';
 import { toAgentPrompt } from './prompt';
 import * as v from 'valibot';
@@ -168,7 +168,7 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
         // undelivered update silently truncates what the editor shows of the turn.
         diagnostics.failure(
           'acp.session_update_undelivered',
-          toProteusError({ doing: 'delivering an acp session/update notification', cause: error, otherwise: 'io' }),
+          toKinuError({ doing: 'delivering an acp session/update notification', cause: error, otherwise: 'io' }),
           { sessionId },
         );
       }

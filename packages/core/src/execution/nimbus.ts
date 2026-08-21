@@ -8,7 +8,7 @@
  */
 
 import * as v from 'valibot';
-import { isAbortError, raceAbort } from '@kinu/agent-utils';
+import { isAbortError, raceAbort } from '@kinu.run/agent-utils';
 import type { VFS } from '../types/primitives';
 import type { Shell } from '../types/primitives';
 import { createInlineExecutor, type InlineExecutorDeps } from './inline';
@@ -18,7 +18,7 @@ import { shellQuote } from '../utils/shell';
 import type { ExecutorCapability, ExecutorProvider } from './types';
 import { readExecSignal } from './signal';
 import { formatExecResult, refusalText } from './exec-result';
-import { ProteusError, renderThrownChain, toProteusError } from '../obs/index';
+import { KinuError, renderThrownChain, toKinuError } from '../obs/index';
 import type { JsonValue } from '../utils/json';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 
@@ -163,7 +163,7 @@ const NOT_CONFIGURED =
  * `workspace`), so a missing binding used to answer every single call with prose
  * that `isFailingResultText` reads as a clean success.
  */
-const NOT_CONFIGURED_REFUSAL = refusalText(new ProteusError('unavailable', NOT_CONFIGURED));
+const NOT_CONFIGURED_REFUSAL = refusalText(new KinuError('unavailable', NOT_CONFIGURED));
 
 /**
  * The session is live and the SDK handle this deployment holds has no such
@@ -174,14 +174,14 @@ const NOT_CONFIGURED_REFUSAL = refusalText(new ProteusError('unavailable', NOT_C
  * call the `run` tool makes for `runtime_does_not_support_exec`.
  */
 function handleLacks(surface: string): string {
-  return refusalText(new ProteusError('unsupported', `Nimbus SDK handle does not expose ${surface}`));
+  return refusalText(new KinuError('unsupported', `Nimbus SDK handle does not expose ${surface}`));
 }
 
 /** Every failure out of the session's RPC. `io` is the seam's own answer for an
  *  unrecognised one — this is a transport to a Durable Object — while an abort, a
  *  timeout or the memory wall keeps the more precise code the classifier pinned. */
-function nimbusFailure(input: { doing: string; cause: unknown }): ProteusError {
-  return toProteusError({ ...input, otherwise: 'io' });
+function nimbusFailure(input: { doing: string; cause: unknown }): KinuError {
+  return toKinuError({ ...input, otherwise: 'io' });
 }
 
 /** `success: false` with a zero exit code is Nimbus reporting a transport-level
@@ -291,7 +291,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
         if (!box) return NOT_CONFIGURED_REFUSAL;
         const command = parseInput(StringSchema, { value: args[0] });
         if (command === undefined) {
-          return refusalText(new ProteusError('bad_input', 'nimbus exec: command must be a string'));
+          return refusalText(new KinuError('bad_input', 'nimbus exec: command must be a string'));
         }
         const signal = readExecSignal({ context: args[1] });
         try {
@@ -315,7 +315,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
         if (!box.runCode) return handleLacks('runCode');
         const code = parseInput(StringSchema, { value: args[0] });
         if (code === undefined) {
-          return refusalText(new ProteusError('bad_input', 'nimbus runCode: code must be a string'));
+          return refusalText(new KinuError('bad_input', 'nimbus runCode: code must be a string'));
         }
         const options = parseInput(NimbusRunCodeOptionsSchema, { value: args[1] });
         try {
@@ -331,7 +331,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
         if (!box) return NOT_CONFIGURED_REFUSAL;
         const path = parseInput(StringSchema, { value: args[0] });
         if (path === undefined) {
-          return refusalText(new ProteusError('bad_input', 'nimbus readFile: path must be a string'));
+          return refusalText(new KinuError('bad_input', 'nimbus readFile: path must be a string'));
         }
         try {
           return await touch(() => box.files.read(path)) ?? '';
@@ -346,13 +346,13 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
         if (!box) return NOT_CONFIGURED_REFUSAL;
         const path = parseInput(StringSchema, { value: args[0] });
         if (path === undefined) {
-          return refusalText(new ProteusError('bad_input', 'nimbus writeFile: path must be a string'));
+          return refusalText(new KinuError('bad_input', 'nimbus writeFile: path must be a string'));
         }
         try {
           const stringContent = v.safeParse(v.string(), args[1]);
           const body = stringContent.success ? stringContent.output : JSON.stringify(args[1]);
           if (body === undefined) {
-            return refusalText(new ProteusError('bad_input', 'nimbus writeFile: content is not serializable'));
+            return refusalText(new KinuError('bad_input', 'nimbus writeFile: content is not serializable'));
           }
           await touch(() => box.files.write(path, body));
           return `Written ${body.length} bytes to ${path}`;
@@ -367,7 +367,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
         if (!box) return NOT_CONFIGURED_REFUSAL;
         const path = parseInput(OptionalPathSchema, { value: args[0] });
         if (args[0] !== undefined && path === undefined) {
-          return refusalText(new ProteusError('bad_input', 'nimbus listFiles: path must be a string'));
+          return refusalText(new KinuError('bad_input', 'nimbus listFiles: path must be a string'));
         }
         try {
           const entries = await touch(() => box.files.list(path || root));
@@ -390,7 +390,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
         // a boolean answer claims the path is absent, and a call that was never
         // made has established nothing about the path.
         if (path === undefined) {
-          return refusalText(new ProteusError('bad_input', 'nimbus exists: path must be a string'));
+          return refusalText(new KinuError('bad_input', 'nimbus exists: path must be a string'));
         }
         try {
           return await touch(() => box.files.exists(path));
@@ -405,7 +405,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
         if (!box) return NOT_CONFIGURED_REFUSAL;
         const path = parseInput(StringSchema, { value: args[0] });
         if (path === undefined) {
-          return refusalText(new ProteusError('bad_input', 'nimbus stat: path must be a string'));
+          return refusalText(new KinuError('bad_input', 'nimbus stat: path must be a string'));
         }
         try {
           const result = await touch(() => box.exec(`stat -c "%s %Y %F" ${shellQuote(path)}`));
@@ -421,7 +421,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
         if (!box) return NOT_CONFIGURED_REFUSAL;
         const path = parseInput(StringSchema, { value: args[0] });
         if (path === undefined) {
-          return refusalText(new ProteusError('bad_input', 'nimbus mkdir: path must be a string'));
+          return refusalText(new KinuError('bad_input', 'nimbus mkdir: path must be a string'));
         }
         try {
           if (box.files.mkdir) await touch(() => box.files.mkdir!(path));
@@ -438,7 +438,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
         if (!box) return NOT_CONFIGURED_REFUSAL;
         const path = parseInput(StringSchema, { value: args[0] });
         if (path === undefined) {
-          return refusalText(new ProteusError('bad_input', 'nimbus rm: path must be a string'));
+          return refusalText(new KinuError('bad_input', 'nimbus rm: path must be a string'));
         }
         try {
           await touch(() => box.files.delete(path, { recursive: true }));
@@ -455,7 +455,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
         if (!box.startProcess) return handleLacks('startProcess');
         const command = parseInput(StringSchema, { value: args[0] });
         if (command === undefined) {
-          return refusalText(new ProteusError('bad_input', 'nimbus startProcess: command must be a string'));
+          return refusalText(new KinuError('bad_input', 'nimbus startProcess: command must be a string'));
         }
         const options = parseInput(NimbusExecOptionsSchema, { value: args[1] });
         try {
@@ -473,7 +473,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
         const input = parseInput(ProcessInputSchema, { value: args[0] });
         const pid = input === undefined ? undefined : v.is(v.number(), input) ? input : input.pid;
         if (pid === undefined || !Number.isFinite(pid)) {
-          return refusalText(new ProteusError('bad_input',
+          return refusalText(new KinuError('bad_input',
             `nimbus killProcess: invalid pid ${stringifyResult({ value: args[0] })}`));
         }
         try {
@@ -491,7 +491,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
         const input = parseInput(ProcessInputSchema, { value: args[0] });
         const pid = input === undefined ? undefined : v.is(v.number(), input) ? input : input.pid;
         if (pid === undefined || !Number.isFinite(pid)) {
-          return refusalText(new ProteusError('bad_input',
+          return refusalText(new KinuError('bad_input',
             `nimbus logs: invalid pid ${stringifyResult({ value: args[0] })}`));
         }
         const options = input !== undefined && !v.is(v.number(), input)
@@ -512,7 +512,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
         const input = parseInput(PortInputSchema, { value: args[0] });
         const port = input === undefined ? undefined : v.is(v.number(), input) ? input : input.port;
         if (port === undefined || !Number.isFinite(port) || port <= 0 || port > 65535) {
-          return refusalText(new ProteusError('bad_input',
+          return refusalText(new KinuError('bad_input',
             `nimbus exposePort: invalid port ${stringifyResult({ value: args[0] })}`));
         }
         try {
@@ -531,7 +531,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
         const input = parseInput(PortInputSchema, { value: args[0] });
         const port = input === undefined ? undefined : v.is(v.number(), input) ? input : input.port;
         if (port === undefined || !Number.isFinite(port)) {
-          return refusalText(new ProteusError('bad_input',
+          return refusalText(new KinuError('bad_input',
             `nimbus unexposePort: invalid port ${stringifyResult({ value: args[0] })}`));
         }
         try {
@@ -564,7 +564,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
         if (!box) return NOT_CONFIGURED_REFUSAL;
         const spec = parseInput(StringSchema, { value: args[0] });
         if (spec === undefined) {
-          return refusalText(new ProteusError('bad_input', 'nimbus installRuntime: spec must be a string'));
+          return refusalText(new KinuError('bad_input', 'nimbus installRuntime: spec must be a string'));
         }
         try {
           if (box.runtimes?.install) await touch(() => box.runtimes!.install!(spec));

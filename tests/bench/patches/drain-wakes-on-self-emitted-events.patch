@@ -4,7 +4,7 @@ diff --git a/packages/core/src/events/hub/drain.ts b/packages/core/src/events/hu
 @@ -50,7 +50,7 @@
  /** Externally-triggered pending events → one drain batch, or null if there are
   *  none (the agent's own self-emitted/internal events never wake a new turn). */
- export function buildDrainBatch(events: ProteusEvent[]): DrainBatch | null {
+ export function buildDrainBatch(events: KinuEvent[]): DrainBatch | null {
 -  const pending = events.filter((e) => e.ingress !== 'self_emit' && e.variant !== 'internal');
 +  const pending = events.filter((e) => e.ingress !== 'self_emit' || e.variant !== 'internal');
    if (pending.length === 0) return null;

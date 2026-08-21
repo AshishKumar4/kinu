@@ -63,7 +63,7 @@
  * knowing what a Durable Object is. Two planes, one classifier each.
  */
 
-import { diagnostics, renderCauseChain, toProteusError } from '@kinu/core/obs';
+import { diagnostics, renderCauseChain, toKinuError } from '@kinu.run/core/obs';
 
 /** Which platform failure a call hit — the value `null` is the absence of one,
  *  and is what makes "the platform dropped this" distinguishable from "your
@@ -166,7 +166,7 @@ export async function retryTransientDO<T>(operation: string, call: () => Promise
     } catch (err) {
       const transient = classifyTransientDO({ cause: err });
       if (transient === null || attempt >= MAX_ATTEMPTS) throw err;
-      diagnostics.failure('do_rpc.transient_retry', toProteusError({
+      diagnostics.failure('do_rpc.transient_retry', toKinuError({
         doing: `an idempotent Durable Object call (${operation})`,
         cause: err,
         otherwise: 'io',

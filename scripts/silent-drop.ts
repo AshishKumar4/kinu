@@ -106,7 +106,7 @@ export const DROPS = {
     silently: 'a missing SQLite table reported as a missing fork: the frame naming the real '
       + 'fault is one `cause` deeper than the one printed',
     fix: 'pass the error itself — `renderThrownChain({ cause: error })`, or `log.failure(name, '
-      + 'toProteusError({ doing, cause: error, otherwise }))`, which renders the chain for you',
+      + 'toKinuError({ doing, cause: error, otherwise }))`, which renders the chain for you',
   },
   projecting_helper: {
     blindTo: 'gate:duplication — one expression is below its node threshold, so 26 copies of '

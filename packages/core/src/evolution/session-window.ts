@@ -30,7 +30,7 @@ import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { CompletedTurn } from './types';
 import { JsonObjectSchema, JsonValueSchema, parseJsonValue } from '../utils/json';
 import { UsageSchema } from '../usage';
-import { diagnostics, toProteusError, tolerate } from '../obs/index';
+import { diagnostics, toKinuError, tolerate } from '../obs/index';
 import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
 
@@ -132,7 +132,7 @@ export function createSessionWindowStore(sql: SqlExecutor): SessionWindowStore {
       } catch (err) {
         diagnostics.failure(
           'evolution.session_turn_unserializable',
-          toProteusError({ doing: 'serialize a session-window turn', cause: err, otherwise: 'bad_input' }),
+          toKinuError({ doing: 'serialize a session-window turn', cause: err, otherwise: 'bad_input' }),
         );
         return;
       }

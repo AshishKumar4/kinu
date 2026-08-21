@@ -25,7 +25,7 @@ const LLM: LLMProviderConfig = {
 };
 
 function scratch() {
-  const dir = mkdtempSync(join(tmpdir(), 'proteus-exec-runtime-'));
+  const dir = mkdtempSync(join(tmpdir(), 'kinu-exec-runtime-'));
   return { dir, dbPath: join(dir, 'agent.db') };
 }
 

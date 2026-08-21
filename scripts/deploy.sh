@@ -7,7 +7,7 @@
 # optional. The gate below is what makes the difference between "the Worker
 # uploaded" and "the product works".
 #
-# Deploys the cf-backend Worker (name "proteus") with the @cloudflare/sandbox
+# Deploys the cf-backend Worker (name "kinu") with the @cloudflare/sandbox
 # Sandbox DO + Container binding, the NimbusSession DO, and the local-device
 # executor routes. Pipeline: strict repository gates → vite build → CLI source
 # archive → wrangler deploy → smoke test.
@@ -39,24 +39,24 @@ BOLD='\033[1m'
 NC='\033[0m'
 
 # ── Locate Kinu root ──────────────────────────────────────────
-PROTEUS_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$PROTEUS_ROOT" || { echo -e "${RED}Cannot cd to Kinu root${NC}"; exit 1; }
+KINU_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$KINU_ROOT" || { echo -e "${RED}Cannot cd to Kinu root${NC}"; exit 1; }
 
 export CLOUDFLARE_ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-f44999d1ddda7012e9a87729eba250f1}"
 
 # Captured during deploy for final summary
-PROTEUS_URL="https://kinu.run/"
-PROTEUS_VERSION=""
+KINU_URL="https://kinu.run/"
+KINU_VERSION=""
 # The one directory wrangler publishes as static assets (see header).
-PROTEUS_ASSETS_DIR="$PROTEUS_ROOT/packages/cf-backend/dist/client"
+KINU_ASSETS_DIR="$KINU_ROOT/packages/cf-backend/dist/client"
 # build-cli-source-archive.sh stamps this sha into the archive, the published
 # version.json, and therefore /api/health's build stamp.
-PROTEUS_SHA="$(git -C "$PROTEUS_ROOT" rev-parse --short HEAD 2>/dev/null || echo dev)"
+KINU_SHA="$(git -C "$KINU_ROOT" rev-parse --short HEAD 2>/dev/null || echo dev)"
 
 # Temp log file — trap cleans up on any exit.
-PROTEUS_DEPLOY_LOG=""
+KINU_DEPLOY_LOG=""
 cleanup() {
-  [ -n "$PROTEUS_DEPLOY_LOG" ] && rm -f "$PROTEUS_DEPLOY_LOG"
+  [ -n "$KINU_DEPLOY_LOG" ] && rm -f "$KINU_DEPLOY_LOG"
 }
 trap cleanup EXIT INT TERM
 
@@ -82,11 +82,11 @@ run_required_gate() {
 
 echo -e "${BOLD}Kinu Deploy Pipeline${NC}"
 echo "========================"
-echo "Kinu root: $PROTEUS_ROOT"
+echo "Kinu root: $KINU_ROOT"
 echo "Account:      $CLOUDFLARE_ACCOUNT_ID"
-echo "Build sha:    $PROTEUS_SHA"
-if [ -n "$(git -C "$PROTEUS_ROOT" status --porcelain 2>/dev/null)" ]; then
-  echo -e "${RED}Worktree is dirty — build $PROTEUS_SHA would not describe the bytes being published.${NC}"
+echo "Build sha:    $KINU_SHA"
+if [ -n "$(git -C "$KINU_ROOT" status --porcelain 2>/dev/null)" ]; then
+  echo -e "${RED}Worktree is dirty — build $KINU_SHA would not describe the bytes being published.${NC}"
   echo "Commit the verified tree before deploying."
   exit 1
 fi
@@ -114,7 +114,7 @@ fi
 # The strict gates need the locked dependency graph, but dependency setup is
 # not a build or publish operation. Do it before verification when a checkout
 # has not been prepared yet; never let deploy update the lockfile.
-if [ ! -d "$PROTEUS_ROOT/node_modules" ]; then
+if [ ! -d "$KINU_ROOT/node_modules" ]; then
   echo "Installing Kinu dependencies (root node_modules missing)..."
   bun install --frozen-lockfile \
     || { echo -e "${RED}bun install failed in Kinu${NC}"; exit 1; }
@@ -200,7 +200,7 @@ echo -e "${GREEN}All required pre-deploy gates passed.${NC}"
 # ── Step 2: Build Kinu ────────────────────────────────────────
 echo ""
 echo -e "${BOLD}Step 2: Building Kinu${NC}"
-cd "$PROTEUS_ROOT/packages/cf-backend" || { echo -e "${RED}cannot cd to cf-backend${NC}"; exit 1; }
+cd "$KINU_ROOT/packages/cf-backend" || { echo -e "${RED}cannot cd to cf-backend${NC}"; exit 1; }
 
 # Build the client bundle into dist/client (used by wrangler's assets directive).
 if [ -f ./node_modules/.bin/vite ]; then
@@ -212,27 +212,27 @@ else
 fi
 
 echo "Building CLI source archive"
-bash "$PROTEUS_ROOT/scripts/build-cli-source-archive.sh" || { echo -e "${RED}CLI source archive build failed${NC}"; exit 1; }
+bash "$KINU_ROOT/scripts/build-cli-source-archive.sh" || { echo -e "${RED}CLI source archive build failed${NC}"; exit 1; }
 
 # Nothing may reach production without the three CLI download assets sitting in
 # the directory wrangler publishes. A deploy missing them bricks every fresh
 # install and update.
 for asset in kinu-source.tar.gz kinu-source.tar.gz.sha256 kinu-version.json; do
-  if [ ! -s "$PROTEUS_ASSETS_DIR/downloads/$asset" ]; then
-    echo -e "${RED}❌ Missing build output: $PROTEUS_ASSETS_DIR/downloads/$asset${NC}"
+  if [ ! -s "$KINU_ASSETS_DIR/downloads/$asset" ]; then
+    echo -e "${RED}❌ Missing build output: $KINU_ASSETS_DIR/downloads/$asset${NC}"
     exit 1
   fi
 done
-echo -e "${GREEN}✅ CLI download assets staged in $PROTEUS_ASSETS_DIR/downloads${NC}"
+echo -e "${GREEN}✅ CLI download assets staged in $KINU_ASSETS_DIR/downloads${NC}"
 
 # ── Step 3: Deploy Kinu ───────────────────────────────────────
 echo ""
 echo -e "${BOLD}Step 3: Deploying Kinu${NC}"
-PROTEUS_DEPLOY_LOG="$(mktemp -t proteus-deploy.XXXXXX.log)"
+KINU_DEPLOY_LOG="$(mktemp -t kinu-deploy.XXXXXX.log)"
 echo ""
-echo "Running: npx wrangler deploy (log → $PROTEUS_DEPLOY_LOG)"
+echo "Running: npx wrangler deploy (log → $KINU_DEPLOY_LOG)"
 echo ""
-if npx wrangler deploy 2>&1 | tee "$PROTEUS_DEPLOY_LOG"; then
+if npx wrangler deploy 2>&1 | tee "$KINU_DEPLOY_LOG"; then
   echo ""
   echo -e "${GREEN}Kinu deploy succeeded.${NC}"
 else
@@ -241,16 +241,16 @@ else
   exit 1
 fi
 
-PROTEUS_VERSION="$(grep -oE 'Version ID:[[:space:]]*[a-f0-9-]+' "$PROTEUS_DEPLOY_LOG" | head -1 | awk '{print $NF}')"
+KINU_VERSION="$(grep -oE 'Version ID:[[:space:]]*[a-f0-9-]+' "$KINU_DEPLOY_LOG" | head -1 | awk '{print $NF}')"
 
 # Verify wrangler echoed the Sandbox binding (proves @cloudflare/sandbox is wired).
 # Binding name is "Sandbox" (capital S) — the SDK hardcodes env.Sandbox lookup.
-if grep -qE 'ProteusSandbox' "$PROTEUS_DEPLOY_LOG"; then
-  echo -e "${GREEN}✅ Kinu bound Sandbox (ProteusSandbox DO + Container)${NC}"
+if grep -qE 'KinuSandbox' "$KINU_DEPLOY_LOG"; then
+  echo -e "${GREEN}✅ Kinu bound Sandbox (KinuSandbox DO + Container)${NC}"
 else
   echo -e "${RED}❌ wrangler output did not mention the Sandbox binding${NC}"
   echo "   Check that packages/cf-backend/wrangler.jsonc includes:"
-  echo "     { \"class_name\": \"ProteusSandbox\", \"name\": \"Sandbox\" }"
+  echo "     { \"class_name\": \"KinuSandbox\", \"name\": \"Sandbox\" }"
   echo "   and a \"containers\" block."
   exit 1
 fi
@@ -258,18 +258,18 @@ fi
 # Wrangler names the assets directory it actually read. Assert it is the one we
 # staged the downloads into, so a future config or plugin change that moves the
 # assets dir fails here instead of silently shipping an assetless site.
-DEPLOYED_ASSETS_DIR="$(grep -oE 'Read [0-9]+ files from the assets directory .*' "$PROTEUS_DEPLOY_LOG" | head -1 | sed 's|.*assets directory ||' | tr -d '\r')"
-if [ "$DEPLOYED_ASSETS_DIR" = "$PROTEUS_ASSETS_DIR" ]; then
-  echo -e "${GREEN}✅ Wrangler published assets from $PROTEUS_ASSETS_DIR${NC}"
+DEPLOYED_ASSETS_DIR="$(grep -oE 'Read [0-9]+ files from the assets directory .*' "$KINU_DEPLOY_LOG" | head -1 | sed 's|.*assets directory ||' | tr -d '\r')"
+if [ "$DEPLOYED_ASSETS_DIR" = "$KINU_ASSETS_DIR" ]; then
+  echo -e "${GREEN}✅ Wrangler published assets from $KINU_ASSETS_DIR${NC}"
 else
   echo -e "${RED}❌ Wrangler published assets from '${DEPLOYED_ASSETS_DIR:-<not reported>}'${NC}"
-  echo "   Expected: $PROTEUS_ASSETS_DIR (the directory the CLI downloads were staged into)."
+  echo "   Expected: $KINU_ASSETS_DIR (the directory the CLI downloads were staged into)."
   echo "   Reconcile packages/cf-backend/wrangler.jsonc, the vite plugin's"
   echo "   .wrangler/deploy/config.json redirect, and this script's header."
   exit 1
 fi
 
-cd "$PROTEUS_ROOT" || exit 1
+cd "$KINU_ROOT" || exit 1
 
 # ── Step 4: Post-deploy smoke test ───────────────────────────────
 echo ""
@@ -280,16 +280,16 @@ sleep 10
 SMOKE_FAIL=0
 
 # Kinu (production route).
-LIVE_STATUS=$(curl -so /dev/null -w '%{http_code}' --max-time 15 "$PROTEUS_URL" 2>/dev/null || echo "000")
+LIVE_STATUS=$(curl -so /dev/null -w '%{http_code}' --max-time 15 "$KINU_URL" 2>/dev/null || echo "000")
 if [ "$LIVE_STATUS" = "200" ]; then
-  echo -e "${GREEN}✅ Kinu live site returns 200${NC} ($PROTEUS_URL)"
+  echo -e "${GREEN}✅ Kinu live site returns 200${NC} ($KINU_URL)"
 else
-  echo -e "${RED}❌ Kinu live site returns $LIVE_STATUS${NC} ($PROTEUS_URL)"
+  echo -e "${RED}❌ Kinu live site returns $LIVE_STATUS${NC} ($KINU_URL)"
   SMOKE_FAIL=1
 fi
 
-LIVE_HTML=$(curl -s --max-time 15 "$PROTEUS_URL" 2>/dev/null)
-if echo "$LIVE_HTML" | grep -qi 'proteus'; then
+LIVE_HTML=$(curl -s --max-time 15 "$KINU_URL" 2>/dev/null)
+if echo "$LIVE_HTML" | grep -qi 'kinu'; then
   echo -e "${GREEN}✅ Kinu live site serves Kinu app${NC}"
 else
   echo -e "${RED}❌ Kinu live site content missing 'Kinu'${NC}"
@@ -303,15 +303,15 @@ fi
 # a stamp that NEVER converges is the real failure this guards.
 HEALTH_SHA=""
 for _try in 1 2 3 4 5 6 7 8; do
-  HEALTH_JSON=$(curl -s --max-time 15 "${PROTEUS_URL}api/health?smoke=$_try" 2>/dev/null)
+  HEALTH_JSON=$(curl -s --max-time 15 "${KINU_URL}api/health?smoke=$_try" 2>/dev/null)
   HEALTH_SHA=$(printf '%s' "$HEALTH_JSON" | json_field build.sha)
-  [ "$HEALTH_SHA" = "$PROTEUS_SHA" ] && break
+  [ "$HEALTH_SHA" = "$KINU_SHA" ] && break
   sleep 15
 done
-if [ "$HEALTH_SHA" = "$PROTEUS_SHA" ]; then
-  echo -e "${GREEN}✅ /api/health reports the deployed build ($PROTEUS_SHA)${NC}"
+if [ "$HEALTH_SHA" = "$KINU_SHA" ]; then
+  echo -e "${GREEN}✅ /api/health reports the deployed build ($KINU_SHA)${NC}"
 else
-  echo -e "${RED}❌ /api/health build stamp is '${HEALTH_SHA:-<none>}', expected '$PROTEUS_SHA'${NC}"
+  echo -e "${RED}❌ /api/health build stamp is '${HEALTH_SHA:-<none>}', expected '$KINU_SHA'${NC}"
   echo "   Body: ${HEALTH_JSON:0:200}"
   SMOKE_FAIL=1
 fi
@@ -320,18 +320,18 @@ fi
 # application/json content-type, so `kinu update` could never see a version.
 VERSION_SHA=""
 for _try in 1 2 3 4 5 6 7 8; do
-  VERSION_SHA=$(curl -fsSL --max-time 15 "${PROTEUS_URL}downloads/kinu-version.json?smoke=$_try" 2>/dev/null | json_field sha)
-  [ "$VERSION_SHA" = "$PROTEUS_SHA" ] && break
+  VERSION_SHA=$(curl -fsSL --max-time 15 "${KINU_URL}downloads/kinu-version.json?smoke=$_try" 2>/dev/null | json_field sha)
+  [ "$VERSION_SHA" = "$KINU_SHA" ] && break
   sleep 15
 done
-if [ "$VERSION_SHA" = "$PROTEUS_SHA" ]; then
+if [ "$VERSION_SHA" = "$KINU_SHA" ]; then
   echo -e "${GREEN}✅ Published kinu-version.json is real JSON for this build${NC}"
 else
-  echo -e "${RED}❌ Published kinu-version.json sha is '${VERSION_SHA:-<unparseable>}', expected '$PROTEUS_SHA'${NC}"
+  echo -e "${RED}❌ Published kinu-version.json sha is '${VERSION_SHA:-<unparseable>}', expected '$KINU_SHA'${NC}"
   SMOKE_FAIL=1
 fi
 
-CLI_SHIM=$(curl -s --max-time 15 "${PROTEUS_URL}downloads/kinu" 2>/dev/null)
+CLI_SHIM=$(curl -s --max-time 15 "${KINU_URL}downloads/kinu" 2>/dev/null)
 if echo "$CLI_SHIM" | grep -q 'downloads/kinu-source.tar.gz' && ! echo "$CLI_SHIM" | grep -q 'github.com'; then
   echo -e "${GREEN}✅ Kinu CLI shim uses deployed source archive${NC}"
 else
@@ -343,7 +343,7 @@ CLI_ARCHIVE_TMP="$(mktemp -t kinu-cli-source.XXXXXX.tar.gz)"
 CLI_ARCHIVE_LIST="$(mktemp -t kinu-cli-source.XXXXXX.list)"
 CLI_ARCHIVE_OK=0
 for attempt in 1 2 3 4 5 6; do
-  if curl -fsSL --max-time 30 "${PROTEUS_URL}downloads/kinu-source.tar.gz" -o "$CLI_ARCHIVE_TMP" \
+  if curl -fsSL --max-time 30 "${KINU_URL}downloads/kinu-source.tar.gz" -o "$CLI_ARCHIVE_TMP" \
     && tar -tzf "$CLI_ARCHIVE_TMP" > "$CLI_ARCHIVE_LIST" \
     && grep -Fq 'kinu/packages/cli/src/commands/setup.ts' "$CLI_ARCHIVE_LIST"; then
     CLI_ARCHIVE_OK=1
@@ -355,7 +355,7 @@ if [ "$CLI_ARCHIVE_OK" = "1" ]; then
   echo -e "${GREEN}✅ Kinu CLI source archive is downloadable${NC}"
   # The CLI shim verifies this checksum by default — a stale/missing .sha256
   # bricks installs and updates, so the deploy gate checks it too.
-  PUBLISHED_SHA="$(curl -fsSL --max-time 15 "${PROTEUS_URL}downloads/kinu-source.tar.gz.sha256" 2>/dev/null | awk '{print $1}')"
+  PUBLISHED_SHA="$(curl -fsSL --max-time 15 "${KINU_URL}downloads/kinu-source.tar.gz.sha256" 2>/dev/null | awk '{print $1}')"
   ACTUAL_SHA="$(sha256sum "$CLI_ARCHIVE_TMP" | awk '{print $1}')"
   if [ -n "$PUBLISHED_SHA" ] && [ "$PUBLISHED_SHA" = "$ACTUAL_SHA" ]; then
     echo -e "${GREEN}✅ Kinu CLI source checksum matches the published .sha256${NC}"
@@ -379,8 +379,8 @@ fi
 echo ""
 echo -e "${BOLD}Deploy complete.${NC}"
 echo "================================="
-echo "Kinu:  $PROTEUS_URL"
-echo "          version ${PROTEUS_VERSION:-unknown}"
-echo "          build   $PROTEUS_SHA"
+echo "Kinu:  $KINU_URL"
+echo "          version ${KINU_VERSION:-unknown}"
+echo "          build   $KINU_SHA"
 echo ""
 echo -e "${GREEN}✅ Kinu Worker deployed and verified.${NC}"

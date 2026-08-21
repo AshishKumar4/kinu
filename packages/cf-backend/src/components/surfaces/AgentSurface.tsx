@@ -23,7 +23,7 @@ import {
   CaretRightIcon, GitBranchIcon,
 } from "@phosphor-icons/react";
 import { ScoreBar } from "@/components/ui/score-bar";
-import type { AgentStatus } from "@/hooks/use-proteus";
+import type { AgentStatus } from "@/hooks/use-kinu";
 import type { ToolInfo, MemoryEntry, Rpc } from "@/lib/protocol";
 import { MarkdownContent, EmptyState, EMPTY_HINTS, Section } from "./shared";
 import { ScaffoldLineage } from "./ScaffoldLineage";

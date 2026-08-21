@@ -55,9 +55,9 @@ import {
 } from './approval-gate';
 import { reconcileColumns } from '../identity/columns';
 import { nanoid } from '../utils/nanoid';
-import { diagnostics, toProteusError } from '../obs/index';
+import { diagnostics, toKinuError } from '../obs/index';
 
-/** The `proteusEvent` kind a decision wakes the agent under — its own name,
+/** The `kinuEvent` kind a decision wakes the agent under — its own name,
  *  not `background_job`'s: the card the owner sees, and the provenance stamped
  *  on the woken turn, must say what actually happened. The MECHANISM is the
  *  background-job wake verbatim (SignalDelivery.deliver → next step, or a turn
@@ -438,7 +438,7 @@ export class DeferredApprovalQueue {
     catch (err) {
       diagnostics.failure(
         'approval.deferred_announce_failed',
-        toProteusError({ doing: 'announce a deferred-approval notice', cause: err, otherwise: 'io' }),
+        toKinuError({ doing: 'announce a deferred-approval notice', cause: err, otherwise: 'io' }),
         { notice: event.kind },
       );
     }

@@ -9,7 +9,7 @@
 // cheerfully true. (A `vite dev` server has no stamp either, correctly: it
 // cannot serve the CLI downloads.)
 
-import { ORCHESTRATOR_AGENT_SLUG } from '@kinu/core';
+import { ORCHESTRATOR_AGENT_SLUG } from '@kinu.run/core';
 import { readBuildStamp } from './lib/deployed-assets';
 
 // A hand list, so it can lie: the three d1-* entries survived the D1 removal

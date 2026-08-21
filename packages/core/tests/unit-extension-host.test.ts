@@ -15,7 +15,7 @@ import {
   ExtensionHost,
   runChat,
   composePrepareStep,
-  type ProteusExtension,
+  type KinuExtension,
   type ChatEvent,
   type Usage,
 } from '../src/index';
@@ -76,7 +76,7 @@ describe('extension seam through runChat', () => {
     let endText = '';
     let startedSteps = 0;
 
-    const ext: ProteusExtension = {
+    const ext: KinuExtension = {
       name: 'recorder',
       onTurnStart: () => { order.push('turn-start'); },
       onToolCall: ({ toolName }) => { order.push(`tool-call:${toolName}`); },
@@ -191,7 +191,7 @@ describe('transformContext through runChat', () => {
     const { model, prompt } = promptCapturingModel();
     let transformSaw: string[] = [];
 
-    const compactor: ProteusExtension = {
+    const compactor: KinuExtension = {
       name: 'compactor',
       transformContext: async ({ messages }) => {
         transformSaw = messages.map((m) => String(m.content));
@@ -249,7 +249,7 @@ describe('transformContext through runChat', () => {
 
   test("transformTrigger threads into the transform context ('force' on overflow recovery, 'auto' default)", async () => {
     const triggers: string[] = [];
-    const observer: ProteusExtension = {
+    const observer: KinuExtension = {
       name: 'observer',
       transformContext: async (ctx) => { triggers.push(ctx.trigger); return undefined; },
     };
@@ -402,11 +402,11 @@ describe('ExtensionHost', () => {
 
   test('runPrepareStep chains outputs and reports no-change as undefined', () => {
     const base: ModelMessage[] = [{ role: 'user', content: 'a' }];
-    const appendB: ProteusExtension = {
+    const appendB: KinuExtension = {
       name: 'b',
       prepareStep: ({ messages }) => [...messages, { role: 'user', content: 'b' }],
     };
-    const passthrough: ProteusExtension = { name: 'p', prepareStep: () => undefined };
+    const passthrough: KinuExtension = { name: 'p', prepareStep: () => undefined };
 
     const host = new ExtensionHost().register(passthrough).register(appendB);
     const out = host.runPrepareStep({ stepNumber: 0, messages: base });

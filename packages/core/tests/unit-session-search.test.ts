@@ -1,7 +1,7 @@
 // Behavior tests for SessionSearchStore — zero-LLM FTS5 transcript search
 // over the canonical `messages` table (the store both backends persist to).
 import { describe, test, expect } from 'bun:test';
-import { createTestSql, type TestSql } from '@kinu/test-utils';
+import { createTestSql, type TestSql } from '@kinu.run/test-utils';
 import { SessionSearchStore, initAllTables } from '../src/index';
 
 interface Fixture { sql: TestSql['sql']; store: SessionSearchStore }

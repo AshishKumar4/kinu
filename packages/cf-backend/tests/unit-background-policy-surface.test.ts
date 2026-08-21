@@ -6,7 +6,7 @@
 // classified the arriving turn via body.oneShot. cf knows the surface; the
 // runner must read it.
 import { describe, test, expect } from 'bun:test';
-import { BACKGROUND_POLICY } from '@kinu/core';
+import { BACKGROUND_POLICY } from '@kinu.run/core';
 import { orchestratorHarness } from './helpers/actor-harness';
 import * as v from 'valibot';
 

@@ -10,18 +10,18 @@
  * brief, and the agent reads it back with its normal file tools (the same
  * drop-content-keep-the-path recipe the tool-result clamp teaches).
  *
- * Content-addressed, beside the other spill dirs (`.proteus/compaction`,
- * `.proteus/tool-output`): identical content always lands on the same path, so
+ * Content-addressed, beside the other spill dirs (`.kinu/compaction`,
+ * `.kinu/tool-output`): identical content always lands on the same path, so
  * a redelivered event renders a byte-identical brief.
  */
 
 import { sha256Hex } from '../../safety/argument-digest';
 import type { VFS } from '../../types/primitives';
 import { EVENT_BRIEF_MAX_CHARS } from './visibility';
-import { diagnostics, toProteusError } from '../../obs/index';
+import { diagnostics, toKinuError } from '../../obs/index';
 
 /** Workspace VFS directory spilled event content is offloaded to. */
-export const EVENT_CONTENT_DIR = '.proteus/event-content';
+export const EVENT_CONTENT_DIR = '.kinu/event-content';
 
 /** The content-addressed path for one spilled body. Pure. */
 export function eventContentPath(content: string): string {
@@ -51,7 +51,7 @@ export async function spillEventContent(vfs: VFS, content: string): Promise<stri
   } catch (err) {
     diagnostics.failure(
       'event.content_spill_failed',
-      toProteusError({ doing: 'spill oversized event content to the workspace', cause: err, otherwise: 'io' }),
+      toKinuError({ doing: 'spill oversized event content to the workspace', cause: err, otherwise: 'io' }),
       { path },
     );
     return null;

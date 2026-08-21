@@ -56,10 +56,10 @@ const FEED_TIMEOUT_MS = 20_000;
  *  scan the scanner actually performed instead of re-deriving one — a second
  *  derivation is a second enumeration, which is what `gate:set-equality` exists
  *  to prevent. */
-export const REPORT_ENV = 'PROTEUS_ADVISORY_REPORT';
+export const REPORT_ENV = 'KINU_ADVISORY_REPORT';
 
 /** Prefix of the one machine-readable stdout line. */
-export const REPORT_SENTINEL = '::proteus-advisory-report::';
+export const REPORT_SENTINEL = '::kinu-advisory-report::';
 
 /* ── Bun's scanner contract ─────────────────────────────────────────────── */
 
@@ -330,21 +330,21 @@ export const REVIEWED_ADVISORIES = {
     ids: [1130709, 1139510],
   },
   'react-router': {
-    reason: 'SHIPS IN CODE WE SERVE: react-router-dom 7.16.0 <- @kinu/cf-backend (^7.14.1). '
+    reason: 'SHIPS IN CODE WE SERVE: react-router-dom 7.16.0 <- @kinu.run/cf-backend (^7.14.1). '
       + 'Open redirect via backslash, RSC XSS and CSRF bypass, constructor injection through '
       + 'deserializeErrors, and route-matching DoS. Our own ^7.14.1 admits the fixed 7.18.2, so '
       + 'a lockfile refresh clears all five: accepted until that refresh, not indefinitely.',
     ids: [1124268, 1124271, 1124272, 1124276, 1138769],
   },
   'shell-quote': {
-    reason: 'declared by @kinu/agent-utils (^1.8.3) and imported by NO tracked source, so the '
+    reason: 'declared by @kinu.run/agent-utils (^1.8.3) and imported by NO tracked source, so the '
       + 'quadratic parse() is called nowhere here. No fixed release exists either: the advisory '
       + 'covers <=1.8.4, which is the latest publish. Removing the unused declaration would '
       + 'remove this entry.',
     ids: [1123944],
   },
   valibot: {
-    reason: 'direct: the root manifest and @kinu/cf-backend both require ^1.4.1. record() '
+    reason: 'direct: the root manifest and @kinu.run/cf-backend both require ^1.4.1. record() '
       + 'issue paths can make flatten() throw for an inherited Object property name, and '
       + 'flatten() is called in no package src. `bun update --dry-run` resolves 1.4.2, outside '
       + 'the vulnerable <=1.4.1 — the next lockfile refresh clears it.',

@@ -6,7 +6,7 @@
 // PUBLIC surfaces the model actually reads (the `run` tool, codemode
 // `workspace.exec`, an executor's `exec`), not just the renderer.
 import { describe, test, expect } from 'bun:test';
-import { toolExecute } from '@kinu/test-utils';
+import { toolExecute } from '@kinu.run/test-utils';
 import { formatExecResult } from '../src/execution/exec-result';
 import { createInlineExecutor } from '../src/execution/inline';
 import { createNimbusExecutor } from '../src/execution/nimbus';

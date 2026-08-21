@@ -12,7 +12,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import { WORKSPACE_CREATED_EVENT } from '@kinu/core';
+import { WORKSPACE_CREATED_EVENT } from '@kinu.run/core';
 import { orchestratorHarness } from './helpers/actor-harness';
 
 const MISSION = 'Audit the OAuth callback flow and report what an attacker could reach.';
@@ -20,15 +20,15 @@ const MISSION = 'Audit the OAuth callback flow and report what an attacker could
 const PLACEHOLDER_MISSION = 'Help the user with the work they assign.';
 
 /** The provenance stamp `BackendHost.enqueueTurn` puts on a programmatic turn:
- *  the `proteusEvent` the prompt surface and the chat card both read, and the
+ *  the `kinuEvent` the prompt surface and the chat card both read, and the
  *  card id the delivery seam round-trips. */
 interface TurnProvenance {
-  readonly proteusEvent?: string;
+  readonly kinuEvent?: string;
   readonly signalId?: string;
 }
 
 const TurnProvenanceSchema: v.GenericSchema<TurnProvenance> = v.object({
-  proteusEvent: v.optional(v.string()),
+  kinuEvent: v.optional(v.string()),
   signalId: v.optional(v.string()),
 });
 
@@ -108,7 +108,7 @@ describe('the workspace takes its own first turn', () => {
     // A turn the backend enqueued. The provenance is what stops the chat from
     // rendering it as words the owner typed.
     expect(turn.role).toBe('user');
-    expect(turn.provenance.proteusEvent).toBe(WORKSPACE_CREATED_EVENT);
+    expect(turn.provenance.kinuEvent).toBe(WORKSPACE_CREATED_EVENT);
     expect(turn.provenance.signalId).toMatch(/^sig-/);
     expect(turn.text).toContain('first turn');
     harness.db.close();

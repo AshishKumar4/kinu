@@ -18,7 +18,7 @@
  *
  * WHY THE CONTEXT TYPE IS DUPLICATED AND WHERE THE DUPLICATION DIES. `test-utils`
  * declares a structurally identical `VerifierContext` (eval-outcome.ts:95-98).
- * `@kinu/core` cannot import `@kinu/test-utils` — the dependency arrow runs
+ * `@kinu.run/core` cannot import `@kinu.run/test-utils` — the dependency arrow runs
  * the other way — so the canonical declaration has to be here and test-utils has
  * to be re-pointed at it when this is wired. That re-pointing is a WIRING step,
  * deliberately not taken in this commit, and it is recorded here rather than in a
@@ -408,10 +408,11 @@ export type PublicationState =
  * - `scaffold_versions` — `scaffold/modify.ts`, reachable when the artifact IS a
  *   prompt or scaffold (`unit:'generator'`).
  *
- * `craft`, and `memory`'s lessons and facts, are `EXPERIENCE_KINDS` members
- * (`experience/types.ts`), so each is additionally a TWO-HOP egress into
- * `experience_library` via `experience/publishable.ts`. Sealing the library alone
- * would leave the winner's own code walking out through `crafted_tools`.
+ * `craft`, `scaffold_versions`, and `memory`'s lessons and facts, are all
+ * `EXPERIENCE_KINDS` members (`experience/types.ts`), so each is additionally a
+ * TWO-HOP egress into `experience_library` via `experience/publishable.ts`.
+ * Sealing the library alone would leave the winner's own code walking out
+ * through `crafted_tools`.
  *
  * Adding a publication surface without adding it here is a specification
  * violation, and `contract-publication-seal.test.ts` holds both directions: a

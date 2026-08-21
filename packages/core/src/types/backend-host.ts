@@ -46,7 +46,7 @@ export interface BroadcastEvent {
 
 /** A programmatic turn injected into the SAME serialized loop the user drives —
  *  the queued half of signal delivery (orchestrator/signals.ts).
- *  `metadata.proteusEvent` makes the chat render it as an event card rather
+ *  `metadata.kinuEvent` makes the chat render it as an event card rather
  *  than a user bubble. */
 export interface ProgrammaticTurn {
   readonly text: string;

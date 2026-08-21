@@ -9,7 +9,7 @@
  * teams, email + webhook ingress, release changes, and fork.
  *
  * Tool factory, system prompt, and crafted-tool injection all live in
- * @kinu/core so the CLI surface shares them verbatim.
+ * @kinu.run/core so the CLI surface shares them verbatim.
  */
 
 import { callable, type AgentContext, type SubAgentClass } from "agents";
@@ -157,16 +157,17 @@ import {
   getAlwaysActiveSkills, getEvolutionConfig, getMctsConfig, getReasoningEffort,
   getShellApprovalMode, getShellApprovalGrants, revokeShellApprovalGrants,
   setAlwaysActiveSkills, setEvolutionConfig,
+  getModelRoles, setModelRoles,
   setMctsConfig, setReasoningEffort, setShellApprovalMode,
-  type EvolutionConfigView, type MctsConfigView,
+  type EvolutionConfigView, type MctsConfigView, type ModelRolesView, type RoutedSpendSource,
   getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
   PlanReviewStore, formatPlanWithLineNumbers,
   planReviewAwaitingDecision,
-  JsonValueSchema, type JsonValue, type ProteusEvent,
+  JsonValueSchema, type JsonValue, type KinuEvent,
   admitPlanReviewAnnotations,
   type PlanEdit, type PlanReview, type PlanReviewAnnotation, type PlanReviewDecision,
   type PlanReviewResult, type WorkMode,
-} from "@kinu/core";
+} from "@kinu.run/core";
 import * as v from 'valibot';
 import { ActorAgent, type ActorToolDeps } from "./actor-agent";
 import { resolveEnsembleJudgeSelection } from "./providers/judge-model";
@@ -181,9 +182,9 @@ import {
   type DeferredApproval, type DeferredApprovalAnswer, type DeferredApprovalChannel,
   type DeferredApprovalNotice, type ApprovalGrant,
   TURN_AUTHOR_METADATA_KEY,
-} from "@kinu/core";
-import type { CodemodeProvider, MctsSearchRunSummary } from "@kinu/core";
-import { diagnostics, renderThrownChain, toProteusError } from "@kinu/core/obs";
+} from "@kinu.run/core";
+import type { CodemodeProvider, MctsSearchRunSummary } from "@kinu.run/core";
+import { diagnostics, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import { deliverCloudFork } from "./user/workspace-fork";
 import { createNimbusWorkspaceSandbox, nimbusWorkspaceArchiveFiles } from './nimbus-route';
@@ -198,7 +199,7 @@ const STALE_EVENT_DELIVERY_MS = 10 * 60 * 1000;
 /** The one agents-SDK schedule row that carries every Kinu-owned wake
  *  (triggers, peer outbox, email outbox). Public because `Agent.schedule()`
  *  types the callback as `keyof this`, which excludes private members. */
-const PROTEUS_TIMER_CALLBACK = '_proteusTimerTick';
+const KINU_TIMER_CALLBACK = '_kinuTimerTick';
 
 /** How overdue a one-shot schedule row must be before it is unrunnable rather
  *  than late. Mirrors the SDK's `fiberRecoveryMaxAgeMs` default: past it the
@@ -260,7 +261,7 @@ const EventVariantSchema = v.picklist([
  *  shows. Derived from core's event so a field renamed there fails here rather
  *  than silently dropping out of the projection. */
 type RecentEventRow = Pick<
-  ProteusEvent,
+  KinuEvent,
   'id' | 'trace_id' | 'caused_by' | 'ingress' | 'variant' | 'trust' | 'priority'
   | 'payload_visibility' | 'payload' | 'received_at'
 >;
@@ -332,7 +333,7 @@ export class OrchestratorAgent extends ActorAgent {
       this.eventLog.markTurnCompleted(turnId);
       return true;
     } catch (err) {
-      diagnostics.failure('event.reply_dispatch_failed', toProteusError({
+      diagnostics.failure('event.reply_dispatch_failed', toKinuError({
         doing: 'dispatching the event replies a completed turn owes',
         cause: err,
         otherwise: 'unavailable',
@@ -386,8 +387,8 @@ export class OrchestratorAgent extends ActorAgent {
   // Takes when the turn completes (onChatResponse).
   private _pendingBranches: PendingBranch[] = [];
 
-  private _triggerRegistry: import('@kinu/core').TriggerRegistry | null = null;
-  private _replyChannels: import('@kinu/core').ReplyChannelStore | null = null;
+  private _triggerRegistry: import('@kinu.run/core').TriggerRegistry | null = null;
+  private _replyChannels: import('@kinu.run/core').ReplyChannelStore | null = null;
   /** Per-activation guard so the full table-init DDL runs once, not on every
    *  onStart + claimOwner. Resets on DO eviction, so a cold start always
    *  re-creates any newly-added tables (no schema-version bookkeeping). */
@@ -488,7 +489,7 @@ export class OrchestratorAgent extends ActorAgent {
             const { stub, caller } = await this.userHub();
             return await stub.hasPeerGrant(caller, senderAgentName, senderUserId);
           } catch (err) {
-            diagnostics.failure('peer.grant_lookup_failed', toProteusError({
+            diagnostics.failure('peer.grant_lookup_failed', toKinuError({
               doing: 'asking the owner UserDO whether a peer grant exists',
               cause: err,
               otherwise: 'unavailable',
@@ -504,7 +505,7 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /** Idempotent soonest-wins arm of Kinu's own wake-up, expressed as the
-   *  agents-SDK schedule row `PROTEUS_TIMER_CALLBACK`. A Durable Object has a
+   *  agents-SDK schedule row `KINU_TIMER_CALLBACK`. A Durable Object has a
    *  single alarm slot and the SDK owns it (`_scheduleNextAlarm` deletes any
    *  alarm it does not recognise), so this must never call `setAlarm` itself.
    *
@@ -530,11 +531,11 @@ export class OrchestratorAgent extends ActorAgent {
     // for the same second and busy-spin the alarm until the millisecond passed.
     const targetSec = Math.max(Math.ceil(atMs / 1000), nowSec);
     const armed = (await this.listSchedules())
-      .filter((row) => row.callback === PROTEUS_TIMER_CALLBACK && row.time > nowSec);
+      .filter((row) => row.callback === KINU_TIMER_CALLBACK && row.time > nowSec);
     const desired = Math.min(targetSec, ...armed.map((row) => row.time));
     if (armed.length === 1 && armed[0].time === desired) return;
     for (const row of armed) await this.cancelSchedule(row.id);
-    await this.schedule(new Date(desired * 1000), PROTEUS_TIMER_CALLBACK);
+    await this.schedule(new Date(desired * 1000), KINU_TIMER_CALLBACK);
   }
 
   /** Drop schedule rows that came due so long ago that nothing downstream can
@@ -815,7 +816,7 @@ export class OrchestratorAgent extends ActorAgent {
     try {
       this.ensureSchema();
     } catch (err) {
-      diagnostics.failure('workspace.schema_ensure_failed', toProteusError({
+      diagnostics.failure('workspace.schema_ensure_failed', toKinuError({
         doing: 'creating the workspace tables before an owner claim',
         cause: err,
         otherwise: 'io',
@@ -1022,7 +1023,7 @@ export class OrchestratorAgent extends ActorAgent {
   ): Promise<void> {
     try {
       if (!this.config.getSleepTimeComputeEnabled()) return;
-      const { runSleepTimeCompute, applySleepTimeUpdate } = await import('@kinu/core');
+      const { runSleepTimeCompute, applySleepTimeUpdate } = await import('@kinu.run/core');
       const currentFacts = this.facts.all()
         .sort((a, b) => b.lastObservedAt - a.lastObservedAt)
         .map(f => ({ key: f.key, value: f.value, confidence: f.confidence }));
@@ -1042,7 +1043,7 @@ export class OrchestratorAgent extends ActorAgent {
         skipped: summary.skipped,
       });
     } catch (err) {
-      diagnostics.failure('memory.fact_compression_failed', toProteusError({
+      diagnostics.failure('memory.fact_compression_failed', toKinuError({
         doing: 'compressing the turn into agent facts',
         cause: err,
         otherwise: 'unavailable',
@@ -1069,7 +1070,7 @@ export class OrchestratorAgent extends ActorAgent {
       });
       if (title) diagnostics.event('workspace.auto_titled', { workspace: this.name, title });
     } catch (err) {
-      diagnostics.failure('workspace.auto_title_failed', toProteusError({
+      diagnostics.failure('workspace.auto_title_failed', toKinuError({
         doing: 'deriving a workspace title from the mission',
         cause: err,
         otherwise: 'unavailable',
@@ -1115,7 +1116,7 @@ export class OrchestratorAgent extends ActorAgent {
         const { stub, caller } = await this.userHub();
         await stub.setWorkspaceDisplayName(caller, this.name, displayName);
       } catch (err) {
-        diagnostics.failure('roster.display_name_sync_failed', toProteusError({
+        diagnostics.failure('roster.display_name_sync_failed', toKinuError({
           doing: 'syncing the workspace display name to the owner roster',
           cause: err,
           otherwise: 'unavailable',
@@ -1365,8 +1366,8 @@ export class OrchestratorAgent extends ActorAgent {
           '</approved-plan>',
         ].join('\n');
     const metadata = {
-      proteusEvent: decision === 'approve' ? 'plan_approved' : 'plan_feedback',
-      proteusMode: decision === 'approve' ? 'build' : 'plan',
+      kinuEvent: decision === 'approve' ? 'plan_approved' : 'plan_feedback',
+      kinuMode: decision === 'approve' ? 'build' : 'plan',
       planId: plan.id,
       revision: plan.revision,
       decision,
@@ -1479,7 +1480,7 @@ export class OrchestratorAgent extends ActorAgent {
     try {
       this.sweepUnrunnableSchedules();
     } catch (err) {
-      diagnostics.failure('schedule.stale_sweep_failed', toProteusError({
+      diagnostics.failure('schedule.stale_sweep_failed', toKinuError({
         doing: 'sweeping unrunnable schedule rows on activation',
         cause: err,
         otherwise: 'io',
@@ -1489,7 +1490,7 @@ export class OrchestratorAgent extends ActorAgent {
     try {
       reconciledEventIds = this.eventLog.unbindStale(STALE_EVENT_DELIVERY_MS);
     } catch (err) {
-      diagnostics.failure('event.stale_delivery_unbind_failed', toProteusError({
+      diagnostics.failure('event.stale_delivery_unbind_failed', toKinuError({
         doing: 'unbinding event deliveries a dead activation left leased',
         cause: err,
         otherwise: 'io',
@@ -1502,7 +1503,7 @@ export class OrchestratorAgent extends ActorAgent {
         void this.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${this.ctx.id.toString()}, ${this.name}, ${Date.now()})`;
       }
     } catch (err) {
-      diagnostics.failure('workspace.identity_init_failed', toProteusError({
+      diagnostics.failure('workspace.identity_init_failed', toKinuError({
         doing: 'writing the workspace identity row on activation',
         cause: err,
         otherwise: 'io',
@@ -1528,7 +1529,7 @@ export class OrchestratorAgent extends ActorAgent {
       runEvents: this.eventRecorder,
       logActivity: (event, detail) => this.logActivity(event, detail),
     }).catch((err) => {
-      diagnostics.failure('head.journal_reconcile_failed', toProteusError({
+      diagnostics.failure('head.journal_reconcile_failed', toKinuError({
         doing: 'settling fork-journal heads a dead activation left running',
         cause: err,
         otherwise: 'io',
@@ -1547,7 +1548,7 @@ export class OrchestratorAgent extends ActorAgent {
       void readSoul(this.rt.storage.vfs)
         .then((soul) => this.maybeAutoTitleWorkspace(summarizeSoul(soul ?? '')))
         .catch((error) => {
-          diagnostics.failure('workspace.auto_title_soul_read_failed', toProteusError({
+          diagnostics.failure('workspace.auto_title_soul_read_failed', toKinuError({
             doing: 'reading SOUL.md to title a legacy workspace',
             cause: error,
             otherwise: 'io',
@@ -1579,7 +1580,7 @@ export class OrchestratorAgent extends ActorAgent {
   // promise settles, so a span opened from anything that escaped this tick throws.
   // The four phases are four sibling spans under one root, which is what turns
   // "the alarm was slow" into "the email reconcile was slow".
-  async _proteusTimerTick(): Promise<void> {
+  async _kinuTimerTick(): Promise<void> {
     const now = Date.now();
     await this.tracing.invocation('alarm', 'tick', async (tick) => {
       await tick.span('alarm.due_triggers', async (span) => {
@@ -1588,10 +1589,10 @@ export class OrchestratorAgent extends ActorAgent {
           // other pending events) — an autonomous turn, debounced so events
           // arriving alongside the alarm coalesce into it.
           const { fired } = await fireDueTriggers({ registry: this.triggerRegistry, log: this.eventLog }, now);
-          span.setAttribute('proteus.triggers_fired', fired);
+          span.setAttribute('kinu.triggers_fired', fired);
           if (fired > 0) this.orch.scheduleDrain();
         } catch (err) {
-          const failure = toProteusError({
+          const failure = toKinuError({
             doing: 'firing the triggers due on this wake',
             cause: err,
             otherwise: 'io',
@@ -1610,7 +1611,7 @@ export class OrchestratorAgent extends ActorAgent {
         try {
           await this.peerHub.dispatchOutbox(now);
         } catch (err) {
-          const failure = toProteusError({
+          const failure = toKinuError({
             doing: 're-driving the pending outbound peer messages',
             cause: err,
             otherwise: 'unavailable',
@@ -1627,7 +1628,7 @@ export class OrchestratorAgent extends ActorAgent {
         try {
           if (this.env.EMAIL) await this.emailOutbox.reconcile(this.env.EMAIL, now);
         } catch (err) {
-          const failure = toProteusError({
+          const failure = toKinuError({
             doing: 'reconciling indeterminate outbound email',
             cause: err,
             otherwise: 'unavailable',
@@ -1650,10 +1651,10 @@ export class OrchestratorAgent extends ActorAgent {
             this.peerHub.nextRetryAt(),
             this.emailOutbox.nextRetryAt(),
           );
-          span.setAttribute('proteus.rearmed', next !== null);
+          span.setAttribute('kinu.rearmed', next !== null);
           if (next !== null) await this.armTimer(next);
         } catch (err) {
-          const failure = toProteusError({
+          const failure = toKinuError({
             doing: 're-arming the wake that keeps the timer chain alive',
             cause: err,
             otherwise: 'io',
@@ -2082,7 +2083,7 @@ export class OrchestratorAgent extends ActorAgent {
         toVersion: result.newCurrentVersion,
       });
     } catch (err) {
-      diagnostics.failure('event.scaffold_decision_emit_failed', toProteusError({
+      diagnostics.failure('event.scaffold_decision_emit_failed', toKinuError({
         doing: 'recording a scaffold promotion/rollback run event',
         cause: err,
         otherwise: 'io',
@@ -2316,7 +2317,7 @@ export class OrchestratorAgent extends ActorAgent {
     try {
       await this.engine.applyExplicitFeedback(messageId, feedback);
     } catch (err) {
-      diagnostics.failure('feedback.explicit_apply_failed', toProteusError({
+      diagnostics.failure('feedback.explicit_apply_failed', toKinuError({
         doing: 'recording an explicit turn verdict in the outcome ledger',
         cause: err,
         otherwise: 'io',
@@ -2555,8 +2556,8 @@ export class OrchestratorAgent extends ActorAgent {
   @callable()
   async recordHeadStep(headId: string, seq: number, step: HeadStep): Promise<{ ok: true }> {
     return await this.tracing.invocation('rpc', 'head.record_step', async (_invocation, span) => {
-      span.setAttribute('proteus.head_id', headId);
-      span.setAttribute('proteus.step_seq', seq);
+      span.setAttribute('kinu.head_id', headId);
+      span.setAttribute('kinu.step_seq', seq);
       // The announcement rides the journal write itself (LiveHeadJournal), so
       // it happens once whether a step arrives through this RPC from a hosted
       // facet or straight from an in-isolate node that has no facet at all.
@@ -2609,7 +2610,7 @@ export class OrchestratorAgent extends ActorAgent {
       // in-flight requests if it changes between calls on one sandbox. The
       // reasoning for `rpc` lives at the other call site (runtime.ts); this one
       // exists to match it, and the pair must move together.
-      const sb = getSandbox(this.env.Sandbox, `proteus-${this.name}`, {
+      const sb = getSandbox(this.env.Sandbox, `kinu-${this.name}`, {
         normalizeId: true, transport: "rpc",
       });
       // Before destroy(): the container object owns its /workspace snapshot, and
@@ -2837,7 +2838,7 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   @callable() async getToolDescriptions() {
-    // Descriptions AND reach sourced from @kinu/core/tools/registry — one
+    // Descriptions AND reach sourced from @kinu.run/core/tools/registry — one
     // truth for both. Reach used to be guessed here as
     // `nativeNames.has(name) ? 'native' : 'codemode'`, a binary that cannot
     // express "this actor has it on neither surface": `report` is the one
@@ -2918,7 +2919,7 @@ export class OrchestratorAgent extends ActorAgent {
     const signal = workspaceGenesisSignal(readMission(this.boundSql));
     if (!signal) return { started: false };
     void this.keepAliveWhile(() => this.orch.signals.deliver(signal)).catch((err) => {
-      diagnostics.failure('genesis.turn_failed', toProteusError({
+      diagnostics.failure('genesis.turn_failed', toKinuError({
         doing: "taking the workspace's first turn",
         cause: err,
         otherwise: 'unavailable',
@@ -3192,6 +3193,16 @@ export class OrchestratorAgent extends ActorAgent {
     return setEvolutionConfig(this.config, config);
   }
 
+  /** Which model each routed producer runs on — the same producer names the
+   *  Spend panel shows. */
+  @callable() async getModelRoles(): Promise<ModelRolesView> {
+    return getModelRoles(this.config);
+  }
+
+  @callable() async setModelRoles(roles: Partial<Record<RoutedSpendSource, string | null>>): Promise<ModelRolesView> {
+    return setModelRoles(this.config, roles);
+  }
+
   // ── Fork RPCs ──────────────────────────────────────────────────
 
   /**
@@ -3396,7 +3407,7 @@ export class OrchestratorAgent extends ActorAgent {
     if (getPendingScaffold(this.boundSql)) return;  // wait for the slot; keep the counter
     this._turnsSinceGepa = 0;
     void this.runScaffoldGepaOptimization()
-      .catch((err) => diagnostics.failure('gepa.auto_run_failed', toProteusError({
+      .catch((err) => diagnostics.failure('gepa.auto_run_failed', toKinuError({
         doing: 'running the cadence GEPA scaffold optimisation',
         cause: err,
         otherwise: 'unavailable',
@@ -3555,7 +3566,7 @@ export class OrchestratorAgent extends ActorAgent {
         ownerEmail: await this.getOwnerEmail(),
         outbox: this.emailOutbox,
       }, notification);
-    })().catch((err) => diagnostics.failure('email.owner_notification_failed', toProteusError({
+    })().catch((err) => diagnostics.failure('email.owner_notification_failed', toKinuError({
       doing: 'sending the owner an away-channel notification',
       cause: err,
       otherwise: 'unavailable',

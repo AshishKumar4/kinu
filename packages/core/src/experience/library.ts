@@ -29,8 +29,7 @@ import type { SqlValue } from '../types/primitives';
 import * as v from 'valibot';
 
 export function initExperienceLibraryTables(sql: SqlExec): void {
-  sql.exec(`
-    CREATE TABLE IF NOT EXISTS experience_library (
+  const ddl = `(
       id               TEXT PRIMARY KEY,
       kind             TEXT NOT NULL CHECK (kind IN (${EXPERIENCE_KINDS.map((k) => `'${k}'`).join(',')})),
       source_workspace TEXT NOT NULL,
@@ -41,8 +40,37 @@ export function initExperienceLibraryTables(sql: SqlExec): void {
       search_text      TEXT NOT NULL,
       published_at     INTEGER NOT NULL,
       UNIQUE (source_workspace, kind, key)
-    )
-  `);
+    )`;
+  const storedDdl = (name: string): string | null => {
+    const row = sql.exec(
+      `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`, name,
+    ).toArray()[0];
+    return row ? v.parse(v.object({ sql: v.string() }), row).sql : null;
+  };
+
+  // Widening the kind CHECK: SQLite cannot ALTER one, so a library created
+  // before a kind was added has to be rebuilt in place (the same discipline
+  // turn_outcomes needed — see evolution/outcomes.ts). The probe is the kind
+  // LIST itself, so adding a member is the only edit ever needed here, and the
+  // `_legacy` table is the resume point for a crash mid-sequence: rows stranded
+  // there must be copied before a bare CREATE IF NOT EXISTS starts an empty one.
+  const live = storedDdl('experience_library');
+  const narrow = live !== null && EXPERIENCE_KINDS.some((kind) => !live.includes(`'${kind}'`));
+  const stranded = storedDdl('experience_library_legacy') !== null;
+  if (narrow) {
+    // Triggers are renamed WITH their table and keep their names, so a later
+    // CREATE TRIGGER IF NOT EXISTS would no-op and leave the new table
+    // unindexed. The FTS table names its content table in its own CREATE, which
+    // a rename does not rewrite — it holds no content of its own, so dropping
+    // and rebuilding the index below is the whole cost.
+    for (const suffix of ['ai', 'ad', 'au']) {
+      sql.exec(`DROP TRIGGER IF EXISTS experience_library_${suffix}`);
+    }
+    sql.exec(`DROP TABLE IF EXISTS experience_library_fts`);
+    sql.exec(`ALTER TABLE experience_library RENAME TO experience_library_legacy`);
+  }
+
+  sql.exec(`CREATE TABLE IF NOT EXISTS experience_library ${ddl}`);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_experience_library_published
               ON experience_library (published_at DESC)`);
 
@@ -75,6 +103,15 @@ export function initExperienceLibraryTables(sql: SqlExec): void {
       VALUES (new.rowid, new.title, new.key, new.evidence, new.search_text);
     END
   `);
+
+  if (narrow || stranded) {
+    sql.exec(`INSERT OR IGNORE INTO experience_library SELECT * FROM experience_library_legacy`);
+    sql.exec(`DROP TABLE experience_library_legacy`);
+    // The copy above fired the insert trigger, and a surviving index may still
+    // hold the old table's rows; 'rebuild' replaces the whole index from the
+    // content table, so neither duplicates nor stale rows can remain.
+    sql.exec(`INSERT INTO experience_library_fts(experience_library_fts) VALUES('rebuild')`);
+  }
 }
 
 export interface ExperienceSearchOptions {

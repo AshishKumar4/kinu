@@ -67,7 +67,7 @@ describe('the eval target allowlist — a deployment serving real users is refus
     }
   });
 
-  test('PROTEUS_EVAL_ALLOW_PROD=1 names the exception, and the verdict says so', () => {
+  test('KINU_EVAL_ALLOW_PROD=1 names the exception, and the verdict says so', () => {
     const verdict = evalTargetVerdict(PRODUCTION_ORIGIN, { [EVAL_IDENTITY_ENV.allowProd]: '1' });
     expect(verdict).toEqual({ kind: 'allowed', origin: PRODUCTION_ORIGIN, why: 'override' });
   });
@@ -144,7 +144,7 @@ describe('resolveEvalIdentity — the credential is the eval service account or 
 
   // The whole point of the module: an empty environment yields a SKIP, never a
   // borrowed session. Before this, the same case reached into
-  // `~/.proteus/config.json` and ran as the owner.
+  // `~/.kinu/config.json` and ran as the owner.
   test('an empty environment is absent — no session is borrowed from anyone', () => {
     const resolved = resolveEvalIdentity({});
     expect(resolved.kind).toBe('absent');

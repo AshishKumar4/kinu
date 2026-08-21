@@ -64,7 +64,7 @@ describe('reachability gate', () => {
   });
 
   test('an import of a same-named core function is not a caller', () => {
-    expect(scan(`import { listDeferredApprovals } from '@kinu/core';\nexport const x = 1;`))
+    expect(scan(`import { listDeferredApprovals } from '@kinu.run/core';\nexport const x = 1;`))
       .toEqual([KEY]);
   });
 

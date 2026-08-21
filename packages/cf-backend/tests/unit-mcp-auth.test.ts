@@ -70,7 +70,7 @@ function initializeRequest(agentName: string, token?: string) {
     accept: 'application/json, text/event-stream',
   });
   if (token) headers.set('authorization', `Bearer ${token}`);
-  return new Request(`https://proteus.example.com/mcp/v1/${agentName}`, {
+  return new Request(`https://kinu.example.com/mcp/v1/${agentName}`, {
     method: 'POST',
     headers,
     body: JSON.stringify({
@@ -116,7 +116,7 @@ describe('MCP server auth gate', () => {
 
   test('non-MCP paths are ignored', async () => {
     const { env } = mcpEnv();
-    const res = await handleMcpRequest(new Request('https://proteus.example.com/api/health'), env);
+    const res = await handleMcpRequest(new Request('https://kinu.example.com/api/health'), env);
     expect(res).toBeNull();
   });
 });

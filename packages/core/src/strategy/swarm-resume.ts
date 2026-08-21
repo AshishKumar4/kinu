@@ -62,7 +62,7 @@
 
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
-import { ProteusError } from '../obs/error';
+import { KinuError } from '../obs/error';
 import type { HeadJournal } from '../heads/journal';
 import type { HeadStep } from '../heads/types';
 import type { MctsSearchStore } from '../mcts/search-store';
@@ -373,7 +373,7 @@ export function reenterSwarm(deps: {
 function parseRecord(nodeId: string, json: string): SwarmNodeRecord {
   const parsed = v.safeParse(SwarmNodeRecordSchema, JSON.parse(json));
   if (parsed.success) return parsed.output;
-  throw new ProteusError('io',
+  throw new KinuError('io',
     `the durable record for node ${nodeId} of this search will not read back, so the run `
     + 'cannot be continued faithfully: '
     + `${parsed.issues.map((issue) => issue.message).join('; ')}. This engine wrote that row, `

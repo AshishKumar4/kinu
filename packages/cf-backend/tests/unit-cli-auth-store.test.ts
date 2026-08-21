@@ -77,7 +77,7 @@ describe('KV-backed CLI auth store', () => {
     const { env, kv, minted } = setupEnv();
     const userId = '0123456789abcdef0123456789abcdef';
 
-    const started = await startCliAuth(env, 'https://proteus.example.com', 'https://proteus.example.com', 'Ashish terminal', '127.0.0.1');
+    const started = await startCliAuth(env, 'https://kinu.example.com', 'https://kinu.example.com', 'Ashish terminal', '127.0.0.1');
     expect(started.userCode).toMatch(/^[A-Z0-9]{4}-[A-Z0-9]{4}$/);
     expect(started.verificationUrl).toContain(`/cli/auth?code=${encodeURIComponent(started.userCode)}`);
 
@@ -105,7 +105,7 @@ describe('KV-backed CLI auth store', () => {
 
   test('the advertised polling cadence remains permitted for the full auth lifetime', async () => {
     const { env } = setupEnv();
-    const started = await startCliAuth(env, 'https://proteus.example.com', 'https://proteus.example.com', 'Ashish terminal', '127.0.0.1');
+    const started = await startCliAuth(env, 'https://kinu.example.com', 'https://kinu.example.com', 'Ashish terminal', '127.0.0.1');
     const remainingMs = Date.parse(started.expiresAt) - Date.now();
     const requiredPolls = Math.ceil(remainingMs / (started.intervalSeconds * 1_000));
 
@@ -199,7 +199,7 @@ describe('CLI auth error propagation', () => {
 
 describe('CLI auth route status mapping', () => {
   function startRequest() {
-    return new Request('https://proteus.example.com/api/cli/auth/start', {
+    return new Request('https://kinu.example.com/api/cli/auth/start', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'cf-connecting-ip': '127.0.0.1' },
       body: JSON.stringify({ deviceName: 't' }),

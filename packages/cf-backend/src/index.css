@@ -131,7 +131,7 @@ html, body, #root {
 
      This block used to carry 6/8/10/14px literals while `@theme inline` mapped
      Tailwind's scale onto `calc(var(--radius) …)` — and `--radius` is defined
-     nowhere but `[data-proteus-plan-review]`. So every `rounded-sm/md/lg/xl` in
+     nowhere but `[data-kinu-plan-review]`. So every `rounded-sm/md/lg/xl` in
      the app, Kumo's own included, computed to 0px, while `.p-composer` used its
      literal and stayed round. That is the "some borders are sharp while the
      prompt box is round" inconsistency, and it was a missing token, not a
@@ -1077,7 +1077,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 /* Plannotator is hosted as a document primitive, not as a second app or theme.
    Its semantic contract is confined to this surface and resolves through the
    same Kinu tokens as the rest of Outputs. */
-[data-proteus-plan-review],
+[data-kinu-plan-review],
 body > [data-comment-popover="true"],
 body > .annotation-toolbar {
   --background: var(--c-bg);
@@ -1112,43 +1112,43 @@ body > .annotation-toolbar {
 }
 
 @layer components {
-  [data-proteus-plan-review] .annotation-highlight { border-radius: var(--radius-xs); padding: 0 2px; margin: 0 -2px; }
-  [data-proteus-plan-review] .annotation-highlight.math-inline-annotation { display: inline-flex; align-items: center; line-height: 1; }
-  [data-proteus-plan-review] .annotation-highlight.math-block-annotation { display: block; }
-  [data-proteus-plan-review] .annotation-highlight.deletion {
+  [data-kinu-plan-review] .annotation-highlight { border-radius: var(--radius-xs); padding: 0 2px; margin: 0 -2px; }
+  [data-kinu-plan-review] .annotation-highlight.math-inline-annotation { display: inline-flex; align-items: center; line-height: 1; }
+  [data-kinu-plan-review] .annotation-highlight.math-block-annotation { display: block; }
+  [data-kinu-plan-review] .annotation-highlight.deletion {
     background: color-mix(in oklab, var(--destructive) 35%, transparent);
     text-decoration: line-through 2px var(--destructive);
   }
-  [data-proteus-plan-review] .annotation-highlight.comment {
+  [data-kinu-plan-review] .annotation-highlight.comment {
     background: color-mix(in oklab, var(--annotation-comment) 22%, transparent);
     border-bottom: 2px solid var(--annotation-comment);
   }
-  [data-proteus-plan-review] .annotation-highlight.focused {
+  [data-kinu-plan-review] .annotation-highlight.focused {
     background: color-mix(in oklab, var(--focus-highlight) 32%, transparent) !important;
     border-bottom: 2px solid var(--focus-highlight);
     box-shadow: 0 0 8px color-mix(in oklab, var(--focus-highlight) 40%, transparent);
     filter: none;
   }
-  [data-proteus-plan-review] .annotation-highlight:hover { cursor: pointer; filter: brightness(1.15); }
+  [data-kinu-plan-review] .annotation-highlight:hover { cursor: pointer; filter: brightness(1.15); }
 
-  [data-proteus-plan-review] .alert-note { border-left-color: var(--c-info); }
-  [data-proteus-plan-review] .alert-note .alert-title { color: var(--c-info); }
-  [data-proteus-plan-review] .alert-tip { border-left-color: var(--c-success); }
-  [data-proteus-plan-review] .alert-tip .alert-title { color: var(--c-success); }
-  [data-proteus-plan-review] .alert-warning { border-left-color: var(--c-warning); }
-  [data-proteus-plan-review] .alert-warning .alert-title { color: var(--c-warning); }
-  [data-proteus-plan-review] .alert-caution { border-left-color: var(--c-danger); }
-  [data-proteus-plan-review] .alert-caution .alert-title { color: var(--c-danger); }
-  [data-proteus-plan-review] .alert-important { border-left-color: var(--c-accent); }
-  [data-proteus-plan-review] .alert-important .alert-title { color: var(--c-accent-fg); }
+  [data-kinu-plan-review] .alert-note { border-left-color: var(--c-info); }
+  [data-kinu-plan-review] .alert-note .alert-title { color: var(--c-info); }
+  [data-kinu-plan-review] .alert-tip { border-left-color: var(--c-success); }
+  [data-kinu-plan-review] .alert-tip .alert-title { color: var(--c-success); }
+  [data-kinu-plan-review] .alert-warning { border-left-color: var(--c-warning); }
+  [data-kinu-plan-review] .alert-warning .alert-title { color: var(--c-warning); }
+  [data-kinu-plan-review] .alert-caution { border-left-color: var(--c-danger); }
+  [data-kinu-plan-review] .alert-caution .alert-title { color: var(--c-danger); }
+  [data-kinu-plan-review] .alert-important { border-left-color: var(--c-accent); }
+  [data-kinu-plan-review] .alert-important .alert-title { color: var(--c-accent-fg); }
 
-  [data-proteus-plan-review] .directive { border-color: var(--border); background: color-mix(in srgb, var(--muted) 50%, transparent); }
-  [data-proteus-plan-review] .directive-title { color: var(--muted-foreground); }
-  [data-proteus-plan-review] .directive-note,
-  [data-proteus-plan-review] .directive-info { border-color: color-mix(in srgb, var(--c-info) 40%, transparent); background: color-mix(in srgb, var(--c-info) 10%, transparent); }
-  [data-proteus-plan-review] .directive-tip,
-  [data-proteus-plan-review] .directive-success { border-color: color-mix(in srgb, var(--c-success) 40%, transparent); background: color-mix(in srgb, var(--c-success) 10%, transparent); }
-  [data-proteus-plan-review] .directive-warning { border-color: color-mix(in srgb, var(--c-warning) 40%, transparent); background: color-mix(in srgb, var(--c-warning) 10%, transparent); }
-  [data-proteus-plan-review] .directive-danger,
-  [data-proteus-plan-review] .directive-caution { border-color: color-mix(in srgb, var(--c-danger) 40%, transparent); background: color-mix(in srgb, var(--c-danger) 10%, transparent); }
+  [data-kinu-plan-review] .directive { border-color: var(--border); background: color-mix(in srgb, var(--muted) 50%, transparent); }
+  [data-kinu-plan-review] .directive-title { color: var(--muted-foreground); }
+  [data-kinu-plan-review] .directive-note,
+  [data-kinu-plan-review] .directive-info { border-color: color-mix(in srgb, var(--c-info) 40%, transparent); background: color-mix(in srgb, var(--c-info) 10%, transparent); }
+  [data-kinu-plan-review] .directive-tip,
+  [data-kinu-plan-review] .directive-success { border-color: color-mix(in srgb, var(--c-success) 40%, transparent); background: color-mix(in srgb, var(--c-success) 10%, transparent); }
+  [data-kinu-plan-review] .directive-warning { border-color: color-mix(in srgb, var(--c-warning) 40%, transparent); background: color-mix(in srgb, var(--c-warning) 10%, transparent); }
+  [data-kinu-plan-review] .directive-danger,
+  [data-kinu-plan-review] .directive-caution { border-color: color-mix(in srgb, var(--c-danger) 40%, transparent); background: color-mix(in srgb, var(--c-danger) 10%, transparent); }
 }

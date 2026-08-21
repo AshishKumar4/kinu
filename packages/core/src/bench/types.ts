@@ -147,8 +147,8 @@ export interface SolverContext {
   task: BenchTask;
   /** Absolute path to this attempt's private sandbox copy of the repo. */
   sandboxDir: string;
-  /** Absolute path to this attempt's PROTEUS_HOME. Never the real one. */
-  proteusHome: string;
+  /** Absolute path to this attempt's KINU_HOME. Never the real one. */
+  kinuHome: string;
   budget: AttemptBudget;
   signal: AbortSignal;
   /** Deterministic per-attempt seed, so controls are reproducible. */

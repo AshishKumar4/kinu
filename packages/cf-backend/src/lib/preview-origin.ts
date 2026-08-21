@@ -51,7 +51,7 @@ interface PreviewHostEnv {
   CLI_PUBLIC_ORIGIN?: string;
 }
 
-const PREVIEW_SUFFIX_META = 'proteus-preview-host-suffix';
+const PREVIEW_SUFFIX_META = 'kinu-preview-host-suffix';
 
 /** The host an origin var names, lowercased, or null when it names none. */
 export function hostOf(origin: string | undefined): string | null {
@@ -167,7 +167,7 @@ export function isPreviewUrl(value: string, configuredSuffix: string | null = br
 
 /**
  * Pull a preview URL out of a tool result. Outputs are usually strings (e.g.
- * `https://8080-proteus-app-p8080_ab12cd34.example.com/`) but can also be
+ * `https://8080-kinu-app-p8080_ab12cd34.example.com/`) but can also be
  * objects with a `url` field.
  *
  * The text being scanned is agent-writable — a command's stdout is a tool result

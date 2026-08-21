@@ -60,7 +60,7 @@ import {
   liveChatModel, liveModelTarget, preRegister, publishRunRecord, reportLiveModelSpend,
   TASK_OUTCOME, UNCONFIGURED_LLM,
   type EvalArmState, type EvalObservation, type EvalTier,
-} from '@kinu/test-utils';
+} from '@kinu.run/test-utils';
 import { DegenerateRunError, runBehaviourTask, type BehaviourOutput } from './harness';
 import { resolveArtifactRoot } from '../../scripts/bench-retention';
 
@@ -77,22 +77,22 @@ const TARGET = liveModelTarget('Behaviour Evals');
  * property of the run rather than left in a comment, because an 18-observation
  * flash number and a 9-observation pro number invite different readings.
  */
-const TIER: EvalTier = process.env.PROTEUS_EVAL_TIER === 'pro' ? 'pro' : 'flash';
-const REPEATS = Number(process.env.PROTEUS_EVAL_REPEATS ?? (TIER === 'pro' ? '1' : '2'));
-const SEED = Number(process.env.PROTEUS_EVAL_SEED ?? '1');
+const TIER: EvalTier = process.env.KINU_EVAL_TIER === 'pro' ? 'pro' : 'flash';
+const REPEATS = Number(process.env.KINU_EVAL_REPEATS ?? (TIER === 'pro' ? '1' : '2'));
+const SEED = Number(process.env.KINU_EVAL_SEED ?? '1');
 
 /**
  * The model this run DRIVES, and it is the tier's — not the resolver's default.
  *
  * `resolveLiveModel` falls back to `DEFAULT_WORKERS_AI_MODEL_ID`, which is the PRO
  * id, while the run record wrote `EVAL_MODELS[TIER]`. Measured: with only
- * PROTEUS_ORIGIN + PROTEUS_TOKEN set, the resolver describes itself as `model
+ * KINU_ORIGIN + KINU_TOKEN set, the resolver describes itself as `model
  * @cf/deepseek-ai/deepseek-v4-pro-0813` and the record would have claimed flash —
  * a record naming a model 3.0x cheaper than the one that was billed. Two sources
  * of truth for "which model", and the wrong one was the one a reader saw.
  *
  * The tier IS the arm, so the tier owns the model, and `modelId` in the record is
- * read from here rather than re-derived. A `PROTEUS_MODEL` in the environment is
+ * read from here rather than re-derived. A `KINU_MODEL` in the environment is
  * deliberately not honoured for this suite: an arm chosen by two knobs is an arm
  * that can be half-changed.
  */
@@ -107,7 +107,7 @@ const LLM: LLMProviderConfig = TARGET === null
  * isolation and wrong for a record that a later run will be compared against.
  */
 const ARM: EvalArmState = {
-  evolution: process.env.PROTEUS_EVAL_EVOLUTION !== '0',
+  evolution: process.env.KINU_EVAL_EVOLUTION !== '0',
   settle: 'none',
   tools: FULL_TOOL_SURFACE,
 };
@@ -307,7 +307,7 @@ describeEval('Agent behaviour over the run-event ledger', {
   // normalized `HarnessRun` (session, usage, errors), and this normalizes the
   // lightweight result instead of us hand-building a transcript.
   harness: createHarness<EvalInput, BehaviourOutput>({
-    name: 'proteus-local-session',
+    name: 'kinu-local-session',
     async run({ input }) {
       const startedAt = Date.now();
       try {

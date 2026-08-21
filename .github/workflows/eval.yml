@@ -59,11 +59,11 @@ jobs:
       # key). It also refuses to run when the baseline is not a different model.
       - name: Run model A/B
         env:
-          PROTEUS_BASE_URL: ${{ secrets.EVAL_BASE_URL }}
-          PROTEUS_AUTH: ${{ secrets.EVAL_AUTH }}
+          KINU_BASE_URL: ${{ secrets.EVAL_BASE_URL }}
+          KINU_AUTH: ${{ secrets.EVAL_AUTH }}
           ANTHROPIC_API_KEY: ${{ secrets.EVAL_ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.EVAL_OPENAI_API_KEY }}
-          PROTEUS_MODEL: ${{ github.event.inputs.model || vars.EVAL_MODEL }}
+          KINU_MODEL: ${{ github.event.inputs.model || vars.EVAL_MODEL }}
           EVAL_MIN_SCORE: ${{ github.event.inputs.min_score || vars.EVAL_MIN_SCORE }}
         run: >-
           bun scripts/eval.ts --out eval-report.json

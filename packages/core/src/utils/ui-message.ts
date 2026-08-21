@@ -75,13 +75,13 @@ export const PROGRAMMATIC_MESSAGE_ID_PREFIX = 'programmatic:';
  * turn). A new event kind is therefore attributed correctly the day it is
  * added, without touching any renderer.
  */
-export const TURN_AUTHOR_METADATA_KEY = 'proteusAuthor';
+export const TURN_AUTHOR_METADATA_KEY = 'kinuAuthor';
 
 export type TurnAuthor = 'harness' | 'operator';
 
 const TurnAuthorSchema = v.looseObject({
   [TURN_AUTHOR_METADATA_KEY]: v.optional(v.picklist(['harness', 'operator'])),
-  proteusEvent: v.optional(v.string()),
+  kinuEvent: v.optional(v.string()),
 });
 
 /**
@@ -108,7 +108,7 @@ export function stampTurnAuthor(metadata?: JsonObject): JsonObject {
  * Who wrote a stored row, from written markers only — never from its prose.
  *
  * The stamp answers it outright. Rows written before the stamp existed are read
- * from the two markers they do carry: the `proteusEvent` metadata a queued
+ * from the two markers they do carry: the `kinuEvent` metadata a queued
  * signal has always stamped, and the {@link PROGRAMMATIC_MESSAGE_ID_PREFIX}
  * both backends have always derived a programmatic row's id from. One legacy
  * shape stays genuinely ambiguous — a metadata-less row under the programmatic
@@ -122,7 +122,7 @@ export function turnAuthor<Metadata>(row: { id?: string; metadata?: Metadata }):
   if (!parsed.success) return 'operator';
   const stamped = parsed.output[TURN_AUTHOR_METADATA_KEY];
   if (stamped) return stamped;
-  const event = parsed.output.proteusEvent;
+  const event = parsed.output.kinuEvent;
   if (event !== undefined) return Object.hasOwn(LEGACY_OPERATOR_EVENTS, event) ? 'operator' : 'harness';
   return row.id?.startsWith(PROGRAMMATIC_MESSAGE_ID_PREFIX) ? 'harness' : 'operator';
 }

@@ -44,14 +44,14 @@ export default defineConfig({
     name: 'evals',
     include: ['tests/evals/**/*.eval.ts'],
     environment: 'node',
-    // The SAME throwaway PROTEUS_HOME every `bun test` process gets, because
+    // The SAME throwaway KINU_HOME every `bun test` process gets, because
     // `bunfig.toml`'s `preload` reaches only bun's runner and this tier is
     // vitest. It is load-bearing here, not hygiene: the behaviour harness opens
     // the workspace through `createCLIRuntime`, which roots a shadow-git
-    // checkpoint engine at `$PROTEUS_HOME/checkpoints`
+    // checkpoint engine at `$KINU_HOME/checkpoints`
     // (cli-backend/src/checkpoints.ts:52) and snapshots on every host-FS
-    // mutation. `proteusHome()` falls back to `~/.proteus`, and measured here
-    // before this line existed, `PROTEUS_HOME` was UNSET under this config — so
+    // mutation. `kinuHome()` falls back to `~/.kinu`, and measured here
+    // before this line existed, `KINU_HOME` was UNSET under this config — so
     // a live eval run wrote checkpoint stores into the developer's real home,
     // which is the same defect that once put ~580 of them there.
     // The VITEST entry, not `bun test`'s. Both are three lines over the same

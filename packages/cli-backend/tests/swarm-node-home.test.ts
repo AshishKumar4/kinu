@@ -37,8 +37,8 @@ import {
   type AgentsToolInput,
   type JsonValue,
   type LLMProviderConfig,
-} from '@kinu/core';
-import { scriptedTurnModel, scratchPath, toolExecute } from '@kinu/test-utils';
+} from '@kinu.run/core';
+import { scriptedTurnModel, scratchPath, toolExecute } from '@kinu.run/test-utils';
 import { createCLIRuntime, type CLIRuntime } from '../src/runtime';
 
 const DUMMY_LLM: LLMProviderConfig = {

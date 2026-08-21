@@ -1,19 +1,19 @@
-import { createLocalModelResolver, type LocalModelResolver } from '@kinu/cli-backend';
-import { agentAffinityKey, parseModelSpec, type LLMProviderConfig } from '@kinu/core';
+import { createLocalModelResolver, type LocalModelResolver } from '@kinu.run/cli-backend';
+import { agentAffinityKey, parseModelSpec, type LLMProviderConfig } from '@kinu.run/core';
 import {
   createCodexAuthStore,
   resolveCloudSession,
   resolveLLMConfig,
   resolveProviderCredentials,
 } from './config';
-import { renderThrownChain } from '@kinu/core/obs';
+import { renderThrownChain } from '@kinu.run/core/obs';
 
 export interface LocalModelResolverOptions {
   model?: string;
   baseUrl?: string;
   auth?: string;
   /** Pins the agent's signed-in proxy turns to one Workers AI replica
-   *  (x-session-affinity) — same `proteus-<name>` key cloud agents use. */
+   *  (x-session-affinity) — same `kinu-<name>` key cloud agents use. */
   agentName?: string;
 }
 

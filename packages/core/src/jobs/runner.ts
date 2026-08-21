@@ -20,7 +20,7 @@ import { nanoid } from '../utils/nanoid';
 import type { WorkMode } from '../prompting/surface';
 import * as v from 'valibot';
 import { parseJsonValue, type JsonValue } from '../utils/json';
-import { diagnostics, renderThrownChain, toProteusError } from '../obs/index';
+import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 
 /** The terminal error a non-recoverable job records when it is interrupted by a
  *  DO eviction (no durable checkpoint / not safe to re-run).
@@ -295,7 +295,7 @@ export class BackgroundJobRunner {
         // trusting a fiber row to survive.
         diagnostics.failure(
           'jobs.settlement_failed',
-          toProteusError({ doing: 'settle a background job and wake the agent', cause: err, otherwise: 'io' }),
+          toKinuError({ doing: 'settle a background job and wake the agent', cause: err, otherwise: 'io' }),
           { jobId },
         );
         settled = this.failUnsettled(jobId, err);
@@ -352,7 +352,7 @@ export class BackgroundJobRunner {
     } catch (failErr) {
       diagnostics.failure(
         'jobs.force_fail_failed',
-        toProteusError({ doing: 'force-fail a job the settlement path left running', cause: failErr, otherwise: 'io' }),
+        toKinuError({ doing: 'force-fail a job the settlement path left running', cause: failErr, otherwise: 'io' }),
         { jobId },
       );
       return false;
@@ -389,7 +389,7 @@ export class BackgroundJobRunner {
       kind: 'background_job',
       text,
       idempotencyKey: backgroundJobWakeTrigger(jobId),
-      metadata: { proteusMode: job.workMode, jobId, kind: job.kind, status: job.status },
+      metadata: { kinuMode: job.workMode, jobId, kind: job.kind, status: job.status },
     } as const satisfies Omit<AgentSignal, 'compensate'>;
     // `compensate` is a PROMISE to retry, so it is offered only where one can be
     // kept: with a durable retry plane behind it. A runner without one serves an
@@ -429,7 +429,7 @@ export class BackgroundJobRunner {
             scheduled_fire_at: job.settledAt ?? job.createdAt,
             label: text,
             user_payload: {
-              proteusEvent: 'background_job', proteusMode: job.workMode,
+              kinuEvent: 'background_job', kinuMode: job.workMode,
               jobId: job.id, kind: job.kind, status: job.status,
             },
           },
@@ -440,7 +440,7 @@ export class BackgroundJobRunner {
     } catch (err) {
       diagnostics.failure(
         'jobs.retry_publish_failed',
-        toProteusError({ doing: 'publish the background-job wake retry', cause: err, otherwise: 'io' }),
+        toKinuError({ doing: 'publish the background-job wake retry', cause: err, otherwise: 'io' }),
         { jobId: job.id, kind: job.kind },
       );
       throw err;
@@ -450,7 +450,7 @@ export class BackgroundJobRunner {
       // The retry is already durable; another ingress or activation can drain it.
       diagnostics.failure(
         'jobs.retry_drain_schedule_failed',
-        toProteusError({ doing: 'schedule the drain for a background-job wake retry', cause: err, otherwise: 'io' }),
+        toKinuError({ doing: 'schedule the drain for a background-job wake retry', cause: err, otherwise: 'io' }),
         { jobId: job.id },
       );
     }
@@ -626,7 +626,7 @@ export class BackgroundJobRunner {
     catch (err) {
       diagnostics.failure(
         'jobs.settle_sink_failed',
-        toProteusError({ doing: 'deliver the job settle notification', cause: err, otherwise: 'io' }),
+        toKinuError({ doing: 'deliver the job settle notification', cause: err, otherwise: 'io' }),
         { jobId },
       );
     }

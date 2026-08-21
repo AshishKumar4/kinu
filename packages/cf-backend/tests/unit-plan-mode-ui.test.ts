@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { planReviewAwaitingDecision } from '@kinu/core';
+import { planReviewAwaitingDecision } from '@kinu.run/core';
 
 const source = (path: string) => readFileSync(join(import.meta.dir, '..', path), 'utf8');
-const hook = source('src/hooks/use-proteus.ts');
+const hook = source('src/hooks/use-kinu.ts');
 const page = source('src/pages/WorkspacePage.tsx');
 const output = source('src/components/surfaces/OutputSurface.tsx');
 // The composer is one shared component now; the mode control and the
@@ -15,7 +15,7 @@ const css = source('src/index.css');
 
 describe('Plan mode browser contract', () => {
   test('stamps typed intent, and a retry cannot lose it', () => {
-    expect(hook).toContain('metadata: { proteusMode: mode }');
+    expect(hook).toContain('metadata: { kinuMode: mode }');
     // Retry no longer COPIES the intent onto a fresh message — it re-runs the
     // turn the intent is already stamped on, so the stamp cannot drift from
     // the turn it governs. Copying was also how a retry appended a duplicate.
@@ -75,7 +75,7 @@ describe('Plan mode browser contract', () => {
     expect(review).not.toContain('setDocPreviewFetcher');
     expect(review).not.toContain('setSkillCatalogTransport');
     expect(review).not.toContain('setSkillContentTransport');
-    expect(css).toContain('[data-proteus-plan-review]');
+    expect(css).toContain('[data-kinu-plan-review]');
     expect(css).toContain('body > [data-comment-popover="true"]');
     expect(css).toContain('body > .annotation-toolbar');
     expect(css).not.toContain('data-quick-label-picker');

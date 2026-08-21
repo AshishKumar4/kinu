@@ -53,7 +53,7 @@ import {
 import { isProductSource, readMatching } from './sources';
 
 const GATE = 'infra';
-const ACK = 'PROTEUS_INFRA_ACK';
+const ACK = 'KINU_INFRA_ACK';
 
 export type Verdict = 'present' | 'absent' | 'unknown' | 'unobservable';
 

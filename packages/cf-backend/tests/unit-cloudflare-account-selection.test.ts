@@ -12,7 +12,7 @@
 //   - both operations are reachable over HTTP, and a successful switch tells
 //     the user's live workspaces to drop their cached provider state
 import { describe, expect, test } from 'bun:test';
-import { asFetchFunction, type OAuthCredential } from '@kinu/core';
+import { asFetchFunction, type OAuthCredential } from '@kinu.run/core';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY, createTestUserDO, testOwner } from './helpers/user-do';
 import { CLOUDFLARE_OAUTH_CRED_KEY } from '../src/lib/cloudflare-oauth';
 import { handleUserRequest } from '../src/user/routes';
@@ -191,7 +191,7 @@ function routeHarness(selectFails = false) {
   // no other Env binding is reachable in the account routes exercised here.
   const env = partialEnv as Env;
   const call = (path: string, method: string, body?: { id: string }) =>
-    handleUserRequest(new Request(`https://proteus.example.com/api/user${path}`, {
+    handleUserRequest(new Request(`https://kinu.example.com/api/user${path}`, {
       method,
       headers: { 'content-type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),

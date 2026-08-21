@@ -88,7 +88,7 @@ describe('SignalDelivery — one delivery time: the next step', () => {
     expect(signals.prepareStep({ stepNumber: 1, messages: [user('q')] })).toBeUndefined();
     expect(queued).toEqual([{
       text: 'mail from bob',
-      metadata: { proteusEvent: 'event_drain', proteusAuthor: 'harness', signalId: cards[0]!.id },
+      metadata: { kinuEvent: 'event_drain', kinuAuthor: 'harness', signalId: cards[0]!.id },
     }]);
   });
 
@@ -111,7 +111,7 @@ describe('SignalDelivery — one delivery time: the next step', () => {
       metadata: { jobId: 'bgjob-1', status: 'completed' },
     })).toBe('queued');
     expect(idle.queued[0]!.metadata).toEqual({
-      proteusEvent: 'background_job', proteusAuthor: 'harness', jobId: 'bgjob-1', status: 'completed',
+      kinuEvent: 'background_job', kinuAuthor: 'harness', jobId: 'bgjob-1', status: 'completed',
       signalId: idle.cards[0]!.id,
     });
   });
@@ -119,20 +119,20 @@ describe('SignalDelivery — one delivery time: the next step', () => {
   test('a mode-bound signal only splices into a live turn with the same mode', async () => {
     const same = setup({ turnInFlight: true, activeMode: 'plan' });
     expect(await same.signals.deliver(wake('plan result', {
-      metadata: { proteusMode: 'plan' },
+      metadata: { kinuMode: 'plan' },
     }))).toBe('mid-turn');
 
     const planIntoBuild = setup({ turnInFlight: true, activeMode: 'build' });
     expect(await planIntoBuild.signals.deliver(wake('plan result', {
-      metadata: { proteusMode: 'plan' },
+      metadata: { kinuMode: 'plan' },
     }))).toBe('queued');
-    expect(planIntoBuild.queued[0]?.metadata?.proteusMode).toBe('plan');
+    expect(planIntoBuild.queued[0]?.metadata?.kinuMode).toBe('plan');
 
     const buildIntoPlan = setup({ turnInFlight: true, activeMode: 'plan' });
     expect(await buildIntoPlan.signals.deliver(wake('build result', {
-      metadata: { proteusMode: 'build' },
+      metadata: { kinuMode: 'build' },
     }))).toBe('queued');
-    expect(buildIntoPlan.queued[0]?.metadata?.proteusMode).toBe('build');
+    expect(buildIntoPlan.queued[0]?.metadata?.kinuMode).toBe('build');
   });
 
   test("the step's own steering is handed to the step, never delivered", async () => {
@@ -155,7 +155,7 @@ describe('SignalDelivery — one delivery time: the next step', () => {
     const queuedPath = setup({ turnInFlight: false });
     await queuedPath.signals.deliver(wake('drain', { replyTurnId: 'evt-1' }));
     expect(queuedPath.queued[0]!.metadata).toEqual({
-      proteusEvent: 'event_drain', proteusAuthor: 'harness', drainTurnId: 'evt-1', signalId: queuedPath.cards[0]!.id,
+      kinuEvent: 'event_drain', kinuAuthor: 'harness', drainTurnId: 'evt-1', signalId: queuedPath.cards[0]!.id,
     });
   });
 });
@@ -170,7 +170,7 @@ describe('SignalDelivery — the user\'s card', () => {
     const opened = cards[0]!;
     expect(opened).toMatchObject({
       type: 'signal_card', state: 'pending',
-      metadata: { proteusEvent: 'event_drain', proteusAuthor: 'harness' },
+      metadata: { kinuEvent: 'event_drain', kinuAuthor: 'harness' },
       // What the agent will actually read on this path, not the other one's.
       text: 'mid-turn: mail from bob',
     });
@@ -285,7 +285,7 @@ describe('SignalDelivery — settlement', () => {
     await Promise.resolve();
     expect(queued).toEqual([{
       text: 'arrived at the final step',
-      metadata: { proteusEvent: 'event_drain', proteusAuthor: 'harness', drainTurnId: 'evt-late', signalId: cards[0]!.id },
+      metadata: { kinuEvent: 'event_drain', kinuAuthor: 'harness', drainTurnId: 'evt-late', signalId: cards[0]!.id },
     }]);
     // Settle reset the state — the next turn starts clean.
     expect(signals.prepareStep({ stepNumber: 0, messages: [user('next')] })).toBeUndefined();
@@ -405,7 +405,7 @@ describe('the workspace genesis signal', () => {
 
     expect(await signals.deliver(genesis!)).toBe('queued');
     expect(queued).toHaveLength(1);
-    expect(queued[0]!.metadata?.proteusEvent).toBe(WORKSPACE_CREATED_EVENT);
+    expect(queued[0]!.metadata?.kinuEvent).toBe(WORKSPACE_CREATED_EVENT);
   });
 
   test('it is never spliced into a turn that raced it', async () => {

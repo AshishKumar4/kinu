@@ -10,7 +10,7 @@
  *
  * So this drives `LocalAgentSession` in-process. That is the same spine the CLI
  * uses (`kinu exec` → `runOneShot` → `LocalAgentSession.processTurn` →
- * `closeTurnRun`), with no subprocess, no `PROTEUS_HOME`, no daemon guard and no
+ * `closeTurnRun`), with no subprocess, no `KINU_HOME`, no daemon guard and no
  * stdout parsing. The rows land in the workspace's own SQLite, which is exactly
  * what the scorer reads.
  *
@@ -49,7 +49,7 @@ import { requireSandboxedExecutors } from './harness';
 import {
   liveChatModel, liveModelTarget, recordLiveModelEpisode, reportLiveModelSpend, scoreDelegation,
   scratchDir, UNCONFIGURED_LLM,
-} from '@kinu/test-utils';
+} from '@kinu.run/test-utils';
 
 const TARGET = liveModelTarget('Delegation Evals');
 const liveTest = test.skipIf(!TARGET);

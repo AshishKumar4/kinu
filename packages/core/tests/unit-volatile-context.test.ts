@@ -33,7 +33,7 @@ import {
   type PromptExecutorInfo,
 } from '../src/index';
 import type { ActiveSkillSet, ParsedSkill } from '../src/skills/types';
-import { createTestRuntime } from '@kinu/test-utils';
+import { createTestRuntime } from '@kinu.run/test-utils';
 
 const idleSandbox: PromptExecutorInfo = { name: 'sandbox', available: true, configured: true, active: false, status: 'idle' };
 const activeSandbox: PromptExecutorInfo = { name: 'sandbox', available: true, configured: true, active: true, status: 'active' };

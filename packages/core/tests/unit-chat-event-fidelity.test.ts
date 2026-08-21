@@ -10,7 +10,7 @@ import { tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import { z } from 'zod';
-import { runChat, ExtensionHost, type ChatEvent, type ProteusExtension, type Usage } from '../src/index';
+import { runChat, ExtensionHost, type ChatEvent, type KinuExtension, type Usage } from '../src/index';
 
 type FinishPart = Extract<LanguageModelV3StreamPart, { type: 'finish' }>;
 
@@ -81,7 +81,7 @@ async function collect(model: LanguageModel, tools: ToolSet, extensions?: Extens
 describe('ChatEvent tool success/error fidelity', () => {
   test('a throwing tool yields a tool-result with success:false and the error text', async () => {
     const seenByExtension: string[] = [];
-    const ext: ProteusExtension = {
+    const ext: KinuExtension = {
       name: 'recorder',
       onToolResult: ({ result }) => { seenByExtension.push(result); },
     };
@@ -152,7 +152,7 @@ describe('ChatEvent tool-result completeness', () => {
 
   test('a result far past the old 1000-char bound reaches the seam whole', async () => {
     const seen: string[] = [];
-    const ext: ProteusExtension = { name: 'recorder', onToolResult: ({ result }) => { seen.push(result); } };
+    const ext: KinuExtension = { name: 'recorder', onToolResult: ({ result }) => { seen.push(result); } };
     const body = `${preamble}THE-TAIL`;
     const model = toolThenTextModel({ toolName: 'big' });
     const tools = {
@@ -166,7 +166,7 @@ describe('ChatEvent tool-result completeness', () => {
 
   test('a long error keeps its tail, so the failure text survives', async () => {
     const seen: string[] = [];
-    const ext: ProteusExtension = { name: 'recorder', onToolResult: ({ result }) => { seen.push(result); } };
+    const ext: KinuExtension = { name: 'recorder', onToolResult: ({ result }) => { seen.push(result); } };
     const model = toolThenTextModel({ toolName: 'boom' });
     const tools = {
       boom: tool({

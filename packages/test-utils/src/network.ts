@@ -4,7 +4,7 @@
 //   1. assert what URL / headers / body the provider sent
 //   2. control the response shape (200/401/etc.)
 //   3. simulate refresh-on-401 flows by switching handlers between calls
-import { asFetchFunction } from '@kinu/core';
+import { asFetchFunction } from '@kinu.run/core';
 import * as v from 'valibot';
 
 export interface RecordedRequest {

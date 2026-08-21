@@ -233,7 +233,7 @@ describe('reconcileSkips', () => {
 
   // A parametrised family is declared once, so the gate does not become a
   // transcript of `corpus × repeats` that any corpus edit or a stray
-  // PROTEUS_EVAL_REPEATS turns red for no defect.
+  // KINU_EVAL_REPEATS turns red for no defect.
   test('a family entry declares every generated case under its prefix', () => {
     const vitest = parseJUnit(VITEST_REPORT);
     const verdict = reconcileSkips(vitest, [{
@@ -368,7 +368,7 @@ describe('the committed lock', () => {
 
 /**
  * With a target resolved every locked entry RUNS — all 25 are `skipIf(!TARGET)`,
- * measured: `bun test ./tests/live-smoke.test.ts` under PROTEUS_EVAL_LIVE=1 ran
+ * measured: `bun test ./tests/live-smoke.test.ts` under KINU_EVAL_LIVE=1 ran
  * both of its locked entries, 3 model calls, 74.3s. Read as `stale` that made the
  * eval tier's own ratchet return 1 on every credentialed run.
  */

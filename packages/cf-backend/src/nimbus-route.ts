@@ -1,5 +1,5 @@
 import { Nimbus } from '@nimbus-sh/sdk';
-import { SOUL_PATH, type ArchiveFileSource } from '@kinu/core';
+import { SOUL_PATH, type ArchiveFileSource } from '@kinu.run/core';
 import { createHash, createHmac } from 'node:crypto';
 import { previewHostSuffix } from './lib/preview-origin';
 import { timingSafeEqual } from './lib/crypto';
@@ -10,7 +10,7 @@ const NIMBUS_SUBJECT = 'workspace';
 
 export function nimbusWorkspaceSessionId(ownerUserId: string, workspaceName: string): string {
   const digest = createHash('sha256')
-    .update('proteus:nimbus-workspace:v1\0')
+    .update('kinu:nimbus-workspace:v1\0')
     .update(ownerUserId)
     .update('\0')
     .update(workspaceName)
@@ -44,7 +44,7 @@ export function publicOriginForNimbus(env: Env): string {
   if (env.CLI_PUBLIC_ORIGIN && env.CLI_PUBLIC_ORIGIN.length > 0) {
     return env.CLI_PUBLIC_ORIGIN.replace(/\/+$/, '');
   }
-  return 'https://proteus.local';
+  return 'https://kinu.local';
 }
 
 /** The single constructor for a hosted workspace's authoritative Nimbus
@@ -93,7 +93,7 @@ export function nimbusPreviewConfigured(env: Env): boolean {
 
 function previewToken(secret: string, sessionId: string, port: number, capability: string): string {
   const digest = createHmac('sha256', secret)
-    .update(`proteus:nimbus-preview:v2:${sessionId}:${port}:${capability}`)
+    .update(`kinu:nimbus-preview:v2:${sessionId}:${port}:${capability}`)
     .digest();
   return encodeBase32(digest).slice(0, 15);
 }

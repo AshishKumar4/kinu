@@ -9,7 +9,7 @@ kinu create jarvis --mode cloud --alias jarvis --purpose "A helpful coding assis
 jarvis "what changed in this repo?"
 ```
 
-The installer works on macOS and Linux, adds `~/.proteus/bin` to your PATH when
+The installer works on macOS and Linux, adds `~/.kinu/bin` to your PATH when
 needed, and runs setup unless `--no-setup` is passed. `kinu setup` handles
 browser login and optional local model-provider credentials.
 
@@ -20,7 +20,7 @@ environments, and sessions) with its default agent inside.
 
 From here, [docs/USER-GUIDE.md](docs/USER-GUIDE.md) covers daily use,
 [docs/CLI.md](docs/CLI.md) is the full command reference, and
-[docs/CONFIG.md](docs/CONFIG.md) documents `~/.proteus/config.json`.
+[docs/CONFIG.md](docs/CONFIG.md) documents `~/.kinu/config.json`.
 
 ## Providers & models
 
@@ -71,5 +71,5 @@ bun run cli -- create jarvis --mode local --alias jarvis
 ```
 
 Source checkouts use `https://kinu.run` as the default app
-origin. Override with `--origin` or `PROTEUS_ORIGIN` only for alternate
+origin. Override with `--origin` or `KINU_ORIGIN` only for alternate
 deployments.

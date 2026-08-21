@@ -2,7 +2,7 @@
 // POST /api/cli/workspaces/:name/rpc {method, args} → {result}, errors
 // surfaced as thrown messages.
 import { describe, expect, test } from 'bun:test';
-import { JsonValueSchema, type JsonValue } from '@kinu/core';
+import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
 import { callAgentRpc } from '../src/cloud-api';
 import * as v from 'valibot';
 

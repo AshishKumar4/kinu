@@ -7,11 +7,11 @@
 // binding; the providers that need it report themselves unavailable rather than
 // guessing (providers/ai-gateway.ts `resolvePlatformGateway`).
 import type { OrchestratorAgent } from "./src/orchestrator";
-import type { ProteusSandbox } from "./src/proteus-sandbox";
+import type { KinuSandbox } from "./src/kinu-sandbox";
 import type { UserDO } from "./src/user/user-do";
 import type { MonitorDO } from "./src/monitor/monitor-do";
 import type { NimbusSession } from "@nimbus-sh/sdk/worker";
-import type { VectorizeIndex as ProteusVectorizeIndex } from "@kinu/core";
+import type { VectorizeIndex as KinuVectorizeIndex } from "@kinu.run/core";
 
 // This file has top-level imports (for the DO class generics below), which
 // makes it a module — so `interface Env` here would be module-scoped, not
@@ -23,7 +23,7 @@ declare global {
      *  memory's embedder report unavailable; nothing silently degrades. */
     AI?: Ai;
     /** Optional semantic-memory index. Without it, memory remains FTS-only. */
-    MEMORY_VECTORS?: ProteusVectorizeIndex;
+    MEMORY_VECTORS?: KinuVectorizeIndex;
     /** The Nimbus runtime artifact store a HOSTED workspace installs its
      *  toolchain from — `catalog/v1.json`, per-version manifests and
      *  content-addressed blobs. An R2 BUCKET, not a marker string: the Nimbus
@@ -44,12 +44,12 @@ declare global {
     /** Sandbox container DO — @cloudflare/sandbox. One per agent.
      *  Binding name is fixed to "Sandbox" because the SDK's proxyToSandbox
      *  looks up `env.Sandbox` directly. */
-    Sandbox: DurableObjectNamespace<ProteusSandbox>;
+    Sandbox: DurableObjectNamespace<KinuSandbox>;
     /** Browser sessions, one-time OAuth state, and CLI browser-approval state.
      *  Everything in it expires on its own; nothing in it is a source of truth. */
     AUTH_KV: KVNamespace;
     /** R2 bucket holding sandbox /workspace snapshots. Read directly by
-     *  ProteusSandbox to verify a snapshot before restoring from it. */
+     *  KinuSandbox to verify a snapshot before restoring from it. */
     BACKUP_BUCKET?: R2Bucket;
     /** Presigned-URL credentials for the container↔R2 transfer. Present ⇒ the
      *  SDK moves snapshot bytes over presigned URLs and restores by MOUNTING the
@@ -98,7 +98,7 @@ declare global {
      *  email without an OAuth browser session. Production must leave this unset. */
     DEV_USER_EMAIL?: string;
     /** Per-turn tool-call step ceiling. OPTIONAL — unset means core's default. */
-    PROTEUS_MAX_STEPS?: string;
+    KINU_MAX_STEPS?: string;
     /** Cloudflare Email Sending binding (`send_email` in wrangler.jsonc).
      *  OPTIONAL — without it, outbound email (thread replies, owner
      *  notifications) skips quietly. */

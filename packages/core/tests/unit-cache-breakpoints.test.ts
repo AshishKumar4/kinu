@@ -240,8 +240,8 @@ describe('markCacheTail', () => {
 
 describe('promptCacheOptions', () => {
   test('openai/codex: typed promptCacheKey', () => {
-    expect(promptCacheOptions({ kind: 'openai-cache-key' }, 'proteus-a1'))
-      .toEqual({ openai: { promptCacheKey: 'proteus-a1' } });
+    expect(promptCacheOptions({ kind: 'openai-cache-key' }, 'kinu-a1'))
+      .toEqual({ openai: { promptCacheKey: 'kinu-a1' } });
   });
 
   test('openai-compat family: prompt_cache_key under the provider namespace', () => {
@@ -262,7 +262,7 @@ describe('applyCacheBreakpoints', () => {
   test('anthropic plan: system message + tail markers, no request options', () => {
     const plan = applyCacheBreakpoints({
       providerId: 'anthropic', modelId: 'claude-opus-4-7',
-      system: 'sys', messages: history(4), sessionKey: 'proteus-x',
+      system: 'sys', messages: history(4), sessionKey: 'kinu-x',
     });
     expect(plan.strategy).toEqual({ kind: 'anthropic' });
     expect(hasCacheMarkers(plan.strategy)).toBe(true);
@@ -275,7 +275,7 @@ describe('applyCacheBreakpoints', () => {
     const messages = history(3);
     const plan = applyCacheBreakpoints({
       providerId: 'workers-ai', modelId: '@cf/moonshotai/kimi-k2.6',
-      system: 'sys', messages, sessionKey: 'proteus-x',
+      system: 'sys', messages, sessionKey: 'kinu-x',
     });
     expect(plan.system).toBe('sys');
     expect(plan.messages).toEqual(messages);
@@ -294,7 +294,7 @@ describe('applyCacheBreakpoints', () => {
       ['openrouter', 'anthropic/claude-sonnet-4.6'],
       ['workers-ai', '@cf/moonshotai/kimi-k2.6'],
     ] as const) {
-      const input = { providerId, modelId, system: 'sys', sessionKey: 'proteus-x' };
+      const input = { providerId, modelId, system: 'sys', sessionKey: 'kinu-x' };
       const { messages: _tail, ...shared } = applyCacheBreakpoints({ ...input, messages: history(4) });
       expect({ providerId, ...shared }).toEqual({ providerId, ...promptCachePlan(input) });
     }

@@ -16,8 +16,8 @@ import {
   isCloudflareCredentialUsable,
   type CloudflareTokenPayload,
 } from '../lib/cloudflare-oauth';
-import { DEFAULT_WORKERS_AI_MODEL_SPEC, JsonObjectSchema, JsonValueSchema, type JsonObject } from '@kinu/core';
-import { diagnostics, toProteusError } from '@kinu/core/obs';
+import { DEFAULT_WORKERS_AI_MODEL_SPEC, JsonObjectSchema, JsonValueSchema, type JsonObject } from '@kinu.run/core';
+import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import { notifyWorkspacesCredentialsChanged } from '../user/workspace-access';
 import { ownerCaller } from '../user/workspace-capability';
 import * as v from 'valibot';
@@ -200,7 +200,7 @@ async function finishOAuth(request: Request, env: Env, ctx: ExecutionContext | u
     });
   } catch (e) {
     const failure = summarizeOAuthFailure(e);
-    diagnostics.failure('auth.oauth_callback_failed', toProteusError({
+    diagnostics.failure('auth.oauth_callback_failed', toKinuError({
       doing: 'completing the OAuth callback',
       cause: e,
       otherwise: 'unavailable',
@@ -241,7 +241,7 @@ async function attachCloudflareWorkersAI(
     notifyWorkspacesCredentialsChanged(env, userDO, ctx);
   } catch (e) {
     const failure = summarizeOAuthFailure(e);
-    diagnostics.failure('auth.workers_ai_credential_unavailable', toProteusError({
+    diagnostics.failure('auth.workers_ai_credential_unavailable', toKinuError({
       doing: 'attaching the Workers AI credential to a Cloudflare sign-in',
       cause: e,
       otherwise: 'unavailable',

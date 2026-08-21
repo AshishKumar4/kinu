@@ -53,6 +53,7 @@ export const SPEND_SOURCES = [
   'swarm',
   'sandbox',
   'platform',
+  'advisor',
 ] as const;
 
 export type SpendSource = (typeof SPEND_SOURCES)[number];
@@ -71,6 +72,7 @@ export const SPEND_SOURCE_LABEL = {
   swarm: 'Swarm expansions',
   sandbox: 'Sandbox llm.query',
   platform: 'Platform AI',
+  advisor: 'Advisor',
 } as const satisfies Readonly<Record<SpendSource, string>>;
 
 /** One sentence per producer saying what actually fires it — the difference
@@ -91,7 +93,36 @@ export const SPEND_SOURCE_DETAIL = {
   platform: 'Workers AI utility bindings: memory embeddings and HTML→markdown '
     + 'repair. Neither returns a usage field of any kind, so these are counted '
     + 'and never measured — which is what the coverage fraction below is made of',
+  advisor: 'the turn reviewer: one call after a turn ends, when it is switched on',
 } as const satisfies Readonly<Record<SpendSource, string>>;
+
+/**
+ * The producers whose model the owner can pin — the routing vocabulary, drawn
+ * from the spend taxonomy above so one set of names answers both "where did the
+ * money go" and "what runs there".
+ *
+ * ROUTED is the load-bearing word, and this is a SUBSET rather than the whole
+ * taxonomy because an offered control that changes nothing is worse than an
+ * absent one. A producer is here only when a resolver stands between it and its
+ * model (providers/role-model.ts). The others, and why each is absent:
+ *
+ *   - `agent` IS the chat model. It already has a picker, and a second key for
+ *     it would be two names for one setting.
+ *   - `reflection` runs on the `fast` tier's own client (evolution/engine.ts
+ *     `fastLlm`). Its spend is reported separately because the QUESTION differs;
+ *     the model does not.
+ *   - `compaction`, `head`, `mcts`, `swarm` and `sandbox` take the session's
+ *     chat model at the call site. Rerouting one is a behavioural change to
+ *     that producer, not a config key.
+ *   - `platform` is a Workers AI binding. There is no model id to set.
+ */
+export const ROUTED_SPEND_SOURCES = ['judge', 'fast', 'advisor'] as const satisfies readonly SpendSource[];
+
+export type RoutedSpendSource = (typeof ROUTED_SPEND_SOURCES)[number];
+
+export function isRoutedSpendSource<Value>(value: Value): value is Value & RoutedSpendSource {
+  return ROUTED_SPEND_SOURCES.some((source) => source === value);
+}
 
 /**
  * One model call, as the producer that made it can report it.

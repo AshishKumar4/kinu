@@ -14,7 +14,7 @@
  */
 
 import PC_AGENT_DAEMON_SOURCE from "../../pc-agent/src/index.js?raw";
-import { DEVICE_CONNECT_PATH } from "@kinu/core";
+import { DEVICE_CONNECT_PATH } from "@kinu.run/core";
 import { json, safeJson } from "./lib/http";
 import { ownerCaller } from "./user/workspace-capability";
 import * as v from "valibot";
@@ -41,23 +41,23 @@ export async function handlePcRequest(request: Request, env: Env): Promise<Respo
 }
 
 function installScriptResponse(origin: string): Response {
-  // `kinu connect` writes ~/.proteus/device.json with the device token over
+  // `kinu connect` writes ~/.kinu/device.json with the device token over
   // an authenticated HTTPS API call. This script only updates/starts the daemon
   // for users who already have that local config.
   const script = `#!/usr/bin/env bash
 set -eu
-PROTEUS_ORIGIN="\${PROTEUS_ORIGIN:-${origin}}"
+KINU_ORIGIN="\${KINU_ORIGIN:-${origin}}"
 
-DIR="$HOME/.proteus"
+DIR="$HOME/.kinu"
 mkdir -p "$DIR"
 chmod 700 "$DIR"
 if [ ! -f "$DIR/device.json" ]; then
   echo "No Kinu device config found at $DIR/device.json."
-  echo "Run: kinu auth --origin $PROTEUS_ORIGIN && kinu connect"
+  echo "Run: kinu auth --origin $KINU_ORIGIN && kinu connect"
   exit 1
 fi
 echo "Downloading Kinu device daemon…"
-curl -fsSL "$PROTEUS_ORIGIN${DAEMON_JS_URL}" -o "$DIR/pc-agent.js"
+curl -fsSL "$KINU_ORIGIN${DAEMON_JS_URL}" -o "$DIR/pc-agent.js"
 chmod 600 "$DIR/device.json"
 
 if command -v node >/dev/null 2>&1; then

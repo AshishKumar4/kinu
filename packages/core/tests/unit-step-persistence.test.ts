@@ -27,7 +27,7 @@
 // fail naming the missing step.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { scratchPath } from '@kinu/test-utils';
+import { scratchPath } from '@kinu.run/test-utils';
 import { tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { z } from 'zod';
 import { runChat, INTERRUPTED_TURN, type ChatEvent } from '../src/chat';

@@ -2,8 +2,8 @@
 // per-agent registry composition.
 import { describe, test, expect } from 'bun:test';
 import { userCredentialSource } from './helpers/user-credentials';
-import { createMockFetch } from '@kinu/test-utils';
-import type { ModelsDevProviderInfo } from '@kinu/core';
+import { createMockFetch } from '@kinu.run/test-utils';
+import type { ModelsDevProviderInfo } from '@kinu.run/core';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry';
 import { buildProviderCatalog } from '../src/user/available-models';
 

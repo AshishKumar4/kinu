@@ -4,7 +4,7 @@
  *
  * Imports and invokes each command module directly. This tests the real CLI
  * local-agent logic (SQLite agent DB, create, list, status, export/import)
- * while keeping test state isolated from the user's real ~/.proteus.
+ * while keeping test state isolated from the user's real ~/.kinu.
  */
 
 import { existsSync, statSync, rmSync, mkdirSync } from "fs";
@@ -16,19 +16,19 @@ import { tmpdir } from "os";
 // would spawn `bun <this-file> daemon run`, re-executing the entire test
 // suite as a "daemon" child, which would spawn another child, ad infinitum.
 // This must be set BEFORE any imports that pull in the CLI command modules.
-process.env.PROTEUS_SKIP_DAEMON = "1";
+process.env.KINU_SKIP_DAEMON = "1";
 
 // Provide dummy LLM config so resolveLLMConfig() doesn't throw.
-process.env.PROTEUS_BASE_URL = process.env.PROTEUS_BASE_URL ?? "http://localhost:5173/workers-ai/v1";
-process.env.PROTEUS_AUTH = process.env.PROTEUS_AUTH ?? "Bearer test";
-process.env.PROTEUS_MODEL = process.env.PROTEUS_MODEL ?? "@cf/deepseek-ai/deepseek-v4-pro-0813";
+process.env.KINU_BASE_URL = process.env.KINU_BASE_URL ?? "http://localhost:5173/workers-ai/v1";
+process.env.KINU_AUTH = process.env.KINU_AUTH ?? "Bearer test";
+process.env.KINU_MODEL = process.env.KINU_MODEL ?? "@cf/deepseek-ai/deepseek-v4-pro-0813";
 
-const TEST_ROOT = join(tmpdir(), `proteus-cli-e2e-home-${Date.now()}`);
-process.env.PROTEUS_HOME = TEST_ROOT;
+const TEST_ROOT = join(tmpdir(), `kinu-cli-e2e-home-${Date.now()}`);
+process.env.KINU_HOME = TEST_ROOT;
 const AGENT_HOME = TEST_ROOT;
 const AGENT_NAME = `e2e-cli-${Date.now()}`;
 const IMPORT_NAME = `e2e-import-${Date.now()}`;
-const EXPORT_DIR = join(tmpdir(), `proteus-cli-e2e-${Date.now()}`);
+const EXPORT_DIR = join(tmpdir(), `kinu-cli-e2e-${Date.now()}`);
 mkdirSync(EXPORT_DIR, { recursive: true });
 
 let passCount = 0;

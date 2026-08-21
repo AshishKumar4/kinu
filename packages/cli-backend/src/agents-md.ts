@@ -7,8 +7,8 @@
 
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import type { AgentsMdFile } from '@kinu/core';
-import { tolerate } from '@kinu/core/obs';
+import type { AgentsMdFile } from '@kinu.run/core';
+import { tolerate } from '@kinu.run/core/obs';
 
 export function discoverAgentsMd(cwd: string): AgentsMdFile[] {
   const files: AgentsMdFile[] = [];

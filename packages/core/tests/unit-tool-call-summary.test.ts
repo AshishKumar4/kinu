@@ -153,7 +153,7 @@ describe('tool call summaries — truthfulness', () => {
 
   test('unknown (MCP / crafted) tools show a lone string argument and nothing else', () => {
     expect(summarizeToolCall('gh__search_issues', { query: 'is:open' })).toBe('is:open');
-    expect(summarizeToolCall('gh__search_issues', { query: 'is:open', repo: 'proteus' })).toBe('');
+    expect(summarizeToolCall('gh__search_issues', { query: 'is:open', repo: 'kinu' })).toBe('');
     expect(summarizeToolCall('crafted_thing', { count: 3 })).toBe('');
   });
 

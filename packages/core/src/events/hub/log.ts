@@ -33,7 +33,7 @@ import * as v from 'valibot';
 import {
   SUBORDINATE_REPORT_STATUSES,
   type AgentLogRow, type EventId, type EventVariant, type IngressDescriptor,
-  type Priority, type ProteusEvent, type ReplyChannelRef, type RevisitCondition,
+  type Priority, type KinuEvent, type ReplyChannelRef, type RevisitCondition,
   type TraceId, type TurnId,
 } from './types';
 import { dedupeKeyForDescriptor } from './dedupe';
@@ -173,7 +173,7 @@ const PeerAgentPayloadSchema = v.object({
   sender_event_id: v.string(),
   reply_expected: v.optional(v.boolean()),
   body_path: v.optional(v.string()),
-  proteus_mode: WorkModeSchema,
+  kinu_mode: WorkModeSchema,
 });
 const SubordinateTaskPayloadSchema = v.object({
   from_workspace: v.string(),
@@ -182,7 +182,7 @@ const SubordinateTaskPayloadSchema = v.object({
   deliverable: v.optional(v.string()),
   deadline_hint: v.optional(v.string()),
   inherited_context: v.optional(v.string()),
-  proteus_mode: WorkModeSchema,
+  kinu_mode: WorkModeSchema,
 });
 const SubordinateReportPayloadSchema = v.object({
   from_subordinate: v.string(),
@@ -190,7 +190,7 @@ const SubordinateReportPayloadSchema = v.object({
   content: v.string(),
   task: v.optional(v.string()),
   content_path: v.optional(v.string()),
-  proteus_mode: WorkModeSchema,
+  kinu_mode: WorkModeSchema,
 });
 const FileChangedPayloadSchema = v.object({
   path: v.string(),
@@ -307,7 +307,7 @@ export class EventLog {
 
   /** Events not yet bound to a turn. Ordered by priority desc, received_at asc.
    *  Honors deferred-revisit conditions if `resolve_deferred` is passed. */
-  pending(filter: PendingFilter = {}): ProteusEvent[] {
+  pending(filter: PendingFilter = {}): KinuEvent[] {
     const limit = filter.limit ?? 50;
     const minPrio = filter.min_priority ?? 'background';
     const minPrioRank = PRIORITY_ORDER[minPrio];
@@ -376,7 +376,7 @@ export class EventLog {
   }
 
   /** Deferred events whose revisit condition is satisfied. */
-  private queryDeferred(ctx: { now: number; phase: 'idle' | 'merging' }): ProteusEvent[] {
+  private queryDeferred(ctx: { now: number; phase: 'idle' | 'merging' }): KinuEvent[] {
     const rows = this.sql.exec(
       `SELECT id, parent_id, trace_id, ingress, variant, trust, priority,
               payload_visibility, payload, received_at, schema_version,
@@ -483,7 +483,7 @@ export class EventLog {
 
   /** Generic event read. Used by the operator UI and the LLM-facing
    *  `recent_events` / `list_pending_events` tools. */
-  query(filter: QueryFilter): ProteusEvent[] {
+  query(filter: QueryFilter): KinuEvent[] {
     let sql = `
       SELECT id, parent_id, trace_id, ingress, variant, trust, priority,
              payload_visibility, payload, received_at, schema_version,
@@ -504,7 +504,7 @@ export class EventLog {
   }
 
   /** Single-event read by id. */
-  get(eventId: EventId): ProteusEvent | null {
+  get(eventId: EventId): KinuEvent | null {
     const rows = this.sql.exec(
       `SELECT id, parent_id, trace_id, ingress, variant, trust, priority,
               payload_visibility, payload, received_at, schema_version,
@@ -611,10 +611,10 @@ function preserveDelegatedMode(
   ) return stored;
   const envelope = v.safeParse(JsonObjectSchema, stored);
   if (!envelope.success) return stored;
-  return { ...envelope.output, proteus_mode: descriptor.payload.proteus_mode };
+  return { ...envelope.output, kinu_mode: descriptor.payload.kinu_mode };
 }
 
-function rowToEvent(row: v.InferOutput<typeof EventRowSchema>): ProteusEvent {
+function rowToEvent(row: v.InferOutput<typeof EventRowSchema>): KinuEvent {
   const payload = parseJsonValue(row.payload);
   const base = {
     id: row.id,

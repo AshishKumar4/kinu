@@ -14,7 +14,7 @@ import {
   // report.* — codemode projection of the native `report` tool.
   createReportCodemodeProvider, type CodemodeProvider,
   type DelegationBudget,
-} from '@kinu/core';
+} from '@kinu.run/core';
 import {
   ActorAgent,
   type ActorToolDeps,
@@ -28,8 +28,8 @@ import {
   subordinateRelaysTurnEnd,
   type SubordinateLiveStatus,
   type SubordinateReportOrigin,
-} from '@kinu/core';
-import { diagnostics, toProteusError } from '@kinu/core/obs';
+} from '@kinu.run/core';
+import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 
 /** The workspace root's class name, which is also its Durable Object binding
  *  name — the equality the SDK itself relies on when it resolves a top-level
@@ -53,7 +53,7 @@ export interface SetSubordinateIdentityInput {
  *  a log line. `lane` names which one — the event name stays literal. */
 function reportSubordinateFailure(lane: string) {
   return <Thrown,>(thrown: Thrown): void => {
-    diagnostics.failure('subordinate.report_failed', toProteusError({
+    diagnostics.failure('subordinate.report_failed', toKinuError({
       doing: 'reporting to the parent workspace',
       cause: thrown,
       otherwise: 'unavailable',
@@ -142,7 +142,7 @@ export class SubordinateAgent extends ActorAgent {
   }
 
   protected scaffoldPath(): string {
-    return `.proteus/agents/${encodeURIComponent(this.name)}/scaffold/agent.js`;
+    return `.kinu/agents/${encodeURIComponent(this.name)}/scaffold/agent.js`;
   }
 
   protected shellId(): string { return `subordinate:${this.name}`; }

@@ -25,7 +25,7 @@
 import type { RunEventInput } from '../events/types';
 import type { SignalDeliverer } from '../types/signals';
 import type { AbandonedHeadRun, HeadJournal } from './journal';
-import { diagnostics, toProteusError } from '../obs/index';
+import { diagnostics, toKinuError } from '../obs/index';
 
 /** What this reconciliation needs of the run-event recorder: find the run a
  *  fork was dispatched from, and append to it. Structural so core's heads layer
@@ -35,7 +35,7 @@ export interface RunEventLedger {
   emit(runId: string, input: RunEventInput): void;
 }
 
-/** The `proteusEvent` name for an interrupted fork — the queued turn's
+/** The `kinuEvent` name for an interrupted fork — the queued turn's
  *  provenance, and what makes the chat render it as an event card. */
 export const FORK_INTERRUPTED_SIGNAL = 'fork_interrupted';
 
@@ -163,7 +163,7 @@ function recordAbandonedRuns(
     } catch (err) {
       diagnostics.failure(
         'head.abandonment_record_failed',
-        toProteusError({ doing: 'record an abandoned fork', cause: err, otherwise: 'io' }),
+        toKinuError({ doing: 'record an abandoned fork', cause: err, otherwise: 'io' }),
         { rootId: run.rootId },
       );
     }

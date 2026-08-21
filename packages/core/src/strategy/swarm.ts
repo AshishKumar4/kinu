@@ -25,7 +25,7 @@
  * drift exactly as *One spelling per axis* describes.
  */
 
-import { ProteusError, refusalOf } from '../obs/error';
+import { KinuError, refusalOf } from '../obs/error';
 import { argumentDigest } from '../safety/argument-digest';
 import { floorMargin } from './objective';
 import type {
@@ -703,7 +703,7 @@ export interface ResolvedSwarm {
  *  tree is rendered by, so a cause chain reads the same here as anywhere else. See
  *  *Refusals*. */
 function badInput(error: string): SwarmRefusal {
-  return { reason: 'bad_input', error: refusalOf(new ProteusError('bad_input', error)).error };
+  return { reason: 'bad_input', error: refusalOf(new KinuError('bad_input', error)).error };
 }
 
 /**

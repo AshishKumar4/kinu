@@ -7,12 +7,12 @@
 // still reachable, just not preferred.
 //
 // Driven through the real `setupCommand` in a subprocess, because config.ts
-// binds PROTEUS_HOME at import.
+// binds KINU_HOME at import.
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, parseJsonObject, type JsonObject } from '@kinu/core';
+import { DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, parseJsonObject, type JsonObject } from '@kinu.run/core';
 
 const repoRoot = resolve(__dirname, '../../..');
 const tempDirs: string[] = [];
@@ -21,7 +21,7 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-const CLOUD_ORIGIN = 'https://proteus.example.com';
+const CLOUD_ORIGIN = 'https://kinu.example.com';
 const CLOUD_TOKEN = 'ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz';
 
 /** A signed-in machine that had been pinned to a paid BYO provider. */
@@ -36,7 +36,7 @@ function signedInHome(extra: JsonObject = {}): string {
 }
 
 function home(config: JsonObject): string {
-  const dir = mkdtempSync(join(tmpdir(), 'proteus-setup-home-'));
+  const dir = mkdtempSync(join(tmpdir(), 'kinu-setup-home-'));
   tempDirs.push(dir);
   writeFileSync(join(dir, 'config.json'), JSON.stringify(config), { mode: 0o600 });
   return dir;
@@ -45,8 +45,8 @@ function home(config: JsonObject): string {
 /** Runs setupCommand with `skipCloud`, so no branch can reach the network:
  *  every assertion here is about which provider the flow chooses. The import
  *  is dynamic because it runs inside a `bun -e` child — config.ts binds
- *  PROTEUS_HOME at import, so each case needs its own process. */
-function runSetup(opts: JsonObject, proteusHome: string) {
+ *  KINU_HOME at import, so each case needs its own process. */
+function runSetup(opts: JsonObject, kinuHome: string) {
   const runner = `
     const { setupCommand } = await import('./packages/cli/src/commands/setup.ts');
     await setupCommand({ ...${JSON.stringify(opts)}, skipCloud: true });
@@ -57,8 +57,8 @@ function runSetup(opts: JsonObject, proteusHome: string) {
     env: {
       ...process.env,
       OPENAI_API_KEY: '', ANTHROPIC_API_KEY: '', OPENROUTER_API_KEY: '', CODEX_ACCESS_TOKEN: '',
-      PROTEUS_BASE_URL: '', PROTEUS_AUTH: '', PROTEUS_MODEL: '', PROTEUS_TOKEN: '', PROTEUS_ORIGIN: '',
-      PROTEUS_HOME: proteusHome, NO_COLOR: '1',
+      KINU_BASE_URL: '', KINU_AUTH: '', KINU_MODEL: '', KINU_TOKEN: '', KINU_ORIGIN: '',
+      KINU_HOME: kinuHome, NO_COLOR: '1',
     },
     stdout: 'pipe',
     stderr: 'pipe',
@@ -67,7 +67,7 @@ function runSetup(opts: JsonObject, proteusHome: string) {
     stdout: proc.stdout.toString(),
     stderr: proc.stderr.toString(),
     exitCode: proc.exitCode,
-    config: parseJsonObject(readFileSync(join(proteusHome, 'config.json'), 'utf8')),
+    config: parseJsonObject(readFileSync(join(kinuHome, 'config.json'), 'utf8')),
   };
 }
 

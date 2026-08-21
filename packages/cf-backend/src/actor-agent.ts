@@ -26,12 +26,12 @@ import type { SubordinateActivityEvent } from './lib/protocol';
 import { parseProtocolMessage } from "agents/chat";
 import { CLI_SCOPES_HEADER, cliScopesConnectionTag, rejectOutOfScopeRpc } from "./cli/rpc-gate";
 import { createWorkersTracer } from "./obs/cf-tracer";
-import { createAgentTracing, renderThrownChain, type AgentTracing } from "@kinu/core/obs";
+import { createAgentTracing, renderThrownChain, type AgentTracing } from "@kinu.run/core/obs";
 import {
   createCompactionExtension, createVfsTranscriptStore,
   createCompactionStateStore, createModelSummarizer,
   type CompactionStateStore, type Logger as CompactionLogger,
-} from "@kinu/compaction";
+} from "@kinu.run/compaction";
 import { Think, Session } from "@cloudflare/think";
 import { streamText, tool, jsonSchema, stepCountIs } from "ai";
 import type { LanguageModel, ModelMessage, SystemModelMessage, ToolSet, UIMessage } from "ai";
@@ -57,6 +57,7 @@ import {
   queueTurnShadowTrial, runQueuedShadowTrials, createJsonJudge, type ScaffoldControl,
   SCAFFOLD_TURN_TIMEOUT_MS,
   effortFor, type CompletedTurn, type TurnContinuity,
+  runAdvisorLane,
   // canonical tool + prompt surface — single source of truth
   buildActorTools,
   withClampedToolResults,
@@ -163,7 +164,7 @@ import {
   // memory.* / tasks.* — codemode projections of the same-named native tools
   createMemoryCodemodeProvider, createTasksCodemodeProvider,
   JsonObjectSchema, JsonValueSchema, projectJsonValue, type JsonObject, type JsonValue,
-} from "@kinu/core";
+} from "@kinu.run/core";
 import { bindAgentSql, createCFRuntime, type CFRuntime } from "./runtime";
 import { createExecuteToolsTool } from "./execute-tools";
 import { createHeadRuntime } from "./head-runtime";
@@ -174,9 +175,9 @@ import {
   // Prompt-cache breakpoints — single source in core prompting/cache-breakpoints.ts
   promptCachePlan, hasCacheMarkers, markLastToolForAnthropicCache,
   type PromptCacheStrategy,
-} from "@kinu/core";
-import type { CodemodeProvider, DeferredApprovalChannel } from "@kinu/core";
-import { diagnostics, ProteusError, toProteusError, tolerate } from "@kinu/core/obs";
+} from "@kinu.run/core";
+import type { CodemodeProvider, DeferredApprovalChannel } from "@kinu.run/core";
+import { diagnostics, KinuError, toKinuError, tolerate } from "@kinu.run/core/obs";
 import type { UserDO } from "./user/user-do";
 import type { UserCaller } from "./user/workspace-capability";
 import { sha256Hex } from "./lib/crypto";
@@ -462,7 +463,7 @@ export abstract class ActorAgent extends Think<Env> {
         const stub = await this.subAgent(facet, entry.name);
         await stub.installWorkspaceCapability(token);
       } catch (err) {
-        diagnostics.failure('capability.subordinate_push_failed', toProteusError({
+        diagnostics.failure('capability.subordinate_push_failed', toKinuError({
           doing: 'pushing the workspace capability token to a subordinate',
           cause: err,
           otherwise: 'unavailable',
@@ -779,7 +780,7 @@ export abstract class ActorAgent extends Think<Env> {
     }, input, Date.now());
   }
 
-  override maxSteps = resolveMaxSteps(this.env.PROTEUS_MAX_STEPS);
+  override maxSteps = resolveMaxSteps(this.env.KINU_MAX_STEPS);
 
   private readonly ownedModelServices = new OwnedModelServices({
     env: this.env,
@@ -827,7 +828,7 @@ export abstract class ActorAgent extends Think<Env> {
           try {
             await this.compactionState.plans.save(this.name, null);
           } catch (err) {
-            diagnostics.failure('compaction.reset_failed', toProteusError({
+            diagnostics.failure('compaction.reset_failed', toKinuError({
               doing: 'clearing the persisted compaction plan after clear-history',
               cause: err,
               otherwise: 'io',
@@ -845,7 +846,7 @@ export abstract class ActorAgent extends Think<Env> {
     // drain replays into durable history (the same ordering the CLI's
     // ExtensionHost uses).
     this.extensions.register({
-      name: 'proteus.user-steer',
+      name: 'kinu.user-steer',
       prepareStep: (ctx) => this.userSteer.prepareStep(ctx),
     });
     // The orchestrator's per-turn extension: the turn steering's observation
@@ -853,7 +854,7 @@ export abstract class ActorAgent extends Think<Env> {
     // through closures because `orch` is built lazily and this runs in the
     // constructor.
     this.extensions.register({
-      name: 'proteus.signals',
+      name: 'kinu.signals',
       onToolCall: (ctx) => this.orch.turnExtension.onToolCall?.(ctx),
       onToolResult: (ctx) => this.orch.turnExtension.onToolResult?.(ctx),
       prepareStep: (ctx) => this.orch.turnExtension.prepareStep?.(ctx),
@@ -936,9 +937,9 @@ export abstract class ActorAgent extends Think<Env> {
       id: steer.id ?? `steer-${nanoid(12)}`,
       role: 'user' as const,
       parts: [{ type: 'text' as const, text: steer.text }],
-      metadata: { proteusSteer: true },
+      metadata: { kinuSteer: true },
     }))).catch((err) =>
-      diagnostics.failure('steer.persist_failed', toProteusError({
+      diagnostics.failure('steer.persist_failed', toKinuError({
         doing: 'persisting a mid-turn steer as a durable user row',
         cause: err,
         otherwise: 'io',
@@ -983,7 +984,7 @@ export abstract class ActorAgent extends Think<Env> {
       metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator' },
     })
       .catch((err) =>
-        diagnostics.failure('steer.rerun_failed', toProteusError({
+        diagnostics.failure('steer.rerun_failed', toKinuError({
           doing: 'enqueuing leftover steers as their own user turn',
           cause: err,
           otherwise: 'io',
@@ -1066,11 +1067,11 @@ export abstract class ActorAgent extends Think<Env> {
       // are shared verbatim with `cli-backend/src/local-session.ts`, which adapts the same
       // `@better-compact/core` Logger port to the same outcomes. One query reads both backends.
       warn: (message, data) => {
-        diagnostics.failure('compaction.degraded', new ProteusError('unavailable', message));
+        diagnostics.failure('compaction.degraded', new KinuError('unavailable', message));
         this.logActivity('compaction_warn', compactionLogDetail(message, data));
       },
       error: (message, data) => {
-        diagnostics.failure('compaction.failed', new ProteusError('io', message));
+        diagnostics.failure('compaction.failed', new KinuError('io', message));
         this.logActivity('compaction_error', compactionLogDetail(message, data));
       },
     };
@@ -1081,7 +1082,14 @@ export abstract class ActorAgent extends Think<Env> {
         logger,
       },
       archive: this.compactionState.archive,
-      summarize: createModelSummarizer(() => this.getModel()),
+      // The sink the summarizer already accepts, finally passed. `compaction`
+      // was a declared SPEND_SOURCE that could never appear in the panel:
+      // folding history is the producer that fires precisely when a
+      // conversation got expensive, so the workspace total understated exactly
+      // the sessions an owner asks about.
+      summarize: createModelSummarizer(() => this.getModel(), undefined, {
+        source: 'compaction', report: (report) => this.reportModelCall(report),
+      }),
       // The ladder's first rung prunes this plane before any tool output.
       ephemeral: this.dynamicLedger,
       onOutcome: ({ outcome }) => {
@@ -1134,7 +1142,7 @@ export abstract class ActorAgent extends Think<Env> {
             try {
               if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'tool_call_end', ...ev });
             } catch (err) {
-              diagnostics.failure('event.tool_call_end_emit_failed', toProteusError({
+              diagnostics.failure('event.tool_call_end_emit_failed', toKinuError({
                 doing: 'recording a tool_call_end run event',
                 cause: err,
                 otherwise: 'io',
@@ -1145,7 +1153,7 @@ export abstract class ActorAgent extends Think<Env> {
             try {
               if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'step_finish', ...ev });
             } catch (err) {
-              diagnostics.failure('event.step_finish_emit_failed', toProteusError({
+              diagnostics.failure('event.step_finish_emit_failed', toKinuError({
                 doing: 'recording a step_finish run event',
                 cause: err,
                 otherwise: 'io',
@@ -1175,7 +1183,7 @@ export abstract class ActorAgent extends Think<Env> {
         try {
           if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'budget_exhausted', ...refusal });
         } catch (err) {
-          diagnostics.failure('event.budget_exhausted_emit_failed', toProteusError({
+          diagnostics.failure('event.budget_exhausted_emit_failed', toKinuError({
             doing: 'recording a budget_exhausted run event',
             cause: err,
             otherwise: 'io',
@@ -1291,7 +1299,7 @@ export abstract class ActorAgent extends Think<Env> {
       await this.orch.settleEvolution();
       await this.orch.runDueSessionEvolution();
     })
-      .catch((err) => diagnostics.failure('evolution.settle_failed', toProteusError({
+      .catch((err) => diagnostics.failure('evolution.settle_failed', toKinuError({
         doing: 'settling the turn and session evolution lanes',
         cause: err,
         otherwise: 'unavailable',
@@ -1305,10 +1313,11 @@ export abstract class ActorAgent extends Think<Env> {
    *
    * `orch.recordTurn` opens the outcome review + session cadence (which is
    * what eventually proposes a new scaffold), `settleEvolutionInBackground`
-   * holds the DO open for that detached work, and `engine.queueShadowTrial`
-   * records this turn as evidence the promotion gate may draw on. Split across
-   * subclasses these drift: a facet that recorded turns but never settled or
-   * queued them proposes exactly one scaffold and then stalls forever on it.
+   * holds the DO open for that detached work, `engine.queueShadowTrial`
+   * records this turn as evidence the promotion gate may draw on, and
+   * `reviewTurnInBackground` is the advisor. Split across subclasses these
+   * drift: a facet that recorded turns but never settled or queued them
+   * proposes exactly one scaffold and then stalls forever on it.
    */
   protected settleCompletedTurn(turn: CompletedTurn): void {
     // Evolution hooks make 5-30s LLM calls and onChatResponse runs INSIDE
@@ -1320,6 +1329,48 @@ export abstract class ActorAgent extends Think<Env> {
     // turn's prepared messages are read synchronously (before any await) so a
     // later turn's stash can never bleed into this one's replay.
     this.engine.queueShadowTrial(turn, this._lastTurnOpts?.messages ?? []);
+    this.reviewTurnInBackground(turn);
+  }
+
+  /**
+   * The advisor lane: one review of the turn that just ended.
+   *
+   * Detached for the same reason the evolution lanes are — it is a model call
+   * on a path the turn queue is holding — and held open by the same keepalive.
+   * A reviewer that fails leaves a turn with no advice, never a failed turn, so
+   * nothing here can reach the caller.
+   *
+   * Governed off the TURN's labels rather than the governor's active scope, the
+   * same way the engine's own review is: this runs after the turn ended, when
+   * the active scope is either empty or some later turn's, and debiting a
+   * mission for work it did not cause is worse than not debiting at all.
+   *
+   * There is no completion gate on this backend — it is the one-shot CLI
+   * surface's mechanism — so `gateOpen` is false here by construction rather
+   * than by omission.
+   */
+  private reviewTurnInBackground(turn: CompletedTurn): void {
+    const llm = this.rt.advisorLlm;
+    if (llm === undefined || !this.config.getAdvisorEnabled()) return;
+    const labels = turn.missionLabels ?? [];
+    void this.keepAliveWhile(() => runAdvisorLane({
+      turn,
+      llm: labels.length === 0 ? llm : this.budget.govern(llm, labels),
+      enabled: true,
+      minSeverity: this.config.getAdvisorMinSeverity(),
+      recent: this.engine.recentAdvisorNotes(),
+      gateOpen: false,
+      // The turn's OWN ToolSet keys, read synchronously with the messages beside
+      // them: what the actor demonstrably had, not what this actor class can
+      // have. A capability the turn never carried must never be named at it.
+      reachable: Object.keys(this._lastTurnOpts?.tools ?? {}),
+      deliver: (signal) => this.orch.signals.deliver(signal),
+      record: (note) => { this.engine.recordAdvisorNote(note); },
+    })).catch((err) => diagnostics.failure('advisor.review_failed', toKinuError({
+      doing: 'reviewing the completed turn',
+      cause: err,
+      otherwise: 'unavailable',
+    })));
   }
 
   /**
@@ -1516,7 +1567,7 @@ export abstract class ActorAgent extends Think<Env> {
           void this.keepAliveWhile(() => new Promise<void>((resolve) => {
             setTimeout(() => {
               fn().catch((err) =>
-                diagnostics.failure('drain.timer_callback_failed', toProteusError({
+                diagnostics.failure('drain.timer_callback_failed', toKinuError({
                   doing: 'running the debounced event drain',
                   cause: err,
                   otherwise: 'io',
@@ -1524,7 +1575,7 @@ export abstract class ActorAgent extends Think<Env> {
               ).finally(resolve);
             }, ms);
           })).catch((err) =>
-            diagnostics.failure('drain.timer_keepalive_failed', toProteusError({
+            diagnostics.failure('drain.timer_keepalive_failed', toKinuError({
               doing: 'holding the actor alive across the drain debounce window',
               cause: err,
               otherwise: 'io',
@@ -1648,7 +1699,7 @@ export abstract class ActorAgent extends Think<Env> {
       if (usd !== undefined) event.usd = usd;
       this.eventRecorder.emit(this._currentRunId || WORKSPACE_RUN_ID, event);
     } catch (err) {
-      diagnostics.failure('event.model_call_emit_failed', toProteusError({
+      diagnostics.failure('event.model_call_emit_failed', toKinuError({
         doing: 'recording a model_call run event',
         cause: err,
         otherwise: 'io',
@@ -1663,7 +1714,7 @@ export abstract class ActorAgent extends Think<Env> {
   //   - TriggerRegistry durable subscriptions (webhooks, timers, watches)
   //   - ReplyChannelStore  durable reply-channel rows + dispatchers
   // Spec: docs/ARCHITECTURE.md — "Events and ingress"
-  private _eventLog: import('@kinu/core').EventLog | null = null;
+  private _eventLog: import('@kinu.run/core').EventLog | null = null;
   protected get eventLog(): EventLog {
     if (!this._eventLog) {
       this._eventLog = new EventLog(this.ctx.storage.sql);
@@ -1755,7 +1806,7 @@ export abstract class ActorAgent extends Think<Env> {
         nodeCount: nodes.length, nodes,
       }));
     } catch (err) {
-      diagnostics.failure('mcts.progress_broadcast_failed', toProteusError({
+      diagnostics.failure('mcts.progress_broadcast_failed', toKinuError({
         doing: 'pushing an MCTS search tree to connected surfaces',
         cause: err,
         otherwise: 'io',
@@ -2344,7 +2395,7 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /**
-   * Delegates to @kinu/core's canonical prompt builder (F1 fix: documents
+   * Delegates to @kinu.run/core's canonical prompt builder (F1 fix: documents
    * `codemode.*` — the real namespace crafted tools land in — instead of the
    * former `tools.*` lie). Cached across turns; invalidated when the soul
    * text or the registered executor set changes.
@@ -2517,7 +2568,7 @@ export abstract class ActorAgent extends Think<Env> {
       this.logActivity("gettools_end", `rebuilt — ${Object.keys(tools).length} tools`);
       return tools;
     } catch (err) {
-      diagnostics.failure('tool.surface_build_failed', toProteusError({
+      diagnostics.failure('tool.surface_build_failed', toKinuError({
         doing: 'assembling the turn tool surface',
         cause: err,
         otherwise: 'io',
@@ -2658,14 +2709,14 @@ export abstract class ActorAgent extends Think<Env> {
    */
   async nodeArbitrate(nodeId: string, proposal: BranchProposal): Promise<BranchDecision> {
     return await this.tracing.invocation('rpc', 'swarm.arbitrate', async (_invocation, span) => {
-      span.setAttribute('proteus.node_id', nodeId);
+      span.setAttribute('kinu.node_id', nodeId);
       const arbiter = this.nodeArbiters.get(nodeId);
       if (!arbiter) {
         // `budget-exhausted` rather than a sixth policy value: the vocabulary is
         // closed on purpose, and this IS that fact — a settled search has no
         // remaining children, so none can be reserved. The prose carries the
         // detail, and the prose is what the node reads.
-        span.setAttribute('proteus.arbiter_registered', false);
+        span.setAttribute('kinu.arbiter_registered', false);
         return {
           kind: 'refused',
           policy: 'budget-exhausted',
@@ -2673,9 +2724,9 @@ export abstract class ActorAgent extends Think<Env> {
             + 'reserved. Finish your own task and report.',
         };
       }
-      span.setAttribute('proteus.arbiter_registered', true);
+      span.setAttribute('kinu.arbiter_registered', true);
       const decision = await arbiter(proposal);
-      span.setAttribute('proteus.decision', decision.kind);
+      span.setAttribute('kinu.decision', decision.kind);
       return decision;
     });
   }
@@ -2746,7 +2797,7 @@ export abstract class ActorAgent extends Think<Env> {
       if (!runId) return;
       this.eventRecorder.emit(runId, headPhaseRunEvent(event));
     } catch (err) {
-      diagnostics.failure('event.head_phase_emit_failed', toProteusError({
+      diagnostics.failure('event.head_phase_emit_failed', toKinuError({
         doing: 'recording a head split/merge phase run event',
         cause: err,
         otherwise: 'io',
@@ -2786,7 +2837,7 @@ export abstract class ActorAgent extends Think<Env> {
     let watermark: number;
     try { watermark = await userDOStub.userMcp_updatedAt(caller); }
     catch (err) {
-      diagnostics.failure('mcp.watermark_fetch_failed', toProteusError({
+      diagnostics.failure('mcp.watermark_fetch_failed', toKinuError({
         doing: 'reading the user MCP configuration watermark from UserDO',
         cause: err,
         otherwise: 'unavailable',
@@ -2818,7 +2869,7 @@ export abstract class ActorAgent extends Think<Env> {
         source: `MCP server "${u.server}"`, reason: u.reason,
       }));
     } catch (err) {
-      diagnostics.failure('mcp.descriptor_fetch_failed', toProteusError({
+      diagnostics.failure('mcp.descriptor_fetch_failed', toKinuError({
         doing: 'fetching the user MCP tool descriptors from UserDO',
         cause: err,
         otherwise: 'unavailable',
@@ -2929,7 +2980,7 @@ export abstract class ActorAgent extends Think<Env> {
   // edit, list, find, grep, delete) with ours, bloating the request by ~2800 tokens.
   // activeTools restricts the model to the built-in tools + session context tools,
   // preventing Think's workspace tools from being sent in the request payload.
-  // ACTIVE_TOOLS is sourced from @kinu/core/tools/registry (single truth).
+  // ACTIVE_TOOLS is sourced from @kinu.run/core/tools/registry (single truth).
 
   async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
     // The scaffold and the soul are both files this turn is about to read, and
@@ -3003,7 +3054,7 @@ export abstract class ActorAgent extends Think<Env> {
     let mcpTools: ToolSet = {};
     try { mcpTools = await this.buildUserMcpTools(); }
     catch (err) {
-      diagnostics.failure('mcp.tool_surface_failed', toProteusError({
+      diagnostics.failure('mcp.tool_surface_failed', toKinuError({
         doing: 'building the user MCP tool adapters for this turn',
         cause: err,
         otherwise: 'unavailable',
@@ -3029,7 +3080,7 @@ export abstract class ActorAgent extends Think<Env> {
       const status = await this.rt.deviceTransport.refreshStatus();
       deviceNotice = observeDevicePresence(this.config, status).notice;
     } catch (err) {
-      diagnostics.failure('device.status_refresh_failed', toProteusError({
+      diagnostics.failure('device.status_refresh_failed', toKinuError({
         doing: 'refreshing the device hub presence for this turn',
         cause: err,
         otherwise: 'unavailable',
@@ -3252,7 +3303,7 @@ export abstract class ActorAgent extends Think<Env> {
 
   /** Whether the in-flight turn was injected programmatically (an event drain,
    *  a background-job wake, an overflow retry) — a queued signal stamps
-   *  proteusEvent metadata on the saved user message; real chat messages carry
+   *  kinuEvent metadata on the saved user message; real chat messages carry
    *  none. */
   protected lastUserTurnIsProgrammatic(): boolean {
     return this.turnUserMessageEvent(null) !== null;
@@ -3269,7 +3320,7 @@ export abstract class ActorAgent extends Think<Env> {
     // count. A CLI one-shot invocation against this workspace stamps `oneShot`
     // on the request body (readTurnContinuity → 'independent_task'). A turn a
     // queued signal drove — an event drain, a background-job wake, a timer, an
-    // overflow retry — carries `proteusEvent` metadata on the message that
+    // overflow retry — carries `kinuEvent` metadata on the message that
     // drives it, the same discriminator every other programmatic-turn decision
     // reads. Continuity alone would miss the whole autonomous population,
     // which is the population the one-shot policy was measured on.
@@ -3277,14 +3328,14 @@ export abstract class ActorAgent extends Think<Env> {
     return programmatic || this._turnContinuity === 'independent_task' ? 'one-shot' : 'interactive';
   }
 
-  /** The turn's proteusEvent metadata value — from the active programmatic
+  /** The turn's kinuEvent metadata value — from the active programmatic
    *  message when one drove the turn, else the last durable user message.
    *  Null for real chat turns. */
   protected turnUserMessageEvent(programmaticUserMessage: { metadata?: unknown } | null): string | null {
     const metadata = programmaticUserMessage ? programmaticUserMessage.metadata : this.turnUserMetadata();
     const parsed = v.safeParse(JsonObjectSchema, metadata);
     if (!parsed.success) return null;
-    return v.is(v.string(), parsed.output.proteusEvent) ? parsed.output.proteusEvent : null;
+    return v.is(v.string(), parsed.output.kinuEvent) ? parsed.output.kinuEvent : null;
   }
 
   /** What the turn may do. Plan is explicit user intent on the driving
@@ -3309,7 +3360,7 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /** What this turn was started BY: the metadata on the message that drives it
-   *  — a signal's `proteusEvent` / `signalId` / mission labels, or nothing at
+   *  — a signal's `kinuEvent` / `signalId` / mission labels, or nothing at
    *  all for a chat turn the operator typed. */
   protected turnUserMetadata(): JsonObject | undefined {
     const source = this.messages.filter(m => m.role === 'user').at(-1);
@@ -3394,7 +3445,7 @@ export abstract class ActorAgent extends Think<Env> {
    *  answer is cached until the owner's provider set is invalidated. */
   protected getModelForReview(): Promise<import('ai').LanguageModel> {
     return this.ownedModelServices.resolveJudgeModel({
-      reviewSpec: this.config.getReviewModel(),
+      reviewSpec: this.config.getRoleModel('judge'),
       chatSpec: this.getStoredModelId(),
     });
   }
@@ -3448,7 +3499,7 @@ export abstract class ActorAgent extends Think<Env> {
         `Snapshot at interruption: ${summary}\n`,
       );
     } catch (err) {
-      diagnostics.failure('fiber.recovery_failed', toProteusError({
+      diagnostics.failure('fiber.recovery_failed', toKinuError({
         doing: 'handling a fiber recovered after eviction',
         cause: err,
         otherwise: 'io',

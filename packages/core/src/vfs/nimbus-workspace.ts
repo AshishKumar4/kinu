@@ -34,7 +34,7 @@ import { provisionWorkspaceRuntimes } from './workspace-runtimes';
 import * as v from 'valibot';
 import type { VFS, Shell, ShellExecOptions } from '../types/primitives';
 import { WORKSPACE_ROOT, workspacePath } from './workspace-path';
-import { diagnostics, renderThrownChain, toProteusError } from '../obs/index';
+import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 
 export { workspaceToolchainCapabilities } from './workspace-runtimes';
 export type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
@@ -243,7 +243,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
   booting.catch((error) => {
     diagnostics.failure(
       'workspace.boot_failed',
-      toProteusError({ doing: 'boot the Nimbus workspace', cause: error, otherwise: 'unavailable' }),
+      toKinuError({ doing: 'boot the Nimbus workspace', cause: error, otherwise: 'unavailable' }),
     );
   });
   const open = (): Promise<NimbusWorkspace> => booting;
@@ -258,7 +258,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
   };
 }
 
-const GENERATION_TABLE = 'proteus_workspace_generation';
+const GENERATION_TABLE = 'kinu_workspace_generation';
 
 /**
  * The next never-repeating process generation for this database.

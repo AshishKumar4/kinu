@@ -37,7 +37,7 @@
  * from, so one channel cannot start disagreeing with the other, and a
  * subscriber that missed a frame is corrected by the next one.
  */
-import { diagnostics, toProteusError } from '../obs';
+import { diagnostics, toKinuError } from '../obs';
 import type { SqlExecutor } from '../types/primitives';
 import { HeadJournal } from './journal';
 import type {
@@ -99,7 +99,7 @@ export class LiveHeadJournal extends HeadJournal {
     try {
       this.listener(headId);
     } catch (err) {
-      diagnostics.failure('head.activity_announce_failed', toProteusError({
+      diagnostics.failure('head.activity_announce_failed', toKinuError({
         doing: 'announcing a head journal write to open clients',
         cause: err,
         otherwise: 'unavailable',

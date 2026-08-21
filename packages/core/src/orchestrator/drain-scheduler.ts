@@ -18,7 +18,7 @@
 // EventLog until markConsumed, and the next trigger (ingress, cron alarm,
 // post-turn drain) picks the backlog up.
 
-import { diagnostics, toProteusError } from '../obs/index';
+import { diagnostics, toKinuError } from '../obs/index';
 
 /** The coalescing window. Long enough to absorb a same-cause burst, short
  *  enough to be imperceptible against a multi-second agent turn. */
@@ -51,7 +51,7 @@ export class DrainScheduler {
         // re-arms. Events stay pending in the EventLog for the next drain.
         diagnostics.failure(
           'orchestrator.debounced_drain_failed',
-          toProteusError({ doing: 'run the debounced event drain', cause: err, otherwise: 'unavailable' }),
+          toKinuError({ doing: 'run the debounced event drain', cause: err, otherwise: 'unavailable' }),
         );
       }
     }, DRAIN_DEBOUNCE_MS);

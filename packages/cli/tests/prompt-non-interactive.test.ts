@@ -11,7 +11,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
-import { tolerate } from "@kinu/core/obs";
+import { tolerate } from "@kinu.run/core/obs";
 
 const repoRoot = resolve(__dirname, "../../..");
 const cliBin = join(repoRoot, "packages/cli/bin/cli.ts");
@@ -23,7 +23,7 @@ afterEach(() => {
 });
 
 function tempHome(): string {
-  const dir = mkdtempSync(join(tmpdir(), "proteus-prompt-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "kinu-prompt-test-"));
   tempDirs.push(dir);
   return dir;
 }
@@ -41,7 +41,7 @@ function runDetachedCli(args: string[], home: string, timeoutMs = 20_000): Promi
       cwd: repoRoot,
       detached: true,
       stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, PROTEUS_HOME: home },
+      env: { ...process.env, KINU_HOME: home },
     });
     let stdout = "";
     let stderr = "";
@@ -64,18 +64,18 @@ function runDetachedCli(args: string[], home: string, timeoutMs = 20_000): Promi
 describe("setup without any terminal", () => {
   test("account-only setup prints sign-in instructions and exits 0 instead of hanging", async () => {
     const result = await runDetachedCli(
-      ["setup", "--account-only", "--origin", "https://proteus.example.com"],
+      ["setup", "--account-only", "--origin", "https://kinu.example.com"],
       tempHome(),
     );
     expect(result.timedOut).toBe(false);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("Kinu account was not connected");
-    expect(result.stdout).toContain("kinu auth --origin https://proteus.example.com");
+    expect(result.stdout).toContain("kinu auth --origin https://kinu.example.com");
   }, 30_000);
 
   test("full setup prints provider instructions and exits 0 instead of prompting", async () => {
     const result = await runDetachedCli(
-      ["setup", "--origin", "https://proteus.example.com"],
+      ["setup", "--origin", "https://kinu.example.com"],
       tempHome(),
     );
     expect(result.timedOut).toBe(false);

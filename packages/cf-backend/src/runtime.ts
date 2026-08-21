@@ -24,7 +24,7 @@ import type {
   DeferredApprovalChannel,
   WriteObserver,
   ModelCallSink, SpendSource,
-} from "@kinu/core";
+} from "@kinu.run/core";
 import {
   nimbusSessionFiles, nimbusSessionShell,
   observeWrites,
@@ -40,14 +40,14 @@ import {
   effortFor,
   createAgentConfigStore, initAgentConfigTable, initActorTables, selectFastModel,
   type VectorStore,
-} from "@kinu/core";
-import type { SandboxHandle } from "@kinu/core";
-import { diagnostics, renderThrownChain, toProteusError } from "@kinu/core/obs";
+} from "@kinu.run/core";
+import type { SandboxHandle } from "@kinu.run/core";
+import { diagnostics, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
 import { getSandbox } from "@cloudflare/sandbox";
 import { configureContainerEgress, withConfiguredEgress } from "./egress/configure";
 import { previewHostSuffix } from "./lib/preview-origin";
-import { MemoryStore } from "@kinu/agent-utils/memory";
-import { CraftStore as AgentUtilsCraftStore } from "@kinu/agent-utils/stores";
+import { MemoryStore } from "@kinu.run/agent-utils/memory";
+import { CraftStore as AgentUtilsCraftStore } from "@kinu.run/agent-utils/stores";
 import { generateText, type LanguageModelUsage } from "ai";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import type { Agent } from "agents";
@@ -63,11 +63,11 @@ import {
   type UserCredentialClient,
   type UserCredentialSource,
 } from "./providers/agent-registry";
-import { resolveJudgeModelSelection } from "./providers/judge-model";
+import { resolveReviewingModelSelection } from "./providers/judge-model";
 import { ownerCaller, type UserCaller } from "./user/workspace-capability";
 import { adaptMemory, backfillMemoryVectors } from "./memory-sync";
-import { agentAffinityKey, explorePrompt, formatInheritedContext, normalizeUsage, reflectionPrompt } from "@kinu/core";
-import type { ProteusSandbox } from "./proteus-sandbox";
+import { agentAffinityKey, explorePrompt, formatInheritedContext, normalizeUsage, reflectionPrompt } from "@kinu.run/core";
+import type { KinuSandbox } from "./kinu-sandbox";
 import {
   createNimbusWorkspaceSandbox,
   nimbusPreviewConfigured,
@@ -190,7 +190,7 @@ async function listOwnerEgressVault(
     const vault: EgressVaultClient = env.UserDO.get(env.UserDO.idFromName(userId));
     return [...await vault.listEgressSecrets(await ownerCaller(env))];
   } catch (err) {
-    diagnostics.failure('egress.vault_unreadable', toProteusError({
+    diagnostics.failure('egress.vault_unreadable', toKinuError({
       doing: "reading the owner's egress vault",
       cause: err,
       otherwise: 'unavailable',
@@ -259,7 +259,7 @@ export type CFRuntime = AgentRuntime & {
    *  start so the turn's context reflects the CURRENT device state. */
   deviceTransport: DeviceTransport;
   /** Vectorize-backed semantic memory. Noop fallback when no binding. */
-  vectorStore: import("@kinu/core").VectorStore;
+  vectorStore: import("@kinu.run/core").VectorStore;
   /** The live sandbox container handle (for /workspace backup/restore), or null
    *  when no Sandbox binding / preview host. Single source for the orchestrator. */
   sandboxHandle: SandboxHandle | null;
@@ -453,7 +453,7 @@ export function createCFRuntime(
   // builds preview URLs on — `<port>-<sandbox>-<token>.<suffix>`, routed back
   // by preview-proxy.ts. `sandboxId` is the stable DO key those URLs carry.
   const previewSuffix = previewHostSuffix(env) ?? undefined;
-  const sandboxId = `proteus-${actor.workspaceName}`;
+  const sandboxId = `kinu-${actor.workspaceName}`;
   let sandboxHandle: SandboxHandle | null = null;
   if (env.Sandbox) {
     try {
@@ -507,7 +507,7 @@ export function createCFRuntime(
       });
       sandboxHandle = handle;
       // No restore wrapper here, deliberately. Restoring /workspace is the
-      // container's own affair and happens in ProteusSandbox.onStart, inside the
+      // container's own affair and happens in KinuSandbox.onStart, inside the
       // blockConcurrencyWhile that no exec can jump ahead of. The predicate this
       // replaced ("only the container's owner may decide a restore") existed to
       // stop a facet reading its own empty `agent_config` and latching the
@@ -524,7 +524,7 @@ export function createCFRuntime(
         previews: previewSuffix ?? '',
       });
     } catch (err) {
-      diagnostics.failure('sandbox.executor_registration_failed', toProteusError({
+      diagnostics.failure('sandbox.executor_registration_failed', toKinuError({
         doing: 'registering the sandbox executor',
         cause: err,
         otherwise: 'unavailable',
@@ -563,7 +563,7 @@ export function createCFRuntime(
         // consented subtree, never widen it. Recorded rather than discarded —
         // `false` alone cannot distinguish "no full-filesystem tier" from "the hub
         // could not be reached", and only one of those is a fault.
-        diagnostics.failure('device.fs_consent_unverifiable', toProteusError({
+        diagnostics.failure('device.fs_consent_unverifiable', toKinuError({
           doing: "reading the device's full-filesystem consent tier",
           cause: error,
           otherwise: 'unavailable',
@@ -578,6 +578,7 @@ export function createCFRuntime(
     memory, executor, llm, schedule, identity, craftStore,
     judgeModel: createJudgeLLM(agent, env, actor, sql, hooks.reportModelCall),
     fastLlm: createFastLLM(agent, env, actor, sql, hooks.reportModelCall),
+    advisorLlm: createAdvisorLLM(agent, env, actor, sql, hooks.reportModelCall),
     spawnBranch: createFacetSpawner(agent, env, actor),
     abortBranch: createFacetAborter(agent),
     releaseBranch: createFacetReleaser(agent),
@@ -671,7 +672,7 @@ async function jsonResultOrVoid<Result>(result: Promise<Result>) {
 /** The SDK's response classes are serializable but intentionally do not carry
  * JsonObject index signatures. Rebuild the small portable SandboxHandle at the
  * boundary and validate opaque mutation responses before core observes them. */
-function adaptCloudflareSandbox(handle: ProteusSandbox): SandboxHandle {
+function adaptCloudflareSandbox(handle: KinuSandbox): SandboxHandle {
   return {
     exec: (command, opts) => handle.exec(command, opts),
     readFile: (path, opts) => handle.readFile(path, opts),
@@ -723,7 +724,7 @@ function buildVectorStore(
     diagnostics.event('vector.store_registered', { namespace: actor.workspaceName });
     return store;
   } catch (err) {
-    diagnostics.failure('vector.store_construction_failed', toProteusError({
+    diagnostics.failure('vector.store_construction_failed', toKinuError({
       doing: 'constructing the Vectorize memory store',
       cause: err,
       otherwise: 'unavailable',
@@ -918,7 +919,7 @@ function createFastLLM(
     return {
       registry,
       ...selectFastModel({
-        fastSpec: config.getFastModel(),
+        fastSpec: config.getRoleModel('fast'),
         chatSpec: registry.normalizeSpecSync(readStoredModelSpec(sql)),
         providers: registry.registry.list(),
       }),
@@ -943,14 +944,13 @@ function createFastLLM(
 
 /**
  * Cross-model judge for MCTS branch evaluation (rt.judgeModel). Resolves the
- * operator's review_model (the `review_model` agent_config key) at call time
- * so judging can run on a DIFFERENT model from the explorer — the
- * self-enhancement-bias fix. With no review_model set it now searches the
- * registry for an available model from a different VENDOR family than the
- * chat model, because an unset key used to mean the agent graded itself with
- * itself; same-model judging survives only as the single-vendor fallback (see
- * core's selectJudgeModel). Errors propagate — the evaluator's judge ensemble
- * drops failed samples instead of misreading them as scores.
+ * operator's pin for the `judge` producer at call time so judging can run on a
+ * DIFFERENT model from the explorer — the self-enhancement-bias fix. With no pin
+ * set it searches the registry for an available model from a different VENDOR
+ * family than the chat model, because an unset key used to mean the agent graded
+ * itself with itself; same-model judging survives only as the single-vendor
+ * fallback (see core's selectJudgeModel). Errors propagate — the evaluator's
+ * judge ensemble drops failed samples instead of misreading them as scores.
  */
 function createJudgeLLM(
   agent: AgentHost,
@@ -964,9 +964,9 @@ function createJudgeLLM(
     async complete(prompt: string): Promise<string> {
       const config = createAgentConfigStore(sql);
       const registry = actorProviderRegistry(agent, env, actor, 'Kinu (judge)');
-      const { spec } = await resolveJudgeModelSelection({
+      const { spec } = await resolveReviewingModelSelection({
         registry,
-        reviewSpec: config.getReviewModel(),
+        pinned: config.getRoleModel('judge'),
         chatSpec: config.getModel(),
       });
       const result = await generateText({
@@ -974,6 +974,47 @@ function createJudgeLLM(
         ...effortFor('judge'),
       });
       reportCall(report, 'judge', spec, result);
+      return result.text.trim();
+    },
+  };
+}
+
+/**
+ * The turn reviewer (rt.advisorLlm): the second model that reads a finished turn
+ * and may say one thing about it (core advisor/review.ts).
+ *
+ * The same reviewing resolver the judge uses, on the `advisor` producer's own
+ * pin, so an owner who pins nothing gets the cross-vendor default for the same
+ * stated reason. Reported as its own producer, which is what makes the cost of
+ * having a reviewer a line the owner can read rather than a rise in someone
+ * else's row.
+ *
+ * Always built. Whether it RUNS is the owner's switch, read per turn by the
+ * lane — not a wiring decision, because a workspace that turns the advisor on
+ * must not have to be redeployed to get one.
+ */
+function createAdvisorLLM(
+  agent: AgentHost,
+  env: Env,
+  actor: ActorRuntimeIdentity,
+  sql: SqlExecutor,
+  report?: ModelCallSink,
+): LLM {
+  return {
+    async *stream() { yield ""; },
+    async complete(prompt: string): Promise<string> {
+      const config = createAgentConfigStore(sql);
+      const registry = actorProviderRegistry(agent, env, actor, 'Kinu (advisor)');
+      const { spec } = await resolveReviewingModelSelection({
+        registry,
+        pinned: config.getRoleModel('advisor'),
+        chatSpec: config.getModel(),
+      });
+      const result = await generateText({
+        model: registry.resolveModel(spec), prompt,
+        ...effortFor('judge'),
+      });
+      reportCall(report, 'advisor', spec, result);
       return result.text.trim();
     },
   };
@@ -1037,7 +1078,7 @@ function createFacetSpawner(agent: AgentHost, env: Env, actor: ActorRuntimeIdent
         capabilityToken: await actor.capabilityToken(),
       });
     } catch (err) {
-      diagnostics.failure('mcts.branch_facet_spawn_failed', toProteusError({
+      diagnostics.failure('mcts.branch_facet_spawn_failed', toKinuError({
         doing: 'spawning a branch facet',
         cause: err,
         otherwise: 'unavailable',
@@ -1078,7 +1119,7 @@ function createFacetReleaser(agent: AgentHost): (branchId: string) => Promise<vo
     try {
       await deleteExplorationFacet(agent, branchId);
     } catch (err) {
-      diagnostics.failure('mcts.branch_facet_storage_leaked', toProteusError({
+      diagnostics.failure('mcts.branch_facet_storage_leaked', toKinuError({
         doing: "reclaiming a branch facet's storage",
         cause: err,
         otherwise: 'io',

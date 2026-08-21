@@ -9,7 +9,7 @@
  * `LoggableFields`, and nothing but this file would have caught it.
  */
 
-import { ProteusError } from '../../../src/obs/error';
+import { KinuError } from '../../../src/obs/error';
 import { createRecordingLogger } from '../../../src/obs/log';
 
 const log = createRecordingLogger();
@@ -44,6 +44,6 @@ log.event('run.escalated', { outcome, runtime: 'laptop' });
 log.event('run.escalated', { ...fields, reused: false });
 
 // A failure carries its classification, and fields are optional there too.
-const failure = new ProteusError('unavailable', 'runtime_not_provisioned');
+const failure = new KinuError('unavailable', 'runtime_not_provisioned');
 log.failure('run.escalation_refused', failure);
 log.failure('run.escalation_refused', failure, { runtime: 'sandbox' });

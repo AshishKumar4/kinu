@@ -15,7 +15,7 @@ import unittest
 from pathlib import Path
 
 from bench.model_endpoint import (
-    DEFAULT_PROTEUS_AI_BASE_URL,
+    DEFAULT_KINU_AI_BASE_URL,
     DEFAULT_WORKERS_AI_MODEL_ID,
     EVAL_ALLOW_PROD_ENV,
     EVAL_STAGING_ORIGIN,
@@ -38,7 +38,7 @@ class ModelEndpointTest(unittest.TestCase):
             "@cf/deepseek-ai/deepseek-v4-pro-0813",
         )
         self.assertEqual(
-            DEFAULT_PROTEUS_AI_BASE_URL,
+            DEFAULT_KINU_AI_BASE_URL,
             f"{EVAL_STAGING_ORIGIN}/api/user/ai/v1",
         )
         self.assertNotEqual(EVAL_STAGING_ORIGIN, PRODUCTION_ORIGIN)
@@ -55,9 +55,9 @@ class ModelEndpointTest(unittest.TestCase):
 
     def test_product_proxy_uses_the_eval_service_token(self) -> None:
         token = resolve_bearer_token(
-            DEFAULT_PROTEUS_AI_BASE_URL,
+            DEFAULT_KINU_AI_BASE_URL,
             "workers-ai",
-            environ={"PROTEUS_EVAL_TOKEN": " pta_eval "},
+            environ={"KINU_EVAL_TOKEN": " pta_eval "},
         )
         self.assertEqual(token, "pta_eval")
 
@@ -78,26 +78,26 @@ class ModelEndpointTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(ValueError, "PROTEUS_EVAL_TOKEN"):
+            with self.assertRaisesRegex(ValueError, "KINU_EVAL_TOKEN"):
                 resolve_bearer_token(
-                    DEFAULT_PROTEUS_AI_BASE_URL,
+                    DEFAULT_KINU_AI_BASE_URL,
                     "workers-ai",
                     environ={},
                     config_path=config_path,
                 )
 
-    def test_a_bare_proteus_token_is_not_the_eval_credential(self) -> None:
-        """``PROTEUS_TOKEN`` is whatever the operator's shell happens to hold.
+    def test_a_bare_kinu_token_is_not_the_eval_credential(self) -> None:
+        """``KINU_TOKEN`` is whatever the operator's shell happens to hold.
 
         The eval identity has its own variable precisely so that a signed-in
         developer's exported session cannot become the identity a scored run acts
         as by accident.
         """
-        with self.assertRaisesRegex(ValueError, "PROTEUS_EVAL_TOKEN"):
+        with self.assertRaisesRegex(ValueError, "KINU_EVAL_TOKEN"):
             resolve_bearer_token(
-                DEFAULT_PROTEUS_AI_BASE_URL,
+                DEFAULT_KINU_AI_BASE_URL,
                 "workers-ai",
-                environ={"PROTEUS_TOKEN": "pta_the_operators_shell"},
+                environ={"KINU_TOKEN": "pta_the_operators_shell"},
             )
 
     def test_direct_workers_ai_uses_cloudflare_api_token(self) -> None:
@@ -117,7 +117,7 @@ class ModelEndpointTest(unittest.TestCase):
         self.assertEqual(token, "sk_or")
 
     def test_endpoint_provider_classification_keeps_byo_explicit(self) -> None:
-        self.assertEqual(provider_for_base_url(DEFAULT_PROTEUS_AI_BASE_URL), "workers-ai")
+        self.assertEqual(provider_for_base_url(DEFAULT_KINU_AI_BASE_URL), "workers-ai")
         self.assertEqual(
             provider_for_base_url(
                 "https://api.cloudflare.com/client/v4/accounts/account-id/ai/v1"
@@ -137,20 +137,20 @@ class ModelEndpointTest(unittest.TestCase):
                 environ={"OPENAI_API_KEY": "must-not-leak"},
             )
 
-    def test_proxy_path_on_an_untrusted_origin_never_receives_proteus_auth(self) -> None:
+    def test_proxy_path_on_an_untrusted_origin_never_receives_kinu_auth(self) -> None:
         hostile = "https://attacker.example/api/user/ai/v1"
         self.assertEqual(provider_for_base_url(hostile), "custom")
         with self.assertRaisesRegex(ValueError, "api_key_env"):
             resolve_bearer_token(
                 hostile,
                 "custom",
-                environ={"PROTEUS_EVAL_TOKEN": "must-not-leak"},
+                environ={"KINU_EVAL_TOKEN": "must-not-leak"},
             )
 
     def test_the_prod_override_does_not_widen_who_may_receive_the_credential(self) -> None:
         """Policy and trust are separate questions, and this is why.
 
-        ``PROTEUS_EVAL_ALLOW_PROD=1`` says an operator accepts running against
+        ``KINU_EVAL_ALLOW_PROD=1`` says an operator accepts running against
         production. If that also decided which origins are Kinu deployments,
         it would declare every host on earth a trusted credential sink — so
         setting it must not turn a hostile proxy path into one.
@@ -163,7 +163,7 @@ class ModelEndpointTest(unittest.TestCase):
                 hostile,
                 "custom",
                 environ={
-                    "PROTEUS_EVAL_TOKEN": "must-not-leak",
+                    "KINU_EVAL_TOKEN": "must-not-leak",
                     EVAL_ALLOW_PROD_ENV: "1",
                 },
             )

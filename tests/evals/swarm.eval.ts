@@ -82,14 +82,14 @@ import { requireSandboxedExecutors, requireVerifierShell } from './harness';
 import {
   HARD_TASKS, liveChatModel, liveModelTarget, recordLiveModelEpisode, reportLiveModelSpend,
   toolExecute, UNCONFIGURED_LLM, type HardTask,
-} from '@kinu/test-utils';
+} from '@kinu.run/test-utils';
 
 const SUITE = 'Swarm Evals';
 const TARGET = liveModelTarget(SUITE);
 const liveTest = test.skipIf(!TARGET);
 const LLM_CONFIG: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;
 
-const TEST_DIR = join(tmpdir(), 'proteus-eval-swarm-' + String(Date.now()));
+const TEST_DIR = join(tmpdir(), 'kinu-eval-swarm-' + String(Date.now()));
 const DB_PATH = join(TEST_DIR, 'agent.db');
 
 /**

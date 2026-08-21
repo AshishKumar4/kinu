@@ -1,8 +1,8 @@
 {
   "system": {
-    "name": "proteus",
+    "name": "kinu",
     "params": {
-      "name": "proteus_stateful_static",
+      "name": "kinu_stateful_static",
       "auto_evolve": false,
       "persist_workspace": true,
       "single_conversation": true

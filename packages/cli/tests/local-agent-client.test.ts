@@ -9,8 +9,8 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import type { LanguageModelV2Prompt } from '@ai-sdk/provider';
-import type { LLMProviderConfig } from '@kinu/core';
-import { createCLIRuntime, type LocalModelResolver } from '@kinu/cli-backend';
+import type { LLMProviderConfig } from '@kinu.run/core';
+import { createCLIRuntime, type LocalModelResolver } from '@kinu.run/cli-backend';
 import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model';
 import { LocalAgentClient } from '../src/local-agent-client';
 import type { AgentClientEvent } from '../src/agent-client';
@@ -86,7 +86,7 @@ function fakeResolver(model: LanguageModel): LocalModelResolver {
 }
 
 function setup(model: LanguageModel) {
-  const home = mkdtempSync(join(tmpdir(), 'proteus-client-'));
+  const home = mkdtempSync(join(tmpdir(), 'kinu-client-'));
   tempDirs.push(home);
   const dbPath = join(home, 'agent.db');
   writeFileSync(dbPath, '');
@@ -329,7 +329,7 @@ describe('/takes — Alternate Takes over a real local client', () => {
     client.subscribe((event) => events.push(event));
     await client.connect();
     const { executeSlashCommand } = await import('../src/slash-commands');
-    const { initSearchTables, initAlternateTakesTable, captureAlternateTakes } = await import('@kinu/core');
+    const { initSearchTables, initAlternateTakesTable, captureAlternateTakes } = await import('@kinu.run/core');
 
     // No takes yet — the command explains instead of opening a comparison.
     const empty = await executeSlashCommand(client, '/takes');

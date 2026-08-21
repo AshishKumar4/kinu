@@ -6,12 +6,12 @@
 // Local/staging dev: if `env.DEV_USER_EMAIL` is set, we synthesize an identity
 // from that email. Production must leave that variable unset.
 
-import { DEVICE_CONNECT_PATH } from '@kinu/core';
+import { DEVICE_CONNECT_PATH } from '@kinu.run/core';
 import { deriveUserId, verifySession } from './store';
 import type { KvStore } from '../lib/kv';
 import type { AccessTokenScope } from '../cli/access-token-store';
 
-export const SESSION_COOKIE_NAME = '__Host-proteus_session';
+export const SESSION_COOKIE_NAME = '__Host-kinu_session';
 
 export interface AuthIdentity {
   /** Stable Kinu user id. */
