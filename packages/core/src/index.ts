@@ -1229,7 +1229,7 @@ export {
   HeadCapture, runHeadInference, buildHeadAccumulatorTools,
   buildHeadSystemPrompt, buildHeadMessages, withHeadCaptureRecording,
   type HeadInferenceDeps, type HeadWorkspaceLayout,
-  buildHeadToolSet, HEAD_BUILTIN_TOOLS,
+  buildHeadToolSet, HEAD_BUILTIN_TOOLS, keepBuiltins,
   type HeadToolDeps, type HeadSplitRequest, type HeadSplitResult,
   HeadFileChanges, formatHeadFileChanges, HEAD_FILE_CHANGE_PROVENANCE,
 } from './heads/index';

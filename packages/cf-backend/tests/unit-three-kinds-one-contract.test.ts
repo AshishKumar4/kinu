@@ -85,25 +85,44 @@
  *     prefix"*. That sentence is true only if the sibling requests carry cache
  *     controls and actually land together. Measured below; neither is true today.
  *
- * ## WHY THE FIXTURES DIFFER IN SHAPE
+ * C10 TERMINAL RECORD. A turn that finishes leaves a terminal record whose status
+ *     says so, in each kind's own store: `run_end.reason` for the actor kinds,
+ *     `head_journal.status` for a node. Two of the three words are shared
+ *     (`completed`, `aborted`); the failure word is not (`error` vs `errored`),
+ *     and that one-letter divergence is DECLARED rather than smoothed over.
  *
- * The two actor kinds are one class (`SubordinateAgent extends ActorAgent`), so an
- * assertion passing for one passes for the other unless the subclass overrides the
- * mechanism — itself worth asserting, since the whole roster of subordinate
- * capabilities rests on it. Their turn BODY is Think's, which does not run outside
- * workerd, so each capability is exercised at the entry point OUR code owns for it.
- * A node's whole loop is core's, so a node is driven end to end. See
- * helpers/three-kinds.ts; the asymmetry is stated there rather than hidden.
+ * C11 MECHANICAL STEERING. The harness's in-turn nudges (repeat, repeated
+ *     failure, no progress, long turn, turn-start shape) are decided from live
+ *     tool traffic and spliced at the step boundary through ONE extension —
+ *     `AgentOrchestrator.turnExtension`, which both backends register into their
+ *     loop. A node's loop has no such seam: its direction is the search's, and
+ *     the search's lever is re-driving it, not hinting at it. Asserted both
+ *     ways — actors steer through their real extension; a node driven past the
+ *     repeat trigger's exact threshold is never spliced.
+ *
+ * C12 REFUSAL SHAPE. The same misuse of a tool every kind holds refuses in the
+ *     same `{reason, error}` shape with the same reason code on every kind's
+ *     REAL surface — the actor surfaces observed from production composition,
+ *     the node's built the way `runNodeLoop` builds it.
+ *
+ * C13 WAKE DELIVERY. A settled background job tells the model through the
+ *     kind's own seam: an actor's runner wakes its own SignalDelivery and the
+ *     wake lands in the next step's messages; a node's wake becomes its next
+ *     turn's opening message. One wording (`BackgroundJobRunner.wake`), three
+ *     receivers.
  */
 
 import { describe, expect, test } from 'bun:test';
-import type { ModelMessage } from 'ai';
+import type { ModelMessage, ToolSet } from 'ai';
+import * as v from 'valibot';
 import {
   BACKGROUND_POLICY,
   BUILTIN_TOOLS,
   DELEGATION_MAX_DEPTH,
+  IDENTICAL_CALLS_BEFORE_STEER,
   NODE_BUILTIN_TOOLS,
   PROPOSE_BRANCH_TOOL,
+  TURN_STEERING_HEADER,
   agentAffinityKey,
   applyCacheBreakpoints,
   promptCachePlan,
@@ -114,10 +133,13 @@ import {
   cacheControlsOn,
   capturingWorkersAIModel,
   driveNode,
+  fixedExecuteTool,
   forwardingHost,
   kindFixtures,
   missionRecorder,
   scriptedProvider,
+  selfSettlingTool,
+  textOfMessages,
   type AgentKind,
   type Difference,
   type KindFixture,
@@ -193,6 +215,26 @@ const DIFFERENCES = {
         + 'node places no provider-native cache control on any request — while the '
         + 'module comments justify append-only inheritance by exactly the caching '
         + 'that absence prevents.',
+    },
+    {
+      capability: 'C10 terminal record vocabulary',
+      verdict: 'asymmetry',
+      reason:
+        'The head journal spells the failure terminal `errored` where an actor '
+        + '`run_end` carries `error`; `completed` and `aborted` are the same words '
+        + 'in both stores. One letter across two stores, declared so a reader '
+        + 'joining them knows the join is not exact.',
+    },
+    {
+      capability: 'C11 mid-turn steering',
+      verdict: 'asymmetry',
+      reason:
+        'A node is not steered mid-turn. The mechanical steer rides '
+        + 'AgentOrchestrator.turnExtension, which only the two actor backends '
+        + 'register into their loop; a node\'s loop is the search\'s, its turns are '
+        + 'short, and the lever for a node going wrong is the search re-driving it, '
+        + 'not a hint spliced into its step. Observed below by driving a node past '
+        + 'the repeat trigger\'s exact threshold and reading no splice on any step.',
     },
   ],
 } satisfies Record<AgentKind, readonly Difference[]>;
@@ -661,42 +703,249 @@ async function requestOnMarkerFamily(fixture: KindFixture, spec: string): Promis
   return fixture.request(HISTORY);
 }
 
+// ── C10 — the terminal vocabulary, three stores ───────────────────────────────
+
+/**
+ * The actor kinds' terminal record is `run_end.reason` (the settle spine writes
+ * `result.status` verbatim); a node's is `head_journal.status`. The words a
+ * supervisor reads are therefore a CONTRACT between two stores — shared where
+ * they are shared, declared where they are not.
+ */
+describe('C10 a finished turn leaves a terminal record, in a mostly shared vocabulary', () => {
+  for (const kind of KINDS) {
+    test(`${kind}: completion is recorded as completed`, async () => {
+      const record = await fixtureFor(kind).terminalOnCompletion();
+      expect(record.status, `${kind}: a finished turn was not recorded as completed`)
+        .toBe('completed');
+      expect(record.errorMessage, `${kind}: a completed turn carried an error`).toBeNull();
+    });
+  }
+
+  test('the failure word is the one divergence, observed and declared', async () => {
+    // Observed on BOTH stores with the same failure, so the divergence below is
+    // a measurement and not a memory.
+    const actorRecord = await fixtureFor('cf-subordinate').terminalOnFailure(
+      new Error('the provider call failed'),
+    );
+    const nodeDrive = await driveNode(
+      { steps: [{ text: 'unreachable' }], throwAt: { call: 0, error: new Error('x') } },
+    );
+    expect(actorRecord.status, 'the actor store no longer spells failure `error`').toBe('error');
+    expect(nodeDrive.outcome.terminal?.status, 'the node journal no longer spells failure `errored`')
+      .toBe('errored');
+    // Declared exactly once, on the kind whose word differs — a declaration the
+    // observations above keep honest in both directions.
+    expect(differenceFor(fixtureFor('swarm-node'), 'C10 terminal record vocabulary')?.verdict)
+      .toBe('asymmetry');
+    expect(differenceFor(fixtureFor('cf-orchestrator'), 'C10 terminal record vocabulary'))
+      .toBeUndefined();
+    expect(differenceFor(fixtureFor('cf-subordinate'), 'C10 terminal record vocabulary'))
+      .toBeUndefined();
+  });
+});
+
+// ── C11 — mechanical steering: one mechanism on the actor loop, none on the node ─
+
+/**
+ * The kinds whose turn loop is the actor loop — the loop both backends register
+ * `AgentOrchestrator.turnExtension` into. A fourth actor kind joins here and in
+ * {@link KINDS}; the node is absent BY DECLARATION, and its case below proves
+ * the declaration true rather than assuming it.
+ */
+const ACTOR_LOOP_KINDS: readonly AgentKind[] = ['cf-orchestrator', 'cf-subordinate'];
+
+
+describe('C11 mechanical steering rides the actor loop\'s one extension, never the node loop', () => {
+  const REPEATED = { command: 'wc -l reference.ts' };
+
+  for (const kind of ACTOR_LOOP_KINDS) {
+    test(`${kind}: the turn-start hint splices at step 0 through the loop's own extension`, () => {
+      const orch = fixtureFor(kind).turnLoopSeam();
+      expect(orch, `${kind}: the loop has no orchestrator seam to steer through`).not.toBeNull();
+      orch!.steering.reset();
+      const spliced = orch!.turnExtension.prepareStep?.({
+        stepNumber: 0,
+        messages: [{ role: 'user', content: 'Refactor the ingestion path.' }],
+      });
+      const text = textOfMessages(spliced);
+      expect(text, `${kind}: the fresh-ask hint never reached the step`).toContain('Settle the shape first');
+      // Runtime-authored, never user-authored — the same rule the completion
+      // gate and the wake splice follow.
+      expect(text).toContain(TURN_STEERING_HEADER);
+    });
+
+    test(`${kind}: a repeat loop is steered, and conversion is recorded on the durable row`, () => {
+      const orch = fixtureFor(kind).turnLoopSeam();
+      expect(orch).not.toBeNull();
+      orch!.steering.reset();
+      for (let i = 0; i < IDENTICAL_CALLS_BEFORE_STEER; i++) {
+        orch!.turnExtension.onToolCall?.({ toolName: 'run', args: REPEATED });
+        orch!.turnExtension.onToolResult?.({
+          toolName: 'run', args: REPEATED, result: 'reference.ts has 412 lines', success: true,
+        });
+      }
+      const spliced = orch!.turnExtension.prepareStep?.({
+        stepNumber: IDENTICAL_CALLS_BEFORE_STEER, messages: [...HISTORY],
+      });
+      const text = textOfMessages(spliced);
+      expect(text, `${kind}: three identical calls steered nothing`)
+        .toContain('has run 3 times with the same arguments');
+      expect(text).toContain(TURN_STEERING_HEADER);
+      // A changed call is what the repeat steer asked for; the durable row the
+      // settle spine writes must say the steer converted.
+      orch!.turnExtension.onToolCall?.({ toolName: 'file', args: { action: 'read', path: '/reference.ts' } });
+      expect(orch!.steering.snapshot()).toEqual([
+        { trigger: 'repeated_call', step: IDENTICAL_CALLS_BEFORE_STEER, tool: 'run', converted: true },
+      ]);
+    });
+  }
+
+  test('swarm-node: driven past the repeat trigger\'s exact threshold, no steer arrives', async () => {
+    const fixture = fixtureFor('swarm-node');
+    const drive = await driveNode({
+      steps: [
+        { toolCall: { name: 'execute_tools', input: REPEATED } },
+        { toolCall: { name: 'execute_tools', input: REPEATED } },
+        { toolCall: { name: 'execute_tools', input: REPEATED } },
+        { text: 'Done.' },
+      ],
+    }, { executeTool: fixedExecuteTool('reference.ts has 412 lines') });
+
+    // Denominators: the loop really ran past the threshold an actor would have
+    // steered at, and finished.
+    expect(drive.requests.length).toBeGreaterThanOrEqual(IDENTICAL_CALLS_BEFORE_STEER + 1);
+    expect(drive.outcome.terminal?.status).toBe('completed');
+    for (const request of drive.requests) {
+      for (const message of request.messages) {
+        expect(message.text, 'a node was steered mid-turn').not.toContain(TURN_STEERING_HEADER);
+      }
+    }
+    // The absence is the declared divergence, so the declaration cannot rot
+    // into an excuse: close the gap and this assertion names it stale.
+    expect(differenceFor(fixture, 'C11 mid-turn steering')?.verdict).toBe('asymmetry');
+  });
+});
+
+/** A deliberately malformed `file` call — a shape the tool's own schema would
+ *  reject, which is exactly the subject: the dispatcher's refusal of it. */
+interface MalformedFileCall {
+  readonly action: string;
+  readonly path: string;
+}
+
+/** Drive one kind's real `file` entry with the malformed call and return the
+ *  refusal it names, parsed here so the assertion reads a domain value. */
+async function refusalOf(
+  toolEntry: ToolSet[string],
+  call: MalformedFileCall,
+): Promise<{ reason: string; error: string }> {
+  const execute = toolEntry.execute;
+  if (!execute) throw new Error('the tool entry has no executor');
+  // SAFETY: the AI-SDK `tool()` wrapper hands its input to the dispatcher
+  // verbatim — `jsonSchema<T>` is a compile-time annotation with no runtime
+  // validation on this path — so the malformed call is guaranteed to reach the
+  // dispatcher's own bad_input refusal (file-tool.ts), which is the result
+  // under assertion; the widened value is never read after the call.
+  const result = await execute(call as Parameters<typeof execute>[0], {
+    toolCallId: 'call-refusal-shape', messages: [...HISTORY],
+  });
+  return v.parse(v.object({ reason: v.string(), error: v.string() }), result);
+}
+
+describe('C12 the same misuse refuses in the same shape on every kind\'s real surface', () => {
+  const MISUSE: MalformedFileCall = { action: 'transmogrify', path: '/' };
+
+  for (const kind of KINDS) {
+    test(kind, async () => {
+      // Reason FIRST — the discriminator survives every clamp that bounds the
+      // prose — with the shared vocabulary's own word for a malformed call.
+      const refusal = await refusalOf(fixtureFor(kind).tool('file'), MISUSE);
+      expect(refusal.reason, `${kind}: the refusal carried the wrong classification`)
+        .toBe('bad_input');
+      expect(refusal.error.length, `${kind}: the refusal named nothing`).toBeGreaterThan(0);
+    });
+  }
+});
+
+// ── C13 — the wake reaches the model ──────────────────────────────────────────
+
+describe('C13 a settled background job tells the model through the kind\'s own seam', () => {
+  const JOB = 'bg-three-kinds-wake';
+  for (const kind of ACTOR_LOOP_KINDS) {
+    test(`${kind}: the runner's own wake lands in the next step's messages`, async () => {
+      const text = await fixtureFor(kind).wakeIntoLiveTurn(JOB);
+      expect(text, `${kind}: no seam delivered the wake`).not.toBeNull();
+      expect(text, `${kind}: the settled job's wake never reached a step`)
+        .toContain(`Background execute_tools job ${JOB} completed`);
+      // The one wording tells the model how to read the result — the sentence
+      // every kind is woken with, maintained in one place.
+      expect(text).toContain('agent.jobResult');
+    });
+  }
+
+  test('swarm-node: the woken node\'s next turn runs ON the wake text', async () => {
+    const drive = await driveNode({
+      steps: [
+        { toolCall: { name: 'execute_tools', input: { command: 'sleep' } } },
+        { text: 'Launched it; waiting on the result.' },
+      ],
+    }, {
+      executeTool: selfSettlingTool(),
+      backgroundPolicy: () => ({ detachAfterMs: 40, settleGraceMs: 400, wakesAfterTurn: true }),
+    });
+    expect(drive.outcome.terminal?.status, 'the woken node never finished').toBe('completed');
+    // The turn AFTER the detach is the wake's: its opening user message is the
+    // settled job's announcement — the same wording an actor is woken with. It
+    // is found by its content rather than its index so the assertion stays
+    // about the wake and not about the script's arithmetic.
+    const woken = drive.requests.find((request) =>
+      request.messages.some((message) => message.text.includes('Background execute_tools job')));
+    expect(woken, 'the node took no turn after the wake').toBeDefined();
+    expect(woken!.messages.some((message) => message.text.includes('completed'))).toBe(true);
+  });
+});
+
 // ── The declarations themselves ────────────────────────────────────────────────
 
 describe('the declared differences are declarations and not decoration', () => {
   test('every declared difference names a capability this suite enumerates', () => {
-    const enumerated = new Set([
-      'C1 system prompt', 'C2 tool result reaches the transcript', 'C3 usage accounting',
-      'C4 backgrounding', 'C5 wake', 'C6 abort', 'C7 terminal record with cause',
-      'C7b a cause-chain renderer on the failure path', 'C8 compaction',
-      'C9 cache breakpoints',
-    ]);
+    const enumerated = {
+      'C1 system prompt': true, 'C2 tool result reaches the transcript': true,
+      'C3 usage accounting': true, 'C4 backgrounding': true, 'C5 wake': true,
+      'C6 abort': true, 'C7 terminal record with cause': true,
+      'C7b a cause-chain renderer on the failure path': true, 'C8 compaction': true,
+      'C9 cache breakpoints': true, 'C10 terminal record vocabulary': true,
+      'C11 mid-turn steering': true,
+    } satisfies Record<string, true>;
     let declarations = 0;
     for (const kind of KINDS) {
       for (const difference of DIFFERENCES[kind]) {
         declarations++;
-        expect(enumerated, `${kind} declares an unenumerated capability`)
-          .toContain(difference.capability);
+        expect(difference.capability in enumerated, `${kind} declares an unenumerated capability`)
+          .toBe(true);
         // A reason that says nothing is a skip with extra steps.
         expect(difference.reason.length).toBeGreaterThan(80);
       }
     }
-    // Denominator: the loop really ran over declarations. SIX, down from nine — the
-    // three the node declared against C4, C5 and C7 are gone because those gaps closed
-    // when a node was put on the shared turn loop and given a job runner and a wake
-    // queue. Pinned rather than bounded, so a declaration added back without an
-    // argument, or deleted without the behaviour changing, fails here.
-    expect(declarations).toBe(6);
+    // Denominator: the loop really ran over declarations. EIGHT — six after the
+    // node's C4/C5/C7 declarations fell when those gaps closed, plus the two new
+    // node asymmetries this suite's C10/C11 sections observe. Pinned rather than
+    // bounded, so a declaration added back without an argument, or deleted
+    // without the behaviour changing, fails here.
+    expect(declarations).toBe(8);
   });
 
   test('no kind declares away a capability every kind actually has', () => {
-    // C1, C3 and C6 are asserted above for all three kinds and pass for all three,
-    // so a declaration against any of them would be a false excuse in the fixture.
+    // C1, C3, C6, C12 and C13 are asserted above for all three kinds and pass
+    // for all three, so a declaration against any of them would be a false
+    // excuse in the fixture.
     for (const kind of KINDS) {
       const capabilities = DIFFERENCES[kind].map((difference) => difference.capability);
       expect(capabilities).not.toContain('C1 system prompt');
       expect(capabilities).not.toContain('C3 usage accounting');
       expect(capabilities).not.toContain('C6 abort');
+      expect(capabilities).not.toContain('C12 refusal shape');
+      expect(capabilities).not.toContain('C13 wake delivery');
     }
   });
 

@@ -53,10 +53,15 @@ import type {
 } from '@cloudflare/think';
 import * as v from 'valibot';
 import {
+  AgentOrchestrator,
+  BackgroundJobRunner,
+  BackgroundJobStore,
   HeadJournal,
   asFetchFunction,
+  buildBuiltinTools,
   initHeadsTables,
   isBackgroundHandle,
+  keepBuiltins,
   nodeWallClockEnvelopeMs,
   runNodeAgent,
   runNodeLoop,
@@ -830,6 +835,48 @@ export interface KindFixture {
   terminalOnFailure(error: Error): Promise<TerminalRecord>;
   /** The terminal record this kind writes for a turn its owner aborted. */
   terminalOnAbort(): Promise<TerminalRecord>;
+  /** The kind's real production tool entry by name — the object a model call
+   *  dispatches into, from the same surface `toolSurface()` names. */
+  tool(name: string): ToolSet[string];
+  /** The terminal record this kind writes for a turn that ran to completion. */
+  terminalOnCompletion(): Promise<TerminalRecord>;
+  /**
+   * The kind's turn-loop seam: the orchestrator whose `turnExtension` carries
+   * mechanical steering and the mid-turn signal drain, registered into the loop
+   * by both backends. Null where the kind's loop has no such seam — a node's
+   * loop is the search's, which is the declared C11 divergence.
+   */
+  turnLoopSeam(): AgentOrchestrator | null;
+  /**
+   * The kind's own background runner over its own durable job store, reachable
+   * outside a turn. Null where the runner is private to the loop — a node's is
+   * built inside `runNodeLoop`, whose wake path the end-to-end `background()`
+   * drive observes instead.
+   */
+  backgroundSeam(): { runner: BackgroundJobRunner; store: BackgroundJobStore } | null;
+  /**
+   * Settle a job in the kind's own store, fire the kind's own runner wake with
+   * a turn live, and return the readable text of the step the splice produced —
+   * the observable half of the actor's wake seam. Null where the kind has no
+   * out-of-loop runner; a node's wake is observed end to end by `background()`.
+   */
+  wakeIntoLiveTurn(jobId: string): Promise<string | null>;
+}
+
+/** The readable text of a step's messages, whatever shape each content took —
+ *  what assertions read when they ask what the model was told. Parsed at this
+ *  boundary the same way the steering object reads an ask
+ *  (orchestrator/turn-steering.ts), so one content shape has one reader. */
+export function textOfMessages(messages: readonly ModelMessage[] | undefined): string {
+  return (messages ?? []).map((message) => {
+    const flat = v.safeParse(v.string(), message.content);
+    if (flat.success) return flat.output;
+    const parts = v.safeParse(
+      v.array(v.looseObject({ text: v.optional(v.string()) })),
+      message.content,
+    );
+    return parts.success ? parts.output.map((part) => part.text ?? '').join('') : '';
+  }).join('\n');
 }
 
 /** A tool call that already settled, as the next request must carry it. */
@@ -943,6 +990,54 @@ function actorFixture(
       });
       return readRunEnd(db, false);
     },
+    tool: (name) => {
+      const entry = agent.observeRawTools()[name];
+      if (!entry) throw new Error(`${kind}'s real surface holds no '${name}' tool`);
+      return entry;
+    },
+    terminalOnCompletion: async () => {
+      await openActorTurn(agent);
+      // The success arm of the same settle spine the failure and abort arms
+      // above ride: `run_end.reason` is `result.status`, so a completed turn
+      // is recorded with the loop's own completed word.
+      await agent.onChatResponse({
+        status: 'completed',
+        requestId: 'req-complete', continuation: false,
+        message: { id: 'assistant-complete', role: 'assistant', parts: [] },
+      });
+      return readRunEnd(db, false);
+    },
+    turnLoopSeam: () => actorLoopSeam(agent),
+    backgroundSeam: () => actorBackgroundSeam(agent),
+    wakeIntoLiveTurn: async (jobId) => {
+      const background = actorBackgroundSeam(agent);
+      const orch = actorLoopSeam(agent);
+      if (!background || !orch) return null;
+      // The kind's OWN durable store, settled the way an executor settles it.
+      background.store.create({ id: jobId, kind: 'execute_tools', workMode: 'build', now: Date.now() });
+      background.store.settle(jobId, background.store.epochOf(jobId) ?? 0, 'exit 0', Date.now());
+      // A wake splices only into a LIVE turn; with no turn in flight the actor's
+      // delivery becomes a durable queued turn instead (the other half of the
+      // same seam, reached through Think's saveMessages and not drivable outside
+      // workerd). Hold the in-flight state a live turn has — read through a
+      // validated probe, exactly like every other protected seam here — so the
+      // delivery takes the splice half this harness can observe.
+      const live = v.safeParse(v.looseObject({ _inFlight: v.boolean() }), agent);
+      if (!live.success) throw new Error('the actor exposes no in-flight flag');
+      // The parse CLONES, so its output only proves the field exists and is a
+      // flag; the write goes to the instance itself, which is what the host
+      // closure reads.
+      Reflect.set(agent, '_inFlight', true);
+      try {
+        await background.runner.wake(jobId);
+        const spliced = orch.turnExtension.prepareStep?.({
+          stepNumber: 1, messages: [{ role: 'user', content: 'waiting on that job' }],
+        });
+        return textOfMessages(spliced);
+      } finally {
+        Reflect.set(agent, '_inFlight', false);
+      }
+    },
   };
 }
 
@@ -955,6 +1050,31 @@ async function openActorTurn(agent: ActorTurnSurface): Promise<void> {
   });
 }
 
+/**
+ * The actor's REAL turn-loop seam, reached through the protected getter the
+ * loop itself reads — the same act production performs on its first turn. Null
+ * would mean an actor whose loop has no orchestrator: the C11 steering wiring
+ * gone missing, not a fixture state.
+ */
+function actorLoopSeam(agent: ActorTurnSurface): AgentOrchestrator | null {
+  const probe = v.safeParse(v.looseObject({ orch: v.instance(AgentOrchestrator) }), agent);
+  return probe.success ? probe.output.orch : null;
+}
+
+/** The actor's own background runner over its own durable job store, through
+ *  the same protected getters the tool wrapper and the cancel RPC read. */
+function actorBackgroundSeam(
+  agent: ActorTurnSurface,
+): { runner: BackgroundJobRunner; store: BackgroundJobStore } | null {
+  const probe = v.safeParse(
+    v.looseObject({
+      jobRunner: v.instance(BackgroundJobRunner),
+      jobs: v.instance(BackgroundJobStore),
+    }),
+    agent,
+  );
+  return probe.success ? { runner: probe.output.jobRunner, store: probe.output.jobs } : null;
+}
 /** Whether this actor really constructed a background job runner. Reached through
  *  the protected getter the tool wrapper reads, which is the only honest question:
  *  a runner nothing can reach is a runner that does not exist. */
@@ -1015,7 +1135,7 @@ function readToolCallEnd(db: Database): string {
  * the bound, which is the smallest honest margin — a value below it would be measuring
  * the scheduler.
  */
-function selfSettlingTool(): NodeAgentDeps['executeTool'] {
+export function selfSettlingTool(): NodeAgentDeps['executeTool'] {
   return tool({
     description: 'Run a command in the sandbox.',
     inputSchema: jsonSchema<{ command: string }>({
@@ -1035,6 +1155,22 @@ function nodeKindFixture(differences: readonly Difference[]): KindFixture {
     const first = drive.requests[0];
     if (!first) throw new Error('the node issued no provider request');
     return first;
+  };
+  // The node's REAL tool surface, built the way `runNodeLoop` builds it:
+  // `buildBuiltinTools` over a runtime, filtered by the confined set with the
+  // SAME `keepBuiltins` production calls. The report dep answers received —
+  // no assertion here drives a report through this surface.
+  let surface: ToolSet | null = null;
+  const nodeSurface = (): ToolSet => {
+    if (!surface) {
+      const { rt } = createTestRuntime();
+      surface = keepBuiltins(buildBuiltinTools({
+        rt,
+        logger: createRecordingLogger(),
+        report: { report: async () => ({ received: true }) },
+      }), NODE_BUILTIN_TOOLS);
+    }
+    return surface;
   };
   return {
     kind: 'swarm-node', differences,
@@ -1120,6 +1256,21 @@ function nodeKindFixture(differences: readonly Difference[]): KindFixture {
       const drive = await driveNode({ signal: controller.signal, steps: [{ text: 'Sort once.' }] });
       return nodeTerminal(drive, true);
     },
+    tool: (name) => {
+      const entry = nodeSurface()[name];
+      if (!entry) throw new Error(`the node's real surface holds no '${name}' tool`);
+      return entry;
+    },
+    terminalOnCompletion: async () => {
+      const drive = await driveNode({ steps: [{ text: 'Sort once.' }] });
+      return nodeTerminal(drive, true);
+    },
+    // Declared, not absent-by-accident: a node's loop has no orchestrator and
+    // no runner reachable outside it. The steering divergence is C11's node
+    // case; the wake path is observed end to end by `background()` above.
+    turnLoopSeam: () => null,
+    backgroundSeam: () => null,
+    wakeIntoLiveTurn: async () => null,
   };
 }
 
