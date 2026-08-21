@@ -912,7 +912,7 @@ interface RawAdvisorRow {
  * before the payload carried a turn id cannot reach the parse at all — the join
  * drops it first.
  */
-export function advisorNegatives(sql: SqlExecutor, limit: number): AdvisorNegativeRow[] {
+function advisorNegatives(sql: SqlExecutor, limit: number): AdvisorNegativeRow[] {
   if (limit <= 0) return [];
   const rows = sql<RawAdvisorRow>`
     SELECT e.id AS id, e.message AS note, e.data AS data, e.created_at AS createdAt,

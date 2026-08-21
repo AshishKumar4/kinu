@@ -67,10 +67,10 @@ export const ADVISOR_SEVERITY_LABEL = {
  *   dissatisfaction   — the user said so in this turn, in their own words, which
  *                       the note quotes.
  */
-export const ADVISOR_NOTE_CLASSES = ['wrong-work', 'missed-capability', 'dissatisfaction'] as const;
+const ADVISOR_NOTE_CLASSES = ['wrong-work', 'missed-capability', 'dissatisfaction'] as const;
 export type AdvisorNoteClass = (typeof ADVISOR_NOTE_CLASSES)[number];
 
-export function isAdvisorNoteClass<Value>(value: Value): value is Value & AdvisorNoteClass {
+function isAdvisorNoteClass<Value>(value: Value): value is Value & AdvisorNoteClass {
   return ADVISOR_NOTE_CLASSES.some((noteClass) => noteClass === value);
 }
 

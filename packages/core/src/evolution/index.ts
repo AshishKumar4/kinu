@@ -22,7 +22,7 @@ export {
   initTurnOutcomeTables, recordTurnOutcome, listTurnOutcomes, hasNegativeOutcome, takePickOutcome,
   NEGATIVE_TURN_OUTCOMES,
   realOutcomeScaffoldRates, blendRealOutcomeRates,
-  buildOutcomeEvalSplit, describeSplitDegeneracy, advisorNegatives, CRITIC_PROSE,
+  buildOutcomeEvalSplit, describeSplitDegeneracy, CRITIC_PROSE,
   recordLesson, listLessons, corroborateLessonsForTurn,
   isNegativeOutcome, isUserVerdictSource, executionVerdict, executionVerdictOutcome,
   isPureLookupCall, TURN_OUTCOME_SOURCES,

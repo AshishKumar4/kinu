@@ -2,10 +2,12 @@
  * The prompt-section loop, end to end over a real turn-outcome ledger.
  *
  * `unit-prompt-section-evolution.test.ts` proves the gates in isolation. This
- * one proves the wire: that the drivers read the SAME ledger the scaffold
- * optimiser reads, that reflection is shown the train half only, that a winner
- * reaches the store as PENDING, that trials on the held-out half decide it, and
- * that the live prompt moves on the promotion and not one moment earlier.
+ * one proves the wire through the SHIPPED entry point — every test below
+ * enters via `advancePromptSectionLane`, the one function the orchestrator
+ * calls — that the drivers read the SAME ledger the scaffold optimiser reads,
+ * that reflection is shown the train half only, that a winner reaches the
+ * store as PENDING, that trials on the held-out half decide it, and that the
+ * live prompt moves on the promotion and not one moment earlier.
  *
  * Every outbound call is scripted, so the pass is deterministic and nothing
  * reaches a network. The control plane is the production `ScaffoldControl`
@@ -20,8 +22,7 @@ import {
   activePromptSectionOverrides, buildSystemPromptSync,
   findPromptSectionTarget, recordTurnOutcome, buildOutcomeEvalSplit,
   EvolutionEngine,
-  runPromptSectionGepaOptimization, runPromptSectionTrials,
-  advancePromptSectionLane, nextPromptSectionTarget, PROMPT_SECTION_TARGETS,
+  advancePromptSectionLane, PROMPT_SECTION_TARGETS,
   startGepaRun,
   type ScaffoldControl,
 } from '../src/index';
@@ -167,29 +168,58 @@ function seedAdvisorNotes(rt: AgentRuntime, count: number): void {
   }
 }
 
-describe('runPromptSectionGepaOptimization — scored on the turn-outcome ledger', () => {
-  test('refuses an unregistered section before it spends anything', async () => {
-    const rt = evolvableRuntime();
-    seedLedger(rt, { failures: 6, guards: 4 });
-    const { control, judgePrompts } = scriptedControl(rt, () => 0.9);
-    const result = await runPromptSectionGepaOptimization(control, { sectionId: 'state/nope' });
-    expect(result.ok).toBe(false);
-    expect(result.error).toContain('not a registered prompt section');
-    expect(result.runId).toBeUndefined();
-    expect(judgePrompts).toEqual([]);
-  });
+/**
+ * One turn of the shipped lane, unwrapped to the pass it ran.
+ *
+ * Everything in this file enters through `advancePromptSectionLane` — the
+ * orchestrator's own entry — so no test can reach an internal that production
+ * never calls.
+ */
+async function lanePass(control: ScaffoldControl) {
+  const step = await advancePromptSectionLane(control);
+  if (step.step !== 'pass') throw new Error(`the lane took ${String(step.step)}, not a pass`);
+  return { ...step.pass, sectionId: step.sectionId };
+}
 
-  test('refuses, by the ledger\'s own name, when there is no failure to optimise toward', async () => {
+/** Same, for the lane's other move: the trials a pending candidate is owed. */
+async function laneTrials(control: ScaffoldControl) {
+  const step = await advancePromptSectionLane(control);
+  if (step.step !== 'trials') throw new Error(`the lane took ${String(step.step)}, not trials`);
+  return { ...step.trials, sectionId: step.sectionId };
+}
+
+/**
+ * Every section registered before `uptoId` has had its pass, so the lane's
+ * derived rotation — least-recently-passed, ties to registry order — selects
+ * `uptoId` next.
+ */
+function seedRotationPast(sql: ScaffoldControl['sql'], uptoId: string): void {
+  for (const section of PROMPT_SECTION_TARGETS) {
+    if (section.id === uptoId) break;
+    startGepaRun(sql, { target: 'prompt_section', targetRef: section.id });
+  }
+}
+
+describe('the lane\'s pass — scored on the turn-outcome ledger', () => {
+  // The refusal is ledger-shaped, not section-shaped — it fires before any
+  // section-specific work — so these enter on whatever the fresh rotation
+  // selects first.
+  test('refuses, by the ledger\'s own name, when nothing was ever labeled', async () => {
     const rt = evolvableRuntime();
     const { control } = scriptedControl(rt, () => 0.9);
-    const unlabeled = await runPromptSectionGepaOptimization(control, { sectionId: TARGET_ID });
+    const unlabeled = await lanePass(control);
     expect(unlabeled.ok).toBe(false);
     expect(unlabeled.error).toContain('no outcome-labeled turns yet');
+  });
 
+  test('refuses, by a different name, when the ledger holds no failure to optimise toward', async () => {
+    const rt = evolvableRuntime();
     seedLedger(rt, { failures: 0, guards: 4 });
-    const guardsOnly = await runPromptSectionGepaOptimization(control, { sectionId: TARGET_ID });
+    const { control } = scriptedControl(rt, () => 0.9);
+    const guardsOnly = await lanePass(control);
     expect(guardsOnly.ok).toBe(false);
-    expect(guardsOnly.error).not.toBe(unlabeled.error);
+    expect(guardsOnly.error).toContain('no corrected/frustrated turns yet');
+    expect(guardsOnly.error).not.toContain('no outcome-labeled turns yet');
   });
 
   /**
@@ -199,14 +229,13 @@ describe('runPromptSectionGepaOptimization — scored on the turn-outcome ledger
    */
   test('an advisor note is a failure to optimise toward, where the ledger has none', async () => {
     const rt = evolvableRuntime();
+    seedRotationPast(rt.storage.sql, TARGET_ID);
     seedAdvisorNotes(rt, 3);
     const { control, judgePrompts, reflectionPrompts } = scriptedControl(
       rt, (candidate) => (candidate === CANDIDATE ? 0.9 : 0.2),
     );
 
-    const result = await runPromptSectionGepaOptimization(control, {
-      sectionId: TARGET_ID, maxIterations: 2, maxMetricCalls: 60,
-    });
+    const result = await lanePass(control);
 
     expect(result.error).toBeUndefined();
     expect(result.ok).toBe(true);
@@ -252,14 +281,13 @@ describe('runPromptSectionGepaOptimization — scored on the turn-outcome ledger
 
   test('reflection sees the train half and the winner lands PENDING, not live', async () => {
     const rt = evolvableRuntime();
+    seedRotationPast(rt.storage.sql, TARGET_ID);
     seedLedger(rt, { failures: 6, guards: 4 });
     const { control, reflectionPrompts, judgePrompts } = scriptedControl(
       rt, (candidate) => (candidate === CANDIDATE ? 0.9 : 0.2),
     );
 
-    const result = await runPromptSectionGepaOptimization(control, {
-      sectionId: TARGET_ID, maxIterations: 2, maxMetricCalls: 60,
-    });
+    const result = await lanePass(control);
 
     expect(result.ok).toBe(true);
     expect(result.proposed).toBe(true);
@@ -277,9 +305,10 @@ describe('runPromptSectionGepaOptimization — scored on the turn-outcome ledger
     expect(shownToReflection).toContain('failure #');
     expect(shownToReflection).not.toContain('guard #');
 
-    // The run is in the lineage under its own target, next to scaffold runs.
+    // The run is in the lineage under its own target, next to scaffold runs
+    // and the seeded rotation rows.
     const run = rt.storage.sql<{ target: string; target_ref: string | null }>`
-      SELECT target, target_ref FROM gepa_runs`[0];
+      SELECT target, target_ref FROM gepa_runs WHERE target_ref = ${TARGET_ID}`[0];
     expect(run).toEqual({ target: 'prompt_section', target_ref: TARGET_ID });
 
     // And the live prompt has not moved.
@@ -299,113 +328,118 @@ describe('runPromptSectionGepaOptimization — scored on the turn-outcome ledger
  * restarted at the first section. Against a joint idle-eviction window measured
  * at 2-5 minutes, `guidance/operating` received every pass and the other eight
  * needed 225 consecutive turns without a pause.
+ *
+ * Driven through the lane, so each step is a real pass: the tie-scored judge
+ * keeps every pass proposal-free, and it is the `gepa_runs` row the pass
+ * writes that moves the rotation.
  */
-describe('nextPromptSectionTarget — the rotation an eviction cannot reset', () => {
+describe('the rotation an eviction cannot reset', () => {
   const firstTwo = PROMPT_SECTION_TARGETS.slice(0, 2).map((section) => section.id);
 
-  test('with nothing passed yet, the registry order decides', () => {
+  test('with nothing passed yet, the registry order decides', async () => {
     const rt = evolvableRuntime();
-    expect(nextPromptSectionTarget(rt.storage.sql)?.id).toBe(firstTwo[0]);
+    const { control } = scriptedControl(rt, () => 0.9);
+    const step = await lanePass(control);
+    expect(step.sectionId).toBe(firstTwo[0]);
   });
 
-  test('a pass moves the rotation on, and holds no state that could be lost', () => {
+  test('a pass moves the rotation on, and holds no state that could be lost', async () => {
     const rt = evolvableRuntime();
+    seedLedger(rt, { failures: 6, guards: 4 });
     startGepaRun(rt.storage.sql, { target: 'prompt_section', targetRef: firstTwo[0] });
+    const { control } = scriptedControl(rt, () => 0.5);
 
-    // Two independent reads over the same workspace. There is no instance here
-    // to evict: the answer is a function of the ledger, so a second caller
-    // cannot disagree with the first, which is the property the in-memory
-    // cursor could not hold.
-    expect(nextPromptSectionTarget(rt.storage.sql)?.id).toBe(firstTwo[1]);
-    expect(nextPromptSectionTarget(rt.storage.sql)?.id).toBe(firstTwo[1]);
-  });
+    const first = await lanePass(control);
+    expect(first.sectionId).toBe(firstTwo[1]);
 
-  test('every section gets one before any gets a second', () => {
+    // A second caller over the same workspace continues from the ledger row
+    // the first pass wrote. There is no instance here to evict: the answer is
+    // a function of the ledger, which is the property the in-memory cursor
+    // could not hold.
+    const second = await lanePass(control);
+    expect(second.sectionId).toBe(PROMPT_SECTION_TARGETS[2].id);
+  }, 30_000);
+
+  test('every section gets one before any gets a second', async () => {
     const rt = evolvableRuntime();
+    seedLedger(rt, { failures: 6, guards: 4 });
+    const { control } = scriptedControl(rt, () => 0.5);
+
     const seen: string[] = [];
     for (let i = 0; i < PROMPT_SECTION_TARGETS.length; i++) {
-      const section = nextPromptSectionTarget(rt.storage.sql);
-      expect(section).not.toBeNull();
-      seen.push(section!.id);
-      startGepaRun(rt.storage.sql, { target: 'prompt_section', targetRef: section!.id });
+      const step = await lanePass(control);
+      seen.push(step.sectionId);
     }
     expect(seen).toEqual(PROMPT_SECTION_TARGETS.map((section) => section.id));
     // A full round done, the rotation comes back inside the same nine rather
-    // than answering null or a tenth thing.
-    const roundTwo = nextPromptSectionTarget(rt.storage.sql);
-    expect(roundTwo).not.toBeNull();
-    expect(seen).toContain(roundTwo?.id ?? '');
-  });
+    // than answering idle or a tenth thing.
+    const roundTwo = await lanePass(control);
+    expect(roundTwo.sectionId).toBe(seen[0]);
+  }, 30_000);
 
-  test('a scaffold run is not a section pass, and never moves the rotation', () => {
+  test('a scaffold run is not a section pass, and never moves the rotation', async () => {
     const rt = evolvableRuntime();
     startGepaRun(rt.storage.sql, { target: 'scaffold' });
-    expect(nextPromptSectionTarget(rt.storage.sql)?.id).toBe(firstTwo[0]);
-  });
+    const { control } = scriptedControl(rt, () => 0.9);
+    const step = await lanePass(control);
+    expect(step.sectionId).toBe(firstTwo[0]);
+  }, 30_000);
 });
 
 describe('advancePromptSectionLane — trials before a new proposal', () => {
   test('a candidate under trial is finished before any section is proposed', async () => {
     const rt = evolvableRuntime();
+    seedRotationPast(rt.storage.sql, TARGET_ID);
     seedLedger(rt, { failures: 6, guards: 4 });
     const { control } = scriptedControl(rt, (candidate) => (candidate === CANDIDATE ? 0.9 : 0.2));
 
-    const proposed = await runPromptSectionGepaOptimization(control, {
-      sectionId: TARGET_ID, maxIterations: 2, maxMetricCalls: 60,
-    });
+    const proposed = await lanePass(control);
     expect(proposed.proposed).toBe(true);
 
-    const step = await advancePromptSectionLane(control);
-    expect(step.step).toBe('trials');
-    expect(step).toMatchObject({ sectionId: TARGET_ID });
+    const step = await laneTrials(control);
+    expect(step.sectionId).toBe(TARGET_ID);
   }, 30_000);
 
   test('with nothing pending, the lane runs the rotation\'s own next section', async () => {
     const rt = evolvableRuntime();
     seedLedger(rt, { failures: 6, guards: 4 });
     const { control } = scriptedControl(rt, () => 0.5);
-    const expected = nextPromptSectionTarget(rt.storage.sql);
+    const expected = PROMPT_SECTION_TARGETS[0].id;
 
-    const step = await advancePromptSectionLane(control);
-    expect(step.step).toBe('pass');
-    expect(step).toMatchObject({ sectionId: expected?.id });
+    const step = await lanePass(control);
+    expect(step.sectionId).toBe(expected);
     // The pass it ran is the row the next tick reads, so the lane advances
     // itself with no cursor in between.
-    expect(nextPromptSectionTarget(rt.storage.sql)?.id).not.toBe(expected?.id);
+    const next = await lanePass(control);
+    expect(next.sectionId).not.toBe(expected);
   }, 30_000);
 });
 
-describe('runPromptSectionTrials — held-out trials decide it', () => {
-  async function propose(rt: AgentRuntime, control: ScaffoldControl): Promise<void> {
-    const result = await runPromptSectionGepaOptimization(control, {
-      sectionId: TARGET_ID, maxIterations: 2, maxMetricCalls: 60,
-    });
-    expect(result.proposed).toBe(true);
+describe('the lane\'s trials — held-out trials decide it', () => {
+  /** A proposal under trial, reached the way production reaches it: the lane
+   *  ran the pass, and the pass left a candidate PENDING. */
+  async function propose(control: ScaffoldControl): Promise<void> {
+    seedRotationPast(control.sql, TARGET_ID);
+    const pass = await lanePass(control);
+    expect(pass.proposed).toBe(true);
   }
-
-  test('nothing pending is not an error, and runs no judge', async () => {
-    const rt = evolvableRuntime();
-    const { control, judgePrompts } = scriptedControl(rt, () => 0.9);
-    const result = await runPromptSectionTrials(control, TARGET_ID);
-    expect(result).toEqual({ sectionId: TARGET_ID, pending: false, trialsRun: 0 });
-    expect(judgePrompts).toEqual([]);
-  });
 
   test('a winning candidate accumulates trials and is promoted into the live prompt', async () => {
     const rt = evolvableRuntime();
     seedLedger(rt, { failures: 6, guards: 4 });
     const { control } = scriptedControl(rt, (candidate) => (candidate === CANDIDATE ? 0.9 : 0.2));
-    await propose(rt, control);
+    await propose(control);
 
-    // Each pass scores both sources on the same instances, so the comparison is
-    // paired. The ladder needs 5 trials and 5 decisive ones before it can
-    // promote, so one pass of three cannot — and must not — decide.
-    const first = await runPromptSectionTrials(control, TARGET_ID, { trials: 3 });
+    // Each trials step scores both sources on the same instances, so the
+    // comparison is paired. The ladder needs 5 trials and 5 decisive ones
+    // before it can promote, so one step of three cannot — and must not —
+    // decide.
+    const first = await laneTrials(control);
     expect(first.trialsRun).toBe(3);
     expect(first.decision).toBe('continue');
     expect(activePromptSectionOverrides(rt.storage.sql)).toEqual({});
 
-    const second = await runPromptSectionTrials(control, TARGET_ID, { trials: 3 });
+    const second = await laneTrials(control);
     expect(second.decision).toBe('promote');
     expect(second.action).toBe('promote');
 
@@ -429,17 +463,18 @@ describe('runPromptSectionTrials — held-out trials decide it', () => {
       const bad = candidate === CANDIDATE ? 0.1 : 0.8;
       return optimising ? good : bad;
     });
-    await propose(rt, control);
+    await propose(control);
     optimising = false;
 
     // The regression veto is checked first and hard: three decisive losses is
-    // past `maxRegressions`, so one pass settles it and no further evidence is
-    // gathered on a candidate already known to be worse.
-    const verdict = await runPromptSectionTrials(control, TARGET_ID, { trials: 3 });
+    // past `maxRegressions`, so one trials step settles it and no further
+    // evidence is gathered on a candidate already known to be worse.
+    const verdict = await laneTrials(control);
     expect(verdict.decision).toBe('rollback');
     expect(verdict.action).toBe('rollback');
-    expect(await runPromptSectionTrials(control, TARGET_ID, { trials: 3 }))
-      .toEqual({ sectionId: TARGET_ID, pending: false, trialsRun: 0 });
+
+    // The candidate is gone from the store, and the live prompt never moved.
+    expect(getPendingPromptSection(rt.storage.sql, TARGET_ID)).toBeNull();
     expect(activePromptSectionOverrides(rt.storage.sql)).toEqual({});
     expect(buildSystemPromptSync(rt, {
       sectionOverrides: activePromptSectionOverrides(rt.storage.sql),
