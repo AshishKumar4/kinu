@@ -68,7 +68,7 @@ export function HomeApp({ opts }: { opts: HomeTuiOptions }) {
   const setupRequired = !cloudReady && !localReady;
   const compactHome = height < 34;
   const panelWidth = Math.min(Math.max(28, width - 4), Math.max(52, Math.floor(width * 0.72)), 104);
-  const promptHeight = compactHome ? 3 : Math.min(Math.max(7, Math.floor(height * 0.24)), 10);
+  const promptHeight = compactHome ? 3 : Math.min(Math.max(4, Math.floor(height * 0.15)), 7);
   const agentPageSize = clamp(height - (compactHome ? 23 : 33), 1, 9);
   const agentPageCount = Math.max(1, Math.ceil(agents.length / agentPageSize));
   const agentPageStart = agentPage * agentPageSize;
@@ -345,7 +345,6 @@ export function HomeApp({ opts }: { opts: HomeTuiOptions }) {
           <box
             style={{
               height: promptHeight,
-              marginTop: 1,
               border: true,
               borderStyle: 'single',
               borderColor: busy ? tuiColors.borderMuted : focusArea === 'mission' ? tuiColors.borderActive : tuiColors.border,
@@ -362,7 +361,7 @@ export function HomeApp({ opts }: { opts: HomeTuiOptions }) {
             <textarea
               ref={(value) => { textareaRef.current = value; }}
               focused={!busy && focusArea === 'mission'}
-              placeholder='A standing brief, not a task. "My personal assistant, Jarvis." "Own the checkout service..."'
+              placeholder='A standing brief, not a task. "Own the checkout service..."'
               wrapMode="word"
               keyBindings={[
                 { name: 'return', ctrl: true, action: 'submit' },
@@ -414,7 +413,7 @@ export function HomeApp({ opts }: { opts: HomeTuiOptions }) {
             <span fg={tuiColors.muted}>
               {setupRequired
                 ? 'Run one setup command above, then return here · Esc exit'
-                : `${agents.length > 0 ? 'Tab focus · ↑/↓ select · Enter open · ' : 'Tab focus mode · '}Ctrl/Alt+Enter create · Esc exit`}
+                : `${agents.length > 0 ? '↑/↓ select · Enter open · ' : 'Tab focus mode · '}Ctrl+Enter create · Esc exit`}
             </span>
           </text>
           <box flexDirection="column" style={{ marginTop: compactHome ? 0 : 1 }}>
@@ -466,11 +465,13 @@ export function HomeApp({ opts }: { opts: HomeTuiOptions }) {
             </box>
             {catalogHint && <text><span fg={tuiColors.amberDeep}>  {catalogHint}</span></text>}
           </box>
-          <text>
-            <span fg={cloudReady ? tuiColors.green : tuiColors.muted}>{cloudReady ? '●' : '○'} Cloud account</span>
-            <span fg={tuiColors.muted}>  </span>
-            <span fg={localReady ? tuiColors.green : tuiColors.muted}>{localReady ? '●' : '○'} Local provider</span>
-          </text>
+          {compactHome && (
+            <text>
+              <span fg={cloudReady ? tuiColors.green : tuiColors.muted}>{cloudReady ? '●' : '○'} Cloud account</span>
+              <span fg={tuiColors.muted}>  </span>
+              <span fg={localReady ? tuiColors.green : tuiColors.muted}>{localReady ? '●' : '○'} Local provider</span>
+            </text>
+          )}
           {cloudSyncError && (
             <text><span fg={tuiColors.amberDeep}>{clipText(cloudSyncError, Math.max(8, panelWidth - 2))}</span></text>
           )}
