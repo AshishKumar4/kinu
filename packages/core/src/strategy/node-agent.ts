@@ -575,7 +575,7 @@ export interface NodeReport {
  * barrier then measured differently, which is a node told its work passed and a search
  * scoring something else.
  */
-export function candidateOf(
+function candidateOf(
   conclusion: string, languages: readonly [string, ...string[]],
 ): string {
   const code = readProposalCode(conclusion, languages);
