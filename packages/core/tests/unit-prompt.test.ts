@@ -23,6 +23,7 @@ import {
   type ParsedSkill,
 } from '../src/index';
 import { AGENTS_ACTION_FIELDS } from '../src/tools/agents-tool';
+import { DELEGATION_SECTION } from '../src/prompting/section-templates';
 import {
   NAMED_SWARM_PRESETS, SWARM_PRESETS, SWARM_PRESET_POINTS, resolveSwarm,
   type SwarmInput,
@@ -170,6 +171,36 @@ describe('buildSystemPromptSync', () => {
     expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toContain(DELEGATION_RUNGS.hire);
     expect(prompt).not.toContain(DELEGATION_RUNGS.swarm);
     expect(prompt).not.toContain(DELEGATION_RUNGS.hire);
+  });
+
+  test('the two delegation bodies share no sentence, so neither can drift into the other', () => {
+    // `registry.ts` used to claim this spec was the SINGLE SOURCE of delegation
+    // doctrine, "which the system prompt's Delegation section also renders
+    // verbatim". It never did, and the test above pins that it must not. What
+    // nothing checked was the reverse direction: two bodies about one subject,
+    // one of them a GEPA target, converging sentence by sentence until a reader
+    // has to diff them to find which is in force.
+    //
+    // The check is a whole sentence, not a phrase: both bodies legitimately say
+    // `action=swarm` and `agents`, and a shared noun is the vocabulary agreeing
+    // rather than the prose being copied.
+    //
+    // Template markers come out FIRST. Without that the check could not fire in
+    // the place a copy actually lands: a `{{#if}}` sits between the section's
+    // lines, it ends in `}}` rather than a full stop, so the sentence after it
+    // was glued to the sentence before and matched nothing. Proven by pasting
+    // one of the spec's own sentences into the section — invisible before the
+    // strip, caught after it.
+    const sentences = (text: string): string[] =>
+      text.replace(/\{\{[^}]*\}\}/g, ' ')
+        .split(/(?<=[.!?])[\s\n]+/).map((s) => s.trim()).filter((s) => s.length > 25);
+    const section = new Set(sentences(DELEGATION_SECTION.source));
+    const shared = sentences(BUILTIN_TOOL_SPECS.agents.whenToUse).filter((s) => section.has(s));
+    expect(shared).toEqual([]);
+    // The rungs each contribute at least one whole sentence, so the comparison
+    // is over real prose on both sides rather than two empty lists agreeing.
+    expect(sentences(BUILTIN_TOOL_SPECS.agents.whenToUse).length).toBeGreaterThan(10);
+    expect(section.size).toBeGreaterThan(5);
   });
 
   test('completion never evicts: the hire rung teaches that finished subordinates STAY', () => {

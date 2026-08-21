@@ -612,10 +612,20 @@ export const BUILTIN_TOOL_SPECS = {
       + 'write returns the size written and whether the file was created or replaced.',
     example: "file({action:'edit', path:'src/api.ts', edits:[{old_text:'timeout: 30', new_text:'timeout: 60'}]})",
   },
-  // The agents spec is the SINGLE SOURCE of delegation doctrine: it composes
-  // the DELEGATION_RUNGS + DELEGATION_CONVERSE constants above, which the
-  // system prompt's Delegation section also renders verbatim (the tool
-  // docstring appends only the live action list per backend).
+  // Delegation doctrine lives in two bodies, and they answer different
+  // questions. This spec answers WHICH rung and WHEN — selection doctrine,
+  // composed from the DELEGATION_* constants above. What a backend actually
+  // ships is narrower: `renderAgentsToolDescription` rebuilds this field and
+  // drops every rung whose deps are not wired.
+  //
+  // The system prompt's Delegation section (`prompting/section-templates.ts`
+  // DELEGATION_SECTION) answers how to RUN the delegation once chosen, and
+  // renders NONE of these constants — `prompt.ts` hands it six booleans and no
+  // rungs text. That is deliberate and it is pinned: `unit-prompt.test.ts`
+  // asserts the prompt contains no rung string, because the prompt's own second
+  // copy of the swarm rung was measured and deleted. Measured 2026-08-21, not
+  // one sentence of this field appears in that section. So neither body is the
+  // other's source, and a change to selection doctrine belongs here alone.
   agents: {
     name: 'agents',
     summary:
