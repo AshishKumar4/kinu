@@ -22,9 +22,11 @@ one, and the two look equally harmless in a prune script.
 
 ## Tag inventory
 
-Nine tags live under `refs/tags/archive/`. All nine are lightweight tags on a
-commit. Both counts below were measured on 2026-08-21 against `main` at
-`29f654bd`, with the commands in the next section.
+Forty tags live under `refs/tags/archive/`. All are lightweight tags on a
+commit. Thirty-one were added by the 2026-08-21 prune wave and carry their own
+table below. Both counts for the first nine were measured on 2026-08-21
+against `main` at `29f654bd`, with the commands in the next section; the wave
+table was measured the same day against `main` at `c143c4b6`.
 
 - **Blobs `main` lacks** counts blobs reachable from the tag that no commit in
   `main`'s history holds. This is the durable question, because branches get
@@ -77,6 +79,67 @@ ref that still reaches that line: 1,149 commits `main` lacks, the 2026-08-19
 measurement base `5dbc0f1b` among them, and — measured during the 2026-08-20
 prune wave — the tips of 60+ working branches since deleted. It is the most
 load-bearing tag in this table: 307 of its blobs exist nowhere else.
+
+### The 2026-08-21 prune wave
+
+Thirty-one branches were judged against `main` on content and deleted, each
+behind a tag created and verified before the delete. Every tag pins the tip of
+the branch named in it, minus the type prefix (`fix/reliability-a1a3` pins as
+`archive/reliability-a1a3`). Counts were measured against `main` at
+`c143c4b6`. Sole copy is 0 for every row: these branches share their whole
+pre-rewrite commit graph with surviving siblings, so no blob is exclusively
+theirs. The novel-blob count is what makes each tag load-bearing.
+
+| Branch (deleted) | Tag | Commit | Commits | Blobs `main` lacks | Sole copy |
+|---|---|---|---|---|---|
+| `chore/kinu-rename` | `archive/kinu-rename` | `074ad285` | 1049 | 4523 | 0 |
+| `proof/fabric-v2-port` | `archive/fabric-v2-port` | `7f47f958` | 1049 | 4411 | 0 |
+| `fix/d1-removal-kv-auth` | `archive/d1-removal-kv-auth` | `6863c622` | 1089 | 4439 | 0 |
+| `bench/tbench-run-3` | `archive/tbench-run-3` | `ec7baac5` | 1088 | 4409 | 0 |
+| `chore/commit-hygiene-gate` | `archive/commit-hygiene-gate` | `ef3e9a70` | 845 | 4198 | 0 |
+| `gate/patch-parity` | `archive/patch-parity` | `0b4f1064` | 845 | 4197 | 0 |
+| `cutover/settle-mcts` | `archive/settle-mcts` | `dd81adcb` | 1871 | 5933 | 0 |
+| `feat/agent-nodes` | `archive/agent-nodes` | `7a0598b6` | 846 | 4194 | 0 |
+| `feat/agents-swarm` | `archive/agents-swarm` | `8a464199` | 1839 | 5902 | 0 |
+| `feat/node-substrate` | `archive/node-substrate` | `7d1cbea9` | 1885 | 5946 | 0 |
+| `feat/records-judge` | `archive/records-judge` | `b8fb9f05` | 871 | 4214 | 0 |
+| `feat/swarm-depth` | `archive/swarm-depth` | `b19c36f5` | 1869 | 5932 | 0 |
+| `feat/merge-back-wiring` | `archive/merge-back-wiring` | `fd482aa0` | 863 | 4210 | 0 |
+| `feat/infra-provision` | `archive/infra-provision` | `a21becc0` | 1844 | 5906 | 0 |
+| `fix/strict-agents-input` | `archive/strict-agents-input` | `88dffa5d` | 1793 | 5827 | 0 |
+| `spec/axis-ergonomics` | `archive/axis-ergonomics` | `461fd28c` | 1801 | 5854 | 0 |
+| `spec/exploration` | `archive/exploration` | `f2ff9db1` | 1806 | 5829 | 0 |
+| `chore/antislop-core` | `archive/antislop-core` | `d4afc4d5` | 1471 | 5027 | 0 |
+| `chore/antislop-cf` | `archive/antislop-cf` | `fa7a15fe` | 1474 | 4984 | 0 |
+| `chore/antislop-cli` | `archive/antislop-cli` | `e000b3b0` | 1471 | 4925 | 0 |
+| `chore/antislop-scripts` | `archive/antislop-scripts` | `dff86db3` | 1472 | 4931 | 0 |
+| `feat/delegation-root-cause` | `archive/delegation-root-cause` | `24223bd8` | 1640 | 5367 | 0 |
+| `eval/staging-identity` | `archive/staging-identity` | `17cadf03` | 1095 | 4529 | 0 |
+| `cutover/strategy-subsystem` | `archive/strategy-subsystem` | `3b7fb04a` | 1034 | 4389 | 0 |
+| `fix/bench-patch-anchors` | `archive/bench-patch-anchors` | `49287e4c` | 1773 | 5791 | 0 |
+| `feat/delegation-semantics` | `archive/delegation-semantics` | `1fa43819` | 1756 | 5662 | 0 |
+| `work/import-cycle-gate` | `archive/import-cycle-gate` | `9777dcd0` | 936 | 4283 | 0 |
+| `feat/swarm-tree-ux` | `archive/swarm-tree-ux` | `ad0dc3ea` | 919 | 4288 | 0 |
+| `feat/merge-back` | `archive/merge-back` | `d170729e` | 849 | 4200 | 0 |
+| `feat/executor-errors` | `archive/executor-errors` | `e2fe40cb` | 1756 | 5638 | 0 |
+| `fix/reliability-a1a3` | `archive/reliability-a1a3` | `2b5d8dfe` | 1093 | 3344 | 0 |
+
+The judgment that sent each branch here came from its shipped successor, not
+from its name: the strategy branches land in `packages/core/src/strategy/`,
+the antislop branches in `tools/oxlint/anti-slop/`, the KV auth cutover in
+`packages/cf-backend/src/auth/store.ts`, the commit-hygiene gate in
+`scripts/commit-hygiene.ts`. Branches with no traced landing evidence were not
+touched; they wait on an owner ruling.
+
+`archive/reliability-a1a3` is the one tag that pins a commit made during the
+prune rather than a bare branch tip. Its worktree held a crashed
+`git worktree add` from 2026-08-10: a stale `index.lock`, no index, and 272 of
+1,179 files checked out, every one byte-identical to its blob in the branch
+tip `df014c73`. That crash state was committed verbatim, and the tag holds the
+commit whose parent is `df014c73`, so both the snapshot and the record of what
+the crash left behind stay reachable. The branch's own work had landed long
+before: `packages/cf-backend/src/hooks/use-kinu.ts` cites STABILITY-AUDIT §A1
+and §A3 by name.
 
 ## Reproducing the test
 
