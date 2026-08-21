@@ -25,7 +25,6 @@
   "docs/EVOLUTION.md: path scaffold/agent.js",
   "docs/MCTS.md: symbol StorageIsolated",
   "docs/MCTS.md: symbol generateAssertions",
-  "docs/REQUESTS-LEDGER.md: path docs/TRACEABILITY.md",
   "docs/STORAGE.md: symbol SqliteFS",
   "docs/TESTING.md: symbol SqliteFS",
   "docs/TOOLS.md: path scaffold/agent.js",
