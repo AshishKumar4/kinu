@@ -181,6 +181,37 @@ export interface ChatOptions {
  *  under five minutes. */
 export const STALL_TIMEOUT_MS = 300_000;
 
+/**
+ * THE TWO REASONS A SILENT TURN ENDS, as the prefixes their messages open with.
+ *
+ * A turn that ends in silence is durable prose: it lands on
+ * `head_journal.error_message`, on `SwarmCandidate.incomplete`, and in the
+ * `swarm.branch_failed` event a surface renders. That prose is the ONLY place the
+ * two causes were ever distinguished, and they need different answers — a wedge
+ * is a fault to investigate, a rate limit is capacity to wait for or pace
+ * against. So the two openings are declared here, once, beside the code that
+ * builds them, and a reader asks {@link isRateLimitedTurnError} instead of
+ * carrying a regex that a reworded sentence silently breaks.
+ */
+export const STALLED_TURN_PREFIX = 'Turn stalled:';
+export const RATE_LIMITED_TURN_PREFIX = 'Turn ended by provider rate limiting:';
+
+/**
+ * Whether a turn's recorded failure is the provider having rate-limited it,
+ * rather than the turn having gone silent on its own. The one classifier: every
+ * surface that renders a node's reason reads it through this.
+ *
+ * `includes` rather than `startsWith`, and that is measured rather than lax: a
+ * node's row does not carry the turn's message, it carries the CHAIN that wrapped
+ * it — the incident's own row read `run agent <id> to a report: Turn stalled:
+ * nothing flowed for 300s …`. So the prefix is a marker inside a chain, which is
+ * exactly why it has to be a declared constant rather than a phrase each reader
+ * reconstructs.
+ */
+export function isRateLimitedTurnError(message: string): boolean {
+  return message.includes(RATE_LIMITED_TURN_PREFIX);
+}
+
 /** The watchdog's own arrival value, distinguishable from every iterator result
  *  because it is a unique symbol and an iterator result is an object. */
 const STALLED = Symbol('turn-stalled');
@@ -379,15 +410,18 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   // same turn through the same silence and used to read as a provider fault.
   //
   // CLASSIFIED, because a swarm node whose row said "stalled" sent its reader
-  // looking for a wedge while the log held a rate limit.
+  // looking for a wedge while the log held a rate limit. Both texts open with an
+  // exported prefix so a reader classifies through
+  // {@link isRateLimitedTurnError} rather than through a regex of its own — the
+  // classification exists in one place, where it is built.
   const stallError = () => new Error(rateLimited
-    ? 'Turn ended by provider rate limiting: the provider asked this turn to wait '
+    ? `${RATE_LIMITED_TURN_PREFIX} the provider asked this turn to wait `
       + `${Math.round(mandatedMs / 1000)}s against a `
       + `${Math.round(PROVIDER_WAIT_BUDGET_MS / 1000)}s budget, that wait was taken, and still `
       + 'nothing flowed — no provider chunk and no tool result. That is a rate limit rather '
       + 'than a wedged turn.'
-    : `Turn stalled: nothing flowed for ${Math.round(stallTimeoutMs / 1000)}s — no provider chunk `
-      + 'and no tool result — so the turn was ended.',
+    : `${STALLED_TURN_PREFIX} nothing flowed for ${Math.round(stallTimeoutMs / 1000)}s — `
+      + 'no provider chunk and no tool result — so the turn was ended.',
   );
 
   // The turn's constants for the per-step breakdown: the cache-eligible system

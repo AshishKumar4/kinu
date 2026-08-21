@@ -16,7 +16,11 @@
 import { describe, test, expect } from 'bun:test';
 import { tool, type ToolSet } from 'ai';
 import { z } from 'zod';
-import { runChat, createChatModel, type ChatEvent } from '../src/index';
+import {
+  runChat, createChatModel, isRateLimitedTurnError,
+  RATE_LIMITED_TURN_PREFIX, STALLED_TURN_PREFIX,
+  type ChatEvent,
+} from '../src/index';
 
 const SSE_HEADERS = { 'content-type': 'text/event-stream' };
 
@@ -254,8 +258,8 @@ describe('a rate-limited turn is not a stalled turn', () => {
       }
       return new Response(new ReadableStream({ start() { /* silent after the wait */ } }), { headers: SSE_HEADERS });
     }, { stallTimeoutMs: 300 });
-    expect(threw?.message ?? '').toContain('rate limit');
-    expect(threw?.message ?? '').not.toContain('Turn stalled');
+    expect(isRateLimitedTurnError(threw?.message ?? '')).toBe(true);
+    expect(threw?.message ?? '').not.toContain(STALLED_TURN_PREFIX);
   }, 20_000);
 
   test('an ordinary dead stream still reads as a stall, with no rate limit in sight', async () => {
@@ -265,7 +269,20 @@ describe('a rate-limited turn is not a stalled turn', () => {
       () => new Response(new ReadableStream({ start() { /* stall forever */ } }), { headers: SSE_HEADERS }),
       { stallTimeoutMs: 300 },
     );
-    expect(threw?.message ?? '').toContain('Turn stalled');
-    expect(threw?.message ?? '').not.toContain('rate limit');
+    expect(threw?.message ?? '').toContain(STALLED_TURN_PREFIX);
+    expect(isRateLimitedTurnError(threw?.message ?? '')).toBe(false);
   }, 20_000);
+
+  test('the classifier reads a reason out of the CHAIN a node records, not just a bare message', async () => {
+    // How a node's row actually looks. `runNodeAgent` wraps the turn's failure
+    // ("run agent <id> to a report: …"), which is the form the incident's own row
+    // carried — so a classifier anchored at the start of the string would have
+    // reported every rate-limited node as unexplained.
+    expect(isRateLimitedTurnError(
+      `run agent n1 to a report: ${RATE_LIMITED_TURN_PREFIX} the provider asked this turn to wait 60s`,
+    )).toBe(true);
+    expect(isRateLimitedTurnError(
+      `run agent n1 to a report: ${STALLED_TURN_PREFIX} nothing flowed for 300s`,
+    )).toBe(false);
+  });
 });
