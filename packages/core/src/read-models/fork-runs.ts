@@ -329,7 +329,7 @@ function runName(rootLabel: string | null, task: string): string {
  *  {@link NAME_MAX_CHARS} otherwise. A title, so no ellipsis: what it cuts,
  *  it cuts cleanly. */
 const NAME_MAX_CHARS = 48;
-export function shortName(task: string): string {
+function shortName(task: string): string {
   const cleaned = task.replace(/\s+/g, ' ').trim();
   if (!cleaned) return '(exploration run)';
   const cut = cleaned.search(/[—–:;,|]|\.\s|\.\s*$|\n/);

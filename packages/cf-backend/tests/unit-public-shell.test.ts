@@ -25,7 +25,6 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import {
-  DISPLAY_FONT_FACE, DISPLAY_FONT_PATH,
   HERO_FACTS, RADII, REPO_URL, THEME_BLOCKS, THEME_BOOT, mark, markDocument, publicPage,
   MARK_IDS, KINU_MARK,
   type Mode, type Palette,
@@ -78,6 +77,8 @@ function resolved(theme: string) {
 }
 
 const NAMED = (palette: Palette, mode: Mode) => `${palette} ${mode}`;
+
+const FONT_PATH = '/assets/fonts/fraunces-latin-var.woff2';
 
 describe('public shell tokens are the app palette', () => {
   test('all four themes are projected', () => {
@@ -143,17 +144,19 @@ describe('public shell tokens are the app palette', () => {
     // preloads it. A path that drifts between the two is a landing page in
     // the fallback face — exactly the drift this file exists to prevent.
     expect(block(':root')['--font-display']).toStartWith('"Fraunces"');
-    expect(INDEX_CSS).toContain(`src: url("${DISPLAY_FONT_PATH}") format("woff2-variations")`);
+    expect(INDEX_CSS).toContain('src: url("/assets/fonts/fraunces-latin-var.woff2") format("woff2-variations")');
     const page = publicPage({ title: 't', body: '' });
-    expect(page).toContain(DISPLAY_FONT_FACE);
-    expect(page).toContain(`<link rel="preload" href="${DISPLAY_FONT_PATH}" as="font" type="font/woff2" crossorigin />`);
+    expect(page).toContain('@font-face{font-family:"Fraunces"');
+    expect(page).toContain('url("/assets/fonts/fraunces-latin-var.woff2") format("woff2-variations")');
+    expect(page).toContain('font-display:swap');
+    expect(page).toContain('<link rel="preload" href="/assets/fonts/fraunces-latin-var.woff2" as="font" type="font/woff2" crossorigin />');
   });
 
   test('the webfont is the latin variable subset, inside its byte budget', () => {
     // 67,304 B today ([opsz,wght] latin). The budget refuses the full-axes
     // build (121 KB) and any unsubset swap; the licence must travel with the
     // file because OFL requires it.
-    const file = resolve(import.meta.dir, '../public', `.${DISPLAY_FONT_PATH}`);
+    const file = resolve(import.meta.dir, '../public', '.' + FONT_PATH);
     const bytes = readFileSync(file);
     expect(new TextDecoder().decode(bytes.subarray(0, 4))).toBe('wOF2');
     expect(bytes.byteLength).toBeLessThanOrEqual(70_000);
@@ -167,7 +170,7 @@ describe('public shell tokens are the app palette', () => {
     // demos to grow deliberately.
     const html = landingDocument("curl -fsSL 'https://kinu.run/install.sh' | bash");
     const gz = Bun.gzipSync(new TextEncoder().encode(html)).byteLength;
-    const font = readFileSync(resolve(import.meta.dir, '../public', `.${DISPLAY_FONT_PATH}`)).byteLength;
+    const font = readFileSync(resolve(import.meta.dir, '../public', '.' + FONT_PATH)).byteLength;
     expect(gz + font).toBeLessThanOrEqual(128 * 1024);
   });
 });
