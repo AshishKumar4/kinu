@@ -1,12 +1,30 @@
-<h1 align="center">Kinu.run</h1>
-
 <p align="center">
-  Agent workspaces that answer a hard task by searching a tree of agents,<br>
-  and keep what worked for the next task.
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.svg">
+    <img alt="Kinu.run: the brush mark and wordmark over a faint tree of a real search" src="docs/assets/banner.svg" width="900">
+  </picture>
 </p>
 
 <p align="center">
-  <a href="https://kinu.run"><b>kinu.run</b></a> &nbsp;·&nbsp;
+  <strong>Agent workspaces that answer a hard task by searching a tree of agents,<br>
+  and keep what worked for the next task.</strong>
+  <strong><a href="https://kinu.run">kinu.run</a></strong>
+</p>
+
+<p align="center">
+  <a href="packages/cli/package.json"><img src="https://img.shields.io/badge/cli-v0.2.0-E0A458?style=flat&colorA=222222" alt="CLI 0.2.0"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-E3D2AE?style=flat&colorA=222222" alt="MIT license"></a>
+  <a href="https://www.typescriptlang.org"><img src="https://img.shields.io/badge/TypeScript-3178C6?style=flat&colorA=222222&logo=typescript&logoColor=white" alt="TypeScript"></a>
+  <a href="https://bun.sh"><img src="https://img.shields.io/badge/runtime-Bun-f472b6?style=flat&colorA=222222" alt="Bun"></a>
+  <a href="https://workers.cloudflare.com"><img src="https://img.shields.io/badge/Cloudflare_Workers-F38020?style=flat&colorA=222222&logo=cloudflareworkers&logoColor=white" alt="Cloudflare Workers"></a>
+</p>
+
+<p align="center">
+  <b>6</b> named searches &nbsp;·&nbsp; <b>8</b> built-in tools &nbsp;·&nbsp;
+  <b>2</b> backends, one core &nbsp;·&nbsp; <b>330</b> Lean theorems, <b>0</b> <code>sorry</code>
+</p>
+
+<p align="center">
   <a href="QUICKSTART.md">Quick start</a> &nbsp;·&nbsp;
   <a href="docs/USER-GUIDE.md">User guide</a> &nbsp;·&nbsp;
   <a href="docs/EXPLORATION.md">Tree swarm</a> &nbsp;·&nbsp;
