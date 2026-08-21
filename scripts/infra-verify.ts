@@ -452,9 +452,13 @@ async function main(): Promise<number> {
     for (const resource of owned) {
       // A resource two environments share is observed once, under the first.
       if (rows.some((entry) => entry.id === resource.id)) continue;
-      rows.push(resource.origin === 'manual' && resource.kind !== 'email-routing' && resource.kind !== 'wildcard-dns'
-        ? unobservableRow(resource)
-        : await observe(resource, environment, live));
+      // Manual ORIGIN says how a resource was created, not whether it can be
+      // observed: AUTH_KV is provisioned by hand and read by `kv namespace
+      // list`, and routing it here as unobservable reported a checked resource
+      // as unchecked. observe() sends kinds with no observer to
+      // unobservableRow, so a genuinely blind resource still demands its
+      // UNOBSERVABLE entry.
+      rows.push(await observe(resource, environment, live));
     }
     secrets.push(...secretRows(environment, secretNames(environment.wranglerEnv)));
   }

@@ -299,18 +299,21 @@ if (import.meta.main) {
     process.exit(0);
   }
 
+  // Zero leaked scratch is the HEALTHY reading — a clean boot or a fresh
+  // reclaim both produce it — so it is stated as text, not fed to
+  // assertMeasured: a count that is legitimately zero would make the throw
+  // fire on a clean machine. The scan itself is still proven: tempEntries
+  // and free inodes stay in the must-be-measured set, so a broken path or
+  // glob cannot read as an empty temp directory.
   const measured = assertMeasured('preflight', [
     ['free inodes', env.freeInodes],
     ['entries in the temp directory', env.tempEntries],
-    ['of them our own leaked test scratch', env.scratchOrphans],
     ['project markers probed per ancestor', PROJECT_MARKERS.length],
   ]);
   const problems = judge(env);
   if (problems.length === 0) {
-    // The merge state is stated as text, not fed to assertMeasured: zero
-    // conflicted paths is the HEALTHY reading, and a denominator that is
-    // legitimately zero would make the throw fire on a good tree.
-    console.log(`preflight: ok — ${measured}, no merge in progress`);
+    console.log(`preflight: ok — ${measured}, `
+      + `${String(env.scratchOrphans)} of them our own leaked test scratch, no merge in progress`);
     process.exit(0);
   }
   console.error(`preflight: ${String(problems.length)} environment fault(s)\n`);
