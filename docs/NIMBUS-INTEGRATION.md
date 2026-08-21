@@ -12,14 +12,14 @@ registry at exact pinned versions:
 
 | Package | Version | Declared in |
 |---|---|---|
-| `@nimbus-sh/core` | 0.5.0 | `packages/core`, `packages/cf-backend` |
-| `@nimbus-sh/sdk` | 0.3.0 | `packages/cf-backend` |
-| `@nimbus-sh/worker` | 0.3.0 | `packages/cf-backend` |
+| `@nimbus-sh/core` | 0.6.0 | `packages/core`, `packages/cf-backend` |
+| `@nimbus-sh/sdk` | 0.3.1 | `packages/cf-backend` |
+| `@nimbus-sh/worker` | 0.4.0 | `packages/cf-backend` |
 | `@nimbus-sh/runtime-bash` | 5.2.37 | `packages/cli-backend` |
 | `@nimbus-sh/runtime-cpython` | 3.13.14 | `packages/cli-backend` |
 
-No `package.json` here declares `@nimbus-sh/fabric`. It reaches `node_modules`
-only as a transitive dependency.
+`packages/core` also declares `@nimbus-sh/fabric` at 0.2.0, and imports it
+directly: `events/outbox.ts` builds its outbox on `@nimbus-sh/fabric/outbox.js`.
 
 `patches/` holds one patch file, `@plannotator%2Fui@0.30.0.patch`, and it is
 not a Nimbus patch. `bun run gate:patch-parity` (`scripts/patch-parity.ts`)
