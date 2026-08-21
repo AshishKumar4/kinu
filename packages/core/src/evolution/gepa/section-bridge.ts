@@ -31,6 +31,7 @@
  */
 
 import type { SqlExecutor } from '../../types/primitives';
+import { renderThrownChain } from '../../obs/error';
 import { checkMisevolution } from '../../scaffold/misevolution';
 import { PROMPT_SECTIONS } from '../../prompting/section-templates';
 import { templateContract, type PromptSection } from '../../prompting/template';
@@ -143,7 +144,7 @@ export async function runSectionGepa<I = unknown, E = unknown>(
         try {
           offered = templateContract(section.id, source);
         } catch (err) {
-          return err instanceof Error ? err.message : String(err);
+          return renderThrownChain({ cause: err });
         }
         if (`${offered.slots.join('|')}//${offered.flags.join('|')}` !== wantedKey) {
           return `slot contract changed — expected {slots: ${wanted.slots.join(', ') || '(none)'}; `

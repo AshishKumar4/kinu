@@ -35,6 +35,7 @@
  */
 
 import * as v from 'valibot';
+import { renderThrownChain } from '../obs/error';
 import { DEFAULT_CONFIG } from '../config';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import { nanoid } from '../utils/nanoid';
@@ -258,7 +259,7 @@ export function proposePromptSection(
   } catch (err) {
     return {
       ok: false, code: 'malformed_template',
-      error: err instanceof Error ? err.message : String(err),
+      error: renderThrownChain({ cause: err }),
     };
   }
   if (wanted.slots.join('|') !== offered.slots.join('|')
