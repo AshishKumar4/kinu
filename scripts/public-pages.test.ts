@@ -892,15 +892,14 @@ describe('the front page leads with the platform', () => {
     expect(s01).not.toContain('Install the CLI</h2>');
   });
 
-  test('the search configuration is disclosed, not headlined', () => {
+  test('the search configuration is absent, not merely disclosed', () => {
+    // The ruling hardened: the spec rail left the page entirely — axes,
+    // presets and depth vocabulary live in the exploration doc, nowhere on
+    // the landing. The story stays in the open: scored nodes, pruning, a
+    // winner.
     const s03 = section('§ 03', '§ 04');
-    const open = s03.indexOf('<details class="config">');
-    expect(open, 'the configuration rail is not behind a disclosure').toBeGreaterThan(-1);
-    const spec = s03.indexOf('<dl class="spec">');
-    expect(spec).toBeGreaterThan(open);
-    expect(s03.indexOf('</details>')).toBeGreaterThan(spec);
-    expect(s03.match(/unit · context · expand · score · advance · carry/g)?.length).toBe(1);
-    // What the DAG is, stated in the open: scored nodes, pruning, a winner.
+    expect(s03).not.toContain('<details class="config">');
+    expect(s03).not.toContain('unit · context · expand · score · advance · carry');
     expect(s03).toContain('directed graph');
     expect(s03).toContain('pruned');
   });

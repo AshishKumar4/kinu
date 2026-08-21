@@ -411,7 +411,10 @@ h2{margin:0;font-family:var(--font-display);font-size:19px;font-weight:500;lette
    ink, so each theme draws its own — champagne light on the dyed face, deep
    dye on the undyed one — and engines without background-clip keep the plain
    accent ink declared first. */
-.hero-ink{color:var(--c-accent-fg);background:linear-gradient(93deg,var(--c-accent) 4%,var(--c-accent-fg) 52%,var(--c-text) 98%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+/* The trailing padding keeps the italic overshoot inside the painted box:
+   background-clip:text stops painting at the border box, so a swash past it
+   rendered sheared at the edge. The negative margin gives the space back. */
+.hero-ink{color:var(--c-accent-fg);background:linear-gradient(93deg,var(--c-accent) 4%,var(--c-accent-fg) 52%,var(--c-text) 98%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;padding-right:.14em;margin-right:-.14em}
 .hero-ink+.ink-dot{color:var(--c-accent)}
 .lede{margin:22px 0 0;max-width:52ch;color:var(--c-text-2);font-size:17px;line-height:1.62}
 .dim{color:var(--c-text-3);font-size:13px;line-height:1.55}
