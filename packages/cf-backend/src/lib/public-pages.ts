@@ -27,16 +27,68 @@ const STATS: ReadonlyArray<readonly [figure: string, label: string]> = [
   ['2', 'backends, one core'],
 ];
 
-/** Cells of the capability grid. Every claim is one the repo can answer for. */
+/**
+ * The lines the headline rotates through. Each completes "An agent of your own
+ * that ___." — one product, four angles of the same claim. The first is the
+ * one a reader with no script gets, so it stays the strongest.
+ */
+const TAGLINES = [
+  'gets better every time it works',
+  'searches a tree of agents when the task is hard',
+  'keeps every skill it earns',
+  'runs in your account and answers to you',
+] as const;
+
+/** § 02. One workspace, reached four ways. The claim the whole section makes
+ *  is that no client is the product, the CLI included. */
+const CLIENTS: ReadonlyArray<readonly [title: string, body: string]> = [
+  [
+    'The browser',
+    'kinu.run opens the workspace with its files, its sessions and every search it has run. The page you are reading is served by the same Worker that runs the agents.',
+  ],
+  [
+    'The terminal',
+    '<code>kinu chat</code> holds a conversation and <code>kinu run</code> fires one task. The CLI is a client like the others, not the product.',
+  ],
+  [
+    'Your editor',
+    '<code>kinu acp</code> speaks the Agent Client Protocol, so an ACP editor drives the same workspace agent from a panel.',
+  ],
+  [
+    'Email',
+    'A workspace has an address, and mail to it wakes the agent for a turn. The answer comes back as a real reply on the same thread. This deployment has not switched its mail route on yet.',
+  ],
+];
+
+/** § 04. The four timescales, each cell one clock. The kicker states the
+ *  clock's trigger, and the body states what may move on it and what guards
+ *  the move. */
+const CLOCKS: ReadonlyArray<readonly [kicker: string, title: string, body: string]> = [
+  [
+    'Per step · every settled tool call',
+    'Tools earn their place',
+    'Inside one long run, a crafted tool is scored on whether it ran, with no model call. A tool that keeps raising drops out of the callable set within the same episode.',
+  ],
+  [
+    'Per turn · the next message',
+    'You are the grader',
+    'Your next message grades the turn. A negative one draws a reflection, and only a corroborated lesson lands in durable memory.',
+  ],
+  [
+    'Per session · every five turns',
+    'The loop may mutate',
+    'Patterns consolidate into reusable tools, and the scaffold, the agent\u2019s own loop, may be rewritten. Four structural gates and a shadow eval stand between a proposal and promotion.',
+  ],
+  [
+    'Per lifetime · every five windows',
+    'The long game',
+    'Low-scoring tools retire on a time-decayed score. A replay eval measures loss against graded turns, and <code>kinu evolve</code> runs a tree search over the scaffold itself.',
+  ],
+];
+
+/** Cells of the capability grid. Every claim is one the repo can answer for,
+ *  and none repeats a section above. */
 const CAPABILITIES: ReadonlyArray<readonly [title: string, body: string]> = [
-  [
-    'You declare the measurement',
-    'An objective names the metric, its unit, the direction and the target, and it names the verifier that measures a candidate. A verifier nobody registered refuses the run instead of inventing a score.',
-  ],
-  [
-    'A node is a whole agent',
-    'Every branch runs the same turn loop the workspace agent runs. Inside the one workspace filesystem it holds its own directory, its own credential and its own /tmp.',
-  ],
   [
     'Workspaces that keep working',
     'A workspace holds its filesystem, sessions and history between turns. Work still running at 30 seconds detaches into a background job, and the agent wakes when the job settles.',
@@ -50,20 +102,63 @@ const CAPABILITIES: ReadonlyArray<readonly [title: string, body: string]> = [
     'A durable POSIX filesystem, a real shell, about 95 coreutils, and language runtimes installed when the agent asks for them. The same component runs on Workers and on your laptop.',
   ],
   [
-    'It keeps the tools it writes',
-    'The agent learns reusable tools from its own conversations and scores them as they earn their place. Its agentic loop is code it can rewrite, checked by four structural gates.',
+    'Four executors',
+    'Work runs in the workspace, in a Linux container, on your own machine behind consent, or in the workspace a fork came from. Each executor\u2019s capabilities are rendered into the agent\u2019s prompt, so the model knows where to send a job.',
+  ],
+  [
+    'Web with zero keys',
+    'The web tool searches and fetches with no API key of its own. Add a Tavily key and search comes back ranked and answer-augmented.',
+  ],
+  [
+    'Formal models',
+    'A Lean 4 corpus models selected core algorithms. Measured 2026-08-19: 330 theorems, 0 sorry. CI re-checks the corpus on every push that touches them.',
   ],
 ];
+
+/** § 06. The three-step self-host story, honest about what each step needs. */
+const DEPLOY_STEPS: ReadonlyArray<readonly [num: string, title: string, body: string, id: string, cmd: string]> = [
+  [
+    'Step one',
+    'Bring the account',
+    'A Cloudflare account on the Workers Paid plan, a zone, and a wrangler login. Provisioning prints everything it cannot create for you, with the command that re-checks each item.',
+    'deploy-provision',
+    'bun run infra:provision',
+  ],
+  [
+    'Step two',
+    'Deploy, then provision again',
+    'The deploy ships the Worker, its Durable Objects and its container. Secrets install on a Worker that exists, which is why provisioning runs twice.',
+    'deploy-deploy',
+    'bun run deploy',
+  ],
+  [
+    'Step three',
+    'Prove the account',
+    'The infra gate checks that every declared resource exists and that the deployed Worker is bound to it. It exits non-zero when one is not.',
+    'deploy-verify',
+    'bun run gate:infra',
+  ],
+];
+
+/** Mono term → value rows, the annotation device the hero already uses. */
+function specRows(rows: ReadonlyArray<readonly [term: string, value: string]>): string {
+  return `<dl class="spec">
+        ${rows.map(([term, value]) => `<div><dt>${term}</dt><dd>${value}</dd></div>`).join('\n        ')}
+      </dl>`;
+}
 
 /** The page as text. `install` is the command for THIS origin, so a preview
  *  deployment shows its own. */
 export function landingDocument(install: string): string {
+  const deployUrl = `https://deploy.workers.cloudflare.com/?url=${REPO_URL}`;
+  const guideUrl = `${REPO_URL}/blob/main/docs/SELF-HOSTING.md`;
   return publicPage({
     title: 'Kinu.run — the self-evolving agent platform',
-    description: 'An agent of your own that gets better every time it works. When a task is hard it searches a tree of agents, measures every candidate the way you said, and keeps every skill it earns.',
+    description: 'An agent of your own that gets better every time it works. When a task is hard it searches a tree of agents, measures every candidate the way you said, and keeps every skill it earns. Run it here, or deploy your own.',
     styles: LANDING_CSS,
     nav: [
       `<a class="icon" href="${REPO_URL}" target="_blank" rel="noopener noreferrer" aria-label="Kinu on GitHub">${GITHUB_ICON}</a>`,
+      '<a class="quiet" href="#deploy">Deploy your own</a>',
       '<a class="quiet" href="#install" data-install-toggle aria-expanded="false">Install CLI</a>',
       '<a class="btn solid" href="/login">Sign in</a>',
     ].join(''),
@@ -71,7 +166,9 @@ export function landingDocument(install: string): string {
   <section class="hero">
     <div class="say">
       <p class="eyebrow">The self-evolving agent platform</p>
-      <h1>An agent of your own that <em>gets better every time it works</em>.</h1>
+      <h1 class="taglines" data-taglines>
+        ${TAGLINES.map((line, at) => `<span${at === 0 ? ' data-shown' : ''}>An agent of your own that <em>${line}</em>.</span>`).join('\n        ')}
+      </h1>
       <p class="lede">Give it a task and a way to measure the answer. When the task is hard it runs a tree of agents, measures every candidate the way you said, and keeps the branch that measured best.</p>
       <p class="lede">Agents live in durable workspaces. Run them in the cloud, or entirely on your own machine.</p>
       <div class="actions">
@@ -123,15 +220,89 @@ export function landingDocument(install: string): string {
   </section>
 
   <section class="section">
-    <p class="label"><b>§ 02</b>What you get</p>
+    <p class="label"><b>§ 02</b>One workspace, every client</p>
+    <h2 class="title">The workspace is the product. Everything else is a door into it.</h2>
+    <p class="lede">The same agent, the same files, the same sessions, whichever door you open.</p>
+    <div class="grid two">
+      ${CLIENTS.map(([title, body]) => `<div class="cell"><h2>${title}</h2><p>${body}</p></div>`).join('\n      ')}
+    </div>
+    <p class="dim foot">A schedule, a webhook and a finished background job come through the same door: each one is a turn, with nobody at the keyboard.</p>
+  </section>
+
+  <section class="section">
+    <p class="label"><b>§ 03</b>The tree of agents</p>
+    <h2 class="title">When the task is hard, it runs a search.</h2>
+    <div class="duo">
+      <div>
+        <p class="lede">One tool action builds a tree whose nodes are whole agents. Each node runs the task its own way, in its own directory, with its own credential.</p>
+        <p class="body">You declare the measurement. An objective names the metric, the unit, the direction and the target, and it names the verifier that scores a candidate. A verifier is code. It runs in the workspace and reports a number, and that number picks the winner. A verifier nobody registered refuses the run instead of inventing a score.</p>
+        <p class="body">What a measured run reaches persists, so the next search of the same objective starts from the record instead of rediscovering it.</p>
+        <p class="dim">The tree at the top of this page is a real UCT search, grown in the order it was built. Nothing in it is hand-placed.</p>
+      </div>
+      ${specRows([
+        ['One action', "<code>agents({action:'swarm'})</code>"],
+        ['Axes', 'unit · context · expand · score · advance · carry'],
+        ['Presets', 'ideate · optimise · prove · custom'],
+        ['Depth', 'ideate 1 · optimise 5 · prove 7'],
+        ['Score', 'your verifier, or a judge ensemble'],
+        ['Records', '<code>exploration_records</code>, per objective'],
+      ])}
+    </div>
+  </section>
+
+  <section class="section">
+    <p class="label"><b>§ 04</b>Self-evolution</p>
+    <h2 class="title">Four clocks, one direction.</h2>
+    <p class="lede">Evolution runs on four timescales at once, and the shorter clocks feed the longer ones.</p>
+    <div class="grid two">
+      ${CLOCKS.map(([kicker, title, body]) => `<div class="cell"><span class="num">${kicker}</span><h2>${title}</h2><p>${body}</p></div>`).join('\n      ')}
+    </div>
+    <p class="dim foot">The step clock is bounded on purpose. Execution proves a tool ran, not that it was right, so that signal feeds tool injection and nothing wider. No scaffold, prompt or gate is ever promoted on it.</p>
+  </section>
+
+  <section class="section">
+    <p class="label"><b>§ 05</b>What you get</p>
     <div class="grid three">
       ${CAPABILITIES.map(([title, body]) => `<div class="cell"><h2>${title}</h2><p>${body}</p></div>`).join('\n      ')}
+    </div>
+  </section>
+
+  <section class="section" id="deploy">
+    <p class="label"><b>§ 06</b>Deploy your own</p>
+    <h2 class="title">Your own kinu, in your own account.</h2>
+    <p class="lede">kinu.run is one deployment of an MIT-licensed repository. Deploy the same Worker in your own Cloudflare account, and your agents, their files and their model spend answer to you.</p>
+    <div class="actions">
+      <a class="btn solid" href="${deployUrl}" target="_blank" rel="noopener noreferrer">Deploy to Cloudflare</a>
+      <a class="btn" href="${guideUrl}" target="_blank" rel="noopener noreferrer">Read the self-hosting guide</a>
+    </div>
+    <div class="grid three">
+      ${DEPLOY_STEPS.map(([num, title, body, id, cmd]) => `<div class="cell"><span class="num">${num}</span><h2>${title}</h2><p>${body}</p><div class="cmd"><code id="${id}">${cmd}</code><button class="copy" type="button" data-copy="${id}">Copy</button></div></div>`).join('\n      ')}
+    </div>
+    <p class="dim foot">The button forks the repository into your account and starts a build. It cannot buy the plan, hold a zone, mint the root secret or register the OAuth applications sign-in needs, so it is step zero, not the whole story. The guide says what works today and what still takes an owner at a dashboard.</p>
+  </section>
+
+  <section class="section">
+    <p class="label"><b>§ 07</b>Open source</p>
+    <div class="duo">
+      <div>
+        <h2 class="title">Every claim on this page is a line in the repo.</h2>
+        <p class="body">The clients, the search, the four clocks and this landing page live in one MIT-licensed repository. The numbers under the headline are counted from that code, and the numbers beside the tree are taken from the tree it draws, so the caption cannot claim a search the picture does not show.</p>
+        <div class="actions">
+          <a class="btn" href="${REPO_URL}" target="_blank" rel="noopener noreferrer">${GITHUB_ICON}Read the source</a>
+        </div>
+      </div>
+      ${specRows([
+        ['Licence', 'MIT'],
+        ['Source', 'github.com/AshishKumar4/kinu'],
+        ['Formal models', '330 Lean theorems · 0 <code>sorry</code>'],
+        ['Docs', 'architecture · exploration · evolution · deployment'],
+      ])}
     </div>
   </section>
 </main>
 `,
     footer: publicFooter(),
-    script: `${COPY_SCRIPT}\n${INSTALL_PANEL_SCRIPT}\n${GROW_SCRIPT}`,
+    script: `${COPY_SCRIPT}\n${INSTALL_PANEL_SCRIPT}\n${TAGLINE_SCRIPT}\n${GROW_SCRIPT}`,
   });
 }
 
@@ -141,6 +312,15 @@ main{display:flex;flex-direction:column}
 gap:calc(var(--gutter) * 1.05);align-items:center;
 padding:calc(var(--gutter) * 1.5) var(--gutter);border-bottom:var(--rule)}
 h1 em{font-style:italic}
+/* The rotating headline. Every variant is stacked on one grid cell, so the
+   hero is sized by the tallest line once and never reflows on a swap. A
+   hidden variant is invisible to the accessibility tree, and with no script
+   the first line simply stays. */
+h1.taglines{display:grid}
+h1.taglines>span{grid-area:1/1;visibility:hidden;opacity:0;
+transition:opacity 460ms var(--ease),visibility 0s 460ms}
+h1.taglines>span[data-shown]{visibility:visible;opacity:1;
+transition:opacity 460ms var(--ease)}
 .actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:32px}
 /* Four across, or two, never three with an orphan under them. */
 .stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;
@@ -156,6 +336,20 @@ figcaption{margin-top:16px;max-width:46ch}
 /* A command in a third of the column is narrow, so it wraps rather than
    clipping: the reader has to be able to see what they are about to run. */
 .cell .cmd code{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}
+
+/* Deep sections: a display-face claim, prose beside a rail of mono facts. */
+.title{margin:0;font-family:var(--font-display);font-size:clamp(27px,3.4vw,40px);
+line-height:1.1;font-weight:500;letter-spacing:-0.018em;max-width:30ch}
+.body{margin:18px 0 0;max-width:60ch;color:var(--c-text-2);font-size:14.5px;line-height:1.65}
+.lede+.grid,.actions+.grid{margin-top:26px}
+.duo{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);
+gap:calc(var(--gutter) * 1.1);align-items:start;margin-top:26px}
+.spec{display:grid;margin:0;border-top:var(--rule)}
+.spec>div{display:flex;justify-content:space-between;gap:18px;padding:11px 0;
+border-bottom:var(--rule)}
+.spec dt{color:var(--c-text-3);padding-top:2px}
+.spec dd{margin:0;text-align:right;color:var(--c-text-2);font-size:13.5px;line-height:1.55}
+.spec dd code{font-size:12px}
 
 /* The tree. Every rule is the app's own reading of a search: weight and radius
    track rollouts, fill tracks the measured score, the kept line is the one
@@ -175,6 +369,9 @@ figcaption{margin-top:16px;max-width:46ch}
 .actions{margin-top:24px}
 .actions .btn{flex:1 1 auto}
 .stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;margin-top:30px;padding-top:22px}
+.duo{grid-template-columns:1fr;gap:28px}
+.spec dd{text-align:left}
+.spec>div{flex-direction:column;gap:5px}
 .tree{padding:16px 0}
 }
 `;
@@ -190,6 +387,26 @@ for (const toggle of toggles) {
     for (const other of toggles) other.setAttribute('aria-expanded', 'true');
     panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   });
+}`;
+
+/**
+ * Rotate the headline through its variants.
+ *
+ * The server sends every line with the first one shown, so with no script,
+ * or a reader who asked for less motion, the page holds the strongest claim
+ * and rotates nothing. A hidden tab skips swaps instead of queueing them,
+ * so a returning reader never lands mid-fade on a line nobody saw.
+ */
+const TAGLINE_SCRIPT = `
+const lines = document.querySelectorAll('[data-taglines] > span');
+if (lines.length > 1 && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+  let shown = 0;
+  setInterval(() => {
+    if (document.hidden) return;
+    lines[shown].removeAttribute('data-shown');
+    shown = (shown + 1) % lines.length;
+    lines[shown].setAttribute('data-shown', '');
+  }, 3600);
 }`;
 
 /**
