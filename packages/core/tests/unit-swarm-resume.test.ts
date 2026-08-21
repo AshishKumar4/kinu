@@ -709,3 +709,78 @@ function jobResultReport(result: string | null) {
   if (result === null) throw new Error('the resumed job stored no result');
   return v.parse(StoredReportSchema, JSON.parse(result)).report;
 }
+
+/* ── the OTHER second-search defect: a re-spawn, not a re-drive ───────────── */
+
+/**
+ * A call that is not a re-drive, over a task this workspace is still searching, is
+ * REFUSED rather than given a tree of its own.
+ *
+ * The suite above closes the EVICTION path. This closes the path a MODEL takes. A
+ * failed job's wake said "decide whether to retry or report the failure", the model
+ * retried by calling `agents.swarm` again, and that call carries no re-drive marker
+ * because it genuinely is not one — so it fell through to a fresh root over a tree the
+ * first attempt had left running. Measured on the owner's live workspace: two roots
+ * with byte-identical task text, six waves, thirty head spawns against a budget of
+ * five.
+ *
+ * The ledger row is written directly here, and that IS the guard's production input:
+ * it reads `findRunningSwarms`, so a `running` row for the task is the whole
+ * precondition. Driving a real first attempt to a freeze — as the suite above does —
+ * would prove the same thing at a hundred times the cost.
+ */
+describe('a second search over a task already running is refused', () => {
+  test('no new root, no new ledger row, and the refusal names the run to wait for', async () => {
+    const { rt } = await workspace();
+    const sql = rt.storage.sql;
+    const ledger = new MctsSearchStore(sql);
+    const log = createRecordingLogger();
+
+    // The state the first attempt left: its own root, still running, mid-search.
+    beganSwarm(ledger, 'root-in-flight', Date.now());
+    ledger.checkpoint('root-in-flight', 0, 2, 3, Date.now());
+    expect(ledger.findRunningSwarms(TASK).map((row) => row.rootId)).toEqual(['root-in-flight']);
+
+    const second = nodeModel();
+    const result = await runSwarm(
+      { rt, model: second.model, mode: 'build', maxSteps: 6, logger: log },
+      resolved(),
+    );
+
+    // REFUSED, and the refusal is actionable: it names the run, says where it got to,
+    // and says the result arrives on its own. A caller told only "no" re-spawns again.
+    expect('reason' in result).toBe(true);
+    if ('reason' in result) {
+      expect(result.error).toContain('root-in-flight');
+      expect(result.error).toContain('iteration 2');
+      expect(result.error).toMatch(/wake/i);
+    }
+
+    // NOTHING WAS CREATED. This is the assertion the incident fails: no second root,
+    // no second ledger row, and the live row untouched — not superseded, because this
+    // call had no standing to take it over.
+    expect(treeOf(sql)).toEqual([]);
+    expect(ledger.list(10).filter((row) => row.engine === 'swarm').map((row) => row.rootId))
+      .toEqual(['root-in-flight']);
+    expect(ledger.get('root-in-flight')).toMatchObject({ status: 'running', epoch: 0 });
+
+    // And no model call was made at all: the refusal lands before the first wave, so a
+    // re-spawn costs nothing rather than costing a level.
+    expect(second.script.calls()).toBe(0);
+
+    // Attributed in the stream, so six waves against one budget can never again be
+    // unexplained.
+    const refused = log.emitted.filter((line) => line.event === 'swarm.duplicate_root_refused');
+    expect(refused).toHaveLength(1);
+    expect(refused[0]?.fields).toMatchObject({ root: 'root-in-flight', redrive: false, running: 1 });
+  });
+
+  test('a task nothing is running is not refused, so the guard cannot block a first call', () => {
+    // The guard's other direction. Without this arm a change that refuses every call
+    // passes the test above.
+    const store = ledgerOnly();
+    beganSwarm(store, 'other-root', Date.now());
+    store.converge('other-root', 0, Date.now());
+    expect(store.findRunningSwarms(TASK)).toEqual([]);
+  });
+});

@@ -1703,16 +1703,53 @@ export async function runSwarm(
    * A re-driven background job replays the stored tool input verbatim
    * (`orchestrator/background-tools.ts`), so minting a fresh root here is what turned
    * ONE evicted five-head search into two abandoned trees, a second ledger row, and a
-   * job that settled `completed — took 18m` carrying an aborted result. Gated on the
-   * call being a re-drive, so a fresh `agents.swarm` whose task matches a search still
-   * expanding gets its own root; `swarm-resume.ts` states the rest of the rule and
-   * names what a re-entry cannot recover.
+   * job that settled `completed — took 18m` carrying an aborted result.
+   * `swarm-resume.ts` states the rest of the rule and names what a re-entry cannot
+   * recover.
    */
   const reentry = deps.redrive === true
     ? reenterSwarm({ sql, ledger: searchLedger, journal }, {
       task: resolved.task, reason: RESUMED_SWARM_NODE_REASON, now: Date.now(),
     })
     : null;
+  /**
+   * AND IF IT IS NEITHER, IT IS NOTHING. A call that did not re-enter and finds a
+   * search of its own task STILL RUNNING is refused rather than given a second tree.
+   *
+   * This used to be the deliberate arm — "a fresh `agents.swarm` whose task matches a
+   * search still expanding gets its own root" — and the case it was defending is real:
+   * two concurrent deliberate calls must not grow one search between them. What it did
+   * not survive is how a re-spawn actually arrives. A failed job's wake tells the model
+   * "decide whether to retry or report the failure", the model retries by calling the
+   * tool again, and that call carries no re-drive marker because it is not a re-drive —
+   * so it took this arm and minted a second root over a tree the first attempt had left
+   * running. Measured on the owner's live workspace: two roots with byte-identical task
+   * text, six waves and thirty head spawns against one budget-5 job.
+   *
+   * A REFUSAL RATHER THAN AN ADOPTION, because adoption is exactly what the marker
+   * exists to authorise: a caller with no marker has not proved it owns the earlier
+   * attempt, and silently continuing somebody else's tree is the collision from the
+   * other direction. So the caller is told the search is already running, told where,
+   * and told its result arrives as a wake — which is the answer it wanted.
+   *
+   * A row this call itself superseded is gone by here: `reenterSwarm` supersedes the
+   * losers before it claims, so a re-drive that genuinely found nothing to re-enter
+   * leaves nothing running and falls through to a fresh search.
+   */
+  const live = reentry ? [] : searchLedger.findRunningSwarms(resolved.task);
+  const contended = live[0];
+  if (contended) {
+    log.event('swarm.duplicate_root_refused', {
+      preset: resolved.preset, root: contended.rootId,
+      redrive: deps.redrive === true, running: live.length,
+    });
+    return unavailable(`this workspace is already running a swarm for this task (${contended.rootId}, `
+      + `iteration ${String(contended.iteration)}, ${String(contended.budget)} of its expansion budget `
+      + 'left), and a second search over one task would pay twice for one answer and crown a winner '
+      + 'from whichever tree happened to finish. That run reports itself when it settles — its result '
+      + 'arrives as a background wake, so wait for it rather than re-spawning. Cancel it first if you '
+      + 'meant to start over.');
+  }
   // The ROOT is the workspace as found at depth 0 — the one node no model wrote.
   // Recorded so that selection has something to select and so that every child's
   // depth is DERIVED from a row this engine wrote rather than asserted by its author.
