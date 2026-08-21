@@ -485,13 +485,26 @@ gap:calc(var(--gutter) * 1.1);align-items:end}
 margin-bottom:26px;background:
 repeating-linear-gradient(115deg,transparent 0 34px,color-mix(in oklab,var(--c-accent) 5%,transparent) 34px 35px),var(--c-bg)}
 .banner .lede{max-width:58ch}
+/* An unfilled mount collapses. A slot that reserves height around nothing
+   ships a page of empty boxes the first time a script fails or an asset is
+   slow, so emptiness is never allowed to hold space: a mount earns its height
+   from content, and anything that must reserve height carries its own still as
+   the floor. */
+.glimpse:empty,.film:empty,.dag:empty{display:none}
+/* A reading surface is governed by measure, not by the width available: a
+   2300px terminal line is unreadable by construction. Grids take the room;
+   single surfaces cap and centre inside it. */
+.film,.dag{max-width:1560px;margin-inline:auto}
 @media (min-width:1440px){
 .page{width:min(1408px,100%)}
 .section,.hero{padding-top:calc(var(--gutter) * 1.3);padding-bottom:calc(var(--gutter) * 1.3)}
 }
 @media (min-width:1920px){
 .page{width:min(1728px,100%)}
-h1{font-size:clamp(40px,3.6vw,68px)}
+h1{font-size:clamp(40px,3.6vw,72px)}
+/* Measured, not guessed: at this column every tagline holds three lines up to
+   81px, and balancing the rag keeps the last line off a one-word orphan. */
+h1.taglines>span{text-wrap:balance}
 .title{font-size:clamp(30px,2.5vw,46px)}
 .lede{font-size:18px}
 .stat strong{font-size:24px}
@@ -506,7 +519,7 @@ h1{font-size:clamp(40px,3.6vw,68px)}
 }
 @media (min-width:2560px){
 .page{width:min(2304px,100%)}
-h1{font-size:clamp(48px,3.2vw,78px)}
+h1{font-size:clamp(48px,3.2vw,84px)}
 .title{font-size:clamp(34px,2.2vw,52px)}
 .lede{font-size:19px}
 .body{font-size:15.5px}
