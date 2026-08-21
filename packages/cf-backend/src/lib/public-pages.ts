@@ -246,7 +246,7 @@ export function landingDocument(install: string): string {
       ${specRows([
         ['One action', "<code>agents({action:'swarm'})</code>"],
         ['Axes', 'unit · context · expand · score · advance · carry'],
-        ['Presets', 'ideate · optimise · prove · custom'],
+        ['Presets', 'ideate · research · audit · redteam · optimise · prove · custom'],
         ['Depth', 'ideate 1 · optimise 5 · prove 7'],
         ['Score', 'a code verifier, or a judge ensemble'],
         ['Records', '<code>exploration_records</code>, per objective'],
