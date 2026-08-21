@@ -68,16 +68,125 @@ json_field() {
   node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const v=process.argv[1].split(".").reduce((o,k)=>o?.[k],JSON.parse(s));process.stdout.write(v==null?"":String(v))}catch{}})' "$1"
 }
 
+# ── The gate queue ───────────────────────────────────────────────
+#
+# `run_required_gate` ENQUEUES; `flush_gates` runs the queue concurrently and
+# waits. The 52 gates used to run one after another for no reason: 400s of
+# declared cost on a 24-thread box that sat idle for all of it.
+#
+# Two gates may not share the machine, and `SERIAL_GATES` in scripts/ladder.ts
+# names them with the reason. They get their own flush, which is what a barrier
+# looks like here: preflight alone before everything, gate:infra alone after
+# everything. deploy.test.ts asserts the barriers match that declaration, so a
+# third gate cannot be quietly made concurrent.
+#
+# The enqueue lines stay one per gate, spelled `run_required_gate "label" cmd`,
+# because scripts/ladder.ts PARSES them: they are the authoritative list of what
+# a deploy runs, and collapsing them into a loop would leave the ladder reading
+# an empty tier.
+GATE_LABELS=()
+GATE_CMDS=()
+
 run_required_gate() {
-  local label="$1"
+  GATE_LABELS+=("$1")
   shift
-  echo "Running: $*"
-  if "$@"; then
-    echo -e "${GREEN}✅ $label passed${NC}"
-  else
-    echo -e "${RED}❌ $label failed. The production build and publish steps did not start.${NC}"
+  GATE_CMDS+=("$*")
+}
+
+# How many at once. Derived from the machine rather than declared, because it is
+# a property of the box and not a policy. Halved against the thread count: the
+# heavy members are test suites that already use more than one thread each, and
+# at full width they contend instead of overlapping (measured 2026-08-21 —
+# nproc=24: 12 jobs 96s, 24 jobs 103s).
+gate_jobs() {
+  local threads
+  threads="$(nproc 2>/dev/null || echo 4)"
+  echo "${KINU_DEPLOY_JOBS:-$(( threads / 2 > 0 ? threads / 2 : 1 ))}"
+}
+
+# Run everything enqueued, then clear the queue. Each gate's output goes to its
+# own file and is printed ONLY if it fails: 52 concurrent streams interleaved
+# into one terminal is not a log anybody can read, and the output a reader wants
+# is the failing gate's.
+#
+# On the first failure it stops LAUNCHING and lets the running gates finish. That
+# is deliberate rather than tidy — a wave usually holds more than one real
+# failure, and reporting "these three failed" beats reporting the first one and
+# discarding two diagnostics that have already been paid for.
+flush_gates() {
+  local total=${#GATE_LABELS[@]}
+  if [ "$total" -eq 0 ]; then return 0; fi
+
+  local jobs; jobs="$(gate_jobs)"
+  local dir; dir="$(mktemp -d "${TMPDIR:-/tmp}/kinu-gates.XXXXXX")"
+  local next=0 settled=0 failures=0 index status
+  local -a reported=()
+
+  echo "Running $total gate(s), up to $jobs at once"
+  for ((index = 0; index < total; index++)); do
+    reported[index]=0
+    # `$cmd` is split on whitespace on purpose: every gate is a plain argv of
+    # words, which is the same assumption scripts/ladder.ts's parse makes and
+    # deploy.test.ts pins by exact string. A quoted argument would mis-split
+    # silently, so refuse it here instead.
+    case "${GATE_CMDS[index]}" in
+      *\"*|*\'*)
+        echo -e "${RED}❌ gate ${index}: '${GATE_CMDS[index]}' carries a quote.${NC}"
+        echo "   Gate commands must be plain words. scripts/ladder.ts parses these lines"
+        echo "   and this runner splits them; a quoted argument would not survive either."
+        rm -rf "$dir"
+        exit 1
+        ;;
+    esac
+  done
+
+  while [ "$settled" -lt "$total" ]; do
+    while [ "$next" -lt "$total" ] && [ "$failures" -eq 0 ] \
+      && [ "$(jobs -rp | wc -l)" -lt "$jobs" ]; do
+      # shellcheck disable=SC2086
+      ( ${GATE_CMDS[next]} > "$dir/$next.log" 2>&1; echo $? > "$dir/$next.status" ) &
+      next=$((next + 1))
+    done
+
+    # Nothing left to launch and nothing running means the rest were never
+    # started, which happens after a failure. Settle them as skipped.
+    if [ "$(jobs -rp | wc -l)" -eq 0 ]; then
+      if [ "$next" -ge "$total" ] || [ "$failures" -ne 0 ]; then break; fi
+    else
+      wait -n 2>/dev/null || true
+    fi
+
+    for ((index = 0; index < next; index++)); do
+      if [ "${reported[index]}" -eq 1 ] || [ ! -f "$dir/$index.status" ]; then continue; fi
+      reported[index]=1
+      settled=$((settled + 1))
+      status="$(cat "$dir/$index.status")"
+      if [ "$status" = "0" ]; then
+        echo -e "${GREEN}✅ ${GATE_LABELS[index]}${NC}"
+      else
+        failures=$((failures + 1))
+        echo -e "${RED}❌ ${GATE_LABELS[index]} failed (exit $status)${NC}"
+      fi
+    done
+  done
+
+  if [ "$failures" -ne 0 ]; then
+    for ((index = 0; index < next; index++)); do
+      if [ ! -f "$dir/$index.status" ] || [ "$(cat "$dir/$index.status")" = "0" ]; then continue; fi
+      echo ""
+      echo -e "${BOLD}── ${GATE_LABELS[index]} ──${NC}"
+      echo "Reproduce: ${GATE_CMDS[index]}"
+      cat "$dir/$index.log"
+    done
+    echo ""
+    echo -e "${RED}❌ $failures gate(s) failed. The build and publish steps did not start.${NC}"
+    rm -rf "$dir"
     exit 1
   fi
+
+  rm -rf "$dir"
+  GATE_LABELS=()
+  GATE_CMDS=()
 }
 
 echo -e "${BOLD}Kinu Deploy Pipeline${NC}"
@@ -99,6 +208,10 @@ echo ""
 # still left `bun install` and the wrangler auth probe ahead of it. It repairs
 # nothing; `--reclaim` is explicit and separate.
 run_required_gate "Environment preflight" bun scripts/preflight.ts
+# BARRIER. Preflight runs alone, and this is why the queue exists: nothing may
+# report on this machine until the preflight has said the machine is fit to be
+# reported on. See SERIAL_GATES in scripts/ladder.ts.
+flush_gates
 
 # ── Pre-flight: verify npx + wrangler auth ───────────────────────
 if ! command -v npx >/dev/null 2>&1; then
@@ -189,12 +302,19 @@ run_required_gate "Root end-to-end lifecycle suites" bun test ./tests/
 run_required_gate "Layergate conformance" bun run layergate
 run_required_gate "Layergate fault-localization matrix" bun run layergate --matrix
 run_required_gate "Lean proofs, consistency, and traceability" bun run verify:lean
-# Last, and the only gate here that talks to Cloudflare. Everything above proves
-# the SOURCE is deployable; this proves the ACCOUNT is. Production-scoped on
-# purpose: staging drift is a real defect and not a reason to refuse the deploy
-# in front of you. `npx wrangler whoami` above is its precondition — without a
-# session it reports BLOCKED and non-zero rather than skipping.
+
+# BARRIER. Everything above this line is independent and ran concurrently.
+flush_gates
+
+# Alone, and last. Everything above proves the SOURCE is deployable; this proves
+# the ACCOUNT is. Production-scoped on purpose: staging drift is a real defect and
+# not a reason to refuse the deploy in front of you. `npx wrangler whoami` above is
+# its precondition — without a session it reports BLOCKED and non-zero rather than
+# skipping. See SERIAL_GATES in scripts/ladder.ts.
 run_required_gate "Declared infrastructure exists and is bound" bun run gate:infra
+
+# BARRIER.
+flush_gates
 
 echo ""
 echo -e "${GREEN}All required pre-deploy gates passed.${NC}"
