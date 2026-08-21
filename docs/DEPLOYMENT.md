@@ -149,8 +149,11 @@ green or not.
 
 **`bun run gate:infra`** checks that every declared resource exists **and that
 the deployed Worker is bound to it**, and exits non-zero when it is not. It is
-the last of the 49 required gates `scripts/deploy.sh` runs, and the only one
-that talks to Cloudflare. It reports a verdict per resource rather than dying on
+the last of the 52 required gates `scripts/deploy.sh` runs, the only one that
+talks to Cloudflare, and the only one that runs alone. It checks the environment
+being deployed: `KINU_DEPLOY_ENV` when `scripts/deploy.sh` sets it, an explicit
+argv otherwise, production by default. So a staging deploy is not refused for a
+production defect. It reports a verdict per resource rather than dying on
 the first problem, because the next move depends on which resource is affected.
 There are four verdicts, and `scripts/infra-verify.ts` has the reasoning:
 
@@ -297,15 +300,27 @@ reconnected.
 ### 3. Build and Deploy
 
 ```bash
-bun run deploy                # the only supported production deploy path
+bun run deploy                # production, https://kinu.run
+bun run deploy:staging        # staging, https://staging.kinu.run
 ```
 
-That runs `scripts/deploy.sh` (see § Deploy Script). Do not deploy production
-with a bare `wrangler deploy`. It uploads a Worker without checking that the CLI
-download assets were built, and production has already shipped that way once.
-The site was fine while `/downloads/kinu-source.tar.gz`, its `.sha256`, and
-`kinu-version.json` all answered with the SPA shell, so every fresh install
-and update died on a checksum mismatch.
+Both run `scripts/deploy.sh` (see § Deploy Script) with the environment as its
+one argument. There is one script on purpose: the gates, the CLI asset check and
+the six smoke checks are the script's, so they cannot be present for production
+and absent for staging.
+
+Staging also deploys itself. `.github/workflows/deploy-staging.yml` runs
+`bun run deploy:staging` on every push to `main`, once a day, and on demand. The
+daily run is not redundant: it catches the account drifting under a Worker
+nobody has touched, which is how `gate:infra` found staging's deployed version
+predating the MonitorDO migration.
+
+Do not deploy either environment with a bare `wrangler deploy`. It uploads a
+Worker without checking that the CLI download assets were built, and production
+has already shipped that way once. The site was fine while
+`/downloads/kinu-source.tar.gz`, its `.sha256`, and `kinu-version.json` all
+answered with the SPA shell, so every fresh install and update died on a
+checksum mismatch.
 
 ### 4. Custom Domain (Optional)
 
@@ -533,13 +548,17 @@ re-specified there.
 
 ## Deploy Script
 
-`scripts/deploy.sh` is the deploy path, reached by `bun run deploy` at the repo
-root. Everything ships as one Worker (name `kinu`). `NimbusSession` is a
-local DO class deployed with it, so there is no separate Nimbus deploy.
+`scripts/deploy.sh` is the deploy path for both environments, reached by
+`bun run deploy` and `bun run deploy:staging` at the repo root. Everything ships
+as one Worker: `kinu` in production, `kinu-staging` in staging. `NimbusSession`
+is a local DO class deployed with it, so there is no separate Nimbus deploy.
 
 ```bash
-bun run deploy
+bash scripts/deploy.sh <production|staging>
 ```
+
+The environments differ in four values — the route, the wrangler `--env` flag,
+the infrastructure scope and the label. An unknown name exits 2 and runs nothing.
 
 ### Order of operations
 
@@ -549,9 +568,13 @@ environment preflight, verifies Wrangler authentication, and installs the locked
 dependency graph with `bun install --frozen-lockfile` when a checkout has no
 root `node_modules`.
 
-1. **Required pre-deploy gates.** 49 gates, every one unconditional. Each is a
-   `run_required_gate` line in `scripts/deploy.sh`, which is the full list. They
-   cover `bun run check`; the deploy contract test; the agent-utils, core,
+1. **Required pre-deploy gates.** 52 gates, every one unconditional. Each is a
+   `run_required_gate` line in `scripts/deploy.sh`, which is the full list. Those
+   lines enqueue; `flush_gates` runs the queue, up to `nproc / 2` at a time. Two
+   gates run alone, and `SERIAL_GATES` in `scripts/ladder.ts` names them with the
+   reason: the environment preflight first, `gate:infra` last. The other 50 run
+   in one wave. They cover `bun run check`; the deploy contract test; the
+   agent-utils, core,
    compaction, test-utils, Cloudflare-backend, workerd, CLI-backend, full
    production CLI, local-device daemon and root end-to-end suites; the
    exploration policy mutation suite; the deterministic eval and benchmark
@@ -569,9 +592,9 @@ root `node_modules`.
    other half, `bench.ts validate`, actually runs each task's checks and is a
    separate nightly run. The last gate, `bun run gate:infra`, is the only one
    that talks to Cloudflare. It checks that every resource `wrangler.jsonc`
-   declares for **production** exists and that the deployed Worker is bound to
-   it. Everything above it proves the source is deployable; that one proves the
-   account is. Any
+   declares for the environment being deployed exists and that that Worker is
+   bound to it. Everything above it proves the source is deployable; that one
+   proves the account is. Any
    failure exits before Vite, archive generation, or Wrangler. No variable skips
    a gate on this path. `KINU_INFRA_ACK` only acknowledges a missing
    Cloudflare session, and the `npx wrangler whoami` check above already fails

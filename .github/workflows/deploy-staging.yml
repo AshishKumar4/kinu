@@ -1,0 +1,102 @@
+name: Deploy staging
+
+# staging.kinu.run served for days with nothing deploying it. Every push went to
+# production, staging drifted, and the eval tier — which points at staging by
+# default — was measuring a build nobody could name.
+#
+# This runs `scripts/deploy.sh staging`, which is the SAME script `bun run deploy`
+# runs against production. It is not a lighter path: the 52 required gates, the
+# CLI asset check and all six post-deploy smoke checks are the script's, not this
+# file's, so they cannot be absent here and present there.
+#
+# ON EVERY PUSH TO MAIN, so staging is the tip. Plus a daily run, because a deploy
+# that only happens on a push cannot catch the account drifting underneath a
+# Worker nobody has touched: `gate:infra` found staging's deployed version
+# predating the MonitorDO migration exactly that way.
+#
+# WHAT THIS CANNOT DO WITHOUT A PERSON. `CLOUDFLARE_API_TOKEN` has to be minted
+# in the dashboard by someone who can sign in there. Without it the script's
+# wrangler probe refuses and prints the scopes to ask for. It stops before the
+# build, so a missing token costs a red run and never a half-deployed staging.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+# One staging deploy at a time. Two concurrent runs would race on the same Worker
+# and the loser's smoke test would read the winner's build stamp, which presents
+# as a deploy failure and is not one. `cancel-in-progress` is off on purpose: a
+# deploy that has already published wants its smoke test to finish.
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # The declared deploy tier is 400s of gates, and on a 2-core runner the wave
+    # runs almost serially. Lean is the long pole: the cache below holds
+    # `lean/.lake`, and on a miss `verify:lean` rebuilds 330 theorems in ~15
+    # minutes. Generous enough for a cold cache, tight enough that a hung gate
+    # fails rather than idles.
+    timeout-minutes: 90
+    steps:
+      # The script refuses a dirty tree and stamps the build with `git rev-parse
+      # --short HEAD`; the smoke test reads that sha back off /api/health, so the
+      # checkout has to be a real commit rather than an export.
+      - uses: actions/checkout@v4
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Cache bun install
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install elan + Lean
+        run: |
+          curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> $GITHUB_PATH
+
+      # BOTH directories. `~/.elan` alone is what the lean-verify workflow
+      # caches, and it holds the toolchain and not the build — so that job pays
+      # the full 15 minutes every time. `lean/.lake` is the build.
+      - name: Cache Lean toolchain and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.elan
+            lean/.lake
+          key: lean-${{ hashFiles('lean/lean-toolchain', 'lean/**/*.lean') }}
+          restore-keys: |
+            lean-${{ hashFiles('lean/lean-toolchain') }}-
+            lean-
+
+      # Chrome for the four gates that boot vite and drive a real page.
+      - name: Install Chrome for puppeteer
+        run: bunx puppeteer browsers install chrome
+
+      # THE WHOLE PIPELINE. No step list here, deliberately: a workflow that
+      # enumerates gates becomes a second list that disagrees with deploy.sh, and
+      # the CI workflow's header records what that cost the last time.
+      - name: Deploy staging
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: bun run deploy:staging
