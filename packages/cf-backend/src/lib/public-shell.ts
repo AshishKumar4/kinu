@@ -56,48 +56,48 @@ export type PublicToken =
 export type TokenSet = Readonly<Record<PublicToken, string>>;
 
 const SILK_DARK = {
-  '--c-recessed': '#0B111C',
+  '--c-recessed': '#080F17',
   '--c-bg': '#111923',
-  '--c-sidebar': '#15202E',
-  '--c-surface': '#192536',
-  '--c-elevated': '#1E2C40',
-  '--c-fill': '#1E2C40',
-  '--c-border': 'rgba(227, 210, 174, 0.16)',
-  '--c-border-strong': 'rgba(227, 210, 174, 0.32)',
-  '--c-input-border': 'rgba(227, 210, 174, 0.25)',
+  '--c-sidebar': '#142230',
+  '--c-surface': '#192B44',
+  '--c-elevated': '#1F334F',
+  '--c-fill': '#1F334F',
+  '--c-border': 'rgba(227, 210, 174, 0.20)',
+  '--c-border-strong': 'rgba(227, 210, 174, 0.36)',
+  '--c-input-border': 'rgba(227, 210, 174, 0.28)',
   '--c-text': '#F4EFE6',
   '--c-text-2': '#BFB6A9',
-  '--c-text-3': '#A69C8E',
+  '--c-text-3': '#B0A795',
   '--c-accent': '#E3D2AE',
   '--c-accent-fg': '#F2DFB4',
   '--c-accent-on': '#131C27',
   '--c-accent-subtle': 'rgba(227, 210, 174, 0.14)',
   '--c-success': '#9BC7A2',
   '--c-warning': '#DFAE72',
-  '--c-danger': '#E38A8A',
+  '--c-danger': '#EC9393',
   '--c-code': '#D8CBA4',
 } satisfies TokenSet;
 
 const SILK_LIGHT = {
-  '--c-recessed': '#E0DACB',
+  '--c-recessed': '#D7CDB2',
   '--c-bg': '#EFEBE0',
-  '--c-sidebar': '#E4DFD1',
-  '--c-surface': '#FCFAF4',
-  '--c-elevated': '#FCFAF4',
-  '--c-fill': '#E9E4D7',
-  '--c-border': 'rgba(35, 63, 96, 0.20)',
-  '--c-border-strong': 'rgba(35, 63, 96, 0.34)',
-  '--c-input-border': 'rgba(35, 63, 96, 0.26)',
+  '--c-sidebar': '#EBE5D6',
+  '--c-surface': '#E6DECA',
+  '--c-elevated': '#FDFAF3',
+  '--c-fill': '#DED4BC',
+  '--c-border': 'rgba(35, 63, 96, 0.22)',
+  '--c-border-strong': 'rgba(35, 63, 96, 0.38)',
+  '--c-input-border': 'rgba(35, 63, 96, 0.28)',
   '--c-text': '#202B36',
-  '--c-text-2': '#4C5A66',
-  '--c-text-3': '#545F69',
+  '--c-text-2': '#3D4956',
+  '--c-text-3': '#48545F',
   '--c-accent': '#2F5480',
   '--c-accent-fg': '#234465',
   '--c-accent-on': '#FBF7EE',
   '--c-accent-subtle': 'rgba(47, 84, 128, 0.16)',
-  '--c-success': '#2E6337',
-  '--c-warning': '#7B5310',
-  '--c-danger': '#9C3527',
+  '--c-success': '#2A5A32',
+  '--c-warning': '#6F4A0C',
+  '--c-danger': '#8F2D27',
   '--c-code': '#22405E',
 } satisfies TokenSet;
 
@@ -332,22 +332,31 @@ const THEME_CSS = THEME_BLOCKS.map(({ selector, tokens }) => {
   return `${selector}{${body}${radii}}`;
 }).join('\n');
 
+/** The one webfont this product ships: Fraunces, variable [opsz 9-144,
+ *  wght 100-900], latin subset, self-hosted (no font CDN at runtime). It is
+ *  the display face only — sans and mono stay system stacks. The file sits
+ *  beside its OFL licence in `public/assets/fonts/`, and `unit-public-shell`
+ *  holds its byte budget so a full-axes swap cannot land silently. */
+export const DISPLAY_FONT_PATH = '/assets/fonts/fraunces-latin-var.woff2';
+export const DISPLAY_FONT_FACE = `@font-face{font-family:"Fraunces";src:url("${DISPLAY_FONT_PATH}") format("woff2-variations");font-weight:100 900;font-style:normal;font-display:swap;unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}`;
+
 /**
  * One stylesheet for every public page.
  *
  * Structure comes from surface steps and hairlines, never from shadows or blur,
  * which is the rule the app's dark mode states. Light mode gets the same
- * structure from a paper surface on a tinted ground.
+ * structure from surface steps on the undyed ground.
  */
 const SHELL_CSS = `
+${DISPLAY_FONT_FACE}
 *,::before,::after{box-sizing:border-box}
 :root{color-scheme:light dark;
---font-display:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua","TeX Gyre Pagella",P052,"Noto Serif",Georgia,serif;
+--font-display:"Fraunces","Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua","TeX Gyre Pagella",P052,"Noto Serif",Georgia,serif;
 --font-ui:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
 --font-mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
 --gutter:clamp(20px,4.6vw,54px);--rule:1px solid var(--c-border);
 --ease:cubic-bezier(.23,1,.32,1)}
-html{-webkit-text-size-adjust:100%}
+html{-webkit-text-size-adjust:100%;font-optical-sizing:auto}
 body{margin:0;min-height:100vh;background:var(--c-bg);color:var(--c-text);
 font-family:var(--font-ui);font-size:16px;line-height:1.55;
 display:flex;flex-direction:column;align-items:center}
@@ -392,6 +401,13 @@ font-size:11.5px;letter-spacing:0.09em;text-transform:uppercase}
 h1{margin:16px 0 0;font-family:var(--font-display);font-size:clamp(36px,5.4vw,62px);
 line-height:1.02;font-weight:500;letter-spacing:-0.026em;max-width:22ch}
 h2{margin:0;font-family:var(--font-display);font-size:19px;font-weight:500;letter-spacing:-0.012em}
+/* The one gradient in the design: sheen along the thread, rationed to a single
+   hero phrase (never body text, never a panel). It runs accent → accent-ink →
+   ink, so each theme draws its own — champagne light on the dyed face, deep
+   dye on the undyed one — and engines without background-clip keep the plain
+   accent ink declared first. */
+.hero-ink{color:var(--c-accent-fg);background:linear-gradient(93deg,var(--c-accent) 4%,var(--c-accent-fg) 52%,var(--c-text) 98%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.hero-ink+.ink-dot{color:var(--c-accent)}
 .lede{margin:22px 0 0;max-width:52ch;color:var(--c-text-2);font-size:17px;line-height:1.62}
 .dim{color:var(--c-text-3);font-size:13px;line-height:1.55}
 .section{padding:var(--gutter);border-bottom:var(--rule)}
@@ -408,8 +424,8 @@ h2{margin:0;font-family:var(--font-display);font-size:19px;font-weight:500;lette
 /* A row of counts the repo can answer for. Display face on the number, mono on
    the label, which is the one place the two faces sit together. */
 .stats{margin:0;padding:0;list-style:none}
-.stat strong{display:block;font-family:var(--font-display);font-size:29px;
-font-weight:500;line-height:1.1;letter-spacing:-0.02em}
+.stat strong{display:block;font-family:var(--font-display);font-size:40px;
+font-weight:500;line-height:1.05;letter-spacing:-0.022em}
 .stat span{display:block;margin-top:5px;color:var(--c-text-3)}
 
 code{font-family:var(--font-mono);font-size:13px;color:var(--c-code)}
@@ -488,6 +504,7 @@ export function publicPage(options: PublicPageOptions): string {
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>${escapeHtml(options.title)}</title>
 ${description ? `<meta name="description" content="${escapeHtml(description)}" />\n` : ''}<link rel="icon" type="image/svg+xml" href="/assets/kinu-icon.svg" />
+<link rel="preload" href="${DISPLAY_FONT_PATH}" as="font" type="font/woff2" crossorigin />
 <script>${THEME_BOOT}</script>
 <style>${THEME_CSS}${SHELL_CSS}${options.styles ?? ''}</style>
 </head>
