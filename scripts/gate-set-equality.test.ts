@@ -193,19 +193,28 @@ describe('silent: the legitimate shapes its first draft mistook for violations',
 });
 
 describe('the denominator, from both sides', () => {
-  test('gate commands are resolved from LADDER *and* deploy.sh, which disagree', () => {
+  test('gate commands are resolved from LADDER *and* deploy.sh, which are not the same set', () => {
     // The warning that makes this gate honest: deriving "all gates" from either
-    // source alone certifies less than it governs, and the disagreement runs in
-    // BOTH directions — deploy.sh carries gates the LADDER does not declare
-    // (verify:lean), and the LADDER carries the `evals` tier, deliberately not
-    // a deploy gate, with its own runner `bun run evals:full`. Either direction
-    // collapsing to zero means one source became a subset and the union
-    // denominator stopped being load-bearing.
+    // source alone certifies less than it governs.
+    //
+    // ONE DIRECTION IS NOW EMPTY, AND THAT IS THE POINT. Until 2026-08-21
+    // deploy.sh carried gates the LADDER did not declare — `bun run verify:lean`
+    // and the bench command — and `gatesFor('deploy')` synthesized them at a
+    // declared cost of zero. This line used to pin `verify:lean` as an example of
+    // that, which made the defect part of the contract. Both are declared now, and
+    // ladder.test.ts fails naming any deploy gate that is not, so the assertion is
+    // the emptiness rather than the example.
+    //
+    // The union is still what the denominator is derived from, for two reasons
+    // that survive the collapse: the LADDER side genuinely carries entries
+    // deploy.sh does not run, and a gate added to deploy.sh tomorrow has to widen
+    // this denominator on the next run rather than be missed by a derivation that
+    // reads one file.
     const ladder = new Set(LADDER.map((gate) => gate.run));
     const deploy = deployGates();
 
     const deployOnly = deploy.filter((run) => !ladder.has(run));
-    expect(deployOnly).toContain('bun run verify:lean');
+    expect(deployOnly).toEqual([]);
 
     // Ladder-only entries come in exactly two legitimate shapes. Tier `evals`
     // is DELIBERATELY absent — live-model evidence with its own runner, `bun

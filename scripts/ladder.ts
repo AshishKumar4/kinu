@@ -1129,14 +1129,12 @@ export const LADDER: readonly Gate[] = [
 /**
  * The deploy gates that MUST NOT run beside another gate, each with the reason.
  *
- * Everything not named here is independent, and `scripts/deploy.sh` runs it
- * concurrently. That claim is checkable rather than hopeful: no gate writes into
- * the working tree (`gate:bench-corpus` uses `git apply --check`, `gate:patch-parity`
- * copies into a throwaway tree, every `tsc` is `--noEmit`), every test process gets
- * its own `mkdtemp` KINU_HOME from scripts/test-scratch-home.ts, and the four gates
- * that boot vite and Chrome take a free port from `freePort(5199)` rather than a
- * fixed one. So the ordered set is these two, and a third would need a reason
- * written here.
+ * Everything not named here or in {@link EXCLUSION_GROUPS} is independent, and
+ * `scripts/deploy.sh` runs it concurrently. That claim is checkable rather than
+ * hopeful: no gate writes into the working tree (`gate:bench-corpus` uses
+ * `git apply --check`, `gate:patch-parity` copies into a throwaway tree, every
+ * `tsc` is `--noEmit`), and every test process gets its own `mkdtemp` KINU_HOME
+ * from scripts/test-scratch-home.ts.
  *
  * `deploy.test.ts` asserts deploy.sh puts a barrier around exactly these, so the
  * policy and the pipeline cannot drift apart.
@@ -1154,6 +1152,40 @@ export const SERIAL_GATES = {
     + 'proves the SOURCE is deployable and it proves the ACCOUNT is. Running it early would '
     + 'spend account calls on a tree that has not been shown to compile.',
 } satisfies Record<string, string>;
+
+/**
+ * Gates that may not run beside EACH OTHER, though they may run beside anything
+ * else. One entry, and it was found by running the wave rather than by reading it.
+ *
+ * A gate not named here is independent of every other gate. That was asserted
+ * from the harness source once — "they take a free port from `freePort(5199)`
+ * rather than a fixed one" — and the assertion was wrong, which is the reason this
+ * declaration is now driven by a measurement.
+ *
+ * `deploy.test.ts` holds this equal to deploy.sh's own table.
+ */
+export const EXCLUSION_GROUPS = {
+  gallery: {
+    why:
+      'each boots vite and Chrome over the same gallery, and `withGallery` picks a port by '
+      + 'PROBING it with `createServer`, closing it, and only then spawning vite. Two gates '
+      + 'starting together can pick the same port, and the loser\'s readiness probe then '
+      + 'reaches the WINNER\'S server: same document, same URL shape, nothing distinguishes '
+      + 'them. Measured 2026-08-21, run concurrently in two rounds of two, `public-pages` and '
+      + '`swarm-tree-geometry` failed in both and passed alone — once as '
+      + '`net::ERR_CONNECTION_REFUSED` 74s into a navigation when the foreign server was torn '
+      + 'down, and once as 16 assertions passing against another worktree\'s build. This '
+      + 'machine normally has several worktrees checked out, and four abandoned gallery '
+      + 'servers from three of them were listening on 5199 and 5200 at the time, one 46 hours '
+      + 'old. The harness owns that defect; until it makes readiness an identity check rather '
+      + 'than a reachability check, these three take turns.',
+    gates: [
+      'bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts',
+      'bun test scripts/public-pages.test.ts',
+      'bun test scripts/swarm-tree-geometry.test.ts',
+    ],
+  },
+} satisfies Record<string, { readonly why: string; readonly gates: readonly string[] }>;
 
 /**
  * The deploy tier, read out of deploy.sh. A parse of the authoritative list,
@@ -1202,6 +1234,25 @@ export function deployWaves(
   }
   if (wave.length > 0) waves.push(wave);
   return waves;
+}
+
+/**
+ * deploy.sh's own exclusion table, parsed. Held equal to {@link EXCLUSION_GROUPS}
+ * by `deploy.test.ts`: the runner is bash and cannot import the declaration, so
+ * the two are written twice and asserted once.
+ */
+export function deployExclusions(
+  source = readFileSync(resolve(root, 'scripts/deploy.sh'), 'utf8'),
+) {
+  const groups: Record<string, string[]> = {};
+  for (const line of source.split('\n')) {
+    const match = /^\s*\['([^']+)'\]=(\S+)\s*$/.exec(line);
+    const run = match?.[1];
+    const group = match?.[2];
+    if (run === undefined || group === undefined) continue;
+    (groups[group] ??= []).push(run);
+  }
+  return groups;
 }
 
 /**

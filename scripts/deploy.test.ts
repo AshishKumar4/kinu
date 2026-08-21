@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { SERIAL_GATES, deployWaves } from "./ladder";
+import { EXCLUSION_GROUPS, SERIAL_GATES, deployExclusions, deployWaves } from "./ladder";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
 const temporaryDirectories: string[] = [];
@@ -95,7 +95,7 @@ exit 0
 `;
 }
 
-function runDeploy(failingGate: string, dirty = false) {
+function runDeploy(failingGate: string, dirty = false, environment = "production") {
   const fixture = mkdtempSync(join(tmpdir(), "kinu-deploy-gate-"));
   temporaryDirectories.push(fixture);
   const log = join(fixture, "events.log");
@@ -135,7 +135,7 @@ printf 'MUTATE npx %s\\n' "$*" >> "$KINU_DEPLOY_GATE_LOG"
 exit 87
 `);
 
-  const run = Bun.spawnSync(["/usr/bin/bash", "scripts/deploy.sh"], {
+  const run = Bun.spawnSync(["/usr/bin/bash", "scripts/deploy.sh", environment], {
     cwd: fixture,
     env: {
       ...process.env,
@@ -151,10 +151,10 @@ exit 87
   const events = existsSync(log)
     ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean)
     : [];
-  return { status: run.exitCode, events };
+  return { status: run.exitCode, events, stdout: run.stdout.toString() };
 }
 
-describe("production deploy gate", () => {
+describe("deploy gate", () => {
   // WHAT PARALLELISM CHANGED, and what it did not.
   //
   // These assertions used to be `events == REQUIRED_GATES` and, per failing gate,
@@ -197,6 +197,31 @@ describe("production deploy gate", () => {
     expect(waves[1]?.length).toBe(50);
   });
 
+  test("the exclusion table in the runner is the one the ladder declares", () => {
+    // Written twice because the runner is bash and cannot import the
+    // declaration, so it is asserted once. Without this the measured reason
+    // lives in TypeScript and the behaviour lives in shell, and either can move.
+    const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
+    const declared = Object.fromEntries(
+      Object.entries(EXCLUSION_GROUPS).map(([group, entry]) => [group, [...entry.gates].sort()]),
+    );
+    const inRunner = Object.fromEntries(
+      Object.entries(deployExclusions(source)).map(([group, gates]) => [group, [...gates].sort()]),
+    );
+    expect(inRunner).toEqual(declared);
+
+    // A group member that is not a gate excludes nothing, and a group of one
+    // excludes nothing either. Both read as a rule and are not one.
+    for (const [group, entry] of Object.entries(EXCLUSION_GROUPS)) {
+      expect(entry.gates.length, `group ${group} holds fewer than two gates`)
+        .toBeGreaterThan(1);
+      for (const gate of entry.gates) {
+        const gates: string[] = [...REQUIRED_GATES];
+        expect(gates, `${gate} is in group ${group} and is not a gate`).toContain(gate);
+      }
+    }
+  });
+
   test("the serial gates are the ends of the real run too", () => {
     const run = runDeploy("");
     const gates = run.events.filter((event) => !event.startsWith("MUTATE "));
@@ -236,5 +261,28 @@ describe("production deploy gate", () => {
 
     expect(run.status).not.toBe(0);
     expect(run.events).toEqual([]);
+  });
+
+  // ── The environment argument ───────────────────────────────────
+  //
+  // staging.kinu.run served for days with nothing deploying it, and the reason a
+  // second script was not written is asserted here: one script means the gate
+  // set, the asset check and the smoke gate cannot be present for production and
+  // absent for staging. The two environments differ in four values, and these
+  // tests are about the two an operator can see.
+  test("staging runs the same gates as production, against the staging route", () => {
+    const run = runDeploy("", false, "staging");
+
+    expect([...run.events].sort()).toEqual([...REQUIRED_GATES, "MUTATE bunx vite build"].sort());
+    expect(run.stdout).toContain("Environment:  staging");
+    expect(run.stdout).toContain("Target:       https://staging.kinu.run/");
+  });
+
+  test("an unknown environment deploys nothing", () => {
+    const run = runDeploy("", false, "preprod");
+
+    expect(run.status).toBe(2);
+    expect(run.events).toEqual([]);
+    expect(run.stdout).toContain("Usage: scripts/deploy.sh <production|staging>");
   });
 });
