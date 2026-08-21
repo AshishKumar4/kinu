@@ -906,6 +906,30 @@ export const LADDER: readonly Gate[] = [
       + 'the commit tier, so a geometry regression reaches a branch before it is caught.',
   },
   {
+    run: 'bun test scripts/chat-scroll.test.ts',
+    tier: 'ci',
+    seconds: 34,
+    catches: 'whether older history arriving above the viewport moves the message the '
+      + 'reader is looking at — measured, in a real cascade, at 0px over four prepends '
+      + 'of 1190px each. `gallery.tsx`\'s `chathistory` frame was built expressly to be '
+      + 'measured, with `?latency= ?fail= ?depth=` and a `gallery:arrive` event so a '
+      + 'live turn can be made to land while an older page is still in flight; it was '
+      + 'then reachable from nothing outside gallery.tsx, which is this repository\'s '
+      + 'own built-but-unwired shape applied to a test harness. Proven red by removing '
+      + '`scrollTop += grew` from use-growing-scroll.ts: the first page then moved the '
+      + 'anchor 5948px, and the walk consumed the whole history in one cascade because '
+      + 'the prefetch re-arms on a view left pinned at the top edge. Also that the '
+      + 'browser\'s own scroll anchoring is off, that each page is one request rather '
+      + 'than a burst, that a FAILED page never renders "beginning of the '
+      + 'conversation", and that the walk and the socket do not draw one message twice.',
+    blind: 'everything about the SERVER half. The frame stubs `fetchPage`, so no rowid '
+      + 'seek, no `limit + 1` over-read and no stale cursor is exercised here — those '
+      + 'are unit-tested against the read model instead. Two hooks and one merge rule '
+      + 'of the ~29 gallery frames; the subordinate column and the node transcript walk '
+      + 'the same contract and are measured by neither this nor any other browser. '
+      + 'Chrome cost keeps it out of the commit tier.',
+  },
+  {
     run: 'bun run layergate',
     tier: 'ci',
     seconds: 25,

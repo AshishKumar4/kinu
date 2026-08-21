@@ -160,6 +160,7 @@ run_required_gate "Wired gate self-tests" bun test scripts/wired.test.ts
 run_required_gate "UI gate self-tests" bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts
 run_required_gate "Public pages render" bun test scripts/public-pages.test.ts
 run_required_gate "Swarm-tree geometry" bun test scripts/swarm-tree-geometry.test.ts
+run_required_gate "Chat infinite scroll" bun test scripts/chat-scroll.test.ts
 run_required_gate "Gate ladder wiring" bun test scripts/ladder.test.ts
 run_required_gate "Dead code" bun run gate:dead-code
 run_required_gate "Built but unwired" bun run gate:wired

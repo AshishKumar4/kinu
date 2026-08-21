@@ -40,6 +40,7 @@ const REQUIRED_GATES = [
   "bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts",
   "bun test scripts/public-pages.test.ts",
       "bun test scripts/swarm-tree-geometry.test.ts",
+  "bun test scripts/chat-scroll.test.ts",
   "bun test scripts/ladder.test.ts",
   "bun run gate:dead-code",
   "bun run gate:wired",
