@@ -1,5 +1,6 @@
 // BackgroundJobStore + withBackgroundThreshold — the #173 background/async core.
 import { describe, test, expect } from 'bun:test';
+import { DELEGATION_RUNGS } from '../src/tools/registry';
 import { Database } from 'bun:sqlite';
 import {
   BackgroundJobStore, initBackgroundJobsTable, withBackgroundThreshold, withSpawnDetach,
@@ -260,7 +261,10 @@ describe('withSpawnDetach — defect A: spawn-shaped work detaches on start, nev
     expect(out).toEqual({ background: false, kind: 'agents', message: 'too many jobs already running' });
   });
 
-  test('the detach message promises a wake and tells the model not to poll or re-spawn', async () => {
+  // The wake promise lives in the runtime message; the never-poll doctrine
+  // lives ONCE, in the agents docstring the model reads at every step. The
+  // old assertion pinned ~70 tokens of that doctrine repeated per spawn.
+  test('the detach message is terse and promises the wake; the docstring carries the doctrine', async () => {
     const out = await withSpawnDetach('agents', async (spawnStarted) => {
       spawnStarted();
       await delay(20);
@@ -270,10 +274,12 @@ describe('withSpawnDetach — defect A: spawn-shaped work detaches on start, nev
     });
     expect(isBackgroundHandle(out)).toBe(true);
     if (isBackgroundHandle(out)) {
-      expect(out.message).toContain('job-9');
-      expect(out.message).toMatch(/woken/i);
-      expect(out.message).toMatch(/do not (check|spawn)/i);
+      expect(out.jobId).toBe('job-9');
+      expect(out.message).toMatch(/wake/i);
+      expect(out.message.length).toBeLessThan(80);
     }
+    const rung = Object.values(DELEGATION_RUNGS).join(' ');
+    expect(rung).toContain('never poll a backgrounded job or spawn it twice');
   });
 });
 
