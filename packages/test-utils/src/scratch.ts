@@ -78,6 +78,14 @@ export const SCRATCH_PREFIXES = [
   'opencode',
   'mutation-gate-',
   'nimbus-probe-',
+  // The anti-slop gates' oxlint fixture prefixes. Each gate mints under tmpdir() and
+  // releases in its own finally, so the only survivor is a SIGKILLed run — exactly the
+  // case this catalogue exists to make visible to preflight's count and --reclaim.
+  'no-ambient-git-boundary-',
+  'no-ambient-git-gate-',
+  'no-copy-rpc-stub-gate-',
+  'no-swallow-gate-',
+  'no-wait-until-gate-',
   'outcome-baseline-',
   'pi-worker-test-',
 ] as const;
