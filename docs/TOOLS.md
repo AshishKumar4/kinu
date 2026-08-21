@@ -272,7 +272,7 @@ The declared relation, action by action:
 
 | Action | Fields its handler reads |
 |---|---|
-| `swarm` | `task`, `preset`, `objective`, `key`, `config`, `from`, `label`, `branches`, `depth`, `budget_usd`, `budget_tokens`, `budget_label` |
+| `swarm` | `task`, `preset`, `objective`, `key`, `config`, `from`, `label`, `name`, `branches`, `depth`, `budget_usd`, `budget_tokens`, `budget_label` |
 | `hire` | `agent`, `role`, `mission`, `model`, `scope`, `message`, `timeout_seconds` |
 | `ask` | `agent`, `message`, `topic`, `timeout_seconds`, `deliverable`, `deadline_hint` |
 | `send` | `agent`, `message`, `topic` |

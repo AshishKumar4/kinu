@@ -36,10 +36,18 @@ export interface SetModelDeps {
   readonly onChanged: () => void;
 }
 
+/**
+ * The MCTS knobs a USER may set.
+ *
+ * Depth is deliberately absent. A form that offers a depth cap beside a budget
+ * offers two spellings of the same limit and invites the reading the owner
+ * gave it — *"why do we have 'max depth' field if we already have 'budget'?"* —
+ * so the depth a search may reach is owned by {@link DEFAULT_CONFIG}'s own cap
+ * and, for a swarm, by the preset it resolved.
+ */
 export interface MctsConfigView {
   explorationConstant: number;
   maxIterations: number;
-  maxDepth: number;
   branchBudget: number;
 }
 
@@ -171,7 +179,6 @@ export function getMctsConfig(config: AgentConfigStore): MctsConfigView {
   return {
     explorationConstant: o.explorationWeight ?? d.explorationWeight,
     maxIterations: o.budget ?? d.budget,
-    maxDepth: o.maxDepth ?? d.maxDepth,
     branchBudget: o.branches ?? d.branches,
   };
 }
@@ -180,7 +187,6 @@ export function setMctsConfig(config: AgentConfigStore, view: Partial<MctsConfig
   config.setMctsOverrides({
     explorationWeight: view.explorationConstant,
     budget: view.maxIterations,
-    maxDepth: view.maxDepth,
     branches: view.branchBudget,
   });
   return view;

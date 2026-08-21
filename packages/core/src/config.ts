@@ -123,7 +123,13 @@ export const DEFAULT_CONFIG: AgentConfig = {
   mcts: {
     budget: 5,
     branches: 3,
-    maxDepth: 20,
+    // FIVE, and it is a cap rather than a target: a search reaches it only if
+    // every level before it kept selecting. It was 20 — above every system in
+    // the literature this repository cites (ToT <=3, LATS 7, Koh 5) and above
+    // the deepest preset the swarm table declares (`prove`, 7). The owner's
+    // ruling on depth caps was "like 5 or 10, but not 1", and 5 is where the
+    // `optimise` preset already sits, so the two engines now agree.
+    maxDepth: 5,
     explorationWeight: Math.SQRT2,
     pruneThreshold: 0.25,
     minAcceptableScore: 0.3,

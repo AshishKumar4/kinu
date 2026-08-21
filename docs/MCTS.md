@@ -153,13 +153,17 @@ Three things in that query are deliberate:
   in-bounds children; selection skips the capped ones and keeps spending budget
   on the shallower frontier instead of dying when the argmax happens to be deep.
 
-Defaults (`core/src/config.ts`): `budget: 5`, `branches: 3`, `maxDepth: 20`,
+Defaults (`core/src/config.ts`): `budget: 5`, `branches: 3`, `maxDepth: 5`,
 `explorationWeight: Math.SQRT2`, `pruneThreshold: 0.25`,
 `minAcceptableScore: 0.3`, `minVisitsForPrune: 2`, `reflectionThreshold: 0.35`,
 `judgeSamples: 3`, `maxEvalLLMCalls: 4`, `maxCostUSD: 10`. Lifetime evolution
 runs a smaller search (budget 2, branches 2), and an operator can override
-iterations, depth, branches, judge samples, eval-call ceiling, and the
-exploration weight per workspace through `agent_config`.
+iterations, branches, judge samples, eval-call ceiling, and the exploration
+weight per workspace through `agent_config`.
+
+The depth cap is NOT one of them. A form that offers a depth cap beside an
+iteration budget offers two spellings of one limit, so depth is owned by the
+default above and, for a swarm, by the preset the call resolved.
 
 ## Scoring: execution picks the band, and inside the fail band it positions too
 

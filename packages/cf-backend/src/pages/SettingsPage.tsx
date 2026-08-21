@@ -421,7 +421,9 @@ export default function SettingsPage() {
               <div className="grid grid-cols-2 gap-3">
                 <NumField label="Exploration constant" value={value.explorationConstant} step={0.1} onChange={(v) => mcts.edit({ ...value, explorationConstant: v })} />
                 <NumField label="Max iterations" value={value.maxIterations} step={1} onChange={(v) => mcts.edit({ ...value, maxIterations: v })} />
-                <NumField label="Max depth" value={value.maxDepth} step={1} onChange={(v) => mcts.edit({ ...value, maxDepth: v })} />
+                {/* No depth field. It sat here beside "Max iterations" offering a
+                    second spelling of one limit, which is the reading the owner
+                    gave it; the engine's own cap owns depth now. */}
                 <NumField label="Branch budget" value={value.branchBudget} step={1} onChange={(v) => mcts.edit({ ...value, branchBudget: v })} />
               </div>
             )}
