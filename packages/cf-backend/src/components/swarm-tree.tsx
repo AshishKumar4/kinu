@@ -70,8 +70,8 @@ import { useTheme } from "@/hooks/use-theme";
 import { useElementSize } from "@/hooks/use-element-size";
 import type { ForkNode } from "@/lib/protocol";
 import {
-	ancestorIds, cleanNodeLabel, clipToWidth, isCompeted, linkWidth, losingBranchIds, maxVisits,
-	NODE_R_MAX, NODE_R_UNSCORED, nodeRadius, principalVariation, subtreeCount,
+	ancestorIds, cleanNodeLabel, clipToWidth, isCompeted, LABEL_MIN_SCALE, linkWidth, losingBranchIds, maxVisits,
+	NODE_R_MAX, NODE_R_UNSCORED, nodeRadius, principalVariation, subtreeCount, viewNoteFor,
 	type ExplorerSelection,
 } from "./swarm-tree-model";
 
@@ -153,8 +153,6 @@ const LABEL_GAP = 8;
  */
 const LABEL_ROOM_INNER = COL - LABEL_X - LABEL_GAP;
 const LABEL_ROOM_LEAF = COL * 2 - LABEL_X - LABEL_GAP;
-/** Below this zoom a label is under ~8px on screen — noise, not text. */
-const LABEL_MIN_SCALE = 0.72;
 /**
  * The zoom at which the picture stops being one: the busiest search's dots
  * merge into a smear well before this, so fitting is allowed to go no smaller.
@@ -541,6 +539,14 @@ export function SwarmTree({
 	const onSelectNodeRef = useRef(onSelectNode);
 	onSelectNodeRef.current = onSelectNode;
 	const selectionRef = useRef<ExplorerSelection | null>(selection);
+	/** The one-line view note ("deeper columns continue right · drag to pan").
+	 *  React state, not a d3 node: it flips only when the view crosses a
+	 *  legibility or fit threshold, so panning never re-renders the tree. */
+	const [viewNote, setViewNote] = useState<string | null>(null);
+	const selectedRunRef = useRef(selectedRunId);
+	selectedRunRef.current = selectedRunId;
+	const widthRef = useRef(width);
+	widthRef.current = width;
 	const hoverRef = useRef<{ runId: string; nodeId: string } | null>(null);
 	/** Empty: a search opens with every branch showing. Folding is something the
 	 *  reader DOES, never a state they are handed — see the note on the fold
@@ -715,6 +721,11 @@ export function SwarmTree({
 				g.selectAll("g.mcts-labels").attr("data-lod", event.transform.k >= LABEL_MIN_SCALE ? "" : null);
 				positionBandTitles(titlesRef.current, event.transform);
 				positionRuler(ruler, stateRef.current, event.transform);
+				const target = stateRef.current?.regions.find((r) => r.runId === selectedRunRef.current)
+					?? stateRef.current?.regions[0];
+				setViewNote(target === undefined
+					? null
+					: viewNoteFor(target.band, event.transform.k, widthRef.current - FIT_PAD * 2));
 			});
 		zoomRef.current = zoom;
 		svg.call(zoom);
@@ -1153,6 +1164,17 @@ export function SwarmTree({
 				    placed by a `translate` the handler writes. */}
 				<div ref={titlesRef} aria-hidden
 					className="absolute inset-0 overflow-hidden pointer-events-none select-none [&>*]:top-0 [&>*]:left-0" />
+
+				{/* The view note, in the ruler's own register, one line under it.
+				    Overlay, never in flow: a line whose presence changes the scene
+				    height would re-fit the view and could toggle itself. Right-aligned
+				    because the fit anchors the root at the left. */}
+				{viewNote !== null && (
+					<div aria-live="polite"
+						className="absolute left-0 right-0 flex justify-end pr-4 pointer-events-none select-none text-[9px] p-text-3"
+						style={{ top: RULER_H, fontFamily: "var(--font-mono)" }}
+					>{viewNote}</div>
+				)}
 
 				{tooltip && <NodeTip tip={tooltip} width={width} />}
 			</div>
