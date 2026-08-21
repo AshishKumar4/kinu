@@ -1748,7 +1748,7 @@ function ChatMessages() {
 function Shell(
   {
     surface = "Output", mctsTrees = EMPTY_TREES, rpc = stubRpc, pendingActions = [],
-    headActivity = NO_HEAD_ACTIVITY, backgroundJobs = BACKGROUND_JOBS,
+    headActivity = NO_HEAD_ACTIVITY, backgroundJobs = BACKGROUND_JOBS, notices = [],
   }:
   {
     surface?: SurfaceKind; mctsTrees?: ReadonlyMap<string, ForkNode>; rpc?: Rpc;
@@ -1760,6 +1760,15 @@ function Shell(
      *  running job and no streaming turn the fork list drops to its idle
      *  cadence, which is the condition a new search used to be invisible under. */
     backgroundJobs?: BackgroundJob[];
+    /**
+     * The composer's status rows. EMPTY by default, and that is the rule
+     * rather than a preference: a frame photographs the surface it is named
+     * for, and every OTHER pane in the shot is that surface's neighbour. A
+     * neighbour stuck in a failure state makes a healthy surface look broken
+     * in every review and every marketing capture. The frames that exist to
+     * photograph a failure — the composer's own status treatment — pass it.
+     */
+    notices?: readonly ComposerNotice[];
   },
 ) {
   return (
@@ -1774,7 +1783,7 @@ function Shell(
             <div className="@container flex flex-col h-full border-r p-border" style={{ width: "42%" }}>
               <GalleryChatTabs />
               <ChatMessages />
-              <GalleryComposer notices={MCTS_NOTICE} />
+              <GalleryComposer notices={notices} />
             </div>
             <div className="flex-1 min-w-0">
               <WorkSurface
