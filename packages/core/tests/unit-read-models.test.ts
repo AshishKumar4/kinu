@@ -643,8 +643,14 @@ describe('background-job control plane', () => {
     const jobs = new BackgroundJobStore(makeSql(db));
     expect(() => listBackgroundJobs(jobs)).toThrow(/no such table: background_jobs/);
     expect(() => jobResult(jobs, 'j1')).toThrow(/no such table: background_jobs/);
-    expect(dismissBackgroundJob(jobs, 'j1')).toEqual({ ok: false });
-    expect(clearBackgroundJobs(jobs)).toEqual({ ok: false });
+    expect(dismissBackgroundJob(jobs, 'j1')).toEqual({
+      ok: false,
+      error: expect.stringContaining('no such table: background_jobs'),
+    });
+    expect(clearBackgroundJobs(jobs)).toEqual({
+      ok: false,
+      error: expect.stringContaining('no such table: background_jobs'),
+    });
     db.close();
   });
 });
