@@ -867,6 +867,20 @@ export const LADDER: readonly Gate[] = [
       + 'green.',
   },
   {
+    run: 'bun test scripts/public-pages.test.ts',
+    tier: 'ci',
+    seconds: 25,
+    catches: 'the signed-out pages as a browser renders them: the hero tree grows and '
+      + 'settles on the landing page, the sign-in and install pages carry the shell, '
+      + 'and every public surface holds zero case-insensitive proteus in visible text. '
+      + 'The gallery async_hooks stub regression lived exactly here: every frame '
+      + 'rendered an empty document while the source-reading gates stayed green.',
+    blind: 'It renders the WORKER-built pages in a local browser, never the deployed '
+      + 'edge — a stale cached object at Cloudflare (measured on staging 2026-08-21) '
+      + 'passes here and serves anyway. No pixel is compared, so a legible-but-ugly '
+      + 'regression passes, and copy quality is unread beyond the zero-proteus grep.',
+  },
+  {
     run: 'bun test scripts/swarm-tree-geometry.test.ts',
     tier: 'ci',
     seconds: 29,

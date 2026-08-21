@@ -60,9 +60,8 @@ a closed set; the sets, not this prose, are the enumeration.
 `unit` buys the cost of one node. `answer` and `generator` are agent nodes, each
 a tool loop with its own turns and its own transcript. They differ in what the
 loop is asked for: one candidate, or the generator that writes candidates.
-`thought` is the degenerate point. It is one model call, with no tools and no
-observation of an environment, because it has no way to touch one. `thought` is
-the cheap tier.
+`thought` is the degenerate point. It is one model call, with no tools, so it
+observes no environment. `thought` is the cheap tier.
 
 `context` buys the child's starting knowledge. `fork` hands the child its
 parent's conversation verbatim. Verbatim is a decision about caching. An
@@ -102,9 +101,8 @@ scalar winner out of an archive run, and no such thing exists.
 See *Settle is derived*.
 
 An axis value carries the parameters that belong to that value, tagged onto it
-rather than sitting as free fields beside the axis. A parameter that cannot
-exist unless the value owning it does has no absent case to reason about, so no
-gate has to be stated over an input it cannot see.
+rather than sitting as free fields beside the axis. A parameter travels with its
+value, so a configuration holding that value holds its parameters too.
 
 Implemented by `strategy/swarm.ts`.
 
@@ -135,11 +133,12 @@ Seven presets exist and four of them resolve:
 | `prove` | a checker accepts a candidate or it does not, and that verdict is the score | required, and it names the checker |
 | `custom` | none of the three fits, so state all six axes in `config` under a `label`, optionally seeded from `from` | as the axes require |
 
-`ideate` is flat by construction. `advance:'none'` means there is no selection
-step, so there is no second level. Its row is depth 1 and 5 branches. `optimise`
-climbs one number with `uct` over a verifier, at depth 5 and 3 branches. `prove`
-searches deepest, at depth 7 and 3 branches, because a checker refutes a wrong
-branch instead of letting a plausible score carry it down.
+`ideate` is flat by construction. `advance:'none'` expands the root once and
+stops, so the search stays at one level. Its row is depth 1 and 5 branches.
+`optimise` climbs one number with `uct` over a verifier, at depth 5 and 3
+branches. `prove` searches deepest, at depth 7 and 3 branches, because a
+checker refutes a wrong branch instead of letting a plausible score carry it
+down.
 
 Three of the seven do not resolve, and each refusal names what is missing.
 `research` and `audit` are given `carry:'artifacts'`, and `redteam` is given
@@ -150,8 +149,8 @@ rejection test moved onto the `archive` arm, and that cost is recorded here.
 State the axes as `custom` instead.
 
 A named preset is never modified. Resolution maps a preset name to a full axis
-tuple (`resolve(preset) -> SwarmConfig`) with no row left partially specified,
-and a preset never implicitly declares a threshold it does not state.
+tuple (`resolve(preset) -> SwarmConfig`) with every row fully specified, and a
+preset never implicitly declares a threshold it does not state.
 
 Mission caps live on the outer call surface and are never duplicated onto the
 search input. An inner cap may only ever be tighter than its outer one.
@@ -218,7 +217,7 @@ Implemented by `strategy/swarm-run.ts` and the union arms in
 ## The objective
 
 An objective states a direction, a metric, a unit and a verifier. Direction is
-`minimise` or `maximise` and nothing derives it.
+`minimise` or `maximise`, and every objective declares one.
 
 **Wire form.** The objective's wire form is snake_case. Key order is fixed by
 stable stringification, but spelling is not, so any digest must be taken over one
@@ -266,8 +265,7 @@ Two runs are comparable only if their verifier `kind` resolves to the same
 implementation. The registry's digest is therefore part of the objective's
 identity. Without it, a rename silently compares incomparable runs.
 
-There is no wire-form transform between what a caller sends and what the identity
-is taken over.
+The identity is taken over the wire form a caller sends.
 
 Implemented by `verifierDigest` in `strategy/verifier-registry.ts` and
 `ObjectiveIdentity` in `strategy/objective.ts`.
@@ -291,8 +289,8 @@ Implemented by `Floor`, `floorMargin` and `FloorBreach` in
 
 A write is a publication when it makes a candidate's artifact, or a value
 measured against the sealed objective, available to a run other than the one that
-produced it. Both halves are load-bearing, because the artifact is what gets
-reused and the value is what gets quoted.
+produced it. Both halves are load-bearing, because other runs reuse the
+artifact and quote the value.
 
 The seal is stated as a reachability property over an enumerated set of surfaces,
 rather than as a guard on one table. A write requires the open state,
@@ -304,7 +302,7 @@ leaderboard was sealed.
 The governed set is `PUBLICATION_SURFACES` and the gate is `admitsPublication`.
 The gate is total over that set on purpose. The caller must NAME the surface as
 an argument, and the gate does not read it from a discriminator, so a new writer
-cannot reach a store without choosing a member of the enumeration. Adding a
+reaches a store only by choosing a member of the enumeration. Adding a
 publication surface without adding it to that set is a specification violation.
 
 A seal is cleared only by a recorded re-derivation. A retry does not clear it,
@@ -470,9 +468,8 @@ through `budgetExhausted` in the shared loop's stop condition.
 
 An unfinished node still returns a report, whether it was aborted, ran out of
 steps or errored. That report's summary is a status line. Nothing measures it.
-The instrument is not asked and the ensemble is not sampled, so no score exists
-to rank it by, and the candidate carries the status, the step count and the clock
-instead.
+The engine skips the instrument and the ensemble, so no score exists to rank it
+by, and the candidate carries the status, the step count and the clock instead.
 
 This is a different fact from unmeasurable, which is the instrument declining
 to turn a real answer into a number. Collapsing the two reports the verifier's
@@ -499,8 +496,8 @@ unmodified prefix is a prefix a provider can cache, so every sibling of one
 parent shares one cacheable prefix, and rewriting history to hand each child a
 summary breaks that prefix for all of them at once.
 
-The non-inheriting value seeds the child with what its parent reported. That is
-a third thing from both inheriting everything and starting from nothing.
+`fresh` seeds the child with what its parent reported. That is a third thing
+from both inheriting everything and starting from nothing.
 
 A node's task block is pinned verbatim at every depth.
 
@@ -530,12 +527,11 @@ the engine decides against a depth cap and a shared budget the node cannot see.
 
 The verdict is the proposal tool's return value. The node reads it, and a
 refusal's text is its next instruction, so a refusal's prose is written for the
-node rather than for the log. A node with no tool to return through has no such
-channel, so its verdict is a typed diagnostic event instead.
+node rather than for the log. Where a node holds no proposal tool, its verdict
+is a typed diagnostic event instead.
 
 **Build-time exclusion.** A tool that could only ever refuse MUST NOT be
-offered. The exclusion is made when the surface is built, not answered at call
-time.
+offered. The surface excludes it at build time, not at call time.
 
 Implemented by `arbitrateBranch` in `strategy/swarm.ts`, offered as a tool by
 `strategy/node-agent.ts`, and ordered by `mcts/frontier.ts`.
@@ -563,7 +559,7 @@ tag was the removed `fork` verb's either/or, and under it such a run arrived as
 two rows sharing one id, so whichever half a caller's dedup kept was the only
 half it could draw. `read-models/fork-runs.ts` positions the page over the union
 of root ids, and `read-models/exploration-canvas.ts` composes both halves and
-both parameter halves onto the one row, so no caller reconciles anything.
+both parameter halves onto the one row, so a caller draws the whole run from it.
 
 What the run was dispatched with is persisted, including the judge clamp. The
 runner writes its own row in the shared search ledger (`mcts_search_runs`, under

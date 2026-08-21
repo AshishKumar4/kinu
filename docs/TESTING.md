@@ -42,8 +42,8 @@ bun test packages/agent-utils/tests packages/compaction/tests
 
 ### A bare package path is a substring filter
 
-`bun test packages/cli` does not mean "the cli package". The argument is matched
-against the whole path, so it also selects `packages/cli-backend/tests`.
+`bun test packages/cli` does not mean "the cli package". Bun matches the
+argument against the whole path, so it also selects `packages/cli-backend/tests`.
 Measured 2026-08-19: `bun test packages/cli/tests` runs 312 tests and
 `bun test packages/cli` runs 625, which is those 312 plus cli-backend's 313.
 Name the directory when you mean the directory.
@@ -154,15 +154,15 @@ rather than in a bill.
 --tier=ci` runs it, the CI workflow runs that on every push and PR, and
 `scripts/deploy.sh` runs it as "Behavioural evals". On a GitHub runner there is
 no session to borrow, so it is free there and everything live skips. On your
-machine it is not.
+machine it spends.
 
 ### The five arms
 
-Two arms exist because two runners are needed and neither can see the other's
+Two arms exist because the tier needs two runners and neither sees the other's
 files: `bun test` matches only `*.test.ts` / `*_test.*` / `*.spec.*`, never
 `*.eval.ts`. The other three are single files on the vitest side, split off for
-cost accounting. An arm is the unit a spend file is written per, so an arm is
-also the unit liveness can be asserted per.
+cost accounting. The tier writes one spend file per arm, so an arm is also the
+unit it asserts liveness over.
 
 | Arm | What runs | What it measures |
 |---|---|---|
@@ -201,8 +201,7 @@ and something can miss.
 
 #### The two new families drive the SPAWNED CLI
 
-The research and optimization arms do not build a runtime and call into it.
-They run `kinu create <name> --mode local`, then `kinu exec --workspace
+Both arms run `kinu create <name> --mode local`, then `kinu exec --workspace
 <name> --json`, in a scratch `KINU_HOME`, and judge the child's own event
 stream plus the ledgers in `$home/<workspace>/agent.db`. The glue is
 `tests/evals/cli-driver.ts`; the precedent is `bench/harbor/kinu_agent.py`.
@@ -497,8 +496,8 @@ loop calls), which is why attempt 3 saw neither that timer nor vitest's own
 Cost here is time rather than rate. The account's limit is 300 requests/minute
 and a full tier run averages under one, so nothing you do to this tier makes it
 hit a rate limit. What it costs you is an afternoon. The tier prints a
-`── per arm ──` block with each arm's own seconds and tokens, so you never have
-to infer which half the time was in.
+`── per arm ──` block with each arm's own seconds and tokens, so the log names
+which half the time was in.
 
 **Do not run two live tiers against one account.** Two concurrent runs produce
 `orchestrator.detached_work_failed / Request Timeout` and turns that come back

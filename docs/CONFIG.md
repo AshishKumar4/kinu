@@ -1,4 +1,4 @@
-# Configuration — `~/.kinu/config.json` and the environment
+# Configuration: `~/.kinu/config.json` and the environment
 
 Every CLI setting lives in one JSON file. `kinu setup`, `kinu auth`,
 `kinu providers connect` and `kinu create` write it for you; this page is
@@ -59,11 +59,10 @@ not shadow a built-in command name.
 
 ## Providers
 
-**`kinu provider connect` no longer writes a key here by default.** Signed
-in, the key goes to your Kinu account, where it is encrypted at rest, and
-this machine reaches it through the provider proxy without holding a copy. Pass
-`--local` to keep one here instead, for offline use or an endpoint only this
-machine can see.
+**Signed in, `kinu provider connect` now sends your key to your Kinu account by
+default.** The key is encrypted at rest there, and this machine reaches it
+through the provider proxy without holding a copy. Pass `--local` to keep one
+here instead, for offline use or an endpoint only this machine can see.
 
 Two exceptions, both deliberate. Codex stays local because the Codex endpoint
 refuses Cloudflare Workers egress, so proxying it would break a credential that

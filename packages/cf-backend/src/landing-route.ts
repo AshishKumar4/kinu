@@ -11,11 +11,19 @@ import { AuthError, authenticateRequest } from './auth/session';
 import { buildCliInstallCommand } from './cli/install-command';
 import { publicHtmlHeaders } from './lib/security-headers';
 import { landingDocument } from './lib/public-pages';
+import { markDocument } from './lib/public-shell';
 
 export async function handleLandingRequest(request: Request, env: Env): Promise<Response | null> {
   const url = new URL(request.url);
-  if (url.pathname !== '/') return null;
   if (request.method !== 'GET' && request.method !== 'HEAD') return null;
+  // The favicon is generated from the same MARK_BODIES the pages render, so
+  // the served icon cannot drift from the mark the code declares.
+  if (url.pathname === '/assets/kinu-icon.svg') {
+    return new Response(markDocument(), {
+      headers: { 'content-type': 'image/svg+xml', 'cache-control': 'public, max-age=3600, must-revalidate' },
+    });
+  }
+  if (url.pathname !== '/') return null;
 
   try {
     await authenticateRequest(request, env);

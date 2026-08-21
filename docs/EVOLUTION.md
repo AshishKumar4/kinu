@@ -13,9 +13,8 @@ crafted-tool fitness (`core/src/orchestrator/craft-cycle.ts` over
 
 The other three timescales are conversational. The next user message grades a
 turn, five turns close a window, five windows close a lifetime. One long agentic
-episode is one turn, with one prompt, hours of steps, and nobody watching. None
-of the conversational clocks fire inside it. The in-episode loop is the one that
-does.
+episode is one turn, with one prompt, hours of steps, and nobody watching. The
+in-episode loop is the only clock that ticks inside it.
 
 | | |
 |---|---|
@@ -280,9 +279,9 @@ carries a negative outcome.
 
 **Scaffold mutation** runs inside that reflection path, so it needs the window
 to have reflected at all. It is then gated on at least 3 closed session windows,
-and skipped outright if a proposal is already pending. The proposal is not built
-from the live scaffold alone. `selectEvolutionBase()` picks a base from the DGM
-archive. With probability `1 − scaffold_explore_share` (default 0.2) it branches
+and skipped outright if a proposal is already pending. `selectEvolutionBase()`
+picks the proposal's base from the DGM archive. With probability
+`1 − scaffold_explore_share` (default 0.2) it branches
 from the live `current`; otherwise it samples an archived `historical` or
 `rolled_back` variant, weighted by its
 **clade-metaproductivity** and inverse trial count. The clade score is the
@@ -530,6 +529,5 @@ The engine emits ten types (`core/src/evolution/types.ts:69`): `reflection`,
 This table is one of four sources the Run Timeline read model merges
 (`core/src/read-models/timeline.ts:147-194`). The others are the per-run
 `run_events` log, the MCTS `search_nodes` tree, and detached background jobs.
-The merge is server-side, and nothing in it is backend-shaped, so a timeline is
-a capability any backend has rather than one specific to the Durable Object.
-`kinu status` reads the same table locally.
+The merge is server-side and platform agnostic, so the timeline is a capability
+every backend has. `kinu status` reads the same table locally.

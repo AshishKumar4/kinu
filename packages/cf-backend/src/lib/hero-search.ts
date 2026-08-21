@@ -1,8 +1,8 @@
 /**
  * The search the landing page draws.
  *
- * The product's one claim is that it answers a task by searching a tree of
- * agents, so the picture on the front page is that tree. It is a real UCT
+ * The hero's proof is that a hard task gets a tree of agents, so the picture
+ * on the front page is that tree. It is a real UCT
  * search: select by the same upper-confidence rule the evolution engine uses,
  * expand one child, score it, carry the score back to the root. Nothing is
  * hand-placed, and the tree is not a drawing of a tree.

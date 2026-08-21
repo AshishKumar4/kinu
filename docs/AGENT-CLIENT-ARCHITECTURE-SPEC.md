@@ -299,8 +299,8 @@ to create itself through the explicit route, and the message names that route
 
 ## 12. Forks, and which ones are real
 
-The word `fork` in this area means two live features and one deleted one. Both
-live ones are reachable today.
+`fork` names two live features here. One walks a conversation back and one forks
+a recorded CLI session. A third, the `fork` delegation action, was deleted.
 
 **Walk-back fork.** `/fork [n]` in either chat surface picks an earlier user
 message and restarts the conversation just before it. `forkCandidates` builds

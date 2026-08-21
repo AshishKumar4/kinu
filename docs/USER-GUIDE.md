@@ -1,4 +1,4 @@
-# Kinu user guide — install, first workspace, daily use
+# Kinu user guide: install, first workspace, daily use
 
 This is the path I actually use: get it installed, make one workspace, then live
 with it. [QUICKSTART.md](../QUICKSTART.md) is the two-minute version and
@@ -107,7 +107,7 @@ canonical workspace, a sandbox container, or your connected machine), and
 
 ## 5. Making it work while you're away
 
-Cloud workspaces have three ways in that don't involve you typing:
+Cloud workspaces take work three ways with nobody at the keyboard:
 
 ```bash
 kinu triggers jarvis                          # what's scheduled
@@ -158,8 +158,8 @@ failed job, or changes to itself you have not read.
 is a configured tree search over agent nodes. A preset fixes the shape of the
 search, and an objective says what is measured. Each node is a whole agent with
 its own home directory, running the same loop as the agent you talk to. A
-candidate can be scored by a verifier you registered rather than judged by a
-model, so what the tab compares is measured. Every search the workspace has run
+verifier you registered scores each candidate, so the tab compares measured
+numbers. Every search the workspace has run
 is a row, newest first, and all of them are drawn on one canvas as the trees
 they are. Score sits in a node's fill, rollouts in its radius, and the line the
 search paid for along the spine; a ring marks the answer it settled on. Results
@@ -170,9 +170,9 @@ presets and what a refusal means.
 Kinu can add surfaces of its own. Ask it for a dashboard and it publishes a
 **view**: a tab, after the six, marked with a sparkle and labelled *Written by
 Kinu*. A view is data. It reads workspace state you can already see and draws
-it with the same components everything else uses, so it can show you numbers but
-can never ask you for anything. It also cannot wear the name of any surface
-Kinu ships, including ones we have retired. "View source" shows exactly what
+it with the same components everything else uses, so it shows you numbers and
+takes no input. Kinu's own surface names are reserved too, including the ones we
+have retired. "View source" shows exactly what
 it wrote, and the Work tab's journal reverts it.
 
 ## 7. Backup, and moving a workspace
