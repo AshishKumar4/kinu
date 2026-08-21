@@ -442,8 +442,8 @@ export function createSandboxExecutor(
         if (!handle) return NOT_CONFIGURED_REFUSAL;
         if (!previewHostSuffix) return PREVIEWS_REFUSAL;
         try {
-          // SDK method is getExposedPorts — the tool we expose is still
-          // named listPorts for backward compat with the codemode namespace.
+          // The SDK method is getExposedPorts; the tool is listPorts because that
+          // is the one verb both executors declare (nimbus's own API is ports.list).
           const ports = await withSandboxRetry(() => touch(() => handle.getExposedPorts(previewHostSuffix)));
           return JSON.stringify((ports ?? []).map(p => ({ port: p.port, status: p.status, url: p.url })));
         } catch (err) {
