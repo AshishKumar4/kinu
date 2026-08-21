@@ -26,7 +26,7 @@ import { isCompeted, principalVariation, maxVisits } from '../src/components/swa
 
 function summary(over: Partial<ForkRunSummary> = {}): ForkRunSummary {
   return {
-    id: 'r1', task: 'compare X vs Y', startedAt: 0, status: 'completed',
+    id: 'r1', name: 'X vs Y', task: 'compare X vs Y', startedAt: 0, status: 'completed',
     hasSearchTree: false, hasNodeTranscripts: true, branches: 2, winnerScore: null, ...over,
   };
 }

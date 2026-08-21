@@ -436,6 +436,14 @@ export interface SwarmInput {
    *  mechanism only works if composed runs are distinguishable from preset runs. */
   readonly label?: string;
   /**
+   * What this search is called — a SHORT handle the reader of the exploration
+   * surface meets instead of a truncated task paragraph. Optional on every
+   * call. It is display identity, not provenance: it never enters the validity
+   * table or a record's config digest, and a run without one is named by
+   * derivation from its task rather than left anonymous.
+   */
+  readonly name?: string;
+  /**
    * How many candidates are produced per expansion. A RESOURCE CAP, available on
    * every preset including the named ones.
    *
@@ -764,6 +772,8 @@ export interface ResolvedSwarm {
    *  make this a preset run and the record still says `custom`. */
   readonly from: NamedSwarmPreset | null;
   readonly label: string | null;
+  /** The caller's name for the run, or null — the display half of {@link SwarmInput.name}. */
+  readonly name: string | null;
   readonly config: SwarmConfig;
   /** Derived, never supplied — {@link settleOf} over the resolved axes. */
   readonly settle: SwarmSettle;
@@ -921,6 +931,7 @@ export function resolveSwarm(input: SwarmInput): ResolvedSwarm | SwarmRefusal {
     preset: input.preset,
     from: input.preset === 'custom' ? input.from ?? null : null,
     label: input.label?.trim() ?? null,
+    name: input.name?.trim() || null,
     config,
     settle: settleOf(config),
     caps: {

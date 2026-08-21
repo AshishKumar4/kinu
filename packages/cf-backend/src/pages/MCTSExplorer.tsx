@@ -72,10 +72,10 @@ export default function MCTSExplorer() {
         <div className="hidden sm:block h-4 w-px shrink-0 bg-[var(--c-border)]" />
         <GitForkIcon size={16} className="p-accent shrink-0" />
         <span className="font-semibold text-sm p-text shrink-0">Search explorer</span>
-        {/* The task keeps the whole remaining line and hands over the rest of
-            itself on hover: at 640px this is the row that decided whether the
-            title broke mid-word or simply ran out of room. */}
-        {run && <span className="min-w-0 flex-1 text-xs p-text-2 truncate" title={run.task}>{run.task}</span>}
+        {/* The NAME leads and the task is what it hands over on hover: at 640px
+            this is the row that decided whether the title broke mid-word or
+            simply ran out of room, and a name is short by construction. */}
+        {run && <span className="min-w-0 flex-1 text-xs p-text-2 truncate" title={run.task}>{run.name}</span>}
       </div>
       {run && selectionResource.status === "error" && (
         <LoadFailure what="fresh exploration runs" message={selectionResource.message} onRetry={reloadSelection} className="px-5 py-2 border-b p-border" />
@@ -130,7 +130,8 @@ function ExplorerBody({
   const regions = useMemo(
     () => tree
       ? [{
-        runId: run.id, root: tree, title: run.task, note: runStateLine(run, liveness, refusal),
+        runId: run.id, root: tree, title: run.task, name: run.name,
+        note: runStateLine(run, liveness, refusal),
         fanIn, why,
       }]
       : [],
@@ -228,7 +229,7 @@ function ExplorerBody({
           )}
           {run.status === "running" && (
             <span className="flex items-center gap-1 p-warning">
-              <span className="size-1.5 rounded-full bg-current animate-pulse" />still running
+              <span className="size-1.5 rounded-full bg-current p-dot-pulse" />still running
             </span>
           )}
         </div>

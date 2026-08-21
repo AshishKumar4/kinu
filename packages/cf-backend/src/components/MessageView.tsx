@@ -87,7 +87,7 @@ function MessageTimestamp({ createdAt }: { createdAt?: string | number | Date })
 function ThinkingRow() {
   return (
     <div className="flex items-center gap-2 animate-fade-in py-1.5" aria-live="polite">
-      <span className="size-1.5 rounded-full p-dot-accent animate-pulse" aria-hidden />
+      <span className="size-1.5 rounded-full p-dot-accent p-dot-pulse" aria-hidden />
       <span className="p-row-text p-shimmer font-medium">Thinking</span>
     </div>
   );
@@ -99,7 +99,7 @@ function ReasoningBlock({ text, live = false }: { text: string; live?: boolean }
     <div className="my-2">
       <button onClick={() => setExpanded(!expanded)} className="group/reason flex items-center gap-2.5 py-0.5 p-row-text p-text-3 hover:p-text-2 w-full text-left transition-colors cursor-pointer">
         {live
-          ? <span className="size-1.5 mx-[6px] shrink-0 rounded-full p-dot-accent animate-pulse" aria-hidden />
+          ? <span className="size-1.5 mx-[6px] shrink-0 rounded-full p-dot-accent p-dot-pulse" aria-hidden />
           : <BrainIcon size={14} className="shrink-0" />}
         <span className={`font-medium ${live ? "p-shimmer" : ""}`}>{expanded ? "Thoughts" : "Thinking"}</span>
         {!expanded && <span className="min-w-0 truncate p-meta p-text-3 opacity-70">{text.slice(0, 90)}</span>}
@@ -186,7 +186,7 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText 
     <div className="my-0.5">
       <button onClick={() => setExpanded(!expanded)} aria-expanded={expanded} className="group/tool flex w-full min-h-7 items-center gap-2 rounded-md px-1 text-left p-row-text p-text-2 hover:p-text transition-colors cursor-pointer">
         <span className="shrink-0 flex w-4 items-center justify-center" aria-hidden>
-          {isRunning ? <span className="size-1.5 rounded-full p-dot-accent animate-pulse" />
+          {isRunning ? <span className="size-1.5 rounded-full p-dot-accent p-dot-pulse" />
             : failed ? <span className="size-1.5 rounded-full p-dot-danger" />
             : <WrenchIcon size={13} className="p-text-3 opacity-60" />}
         </span>

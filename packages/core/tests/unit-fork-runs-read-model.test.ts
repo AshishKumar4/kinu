@@ -78,18 +78,20 @@ function seedSearchRun(
   db: Database,
   run: {
     rootId: string; task: string; at: number; branches: number;
+    /** What the engine wrote as the ROOT's own label — the run's name. */
+    name?: string;
     winner?: number; ledger?: 'running' | 'converged' | 'failed';
   },
 ): void {
   const node = db.prepare(
     `INSERT INTO search_nodes (id, parent_id, root_id, task, action, observation, visits, value, depth, status, created_at)
-     VALUES (?, ?, ?, ?, '', '', 1, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, '', 1, ?, ?, ?, ?)`,
   );
-  node.run(run.rootId, null, run.rootId, run.task, 0, 0, 'open', run.at);
+  node.run(run.rootId, null, run.rootId, run.task, run.name ?? '', 0, 0, 'open', run.at);
   for (let i = 0; i < run.branches; i++) {
     const isWinner = run.winner !== undefined && i === 0;
     node.run(
-      `${run.rootId}-n${i}`, run.rootId, run.rootId, run.task,
+      `${run.rootId}-n${i}`, run.rootId, run.rootId, run.task, '',
       isWinner ? run.winner! : 0.2, 1, isWinner ? 'terminal' : 'pruned', run.at + i + 1,
     );
   }
@@ -100,6 +102,58 @@ function seedSearchRun(
     ).run(run.rootId, run.task, run.ledger, run.at, run.at);
   }
 }
+
+/**
+ * A run's NAME — the short handle every exploration surface leads with.
+ *
+ * The owner's report: the tree drew `(root)` and the index rows drew truncated
+ * task text, so two searches of one repository were told apart by reading two
+ * paragraphs. A run now carries a name: what the caller gave the `agents` tool,
+ * which the engine writes as the root node's own label, and a derivation from
+ * the task where nothing was given.
+ */
+describe('a run carries a name', () => {
+  test('the name the caller gave is what the run is called', () => {
+    const { db, sql } = freshDb();
+    seedSearchRun(db, {
+      rootId: 'r-named', task: 'Security and code audit of the repo at /home/user/kinu — a self-evolving agent runtime',
+      at: 1000, branches: 3, name: 'repo audit', ledger: 'converged',
+    });
+    expect(readForkRun(sql, 'r-named')?.name).toBe('repo audit');
+  });
+
+  test('a run that named nothing is called by its task\'s first clause', () => {
+    const { db, sql } = freshDb();
+    seedSearchRun(db, {
+      rootId: 'r-derived', task: 'Security and code audit of the repo — a self-evolving agent runtime with a Cloudflare backend',
+      at: 1000, branches: 2, ledger: 'converged',
+    });
+    // Cut where the task itself offers a cut, and never the whole paragraph.
+    expect(readForkRun(sql, 'r-derived')?.name).toBe('Security and code audit of the repo');
+  });
+
+  test('a task with no clause break is cut at a word, not mid-word', () => {
+    const { db, sql } = freshDb();
+    seedSearchRun(db, {
+      rootId: 'r-long',
+      task: 'Reproduce the checkout regression against the staging snapshot and report what the guard actually does',
+      at: 1000, branches: 1, ledger: 'converged',
+    });
+    const name = readForkRun(sql, 'r-long')?.name ?? '';
+    expect(name.length).toBeLessThanOrEqual(48);
+    expect(name.endsWith(' ')).toBe(false);
+    expect('Reproduce the checkout regression against the staging snapshot'.startsWith(name)).toBe(true);
+  });
+
+  test('a journal-only run is named too', () => {
+    const { db, sql } = freshDb();
+    seedJournalledRun(db, {
+      rootId: 'r-journal', task: 'Audit the CLI surface, then the daemon', at: 1000,
+      heads: [{ status: 'completed' }], merged: true,
+    });
+    expect(readForkRun(sql, 'r-journal')?.name).toBe('Audit the CLI surface');
+  });
+});
 
 describe('listForkRuns', () => {
   test('lists runs from both stores in one chronological order', () => {

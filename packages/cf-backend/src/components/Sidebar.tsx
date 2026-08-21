@@ -285,7 +285,7 @@ export default function Sidebar() {
                     </NavLink>
                     {live && (live.running || live.unseenChangelog > 0) && (
                       <span className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1 transition-opacity group-hover:opacity-0">
-                        {live.running && <span className="size-1.5 rounded-full p-dot-success animate-pulse" title="Working now" />}
+                        {live.running && <span className="size-1.5 rounded-full p-dot-success p-dot-pulse" title="Working now" />}
                         {live.unseenChangelog > 0 && <span className="size-1.5 rounded-full p-dot-accent" title={`${live.unseenChangelog} new self-change${live.unseenChangelog === 1 ? "" : "s"}`} />}
                       </span>
                     )}

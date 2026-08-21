@@ -876,7 +876,8 @@ const FORK_RUNS: ForkRunSummary[] = [
     // newest on arrival. `branches` counts the SETTLED rows, so it is 2 while nine
     // nodes exist — which is exactly the discrepancy a reader needs the journal to
     // explain, and exactly what made a running swarm look like a one-node tree.
-    id: "lv000", task: "Audit every reader of coupon.kind across the checkout package",
+    id: "lv000", name: "coupon.kind readers",
+    task: "Audit every reader of coupon.kind across the checkout package",
     startedAt: NOW - 42e4, status: "running",
     hasSearchTree: true, hasNodeTranscripts: true,
     branches: RUNNING_ROWS.length - 1, winnerScore: null,
@@ -884,7 +885,8 @@ const FORK_RUNS: ForkRunSummary[] = [
   {
     // Derived, because `forkbig` generates 520 rows for this same run and a hardcoded
     // 105 made the scale frame photograph `105 branches` beside `Branches: 519`.
-    id: "n000", task: "Find why the SAVE20 coupon 500s", startedAt: NOW - 36e5,
+    id: "n000", name: "SAVE20 500s",
+    task: "Find why the SAVE20 coupon 500s", startedAt: NOW - 36e5,
     // Both facts, and they come from the same fixture stores that give each row its
     // halves below (SEARCH_ROWS_BY_ROOT / JOURNAL_BY_ROOT): a judged MCTS search has
     // the tree and no journal, and a swarm has both — which is the row no frame could
@@ -893,13 +895,15 @@ const FORK_RUNS: ForkRunSummary[] = [
     branches: MCTS_ROWS.length - 1, winnerScore: 0.91,
   },
   {
-    id: "sw000", task: "Reduce checkout p95 without regressing the coupon guard",
+    id: "sw000", name: "checkout p95",
+    task: "Reduce checkout p95 without regressing the coupon guard",
     startedAt: NOW - 22e5, status: "completed",
     hasSearchTree: true, hasNodeTranscripts: true,
     branches: SWARM_ROWS.length - 1, winnerScore: 0.93,
   },
   {
-    id: "pv000", task: "Prove that applyCoupon terminates for every coupon row",
+    id: "pv000", name: "applyCoupon terminates",
+    task: "Prove that applyCoupon terminates for every coupon row",
     startedAt: NOW - 78e5, status: "completed",
     hasSearchTree: true, hasNodeTranscripts: true,
     branches: PROVE_ROWS.length - 1, winnerScore: 0.94,
@@ -907,18 +911,21 @@ const FORK_RUNS: ForkRunSummary[] = [
   {
     // Branchless BY CONSTRUCTION: the root is the only row, so `branches` is 0 and
     // the surface owes the reader a cause rather than an empty canvas.
-    id: "rf000", task: "Find a coupon row that makes applyCoupon throw",
+    id: "rf000", name: "throwing coupon row",
+    task: "Find a coupon row that makes applyCoupon throw",
     startedAt: NOW - 4e5, status: "failed",
     hasSearchTree: true, hasNodeTranscripts: true,
     branches: 0, winnerScore: null,
   },
   {
-    id: "root-merge-1", task: "Check every other call site that indexes rules by kind",
+    id: "root-merge-1", name: "rules-by-kind call sites",
+    task: "Check every other call site that indexes rules by kind",
     startedAt: NOW - 52e5, status: "completed", hasSearchTree: false,
     hasNodeTranscripts: true, branches: 5, winnerScore: null,
   },
   {
-    id: "root-merge-0", task: "Audit the CLI surface", startedAt: NOW - 9 * 36e5,
+    id: "root-merge-0", name: "CLI surface audit",
+    task: "Audit the CLI surface", startedAt: NOW - 9 * 36e5,
     status: "partial", hasSearchTree: false, hasNodeTranscripts: true,
     branches: 2, winnerScore: null,
   },
@@ -944,6 +951,8 @@ function olderForks(): ForkRunSummary[] {
     const searched = i % 3 === 0;
     return {
       id: searched ? `n${String(100 + i).padStart(3, "0")}` : `root-merge-${100 + i}`,
+      // The derived name, as the read model derives it: the task's first clause.
+      name: (tasks[i % tasks.length] ?? "").split(" ").slice(0, 4).join(" "),
       task: `${tasks[i % tasks.length]!}${i >= tasks.length ? ` (attempt ${Math.floor(i / tasks.length) + 1})` : ""}`,
       startedAt: NOW - (10 + i) * 36e5,
       status: i % 7 === 5 ? "partial" as const : "completed" as const,
@@ -1558,6 +1567,7 @@ function liveRun(stage: number): ForkRunSummary {
   const settled = stage >= LIVE_STAGES - 1;
   return {
     id: "live000",
+    name: "SAVE20 500s",
     task: "Find why the SAVE20 coupon 500s",
     startedAt: NOW - 3e4,
     status: settled ? "completed" : "running",

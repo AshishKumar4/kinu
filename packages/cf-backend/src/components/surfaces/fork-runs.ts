@@ -371,7 +371,12 @@ export function forkParamRows(params: ForkRunParams | undefined): ForkParamRow[]
   if (search !== null) {
     rows.push({ label: "budget", value: `${search.budget} expansions` });
     rows.push({ label: "branches", value: String(search.branches) });
-    if (search.maxDepth !== null) rows.push({ label: "max depth", value: String(search.maxDepth) });
+    // A depth cap of one is not a knob beside budget — it is what "flat" means,
+    // and the resolution panel says that as a shape. Rendering `max depth 1`
+    // here read as a second throttle on a search that has none.
+    if (search.maxDepth !== null && search.maxDepth > 1) {
+      rows.push({ label: "max depth", value: String(search.maxDepth) });
+    }
     if (search.explorationWeight !== null) {
       rows.push({ label: "exploration c", value: search.explorationWeight.toFixed(2) });
     }
