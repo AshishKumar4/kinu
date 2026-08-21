@@ -7,10 +7,11 @@
 // `workspace.exec`, an executor's `exec`), not just the renderer.
 import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
-import { formatExecResult } from '../src/execution/exec-result';
+import { formatExecResult, parseRefusal, refusalText } from '../src/execution/exec-result';
 import { createInlineExecutor } from '../src/execution/inline';
 import { createNimbusExecutor } from '../src/execution/nimbus';
 import { createDeviceTunnelExecutor } from '../src/execution/device-tunnel-executor';
+import { KinuError } from '../src/obs/index';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { createTestRuntime } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
@@ -71,6 +72,25 @@ describe('formatExecResult', () => {
 
   test('a missing exit code is a success — transports that omit it never read as failures', () => {
     expect(formatExecResult({ stdout: 'ok' })).toBe('ok');
+  });
+});
+
+describe('parseRefusal', () => {
+  test('a refusal payload reads back as reason and error', () => {
+    expect(parseRefusal(refusalText(new KinuError('unavailable', 'No device connected.')))).toEqual({
+      reason: 'unavailable',
+      error: 'No device connected.',
+    });
+  });
+
+  test('a result that is not JSON is not a refusal', () => {
+    expect(parseRefusal('Error (exit 1)\n--- stdout ---\nfailed')).toBeNull();
+    expect(parseRefusal('plain command output')).toBeNull();
+  });
+
+  test('JSON that is not a refusal shape is not a refusal', () => {
+    expect(parseRefusal('{"ok":true,"result":42}')).toBeNull();
+    expect(parseRefusal('{"error":"no reason field"}')).toBeNull();
   });
 });
 

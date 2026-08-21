@@ -32,6 +32,7 @@ import {
   searchLocalMemory,
 } from '../local-inspection';
 import { renderThrownChain } from '@kinu.run/core/obs';
+import { installTurnDiagnostics } from '../turn-log';
 
 /** Session flags as Commander actually delivers them: `--no-session` arrives
  *  as `session: false` on the shared option key, not as `noSession: true`. */
@@ -162,6 +163,10 @@ async function runOneShot(
   // starts the cadence-heavy evolution pass it cannot finish, so the daemon is
   // what eventually runs it (see AgentOrchestrator's exit contract).
   if (target.mode === 'local') ensureLocalDaemonRunning();
+  // Text mode streams a transcript a person reads; its diagnostics belong in
+  // the turn log, not between the reader and the run. --json keeps stderr as
+  // the log stream CI already collects.
+  if (!surface.json) installTurnDiagnostics();
   const client = await createAgentClient(
     target,
     { model: opts.model, baseUrl: opts.baseUrl, auth: opts.auth, noAutoEvolve: opts.noAutoEvolve, ...sessionOptions(opts) },

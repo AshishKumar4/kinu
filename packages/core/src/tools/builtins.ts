@@ -91,9 +91,13 @@ import { createTasksDispatcher, type TasksToolInput } from './tasks-tool';
 import { WebFetchError, type WebSearchProvider, type WebSearchResponse } from '../web/index';
 import type { PlanEdit, SubmitPlanToolDeps } from '../plans/review';
 import type { JsonValue } from '../utils/json';
+<<<<<<< HEAD
 import {
   createConsoleLogger, diagnostics, KinuError, renderThrownChain, toKinuError, type Logger,
 } from '../obs/index';
+=======
+import { diagnostics, KinuError, toKinuError, type Logger } from '../obs/index';
+>>>>>>> 03e1bfd5 (feat(cli): the terminal speaks silk, and a refusal reads as prose)
 
 type ToolExecutionOptions = Parameters<NonNullable<ToolSet[string]['execute']>>[1];
 type ExecutableToolEntry = NonNullable<ToolSet[string]>;
@@ -372,8 +376,11 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   const fileToolSteer = createFileToolSteer();
   // The observability seam. A toolset built without one still logs: the console
   // logger writes one JSON line per event to the sink both backends already
-  // collect. Never absent, so a refusal is never silent.
-  const logger = deps.logger ?? createConsoleLogger();
+  // collect. Never absent, so a refusal is never silent. `diagnostics`, not a
+  // private console logger: the destination is the host's decision (obs/log.ts),
+  // and a foreground CLI turn installs a file sink so this never lands between
+  // the reader and their agent.
+  const logger = deps.logger ?? diagnostics;
 
   const tools: ToolSet = {};
 

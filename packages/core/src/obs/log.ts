@@ -198,6 +198,29 @@ interface LogLine {
 }
 
 /**
+ * A logger over any line sink: the JSON envelope is this file's, the
+ * destination is the caller's. `createConsoleLogger` is the platform case;
+ * a host whose stderr is NOT a log collection point — the CLI's interactive
+ * surfaces, where stderr is the person's own screen — installs a file sink
+ * through `setDiagnosticsSink` built on this.
+ */
+export function createLineLogger(write: (line: string) => void): Logger {
+  return {
+    event(name: LogEventName, fields?: LogFields): void {
+      write(JSON.stringify({ event: name, fields: fields ?? {} } satisfies LogLine));
+    },
+    failure(name: LogEventName, error: KinuError, fields?: LogFields): void {
+      write(JSON.stringify({
+        event: name,
+        code: error.code,
+        cause: renderCauseChain(error),
+        fields: fields ?? {},
+      } satisfies LogLine));
+    },
+  };
+}
+
+/**
  * The logger the backends use. One JSON line per event on the platform's own
  * sink, which is what both readers already collect: `console` on workerd reaches
  * Workers Logs, and on the CLI it reaches the daemon journal, which captures both
@@ -222,21 +245,7 @@ interface LogLine {
  * first. On workerd both streams reach Workers Logs identically.
  */
 export function createConsoleLogger(): Logger {
-  return {
-    event(name: LogEventName, fields?: LogFields): void {
-      const line: LogLine = { event: name, fields: fields ?? {} };
-      console.error(JSON.stringify(line));
-    },
-    failure(name: LogEventName, error: KinuError, fields?: LogFields): void {
-      const line: LogLine = {
-        event: name,
-        code: error.code,
-        cause: renderCauseChain(error),
-        fields: fields ?? {},
-      };
-      console.error(JSON.stringify(line));
-    },
-  };
+  return createLineLogger((line) => console.error(line));
 }
 /**
  * The diagnostic sink for the call sites that have no dependency seam to inject
@@ -271,7 +280,38 @@ export function createConsoleLogger(): Logger {
  * there. It means `event` is safe from any package, so no call site has to know
  * which host it will run on.
  */
-export const diagnostics: Logger = createConsoleLogger();
+let diagnosticsSink: Logger = createConsoleLogger();
+
+/**
+ * The host's override for `diagnostics`. The destination stays a property of
+ * the HOST — workerd keeps `console` (Workers Logs); a CLI process whose
+ * stderr is the product's own screen (the interactive chat and run surfaces)
+ * installs a file sink instead, so a diagnostic reaches whoever reads logs
+ * later without landing between a person and their agent. Returns the restore
+ * function; tests use it to undo an install.
+ */
+export function setDiagnosticsSink(logger: Logger): () => void {
+  const previous = diagnosticsSink;
+  diagnosticsSink = logger;
+  return () => {
+    diagnosticsSink = previous;
+  };
+}
+
+/** One shared instance rather than a `createConsoleLogger()` per module: the
+ *  object is stateless and its destination is a property of the HOST, never of
+ *  the call site, so sixty private copies would be sixty allocations of one
+ *  identity. `createConsoleLogger` stays exported for the seams that DO inject,
+ *  where a test substitutes `createRecordingLogger()` and asserts the event
+ *  name. */
+export const diagnostics: Logger = {
+  event(name, fields) {
+    diagnosticsSink.event(name, fields);
+  },
+  failure(name, error, fields) {
+    diagnosticsSink.failure(name, error, fields);
+  },
+};
 
 /** What the recording logger captured for one call. */
 export interface RecordedLog {

@@ -29,10 +29,11 @@ import {
 import { requireAuthConfig } from './config';
 import { renderSessionBrowser, selectSession } from './tui/session-browser';
 import {
-  printToolCall, printToolResult, printEvolutionEvent, createTypingIndicator, formatFailure,
-  ACCENT, DIM, MUTED, ERR, OK, WARN,
+  printToolCall, printToolResult, printEvolutionEvent, createTurnStatus, formatFailure,
+  ACCENT, DIM, MUTED, ERR, OK, WARN, type TurnStatus,
 } from './display';
 import { renderThrownChain } from '@kinu.run/core/obs';
+import { clipText } from './tui/format';
 
 export interface ChatLoopOpts {
   client: AgentClient;
@@ -45,8 +46,8 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
   // Per-turn render state — reset on every user turn so the agent-name header
-  // prints once per turn and the typing indicator stops on first output.
-  let typing = createTypingIndicator(client.agentName);
+  // prints once per turn and the status line stops on first output.
+  let turnStatus = createTurnStatus({ hold: () => consentAskPending || rl.line.length > 0 });
   let headerPrinted = false;
   let turnInFlight = false;
   let interruptRequested = false;
@@ -66,7 +67,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   const onClientEvent = (event: AgentClientEvent) => {
     if (event.type === 'turn-start') activeTurns += 1;
     else if (event.type === 'turn-end') activeTurns = Math.max(0, activeTurns - 1);
-    renderClientEvent(event, client.agentName, typing, () => headerPrinted, (v) => { headerPrinted = v; });
+    renderClientEvent(event, client.agentName, turnStatus, () => headerPrinted, (v) => { headerPrinted = v; });
   };
   let unsubscribe = client.subscribe(onClientEvent);
 
@@ -177,10 +178,12 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
 
   const consentAsk = async (question: string, signal: AbortSignal) => {
     consentAskPending = true;
+    turnStatus.clear();
     try {
       return await ask(rl, question, signal);
     } finally {
       consentAskPending = false;
+      if (turnInFlight) turnStatus.resume();
     }
   };
 
@@ -195,7 +198,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     headerPrinted = false;
     turnInFlight = true;
     interruptRequested = false;
-    typing.start();
+    turnStatus.show('thinking');
     const consentWatch = client.consents
       ? watchTerminalConsents(client.consents, client.agentName, consentAsk)
       : null;
@@ -206,12 +209,12 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
       );
       await waitForTurnsToSettle();
     } catch (err) {
-      typing.stop();
+      turnStatus.clear();
       console.log(`\n${formatFailure(err)}\n`);
     } finally {
       consentWatch?.stop();
       turnInFlight = false;
-      typing.stop();
+      turnStatus.clear();
     }
     console.log('\n');
   };
@@ -226,7 +229,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     if (!ref) {
       console.log(`\n${DIM('Walk back to (1 = most recent):')}`);
       candidates.forEach((candidate, i) => {
-        console.log(`  ${ACCENT(String(i + 1))} ${candidate.text.replace(/\s+/g, ' ').slice(0, 100)}`);
+        console.log(`  ${ACCENT(String(i + 1))} ${clipText(candidate.text.replace(/\s+/g, ' '), 100)}`);
       });
       console.log(DIM('Fork with /fork <number> — the conversation restarts just before that message.\n'));
       return;
@@ -243,7 +246,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
       const previous = client;
       client = result.client;
       unsubscribe = client.subscribe(onClientEvent);
-      typing = createTypingIndicator(client.agentName);
+      turnStatus = createTurnStatus({ hold: () => consentAskPending || rl.line.length > 0 });
       // Bring the replacement up first: a failure closing the old session must not leave the loop
       // holding a client that was never connected.
       await client.connect();
@@ -484,27 +487,35 @@ async function applySlashOutcome(client: AgentClient, rl: readline.Interface, ou
   }
 }
 
-/** Render one AgentClientEvent to the terminal. */
+/**
+ * Render one AgentClientEvent to the terminal. The status line is part of the
+ * same event flow: every label it shows is a state the turn actually entered —
+ * `thinking` until output starts, the tool's name while its call runs — so the
+ * line never spins a claim the client did not make. The vocabulary matches the
+ * TUI's phase line word for word.
+ */
 function renderClientEvent(
-  event: AgentClientEvent, agentName: string, typing: { stop: () => void },
+  event: AgentClientEvent, agentName: string, status: TurnStatus,
   getHeader: () => boolean, setHeader: (v: boolean) => void,
 ): void {
   const header = () => {
     if (getHeader()) return;
-    typing.stop();
+    status.clear();
     process.stdout.write(`\n${ACCENT(agentName)} ${DIM('›')} `);
     setHeader(true);
   };
   switch (event.type) {
     case 'turn-start':
       if (event.kind === 'programmatic') {
-        typing.stop();
+        status.clear();
         setHeader(false);
-        console.log(`\n${DIM(`⚡ ${event.event ?? 'event'}`)} ${MUTED(event.text.slice(0, 80))}`);
+        console.log(`\n${DIM(`⚡ ${event.event ?? 'event'}`)} ${MUTED(clipText(event.text, 80))}`);
+        status.show('running background work');
       } else {
         // A cascaded user turn (steer follow-up / queued leftover) gets its
         // own agent-name header when its response starts.
         setHeader(false);
+        status.show('thinking');
       }
       break;
     case 'text-delta':
@@ -512,27 +523,32 @@ function renderClientEvent(
       process.stdout.write(event.delta);
       break;
     case 'tool-call':
-      typing.stop();
+      status.clear();
       printToolCall(event.toolName, event.args);
+      status.show(`calling ${event.toolName}`);
       break;
     case 'tool-result':
+      status.clear();
       printToolResult(event.result);
+      status.show(`finished ${event.toolName}`);
+      break;
+    case 'step-finish':
+      status.show(`step ${event.stepIndex}`);
       break;
     case 'evolution':
       printEvolutionEvent(event.event, event.message);
       break;
     case 'error':
-      typing.stop();
+      status.clear();
       console.log(`\n${formatFailure(event.message)}\n`);
       break;
     case 'broadcast':
       if (isBranchStatusEvent(event.event)) {
-        typing.stop();
+        status.clear();
         console.log(`\n${DIM(describeBranchStatus(event.event))}`);
       }
       break;
     case 'turn-end':
-    case 'step-finish':
     case 'run-event':
       break;
   }

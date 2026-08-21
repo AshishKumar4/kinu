@@ -55,8 +55,10 @@ export {
 } from './error';
 export {
   createConsoleLogger,
+  createLineLogger,
   createRecordingLogger,
   diagnostics,
+  setDiagnosticsSink,
   RESERVED_LOG_FIELDS,
   type LogEventName,
   type LogFields,
