@@ -59,8 +59,8 @@ const CAPABILITIES: ReadonlyArray<readonly [title: string, body: string]> = [
  *  deployment shows its own. */
 export function landingDocument(install: string): string {
   return publicPage({
-    title: 'Kinu.run — a tree of agents, measured',
-    description: 'Kinu answers a task by searching a tree of agents. You declare how an answer is measured, and the search keeps the branch that measured best.',
+    title: 'Kinu.run — the self-evolving agent platform',
+    description: 'An agent of your own that gets better every time it works. When a task is hard it searches a tree of agents, measures every candidate the way you said, and keeps every skill it earns.',
     styles: LANDING_CSS,
     nav: [
       `<a class="icon" href="${REPO_URL}" target="_blank" rel="noopener noreferrer" aria-label="Kinu on GitHub">${GITHUB_ICON}</a>`,
@@ -70,9 +70,9 @@ export function landingDocument(install: string): string {
     body: `<main>
   <section class="hero">
     <div class="say">
-      <p class="eyebrow">Tree search for agents</p>
-      <h1>Kinu answers a task by <em>searching a tree of agents</em>.</h1>
-      <p class="lede">You give it the task and a way to measure an answer. It runs the tree, measures every candidate the way you said, and keeps the branch that measured best.</p>
+      <p class="eyebrow">The self-evolving agent platform</p>
+      <h1>An agent of your own that <em>gets better every time it works</em>.</h1>
+      <p class="lede">Give it a task and a way to measure the answer. When the task is hard it runs a tree of agents, measures every candidate the way you said, and keeps the branch that measured best.</p>
       <p class="lede">Agents live in durable workspaces. Run them in the cloud, or entirely on your own machine.</p>
       <div class="actions">
         <a class="btn solid" href="/login">Sign in</a>

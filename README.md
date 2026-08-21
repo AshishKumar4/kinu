@@ -6,8 +6,8 @@
 </p>
 
 <p align="center">
-  <strong>Agent workspaces that answer a hard task by searching a tree of agents,<br>
-  and keep what worked for the next task.</strong>
+  <strong>An agent of your own that gets better every time it works.<br>
+  When a task is hard it searches a tree of agents, and it keeps every skill it earns.</strong>
   <strong><a href="https://kinu.run">kinu.run</a></strong>
 </p>
 
