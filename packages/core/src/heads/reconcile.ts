@@ -26,7 +26,8 @@ import type { RunEventInput } from '../events/types';
 import type { SignalDeliverer } from '../types/signals';
 import type { AbandonedHeadRun, HeadJournal } from './journal';
 import * as v from 'valibot';
-import { diagnostics, toKinuError } from '../obs/index';
+import { diagnostics, toKinuError, tolerate } from '../obs/index';
+import { parseJsonValue } from '../utils/json';
 
 /** What this reconciliation needs of the run-event recorder: find the run a
  *  fork was dispatched from, find the runs a dead activation left open, and
@@ -110,20 +111,25 @@ export function jobRedriveResumeGate(deps: {
  */
 const ResumableJobInputSchema = v.looseObject({ task: v.optional(v.string()) });
 
-/** The task a stored tool input names, or the empty string. */
+/** The task a stored tool input names, or the empty string.
+ *
+ *  A stored input is data, so malformed JSON is a value this walk reads past.
+ *  Nothing else is: any other failure rethrows rather than reading as "this job
+ *  named no task", which would quietly take the job out of the resume gate's
+ *  reach. */
 function taskOf(input: string | null): string {
   if (input === null) return '';
-  try {
-    const parsed = v.safeParse(ResumableJobInputSchema, JSON.parse(input));
-    return parsed.success ? parsed.output.task ?? '' : '';
-  } catch (err) {
+  const raw = tolerate(() => parseJsonValue(input), 'malformed-input');
+  if (raw === undefined) {
     diagnostics.failure('head.resume_gate_input_unreadable', toKinuError({
       doing: 'reading the task out of a stored background-job input',
-      cause: err,
-      otherwise: 'io',
+      cause: new Error('the stored input is not JSON'),
+      otherwise: 'bad_input',
     }));
     return '';
   }
+  const parsed = v.safeParse(ResumableJobInputSchema, raw);
+  return parsed.success ? parsed.output.task ?? '' : '';
 }
 
 /**
@@ -342,12 +348,17 @@ async function claimedRoots(
   try {
     return await resume(roots);
   } catch (err) {
+    // A gate that THREW has not refused, and the two must not read alike here:
+    // `claimed` becomes `exceptRoots`, so an empty answer retires every run this
+    // sweep found. Retiring on an unknown destroys work no later activation can
+    // recover, while leaving the rows interrupted costs one more sweep. So every
+    // root is protected until a gate actually answers.
     diagnostics.failure('head.resume_gate_failed', toKinuError({
       doing: 'offering interrupted fork runs to the resume gate',
       cause: err,
       otherwise: 'io',
-    }), { runs: roots.length });
-    return [];
+    }), { runs: roots.length, protected: roots.length });
+    return roots;
   }
 }
 
