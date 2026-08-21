@@ -833,7 +833,7 @@ const INHERITED_CREDENTIALS = [
   'KINU_TOKEN',
 ];
 
-const HOME_SCREEN_PRELUDE = `
+const homeScreenPrelude = (width = 100, height = 40) => `
   import { mock } from 'bun:test';
   import * as core from '@opentui/core';
   import { createTestRenderer } from '@opentui/core/testing.js';
@@ -845,8 +845,8 @@ const HOME_SCREEN_PRELUDE = `
     headers: { 'content-type': 'application/json' },
   });
   const { renderer, mockInput, renderOnce, captureCharFrame } = await createTestRenderer({
-    width: 100,
-    height: 40,
+    width: ${width},
+    height: ${height},
     useThread: false,
     maxFps: Number.POSITIVE_INFINITY,
     // Ctrl+Enter creates the workspace, and only the kitty protocol carries a
@@ -887,12 +887,52 @@ const HOME_SCREEN_PRELUDE = `
   await waitFor('the home screen to start accepting keys', () => renderer.keyInput.listenerCount('keypress') > 1);
 `;
 
+  // Full-height home shows readiness on the mode segments themselves; the
+  // dots row is the compact fallback for the heights where those segments
+  // don't render. The mission brief reads in one line — the second example
+  // only ever wrapped into an orphan.
+  test('the home screen carries readiness once and reads its brief in one line', () => {
+    const full = runHomeScreen({
+      driver: `
+        await waitFor('the mode segments to render', () => frame().includes('Cloud'));
+        const rows = frame().split('\\n');
+        console.log(JSON.stringify({
+          readinessRow: rows.some((row) => row.includes('Cloud account')),
+          briefOnOneLine: (rows.find((row) => row.includes('A standing brief')) ?? '').includes('checkout service'),
+        }));
+      `,
+    });
+    try {
+      const observed = v.parse(v.object({
+        readinessRow: v.boolean(),
+        briefOnOneLine: v.boolean(),
+      }), JSON.parse(full.stdout));
+      expect(observed.readinessRow).toBe(false);
+      expect(observed.briefOnOneLine).toBe(true);
+    } finally {
+      rmSync(full.home, { recursive: true, force: true });
+    }
+
+    const compact = runHomeScreen({
+      height: 30,
+      driver: `
+        await waitFor('the readiness row to render', () => frame().includes('Cloud account'));
+        console.log(JSON.stringify({ readinessRow: true }));
+      `,
+    });
+    try {
+      expect(JSON.parse(compact.stdout)).toEqual({ readinessRow: true });
+    } finally {
+      rmSync(compact.home, { recursive: true, force: true });
+    }
+  });
+
 /** Drives the home screen the CLI actually runs, in a subprocess so that one
  *  KINU_HOME and one renderer swap belong to one test. `driver` runs with
  *  `frame`, `rowWith`, `waitFor`, `settle`, `mockInput`, `action` (whatever the
  *  screen has finished with, or null) and `opened` in scope, and prints the one
  *  JSON line the caller asserts on. The caller owns the returned home. */
-function runHomeScreen(options: { driver: string; workspaces?: readonly string[] }) {
+function runHomeScreen(options: { driver: string; workspaces?: readonly string[]; width?: number; height?: number }) {
   const home = mkdtempSync(resolve(tmpdir(), 'kinu-home-tui-'));
   writeFileSync(resolve(home, 'config.json'), JSON.stringify({
     model: 'openai/gpt-5.5',
@@ -906,7 +946,7 @@ function runHomeScreen(options: { driver: string; workspaces?: readonly string[]
   for (const name of INHERITED_CREDENTIALS) delete env[name];
 
   const proc = Bun.spawnSync({
-    cmd: [process.execPath, '-e', `${HOME_SCREEN_PRELUDE}${options.driver}`],
+    cmd: [process.execPath, '-e', `${homeScreenPrelude(options.width, options.height)}${options.driver}`],
     cwd: repoRoot,
     env,
     stdout: 'pipe',
