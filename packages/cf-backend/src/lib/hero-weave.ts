@@ -69,7 +69,7 @@ const SHEEN_ALPHA = 0.1;
 /** How wide the bright chord is, as a fraction of the field's height. */
 const SHEEN_WIDTH = 0.16;
 
-export function weaveField(seed = 0x514B): WeaveField {
+function weaveField(seed = 0x514B): WeaveField {
   const random = rng(seed);
   const threads: WeaveThread[] = [];
   for (let i = 0; i < THREADS; i++) {
@@ -118,7 +118,7 @@ const STILL_STEPS = 36;
  * The field at t=0, as SVG. `preserveAspectRatio="none"` on purpose: warp
  * threads stretch with their loom, and a sine stays a sine under it.
  */
-export function weaveStill(field: WeaveField = FIELD): string {
+function weaveStill(field: WeaveField = FIELD): string {
   const paths = field.threads.map((thread) => {
     const points: string[] = [];
     for (let s = 0; s <= STILL_STEPS; s++) {

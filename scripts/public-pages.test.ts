@@ -27,7 +27,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Browser, Page } from 'puppeteer';
 
-import { CLI_FILM, CLI_FILM_PROVENANCE, ELIDED } from '../packages/cf-backend/src/lib/cli-film';
+import { cliFilmFigure } from '../packages/cf-backend/src/lib/cli-film';
 import { landingDocument } from '../packages/cf-backend/src/lib/public-pages';
 import { withGallery } from './gallery-harness';
 import { THEMES, type Theme } from './computed-style';
@@ -537,13 +537,39 @@ describe('the silk behind the hero', () => {
 
 describe('the CLI film is the recording', () => {
   const RECORDING = readFileSync(join(import.meta.dir, 'fixtures', 'cli-film-run.jsonl'), 'utf8');
+  const FILM_SOURCE = readFileSync(
+    join(import.meta.dir, '..', 'packages', 'cf-backend', 'src', 'lib', 'cli-film.ts'), 'utf8');
+  const ELIDED = ' …';
+
+  const unescape = (html: string): string => html
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+
+  /** The film as it SHIPS: one entry per line the reader sees, with the prompt
+   *  or the label stripped, so what remains is the recorded text itself. Read
+   *  off the rendered figure rather than the projection behind it, so a frame
+   *  that never reaches the page cannot pass. */
+  const shippedLines = (): string[] => {
+    const pre = /<pre class="term" id="cli-film">(.*?)<\/pre>/s.exec(cliFilmFigure());
+    expect(pre, 'the film figure no longer renders a terminal').not.toBeNull();
+    return (pre?.[1] ?? '').split('<span class="line"').slice(1)
+      // The split leaves each opening tag's own remainder ahead of the text.
+      .map((chunk) => chunk.slice(chunk.indexOf('>') + 1))
+      .map((chunk) => unescape(chunk.replace(/<b>.*?<\/b>/gs, '').replace(/<[^>]+>/g, '')).trim());
+  };
+
+  /** Both annotation rails, as the reader reads them. */
+  const shippedRails = (): string =>
+    (cliFilmFigure().match(/<div class="anno ruled">.*?<\/div>/gs) ?? []).map(unescape).join(' ');
 
   test('every frame is a verbatim substring of the recorded session', () => {
-    for (const line of CLI_FILM) {
-      const text = line.text.endsWith(ELIDED) ? line.text.slice(0, -ELIDED.length) : line.text;
+    const lines = shippedLines();
+    expect(lines.length, 'the film renders no frames').toBeGreaterThan(0);
+    for (const line of lines) {
+      const text = line.endsWith(ELIDED) ? line.slice(0, -ELIDED.length) : line;
       // The prompt inside the command line is recorded on `turn_start`; the
       // rest of that line is the invocation itself, checked below.
-      const candidate = line.kind === 'cmd' ? text.replace(/^kinu run \S+ "(.*)"$/, '$1') : text;
+      const candidate = text.replace(/^kinu run \S+ "(.*)"$/, '$1');
       const escaped = JSON.stringify(candidate).slice(1, -1);
       expect(
         RECORDING.includes(candidate) || RECORDING.includes(escaped),
@@ -556,20 +582,25 @@ describe('the CLI film is the recording', () => {
     const rows = RECORDING.split('\n').filter((row) => row !== '').map((row) => JSON.parse(row));
     const session = rows.find((row) => row.type === 'session');
     const turnEnd = rows.find((row) => row.type === 'turn_end');
-    expect(session.workspace).toBe(CLI_FILM_PROVENANCE.workspace);
-    expect(session.backend).toBe(CLI_FILM_PROVENANCE.backend);
-    expect(session.id).toBe(CLI_FILM_PROVENANCE.session);
-    expect(turnEnd.steps).toBe(CLI_FILM_PROVENANCE.steps);
-    expect(Math.round(turnEnd.durationMs / 1000)).toBe(CLI_FILM_PROVENANCE.seconds);
+    const rails = shippedRails();
+    expect(rails).toContain(session.workspace);
+    expect(rails).toContain(session.backend);
+    expect(rails).toContain(`${String(turnEnd.steps)} steps`);
+    expect(rails).toContain(`${String(Math.round(turnEnd.durationMs / 1000))} s`);
+    // The rails carry no session id — a reader has no use for one — so the
+    // projection is held to the recording's identity here instead. If either
+    // side is replaced without the other, this fails.
+    expect(FILM_SOURCE).toContain(session.id);
   });
 
   test('it plays on approach and settles on the whole transcript', () => {
     const film = facts.cliFilm!;
+    const lines = shippedLines();
     expect(film.playing.shown, 'playback was never part way').toBeLessThan(film.playing.total);
     expect(film.settled.shown).toBe(film.settled.total);
-    expect(film.settled.total).toBe(CLI_FILM.length);
-    for (const line of CLI_FILM) {
-      expect(film.settled.text, 'a frame is missing from the settled player').toContain(line.text);
+    expect(film.settled.total).toBe(lines.length);
+    for (const line of lines) {
+      expect(film.settled.text, 'a frame is missing from the settled player').toContain(line);
     }
   });
 

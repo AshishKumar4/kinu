@@ -42,7 +42,7 @@ export type CliFilmLine =
 
 /** Mono-rail facts, read off the recording's own `session` and `turn_end`
  *  rows. Data, not prose. */
-export const CLI_FILM_PROVENANCE = {
+const CLI_FILM_PROVENANCE = {
   command: 'kinu run film "Find the slowest test in this repo and explain why it is slow."',
   recorded: '2026-08-21',
   session: '20260821035055-06e6d112',
@@ -56,9 +56,9 @@ export const CLI_FILM_PROVENANCE = {
 /** A call frame's command may stop early — a landing page is not a pager —
  *  but it must never be reworded: the gate strips this marker and asks the
  *  recording for the rest. */
-export const ELIDED = ' …';
+const ELIDED = ' …';
 
-export const CLI_FILM: readonly CliFilmLine[] = [
+const CLI_FILM: readonly CliFilmLine[] = [
   { kind: 'cmd', text: CLI_FILM_PROVENANCE.command },
   { kind: 'call', label: 'run · workspace', text: `cd /tmp/kinu-film-repo && ls -la${ELIDED}` },
   { kind: 'why', text: 'The working directory /tmp/kinu-film-repo lives on the local machine, not the workspace filesystem.' },
