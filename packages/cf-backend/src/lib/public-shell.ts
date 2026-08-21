@@ -413,10 +413,10 @@ font-weight:500;line-height:1.1;letter-spacing:-0.02em}
 .stat span{display:block;margin-top:5px;color:var(--c-text-3)}
 
 code{font-family:var(--font-mono);font-size:13px;color:var(--c-code)}
-.cmd{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;
+.cmd{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:start;
 padding:10px 11px;border:1px solid var(--c-input-border);border-radius:var(--r-row);
 background:var(--c-recessed)}
-.cmd::before{content:"$";color:var(--c-text-3);font-family:var(--font-mono);font-size:13px}
+.cmd::before{content:"$";color:var(--c-text-3);font-family:var(--font-mono);font-size:13px;line-height:1.7}
 .cmd code{display:block;overflow-x:auto;white-space:nowrap;line-height:1.7}
 .copy{min-height:30px;padding:0 11px;border:1px solid var(--c-input-border);
 border-radius:var(--r-control);background:transparent;color:var(--c-text-3);
