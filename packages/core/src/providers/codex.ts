@@ -14,12 +14,13 @@
 // Workers egress is CF data-center IPs — runtime probe needed.
 import { createOpenAI } from '@ai-sdk/openai';
 import type { LanguageModel } from 'ai';
-import type { ModelProvider, ModelInfo, ModelInputModality } from './types';
+import type { AuthResolution, ModelProvider, ModelInfo, ModelInputModality } from './types';
 import { MODEL_INPUT_MODALITIES } from './types';
 import { asFetchFunction } from './fetch-shim';
 import { withRateLimitRetry } from './rate-limit-retry';
 import { authCacheKey, cloneModelInfos, nonEmptyString, positiveInteger } from './util';
 import * as v from 'valibot';
+import { CodexOAuthTokenError } from './codex-oauth';
 import { JsonArraySchema, JsonObjectSchema, JsonValueSchema, type JsonValue } from '../utils/json';
 import { classify, diagnostics, KinuError, renderThrownChain } from '../obs/index';
 
@@ -28,6 +29,12 @@ export const CODEX_CRED_KEY = 'codex.oauth';
 export const CODEX_DEFAULT_MODEL = 'gpt-5.5';
 /** The small tier the evolution engine's mechanical calls run on. */
 export const CODEX_FAST_MODEL = 'gpt-5.4-mini';
+
+/** One sentence for a ChatGPT login the provider refused even after the
+ *  forced-refresh retry: what died, and the two doors to its re-auth — the
+ *  web settings page and the CLI's device-code flow. */
+export const CODEX_DEAD_LOGIN =
+  'Your ChatGPT login is no longer valid. Reconnect ChatGPT in User settings, or run `kinu setup` on this machine.';
 
 const FALLBACK_MODELS: ModelInfo[] = [
   { id: CODEX_DEFAULT_MODEL, label: 'GPT-5.5 (Codex)',    capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 272_000 },
@@ -88,7 +95,34 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
     createModel(modelId, deps): LanguageModel {
       const baseFetch = withRateLimitRetry(deps.fetch ?? fetch);
       const customFetch = asFetchFunction(async (input, init) => {
-        const auth = await deps.getAuth(CODEX_CRED_KEY);
+        // A dead login presents two ways: the resolver refuses up front (its
+        // own proactive refresh hit invalid_grant — the local store's shape),
+        // or the call goes out and comes back 401 even after one forced
+        // refresh (UserDO serves a credential until it is proven dead).
+        // Both get the same answer: the remedy sentence, on the 401 the AI
+        // SDK already knows how to carry to the chat's failed-turn card.
+        const resolveAuth = async (opts?: { forceRefresh?: boolean }): Promise<AuthResolution | 'revoked' | null> => {
+          try {
+            return await deps.getAuth(CODEX_CRED_KEY, opts);
+          } catch (cause) {
+            if (cause instanceof CodexOAuthTokenError && cause.oauthError === 'invalid_grant') return 'revoked';
+            throw cause;
+          }
+        };
+        const refusedLoginResponse = (): Response => {
+          diagnostics.failure(
+            'provider.codex_dead_login',
+            new KinuError('denied', 'the stored ChatGPT login was refused by chatgpt.com'),
+            { model: modelId },
+          );
+          return new Response(
+            JSON.stringify({ error: { message: CODEX_DEAD_LOGIN } }),
+            { status: 401, headers: { 'Content-Type': 'application/json' } },
+          );
+        };
+
+        const auth = await resolveAuth();
+        if (auth === 'revoked') return refusedLoginResponse();
         if (!auth) {
           diagnostics.failure(
             'credential.codex_absent',
@@ -96,7 +130,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
             { model: modelId },
           );
           return new Response(
-            JSON.stringify({ error: 'Codex credentials not configured. Connect ChatGPT in /user/settings.' }),
+            JSON.stringify({ error: { message: 'Codex credentials not configured. Connect ChatGPT in User settings, or run `kinu setup` on this machine.' } }),
             { status: 401, headers: { 'Content-Type': 'application/json' } },
           );
         }
@@ -108,7 +142,8 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
         };
         let res = await send(auth.headers);
         if (res.status === 401) {
-          const refreshed = await deps.getAuth(CODEX_CRED_KEY, { forceRefresh: true });
+          const refreshed = await resolveAuth({ forceRefresh: true });
+          if (refreshed === 'revoked') return refusedLoginResponse();
           if (refreshed) {
             res = await send(refreshed.headers);
           }
@@ -142,6 +177,11 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
               { status: 503, headers: { 'Content-Type': 'application/json' } },
             );
           }
+        }
+        if (res.status === 401) {
+          // Still 401 AFTER the forced refresh: the stored login is dead
+          // upstream, whatever the resolver believed.
+          return refusedLoginResponse();
         }
         return res;
       });

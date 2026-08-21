@@ -260,6 +260,54 @@ describe('Codex provider contract', () => {
     expect(mock.requests[1].headers['authorization']).toBe('Bearer refreshed');
   });
 
+  test('a refresh the resolver refuses up front surfaces as the named remedy', async () => {
+    // The local store's shape: its own proactive refresh hit invalid_grant and
+    // it throws out of getAuth BEFORE any request exists. The user-visible
+    // answer must be the reconnection remedy, not a raw thrown chain.
+    let wireCalls = 0;
+    const deps: ProviderDeps = {
+      env: {},
+      fetch: asFetchFunction(async () => {
+        wireCalls += 1;
+        return new Response(JSON.stringify({ detail: 'Unauthorized' }), { status: 401 });
+      }),
+      async getAuth(key) {
+        if (key !== CODEX_CRED_KEY) return null;
+        throw new CodexOAuthTokenError('invalid_grant', 'Codex token refresh failed: 400 invalid_grant');
+      },
+      async hasCredential() { return true; },
+    };
+    const model = createCodexProvider().createModel('gpt-5.5', deps);
+
+    const failure = await generateText({ model, prompt: 'hello', maxOutputTokens: 16 }).then(
+      () => '',
+      (rejection: { message?: string; responseBody?: string }) =>
+        `${rejection.message ?? ''}\n${rejection.responseBody ?? ''}`,
+    );
+    expect(failure).toContain('Your ChatGPT login is no longer valid');
+    expect(failure).toContain('kinu setup');
+    // The opaque chain the resolver threw must not survive to the surface.
+    expect(failure).not.toContain('Codex token refresh failed');
+    expect(wireCalls).toBe(0);
+  });
+
+  test('a 401 that survives the forced refresh names the reconnection remedy', async () => {
+    const deps = makeDeps({
+      [CODEX_CRED_KEY]: { headers: { Authorization: 'Bearer codex-dead' } },
+    }, asFetchFunction(async () =>
+      new Response(JSON.stringify({ detail: 'Unauthorized' }), { status: 401 })));
+    const model = createCodexProvider().createModel('gpt-5.5', deps);
+    const failure = await generateText({ model, prompt: 'hello', maxOutputTokens: 16 }).then(
+      () => '',
+      (rejection: { message?: string; responseBody?: string }) =>
+        `${rejection.message ?? ''}\n${rejection.responseBody ?? ''}`,
+    );
+    expect(failure).toContain('Your ChatGPT login is no longer valid');
+    // The bare upstream word is what the owner was shown for the Cloudflare
+    // credential; it must not survive here either.
+    expect(failure).not.toMatch(/(^|\W)Unauthorized(\W|$)/);
+  });
+
   test('returns 401 when no credential stored (no upstream call)', async () => {
     const mock = createMockFetch([
       { match: 'chatgpt.com', respond: { status: 200, body: OPENAI_RESPONSES_BODY } },
