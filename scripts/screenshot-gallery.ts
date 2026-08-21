@@ -70,9 +70,17 @@ async function shoot(
   page.on('pageerror', (err) => failures.push(String(err)));
   page.on('console', (msg) => { if (msg.type() === 'error') failures.push(msg.text()); });
 
+  // A background tab is served no animation frames, so a page that reveals
+  // itself over rAF would be photographed at beat zero. Front first, then let
+  // it finish.
+  await page.bringToFront();
   await page.goto(`${origin}/gallery.html?frame=${frame}`, { waitUntil: 'networkidle0' });
   // React renders after the RPC stubs resolve; the mock is async.
   await Bun.sleep(600);
+  // A frame still building itself says so. The signed-out front page grows its
+  // search tree from the beat the search created each node on, and a shot taken
+  // mid-reveal is a different picture every run.
+  await page.waitForFunction(() => !document.querySelector('[data-growing]'), { timeout: 8000 });
   // The wall clock is pinned above; the ANIMATION clock was not, so a blinking
   // streaming caret is simply absent from half of all captures and a shimmer
   // lands at a random phase. Rewinding every running animation to its first

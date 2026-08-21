@@ -17,6 +17,7 @@ import {
 import { buildCliInstallCommand } from '../src/cli/install-command';
 import { handleCliRequest } from '../src/cli/routes';
 import { sanitizeReturnTo } from '../src/auth/store';
+import { landingDocument } from '../src/lib/public-pages';
 
 const root = join(import.meta.dir, '..');
 
@@ -408,14 +409,21 @@ describe('auth and desktop security invariants', () => {
     expect(server).toContain('handleLandingRequest(request, env)');
     expect(server.indexOf('handleLandingRequest(request, env)')).toBeLessThan(server.indexOf('authenticateRequest(request, env)'));
     expect(landing).toContain("url.pathname !== '/'");
-    expect(landing).toContain('Sign in');
-    expect(landing).toContain('href="#install"');
-    expect(landing).toContain('data-install-toggle');
-    expect(landing).toContain('landing-install-command');
-    expect(landing).not.toContain('href="/install.sh"');
-    expect(landing).not.toContain('href="/install"');
-    expect(landing).not.toContain('/api/health">Status');
-    expect(landing).not.toContain('OAuth sign-in required for the dashboard.');
+  });
+
+  test('the front page hands over in place and never bounces a visitor to a script', () => {
+    const page = landingDocument("curl -fsSL 'https://kinu.example.com/install.sh' | bash");
+    // Both ways in, and the install command is revealed on the page rather than
+    // by navigating away: a visitor who wants the CLI must not lose the page.
+    expect(page).toContain('>Sign in<');
+    expect(page).toContain('href="#install"');
+    expect(page).toContain('data-install-toggle');
+    expect(page).toContain('landing-install-command');
+    // Escaped, not raw: the origin reaches this page through a template.
+    expect(page).toContain('curl -fsSL &#039;https://kinu.example.com/install.sh&#039; | bash');
+    expect(page).not.toContain('href="/install.sh"');
+    expect(page).not.toContain('/api/health">Status');
+    expect(page).not.toContain('OAuth sign-in required for the dashboard.');
   });
 
   test('browser install page is HTML while the terminal installer stays raw shell', async () => {
@@ -424,7 +432,7 @@ describe('auth and desktop security invariants', () => {
     expect(installPage?.headers.get('content-type')).toContain('text/html');
     expect(installPage?.headers.get('content-security-policy')).toContain('https://static.cloudflareinsights.com');
     const html = await installPage!.text();
-    expect(html).toContain('Install Kinu CLI');
+    expect(html).toContain('Install the Kinu.run CLI');
     expect(html).toContain('curl -fsSL');
     expect(html).toContain('https://kinu.example.com/install.sh');
     expect(html).toContain('| bash');

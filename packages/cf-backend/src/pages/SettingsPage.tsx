@@ -282,7 +282,7 @@ export default function SettingsPage() {
             <Link to={`/workspace/${agentId}`} className="text-xs p-text-3 flex items-center gap-1 hover:p-text mb-2">
               <ArrowLeftIcon size={12} /> Back to chat
             </Link>
-            <h1 className="text-2xl font-semibold">Workspace settings</h1>
+            <h1 className="p-display text-2xl">Workspace settings</h1>
             <p className="text-xs p-text-3 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1">
               <span className="font-mono">{agentId}</span>
               <CopyButton value={agentId ?? ""} what="the workspace slug" size={11}

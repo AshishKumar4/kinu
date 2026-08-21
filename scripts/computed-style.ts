@@ -64,6 +64,11 @@ const FRAMES = [
   'shell', 'chat', 'chatempty', 'chatloading', 'toolcalls', 'streaming', 'modal', 'home', 'tabs', 'markdown',
   'views', 'viewfail', 'releases', 'work', 'workempty', 'approvals', 'environment', 'supervise',
   'settings', 'forks', 'forkmerge', 'forkfull',
+  // The signed-out pages. They are whole documents with their own stylesheet
+  // rather than components, and that stylesheet is exactly the one no other
+  // instrument in the repo reads: it is assembled in TypeScript, served by the
+  // worker, and never passes through Tailwind or vite.
+  'landing', 'login', 'loginfail', 'install', 'approve', 'marks',
 ] as const;
 
 /** Palette × mode. `umber` is the shipped default and selects no palette block

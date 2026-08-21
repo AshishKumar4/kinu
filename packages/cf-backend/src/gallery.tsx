@@ -68,6 +68,10 @@ import {
   TrashIcon, BrainIcon,
 } from "@phosphor-icons/react";
 import "./index.css";
+import { KINU_MARK, MARK_IDS, mark } from "@/lib/public-shell";
+import {
+  approvalDocument, authDocument, installDocument, landingDocument, loginDocument,
+} from "@/lib/public-pages";
 import Sidebar from "@/components/Sidebar";
 import { ModelPicker } from "@/components/ModelPicker";
 import { Composer, type ChatMode, type ComposerNotice } from "@/components/Composer";
@@ -1933,54 +1937,116 @@ function Palette() {
   );
 }
 
-/* ── Landing v2 sketch — the app's tokens ARE the landing's tokens ── */
+/* ── The signed-out pages, as the worker actually serves them ──────────
 
-function LandingV2() {
+   Not a sketch of the landing page in app tokens — that is what used to be
+   here, and a sketch is a second design that drifts. These frames write the
+   REAL document text into this window, so the browser computes the real
+   cascade: the computed-style gate audits the public stylesheet, the
+   screenshot pass photographs the shipped page, and the growth of the hero
+   tree is the shipped script running. */
+
+/** The public documents, by frame name. The install command is the production
+ *  one rather than this dev server's, so the frame photographs the copy a
+ *  visitor reads. */
+function publicDocument(name: string | null): string | null {
+  const install = `curl -fsSL 'https://kinu.run/install.sh' | bash`;
+  if (name === "landing") return landingDocument(install);
+  if (name === "login") {
+    return loginDocument([
+      { href: "/auth/cloudflare/start?return_to=%2F", label: "Cloudflare" },
+      { href: "/auth/github/start?return_to=%2F", label: "GitHub" },
+    ], " Signing in with Cloudflare also connects Workers AI, so a new workspace has a model to run.");
+  }
+  if (name === "loginfail") {
+    return authDocument("Sign in failed", `
+      <p class="lede">The sign-in request could not be completed. Return to sign in and try again.</p>
+      <p class="muted">Failure stage: <code>token_request</code></p>
+      <p class="muted">Reason: <code>provider_rejected_client</code></p>
+      <div class="providers"><a class="provider" href="/login?prompt=login">Return to sign in</a></div>
+    `);
+  }
+  if (name === "install") return installDocument(install);
+  if (name === "approve") {
+    return approvalDocument("Connect the Kinu CLI", `
+      <p>A terminal on this machine asked to sign in as you.</p>
+      <dl>
+        <div><dt>Device</dt><dd>mrwhite0racle@workshop</dd></div>
+        <div><dt>Code</dt><dd><code>KJ4-9QF</code></dd></div>
+        <div><dt>Expires</dt><dd>in 9 minutes</dd></div>
+      </dl>
+      <form method="post"><button type="submit">Approve this device</button></form>
+      <p class="muted">Approve only if you started this in your own terminal.</p>
+    `);
+  }
+  return null;
+}
+
+/** Replace this document with the page. `document.write` rather than an
+ *  innerHTML swap, because the page's own theme bootstrap and its scripts have
+ *  to RUN — an injected `<script>` never does. */
+function writeDocument(html: string): void {
+  document.open();
+  document.write(html);
+  document.close();
+}
+
+/**
+ * The four candidate marks, at every size that decides one.
+ *
+ * A logo is chosen at 16px and at hero size, in both faces, or it is chosen
+ * wrong. `KINU_MARK` in `public-shell.ts` names the one that ships, so this
+ * frame is what that one line is answerable to.
+ */
+function MarksFrame() {
+  const sizes = [16, 24, 48, 96] as const;
   return (
-    <div className="p-bg min-h-screen flex flex-col">
-      <header className="flex h-16 items-center justify-between px-6 border-b p-border">
-        <span className="flex items-center gap-2.5">
-          <span className="flex size-6 items-center justify-center rounded-md p-accent-bg p-accent font-mono text-[13px] font-bold">K</span>
-          <span className="font-mono text-[13px] font-semibold tracking-[0.14em] p-text">KINU</span>
-        </span>
-        <nav className="flex items-center gap-2">
-          <button className="p-btn-ghost px-3 h-8 p-row-text">Install CLI</button>
-          <button className="p-btn px-3.5 h-9 p-row-text inline-flex items-center">Sign in</button>
-        </nav>
-      </header>
-      <main className="flex-1 grid content-center px-6 py-16 max-w-4xl">
-        <div className="p-eyebrow mb-4" style={{ color: "var(--c-accent-fg)" }}>Persistent agents for serious work</div>
-        <h1 className="p-text" style={{ fontSize: "clamp(40px, 7vw, 72px)", lineHeight: 1.02, fontWeight: 700, letterSpacing: "-0.025em" }}>
-          Agents that keep<br />working after you close<br />the tab.
-        </h1>
-        <p className="p-body p-text-2 mt-5 max-w-xl" style={{ fontSize: 17, lineHeight: 1.55 }}>
-          Kinu agents hold state across sessions, run from the dashboard or your terminal, and use your own machine when local access matters.
-        </p>
-        <div className="flex items-center gap-3 mt-8">
-          <button className="p-btn px-4 h-10 p-body inline-flex items-center font-semibold">Sign in</button>
-          <button className="p-btn-quiet px-4 h-10 p-body inline-flex items-center">Install CLI</button>
+    <div className="p-bg p-text min-h-screen p-10 space-y-10">
+      <div className="space-y-2">
+        <div className="p-eyebrow">Candidate marks — hiragana く, one stroke</div>
+        <div className="p-body p-text-2 max-w-xl">
+          Shipping: <span className="p-text font-semibold">{KINU_MARK}</span>. Each mark is
+          hand-authored paths on a 24-unit grid, inheriting <code>currentColor</code>, so it is
+          the accent of whichever face is on screen.
         </div>
-        {/* The product's signature — a run timeline as brand motif */}
-        <div className="mt-14 border p-border rounded-lg p-surface p-4 max-w-xl">
-          <div className="p-eyebrow mb-2.5">A live run, right now</div>
-          {[
-            ["p-dot-accent", "Turn: fix SAVE20 coupon", "48.0s"],
-            ["p-dot-neutral", "sandbox: bun test packages/checkout", "14.2s"],
-            ["p-dot-info", "agents(fork/mcts): bisect migration", "12 nodes"],
-            ["p-dot-success", "deploy: staging green", "checks passed"],
-          ].map(([dot, label, meta]) => (
-            <div key={label} className="flex items-center gap-2.5 py-1">
-              <span className={`size-1.5 rounded-full ${dot}`} />
-              <span className="p-row-text p-text-2">{label}</span>
-              <span className="ml-auto p-num text-[11px] p-text-3">{meta}</span>
+      </div>
+      {MARK_IDS.map((id) => (
+        <div key={id} className="space-y-3 border-t p-border pt-6">
+          <div className="flex items-baseline gap-3">
+            <span className="p-title p-text">{id}</span>
+            {id === KINU_MARK && <span className="p-eyebrow" style={{ color: "var(--c-accent-fg)" }}>shipping</span>}
+          </div>
+          <div className="flex items-end gap-10">
+            {sizes.map((size) => (
+              <div key={size} className="flex flex-col items-center gap-2">
+                <span
+                  style={{ color: "var(--c-accent)", lineHeight: 0 }}
+                  dangerouslySetInnerHTML={{ __html: mark(size, id) }}
+                />
+                <span className="p-meta p-text-3">{size}px</span>
+              </div>
+            ))}
+            <div className="flex items-center gap-2.5 border p-border rounded-md px-3 py-2">
+              <span
+                style={{ color: "var(--c-accent)", lineHeight: 0 }}
+                dangerouslySetInnerHTML={{ __html: mark(21, id) }}
+              />
+              <span style={{ fontFamily: "var(--font-display)", fontSize: 17, fontWeight: 500, letterSpacing: "-0.015em" }}>
+                Kinu.run
+              </span>
             </div>
-          ))}
+            <div className="flex items-center gap-2.5 px-3 py-2 rounded-md" style={{ background: "var(--c-accent)" }}>
+              <span
+                style={{ color: "var(--c-accent-on)", lineHeight: 0 }}
+                dangerouslySetInnerHTML={{ __html: mark(21, id) }}
+              />
+              <span style={{ color: "var(--c-accent-on)", fontFamily: "var(--font-display)", fontSize: 17, fontWeight: 500 }}>
+                Kinu.run
+              </span>
+            </div>
+          </div>
         </div>
-      </main>
-      <footer className="flex h-14 items-center justify-between px-6 border-t p-border">
-        <span className="p-meta p-text-3">Kinu on GitHub</span>
-        <span className="p-meta p-text-3">Durable agents, local execution, user-controlled automation.</span>
-      </footer>
+      ))}
     </div>
   );
 }
@@ -3092,6 +3158,14 @@ function TranscriptFrame() {
 }
 
 async function mount() {
+  // A public page is a whole document, not a component: it replaces this one
+  // and React never mounts. Checked before anything else so no app CSS or
+  // React root is built for a frame that is about to throw the document away.
+  const document_ = publicDocument(frame);
+  if (document_ !== null) {
+    writeDocument(document_);
+    return;
+  }
   let node: React.ReactNode;
   let entries = ["/"];
   if (frame === "shell") node = <Shell />;
@@ -3124,7 +3198,7 @@ async function mount() {
   }
   else if (frame === "modal") node = <GalleryModal />;
   else if (frame === "palette") node = <Palette />;
-  else if (frame === "landing2") node = <LandingV2 />;
+  else if (frame === "marks") node = <MarksFrame />;
   else if (frame === "tabs") node = <TabsFrame />;
   else if (frame === "markdown") node = <MarkdownFrame />;
   else if (frame === "chat") node = <ChatFrame />;

@@ -5,6 +5,7 @@ import {
   type OAuthProfile,
 } from './store';
 import { escapeHtml, json } from '../lib/http';
+import { authDocument, loginDocument } from '../lib/public-pages';
 import { publicHtmlHeaders } from '../lib/security-headers';
 import {
   clientAuth, getAuthorizationServer, getOAuthProvider, listConfiguredOAuthProviders,
@@ -98,22 +99,23 @@ async function renderLogin(request: Request, env: Env): Promise<Response> {
     if (!(e instanceof AuthError) || e.status !== 401) throw e;
   }
 
-  const providers = listConfiguredOAuthProviders(env);
-  const buttons = providers.map((provider) => {
+  const providers = listConfiguredOAuthProviders(env).map((provider) => {
     const start = new URL(`/auth/${provider.id}/start`, url.origin);
     start.searchParams.set('return_to', returnTo);
     if (prompt) start.searchParams.set('prompt', prompt);
-    return `<a class="provider" href="${escapeHtml(start.pathname + start.search)}">Continue with ${escapeHtml(provider.label)}</a>`;
-  }).join('');
+    return { href: escapeHtml(start.pathname + start.search), label: provider.label, id: provider.id };
+  });
 
-  const body = providers.length
-    ? buttons
-    : `<p>No OAuth providers are configured yet.</p>`;
+  // Cloudflare sign-in also attaches the Workers AI credential, which is the
+  // difference between an account that can run a model and one that cannot. It
+  // is worth a line, and only when that provider is configured.
+  const workersAi = providers.some((provider) => provider.id === 'cloudflare')
+    ? ' Signing in with Cloudflare also connects Workers AI, so a new workspace has a model to run.'
+    : '';
 
-  return html('Sign in to Kinu', `
-    <p class="lede">Choose a sign-in method.</p>
-    <div class="providers">${body}</div>
-  `, { headers: { 'cache-control': 'no-store' } });
+  return new Response(loginDocument(providers, workersAi), {
+    headers: { ...publicHtmlHeaders(), 'cache-control': 'no-store' },
+  });
 }
 
 async function startOAuth(request: Request, env: Env, providerId: string): Promise<Response> {
@@ -564,119 +566,10 @@ function redirect(location: string, init: ResponseInit = {}): Response {
   });
 }
 
+/** The failure pages the OAuth flow can land on. Sign-in itself renders
+ *  through `loginDocument`; this is the same card with prose in it. */
 function html(title: string, body: string, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers);
   for (const [key, value] of Object.entries(publicHtmlHeaders())) headers.set(key, value);
-  return new Response(`<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${escapeHtml(title)}</title>
-  <style>
-    :root {
-      color-scheme: dark;
-      --bg: #1A1613;
-      --ink: #F5EFE6;
-      --muted: #B6A893;
-      --line: rgba(224, 164, 88, 0.14);
-      --accent: #E0A458;
-      --accent-soft: rgba(224, 164, 88, 0.12);
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      min-height: 100vh;
-      background: var(--bg);
-      color: var(--ink);
-      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      letter-spacing: 0;
-    }
-    a { color: inherit; text-decoration: none; }
-    .shell {
-      width: min(760px, calc(100vw - 28px));
-      min-height: 100vh;
-      margin: 0 auto;
-      border-inline: 1px solid var(--line);
-      display: grid;
-      grid-template-rows: auto 1fr;
-      background: rgba(26, 22, 19, 0.84);
-    }
-    header {
-      min-height: 64px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0 24px;
-      border-bottom: 1px solid var(--line);
-    }
-    .brand {
-      display: inline-flex;
-      align-items: center;
-      gap: 10px;
-      font-weight: 720;
-    }
-    .mark {
-      width: 24px;
-      height: 24px;
-      display: grid;
-      place-items: center;
-      border: 1px solid rgba(224, 164, 88, 0.55);
-      color: var(--accent);
-      font-weight: 780;
-    }
-    main {
-      width: min(460px, 100%);
-      align-self: center;
-      justify-self: center;
-      padding: 56px 24px;
-    }
-    h1 {
-      font-size: 44px;
-      line-height: 0.96;
-      margin: 0;
-      font-weight: 780;
-      letter-spacing: 0;
-    }
-    .lede, p {
-      color: var(--muted);
-      line-height: 1.55;
-      margin: 16px 0 0;
-      font-size: 15px;
-    }
-    .providers, .actions {
-      display: grid;
-      gap: 10px;
-      margin-top: 24px;
-    }
-    .provider {
-      min-height: 42px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      border: 1px solid rgba(224, 164, 88, 0.62);
-      padding: 0 14px;
-      color: var(--ink);
-      background: var(--accent-soft);
-      font-weight: 660;
-    }
-    .provider:hover { background: rgba(224, 164, 88, 0.18); }
-    @media (max-width: 720px) {
-      .shell { width: 100%; border-inline: 0; }
-      header { padding: 0 16px; }
-      main { padding: 44px 16px; }
-      h1 { font-size: 34px; }
-    }
-  </style>
-</head>
-<body>
-  <div class="shell">
-    <header><a class="brand" href="/"><span class="mark">K</span><span>Kinu</span></a></header>
-    <main><h1>${escapeHtml(title)}</h1>${body}</main>
-  </div>
-</body>
-</html>`, {
-    ...init,
-    headers,
-  });
+  return new Response(authDocument(title, body), { ...init, headers });
 }
