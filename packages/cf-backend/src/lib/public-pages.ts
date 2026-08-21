@@ -20,24 +20,39 @@ import {
 
 /* ── Front page ──────────────────────────────────────────────────────── */
 
-/** Counts the repo can answer for, each one a link in the same argument: the
- *  search is configurable, and the configuration is closed. */
-const STATS: ReadonlyArray<readonly [figure: string, label: string]> = [
-  ['6', 'named searches'],
-  ['6', 'composable axes'],
-  ['7', 'delegation actions'],
-  ['2', 'backends, one core'],
+/** The four claims a visitor decides on, each one the repo can answer for.
+ *  The counts they replaced told engineers how the search is built; these tell
+ *  a person what they get. */
+const CLAIMS: ReadonlyArray<readonly [claim: string, support: string]> = [
+  [
+    'Learns from use',
+    'Every turn is graded against your next message. Lessons that later turns confirm persist.',
+  ],
+  [
+    'Crafts its own tools',
+    'Recurring patterns become tools it builds, scores, and calls on its own.',
+  ],
+  [
+    'Commands agent swarms',
+    'A hard task forks a scored tree of whole agents. The best attempt wins.',
+  ],
+  [
+    'Your cloud or yours alone',
+    'Run it on kinu.run today, or deploy the same Worker into your own account.',
+  ],
 ];
 
 /**
  * The lines the headline rotates through. Each completes "An agent of your own
- * that ___." — one product, four angles of the same claim. The first is the
+ * that ___." — one product, four angles of the platform: learning, tool
+ * crafting, swarm delegation, and where it runs. The tree of agents is how the
+ * swarm works, so it leads § 03 instead of the headline. The first is the
  * one a reader with no script gets, so it stays the strongest.
  */
 const TAGLINES = [
   'gets better every time it works',
-  'searches a tree of agents when the task is hard',
-  'remembers what worked',
+  'builds its own tools from repeated work',
+  'commands a swarm when the task is hard',
   'runs in your cloud, or on your machine',
 ] as const;
 
@@ -193,7 +208,8 @@ export function landingDocument(
       <h1 class="taglines" data-taglines>
         ${TAGLINES.map((line, at) => `<span${at === 0 ? ' data-shown' : ''}>An agent of your own that <em>${line}</em>.</span>`).join('\n        ')}
       </h1>
-      <p class="lede">Give it a task in chat. When the task is hard, Kinu runs many attempts, measures each one, and keeps the best.</p>
+      <p class="lede">It learns from your conversations and gets measurably better at your work. It builds its own tools from the patterns it has proven.</p>
+      <p class="lede">On hard tasks it commands a swarm of subagents, scores every attempt, and keeps the branch that proved itself.</p>
       <p class="lede">Workspaces are durable: files, sessions, and memory persist between turns. Run them on Cloudflare or entirely on your own machine.</p>
       <div class="actions">
         <a class="btn solid" href="/login">Sign in</a>
@@ -207,7 +223,7 @@ export function landingDocument(
         <p class="dim">Run it in a terminal on macOS or Linux. The installer adds the <code>kinu</code> command, then starts browser sign-in.</p>
       </div>
       <ul class="stats">
-        ${STATS.map(([figure, label]) => `<li class="stat"><strong>${figure}</strong><span>${label}</span></li>`).join('\n        ')}
+        ${CLAIMS.map(([claim, support]) => `<li class="stat"><strong>${claim}</strong><span>${support}</span></li>`).join('\n        ')}
       </ul>
     </div>
     <figure class="show">
@@ -220,33 +236,39 @@ export function landingDocument(
 
   <section class="section">
     <p class="label"><b>§ 01</b>Quickstart</p>
+    <h2 class="title">Start in the cloud on kinu.run, or run it entirely on your own machines.</h2>
+    <p class="lede">Both are the same core. Reach one workspace from the web app, the TUI, or the CLI.</p>
     <div class="grid three">
       <div class="cell">
-        <span class="num">Step one</span>
-        <h2>Install the CLI</h2>
-        <p>One command on macOS or Linux.</p>
+        <span class="num">In the browser</span>
+        <h2>Web</h2>
+        <p>Sign in and create a workspace. Nothing to install, and the same workspace opens from every client.</p>
+        <div class="actions"><a class="btn solid" href="/login">Sign in</a></div>
+        <div class="glimpse" data-glimpse="web"></div>
+      </div>
+      <div class="cell">
+        <span class="num">In the terminal</span>
+        <h2>TUI</h2>
+        <p><code>kinu chat</code> opens the full-screen app: pick a workspace, talk, and watch it work.</p>
+        <div class="cmd"><code id="step-chat">kinu chat triage</code><button class="copy" type="button" data-copy="step-chat">Copy</button></div>
+        <div class="glimpse" data-glimpse="tui"></div>
+      </div>
+      <div class="cell">
+        <span class="num">In the terminal</span>
+        <h2>CLI</h2>
+        <p>One command installs <code>kinu</code> on macOS or Linux. Create a workspace, then hand it a task.</p>
         <div class="cmd"><code id="step-install">${escapeHtml(install)}</code><button class="copy" type="button" data-copy="step-install">Copy</button></div>
-      </div>
-      <div class="cell">
-        <span class="num">Step two</span>
-        <h2>Create a workspace</h2>
-        <p>Cloud by default. Add <code>--mode local</code> to keep it on this machine.</p>
         <div class="cmd"><code id="step-create">kinu create triage</code><button class="copy" type="button" data-copy="step-create">Copy</button></div>
-      </div>
-      <div class="cell">
-        <span class="num">Step three</span>
-        <h2>Give it work</h2>
-        <p>Run one task, or open a conversation with <code>kinu chat triage</code>.</p>
-        <div class="cmd"><code id="step-run">kinu run triage "find the slowest query"</code><button class="copy" type="button" data-copy="step-run">Copy</button></div>
+        <div class="glimpse" data-glimpse="cli"></div>
       </div>
     </div>
-    <p class="dim foot">The web app opens the same workspace, with its files, its sessions and every search it has run.</p>
+    <p class="dim foot">A workspace created anywhere opens from the others, with its files, sessions, and search history intact.</p>
   </section>
 
   <section class="section">
     <p class="label"><b>§ 02</b>One workspace, every client</p>
     <h2 class="title">Work from the browser, the terminal, your editor, or email.</h2>
-    <p class="lede">Every client opens the same workspace, with the same files and history.</p>
+    <p class="lede">Every client opens the same workspace, with the same files and history. Start a run at your desk, check it over SSH from the terminal, read the result in your editor.</p>
     <div class="grid two">
       ${CLIENTS.map(([title, body]) => `<div class="cell"><h2>${title}</h2><p>${body}</p></div>`).join('\n      ')}
     </div>
@@ -257,21 +279,25 @@ export function landingDocument(
   <section class="section">
     <p class="label"><b>§ 03</b>The tree of agents</p>
     <h2 class="title">Run one task as a tree of agents.</h2>
+    <p class="lede">It is a directed graph: every node is an attempt with its measured score, weak branches are pruned mid-run, and the winner answers.</p>
     <div class="duo">
       <div>
         <p class="lede">One tool call builds the tree. Each node is a whole agent that attempts the task its own way, in its own directory, with its own credential.</p>
         <p class="body">The agent turns your ask into an objective: a metric, a target, and a verifier. A verifier is code that runs in the workspace, and its number picks the winner. Unregistered verifier names fail the run.</p>
-        <p class="body">Results persist per objective, so the next search starts from the record instead of from zero.</p>
+        <p class="body">What you get back is the winner plus the record: every branch, its score, and the verifier number behind each pick. Results persist per objective, so the next search starts from the record instead of from zero.</p>
         <p class="dim">The tree in the header is a recorded search.</p>
       </div>
-      ${specRows([
-        ['One action', "<code>agents({action:'swarm'})</code>"],
-        ['Axes', 'unit · context · expand · score · advance · carry'],
-        ['Presets', 'ideate · research · audit · redteam · optimise · prove · custom'],
-        ['Depth', 'ideate 1 · optimise 5 · prove 7'],
-        ['Score', 'a code verifier, or a judge ensemble'],
-        ['Records', '<code>exploration_records</code>, per objective'],
-      ])}
+      <details class="config">
+        <summary>The configuration, spelled out</summary>
+        ${specRows([
+          ['One action', "<code>agents({action:'swarm'})</code>"],
+          ['Axes', 'unit · context · expand · score · advance · carry'],
+          ['Presets', 'ideate · research · audit · redteam · optimise · prove · custom'],
+          ['Depth', 'ideate 1 · optimise 5 · prove 7'],
+          ['Score', 'a code verifier, or a judge ensemble'],
+          ['Records', '<code>exploration_records</code>, per objective'],
+        ])}
+      </details>
     </div>
     <figure class="film">
       <div class="anno ruled"><span>Web · swarm run · design gallery, fixture transport</span><span>home · agent · search · work</span></div>
@@ -283,7 +309,7 @@ export function landingDocument(
   <section class="section">
     <p class="label"><b>§ 04</b>Self-evolution</p>
     <h2 class="title">Evolution on four timescales.</h2>
-    <p class="lede">The shorter clocks feed the longer ones.</p>
+    <p class="lede">The shorter clocks feed the longer ones. None of it needs your upkeep: scoring, consolidation, and retirement run inside the workspace.</p>
     <div class="grid two">
       ${CLOCKS.map(([kicker, title, body]) => `<div class="cell"><span class="num">${kicker}</span><h2>${title}</h2><p>${body}</p></div>`).join('\n      ')}
     </div>
@@ -292,6 +318,7 @@ export function landingDocument(
 
   <section class="section">
     <p class="label"><b>§ 05</b>What you get</p>
+    <p class="lede">Everything in this grid ships today, on both backends.</p>
     <div class="grid three">
       ${CAPABILITIES.map(([title, body]) => `<div class="cell"><h2>${title}</h2><p>${body}</p></div>`).join('\n      ')}
     </div>
@@ -308,7 +335,7 @@ export function landingDocument(
     <div class="grid three">
       ${DEPLOY_STEPS.map(([num, title, body, id, cmd]) => `<div class="cell"><span class="num">${num}</span><h2>${title}</h2><p>${body}</p><div class="cmd"><code id="${id}">${cmd}</code><button class="copy" type="button" data-copy="${id}">Copy</button></div></div>`).join('\n      ')}
     </div>
-    <p class="dim foot">The button forks the repository and starts a build. The plan, the zone, the root secret, and the OAuth apps are manual steps; the guide covers each one.</p>
+    <p class="dim foot">The button forks the repository and starts a build. The plan, the zone, the root secret, and the OAuth apps are manual steps; the guide covers each one. When the infra gate passes, the Worker serving your requests is the same one kinu.run runs.</p>
   </section>
 
   <section class="section">
@@ -316,7 +343,7 @@ export function landingDocument(
     <div class="duo">
       <div>
         <h2 class="title">One MIT-licensed repository.</h2>
-        <p class="body">The agent, both backends, the CLI, and this site are in one repository.</p>
+        <p class="body">The agent, both backends, the CLI, and this site are in one repository. The gates that hold this page honest run from it too: film provenance, weight budgets, measured contrast. Audit the claims yourself.</p>
         <div class="actions">
           <a class="btn" href="${REPO_URL}" target="_blank" rel="noopener noreferrer">${GITHUB_ICON}Read the source</a>
         </div>
@@ -363,10 +390,13 @@ transition:opacity 460ms var(--ease),visibility 0s 460ms}
 h1.taglines>span[data-shown]{visibility:visible;opacity:1;
 transition:opacity 460ms var(--ease)}
 .actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:32px}
-/* Four across, or two, never three with an orphan under them. */
+/* Four claims across, or two, never three with an orphan under them. The
+   claim is the display face at reading size, the support is plain prose: a
+   sentence a visitor reads, not a label they decode. */
 .stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;
 margin-top:40px;padding-top:26px;border-top:var(--rule)}
-.stat span{font-size:10.5px;letter-spacing:0.06em;line-height:1.45}
+.stat strong{font-size:clamp(19px,1.75vw,22px);line-height:1.25}
+.stat span{font-size:12.5px;letter-spacing:0;line-height:1.5;text-transform:none;color:var(--c-text-2)}
 .show{margin:0}
 .ruled{display:flex;justify-content:space-between;gap:16px;padding:8px 0;
 border-bottom:var(--rule)}
@@ -391,6 +421,19 @@ border-bottom:var(--rule)}
 .spec dt{color:var(--c-text-3);padding-top:2px}
 .spec dd{margin:0;text-align:right;color:var(--c-text-2);font-size:13.5px;line-height:1.55}
 .spec dd code{font-size:12px}
+
+/* The search's configuration is real engineering detail, so it ships behind a
+   native disclosure: one line for the visitor, the whole rail for the engineer
+   who opens it. No script, and the summary still names what is inside. */
+.config{border-top:var(--rule)}
+.config summary{display:flex;justify-content:space-between;gap:18px;cursor:pointer;
+padding:11px 0;list-style:none;color:var(--c-text-3);
+font-family:var(--font-mono);font-size:11.5px;letter-spacing:0.09em;text-transform:uppercase}
+.config summary::-webkit-details-marker{display:none}
+.config summary::after{content:"+"}
+.config[open] summary::after{content:"\\2212"}
+.config[open] summary{color:var(--c-text-2)}
+.config .spec{margin-top:4px}
 
 /* The tree. Every rule is the app's own reading of a search: weight and radius
    track rollouts, fill tracks the measured score, the kept line is the one

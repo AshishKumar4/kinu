@@ -725,6 +725,68 @@ describe('deploy your own is a real path', () => {
   });
 });
 
+/**
+ * The positioning gates. The owner rejected a page that led with search
+ * mechanics, so the structure itself is held: the platform promise leads, the
+ * quickstart opens with where it runs, and the search's configuration ships
+ * behind a disclosure. These read the rendered document offline — the same
+ * pure function the server sends — so they need no browser.
+ */
+describe('the front page leads with the platform', () => {
+  const INSTALL = "curl -fsSL 'https://kinu.run/install.sh' | bash";
+  const section = (from: string, to: string): string => {
+    const doc = landingDocument(INSTALL);
+    return doc.slice(doc.indexOf(from), doc.indexOf(to));
+  };
+
+  test('the stat band carries four visitor claims, not engineering counts', () => {
+    const html = landingDocument(INSTALL);
+    for (const claim of ['Learns from use', 'Crafts its own tools', 'Commands agent swarms', 'Your cloud or yours alone']) {
+      expect(html).toContain(claim);
+    }
+    expect(html.match(/<li class="stat">/g)?.length).toBe(4);
+    // The counts moved out entirely: no bare figure leads a stat, and the
+    // search's own vocabulary is not headline material.
+    expect(html).not.toMatch(/<strong>\d+<\/strong>/);
+    expect(html).not.toContain('named searches');
+  });
+
+  test('quickstart opens with where it runs, not with installing', () => {
+    const s01 = section('§ 01', '§ 02');
+    expect(s01).toContain('Start in the cloud on kinu.run');
+    // All three modes are visible, web first, each with its glimpse mount for
+    // the animated miniature that plays there.
+    const order = ['data-glimpse="web"', 'data-glimpse="tui"', 'data-glimpse="cli"'].map((g) => s01.indexOf(g));
+    expect(order.every((at) => at > -1), 'a mode cell is missing its glimpse mount').toBeTrue();
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(s01).toContain('kinu create triage');
+    expect(s01).toContain('kinu chat triage');
+    expect(s01).toContain('curl -fsSL');
+    // The regression this gate exists for: installation was the first thing
+    // the section asked of a visitor who may never open a terminal.
+    expect(s01).not.toContain('Install the CLI</h2>');
+  });
+
+  test('the search configuration is disclosed, not headlined', () => {
+    const s03 = section('§ 03', '§ 04');
+    const open = s03.indexOf('<details class="config">');
+    expect(open, 'the configuration rail is not behind a disclosure').toBeGreaterThan(-1);
+    const spec = s03.indexOf('<dl class="spec">');
+    expect(spec).toBeGreaterThan(open);
+    expect(s03.indexOf('</details>')).toBeGreaterThan(spec);
+    expect(s03.match(/unit · context · expand · score · advance · carry/g)?.length).toBe(1);
+    // What the DAG is, stated in the open: scored nodes, pruning, a winner.
+    expect(s03).toContain('directed graph');
+    expect(s03).toContain('pruned');
+  });
+
+  test('the configuration keeps its home in the exploration doc', () => {
+    const exploration = readFileSync(join(import.meta.dir, '..', 'docs', 'EXPLORATION.md'), 'utf8');
+    expect(exploration).toContain('The six axes');
+    expect(exploration).toContain('`ideate`');
+  });
+});
+
 describe('the page reads as numbered sections', () => {
   test('the § labels count up without a gap', () => {
     expect(facts.labels).toEqual(['§ 01', '§ 02', '§ 03', '§ 04', '§ 05', '§ 06', '§ 07']);
