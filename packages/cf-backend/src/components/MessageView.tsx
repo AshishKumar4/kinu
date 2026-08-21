@@ -13,15 +13,15 @@ import {
   BrainIcon, GitBranchIcon, CheckCircleIcon, ClockIcon,
   WarningCircleIcon, ProhibitIcon,
   ClockCounterClockwiseIcon, LightningIcon,
-  StackIcon, SparkleIcon, ArrowBendUpRightIcon, GearSixIcon,
+  StackIcon, SparkleIcon, ArrowBendUpRightIcon, GearSixIcon, EyeIcon,
 } from "@phosphor-icons/react";
 import { isToolUIPart, getToolName } from "ai";
 import type { UIMessage, FileUIPart } from "ai";
 import {
-  JsonObjectSchema, JsonValueSchema,
+  ADVISOR_SEVERITY_LABEL, JsonObjectSchema, JsonValueSchema,
   describeToolCall, isToolCallFailed, summarizeToolCall, summarizeToolRun,
 } from "@kinu.run/core";
-import type { JsonObject, JsonValue } from "@kinu.run/core";
+import type { AdvisorSeverity, JsonObject, JsonValue } from "@kinu.run/core";
 import * as v from "valibot";
 import { tolerate } from "@kinu.run/core/obs";
 import { PreviewFrame } from "@/components/PreviewFrame";
@@ -509,6 +509,37 @@ function SystemEventCard({ event, text, state }: {
   );
 }
 
+/** The severity ladder as surfaces: `nit` is an ordinary quiet card, `concern`
+ *  wears the warning notice, `blocker` the danger one. The tints and borders
+ *  are the notice tokens the composer already uses, so both themes hold. */
+const ADVISOR_TONES = {
+  nit: { panel: "border p-border p-elevated", icon: "p-text-3", badge: "p-badge-neutral" },
+  concern: { panel: "p-notice-warning", icon: "p-warning", badge: "p-badge-warning" },
+  blocker: { panel: "p-notice-danger", icon: "p-danger", badge: "p-badge-danger" },
+} satisfies Record<AdvisorSeverity, { panel: string; icon: string; badge: string }>;
+
+/** The advisor's one note on a finished turn. Unlike `SystemEventCard` the
+ *  words are FOR the owner, not the model, so the note is never folded behind
+ *  a disclosure — severity carries the colour, the note carries the point. */
+function AdvisorCard({ severity, text, state }: {
+  severity: AdvisorSeverity; text: string; state: CardState;
+}) {
+  const tone = ADVISOR_TONES[severity];
+  return (
+    <div className="flex justify-center animate-fade-in py-1" data-advisor-severity={severity}>
+      <div className={`w-full max-w-[85%] rounded-xl px-3 py-2 ${tone.panel}`}>
+        <div className="flex items-center gap-1.5 text-[10px] p-text-3">
+          <EyeIcon size={11} className={`shrink-0 ${tone.icon}`} weight="fill" />
+          <span className="font-medium p-text-2">Advisor</span>
+          <span className={`px-1.5 text-[10px] ${tone.badge}`}>{ADVISOR_SEVERITY_LABEL[severity]}</span>
+          <ShownCaption state={state} />
+        </div>
+        <div className="mt-1 text-[11px] p-text-2 whitespace-pre-wrap break-words">{text}</div>
+      </div>
+    </div>
+  );
+}
+
 /** One programmatic turn as the chat shows it — the durable message a queued
  *  signal became, or the live card of one spliced into a running turn. Same
  *  classifier, same cards, one rendering. */
@@ -523,6 +554,9 @@ export function ProgrammaticTurnCard({ turn, text, state }: {
   }
   if (turn.kind === "deferred_approval") {
     return <DeferredApprovalCard decision={turn.decision} count={turn.count} state={state} />;
+  }
+  if (turn.kind === "advisor") {
+    return <AdvisorCard severity={turn.severity} text={text} state={state} />;
   }
   if (turn.kind === "system_event") {
     return <SystemEventCard event={turn.event} text={text} state={state} />;

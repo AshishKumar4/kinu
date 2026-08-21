@@ -14,19 +14,32 @@ const candidatesFor = (registry: AgentProviderRegistry) => (): Promise<string[]>
   availableJudgeSpecs(registry.registry, registry.deps);
 
 /**
- * Resolve the model that judges this agent's own output: the operator's
- * `review_model` when set, else a different-vendor model when one is
- * connected, else the chat model (same-model judging — the documented
- * single-vendor fallback). Specs come back normalized and registry-resolvable.
+ * Resolve a REVIEWING producer's model: the owner's pin for that producer when
+ * set, else a different-vendor model when one is connected, else the chat model
+ * (same-model reviewing — the documented single-vendor fallback). Specs come
+ * back normalized and registry-resolvable.
+ *
+ * Two producers review: `judge` grades the agent's own output, and `advisor`
+ * reads a finished turn and may say one thing about it. They share this one
+ * resolver because they share the whole reason for the cross-vendor default —
+ * assessing your own output has a bias the smaller sibling shares — and a
+ * second copy of that policy would be a second place for it to change.
+ *
+ * The MECHANICAL producers deliberately do NOT come through here. `selectFastModel`
+ * is synchronous, and their seams need a synchronous answer at construction
+ * time to decide whether to wire a distinct client at all; this one has to await
+ * a live credential listing. One resolver over both would carry a branch neither
+ * caller can reach.
  */
-export async function resolveJudgeModelSelection(opts: {
+export async function resolveReviewingModelSelection(opts: {
   registry: AgentProviderRegistry;
-  reviewSpec: string | null;
+  /** The owner's pin for this producer (AgentConfigStore.getRoleModel). */
+  pinned: string | null;
   chatSpec: string | null;
 }): Promise<JudgeModelSelection> {
   const { registry } = opts;
   const selection = await selectJudgeModel({
-    reviewSpec: opts.reviewSpec,
+    reviewSpec: opts.pinned,
     chatSpec: registry.normalizeSpecSync(opts.chatSpec),
     candidates: candidatesFor(registry),
   });

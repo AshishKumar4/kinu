@@ -20,7 +20,7 @@ import type { LanguageModel } from 'ai';
 import type { LanguageModelV2 } from '@ai-sdk/provider';
 import {
   BACKGROUND_POLICY,
-  compareSurface, normalizeObservedTables, observedActionEnum,
+  compareSurface, normalizeObservedTables, observedActionEnum, wiredProducers,
   renderConformanceFindings,
   type ObservedSurface,
 } from '@kinu.run/core';
@@ -152,6 +152,7 @@ async function observeCli(): Promise<{ observed: ObservedSurface; captured: Capt
         'agents-action': observedActionEnum(byName.get('agents')),
         'memory-action': observedActionEnum(byName.get('memory')),
         table: normalizeObservedTables(tables),
+        producer: wiredProducers(rt),
       },
     },
   };

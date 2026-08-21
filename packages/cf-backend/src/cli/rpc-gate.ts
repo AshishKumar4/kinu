@@ -164,6 +164,7 @@ export const AGENT_RPC_ACCESS = {
   getFacts: 'interactive',
   getEvolutionConfig: 'interactive',
   getMctsConfig: 'interactive',
+  getModelRoles: 'interactive',
   getReplayEvals: 'interactive',
   // Raw per-run events: full tool-call arguments/results and every turn's
   // context-budget/steering/file-edit telemetry. Same sensitivity class as
@@ -204,6 +205,7 @@ export const AGENT_RPC_ACCESS = {
   setDisplayName: 'interactive',
   setEvolutionConfig: 'interactive',
   setMctsConfig: 'interactive',
+  setModelRoles: 'interactive',
   setModel: 'interactive',
   setReasoningEffort: 'interactive',
   setShellApprovalMode: 'interactive',

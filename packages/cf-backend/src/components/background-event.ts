@@ -21,8 +21,9 @@
  */
 
 import {
+  ADVISOR_SIGNAL_KIND, DEFAULT_ADVISOR_MIN_SEVERITY, isAdvisorSeverity,
   JsonObjectSchema, SIGNAL_ID_METADATA_KEY, turnAuthor,
-  type JsonObject, type SignalCardEvent, type SignalCardState,
+  type AdvisorSeverity, type JsonObject, type SignalCardEvent, type SignalCardState,
 } from "@kinu.run/core";
 import * as v from 'valibot';
 
@@ -33,10 +34,12 @@ export type ProgrammaticTurn =
   | { kind: "workspace_created" }
   | { kind: "background_job"; jobKind: string; status: string }
   | { kind: "deferred_approval"; decision: string; count: number }
+  | { kind: "advisor"; severity: AdvisorSeverity }
   | { kind: "system_event"; event: string };
 
 const ProgrammaticMetadataSchema = v.looseObject({
   kinuEvent: v.optional(v.string()),
+  advisorSeverity: v.optional(v.string()),
   kind: v.optional(v.string()),
   status: v.optional(v.string()),
   decision: v.optional(v.string()),
@@ -58,7 +61,7 @@ const SignalCardEventSchema = v.variant('state', [
  * before that stamp existed, the `kinuEvent` metadata and the
  * `programmatic:` id prefix. Nothing here reads the prose.
  *
- * Four events have a card that says what happened without the harness's
+ * Five events have a card that says what happened without the harness's
  * wording; everything else harness-authored is `system_event`, which shows the
  * event's name and keeps its words folded away. That fallback is the point:
  * this used to be an allowlist of those four, so every event kind added after
@@ -75,6 +78,9 @@ const SignalCardEventSchema = v.variant('state', [
  * MISSION in the New workspace dialog, not a message — the mission is the soul
  * and reaches the agent through the system prompt. What lands in the transcript
  * is the harness telling the agent it is open, so it wears a card too.
+ *
+ * The advisor's note gets its own card because its severity is the one thing
+ * a reader needs at a glance, and the `system_event` fold would hide it.
  */
 export function classifyProgrammaticTurn<Metadata>(
   metadata: Metadata, id?: string,
@@ -98,6 +104,11 @@ export function classifyProgrammaticTurn<Metadata>(
         kind: "deferred_approval",
         decision: turn.decision || "decided",
         count: turn.count ?? 1,
+      };
+    case ADVISOR_SIGNAL_KIND:
+      return {
+        kind: "advisor",
+        severity: isAdvisorSeverity(turn.advisorSeverity) ? turn.advisorSeverity : DEFAULT_ADVISOR_MIN_SEVERITY,
       };
     default:
       return { kind: "system_event", event: turn.kinuEvent || "system" };

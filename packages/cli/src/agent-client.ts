@@ -12,6 +12,7 @@ import type {
   BroadcastEvent, ChangelogEntry, ChangelogRevertResult, PromptFile, ShellApprovalMode,
   FileCheckpointListing, FileRestorePlan, FileRestoreResult,
   AlternateTakeSet, TakePickOutcome,
+  EvolutionConfigView,
   ReasoningEffort, Usage, RunEvent, JsonObject, JsonValue,
 } from '@kinu.run/core';
 import type { ShellApprovalHandler } from '@kinu.run/cli-backend';
@@ -328,6 +329,10 @@ export interface AgentClient {
   setModel(spec: string): Promise<{ spec: string }>;
   getReasoningEffort(): Promise<ReasoningEffort | null>;
   setReasoningEffort(effort: ReasoningEffort): Promise<{ effort: ReasoningEffort }>;
+  /** The self-evolution knobs, including the advisor gate (`/advisor`). */
+  getEvolutionConfig(): Promise<EvolutionConfigView>;
+  /** Set any subset of them; answers with the effective config. */
+  setEvolutionConfig(view: Partial<EvolutionConfigView>): Promise<EvolutionConfigView>;
   listModels(): Promise<AgentModelMenu>;
 }
 

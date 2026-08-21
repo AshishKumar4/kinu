@@ -117,7 +117,11 @@ export class SignalDelivery implements SignalDeliverer {
     const signalMode = signal.metadata?.kinuMode;
     const modeMismatch = isWorkMode(signalMode)
       && this.activeWorkMode?.() !== signalMode;
-    if (!this.host.turnInFlight() || signal.requiresOwnTurn || modeMismatch) return this.queue(delivered);
+    // A `blocker` says continuing wastes the work, so it gets its own turn for
+    // the same reason a mode mismatch does: spliced into a step it would be read
+    // beside the work it is telling the agent to stop.
+    const ownTurn = signal.requiresOwnTurn === true || signal.severity === 'blocker';
+    if (!this.host.turnInFlight() || ownTurn || modeMismatch) return this.queue(delivered);
     this.pending.push(delivered);
     this.openCard(delivered, stepBody(delivered));
     this.logActivity?.('signal_injected', `${signal.kind} → live turn`);

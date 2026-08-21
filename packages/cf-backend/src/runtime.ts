@@ -63,7 +63,7 @@ import {
   type UserCredentialClient,
   type UserCredentialSource,
 } from "./providers/agent-registry";
-import { resolveJudgeModelSelection } from "./providers/judge-model";
+import { resolveReviewingModelSelection } from "./providers/judge-model";
 import { ownerCaller, type UserCaller } from "./user/workspace-capability";
 import { adaptMemory, backfillMemoryVectors } from "./memory-sync";
 import { agentAffinityKey, explorePrompt, formatInheritedContext, normalizeUsage, reflectionPrompt } from "@kinu.run/core";
@@ -578,6 +578,7 @@ export function createCFRuntime(
     memory, executor, llm, schedule, identity, craftStore,
     judgeModel: createJudgeLLM(agent, env, actor, sql, hooks.reportModelCall),
     fastLlm: createFastLLM(agent, env, actor, sql, hooks.reportModelCall),
+    advisorLlm: createAdvisorLLM(agent, env, actor, sql, hooks.reportModelCall),
     spawnBranch: createFacetSpawner(agent, env, actor),
     abortBranch: createFacetAborter(agent),
     releaseBranch: createFacetReleaser(agent),
@@ -918,7 +919,7 @@ function createFastLLM(
     return {
       registry,
       ...selectFastModel({
-        fastSpec: config.getFastModel(),
+        fastSpec: config.getRoleModel('fast'),
         chatSpec: registry.normalizeSpecSync(readStoredModelSpec(sql)),
         providers: registry.registry.list(),
       }),
@@ -943,14 +944,13 @@ function createFastLLM(
 
 /**
  * Cross-model judge for MCTS branch evaluation (rt.judgeModel). Resolves the
- * operator's review_model (the `review_model` agent_config key) at call time
- * so judging can run on a DIFFERENT model from the explorer — the
- * self-enhancement-bias fix. With no review_model set it now searches the
- * registry for an available model from a different VENDOR family than the
- * chat model, because an unset key used to mean the agent graded itself with
- * itself; same-model judging survives only as the single-vendor fallback (see
- * core's selectJudgeModel). Errors propagate — the evaluator's judge ensemble
- * drops failed samples instead of misreading them as scores.
+ * operator's pin for the `judge` producer at call time so judging can run on a
+ * DIFFERENT model from the explorer — the self-enhancement-bias fix. With no pin
+ * set it searches the registry for an available model from a different VENDOR
+ * family than the chat model, because an unset key used to mean the agent graded
+ * itself with itself; same-model judging survives only as the single-vendor
+ * fallback (see core's selectJudgeModel). Errors propagate — the evaluator's
+ * judge ensemble drops failed samples instead of misreading them as scores.
  */
 function createJudgeLLM(
   agent: AgentHost,
@@ -964,9 +964,9 @@ function createJudgeLLM(
     async complete(prompt: string): Promise<string> {
       const config = createAgentConfigStore(sql);
       const registry = actorProviderRegistry(agent, env, actor, 'Kinu (judge)');
-      const { spec } = await resolveJudgeModelSelection({
+      const { spec } = await resolveReviewingModelSelection({
         registry,
-        reviewSpec: config.getReviewModel(),
+        pinned: config.getRoleModel('judge'),
         chatSpec: config.getModel(),
       });
       const result = await generateText({
@@ -974,6 +974,47 @@ function createJudgeLLM(
         ...effortFor('judge'),
       });
       reportCall(report, 'judge', spec, result);
+      return result.text.trim();
+    },
+  };
+}
+
+/**
+ * The turn reviewer (rt.advisorLlm): the second model that reads a finished turn
+ * and may say one thing about it (core advisor/review.ts).
+ *
+ * The same reviewing resolver the judge uses, on the `advisor` producer's own
+ * pin, so an owner who pins nothing gets the cross-vendor default for the same
+ * stated reason. Reported as its own producer, which is what makes the cost of
+ * having a reviewer a line the owner can read rather than a rise in someone
+ * else's row.
+ *
+ * Always built. Whether it RUNS is the owner's switch, read per turn by the
+ * lane — not a wiring decision, because a workspace that turns the advisor on
+ * must not have to be redeployed to get one.
+ */
+function createAdvisorLLM(
+  agent: AgentHost,
+  env: Env,
+  actor: ActorRuntimeIdentity,
+  sql: SqlExecutor,
+  report?: ModelCallSink,
+): LLM {
+  return {
+    async *stream() { yield ""; },
+    async complete(prompt: string): Promise<string> {
+      const config = createAgentConfigStore(sql);
+      const registry = actorProviderRegistry(agent, env, actor, 'Kinu (advisor)');
+      const { spec } = await resolveReviewingModelSelection({
+        registry,
+        pinned: config.getRoleModel('advisor'),
+        chatSpec: config.getModel(),
+      });
+      const result = await generateText({
+        model: registry.resolveModel(spec), prompt,
+        ...effortFor('judge'),
+      });
+      reportCall(report, 'advisor', spec, result);
       return result.text.trim();
     },
   };

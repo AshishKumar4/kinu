@@ -57,6 +57,7 @@ import {
   queueTurnShadowTrial, runQueuedShadowTrials, createJsonJudge, type ScaffoldControl,
   SCAFFOLD_TURN_TIMEOUT_MS,
   effortFor, type CompletedTurn, type TurnContinuity,
+  runAdvisorLane,
   // canonical tool + prompt surface — single source of truth
   buildActorTools,
   withClampedToolResults,
@@ -1081,7 +1082,14 @@ export abstract class ActorAgent extends Think<Env> {
         logger,
       },
       archive: this.compactionState.archive,
-      summarize: createModelSummarizer(() => this.getModel()),
+      // The sink the summarizer already accepts, finally passed. `compaction`
+      // was a declared SPEND_SOURCE that could never appear in the panel:
+      // folding history is the producer that fires precisely when a
+      // conversation got expensive, so the workspace total understated exactly
+      // the sessions an owner asks about.
+      summarize: createModelSummarizer(() => this.getModel(), undefined, {
+        source: 'compaction', report: (report) => this.reportModelCall(report),
+      }),
       // The ladder's first rung prunes this plane before any tool output.
       ephemeral: this.dynamicLedger,
       onOutcome: ({ outcome }) => {
@@ -1305,10 +1313,11 @@ export abstract class ActorAgent extends Think<Env> {
    *
    * `orch.recordTurn` opens the outcome review + session cadence (which is
    * what eventually proposes a new scaffold), `settleEvolutionInBackground`
-   * holds the DO open for that detached work, and `engine.queueShadowTrial`
-   * records this turn as evidence the promotion gate may draw on. Split across
-   * subclasses these drift: a facet that recorded turns but never settled or
-   * queued them proposes exactly one scaffold and then stalls forever on it.
+   * holds the DO open for that detached work, `engine.queueShadowTrial`
+   * records this turn as evidence the promotion gate may draw on, and
+   * `reviewTurnInBackground` is the advisor. Split across subclasses these
+   * drift: a facet that recorded turns but never settled or queued them
+   * proposes exactly one scaffold and then stalls forever on it.
    */
   protected settleCompletedTurn(turn: CompletedTurn): void {
     // Evolution hooks make 5-30s LLM calls and onChatResponse runs INSIDE
@@ -1320,6 +1329,48 @@ export abstract class ActorAgent extends Think<Env> {
     // turn's prepared messages are read synchronously (before any await) so a
     // later turn's stash can never bleed into this one's replay.
     this.engine.queueShadowTrial(turn, this._lastTurnOpts?.messages ?? []);
+    this.reviewTurnInBackground(turn);
+  }
+
+  /**
+   * The advisor lane: one review of the turn that just ended.
+   *
+   * Detached for the same reason the evolution lanes are — it is a model call
+   * on a path the turn queue is holding — and held open by the same keepalive.
+   * A reviewer that fails leaves a turn with no advice, never a failed turn, so
+   * nothing here can reach the caller.
+   *
+   * Governed off the TURN's labels rather than the governor's active scope, the
+   * same way the engine's own review is: this runs after the turn ended, when
+   * the active scope is either empty or some later turn's, and debiting a
+   * mission for work it did not cause is worse than not debiting at all.
+   *
+   * There is no completion gate on this backend — it is the one-shot CLI
+   * surface's mechanism — so `gateOpen` is false here by construction rather
+   * than by omission.
+   */
+  private reviewTurnInBackground(turn: CompletedTurn): void {
+    const llm = this.rt.advisorLlm;
+    if (llm === undefined || !this.config.getAdvisorEnabled()) return;
+    const labels = turn.missionLabels ?? [];
+    void this.keepAliveWhile(() => runAdvisorLane({
+      turn,
+      llm: labels.length === 0 ? llm : this.budget.govern(llm, labels),
+      enabled: true,
+      minSeverity: this.config.getAdvisorMinSeverity(),
+      recent: this.engine.recentAdvisorNotes(),
+      gateOpen: false,
+      // The turn's OWN ToolSet keys, read synchronously with the messages beside
+      // them: what the actor demonstrably had, not what this actor class can
+      // have. A capability the turn never carried must never be named at it.
+      reachable: Object.keys(this._lastTurnOpts?.tools ?? {}),
+      deliver: (signal) => this.orch.signals.deliver(signal),
+      record: (note) => { this.engine.recordAdvisorNote(note); },
+    })).catch((err) => diagnostics.failure('advisor.review_failed', toKinuError({
+      doing: 'reviewing the completed turn',
+      cause: err,
+      otherwise: 'unavailable',
+    })));
   }
 
   /**
@@ -3394,7 +3445,7 @@ export abstract class ActorAgent extends Think<Env> {
    *  answer is cached until the owner's provider set is invalidated. */
   protected getModelForReview(): Promise<import('ai').LanguageModel> {
     return this.ownedModelServices.resolveJudgeModel({
-      reviewSpec: this.config.getReviewModel(),
+      reviewSpec: this.config.getRoleModel('judge'),
       chatSpec: this.getStoredModelId(),
     });
   }

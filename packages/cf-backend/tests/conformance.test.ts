@@ -10,13 +10,13 @@
 import { describe, test, expect } from 'bun:test';
 import type { ToolSet } from 'ai';
 import {
-  compareSurface, normalizeObservedTables, observedActionEnum,
+  compareSurface, normalizeObservedTables, observedActionEnum, wiredProducers,
   renderConformanceFindings,
-  type ConformanceRoot, type ObservedSurface,
+  type AgentRuntime, type ConformanceRoot, type ObservedSurface,
 } from '@kinu.run/core';
 import { orchestratorHarness, subordinateHarness, type ActorHarness } from './helpers/actor-harness';
 
-interface RawToolsAgent { observeRawTools(): ToolSet }
+interface RawToolsAgent { observeRawTools(): ToolSet; observeRuntime(): AgentRuntime }
 
 function observe(root: ConformanceRoot, harness: ActorHarness<RawToolsAgent>): ObservedSurface {
   const tools = harness.agent.observeRawTools();
@@ -27,6 +27,7 @@ function observe(root: ConformanceRoot, harness: ActorHarness<RawToolsAgent>): O
       'agents-action': observedActionEnum(tools.agents),
       'memory-action': observedActionEnum(tools.memory),
       table: normalizeObservedTables(harness.tableNames()),
+      producer: wiredProducers(harness.agent.observeRuntime()),
     },
   };
 }

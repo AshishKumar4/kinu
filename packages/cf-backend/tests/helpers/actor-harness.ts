@@ -18,7 +18,7 @@
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import type { AgentContext } from 'agents';
 import type { ToolSet } from 'ai';
-import type { IngressDescriptor, SqlExecRow, SqlValue, SubordinateRosterStore } from '@kinu.run/core';
+import type { AgentRuntime, IngressDescriptor, SqlExecRow, SqlValue, SubordinateRosterStore } from '@kinu.run/core';
 import * as v from 'valibot';
 import { mockAgentsSdk } from './agents-sdk';
 import { platformGatewayEnv } from './platform-gateway';
@@ -36,6 +36,8 @@ const { SubordinateAgent } = await import('../../src/subordinate-agent');
  *  of reaching through `ReturnType<typeof orchestratorHarness>`. */
 export class HarnessOrchestratorAgent extends OrchestratorAgent {
   observeRawTools(): ToolSet { return this.getRawTools(); }
+  /** The assembled runtime, for the conformance observer's `producer` plane. */
+  observeRuntime(): AgentRuntime { return this.rt; }
   setObservedSoul(text: string): void { this._cachedSoulText = text; }
   declareScaffoldPresent(): void { this._scaffoldReady = true; }
   /** The parent-side roster the facet gate consults. Exposed rather than
@@ -59,6 +61,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
 class HarnessSubordinateAgent extends SubordinateAgent {
   observeRawTools(): ToolSet { return this.getRawTools(); }
+  observeRuntime(): AgentRuntime { return this.rt; }
   declareScaffoldPresent(): void { this._scaffoldReady = true; }
 }
 

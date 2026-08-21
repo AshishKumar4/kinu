@@ -1,5 +1,6 @@
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import {
+  ADVISOR_SEVERITIES,
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   JsonObjectSchema,
   JsonValueSchema,
@@ -33,7 +34,7 @@ import {
 import { SessionRecorder } from './session-recorder';
 import { normalizeModelMenu, type AgentModelMenu } from './model-catalog';
 import { pageSchema, type Page, type SeekCursor } from '@kinu.run/core';
-import type { AlternateTakeSet, BranchStatusEvent, ChangelogEntry, ChangelogRevertResult, ReasoningEffort, TakePickOutcome } from '@kinu.run/core';
+import type { AlternateTakeSet, BranchStatusEvent, ChangelogEntry, ChangelogRevertResult, EvolutionConfigView, ReasoningEffort, TakePickOutcome } from '@kinu.run/core';
 import {
   asRecord,
   createUserUiMessage,
@@ -60,6 +61,15 @@ import {
 import * as v from 'valibot';
 
 const ReasoningEffortSchema = v.picklist(['low', 'medium', 'high'] satisfies ReasoningEffort[]);
+const EvolutionConfigSchema: v.GenericSchema<EvolutionConfigView> = v.object({
+  reviewModel: v.nullable(v.string()),
+  autoPromoteScaffold: v.boolean(),
+  gepaEvalBudget: v.number(),
+  shadowSampleRate: v.number(),
+  scaffoldExploreShare: v.number(),
+  advisorEnabled: v.boolean(),
+  advisorMinSeverity: v.picklist(ADVISOR_SEVERITIES),
+});
 const PendingDeviceConsentSchema: v.GenericSchema<PendingDeviceConsent> = v.object({
   consentId: v.string(),
   deviceLabel: v.string(),
@@ -589,6 +599,14 @@ export class CloudAgentClient implements AgentClient {
     return {
       effort: (await this.callHttp('setReasoningEffort', SetReasoningEffortResultSchema, [effort])).effort,
     };
+  }
+
+  async getEvolutionConfig(): Promise<EvolutionConfigView> {
+    return await this.callHttp('getEvolutionConfig', EvolutionConfigSchema);
+  }
+
+  async setEvolutionConfig(view: Partial<EvolutionConfigView>): Promise<EvolutionConfigView> {
+    return await this.callHttp('setEvolutionConfig', EvolutionConfigSchema, [decodeJsonValue({ value: view })]);
   }
 
   async listModels(): Promise<AgentModelMenu> {

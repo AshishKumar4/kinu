@@ -995,6 +995,9 @@ export {
   type ModelCallSpend,
   type ModelCallSink,
   type SpendSource,
+  ROUTED_SPEND_SOURCES,
+  isRoutedSpendSource,
+  type RoutedSpendSource,
   type RunEventListener,
   type RunEventQuery,
 } from './events/index';
@@ -1361,8 +1364,8 @@ export type {
 // "X never worked on Y backend" class: a forgotten wire can no longer look
 // like a design decision.
 export {
-  BACKEND_CONFORMANCE, CONFORMANCE_PLANES, CONFORMANCE_ROOTS, PLANE_UNIVERSE, WIRED,
-  compareSurface, normalizeObservedTables, observedActionEnum, phantomCallables,
+  BACKEND_CONFORMANCE, CONFORMANCE_PLANES, CONFORMANCE_PRODUCERS, CONFORMANCE_ROOTS, PLANE_UNIVERSE, WIRED,
+  compareSurface, normalizeObservedTables, observedActionEnum, phantomCallables, wiredProducers,
   renderConformanceFindings,
 } from './conformance/index';
 export type {
@@ -1461,14 +1464,45 @@ export type {
   BackgroundJobControl, BackgroundJobPlaneDeps, CancelWorkDeps, CancelWorkOutcome, RetryOutcome,
 } from './read-models/background-jobs';
 export {
-  getAlwaysActiveSkills, getEvolutionConfig, getMctsConfig, getReasoningEffort,
+  getAlwaysActiveSkills, getEvolutionConfig, getMctsConfig, getModelRoles, getReasoningEffort,
   getShellApprovalMode, getStoredModelSpec, setAlwaysActiveSkills, setEvolutionConfig,
-  setMctsConfig, setModel, setReasoningEffort, setShellApprovalMode,
+  setMctsConfig, setModel, setModelRoles, setReasoningEffort, setShellApprovalMode,
   getShellApprovalGrants, revokeShellApprovalGrants,
 } from './read-models/config-plane';
 export type {
-  EvolutionConfigView, MctsConfigView, SetModelDeps,
+  EvolutionConfigView, MctsConfigView, ModelRolesView, SetModelDeps,
 } from './read-models/config-plane';
+
+// The advisor — one severity-tagged note per turn, the rules that keep it quiet,
+// and the turn-end lane both backends call. Delivery itself is SignalDelivery's.
+export {
+  ADVISOR_EVENT_TYPE,
+  ADVISOR_NOTE_MAX_CHARS,
+  ADVISOR_SEVERITIES,
+  ADVISOR_SEVERITY_LABEL,
+  ADVISOR_SEVERITY_METADATA_KEY,
+  ADVISOR_SIGNAL_KIND,
+  CONTENT_FREE_NOTES,
+  DEFAULT_ADVISOR_MIN_SEVERITY,
+  ADVISOR_DEDUPE_WINDOW,
+  ADVISOR_HEADER,
+  advisorSignalText,
+  runAdvisorLane,
+  buildAdvisorPrompt,
+  isAdvisorSeverity,
+  isContentFree,
+  isDuplicateNote,
+  judgeNote,
+  normalizeNote,
+  parseAdvisorReply,
+  reviewCompletedTurn,
+  type AdvisorDisposition,
+  type AdvisorLaneDeps,
+  type AdvisorNote,
+  type AdvisorSeverity,
+  type NoteVerdict,
+  type SuppressionRule,
+} from './advisor/review';
 export {
   getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
 } from './read-models/evolution-views';

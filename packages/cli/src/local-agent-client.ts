@@ -1,8 +1,8 @@
 import { existsSync, statSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
-import type { AgentRuntime, SessionSurface, ShellApprovalMode, ReasoningEffort, JsonObject } from '@kinu.run/core';
+import type { AgentConfigStore, AgentRuntime, EvolutionConfigView, SessionSurface, ShellApprovalMode, ReasoningEffort, JsonObject } from '@kinu.run/core';
 import type { WorkspaceInfo } from '@kinu.run/core/identity';
-import { applyWorkspaceTitle, createAgentConfigStore, initAgentConfigTable, readLatestSearchTree, BACKGROUND_POLICY, decodeJsonValue, usageReported, type GepaOptimizationResult } from '@kinu.run/core';
+import { applyWorkspaceTitle, createAgentConfigStore, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, decodeJsonValue, usageReported, type GepaOptimizationResult } from '@kinu.run/core';
 import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import {
   LOCAL_MAX_INLINE_ATTACHMENT_BYTES,
@@ -226,6 +226,10 @@ export class LocalAgentClient implements AgentClient {
   readonly inlineAttachmentLimitBytes = LOCAL_MAX_INLINE_ATTACHMENT_BYTES;
 
   private readonly deps: LocalAgentClientDeps;
+  /** Workspace-level agent_config, read straight off the same database the
+   *  session uses. Config outlives the session, so fork/resume swaps do not
+   *  invalidate this. */
+  private readonly config: AgentConfigStore;
   private readonly listeners = new Set<(event: AgentClientEvent) => void>();
   private session: LocalAgentSession;
   private activeCliSession: CliSession;
@@ -235,6 +239,7 @@ export class LocalAgentClient implements AgentClient {
 
   constructor(deps: LocalAgentClientDeps) {
     this.deps = deps;
+    this.config = createAgentConfigStore(deps.rt.storage.sql);
     this.agentName = deps.agentName;
     this.activeCliSession = createCliSession(deps.agentName, {
       ...deps.sessionOptions,
@@ -507,6 +512,14 @@ export class LocalAgentClient implements AgentClient {
 
   async setReasoningEffort(effort: ReasoningEffort): Promise<{ effort: ReasoningEffort }> {
     return { effort: this.session.setReasoningEffort(effort).effort };
+  }
+
+  async getEvolutionConfig(): Promise<EvolutionConfigView> {
+    return getEvolutionConfig(this.config);
+  }
+
+  async setEvolutionConfig(view: Partial<EvolutionConfigView>): Promise<EvolutionConfigView> {
+    return setEvolutionConfig(this.config, view);
   }
 
   async listModels(): Promise<AgentModelMenu> {

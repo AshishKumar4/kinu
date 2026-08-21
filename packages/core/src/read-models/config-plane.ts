@@ -16,12 +16,15 @@ import * as v from 'valibot';
 import { DEFAULT_CONFIG } from '../config';
 import type { AgentConfigStore, ShellApprovalMode } from '../config/store';
 import { REASONING_EFFORTS } from '../strategy/effort';
+import { ADVISOR_SEVERITIES, type AdvisorSeverity } from '../advisor/review';
+import { ROUTED_SPEND_SOURCES, type RoutedSpendSource } from '../events/model-call';
 
 const SHELL_APPROVAL_MODES: readonly ShellApprovalMode[] = ['strict', 'allow_all', 'deny_all'];
 const ReasoningEffortSchema = v.picklist(REASONING_EFFORTS);
 const ShellApprovalModeSchema = v.picklist(SHELL_APPROVAL_MODES);
 const ArrayBoundarySchema = v.array(v.unknown());
 const SkillNamesSchema = v.array(v.string());
+const AdvisorSeveritySchema = v.picklist(ADVISOR_SEVERITIES);
 
 export interface SetModelDeps {
   readonly config: AgentConfigStore;
@@ -46,6 +49,22 @@ export interface EvolutionConfigView {
   gepaEvalBudget: number;
   shadowSampleRate: number;
   scaffoldExploreShare: number;
+  /** Whether the turn reviewer runs. False by default. */
+  advisorEnabled: boolean;
+  /** The lowest severity that reaches the conversation. Below it, a note is a
+   *  Changelog row instead. */
+  advisorMinSeverity: AdvisorSeverity;
+}
+
+/**
+ * One model spec per routed producer, or null where the producer keeps the
+ * default for its class.
+ *
+ * Keyed by {@link ROUTED_SPEND_SOURCES} rather than by the whole spend
+ * taxonomy, so every key the owner is shown is a key that changes something.
+ */
+export interface ModelRolesView {
+  readonly roles: Readonly<Record<RoutedSpendSource, string | null>>;
 }
 
 /** The stored model spec, or null when unset (the registry picks a default). */
@@ -171,11 +190,13 @@ export function setMctsConfig(config: AgentConfigStore, view: Partial<MctsConfig
  *  promotes itself, and how much each loop may spend. */
 export function getEvolutionConfig(config: AgentConfigStore): EvolutionConfigView {
   return {
-    reviewModel: config.getReviewModel(),
+    reviewModel: config.getRoleModel('judge'),
     autoPromoteScaffold: config.getAutoPromoteScaffold(),
     gepaEvalBudget: config.getGepaEvalBudget(),
     shadowSampleRate: config.getShadowSampleRate(),
     scaffoldExploreShare: config.getScaffoldExploreShare(),
+    advisorEnabled: config.getAdvisorEnabled(),
+    advisorMinSeverity: config.getAdvisorMinSeverity(),
   };
 }
 
@@ -185,10 +206,45 @@ export function setEvolutionConfig(
   config: AgentConfigStore,
   view: Partial<EvolutionConfigView>,
 ): EvolutionConfigView {
-  if (view.reviewModel !== undefined) config.setReviewModel(view.reviewModel);
+  if (view.reviewModel !== undefined) config.setRoleModel('judge', view.reviewModel);
   if (view.autoPromoteScaffold !== undefined) config.setAutoPromoteScaffold(view.autoPromoteScaffold);
   if (view.gepaEvalBudget !== undefined) config.setGepaEvalBudget(view.gepaEvalBudget);
   if (view.shadowSampleRate !== undefined) config.setShadowSampleRate(view.shadowSampleRate);
   if (view.scaffoldExploreShare !== undefined) config.setScaffoldExploreShare(view.scaffoldExploreShare);
+  if (view.advisorEnabled !== undefined) config.setAdvisorEnabled(view.advisorEnabled);
+  if (view.advisorMinSeverity !== undefined) {
+    config.setAdvisorMinSeverity(v.parse(AdvisorSeveritySchema, view.advisorMinSeverity));
+  }
   return getEvolutionConfig(config);
+}
+
+/** What each routed producer is pinned to. Unset reads as null, which is the
+ *  value that means "keep the default for this producer's class".
+ *
+ *  Written out rather than looped so the compiler holds it complete: adding a
+ *  producer to ROUTED_SPEND_SOURCES fails this function until it is read here,
+ *  which a loop over the same array would silently satisfy while answering a
+ *  record with a missing key. */
+export function getModelRoles(config: AgentConfigStore): ModelRolesView {
+  return {
+    roles: {
+      judge: config.getRoleModel('judge'),
+      fast: config.getRoleModel('fast'),
+      advisor: config.getRoleModel('advisor'),
+    },
+  };
+}
+
+/** Pin or clear any subset of the routed producers. A blank spec clears the
+ *  pin, so the form's empty field and the owner's "back to default" are the
+ *  same action rather than two. */
+export function setModelRoles(
+  config: AgentConfigStore,
+  roles: Partial<Record<RoutedSpendSource, string | null>>,
+): ModelRolesView {
+  for (const source of ROUTED_SPEND_SOURCES) {
+    const spec = roles[source];
+    if (spec !== undefined) config.setRoleModel(source, spec);
+  }
+  return getModelRoles(config);
 }

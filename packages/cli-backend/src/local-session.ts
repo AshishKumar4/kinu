@@ -68,6 +68,7 @@ import {
   openTurnRun, closeTurnRun, snapshotCompletedTurn, creditedTurnId,
   persistMeasuredPromptTokens, applyOverflowRecovery, measureCompactionTrigger,
   CompletionGate, observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
+  runAdvisorLane,
   PROGRAMMATIC_MESSAGE_ID_PREFIX,
   ExtensionHost, UserSteerDrain,
   createDefaultWebSearchProvider, createWebCodemodeProvider, createRLMProvider, type WebSearchProvider,
@@ -535,7 +536,12 @@ export class LocalAgentSession implements BackendHost {
         },
       },
       archive: this.compactionState.archive,
-      summarize: createModelSummarizer(() => this.ensureModelState()),
+      // The sink the summarizer already accepts, finally passed — see the same
+      // call on the cloud actor. Without it `compaction` was a declared
+      // SPEND_SOURCE that could never appear in the panel.
+      summarize: createModelSummarizer(() => this.ensureModelState(), undefined, {
+        source: 'compaction', report: (report) => this.modelCallSink(report),
+      }),
       // The ladder's first rung prunes this plane before any tool output.
       ephemeral: this.dynamicLedger,
       onOutcome: ({ outcome }) => {
@@ -1987,6 +1993,9 @@ export class LocalAgentSession implements BackendHost {
       // a `kinu exec` process no longer waits out a candidate turn before
       // it can exit.
       if (this.turnWorkMode !== 'plan') this.engine.queueShadowTrial(turn, liveTurnOpts.history);
+      if (this.turnWorkMode !== 'plan') {
+        this.reviewTurnInBackground(turn, Object.keys(liveTurnOpts.tools ?? {}));
+      }
       this.emit({ type: 'turn-end', turn });
     } catch (err) {
       const message = renderThrownChain({ cause: err });
@@ -2043,6 +2052,43 @@ export class LocalAgentSession implements BackendHost {
       metadata: { kinuEvent: COMPLETION_GATE_EVENT },
       resolve: () => {},
     });
+  }
+
+  /**
+   * The advisor lane: one review of the turn that just ended.
+   *
+   * Detached, so a reviewer never delays the prompt, and never throws at the
+   * turn — a review that failed is a turn with no advice.
+   *
+   * `gateOpen` is the one thing this backend has and the cloud one does not.
+   * The completion gate is the other harness-authored message at a turn
+   * boundary, and it lives on this surface only. While it is waiting for its
+   * answer the advisor records its note instead of saying it, so the one-shot
+   * run reads exactly one runtime voice per boundary.
+   *
+   * Governed off the TURN's labels for the same reason the engine's own review
+   * is: this runs after the turn ended, and debiting whatever mission happens
+   * to be active later would charge work it did not cause.
+   */
+  private reviewTurnInBackground(turn: CompletedTurn, reachable: readonly string[]): void {
+    const llm = this.rt.advisorLlm;
+    if (llm === undefined || !this.config.getAdvisorEnabled()) return;
+    const labels = turn.missionLabels ?? [];
+    void runAdvisorLane({
+      turn,
+      llm: labels.length === 0 ? llm : this.budget.govern(llm, labels),
+      enabled: true,
+      minSeverity: this.config.getAdvisorMinSeverity(),
+      recent: this.engine.recentAdvisorNotes(),
+      gateOpen: this.completionGate.open,
+      reachable,
+      deliver: (signal) => this.orch.signals.deliver(signal),
+      record: (note) => { this.engine.recordAdvisorNote(note); },
+    }).catch((err) => diagnostics.failure('advisor.review_failed', toKinuError({
+      doing: 'reviewing the completed turn',
+      cause: err,
+      otherwise: 'unavailable',
+    })));
   }
 
   /** Settle every branch launched during the just-finished turn (detached —

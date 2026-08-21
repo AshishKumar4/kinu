@@ -106,6 +106,8 @@ function fakeClient(opts: FakeOptions = {}): Fake {
     setModel: async (spec) => ({ spec }),
     getReasoningEffort: async () => null,
     setReasoningEffort: async (effort) => ({ effort }),
+    getEvolutionConfig: async () => { throw new Error('no evolution config'); },
+    setEvolutionConfig: async () => { throw new Error('no evolution config'); },
     listModels: async () => ({ models: [], failures: [] }),
   };
 

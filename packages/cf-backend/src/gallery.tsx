@@ -15,6 +15,9 @@
  *                                    (quiet failure, protocol failure, a
  *                                    multi-line `run`, an MCP tool, a failing
  *                                    group)
+ *   /gallery.html?frame=advisor  → the advisor's note card, once per severity
+ *                                  (nit / concern / blocker), full ladder in
+ *                                  one column
  *   /gallery.html?frame=modal    → modal open
  *   /gallery.html?frame=home     → HomePage
  *   /gallery.html?frame=tabs     → the agent tab strip, active + idle + working
@@ -2987,6 +2990,37 @@ function ToolCallsFrame() {
   );
 }
 
+/* ── Advisor notes ──────────────────────────────────────────────── */
+
+/** The advisor's one note per finished turn, once per severity — the ladder
+ *  the card has to keep legible: `nit` must stay quiet, `blocker` must be the
+ *  loudest thing in the column, and the note itself is readable without a
+ *  click on all three. Real metadata shape (`proteusEvent` + `advisorSeverity`),
+ *  so the frame exercises the classifier, not a mock of it. */
+const ADVISOR_NOTES = {
+  nit: "The commit message says 'fix typo' but the diff also renames two exported symbols. Split it or say so.",
+  concern: "The retry loop in deploy.sh has no backoff cap. A stuck registry keeps it spinning for the whole turn budget.",
+  blocker: "The migration drops coupons.kind while the old worker is still deployed. Roll the worker first or every checkout 500s.",
+} as const;
+
+const ADVISOR_MESSAGES: UIMessage[] = (["nit", "concern", "blocker"] as const).map((severity) => msg({
+  id: `adv-${severity}`, role: "user",
+  metadata: { proteusEvent: "advisor", advisorSeverity: severity },
+  parts: [{ type: "text", text: ADVISOR_NOTES[severity] }],
+}));
+
+function AdvisorFrame() {
+  return (
+    <div className="flex justify-center p-bg p-text min-h-screen">
+      <div className="@container flex w-full max-w-[640px] flex-col gap-6 border-x p-border px-6 py-6">
+        {ADVISOR_MESSAGES.map((m) => (
+          <MessageView key={m.id} message={m} isLast={false} isStreaming={false} onFork={() => {}} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function AgentFrame() {
   return (
     <div className="p-bg min-h-screen flex justify-center">
@@ -3098,6 +3132,7 @@ async function mount() {
   else if (frame === "chatloading") node = <ChatLoadingFrame />;
   else if (frame === "chathistory") node = <ChatHistoryFrame />;
   else if (frame === "toolcalls") node = <ToolCallsFrame />;
+  else if (frame === "advisor") node = <AdvisorFrame />;
   else if (frame === "streaming") node = <StreamingFrame />;
   else if (frame === "agent") node = <AgentFrame />;
   else if (frame === "transcript") node = <TranscriptFrame />;

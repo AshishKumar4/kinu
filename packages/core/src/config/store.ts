@@ -19,6 +19,10 @@ import {
 import {
   formatApprovalGrant, parseApprovalGrant, type ApprovalGrant,
 } from '../safety/approval-gate';
+import {
+  DEFAULT_ADVISOR_MIN_SEVERITY, isAdvisorSeverity, type AdvisorSeverity,
+} from '../advisor/review';
+import type { RoutedSpendSource } from '../events/model-call';
 
 export type ShellApprovalMode = 'strict' | 'allow_all' | 'deny_all';
 
@@ -47,14 +51,24 @@ export const AGENT_CONFIG_KEYS = {
   /** Fraction of scaffold proposals that branch from an archived variant
    *  instead of the live current (DGM archive exploration). */
   scaffoldExploreShare: 'scaffold_explore_share',
-  /** `<provider>/<modelId>` the agent's own output is judged on. Unset = pick
-   *  the first available cross-family model (selectJudgeModel). */
+  /** `<provider>/<modelId>` the agent's own output is judged on. The `judge`
+   *  producer's role key, under the name it has always had rather than
+   *  `model_role.judge` — see {@link roleConfigKey}. Unset = the first
+   *  available cross-family model (selectJudgeModel). */
   reviewModel: 'review_model',
   /** `<provider>/<modelId>` the MECHANICAL evolution calls run on (outcome
    *  classification, pathology labels, short reflections, pattern extraction,
-   *  sleep-time compression). Unset = the chat vendor's own small tier, or the
-   *  chat model where it has none (selectFastModel). */
+   *  sleep-time compression). The `fast` producer's role key. Unset = the chat
+   *  vendor's own small tier, or the chat model where it has none
+   *  (selectFastModel). */
   fastModel: 'fast_model',
+  /** 'true' switches the turn reviewer on. Off by default: it is one more model
+   *  call per turn, and the owner pays for it. */
+  advisorEnabled: 'advisor_enabled',
+  /** The lowest severity an advisor note needs to reach the conversation.
+   *  Below it a note is a Changelog row. Unset reads as
+   *  DEFAULT_ADVISOR_MIN_SEVERITY. */
+  advisorMinSeverity: 'advisor_min_severity',
   /** Comma-separated list of skill names the operator wants always-on. */
   alwaysActiveSkills: 'always_active_skills',
   /** The executor namespace the agent most recently ran a tool in — so the UI
@@ -98,6 +112,19 @@ export const AGENT_CONFIG_KEYS = {
    *  fork most commonly dies (`ctx.facets.abort()`). */
   isolateGen: 'isolate_gen',
 } as const;
+
+/**
+ * The `agent_config` key a producer's pinned model is stored under.
+ *
+ * `judge` and `fast` keep the keys they already had, so no workspace loses a
+ * setting and nothing has to migrate. This is the whole of the compatibility
+ * story: an alias in one accessor, not a migration and not a second table.
+ */
+export function roleConfigKey(source: RoutedSpendSource): string {
+  if (source === 'judge') return AGENT_CONFIG_KEYS.reviewModel;
+  if (source === 'fast') return AGENT_CONFIG_KEYS.fastModel;
+  return `model_role.${source}`;
+}
 
 export interface AgentConfigStore {
   // ── Generic accessors ──
@@ -150,16 +177,21 @@ export interface AgentConfigStore {
   /** Archive-exploration share for proposal base selection (0..1, default 0.2). */
   getScaffoldExploreShare(): number;
   setScaffoldExploreShare(share: number): void;
-  /** The model the agent's own output is judged on, or null to let
-   *  selectJudgeModel pick a cross-family one. */
-  getReviewModel(): string | null;
-  /** Pin the review model; null / blank clears the pin. */
-  setReviewModel(spec: string | null): void;
-  /** The model the mechanical evolution calls run on, or null to let
-   *  selectFastModel pick the chat vendor's small tier. */
-  getFastModel(): string | null;
-  /** Pin the fast model; null / blank clears the pin. */
-  setFastModel(spec: string | null): void;
+  /** The model this producer is pinned to, or null to let its class default
+   *  choose (providers/role-model.ts). One accessor for every routed producer,
+   *  because a per-producer getter pair is how the two that existed came to
+   *  disagree with the names the Spend panel shows. */
+  getRoleModel(source: RoutedSpendSource): string | null;
+  /** Pin a producer's model; null / blank clears the pin. */
+  setRoleModel(source: RoutedSpendSource, spec: string | null): void;
+  /** Whether the turn reviewer runs. False unless the owner switched it on. */
+  getAdvisorEnabled(): boolean;
+  setAdvisorEnabled(enabled: boolean): void;
+  /** The lowest severity that reaches the conversation. Always answers: unset
+   *  or unknown reads as `concern`, so the delivery seam never has to decide
+   *  what a missing floor means. */
+  getAdvisorMinSeverity(): AdvisorSeverity;
+  setAdvisorMinSeverity(severity: AdvisorSeverity): void;
   /** Skills the operator has pinned as always-active for this agent. */
   getAlwaysActiveSkills(): string[];
   setAlwaysActiveSkills(names: ReadonlyArray<string>): void;
@@ -363,18 +395,20 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
       return Number.isFinite(n) && n >= 0 && n <= 1 ? n : 0.2;
     },
     setScaffoldExploreShare(share) { set(AGENT_CONFIG_KEYS.scaffoldExploreShare, String(unitInterval('scaffold_explore_share', share))); },
-    getReviewModel() { return get(AGENT_CONFIG_KEYS.reviewModel); },
-    setReviewModel(spec) {
+    getRoleModel(source) { return get(roleConfigKey(source)); },
+    setRoleModel(source, spec) {
+      const key = roleConfigKey(source);
       const trimmed = spec?.trim();
-      if (trimmed) set(AGENT_CONFIG_KEYS.reviewModel, trimmed);
-      else void sql`DELETE FROM agent_config WHERE key = ${AGENT_CONFIG_KEYS.reviewModel}`;
+      if (trimmed) set(key, trimmed);
+      else void sql`DELETE FROM agent_config WHERE key = ${key}`;
     },
-    getFastModel() { return get(AGENT_CONFIG_KEYS.fastModel); },
-    setFastModel(spec) {
-      const trimmed = spec?.trim();
-      if (trimmed) set(AGENT_CONFIG_KEYS.fastModel, trimmed);
-      else void sql`DELETE FROM agent_config WHERE key = ${AGENT_CONFIG_KEYS.fastModel}`;
+    getAdvisorEnabled() { return get(AGENT_CONFIG_KEYS.advisorEnabled) === 'true'; },
+    setAdvisorEnabled(enabled) { set(AGENT_CONFIG_KEYS.advisorEnabled, String(enabled)); },
+    getAdvisorMinSeverity() {
+      const stored = get(AGENT_CONFIG_KEYS.advisorMinSeverity);
+      return isAdvisorSeverity(stored) ? stored : DEFAULT_ADVISOR_MIN_SEVERITY;
     },
+    setAdvisorMinSeverity(severity) { set(AGENT_CONFIG_KEYS.advisorMinSeverity, severity); },
     getAlwaysActiveSkills() {
       const v = get(AGENT_CONFIG_KEYS.alwaysActiveSkills);
       if (!v) return [];

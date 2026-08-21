@@ -157,8 +157,9 @@ import {
   getAlwaysActiveSkills, getEvolutionConfig, getMctsConfig, getReasoningEffort,
   getShellApprovalMode, getShellApprovalGrants, revokeShellApprovalGrants,
   setAlwaysActiveSkills, setEvolutionConfig,
+  getModelRoles, setModelRoles,
   setMctsConfig, setReasoningEffort, setShellApprovalMode,
-  type EvolutionConfigView, type MctsConfigView,
+  type EvolutionConfigView, type MctsConfigView, type ModelRolesView, type RoutedSpendSource,
   getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
   PlanReviewStore, formatPlanWithLineNumbers,
   planReviewAwaitingDecision,
@@ -3190,6 +3191,16 @@ export class OrchestratorAgent extends ActorAgent {
 
   @callable() async setEvolutionConfig(config: Partial<EvolutionConfigView>): Promise<EvolutionConfigView> {
     return setEvolutionConfig(this.config, config);
+  }
+
+  /** Which model each routed producer runs on — the same producer names the
+   *  Spend panel shows. */
+  @callable() async getModelRoles(): Promise<ModelRolesView> {
+    return getModelRoles(this.config);
+  }
+
+  @callable() async setModelRoles(roles: Partial<Record<RoutedSpendSource, string | null>>): Promise<ModelRolesView> {
+    return setModelRoles(this.config, roles);
   }
 
   // ── Fork RPCs ──────────────────────────────────────────────────

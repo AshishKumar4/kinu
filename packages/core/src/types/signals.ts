@@ -11,6 +11,7 @@
 // it and never picks a mechanism — starting a turn is simply what "next step"
 // means when no turn is running.
 
+import type { AdvisorSeverity } from '../advisor/review';
 import type { JsonObject } from '../utils/json';
 
 /** Why a queued signal never became a turn: 'preempted' = a newer turn
@@ -43,6 +44,16 @@ export interface AgentSignal {
   /** This signal carries a trusted turn mode and must not be spliced into a
    * differently-modeled live turn. Queue it as its own turn instead. */
   readonly requiresOwnTurn?: boolean | undefined;
+  /**
+   * How strongly the producer asks this to be weighed, when it has an opinion.
+   *
+   * Delivery reads it in exactly one place: a `blocker` gets its own turn, so a
+   * note that says "continuing wastes the work" cannot be folded into a turn
+   * already running in another work mode. Everything below that routes on turn
+   * state exactly as it did before, because how strongly a note is meant and
+   * when the agent can hear it are two different questions.
+   */
+  readonly severity?: AdvisorSeverity | undefined;
   /**
    * Stable identity for the FACT this signal announces, when the producer has
    * one. Forwarded to `BackendHost.enqueueTurn` as its `idempotencyKey`, which

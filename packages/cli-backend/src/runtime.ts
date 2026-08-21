@@ -343,7 +343,7 @@ export function createCLIRuntime(
   // (see approvalPolicy below).
   const agentConfig = createAgentConfigStore(sql);
   const fast = selectFastModel({
-    fastSpec: agentConfig.getFastModel(),
+    fastSpec: agentConfig.getRoleModel('fast'),
     chatSpec: fastResolver.normalizeSpecSync(null),
     providers: fastResolver.fastModelCandidates(),
   });
@@ -368,6 +368,23 @@ export function createCLIRuntime(
       spend: { source: 'judge', report },
     })
     : undefined;
+
+  // The turn reviewer. Its pin wins; with none it runs on the configured judge
+  // (the same cross-model client, for the same reason — a reviewer sharing the
+  // reviewed model's family agrees with it); with neither it runs on the chat
+  // model, which is a local session's only remaining option and is the honest
+  // one rather than leaving the owner's switch inert.
+  //
+  // Resolved once, like the fast tier: a CLI process is one workspace's session.
+  const advisorSpec = agentConfig.getRoleModel('advisor');
+  const advisorConfig: Parameters<typeof createLocalProviderLLM>[0] = {
+    llm: advisorSpec ? config.llm : config.judge ?? config.llm,
+    credentials: config.providerCredentials,
+    codexAuthStore: config.codexAuthStore, onCodexRefresh: config.onCodexRefresh,
+    spend: { source: 'advisor', report },
+  };
+  if (advisorSpec) advisorConfig.spec = advisorSpec;
+  const advisorLlm = createLocalProviderLLM(advisorConfig);
 
   const schedule: Schedule = {
     after: async (_ms, fn) => { setTimeout(fn, 0); },
@@ -465,7 +482,7 @@ export function createCLIRuntime(
   // other seam already holds a reference to.
   return Object.assign(buildRuntime({
     sql, execRaw, vfs, llm, executor: createSandboxedExecutor(), schedule,
-    agentId, agentName, memory, craftStore, judgeModel, fastLlm,
+    agentId, agentName, memory, craftStore, judgeModel, fastLlm, advisorLlm,
     spawnBranch: spawn, abortBranch: abort,
     // A CLI branch is a forked child process with its own SQLite FILE, not a
     // facet inside a shared durable object. `abort` already does the whole
@@ -603,6 +620,9 @@ export function buildCLIHeadRuntime(
   const runtimeOptions: Parameters<typeof buildRuntime>[0] = {
     sql, execRaw, vfs, llm: parent.llm, executor: parent.executor, schedule: parent.schedule,
     agentId: opts.agentId, agentName: opts.agentName, memory, craftStore, judgeModel: parent.judgeModel,
+    // A CLI fork is a child of the same workspace, so it inherits the reviewer
+    // the parent built, exactly as it inherits the judge.
+    advisorLlm: parent.advisorLlm,
     spawnBranch: parent.spawnBranch, abortBranch: parent.abortBranch,
     releaseBranch: parent.releaseBranch,
     executionRouter, shell,

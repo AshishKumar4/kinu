@@ -48,7 +48,7 @@ describe('compareSurface can fail (canaries)', () => {
 
   test('an unmeasured plane is reported, never silently conformant', () => {
     const report = compareSurface(observing({ tool: new Set() }));
-    expect(report.unmeasured).toEqual(['agents-action', 'memory-action', 'table']);
+    expect(report.unmeasured).toEqual(['agents-action', 'memory-action', 'table', 'producer']);
   });
 
   test('a fully conforming observation yields zero findings', () => {
@@ -57,6 +57,7 @@ describe('compareSurface can fail (canaries)', () => {
       'agents-action': { ...BACKEND_CONFORMANCE['agents-action'] },
       'memory-action': { ...BACKEND_CONFORMANCE['memory-action'] },
       table: {},
+      producer: { ...BACKEND_CONFORMANCE.producer },
     };
     const wiredOnCli = (record: Readonly<Record<string, RootStatuses>>): Set<string> =>
       new Set(Object.entries(record).filter(([, s]) => 'wired' in s.cli).map(([n]) => n));
@@ -65,6 +66,7 @@ describe('compareSurface can fail (canaries)', () => {
       'agents-action': wiredOnCli(manifest['agents-action']),
       'memory-action': wiredOnCli(manifest['memory-action']),
       table: new Set(),
+      producer: wiredOnCli(manifest.producer),
     }), manifest);
     expect(renderConformanceFindings(report)).toBe('');
     expect(report.unmeasured).toEqual([]);
@@ -95,6 +97,7 @@ describe('manifest hygiene', () => {
     expect(Object.keys(BACKEND_CONFORMANCE.tool).sort()).toEqual([...PLANE_UNIVERSE.tool!].sort());
     expect(Object.keys(BACKEND_CONFORMANCE['agents-action']).sort()).toEqual([...AGENTS_TOOL_ACTIONS].sort());
     expect(Object.keys(BACKEND_CONFORMANCE['memory-action']).sort()).toEqual([...PLANE_UNIVERSE['memory-action']!].sort());
+    expect(Object.keys(BACKEND_CONFORMANCE.producer).sort()).toEqual([...PLANE_UNIVERSE.producer!].sort());
   });
 
   test('no capability is declared absent everywhere (dead declaration)', () => {

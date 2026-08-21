@@ -202,6 +202,22 @@ describe('an optional field production reads', () => {
     expect(census(fixture(body))).toEqual([PROVISION_HOME]);
   });
 
+  test('is NOT reported when the supplying literal is returned through a ternary', () => {
+    // The false positive this direction locks. `AgentOrchestrator.scopeTurn`
+    // supplies `CompletedTurn.missionLabels` as
+    // `labels.length === 0 ? turn : { ...turn, missionLabels: [...labels] }`,
+    // and a detector reading only a ReturnStatement's DIRECT children saw no
+    // construction site there at all — so a field wired at both ends was
+    // reported connected at neither, which is the finding that gets a gate
+    // switched off.
+    const body = `  function scope(deps: RunDeps): RunDeps {
+    return deps.rt === '' ? deps : { rt: 'x', mission: 'm', logger: 'l' };
+  }
+  void scope;
+${SUPPLY(`{ rt: 'x' }`)}`;
+    expect(census(fixture(body))).toEqual([PROVISION_HOME]);
+  });
+
   test('is NOT judged at all when nothing visibly builds the interface', () => {
     // `runIt` is called with a value this gate cannot type. Guessing here is how
     // a gate earns a false positive and then a disabled line in a config.

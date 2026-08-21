@@ -10,19 +10,22 @@ import { Loader } from "@cloudflare/kumo";
 import {
   FloppyDiskIcon, BrainIcon, GearSixIcon, CheckIcon, ArrowLeftIcon,
   ShieldIcon, TreeStructureIcon, KeyIcon, PlugIcon, SparkleIcon,
-  DesktopTowerIcon, DownloadSimpleIcon,
+  DesktopTowerIcon, DownloadSimpleIcon, EyeIcon, CpuIcon,
 } from "@phosphor-icons/react";
 import {
+  ADVISOR_SEVERITIES, ADVISOR_SEVERITY_LABEL, DEFAULT_ADVISOR_MIN_SEVERITY,
+  ROUTED_SPEND_SOURCES, SPEND_SOURCE_DETAIL, SPEND_SOURCE_LABEL,
   WORKSPACE_ARCHIVE_EXTENSION, formatScoreInterval,
-  type ApprovalGrant, type ArchiveCursor, type ArchivePage, type JsonValue,
+  type ApprovalGrant, type ArchiveCursor, type ArchivePage, type EvolutionConfigView,
+  type JsonValue, type ModelRolesView,
 } from "@kinu.run/core";
 import { executorLabel } from "@/lib/executors";
 import { useKinu } from "@/hooks/use-kinu";
 import {
-  listDevices, listDeviceConsents, setDeviceConsentScope,
+  listAvailableModels, listDevices, listDeviceConsents, setDeviceConsentScope,
   type UserDevice, type DeviceConsentScope,
 } from "../lib/user-api";
-import { ConnectedModelPicker } from "@/components/ModelPicker";
+import { ConnectedModelPicker, ModelPicker } from "@/components/ModelPicker";
 import { Card, inputCls } from "@/components/ui/form";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -57,6 +60,21 @@ interface MctsConfig {
   maxIterations: number;
   maxDepth: number;
   branchBudget: number;
+}
+
+/** The advisor's two knobs, as the slice of the evolution config they ride on. */
+type AdvisorConfig = Pick<EvolutionConfigView, "advisorEnabled" | "advisorMinSeverity">;
+
+type ModelRoles = ModelRolesView["roles"];
+
+/** Every routed producer present, absent ones defaulted — so a partial answer
+ *  from an older agent still hydrates a record the form can edit key by key. */
+function allRoles(view: ModelRolesView | undefined): ModelRoles {
+  return {
+    judge: view?.roles?.judge ?? null,
+    fast: view?.roles?.fast ?? null,
+    advisor: view?.roles?.advisor ?? null,
+  };
 }
 
 /**
@@ -134,6 +152,8 @@ export default function SettingsPage() {
   const spec = useSettingField<string>();
   const approval = useSettingField<ApprovalMode>();
   const mcts = useSettingField<MctsConfig>();
+  const advisor = useSettingField<AdvisorConfig>();
+  const roles = useSettingField<ModelRoles>();
 
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -155,14 +175,18 @@ export default function SettingsPage() {
   const { hydrate: hydrateSpec, fail: failSpec } = spec;
   const { hydrate: hydrateApproval, fail: failApproval } = approval;
   const { hydrate: hydrateMcts, fail: failMcts } = mcts;
+  const { hydrate: hydrateAdvisor, fail: failAdvisor } = advisor;
+  const { hydrate: hydrateRoles, fail: failRoles } = roles;
   const load = useCallback(async () => {
     // A read that fails leaves its field unloaded — and so unsaveable — and
     // says so in place of the editor. It never substitutes a default that Save
     // would then write over the stored value.
-    const [storedSpec, mode, config] = await Promise.allSettled([
+    const [storedSpec, mode, config, evolution, modelRoles] = await Promise.allSettled([
       rpc<{ spec: string | null }>("getStoredModelSpec", []),
       rpc<{ mode: ApprovalMode }>("getShellApprovalMode", []),
       rpc<MctsConfig>("getMctsConfig", []),
+      rpc<EvolutionConfigView>("getEvolutionConfig", []),
+      rpc<ModelRolesView>("getModelRoles", []),
     ]);
     if (storedSpec.status === "rejected") failSpec(storedSpec.reason);
     else hydrateSpec(storedSpec.value?.spec ?? "");
@@ -173,7 +197,19 @@ export default function SettingsPage() {
     if (config.status === "rejected") failMcts(config.reason);
     else if (config.value) hydrateMcts(config.value);
     else failMcts("the agent returned no MCTS config");
-  }, [rpc, hydrateSpec, failSpec, hydrateApproval, failApproval, hydrateMcts, failMcts]);
+
+    if (evolution.status === "rejected") failAdvisor(evolution.reason);
+    else hydrateAdvisor({
+      advisorEnabled: evolution.value?.advisorEnabled ?? false,
+      advisorMinSeverity: evolution.value?.advisorMinSeverity ?? DEFAULT_ADVISOR_MIN_SEVERITY,
+    });
+
+    if (modelRoles.status === "rejected") failRoles(modelRoles.reason);
+    else hydrateRoles(allRoles(modelRoles.value));
+  }, [
+    rpc, hydrateSpec, failSpec, hydrateApproval, failApproval, hydrateMcts, failMcts,
+    hydrateAdvisor, failAdvisor, hydrateRoles, failRoles,
+  ]);
 
   // Fetch once per agent connection — not on every render.
   const loaded = useRef(false);
@@ -183,7 +219,8 @@ export default function SettingsPage() {
     void load();
   }, [connectionStatus, load]);
 
-  const dirty = displayName.dirty || soul.dirty || spec.dirty || approval.dirty || mcts.dirty;
+  const dirty = displayName.dirty || soul.dirty || spec.dirty || approval.dirty || mcts.dirty
+    || advisor.dirty || roles.dirty;
 
   const save = useCallback(async () => {
     // Only edited fields are written. Everything else is either still loading
@@ -204,6 +241,8 @@ export default function SettingsPage() {
     });
     write(approval, (v) => rpc("setShellApprovalMode", [v]));
     write(mcts, (v) => rpc("setMctsConfig", [v]));
+    write(advisor, (v) => rpc("setEvolutionConfig", [v]));
+    write(roles, (v) => rpc("setModelRoles", [v]));
     if (writes.length === 0) return;
 
     setSaving(true);
@@ -218,7 +257,7 @@ export default function SettingsPage() {
     } finally {
       setSaving(false);
     }
-  }, [rpc, setModel, displayName, soul, spec, approval, mcts]);
+  }, [rpc, setModel, displayName, soul, spec, approval, mcts, advisor, roles]);
 
   if (connectionStatus !== "connected") {
     return (
@@ -313,6 +352,49 @@ export default function SettingsPage() {
             Changes take effect on the next turn. Provider availability is driven by which credentials you've connected.
           </p>
         </Card>
+
+        {/* Advisor */}
+        <Card title="Advisor" icon={EyeIcon}>
+          <FieldState field={advisor} what="the advisor settings" onRetry={() => void load()}>
+            {(value) => (
+              <>
+                <div className="space-y-1.5">
+                  <label className="text-xs p-text-2 font-medium">Second opinion</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {([false, true] as const).map((on) => (
+                      <button
+                        key={on ? "on" : "off"}
+                        onClick={() => advisor.edit({ ...value, advisorEnabled: on })}
+                        className={`p-2 rounded-md text-xs ${value.advisorEnabled === on ? "p-accent-bg p-accent" : "p-card p-card-hover"}`}
+                      >{on ? "On" : "Off"}</button>
+                    ))}
+                  </div>
+                  <p className="p-meta p-text-3">
+                    Off by default. When on, a second model reads each finished turn and can add one note. This adds one model call per turn.
+                  </p>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs p-text-2 font-medium">Minimum severity</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {ADVISOR_SEVERITIES.map((severity) => (
+                      <button
+                        key={severity}
+                        onClick={() => advisor.edit({ ...value, advisorMinSeverity: severity })}
+                        className={`p-2 rounded-md text-xs ${value.advisorMinSeverity === severity ? "p-accent-bg p-accent" : "p-card p-card-hover"}`}
+                      >{ADVISOR_SEVERITY_LABEL[severity]}</button>
+                    ))}
+                  </div>
+                  <p className="p-meta p-text-3">
+                    Notes at or above this severity reach the conversation. Notes below it become Changelog rows. The default is concern.
+                  </p>
+                </div>
+              </>
+            )}
+          </FieldState>
+        </Card>
+
+        {/* Per-producer model roles */}
+        <ModelRolesCard field={roles} onRetry={() => void load()} />
 
         {/* Approval */}
         <Card title="Shell-command approval" icon={ShieldIcon}>
@@ -750,6 +832,54 @@ function AlwaysActiveSkillsCard({
         >Pin</button>
       </div>
       {err && <div className="p-meta p-danger mt-1">{err}</div>}
+    </Card>
+  );
+}
+
+// ── Per-producer model roles ─────────────────────────────────────
+
+/**
+ * One model spec per routed producer, empty meaning "keep the default".
+ * ROUTED_SPEND_SOURCES rather than the whole spend taxonomy: the other
+ * producers have no resolver between them and a model, so a key for one
+ * would be a control that changes nothing (see events/model-call.ts).
+ * The menu is fetched once and shared across the rows — self-fetching
+ * pickers would issue one identical /api/user/models read per row.
+ */
+function ModelRolesCard({ field, onRetry }: {
+  field: SettingField<ModelRoles>;
+  onRetry: () => void;
+}) {
+  const { resource, reload } = useAsyncResource(useCallback(() => listAvailableModels(), []));
+  const menu = lastValue(resource);
+  return (
+    <Card title="Model roles" icon={CpuIcon}>
+      <p className="p-meta p-text-3">
+        Set one model per producer. The Spend panel lists every producer; only these
+        three take a model of their own. An empty field keeps that producer's default.
+      </p>
+      <FieldState field={field} what="the model roles" onRetry={onRetry}>
+        {(value) => resource.status === "error" && menu === null ? (
+          <LoadFailure what="the model list" message={resource.message} onRetry={reload} />
+        ) : menu === null ? (
+          <p className="text-xs p-text-3">Loading models…</p>
+        ) : (
+          <div className="space-y-3">
+            {ROUTED_SPEND_SOURCES.map((source) => (
+              <div key={source} className="space-y-1">
+                <label className="block p-meta p-text-2 font-medium">{SPEND_SOURCE_LABEL[source]}</label>
+                <ModelPicker
+                  models={menu.models} failures={menu.failures}
+                  value={value[source] ?? ""}
+                  onChange={(spec) => field.edit({ ...value, [source]: spec || null })}
+                  clearable placeholder="(default)" size="sm"
+                />
+                <p className="p-meta p-text-3">{SPEND_SOURCE_DETAIL[source]}</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </FieldState>
     </Card>
   );
 }
