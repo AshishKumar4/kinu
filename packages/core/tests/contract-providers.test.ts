@@ -16,7 +16,8 @@ import { generateText } from 'ai';
 import * as v from 'valibot';
 import {
   createOpenAIProvider, createOpenRouterProvider, createOpenAICompatProvider,
-  createAnthropicProvider, createCodexProvider,
+  createAnthropicProvider, createCodexProvider, createCodexOAuthClient,
+  CodexOAuthTokenError,
   CODEX_CRED_KEY,
   ANTHROPIC_CRED_KEY, OPENAI_CRED_KEY, OPENROUTER_CRED_KEY,
   type ProviderDeps, type AuthResolution,
@@ -268,6 +269,34 @@ describe('Codex provider contract', () => {
     const model = provider.createModel('gpt-5.5', deps);
     await expect(call(model)).rejects.toThrow();
     expect(mock.requests.length).toBe(0);
+  });
+});
+
+// ── Codex OAuth client ────────────────────────────────────────────────
+
+describe('Codex OAuth client', () => {
+  test('a rejected refresh token surfaces as a typed invalid_grant error', async () => {
+    const client = createCodexOAuthClient(asFetchFunction(async () => new Response(
+      JSON.stringify({ error: 'invalid_grant', error_description: 'The provided authorization grant is invalid' }),
+      { status: 400, headers: { 'content-type': 'application/json' } },
+    )));
+    const attempt = client.refresh('codex-refresh-revoked');
+    await expect(attempt).rejects.toBeInstanceOf(CodexOAuthTokenError);
+    await attempt.catch((err: CodexOAuthTokenError) => {
+      expect(err.oauthError).toBe('invalid_grant');
+      // The message must never quote the credential it failed on.
+      expect(err.message).not.toContain('codex-refresh-revoked');
+    });
+  });
+
+  test('a transient refresh failure carries no OAuth code a caller could treat as terminal', async () => {
+    const client = createCodexOAuthClient(asFetchFunction(async () =>
+      new Response('upstream exploded', { status: 502 })));
+    const attempt = client.refresh('codex-refresh');
+    await expect(attempt).rejects.toBeInstanceOf(CodexOAuthTokenError);
+    await attempt.catch((err: CodexOAuthTokenError) => {
+      expect(err.oauthError).toBe('unknown');
+    });
   });
 });
 

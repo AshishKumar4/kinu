@@ -47,6 +47,34 @@ function sanitizeErrorBody(body: string): string {
     .slice(0, 512);
 }
 
+/** Token-endpoint rejection carrying the OAuth error code, so callers can
+ *  tell a terminal `invalid_grant` (revoked/expired refresh token) apart from
+ *  transient failures. The Codex counterpart of cf-backend's
+ *  CloudflareOAuthTokenError — the same distinction, one per issuer. */
+export class CodexOAuthTokenError extends Error {
+  override readonly name = 'CodexOAuthTokenError';
+
+  constructor(readonly oauthError: string, message: string) {
+    super(message);
+  }
+}
+
+/** Read the token endpoint's rejection into its typed shape. The OAuth error
+ *  code rides the JSON body's `error` field; a body that is not that shape is
+ *  still a failure, but it carries no code — spelled `unknown` so no caller
+ *  can mistake a transient outage for a terminal revocation. */
+async function codexTokenEndpointError(res: Response): Promise<CodexOAuthTokenError> {
+  const body = await res.text();
+  const rejection = v.safeParse(
+    v.object({ error: v.optional(v.string()) }),
+    tolerate<unknown>(() => JSON.parse(body), 'malformed-input'),
+  );
+  return new CodexOAuthTokenError(
+    rejection.success && rejection.output.error ? rejection.output.error : 'unknown',
+    `Codex token refresh failed: ${res.status} ${sanitizeErrorBody(body)}`,
+  );
+}
+
 export interface DeviceCodeStart {
   userCode: string;
   deviceAuthId: string;
@@ -141,7 +169,7 @@ export function createCodexOAuthClient(fetchFn: typeof fetch = fetch): CodexOAut
         }).toString(),
       });
       if (!res.ok) {
-        throw new Error(`Codex token refresh failed: ${res.status} ${sanitizeErrorBody(await res.text())}`);
+        throw await codexTokenEndpointError(res);
       }
       const body = v.safeParse(TokenExchangeResponseSchema, await res.json());
       if (!body.success) {
