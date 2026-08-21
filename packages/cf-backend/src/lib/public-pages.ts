@@ -142,6 +142,24 @@ const DEPLOY_STEPS: ReadonlyArray<readonly [num: string, title: string, body: st
   ],
 ];
 
+/** § 08 — social proof. PENDING-OWNER, and deliberately empty: the audit
+ *  grades this dimension 1 against Prime Intellect's 9, and the only honest
+ *  way to close the gap is entries the owner supplies and can stand behind —
+ *  one verifiable quote per entry, with the source's permission. The section
+ *  renders only when this array is non-empty, so the page cannot ship a
+ *  placeholder that reads as proof and cannot carry an invented one. */
+const SOCIAL_PROOF: ReadonlyArray<{ readonly quote: string; readonly name: string; readonly role: string }> = [];
+
+export function proofSection(entries: ReadonlyArray<{ readonly quote: string; readonly name: string; readonly role: string }>): string {
+  return `<section class="section" id="proof">
+    <p class="label"><b>§ 08</b>Who vouches for it</p>
+    <h2 class="title">People who run it, in their own words.</h2>
+    <div class="grid three">
+      ${entries.map((e) => `<div class="cell"><p class="quote">“${e.quote}”</p><p class="who">${e.name} · ${e.role}</p></div>`).join('\n      ')}
+    </div>
+  </section>`;
+}
+
 /** Mono term → value rows, the annotation device the hero already uses. */
 function specRows(rows: ReadonlyArray<readonly [term: string, value: string]>): string {
   return `<dl class="spec">
@@ -308,9 +326,9 @@ export function landingDocument(install: string): string {
       ])}
     </div>
   </section>
+  ${SOCIAL_PROOF.length > 0 ? proofSection(SOCIAL_PROOF) : ''}
 </main>
 `,
-    footer: publicFooter(),
     script: `${COPY_SCRIPT}\n${INSTALL_PANEL_SCRIPT}\n${TAGLINE_SCRIPT}\n${GROW_SCRIPT}\n${WEAVE_SCRIPT}\n${CLI_FILM_SCRIPT}`,
   });
 }
@@ -398,6 +416,10 @@ white-space:pre-wrap;overflow-wrap:anywhere}
 .term .line[data-kind="call"]{margin-top:12px;color:var(--c-text-2)}
 .term .line[data-kind="call"] b{color:var(--c-accent-fg);font-weight:inherit}
 .term .line[data-kind="why"]{color:var(--c-text-3)}
+.quote{margin:0;font-family:var(--font-display);font-size:16.5px;line-height:1.5;
+letter-spacing:-0.01em;max-width:34ch}
+.who{margin:14px 0 0;font-size:11px;letter-spacing:0.06em;color:var(--c-text-3)}
+
 .term .line[data-kind="out"]{margin-top:4px;color:var(--c-text-2)}
 .term .line[data-kind="text"]{margin-top:10px}
 .term[data-playing] .line:not([data-shown]){display:none}
