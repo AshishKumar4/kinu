@@ -5,22 +5,36 @@
 
 import chalk from 'chalk';
 import type { Command } from 'commander';
-import { BUILTIN_TOOLS, describeToolCall, summarizeToolCall } from '@kinu.run/core';
+import { BUILTIN_TOOLS, describeToolCall, summarizeToolCall, parseRefusal } from '@kinu.run/core';
 import type { SearchNode, ReasoningEffort, JsonObject } from '@kinu.run/core';
+import { clipText } from './tui/format';
 import type { WorkspaceInfo } from '@kinu.run/core/identity';
 import { guideFailure, type ProviderFailure } from './provider-guidance';
 import cliPackage from '../package.json' with { type: 'json' };
 
 // ── Brand ────────────────────────────────────────────────────────
 
-const BRAND = chalk.bold.cyan('🔱 Kinu');
+// The silk palette (絹) the product renders — cf-backend index.css, silk dark.
+// Status hues are dye colours: bamboo for success, yamabuki amber for warning,
+// safflower for danger. Fixed hexes assume the dark terminal the TUI paints;
+// NO_COLOR still strips everything through chalk.
+const SILK = {
+  sheen: '#F2DFB4',   // --c-accent-fg — brand ink
+  thread: '#E3D2AE',  // --c-accent — fills, strokes, the winning line
+  success: '#9BC7A2', // 若竹 bamboo
+  warning: '#DFAE72', // 山吹 amber
+  danger: '#E38A8A',  // 紅 safflower
+  dim: '#A69C8E',     // --c-text-3
+} as const;
+
+const BRAND = chalk.bold.hex(SILK.sheen)('🔱 Kinu');
 const VERSION = cliPackage.version;
 const DIM = chalk.dim;
-const ACCENT = chalk.cyan;
-const OK = chalk.green;
-const WARN = chalk.yellow;
-const ERR = chalk.red;
-const MUTED = chalk.gray;
+const ACCENT = chalk.hex(SILK.thread);
+const OK = chalk.hex(SILK.success);
+const WARN = chalk.hex(SILK.warning);
+const ERR = chalk.hex(SILK.danger);
+const MUTED = chalk.hex(SILK.dim);
 
 export { BRAND, VERSION, DIM, ACCENT, OK, WARN, ERR, MUTED };
 
@@ -91,22 +105,53 @@ export function createSpinner(initialMessage: string) {
   };
 }
 
-// ── Typing indicator for chat ────────────────────────────────────
+// ── Turn status line for chat ────────────────────────────────────
 
-export function createTypingIndicator(agentName: string) {
-  let i = 0;
+export interface TurnStatus {
+  /** The turn entered a named state (`thinking`, `calling run`). */
+  show(label: string): void;
+  /** Release the row; the label is remembered for `resume`. */
+  clear(): void;
+  /** Redraw the last shown label — after a consent question gave the row back. */
+  resume(): void;
+}
+
+/**
+ * The chat turn's live status line. The LABEL is state: only a client event
+ * names it (the same vocabulary the TUI's phase line uses), so the line never
+ * claims work the turn is not doing — during a tool call it says `calling`,
+ * not `thinking`. The interval only animates frames under a live label, and
+ * `hold` surrenders the row to whatever has the user's attention (typed
+ * steering input, an unanswered consent question).
+ */
+export function createTurnStatus(opts: { hold?: () => boolean; tty?: boolean } = {}): TurnStatus {
+  const tty = opts.tty ?? isTTY;
+  let frame = 0;
+  let label: string | null = null;
   let timer: ReturnType<typeof setInterval> | null = null;
+  const draw = () => {
+    if (label === null || opts.hold?.()) return;
+    process.stdout.write(`\r\x1b[K${ACCENT(SPINNER_FRAMES[frame % SPINNER_FRAMES.length])} ${DIM(label)}`);
+    frame++;
+  };
   return {
-    start() {
-      if (!isTTY) return;
-      timer = setInterval(() => {
-        process.stdout.write(`\r${ACCENT(agentName)} ${DIM(SPINNER_FRAMES[i % SPINNER_FRAMES.length])} `);
-        i++;
-      }, 80);
+    show(next) {
+      label = next;
+      if (!tty || timer) return;
+      timer = setInterval(draw, 80);
+      draw();
     },
-    stop() {
-      if (timer) clearInterval(timer);
-      if (isTTY) process.stdout.write(`\r\x1b[K`);
+    clear() {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+      if (tty && label !== null) process.stdout.write('\r\x1b[K');
+    },
+    resume() {
+      if (label === null || !tty) return;
+      if (!timer) timer = setInterval(draw, 80);
+      draw();
     },
   };
 }
@@ -120,7 +165,7 @@ export function printCreatedCard(name: string, purpose: string, model: string, d
   console.log(`${BRAND} ${DIM('— Workspace Created')}`);
   console.log(boxTop(w));
   console.log(boxRow(L('Name:'), ACCENT(name), w));
-  console.log(boxRow(L('Mission:'), purpose.slice(0, w - 18), w));
+  console.log(boxRow(L('Mission:'), clipText(purpose, w - 18), w));
   console.log(boxRow(L('Model:'), MUTED(model), w));
   console.log(boxRow(L('Database:'), MUTED(dbPath), w));
   console.log(boxBot(w));
@@ -230,7 +275,7 @@ export function printSearchTree(nodes: SearchNode[]): void {
       : WARN('◌');
     const value = WARN(n.value.toFixed(3));
     const visits = DIM(`n=${n.visits}`);
-    const action = n.action.replace(/\n/g, ' ').slice(0, 50);
+    const action = clipText(n.action.replace(/\n/g, ' '), 50);
     console.log(`${indent}${icon} ${value} ${visits} ${DIM(action)}`);
   }
   console.log('');
@@ -257,12 +302,27 @@ export function printToolCall(toolName: string, args: JsonObject): void {
   if (summary) console.log(`${DIM('  ')}${MUTED(summary)}`);
 }
 
+/**
+ * A tool result, as a person reads it. A refusal — the `{reason, error}`
+ * payload executor tools answer failures on (core exec-result.ts) — renders as
+ * prose under a ✗, not as the JSON the model reads; everything else keeps the
+ * five-line preview, and every cut carries an ellipsis saying it cut.
+ */
 export function printToolResult(result: string): void {
-  const lines = result.split('\n').slice(0, 5);
-  for (const line of lines) {
-    console.log(`${DIM('  → ')}${MUTED(line.slice(0, 70))}`);
+  const refusal = parseRefusal(result);
+  if (refusal) {
+    const [head, ...rest] = refusal.error.split('\n');
+    if (head) console.log(`${DIM('  ✗ ')}${ERR(head)} ${DIM(`(${refusal.reason})`)}`);
+    else console.log(`${DIM('  ✗ ')}${ERR(refusal.reason)}`);
+    for (const line of rest) console.log(`${DIM('      ')}${MUTED(line)}`);
+    console.log(DIM('  ' + '━'.repeat(44)));
+    return;
   }
-  if (result.split('\n').length > 5) console.log(DIM(`  → ... (${result.split('\n').length - 5} more lines)`));
+  const lines = result.split('\n');
+  for (const line of lines.slice(0, 5)) {
+    console.log(`${DIM('  → ')}${MUTED(clipText(line, 70))}`);
+  }
+  if (lines.length > 5) console.log(DIM(`  → … (${lines.length - 5} more lines)`));
   console.log(DIM('  ' + '━'.repeat(44)));
 }
 
@@ -275,7 +335,7 @@ const EVOLUTION_ICONS = new Map([
 
 export function printEvolutionEvent(type: string, message: string): void {
   const icon = EVOLUTION_ICONS.get(type) ?? '•';
-  console.log(MUTED(`  ${icon} ${message.slice(0, 70)}`));
+  console.log(MUTED(`  ${icon} ${clipText(message, 70)}`));
 }
 
 // ── Error formatting ─────────────────────────────────────────────

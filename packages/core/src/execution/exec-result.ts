@@ -40,9 +40,10 @@
  */
 
 import * as v from 'valibot';
-import { refusalOf, tolerate, type KinuError } from '../obs/index';
+import { ERROR_CODES, refusalOf, tolerate, type KinuError, type Refusal } from '../obs/index';
 import { parseJsonValue } from '../utils/json';
 
+const RefusalSchema = v.object({ reason: v.picklist(ERROR_CODES), error: v.string() });
 const ErrorResultSchema = v.object({ error: v.string() });
 
 /** The shape every transport settles a command into. */
@@ -79,6 +80,26 @@ export const NO_OUTPUT = '(no output)';
  */
 export function refusalText(error: KinuError): string {
   return JSON.stringify(refusalOf(error));
+}
+
+/**
+ * The refusal a rendered tool result carries, or null when it is not one — the
+ * reader side of `refusalText`, kept in this file so producer and parser cannot
+ * disagree about the shape. Every surface that shows a result to a HUMAN (the
+ * CLI's chat transcripts and one-shot runs) funnels through here, so a refusal
+ * reaches the person as prose instead of as the JSON the model reads.
+ *
+ * Strict on purpose: a result of structured JSON that merely CONTAINS an
+ * `error` field (codemode results, executor payloads) is not a refusal, and
+ * rendering one as a failure would lie about a successful call.
+ */
+export function parseRefusal(result: string): Refusal | null {
+  const text = result.trimStart();
+  if (!text.startsWith('{')) return null;
+  const json = tolerate(() => parseJsonValue(text), 'malformed-input');
+  if (json === undefined) return null;
+  const parsed = v.safeParse(RefusalSchema, json);
+  return parsed.success ? { reason: parsed.output.reason, error: parsed.output.error } : null;
 }
 
 export function formatExecResult(result: ExecOutcome): string {

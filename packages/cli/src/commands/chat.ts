@@ -5,6 +5,7 @@ import { createAgentClient } from '../client-factory';
 import { runChatLoop } from '../chat-loop';
 import { ensureLocalDaemonRunning } from './daemon';
 import { printError, ACCENT, DIM } from '../display';
+import { installTurnDiagnostics } from '../turn-log';
 import { listKnownAgents } from '../agent-list';
 import { ask } from '../prompt';
 
@@ -50,6 +51,7 @@ export async function chatCommand(name: string | undefined, opts: {
 
   const target = resolveAgentTarget(name);
   if (target.mode === 'local') ensureLocalDaemonRunning();
+  installTurnDiagnostics();
   const client = await createAgentClient(target, opts);
   // A cloud workspace keeps its transcript server-side, so opening one always
   // replays it; a local one replays only the recorded session you asked for.

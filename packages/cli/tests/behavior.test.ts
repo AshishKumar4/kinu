@@ -483,6 +483,48 @@ describe("kinu exec (headless)", () => {
   });
 });
 
+// A tool refusal is the `{reason,error}` payload executor tools answer failures
+// on — written for the MODEL to branch on. The person watching the run must
+// read prose, not that JSON, and the diagnostic the refusal logs must not land
+// between them and their agent either.
+describe("kinu run — a tool refusal is rendered for the person, not the model", () => {
+  test("a refused escalation prints prose under ✗ and its diagnostic lands in cli.log", async () => {
+    const home = mkdtempSync(join(tmpdir(), "kinu-cli-run-refusal-"));
+    tempDirs.push(home);
+    // An unregistered runtime fails deterministically without touching a shell.
+    const server = startToolLoopMockLlm(
+      { name: "run", arguments: JSON.stringify({ command: "true", runtime: "nonexistent" }) },
+      1,
+      "done",
+    );
+    try {
+      const env = {
+        KINU_BASE_URL: `http://127.0.0.1:${server.port}`,
+        KINU_AUTH: "Bearer mock",
+        KINU_MODEL: "mock-model",
+      };
+      const created = await runCliAsync(["create", "refusy", "--mode", "local", "--purpose", "refusal render"], { home, env });
+      expect(created.exitCode).toBe(0);
+
+      const proc = await runCliAsync(["run", "refusy", "try the nonexistent runtime"], { home, env });
+      expect(proc.exitCode).toBe(0);
+      const stdout = toText(proc.stdout);
+      expect(stdout).toContain("✗");
+      expect(stdout).toContain("runtime_not_provisioned");
+      expect(stdout).toContain("(unavailable)");
+      expect(stdout).not.toContain('"reason"');
+      // No diagnostic JSON on the reader's streams — the turn log owns it now.
+      const stderr = toText(proc.stderr);
+      expect(stderr).not.toContain('"event"');
+      expect(stderr).not.toContain("AI SDK Warning");
+      expect(readFileSync(join(home, "cli.log"), "utf-8")).toContain("run.escalation_refused");
+    } finally {
+      stopLocalDaemon(home);
+      server.stop();
+    }
+  }, 120_000);
+});
+
 // The mechanical delegation nudge is the strongest causally-measured result in
 // the program, and it was measurable only from the run_events table inside the
 // agent's database — which a benchmark container deletes with the container.

@@ -3,7 +3,9 @@
  * evolution events, and system messages.
  */
 
+import { parseRefusal } from '@kinu.run/core';
 import { markdownSyntax, tuiColors } from './theme';
+import { clipText } from './format';
 
 export interface DisplayMessage {
   id: string;
@@ -89,18 +91,33 @@ function ToolCallMessage({ toolName, args }: { toolName: string; args?: string }
       <text>
         <span fg={tuiColors.amberDeep}>⚡ </span>
         <span fg={tuiColors.amber}>{toolName}</span>
-        {args ? <span fg={tuiColors.muted}> {args.slice(0, 80)}{args.length > 80 ? '…' : ''}</span> : null}
+        {args ? <span fg={tuiColors.muted}> {clipText(args, 80)}</span> : null}
       </text>
     </box>
   );
 }
 
 function ToolResultMessage({ content }: { content: string }) {
-  const truncated = content.length > 200 ? content.slice(0, 200) + '…' : content;
+  const refusal = parseRefusal(content);
+  if (refusal) {
+    const [head, ...rest] = refusal.error.split('\n');
+    return (
+      <box style={{ paddingLeft: 6, marginBottom: 1 }}>
+        <text>
+          <span fg={tuiColors.red}>✗ refused</span>
+          {head ? <span fg={tuiColors.text}> {clipText(head, 160)}</span> : null}
+          <span fg={tuiColors.muted}> ({refusal.reason})</span>
+        </text>
+        {rest.map((line, i) => (
+          <text key={i}><span fg={tuiColors.muted}>{clipText(line, 160)}</span></text>
+        ))}
+      </box>
+    );
+  }
   return (
     <box style={{ paddingLeft: 6, marginBottom: 1 }}>
       <text>
-        <span fg={tuiColors.muted}>↳ {truncated}</span>
+        <span fg={tuiColors.muted}>↳ {clipText(content, 200)}</span>
       </text>
     </box>
   );

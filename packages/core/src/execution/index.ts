@@ -15,7 +15,7 @@ export type {
 export { EXECUTOR_CAPABILITIES } from './types';
 
 export {
-  formatExecResult, isFailingResultText, type ExecOutcome,
+  formatExecResult, isFailingResultText, parseRefusal, type ExecOutcome,
   STDOUT_LABEL, STDERR_LABEL, NO_OUTPUT,
 } from './exec-result';
 export {
