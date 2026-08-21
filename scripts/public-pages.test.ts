@@ -39,6 +39,11 @@ declare global {
   interface Window {
     __tasks?: number;
     __kinuWeave?: { frames: number; maxFrameMs: number };
+    /** The first part-drawn frame of the hero tree, recorded by the watcher
+     *  installed before navigation. Read after the reveal settles, so proving
+     *  "there was such a moment" never depends on the observer attaching
+     *  before the reveal finishes on a slow first compile. */
+    __growth?: { early: number; total: number; announced: boolean };
   }
 }
 
@@ -109,7 +114,10 @@ interface Facts {
   /** What the page does with a wide screen: how much width it takes, how much
    *  padding a cell keeps, the narrowest mode cell, and whether every glimpse
    *  still fits the card it sits in. Keyed by viewport width. */
-  wide: Record<string, { pageWidth: number; minPad: number; cellInner: number; glimpseFits: boolean }>;
+  wide: Record<string, {
+    pageWidth: number; minPad: number; cellInner: number; glimpseFits: boolean;
+    heroLines: number; filmWidth: number; emptyMountHeight: number;
+  }>;
 }
 
 let browser: Browser;
@@ -154,6 +162,23 @@ async function openPage(frame: string, theme: Theme, size: { width: number; heig
   await page.setViewport(size);
   await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: theme.mode }]);
   await page.evaluateOnNewDocument((palette: string) => { localStorage.setItem('palette', palette); }, theme.palette);
+  // The hero's reveal is over in about 1.6s, so an observer that attaches after
+  // load can miss it entirely on a cold vite compile. This watcher runs from
+  // the document's first frame and keeps the first part-drawn frame it sees.
+  await page.evaluateOnNewDocument(() => {
+    const watch = (): void => {
+      const tree = document.querySelector('#hero-tree');
+      if (tree !== null && window.__growth === undefined) {
+        const shown = tree.querySelectorAll('.n[data-shown]').length;
+        const total = tree.querySelectorAll('.n').length;
+        if (shown > 0 && shown < total) {
+          window.__growth = { early: shown, total, announced: tree.hasAttribute('data-growing') };
+        }
+      }
+      requestAnimationFrame(watch);
+    };
+    requestAnimationFrame(watch);
+  });
   await page.bringToFront();
   await page.goto(`${origin}/gallery.html?frame=${frame}`, { waitUntil: 'networkidle0' });
   const applied = await page.evaluate(() => ({
@@ -177,25 +202,20 @@ beforeAll(async () => {
     // ── The tree grows, and it settles ────────────────────────────────
     {
       const page = await openPage('landing', SILK_DARK, DESKTOP);
-      // The first observable moment where the tree is PART drawn — awaited as a
-      // condition rather than slept for, so the assertion is "there was such a
-      // moment" and not "420ms was long enough".
-      const partial = await page.waitForFunction(() => {
-        const tree = document.querySelector('#hero-tree');
-        if (tree === null) return null;
-        const shown = tree.querySelectorAll('.n[data-shown]').length;
-        const total = tree.querySelectorAll('.n').length;
-        if (shown === 0 || shown >= total) return null;
-        return { shown, total, growing: tree.hasAttribute('data-growing') };
-      }, { polling: 'raf', timeout: 8000 }).then((handle) => handle.jsonValue());
-      if (partial === null) throw new Error('the hero tree was never observed part-drawn');
+      // The first moment the tree is PART drawn. Recorded from inside the page
+      // by a watcher planted before navigation: polling from here raced the
+      // reveal, and a slow first compile could finish all 35 nodes before the
+      // first poll, which failed the suite for a reason that was never about
+      // the page.
       await page.waitForFunction(() => !document.querySelector('[data-growing]'), { timeout: 8000 });
+      const partial = await page.evaluate(() => window.__growth ?? null);
+      if (partial === null) throw new Error('the hero tree was never observed part-drawn');
       const settled = await page.evaluate(() => document.querySelectorAll('#hero-tree .n[data-shown]').length);
       facts.growth = {
-        early: partial.shown,
+        early: partial.early,
         total: partial.total,
         settled,
-        announced: partial.growing,
+        announced: partial.announced,
       };
 
       // ── The silk is awake, and it is cheap ───────────────────────────
@@ -496,18 +516,34 @@ beforeAll(async () => {
             const column = document.querySelector('.page')!;
             const cells = [...document.querySelectorAll('.grid > .cell')];
             const pad = (cell: Element): number => parseFloat(getComputedStyle(cell).paddingLeft);
-            const fits = [...document.querySelectorAll('[data-glimpse]')].every((glimpse) => {
+            // An unfilled mount is collapsed, so it has no box: nothing to
+            // overflow, and the assertion below holds it to zero height rather
+            // than letting emptiness reserve space.
+            const mounts = [...document.querySelectorAll('[data-glimpse]')];
+            const fits = mounts.every((glimpse) => {
               const card = glimpse.closest('.cell');
               if (card === null) return false;
               const inner = glimpse.getBoundingClientRect();
+              if (inner.width === 0 && inner.height === 0) return true;
               const outer = card.getBoundingClientRect();
               return inner.left >= outer.left - 1 && inner.right <= outer.right + 1;
             });
+            const lineHeight = (node: Element): number => parseFloat(getComputedStyle(node).lineHeight);
+            const taglines = [...document.querySelectorAll('[data-taglines] > span')];
             return {
               pageWidth: column.getBoundingClientRect().width,
               minPad: Math.min(...cells.map(pad)),
               cellInner: Math.min(...cells.map((cell) => cell.clientWidth - pad(cell) * 2)),
               glimpseFits: fits,
+              // The rag: every variant of the headline, in lines.
+              heroLines: Math.max(...taglines.map(
+                (span) => Math.round(span.getBoundingClientRect().height / lineHeight(span)))),
+              // A single reading surface, at its widest on this page.
+              filmWidth: Math.max(...[...document.querySelectorAll('.film,.dag')]
+                .map((film) => film.getBoundingClientRect().width), 0),
+              emptyMountHeight: Math.max(...mounts
+                .filter((mount) => mount.childElementCount === 0)
+                .map((mount) => mount.getBoundingClientRect().height), 0),
             };
           });
         }
@@ -740,6 +776,30 @@ describe('the landing is designed for the wide screens', () => {
   test('every glimpse fits the card it sits in', () => {
     for (const at of ['1920', '2560'] as const) {
       expect(facts.wide[at]!.glimpseFits, `${at}: a glimpse overflowed its card`).toBeTrue();
+    }
+  });
+
+  test('the headline holds three lines, so the rag never orphans a word', () => {
+    // Measured with a sweep before the sizes were set: at these columns every
+    // tagline holds three lines up to 81px (1920) and 108px (2560), and the
+    // tiers ship 72 and 84. The 1280 base belongs to the shell, not here.
+    for (const at of ['1920', '2560'] as const) {
+      expect(facts.wide[at]!.heroLines, `${at}: headline lines`).toBeLessThanOrEqual(3);
+    }
+  });
+
+  test('a reading surface caps its measure instead of stretching to the column', () => {
+    // A grid may take the whole width; one terminal or one demo may not. At
+    // 2560 an uncapped figure measured about 2300px, which is unreadable by
+    // construction.
+    expect(facts.wide['2560']!.filmWidth, 'a film or demo stretched past its measure')
+      .toBeLessThanOrEqual(1600);
+    expect(facts.wide['2560']!.filmWidth, 'no film or demo was measured at all').toBeGreaterThan(0);
+  });
+
+  test('an unfilled mount collapses instead of reserving void', () => {
+    for (const at of ['1920', '2560'] as const) {
+      expect(facts.wide[at]!.emptyMountHeight, `${at}: an empty mount held height`).toBe(0);
     }
   });
 });
