@@ -71,6 +71,7 @@ const ACTOR_DDL = [
     parent_id  TEXT,
     role       TEXT NOT NULL,
     content    TEXT NOT NULL,
+    metadata   TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
   )`,
   `CREATE INDEX IF NOT EXISTS idx_msg_session ON messages(session_id)`,

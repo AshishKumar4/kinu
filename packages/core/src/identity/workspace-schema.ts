@@ -175,6 +175,12 @@ export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
   renameReleaseTables(execRaw, sql);
 
   initAllTables(execRaw, sql);
+  // `messages` gained its provenance column after release: the writer that
+  // persists a harness-enqueued turn stamps who wrote it there, and the
+  // transcript read model selects it by name. A workspace opened before the
+  // column existed has the old table — CREATE IF NOT EXISTS is a no-op on it —
+  // so the column is reconciled into shape on every boot.
+  reconcileColumns(sql, execRaw, 'messages', { metadata: 'TEXT' });
   // Pre-current-schema storage (legacy identity table, agent_soul, TEXT-bound
   // SOUL.md rows) — repaired here so every read path stays a pure read.
   migrateWorkspaceStorage(sql, execRaw);

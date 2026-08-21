@@ -38,7 +38,7 @@ import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store';
 import { SignalDelivery } from '../src/orchestrator/signals';
 import { EventLog, initEventsHubTables } from '../src/events/hub/index';
 import { getChatHistoryPage } from '../src/read-models/status';
-import { PROGRAMMATIC_MESSAGE_ID_PREFIX, uiMessageText } from '../src/utils/ui-message';
+import { PROGRAMMATIC_MESSAGE_ID_PREFIX, TURN_AUTHOR_METADATA_KEY, uiMessageText } from '../src/utils/ui-message';
 import type { BackendHost } from '../src/types/backend-host';
 import type { Schedule, SqlExecutor } from '../src/types/primitives';
 import { createTestWorkspace, makeSql, makeExecRaw, makeSqlExec, SDK_SESSION_DDL } from './helpers';
@@ -258,5 +258,29 @@ describe('a settled background job announces itself once, and not as the owner',
     // dedupes on is the SAME string the conversation row is keyed by.
     expect(events).toHaveLength(1);
     expect(events[0]!.payload).toContain(backgroundJobWakeTrigger(JOB));
+  });
+
+  test('the plain mirror carries the stamp at rest, and the paged read serves it', () => {
+    // The CLI backend has no assistant_messages — its `messages` table IS the
+    // transcript. A notice written there must state its authorship in the row
+    // itself, not lean on the id-prefix fallback that reads rows predating
+    // stamps; and the paged read must serve what the row states.
+    const ws = evictedWorkspace();
+    const sql = makeSql(ws.db);
+    void sql`
+      INSERT INTO messages (id, session_id, role, content, metadata)
+      VALUES (${`${PROGRAMMATIC_MESSAGE_ID_PREFIX}${backgroundJobWakeTrigger(JOB)}`},
+              ${'default'}, ${'user'},
+              ${`Background agents job ${JOB} completed. Read the full result with agent.jobResult.`},
+              ${JSON.stringify({
+                kinuEvent: 'background_job', jobId: JOB, kind: 'agents', status: 'completed',
+                [TURN_AUTHOR_METADATA_KEY]: 'harness',
+              })})
+    `;
+
+    const history = getChatHistoryPage(sql).items;
+    expect(history).toHaveLength(1);
+    expect(history[0]!.role).toBe('system');
+    expect(history[0]!.metadata).toMatchObject({ kinuEvent: 'background_job', jobId: JOB });
   });
 });

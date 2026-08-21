@@ -16,8 +16,10 @@ import type { CraftStore } from '../types/agent-runtime';
 import type { VFS, SqlExecutor } from '../types/primitives';
 import type { CraftedTool } from '../types/craft';
 import type { ReasoningEffort } from '../strategy/effort';
+import * as v from 'valibot';
+import { tolerate } from '../obs/index';
 import { transcriptRole, uiMessageRow, type StoredRowProjection } from '../utils/ui-message';
-import type { JsonObject } from '../utils/json';
+import { JsonObjectSchema, parseJsonValue, type JsonObject } from '../utils/json';
 import { mapPage, seekPage, StaleCursorError, type Page, type PageRequest } from './page';
 
 /** Widest transcript page a surface may ask for. */
@@ -144,7 +146,8 @@ export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus
  * A row the harness enqueued is reported as `system`, not as the operator's
  * words — see {@link transcriptRole}. Both branches apply it: the rich table
  * carries the author stamp inside its serialized message, and the plain mirror
- * carries the row id the same rule falls back to.
+ * carries it in its `metadata` column — with the row id left as the fallback
+ * for rows written before either stamp existed.
  *
  * ── Why the cursor is rowid and not created_at ───────────────────────────────
  * `assistant_messages.created_at` is `DATETIME DEFAULT CURRENT_TIMESTAMP` —
@@ -180,7 +183,7 @@ export function getChatHistoryPage(
         SELECT id, role, content, created_at FROM assistant_messages
         WHERE role IN ('user', 'assistant', 'system') AND rowid < ${from}
         ORDER BY rowid DESC LIMIT ${over}`,
-      limit, rowId), uiMessageRow);
+      limit, rowId), (row) => uiMessageRow(row.content));
   } catch (err) {
     // A stale cursor is this read failing, not the rich table being absent.
     // Falling through would answer the mirror's rows under a cursor minted
@@ -190,14 +193,14 @@ export function getChatHistoryPage(
       SELECT rowid AS seek FROM messages WHERE id = ${after} AND session_id = ${'default'}`, after);
     return chronological(seekPage(from === null
       ? sql<TranscriptRow>`
-        SELECT id, role, content, created_at FROM messages
+        SELECT id, role, content, metadata, created_at FROM messages
         WHERE session_id = ${'default'} AND role IN ('user', 'assistant', 'system')
         ORDER BY rowid DESC LIMIT ${over}`
       : sql<TranscriptRow>`
-        SELECT id, role, content, created_at FROM messages
+        SELECT id, role, content, metadata, created_at FROM messages
         WHERE session_id = ${'default'} AND role IN ('user', 'assistant', 'system') AND rowid < ${from}
         ORDER BY rowid DESC LIMIT ${over}`,
-      limit, rowId), (content) => ({ text: content }));
+      limit, rowId), mirrorRow);
   }
 }
 
@@ -205,10 +208,31 @@ interface TranscriptRow {
   id: string;
   role: string;
   content: string;
+  /** The plain mirror's provenance column: what the writer stamped on the
+   *  row, as JSON. NULL on rows written before the stamp existed. */
+  metadata?: string | null;
   created_at: string | number;
 }
 
 const rowId = (row: TranscriptRow): string => row.id;
+
+const MirrorStampSchema = v.optional(JsonObjectSchema);
+
+/**
+ * The plain mirror's projection: its text is the content, and its provenance
+ * is whatever the writer stated on the row. A NULL or unparseable stamp is
+ * undefined — the row then reads through the id-prefix fallback inside
+ * {@link transcriptRole}, the rule for everything written before stamps
+ * existed.
+ */
+function mirrorRow(row: TranscriptRow): StoredRowProjection {
+  if (!row.metadata) return { text: row.content };
+  const decoded = tolerate(() => parseJsonValue(row.metadata!), 'malformed-input');
+  const parsed = decoded === undefined ? undefined : v.safeParse(MirrorStampSchema, decoded);
+  return parsed?.success && parsed.output !== undefined
+    ? { text: row.content, metadata: parsed.output }
+    : { text: row.content };
+}
 
 /** The cursor's anchor as a rowid, or the refusal that keeps a vanished anchor
  *  from reading as an exhausted conversation. */
@@ -229,7 +253,7 @@ function anchorRowid(found: { seek: number }[], after: string): number {
  */
 function chronological(
   page: Page<TranscriptRow>,
-  project: (content: string) => StoredRowProjection,
+  project: (row: TranscriptRow) => StoredRowProjection,
 ): Page<ChatHistoryEntry> {
   return mapPage(page, (rows) => rows.flatMap((row) => {
     const role = normalizeUiRole(row.role);
@@ -237,7 +261,7 @@ function chronological(
     // A row the harness enqueued reports as `system`, never as the operator's
     // words. One place, because both the transcript and the mirror branch land
     // here — and one rule, the same `turnAuthor` the chat pane renders from.
-    const { text, metadata } = project(row.content);
+    const { text, metadata } = project(row);
     const entry: ChatHistoryEntry = {
       id: row.id, role: transcriptRole(row.id, role, metadata),
       content: text, createdAt: row.created_at,
