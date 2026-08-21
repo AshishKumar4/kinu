@@ -29,31 +29,35 @@ suites that exercise it are in [Testing](TESTING.md).
 
 Six production call sites, all of them genuine invocation entry points, in two
 of the four declared invocation classes. Grepped `this.tracing.invocation` on
-2026-08-19:
+2026-08-21:
 
-| File and line | Class | Root span | Entry method |
+| File | Class | Root span | Entry method |
 | --- | --- | --- | --- |
-| `cf-backend/src/orchestrator.ts:1581` | `alarm` | `alarm.tick` | `OrchestratorAgent._kinuTimerTick` |
-| `cf-backend/src/orchestrator.ts:2554` | `rpc` | `rpc.head.record_step` | `OrchestratorAgent.recordHeadStep` |
-| `cf-backend/src/actor-agent.ts:2620` | `rpc` | `rpc.swarm.arbitrate` | `ActorAgent.nodeArbitrate` |
-| `cf-backend/src/exploration.ts:267` | `rpc` | `rpc.mcts.branch` | `ExplorationAgent.explore` |
-| `cf-backend/src/exploration.ts:341` | `rpc` | `rpc.head.run` | `ExplorationAgent.runAsHead` |
-| `cf-backend/src/exploration.ts:401` | `rpc` | `rpc.swarm.node` | `ExplorationAgent.runAsNode` |
+| `cf-backend/src/orchestrator.ts` | `alarm` | `alarm.tick` | `OrchestratorAgent._kinuTimerTick` |
+| `cf-backend/src/orchestrator.ts` | `rpc` | `rpc.head.record_step` | `OrchestratorAgent.recordHeadStep` |
+| `cf-backend/src/actor-agent.ts` | `rpc` | `rpc.swarm.arbitrate` | `ActorAgent.nodeArbitrate` |
+| `cf-backend/src/exploration.ts` | `rpc` | `rpc.mcts.branch` | `ExplorationAgent.explore` |
+| `cf-backend/src/exploration.ts` | `rpc` | `rpc.head.run` | `ExplorationAgent.runAsHead` |
+| `cf-backend/src/exploration.ts` | `rpc` | `rpc.swarm.node` | `ExplorationAgent.runAsNode` |
 
 `InvocationKind` declares four classes: `fetch`, `alarm`, `rpc` and `websocket`
-(`obs/agent-tracing.ts:72`). Only `alarm` and `rpc` are in use. The class
+(`obs/agent-tracing.ts`). Only `alarm` and `rpc` are in use. The class
 prefixes the root span's name because the same work reached from two entry points
 is not the same measurement. An `alarm` tick competes with nothing, and a
 `fetch` holds a client.
+
+The table cites the entry method, not a line number: the sites move within
+their files within days, and the method and span names are what a grep for
+`this.tracing.invocation` actually finds.
 
 Nine phase spans hang off those roots:
 
 | Root | Phases |
 | --- | --- |
-| `alarm.tick` | `alarm.due_triggers`, `alarm.peer_dispatch`, `alarm.email_reconcile`, `alarm.timer_rearm` (`orchestrator.ts:1582,1606,1623,1642`) |
-| `rpc.swarm.node` | `swarm.node.deps`, `swarm.node.loop` (`exploration.ts:403,433`) |
-| `rpc.head.run` | `head.deps`, `head.inference` (`exploration.ts:347,366`) |
-| `rpc.mcts.branch` | `mcts.branch.model` (`exploration.ts:283`) |
+| `alarm.tick` | `alarm.due_triggers`, `alarm.peer_dispatch`, `alarm.email_reconcile`, `alarm.timer_rearm` |
+| `rpc.swarm.node` | `swarm.node.deps`, `swarm.node.loop` |
+| `rpc.head.run` | `head.deps`, `head.inference` |
+| `rpc.mcts.branch` | `mcts.branch.model` |
 
 ### Why each one
 
