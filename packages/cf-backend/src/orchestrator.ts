@@ -57,8 +57,7 @@ import {
   // supplies the surface they run against).
   applyScaffoldDecision, getShadowStatus, listScaffoldVersions,
   previewScaffoldLive, proposeScaffold, runScaffoldCaptureText, runScaffoldGepaOptimization,
-  runPromptSectionGepaOptimization, runPromptSectionTrials,
-  PROMPT_SECTION_TARGETS, firstPendingPromptSection,
+  advancePromptSectionLane,
   runScaffoldOnce,
   type GepaOptimizationResult, type ScaffoldDecisionResult,
   type ScaffoldVersionView, type ShadowStatus,
@@ -380,12 +379,15 @@ export class OrchestratorAgent extends ActorAgent {
 
 
   /** Turns of new execution traces since the last auto-GEPA pass (in-memory
-   *  cadence; resets on eviction, which just delays the next pass slightly). */
+   *  cadence; resets on eviction, which just delays the next pass — measured
+   *  below at `advancePromptSections`, and it is a real delay on a workspace
+   *  whose turns are further apart than the eviction window). */
   private _turnsSinceGepa = 0;
-  /** Which of the nine prompt sections the next optimisation pass targets.
-   *  In-memory: an eviction restarting the rotation costs one repeated section,
-   *  and the alternative is a config key for a cursor nobody reads. */
-  private _nextPromptSection = 0;
+  // The rotation cursor that stood here is gone. It was in-memory, and a probe
+  // over the real actor measured what that cost: `agent_config` held one key
+  // (the cadence) and no table named the cursor, so every activation restarted
+  // the rotation at the first section. `nextPromptSectionTarget` derives the
+  // answer from the `gepa_runs` rows each pass already writes.
   // Session-reflection cadence (_sessionTurnCount/Turns/StartedAt) now lives on
   // the core AgentOrchestrator; read the turn index via this.orch.sessionTurnIndex.
 
@@ -3453,32 +3455,22 @@ export class OrchestratorAgent extends ActorAgent {
   /**
    * Advance the evolved-prompt-section loop by one step.
    *
-   * A section under trial is FINISHED first, always: trials are what turn a
-   * proposal into evidence, and a proposal nobody trials never lands. With
-   * nothing pending, the next section in the rotation gets an optimisation
-   * pass, so over nine cadence ticks every section has had one.
+   * The order and the selection are `advancePromptSectionLane` in core: policy
+   * over a `ScaffoldControl` with nothing Cloudflare-shaped in it, and exactly
+   * what a second backend would otherwise have to copy. What stays here is what
+   * only this backend knows — that the work rides off a completed turn and must
+   * not lengthen the next one, and where a fault is reported.
    *
-   * Both halves are fire-and-forget for the same reason the scaffold pass is:
-   * this runs off a completed turn and must not lengthen the next one.
+   * Detached rather than awaited, as the scaffold pass beside it is. A floating
+   * promise in a Durable Object is cancelled on eviction with its rejection
+   * swallowed, so the cost of an eviction here is a pass that did not finish —
+   * which is the same cost as the pass never starting, and the durable ledger is
+   * what the next tick reads either way.
    */
   protected advancePromptSections(): void {
-    const pending = firstPendingPromptSection(this.boundSql);
-    if (pending !== null) {
-      void runPromptSectionTrials(this.scaffoldControl, pending)
-        .catch((err) => diagnostics.failure('prompt_section.trials_failed', toKinuError({
-          doing: `running shadow trials for prompt section ${pending}`,
-          cause: err,
-          otherwise: 'unavailable',
-        }), { workspace: this.name }));
-      return;
-    }
-    const targets = PROMPT_SECTION_TARGETS;
-    const section = targets[this._nextPromptSection % targets.length];
-    this._nextPromptSection += 1;
-    if (!section) return;
-    void runPromptSectionGepaOptimization(this.scaffoldControl, { sectionId: section.id })
-      .catch((err) => diagnostics.failure('prompt_section.pass_failed', toKinuError({
-        doing: `running the cadence GEPA pass over prompt section ${section.id}`,
+    void advancePromptSectionLane(this.scaffoldControl)
+      .catch((err) => diagnostics.failure('prompt_section.lane_failed', toKinuError({
+        doing: 'advancing the prompt-section evolution lane',
         cause: err,
         otherwise: 'unavailable',
       }), { workspace: this.name }));

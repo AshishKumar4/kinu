@@ -52,13 +52,16 @@ import {
   type OutcomeEvalExpectation,
 } from './outcomes';
 import { runScaffoldGepa } from './gepa/scaffold-bridge';
-import { runSectionGepa, findPromptSectionTarget } from './gepa/section-bridge';
 import {
-  applyPromptSectionDecision, decidePromptSectionPromotion, getPendingPromptSection,
-  incumbentSectionSource, recordPromptSectionTrial,
+  runSectionGepa, findPromptSectionTarget, PROMPT_SECTION_TARGETS,
+} from './gepa/section-bridge';
+import {
+  applyPromptSectionDecision, decidePromptSectionPromotion, firstPendingPromptSection,
+  getPendingPromptSection, incumbentSectionSource, recordPromptSectionTrial,
 } from '../prompting/section-store';
+import type { PromptSection } from '../prompting/template';
 import {
-  finishGepaRun, makePersistingHook, startGepaRun,
+  finishGepaRun, lastGepaRunPerTarget, makePersistingHook, startGepaRun,
 } from './gepa/persistence';
 import type { EvalInstance, MetricOutcome, ReflectionLM } from './gepa/types';
 import type { ScoreInterval } from '../utils/stats';
@@ -870,6 +873,84 @@ export async function runPromptSectionTrials(
   result.action = applied.action;
   if (applied.vetoReason) result.vetoReason = applied.vetoReason;
   return result;
+}
+
+/**
+ * Which section the next optimisation pass targets: the one whose last pass is
+ * oldest, and a section never passed before any that has.
+ *
+ * DERIVED from `gepa_runs`, not stored. It used to be a Durable Object field
+ * (`orchestrator.ts` `_nextPromptSection`) whose comment reasoned that an
+ * eviction "costs one repeated section". Measured, it costs the rotation: the
+ * cadence only reaches this decision on the tick where its own in-memory
+ * counter hits `autoGepaEveryNTurns`, both counters live in the same
+ * activation, so index k is reachable only inside an activation that already
+ * served (k+1) x 25 qualifying turns. A probe over the real actor confirmed it —
+ * the cursor advanced on ticks 25, 50 and 75 and appears in no durable table,
+ * `agent_config` holding one key, the cadence. Against a joint idle-eviction
+ * window measured at 2-5 minutes (`platform-catalog.ts`
+ * `do.facet.eviction_joint`), the first section received every pass and the
+ * other eight needed 225 consecutive turns with no pause.
+ *
+ * A stored cursor would fix it. Deriving it needs no new state at all: every
+ * pass already writes its own `gepa_runs` row under `target_ref`, and a section
+ * with no row has plainly never had a turn. The ordering is stable — ties break
+ * on the registry's own order, so two never-passed sections resolve the way
+ * `PROMPT_SECTIONS` declares them.
+ */
+export function nextPromptSectionTarget(sql: SqlExecutor): PromptSection<string> | null {
+  const lastPass = lastGepaRunPerTarget(sql, 'prompt_section');
+  let next: PromptSection<string> | null = null;
+  let nextAt = Number.POSITIVE_INFINITY;
+  for (const section of PROMPT_SECTION_TARGETS) {
+    const at = lastPass.get(section.id) ?? Number.NEGATIVE_INFINITY;
+    if (at < nextAt) {
+      next = section;
+      nextAt = at;
+    }
+  }
+  return next;
+}
+
+/** What one turn of the prompt-section lane did. */
+export type PromptSectionLaneStep =
+  /** A candidate was under trial and got its trials. */
+  | { readonly step: 'trials'; readonly sectionId: string; readonly trials: PromptSectionTrialResult }
+  /** Nothing was pending, so the least-recently-passed section got a pass. */
+  | { readonly step: 'pass'; readonly sectionId: string; readonly pass: PromptSectionOptimizationResult }
+  /** No sections are registered. */
+  | { readonly step: 'idle' };
+
+/**
+ * Advance the evolved-prompt-section loop by one step.
+ *
+ * A section under trial is FINISHED first, always: trials are what turn a
+ * proposal into evidence, and a proposal nobody trials never lands. With
+ * nothing pending, the next section in the rotation gets an optimisation pass,
+ * so over nine cadence ticks every section has had one.
+ *
+ * Core rather than per backend because both halves of this — the order and the
+ * selection — are policy over a `ScaffoldControl` with nothing platform-shaped
+ * in them, and the order is exactly what a second backend would have to copy.
+ * Two copies of "trials before a new pass" is one copy that eventually says
+ * something else. What legitimately stays with the caller is the LIFECYCLE: how
+ * a Durable Object gets this off its turn's critical path, and what it does with
+ * a fault.
+ */
+export async function advancePromptSectionLane(
+  control: ScaffoldControl,
+): Promise<PromptSectionLaneStep> {
+  const pending = firstPendingPromptSection(control.sql);
+  if (pending !== null) {
+    return { step: 'trials', sectionId: pending, trials: await runPromptSectionTrials(control, pending) };
+  }
+  const section = nextPromptSectionTarget(control.sql);
+  if (!section) return { step: 'idle' };
+  return {
+    step: 'pass',
+    sectionId: section.id,
+    pass: await runPromptSectionGepaOptimization(control, { sectionId: section.id }),
+  };
 }
 
 /** Structured output over a review LanguageModel at the judge stage's

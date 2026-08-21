@@ -194,6 +194,29 @@ export function finishGepaRun(
         WHERE run_id = ${args.runId}`;
 }
 
+/**
+ * When each `target_ref` under one target last had a pass STARTED, newest wins.
+ *
+ * `started_at` and not `ended_at`: a pass that began and is still running has
+ * had its turn, and a caller picking the least-recently-attempted target must
+ * not pick it again while it works. An aborted pass counts for the same reason —
+ * it spent, and repeating it immediately spends again on the same evidence.
+ *
+ * This is what lets a rotation over a fixed target list be DERIVED instead of
+ * stored. A cursor held in a Durable Object's memory is reset by an eviction,
+ * and eviction is measured at 2-5 minutes of idleness
+ * (`platform-catalog.ts` `do.facet.eviction_joint`) — far shorter than the
+ * activity a rotation needs to advance. The run ledger is already durable and
+ * already written by every pass, so there is nothing to keep in step.
+ */
+export function lastGepaRunPerTarget(sql: SqlExecutor, target: string): Map<string, number> {
+  const rows = sql<{ target_ref: string; started_at: number }>`
+    SELECT target_ref, MAX(started_at) AS started_at FROM gepa_runs
+    WHERE target = ${target} AND target_ref IS NOT NULL
+    GROUP BY target_ref`;
+  return new Map(rows.map((row) => [row.target_ref, row.started_at]));
+}
+
 /** List recent runs (newest first). */
 export interface GepaRunSummary {
   runId: string;
