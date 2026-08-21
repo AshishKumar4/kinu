@@ -47,6 +47,42 @@ export const ADVISOR_SEVERITY_LABEL = {
 } as const satisfies Readonly<Record<AdvisorSeverity, string>>;
 
 /**
+ * WHAT the note is about, in the order {@link buildAdvisorPrompt} offers the
+ * three classes.
+ *
+ * The prompt has always asked for exactly these three and the reply threw the
+ * answer away, so every note landed on the audit stream as undifferentiated
+ * prose. The class is what makes an advisor row usable as evidence rather than
+ * as reading material: `buildOutcomeEvalSplit` renders it into the instance a
+ * judge scores, so the judge is told what KIND of failure it is grading.
+ *
+ *   wrong-work        — the turn did not do what was asked: a check skipped, an
+ *                       assumption about to be built on, a failure read as a
+ *                       success.
+ *   missed-capability — a capability the turn HAD and did not use, where using
+ *                       it was the right shape for the work. This is the one
+ *                       signal `turn_outcomes` structurally cannot carry: the
+ *                       outcome classifier grades what happened, never what was
+ *                       available and went unused.
+ *   dissatisfaction   — the user said so in this turn, in their own words, which
+ *                       the note quotes.
+ */
+export const ADVISOR_NOTE_CLASSES = ['wrong-work', 'missed-capability', 'dissatisfaction'] as const;
+export type AdvisorNoteClass = (typeof ADVISOR_NOTE_CLASSES)[number];
+
+export function isAdvisorNoteClass<Value>(value: Value): value is Value & AdvisorNoteClass {
+  return ADVISOR_NOTE_CLASSES.some((noteClass) => noteClass === value);
+}
+
+/** What each class means to a reader who did not write it — the phrase an eval
+ *  instance carries, so a judge reads the kind and not the token. */
+export const ADVISOR_CLASS_LABEL = {
+  'wrong-work': 'the work did not do what was asked',
+  'missed-capability': 'a capability it had and did not use',
+  dissatisfaction: 'the user said they were unhappy',
+} as const satisfies Readonly<Record<AdvisorNoteClass, string>>;
+
+/**
  * The default floor for reaching the conversation.
  *
  * `concern` keeps the conversation quiet by default. A `nit` is still recorded,
@@ -70,7 +106,31 @@ export const ADVISOR_EVENT_TYPE = 'advisor_note';
 export interface AdvisorNote {
   readonly note: string;
   readonly severity: AdvisorSeverity;
+  readonly class: AdvisorNoteClass;
 }
+
+/**
+ * The `evolution_events.data` payload of an advisor row: what the writer stamps
+ * and what the scorer parses.
+ *
+ * One schema for both directions on purpose. A hand-rolled `json_extract` read
+ * beside a hand-built write is how a payload comes to be written in one shape
+ * and read in another while both sides look like they work — recorded, in this
+ * repo, at `test-utils/tests/agent-evals.test.ts`. `EvolutionEngine
+ * .recordAdvisorNote` types its object as this, so a field renamed on one side
+ * fails to compile on the other.
+ *
+ * `turnId` is nullable because a turn can end with no durable id (a programmatic
+ * wake). Such a note is still recorded and still deduped against; it just has no
+ * conversation to join back to, so it scores nothing.
+ */
+export const AdvisorRowDataSchema = v.object({
+  severity: v.picklist(ADVISOR_SEVERITIES),
+  class: v.picklist(ADVISOR_NOTE_CLASSES),
+  turnId: v.nullable(v.string()),
+});
+
+export type AdvisorRowData = v.InferOutput<typeof AdvisorRowDataSchema>;
 
 // ── Suppression ─────────────────────────────────────────────────────────────
 
@@ -195,13 +255,14 @@ export function judgeNote(opts: {
 /**
  * What the model may answer.
  *
- * `note` absent, empty, or `severity` absent is the silent answer, and silence
- * is the expected one. Asking for an explicit null would make "I have nothing"
- * a shape the model has to get right.
+ * `note` absent, empty, or `severity` or `class` absent is the silent answer,
+ * and silence is the expected one. Asking for an explicit null would make "I
+ * have nothing" a shape the model has to get right.
  */
 const AdvisorReplySchema = v.object({
   note: v.optional(v.string()),
   severity: v.optional(v.string()),
+  class: v.optional(v.string()),
 });
 
 /** One tool call as the advisor is shown it. Arguments and result are bounded
@@ -248,15 +309,16 @@ export function buildAdvisorPrompt(turn: CompletedTurn, reachable: readonly stri
     'Say something only when the turn shows a problem the agent would act on. The classes',
     'that count:',
     '',
-    '- Work that does not do what was asked, a check it skipped, a wrong assumption it is',
-    '  about to build on, a failure it read as a success.',
-    '- A capability it HAD and did not use, where using it was the right shape for the',
-    '  work: parallel or exploratory work ground through serially, or deep work answered',
-    '  thinly, while a delegation or search capability sat unused. Name the capability and',
-    '  the moment it should have been used. Only from the reachable list below — if the',
-    '  capability is not on that list the agent did not have it, and there is nothing to say.',
-    '- Visible dissatisfaction from the user in this turn: explicit frustration, or a',
-    '  correction that spells out what they wanted. QUOTE the user\'s own words in the note.',
+    '- "wrong-work": work that does not do what was asked, a check it skipped, a wrong',
+    '  assumption it is about to build on, a failure it read as a success.',
+    '- "missed-capability": a capability it HAD and did not use, where using it was the',
+    '  right shape for the work: parallel or exploratory work ground through serially, or',
+    '  deep work answered thinly, while a delegation or search capability sat unused. Name the',
+    '  capability and the moment it should have been used. Only from the reachable list below —',
+    '  if the capability is not on that list the agent did not have it, and there is nothing to say.',
+    '- "dissatisfaction": visible dissatisfaction from the user in this turn — explicit',
+    '  frustration, or a correction that spells out what they wanted.',
+    '  QUOTE the user\'s own words in the note.',
     '  Their wording is the evidence, and a paraphrase loses what they actually asked for.',
     '',
     'Stay silent on these, however plainly you notice them:',
@@ -298,7 +360,8 @@ export function buildAdvisorPrompt(turn: CompletedTurn, reachable: readonly stri
     'One note, at most 240 characters, addressed to the agent. State the problem and what',
     'to do. No preamble, no praise, no restating the turn.',
     '',
-    'JSON shape when you have something: {"note":"<the note>","severity":"nit"|"concern"|"blocker"}',
+    'JSON shape when you have something: {"note":"<the note>","severity":"nit"|"concern"|"blocker",'
+      + '"class":"wrong-work"|"missed-capability"|"dissatisfaction"}',
     'JSON shape when you do not: {}',
     jsonObjectOnlyInstruction(),
   ].join('\n');
@@ -309,8 +372,11 @@ export function buildAdvisorPrompt(turn: CompletedTurn, reachable: readonly stri
  *
  * A model that answers a longer note than asked is not a failure — it is the
  * ordinary case — so the text is bounded here rather than rejected. An
- * unreadable answer or an unknown severity IS a failure of the contract and
- * answers null, which the caller records as a turn the advisor did not review.
+ * unreadable answer, an unknown severity or an unknown class IS a failure of the
+ * contract and answers null, which the caller records as a turn the advisor did
+ * not review. The class is held to the same standard as the severity because the
+ * two are read the same way downstream: a note whose kind nobody can name scores
+ * nothing, so accepting one would put an unlabeled instance in front of a judge.
  */
 export const ADVISOR_NOTE_MAX_CHARS = 240;
 
@@ -319,7 +385,12 @@ export function parseAdvisorReply(raw: string): AdvisorNote | null {
   const note = reply.note?.trim();
   if (note === undefined || note.length === 0) return null;
   if (!isAdvisorSeverity(reply.severity)) return null;
-  return { note: note.slice(0, ADVISOR_NOTE_MAX_CHARS), severity: reply.severity };
+  if (!isAdvisorNoteClass(reply.class)) return null;
+  return {
+    note: note.slice(0, ADVISOR_NOTE_MAX_CHARS),
+    severity: reply.severity,
+    class: reply.class,
+  };
 }
 
 /**
@@ -381,8 +452,12 @@ export interface AdvisorLaneDeps {
   readonly reachable?: readonly string[];
   /** Speak the note. The caller supplies its own SignalDelivery. */
   readonly deliver: (signal: AgentSignal) => Promise<SignalOutcome>;
-  /** Record the note on the audit stream (EvolutionEngine.recordAdvisorNote). */
-  readonly record: (note: AdvisorNote) => void;
+  /** Record the note on the audit stream (EvolutionEngine.recordAdvisorNote).
+   *  The turn id comes from the lane rather than from each backend's closure:
+   *  it is what joins the row back to the conversation it graded, and a backend
+   *  that forgot to pass it would write a note no scorer can read while looking
+   *  exactly like one that works. */
+  readonly record: (note: AdvisorNote, turnId: string | undefined) => void;
 }
 
 /**
@@ -415,7 +490,7 @@ export async function runAdvisorLane(deps: AdvisorLaneDeps): Promise<AdvisorDisp
   // turn's dedupe window reads, so a delivered note that skipped it would be
   // sayable again on the very next turn — which is the nagging this exists to
   // prevent, arriving through the one path that looks like it is working.
-  deps.record(note);
+  deps.record(note, deps.turn.turnId);
   if (verdict.disposition === 'changelog') return 'changelog';
   const signal: AgentSignal = {
     kind: ADVISOR_SIGNAL_KIND,

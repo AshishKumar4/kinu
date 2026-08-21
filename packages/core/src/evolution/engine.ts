@@ -57,7 +57,8 @@ import { createCraftLedger, type CraftLedger } from '../craft/in-episode';
 import { recordRecoveryFinding, recoveryFindingText, type RecoveryFinding } from './recovery';
 import { readSoul, summarizeSoul } from '../identity/soul';
 import {
-  ADVISOR_DEDUPE_WINDOW, ADVISOR_EVENT_TYPE, normalizeNote, type AdvisorNote,
+  ADVISOR_DEDUPE_WINDOW, ADVISOR_EVENT_TYPE, normalizeNote,
+  type AdvisorNote, type AdvisorRowData,
 } from '../advisor/review';
 import {
   type TurnOutcome, type TurnOutcomeSource, type OutcomeClassification,
@@ -407,13 +408,19 @@ export class EvolutionEngine {
    * wants a record of a note the agent was also told. All three are the same
    * row, because a reader of the Changelog cares what the advisor said, not
    * which of those it was.
+   *
+   * The row carries the note's CLASS and the id of the turn it graded, which is
+   * what turns it from prose into evidence: `advisorNegatives` joins on that id
+   * to reach the conversation the note is about, and `buildOutcomeEvalSplit`
+   * draws the result as a scoring instance. Neither the message nor the response
+   * is copied here — the `messages` rows already hold them, and a second copy is
+   * a second thing to keep true.
    */
-  recordAdvisorNote(note: AdvisorNote): void {
-    this.emit({
-      type: ADVISOR_EVENT_TYPE,
-      message: note.note,
-      data: { severity: note.severity },
-    });
+  recordAdvisorNote(note: AdvisorNote, turnId?: string): void {
+    const data: AdvisorRowData = {
+      severity: note.severity, class: note.class, turnId: turnId ?? null,
+    };
+    this.emit({ type: ADVISOR_EVENT_TYPE, message: note.note, data });
   }
 
   /** The normalised text of the last `limit` advisor notes, newest first — the

@@ -1373,7 +1373,7 @@ export abstract class ActorAgent extends Think<Env> {
       // have. A capability the turn never carried must never be named at it.
       reachable: Object.keys(this._lastTurnOpts?.tools ?? {}),
       deliver: (signal) => this.orch.signals.deliver(signal),
-      record: (note) => { this.engine.recordAdvisorNote(note); },
+      record: (note, turnId) => { this.engine.recordAdvisorNote(note, turnId); },
     })).catch((err) => diagnostics.failure('advisor.review_failed', toKinuError({
       doing: 'reviewing the completed turn',
       cause: err,

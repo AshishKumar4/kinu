@@ -47,7 +47,10 @@ import type { ShadowTrialDrain, ShadowTrialTurn } from './types';
 import {
   DEFAULT_AUTO_JUDGE_CONFIG, runAutoShadowEval,
 } from '../scaffold/auto-judge';
-import { buildOutcomeEvalSplit, describeSplitDegeneracy, type OutcomeEvalExpectation } from './outcomes';
+import {
+  buildOutcomeEvalSplit, describeSplitDegeneracy, CRITIC_PROSE,
+  type OutcomeEvalExpectation,
+} from './outcomes';
 import { runScaffoldGepa } from './gepa/scaffold-bridge';
 import { runSectionGepa, findPromptSectionTarget } from './gepa/section-bridge';
 import {
@@ -543,8 +546,8 @@ export async function runScaffoldGepaOptimization(
 
   // 2. Metric: run the candidate scaffold against the task, then judge against
   // the recorded outcome — accepted turns are regression checks against the
-  // response the user approved; corrected/frustrated turns are scored on
-  // whether the candidate already addresses the user's correction.
+  // response the user approved; negatives are scored on whether the candidate
+  // already addresses the complaint, whoever made it.
   const metric = async (
     candidate: string, instance: EvalInstance<string, OutcomeEvalExpectation>,
   ): Promise<MetricOutcome> => {
@@ -556,13 +559,14 @@ export async function runScaffoldGepaOptimization(
       return { score: 0, feedback: `scaffold execution failed: ${message}` };
     }
     const exp = instance.expected;
+    const critic = CRITIC_PROSE[exp?.critic ?? 'user'];
     const criterion = exp && exp.outcome === 'accepted'
       ? `The reference response below was ACCEPTED by the user. Score 1.0 when the new response ` +
         `is at least as good, 0.0 when it regresses.\n\nReference response:\n${evidenceWindow(exp.recordedResponse, EVIDENCE_BUDGETS.replayReferenceResponse)}`
-      : `The agent's previous response to this task FAILED — the user had to correct it. Score 1.0 when ` +
+      : `The agent's previous response to this task FAILED — ${critic.verdict}. Score 1.0 when ` +
         `the new response already addresses the correction, 0.0 when it repeats the failure.\n\n` +
         `Previous (failed) response:\n${evidenceWindow(exp?.recordedResponse ?? '', EVIDENCE_BUDGETS.replayFailedResponse)}\n\n` +
-        `User's correction:\n${evidenceWindow(exp?.followup ?? '(not recorded)', EVIDENCE_BUDGETS.replayCorrection)}`;
+        `${critic.complaint}:\n${evidenceWindow(exp?.followup ?? '(not recorded)', EVIDENCE_BUDGETS.replayCorrection)}`;
     try {
       const obj = await control.judge({
         schema: GepaScoreSchema,
@@ -656,14 +660,15 @@ function renderSectionScorePrompt(
   instance: EvalInstance<string, OutcomeEvalExpectation>,
 ): string {
   const expected = instance.expected;
+  const critic = CRITIC_PROSE[expected?.critic ?? 'user'];
   const criterion = expected && expected.outcome === 'accepted'
     ? `The agent's response below was ACCEPTED by the user. Score 1.0 when the candidate wording `
       + `would still have produced a response at least this good, 0.0 when it would have pushed the `
       + `agent off it.\n\nAccepted response:\n${evidenceWindow(expected.recordedResponse, EVIDENCE_BUDGETS.replayReferenceResponse)}`
-    : `The agent's response below FAILED — the user had to correct it. Score 1.0 when the candidate `
+    : `The agent's response below FAILED — ${critic.verdict}. Score 1.0 when the candidate `
       + `wording would have prevented that failure, 0.0 when it would have changed nothing.\n\n`
       + `Failed response:\n${evidenceWindow(expected?.recordedResponse ?? '', EVIDENCE_BUDGETS.replayFailedResponse)}\n\n`
-      + `User's correction:\n${evidenceWindow(expected?.followup ?? '(not recorded)', EVIDENCE_BUDGETS.replayCorrection)}`;
+      + `${critic.complaint}:\n${evidenceWindow(expected?.followup ?? '(not recorded)', EVIDENCE_BUDGETS.replayCorrection)}`;
   return `Score a candidate revision of one section of an agent's system prompt on a 0..1 scale, `
     + `and give one sentence of specific feedback naming what in the WORDING is responsible.\n\n`
     + `Section: ${sectionId}\n\nCandidate wording:\n${evidenceWindow(candidate, EVIDENCE_BUDGETS.gepaParentSource)}\n\n`
