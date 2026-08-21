@@ -19,6 +19,7 @@ import {
   type AgentMode,
 } from '../config';
 import { createConfiguredLocalModelResolver } from '../local-model-resolver';
+import { installTurnDiagnostics } from '../turn-log';
 import { EMPTY_MODEL_MENU, normalizeModelMenu, type AgentModelEntry, type AgentModelMenu } from '../model-catalog';
 import { requireInteractiveTerminal } from '../prompt';
 import { VERSION } from '../display';
@@ -539,6 +540,9 @@ function ModeSegment(props: {
 }
 
 export async function runHomeTui(opts: HomeTuiOptions = {}): Promise<HomeTuiAction> {
+  // The home screen is an interactive surface like chat and run: its stderr is
+  // the person's own screen, so diagnostics go to cli.log, not between us.
+  installTurnDiagnostics();
   requireInteractiveTerminal();
   const renderer = await createCliRenderer({ exitOnCtrlC: false });
   const root = createRoot(renderer);
