@@ -32,18 +32,29 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { Browser, Page } from 'puppeteer';
+import * as v from 'valibot';
+import { renderThrownChain } from '@kinu.run/core/obs';
 
 import { withGallery } from './gallery-harness';
 
-/** The frame's hidden `[data-testid="probe"]` blob — the hooks' own state. */
-interface Probe {
-  readonly ids: readonly string[];
+/**
+ * The frame's hidden `[data-testid="probe"]` blob — the hooks' own state, which
+ * the frame serializes on every render.
+ *
+ * Parsed rather than asserted: it crosses a process boundary as text, so a
+ * renamed field would otherwise read as `undefined` and every assertion over it
+ * would go quietly vacuous instead of red.
+ */
+const ProbeSchema = v.object({
+  ids: v.array(v.string()),
   /** One entry per `fetchPage` call, in order, holding the cursor it was given. */
-  readonly calls: readonly string[];
-  readonly loading: boolean;
-  readonly exhausted: boolean;
-  readonly error: string | null;
-}
+  calls: v.array(v.string()),
+  loading: v.boolean(),
+  exhausted: v.boolean(),
+  error: v.nullable(v.string()),
+});
+
+type Probe = v.InferOutput<typeof ProbeSchema>;
 
 /**
  * One prepend, measured on both sides of the commit.
@@ -73,8 +84,32 @@ interface Prepend {
 const SCROLL = '[data-testid="chat-scroll"]';
 const PROBE = '[data-testid="probe"]';
 
+/** The headline of a cause chain — what a scenario reports when it could not be
+ *  measured. The full chain is several frames of puppeteer internals, and the
+ *  first line is the part that names what did not happen. */
+function firstLine(input: { cause: unknown }): string {
+  return renderThrownChain(input).split('\n')[0] ?? 'no reason reported';
+}
+
 async function probe(page: Page): Promise<Probe> {
-  return JSON.parse(await page.$eval(PROBE, (el) => el.textContent ?? '{}')) as Probe;
+  return v.parse(ProbeSchema, JSON.parse(await page.$eval(PROBE, (el) => el.textContent ?? 'null')));
+}
+
+/**
+ * A predicate over the probe, run in the browser.
+ *
+ * The condition is a string of JS rather than a closure because it executes in
+ * the page, where the schema does not exist; `probe()` above is what pins the
+ * shape, and every field these conditions name is one it parses.
+ */
+async function untilProbe(page: Page, condition: string, timeout = 30_000): Promise<void> {
+  await page.waitForFunction(
+    `(() => { const el = document.querySelector('${PROBE}');
+       if (!el || !el.textContent) return false;
+       const state = JSON.parse(el.textContent);
+       return Boolean(${condition}); })()`,
+    { timeout, polling: 50 },
+  );
 }
 
 /** A gallery frame, loaded twice: a first load can trip vite's dependency
@@ -91,16 +126,27 @@ async function openFrame(browser: Browser, origin: string, query: string): Promi
 
 /** Wait until the frame is settled: nothing in flight, and the first page in. */
 async function settled(page: Page): Promise<void> {
-  await page.waitForFunction(
-    (selector: string) => {
-      const text = document.querySelector(selector)?.textContent;
-      if (!text) return false;
-      const state = JSON.parse(text) as { loading: boolean; calls: string[] };
-      return !state.loading && state.calls.length > 0;
-    },
-    { timeout: 30_000, polling: 50 }, PROBE,
-  );
+  await untilProbe(page, 'state.loading === false && state.calls.length > 0');
 }
+
+/** The scroller and one anchor row, before a page lands. `id` and `top` are
+ *  nullable because a frame that drew nothing is a finding rather than a crash
+ *  — it is the shape a sibling gate reported clean over. */
+const BeforeSchema = v.object({
+  id: v.nullable(v.string()),
+  top: v.nullable(v.number()),
+  height: v.number(),
+  scrollTop: v.number(),
+  rows: v.number(),
+});
+
+/** The same, after. A null `top` means the anchor left the document, which is a
+ *  distinct failure from it having moved. */
+const AfterSchema = v.object({
+  top: v.nullable(v.number()),
+  height: v.number(),
+  rows: v.number(),
+});
 
 /**
  * Wait for the next page and report what it moved.
@@ -117,20 +163,23 @@ async function settled(page: Page): Promise<void> {
  * the inserted page when it is missing.
  */
 async function prepend(page: Page, scroll: boolean): Promise<Prepend> {
-  const before = await page.evaluate((selector: string) => {
-    const el = document.querySelector(selector) as HTMLElement;
+  const before = v.parse(BeforeSchema, await page.$eval(SCROLL, (el) => {
     // The bottom-most row still fully on screen: a row the reader is reading.
-    const rows = [...el.querySelectorAll('[data-msg]')] as HTMLElement[];
+    const rows = [...el.querySelectorAll('[data-msg]')];
     const bottom = el.getBoundingClientRect().bottom;
-    const anchor = rows.filter((row) => row.getBoundingClientRect().bottom <= bottom).pop() ?? rows[0]!;
+    const anchor = rows.filter((row) => row.getBoundingClientRect().bottom <= bottom).pop()
+      ?? rows[0];
     return {
-      id: anchor.getAttribute('data-msg')!,
-      top: anchor.getBoundingClientRect().top,
+      id: anchor?.getAttribute('data-msg') ?? null,
+      top: anchor?.getBoundingClientRect().top ?? null,
       height: el.scrollHeight,
       scrollTop: el.scrollTop,
       rows: rows.length,
     };
-  }, SCROLL);
+  }));
+  if (before.id === null || before.top === null) {
+    throw new Error(`the frame drew no message rows (scrollHeight ${before.height})`);
+  }
 
   const callsBefore = (await probe(page)).calls.length;
   let carriedDownPx = 0;
@@ -142,20 +191,11 @@ async function prepend(page: Page, scroll: boolean): Promise<Prepend> {
     carriedDownPx = before.scrollTop;
   }
 
-  await page.waitForFunction(
-    (selector: string, want: number) => {
-      const text = document.querySelector(selector)?.textContent;
-      if (!text) return false;
-      const state = JSON.parse(text) as { loading: boolean; ids: string[] };
-      // A landed page is one whose rows are RENDERED and whose walk is asleep.
-      // Not one that was asked for: the first page is requested by the hook the
-      // moment the container mounts, so a request count taken here has already
-      // counted it and waiting for a second one waits for a page a correct hook
-      // will never ask for.
-      return state.ids.length > want && !state.loading;
-    },
-    { timeout: 30_000, polling: 50 }, PROBE, before.rows,
-  );
+  // A landed page is one whose rows are RENDERED and whose walk is asleep. Not
+  // one that was asked for: the first page is requested by the hook the moment
+  // the container mounts, so a request count taken here has already counted it,
+  // and waiting for a second one waits for a page a correct hook never asks for.
+  await untilProbe(page, `state.ids.length > ${before.rows} && state.loading === false`);
   // The page has landed in state; the correction is a layout effect, so let the
   // browser commit a frame before measuring where anything is.
   await page.evaluate(() => {
@@ -164,39 +204,47 @@ async function prepend(page: Page, scroll: boolean): Promise<Prepend> {
     return painted.promise;
   });
 
-  const after = await page.evaluate((args: { selector: string; id: string }) => {
-    const el = document.querySelector(args.selector) as HTMLElement;
-    const anchor = el.querySelector(`[data-msg="${args.id}"]`) as HTMLElement | null;
-    return {
-      top: anchor === null ? null : anchor.getBoundingClientRect().top,
-      height: el.scrollHeight,
-      rows: el.querySelectorAll('[data-msg]').length,
-    };
-  }, { selector: SCROLL, id: before.id });
+  const after = v.parse(AfterSchema, await page.$eval(SCROLL, (el, id: string) => ({
+    top: el.querySelector(`[data-msg="${id}"]`)?.getBoundingClientRect().top ?? null,
+    height: el.scrollHeight,
+    rows: el.querySelectorAll('[data-msg]').length,
+  }), before.id));
 
-  expect(after.top, `anchor ${before.id} left the document`).not.toBeNull();
+  if (after.top === null) throw new Error(`anchor ${before.id} left the document`);
   const state = await probe(page);
   return {
     grewPx: after.height - before.height,
-    driftPx: Math.round(after.top! - before.top - carriedDownPx),
+    driftPx: Math.round(after.top - before.top - carriedDownPx),
     calls: state.calls.length - callsBefore,
     rows: after.rows,
     refused: null,
   };
 }
 
-/** One walk step, with a step that could not be taken named rather than
- *  thrown — see {@link Prepend.refused}. Nothing is discarded: the reason
- *  reaches an assertion below. */
+/**
+ * One walk step, with a step that could not be taken NAMED rather than thrown —
+ * see {@link Prepend.refused}.
+ *
+ * The probe is re-read to say what the frame was doing when the step gave up,
+ * and a probe that will not parse is itself part of the answer rather than
+ * something to hide: it means the frame stopped serializing its state, which is
+ * a different finding from a walk that ran out of pages.
+ */
 async function prependStep(page: Page, scroll = true): Promise<Prepend> {
   try {
     return await prepend(page, scroll);
-  } catch (err) {
-    const state = await probe(page).catch(() => null);
+  } catch (cause) {
+    let state = 'the frame reported no state';
+    try {
+      const settledState = await probe(page);
+      state = `exhausted=${settledState.exhausted}, calls=${settledState.calls.length}`
+        + `, rows=${settledState.ids.length}`;
+    } catch (probeFailure) {
+      state = `the probe itself failed: ${renderThrownChain({ cause: probeFailure })}`;
+    }
     return {
       grewPx: 0, driftPx: 0, calls: 0, rows: 0,
-      refused: `${why(err)} (exhausted=${state?.exhausted ?? '?'}`
-        + `, calls=${state?.calls.length ?? '?'}, rows=${state?.ids.length ?? '?'})`,
+      refused: `${firstLine({ cause })} (${state})`,
     };
   }
 }
@@ -257,12 +305,6 @@ interface Observed {
   readonly walked: Walked;
 }
 
-/** One line of why a scenario could not be measured. Never discarded: every
- *  scenario's `refused` is the first thing its own describe asserts. */
-function why(err: unknown): string {
-  return err instanceof Error ? err.message.split('\n')[0]! : String(err);
-}
-
 async function measureWalk(browser: Browser, origin: string): Promise<Walk> {
   // Slow on purpose. The first page is requested the moment the container
   // mounts, so the before-state exists only until the stub answers — at the
@@ -275,13 +317,7 @@ async function measureWalk(browser: Browser, origin: string): Promise<Walk> {
     // Asserted rather than assumed: the live rows alone, with the first page
     // still in flight. A measurement taken after it landed would report zero
     // drift for the trivial reason that nothing moved while we watched.
-    await page.waitForFunction(
-      (selector: string) => {
-        const state = JSON.parse(document.querySelector(selector)?.textContent ?? '{}');
-        return state.loading === true && state.ids?.length === 3;
-      },
-      { timeout: 30_000, polling: 25 }, PROBE,
-    );
+    await untilProbe(page, 'state.loading === true && state.ids.length === 3');
     const firstPage = await prependStep(page, false);
     await settled(page);
     const firstRows = await page.$$eval('[data-msg]', (rows) => rows.length);
@@ -289,7 +325,7 @@ async function measureWalk(browser: Browser, origin: string): Promise<Walk> {
     for (let i = 0; i < 3; i++) prepends.push(await prependStep(page));
     return { refused: null, overflowAnchor, firstPage, firstRows, prepends };
   } catch (err) {
-    return { refused: why(err), overflowAnchor: '', firstPage: empty, firstRows: 0, prepends: [] };
+    return { refused: firstLine({ cause: err }), overflowAnchor: '', firstPage: empty, firstRows: 0, prepends: [] };
   } finally {
     await page.close();
   }
@@ -308,10 +344,7 @@ async function measureRace(browser: Browser, origin: string): Promise<Race> {
   try {
     await settled(page);
     await page.$eval(SCROLL, (el) => { el.scrollTop = 0; });
-    await page.waitForFunction(
-      (selector: string) => JSON.parse(document.querySelector(selector)?.textContent ?? '{}').loading === true,
-      { timeout: 30_000, polling: 25 }, PROBE,
-    );
+    await untilProbe(page, 'state.loading === true');
     await page.evaluate(() => {
       window.dispatchEvent(new CustomEvent('gallery:arrive', { detail: 'race-1' }));
     });
@@ -320,7 +353,7 @@ async function measureRace(browser: Browser, origin: string): Promise<Race> {
     const seen = new Set<string>();
     return { refused: null, ids, duplicates: ids.filter((id) => seen.size === seen.add(id).size) };
   } catch (err) {
-    return { refused: why(err), ids: [], duplicates: [] };
+    return { refused: firstLine({ cause: err }), ids: [], duplicates: [] };
   } finally {
     await page.close();
   }
@@ -329,10 +362,7 @@ async function measureRace(browser: Browser, origin: string): Promise<Race> {
 async function measureBroken(browser: Browser, origin: string): Promise<Broken> {
   const page = await openFrame(browser, origin, 'latency=100&fail=1&depth=4');
   try {
-    await page.waitForFunction(
-      (selector: string) => JSON.parse(document.querySelector(selector)?.textContent ?? '{}').error !== null,
-      { timeout: 30_000, polling: 50 }, PROBE,
-    );
+    await untilProbe(page, 'state.error !== null');
     const failed = await probe(page);
     const boundary = await page.$eval(SCROLL, (el) => el.firstElementChild?.textContent ?? '');
     // The harness clears its own failure after one throw, so the retry the
@@ -341,16 +371,11 @@ async function measureBroken(browser: Browser, origin: string): Promise<Broken> 
       const button = [...document.querySelectorAll('button')].find((b) => b.textContent === 'Retry');
       button?.click();
     });
-    await page.waitForFunction(
-      (selector: string) => {
-        const state = JSON.parse(document.querySelector(selector)?.textContent ?? '{}');
-        return state.error === null && state.loading === false && state.ids?.length > 3;
-      },
-      { timeout: 30_000, polling: 50 }, PROBE,
-    );
+    await untilProbe(
+      page, 'state.error === null && state.loading === false && state.ids.length > 3');
     return { refused: null, failed, boundary, retried: await probe(page) };
   } catch (err) {
-    return { refused: why(err), failed: null, boundary: '', retried: null };
+    return { refused: firstLine({ cause: err }), failed: null, boundary: '', retried: null };
   } finally {
     await page.close();
   }
@@ -359,17 +384,14 @@ async function measureBroken(browser: Browser, origin: string): Promise<Broken> 
 async function measureWalked(browser: Browser, origin: string): Promise<Walked> {
   const page = await openFrame(browser, origin, 'latency=80&depth=1');
   try {
-    await page.waitForFunction(
-      (selector: string) => JSON.parse(document.querySelector(selector)?.textContent ?? '{}').exhausted === true,
-      { timeout: 30_000, polling: 50 }, PROBE,
-    );
+    await untilProbe(page, 'state.exhausted === true');
     return {
       refused: null,
       state: await probe(page),
       boundary: await page.$eval(SCROLL, (el) => el.firstElementChild?.textContent ?? ''),
     };
   } catch (err) {
-    return { refused: why(err), state: null, boundary: '' };
+    return { refused: firstLine({ cause: err }), state: null, boundary: '' };
   } finally {
     await page.close();
   }
@@ -385,13 +407,15 @@ async function run(): Promise<Observed> {
 }
 
 let observed: Observed;
-/** Only a failure to boot the gallery at all — every scenario holds its own. */
-let bootFailure: unknown = null;
+/** Only a failure to boot the gallery at all — every scenario holds its own.
+ *  Rendered rather than held raw, because the whole cause chain is what says
+ *  whether vite, Chrome or the frame is the thing that did not come up. */
+let bootFailure: string | null = null;
 beforeAll(async () => {
-  try { observed = await run(); } catch (err) { bootFailure = err; }
+  try { observed = await run(); } catch (cause) { bootFailure = renderThrownChain({ cause }); }
 }, 300_000);
 
-afterAll(() => { if (bootFailure !== null) throw bootFailure; });
+afterAll(() => { if (bootFailure !== null) throw new Error(bootFailure); });
 
 describe('the transcript this gate measures', () => {
   test('the frame rendered, and it overflows', () => {
