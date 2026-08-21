@@ -67,6 +67,18 @@ interface FrameGeometry {
   readonly cellHeight: number | null;
   /** Every band's group opacity, selected band first. */
   readonly bandOpacity: readonly number[];
+  /**
+   * Each band's caption against the band it names: how far its right edge is
+   * PAST the band's own right edge, in screen pixels.
+   *
+   * The captions are HTML pinned over the scene, and their width was capped to
+   * the CANVAS rather than to the band — so a one-node search, whose band is as
+   * wide as one node's label, wore a caption running the whole width of the
+   * card. That is the "content leaks out of the box" in the owner's own
+   * screenshot, and it is a comparison of two boxes, which is why it can only
+   * be measured here.
+   */
+  readonly captionOverflow: readonly number[];
 }
 
 function readGeometry(page: Page): Promise<FrameGeometry> {
@@ -122,6 +134,18 @@ function readGeometry(page: Page): Promise<FrameGeometry> {
       cellHeight: cellBox === null ? null : cellBox.height,
       bandOpacity: [...document.querySelectorAll('g.mcts-region')]
         .map((region) => Number(region.getAttribute('opacity'))),
+      // Matched by RUN, never by index: the caption overlay and the band layer
+      // are rebuilt from the same list, so an index pairing would silently
+      // compare a caption against somebody else's band the day one of them is
+      // filtered.
+      captionOverflow: [...document.querySelectorAll<SVGGElement>('g.mcts-band[data-run]')]
+        .flatMap((band) => {
+          const runId = band.dataset.run ?? '';
+          const caption = document.querySelector(`[data-band-title="${CSS.escape(runId)}"]`);
+          const rect = band.querySelector('rect');
+          if (caption === null || rect === null) return [];
+          return [caption.getBoundingClientRect().right - rect.getBoundingClientRect().right];
+        }),
     };
   });
 }
@@ -184,9 +208,19 @@ interface Liveness {
   readonly workingAfterDecay: number;
 }
 
+/**
+ * Every control on the docked row, pressed, and whether the scene answered.
+ *
+ * Keyed by the control's own accessible name so a renamed button fails loudly
+ * rather than going unwatched. `zoom`/`nodes` are what the press is allowed to
+ * change; a control that moves neither did nothing, which is the whole claim.
+ */
+type ControlEffect = Record<string, { zoomChanged: boolean; nodesBefore: number; nodesAfter: number }>;
+
 interface Observed {
   readonly geometry: Geometry;
   readonly live: Liveness;
+  readonly controls: ControlEffect;
 }
 
 const FRAMES = ['forks', 'forkmerge', 'forkbig'] as const;
@@ -340,10 +374,49 @@ async function readLiveness(browser: Browser, origin: string): Promise<Liveness>
   return { pinned, watched, navigations, rowAppearedMs, workingOnArrival, workingAfterDecay };
 }
 
+/**
+ * Press every control on the docked row and see whether the scene answered.
+ *
+ * On the 106-node search, because it is the only fixture where every control has
+ * something to do: a tree with abandoned branches to fold, and a fit at a scale
+ * that zooming can move away from. `Fit` is pressed LAST and after a fold, so it
+ * is asked to travel rather than to re-apply the transform it is already at —
+ * a control asked for what it has already done cannot be observed either way.
+ */
+async function readControls(browser: Browser, origin: string): Promise<ControlEffect> {
+  const effects: ControlEffect = {};
+  const page = await browser.newPage();
+  try {
+    await page.setViewport({ width: 1280, height: 1238 });
+    await page.goto(`${origin}/gallery.html?frame=forks`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('g.mcts-band');
+    await settled(page);
+    const scene = () => page.evaluate(() => ({
+      zoom: document.querySelector('g.mcts-bands')?.parentElement?.getAttribute('transform') ?? '',
+      nodes: document.querySelectorAll('g.mcts-node').length,
+    }));
+    for (const label of ['Zoom in', 'Zoom out', 'Fold abandoned branches', 'Expand every branch', 'Fit the selected search to view']) {
+      const before = await scene();
+      await page.click(`button[aria-label="${label}"]`);
+      await settled(page);
+      const after = await scene();
+      effects[label] = {
+        zoomChanged: before.zoom !== after.zoom,
+        nodesBefore: before.nodes,
+        nodesAfter: after.nodes,
+      };
+    }
+  } finally {
+    await page.close();
+  }
+  return effects;
+}
+
 async function run(): Promise<Observed> {
   return withGallery(async ({ browser, origin }) => ({
     geometry: await readGeometryFrames(browser, origin),
     live: await readLiveness(browser, origin),
+    controls: await readControls(browser, origin),
   }));
 }
 
@@ -454,6 +527,48 @@ describe('the swarm trees, as a browser lays them out', () => {
         expect(opacity, `${where}: unselected band not receding`).toBeLessThan(1);
       }
     }
+  });
+
+  test("a band's caption stops inside the band it names", () => {
+    // The owner's words were "the content leaks out of the box", and the box he
+    // meant is the band. A caption capped to the CANVAS instead of to its band
+    // ran the full width of the card over a search one node wide.
+    for (const [where, frame] of every()) {
+      expect(frame.captionOverflow.length, `${where}: no caption paired to a band`).toBeGreaterThan(0);
+      for (const past of frame.captionOverflow) {
+        expect(Math.round(past), `${where}: a caption runs ${Math.round(past)}px past its band`)
+          .toBeLessThanOrEqual(0);
+      }
+    }
+  });
+});
+
+/**
+ * The controls, pressed.
+ *
+ * A control that renders and does nothing is worse than an absent one: the reader
+ * believes the view cannot do the thing. Both zoom buttons were in that state —
+ * the transform was byte-identical at 0ms, 120ms, 240ms and 1700ms after the
+ * press, so nothing was even scheduled — while fold, expand and fit on the same
+ * row worked. So this is asserted per control and by NAME.
+ */
+describe('the controls on the docked row', () => {
+  test('zooming in and out moves the scene', () => {
+    for (const label of ['Zoom in', 'Zoom out']) {
+      expect(observed.controls[label]?.zoomChanged, `${label} did not move the scene`).toBe(true);
+    }
+  });
+
+  test('folding abandoned branches removes nodes, and expanding brings them back', () => {
+    const fold = observed.controls['Fold abandoned branches'];
+    const expand = observed.controls['Expand every branch'];
+    expect(fold?.nodesAfter ?? 0, 'folding drew as many nodes as before').toBeLessThan(fold?.nodesBefore ?? 0);
+    expect(expand?.nodesAfter).toBe(fold?.nodesBefore);
+  });
+
+  test('fit travels back to the fitted view after the scene has been moved', () => {
+    expect(observed.controls['Fit the selected search to view']?.zoomChanged, 'fit did not move the scene')
+      .toBe(true);
   });
 });
 

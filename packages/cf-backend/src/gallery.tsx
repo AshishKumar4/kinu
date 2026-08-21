@@ -757,6 +757,95 @@ const REFUSED_RUN: HeadRunView = {
 };
 
 /**
+ * A swarm that is HAPPENING, with its nodes in every state at once.
+ *
+ * The run the surface could not photograph, and the one every report about this
+ * surface was about: two levels, some nodes reported, some still working, one
+ * stopped by the operator and one that failed on the provider. The owner saw a
+ * `running` label over a lone `0% root` and read the whole feature as dead.
+ *
+ * The two stores disagree ON PURPOSE, because that is what a live search looks
+ * like: `search_nodes` holds the root and only the nodes that SETTLED, and
+ * `head_journal` holds all nine. A node in the journal and not in the tree is a
+ * node still working, it carries no score, and folding the two halves is the only
+ * way it is drawn at all.
+ */
+const RUNNING_ROWS: MctsRow[] = [
+  {
+    id: "lv000", parent_id: null, depth: 0, visits: 0, value: 0, status: "open",
+    action: "Audit the coupon guard for unsafe kind reads",
+    task: "Audit every reader of coupon.kind across the checkout package and report the ones "
+      + "that can throw on a null kind, with the call path and a suggested guard.",
+    observation: "The workspace as found: 41 coupon fixtures, 9 readers.",
+    created_at: NOW - 42e4,
+  },
+  {
+    id: "lv001", parent_id: "lv000", depth: 1, visits: 1, value: 0.72, status: "open",
+    action: "Walk the cart serializer's null path",
+    observation: "Two readers dereference rules[kind] with no guard.",
+    created_at: NOW - 30e4,
+  },
+  {
+    id: "lv002", parent_id: "lv000", depth: 1, visits: 1, value: 0.44, status: "open",
+    action: "Check the admin coupon report",
+    observation: "One reader, already guarded by an early return.",
+    created_at: NOW - 26e4,
+  },
+];
+
+const RUNNING_RUN: HeadRunView = {
+  rootId: "lv000",
+  task: "Audit every reader of coupon.kind across the checkout package and report the ones "
+    + "that can throw on a null kind, with the call path and a suggested guard.",
+  rationale: "audit",
+  status: "running",
+  spawnedAt: NOW - 42e4,
+  heads: [
+    swarmNode("lv001", "Walk the cart serializer's null path", "expansion 1 of 5", {
+      summary: "`serializeCart` reads `rules[coupon.kind].percent` with no guard — throws on "
+        + "every percentage coupon written before the migration.",
+      wallClockMs: 118_000, spawnedAt: NOW - 40e4, lastStepAt: NOW - 30e4,
+    }),
+    swarmNode("lv002", "Check the admin coupon report", "expansion 2 of 5", {
+      summary: "The admin report already returns early on a null kind. No fix needed here.",
+      wallClockMs: 96_000, spawnedAt: NOW - 40e4, lastStepAt: NOW - 26e4,
+    }),
+    swarmNode("lv003", "Trace the pricing refactor's readers", "expansion 3 of 5", {
+      status: "running", wallClockMs: 0,
+      spawnedAt: NOW - 40e4, lastStepAt: NOW - 4e3,
+    }),
+    swarmNode("lv004", "Audit the coupon report exporter", "expansion 4 of 5", {
+      status: "running", wallClockMs: 0,
+      spawnedAt: NOW - 40e4, lastStepAt: NOW - 11e3,
+    }),
+    swarmNode("lv005", "Read the checkout API edge", "expansion 5 of 5", {
+      status: "aborted", wallClockMs: 31_000,
+      spawnedAt: NOW - 40e4, lastStepAt: NOW - 34e4,
+      errorMessage: "Stopped by the operator while it was reading the request validator.",
+    }),
+    swarmNode("lv006", "Re-read the two unguarded readers together", "expansion 1 of 3", {
+      status: "running", depth: 2, parentId: "lv001", wallClockMs: 0,
+      spawnedAt: NOW - 18e4, lastStepAt: NOW - 9e3,
+    }),
+    swarmNode("lv007", "Draft the guard for serializeCart", "expansion 2 of 3", {
+      status: "running", depth: 2, parentId: "lv001", wallClockMs: 0,
+      spawnedAt: NOW - 18e4, lastStepAt: null,
+    }),
+    swarmNode("lv008", "Check whether inferKind belongs at the edge", "expansion 3 of 3", {
+      status: "errored", depth: 2, parentId: "lv002", wallClockMs: 7_400,
+      spawnedAt: NOW - 18e4, lastStepAt: NOW - 15e4,
+      errorMessage: "Turn ended by provider rate limiting: the provider asked this turn to "
+        + "wait 61s against a 45s budget, that wait was taken, and still nothing flowed.",
+    }),
+    swarmNode("lv009", "Fan the two guarded readers in", "fan-in over 2 parents of depth 1", {
+      status: "running", depth: 2, parentId: "lv001", wallClockMs: 0,
+      spawnedAt: NOW - 12e4, lastStepAt: NOW - 21e3,
+    }),
+  ],
+  merge: null,
+};
+
+/**
  * Every run the Exploration frames list, and the stores behind them.
  *
  * Every state the surface has to draw is in ONE list on purpose: a legacy judged
@@ -775,6 +864,16 @@ const REFUSED_RUN: HeadRunView = {
  * photograph either the boundary or the end of the list.
  */
 const FORK_RUNS: ForkRunSummary[] = [
+  {
+    // The live one, first because it is the newest and the surface focuses the
+    // newest on arrival. `branches` counts the SETTLED rows, so it is 2 while nine
+    // nodes exist — which is exactly the discrepancy a reader needs the journal to
+    // explain, and exactly what made a running swarm look like a one-node tree.
+    id: "lv000", task: "Audit every reader of coupon.kind across the checkout package",
+    startedAt: NOW - 42e4, status: "running",
+    hasSearchTree: true, hasNodeTranscripts: true,
+    branches: RUNNING_ROWS.length - 1, winnerScore: null,
+  },
   {
     // Derived, because `forkbig` generates 520 rows for this same run and a hardcoded
     // 105 made the scale frame photograph `105 branches` beside `Branches: 519`.
@@ -1125,6 +1224,17 @@ const FORK_PARAMS: ForkRunParams[] = [
     search: null,
     transcripts: { mergeStrategy: "best_of", branches: 2 },
   },
+  {
+    // The live run's own parameters, so the disclosure has both halves to show on
+    // the run a reader is most likely to open: what the preset resolved AND what
+    // the call was dispatched with.
+    rootId: "lv000",
+    search: {
+      budget: 12, branches: 5, maxDepth: 2, explorationWeight: 1.41,
+      judgeSamplesRequested: null, judgeSamplesRealised: null, mode: "build",
+    },
+    transcripts: null,
+  },
 ];
 
 /** Every store's rows for one run, keyed by the run's root id — the same key the
@@ -1135,10 +1245,11 @@ const SEARCH_ROWS_BY_ROOT: ReadonlyMap<string, readonly MctsRow[]> = new Map([
   ["sw000", SWARM_ROWS],
   ["pv000", PROVE_ROWS],
   ["rf000", REFUSED_ROWS],
+  ["lv000", RUNNING_ROWS],
 ]);
 
 const JOURNAL_BY_ROOT: ReadonlyMap<string, HeadRunView> = new Map(
-  [MERGED_RUN, SWARM_RUN, PROVE_RUN, REFUSED_RUN].map((run) => [run.rootId, run]),
+  [MERGED_RUN, SWARM_RUN, PROVE_RUN, REFUSED_RUN, RUNNING_RUN].map((run) => [run.rootId, run]),
 );
 
 /**
@@ -1300,6 +1411,23 @@ const swarmFanInRpc = focusRun("sw000");
 
 /** A search that started and reached nothing. Never an empty tree: a refusal. */
 const refusedRunRpc = focusRun("rf000");
+
+/**
+ * A swarm in flight, with its nodes in every state at once — the run the owner
+ * kept being shown as a `running` label over a lone root.
+ *
+ * Focused, so the frame opens on it rather than on whichever run happens to be
+ * newest, and the settled runs stay in the list underneath because the comparison
+ * between a live search and a finished one is the point.
+ */
+const runningSwarmRpc = focusRun("lv000");
+
+/** The `head_activity` counters for the live run's working nodes — the push that
+ *  makes a node pulse on the canvas and in the run's node list. A settled node
+ *  announces nothing, which is correct: it is not moving. */
+const RUNNING_ACTIVITY: ReadonlyMap<string, number> = new Map(
+  RUNNING_RUN.heads.filter((head) => head.status === "running").map((head) => [head.id, 3]),
+);
 
 /* ── one search, as it happens ──────────────────────────────────── */
 
@@ -3231,6 +3359,12 @@ async function mount() {
   else if (frame === "forkpreset") node = <Shell surface="Exploration" rpc={provePresetRpc} />;
   else if (frame === "forkfanin") node = <Shell surface="Exploration" rpc={swarmFanInRpc} />;
   else if (frame === "forkrefused") node = <Shell surface="Exploration" rpc={refusedRunRpc} />;
+  // A multi-node MIXED-STATUS run: nodes reported, nodes still working, one
+  // aborted and one failed on the provider, over two levels. The state the whole
+  // surface exists for and the one no frame could photograph.
+  else if (frame === "forkrunning") {
+    node = <Shell surface="Exploration" rpc={runningSwarmRpc} headActivity={RUNNING_ACTIVITY} />;
+  }
   else if (frame === "forklive") {
     // `?stage=N` pins the beat. Absent, the frame advances itself — see
     // ForkLiveFrame for why liveness needs both.

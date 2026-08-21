@@ -198,22 +198,30 @@ describe('fork revalidation policy', () => {
     expect(fullPage).toContain('useExactForkRun(state.rpc, runId, hasActiveWork)');
   });
 
-  test('a branch opens BESIDE the canvas, never over it', () => {
+  test('a branch opens inside its RUN, beside the canvas, never over it', () => {
     const embedded = readFileSync(
       join(import.meta.dir, '..', 'src/components/surfaces/ExplorationSurface.tsx'), 'utf8',
     );
-    // A branch click sets the selection, and the selection opens a THIRD pane.
-    // It used to replace the canvas — `opened ? <ForkBranchView …> : <ForkCanvas …>`
-    // — which answered "what did this branch do" by taking away the tree that
-    // gave the answer its place. Both are mounted now, so neither ternary may
-    // come back.
-    expect(embedded).toContain('<ForkBranchView');
+    // The third pane is the RUN, and a branch opens INSIDE it. Two defects are
+    // pinned here at once. The older: the branch used to REPLACE the canvas
+    // — `opened ? <ForkBranchView …> : <ForkCanvas …>` — which answered "what did
+    // this branch do" by taking away the tree that gave the answer its place. The
+    // newer: the pane rendered nothing at all until a node was clicked and then
+    // described that one node, so the owner's *"does it only show the node? WHY?
+    // It should show everything about a particular run"* had no answer.
+    expect(embedded).toContain('<RunDetailView');
     expect(embedded).toContain('<ForkCanvas');
     expect(embedded).not.toContain(': <ForkCanvas');
-    // Three columns at the width that fits them: runs, canvas, branch.
+    // Nested, not switched: `ForkBranchView` is reached from inside the run view,
+    // which is what keeps the run's own liveness on screen while a branch is read.
+    expect(embedded).toMatch(/<ForkBranchView[^>]*\n[\s\S]{0,400}?onBack=/);
+    expect(embedded).not.toContain('No branch open');
+    // Three columns at the width that fits them: runs, canvas, run detail.
     expect(embedded).toMatch(/@6xl:grid-cols-\[[^\]]+_[^\]]+_[^\]]+\]/);
-    // Closed, not navigated back: there is nothing to go back to.
-    expect(embedded).toContain('onClose={() => setSelection(null)}');
+    // The pane gives the column back to the canvas; the branch goes back to its
+    // run. Two different journeys, and each control names the one it makes.
+    expect(embedded).toContain('onClose={() => setInspect(null)}');
+    expect(embedded).toContain('onBack={() => onOpenBranch(null)}');
     expect(embedded).not.toContain('BranchInspector');
     // A branch's behaviour is read through the ONE transcript component, which
     // renders every step with the main chat's own `MessageView`. The card this

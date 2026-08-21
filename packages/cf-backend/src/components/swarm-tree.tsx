@@ -618,10 +618,38 @@ export function SwarmTree({
 		else svg.call(zoomRef.current.transform, to);
 	}, [width, sceneH, selectedRunId]);
 
+	/**
+	 * Zoom about the middle of the canvas.
+	 *
+	 * The transform is computed here and handed to `zoom.transform` — the same call
+	 * `fit` uses and the only one this component can observe working. It was
+	 * `zoom.scaleBy`, which scheduled nothing: the scene transform was
+	 * byte-identical 0ms, 120ms, 240ms and 1700ms after the press, so both zoom
+	 * buttons rendered, took the click, and did nothing, while fold, expand and fit
+	 * on the same row worked.
+	 *
+	 * `userMoved` is set because a press IS the reader moving the view, and that is
+	 * the second half of the same defect: the data render refits whenever
+	 * `userMoved` is false, so a zoom that did not claim the view would be pulled
+	 * back to the fit by the next poll even once it started applying.
+	 */
 	const scaleBy = useCallback((factor: number) => {
-		if (!svgRef.current || !zoomRef.current) return;
-		d3.select(svgRef.current).transition().duration(180).call(zoomRef.current.scaleBy, factor);
-	}, []);
+		const svgEl = svgRef.current;
+		const zoom = zoomRef.current;
+		if (!svgEl || !zoom) return;
+		const from = d3.zoomTransform(svgEl);
+		const [minK, maxK] = zoom.scaleExtent();
+		const k = Math.min(maxK, Math.max(minK, from.k * factor));
+		if (k === from.k) return;
+		// Anchored on the canvas centre, so the thing the reader is looking at is
+		// the thing that stays put.
+		const [cx, cy] = [width / 2, sceneH / 2];
+		const to = d3.zoomIdentity
+			.translate(cx - (cx - from.x) * (k / from.k), cy - (cy - from.y) * (k / from.k))
+			.scale(k);
+		userMoved.current = true;
+		d3.select(svgEl).transition().duration(180).call(zoom.transform, to);
+	}, [width, sceneH]);
 
 	/**
 	 * Fold every abandoned branch, in every search. A CONTROL, never a default:
@@ -723,6 +751,7 @@ export function SwarmTree({
 			.data(state.regions, (d) => d.runId)
 			.join("g")
 			.attr("class", "mcts-band")
+			.attr("data-run", (d) => d.runId)
 			.style("cursor", "pointer")
 			.on("click", (_event: MouseEvent, d) => onSelectRunRef.current?.(d.runId));
 		bands.append("rect")
@@ -747,8 +776,14 @@ export function SwarmTree({
 				const meta = titles.get(region.runId);
 				const el = document.createElement("div");
 				el.className = "absolute flex min-w-0 items-baseline gap-2 whitespace-nowrap";
+				el.dataset.bandTitle = region.runId;
 				el.dataset.x = String(region.band.x0 + BAND_PAD);
 				el.dataset.y = String(region.band.y0 + BAND_PAD);
+				// The band's own right edge, so the caption is bounded by the box it
+				// names rather than by the canvas. Carried as data because the
+				// clamping runs from the zoom handler, in screen space, on a scene
+				// this closure has already finished with.
+				el.dataset.x1 = String(region.band.x1 - BAND_PAD);
 				const name = document.createElement("span");
 				name.className = `min-w-0 shrink truncate text-[11px] font-medium ${
 					region.runId === selectedRunId ? "p-text" : "p-text-2"
@@ -1211,11 +1246,17 @@ function positionBandTitles(
 		// off the left of the canvas a glyph at a time.
 		const left = Math.max(BAND_PAD, x);
 		el.style.transform = `translate(${left}px,${y}px)`;
-		// The room a caption has is the canvas to the right of where it starts,
-		// which moves with the pan. It was a flat 22rem, so on a 313px column the
-		// title truncated mid-word while a wide canvas left it short of the edge
-		// it could have used.
-		el.style.maxWidth = `${Math.max(0, width - left - BAND_PAD)}px`;
+		// The room a caption has is its OWN BAND to the right of where it starts,
+		// never the canvas. Two boxes, and the caption belongs to the narrower one:
+		// a band is only as wide as the widest label in the widest tree on the
+		// canvas, so on a workspace of one-node searches the band is a couple of
+		// hundred pixels and a caption bounded by the canvas ran several times past
+		// its own edge. That is the leak in the owner's screenshot.
+		//
+		// Still bounded by the canvas as well, because panning a wide band leaves
+		// its right edge off screen and a caption may not run off the card.
+		const bandRight = transform.applyX(Number(el.dataset.x1));
+		el.style.maxWidth = `${Math.max(0, Math.min(bandRight, width - BAND_PAD) - left)}px`;
 		el.style.visibility = y < RULER_H || y > height - 12 ? "hidden" : "visible";
 	}
 }

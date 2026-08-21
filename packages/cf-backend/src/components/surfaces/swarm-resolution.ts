@@ -247,3 +247,86 @@ export function runRefusal(
   }
   return null;
 }
+
+/**
+ * One level of a search, and what its nodes are doing.
+ *
+ * `depth` is the journal's own, so a deeper search reports level by level instead
+ * of as one flat wave. The journal is the only store that holds a node which has
+ * not reported, which is why the level counts come from here and not from the tree.
+ */
+export interface RunLevel {
+  readonly depth: number;
+  readonly running: number;
+  readonly reported: number;
+  readonly failed: number;
+  readonly total: number;
+}
+
+/**
+ * What a search is doing right now.
+ *
+ * The gap this closes: {@link runRefusal} is null for a running run, correctly —
+ * a run that has not reached an answer yet has not reached nothing — so a running
+ * search had no fact of its own to state. It said `running` and drew a picture,
+ * and the owner read that as dead six times.
+ *
+ * Every field is counted off `head_journal`, because that store holds the nodes a
+ * settled-rows read cannot see. Null rather than a row of zeroes when there is no
+ * journal: zeroes would assert "these nodes are doing nothing", which is the false
+ * statement this exists to remove.
+ */
+export interface RunLiveness {
+  readonly running: number;
+  readonly reported: number;
+  readonly failed: number;
+  readonly total: number;
+  /**
+   * The newest thing that happened, as epoch millis: the latest step any node
+   * recorded, or the latest spawn where no node has stepped yet. This is the
+   * number that answers "is it alive" — a run whose newest event is four seconds
+   * old is working, and one whose newest event is an hour old is not, whatever
+   * its status column says.
+   */
+  readonly lastEventAt: number;
+  readonly levels: readonly RunLevel[];
+}
+
+/** Terminal-with-a-report, terminal-without-one, or neither. A status this
+ *  vocabulary does not declare is counted in `total` and in no other bucket: an
+ *  unrecognised word is not a claim that work is in flight. `interrupted` is
+ *  exactly that case and must never inflate `running`. */
+function bucketOf(status: string): "running" | "reported" | "failed" | null {
+  if (status === "running") return "running";
+  if (status === "completed") return "reported";
+  if (status === "errored" || status === "aborted") return "failed";
+  return null;
+}
+
+export function runLiveness(head: HeadRunView | null): RunLiveness | null {
+  const nodes = head?.heads ?? [];
+  if (nodes.length === 0) return null;
+  const totals = { running: 0, reported: 0, failed: 0 };
+  const byDepth = new Map<number, { running: number; reported: number; failed: number; total: number }>();
+  let lastEventAt = 0;
+  for (const node of nodes) {
+    const bucket = bucketOf(node.status);
+    if (bucket !== null) totals[bucket] += 1;
+    const level = byDepth.get(node.depth)
+      ?? { running: 0, reported: 0, failed: 0, total: 0 };
+    if (bucket !== null) level[bucket] += 1;
+    level.total += 1;
+    byDepth.set(node.depth, level);
+    // A node that has not stepped is timed from its spawn, which is what an
+    // in-flight branch has instead of a step — see `HeadRunHeadView.lastStepAt`.
+    lastEventAt = Math.max(lastEventAt, node.lastStepAt ?? node.spawnedAt);
+  }
+  return {
+    ...totals,
+    total: nodes.length,
+    lastEventAt,
+    levels: [...byDepth.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([depth, counts]) => ({ depth, ...counts })),
+  };
+}

@@ -234,3 +234,47 @@ describe('explorationForkTree — the run as production held it', () => {
     }
   });
 });
+
+/**
+ * The last of the lone `0% root`.
+ *
+ * The fold above puts a running node on the canvas. The ROOT is not a running
+ * node: it comes from the settled half, because the engine writes its row at
+ * dispatch — and `SearchNode.value` is a `number` initialised to 0. So the root
+ * of a swarm that has evaluated nothing carries a real, stored `0`, survives the
+ * fold intact, and is drawn `0%`.
+ *
+ * That is the caption in the owner's screenshot, and it is a lie of the same kind
+ * as the missing nodes: 0 is the initialiser, not a measurement. `visits === 0`
+ * is what says so — nothing has been backpropagated through this node — and it is
+ * the store's own field, not a heuristic.
+ */
+describe('a node nothing has been backpropagated through has no score', () => {
+  test('the root of a search that has evaluated nothing carries null, not 0', () => {
+    const tree = explorationForkTree({ tree: [rootRow()], head: null });
+    expect(tree?.visits).toBeNull();
+    expect(tree?.value).toBeNull();
+  });
+
+  test('a visited node keeps the score it earned, including a genuine zero', () => {
+    const scored: MctsRow = {
+      ...rootRow(), id: 'n1', parent_id: ROOT, depth: 1, visits: 3, value: 0,
+    };
+    const tree = explorationForkTree({ tree: [rootRow(), scored], head: null });
+    const child = tree?.children[0];
+    // Three rollouts that all returned 0 is a measurement and must survive: this
+    // is the case a blanket "hide zeroes" rule would erase.
+    expect(child?.visits).toBe(3);
+    expect(child?.value).toBe(0);
+  });
+
+  test('an unvisited row that somehow carries a value keeps it', () => {
+    // The store should not produce this, and if it does the number is the only
+    // evidence there is. Suppressing it would be inventing an absence.
+    const odd: MctsRow = {
+      ...rootRow(), id: 'n2', parent_id: ROOT, depth: 1, visits: 0, value: 0.7,
+    };
+    const tree = explorationForkTree({ tree: [rootRow(), odd], head: null });
+    expect(tree?.children[0]?.value).toBe(0.7);
+  });
+});
