@@ -15,7 +15,7 @@ import type {
   ModelProvider, ProviderDeps, ProviderInfo, ModelInfo,
 } from './types';
 import { parseModelSpec } from './types';
-import { renderThrownChain } from '../obs/index';
+import { diagnostics, renderThrownChain } from '../obs/index';
 
 export interface DynamicProviderSource {
   /** Sync — build (or reuse) a provider for `providerId`, or undefined when
@@ -185,7 +185,10 @@ export function createProviderRegistry(): ProviderRegistry {
           if (!(await p.isAvailable(deps))) continue;
           const modelId = p.defaultModel ?? (await p.listModels(deps))[0]?.id;
           if (modelId) return `${p.id}/${modelId}`;
-        } catch { continue; }
+        } catch (error) {
+          diagnostics.event('providers.default_model_unavailable', { error: renderThrownChain({ cause: error }) });
+          continue;
+        }
       }
       return null;
     },

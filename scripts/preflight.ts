@@ -281,7 +281,10 @@ export function reclaim(temp: string, olderThanMs: number): ReclaimResult {
       if (statSync(path).mtimeMs >= cutoff) { kept += 1; continue; }
       Bun.spawnSync(['rm', '-rf', path]);
       removed += 1;
-    } catch { kept += 1; }
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+      kept += 1;
+    }
   }
   return { removed, kept };
 }

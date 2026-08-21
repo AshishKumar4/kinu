@@ -11,7 +11,7 @@
 // drive subscription calls, so nothing here is reachable from cf-backend.
 import type { LanguageModelV2, LanguageModelV2CallOptions, LanguageModelV2StreamPart, LanguageModelV2Usage } from '@ai-sdk/provider';
 import { JsonObjectSchema, usageTotal } from '@kinu.run/core';
-import { diagnostics, KinuError, tolerate } from '@kinu.run/core/obs';
+import { classify, diagnostics, KinuError, renderThrownChain, tolerate } from '@kinu.run/core/obs';
 import type { JsonObject, ModelProvider, ModelInfo, ProviderDeps, Usage } from '@kinu.run/core';
 import { spawn as nodeSpawn } from 'node:child_process';
 import * as v from 'valibot';
@@ -135,7 +135,8 @@ async function probeClaude(spawn: ClaudeSpawn): Promise<ClaudeAvailability> {
   try {
     const parsed = v.parse(v.object({ loggedIn: v.optional(v.boolean()) }), JSON.parse(status.stdout));
     loggedIn = parsed.loggedIn === true;
-  } catch {
+  } catch (error) {
+    if (classify({ cause: error }) !== 'malformed-input') throw error;
     loggedIn = false;
   }
   return { binary: true, loggedIn };
@@ -145,7 +146,8 @@ async function runToString(spawn: ClaudeSpawn, args: string[]): Promise<{ code: 
   let child: SpawnedClaude;
   try {
     child = spawn(args, {});
-  } catch {
+  } catch (error) {
+    diagnostics.event('claude_cli.spawn_failed', { error: renderThrownChain({ cause: error }) });
     return { code: null, stdout: '' };
   }
   child.stdin?.end();

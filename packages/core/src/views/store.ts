@@ -112,8 +112,8 @@ export async function createView<Name, Spec>(
   if (encodedSpec.success) {
     try {
       parsed = parseViewSpec(parseJsonValue(encodedSpec.output));
-    } catch {
-      return { ok: false, error: 'The spec was a string but not valid JSON.' };
+    } catch (error) {
+      return { ok: false, error: `The spec was a string but not valid JSON: ${renderThrownChain({ cause: error })}` };
     }
   } else {
     parsed = parseViewSpec(rawSpec);

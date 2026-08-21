@@ -27,6 +27,7 @@ import type { AssistantModelMessage, FilePart, ImagePart, ModelMessage, TextPart
 import type { VFS } from '../types/primitives';
 import type { ModelInputModality } from '../providers/types';
 import { SPILL_DIRS, type TurnContextBudget } from '../context-budget';
+import { diagnostics, renderThrownChain } from '../obs/index';
 import { fnv1a64Bytes } from './volatile-context';
 
 /** Media kinds an attachment can be — the input-modality vocabulary minus
@@ -355,7 +356,8 @@ function decodeBase64OrText(value: string): Uint8Array {
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
     return bytes;
-  } catch {
+  } catch (error) {
+    diagnostics.event('attachment.base64_decode_fallback', { error: renderThrownChain({ cause: error }) });
     return new TextEncoder().encode(value);
   }
 }

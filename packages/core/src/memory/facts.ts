@@ -10,6 +10,7 @@
 import type { SqlExecutor } from '../types/primitives';
 import * as v from 'valibot';
 import { parseJsonValue, type JsonValue } from '../utils/json';
+import { classify } from '../obs/index';
 
 export interface Fact {
   key: string;
@@ -62,7 +63,11 @@ function rowToFact(r: FactRow): Fact {
 }
 
 function safeParse(json: string): JsonValue {
-  try { return parseJsonValue(json); } catch { return json; }
+  try { return parseJsonValue(json); }
+  catch (error) {
+    if (classify({ cause: error }) !== 'malformed-input') throw error;
+    return json;
+  }
 }
 
 export function createFactsStore(sql: SqlExecutor): FactsStore {

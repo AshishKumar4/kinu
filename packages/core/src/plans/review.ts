@@ -389,7 +389,9 @@ export class PlanReviewStore {
     }
     let encoded: string;
     try { encoded = JSON.stringify(annotations); }
-    catch { return { ok: false, error: 'annotations must be JSON-serializable', plan: current }; }
+    catch (error) {
+      return { ok: false, error: `annotations must be JSON-serializable: ${renderThrownChain({ cause: error })}`, plan: current };
+    }
     if (byteLength(encoded) > MAX_PLAN_ANNOTATIONS_BYTES) {
       return { ok: false, error: 'annotations exceed the maximum size of 1 MiB', plan: current };
     }

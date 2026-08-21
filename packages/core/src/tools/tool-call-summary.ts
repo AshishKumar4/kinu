@@ -16,6 +16,7 @@
  * on the web. One vocabulary, one home, both surfaces.
  */
 import { isFailingToolResult } from '../orchestrator/turn-steering';
+import { renderThrownChain } from '../obs/index';
 import { JsonObjectSchema, JsonValueSchema, type JsonObject, type JsonValue } from '../utils/json';
 import * as v from 'valibot';
 
@@ -49,7 +50,11 @@ export function isToolCallFailed<Input, Output>(
 }
 
 function jsonOrString(value: JsonValue): string {
-  try { return JSON.stringify(value); } catch { return String(value); }
+  try {
+    return JSON.stringify(value);
+  } catch (error) {
+    return `unserializable tool call part: ${renderThrownChain({ cause: error })}`;
+  }
 }
 
 function str(input: JsonObject, key: string): string {

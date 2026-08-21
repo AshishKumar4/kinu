@@ -19,6 +19,7 @@ import type { EventLog } from '../hub/log';
 import type { ReplyChannelStore } from '../hub/reply-channel';
 import type { TriggerRegistry } from '../hub/triggers';
 import { spillEventContent } from '../hub/content-spill';
+import { classify } from '../../obs/index';
 import type { SqlExec, VFS } from '../../types/primitives';
 import { hmacSha256Hex, timingSafeEqual } from '../../utils/crypto';
 import { normalizeWebhookRateLimitPerMin, tryConsumeWebhookRateLimit } from './rate-limit';
@@ -205,7 +206,13 @@ export async function acceptWebhookDelivery(
   let parsedBody: unknown;
   try {
     parsedBody = receivedCT.includes('json') ? JSON.parse(opts.body_text) : opts.body_text;
-  } catch { parsedBody = opts.body_text; }
+  } catch (error) {
+    // A JSON content-type with a body that will not parse is a sender's bug,
+    // not ours: keep the raw text so the durable event still carries what
+    // arrived, and let every other failure propagate.
+    if (classify({ cause: error }) !== 'malformed-input') throw error;
+    parsedBody = opts.body_text;
+  }
 
   const delivery_id = opts.delivery_id ?? `${opts.now}-${Math.random().toString(36).slice(2, 10)}`;
 

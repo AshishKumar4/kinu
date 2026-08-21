@@ -92,7 +92,7 @@ import { WebFetchError, type WebSearchProvider, type WebSearchResponse } from '.
 import type { PlanEdit, SubmitPlanToolDeps } from '../plans/review';
 import type { JsonValue } from '../utils/json';
 import {
-  createConsoleLogger, diagnostics, KinuError, toKinuError, type Logger,
+  createConsoleLogger, diagnostics, KinuError, renderThrownChain, toKinuError, type Logger,
 } from '../obs/index';
 
 type ToolExecutionOptions = Parameters<NonNullable<ToolSet[string]['execute']>>[1];
@@ -249,7 +249,8 @@ function buildCraftedToolSetFromExecute(
   let list;
   try {
     list = rt.craftStore.list();
-  } catch {
+  } catch (error) {
+    diagnostics.event('craft.list_unreadable', { error: renderThrownChain({ cause: error }) });
     return out;
   }
 

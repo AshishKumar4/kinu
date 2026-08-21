@@ -608,7 +608,8 @@ export async function probeOpenCode(
     if (cred.type !== 'wellknown' || !cred.token) {
       return { binary: true, authenticated: false };
     }
-  } catch {
+  } catch (error) {
+    diagnostics.event('opencode.cred_unreadable', { error: renderThrownChain({ cause: error }) });
     return { binary: true, authenticated: false };
   }
 

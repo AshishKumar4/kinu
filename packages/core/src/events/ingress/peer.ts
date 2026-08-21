@@ -362,8 +362,10 @@ export class PeerHub {
     let holder: PeerBackHolder;
     try {
       holder = v.parse(PeerBackHolderSchema, parseJsonObject(channel.holder_addr));
-    } catch {
-      return { delivered: false, detail: 'malformed peer_back holder_addr' };
+    } catch (error) {
+      // The same disclosure the inbound dispatcher renders at :430 — a malformed holder is
+      // a value the operator can act on only if the reason rides with it.
+      return { delivered: false, detail: `malformed peer_back holder_addr: ${renderThrownChain({ cause: error })}` };
     }
     await this.enqueue(holder.agent_name, holder.user_id, PEER_REPLY_TOPIC, {
       in_reply_to: holder.ask_id,

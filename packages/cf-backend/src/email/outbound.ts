@@ -15,7 +15,7 @@
 import { JsonValueSchema, type EmailThreadAddr, type EventLog, type JsonValue, type ReplyChannelStore } from '@kinu.run/core';
 import { agentEmailAddress } from './inbound';
 import type { EmailOutbox } from './outbox';
-import { diagnostics, KinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, renderThrownChain } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 const EmailThreadAddrSchema = v.object({
@@ -78,8 +78,8 @@ export function createEmailThreadDispatcher(
       let addr: EmailThreadAddr;
       try {
         addr = v.parse(EmailThreadAddrSchema, JSON.parse(channel.holder_addr));
-      } catch {
-        return { delivered: false, detail: 'malformed email_thread holder_addr' };
+      } catch (error) {
+        return { delivered: false, detail: `malformed email_thread holder_addr: ${renderThrownChain({ cause: error })}` };
       }
       if (!addr.to || !addr.from) {
         return { delivered: false, detail: 'email_thread holder_addr missing addresses' };

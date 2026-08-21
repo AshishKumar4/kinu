@@ -19,6 +19,7 @@ import type { BackgroundJob, BackgroundJobStore } from '../jobs/store';
 import type { WorkMode } from '../prompting/surface';
 import { decodeJsonValue, parseJsonValue, type JsonValue } from '../utils/json';
 import { resumableAgentsInput } from '../tools/agents-tool';
+import { renderThrownChain } from '../obs/index';
 
 /** The four things the control plane asks of a running job registry —
  *  BackgroundJobRunner's public surface, named at the width this plane uses. */
@@ -61,12 +62,22 @@ export async function cancelBackgroundJob(jobRunner: BackgroundJobControl, jobId
 
 /** Remove a settled job from the registry (an operator dismiss). */
 export function dismissBackgroundJob(jobs: BackgroundJobStore, jobId: string) {
-  try { jobs.dismiss(jobId); return { ok: true }; } catch { return { ok: false }; }
+  try {
+    jobs.dismiss(jobId);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: renderThrownChain({ cause: error }) };
+  }
 }
 
 /** Clear all settled jobs, keeping running ones. */
 export function clearBackgroundJobs(jobs: BackgroundJobStore) {
-  try { jobs.clearSettled(); return { ok: true }; } catch { return { ok: false }; }
+  try {
+    jobs.clearSettled();
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: renderThrownChain({ cause: error }) };
+  }
 }
 
 /**
@@ -94,7 +105,8 @@ export function retryBackgroundJob(deps: BackgroundJobPlaneDeps, jobId: string):
   const tool = deps.rawTools(job.workMode)[job.kind];
   if (!tool?.execute) return { ok: false, error: `tool "${job.kind}" unavailable` };
   let input: JsonValue;
-  try { input = parseJsonValue(inputJson); } catch { return { ok: false, error: 'stored input is unreadable' }; }
+  try { input = parseJsonValue(inputJson); }
+  catch (error) { return { ok: false, error: `stored input is unreadable: ${renderThrownChain({ cause: error })}` }; }
   const translated = resumableAgentsInput(job.kind, input);
   if (translated) input = decodeJsonValue({ value: translated });
   const controller = new AbortController();

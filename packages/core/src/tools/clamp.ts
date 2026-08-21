@@ -18,7 +18,7 @@ import type { VFS } from '../types/primitives';
 import { nanoid } from '../utils/nanoid';
 import { SPILL_DIRS, type BulkProducer, type TurnContextBudget } from '../context-budget';
 import { assertJsonValue, parseJsonValue, type JsonValue } from '../utils/json';
-import { renderThrownChain } from '../obs/index';
+import { diagnostics, renderThrownChain } from '../obs/index';
 
 /** Workspace VFS directory full outputs are offloaded to. */
 export const TOOL_OUTPUT_DIR = SPILL_DIRS.toolOutput;
@@ -64,8 +64,9 @@ export async function clampToolResult(
       // workspace root for every surface that reads them, and a leading slash
       // would name the filesystem's real root instead.
       savedPath = path;
-    } catch {
-      savedPath = null; // offload failed — still clamp, marker stays honest
+    } catch (error) {
+      diagnostics.event('clamp.offload_failed', { error: renderThrownChain({ cause: error }) });
+      savedPath = null;
     }
   }
 
@@ -158,7 +159,7 @@ function normalizeToolOutput(input: { output: unknown }): JsonValue | undefined 
   try {
     assertJsonValue(value);
     return value.value;
-  } catch {
+  } catch (error) {
     // Not already a JsonValue, so re-serialize. A cycle or a BigInt makes even
     // that impossible, and `String()` on those is "[object Object]" — the one
     // string that carries nothing at all — so the reason takes its place.
@@ -168,6 +169,6 @@ function normalizeToolOutput(input: { output: unknown }): JsonValue | undefined 
     } catch (error) {
       return `unserializable tool output: ${renderThrownChain({ cause: error })}`;
     }
-    return String(input.output);
+    return `unserializable tool output: ${renderThrownChain({ cause: error })}`;
   }
 }

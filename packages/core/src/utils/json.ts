@@ -1,4 +1,5 @@
 import * as v from 'valibot';
+import { renderThrownChain } from '../obs/index';
 
 export type JsonPrimitive = string | number | boolean | null;
 
@@ -119,7 +120,11 @@ export function digestJsonValue(input: { value: unknown }): JsonValue | undefine
     const projected = projectJsonValue(input);
     const serialized = JSON.stringify(projected);
     return serialized.length <= DIGEST_LIMIT ? projected : serialized.slice(0, DIGEST_LIMIT) + '…';
-  } catch { return String(input.value).slice(0, DIGEST_LIMIT); }
+  } catch (error) {
+    // The clamp precedent: `String()` on an unprojectable value is "[object Object]", so
+    // the reason takes its place — still truncated to the digest bound.
+    return `unserializable digest input: ${renderThrownChain({ cause: error })}`.slice(0, DIGEST_LIMIT);
+  }
 }
 
 /**

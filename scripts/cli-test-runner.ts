@@ -79,6 +79,7 @@ async function testCreate() {
 
   // Duplicate should fail
   let dupFailed = false;
+  let dupError = "";
   const origExit = process.exit;
   process.exit = (code) => {
     if (code === 1) dupFailed = true;
@@ -86,14 +87,15 @@ async function testCreate() {
   };
   try {
     await createCommand(AGENT_NAME, { mode: "local", purpose: "dupe" });
-  } catch {
+  } catch (error) {
     dupFailed = true;
+    dupError = errorMessage(error);
   } finally {
     process.exit = origExit;
   }
 
   if (dupFailed) {
-    pass("kinu create (duplicate rejected)", "correctly refused");
+    pass("kinu create (duplicate rejected)", `correctly refused (${dupError})`);
   } else {
     fail("kinu create (duplicate rejected)", "no error for duplicate");
   }

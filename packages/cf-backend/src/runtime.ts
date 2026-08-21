@@ -869,7 +869,10 @@ function createDualPathLLM(
         });
         reportCall(report, 'reflection', spec, result);
         return result.text.trim();
-      } catch { return "(reflection unavailable)"; }
+      } catch (error) {
+        diagnostics.event('runtime.reflection_unavailable', { error: renderThrownChain({ cause: error }) });
+        return "(reflection unavailable)";
+      }
     },
   };
 }
@@ -937,7 +940,10 @@ function createFastLLM(
         });
         reportCall(report, 'fast', spec, result);
         return result.text.trim();
-      } catch { return "(reflection unavailable)"; }
+      } catch (error) {
+        diagnostics.event('runtime.fast_unavailable', { error: renderThrownChain({ cause: error }) });
+        return "(reflection unavailable)";
+      }
     },
   };
 }

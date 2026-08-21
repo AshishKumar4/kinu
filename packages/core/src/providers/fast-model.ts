@@ -25,6 +25,7 @@
 
 import type { ModelProvider } from './types';
 import { parseModelSpec } from './types';
+import { diagnostics, renderThrownChain } from '../obs/index';
 
 export interface FastModelSelection {
   /** `<provider>/<modelId>` the mechanical calls should run on. */
@@ -59,7 +60,10 @@ export function selectFastModel(opts: SelectFastModelOpts): FastModelSelection {
   let chat: { provider: string; modelId: string };
   try {
     chat = parseModelSpec(opts.chatSpec);
-  } catch {
+  } catch (error) {
+    // parseModelSpec throws only for a malformed spec, and degrading to the raw
+    // chat spec then is the pinned contract (unit-fast-model.test.ts) — say so.
+    diagnostics.event('providers.fast_spec_unparseable', { error: renderThrownChain({ cause: error }) });
     return { spec: opts.chatSpec, source: 'chat-model' };
   }
   const small = opts.providers.find((p) => p.id === chat.provider)?.fastModel;

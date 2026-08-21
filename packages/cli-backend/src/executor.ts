@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeFileSync, unlinkSync } from 'node:fs';
 import * as v from 'valibot';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { classify, renderThrownChain } from '@kinu.run/core/obs';
 
 const TIMEOUT_MS = 30_000;
 const subprocessResultSchema = v.variant('ok', [
@@ -186,7 +186,8 @@ async function executeInSubprocess(code: string, timeoutMs: number): Promise<Exe
     const parsed = v.parse(subprocessResultSchema, JSON.parse(lastLine));
     if (parsed.ok) return { result: parsed.result };
     return { result: undefined, error: parsed.error ?? 'Unknown error' };
-  } catch {
+  } catch (error) {
+    if (classify({ cause: error }) !== 'malformed-input') throw error;
     return { result: run.stdout.trim() || undefined };
   }
 }

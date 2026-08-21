@@ -219,7 +219,10 @@ function formatLogArg(input: { value: unknown }): string {
   const text = v.safeParse(v.string(), input.value);
   if (text.success) return text.output;
   try { return JSON.stringify(input.value) ?? String(input.value); }
-  catch { return String(input.value); }
+  catch (error) {
+    // Clamp precedent: String() on a cyclic value is "[object Object]" — nothing carried — so the reason takes its place.
+    return `unserializable tool input: ${renderThrownChain({ cause: error })}`;
+  }
 }
 
 function readAbortSignal(input: { options: unknown }): AbortSignal | undefined {

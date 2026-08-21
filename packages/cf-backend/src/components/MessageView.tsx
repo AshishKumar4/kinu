@@ -23,7 +23,7 @@ import {
 } from "@kinu.run/core";
 import type { AdvisorSeverity, InlineSteer, JsonObject, JsonValue, PlacedSteer } from "@kinu.run/core";
 import * as v from "valibot";
-import { tolerate } from "@kinu.run/core/obs";
+import { diagnostics, renderThrownChain, tolerate } from "@kinu.run/core/obs";
 import { PreviewFrame } from "@/components/PreviewFrame";
 import { MarkdownContent, CodeBlock } from "@/components/surfaces/shared";
 import { AttachmentChip } from "@/components/AttachmentChip";
@@ -804,7 +804,8 @@ function MessageFeedback({
     const apply = current === next ? null : next; // click again to clear
     try {
       await onFeedback(messageId, apply);
-    } catch {
+    } catch (error) {
+      diagnostics.event('ui.feedback_failed', { error: renderThrownChain({ cause: error }) });
       setFailed(true);
     } finally {
       setBusy(false);

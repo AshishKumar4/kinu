@@ -44,7 +44,7 @@ import { createClaudeCliProvider, type ClaudeCliProviderOptions } from './claude
 import { createOpenCodeProvider, type OpenCodeProviderOptions } from './opencode-provider';
 import type { LocalCodexAuthStore } from './codex-auth-store';
 import * as v from 'valibot';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { diagnostics, renderThrownChain } from '@kinu.run/core/obs';
 
 const cloudMenuSchema = v.object({
   models: v.optional(v.array(v.object({
@@ -530,7 +530,8 @@ function createCloudModelMenu(cloud: LocalCloudSession, fetchImpl?: typeof fetch
       const menu: CloudMenu = { entries, failures: cloudMenuFailures(source.failures) };
       cached = { at: Date.now(), menu };
       return menu;
-    } catch {
+    } catch (error) {
+      diagnostics.event('model_resolver.cloud_menu_fallback', { error: renderThrownChain({ cause: error }) });
       return EMPTY_CLOUD_MENU;
     }
   };

@@ -35,7 +35,10 @@ function openTerminal(): TerminalInput | null {
   try {
     const fd = openSync('/dev/tty', 'r');
     return { fd, close: () => closeSync(fd) };
-  } catch {
+  } catch (error) {
+    // No terminal is the everyday absence: ENXIO is what open(2) raises without a
+    // controlling terminal, ENOENT when the node itself is missing. Anything else is real.
+    if (!(error instanceof Error && 'code' in error && (error.code === 'ENXIO' || error.code === 'ENOENT'))) throw error;
     return process.stdin.isTTY ? { fd: 0, close: () => {} } : null;
   }
 }

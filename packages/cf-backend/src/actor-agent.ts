@@ -28,7 +28,7 @@ import { CLI_SCOPES_HEADER, cliScopesConnectionTag, rejectOutOfScopeRpc } from "
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { createAgentTracing, renderThrownChain, type AgentTracing } from "@kinu.run/core/obs";
 import {
-  createCompactionExtension, createVfsTranscriptStore,
+  createCompactionExtension, createSharedPrefixCompactor, createVfsTranscriptStore,
   createCompactionStateStore, createModelSummarizer,
   type CompactionStateStore, type Logger as CompactionLogger,
 } from "@kinu.run/compaction";
@@ -340,7 +340,10 @@ function compactionLogDetail<Data>(message: string, data?: Data): string {
   if (data === undefined) return message;
   try {
     return `${message} ${JSON.stringify(data)}`;
-  } catch {
+  } catch (error) {
+    // A detail that cannot serialize (a cycle, a BigInt) must not take the
+    // activity-log line down with it: record why and ship the message alone.
+    diagnostics.event('actor.compaction_detail_unserializable', { error: renderThrownChain({ cause: error }) });
     return message;
   }
 }
@@ -1067,27 +1070,30 @@ export abstract class ActorAgent extends Think<Env> {
    *  regrows. Registered unconditionally at construction; every port
    *  dereferences `this` lazily, so nothing heavy (the CF runtime, the model)
    *  is built before it is first needed. */
+  /** One compaction logger for both compaction entries — the per-turn extension and the
+   *  swarm shared-prefix ladder — so the two cannot drift into different outcome names. */
+  private readonly compactionLogger: CompactionLogger = {
+    info: (message, data) => this.logActivity('compaction', compactionLogDetail(message, data)),
+    debug: (message) => diagnostics.event('compaction.debug', { message }),
+    // `degraded`/`failed` rather than `warn`/`error`: a level is not an outcome, and these two names
+    // are shared verbatim with `cli-backend/src/local-session.ts`, which adapts the same
+    // `@better-compact/core` Logger port to the same outcomes. One query reads both backends.
+    warn: (message, data) => {
+      diagnostics.failure('compaction.degraded', new KinuError('unavailable', message));
+      this.logActivity('compaction_warn', compactionLogDetail(message, data));
+    },
+    error: (message, data) => {
+      diagnostics.failure('compaction.failed', new KinuError('io', message));
+      this.logActivity('compaction_error', compactionLogDetail(message, data));
+    },
+  };
+
   private registerCompactionExtension(): void {
-    const logger: CompactionLogger = {
-      info: (message, data) => this.logActivity('compaction', compactionLogDetail(message, data)),
-      debug: (message) => diagnostics.event('compaction.debug', { message }),
-      // `degraded`/`failed` rather than `warn`/`error`: a level is not an outcome, and these two names
-      // are shared verbatim with `cli-backend/src/local-session.ts`, which adapts the same
-      // `@better-compact/core` Logger port to the same outcomes. One query reads both backends.
-      warn: (message, data) => {
-        diagnostics.failure('compaction.degraded', new KinuError('unavailable', message));
-        this.logActivity('compaction_warn', compactionLogDetail(message, data));
-      },
-      error: (message, data) => {
-        diagnostics.failure('compaction.failed', new KinuError('io', message));
-        this.logActivity('compaction_error', compactionLogDetail(message, data));
-      },
-    };
     this.extensions.register(createCompactionExtension({
       ports: {
         transcripts: createVfsTranscriptStore(() => this.rt.storage.vfs),
         plans: this.compactionState.plans,
-        logger,
+        logger: this.compactionLogger,
       },
       archive: this.compactionState.archive,
       // The sink the summarizer already accepts, finally passed. `compaction`
@@ -1947,6 +1953,20 @@ export abstract class ActorAgent extends Think<Env> {
             if (workMode === 'build') this.recordHeadsTake(merge, task);
           },
         },
+        // The *Inherited context* barrier: the SAME better-compact ladder the per-turn
+        // extension runs, entered once per branch point. The swarm engine owns the
+        // threshold; this owns the rewrite.
+        compactShared: createSharedPrefixCompactor({
+          ports: {
+            transcripts: createVfsTranscriptStore(() => this.rt.storage.vfs),
+            plans: this.compactionState.plans,
+            logger: this.compactionLogger,
+          },
+          archive: this.compactionState.archive,
+          summarize: createModelSummarizer(() => this.getModel(), undefined, {
+            source: 'compaction', report: (report) => this.reportModelCall(report),
+          }),
+        }),
       }),
       budget: this.budget,
     };
@@ -2960,7 +2980,8 @@ export abstract class ActorAgent extends Think<Env> {
     const stored = this.getStoredModelId();
     try {
       return this.providerRegistry().normalizeSpecSync(stored);
-    } catch {
+    } catch (error) {
+      diagnostics.event('actor.model_spec_unresolvable', { error: renderThrownChain({ cause: error }) });
       return stored ?? '';
     }
   }
@@ -2981,7 +3002,8 @@ export abstract class ActorAgent extends Think<Env> {
     try {
       const { provider, modelId } = parseModelSpec(spec);
       return { id: modelId, provider };
-    } catch {
+    } catch (error) {
+      diagnostics.event('actor.model_spec_unparseable', { error: renderThrownChain({ cause: error }) });
       return { id: spec };
     }
   }

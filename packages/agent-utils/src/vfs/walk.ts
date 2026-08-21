@@ -41,7 +41,12 @@ export async function walkRecursive(
 			if (entries.length >= maxEntries) { truncated = true; return; }
 			const full = dir ? `${dir}/${name}` : name;
 			let st: VFSStat;
-			try { st = await vfs.stat(full); } catch { continue; }
+			try { st = await vfs.stat(full); } catch (error) {
+				// VFSError is Node-errno shaped: ENOENT is an entry that vanished
+				// between readdir and stat; anything else is a real walk failure.
+				if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+				continue;
+			}
 			entries.push({ path: full, stat: st });
 			if (st.isDirectory()) {
 				if (depth + 1 > maxDepth) { depthPruned = true; continue; }

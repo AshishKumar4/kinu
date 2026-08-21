@@ -14,7 +14,6 @@
  * Turns are segmented by the `scaffold_version` that served them, so each
  * segment is "how the agent behaved while it was THAT version of itself" and
  * the boundaries between segments are exactly the self-evolution events.
- *
  * Honesty is the whole point. A rate over a handful of turns is noise, so
  * every rate here ships with a 95% interval, every segment carries whether it
  * is precise enough to mean anything, and the trend refuses to name a
@@ -23,6 +22,7 @@
 
 import { wilsonInterval } from '../utils/stats';
 import type { SqlExecutor } from '../types/primitives';
+import { tableExists } from '../identity/schema';
 
 /** A rate is worth reading when its 95% interval spans no more than 20 points
  *  per 100 turns (±10). This replaces an arbitrary minimum-n rule: precision
@@ -195,21 +195,20 @@ function buildNote(segments: ReadonlyArray<AlignmentSegment>, gradedTurns: numbe
  * contract every other reader over this table offers.
  */
 export function alignmentConvergence(sql: SqlExecutor): AlignmentConvergence {
-  let rows: RawSegmentRow[];
-  try {
-    rows = sql<RawSegmentRow>`
-      SELECT scaffold_version,
-             SUM(CASE WHEN outcome != 'abandoned' AND source != 'execution' THEN 1 ELSE 0 END) AS graded,
-             SUM(CASE WHEN outcome IN ('corrected','frustrated') AND source != 'execution' THEN 1 ELSE 0 END) AS negatives,
-             SUM(CASE WHEN outcome = 'abandoned' THEN 1 ELSE 0 END) AS abandoned,
-             SUM(CASE WHEN source = 'execution' THEN 1 ELSE 0 END) AS execution_graded,
-             MIN(created_at) AS first_at,
-             MAX(created_at) AS last_at
-      FROM turn_outcomes
-      GROUP BY scaffold_version`;
-  } catch {
-    rows = [];
-  }
+  // Asked rather than caught: a missing table is the one expected condition, and a catch
+  // cannot tell it from a locked database — the doctrine's own named example.
+  const rows: RawSegmentRow[] = tableExists(sql, 'turn_outcomes')
+    ? sql<RawSegmentRow>`
+        SELECT scaffold_version,
+               SUM(CASE WHEN outcome != 'abandoned' AND source != 'execution' THEN 1 ELSE 0 END) AS graded,
+               SUM(CASE WHEN outcome IN ('corrected','frustrated') AND source != 'execution' THEN 1 ELSE 0 END) AS negatives,
+               SUM(CASE WHEN outcome = 'abandoned' THEN 1 ELSE 0 END) AS abandoned,
+               SUM(CASE WHEN source = 'execution' THEN 1 ELSE 0 END) AS execution_graded,
+               MIN(created_at) AS first_at,
+               MAX(created_at) AS last_at
+        FROM turn_outcomes
+        GROUP BY scaffold_version`
+    : [];
   const segments = rows.map(toSegment).sort((a, b) => a.firstAt - b.firstAt);
   const overall = pool(segments);
   const trend = decideTrend(segments);

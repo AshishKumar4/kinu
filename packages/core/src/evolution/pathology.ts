@@ -27,6 +27,7 @@ import * as v from 'valibot';
 import type { LLM } from '../types/primitives';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
 import type { JsonObject } from '../utils/json';
+import { diagnostics, renderThrownChain } from '../obs/index';
 
 /** WHY the user pushed back. Ordered: the first match wins, so explicit
  *  lexical evidence outranks the inferred `repeat`, and `other` is the honest
@@ -268,7 +269,11 @@ export async function labelPathologyClusters(
   let titles: JsonObject;
   try {
     titles = extractJsonObject(await llm.complete(buildPathologyLabelPrompt(clusters)));
-  } catch {
+  } catch (error) {
+    // Degrading to the deterministic titles is the design; the failure still gets a row, so
+    // a summariser that silently broke on every run is readable in the journal rather than
+    // visible only as an archive that never gains titles.
+    diagnostics.event('pathology.label_degraded', { error: renderThrownChain({ cause: error }) });
     return [...clusters];
   }
   return clusters.map((cluster) => {

@@ -38,6 +38,7 @@ import { DEFAULT_CONFIG } from '../config';
 import { isoDate, nowMs } from '../utils/date';
 import { parseJsonValue } from '../utils/json';
 import { getLesson, listLessons } from '../evolution/outcomes';
+import { classify } from '../obs/index';
 import {
   DEFAULT_SHADOW_CONFIG, decidePromotion, getCurrentScaffoldVersion, readShadowVerdict,
   type ScaffoldStatus,
@@ -89,7 +90,8 @@ function craftScores(sql: SqlExecutor): Map<string, CraftScoreRow> {
       sql<CraftScoreRow>`SELECT tool_name, score, uses, last_used_at FROM craft_scores`
         .map((r) => [r.tool_name, r]),
     );
-  } catch {
+  } catch (error) {
+    if (classify({ cause: error }) !== 'sqlite-missing-table') throw error;
     return new Map();
   }
 }
