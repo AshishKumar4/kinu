@@ -66,6 +66,7 @@ import {
   type TriggerRow,
   type MctsSearchRunSummary,
   type ReasoningEffort,
+  reconcileColumns,
   decodeJsonValue,
   parseJsonValue,
   type SqlExec,
@@ -461,9 +462,20 @@ export function listLocalGepaRuns(name: string, limit = 20): GepaRunSummary[] {
 
 /** Local peer of the cloud `getChatHistoryPage` RPC — the newest page, which
  *  is what `kinu debug messages --limit` is asking for. The read model
- *  itself (core status.ts) works over any SqlExecutor. */
-export function getLocalChatHistory(name: string, limit = 100): ChatHistoryEntry[] {
-  return withLocalDb(name, (db) => [...getChatHistoryPage(makeSql(db), { limit }).items]);
+ *  itself (core status.ts) works over any SqlExecutor.
+ *
+ *  The read selects the provenance column by name, so a workspace created
+ *  before it existed is reconciled here first — this is the one reader that
+ *  opens the database without running `initWorkspaceSchema`, and "no such
+ *  column" on a diagnostic read of an old workspace is a self-inflicted
+ *  failure, not information. */
+export async function getLocalChatHistory(name: string, limit = 100): Promise<ChatHistoryEntry[]> {
+  return withLocalWritableDb(name, (db) => {
+    if (tableExists(db, 'messages')) {
+      reconcileColumns(makeSql(db), (ddl) => { db.exec(ddl); }, 'messages', { metadata: 'TEXT' });
+    }
+    return [...getChatHistoryPage(makeSql(db), { limit }).items];
+  });
 }
 
 /** Local peer of the cloud `getEvolutionChangelog` RPC. */

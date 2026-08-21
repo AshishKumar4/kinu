@@ -71,7 +71,8 @@ import {
   persistMeasuredPromptTokens, applyOverflowRecovery, measureCompactionTrigger,
   CompletionGate, observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
   runAdvisorLane,
-  PROGRAMMATIC_MESSAGE_ID_PREFIX,
+  PROGRAMMATIC_MESSAGE_ID_PREFIX, stampTurnAuthor,
+  type JsonObject,
   ExtensionHost, UserSteerDrain,
   createDefaultWebSearchProvider, createWebCodemodeProvider, createRLMProvider, type WebSearchProvider,
   createAgentsCodemodeProvider, createReleaseCodemodeProvider, type CodemodeProvider,
@@ -1952,9 +1953,9 @@ export class LocalAgentSession implements BackendHost {
       // One durable row PER steer (not per drain): the walk-back fork pivot
       // matches individual user messages verbatim, exactly as surfaces and the
       // JSONL transcript recorded them. A turn the harness enqueued opens on a
-      // `programmatic:`-prefixed row instead, which is both its provenance in
-      // the transcript and — when the producer named the fact — the key that
-      // stops a re-announcement writing a second one.
+      // `programmatic:`-prefixed row that also carries its provenance — the
+      // stamped metadata below is what states authorship at rest; the prefix
+      // only keys the idempotency.
       assistantMsgId = this.persist(
         item.kind === 'programmatic'
           ? `${PROGRAMMATIC_MESSAGE_ID_PREFIX}${item.idempotencyKey ?? crypto.randomUUID()}`
@@ -1965,6 +1966,7 @@ export class LocalAgentSession implements BackendHost {
         // so the local `StepInjections` it read from no longer exists here.
         this.userSteer.drainedTexts(),
         fullText,
+        item.kind === 'programmatic' ? item.metadata : undefined,
       );
 
       // Alternate Takes and steer branches were both captured mid-turn, before
@@ -2495,17 +2497,25 @@ export class LocalAgentSession implements BackendHost {
    *  fresh uuid when the operator typed it. `INSERT OR IGNORE` is what makes the
    *  first form idempotent — the primary key refuses a second announcement of
    *  the same fact — and is a no-op for the second, whose id is unique by
-   *  construction. */
+   *  construction.
+   *
+   *  A programmatic row also STATES its provenance: `metadata` is stamped here,
+   *  at the one seam every durable CLI turn is written through, so authorship
+   *  and event kind live in the row itself. The `programmatic:` id prefix
+   *  remains only as the read-side fallback for rows written before the stamp
+   *  existed — never the thing a new row leans on. */
   private persist(
     turnId: string,
     userText: string,
     steeredTexts: ReadonlyArray<string>,
     assistantText: string,
+    metadata?: JsonObject,
   ): string | null {
     if (!this.persistMessagesEnabled) return null;
     const assistantId = crypto.randomUUID();
-    void this.rt.storage.sql`INSERT OR IGNORE INTO messages (id, session_id, role, content)
-      VALUES (${turnId}, ${this.sessionId}, ${'user'}, ${userText})`;
+    const stamp = metadata === undefined ? null : JSON.stringify(stampTurnAuthor(metadata));
+    void this.rt.storage.sql`INSERT OR IGNORE INTO messages (id, session_id, role, content, metadata)
+      VALUES (${turnId}, ${this.sessionId}, ${'user'}, ${userText}, ${stamp})`;
     let parentId = turnId;
     for (const steered of steeredTexts) {
       const steerId = crypto.randomUUID();

@@ -21,12 +21,14 @@ import type { LLMProviderConfig } from '@kinu.run/core';
 import {
   DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, createAgentsCodemodeProvider,
   initSearchTables, initAlternateTakesTable, captureAlternateTakes, MAX_CONCURRENT_DETACHED_JOBS,
+  initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, SignalDelivery,
+  backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage,
   JsonObjectSchema, WORKSPACE_RUN_ID, BACKGROUND_POLICY,
   type AgentsToolDeps, type ModelInfo, type JsonObject, type JsonValue,
   type ModelCallSink,
   createAgentSelfProvider,
 } from '@kinu.run/core';
-import { createCLIRuntime } from '../src/runtime';
+import { createCLIRuntime, makeExecRaw, makeSql } from '../src/runtime';
 import { LocalAgentSession, serializeContentForHeads, type LocalAgentSessionOpts, type SessionEvent } from '../src/local-session';
 import { cloudProxyBaseURL, createLocalModelResolver, type LocalModelResolver } from '../src/model-resolver';
 import { createNodeExecuteToolFactory } from '../src/execute-tools-factory';
@@ -850,6 +852,53 @@ describe('LocalAgentSession — programmatic turns (reactor / background-job wak
     expect(starts).toHaveLength(1);
     expect(starts[0]!.kind).toBe('programmatic');
     expect(events.some((e) => e.type === 'turn-end')).toBe(true);
+  });
+
+  test('a job wake through the real runner carries its authorship at rest', async () => {
+    const JOB = 'bgjob-wake-at-rest';
+    // The full production chain with only the model faked: BackgroundJobRunner
+    // settle → SignalDelivery.deliver → the session's own enqueueTurn →
+    // processTurn → persist. The stored row must STATE who wrote it (the
+    // authorship stamp and the event name), because the CLI transcript has no
+    // rich twin to recover provenance from — a row that leans on its
+    // `programmatic:` id prefix is one reader away from the owner's bubble.
+    const { db, session } = setup('ack');
+    const sql = makeSql(db);
+    initBackgroundJobsTable(makeExecRaw(db), sql);
+    const store = new BackgroundJobStore(sql);
+    const now = Date.now();
+    store.create({ id: JOB, kind: 'agents', workMode: 'build', now, label: 'fork: design the algorithm' });
+    store.settle(JOB, 0, JSON.stringify({ strategy: 'mcts', score: 0 }), now + 1_000);
+
+    const runner = new BackgroundJobRunner({
+      store,
+      fiber: async (_name, fn) => fn({ stash: () => {}, snapshot: null }),
+      signals: new SignalDelivery(session),
+      scheduleDrain: () => {},
+    });
+    await runner.wake(JOB);
+
+    const expectedId = `${'programmatic:'}${backgroundJobWakeTrigger(JOB)}`;
+    const row = sql<{ metadata: string | null }>`
+      SELECT metadata FROM messages WHERE id = ${expectedId}`[0];
+    expect(row).toBeDefined();
+    expect(JSON.parse(row!.metadata!)).toMatchObject({
+      kinuEvent: 'background_job',
+      jobId: JOB,
+      [TURN_AUTHOR_METADATA_KEY]: 'harness',
+    });
+
+    // The paged read serves the same fact: the harness's words, never the
+    // owner's bubble. Each programmatic turn also persists its assistant
+    // reply; nothing in this conversation was typed by a person, so no row
+    // may read as one. The one-shot surface's completion gate adds its own
+    // programmatic turn after the wake — a producer whose queue item names
+    // only its event — and the write seam stamps that one too.
+    const page = getChatHistoryPage(sql);
+    expect(page.items.some((entry) => entry.role === 'user')).toBe(false);
+    const wake = page.items.find((entry) => entry.id === expectedId)!;
+    expect(wake.role).toBe('system');
+    expect(wake.metadata).toMatchObject({ kinuEvent: 'background_job', jobId: JOB });
   });
 });
 

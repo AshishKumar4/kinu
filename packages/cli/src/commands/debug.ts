@@ -353,7 +353,7 @@ function cloudDebugSource(cloudName: string, auth: { origin: string; token: stri
 function localDebugSource(localName: string): DebugSource {
   return {
     identity: async () => parseLocal(JsonObjectSchema, { value: getLocalAgentInfo(localName) }),
-    messages: async (limit) => parseLocal(JsonRowsSchema, { value: getLocalChatHistory(localName, limit) }),
+    messages: async (limit) => parseLocal(JsonRowsSchema, { value: await getLocalChatHistory(localName, limit) }),
     runs: async (limit) => parseLocal(v.array(DebugRunSchema), { value: listLocalRuns(localName, limit) }),
     runEvents: async (runId, since, limit) => parseLocal(
       v.array(DebugRunEventSchema), { value: listLocalRunEvents(localName, runId, { since, limit }) },
