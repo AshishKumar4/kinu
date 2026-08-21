@@ -2,9 +2,8 @@
 
 Kinu carries a large self-evolution machine with no measured effect attached
 to it. Measured 2026-08-19: 15,645 lines of non-test TypeScript across
-`core/src/evolution`, `core/src/mcts`, `core/src/scaffold` and `core/src/craft`,
-plus a Lean corpus of 330 theorems and 43 requirements with 0 `sorry`. No
-live-model run has scored any of it yet.
+`core/src/evolution`, `core/src/mcts`, `core/src/scaffold` and `core/src/craft`.
+No live-model run has scored any of it yet.
 
 This harness is the instrument for producing that number. It has one
 machine-checked metric, rejection by default, a held-out split, and no model
