@@ -1,7 +1,19 @@
 import { describe, expect, test } from 'bun:test';
 import { withRateLimitRetry } from '../src/providers/rate-limit-retry';
+import { ProviderPacer } from '../src/providers/pacing';
 import { asFetchFunction } from '../src/providers/fetch-shim';
 
+/**
+ * The layer under test, on a clock the suite owns.
+ *
+ * THE PACER SHARES THAT CLOCK, and it has to. The layer now declares each wait
+ * into the isolate's provider pacer so siblings honour it, and the pacer holds
+ * the next request until the declared deadline passes — measured on the pacer's
+ * own clock. Left on the real one, every wait this suite fakes would be taken for
+ * real on the way back in, which is a genuine seam rather than a test detail: a
+ * caller controlling time must control all of it, or the two clocks disagree and
+ * the layer waits twice.
+ */
 function retryHarness(
   responses: Response[],
   overrides: Parameters<typeof withRateLimitRetry>[1] = {},
@@ -10,14 +22,19 @@ function retryHarness(
   let calls = 0;
   const waits: number[] = [];
   const warnings: string[] = [];
+  const now = () => nowMs;
+  const sleep = async (ms: number) => {
+    waits.push(ms);
+    nowMs += ms;
+  };
   const fetchImpl = asFetchFunction(async () => responses[Math.min(calls++, responses.length - 1)]!);
   const wrapped = withRateLimitRetry(fetchImpl, {
-    now: () => nowMs,
+    now,
     random: () => 0.5,
-    sleep: async (ms) => {
-      waits.push(ms);
-      nowMs += ms;
-    },
+    sleep,
+    // Its own pacer, not the isolate's: a suite that declared waits into the
+    // shared one would leave cooldowns behind for whatever ran next.
+    pacer: new ProviderPacer({ now, sleep: async (ms) => { nowMs += ms; } }),
     warn: (message) => warnings.push(message),
     ...overrides,
   });

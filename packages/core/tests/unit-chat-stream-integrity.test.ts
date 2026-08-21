@@ -196,3 +196,76 @@ describe('stalled provider stream aborts the turn', () => {
     expect(done).toBeDefined();
   }, 15_000);
 });
+
+// A PROVIDER-MANDATED WAIT IS NOT A STALL.
+//
+// Measured on the owner's live workspace (my-personal-assistant-f0e4afa6): an
+// `ideate` swarm spawned five nodes against one Cloudflare OAuth credential, the
+// account rate-limited them together, and two heads ended `errored` with
+// "Turn stalled: nothing flowed for 300s" while a `wrangler tail` on the same
+// workspace carried `provider.rate_limited — waiting`. The work was never wedged;
+// it was queued behind a rate limit, and nothing in the stack could tell the two
+// apart because `withRateLimitRetry` sleeps inside `fetch`, upstream of every
+// chunk the watchdog waits for.
+//
+// These drive the REAL retry layer (createChatModel wraps its fetch in it)
+// against a scripted 429, with a mandated wait deliberately LONGER than the stall
+// window — the arrangement that used to fail the turn.
+describe('a rate-limited turn is not a stalled turn', () => {
+  /** Step 2 answers 429 with `Retry-After`, then answers properly. Two responses,
+   *  because the retry layer's second attempt is the one that must survive. */
+  function rateLimitedThenHealthy(retryAfterSeconds: number): () => Response {
+    let served = 0;
+    return () => {
+      served += 1;
+      if (served === 1) {
+        return new Response('rate limited', {
+          status: 429, headers: { 'Retry-After': String(retryAfterSeconds) },
+        });
+      }
+      return new Response(sse([
+        JSON.stringify({ choices: [{ delta: { content: 'answer after the wait' } }] }),
+        JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 20, completion_tokens: 3, total_tokens: 23 } }),
+        '[DONE]',
+      ]), { headers: SSE_HEADERS });
+    };
+  }
+
+  test('a Retry-After longer than the stall window is waited out, not called a stall', async () => {
+    // 1s mandated against a 300ms window. The watchdog fires mid-wait and must
+    // push its deadline instead of ending the turn — and must then give the
+    // RETRIED request a window of its own, because that request is only issued
+    // when the wait ends.
+    const { threw, done } = await driveTurn(rateLimitedThenHealthy(1), { stallTimeoutMs: 300 });
+    expect(threw).toBeNull();
+    expect(done && done.type === 'done' ? done.text : '').toContain('answer after the wait');
+  }, 20_000);
+
+  test('a turn ended after its mandated wait blames the rate limit, not a wedge', async () => {
+    // The other half of the classification: the provider asks for a wait, the
+    // wait is taken, and then nothing arrives anyway. That IS a turn ending — but
+    // the reason a reader gets must be the rate limit, because a row reading
+    // "stalled" sent its reader looking for a wedge that was never there.
+    let served = 0;
+    const { threw } = await driveTurn(() => {
+      served += 1;
+      if (served === 1) {
+        return new Response('rate limited', { status: 429, headers: { 'Retry-After': '1' } });
+      }
+      return new Response(new ReadableStream({ start() { /* silent after the wait */ } }), { headers: SSE_HEADERS });
+    }, { stallTimeoutMs: 300 });
+    expect(threw?.message ?? '').toContain('rate limit');
+    expect(threw?.message ?? '').not.toContain('Turn stalled');
+  }, 20_000);
+
+  test('an ordinary dead stream still reads as a stall, with no rate limit in sight', async () => {
+    // The guard on the classification: nothing declared a wait, so nothing may
+    // claim one. Without this a refactor that always blames the provider passes.
+    const { threw } = await driveTurn(
+      () => new Response(new ReadableStream({ start() { /* stall forever */ } }), { headers: SSE_HEADERS }),
+      { stallTimeoutMs: 300 },
+    );
+    expect(threw?.message ?? '').toContain('Turn stalled');
+    expect(threw?.message ?? '').not.toContain('rate limit');
+  }, 20_000);
+});
