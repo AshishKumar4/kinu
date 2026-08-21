@@ -540,8 +540,24 @@ export interface PromotionDecision {
   winRate: number;
 }
 
+/**
+ * The trial record a promotion decision reads, and all of it.
+ *
+ * Named separately from {@link PendingScaffold} because the rule below is
+ * calibrated against this RECORD — 200k-sim binomial Monte Carlo over
+ * win/loss/tie counts — and not against what produced them. An evolved prompt
+ * section accumulates the same three counts (`prompting/section-store.ts`), and
+ * the alternative to widening the parameter is a second set of thresholds for
+ * one question, which is how two policies start.
+ */
+export interface ShadowTrialRecord {
+  readonly trialsSoFar: number;
+  readonly pendingWins: number;
+  readonly currentWins: number;
+}
+
 export function decidePromotion(
-  pending: PendingScaffold,
+  pending: ShadowTrialRecord,
   config: ShadowConfig,
 ): PromotionDecision {
   const decisiveTrials = pending.pendingWins + pending.currentWins;

@@ -49,10 +49,15 @@ import {
 } from '../scaffold/auto-judge';
 import { buildOutcomeEvalSplit, describeSplitDegeneracy, type OutcomeEvalExpectation } from './outcomes';
 import { runScaffoldGepa } from './gepa/scaffold-bridge';
+import { runSectionGepa, findPromptSectionTarget } from './gepa/section-bridge';
+import {
+  applyPromptSectionDecision, decidePromptSectionPromotion, getPendingPromptSection,
+  incumbentSectionSource, recordPromptSectionTrial,
+} from '../prompting/section-store';
 import {
   finishGepaRun, makePersistingHook, startGepaRun,
 } from './gepa/persistence';
-import type { EvalInstance, MetricOutcome } from './gepa/types';
+import type { EvalInstance, MetricOutcome, ReflectionLM } from './gepa/types';
 import type { ScoreInterval } from '../utils/stats';
 import { nanoid } from '../utils/nanoid';
 import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
@@ -446,6 +451,25 @@ export async function applyScaffoldDecision(
   return { ok: true, fromVersion, ...result };
 }
 
+/**
+ * GEPA's reflection LM, over the chat model, reporting as `reflection` spend.
+ *
+ * One for both targets. The reasoning effort is `scaffold_mutation` for a
+ * prompt section too: the job is the same — read the failures, rewrite the
+ * artifact — and a second effort key would be a second knob for one decision.
+ */
+function reflectionLmFor(control: ScaffoldControl, model: LanguageModel): ReflectionLM {
+  return async (prompt) => {
+    const result = await generateText({ model, prompt, ...effortFor('scaffold_mutation') });
+    control.reportModelCall?.({
+      source: 'reflection',
+      usage: normalizeUsage(result.totalUsage),
+      modelId: result.response.modelId,
+    });
+    return result.text;
+  };
+}
+
 // ── GEPA offline scaffold optimisation ──────────────────────────────────────
 
 const GepaScoreSchema = v.object({
@@ -556,16 +580,8 @@ export async function runScaffoldGepaOptimization(
     }
   };
 
-  // 3. Reflection LM — rewrites the scaffold from the failure feedback.
-  const reflectionLm = async (prompt: string): Promise<string> => {
-    const result = await generateText({ model, prompt, ...effortFor('scaffold_mutation') });
-    control.reportModelCall?.({
-      source: 'reflection',
-      usage: normalizeUsage(result.totalUsage),
-      modelId: result.response.modelId,
-    });
-    return result.text;
-  };
+  // 3. Reflection LM — rewrites the artifact from the failure feedback.
+  const reflectionLm = reflectionLmFor(control, model);
 
   // 4. Run GEPA, persisting every candidate + Pareto snapshot.
   const runId = startGepaRun(control.sql, { target: 'scaffold', budget });
@@ -614,6 +630,241 @@ export async function runScaffoldGepaOptimization(
   };
   if (split.degeneracy) output.selectionWarning = describeSplitDegeneracy(split.degeneracy);
   return output;
+}
+
+// ── GEPA offline prompt-section optimisation ────────────────────────────────
+
+/**
+ * Score one candidate SECTION against one outcome-labeled turn.
+ *
+ * No rollout, and the omission is the point. A scaffold is code, so the only
+ * way to know what it does is to run it; a prompt section is guidance the model
+ * reads, and the question a labeled turn answers about it is counterfactual —
+ * would this wording have prevented the correction the user actually wrote, or
+ * kept the answer they actually accepted? Re-running a whole turn per instance
+ * would cost the eval budget many times over to answer the same question with a
+ * sampled loop in the way.
+ *
+ * That makes the score weaker evidence than a scaffold rollout, which is
+ * exactly why nothing here promotes: a winner lands PENDING and earns its way
+ * live through held-out trials and the same calibrated rule
+ * (`prompting/section-store.ts`).
+ */
+function renderSectionScorePrompt(
+  sectionId: string,
+  candidate: string,
+  instance: EvalInstance<string, OutcomeEvalExpectation>,
+): string {
+  const expected = instance.expected;
+  const criterion = expected && expected.outcome === 'accepted'
+    ? `The agent's response below was ACCEPTED by the user. Score 1.0 when the candidate wording `
+      + `would still have produced a response at least this good, 0.0 when it would have pushed the `
+      + `agent off it.\n\nAccepted response:\n${evidenceWindow(expected.recordedResponse, EVIDENCE_BUDGETS.replayReferenceResponse)}`
+    : `The agent's response below FAILED — the user had to correct it. Score 1.0 when the candidate `
+      + `wording would have prevented that failure, 0.0 when it would have changed nothing.\n\n`
+      + `Failed response:\n${evidenceWindow(expected?.recordedResponse ?? '', EVIDENCE_BUDGETS.replayFailedResponse)}\n\n`
+      + `User's correction:\n${evidenceWindow(expected?.followup ?? '(not recorded)', EVIDENCE_BUDGETS.replayCorrection)}`;
+  return `Score a candidate revision of one section of an agent's system prompt on a 0..1 scale, `
+    + `and give one sentence of specific feedback naming what in the WORDING is responsible.\n\n`
+    + `Section: ${sectionId}\n\nCandidate wording:\n${evidenceWindow(candidate, EVIDENCE_BUDGETS.gepaParentSource)}\n\n`
+    + `The agent was asked:\n${evidenceWindow(instance.input, EVIDENCE_BUDGETS.replayTask)}\n\n`
+    + `${criterion}\n\n`
+    + `JSON shape: {"score": <number 0..1>, "feedback": "<one sentence>"}.`;
+}
+
+function sectionMetric(control: ScaffoldControl, sectionId: string) {
+  return async (
+    candidate: string, instance: EvalInstance<string, OutcomeEvalExpectation>,
+  ): Promise<MetricOutcome> => {
+    try {
+      const scored = await control.judge({
+        schema: GepaScoreSchema,
+        prompt: renderSectionScorePrompt(sectionId, candidate, instance),
+      });
+      return { score: scored.score, feedback: scored.feedback };
+    } catch (err) {
+      // Same neutral score the scaffold metric uses for an unavailable judge: a
+      // 0 would read as "this candidate is bad" on evidence nobody gathered.
+      return { score: 0.5, feedback: `judge unavailable: ${renderThrownChain({ cause: err })}` };
+    }
+  };
+}
+
+export interface PromptSectionOptimizationResult {
+  ok: boolean;
+  error?: string;
+  runId?: string;
+  sectionId?: string;
+  proposed?: boolean;
+  pendingVersion?: number | null;
+  skipReason?: string;
+  /** Present when the gate refused — `size_rule` is the anti-bloat rule, not a
+   *  fault, and callers report it as such. */
+  refusal?: string;
+  bestScore?: ScoreInterval;
+  incumbentScore?: ScoreInterval;
+  iterations?: number;
+  /** Bytes the winner would add to every turn if promoted. Negative is the
+   *  outcome worth celebrating. */
+  byteDelta?: number;
+  selectionWarning?: string;
+}
+
+/**
+ * Run a GEPA pass over ONE prompt section.
+ *
+ * The scaffold sibling of this driver (`runScaffoldGepaOptimization`) draws the
+ * same DISJOINT train/val split from the turn-outcome ledger, and for the same
+ * reason: older corrected/frustrated turns are what reflection must fix, the
+ * newest failures plus accepted-turn regression guards are what the winner is
+ * SELECTED on. A section optimised against the turns it was selected on has
+ * learned those turns, not the job.
+ */
+export async function runPromptSectionGepaOptimization(
+  control: ScaffoldControl,
+  opts: { sectionId: string; maxIterations?: number; evalSize?: number; maxMetricCalls?: number },
+): Promise<PromptSectionOptimizationResult> {
+  if (!findPromptSectionTarget(opts.sectionId)) {
+    return { ok: false, error: `"${opts.sectionId}" is not a registered prompt section` };
+  }
+  const evalSize = clampGepaEvalBudget(opts.evalSize ?? control.config.getGepaEvalBudget());
+  const split = buildOutcomeEvalSplit(control.sql, evalSize);
+  if (split.degeneracy === 'no_labeled_turns' || split.degeneracy === 'no_negatives') {
+    return { ok: false, error: describeSplitDegeneracy(split.degeneracy) };
+  }
+
+  const budget = {
+    maxIterations: Math.max(1, Math.min(opts.maxIterations ?? 4, 20)),
+    // A section metric call is ONE judge call, where a scaffold's is a whole
+    // rollout plus a judge call, so the same iteration count buys more here.
+    maxMetricCalls: Math.max(10, Math.min(opts.maxMetricCalls ?? 120, 400)),
+    minibatchSize: 3,
+  };
+  const reflectionLm = reflectionLmFor(control, await control.model());
+
+  const runId = startGepaRun(control.sql, {
+    target: 'prompt_section', targetRef: opts.sectionId, budget,
+  });
+  const persisted = new Set<string>();
+  let result;
+  try {
+    result = await runSectionGepa({
+      sql: control.sql,
+      sectionId: opts.sectionId,
+      evalSet: split.val,
+      trainSet: split.train,
+      metric: sectionMetric(control, opts.sectionId),
+      reflectionLm,
+      budget,
+      onIteration: makePersistingHook({
+        sql: control.sql, runId, evalSet: split.val, persisted,
+      }),
+    });
+  } catch (err) {
+    finishGepaRun(control.sql, {
+      runId, status: 'aborted', stopReason: 'aborted', winnerId: null, metricCalls: 0, iterations: 0,
+    });
+    return { ok: false, error: renderThrownChain({ cause: err }), runId };
+  }
+  const gepa = result.gepa;
+  finishGepaRun(control.sql, {
+    runId,
+    status: 'completed',
+    stopReason: gepa?.stopReason ?? 'no_improvement_possible',
+    winnerId: gepa?.winner.id ?? null,
+    metricCalls: gepa?.metricCallsUsed ?? 0,
+    iterations: gepa?.iterationsRun ?? 0,
+  });
+
+  const seedBytes = Buffer.byteLength(gepa?.history[0]?.source ?? '', 'utf8');
+  const output: PromptSectionOptimizationResult = {
+    ok: true,
+    runId,
+    sectionId: result.sectionId,
+    proposed: result.proposed,
+    pendingVersion: result.pendingVersion,
+    skipReason: result.skipReason,
+    bestScore: result.winnerScore,
+    incumbentScore: result.incumbentScore,
+    iterations: gepa?.iterationsRun ?? 0,
+    byteDelta: Buffer.byteLength(gepa?.winner.source ?? '', 'utf8') - seedBytes,
+  };
+  if (result.proposeError) output.refusal = result.proposeError.error;
+  if (split.degeneracy) output.selectionWarning = describeSplitDegeneracy(split.degeneracy);
+  return output;
+}
+
+export interface PromptSectionTrialResult {
+  sectionId: string;
+  /** No pending candidate for this section — nothing to trial. */
+  pending: boolean;
+  trialsRun: number;
+  decision?: 'promote' | 'rollback' | 'continue';
+  winRate?: number;
+  action?: 'promote' | 'rollback';
+  vetoReason?: string;
+}
+
+/**
+ * The offline half: score the pending section against the incumbent on turns it
+ * was never selected on, then let the calibrated rule decide.
+ *
+ * The shadow loop's discipline, kept: a trial is EXPENSIVE (two judge calls),
+ * so it runs on the cadence lane and never on a user's turn; the two sources
+ * are scored on the SAME instance so the comparison is paired; a tie is
+ * recorded as a tie. What differs from the scaffold's loop is only what a trial
+ * IS — no queue, because a section trial needs no live turn to ride on. It
+ * needs a labeled turn, and the ledger already has those.
+ */
+export async function runPromptSectionTrials(
+  control: ScaffoldControl,
+  sectionId: string,
+  opts?: { trials?: number },
+): Promise<PromptSectionTrialResult> {
+  const pending = getPendingPromptSection(control.sql, sectionId);
+  if (!pending) return { sectionId, pending: false, trialsRun: 0 };
+  const section = findPromptSectionTarget(sectionId);
+  if (!section) return { sectionId, pending: false, trialsRun: 0 };
+
+  const incumbent = incumbentSectionSource(control.sql, section);
+  const metric = sectionMetric(control, sectionId);
+  // Drawn fresh each pass, so consecutive passes see the turns that happened in
+  // between: the newest failures plus the accepted-turn guards, and never the
+  // train half the candidate was written against.
+  const split = buildOutcomeEvalSplit(control.sql, control.config.getGepaEvalBudget());
+  const instances = split.val.slice(0, Math.max(1, opts?.trials ?? 3));
+
+  let trialsRun = 0;
+  for (const instance of instances) {
+    const [current, candidate] = await Promise.all([
+      metric(incumbent, instance),
+      metric(pending.source, instance),
+    ]);
+    recordPromptSectionTrial(control.sql, {
+      sectionId,
+      pendingVersion: pending.version,
+      instanceId: instance.id,
+      currentScore: current.score,
+      pendingScore: candidate.score,
+      winner: candidate.score > current.score ? 'pending'
+        : candidate.score < current.score ? 'current' : 'tie',
+      feedback: candidate.feedback,
+    });
+    trialsRun += 1;
+  }
+
+  const settled = getPendingPromptSection(control.sql, sectionId);
+  if (!settled) return { sectionId, pending: true, trialsRun };
+  const verdict = decidePromptSectionPromotion(settled);
+  const result: PromptSectionTrialResult = {
+    sectionId, pending: true, trialsRun,
+    decision: verdict.decision, winRate: verdict.winRate,
+  };
+  if (verdict.decision === 'continue') return result;
+  const applied = applyPromptSectionDecision(control.sql, settled, verdict.decision);
+  result.action = applied.action;
+  if (applied.vetoReason) result.vetoReason = applied.vetoReason;
+  return result;
 }
 
 /** Structured output over a review LanguageModel at the judge stage's

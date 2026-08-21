@@ -63,6 +63,7 @@ import {
   withClampedToolResults,
   type WebSearchProvider,
   buildSystemPromptSync,
+  activePromptSectionOverrides,
   currentDateForPrompt,
   turnProvenanceForMetadata,
   workModeForTurnMetadata,
@@ -3126,6 +3127,10 @@ export abstract class ActorAgent extends Think<Env> {
       planSubmissionAvailable: workMode === 'plan' && turnActorDeps.submitPlan !== undefined,
       model,
       currentDate: currentDateForPrompt(),
+      // Prompt sections the evolution loop promoted. Read here, not inside the
+      // builder: the builder is the byte-stable cacheable prefix and does no
+      // I/O, exactly as with the soul.
+      sectionOverrides: activePromptSectionOverrides(this.rt.storage.sql),
     };
     if (availableSkills.length > 0) promptOptions.availableSkills = availableSkills;
     if (activeSetForPrompt) promptOptions.activeSkills = activeSetForPrompt;

@@ -57,6 +57,8 @@ import {
   // supplies the surface they run against).
   applyScaffoldDecision, getShadowStatus, listScaffoldVersions,
   previewScaffoldLive, proposeScaffold, runScaffoldCaptureText, runScaffoldGepaOptimization,
+  runPromptSectionGepaOptimization, runPromptSectionTrials,
+  PROMPT_SECTION_TARGETS, firstPendingPromptSection,
   runScaffoldOnce,
   type GepaOptimizationResult, type ScaffoldDecisionResult,
   type ScaffoldVersionView, type ShadowStatus,
@@ -379,6 +381,10 @@ export class OrchestratorAgent extends ActorAgent {
   /** Turns of new execution traces since the last auto-GEPA pass (in-memory
    *  cadence; resets on eviction, which just delays the next pass slightly). */
   private _turnsSinceGepa = 0;
+  /** Which of the nine prompt sections the next optimisation pass targets.
+   *  In-memory: an eviction restarting the rotation costs one repeated section,
+   *  and the alternative is a config key for a cursor nobody reads. */
+  private _nextPromptSection = 0;
   // Session-reflection cadence (_sessionTurnCount/Turns/StartedAt) now lives on
   // the core AgentOrchestrator; read the turn index via this.orch.sessionTurnIndex.
 
@@ -3406,9 +3412,48 @@ export class OrchestratorAgent extends ActorAgent {
     if (this._turnsSinceGepa < everyN) return;
     if (getPendingScaffold(this.boundSql)) return;  // wait for the slot; keep the counter
     this._turnsSinceGepa = 0;
+    // The prompt-section lane rides the same cadence and the same switch. It is
+    // judge-only where a scaffold pass is a rollout PLUS a judge call, so the
+    // two share a tick rather than competing for one, and neither needs a
+    // second config key nobody would find.
+    this.advancePromptSections();
     void this.runScaffoldGepaOptimization()
       .catch((err) => diagnostics.failure('gepa.auto_run_failed', toKinuError({
         doing: 'running the cadence GEPA scaffold optimisation',
+        cause: err,
+        otherwise: 'unavailable',
+      }), { workspace: this.name }));
+  }
+
+  /**
+   * Advance the evolved-prompt-section loop by one step.
+   *
+   * A section under trial is FINISHED first, always: trials are what turn a
+   * proposal into evidence, and a proposal nobody trials never lands. With
+   * nothing pending, the next section in the rotation gets an optimisation
+   * pass, so over nine cadence ticks every section has had one.
+   *
+   * Both halves are fire-and-forget for the same reason the scaffold pass is:
+   * this runs off a completed turn and must not lengthen the next one.
+   */
+  protected advancePromptSections(): void {
+    const pending = firstPendingPromptSection(this.boundSql);
+    if (pending !== null) {
+      void runPromptSectionTrials(this.scaffoldControl, pending)
+        .catch((err) => diagnostics.failure('prompt_section.trials_failed', toKinuError({
+          doing: `running shadow trials for prompt section ${pending}`,
+          cause: err,
+          otherwise: 'unavailable',
+        }), { workspace: this.name }));
+      return;
+    }
+    const targets = PROMPT_SECTION_TARGETS;
+    const section = targets[this._nextPromptSection % targets.length];
+    this._nextPromptSection += 1;
+    if (!section) return;
+    void runPromptSectionGepaOptimization(this.scaffoldControl, { sectionId: section.id })
+      .catch((err) => diagnostics.failure('prompt_section.pass_failed', toKinuError({
+        doing: `running the cadence GEPA pass over prompt section ${section.id}`,
         cause: err,
         otherwise: 'unavailable',
       }), { workspace: this.name }));

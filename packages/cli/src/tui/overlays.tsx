@@ -248,6 +248,7 @@ interface ChangelogOverlayProps {
 
 const CHANGELOG_GLYPH = {
   scaffold: '⟳', tool: '⚒', view: '▦', fact: '✦', gepa: '◬', replay: '⏱', outcomes: '☑',
+  prompt_section: '✎',
 } satisfies Record<ChangelogEntry['kind'], string>;
 
 /** The Evolution Changelog digest (/changelog): every self-change with its

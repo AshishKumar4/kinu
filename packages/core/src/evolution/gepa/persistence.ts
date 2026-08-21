@@ -4,7 +4,7 @@
  * Schema:
  *   gepa_runs
  *     run_id            TEXT PK
- *     target            TEXT ('scaffold' | 'crafted_tool' | 'arbitrary')
+ *     target            TEXT ('scaffold' | 'prompt_section' | 'crafted_tool' | 'arbitrary')
  *     target_ref        TEXT (e.g. tool name; nullable)
  *     started_at        INTEGER
  *     ended_at          INTEGER (null while in flight)
@@ -102,7 +102,7 @@ export function initGepaTables(execRaw: RawSqlExec): void {
 export function startGepaRun(
   sql: SqlExecutor,
   opts: {
-    target: 'scaffold' | 'crafted_tool' | 'arbitrary';
+    target: 'scaffold' | 'prompt_section' | 'crafted_tool' | 'arbitrary';
     targetRef?: string | null;
     budget?: Partial<GepaBudget>;
   },

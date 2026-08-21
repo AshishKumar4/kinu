@@ -213,9 +213,9 @@ async function scaffoldCandidate(
   // carry status='current' and neither earned it.
   const record = readShadowVerdict(src.sql, version).summary;
   const gate = decidePromotion({
-    version, writtenAt: row.written_at, rationale: row.rationale,
-    trialsSoFar: record.trials, pendingWins: record.pendingWins,
-    currentWins: record.currentWins, ties: record.ties,
+    trialsSoFar: record.trials,
+    pendingWins: record.pendingWins,
+    currentWins: record.currentWins,
   }, DEFAULT_SHADOW_CONFIG);
   if (gate.decision !== 'promote') {
     return {

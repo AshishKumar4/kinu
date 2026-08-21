@@ -249,6 +249,13 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     gepa_candidates: EVERYWHERE,
     gepa_pareto_membership: EVERYWHERE,
 
+    // ── evolved prompt sections ──
+    // The promoted rows are read by the prompt builder on every turn, on every
+    // root, so the table is EVERYWHERE for the same reason `alternate_takes`
+    // is: a reader that finds no table is a fault, not an empty result.
+    prompt_section_versions: EVERYWHERE,
+    prompt_section_evaluations: EVERYWHERE,
+
     // ── agent-authored views ──
     // One table per workspace, wherever a workspace lives: `initViewTables` is
     // part of `initActorTables`, so every root that can run a turn can publish
