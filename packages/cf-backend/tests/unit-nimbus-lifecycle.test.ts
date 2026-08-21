@@ -191,7 +191,7 @@ describe('canonical Nimbus workspace lifecycle', () => {
     await expect(harness.userDO.removeWorkspace(await testOwner(), 'doomed', OWNER))
       .rejects.toThrow('Nimbus destroy failed');
 
-    expect((await harness.userDO.listWorkspaces(await testOwner())).map((row) => row.name)).toContain('doomed');
+    expect((await harness.userDO.listWorkspaces(await testOwner())).entries.map((row) => row.name)).toContain('doomed');
     expect(await harness.userDO.hasWorkspace({ workspaceToken: token }, 'doomed')).toBe(true);
     harness.close();
   });

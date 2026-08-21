@@ -131,7 +131,7 @@ export const getProfile = () => api(UserProfileSchema, 'GET', '/profile');
 export const getCliSetup = () => api(CliSetupSchema, 'GET', '/cli');
 
 // ── Agents ─────────────────────────────────────────────────────────
-export const listWorkspaces     = () => api(v.array(WorkspaceEntrySchema), 'GET', '/workspaces');
+export const listWorkspaces     = () => api(v.object({ entries: v.array(WorkspaceEntrySchema), total: v.number() }), 'GET', '/workspaces');
 // `purpose` is the initial mission. When `name` is omitted the server creates
 // the agent identity using the user's connected model.
 export const registerWorkspace  = (name?: string, purpose?: string, displayName?: string) =>

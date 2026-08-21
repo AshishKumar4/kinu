@@ -149,6 +149,11 @@ const DEVICE_TOKEN_IDLE_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days
 const DEVICE_CONNECT_TICKET_TTL_MS = 60 * 1000;
 const CLI_AGENT_CONNECT_TICKET_TTL_MS = 60 * 1000;
 const CLI_AGENT_WEBSOCKET_CAPABILITY = 'agent.websocket' as const;
+/** Wire bound for the roster listing. A page past this size answers with the
+ *  newest rows plus the whole-roster total — never a silent truncation.
+ *  Numerically equal to core status.ts's MAX_HISTORY_LIMIT by coincidence
+ *  only: that one caps transcript pages, this one caps registry rows. */
+const WORKSPACE_LIST_LIMIT = 200;
 
 /** Stable per-user OAuth callback path. The full URL is built from the
  *  request origin at add-time so it works in any environment without
@@ -210,6 +215,14 @@ export interface WorkspaceEntry {
   createdAt: number;
   lastVisited: number;
   archivedAt: number | null;
+}
+
+/** One bounded page of the workspace roster. `total` is the whole active
+ *  roster, so `entries.length < total` states the remainder instead of
+ *  silently dropping it. */
+export interface WorkspaceList {
+  entries: WorkspaceEntry[];
+  total: number;
 }
 
 export interface CredentialSummary {
@@ -398,11 +411,11 @@ export class UserDO extends Agent<Env> {
 
   // ── Workspace registry ─────────────────────────────────────────────
 
-  async listWorkspaces(caller: UserCaller): Promise<WorkspaceEntry[]> {
+  async listWorkspaces(caller: UserCaller): Promise<WorkspaceList> {
     await this.requireTier(caller, 'workspaces.read');
-    return this.sqlx<{ name: string; display_name: string; created_at: number; last_visited: number; archived_at: number | null }>(
+    const entries = this.sqlx<{ name: string; display_name: string; created_at: number; last_visited: number; archived_at: number | null }>(
       `SELECT name, display_name, created_at, last_visited, archived_at
-       FROM user_workspaces WHERE archived_at IS NULL ORDER BY last_visited DESC`,
+       FROM user_workspaces WHERE archived_at IS NULL ORDER BY last_visited DESC LIMIT ${WORKSPACE_LIST_LIMIT}`,
     ).map((r) => ({
       name: r.name,
       displayName: r.display_name,
@@ -410,6 +423,21 @@ export class UserDO extends Agent<Env> {
       lastVisited: r.last_visited,
       archivedAt: r.archived_at,
     }));
+    const { n } = this.sqlx<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM user_workspaces WHERE archived_at IS NULL`,
+    )[0];
+    return { entries, total: n };
+  }
+
+  /** Complete enumeration of the active roster for server-side fans (credential
+   *  invalidation, peer lists, the CLI's config reconcile) where a capped page
+   *  would silently drop targets. Identity fields only — the wide wire contract
+   *  is listWorkspaces. */
+  async listActiveWorkspaces(caller: UserCaller): Promise<Array<Pick<WorkspaceEntry, 'name' | 'displayName' | 'createdAt'>>> {
+    await this.requireTier(caller, 'workspaces.read');
+    return this.sqlx<{ name: string; display_name: string; created_at: number }>(
+      `SELECT name, display_name, created_at FROM user_workspaces WHERE archived_at IS NULL ORDER BY last_visited DESC`,
+    ).map((r) => ({ name: r.name, displayName: r.display_name, createdAt: r.created_at }));
   }
 
   /** Insert-or-resurrect a roster row. `existed` reports whether ANY row

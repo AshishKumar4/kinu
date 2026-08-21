@@ -127,6 +127,7 @@ export default function Sidebar() {
   const navigate = useNavigate();
   const { mode, palette } = useTheme();
   const [workspaces, setWorkspaces] = useState<WorkspaceEntry[]>([]);
+  const [workspaceTotal, setWorkspaceTotal] = useState(0);
   const [listError, setListError] = useState(false);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [profileFailed, setProfileFailed] = useState(false);
@@ -140,7 +141,12 @@ export default function Sidebar() {
   const userMenuRef = useRef<HTMLDivElement>(null);
 
   const refreshWorkspaces = useCallback(async () => {
-    try { setWorkspaces(await listWorkspaces()); setListError(false); }
+    try {
+      const list = await listWorkspaces();
+      setWorkspaces(list.entries);
+      setWorkspaceTotal(list.total);
+      setListError(false);
+    }
     catch (err) {
       console.warn('[sidebar] listWorkspaces:', renderThrownChain({ cause: err }));
       setListError(true);
@@ -301,6 +307,9 @@ export default function Sidebar() {
             );
           })}
         </ul>
+        {workspaceTotal > workspaces.length && (
+          <div className="px-2 py-2 text-xs p-text-3">Showing {workspaces.length} of {workspaceTotal} workspaces.</div>
+        )}
       </div>
 
       {/* User dropdown — pinned to bottom, with both theme axes visible */}

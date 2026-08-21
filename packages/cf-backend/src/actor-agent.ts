@@ -202,7 +202,7 @@ interface SettledTurnEvents {
 interface UserHubCoreClient {
   readonly hasPeerGrant: UserDO['hasPeerGrant'];
   readonly hasWorkspace: UserDO['hasWorkspace'];
-  readonly listWorkspaces: UserDO['listWorkspaces'];
+  readonly listActiveWorkspaces: UserDO['listActiveWorkspaces'];
   readonly publishExperience: UserDO['publishExperience'];
   readonly searchExperience: UserDO['searchExperience'];
   readonly getExperienceEntry: UserDO['getExperienceEntry'];

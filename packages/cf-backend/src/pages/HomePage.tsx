@@ -23,11 +23,12 @@ import { listWorkspaces, type WorkspaceEntry } from "@/lib/user-api";
 export default function HomePage() {
   const [mission, setMission] = useState("");
   const [workspaces, setWorkspaces] = useState<WorkspaceEntry[]>([]);
+  const [workspaceTotal, setWorkspaceTotal] = useState(0);
   const [listFailed, setListFailed] = useState(false);
   const { hasModels, busy, err, create } = useCreateWorkspace();
 
   useEffect(() => {
-    listWorkspaces().then((w) => { setWorkspaces(w); setListFailed(false); }).catch(() => setListFailed(true));
+    listWorkspaces().then((w) => { setWorkspaces(w.entries); setWorkspaceTotal(w.total); setListFailed(false); }).catch(() => setListFailed(true));
   }, []);
 
   const submit = (event?: FormEvent) => {
@@ -116,7 +117,7 @@ export default function HomePage() {
             <div className="border p-border p-card p-4">
               <div className="flex items-center justify-between gap-3">
                 <span className="text-sm font-semibold p-text">Recent</span>
-                <span className="text-xs p-text-3">{workspaces.length}</span>
+                <span className="text-xs p-text-3">{workspaceTotal}</span>
               </div>
               <div className="mt-3 space-y-1">
                 {workspaces.slice(0, 5).map((agent) => (

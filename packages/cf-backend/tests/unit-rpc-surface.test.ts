@@ -108,7 +108,7 @@ describe('the UserDO capability gate is reachable-surface enforced, not advisory
 
     // A worker route acting for the owner.
     expect(await callOverRpc(harness.userDO, 'listWorkspaces', [await testOwner()]))
-      .toMatchObject([{ name: 'alpha' }]);
+      .toMatchObject({ entries: [{ name: 'alpha' }], total: 1 });
     // A workspace presenting its capability token — same transport, still gated.
     await expect(callOverRpc(harness.userDO, 'listCredentials', [{ workspaceToken: token }]))
       .resolves.toEqual([]);

@@ -20,12 +20,12 @@ export interface CliAuthPoll {
   user?: { id: string; email: string };
 }
 
+/** The workspace roster the CLI reconciles against: the complete active list,
+ *  names only. The wide bounded listing is the web surface's contract. */
 export interface CloudAgent {
   name: string;
   displayName: string;
   createdAt: number;
-  lastVisited: number;
-  archivedAt: number | null;
 }
 
 export interface CloudDeviceRegistration {
@@ -141,7 +141,7 @@ const CliAuthPollSchema: v.GenericSchema<CliAuthPoll> = v.object({
   user: v.optional(v.object({ id: v.string(), email: v.string() })),
 });
 const CloudAgentSchema: v.GenericSchema<CloudAgent> = v.object({
-  name: v.string(), displayName: v.string(), createdAt: v.number(), lastVisited: v.number(), archivedAt: v.nullable(v.number()),
+  name: v.string(), displayName: v.string(), createdAt: v.number(),
 });
 const CloudDeviceRegistrationSchema: v.GenericSchema<CloudDeviceRegistration> = v.object({
   deviceId: v.string(), token: v.string(), userId: v.string(), origin: v.string(),

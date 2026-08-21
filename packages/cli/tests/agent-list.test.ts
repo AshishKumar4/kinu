@@ -35,8 +35,8 @@ describe('CLI cloud agent registry sync', () => {
         },
       ],
       [
-        { name: 'web-agent', displayName: 'Web Agent', createdAt: 1, lastVisited: 1, archivedAt: null },
-        { name: 'web-agent', displayName: 'Web Agent', createdAt: 1, lastVisited: 1, archivedAt: null },
+        { name: 'web-agent', displayName: 'Web Agent', createdAt: 1 },
+        { name: 'web-agent', displayName: 'Web Agent', createdAt: 1 },
       ],
     );
 
