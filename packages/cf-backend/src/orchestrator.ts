@@ -2544,8 +2544,8 @@ export class OrchestratorAgent extends ActorAgent {
    * read-models/node-transcript.ts for what each store can honestly report.
    */
   @callable()
-  async getNodeTranscript(runId: string, nodeId: string): Promise<NodeTranscriptView | null> {
-    return readNodeTranscript(this.boundSql, runId, nodeId);
+  async getNodeTranscript(runId: string, nodeId: string, request?: PageRequest): Promise<NodeTranscriptView | null> {
+    return readNodeTranscript(this.boundSql, runId, nodeId, request ?? {});
   }
 
   /**

@@ -29,11 +29,14 @@ import {
 import type { UIMessage } from "ai";
 import type { HeadStep, HeadStepToolCall, NodeTranscriptView } from "@kinu.run/core";
 import { usageTotal } from "@kinu.run/core";
+import { renderThrownChain } from "@kinu.run/core/obs";
 import { MessageView } from "@/components/MessageView";
-import { DetailSection, EmptyState, MarkdownContent, Metric, timeAgo } from "@/components/surfaces/shared";
+import { DetailSection, EmptyState, HistoryBoundary, MarkdownContent, Metric, timeAgo } from "@/components/surfaces/shared";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { cleanNodeLabel, findForkNode } from "@/components/swarm-tree-model";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import { useGrowingScroll } from "@/hooks/use-growing-scroll";
+import type { SeekCursor } from "@kinu.run/core";
 import { fmtTokens } from "@/lib/format";
 import type { ForkNode, Rpc } from "@/lib/protocol";
 
@@ -251,18 +254,28 @@ function EmptyTrace({ view }: { view: NodeTranscriptView }) {
  * through the panel below, and a mid-turn branch chip has its own way of getting
  * the same view for the same RPC.
  */
-export function TranscriptBody({ view, onSelect }: {
+export function TranscriptBody({ view, onSelect, older, onLoadOlder }: {
   view: NodeTranscriptView;
   /** Selecting an ancestor from the search path; omitted by a caller whose view
    *  is one node deep. */
   onSelect?: (nodeId: string) => void;
+  /** Pages already walked BELOW the view's own, oldest first, plus the walk's
+   *  state. Absent from a caller that shows one page — a compact chip — which
+   *  then renders no boundary and no affordance at all. */
+  older?: {
+    readonly steps: readonly HeadStep[];
+    readonly hasMore: boolean;
+    readonly loading: boolean;
+    readonly error: string | null;
+  };
+  onLoadOlder?: () => void;
 }) {
   const live = view.status === "running";
+  const allSteps = older ? [...older.steps, ...view.steps.items] : view.steps.items;
   const messages = useMemo(
-    () => view.steps.map((step, index) => stepAsMessage(step, index, view.nodeId)),
-    [view.steps, view.nodeId],
+    () => allSteps.map((step, index) => stepAsMessage(step, index, view.nodeId)),
+    [allSteps, view.nodeId],
   );
-  const toolCalls = view.steps.reduce((sum, step) => sum + step.toolCalls.length, 0);
 
   // A live branch is read at its newest step, so the trace follows the work
   // instead of asking the reader to chase it. Only while running: scrolling a
@@ -271,6 +284,16 @@ export function TranscriptBody({ view, onSelect }: {
   useEffect(() => {
     if (live) tail.current?.scrollIntoView({ block: "end" });
   }, [live, messages.length]);
+
+  // The trace grows UP as the reader walks back: the same hook the chat columns
+  // use, so the prepend is compensated and the edge fires the next page without
+  // this panel growing a second scroll policy.
+  const scrollerRef = useGrowingScroll<HTMLDivElement>({
+    grows: "up",
+    content: messages,
+    fetched: older?.steps.length ?? 0,
+    onReachEdge: older?.hasMore && !older.loading && !older.error ? onLoadOlder : undefined,
+  });
 
   return (
     <div className="min-h-0 flex-1 flex flex-col">
@@ -291,9 +314,17 @@ export function TranscriptBody({ view, onSelect }: {
 
       {/* The trace, and only the trace, scrolls: the task and the answer stay
           put, which is the whole point of pinning them. */}
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+      <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
         {messages.length === 0 ? <EmptyTrace view={view} /> : (
           <div className="space-y-3">
+            {older && (older.hasMore || older.loading || older.error) && (
+              <HistoryBoundary
+                loading={older.loading}
+                error={older.error}
+                exhausted={!older.hasMore}
+                onRetry={onLoadOlder ?? (() => {})}
+              />
+            )}
             {messages.map((message, index) => (
               <MessageView key={message.id} message={message}
                 isLast={index === messages.length - 1} isStreaming={live} />
@@ -318,11 +349,12 @@ export function TranscriptBody({ view, onSelect }: {
         )}
       </div>
 
-      {/* Liveness before cost: "is it stuck" is the question a reader of a
-          running branch actually has, and a timestamp does not answer it. */}
+      {/* Whole-trace counts, not page counts: `stepCount`/`toolCount` are the
+          store's own totals, so paging cannot make the metrics shrink as the
+          reader walks backwards. */}
       <div className="shrink-0 border-t p-border px-4 py-2 grid grid-cols-4 gap-2">
-        <Metric label="Steps" value={view.steps.length} />
-        <Metric label="Tools" value={toolCalls} />
+        <Metric label="Steps" value={view.stepCount} />
+        <Metric label="Tools" value={view.toolCount} />
         <Metric label="Tokens" value={fmtTokens(usageTotal(view.usage))} />
         <Metric label={live ? "Last step" : "Wall"}
           value={live
@@ -392,7 +424,62 @@ export function useNodeTranscript({ runId, nodeId, rpc, headActivity, running = 
     if (previous.subject === subject && previous.tick !== tick) reload();
   }, [subject, tick, reload]);
 
-  return { view: lastValue(resource), resource, reload };
+  // ── The walk backwards ────────────────────────────────────────────
+  //
+  // The view carries the NEWEST page; `older` accumulates everything the
+  // reader has walked to below it. The boundary cursor is frozen once the
+  // first older page lands: new steps are newer, so they change the view and
+  // never the pages under it — a live branch growing while someone reads its
+  // history cannot invalidate the walk.
+  const [walk, setWalk] = useState<{ steps: HeadStep[]; hasMore: boolean; below: SeekCursor | null; loading: boolean; error: string | null }>(
+    () => ({ steps: [], hasMore: false, below: null, loading: false, error: null }),
+  );
+  useEffect(() => { setWalk({ steps: [], hasMore: false, below: null, loading: false, error: null }); }, [subject]);
+
+  const view = lastValue(resource);
+  // With nothing walked yet, the boundary is the view's own; after, it is the
+  // frozen one.
+  const hasMore = walk.steps.length > 0 ? walk.hasMore : view?.steps.status === 'more';
+  const below = walk.steps.length > 0 ? walk.below : (view?.steps.status === 'more' ? view.steps.next : null);
+  const walkRef = useRef(subject);
+  walkRef.current = subject;
+  const inFlight = useRef(false);
+  const loadOlder = useCallback(() => {
+    const at = walkRef.current;
+    if (inFlight.current || below === null) return;
+    inFlight.current = true;
+    setWalk((prev) => ({ ...prev, loading: true, error: null }));
+    (async () => {
+      try {
+        const next = await rpc<NodeTranscriptView | null>('getNodeTranscript', [runId, nodeId, { cursor: below }]);
+        if (walkRef.current !== at) return; // the reader moved on; the page is nobody's
+        if (!next) {
+          setWalk((prev) => ({ ...prev, loading: false, error: 'This trace could not be read.' }));
+          return;
+        }
+        setWalk((prev) => ({
+          steps: [...next.steps.items, ...prev.steps],
+          hasMore: next.steps.status === 'more',
+          below: next.steps.status === 'more' ? next.steps.next : null,
+          loading: false,
+          error: null,
+        }));
+      } catch (error) {
+        if (walkRef.current !== at) return;
+        setWalk((prev) => ({ ...prev, loading: false, error: renderThrownChain({ cause: error }) }));
+      } finally {
+        inFlight.current = false;
+      }
+    })();
+  }, [rpc, runId, nodeId, below]);
+
+  return {
+    view,
+    resource,
+    reload,
+    older: { steps: walk.steps, hasMore, loading: walk.loading, error: walk.error },
+    loadOlder,
+  };
 }
 
 /**
@@ -420,7 +507,7 @@ export function NodeTranscript({ selection, trees, rpc, headActivity, onSelect }
   // the transcript's fallback clock.
   const drawnRoot = runId === null ? undefined : trees.get(runId);
   const drawn = drawnRoot && nodeId !== null ? findForkNode(drawnRoot, nodeId) : null;
-  const { view, resource, reload } = useNodeTranscript({
+  const { view, resource, reload, older, loadOlder } = useNodeTranscript({
     runId, nodeId, rpc, headActivity, running: drawn?.status === "running",
   });
   const drawnLabel = cleanNodeLabel(drawn?.action, nodeId ?? "this branch");
@@ -442,7 +529,7 @@ export function NodeTranscript({ selection, trees, rpc, headActivity, onSelect }
         <LoadFailure what="this branch's transcript" message={resource.message} onRetry={reload}
           className="shrink-0 border-b p-border px-4 py-2" />
       )}
-      {view ? <TranscriptBody view={view} onSelect={onSelect} />
+      {view ? <TranscriptBody view={view} onSelect={onSelect} older={older} onLoadOlder={loadOlder} />
         : resource.status === "loading" ? (
           <div className="flex-1 flex items-center justify-center gap-2 text-[12px] p-text-2">
             <Loader size="sm" />Reading the branch…

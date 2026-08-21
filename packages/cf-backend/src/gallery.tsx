@@ -84,12 +84,12 @@ import { WorkSurface, ACTIVITY_SURFACE, type SurfaceKind } from "@/components/su
 import { AgentViewSurface } from "@/components/surfaces/AgentViewSurface";
 import { ReleasesSurface } from "@/components/surfaces/ReleasesSurface";
 import { AgentSurface } from "@/components/surfaces/AgentSurface";
-import { EmptyState, MarkdownContent } from "@/components/surfaces/shared";
+import { HistoryBoundary, EmptyState, MarkdownContent } from "@/components/surfaces/shared";
 import { SubordinateTabs } from "@/components/SubordinateTabs";
 import { Modal } from "@/components/ui/Modal";
 import { MessageView, SteerBubble } from "@/components/MessageView";
 import { buildTranscript } from "@kinu.run/core";
-import { ConversationSkeleton, DeviceConsentCard, ChatErrorCard, EmptyConversation, HistoryBoundary } from "@/pages/WorkspacePage";
+import { ConversationSkeleton, DeviceConsentCard, ChatErrorCard, EmptyConversation } from "@/pages/WorkspacePage";
 import { usePagedScroll } from "@/hooks/use-paged-scroll";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { useTheme } from "@/hooks/use-theme";
@@ -1017,7 +1017,7 @@ const TRANSCRIPTS = {
     status: "completed",
     spawnedAt: NOW - 52e5, lastStepAt: NOW - 51e5, wallClockMs: 14_200,
     usage: { input: 8_420, output: 610 },
-    steps: [
+    steps: { status: "end", items: [
       {
         text: "Reading the handler and both of its callers before changing anything.",
         reasoning: "The 500 is a dereference of `rules[kind]` where kind is null, so the fix has to sit where the dereference is — not where the value was created. That means I need every reader, not just the one in the stack trace.",
@@ -1040,7 +1040,9 @@ const TRANSCRIPTS = {
           { name: "run", input: { command: "bun test packages/checkout" }, output: "42 pass\n0 fail\nRan 42 tests across 6 files. [1.21s]" },
         ],
       },
-    ],
+    ] },
+    stepCount: 3,
+    toolCount: 5,
     answer: "Two more reads of `rules[kind]` in `apply-coupon.ts`, both fixed by the same `?? inferKind(coupon)` guard already used in `validate.ts:9`.\n\nGuarding at the **reader** rather than the request edge, because the cart serializer reads the same table on the lazy path and an edge guard would still let a null reach it. `bun test packages/checkout` is green (42 pass).",
     decisions: [{
       question: "Guard at the edge or at the reader?",
@@ -1060,11 +1062,13 @@ const TRANSCRIPTS = {
     rationale: "the lazy path", status: "running",
     spawnedAt: NOW - 42e3, lastStepAt: NOW - 9e3, wallClockMs: 0,
     usage: { input: 5_110 },
-    steps: [{
+    steps: { status: "end", items: [{
       text: "Opening the serializer.",
       reasoning: "If this path already optional-chains, the guard belongs only in apply-coupon.",
       toolCalls: [{ name: "file", input: { action: "read", path: "packages/cart/src/serializer.ts" }, output: "const rule = rules[coupon.kind]?.serialize;" }],
-    }],
+    }] },
+    stepCount: 1,
+    toolCount: 1,
     answer: null, decisions: [], errorMessage: null,
     path: [
       { id: "root-merge-1", label: "Check every other call site that indexes rules by kind", depth: 0, status: "running" },
@@ -1078,7 +1082,7 @@ const TRANSCRIPTS = {
     rationale: "the reporting path", status: "errored",
     spawnedAt: NOW - 52e5, lastStepAt: null, wallClockMs: 2_100,
     usage: { input: 1_020 },
-    steps: [], answer: null, decisions: [],
+    steps: { status: "end", items: [] }, stepCount: 0, toolCount: 0, answer: null, decisions: [],
     errorMessage: "the admin package is not checked out in this sandbox",
     path: [
       { id: "root-merge-1", label: "Check every other call site that indexes rules by kind", depth: 0, status: "completed" },
@@ -1094,7 +1098,7 @@ const TRANSCRIPTS = {
     task: "Find why the SAVE20 coupon 500s",
     rationale: "", status: "terminal",
     spawnedAt: NOW - 34e5, lastStepAt: null, wallClockMs: 0, usage: {},
-    steps: [],
+    steps: { status: "end", items: [] }, stepCount: 0, toolCount: 0,
     answer: "The percentage branch indexes `rules[coupon.kind]` and Tuesday's migration left `kind` null on every coupon created after it, so the lookup returns undefined and `.apply` throws. Guard the read with `?? inferKind(coupon)` — the shape `validate.ts` already uses — rather than backfilling the column, which would need a migration window the checkout path cannot take.",
     decisions: [], errorMessage: null,
     path: [
@@ -1113,7 +1117,7 @@ const TRANSCRIPTS = {
     status: "completed",
     spawnedAt: NOW - 9e5, lastStepAt: NOW - 84e4, wallClockMs: 61_400,
     usage: { input: 5_140, output: 380 },
-    steps: [
+    steps: { status: "end", items: [
       {
         text: "Checking whether Tuesday's migration reached staging at all.",
         reasoning: "If staging never ran it, the null `kind` column there proves nothing about production and the whole comparison is off.",
@@ -1125,7 +1129,9 @@ const TRANSCRIPTS = {
         text: "It did run, on the 11th. The snapshot is comparable after all.",
         toolCalls: [],
       },
-    ],
+    ] },
+    stepCount: 2,
+    toolCount: 1,
     answer: "Staging applied `0007_coupon_kind.sql` on 2026-08-11, so its null `kind` rows predate the migration exactly as production's do — the snapshot is a fair reproduction and the guard is still the right fix.",
     decisions: [], errorMessage: null,
     path: [
@@ -1144,7 +1150,7 @@ const TRANSCRIPTS = {
     status: "completed",
     spawnedAt: NOW - 40e4, lastStepAt: NOW - 30e4, wallClockMs: 118_000,
     usage: { input: 9_180, output: 720 },
-    steps: [
+    steps: { status: "end", items: [
       {
         text: "Listing the readers before I judge any of them.",
         reasoning: "The task names one file but the serializer re-exports from two others, so grepping the package is cheaper than reading it and less likely to miss a caller.",
@@ -1170,7 +1176,9 @@ const TRANSCRIPTS = {
         text: "Confirmed. `rule` is undefined for a null kind and `.apply` throws before anything is returned to the caller.",
         toolCalls: [],
       },
-    ],
+    ] },
+    stepCount: 3,
+    toolCount: 2,
     answer: "`serializeCart` reads `rules[coupon.kind].percent` with no guard — it throws on every percentage coupon written before the migration. `totals.ts:52` has the same shape. `serializer.ts:141` compares instead of indexing and is safe. The guard belongs at both reads, spelled the way `validate.ts` already spells it: `rules[coupon.kind ?? inferKind(coupon)]`.",
     decisions: [], errorMessage: null,
     path: [
@@ -1186,7 +1194,7 @@ const TRANSCRIPTS = {
     status: "running",
     spawnedAt: NOW - 40e4, lastStepAt: NOW - 4e3, wallClockMs: 0,
     usage: { input: 4_260, output: 190 },
-    steps: [
+    steps: { status: "end", items: [
       {
         text: "Finding the refactor first — the guard may have moved rather than gone.",
         reasoning: "A read that lost its guard and a read that never had one need different fixes, and only the history tells them apart.",
@@ -1206,7 +1214,9 @@ const TRANSCRIPTS = {
           { name: "run", input: { command: "git show 8c1f20a1 --stat" } },
         ],
       },
-    ],
+    ] },
+    stepCount: 2,
+    toolCount: 2,
     answer: null,
     decisions: [], errorMessage: null,
     path: [
