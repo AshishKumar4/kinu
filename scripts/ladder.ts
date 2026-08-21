@@ -829,8 +829,11 @@ export const LADDER: readonly Gate[] = [
     // by an entry that did not name them.
     run: 'bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts',
     tier: 'ci',
-    // 4.4s: 216 tests over 9 files, median of 4.50 / 4.38 / 4.33 on the 24-thread
-    // box, 2026-08-21.
+    // 4.4s: 218 tests over 9 files, median of 4.33 / 4.39 / 4.54 on the 24-thread
+    // box, 2026-08-21 — re-measured after the Terminal-Bench pre-flight brought
+    // the count here. That is the corpus-absent basis every fresh clone sees; a
+    // checkout with terminal-bench-2.1 on disk also pays the sampler over the real
+    // corpus in bench-external.test.ts.
     seconds: 4.4,
     catches: 'the bench harness guarantees — sandbox isolation, the seal, '
       + 'anti-self-scoring, budget enforcement, corpus well-formedness — plus the '
@@ -1178,11 +1181,12 @@ export const EXCLUSION_GROUPS = {
       + 'machine normally has several worktrees checked out, and four abandoned gallery '
       + 'servers from three of them were listening on 5199 and 5200 at the time, one 46 hours '
       + 'old. The harness owns that defect; until it makes readiness an identity check rather '
-      + 'than a reachability check, these three take turns.',
+      + 'than a reachability check, these four take turns.',
     gates: [
       'bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts',
       'bun test scripts/public-pages.test.ts',
       'bun test scripts/swarm-tree-geometry.test.ts',
+      'bun test scripts/chat-scroll.test.ts',
     ],
   },
 } satisfies Record<string, { readonly why: string; readonly gates: readonly string[] }>;

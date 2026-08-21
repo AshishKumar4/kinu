@@ -194,7 +194,7 @@ describe("deploy gate", () => {
     expect(waves.length).toBe(3);
     expect(waves[0]).toEqual(["bun scripts/preflight.ts"]);
     expect(waves.at(-1)).toEqual(["bun run gate:infra"]);
-    expect(waves[1]?.length).toBe(50);
+    expect(waves[1]?.length).toBe(51);
   });
 
   test("the exclusion table in the runner is the one the ladder declares", () => {
@@ -232,7 +232,7 @@ describe("deploy gate", () => {
 
   // The budget is EXPLICIT because the work is quadratic and bun's 5000ms
   // default is not a decision anybody made about this test. One deploy run per
-  // gate, each running every earlier gate's stub: 52 gates is ~2,700 process
+  // gate, each running every earlier gate's stub: 53 gates is ~2,800 process
   // spawns.
   test("every gate fails closed even when the former skip variable is set", () => {
     const last = REQUIRED_GATES.at(-1);

@@ -5,7 +5,7 @@ name: Deploy staging
 # default — was measuring a build nobody could name.
 #
 # This runs `scripts/deploy.sh staging`, which is the SAME script `bun run deploy`
-# runs against production. It is not a lighter path: the 52 required gates, the
+# runs against production. It is not a lighter path: the 53 required gates, the
 # CLI asset check and all six post-deploy smoke checks are the script's, not this
 # file's, so they cannot be absent here and present there.
 #
