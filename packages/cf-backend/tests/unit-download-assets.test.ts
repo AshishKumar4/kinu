@@ -13,6 +13,7 @@
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
+import { BUILTIN_TOOLS, NAMED_SWARM_PRESETS, SWARM_PRESETS } from '@kinu.run/core';
 import { handleCliRequest } from '../src/cli/routes';
 import { handleHealthRequest } from '../src/health-route';
 
@@ -33,6 +34,11 @@ const HealthResponseSchema = v.object({
     sha: v.string(),
     builtAt: v.string(),
   })),
+  features: v.object({
+    builtinTools: v.number(),
+    swarmPresets: v.number(),
+    namedSearches: v.number(),
+  }),
 });
 
 function requiredResponse(response: Response | null): Response {
@@ -159,5 +165,18 @@ describe('GET /api/health build stamp', () => {
     const env = envWithAssets(PUBLISHED);
     expect(await handleHealthRequest(new Request(`${ORIGIN}/api/other`), env)).toBeNull();
     expect(await handleHealthRequest(new Request(`${ORIGIN}/api/health`, { method: 'POST' }), env)).toBeNull();
+  });
+
+  test('the feature counts are read out of the registries, not declared by hand', async () => {
+    const response = requiredResponse(await handleHealthRequest(new Request(`${ORIGIN}/api/health`), envWithAssets(PUBLISHED)));
+    const body = v.parse(HealthResponseSchema, await response.json());
+    // Compared against the registries themselves: a hand-listed number passes
+    // today and lies at the next registry edit, so the endpoint is held to the
+    // same source the compiler holds BUILTIN_TOOLS to.
+    expect(body.features).toEqual({
+      builtinTools: BUILTIN_TOOLS.length,
+      swarmPresets: SWARM_PRESETS.length,
+      namedSearches: NAMED_SWARM_PRESETS.length,
+    });
   });
 });

@@ -9,28 +9,9 @@
 // cheerfully true. (A `vite dev` server has no stamp either, correctly: it
 // cannot serve the CLI downloads.)
 
-import { ORCHESTRATOR_AGENT_SLUG } from '@kinu.run/core';
+import { BUILTIN_TOOLS, NAMED_SWARM_PRESETS, ORCHESTRATOR_AGENT_SLUG, SWARM_PRESETS } from '@kinu.run/core';
 import { readBuildStamp } from './lib/deployed-assets';
 
-// A hand list, so it can lie: the three d1-* entries survived the D1 removal
-// by a day. When a feature dies here, delete its line in the same commit.
-const FEATURES: ReadonlyArray<string> = [
-  'kv-oauth-session-auth',
-  'kv-cli-auth-state',
-  'user-do',
-  'multi-tenant',
-  'multi-provider-registry',
-  'codex-oauth',
-  'branching-heads',
-  'scaffold-loop-closure',
-  'scaffold-shadow-rollout',
-  'run-event-log',
-  'sse-resume',
-  'mcp-server',
-  'background-review',
-  'compaction',
-  'approval-gate',
-];
 
 export async function handleHealthRequest(request: Request, env: Env): Promise<Response | null> {
   const url = new URL(request.url);
@@ -40,7 +21,16 @@ export async function handleHealthRequest(request: Request, env: Env): Promise<R
   return Response.json({
     ok: build !== null,
     build,
-    features: FEATURES,
+    // Counted, not declared: each figure is read out of a registry the
+    // compiler already holds to its own declaration (BUILTIN_TOOLS cannot name
+    // a tool the reach table does not call native), so a feature that dies
+    // leaves this list in the same commit that deletes it. The hand list this
+    // replaces survived the D1 removal by a day.
+    features: {
+      builtinTools: BUILTIN_TOOLS.length,
+      swarmPresets: SWARM_PRESETS.length,
+      namedSearches: NAMED_SWARM_PRESETS.length,
+    },
     endpoints: {
       // User-scoped (auth required)
       'GET /api/user/profile': 'caller identity',
