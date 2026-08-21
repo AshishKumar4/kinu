@@ -54,6 +54,7 @@ Event = dict[str, Any]
 #: two shadow-eval outcomes emitted directly by local-session.ts; the drift gate
 #: in scripts/bench.test.ts fails if this set and that union diverge.
 EVOLUTION_EVENTS = frozenset({
+    "advisor_note",
     "reflection",
     "craft_discovered",
     "scaffold_proposed",

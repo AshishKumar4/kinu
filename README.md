@@ -70,24 +70,23 @@ editor over the Agent Client Protocol, or by email.
 
 ## The tree swarm
 
-Hard tasks get more than one attempt, and code picks the winner. One tool action
-runs the search. `agents({action:'swarm', …})` takes a task and an objective,
-builds a tree whose nodes are agents, and measures every candidate the way you
-said.
+Hard tasks get more than one attempt, and code picks the winner. When the agent
+judges a task worth a search, it calls `agents({action:'swarm', …})` with the
+task and an objective it derives from your ask, and the search builds a tree whose
+nodes are agents.
 
-You declare the measurement. An `objective` names a metric, a unit, a direction and
-a target, and it names the verifier that measures a candidate. A verifier is code.
-It runs in this workspace and reports a raw number, and that number picks the
-winner. Verifier kinds resolve through a closed registry, so a name nobody
-registered fails the run. Ask for `score:'judge'` instead and you get the median of
-a model ensemble, which ranks candidates without measuring anything, and nothing
-from a judged run persists as a record.
+The objective names a metric, a unit, a direction and a target, and it names the
+verifier that measures a candidate. A verifier is code. It runs in this workspace
+and reports a raw number, and that number picks the winner. Verifier kinds resolve
+through a closed registry, so a name nobody registered fails the run. With
+`score:'judge'` a model ensemble ranks candidates instead, and a judged run leaves
+no measured record.
 
 A `preset` fixes the shape of the search. `ideate` is flat by construction, at depth
 1 and 5 branches, and hands back every candidate unranked. `optimise` climbs one measured
 number with UCT selection, at depth 5 and 3 branches. `prove` searches deepest, at
 depth 7, because a checker refutes a wrong branch early. `custom` takes the six axes,
-`unit` `context` `expand` `score` `advance` `carry`, and composes your own.
+`unit` `context` `expand` `score` `advance` `carry`.
 `expand:'aggregate'` fans a level in and
 merges its members in dependency order. `advance:'archive'` keeps a grid of cells
 and one elite per coordinate.
