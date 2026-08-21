@@ -325,6 +325,7 @@ export interface SwarmRunDeps {
    */
   readonly compactShared?: (
     messages: readonly ModelMessage[],
+    basis: { readonly contextWindow: number; readonly key: string },
   ) => Promise<readonly ModelMessage[]>;
   /**
    * This call is an evict/exit RE-DRIVE of a durable job row, so it RE-ENTERS the
@@ -945,7 +946,8 @@ async function sharedPrefix(input: {
   const chars = parent.transcript.reduce(
     (total, message) => total + JSON.stringify(message.content).length, 0,
   );
-  const room = contextWindowForModel(modelSpecOf(deps.model)) * CONTEXT_COMPACTION_THRESHOLD;
+  const window = contextWindowForModel(modelSpecOf(deps.model));
+  const room = window * CONTEXT_COMPACTION_THRESHOLD;
   if (estimateTokens(chars) < room) return parent.transcript;
   if (!deps.compactShared) {
     input.log.event('swarm.compaction_absent', {
@@ -954,7 +956,13 @@ async function sharedPrefix(input: {
     });
     return parent.transcript;
   }
-  const shared = await deps.compactShared(parent.transcript);
+  // The key is the branch point's durable id, so a re-entered search replays the same
+  // plan byte-stably instead of re-summarising; the window is the one this threshold
+  // measured against, so the ladder and the policy never disagree about pressure.
+  const shared = await deps.compactShared(parent.transcript, {
+    contextWindow: window,
+    key: `swarm:${parent.id}`,
+  });
   parent.compacted = shared;
   input.log.event('swarm.context_compacted', {
     preset: input.preset, node: parent.id, depth: parent.depth,
