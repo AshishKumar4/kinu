@@ -2098,7 +2098,7 @@ export class LocalAgentSession implements BackendHost {
       gateOpen: this.completionGate.open,
       reachable,
       deliver: (signal) => this.orch.signals.deliver(signal),
-      record: (note) => { this.engine.recordAdvisorNote(note); },
+      record: (note, turnId) => { this.engine.recordAdvisorNote(note, turnId); },
     }).catch((err) => diagnostics.failure('advisor.review_failed', toKinuError({
       doing: 'reviewing the completed turn',
       cause: err,

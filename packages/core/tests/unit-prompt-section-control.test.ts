@@ -18,7 +18,8 @@ import { MockLanguageModelV3 } from 'ai/test';
 import * as v from 'valibot';
 import {
   activePromptSectionOverrides, buildSystemPromptSync,
-  findPromptSectionTarget, recordTurnOutcome,
+  findPromptSectionTarget, recordTurnOutcome, buildOutcomeEvalSplit,
+  EvolutionEngine,
   runPromptSectionGepaOptimization, runPromptSectionTrials,
   type ScaffoldControl,
 } from '../src/index';
@@ -137,6 +138,33 @@ function seedLedger(rt: AgentRuntime, counts: { failures: number; guards: number
   }
 }
 
+/**
+ * The turns `turn_outcomes` structurally cannot grade, graded.
+ *
+ * The ledger classifies turn N from user message N+1, so a headless run, a
+ * one-shot invocation, and the case the owner asked about — the agent grinding
+ * serially through work a search capability was sitting right there for — all
+ * leave it silent. Each note goes through the REAL writer and needs a real
+ * `messages` pair, because the row stores a turn id and never a copy of the
+ * text: a fixture that INSERTed the row by hand would certify a shape the
+ * writer does not produce.
+ */
+function seedAdvisorNotes(rt: AgentRuntime, count: number): void {
+  const engine = new EvolutionEngine(rt);
+  for (let i = 0; i < count; i++) {
+    const turnId = `adv-${String(i)}`;
+    void rt.storage.sql`INSERT INTO messages (id, parent_id, role, content, created_at)
+      VALUES (${`ask-${String(i)}`}, ${null}, ${'user'}, ${failureTask(i)}, ${3_000 + i})`;
+    void rt.storage.sql`INSERT INTO messages (id, parent_id, role, content, created_at)
+      VALUES (${turnId}, ${`ask-${String(i)}`}, ${'assistant'}, ${'{"files":["a.txt"]}'}, ${3_100 + i})`;
+    engine.recordAdvisorNote({
+      note: `you answered this alone; agents was reachable and the work had ${String(i + 2)} angles`,
+      severity: 'concern',
+      class: 'missed-capability',
+    }, turnId);
+  }
+}
+
 describe('runPromptSectionGepaOptimization — scored on the turn-outcome ledger', () => {
   test('refuses an unregistered section before it spends anything', async () => {
     const rt = evolvableRuntime();
@@ -160,6 +188,64 @@ describe('runPromptSectionGepaOptimization — scored on the turn-outcome ledger
     const guardsOnly = await runPromptSectionGepaOptimization(control, { sectionId: TARGET_ID });
     expect(guardsOnly.ok).toBe(false);
     expect(guardsOnly.error).not.toBe(unlabeled.error);
+  });
+
+  /**
+   * The closure. Before this, a workspace whose only negative signal was an
+   * advisor note got the refusal above — the note was written, read by nothing,
+   * and the loop the owner asked for ended in a table.
+   */
+  test('an advisor note is a failure to optimise toward, where the ledger has none', async () => {
+    const rt = evolvableRuntime();
+    seedAdvisorNotes(rt, 3);
+    const { control, judgePrompts, reflectionPrompts } = scriptedControl(
+      rt, (candidate) => (candidate === CANDIDATE ? 0.9 : 0.2),
+    );
+
+    const result = await runPromptSectionGepaOptimization(control, {
+      sectionId: TARGET_ID, maxIterations: 2, maxMetricCalls: 60,
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.ok).toBe(true);
+    expect(result.proposed).toBe(true);
+    // Selection rested on a note the candidate was NOT written against: the
+    // newest of the three is held out, exactly as a ledger failure would be.
+    expect(result.selectionWarning).toBeUndefined();
+
+    // The judge is told who complained, and it is not the user. A prompt that
+    // said "the user had to correct it" about a turn no user ever graded would
+    // be teaching the judge a fact the record does not hold.
+    const negativeScoring = judgePrompts.filter((prompt) => prompt.includes("Reviewer's note"));
+    expect(negativeScoring.length).toBeGreaterThan(0);
+    for (const prompt of negativeScoring) {
+      expect(prompt).toContain('no user ever graded it');
+      expect(prompt).not.toContain('the user had to correct it');
+      expect(prompt).toContain('agents was reachable');
+    }
+    // The class reaches the scoring evidence, which is the whole reason the
+    // writer stamps it.
+    expect(reflectionPrompts.join('\n')).toContain('a capability it had and did not use');
+  }, 30_000);
+
+  test('a note about a turn the ledger already graded is not counted twice', async () => {
+    const rt = evolvableRuntime();
+    seedAdvisorNotes(rt, 3);
+    // The user came back and corrected `adv-1` after all. The ledger is the
+    // verdict where it spoke, so that turn must appear once — as a ledger row.
+    recordTurnOutcome(rt.storage.sql, {
+      turnId: 'adv-1', outcome: 'corrected', confidence: 1, source: 'classifier',
+      userMessage: failureTask(1), assistantResponse: '{"files":["a.txt"]}',
+      followup: 'just tell me in prose', now: 4_000,
+    });
+
+    const split = buildOutcomeEvalSplit(rt.storage.sql, EVAL_SIZE);
+    const negatives = [...split.train, ...split.val.slice(0, split.heldOutNegatives)];
+    expect(negatives).toHaveLength(3);
+    expect(new Set(negatives.map((i) => i.input)).size).toBe(3);
+    // …and it is the ledger's own complaint that is scored, not the reviewer's.
+    const graded = negatives.find((i) => i.input === failureTask(1));
+    expect(graded?.expected).toMatchObject({ critic: 'user', followup: 'just tell me in prose' });
   });
 
   test('reflection sees the train half and the winner lands PENDING, not live', async () => {

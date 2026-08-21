@@ -39,7 +39,11 @@ const saying = (raw: string): LLM => ({
   complete: async () => raw,
 });
 
-const NOTE: AdvisorNote = { note: 'the rotate command exited 1 and the reply says it worked', severity: 'concern' };
+const NOTE: AdvisorNote = {
+  note: 'the rotate command exited 1 and the reply says it worked',
+  severity: 'concern',
+  class: 'wrong-work',
+};
 
 /** One lane run, with everything it touched recorded. */
 async function lane(over: {
@@ -91,7 +95,7 @@ describe('the owner’s switch', () => {
 describe('severity decides where a note goes', () => {
   test('below the floor it is a Changelog row and never a card', async () => {
     const run = await lane({
-      llm: saying(JSON.stringify({ note: 'the variable name is inconsistent', severity: 'nit' })),
+      llm: saying(JSON.stringify({ note: 'the variable name is inconsistent', severity: 'nit', class: 'wrong-work' })),
       minSeverity: 'concern',
     });
     expect(run.disposition).toBe('changelog');
@@ -113,7 +117,7 @@ describe('severity decides where a note goes', () => {
 
   test('a lowered floor lets a nit through — the floor is the only gate on it', async () => {
     const run = await lane({
-      llm: saying(JSON.stringify({ note: 'the variable name is inconsistent', severity: 'nit' })),
+      llm: saying(JSON.stringify({ note: 'the variable name is inconsistent', severity: 'nit', class: 'wrong-work' })),
       minSeverity: 'nit',
     });
     expect(run.disposition).toBe('deliver');
@@ -169,7 +173,7 @@ describe('the content-free rule', () => {
   });
 
   test('a content-free note is neither said nor stored', async () => {
-    const run = await lane({ llm: saying(JSON.stringify({ note: 'Stop.', severity: 'blocker' })) });
+    const run = await lane({ llm: saying(JSON.stringify({ note: 'Stop.', severity: 'blocker', class: 'wrong-work' })) });
     expect(run).toMatchObject({ disposition: 'drop', delivered: [], recorded: [] });
   });
 });
@@ -206,7 +210,7 @@ describe('the completion-gate rule', () => {
 
   test('an open gate holds back a blocker too — one runtime voice per boundary', () => {
     expect(judgeNote({
-      note: { note: 'the build is broken', severity: 'blocker' },
+      note: { note: 'the build is broken', severity: 'blocker', class: 'wrong-work' },
       minSeverity: 'nit', recent: [], gateOpen: true,
     })).toEqual({ disposition: 'changelog', rule: 'gate-open' });
   });
@@ -219,7 +223,7 @@ describe('the completion-gate rule', () => {
 describe('rule precedence', () => {
   test('a content-free duplicate is dropped as content-free, so nothing is stored', () => {
     expect(judgeNote({
-      note: { note: 'Stop.', severity: 'blocker' },
+      note: { note: 'Stop.', severity: 'blocker', class: 'wrong-work' },
       minSeverity: 'nit', recent: ['stop'], gateOpen: true,
     })).toEqual({ disposition: 'drop', rule: 'content-free' });
   });
@@ -258,19 +262,28 @@ describe('what the model is allowed to answer', () => {
   });
 
   test('an unknown severity is refused rather than coerced to a default', () => {
-    expect(parseAdvisorReply('{"note":"something","severity":"critical"}')).toBeNull();
-    expect(parseAdvisorReply('{"note":"something"}')).toBeNull();
+    expect(parseAdvisorReply('{"note":"x","severity":"critical","class":"wrong-work"}')).toBeNull();
+    expect(parseAdvisorReply('{"note":"x","class":"wrong-work"}')).toBeNull();
+  });
+
+  // The class is held to the severity's standard for the same reason: an
+  // unlabeled note reaches the eval split as an instance whose kind nobody can
+  // name, and a judge cannot be told what it is grading.
+  test('an unknown or absent class is refused, exactly as a severity is', () => {
+    expect(parseAdvisorReply('{"note":"x","severity":"nit","class":"style"}')).toBeNull();
+    expect(parseAdvisorReply('{"note":"x","severity":"nit"}')).toBeNull();
   });
 
   test('prose around the JSON is tolerated, because models add it', () => {
-    expect(parseAdvisorReply('Here you go:\n```json\n{"note":"real finding","severity":"nit"}\n```'))
-      .toEqual({ note: 'real finding', severity: 'nit' });
+    expect(parseAdvisorReply(
+      'Here you go:\n```json\n{"note":"real finding","severity":"nit","class":"missed-capability"}\n```',
+    )).toEqual({ note: 'real finding', severity: 'nit', class: 'missed-capability' });
   });
 
   test('an over-long note is bounded rather than refused', () => {
     const long = 'x'.repeat(ADVISOR_NOTE_MAX_CHARS + 200);
-    expect(parseAdvisorReply(JSON.stringify({ note: long, severity: 'nit' })))
-      .toEqual({ note: 'x'.repeat(ADVISOR_NOTE_MAX_CHARS), severity: 'nit' });
+    expect(parseAdvisorReply(JSON.stringify({ note: long, severity: 'nit', class: 'wrong-work' })))
+      .toEqual({ note: 'x'.repeat(ADVISOR_NOTE_MAX_CHARS), severity: 'nit', class: 'wrong-work' });
   });
 
   test('every declared severity parses, and nothing else does', () => {
@@ -393,7 +406,7 @@ describe('the user-dissatisfaction class', () => {
   });
 
   test('a quoted note still obeys the suppression rules', async () => {
-    const quoted = { note: 'the user asked you to "write better commit messages"', severity: 'concern' } as const;
+    const quoted = { note: 'the user asked you to "write better commit messages"', severity: 'concern', class: 'dissatisfaction' } as const;
     const first = await lane({ llm: saying(JSON.stringify(quoted)) });
     expect(first.disposition).toBe('deliver');
     const again = await lane({

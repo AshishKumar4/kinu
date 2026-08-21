@@ -22,7 +22,7 @@ export {
   initTurnOutcomeTables, recordTurnOutcome, listTurnOutcomes, hasNegativeOutcome, takePickOutcome,
   NEGATIVE_TURN_OUTCOMES,
   realOutcomeScaffoldRates, blendRealOutcomeRates,
-  buildOutcomeEvalSplit, describeSplitDegeneracy,
+  buildOutcomeEvalSplit, describeSplitDegeneracy, advisorNegatives, CRITIC_PROSE,
   recordLesson, listLessons, corroborateLessonsForTurn,
   isNegativeOutcome, isUserVerdictSource, executionVerdict, executionVerdictOutcome,
   isPureLookupCall, TURN_OUTCOME_SOURCES,
@@ -31,7 +31,7 @@ export {
   type TurnOutcome, type TurnOutcomeSource, type TurnOutcomeRow, type ExecutionVerdict,
   type OutcomeClassification, type RecordTurnOutcomeInput, type RealOutcomeRate,
   type OutcomeEvalExpectation, type OutcomeEvalInstance, type OutcomeEvalSplit,
-  type OutcomeSplitDegeneracy,
+  type OutcomeSplitDegeneracy, type AdvisorNegativeRow,
   type LessonRow, type LessonSource, type LessonStatus, LESSON_SOURCES,
 } from './outcomes';
 export {
