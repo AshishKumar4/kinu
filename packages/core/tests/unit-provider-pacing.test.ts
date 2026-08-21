@@ -16,9 +16,7 @@
 // declared by one caller is visible to a watchdog in another — are the ones
 // PROVIDER_REQUEST_LANES runs in production.
 import { describe, test, expect } from 'bun:test';
-import {
-  PROVIDER_REQUEST_LANES, ProviderPacer, abortableSleep,
-} from '../src/providers/pacing';
+import { ProviderPacer, abortableSleep } from '../src/providers/pacing';
 import { PLATFORM_CATALOG } from '../src/platform-catalog';
 
 /** A pacer on a hand-cranked clock, so a declared wait costs the suite nothing. */
@@ -33,13 +31,28 @@ function fixedClock(startMs = 1_000_000) {
 const HOST = 'api.cloudflare.com';
 
 describe('the lane bound is the platform\'s, not a number of ours', () => {
-  test('PROVIDER_REQUEST_LANES is read off the catalog rather than restated', () => {
-    // The catalog is this repository's single copy of every platform number, and
-    // its own note names this incident. Asserted rather than assumed so a future
-    // hand-written literal here fails instead of quietly forking the number.
-    expect(PROVIDER_REQUEST_LANES)
-      .toBe(PLATFORM_CATALOG['worker.simultaneous_connections'].limit.value);
+  test('a pacer nobody configured paces at the platform\'s connection limit', async () => {
+    // The catalog is this repository's single copy of every platform number.
+    // Read through a DEFAULT pacer — the one production builds — rather than by
+    // comparing the constant with the expression that defines it, which is the
+    // same statement twice and holds however wrong the number is.
+    const lanes = PLATFORM_CATALOG['worker.simultaneous_connections'].limit.value;
     expect(PLATFORM_CATALOG['worker.simultaneous_connections'].bounds).toBe('concurrency');
+
+    const pacer = new ProviderPacer();
+    const held: Array<() => void> = [];
+    for (let i = 0; i < lanes; i++) held.push(await pacer.admit(HOST));
+
+    // One more than the platform allows is held, and admitted the moment a lane
+    // frees. Raise or lower the default and exactly one of these two fails.
+    let admitted = false;
+    const extra = pacer.admit(HOST).then((release) => { admitted = true; return release; });
+    await Promise.resolve();
+    expect(admitted).toBe(false);
+
+    held[0]!();
+    expect(await extra).toBeInstanceOf(Function);
+    for (const release of held.slice(1)) release();
   });
 });
 

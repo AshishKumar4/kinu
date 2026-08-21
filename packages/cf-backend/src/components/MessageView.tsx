@@ -601,7 +601,7 @@ export function SteerBubble({ steer, onFork }: {
 /** The label a user message carries when it reached the model mid-turn instead
  *  of starting a turn of its own. Without it a user bubble in the middle of an
  *  assistant's work reads like a rendering bug rather than the steer it is. */
-export function SteeredMark({ state }: { state: "queued" | "landed" }) {
+function SteeredMark({ state }: { state: "queued" | "landed" }) {
   return (
     <span className="mt-1 inline-flex items-center gap-1 text-[10px] p-text-3">
       <ArrowBendUpRightIcon size={10} weight="bold" />

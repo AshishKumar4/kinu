@@ -85,7 +85,7 @@ export type JobResumer = (
  *  that evicts on every activation can't loop forever. MCTS makes monotonic
  *  progress (budget strictly decreases per resume) so it converges well within
  *  this; the cap only bounds pathological non-progressing kinds. */
-export const MAX_RESUME_ATTEMPTS = 5;
+const MAX_RESUME_ATTEMPTS = 5;
 
 /**
  * THE LONGEST ONE ATTEMPT OF A JOB MAY RUN.
@@ -112,7 +112,7 @@ export const MAX_RESUME_ATTEMPTS = 5;
  * silent kill: the job settles with {@link BackgroundJobRunnerDeps.harvest}'s partial
  * result and the wake says which generation gave up.
  */
-export const MAX_JOB_ATTEMPT_MS = MAX_RESUME_ATTEMPTS * TURN_WALL_CLOCK_ENVELOPE_MS;
+const MAX_JOB_ATTEMPT_MS = MAX_RESUME_ATTEMPTS * TURN_WALL_CLOCK_ENVELOPE_MS;
 
 /**
  * What a job has already produced, for a job that will not be driven again.

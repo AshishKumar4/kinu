@@ -5,9 +5,10 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
-  BackgroundJobRunner, JobNotResumable, MAX_CONCURRENT_DETACHED_JOBS, MAX_JOB_ATTEMPT_MS,
-  MAX_RESUME_ATTEMPTS, type JobHarvester, type JobResumer,
+  BackgroundJobRunner, JobNotResumable, MAX_CONCURRENT_DETACHED_JOBS,
+  type JobHarvester, type JobResumer,
 } from '../src/jobs/runner';
+import { TURN_WALL_CLOCK_ENVELOPE_MS } from '../src/config';
 import { SignalDelivery } from '../src/orchestrator/signals';
 import {
   BackgroundJobStore, initBackgroundJobsTable, BACKGROUND_POLICY,
@@ -613,18 +614,21 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
  * lifetime is bounded, the generation count is disclosed, and the terminal state
  * carries what the work has.
  *
- * `MAX_JOB_ATTEMPT_MS` is not exercised at its real value here for the reason the
- * stall watchdog's suite gives about `STALL_TIMEOUT_MS`: a bound of fifty minutes
- * cannot be reached by a test that has to finish. What is under test is the
+ * Neither bound is exercised at its real value here, for the reason the stall
+ * watchdog's suite gives about `STALL_TIMEOUT_MS`: a bound of fifty minutes cannot
+ * be reached by a test that has to finish, and a generation count restated here
+ * would only be this file comparing a number with itself. What is under test is the
  * RELATIONSHIP — a bound exists, it settles rather than hangs, and it carries the
- * partial — and the derivation of the number lives on the constant.
+ * partial — and the derivation of each number lives on its constant.
  */
 describe('a background job gives up its turn, and hands over what it has', () => {
   /** A row whose CURRENT attempt began longer ago than any attempt may run. Written
    *  as SQL because that is the state a long-running generation reaches on disk, and
-   *  no public write produces it directly. */
+   *  no public write produces it directly. Aged off the repository's measured turn
+   *  envelope — the quantity the bound is derived FROM — many times over, so it is
+   *  past the bound without restating it. */
   function staleAttempt(db: Database, id: string) {
-    const longAgo = Date.now() - MAX_JOB_ATTEMPT_MS - 60_000;
+    const longAgo = Date.now() - TURN_WALL_CLOCK_ENVELOPE_MS * 100;
     db.exec("INSERT INTO background_jobs (id, kind, work_mode, status, input_json, created_at, attempt_started_at) "
       + `VALUES ('${id}', 'agents', 'build', 'running', '{}', ${String(longAgo)}, ${String(longAgo)})`);
   }
@@ -678,10 +682,12 @@ describe('a background job gives up its turn, and hands over what it has', () =>
       harvest: async () => ({ rootId: 'root-2', candidates: [{ nodeId: 'n1', score: 0.4 }] }),
     });
     store.create({ id: 'bgjob-capped', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
-    // Drive it to the cap. The incident's job was at exactly attempts=4, so the next
-    // reclaim is the one that used to discard its two completed candidates.
-    for (let i = 0; i < MAX_RESUME_ATTEMPTS; i++) store.reclaim('bgjob-capped');
-    expect(store.get('bgjob-capped')?.resumeAttempts).toBe(MAX_RESUME_ATTEMPTS);
+    // Driven past the cap. The incident's job was at exactly attempts=4, so the
+    // reclaim after it is the one that used to discard its two completed
+    // candidates. Reclaimed well past any cap rather than exactly to it: the
+    // count is the runner's to own, and asserting it here only compared this
+    // file's copy of the number with the runner's.
+    for (let i = 0; i < 50; i++) store.reclaim('bgjob-capped');
 
     await runner.recoverOrphans();
     await settled();

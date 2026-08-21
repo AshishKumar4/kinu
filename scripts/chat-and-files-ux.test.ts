@@ -74,6 +74,19 @@ interface ChatRow {
   readonly offsetFromCentrePx: number;
 }
 
+/** One Exploration run-node row, as the browser drew it. */
+interface RunNode {
+  /** What the row TELLS a reader the node's ending was, read off the row rather
+   *  than inferred from the prose it happens to carry. */
+  readonly reason: string | null;
+  /** The reason line as rendered. */
+  readonly reasonText: string;
+  /** The status dot's tone — the at-a-glance half of the same fact. A dot that
+   *  says fault beside a line that says rate limit is the contradiction the
+   *  classification exists to remove. */
+  readonly dot: string;
+}
+
 interface Observed {
   readonly tails: TailFrame[];
   readonly chat: Record<string, ChatRow>;
@@ -85,6 +98,8 @@ interface Observed {
   readonly filesAfterUpEntries: string[];
   readonly capabilityChips: string[];
   readonly capabilityAbsences: string;
+  /** Exploration's run-node rows on the mixed-status run, by node id. */
+  readonly runNodes: Record<string, RunNode>;
 }
 
 /** The gallery ids the provenance assertions address (gallery.tsx MESSAGES). */
@@ -92,6 +107,11 @@ const LEGACY_FORK_ROW = 'f8798675-5e9a-4d13-aac2-293f4557f1c1';
 const STAMPED_GATE_ROW = 'programmatic:completion-gate-1';
 const TYPED_ROW = 'u1';
 const DRAIN_ROW = 'd1';
+
+/** The two endings the node rows are read for (gallery.tsx RUNNING_RUN): one
+ *  turn the provider rate-limited, one the operator stopped. */
+const RATE_LIMITED_NODE = 'lv008';
+const ABORTED_NODE = 'lv005';
 
 async function readChatRows(page: Page): Promise<Record<string, ChatRow>> {
   return page.$$eval('[data-chat-row]', (rows) => {
@@ -114,6 +134,22 @@ async function readChatRows(page: Page): Promise<Record<string, ChatRow>> {
         offsetFromCentrePx: Math.round(
           (drawnBox.left + drawnBox.width / 2) - (columnBox.left + columnBox.width / 2),
         ),
+      };
+    }
+    return measured;
+  });
+}
+
+async function readRunNodes(page: Page): Promise<Record<string, RunNode>> {
+  return page.$$eval('[data-run-node]', (rows) => {
+    const measured: Record<string, { reason: string | null; reasonText: string; dot: string }> = {};
+    for (const row of rows) {
+      const line = row.querySelector('[data-node-reason]');
+      const dot = row.querySelector('span.rounded-full');
+      measured[row.getAttribute('data-run-node') ?? ''] = {
+        reason: line === null ? null : line.getAttribute('data-node-reason'),
+        reasonText: line?.textContent ?? '',
+        dot: [...(dot?.classList ?? [])].find((name) => name.startsWith('p-dot-')) ?? '',
       };
     }
     return measured;
@@ -229,10 +265,18 @@ async function run(): Promise<Observed> {
     );
     await files.close();
 
+    const explore = await browser.newPage();
+    await explore.setViewport({ width: 1280, height: 1100 });
+    await explore.goto(`${origin}/gallery.html?frame=forkrunning`, { waitUntil: 'networkidle0' });
+    await explore.reload({ waitUntil: 'networkidle0' });
+    await explore.waitForSelector(`[data-run-node="${RATE_LIMITED_NODE}"]`, { timeout: 20_000 });
+    const runNodes = await readRunNodes(explore);
+    await explore.close();
+
     return {
       tails, chat, forkInterruptedAfterClick, chatErrorHeadings,
       filesHome, filesAfterUp, filesAfterUpEntries,
-      capabilityChips, capabilityAbsences,
+      capabilityChips, capabilityAbsences, runNodes,
     };
   });
 }
@@ -391,5 +435,29 @@ describe('the capability row, as something to act on', () => {
     // go is omitted, so naming one is the whole point of the line.
     expect(observed.capabilityAbsences).toContain('Docker');
     expect(observed.capabilityAbsences).toMatch(/Sandbox|Your PC/);
+  });
+});
+
+describe('a node the provider rate-limited, as the run list reads it', () => {
+  test('the row says rate limit, not fault', () => {
+    // The seam this reads through is `isRateLimitedTurnError`. Before it was
+    // wired here the row rendered `errorMessage` verbatim in the failure tone,
+    // so a node the provider told us to wait for was indistinguishable from a
+    // wedged one — the distinction the classifier was built for.
+    expect(observed.runNodes[RATE_LIMITED_NODE]?.reason).toBe('rate-limited');
+    expect(observed.runNodes[RATE_LIMITED_NODE]?.reasonText).toContain('Rate limited');
+  });
+
+  test('its dot agrees with its line', () => {
+    expect(observed.runNodes[RATE_LIMITED_NODE]?.dot).toBe('p-dot-warning');
+  });
+
+  test('a turn that ended some other way is still a fault', () => {
+    // The guard on the classification: the operator stopped this one, nothing
+    // declared a wait, and a refactor that blames the provider for every ending
+    // fails here rather than passing quietly.
+    expect(observed.runNodes[ABORTED_NODE]?.reason).toBe('failed');
+    expect(observed.runNodes[ABORTED_NODE]?.reasonText).not.toContain('Rate limited');
+    expect(observed.runNodes[ABORTED_NODE]?.dot).toBe('p-dot-danger');
   });
 });

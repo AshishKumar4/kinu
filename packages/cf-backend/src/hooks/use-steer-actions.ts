@@ -73,7 +73,7 @@ export interface SteerActions {
  * the entire fix: the model has the words, so a row still promising to deliver
  * them is describing a state that has passed.
  */
-export function queuedSteerNotice(
+function queuedSteerNotice(
   steerRuns: readonly InlineSteer[], hasAttachments: boolean,
 ): ComposerNotice | null {
   if (!steerRuns.some((steer) => steer.state === "queued")) return null;
