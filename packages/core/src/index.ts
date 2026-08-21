@@ -303,7 +303,11 @@ export {
 } from './experience/index';
 
 // Chat engine (shared between server and CLI)
-export { runChat, INTERRUPTED_TURN, type ChatEvent, type ChatOptions } from './chat';
+export {
+  runChat, INTERRUPTED_TURN, isRateLimitedTurnError,
+  RATE_LIMITED_TURN_PREFIX, STALLED_TURN_PREFIX,
+  type ChatEvent, type ChatOptions,
+} from './chat';
 
 // Extension seam (public plugin API — observe + extend a turn)
 export {
