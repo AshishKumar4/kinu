@@ -20,11 +20,14 @@
  * as fork points, so a workspace whose recovery re-announced one job filled its
  * whole walk-back list with the same machine notice.
  *
- * The provenance is the row's ID, not a column and not a second copy of the
- * metadata: `BackendHost.enqueueTurn` has always derived a programmatic turn's
- * message id from {@link programmaticMessageId}, so the fact is already durable
- * on both backends, survives the fork copy (which preserves primary keys), and
- * needs no schema change to read.
+ * The provenance is stated at the write, in the order the fallbacks degrade:
+ * the author stamp the enqueue seam puts on every programmatic row (in the
+ * serialized message on the rich table, in the `messages` mirror's metadata
+ * column), then the `kinuEvent` name, then the row id —
+ * `BackendHost.enqueueTurn` derives a programmatic turn's message id from
+ * {@link programmaticMessageId}, which is durable on both backends and
+ * survives the fork copy (which preserves primary keys). The id is what rows
+ * written before stamps existed lean on; a new row leans on its stamp.
  */
 
 import type { UIMessage } from 'ai';
