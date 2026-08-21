@@ -429,7 +429,7 @@ function RunDetailView({
       {branchId === null
         ? <RunNodeList journal={journal} tree={tree} activity={headActivity} onOpen={onOpenBranch} />
         : <ForkBranchView run={run} branchId={branchId} trees={trees} rpc={rpc}
-            headActivity={headActivity}
+            headActivity={headActivity} nodeCount={journal?.heads.length ?? run.branches}
             onBack={() => onOpenBranch(null)} onOpenBranch={onOpenBranch} />}
     </div>
   );
@@ -629,7 +629,7 @@ function NODE_DOT(status: string): string {
  * control returns to it.
  */
 function ForkBranchView({
-  run, branchId, trees, rpc, headActivity, onBack, onOpenBranch,
+  run, branchId, trees, rpc, headActivity, nodeCount, onBack, onOpenBranch,
 }: {
   run: ForkRunSummary;
   branchId: string;
@@ -638,6 +638,11 @@ function ForkBranchView({
   trees: ReadonlyMap<string, ForkNode>;
   rpc: Rpc;
   headActivity: ReadonlyMap<string, number>;
+  /** How many nodes the list behind this one holds. The JOURNAL's count, because
+   *  `ForkRunSummary.branches` counts settled search rows: on a live run those
+   *  disagree by every node still working, and "all 2 nodes" over a list of nine
+   *  is the same kind of wrong number as the tree that drew two of them. */
+  nodeCount: number;
   onBack: () => void;
   onOpenBranch: (branchId: string) => void;
 }) {
@@ -646,7 +651,7 @@ function ForkBranchView({
       <div className="shrink-0 flex items-center gap-1 border-b p-border px-2 py-1">
         <button type="button" onClick={onBack}
           className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] p-text-3 hover:p-text transition-colors cursor-pointer">
-          <ArrowLeftIcon size={10} />all {run.branches === 1 ? "1 node" : `${run.branches} nodes`}
+          <ArrowLeftIcon size={10} />all {nodeCount === 1 ? "1 node" : `${nodeCount} nodes`}
         </button>
       </div>
       <NodeTranscript

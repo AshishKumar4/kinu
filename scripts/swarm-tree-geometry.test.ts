@@ -375,13 +375,15 @@ async function readLiveness(browser: Browser, origin: string): Promise<Liveness>
 }
 
 /**
- * Press every control on the docked row and see whether the scene answered.
+ * Every control on the docked row, pressed, and whether the scene answered.
  *
  * On the 106-node search, because it is the only fixture where every control has
- * something to do: a tree with abandoned branches to fold, and a fit at a scale
- * that zooming can move away from. `Fit` is pressed LAST and after a fold, so it
- * is asked to travel rather than to re-apply the transform it is already at —
- * a control asked for what it has already done cannot be observed either way.
+ * something to do. Each is pressed from a state where it HAS work: `Fit` after a
+ * zoom, so it is asked to travel rather than to re-apply the transform it already
+ * holds, and `Expand` after a fold. A control asked for what it has already done
+ * cannot be observed either way — which is how the first version of this probe
+ * passed `Fit` for the wrong reason, `Expand`'s own refit having already fitted
+ * the scene.
  */
 async function readControls(browser: Browser, origin: string): Promise<ControlEffect> {
   const effects: ControlEffect = {};
@@ -395,7 +397,7 @@ async function readControls(browser: Browser, origin: string): Promise<ControlEf
       zoom: document.querySelector('g.mcts-bands')?.parentElement?.getAttribute('transform') ?? '',
       nodes: document.querySelectorAll('g.mcts-node').length,
     }));
-    for (const label of ['Zoom in', 'Zoom out', 'Fold abandoned branches', 'Expand every branch', 'Fit the selected search to view']) {
+    const press = async (label: string) => {
       const before = await scene();
       await page.click(`button[aria-label="${label}"]`);
       await settled(page);
@@ -405,7 +407,22 @@ async function readControls(browser: Browser, origin: string): Promise<ControlEf
         nodesBefore: before.nodes,
         nodesAfter: after.nodes,
       };
-    }
+      return after;
+    };
+    const fitted = (await scene()).zoom;
+    // One zoom, then the refit, then the other zoom. Pressing both zooms first
+    // would land exactly back on the fit — the factors are reciprocal and the
+    // anchor is the same point — leaving `Fit` nothing to do and passing it for
+    // the wrong reason.
+    await press('Zoom in');
+    await press('Fit the selected search to view');
+    effects.refitted = {
+      zoomChanged: (await scene()).zoom === fitted,
+      nodesBefore: 0, nodesAfter: 0,
+    };
+    await press('Zoom out');
+    await press('Fold abandoned branches');
+    await press('Expand every branch');
   } finally {
     await page.close();
   }
@@ -568,6 +585,10 @@ describe('the controls on the docked row', () => {
 
   test('fit travels back to the fitted view after the scene has been moved', () => {
     expect(observed.controls['Fit the selected search to view']?.zoomChanged, 'fit did not move the scene')
+      .toBe(true);
+    // And it arrives where it started, which is the claim: a control that merely
+    // moved the scene somewhere would satisfy the line above.
+    expect(observed.controls.refitted?.zoomChanged, 'fit did not land on the fitted transform')
       .toBe(true);
   });
 });
