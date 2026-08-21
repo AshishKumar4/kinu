@@ -7,10 +7,10 @@
 // The set of re-attemptable reset strings is not retyped here: it is read out of
 // PLATFORM_CATALOG['do.reset.transient'], the entry the classifier cites, so the
 // two cannot drift apart.
-import { describe, test, expect } from 'bun:test';
+import { describe, test, expect, beforeEach } from 'bun:test';
 import { PLATFORM_CATALOG } from '@kinu.run/core';
 import { retryTransientDO, classifyTransientDO } from '../src/lib/do-rpc';
-import { claimOwnedWorkspace } from '../src/user/workspace-access';
+import { claimOwnedWorkspace, forgetWorkspaceMembership } from '../src/user/workspace-access';
 
 const USER = '0123456789abcdef0123456789abcdef';
 const CONNECTION_LOST = 'Network connection lost.';
@@ -24,6 +24,16 @@ function flaky<T>(failures: number, error: Error, value: T) {
       if (seen++ < failures) throw error;
       return value;
     },
+    calls: () => seen,
+  };
+}
+
+/** Sequential answers: resolves each value in order, holding the last. Counts
+ *  calls like flaky does. */
+function answers<T>(...values: T[]) {
+  let seen = 0;
+  return {
+    call: async () => values[Math.min(seen++, values.length - 1)],
     calls: () => seen,
   };
 }
@@ -131,26 +141,42 @@ describe('retryTransientDO', () => {
 describe('claimOwnedWorkspace — the gate on every authenticated workspace request', () => {
   function envWith(opts: {
     dropHasWorkspace?: number;
+    membershipAnswers?: boolean[];
+    registryReads?: string[];
     claimError?: Error;
     capabilityError?: Error;
+    /** Reconciles that succeed before `capabilityError` applies — models a
+     *  removal that lands between requests. Default 0: always throws. */
+    capabilitySucceeds?: number;
+    claims?: string[];
   }): Env {
-    const membership = flaky(opts.dropHasWorkspace ?? 0, new Error(CONNECTION_LOST), true);
+    const membership = opts.membershipAnswers
+      ? answers(...opts.membershipAnswers)
+      : flaky(opts.dropHasWorkspace ?? 0, new Error(CONNECTION_LOST), true);
+    let reconciles = 0;
     const partial: Partial<Env> = {};
     Object.assign(partial, {
       CREDENTIAL_ENCRYPTION_KEY: 'test-owner-secret',
       UserDO: {
         idFromName: (name: string) => name,
         get: () => ({
-          hasWorkspace: () => membership.call(),
+          async hasWorkspace(_owner: string, name: string) {
+            opts.registryReads?.push(name);
+            return membership.call();
+          },
           async ensureWorkspaceCapability() {
-            if (opts.capabilityError) throw opts.capabilityError;
+            reconciles += 1;
+            if (opts.capabilityError && reconciles > (opts.capabilitySucceeds ?? 0)) {
+              throw opts.capabilityError;
+            }
           },
         }),
       },
       OrchestratorAgent: {
         idFromName: (name: string) => name,
         get: () => ({
-          async claimOwner() {
+          async claimOwner(userId: string) {
+            opts.claims?.push(userId);
             if (opts.claimError) throw opts.claimError;
             return { owner: USER, capabilityHash: 'h' };
           },
@@ -193,5 +219,50 @@ describe('claimOwnedWorkspace — the gate on every authenticated workspace requ
     await expect(claimOwnedWorkspace(
       envWith({ capabilityError: new Error('no such column: capability_hash') }), USER, 'jarvis'))
       .resolves.toMatchObject({ ok: false, status: 500 });
+  });
+
+  beforeEach(() => {
+    // Positive-membership proofs live at module scope, and one bun process
+    // shares modules across files; these tests pin what an UNCACHED caller
+    // does, so each starts with this pair's proof discarded.
+    forgetWorkspaceMembership(USER, 'jarvis');
+  });
+
+  test('a warm request skips the registry read', async () => {
+    const reads: string[] = [];
+    const env = envWith({ membershipAnswers: [true], registryReads: reads });
+    expect((await claimOwnedWorkspace(env, USER, 'jarvis')).ok).toBe(true);
+    expect(reads).toEqual(['jarvis']);
+    // The proof is earned by exactly one real registry read; the next request
+    // goes straight to the claim, which still verifies the caller's identity.
+    expect((await claimOwnedWorkspace(env, USER, 'jarvis')).ok).toBe(true);
+    expect(reads).toEqual(['jarvis']);
+  });
+
+  test('an unproven caller is membership-checked before the agent wakes', async () => {
+    const claims: string[] = [];
+    const result = await claimOwnedWorkspace(
+      envWith({ membershipAnswers: [false], claims }), USER, 'jarvis');
+    expect(result).toMatchObject({ ok: false, status: 404 });
+    expect(claims).toEqual([]);
+  });
+
+  test('a removed workspace evicts the proof and reports 404', async () => {
+    const reads: string[] = [];
+    const env = envWith({
+      membershipAnswers: [true, false],
+      registryReads: reads,
+      capabilityError: new Error('Workspace jarvis is not in your registry.'),
+      capabilitySucceeds: 1,
+    });
+    expect((await claimOwnedWorkspace(env, USER, 'jarvis')).ok).toBe(true);
+    // The proof is now stale: the UserDO's own registry re-check contradicts
+    // it, so the request reports 404 and the proof is discarded.
+    await expect(claimOwnedWorkspace(env, USER, 'jarvis'))
+      .resolves.toMatchObject({ ok: false, status: 404 });
+    // The next request re-reads the registry for real and finds it gone.
+    await expect(claimOwnedWorkspace(env, USER, 'jarvis'))
+      .resolves.toMatchObject({ ok: false, status: 404 });
+    expect(reads).toEqual(['jarvis', 'jarvis']);
   });
 });

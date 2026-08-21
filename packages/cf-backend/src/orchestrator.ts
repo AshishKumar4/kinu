@@ -855,11 +855,12 @@ export class OrchestratorAgent extends ActorAgent {
     if (current !== userId) {
       throw new Error(`Agent owned by a different user (stored=${current.slice(0, 8)}…, caller=${userId.slice(0, 8)}…)`);
     }
-    // Ownership is persisted before the external filesystem bootstrap. If a
-    // transient Nimbus failure interrupted that first claim, the next
-    // authenticated touch must finish the invariant instead of treating the
-    // owner row as proof that initialization completed.
-    await this.ensureOwnedScaffold();
+    // No scaffold probe on this branch: it runs on EVERY authenticated
+    // request, and a cold activation paid a Nimbus network round trip inside
+    // it (claimOwner p90 1170ms / max 2456ms across 48h of production). The
+    // first claim bootstraps; if that bootstrap was interrupted, the first
+    // turn finishes it — beforeTurn awaits ensureOwnedScaffold before
+    // anything reads the workspace files.
     return { owner: current, capabilityHash };
   }
 
