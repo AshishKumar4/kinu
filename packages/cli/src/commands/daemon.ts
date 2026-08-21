@@ -7,7 +7,6 @@ import { renderThrownChain, tolerate } from '@kinu.run/core/obs';
 import {
   LocalAgentSession,
   openWorkspaceCLI,
-  resolveChatModel,
   writeSecretFile,
   type SessionEvent,
 } from '@kinu.run/cli-backend';
@@ -233,7 +232,6 @@ async function tickAgent(name: string, now: number): Promise<number | null> {
     const session = new LocalAgentSession({
       rt,
       db,
-      model: resolveChatModel(llmConfig),
       modelResolver,
       onEvent: (event) => logSessionEvent(name, event),
     });

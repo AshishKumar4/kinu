@@ -18,10 +18,10 @@ import {
   initSearchTables, initScaffoldTables, initCraftScoreTables,
 } from '../packages/core/src/index';
 import { createWorkspace } from '../packages/core/src/identity/index';
-import { openWorkspaceCLI, resolveChatModel, LocalAgentSession } from '../packages/cli-backend/src/index';
+import { openWorkspaceCLI, LocalAgentSession } from '../packages/cli-backend/src/index';
 import { makeSql } from '../packages/cli-backend/src/runtime';
 import type { SessionEvent } from '../packages/cli-backend/src/index';
-import { createBenchInferenceProxy } from './bench-inference-proxy';
+import { benchChatModel, createBenchInferenceProxy } from './bench-inference-proxy';
 import { parseAgentWorkerInput, type WorkerOutput } from './bench-worker-protocol';
 
 async function main(): Promise<void> {
@@ -64,7 +64,7 @@ async function main(): Promise<void> {
   session = new LocalAgentSession({
     rt,
     db: backendDb,
-    model: resolveChatModel(meteredLLM),
+    model: benchChatModel(meteredLLM),
     onEvent: (event: SessionEvent) => {
       if (event.type === 'turn-end') {
         steps = event.turn.steps;

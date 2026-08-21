@@ -154,7 +154,11 @@ export interface LocalModelResolver {
 }
 
 export interface LocalModelResolverConfig {
-  llm: LLMProviderConfig;
+  /** The default inference endpoint for BARE model ids — the one thing the
+   *  registry cannot know on its own. Null when nothing derives one: explicit
+   *  `provider/model` specs still resolve through the registry, and a bare id
+   *  then fails at resolution with the fixes named. */
+  llm: LLMProviderConfig | null;
   credentials?: LocalProviderCredentials;
   codexAuthStore?: LocalCodexAuthStore;
   /** Signed-in session. When present, workers-ai + my-gateway resolve through
@@ -217,15 +221,19 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
   spend?: ModelCallSpend;
 }): LLM {
   const resolver = createLocalModelResolver(opts);
-  const spec = resolver.normalizeSpecSync(opts.spec ?? null);
-  const providerOptions = reasoningEffortOptions('low', parseModelSpec(spec).provider);
-  const maxOutputTokens = opts.llm.maxTokens;
-  const model = () => resolver.resolveModel(spec);
+  // Normalized per call, not at construction: a seam over a registry-only
+  // family (or an endpoint chosen later) must still BUILD — an id that cannot
+  // resolve fails at the call that names it, with the fixes named.
+  const spec = () => resolver.normalizeSpecSync(opts.spec ?? null);
+  const maxOutputTokens = opts.llm?.maxTokens;
+  const model = (resolved: string) => resolver.resolveModel(resolved);
   const spend = opts.spend;
+  const effortOptions = (resolved: string) => reasoningEffortOptions('low', parseModelSpec(resolved).provider);
   return {
     async *stream(input) {
+      const resolved = spec();
       const request: Parameters<typeof streamText>[0] = {
-        model: model(),
+        model: model(resolved),
         system: input.system,
         messages: input.messages.map(m => ({
           role: m.role,
@@ -233,6 +241,7 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
         })),
       };
       if (maxOutputTokens !== undefined) request.maxOutputTokens = maxOutputTokens;
+      const providerOptions = effortOptions(resolved);
       if (providerOptions) request.providerOptions = providerOptions;
       const result = streamText(request);
       for await (const chunk of result.textStream) yield chunk;
@@ -240,17 +249,19 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
       // here. A consumer that abandons the generator never reaches this line and
       // reports nothing — honest, because the cost of a stream nobody finished
       // is not something this seam ever learns.
-      if (spend) reportCall(spend, spec, await result.totalUsage, (await result.response).modelId);
+      if (spend) reportCall(spend, resolved, await result.totalUsage, (await result.response).modelId);
     },
     async complete(prompt) {
+      const resolved = spec();
       const request: Parameters<typeof generateText>[0] = {
-        model: model(),
+        model: model(resolved),
         prompt,
       };
       if (maxOutputTokens !== undefined) request.maxOutputTokens = maxOutputTokens;
+      const providerOptions = effortOptions(resolved);
       if (providerOptions) request.providerOptions = providerOptions;
       const result = await generateText(request);
-      if (spend) reportCall(spend, spec, result.totalUsage, result.response.modelId);
+      if (spend) reportCall(spend, resolved, result.totalUsage, result.response.modelId);
       return result.text.trim();
     },
   };
@@ -262,7 +273,7 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
  * The DO backend resolves model specs through UserDO-scoped credentials. The
  * CLI has no UserDO, so this adapter supplies the same registry contract from
  * local config/env credentials while preserving the advanced KINU_BASE_URL /
- * KINU_AUTH path as a direct OpenAI-compatible endpoint.
+ * KINU_AUTH override.
  */
 export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalModelResolver {
   const registry = createProviderRegistry();
@@ -279,10 +290,11 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
   // precedence over the signed-in proxy; the proxy-derived llm config (its
   // baseURL IS the proxy) registers through the cloud providers below instead.
   const llmIsCloudProxy = cloud !== undefined
+    && localEndpoint !== null
     && localEndpoint.baseURL.replace(/\/+$/, '') === cloudProxyBaseURL(cloud.origin);
 
   const defaultProvider = defaultProviderFor(localEndpoint);
-  if (defaultProvider === 'workers-ai' && !llmIsCloudProxy) {
+  if (localEndpoint !== null && defaultProvider === 'workers-ai' && !llmIsCloudProxy) {
     registry.register(createGatewayBackedProvider({
       id: 'workers-ai',
       label: 'Cloudflare Workers AI (local gateway)',
@@ -380,12 +392,21 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     },
   };
 
-  const fallbackProvider = registry.get(defaultProvider) ? defaultProvider : 'openai-compat';
-  const fallbackModel = localEndpoint.model;
+  /** What a bare model id falls to. Null endpoint = no honest default: the
+   *  fixes live in `noDefaultModelMessage`, shared by every bare-id failure. */
+  const fallback: { provider: string; model: string } | null = localEndpoint
+    ? {
+      provider: defaultProvider !== null && registry.get(defaultProvider) ? defaultProvider : 'openai-compat',
+      model: localEndpoint.model,
+    }
+    : null;
 
   function normalizeSpecSync(specOrNull?: string | null): string {
     const s = (specOrNull ?? '').trim();
-    if (!s) return `${fallbackProvider}/${fallbackModel}`;
+    if (!s) {
+      if (!fallback) throw new Error(noDefaultModelMessage());
+      return `${fallback.provider}/${fallback.model}`;
+    }
     if (s.startsWith('@cf/')) return `workers-ai/${s}`;
 
     const slash = s.indexOf('/');
@@ -401,10 +422,12 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
       if (proxied?.providerIds().has(first)) return s;
       // Slashful model IDs (for example minimax/m3) are model IDs under the
       // configured local endpoint unless the first path segment is a provider.
-      return `${fallbackProvider}/${s}`;
+      if (!fallback) throw new Error(noDefaultModelMessage());
+      return `${fallback.provider}/${s}`;
     }
 
-    return `${fallbackProvider}/${s}`;
+    if (!fallback) throw new Error(noDefaultModelMessage());
+    return `${fallback.provider}/${s}`;
   }
 
   return {
@@ -694,13 +717,23 @@ function createSignedOutCloudProvider(id: CloudProxyProviderId, label: string): 
   };
 }
 
-function defaultProviderFor(llm: LLMProviderConfig): 'workers-ai' | 'codex' | 'openai' | 'anthropic' | 'openrouter' | 'openai-compat' | 'opencode' {
+/** Why a bare model id has nowhere to go, with every fix named. */
+function noDefaultModelMessage(): string {
+  return 'No default model configured.'
+    + ' Run kinu auth to use your Cloudflare AI, run kinu setup to configure a local provider,'
+    + ' or name a model explicitly with --model'
+    + ' (for example --model claude/claude-sonnet-4-x after signing in to Claude Code).';
+}
+
+function defaultProviderFor(llm: LLMProviderConfig | null): 'workers-ai' | 'codex' | 'openai' | 'anthropic' | 'openrouter' | 'openai-compat' | 'opencode' | 'claude' | null {
+  if (llm === null) return null;
   if (llm.name === 'workers-ai' || llm.model.startsWith('@cf/')) return 'workers-ai';
   if (llm.name === 'codex') return 'codex';
   if (llm.name === 'openai') return 'openai';
   if (llm.name === 'anthropic') return 'anthropic';
   if (llm.name === 'openrouter') return 'openrouter';
   if (llm.name === 'opencode') return 'opencode';
+  if (llm.name === 'claude') return 'claude';
   return 'openai-compat';
 }
 
@@ -715,7 +748,7 @@ interface OpenAICompatHeaders {
 }
 
 function buildAuthStore(
-  localEndpoint: LLMProviderConfig,
+  localEndpoint: LLMProviderConfig | null,
   credentials: LocalProviderCredentials,
   opts: {
     codexAuthStore?: LocalCodexAuthStore;
@@ -729,7 +762,7 @@ function buildAuthStore(
   if (credentials.openaiApiKey) {
     store.set('openai.bearer', bearer(credentials.openaiApiKey));
   }
-  if (!store.has('openai.bearer') && localEndpoint.name === 'openai') {
+  if (!store.has('openai.bearer') && localEndpoint?.name === 'openai') {
     const auth = localEndpoint.headers.Authorization ?? localEndpoint.headers.authorization;
     if (auth) store.set('openai.bearer', { headers: { Authorization: auth } });
   }
@@ -741,7 +774,7 @@ function buildAuthStore(
       },
     });
   }
-  if (!store.has('anthropic.bearer') && localEndpoint.name === 'anthropic') {
+  if (!store.has('anthropic.bearer') && localEndpoint?.name === 'anthropic') {
     const key = localEndpoint.headers['x-api-key'] ?? localEndpoint.headers['X-Api-Key'];
     if (key) {
       store.set('anthropic.bearer', {
@@ -755,11 +788,11 @@ function buildAuthStore(
   if (credentials.openrouterApiKey) {
     store.set('openrouter.bearer', bearer(credentials.openrouterApiKey));
   }
-  if (!store.has('openrouter.bearer') && localEndpoint.name === 'openrouter') {
+  if (!store.has('openrouter.bearer') && localEndpoint?.name === 'openrouter') {
     const auth = localEndpoint.headers.Authorization ?? localEndpoint.headers.authorization;
     if (auth) store.set('openrouter.bearer', { headers: { Authorization: auth } });
   }
-  if (localEndpoint.name === 'openai-compat') {
+  if (localEndpoint?.name === 'openai-compat') {
     store.set('openai-compat.default', {
       headers: localEndpoint.headers,
       baseURL: localEndpoint.baseURL,

@@ -1,5 +1,6 @@
 import { existsSync, statSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
+import type { LanguageModel } from 'ai';
 import type { AgentConfigStore, AgentRuntime, EvolutionConfigView, SessionSurface, ShellApprovalMode, ReasoningEffort, JsonObject } from '@kinu.run/core';
 import type { WorkspaceInfo } from '@kinu.run/core/identity';
 import { applyWorkspaceTitle, createAgentConfigStore, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, decodeJsonValue, usageReported, type GepaOptimizationResult } from '@kinu.run/core';
@@ -8,7 +9,6 @@ import {
   LOCAL_MAX_INLINE_ATTACHMENT_BYTES,
   LocalAgentSession,
   openWorkspaceCLI,
-  resolveChatModel,
   type CLIRuntime,
   type LocalModelResolver,
   type McpServerConfig,
@@ -98,7 +98,6 @@ export async function openLocalAgentClient(name: string, opts: LocalAgentClientO
     dbPath,
     info,
     refreshInfo: async () => (await openWorkspaceCLI(db, dbPath, openConfig)).info,
-    model: resolveChatModel(llmConfig),
     modelResolver: resolver,
     mcpServers: resolveMcpServers(),
     noAutoEvolve: opts.noAutoEvolve ?? false,
@@ -181,7 +180,9 @@ export interface LocalAgentClientDeps {
   dbPath: string;
   info: WorkspaceInfo;
   refreshInfo: () => Promise<WorkspaceInfo>;
-  model: ReturnType<typeof resolveChatModel>;
+  /** The static-model fallback for sessions built without a resolver — the
+   *  interactive client always wires a resolver, so this stays undefined. */
+  model?: LanguageModel;
   modelResolver: LocalModelResolver;
   mcpServers: Record<string, McpServerConfig>;
   noAutoEvolve: boolean;

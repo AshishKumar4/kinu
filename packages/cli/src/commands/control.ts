@@ -1,6 +1,5 @@
 import {
   requireAuthConfig,
-  setDefaultModel,
   setDefaultReasoningEffort,
 } from '../config';
 import { isReasoningEffort, type ModelMenu, type ReasoningEffort } from '@kinu.run/core';
@@ -71,7 +70,6 @@ export async function modelCommand(name: string, spec: string | undefined, opts:
       ? await callAgentRpc(auth.origin, auth.token, target.cloudName, 'setModel', ModelSetResultSchema, [spec])
       : await callAgentRpc(auth.origin, auth.token, target.cloudName, 'getStoredModelSpec', StoredModelSchema);
     console.log(spec ? `${OK('set')} ${result.spec}` : `${DIM('model')} ${result.spec ?? '(default)'}`);
-    if (spec && result.spec) setDefaultModel(result.spec);
     return;
   }
 
@@ -89,7 +87,6 @@ export async function modelCommand(name: string, spec: string | undefined, opts:
   }
   const result = resolvedSpec ? await setLocalStoredModel(target.localName, resolvedSpec) : getLocalStoredModel(target.localName);
   console.log(spec ? `${OK('set')} ${result.spec}` : `${DIM('model')} ${result.spec ?? '(default)'}`);
-  if (spec && result.spec) setDefaultModel(result.spec);
 }
 
 export async function effortCommand(name: string, level: string | undefined): Promise<void> {

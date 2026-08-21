@@ -3,7 +3,7 @@ import { Database } from 'bun:sqlite';
 import { runMCTS, DEFAULT_CONFIG, type MCTSProgressEvent, type SearchNode } from '@kinu.run/core';
 import type { AgentRuntime, SessionWriter, SessionMessage } from '@kinu.run/core';
 import { openWorkspaceCLI } from '@kinu.run/cli-backend';
-import { CONFIG_PATH, agentDbPath, createCodexAuthStore, resolveAgentRef, resolveLLMConfig, resolveProviderCredentials } from '../config';
+import { CONFIG_PATH, agentDbPath, createCodexAuthStore, requireLLMConfig, resolveAgentRef, resolveProviderCredentials } from '../config';
 import {
   printSearchTree, printError, createSpinner,
   BRAND, DIM, OK, WARN, ACCENT, MUTED,
@@ -31,7 +31,7 @@ export async function evolveCommand(name: string, opts: {
   const budget = opts.budget !== undefined ? parseInt(opts.budget, 10) : DEFAULT_CONFIG.mcts.budget;
   const branches = opts.branches !== undefined ? parseInt(opts.branches, 10) : DEFAULT_CONFIG.mcts.branches;
   const maxCostUSD = opts.maxCost !== undefined ? Number(opts.maxCost) : DEFAULT_CONFIG.mcts.maxCostUSD;
-  const llmConfig = resolveLLMConfig(opts);
+  const llmConfig = requireLLMConfig(opts);
   const codexAuthStore = createCodexAuthStore();
   const db = new Database(dbPath);
   const { rt, info } = await openWorkspaceCLI(db, dbPath, {

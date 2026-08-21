@@ -55,7 +55,10 @@ import * as v from 'valibot';
 
 export interface CLIRuntimeConfig {
   dbPath: string;
-  llm: LLMProviderConfig;
+  /** The workspace's default endpoint for bare ids — null when nothing
+   *  derives one. Explicit specs resolve through the registry regardless;
+   *  the stored chat model (agent_config) drives the seams instead. */
+  llm: LLMProviderConfig | null;
   judge?: LLMProviderConfig;
   agentName?: string;
   providerCredentials?: LocalProviderCredentials;
@@ -318,11 +321,25 @@ export function createCLIRuntime(
   let modelCallSink: ModelCallSink | null = null;
   const report: ModelCallSink = (call) => modelCallSink?.(call);
 
+  initAgentConfigTable(execRaw);
+  // Shared for every typed agent_config read/write this runtime needs at
+  // construction time — the fast-model lookup below, and the live shell-
+  // approval-mode getter the execution seam's gate reads on every command
+  // (see approvalPolicy below).
+  const agentConfig = createAgentConfigStore(sql);
+
+  // The workspace's own chat model is the default-everything spec: reflection,
+  // fast-tier selection, advisor fallback. A registry-only endpoint (claude/…)
+  // derives none, so the stored spec is the whole answer; with neither, the
+  // seams still BUILD and an unresolvable id fails at the call that names it.
+  const chatSpec = agentConfig.getModel() ?? undefined;
+
   const llm = createLocalProviderLLM({
     llm: config.llm,
     credentials: config.providerCredentials,
     codexAuthStore: config.codexAuthStore,
     onCodexRefresh: config.onCodexRefresh,
+    spec: chatSpec,
     // `rt.llm.complete` is the evolution engine's own reflection seam — the
     // turn loop drives its chat model directly and reports as `step_finish`.
     spend: { source: 'reflection', report },
@@ -336,17 +353,21 @@ export function createCLIRuntime(
     llm: config.llm, credentials: config.providerCredentials,
     codexAuthStore: config.codexAuthStore, onCodexRefresh: config.onCodexRefresh,
   });
-  initAgentConfigTable(execRaw);
-  // Shared for every typed agent_config read/write this runtime needs at
-  // construction time — the fast-model lookup below, and the live shell-
-  // approval-mode getter the execution seam's gate reads on every command
-  // (see approvalPolicy below).
-  const agentConfig = createAgentConfigStore(sql);
-  const fast = selectFastModel({
-    fastSpec: agentConfig.getRoleModel('fast'),
-    chatSpec: fastResolver.normalizeSpecSync(null),
-    providers: fastResolver.fastModelCandidates(),
-  });
+  let normalizedChatSpec: string | null;
+  try {
+    normalizedChatSpec = chatSpec ?? fastResolver.normalizeSpecSync(null);
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.startsWith('No default model')) throw error;
+    // No endpoint and no stored model: nothing for the fast tier to differ from.
+    normalizedChatSpec = null;
+  }
+  const fast = normalizedChatSpec === null
+    ? { spec: '', source: 'chat-model' as const }
+    : selectFastModel({
+      fastSpec: agentConfig.getRoleModel('fast'),
+      chatSpec: normalizedChatSpec,
+      providers: fastResolver.fastModelCandidates(),
+    });
   // Only when it IS a different model — otherwise leave it unset so every
   // reader's documented `?? rt.llm` fallback is what runs, rather than a
   // second identical client.

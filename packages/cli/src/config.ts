@@ -422,11 +422,19 @@ export function validateAliasName(alias: string): void {
   }
 }
 
+/**
+ * The default inference endpoint for BARE model ids — the one input the
+ * cli-backend registry cannot derive on its own. Total: null when nothing
+ * derives one, because an explicit `provider/model` spec needs no endpoint at
+ * all (registry-only families — the claude subscription, the opencode bridge —
+ * carry their own auth seams). Seams that must hand core an endpoint object
+ * use {@link requireLLMConfig}.
+ */
 export function resolveLLMConfig(opts?: {
   model?: string;
   baseUrl?: string;
   auth?: string;
-}): LLMProviderConfig {
+}): LLMProviderConfig | null {
   const file = loadConfigFile();
 
   // Direct-endpoint overrides come only from explicit flags or env; provider
@@ -471,26 +479,46 @@ export function resolveLLMConfig(opts?: {
     : null;
   if (cloudConfig && (!model || isNativeCloudSpec(model))) return cloudConfig;
 
+  // An explicit spec naming a registry-only family resolves to that family —
+  // ahead of any credential default, which exists to answer BARE ids.
+  const family = registryFamilyMarker(model);
+  if (family) return family;
+
   const derived = deriveLLMConfigFromProviderCredentials(file, model);
   if (derived) return derived;
 
   if (cloudConfig) return cloudConfig;
 
-  if (!baseURL) {
-    throw new Error(
-      'No LLM configured.\n' +
-      '  Run kinu auth to use your Cloudflare AI, run kinu setup to configure a local provider,\n' +
-      '  or pass --base-url for an advanced override.'
-    );
-  }
-  if (!auth) {
+  // Half an advanced override is a misconfiguration, not an absence: name it.
+  if (baseURL && !auth) {
     throw new Error(
       'No LLM auth configured.\n' +
       '  Run kinu setup and configure a local provider, or pass --auth for an advanced override.'
     );
   }
 
-  return { name: 'openai-compat', baseURL, headers: { 'Authorization': auth }, model: directEndpointModelId(model ?? DEFAULT_WORKERS_AI_MODEL_ID) };
+  return null;
+}
+
+/**
+ * resolveLLMConfig for the seams that must hand core's runtime an endpoint
+ * object (workspace creation, evolution). Resolution itself never requires
+ * one — registry-only families run without it — so the failure names every
+ * fix rather than leaking null downward.
+ */
+export function requireLLMConfig(opts?: {
+  model?: string;
+  baseUrl?: string;
+  auth?: string;
+}): LLMProviderConfig {
+  const config = resolveLLMConfig(opts);
+  if (config) return config;
+  throw new Error(
+    'No LLM configured.\n' +
+    '  Run kinu auth to use your Cloudflare AI,\n' +
+    '  run kinu setup to configure a local provider, or sign in to Claude Code and pass --model claude/<model>,\n' +
+    '  or pass --base-url for an advanced override.'
+  );
 }
 
 /** Local provider credentials used by the CLI backend's provider registry.
@@ -579,19 +607,21 @@ function deriveLLMConfigFromProviderCredentials(file: KinuConfig, model: string 
     };
   }
 
-  // OpenCode bridge — no credential stored in config; the provider reads
-  // opencode's auth.json and remote config at request time. We just need to
-  // return a config whose `name` maps to the opencode provider in the
-  // registry so the model spec resolves correctly.
-  if (providerModel?.startsWith('opencode/')) {
-    return {
-      name: 'opencode',
-      baseURL: '',
-      headers: {},
-      model: stripProvider(providerModel, 'opencode'),
-    };
-  }
+  return null;
+}
 
+/** Registry-only families: served by the CLI backend's own providers from
+ *  their own auth seams (the claude binary's subscription login, opencode's
+ *  auth.json), so their endpoint config is a marker the resolver maps back to
+ *  the family rather than a place to send HTTP. */
+function registryFamilyMarker(model: string | undefined): LLMProviderConfig | null {
+  if (!model) return null;
+  if (model.startsWith('claude/')) {
+    return { name: 'claude', baseURL: '', headers: {}, model: stripProvider(model, 'claude') };
+  }
+  if (model.startsWith('opencode/')) {
+    return { name: 'opencode', baseURL: '', headers: {}, model: stripProvider(model, 'opencode') };
+  }
   return null;
 }
 

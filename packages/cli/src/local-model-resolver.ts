@@ -1,4 +1,4 @@
-import { createLocalModelResolver, type LocalModelResolver } from '@kinu.run/cli-backend';
+import { createLocalModelResolver, type ClaudeCliProviderOptions, type LocalModelResolver } from '@kinu.run/cli-backend';
 import { agentAffinityKey, parseModelSpec, type LLMProviderConfig } from '@kinu.run/core';
 import {
   createCodexAuthStore,
@@ -15,12 +15,18 @@ export interface LocalModelResolverOptions {
   /** Pins the agent's signed-in proxy turns to one Workers AI replica
    *  (x-session-affinity) — same `kinu-<name>` key cloud agents use. */
   agentName?: string;
+  /** Seam for the local Claude-subscription provider (tests inject a fake
+   *  `claude` binary). Production leaves this undefined. */
+  claudeCli?: ClaudeCliProviderOptions;
 }
 
 export interface ConfiguredLocalModelResolver {
-  llmConfig: LLMProviderConfig;
+  /** The default endpoint for bare ids — null when nothing derives one.
+   *  Explicit `provider/model` specs resolve regardless. */
+  llmConfig: LLMProviderConfig | null;
   resolver: LocalModelResolver;
 }
+
 
 /** Why a workspace's model cannot run yet, or null when it can. */
 export interface UnusableModel {
@@ -61,6 +67,8 @@ export async function findUnusableModel(opts: LocalModelResolverOptions = {}): P
 }
 
 export function createConfiguredLocalModelResolver(opts: LocalModelResolverOptions = {}): ConfiguredLocalModelResolver {
+  // Total on purpose: a null endpoint only means bare ids have no default —
+  // explicit registry-only specs (claude/…, opencode/…) resolve regardless.
   const llmConfig = resolveLLMConfig(opts);
   const cloud = resolveCloudSession();
   const resolver = createLocalModelResolver({
@@ -70,6 +78,7 @@ export function createConfiguredLocalModelResolver(opts: LocalModelResolverOptio
     cloud: cloud
       ? { ...cloud, sessionAffinity: opts.agentName ? agentAffinityKey(opts.agentName) : undefined }
       : undefined,
+    claudeCli: opts.claudeCli,
   });
   return { llmConfig, resolver };
 }

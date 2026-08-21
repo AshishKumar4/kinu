@@ -22,7 +22,7 @@ import {
 } from '@kinu.run/compaction';
 import type {
   ChatOptions, ChatEvent,
-  LLMProviderConfig, CompletedTurn, TurnContinuity, FiberCtx,
+  CompletedTurn, TurnContinuity, FiberCtx,
   ModelCallSink,
   BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile,
   SessionWriter, SkillsVfs, ActiveSkillSet, TurnSkillSurface, FactsStore, KinuExtension,
@@ -64,7 +64,7 @@ import {
   buildActorTools, withClampedToolResults, buildSystemPromptSync, currentDateForPrompt,
   activePromptSectionOverrides,
   turnProvenanceForMetadata, workModeForTurnMetadata,
-  createChatModel, runChat, resolveMaxSteps, estimateTokens,
+  runChat, resolveMaxSteps, estimateTokens,
   parseModelSpec, agentAffinityKey,
   OVERFLOW_RETRY_EVENT,
   openTurnRun, closeTurnRun, snapshotCompletedTurn, creditedTurnId,
@@ -127,19 +127,6 @@ import { detectOrphanedFibers } from './fiber';
 import { connectMcpServers, type McpServerConfig } from './mcp';
 import type { LocalModelResolver } from './model-resolver';
 
-/** Build the ai-SDK chat model both frontends drive runChat with.
- *  Provider-style model switching uses
- *  createLocalModelResolver and agent_config.model. */
-export function resolveChatModel(llm: LLMProviderConfig): LanguageModel {
-  if (llm.name === 'anthropic') {
-    return createChatModel({
-      kind: 'anthropic', baseURL: llm.baseURL, headers: llm.headers, modelId: llm.model,
-    });
-  }
-  return createChatModel({
-    kind: 'openai-compat', name: llm.name, baseURL: llm.baseURL, headers: llm.headers, modelId: llm.model,
-  });
-}
 
 /**
  * The head of a transcript that could not be restored whole.
@@ -237,8 +224,10 @@ export interface LocalAgentSessionOpts {
   rt: CLIRuntime;
   /** Raw bun:sqlite handle — backs the EventsHub SqlExec adapter. */
   db: LocalSessionDb;
-  /** The ai-SDK chat model runChat drives. Build via resolveChatModel(llmConfig). */
-  model: LanguageModel;
+  /** The ai-SDK chat model runChat drives on a STATIC session — one built
+   *  without a modelResolver. Required there; with a resolver, turns resolve
+   *  through the registry and this is only the pre-claim fallback. */
+  model?: LanguageModel;
   /** Display/canonical spec for static-model sessions with no modelResolver. */
   modelSpec?: string;
   /** Optional provider-style resolver. When present, agent_config.model controls
@@ -288,7 +277,7 @@ type CurriculumStatus = 'pending' | 'accepted' | 'rejected' | 'completed';
 
 export class LocalAgentSession implements BackendHost {
   private readonly rt: CLIRuntime;
-  private readonly fallbackModel: LanguageModel;
+  private readonly fallbackModel: LanguageModel | null;
   private readonly fallbackModelSpec: string;
   private readonly modelResolver: LocalModelResolver | null;
   private cachedModel: LanguageModel | null = null;
@@ -447,9 +436,17 @@ export class LocalAgentSession implements BackendHost {
     this.oneShot = opts.oneShot === true;
     this.cwd = opts.cwd ?? process.cwd();
     this.persistMessagesEnabled = opts.persistMessages !== false;
-    this.fallbackModel = opts.model;
+    this.fallbackModel = opts.model ?? null;
     this.fallbackModelSpec = opts.modelSpec ?? 'local/static';
     this.modelResolver = opts.modelResolver ?? null;
+
+    // A session with neither a resolver nor a static model has no brain; the
+    // failure belongs at the first use that needs one, named for that use.
+    if (!opts.model && !this.modelResolver) {
+      throw new Error(
+        'No model for this session: construct it with a modelResolver or a static model.'
+      );
+    }
 
     // The cumulative spend governor — a scheduled run or a fork opts into a
     // label, and its refusals land in this run's durable event log. No label
@@ -556,7 +553,7 @@ export class LocalAgentSession implements BackendHost {
     });
 
     const headRuntimeOptions: Parameters<typeof createCLIHeadRuntime>[0] = {
-      model: this.fallbackModel,
+      model: this.defaultModel("a head with no model of its own"),
       providerFamily: parseModelSpec(this.fallbackModelSpec).provider,
       // The merge runs on `model` above — the model THIS spec resolved — so the
       // spec is this session's to attach and not head-runtime's: that seam holds
@@ -2400,7 +2397,7 @@ export class LocalAgentSession implements BackendHost {
   private buildAgentsForkDeps(mode: WorkMode): AgentsForkDeps {
     return buildStrategyForkDeps({
       rt: this.rt,
-      model: this.cachedModel ?? this.fallbackModel,
+      model: this.cachedModel ?? this.defaultModel("an agents fork"),
       // Same catalog session that answers the context window and prices the
       // mission ledger — so a search's pre-run estimate and the ledger that
       // later debits it read one rate.
@@ -2556,6 +2553,7 @@ export class LocalAgentSession implements BackendHost {
       tokens += cost;
       restored.push({ role: row.role, content: row.content });
     }
+
     if (omitted > 0) this.history.push(olderHistoryNotice(omitted, this.sessionId));
     this.history.push(...restored.reverse());
   }
@@ -2567,10 +2565,19 @@ export class LocalAgentSession implements BackendHost {
     throw new Error('Model switching is unavailable for this local session; construct it with a modelResolver.');
   }
 
-  /** The model spec every turn resolves against — the stored/claimed one, or
-   *  the constructed fallback before a model has been claimed. */
   private effectiveModelSpec(): string {
     return this.cachedModelSpec ?? this.fallbackModelSpec;
+  }
+  /** The session's model before any per-turn claim: the static model, or
+   *  null on resolver sessions until a spec resolves. `what` names the use so
+   *  the failure says what could not run rather than that a field was null. */
+  private defaultModel(what: string): LanguageModel {
+    if (!this.fallbackModel) {
+      throw new Error(
+        `No default model to run ${what}: set one with /model or kinu model.`
+      );
+    }
+    return this.fallbackModel;
   }
 
   /** The shared catalog view of the resolved model (core model-catalog —
@@ -2593,7 +2600,7 @@ export class LocalAgentSession implements BackendHost {
   private ensureModelState(): LanguageModel {
     const spec = this.normalizeModelSpec(this.config.getModel());
     if (this.cachedModel && this.cachedModelSpec === spec) return this.cachedModel;
-    const model = this.modelResolver ? this.modelResolver.resolveModel(spec) : this.fallbackModel;
+    const model = this.modelResolver ? this.modelResolver.resolveModel(spec) : this.defaultModel("this static-model session");
     this.cachedModel = model;
     this.cachedModelSpec = spec;
     // Start the catalog lookup at claim time rather than at first use. A CLI

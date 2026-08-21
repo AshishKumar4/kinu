@@ -7,7 +7,7 @@
 
 import { ADVISOR_SEVERITIES, isAdvisorSeverity, isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type BranchStatusEvent, type EvolutionConfigView, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu.run/core';
 import type { AgentChangelogView, AgentClient, AgentClientStatus, AgentSearchNode } from './agent-client';
-import { setDefaultModel, setDefaultReasoningEffort } from './config';
+import { setDefaultReasoningEffort } from './config';
 
 export interface SlashCommandInfo {
   name: string;
@@ -285,10 +285,10 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
   }
 }
 
+/** /model scopes to THIS workspace: the client stores the spec on the agent,
+ *  and the global default in config.json is nobody else's business. */
 export async function setModelPreference(client: Pick<AgentClient, 'setModel'>, spec: string): Promise<{ spec: string }> {
-  const result = await client.setModel(spec);
-  setDefaultModel(result.spec);
-  return result;
+  return await client.setModel(spec);
 }
 
 export async function setReasoningEffortPreference(

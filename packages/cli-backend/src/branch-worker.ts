@@ -75,14 +75,19 @@ const branchWorkerMessageSchema = v.variant('method', [
 const branchWorkerEnvelopeSchema = v.object({ method: v.string() });
 const BRANCH_METHODS = new Set<string>(['explore', 'reflect']);
 
-const llmConfig: LLMProviderConfig = {
-  name: process.env.KINU_LLM_NAME ?? 'workers-ai',
-  baseURL: process.env.KINU_BASE_URL ?? '',
-  headers: readJson(stringMapSchema, process.env.KINU_LLM_HEADERS) ?? {
-    Authorization: process.env.KINU_AUTH ?? '',
-  },
-  model: process.env.KINU_MODEL ?? DEFAULT_WORKERS_AI_MODEL_ID,
-};
+/** The parent's default endpoint, or null when the parent had none: an empty
+ *  KINU_LLM_NAME is that absence, and bare ids then fail at resolution with
+ *  the fixes named — exactly as they would in the parent. */
+const llmConfig: LLMProviderConfig | null = process.env.KINU_LLM_NAME
+  ? {
+    name: process.env.KINU_LLM_NAME,
+    baseURL: process.env.KINU_BASE_URL ?? '',
+    headers: readJson(stringMapSchema, process.env.KINU_LLM_HEADERS) ?? {
+      Authorization: process.env.KINU_AUTH ?? '',
+    },
+    model: process.env.KINU_MODEL ?? DEFAULT_WORKERS_AI_MODEL_ID,
+  }
+  : null;
 
 const credentials: LocalProviderCredentials = readJson(
   localProviderCredentialsSchema,

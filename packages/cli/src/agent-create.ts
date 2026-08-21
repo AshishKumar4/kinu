@@ -21,6 +21,7 @@ import {
   ensureAgentHome,
   loadConfigFile,
   requireAuthConfig,
+  requireLLMConfig,
   resolveLLMConfig,
   upsertAgentConfig,
   writeAliasShim,
@@ -125,21 +126,19 @@ export function isCloudAuthConfigured(): boolean {
   return Boolean(loadConfigFile().accessToken);
 }
 
-/** config.ts's "there is nothing to run a model with" messages ('No LLM configured.', 'No LLM auth
- *  configured.'). resolveLLMConfig reports that state by throwing, and it is the ONLY failure of it
- *  that means "not set up yet". */
-const NOT_CONFIGURED_MESSAGE = /^No LLM\b/u;
-
+/** Whether ANY inference path exists: a derived endpoint, or any provider the
+ *  registry could serve. A config.json that will not parse is a real failure
+ *  and propagates — repainting it as "run setup" is how a broken install
+ *  looks like a fresh one. */
 export function isLocalModelConfigured(): boolean {
   try {
-    resolveLLMConfig({});
-    return true;
+    return resolveLLMConfig({}) !== null;
   } catch (error) {
-    // "Nothing is configured" is resolveLLMConfig's answer. Anything else — a config.json that will
-    // not parse, a stored spec that will not resolve — is a real failure, and repainting it as
-    // "run setup" is how a broken install looks like a fresh one.
-    if (!NOT_CONFIGURED_MESSAGE.test(error instanceof Error ? error.message : '')) throw error;
-    return false;
+    // Only the half-set-override diagnostic reads as "not usable yet". Anything
+    // else — a config.json that will not parse, a stored spec that will not
+    // resolve — is a real failure and propagates.
+    if (error instanceof Error && error.message.startsWith('No LLM auth configured')) return false;
+    throw error;
   }
 }
 
@@ -180,8 +179,7 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   const dir = agentDir(name);
   const dbPath = agentDbPath(name);
   if (existsSync(dbPath)) throw new Error(`Agent "${name}" already exists.`);
-
-  const llmConfig = resolveLLMConfig(input);
+  const llmConfig = requireLLMConfig(input);
   mkdirSync(dir, { recursive: true });
   const db = new Database(dbPath);
   try {

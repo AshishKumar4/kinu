@@ -1,6 +1,20 @@
 import * as v from 'valibot';
-import { parseJsonValue, type JsonValue } from '../packages/core/src/index';
+import { createChatModel, parseJsonValue, type JsonValue, type LLMProviderConfig } from '../packages/core/src/index';
+import type { LanguageModel } from 'ai';
 import { tolerate } from '../packages/core/src/obs/index';
+
+/** The static chat model for an explicit bench endpoint. A bench NAMES its
+ *  endpoint through the metering proxy; it does not resolve one, so this is
+ *  plain construction — no registry, no defaults. */
+export function benchChatModel(config: LLMProviderConfig): LanguageModel {
+  return createChatModel({
+    kind: config.name === 'anthropic' ? 'anthropic' : 'openai-compat',
+    name: config.name,
+    baseURL: config.baseURL,
+    headers: config.headers,
+    modelId: config.model,
+  });
+}
 
 const TokenCountSchema = v.pipe(v.number(), v.finite(), v.integer(), v.minValue(0));
 const UsageSchema = v.object({

@@ -43,7 +43,10 @@ const activeBranches = new Map<string, ChildProcess>();
 export const BRANCH_RPC_TIMEOUT_MS = TURN_WALL_CLOCK_ENVELOPE_MS;
 
 export interface BranchSpawnerConfig {
-  llm: LLMProviderConfig;
+  /** The parent's default endpoint for bare ids — null when nothing derives
+   *  one. The child then resolves explicit specs through its own registry and
+   *  has no default, exactly like the parent. */
+  llm: LLMProviderConfig | null;
   providerCredentials?: LocalProviderCredentials;
   codexConfigPath?: string;
 }
@@ -106,11 +109,11 @@ export function createBranchSpawner(
 
     const env: NodeJS.ProcessEnv = {
       ...process.env,
-      KINU_LLM_NAME: config.llm.name,
-      KINU_BASE_URL: config.llm.baseURL,
-      KINU_AUTH: config.llm.headers.Authorization ?? config.llm.headers.authorization ?? '',
-      KINU_MODEL: config.llm.model,
-      KINU_LLM_HEADERS: JSON.stringify(config.llm.headers),
+      KINU_LLM_NAME: config.llm?.name ?? '',
+      KINU_BASE_URL: config.llm?.baseURL ?? '',
+      KINU_AUTH: config.llm?.headers.Authorization ?? config.llm?.headers.authorization ?? '',
+      KINU_MODEL: config.llm?.model ?? '',
+      KINU_LLM_HEADERS: JSON.stringify(config.llm?.headers ?? {}),
       KINU_PROVIDER_CREDENTIALS: JSON.stringify(branchSafeCredentials(config.providerCredentials)),
       KINU_PARENT_DB: `${basePath}.db`,
     };
