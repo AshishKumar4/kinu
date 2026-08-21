@@ -33,7 +33,11 @@ import { kinuHome } from './home';
 import * as v from 'valibot';
 
 export interface CLIHeadRuntimeDeps {
-  model: LanguageModel;
+  /** The session's model for a head that names none or cannot resolve theirs —
+   *  read PER SPAWN, not at construction: a resolver session claims its model
+   *  on first turn, so the session model may simply not exist yet when the
+   *  runtime is built. */
+  model: () => LanguageModel;
   /** Provider prefix from the normalized model spec. */
   providerFamily?: string;
   /** Resolve a per-fork model spec (`HeadInput.model`) to a model. Without it
@@ -147,7 +151,7 @@ function openHeadScratch(headId: string): HeadScratch {
  *  rather than failing the head: one fork's unresolvable model must not take
  *  down a split the other forks are already running. */
 function headModel(input: HeadInput, deps: CLIHeadRuntimeDeps): LanguageModel {
-  if (!input.model || !deps.resolveModel) return deps.model;
+  if (!input.model || !deps.resolveModel) return deps.model();
   try {
     return deps.resolveModel(input.model);
   } catch (err) {
@@ -160,7 +164,7 @@ function headModel(input: HeadInput, deps: CLIHeadRuntimeDeps): LanguageModel {
       }),
       { headId: input.id, model: input.model },
     );
-    return deps.model;
+    return deps.model();
   }
 }
 
@@ -255,7 +259,7 @@ async function runLocalSplit(
 async function mergeViaLLM(deps: CLIHeadRuntimeDeps, prompt: string): Promise<MergeOutput> {
   const providerOptions = reasoningEffortOptions('low', deps.providerFamily ?? '');
   const request: Parameters<typeof generateText>[0] = {
-    model: deps.model,
+    model: deps.model(),
     prompt,
   };
   if (providerOptions) request.providerOptions = providerOptions;
