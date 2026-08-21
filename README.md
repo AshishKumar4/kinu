@@ -6,6 +6,10 @@
 </p>
 
 <p align="center">
+  <img alt="Recorded views of Kinu at work: a steered turn becoming a measured swarm search, the search growing node by node on the exploration canvas, and one node's transcript with its tool calls and report." src="docs/assets/kinu-film-readme.webp" width="900" height="562">
+</p>
+
+<p align="center">
   <strong>A self-evolving agent platform.<br>
   Your agent keeps a durable workspace of its own, and runs a tree of agents when a task is hard.</strong>
   <strong><a href="https://kinu.run">kinu.run</a></strong>
