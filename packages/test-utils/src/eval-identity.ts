@@ -32,6 +32,8 @@
  * Pure over its environment, so the guard is testable without a credential and
  * without a network.
  */
+import { USER_AI_PROXY_PATH } from '@kinu.run/core';
+import { LIVE_MODEL_ENV } from './ambient-env';
 
 /** The three variables that decide identity and target. One object so a failure
  *  message, a shell script and the docs can name them without a second copy. */
@@ -148,6 +150,82 @@ export function evalTargetVerdict(origin: string, env: EnvSource = process.env):
       + `deployment that serves real users. To make this run anyway, set `
       + `${EVAL_IDENTITY_ENV.allowProd}=1 — which records that somebody chose it.`,
   };
+}
+
+export type EvalModelEndpointVerdict =
+  /** An origin the allowlist ruled on, either way. */
+  | { readonly kind: 'checked'; readonly target: EvalTargetVerdict }
+  /** Fronts a model and no Kinu deployment, so it creates nothing and there is
+   *  no target to rule on. */
+  | { readonly kind: 'gateway' };
+
+/**
+ * Whether an eval may send its credential to the model endpoint `baseUrl`.
+ *
+ * A model endpoint arrives as a base URL rather than an origin, and the two
+ * variables that carry one hold either shape: `.env.example` documents an AI
+ * Gateway, and `.github/workflows/eval.yml` held a repository secret that could
+ * hold either. Measured on 2026-08-21, `resolveLLMConfig` turns
+ * `https://kinu.run/api/user/ai/v1` plus a bearer into
+ * `{ name: 'workers-ai', baseURL: <that>, Authorization: 'Bearer …' }` — the
+ * shape that authenticates against a deployment, not a gateway's
+ * `cf-aig-authorization` — so that pair reaches production's whole API.
+ *
+ * THE ORIGIN DECIDES FIRST, against the one allowlist. An allowed origin needs
+ * no further reasoning, whatever path follows it. Only a refused origin raises
+ * the second question, which is whether refusing it would break the gateway
+ * path the tier legitimately uses — and there the deployment's own inference
+ * route answers, because {@link USER_AI_PROXY_PATH} is the single declaration of
+ * that route, shared by the URL builder, the server handler and the auth router.
+ *
+ * The order matters more than either test. Origin-first keeps production out of
+ * this module: naming the deployments would turn the allowlist into a list of
+ * hosts to distrust, and every origin nobody had thought of yet would then read
+ * as a gateway and pass. This way an undeclared origin bearing the inference
+ * route is refused, including one belonging to nobody here.
+ */
+export function evalModelEndpointVerdict(
+  baseUrl: string,
+  env: EnvSource = process.env,
+): EvalModelEndpointVerdict {
+  let url: URL;
+  try {
+    url = new URL(baseUrl.trim());
+  } catch {
+    // Not a URL, so it names no deployment and reaches nothing. The provider
+    // stack refuses it on the first call.
+    return { kind: 'gateway' };
+  }
+
+  const target = evalTargetVerdict(url.origin, env);
+  if (target.kind === 'allowed') return { kind: 'checked', target };
+  if (url.pathname.replace(/\/+$/, '') === USER_AI_PROXY_PATH) return { kind: 'checked', target };
+  return { kind: 'gateway' };
+}
+
+/** A model endpoint an eval may not use, and the variable that carries it. */
+export interface RefusedEvalEndpoint {
+  readonly variable: string;
+  readonly reason: string;
+}
+
+/**
+ * The first model endpoint in `env` aimed at a deployment an eval may not reach.
+ *
+ * Reported by VARIABLE, because a variable is what an operator changes. The
+ * names come from {@link LIVE_MODEL_ENV} rather than a second list, so a
+ * spelling added there is checked here.
+ */
+export function refusedEvalEndpoint(env: EnvSource = process.env): RefusedEvalEndpoint | null {
+  for (const variable of LIVE_MODEL_ENV.gatewayURL) {
+    const value = env[variable]?.trim();
+    if (!value) continue;
+    const verdict = evalModelEndpointVerdict(value, env);
+    if (verdict.kind === 'checked' && verdict.target.kind === 'refused') {
+      return { variable, reason: verdict.target.reason };
+    }
+  }
+  return null;
 }
 
 /** The eval-service credential and the deployment it is good for. */
