@@ -317,18 +317,27 @@ describe('the agent surfaces cannot drift from their classes', () => {
   /**
    * The control plane lives on the substrate, once.
    *
-   * All four were declared on BOTH roots over the same core implementation, and
-   * nothing was red while they drifted: the orchestrator's setModel and
-   * getStoredModelSpec skipped the `ensureSchema()` its twin ran, so the two roots
-   * disagreed about whether their own tables had to exist before a config write.
-   * A copy reappearing on a root is exactly how that returns, so it is red here
-   * rather than left to review.
+   * All four of the original members were declared on BOTH roots over the same
+   * core implementation, and nothing was red while they drifted: the
+   * orchestrator's setModel and getStoredModelSpec skipped the `ensureSchema()`
+   * its twin ran, so the two roots disagreed about whether their own tables had
+   * to exist before a config write. A copy reappearing on a root is exactly how
+   * that returns, so it is red here rather than left to review.
+   *
+   * `getChatHistoryPage` is the fifth and arrived the other way round: it was
+   * declared on the workspace root ONLY, so a subordinate — a facet with its
+   * own `initWorkspaceSchema` tables and therefore its own conversation — had no
+   * way to be asked for a page of its own history. One root having a member of
+   * this plane and the other not is the same defect as both having their own
+   * copy, and this list is what refuses either shape.
    *
    * Behaviour is pinned separately, through both classes, in
-   * unit-actor-control-plane.test.ts.
+   * unit-actor-control-plane.test.ts and unit-actor-transcript-page.test.ts.
    */
   test('the shared control plane is declared on ActorAgent and on neither root', () => {
-    const shared = ['getStoredModelSpec', 'setModel', 'steerTurn', 'cancelCurrentWork'];
+    const shared = [
+      'getStoredModelSpec', 'setModel', 'steerTurn', 'cancelCurrentWork', 'getChatHistoryPage',
+    ];
     const onActor = actorMembers.map((m) => m.name).filter((name) => shared.includes(name));
     expect(onActor.sort()).toEqual([...shared].sort());
     for (const file of ['orchestrator.ts', 'subordinate-agent.ts']) {

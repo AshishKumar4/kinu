@@ -122,8 +122,8 @@ import {
   type BackgroundJobStore, type TaskListStore,
   wrapToolsForBackground, BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob,
   // The control plane both roots expose over the same core implementations.
-  cancelCurrentWork, getStoredModelSpec, setModel,
-  type CancelWorkOutcome,
+  cancelCurrentWork, getStoredModelSpec, setModel, getChatHistoryPage,
+  type CancelWorkOutcome, type ChatHistoryEntry, type Page, type PageRequest,
   type MctsSearchStore, readSearchTree, type MCTSProgressEvent,
   // EventsHub primitives (spec §1)
   EventLog,
@@ -2343,6 +2343,28 @@ export abstract class ActorAgent extends Think<Env> {
   // wherever the chat is. `ensureSchema()` first on each, because a native DO RPC
   // does not route through partyserver and can land before `onStart` — the race
   // `installWorkspaceCapability` documents. It is flag-gated and idempotent.
+
+  /**
+   * One page of the durable transcript, oldest-first within the page, newest
+   * page when called with no cursor.
+   *
+   * `@callable()` because a chat pane calls it over the socket. The pane is
+   * SEEDED by the SDK's own `get-messages` route — `Think.messages`, a bounded
+   * newest window governed by `hydrationByteBudget` — and this is the only way
+   * to reach anything older than that window.
+   *
+   * On the substrate rather than on the workspace root, because a facet runs
+   * `initWorkspaceSchema` against its own `ctx.storage.sql` and therefore has
+   * its own conversation. Declared on the root alone, a subordinate's chat had
+   * no way to ask for a page of its own history, so the column drove its
+   * scroller with nothing to fetch and everything past the hydration window was
+   * unreachable rather than slow.
+   */
+  @callable()
+  async getChatHistoryPage(request?: PageRequest): Promise<Page<ChatHistoryEntry>> {
+    this.ensureSchema();
+    return getChatHistoryPage(this.boundSql, request ?? {});
+  }
 
   /** The agent's stored model spec. The UI preselects a menu entry with it; the
    *  available-models list comes from /api/user/models so it stays user-scoped. */

@@ -11,17 +11,16 @@ import {
 import { convertFileListToFileUIParts } from "ai";
 import type { FileUIPart } from "ai";
 import {
-  buildTranscript, CLOUD_MAX_INLINE_ATTACHMENT_BYTES, mergeTranscript, pageSchema,
+  buildTranscript, CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   isPlaceholderMission, planReviewAwaitingDecision, summarizeRestorePlan,
 } from "@kinu.run/core";
 import type {
-  AlternateTakeSet, ChatHistoryEntry, FileCheckpointEntry, FileCheckpointListing,
-  FileRestoreChange, FileRestorePlan, Page, TakePickOutcome,
+  AlternateTakeSet, FileCheckpointEntry, FileCheckpointListing,
+  FileRestoreChange, FileRestorePlan, TakePickOutcome,
 } from "@kinu.run/core";
-import * as v from "valibot";
 import { useKinu } from "@/hooks/use-kinu";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
-import { usePagedScroll, walkStart } from "@/hooks/use-paged-scroll";
+import { useChatHistory } from "@/hooks/use-chat-history";
 import { useSteerActions } from "@/hooks/use-steer-actions";
 import { touchWorkspace } from "@/lib/user-api";
 import { describeError } from "@/hooks/use-async-resource";
@@ -47,16 +46,6 @@ import { renderThrownChain } from "@kinu.run/core/obs";
 
 /* ── Transcript chrome ────────────────────────────────────────── */
 
-/** Messages per older-history request. Small enough that a page renders in one
- *  frame and the scroll stays smooth, large enough that a flick up does not
- *  need a dozen round trips. */
-const CHAT_PAGE_SIZE = 40;
-const ChatHistoryPageSchema: v.GenericSchema<Page<ChatHistoryEntry>> = pageSchema(v.object({
-  id: v.pipe(v.string(), v.nonEmpty()),
-  role: v.picklist(["user", "assistant", "system"]),
-  content: v.string(),
-  createdAt: v.union([v.string(), v.number()]),
-}));
 const squareButtonVariant = "square";
 const SQUARE_BUTTON_PROPS = { ["sha" + "pe"]: squareButtonVariant };
 
@@ -359,10 +348,16 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
   const setModel = state.setModel;
   const onPickModel = useCallback((spec: string) => { void setModel(spec); }, [setModel]);
   const [input, setInput] = useState("");
-  // No older-history walk: a subordinate facet's transcript is one delegation,
-  // and the SDK's seed already carries all of it. `prepended` is therefore
-  // constant — nothing is ever inserted above the live list here.
-  const messagesRef = useGrowingScroll<HTMLDivElement>({ grows: "up", content: state.messages, fetched: null });
+  // The same older-history walk the workspace column runs, over this facet's
+  // own storage. A subordinate keeps its own conversation, and a helper that
+  // worked for an hour has more of one than the SDK's hydration window holds.
+  const { history, transcript } = useChatHistory(state.rpc, state.messages, state.transcriptSeeded);
+  const messagesRef = useGrowingScroll<HTMLDivElement>({
+    grows: "up",
+    content: transcript,
+    fetched: history.fetched,
+    onReachEdge: history.loadMore,
+  });
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useLayoutEffect(() => {
@@ -379,7 +374,7 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
     setInput("");
   }, [input, state]);
 
-  const messageIds = useMemo(() => state.messages.map((msg) => msg.id), [state.messages]);
+  const messageIds = useMemo(() => transcript.map((msg) => msg.id), [transcript]);
   const { notice: steerNotice, steer, stop, liveSteers } = useSteerActions({
     steerChat: state.steerChat,
     abortChat: state.abortChat,
@@ -392,7 +387,7 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
   // Same rule as the workspace column: a steer sits inside the turn that read
   // it, and only an unplaceable one trails.
   const thread = useMemo(
-    () => buildTranscript(state.messages, liveSteers), [state.messages, liveSteers]);
+    () => buildTranscript(transcript, liveSteers), [transcript, liveSteers]);
 
   if (state.connectionStatus === "connecting" && !state.agentStatus) {
     return (
@@ -425,7 +420,19 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
 
       <ErrorBoundary label="Subordinate chat">
         <div ref={messagesRef} className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8">
-          {thread.entries.length === 0 && !state.isStreaming && (
+          {/* Above the oldest message, exactly as the workspace column has it:
+              a walk in progress, a failed page with its retry, or the store's
+              own statement that this is the beginning. Suppressed only when
+              there is nothing at all, where the empty state below says more. */}
+          {thread.entries.length > 0 && (
+            <HistoryBoundary
+              loading={history.loading}
+              error={history.error}
+              exhausted={history.exhausted}
+              onRetry={history.loadMore}
+            />
+          )}
+          {thread.entries.length === 0 && !state.isStreaming && !history.loading && (
             <div className="flex h-full flex-col items-center justify-center text-center">
               <KinuMark size={30} className="mb-3 text-[var(--c-accent)] opacity-60" />
               <p className="text-sm p-text-3">This subordinate's conversation starts here.</p>
@@ -541,21 +548,8 @@ export default function WorkspacePage() {
   // than not starting it: the store is asked, and "there is nothing here" is
   // then something the store said instead of something the socket failed to
   // say. That is the report — a workspace whose conversation was gone.
-  const oldest = state.messages[0]?.id;
-  const history = usePagedScroll<ChatHistoryEntry>({
-    grows: "up",
-    fetchPage: useCallback(
-      (cursor) => state.rpc<unknown>("getChatHistoryPage", [{ cursor, limit: CHAT_PAGE_SIZE }])
-        .then((page) => v.parse(ChatHistoryPageSchema, page)),
-      [state.rpc],
-    ),
-    startFrom: useCallback(
-      () => walkStart(oldest, state.transcriptSeeded), [oldest, state.transcriptSeeded]),
-  });
-
-  const transcript = useMemo(
-    () => mergeTranscript(history.fetched, state.messages),
-    [history.fetched, state.messages]);
+  const { history, transcript } = useChatHistory(
+    state.rpc, state.messages, state.transcriptSeeded);
 
   // Two clauses, both load-bearing. The connect frame settles the ordinary case
   // whatever the transcript turns out to hold, including empty. It is NOT sent

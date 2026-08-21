@@ -134,7 +134,7 @@ import {
   type EmailAdmission, type IncomingEmail,
   PeerHub, type PeerMessage, type ReceiveResult,
   // ── Read models: the folds a surface asks for, one implementation each ──
-  getAgentStatus, getChatHistoryPage, getToolList, readLatestSearchTree, readSearchTree,
+  getAgentStatus, getToolList, readLatestSearchTree, readSearchTree,
   readSearchNodeDetail, type SearchNodeDetail,
   listForkRuns, type ForkRunSummary,
   readNodeTranscript, type NodeTranscriptView,
@@ -144,7 +144,7 @@ import {
   type RecordObjectiveHandle, type RecordCellHandle, type ExplorationRecord,
   type HeadStep,
   buildPendingActions, type PendingAction,
-  type ChatHistoryEntry, type Page, type PageRequest,
+  type Page, type PageRequest,
   getRunTimeline, type TimelineSpan,
   getRunEvents, getRunSummaries, listRuns, type RunListEntry, type RunSummary,
   getWorkspaceDiff, getExecutorDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline,
@@ -1751,20 +1751,6 @@ export class OrchestratorAgent extends ActorAgent {
       // AIChatAgent array is the only count there is.
       fallbackMessageCount: this.messages.length,
     });
-  }
-
-  /**
-   * One page of the durable transcript, older-first within the page, newest
-   * page when called with no cursor.
-   *
-   * `@callable()` because the chat pane calls it over the socket. The pane is
-   * SEEDED by the SDK's own `get-messages` route — `Think.messages`, a bounded
-   * newest-window governed by `hydrationByteBudget` — and this is the only way
-   * to reach anything older than that window.
-   */
-  @callable()
-  async getChatHistoryPage(request?: PageRequest): Promise<Page<ChatHistoryEntry>> {
-    return getChatHistoryPage(this.boundSql, request ?? {});
   }
 
   async getToolList() {
