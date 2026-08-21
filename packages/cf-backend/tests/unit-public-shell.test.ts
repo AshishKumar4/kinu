@@ -25,6 +25,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import {
+  DISPLAY_FONT_FACE, DISPLAY_FONT_PATH,
   HERO_FACTS, RADII, REPO_URL, THEME_BLOCKS, THEME_BOOT, mark, markDocument, publicPage,
   MARK_IDS, KINU_MARK,
   type Mode, type Palette,
@@ -134,6 +135,40 @@ describe('public shell tokens are the app palette', () => {
     const app = block(':root')['--font-display'];
     expect(app).toBeString();
     expect(publicPage({ title: 't', body: '' })).toContain(`--font-display:${app!.replaceAll(', ', ',')}`);
+  });
+
+  test('the display face leads with the shipped webfont in both stylesheets', () => {
+    // The face itself, not just the stack string: the app declares the
+    // @font-face over the same asset path the shell inlines, and the shell
+    // preloads it. A path that drifts between the two is a landing page in
+    // the fallback face — exactly the drift this file exists to prevent.
+    expect(block(':root')['--font-display']).toStartWith('"Fraunces"');
+    expect(INDEX_CSS).toContain(`src: url("${DISPLAY_FONT_PATH}") format("woff2-variations")`);
+    const page = publicPage({ title: 't', body: '' });
+    expect(page).toContain(DISPLAY_FONT_FACE);
+    expect(page).toContain(`<link rel="preload" href="${DISPLAY_FONT_PATH}" as="font" type="font/woff2" crossorigin />`);
+  });
+
+  test('the webfont is the latin variable subset, inside its byte budget', () => {
+    // 67,304 B today ([opsz,wght] latin). The budget refuses the full-axes
+    // build (121 KB) and any unsubset swap; the licence must travel with the
+    // file because OFL requires it.
+    const file = resolve(import.meta.dir, '../public', `.${DISPLAY_FONT_PATH}`);
+    const bytes = readFileSync(file);
+    expect(new TextDecoder().decode(bytes.subarray(0, 4))).toBe('wOF2');
+    expect(bytes.byteLength).toBeLessThanOrEqual(70_000);
+    expect(readFileSync(resolve(file, '../OFL.txt'), 'utf8')).toContain('SIL Open Font License');
+  });
+
+  test('the landing page weight stays inside its envelope', () => {
+    // What a first visit downloads before images: the document (gzipped, as
+    // served) plus the display font. 93 KB today; the envelope catches an
+    // unbounded regression while leaving room for the landing's inline
+    // demos to grow deliberately.
+    const html = landingDocument("curl -fsSL 'https://kinu.run/install.sh' | bash");
+    const gz = Bun.gzipSync(new TextEncoder().encode(html)).byteLength;
+    const font = readFileSync(resolve(import.meta.dir, '../public', `.${DISPLAY_FONT_PATH}`)).byteLength;
+    expect(gz + font).toBeLessThanOrEqual(128 * 1024);
   });
 });
 

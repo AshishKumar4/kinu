@@ -187,7 +187,7 @@ export function landingDocument(
     <div class="say">
       <p class="eyebrow">The self-evolving agent platform</p>
       <h1 class="taglines" data-taglines>
-        ${TAGLINES.map((line, at) => `<span${at === 0 ? ' data-shown' : ''}>An agent of your own that <em>${line}</em>.</span>`).join('\n        ')}
+        ${TAGLINES.map((line, at) => `<span${at === 0 ? ' data-shown' : ''}>An agent of your own that <em class="hero-ink">${line}</em><span class="ink-dot">.</span></span>`).join('\n        ')}
       </h1>
       <p class="lede">It learns from your conversations and gets measurably better at your work. It builds its own tools from the patterns it has proven.</p>
       <p class="lede">On hard tasks it commands a swarm of subagents, scores every attempt, and keeps the branch that proved itself.</p>

@@ -115,19 +115,41 @@
    out as a floating four-sided box instead of a tab.
    ════════════════════════════════════════════════════════════════════ */
 
+/* The one webfont this product ships: Fraunces, variable [opsz 9-144,
+   wght 100-900], latin subset, 67 KB, self-hosted from public/assets — no
+   font CDN at runtime. The optical-size axis is the reason it exists: the
+   old Palatino stack has no opsz and a single working weight, so the 62px
+   hero and a 15px panel heading were the same drawing at two zooms. The
+   fallback stack below stays intact, so an unloaded font degrades to
+   exactly the face this product shipped before. Licence: OFL, vendored
+   beside the file. The signed-out shell declares the same face and
+   `unit-public-shell` holds the two identical, plus the file's byte
+   budget. */
+@font-face {
+  font-family: "Fraunces";
+  src: url("/assets/fonts/fraunces-latin-var.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
 html, body, #root {
   width: 100%; height: 100%; margin: 0;
   font-family: var(--font-ui);
+  /* Variable-font optical sizing follows rendered size (inherited), so the
+     display face self-adjusts between a hero and a panel heading. */
+  font-optical-sizing: auto;
 }
 
 :root {
-  /* type — three faces, no web fonts, no bytes over the wire.
+  /* type — three faces, one webfont (the display face above).
 
-     `--font-display` is a Palatino-family stack, and it is the one face here
-     that is not the operating system's UI font. Every landing page this design
-     was measured against sets a display face over a system fallback (omp.sh
-     puts Fraunces over "Iowan Old Style"; pi.dev puts Plantin over Georgia),
-     and a product whose largest type is `-apple-system` reads as a dashboard
+     `--font-display` leads with Fraunces and falls back to the Palatino
+     stack it replaced. Every landing page this design was measured against
+     sets a display face over a system fallback (omp.sh puts Fraunces over
+     "Iowan Old Style"; pi.dev puts Plantin over Georgia), and a product
+     whose largest type is `-apple-system` reads as a dashboard
      with headings in it. It is rationed to page titles and to the signed-out
      pages, never to UI at reading size. The signed-out shell declares the same
      stack and `unit-public-shell` asserts the two are identical, because the
@@ -136,7 +158,7 @@ html, body, #root {
      `--font-mono` carries a second job besides code: every eyebrow and section
      label is set in it (see `.p-eyebrow`), which is the label convention the
      same references share. */
-  --font-display: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", "TeX Gyre Pagella", P052, "Noto Serif", Georgia, serif;
+  --font-display: "Fraunces", "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", "TeX Gyre Pagella", P052, "Noto Serif", Georgia, serif;
   --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
   --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
 
@@ -468,45 +490,54 @@ html, body, #root {
      two modes that the whole direction is built on.
 
    ── DARK — the dyed face ──────────────────────────────────────────
-   Retuned 2026-08-20 against the README banner (docs/assets/banner-dark.svg):
-   the first pass kept the banner's canvas but let the ladder desaturate as it
-   rose, so cards, composer and event chrome — most of the pixels on a working
-   screen — read slate-grey rather than dyed. Every rung above the canvas now
-   carries at least the canvas's chroma (the dye deepens as the cloth folds),
-   and the fibre hairlines sit a step stronger than umber's, because a warm
-   line on a COOL ground needs more alpha to read as the weave than the same
-   line on a warm one.
+   Retuned 2026-08-21 (v3) against two verdicts on v2: the field read
+   slate-grey rather than dyed, and the umber palette still felt more
+   cohesive. Umber's cohesion is structural: its hairlines are its own
+   accent, so every line lives in the ground's hue family and the whole
+   screen is one material. v3 gives silk the same structure with silk's
+   two threads:
 
-   Ladder steps, as WCAG luminance ratios: recessed→bg 1.07, bg→sidebar
-   1.08, sidebar→surface 1.06, surface→elevated 1.10, elevated→overlay
-   1.10 — every rung at least as separated as umber's (1.06/1.04/1.04/
-   1.09/1.09), so the same "hierarchy from surface steps plus hairlines,
-   never shadows" rule still holds up. Worst-case text ratio across all
-   seven surfaces: text 11.2, text-2 6.4, text-3 4.7, accent-fg 9.7,
-   danger 5.0. ══ */
+   · The FIELD is the dye. Every rung above the canvas gains chroma as
+     it rises — the dye pooling where the cloth folds — instead of
+     fading toward grey. The canvas stays the banner's #111923 verbatim
+     (docs/assets/banner-dark.svg is the anchor).
+   · The LINES are the weft. The banner draws its own structure in
+     thread at 26-45% opacity; v2's hairlines sat at 16-32% and
+     composited to neutral grey, which killed the weave. v3 raises them
+     to 20/36/28 so a rule reads as pale thread over indigo, the same
+     reading as the banner's tree.
+
+   Ladder steps, as WCAG luminance ratios: recessed→bg 1.09, bg→sidebar
+   1.10, sidebar→surface 1.13, surface→elevated 1.12, elevated→overlay
+   1.15 — every rung wider than v2's (1.07/1.08/1.06/1.10/1.10), so
+   "hierarchy from surface steps plus hairlines, never shadows" now has
+   the steps to say it. Worst-case text ratio across all seven
+   surfaces, all on overlay: text 9.7, text-2 5.6, text-3 4.7,
+   accent-fg 8.5, danger 4.9. ══ */
 [data-palette="silk"] {
-  --c-recessed: #0B111C;   /* wells, tracks, inset code */
+  --c-recessed: #080F17;   /* wells, tracks, inset code */
   --c-bg:       #111923;   /* the canvas — banner --bg, verbatim */
-  --c-sidebar:  #15202E;   /* chrome: rails, panel headers */
-  --c-surface:  #192536;   /* card */
-  --c-elevated: #1E2C40;   /* raised: composer, dialogs, menus */
-  --c-overlay:  #23334A;   /* dialogs */
+  --c-sidebar:  #142230;   /* chrome: rails, panel headers */
+  --c-surface:  #192B44;   /* card */
+  --c-elevated: #1F334F;   /* raised: composer, dialogs, menus */
+  --c-overlay:  #253C5D;   /* dialogs */
   /* Same argument as umber: moving up a dark ladder reads as both
      "raised" and "a plane inside a card", so the two roles are one
      value here and only diverge on paper. */
-  --c-fill:     #1E2C40;
+  --c-fill:     #1F334F;
 
-  /* Hairlines are the FIBRE at low alpha, not the dye — a warm line on a
-     cool ground is what makes the weave visible at all. Umber draws its
-     rules the same structural way (accent alpha); the colour is what
-     tells the two palettes apart at a glance. */
-  --c-border:        rgba(227, 210, 174, 0.16);
-  --c-border-strong: rgba(227, 210, 174, 0.32);
-  --c-input-border:  rgba(227, 210, 174, 0.25);
+  /* Hairlines are the FIBRE — the weft crossing the dyed warp. At v2's
+     16-32% a warm line over indigo composited to neutral grey; at the
+     banner's own stroke strengths it stays visibly thread. Umber draws
+     its rules the same structural way (accent alpha); the colour is
+     what tells the two palettes apart at a glance. */
+  --c-border:        rgba(227, 210, 174, 0.20);
+  --c-border-strong: rgba(227, 210, 174, 0.36);
+  --c-input-border:  rgba(227, 210, 174, 0.28);
 
   --c-text:     #F4EFE6;   /* raw silk        15.5:1 on bg */
   --c-text-2:   #BFB6A9;   /* spun            8.8:1 */
-  --c-text-3:   #A69C8E;   /* dim             6.5:1 on bg, 4.8:1 on overlay */
+  --c-text-3:   #B0A795;   /* dim             6.9:1 on bg, 4.7:1 on overlay */
 
   --c-accent:    #E3D2AE;  /* the thread — fills, strokes, the winning line */
   /* The sheen — links, brand ink, active labels. Champagne rather than a
@@ -521,20 +552,20 @@ html, body, #root {
      on an indigo ground a blue status tone is the ground. */
   --c-success:  #9BC7A2;   /* 9.3:1 */
   --c-warning:  #DFAE72;   /* 8.8:1 */
-  --c-danger:   #E38A8A;   /* 7.0:1 */
+  --c-danger:   #EC9393;   /* 4.9:1 on overlay */
   --c-info:     #93BFC8;   /* 8.9:1 */
 
   --c-success-tint: rgba(155, 199, 162, 0.14);
   --c-warning-tint: rgba(223, 174, 114, 0.14);
-  --c-danger-tint:  rgba(227, 138, 138, 0.14);
+  --c-danger-tint:  rgba(236, 147, 147, 0.14);
   --c-info-tint:    rgba(147, 191, 200, 0.14);
   --c-neutral-tint: rgba(244, 239, 230, 0.07);
 
   /* The user's turn is the dye at full strength — the one plane that is
      more saturated than the canvas rather than lighter than it — under a
      thread border strong enough to catch light. */
-  --c-user-bg:     #1A2C48;
-  --c-user-border: rgba(227, 210, 174, 0.30);
+  --c-user-bg:     #1B3050;
+  --c-user-border: rgba(227, 210, 174, 0.32);
   /* The sheen the bubble wears: the fibre glancing off the top of the
      cloth. One narrow directional gradient, per the palette's own rule —
      never spread over a panel. */
@@ -552,16 +583,23 @@ html, body, #root {
 }
 
 /* ── LIGHT — the undyed face ───────────────────────────────────────
-   Raw silk is not white: it is a warm cream with a faint grey cast, so
-   the ground is that and paper is a tinted off-white rather than #FFF.
-   The structure follows the rule umber's light mode arrived at after
-   three attempts — near-neutral ground, PAPER cards, hairlines you can
-   actually see, real elevation — because that rule was right and only
-   its hue was ours to choose. Measured steps: paper:canvas 1.14,
-   canvas:chrome 1.12, paper:fill 1.22, canvas:recessed 1.17; the
-   hairline is 1.42:1 on paper, matching umber's 1.43 rather than the
-   1.19 that vanished. Worst-case text across all seven surfaces: text
-   10.3, text-2 5.1, text-3 4.7, accent-fg 7.2.
+   Rebuilt 2026-08-21 (v3) from the owner's verdict on v2: "certain
+   things are completely white when they should instead have been
+   darker than their surroundings." v2 put paper cards ABOVE a cream
+   canvas at 1.14, and on a working screen that read as white on white.
+   v3 inverts the ladder: the canvas is the brightest large plane, and
+   every working surface is DYED — a step down from the ground, the way
+   dyed swatches sit on undyed cloth. Only floating layers (composer,
+   dialogs, menus) rise above the canvas as paper, so "paper" now means
+   "in your hand", not "any card".
+
+   The canvas itself is untouched (#EFEBE0): the signed-out landing
+   builds on it and its light face is accepted — the inversion happens
+   entirely in the rungs around it. Measured steps: canvas:card 1.13,
+   canvas:chrome 1.05, card:fill 1.10, canvas:well 1.33, paper:canvas
+   1.14, paper:card 1.29. The hairline is 1.46:1 on the canvas (v2:
+   1.42). Worst-case text across all seven surfaces, all on the well:
+   text 9.1, text-2 5.8, text-3 4.9, accent-fg 6.4, statuses ≥ 5.0.
 
    Every token umber's light block declares is declared again here.
    `[data-mode="light"]` and `[data-palette="silk"]` carry equal
@@ -570,46 +608,46 @@ html, body, #root {
    umber's light one. Completeness is what makes the cascade
    deterministic, and `unit-palette-contrast` asserts it. ── */
 [data-palette="silk"][data-mode="light"] {
-  --c-recessed: #E0DACB;   /* wells, tracks, code */
-  --c-sidebar:  #E4DFD1;   /* chrome: rails, panel headers */
-  --c-fill:     #E9E4D7;   /* chips, segments, tracks, hover */
-  --c-bg:       #EFEBE0;   /* the canvas — undyed silk */
-  --c-surface:  #FCFAF4;   /* cards — paper, tinted, never #FFF */
-  --c-elevated: #FCFAF4;   /* raised — paper, lifted by shadow */
-  --c-overlay:  #FCFAF4;   /* dialogs — paper, lifted further */
+  --c-recessed: #D7CDB2;   /* wells, tracks, code — deepest dye */
+  --c-sidebar:  #EBE5D6;   /* chrome: rails, panel headers */
+  --c-fill:     #DED4BC;   /* chips, segments, tracks, hover — inside a card */
+  --c-bg:       #EFEBE0;   /* the canvas — undyed silk, the BRIGHT plane */
+  --c-surface:  #E6DECA;   /* cards, rows, panels — dyed, below the ground */
+  --c-elevated: #FDFAF3;   /* floating: composer, dialogs, menus — paper */
+  --c-overlay:  #FDFAF3;   /* dialogs — paper, lifted by shadow */
 
   /* Borders swap thread: on the undyed face the line is the DYE, which is
      the same reading as dark (the line is whichever thread the ground is
      not) and keeps a rule looking like the same rule in both modes. */
-  --c-border:        rgba(35, 63, 96, 0.20);
-  --c-border-strong: rgba(35, 63, 96, 0.34);
-  --c-input-border:  rgba(35, 63, 96, 0.26);
+  --c-border:        rgba(35, 63, 96, 0.22);
+  --c-border-strong: rgba(35, 63, 96, 0.38);
+  --c-input-border:  rgba(35, 63, 96, 0.28);
 
-  --c-text:     #202B36;   /* 13.8:1 on paper */
-  --c-text-2:   #4C5A66;   /*  6.8:1 */
-  --c-text-3:   #545F69;   /*  6.3:1 on paper, 4.7:1 on recessed */
+  --c-text:     #202B36;   /* 12.6:1 on the canvas */
+  --c-text-2:   #3D4956;   /*  8.0:1 on the canvas, 5.8:1 on the well */
+  --c-text-3:   #48545F;   /*  6.8:1 on the canvas, 4.9:1 on the well */
 
   --c-accent:    #2F5480;  /* the dye — fills, strokes, the winning line */
   --c-accent-fg: #234465;  /* deeper dye for ink, 9.6:1 on paper */
   --c-accent-on: #FBF7EE;  /* fibre ink on the dye, 7.3:1 */
   --c-accent-subtle: rgba(47, 84, 128, 0.16);
 
-  --c-success:  #2E6337;
-  --c-warning:  #7B5310;
-  --c-danger:   #9C3527;
-  --c-info:     #16606B;
+  --c-success:  #2A5A32;
+  --c-warning:  #6F4A0C;
+  --c-danger:   #8F2D27;
+  --c-info:     #135761;
 
-  --c-success-tint: rgba(46, 99, 55, 0.11);
-  --c-warning-tint: rgba(123, 83, 16, 0.12);
-  --c-danger-tint:  rgba(156, 53, 39, 0.11);
-  --c-info-tint:    rgba(22, 96, 107, 0.11);
+  --c-success-tint: rgba(42, 90, 50, 0.11);
+  --c-warning-tint: rgba(111, 74, 12, 0.12);
+  --c-danger-tint:  rgba(143, 45, 39, 0.11);
+  --c-info-tint:    rgba(19, 87, 97, 0.11);
   --c-neutral-tint: rgba(32, 43, 54, 0.08);
 
-  /* The user's turn stays the dye, a shade deeper than the first pass: on
-     cream, #E4EAF3 read as a generic pastel rather than dyed cloth, and the
-     border was too faint to say "thread". */
-  --c-user-bg:     #DBE4F0;
-  --c-user-border: rgba(35, 68, 101, 0.30);
+  /* The user's turn stays the dye — deeper than v2, because on a field of
+     dyed creams the bubble must read as the one BLUE plane, and its
+     border as thread. */
+  --c-user-bg:     #D8E3F2;
+  --c-user-border: rgba(35, 68, 101, 0.32);
   /* On the undyed face the sheen is the light itself — a paper glint. */
   --c-user-sheen:  rgba(255, 255, 255, 0.65);
 
@@ -618,9 +656,10 @@ html, body, #root {
 
   --c-scrim: rgba(18, 26, 38, 0.34);
 
-  /* Shadows are cool ink here, and they are the whole reason a paper card
-     on a cream canvas reads as an object. */
-  --shadow-card:    0 1px 2px rgba(24, 34, 48, 0.05), 0 2px 6px -2px rgba(24, 34, 48, 0.07);
+  /* Cards are dyed a step below the canvas, so tone and hairline carry
+     them; a shadow under a darker plane reads as a hole rather than a
+     lift. Shadow now means FLOATING — composer, dialogs, menus. */
+  --shadow-card:    none;
   --shadow-overlay: 0 16px 40px -14px rgba(18, 26, 38, 0.20), 0 2px 8px rgba(18, 26, 38, 0.07);
   --shadow-menu:    0 10px 24px -10px rgba(18, 26, 38, 0.18), 0 1px 3px rgba(18, 26, 38, 0.06);
   --shadow-composer: 0 -6px 20px -16px rgba(18, 26, 38, 0.14), 0 1px 2px rgba(24, 34, 48, 0.05);
