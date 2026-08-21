@@ -49,7 +49,7 @@ precedence rule Cloudflare documents unambiguously.
 
 ```bash
 git clone https://github.com/AshishKumar4/kinu.git
-cd Proteus
+cd kinu
 bun install
 ```
 

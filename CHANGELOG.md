@@ -70,13 +70,13 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Changed
 
-- **The product is Kinu, and it runs at https://kinu.run.** Formerly Kinu,
+- **The product is Kinu, and it runs at https://kinu.run.** Formerly Proteus,
   at a hostname on the author's personal zone. This is the only place that name
   appears: kinu.run is a new deployment on a dedicated zone, not a rename of a
   running one, so nothing migrates and no redirect, alias or compatibility path
   exists from the old origin.
 
-  The command is `kinu`. There is no `kinu` alias and no deprecation
+  The command is `kinu`. There is no `proteus` alias and no deprecation
   warning, because a new deployment has no installed base to keep working. The
   served install assets follow it: `/downloads/kinu`,
   `kinu-source.tar.gz` and `kinu-version.json`. The npm scope is `@kinu.run/*`.
