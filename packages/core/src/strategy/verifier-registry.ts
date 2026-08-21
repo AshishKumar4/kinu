@@ -40,22 +40,21 @@
 import * as v from 'valibot';
 import { SOLUTION_FILE, execRatioImplementation, runRatioMeasurement } from './exec-ratio';
 import { KinuError, refusalOf } from '../obs/error';
-import type { Measurement, Verifier, VerifierSpec } from './objective';
+import {
+  VERIFIER_KINDS,
+  type Measurement, type Verifier, type VerifierKind, type VerifierSpec,
+} from './objective';
 import { renderIssues, type JsonValue } from '../utils/json';
 import type { SwarmRefusal } from './swarm';
 
 /**
- * Every verifier kind that resolves. The set `VerifierSpec.kind` is closed over, and
- * the list a refusal prints.
- *
- * One member, and that is a statement rather than a stub: a kind is a real
- * instrument with a real spec schema, and the corpus that pays for this one
- * (`exec-ratio`) is the only measurement substrate the tree currently owns. A second
- * member arrives with its implementation, not before it.
+ * The vocabulary {@link VERIFIER_KINDS} closes and the implementations behind it are
+ * deliberately in two files. The set is re-exported here because this is where a
+ * reader looks for it, and it is DECLARED in `objective.ts` beside the field it
+ * closes so {@link swarmValidity} can check membership at call time without closing an
+ * import cycle.
  */
-export const VERIFIER_KINDS = ['exec-ratio'] as const;
-
-export type VerifierKind = (typeof VERIFIER_KINDS)[number];
+export { VERIFIER_KINDS, type VerifierKind };
 
 /**
  * What `kind:'exec-ratio'` requires of its `spec` — `RatioProblem` in FULL rather

@@ -58,6 +58,7 @@ import { BackgroundJobStore, initBackgroundJobsTable } from '../jobs/store';
 import { CONFINED_BACKGROUNDABLE_TOOLS, wrapToolsForBackground } from '../jobs/background-wrap';
 import type { BackgroundPolicy } from '../jobs/threshold';
 import { readProposalCode } from '../execution/code-fence';
+import type { JsonValue } from '../utils/json';
 import { nodeWorkspace, isolationDisclosure } from './node-workspace';
 import { TURN_WALL_CLOCK_ENVELOPE_MS } from '../config';
 import { BRANCH_PROPOSAL_WIDTH, SWARM_CONTEXTS } from './swarm';
@@ -299,6 +300,8 @@ export interface NodeAgentDeps {
    *  the tool is absent too rather than broken. */
   executeTool?: unknown;
   webSearch?: WebSearchProvider;
+  /** The report contract's gate; see {@link NodeLoopDeps.gradeReport}. */
+  gradeReport?: (candidate: string) => Promise<string | null>;
   /**
    * THE DEADLINE THIS NODE RUNS TO, observed between its own steps.
    *
@@ -342,6 +345,27 @@ export interface NodeLoopDeps {
   arbitrate: NodeArbiter | null;
   executeTool?: unknown;
   webSearch?: WebSearchProvider;
+  /**
+   * THE REPORT CONTRACT'S GATE: run the objective's instrument over what the node is
+   * about to report, and answer with the instrument's errors instead of accepting it.
+   *
+   * Returns null to let the report land, or the text the node reads as its next
+   * instruction. ABSENT where the run has no instrument — a judged run has nothing to
+   * gate on — and absent rather than a function that always accepts, because a check
+   * that passed and a check that never existed are different facts.
+   *
+   * IT DECIDES WHETHER THE INSTRUMENT RAN, NOT WHETHER THE ANSWER IS GOOD. A node that
+   * reports something the instrument measures at a poor value passes this and is scored
+   * low; a node whose answer the instrument cannot run at all is turned back with the
+   * reason. Grading stays with the engine — *No self-grading* — so the quantity a node
+   * would have to lie about is still one it never supplies.
+   *
+   * NOTHING BOUNDS THE RETRIES HERE and nothing should. The node's own step budget is
+   * already the bound: a node that cannot satisfy the instrument runs out of steps and
+   * ends unreported, which the search reads as a member that produced nothing. A retry
+   * count declared here would be a second bound with no measurement behind it.
+   */
+  gradeReport?: (candidate: string) => Promise<string | null>;
   /** Stream-inactivity watchdog override, in ms — the turn loop's own bound, whose
    *  default is five minutes and therefore untestable in a suite that has to finish. */
   stallTimeoutMs?: number;
@@ -471,7 +495,22 @@ function buildNodeToolSet(input: {
     rt: deps.rt,
     logger: deps.logger,
     report: {
-      report: async ({ status, content }) => {
+      report: async ({ status, content }): Promise<JsonValue> => {
+        // THE INSTRUMENT RUNS HERE, BEFORE THE REPORT LANDS. The candidate is read out
+        // of the content through {@link candidateOf} — the same function the engine
+        // reads it with at the barrier, so the text the gate measures and the text the
+        // search measures cannot be two different things.
+        const errors = await deps.gradeReport?.(
+          candidateOf(content.trim(), deps.rt.executor.languages),
+        );
+        if (errors !== undefined && errors !== null) {
+          // NOT WRITTEN TO `scratch.reported`, which is the whole of "blocks": the
+          // loop's terminal condition is a report having landed, so a refused one
+          // leaves the node running with the instrument's own words as its next
+          // instruction. Returned rather than thrown — a tool's refusal is its return
+          // value, the same shape the proposal tool answers an arbiter's denial with.
+          return { accepted: false, errors };
+        }
         scratch.reported = { status, content };
         return { received: true };
       },
@@ -527,17 +566,29 @@ export interface NodeReport {
   readonly conclusion: string;
 }
 
+/**
+ * The text an instrument is pointed at, from what a node wrote.
+ *
+ * ONE definition with two callers, and the second one is why it exists: the report
+ * contract's gate measures a candidate BEFORE the report lands, and the engine measures
+ * one AFTER. Two spellings of this extraction would let the gate accept an answer the
+ * barrier then measured differently, which is a node told its work passed and a search
+ * scoring something else.
+ */
+export function candidateOf(
+  conclusion: string, languages: readonly [string, ...string[]],
+): string {
+  const code = readProposalCode(conclusion, languages);
+  return code?.kind === 'runnable' ? code.code : conclusion;
+}
+
 export function readNodeReport(input: {
   readonly report: HeadReport;
   readonly reported: CapturedReport | null;
   readonly languages: readonly [string, ...string[]];
 }): NodeReport {
   const conclusion = input.reported?.content.trim() || input.report.summary.trim();
-  const code = readProposalCode(conclusion, input.languages);
-  return {
-    candidate: code?.kind === 'runnable' ? code.code : conclusion,
-    conclusion,
-  };
+  return { candidate: candidateOf(conclusion, input.languages), conclusion };
 }
 
 /**
@@ -858,6 +909,7 @@ function nodeLoopDeps(input: NodeAgentInput, deps: NodeAgentDeps): NodeLoopDeps 
   if (deps.mission !== undefined) loop.mission = deps.mission;
   if (deps.executeTool !== undefined) loop.executeTool = deps.executeTool;
   if (deps.webSearch !== undefined) loop.webSearch = deps.webSearch;
+  if (deps.gradeReport !== undefined) loop.gradeReport = deps.gradeReport;
   if (deps.stallTimeoutMs !== undefined) loop.stallTimeoutMs = deps.stallTimeoutMs;
   if (deps.backgroundPolicy !== undefined) loop.backgroundPolicy = deps.backgroundPolicy;
   return loop;

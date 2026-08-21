@@ -844,9 +844,11 @@ function blindSpots(seen: Claims): string {
     + ' prose — not here.',
     '  4. TRUTH is not checked, only EXISTENCE. A symbol that resolves may still be'
     + ' described wrongly, and a path that exists may hold nothing like what the'
-    + ' sentence says. Measured on 2026-08-19: `strategy/swarm.ts` lists six tested'
-    + ' paths and three of them, `research`, `audit` and `redteam`, are undeclared rows'
-    + ' that refuse to resolve. This gate passes that list.',
+    + ' sentence says. Measured on 2026-08-19: `strategy/swarm.ts` listed six tested'
+    + ' paths and three of them, `research`, `audit` and `redteam`, were undeclared rows'
+    + ' that refused to resolve — and this gate passed that list. Those rows were'
+    + ' declared on 2026-08-21; the example stays in the past tense because what it'
+    + " illustrates is this gate's reach rather than that defect.",
     '  5. MODEL-FACING STRINGS IN SOURCE are out of the corpus. `tools/clamp.ts` told'
     + ' the model to hand work to a fork on a surface with no fork action — a false'
     + ' claim in a `.ts`, assembled in a ternary. Nothing here reads it.',

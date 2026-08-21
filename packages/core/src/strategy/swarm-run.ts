@@ -155,7 +155,8 @@ import type {
   PublishingCarry, VerifierSource,
 } from './objective';
 import {
-  archiveRegionRefusal, configDigestOf, isTreeAdvance, judgeMarginalisationRefusal,
+  archiveRegionRefusal, configDigestOf, isTreeAdvance, judgeCallPool,
+  judgeMarginalisationRefusal, JUDGE_MARGINALISATION_MIN,
   BRANCH_PROPOSAL_WIDTH, SWARM_CONTEXTS, SWARM_TREE_ADVANCES,
 } from './swarm';
 import {
@@ -1348,6 +1349,79 @@ function answerProposal(input: {
 }
 
 /**
+ * THE REPORT CONTRACT (*The report contract*): the gate a node's own `report` call runs
+ * through when this run has an instrument.
+ *
+ * The owner's ask, and it is one sentence: *"If it's something that is verifiable, run
+ * and compute the metric/results — and block the report tool until it runs
+ * successfully, else return the error to the agent."* What shipped ran the instrument
+ * LATER, at the settle barrier, so a node whose answer the instrument could not run at
+ * all learnt nothing and arrived as an unmeasurable candidate with the node long gone.
+ * The information existed; nothing delivered it to the one agent that could act on it.
+ *
+ * IT GATES ON RUNNABILITY, NOT ON SCORE, and the distinction is the whole design. A
+ * candidate the instrument measures passes, whatever the number — grading stays at the
+ * barrier, because *No self-grading* means a node never supplies the quantity it would
+ * have to lie about. A candidate the instrument reports `unmeasurable` for, or throws
+ * on, is turned back with the reason as the node's next instruction.
+ *
+ * SERIALISED, for {@link measureChild}'s exact reason and not by analogy with it: every
+ * candidate is written to the SAME path, and nodes run in PARALLEL, so two gates racing
+ * would each measure whichever wrote last. The lane is one promise chain.
+ *
+ * THE LANE COSTS THE LAST NODE `width x instrument`, and that wait happens INSIDE its
+ * turn, under the stream-inactivity watchdog — which counts a silent tool call as a
+ * stall, deliberately and on measured grounds (`chat.ts`: "a tool call that never
+ * returns stalls the same turn through the same silence"). So a run whose instrument
+ * takes t seconds gives its last node `width x t` of silence to survive, against a
+ * five-minute default. It is stated rather than guarded because the alternative is a
+ * per-node artifact path, and where the candidate is written is the verifier contract's
+ * to decide, not this function's.
+ *
+ * A THROW IS THE INSTRUMENT BREAKING, and here it is still returned to the node rather
+ * than failing the run. At the barrier a throw means no number can be trusted; here it
+ * means this candidate could not be placed, and the node is the party that can try
+ * something else. The barrier keeps its own verdict either way — this gate decides
+ * nothing the run records.
+ */
+function reportGate(input: {
+  readonly ctx: MeasurementContext;
+  readonly verifier: ResolvedVerifier;
+}): (candidate: string) => Promise<string | null> {
+  const { ctx, verifier } = input;
+  let lane: Promise<unknown> = Promise.resolve();
+  return (candidate: string): Promise<string | null> => {
+    const measured = lane.then(async (): Promise<string | null> => {
+      let measurement: Measurement;
+      try {
+        // The WRITE is inside the try beside the measurement, so this function has one
+        // failure story rather than two: everything between placing the candidate and
+        // reading the verdict is the instrument's attempt, and the node hears about all
+        // of it. It also makes the returned promise total, which is what lets the lane
+        // below advance without a catch that would flatten a rejection into a value.
+        await ctx.vfs.writeFile(verifier.artifact, candidate);
+        measurement = await verifier.verify(ctx);
+      } catch (error) {
+        return `the verifier could not run over what you reported: `
+          + `${renderThrownChain({ cause: error })}. Fix the answer and report again.`;
+      }
+      if (measurement.kind === 'unmeasurable') {
+        return `the verifier ran and could not measure what you reported: ${measurement.detail}. `
+          + 'Fix the answer and report again — a report the instrument cannot read is a '
+          + 'candidate the search cannot score.';
+      }
+      return null;
+    });
+    // The lane advances on the MEASUREMENT rather than on the caller, so a node that is
+    // cancelled between the two cannot leave the next one measuring its file. No catch
+    // is needed and none is written: the function above returns the instrument's
+    // failures as text, so this promise does not reject.
+    lane = measured;
+    return measured;
+  };
+}
+
+/**
  * Measure one child: write it to the path the instrument reads, run the instrument,
  * and classify what came back.
  *
@@ -1413,12 +1487,29 @@ async function measureChild(input: {
  * everywhere else, and it would also lose the clamp disclosure, which is the one thing
  * about this scorer that was measured going silent.
  *
- * The BUDGET is the operator's shipped dial and not a new swarm axis. `maxEvalLLMCalls`
- * is the whole per-evaluation call pool that check generation and the ensemble share,
- * so `samples` is a REQUEST and the pool is its ceiling: on shipped defaults a
- * code-bearing candidate realises `min(samples, 4 − 1) = 3`, which is why a judged tree
- * asking for the marginalisation floor of 20 is answered by 3 and why that number is
- * reported rather than assumed.
+ * THE POOL IS FUNDED FROM THE REQUEST. `maxEvalLLMCalls` is the whole per-evaluation
+ * call pool that check generation and the ensemble share, and this path used to hand the
+ * evaluator the MCTS engine's shipped 4 — so a judged tree admitted at the
+ * marginalisation floor of 20 realised `min(20, 4 − 1) = 3`. {@link judgeCallPool} sizes
+ * the pool at `samples + 1` instead, so the clamp cannot bind.
+ *
+ * AN ENSEMBLE SHRINKS TWO WAYS AND BOTH ARE REFUSED HERE. The pool is one: it decides
+ * how many calls are ASKED FOR, and a shortfall there means the evaluator did not honour
+ * the budget it was handed. Dropped samples are the other, and they are the door the
+ * pool fix does not close: `completeWithinTimeout` returns null for a judge call that
+ * lost its race and `sampleJudgeScore` returns null for one that would not parse, so the
+ * median can be taken over far fewer opinions than were asked for. Under sustained rate
+ * limiting a request can legitimately spend most of its own envelope waiting to be sent
+ * — `PROVIDER_WAIT_BUDGET_MS` is 540s against a 600s judge envelope — so this is
+ * reachable rather than theoretical. Found by `SwarmRuntimeFix` while pacing the
+ * provider, and it is the same defect the pool fix removes arriving by another door: an
+ * ensemble admitted at one size and MEDIANED at another.
+ *
+ * SO THE REPORTED ENSEMBLE IS THE ONE THE MEDIAN WAS TAKEN OVER, `judgeSamplesUsed`,
+ * rather than the number asked for. A run whose realised marginalisation falls below
+ * `minEnsemble` fails rather than scoring: below the floor the measurement says the
+ * scorer is not worth building, and a caller who wants headroom against drops asks for
+ * more than the floor rather than being quietly given less.
  *
  * A THROWN judge is the instrument breaking and takes the run down through the same arm
  * a thrown verifier does (*The closed verifier registry*). It is NOT converted into a
@@ -1429,6 +1520,10 @@ async function judgeChild(input: {
   readonly rt: AgentRuntime;
   readonly mode: WorkMode;
   readonly samples: number;
+  /** The smallest median this run may be scored by: {@link JUDGE_MARGINALISATION_MIN}
+   *  down a tree, where the floor is stated, and 1 for a flat run, where it is not —
+   *  but where a median over nothing is still not an opinion. */
+  readonly minEnsemble: number;
   readonly task: string;
   /** The node's output AS WRITTEN — fences intact. Not the extracted artifact: the
    *  judge grades the answer, and stripping it to its code hides the reasoning the
@@ -1449,7 +1544,12 @@ async function judgeChild(input: {
     executor: rt.executor,
     explorer: rt.llm,
     judgeSamples: input.samples,
-    maxLLMCalls: DEFAULT_CONFIG.mcts.maxEvalLLMCalls,
+    // FUNDED AT THE REQUEST, which is the whole of the judge-ceiling fix. This used to
+    // be `DEFAULT_CONFIG.mcts.maxEvalLLMCalls` — the MCTS engine's dial, 4, sized for
+    // that engine's own `judgeSamples: 3` — so every judged swarm realised
+    // `min(samples, 3)` no matter what the marginalisation floor admitted. See
+    // {@link judgeCallPool}.
+    maxLLMCalls: judgeCallPool(input.samples),
   };
   let evaluation: BranchEvaluation;
   try {
@@ -1465,10 +1565,44 @@ async function judgeChild(input: {
       error: renderThrownChain({ cause: error }),
     };
   }
+  if (evaluation.judgeSamplesAttempted > 0
+    && evaluation.judgeSamplesUsed < input.minEnsemble) {
+    // THE DROPPED-SAMPLE DOOR. The calls were asked for and some of them answered with
+    // nothing — a timeout or an unparseable reply — so the median stands on fewer
+    // opinions than the floor this run was admitted at. Refused rather than scored,
+    // because a median over four samples reported as a twenty-sample ensemble is the
+    // silent downgrade in its purest form.
+    return {
+      kind: 'instrument-faulted',
+      error: `the judge ensemble answered with ${String(evaluation.judgeSamplesUsed)} usable `
+        + `samples of the ${String(evaluation.judgeSamplesAttempted)} asked for, below the `
+        + `${String(input.minEnsemble)} this run was admitted at, so its median is a different `
+        + 'scorer from the one validity checked. A judge call that times out or will not parse '
+        + 'is dropped, so ask for more than the floor where the provider is being rate-limited.',
+    };
+  }
+  if (evaluation.judgeSamplesAttempted > 0
+    && evaluation.judgeSamplesAttempted < input.samples) {
+    // UNREACHABLE BY CONSTRUCTION, and stated anyway. The pool above is sized so the
+    // clamp cannot bind; if it binds regardless, the evaluator did not honour the
+    // budget it was handed, and a candidate scored by a smaller ensemble than the one
+    // this run was admitted at is exactly the silent downgrade the fix exists to
+    // remove. It is the instrument breaking, so it takes the run down the way a thrown
+    // verifier does rather than returning a number nothing validated.
+    return {
+      kind: 'instrument-faulted',
+      error: `the judge ensemble realised ${String(evaluation.judgeSamplesAttempted)} of the `
+        + `${String(input.samples)} samples this run was admitted at, so its median is a different `
+        + 'scorer from the one validity checked. The per-evaluation pool was sized at '
+        + `${String(judgeCallPool(input.samples))} calls for exactly this reason.`,
+    };
+  }
   return {
     kind: 'judged',
     score: evaluation.score,
-    ensemble: evaluation.judgeSamplesAttempted,
+    // USED, not attempted: the ensemble is the number of opinions the median stands on,
+    // and reporting the number asked for would restate the request as a result.
+    ensemble: evaluation.judgeSamplesUsed,
     grounding: evaluation.grounding,
   };
 }
@@ -1813,9 +1947,6 @@ export async function runSwarm(
   /** Every ensemble size a candidate actually sampled, for the report's binding
    *  realisation. Empty for a run that scored by anything other than a judge. */
   const ensembles: number[] = [];
-  /** Realised sizes whose clamp has already been disclosed, so one run reports one event
-   *  per distinct size rather than one per candidate. */
-  const clampsReported = new Set<number>();
   /**
    * WHAT AN EARLIER ATTEMPT OF THIS SEARCH ALREADY SETTLED, put back.
    *
@@ -2001,6 +2132,14 @@ export async function runSwarm(
   if (deps.executeTool !== undefined) nodeDeps.executeTool = deps.executeTool;
   if (deps.webSearch !== undefined) nodeDeps.webSearch = deps.webSearch;
   if (deps.stallTimeoutMs !== undefined) nodeDeps.stallTimeoutMs = deps.stallTimeoutMs;
+  // THE REPORT CONTRACT, wired exactly where an instrument exists. A judged run gets no
+  // gate at all — an absent key, because a check that passed and a check that never
+  // existed are different facts — and the ABSENCE is what makes a judged node's report
+  // land the way it always did.
+  if (verifier && ctx && measured) {
+    const grade = reportGate({ ctx, verifier });
+    nodeDeps.gradeReport = grade;
+  }
 
   let lost = 0;
   let aborted = false;
@@ -2759,6 +2898,11 @@ export async function runSwarm(
           : judgeSamples !== null
             ? await judgeChild({
               rt: deps.rt, mode: deps.mode, samples: judgeSamples, task: resolved.task,
+              // The floor is stated over TREE selectors only, so a flat judged run is
+              // held to 1 — an ensemble that answered nothing is still not an opinion.
+              minEnsemble: isTreeAdvance(resolved.config.advance.kind)
+                ? JUDGE_MARGINALISATION_MIN
+                : 1,
               answer: expansion.answer,
               siblings: siblings.map((other) => other.answer),
               // WP-A5's band loophole: a prose-only candidate is capped at the fail
@@ -2867,31 +3011,24 @@ export async function runSwarm(
       }
       if (outcome?.kind === 'judged' && outcome.ensemble > 0) {
         // The ensemble this candidate ACTUALLY sampled. Collected rather than
-        // recomputed from the knobs, and the clamp is disclosed the moment it binds —
-        // once per distinct realised size, which is the discipline the engine's own
-        // seam and the heads controller's both follow. Zero attempts is excluded here
-        // and not counted as a clamp of zero: an evaluation that short-circuited before
-        // the ensemble never asked.
+        // recomputed from the knobs, because the realisation is the fact and the knobs
+        // are the request. Zero attempts is excluded: an evaluation that
+        // short-circuited before the ensemble never asked, which is not a realisation
+        // of zero.
         ensembles.push(outcome.ensemble);
-        // And onto the run's ledger row, which is where a surface can read it: the
-        // settle report discloses this clamp to the caller of THIS call, and a
+        // And onto the run's ledger row, which is where a surface can read it: a
         // measurement disclosed once and persisted nowhere is a measurement taken and
         // dropped. The store keeps the smallest any candidate reached.
+        //
+        // A `swarm.judge_ensemble_clamped` event used to sit here, emitted once per
+        // distinct realised size when a candidate came back below the request. It is
+        // GONE rather than quietened: the per-evaluation pool is now sized from the
+        // request (`judgeCallPool`), so a shortfall is no longer a disclosed downgrade
+        // but a broken instrument, and `judgeChild` fails the run on it. The two
+        // engines that still borrow the shipped dial keep their own events —
+        // `mcts.judge_ensemble_clamped` and `head.judge_ensemble_clamped` — because
+        // there the clamp is still reachable and still honest.
         searchLedger.observeJudgeEnsemble(rootId, outcome.ensemble);
-        if (judgeSamples !== null
-          && outcome.ensemble < judgeSamples
-          && !clampsReported.has(outcome.ensemble)) {
-          clampsReported.add(outcome.ensemble);
-          log.event('swarm.judge_ensemble_clamped', {
-            preset: resolved.preset,
-            root_id: rootId,
-            depth: childDepth,
-            grounding: outcome.grounding,
-            judge_samples_requested: judgeSamples,
-            judge_samples_realised: outcome.ensemble,
-            max_eval_llm_calls: DEFAULT_CONFIG.mcts.maxEvalLLMCalls,
-          });
-        }
       }
       if (score !== null) {
         backpropagate(sql, expansion.id, score);

@@ -28,7 +28,7 @@
  * derived" and "Refusals".
  */
 import {
-  isPresetPoint, NAMED_SWARM_PRESETS, settleOf, SWARM_PRESET_POINTS,
+  NAMED_SWARM_PRESETS, settleOf, SWARM_PRESET_POINTS,
   type HeadRunView, type NamedSwarmPreset, type SwarmConfig, type SwarmPresetRow,
   type SwarmSettle,
 } from "@kinu.run/core";
@@ -53,12 +53,12 @@ export interface SwarmAxisRow {
 /**
  * What a run's recorded label says about its resolution.
  *
- * Three cases and not two, because a preset that CANNOT RESOLVE is a different
- * fact from one that resolved to something: three of the rows in
- * `SWARM_PRESET_POINTS` are undeclared — each names a tagged arm whose parameter
- * the preset table never stated — and a run under one of those names has no tuple
- * to show. Rendering it as an empty axis list would read as "the axes are unknown"
- * when what is true is "this row cannot be constructed as printed".
+ * Two cases. There were three: a preset row could be UNDECLARED — naming a tagged arm
+ * whose parameter the preset table never stated — and a run under one of those names
+ * had no tuple to show, so rendering it as an empty axis list would have read as "the
+ * axes are unknown" when what was true is "this row cannot be constructed as printed".
+ * Every row is declared now, the arm is gone from `SWARM_PRESET_POINTS`, and this
+ * union follows it rather than keeping a case nothing can produce.
  */
 export type SwarmResolution =
   | {
@@ -73,12 +73,6 @@ export type SwarmResolution =
        *  surface labels them as the preset's rather than as the run's. */
       readonly depth: number;
       readonly branches: number;
-    }
-  | {
-      readonly kind: "undeclared";
-      readonly preset: NamedSwarmPreset;
-      /** Exactly what the preset table has not stated. */
-      readonly undeclared: string;
     }
   | { readonly kind: "custom"; readonly label: string };
 
@@ -97,10 +91,8 @@ export function swarmResolutionOf(label: string | null | undefined): SwarmResolu
   const preset = NAMED_SWARM_PRESETS.find((candidate) => candidate === named);
   if (preset === undefined) return { kind: "custom", label: named };
   // Widened to the declared row type on the way out of the table: the table is
-  // `as const`, so its own inferred type is the seven literal rows and the guard
-  // has no union left to narrow.
+  // `as const`, so its own inferred type is the six literal rows.
   const row: SwarmPresetRow = SWARM_PRESET_POINTS[preset];
-  if (!isPresetPoint(row)) return { kind: "undeclared", preset, undeclared: row.undeclared };
   return {
     kind: "preset",
     preset,
@@ -132,8 +124,12 @@ export function swarmAxisRows(config: SwarmConfig): readonly SwarmAxisRow[] {
     },
     {
       axis: "advance",
+      // `≥` and not `τ`. This number is the DISTANCE a candidate must put between
+      // itself and its cell's occupants, and τ is the symbol every published filter
+      // uses for a SIMILARITY ceiling — the one conversion `archiveRegionRefusal`
+      // exists to catch, printed here in the direction that would cause it.
       value: config.advance.kind === "archive"
-        ? `archive τ${config.advance.novelty}`
+        ? `archive ≥${config.advance.novelty}`
         : config.advance.kind,
     },
     {

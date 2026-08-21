@@ -124,14 +124,17 @@ A preset fixes the search. The caller supplies the objective. Those are the two
 halves of a call and they never mix. A `config` is axes only, and a named preset
 does not accept one at all.
 
-Seven presets exist and four of them resolve:
+All seven presets resolve:
 
 | preset | reach for it when | `objective` |
 | --- | --- | --- |
 | `ideate` | you want a set of distinct approaches and nothing has to rank them | refused, because there is no value signal |
 | `optimise` | you can measure the quantity you want to improve | required |
 | `prove` | a checker accepts a candidate or it does not, and that verdict is the score | required, and it names the checker |
-| `custom` | none of the three fits, so state all six axes in `config` under a `label`, optionally seeded from `from` | as the axes require |
+| `research` | you want coverage of a subject rather than one best answer | required, with a coverage `key` |
+| `audit` | you want coverage of a class of findings | required, with a coverage `key` |
+| `redteam` | you want coverage of a set of tactics | required, with a coverage `key` |
+| `custom` | none of the six fits, so state all six axes in `config` under a `label`, optionally seeded from `from` | as the axes require |
 
 `ideate` is flat by construction. `advance:'none'` expands the root once and
 stops, so the search stays at one level. Its row is depth 1 and 5 branches.
@@ -140,13 +143,18 @@ branches. `prove` searches deepest, at depth 7 and 3 branches, because a
 checker refutes a wrong branch instead of letting a plausible score carry it
 down.
 
-Three of the seven do not resolve, and each refusal names what is missing.
-`research` and `audit` are given `carry:'artifacts'`, and `redteam` is given
-`advance:'archive'`. Each of those arms requires a threshold the preset table
-does not state, and nothing here invents one, so `resolveSwarm` refuses the call
-and quotes the reason. `redteam` used to resolve. It stopped when the novelty
-rejection test moved onto the `archive` arm, and that cost is recorded here.
-State the axes as `custom` instead.
+`research`, `audit` and `redteam` are archive runs at depth 1 and 4 branches. They
+differ from each other in what their `key` means and in where survivors go:
+`research` and `audit` carry `artifacts`, which publishes; `redteam` carries
+`elites`, which keeps its corpus in the workspace that asked for it.
+
+Three of these rows did not resolve until the parameters their tagged arms require
+were stated. Neither number is this table's own. The archive novelty floor is
+Rainbow Teaming's τ=0.6 CONVERTED — τ is a similarity ceiling and this axis is a
+distance floor, so the row states 0.4 — and the artifacts threshold is
+`craftExtractionThreshold`, the pass-band midpoint this repository already
+publishes search artifacts at. A preset never implicitly declares a threshold it
+does not state; it states one it can derive, or it does not resolve.
 
 A named preset is never modified. Resolution maps a preset name to a full axis
 tuple (`resolve(preset) -> SwarmConfig`) with every row fully specified, and a

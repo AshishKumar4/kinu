@@ -24,7 +24,8 @@ import {
 } from '../src/index';
 import { AGENTS_ACTION_FIELDS } from '../src/tools/agents-tool';
 import {
-  NAMED_SWARM_PRESETS, SWARM_PRESETS, SWARM_PRESET_POINTS, isPresetPoint, resolveSwarm,
+  NAMED_SWARM_PRESETS, SWARM_PRESETS, SWARM_PRESET_POINTS, resolveSwarm,
+  type SwarmInput,
 } from '../src/strategy/swarm';
 import { createTestRuntime } from '@kinu.run/test-utils';
 
@@ -255,31 +256,33 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toMatch(/scores each one with the verifier you named in `objective`/);
   });
 
-  test('every surface that enumerates presets names the ones that resolve, and says so about the ones that do not', () => {
-    // Three of six named presets stopped resolving — SWARM_PRESET_POINTS records
-    // the gap rather than inventing a threshold, so `resolveSwarm` refuses the row
-    // outright — while `prove`, the one preset with an exact checker, joined the
-    // advertised enum and was named in no sentence anywhere. Four hand-written
-    // copies of one list is how both happened, so the list is one constant now and
-    // this test is derived from the TABLE: declaring a threshold for research /
-    // audit / redteam fails it until the doctrine stops calling them
-    // unconstructible, and an eighth preset fails it until the doctrine names it.
+  test('every surface that enumerates presets names all six, and every one of them resolves', () => {
+    // This test used to check the opposite half of the same property. Three of six
+    // named presets did not resolve — `SWARM_PRESET_POINTS` recorded the gap rather
+    // than inventing a threshold — and the doctrine had to SAY so, because a model can
+    // select one from the advertised enum. It now checks that no such sentence
+    // survives: the rows are declared, the presets run, and doctrine describing an
+    // absence that no longer exists is exactly the drift one shared constant prevents.
     const doctrine = SWARM_PRESET_DOCTRINE.join(' ');
     for (const preset of SWARM_PRESETS) expect(doctrine).toContain(preset);
+    expect(doctrine).not.toContain('UNCONSTRUCTIBLE');
 
-    const unconstructible = NAMED_SWARM_PRESETS.filter((preset) => !isPresetPoint(SWARM_PRESET_POINTS[preset]));
-    expect(unconstructible).toEqual(['research', 'audit', 'redteam']);
-    const refused = SWARM_PRESET_DOCTRINE.filter((line) => line.includes('UNCONSTRUCTIBLE'));
-    expect(refused).toHaveLength(1);
-    for (const preset of unconstructible) expect(refused[0]).toContain(preset);
-    // …and no preset that DOES resolve is swept into that sentence.
-    for (const preset of NAMED_SWARM_PRESETS.filter((p) => isPresetPoint(SWARM_PRESET_POINTS[p]))) {
-      expect(refused[0]).not.toContain(preset);
+    // Derived from the TABLE rather than from a second list, so a row that stops being
+    // declared fails here instead of being described as working.
+    for (const preset of NAMED_SWARM_PRESETS) {
+      expect(SWARM_PRESET_POINTS[preset].config).toBeDefined();
     }
-    // The claim is true of the engine, not just of the prose.
-    for (const preset of unconstructible) {
-      const resolved = resolveSwarm({ preset, task: 'x', key: 'k' });
-      expect(resolved).toHaveProperty('reason');
+    // And the claim is true of the engine, not just of the prose.
+    for (const preset of NAMED_SWARM_PRESETS) {
+      // An archive preset needs its coverage key to be legal, and the key is added as a
+      // statement rather than spread conditionally: an absent key must be an ABSENT KEY,
+      // which is the same rule the resolver reads to tell "the caller stated none" from
+      // "the caller stated undefined".
+      const archive = SWARM_PRESET_POINTS[preset].config.advance.kind === 'archive';
+      const call: SwarmInput = archive
+        ? { preset, task: 'x', key: 'k' }
+        : { preset, task: 'x' };
+      expect(resolveSwarm(call)).not.toHaveProperty('reason');
     }
   });
 

@@ -306,6 +306,27 @@ export const CLAIMS: readonly Claim[] = [
       + ' strictly weaker.',
   },
   {
+    work: 'rainbow-teaming',
+    value: '0.4',
+    says: 'NOT a number the paper states. It is this repository\'s archive novelty floor,'
+      + ' derived as 1 − 0.6 because `advance:{kind:"archive"}` takes a DISTANCE floor'
+      + ' where the paper states a SIMILARITY ceiling. Registered so the conversion and'
+      + ' its caveat travel with the digit.',
+    where: NO_LOCATOR,
+    unit: 'Jaccard distance floor, converted from a BLEU similarity ceiling',
+    hand: 'artifact',
+    via: 'agent://SpecAudit.SpecEvidence',
+    verifiedBy: 'derived here from the 0.6 entry above; no paper states 0.4',
+    note: 'TWO QUALIFIERS ARE LOST AND BOTH ARE STATED RATHER THAN HIDDEN. The paper'
+      + ' ablates a PARENT-CHILD filter and this floor is measured against the ARCHIVE,'
+      + ' which is a different and stronger mechanism; and the paper measures BLEU'
+      + ' similarity where `noveltyDistance` is one minus Jaccard token overlap, which is'
+      + ' a different metric. So this is the only measured rejection bar in evidence,'
+      + ' adopted for the SHAPE of the rule rather than for its magnitude, and nobody has'
+      + ' measured a floor for these archives. A run that finds cells collapsing or'
+      + ' starving should move it and record what it measured.',
+  },
+  {
     work: 'lats',
     value: '4',
     says: 'the number of independent assertions LATS generates per candidate',
