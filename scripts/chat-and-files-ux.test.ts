@@ -461,3 +461,38 @@ describe('a node the provider rate-limited, as the run list reads it', () => {
     expect(observed.runNodes[ABORTED_NODE]?.dot).toBe('p-dot-danger');
   });
 });
+
+/**
+ * A STUBBED FIXTURE MUST NOT RENDER A FAILURE STATE.
+ *
+ * The sidebar footer read "Profile unavailable" in every gallery capture any
+ * agent took, while `/api/user/profile` sat in the stub table with a payload.
+ * The cause was not the fetch racing the stub — the stub is installed at module
+ * scope, before React mounts. The payload simply did not satisfy the schema the
+ * CLIENT parses it with: `UserProfileSchema` requires `displayName`, the stub
+ * omitted it, valibot threw, and the component's own catch rendered the failure.
+ *
+ * So the assertion is over the RENDERED state rather than over the table: a
+ * table that type-checks and still fails the client's parse is exactly what
+ * happened, and only a browser can see the difference.
+ */
+describe('the gallery shell photographs a healthy neighbour', () => {
+  test('a frame whose stub carries a profile never renders "Profile unavailable"', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1280, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=forks`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('aside');
+      // The footer settles once the profile call resolves either way, so the
+      // read waits for the loading word to leave rather than for a fixed delay.
+      await page.waitForFunction(
+        () => !(document.querySelector('aside')?.textContent ?? '').includes('loading...'),
+        { timeout: 8000 },
+      );
+      const footer = await page.evaluate(() => document.querySelector('aside')?.textContent ?? '');
+      await page.close();
+      expect(footer).not.toContain('Profile unavailable');
+      expect(footer).toContain('@');
+    });
+  }, 120_000);
+});
