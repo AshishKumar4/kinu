@@ -11,9 +11,24 @@
  *    "Account > Workers Observability > Read". Mint once: dash.cloudflare.com
  *    -> My Profile -> API Tokens -> Create Token.
  *
+ * `--worker` is the SERVICE name the account files events under, not the
+ * project's name. Measured over 48h on 2026-08-21, the account carried
+ * `proteus` (288,797 events — the live deployment, still on its pre-rename
+ * script name), `kinu-staging` (186) and `proteus-staging` (1). So the default
+ * below answers nothing until the rename reaches a deploy, and asking for a
+ * service that has no events is indistinguishable from asking wrongly — hence
+ * the census is written down here.
+ *
+ * Grouping and percentiles, for anyone extending this: the operator set is
+ * `count`, `avg`, `min`, `max`, `sum`, `stddev`, `uniq`, `median`, `p25`,
+ * `p75`, `p90`, `p95`, `p99`. There is no `p50` — it answers HTTP 400, and
+ * `median` is its name. `$workers.wallTimeMs` mixes request duration with
+ * WebSocket lifetime (measured median 119,960 ms on this account), so a
+ * latency question has to exclude the upgrades before it means anything.
+ *
  * Usage:
- *   bun scripts/prod-logs.ts live [--worker kinu] [--seconds 120] [--grep swarm]
- *   bun scripts/prod-logs.ts query [--worker kinu] [--since 6h] [--grep head.]
+ *   bun scripts/prod-logs.ts live [--worker proteus] [--seconds 120] [--grep swarm]
+ *   bun scripts/prod-logs.ts query [--worker proteus] [--since 6h] [--grep head.]
  */
 import { spawn } from 'node:child_process';
 import * as v from 'valibot';
@@ -121,6 +136,13 @@ async function query(args: Args): Promise<void> {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify({
+        // REQUIRED, and its absence is why this half of the tool had never
+        // answered anything: the endpoint validates the envelope before the
+        // query and rejects a body without it as
+        // `ZodError … path: ["queryId"] … Invalid input` under HTTP 400.
+        // Measured against the live account 2026-08-21. It names the saved
+        // query the run is filed under, so it is a constant rather than a flag.
+        queryId: 'kinu-prod-logs',
         timeframe: { from: now - args.since, to: now },
         view: 'events',
         limit: 500,
