@@ -29,8 +29,34 @@ if (!existsSync(staged)) {
   throw new Error(`Nimbus runtime assets missing at ${nimbusAssets} — is @nimbus-sh/worker installed?`);
 }
 
+/**
+ * The client graph reaches node builtins through `@kinu.run/core` imports:
+ * dev serves the barrel as source, so every module it re-exports loads in the
+ * browser and an externalized `node:crypto` throws at module init, blanking
+ * the app before React mounts. The production build tree-shakes these away.
+ * Resolve them to stubs for the CLIENT environment only — the worker keeps
+ * real node builtins (nimbus-route hashes with them).
+ */
+const clientNodeStubs = resolve(__dirname, "client-node-stubs.ts");
+
+const stubClientNodeBuiltins = {
+  name: "kinu:stub-client-node-builtins",
+  enforce: "pre" as const,
+  // The worker environment keeps real node builtins (nimbus-route hashes
+  // with them); only the browser graph gets stubs.
+  resolveId(this: { environment?: { name: string } }, source: string): string | null {
+    if (this.environment !== undefined && this.environment.name !== "client") return null;
+    if (source === "node:crypto" || source === "node:async_hooks") return clientNodeStubs;
+    return null;
+  },
+};
 export default defineConfig({
-  plugins: [agents(), react(), cloudflare(), tailwindcss()],
+  plugins: [stubClientNodeBuiltins, agents(), react(), cloudflare(), tailwindcss()],
+  // The fabric outbox is the one pre-bundled dep that imports a stubbed
+  // builtin; excluded, it serves as source and the resolveId hook reaches it.
+  optimizeDeps: {
+    exclude: ["@nimbus-sh/fabric/outbox.js"],
+  },
   resolve: {
     alias: {
       "@": resolve(__dirname, "src"),
