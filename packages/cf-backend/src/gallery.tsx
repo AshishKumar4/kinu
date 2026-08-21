@@ -3539,6 +3539,42 @@ function TranscriptFrame() {
   );
 }
 
+/**
+ * The frames that mount the Exploration surface, and the workspace they mount
+ * it in.
+ *
+ * The surface builds its full-screen permalink out of the route's `agentId`, so
+ * a fixture that renders it bare renders every control EXCEPT that one — and a
+ * control no fixture can draw is a control no screenshot gate can ever catch
+ * regressing. Routed the way the `settings` and `forkfull` frames already are,
+ * which is the same fact about two other pages.
+ */
+const EXPLORATION_FRAMES = {
+  forks: true, forkconfig: true, forkmerge: true, forkpreset: true,
+  forkfanin: true, forkrefused: true, forkrunning: true, forklive: true,
+} satisfies Record<string, true>;
+const GALLERY_WORKSPACE = "checkout-fixes";
+
+/**
+ * Every swarm-config disclosure on the frame, opened once it has rendered.
+ *
+ * A fixture-only affordance, and deliberately outside the component: the card
+ * ships shut and must keep shipping shut, so opening it through a new prop
+ * would put a review convenience into the product's own contract. `details`
+ * carries its openness in the DOM, so the fixture sets exactly that.
+ */
+function OpenConfigDisclosures({ children }: { children: React.ReactNode }) {
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      for (const card of document.querySelectorAll<HTMLDetailsElement>("details[data-swarm-config]")) {
+        card.open = true;
+      }
+    }, 300);
+    return () => { clearTimeout(timer); };
+  }, []);
+  return <>{children}</>;
+}
+
 async function mount() {
   // A public page is a whole document, not a component: it replaces this one
   // and React never mounts. Checked before anything else so no app CSS or
@@ -3552,6 +3588,14 @@ async function mount() {
   let entries = ["/"];
   if (frame === "shell") node = <Shell />;
   else if (frame === "forks") node = <Shell surface="Exploration" mctsTrees={MCTS_TREES} rpc={forkRpc} />;
+  // The same surface with its config disclosure OPEN. The card is shut by the
+  // owner's own ruling — config is asked for, never shoved at a reader — so no
+  // frame could photograph what it holds, and `flat · 5 branches` is an owner
+  // item that has to be reviewable. Opened through the disclosure's own stable
+  // hook rather than by a prop, so the shipped default stays shut.
+  else if (frame === "forkconfig") {
+    node = <OpenConfigDisclosures><Shell surface="Exploration" mctsTrees={MCTS_TREES} rpc={forkRpc} /></OpenConfigDisclosures>;
+  }
   else if (frame === "forkmerge") node = <Shell surface="Exploration" rpc={mergeFirstRpc} />;
   else if (frame === "forkpreset") node = <Shell surface="Exploration" rpc={provePresetRpc} />;
   else if (frame === "forkfanin") node = <Shell surface="Exploration" rpc={swarmFanInRpc} />;
@@ -3633,6 +3677,10 @@ async function mount() {
     const { default: HomePage } = await import("@/pages/HomePage");
     node = <div className="h-screen p-bg p-text"><HomePage /></div>;
   } else node = <All />;
+  if (frame !== null && frame in EXPLORATION_FRAMES) {
+    entries = [`/workspace/${GALLERY_WORKSPACE}`];
+    node = <Routes><Route path="/workspace/:agentId" element={node} /></Routes>;
+  }
   createRoot(document.getElementById("root")!).render(
     <StrictMode><MemoryRouter initialEntries={entries}>{node}</MemoryRouter></StrictMode>,
   );
