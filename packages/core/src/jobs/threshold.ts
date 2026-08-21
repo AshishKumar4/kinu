@@ -163,11 +163,8 @@ export async function withBackgroundThreshold<T>(
     jobId: outcome.jobId,
     kind,
     message:
-      `The "${kind}" call outran the ${Math.round(thresholdMs / 1000)}s foreground threshold, so it ` +
-      `is now background job ${outcome.jobId} — still running, NOT cancelled: its effects will land, ` +
-      `and you will be woken with the full result when it settles. Until that wake arrives the job has ` +
-      `no result to read, so do not check on it and do not start the same work again (a second copy ` +
-      `would race this one). Do other work if you have any; otherwise end your turn.`,
+      `Outran the ${Math.round(thresholdMs / 1000)}s foreground window; backgrounded — ` +
+      `still running, not cancelled. The settled result will wake you.`,
   };
 }
 
@@ -209,12 +206,7 @@ export async function withSpawnDetach<T>(
     background: true,
     jobId: outcome.jobId,
     kind,
-    message:
-      `Spawned. The "${kind}" spawn is running as background job ${outcome.jobId} — spawned work ` +
-      `never blocks your turn, and it needs nothing from you while it runs. You will be woken with ` +
-      `the settled result when it completes; until that wake the job has no result to read, so do ` +
-      `not check on it and do not spawn the same work again. Do other work if you have any; ` +
-      `otherwise end your turn.`,
+    message: `Spawned; the settled result will wake you.`,
   };
 }
 
