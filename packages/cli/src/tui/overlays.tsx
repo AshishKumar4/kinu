@@ -8,6 +8,7 @@ import type { ProviderFailure } from '@kinu.run/core';
 import type { AgentChangelogView, ForkPoint } from '../agent-client';
 import type { DeviceConnectPromptState } from './use-device-connect';
 import { clipText } from './format';
+import { CHANGE_KIND_GLYPH } from './glyphs';
 import { tuiColors } from './theme';
 
 export interface OverlayGeometry {
@@ -246,11 +247,6 @@ interface ChangelogOverlayProps {
   onSelect: (entry: ChangelogEntry) => void;
 }
 
-const CHANGELOG_GLYPH = {
-  scaffold: '⟳', tool: '⚒', view: '▦', fact: '✦', gepa: '◬', replay: '⏱', outcomes: '☑',
-  prompt_section: '✎',
-} satisfies Record<ChangelogEntry['kind'], string>;
-
 /** The Evolution Changelog digest (/changelog): every self-change with its
  *  evidence number; Enter reverts the selected line through the real
  *  rollback paths. Keeping is the default — closing the overlay keeps all. */
@@ -259,7 +255,7 @@ export function ChangelogOverlay({ view, terminal, onSelect }: ChangelogOverlayP
   const innerWidth = Math.max(1, paletteWidth - 4);
   const options: SelectOption[] = view.entries.map((entry, index) => ({
     name: clipText(
-      `${String(index + 1).padStart(2)}. ${CHANGELOG_GLYPH[entry.kind]} ${entry.summary.replace(/\s+/g, ' ')}`,
+      `${String(index + 1).padStart(2)}. ${CHANGE_KIND_GLYPH[entry.kind]} ${entry.summary.replace(/\s+/g, ' ')}`,
       innerWidth,
     ),
     description: clipText(`${entry.evidence}${entry.revert ? ' · Enter reverts' : ' · informational'}`, innerWidth),

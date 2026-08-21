@@ -96,5 +96,6 @@
   "movable packages/cli/src/provider-guidance.ts",
   "movable packages/cli/src/tui/context-status.ts",
   "movable packages/cli/src/tui/format.ts",
+  "movable packages/cli/src/tui/glyphs.ts",
   "movable packages/cli/src/tui/input-state.ts"
 ]
