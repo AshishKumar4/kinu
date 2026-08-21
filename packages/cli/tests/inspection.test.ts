@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
@@ -287,8 +287,13 @@ describe("CLI inspection commands", () => {
 
     const stored = runCli(home, ["model", "localtest"], llmEnv);
     expect(stored.stdout.toString()).toContain("workers-ai/@cf/meta/llama-3.1-8b-instruct");
-    expect(JSON.parse(readFileSync(join(home, "config.json"), "utf8")).model)
-      .toBe("workers-ai/@cf/meta/llama-3.1-8b-instruct");
+    // Workspace-scoped on purpose: a workspace's model choice must never become
+    // every other command's default, so the global config gains no model here.
+    const configPath = join(home, "config.json");
+    const globalModel = existsSync(configPath)
+      ? v.parse(v.object({ model: v.optional(v.string()) }), JSON.parse(readFileSync(configPath, "utf8"))).model
+      : undefined;
+    expect(globalModel).toBeUndefined();
   }, CLI_SPAWN_TIMEOUT_MS);
 
   test("kinu effort sets workspace and global defaults and appears in status", () => {
