@@ -49,7 +49,7 @@ import {
   type MissionGovernor, type MissionScope,
 } from '../mission-budget';
 import type { BuiltinStrategyOptions } from '../strategy/types';
-import { agentHomeNodeProvisioner, type NodeHomeHost } from '../strategy/node-workspace';
+import type { NodeHomeHost } from '../strategy/node-workspace';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { CostModel } from '../mcts/cost';
 import type { WorkMode } from '../prompting/surface';
@@ -303,6 +303,13 @@ export interface AgentsForkDeps {
   /** Per-strategy infrastructure options the LLM must not set — e.g.
    *  `{ mcts: { session }, heads: { controller, inheritedContext, onPhase } }`. */
   defaultOptions?: () => BuiltinStrategyOptions;
+  /**
+   * The shared-prefix compaction ladder for *Inherited context*, over the same
+   * `SwarmRunDeps.compactShared` seam the engine consumes. The backend wires the real
+   * better-compact ladder here (packages/compaction); absent, a parent past its window
+   * inherits verbatim and the provider refuses — the loud failure the seam documents.
+   */
+  compactShared?: SwarmRunDeps['compactShared'];
 }
 
 export interface AgentsToolDeps {
@@ -955,8 +962,11 @@ async function runSwarmAction(
   // swarm call and awaited per node, so a turn that never searches never boots a
   // filesystem, and an absent factory leaves the key absent — which is what makes
   // every node report the shared plane instead of a home it does not have.
-  const nodeHome = deps.nodeHome;
-  if (nodeHome) Object.assign(runDeps, { provisionHome: agentHomeNodeProvisioner(nodeHome()) });
+  // The *Inherited context* barrier: the backend's real compaction ladder, handed to the
+  // run so a fork parent past the threshold is rewritten once instead of inherited
+  // verbatim until the provider refuses. Absent stays absent — the seam's documented
+  // loud failure rather than a silent stub.
+  if (deps.compactShared) Object.assign(runDeps, { compactShared: deps.compactShared });
   // THIS CALL IS A RE-DRIVE, or it is not — and only a re-drive re-enters an
   // interrupted search. Read off the options bag rather than the input for the reason
   // `RESUME_REDRIVE_OPTION` states: the input IS the durable row, and a re-drive

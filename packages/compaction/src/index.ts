@@ -15,8 +15,10 @@ export * from '@better-compact/core';
 export { kinuCodec, kinuConventions, kinuSpec, type ToolPairHandle } from './codec';
 export {
   createCompactionExtension,
+  createSharedPrefixCompactor,
   type CompactionExtensionDeps,
   type CompactionOutcomeEvent,
+  type SharedPrefixCompactorDeps,
 } from './extension';
 export {
   deriveArchiveRange,

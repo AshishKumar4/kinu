@@ -78,6 +78,13 @@ export interface ForkDepsWiring {
    * every node did before this seam had a caller.
    */
   nodeHome?: () => Promise<NodeHomeHost>;
+  /**
+   * The shared-prefix compaction ladder for *Inherited context* — the real
+   * better-compact path (packages/compaction), which core only names as a seam. Absent
+   * leaves `SwarmRunDeps.compactShared` absent: a parent past its window inherits
+   * verbatim until the provider refuses, the seam's documented loud failure.
+   */
+  compactShared?: AgentsForkDeps['compactShared'];
   mcts: {
     /** Fresh per fork call — a search must not share another's tree. */
     session: () => SessionWriter;
@@ -134,6 +141,7 @@ export function buildStrategyForkDeps(wiring: ForkDepsWiring): AgentsForkDeps {
     costModel: wiring.costModel,
     nodeHost: wiring.nodeHost,
     nodeHome: wiring.nodeHome,
+    compactShared: wiring.compactShared,
     defaultOptions: () => {
       const mcts = {
         session: wiring.mcts.session(),

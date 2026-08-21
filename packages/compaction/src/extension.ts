@@ -366,6 +366,62 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
   };
 }
 
+/** The swarm's inherited prefix never wove a dynamic-context block — those are woven per
+ *  model STEP for the chat loop, and the prefix predates any child's loop — so the ladder's
+ *  first rung has nothing to drop. The port still demands the plane; this is that absence,
+ *  stated rather than faked with a ledger. */
+const NO_EPHEMERAL_PLANE: EphemeralContextPlane = { dropSuperseded: () => 0 };
+
+export interface SharedPrefixCompactorDeps {
+  /** Engine ports: transcript store (the archived verbatim range lands in the workspace
+   *  VFS, readable by the node's own file tools), plan store (content-keyed replay), logger. */
+  ports: EnginePorts;
+  /** Durable archive index behind the checkpoint's navigation manifest. */
+  archive: ArchiveIndexStore;
+  /** One LLM call — prompt in, completion text out. Same contract as the extension's. */
+  summarize: (prompt: string) => Promise<string>;
+  /** Trigger/target/recent-tool profile. Defaults to the light preset. */
+  profile?: CompactionProfile;
+}
+
+/**
+ * The swarm half of the compaction seam (`SwarmRunDeps.compactShared`): the SAME
+ * better-compact ladder the per-turn extension runs, entered once per branch point instead
+ * of once per turn. The caller owns the POLICY — the ~85% threshold and the fire-once
+ * memoisation are the engine's — so this entry always rewrites (`trigger: 'force'`), and
+ * the session key is the branch point's durable id, so a re-entered search replays the
+ * same plan byte-stably instead of paying for summaries twice.
+ *
+ * Byte-identical siblings is the property that makes this safe: the engine computes the
+ * prefix ONCE per branch point and hands every child the same array, so a provider caches
+ * it across the whole level.
+ */
+export function createSharedPrefixCompactor(
+  deps: SharedPrefixCompactorDeps,
+): (
+  messages: readonly ModelMessage[],
+  basis: { readonly contextWindow: number; readonly key: string },
+) => Promise<readonly ModelMessage[]> {
+  const extension = createCompactionExtension({
+    ports: deps.ports,
+    archive: deps.archive,
+    summarize: deps.summarize,
+    profile: deps.profile,
+    ephemeral: NO_EPHEMERAL_PLANE,
+  });
+  return async (messages, basis) => {
+    if (messages.length === 0) return messages;
+    const compacted = await extension.transformContext?.({
+      sessionKey: basis.key,
+      messages: [...messages],
+      system: '',
+      contextWindow: basis.contextWindow,
+      trigger: 'force',
+    });
+    return compacted ?? messages;
+  };
+}
+
 /** The trigger's known-overhead floor: the assembled system prompt, priced on
  *  the engine's chars/4 scale. The transform sees only the durable history —
  *  the system prompt (and tool schemas it stands in for) rides every request
