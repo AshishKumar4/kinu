@@ -83,6 +83,72 @@ describe('CLI TUI layout', () => {
     }
   });
 
+  test('status bar keeps the mode visible while a long workspace name clips', async () => {
+    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 56, height: 6, useThread: false, maxFps: Number.POSITIVE_INFINITY });
+    const root = createRoot(renderer);
+    try {
+      root.render(
+        <StatusBar
+          name="a-really-quite-long-workspace-name"
+          mode="local"
+          model="openai/gpt-5.5"
+          reasoningEffort="high"
+          connected={true}
+        />,
+      );
+      await renderSettled(renderOnce);
+      const frame = captureCharFrame();
+      // The name may ellipsize; the mode may not silently vanish with it.
+      expect(frame).toContain('local');
+    } finally {
+      root.render(<box />);
+      renderer.destroy();
+    }
+  });
+  test('status segments drop by liveness — statics first, transient last', async () => {
+    const render = async (width: number, assertions: (frame: string) => void) => {
+      const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width, height: 6, useThread: false, maxFps: Number.POSITIVE_INFINITY });
+      const root = createRoot(renderer);
+      try {
+        root.render(
+          <StatusBar
+            name="checkout"
+            mode="local"
+            model="openai/gpt-5.5"
+            reasoningEffort="high"
+            connected={true}
+            contextTokens={2300}
+            contextWindow={128_000}
+            toolCount={14}
+            autoEvolve={false}
+            branchCount={1}
+          />,
+        );
+        await renderSettled(renderOnce);
+        assertions(captureCharFrame());
+      } finally {
+        root.render(<box />);
+        renderer.destroy();
+      }
+    };
+    // A running branch survives a mid-size bar and the live settings follow
+    // it; the statics are the first to go.
+    await render(72, (frame) => {
+      expect(frame).toContain('⎇ branch');
+      expect(frame).not.toContain('effort high');
+    });
+    // With room, everything earns its place back — including the full model
+    // control.
+    await render(124, (frame) => {
+      expect(frame).toContain('⎇ branch');
+      expect(frame).toContain('ctx');
+      expect(frame).toContain('effort high');
+      expect(frame).toContain('evolve off');
+      expect(frame).toContain('14 tools');
+      expect(frame).toContain('[Ctrl+P]');
+    });
+  });
+
   test('CLI version has package.json as its single source', () => {
     const packageJson = v.parse(
       v.object({ version: v.string() }),

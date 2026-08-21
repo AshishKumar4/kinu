@@ -1,5 +1,12 @@
 /**
  * Status bar — sits at the top of the TUI, shows agent identity and stats.
+ *
+ * Segment discipline, widest to narrowest terminal: the identity anchors left
+ * (brand, workspace, mode — the mode never silently clips away, the name
+ * does), the model control keeps its full width while any room remains, and
+ * the middle segments earn their place by liveness — a running branch first,
+ * then context burn, effort, evolve mode, tool count — dropping whole from
+ * the right as width runs out.
  */
 
 import type { AgentClientMode } from '../agent-client';
@@ -26,25 +33,41 @@ interface Props {
   branchCount?: number;
 }
 
+/** Brand prefix and the separator that points at what follows it. */
+const IDENTITY_PREFIX = 'kinu ❯ ';
+
 export function StatusBar({ name, mode, model, reasoningEffort, onModelSelect, connected, scaffoldVersion, toolCount, autoEvolve, contextTokens = 0, contextWindow, branchCount = 0 }: Props) {
   const { width } = useTerminalDimensions();
   const innerWidth = Math.max(0, width - 4);
   const connection = connected ? '●' : '○';
   const tail = width >= 48 ? `  cli ${VERSION}  ${connection}` : ` cli ${VERSION} ${connection}`;
   const available = Math.max(0, innerWidth - tail.length);
-  const identityBudget = Math.min(40, Math.max(0, Math.floor(available * 0.32)));
-  const identity = clipText(`🔱 ${name} ${mode}${scaffoldVersion !== undefined ? ` v${scaffoldVersion}` : ''}`, identityBudget);
-  const identityWidth = identity.length;
+
+  // The identity degrades in a fixed order: the name ellipsizes first, the
+  // scaffold version dies next, and brand + mode are the last things standing.
+  const identityBudget = Math.min(44, Math.max(0, Math.ceil(available * 0.42)));
+  const versionSuffix = scaffoldVersion !== undefined ? ` v${scaffoldVersion}` : '';
+  let identityTail = ` ${mode}${versionSuffix}`;
+  let nameBudget = identityBudget - IDENTITY_PREFIX.length - identityTail.length;
+  if (nameBudget < 3 && versionSuffix !== '') {
+    identityTail = ` ${mode}`;
+    nameBudget = identityBudget - IDENTITY_PREFIX.length - identityTail.length;
+  }
+  const identityName = clipText(name, Math.max(2, nameBudget));
+  const identityWidth = IDENTITY_PREFIX.length + identityName.length + identityTail.length;
+
+  // The model control reserves its ideal width up front; metadata spends only
+  // what the identity and the control leave behind.
   const modelControl = ` ${modelDisplayName(model) || 'model'} [Ctrl+P]`;
-  const minimumModelWidth = Math.min(8, Math.max(0, available - identityWidth));
+  const modelIdeal = Math.min(34, modelControl.length);
   const optionalSegments = [
-    ...(branchCount > 0 ? [{ text: `  ⎇ ${branchCount > 1 ? `${branchCount} branches` : 'branch'} running`, color: tuiColors.amber }] : []),
-    { text: `  effort ${reasoningEffort}`, color: tuiColors.muted },
+    ...(branchCount > 0 ? [{ text: branchCount > 1 ? `  ⎇ ${branchCount} branches` : '  ⎇ branch', color: tuiColors.amber }] : []),
     { text: `  ${formatContextUsage(model, contextTokens, contextWindow)}`, color: tuiColors.muted },
-    ...(toolCount !== undefined ? [{ text: `  ⚡ ${toolCount} tools`, color: tuiColors.muted }] : []),
-    ...(autoEvolve !== undefined ? [{ text: `  ${autoEvolve ? '↻ auto' : '⏸ manual'}`, color: autoEvolve ? tuiColors.accent : tuiColors.muted }] : []),
+    { text: `  effort ${reasoningEffort}`, color: tuiColors.muted },
+    ...(autoEvolve !== undefined ? [{ text: `  ${autoEvolve ? 'evolve auto' : 'evolve off'}`, color: autoEvolve ? tuiColors.accent : tuiColors.muted }] : []),
+    ...(toolCount !== undefined ? [{ text: `  ${toolCount} tools`, color: tuiColors.muted }] : []),
   ];
-  const metadataBudget = Math.max(0, available - identityWidth - minimumModelWidth);
+  const metadataBudget = Math.max(0, available - identityWidth - modelIdeal);
   const metadata: typeof optionalSegments = [];
   let metadataWidth = 0;
   for (const segment of optionalSegments) {
@@ -52,8 +75,9 @@ export function StatusBar({ name, mode, model, reasoningEffort, onModelSelect, c
     metadata.push(segment);
     metadataWidth += segment.text.length;
   }
-  const modelBudget = Math.min(34, Math.max(0, available - identityWidth - metadataWidth));
-
+  // Whatever metadata did not spend flows back to the control; the total can
+  // never overflow because both sides are cut from the same leftover.
+  const modelBudget = Math.min(modelIdeal, Math.max(0, available - identityWidth - metadataWidth));
   return (
     <box
       style={{
@@ -70,7 +94,9 @@ export function StatusBar({ name, mode, model, reasoningEffort, onModelSelect, c
       }}
     >
       <text>
-        <strong fg={tuiColors.accentStrong}>{identity}</strong>
+        <strong fg={tuiColors.accent}>{IDENTITY_PREFIX}</strong>
+        <strong fg={tuiColors.textStrong}>{identityName}</strong>
+        <span fg={tuiColors.muted}>{identityTail}</span>
       </text>
       <box style={{ flexDirection: 'row', alignItems: 'center' }}>
         {modelBudget > 0 && (
