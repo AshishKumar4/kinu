@@ -103,7 +103,6 @@
   "packages/cli-backend/src/claude-cli-provider.ts#CLAUDE_CLI_DEFAULT_MODEL (unreached-export)",
   "packages/cli-backend/src/claude-cli-provider.ts#CLAUDE_CLI_PROVIDER_ID (unreached-export)",
   "packages/cli-backend/src/claude-cli-provider.ts#buildClaudePrompt (unreached-export)",
-  "packages/cli-backend/src/model-resolver.ts#LocalModelResolverConfig.claudeCli (unsupplied-field)",
   "packages/cli-backend/src/model-resolver.ts#LocalModelResolverConfig.fetch (unsupplied-field)",
   "packages/cli-backend/src/model-resolver.ts#LocalModelResolverConfig.opencode (unsupplied-field)",
   "packages/cli-backend/src/model-resolver.ts#LocalProviderCredentials.codexOAuth (unsupplied-field)",

@@ -96,7 +96,7 @@ async function main(): Promise<void> {
   // it, and the runtime writes each head's steps to it as they land.
   const journal = new HeadJournal(makeSql(db));
   const headRuntime = createCLIHeadRuntime({
-    model: benchChatModel(analyst),
+    model: () => benchChatModel(analyst),
     parentRuntime: rt,
     cwd: process.cwd(),
     resolveModel: (spec: string) => {

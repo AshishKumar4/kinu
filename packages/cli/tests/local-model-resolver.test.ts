@@ -195,4 +195,34 @@ describe("createConfiguredLocalModelResolver — registry-only providers", () =>
       turn: "Hello from the subscription.",
     });
   });
+  test("the production composition carries the claude spawn seam without injection", async () => {
+    const kinuHome = mkdtempSync(join(tmpdir(), "kinu-cli-resolver-claude-wire-"));
+    tempDirs.push(kinuHome);
+    writeFileSync(join(kinuHome, "config.json"), JSON.stringify({}), { mode: 0o600 });
+    const script = `
+      import { createConfiguredLocalModelResolver } from './packages/cli/src/local-model-resolver.ts';
+      const { resolver } = createConfiguredLocalModelResolver({ model: 'claude/claude-sonnet-4-x' });
+      const model = resolver.resolveModel('claude/claude-sonnet-4-x');
+      console.log(JSON.stringify({ provider: model.provider, specificationVersion: model.specificationVersion }));
+    `;
+    const env: NodeJS.ProcessEnv = { ...process.env, KINU_HOME: kinuHome };
+    for (const name of [
+      "KINU_TOKEN", "KINU_ORIGIN", "KINU_MODEL", "KINU_BASE_URL", "KINU_AUTH",
+      "AI_GATEWAY_BASE_URL", "AI_GATEWAY_AUTH", "AI_GATEWAY_MODEL",
+      "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "CODEX_ACCESS_TOKEN",
+    ]) delete env[name];
+    const proc = Bun.spawn({
+      cmd: [process.execPath, "-e", script],
+      cwd: resolve(__dirname, "../../.."),
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      proc.exited,
+    ]);
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(stdout)).toEqual({ provider: "claude", specificationVersion: "v2" });
+  });
 });

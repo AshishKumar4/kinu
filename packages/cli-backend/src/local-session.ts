@@ -553,7 +553,7 @@ export class LocalAgentSession implements BackendHost {
     });
 
     const headRuntimeOptions: Parameters<typeof createCLIHeadRuntime>[0] = {
-      model: this.defaultModel("a head with no model of its own"),
+      model: () => this.cachedModel ?? this.defaultModel("a head with no model of its own"),
       providerFamily: parseModelSpec(this.fallbackModelSpec).provider,
       // The merge runs on `model` above — the model THIS spec resolved — so the
       // spec is this session's to attach and not head-runtime's: that seam holds
@@ -2626,7 +2626,7 @@ export class LocalAgentSession implements BackendHost {
     // Branching heads — in-process runtime + controller (drives think strategy=heads).
     // The agent's VFS backs the shared findings scratch sibling heads write to.
     this._headRuntime = createCLIHeadRuntime({
-      model,
+      model: () => model,
       providerFamily: parseModelSpec(spec).provider,
       reportModelCall: (report) => this.modelCallSink({ ...report, spec }),
       parentRuntime: this.rt,

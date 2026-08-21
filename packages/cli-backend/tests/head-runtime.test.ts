@@ -66,7 +66,7 @@ function headDeps(model: LanguageModel, over?: Partial<CLIHeadRuntimeDeps>): CLI
   const governor = makeGovernor();
   const journal = makeJournal();
   return {
-    model, parentRuntime: makeParent(), cwd: process.cwd(),
+    model: () => model, parentRuntime: makeParent(), cwd: process.cwd(),
     webSearch: stubWeb, codemodeExtras: () => [],
     governor: () => governor, journal: () => journal, ...over,
   };
