@@ -80,14 +80,42 @@ import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import { makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime';
 import { requireSandboxedExecutors, requireVerifierShell } from './harness';
 import {
-  HARD_TASKS, liveChatModel, liveModelTarget, recordLiveModelEpisode, reportLiveModelSpend,
-  toolExecute, UNCONFIGURED_LLM, type HardTask,
+  EVAL_MODELS, HARD_TASKS, liveChatModel, liveModelTarget, recordLiveModelEpisode,
+  reportLiveModelSpend, toolExecute, UNCONFIGURED_LLM,
+  type EvalTier, type HardTask,
 } from '@kinu.run/test-utils';
 
 const SUITE = 'Swarm Evals';
 const TARGET = liveModelTarget(SUITE);
 const liveTest = test.skipIf(!TARGET);
-const LLM_CONFIG: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;
+
+/**
+ * Which arm this process is. Flash is the volume arm, pro the small arm that
+ * establishes the bound — the owner's split, and the same declaration the three
+ * sibling arms make.
+ */
+const TIER: EvalTier = process.env.KINU_EVAL_TIER === 'pro' ? 'pro' : 'flash';
+
+/**
+ * The model this run DRIVES, and it is the tier's.
+ *
+ * `TARGET?.llm ?? UNCONFIGURED_LLM` stood here and read no tier at all, so
+ * `resolveLiveModel`'s fallback decided the model: `DEFAULT_WORKERS_AI_MODEL_ID`
+ * (`packages/core/src/providers/workers-ai.ts:6`), which is the PRO id. So
+ * `KINU_EVAL_TIER=flash` billed this arm at pro and said nothing — the one arm
+ * of four whose cost the tier switch did not reach, while `eval-tier.sh` gives
+ * it its own spend file precisely so its cost can be read on its own.
+ *
+ * ONE id, spread from the tier, and every disclosure below reads it off THIS
+ * config rather than re-deriving it from `EVAL_MODELS`. That is the half that
+ * matters: the behaviour arm's own note records a run whose config carried one
+ * id while its record wrote another, and two sources for "which model" is how a
+ * reader is shown the cheaper one. `KINU_MODEL` is deliberately not honoured —
+ * an arm chosen by two knobs is an arm that can be half-changed.
+ */
+const LLM_CONFIG: LLMProviderConfig = TARGET === null
+  ? UNCONFIGURED_LLM
+  : { ...TARGET.llm, model: EVAL_MODELS[TIER] };
 
 const TEST_DIR = join(tmpdir(), 'kinu-eval-swarm-' + String(Date.now()));
 const DB_PATH = join(TEST_DIR, 'agent.db');
@@ -514,6 +542,25 @@ describe('Swarm evals — a live measured search through the settled tool surfac
     expect(outcome.refusal.error).toContain('unknown field "budgetUsd" — did you mean "budget_usd"?');
   });
 
+  test('the arm drives the tier it declared', () => {
+    // CREDENTIAL-FREE, and the reason it exists: this arm read no tier at all,
+    // so `resolveLiveModel`'s fallback chose the model and `KINU_EVAL_TIER=flash`
+    // was billed at pro in silence. A default that a knob does not reach is not
+    // a default, it is a second source of truth.
+    //
+    // Read off the DRIVEN MODEL rather than off the config it was built from, so
+    // this also covers the other half of the same defect: a config carrying one
+    // id while the run drives another is what the behaviour arm's own note
+    // records. Parsed, because `LanguageModel` is an object or a bare id string
+    // and only the object states which model it is — a string here would mean
+    // the suite cannot say what it drives, which is the finding rather than a
+    // branch to take. Both branches of the arm are asserted, so a run with no
+    // target cannot pass this vacuously.
+    const driven = v.parse(v.object({ modelId: v.string() }), model);
+    expect(driven.modelId).toBe(LLM_CONFIG.model);
+    expect(LLM_CONFIG.model).toBe(TARGET === null ? UNCONFIGURED_LLM.model : EVAL_MODELS[TIER]);
+  });
+
   liveTest('MEASURED: a live swarm crowns a winner that beats its own measured baseline', async () => {
     const startedAt = Date.now();
     const outcome = await callSwarm({
@@ -548,7 +595,14 @@ describe('Swarm evals — a live measured search through the settled tool surfac
     // WHAT THIS RUN COST AND WHAT IT FOUND, printed unconditionally. The tier's own
     // spend line is a total over suites; these are this run's numbers, and a
     // measurement nobody printed is a measurement nobody can check.
+    //
+    // The ARM comes first, read off the config the run actually drove. This suite
+    // publishes no run record — no `publishRunRecord`, unlike the three
+    // vitest-evals arms — so this line is where the tier and the model id are
+    // disclosed, and a cost read without them is a cost that cannot be compared
+    // with yesterday's.
     recordLiveModelEpisode(rt.storage.sql);
+    console.log(`    arm ${TIER}, model ${LLM_CONFIG.model}`);
     console.log(`    wall ${wallSeconds.toFixed(1)}s, engine ${(report.durationMs / 1000).toFixed(1)}s, `
       + `${String(report.tokens ?? 'unreported')} tokens, ${String(report.expansions)} expansions, `
       + `stop=${report.stop}`);
