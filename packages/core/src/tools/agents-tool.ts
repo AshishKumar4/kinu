@@ -49,7 +49,7 @@ import {
   type MissionGovernor, type MissionScope,
 } from '../mission-budget';
 import type { BuiltinStrategyOptions } from '../strategy/types';
-import type { NodeHomeHost } from '../strategy/node-workspace';
+import { agentHomeNodeProvisioner, type NodeHomeHost } from '../strategy/node-workspace';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { CostModel } from '../mcts/cost';
 import type { WorkMode } from '../prompting/surface';
@@ -962,6 +962,8 @@ async function runSwarmAction(
   // swarm call and awaited per node, so a turn that never searches never boots a
   // filesystem, and an absent factory leaves the key absent — which is what makes
   // every node report the shared plane instead of a home it does not have.
+  const nodeHome = deps.nodeHome;
+  if (nodeHome) Object.assign(runDeps, { provisionHome: agentHomeNodeProvisioner(nodeHome()) });
   // The *Inherited context* barrier: the backend's real compaction ladder, handed to the
   // run so a fork parent past the threshold is rewritten once instead of inherited
   // verbatim until the provider refuses. Absent stays absent — the seam's documented
