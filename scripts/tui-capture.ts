@@ -70,14 +70,14 @@ const { PhaseLine, TakesOverlay, CommandHintOverlay } = await import('../package
 const { tuiColors } = await import('../packages/cli/src/tui/theme');
 const { renderSearchTree, SLASH_COMMANDS } = await import('../packages/cli/src/slash-commands');
 
-async function settle(renderOnce: () => Promise<void>, passes = 8): Promise<void> {
+async function settle(renderOnce: () => Promise<void>, passes = 12): Promise<void> {
   for (let i = 0; i < passes; i++) {
     await renderOnce();
     await Bun.sleep(8);
   }
 }
 
-async function shoot(name: string, width: number, height: number, element: React.ReactElement, passes = 8): Promise<void> {
+async function shoot(name: string, width: number, height: number, element: React.ReactElement, passes = 12): Promise<void> {
   const renderer = await createTestRenderer({ width, height, useThread: false, maxFps: Number.POSITIVE_INFINITY });
   const root = createRoot(renderer.renderer);
   try {
@@ -95,7 +95,7 @@ async function shoot(name: string, width: number, height: number, element: React
 function chatScreen(messages: readonly DisplayMessage[], phase: string | null, processing: boolean, overlay?: React.ReactElement): React.ReactElement {
   const title = processing ? '⟳ processing…' : `${WORKSPACE} · ${SESSION} · Ctrl+P model ›`;
   const placeholder = processing
-    ? 'Type to steer · Enter delivers mid-turn · Tab queues · Ctrl+B branches · Esc interrupts'
+    ? 'Type to steer · Tab queues · Ctrl+B branches · Esc interrupts'
     : 'Type a message or /help · Shift+Enter for a new line';
   return React.createElement(
     'box',
@@ -151,7 +151,7 @@ const TOOLS: DisplayMessage[] = [
   message('t1', 'tool_call', '', { toolName: 'exec', args: '{"cmd":"bun test packages/checkout"}' }),
   message('r1', 'tool_result', '37 pass\n2 fail\ntotals.ts:41 expected 1187, received 1204'),
   message('t2', 'tool_call', '', { toolName: 'write_file', args: '{"path":"totals.ts"}' }),
-  message('r2', 'tool_result', JSON.stringify({ reason: 'approval_required', error: 'Writing outside this workspace needs approval.\nThe path /etc/hosts.conf is not inside the workspace.' })),
+  message('r2', 'tool_result', JSON.stringify({ reason: 'denied', error: 'Writing outside this workspace needs approval.\nThe path /etc/hosts.conf is not inside the workspace.' })),
   message('a2', 'assistant', 'Two failures share one cause: `lineTotal` counts shipping as taxable.\nA third-party refusal blocked a config write — not needed for the fix.'),
 ];
 

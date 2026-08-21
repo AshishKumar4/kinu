@@ -21,21 +21,27 @@ interface CommandHintProps {
   terminal: OverlayGeometry;
 }
 
+/** The palette's standing instructions — copy, so their width is floor, not filler. */
+const FILTER_HINT = 'Type to filter · Enter runs a completed command';
+
 export function CommandHintOverlay({ commands, terminal }: CommandHintProps) {
   if (commands.length === 0) return null;
-  const paletteWidth = boundedPaletteWidth(terminal, 0.46, 44, 74);
   const paletteHeight = Math.min(commands.length + 3, 11);
-  const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'lower');
   const maxCommandRows = Math.max(1, paletteHeight - 5);
   const hiddenCount = Math.max(0, commands.length - maxCommandRows);
   const visibleCommands = hiddenCount > 0
     ? commands.slice(0, Math.max(1, maxCommandRows - 1))
     : commands;
-  const innerWidth = Math.max(1, paletteWidth - 4);
   const nameWidth = Math.min(
     18,
     Math.max(8, ...visibleCommands.map((command) => command.name.length)),
   );
+  const moreLine = hiddenCount > 0 ? `… ${hiddenCount + 1} more commands. Keep typing to filter.` : '';
+  // The width floor keeps the instructions whole and lets only the rows clip.
+  const copyWidth = Math.max(FILTER_HINT.length, moreLine.length);
+  const paletteWidth = boundedPaletteWidth(terminal, 0.46, Math.max(44, copyWidth + 4), 74);
+  const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'lower');
+  const innerWidth = Math.max(1, paletteWidth - 4);
   return (
     <PaletteFrame
       title="Commands"
@@ -45,7 +51,7 @@ export function CommandHintOverlay({ commands, terminal }: CommandHintProps) {
       top={position.top}
       dim={false}
     >
-      <PaletteLine text="Type to filter · Enter runs a completed command" width={innerWidth} color={tuiColors.muted} />
+      <PaletteLine text={FILTER_HINT} width={innerWidth} color={tuiColors.muted} />
       {visibleCommands.map((command) => (
         <PaletteLine
           key={command.name}
@@ -55,8 +61,8 @@ export function CommandHintOverlay({ commands, terminal }: CommandHintProps) {
           accentPrefix={nameWidth}
         />
       ))}
-      {hiddenCount > 0 && (
-        <PaletteLine text={`… ${hiddenCount + 1} more commands. Keep typing to filter.`} width={innerWidth} color={tuiColors.muted} />
+      {moreLine !== '' && (
+        <PaletteLine text={moreLine} width={innerWidth} color={tuiColors.muted} />
       )}
     </PaletteFrame>
   );
