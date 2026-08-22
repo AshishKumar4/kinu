@@ -11,6 +11,7 @@ import {
   encodeLongHorizonSpec, parseJsonValue, renderLongHorizonAnswerFile, SealedSplit, splitOf,
   type AttemptOutcome, type BenchTask, type JsonValue,
 } from '../packages/core/src/index';
+import { manifestHash } from '../packages/core/src/bench/split';
 import { BENCH_FAMILIES, DEFAULT_VALIDATE_RETRIES, panelArm, panelProviders, parseArgv, parseCommon } from './bench';
 import { BENCH_SUITES, benchPatchFiles, loadBenchCorpus, stalePatches } from './bench-corpus';
 import { loadLongHorizonCorpus, materializeLongHorizon } from './bench-longhorizon';
@@ -816,11 +817,20 @@ describe('the long-horizon corpus', () => {
   });
 
   test('regenerating a task at a different size changes the manifest', () => {
-    const bigger = loadLongHorizonCorpus(REPO_ROOT);
-    expect(bigger.corpus.manifestHash).toBe(corpus.manifestHash);
-    const [id, spec] = [...specs.entries()][0]!;
-    expect(encodeLongHorizonSpec({ ...spec, entries: spec.entries + 1 }))
-      .not.toBe(encodeLongHorizonSpec(specs.get(id)!));
+    const task = corpus.dev[0]!;
+    const spec = specs.get(task.id)!;
+    const check = task.checks[0]!;
+    const changed = {
+      ...task,
+      checks: [{
+        ...check,
+        command: [
+          ...check.command.slice(0, 2),
+          encodeLongHorizonSpec({ ...spec, entries: spec.entries + 1 }),
+        ],
+      }],
+    };
+    expect(manifestHash([changed])).not.toBe(manifestHash([task]));
   });
 
   function longHorizonFixture(line: JsonValue): string {
