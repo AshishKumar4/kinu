@@ -10,6 +10,8 @@
 import { type FormEvent, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
+import { FilledButton } from "@/components/ui/FilledButton";
+import { KinuMark } from "@/components/ui/KinuLogo";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
 import {
   CONNECT_AI_MESSAGE,
@@ -38,21 +40,17 @@ export default function HomePage() {
 
   return (
     <div className="h-full overflow-y-auto p-bg">
-      {/* The mock's grid: a 520px mission column and a 250px side column,
-          centered, with the headline spanning both. */}
-      <main className="mx-auto grid min-h-full w-full max-w-[810px] grid-cols-[minmax(0,1fr)] content-center gap-5 px-8 py-8 lg:grid-cols-[minmax(0,520px)_250px]">
-        <header className="col-span-full mb-1.5">
+      <main className="mx-auto grid min-h-full w-full max-w-[1080px] grid-cols-1 content-start gap-6 px-6 py-[clamp(72px,12vh,132px)] md:px-10 lg:grid-cols-[minmax(0,680px)_300px]">
+        <header className="col-span-full mb-3">
           <div className="mb-3.5 flex items-center gap-2.5">
-            <span aria-hidden="true" className="inline-block font-serif text-[22px] leading-none text-[var(--c-accent)] rotate-12">❯</span>
+            <KinuMark size={22} />
             <span className="font-mono text-[10px] uppercase tracking-[.2em] p-text-4">New workspace</span>
           </div>
-          {/* The product's serif voice — the mock's 36px Newsreader headline. */}
-          <h1 className="font-serif font-medium text-[36px] leading-tight tracking-[-.01em] p-text">
+          <h1 className="font-serif text-[clamp(38px,4vw,46px)] font-medium leading-[1.12] tracking-[-.015em] p-text">
             What is this workspace for?
           </h1>
         </header>
 
-        {/* Mission card */}
         <form onSubmit={submit} className="min-w-0 overflow-hidden rounded-[14px] border p-border p-surface">
           <label htmlFor="workspace-mission" className="block px-5 pt-4 text-xs font-semibold p-text-4">
             {MISSION_LABEL}
@@ -63,10 +61,10 @@ export default function HomePage() {
             onChange={(event) => setMission(event.currentTarget.value)}
             onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submit(); } }}
             placeholder={MISSION_PLACEHOLDER}
-            rows={6}
+            rows={7}
             autoFocus
             disabled={busy}
-            className="block min-h-28 w-full resize-y bg-transparent px-5 pb-4 pt-2.5 text-[14.5px] leading-[1.65] p-text outline-none placeholder:p-text-3 disabled:opacity-60"
+            className="block min-h-40 w-full resize-y bg-transparent px-5 pb-5 pt-3 text-[15px] leading-[1.7] p-text outline-none placeholder:p-text-3 disabled:opacity-60"
           />
           {hasModels === false && (
             <div className="px-5 pb-3">
@@ -80,14 +78,14 @@ export default function HomePage() {
             <p className="text-[11.5px] leading-snug p-text-4">
               {MISSION_HELP}
             </p>
-            <button
+            <FilledButton
               type="submit"
               disabled={busy || !mission.trim() || hasModels === false}
-              className="inline-flex h-9 shrink-0 cursor-pointer items-center justify-center gap-2 rounded-full bg-[var(--c-accent)] px-[18px] text-[13px] font-semibold text-[var(--c-accent-on)] transition-colors hover:bg-[var(--c-accent-fg)] disabled:bg-[var(--c-fill)] disabled:p-text-4"
+              className="!h-9 !rounded-lg px-5 text-[13px]"
             >
               {busy && <Loader size="sm" />}
               Create workspace
-            </button>
+            </FilledButton>
           </div>
         </form>
 

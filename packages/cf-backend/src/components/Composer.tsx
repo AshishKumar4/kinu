@@ -194,7 +194,7 @@ export function Composer({
     // @container: the action row labels itself when there is room and falls back
     // to icons in a dragged-narrow chat column, without depending on which
     // surface mounted it.
-    <div className="@container mx-auto w-full max-w-[660px] px-4 py-3.5 sm:px-5"
+    <div className="@container mx-auto w-full max-w-[700px] px-4 py-3.5 sm:px-5"
       onPaste={(e) => {
         if (attachments && e.clipboardData.files.length > 0) {
           e.preventDefault();

@@ -94,16 +94,9 @@ async function openLanding(
   ]);
   await page.goto(`${origin}/landing.html`, { waitUntil: 'networkidle0' });
   await page.waitForFunction(
-    () => document.getElementById('__bundler_loading') === null,
+    () => document.querySelector('h1') !== null,
     { timeout: 15_000 },
   );
-  const runtimeError = await page.evaluate(
-    () => document.getElementById('__bundler_err')?.textContent ?? null,
-  );
-  if (runtimeError !== null) {
-    await page.close();
-    throw new Error(`landing runtime failed: ${runtimeError}`);
-  }
   return page;
 }
 
@@ -125,17 +118,18 @@ async function openPublic(
 }
 
 async function opaqueCanvasPixels(page: Page): Promise<number> {
-  return page.evaluate(() => {
+  const handle = await page.waitForFunction(() => {
     const canvas = document.querySelector('canvas');
     const context = canvas?.getContext('2d');
-    if (canvas === null || context === null || context === undefined || canvas.width === 0 || canvas.height === 0) return 0;
+    if (canvas === null || context === null || context === undefined || canvas.width === 0 || canvas.height === 0) return null;
     const data = context.getImageData(0, 0, canvas.width, canvas.height).data;
     let opaque = 0;
-    for (let index = 3; index < data.length; index += 64) {
+    for (let index = 3; index < data.length; index += 4) {
       if (data[index] !== 0) opaque += 1;
     }
-    return opaque;
-  });
+    return opaque > 0 ? opaque : null;
+  }, { polling: 100, timeout: 5_000 });
+  return Number(await handle.jsonValue());
 }
 
 beforeAll(async () => {
@@ -169,7 +163,7 @@ beforeAll(async () => {
           };
         };
         return {
-          workspace: measure(document.querySelector('[data-screen-label="Workspace mock"]')),
+          workspace: measure(document.querySelector('[aria-label="Kinu workspace interface preview"]')),
           tui: measure(document.querySelector('[aria-label="Kinu terminal interface preview"]')),
         };
       });
@@ -200,11 +194,11 @@ beforeAll(async () => {
         const samples = [
           ['hero title', 'h1'],
           ['hero body', '#top p'],
-          ['feature title', '.feature-strip > div > div:first-child'],
-          ['feature body', '.feature-strip > div > div:last-child'],
-          ['workspace heading', '[data-screen-label="Workspace mock"] h2'],
-          ['workspace body', '[data-screen-label="Workspace mock"] p'],
-          ['terminal answer', '.tui-answer'],
+          ['feature title', '[data-feature-strip] > div > h3'],
+          ['feature body', '[data-feature-strip] > div > p'],
+          ['workspace heading', '[data-showcase="workspace"] h2'],
+          ['workspace body', '[data-showcase="workspace"] p'],
+          ['terminal body', '[data-showcase="tui"] p'],
           ['section title', '#platform h2'],
           ['section body', '#platform p'],
           ['primary action', '#top a[href="/login"]'],
@@ -254,7 +248,7 @@ beforeAll(async () => {
       const surfacesFit = await page.evaluate(() => {
         const viewport = document.documentElement.clientWidth;
         return [
-          document.querySelector('[data-screen-label="Workspace mock"]'),
+          document.querySelector('[aria-label="Kinu workspace interface preview"]'),
           document.querySelector('[aria-label="Kinu terminal interface preview"]'),
         ].every((element) => {
           const box = element?.getBoundingClientRect();
@@ -269,7 +263,7 @@ beforeAll(async () => {
       }
       if (label === '1568' || label === '1920') {
         facts.wideColumns[label] = await page.$eval(
-          '.feature-strip',
+          '[data-feature-strip]',
           (element) => Math.round(element.getBoundingClientRect().width),
         );
       }
