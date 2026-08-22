@@ -383,6 +383,16 @@ h2{margin:0;font-family:var(--font-display);font-size:19px;font-weight:500;lette
 .stat strong{display:block;font-family:var(--font-display);font-size:40px;
 font-weight:500;line-height:1.05;letter-spacing:-0.022em}
 .stat span{display:block;margin-top:5px;color:var(--c-text-3)}
+/* Data rows - the workhorse: a gold key, a plain value, a faint metric. */
+.rows{border:1px solid var(--c-border);background:var(--c-surface)}
+.rows>.row{display:grid;grid-template-columns:120px minmax(0,1fr) 220px;gap:24px;
+padding:18px 24px;align-items:baseline}
+.rows>.row:not(:last-child){border-bottom:1px dashed var(--c-border-strong)}
+.row p{font-size:14px;line-height:1.6;color:var(--c-text-2)}
+.row p b{color:var(--c-text);font-weight:400}
+.metric{font-family:var(--font-mono);font-size:11px;color:var(--c-accent);
+overflow-wrap:anywhere}
+.rows.faint .metric{color:var(--c-text-3)}
 
 code{font-family:var(--font-mono);font-size:13px;color:var(--c-code)}
 .cmd{display:flex;align-items:center;justify-content:space-between;gap:20px;

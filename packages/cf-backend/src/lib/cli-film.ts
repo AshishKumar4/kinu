@@ -105,7 +105,41 @@ export function cliFilmFigure(): string {
       <div class="anno ruled"><span>${p.model}</span><span>${p.steps} steps · ${p.seconds} s · live</span></div>
     </figure>`;
 }
+/** The landing's condensed cut.
+ *
+ *  The owner's mock renders a six-line excerpt, not the full session, and
+ *  the landing section must hold his visual weight — so this is the same
+ *  projection with rows chosen to carry his exact narrative shape: the
+ *  command, the suite timed, the scaling proof, the verdict, and the named
+ *  fix. Every row is one of `CLI_FILM`'s own lines, verbatim — the
+ *  recording gate that holds the full film holds these by inheritance, and
+ *  `unit-cli-film` asserts the subset relation directly. Static by design:
+ *  his block is static, and the full player remains the place the session
+ *  plays end to end. */
+const CONDENSED_ROWS: readonly number[] = [0, 6, 14, 15, 19];
 
+/** The scaling proof, on one line as his mock draws it. The segments are the
+ *  recording's own verbatim measurements joined for display; the gate holds
+ *  every segment against the recording individually. */
+function condensedScaling(): CliFilmLine {
+  const joined = CLI_FILM[11]!.text.split('\n').join('  ·  ');
+  return { kind: 'out', text: joined };
+}
+
+export function condensedCliFilm(): string {
+  const p = CLI_FILM_PROVENANCE;
+  const lines: CliFilmLine[] = CONDENSED_ROWS.map((at) => CLI_FILM[at]!.kind === 'out' ? condensedScaling() : CLI_FILM[at]!);
+  const rows = lines.map((line) => {
+    if (line.kind === 'cmd') return `<span class="line" data-kind="cmd"><b>$</b> ${escapeText(line.text)}</span>`;
+    if (line.kind === 'call') return `<span class="line" data-kind="call"><b>▸ ${escapeText(line.label)}</b> ${escapeText(line.text)}</span>`;
+    return `<span class="line" data-kind="${line.kind}">${escapeText(line.text)}</span>`;
+  }).join('');
+  return `<figure class="film condensed">
+      <div class="anno ruled"><span>FIG.02 · CLI · KINU RUN · RECORDED</span><span>WORKSPACE "${p.workspace.toUpperCase()}" · ${p.backend.toUpperCase()} BACKEND</span></div>
+      <pre class="term" id="cli-film-condensed">${rows}</pre>
+      <div class="anno ruled"><span>${p.model}</span><span>${p.steps} steps · ${p.seconds} s · live</span></div>
+    </figure>`;
+}
 /**
  * Play the recording back when the reader reaches it.
  *

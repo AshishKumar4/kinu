@@ -96,6 +96,9 @@ padding:64px 56px 56px}
 grid-template-columns:minmax(0,1.08fr) minmax(0,1fr);gap:56px;align-items:center;z-index:1}
 
 .claims{border-top:1px solid var(--c-border);border-bottom:1px solid var(--c-border)}
+/* His cell voice: 14px over 1.65, muted — the grids speak in it, so it is
+   declared once here for every cell paragraph the page renders. */
+.grid p,.claims p{font-size:14px;line-height:1.65;color:var(--c-text-2)}
 .claims>*{background:var(--c-bg)}
 .claims>:first-child{padding:26px 28px 26px 0}
 .claims>:last-child{padding:26px 0 26px 28px}
@@ -137,7 +140,7 @@ background:var(--c-recessed);padding:24px 28px}
 .film .anno.ruled{border:0;padding:0 0 14px;flex-wrap:wrap;gap:8px;
 font-family:var(--font-mono);font-size:10px;letter-spacing:.16em;
 text-transform:uppercase;color:var(--c-text-3)}
-.term{border:0;border-radius:0;background:transparent;padding:0;max-height:none;
+.term{border:0;border-radius:0;background:transparent;margin:14px 0;padding:0;max-height:none;
 font-size:12px;line-height:2;color:var(--c-text-2);
 white-space:pre-wrap;overflow-wrap:anywhere}
 .term .line{display:block}
