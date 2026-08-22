@@ -30,12 +30,14 @@ function statusMeta(status: BackgroundJob["status"]) {
 
 export interface JobCardProps {
   job: BackgroundJob;
+  /** Render inside the journal's shared grouped-row container. */
+  grouped?: boolean;
   /** Re-fetch after a mutation; the hook also polls on its own cadence. */
   onRefresh: () => void;
   rpc: Rpc;
 }
 
-export function JobCard({ job, onRefresh, rpc }: JobCardProps) {
+export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -55,19 +57,19 @@ export function JobCard({ job, onRefresh, rpc }: JobCardProps) {
   const detail = job.status === "completed" ? job.result : job.error;
 
   return (
-    <div className="p-card p-3">
+    <div className={grouped ? "p-3" : "p-group p-3"}>
       <div className="flex items-start gap-2">
         <Icon size={15} className={`${m.tone} shrink-0 mt-0.5 ${m.spin ? "animate-spin" : ""}`}
           weight={job.status === "running" ? "bold" : "fill"} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            <span className="text-xs font-medium p-text">{job.kind}</span>
+            <span className="text-[13px] leading-[18px] font-medium p-text">{job.kind}</span>
             <code className="text-[10px] p-text-3">{job.id.replace(/^bgjob-/, "").slice(0, 8)}</code>
           </div>
-          <div className="text-[10px] p-text-3">
+          <div className="text-[10.5px] leading-[15px] p-text-3">
             {m.label} · started {timeAgo(job.createdAt)}{job.settledAt ? ` · settled ${timeAgo(job.settledAt)}` : ""}
           </div>
-          {detail && <div className="text-[10px] p-text-2 mt-1 line-clamp-3 whitespace-pre-wrap break-words font-mono">{detail}</div>}
+          {detail && <div className="text-[11.5px] leading-[16px] p-text-2 mt-1 line-clamp-3 whitespace-pre-wrap break-words font-mono">{detail}</div>}
           {err && <div className="text-[10px] p-danger mt-1">{err}</div>}
         </div>
         <div className="flex items-center gap-1 shrink-0">

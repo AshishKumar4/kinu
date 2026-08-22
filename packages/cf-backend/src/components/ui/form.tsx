@@ -17,7 +17,7 @@ export const inputCls = "w-full rounded-md px-3 py-2 text-sm p-text focus:outlin
  * the app uses the pair, so a tab reads the same above the chat as it does
  * above the work surfaces.
  */
-export const tabCls = "p-tab -mb-px flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap px-2 py-2.5 p-row-text font-medium @[38rem]:px-3";
+export const tabCls = "p-tab -mb-px flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap px-2.5 py-[13px] text-[12.5px] leading-[18px] font-medium";
 
 export function Card({ title, icon: Icon, children }: {
   title: string;

@@ -28,13 +28,14 @@
 import { useRef, type ReactNode } from "react";
 import { InputArea, Loader } from "@cloudflare/kumo";
 import {
-  PaperPlaneRightIcon, PaperclipIcon, StopIcon, GitBranchIcon, ArrowBendUpRightIcon,
-  LightningIcon, NotePencilIcon, WarningCircleIcon, InfoIcon, CheckCircleIcon,
+  StopIcon, GitBranchIcon, ArrowBendUpRightIcon,
+  WarningCircleIcon, InfoIcon, CheckCircleIcon,
 } from "@phosphor-icons/react";
 import type { FileUIPart } from "ai";
 import { AttachmentChip } from "@/components/AttachmentChip";
 
-export type ChatMode = "plan" | "build";
+const CHAT_MODES = ["build", "plan"] as const;
+export type ChatMode = (typeof CHAT_MODES)[number];
 
 /** Tones a status row can take. `progress` is `neutral` plus a spinner — it is
  *  a state, not a colour, so it gets no tint of its own. */
@@ -109,20 +110,34 @@ function Notice({ notice }: { notice: ComposerNotice }) {
 function ModeSegment({ value, onChange, locked, disabled }: {
   value: ChatMode; onChange: (mode: ChatMode) => void; locked: boolean; disabled: boolean;
 }) {
-  const item = (mode: ChatMode, Icon: typeof LightningIcon, label: string, hint: string, activeCls: string) => (
-    <button type="button" onClick={() => onChange(mode)}
-      disabled={disabled || (locked && mode === "build")}
-      aria-pressed={value === mode}
-      title={locked && mode === "build" ? "Approve the active plan before starting an Auto turn." : hint}
-      className={`flex items-center gap-1 rounded-full px-3 py-[5px] text-xs font-medium transition-colors disabled:opacity-40 ${value === mode ? activeCls : "p-text-3 hover:p-text-2"}`}>
-      <Icon size={12} />{label}
-    </button>
-  );
   return (
-    <div className="flex shrink-0 items-center gap-0.5"
-      role="group" aria-label="Turn mode">
-      {item("build", LightningIcon, "Auto", "Auto — the agent implements the change and shows you what it ran.", "border border-[rgba(224,164,88,.3)] bg-[rgba(224,164,88,.1)] p-gold")}
-      {item("plan", NotePencilIcon, "Plan", "Plan — review a plan before anything changes.", "border border-[rgba(224,164,88,.3)] bg-[rgba(224,164,88,.1)] p-gold")}
+    <div className="flex shrink-0 items-center gap-0.5" role="group" aria-label="Turn mode">
+      {CHAT_MODES.map((mode) => {
+        const build = mode === "build";
+        const selected = value === mode;
+        const title = build && locked
+          ? "Approve the active plan before starting an Auto turn."
+          : build
+            ? "Auto — the agent implements the change and shows you what it ran."
+            : "Plan — review a plan before anything changes.";
+        return (
+          <button
+            key={mode}
+            type="button"
+            onClick={() => onChange(mode)}
+            disabled={disabled || (locked && mode === "build")}
+            aria-pressed={selected}
+            title={title}
+            className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors disabled:opacity-40 ${
+              selected
+                ? "border-[rgba(224,164,88,.3)] bg-[rgba(224,164,88,.1)] p-gold"
+                : "p-border p-text-3 hover:p-text-2 hover:border-[var(--c-accent)]"
+            }`}
+          >
+            {build ? "Auto" : "Plan"}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -179,7 +194,7 @@ export function Composer({
     // @container: the action row labels itself when there is room and falls back
     // to icons in a dragged-narrow chat column, without depending on which
     // surface mounted it.
-    <div className="@container px-4 py-3 lg:px-6"
+    <div className="@container mx-auto w-full max-w-[660px] px-4 py-3.5 sm:px-5"
       onPaste={(e) => {
         if (attachments && e.clipboardData.files.length > 0) {
           e.preventDefault();
@@ -205,14 +220,14 @@ export function Composer({
         <InputArea ref={textareaRef} value={value} onValueChange={onValueChange}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit?.(); } }}
           placeholder={placeholder} disabled={disabled} rows={1}
-          className="w-full max-h-56 resize-none overflow-y-auto !border-0 px-3.5 pt-3 pb-1 !bg-transparent !shadow-none !outline-none !ring-0 focus:!ring-0" />
+          className="w-full max-h-56 resize-none overflow-y-auto !border-0 px-4 pt-3 pb-1 !bg-transparent !shadow-none !outline-none !ring-0 focus:!ring-0" />
 
         {/* One toolbar: how the turn runs on the left, what starts it on the
             right. It WRAPS, because a chat column can be dragged to ~190px and
             an unwrapped row pushed the send button off the card entirely. When
             it wraps, the model picker and the actions take the second line and
             `ml-auto` keeps send on the right. */}
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-2.5 pb-2.5">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-3 pt-2 pb-3">
           {attachments && (
             <>
               <input ref={fileInputRef} type="file" multiple className="hidden"
@@ -221,7 +236,6 @@ export function Composer({
                 className="inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full border p-border px-3 py-1 text-xs p-text-3 transition-colors hover:p-gold hover:border-[var(--c-accent)]"
                 aria-label="Attach files" title="Attach files">
                 <span aria-hidden className="text-[13px] leading-none">+</span>
-                <PaperclipIcon size={12} />
                 <span className="hidden @[26rem]:inline">Attach</span>
               </button>
             </>
@@ -232,7 +246,11 @@ export function Composer({
               disabled={disabled || streaming} />
           )}
 
-          {modelPicker}
+          {modelPicker && (
+            <div className="min-w-0 flex-1 basis-32 max-w-44 focus-within:rounded-sm focus-within:ring-1 focus-within:ring-[var(--c-accent)] [&_input]:!bg-transparent [&_input]:!ring-transparent">
+              {modelPicker}
+            </div>
+          )}
 
           {/* Three actions, one model, while the agent works: Stop abandons the
               turn, Branch answers the draft beside it, Steer hands the draft to
@@ -269,7 +287,6 @@ export function Composer({
               : <button type="button" onClick={onSend} disabled={empty || disabled}
                   className="p-btn inline-flex h-[30px] cursor-pointer items-center justify-center gap-1.5 rounded-full px-[18px] text-[12.5px]"
                   aria-label="Send">
-                  <PaperPlaneRightIcon size={13} />
                   Send
                 </button>}
           </div>

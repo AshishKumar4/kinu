@@ -98,7 +98,7 @@ function ReasoningBlock({ text, live = false }: { text: string; live?: boolean }
   return (
     // The mock's thought: a dim block ruled off the column by a 2px dashed
     // line, the first words inline, the affordance the word "expand" in gold.
-    <div className={`my-1 border-l-2 border-[var(--c-dash)] py-0.5 pl-3.5 text-[12.5px] leading-[1.7] p-text-4`}>
+    <div className={`border-l-2 border-[var(--c-dash)] py-0.5 pl-3.5 text-[12.5px] leading-[1.7] p-text-4`}>
       <button onClick={() => setExpanded(!expanded)} className="group/reason w-full text-left cursor-pointer" aria-expanded={expanded}>
         <span className={live ? "p-shimmer" : ""}>Thinking</span>
         {!expanded && <span className="opacity-80"> · {text.slice(0, 120)}</span>}
@@ -294,7 +294,7 @@ function ToolCallGroup({ parts }: { parts: readonly AnyToolPart[] }) {
   const VISIBLE = 8;
   const shown = showAll ? parts : parts.slice(0, VISIBLE);
   return (
-    <div className="my-1 overflow-hidden rounded-xl border p-border p-surface">
+    <div className="overflow-hidden rounded-lg border p-border p-surface">
       <div className="divide-y divide-dashed divide-[var(--c-dash)]">
         {shown.map((part) => <ToolCallPart key={part.toolCallId} part={part} />)}
       </div>
@@ -350,19 +350,21 @@ function ShownCaption({ state }: { state: CardState }) {
   );
 }
 
-/** A background job returning into the conversation — rendered as a centered
- *  marker, not a chat bubble. The agent's synthesis reply follows as normal. */
+/** A background job returning into the conversation — a full-width system row.
+ *  The agent's synthesis reply follows as normal. */
 function BackgroundEventCard({ kind, status, state }: { kind: string; status: string; state: CardState }) {
   const meta = status === "completed" ? { Icon: CheckCircleIcon, tone: "p-success", verb: "completed" }
     : status === "cancelled" ? { Icon: ProhibitIcon, tone: "p-text-3", verb: "was cancelled" }
     : { Icon: WarningCircleIcon, tone: "p-danger", verb: "failed" };
   return (
-    <div className="flex justify-center animate-fade-in py-1">
-      <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full p-elevated border p-border text-[11px] p-text-2">
-        <meta.Icon size={13} className={meta.tone} weight="fill" />
-        <span>Background <span className="font-medium p-text">{kind}</span> task {meta.verb}</span>
-        <span className="flex items-center gap-1 p-text-3"><ShownCaption state={state} /></span>
-        <ClockIcon size={11} className="p-text-3" />
+    <div className="animate-fade-in">
+      <div className="flex w-full items-baseline gap-2.5 rounded-lg border border-[rgba(224,164,88,.25)] bg-[rgba(224,164,88,.05)] px-4 py-2.5">
+        <span className="shrink-0 text-[11px] font-semibold p-gold">System</span>
+        <div className="min-w-0 flex-1 text-[12.5px] leading-[1.6] p-text-2 opacity-80">
+          Background <span className="font-mono text-[11px]">{kind}</span> task {meta.verb}
+          <span className="ml-1 inline-flex items-center gap-1 p-text-3"><ShownCaption state={state} /></span>
+        </div>
+        <meta.Icon size={12} className={`shrink-0 ${meta.tone}`} weight="fill" />
       </div>
     </div>
   );
@@ -376,9 +378,9 @@ function DrainedEventRow({ event }: { event: DrainedEvent }) {
     <button
       type="button"
       onClick={() => setExpanded(!expanded)}
-      className="w-full text-left p-card p-card-hover transition-colors px-2 py-1.5"
+      className="w-full rounded-md px-2 py-2 text-left transition-colors hover:p-elevated"
     >
-      <div className="flex items-center gap-1.5 text-[10px]">
+      <div className="flex items-center gap-1.5 text-[11px]">
         <span className="shrink-0 font-medium p-text-2">{eventVariantLabel(event.variant)}</span>
         <span className="min-w-0 truncate p-text-3">{event.source}</span>
         {event.replyExpected && (
@@ -390,7 +392,7 @@ function DrainedEventRow({ event }: { event: DrainedEvent }) {
           {expanded ? <CaretDownIcon size={10} /> : <CaretRightIcon size={10} />}
         </span>
       </div>
-      <div className={`mt-0.5 text-[11px] p-text-2 ${expanded ? "whitespace-pre-wrap break-words" : "truncate"}`}>
+      <div className={`mt-0.5 text-[12px] leading-[1.6] p-text-2 opacity-80 ${expanded ? "whitespace-pre-wrap break-words" : "truncate"}`}>
         {event.brief}
       </div>
     </button>
@@ -404,21 +406,21 @@ function DrainedEventRow({ event }: { event: DrainedEvent }) {
 function DrainedEventsCard({ text, state }: { text: string; state: CardState }) {
   const events = parseDrainedEvents(text);
   return (
-    <div className="flex justify-center animate-fade-in">
-      {/* The mock's System notice: gold-tinted border and ground, a gold
-          "System" label, the body in the dim register. */}
-      <div className="w-full max-w-[85%] rounded-xl border border-[rgba(224,164,88,.25)] bg-[rgba(224,164,88,.05)] px-4 py-2.5">
-        <div className="flex items-center gap-2 text-[10px]">
+    <div className="animate-fade-in">
+      {/* The mock's System notice: a full-width gold-tinted row in the
+          transcript measure, not a small card floating in its centre. */}
+      <div className="w-full rounded-lg border border-[rgba(224,164,88,.25)] bg-[rgba(224,164,88,.05)] px-4 py-2.5">
+        <div className="flex items-baseline gap-2.5 text-[11px]">
           <LightningIcon size={11} className={`shrink-0 ${state === "pending" ? "p-text-4" : "p-gold"}`} weight="fill" />
-          <span className="font-semibold p-gold">System</span>
-          <ShownCaption state={state} />
-          {events.length > 1 && <span className="ml-auto shrink-0 tabular-nums">{events.length} events</span>}
+          <span className="shrink-0 font-semibold p-gold">System</span>
+          <span className="p-text-3"><ShownCaption state={state} /></span>
+          {events.length > 1 && <span className="ml-auto shrink-0 p-text-3 tabular-nums">{events.length} events</span>}
         </div>
-        <div className="mt-1.5 space-y-1">
+        <div className="mt-1.5 divide-y divide-dashed divide-[var(--c-dash)]">
           {events.length > 0
             ? events.map((event, i) => <DrainedEventRow key={i} event={event} />)
             /* Format drift: show what the agent was given rather than nothing. */
-            : <div className="text-[11px] p-text-2 whitespace-pre-wrap break-words">{text}</div>}
+            : <div className="text-[12.5px] leading-[1.6] p-text-2 opacity-80 whitespace-pre-wrap break-words">{text}</div>}
         </div>
       </div>
     </div>
@@ -478,23 +480,23 @@ function SystemEventCard({ event, text, state }: {
 }) {
   const [expanded, setExpanded] = useState(false);
   return (
-    <div className="flex justify-center animate-fade-in py-1" data-system-event={event}>
-      <div className="w-full max-w-[85%] rounded-xl border border-[rgba(224,164,88,.25)] bg-[rgba(224,164,88,.05)] px-4 py-2.5">
+    <div className="animate-fade-in" data-system-event={event}>
+      <div className="w-full rounded-lg border border-[rgba(224,164,88,.25)] bg-[rgba(224,164,88,.05)] px-4 py-2.5">
         <button
           type="button"
           onClick={() => setExpanded(!expanded)}
-          className="w-full flex items-center gap-2 text-left text-[10px]"
+          className="w-full flex items-baseline gap-2.5 text-left text-[11px]"
           aria-expanded={expanded}
         >
           <GearSixIcon size={11} className="shrink-0 p-gold" weight="fill" />
-          <span className="font-semibold p-gold">System</span>
+          <span className="shrink-0 font-semibold p-gold">System</span>
           <span className="p-text-4">{event.replace(/_/g, " ")}</span>
-          <ShownCaption state={state} />
-          <span className="ml-auto shrink-0">
+          <span className="p-text-3"><ShownCaption state={state} /></span>
+          <span className="ml-auto shrink-0 p-text-3">
             {expanded ? <CaretDownIcon size={10} /> : <CaretRightIcon size={10} />}
           </span>
         </button>
-        <div className={`mt-1 text-[11px] p-text-2 ${expanded ? "whitespace-pre-wrap break-words" : "truncate"}`}>
+        <div className={`mt-1 text-[12.5px] leading-[1.6] p-text-2 opacity-80 ${expanded ? "whitespace-pre-wrap break-words" : "truncate"}`}>
           {text}
         </div>
       </div>
@@ -718,7 +720,7 @@ export const MessageView = memo(function MessageView({
         <Fragment key={s}>
           {segment.steer && <SteerBubble steer={segment.steer} onFork={onFork} />}
           {segment.parts.length > 0 && (
-            <div className="group relative max-w-[85%] space-y-1">
+            <div className="group relative w-full space-y-5">
               {s === forkSegment && canFork && (
                 <button
                   onClick={() => onFork!(message.id)}
@@ -754,7 +756,13 @@ export const MessageView = memo(function MessageView({
                     </div>
                   );
                 }
-                if (isToolUIPart(part)) return <ToolCallPart key={part.toolCallId} part={part} />;
+                if (isToolUIPart(part)) {
+                  return (
+                    <div key={part.toolCallId} className="overflow-hidden rounded-lg border p-border p-surface">
+                      <ToolCallPart part={part} />
+                    </div>
+                  );
+                }
                 return null;
               })}
             </div>

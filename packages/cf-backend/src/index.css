@@ -509,7 +509,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-annotation { font-family: var(--font-mono); font-size: 10px; line-height: 14px; letter-spacing: 0.045em; font-variant-numeric: tabular-nums; }
 .p-meta     { font-size: 12px; line-height: 16px; letter-spacing: -0.005em; }
 .p-row-text { font-size: 13px; line-height: 18px; letter-spacing: -0.008em; }
-.p-body     { font-size: 14px; line-height: 21px; letter-spacing: -0.006em; }
+.p-body     { font-size: 14px; line-height: 1.6; letter-spacing: -0.006em; }
 .p-title    { font-size: 15px; line-height: 20px; font-weight: 600; letter-spacing: -0.01em; }
 /* A panel heading — the display face at UI weight. `.p-display` is rationed
    to page titles at 24px+; this is the same voice for the headings inside a
