@@ -1,38 +1,37 @@
 import { SyntaxStyle } from '@opentui/core';
 
 // The Kinu design system, dark theme — packages/cf-backend/src/index.css
-// :root is the source of truth; this file mirrors it for the terminal. Warm
-// black ladder for ground and chrome, brass #E0A458 as the one accent. The
-// css draws hairlines as gold at alpha over the canvas; opentui takes hex
-// only, so those blends are precomputed here (border 0.14, input 0.18/0.22,
-// strong 0.28) — same recipe as the css, nothing invented. Status hues are
-// the system's sage/tan/terracotta lifted for AA, and info stays a cool
-// tone on purpose: a warm info hue would vanish into the ground.
+// :root is the source of truth (mock-canonical); this file mirrors it for the
+// terminal. Warm black ladder for ground and chrome, brass #E0A458 as the one
+// accent, hairlines as solid warm browns straight off the mock. Status hues:
+// the system defines good and bad; warning and info are its derived tan and
+// slate, and info stays a cool tone on purpose — a warm info hue would vanish
+// into the ground.
 export const tuiColors = {
-  bg: '#1A1613',           // --c-bg — the canvas, warm black at reading depth
-  panel: '#201A15',        // --c-sidebar — chrome: rails, panel headers
-  panelStrong: '#241E18',  // --c-surface — cards
-  panelDeep: '#120F0C',    // --c-recessed — wells, tracks, inset code
-  selection: '#2C251E',    // --c-fill / --c-elevated — chips, segments, hover
-  selectionDeep: '#2A211A',// --c-user-bg — the user turn's raised plane
-  bubbleBg: '#2A211A',     // --c-user-bg
-  bubbleBorder: '#3E301F', // --c-user-border (0.18) over bg
-  border: '#362A1D',       // --c-border (0.14) over bg
-  borderSubtle: '#292522', // --c-neutral-tint (0.07) over bg
-  borderMuted: '#513E26',  // --c-border-strong (0.28) over bg
+  bg: '#0F0D0B',           // --c-bg — the canvas, warm black at reading depth
+  panel: '#141110',        // --c-sidebar — chrome: rails, panel headers
+  panelStrong: '#181512',  // --c-surface — cards
+  panelDeep: '#131110',    // --c-recessed — wells, tracks, inset code
+  selection: '#1B1713',    // --c-fill — chips, segments, row hover
+  selectionDeep: '#221C15',// --c-elevated — the selected, raised state
+  bubbleBg: '#241E16',     // --c-user-bg — the user turn's plane
+  bubbleBorder: '#3A3126', // --c-user-border — mock --bubbleLine
+  border: '#262019',       // --c-border — mock --line
+  borderSubtle: '#2A241D', // --c-dash — dashed separators
+  borderMuted: '#332C23',  // --c-border-strong — mock --line2
   borderActive: '#E0A458', // focus sits in the system's full-brass ration
-  text: '#F5EFE6',         // --c-text — the ink
-  textStrong: '#F0CF9B',   // --c-accent-fg — headings, identity
-  textBright: '#F5EFE6',
-  muted: '#A19682',        // --c-text-3 — dim
+  text: '#EDE5D8',         // --c-text — the ink
+  textStrong: '#E3D2AE',   // --c-accent-fg — headings, identity
+  textBright: '#EDE5D8',
+  muted: '#9C9184',        // --c-text-3 — the dim role
   accent: '#E0A458',       // --c-accent — fills, strokes, the winning line
-  accentStrong: '#F0CF9B', // --c-accent-fg — bright end, hover
-  accentDeep: '#E8B97A',   // --c-code — one brass tone on a well
+  accentStrong: '#E3D2AE', // --c-accent-fg — bright end, hover
+  accentDeep: '#E3D2AE',   // --c-code — one brass tone on a well
   blue: '#8FB6D6',         // --c-info — links; deliberately cool on a warm ground
-  green: '#9EBE7E',        // --c-success — sage
-  amber: '#E8B97A',        // --c-warning — tan; the system has no separate warning hue
+  green: '#8FBC8B',        // --c-success — mock --good
+  amber: '#E8B97A',        // --c-warning — the system's derived tan
   amberDeep: '#AE8B5C',    // warning mixed 25% toward black, for borders
-  red: '#E8907A',          // --c-danger — terracotta
+  red: '#C97B6B',          // --c-danger — mock --bad
 };
 
 export const markdownSyntax = SyntaxStyle.fromStyles({

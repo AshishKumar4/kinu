@@ -18,12 +18,12 @@ import cliPackage from '../package.json' with { type: 'json' };
 // the source of truth. Fixed hexes assume the dark terminal the TUI paints;
 // NO_COLOR still strips everything through chalk.
 const INK = {
-  sheen: '#F0CF9B',   // --c-accent-fg — brand ink
+  sheen: '#E3D2AE',   // --c-accent-fg — brand ink
   thread: '#E0A458',  // --c-accent — fills, strokes, the winning line
-  success: '#9EBE7E', // --c-success — sage
-  warning: '#E8B97A', // --c-warning — tan
-  danger: '#E8907A',  // --c-danger — terracotta
-  dim: '#A19682',     // --c-text-3
+  success: '#8FBC8B', // --c-success — mock --good
+  warning: '#E8B97A', // --c-warning — derived tan
+  danger: '#C97B6B',  // --c-danger — mock --bad
+  dim: '#9C9184',     // --c-text-3
 } as const;
 
 const BRAND = chalk.bold.hex(INK.sheen)('Kinu');
