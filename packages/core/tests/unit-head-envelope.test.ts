@@ -2,13 +2,13 @@
  * Unit tests: the envelope a head actually runs in.
  *
  * A head is a FORK of its parent turn — same workspace, same files, same
- * sandbox — so it gets the same working envelope: the turn's step count, no
- * wall clock, no token pool. It used to get a private one instead (a ~5 min
+ * sandbox — so it gets the same open working envelope: no default wall clock,
+ * step count, or token pool. It used to get a private one instead (a ~5 min
  * clock, a token pool divided by fan-out, and a step guard derived from that
  * pool), and a 6-wide fork of a real audit died at 32 steps having produced
- * nothing. These tests lock the envelope open, and lock the two bounds that
- * remain to what they actually are: recursion depth, and a deadline only a
- * caller can ask for.
+ * nothing. These tests lock the envelope open, and lock the bounds that remain
+ * to what they actually are: recursion depth, a deadline only a caller can ask
+ * for, and cancellation by the spawner.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -206,20 +206,21 @@ describe('runHeadInference — a fork works until the work is done', () => {
     expect(usageTotal(report.usage)).toBe(20_400 * 10);
   });
 
-  test('the turn step envelope is the backstop, and it reports itself honestly', async () => {
+  test('the spawner abort is the backstop, and it reports itself honestly', async () => {
     const capture = new HeadCapture();
-    // A model that never stops. The only thing that ends it is the same step
-    // envelope the parent turn runs to — and the report says so rather than
-    // presenting a mid-flight thought as a finished answer.
+    // No default step bound exists. This caller cancels after the head banked
+    // forty real evidence rows, which exercises the surviving backstop without
+    // teaching an infinite fixture to wait for a guard production removed.
     const report = await runHeadInference(loopInput(), {
       model: loopingHeadModel({ promptTokens: 4_000, outputTokens: 1 }),
       tools: buildHeadAccumulatorTools(capture), capture,
       workspaceLayout: 'shared-workspace',
- isAborted: () => false,
+      isAborted: () => capture.evidence.length >= 40,
+      abortReason: () => 'the parent stopped the head after 40 findings',
     });
     expect(report.stepCount).toBe(40);
-    expect(report.status).toBe('budget_exceeded');
-    expect(report.errorMessage).toContain('step envelope (40 steps)');
+    expect(report.status).toBe('aborted');
+    expect(report.errorMessage).toContain('parent stopped');
     expect(report.summary).toContain('did not complete');
     // What it genuinely banked is still reported.
     expect(report.summary).toContain('still working');
@@ -229,15 +230,16 @@ describe('runHeadInference — a fork works until the work is done', () => {
 describe('runHeadInference — a head that stopped never reports a conclusion it did not reach', () => {
   const SPECULATION = 'The immediate blockage is the sandbox provisioning failure.';
 
-  test("a cut-off head's mid-flight prose is not returned as its finding", async () => {
+  test("an aborted head's mid-flight prose is not returned as its finding", async () => {
     const capture = new HeadCapture();
     const report = await runHeadInference(loopInput(), {
       model: loopingHeadModel({ promptTokens: 4_000, outputTokens: 1_000, text: SPECULATION }),
       tools: buildHeadAccumulatorTools(capture), capture,
       workspaceLayout: 'shared-workspace',
- isAborted: () => false,
+      isAborted: () => capture.evidence.length >= 4,
+      abortReason: () => 'the parent cancelled this head',
     });
-    expect(report.status).toBe('budget_exceeded');
+    expect(report.status).toBe('aborted');
     // This is the fabrication path: the speculation reached the parent as fact.
     expect(report.summary).not.toContain('sandbox provisioning');
     expect(report.summary).toContain('did not complete');
