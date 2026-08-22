@@ -56,6 +56,7 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>): Pr
       root: CF,
       cacheDir,
       configFile: join(CF, 'gallery.vite.config.ts'),
+      configLoader: 'runner',
       appType: 'spa',
       server: { middlewareMode: true, hmr: { server: http } },
     });

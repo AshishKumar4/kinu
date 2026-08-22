@@ -17,7 +17,6 @@ import {
 import { buildCliInstallCommand } from '../src/cli/install-command';
 import { handleCliRequest } from '../src/cli/routes';
 import { sanitizeReturnTo } from '../src/auth/store';
-import { landingDocument } from '../src/lib/public-pages';
 
 const root = join(import.meta.dir, '..');
 
@@ -409,21 +408,6 @@ describe('auth and desktop security invariants', () => {
     expect(server).toContain('handleLandingRequest(request, env)');
     expect(server.indexOf('handleLandingRequest(request, env)')).toBeLessThan(server.indexOf('authenticateRequest(request, env)'));
     expect(landing).toContain("url.pathname !== '/'");
-  });
-
-  test('the front page hands over in place and never bounces a visitor to a script', () => {
-    const page = landingDocument("curl -fsSL 'https://kinu.example.com/install.sh' | bash");
-    // Authentication is a real link. The install command is already visible,
-    // so no script-gated toggle can hide the second way in.
-    expect(page).toContain('href="/login"');
-    expect(page).toContain('TRY CLOUD AGENTS');
-    expect(page).toContain('landing-install-command');
-    expect(page).not.toContain('data-install-toggle');
-    // Escaped, not raw: the origin reaches this page through a template.
-    expect(page).toContain('curl -fsSL &#039;https://kinu.example.com/install.sh&#039; | bash');
-    expect(page).not.toContain('href="/install.sh"');
-    expect(page).not.toContain('/api/health">Status');
-    expect(page).not.toContain('OAuth sign-in required for the dashboard.');
   });
 
   test('browser install page is HTML while the terminal installer stays raw shell', async () => {

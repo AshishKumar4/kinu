@@ -50,6 +50,7 @@ const stubClientNodeBuiltins = {
     return null;
   },
 };
+
 export default defineConfig({
   plugins: [stubClientNodeBuiltins, agents(), react(), cloudflare(), tailwindcss()],
   // The fabric outbox is the one pre-bundled dep that imports a stubbed
@@ -60,6 +61,18 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": resolve(__dirname, "src"),
+    },
+  },
+  environments: {
+    client: {
+      build: {
+        rolldownOptions: {
+          input: {
+            app: resolve(__dirname, "index.html"),
+            landing: resolve(__dirname, "landing.html"),
+          },
+        },
+      },
     },
   },
 });
