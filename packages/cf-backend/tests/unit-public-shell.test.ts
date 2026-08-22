@@ -25,7 +25,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import {
-  FONT_PATHS, HERO_FACTS, RADII, REPO_URL, THEME_BLOCKS, THEME_BOOT, mark, markDocument, publicPage,
+  RADII, REPO_URL, THEME_BLOCKS, THEME_BOOT, mark, markDocument, publicPage,
   MARK_IDS, KINU_MARK,
 } from '../src/lib/public-shell';
 import {
