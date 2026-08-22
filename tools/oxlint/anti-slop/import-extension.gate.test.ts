@@ -20,6 +20,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 
 import { isParseable, isRawNodeModule, readMatching, trackedFiles } from "../../../scripts/sources.ts";
@@ -203,10 +204,10 @@ const cases: ReadonlyArray<{ readonly name: string; readonly bad: string; readon
   },
 ];
 
-const fixtures = mkdtempSync(join(repoRoot, ".import-extension-gate-"));
-/** `.oxlintrc.json` minus the plugin directory from `ignorePatterns`. Written at the repository
- *  root because oxlint resolves a `jsPlugins` specifier relative to its config file. */
-const rawNodeConfig = join(repoRoot, `${relative(repoRoot, fixtures)}.oxlintrc.json`);
+const fixtures = mkdtempSync(join(tmpdir(), "kinu-scratch-import-extension-gate-"));
+/** The raw-Node config lives with the fixtures. Absolute plugin paths keep
+ *  Oxlint resolution anchored to this repository without writing into it. */
+const rawNodeConfig = join(fixtures, "raw-node.oxlintrc.json");
 try {
   // --- 2a. The bundled/Bun half: the whole tree, under the real config. -----
   const tree = lintJson(["-c", ".oxlintrc.json", "."]);
@@ -228,12 +229,15 @@ try {
   writeFileSync(
     rawNodeConfig,
     JSON.stringify({
-      jsPlugins: config.jsPlugins,
+      jsPlugins: (config.jsPlugins ?? []).map((plugin: { readonly specifier: string }) => ({
+        ...plugin,
+        specifier: resolve(repoRoot, plugin.specifier),
+      })),
       rules: { [`anti-slop/${RULE}`]: "error" },
       ignorePatterns: ["node_modules", "dist"],
     }),
   );
-  const rawNode = lintJson(["-c", relative(repoRoot, rawNodeConfig), ...closure]);
+  const rawNode = lintJson(["-c", rawNodeConfig, ...closure]);
   assert.equal(
     rawNode.number_of_files,
     closure.size,
@@ -257,7 +261,7 @@ try {
     writeFileSync(join(green, `${name}.ts`), good);
   }
   const seeded = (directory: string): readonly Diagnostic[] => {
-    const report = lintJson(["-c", ".oxlintrc.json", relative(repoRoot, directory)]);
+    const report = lintJson(["-c", ".oxlintrc.json", directory]);
     assert.equal(
       report.number_of_files,
       cases.length + 1,
