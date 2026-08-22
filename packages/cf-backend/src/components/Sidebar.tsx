@@ -21,7 +21,7 @@
  */
 import { useEffect, useState, useCallback, useRef, type FormEvent } from "react";
 import { Link, NavLink, useMatch, useNavigate } from "react-router-dom";
-import { GearIcon, TrashIcon, SignOutIcon, PencilSimpleIcon, CheckIcon, XIcon } from "@phosphor-icons/react";
+import { GearIcon, TrashIcon, SignOutIcon, PencilSimpleIcon, CheckIcon, XIcon, PlusIcon } from "@phosphor-icons/react";
 import { Button } from "@cloudflare/kumo";
 import { FilledButton } from "./ui/FilledButton";
 import { KinuLogo } from "./ui/KinuLogo";
@@ -242,8 +242,6 @@ export default function Sidebar() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* Brand — the mock's lockup: the chevron caught mid-turn, Newsreader,
-          gold, rotated the way the stroke leans. */}
       <div className="flex items-center gap-2.5 px-5 pt-[18px] pb-2">
         <Link to="/" className="flex items-center" aria-label="Kinu home">
           <KinuLogo />
@@ -253,13 +251,16 @@ export default function Sidebar() {
       {/* New workspace — the outlined control the mock draws, into the
           mission-first screen (the home route). */}
       <div className="px-3.5 pb-1.5">
-        <button
+        <Button
+          type="button"
+          variant="secondary"
+          size="base"
           onClick={() => navigate("/")}
-          className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-[10px] border p-border-strong px-3.5 py-[9px] text-[13px] font-medium p-text-2 transition-colors hover:p-gold hover:border-[var(--c-accent)]"
+          className="!h-10 w-full justify-center"
+          icon={<PlusIcon size={15} weight="bold" />}
         >
-          <span className="text-[15px] leading-none">+</span>
-          <span>New workspace</span>
-        </button>
+          New workspace
+        </Button>
       </div>
 
       {/* Workspace list */}

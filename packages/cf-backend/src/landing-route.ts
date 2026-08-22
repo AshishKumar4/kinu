@@ -1,13 +1,13 @@
 /**
  * `/` for a visitor with no session.
  *
- * The signed-out landing is the supplied standalone HTML document. The Worker
- * chooses who sees it and streams the built asset without a second rendering
- * path. Its own controller derives the install command from the request origin.
+ * The signed-out landing is a dedicated React entry. The Worker chooses who
+ * sees it and streams the built asset. The browser derives its install command
+ * from the request origin.
  */
 
 import { AuthError, authenticateRequest } from './auth/session';
-import { landingHtmlHeaders } from './lib/security-headers';
+import { publicHtmlHeaders } from './lib/security-headers';
 import { markDocument } from './lib/public-shell';
 
 export async function handleLandingRequest(request: Request, env: Env): Promise<Response | null> {
@@ -29,7 +29,7 @@ export async function handleLandingRequest(request: Request, env: Env): Promise<
     if (!(e instanceof AuthError) || e.status !== 401) throw e;
   }
 
-  const headers = new Headers(landingHtmlHeaders());
+  const headers = new Headers(publicHtmlHeaders());
   if (request.method === 'HEAD') return new Response(null, { headers });
 
   const assetUrl = new URL('/landing.html', request.url);

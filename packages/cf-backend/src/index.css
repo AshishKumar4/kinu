@@ -932,6 +932,21 @@ body { background: var(--c-bg); color: var(--c-text); }
 @keyframes scale-in { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: scale(1); } }
 @keyframes blink-cursor { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0; } }
 
+.landing-shell {
+  width: 100%;
+  max-width: 82.5rem;
+  margin-inline: auto;
+  padding-inline: 2.5rem;
+}
+
+@media (max-width: 64rem) {
+  .landing-shell { padding-inline: 1.5rem; }
+}
+
+@media (max-width: 40rem) {
+  .landing-shell { padding-inline: 1.25rem; }
+}
+
 @layer utilities {
   .animate-fade-in { animation: fade-in var(--dur-enter) var(--ease-out-strong); }
   .animate-scale-in { animation: scale-in var(--dur-fast) ease-out; }
