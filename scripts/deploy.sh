@@ -144,6 +144,11 @@ gate_jobs() {
   echo "${KINU_DEPLOY_JOBS:-$(( threads / 2 > 0 ? threads / 2 : 1 ))}"
 }
 
+# A gate that cannot exit is a failure, not an infinite deploy. The slowest
+# measured source gate is ~60s under the full 12-job wave (2026-08-22); 180s
+# preserves that work while bounding leaked worker processes.
+GATE_DEADLINE_SECONDS=180
+
 # Run everything enqueued, then clear the queue. Each gate's output goes to its
 # own file and is printed ONLY if it fails: 52 concurrent streams interleaved
 # into one terminal is not a log anybody can read, and the output a reader wants
@@ -202,8 +207,10 @@ flush_gates() {
       group="${GATE_GROUP[${GATE_CMDS[pick]}]:-}"
       if [ -n "$group" ]; then busy[$group]=1; fi
       launched[pick]=1
+      # `timeout` owns a process group and escalates after five seconds, so a
+      # worker that keeps an open handle cannot outlive its gate or the deploy.
       # shellcheck disable=SC2086
-      ( ${GATE_CMDS[pick]} > "$dir/$pick.log" 2>&1; echo $? > "$dir/$pick.status" ) &
+      ( timeout --signal=TERM --kill-after=5s "$GATE_DEADLINE_SECONDS" ${GATE_CMDS[pick]} > "$dir/$pick.log" 2>&1; echo $? > "$dir/$pick.status" ) &
     done
 
     # WAIT ONLY IF SOMETHING IS RUNNING, and never break before settling. An
