@@ -25,14 +25,12 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import {
-  HERO_FACTS, RADII, REPO_URL, THEME_BLOCKS, THEME_BOOT, mark, markDocument, publicPage,
+  FONT_PATHS, HERO_FACTS, RADII, REPO_URL, THEME_BLOCKS, THEME_BOOT, mark, markDocument, publicPage,
   MARK_IDS, KINU_MARK,
 } from '../src/lib/public-shell';
 import {
   approvalDocument, authDocument, installDocument, landingDocument, loginDocument,
 } from '../src/lib/public-pages';
-import { heroSearch } from '../src/lib/hero-search';
-
 const INDEX_CSS = readFileSync(resolve(import.meta.dir, '../src/index.css'), 'utf8');
 
 /** The palette blocks that apply to each theme, in source order. Same model as
@@ -277,19 +275,6 @@ describe('public copy', () => {
       expect(html).toContain('width=device-width, initial-scale=1');
     });
   }
-
-  test('the front page quotes the search it actually draws', () => {
-    const search = heroSearch();
-    expect(HERO_FACTS.nodes).toBe(search.nodes.length);
-    expect(HERO_FACTS.depth).toBe(search.depth);
-    expect(HERO_FACTS.rollouts).toBe(search.beats);
-    expect(HERO_FACTS.abandoned).toBe(search.nodes.filter((node) => node.status === 'pruned').length);
-    const html = DOCUMENTS.landing;
-    expect(html).toContain(`${HERO_FACTS.rollouts} rollouts · depth ${HERO_FACTS.depth}`);
-    expect(html).toContain(`${HERO_FACTS.abandoned} branches abandoned`);
-    // The picture has to hold every node the caption's numbers came from.
-    expect(html.match(/class="n"/g)?.length).toBe(search.nodes.length);
-  });
 
   test('no page reaches for a font, a script or an image it cannot serve', () => {
     // `publicHtmlHeaders` allows `'self'` and inline only. A remote font or

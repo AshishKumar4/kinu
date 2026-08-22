@@ -63,6 +63,8 @@
   "movable packages/cf-backend/src/lib/hero-weave.ts",
   "movable packages/cf-backend/src/lib/http.ts",
   "movable packages/cf-backend/src/lib/kv.ts",
+  "movable packages/cf-backend/src/lib/landing-body.generated.ts",
+  "movable packages/cf-backend/src/lib/landing-scripts.ts",
   "movable packages/cf-backend/src/lib/nimbus-preview-host.ts",
   "movable packages/cf-backend/src/lib/orchestrator-wire.ts",
   "movable packages/cf-backend/src/lib/preview-origin.ts",

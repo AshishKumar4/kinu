@@ -35,7 +35,6 @@
  */
 
 import { escapeHtml } from './http';
-import { heroSearch, type HeroSearch } from './hero-search';
 
 /* ── Tokens ──────────────────────────────────────────────────────────── */
 
@@ -215,63 +214,6 @@ export function markDocument(id: MarkId = KINU_MARK): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" color="${DARK['--c-accent']}">${MARK_BODIES[id]}</svg>\n`;
 }
 
-/* ── The hero picture ────────────────────────────────────────────────── */
-
-const HERO = heroSearch();
-
-/** Radius from rollouts, by area rather than diameter, on the bracket
- *  `swarm-tree-model.ts` uses. */
-function radius(visits: number, max: number): number {
-  return 3.2 + (11 - 3.2) * Math.sqrt(Math.max(visits, 0) / Math.max(max, 1));
-}
-
-/** Fill from the measured score, on the product's own danger→warning→success
- *  ramp. Mixed in oklab for the same reason the app interpolates in Lab: an
- *  sRGB mix of those three goes muddy through the middle. */
-function scoreFill(value: number): string {
-  const low = value < 0.5;
-  const from = low ? '--c-danger' : '--c-warning';
-  const to = low ? '--c-warning' : '--c-success';
-  const t = low ? value * 2 : (value - 0.5) * 2;
-  return `color-mix(in oklab, var(${to}) ${Math.round(t * 100)}%, var(${from}))`;
-}
-
-/**
- * The search, as SVG.
- *
- * Every node and edge carries the beat it was created on, so the page can
- * reveal the tree in the order the search built it. With no script the whole
- * tree is already here, which is why growth is added by script rather than
- * removed by it.
- */
-export function heroFigure(search: HeroSearch = HERO): string {
-  const max = search.nodes.reduce((most, node) => Math.max(most, node.visits), 0);
-  const edges = search.edges.map(({ from, to }) => {
-    const mid = (from.x + to.x) / 2;
-    const weight = (0.7 + 2.6 * Math.sqrt(to.visits / max)).toFixed(2);
-    return `<path class="e" data-beat="${to.beat}" data-status="${to.status}" d="M${from.x} ${from.y}C${mid} ${from.y} ${mid} ${to.y} ${to.x} ${to.y}" stroke-width="${weight}"/>`;
-  }).join('');
-  const nodes = search.nodes.map((node) => (
-    `<circle class="n" data-beat="${node.beat}" data-status="${node.status}"`
-    + ` cx="${node.x}" cy="${node.y}" r="${radius(node.visits, max).toFixed(2)}"`
-    + ` style="fill:${scoreFill(node.value)}"/>`
-  )).join('');
-  return `<svg class="tree" id="hero-tree" viewBox="0 0 ${search.width} ${search.height}"`
-    + ` preserveAspectRatio="xMidYMid meet" role="img"`
-    + ` aria-label="A search tree of ${search.nodes.length} agents, ${search.depth} levels deep. The branch with the best measured score is drawn brightest."`
-    + `><g class="edges">${edges}</g><g class="nodes">${nodes}</g></svg>`;
-}
-
-/** Numbers the page quotes, taken from the tree it draws, so the words under
- *  the picture cannot claim a search the picture does not show. */
-export const HERO_FACTS = {
-  nodes: HERO.nodes.length,
-  depth: HERO.depth,
-  rollouts: HERO.beats,
-  /** Branches that took one rollout and were never returned to. */
-  abandoned: HERO.nodes.filter((node) => node.status === 'pruned').length,
-} as const;
-
 /* ── Stylesheet ──────────────────────────────────────────────────────── */
 
 const THEME_CSS = THEME_BLOCKS.map(({ selector, tokens }) => {
@@ -334,6 +276,59 @@ font-family:var(--font-mono);font-size:11.5px;letter-spacing:0.07em;text-transfo
 .icon{display:inline-flex;padding:7px;color:var(--c-text-3);border-radius:var(--r-control)}
 .icon:hover{color:var(--c-text);background:var(--c-fill)}
 
+/* ── Sticky nav ────────────────────────────────────────────────────────
+   Blurred ground at 92% so the page reads through it while scrolled. */
+.bar{position:sticky;top:0;z-index:10;margin:0 calc(-1 * var(--gutter));
+padding:0 var(--gutter);height:64px;display:flex;align-items:center;
+justify-content:space-between;gap:24px;border-bottom:1px solid var(--c-border);
+background:color-mix(in srgb,var(--c-bg) 92%,transparent);
+backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+.brand{display:inline-flex;align-items:baseline;gap:12px;font-weight:700;
+font-size:24px;letter-spacing:-.02em;color:var(--c-text)}
+.brand:hover{color:var(--c-text)}
+.brand .mark{color:var(--c-accent);align-self:center}
+.brand .kana,.kana{font-family:var(--font-mono);font-size:10px;letter-spacing:.2em;
+color:var(--c-text-3)}
+.nav-cta{padding:9px 18px;min-height:0;font-size:11px}
+.nav{display:flex;align-items:center;gap:26px;font-family:var(--font-mono);
+font-size:11px;letter-spacing:.14em}
+.nav .quiet{color:var(--c-text-2)}
+.nav .quiet:hover{color:var(--c-accent)}
+.nav .quiet b{color:inherit;font-weight:inherit}
+.icon{display:inline-flex;padding:6px;color:var(--c-text-3)}
+.icon:hover{color:var(--c-accent)}
+
+/* ── Type ──────────────────────────────────────────────────────────────
+   Two voices per the design system: the grotesque at 600 for display and
+   400 for reading; Fragment Mono names everything the machine touches.
+   Gold is the emphasis of last resort - one phrase per screen. */
+h1,h2,h3{margin:0;font-weight:600}
+h1{font-size:clamp(34px,4.5vw,58px);line-height:1.04;letter-spacing:-.03em;text-wrap:pretty}
+h2{font-size:clamp(30px,3.5vw,46px);line-height:1.05;letter-spacing:-.03em;text-wrap:pretty}
+h3{font-size:22px;letter-spacing:-.02em;line-height:1.25}
+.subhead{font-weight:500;font-size:clamp(20px,2vw,28px);line-height:1.25;
+letter-spacing:-.02em;color:var(--c-accent-fg)}
+p{margin:0}
+.gold{color:var(--c-accent)}
+.lede{font-size:17px;line-height:1.65;color:var(--c-text-2);text-wrap:pretty}
+.body{font-size:15px;line-height:1.7;color:var(--c-text-2);text-wrap:pretty}
+.dim{font-family:var(--font-mono);font-size:11.5px;letter-spacing:.04em;
+line-height:1.8;color:var(--c-text-3)}
+
+/* The mono voices. Section numerals are gold; figure captions and cell
+   kickers are faint; data-row keys are gold at reading size. */
+.eyebrow,.label,.fig,.num,.key{font-family:var(--font-mono);text-transform:uppercase}
+.eyebrow,.label{font-size:12px;letter-spacing:.22em;color:var(--c-accent)}
+.label b{color:inherit;font-weight:inherit;margin-right:1.5em}
+.fig{font-size:10px;letter-spacing:.16em;color:var(--c-text-3)}
+.num{font-size:10px;letter-spacing:.18em;color:var(--c-text-3)}
+.key{font-size:12px;letter-spacing:.02em;color:var(--c-accent)}
+.stat-k{font-family:var(--font-mono);font-size:11px;letter-spacing:.16em;
+text-transform:uppercase;color:var(--c-accent)}
+
+/* ── Controls: sharp corners, mono labels ──────────────────────────────
+   No radius anywhere on this surface; depth comes from the two background
+   steps, never from shadows. */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;
 min-height:38px;padding:0 15px;border:1px solid var(--c-input-border);border-radius:var(--r-row);
 background:transparent;color:var(--c-text);font:inherit;font-size:14px;font-weight:600;
@@ -433,6 +428,9 @@ export interface PublicPageOptions {
   /** Extra CSS for one page. Kept short: anything two pages need belongs in
    *  `SHELL_CSS`. */
   readonly styles?: string;
+  /** Left-hand side of the header bar, as markup. Absent means the standard
+   *  mark-plus-wordmark link home. */
+  readonly brand?: string;
   /** Right-hand side of the header bar. Absent means no bar at all, which is
    *  what the CLI approval pages want. */
   readonly nav?: string;
@@ -472,7 +470,7 @@ ${description ? `<meta name="description" content="${escapeHtml(description)}" /
 </head>
 <body>
 <div class="page">
-${options.nav === undefined ? '' : `<header class="bar">${wordmark()}<nav class="nav">${options.nav}</nav></header>\n`}${options.body}
+${options.nav === undefined ? '' : `<header class="bar">${options.brand ?? wordmark()}<nav class="nav">${options.nav}</nav></header>\n`}${options.body}
 ${options.footer ?? ''}</div>
 ${options.script ? `<script>${options.script}</script>\n` : ''}</body>
 </html>`;
