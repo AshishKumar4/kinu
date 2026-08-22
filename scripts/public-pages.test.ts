@@ -35,6 +35,7 @@ interface Facts {
   canvasPixels?: number;
   treeFlows?: boolean;
   prunedNodes?: number;
+  heroGraphWidth?: number;
   workspace?: SurfaceFact;
   tui?: SurfaceFact;
   cli?: SurfaceFact;
@@ -158,6 +159,9 @@ beforeAll(async () => {
       facts.canvasPixels = await opaqueCanvasPixels(page);
       await page.waitForSelector('canvas[data-settled="true"]', { timeout: 10_000 });
       facts.prunedNodes = await page.$eval('canvas', (canvas) => Number(canvas.dataset.pruned ?? 0));
+      facts.heroGraphWidth = await page.$eval('[data-hero-graph]', (graph) => (
+        Math.round(graph.getBoundingClientRect().width)
+      ));
       const settledTree = await page.$eval('canvas', (canvas) => canvas.toDataURL());
       const settledPhrase = await page.$eval('h1', (heading) => heading.textContent ?? '');
       await page.waitForFunction(
@@ -340,6 +344,7 @@ describe('the standalone landing runs', () => {
 
   test('the abstract tree keeps visibly pruned branches', () => {
     expect(required(facts.prunedNodes, 'pruned branch count')).toBeGreaterThan(20);
+    expect(required(facts.heroGraphWidth, 'hero graph width')).toBeGreaterThan(620);
   });
 
   test('reduced motion serves one settled result', () => {
