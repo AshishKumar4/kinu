@@ -18,11 +18,11 @@
 // against the files. Both halves are needed: the first says the mutation matters, the
 // second says the claim about which test catches it is true.
 //
-// WHY A MUTANT COPY AND NOT THE REAL FILE — the same reason `mutation-merge-back.test.ts`
-// gives. Editing `src/strategy/objective.ts` in place would open a window in which any
-// other test file loading that module gets the mutant, and a crash mid-run would leave
-// the source inverted. Each mutation is written to its own throwaway modules beside this
-// file, imported once, and removed.
+// WHY A MUTANT COPY AND NOT THE REAL FILE — the same reason
+// `mutation-merge-back.test.ts` gives. Editing a strategy in place would expose
+// every concurrent reader and a crash could leave the source inverted. Each
+// mutation lives under owned scratch, is imported once, and is removed by the
+// test process's shared release.
 //
 // AND THE COPY IS A CLOSURE, which is the one thing this harness adds over that file's.
 // `isBetter` and `admitsPublication` are observable only through `records.ts`, and a
@@ -34,9 +34,10 @@
 // EVERY MUTATION ASSERTS IT LANDED. `writeMutants` requires each snippet to occur EXACTLY
 // once and throws otherwise, because a mutation whose edit silently missed is a test that
 // proves a guard is load-bearing by never removing it.
-import { afterAll, describe, expect, test } from 'bun:test';
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { describe, expect, test } from 'bun:test';
+import { readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
+import { scratchDir } from '@kinu.run/test-utils';
 import { Database } from 'bun:sqlite';
 import { makeExecRaw, makeSql } from './helpers';
 import { createRecordingLogger } from '../src/obs/index';
@@ -65,8 +66,10 @@ type MergeBackModule = typeof pristineMergeBack;
 type RecordsModule = typeof pristineRecords;
 type SwarmBudgetModule = typeof pristineSwarmBudget;
 
-const HERE = new URL('.', import.meta.url).pathname;
+const TEST_DIR = new URL('.', import.meta.url).pathname;
+const MUTANTS = scratchDir('mutation-exploration-policy');
 const SRC = new URL('../src/', import.meta.url).pathname;
+symlinkSync(resolve(TEST_DIR, '../../../node_modules'), resolve(MUTANTS, 'node_modules'), 'dir');
 
 /** A file to copy, and what to change in it. */
 interface Copy {
@@ -77,26 +80,21 @@ interface Copy {
   readonly edits?: readonly (readonly [find: string, replace: string])[];
 }
 
-const written: string[] = [];
-
-afterAll(() => {
-  for (const path of written) rmSync(path, { force: true });
-});
 
 /**
- * Write every file in `plan` beside this test file with its edits applied, and answer
- * with a lookup from planned `src` to the copy's path.
+ * Write every file in `plan` under this run's owned scratch directory and
+ * answer with a lookup from planned `src` to the copy's path.
  *
- * A copied file's relative imports are resolved against ITS OWN directory and re-emitted
- * relative to this one, so a specifier pointing at another copied file lands on that
- * file's copy and every other specifier lands on the untouched original.
+ * A copied file's relative imports are resolved against its source directory
+ * and re-emitted relative to scratch. A specifier pointing at another copied
+ * file lands on that copy; every other specifier lands on pristine source.
  */
 function writeMutants(label: string, plan: readonly Copy[]): (src: string) => string {
   // A copy is named so the `*.test.ts` glob cannot match it and the runner never treats a
   // mutant as a suite of its own.
   const target = new Map(plan.map((copy) => [
     resolve(SRC, copy.src),
-    resolve(HERE, `policy.mutant-${label}-${copy.src.replaceAll('/', '-')}`),
+    resolve(MUTANTS, `policy.mutant-${label}-${copy.src.replaceAll('/', '-')}`),
   ]));
   for (const copy of plan) {
     const origin = resolve(SRC, copy.src);
@@ -118,14 +116,13 @@ function writeMutants(label: string, plan: readonly Copy[]): (src: string) => st
       (_whole: string, specifier: string) => {
         const resolved = resolve(dir, specifier);
         const to = target.get(`${resolved}.ts`) ?? resolved;
-        const path = relative(HERE, to);
+        const path = relative(MUTANTS, to);
         return `from '${path.startsWith('.') ? path : `./${path}`}'`;
       },
     );
     const at = target.get(origin);
     if (at === undefined) throw new Error(`no copy planned for ${copy.src}`);
     writeFileSync(at, rewritten);
-    written.push(at);
   }
   return (src) => {
     const at = target.get(resolve(SRC, src));
@@ -783,7 +780,7 @@ describe('the harness cannot prove a guard it did not remove', () => {
   // files that hold them.
   test('every defended test exists exactly once where it is claimed', () => {
     const missing = DEFENDED.filter((defended) => {
-      const source = readFileSync(resolve(HERE, defended.file), 'utf8');
+      const source = readFileSync(resolve(TEST_DIR, defended.file), 'utf8');
       return source.split(`test('${defended.name}'`).length - 1
         + source.split(`test("${defended.name}"`).length - 1 !== 1;
     }).map((defended) => `${defended.file}: ${defended.name}`);
