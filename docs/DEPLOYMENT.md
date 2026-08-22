@@ -509,7 +509,7 @@ exhausted budget returns the original response rather than throwing.
 | `KINU_MODEL` | CLI shell env | Override local agent model |
 | `KINU_SOURCE_TARBALL` | CLI shell env | Advanced installer/update source override (`cli/routes.ts:957`) |
 | `KINU_SOURCE_SHA256` | CLI shell env | Pin a SHA-256 for the source tarball (default: published `.sha256` asset, always verified) |
-| `KINU_CALL_TIMEOUT_MS`-class tuning | CLI shell env / wrangler env var | None exposed: the per-call silence window (600 s) and its 3 retries are core constants (`core/src/config.ts`), never per-turn |
+| Per-call timeout tuning | CLI shell env / wrangler env var | None exposed. Core fixes the silence window at 600 s with 3 retries (`LLM_CALL_TIMEOUT_MS` and `LLM_CALL_MAX_RETRIES` in `core/src/config.ts`). |
 
 `SANDBOX_TRANSPORT` is the one `vars` entry `Env` in `env.d.ts` does not
 declare. Read it from `wrangler.jsonc`, not from the type.
