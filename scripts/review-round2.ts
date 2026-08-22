@@ -43,6 +43,12 @@ interface SectionYs {
   [id: string]: number;
 }
 
+interface AnchorDriftEntry { readonly dx: number; readonly dy: number }
+type LabelReport = DriftReport & {
+  readonly anchorDrift: Record<string, AnchorDriftEntry>;
+  readonly anchorMax: { readonly maxDx: number; readonly maxDy: number };
+};
+
 interface DriftReport {
   readonly artifactHeightPx: number;
   readonly portHeightPx: number;
@@ -97,6 +103,68 @@ async function serveDesign(): Promise<{ url: string; kill: () => void }> {
 }
 
 const SECTION_IDS = ['top', 'platform', 'quickstart', 'clients', 'evolution', 'swarm', 'deploy', 'cta'] as const;
+
+interface Rect { readonly x: number; readonly y: number; readonly w: number; readonly h: number }
+
+/** Structural anchors that exist on BOTH pages: his inline-styled markup and
+ *  the component agree on ids, canvas, h1, and copy-keyed blocks, so the same
+ *  resolution logic runs on each side. */
+async function anchors(page: Page): Promise<Record<string, Rect>> {
+  const raw = await page.evaluate(() => {
+    // X is recorded relative to the page's own content column: the two
+    // documents live at different viewport widths (his margin strips widen
+    // the captured canvas), so absolute x compares nothing. The h1 sits at
+    // the column's content edge on both sides, so its left IS the column.
+    const h1el = [...document.querySelectorAll('h1')]
+      .find((el) => (el.textContent ?? '').includes('Agents that')) ?? document.querySelector('h1');
+    const columnLeft = h1el === null ? 0
+      : h1el.getBoundingClientRect().left - (parseFloat(getComputedStyle(h1el).paddingLeft) || 0);
+    const rect = (el: Element): Rect => {
+      const r = el.getBoundingClientRect();
+      return { x: Math.round(r.left + window.scrollX - columnLeft), y: Math.round(r.top + window.scrollY),
+        w: Math.round(r.width), h: Math.round(r.height) };
+    };
+    const byText = (root: ParentNode, text: string, tag = '*'): Element | null =>
+      [...root.querySelectorAll(tag)].find((el) => (el.textContent ?? '').trim().startsWith(text)) ?? null;
+    const out: Record<string, Rect> = {};
+    const put = (name: string, el: Element | null): void => {
+      out[name] = el === null ? { x: -1, y: -1, w: -1, h: -1 } : rect(el);
+    };
+    put('nav_lockup', document.querySelector('header a[href="#top"]'));
+    for (const id of ['platform', 'quickstart', 'clients', 'evolution', 'swarm', 'deploy']) {
+      put(`nav_${id}`, document.querySelector(`header a[href="#${id}"]`));
+    }
+    put('nav_cta', byText(document.querySelector('header') ?? document, 'TRY CLOUD AGENTS', 'a'));
+    // The hero card: the grid panel that carries the claim.
+    const heroGrid = [...document.querySelectorAll('#top div')].find((el) => {
+      const cs = getComputedStyle(el);
+      return cs.display === 'grid' && (el.textContent ?? '').includes('THE SELF-EVOLVING');
+    }) ?? null;
+    put('hero_card', heroGrid);
+    if (heroGrid !== null) {
+      const cols = [...heroGrid.children].filter((k) => getComputedStyle(k).position !== 'absolute');
+      put('hero_col2', cols[1] ?? null);
+      put('hero_eyebrow', byText(heroGrid, 'THE SELF-EVOLVING'));
+      put('hero_h1', heroGrid.querySelector('h1'));
+      put('hero_lede', byText(heroGrid, 'Persistent workspaces'));
+      put('hero_install', byText(heroGrid, 'curl -fsSL'));
+      put('hero_cta', byText(heroGrid, 'TRY CLOUD AGENTS'));
+      put('hero_cta2', byText(heroGrid, 'DEPLOY YOUR OWN'));
+    }
+    const learns = byText(document.body, 'LEARNS FROM USE');
+    put('claims', learns === null ? null : learns.parentElement);
+    const claimCells = document.querySelectorAll('.claims > *');
+    claimCells.forEach((cell, i) => put(`claim_${i}`, cell));
+    for (const id of ['platform', 'quickstart', 'clients', 'evolution', 'swarm', 'deploy', 'cta']) {
+      put(`h2_${id}`, (document.getElementById(id) ?? document).querySelector('h2'));
+    }
+    put('footer', document.querySelector('footer'));
+    return out;
+  }, []);
+  const ys: Record<string, Rect> = {};
+  for (const [k, v] of Object.entries(raw)) ys[k] = v;
+  return ys;
+}
 
 async function measure(page: Page): Promise<SectionYs> {
   // The CDP boundary hands back a plain record; the missing-key defaults
@@ -174,7 +242,7 @@ try {
   if (!up) throw new Error('vite never came up');
 
   browser = await puppeteer.launch({ headless: true, executablePath: chromePath ?? undefined, args: ['--no-sandbox'] });
-  const report: Record<string, DriftReport | Record<string, SideAnatomy>> = {};
+  const report: Record<string, DriftReport | LabelReport | Record<string, SideAnatomy>> = {};
 
   for (const [label, width, height] of [['1280', 1280, 900], ['1920', 1920, 1000]] as const) {
     const a = await browser.newPage();
@@ -182,6 +250,7 @@ try {
     await a.goto(`${design.url}/${encodeURIComponent('Kinu Landing Page.dc.html')}`, { waitUntil: 'networkidle0' });
     await waitArtifactSettled(a);
     const artifactYs = await measure(a);
+    const artifactAnchors = await anchors(a);
     await a.screenshot({ path: `${OUT}/artifact-${label}.png`, fullPage: true });
 
     const p = await browser.newPage();
@@ -190,7 +259,20 @@ try {
     await p.goto(`${origin}/gallery.html?frame=landing`, { waitUntil: 'networkidle0' });
     await new Promise((r) => setTimeout(r, 700));
     const portYs = await measure(p);
+    const portAnchors = await anchors(p);
     await p.screenshot({ path: `${OUT}/port-${label}.png`, fullPage: true });
+
+    let maxDx = 0; let maxDy = 0;
+    const anchorDrift: Record<string, { dx: number; dy: number }> = {};
+    for (const name of Object.keys(artifactAnchors)) {
+      const ar = artifactAnchors[name]!; const pr = portAnchors[name]!;
+      const dx = Math.abs(pr.x - ar.x); const dy = Math.abs(pr.y - ar.y);
+      if (ar.x >= 0 && pr.x >= 0) {
+        anchorDrift[name] = { dx, dy };
+        if (dx > maxDx) maxDx = dx;
+        if (dy > maxDy) maxDy = dy;
+      }
+    }
 
     const drift: Record<string, number> = {};
     for (const id of Object.keys(artifactYs)) {
@@ -204,7 +286,10 @@ try {
       sectionHeights: secsTable(artifactYs, portYs),
       driftPx: drift,
     };
-    report[label] = driftReport;
+    const labelReport: LabelReport = Object.assign(driftReport, {
+      anchorDrift, anchorMax: { maxDx, maxDy },
+    });
+    report[label] = labelReport;
     if (label === '1280') {
       writeFileSync(`${OUT}/anatomy.json`, JSON.stringify({ artifact: await anatomy(a), port: await anatomy(p) }, null, 1));
     }
@@ -242,4 +327,39 @@ function secsTable(a: SectionYs, p: SectionYs): DriftReport['sectionHeights'] {
     out[id] = { artifact: nextA - a[id]!, port: nextP - p[id]! };
   }
   return out;
+}
+
+/** Light-mode set: same widths, prefers-color-scheme light. One vite, one
+ *  browser, both closed before exit — the same discipline as the main pass. */
+{
+  // A fresh browser for the second pass: under memory pressure the long
+  //-lived one was dying between passes and taking the light set with it.
+  await browser?.close();
+  browser = await puppeteer.launch({ headless: true, executablePath: chromePath ?? undefined, args: ['--no-sandbox'] });
+  const viteL = spawn('bunx', ['vite', 'dev', '--config', 'gallery.vite.config.ts', '--port', String(vitePort + 1)], { cwd: CF, stdio: 'ignore' });
+  const originL = `http://127.0.0.1:${vitePort + 1}`;
+  try {
+    const deadlineL = Date.now() + 30_000;
+    for (;;) {
+      try { if ((await fetch(`${originL}/gallery.html`)).ok) break; } catch (cause) {
+        console.warn('vite not answering yet:', cause instanceof Error ? cause.message : cause);
+      }
+      if (Date.now() > deadlineL) throw new Error('light-pass vite never came up');
+      await Bun.sleep(250);
+    }
+    for (const [label, width, height] of [
+      ['1280', 1280, 900], ['1920', 1920, 1000], ['390', 390, 844],
+    ] as const) {
+      const p = await browser.newPage();
+      await p.setViewport({ width, height });
+      await p.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'light' }]);
+      await p.goto(`${originL}/gallery.html?frame=landing`, { waitUntil: 'networkidle0' });
+      await new Promise((r) => setTimeout(r, 700));
+      await p.screenshot({ path: `${OUT}/port-${label}-light.png`, fullPage: true });
+      await p.close();
+      console.log(`shot light ${label}`);
+    }
+  } finally {
+    viteL.kill();
+  }
 }

@@ -12,7 +12,7 @@
  */
 
 import { escapeHtml } from './http';
-import { HERO_TREE_SCRIPT, TYPEWRITER_SCRIPT } from './landing-scripts';
+import { HERO_TREE_SCRIPT, MODE_TOGGLE_SCRIPT, PREVIEW_SCRIPT, TYPEWRITER_SCRIPT } from './landing-scripts';
 import { LANDING_BODY } from './landing-body.generated';
 import {
   COPY_SCRIPT, GITHUB_ICON, REPO_URL, mark, publicFooter, publicPage,
@@ -41,6 +41,7 @@ export function landingDocument(
     title: 'Kinu.run — the self-evolving agent platform',
     description: 'Kinu is an open-source agent platform. Agents run in durable workspaces, improve with use, and search a tree of agents on hard tasks. Run it on kinu.run, or deploy your own.',
     styles: LANDING_CSS,
+    chrome: 'bleed',
     brand: `<a href="#top" style="font-weight:700; font-size:24px; color:var(--c-text); letter-spacing:-.02em">kinu</a>
         <span class="kana">絹</span>`,
     nav: [
@@ -51,11 +52,15 @@ export function landingDocument(
       '<a class="quiet" href="#swarm">SWARM</a>',
       '<a class="quiet" href="#deploy">SELF-HOST</a>',
       `<a class="quiet" href="${REPO_URL}" target="_blank" rel="noopener noreferrer">GITHUB ↗</a>`,
+      '<button class="mode-toggle" type="button" data-mode-toggle aria-label="Switch to light mode">'
+        + '<svg data-icon="sun" width="15" height="15" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M120 40V16a8 8 0 0 1 16 0v24a8 8 0 0 1-16 0Zm72 88a64 64 0 1 1-64-64 64.07 64.07 0 0 1 64 64Zm-128 0a8 8 0 0 0-8-8H24a8 8 0 0 0 0 16h24a8 8 0 0 0 8-8Zm80 72v24a8 8 0 0 1-16 0v-24a8 8 0 0 1 16 0Zm88-88h-24a8 8 0 0 0 0 16h24a8 8 0 0 0 0-16ZM74.34 85.66a8 8 0 0 0 11.32 0l16-16a8 8 0 0 0-11.32-11.32l-16 16a8 8 0 0 0 0 11.32Zm96.04 3.95a8 8 0 0 0 5.65-2.34l16-16a8 8 0 1 0-11.31-11.32l-16 16a8 8 0 0 0 5.66 13.66Zm-84.77 79.19-16 16a8 8 0 0 0 11.32 11.32l16-16a8 8 0 0 0-11.32-11.32Zm101.26-.69a8 8 0 0 0-11.32 0 8 8 0 0 0 0 11.32l16 16a8 8 0 0 0 11.32-11.32Z"/></svg>'
+        + '<svg data-icon="moon" width="15" height="15" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M233.54 142.23a8 8 0 0 0-8-2 88.08 88.08 0 0 1-109.8-109.8 8 8 0 0 0-10-10 104.09 104.09 0 1 0 127.82 127.82 8 8 0 0 0 .02-6.02Z"/></svg>'
+        + '</button>',
       '<a class="btn solid nav-cta" href="/login">TRY CLOUD AGENTS</a>',
     ].join(''),
     body,
     footer: `
-<footer><div class="footer-in">
+<footer class="bleed"><div class="page"><div class="footer-in">
   <div style="display:flex; align-items:baseline; gap:12px">
     <span style="font-weight:700; font-size:18px; letter-spacing:-.02em">kinu</span>
     <span class="kana">絹 · THE SELF-EVOLVING AGENT PLATFORM</span>
@@ -67,9 +72,9 @@ export function landingDocument(
     <a href="/login">KINU.RUN</a>
   </nav>
   <span class="dim">MIT © 2026</span>
-</div></footer>
+</div></div></footer>
 `,
-    script: [COPY_SCRIPT, TYPEWRITER_SCRIPT, HERO_TREE_SCRIPT].join('\n'),
+    script: [COPY_SCRIPT, MODE_TOGGLE_SCRIPT, TYPEWRITER_SCRIPT, HERO_TREE_SCRIPT, PREVIEW_SCRIPT].join('\n'),
   });
 }
 
@@ -79,6 +84,12 @@ export function landingDocument(
  * caret blink. Colours stay on tokens throughout.
  */
 const LANDING_CSS = `
+/* ── Width model ────────────────────────────────────────────────────────
+   Measured, not assumed: his mock runtime ships its own
+   box-sizing:border-box reset, so his max-width-1280 padded column is
+   1280 OUTER with an 1184 content measure — exactly what this shell's
+   border-box .page already produces. No compensation; rails, gutters and
+   inner grids line up verbatim. */
 @keyframes kinu-blink { 0%, 49% { opacity:1; } 50%, 100% { opacity:0; } }
 .caret{display:inline-block;width:.09em;height:.82em;background:var(--c-accent);
 margin-left:.06em;vertical-align:baseline;transform:translateY(.12em);
@@ -148,6 +159,51 @@ white-space:pre-wrap;overflow-wrap:anywhere}
 .glimpse:empty{display:none}
 .glimpse{min-height:120px}
 
+/* Theme toggle — the app top-bar control's landing twin. */
+.mode-toggle{display:inline-flex;align-items:center;justify-content:center;
+width:34px;height:34px;border:1px solid var(--c-border-strong);border-radius:0;
+background:transparent;color:var(--c-text-2);cursor:pointer;
+transition:color 150ms var(--ease),border-color 150ms var(--ease)}
+.mode-toggle:hover{color:var(--c-accent);border-color:var(--c-accent)}
+
+/* The hero figure floats on the panel's own texture — no box of its own. */
+.hero-fig{min-width:0}
+
+/* Interactive previews: the beats the driver reveals. All ships visible;
+   the driver hides future beats only when motion is allowed and the figure
+   is on screen. */
+[data-preview] .term{margin:14px 0}
+.prev-duo{margin-top:clamp(36px,4vw,56px);align-items:start}
+.tui-preview .line[data-kind="tool"]{color:var(--c-text-2);font-family:var(--font-mono)}
+.tui-preview .line[data-kind="say"]{color:var(--c-text);font-family:var(--font-ui);font-size:13.5px;line-height:1.7}
+.tui-preview .line[data-kind="status"]{color:var(--c-success)}
+.ws{display:grid;grid-template-columns:150px minmax(0,1fr);gap:1px;
+background:var(--c-border);border:1px solid var(--c-border);
+font-family:var(--font-ui)}
+.ws-rail{background:var(--c-recessed);padding:14px;display:flex;flex-direction:column;gap:6px}
+.ws-item{font-size:12.5px;color:var(--c-text-2);padding:6px 10px;border-left:2px solid transparent}
+.ws-item.active{color:var(--c-text);border-left-color:var(--c-accent);background:var(--c-fill)}
+.ws-main{position:relative;background:var(--c-surface);padding:18px;min-height:230px}
+.ws-bubble{background:var(--c-user-bg);border:1px solid var(--c-user-border);
+padding:9px 12px;font-size:13.5px;color:var(--c-text);max-width:85%;
+margin-left:auto;margin-bottom:12px}
+.ws-tool,.ws-say,.ws-job,.ws-inspector{margin-bottom:11px}
+.ws-tool{font-family:var(--font-mono);font-size:12.5px;color:var(--c-text-2)}
+.ws-tool .metric{margin-left:8px}
+.ws-say{font-size:14px;line-height:1.65;color:var(--c-text-2);max-width:60ch}
+.ws-job{display:flex;gap:10px;align-items:center;padding:8px 10px;
+border:1px dashed var(--c-border-strong);font-size:12.5px;color:var(--c-text-2)}
+.ws-inspector{border-top:1px dashed var(--c-border-strong);padding-top:10px;
+display:flex;flex-direction:column;gap:6px}
+.ws-inspector>div:not(.fig){font-family:var(--font-mono);font-size:12px;
+display:flex;justify-content:space-between;gap:16px;color:var(--c-text-2)}
+[data-preview] [data-beat]{opacity:1}
+
+@media (max-width:1020px){
+@media (prefers-reduced-motion:no-preference){
+[data-preview] [data-beat-shown]{opacity:1}
+[data-preview] [data-beat]:not([data-beat-shown]){opacity:0}
+}}
 @media (max-width:1020px){
 .hero-grid{grid-template-columns:1fr;gap:44px}
 .hero-grid>*{min-width:0}
@@ -159,6 +215,9 @@ white-space:pre-wrap;overflow-wrap:anywhere}
 }
 @media (max-width:680px){
 .g.two,.g.three,.grid.four{grid-template-columns:1fr!important}
+.ws{grid-template-columns:1fr}
+.ws-rail{flex-direction:row;flex-wrap:wrap}
+.ws-main{min-height:0}
 /* Below his design's floor the no-wrap claim would clip mid-word; wrapping
    it is the smaller deviation. */
 [data-typewriter]{white-space:normal !important;height:auto !important}
