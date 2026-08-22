@@ -1,5 +1,5 @@
 import { Tabs, type TabsItem } from '@cloudflare/kumo';
-import { useState, type ReactElement } from 'react';
+import { useEffect, useState, type ReactElement } from 'react';
 
 import { KinuLogo } from '@/components/ui/KinuLogo';
 
@@ -23,7 +23,7 @@ function WorkspacePreview(): ReactElement {
           onValueChange={setAltitude}
           variant="segmented"
           activateOnFocus
-          className="shrink-0 [&>div:first-child]:!h-9 [&>div:first-child]:!rounded-full [&>div:first-child]:!bg-[var(--c-fill)] [&_[role=tab]]:!my-0 [&_[role=tab]]:!h-[30px] [&_[role=tab]]:!rounded-full"
+          className="landing-tabs shrink-0 [&>div:first-child]:!h-9 [&>div:first-child]:!rounded-full [&>div:first-child]:!bg-[var(--c-fill)] [&_[role=tab]]:!my-0 [&_[role=tab]]:!h-[30px] [&_[role=tab]]:!rounded-full"
           listClassName="!h-9 !rounded-full !border !border-[var(--c-border-strong)] !bg-[var(--c-fill)] !p-[3px] !ring-0"
           indicatorClassName="!rounded-full !bg-[var(--c-accent)] !shadow-none !ring-0"
         />
@@ -108,6 +108,11 @@ function TuiPreview(): ReactElement {
   ] as const;
   return (
     <div aria-label="Kinu terminal interface preview" className="overflow-hidden rounded-xl border border-[var(--c-border-strong)] bg-[var(--c-input-bg)] shadow-[0_40px_110px_-50px_rgba(0,0,0,.95)]">
+      <div className="grid h-10 grid-cols-[1fr_auto_1fr] items-center border-b border-[var(--c-border-strong)] p-sidebar px-4 font-mono text-[10px] p-text-4">
+        <div className="flex gap-2"><span className="size-2 rounded-full bg-[var(--c-danger)] opacity-70" /><span className="size-2 rounded-full bg-[var(--c-warning)] opacity-70" /><span className="size-2 rounded-full bg-[var(--c-success)] opacity-70" /></div>
+        <span className="uppercase tracking-[.14em]">kinu tui — checkout</span>
+        <span className="justify-self-end uppercase tracking-[.1em]">terminal</span>
+      </div>
       <div className="flex min-h-12 items-center justify-between gap-4 border-b border-[var(--c-border-strong)] p-recessed px-4 py-2 font-mono text-[11px] uppercase tracking-[.06em] p-text-4">
         <div className="flex min-w-0 flex-wrap items-center gap-3.5">
           <KinuLogo compact />
@@ -158,25 +163,43 @@ function TuiPreview(): ReactElement {
   );
 }
 function CliPreview(): ReactElement {
+  const [stage, setStage] = useState(0);
+  useEffect(() => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setStage(4);
+      return;
+    }
+    const timers = [650, 1_250, 1_900, 2_600].map((delay, index) => (
+      window.setTimeout(() => setStage(index + 1), delay)
+    ));
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, []);
+
+  const lineClass = (visible: boolean): string => (
+    `grid grid-cols-[16px_minmax(0,1fr)_auto] gap-3 py-2 transition-all duration-300 ${visible ? 'translate-y-0 opacity-100' : 'translate-y-1 opacity-0'}`
+  );
   return (
-    <div aria-label="Kinu command line preview" className="grid overflow-hidden rounded-xl border border-[var(--c-border-strong)] bg-[var(--c-input-bg)] font-mono text-xs lg:grid-cols-[minmax(0,.9fr)_minmax(0,1.1fr)]">
-      <div className="border-b border-[var(--c-border-strong)] p-5 lg:border-b-0 lg:border-r sm:p-7">
-        <div className="mb-5 text-[10px] uppercase tracking-[.16em] p-text-4">Commands</div>
-        <div className="space-y-4">
-          <div><span className="mr-2 p-gold">$</span><span className="p-text">kinu run checkout “Audit the coupon flow.”</span></div>
-          <div><span className="mr-2 p-gold">$</span><span className="p-text">kinu chat checkout</span></div>
-          <div><span className="mr-2 p-gold">$</span><span className="p-text">kinu acp checkout</span></div>
+    <div aria-label="Kinu command line preview" className="overflow-hidden rounded-xl border border-[var(--c-border-strong)] bg-[var(--c-input-bg)] font-mono text-xs shadow-[0_30px_90px_-50px_rgba(0,0,0,.8)]">
+      <div className="flex h-11 items-center gap-2 border-b border-[var(--c-border-strong)] p-recessed px-4">
+        <span className="size-2 rounded-full bg-[var(--c-danger)] opacity-70" />
+        <span className="size-2 rounded-full bg-[var(--c-warning)] opacity-70" />
+        <span className="size-2 rounded-full bg-[var(--c-success)] opacity-70" />
+        <span className="ml-3 flex-1 text-center text-[10px] uppercase tracking-[.14em] p-text-4">kinu run · checkout</span>
+        <span className={`text-[10px] uppercase tracking-[.12em] ${stage < 4 ? 'p-gold' : 'p-success'}`}>{stage < 4 ? 'running' : 'exit 0'}</span>
+      </div>
+      <div className="min-h-[360px] p-5 sm:p-7">
+        <div className="mb-6 p-text"><span className="mr-2 p-gold">$</span>kinu run checkout “Audit the coupon flow and fix it.”<span className={`ml-1 inline-block h-[1em] w-[7px] bg-[var(--c-accent)] ${stage === 0 ? 'motion-safe:animate-pulse' : 'opacity-0'}`} /></div>
+        <div className="border-y border-[var(--c-border-strong)] px-1">
+          <div className={lineClass(stage >= 1)}><span className="p-gold">›</span><span className="p-text-3">run · workspace &nbsp; reproduce coupon failure</span><span className="p-danger">exit 1</span></div>
+          <div className={`${lineClass(stage >= 2)} border-t border-dashed border-[var(--c-dash)]`}><span className="p-gold">›</span><span className="p-text-3">file &nbsp; edit migration and handler</span><span className="p-success">saved</span></div>
+          <div className={`${lineClass(stage >= 3)} border-t border-dashed border-[var(--c-dash)]`}><span className="p-gold">›</span><span className="p-text-3">run · workspace &nbsp; bun test coupon</span><span className="p-success">7 pass</span></div>
+        </div>
+        <div className={`mt-6 grid grid-cols-[52px_minmax(0,1fr)] gap-3 transition-all duration-300 ${stage >= 4 ? 'translate-y-0 opacity-100' : 'translate-y-1 opacity-0'}`}>
+          <span className="text-[10px] uppercase tracking-[.12em] p-gold">result</span>
+          <p className="font-sans text-sm leading-[1.65] p-text">The percentage-coupon path is fixed. The migration now fills both coupon kinds, and all seven focused tests pass.</p>
         </div>
       </div>
-      <div className="p-5 sm:p-7">
-        <div className="mb-5 flex justify-between gap-4 text-[10px] uppercase tracking-[.16em] p-text-4"><span>last run</span><span>exit 0 · 18.4 s</span></div>
-        <div className="space-y-2.5 p-text-3">
-          <div><span className="mr-3 p-success">✓</span>reproduced the percentage-coupon failure</div>
-          <div><span className="mr-3 p-success">✓</span>patched the migration and handler</div>
-          <div><span className="mr-3 p-success">✓</span>7 focused tests passed</div>
-        </div>
-        <p className="mt-6 border-t border-dashed border-[var(--c-dash)] pt-4 font-sans text-sm leading-[1.65] p-text">The command exits with the result, so the same workspace fits scripts, CI, and shell pipelines.</p>
-      </div>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--c-border-strong)] p-recessed px-5 py-3 text-[10px] p-text-4"><span>one-shot run · final answer on stdout</span><span>also: kinu chat · kinu acp</span></div>
     </div>
   );
 }
@@ -200,8 +223,8 @@ export function LandingShowcases(): ReactElement {
       </section>
       <section data-showcase="cli" className="py-24">
         <div className="mb-9 grid items-end gap-6 md:grid-cols-[minmax(0,.72fr)_minmax(0,1.28fr)] md:gap-[52px]">
-          <div><div className="mb-3.5 flex items-center gap-3 text-[13px] font-semibold p-gold"><span className="h-px w-[22px] bg-[color-mix(in_srgb,var(--c-accent)_55%,transparent)]" />The CLI</div><h2 className="text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">One command in. <span className="p-gold">One result out.</span></h2></div>
-          <p className="max-w-[580px] text-base leading-[1.65] p-text-3">Run one task and exit for scripts and CI. Open the same workspace in the TUI or an ACP editor when the work needs a conversation.</p>
+          <div><div className="mb-3.5 flex items-center gap-3 text-[13px] font-semibold p-gold"><span className="h-px w-[22px] bg-[color-mix(in_srgb,var(--c-accent)_55%,transparent)]" />The CLI</div><h2 className="text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">Automate focused work <span className="p-gold">from any shell.</span></h2></div>
+          <p className="max-w-[580px] text-base leading-[1.65] p-text-3">Use <code className="font-mono text-[.9em] p-text-2">kinu run</code> for one-shot tasks in scripts and CI. It streams tool activity, returns the final answer, and exits with the run status.</p>
         </div>
         <CliPreview />
       </section>

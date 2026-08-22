@@ -129,7 +129,7 @@ export function WorkspaceBar({
             if (value === "run" || value === "supervise") onAltitude(value);
           }}
           activateOnFocus
-          className="shrink-0 [&>div:first-child]:!h-9 [&>div:first-child]:!rounded-full [&>div:first-child]:!bg-[var(--c-fill)] [&_[role=tab]]:!my-0 [&_[role=tab]]:!h-[30px] [&_[role=tab]]:!rounded-full"
+          className="p-altitude-tabs shrink-0 [&>div:first-child]:!h-9 [&>div:first-child]:!rounded-full [&>div:first-child]:!bg-[var(--c-fill)] [&_[role=tab]]:!my-0 [&_[role=tab]]:!h-[30px] [&_[role=tab]]:!rounded-full"
           listClassName="!h-9 !rounded-full !border !border-[var(--c-border)] !bg-[var(--c-fill)] !p-[3px] !ring-0"
           indicatorClassName="!rounded-full !bg-[var(--c-accent)] !shadow-none !ring-0"
         />

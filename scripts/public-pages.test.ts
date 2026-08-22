@@ -33,6 +33,8 @@ interface Facts {
   typed?: { early: string; later: string };
   reduced?: { before: string; after: string; pixels: number; animations: number };
   canvasPixels?: number;
+  treeFlows?: boolean;
+  prunedNodes?: number;
   workspace?: SurfaceFact;
   tui?: SurfaceFact;
   cli?: SurfaceFact;
@@ -94,6 +96,7 @@ async function openLanding(
     { name: 'prefers-color-scheme', value: 'dark' },
     { name: 'prefers-reduced-motion', value: reducedMotion ? 'reduce' : 'no-preference' },
   ]);
+  await page.bringToFront();
   await page.goto(`${origin}/landing.html`, { waitUntil: 'networkidle0' });
   await page.waitForFunction(
     () => document.querySelector('h1') !== null,
@@ -153,6 +156,19 @@ beforeAll(async () => {
       facts.typed = { early, later: String(later) };
       await new Promise((resolve) => setTimeout(resolve, 1200));
       facts.canvasPixels = await opaqueCanvasPixels(page);
+      await page.waitForSelector('canvas[data-settled="true"]', { timeout: 10_000 });
+      facts.prunedNodes = await page.$eval('canvas', (canvas) => Number(canvas.dataset.pruned ?? 0));
+      const settledTree = await page.$eval('canvas', (canvas) => canvas.toDataURL());
+      const settledPhrase = await page.$eval('h1', (heading) => heading.textContent ?? '');
+      await page.waitForFunction(
+        (previous: string) => document.querySelector('h1')?.textContent !== previous,
+        { polling: 100, timeout: 8_000 },
+        settledPhrase,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      facts.treeFlows = await page.$eval('canvas', (canvas, first) => (
+        canvas.dataset.settled === 'true' && canvas.toDataURL() !== first
+      ), settledTree);
 
       const surfaces = await page.evaluate(() => {
         const measure = (element: Element | null): SurfaceFact => {
@@ -316,6 +332,14 @@ describe('the standalone landing runs', () => {
     const typed = required(facts.typed, 'typed claim');
     expect(typed.early).not.toBe(typed.later);
     expect(required(facts.canvasPixels, 'canvas pixels')).toBeGreaterThan(20);
+  });
+
+  test('the settled graph keeps flowing without restarting its reveal', () => {
+    expect(required(facts.treeFlows, 'settled tree motion')).toBeTrue();
+  });
+
+  test('the abstract tree keeps visibly pruned branches', () => {
+    expect(required(facts.prunedNodes, 'pruned branch count')).toBeGreaterThan(20);
   });
 
   test('reduced motion serves one settled result', () => {
