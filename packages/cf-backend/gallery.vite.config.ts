@@ -5,24 +5,27 @@
  *
  *   bunx vite dev --config gallery.vite.config.ts --port 5199
  */
-import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
+
+const galleryRoot = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
-      "@": resolve(__dirname, "src"),
-      "node:crypto": resolve(__dirname, "client-node-stubs.ts"),
-      "node:async_hooks": resolve(__dirname, "client-node-stubs.ts"),
+      "@": resolve(galleryRoot, "src"),
+      "node:crypto": resolve(galleryRoot, "client-node-stubs.ts"),
+      "node:async_hooks": resolve(galleryRoot, "client-node-stubs.ts"),
       // The agent transport. A frame that mounts a PAGE rather than a surface
       // gets no `Rpc` prop — the page opens its own connection — so without
       // these two the page opened a WebSocket to a vite server that is not a
       // Worker and drew nothing. Three fork frames did exactly that.
-      "agents/react": resolve(__dirname, "src/gallery-agent-stub.ts"),
-      "@cloudflare/ai-chat/react": resolve(__dirname, "src/gallery-agent-stub.ts"),
+      "agents/react": resolve(galleryRoot, "src/gallery-agent-stub.ts"),
+      "@cloudflare/ai-chat/react": resolve(galleryRoot, "src/gallery-agent-stub.ts"),
     },
   },
 });
