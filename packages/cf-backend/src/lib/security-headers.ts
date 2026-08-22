@@ -46,6 +46,7 @@ export function publicHtmlHeaders() {
   };
 }
 
+
 /**
  * CSP for the authenticated SPA.
  *

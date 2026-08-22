@@ -29,7 +29,7 @@ import {
   MARK_IDS, KINU_MARK,
 } from '../src/lib/public-shell';
 import {
-  approvalDocument, authDocument, installDocument, landingDocument, loginDocument,
+  approvalDocument, authDocument, installDocument, loginDocument,
 } from '../src/lib/public-pages';
 const INDEX_CSS = readFileSync(resolve(import.meta.dir, '../src/index.css'), 'utf8');
 
@@ -163,25 +163,13 @@ describe('public shell tokens are the app palette', () => {
     expect(readFileSync(resolve(file, '../OFL.txt'), 'utf8')).toContain('SIL Open Font License');
   });
 
-  test('Newsreader stays app-only', () => {
-    // The app's serif voice (brand mark, the new-workspace headline) is not
-    // part of the signed-out shell, so its 58 KB never loads on the landing.
+  test('Newsreader stays in the React bundle rather than the standalone shell', () => {
+    // Landing and the app share the Kinu wordmark through the React stylesheet.
+    // Login/install pages remain small standalone documents.
     expect(publicPage({ title: 't', body: '' })).not.toContain('Newsreader');
     expect(INDEX_CSS).toContain('/assets/fonts/newsreader-latin-var.woff2');
   });
 
-  test('the landing page weight stays inside its envelope', () => {
-    // What a first visit downloads before images: the document (gzipped, as
-    // served) plus the two fonts. ~97 KB today; the envelope catches an
-    // unbounded regression while leaving room for the landing's inline
-    // demos to grow deliberately.
-    const html = landingDocument("curl -fsSL 'https://kinu.run/install.sh' | bash");
-    const gz = Bun.gzipSync(new TextEncoder().encode(html)).byteLength;
-    const fonts = [UI_FONT_PATH, MONO_FONT_PATH]
-      .map((p) => readFileSync(resolve(import.meta.dir, '../public', '.' + p)).byteLength)
-      .reduce((a, b) => a + b, 0);
-    expect(gz + fonts).toBeLessThanOrEqual(128 * 1024);
-  });
 });
 
 
@@ -229,7 +217,6 @@ describe('the pre-paint theme script', () => {
 
 /** Every public document, with the arguments its route passes. */
 const DOCUMENTS = {
-  landing: landingDocument("curl -fsSL 'https://kinu.run/install.sh' | bash"),
   login: loginDocument([{ href: '/auth/github/start', label: 'GitHub' }], ' And a trailing line.'),
   authFailure: authDocument('Sign in failed', '<p class="lede">Try again.</p>'),
   install: installDocument("curl -fsSL 'https://kinu.run/install.sh' | bash"),

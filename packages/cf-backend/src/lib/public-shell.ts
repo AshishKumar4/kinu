@@ -447,14 +447,6 @@ export interface PublicPageOptions {
   /** Extra CSS for one page. Kept short: anything two pages need belongs in
    *  `SHELL_CSS`. */
   readonly styles?: string;
-  /** Left-hand side of the header bar, as markup. Absent means the standard
-   *  mark-plus-wordmark link home. */
-  readonly brand?: string;
-  /** `'bleed'` moves the header and footer OUTSIDE the measured column: the
-   *  hairline runs the full viewport and their inner content stands in a
-   *  column of the same measure. The landing's artifact draws both that way;
-   *  the small utility pages stay inset. */
-  readonly chrome?: 'inset' | 'bleed';
   /** Right-hand side of the header bar. Absent means no bar at all, which is
    *  what the CLI approval pages want. */
   readonly nav?: string;
@@ -480,12 +472,9 @@ for (const button of document.querySelectorAll('[data-copy]')) {
 
 export function publicPage(options: PublicPageOptions): string {
   const description = options.description ?? '';
-  const bleed = options.chrome === 'bleed';
   const header = options.nav === undefined
     ? ''
-    : bleed
-      ? `<header class="bar"><div class="page bar-page">${options.brand ?? wordmark()}<nav class="nav">${options.nav}</nav></div></header>\n`
-      : `<header class="bar">${options.brand ?? wordmark()}<nav class="nav">${options.nav}</nav></header>\n`;
+    : `<header class="bar">${wordmark()}<nav class="nav">${options.nav}</nav></header>\n`;
 
   return `<!doctype html>
 <html lang="en">

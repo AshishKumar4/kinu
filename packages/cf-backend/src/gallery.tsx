@@ -72,7 +72,7 @@ import {
 import "./index.css";
 import { KINU_MARK, MARK_IDS, mark } from "@/lib/public-shell";
 import {
-  approvalDocument, authDocument, installDocument, landingDocument, loginDocument,
+  approvalDocument, authDocument, installDocument, loginDocument,
 } from "@/lib/public-pages";
 import Sidebar from "@/components/Sidebar";
 import { ModelPicker } from "@/components/ModelPicker";
@@ -2339,7 +2339,6 @@ function Palette() {
  *  visitor reads. */
 function publicDocument(name: string | null): string | null {
   const install = `curl -fsSL 'https://kinu.run/install.sh' | bash`;
-  if (name === "landing") return landingDocument(install);
   if (name === "login") {
     return loginDocument([
       { href: "/auth/cloudflare/start?return_to=%2F", label: "Cloudflare" },
@@ -3599,9 +3598,7 @@ function OpenConfigDisclosures({ children }: { children: React.ReactNode }) {
 }
 
 async function mount() {
-  // A public page is a whole document, not a component: it replaces this one
-  // and React never mounts. Checked before anything else so no app CSS or
-  // React root is built for a frame that is about to throw the document away.
+  // Standalone public string documents render without the app shell.
   const document_ = publicDocument(frame);
   if (document_ !== null) {
     writeDocument(document_);

@@ -1,16 +1,13 @@
 /**
  * `/` for a visitor with no session.
  *
- * The page itself is `lib/public-pages.ts`. This decides who sees it: a request
- * that authenticates falls through to the SPA, and only a 401 gets the front
- * page. Anything else the session layer throws is a real failure and is not
- * answered with marketing.
+ * The signed-out landing is a dedicated React entry. The Worker chooses who
+ * sees it and streams the built asset. The browser derives its install command
+ * from the request origin.
  */
 
 import { AuthError, authenticateRequest } from './auth/session';
-import { buildCliInstallCommand } from './cli/install-command';
 import { publicHtmlHeaders } from './lib/security-headers';
-import { landingDocument } from './lib/public-pages';
 import { markDocument } from './lib/public-shell';
 
 export async function handleLandingRequest(request: Request, env: Env): Promise<Response | null> {
@@ -32,8 +29,18 @@ export async function handleLandingRequest(request: Request, env: Env): Promise<
     if (!(e instanceof AuthError) || e.status !== 401) throw e;
   }
 
-  const headers = publicHtmlHeaders();
+  const headers = new Headers(publicHtmlHeaders());
   if (request.method === 'HEAD') return new Response(null, { headers });
-  const install = buildCliInstallCommand({ origin: url.origin });
-  return new Response(landingDocument(install), { headers });
+
+  const assetUrl = new URL('/landing.html', request.url);
+  const asset = await env.ASSETS.fetch(assetUrl);
+  if (!asset.ok) {
+    throw new Error(`landing asset returned ${String(asset.status)}`);
+  }
+  headers.delete('content-length');
+  return new Response(asset.body, {
+    status: asset.status,
+    statusText: asset.statusText,
+    headers,
+  });
 }

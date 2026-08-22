@@ -10,18 +10,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { MAX_LINES_PER_FILE, type DiffLine } from "@kinu.run/core";
 import { copyLabel, useCopy } from "@/hooks/use-copy";
-import { mark } from "@/lib/public-shell";
-
-/** The brush mark, as a React element. One renderer for every in-app use —
- *  the sidebar lockup, empty states, the gallery's candidate sheet — so the
- *  mark is always the same paths from `public-shell.ts`, coloured by
- *  `currentColor` like everywhere else it ships. */
-export function KinuMark({ size = 20, className }: { size?: number; className?: string }) {
-  return (
-    <span aria-hidden className={className} style={{ lineHeight: 0 }}
-      dangerouslySetInnerHTML={{ __html: mark(size) }} />
-  );
-}
+import { KinuMark } from "@/components/ui/KinuLogo";
 
 /** Render a sequence of diff lines (add/del/ctx) red/green — shared by the
  *  scaffold-version diff (Self) and the workspace change-set (Output).
