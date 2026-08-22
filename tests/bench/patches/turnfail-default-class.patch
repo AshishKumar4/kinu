@@ -1,13 +1,11 @@
 diff --git a/packages/core/src/turn-failure.ts b/packages/core/src/turn-failure.ts
-index c8f8f44..0380afe 100644
+index e6cc51a..aa91473 100644
 --- a/packages/core/src/turn-failure.ts
 +++ b/packages/core/src/turn-failure.ts
-@@ -69,7 +69,7 @@ export function classifyTurnFailure(error: string, signals: TurnFailureSignals =
-       lastPromptTokens > contextWindow * 0.5;
+@@ -89,5 +89,5 @@ export function classifyTurnFailure(error: string, signals: TurnFailureSignals =
      return oversized ? 'context_length' : 'rate_limit';
    }
+   if (AUTH_PATTERNS.some((re) => re.test(error))) return 'auth';
 -  return 'transient';
 +  return 'rate_limit';
  }
- 
- export interface OverflowRecoveryInput extends TurnFailureSignals {
