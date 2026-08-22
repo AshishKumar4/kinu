@@ -9,20 +9,25 @@
  * invisible to every non-browser instrument in the repo.
  *
  * Two scripts need that browser now (screenshots, computed-style), and the
- * lifecycle they need is identical and entirely non-obvious: pick a port that
- * is free in THIS worktree, spawn vite, wait for it to answer, find a Chrome,
- * and declare a pointing device so `hover:` utilities are not silently dead.
- * All of it is here so neither caller carries it.
+ * lifecycle they need is identical: let the OS atomically assign a port,
+ * start Vite in this process, launch one Chrome, and close both in one finally.
+ * No probe-then-bind gap exists, so concurrent worktrees cannot select one port
+ * and silently photograph whichever server won the race.
  */
 
-import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { createServer } from 'node:net';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { createServer as createHttpServer } from 'node:http';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import puppeteer, { type Browser, type LaunchOptions } from 'puppeteer';
+import { createServer as createViteServer } from 'vite';
+import * as v from 'valibot';
 
 const REPO = join(import.meta.dir, '..');
 const CF = join(REPO, 'packages', 'cf-backend');
+const TcpAddressSchema = v.object({
+  port: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(65_535)),
+});
 
 export interface Gallery {
   readonly browser: Browser;
@@ -30,42 +35,6 @@ export interface Gallery {
   readonly origin: string;
 }
 
-/** A free port, starting at the usual one.
- *
- *  Not a nicety: several worktrees of this repo are normally checked out at
- *  once, and a fixed port means the second run's vite fails to bind, the
- *  readiness probe succeeds against the FIRST worktree's server, and the run
- *  reports on somebody else's code — silently, under the names you asked for. */
-async function freePort(from: number): Promise<number> {
-  for (let port = from; port < from + 50; port++) {
-    const { promise, resolve } = Promise.withResolvers<boolean>();
-    const probe = createServer();
-    probe.once('error', () => resolve(false));
-    probe.once('listening', () => probe.close(() => resolve(true)));
-    probe.listen(port, '127.0.0.1');
-    const free = await promise;
-    if (free) return port;
-  }
-  throw new Error(`no free port in ${from}..${from + 50}`);
-}
-
-async function waitForServer(url: string, timeoutMs = 30_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  // vite is spawned with `stdio: 'ignore'`, so the probe's own last refusal is
-  // the only surviving evidence of WHY nothing answered — a config error that
-  // killed the server looks exactly like a slow start without it.
-  let lastFailure: unknown;
-  while (Date.now() < deadline) {
-    try {
-      const res = await fetch(url);
-      if (res.ok) return;
-    } catch (cause) {
-      lastFailure = cause;
-    }
-    await Bun.sleep(250);
-  }
-  throw new Error(`gallery server never came up at ${url}`, { cause: lastFailure });
-}
 
 function chromePath(): string | undefined {
   for (const candidate of ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium']) {
@@ -75,38 +44,62 @@ function chromePath(): string | undefined {
 }
 
 /** Run `body` against a live gallery, then tear both halves down whatever
- *  happens. The server and the browser are never handed out separately: a
- *  caller that could forget one is a caller that leaves a vite process on a
- *  port the next run will then avoid. */
+ *  happens. Vite runs as middleware behind a Node server that binds port 0.
+ *  The kernel selects and binds that port in one syscall, so another gate
+ *  cannot claim it between a probe and a later Vite spawn. Each run also owns
+ *  a dependency cache; concurrent Vite optimizers never rewrite one tree. */
 export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>): Promise<T> {
-  const port = await freePort(5199);
-  const server = spawn(
-    'bunx', ['vite', 'dev', '--config', 'gallery.vite.config.ts', '--port', String(port)],
-    { cwd: CF, stdio: 'ignore' },
-  );
+  const cacheDir = mkdtempSync(join(tmpdir(), 'kinu-gallery-vite-'));
   try {
-    const origin = `http://127.0.0.1:${port}`;
-    await waitForServer(`${origin}/gallery.html`);
-    const executablePath = chromePath();
-    const launchOptions: LaunchOptions = {
-      // Headless Chrome reports no pointing device, so `(hover: hover)` and
-      // `(pointer: fine)` are both false and every `hover:` utility Tailwind
-      // emits behind them is dead. Declaring the mouse restores the states a
-      // desktop user actually sees.
-      args: [
-        '--no-sandbox',
-        '--disable-dev-shm-usage',
-        '--blink-settings=primaryPointerType=4,availablePointerTypes=4,primaryHoverType=2,availableHoverTypes=2',
-      ],
-    };
-    if (executablePath) launchOptions.executablePath = executablePath;
-    const browser = await puppeteer.launch(launchOptions);
+    const http = createHttpServer();
+    const vite = await createViteServer({
+      root: CF,
+      cacheDir,
+      configFile: join(CF, 'gallery.vite.config.ts'),
+      appType: 'spa',
+      server: { middlewareMode: true, hmr: { server: http } },
+    });
+    http.on('request', (request, response) => {
+      vite.middlewares(request, response, () => {
+        response.statusCode = 404;
+        response.end();
+      });
+    });
+    const listening = Promise.withResolvers<void>();
+    http.once('error', listening.reject);
+    http.listen(0, '127.0.0.1', listening.resolve);
+    await listening.promise;
     try {
-      return await body({ browser, origin });
+      const address = v.safeParse(TcpAddressSchema, http.address());
+      if (!address.success) {
+        throw new Error('gallery HTTP server has no TCP address after listen');
+      }
+      const origin = `http://127.0.0.1:${String(address.output.port)}`;
+      const executablePath = chromePath();
+      const launchOptions: LaunchOptions = {
+        // Headless Chrome reports no pointing device, so `(hover: hover)` and
+        // `(pointer: fine)` are both false and every `hover:` utility Tailwind
+        // emits behind them is dead. Declaring the mouse restores desktop states.
+        args: [
+          '--no-sandbox',
+          '--disable-dev-shm-usage',
+          '--blink-settings=primaryPointerType=4,availablePointerTypes=4,primaryHoverType=2,availableHoverTypes=2',
+        ],
+      };
+      if (executablePath) launchOptions.executablePath = executablePath;
+      const browser = await puppeteer.launch(launchOptions);
+      try {
+        return await body({ browser, origin });
+      } finally {
+        await browser.close();
+      }
     } finally {
-      await browser.close();
+      const closed = Promise.withResolvers<void>();
+      http.close((error) => error === undefined ? closed.resolve() : closed.reject(error));
+      await closed.promise;
+      await vite.close();
     }
   } finally {
-    server.kill();
+    rmSync(cacheDir, { recursive: true, force: true });
   }
 }

@@ -292,6 +292,7 @@ export function TranscriptBody({ view, onSelect, older, onLoadOlder }: {
     grows: "up",
     content: messages,
     fetched: older?.steps.length ?? 0,
+    loading: older?.loading ?? false,
     onReachEdge: older?.hasMore && !older.loading && !older.error ? onLoadOlder : undefined,
   });
 

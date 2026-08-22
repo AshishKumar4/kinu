@@ -793,7 +793,7 @@ function ForkCanvas({
     // holds, so a workspace of short searches no longer draws a bordered box
     // with several hundred pixels of nothing under its trees.
     <div ref={attachCell} className="h-full min-h-0">
-      <div className="flex max-h-full flex-col rounded-xl border p-border p-surface overflow-hidden">
+      <div data-tree-card className="flex max-h-full flex-col rounded-xl border p-border p-surface overflow-hidden">
         <div ref={attachChrome} className="shrink-0">
           {/* The bar the owner stripped: it carried the run count, the focused
               task and a config chip over every search at once — three facts

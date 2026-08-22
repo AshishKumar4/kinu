@@ -78,6 +78,12 @@ interface Prepend {
   /** Requests the step caused. One, unless the walk ran away. */
   readonly calls: number;
   readonly rows: number;
+  readonly beforeTop: number;
+  readonly beforeHeight: number;
+  readonly beforeScrollTop: number;
+  readonly afterTop: number;
+  readonly afterHeight: number;
+  readonly afterScrollTop: number;
   readonly refused: string | null;
 }
 
@@ -121,6 +127,12 @@ async function openFrame(browser: Browser, origin: string, query: string): Promi
   await page.goto(`${origin}/gallery.html?frame=chathistory&${query}`, { waitUntil: 'networkidle0' });
   await page.reload({ waitUntil: 'networkidle0' });
   await page.waitForSelector(SCROLL);
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    const painted = Promise.withResolvers<void>();
+    requestAnimationFrame(() => requestAnimationFrame(() => painted.resolve()));
+    await painted.promise;
+  });
   return page;
 }
 
@@ -145,6 +157,7 @@ const BeforeSchema = v.object({
 const AfterSchema = v.object({
   top: v.nullable(v.number()),
   height: v.number(),
+  scrollTop: v.number(),
   rows: v.number(),
 });
 
@@ -207,6 +220,7 @@ async function prepend(page: Page, scroll: boolean): Promise<Prepend> {
   const after = v.parse(AfterSchema, await page.$eval(SCROLL, (el, id: string) => ({
     top: el.querySelector(`[data-msg="${id}"]`)?.getBoundingClientRect().top ?? null,
     height: el.scrollHeight,
+    scrollTop: el.scrollTop,
     rows: el.querySelectorAll('[data-msg]').length,
   }), before.id));
 
@@ -217,6 +231,12 @@ async function prepend(page: Page, scroll: boolean): Promise<Prepend> {
     driftPx: Math.round(after.top - before.top - carriedDownPx),
     calls: state.calls.length - callsBefore,
     rows: after.rows,
+    beforeTop: before.top,
+    beforeHeight: before.height,
+    beforeScrollTop: before.scrollTop,
+    afterTop: after.top,
+    afterHeight: after.height,
+    afterScrollTop: after.scrollTop,
     refused: null,
   };
 }
@@ -244,6 +264,8 @@ async function prependStep(page: Page, scroll = true): Promise<Prepend> {
     }
     return {
       grewPx: 0, driftPx: 0, calls: 0, rows: 0,
+      beforeTop: 0, beforeHeight: 0, beforeScrollTop: 0,
+      afterTop: 0, afterHeight: 0, afterScrollTop: 0,
       refused: `${firstLine({ cause })} (${state})`,
     };
   }
@@ -311,7 +333,12 @@ async function measureWalk(browser: Browser, origin: string): Promise<Walk> {
   // 400ms default it had already landed by the time the harness finished its
   // second load, and the measurement was of nothing.
   const page = await openFrame(browser, origin, 'latency=3000&depth=5');
-  const empty = { grewPx: 0, driftPx: 0, calls: 0, rows: 0, refused: 'not reached' };
+  const empty = {
+    grewPx: 0, driftPx: 0, calls: 0, rows: 0,
+    beforeTop: 0, beforeHeight: 0, beforeScrollTop: 0,
+    afterTop: 0, afterHeight: 0, afterScrollTop: 0,
+    refused: 'not reached',
+  };
   try {
     const overflowAnchor = await page.$eval(SCROLL, (el) => getComputedStyle(el).overflowAnchor);
     // Asserted rather than assumed: the live rows alone, with the first page
@@ -442,8 +469,10 @@ describe('a prepend does not move what the reader is reading', () => {
     // the one that carries the number. Without `scrollTop += grew` the reader's
     // rows are pushed down the viewport by the whole height of the page that
     // arrived — which is what "the chat jumps when history loads" is.
-    expect(Math.abs(first.driftPx), `the first page moved the anchor ${first.driftPx}px`)
-      .toBeLessThanOrEqual(1);
+    expect(
+      Math.abs(first.driftPx),
+      `the first page moved the anchor ${first.driftPx}px: ${JSON.stringify(first)}`,
+    ).toBeLessThanOrEqual(1);
   });
 
   test('the anchor holds, prepend by prepend', () => {

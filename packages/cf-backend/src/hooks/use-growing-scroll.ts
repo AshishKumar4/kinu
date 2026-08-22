@@ -18,7 +18,7 @@
  *            pin to — pinning would fight the load-more trigger for the same
  *            edge.
  */
-import { useCallback, useLayoutEffect, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 
 /** Distance (px) from the bottom within which the view counts as pinned. */
 const PIN_THRESHOLD = 40;
@@ -36,6 +36,9 @@ export interface GrowingScrollOptions {
   /** Identity changes when a fetched page was added. Distinct from `content`
    *  because only this kind of growth needs the viewport held in place. */
   fetched: unknown;
+  /** The page request that produced `fetched` is still settling. Used only to
+   *  stop its loading-state commit from bottom-pinning over the prepend. */
+  loading?: boolean | undefined;
   /** Called while the reader is near the growing edge. Must be safe to call
    *  again before a previous call has settled — this fires on every scroll
    *  tick and again after each page lands. */
@@ -43,7 +46,7 @@ export interface GrowingScrollOptions {
 }
 
 export function useGrowingScroll<T extends HTMLElement>({
-  grows, content, fetched, onReachEdge,
+  grows, content, fetched, loading = false, onReachEdge,
 }: GrowingScrollOptions) {
   const el = useRef<T | null>(null);
   const pinned = useRef(grows === "up");
@@ -52,6 +55,8 @@ export function useGrowingScroll<T extends HTMLElement>({
   // already grown, so by then there is nothing left to measure against.
   const lastHeight = useRef(0);
   const lastFetched = useRef(fetched);
+  const settlingPrepend = useRef(false);
+  const lastLoading = useRef(loading);
   const reachEdge = useRef(onReachEdge);
   reachEdge.current = onReachEdge;
 
@@ -96,17 +101,38 @@ export function useGrowingScroll<T extends HTMLElement>({
     maybeLoadMore(node);
   }, [grows, onScroll, maybeLoadMore]);
 
+  // Font loading changes scrollHeight without a React commit. If the first
+  // history page is already in flight, a baseline captured in the fallback
+  // face over-corrects by the exact font reflow when that page lands.
+  useEffect(() => {
+    const syncHeight = () => {
+      if (settlingPrepend.current) return;
+      const node = el.current;
+      if (node) lastHeight.current = node.scrollHeight;
+    };
+    syncHeight();
+    document.fonts.addEventListener("loadingdone", syncHeight);
+    return () => document.fonts.removeEventListener("loadingdone", syncHeight);
+  }, []);
+
   useLayoutEffect(() => {
     const node = el.current;
     if (!node) return;
     const grew = node.scrollHeight - lastHeight.current;
-    if (lastFetched.current !== fetched) {
+    const fetchedChanged = lastFetched.current !== fetched;
+    const loadingChanged = lastLoading.current !== loading;
+    lastLoading.current = loading;
+    if (fetchedChanged) {
       lastFetched.current = fetched;
       // Push the viewport down by exactly what was inserted above it, so the
       // message the reader was looking at does not move a pixel. Growth at the
       // other end moves nothing and needs no correction.
       if (grows === "up" && grew > 0) node.scrollTop += grew;
-    } else if (pinned.current) {
+      // React can commit other content derived from the page separately. Keep
+      // the prepend authoritative through the next paint; the passive effect
+      // below then restores live-message pinning from the actual position.
+      settlingPrepend.current = true;
+    } else if (!loadingChanged && !settlingPrepend.current && pinned.current) {
       node.scrollTop = node.scrollHeight;
     }
     lastHeight.current = node.scrollHeight;
@@ -114,8 +140,20 @@ export function useGrowingScroll<T extends HTMLElement>({
     // back at the edge with the request they triggered now settled. Without
     // this re-check the next page only starts on their next scroll EVENT, and
     // a flick that ends at the edge produces no more events at all.
-    maybeLoadMore(node);
-  }, [grows, content, fetched, maybeLoadMore]);
+    if (fetchedChanged || !loadingChanged) maybeLoadMore(node);
+  }, [grows, content, fetched, loading, maybeLoadMore]);
+
+  useEffect(() => {
+    if (loading || !settlingPrepend.current) return;
+    const frame = requestAnimationFrame(() => {
+      settlingPrepend.current = false;
+      const node = el.current;
+      if (!node) return;
+      pinned.current = grows === "up"
+        && node.scrollHeight - node.scrollTop - node.clientHeight < PIN_THRESHOLD;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [fetched, grows, loading]);
 
   return containerRef;
 }
