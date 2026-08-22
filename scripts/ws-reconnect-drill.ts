@@ -81,17 +81,52 @@ interface CorpseProxy {
   stop(): void;
 }
 
+/** Client byte-chunks buffered while no upstream exists in pass mode. */
+const DIAL_QUEUE_CHUNKS = 256;
+
 interface Pipe {
   client: Socket<unknown>;
   upstream: Socket<unknown> | null;
+  /** True while a dial() is in flight — client bytes queue instead of re-dialing. */
+  dialing: boolean;
+  /** Bytes that arrived while no upstream was attached (cap: DIAL_QUEUE_CHUNKS). */
+  queue: Uint8Array[];
+  /**
+   * How this connection must behave when its upstream dies:
+   *   - "agent-ws": the chat websocket. In production a superseded DO's
+   *     websocket is dead FOREVER client-side until the client itself
+   *     redials — so once its upstream is lost it is a CORPSE: held open,
+   *     every byte swallowed, never redialed by the proxy.
+   *   - "vite-ping": vite's HMR liveness poll. A built SPA has no such
+   *     escape hatch; swallowing it keeps the dev drill as honest as
+   *     production about the page not learning that the world changed.
+   *   - "http": ordinary traffic. Hold and redial transparently, so idle
+   *     keep-alive churn and dev-server restarts do not masquerade as the
+   *     incident.
+   */
+  kind: "agent-ws" | "vite-ping" | "http";
+  /** Set when the upstream is lost (or severed). agent-ws pipes never
+   *  redial past this point; http pipes queue and redial. */
+  upstreamLost: boolean;
+}
+
+/** Classify from the request line + headers in the connection's first chunk. */
+function classifyPipe(firstChunk: Uint8Array): Pipe["kind"] {
+  const head = new TextDecoder("latin1").decode(firstChunk.slice(0, 2048)).toLowerCase();
+ const isWebSocket = head.includes("\r\nupgrade: websocket") || head.startsWith("upgrade: websocket");
+  if (isWebSocket && head.includes(" /agents/")) return "agent-ws";
+  if (head.startsWith("get /__vite_ping")) return "vite-ping";
+  return "http";
 }
 
 /**
- * Raw TCP forwarder with hold-the-client-open semantics. Bytes pipe both ways
- * while an upstream socket lives. On sever, upstream sockets close (the dev
- * server dies believing its clients left); client sockets stay open and every
- * byte they send is discarded. On restore, each held client gets a fresh
- * upstream dial and piping resumes.
+ * Raw TCP forwarder that reproduces, per connection kind, what the browser
+ * really experiences when the workspace's isolate is superseded. Ordinary
+ * HTTP heals transparently (hold, queue, redial). The chat websocket gets
+ * production corpse semantics: its upstream loss holds the socket OPEN and
+ * swallows everything — no close event, no redial — until the CLIENT dials
+ * again. On sever, upstream sockets close AND nothing is dialed or delivered
+ * for any kind; on restore, non-corpse pipes get fresh upstreams.
  */
 async function createCorpseProxy(upstreamPort: number, port: number): Promise<CorpseProxy> {
   const pipes = new Set<Pipe>();
@@ -114,6 +149,8 @@ async function createCorpseProxy(upstreamPort: number, port: number): Promise<Co
   }
 
   function dial(pipe: Pipe): void {
+    if (pipe.dialing || pipe.upstream) return;
+    pipe.dialing = true;
     Bun.connect({
       hostname: "127.0.0.1",
       port: upstreamPort,
@@ -128,28 +165,47 @@ async function createCorpseProxy(upstreamPort: number, port: number): Promise<Co
         close() {
           if (!pipe.upstream) return;
           pipe.upstream = null;
-          // A genuine upstream death while passing through propagates to the
-          // client; only a deliberate sever holds the corpse open.
-          if (state === "pass") {
-            log("proxy: upstream died mid-session — dropping the client with it");
-            dropPipe(pipe);
+          pipe.upstreamLost = true;
+          if (pipe.kind === "agent-ws") {
+            log("proxy: AGENT WS upstream lost — socket is now a corpse (no events reach the page)");
+            return;
           }
+          log(`proxy: ${pipe.kind} upstream closed — client held for redial`);
         },
         error(cause) {
           log(`proxy: upstream socket error: ${String(cause)}`);
         },
       },
     }).then((up) => {
+      pipe.dialing = false;
       if (state === "severed") {
-        endQuietly("severing a just-dialed upstream", up);
+        // sever() swept while this dial was in flight; cut it too.
+        try {
+          up.end();
+        } catch (cause) {
+          log(`proxy: post-sever cut failed: ${String(cause)}`);
+        }
         return;
       }
       pipe.upstream = up;
+      for (const chunk of pipe.queue.splice(0)) {
+        try {
+          up.write(chunk);
+        } catch (cause) {
+          log(`proxy: queued write failed: ${String(cause)}`);
+        }
+      }
     }).catch((cause: Error) => {
+      pipe.dialing = false;
       // Dial failures are expected while the dev server is down; restore()
-      // redials every held pipe.
+      // redials every healable pipe.
       log(`proxy: upstream dial failed (${String(cause)})`);
     });
+  }
+
+  /** Whether this pipe may ever receive a fresh upstream after losing one. */
+  function isHealable(pipe: Pipe): boolean {
+    return pipe.kind === "http";
   }
 
   const listener = Bun.listen<unknown>({
@@ -159,20 +215,29 @@ async function createCorpseProxy(upstreamPort: number, port: number): Promise<Co
       data(socket, chunk) {
         let pipe = pipeBySocket.get(socket);
         if (!pipe) {
-          const fresh: Pipe = { client: socket, upstream: null };
+          const fresh: Pipe = {
+            client: socket, upstream: null, dialing: false, queue: [],
+            kind: classifyPipe(chunk), upstreamLost: false,
+          };
           pipeBySocket.set(socket, fresh);
           pipes.add(fresh);
-          dial(fresh);
-          return;
+          pipe = fresh;
+          if (fresh.kind === "agent-ws") log("proxy: agent websocket classified");
         }
-        if (state === "pass" && pipe.upstream) {
+        if (state === "severed") return; // the corpse swallows silently
+        if (pipe.upstream) {
           try {
             pipe.upstream.write(chunk);
           } catch (cause) {
             log(`proxy: upstream write failed: ${String(cause)}`);
           }
+          return;
         }
-        // severed, or upstream not yet dialed: discard — the corpse swallows silently.
+        // No upstream attached.
+        if (pipe.kind === "agent-ws" && pipe.upstreamLost) return; // CORPSE: swallow forever
+        if (pipe.kind === "vite-ping") return; // production has no HMR escape hatch
+        if (pipe.queue.length < DIAL_QUEUE_CHUNKS) pipe.queue.push(chunk);
+        dial(pipe);
       },
       close(socket) {
         const pipe = pipeBySocket.get(socket);
@@ -197,11 +262,12 @@ async function createCorpseProxy(upstreamPort: number, port: number): Promise<Co
       for (const pipe of pipes) {
         endQuietly("severing", pipe.upstream);
         pipe.upstream = null;
+        pipe.upstreamLost = true;
       }
     },
     restore() {
       state = "pass";
-      for (const pipe of pipes) if (!pipe.upstream) dial(pipe);
+      for (const pipe of pipes) if (!pipe.upstream && isHealable(pipe)) dial(pipe);
     },
     dropAll() {
       // dropPipe removes from `pipes`; iterate a copy.
@@ -291,23 +357,57 @@ function isStartupProbeFailure<ErrorValue>(cause: ErrorValue): boolean {
   return cause instanceof TypeError || cause instanceof DOMException;
 }
 
-async function startDevServer(label: string): Promise<DevServer> {
-  log(`starting dev server (${label}) on :${UPSTREAM_PORT}`);
+/** The port must be genuinely bindable before vite spawns: a name-based
+ *  pkill cannot catch every orphan shape, and a ghost answering /api/health
+ *  makes the readiness poll pass against the WRONG server. Probe-bind until
+ *  the port is free, sweeping hard between attempts. */
+async function waitForPortFree(port: number): Promise<void> {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    try {
+      const probe = Bun.listen({
+        hostname: "127.0.0.1",
+        port,
+        socket: { data() {}, close() {}, error() {} },
+      });
+      probe.stop(true);
+      return;
+    } catch (cause) {
+      if (!(cause instanceof Error) || !cause.message.includes("EADDRINUSE")) throw cause;
+      log(`port ${port} still held (${cause.message}) — sweeping again`);
+      Bun.spawnSync(["pkill", "-9", "-f", `port ${port}`]);
+      await Bun.sleep(1_000);
+    }
+  }
+  fail("dev-server", `port ${port} never became free`);
+}
+
+async function spawnDevServerOnce(): Promise<ReturnType<typeof Bun["spawn"]>> {
   // A previous crashed run leaves an orphaned `vite` child holding the port;
   // clear it so this bind succeeds.
   Bun.spawnSync(["pkill", "-f", `port ${UPSTREAM_PORT}`]);
-  await Bun.sleep(500);
-  const proc = Bun.spawn(
+  await waitForPortFree(UPSTREAM_PORT);
+  return Bun.spawn(
     ["bun", "x", "vite", "dev", "--host", "127.0.0.1", "--port", String(UPSTREAM_PORT), "--strictPort"],
     { cwd: CF_BACKEND, stdin: "ignore", stdout: "ignore", stderr: "inherit" },
   );
-  const healthAt = `${UPSTREAM_ORIGIN}/api/health`;
+}
+
+async function startDevServer(label: string): Promise<DevServer> {
+  log(`starting dev server (${label}) on :${UPSTREAM_PORT}`);
+  let proc: ReturnType<typeof Bun["spawn"]> | null = null;
   const started = Date.now();
   for (;;) {
-    if (proc.exitCode !== null) fail("dev-server", `${label} exited early with code ${proc.exitCode}`);
-    if (Date.now() - started > 180_000) fail("dev-server", `${label} never answered /api/health`);
+    if (Date.now() - started > 300_000) fail("dev-server", `${label} never answered /api/health`);
+    if (proc === null || proc.exitCode !== null) {
+      if (proc !== null) {
+        log(`dev server (${label}) exited with code ${proc.exitCode} before answering — sweeping and retrying`);
+        Bun.spawnSync(["pkill", "-9", "-f", `port ${UPSTREAM_PORT}`]);
+        await Bun.sleep(3_000);
+      }
+      proc = await spawnDevServerOnce();
+    }
     try {
-      const res = await fetch(healthAt, { signal: AbortSignal.timeout(2_000) });
+      const res = await fetch(`${UPSTREAM_ORIGIN}/api/health`, { signal: AbortSignal.timeout(2_000) });
       if (res.ok) break;
     } catch (cause) {
       if (!isStartupProbeFailure(cause)) throw cause;
@@ -326,6 +426,48 @@ async function startDevServer(label: string): Promise<DevServer> {
       log(`dev server killed (${label})`);
     },
   };
+}
+
+/**
+ * A stand-in for the deploy DRAIN WINDOW: a server that completes the
+ * websocket handshake and answers every rpc frame immediately with the
+ * platform's connection-lost failure — which is exactly what a superseding
+ * isolate surfaces while its cross-DO calls are dying. Fast, repeated,
+ * protocol-level failures; the shape that sets the degraded banner before
+ * the world goes quiet.
+ */
+interface FailureServer {
+  stop(): Promise<void>;
+}
+
+function startFailureServer(port: number): Promise<FailureServer> {
+  const server = Bun.serve({
+    port,
+    async fetch(request, sup) {
+      if (new URL(request.url).pathname.startsWith("/agents/") && sup.upgrade(request)) {
+        return undefined;
+      }
+      return new Response("draining", { status: 503 });
+    },
+    websocket: {
+      message(ws, raw) {
+        const frame = parseRpcFrame(String(raw));
+        if (!frame || frame.type !== "rpc" || frame.id === undefined) return;
+        ws.send(JSON.stringify({
+          type: "rpc",
+          id: frame.id,
+          success: false,
+          error: "Network connection lost.",
+        }));
+      },
+    },
+  });
+  return Promise.resolve({
+    async stop() {
+      server.stop(true);
+      await Bun.sleep(300);
+    },
+  });
 }
 
 /* ── REST helpers (direct to upstream — never through the proxy) ───────────── */
@@ -374,6 +516,19 @@ const MOCK_SHA_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const MOCK_SHA_B = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 let mockedSha = MOCK_SHA_A;
 
+/** Rolling capture of what the browser said — dumped on every failure. */
+class BrowserLog {
+  private lines: string[] = [];
+  record(kind: string, text: string): void {
+    this.lines.push(`${kind}: ${text}`.slice(0, 400));
+    if (this.lines.length > 200) this.lines.shift();
+  }
+  dump(): string {
+    return this.lines.slice(-30).join("\n  ");
+  }
+}
+const browserLog = new BrowserLog();
+
 /** What the page surface says right now: alerts, statuses, body text, marker.
  *  The marker reads 0 when absent — which is exactly the reload signal. */
 interface PageProbe {
@@ -381,6 +536,8 @@ interface PageProbe {
   statuses: string[];
   bodyText: string;
   marker: number;
+  /** The composer's textarea — the positive "the app rendered" signal. */
+  hasComposer: boolean;
 }
 
 async function probe(page: Page): Promise<PageProbe> {
@@ -393,6 +550,7 @@ async function probe(page: Page): Promise<PageProbe> {
     statuses: [...document.querySelectorAll('[role="status"]')].map((el) => el.textContent ?? ""),
     bodyText: document.body.innerText,
     marker: reloadMarker,
+    hasComposer: document.querySelector("textarea") !== null,
   }), marker);
 }
 
@@ -400,6 +558,7 @@ const hasDegradedBanner = (p: PageProbe): boolean =>
   p.alerts.some((t) => t.includes("Showing last known data"));
 const newVersionAffordances = (p: PageProbe): string[] =>
   p.statuses.filter((t) => t.toLowerCase().includes("new version"));
+
 
 async function waitFor(
   what: string, deadlineMs: number, pollMs: number,
@@ -411,7 +570,10 @@ async function waitFor(
       log(`${what} ✓ (after ${((Date.now() - started) / 1000).toFixed(1)}s)`);
       return;
     }
-    if (Date.now() - started > deadlineMs) fail(what, `deadline ${deadlineMs}ms exceeded`);
+    if (Date.now() - started > deadlineMs) {
+      log(`browser said, last words first:\n  ${browserLog.dump()}`);
+      fail(what, `deadline ${deadlineMs}ms exceeded`);
+    }
     await Bun.sleep(pollMs);
   }
 }
@@ -434,6 +596,12 @@ async function main(): Promise<void> {
   });
   try {
     const page = await browser.newPage();
+    page.on("console", (msg) => browserLog.record(`console.${msg.type()}`, msg.text()));
+    page.on("pageerror", (err) => browserLog.record("pageerror", String(err)));
+    page.on("requestfailed", (req) => browserLog.record("requestfailed", `${req.url()} — ${req.failure()?.errorText ?? "?"}`));
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) browserLog.record("nav", frame.url());
+    });
     await page.setViewport({ width: 1568, height: 900 });
     await page.setRequestInterception(true);
     page.on("request", (req: HTTPRequest) => {
@@ -456,11 +624,11 @@ async function main(): Promise<void> {
     });
 
     // ── stage 1: connect through the proxy ────────────────────────────────
-    await page.goto(`${ORIGIN}/workspace/${WORKSPACE}`, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    await page.goto(`${ORIGIN}/workspace/${WORKSPACE}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
     await page.evaluate("window.__wsDrillReloadMarker = 1");
-    await waitFor("client connected (no Connecting/Reconnecting)", 90_000, 500, async () => {
+    await waitFor("client connected (composer rendered, no reconnect strip)", 120_000, 500, async () => {
       const p = await probe(page);
-      return !p.bodyText.includes("Connecting...") && !p.bodyText.includes("Reconnecting...");
+      return p.hasComposer && !p.bodyText.includes("Reconnecting...");
     });
     const sane = await probe(page);
     if (hasDegradedBanner(sane)) fail("baseline", "degraded banner present on a healthy session");
@@ -468,34 +636,59 @@ async function main(): Promise<void> {
     await page.screenshot({ path: join(ARTIFACTS, "1-connected.png") });
     log("stage 1 complete: healthy session through the proxy");
 
-    // ── stage 2: sever — the corpse ────────────────────────────────────────
-    proxy.sever();
-    await server.kill(); // upstream is already cut; the kill never reaches the browser
-    log(`stage 2: corpse established (${proxy.severedCount()} client socket[s] held open)`);
-    await waitFor("degraded banner appeared", BANNER_DEADLINE_MS, 2_000, async () =>
+    // ── stage 2: the drain window — the banner sets ───────────────────────
+    // The real server dies; a stand-in takes the port and answers every rpc
+    // immediately with the platform's connection-lost failure — the shape a
+    // superseding isolate surfaces while its calls are dying. Fast, repeated
+    // failures land while they are still current, so the degraded banner
+    // sets, worded exactly as the incident's.
+    await server.kill();
+    const draining = await startFailureServer(UPSTREAM_PORT);
+    proxy.dropAll(); // a client-VISIBLE close: partysocket redials into the stand-in
+    await waitFor("degraded banner appeared", BANNER_DEADLINE_MS, 1_000, async () =>
       hasDegradedBanner(await probe(page)));
     await page.screenshot({ path: join(ARTIFACTS, "2-degraded.png") });
 
-    // ── stage 3: fresh server, renamed workspace, restore ─────────────────
+    // ── stage 3: the world heals; the healthy path must clear the banner ──
+    // The stand-in going away is ALSO client-visible (a supersede resets the
+    // socket): close it so the page redials into the healed server instead of
+    // holding a corpse through the transition.
+    await draining.stop();
+    proxy.dropAll();
     server = await startDevServer("second boot");
+    await ensureWorkspace();
+    await waitFor("banner cleared after clean reconnect", 180_000, 2_000, async () =>
+      !hasDegradedBanner(await probe(page)));
+    await page.screenshot({ path: join(ARTIFACTS, "3-banner-cleared.png") });
+    log("stage 3 complete: banner gone after the clean reconnect");
+
+    // ── stage 4: THE CORPSE — the eventless supersede ─────────────────────
+    // sever() holds the browser's sockets OPEN with no upstream, so no close
+    // or open event ever reaches the page. The fresh server renames the
+    // workspace; a session that cannot see the world change stays frozen on
+    // the old title forever.
+    proxy.sever();
+    await server.kill();
+    server = await startDevServer("third boot");
     await ensureWorkspace();
     const newTitle = `Renamed ${new Date().toLocaleTimeString()}`;
     await callAgentRpc(WORKSPACE, "setDisplayName", [newTitle]);
-    log(`workspace renamed to "${newTitle}" on the fresh server`);
+    log(`workspace renamed to "${newTitle}" behind the corpse`);
     proxy.restore();
-    log("stage 3: proxy restored — upstream alive again");
-
-    // ── stage 4: recovery, no reload ──────────────────────────────────────
-    await waitFor("recovered: degraded banner cleared", RECOVERY_DEADLINE_MS, 2_000, async () =>
-      !hasDegradedBanner(await probe(page)));
-    await waitFor("fresh data flowing: new title visible", 60_000, 1_000, async () => {
+    log("stage 4: corpse established, world healed behind it");
+    await waitFor("fresh data flowing: new title visible", RECOVERY_DEADLINE_MS, 2_000, async () => {
       const p = await probe(page);
       return p.bodyText.includes(newTitle);
     });
+    // The title renders from the snapshot success; the per-source errors the
+    // corpse left behind clear on the next live-refresh tick. Recovery is
+    // complete only when BOTH have settled.
+    await waitFor("recovered: degraded banner cleared", 90_000, 1_000, async () =>
+      !hasDegradedBanner(await probe(page)));
     const recovered = await probe(page);
     if (recovered.marker !== 1) fail("recovery", "page reloaded mid-drill (marker lost) — recovery must be seamless");
-    await page.screenshot({ path: join(ARTIFACTS, "3-recovered.png") });
-    log("stage 4 complete: banner gone, fresh title, no reload");
+    await page.screenshot({ path: join(ARTIFACTS, "4-recovered.png") });
+    log("stage 4 complete: session caught up without a reload");
 
     // ── stage 5: version skew → reload affordance exactly once ────────────
     mockedSha = MOCK_SHA_B;
