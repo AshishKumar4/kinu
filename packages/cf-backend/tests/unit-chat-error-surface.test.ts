@@ -39,7 +39,7 @@ describe('use-kinu chat-error wiring', () => {
     expect(send).toContain('setChatError(null)');
     // The whole workspace-switch effect, bounded by its own dependency array —
     // not a trailing marker that a rename can move out from under it.
-    const reset = between(hook, 'setLoadAttempt(0);', '}, [workspace, subordinate]);', 'use-kinu.ts');
+    const reset = between(hook, 'setLoadGeneration(0);', '}, [workspace, subordinate]);', 'use-kinu.ts');
     expect(reset).toContain('setChatError(null)');
     const returned = hook.slice(hook.indexOf('return {\n    messages'));
     expect(returned).toContain('chatError,');
