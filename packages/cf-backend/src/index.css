@@ -478,7 +478,8 @@ body { background: var(--c-bg); color: var(--c-text); }
 
 /* ── Chat markdown ─────────────────────────────────────────────────── */
 .prose-chat {
-  font-size: 0.875rem; line-height: 1.65; color: var(--c-text);
+  /* The mock's assistant body: 14.5px on 1.7, in the ink2 register. */
+  font-size: 0.906rem; line-height: 1.7; color: var(--c-text-2);
   letter-spacing: -0.006em;
   p { margin: 0.45em 0; }
   p:first-child { margin-top: 0; }

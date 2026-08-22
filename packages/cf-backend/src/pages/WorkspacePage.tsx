@@ -920,7 +920,9 @@ export default function WorkspacePage() {
                 ErrorBoundary'd so a single malformed message doesn't
                 whitescreen the chat. (STABILITY-AUDIT §D2.) */}
             <ErrorBoundary label="Chat">
-            <div ref={messagesRef} className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8">
+            {/* The mock's reading measure: one centred 660px column, every
+                entry constrained by its parent so cards cannot wander wide. */}
+            <div ref={messagesRef} className="flex-1 overflow-y-auto px-6 py-7 space-y-5 lg:px-8 [&>*]:max-w-[660px] [&>*]:mx-auto">
               {transcriptPending && <ConversationSkeleton />}
               {!transcriptPending && thread.entries.length === 0 && !state.isStreaming && (
                 <EmptyConversation mission={as?.purpose ?? ""} />
