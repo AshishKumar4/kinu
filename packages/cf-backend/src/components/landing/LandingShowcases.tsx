@@ -1,4 +1,4 @@
-import { Tabs, type TabsItem } from '@cloudflare/kumo';
+import { Button, Tabs, type TabsItem } from '@cloudflare/kumo';
 import { useEffect, useState, type ReactElement } from 'react';
 
 import { KinuLogo } from '@/components/ui/KinuLogo';
@@ -7,8 +7,9 @@ const RUN_TABS: TabsItem[] = [{ value: 'run', label: 'Run' }, { value: 'supervis
 
 function WorkspacePreview(): ReactElement {
   const [altitude, setAltitude] = useState('run');
+  const [decision, setDecision] = useState<'pending' | 'retried' | 'dismissed'>('pending');
   return (
-    <div aria-label="Kinu workspace interface preview" className="relative overflow-hidden rounded-2xl border p-border bg-[var(--c-bg)] shadow-[0_40px_110px_-50px_rgba(0,0,0,.95)]">
+    <div data-workspace-mode={altitude} aria-label="Kinu workspace interface preview" className="relative overflow-hidden rounded-2xl border p-border bg-[var(--c-bg)] shadow-[0_40px_110px_-50px_rgba(0,0,0,.95)]">
       <div className="flex min-h-[46px] flex-wrap items-center justify-between gap-3 border-b p-border p-recessed px-4 py-2">
         <div className="flex min-w-0 items-center gap-3">
           <KinuLogo compact />
@@ -41,22 +42,39 @@ function WorkspacePreview(): ReactElement {
           <div className="mt-1.5 flex items-center gap-2 px-2.5 py-2 text-[12.5px] p-text-3"><span className="size-[5px] rounded-full p-fill" />checkout-svc</div>
         </aside>
         <div className="flex min-w-0 flex-col border-r p-border">
-          <div className="flex flex-1 flex-col gap-3.5 overflow-hidden px-4 py-5 sm:px-6">
-            <div className="max-w-[76%] self-end rounded-xl border p-user-bubble px-3.5 py-2.5 text-[13px] leading-[1.55]">Find the slowest test in this repo and explain why.</div>
-            <div className="grid grid-cols-[auto_auto_minmax(0,1fr)_auto] items-center gap-2 text-xs p-text-4">
-              <span>▸</span><code className="p-text-2">run · laptop</code><code className="truncate">time bun test</code><span className="p-success">7 pass · 912 ms</span>
-            </div>
-            <div className="grid grid-cols-[auto_auto_minmax(0,1fr)_auto] items-center gap-2 text-xs p-text-4">
-              <span>▸</span><code className="p-text-2">agents · swarm</code><code className="truncate">optimise · 3 branches</code><span className="p-gold">detached</span>
-            </div>
-            <p className="text-[13.5px] leading-[1.65] p-text"><strong>summary.test.ts</strong> takes ~864 ms of the suite's ~912 ms. The dedupe pass is O(n²). Each doubling quadruples runtime. A Map keyed by id reduces it to one pass.</p>
-            <div className="rounded-xl border border-[color-mix(in_srgb,var(--c-accent)_25%,transparent)] bg-[color-mix(in_srgb,var(--c-accent)_5%,transparent)] px-3.5 py-2.5 text-[12.5px] leading-[1.55] p-text-2"><strong className="p-gold">System</strong> · a background job settled while you were away and joined this turn.</div>
-            <div className="border-l-2 border-[var(--c-border-strong)] pl-3 text-[12.5px] leading-[1.6] p-text-4">Thinking · The result is stable. I will patch the one-pass dedupe and run the focused suite.</div>
-            <div className="overflow-hidden rounded-xl border p-border p-surface">
-              <div className="grid grid-cols-[auto_auto_minmax(0,1fr)_auto] items-center gap-2 px-3 py-2.5 text-xs p-text-4"><span>▸</span><code className="p-text-2">file</code><code className="truncate">Edited src/dedupe.ts</code><span className="p-success">saved</span></div>
-              <div className="grid grid-cols-[auto_auto_minmax(0,1fr)_auto] items-center gap-2 border-t border-dashed border-[var(--c-dash)] px-3 py-2.5 text-xs p-text-4"><span>▸</span><code className="p-text-2">run · workspace</code><code className="truncate">bun test summary</code><span className="p-success">2 pass</span></div>
-            </div>
-            <p className="text-[13.5px] leading-[1.65] p-text">The one-pass implementation keeps the same output and removes most of the suite time. The focused tests pass.</p>
+          <div data-workspace-panel={altitude} className="flex flex-1 flex-col gap-3.5 overflow-hidden px-4 py-5 sm:px-6">
+            {altitude === 'run' ? (
+              <>
+                <div className="max-w-[76%] self-end rounded-xl border p-user-bubble px-3.5 py-2.5 text-[13px] leading-[1.55]">Find the slowest test in this repo and explain why.</div>
+                <div className="grid grid-cols-[auto_auto_minmax(0,1fr)_auto] items-center gap-2 text-xs p-text-4">
+                  <span>▸</span><code className="p-text-2">run · laptop</code><code className="truncate">time bun test</code><span className="p-success">7 pass · 912 ms</span>
+                </div>
+                <div className="grid grid-cols-[auto_auto_minmax(0,1fr)_auto] items-center gap-2 text-xs p-text-4">
+                  <span>▸</span><code className="p-text-2">agents · swarm</code><code className="truncate">optimise · 3 branches</code><span className="p-gold">detached</span>
+                </div>
+                <p className="text-[13.5px] leading-[1.65] p-text"><strong>summary.test.ts</strong> takes ~864 ms of the suite's ~912 ms. The dedupe pass is O(n²). Each doubling quadruples runtime. A Map keyed by id reduces it to one pass.</p>
+                <div className="rounded-xl border border-[color-mix(in_srgb,var(--c-accent)_25%,transparent)] bg-[color-mix(in_srgb,var(--c-accent)_5%,transparent)] px-3.5 py-2.5 text-[12.5px] leading-[1.55] p-text-2"><strong className="p-gold">System</strong> · a background job settled while you were away and joined this turn.</div>
+                <div className="border-l-2 border-[var(--c-border-strong)] pl-3 text-[12.5px] leading-[1.6] p-text-4">Thinking · The result is stable. I will patch the one-pass dedupe and run the focused suite.</div>
+                <div className="overflow-hidden rounded-xl border p-border p-surface">
+                  <div className="grid grid-cols-[auto_auto_minmax(0,1fr)_auto] items-center gap-2 px-3 py-2.5 text-xs p-text-4"><span>▸</span><code className="p-text-2">file</code><code className="truncate">Edited src/dedupe.ts</code><span className="p-success">saved</span></div>
+                  <div className="grid grid-cols-[auto_auto_minmax(0,1fr)_auto] items-center gap-2 border-t border-dashed border-[var(--c-dash)] px-3 py-2.5 text-xs p-text-4"><span>▸</span><code className="p-text-2">run · workspace</code><code className="truncate">bun test summary</code><span className="p-success">2 pass</span></div>
+                </div>
+                <p className="text-[13.5px] leading-[1.65] p-text">The one-pass implementation keeps the same output and removes most of the suite time. The focused tests pass.</p>
+              </>
+            ) : (
+              <>
+                <div className="flex items-start justify-between gap-4"><div><div className="text-[11px] uppercase tracking-[.14em] p-gold">Supervise</div><h3 className="mt-1.5 text-lg font-semibold p-text">Three agents are working</h3></div><span className="rounded-full p-accent-subtle px-3 py-1 text-[11px] p-gold">2 active · 1 waiting</span></div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {[['Scout', 'Researching the hot path', '3 sources', 'active'], ['Builder', 'Editing the one-pass dedupe', 'src/dedupe.ts', 'active'], ['Verifier', 'Waiting for Builder', 'bun test summary', 'waiting']].map(([name, task, detail, state]) => (
+                    <div key={name} className="rounded-xl border p-border p-surface p-4">
+                      <div className="mb-3 flex items-center justify-between gap-3"><strong className="text-[13px] p-text">{name}</strong><span className={`text-[10px] uppercase tracking-[.1em] ${state === 'active' ? 'p-success' : 'p-warning'}`}>{state}</span></div>
+                      <p className="text-[12.5px] leading-[1.55] p-text-2">{task}</p><code className="mt-2 block truncate text-[10.5px] p-text-4">{detail}</code>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-1 rounded-xl border p-border p-recessed p-4"><div className="mb-3 flex justify-between text-[11px] p-text-4"><span>Branch progress</span><span>2 of 3 settled</span></div><div className="h-1.5 overflow-hidden rounded-full p-fill"><span className="block h-full w-2/3 rounded-full p-dot-accent" /></div><p className="mt-3 text-[12.5px] leading-[1.55] p-text-3">Builder's patch will wake Verifier automatically. The best measured result returns to this conversation.</p></div>
+              </>
+            )}
           </div>
           <div className="border-t p-border p-recessed px-4 py-3">
             <div className="flex items-center gap-2.5 rounded-xl border border-[var(--c-border-strong)] bg-[var(--c-input-bg)] px-3.5 py-2.5">
@@ -72,9 +90,15 @@ function WorkspacePreview(): ReactElement {
             {['Exploration', 'Agent', 'Files'].map((tab) => <span key={tab} className="pb-2.5 text-[11.5px] p-text-4">{tab}</span>)}
           </div>
           <div className="flex flex-col gap-3.5 overflow-hidden p-3.5">
-            <div className="overflow-hidden rounded-xl border border-[color-mix(in_srgb,var(--c-accent)_30%,transparent)] p-surface">
-              <div className="border-b border-dashed border-[var(--c-dash)] px-3.5 py-2 text-[11.5px] font-semibold p-gold">Needs you · 1</div>
-              <div className="px-3.5 py-3"><div className="mb-2 text-[12.5px]">Swarm search stopped early</div><div className="flex gap-2 text-[11px]"><span className="rounded-full border border-[color-mix(in_srgb,var(--c-accent)_35%,transparent)] px-2.5 py-0.5 p-gold">Retry</span><span className="rounded-full border p-border px-2.5 py-0.5 p-text-4">Dismiss</span></div></div>
+            <div data-decision-state={decision} className="overflow-hidden rounded-xl border border-[color-mix(in_srgb,var(--c-accent)_30%,transparent)] p-surface">
+              {decision === 'pending' ? (
+                <>
+                  <div className="border-b border-dashed border-[var(--c-dash)] px-3.5 py-2 text-[11.5px] font-semibold p-gold">Needs you · 1</div>
+                  <div className="px-3.5 py-3"><div className="mb-2 text-[12.5px]">Swarm search stopped early</div><div className="flex gap-2 text-[11px]"><button type="button" onClick={() => setDecision('retried')} className="rounded-full border border-[color-mix(in_srgb,var(--c-accent)_35%,transparent)] px-2.5 py-0.5 p-gold">Retry</button><button type="button" onClick={() => setDecision('dismissed')} className="rounded-full border p-border px-2.5 py-0.5 p-text-4">Dismiss</button></div></div>
+                </>
+              ) : (
+                <div className="flex items-center justify-between gap-3 px-3.5 py-3"><span className={`text-[11.5px] ${decision === 'retried' ? 'p-success' : 'p-text-4'}`}>{decision === 'retried' ? 'Search restarted' : 'Decision dismissed'}</span><button type="button" onClick={() => setDecision('pending')} className="text-[10.5px] p-gold">Reset</button></div>
+              )}
             </div>
             <div>
               <div className="mb-2 text-[11.5px] font-semibold p-text-4">Now · 2 active</div>
@@ -100,62 +124,98 @@ function WorkspacePreview(): ReactElement {
 }
 
 function TuiPreview(): ReactElement {
-  const toolRows = [
-    ['›', 'run · workspace', 'bun test coupon', '7 pass'],
-    ['›', 'file', 'read 0042_coupon_kind.sql', '1.8 KB'],
-    ['›', 'file', 'edit 0042_coupon_kind.sql', 'saved'],
-    ['›', 'agents', 'three independent checks', 'running'],
-  ] as const;
+  const sessions = {
+    checkout: {
+      label: 'checkout audit',
+      workspace: 'checkout',
+      location: 'local',
+      state: 'working',
+      prompt: 'Audit the checkout flow, fix the coupon failure, and keep the tests green.',
+      thought: 'I found the request path. I will reproduce the failure before I change the handler.',
+      answer: 'The migration only filled fixed coupons. I patched the backfill, added the percentage case, and started the focused suite.',
+      tools: [['run · workspace', 'bun test coupon', '7 pass'], ['file', 'read 0042_coupon_kind.sql', '1.8 KB'], ['file', 'edit 0042_coupon_kind.sql', 'saved'], ['agents', 'three independent checks', 'running']],
+    },
+    migration: {
+      label: 'migration review',
+      workspace: 'migration',
+      location: 'local',
+      state: 'reviewing',
+      prompt: 'Review the migration plan and identify any destructive step.',
+      thought: 'The backfill is reversible, but the final column constraint is not. I will separate those operations.',
+      answer: 'The plan now ships the backfill first, verifies both coupon kinds, then adds the constraint in a later release.',
+      tools: [['file', 'read migrations/0042.sql', '2.1 KB'], ['agents', 'audit migration plan', '2 reports'], ['file', 'edit MIGRATION.md', 'saved']],
+    },
+    jarvis: {
+      label: 'Jarvis',
+      workspace: 'jarvis',
+      location: 'cloud',
+      state: 'live',
+      prompt: 'Summarize the overnight research and flag the decision I need to make.',
+      thought: 'Three sources agree on the failure mode. The rollout choice still depends on your risk tolerance.',
+      answer: 'The evidence supports staged rollout. Decide whether the first cohort should be 5% or 10%; the rest is ready.',
+      tools: [['web', 'compare three primary sources', '3 sources'], ['agents', 'independent risk review', 'settled'], ['report', 'prepare owner decision', 'ready']],
+    },
+  } as const;
+  type SessionId = keyof typeof sessions;
+  const sessionIds: SessionId[] = ['checkout', 'migration', 'jarvis'];
+  const [sessionId, setSessionId] = useState<SessionId>('checkout');
+  const session = sessions[sessionId];
+  const selectClass = (id: SessionId): string => (
+    id === sessionId
+      ? 'border-l-2 border-[var(--c-accent)] p-elevated p-text'
+      : 'border-l-2 border-transparent p-text-3 hover:p-text'
+  );
   return (
-    <div aria-label="Kinu terminal interface preview" className="overflow-hidden rounded-xl border border-[var(--c-border-strong)] bg-[var(--c-input-bg)] shadow-[0_40px_110px_-50px_rgba(0,0,0,.95)]">
+    <div data-tui-session={sessionId} aria-label="Kinu terminal interface preview" className="overflow-hidden rounded-xl border border-[var(--c-border-strong)] bg-[var(--c-input-bg)] shadow-[0_40px_110px_-50px_rgba(0,0,0,.95)]">
       <div className="grid h-10 grid-cols-[1fr_auto_1fr] items-center border-b border-[var(--c-border-strong)] p-sidebar px-4 font-mono text-[10px] p-text-4">
         <div className="flex gap-2"><span className="size-2 rounded-full bg-[var(--c-danger)] opacity-70" /><span className="size-2 rounded-full bg-[var(--c-warning)] opacity-70" /><span className="size-2 rounded-full bg-[var(--c-success)] opacity-70" /></div>
-        <span className="uppercase tracking-[.14em]">kinu tui — checkout</span>
+        <span className="uppercase tracking-[.14em]">kinu tui — {session.workspace}</span>
         <span className="justify-self-end uppercase tracking-[.1em]">terminal</span>
       </div>
       <div className="flex min-h-12 items-center justify-between gap-4 border-b border-[var(--c-border-strong)] p-recessed px-4 py-2 font-mono text-[11px] uppercase tracking-[.06em] p-text-4">
         <div className="flex min-w-0 flex-wrap items-center gap-3.5">
           <KinuLogo compact />
-          <span>checkout</span>
-          <span className="inline-flex items-center gap-2 p-gold"><span className="size-1.5 rounded-full p-dot-accent motion-safe:animate-pulse" />working</span>
+          <span>{session.workspace}</span>
+          <span className="inline-flex items-center gap-2 p-gold"><span className="size-1.5 rounded-full p-dot-accent motion-safe:animate-pulse" />{session.state}</span>
         </div>
-        <div className="hidden items-center gap-4 sm:flex"><span>local</span><span>Claude Opus 4</span><span>main</span></div>
+        <div className="hidden items-center gap-4 sm:flex"><span>{session.location}</span><span>Claude Opus 4</span><span>main</span></div>
+      </div>
+      <div className="flex overflow-x-auto border-b border-[var(--c-border-strong)] bg-[var(--c-bg)] p-2 font-mono text-[10px] md:hidden">
+        {sessionIds.map((id) => <button type="button" key={id} onClick={() => setSessionId(id)} className={`shrink-0 rounded-full px-3 py-1.5 ${id === sessionId ? 'p-accent-subtle p-gold' : 'p-text-4'}`}>{sessions[id].label}</button>)}
       </div>
       <div className="grid min-h-[600px] grid-cols-1 md:grid-cols-[220px_minmax(0,1fr)]">
         <aside className="hidden border-r border-[var(--c-border-strong)] bg-[var(--c-bg)] px-3 py-4 font-mono md:block">
           <div className="mx-2 mb-2 text-[10px] uppercase tracking-[.16em] p-text-4">Local workspaces</div>
-          <div className="border-l-2 border-[var(--c-accent)] p-elevated px-3 py-2 text-xs p-text">checkout audit</div>
-          <div className="px-3 py-2 text-xs p-text-3">migration review</div>
-          <div className="px-3 py-2 text-xs p-text-3">release notes</div>
+          <button type="button" onClick={() => setSessionId('checkout')} className={`block w-full px-3 py-2 text-left text-xs ${selectClass('checkout')}`}>checkout audit</button>
+          <button type="button" onClick={() => setSessionId('migration')} className={`block w-full px-3 py-2 text-left text-xs ${selectClass('migration')}`}>migration review</button>
           <div className="mx-2 mb-2 mt-6 text-[10px] uppercase tracking-[.16em] p-text-4">Cloud workspaces</div>
-          <div className="flex items-center justify-between px-3 py-2 text-xs p-text-2"><span>Jarvis</span><span className="p-success">live</span></div>
-          <div className="flex items-center justify-between px-3 py-2 text-xs p-text-3"><span>checkout-svc</span><span>idle</span></div>
+          <button type="button" onClick={() => setSessionId('jarvis')} className={`flex w-full items-center justify-between px-3 py-2 text-left text-xs ${selectClass('jarvis')}`}><span>Jarvis</span><span className="p-success">live</span></button>
         </aside>
         <div className="flex min-w-0 flex-col font-mono text-xs leading-[1.65]">
           <div className="flex-1 overflow-hidden px-4 py-5 sm:px-7 sm:py-6">
             <div className="mb-5 grid grid-cols-[52px_minmax(0,1fr)] gap-3">
               <span className="text-[10px] uppercase tracking-[.12em] p-gold">you</span>
-              <p className="p-text">Audit the checkout flow, fix the coupon failure, and keep the tests green.</p>
+              <p className="p-text">{session.prompt}</p>
             </div>
             <div className="mb-5 grid grid-cols-[52px_minmax(0,1fr)] gap-3 border-l border-[var(--c-border-strong)] pl-3 p-text-4">
               <span className="text-[10px] uppercase tracking-[.12em]">think</span>
-              <p>I found the request path. I will reproduce the failure before I change the handler.</p>
+              <p>{session.thought}</p>
             </div>
             <div className="border-y border-[var(--c-border-strong)]">
-              {toolRows.map(([glyph, tool, action, result], index) => (
+              {session.tools.map(([tool, action, result], index) => (
                 <div key={`${tool}-${action}`} className={`grid grid-cols-[14px_120px_minmax(0,1fr)] gap-3 px-1 py-2.5 sm:grid-cols-[14px_150px_minmax(0,1fr)_auto] ${index > 0 ? 'border-t border-dashed border-[var(--c-dash)]' : ''}`}>
-                  <span className="p-gold">{glyph}</span><strong className="font-normal p-text-2">{tool}</strong><span className="truncate p-text-4">{action}</span><span className="hidden p-success sm:block">{result}</span>
+                  <span className="p-gold">›</span><strong className="font-normal p-text-2">{tool}</strong><span className="truncate p-text-4">{action}</span><span className="hidden p-success sm:block">{result}</span>
                 </div>
               ))}
             </div>
             <div className="mt-5 grid grid-cols-[52px_minmax(0,1fr)] gap-3">
               <span className="text-[10px] uppercase tracking-[.12em] p-gold">kinu</span>
-              <p className="font-sans text-[13.5px] leading-[1.65] p-text">The migration only filled fixed coupons. I patched the backfill, added the percentage case, and started the focused suite.</p>
+              <p className="font-sans text-[13.5px] leading-[1.65] p-text">{session.answer}</p>
             </div>
           </div>
           <div className="border-t border-[var(--c-border-strong)] p-recessed px-4 pb-3 pt-3">
             <div className="border border-[var(--c-border-strong)] bg-[var(--c-bg)] px-3 py-2.5 p-text-4"><span className="mr-2 p-gold">❯</span>Send a message…</div>
-            <div className="mt-2 flex flex-wrap justify-between gap-3 text-[10px] p-text-4"><span>auto · local workspace · connected</span><span>ctrl+k commands · ctrl+o workspaces · esc cancel</span></div>
+            <div className="mt-2 flex flex-wrap justify-between gap-3 text-[10px] p-text-4"><span>auto · {session.location} workspace · connected</span><span>ctrl+k commands · ctrl+o workspaces · esc cancel</span></div>
           </div>
         </div>
       </div>
@@ -164,6 +224,7 @@ function TuiPreview(): ReactElement {
 }
 function CliPreview(): ReactElement {
   const [stage, setStage] = useState(0);
+  const [sequence, setSequence] = useState(0);
   useEffect(() => {
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
       setStage(4);
@@ -173,19 +234,22 @@ function CliPreview(): ReactElement {
       window.setTimeout(() => setStage(index + 1), delay)
     ));
     return () => timers.forEach((timer) => window.clearTimeout(timer));
-  }, []);
+  }, [sequence]);
 
   const lineClass = (visible: boolean): string => (
     `grid grid-cols-[16px_minmax(0,1fr)_auto] gap-3 py-2 transition-all duration-300 ${visible ? 'translate-y-0 opacity-100' : 'translate-y-1 opacity-0'}`
   );
   return (
-    <div aria-label="Kinu command line preview" className="overflow-hidden rounded-xl border border-[var(--c-border-strong)] bg-[var(--c-input-bg)] font-mono text-xs shadow-[0_30px_90px_-50px_rgba(0,0,0,.8)]">
+    <div data-cli-stage={stage} aria-label="Kinu command line preview" className="overflow-hidden rounded-xl border border-[var(--c-border-strong)] bg-[var(--c-input-bg)] font-mono text-xs shadow-[0_30px_90px_-50px_rgba(0,0,0,.8)]">
       <div className="flex h-11 items-center gap-2 border-b border-[var(--c-border-strong)] p-recessed px-4">
         <span className="size-2 rounded-full bg-[var(--c-danger)] opacity-70" />
         <span className="size-2 rounded-full bg-[var(--c-warning)] opacity-70" />
         <span className="size-2 rounded-full bg-[var(--c-success)] opacity-70" />
         <span className="ml-3 flex-1 text-center text-[10px] uppercase tracking-[.14em] p-text-4">kinu run · checkout</span>
-        <span className={`text-[10px] uppercase tracking-[.12em] ${stage < 4 ? 'p-gold' : 'p-success'}`}>{stage < 4 ? 'running' : 'exit 0'}</span>
+        <div className="flex items-center gap-2">
+          <span className={`text-[10px] uppercase tracking-[.12em] ${stage < 4 ? 'p-gold' : 'p-success'}`}>{stage < 4 ? 'running' : 'exit 0'}</span>
+          <Button type="button" size="sm" variant="ghost" aria-label="Replay CLI run" onClick={() => { setStage(0); setSequence((value) => value + 1); }} className="!h-7 !rounded-full !px-2.5 !text-[10px]">Replay</Button>
+        </div>
       </div>
       <div className="min-h-[360px] p-5 sm:p-7">
         <div className="mb-6 p-text"><span className="mr-2 p-gold">$</span>kinu run checkout “Audit the coupon flow and fix it.”<span className={`ml-1 inline-block h-[1em] w-[7px] bg-[var(--c-accent)] ${stage === 0 ? 'motion-safe:animate-pulse' : 'opacity-0'}`} /></div>
