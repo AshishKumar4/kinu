@@ -947,6 +947,16 @@ body { background: var(--c-bg); color: var(--c-text); }
   .landing-shell { padding-inline: 1.25rem; }
 }
 
+.landing-tabs [role="presentation"],
+.p-altitude-tabs [role="presentation"] {
+  background: var(--c-accent) !important;
+}
+
+.landing-tabs [role="tab"][aria-selected="true"],
+.p-altitude-tabs [role="tab"][aria-selected="true"] {
+  color: var(--c-accent-on) !important;
+}
+
 @layer utilities {
   .animate-fade-in { animation: fade-in var(--dur-enter) var(--ease-out-strong); }
   .animate-scale-in { animation: scale-in var(--dur-fast) ease-out; }

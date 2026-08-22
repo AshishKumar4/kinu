@@ -21,7 +21,7 @@ const CARD = 'min-w-0 rounded-[14px] border p-border p-surface';
 const FEATURES = [
   ['Learns from use', 'Every turn is graded against your next message. Lessons that later turns confirm persist.'],
   ['Crafts its own tools', 'Recurring patterns become tools it builds, scores, and calls on its own.'],
-  ['Commands agent swarms', 'A hard task forks a scored tree of whole agents. The best attempt wins.'],
+  ['Orchestrates subagent DAGs', 'Complex work branches across specialists, passes evidence forward, and converges into one result.'],
   ['Your cloud, or yours alone', 'Run it on kinu.run today, or deploy the same Worker into your own account.'],
 ] as const;
 
@@ -124,20 +124,119 @@ function ClientsSection(): ReactElement {
   );
 }
 
+type EvolutionSignalKind = 'score' | 'lesson' | 'merge' | 'version';
+
+function EvolutionSignal({ kind }: { kind: EvolutionSignalKind }): ReactElement {
+  if (kind === 'score') {
+    return (
+      <div aria-hidden="true" className="flex h-24 items-end gap-2">
+        {[42, 68, 88].map((height, index) => <span key={height} className={`w-5 rounded-t-sm ${index === 2 ? 'p-dot-accent motion-safe:animate-pulse' : 'p-fill'}`} style={{ height: `${String(height)}%` }} />)}
+      </div>
+    );
+  }
+  if (kind === 'lesson') {
+    return (
+      <div aria-hidden="true" className="relative h-24">
+        <span className="absolute left-0 top-3 rounded-lg border p-border p-recessed px-3 py-2 text-[10px] p-text-3">answer</span>
+        <span className="absolute left-[42%] top-10 font-mono text-xs p-gold">→</span>
+        <span className="absolute right-0 top-8 rounded-full border border-[var(--c-accent)] p-accent-subtle px-3 py-2 text-[10px] p-gold">lesson</span>
+      </div>
+    );
+  }
+  if (kind === 'merge') {
+    return (
+      <div aria-hidden="true" className="relative h-24">
+        <span className="absolute left-0 top-1 size-8 rounded-full border p-border p-surface" />
+        <span className="absolute left-0 top-14 size-8 rounded-full border p-border p-surface" />
+        <span className="absolute left-[38%] top-9 h-px w-[26%] bg-[var(--c-border-strong)]" />
+        <span className="absolute right-0 top-7 flex size-11 items-center justify-center rounded-full border border-[var(--c-accent)] p-accent-subtle font-mono text-[10px] p-gold">one</span>
+      </div>
+    );
+  }
+  return (
+    <div aria-hidden="true" className="relative h-24">
+      <span className="absolute left-1 top-5 h-12 w-[72%] rounded-md border p-border p-recessed" />
+      <span className="absolute left-4 top-3 h-12 w-[72%] rounded-md border p-border p-surface" />
+      <span className="absolute left-7 top-1 flex h-12 w-[72%] items-center px-3 font-mono text-[10px] p-gold">v12 · active</span>
+    </div>
+  );
+}
+
+function SwarmDag(): ReactElement {
+  const nodes = [
+    { label: 'Agent', detail: 'delegates', x: 50, y: 8, tone: 'agent' },
+    { label: 'Research', detail: 'sources', x: 10, y: 35, tone: 'node' },
+    { label: 'Ideation', detail: 'options', x: 38, y: 35, tone: 'node' },
+    { label: 'Audit', detail: 'risks', x: 68, y: 35, tone: 'node' },
+    { label: 'Optimization', detail: 'benchmarks', x: 22, y: 64, tone: 'node' },
+    { label: 'Planning', detail: 'sequence', x: 52, y: 64, tone: 'node' },
+    { label: 'Implementation', detail: 'builds', x: 82, y: 64, tone: 'node' },
+    { label: 'Integrated result', detail: 'evidence + answer', x: 50, y: 90, tone: 'result' },
+  ] as const;
+  return (
+    <div className="overflow-hidden rounded-2xl border p-border p-surface">
+      <div className="relative hidden h-[460px] md:block">
+        <svg aria-hidden="true" viewBox="0 0 1000 460" preserveAspectRatio="none" className="absolute inset-0 size-full">
+          <g fill="none" stroke="var(--c-border-strong)" strokeWidth="1.2">
+            <path d="M500 65 C500 110 100 105 100 155" />
+            <path d="M500 65 C500 110 380 105 380 155" />
+            <path d="M500 65 C500 110 680 105 680 155" />
+            <path d="M100 195 C100 245 220 245 220 275" />
+            <path d="M380 195 C380 245 220 245 220 275" />
+            <path d="M380 195 C380 245 520 245 520 275" />
+            <path d="M680 195 C680 245 520 245 520 275" />
+            <path d="M680 195 C680 245 820 245 820 275" />
+            <path d="M220 320 C220 380 500 370 500 398" />
+            <path d="M520 320 C520 360 500 370 500 398" />
+            <path d="M820 320 C820 380 500 370 500 398" />
+          </g>
+          <g fill="var(--c-accent)">
+            {[[500, 65], [100, 155], [380, 155], [680, 155], [220, 275], [520, 275], [820, 275], [500, 398]].map(([x, y]) => <circle key={`${String(x)}-${String(y)}`} cx={x} cy={y} r="3" />)}
+          </g>
+        </svg>
+        {nodes.map((node) => (
+          <div
+            key={node.label}
+            className={`absolute min-w-[150px] -translate-x-1/2 -translate-y-1/2 rounded-xl border px-4 py-3 text-center ${node.tone === 'agent' ? 'border-[var(--c-accent)] p-accent-subtle' : node.tone === 'result' ? 'border-[var(--c-success)] bg-[var(--c-success-tint)]' : 'p-border p-recessed'}`}
+            style={{ left: `${String(node.x)}%`, top: `${String(node.y)}%` }}
+          >
+            <div className={`text-[12.5px] font-semibold ${node.tone === 'agent' ? 'p-gold' : node.tone === 'result' ? 'p-success' : 'p-text'}`}>{node.label}</div>
+            <div className="mt-1 font-mono text-[9.5px] p-text-4">{node.detail}</div>
+          </div>
+        ))}
+      </div>
+      <div className="grid gap-px bg-[var(--c-border)] md:hidden">
+        {nodes.map((node) => <div key={node.label} className="flex items-center justify-between gap-3 p-recessed px-4 py-3"><span className="text-[12.5px] p-text">{node.label}</span><span className="font-mono text-[10px] p-text-4">{node.detail}</span></div>)}
+      </div>
+      <div className="flex flex-wrap justify-between gap-3 border-t p-border p-recessed px-5 py-3 font-mono text-[10px] uppercase tracking-[.1em] p-text-4"><span>parallel branches</span><span>measured evidence</span><span>fan-in</span></div>
+    </div>
+  );
+}
+
 function EvolutionSection(): ReactElement {
   const clocks = [
-    ['Per step', 'Tool fitness', 'Every settled call updates the tool score from execution evidence.'],
-    ['Per turn', 'Lesson extraction', 'The next message grades the answer. Confirmed lessons enter memory.'],
-    ['Per session', 'Consolidation', 'Related lessons merge. Conflicts stay explicit until later evidence resolves them.'],
-    ['Across sessions', 'Scaffold evolution', 'Repeated patterns can change the agent loop. Versions stay reversible.'],
+    ['Per step', 'Tool fitness', 'Execution evidence updates which tools the agent trusts and reaches for next.', 'score'],
+    ['Per turn', 'Lesson extraction', 'Your next message grades the answer. Confirmed lessons enter workspace memory.', 'lesson'],
+    ['Per session', 'Consolidation', 'Related lessons merge, while unresolved conflicts stay visible for later evidence.', 'merge'],
+    ['Across sessions', 'Scaffold evolution', 'Repeated patterns can change the agent loop. Every version remains reversible.', 'version'],
   ] as const;
   return (
     <section id="evolution" className={SECTION}>
       <RuleLabel>04 · Self-evolution</RuleLabel>
-      <SectionTitle>Evolution on <span className="p-gold">four timescales.</span></SectionTitle>
-      <p className="mb-10 mt-3.5 max-w-[640px] text-[17px] leading-[1.6] p-text-3">The shorter clocks feed the longer ones. Scoring, consolidation, and retirement run inside the workspace.</p>
-      <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
-        {clocks.map(([time, title, body]) => <div key={title} className={`${CARD} p-[26px]`}><div className="mb-3.5 text-[11.5px] p-text-4">{time}</div><h3 className="mb-2.5 text-[12.5px] font-semibold p-gold">{title}</h3><p className="text-sm leading-[1.65] p-text-3">{body}</p></div>)}
+      <SectionTitle>Learning compounds across <span className="p-gold">four connected clocks.</span></SectionTitle>
+      <p className="mb-10 mt-3.5 max-w-[680px] text-[17px] leading-[1.6] p-text-3">Each completed action can improve the next one. Tool evidence becomes lessons, lessons consolidate into memory, and repeated patterns can produce a new reversible scaffold version.</p>
+      <div className="overflow-hidden rounded-2xl border p-border p-surface">
+        <div className="grid gap-px bg-[var(--c-border)] sm:grid-cols-2 lg:grid-cols-4">
+          {clocks.map(([time, title, body, signal], index) => (
+            <article key={title} className="min-w-0 p-surface p-6 sm:p-7">
+              <div className="mb-5 flex items-center justify-between gap-3"><span className="font-mono text-[10px] uppercase tracking-[.14em] p-gold">{time}</span><span className="font-mono text-[10px] p-text-4">0{index + 1}</span></div>
+              <EvolutionSignal kind={signal} />
+              <h3 className="mb-2.5 mt-5 text-[15px] font-semibold p-text">{title}</h3>
+              <p className="text-sm leading-[1.65] p-text-3">{body}</p>
+            </article>
+          ))}
+        </div>
+        <div className="flex flex-wrap items-center justify-center gap-3 border-t p-border p-recessed px-5 py-3 font-mono text-[10px] uppercase tracking-[.1em] p-text-4"><span>tool evidence</span><span className="p-gold">→</span><span>lessons</span><span className="p-gold">→</span><span>memory</span><span className="p-gold">→</span><span>versioned scaffold</span></div>
       </div>
     </section>
   );
@@ -146,11 +245,10 @@ function EvolutionSection(): ReactElement {
 function SwarmSection(): ReactElement {
   return (
     <section id="swarm" className={SECTION}>
-      <RuleLabel>05 · The tree of agents</RuleLabel>
-      <div className="grid items-start gap-10 lg:grid-cols-2 lg:gap-14">
-        <div><SectionTitle>Run one task <span className="p-gold">as a tree of agents.</span></SectionTitle><p className="mt-3.5 text-[17px] leading-[1.6] p-text-3">One tool call builds the tree. Each node attempts the task in its own directory. Weak branches are pruned, and the measured winner answers.</p><p className="mt-3.5 text-[17px] leading-[1.6] p-text-3">Kinu derives the objective and verifier from your request. You keep the winning result and the record behind it.</p></div>
-        <div className={`${CARD} p-6 font-mono text-[12.5px] leading-[1.9] p-text-3`}><div className="mb-3.5 text-[11px] uppercase tracking-[.14em] p-text-4">One internal call</div><pre className="overflow-x-auto whitespace-pre-wrap">{`agents({\n  action: 'swarm',\n  preset: 'optimise',\n  task: 'make the p95 faster',\n  verify: { kind: 'command', spec: 'bun bench' }\n})`}</pre><div className="mt-4 border-t border-dashed border-[var(--c-dash)] pt-3.5 text-[11px] p-text-4">The shape follows the task. Ideation fans out; optimisation searches and measures; proof runs deeper.</div></div>
-      </div>
+      <RuleLabel>05 · Subagent DAGs</RuleLabel>
+      <SectionTitle>Your agent can assemble <span className="p-gold">the specialists a task needs.</span></SectionTitle>
+      <p className="mb-10 mt-3.5 max-w-[780px] text-[17px] leading-[1.6] p-text-3">For complex work, the agent can build a DAG of subagents for research, optimization, ideation, planning, audit, and implementation. Nodes work in parallel, pass evidence forward, and converge into one integrated result.</p>
+      <SwarmDag />
     </section>
   );
 }
