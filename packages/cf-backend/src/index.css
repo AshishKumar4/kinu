@@ -73,40 +73,32 @@
 }
 
 /* ════════════════════════════════════════════════════════════════════
-   Kinu design language — the landing page, applied to the app.
+   Kinu design language — the owner's app mock, applied to the app.
 
-   The signed-out landing page (`landing-route.ts`) is the reference, and
-   it is not a second design system to be absorbed: it is THE one. Its
-   ground (#1A1613), ink (#F5EFE6), muted (#B6A893), brass (#E0A458),
-   brass-strong (#F0CF9B) and brass hairline (brass @14%) are reproduced
-   here verbatim, and the app's dark mode is built around them.
+   The reference is `~/kinu-landing-design/Kinu App v2.dc.html`, drawn by
+   the owner himself: warm blacks (#0F0D0B ground, #181512 cards), solid
+   warm-brown hairlines (#262019) instead of alpha glows, one gold accent
+   (#E0A458) rationed to intent, silk (#E3D2AE) as the bright end of the
+   same thread, and three self-hosted faces — Schibsted Grotesk for
+   everything that reads, Newsreader for the two moments where the product
+   speaks in its own voice, Fragment Mono for labels and commands.
 
    Rules the tokens encode:
-   · The dark canvas IS the landing's canvas. Chrome sits a step above
-     it (the landing's header does the same); wells sit below.
-   · Hairlines are brass at low alpha — that warmth is the "colour
-     scheme" the app is recognised by. Brass at FULL strength stays
-     rationed to intent: primary action, active nav, links, focus, live
-     work.
-   · Surfaces are a warm ladder. In DARK, hierarchy comes from surface
-     steps plus hairlines, never from shadows.
-   · LIGHT is not the dark palette warmed and lightened. Two passes did
-     that and both produced the same defect: a monochrome beige field
-     where canvas, rails, panels and cards were one hue separated by a
-     few percent lightness. Light gets its structure the way strong
-     light modes actually get it — near-neutral ground, PAPER cards,
-     real hairlines, real elevation — and brass is rationed to intent
-     rather than being the atmosphere. The planes carry roughly half
-     the chroma they used to; brass is then the only saturated thing on
-     screen, which is what makes it read as an accent at all.
-   · `--c-elevated` and `--c-fill` are one value in dark and two in
-     light, because dark conflates two roles that light cannot. "Raised
-     off the canvas" (composer, dialogs, cards) is PAPER in light;
-     "a plane inside a card" (chips, segments, meter tracks, hover) is
-     a step DOWN from paper. One token served both only because moving
-     up the dark ladder happens to do both at once.
+   · Hairlines are SOLID colours from the ground's own family. The mock
+     draws its structure this way and it is what keeps the surface warm;
+     an alpha hairline composited over these grounds reads grey.
+   · Gold stays rationed: primary action, active nav, links, focus, live
+     work. Silk is gold caught in light — links, brand ink, inline code —
+     never a second accent.
+   · Surfaces are a warm ladder and dark hierarchy comes from steps plus
+     hairlines, never shadows.
+   · LIGHT is the owner's own light theme from the same file, not a
+     derivation: tinted ground (#E9E2D3), paper cards (#F7F3E9), strong
+     visible rules (#D2C6AE family), gold deepened for text (#8F5C10).
    · Every text token meets WCAG AA (4.5:1+) on every surface it is
-     specced for, in both modes — enforced by unit-palette-contrast.
+     specced for, in both modes — enforced by unit-palette-contrast. Two
+     rungs are lifted a hair above the mock's literals for exactly this
+     gate and say so in their comments.
 
    The `.p-*` component classes live in `@layer components` so that any
    Tailwind utility written beside one wins. Unlayered, `.p-card`'s
@@ -115,20 +107,34 @@
    out as a floating four-sided box instead of a tab.
    ════════════════════════════════════════════════════════════════════ */
 
-/* The one webfont this product ships: Fraunces, variable [opsz 9-144,
-   wght 100-900], latin subset, 67 KB, self-hosted from public/assets — no
-   font CDN at runtime. The optical-size axis is the reason it exists: the
-   old Palatino stack has no opsz and a single working weight, so the 62px
-   hero and a 15px panel heading were the same drawing at two zooms. The
-   fallback stack below stays intact, so an unloaded font degrades to
-   exactly the face this product shipped before. Licence: OFL, vendored
-   beside the file. The signed-out shell declares the same face and
-   `unit-public-shell` holds the two identical, plus the file's byte
-   budget. */
+/* Three webfonts, latin subsets, self-hosted from public/assets — no font
+   CDN at runtime. Schibsted Grotesk is the variable [wght 400-900] cut:
+   one file carries every UI weight. Newsreader is the app's serif voice,
+   variable [wght 400-700] at a fixed optical size — it appears at exactly
+   two sizes (the brand mark, the new-workspace headline), so the opsz axis
+   bought nothing and cost 74 KB. Fallback stacks stay intact, so an
+   unloaded font degrades to the face this product shipped before. Each
+   licence travels with the files because OFL requires it. */
 @font-face {
-  font-family: "Fraunces";
-  src: url("/assets/fonts/fraunces-latin-var.woff2") format("woff2-variations");
-  font-weight: 100 900;
+  font-family: "Schibsted Grotesk";
+  src: url("/assets/fonts/schibsted-latin-var.woff2") format("woff2-variations");
+  font-weight: 400 900;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Newsreader";
+  src: url("/assets/fonts/newsreader-latin-var.woff2") format("woff2-variations");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Fragment Mono";
+  src: url("/assets/fonts/fragmentmono-latin.woff2") format("woff2");
+  font-weight: 400;
   font-style: normal;
   font-display: swap;
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
@@ -137,46 +143,42 @@
 html, body, #root {
   width: 100%; height: 100%; margin: 0;
   font-family: var(--font-ui);
-  /* Variable-font optical sizing follows rendered size (inherited), so the
-     display face self-adjusts between a hero and a panel heading. */
-  font-optical-sizing: auto;
 }
 
 :root {
-  /* type — three faces, one webfont (the display face above).
+  /* type — three faces, three jobs, all self-hosted above.
 
-     `--font-display` leads with Fraunces and falls back to the Palatino
-     stack it replaced. Every landing page this design was measured against
-     sets a display face over a system fallback (omp.sh puts Fraunces over
-     "Iowan Old Style"; pi.dev puts Plantin over Georgia), and a product
-     whose largest type is `-apple-system` reads as a dashboard
-     with headings in it. It is rationed to page titles and to the signed-out
-     pages, never to UI at reading size. The signed-out shell declares the same
-     stack and `unit-public-shell` asserts the two are identical, because the
-     two surfaces are one product.
+     `--font-ui` and `--font-display` are the same Schibsted Grotesk stack:
+     the mock sets headings, labels and body in one grotesk and earns its
+     hierarchy with weight, not typeface swaps. They stay two tokens because
+     the roles can diverge later without touching call sites.
 
-     `--font-mono` carries a second job besides code: every eyebrow and section
-     label is set in it (see `.p-eyebrow`), which is the label convention the
-     same references share. */
-  --font-display: "Fraunces", "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", "TeX Gyre Pagella", P052, "Noto Serif", Georgia, serif;
-  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
-  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+     `--font-serif` is Newsreader, rationed to the two moments where the
+     product speaks in first person: the brand mark and the new-workspace
+     headline. The signed-out shell declares the same stacks and
+     `unit-public-shell` asserts the two are identical, because the two
+     surfaces are one product.
 
-  /* Radii — role names over the four rungs declared in the `@theme` block at
-     the top of this file. Kept as roles because the role is what a call site
-     means; the rung is just how round it happens to be.
+     `--font-mono` carries a second job besides code: every eyebrow and
+     section label is set in it (see `.p-eyebrow`), the mock's own label
+     convention (WORKSPACES, the run-history columns). */
+  --font-display: "Schibsted Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  --font-ui: "Schibsted Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  --font-serif: "Newsreader", "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --font-mono: "Fragment Mono", ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
 
-     This block used to carry 6/8/10/14px literals while `@theme inline` mapped
-     Tailwind's scale onto `calc(var(--radius) …)` — and `--radius` is defined
-     nowhere but `[data-kinu-plan-review]`. So every `rounded-sm/md/lg/xl` in
-     the app, Kumo's own included, computed to 0px, while `.p-composer` used its
-     literal and stayed round. That is the "some borders are sharp while the
-     prompt box is round" inconsistency, and it was a missing token, not a
-     styling choice. Locked by unit-radius-scale.test.ts. */
+  /* Radii — the mock's own measures, stated as roles. Outer cards and the
+     composer are 14px; the grouped cards INSIDE a surface (tool rows,
+     journal, key-value tables) stay at Tailwind's 12px rung; rows and
+     fields 8px; controls 6px; actions and chips are pills. The old
+     aliasing of `--r-card`/`--r-overlay` onto Tailwind rungs is gone — the
+     mock's two 14px measures sit between Tailwind's 12 and 16, and a role
+     that means "outer card" should not have to negotiate with a library
+     scale to say so. Locked by unit-radius-scale.test.ts. */
   --r-control: var(--radius-sm);   /*  6px — chips, inline code, segment items */
   --r-row:     var(--radius-md);   /*  8px — buttons, fields, rows */
-  --r-card:    var(--radius-lg);   /* 12px — cards, panels, notices */
-  --r-overlay: var(--radius-xl);   /* 16px — dialogs, menus, the composer */
+  --r-card:    0.875rem;           /* 14px — outer cards, panels, notices */
+  --r-overlay: 0.875rem;           /* 14px — dialogs, menus, the composer */
 
   /* motion */
   --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
@@ -184,62 +186,66 @@ html, body, #root {
   --dur-base: 150ms;
   --dur-enter: 220ms;
 
-  /* ── DARK (default) — the landing page's umber ─────────────────────
-     Values marked "landing" are copied from `landing-route.ts` and must
-     stay identical to it: the two surfaces are one product, and the
-     first thing a signed-in user notices is when they are not. ── */
-  --c-recessed: #120F0C;   /* wells, tracks, inset code   */
-  --c-bg:       #1A1613;   /* landing --bg — the canvas   */
-  --c-sidebar:  #201A15;   /* landing header tone — panels */
-  --c-surface:  #241E18;   /* card   */
-  --c-elevated: #2C251E;   /* raised off the canvas: composer, dialogs, menus */
-  --c-overlay:  #332B23;   /* dialogs */
-  /* A plane INSIDE a card — chip, segment, meter track, row hover. Dark has
-     no use for the distinction (up the ladder reads as both), so it is the
-     same value as `--c-elevated` here and the two only diverge on paper. */
-  --c-fill:     #2C251E;
+  /* ── DARK (default) — the owner's app mock, verbatim ───────────────
+     Every value below is the mock's own dark theme (Kinu App v2.dc.html,
+     `themes.dark`), mapped onto the app's role names. The mock's own
+     variable name is cited per token so an audit can trace each value
+     back to his file. ── */
+  --c-recessed: #131110;   /* mock --deep — wells, tracks, inset code */
+  --c-bg:       #0F0D0B;   /* mock --bg — the canvas   */
+  --c-sidebar:  #141110;   /* mock --panel2 — chrome: sidebar, top bar, composer strip */
+  --c-surface:  #181512;   /* mock --panel — card   */
+  --c-elevated: #221C15;   /* mock --raise — hover raise, menus, dialogs */
+  --c-overlay:  #221C15;   /* dialogs — dark conflates the top two rungs, as the mock does */
+  /* mock --chip — a plane INSIDE a card: the model chip, the Run/Supervise
+     pill container, count badges. One step above the card it sits on. */
+  --c-fill:     #1B1713;
+  /* mock --input — the composer well. It sits BELOW the canvas, a dark
+     inset inside the chrome strip, which is why it is not `--c-elevated`. */
+  --c-input-bg: #0B0A09;
 
-  /* Brass hairlines. The landing draws every rule this way and it is what
-     makes the surface read warm rather than merely dark. */
-  --c-border:        rgba(224, 164, 88, 0.14);  /* landing --line */
-  --c-border-strong: rgba(224, 164, 88, 0.28);
-  --c-input-border:  rgba(224, 164, 88, 0.22);
+  /* Solid hairlines from the ground's own family. The mock draws every rule
+     as a solid warm brown and that is what keeps the surface warm — an
+     alpha hairline composited over these grounds reads grey. mock --line
+     for structural rules, --dash for separators inside a card, --line2 for
+     outlined controls (the composer, quiet buttons, the tab pill). */
+  --c-border:        #262019;  /* mock --line  */
+  --c-border-strong: #332C23;  /* mock --line2 */
+  --c-input-border:  #332C23;  /* mock --line2 — the composer's resting edge */
+  --c-dash:          #2A241D;  /* mock --dash — dashed separators */
 
-  --c-text:     #F5EFE6;   /* landing --ink    15.7:1 on bg */
-  --c-text-2:   #B6A893;   /* landing --muted   7.7:1 */
-  --c-text-3:   #A19682;   /* dim  6.2:1 on bg, 4.8:1 on overlay */
+  --c-text:     #EDE5D8;   /* mock --ink   15.5:1 on bg */
+  --c-text-2:   #D8CFC2;   /* mock --ink3  12.6:1 — secondary UI text */
+  --c-text-3:   #9C9184;   /* mock --dim    6.3:1 — the dim role */
+  --c-text-4:   #8E8478;   /* mock --faint2 lifted from #8A7F72 for AA (4.6:1 worst) — micro labels */
 
-  --c-accent:    #E0A458;  /* landing --accent        */
-  --c-accent-fg: #F0CF9B;  /* landing --accent-strong */
-  --c-accent-on: #2a1d0c;  /* landing --accent-on, 7.5:1 on brass */
-  --c-accent-subtle: rgba(224, 164, 88, 0.14);
+  --c-accent:    #E0A458;  /* mock --gold / --goldFill */
+  --c-accent-fg: #E3D2AE;  /* mock --silk — the bright end: links, brand ink, inline code */
+  --c-accent-on: #1A1408;  /* mock --goldInk, 8.4:1 on gold */
+  --c-accent-subtle: rgba(224, 164, 88, 0.12);
 
-  /* The status hues are the landing canvas's own palette (sage, tan,
-     terracotta), lifted until each clears AA on the top of the ladder. */
-  --c-success:  #9EBE7E;   /* 8.7:1 */
-  --c-warning:  #E8B97A;   /* landing --code, 10.0:1 */
-  --c-danger:   #E8907A;   /* 7.5:1 */
-  --c-info:     #8FB6D6;   /* 8.4:1 */
+  /* Status hues. good/bad are the mock's own; warning and info have no
+     mock literal and keep the family's tan and slate. */
+  --c-success:  #8FBC8B;   /* mock --good, 9.0:1 */
+  --c-warning:  #E8B97A;   /* derived, 10.8:1 */
+  --c-danger:   #C97B6B;   /* mock --bad, 6.0:1 */
+  --c-info:     #8FB6D6;   /* derived, 9.1:1 */
 
-  --c-success-tint: rgba(158, 190, 126, 0.14);
+  --c-success-tint: rgba(143, 188, 139, 0.14);
   --c-warning-tint: rgba(232, 185, 122, 0.14);
-  --c-danger-tint:  rgba(232, 144, 122, 0.14);
+  --c-danger-tint:  rgba(201, 123, 107, 0.14);
   --c-info-tint:    rgba(143, 182, 214, 0.14);
-  --c-neutral-tint: rgba(245, 239, 230, 0.07);
+  --c-neutral-tint: rgba(237, 229, 216, 0.06);
 
-  --c-user-bg:     #2A211A;  /* user turn: warm-tinted raised surface */
-  --c-user-border: rgba(224, 164, 88, 0.18);
-  /* The narrow directional highlight the user bubble wears (`.p-user-bubble`)
-     — brass glancing off the top of the turn. Declared per theme because the
-     glint is warm light in dark modes and paper-white in light ones. */
-  --c-user-sheen:  rgba(240, 207, 155, 0.06);
+  --c-user-bg:     #241E16;  /* mock --bubble */
+  --c-user-border: #3A3126;  /* mock --bubbleLine */
 
-  /* The code surface. The landing renders code as one warm tone on a
-     recessed panel rather than syntax-coloured, and that is deliberate
-     here too — see CodeBlock in components/surfaces/shared.tsx. */
-  --c-code:     #E8B97A;   /* landing --code */
-  /* A code block is a well, which is what `--c-recessed` already means; the
-     two were the same literal in both modes and drifted apart by hand. */
+  /* The code surface: one silk tone on a recessed well rather than
+     syntax-coloured — the mock sets every inline identifier in its bright
+     thread colour, and CodeBlock in components/surfaces/shared.tsx does
+     the same. */
+  --c-code:     #E3D2AE;   /* mock --silk, in prose */
+  /* A code block is a well, which is what `--c-recessed` already means. */
   --c-code-bg:  var(--c-recessed);
 
   /* One scrim behind every overlay — dialogs, drawers, sheets. Warm-black so
@@ -339,86 +345,65 @@ html, body, #root {
 }
 
 [data-mode="light"] {
-  /* ── LIGHT — near-neutral ground, paper cards, brass rationed ──────
-     Three passes of complaint, all the same one: "it's all mostly the
-     same colour and shade on most panels." Both previous attempts
-     answered it by moving the steps of a warm ladder around. That could
-     not work, because the problem was never the spacing of the steps —
-     it was that every plane on screen was the SAME saturated beige, and
-     brass, the accent, was that beige too. An accent cannot be an
-     accent when the whole field is already its hue.
+  /* ── LIGHT — the owner's own light theme, verbatim ─────────────────
+     The mock carries a complete light face (`themes.light`), so this is
+     not a derivation: tinted ground, paper cards, strong visible rules,
+     gold deepened for text. Where the ladder needs a name:
 
-     So the planes give up most of their chroma (roughly 42% → 20%
-     saturation) and gain lightness, and the structure comes from where
-     good light modes actually get it:
+       ground   #E9E2D3  the canvas
+       chrome   #F1EBDD  sidebar, top bar, composer strip
+       paper    #F7F3E9  cards, composer well, dialogs
+       chip     #E5DCC8  planes inside a card
+       raise    #E8E0CE  row hover, menus
+       line     #D2C6AE  structural rules — 1.5:1 on paper, plainly visible
 
-       ground      a near-neutral warm grey you would call "off-white"
-       chrome      rails and panel headers, a real step BELOW the canvas
-       paper       cards, composer, dialogs — WHITE, the reading surface
-       line        hairlines strong enough to see (1.43:1 on white,
-                   GitHub-strength; the old rule was 1.19:1 and vanished)
-       lift        cards cast a shadow, which dark deliberately forbids
+     Gold splits in two on paper: the fill stays bright (#D89A44) while
+     text-grade gold deepens to #8F5C10, exactly as the mock does. ── */
+  --c-recessed: #E0D8C5;   /* mock --deep */
+  --c-bg:       #E9E2D3;   /* mock --bg */
+  --c-sidebar:  #F1EBDD;   /* mock --panel2 */
+  --c-surface:  #F7F3E9;   /* mock --panel — paper cards */
+  --c-elevated: #E8E0CE;   /* mock --raise — hover raise, menus */
+  --c-overlay:  #F7F3E9;   /* dialogs — paper, lifted by shadow */
+  --c-fill:     #E5DCC8;   /* mock --chip */
+  --c-input-bg: #F7F3E9;   /* mock --input */
 
-     The measured steps, as WCAG luminance ratios, recomputed from the hexes
-     below (`paper : fill` and `canvas : recessed` had drifted from the numbers
-     originally written here, 1.22 and 1.19):
-       paper : canvas   1.148     canvas : chrome   1.124
-       paper : fill     1.211     canvas : recessed 1.147
-     Every one of those is a step you can see without hunting; the old
-     canvas : chrome was 1.07, which is why the rail and the canvas read
-     as one surface.
+  --c-border:        #D2C6AE;  /* mock --line  */
+  --c-border-strong: #BBAB8C;  /* mock --line2 */
+  --c-input-border:  #BBAB8C;  /* mock --line2 */
+  --c-dash:          #DBD1BE;  /* mock --dash */
 
-     Brass survives verbatim as `--c-accent` — the same object as dark —
-     and is now the only saturated colour in the room. ── */
-  --c-recessed: #E4E0D8;   /* wells, tracks, code             */
-  --c-sidebar:  #E7E2D9;   /* chrome: rails, panel headers    */
-  --c-fill:     #EDE9E1;   /* chips, segments, tracks, hover  */
-  --c-bg:       #F2EFE9;   /* the canvas                      */
-  --c-surface:  #FFFFFF;   /* cards — paper                   */
-  --c-elevated: #FFFFFF;   /* raised — paper, lifted by shadow */
-  --c-overlay:  #FFFFFF;   /* dialogs — paper, lifted further  */
+  --c-text:     #1C1710;   /* mock --ink   13.8:1 on bg */
+  --c-text-2:   #3D3427;   /* mock --ink3   9.5:1 */
+  --c-text-3:   #5E5344;   /* mock --dim    5.8:1 */
+  --c-text-4:   #695C4C;   /* mock --faint2 lifted from #6F6252 for AA (4.6:1 worst) */
 
-  /* Warm-brown ink alpha: borders flip source (brass→ink) but keep the
-     hue family, so a rule looks like the same rule in both modes. On a
-     near-white ground they have to be a good deal stronger than the
-     brass hairlines dark uses, or the paper edges disappear. */
-  --c-border:        rgba(74, 56, 30, 0.20);
-  --c-border-strong: rgba(74, 56, 30, 0.34);
-  --c-input-border:  rgba(74, 56, 30, 0.26);
+  --c-accent:    #D89A44;  /* mock --goldFill — fills keep the bright object */
+  --c-accent-fg: #7A5514;  /* mock --silk — links, brand ink, inline code, 5.2:1 on bg */
+  --c-accent-on: #1F1503;  /* mock --goldInk, 7.4:1 on the fill */
+  --c-accent-subtle: rgba(216, 154, 68, 0.16);
 
-  --c-text:     #2A2118;   /* 15.7:1 on paper */
-  --c-text-2:   #5C5044;   /*  7.5:1 */
-  --c-text-3:   #655749;   /*  6.4:1 on paper, 4.9:1 on recessed */
-
-  --c-accent:    #E0A458;  /* the same brass object as dark */
-  --c-accent-fg: #8A4E0D;  /* deep bronze ink, 6.6:1 on paper */
-  --c-accent-on: #2a1d0c;
-  --c-accent-subtle: rgba(224, 164, 88, 0.22);
-
-  --c-success:  #37622E;
+  --c-success:  #316530;   /* mock --good #356B35 lifted for AA on wells (4.9:1 worst) */
   --c-warning:  #7E5205;
-  --c-danger:   #9C3A28;
+  --c-danger:   #96412C;   /* mock --bad */
   --c-info:     #2F6289;
 
-  --c-success-tint: rgba(55, 98, 46, 0.11);
-  --c-warning-tint: rgba(126, 82, 5, 0.12);
-  --c-danger-tint:  rgba(156, 58, 40, 0.11);
-  --c-info-tint:    rgba(47, 98, 137, 0.11);
-  --c-neutral-tint: rgba(58, 45, 30, 0.08);
+  --c-success-tint: rgba(49, 101, 48, 0.11);
+  --c-warning-tint: rgba(126, 82, 5, 0.10);
+  --c-danger-tint:  rgba(150, 65, 44, 0.11);
+  --c-info-tint:    rgba(47, 98, 137, 0.08);
+  --c-neutral-tint: rgba(43, 36, 25, 0.07);
 
-  /* The user's own turn is the one plane that stays frankly warm: on a
-     near-neutral field it now reads as brass rather than as more beige. */
-  --c-user-bg:     #FBEDD5;
-  --c-user-border: rgba(138, 78, 13, 0.22);
-  --c-user-sheen:  rgba(255, 255, 255, 0.60);
+  --c-user-bg:     #F2D9AC;  /* mock --bubble */
+  --c-user-border: #D9B573;  /* mock --bubbleLine */
 
-  --c-code:     #5E3604;   /* the brass ink, deepened for paper */
+  --c-code:     #7A5514;   /* mock --silk, deepened ink on paper */
 
   /* On paper the scrim reads as ink pulled over the page, not a blackout. */
   --c-scrim: rgba(43, 26, 4, 0.32);
-  /* Light shadows are warm ink. They are the whole reason a white card on a
-     near-white canvas reads as an object, so a card gets one too. */
-  --shadow-card:    0 1px 2px rgba(60, 45, 25, 0.05), 0 2px 6px -2px rgba(60, 45, 25, 0.07);
+  /* The mock separates its planes with tone plus strong rules and casts no
+     card shadow; only floating layers get a lift. */
+  --shadow-card: none;
   --shadow-overlay: 0 16px 40px -14px rgba(43, 26, 4, 0.20), 0 2px 8px rgba(43, 26, 4, 0.07);
   --shadow-menu:    0 10px 24px -10px rgba(43, 26, 4, 0.18), 0 1px 3px rgba(43, 26, 4, 0.06);
   --shadow-composer: 0 -6px 20px -16px rgba(43, 26, 4, 0.14), 0 1px 2px rgba(60, 45, 25, 0.05);
@@ -426,247 +411,6 @@ html, body, #root {
   /* The one Kumo token whose light value is not a re-pointed `--c-*`: on
      paper the drop shadow is warm ink, not black. */
   --color-kumo-shadow-drop: rgba(43, 26, 4, 0.14);
-}
-
-/* ════════════════════════════════════════════════════════════════════
-   SILK (v2) — 絹, the product's own name, as a palette.
-
-   Selected by `data-palette="silk"` on <html>, which `use-theme.ts` sets
-   from the same store that sets `data-mode`. Silk is the shipped default —
-   index.html, gallery.html and the public pages all boot into it — while
-   umber stays on `:root` so an absent or unknown attribute still renders a
-   complete palette, and so every silk token has a fallback to deviate from.
-
-   ── The idea ─────────────────────────────────────────────────────
-   Silk is one continuous filament with a triangular cross-section, and
-   that is why it has SHEEN: the same dyed cloth reads as two different
-   colours depending on whether you are looking along the warp or across
-   the weft. Shot silk makes that explicit — warp dyed one colour, weft
-   another, and the fabric changes as it moves.
-
-   So this palette is two threads, not one hue with steps:
-
-     the dye    藍, indigo — the traditional dye for 絹
-     the fibre  raw undyed silk, a warm pearl
-
-   and the modes are the two faces of the same cloth. DARK is the dyed
-   face: an indigo ground with the pale fibre catching the light, so the
-   accent is the BRIGHTEST thing on screen. LIGHT is the undyed face: a
-   raw-silk ground with the dye as the only saturated thing on it, so the
-   accent is the DARKEST. The two threads swap which one is ground and
-   which one is accent, which is why light here is not dark inverted —
-   the accent changes hue family between modes on purpose, and each
-   ladder is built against its own ground.
-
-   Sheen is the one gradient in the design and it is not painted: it is
-   the gap between `--c-accent` (the thread) and `--c-accent-fg` (the
-   light on the thread). The pair always moves AWAY from the ground —
-   brighter than it in dark, deeper than it in light.
-
-   The motif lands on something real without a line of new drawing code:
-   `swarm-tree.tsx` already strokes every link in `--c-border-strong` and
-   the winning line in `--c-accent`, so the tree is literally threads
-   with one of them catching light. Nothing there had to change.
-
-   ── What this rejects ────────────────────────────────────────────
-   · Deriving light from dark. The umber palette's own comment records
-     three passes of complaint from exactly that method. Deriving one
-     PALETTE from another is the same mistake on a different axis, so
-     both faces are declared complete and independently measured.
-   · Iridescence — gradient meshes, blurred glass, a shimmer animation
-     "because silk shines". Real sheen is narrow and directional; spread
-     over every panel it is just glassmorphism. It is rationed to two
-     tokens on one axis instead.
-   · A woven background texture. A tiled weave is a picture of the idea
-     rather than the idea, and it would sit under a workspace where the
-     hairlines are already the weave.
-   · A second accent hue for "warp vs weft" as a categorical pair. This
-     product has no categorical palette by policy (see the Kumo badge
-     mapping above) — a second accent would need a meaning, and there
-     is none to give it.
-   · Monochrome-plus-one-accent, the safe editorial answer. A greyscale
-     ground is what Kumo ships by default and what the umber palette
-     deliberately left, and it throws away the relationship between the
-     two modes that the whole direction is built on.
-
-   ── DARK — the dyed face ──────────────────────────────────────────
-   Retuned 2026-08-21 (v3) against two verdicts on v2: the field read
-   slate-grey rather than dyed, and the umber palette still felt more
-   cohesive. Umber's cohesion is structural: its hairlines are its own
-   accent, so every line lives in the ground's hue family and the whole
-   screen is one material. v3 gives silk the same structure with silk's
-   two threads:
-
-   · The FIELD is the dye. Every rung above the canvas gains chroma as
-     it rises — the dye pooling where the cloth folds — instead of
-     fading toward grey. The canvas stays the banner's #111923 verbatim
-     (docs/assets/banner-dark.svg is the anchor).
-   · The LINES are the weft. The banner draws its own structure in
-     thread at 26-45% opacity; v2's hairlines sat at 16-32% and
-     composited to neutral grey, which killed the weave. v3 raises them
-     to 20/36/28 so a rule reads as pale thread over indigo, the same
-     reading as the banner's tree.
-
-   Ladder steps, as WCAG luminance ratios: recessed→bg 1.09, bg→sidebar
-   1.10, sidebar→surface 1.13, surface→elevated 1.12, elevated→overlay
-   1.15 — every rung wider than v2's (1.07/1.08/1.06/1.10/1.10), so
-   "hierarchy from surface steps plus hairlines, never shadows" now has
-   the steps to say it. Worst-case text ratio across all seven
-   surfaces, all on overlay: text 9.7, text-2 5.6, text-3 4.7,
-   accent-fg 8.5, danger 4.9. ══ */
-[data-palette="silk"] {
-  --c-recessed: #080F17;   /* wells, tracks, inset code */
-  --c-bg:       #111923;   /* the canvas — banner --bg, verbatim */
-  --c-sidebar:  #142230;   /* chrome: rails, panel headers */
-  --c-surface:  #192B44;   /* card */
-  --c-elevated: #1F334F;   /* raised: composer, dialogs, menus */
-  --c-overlay:  #253C5D;   /* dialogs */
-  /* Same argument as umber: moving up a dark ladder reads as both
-     "raised" and "a plane inside a card", so the two roles are one
-     value here and only diverge on paper. */
-  --c-fill:     #1F334F;
-
-  /* Hairlines are the FIBRE — the weft crossing the dyed warp. At v2's
-     16-32% a warm line over indigo composited to neutral grey; at the
-     banner's own stroke strengths it stays visibly thread. Umber draws
-     its rules the same structural way (accent alpha); the colour is
-     what tells the two palettes apart at a glance. */
-  --c-border:        rgba(227, 210, 174, 0.20);
-  --c-border-strong: rgba(227, 210, 174, 0.36);
-  --c-input-border:  rgba(227, 210, 174, 0.28);
-
-  --c-text:     #F4EFE6;   /* raw silk        15.5:1 on bg */
-  --c-text-2:   #BFB6A9;   /* spun            8.8:1 */
-  --c-text-3:   #B0A795;   /* dim             6.9:1 on bg, 4.7:1 on overlay */
-
-  --c-accent:    #E3D2AE;  /* the thread — fills, strokes, the winning line */
-  /* The sheen — links, brand ink, active labels. Champagne rather than a
-     brighter pearl: at body size a paler neutral was within 0.08 luminance of
-     `--c-text` and a link stopped reading as one. 9.9:1 at worst. */
-  --c-accent-fg: #F2DFB4;
-  --c-accent-on: #131C27;  /* dye ink on the thread, 11.5:1 */
-  --c-accent-subtle: rgba(227, 210, 174, 0.14);
-
-  /* Status hues are silk dye colours — 若竹 bamboo, 山吹 amber, 紅 safflower,
-     and a muted teal for info. Info deliberately leaves the blue family:
-     on an indigo ground a blue status tone is the ground. */
-  --c-success:  #9BC7A2;   /* 9.3:1 */
-  --c-warning:  #DFAE72;   /* 8.8:1 */
-  --c-danger:   #EC9393;   /* 4.9:1 on overlay */
-  --c-info:     #93BFC8;   /* 8.9:1 */
-
-  --c-success-tint: rgba(155, 199, 162, 0.14);
-  --c-warning-tint: rgba(223, 174, 114, 0.14);
-  --c-danger-tint:  rgba(236, 147, 147, 0.14);
-  --c-info-tint:    rgba(147, 191, 200, 0.14);
-  --c-neutral-tint: rgba(244, 239, 230, 0.07);
-
-  /* The user's turn is the dye at full strength — the one plane that is
-     more saturated than the canvas rather than lighter than it — under a
-     thread border strong enough to catch light. */
-  --c-user-bg:     #1B3050;
-  --c-user-border: rgba(227, 210, 174, 0.32);
-  /* The sheen the bubble wears: the fibre glancing off the top of the
-     cloth. One narrow directional gradient, per the palette's own rule —
-     never spread over a panel. */
-  --c-user-sheen:  rgba(242, 223, 180, 0.07);
-
-  --c-code:     #D8CBA4;   /* one thread tone on a well, 11.7:1 */
-  --c-code-bg:  var(--c-recessed);
-
-  --c-scrim: rgba(5, 9, 14, 0.58);
-
-  --shadow-card: none;
-  --shadow-overlay: 0 18px 44px -12px rgba(3, 7, 12, 0.62), 0 2px 8px rgba(3, 7, 12, 0.40);
-  --shadow-menu:    0 10px 28px -10px rgba(3, 7, 12, 0.55);
-  --shadow-composer: 0 -6px 24px -16px rgba(3, 7, 12, 0.50);
-}
-
-/* ── LIGHT — the undyed face ───────────────────────────────────────
-   Rebuilt 2026-08-21 (v3) from the owner's verdict on v2: "certain
-   things are completely white when they should instead have been
-   darker than their surroundings." v2 put paper cards ABOVE a cream
-   canvas at 1.14, and on a working screen that read as white on white.
-   v3 inverts the ladder: the canvas is the brightest large plane, and
-   every working surface is DYED — a step down from the ground, the way
-   dyed swatches sit on undyed cloth. Only floating layers (composer,
-   dialogs, menus) rise above the canvas as paper, so "paper" now means
-   "in your hand", not "any card".
-
-   The canvas itself is untouched (#EFEBE0): the signed-out landing
-   builds on it and its light face is accepted — the inversion happens
-   entirely in the rungs around it. Measured steps: canvas:card 1.13,
-   canvas:chrome 1.05, card:fill 1.10, canvas:well 1.33, paper:canvas
-   1.14, paper:card 1.29. The hairline is 1.46:1 on the canvas (v2:
-   1.42). Worst-case text across all seven surfaces, all on the well:
-   text 9.1, text-2 5.8, text-3 4.9, accent-fg 6.4, statuses ≥ 5.0.
-
-   Every token umber's light block declares is declared again here.
-   `[data-mode="light"]` and `[data-palette="silk"]` carry equal
-   specificity, so a token this pair left out would fall back to
-   whichever of those two declared it last — silk's dark value, or
-   umber's light one. Completeness is what makes the cascade
-   deterministic, and `unit-palette-contrast` asserts it. ── */
-[data-palette="silk"][data-mode="light"] {
-  --c-recessed: #D7CDB2;   /* wells, tracks, code — deepest dye */
-  --c-sidebar:  #EBE5D6;   /* chrome: rails, panel headers */
-  --c-fill:     #DED4BC;   /* chips, segments, tracks, hover — inside a card */
-  --c-bg:       #EFEBE0;   /* the canvas — undyed silk, the BRIGHT plane */
-  --c-surface:  #E6DECA;   /* cards, rows, panels — dyed, below the ground */
-  --c-elevated: #FDFAF3;   /* floating: composer, dialogs, menus — paper */
-  --c-overlay:  #FDFAF3;   /* dialogs — paper, lifted by shadow */
-
-  /* Borders swap thread: on the undyed face the line is the DYE, which is
-     the same reading as dark (the line is whichever thread the ground is
-     not) and keeps a rule looking like the same rule in both modes. */
-  --c-border:        rgba(35, 63, 96, 0.22);
-  --c-border-strong: rgba(35, 63, 96, 0.38);
-  --c-input-border:  rgba(35, 63, 96, 0.28);
-
-  --c-text:     #202B36;   /* 12.6:1 on the canvas */
-  --c-text-2:   #3D4956;   /*  8.0:1 on the canvas, 5.8:1 on the well */
-  --c-text-3:   #48545F;   /*  6.8:1 on the canvas, 4.9:1 on the well */
-
-  --c-accent:    #2F5480;  /* the dye — fills, strokes, the winning line */
-  --c-accent-fg: #234465;  /* deeper dye for ink, 9.6:1 on paper */
-  --c-accent-on: #FBF7EE;  /* fibre ink on the dye, 7.3:1 */
-  --c-accent-subtle: rgba(47, 84, 128, 0.16);
-
-  --c-success:  #2A5A32;
-  --c-warning:  #6F4A0C;
-  --c-danger:   #8F2D27;
-  --c-info:     #135761;
-
-  --c-success-tint: rgba(42, 90, 50, 0.11);
-  --c-warning-tint: rgba(111, 74, 12, 0.12);
-  --c-danger-tint:  rgba(143, 45, 39, 0.11);
-  --c-info-tint:    rgba(19, 87, 97, 0.11);
-  --c-neutral-tint: rgba(32, 43, 54, 0.08);
-
-  /* The user's turn stays the dye — deeper than v2, because on a field of
-     dyed creams the bubble must read as the one BLUE plane, and its
-     border as thread. */
-  --c-user-bg:     #D8E3F2;
-  --c-user-border: rgba(35, 68, 101, 0.32);
-  /* On the undyed face the sheen is the light itself — a paper glint. */
-  --c-user-sheen:  rgba(255, 255, 255, 0.65);
-
-  --c-code:     #22405E;   /* dye ink deepened for the well, 7.7:1 on it */
-  --c-code-bg:  var(--c-recessed);
-
-  --c-scrim: rgba(18, 26, 38, 0.34);
-
-  /* Cards are dyed a step below the canvas, so tone and hairline carry
-     them; a shadow under a darker plane reads as a hole rather than a
-     lift. Shadow now means FLOATING — composer, dialogs, menus. */
-  --shadow-card:    none;
-  --shadow-overlay: 0 16px 40px -14px rgba(18, 26, 38, 0.20), 0 2px 8px rgba(18, 26, 38, 0.07);
-  --shadow-menu:    0 10px 24px -10px rgba(18, 26, 38, 0.18), 0 1px 3px rgba(18, 26, 38, 0.06);
-  --shadow-composer: 0 -6px 20px -16px rgba(18, 26, 38, 0.14), 0 1px 2px rgba(24, 34, 48, 0.05);
-
-  /* Same single escape umber's light block makes: Kumo's drop shadow has no
-     palette equivalent, and black over cream is a smudge. */
-  --color-kumo-shadow-drop: rgba(18, 26, 38, 0.14);
 }
 
 body { background: var(--c-bg); color: var(--c-text); }
@@ -836,7 +580,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   box-shadow: var(--shadow-card);
   transition: border-color var(--dur-base) ease-out, background-color var(--dur-base) ease-out;
 }
-.p-card-hover:hover { background: var(--c-fill); }
+.p-card-hover:hover { background: var(--c-elevated); }
 
 /* ── Code ──────────────────────────────────────────────────────────
    One warm ink on a recessed ground, exactly as the landing page sets
@@ -911,12 +655,11 @@ body { background: var(--c-bg); color: var(--c-text); }
   overflow-wrap: anywhere;
 }
 
-/* User chat turn. The ground is the dye; the border is the thread; the sheen
-   is one narrow directional highlight along the top edge — colour and image
-   are separate properties so the gradient rides the theme's own glint token. */
+/* User chat turn — the mock's bubble: one warm plane, one solid border,
+   no gradient. The 16/16/4/16 radius is applied at the call site because
+   the clipped corner is directional (it points at the speaker). */
 .p-user-bubble {
   background-color: var(--c-user-bg);
-  background-image: linear-gradient(180deg, var(--c-user-sheen), transparent 42%);
   border: 1px solid var(--c-user-border);
   color: var(--c-text);
 }
@@ -1018,7 +761,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   letter-spacing: -0.008em;
   transition: background-color var(--dur-base) ease-out, border-color var(--dur-base) ease-out, transform var(--dur-fast) var(--ease-out-strong);
 }
-.p-btn-quiet:hover { background: var(--c-fill); border-color: var(--c-border-strong); }
+.p-btn-quiet:hover { background: var(--c-elevated); border-color: var(--c-border-strong); }
 .p-btn-quiet:active { transform: scale(0.98); }
 .p-btn-quiet:disabled { opacity: 0.45; cursor: default; transform: none; }
 
@@ -1036,7 +779,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 /* Composer — the one place the user acts; a distinct raised surface that
    lifts a touch on focus. */
 .p-composer {
-  background: var(--c-elevated);
+  background: var(--c-input-bg);
   border: 1px solid var(--c-input-border);
   border-radius: var(--r-overlay);
   box-shadow: var(--shadow-composer);
@@ -1052,7 +795,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   color: var(--c-accent-fg);
 }
 
-.p-row-hover:hover { background: var(--c-neutral-tint); }
+.p-row-hover:hover { background: var(--c-elevated); }
 
 /* MCTS tree labels. Below the zoom where an 11px label lands under ~8px on
    screen they are noise rather than text, so the whole layer is gated on one

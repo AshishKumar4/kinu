@@ -2272,13 +2272,13 @@ const TEXT_STEPS = [
 const STATUS_STEPS = ["success", "warning", "danger", "info"] as const;
 
 function Palette() {
-  const { mode, palette } = useTheme();
+  const { mode } = useTheme();
   return (
     <div className="p-bg min-h-screen p-8 space-y-8 max-w-3xl">
       <div>
-        <div className="p-eyebrow mb-1">{palette} · {mode}</div>
+        <div className="p-eyebrow mb-1">{mode}</div>
         <h1 className="p-title p-text" style={{ fontSize: 22, lineHeight: "28px" }}>Surface ladder, text roles, accent intent, status</h1>
-        <p className="p-meta p-text-3 mt-1">The plate names the theme it is drawn in, and every value below is read from the live cascade — so it shows whichever of the four themes the toggles are on.</p>
+        <p className="p-meta p-text-3 mt-1">The plate names the mode it is drawn in, and every value below is read from the live cascade — one palette, two modes.</p>
       </div>
       <div>
         <div className="p-eyebrow mb-2">Surfaces — six steps</div>

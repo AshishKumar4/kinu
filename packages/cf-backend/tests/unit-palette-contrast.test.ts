@@ -23,11 +23,11 @@ import { resolve } from 'node:path';
 const INDEX_CSS = resolve(import.meta.dir, '../src/index.css');
 
 /** Text roles, and the surfaces each is allowed to sit on. `--c-text-3` is
- *  the dim role: it lands anywhere, including inside dialogs, which is where
- *  it used to fail. */
+ *  the dim role and `--c-text-4` the micro-label role: both land anywhere,
+ *  including inside dialogs, which is where they used to fail. */
 const SURFACES = ['--c-bg', '--c-sidebar', '--c-surface', '--c-elevated', '--c-overlay', '--c-recessed', '--c-fill'] as const;
 const TEXT_ROLES = [
-  '--c-text', '--c-text-2', '--c-text-3', '--c-accent-fg',
+  '--c-text', '--c-text-2', '--c-text-3', '--c-text-4', '--c-accent-fg',
   '--c-success', '--c-warning', '--c-danger', '--c-info',
 ] as const;
 
@@ -56,21 +56,11 @@ function parse(css: string): Rgb {
   throw new Error(`palette token is not a hex or rgb() literal: ${css}`);
 }
 
-/** Each theme, and the palette blocks that apply to it in source order. `:root`
- *  holds umber dark; each later block overrides a subset (umber light) or the
- *  whole set (silk). */
+/** The one palette, two modes. `:root` holds dark; `[data-mode="light"]`
+ *  overrides the whole set. */
 const CASCADE = [
-  { theme: 'umber dark', blocks: [':root'] },
-  { theme: 'umber light', blocks: [':root', '[data-mode="light"]'] },
-  { theme: 'silk dark', blocks: [':root', '[data-palette="silk"]'] },
-  // `[data-mode="light"]` still MATCHES silk light and sits between the two
-  // silk blocks in source order, so it is part of that cascade even though silk
-  // is expected to overwrite every token it sets. Modelling it is what lets the
-  // completeness test below prove that expectation rather than assume it.
-  {
-    theme: 'silk light',
-    blocks: [':root', '[data-mode="light"]', '[data-palette="silk"]', '[data-palette="silk"][data-mode="light"]'],
-  },
+  { theme: 'dark', blocks: [':root'] },
+  { theme: 'light', blocks: [':root', '[data-mode="light"]'] },
 ] as const;
 
 /** One palette block, as name → value, `--c-*` only. Anchored at the start of
@@ -126,25 +116,8 @@ function contrast(fgCss: string, bgCss: string): number {
 
 const AA = 4.5;
 
-describe('palette contrast', () => {
-  /** A silk block that forgot a token does not fail to render: it inherits
-   *  whichever earlier block declared it last, so silk light would quietly
-   *  serve a dark-face value or an umber one. That is the cascade hazard the
-   *  four-way matrix creates, and it is checked structurally rather than left
-   *  to whether the omitted token happens to fail a contrast pair. */
-  test('each silk block declares the whole palette, not a diff over another one', () => {
-    const css = readFileSync(INDEX_CSS, 'utf8');
-    const roles = Object.keys(block(css, ':root')).sort();
-    for (const selector of ['[data-palette="silk"]', '[data-palette="silk"][data-mode="light"]']) {
-      const declared = Object.keys(block(css, selector)).sort();
-      expect({ selector, missing: roles.filter((t) => !declared.includes(t)) })
-        .toEqual({ selector, missing: [] });
-      // The other direction: a typo'd role name is a token nothing reads.
-      expect({ selector, unknown: declared.filter((t) => !roles.includes(t)) })
-        .toEqual({ selector, unknown: [] });
-    }
-  });
 
+describe('palette contrast', () => {
   for (const { theme, blocks } of CASCADE) {
     describe(theme, () => {
       const p = palette(blocks);

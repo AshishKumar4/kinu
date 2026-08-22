@@ -16,14 +16,14 @@
  */
 import { useEffect, useState, useCallback, useRef, type FormEvent } from "react";
 import { Link, NavLink, useMatch, useNavigate } from "react-router-dom";
-import { PlusIcon, GearIcon, GithubLogoIcon, TrashIcon, SignOutIcon, CaretRightIcon, PencilSimpleIcon, CheckIcon, XIcon, SunIcon, MoonIcon, SwatchesIcon } from "@phosphor-icons/react";
+import { PlusIcon, GearIcon, GithubLogoIcon, TrashIcon, SignOutIcon, CaretRightIcon, PencilSimpleIcon, CheckIcon, XIcon, SunIcon, MoonIcon } from "@phosphor-icons/react";
 import { Button } from "@cloudflare/kumo";
 import { FilledButton } from "./ui/FilledButton";
 import { listWorkspaces, removeWorkspace, getProfile, type WorkspaceEntry, type UserProfile } from "../lib/user-api";
 import { useWorkspaceRpc } from "../hooks/use-kinu";
-import { useTheme, toggleMode, togglePalette } from "../hooks/use-theme";
+import { useTheme, toggleMode } from "../hooks/use-theme";
 import { CreateWorkspaceModal } from "./CreateWorkspaceModal";
-import { ModeToggle, PaletteToggle } from "./theme-toggle";
+import { ModeToggle } from "./theme-toggle";
 import { KinuMark } from "./surfaces/shared";
 import { Modal } from "./ui/Modal";
 import * as v from "valibot";
@@ -125,7 +125,7 @@ export default function Sidebar() {
     ? sectionMatch.params.agentId
     : undefined;
   const navigate = useNavigate();
-  const { mode, palette } = useTheme();
+  const { mode } = useTheme();
   const [workspaces, setWorkspaces] = useState<WorkspaceEntry[]>([]);
   const [workspaceTotal, setWorkspaceTotal] = useState(0);
   const [listError, setListError] = useState(false);
@@ -312,7 +312,7 @@ export default function Sidebar() {
         )}
       </div>
 
-      {/* User dropdown — pinned to bottom, with both theme axes visible */}
+      {/* User dropdown — pinned to bottom */}
       <div className="px-2 py-2 border-t p-border relative" ref={userMenuRef}>
         <div className="flex items-center gap-1">
           <button
@@ -326,15 +326,6 @@ export default function Sidebar() {
               <span className="text-xs p-text truncate">{profile?.email ?? (profileFailed ? 'Profile unavailable' : 'loading...')}</span>
             </div>
             <CaretRightIcon size={12} className={`transition-transform p-text-3 ${showUserMenu ? 'rotate-90' : ''}`} />
-          </button>
-          <button
-            type="button"
-            onClick={togglePalette}
-            className="shrink-0 flex size-9 items-center justify-center rounded-lg p-text-3 p-card-hover hover:p-text transition-colors"
-            title={palette === 'silk' ? 'Switch to the umber palette' : 'Switch to the silk palette'}
-            aria-label={palette === 'silk' ? 'Switch to the umber palette' : 'Switch to the silk palette'}
-          >
-            <SwatchesIcon size={15} />
           </button>
           <button
             type="button"
@@ -354,7 +345,6 @@ export default function Sidebar() {
               <span>Account settings</span>
             </Link>
             <ModeToggle />
-            <PaletteToggle />
             <a
               href="/logout"
               className="flex items-center gap-2 px-2 py-1.5 text-sm rounded-sm p-card-hover"
