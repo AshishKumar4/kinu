@@ -22,6 +22,7 @@ interface TreeNode {
   readonly children: number[];
   appear: number;
   pruned: boolean;
+  hidden: boolean;
 }
 
 interface TreeState {
@@ -76,7 +77,7 @@ function pseudoRandom(seed: number): () => number {
 function buildTree(width: number, height: number): TreeState {
   const random = pseudoRandom(417);
   const nodes: TreeNode[] = [];
-  const levels = 6;
+  const levels = 5;
   const left = width * 0.04;
   const right = width * 0.97;
   const addNode = (parent: number | null, depth: number, top: number, bottom: number): void => {
@@ -92,6 +93,7 @@ function buildTree(width: number, height: number): TreeState {
       children: [],
       appear: 0,
       pruned: false,
+      hidden: false,
     };
     nodes.push(node);
     if (parent !== null) nodes[parent]?.children.push(node.id);
@@ -108,8 +110,6 @@ function buildTree(width: number, height: number): TreeState {
     }
   };
   addNode(null, 0, height * 0.06, height * 0.94);
-  [...nodes].sort((a, b) => a.depth - b.depth || a.y - b.y)
-    .forEach((node, index) => { node.appear = 120 + index * 45 + random() * 35; });
   const leaves = nodes.filter((node) => (
     node.children.length === 0
     && node.depth >= levels - 2
@@ -125,11 +125,18 @@ function buildTree(width: number, height: number): TreeState {
   }
   for (const node of nodes) {
     if (node.depth < 2 || winningPath.has(node.id)) continue;
-    const parentPruned = node.parent === null ? false : nodes[node.parent]?.pruned === true;
-    const probability = node.children.length === 0 ? 0.72 : 0.42;
-    node.pruned = parentPruned || random() < probability;
+    const parent = node.parent === null ? undefined : nodes[node.parent];
+    if (parent?.pruned === true || parent?.hidden === true) {
+      node.hidden = true;
+      continue;
+    }
+    const probability = node.children.length === 0 ? 0.35 : 0.5;
+    node.pruned = random() < probability;
   }
-  const lastAppear = Math.max(...nodes.map((node) => node.appear));
+  const visibleNodes = nodes.filter((node) => !node.hidden);
+  [...visibleNodes].sort((a, b) => a.depth - b.depth || a.y - b.y)
+    .forEach((node, index) => { node.appear = 120 + index * 55 + random() * 35; });
+  const lastAppear = Math.max(...visibleNodes.map((node) => node.appear));
   return { nodes, winner: winnerNode.id, winningPath, lastAppear };
 }
 
@@ -150,6 +157,7 @@ function drawTree(
   const sway = (node: TreeNode): number => Math.sin(elapsed / 2_400 + node.phase) * (1.5 + node.depth * 0.9);
 
   for (const node of state.nodes) {
+    if (node.hidden) continue;
     if (node.parent === null) continue;
     const parent = state.nodes[node.parent];
     if (parent === undefined) continue;
@@ -184,6 +192,7 @@ function drawTree(
   }
 
   for (const node of state.nodes) {
+    if (node.hidden) continue;
     const arrival = Math.min(1, Math.max(0, (time - node.appear) / 620));
     if (arrival <= 0) continue;
     const x = node.x;
@@ -192,7 +201,7 @@ function drawTree(
     const winner = node.id === state.winner;
     const selected = state.winningPath.has(node.id);
     const pruned = node.pruned;
-    const leaf = node.children.length === 0;
+    const leaf = node.pruned || node.children.every((child) => state.nodes[child]?.hidden === true);
     const radius = (root ? 5 : leaf ? 3.6 : 2.6) * (0.5 + 0.5 * arrival);
     if (pruned) {
       context.beginPath();
@@ -241,6 +250,8 @@ function SearchCanvas(): ReactElement {
       dimensions = { width: box.width, height: box.height, ratio };
       tree = buildTree(box.width, box.height);
       canvas.dataset.pruned = String(tree.nodes.filter((node) => node.pruned).length);
+      canvas.dataset.hidden = String(tree.nodes.filter((node) => node.hidden).length);
+      canvas.dataset.visible = String(tree.nodes.filter((node) => !node.hidden).length);
       return true;
     };
     const paint = (elapsed: number): void => {
