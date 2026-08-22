@@ -41,6 +41,7 @@ interface Facts {
   homeLink?: { visible: boolean; hasGraphic: boolean };
   deploy?: { button: string | null; guide: string | null };
   providers?: string[];
+  loginLayout?: { dialog: boolean; cardOffset: number; barOffset: number; footer: boolean };
   landingOverflow: Record<string, number>;
   publicOverflow: Record<string, number>;
   landingTargets?: number[];
@@ -291,6 +292,17 @@ beforeAll(async () => {
             facts.providers = await page.evaluate(() => [
               ...document.querySelectorAll<HTMLAnchorElement>('a.provider'),
             ].map((element) => element.getAttribute('href') ?? ''));
+            facts.loginLayout = await page.evaluate(() => {
+              const viewportCenter = document.documentElement.clientWidth / 2;
+              const card = document.querySelector('.card')?.getBoundingClientRect();
+              const bar = document.querySelector('.bar-inner')?.getBoundingClientRect();
+              return {
+                dialog: document.querySelector('[role="dialog"]')?.getAttribute('aria-modal') === 'true',
+                cardOffset: Math.abs((card?.left ?? 0) + (card?.width ?? 0) / 2 - viewportCenter),
+                barOffset: Math.abs((bar?.left ?? 0) + (bar?.width ?? 0) / 2 - viewportCenter),
+                footer: document.querySelector('footer') !== null,
+              };
+            });
           }
           await page.close();
         }
@@ -353,6 +365,14 @@ describe('public actions work', () => {
     const providers = required(facts.providers, 'sign-in providers');
     expect(providers.length).toBeGreaterThan(0);
     for (const href of providers) expect(href).toMatch(/^\/auth\/[^/]+\/start/);
+  });
+
+  test('sign in is a centered modal under one centered header', () => {
+    const layout = required(facts.loginLayout, 'sign-in layout');
+    expect(layout.dialog).toBeTrue();
+    expect(layout.cardOffset).toBeLessThanOrEqual(1);
+    expect(layout.barOffset).toBeLessThanOrEqual(1);
+    expect(layout.footer).toBeFalse();
   });
 });
 
