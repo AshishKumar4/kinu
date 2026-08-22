@@ -4,11 +4,10 @@
 // not defending anything. So each check here is removed mechanically and the suite
 // asserts that behaviour changes — the difference between a guard and a comment.
 //
-// WHY A MUTANT COPY AND NOT THE REAL FILE. Editing `src/strategy/merge-back.ts` in place
-// would open a window in which any other test file loading that module gets the mutant,
-// and a crash mid-run would leave the source deleted-check. Each mutation is therefore
-// written to its own throwaway module beside this file, imported once, and removed. The
-// real source is never touched, so there is no window and nothing to restore.
+// WHY A MUTANT COPY AND NOT THE REAL FILE. Editing the strategy in place would
+// expose every concurrent reader, and a crash could leave a deleted guard.
+// Each mutation lives under owned scratch, is imported once, and is removed by
+// the test process's shared release. The real source is never touched.
 //
 // EVERY MUTATION ASSERTS IT LANDED. `mutate` requires each snippet to occur EXACTLY once
 // and throws otherwise, because a mutation test whose edit silently missed is a test
@@ -16,8 +15,10 @@
 // this file can be believed.
 //
 // Specified by docs/EXPLORATION.md — "Merge-back", including *Dependency order*.
-import { afterAll, describe, expect, test } from 'bun:test';
-import { rmSync, writeFileSync } from 'node:fs';
+import { describe, expect, test } from 'bun:test';
+import { symlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join, relative, resolve } from 'node:path';
+import { scratchDir } from '@kinu.run/test-utils';
 import { MAX_TX_BLOB_BYTES } from '@nimbus-sh/core/constants.js';
 import { createRecordingLogger } from '../src/obs/index';
 import * as pristine from '../src/strategy/merge-back';
@@ -28,18 +29,15 @@ import type {
 type MergeBackModule = typeof pristine;
 
 const SOURCE = new URL('../src/strategy/merge-back.ts', import.meta.url).pathname;
-const written: string[] = [];
+const SOURCE_DIR = dirname(SOURCE);
+const MUTANTS = scratchDir('mutation-merge-back');
 
-afterAll(() => {
-  for (const path of written) rmSync(path, { force: true });
-});
-
+symlinkSync(resolve(SOURCE_DIR, '../../../../node_modules'), join(MUTANTS, 'node_modules'), 'dir');
 /**
  * A copy of merge-back with `edits` applied, loaded as its own module.
  *
- * Lands beside this file so the source's own relative imports resolve after one
- * mechanical rewrite of their depth, and under a name the test glob cannot match so the
- * runner never treats a mutant as a suite.
+ * It lives in owned scratch, outside every source scanner. Relative imports
+ * are re-pointed to pristine source before the module is loaded.
  */
 async function mutate(
   label: string, edits: readonly (readonly [find: string, replace: string])[],
@@ -56,15 +54,16 @@ async function mutate(
     }
     source = source.replace(find, replace);
   }
-  // The mutant sits one directory shallower than the original, so `../x` becomes
-  // `../src/x` and a sibling `./x` becomes `../src/strategy/x`. Bare specifiers are
-  // untouched. A wrong rewrite throws at import rather than passing quietly.
-  const rewritten = source
-    .replaceAll("from '../", "from '../src/")
-    .replaceAll("from './", "from '../src/strategy/");
-  const path = new URL(`./merge-back.mutant-${label}.ts`, import.meta.url).pathname;
+  const rewritten = source.replaceAll(
+    /from '(\.[^']*)'/g,
+    (_whole: string, specifier: string) => {
+      const target = `${resolve(SOURCE_DIR, specifier)}.ts`;
+      const path = relative(MUTANTS, target);
+      return `from '${path.startsWith('.') ? path : `./${path}`}'`;
+    },
+  );
+  const path = join(MUTANTS, `merge-back.mutant-${label}.ts`);
   writeFileSync(path, rewritten);
-  written.push(path);
   // SAFETY: the mutant is `merge-back.ts`'s own text with `edits` applied, and every edit
   // is required above to have matched exactly once — so its export shape is the pristine
   // module's by construction. A dynamic specifier carries no static type, and a wrong
