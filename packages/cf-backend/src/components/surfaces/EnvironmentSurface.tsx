@@ -31,7 +31,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Badge, Loader } from "@cloudflare/kumo";
 import {
-  HardDrivesIcon, CircleIcon,
+  CircleIcon,
   LockSimpleIcon, TerminalIcon, FolderOpenIcon, PlugIcon, GearSixIcon,
 } from "@phosphor-icons/react";
 import type { MountInfo } from "@kinu.run/core";
@@ -122,9 +122,8 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
         {/* One identity-stable chip per environment. */}
         <section>
           <div className="flex items-center gap-2 mb-2">
-            <HardDrivesIcon size={14} className="p-accent" />
-            <span className="text-xs font-semibold p-text">Environments</span>
-            <span className="text-[10px] p-text-3">each one its own filesystem, in its own paths</span>
+            <span className="p-label">Executors</span>
+            <span className="text-[10px] p-text-4">· each its own filesystem</span>
           </div>
           <div className="flex flex-wrap gap-1.5">
             {mounts.map((m) => {
@@ -133,10 +132,10 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
                 <button key={m.name}
                   onClick={() => { setSelected(m.name); setPane({ kind: "files" }); }}
                   title={mountTitle(m, exec)}
-                  className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs transition-colors cursor-pointer ${
-                    selectedName === m.name ? "p-accent-subtle p-accent"
-                      : m.live ? "p-card p-card-hover p-text-2"
-                      : "p-text-3 border p-border border-dashed p-card-hover"
+                  className={`inline-flex items-center gap-1.5 rounded-full px-3 py-[5px] text-[11.5px] font-medium transition-colors cursor-pointer ${
+                    selectedName === m.name ? "border border-[rgba(224,164,88,.35)] bg-[rgba(224,164,88,.07)] p-gold"
+                      : m.live ? "border p-border p-text-2 hover:border-[var(--c-border-strong)]"
+                      : "border p-border border-dashed p-text-4 hover:p-text-2"
                   }`}>
                   <CircleIcon size={7} weight="fill" className={mountDotClass(m, exec)} />
                   <span className="font-mono">{m.prefix}</span>

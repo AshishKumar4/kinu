@@ -134,7 +134,7 @@ export function ExplorationSurface({
           so it cannot stretch into dead space above the canvas. */}
       <div className="flex-1 min-h-0 grid gap-3 grid-rows-[auto_minmax(0,1fr)] @3xl:grid-rows-1 @3xl:grid-cols-[minmax(220px,280px)_minmax(0,1fr)] @6xl:grid-cols-[minmax(200px,250px)_minmax(0,1fr)_minmax(330px,400px)]">
         <div ref={listRef}
-          className="min-h-0 max-h-44 @3xl:max-h-none overflow-y-auto rounded-lg border p-border p-surface p-1.5 space-y-0.5">
+          className="min-h-0 max-h-44 @3xl:max-h-none overflow-y-auto rounded-xl border p-border p-surface p-1.5 space-y-0.5">
           {runs.map((run) => (
             <ForkRunRow key={run.id} run={run}
               kind={runKind(resolutions.get(run.id))}
@@ -418,7 +418,7 @@ function RunDetailView({
   const liveness = runLiveness(journal);
   const refusal = runRefusal(run, journal);
   return (
-    <div className="h-full min-h-0 flex flex-col rounded-lg border p-border p-surface overflow-hidden">
+    <div className="h-full min-h-0 flex flex-col rounded-xl border p-border p-surface overflow-hidden">
       <div className="shrink-0 flex items-start gap-2 border-b p-border px-3 py-2">
         <span className={`mt-1.5 size-1.5 rounded-full shrink-0 ${RUN_DOT[run.status]} ${run.status === "running" ? "p-dot-pulse" : ""}`} />
         <div className="min-w-0 flex-1">
@@ -793,7 +793,7 @@ function ForkCanvas({
     // holds, so a workspace of short searches no longer draws a bordered box
     // with several hundred pixels of nothing under its trees.
     <div ref={attachCell} className="h-full min-h-0">
-      <div className="flex max-h-full flex-col rounded-lg border p-border p-surface overflow-hidden">
+      <div className="flex max-h-full flex-col rounded-xl border p-border p-surface overflow-hidden">
         <div ref={attachChrome} className="shrink-0">
           {/* The bar the owner stripped: it carried the run count, the focused
               task and a config chip over every search at once — three facts

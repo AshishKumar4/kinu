@@ -8,7 +8,7 @@
  * Run history (cross-run list), Automations (the ONE trigger surface:
  * list + create webhooks + revoke), Fork lineage.
  */
-import { useState, useCallback } from "react";
+import { useState, useCallback, type ReactNode } from "react";
 import { useParams } from "react-router-dom";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -75,13 +75,65 @@ export interface SupervisePageProps {
  */
 export function SupervisePage({ rpc, onRunTask }: SupervisePageProps) {
   return (
-    <div className="h-full overflow-y-auto px-6 py-5 lg:px-10 max-w-5xl mx-auto space-y-8">
-      <CurriculumBlock rpc={rpc} onRunTask={onRunTask} />
-      <div className="grid md:grid-cols-2 gap-8">
-        <RunHistoryBlock rpc={rpc} />
-        <AutomationsBlock rpc={rpc} />
+    // The mock's 2x2: Curriculum · Run history & budget / Evolution · Automations.
+    <div className="h-full overflow-y-auto px-6 py-6 lg:px-8">
+      <div className="mx-auto grid max-w-[1380px] grid-cols-1 gap-[18px] md:grid-cols-2">
+        <SuperviseCard><CurriculumBlock rpc={rpc} onRunTask={onRunTask} /></SuperviseCard>
+        <SuperviseCard><RunHistoryBlock rpc={rpc} /></SuperviseCard>
+        <SuperviseCard><EvolutionCard rpc={rpc} /></SuperviseCard>
+        <SuperviseCard><AutomationsBlock rpc={rpc} /></SuperviseCard>
       </div>
     </div>
+  );
+}
+
+interface GepaRunRow { runId: string; target: string; startedAt: number; status: string; winnerId: string | null; iterations: number; metricCalls: number }
+
+/** One cell of the supervise grid: the mock's outer card. */
+function SuperviseCard({ children }: { children: ReactNode }) {
+  return (
+    <div className="min-w-0 overflow-hidden rounded-[14px] border p-border p-surface p-5">
+      {children}
+    </div>
+  );
+}
+
+/** Evolution — the self-improvement loop at a glance, from real reads only:
+ *  the GEPA passes that propose scaffold candidates, newest first. */
+function EvolutionCard({ rpc }: { rpc: Rpc }) {
+  const load = useCallback(() => rpc<GepaRunRow[]>("getGepaRuns", [5]), [rpc]);
+  const { resource, reload } = useAsyncResource(load);
+  const runs = lastValue(resource);
+
+  return (
+    <section>
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        <h2 className="text-sm font-semibold p-text">Evolution</h2>
+        {runs && <Badge variant="secondary">{runs.length}</Badge>}
+        <span className="ml-auto p-meta p-text-4">GEPA passes</span>
+      </div>
+      {runs === null ? (
+        resource.status === "error"
+          ? <LoadFailure what="evolution passes" message={resource.message} onRetry={reload} />
+          : <div className="flex justify-center py-6"><Loader size="sm" /></div>
+      ) : runs.length === 0 ? (
+        <p className="text-xs leading-relaxed p-text-3">
+          No optimisation passes yet. GEPA proposes scaffold candidates from graded turns;
+          each lands here with its measured verdict.
+        </p>
+      ) : (
+        <div className="p-group">
+          {runs.map((run) => (
+            <div key={run.runId} className="flex items-center gap-2.5 px-4 py-2.5">
+              <span className="shrink-0 font-mono text-[11px] p-gold">{run.runId}</span>
+              <span className="min-w-0 flex-1 truncate text-[13px] p-text-2">{run.target}</span>
+              <span className={`shrink-0 text-[10px] ${run.status === "complete" ? "p-success" : "p-text-4"}`}>{run.status}</span>
+              <span className="shrink-0 font-mono text-[10.5px] p-text-4 tabular-nums">{run.iterations} it</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
