@@ -576,6 +576,20 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-notice-danger  { background: var(--c-danger-tint);  color: var(--c-danger);  border: 1px solid color-mix(in srgb, var(--c-danger) 30%, transparent); }
 .p-notice-info    { background: var(--c-info-tint);    color: var(--c-info);    border: 1px solid color-mix(in srgb, var(--c-info) 30%, transparent); }
 
+/* ── Grouped rows — the mock's inner card: one bordered container whose
+      members are separated by dashed rules, not borders of their own. ── */
+.p-group {
+  border: 1px solid var(--c-border);
+  background: var(--c-surface);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.p-group > * + * { border-top: 1px dashed var(--c-dash); }
+
+/* A section label — the mock's 12.5px/600 faint register that names each
+   block ("Mission", "Journal", "Identity"). */
+.p-label { font-size: 12.5px; line-height: 18px; font-weight: 600; color: var(--c-text-4); }
+
 /* ── Cards — quiet at rest; only cards that are actually interactive
       react (`p-card-hover`), and with a surface step, never an accent flood. ── */
 .p-card {

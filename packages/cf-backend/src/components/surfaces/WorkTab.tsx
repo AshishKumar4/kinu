@@ -153,7 +153,8 @@ export function WorkTab({
         <Section id="work-needs-you" title="Needs you"
           icon={<WarningCircleIcon size={14} className="p-accent" />}
           badge={<Badge variant="secondary">{pendingActions.length}</Badge>}>
-          <div className="space-y-1.5">
+          {/* The mock's Needs-you: a gold-tinted card holding the queue. */}
+          <div className="rounded-xl border border-[rgba(224,164,88,.32)] bg-[rgba(224,164,88,.06)] p-3.5 space-y-1.5">
             {parkedCommands.length > 0 && (
               <ParkedCommands actions={parkedCommands} rpc={rpc} />
             )}
@@ -202,7 +203,7 @@ export function WorkTab({
             {FILTERS.map((chip) => (
               <button key={chip.id} type="button" onClick={() => setFilter(chip.id)}
                 aria-pressed={filter === chip.id}
-                className={`px-2.5 py-1 text-[11px] rounded-md transition-colors ${filter === chip.id ? "p-fill p-text font-medium" : "p-text-3 hover:p-text-2"}`}>
+                className={`px-2.5 py-0.5 rounded-full transition-colors ${filter === chip.id ? "bg-[rgba(224,164,88,.1)] p-gold font-semibold" : "p-text-3 hover:p-gold"}`}>
                 {chip.label}
               </button>
             ))}

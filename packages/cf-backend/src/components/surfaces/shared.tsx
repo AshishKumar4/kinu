@@ -219,7 +219,7 @@ export function Section({ id, title, icon, badge, defaultOpen = true, children }
           className={`shrink-0 p-text-3 transition-transform duration-150 ${open ? "rotate-90" : ""}`}
         />
         {icon}
-        <span className="text-sm font-medium p-text">{title}</span>
+        <span className="p-label">{title}</span>
         {badge}
       </button>
       {open && <div className="mt-2.5">{children}</div>}

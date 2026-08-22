@@ -17,10 +17,11 @@
  * while I was away" is not a question anyone opens a CV to answer.
  */
 import { useCallback, useState } from "react";
+import { Link } from "react-router-dom";
 import { Badge, Loader } from "@cloudflare/kumo";
 import {
   FingerprintIcon, PackageIcon, MagnifyingGlassIcon, DatabaseIcon, FolderOpenIcon, BrainIcon,
-  CaretRightIcon, GitBranchIcon,
+  CaretRightIcon, GitBranchIcon, UsersIcon,
 } from "@phosphor-icons/react";
 import { ScoreBar } from "@/components/ui/score-bar";
 import type { AgentStatus } from "@/hooks/use-kinu";
@@ -177,9 +178,9 @@ export function AgentSurface({ agentStatus: as, tools, memory, memoryContent, on
               ["Messages", String(as.messageCount)],
               ["Created", new Date(as.createdAt).toLocaleString()],
             ]).map(([l, v]) => (
-              <div key={l} className="flex items-center justify-between py-2.5 border-b p-border last:border-0">
-                <span className="text-sm p-text-2">{l}</span>
-                <span className="text-sm p-text max-w-[60%] text-right">{v}</span>
+              <div key={l} className={`grid grid-cols-[96px_minmax(0,1fr)] gap-3.5 py-2.5 border-b border-dashed border-[var(--c-dash)] last:border-0 items-baseline ${l === "Model" ? "font-mono" : ""}`}>
+                <span className="text-xs p-text-4">{l}</span>
+                <span className={`text-[13px] p-text-2 min-w-0 break-words ${l === "Model" ? "text-[11px] p-text-3" : "text-right"}`}>{v}</span>
               </div>
             ))}
           </div>
@@ -240,6 +241,10 @@ export function AgentSurface({ agentStatus: as, tools, memory, memoryContent, on
         </Section>
       )}
 
+      {/* Subordinates — the mock's roster card. Real data off the same
+          @callable the chat strip uses; Message opens that subordinate's chat. */}
+        <SubordinatesCard rpc={rpc} workspaceName={as?.name ?? ""} />
+
       {/* Tools (CraftStore + builtins) */}
       <Section id="tools" title="Tools" icon={<PackageIcon size={14} className="p-text-2" />}
         badge={tools.length > 0 ? <Badge variant="secondary">{tools.length}</Badge> : undefined}>
@@ -279,4 +284,50 @@ function EvolutionBlock({ title, hint, children }: { title: string; hint: string
       {children}
     </section>
   );
+}
+
+/** One durable helper of this workspace, as the mock draws it: dot, name,
+ *  role line, and a Message button into its chat. */
+function SubordinatesCard({ rpc, workspaceName }: { rpc: Rpc; workspaceName: string }) {
+  const loadRoster = useCallback(() => rpc<SubordinateRow[]>("listSubordinates", []), [rpc]);
+  const { resource, reload } = useAsyncResource(loadRoster);
+  const roster = (lastValue(resource) ?? []).filter((sub) => sub.status !== "dismissed");
+
+  return (
+    <Section id="subordinates" title="Subordinates" icon={<UsersIcon size={14} className="p-text-2" />}
+      badge={roster.length > 0 ? <Badge variant="secondary">{roster.length}</Badge> : undefined}>
+      {resource.status === "error" ? (
+        <LoadFailure what="the subordinate roster" message={resource.message} onRetry={reload} />
+      ) : roster.length === 0 ? (
+        <p className="text-xs leading-relaxed p-text-4">
+          No standing helpers. Each one outlives the turn and runs its own loop, sharing this
+          workspace's files — the agent can hire them itself, or you can from the chat tab strip.
+        </p>
+      ) : (
+        <div className="p-group">
+          {roster.map((sub) => (
+            <div key={sub.name} className="flex items-center gap-2.5 px-4 py-3">
+              <span className={`size-1.5 shrink-0 rounded-full ${sub.status === "working" ? "p-dot-success p-dot-pulse" : sub.status === "awaiting_input" ? "p-dot-warning" : "bg-[var(--c-fill)] border p-border"}`} />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[13px] p-text-2">{sub.displayName}</div>
+                <div className="truncate text-[11px] p-text-4">{sub.role}{sub.currentTask ? ` · ${sub.currentTask}` : ""}</div>
+              </div>
+              <Link
+                to={`/workspace/${workspaceName}/agents/${sub.name}`}
+                className="shrink-0 text-[11.5px] font-semibold p-gold transition-colors hover:p-accent"
+              >Message</Link>
+            </div>
+          ))}
+        </div>
+      )}
+    </Section>
+  );
+}
+
+interface SubordinateRow {
+  name: string;
+  displayName: string;
+  role: string;
+  status: string;
+  currentTask: string | null;
 }
