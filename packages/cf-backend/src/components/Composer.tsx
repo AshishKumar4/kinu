@@ -114,15 +114,15 @@ function ModeSegment({ value, onChange, locked, disabled }: {
       disabled={disabled || (locked && mode === "build")}
       aria-pressed={value === mode}
       title={locked && mode === "build" ? "Approve the active plan before starting an Auto turn." : hint}
-      className={`flex items-center gap-1 rounded-sm px-2 py-1 p-meta font-medium transition-colors disabled:opacity-40 ${value === mode ? activeCls : "p-text-3 hover:p-text-2"}`}>
+      className={`flex items-center gap-1 rounded-full px-3 py-[5px] text-xs font-medium transition-colors disabled:opacity-40 ${value === mode ? activeCls : "p-text-3 hover:p-text-2"}`}>
       <Icon size={12} />{label}
     </button>
   );
   return (
-    <div className="flex shrink-0 items-center gap-0.5 rounded-md border p-border p-fill p-0.5"
+    <div className="flex shrink-0 items-center gap-0.5"
       role="group" aria-label="Turn mode">
-      {item("build", LightningIcon, "Auto", "Auto — the agent implements the change and shows you what it ran.", "p-surface p-text")}
-      {item("plan", NotePencilIcon, "Plan", "Plan — review a plan before anything changes.", "p-accent-subtle p-accent")}
+      {item("build", LightningIcon, "Auto", "Auto — the agent implements the change and shows you what it ran.", "border border-[rgba(224,164,88,.3)] bg-[rgba(224,164,88,.1)] p-gold")}
+      {item("plan", NotePencilIcon, "Plan", "Plan — review a plan before anything changes.", "border border-[rgba(224,164,88,.3)] bg-[rgba(224,164,88,.1)] p-gold")}
     </div>
   );
 }
@@ -218,8 +218,11 @@ export function Composer({
               <input ref={fileInputRef} type="file" multiple className="hidden"
                 onChange={(e) => { attachments.onAdd(e.currentTarget.files); e.currentTarget.value = ""; }} />
               <button type="button" onClick={() => fileInputRef.current?.click()} disabled={disabled}
-                className="p-btn-ghost shrink-0 cursor-pointer p-1.5" aria-label="Attach files" title="Attach files">
-                <PaperclipIcon size={15} />
+                className="inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full border p-border px-3 py-1 text-xs p-text-3 transition-colors hover:p-gold hover:border-[var(--c-accent)]"
+                aria-label="Attach files" title="Attach files">
+                <span aria-hidden className="text-[13px] leading-none">+</span>
+                <PaperclipIcon size={12} />
+                <span className="hidden @[26rem]:inline">Attach</span>
               </button>
             </>
           )}
@@ -257,16 +260,17 @@ export function Composer({
             )}
             {streaming
               ? <button type="button" onClick={onSteer} disabled={empty || disabled || !onSteer}
-                  className="p-btn inline-flex h-8 cursor-pointer items-center justify-center gap-1.5 px-2.5"
+                  className="p-btn inline-flex h-[30px] cursor-pointer items-center justify-center gap-1.5 rounded-full px-[18px] text-[12.5px]"
                   aria-label="Steer the running turn"
                   title="Steer: give this to the turn already running. It lands at the agent's next step — nothing is interrupted.">
-                  <ArrowBendUpRightIcon size={15} weight="bold" />
-                  <span className="hidden @[30rem]:inline p-meta">Steer</span>
+                  <ArrowBendUpRightIcon size={14} weight="bold" />
+                  Steer
                 </button>
               : <button type="button" onClick={onSend} disabled={empty || disabled}
-                  className="p-btn inline-flex size-8 cursor-pointer items-center justify-center"
+                  className="p-btn inline-flex h-[30px] cursor-pointer items-center justify-center gap-1.5 rounded-full px-[18px] text-[12.5px]"
                   aria-label="Send">
-                  <PaperPlaneRightIcon size={15} />
+                  <PaperPlaneRightIcon size={13} />
+                  Send
                 </button>}
           </div>
         </div>

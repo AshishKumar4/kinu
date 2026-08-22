@@ -10,16 +10,16 @@
 import { Fragment, memo, useState, useRef, useEffect, useCallback, type ReactNode } from "react";
 import {
   WrenchIcon, CaretDownIcon, CaretRightIcon,
-  BrainIcon, GitBranchIcon, CheckCircleIcon, ClockIcon,
+  GitBranchIcon, CheckCircleIcon, ClockIcon,
   WarningCircleIcon, ProhibitIcon,
   ClockCounterClockwiseIcon, LightningIcon,
-  StackIcon, SparkleIcon, ArrowBendUpRightIcon, GearSixIcon, EyeIcon,
+  SparkleIcon, ArrowBendUpRightIcon, GearSixIcon, EyeIcon,
 } from "@phosphor-icons/react";
 import { isToolUIPart, getToolName } from "ai";
 import type { UIMessage, FileUIPart } from "ai";
 import {
   ADVISOR_SEVERITY_LABEL, JsonObjectSchema, JsonValueSchema,
-  describeToolCall, isToolCallFailed, summarizeToolCall, summarizeToolRun,
+  describeToolCall, isToolCallFailed, summarizeToolCall,
 } from "@kinu.run/core";
 import type { AdvisorSeverity, InlineSteer, JsonObject, JsonValue, PlacedSteer } from "@kinu.run/core";
 import * as v from "valibot";
@@ -96,19 +96,18 @@ function ThinkingRow() {
 function ReasoningBlock({ text, live = false }: { text: string; live?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   return (
-    <div className="my-2">
-      <button onClick={() => setExpanded(!expanded)} className="group/reason flex items-center gap-2.5 py-0.5 p-row-text p-text-3 hover:p-text-2 w-full text-left transition-colors cursor-pointer">
-        {live
-          ? <span className="size-1.5 mx-[6px] shrink-0 rounded-full p-dot-accent p-dot-pulse" aria-hidden />
-          : <BrainIcon size={14} className="shrink-0" />}
-        <span className={`font-medium ${live ? "p-shimmer" : ""}`}>{expanded ? "Thoughts" : "Thinking"}</span>
-        {!expanded && <span className="min-w-0 truncate p-meta p-text-3 opacity-70">{text.slice(0, 90)}</span>}
-        <CaretRightIcon size={11} className={`shrink-0 transition-transform duration-150 ${expanded ? "rotate-90" : ""} opacity-0 group-hover/reason:opacity-100`} />
+    // The mock's thought: a dim block ruled off the column by a 2px dashed
+    // line, the first words inline, the affordance the word "expand" in gold.
+    <div className={`my-1 border-l-2 border-[var(--c-dash)] py-0.5 pl-3.5 text-[12.5px] leading-[1.7] p-text-4`}>
+      <button onClick={() => setExpanded(!expanded)} className="group/reason w-full text-left cursor-pointer" aria-expanded={expanded}>
+        <span className={live ? "p-shimmer" : ""}>Thinking</span>
+        {!expanded && <span className="opacity-80"> · {text.slice(0, 120)}</span>}
+        {text.length > 120 && (
+          <span className="ml-1.5 font-medium p-gold">{expanded ? "collapse" : "expand"}</span>
+        )}
       </button>
       {expanded && (
-        <div className="mt-2 ml-[7px] border-l p-border pl-4 p-meta p-text-2 whitespace-pre-wrap leading-relaxed">
-          {text}
-        </div>
+        <div className="mt-1 whitespace-pre-wrap">{text}</div>
       )}
     </div>
   );
@@ -183,26 +182,22 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText 
 
   const failed = isError || !!provisionErr;
   return (
-    <div className="my-0.5">
-      <button onClick={() => setExpanded(!expanded)} aria-expanded={expanded} className="group/tool flex w-full min-h-7 items-center gap-2 rounded-md px-1 text-left p-row-text p-text-2 hover:p-text transition-colors cursor-pointer">
-        <span className="shrink-0 flex w-4 items-center justify-center" aria-hidden>
-          {isRunning ? <span className="size-1.5 rounded-full p-dot-accent p-dot-pulse" />
-            : failed ? <span className="size-1.5 rounded-full p-dot-danger" />
-            : <WrenchIcon size={13} className="p-text-3 opacity-60" />}
-        </span>
-        <span className={`font-mono text-[12px] shrink-0 ${isRunning ? "p-shimmer" : failed ? "p-danger" : ""}`}>{toolName}</span>
+    <div>
+      <button onClick={() => setExpanded(!expanded)} aria-expanded={expanded} className="group/tool flex w-full items-center gap-2.5 px-4 py-2.5 text-left transition-colors cursor-pointer hover:bg-[var(--c-elevated)]">
+        <CaretRightIcon size={10} aria-hidden className={`shrink-0 p-text-3 transition-transform duration-150 ${expanded ? "rotate-90" : ""}`} />
+        <span className={`shrink-0 font-mono text-[11.5px] ${isRunning ? "p-shimmer" : failed ? "p-danger" : "p-text-2"}`}>{toolName}{runtime && runtime !== "workspace" ? ` · ${runtime}` : ""}</span>
         {/* What the call does, then what it was passed. The description is
             derived from the same arguments as the summary — when they do
             not say, it is absent rather than invented. */}
-        {description && <span className="shrink-0 p-text">{description}</span>}
-        {summary && (
-          <span className="min-w-0 truncate p-text-3" title={summary}>{summary}</span>
-        )}
-        {runtime && runtime !== "workspace" && (
-          <span className="shrink-0 font-mono text-[11px] p-text-3" title={`Runtime: ${runtime}`}>@{runtime}</span>
-        )}
-        {durationLabel && !isRunning && <span className="shrink-0 p-text-3 p-num text-[11px]">{durationLabel}</span>}
-        <CaretRightIcon size={11} className={`shrink-0 p-text-3 transition-transform duration-150 ${expanded ? "rotate-90" : ""} opacity-0 group-hover/tool:opacity-100 ${expanded ? "opacity-100" : ""}`} />
+        <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] p-text-4" title={[description, summary].filter(Boolean).join(" · ")}>
+          {description ?? summary ?? ""}
+        </span>
+        <span className="shrink-0 text-[11px]">
+          {isRunning ? <span className="p-gold">running…</span>
+            : failed ? <span className="p-danger">failed</span>
+            : durationLabel ? <span className="p-success p-num">{durationLabel}</span>
+            : null}
+        </span>
       </button>
       {provisionErr && (
         <div className="p-tint-warning mt-1.5 ml-5 rounded-lg border px-3 py-2 text-xs p-text-2 flex items-start gap-2">
@@ -220,7 +215,7 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText 
         </div>
       )}
       {expanded && (
-        <div className="mt-1 ml-[7px] border-l p-border pl-4 space-y-2 animate-scale-in">
+        <div className="border-t border-dashed border-[var(--c-dash)] px-4 py-3 space-y-2 animate-scale-in bg-[var(--c-recessed)]">
           {/* A protocol-level failure (crashed executor, timeout) carries its
               reason here, never in `output` — without this, expanding one of
               these showed a red row and then nothing: the actual cause was
@@ -289,38 +284,32 @@ function partFailed(part: AnyToolPart): boolean {
 }
 
 function ToolCallGroup({ parts }: { parts: readonly AnyToolPart[] }) {
-  const [expanded, setExpanded] = useState(false);
-  // Reads every call's own output, not just the transport state — a run of
-  // calls whose failure is a `run` tool's `Error (exit 1)` (caught and
-  // returned as a normal result) used to collapse into a group that looked
-  // exactly like a clean one; expanding it was the only way to find out which
-  // row, if any, was the problem.
-  const failed = parts.some(partFailed);
-  const headline = summarizeToolRun(parts.map((p) => ({ toolName: getToolName(p), input: p.input })));
-
+  const [showAll, setShowAll] = useState(false);
+  // Reads every call's own output, not just the transport state — a failure a
+  // built-in caught and returned as a normal result used to be invisible in
+  // the collapsed tally; per-row status makes it visible at a glance.
+  // The mock draws the card OPEN: consecutive calls are rows in one bordered
+  // card, separated by dashed rules. A long run folds its tail behind one
+  // expander so a 30-call repair does not bury the prose around it.
+  const VISIBLE = 8;
+  const shown = showAll ? parts : parts.slice(0, VISIBLE);
   return (
-    <div className="my-0.5">
-      <button onClick={() => setExpanded(!expanded)} aria-expanded={expanded}
-        className="group/tool flex w-full min-h-7 items-center gap-2 rounded-md px-1 text-left p-row-text p-text-2 hover:p-text transition-colors cursor-pointer">
-        <span className="shrink-0 flex w-4 items-center justify-center" aria-hidden>
-          {failed ? <span className="size-1.5 rounded-full p-dot-danger" />
-            : <StackIcon size={13} className="p-text-3 opacity-60" />}
-        </span>
-        {/* title: the tally can run longer than the column and truncate —
-            every other row in this card offers the untruncated text on
-            hover, and this one didn't. */}
-        <span className="min-w-0 truncate" title={headline}>{headline}</span>
-        <CaretRightIcon size={11} className={`ml-auto shrink-0 p-text-3 transition-transform duration-150 ${expanded ? "rotate-90 opacity-100" : "opacity-0 group-hover/tool:opacity-100"}`} />
-      </button>
-      {expanded && (
-        <div className="mt-0.5 ml-[7px] border-l p-border pl-3 animate-scale-in">
-          {parts.map((part) => <ToolCallPart key={part.toolCallId} part={part} />)}
-        </div>
+    <div className="my-1 overflow-hidden rounded-xl border p-border p-surface">
+      <div className="divide-y divide-dashed divide-[var(--c-dash)]">
+        {shown.map((part) => <ToolCallPart key={part.toolCallId} part={part} />)}
+      </div>
+      {parts.length > VISIBLE && (
+        <button
+          type="button"
+          onClick={() => setShowAll(!showAll)}
+          className="w-full border-t border-dashed border-[var(--c-dash)] px-4 py-2 text-left text-[11px] font-medium p-gold transition-colors hover:p-accent cursor-pointer"
+        >
+          {showAll ? "Show fewer" : `Show all ${parts.length} calls`}
+        </button>
       )}
     </div>
   );
 }
-
 /** One tool part: its row, plus the live preview a tool can return. */
 function ToolCallPart({ part }: { part: AnyToolPart }) {
   const output = partOutput(part);
@@ -416,10 +405,12 @@ function DrainedEventsCard({ text, state }: { text: string; state: CardState }) 
   const events = parseDrainedEvents(text);
   return (
     <div className="flex justify-center animate-fade-in">
-      <div className="w-full max-w-[85%] rounded-xl border p-border p-elevated px-3 py-2">
-        <div className="flex items-center gap-1.5 text-[10px] p-text-3">
-          <LightningIcon size={11} className={`shrink-0 ${state === "pending" ? "p-text-3" : "p-warning"}`} weight="fill" />
-          <span className="font-medium">Background event</span>
+      {/* The mock's System notice: gold-tinted border and ground, a gold
+          "System" label, the body in the dim register. */}
+      <div className="w-full max-w-[85%] rounded-xl border border-[rgba(224,164,88,.25)] bg-[rgba(224,164,88,.05)] px-4 py-2.5">
+        <div className="flex items-center gap-2 text-[10px]">
+          <LightningIcon size={11} className={`shrink-0 ${state === "pending" ? "p-text-4" : "p-gold"}`} weight="fill" />
+          <span className="font-semibold p-gold">System</span>
           <ShownCaption state={state} />
           {events.length > 1 && <span className="ml-auto shrink-0 tabular-nums">{events.length} events</span>}
         </div>
@@ -488,15 +479,16 @@ function SystemEventCard({ event, text, state }: {
   const [expanded, setExpanded] = useState(false);
   return (
     <div className="flex justify-center animate-fade-in py-1" data-system-event={event}>
-      <div className="w-full max-w-[85%] rounded-xl border p-border p-elevated px-3 py-2">
+      <div className="w-full max-w-[85%] rounded-xl border border-[rgba(224,164,88,.25)] bg-[rgba(224,164,88,.05)] px-4 py-2.5">
         <button
           type="button"
           onClick={() => setExpanded(!expanded)}
-          className="w-full flex items-center gap-1.5 text-left text-[10px] p-text-3"
+          className="w-full flex items-center gap-2 text-left text-[10px]"
           aria-expanded={expanded}
         >
-          <GearSixIcon size={11} className="shrink-0 p-text-3" weight="fill" />
-          <span className="font-medium p-text-2">{event.replace(/_/g, " ")}</span>
+          <GearSixIcon size={11} className="shrink-0 p-gold" weight="fill" />
+          <span className="font-semibold p-gold">System</span>
+          <span className="p-text-4">{event.replace(/_/g, " ")}</span>
           <ShownCaption state={state} />
           <span className="ml-auto shrink-0">
             {expanded ? <CaretDownIcon size={10} /> : <CaretRightIcon size={10} />}
@@ -581,7 +573,7 @@ export function SteerBubble({ steer, onFork }: {
 }) {
   return (
     <div className="group flex flex-col items-end animate-fade-in" data-steer={steer.state}>
-      <div className="relative max-w-[min(75%,42rem)] px-4 py-2.5 rounded-xl rounded-br-md p-user-bubble p-body whitespace-pre-wrap">
+      <div className="relative max-w-[min(80%,42rem)] rounded-t-2xl rounded-br-[4px] rounded-bl-2xl border p-user-border px-[18px] py-3 p-user-bubble p-body whitespace-pre-wrap">
         {steer.text}
         {onFork && steer.state === "landed" && (
           <button
@@ -675,7 +667,7 @@ export const MessageView = memo(function MessageView({
     const fileParts = message.parts.filter((p): p is FileUIPart => p.type === "file");
     return (
       <div className="flex flex-col items-end animate-fade-in group">
-        <div className="relative max-w-[min(75%,42rem)] px-4 py-2.5 rounded-xl rounded-br-md p-user-bubble p-body whitespace-pre-wrap">
+        <div className="relative max-w-[min(80%,42rem)] rounded-t-2xl rounded-br-[4px] rounded-bl-2xl border p-user-border px-[18px] py-3 p-user-bubble p-body whitespace-pre-wrap">
           {fileParts.length > 0 && (
             <div className="flex flex-wrap gap-1.5 mb-1.5">
               {fileParts.map((p, i) => <FilePartView key={i} part={p} />)}
