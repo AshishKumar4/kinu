@@ -440,6 +440,11 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
               ? [{ id: "load", tone: "danger" as const, text: state.error,
                    action: { label: "Retry", icon: <ArrowsClockwiseIcon size={11} />, onClick: state.retryLoad } }]
               : []),
+            ...(state.newerDeployedBuild ? [{
+              id: "version", tone: "info" as const,
+              text: "A new version was just deployed — this tab is running the old one.",
+              action: { label: "Reload", icon: <ArrowsClockwiseIcon size={11} />, onClick: () => window.location.reload() },
+            }] : []),
             ...(steerNotice ? [steerNotice] : []),
           ]}
         />
@@ -993,6 +998,11 @@ export default function WorkspacePage() {
                 notices={[
                   ...(state.error ? [{ id: "load", tone: "danger" as const, text: state.error,
                     action: { label: "Retry", icon: <ArrowsClockwiseIcon size={11} />, onClick: state.retryLoad } }] : []),
+                  ...(state.newerDeployedBuild ? [{
+                    id: "version", tone: "info" as const,
+                    text: "A new version was just deployed — this tab is running the old one.",
+                    action: { label: "Reload", icon: <ArrowsClockwiseIcon size={11} />, onClick: () => window.location.reload() },
+                  }] : []),
                   ...(attachError ? [{ id: "attach", tone: "warning" as const, text: attachError }] : []),
                   // Each side read that failed, named. These are collected by
                   // reportSide and would otherwise be recorded and never shown,
