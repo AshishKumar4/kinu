@@ -77,8 +77,8 @@ describe('cloud agent ownership safety', () => {
       async setSoul() {
         calls.push('soul');
       },
-      async setProvisionalDisplayName(displayName: string) {
-        calls.push(`provisional-title:${displayName}`);
+      async setInitialDisplayName(displayName: string, origin: 'user' | 'auto') {
+        calls.push(`initial-title:${displayName}:${origin}`);
       },
       async setModel(model: string) {
         calls.push(`model:${model}`);
@@ -122,7 +122,7 @@ describe('cloud agent ownership safety', () => {
       expect(entry.name).toMatch(/^build-a-hello-world-app-[0-9a-f]{8}$/);
       expect(entry.displayName).toBe('Build a hello world app in react');
       expect(calls).toContain(`claim:${USER_ID}`);
-      expect(calls).toContain('provisional-title:Build a hello world app in react');
+      expect(calls).toContain('initial-title:Build a hello world app in react:auto');
       expect(calls).toContain('soul');
       // The agent takes the first turn itself — after the soul, model and
       // effort are durable, and without the owner having to reprompt.
@@ -146,6 +146,18 @@ describe('cloud agent ownership safety', () => {
       expect(purposeless.name).toMatch(/^[a-z]+-[a-z]+-[0-9a-f]{8}$/);
       expect(purposeless.displayName).toMatch(/^[A-Z][a-z]+ [A-Z][a-z]+$/);
       expect(purposeless.displayName).not.toBe(purposeless.name);
+      expect(background).toHaveLength(1);
+
+      const explicitlyTitled = await createCloudWorkspaceForUser(
+        env,
+        USER_ID,
+        userStub(env),
+        await testOwner(),
+        { displayName: 'Jarvis', purpose: 'My personal assistant' },
+        { waitUntil: (promise) => background.push(promise) },
+      );
+      expect(explicitlyTitled.displayName).toBe('Jarvis');
+      expect(calls).toContain('initial-title:Jarvis:user');
       expect(background).toHaveLength(1);
     } finally {
       globalThis.fetch = originalFetch;
@@ -293,7 +305,7 @@ describe('cloud agent ownership safety', () => {
     const orchestrator = {
       // A freshly materialized workspace DO holds nothing yet.
       async claimOwner(userId: string) { calls.push(`claim:${userId}`); return { owner: userId, capabilityHash: null }; },
-      async setProvisionalDisplayName() { calls.push('provisional-title'); },
+      async setInitialDisplayName(_displayName: string, origin: 'user' | 'auto') { calls.push(`initial-title:${origin}`); },
       async setSoul() { calls.push('soul'); },
       async setModel() { calls.push('model'); },
       async resetWorkspaceBaseline() { calls.push('baseline'); return { ok: true as const }; },
@@ -314,6 +326,7 @@ describe('cloud agent ownership safety', () => {
       await createCloudWorkspaceForUser(env, USER_ID, userStub(env), await testOwner(), {
         name: 'jarvis',
         displayName: 'Jarvis',
+        purpose: 'My personal assistant Jarvis',
       });
     } finally {
       globalThis.fetch = originalFetch;
@@ -324,7 +337,7 @@ describe('cloud agent ownership safety', () => {
     // before any of that, not on first visit.
     expect(calls).toEqual([
       'register:jarvis', `claim:${USER_ID}`, 'ensure:jarvis:none',
-      'provisional-title', 'soul', 'baseline', 'model', 'genesis',
+      'initial-title:user', 'soul', 'baseline', 'model', 'genesis',
     ]);
   });
 

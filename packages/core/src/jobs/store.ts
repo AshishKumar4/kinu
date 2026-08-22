@@ -34,6 +34,8 @@ export interface BackgroundJob {
   epoch: number;
   /** How many times evict-recovery has re-driven this job (bounds resume loops). */
   resumeAttempts: number;
+  /** Replacement job created by an operator retry; null until handled. */
+  retriedBy: string | null;
   /**
    * When the attempt CURRENTLY driving this job began — `createdAt` for a first
    * drive, bumped by every {@link BackgroundJobStore.reclaim}.
@@ -59,7 +61,7 @@ interface Row {
   id: string; kind: string; label: string | null; status: string;
   work_mode: string;
   result: string | null; error: string | null; created_at: number; settled_at: number | null;
-  epoch: number; resume_attempts: number; attempt_started_at: number | null;
+  epoch: number; resume_attempts: number; attempt_started_at: number | null; retried_by: string | null;
 }
 
 function toJob(r: Row): BackgroundJob {
@@ -71,6 +73,7 @@ function toJob(r: Row): BackgroundJob {
     result: r.result, error: r.error, createdAt: r.created_at, settledAt: r.settled_at,
     epoch: r.epoch ?? 0,
     resumeAttempts: r.resume_attempts ?? 0,
+    retriedBy: r.retried_by ?? null,
     // Null for a row written before this column existed. `created_at` is the honest
     // reading there: its first attempt is the only one anything recorded.
     attemptStartedAt: r.attempt_started_at ?? r.created_at,
@@ -107,6 +110,7 @@ export function initBackgroundJobsTable(execRaw: RawSqlExec, sql: SqlExecutor): 
     epoch       INTEGER NOT NULL DEFAULT 0,
     resume_attempts INTEGER NOT NULL DEFAULT 0,
     attempt_started_at INTEGER,
+    retried_by TEXT,
     created_at  INTEGER NOT NULL,
     settled_at  INTEGER
   )`);
@@ -116,6 +120,7 @@ export function initBackgroundJobsTable(execRaw: RawSqlExec, sql: SqlExecutor): 
     epoch: 'INTEGER NOT NULL DEFAULT 0',
     resume_attempts: 'INTEGER NOT NULL DEFAULT 0',
     attempt_started_at: 'INTEGER',
+    retried_by: 'TEXT',
   });
   execRaw(`CREATE INDEX IF NOT EXISTS idx_background_jobs_status ON background_jobs(status)`);
 }
@@ -181,6 +186,12 @@ export class BackgroundJobStore {
     void this.sql`DELETE FROM background_jobs WHERE id=${id} AND status != 'running'`;
   }
 
+  /** Record that a failed row was handled by creating a replacement job. */
+  markRetried(id: string, replacementId: string): void {
+    void this.sql`UPDATE background_jobs SET retried_by=${replacementId}
+      WHERE id=${id} AND status != 'running' AND retried_by IS NULL`;
+  }
+
   /** Remove all settled jobs. Running jobs are kept. Returns nothing. */
   clearSettled(): void {
     void this.sql`DELETE FROM background_jobs WHERE status != 'running'`;
@@ -194,13 +205,13 @@ export class BackgroundJobStore {
   }
 
   get(id: string): BackgroundJob | null {
-    const rows = this.sql<Row>`SELECT id, kind, label, work_mode, status, result, error, created_at, settled_at, epoch, resume_attempts, attempt_started_at
+    const rows = this.sql<Row>`SELECT id, kind, label, work_mode, status, result, error, created_at, settled_at, epoch, resume_attempts, attempt_started_at, retried_by
       FROM background_jobs WHERE id=${id} LIMIT 1`;
     return rows[0] ? toJob(rows[0]) : null;
   }
 
   list(limit = 20): BackgroundJob[] {
-    return this.sql<Row>`SELECT id, kind, label, work_mode, status, result, error, created_at, settled_at, epoch, resume_attempts, attempt_started_at
+    return this.sql<Row>`SELECT id, kind, label, work_mode, status, result, error, created_at, settled_at, epoch, resume_attempts, attempt_started_at, retried_by
       FROM background_jobs ORDER BY created_at DESC LIMIT ${limit}`.map(toJob);
   }
 

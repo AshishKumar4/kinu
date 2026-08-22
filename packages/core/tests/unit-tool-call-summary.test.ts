@@ -2,7 +2,7 @@
 // six different calls, and no summary may claim detail the arguments never
 // carried.
 import { describe, test, expect } from 'bun:test';
-import { clip, describeToolCall, isToolCallFailed, summarizeToolCall } from '../src/tools/tool-call-summary';
+import { clip, describeToolCall, isToolCallFailed, summarizeToolCall, toolCallEffect } from '../src/tools/tool-call-summary';
 import { renderExecuteToolsDescription } from '../src/tools/registry';
 
 describe('tool call summaries — the unified agents tool', () => {
@@ -180,6 +180,30 @@ describe('tool call summaries — truthfulness', () => {
     expect(summary.length).toBeLessThanOrEqual(72);
     expect(clip('short')).toBe('short');
     expect(clip('one    two\n three')).toBe('one two three');
+  });
+});
+
+describe('toolCallEffect — consequence controls activity density', () => {
+  test('known mutations remain prominent', () => {
+    expect(toolCallEffect('file', { action: 'write', path: '/workspace/report.md' })).toBe('mutate');
+    expect(toolCallEffect('file', { action: 'edit', path: '/workspace/src/auth.ts' })).toBe('mutate');
+    expect(toolCallEffect('tasks', { action: 'update', id: 't3', status: 'done' })).toBe('mutate');
+    expect(toolCallEffect('memory', { action: 'remember', key: 'deploy.target' })).toBe('mutate');
+    expect(toolCallEffect('agents', { action: 'swarm', task: 'audit it' })).toBe('mutate');
+  });
+
+  test('known observations collapse into the compact timeline', () => {
+    expect(toolCallEffect('file', { action: 'read', path: '/workspace/report.md' })).toBe('observe');
+    expect(toolCallEffect('web', { action: 'fetch', url: 'https://example.com' })).toBe('observe');
+    expect(toolCallEffect('memory', { action: 'search', query: 'deploy' })).toBe('observe');
+    expect(toolCallEffect('agents', { action: 'list' })).toBe('observe');
+  });
+
+  test('programs and unknown contracts do not invent an effect', () => {
+    expect(toolCallEffect('run', { command: 'node inspect.js' })).toBe('unknown');
+    expect(toolCallEffect('execute_tools', { code: 'return await workspace.files.read("a")' })).toBe('unknown');
+    expect(toolCallEffect('crafted_unknown', { action: 'write' })).toBe('unknown');
+    expect(toolCallEffect('file', 'read a')).toBe('unknown');
   });
 });
 

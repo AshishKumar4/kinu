@@ -67,7 +67,8 @@ export async function createCloudWorkspaceForUser(
   const { entry, existed } = await userDO.registerWorkspace(caller, identity.name, identity.displayName, purpose);
   try {
     const initialization: InitializeOrchestratorInput = {
-      env, userId, userDO, agentName: entry.name, displayName: entry.displayName, model,
+      env, userId, userDO, agentName: entry.name, displayName: entry.displayName,
+      nameOrigin: identity.nameOrigin, model,
     };
     if (purpose) initialization.mission = purpose;
     if (input.reasoningEffort) initialization.reasoningEffort = input.reasoningEffort;
@@ -113,11 +114,12 @@ function createInitialCloudAgentIdentity(
       nameOrigin: 'user',
     };
   }
+  const requestedDisplayName = input.displayName?.trim();
   const fallback = fallbackWorkspaceIdentity(purpose ?? '', crypto.randomUUID());
   return {
     name: fallback.name,
-    displayName: input.displayName?.trim() || fallback.displayName,
-    nameOrigin: 'auto',
+    displayName: requestedDisplayName || fallback.displayName,
+    nameOrigin: requestedDisplayName ? 'user' : 'auto',
   };
 }
 
@@ -206,13 +208,14 @@ interface InitializeOrchestratorInput {
   userDO: CloudWorkspaceRegistry;
   agentName: string;
   displayName: string;
+  nameOrigin: 'user' | 'auto';
   mission?: string;
   model?: string;
   reasoningEffort?: ReasoningEffort;
 }
 
 async function initializeOrchestrator(input: InitializeOrchestratorInput): Promise<void> {
-  const { env, userId, userDO, agentName, displayName, mission, model, reasoningEffort } = input;
+  const { env, userId, userDO, agentName, displayName, nameOrigin, mission, model, reasoningEffort } = input;
   // SAFETY: Env.OrchestratorAgent is generated from the OrchestratorAgent binding and exposes its RPC methods.
   const orchestrator = env.OrchestratorAgent.get(
     env.OrchestratorAgent.idFromName(agentName),
@@ -223,7 +226,7 @@ async function initializeOrchestrator(input: InitializeOrchestratorInput): Promi
   // ever being opened, and every one of those needs its identity to reach the
   // owner's UserDO.
   await userDO.ensureWorkspaceCapability(agentName, claim.capabilityHash);
-  await orchestrator.setProvisionalDisplayName(displayName);
+  await orchestrator.setInitialDisplayName(displayName, nameOrigin);
   await orchestrator.setSoul(renderSoulMarkdown({ name: displayName, mission }));
   // The Output diff is relative to workspace birth, never to the first time
   // somebody happens to open the tab. Capture after identity seeding and

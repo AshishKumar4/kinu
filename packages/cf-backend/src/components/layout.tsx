@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { GearIcon, GithubLogoIcon, ListIcon, PlusIcon } from "@phosphor-icons/react";
+import { GithubLogoIcon, ListIcon, PlusIcon } from "@phosphor-icons/react";
 import Sidebar from "./Sidebar";
 import { KinuLogo } from "./ui/KinuLogo";
+import { WorkspaceRosterProvider } from "@/hooks/use-workspace-roster";
 
 /**
  * Top-level shell — left rail (Sidebar with user info + agent list) +
@@ -19,6 +20,7 @@ export default function Layout() {
   useEffect(() => { setDrawerOpen(false); }, [location]);
 
   return (
+    <WorkspaceRosterProvider>
     <div className="flex h-screen w-screen flex-col p-bg p-text overflow-hidden md:flex-row">
       <header className="flex h-14 shrink-0 items-center justify-between border-b p-border p-sidebar px-3 md:hidden">
         <div className="flex items-center gap-1">
@@ -41,9 +43,6 @@ export default function Layout() {
           <button type="button" onClick={() => navigate("/")} aria-label="New workspace" className="flex size-9 items-center justify-center rounded-md p-text-2 p-card-hover hover:p-text">
             <PlusIcon size={16} />
           </button>
-          <Link to="/user/settings" aria-label="Account settings" className="flex size-9 items-center justify-center rounded-md p-text-2 p-card-hover hover:p-text">
-            <GearIcon size={16} />
-          </Link>
         </div>
       </header>
 
@@ -67,5 +66,6 @@ export default function Layout() {
       </main>
 
     </div>
+    </WorkspaceRosterProvider>
   );
 }

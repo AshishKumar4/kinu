@@ -1078,7 +1078,7 @@ export class OrchestratorAgent extends ActorAgent {
         nameOrigin: this.config.getNameOrigin(),
         mission,
       }, {
-        persist: async (name) => { await this.setAutoDisplayName(name); },
+        persist: async (name) => (await this.setAutoDisplayName(name)).applied,
         suggest: (text) => this.suggestWorkspaceTitle(text),
       });
       if (title) diagnostics.event('workspace.auto_titled', { workspace: this.name, title });
@@ -1118,25 +1118,22 @@ export class OrchestratorAgent extends ActorAgent {
     return parseWorkspaceTitle(result.text);
   }
 
-  /** Push a display name to all three homes: agent_config (source of truth),
-   *  the owner's roster row (the Sidebar), and a live broadcast to open clients.
-   *  Does NOT set name_origin — the caller decides whether this locks
-   *  auto-titling (a provisional title leaves it open; user/auto titles set it). */
-  private async propagateDisplayName(displayName: string): Promise<void> {
-    this.config.setDisplayName(displayName);
+  /** Commit one display name to the owner roster, actor config and live clients.
+   *  UserDO is authoritative. An auto-title is refused if a manual rename has
+   *  claimed the title before or during the cross-DO write. */
+  private async propagateDisplayName(
+    displayName: string,
+    origin: 'user' | 'auto',
+  ): Promise<boolean> {
+    if (origin === 'auto' && this.config.getNameOrigin() === 'user') return false;
     if (this.getOwnerUserId()) {
-      try {
-        const { stub, caller } = await this.userHub();
-        await stub.setWorkspaceDisplayName(caller, this.name, displayName);
-      } catch (err) {
-        diagnostics.failure('roster.display_name_sync_failed', toKinuError({
-          doing: 'syncing the workspace display name to the owner roster',
-          cause: err,
-          otherwise: 'unavailable',
-        }), { workspace: this.name });
-      }
+      const { stub, caller } = await this.userHub();
+      await stub.setWorkspaceDisplayName(caller, this.name, displayName);
     }
+    if (origin === 'auto' && this.config.getNameOrigin() === 'user') return false;
+    this.config.setDisplayNameOrigin(displayName, origin);
     this.broadcast(JSON.stringify({ type: 'workspace_renamed', displayName }));
+    return true;
   }
 
   // ── Background jobs (#173) — auto-detach >30s tool calls, wake on completion ──
@@ -2913,20 +2910,21 @@ export class OrchestratorAgent extends ActorAgent {
   // setModel moved below — validates spec via the provider registry before storing.
 
   @callable() async setDisplayName(displayName: string) {
-    await this.propagateDisplayName(displayName);
-    this.config.setNameOrigin('user'); // locks auto-titling — the operator named it
+    // Lock before the cross-DO write. A concurrent auto-title must not pass its
+    // pre-commit check while the owner's rename is in flight.
+    this.config.setNameOrigin('user');
+    await this.propagateDisplayName(displayName, 'user');
     return { displayName };
   }
 
   async setAutoDisplayName(displayName: string) {
-    await this.propagateDisplayName(displayName);
-    this.config.setNameOrigin('auto');
-    return { displayName };
+    const applied = await this.propagateDisplayName(displayName, 'auto');
+    return { displayName: applied ? displayName : this.config.getDisplayName(), applied };
   }
 
-  async setProvisionalDisplayName(displayName: string) {
-    this.config.setDisplayName(displayName);
-    return { displayName };
+  async setInitialDisplayName(displayName: string, nameOrigin: 'user' | 'auto') {
+    this.config.setDisplayNameOrigin(displayName, nameOrigin);
+    return { displayName, nameOrigin };
   }
 
   /**

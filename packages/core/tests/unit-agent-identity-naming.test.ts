@@ -244,6 +244,29 @@ describe('automatic workspace titling — applying it', () => {
     expect(stored.displayName).toBe('workspace-1a4e20');
   });
 
+  test('a manual rename that lands during title generation rejects the stale suggestion', async () => {
+    const { stored, persisted, persist } = workspace();
+    let resolveSuggestion: ((value: string) => void) | undefined;
+    const suggestion = new Promise<string>((resolve) => { resolveSuggestion = resolve; });
+    const pending = applyWorkspaceTitle(stored, {
+      persist: (title) => {
+        if (stored.nameOrigin === 'user') return false;
+        persist(title);
+        return true;
+      },
+      suggest: () => suggestion,
+    });
+    await Promise.resolve();
+    stored.displayName = 'Jarvis';
+    stored.nameOrigin = 'user';
+    if (resolveSuggestion === undefined) throw new Error('suggestion was never requested');
+    resolveSuggestion('OAuth Callback Audit');
+
+    expect(await pending).toBe(null);
+    expect(persisted).toEqual(['Audit the OAuth callback flow']);
+    expect(stored).toMatchObject({ displayName: 'Jarvis', nameOrigin: 'user' });
+  });
+
   test('a repeated or empty suggestion never writes twice', async () => {
     const { stored, persisted, persist } = workspace();
 

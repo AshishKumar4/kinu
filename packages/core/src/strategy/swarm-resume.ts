@@ -63,6 +63,7 @@
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 import { KinuError } from '../obs/error';
+import { tolerate } from '../obs/index';
 import type { HeadJournal } from '../heads/journal';
 import type { HeadStep } from '../heads/types';
 import type { MctsSearchStore } from '../mcts/search-store';
@@ -474,6 +475,7 @@ export function harvestSwarm(deps: {
   if (!running) return null;
 
   const records = new Map<string, SwarmNodeRecord>();
+  const unreadable = new Set<string>();
   for (const row of deps.sql<{ node_id: string; record_json: string }>`
     SELECT node_id, record_json FROM swarm_node_records WHERE root_id = ${running.rootId}`) {
     // A row this build cannot read is SKIPPED rather than thrown, and that is the
@@ -482,8 +484,14 @@ export function harvestSwarm(deps: {
     // A harvest is the last thing that will ever be said about this search, and
     // dropping one unreadable candidate to deliver four readable ones is strictly
     // better than delivering none.
-    const parsed = v.safeParse(SwarmNodeRecordSchema, JSON.parse(row.record_json));
+    const decoded = tolerate<unknown>(() => JSON.parse(row.record_json), 'malformed-input');
+    if (decoded === undefined) {
+      unreadable.add(row.node_id);
+      continue;
+    }
+    const parsed = v.safeParse(SwarmNodeRecordSchema, decoded);
     if (parsed.success) records.set(row.node_id, parsed.output);
+    else unreadable.add(row.node_id);
   }
 
   const candidates: HarvestedCandidate[] = [];
@@ -492,14 +500,18 @@ export function harvestSwarm(deps: {
     WHERE root_id = ${running.rootId} AND parent_id IS NOT NULL
     ORDER BY depth ASC, created_at ASC`) {
     const outcome = records.get(row.id)?.outcome ?? null;
+    if (unreadable.has(row.id)) continue;
+    const artifact = row.observation.trim();
+    if (outcome?.kind === 'incomplete' || artifact.length === 0) continue;
     candidates.push({
       nodeId: row.id,
       depth: row.depth,
-      artifact: row.observation,
+      artifact,
       score: outcome?.kind === 'scored' || outcome?.kind === 'judged' ? outcome.score : null,
       outcome: outcome?.kind ?? 'unrecorded',
     });
   }
+  if (candidates.length === 0) return null;
 
   let best: HarvestedCandidate | null = null;
   for (const candidate of candidates) {

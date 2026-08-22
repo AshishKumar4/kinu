@@ -380,7 +380,7 @@ const ORCHESTRATOR_METHODS = [
   'setAutoDisplayName',
   'setEmailAllowlist',
   'setEmailNotifications',
-  'setProvisionalDisplayName',
+  'setInitialDisplayName',
   'transitionReleaseChange',
   'writeExecutorFile',
 ] as const satisfies readonly (keyof OrchestratorAgent)[];

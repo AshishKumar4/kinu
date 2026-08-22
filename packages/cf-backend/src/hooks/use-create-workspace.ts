@@ -11,6 +11,7 @@ import { useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { createWorkspaceFromMission } from "@/lib/create-workspace";
 import { listAvailableModels } from "@/lib/user-api";
+import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { renderThrownChain } from '@kinu.run/core/obs';
 
@@ -24,6 +25,7 @@ export const CONNECT_AI_MESSAGE = "Connect Cloudflare Workers AI before creating
 
 export function useCreateWorkspace() {
   const navigate = useNavigate();
+  const roster = useWorkspaceRoster();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -46,13 +48,14 @@ export function useCreateWorkspace() {
     setErr(null);
     try {
       const created = await createWorkspaceFromMission(m);
+      roster.upsert(created);
       onBeforeNavigate?.();
       navigate(`/workspace/${created.name}`);
     } catch (e) {
       setErr(renderThrownChain({ cause: e }));
       setBusy(false);
     }
-  }, [busy, navigate]);
+  }, [busy, navigate, roster]);
 
   return { hasModels, busy, err, create };
 }

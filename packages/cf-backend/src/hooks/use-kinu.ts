@@ -619,6 +619,7 @@ export function useKinu(target?: string | KinuActorAddress) {
   // window claiming it had none, and then replaced that claim with the
   // transcript. False is "not yet", never "nothing".
   const [transcriptSeeded, setTranscriptSeeded] = useState(false);
+  const terminallyClosed = useRef(false);
 
   const agentOptions: Parameters<typeof useAgent>[0] = {
     agent: ORCHESTRATOR_AGENT_SLUG,
@@ -627,13 +628,18 @@ export function useKinu(target?: string | KinuActorAddress) {
     // "error", a successful reopen must recover the UI. Without this, a
     // single transient error event traps the user on the disconnect
     // banner forever (STABILITY-AUDIT §A1).
-    onOpen: useCallback(() => setConnectionStatus("connected"), []),
-    onClose: useCallback(() => setConnectionStatus("disconnected"), []),
+    onOpen: useCallback(() => {
+      terminallyClosed.current = false;
+      setConnectionStatus("connected");
+    }, []),
+    onClose: useCallback((event: CloseEvent) => {
+      terminallyClosed.current = event.code === 1008 || event.code >= 4000;
+      setConnectionStatus("disconnected");
+    }, []),
     // Don't clobber a healthy status; partysocket auto-reconnects in the
     // background and the next onOpen recovers. onError is a transient no-op.
     onError: useCallback(() => {}, []),
-    // Live AI auto-title: the agent broadcasts `workspace_renamed` after the first
-    // turn — nudge the Sidebar roster to refetch so the new name shows at once.
+    // Live AI auto-title: update both actor state and the shared roster store.
     onMessage: useCallback((ev: MessageEvent) => {
       const data = parseSocketMessage(ev.data);
       if (data?.type === "workspace_renamed") {
@@ -641,7 +647,9 @@ export function useKinu(target?: string | KinuActorAddress) {
         if (displayName?.trim()) {
           setAgentStatus((prev) => prev ? { ...prev, displayName } : prev);
         }
-        window.dispatchEvent(new CustomEvent("kinu:workspace-renamed"));
+        window.dispatchEvent(new CustomEvent("kinu:workspace-renamed", {
+          detail: { name: actorAddress.workspace, displayName },
+        }));
       } else if (data?.type === "cf_agent_stream_resuming") {
         resumedRequestIds.current.add(data.id);
       } else if (data?.type === "cf_agent_use_chat_response" && data.error === true && data.done === true) {
@@ -654,7 +662,7 @@ export function useKinu(target?: string | KinuActorAddress) {
           replayed: data.id !== undefined && resumedRequestIds.current.has(data.id),
         });
       }
-    }, []),
+    }, [actorAddress.workspace]),
   };
   if (subordinate) {
     agentOptions.sub = [{ agent: SUBORDINATE_AGENT_SLUG, name: subordinate }];
@@ -724,24 +732,6 @@ export function useKinu(target?: string | KinuActorAddress) {
   }, [agent]);
 
 
-  // ── A4: 25s heartbeat keeps the WS warm against Cloudflare's edge reaping an
-  // idle connection. Server no-ops unknown message types.
-  //
-  // The threshold is `edge.websocket_idle_reap_ms`, and that entry is labelled
-  // SPECULATIVE: this comment used to cite `STABILITY-AUDIT §A4`, which is not
-  // in the working tree — only its screenshots survived — and the recovered text
-  // says "Cloudflare's documented 100s reap" while citing nothing. Cloudflare
-  // publishes no such figure. See also `websocket.protocol_ping_auto_answered`:
-  // the runtime answers RFC 6455 ping FRAMES for free without waking the object,
-  // and this application-level message does not get that treatment.
-  useEffect(() => {
-    if (connectionStatus !== "connected") return;
-    const id = setInterval(() => {
-      if (agent.readyState !== WebSocket.OPEN) return;
-      agent.send(JSON.stringify({ type: "ping" }));
-    }, 25_000);
-    return () => clearInterval(id);
-  }, [agent, connectionStatus]);
 
   const isConnected = connectionStatus === "connected";
 
@@ -829,6 +819,25 @@ export function useKinu(target?: string | KinuActorAddress) {
         },
       );
   }, [agent, sessionRecovery]);
+
+  // Root sockets keep the existing application heartbeat. Subordinate sockets
+  // need an acknowledged frame: without the root surface's live-data polls, an
+  // OPEN corpse otherwise produces no RPC evidence for the recovery controller.
+  useEffect(() => {
+    if (connectionStatus !== "connected") return;
+    const id = setInterval(() => {
+      if (agent.readyState !== WebSocket.OPEN) return;
+      if (!isSubordinate) {
+        agent.send(JSON.stringify({ type: "ping" }));
+        return;
+      }
+      void rpc("getSubordinateSnapshot", []).then(
+        () => setSourceError("snapshot", null),
+        (error) => setSourceError("snapshot", `Subordinate liveness probe failed: ${errorMessage(error)}`),
+      );
+    }, 25_000);
+    return () => clearInterval(id);
+  }, [agent, connectionStatus, isSubordinate, rpc, setSourceError]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1065,7 +1074,7 @@ export function useKinu(target?: string | KinuActorAddress) {
   const retryLoad = useCallback(() => {
     failureStreak.current = 0;
     setSourceError("model", null);
-    sessionRecovery.manualRetry();
+    sessionRecovery.manualRetry(terminallyClosed.current);
     if (!isSubordinate) void refreshLiveData();
   }, [isSubordinate, refreshLiveData, sessionRecovery, setSourceError]);
 

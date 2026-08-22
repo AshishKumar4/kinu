@@ -25,8 +25,9 @@ import { GearIcon, TrashIcon, SignOutIcon, PencilSimpleIcon, CheckIcon, XIcon, P
 import { Button } from "@cloudflare/kumo";
 import { FilledButton } from "./ui/FilledButton";
 import { KinuLogo } from "./ui/KinuLogo";
-import { listWorkspaces, removeWorkspace, getProfile, type WorkspaceEntry, type UserProfile } from "../lib/user-api";
+import { removeWorkspace, getProfile, type WorkspaceEntry, type UserProfile } from "../lib/user-api";
 import { useWorkspaceRpc } from "../hooks/use-kinu";
+import { useWorkspaceRoster } from "../hooks/use-workspace-roster";
 import { ModeToggle } from "./theme-toggle";
 import { Modal } from "./ui/Modal";
 import * as v from "valibot";
@@ -146,14 +147,19 @@ function SidebarRenameEditor({ workspace, onSaved, onCancel }: {
 export default function Sidebar() {
   // useParams can't see :agentId from here (the Sidebar renders outside the
   // route's Outlet) — match the location directly instead.
-  const sectionMatch = useMatch("/:section/:agentId");
+  const sectionMatch = useMatch({ path: "/:section/:agentId/*", end: false });
   const agentId = sectionMatch && WORKSPACE_SCOPED_SECTIONS.includes(sectionMatch.params.section ?? "")
     ? sectionMatch.params.agentId
     : undefined;
   const navigate = useNavigate();
-  const [workspaces, setWorkspaces] = useState<WorkspaceEntry[]>([]);
-  const [workspaceTotal, setWorkspaceTotal] = useState(0);
-  const [listError, setListError] = useState(false);
+  const {
+    entries: workspaces,
+    total: workspaceTotal,
+    error: listError,
+    refresh: refreshWorkspaces,
+    rename: renameWorkspace,
+    remove: removeFromRoster,
+  } = useWorkspaceRoster();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [profileFailed, setProfileFailed] = useState(false);
   const [activity, setActivity] = useState<Record<string, WorkspaceActivity>>({});
@@ -164,23 +170,13 @@ export default function Sidebar() {
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
 
-  const refreshWorkspaces = useCallback(async () => {
-    try {
-      const list = await listWorkspaces();
-      setWorkspaces(list.entries);
-      setWorkspaceTotal(list.total);
-      setListError(false);
-    }
-    catch (err) {
-      console.warn('[sidebar] listWorkspaces:', renderThrownChain({ cause: err }));
-      setListError(true);
-    }
-  }, []);
 
   useEffect(() => {
-    refreshWorkspaces();
-    getProfile().then((p) => { setProfile(p); setProfileFailed(false); }).catch(() => setProfileFailed(true));
-  }, [refreshWorkspaces]);
+    getProfile().then(
+      (profile) => { setProfile(profile); setProfileFailed(false); },
+      () => setProfileFailed(true),
+    );
+  }, []);
 
   // Reflect the open workspace's live status on its roster row, and carry its
   // nested agent roster for the mock's indented block.
@@ -196,15 +192,6 @@ export default function Sidebar() {
     return () => window.removeEventListener("kinu:workspace-activity", h);
   }, []);
 
-  // Re-sync when route changes (so a freshly-created workspace appears).
-  useEffect(() => { refreshWorkspaces(); }, [agentId, refreshWorkspaces]);
-
-  // Re-sync when the active workspace AI-renames itself after its first turn.
-  useEffect(() => {
-    const h = () => refreshWorkspaces();
-    window.addEventListener("kinu:workspace-renamed", h);
-    return () => window.removeEventListener("kinu:workspace-renamed", h);
-  }, [refreshWorkspaces]);
 
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
@@ -227,14 +214,14 @@ export default function Sidebar() {
     if (name === agentId) navigate("/");
     try {
       await removeWorkspace(name);
-      await refreshWorkspaces();
+      removeFromRoster(name);
       setDeleteTarget(null);
     } catch (err) {
       setDeleteError(renderThrownChain({ cause: err }));
     } finally {
       setDeleteBusy(false);
     }
-  }, [deleteTarget, agentId, navigate, refreshWorkspaces]);
+  }, [deleteTarget, agentId, navigate, removeFromRoster]);
 
   // The responsive wrappers (desktop rail / mobile drawer) live in layout.tsx;
   // this renders just the column content so both reuse one roster + user menu.
@@ -273,7 +260,7 @@ export default function Sidebar() {
         )}
         {listError && (
           <button
-            onClick={() => refreshWorkspaces()}
+            onClick={refreshWorkspaces}
             className="w-full text-left px-5 py-2 text-xs p-warning rounded-md p-card-hover transition-colors"
           >Couldn't load workspaces. Tap to retry.</button>
         )}
@@ -291,7 +278,7 @@ export default function Sidebar() {
                       workspace={a}
                       onCancel={() => setEditingWorkspace(null)}
                       onSaved={(displayName) => {
-                        setWorkspaces((current) => current.map((entry) => entry.name === a.name ? { ...entry, displayName } : entry));
+                        renameWorkspace(a.name, displayName);
                         setEditingWorkspace(null);
                       }}
                     />
@@ -300,7 +287,7 @@ export default function Sidebar() {
                       <NavLink
                         to={`/workspace/${a.name}`}
                         className={({ isActive: linkActive }) =>
-                          `flex items-center gap-2 rounded-lg px-3 py-[7px] transition-colors ${
+                          `flex items-center gap-2 rounded-lg py-[7px] pl-3 pr-16 transition-colors ${
                             linkActive ? 'bg-[var(--c-elevated)]' : 'hover:bg-[var(--c-elevated)]'
                           }`
                         }
@@ -318,8 +305,14 @@ export default function Sidebar() {
                                 : null}
                         </span>
                         <span className={`min-w-0 flex-1 truncate text-[13px] ${isActive ? 'font-semibold p-text' : 'font-semibold p-text-2'}`}>{a.displayName}</span>
-                        {age && <span className="shrink-0 text-[10.5px] tabular-nums p-text-4">{age}</span>}
+                        {age && <span className="shrink-0 text-[10.5px] tabular-nums p-text-4 transition-opacity group-hover:opacity-0">{age}</span>}
                       </NavLink>
+                      <Link
+                        to={`/settings/${a.name}`}
+                        className="absolute right-11 top-1/2 -translate-y-1/2 p-1 opacity-0 transition-all p-text-3 hover:p-gold focus-visible:opacity-100 group-hover:opacity-60"
+                        title="Workspace settings"
+                        aria-label={`Workspace settings for ${a.displayName}`}
+                      ><GearIcon size={11} /></Link>
                       <button
                         onClick={() => setEditingWorkspace(a.name)}
                         className="absolute right-6 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-60 focus-visible:opacity-100 hover:!opacity-100 p-text-3 hover:p-text transition-all p-1"

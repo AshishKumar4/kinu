@@ -5,16 +5,15 @@
  * Identity lives here because this is the only row present at BOTH altitudes:
  * in Supervise there is no chat header to carry it.
  *
- * Workspace-scoped chrome rides with it: the live pill (connection + the
- * shared mid-turn pulse), the model chip (what the next turn will run), the
- * theme circle, the Run/Supervise altitude pair, and the one gear into
- * workspace settings. Anything about one conversation (which tab, clearing
- * its history) stays on the chat column's tab strip.
+ * Workspace-scoped status rides with it: the live pill, the next-turn model,
+ * theme, and Run/Supervise altitude. Settings lives with the workspace row in
+ * the Sidebar; anything about one conversation (which tab, clearing its
+ * history) stays on the chat column's tab strip.
  */
 import { useEffect, useState, type FormEvent } from "react";
 import { Tabs, type TabsItem } from "@cloudflare/kumo";
 import { Link } from "react-router-dom";
-import { CheckIcon, GearSixIcon, GitBranchIcon, PencilSimpleIcon, SunIcon, MoonIcon } from "@phosphor-icons/react";
+import { CheckIcon, GitBranchIcon, PencilSimpleIcon, SunIcon, MoonIcon } from "@phosphor-icons/react";
 import type { ConnectionStatus } from "@/hooks/use-kinu";
 import { useTheme, toggleMode } from "@/hooks/use-theme";
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -47,7 +46,6 @@ export interface WorkspaceBarProps {
   model?: string;
   /** Present on a forked workspace: a link back to the one it was cut from. */
   forkParent?: { workspace: string; forkedAt: number };
-  settingsHref: string;
   altitude: Altitude;
   onAltitude: (altitude: Altitude) => void;
 }
@@ -79,7 +77,7 @@ function LivePill({ status, working }: { status: ConnectionStatus; working: bool
 
 export function WorkspaceBar({
   title, onRename, connectionStatus, working, model, forkParent,
-  settingsHref, altitude, onAltitude,
+  altitude, onAltitude,
 }: WorkspaceBarProps) {
   const { mode } = useTheme();
   return (
@@ -110,9 +108,6 @@ export function WorkspaceBar({
       </div>
 
       <div className="ml-auto flex shrink-0 items-center gap-2.5">
-        <Link to={settingsHref} className="p-text-3 transition-colors hover:p-gold" title="Workspace settings" aria-label="Workspace settings">
-          <GearSixIcon size={15} />
-        </Link>
         <button
           type="button"
           onClick={toggleMode}

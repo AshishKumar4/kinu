@@ -41,6 +41,7 @@ import { scriptedTurnModel } from '@kinu.run/test-utils';
 import { createTestRuntime, makeExecRaw, makeSql } from './helpers';
 import { MissionGovernor } from '../src/mission-budget';
 import { MctsSearchStore, initMctsSearchTable } from '../src/mcts/search-store';
+import { initSearchTables } from '../src/mcts/schemas';
 import { HeadJournal } from '../src/heads/journal';
 import { createRecordingLogger } from '../src/obs/index';
 import { createAgentsTool, type AgentsToolDeps, type AgentsToolInput } from '../src/tools/agents-tool';
@@ -54,6 +55,9 @@ import {
 } from '../src/heads/reconcile';
 import { runSwarm } from '../src/strategy/swarm-run';
 import { resolveSwarm, swarmValidity } from '../src/strategy/swarm';
+import {
+  harvestSwarm, initSwarmNodeRecords, recordSwarmNode,
+} from '../src/strategy/swarm-resume';
 import type { ResolvedSwarm, SwarmConfig } from '../src/strategy/swarm';
 import type { Objective } from '../src/strategy/objective';
 import type { AgentRuntime } from '../src/types/agent-runtime';
@@ -128,6 +132,59 @@ describe('the swarm-scoped resume lookup, and what it does about a collision', (
     store.converge('root', 0, 2_000);
     store.supersede('root', 3_000);
     expect(store.get('root')?.status).toBe('converged');
+  });
+});
+
+describe('harvesting a capped swarm', () => {
+  function setupHarvest() {
+    const db = new Database(':memory:');
+    const sql = makeSql(db);
+    const execRaw = makeExecRaw(db);
+    initSearchTables(execRaw, sql);
+    initMctsSearchTable(execRaw, sql);
+    initSwarmNodeRecords(execRaw);
+    const ledger = new MctsSearchStore(sql);
+    beganSwarm(ledger, 'harvest-root', 1_000);
+    void sql`INSERT INTO search_nodes (id, root_id, task, observation)
+      VALUES ('harvest-root', 'harvest-root', ${TASK}, 'root')`;
+    return { sql, ledger };
+  }
+
+  test('an all-incomplete search has no candidate to report as completed', () => {
+    const { sql, ledger } = setupHarvest();
+    void sql`INSERT INTO search_nodes (id, parent_id, root_id, task, observation, depth)
+      VALUES ('incomplete', 'harvest-root', 'harvest-root', ${TASK}, 'stopped before an answer', 1)`;
+    recordSwarmNode(sql, {
+      rootId: 'harvest-root',
+      nodeId: 'incomplete',
+      record: {
+        outcome: { kind: 'incomplete', detail: 'evicted before completion' },
+        conclusion: null,
+        aggregated: [],
+        tokens: null,
+      },
+      now: 2_000,
+    });
+    expect(harvestSwarm({ sql, ledger }, TASK)).toBeNull();
+  });
+
+  test('one malformed record cannot hide another usable candidate', () => {
+    const { sql, ledger } = setupHarvest();
+    void sql`INSERT INTO search_nodes (id, parent_id, root_id, task, observation, depth)
+      VALUES
+        ('bad', 'harvest-root', 'harvest-root', ${TASK}, 'bad artifact', 1),
+        ('good', 'harvest-root', 'harvest-root', ${TASK}, 'usable answer', 1)`;
+    void sql`INSERT INTO swarm_node_records (node_id, root_id, record_json, created_at)
+      VALUES ('bad', 'harvest-root', '{', 2_000)`;
+    recordSwarmNode(sql, {
+      rootId: 'harvest-root',
+      nodeId: 'good',
+      record: { outcome: null, conclusion: null, aggregated: [], tokens: null },
+      now: 2_000,
+    });
+    const harvest = harvestSwarm({ sql, ledger }, TASK);
+    expect(harvest?.candidates.map((candidate) => candidate.nodeId)).toEqual(['good']);
+    expect(harvest?.candidates[0]?.artifact).toBe('usable answer');
   });
 });
 
@@ -678,6 +735,25 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
       WHERE error_message = ${FORK_INTERRUPTED_REASON}`[0]?.n).toBe(FROZEN_NODES);
     expect(journal.listLive()).toEqual([]);
   }, 300_000);
+});
+
+describe('the start-of-life sweep reaches registry-only jobs', () => {
+  test('a wired resume gate runs even when no head or search row exists', async () => {
+    let calls = 0;
+    await reconcileInterruptedForks({
+      journal: {
+        markInterrupted: () => [],
+        abandonRunning: () => [],
+      },
+      signals: idleAgent().signals,
+      resume: async (roots) => {
+        calls += 1;
+        expect(roots).toEqual([]);
+        return [];
+      },
+    });
+    expect(calls).toBe(1);
+  });
 });
 
 /**

@@ -175,24 +175,37 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
 
   return (
     <div className={`${grouped ? "p-3" : "p-group p-3"} ${kept ? "opacity-70" : ""}`}>
-      <div className="flex items-start gap-2">
+      <div className="grid grid-cols-[14px_minmax(0,1fr)_auto] items-start gap-2">
         <Icon size={14} className={`mt-0.5 shrink-0 ${fresh ? "p-accent" : "p-text-3"}`} />
         {hasDetails ? (
-          <button type="button" className="min-w-0 flex-1 flex items-start gap-2 text-left rounded-md"
-            aria-expanded={expanded} aria-controls={detailsId}
-            onClick={() => setExpanded((prev) => !prev)}>
+          <button
+            type="button"
+            className="min-w-0 rounded-md text-left"
+            aria-expanded={expanded}
+            aria-controls={detailsId}
+            onClick={() => setExpanded((previous) => !previous)}
+          >
             {headline}
-            {expanded
-              ? <CaretDownIcon size={11} className="mt-0.5 shrink-0 p-text-3" />
-              : <CaretRightIcon size={11} className="mt-0.5 shrink-0 p-text-3" />}
           </button>
         ) : headline}
-        <div className="flex items-center gap-1 shrink-0">
+        <div className="grid auto-cols-max grid-flow-col items-center gap-1 justify-self-end">
           {entry.scaffoldVersion != null && (
             <Button size="sm" variant="ghost" {...{ 'shape': 'square' as const }} onClick={toggleDiff}
               icon={<GitDiffIcon size={12} />} aria-label="Show diff" />
           )}
           {actions}
+          {hasDetails && (
+            <button
+              type="button"
+              onClick={() => setExpanded((previous) => !previous)}
+              aria-expanded={expanded}
+              aria-controls={detailsId}
+              aria-label={expanded ? `Collapse ${entry.summary}` : `Expand ${entry.summary}`}
+              className="flex size-7 items-center justify-center rounded-md p-text-3 hover:p-text"
+            >
+              {expanded ? <CaretDownIcon size={11} /> : <CaretRightIcon size={11} />}
+            </button>
+          )}
         </div>
       </div>
 

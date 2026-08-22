@@ -7,7 +7,7 @@
  * automatically — a deterministic provisional from the mission, replaced by a
  * generated title moments later — so there is no name field to fill in.
  */
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useState } from "react";
 import { Link } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -20,17 +20,14 @@ import {
   MISSION_PLACEHOLDER,
   useCreateWorkspace,
 } from "@/hooks/use-create-workspace";
-import { listWorkspaces, type WorkspaceEntry } from "@/lib/user-api";
+import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 
 export default function HomePage() {
   const [mission, setMission] = useState("");
-  const [workspaces, setWorkspaces] = useState<WorkspaceEntry[]>([]);
-  const [listFailed, setListFailed] = useState(false);
+  const { entries: workspaces, error: rosterError } = useWorkspaceRoster();
+  const listFailed = rosterError !== null;
   const { hasModels, busy, err, create } = useCreateWorkspace();
 
-  useEffect(() => {
-    listWorkspaces().then((w) => { setWorkspaces(w.entries); setListFailed(false); }).catch(() => setListFailed(true));
-  }, []);
 
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
