@@ -413,12 +413,12 @@ describe('auth and desktop security invariants', () => {
 
   test('the front page hands over in place and never bounces a visitor to a script', () => {
     const page = landingDocument("curl -fsSL 'https://kinu.example.com/install.sh' | bash");
-    // Both ways in, and the install command is revealed on the page rather than
-    // by navigating away: a visitor who wants the CLI must not lose the page.
-    expect(page).toContain('>Sign in<');
-    expect(page).toContain('href="#install"');
-    expect(page).toContain('data-install-toggle');
+    // Authentication is a real link. The install command is already visible,
+    // so no script-gated toggle can hide the second way in.
+    expect(page).toContain('href="/login"');
+    expect(page).toContain('TRY CLOUD AGENTS');
     expect(page).toContain('landing-install-command');
+    expect(page).not.toContain('data-install-toggle');
     // Escaped, not raw: the origin reaches this page through a template.
     expect(page).toContain('curl -fsSL &#039;https://kinu.example.com/install.sh&#039; | bash');
     expect(page).not.toContain('href="/install.sh"');
@@ -519,19 +519,17 @@ describe('auth and desktop security invariants', () => {
   });
 
   test('web UI offers Cloudflare Workers AI reconnect instead of a no-provider dead end', () => {
-    // The shared self-fetching picker owns the reconnect CTA; the chat page
-    // renders it in the header.
+    // The shared self-fetching picker owns the reconnect CTA; every surviving
+    // creation/chat/settings surface embeds that same notice.
     const picker = source('src/components/ModelPicker.tsx');
     const workspace = source('src/pages/WorkspacePage.tsx');
     const home = source('src/pages/HomePage.tsx');
-    const modal = source('src/components/CreateWorkspaceModal.tsx');
     const settings = source('src/pages/UserSettingsPage.tsx');
     expect(picker).not.toContain('(no providers connected)');
     expect(picker).toContain('Connect Workers AI');
     expect(picker).toContain('cloudflareReconnectPath');
     expect(workspace).toContain('ConnectedModelPicker');
     expect(home).toContain('CloudflareAIConnectNotice');
-    expect(modal).toContain('CloudflareAIConnectNotice');
     expect(settings).toContain('CloudflareAIConnectNotice');
   });
 });

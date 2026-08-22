@@ -7,7 +7,7 @@
  * user turn, so a workspace created with "My personal assistant, Jarvis" got a
  * reply that began "This is a very short, ambiguous statement": a standing
  * brief handed over as a task. The second reading is gone; these pin that it
- * cannot come back, on either surface that creates a workspace.
+ * cannot come back through the one mission-first creation surface.
  *
  * Wiring assertions over source, the technique unit-agent-naming.test.ts
  * already uses for the same reason: the app has no DOM test harness, and the
@@ -37,19 +37,18 @@ describe("the creation box is a mission, not a first prompt", () => {
     expect(page).not.toContain("location.state");
   });
 
-  test("both creation surfaces say what the box is, and that nothing runs yet", () => {
+  test("the creation surface says what the box is, and that nothing runs yet", () => {
     const copy = source("src/hooks/use-create-workspace.ts");
     expect(copy).toContain('MISSION_LABEL = "Mission"');
     expect(copy).toContain("A standing brief for the whole workspace.");
-    expect(copy).toContain("Nothing runs until you send the first message.");
+    expect(copy).toContain("Nothing runs until the first message.");
 
-    for (const path of ["src/pages/HomePage.tsx", "src/components/CreateWorkspaceModal.tsx"]) {
-      const ui = source(path);
-      expect(ui).toContain("MISSION_LABEL");
-      expect(ui).toContain("MISSION_PLACEHOLDER");
-      expect(ui).toContain("MISSION_HELP");
-      expect(ui).not.toContain("first turn");
-    }
+    const ui = source("src/pages/HomePage.tsx");
+    expect(ui).toContain("MISSION_LABEL");
+    expect(ui).toContain("MISSION_PLACEHOLDER");
+    expect(ui).toContain("MISSION_HELP");
+    expect(ui).not.toContain("first turn");
+    expect(() => source("src/components/CreateWorkspaceModal.tsx")).toThrow();
   });
 
   test("a workspace before its first turn shows the mission as a brief", () => {

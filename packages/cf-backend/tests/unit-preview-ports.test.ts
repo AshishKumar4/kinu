@@ -56,8 +56,9 @@ describe('preview port refresh reconciliation', () => {
     const source = readFileSync(join(import.meta.dir, '../src/hooks/use-kinu.ts'), 'utf8');
     expect(source).toContain('const generation = ++exposedPortsRefreshGeneration.current;');
     expect(source).toContain('if (generation !== exposedPortsRefreshGeneration.current) return;');
-    const reset = source.slice(source.indexOf('setLoadAttempt(0);') - 100, source.indexOf('setLoadAttempt(0);') + 100);
-    expect(reset).toContain('++exposedPortsRefreshGeneration.current;');
+    const resetAt = source.indexOf('setLoadGeneration(0);');
+    expect(resetAt).toBeGreaterThan(0);
+    expect(source.slice(resetAt - 160, resetAt)).toContain('++exposedPortsRefreshGeneration.current;');
   });
 });
 
