@@ -385,16 +385,16 @@ font-weight:500;line-height:1.05;letter-spacing:-0.022em}
 .stat span{display:block;margin-top:5px;color:var(--c-text-3)}
 
 code{font-family:var(--font-mono);font-size:13px;color:var(--c-code)}
-.cmd{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:start;
-padding:10px 11px;border:1px solid var(--c-input-border);border-radius:var(--r-row);
-background:var(--c-recessed)}
-.cmd::before{content:"$";color:var(--c-text-3);font-family:var(--font-mono);font-size:13px;line-height:1.7}
-.cmd code{display:block;overflow-x:auto;white-space:nowrap;line-height:1.7}
-.copy{min-height:30px;padding:0 11px;border:1px solid var(--c-input-border);
-border-radius:var(--r-control);background:transparent;color:var(--c-text-3);
-font-family:var(--font-mono);font-size:11px;letter-spacing:0.08em;text-transform:uppercase;
-cursor:pointer;transition:color 150ms var(--ease),background 150ms var(--ease)}
-.copy:hover{color:var(--c-text);background:var(--c-fill)}
+.cmd{display:flex;align-items:center;justify-content:space-between;gap:20px;
+padding:17px 20px;border:1px solid var(--c-border);background:var(--c-recessed);
+font-family:var(--font-mono);font-size:13px}
+.cmd code{white-space:nowrap;overflow:hidden;min-width:0;text-overflow:ellipsis}
+.cmd code .dollar{color:var(--c-accent)}
+.copy{flex-shrink:0;font-family:var(--font-mono);font-size:11px;letter-spacing:.14em;
+color:var(--c-text-3);border:1px solid var(--c-border-strong);padding:6px 12px;
+min-height:34px;background:transparent;border-radius:0;cursor:pointer;
+transition:color 150ms var(--ease),border-color 150ms var(--ease)}
+.copy:hover{color:var(--c-accent);border-color:var(--c-accent)}
 .panel[hidden]{display:none}
 .panel{margin-top:18px;max-width:620px}
 .panel .dim{margin:11px 0 0}

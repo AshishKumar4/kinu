@@ -138,13 +138,16 @@ background:var(--c-recessed);padding:24px 28px}
 font-family:var(--font-mono);font-size:10px;letter-spacing:.16em;
 text-transform:uppercase;color:var(--c-text-3)}
 .term{border:0;border-radius:0;background:transparent;padding:0;max-height:none;
-font-size:12px;line-height:2;color:var(--c-text-2)}
+font-size:12px;line-height:2;color:var(--c-text-2);
+white-space:pre-wrap;overflow-wrap:anywhere}
+.term .line{display:block}
 .webfilm{border-radius:0;border-color:var(--c-border)}
 .glimpse:empty{display:none}
 .glimpse{min-height:120px}
 
 @media (max-width:1020px){
 .hero-grid{grid-template-columns:1fr;gap:44px}
+.hero-grid>*{min-width:0}
 .g.two,.g.three,.grid.four{grid-template-columns:repeat(2,minmax(0,1fr))!important}
 .duo,.cta-grid,#deploy .duo{grid-template-columns:1fr;gap:40px}
 .section{padding:80px 0 72px}
@@ -153,6 +156,9 @@ font-size:12px;line-height:2;color:var(--c-text-2)}
 }
 @media (max-width:680px){
 .g.two,.g.three,.grid.four{grid-template-columns:1fr!important}
+/* Below his design's floor the no-wrap claim would clip mid-word; wrapping
+   it is the smaller deviation. */
+[data-typewriter]{white-space:normal !important;height:auto !important}
 .section{padding:64px 0 60px}
 .claims>:first-child,.claims>:last-child{padding:22px 20px}
 .nav-cta{padding:9px 14px !important;min-height:34px !important}

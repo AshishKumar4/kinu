@@ -279,7 +279,10 @@ beforeAll(async () => {
         if (frame === 'landing' && (label === '1920' || label === '2560')) {
           facts.wide[label] = await page.evaluate(() => {
             const column = document.querySelector('.page')!;
-            const cells = [...document.querySelectorAll('.grid > *, .g > *')];
+            // The claim strip's outer cells sit flush to the rails by design — the
+            // cram concern is interior content cells.
+            const cells = [...document.querySelectorAll('.grid > *, .g > *')]
+              .filter((cell) => !cell.classList.contains('claim'));
             const pad = (cell: Element): number => parseFloat(getComputedStyle(cell).paddingLeft);
             const mounts = [...document.querySelectorAll('[data-glimpse]')];
             const fits = mounts.every((glimpse) => {

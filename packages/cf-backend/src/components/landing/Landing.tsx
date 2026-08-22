@@ -81,7 +81,7 @@ function HeroLeft({ install }: { install: string }): ReactElement {
         <button className="copy" type="button" data-copy="landing-install-command">COPY</button>
       </div>
       <div id="landing-install-command" hidden>{install}</div>
-      <div style={{ display: 'flex', gap: 18, marginTop: 24, alignItems: 'center' }}>
+      <div style={{ display: 'flex', gap: 18, marginTop: 24, alignItems: 'center', flexWrap: 'wrap' }}>
         <a href="/login" className="btn solid">TRY CLOUD AGENTS →</a>
         <a href="#deploy" className="btn">DEPLOY YOUR OWN</a>
         <span style={{ fontFamily: MONO, fontSize: 11, color: FAINT }}>MIT · open source</span>
@@ -95,7 +95,7 @@ const TABS = ['optimise', 'research', 'ideate'] as const;
 function HeroRight(): ReactElement {
   return (
     <div style={{ border: '1px solid var(--c-border)', background: 'var(--c-sidebar)', position: 'relative', padding: 16 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 12, flexWrap: 'wrap' }}>
         <div data-hero-tabs style={{ display: 'flex', gap: 14, alignItems: 'baseline' }}>
           <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '.16em', color: FAINT }}>FIG.01</span>
           {TABS.map((m, at) => (
