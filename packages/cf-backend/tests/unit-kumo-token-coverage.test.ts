@@ -95,7 +95,7 @@ describe('Kumo token coverage', () => {
     // face keeps the `:root` black.
     expect(literal.sort()).toEqual([
       '--color-kumo-shadow-drop: rgba(0, 0, 0, 0.3)',
-      '--color-kumo-shadow-drop: rgba(43, 26, 4, 0.14)',
+      '--color-kumo-shadow-drop: rgba(66, 49, 18, 0.14)',
     ]);
   });
 });
