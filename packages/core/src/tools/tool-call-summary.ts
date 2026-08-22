@@ -428,29 +428,6 @@ export function describeToolCall<Input>(toolName: string, input: Input): string 
   return DESCRIBERS.get(toolName)?.(parsed.output) ?? "";
 }
 
-/**
- * The headline for a collapsed run of consecutive calls: a tally of what the
- * agent did, in the order it first did each thing.
- *
- *   read, read, edit, write, fork  →  "5 calls · Read ×2 · Edited · Wrote · Delegated"
- *
- * The key is the verb from `describeToolCall`, so the line says what happened
- * rather than which tool was invoked. A call whose arguments carry no verb
- * falls back to its tool name, which is the most that can honestly be said
- * about an MCP tool nobody has a contract for.
- *
- * A tally rather than a sentence: a run mixes verbs, and five clauses joined
- * into prose reads worse at a glance than the counts do.
- */
-export function summarizeToolRun<Input>(calls: ReadonlyArray<{ toolName: string; input: Input }>): string {
-  const counts = new Map<string, number>();
-  for (const { toolName, input } of calls) {
-    const key = describeToolCall(toolName, input).split(" ")[0] || toolName;
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  const tally = [...counts].map(([verb, n]) => (n > 1 ? `${verb} ×${n}` : verb)).join(" · ");
-  return `${calls.length} calls · ${tally}`;
-}
 
 /** MCP and crafted tools have no known argument contract. A single string
  *  argument IS the call's subject, so it can be shown as-is; anything else

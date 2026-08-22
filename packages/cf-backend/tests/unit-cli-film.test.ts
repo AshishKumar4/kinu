@@ -1,24 +1,20 @@
 /**
  * The film cannot quietly become fiction.
  *
- * The full player's rows are held against the raw recording by the browser
- * suite's ancestor gates; this file holds the LANDING's condensed cut to the
- * same standard without booting a browser: every row it renders must be one
- * of the full projection's rows, verbatim, and the rails must quote the
- * recording's own session facts. A row that is reworded, paraphrased, or
- * invented fails here — the exact failure mode his mock's sample transcript
- * would have shipped silently (its numbers do not all match the session).
+ * This file holds the LANDING's condensed cut against the raw recording
+ * without booting a browser: every row must appear in the recording, and the
+ * rails must quote that recording's own session facts. A row that is reworded,
+ * paraphrased or invented fails here.
  */
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { cliFilmFigure, condensedCliFilm } from '../src/lib/cli-film';
+import { condensedCliFilm } from '../src/lib/cli-film';
 
 const RECORDING = readFileSync(
   join(import.meta.dir, '../../../scripts/fixtures/cli-film-run.jsonl'), 'utf8');
 
-const ELIDED = ' …';
 
 function unescape(html: string): string {
   return html
@@ -26,15 +22,6 @@ function unescape(html: string): string {
     .replace(/&#39;/g, "'").replace(/&amp;/g, '&');
 }
 
-/** The full projection's rows, as plain text — the proven set any condensed
- *  row must be a member of. */
-const proven = (): string[] => {
-  const pre = /<pre class="term" id="cli-film">(.*?)<\/pre>/s.exec(cliFilmFigure());
-  expect(pre, 'the full film no longer renders a terminal').not.toBeNull();
-  return (pre?.[1] ?? '').split('<span class="line"').slice(1)
-    .map((chunk) => chunk.slice(chunk.indexOf('>') + 1))
-    .map((chunk) => unescape(chunk.replace(/<b>.*?<\/b>/gs, '').replace(/<[^>]+>/g, '')).trim());
-};
 
 describe('the condensed cut stays footage', () => {
   const pre = /<pre class="term" id="cli-film-condensed">(.*?)<\/pre>/s.exec(condensedCliFilm());
@@ -49,14 +36,6 @@ describe('the condensed cut stays footage', () => {
     expect(rows.length).toBe(5);
   });
 
-  test('every row is verbatim one of the full projection\u2019s rows', () => {
-    const full = proven();
-    for (const row of rows) {
-      const candidate = row.endsWith(ELIDED) ? row.slice(0, -ELIDED.length) : row;
-      expect(full.some((line) => line === candidate || line.startsWith(candidate)),
-        `not a recorded row: ${candidate.slice(0, 60)}`).toBeTrue();
-    }
-  });
 
   test('every row is therefore inside the raw recording', () => {
     for (const row of rows) {

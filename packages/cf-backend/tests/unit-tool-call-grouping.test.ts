@@ -1,14 +1,14 @@
-// Folding a turn's parts into render blocks, and the annotation the chat
-// shows instead of raw arguments.
+// Folding a turn's parts into render blocks, and the annotation each tool row
+// derives from its own arguments.
 //
-// Two properties carry the feature: a run of finished calls collapses to one
-// row, and a call still running never does — a headline that ticks between
-// "4 calls" and "5 calls" while the agent works is worse than no headline.
+// A run of finished calls groups into one bordered block; a call still running
+// remains its own live row. The grouped tally headline was removed with the app
+// mock cutover, so this file now tests only behavior that is rendered.
 import { describe, test, expect } from 'bun:test';
 import type { ReasoningUIPart, TextUIPart, ToolUIPart, UIMessage } from 'ai';
 import type { JsonValue } from '@kinu.run/core';
 import { groupMessageParts } from '../src/components/tool-call-grouping';
-import { describeCommand, describeToolCall, summarizeToolRun } from '@kinu.run/core';
+import { describeCommand, describeToolCall } from '@kinu.run/core';
 
 type Part = UIMessage['parts'][number];
 
@@ -142,22 +142,3 @@ describe('what a call does, from its own arguments', () => {
   });
 });
 
-describe('the collapsed run headline', () => {
-  test('tallies verbs, in the order the agent first did each thing', () => {
-    expect(summarizeToolRun([
-      { toolName: 'file', input: { action: 'read', path: 'a.ts' } },
-      { toolName: 'file', input: { action: 'read', path: 'b.sql' } },
-      { toolName: 'file', input: { action: 'edit', path: 'b.sql' } },
-      { toolName: 'file', input: { action: 'write', path: 'c.test.ts' } },
-      { toolName: 'agents', input: { action: 'fork', forks: [{}, {}, {}] } },
-    ])).toBe('5 calls · Read ×2 · Edited · Wrote · Delegated');
-  });
-
-  test('a call whose arguments carry no verb falls back to its tool name', () => {
-    expect(summarizeToolRun([
-      { toolName: 'weather_mcp', input: { city: 'Berlin' } },
-      { toolName: 'weather_mcp', input: { city: 'Paris' } },
-      { toolName: 'file', input: { action: 'read', path: 'a.ts' } },
-    ])).toBe('3 calls · weather_mcp ×2 · Read');
-  });
-});

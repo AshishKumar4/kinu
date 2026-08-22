@@ -537,7 +537,7 @@ export { createFileDispatcher, type FileToolDeps, type FileToolInput } from './t
 // transcript. It was a cf-backend component and the CLI therefore printed raw
 // argument values; see tools/tool-call-summary.ts.
 export {
-  summarizeToolCall, summarizeToolRun, describeToolCall, describeCommand,
+  summarizeToolCall, describeToolCall, describeCommand,
   isToolCallFailed, clip,
 } from './tools/tool-call-summary';
 export {

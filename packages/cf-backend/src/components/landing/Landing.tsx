@@ -33,7 +33,7 @@ const DIM = 'var(--c-text-2)';
 const FAINT = 'var(--c-text-3)';
 const CODE_INK = 'var(--c-text)';
 
-export const HERO_PHRASES = [
+const HERO_PHRASES = [
   'get better with use.',
   'craft their own tools.',
   'command scored swarms.',

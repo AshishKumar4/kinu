@@ -91,16 +91,3 @@ export const SWARM_ROWS: MctsRow[] = [
   },
 ];
 
-/**
- * Parents each aggregate vertex consumed, by node id.
- *
- * The engine writes this as one sentence into the journal — `fan-in over k
- * parents of depth d` — and two surfaces read the count back out of it: the
- * app's tree draws a `⋈k` badge, and the landing draws the same badge. The
- * count lives here so neither surface invents one.
- */
-export const SWARM_FAN_IN = { sw004: 3, sw009: 2 } as const;
-
-/** The same counts, keyed for a walk over rows whose ids are only known at
- *  runtime. */
-export const SWARM_FAN_IN_BY_ID: ReadonlyMap<string, number> = new Map(Object.entries(SWARM_FAN_IN));

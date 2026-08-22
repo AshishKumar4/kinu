@@ -7,14 +7,10 @@
  * process.stdin completely untouched.
  */
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { afterAll, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 
 const srcDir = resolve(__dirname, "../src");
-// The probe must live inside the package so @opentui/core resolves from it.
-const fixtures = mkdtempSync(join(__dirname, "import-probe-"));
-afterAll(() => rmSync(fixtures, { recursive: true, force: true }));
 
 const PROBE = `
 const stdinState = () => ({
@@ -33,9 +29,7 @@ process.exit(0);
 `;
 
 test("importing the setup/chat command graph leaves stdin untouched and opentui unloaded", () => {
-  const probePath = join(fixtures, "probe.ts");
-  writeFileSync(probePath, PROBE);
-  const run = spawnSync(process.execPath, [probePath], {
+  const run = spawnSync(process.execPath, ["-e", PROBE], {
     cwd: resolve(__dirname, ".."),
     encoding: "utf8",
     timeout: 30_000,

@@ -3,14 +3,16 @@ import {
   createSessionRecovery,
   fetchDeployedBuildSha,
   isNewerDeployedBuild,
-  isRpcTimeoutError,
-  REDIAL_MAX_INTERVAL_MS,
-  REDIAL_MIN_INTERVAL_MS,
 } from "../src/hooks/session-recovery";
 
 function timeoutError(method = "getWorkspaceSnapshot", ms = 30_000): Error {
   return new Error(`RPC call to ${method} timed out after ${ms}ms`);
 }
+
+const MIN_REDIAL_INTERVAL_MS = 15_000;
+const MAX_REDIAL_INTERVAL_MS = 60_000;
+
+type RpcFailureInput = Error | string | undefined;
 
 /** A controller over a fake clock, recording what it ordered. */
 interface Harness {
@@ -20,6 +22,7 @@ interface Harness {
   openSocket(isFirstForSession?: boolean): void;
   failTimeout(socketOpen?: boolean): void;
   failFast(): void;
+  fail(error: RpcFailureInput): void;
   succeed(): void;
   retryManually(): void;
 }
@@ -48,23 +51,29 @@ function harness(options: {
     openSocket(isFirstForSession = false) { recovery.socketOpened(isFirstForSession); },
     failTimeout(socketOpen = true) { recovery.rpcFailed(timeoutError(), socketOpen); },
     failFast() { recovery.rpcFailed(new Error("Connection closed"), true); },
+    fail(error: RpcFailureInput) { recovery.rpcFailed(error, true); },
     succeed() { recovery.rpcSucceeded(); },
     retryManually() { recovery.manualRetry(); },
   };
 }
 
-describe("isRpcTimeoutError", () => {
-  test("matches the agents SDK's verbatim timeout rejection", () => {
-    expect(isRpcTimeoutError(timeoutError())).toBe(true);
-    expect(isRpcTimeoutError(timeoutError("listBackgroundJobs", 5_000))).toBe(true);
-  });
+describe("timeout classification through the recovery controller", () => {
+  test("only the agents SDK's verbatim timeout rejection condemns the socket", () => {
+    const timedOut = harness({ timeoutsToRedial: 1 });
+    timedOut.fail(timeoutError("listBackgroundJobs", 5_000));
+    expect(timedOut.redials()).toBe(1);
 
-  test("rejects every other failure shape", () => {
-    expect(isRpcTimeoutError(new Error("Network connection lost."))).toBe(false);
-    expect(isRpcTimeoutError(new Error("Connection closed"))).toBe(false);
-    expect(isRpcTimeoutError(new Error("RPC call to x timed out eventually"))).toBe(false);
-    expect(isRpcTimeoutError("RPC call to x timed out after 30000ms")).toBe(false);
-    expect(isRpcTimeoutError(undefined)).toBe(false);
+    for (const error of [
+      new Error("Network connection lost."),
+      new Error("Connection closed"),
+      new Error("RPC call to x timed out eventually"),
+      "RPC call to x timed out after 30000ms",
+      undefined,
+    ]) {
+      const answered = harness({ timeoutsToRedial: 1 });
+      answered.fail(error);
+      expect(answered.redials()).toBe(0);
+    }
   });
 });
 
@@ -116,7 +125,7 @@ describe("the corpse detector", () => {
 
 describe("redial spacing", () => {
   test("a still-dead origin is re-probed at growing intervals, not hammered", () => {
-    const h = harness({ minRedialIntervalMs: REDIAL_MIN_INTERVAL_MS });
+    const h = harness({ minRedialIntervalMs: MIN_REDIAL_INTERVAL_MS });
     // First condemnation.
     h.failTimeout(); h.failTimeout(); h.failTimeout();
     expect(h.redials()).toBe(1);
@@ -124,17 +133,17 @@ describe("redial spacing", () => {
     for (let i = 0; i < 9; i += 1) h.failTimeout();
     expect(h.redials()).toBe(1);
     // Past the doubled interval (15s → 30s), the next condemnation dials again.
-    h.advance(REDIAL_MIN_INTERVAL_MS * 2);
+    h.advance(MIN_REDIAL_INTERVAL_MS * 2);
     h.failTimeout(); h.failTimeout(); h.failTimeout();
     expect(h.redials()).toBe(2);
     // Growth caps at 60s even as outages persist.
-    h.advance(REDIAL_MAX_INTERVAL_MS + 1);
+    h.advance(MAX_REDIAL_INTERVAL_MS + 1);
     h.failTimeout(); h.failTimeout(); h.failTimeout();
     expect(h.redials()).toBe(3);
   });
 
   test("one success after a redial restores the base spacing", () => {
-    const h = harness({ minRedialIntervalMs: REDIAL_MIN_INTERVAL_MS });
+    const h = harness({ minRedialIntervalMs: MIN_REDIAL_INTERVAL_MS });
     h.failTimeout(); h.failTimeout(); h.failTimeout();
     expect(h.redials()).toBe(1);
     h.succeed();
