@@ -21,6 +21,7 @@
 import type { CSSProperties, ReactElement } from 'react';
 
 import { PLATFORM_CATALOG } from '@kinu.run/core';
+import { PRESET_SEARCHES, type PresetSearch } from '../../lib/hero-searches';
 
 /** The storage quota the self-host cells quote, read off the catalog rather
  *  than retyped — the platform gate refuses a second copy of the number.
@@ -91,36 +92,107 @@ function HeroLeft({ install }: { install: string }): ReactElement {
 }
 
 const TABS = ['optimise', 'research', 'ideate'] as const;
+type HeroPreset = (typeof TABS)[number];
+const HERO_W = 560;
+const HERO_H = 440;
+
+function HeroGraph({ preset }: { preset: HeroPreset }): ReactElement {
+  const search: PresetSearch = PRESET_SEARCHES[preset];
+  const point = (id: string) => {
+    const vertex = search.vertices.find((candidate) => candidate.id === id);
+    if (vertex === undefined) throw new Error(`hero search ${preset} has no vertex ${id}`);
+    return { x: vertex.x * HERO_W, y: vertex.y * HERO_H };
+  };
+  return (
+    <g
+      className="ht-graph"
+      data-preset={preset}
+      data-live={preset === 'optimise' ? '' : undefined}
+      data-measured={preset === 'optimise' ? '' : undefined}
+      data-lit={preset === 'optimise' ? '' : undefined}
+      data-unranked={search.winnerId === null ? '' : undefined}
+      data-phase-start={search.phases[0]}
+      data-phase-mid={search.phases[1]}
+      data-phase-end={search.phases[2]}
+    >
+      <text className="ht-objective" x="14" y="24">{search.objective}</text>
+      <g className="ht-edges">
+        {search.vertices.map((vertex) => {
+          if (vertex.parent === null) return null;
+          const from = point(vertex.parent);
+          const to = point(vertex.id);
+          const dip = (to.y - from.y) * 0.42;
+          return (
+            <path
+              className={`ht-e${search.winPathIds.includes(vertex.id) ? ' ht-p' : ''}`}
+              data-arrive={vertex.arrives}
+              d={`M${from.x.toFixed(1)} ${from.y.toFixed(1)} Q${from.x.toFixed(1)} ${(from.y + dip).toFixed(1)} ${to.x.toFixed(1)} ${to.y.toFixed(1)}`}
+              key={vertex.id}
+            />
+          );
+        })}
+      </g>
+      <g className="ht-nodes">
+        {search.vertices.map((vertex) => {
+          const at = point(vertex.id);
+          const winner = search.winnerId === vertex.id;
+          const radius = vertex.parent === null ? 9 : winner ? 8 : 6;
+          return (
+            <g
+              className={`ht-v${vertex.parent === null ? ' ht-root' : ''}${search.winPathIds.includes(vertex.id) ? ' ht-p' : ''}`}
+              data-arrive={vertex.arrives}
+              data-won={winner ? '' : undefined}
+              key={vertex.id}
+            >
+              <circle cx={at.x} cy={at.y} r={radius} />
+              {vertex.scoreText !== undefined && search.labeled.includes(vertex.id) ? (
+                <text
+                  className="ht-s"
+                  data-good={vertex.good ? '' : undefined}
+                  x={at.x}
+                  y={at.y + radius + 16}
+                  textAnchor="middle"
+                >
+                  {vertex.scoreText}
+                </text>
+              ) : null}
+            </g>
+          );
+        })}
+      </g>
+      <text className="ht-winline" x="14" y={HERO_H - 12}>{search.winnerLine ?? ''}</text>
+    </g>
+  );
+}
 
 function HeroRight(): ReactElement {
   return (
-    <div className="hero-fig" style={{ position: 'relative', padding: '8px 0' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 12, flexWrap: 'wrap' }}>
-        <div data-hero-tabs style={{ display: 'flex', gap: 14, alignItems: 'baseline' }}>
-          <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '.16em', color: FAINT }}>FIG.01</span>
-          {TABS.map((m, at) => (
-            <span
-              key={m}
-              role="button"
-              tabIndex={0}
-              data-mode={m}
-              data-active={at === 0 ? '' : undefined}
-              style={{
-                fontFamily: MONO, fontSize: 10, letterSpacing: '.16em', cursor: 'pointer',
-                textTransform: 'uppercase',
-                borderBottom: at === 0 ? '1px solid color-mix(in srgb, var(--c-accent) 50%, transparent)' : '1px solid transparent',
-                paddingBottom: 2,
-              }}
+    <div id="hero-search" className="hero-fig" data-hero-search>
+      <div className="ht-bar">
+        <div className="ht-tabs">
+          <span className="fig">FIG.01</span>
+          {TABS.map((preset) => (
+            <button
+              className="ht-tab"
+              data-ht-tab={preset}
+              data-lit={preset === 'optimise' ? '' : undefined}
+              key={preset}
+              type="button"
             >
-              {m}
-            </span>
+              {preset}
+            </button>
           ))}
         </div>
-        <span data-hero-status style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '.16em', color: 'var(--c-accent)' }} />
+        <span className="ht-status" data-ht-status>{PRESET_SEARCHES.optimise.phases[2]}</span>
       </div>
-      {/* MotionRedesign2 owns this figure's data module; until it lands the
-          owner's own procedural canvas ships, driven by HERO_TREE_SCRIPT. */}
-      <canvas id="hero-tree" width={1120} height={880} style={{ width: '100%', height: 'auto', display: 'block' }} />
+      <svg
+        className="ht-svg"
+        viewBox={`0 0 ${HERO_W} ${HERO_H}`}
+        role="img"
+        aria-label="An interactive tree of agents. Optimise uses a recorded repository search; research and ideate are labeled design fixtures."
+      >
+        {TABS.map((preset) => <HeroGraph preset={preset} key={preset} />)}
+      </svg>
     </div>
   );
 }
@@ -329,50 +401,93 @@ function Clients({ cliFilm }: { cliFilm: string }): ReactElement {
   );
 }
 
+function PreviewControls(
+  { chapters }: { chapters: ReadonlyArray<readonly [label: string, beat: number]> },
+): ReactElement {
+  return (
+    <figcaption className="preview-controls">
+      <span className="preview-chapters">
+        {chapters.map(([label, beat]) => (
+          <button type="button" data-preview-go={beat} key={label}>{label}</button>
+        ))}
+      </span>
+      <span className="preview-actions">
+        <button type="button" data-preview-toggle>pause</button>
+        <button type="button" data-preview-replay>replay</button>
+      </span>
+    </figcaption>
+  );
+}
+
 function TuiPreview(): ReactElement {
-  const lines: ReadonlyArray<readonly [kind: string, text: ReactElement]> = [
-    ['cmd', <><span className="dollar">$</span> kinu chat triage</>],
-    ['say', <>Reading the repo and timing every test file.</>],
-    ['tool', <>run · laptop <span style={{ color: FAINT }}>time bun test</span></>],
-    ['out', <>7 pass · 912 ms total</>],
-    ['say', <>Slowest: summary.test.ts (~864 ms). dedupe is O(n²) — a Map keyed by id makes it linear.</>],
-  ];
   return (
     <figure className="film tui-preview" data-preview="tui">
-      <div className="anno ruled"><span>FIG.04 · TUI · INTERACTIVE</span><span>KINU CHAT · LIVE PREVIEW</span></div>
-      <pre className="term" data-beats={String(lines.length + 1)}>
-        {lines.map(([kind, text], i) => (
-          <span className="line" data-kind={kind} data-beat={i} key={i}>{text}</span>
-        ))}
-        <span className="line" data-kind="status" data-beat={lines.length}>● swarm ready · 3 branches idle</span>
-      </pre>
+      <div className="anno ruled"><span>FIG.04 · TUI · DOM PREVIEW</span><span>KINU CHAT · LOCAL</span></div>
+      <div className="preview-window">
+        <div className="preview-window-bar"><i /><i /><i /><b>KINU · TUI</b></div>
+        <div className="tui-shell">
+          <aside className="tui-rail">
+            <b>Kinu</b>
+            <span className="fig">WORKSPACES</span>
+            <span className="active">triage</span>
+            <span>research</span>
+            <span>site reliability</span>
+          </aside>
+          <div className="tui-main">
+            <div className="tui-bar"><b>triage</b><span>deepseek-v4-pro</span></div>
+            <div className="tui-turn" data-beat="0"><span className="key">YOU</span> Demonstrate the swarm on the Kinu codebase.</div>
+            <div className="tui-think" data-beat="1">Thinking · choose a flat ideate search, then report each branch.</div>
+            <div className="tui-tool" data-beat="2"><span>▸ agents · swarm</span><em>ideate · 5 branches</em></div>
+            <div className="tui-tool" data-beat="3"><span>▸ background job</span><em>detached · still running</em></div>
+            <div className="tui-answer" data-beat="4">Five distinct audit angles returned. Open any node to read its transcript and report.</div>
+            <div className="tui-status"><span>workspace: triage</span><span data-beat="5">swarm settled · 5 reports</span></div>
+          </div>
+        </div>
+      </div>
+      <PreviewControls chapters={[['ask', 1], ['tools', 3], ['result', 6]]} />
     </figure>
   );
 }
 
 function WorkspacePreview(): ReactElement {
   return (
-    <figure className="film ws-preview" data-preview="ws">
-      <div className="anno ruled"><span>FIG.05 · WORKSPACE · INTERACTIVE</span><span>WEB APP · SAME TOKENS</span></div>
-      <div className="ws">
-        <div className="ws-rail">
-          <div className="ws-item active">triage</div>
-          <div className="ws-item">research</div>
-          <div className="ws-item">site-reliability</div>
-        </div>
-        <div className="ws-main">
-          <div className="ws-bubble" data-beat="0">Find the slowest test in this repo and explain why.</div>
-          <div className="ws-tool" data-beat="1"><span className="key">▸ run</span> time bun test <span className="metric">7 pass · 912 ms</span></div>
-          <div className="ws-tool" data-beat="2"><span className="key">▸ run</span> bun test tests/summary.test.ts <span className="metric">864 ms</span></div>
-          <div className="ws-say" data-beat="3">Slowest: summary.test.ts (~864 ms of 912). dedupe is O(n²); a Map keyed by id makes it one pass.</div>
-          <div className="ws-job" data-beat="4"><span className="stat-k">JOB</span> detached · wakes when settled</div>
-          <div className="ws-inspector" data-beat="5">
-            <div className="fig">INSPECTOR</div>
-            <div>src/dedupe.ts <span className="metric">O(n²)</span></div>
-            <div>tests/summary.test.ts <span className="metric">864 ms</span></div>
+    <figure className="film ws-preview" data-preview="workspace">
+      <div className="anno ruled"><span>FIG.05 · WORKSPACE · DOM PREVIEW</span><span>WEB APP · SAME SYSTEM</span></div>
+      <div className="preview-window">
+        <div className="preview-window-bar"><i /><i /><i /><b>KINU · WEB</b></div>
+        <div className="wd-shell">
+          <aside className="wd-rail">
+            <b>Kinu</b>
+            <span className="fig">WORKSPACES</span>
+            <span className="active">Jarvis</span>
+            <span className="wd-child">Scout · research</span>
+            <span className="wd-child">Sentry · PR review</span>
+          </aside>
+          <div className="wd-main">
+            <div className="wd-bar"><b>Jarvis</b><span>● Live</span><em>Run</em></div>
+            <div className="wd-panes">
+              <div className="wd-chat">
+                <div className="wd-bubble" data-beat="0">Can you demonstrate the swarm on the Kinu codebase?</div>
+                <div className="wd-think" data-beat="1">Thinking · use ideate to return distinct, code-grounded audit angles.</div>
+                <div className="wd-tools" data-beat="2">
+                  <span><b>▸ run · workspace</b><em>mapped 7 packages</em></span>
+                  <span><b>▸ agents · swarm</b><em>ideate · 5 branches</em></span>
+                </div>
+                <div className="wd-system" data-beat="3"><b>System</b> Background job settled and woke this turn.</div>
+                <div className="wd-answer" data-beat="4">Five reports returned. The strongest finding traces one user-controlled redirect path.</div>
+                <div className="wd-composer"><span>Send a message…</span><b>Auto</b><em>Send</em></div>
+              </div>
+              <aside className="wd-inspector">
+                <div className="wd-tabs"><b>Work</b><span>Exploration</span><span>Agent</span></div>
+                <div data-beat="2"><span className="fig">NOW · 1 IN FLIGHT</span><p>Security audit search</p></div>
+                <div data-beat="3"><span className="fig">JOURNAL</span><p>Swarm settled · 5 reports</p></div>
+                <div data-beat="5"><span className="fig">SELECTED NODE</span><p>Open transcript →</p></div>
+              </aside>
+            </div>
           </div>
         </div>
       </div>
+      <PreviewControls chapters={[['ask', 1], ['swarm', 3], ['wake', 4], ['answer', 6]]} />
     </figure>
   );
 }

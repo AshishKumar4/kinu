@@ -57,9 +57,8 @@ process.env.KINU_HOME = home;
 process.env.KINU_BASE_URL = 'https://api.example.invalid/v1';
 process.env.KINU_AUTH = 'Bearer capture-fixture-not-a-real-key';
 
-// The CLI's config module captures KINU_HOME at import time, so every app
-// import below happens after the temp home is set — same reason
-// scripts/web-film.ts imports dynamically.
+// The CLI config module captures KINU_HOME at import time. Load every app
+// module only after the fixture home and endpoint are set.
 const { createTestRenderer } = await import('@opentui/core/testing');
 const { createRoot } = await import('@opentui/react');
 const React = await import('react');
