@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { asFetchFunction } from '@kinu.run/core';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import * as v from 'valibot';
 import { cloudflareTokenJsonToResponse, cloudflareUserResultToProfile } from '../src/auth/routes';
 import { getConfiguredOAuthProviders, listConfiguredOAuthProviders } from '../src/auth/providers';
 import {
@@ -17,12 +18,18 @@ import {
 import { buildCliInstallCommand } from '../src/cli/install-command';
 import { handleCliRequest } from '../src/cli/routes';
 import { sanitizeReturnTo } from '../src/auth/store';
-import { landingDocument } from '../src/lib/public-pages';
 
 const root = join(import.meta.dir, '..');
 
 function source(path: string): string {
   return readFileSync(join(root, path), 'utf8');
+}
+
+function landingTemplate(): string {
+  const document = source('landing.html');
+  const match = /<script type="__bundler\/template">\s*(.*?)\s*<\/script>/s.exec(document);
+  if (match?.[1] === undefined) throw new Error('landing bundle has no template');
+  return v.parse(v.string(), JSON.parse(match[1]));
 }
 
 function publicRouteEnv(): Env {
@@ -411,16 +418,14 @@ describe('auth and desktop security invariants', () => {
     expect(landing).toContain("url.pathname !== '/'");
   });
 
-  test('the front page hands over in place and never bounces a visitor to a script', () => {
-    const page = landingDocument("curl -fsSL 'https://kinu.example.com/install.sh' | bash");
-    // Authentication is a real link. The install command is already visible,
-    // so no script-gated toggle can hide the second way in.
+  test('the front page keeps both ways in visible in its supplied document', () => {
+    const page = landingTemplate();
     expect(page).toContain('href="/login"');
-    expect(page).toContain('TRY CLOUD AGENTS');
-    expect(page).toContain('landing-install-command');
-    expect(page).not.toContain('data-install-toggle');
-    // Escaped, not raw: the origin reaches this page through a template.
-    expect(page).toContain('curl -fsSL &#039;https://kinu.example.com/install.sh&#039; | bash');
+    expect(page).toContain('Try cloud agents');
+    expect(page).toContain('data-install-command');
+    expect(page).toContain('{{ installCommand }}');
+    expect(page).toContain('window.location.origin');
+    expect(page).toContain('Kinu terminal interface preview');
     expect(page).not.toContain('href="/install.sh"');
     expect(page).not.toContain('/api/health">Status');
     expect(page).not.toContain('OAuth sign-in required for the dashboard.');
