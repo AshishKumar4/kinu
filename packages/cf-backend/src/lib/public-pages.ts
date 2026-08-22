@@ -28,7 +28,7 @@ export interface LoginProvider {
 /** Sign-in is one decision: choose a configured provider. */
 export function loginDocument(providers: readonly LoginProvider[]): string {
   const body = providers.length === 0
-    ? '<p class="lede">No sign-in provider is configured.</p>'
+    ? '<p class="lede">Sign-in is unavailable.</p>'
     : `<div class="providers">${providers.map((provider) => (
       `<a class="provider" href="${provider.href}">Continue with ${escapeHtml(provider.label)}</a>`
     )).join('')}</div>`;
@@ -41,11 +41,11 @@ export function authDocument(title: string, body: string): string {
     title: title.includes('Kinu') ? title : `${title} — Kinu.run`,
     styles: CARD_CSS,
     nav: `<a class="quiet" href="/install">Install CLI</a><a class="icon" href="${REPO_URL}" target="_blank" rel="noopener noreferrer" aria-label="Kinu on GitHub">${GITHUB_ICON}</a>`,
-    body: `<main class="gate"><div class="card">
-  <h1>${escapeHtml(title)}</h1>
+    body: `<main class="gate"><section class="card" role="dialog" aria-modal="true" aria-labelledby="auth-title">
+  <a class="modal-close" href="/" aria-label="Close sign in">×</a>
+  <h1 id="auth-title">${escapeHtml(title)}</h1>
   ${body}
-</div></main>\n`,
-    footer: publicFooter(),
+</section></main>\n`,
   });
 }
 
@@ -69,17 +69,22 @@ export function approvalDocument(title: string, body: string): string {
 
 const CARD_CSS = `
 .page:has(.gate){width:100%;max-width:none;border-inline:0;background:var(--c-bg)}
-.page:has(.gate)>footer{display:none}
-.gate{flex:1;display:flex;align-items:flex-start;justify-content:center;
-padding:clamp(64px,13vh,140px) 24px 96px}
-.card{width:min(500px,100%);padding:32px;border:var(--rule);border-radius:var(--r-card);
-background:var(--c-surface)}
-.card h1{margin:0;font-size:32px;letter-spacing:-0.025em;max-width:none}
+.gate{position:relative;isolation:isolate;flex:1;display:flex;align-items:flex-start;justify-content:center;
+overflow:hidden;padding:clamp(64px,13vh,140px) 24px 96px}
+.gate::before{content:"";position:absolute;z-index:-1;inset:0;
+background:radial-gradient(circle at 50% 22%,var(--c-accent-subtle),transparent 36%)}
+.card{position:relative;width:min(500px,100%);padding:32px;border:var(--rule);
+border-radius:var(--r-card);background:var(--c-surface);box-shadow:var(--shadow-overlay)}
+.card h1{margin:0;padding-right:34px;font-size:32px;letter-spacing:-0.025em;max-width:none}
 .card h1.small{font-size:23px;letter-spacing:-0.015em}
 .card .lede{margin:16px 0 0;font-size:15px;max-width:none}
 .card p{margin:16px 0 0;color:var(--c-text-2);font-size:15px}
 .card .muted{color:var(--c-text-3);font-size:13px}
 .card code{overflow-wrap:anywhere}
+.modal-close{position:absolute;top:16px;right:16px;display:flex;align-items:center;
+justify-content:center;width:30px;height:30px;border-radius:var(--r-row);color:var(--c-text-3);
+font-size:22px;line-height:1}
+.modal-close:hover{background:var(--c-fill);color:var(--c-text)}
 .providers{display:grid;gap:12px;margin-top:26px}
 .provider{display:flex;align-items:center;justify-content:space-between;gap:12px;
 min-height:48px;padding:0 17px;border:1px solid var(--c-input-border);border-radius:var(--r-row);

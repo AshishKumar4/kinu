@@ -263,48 +263,25 @@ a{color:inherit;text-decoration:none}
    of that grid rather than a card floating on it, so nothing nests. */
 .page{width:min(1200px,100%);flex:1;display:flex;flex-direction:column;
 border-inline:var(--rule);background:var(--c-bg)}
-.bar{width:100%;box-sizing:border-box;display:flex;align-items:center;
-justify-content:space-between;gap:16px;min-height:58px;padding:0 var(--gutter);
-border-bottom:var(--rule);background:var(--c-sidebar)}
-.brand{display:inline-flex;align-items:center;gap:9px;font-family:var(--font-display);
-font-size:17px;font-weight:500;letter-spacing:-0.015em}
-.brand .mark{color:var(--c-accent);flex:none}
-.nav{display:flex;align-items:center;gap:4px}
-.nav .quiet{padding:6px 10px;color:var(--c-text-2);border-radius:var(--r-control);
-font-family:var(--font-mono);font-size:11.5px;letter-spacing:0.07em;text-transform:uppercase}
-.nav .quiet b{color:var(--c-accent-fg);font-weight:inherit;margin-right:7px}
-.nav .quiet:hover{color:var(--c-text);background:var(--c-fill)}
-.icon{display:inline-flex;padding:7px;color:var(--c-text-3);border-radius:var(--r-control)}
-.icon:hover{color:var(--c-text);background:var(--c-fill)}
-
-/* ── Sticky nav ────────────────────────────────────────────────────────
-   Blurred ground at 92% so the page reads through it while scrolled. */
-.bar{position:sticky;top:0;z-index:10;height:64px;display:flex;align-items:center;
-border-bottom:var(--rule);
-background:color-mix(in srgb,var(--c-bg) 92%,transparent);
+.bar{position:sticky;top:0;z-index:10;width:100%;height:64px;
+border-bottom:var(--rule);background:color-mix(in srgb,var(--c-bg) 92%,transparent);
 backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
-.bar > *,footer.bleed > *{width:100%;max-width:1280px;margin:0 auto;
-display:flex;align-items:center;border-left:1px dashed var(--c-rail);
-border-right:1px dashed var(--c-rail)}
-.bar > *,footer.bleed > .page{padding:0 var(--gutter)}
-.bar > .page{justify-content:space-between;gap:24px}
-footer.bleed > .page{justify-content:space-between}
-footer.bleed > .page > .footer-in{display:flex;align-items:baseline;
-justify-content:space-between;width:100%;flex-wrap:wrap;gap:16px}
-.brand{display:inline-flex;align-items:baseline;gap:12px;font-weight:700;
-font-size:24px;letter-spacing:-.02em;color:var(--c-text)}
+.bar-inner{width:min(1200px,100%);height:64px;margin:0 auto;padding:0 var(--gutter);
+display:flex;align-items:center;justify-content:space-between;gap:24px}
+.brand{display:inline-flex;align-items:center;gap:9px;font-family:var(--font-display);
+font-size:20px;font-weight:600;letter-spacing:-.02em;color:var(--c-text)}
 .brand:hover{color:var(--c-text)}
-.brand .mark{color:var(--c-accent);align-self:center}
+.brand .mark{color:var(--c-accent);flex:none}
 .brand .kana,.kana{font-family:var(--font-mono);font-size:10px;letter-spacing:.2em;
 color:var(--c-text-3)}
-.nav-cta{padding:9px 18px;min-height:0;font-size:11px}
-.nav{display:flex;align-items:center;gap:26px;font-family:var(--font-mono);
-font-size:11px;letter-spacing:.14em}
-.nav .quiet{color:var(--c-text-2)}
-.nav .quiet:hover{color:var(--c-accent)}
-.nav .quiet b{color:inherit;font-weight:inherit}
-.icon{display:inline-flex;padding:6px;color:var(--c-text-3)}
-.icon:hover{color:var(--c-accent)}
+.nav{display:flex;align-items:center;gap:18px;font-family:var(--font-mono);
+font-size:11px;letter-spacing:.1em}
+.nav .quiet{padding:7px 10px;color:var(--c-text-2);border-radius:var(--r-control);
+text-transform:uppercase}
+.nav .quiet:hover{color:var(--c-accent);background:var(--c-fill)}
+.nav .quiet b{color:inherit;font-weight:inherit;margin-right:7px}
+.icon{display:inline-flex;padding:7px;color:var(--c-text-3);border-radius:var(--r-control)}
+.icon:hover{color:var(--c-accent);background:var(--c-fill)}
 
 /* ── Type ──────────────────────────────────────────────────────────────
    Two voices per the design system: the grotesque at 600 for display and
@@ -474,7 +451,7 @@ export function publicPage(options: PublicPageOptions): string {
   const description = options.description ?? '';
   const header = options.nav === undefined
     ? ''
-    : `<header class="bar">${wordmark()}<nav class="nav">${options.nav}</nav></header>\n`;
+    : `<header class="bar"><div class="bar-inner">${wordmark()}<nav class="nav">${options.nav}</nav></div></header>\n`;
 
   return `<!doctype html>
 <html lang="en">
