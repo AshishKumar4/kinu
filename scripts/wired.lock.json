@@ -397,7 +397,6 @@
   "packages/core/src/platform-catalog.ts#PLATFORM_FACT_IDS (unreached-export)",
   "packages/core/src/platform-catalog.ts#PROVEN_LABELS (unreached-export)",
   "packages/core/src/platform-catalog.ts#injectableFaults (unreached-export)",
-  "packages/core/src/platform-catalog.ts#platformFact (unreached-export)",
   "packages/core/src/platform-catalog.ts#platformFactEntries (unreached-export)",
   "packages/core/src/prompt.ts#FALLBACK_PURPOSE (unreached-export)",
   "packages/core/src/prompting/agents-md.ts#AGENTS_MD_MAX_CHARS (unreached-export)",
