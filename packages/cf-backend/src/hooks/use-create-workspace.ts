@@ -1,6 +1,6 @@
 /**
  * The single agent-creation flow, shared by the home-screen mission composer
- * and the sidebar's CreateWorkspaceModal: models-connected gate, busy/error
+ * and the home screen's mission card: models-connected gate, busy/error
  * state, createWorkspaceFromMission, and navigation into the new workspace.
  *
  * The mission does not ride along as a chat message. It is what the workspace

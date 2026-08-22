@@ -35,7 +35,7 @@ import { classifyProgrammaticTurn, messageSignalId } from "@/components/backgrou
 import { WorkSurface, type SurfaceKind } from "@/components/surfaces/WorkSurface";
 import { HistoryBoundary, KinuMark } from "@/components/surfaces/shared";
 import { SupervisePage } from "./SupervisePage";
-import { SubordinateTabs } from "@/components/SubordinateTabs";
+import { SubordinateTabs, SpawnSubordinateDialog } from "@/components/SubordinateTabs";
 import { WorkspaceBar, type Altitude } from "@/components/WorkspaceBar";
 import { Composer } from "@/components/Composer";
 import { dataUrlRawBytes } from "@/components/AttachmentChip";
@@ -501,6 +501,15 @@ export default function WorkspacePage() {
   const [chatInput, setChatInput] = useState("");
   const [forkFor, setForkFor] = useState<string | null>(null); // message id to fork at, or null
   const [showClearConfirm, setShowClearConfirm] = useState(false);
+  // The sidebar's "+ New agent" opens the SAME spawn dialog the chat tab strip
+  // owns — one flow, one form, two doors into it. Only meaningful while the
+  // workspace socket is live, which is exactly when the sidebar shows the row.
+  const [hireOpen, setHireOpen] = useState(false);
+  useEffect(() => {
+    const h = () => { if (state.connectionStatus === "connected") setHireOpen(true); };
+    window.addEventListener("kinu:hire-subordinate", h);
+    return () => window.removeEventListener("kinu:hire-subordinate", h);
+  }, [state.connectionStatus]);
   // ── Older history ────────────────────────────────────────────────────────
   // `state.messages` is the LIVE list: the SDK's `get-messages` seed (which is
   // `Think.messages`, a bounded newest window governed by hydrationByteBudget)
@@ -596,9 +605,16 @@ export default function WorkspacePage() {
     if (!agentId) return;
     const running = state.isStreaming || state.backgroundJobs.some((j) => j.status === "running");
     window.dispatchEvent(new CustomEvent("kinu:workspace-activity", {
-      detail: { name: agentId, running, unseenChangelog: state.changelogUnseen },
+      detail: {
+        name: agentId,
+        running,
+        unseenChangelog: state.changelogUnseen,
+        agents: state.subordinates.map((sub) => ({
+          name: sub.name, displayName: sub.displayName, role: sub.role, status: sub.status,
+        })),
+      },
     }));
-  }, [agentId, state.isStreaming, state.backgroundJobs, state.changelogUnseen]);
+  }, [agentId, state.isStreaming, state.backgroundJobs, state.changelogUnseen, state.subordinates]);
 
   // The ONE rule that steers the surface on its own: a newly exposed sandbox
   // port switches to Output, where the running app is. Environment used to run
@@ -852,6 +868,7 @@ export default function WorkspacePage() {
         onRename={state.setDisplayName}
         connectionStatus={state.connectionStatus}
         working={state.isStreaming}
+        model={as?.model}
         {...(as?.forkLineage ? { forkParent: { workspace: as.forkLineage.sourceWorkspaceName, forkedAt: as.forkLineage.forkedAt } } : {})}
         settingsHref={`/settings/${agentId}`}
         altitude={altitude}
@@ -1090,6 +1107,12 @@ export default function WorkspacePage() {
           onCancel={() => setRestorePlan(null)} onConfirm={applyRestore} />
       )}
 
+      {hireOpen && (
+        <SpawnSubordinateDialog
+          onClose={() => setHireOpen(false)}
+          onSpawn={state.spawnSubordinate}
+        />
+      )}
       {showClearConfirm && (
         <Modal
           title="Clear conversation history"
