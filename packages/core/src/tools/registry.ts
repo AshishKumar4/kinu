@@ -758,6 +758,7 @@ export function renderExecuteToolsDescription(typeBlock: string): string {
     // (cf-backend/crafted-tool-registry.ts injectPreamble), so a statement
     // body, a trailing expression and an async arrow are all equally correct.
     'The sandbox is a JavaScript isolate: write statements, a single trailing expression, or one `async (...) => { … }` arrow — whichever fits — and the value your code produces comes back as the result. Type annotations, interfaces and generics do not parse there.',
+    'Start every program with exactly one `//` comment on the first nonblank line. State the operation and target in plain language, for example `// Read package.json to inspect its scripts`. The interface shows this line to the user as the call intent.',
     `Namespaces bound in this sandbox:\n${typeBlock}`,
   ].join('\n\n');
 }

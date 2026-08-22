@@ -14,6 +14,8 @@ import {
   WarningCircleIcon, ProhibitIcon,
   ClockCounterClockwiseIcon, LightningIcon,
   SparkleIcon, ArrowBendUpRightIcon, GearSixIcon, EyeIcon,
+  TerminalWindowIcon, FileTextIcon, UsersThreeIcon, BrainIcon,
+  ListChecksIcon, GlobeIcon, ChartLineUpIcon, DotsThreeCircleIcon,
 } from "@phosphor-icons/react";
 import { isToolUIPart, getToolName } from "ai";
 import type { UIMessage, FileUIPart } from "ai";
@@ -139,6 +141,33 @@ function displayToolValue(value: JsonValue): string {
   return v.is(v.string(), value) ? value : JSON.stringify(value, null, 2) ?? "";
 }
 
+const TOOL_LABELS = new Map(Object.entries({
+  run: "Run command",
+  execute_tools: "Tool program",
+  file: "Files",
+  agents: "Agents",
+  memory: "Memory",
+  tasks: "Tasks",
+  web: "Web",
+  report: "Report",
+}));
+
+function toolLabel(toolName: string): string {
+  return TOOL_LABELS.get(toolName) ?? toolName;
+}
+
+function toolIcon(toolName: string): ReactNode {
+  if (toolName === "run") return <TerminalWindowIcon size={15} />;
+  if (toolName === "execute_tools") return <LightningIcon size={15} />;
+  if (toolName === "file") return <FileTextIcon size={15} />;
+  if (toolName === "agents") return <UsersThreeIcon size={15} />;
+  if (toolName === "memory") return <BrainIcon size={15} />;
+  if (toolName === "tasks") return <ListChecksIcon size={15} />;
+  if (toolName === "web") return <GlobeIcon size={15} />;
+  if (toolName === "report") return <ChartLineUpIcon size={15} />;
+  return <DotsThreeCircleIcon size={15} />;
+}
+
 function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText }: {
   toolName: string; input?: JsonObject; output?: JsonValue; isRunning: boolean; isError: boolean;
   /** The transport's own reason for a protocol-level failure (a crashed
@@ -183,21 +212,33 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText 
   const failed = isError || !!provisionErr;
   return (
     <div>
-      <button onClick={() => setExpanded(!expanded)} aria-expanded={expanded} className="group/tool flex w-full items-center gap-2.5 px-4 py-2.5 text-left transition-colors cursor-pointer hover:bg-[var(--c-elevated)]">
-        <CaretRightIcon size={10} aria-hidden className={`shrink-0 p-text-3 transition-transform duration-150 ${expanded ? "rotate-90" : ""}`} />
-        <span className={`shrink-0 font-mono text-[11.5px] ${isRunning ? "p-shimmer" : failed ? "p-danger" : "p-text-2"}`}>{toolName}{runtime && runtime !== "workspace" ? ` · ${runtime}` : ""}</span>
-        {/* What the call does, then what it was passed. The description is
-            derived from the same arguments as the summary — when they do
-            not say, it is absent rather than invented. */}
-        <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] p-text-4" title={[description, summary].filter(Boolean).join(" · ")}>
-          {description ?? summary ?? ""}
+      <button
+        type="button"
+        onClick={() => setExpanded(!expanded)}
+        aria-expanded={expanded}
+        data-tool-state={isRunning ? "running" : failed ? "failed" : "done"}
+        className="group/tool grid w-full cursor-pointer grid-cols-[34px_minmax(0,1fr)_auto_auto] items-center gap-3 px-3.5 py-3 text-left transition-colors hover:bg-[var(--c-elevated)]"
+      >
+        <span className={`flex size-[34px] items-center justify-center rounded-lg border ${isRunning ? "border-[var(--c-accent)] p-accent-subtle p-gold" : failed ? "border-[var(--c-danger)] bg-[var(--c-danger-tint)] p-danger" : "p-border p-recessed p-text-3"}`}>
+          {toolIcon(toolName)}
         </span>
-        <span className="shrink-0 text-[11px]">
-          {isRunning ? <span className="p-gold">running…</span>
-            : failed ? <span className="p-danger">failed</span>
-            : durationLabel ? <span className="p-success p-num">{durationLabel}</span>
-            : null}
+        <span className="min-w-0">
+          <span className="flex min-w-0 items-center gap-2">
+            <strong className="truncate text-[12.5px] font-semibold p-text">{description || toolLabel(toolName)}</strong>
+            {runtime && <span className="shrink-0 rounded-full p-fill px-2 py-0.5 font-mono text-[9.5px] p-text-3">{runtime}</span>}
+          </span>
+          <span className="mt-0.5 block truncate font-mono text-[11px] p-text-4" title={[summary, description].filter(Boolean).join(" · ")}>
+            {summary || "Tool call"}
+          </span>
         </span>
+        <span className={`inline-flex min-h-6 shrink-0 items-center gap-1.5 rounded-full px-2 text-[10px] font-semibold ${isRunning ? "p-accent-subtle p-gold" : failed ? "p-badge-danger" : "p-badge-success"}`}>
+          {isRunning
+            ? <><span className="size-1.5 rounded-full p-dot-accent p-dot-pulse" />Running</>
+            : failed
+              ? <><WarningCircleIcon size={11} weight="fill" />Failed</>
+              : <><CheckCircleIcon size={11} weight="fill" />{durationLabel ?? "Done"}</>}
+        </span>
+        <CaretRightIcon size={11} aria-hidden className={`shrink-0 p-text-3 transition-transform duration-150 ${expanded ? "rotate-90" : ""}`} />
       </button>
       {provisionErr && (
         <div className="p-tint-warning mt-1.5 ml-5 rounded-lg border px-3 py-2 text-xs p-text-2 flex items-start gap-2">
@@ -293,8 +334,15 @@ function ToolCallGroup({ parts }: { parts: readonly AnyToolPart[] }) {
   // expander so a 30-call repair does not bury the prose around it.
   const VISIBLE = 8;
   const shown = showAll ? parts : parts.slice(0, VISIBLE);
+  const failedCount = parts.filter(partFailed).length;
   return (
-    <div className="overflow-hidden rounded-lg border p-border p-surface">
+    <div className="overflow-hidden rounded-xl border p-border p-surface">
+      <div className="flex items-center gap-2 border-b p-border p-recessed px-3.5 py-2">
+        <LightningIcon size={13} className="p-gold" weight="fill" />
+        <span className="text-[11.5px] font-semibold p-text-2">Agent activity</span>
+        <span className="font-mono text-[10px] p-text-4">{parts.length} call{parts.length === 1 ? "" : "s"}</span>
+        {failedCount > 0 && <span className="ml-auto p-badge-danger px-2 py-0.5">{failedCount} failed</span>}
+      </div>
       <div className="divide-y divide-dashed divide-[var(--c-dash)]">
         {shown.map((part) => <ToolCallPart key={part.toolCallId} part={part} />)}
       </div>

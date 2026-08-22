@@ -174,9 +174,8 @@ async function readTails(page: Page): Promise<Record<string, TailFrame>> {
         heightCostPx,
         thinkingRows: row.querySelectorAll('[aria-live="polite"]').length,
         shimmerLabels: row.querySelectorAll('.p-shimmer').length,
-        // The adopted tool row uses the same shimmer register as other live
-        // labels; it no longer adds a second pulse dot beside the caret.
-        runningIndicators: row.querySelectorAll('.p-shimmer').length,
+        // Tool styling can change; the semantic state is the contract.
+        runningIndicators: row.querySelectorAll('[data-tool-state="running"]').length,
       };
     }
     return measured;
@@ -190,7 +189,7 @@ async function run(): Promise<Observed> {
     await stream.goto(`${origin}/gallery.html?frame=streaming`, { waitUntil: 'networkidle0' });
     await stream.reload({ waitUntil: 'networkidle0' });
     await stream.waitForSelector('[data-gallery-stream] .p-streaming');
-    await stream.waitForSelector('[data-stream-id="st-tool"] .p-shimmer', { timeout: 20_000 });
+    await stream.waitForSelector('[data-stream-id="st-tool"] [data-tool-state="running"]', { timeout: 20_000 });
     const tails = await readTails(stream);
     await stream.close();
 
@@ -333,11 +332,10 @@ describe('the streaming turn, as a browser lays it out', () => {
     expect(observed.tails[NO_PARTS]!.thinkingRows).toBe(1);
   });
 
-  test('a call in flight owns the indicator — no second claim under it', () => {
-    // The honesty property. Its row already shimmers; adding a "Thinking" row
-    // below would assert two concurrent activities from one stream position.
+  test('a call in flight owns the running state — no second claim under it', () => {
+    // One stream position reports one current activity.
     expect(observed.tails[TOOL_IN_FLIGHT]!.thinkingRows).toBe(0);
-    expect(observed.tails[TOOL_IN_FLIGHT]!.runningIndicators).toBeGreaterThan(0);
+    expect(observed.tails[TOOL_IN_FLIGHT]!.runningIndicators).toBe(1);
     expect(observed.tails[TOOL_IN_FLIGHT]!.caretWidth).toBe('none');
   });
 
