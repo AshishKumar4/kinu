@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
-import { Link, Outlet, useLocation } from "react-router-dom";
-import { BrainIcon, GearIcon, GithubLogoIcon, ListIcon, PlusIcon } from "@phosphor-icons/react";
+import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { GearIcon, GithubLogoIcon, ListIcon, PlusIcon } from "@phosphor-icons/react";
 import Sidebar from "./Sidebar";
-import { CreateWorkspaceModal } from "./CreateWorkspaceModal";
 
 /**
  * Top-level shell — left rail (Sidebar with user info + agent list) +
@@ -12,7 +11,7 @@ import { CreateWorkspaceModal } from "./CreateWorkspaceModal";
  */
 export default function Layout() {
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [showCreate, setShowCreate] = useState(false);
+  const navigate = useNavigate();
   const location = useLocation();
 
   // Any navigation (agent link, settings, new-agent create) closes the drawer.
@@ -30,16 +29,16 @@ export default function Layout() {
           >
             <ListIcon size={18} />
           </button>
-          <Link to="/" className="flex items-center gap-2 rounded-md px-2 py-1.5">
-            <BrainIcon size={21} weight="duotone" className="p-accent" />
-            <span className="font-medium tracking-tight">Kinu</span>
+          <Link to="/" className="flex items-center gap-[9px] rounded-md px-2 py-1.5">
+            <span aria-hidden="true" className="inline-block leading-none text-[18px] text-[var(--c-accent)] font-serif rotate-12">❯</span>
+            <span className="font-serif font-semibold text-[18px] tracking-[.01em]">Kinu</span>
           </Link>
         </div>
         <div className="flex items-center gap-1">
           <a href="https://github.com/AshishKumar4/kinu" target="_blank" rel="noopener noreferrer" aria-label="GitHub repository" className="flex size-9 items-center justify-center rounded-md p-text-2 p-card-hover hover:p-text">
             <GithubLogoIcon size={17} />
           </a>
-          <button type="button" onClick={() => setShowCreate(true)} aria-label="New workspace" className="flex size-9 items-center justify-center rounded-md p-text-2 p-card-hover hover:p-text">
+          <button type="button" onClick={() => navigate("/")} aria-label="New workspace" className="flex size-9 items-center justify-center rounded-md p-text-2 p-card-hover hover:p-text">
             <PlusIcon size={16} />
           </button>
           <Link to="/user/settings" aria-label="Account settings" className="flex size-9 items-center justify-center rounded-md p-text-2 p-card-hover hover:p-text">
@@ -49,7 +48,7 @@ export default function Layout() {
       </header>
 
       {/* Desktop rail */}
-      <aside className="hidden w-64 shrink-0 h-full p-sidebar border-r p-border md:block">
+      <aside className="hidden w-60 shrink-0 h-full p-sidebar border-r p-border md:block">
         <Sidebar />
       </aside>
 
@@ -67,7 +66,6 @@ export default function Layout() {
         <Outlet />
       </main>
 
-      {showCreate && <CreateWorkspaceModal onClose={() => setShowCreate(false)} />}
     </div>
   );
 }

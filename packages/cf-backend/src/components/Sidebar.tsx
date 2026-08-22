@@ -1,58 +1,83 @@
 /**
- * Left sidebar — ChatGPT/Codex-style.
+ * Left sidebar — the mock's 240px rail.
  *
  *   ┌─────────────────┐
- *   │ ◉  Kinu      │
+ *   │ ❯ Kinu          │   Newsreader brand lockup
  *   │ + New workspace │
- *   │ ─── Agents ───  │
- *   │ ● refactor-X    │
- *   │ ○ exploration   │
- *   │ ...             │
+ *   │ WORKSPACES      │
+ *   │ ● Jarvis    4h  │
+ *   │   ├ Scout       │   nested subordinates of the OPEN workspace
+ *   │   └ + New agent │
  *   │ ─────────────── │
- *   │ 👤 user.email   │
- *   │   ⚙ Settings    │
- *   │   ⎋ Sign out    │
+ *   │ A user@…     ⚙  │
  *   └─────────────────┘
+ *
+ * The nested agent rows are real data for exactly one workspace: the one open
+ * this session (only a mounted WorkspacePage has a live socket, and it bridges
+ * its subordinate roster here over `kinu:workspace-activity`). "+ New agent"
+ * asks that page to open its spawn dialog (`kinu:hire-subordinate`); with no
+ * workspace mounted there is nothing to hire INTO, so the row only renders
+ * under an open workspace.
  */
 import { useEffect, useState, useCallback, useRef, type FormEvent } from "react";
 import { Link, NavLink, useMatch, useNavigate } from "react-router-dom";
-import { PlusIcon, GearIcon, GithubLogoIcon, TrashIcon, SignOutIcon, CaretRightIcon, PencilSimpleIcon, CheckIcon, XIcon, SunIcon, MoonIcon } from "@phosphor-icons/react";
+import { GearIcon, TrashIcon, SignOutIcon, PencilSimpleIcon, CheckIcon, XIcon } from "@phosphor-icons/react";
 import { Button } from "@cloudflare/kumo";
 import { FilledButton } from "./ui/FilledButton";
 import { listWorkspaces, removeWorkspace, getProfile, type WorkspaceEntry, type UserProfile } from "../lib/user-api";
 import { useWorkspaceRpc } from "../hooks/use-kinu";
-import { useTheme, toggleMode } from "../hooks/use-theme";
-import { CreateWorkspaceModal } from "./CreateWorkspaceModal";
 import { ModeToggle } from "./theme-toggle";
-import { KinuMark } from "./surfaces/shared";
 import { Modal } from "./ui/Modal";
 import * as v from "valibot";
 import { renderCauseChain, renderThrownChain } from "@kinu.run/core/obs";
-
-/** Live per-workspace activity, bridged from the mounted WorkspacePage socket
- *  via a window event (only the open workspace has a live socket, so the roster
- *  reflects status for workspaces visited this session). */
-interface WorkspaceActivity { running: boolean; unseenChangelog: number; }
-const WorkspaceActivityEventSchema = v.object({
-  name: v.string(),
-  running: v.boolean(),
-  unseenChangelog: v.number(),
-});
 
 // Route families in App.tsx that mount a live useKinu/useAgent socket for
 // :agentId. Deleting that agent must first navigate away from ALL of them —
 // a still-mounted socket auto-reconnects and resurrects the destroyed DO.
 const WORKSPACE_SCOPED_SECTIONS = ["workspace", "mcts", "settings", "triggers"];
 
-function relativeActivity(lastVisited: number): string | null {
+/** The nested-agent payload the open workspace broadcasts beside its running
+ *  flag — identity fields only, straight off the SubordinateRosterEntry. */
+interface SidebarAgent {
+  name: string;
+  displayName: string;
+  role: string;
+  status: string;
+}
+
+const SidebarAgentSchema = v.object({
+  name: v.string(),
+  displayName: v.string(),
+  role: v.string(),
+  status: v.string(),
+});
+
+/** Live per-workspace activity, bridged from the mounted WorkspacePage socket
+ *  via a window event (only the open workspace has a live socket, so the roster
+ *  reflects status for workspaces visited this session). */
+interface WorkspaceActivity {
+  running: boolean;
+  unseenChangelog: number;
+  agents: SidebarAgent[];
+}
+const WorkspaceActivityEventSchema = v.object({
+  name: v.string(),
+  running: v.boolean(),
+  unseenChangelog: v.number(),
+  agents: v.array(SidebarAgentSchema),
+});
+
+/** The mock's short ages: "4h", not "Active 4h ago" — the dot already says
+ *  it is activity, and the column is 30px wide. */
+function shortAge(lastVisited: number): string | null {
   if (!lastVisited) return null;
   const seconds = Math.max(0, Math.floor((Date.now() - lastVisited) / 1000));
-  if (seconds < 60) return "Active just now";
-  if (seconds < 3600) return `Active ${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `Active ${Math.floor(seconds / 3600)}h ago`;
-  if (seconds < 2_592_000) return `Active ${Math.floor(seconds / 86400)}d ago`;
-  if (seconds < 31_536_000) return `Active ${Math.floor(seconds / 2_592_000)}mo ago`;
-  return `Active ${Math.floor(seconds / 31_536_000)}y ago`;
+  if (seconds < 60) return "now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
+  if (seconds < 2_592_000) return `${Math.floor(seconds / 86400)}d`;
+  if (seconds < 31_536_000) return `${Math.floor(seconds / 2_592_000)}mo`;
+  return `${Math.floor(seconds / 31_536_000)}y`;
 }
 
 function SidebarRenameEditor({ workspace, onSaved, onCancel }: {
@@ -125,7 +150,6 @@ export default function Sidebar() {
     ? sectionMatch.params.agentId
     : undefined;
   const navigate = useNavigate();
-  const { mode } = useTheme();
   const [workspaces, setWorkspaces] = useState<WorkspaceEntry[]>([]);
   const [workspaceTotal, setWorkspaceTotal] = useState(0);
   const [listError, setListError] = useState(false);
@@ -133,7 +157,6 @@ export default function Sidebar() {
   const [profileFailed, setProfileFailed] = useState(false);
   const [activity, setActivity] = useState<Record<string, WorkspaceActivity>>({});
   const [showUserMenu, setShowUserMenu] = useState(false);
-  const [showCreate, setShowCreate] = useState(false);
   const [editingWorkspace, setEditingWorkspace] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<WorkspaceEntry | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
@@ -158,14 +181,15 @@ export default function Sidebar() {
     getProfile().then((p) => { setProfile(p); setProfileFailed(false); }).catch(() => setProfileFailed(true));
   }, [refreshWorkspaces]);
 
-  // Reflect the open workspace's live status on its roster row.
+  // Reflect the open workspace's live status on its roster row, and carry its
+  // nested agent roster for the mock's indented block.
   useEffect(() => {
     const h = (e: Event) => {
       if (!(e instanceof CustomEvent)) return;
       const parsed = v.safeParse(WorkspaceActivityEventSchema, e.detail);
       if (!parsed.success) return;
-      const { name, running, unseenChangelog } = parsed.output;
-      setActivity((prev) => ({ ...prev, [name]: { running, unseenChangelog } }));
+      const { name, running, unseenChangelog, agents } = parsed.output;
+      setActivity((prev) => ({ ...prev, [name]: { running, unseenChangelog, agents } }));
     };
     window.addEventListener("kinu:workspace-activity", h);
     return () => window.removeEventListener("kinu:workspace-activity", h);
@@ -213,132 +237,161 @@ export default function Sidebar() {
 
   // The responsive wrappers (desktop rail / mobile drawer) live in layout.tsx;
   // this renders just the column content so both reuse one roster + user menu.
+  const activeAgents = agentId ? activity[agentId]?.agents : undefined;
+
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* Logo + new workspace */}
-      <div className="px-3 pt-4 pb-2 flex flex-col gap-2">
-        <div className="flex items-center justify-between">
-          <Link to="/" className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg p-card-hover transition-colors">
-            {/* The mark at 20px in the accent — the same lockup the signed-out
-                pages wear, so signing in does not change whose product it is.
-                16px reads as noise beside 15px text; 20px reads as a mark. */}
-            <KinuMark size={20} className="text-[var(--c-accent)]" />
-            <span className="p-heading text-[17px] p-text">Kinu</span>
-          </Link>
-          <a
-            href="https://github.com/AshishKumar4/kinu"
-            target="_blank" rel="noopener noreferrer" aria-label="GitHub repository"
-            className="flex size-8 items-center justify-center rounded-md p-text-2 p-card-hover hover:p-text transition-colors"
-          >
-            <GithubLogoIcon size={17} />
-          </a>
-        </div>
+      {/* Brand — the mock's lockup: the chevron caught mid-turn, Newsreader,
+          gold, rotated the way the stroke leans. */}
+      <div className="flex items-center gap-2.5 px-5 pt-[18px] pb-2">
+        <Link to="/" className="flex items-center gap-[9px]" aria-label="Kinu home">
+          <span aria-hidden="true" className="inline-block leading-none text-[20px] text-[var(--c-accent)] font-serif rotate-12">❯</span>
+          <span className="font-serif font-semibold text-[20px] tracking-[.01em] p-text">Kinu</span>
+        </Link>
+      </div>
+
+      {/* New workspace — the outlined control the mock draws, into the
+          mission-first screen (the home route). */}
+      <div className="px-3.5 pb-1.5">
         <button
-          onClick={() => setShowCreate(true)}
-          className="flex items-center gap-2 px-3 py-2 p-btn-quiet p-row-text cursor-pointer"
+          onClick={() => navigate("/")}
+          className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-[10px] border p-border-strong px-3.5 py-[9px] text-[13px] font-medium p-text-2 transition-colors hover:p-gold hover:border-[var(--c-accent)]"
         >
-          <PlusIcon size={14} />
+          <span className="text-[15px] leading-none">+</span>
           <span>New workspace</span>
         </button>
       </div>
 
       {/* Workspace list */}
-      <div className="flex-1 overflow-y-auto px-2 pt-2 pb-3">
-        <div className="p-eyebrow px-2 pb-1.5">Workspaces</div>
+      <div className="flex-1 overflow-y-auto pt-2 pb-3">
+        <div className="px-5 pb-2 pt-4 font-mono text-[9px] tracking-[.18em] uppercase p-text-4">
+          Workspaces{workspaceTotal > workspaces.length ? ` · ${workspaces.length}/${workspaceTotal}` : ""}
+        </div>
         {workspaces.length === 0 && !listError && (
-          <div className="px-2 py-3 text-xs p-text-3">No workspaces yet. Click "New workspace" to start.</div>
+          <div className="px-5 py-3 text-xs p-text-3">No workspaces yet.</div>
         )}
         {listError && (
           <button
             onClick={() => refreshWorkspaces()}
-            className="w-full text-left px-2 py-2 text-xs p-warning rounded-md p-card-hover transition-colors"
+            className="w-full text-left px-5 py-2 text-xs p-warning rounded-md p-card-hover transition-colors"
           >Couldn't load workspaces. Tap to retry.</button>
         )}
-        <ul className="space-y-0.5">
+        <ul>
           {workspaces.map((a) => {
-            const lastActive = relativeActivity(a.lastVisited);
+            const age = shortAge(a.lastVisited);
             const live = activity[a.name];
             const editing = editingWorkspace === a.name;
+            const isActive = a.name === agentId;
             return (
-              <li key={a.name} className="group relative">
-                {editing ? (
-                  <SidebarRenameEditor
-                    workspace={a}
-                    onCancel={() => setEditingWorkspace(null)}
-                    onSaved={(displayName) => {
-                      setWorkspaces((current) => current.map((entry) => entry.name === a.name ? { ...entry, displayName } : entry));
-                      setEditingWorkspace(null);
-                    }}
-                  />
-                ) : (
-                  <>
-                    <NavLink
-                      to={`/workspace/${a.name}`}
-                      className={({ isActive }) =>
-                        `flex min-w-0 flex-col pl-2.5 pr-12 py-1.5 rounded-lg transition-colors ${
-                          isActive ? 'p-nav-active' : 'p-row-hover p-text-2 hover:p-text'
-                        }`
-                      }
+              <li key={a.name}>
+                <div className="group relative mx-2">
+                  {editing ? (
+                    <SidebarRenameEditor
+                      workspace={a}
+                      onCancel={() => setEditingWorkspace(null)}
+                      onSaved={(displayName) => {
+                        setWorkspaces((current) => current.map((entry) => entry.name === a.name ? { ...entry, displayName } : entry));
+                        setEditingWorkspace(null);
+                      }}
+                    />
+                  ) : (
+                    <>
+                      <NavLink
+                        to={`/workspace/${a.name}`}
+                        className={({ isActive: linkActive }) =>
+                          `flex items-center gap-2 rounded-lg px-3 py-[7px] transition-colors ${
+                            linkActive ? 'bg-[var(--c-elevated)]' : 'hover:bg-[var(--c-elevated)]'
+                          }`
+                        }
+                      >
+                        {/* One dot, four honest states: working (green pulse),
+                            unread self-changes (accent), the open workspace
+                            (the mock's gold selection dot), plain row (none). */}
+                        <span className="size-1.5 shrink-0 rounded-full">
+                          {live?.running
+                            ? <span className="block size-1.5 rounded-full p-dot-success p-dot-pulse" title="Working now" />
+                            : (live?.unseenChangelog ?? 0) > 0
+                              ? <span className="block size-1.5 rounded-full p-dot-accent" title={`${live!.unseenChangelog} new self-change${live!.unseenChangelog === 1 ? "" : "s"}`} />
+                              : isActive
+                                ? <span className="block size-1.5 rounded-full p-dot-accent" />
+                                : null}
+                        </span>
+                        <span className={`min-w-0 flex-1 truncate text-[13px] ${isActive ? 'font-semibold p-text' : 'font-semibold p-text-2'}`}>{a.displayName}</span>
+                        {age && <span className="shrink-0 text-[10.5px] tabular-nums p-text-4">{age}</span>}
+                      </NavLink>
+                      <button
+                        onClick={() => setEditingWorkspace(a.name)}
+                        className="absolute right-6 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-60 focus-visible:opacity-100 hover:!opacity-100 p-text-3 hover:p-text transition-all p-1"
+                        title="Rename"
+                        aria-label={`Rename workspace ${a.displayName}`}
+                      ><PencilSimpleIcon size={11} /></button>
+                      <button
+                        onClick={() => { setDeleteError(null); setDeleteTarget(a); }}
+                        className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-60 focus-visible:opacity-100 hover:!opacity-100 p-text-3 hover:p-danger transition-all p-1"
+                        title="Remove"
+                        aria-label={`Remove workspace ${a.displayName}`}
+                      ><TrashIcon size={11} /></button>
+                    </>
+                  )}
+                </div>
+
+                {/* Nested subordinates — the open workspace's real roster, in
+                    the mock's indented block with its left rule. */}
+                {isActive && activeAgents && activeAgents.length > 0 && (
+                  <div className="ml-[21px] mt-0.5 border-l p-border pl-2.5">
+                    {activeAgents.map((sub) => (
+                      <NavLink
+                        key={sub.name}
+                        to={`/workspace/${a.name}/agents/${sub.name}`}
+                        className="flex items-center gap-2 rounded-lg px-2.5 py-[5px] transition-colors hover:bg-[var(--c-elevated)]"
+                        title={sub.role}
+                      >
+                        <span className={`size-1.5 shrink-0 rounded-full ${sub.status === "working" ? "p-dot-success p-dot-pulse" : sub.status === "awaiting_input" ? "p-dot-warning" : "bg-[var(--c-fill)] border p-border"}`} />
+                        <span className="min-w-0 flex-1 truncate text-[12.5px] p-text-2">{sub.displayName}</span>
+                        <span className="shrink-0 max-w-20 truncate text-[10px] p-text-4">{sub.role}</span>
+                      </NavLink>
+                    ))}
+                    <button
+                      onClick={() => window.dispatchEvent(new CustomEvent("kinu:hire-subordinate"))}
+                      className="w-full rounded-lg px-2.5 py-[5px] text-left text-[11.5px] p-text-4 transition-colors hover:p-gold"
                     >
-                      <span className="truncate p-row-text font-medium">{a.displayName}</span>
-                      {lastActive && <span className="truncate p-meta p-text-3 font-normal">{lastActive}</span>}
-                    </NavLink>
-                    {live && (live.running || live.unseenChangelog > 0) && (
-                      <span className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1 transition-opacity group-hover:opacity-0">
-                        {live.running && <span className="size-1.5 rounded-full p-dot-success p-dot-pulse" title="Working now" />}
-                        {live.unseenChangelog > 0 && <span className="size-1.5 rounded-full p-dot-accent" title={`${live.unseenChangelog} new self-change${live.unseenChangelog === 1 ? "" : "s"}`} />}
-                      </span>
-                    )}
+                      + New agent
+                    </button>
+                  </div>
+                )}
+                {isActive && activeAgents && activeAgents.length === 0 && (
+                  <div className="ml-[21px] mt-0.5 border-l p-border pl-2.5">
                     <button
-                      onClick={() => setEditingWorkspace(a.name)}
-                      className="absolute right-6 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-60 focus-visible:opacity-100 hover:!opacity-100 p-text-3 hover:p-text transition-all p-1"
-                      title="Rename"
-                      aria-label={`Rename workspace ${a.displayName}`}
-                    ><PencilSimpleIcon size={12} /></button>
-                    <button
-                      onClick={() => { setDeleteError(null); setDeleteTarget(a); }}
-                      className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-60 focus-visible:opacity-100 hover:!opacity-100 p-text-3 hover:p-danger transition-all p-1"
-                      title="Remove"
-                      aria-label={`Remove workspace ${a.displayName}`}
-                    ><TrashIcon size={12} /></button>
-                  </>
+                      onClick={() => window.dispatchEvent(new CustomEvent("kinu:hire-subordinate"))}
+                      className="w-full rounded-lg px-2.5 py-[5px] text-left text-[11.5px] p-text-4 transition-colors hover:p-gold"
+                    >
+                      + New agent
+                    </button>
+                  </div>
                 )}
               </li>
             );
           })}
         </ul>
-        {workspaceTotal > workspaces.length && (
-          <div className="px-2 py-2 text-xs p-text-3">Showing {workspaces.length} of {workspaceTotal} workspaces.</div>
-        )}
       </div>
 
-      {/* User dropdown — pinned to bottom */}
-      <div className="px-2 py-2 border-t p-border relative" ref={userMenuRef}>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => setShowUserMenu((v) => !v)}
-            className="min-w-0 flex-1 flex items-center justify-between gap-2 px-2 py-2 rounded-lg p-card-hover transition-colors text-left"
-          >
-            <div className="flex items-center gap-2 min-w-0">
-              <div className="w-7 h-7 rounded-full p-accent-bg flex items-center justify-center text-xs font-medium p-accent shrink-0">
-                {profile?.email?.[0]?.toUpperCase() ?? '?'}
-              </div>
-              <span className="text-xs p-text truncate">{profile?.email ?? (profileFailed ? 'Profile unavailable' : 'loading...')}</span>
-            </div>
-            <CaretRightIcon size={12} className={`transition-transform p-text-3 ${showUserMenu ? 'rotate-90' : ''}`} />
-          </button>
-          <button
-            type="button"
-            onClick={toggleMode}
-            className="shrink-0 flex size-9 items-center justify-center rounded-lg p-text-3 p-card-hover hover:p-text transition-colors"
-            title={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
-            aria-label={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
-          >
-            {mode === 'light' ? <MoonIcon size={15} /> : <SunIcon size={15} />}
-          </button>
-        </div>
+      {/* Account row — pinned to bottom; the gear opens the same menu as
+          clicking the row. */}
+      <div className="border-t p-border px-4 py-3.5 relative" ref={userMenuRef}>
+        <button
+          onClick={() => setShowUserMenu((v) => !v)}
+          className="flex w-full min-w-0 items-center gap-2.5 text-left"
+        >
+          <div className="flex size-[26px] shrink-0 items-center justify-center rounded-full bg-[#2A2018] text-[12px] font-semibold text-[var(--c-accent)]">
+            {profile?.email?.[0]?.toUpperCase() ?? '?'}
+          </div>
+          <span className="min-w-0 flex-1 truncate text-[13px] p-text-4">
+            {profile?.email ?? (profileFailed ? 'Profile unavailable' : 'loading…')}
+          </span>
+          <GearIcon size={14} className="shrink-0 p-text-4 transition-colors hover:p-gold" />
+        </button>
         {showUserMenu && (
-          <div className="absolute bottom-full left-2 right-2 mb-1 p-card p-1.5 p-shadow-menu border p-border">
+          <div className="absolute bottom-full left-2 right-2 mb-1 p-card p-1.5 p-shadow-menu border p-border z-10">
             <Link to="/user/settings" onClick={() => setShowUserMenu(false)}
               className="flex items-center gap-2 px-2 py-1.5 text-sm rounded-sm p-card-hover">
               <GearIcon size={14} />
@@ -355,8 +408,6 @@ export default function Sidebar() {
           </div>
         )}
       </div>
-
-      {showCreate && <CreateWorkspaceModal onClose={() => setShowCreate(false)} />}
 
       {deleteTarget && (
         <Modal

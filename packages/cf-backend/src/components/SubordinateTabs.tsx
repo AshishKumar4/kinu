@@ -35,7 +35,7 @@ function StatusMark({ subordinate }: { subordinate: SubordinateRosterEntry }) {
   );
 }
 
-function SpawnSubordinateDialog({ onClose, onSpawn }: {
+export function SpawnSubordinateDialog({ onClose, onSpawn }: {
   onClose(): void;
   onSpawn(role: string, mission: string): Promise<SpawnResult>;
 }) {
