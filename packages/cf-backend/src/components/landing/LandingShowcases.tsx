@@ -23,12 +23,12 @@ function WorkspacePreview(): ReactElement {
           onValueChange={setAltitude}
           variant="segmented"
           activateOnFocus
-          className="shrink-0 [&>div:first-child]:!h-8 [&>div:first-child]:!rounded-full [&>div:first-child]:!bg-[var(--c-fill)]"
-          listClassName="!h-8 !rounded-full !border !border-[var(--c-border)] !bg-[var(--c-fill)] !p-[3px] !ring-0"
+          className="shrink-0 [&>div:first-child]:!h-9 [&>div:first-child]:!rounded-full [&>div:first-child]:!bg-[var(--c-fill)] [&_[role=tab]]:!my-0 [&_[role=tab]]:!h-[30px] [&_[role=tab]]:!rounded-full"
+          listClassName="!h-9 !rounded-full !border !border-[var(--c-border-strong)] !bg-[var(--c-fill)] !p-[3px] !ring-0"
           indicatorClassName="!rounded-full !bg-[var(--c-accent)] !shadow-none !ring-0"
         />
       </div>
-      <div className="grid min-h-[452px] grid-cols-1 md:grid-cols-[minmax(0,1fr)_260px] lg:grid-cols-[172px_minmax(0,1fr)_300px]">
+      <div className="grid min-h-[640px] grid-cols-1 md:grid-cols-[minmax(0,1fr)_280px] lg:grid-cols-[190px_minmax(0,1fr)_330px]">
         <aside className="hidden border-r p-border p-recessed px-3 py-3.5 lg:block">
           <div className="px-2 pb-2.5 text-[11px] p-text-4">Workspaces</div>
           <div className="flex items-center gap-2 rounded-lg p-card-active px-2.5 py-2">
@@ -51,6 +51,12 @@ function WorkspacePreview(): ReactElement {
             </div>
             <p className="text-[13.5px] leading-[1.65] p-text"><strong>summary.test.ts</strong> takes ~864 ms of the suite's ~912 ms. The dedupe pass is O(n²). Each doubling quadruples runtime. A Map keyed by id reduces it to one pass.</p>
             <div className="rounded-xl border border-[color-mix(in_srgb,var(--c-accent)_25%,transparent)] bg-[color-mix(in_srgb,var(--c-accent)_5%,transparent)] px-3.5 py-2.5 text-[12.5px] leading-[1.55] p-text-2"><strong className="p-gold">System</strong> · a background job settled while you were away and joined this turn.</div>
+            <div className="border-l-2 border-[var(--c-border-strong)] pl-3 text-[12.5px] leading-[1.6] p-text-4">Thinking · The result is stable. I will patch the one-pass dedupe and run the focused suite.</div>
+            <div className="overflow-hidden rounded-xl border p-border p-surface">
+              <div className="grid grid-cols-[auto_auto_minmax(0,1fr)_auto] items-center gap-2 px-3 py-2.5 text-xs p-text-4"><span>▸</span><code className="p-text-2">file</code><code className="truncate">Edited src/dedupe.ts</code><span className="p-success">saved</span></div>
+              <div className="grid grid-cols-[auto_auto_minmax(0,1fr)_auto] items-center gap-2 border-t border-dashed border-[var(--c-dash)] px-3 py-2.5 text-xs p-text-4"><span>▸</span><code className="p-text-2">run · workspace</code><code className="truncate">bun test summary</code><span className="p-success">2 pass</span></div>
+            </div>
+            <p className="text-[13.5px] leading-[1.65] p-text">The one-pass implementation keeps the same output and removes most of the suite time. The focused tests pass.</p>
           </div>
           <div className="border-t p-border p-recessed px-4 py-3">
             <div className="flex items-center gap-2.5 rounded-xl border border-[var(--c-border-strong)] bg-[var(--c-input-bg)] px-3.5 py-2.5">
@@ -71,6 +77,13 @@ function WorkspacePreview(): ReactElement {
               <div className="px-3.5 py-3"><div className="mb-2 text-[12.5px]">Swarm search stopped early</div><div className="flex gap-2 text-[11px]"><span className="rounded-full border border-[color-mix(in_srgb,var(--c-accent)_35%,transparent)] px-2.5 py-0.5 p-gold">Retry</span><span className="rounded-full border p-border px-2.5 py-0.5 p-text-4">Dismiss</span></div></div>
             </div>
             <div>
+              <div className="mb-2 text-[11.5px] font-semibold p-text-4">Now · 2 active</div>
+              <div className="overflow-hidden rounded-xl border p-border p-surface">
+                <div className="flex items-start gap-2.5 px-3.5 py-2.5"><span className="mt-1 size-2 rounded-full p-dot-accent" /><span className="flex-1 text-xs p-text-2">Patch the slow dedupe path</span></div>
+                <div className="flex items-start gap-2.5 border-t border-dashed border-[var(--c-dash)] px-3.5 py-2.5"><span className="mt-1 size-2 rounded-full p-dot-success" /><span className="flex-1 text-xs p-text-2">Add the regression case</span></div>
+              </div>
+            </div>
+            <div>
               <div className="mb-2 text-[11.5px] font-semibold p-text-4">Journal</div>
               <div className="overflow-hidden rounded-xl border p-border p-surface">
                 {[['◈', 'Crafted a tool: dedupe-bench', '2m'], ['✓', 'Graded 2 turns', '18h'], ['✓', 'Mapped 7 packages', '19h']].map(([icon, label, age], index) => (
@@ -87,31 +100,82 @@ function WorkspacePreview(): ReactElement {
 }
 
 function TuiPreview(): ReactElement {
+  const toolRows = [
+    ['›', 'run · workspace', 'bun test coupon', '7 pass'],
+    ['›', 'file', 'read 0042_coupon_kind.sql', '1.8 KB'],
+    ['›', 'file', 'edit 0042_coupon_kind.sql', 'saved'],
+    ['›', 'agents', 'three independent checks', 'running'],
+  ] as const;
   return (
-    <div aria-label="Kinu terminal interface preview" className="overflow-hidden rounded-2xl border p-border bg-[var(--c-input-bg)] shadow-[0_40px_110px_-50px_rgba(0,0,0,.95)]">
-      <div className="flex min-h-11 items-center justify-between gap-4 border-b p-border p-recessed px-4 py-2 font-mono text-[11.5px] p-text-4">
-        <div className="flex min-w-0 flex-wrap items-center gap-3.5"><KinuLogo compact /><span>checkout</span><span className="inline-flex items-center gap-2 rounded-full border border-[color-mix(in_srgb,var(--c-accent)_32%,transparent)] bg-[color-mix(in_srgb,var(--c-accent)_6%,transparent)] px-2.5 py-1 p-gold"><span className="size-1.5 rounded-full border-2 border-[color-mix(in_srgb,var(--c-accent)_28%,transparent)] border-t-[var(--c-accent)] motion-safe:animate-spin" />Working</span></div>
-        <div className="hidden items-center gap-3.5 sm:flex"><span>local</span><span>Claude Opus 4</span></div>
-      </div>
-      <div className="grid min-h-[420px] grid-cols-1 md:grid-cols-[190px_minmax(0,1fr)]">
-        <aside className="hidden border-r p-border bg-[var(--c-bg)] px-3 py-4 md:block">
-          <div className="mx-2 mb-3 font-mono text-[10px] uppercase tracking-[.14em] p-text-4">Sessions</div>
-          <div className="rounded-lg border-l-2 border-[var(--c-accent)] p-elevated px-2.5 py-2 text-xs">checkout audit</div>
-          <div className="px-2.5 py-2 text-xs p-text-3">migration review</div>
-          <div className="px-2.5 py-2 text-xs p-text-3">release notes</div>
-        </aside>
-        <div className="flex min-w-0 flex-col px-4 pb-3.5 pt-[22px] font-mono text-xs leading-[1.65] sm:px-[26px]">
-          <div className="max-w-[88%] self-end rounded-[12px_12px_3px_12px] border p-user-bubble px-3 py-2 font-sans text-[13px] p-text sm:max-w-[74%]">Audit the checkout flow, fix the coupon failure, and keep the tests green.</div>
-          <div className="my-4 border-l-2 border-[var(--c-border-strong)] pl-3 p-text-4 sm:mb-3.5 sm:mt-5">Thinking · I found the request path. I will reproduce the failure before I change the handler.</div>
-          <div className="overflow-hidden rounded-[10px] border p-border p-recessed">
-            {[['run · workspace', 'bun test coupon', '7 pass'], ['file', 'Edited 0042_coupon_kind.sql', 'saved'], ['agents', 'Delegated three independent checks', 'running']].map(([tool, action, state], index) => (
-              <div key={tool} className={`grid grid-cols-[88px_minmax(0,1fr)] gap-3 px-3 py-2.5 sm:grid-cols-[120px_minmax(0,1fr)_auto] sm:gap-3.5 ${index > 0 ? 'border-t border-dashed border-[var(--c-dash)]' : ''}`}><strong className="font-normal p-text-2">{tool}</strong><span className="p-text-4">{action}</span><em className="hidden not-italic p-success sm:block">{state}</em></div>
-            ))}
-          </div>
-          <p className="my-4 font-sans text-[13.5px] leading-[1.65] p-text">The migration only filled fixed coupons. I patched the backfill, added the percentage case, and started the focused suite.</p>
-          <div className="mt-auto rounded-[10px] border border-[var(--c-border-strong)] bg-[var(--c-bg)] px-3 py-2.5 p-text-4">Send a message…</div>
-          <div className="mt-3 flex flex-wrap justify-between gap-3 text-[10px] p-text-4"><span>Auto · workspace connected</span><span>ctrl+k commands · esc cancel</span></div>
+    <div aria-label="Kinu terminal interface preview" className="overflow-hidden rounded-xl border border-[var(--c-border-strong)] bg-[var(--c-input-bg)] shadow-[0_40px_110px_-50px_rgba(0,0,0,.95)]">
+      <div className="flex min-h-12 items-center justify-between gap-4 border-b border-[var(--c-border-strong)] p-recessed px-4 py-2 font-mono text-[11px] uppercase tracking-[.06em] p-text-4">
+        <div className="flex min-w-0 flex-wrap items-center gap-3.5">
+          <KinuLogo compact />
+          <span>checkout</span>
+          <span className="inline-flex items-center gap-2 p-gold"><span className="size-1.5 rounded-full p-dot-accent motion-safe:animate-pulse" />working</span>
         </div>
+        <div className="hidden items-center gap-4 sm:flex"><span>local</span><span>Claude Opus 4</span><span>main</span></div>
+      </div>
+      <div className="grid min-h-[600px] grid-cols-1 md:grid-cols-[220px_minmax(0,1fr)]">
+        <aside className="hidden border-r border-[var(--c-border-strong)] bg-[var(--c-bg)] px-3 py-4 font-mono md:block">
+          <div className="mx-2 mb-2 text-[10px] uppercase tracking-[.16em] p-text-4">Local workspaces</div>
+          <div className="border-l-2 border-[var(--c-accent)] p-elevated px-3 py-2 text-xs p-text">checkout audit</div>
+          <div className="px-3 py-2 text-xs p-text-3">migration review</div>
+          <div className="px-3 py-2 text-xs p-text-3">release notes</div>
+          <div className="mx-2 mb-2 mt-6 text-[10px] uppercase tracking-[.16em] p-text-4">Cloud workspaces</div>
+          <div className="flex items-center justify-between px-3 py-2 text-xs p-text-2"><span>Jarvis</span><span className="p-success">live</span></div>
+          <div className="flex items-center justify-between px-3 py-2 text-xs p-text-3"><span>checkout-svc</span><span>idle</span></div>
+        </aside>
+        <div className="flex min-w-0 flex-col font-mono text-xs leading-[1.65]">
+          <div className="flex-1 overflow-hidden px-4 py-5 sm:px-7 sm:py-6">
+            <div className="mb-5 grid grid-cols-[52px_minmax(0,1fr)] gap-3">
+              <span className="text-[10px] uppercase tracking-[.12em] p-gold">you</span>
+              <p className="p-text">Audit the checkout flow, fix the coupon failure, and keep the tests green.</p>
+            </div>
+            <div className="mb-5 grid grid-cols-[52px_minmax(0,1fr)] gap-3 border-l border-[var(--c-border-strong)] pl-3 p-text-4">
+              <span className="text-[10px] uppercase tracking-[.12em]">think</span>
+              <p>I found the request path. I will reproduce the failure before I change the handler.</p>
+            </div>
+            <div className="border-y border-[var(--c-border-strong)]">
+              {toolRows.map(([glyph, tool, action, result], index) => (
+                <div key={`${tool}-${action}`} className={`grid grid-cols-[14px_120px_minmax(0,1fr)] gap-3 px-1 py-2.5 sm:grid-cols-[14px_150px_minmax(0,1fr)_auto] ${index > 0 ? 'border-t border-dashed border-[var(--c-dash)]' : ''}`}>
+                  <span className="p-gold">{glyph}</span><strong className="font-normal p-text-2">{tool}</strong><span className="truncate p-text-4">{action}</span><span className="hidden p-success sm:block">{result}</span>
+                </div>
+              ))}
+            </div>
+            <div className="mt-5 grid grid-cols-[52px_minmax(0,1fr)] gap-3">
+              <span className="text-[10px] uppercase tracking-[.12em] p-gold">kinu</span>
+              <p className="font-sans text-[13.5px] leading-[1.65] p-text">The migration only filled fixed coupons. I patched the backfill, added the percentage case, and started the focused suite.</p>
+            </div>
+          </div>
+          <div className="border-t border-[var(--c-border-strong)] p-recessed px-4 pb-3 pt-3">
+            <div className="border border-[var(--c-border-strong)] bg-[var(--c-bg)] px-3 py-2.5 p-text-4"><span className="mr-2 p-gold">❯</span>Send a message…</div>
+            <div className="mt-2 flex flex-wrap justify-between gap-3 text-[10px] p-text-4"><span>auto · local workspace · connected</span><span>ctrl+k commands · ctrl+o workspaces · esc cancel</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+function CliPreview(): ReactElement {
+  return (
+    <div aria-label="Kinu command line preview" className="grid overflow-hidden rounded-xl border border-[var(--c-border-strong)] bg-[var(--c-input-bg)] font-mono text-xs lg:grid-cols-[minmax(0,.9fr)_minmax(0,1.1fr)]">
+      <div className="border-b border-[var(--c-border-strong)] p-5 lg:border-b-0 lg:border-r sm:p-7">
+        <div className="mb-5 text-[10px] uppercase tracking-[.16em] p-text-4">Commands</div>
+        <div className="space-y-4">
+          <div><span className="mr-2 p-gold">$</span><span className="p-text">kinu run checkout “Audit the coupon flow.”</span></div>
+          <div><span className="mr-2 p-gold">$</span><span className="p-text">kinu chat checkout</span></div>
+          <div><span className="mr-2 p-gold">$</span><span className="p-text">kinu acp checkout</span></div>
+        </div>
+      </div>
+      <div className="p-5 sm:p-7">
+        <div className="mb-5 flex justify-between gap-4 text-[10px] uppercase tracking-[.16em] p-text-4"><span>last run</span><span>exit 0 · 18.4 s</span></div>
+        <div className="space-y-2.5 p-text-3">
+          <div><span className="mr-3 p-success">✓</span>reproduced the percentage-coupon failure</div>
+          <div><span className="mr-3 p-success">✓</span>patched the migration and handler</div>
+          <div><span className="mr-3 p-success">✓</span>7 focused tests passed</div>
+        </div>
+        <p className="mt-6 border-t border-dashed border-[var(--c-dash)] pt-4 font-sans text-sm leading-[1.65] p-text">The command exits with the result, so the same workspace fits scripts, CI, and shell pipelines.</p>
       </div>
     </div>
   );
@@ -127,12 +191,19 @@ export function LandingShowcases(): ReactElement {
         </div>
         <WorkspacePreview />
       </section>
-      <section data-showcase="tui" className="pb-2 pt-24">
+      <section data-showcase="tui" className="pt-24">
         <div className="mb-9 grid items-end gap-6 md:grid-cols-[minmax(0,.72fr)_minmax(0,1.28fr)] md:gap-[52px]">
-          <div><div className="mb-3.5 flex items-center gap-3 text-[13px] font-semibold p-gold"><span className="h-px w-[22px] bg-[color-mix(in_srgb,var(--c-accent)_55%,transparent)]" />The terminal</div><h2 className="text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">The same workspace, <span className="p-gold">without the browser.</span></h2></div>
-          <p className="max-w-[580px] text-base leading-[1.65] p-text-3">Open the full-screen TUI over SSH or on your own machine. It keeps the same sessions, tools, background work, and approvals.</p>
+          <div><div className="mb-3.5 flex items-center gap-3 text-[13px] font-semibold p-gold"><span className="h-px w-[22px] bg-[color-mix(in_srgb,var(--c-accent)_55%,transparent)]" />The terminal</div><h2 className="text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">Let your agents live <span className="p-gold">locally.</span></h2></div>
+          <p className="max-w-[580px] text-base leading-[1.65] p-text-3">Create local workspaces in the full-featured TUI, or connect to cloud workspaces from your favorite terminal.</p>
         </div>
         <TuiPreview />
+      </section>
+      <section data-showcase="cli" className="py-24">
+        <div className="mb-9 grid items-end gap-6 md:grid-cols-[minmax(0,.72fr)_minmax(0,1.28fr)] md:gap-[52px]">
+          <div><div className="mb-3.5 flex items-center gap-3 text-[13px] font-semibold p-gold"><span className="h-px w-[22px] bg-[color-mix(in_srgb,var(--c-accent)_55%,transparent)]" />The CLI</div><h2 className="text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">One command in. <span className="p-gold">One result out.</span></h2></div>
+          <p className="max-w-[580px] text-base leading-[1.65] p-text-3">Run one task and exit for scripts and CI. Open the same workspace in the TUI or an ACP editor when the work needs a conversation.</p>
+        </div>
+        <CliPreview />
       </section>
     </div>
   );

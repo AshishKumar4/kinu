@@ -2,7 +2,8 @@
 // six different calls, and no summary may claim detail the arguments never
 // carried.
 import { describe, test, expect } from 'bun:test';
-import { clip, isToolCallFailed, summarizeToolCall } from '../src/tools/tool-call-summary';
+import { clip, describeToolCall, isToolCallFailed, summarizeToolCall } from '../src/tools/tool-call-summary';
+import { renderExecuteToolsDescription } from '../src/tools/registry';
 
 describe('tool call summaries — the unified agents tool', () => {
   test('agents calls are told apart by action and target', () => {
@@ -109,11 +110,26 @@ describe('tool call summaries — builtins', () => {
       .toBe('completed — "audit finished"');
   });
 
-  test('execute_tools shows the first real line of the program, not a comment', () => {
-    expect(summarizeToolCall('execute_tools', {
-      code: '// fetch the roster\n\nconst r = await team.list();\nreturn r;',
-    })).toBe('const r = await team.list();');
-    expect(summarizeToolCall('execute_tools', { code: '// only a comment' })).toBe('');
+  test('execute_tools separates the visible intent from the first executable line', () => {
+    const code = '// Fetch the roster to identify idle agents\n\nconst r = await team.list();\nreturn r;';
+    expect(describeToolCall('execute_tools', { code })).toBe('Fetch the roster to identify idle agents');
+    expect(summarizeToolCall('execute_tools', { code })).toBe('const r = await team.list();');
+    expect(describeToolCall('execute_tools', { code: 'const r = await team.list();' })).toBe('Ran a tool program');
+  });
+
+  test('the codemode prompt requires the intent line the interface reads', () => {
+    const description = renderExecuteToolsDescription('declare const workspace: unknown;');
+    expect(description).toContain('Start every program with exactly one `//` comment');
+    expect(description).toContain('The interface shows this line to the user as the call intent.');
+  });
+
+  test('native calls name their operation and target in plain language', () => {
+    expect(describeToolCall('file', { action: 'read', path: '/workspace/package.json' })).toBe('Read package.json');
+    expect(describeToolCall('file', { action: 'edit', path: '/workspace/src/auth.ts' })).toBe('Edited auth.ts');
+    expect(describeToolCall('run', { command: 'bun test packages/core' })).toBe('Ran tests');
+    expect(describeToolCall('web', { action: 'fetch', url: 'https://example.com' })).toBe('Fetched a page');
+    expect(describeToolCall('memory', { action: 'search', query: 'deployment' })).toBe('Searched memory');
+    expect(describeToolCall('agents', { action: 'ask', agent: 'scout' })).toBe('Asked scout');
   });
 
   test('release distinguishes its thirteen actions', () => {

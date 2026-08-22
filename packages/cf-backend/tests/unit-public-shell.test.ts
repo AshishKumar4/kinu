@@ -217,7 +217,7 @@ describe('the pre-paint theme script', () => {
 
 /** Every public document, with the arguments its route passes. */
 const DOCUMENTS = {
-  login: loginDocument([{ href: '/auth/github/start', label: 'GitHub' }], ' And a trailing line.'),
+  login: loginDocument([{ href: '/auth/github/start', label: 'GitHub' }]),
   authFailure: authDocument('Sign in failed', '<p class="lede">Try again.</p>'),
   install: installDocument("curl -fsSL 'https://kinu.run/install.sh' | bash"),
   approval: approvalDocument('Connect the Kinu CLI', '<p>A terminal asked to sign in.</p>'),

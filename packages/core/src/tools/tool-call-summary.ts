@@ -101,6 +101,12 @@ function firstCodeLine(code: string): string {
   return "";
 }
 
+/** The first nonblank line is the model's user-facing codemode intent. */
+function codemodeIntent(code: string): string {
+  const first = code.split("\n").find((line) => line.trim().length > 0)?.trim() ?? "";
+  return first.startsWith("//") ? clip(first.slice(2), 72) : "";
+}
+
 function summarizeThink(input: JsonObject): string {
   const heads = Array.isArray(input.heads) ? input.heads.length : 0;
   const label = heads > 0 ? `${heads} heads` : str(input, "strategy");
@@ -398,7 +404,7 @@ const DESCRIBERS = new Map<string, ToolDescriber>(Object.entries({
   web: (input) => (str(input, "action") === "fetch" ? "Fetched a page" : str(input, "query") ? "Searched the web" : ""),
   web_search: () => "Searched the web",
   web_fetch: () => "Fetched a page",
-  execute_tools: () => "Ran a tool program",
+  execute_tools: (input) => codemodeIntent(str(input, "code")) || "Ran a tool program",
   think: (input) => {
     const heads = Array.isArray(input.heads) ? input.heads.length : 0;
     return heads > 0 ? `Explored with ${heads} heads` : "Explored the problem";

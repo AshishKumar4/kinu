@@ -25,12 +25,11 @@ import { listWorkspaces, type WorkspaceEntry } from "@/lib/user-api";
 export default function HomePage() {
   const [mission, setMission] = useState("");
   const [workspaces, setWorkspaces] = useState<WorkspaceEntry[]>([]);
-  const [workspaceTotal, setWorkspaceTotal] = useState(0);
   const [listFailed, setListFailed] = useState(false);
   const { hasModels, busy, err, create } = useCreateWorkspace();
 
   useEffect(() => {
-    listWorkspaces().then((w) => { setWorkspaces(w.entries); setWorkspaceTotal(w.total); setListFailed(false); }).catch(() => setListFailed(true));
+    listWorkspaces().then((w) => { setWorkspaces(w.entries); setListFailed(false); }).catch(() => setListFailed(true));
   }, []);
 
   const submit = (event?: FormEvent) => {
@@ -51,7 +50,7 @@ export default function HomePage() {
           </h1>
         </header>
 
-        <form onSubmit={submit} className="min-w-0 overflow-hidden rounded-[14px] border p-border p-surface">
+        <form onSubmit={submit} className="p-focus min-w-0 rounded-[14px] border p-border p-surface transition-[border-color,box-shadow]">
           <label htmlFor="workspace-mission" className="block px-5 pt-4 text-xs font-semibold p-text-4">
             {MISSION_LABEL}
           </label>
@@ -64,7 +63,7 @@ export default function HomePage() {
             rows={7}
             autoFocus
             disabled={busy}
-            className="block min-h-40 w-full resize-y bg-transparent px-5 pb-5 pt-3 text-[15px] leading-[1.7] p-text outline-none placeholder:p-text-3 disabled:opacity-60"
+            className="block min-h-40 w-full resize-y bg-transparent px-5 pb-5 pt-3 text-[15px] leading-[1.7] p-text outline-none focus-visible:!outline-none placeholder:p-text-3 disabled:opacity-60"
           />
           {hasModels === false && (
             <div className="px-5 pb-3">
@@ -89,8 +88,7 @@ export default function HomePage() {
           </div>
         </form>
 
-        {/* Setup + Recent */}
-        <aside className="flex min-w-0 flex-col gap-3.5">
+        <aside className="order-3 min-w-0 lg:order-none">
           <div className="rounded-[14px] border p-border p-surface px-[18px] py-4">
             <div className="mb-2.5 text-xs font-semibold p-text-4">Setup</div>
             <Link to="/user/settings" className="block py-[5px] text-[13px] p-gold transition-colors hover:p-accent">
@@ -100,27 +98,28 @@ export default function HomePage() {
               Install the CLI →
             </a>
           </div>
-
-          {(listFailed || workspaces.length > 0) && (
-            <div className="rounded-[14px] border p-border p-surface px-[18px] py-4">
-              <div className="mb-2.5 flex items-center justify-between gap-3">
-                <span className="text-xs font-semibold p-text-4">Recent{workspaces.length > 0 ? ` · ${workspaceTotal}` : ""}</span>
-                {listFailed && <span className="text-[11px] p-warning">couldn't load</span>}
-              </div>
-              <div className="space-y-0.5">
-                {workspaces.slice(0, 5).map((agent) => (
-                  <Link
-                    key={agent.name}
-                    to={`/workspace/${agent.name}`}
-                    className="block truncate rounded-md px-1 py-1 text-[13.5px] p-text transition-colors hover:p-gold"
-                  >
-                    {agent.displayName || agent.name}
-                  </Link>
-                ))}
-              </div>
-            </div>
-          )}
         </aside>
+
+        {(listFailed || workspaces.length > 0) && (
+          <section aria-label="Recent workspaces" className="order-2 min-w-0 lg:order-none">
+            <div className="mb-2.5 flex items-center justify-between gap-3 px-1">
+              <span className="font-mono text-[10px] uppercase tracking-[.14em] p-text-4">Recent</span>
+              {listFailed && <span className="text-[11px] p-warning">couldn't load</span>}
+            </div>
+            <div className="overflow-hidden rounded-[14px] border p-border p-surface">
+              {workspaces.slice(0, 5).map((agent, index) => (
+                <Link
+                  key={agent.name}
+                  to={`/workspace/${agent.name}`}
+                  className={`flex items-center justify-between gap-3 px-[18px] py-3 text-[13.5px] p-text transition-colors hover:p-gold hover:p-elevated ${index > 0 ? 'border-t border-dashed border-[var(--c-dash)]' : ''}`}
+                >
+                  <span className="truncate">{agent.displayName || agent.name}</span>
+                  <span aria-hidden="true" className="p-text-4">→</span>
+                </Link>
+              ))}
+            </div>
+          </section>
+        )}
       </main>
     </div>
   );

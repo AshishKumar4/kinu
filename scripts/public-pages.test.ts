@@ -35,6 +35,7 @@ interface Facts {
   canvasPixels?: number;
   workspace?: SurfaceFact;
   tui?: SurfaceFact;
+  cli?: SurfaceFact;
   command?: string;
   copied?: boolean;
   homeLink?: { visible: boolean; hasGraphic: boolean };
@@ -165,10 +166,12 @@ beforeAll(async () => {
         return {
           workspace: measure(document.querySelector('[aria-label="Kinu workspace interface preview"]')),
           tui: measure(document.querySelector('[aria-label="Kinu terminal interface preview"]')),
+          cli: measure(document.querySelector('[aria-label="Kinu command line preview"]')),
         };
       });
       facts.workspace = surfaces.workspace;
       facts.tui = surfaces.tui;
+      facts.cli = surfaces.cli;
       facts.command = await page.$eval(
         '[data-install-command]',
         (element) => element.textContent?.trim() ?? '',
@@ -250,6 +253,7 @@ beforeAll(async () => {
         return [
           document.querySelector('[aria-label="Kinu workspace interface preview"]'),
           document.querySelector('[aria-label="Kinu terminal interface preview"]'),
+          document.querySelector('[aria-label="Kinu command line preview"]'),
         ].every((element) => {
           const box = element?.getBoundingClientRect();
           return box !== undefined && box.left >= -1 && box.right <= viewport + 1;
@@ -310,16 +314,18 @@ describe('the standalone landing runs', () => {
     expect(reduced.animations).toBe(0);
   });
 
-  test('the workspace and terminal are visible, substantial, and distinct', () => {
+  test('the workspace, terminal, and CLI are visible and distinct', () => {
     const workspace = required(facts.workspace, 'workspace preview');
     const tui = required(facts.tui, 'terminal preview');
-    expect(workspace.present).toBeTrue();
-    expect(tui.present).toBeTrue();
-    expect(workspace.width).toBeGreaterThan(500);
-    expect(tui.width).toBeGreaterThan(500);
-    expect(workspace.height).toBeGreaterThan(350);
-    expect(tui.height).toBeGreaterThan(350);
-    expect(workspace.text).not.toBe(tui.text);
+    const cli = required(facts.cli, 'CLI preview');
+    for (const surface of [workspace, tui, cli]) {
+      expect(surface.present).toBeTrue();
+      expect(surface.width).toBeGreaterThan(500);
+    }
+    expect(workspace.height).toBeGreaterThan(600);
+    expect(tui.height).toBeGreaterThan(600);
+    expect(cli.height).toBeGreaterThan(150);
+    expect(new Set([workspace.text, tui.text, cli.text]).size).toBe(3);
   });
 });
 

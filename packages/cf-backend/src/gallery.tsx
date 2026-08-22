@@ -438,7 +438,7 @@ const MESSAGES: UIMessage[] = [
     parts: [
       { type: "reasoning", text: "The coupon path goes through /api/cart/apply. I should reproduce first, then bisect: the handler, the pricing service, then the migration that landed Tuesday. The 500 with SAVE20 but not SAVE10 suggests a percentage-vs-fixed branch." },
       { type: "tool-run", toolCallId: "t1", state: "output-available", input: { runtime: "sandbox", command: "curl -s -X POST localhost:8788/api/cart/apply -d '{\"code\":\"SAVE20\"}'" }, output: "HTTP 500\n{\"error\":\"TypeError: Cannot read properties of undefined (reading 'percent')\"}" },
-      { type: "tool-execute_tools", toolCallId: "t2", state: "output-available", input: { code: "const rows = await sql`SELECT code, kind, value FROM coupons WHERE code LIKE 'SAVE%'`;\nreturn rows;" }, output: '[{"code":"SAVE10","kind":"fixed","value":10},{"code":"SAVE20","kind":null,"value":20}]' },
+      { type: "tool-execute_tools", toolCallId: "t2", state: "output-available", input: { code: "// Inspect coupon rows to find the missing kind\nconst rows = await sql`SELECT code, kind, value FROM coupons WHERE code LIKE 'SAVE%'`;\nreturn rows;" }, output: '[{"code":"SAVE10","kind":"fixed","value":10},{"code":"SAVE20","kind":null,"value":20}]' },
       { type: "text", text: "Found it. Tuesday's migration backfilled `kind` for fixed coupons only — percentage coupons have `kind: null`, and `applyCoupon` dereferences `rules[kind].percent`.\n\n```ts\nconst rule = rules[coupon.kind ?? inferKind(coupon)];\n```\n\nI'll patch the migration, add a regression test, and run the suite." },
       // A real repair is a RUN of calls, not one — this is the case the chat
       // has to survive without becoming a wall of identical rows.
@@ -2343,7 +2343,7 @@ function publicDocument(name: string | null): string | null {
     return loginDocument([
       { href: "/auth/cloudflare/start?return_to=%2F", label: "Cloudflare" },
       { href: "/auth/github/start?return_to=%2F", label: "GitHub" },
-    ], " Signing in with Cloudflare also connects Workers AI, so a new workspace has a model to run.");
+    ]);
   }
   if (name === "loginfail") {
     return authDocument("Sign in failed", `

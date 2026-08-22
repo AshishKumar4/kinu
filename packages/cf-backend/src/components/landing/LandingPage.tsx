@@ -1,5 +1,5 @@
 import { Button } from '@cloudflare/kumo';
-import { MoonIcon, SunIcon } from '@phosphor-icons/react';
+import { ArrowUpRightIcon, MoonIcon, SunIcon } from '@phosphor-icons/react';
 import { platformFact } from '@kinu.run/core';
 import type { ReactElement, ReactNode } from 'react';
 
@@ -50,22 +50,32 @@ function FeatureStrip(): ReactElement {
 
 function PlatformSection(): ReactElement {
   const examples = [
-    ['Research, overnight', 'Hand it a question in the evening. The brief, with sources, is waiting in the morning.'],
-    ['PRs reviewed in the background', 'A webhook wakes the agent on every pull request. The review is posted by the time you look.'],
-    ["PRs created while you're away", 'Describe the change. The agent branches, builds, tests, and opens the pull request.'],
+    ['Research, overnight', 'Hand it a question in the evening. The sourced brief is ready in the morning.'],
+    ['Review every pull request', 'A webhook wakes the workspace and posts the review before you open the PR.'],
+    ['Ship while you are away', 'Describe the change. The agent branches, builds, tests, and opens the pull request.'],
   ] as const;
   return (
     <section id="platform" className={SECTION}>
       <RuleLabel>01 · The platform</RuleLabel>
       <SectionTitle>Close the laptop. <span className="p-gold">The agent keeps working.</span></SectionTitle>
-      <p className="mb-10 mt-3.5 max-w-[660px] text-[17px] leading-[1.6] p-text-3">Kinu is a cloud-native agent platform on Cloudflare. Workspaces and sandboxes are hosted, so a task keeps running after you close the browser. The same agent also runs fully native on your own machine.</p>
-      <div className="mb-5 grid gap-5 md:grid-cols-2">
-        <div className={`${CARD} p-[30px]`}><h3 className="mb-3 text-[12.5px] font-semibold p-gold">In the cloud</h3><h4 className="mb-2.5 text-[21px] font-semibold tracking-[-.02em]">Hosted workspaces and sandboxes</h4><p className="text-[15px] leading-[1.7] p-text-3">Start a task, shut your computer, and come back to the result. Schedules and webhooks reach agents while you are away.</p></div>
-        <div className={`${CARD} p-[30px]`}><h3 className="mb-3 text-[12.5px] font-semibold p-gold">On your machine</h3><h4 className="mb-2.5 text-[21px] font-semibold tracking-[-.02em]">TUI, CLI, or your editor</h4><p className="text-[15px] leading-[1.7] p-text-3">Run Kinu fully native and local. The TUI also connects to cloud agents, so the terminal can replace the browser.</p></div>
+      <p className="mb-10 mt-3.5 max-w-[660px] text-[17px] leading-[1.6] p-text-3">Kinu runs durable cloud workspaces and fully local agents through the same core. Start in either place, then open the workspace from the client you prefer.</p>
+      <div className="mb-10 overflow-hidden rounded-2xl border p-border p-surface">
+        <div className="grid md:grid-cols-2">
+          <article className="min-w-0 p-7 sm:p-8">
+            <div className="mb-7 flex items-center justify-between gap-4"><span className="font-mono text-[10px] uppercase tracking-[.16em] p-gold">Cloud</span><span className="font-mono text-[10px] p-text-4">Durable · always reachable</span></div>
+            <h3 className="mb-3 text-[24px] font-semibold tracking-[-.025em]">Hosted workspaces and sandboxes</h3>
+            <p className="max-w-[480px] text-[15px] leading-[1.7] p-text-3">Start a task, close the browser, and return to the result. Schedules and webhooks keep the workspace active while you are away.</p>
+          </article>
+          <article className="min-w-0 border-t p-border p-7 sm:p-8 md:border-l md:border-t-0">
+            <div className="mb-7 flex items-center justify-between gap-4"><span className="font-mono text-[10px] uppercase tracking-[.16em] p-gold">Local</span><span className="font-mono text-[10px] p-text-4">Files stay on your machine</span></div>
+            <h3 className="mb-3 text-[24px] font-semibold tracking-[-.025em]">TUI, CLI, or your editor</h3>
+            <p className="max-w-[480px] text-[15px] leading-[1.7] p-text-3">Create a local workspace in the terminal, or connect the TUI to a cloud workspace. The same sessions and tools follow.</p>
+          </article>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t p-border p-recessed px-7 py-4 font-mono text-[11px] p-text-4"><span>ONE BACKEND-AGNOSTIC CORE</span><span>web · TUI · CLI · ACP</span></div>
       </div>
-      <div className="mb-10 rounded-xl border p-border p-recessed px-6 py-4 text-[12.5px] p-text-4">One backend-agnostic core runs both.</div>
-      <div className="grid gap-5 md:grid-cols-3">
-        {examples.map(([title, body]) => <div key={title} className={`${CARD} p-[26px] transition-transform hover:-translate-y-0.5 hover:border-[var(--c-user-border)]`}><h3 className="mb-2.5 text-[12.5px] font-semibold p-gold">{title}</h3><p className="text-sm leading-[1.65] p-text-3">{body}</p></div>)}
+      <div className="grid border-y p-border md:grid-cols-3">
+        {examples.map(([title, body], index) => <div key={title} className={`py-6 md:px-7 ${index > 0 ? 'border-t border-dashed border-[var(--c-dash)] md:border-l md:border-t-0' : 'md:pl-0'} ${index === examples.length - 1 ? 'md:pr-0' : ''}`}><h3 className="mb-2.5 text-[13px] font-semibold p-gold">{title}</h3><p className="text-sm leading-[1.65] p-text-3">{body}</p></div>)}
       </div>
     </section>
   );
@@ -190,7 +200,7 @@ function Header(): ReactElement {
         <a href="#top" aria-label="Kinu home"><KinuLogo /></a>
         <nav className="flex items-center gap-1" aria-label="Landing sections">
           {['Platform', 'Quickstart', 'Clients', 'Evolution', 'Swarms', 'Self-host'].map((label) => <a key={label} href={`#${label === 'Swarms' ? 'swarm' : label === 'Self-host' ? 'deploy' : label.toLowerCase()}`} className="hidden rounded-full px-3 py-2 text-[13px] p-text-3 transition-colors hover:p-text lg:block">{label}</a>)}
-          <a href={REPOSITORY} target="_blank" rel="noreferrer" className="hidden rounded-full px-3 py-2 text-[13px] p-text-3 hover:p-text xl:block">GitHub ↗</a>
+          <a href={REPOSITORY} target="_blank" rel="noreferrer" className="hidden items-center gap-1 rounded-full px-3 py-2 text-[13px] p-text-3 hover:p-text xl:flex">GitHub <ArrowUpRightIcon aria-hidden="true" size={13} /></a>
           <Button type="button" variant="ghost" size="sm" onClick={toggleMode} aria-label={`Switch to ${theme.mode === 'dark' ? 'light' : 'dark'} mode`} icon={theme.mode === 'dark' ? <SunIcon size={15} /> : <MoonIcon size={15} />} />
           <LandingActionLink href="/login" primary size="base">Try cloud agents</LandingActionLink>
         </nav>

@@ -106,14 +106,7 @@ async function renderLogin(request: Request, env: Env): Promise<Response> {
     return { href: escapeHtml(start.pathname + start.search), label: provider.label, id: provider.id };
   });
 
-  // Cloudflare sign-in also attaches the Workers AI credential, which is the
-  // difference between an account that can run a model and one that cannot. It
-  // is worth a line, and only when that provider is configured.
-  const workersAi = providers.some((provider) => provider.id === 'cloudflare')
-    ? ' Signing in with Cloudflare also connects Workers AI, so a new workspace has a model to run.'
-    : '';
-
-  return new Response(loginDocument(providers, workersAi), {
+  return new Response(loginDocument(providers), {
     headers: { ...publicHtmlHeaders(), 'cache-control': 'no-store' },
   });
 }

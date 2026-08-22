@@ -165,12 +165,12 @@ export function WorkSurface(props: WorkSurfaceProps) {
           onClick={() => onSurface(ACTIVITY_SURFACE)}
           aria-label="Activity"
           title="Activity: context, cost and cache"
-          className={`${tabCls} px-2.5 ${surface === ACTIVITY_SURFACE ? "p-tab-active" : ""}`}>
+          className={`${tabCls} mr-2 px-2.5 ${surface === ACTIVITY_SURFACE ? "p-tab-active" : ""}`}>
           <GaugeIcon size={14} />
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-[18px] min-h-0">
+      <div className="flex-1 overflow-y-auto py-[18px] pl-[18px] pr-6 min-h-0">
         <ErrorBoundary key={surface} label={surface}>
           {surface === "Output" && <OutputSurface
             pinnedPorts={props.pinnedPorts}
