@@ -1,7 +1,7 @@
 # Kinu Quick Start
 
-Two minutes to an agent with a machine of its own: one POSIX filesystem, a real
-shell, execution environments, sessions and memory that it keeps.
+Two minutes to a durable agent workspace with a POSIX filesystem, shell,
+execution environments, sessions and memory.
 
 ## CLI
 

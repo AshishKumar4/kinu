@@ -543,8 +543,7 @@ The minimums are 40 development tasks and 3 repeats, which is 120 attempts. The
 report records task flips, failures, errors, token use, exact model-call counts
 and budget breaches. Its schema requires call evidence for every attempt, and it
 re-derives the total, mean and maximum from the per-task rows rather than
-trusting the reported ones. The report unlocks a matched run only when all of
-these hold:
+trusting the reported ones. A matched run is valid only when all of these hold:
 
 - at least 40 distinct tasks and 3 repeats were completed;
 - the family, the corpus manifest, the model, the provider-endpoint hash, the

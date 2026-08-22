@@ -13,8 +13,8 @@
 </p>
 
 <p align="center">
-  <strong>A self-evolving agent platform.<br>
-  Your agent keeps a durable workspace of its own, and runs a tree of agents when a task is hard.</strong>
+  <strong>Persistent agents for cloud and local workspaces.<br>
+  Agents can delegate complex tasks across a DAG of subagents.</strong><br>
   <strong><a href="https://kinu.run">kinu.run</a></strong>
 </p>
 
@@ -66,14 +66,11 @@ CLOUDFLARE_ACCOUNT_ID=<your-id> npx vite dev --port 5173 --host 0.0.0.0
 
 ## What a workspace is
 
-Your agent gets a machine of its own, and it keeps it. A workspace is a durable
-container: one POSIX filesystem, a real shell, execution environments, sessions,
-memory and an event log. The agent lives inside it for as long as you keep it.
+Each workspace provides a durable POSIX filesystem, shell, execution
+environments, sessions, memory and an event log.
 
-The agent also gets better with use. It learns reusable tools from its own
-conversations and stores them with a quality score, and it can rewrite the agentic
-loop it runs on. You reach it from the terminal, from the browser, from your
-editor over the Agent Client Protocol, or by email.
+Turns can produce scored tools, durable lessons and reversible versions of the
+agent loop. Use a workspace from the terminal, browser, an ACP editor or email.
 
 ## The tree swarm
 

@@ -352,7 +352,7 @@ describe('the README app capture', () => {
       /<img alt="[^"]+" src="docs\/assets\/kinu-app-light\.webp" width="900" height="563">/,
     );
     expect(README.indexOf('kinu-app-dark.webp'))
-      .toBeLessThan(README.indexOf('A self-evolving agent platform'));
+      .toBeLessThan(README.indexOf('## Install'));
     expect(README).not.toContain('kinu-film-readme.webp');
   });
 });
