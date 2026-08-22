@@ -308,6 +308,17 @@ function isPublishedHost(url: URL, env: Env): boolean {
   return url.hostname.toLowerCase() === hostOf(env.CLI_PUBLIC_ORIGIN);
 }
 
+/** Vite's unbundled client graph exists only on an unpublished dev host.
+ * Production serves hashed `/assets/*`; these paths must never bypass auth on
+ * a published host. */
+function isViteDevAssetPath(url: URL, env: Env): boolean {
+  if (isPublishedHost(url, env)) return false;
+  return ['/src/', '/@vite/', '/@fs/', '/node_modules/', '/.vite/']
+    .some((prefix) => url.pathname.startsWith(prefix))
+    || url.pathname === '/@react-refresh'
+    || url.pathname === '/client-node-stubs.ts';
+}
+
 /**
  * Redirect cleartext to HTTPS.
  *
@@ -398,6 +409,13 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
   if (url.pathname.startsWith("/mcp/v1/")) {
     const mcpResp = await handleMcpRequest(request, env);
     if (mcpResp) return mcpResp;
+  }
+
+  // Vite's source modules are public assets only on a local dev host. Without
+  // this, the landing document loads but every hydration/CSS request receives
+  // the sign-in page from the auth gate below.
+  if (isViteDevAssetPath(url, env)) {
+    return serveApp(request, env);
   }
 
   // 7. Public bypass list.

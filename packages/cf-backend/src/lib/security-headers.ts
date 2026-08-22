@@ -46,6 +46,22 @@ export function publicHtmlHeaders() {
   };
 }
 
+const LANDING_PAGE_CSP = PUBLIC_PAGE_CSP
+  .replace(
+    "script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com",
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://static.cloudflareinsights.com",
+  )
+  .replace("img-src 'self' data:", "img-src 'self' data: blob:")
+  .concat("; font-src 'self' data: blob:");
+
+/** The supplied standalone landing expands its bundled local assets to blobs. */
+export function landingHtmlHeaders() {
+  return {
+    ...publicHtmlHeaders(),
+    'content-security-policy': LANDING_PAGE_CSP,
+  };
+}
+
 /**
  * CSP for the authenticated SPA.
  *

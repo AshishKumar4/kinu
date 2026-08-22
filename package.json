@@ -82,7 +82,7 @@
           "src/index.ts!",
           "src/gallery.tsx!",
           "src/gallery-agent-stub.ts!",
-          "scripts/prerender-landing.tsx!",
+          "vite.config.ts!",
           "tests/**/*.test.ts"
         ]
       },
