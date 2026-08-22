@@ -228,6 +228,51 @@ const DOCS_READ = '2026-08-17';
 export const PLATFORM_CATALOG = {
   // ── Memory ────────────────────────────────────────────────────────────
 
+  'container.instance.vcpu': {
+    subject: 'vCPU allocated to each Kinu sandbox container',
+    limit: { value: 2, unit: 'count' },
+    origin: 'self-imposed',
+    bounds: 'count',
+    evidence: 'proven-by-source',
+    provenance: 'packages/cf-backend/wrangler.jsonc:121-124',
+    date: '2026-08-22',
+    trigger: 'a sandbox workload needs more than 2 CPU cores',
+    onBreach: 'the workload receives no additional cores and remains bounded by the container allocation',
+    observable: [],
+    firstPartySignal: false,
+  },
+
+  'container.instance.memory': {
+    subject: 'Memory allocated to each Kinu sandbox container',
+    limit: { value: 6_144 * MiB, unit: 'bytes' },
+    origin: 'self-imposed',
+    bounds: 'peak-resident',
+    evidence: 'proven-by-source',
+    provenance: 'packages/cf-backend/wrangler.jsonc:121-124',
+    date: '2026-08-22',
+    trigger: 'sandbox resident memory exceeds the configured 6144 MiB allocation',
+    onBreach: 'the container process is terminated by its memory limit',
+    observable: [],
+    firstPartySignal: false,
+    measurements: [
+      { scenario: 'deployed container free -m total', value: 6_185 * MiB, unit: 'bytes' },
+    ],
+  },
+
+  'container.instance.disk': {
+    subject: 'Disk allocated to each Kinu sandbox container',
+    limit: { value: 8_000 * MB, unit: 'bytes' },
+    origin: 'self-imposed',
+    bounds: 'storage',
+    evidence: 'proven-by-source',
+    provenance: 'packages/cf-backend/wrangler.jsonc:121-124',
+    date: '2026-08-22',
+    trigger: 'sandbox files consume the configured 8000 MB disk allocation',
+    onBreach: 'writes fail because the container disk is full',
+    observable: [],
+    firstPartySignal: false,
+  },
+
   'worker.isolate.memory': {
     subject: 'Memory per V8 isolate: JavaScript heap plus WebAssembly allocations',
     limit: { value: 128 * MB, unit: 'bytes' },

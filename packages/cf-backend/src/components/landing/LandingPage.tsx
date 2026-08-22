@@ -12,8 +12,17 @@ import { LandingShowcases } from './LandingShowcases';
 
 const REPOSITORY = 'https://github.com/AshishKumar4/kinu';
 const storageLimit = platformFact('do.storage.bytes').limit;
+const sandboxCpu = platformFact('container.instance.vcpu').limit;
+const sandboxMemory = platformFact('container.instance.memory').limit;
+const sandboxDisk = platformFact('container.instance.disk').limit;
 if (storageLimit?.unit !== 'bytes') throw new Error('do.storage.bytes has no byte limit');
-const STORAGE_GB = storageLimit.value / (1024 ** 3);
+if (sandboxCpu?.unit !== 'count') throw new Error('container.instance.vcpu has no count');
+if (sandboxMemory?.unit !== 'bytes') throw new Error('container.instance.memory has no byte limit');
+if (sandboxDisk?.unit !== 'bytes') throw new Error('container.instance.disk has no byte limit');
+const STORAGE_GB = storageLimit.value / 1_000_000_000;
+const SANDBOX_VCPU = sandboxCpu.value;
+const SANDBOX_MEMORY_GB = sandboxMemory.value / (1024 ** 3);
+const SANDBOX_DISK_GB = sandboxDisk.value / 1_000_000_000;
 const SHELL = 'landing-shell';
 const SECTION = 'border-t p-border py-20 lg:py-[104px] lg:pb-24';
 const CARD = 'min-w-0 rounded-[14px] border p-border p-surface';
@@ -331,7 +340,12 @@ export function LandingPage({ install }: { install: string }): ReactElement {
       <main>
         <LandingHero install={install} />
         <FeatureStrip />
-        <LandingShowcases />
+        <LandingShowcases
+          storageGb={STORAGE_GB}
+          sandboxVcpu={SANDBOX_VCPU}
+          sandboxMemoryGb={SANDBOX_MEMORY_GB}
+          sandboxDiskGb={SANDBOX_DISK_GB}
+        />
         <div className={SHELL}>
           <PlatformSection />
           <QuickstartSection />

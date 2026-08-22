@@ -1,9 +1,33 @@
 import { Button, Tabs, type TabsItem } from '@cloudflare/kumo';
 import { useEffect, useState, type ReactElement } from 'react';
+import type { UIMessage } from 'ai';
 
 import { KinuLogo } from '@/components/ui/KinuLogo';
+import { MessageView } from '@/components/MessageView';
 
 const RUN_TABS: TabsItem[] = [{ value: 'run', label: 'Run' }, { value: 'supervise', label: 'Supervise' }];
+
+const WORKSPACE_DEMO_MESSAGES: UIMessage[] = [
+  {
+    id: 'landing-workspace-user',
+    role: 'user',
+    parts: [{ type: 'text', text: 'Audit the checkout flow, find why the SAVE20 coupon 500s, and fix it. Deploy to staging when green.' }],
+  },
+  {
+    id: 'landing-workspace-agent',
+    role: 'assistant',
+    parts: [
+      { type: 'reasoning', text: 'The coupon path goes through /api/cart/apply. I should reproduce first, then inspect the handler and migration.' },
+      { type: 'tool-run', toolCallId: 'landing-run', state: 'output-available', input: { runtime: 'sandbox', command: "curl -s -X POST localhost:8788/api/cart/apply -d '{\"code\":\"SAVE20\"}'" }, output: 'HTTP 500' },
+      { type: 'tool-execute_tools', toolCallId: 'landing-query', state: 'output-available', input: { code: '// Inspect coupon rows to find the missing kind\nconst rows = await sql`SELECT code, kind, value FROM coupons`;\nreturn rows;' }, output: '[{"code":"SAVE20","kind":null,"value":20}]' },
+      { type: 'text', text: "Tuesday's migration backfilled `kind` for fixed coupons only. I will patch the migration, add a regression test, and run the focused suite." },
+      { type: 'tool-file', toolCallId: 'landing-read', state: 'output-available', input: { action: 'read', path: 'packages/checkout/migrations/0042_coupon_kind.sql' }, output: '…' },
+      { type: 'tool-file', toolCallId: 'landing-edit', state: 'output-available', input: { action: 'edit', path: 'packages/checkout/migrations/0042_coupon_kind.sql', edits: [{}, {}] }, output: { error: 'old_text not found or not unique' } },
+      { type: 'tool-file', toolCallId: 'landing-write', state: 'output-available', input: { action: 'write', path: 'packages/checkout/tests/coupon-kind.test.ts' }, output: 'ok' },
+      { type: 'tool-tasks', toolCallId: 'landing-task', state: 'output-available', input: { action: 'update', id: 't4', status: 'done' }, output: 'ok' },
+    ],
+  },
+];
 
 function WorkspacePreview(): ReactElement {
   const [altitude, setAltitude] = useState('run');
@@ -29,7 +53,7 @@ function WorkspacePreview(): ReactElement {
           indicatorClassName="!rounded-full !bg-[var(--c-accent)] !shadow-none !ring-0"
         />
       </div>
-      <div className="grid min-h-[640px] grid-cols-1 md:grid-cols-[minmax(0,1fr)_280px] lg:grid-cols-[190px_minmax(0,1fr)_330px]">
+      <div className="grid min-h-[760px] grid-cols-1 md:grid-cols-[minmax(0,1fr)_280px] lg:grid-cols-[190px_minmax(0,1fr)_330px]">
         <aside className="hidden border-r p-border p-recessed px-3 py-3.5 lg:block">
           <div className="px-2 pb-2.5 text-[11px] p-text-4">Workspaces</div>
           <div className="flex items-center gap-2 rounded-lg p-card-active px-2.5 py-2">
@@ -42,25 +66,24 @@ function WorkspacePreview(): ReactElement {
           <div className="mt-1.5 flex items-center gap-2 px-2.5 py-2 text-[12.5px] p-text-3"><span className="size-[5px] rounded-full p-fill" />checkout-svc</div>
         </aside>
         <div className="flex min-w-0 flex-col border-r p-border">
+          <div className="flex h-10 shrink-0 items-end gap-1 border-b p-border p-recessed px-3">
+            <span className="border-b-2 border-[var(--c-accent)] px-3 py-2 text-[11.5px] font-semibold p-text">Main</span>
+            <span className="px-3 py-2 text-[11.5px] p-text-4">Coupon tester</span>
+            <span className="px-3 py-2 text-[11.5px] p-text-4">Migration review</span>
+          </div>
           <div data-workspace-panel={altitude} className="flex flex-1 flex-col gap-3.5 overflow-hidden px-4 py-5 sm:px-6">
             {altitude === 'run' ? (
-              <>
-                <div className="max-w-[76%] self-end rounded-xl border p-user-bubble px-3.5 py-2.5 text-[13px] leading-[1.55]">Find the slowest test in this repo and explain why.</div>
-                <div className="grid grid-cols-[auto_auto_minmax(0,1fr)_auto] items-center gap-2 text-xs p-text-4">
-                  <span>▸</span><code className="p-text-2">run · laptop</code><code className="truncate">time bun test</code><span className="p-success">7 pass · 912 ms</span>
-                </div>
-                <div className="grid grid-cols-[auto_auto_minmax(0,1fr)_auto] items-center gap-2 text-xs p-text-4">
-                  <span>▸</span><code className="p-text-2">agents · swarm</code><code className="truncate">optimise · 3 branches</code><span className="p-gold">detached</span>
-                </div>
-                <p className="text-[13.5px] leading-[1.65] p-text"><strong>summary.test.ts</strong> takes ~864 ms of the suite's ~912 ms. The dedupe pass is O(n²). Each doubling quadruples runtime. A Map keyed by id reduces it to one pass.</p>
-                <div className="rounded-xl border border-[color-mix(in_srgb,var(--c-accent)_25%,transparent)] bg-[color-mix(in_srgb,var(--c-accent)_5%,transparent)] px-3.5 py-2.5 text-[12.5px] leading-[1.55] p-text-2"><strong className="p-gold">System</strong> · a background job settled while you were away and joined this turn.</div>
-                <div className="border-l-2 border-[var(--c-border-strong)] pl-3 text-[12.5px] leading-[1.6] p-text-4">Thinking · The result is stable. I will patch the one-pass dedupe and run the focused suite.</div>
-                <div className="overflow-hidden rounded-xl border p-border p-surface">
-                  <div className="grid grid-cols-[auto_auto_minmax(0,1fr)_auto] items-center gap-2 px-3 py-2.5 text-xs p-text-4"><span>▸</span><code className="p-text-2">file</code><code className="truncate">Edited src/dedupe.ts</code><span className="p-success">saved</span></div>
-                  <div className="grid grid-cols-[auto_auto_minmax(0,1fr)_auto] items-center gap-2 border-t border-dashed border-[var(--c-dash)] px-3 py-2.5 text-xs p-text-4"><span>▸</span><code className="p-text-2">run · workspace</code><code className="truncate">bun test summary</code><span className="p-success">2 pass</span></div>
-                </div>
-                <p className="text-[13.5px] leading-[1.65] p-text">The one-pass implementation keeps the same output and removes most of the suite time. The focused tests pass.</p>
-              </>
+              <div className="space-y-5">
+                {WORKSPACE_DEMO_MESSAGES.map((message, index) => (
+                  <MessageView
+                    key={message.id}
+                    message={message}
+                    isLast={index === WORKSPACE_DEMO_MESSAGES.length - 1}
+                    isStreaming={false}
+                    onFork={() => {}}
+                  />
+                ))}
+              </div>
             ) : (
               <>
                 <div className="flex items-start justify-between gap-4"><div><div className="text-[11px] uppercase tracking-[.14em] p-gold">Supervise</div><h3 className="mt-1.5 text-lg font-semibold p-text">Three agents are working</h3></div><span className="rounded-full p-accent-subtle px-3 py-1 text-[11px] p-gold">2 active · 1 waiting</span></div>
@@ -268,13 +291,28 @@ function CliPreview(): ReactElement {
   );
 }
 
-export function LandingShowcases(): ReactElement {
+export function LandingShowcases({
+  storageGb,
+  sandboxVcpu,
+  sandboxMemoryGb,
+  sandboxDiskGb,
+}: {
+  readonly storageGb: number;
+  readonly sandboxVcpu: number;
+  readonly sandboxMemoryGb: number;
+  readonly sandboxDiskGb: number;
+}): ReactElement {
   return (
     <div className="landing-shell">
       <section data-showcase="workspace" className="pt-24">
-        <div className="mx-auto mb-11 max-w-[620px] text-center">
-          <h2 className="mb-3 text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">Every run leaves a clear record.</h2>
-          <p className="text-base leading-[1.6] p-text-3">See each file change, running job, and tool the agent creates. When it needs a decision, it asks you here.</p>
+        <div className="mx-auto mb-11 max-w-[760px] text-center">
+          <h2 className="mb-3 text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">Have your agents <span className="p-gold">live in the cloud.</span></h2>
+          <p className="mx-auto max-w-[700px] text-base leading-[1.65] p-text-3">Each workspace keeps durable files, sessions, and memory. Attach an isolated Linux computer for heavier work, or securely connect your own machine.</p>
+          <div className="mt-5 flex flex-wrap justify-center gap-2 font-mono text-[10.5px] p-text-3">
+            <span className="rounded-full border p-border p-recessed px-3 py-1.5">{String(storageGb)} GB durable workspace</span>
+            <span className="rounded-full border p-border p-recessed px-3 py-1.5">{String(sandboxVcpu)} vCPU · {String(sandboxMemoryGb)} GB RAM · {String(sandboxDiskGb)} GB disk sandbox</span>
+            <span className="rounded-full border p-border p-recessed px-3 py-1.5">Secure device connection</span>
+          </div>
         </div>
         <WorkspacePreview />
       </section>
