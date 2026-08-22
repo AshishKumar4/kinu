@@ -2090,7 +2090,8 @@ function ChatHistoryFrame() {
 
   const transcript = useMemo(() => mergeTranscript(history.fetched, live), [history.fetched, live]);
   const messagesRef = useGrowingScroll<HTMLDivElement>({
-    grows: "up", content: transcript, fetched: history.fetched, onReachEdge: history.loadMore,
+    grows: "up", content: transcript, fetched: history.fetched, loading: history.loading,
+    onReachEdge: history.loadMore,
   });
 
   // Driven from the test, so a live turn can be made to land while an older
@@ -3433,8 +3434,10 @@ function StreamingFrame() {
   return (
     <div className="flex justify-center p-bg p-text min-h-screen">
       <div data-gallery-stream className="@container flex w-full max-w-[640px] flex-col gap-8 border-x p-border px-6 py-6">
-        {STREAMING_MESSAGES.map((m) => (
-          <MessageView key={m.id} message={m} isLast isStreaming onFork={() => {}} />
+        {STREAMING_MESSAGES.map((message) => (
+          <div data-stream-id={message.id} key={message.id}>
+            <MessageView message={message} isLast isStreaming onFork={() => {}} />
+          </div>
         ))}
       </div>
     </div>

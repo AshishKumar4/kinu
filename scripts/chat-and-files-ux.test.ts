@@ -55,8 +55,8 @@ interface TailFrame {
   readonly thinkingRows: number;
   /** A shimmering label — the live reasoning block wears one. */
   readonly shimmerLabels: number;
-  /** The pulsing dot a call in flight carries on its own row. */
-  readonly runningDots: number;
+  /** The animated label a call in flight carries on its own row. */
+  readonly runningIndicators: number;
 }
 
 /** One chat row, as the browser placed and drew it. */
@@ -88,7 +88,7 @@ interface RunNode {
 }
 
 interface Observed {
-  readonly tails: TailFrame[];
+  readonly tails: Record<string, TailFrame>;
   readonly chat: Record<string, ChatRow>;
   readonly forkInterruptedAfterClick: ChatRow;
   /** The failed-turn card's headline, keyed by whether it is a replay. */
@@ -156,27 +156,31 @@ async function readRunNodes(page: Page): Promise<Record<string, RunNode>> {
   });
 }
 
-async function readTails(page: Page): Promise<TailFrame[]> {
-  return page.$$eval('[data-gallery-stream] > *', (rows) => rows.map((row) => {
-    const streaming = row.querySelector('.p-streaming');
-    const last = streaming?.lastElementChild ?? null;
-    let heightCostPx = 0;
-    if (streaming !== null) {
-      const withCaret = streaming.getBoundingClientRect().height;
-      streaming.classList.remove('p-streaming');
-      heightCostPx = Math.round(withCaret - streaming.getBoundingClientRect().height);
-      streaming.classList.add('p-streaming');
+async function readTails(page: Page): Promise<Record<string, TailFrame>> {
+  return page.$$eval('[data-stream-id]', (rows) => {
+    const measured: Record<string, TailFrame> = {};
+    for (const row of rows) {
+      const streaming = row.querySelector('.p-streaming');
+      const last = streaming?.lastElementChild ?? null;
+      let heightCostPx = 0;
+      if (streaming !== null) {
+        const withCaret = streaming.getBoundingClientRect().height;
+        streaming.classList.remove('p-streaming');
+        heightCostPx = Math.round(withCaret - streaming.getBoundingClientRect().height);
+        streaming.classList.add('p-streaming');
+      }
+      measured[row.getAttribute('data-stream-id') ?? ''] = {
+        caretWidth: last === null ? 'none' : getComputedStyle(last, '::after').width,
+        heightCostPx,
+        thinkingRows: row.querySelectorAll('[aria-live="polite"]').length,
+        shimmerLabels: row.querySelectorAll('.p-shimmer').length,
+        // The adopted tool row uses the same shimmer register as other live
+        // labels; it no longer adds a second pulse dot beside the caret.
+        runningIndicators: row.querySelectorAll('.p-shimmer').length,
+      };
     }
-    return {
-      caretWidth: last === null ? 'none' : getComputedStyle(last, '::after').width,
-      heightCostPx,
-      thinkingRows: row.querySelectorAll('[aria-live="polite"]').length,
-      shimmerLabels: row.querySelectorAll('.p-shimmer').length,
-      // The one shipped spelling after the reduced-motion cutover; counting the
-      // old ad-hoc class would read a regression back to it as zero dots too.
-      runningDots: row.querySelectorAll('.p-dot-pulse').length,
-    };
-  }));
+    return measured;
+  });
 }
 
 async function run(): Promise<Observed> {
@@ -186,6 +190,7 @@ async function run(): Promise<Observed> {
     await stream.goto(`${origin}/gallery.html?frame=streaming`, { waitUntil: 'networkidle0' });
     await stream.reload({ waitUntil: 'networkidle0' });
     await stream.waitForSelector('[data-gallery-stream] .p-streaming');
+    await stream.waitForSelector('[data-stream-id="st-tool"] .p-shimmer', { timeout: 20_000 });
     const tails = await readTails(stream);
     await stream.close();
 
@@ -282,21 +287,20 @@ async function run(): Promise<Observed> {
     };
   });
 }
-
-/** Frame order in `STREAMING_MESSAGES` (gallery.tsx). */
-const TEXT = 0;
-const AFTER_TOOLS = 1;
-const TOOL_IN_FLIGHT = 2;
-const REASONING = 3;
-const CODE_FENCE = 4;
-const NO_PARTS = 5;
+/** Stable fixture identities from `STREAMING_MESSAGES` (gallery.tsx). */
+const TEXT = 'st-text';
+const AFTER_TOOLS = 'st-after-tools';
+const TOOL_IN_FLIGHT = 'st-tool';
+const REASONING = 'st-reasoning';
+const CODE_FENCE = 'st-fence';
+const NO_PARTS = 'st-empty';
 
 let observed: Observed;
 beforeAll(async () => { observed = await run(); }, 240_000);
 
 describe('the streaming turn, as a browser lays it out', () => {
   test('it measures something — six live tails, not an empty denominator', () => {
-    expect(observed.tails).toHaveLength(6);
+    expect(Object.keys(observed.tails)).toHaveLength(6);
   });
 
   test('the caret is drawn, and drawn INSIDE the last block of the streamed text', () => {
@@ -330,10 +334,10 @@ describe('the streaming turn, as a browser lays it out', () => {
   });
 
   test('a call in flight owns the indicator — no second claim under it', () => {
-    // The honesty property. Its row already pulses; adding a "Thinking" row
+    // The honesty property. Its row already shimmers; adding a "Thinking" row
     // below would assert two concurrent activities from one stream position.
     expect(observed.tails[TOOL_IN_FLIGHT]!.thinkingRows).toBe(0);
-    expect(observed.tails[TOOL_IN_FLIGHT]!.runningDots).toBeGreaterThan(0);
+    expect(observed.tails[TOOL_IN_FLIGHT]!.runningIndicators).toBeGreaterThan(0);
     expect(observed.tails[TOOL_IN_FLIGHT]!.caretWidth).toBe('none');
   });
 

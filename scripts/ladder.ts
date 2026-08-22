@@ -591,9 +591,11 @@ export const LADDER: readonly Gate[] = [
       + 'list the gate prints on its green path is the honest answer to that.',
   },
   {
+    // Measured 2026-08-22 on the 24-thread workstation: 33.15s with four
+    // isolated Bun workers, versus 78.16s in one shared process.
     run: 'bun run test',
     tier: 'push',
-    seconds: 24,
+    seconds: 34,
     catches: 'behavioural regressions in agent-utils, core and compaction — the whole '
       + 'shared spine both backends run on. No test COUNT is quoted here: this entry '
       + 'carried 3,105 against a measured 3,917, and forty lines below it this same '
@@ -619,9 +621,10 @@ export const LADDER: readonly Gate[] = [
     blind: 'the suites that use it.',
   },
   {
-    run: 'bun test packages/cf-backend/',
+    // Measured 2026-08-22: 6.43s, four isolated workers.
+    run: 'bun test --parallel=4 packages/cf-backend/',
     tier: 'push',
-    seconds: 13,
+    seconds: 7,
     catches: 'the Cloudflare composition root observed against the capability manifest '
       + '— the conformance gate.',
     blind: 'anything needing a Workers runtime rather than a composition root — every '
@@ -682,17 +685,19 @@ export const LADDER: readonly Gate[] = [
       + 'An unreachable feed is reported as `unknown` via `blocked()`, never as a clean tree.',
   },
   {
-    run: 'bun test packages/cli-backend/',
+    // Measured 2026-08-22: 18.42s, four isolated workers.
+    run: 'bun test --parallel=4 packages/cli-backend/',
     tier: 'ci',
-    seconds: 41,
+    seconds: 19,
     catches: 'the local composition root and its conformance gate, plus the real host '
       + 'filesystem and checkpoint paths.',
     blind: 'the CLI surface above it.',
   },
   {
-    run: 'bun test packages/cli/',
+    // Measured 2026-08-22: 23.52s, four isolated workers.
+    run: 'bun test --parallel=4 packages/cli/',
     tier: 'ci',
-    seconds: 74,
+    seconds: 24,
     catches: 'the production CLI end to end, including the PTY and subprocess paths. Every '
       + 'file it claims runs in no other tier, asserted in ladder.test.ts as an empty '
       + 'overlap rather than as the count this sentence used to carry. It runs headless — '
@@ -703,10 +708,9 @@ export const LADDER: readonly Gate[] = [
       + 'silently moved ten of these tests onto their signed-in branch; '
       + 'scripts/test-scratch-home.ts now strips those, so the result no longer depends '
       + 'on whose shell ran it.',
-    blind: 'nothing in its own surface. It is the costliest gate at ci outside the live '
-      + 'eval tier — asserted from the declared costs in ladder.test.ts, where it used to '
-      + 'be a percentage of a denominator nobody could reproduce — which is why it is not '
-      + 'earlier.',
+    blind: 'the deployed CLI archive and a real person\'s terminal outside the synthetic PTY. '
+      + 'The download smoke and asset-integrity gates own the archive; neither proves terminal '
+      + 'rendering on a user\'s emulator.',
   },
   {
     run: 'bun test packages/pc-agent/',
@@ -1157,39 +1161,16 @@ export const SERIAL_GATES = {
 } satisfies Record<string, string>;
 
 /**
- * Gates that may not run beside EACH OTHER, though they may run beside anything
- * else. One entry, and it was found by running the wave rather than by reading it.
- *
- * A gate not named here is independent of every other gate. That was asserted
- * from the harness source once — "they take a free port from `freePort(5199)`
- * rather than a fixed one" — and the assertion was wrong, which is the reason this
- * declaration is now driven by a measurement.
- *
- * `deploy.test.ts` holds this equal to deploy.sh's own table.
+ * Same-wave exclusions. Empty after the gallery harness moved to a
+ * kernel-assigned port and per-process Vite cache, fixtures gained semantic
+ * identities, and the chat anchor stopped re-pinning on page-settle commits.
+ * `deploy.test.ts` holds this equal to deploy.sh's table.
  */
-export const EXCLUSION_GROUPS = {
-  gallery: {
-    why:
-      'each boots vite and Chrome over the same gallery, and `withGallery` picks a port by '
-      + 'PROBING it with `createServer`, closing it, and only then spawning vite. Two gates '
-      + 'starting together can pick the same port, and the loser\'s readiness probe then '
-      + 'reaches the WINNER\'S server: same document, same URL shape, nothing distinguishes '
-      + 'them. Measured 2026-08-21, run concurrently in two rounds of two, `public-pages` and '
-      + '`swarm-tree-geometry` failed in both and passed alone — once as '
-      + '`net::ERR_CONNECTION_REFUSED` 74s into a navigation when the foreign server was torn '
-      + 'down, and once as 16 assertions passing against another worktree\'s build. This '
-      + 'machine normally has several worktrees checked out, and four abandoned gallery '
-      + 'servers from three of them were listening on 5199 and 5200 at the time, one 46 hours '
-      + 'old. The harness owns that defect; until it makes readiness an identity check rather '
-      + 'than a reachability check, these four take turns.',
-    gates: [
-      'bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts',
-      'bun test scripts/public-pages.test.ts',
-      'bun test scripts/swarm-tree-geometry.test.ts',
-      'bun test scripts/chat-scroll.test.ts',
-    ],
-  },
-} satisfies Record<string, { readonly why: string; readonly gates: readonly string[] }>;
+export interface ExclusionGroup {
+  readonly why: string;
+  readonly gates: readonly string[];
+}
+export const EXCLUSION_GROUPS: Readonly<Record<string, ExclusionGroup>> = {};
 
 /**
  * The deploy tier, read out of deploy.sh. A parse of the authoritative list,

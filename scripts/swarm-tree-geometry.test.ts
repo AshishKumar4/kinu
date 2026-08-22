@@ -85,7 +85,7 @@ function readGeometry(page: Page): Promise<FrameGeometry> {
   return page.evaluate((): FrameGeometry => {
     const scene = document.querySelector('g.mcts-bands')?.closest('svg') ?? null;
     const legendEl = document.querySelector('[data-tree-legend]');
-    const cardEl = legendEl?.closest('.rounded-lg') ?? null;
+    const cardEl = legendEl?.closest('[data-tree-card]') ?? null;
     const box = (el: Element | null) => (el === null ? null : el.getBoundingClientRect());
     const sceneBox = box(scene);
     const legendBox = box(legendEl);
@@ -288,6 +288,10 @@ async function readGeometryFrames(browser: Browser, origin: string): Promise<Geo
           // resolves `networkidle0` with an empty body, which is exactly the
           // state this file exists to stop being green.
           await page.waitForSelector('g.mcts-band');
+          await page.waitForSelector('[data-tree-legend]', { timeout: 20_000 });
+          if (frame === 'forkmerge') {
+            await page.waitForSelector('[data-tree-card]', { timeout: 20_000 });
+          }
           await settled(page);
           observed[key(frame, width, mode)] = await readGeometry(page);
         } finally {

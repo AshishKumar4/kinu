@@ -69,9 +69,9 @@ const NON_BUN_RUNNERS = {
  */
 const ROOT_TEST_OMISSIONS = {
   'packages/test-utils': 'bun test packages/test-utils/',
-  'packages/cf-backend': 'bun test packages/cf-backend/',
-  'packages/cli-backend': 'bun test packages/cli-backend/',
-  'packages/cli': 'bun test packages/cli/',
+  'packages/cf-backend': 'bun test --parallel=4 packages/cf-backend/',
+  'packages/cli-backend': 'bun test --parallel=4 packages/cli-backend/',
+  'packages/cli': 'bun test --parallel=4 packages/cli/',
   'packages/pc-agent': 'bun test packages/pc-agent/',
 } satisfies Record<string, string>;
 
@@ -270,11 +270,11 @@ describe('every test file is claimed by some runner', () => {
   });
 
   test('the CLI suite is the only tier that runs its own files', () => {
-    // `bun test packages/cli/` says so in prose, and said "41 of these 42 files"
-    // until the 43rd landed. Derived as an empty overlap rather than as a count,
-    // for the reason claims() gives above: a cardinality over a globbed set is
-    // drift by construction, and this one drifted while nothing noticed.
-    const cliGate = 'bun test packages/cli/';
+    // The CLI gate says so in prose, and said "41 of these 42 files" until the
+    // 43rd landed. Derived as an empty overlap rather than as a count, for the
+    // reason claims() gives above: a cardinality over a globbed set is drift by
+    // construction, and this one drifted while nothing noticed.
+    const cliGate = 'bun test --parallel=4 packages/cli/';
     const cliFiles = claims(cliGate, tracked);
     expect(cliFiles.length).toBeGreaterThan(0);
     const elsewhere = new Set(gatesFor('ci', deploy)
@@ -417,21 +417,19 @@ describe('cost, so a tier that stops being run is a decision and not a drift', (
     expect(vague).toEqual([]);
   });
 
-  test('the CLI suite is the costliest gate at ci outside the live eval tier', () => {
-    // Its `blind` claims this, and claimed it as "54% of the suite's wall clock
-    // for 7.5% of its tests" — two percentages over denominators nobody could
-    // reproduce, beside a pass count that had drifted by 17. An ordering over the
-    // declared costs cannot rot: a gate that overtakes it turns this red on the
-    // commit that makes the sentence wrong.
+  test('heavy package gates use four isolated Bun workers', () => {
     const atCi = gatesFor('ci', deploy);
-    const cliGate = 'bun test packages/cli/';
-    const cli = atCi.find((gate) => gate.run === cliGate);
-    if (!cli) throw new Error(`${cliGate} is not a gate at ci`);
-    const dearer = atCi
-      .filter((gate) => gate.run !== cliGate && gate.run !== 'bun run test:eval')
-      .filter((gate) => gate.seconds >= cli.seconds)
-      .map((gate) => `${gate.run} — ${String(gate.seconds)}s`);
-    expect(dearer).toEqual([]);
+    for (const run of [
+      'bun test --parallel=4 packages/cf-backend/',
+      'bun test --parallel=4 packages/cli-backend/',
+      'bun test --parallel=4 packages/cli/',
+    ]) {
+      expect(atCi.some((gate) => gate.run === run), `${run} is not a gate at ci`).toBeTrue();
+    }
+    const packageJson = readFileSync(resolve(root, 'package.json'), 'utf8');
+    expect(packageJson).toContain(
+      '"test": "bun test --parallel=4 packages/agent-utils/ packages/core/ packages/compaction/"',
+    );
   });
 });
 

@@ -24,10 +24,10 @@ const REQUIRED_GATES = [
   "bun run test",
   "bun run test:mutation",
   "bun test packages/test-utils/",
-  "bun test packages/cf-backend/",
+  "bun test --parallel=4 packages/cf-backend/",
   "bun run test:workerd",
-  "bun test packages/cli-backend/",
-  "bun test packages/cli/",
+  "bun test --parallel=4 packages/cli-backend/",
+  "bun test --parallel=4 packages/cli/",
   "bun test scripts/eval.test.ts scripts/eval-triage.test.ts",
   `bun test ${BENCH_GATE_FILES.join(" ")}`,
   "bun test scripts/secret-scan.test.ts scripts/sources.test.ts",
@@ -166,8 +166,7 @@ describe("deploy gate", () => {
   // one is new:
   //   - every declared gate RUNS (set equality, so a dropped gate still fails — the
   //     old ordered compare caught that and this catches it too);
-  //   - the two SERIAL_GATES sit alone at the ends, which is the only ordering the
-  //     pipeline actually requires;
+  //   - every SERIAL_GATE sits in its own wave at the position it declares;
   //   - a failing gate stops the pipeline: no build mutation, and the run is
   //     strictly shorter than a whole run;
   //   - nothing mutates before the gates finish.
@@ -189,12 +188,13 @@ describe("deploy gate", () => {
     const alone = waves.filter((wave) => wave.length === 1).flat();
 
     expect(alone.sort()).toEqual(Object.keys(SERIAL_GATES).sort());
-    // Three waves, so the middle one really is one concurrent block. A barrier
-    // after every gate would satisfy the line above and be fully serial again.
+    // Three waves: preflight, one concurrent source block, then infrastructure.
+    // Barriers around every source gate would satisfy `alone` and make the
+    // pipeline serial, so pin the middle size.
     expect(waves.length).toBe(3);
     expect(waves[0]).toEqual(["bun scripts/preflight.ts"]);
-    expect(waves.at(-1)).toEqual(["bun run gate:infra"]);
     expect(waves[1]?.length).toBe(51);
+    expect(waves[2]).toEqual(["bun run gate:infra"]);
   });
 
   test("the exclusion table in the runner is the one the ladder declares", () => {
@@ -222,7 +222,7 @@ describe("deploy gate", () => {
     }
   });
 
-  test("the serial gates are the ends of the real run too", () => {
+  test("the serial gates are the ends of the real run", () => {
     const run = runDeploy("");
     const gates = run.events.filter((event) => !event.startsWith("MUTATE "));
 

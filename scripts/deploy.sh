@@ -120,16 +120,10 @@ json_field() {
 # a deploy runs, and collapsing them into a loop would leave the ladder reading
 # an empty tier.
 #
-# Four more gates may not run beside EACH OTHER, though they may run beside
-# anything else. This table is that rule and `EXCLUSION_GROUPS` in
-# scripts/ladder.ts carries the measured reason; deploy.test.ts holds the two
-# equal.
-declare -A GATE_GROUP=(
-  ['bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts']=gallery
-  ['bun test scripts/public-pages.test.ts']=gallery
-  ['bun test scripts/swarm-tree-geometry.test.ts']=gallery
-  ['bun test scripts/chat-scroll.test.ts']=gallery
-)
+# Cross-wave barriers own every remaining exclusion. The empty table stays
+# explicit because deploy.test.ts holds it equal to EXCLUSION_GROUPS; a future
+# same-wave exclusion has to update both declarations.
+declare -A GATE_GROUP=()
 GATE_LABELS=()
 GATE_CMDS=()
 
@@ -325,10 +319,10 @@ run_required_gate "Production deploy contract" bun test scripts/deploy.test.ts
 run_required_gate "Agent-utils, Core, and compaction suites" bun run test
 run_required_gate "Exploration policy mutations" bun run test:mutation
 run_required_gate "Test-utils suite" bun test packages/test-utils/
-run_required_gate "Cloudflare backend and conformance suite" bun test packages/cf-backend/
+run_required_gate "Cloudflare backend and conformance suite" bun test --parallel=4 packages/cf-backend/
 run_required_gate "Durable Object semantics under workerd" bun run test:workerd
-run_required_gate "CLI backend and conformance suite" bun test packages/cli-backend/
-run_required_gate "Full production CLI suite" bun test packages/cli/
+run_required_gate "CLI backend and conformance suite" bun test --parallel=4 packages/cli-backend/
+run_required_gate "Full production CLI suite" bun test --parallel=4 packages/cli/
 run_required_gate "Evaluation gate logic" bun test scripts/eval.test.ts scripts/eval-triage.test.ts
 run_required_gate "Benchmark harness guarantees" bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts
 run_required_gate "Secret scanner self-test" bun test scripts/secret-scan.test.ts scripts/sources.test.ts
@@ -385,6 +379,7 @@ run_required_gate "Lean proofs, consistency, and traceability" bun run verify:le
 
 # BARRIER. Everything above this line is independent and ran concurrently.
 flush_gates
+
 
 # Alone, and last. Everything above proves the SOURCE is deployable; this proves
 # the ACCOUNT is. Scoped to the environment being deployed (KINU_DEPLOY_ENV), so a

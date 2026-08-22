@@ -316,6 +316,7 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
     grows: "up",
     content: transcript,
     fetched: history.fetched,
+    loading: history.loading,
     onReachEdge: history.loadMore,
   });
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -535,6 +536,7 @@ export default function WorkspacePage() {
     grows: "up",
     content: transcript,
     fetched: history.fetched,
+    loading: history.loading,
     onReachEdge: history.loadMore,
   });
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
