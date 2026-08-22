@@ -1,7 +1,7 @@
 import { Button } from '@cloudflare/kumo';
 import { ArrowUpRightIcon, MoonIcon, SunIcon } from '@phosphor-icons/react';
 import { platformFact } from '@kinu.run/core';
-import type { ReactElement, ReactNode } from 'react';
+import { useState, type ReactElement, type ReactNode } from 'react';
 
 import { KinuLogo } from '@/components/ui/KinuLogo';
 import { toggleMode, useTheme } from '@/hooks/use-theme';
@@ -124,43 +124,6 @@ function ClientsSection(): ReactElement {
   );
 }
 
-type EvolutionSignalKind = 'score' | 'lesson' | 'merge' | 'version';
-
-function EvolutionSignal({ kind }: { kind: EvolutionSignalKind }): ReactElement {
-  if (kind === 'score') {
-    return (
-      <div aria-hidden="true" className="flex h-24 items-end gap-2">
-        {[42, 68, 88].map((height, index) => <span key={height} className={`w-5 rounded-t-sm ${index === 2 ? 'p-dot-accent motion-safe:animate-pulse' : 'p-fill'}`} style={{ height: `${String(height)}%` }} />)}
-      </div>
-    );
-  }
-  if (kind === 'lesson') {
-    return (
-      <div aria-hidden="true" className="relative h-24">
-        <span className="absolute left-0 top-3 rounded-lg border p-border p-recessed px-3 py-2 text-[10px] p-text-3">answer</span>
-        <span className="absolute left-[42%] top-10 font-mono text-xs p-gold">→</span>
-        <span className="absolute right-0 top-8 rounded-full border border-[var(--c-accent)] p-accent-subtle px-3 py-2 text-[10px] p-gold">lesson</span>
-      </div>
-    );
-  }
-  if (kind === 'merge') {
-    return (
-      <div aria-hidden="true" className="relative h-24">
-        <span className="absolute left-0 top-1 size-8 rounded-full border p-border p-surface" />
-        <span className="absolute left-0 top-14 size-8 rounded-full border p-border p-surface" />
-        <span className="absolute left-[38%] top-9 h-px w-[26%] bg-[var(--c-border-strong)]" />
-        <span className="absolute right-0 top-7 flex size-11 items-center justify-center rounded-full border border-[var(--c-accent)] p-accent-subtle font-mono text-[10px] p-gold">one</span>
-      </div>
-    );
-  }
-  return (
-    <div aria-hidden="true" className="relative h-24">
-      <span className="absolute left-1 top-5 h-12 w-[72%] rounded-md border p-border p-recessed" />
-      <span className="absolute left-4 top-3 h-12 w-[72%] rounded-md border p-border p-surface" />
-      <span className="absolute left-7 top-1 flex h-12 w-[72%] items-center px-3 font-mono text-[10px] p-gold">v12 · active</span>
-    </div>
-  );
-}
 
 function SwarmDag(): ReactElement {
   const nodes = [
@@ -214,29 +177,75 @@ function SwarmDag(): ReactElement {
 }
 
 function EvolutionSection(): ReactElement {
-  const clocks = [
-    ['Per step', 'Tool fitness', 'Execution evidence updates which tools the agent trusts and reaches for next.', 'score'],
-    ['Per turn', 'Lesson extraction', 'Your next message grades the answer. Confirmed lessons enter workspace memory.', 'lesson'],
-    ['Per session', 'Consolidation', 'Related lessons merge, while unresolved conflicts stay visible for later evidence.', 'merge'],
-    ['Across sessions', 'Scaffold evolution', 'Repeated patterns can change the agent loop. Every version remains reversible.', 'version'],
+  const stages = [
+    {
+      time: 'Every tool call',
+      title: 'Tool fitness',
+      evidence: 'Execution result · 7 tests passed',
+      change: 'Update the tool fitness score',
+      persists: 'A better tool choice on similar work',
+      detail: 'Success, failure, latency, and later turn evidence change which tools the agent trusts.',
+    },
+    {
+      time: 'After each turn',
+      title: 'Lesson extraction',
+      evidence: 'Your next message grades the answer',
+      change: 'Confirm or reject the inferred lesson',
+      persists: 'A lesson in workspace memory',
+      detail: 'The next user response supplies the grade. Unconfirmed guesses do not become durable lessons.',
+    },
+    {
+      time: 'At session boundaries',
+      title: 'Memory consolidation',
+      evidence: 'Related lessons and open conflicts',
+      change: 'Merge duplicates; preserve disagreement',
+      persists: 'Smaller, clearer workspace memory',
+      detail: 'Consolidation reduces repetition without hiding evidence that still conflicts.',
+    },
+    {
+      time: 'Across many sessions',
+      title: 'Scaffold evolution',
+      evidence: 'A repeated pattern with measured outcomes',
+      change: 'Evaluate a change to the agent loop',
+      persists: 'A reversible scaffold version',
+      detail: 'A candidate loop must beat the current version. Every accepted scaffold keeps a rollback path.',
+    },
   ] as const;
+  const [activeIndex, setActiveIndex] = useState(0);
+  const active = stages[activeIndex] ?? stages[0];
   return (
-    <section id="evolution" className={SECTION}>
+    <section id="evolution" data-evolution-stage={activeIndex} className={SECTION}>
       <RuleLabel>04 · Self-evolution</RuleLabel>
-      <SectionTitle>Learning compounds across <span className="p-gold">four connected clocks.</span></SectionTitle>
-      <p className="mb-10 mt-3.5 max-w-[680px] text-[17px] leading-[1.6] p-text-3">Each completed action can improve the next one. Tool evidence becomes lessons, lessons consolidate into memory, and repeated patterns can produce a new reversible scaffold version.</p>
-      <div className="overflow-hidden rounded-2xl border p-border p-surface">
-        <div className="grid gap-px bg-[var(--c-border)] sm:grid-cols-2 lg:grid-cols-4">
-          {clocks.map(([time, title, body, signal], index) => (
-            <article key={title} className="min-w-0 p-surface p-6 sm:p-7">
-              <div className="mb-5 flex items-center justify-between gap-3"><span className="font-mono text-[10px] uppercase tracking-[.14em] p-gold">{time}</span><span className="font-mono text-[10px] p-text-4">0{index + 1}</span></div>
-              <EvolutionSignal kind={signal} />
-              <h3 className="mb-2.5 mt-5 text-[15px] font-semibold p-text">{title}</h3>
-              <p className="text-sm leading-[1.65] p-text-3">{body}</p>
-            </article>
+      <SectionTitle>The agent learns at <span className="p-gold">four different speeds.</span></SectionTitle>
+      <p className="mb-10 mt-3.5 max-w-[720px] text-[17px] leading-[1.6] p-text-3">A tool result can change the next choice. Repeated evidence can change the agent loop itself. Select a timescale to see the full path.</p>
+      <div className="grid overflow-hidden rounded-2xl border p-border p-surface lg:grid-cols-[280px_minmax(0,1fr)]">
+        <div className="grid gap-px bg-[var(--c-border)] sm:grid-cols-2 lg:grid-cols-1">
+          {stages.map((stage, index) => (
+            <button
+              type="button"
+              key={stage.title}
+              aria-pressed={activeIndex === index}
+              onClick={() => setActiveIndex(index)}
+              className={`flex min-h-[88px] items-center justify-between gap-4 p-5 text-left transition-colors ${activeIndex === index ? 'p-accent-subtle' : 'p-recessed hover:p-elevated'}`}
+            >
+              <span><span className="block font-mono text-[10px] uppercase tracking-[.13em] p-gold">{stage.time}</span><strong className="mt-1.5 block text-[13.5px] p-text">{stage.title}</strong></span>
+              <span className={`font-mono text-sm ${activeIndex === index ? 'p-gold' : 'p-text-4'}`}>0{index + 1}</span>
+            </button>
           ))}
         </div>
-        <div className="flex flex-wrap items-center justify-center gap-3 border-t p-border p-recessed px-5 py-3 font-mono text-[10px] uppercase tracking-[.1em] p-text-4"><span>tool evidence</span><span className="p-gold">→</span><span>lessons</span><span className="p-gold">→</span><span>memory</span><span className="p-gold">→</span><span>versioned scaffold</span></div>
+        <div className="flex min-h-[390px] flex-col justify-between p-5 sm:p-8">
+          <div>
+            <div className="mb-7 flex flex-wrap items-baseline justify-between gap-3"><div><div className="font-mono text-[10px] uppercase tracking-[.14em] p-gold">{active.time}</div><h3 className="mt-2 text-[24px] font-semibold tracking-[-.02em] p-text">{active.title}</h3></div><span className="rounded-full border p-border p-recessed px-3 py-1 font-mono text-[10px] p-text-4">evidence → durable state</span></div>
+            <div className="grid items-stretch gap-3 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto_minmax(0,1fr)]">
+              <div className="rounded-xl border p-border p-recessed p-4"><span className="font-mono text-[9.5px] uppercase tracking-[.14em] p-text-4">Evidence</span><p className="mt-3 text-[13px] leading-[1.55] p-text">{active.evidence}</p></div>
+              <span aria-hidden="true" className="hidden self-center font-mono p-gold md:block">→</span>
+              <div className="rounded-xl border border-[color-mix(in_srgb,var(--c-accent)_35%,transparent)] p-accent-subtle p-4"><span className="font-mono text-[9.5px] uppercase tracking-[.14em] p-gold">Agent changes</span><p className="mt-3 text-[13px] leading-[1.55] p-text">{active.change}</p></div>
+              <span aria-hidden="true" className="hidden self-center font-mono p-gold md:block">→</span>
+              <div className="rounded-xl border p-border p-recessed p-4"><span className="font-mono text-[9.5px] uppercase tracking-[.14em] p-text-4">Persists</span><p className="mt-3 text-[13px] leading-[1.55] p-text">{active.persists}</p></div>
+            </div>
+          </div>
+          <p className="mt-7 border-t border-dashed border-[var(--c-dash)] pt-5 text-sm leading-[1.65] p-text-3">{active.detail}</p>
+        </div>
       </div>
     </section>
   );

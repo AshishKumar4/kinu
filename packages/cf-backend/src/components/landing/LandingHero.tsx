@@ -130,12 +130,12 @@ function buildTree(width: number, height: number): TreeState {
       node.hidden = true;
       continue;
     }
-    const probability = node.children.length === 0 ? 0.35 : 0.5;
+    const probability = node.children.length === 0 ? 0.32 : 0.23;
     node.pruned = random() < probability;
   }
   const visibleNodes = nodes.filter((node) => !node.hidden);
   [...visibleNodes].sort((a, b) => a.depth - b.depth || a.y - b.y)
-    .forEach((node, index) => { node.appear = 120 + index * 55 + random() * 35; });
+    .forEach((node, index) => { node.appear = 180 + index * 105 + random() * 55; });
   const lastAppear = Math.max(...visibleNodes.map((node) => node.appear));
   return { nodes, winner: winnerNode.id, winningPath, lastAppear };
 }
@@ -268,7 +268,7 @@ function SearchCanvas(): ReactElement {
     };
 
     resize();
-    const initialElapsed = reduced ? tree.lastAppear + 2_000 : 700;
+    const initialElapsed = reduced ? tree.lastAppear + 2_000 : 180;
     started = performance.now() - initialElapsed;
     paint(initialElapsed);
     if (!reduced) timer = window.setTimeout(() => draw(performance.now()), 34);

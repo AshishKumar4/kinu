@@ -40,6 +40,7 @@ interface Facts {
   workspace?: SurfaceFact;
   tui?: SurfaceFact;
   cli?: SurfaceFact;
+  interactions?: { workspace: boolean; decision: boolean; tui: boolean; cli: boolean; evolution: boolean };
   command?: string;
   copied?: boolean;
   homeLink?: { visible: boolean; hasGraphic: boolean };
@@ -195,6 +196,50 @@ beforeAll(async () => {
       facts.workspace = surfaces.workspace;
       facts.tui = surfaces.tui;
       facts.cli = surfaces.cli;
+      await page.evaluate(() => {
+        const root = document.querySelector('[data-workspace-mode]');
+        const supervise = [...(root?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? [])]
+          .find((button) => button.textContent?.trim() === 'Supervise');
+        supervise?.click();
+      });
+      await page.waitForFunction(
+        () => document.querySelector('[data-workspace-mode]')?.getAttribute('data-workspace-mode') === 'supervise',
+      );
+      await page.evaluate(() => {
+        const retry = [...document.querySelectorAll<HTMLButtonElement>('[data-decision-state] button')]
+          .find((button) => button.textContent?.trim() === 'Retry');
+        retry?.click();
+      });
+      await page.waitForFunction(
+        () => document.querySelector('[data-decision-state]')?.getAttribute('data-decision-state') === 'retried',
+      );
+      await page.evaluate(() => {
+        const root = document.querySelector('[data-tui-session]');
+        const jarvis = [...(root?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
+          .find((button) => button.textContent?.includes('Jarvis') === true);
+        jarvis?.click();
+      });
+      await page.waitForFunction(
+        () => document.querySelector('[data-tui-session]')?.getAttribute('data-tui-session') === 'jarvis',
+      );
+      await page.waitForSelector('[data-cli-stage="4"]', { timeout: 5_000 });
+      await page.click('button[aria-label="Replay CLI run"]');
+      await page.waitForSelector('[data-cli-stage="0"]');
+      await page.evaluate(() => {
+        const stage = [...document.querySelectorAll<HTMLButtonElement>('#evolution button')]
+          .find((button) => button.textContent?.includes('After each turn') === true);
+        stage?.click();
+      });
+      await page.waitForFunction(
+        () => document.getElementById('evolution')?.getAttribute('data-evolution-stage') === '1',
+      );
+      facts.interactions = await page.evaluate(() => ({
+        workspace: document.querySelector('[data-workspace-panel="supervise"]') !== null,
+        decision: document.querySelector('[data-decision-state="retried"]') !== null,
+        tui: document.querySelector('[data-tui-session="jarvis"]')?.textContent?.includes('staged rollout') === true,
+        cli: document.querySelector('[data-cli-stage="0"]') !== null,
+        evolution: document.querySelector('#evolution [aria-pressed="true"]')?.textContent?.includes('After each turn') === true,
+      }));
       facts.command = await page.$eval(
         '[data-install-command]',
         (element) => element.textContent?.trim() ?? '',
@@ -370,6 +415,15 @@ describe('the standalone landing runs', () => {
     expect(tui.height).toBeGreaterThan(600);
     expect(cli.height).toBeGreaterThan(150);
     expect(new Set([workspace.text, tui.text, cli.text]).size).toBe(3);
+  });
+
+  test('workspace, TUI, CLI, and evolution controls change their surfaces', () => {
+    const interactions = required(facts.interactions, 'landing interactions');
+    expect(interactions.workspace).toBeTrue();
+    expect(interactions.decision).toBeTrue();
+    expect(interactions.tui).toBeTrue();
+    expect(interactions.cli).toBeTrue();
+    expect(interactions.evolution).toBeTrue();
   });
 });
 

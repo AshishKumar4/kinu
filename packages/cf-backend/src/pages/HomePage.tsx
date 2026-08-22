@@ -50,37 +50,44 @@ export default function HomePage() {
           </h1>
         </header>
 
-        <form onSubmit={submit} className="p-focus min-w-0 rounded-[14px] border p-border p-surface transition-[border-color,box-shadow]">
-          <label htmlFor="workspace-mission" className="block px-5 pt-4 text-xs font-semibold p-text-4">
-            {MISSION_LABEL}
-          </label>
-          <textarea
-            id="workspace-mission"
-            value={mission}
-            onChange={(event) => setMission(event.currentTarget.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submit(); } }}
-            placeholder={MISSION_PLACEHOLDER}
-            rows={7}
-            autoFocus
-            disabled={busy}
-            className="block min-h-40 w-full resize-y bg-transparent px-5 pb-5 pt-3 text-[15px] leading-[1.7] p-text outline-none focus-visible:!outline-none placeholder:p-text-3 disabled:opacity-60"
-          />
+        <form onSubmit={submit} className="p-focus min-w-0 overflow-hidden rounded-2xl border p-border bg-[var(--c-input-bg)] shadow-[0_18px_55px_-42px_rgba(0,0,0,.75)] transition-[border-color,box-shadow]">
+          <div className="px-6 pt-5">
+            <label htmlFor="workspace-mission" className="block text-[12.5px] font-semibold p-text-3">
+              {MISSION_LABEL}
+            </label>
+            <textarea
+              id="workspace-mission"
+              value={mission}
+              onChange={(event) => setMission(event.currentTarget.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                  event.preventDefault();
+                  submit();
+                }
+              }}
+              placeholder={MISSION_PLACEHOLDER}
+              rows={6}
+              autoFocus
+              disabled={busy}
+              className="block min-h-[168px] w-full resize-none bg-transparent pb-4 pt-3 text-[15px] leading-[1.7] p-text outline-none focus-visible:!outline-none placeholder:p-text-3 disabled:opacity-60"
+            />
+          </div>
           {hasModels === false && (
-            <div className="px-5 pb-3">
+            <div className="px-6 pb-4">
               <CloudflareAIConnectNotice returnTo="/" message={CONNECT_AI_MESSAGE} />
             </div>
           )}
           {err && (
-            <div className="mx-5 mb-3 rounded-md px-3 py-2 text-xs p-notice-danger">{err}</div>
+            <div className="mx-6 mb-4 rounded-md px-3 py-2 text-xs p-notice-danger">{err}</div>
           )}
-          <div className="flex items-center justify-between gap-4 border-t p-border p-sidebar px-5 py-3">
-            <p className="text-[11.5px] leading-snug p-text-4">
+          <div className="flex flex-col items-start gap-4 px-6 pb-5 sm:flex-row sm:items-center sm:justify-between">
+            <p className="max-w-[390px] text-[11.5px] leading-[1.5] p-text-4">
               {MISSION_HELP}
             </p>
             <FilledButton
               type="submit"
               disabled={busy || !mission.trim() || hasModels === false}
-              className="!h-9 !rounded-lg px-5 text-[13px]"
+              className="!h-10 !rounded-full px-5 text-[13px]"
             >
               {busy && <Loader size="sm" />}
               Create workspace
