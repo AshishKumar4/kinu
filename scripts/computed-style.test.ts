@@ -13,12 +13,8 @@ interface Scenarios {
   readonly cutRoleToken: ThemeAudit;
   /** `var(--x, fallback)` against a token that does not exist. */
   readonly withFallback: ThemeAudit;
-  /** Silk's light face, reached the way a person reaches it. */
+  /** The light face, reached the way a person reaches it: the mode control. */
   readonly lightMode: ThemeAudit;
-  /** Umber's dark face, reached through its own control. */
-  readonly umberDark: ThemeAudit;
-  /** Umber's light face — both controls, the theme furthest from the default. */
-  readonly umberLight: ThemeAudit;
 }
 
 /**
@@ -26,15 +22,14 @@ interface Scenarios {
  *
  * The theme is carried by EVERY scenario rather than only the switched ones,
  * because a pin that is set but never read is indistinguishable from no pin at
- * all: the pre-paint script in `gallery.html:7-22` writes `data-mode` and
- * `data-palette` once at load and installs no listener, so a feature emulated
- * at the wrong moment leaves the page on whichever theme Chromium and
- * localStorage happened to produce while the test reads as pinned. Asserting
- * both axes is what makes the pin a measurement.
+ * all: the pre-paint script in `gallery.html` writes `data-mode` once at load
+ * and installs no listener, so a feature emulated at the wrong moment leaves
+ * the page on whichever theme Chromium happened to produce while the test
+ * reads as pinned. Asserting the axis every time is what makes the pin a
+ * measurement.
  */
 interface ThemeAudit {
   readonly mode: string | undefined;
-  readonly palette: string | undefined;
   readonly audit: PageAudit;
 }
 
@@ -57,7 +52,7 @@ async function run(): Promise<Scenarios> {
      * media query, and the harness never pinned it — it declares a pointing
      * device for `hover:` utilities (`gallery-harness.ts:96-100`) and stops
      * there. Unpinned, every assertion in this file read "the shipped
-     * stylesheet resolves every token" against whichever palette the Chromium
+     * stylesheet resolves every token" against whichever face the Chromium
      * build happened to prefer. Measured dark on this build; a build or CI image
      * that answered light would have silently moved the subject of the gate
      * without changing a line here.
@@ -70,9 +65,8 @@ async function run(): Promise<Scenarios> {
       // toggle is the next page's stored preference — and a stored preference
       // beats the emulated media query by design. Uncleared, the scenario that
       // clicks "light" silently moved every scenario after it off the theme it
-      // claims, and the palette scenario found the control already switched and
-      // timed out looking for its own label. Cleared before the pre-paint script
-      // runs, each scenario starts from "the user has never chosen".
+      // claims. Cleared before the pre-paint script runs, each scenario starts
+      // from "the user has never chosen".
       await page.evaluateOnNewDocument(() => { localStorage.clear(); });
       await page.goto(`${origin}/gallery.html?frame=shell`, { waitUntil: 'networkidle0' });
       // The signal that React has mounted the surface, not a guessed duration:
@@ -98,55 +92,43 @@ async function run(): Promise<Scenarios> {
       const audit = await page.evaluate(auditPage);
       // A plain object, not `dataset`: a DOMStringMap crosses the CDP boundary
       // as `{}` and every attribute read comes back undefined.
-      const { mode, palette } = await page.evaluate(() => ({
+      const { mode } = await page.evaluate(() => ({
         mode: document.documentElement.dataset.mode,
-        palette: document.documentElement.dataset.palette,
       }));
       await page.close();
-      return { mode, palette, audit };
+      return { mode, audit };
     };
 
     /**
-     * A theme entered through the controls a person actually clicks rather than
+     * A theme entered through the control a person actually clicks rather than
      * by setting the attribute — so a regression in `use-theme.ts` or in the
      * Sidebar wiring shows up here too, not just a missing token.
      *
-     * Each palette block is structurally distinct, not a filter over another
-     * one. `index.css:300-388` (umber light) carries its own record of "three
-     * passes of complaint, all the same one"; the silk blocks after it are a
-     * second full palette whose light face is the theme furthest from `:root`,
-     * four blocks deep in the cascade. Any token left unmapped in any of them
-     * renders as Kumo's uncustomised brand colour rather than throwing, which is
-     * why this has to be measured per theme and not inferred from one. Silk is
-     * the shipped default, so the controls here reach umber, not silk.
+     * Each block is structurally distinct, not a filter over the other one:
+     * `[data-mode="light"]` re-points every token, four rungs deep in the
+     * cascade. Any token left unmapped there renders as Kumo's uncustomised
+     * brand colour rather than throwing, which is why this has to be measured
+     * per theme and not inferred from dark.
      */
-    const throughTheControls = async (want: { mode: 'dark' | 'light'; palette: 'umber' | 'silk' }): Promise<ThemeAudit> => {
+    const throughTheControls = async (want: 'dark' | 'light'): Promise<ThemeAudit> => {
       const page = await openShell('dark');
-      // Ordered mode-then-palette only because the mode control's label depends
-      // on the mode; both are idempotent and neither reads the other.
-      const clicks = [
-        ...(want.mode === 'light' ? ['[aria-label="Switch to light mode"]'] : []),
-        ...(want.palette === 'umber' ? ['[aria-label="Switch to the umber palette"]'] : []),
-      ];
-      for (const control of clicks) {
-        await page.waitForSelector(control);
-        await page.click(control);
-      }
+      const control = '[aria-label="Switch to light mode"]';
+      await page.waitForSelector(control);
+      await page.click(control);
       // Polled rather than awaited on a selector so a control that fails to
       // switch reports the theme it stayed in, instead of failing every scenario
       // in this file from `beforeAll` with a timeout.
       const read = () => page.evaluate(() => ({
         mode: document.documentElement.dataset.mode,
-        palette: document.documentElement.dataset.palette,
       }));
       let applied = await read();
-      for (let attempt = 0; attempt < 40 && (applied.mode !== want.mode || applied.palette !== want.palette); attempt += 1) {
+      for (let attempt = 0; attempt < 40 && applied.mode !== want; attempt += 1) {
         await Bun.sleep(25);
         applied = await read();
       }
       const audit = await page.evaluate(auditPage);
       await page.close();
-      return { mode: applied.mode, palette: applied.palette, audit };
+      return { mode: applied.mode, audit };
     };
 
     return {
@@ -157,9 +139,7 @@ async function run(): Promise<Scenarios> {
       seededRadius: await on('.p-card { border-radius: calc(var(--radius) - 2px); }'),
       cutRoleToken: await on(null, '--r-card'),
       withFallback: await on('.p-card { outline-width: var(--never-declared-anywhere, 1px); }'),
-      lightMode: await throughTheControls({ mode: 'light', palette: 'silk' }),
-      umberDark: await throughTheControls({ mode: 'dark', palette: 'umber' }),
-      umberLight: await throughTheControls({ mode: 'light', palette: 'umber' }),
+      lightMode: await throughTheControls('light'),
     };
   });
 }
@@ -202,37 +182,24 @@ describe('computed-style gate', () => {
     // Without this the pin is decoration: `emulateMediaFeatures` could stop
     // applying, or move after `goto`, and every assertion above would quietly
     // change which theme it was making a claim about.
-    expect({ mode: scenarios.clean.mode, palette: scenarios.clean.palette })
-      .toEqual({ mode: 'dark', palette: 'silk' });
+    expect(scenarios.clean.mode).toBe('dark');
   });
 
-  test('the controls switch the document to each of the other three themes', () => {
-    // User-visible controls, and the denominator for the test below: a control
-    // that silently failed would leave these passes re-measuring the theme the
+  test('the control switches the document to the other face', () => {
+    // User-visible control, and the denominator for the test below: a control
+    // that silently failed would leave this pass re-measuring the theme the
     // four scenarios above already covered.
-    expect([
-      { mode: scenarios.lightMode.mode, palette: scenarios.lightMode.palette },
-      { mode: scenarios.umberDark.mode, palette: scenarios.umberDark.palette },
-      { mode: scenarios.umberLight.mode, palette: scenarios.umberLight.palette },
-    ]).toEqual([
-      { mode: 'light', palette: 'silk' },
-      { mode: 'dark', palette: 'umber' },
-      { mode: 'light', palette: 'umber' },
-    ]);
+    expect(scenarios.lightMode.mode).toBe('light');
   });
 
-  test('every other theme resolves every token it references', () => {
-    // Same instrument as the shipped-stylesheet test, pointed at each remaining
+  test('the other face resolves every token it references', () => {
+    // Same instrument as the shipped-stylesheet test, pointed at the remaining
     // theme. An unmapped role token renders as Kumo's uncustomised brand colour
-    // rather than throwing, which is why three rounds of it reached a human
-    // before a gate ever could — and why silk's two blocks are audited here
-    // rather than assumed complete because their sibling is.
-    const audited = [
-      ['silk light', scenarios.lightMode],
-      ['umber dark', scenarios.umberDark],
-      ['umber light', scenarios.umberLight],
-    ] as const;
-    expect(audited.map(([theme, s]) => ({ theme, findings: s.audit.findings, measured: s.audit.checked > 100 })))
-      .toEqual(audited.map(([theme]) => ({ theme, findings: [], measured: true })));
+    // rather than throwing, which is why rounds of it reached a human before a
+    // gate ever could — and why the light block is audited here rather than
+    // assumed complete because dark is.
+    const s = scenarios.lightMode;
+    expect({ findings: s.audit.findings, measured: s.audit.checked > 100 })
+      .toEqual({ findings: [], measured: true });
   });
 });

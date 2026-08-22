@@ -40,18 +40,18 @@
  * WITH a fallback is legal by design and is skipped — the fallback is the
  * author saying the token is optional.
  *
- * Every frame is audited under every THEME the stylesheet declares — two
- * palettes (umber, silk) × two modes — because a palette block is exactly where
+ * Every frame is audited under every THEME the stylesheet declares — both
+ * faces of the one palette family — because an override block is exactly where
  * an unmapped role token hides, and an unmapped token does not throw: it
  * renders as Kumo's uncustomised brand colour. Auditing one theme and calling
- * the stylesheet clean measures a quarter of what it governs. Each pass reads
- * `data-mode`/`data-palette` back off the document and fails if the page is not
- * on the theme the pass claims, since a pin nobody reads back is not a pin.
+ * the stylesheet clean measures half of what it governs. Each pass reads
+ * `data-mode` back off the document and fails if the page is not on the theme
+ * the pass claims, since a pin nobody reads back is not a pin. (The former
+ * palette axis retired with the champagne cutover; see index.css.)
  *
- *   bun scripts/computed-style.ts                     # every frame, four themes
+ *   bun scripts/computed-style.ts                     # every frame, both themes
  *   bun scripts/computed-style.ts chat forks          # named frames only
- *   bun scripts/computed-style.ts --palette silk      # one palette, both modes
- *   bun scripts/computed-style.ts --mode dark chat    # one theme, one frame
+ *   bun scripts/computed-style.ts --mode light chat   # one theme, named frames
  */
 
 import { withGallery } from './gallery-harness';
@@ -71,19 +71,15 @@ const FRAMES = [
   'landing', 'login', 'loginfail', 'install', 'approve', 'marks',
 ] as const;
 
-/** Palette × mode. `umber` selects no palette block at all (`:root` is it);
- *  `silk` — the shipped default — selects the two `[data-palette="silk"]`
- *  blocks. Both are named here so the attribute assertion can be exact. */
+/** The two faces of the one palette family. Named here so the attribute
+ *  assertion can be exact. */
 export interface Theme {
-  readonly palette: 'umber' | 'silk';
   readonly mode: 'dark' | 'light';
 }
 
 export const THEMES: readonly Theme[] = [
-  { palette: 'umber', mode: 'dark' },
-  { palette: 'umber', mode: 'light' },
-  { palette: 'silk', mode: 'dark' },
-  { palette: 'silk', mode: 'light' },
+  { mode: 'dark' },
+  { mode: 'light' },
 ];
 
 export interface Unresolved {
@@ -211,30 +207,26 @@ export async function audit(frames: readonly string[], themes: readonly Theme[] 
     const perTheme: { theme: string; checked: number }[] = [];
     let checked = 0;
     for (const theme of themes) {
-      const label = `${theme.palette} ${theme.mode}`;
+      const label = theme.mode;
       let themeChecked = 0;
       for (const frame of frames) {
         const page = await browser.newPage();
         await page.setViewport({ width: 1280, height: 1100 });
         // The mode rides `prefers-color-scheme`, which is what the pre-paint
-        // script reads absent a stored choice; the palette has no media query,
-        // so it is seeded into the storage that same script reads. Both are set
-        // before navigation because the script runs once, at load, and installs
-        // no listener.
+        // script reads absent a stored choice. It is pinned before navigation
+        // because the script runs once, at load, and installs no listener.
         await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: theme.mode }]);
-        await page.evaluateOnNewDocument((p: string) => { localStorage.setItem('palette', p); }, theme.palette);
         await page.goto(`${origin}/gallery.html?frame=${frame}`, { waitUntil: 'networkidle0' });
         // React renders after the mock RPC stubs resolve; the mock is async.
         await Bun.sleep(600);
         const applied = await page.evaluate(() => ({
           mode: document.documentElement.dataset.mode,
-          palette: document.documentElement.dataset.palette,
         }));
-        if (applied.mode !== theme.mode || applied.palette !== theme.palette) {
+        if (applied.mode !== theme.mode) {
           await page.close();
           throw new Error(
             `computed-style: asked for ${label} on ${frame}, document is on `
-            + `${applied.palette} ${applied.mode} — the pass would have reported against the wrong theme`,
+            + `${applied.mode} — the pass would have reported against the wrong theme`,
           );
         }
         const pageAudit = await page.evaluate(auditPage);
@@ -274,14 +266,13 @@ if (import.meta.main) {
     const at = argv.indexOf(`--${name}`);
     return at === -1 ? undefined : argv[at + 1];
   };
-  const palette = flag('palette');
   const mode = flag('mode');
-  const themes = THEMES.filter((t) => (!palette || t.palette === palette) && (!mode || t.mode === mode));
+  const themes = THEMES.filter((t) => !mode || t.mode === mode);
   if (themes.length === 0) {
-    console.error(`computed-style: --palette ${palette} --mode ${mode} names no theme`);
+    console.error(`computed-style: --mode ${mode} names no theme`);
     process.exit(1);
   }
-  const named = argv.filter((a, i) => !a.startsWith('--') && argv[i - 1] !== '--palette' && argv[i - 1] !== '--mode');
+  const named = argv.filter((a, i) => !a.startsWith('--') && argv[i - 1] !== '--mode');
   const frames = named.length > 0 ? named : FRAMES;
   const { found, checked, perTheme } = await audit(frames, themes);
   // A denominator of zero means the page never rendered or the selectors never

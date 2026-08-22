@@ -11,10 +11,15 @@
  *     reveal is written as "hide, then put back", so a browser that never runs
  *     the script shows the search — but only if the CSS agrees, and that is a
  *     cascade fact.
- *   - The bright line is the accent. The picture's argument is that colour
- *     means measurement, and it is made of computed strokes.
+ *   - The bright line is the accent's own face. The picture's argument is
+ *     that colour means measurement, and it is made of computed strokes.
+ *   - The claim is one static line inside the champagne block, and its ink
+ *     meets AA against the block itself — the one surface assembled in
+ *     TypeScript rather than declared by a token.
  *   - Nothing overflows at 390px. A public page that scrolls sideways on a
  *     phone is the one defect a visitor cannot work around.
+ *   - The frame holds its measure at every width: one centered column whose
+ *     rules run full-bleed, never a column that widens without purpose.
  *   - Text meets AA against the surface it actually lands on. The palette test
  *     proves the tokens; only a browser can say which token ended up on which
  *     background in a stylesheet assembled in TypeScript.
@@ -85,12 +90,13 @@ interface Facts {
   contrast: Contrast[];
   panel?: { hiddenAtFirst: boolean; openAfterClick: boolean; command: string };
   providers?: string[];
-  /** The rotating headline: what it said first, what it said next, how many
-   *  variants it holds, and how many were visible at one moment. */
-  tagline?: { first: string; second: string; variants: number; distinct: number; shownAtOnce: number };
-  /** The same headline under prefers-reduced-motion, read twice across more
-   *  than one rotation period. */
-  taglineStill?: { before: string; after: string };
+  /** The hero claim: how many h1 elements exist, what the block's says,
+   *  whether any rotation machinery remains, and how many pill actions the
+   *  block asks the visitor to choose between. */
+  claim?: { headlines: number; text: string; rotators: number; chip: string; pills: number };
+  /** The same claim read twice across more than one former rotation period:
+   *  a static line must not move. */
+  claimStill?: { before: string; after: string };
   /** Section labels in document order, and the § 06 self-deploy facts. */
   labels?: string[];
   deploy?: { button: string | null; guide: string | null; commands: string[] };
@@ -116,7 +122,7 @@ interface Facts {
    *  still fits the card it sits in. Keyed by viewport width. */
   wide: Record<string, {
     pageWidth: number; minPad: number; cellInner: number; glimpseFits: boolean;
-    heroLines: number; filmWidth: number; emptyMountHeight: number;
+    heroLines: number; filmWidth: number; emptyMountHeight: number; ruleWidth: number;
   }>;
 }
 
@@ -161,7 +167,6 @@ async function openPage(frame: string, theme: Theme, size: { width: number; heig
   const page = await browser.newPage();
   await page.setViewport(size);
   await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: theme.mode }]);
-  await page.evaluateOnNewDocument((palette: string) => { localStorage.setItem('palette', palette); }, theme.palette);
   // The hero's reveal is over in about 1.6s, so an observer that attaches after
   // load can miss it entirely on a cold vite compile. This watcher runs from
   // the document's first frame and keeps the first part-drawn frame it sees.
@@ -183,16 +188,15 @@ async function openPage(frame: string, theme: Theme, size: { width: number; heig
   await page.goto(`${origin}/gallery.html?frame=${frame}`, { waitUntil: 'networkidle0' });
   const applied = await page.evaluate(() => ({
     mode: document.documentElement.dataset.mode,
-    palette: document.documentElement.dataset.palette,
   }));
-  if (applied.mode !== theme.mode || applied.palette !== theme.palette) {
+  if (applied.mode !== theme.mode) {
     await page.close();
-    throw new Error(`${frame}: asked for ${theme.palette} ${theme.mode}, page is on ${applied.palette} ${applied.mode}`);
+    throw new Error(`${frame}: asked for ${theme.mode}, page is on ${applied.mode}`);
   }
   return page;
 }
 
-const SILK_DARK: Theme = { palette: 'silk', mode: 'dark' };
+const DARK: Theme = { mode: 'dark' };
 
 beforeAll(async () => {
   await withGallery(async (gallery) => {
@@ -201,7 +205,7 @@ beforeAll(async () => {
 
     // ── The tree grows, and it settles ────────────────────────────────
     {
-      const page = await openPage('landing', SILK_DARK, DESKTOP);
+      const page = await openPage('landing', DARK, DESKTOP);
       // The first moment the tree is PART drawn. Recorded from inside the page
       // by a watcher planted before navigation: polling from here raced the
       // reveal, and a slow first compile could finish all 35 nodes before the
@@ -238,22 +242,10 @@ beforeAll(async () => {
         new PerformanceObserver((list) => { window.__tasks = (window.__tasks ?? 0) + list.getEntries().length; })
           .observe({ type: 'longtask' });
       });
-      // Synchronise on a headline swap: the rotator toggles two spans every
-      // 3.6 s, and each swap is booked as layout twice — once when
-      // `data-shown` moves, once 460 ms later when the leaver's delayed
-      // `visibility` transition ends. Wait for the swap, outwait its tail,
-      // then open a window that closes before the next swap: anything counted
-      // in it belongs to the weave, which claims to touch nothing but its
-      // canvas.
-      await page.waitForFunction((was: string) => {
-        const now = document.querySelector('[data-taglines] > span[data-shown]')?.textContent ?? '';
-        return now !== was;
-      }, { polling: 'raf', timeout: 9000 }, await page.evaluate(
-        () => document.querySelector('[data-taglines] > span[data-shown]')?.textContent ?? '',
-      ));
-      const tail = Promise.withResolvers<void>();
-      setTimeout(tail.resolve, 700);
-      await tail.promise;
+      // At rest the only thing running on this page is the weave's frame
+      // loop: the tree reveal has settled and the claim is static. Open a
+      // plain timed window — anything counted in it belongs to the weave,
+      // which claims to touch nothing but its canvas.
       const layoutsBefore = (await page.metrics()).LayoutCount ?? 0;
       // A real delay on purpose: the clock under measurement is a rAF loop
       // inside a real browser, which no fake timer in this process can
@@ -297,7 +289,7 @@ beforeAll(async () => {
         const other = document.querySelector('#hero-tree .n[data-status="pruned"]')!;
         return {
           kept: getComputedStyle(kept).stroke,
-          accent: root.getPropertyValue('--c-accent').trim(),
+          accent: root.getPropertyValue('--c-accent-fg').trim(),
           prunedDash: getComputedStyle(pruned).strokeDasharray,
           keptWidth: Number(keptNode.getAttribute('r')),
           siblingWidth: Number(other.getAttribute('r')),
@@ -307,20 +299,23 @@ beforeAll(async () => {
       // ── Contrast, measured where the text actually sits ─────────────
       facts.contrast = await page.evaluate(() => {
         const samples: { what: string; selector: string }[] = [
-          { what: 'hero headline', selector: 'h1' },
-          { what: 'hero lede', selector: '.lede' },
-          { what: 'eyebrow', selector: '.eyebrow' },
+          { what: 'hero claim on the block', selector: '.block h1' },
+          { what: 'block support line', selector: '.block .say' },
+          { what: 'block chip', selector: '.block .chip' },
           { what: 'section label', selector: '.label' },
+          { what: 'section title', selector: '.head h2' },
+          { what: 'section lede', selector: '.head .lede' },
           { what: 'figure annotation', selector: '.anno span' },
           { what: 'figure caption', selector: 'figcaption' },
-          { what: 'stat label', selector: '.stat span' },
+          { what: 'claim row heading', selector: '.stat strong' },
+          { what: 'claim row body', selector: '.stat span' },
           { what: 'capability body', selector: '.cell p' },
           { what: 'command text', selector: '.cmd code' },
           { what: 'copy button', selector: '.copy' },
           { what: 'footer', selector: 'footer span' },
           { what: 'nav link', selector: '.nav .quiet' },
-          { what: 'section title', selector: '.title' },
           { what: 'deep prose', selector: '.body' },
+          { what: 'pull-quote', selector: '.pull' },
           { what: 'spec term', selector: '.spec dt' },
           { what: 'spec value', selector: '.spec dd' },
           { what: 'clock kicker', selector: '.cell .num' },
@@ -346,27 +341,25 @@ beforeAll(async () => {
         ratio: ratio(parseRgb(row.ink), parseRgb(row.paper)),
       })));
 
-      // ── The headline rotates, one line at a time ─────────────────────
-      // "It changes" is a pair of moments, like the tree's growth: read the
-      // line that is up now, then await the moment a DIFFERENT line is up.
-      {
-        const first = await page.evaluate(
-          () => document.querySelector('[data-taglines] > span[data-shown]')?.textContent?.trim() ?? '',
-        );
-        const second = await page.waitForFunction((was: string) => {
-          const now = document.querySelector('[data-taglines] > span[data-shown]')?.textContent?.trim() ?? '';
-          return now !== '' && now !== was ? now : null;
-        }, { polling: 'raf', timeout: 9000 }, first).then((handle) => handle.jsonValue());
-        const stack = await page.evaluate(() => {
-          const spans = [...document.querySelectorAll('[data-taglines] > span')];
-          return {
-            variants: spans.length,
-            distinct: new Set(spans.map((span) => span.textContent?.trim())).size,
-            shownAtOnce: spans.filter((span) => span.hasAttribute('data-shown')).length,
-          };
-        });
-        facts.tagline = { first, second: String(second), ...stack };
-      }
+      // ── The claim is static ───────────────────────────────────────────
+      // One h1, no rotation machinery in the document at all: the defect
+      // this replaces showed two variants ghosting through each other
+      // mid-fade, so the honest state is "there is nothing to rotate".
+      facts.claim = await page.evaluate(() => ({
+        headlines: document.querySelectorAll('h1').length,
+        text: document.querySelector('.block h1')?.textContent?.trim() ?? '',
+        rotators: document.querySelectorAll('[data-taglines]').length,
+        chip: document.querySelector('.block .chip')?.textContent?.trim() ?? '',
+        pills: [...document.querySelectorAll('.block .actions .btn')].length,
+      }));
+      // Read the claim twice across a wait longer than the old rotation
+      // period, so a regression back to a rotator shows up as movement.
+      const claimBefore = facts.claim.text;
+      await new Promise((resolve) => setTimeout(resolve, 4300));
+      const claimAfter = await page.evaluate(
+        () => document.querySelector('.block h1')?.textContent?.trim() ?? '',
+      );
+      facts.claimStill = { before: claimBefore, after: claimAfter };
 
       // ── The page's own table of contents, and § 06's way out ─────────
       facts.labels = await page.evaluate(
@@ -443,20 +436,19 @@ beforeAll(async () => {
       const opacities = await page.evaluate(() => [...document.querySelectorAll('#hero-tree .n')]
         .map((node) => Number(getComputedStyle(node).opacity)));
       facts.reducedMotion = { ...facts.reducedMotion, shown: opacities.filter((o) => o > 0.9).length };
-      // A reader who refused motion gets one headline that stays. Read it,
-      // outwait a full rotation period, read it again. A real delay on
-      // purpose: the clock under test is the page's own interval inside a
-      // real browser, which no fake timer in this process can advance.
+      // A reader who refused motion gets the same static claim. Read it,
+      // outwait a former rotation period, read it again — the same hold the
+      // live page is held to.
       const before = await page.evaluate(
-        () => document.querySelector('[data-taglines] > span[data-shown]')?.textContent?.trim() ?? '',
+        () => document.querySelector('.block h1')?.textContent?.trim() ?? '',
       );
-      const rotation = Promise.withResolvers<void>();
-      setTimeout(rotation.resolve, 4300);
-      await rotation.promise;
+      const still = Promise.withResolvers<void>();
+      setTimeout(still.resolve, 4300);
+      await still.promise;
       const after = await page.evaluate(
-        () => document.querySelector('[data-taglines] > span[data-shown]')?.textContent?.trim() ?? '',
+        () => document.querySelector('.block h1')?.textContent?.trim() ?? '',
       );
-      facts.taglineStill = { before, after };
+      facts.claimStill = { before, after };
 
       // ── Motion refused: the designed still, and the whole transcript ──
       facts.weaveStill = await page.evaluate(() => {
@@ -490,7 +482,7 @@ beforeAll(async () => {
       for (const [label, size] of [
         ['390', PHONE], ['640', TABLET], ['1280', DESKTOP], ['1920', WIDE], ['2560', WIDER],
       ] as const) {
-        const page = await openPage(frame, SILK_DARK, size);
+        const page = await openPage(frame, DARK, size);
         if (frame === 'landing') {
           await page.waitForFunction(() => !document.querySelector('[data-growing]'), { timeout: 8000 });
         }
@@ -529,21 +521,27 @@ beforeAll(async () => {
               return inner.left >= outer.left - 1 && inner.right <= outer.right + 1;
             });
             const lineHeight = (node: Element): number => parseFloat(getComputedStyle(node).lineHeight);
-            const taglines = [...document.querySelectorAll('[data-taglines] > span')];
+            const claim = document.querySelector('.block h1');
+            const rules = [...document.querySelectorAll('hr.rule')];
+            const widestRule = Math.max(...rules.map(
+              (rule) => rule.getBoundingClientRect().width), 0);
             return {
               pageWidth: column.getBoundingClientRect().width,
               minPad: Math.min(...cells.map(pad)),
               cellInner: Math.min(...cells.map((cell) => cell.clientWidth - pad(cell) * 2)),
               glimpseFits: fits,
-              // The rag: every variant of the headline, in lines.
-              heroLines: Math.max(...taglines.map(
-                (span) => Math.round(span.getBoundingClientRect().height / lineHeight(span)))),
+              // The rag: the claim, in lines.
+              heroLines: claim === null ? 99 : Math.round(
+                claim.getBoundingClientRect().height / lineHeight(claim)),
               // A single reading surface, at its widest on this page.
-              filmWidth: Math.max(...[...document.querySelectorAll('.film,.dag')]
+              filmWidth: Math.max(...[...document.querySelectorAll('.film,.dag,.dag-wrap')]
                 .map((film) => film.getBoundingClientRect().width), 0),
-              emptyMountHeight: Math.max(...mounts
+              emptyMountHeight: Math.max(...[...document.querySelectorAll('.film,.dag-wrap,[data-glimpse]')]
                 .filter((mount) => mount.childElementCount === 0)
                 .map((mount) => mount.getBoundingClientRect().height), 0),
+              // The frame spends the width, not the column: separators run
+              // the full viewport while the content stays measured.
+              ruleWidth: widestRule,
             };
           });
         }
@@ -553,7 +551,7 @@ beforeAll(async () => {
 
     // ── Sign-in offers a real way in ──────────────────────────────────
     {
-      const page = await openPage('login', SILK_DARK, DESKTOP);
+      const page = await openPage('login', DARK, DESKTOP);
       facts.providers = await page.evaluate(
         () => [...document.querySelectorAll('a.provider')].map((a) => a.getAttribute('href') ?? ''),
       );
@@ -750,17 +748,24 @@ describe('every public page fits the screen it is on', () => {
 });
 
 /**
- * A 2K or 4K screen is a design, not a leftover. The page widens in steps and
- * the cells take real padding, so these are the numbers that catch the
- * complaint they exist for: a column that ignores the room, a cell squeezed
- * below a legible width, and a glimpse breaking out of the card it sits in.
+ * A wide screen is where the reference language earns its keep: the FRAME
+ * takes the room — full-bleed rules, generous rhythm — and the reading
+ * column stays measured. These are the numbers that catch both failure
+ * modes: a column that widens without purpose (the owner's complaint about
+ * the previous tier system) and cells squeezed below legibility.
  */
 describe('the landing is designed for the wide screens', () => {
-  test('the column uses the room instead of holding one narrow measure', () => {
-    expect(facts.wide['1920']!.pageWidth, 'the page stayed narrow at 1920').toBeGreaterThan(1650);
-    expect(facts.wide['2560']!.pageWidth, 'the page stayed narrow at 2560').toBeGreaterThan(2100);
-    // And it never spills: the overflow pass above covers both widths too.
-    expect(facts.wide['2560']!.pageWidth).toBeLessThanOrEqual(2560);
+  test('the column keeps its measure and the frame spends the room', () => {
+    for (const at of ['1920', '2560'] as const) {
+      const wide = facts.wide[at]!;
+      // One centered column, 1200px plus its hairlines — never wider.
+      expect(wide.pageWidth, `${at}: the column widened without purpose`)
+        .toBeLessThanOrEqual(1202);
+      expect(wide.pageWidth, `${at}: the column collapsed`).toBeGreaterThan(1100);
+      // Separators run the full viewport: the width goes to the frame.
+      expect(wide.ruleWidth, `${at}: rules stopped short of full bleed`)
+        .toBeGreaterThanOrEqual(wide.pageWidth);
+    }
   });
 
   test('nothing crams: cells keep their padding and a mode cell stays legible', () => {
@@ -788,12 +793,10 @@ describe('the landing is designed for the wide screens', () => {
     }
   });
 
-  test('a reading surface caps its measure instead of stretching to the column', () => {
-    // A grid may take the whole width; one terminal or one demo may not. At
-    // 2560 an uncapped figure measured about 2300px, which is unreadable by
-    // construction.
+  test('a reading surface caps its measure instead of stretching to the viewport', () => {
+    // A figure may take the column; a terminal or a demo may not exceed it.
     expect(facts.wide['2560']!.filmWidth, 'a film or demo stretched past its measure')
-      .toBeLessThanOrEqual(1600);
+      .toBeLessThanOrEqual(1200);
     expect(facts.wide['2560']!.filmWidth, 'no film or demo was measured at all').toBeGreaterThan(0);
   });
 
@@ -817,24 +820,21 @@ describe('the public text is readable', () => {
   });
 });
 
-describe('the headline is alive', () => {
-  test('it changes over time, one line shown at a time', () => {
-    const tagline = facts.tagline!;
-    expect(tagline.variants).toBeGreaterThan(1);
-    expect(tagline.distinct, 'two variants say the same thing').toBe(tagline.variants);
-    expect(tagline.shownAtOnce, 'the stack showed more than one line').toBe(1);
-    expect(tagline.first).not.toBe('');
-    expect(tagline.second, 'the headline never changed').not.toBe(tagline.first);
-    // Every variant completes the same claim, so the page never flashes a
-    // fragment that reads as a different product.
-    expect(tagline.first).toStartWith('An agent of your own that');
-    expect(tagline.second).toStartWith('An agent of your own that');
+describe('the claim is one confident line', () => {
+  test('one h1 in the block, no rotation machinery anywhere', () => {
+    const claim = facts.claim!;
+    expect(claim.headlines, 'more than one headline on the page').toBe(1);
+    expect(claim.rotators, 'rotation machinery survived the rebuild').toBe(0);
+    expect(claim.text).toStartWith('An agent of your own that');
+    expect(claim.chip, 'the block lost its kicker').toContain('self-evolving');
+    // The reference block carries exactly one pill action: choice is the
+    // section's job, not the hero's.
+    expect(claim.pills, 'the hero asked for more than one action').toBe(1);
   });
 
-  test('refusing motion holds one line still', () => {
-    const still = facts.taglineStill!;
-    expect(still.before).not.toBe('');
-    expect(still.after).toBe(still.before);
+  test('the claim does not move, live or under refused motion', () => {
+    expect(facts.claimStill!.before).not.toBe('');
+    expect(facts.claimStill!.after).toBe(facts.claimStill!.before);
   });
 });
 
@@ -926,12 +926,10 @@ describe('sign-in works from the page', () => {
 });
 
 describe('the pages hold up in every theme', () => {
-  test('all four themes are the ones the shell declares', () => {
-    // The overflow and contrast passes above run in silk dark. This names the
-    // set they are a sample of, so a palette added to the app without a public
-    // projection fails here rather than silently going unphotographed.
-    expect(THEMES.map((theme) => `${theme.palette} ${theme.mode}`)).toEqual([
-      'umber dark', 'umber light', 'silk dark', 'silk light',
-    ]);
+  test('both faces are the ones the shell declares', () => {
+    // The overflow and contrast passes above run dark. This names the set
+    // they are a sample of, so a theme added without a public projection
+    // fails here rather than silently going unphotographed.
+    expect(THEMES.map((theme) => theme.mode)).toEqual(['dark', 'light']);
   });
 });
