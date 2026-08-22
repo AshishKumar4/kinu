@@ -85,37 +85,14 @@ function escapeText(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-/**
- * The player, finished. Every line is present and visible in the markup the
- * server sends; `CLI_FILM_SCRIPT` is what hides them and plays the session
- * back, so the still is the whole recording rather than a poster of it.
- */
-export function cliFilmFigure(): string {
-  const p = CLI_FILM_PROVENANCE;
-  const rows = CLI_FILM.map((line) => {
-    if (line.kind === 'cmd') return `<span class="line" data-kind="cmd"><b>$</b> <span data-typed>${escapeText(line.text)}</span></span>`;
-    if (line.kind === 'call') return `<span class="line" data-kind="call"><b>▸ ${escapeText(line.label)}</b> ${escapeText(line.text)}</span>`;
-    return `<span class="line" data-kind="${line.kind}">${escapeText(line.text)}</span>`;
-    // Joined with nothing: inside a <pre>, a newline between spans is a
-    // rendered blank line, and twenty of them were a very tall empty film.
-  }).join('');
-  return `<figure class="film">
-      <div class="anno ruled"><span>CLI · kinu run · recorded ${p.recorded}</span><span>workspace “${p.workspace}” · ${p.backend} backend</span></div>
-      <pre class="term" id="cli-film">${rows}</pre>
-      <div class="anno ruled"><span>${p.model}</span><span>${p.steps} steps · ${p.seconds} s · live</span></div>
-    </figure>`;
-}
 /** The landing's condensed cut.
  *
- *  The owner's mock renders a six-line excerpt, not the full session, and
- *  the landing section must hold his visual weight — so this is the same
- *  projection with rows chosen to carry his exact narrative shape: the
- *  command, the suite timed, the scaling proof, the verdict, and the named
- *  fix. Every row is one of `CLI_FILM`'s own lines, verbatim — the
- *  recording gate that holds the full film holds these by inheritance, and
- *  `unit-cli-film` asserts the subset relation directly. Static by design:
- *  his block is static, and the full player remains the place the session
- *  plays end to end. */
+ * The owner's mock renders a short excerpt, not the full session. These rows
+ * carry its narrative shape: command, timed suite, scaling proof, verdict and
+ * named fix. Every row comes from `CLI_FILM`; `unit-cli-film` holds the visible
+ * cut directly against the raw recording. Static by design: the interactive DOM
+ * workspace and TUI previews below it carry the live sequence.
+ */
 const CONDENSED_ROWS: readonly number[] = [0, 6, 14, 15, 19];
 
 /** The scaling proof, on one line as his mock draws it. The segments are the
@@ -140,54 +117,3 @@ export function condensedCliFilm(): string {
       <div class="anno ruled"><span>${p.model}</span><span>${p.steps} steps · ${p.seconds} s · live</span></div>
     </figure>`;
 }
-/**
- * Play the recording back when the reader reaches it.
- *
- * Hide, then put back — the hero tree's contract: with no script or with
- * motion refused the finished transcript simply stays, and `data-playing` is
- * present only mid-reveal so the gate can watch playback start and settle.
- * The command line types at a human cadence; everything after it prints in
- * beats, because that is what the terminal did.
- */
-export const CLI_FILM_SCRIPT = `
-const film = document.getElementById('cli-film');
-if (film && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
-  const lines = Array.from(film.querySelectorAll('.line'));
-  const typed = film.querySelector('[data-typed]');
-  const command = typed.textContent;
-  const played = () => {
-    film.removeAttribute('data-playing');
-    film.setAttribute('data-played', '');
-  };
-  const play = () => {
-    film.setAttribute('data-playing', '');
-    typed.textContent = '';
-    lines[0].setAttribute('data-shown', '');
-    let at = 0;
-    let next = 0;
-    const step = (now) => {
-      if (now < next) { requestAnimationFrame(step); return; }
-      if (typed.textContent.length < command.length) {
-        typed.textContent = command.slice(0, typed.textContent.length + 1);
-        next = now + 24;
-      } else if (++at < lines.length) {
-        lines[at].setAttribute('data-shown', '');
-        // The player is its own scroll container, so following the newest
-        // line never moves the page under the reader.
-        film.scrollTop = film.scrollHeight;
-        const kind = lines[at].dataset.kind;
-        next = now + (kind === 'out' ? 140 : kind === 'text' ? 300 : 420);
-      } else {
-        played();
-        return;
-      }
-      requestAnimationFrame(step);
-    };
-    requestAnimationFrame(step);
-  };
-  new IntersectionObserver((entries, observer) => {
-    if (!entries[0].isIntersecting) return;
-    observer.disconnect();
-    play();
-  }, { threshold: 0.3 }).observe(film);
-}`;

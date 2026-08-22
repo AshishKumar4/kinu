@@ -38,7 +38,7 @@ import * as v from "valibot";
  *  must not feed the corpse detector. */
 const RPC_TIMEOUT_PATTERN = /^RPC call to .+ timed out after \d+ms$/;
 
-export function isRpcTimeoutError<ErrorValue>(error: ErrorValue): boolean {
+function isRpcTimeoutError<ErrorValue>(error: ErrorValue): boolean {
   return error instanceof Error && RPC_TIMEOUT_PATTERN.test(error.message);
 }
 
@@ -47,15 +47,15 @@ export function isRpcTimeoutError<ErrorValue>(error: ErrorValue): boolean {
 /** Consecutive timed-out RPCs (while the socket claims OPEN) that condemn the
  *  transport. One timeout is a slow method; three inside the window, with zero
  *  successes between, is a peer that is not there. */
-export const TIMEOUTS_TO_REDIAL = 3;
+const TIMEOUTS_TO_REDIAL = 3;
 
 /** How long a streak may take to accumulate and still count as ONE outage. */
-export const REDIAL_WINDOW_MS = 90_000;
+const REDIAL_WINDOW_MS = 90_000;
 
 /** Minimum spacing between forced redials — doubles per redial up to the cap,
  *  so a long-dead origin is probed at a heartbeat, not with a hammer. */
-export const REDIAL_MIN_INTERVAL_MS = 15_000;
-export const REDIAL_MAX_INTERVAL_MS = 60_000;
+const REDIAL_MIN_INTERVAL_MS = 15_000;
+const REDIAL_MAX_INTERVAL_MS = 60_000;
 
 export interface SessionRecoveryCallbacks {
   /** Re-run the initial load and the live-data refresh. */

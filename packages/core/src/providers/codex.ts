@@ -33,7 +33,7 @@ export const CODEX_FAST_MODEL = 'gpt-5.4-mini';
 /** One sentence for a ChatGPT login the provider refused even after the
  *  forced-refresh retry: what died, and the two doors to its re-auth — the
  *  web settings page and the CLI's device-code flow. */
-export const CODEX_DEAD_LOGIN =
+const CODEX_DEAD_LOGIN =
   'Your ChatGPT login is no longer valid. Reconnect ChatGPT in User settings, or run `kinu setup` on this machine.';
 
 const FALLBACK_MODELS: ModelInfo[] = [

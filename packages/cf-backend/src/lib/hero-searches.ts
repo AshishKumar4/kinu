@@ -190,8 +190,3 @@ export const PRESET_SEARCHES = {
   ideate: ideateSearch(),
 } satisfies Record<'optimise' | 'research' | 'ideate', PresetSearch>;
 
-/** The facts the hero's caption quotes, still read off the canonical search. */
-export const HERO_SEARCH_FACTS = {
-  agents: SWARM_ROWS.length,
-  winnerMs: p95Of(SWARM_ROWS.find((r) => r.status === 'terminal')!),
-} as const;
