@@ -151,6 +151,8 @@ export interface AgentConfigStore {
   setDisplayName(name: string): void;
   getNameOrigin(): 'user' | 'auto' | null;
   setNameOrigin(origin: 'user' | 'auto'): void;
+  /** Persist the visible title and its ownership in one SQLite statement. */
+  setDisplayNameOrigin(name: string, origin: 'user' | 'auto'): void;
   /** The agent's current working stance. Always answers: unset or unknown
    *  reads as `general`, which renders no guidance at all. */
   getStance(): AgentStance;
@@ -351,6 +353,14 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
     setDisplayName(name) { set(AGENT_CONFIG_KEYS.displayName, name); },
     getNameOrigin() { const v = get(AGENT_CONFIG_KEYS.nameOrigin); return v === 'user' || v === 'auto' ? v : null; },
     setNameOrigin(origin) { set(AGENT_CONFIG_KEYS.nameOrigin, origin); },
+    setDisplayNameOrigin(name, origin) {
+      void sql`
+        INSERT INTO agent_config (key, value) VALUES
+          (${AGENT_CONFIG_KEYS.displayName}, ${name}),
+          (${AGENT_CONFIG_KEYS.nameOrigin}, ${origin})
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+      `;
+    },
     getStance() {
       const stored = get(AGENT_CONFIG_KEYS.agentStance);
       return isAgentStance(stored) ? stored : DEFAULT_AGENT_STANCE;

@@ -100,6 +100,7 @@ export function retryBackgroundJob(deps: BackgroundJobPlaneDeps, jobId: string):
   const job = deps.jobs.get(jobId);
   if (!job) return { ok: false, error: 'job not found' };
   if (job.status === 'running') return { ok: false, error: 'job still running' };
+  if (job.retriedBy) return { ok: false, error: `job already retried as ${job.retriedBy}` };
   const inputJson = deps.jobs.getInput(jobId);
   if (inputJson == null) return { ok: false, error: 'no stored input to retry' };
   const tool = deps.rawTools(job.workMode)[job.kind];
@@ -111,6 +112,7 @@ export function retryBackgroundJob(deps: BackgroundJobPlaneDeps, jobId: string):
   if (translated) input = decodeJsonValue({ value: translated });
   const controller = new AbortController();
   const newId = deps.jobRunner.create(job.kind, input, job.workMode, controller);
+  deps.jobs.markRetried(jobId, newId);
   deps.logActivity('bg_job_retry', `${jobId} → ${newId}`);
   const promise = Promise.resolve(tool.execute(input, {
       abortSignal: controller.signal, toolCallId: newId, messages: [],

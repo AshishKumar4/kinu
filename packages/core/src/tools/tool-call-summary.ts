@@ -67,6 +67,52 @@ function nested(input: JsonObject, key: string): JsonObject {
   return v.is(JsonObjectSchema, value) ? value : {};
 }
 
+export type ToolCallEffect = 'observe' | 'mutate' | 'unknown';
+
+const MUTATING_ACTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['file', new Set(['write', 'edit', 'append', 'delete', 'move', 'copy'])],
+  ['tasks', new Set(['add', 'update'])],
+  ['memory', new Set(['save', 'set', 'delete', 'remember', 'forget'])],
+  ['agents', new Set(['swarm', 'fork', 'hire', 'ask', 'send', 'reply', 'dismiss'])],
+  ['release', new Set([
+    'create', 'bind_source', 'transition', 'record_check', 'run_checks',
+    'deploy', 'rollback', 'record_deployment', 'request_approval',
+  ])],
+  ['product_change', new Set([
+    'create', 'bind_source', 'transition', 'record_check', 'run_checks',
+    'deploy', 'rollback', 'record_deployment', 'request_approval',
+  ])],
+  ['fact', new Set(['set', 'delete'])],
+  ['team', new Set(['spawn', 'assign', 'message'])],
+  ['peers', new Set(['send', 'reply', 'spawn_workspace'])],
+]);
+
+const OBSERVING_ACTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['file', new Set(['read', 'list', 'search'])],
+  ['tasks', new Set(['list'])],
+  ['memory', new Set(['search', 'get', 'list', 'recall', 'sessions'])],
+  ['agents', new Set(['list', 'status'])],
+  ['web', new Set(['search', 'fetch'])],
+  ['fact', new Set(['get', 'list'])],
+  ['release', new Set(['list', 'status', 'preview'])],
+  ['product_change', new Set(['list', 'status', 'preview'])],
+]);
+
+/**
+ * The visible consequence class for a tool call. Only typed action contracts
+ * can answer; shell and codemode programs remain unknown because reading their
+ * source here would duplicate the execution layer's own mutation analysis.
+ */
+export function toolCallEffect<Input>(toolName: string, input: Input): ToolCallEffect {
+  const parsed = v.safeParse(JsonObjectSchema, input);
+  if (!parsed.success) return 'unknown';
+  const action = str(parsed.output, 'action');
+  if (MUTATING_ACTIONS.get(toolName)?.has(action) === true) return 'mutate';
+  if (OBSERVING_ACTIONS.get(toolName)?.has(action) === true) return 'observe';
+  if (toolName === 'web_search' || toolName === 'web_fetch') return 'observe';
+  return 'unknown';
+}
+
 /** Collapse whitespace and clip, marking the clip so nothing reads as complete
  *  when it isn't. */
 export function clip(value: string, max: number = MAX): string {

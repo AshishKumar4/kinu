@@ -127,7 +127,7 @@ export function buildPendingActions(input: PendingActionInputs): PendingAction[]
   }
 
   for (const job of input.jobs) {
-    if (job.status !== 'failed') continue;
+    if (job.status !== 'failed' || job.retriedBy !== null) continue;
     actions.push({
       id: job.id,
       kind: 'failed_job',

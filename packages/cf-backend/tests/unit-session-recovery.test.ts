@@ -24,7 +24,7 @@ interface Harness {
   failFast(): void;
   fail(error: RpcFailureInput): void;
   succeed(): void;
-  retryManually(): void;
+  retryManually(forceRedial?: boolean): void;
 }
 
 function harness(options: {
@@ -53,7 +53,7 @@ function harness(options: {
     failFast() { recovery.rpcFailed(new Error("Connection closed"), true); },
     fail(error: RpcFailureInput) { recovery.rpcFailed(error, true); },
     succeed() { recovery.rpcSucceeded(); },
-    retryManually() { recovery.manualRetry(); },
+    retryManually(forceRedial = false) { recovery.manualRetry(forceRedial); },
   };
 }
 
@@ -142,6 +142,18 @@ describe("redial spacing", () => {
     expect(h.redials()).toBe(3);
   });
 
+  test("close rejections from a forced redial do not erase its growing spacing", () => {
+    const h = harness({ minRedialIntervalMs: MIN_REDIAL_INTERVAL_MS });
+    h.failTimeout(); h.failTimeout(); h.failTimeout();
+    expect(h.redials()).toBe(1);
+    h.failTimeout(false);
+    h.failTimeout(); h.failTimeout(); h.failTimeout();
+    expect(h.redials()).toBe(1);
+    h.advance(MIN_REDIAL_INTERVAL_MS * 2);
+    h.failTimeout(); h.failTimeout(); h.failTimeout();
+    expect(h.redials()).toBe(2);
+  });
+
   test("one success after a redial restores the base spacing", () => {
     const h = harness({ minRedialIntervalMs: MIN_REDIAL_INTERVAL_MS });
     h.failTimeout(); h.failTimeout(); h.failTimeout();
@@ -165,6 +177,13 @@ describe("refetch on reconnect", () => {
   test("manual retry refetches", () => {
     const h = harness();
     h.retryManually();
+    expect(h.refetches()).toBe(1);
+  });
+
+  test("manual retry can redial a terminally closed route before refetching", () => {
+    const h = harness();
+    h.retryManually(true);
+    expect(h.redials()).toBe(1);
     expect(h.refetches()).toBe(1);
   });
 });

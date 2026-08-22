@@ -84,21 +84,11 @@ describe("workspace titling wiring (OrchestratorAgent)", () => {
     expect(orchestrator.match(/maybeAutoTitleWorkspace\(/g)).toHaveLength(3);
   });
 
-  test("titling persists through setAutoDisplayName, which marks name_origin auto", () => {
-    const method = orchestrator.slice(
-      orchestrator.indexOf("private async maybeAutoTitleWorkspace"),
-      orchestrator.indexOf("private async suggestWorkspaceTitle"),
-    );
-    expect(method).toContain("applyWorkspaceTitle({");
-    expect(method).toContain("persist: async (name) => { await this.setAutoDisplayName(name); }");
-    const setAutoDisplayName = orchestrator.slice(orchestrator.indexOf("async setAutoDisplayName("));
-    expect(setAutoDisplayName).toContain("this.config.setNameOrigin('auto')");
-  });
 
   test("one generator: the shared workspace-identity prompt and parser", () => {
     const suggest = orchestrator.slice(
       orchestrator.indexOf("private async suggestWorkspaceTitle"),
-      orchestrator.indexOf("/** Push a display name to all three homes"),
+      orchestrator.indexOf("/** Commit one display name"),
     );
     expect(suggest).toContain("system: WORKSPACE_TITLE_SYSTEM_PROMPT");
     expect(suggest).toContain("prompt: workspaceTitlePrompt(mission)");

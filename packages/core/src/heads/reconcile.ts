@@ -284,12 +284,13 @@ export async function reconcileInterruptedForks(deps: {
     );
   }
 
-  // THE GATE, ONCE. It re-drives durable work under a fresh lease, so a second
-  // call would reclaim a job out from under the executor the first call started.
-  // It fires when the journal sweep found heads, and also when it found none but
-  // a search row still claims an executor — `unit:'thought'` nodes journal no
-  // rows, so a dead thought-swarm's ledger claim is the only evidence left.
-  const gateNeeded = interrupted.length > 0
+  // THE GATE, ONCE. The callback also sweeps the background-job registry, whose
+  // orphan rows can exist before a head or search row was written. Therefore a
+  // wired resume path runs on every activation, even with no offered roots.
+  // A second call would reclaim a job out from under the executor the first
+  // call started.
+  const gateNeeded = deps.resume !== undefined
+    || interrupted.length > 0
     || (deps.search !== undefined && deps.search.runningSwarmCount() > 0);
   const outcome: ResumeOutcome = gateNeeded
     ? await resumeOutcome(deps.resume, interrupted)

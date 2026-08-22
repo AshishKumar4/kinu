@@ -385,28 +385,31 @@ function PendingRow(
 ) {
   const home = PENDING_HOME[action.kind];
   const Icon = PENDING_ICON[action.kind];
-  const body = (
-    <>
-      <Icon size={14} className="p-accent shrink-0 mt-0.5" />
-      <div className="min-w-0 flex-1">
-        <div className="text-[13px] leading-[18px] p-text">{action.title}</div>
-        {action.detail && (
-          <div className="text-[11.5px] leading-[16px] p-text-3 mt-0.5 line-clamp-2 break-words">{action.detail}</div>
-        )}
-        <div className="text-[10.5px] leading-[15px] p-text-3 mt-0.5">
-          {timeAgo(action.at)}{home.cta === null ? "" : ` · ${home.cta}`}
-        </div>
+  const content = (
+    <div className="min-w-0">
+      <div className="text-[13px] leading-[18px] p-text">{action.title}</div>
+      {action.detail && (
+        <div className="mt-0.5 line-clamp-2 break-words text-[11.5px] leading-[16px] p-text-3">{action.detail}</div>
+      )}
+      <div className="mt-0.5 text-[10.5px] leading-[15px] p-text-3">
+        {timeAgo(action.at)}{home.cta === null ? "" : ` · ${home.cta}`}
       </div>
-    </>
+    </div>
   );
+  const icon = <Icon size={14} className="mt-0.5 shrink-0 p-accent" />;
   if (home.surface === null) {
-    return <div className="py-2 flex items-start gap-2">{body}</div>;
+    return <div className="grid grid-cols-[14px_minmax(0,1fr)] items-start gap-2 py-2">{icon}{content}</div>;
   }
+  const surface = home.surface;
   return (
-    <button type="button" onClick={() => onOpenSurface(home.surface!)}
-      className="w-full rounded-md py-2 flex items-start gap-2 text-left hover:p-elevated transition-colors">
-      {body}
-      <CaretRightIcon size={12} className="p-text-3 shrink-0 mt-1" />
+    <button
+      type="button"
+      onClick={() => onOpenSurface(surface)}
+      className="grid w-full grid-cols-[14px_minmax(0,1fr)_16px] items-start gap-2 rounded-md py-2 text-left transition-colors hover:p-elevated"
+    >
+      {icon}
+      {content}
+      <CaretRightIcon size={12} className="mt-1 shrink-0 justify-self-end p-text-3" />
     </button>
   );
 }

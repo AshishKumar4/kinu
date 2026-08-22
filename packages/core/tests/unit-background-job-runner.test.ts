@@ -419,8 +419,9 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
     const job = first.store.get('jc');
     expect(job?.status).toBe('failed');
     expect(job?.error).toContain('gave up');
-    expect(job?.resumeAttempts).toBe(6);
+    expect(job?.resumeAttempts).toBe(5);
     expect(last.enqueued.at(-1)?.metadata?.status).toBe('failed');
+    expect(last.enqueued.at(-1)?.text ?? '').toContain('generation 6');
   });
 
   test('a job this runner is already driving is never re-driven out from under itself', async () => {

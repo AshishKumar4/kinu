@@ -149,11 +149,12 @@ export function autoTitleLocalWorkspace(
         mission,
       }, {
         persist: (title) => {
-          config.setDisplayName(title);
-          config.setNameOrigin('auto');
+          if (config.getNameOrigin() === 'user') return false;
+          config.setDisplayNameOrigin(title, 'auto');
           const configured = listConfiguredAgentRefs()
             .find((agent) => agent.mode === 'local' && (agent.localName ?? agent.name) === name);
           upsertAgentConfig({ ...(configured ?? { name, mode: 'local', localName: name }), displayName: title });
+          return true;
         },
         suggest: async (text) => (await suggestAgentIdentityFromMission(text, opts)).displayName,
       });

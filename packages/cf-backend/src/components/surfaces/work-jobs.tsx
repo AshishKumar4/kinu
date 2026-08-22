@@ -37,6 +37,11 @@ export interface JobCardProps {
   rpc: Rpc;
 }
 
+interface JobControlOutcome {
+  readonly ok: boolean;
+  readonly error?: string;
+}
+
 export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -44,7 +49,14 @@ export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) 
   const act = useCallback(async (method: string) => {
     setBusy(true);
     setErr(null);
-    try { await rpc(method, [job.id]); onRefresh(); }
+    try {
+      const outcome = await rpc<JobControlOutcome>(method, [job.id]);
+      if (!outcome.ok) {
+        setErr(outcome.error ?? `${method.replace("BackgroundJob", "")} was refused`);
+        return;
+      }
+      onRefresh();
+    }
     catch (error) {
       const message = renderThrownChain({ cause: error });
       setErr(`${method.replace("BackgroundJob", "")} failed: ${message}`);
@@ -58,7 +70,7 @@ export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) 
 
   return (
     <div className={grouped ? "p-3" : "p-group p-3"}>
-      <div className="flex items-start gap-2">
+      <div className="grid grid-cols-[15px_minmax(0,1fr)_auto] items-start gap-2">
         <Icon size={15} className={`${m.tone} shrink-0 mt-0.5 ${m.spin ? "animate-spin" : ""}`}
           weight={job.status === "running" ? "bold" : "fill"} />
         <div className="min-w-0 flex-1">
@@ -72,7 +84,7 @@ export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) 
           {detail && <div className="text-[11.5px] leading-[16px] p-text-2 mt-1 line-clamp-3 whitespace-pre-wrap break-words font-mono">{detail}</div>}
           {err && <div className="text-[10px] p-danger mt-1">{err}</div>}
         </div>
-        <div className="flex items-center gap-1 shrink-0">
+        <div className="grid auto-cols-max grid-flow-col items-center gap-1 justify-self-end">
           {job.status === "running" ? (
             <Button size="sm" variant="ghost" disabled={busy} onClick={() => act("cancelBackgroundJob")}
               title="Hard-cancel, aborting the underlying work">

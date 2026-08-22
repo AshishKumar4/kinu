@@ -20,6 +20,7 @@ function job(over: Partial<BackgroundJob>): BackgroundJob {
   return {
     id: 'bgjob-1', kind: 'run', label: 'bun test', workMode: 'build', status: 'completed',
     result: null, error: null, createdAt: 1000, settledAt: 1100, epoch: 0, resumeAttempts: 0,
+    retriedBy: null,
     attemptStartedAt: 1000,
     ...over,
   };
@@ -181,6 +182,17 @@ describe('buildPendingActions', () => {
       'deferred_action', 'scaffold_version', 'unseen_changes', 'release_approval',
       'curriculum_task', 'failed_job',
     ]);
+  });
+
+  test('a successfully retried failure stays in the journal but leaves Needs you', () => {
+    expect(buildPendingActions({
+      ...EMPTY,
+      jobs: [job({
+        status: 'failed',
+        error: 'old failure',
+        retriedBy: 'bgjob-replacement',
+      })],
+    })).toEqual([]);
   });
 });
 

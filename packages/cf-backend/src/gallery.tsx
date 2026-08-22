@@ -89,10 +89,11 @@ import { SubordinateTabs } from "@/components/SubordinateTabs";
 import { Modal } from "@/components/ui/Modal";
 import { MessageView, SteerBubble } from "@/components/MessageView";
 import { buildTranscript } from "@kinu.run/core";
-import { ConversationSkeleton, DeviceConsentCard, ChatErrorCard, EmptyConversation } from "@/pages/WorkspacePage";
+import WorkspacePage, { ConversationSkeleton, DeviceConsentCard, ChatErrorCard, EmptyConversation } from "@/pages/WorkspacePage";
 import { usePagedScroll } from "@/hooks/use-paged-scroll";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { useTheme } from "@/hooks/use-theme";
+import { WorkspaceRosterProvider } from "@/hooks/use-workspace-roster";
 import { SupervisePage } from "@/pages/SupervisePage";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
 import {
@@ -537,6 +538,12 @@ const stubRpc: Rpc = async <T,>(method: string): Promise<T> => {
   if (method.startsWith("list") || method.startsWith("get")) return rpcResult([]).json<T>();
   return rpcResult({}).json<T>();
 };
+
+const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => (
+  AGENT_RPC.has(method)
+    ? rpcResult(AGENT_RPC.get(method)).json<T>()
+    : stubRpc<T>(method, args)
+);
 
 /* ── swarm searches: the shipped model's own states ─────────────── */
 
@@ -1668,7 +1675,6 @@ function GalleryWorkspaceBar() {
       onRename={async (name) => name}
       connectionStatus="connected"
       working
-      settingsHref="/settings/checkout-fixes"
       altitude="run"
       onAltitude={() => {}}
     />
@@ -1730,7 +1736,7 @@ function GalleryComposer({ notices = [] }: { notices?: readonly ComposerNotice[]
 
 function ChatMessages() {
   return (
-    <div className="flex-1 overflow-y-auto px-6 py-7 space-y-5 lg:px-8 [&>*]:max-w-[660px] [&>*]:mx-auto" data-gallery-chat>
+    <div className="flex-1 overflow-y-auto px-6 py-7 space-y-5 lg:px-8 [&>*]:max-w-[780px] [&>*]:mx-auto" data-gallery-chat>
       {MESSAGES.map((m, i) => (
         <div key={m.id} data-chat-row={m.id}>
           <MessageView message={m} isLast={i === MESSAGES.length - 1} isStreaming={false} onFork={() => {}} />
@@ -3363,6 +3369,23 @@ const TOOLCALL_MESSAGES: UIMessage[] = [
   }),
 ];
 
+const LARGE_TOOL_RUN_MESSAGE: UIMessage = msg({
+  id: "tc-large-run", role: "assistant",
+  parts: [
+    { type: "text", text: "A long repository inspection with three consequential changes." },
+    ...Array.from({ length: 50 }, (_, index) => ({
+      type: "tool-file" as const,
+      toolCallId: `scan-${String(index)}`,
+      state: "output-available" as const,
+      input: { action: "read", path: `packages/checkout/src/generated/module-${String(index)}.ts` },
+      output: "…",
+    })),
+    { type: "tool-file", toolCallId: "large-edit", state: "output-available", input: { action: "edit", path: "packages/checkout/migrations/0042_coupon_kind.sql", edits: [{}, {}] }, output: { error: "old_text not found or not unique" } },
+    { type: "tool-file", toolCallId: "large-write", state: "output-available", input: { action: "write", path: "packages/checkout/tests/coupon-kind.test.ts" }, output: "ok" },
+    { type: "tool-tasks", toolCallId: "large-task", state: "output-available", input: { action: "update", id: "t4", status: "done" }, output: "ok" },
+  ],
+});
+
 /** Clicks open every collapsed tool-call row shortly after mount — the
  *  expand/collapse toggle is local component state with no prop to preset
  *  it, and simulating the one click an operator would make is simpler and
@@ -3455,6 +3478,16 @@ function ToolCallsFrame() {
         {TOOLCALL_MESSAGES.map((m) => (
           <MessageView key={m.id} message={m} isLast={false} isStreaming={false} onFork={() => {}} />
         ))}
+      </div>
+    </div>
+  );
+}
+
+function ToolRunScaleFrame() {
+  return (
+    <div className="flex min-h-screen justify-center p-bg p-text">
+      <div className="@container w-full max-w-[780px] border-x p-border px-6 py-6">
+        <MessageView message={LARGE_TOOL_RUN_MESSAGE} isLast={false} isStreaming={false} onFork={() => {}} />
       </div>
     </div>
   );
@@ -3660,6 +3693,7 @@ async function mount() {
   else if (frame === "composer") node = <ComposerFrame />;
   else if (frame === "chathistory") node = <ChatHistoryFrame />;
   else if (frame === "toolcalls") node = <ToolCallsFrame />;
+  else if (frame === "toolrun") node = <ToolRunScaleFrame />;
   else if (frame === "advisor") node = <AdvisorFrame />;
   else if (frame === "streaming") node = <StreamingFrame />;
   else if (frame === "agent") node = <AgentFrame />;
@@ -3679,6 +3713,11 @@ async function mount() {
   else if (frame === "activity") node = <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_SNAPSHOT)} />;
   else if (frame === "activityclean") node = <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_CLEAN)} />;
   else if (frame === "activityempty") node = <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_FRESH)} />;
+  else if (frame === "workspacepage") {
+    serveGalleryRpc(workspacePageRpc);
+    entries = ["/workspace/checkout-fixes"];
+    node = <Routes><Route path="/workspace/:agentId" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} /></Routes>;
+  }
   else if (frame === "settings") {
     const { default: SettingsPage } = await import("@/pages/SettingsPage");
     // Routed, not bare: the page reads `agentId` off the route, and every
@@ -3702,7 +3741,7 @@ async function mount() {
     node = <Routes><Route path="/workspace/:agentId" element={node} /></Routes>;
   }
   createRoot(document.getElementById("root")!).render(
-    <StrictMode><MemoryRouter initialEntries={entries}>{node}</MemoryRouter></StrictMode>,
+    <StrictMode><MemoryRouter initialEntries={entries}><WorkspaceRosterProvider>{node}</WorkspaceRosterProvider></MemoryRouter></StrictMode>,
   );
 }
 void mount();

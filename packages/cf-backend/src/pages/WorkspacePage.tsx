@@ -22,6 +22,7 @@ import { useKinu } from "@/hooks/use-kinu";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { useChatHistory } from "@/hooks/use-chat-history";
 import { useSteerActions } from "@/hooks/use-steer-actions";
+import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { touchWorkspace } from "@/lib/user-api";
 import { describeError } from "@/hooks/use-async-resource";
 import { ConnectedModelPicker } from "@/components/ModelPicker";
@@ -381,7 +382,7 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
       </div>
 
       <ErrorBoundary label="Subordinate chat">
-        <div ref={messagesRef} className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8">
+        <div ref={messagesRef} className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8 [&>*]:max-w-[780px] [&>*]:mx-auto">
           {/* Above the oldest message, exactly as the workspace column has it:
               a walk in progress, a failed page with its retry, or the store's
               own statement that this is the beginning. Suppressed only when
@@ -473,6 +474,7 @@ export default function WorkspacePage() {
   const location = useLocation();
   const navigate = useNavigate();
   const state = useKinu(agentId);
+  const { entries: workspaceEntries } = useWorkspaceRoster();
 
   // The picker is fire-and-forget: setModel records the failure on state.error
   // and rolls the picker back to the stored spec, so this call site has nothing
@@ -495,6 +497,17 @@ export default function WorkspacePage() {
     () => new URLSearchParams(location.search).get("altitude") === "supervise" ? "supervise" : "run",
   );
   // A returning driver opens on status, not on the agent's own description.
+  const [mobilePane, setMobilePane] = useState<'chat' | 'workspace'>('chat');
+  const [desktopPanels, setDesktopPanels] = useState(
+    () => globalThis.window === undefined || globalThis.window.matchMedia("(min-width: 768px)").matches,
+  );
+  useEffect(() => {
+    const media = window.matchMedia("(min-width: 768px)");
+    const sync = () => setDesktopPanels(media.matches);
+    sync();
+    media.addEventListener("change", sync);
+    return () => media.removeEventListener("change", sync);
+  }, []);
   // Output still takes over the moment there is something running to look at.
   const [surface, setSurface] = useState<SurfaceKind>("Work");
   const [chatMode, setChatMode] = useState<"plan" | "build">("build");
@@ -851,7 +864,8 @@ export default function WorkspacePage() {
   if (!agentId) return null;
 
   const as = state.agentStatus;
-  const workspaceTitle = as?.displayName || "Workspace";
+  const rosterTitle = workspaceEntries.find((entry) => entry.name === agentId)?.displayName;
+  const workspaceTitle = as?.displayName || rosterTitle || agentId;
   return (
     <div className="h-full flex flex-col">
       {/* Non-destructive disconnect banner. The chat panel below stays
@@ -873,7 +887,6 @@ export default function WorkspacePage() {
         working={state.isStreaming}
         model={as?.model}
         {...(as?.forkLineage ? { forkParent: { workspace: as.forkLineage.sourceWorkspaceName, forkedAt: as.forkLineage.forkedAt } } : {})}
-        settingsHref={`/settings/${agentId}`}
         altitude={altitude}
         onAltitude={setAltitude}
       />
@@ -885,9 +898,21 @@ export default function WorkspacePage() {
           </ErrorBoundary>
         </div>
       ) : (
-      <PanelGroup className="flex-1">
+      <>
+      <div className="flex shrink-0 items-center gap-1 border-b p-border p-sidebar px-3 py-2 md:hidden">
+        <button type="button" onClick={() => setMobilePane('chat')} aria-pressed={mobilePane === 'chat'}
+          className={`rounded-full px-3 py-1.5 text-xs ${mobilePane === 'chat' ? 'p-accent-subtle p-gold' : 'p-text-3'}`}>Chat</button>
+        <button type="button" onClick={() => setMobilePane('workspace')} aria-pressed={mobilePane === 'workspace'}
+          className={`rounded-full px-3 py-1.5 text-xs ${mobilePane === 'workspace' ? 'p-accent-subtle p-gold' : 'p-text-3'}`}>Workspace{state.pendingActions.length > 0 ? ` · ${String(state.pendingActions.length)}` : ''}</button>
+      </div>
+      <PanelGroup key={desktopPanels ? "desktop" : mobilePane} className="flex-1">
         {/* ── Column A — Chat / Steer ─────────────────────────── */}
-        <Panel minSize="24%" groupResizeBehavior="preserve-relative-size">
+        <Panel
+          {...(desktopPanels
+            ? { minSize: "24%" }
+            : { minSize: "0%", defaultSize: mobilePane === 'chat' ? "100%" : "0%" })}
+          groupResizeBehavior="preserve-relative-size"
+        >
           <div className="flex flex-col h-full border-r p-border">
             {/* Agent tabs — the workspace's orchestrator + durable subordinates.
                 Roster + live status ride the parent socket; the CHAT below
@@ -923,9 +948,9 @@ export default function WorkspacePage() {
                 ErrorBoundary'd so a single malformed message doesn't
                 whitescreen the chat. (STABILITY-AUDIT §D2.) */}
             <ErrorBoundary label="Chat">
-            {/* The mock's reading measure: one centred 660px column, every
-                entry constrained by its parent so cards cannot wander wide. */}
-            <div ref={messagesRef} className="flex-1 overflow-y-auto px-6 py-7 space-y-5 lg:px-8 [&>*]:max-w-[660px] [&>*]:mx-auto">
+            {/* One centred 780px reading measure. Every entry stays within it,
+                so prose remains readable while tables and activity rows gain space. */}
+            <div ref={messagesRef} className="flex-1 overflow-y-auto px-6 py-7 space-y-5 lg:px-8 [&>*]:max-w-[780px] [&>*]:mx-auto">
               {transcriptPending && <ConversationSkeleton />}
               {!transcriptPending && thread.entries.length === 0 && !state.isStreaming && (
                 <EmptyConversation mission={as?.purpose ?? ""} />
@@ -1053,12 +1078,17 @@ export default function WorkspacePage() {
           </div>
         </Panel>
 
-        <PanelResizeHandle className="z-[2] -ml-[3px] w-[5px] shrink-0 cursor-col-resize bg-transparent transition-colors hover:bg-[var(--c-accent-subtle)]" />
+        {desktopPanels && <PanelResizeHandle className="z-[2] -ml-[3px] w-[5px] shrink-0 cursor-col-resize bg-transparent transition-colors hover:bg-[var(--c-accent-subtle)]" />}
 
         {/* The mock keeps the inspector at 430px and lets chat take the
             remainder. It can still be dragged; resizing the window preserves
             the inspector's useful reading width instead of a 42/58 ratio. */}
-        <Panel minSize="28%" defaultSize="430px" groupResizeBehavior="preserve-pixel-size">
+        <Panel
+          {...(desktopPanels
+            ? { minSize: "28%", defaultSize: "430px" }
+            : { minSize: "0%", defaultSize: mobilePane === 'workspace' ? "100%" : "0%" })}
+          groupResizeBehavior="preserve-pixel-size"
+        >
           <WorkSurface
             surface={surface}
             onSurface={setSurface}
@@ -1088,6 +1118,7 @@ export default function WorkspacePage() {
         </Panel>
 
       </PanelGroup>
+      </>
       )}
 
       {forkFor && (

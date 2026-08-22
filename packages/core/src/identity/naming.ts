@@ -226,7 +226,7 @@ export function planWorkspaceTitle(state: WorkspaceTitleState): WorkspaceTitlePl
 export async function applyWorkspaceTitle(
   state: WorkspaceTitleState,
   effects: {
-    persist: (title: string) => void | Promise<void>;
+    persist: (title: string) => boolean | void | Promise<boolean | void>;
     suggest?: (mission: string) => Promise<string | null>;
   },
 ): Promise<string | null> {
@@ -234,12 +234,14 @@ export async function applyWorkspaceTitle(
   if (!plan) return null;
   let title: string | null = null;
   if (plan.provisional) {
-    await effects.persist(plan.provisional);
+    const persisted = await effects.persist(plan.provisional);
+    if (persisted === false) return null;
     title = plan.provisional;
   }
   const suggested = (await effects.suggest?.(plan.mission))?.trim();
   if (suggested && suggested !== title) {
-    await effects.persist(suggested);
+    const persisted = await effects.persist(suggested);
+    if (persisted === false) return null;
     title = suggested;
   }
   return title;

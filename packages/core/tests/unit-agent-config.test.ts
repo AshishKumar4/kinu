@@ -120,6 +120,13 @@ describe('AgentConfigStore — typed accessors', () => {
     expect(c.getDisplayName()).toBe('my agent');
   });
 
+  test('displayName and origin are committed together', () => {
+    const c = setup();
+    c.setDisplayNameOrigin('Jarvis', 'user');
+    expect(c.getDisplayName()).toBe('Jarvis');
+    expect(c.getNameOrigin()).toBe('user');
+  });
+
   test('shellApprovalMode: defaults to strict, validates input', () => {
     const c = setup();
     expect(c.getShellApprovalMode()).toBe('strict');

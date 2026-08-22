@@ -722,13 +722,13 @@ export class BackgroundJobRunner {
     if (job.status !== 'running') { await this.wake(jobId); return null; }
 
     if (this.deps.resume) {
-      const claim = this.deps.store.reclaim(jobId);
-      if (!claim) return null; // lost the race — another activation already reclaimed it
-      if (claim.attempts > MAX_RESUME_ATTEMPTS) {
-        await this.settleBounded(jobId, claim.epoch,
+      if (job.resumeAttempts >= MAX_RESUME_ATTEMPTS) {
+        await this.settleBounded(jobId, job.epoch,
           `it was re-driven ${String(MAX_RESUME_ATTEMPTS)} times without finishing, so it gave up`);
         return null;
       }
+      const claim = this.deps.store.reclaim(jobId);
+      if (!claim) return null; // lost the race — another activation already reclaimed it
       // NO WALL-CLOCK CHECK HERE, and that is a decision rather than an omission.
       // Time since `createdAt` is the wrong quantity: a Durable Object evicted
       // overnight was not WORKING overnight, and bounding a job on it would make a

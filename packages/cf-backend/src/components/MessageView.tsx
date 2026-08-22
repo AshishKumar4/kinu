@@ -21,7 +21,7 @@ import { isToolUIPart, getToolName } from "ai";
 import type { UIMessage, FileUIPart } from "ai";
 import {
   ADVISOR_SEVERITY_LABEL, JsonObjectSchema, JsonValueSchema,
-  describeToolCall, isToolCallFailed, summarizeToolCall,
+  describeToolCall, isToolCallFailed, summarizeToolCall, toolCallEffect,
 } from "@kinu.run/core";
 import type { AdvisorSeverity, InlineSteer, JsonObject, JsonValue, PlacedSteer } from "@kinu.run/core";
 import * as v from "valibot";
@@ -210,27 +210,36 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText 
   const description = describeToolCall(toolName, input);
 
   const failed = isError || !!provisionErr;
+  const effect = toolCallEffect(toolName, input);
+  const prominent = effect === 'mutate' || isRunning || failed;
   return (
-    <div>
+    <div className={prominent ? "m-2 overflow-hidden rounded-lg border border-[color-mix(in_srgb,var(--c-accent)_24%,var(--c-border))] bg-[color-mix(in_srgb,var(--c-accent)_4%,var(--c-recessed))]" : ""}>
       <button
         type="button"
         onClick={() => setExpanded(!expanded)}
         aria-expanded={expanded}
         data-tool-state={isRunning ? "running" : failed ? "failed" : "done"}
-        className="group/tool grid w-full cursor-pointer grid-cols-[34px_minmax(0,1fr)_auto_auto] items-center gap-3 px-3.5 py-3 text-left transition-colors hover:bg-[var(--c-elevated)]"
+        data-tool-effect={effect}
+        className={`group/tool grid w-full cursor-pointer items-center text-left transition-colors hover:bg-[var(--c-elevated)] ${prominent ? "grid-cols-[34px_minmax(0,1fr)_auto_auto] gap-3 px-3.5 py-3" : "grid-cols-[20px_minmax(0,1fr)_auto_auto] gap-2 px-3 py-2"}`}
       >
-        <span className={`flex size-[34px] items-center justify-center rounded-lg border ${isRunning ? "border-[var(--c-accent)] p-accent-subtle p-gold" : failed ? "border-[var(--c-danger)] bg-[var(--c-danger-tint)] p-danger" : "p-border p-recessed p-text-3"}`}>
+        <span className={`flex items-center justify-center ${prominent ? `size-[34px] rounded-lg border ${isRunning ? "border-[var(--c-accent)] p-accent-subtle p-gold" : failed ? "border-[var(--c-danger)] bg-[var(--c-danger-tint)] p-danger" : "p-border p-recessed p-text-3"}` : "size-5 p-text-4"}`}>
           {toolIcon(toolName)}
         </span>
-        <span className="min-w-0">
-          <span className="flex min-w-0 items-center gap-2">
-            <strong className="truncate text-[12.5px] font-semibold p-text">{description || toolLabel(toolName)}</strong>
-            {runtime && <span className="shrink-0 rounded-full p-fill px-2 py-0.5 font-mono text-[9.5px] p-text-3">{runtime}</span>}
+        {prominent ? (
+          <span className="min-w-0">
+            <span className="flex min-w-0 items-center gap-2">
+              <strong className="truncate text-[12.5px] font-semibold p-text">{description || toolLabel(toolName)}</strong>
+              {runtime && <span className="shrink-0 rounded-full p-fill px-2 py-0.5 font-mono text-[9.5px] p-text-3">{runtime}</span>}
+            </span>
+            <span className="mt-0.5 block truncate font-mono text-[11px] p-text-4" title={[summary, description].filter(Boolean).join(" · ")}>{summary || "Tool call"}</span>
           </span>
-          <span className="mt-0.5 block truncate font-mono text-[11px] p-text-4" title={[summary, description].filter(Boolean).join(" · ")}>
-            {summary || "Tool call"}
+        ) : (
+          <span className="flex min-w-0 items-baseline gap-2">
+            <strong className="shrink-0 text-[11.5px] font-medium p-text-2">{description || toolLabel(toolName)}</strong>
+            <span className="min-w-0 flex-1 truncate font-mono text-[10.5px] p-text-4" title={[summary, description].filter(Boolean).join(" · ")}>{summary || "Tool call"}</span>
+            {runtime && <span className="shrink-0 font-mono text-[9.5px] p-text-4">{runtime}</span>}
           </span>
-        </span>
+        )}
         <span className={`inline-flex min-h-6 shrink-0 items-center gap-1.5 rounded-full px-2 text-[10px] font-semibold ${isRunning ? "p-accent-subtle p-gold" : failed ? "p-badge-danger" : "p-badge-success"}`}>
           {isRunning
             ? <><span className="size-1.5 rounded-full p-dot-accent p-dot-pulse" />Running</>
@@ -318,6 +327,15 @@ function partOutput(part: AnyToolPart): JsonValue | undefined {
   return parsed.success ? parsed.output : undefined;
 }
 
+function partInput(part: AnyToolPart): JsonObject | undefined {
+  const parsed = v.safeParse(JsonObjectSchema, part.input);
+  return parsed.success ? parsed.output : undefined;
+}
+
+function partEffect(part: AnyToolPart) {
+  return toolCallEffect(getToolName(part), partInput(part));
+}
+
 /** Whether this part failed — protocol-level (`output-error`) or the quieter
  *  kind a built-in catches and returns as a normal result (isToolCallFailed). */
 function partFailed(part: AnyToolPart): boolean {
@@ -326,33 +344,45 @@ function partFailed(part: AnyToolPart): boolean {
 
 function ToolCallGroup({ parts }: { parts: readonly AnyToolPart[] }) {
   const [showAll, setShowAll] = useState(false);
-  // Reads every call's own output, not just the transport state — a failure a
-  // built-in caught and returned as a normal result used to be invisible in
-  // the collapsed tally; per-row status makes it visible at a glance.
-  // The mock draws the card OPEN: consecutive calls are rows in one bordered
-  // card, separated by dashed rules. A long run folds its tail behind one
-  // expander so a 30-call repair does not bury the prose around it.
-  const VISIBLE = 8;
-  const shown = showAll ? parts : parts.slice(0, VISIBLE);
   const failedCount = parts.filter(partFailed).length;
+  const mutationCount = parts.filter((part) => partEffect(part) === 'mutate').length;
+  const collapsedIds = new Set<string>();
+  if (parts.length <= 8) {
+    for (const part of parts) collapsedIds.add(part.toolCallId);
+  } else {
+    for (const part of parts) {
+      if (collapsedIds.size >= 6) break;
+      if (partFailed(part) || partEffect(part) === 'mutate') collapsedIds.add(part.toolCallId);
+    }
+    const first = parts[0];
+    const last = parts.at(-1);
+    if (first !== undefined) collapsedIds.add(first.toolCallId);
+    if (last !== undefined) collapsedIds.add(last.toolCallId);
+  }
+  const collapsed = parts.filter((part) => collapsedIds.has(part.toolCallId));
+  const shown = showAll ? parts : collapsed;
+  const hiddenCount = parts.length - collapsed.length;
   return (
-    <div className="overflow-hidden rounded-xl border p-border p-surface">
-      <div className="flex items-center gap-2 border-b p-border p-recessed px-3.5 py-2">
+    <div data-tool-group data-tool-count={parts.length} data-tool-mutations={mutationCount} className="overflow-hidden rounded-xl border p-border bg-[var(--c-recessed)]">
+      <div className="flex flex-wrap items-center gap-2 border-b p-border p-sidebar px-3.5 py-2">
         <LightningIcon size={13} className="p-gold" weight="fill" />
         <span className="text-[11.5px] font-semibold p-text-2">Agent activity</span>
         <span className="font-mono text-[10px] p-text-4">{parts.length} call{parts.length === 1 ? "" : "s"}</span>
+        {mutationCount > 0 && <span className="rounded-full p-accent-subtle px-2 py-0.5 text-[9.5px] font-semibold p-gold">{mutationCount} change{mutationCount === 1 ? "" : "s"}</span>}
         {failedCount > 0 && <span className="ml-auto p-badge-danger px-2 py-0.5">{failedCount} failed</span>}
       </div>
       <div className="divide-y divide-dashed divide-[var(--c-dash)]">
         {shown.map((part) => <ToolCallPart key={part.toolCallId} part={part} />)}
       </div>
-      {parts.length > VISIBLE && (
+      {hiddenCount > 0 && (
         <button
           type="button"
-          onClick={() => setShowAll(!showAll)}
-          className="w-full border-t border-dashed border-[var(--c-dash)] px-4 py-2 text-left text-[11px] font-medium p-gold transition-colors hover:p-accent cursor-pointer"
+          onClick={() => setShowAll((current) => !current)}
+          aria-expanded={showAll}
+          data-tool-group-toggle
+          className="w-full border-t border-dashed border-[var(--c-dash)] px-4 py-2 text-left text-[11px] font-medium p-gold transition-colors hover:p-accent"
         >
-          {showAll ? "Show fewer" : `Show all ${parts.length} calls`}
+          {showAll ? "Collapse activity" : `Show ${hiddenCount} more call${hiddenCount === 1 ? "" : "s"}`}
         </button>
       )}
     </div>
@@ -361,21 +391,20 @@ function ToolCallGroup({ parts }: { parts: readonly AnyToolPart[] }) {
 /** One tool part: its row, plus the live preview a tool can return. */
 function ToolCallPart({ part }: { part: AnyToolPart }) {
   const output = partOutput(part);
-  const parsedInput = v.safeParse(JsonObjectSchema, part.input);
+  const input = partInput(part);
   const previewUrl = extractPreviewUrl(output);
   return (
     <div>
-      <ToolCallBlock toolName={getToolName(part)}
-        input={parsedInput.success ? parsedInput.output : undefined}
+      <ToolCallBlock
+        toolName={getToolName(part)}
+        input={input}
         output={output}
         isRunning={part.state === "input-available" || part.state === "input-streaming"}
         isError={partFailed(part)}
-        errorText={part.state === "output-error" ? part.errorText : undefined} />
-      {/* Inline preview card — when an executor returns a preview URL, surface
-          a live iframe under the tool block so the user sees the running app
-          inline (also promoted to the Output surface). */}
+        errorText={part.state === "output-error" ? part.errorText : undefined}
+      />
       {previewUrl && (
-        <div className="mt-2 h-64 rounded-md border p-border overflow-hidden">
+        <div className="mt-2 h-64 overflow-hidden rounded-md border p-border">
           <PreviewFrame url={previewUrl} />
         </div>
       )}
@@ -805,11 +834,7 @@ export const MessageView = memo(function MessageView({
                   );
                 }
                 if (isToolUIPart(part)) {
-                  return (
-                    <div key={part.toolCallId} className="overflow-hidden rounded-lg border p-border p-surface">
-                      <ToolCallPart part={part} />
-                    </div>
-                  );
+                  return <ToolCallPart key={part.toolCallId} part={part} />;
                 }
                 return null;
               })}

@@ -85,7 +85,7 @@ export interface SessionRecovery {
   /** An RPC succeeded — the transport is alive. */
   rpcSucceeded(): void;
   /** The user pressed Retry. */
-  manualRetry(): void;
+  manualRetry(forceRedial?: boolean): void;
 }
 
 export function createSessionRecovery(
@@ -121,9 +121,11 @@ export function createSessionRecovery(
     },
 
     rpcFailed(error, socketOpen) {
-      if (!socketOpen || !isRpcTimeoutError(error)) {
-        // A fast rejection means something ANSWERED; a closed socket cannot
-        // condemn itself. Either way this says nothing about a corpse.
+      // Closing a corpse rejects every other in-flight RPC with
+      // `Connection closed`. That is not peer evidence and must not erase the
+      // redial spacing this outage already earned.
+      if (!socketOpen) return;
+      if (!isRpcTimeoutError(error)) {
         restoreTrust();
         return;
       }
@@ -149,7 +151,8 @@ export function createSessionRecovery(
       restoreTrust();
     },
 
-    manualRetry() {
+    manualRetry(forceRedial = false) {
+      if (forceRedial) callbacks.forceRedial();
       callbacks.refetch();
     },
   };

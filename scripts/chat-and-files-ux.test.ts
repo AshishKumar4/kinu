@@ -100,6 +100,16 @@ interface Observed {
   readonly capabilityAbsences: string;
   /** Exploration's run-node rows on the mixed-status run, by node id. */
   readonly runNodes: Record<string, RunNode>;
+  readonly toolActivity: {
+    total: number;
+    collapsedRows: number;
+    expandedRows: number;
+    mutationRows: number;
+    compactHeight: number;
+    mutationHeight: number;
+    ground: string;
+    pageGround: string;
+  };
 }
 
 /** The gallery ids the provenance assertions address (gallery.tsx MESSAGES). */
@@ -225,6 +235,37 @@ async function run(): Promise<Observed> {
     ));
     await chatPage.close();
 
+    const tools = await browser.newPage();
+    await tools.setViewport({ width: 1280, height: 1600 });
+    await tools.evaluateOnNewDocument(() => localStorage.setItem('kinu-mode', 'light'));
+    await tools.goto(`${origin}/gallery.html?frame=toolrun`, { waitUntil: 'networkidle0' });
+    await tools.reload({ waitUntil: 'networkidle0' });
+    await tools.waitForSelector('[data-tool-group]');
+    const collapsedActivity = await tools.$eval('[data-tool-group]', (group) => {
+      const rows = [...group.querySelectorAll<HTMLElement>('[data-tool-state]')];
+      const mutation = rows.find((row) => row.dataset.toolEffect === 'mutate');
+      const compact = rows.find((row) => row.dataset.toolEffect === 'observe');
+      return {
+        total: Number(group.getAttribute('data-tool-count') ?? 0),
+        collapsedRows: rows.length,
+        mutationRows: rows.filter((row) => row.dataset.toolEffect === 'mutate').length,
+        compactHeight: Math.round(compact?.getBoundingClientRect().height ?? 0),
+        mutationHeight: Math.round(mutation?.getBoundingClientRect().height ?? 0),
+        ground: getComputedStyle(group).backgroundColor,
+        pageGround: getComputedStyle(document.body).backgroundColor,
+      };
+    });
+    await tools.click('[data-tool-group-toggle]');
+    await tools.waitForFunction(
+      () => document.querySelector('[data-tool-group-toggle]')?.getAttribute('aria-expanded') === 'true',
+    );
+    const expandedRows = await tools.$$eval(
+      '[data-tool-group] [data-tool-state]',
+      (rows) => rows.length,
+    );
+    const toolActivity = { ...collapsedActivity, expandedRows };
+    await tools.close();
+
     const files = await browser.newPage();
     await files.setViewport({ width: 1280, height: 1100 });
     await files.goto(`${origin}/gallery.html?frame=environment`, { waitUntil: 'networkidle0' });
@@ -280,7 +321,7 @@ async function run(): Promise<Observed> {
     await explore.close();
 
     return {
-      tails, chat, forkInterruptedAfterClick, chatErrorHeadings,
+      tails, chat, forkInterruptedAfterClick, chatErrorHeadings, toolActivity,
       filesHome, filesAfterUp, filesAfterUpEntries,
       capabilityChips, capabilityAbsences, runNodes,
     };
@@ -346,6 +387,27 @@ describe('the streaming turn, as a browser lays it out', () => {
 
   test('a turn actively writing text is never also announced as thinking', () => {
     expect(observed.tails[TEXT]!.thinkingRows).toBe(0);
+  });
+});
+
+describe('large tool runs, as the activity timeline draws them', () => {
+  test('the default stays bounded and expansion restores every call', () => {
+    const activity = observed.toolActivity;
+    expect(activity.total).toBeGreaterThan(50);
+    expect(activity.collapsedRows).toBeLessThanOrEqual(8);
+    expect(activity.expandedRows).toBe(activity.total);
+  });
+
+  test('mutations remain more prominent than observations', () => {
+    const activity = observed.toolActivity;
+    expect(activity.mutationRows).toBeGreaterThanOrEqual(2);
+    expect(activity.mutationHeight).toBeGreaterThan(activity.compactHeight);
+  });
+
+  test('light mode uses a recessed activity ground instead of white cards', () => {
+    const activity = observed.toolActivity;
+    expect(activity.ground).not.toBe(activity.pageGround);
+    expect(activity.ground).not.toBe('rgb(255, 255, 255)');
   });
 });
 
@@ -481,22 +543,57 @@ describe('a node the provider rate-limited, as the run list reads it', () => {
  * happened, and only a browser can see the difference.
  */
 describe('the gallery shell photographs a healthy neighbour', () => {
-  test('a frame whose stub carries a profile never renders "Profile unavailable"', async () => {
+  test('the real shell shares identity, width, and one settings action', async () => {
     await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
       const page = await browser.newPage();
-      await page.setViewport({ width: 1280, height: 900 });
-      await page.goto(`${origin}/gallery.html?frame=forks`, { waitUntil: 'networkidle0' });
+      await page.setViewport({ width: 1568, height: 1000 });
+      await page.goto(`${origin}/gallery.html?frame=shell`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('aside');
-      // The footer settles once the profile call resolves either way, so the
-      // read waits for the loading word to leave rather than for a fixed delay.
       await page.waitForFunction(
         () => !(document.querySelector('aside')?.textContent ?? '').includes('loading...'),
         { timeout: 8000 },
       );
-      const footer = await page.evaluate(() => document.querySelector('aside')?.textContent ?? '');
+      const shell = await page.evaluate(() => ({
+        footer: document.querySelector('aside')?.textContent ?? '',
+        chatWidth: Math.round(document.querySelector('[data-gallery-chat] > *')?.getBoundingClientRect().width ?? 0),
+        composerWidth: Math.round(document.querySelector('[data-composer-root] > .p-composer')?.getBoundingClientRect().width ?? 0),
+        headerSettings: document.querySelectorAll('[aria-label="Workspace settings"]').length,
+        rosterSettings: document.querySelectorAll('[aria-label^="Workspace settings for"]').length,
+      }));
       await page.close();
-      expect(footer).not.toContain('Profile unavailable');
-      expect(footer).toContain('@');
+      expect(shell.footer).not.toContain('Profile unavailable');
+      expect(shell.footer).toContain('@');
+      expect(shell.chatWidth).toBe(780);
+      expect(shell.composerWidth).toBe(780);
+      expect(shell.headerSettings).toBe(0);
+      expect(shell.rosterSettings).toBeGreaterThan(0);
+    });
+  }, 120_000);
+
+  test('mobile gives Chat and Workspace the full viewport in turn', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 390, height: 844 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-composer-root]');
+      const chatPanels = await page.evaluate(
+        () => [...document.querySelectorAll('[data-panel]')].map((panel) => Math.round(panel.getBoundingClientRect().width)),
+      );
+      const workspaceButton = await page.$('button[aria-pressed="false"]');
+      await workspaceButton?.click();
+      await page.waitForFunction(
+        () => [...document.querySelectorAll('[data-panel]')].some((panel, index) => (
+          index === 1 && Math.round(panel.getBoundingClientRect().width) === 390
+        )),
+      );
+      const workspacePanels = await page.evaluate(
+        () => [...document.querySelectorAll('[data-panel]')].map((panel) => Math.round(panel.getBoundingClientRect().width)),
+      );
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
+      await page.close();
+      expect(chatPanels).toEqual([390, 0]);
+      expect(workspacePanels).toEqual([0, 390]);
+      expect(overflow).toBe(0);
     });
   }, 120_000);
 });

@@ -538,7 +538,8 @@ export { createFileDispatcher, type FileToolDeps, type FileToolInput } from './t
 // argument values; see tools/tool-call-summary.ts.
 export {
   summarizeToolCall, describeToolCall, describeCommand,
-  isToolCallFailed, clip,
+  isToolCallFailed, toolCallEffect, clip,
+  type ToolCallEffect,
 } from './tools/tool-call-summary';
 export {
   clampToolResult,

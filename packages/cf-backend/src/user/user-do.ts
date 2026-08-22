@@ -559,8 +559,8 @@ export class UserDO extends Agent<Env> {
     revokeWorkspaceCapability(this.ctx.storage.sql, name);
   }
 
-  /** Update only the roster display name — keeps the Sidebar in sync with the
-   *  agent's own `agent_config.display_name` (e.g. after AI auto-titling). */
+  /** Update the authoritative roster title. The workspace actor mirrors this
+   *  value only after the cross-DO write succeeds. */
   async setWorkspaceDisplayName(caller: UserCaller, name: string, displayName: string): Promise<void> {
     const resolved = await this.requireTier(caller, 'workspaces.rename_self');
     validateWorkspaceName(name);
