@@ -13,6 +13,8 @@ import { Loader } from "@cloudflare/kumo";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
 import {
   CONNECT_AI_MESSAGE,
+  MISSION_HELP,
+  MISSION_LABEL,
   MISSION_PLACEHOLDER,
   useCreateWorkspace,
 } from "@/hooks/use-create-workspace";
@@ -53,7 +55,7 @@ export default function HomePage() {
         {/* Mission card */}
         <form onSubmit={submit} className="min-w-0 overflow-hidden rounded-[14px] border p-border p-surface">
           <label htmlFor="workspace-mission" className="block px-5 pt-4 text-xs font-semibold p-text-4">
-            Mission
+            {MISSION_LABEL}
           </label>
           <textarea
             id="workspace-mission"
@@ -76,7 +78,7 @@ export default function HomePage() {
           )}
           <div className="flex items-center justify-between gap-4 border-t p-border p-sidebar px-5 py-3">
             <p className="text-[11.5px] leading-snug p-text-4">
-              Becomes the workspace's SOUL.md. Nothing runs until the first message.
+              {MISSION_HELP}
             </p>
             <button
               type="submit"

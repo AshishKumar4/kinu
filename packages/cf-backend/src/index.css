@@ -252,6 +252,7 @@ html, body, #root {
   /* One scrim behind every overlay — dialogs, drawers, sheets. Warm-black so
      it deepens the umber ground instead of greying it. */
   --c-scrim: rgba(10, 8, 5, 0.55);
+  --c-shadow-drop: rgba(0, 0, 0, 0.3);
 
   /* elevation — role-named; dark = black-based, heavier */
   /* Dark draws no card shadow at all (the rule above): a card is a rung of
@@ -307,7 +308,7 @@ html, body, #root {
   --color-kumo-warning-tint: var(--c-warning-tint);
   --color-kumo-info-tint: var(--c-info-tint);
   --color-kumo-shadow-edge: var(--c-border);
-  --color-kumo-shadow-drop: rgba(0, 0, 0, 0.3);
+  --color-kumo-shadow-drop: var(--c-shadow-drop);
   --color-kumo-tip-shadow: transparent;
   --color-kumo-tip-stroke: var(--c-border);
 
@@ -402,6 +403,7 @@ html, body, #root {
 
   /* On paper the scrim reads as ink pulled over the page, not a blackout. */
   --c-scrim: rgba(43, 26, 4, 0.32);
+  --c-shadow-drop: rgba(43, 26, 4, 0.14);
   /* The mock separates its planes with tone plus strong rules and casts no
      card shadow; only floating layers get a lift. */
   --shadow-card: none;
@@ -409,9 +411,8 @@ html, body, #root {
   --shadow-menu:    0 10px 24px -10px rgba(43, 26, 4, 0.18), 0 1px 3px rgba(43, 26, 4, 0.06);
   --shadow-composer: 0 -6px 20px -16px rgba(43, 26, 4, 0.14), 0 1px 2px rgba(60, 45, 25, 0.05);
 
-  /* The one Kumo token whose light value is not a re-pointed `--c-*`: on
-     paper the drop shadow is warm ink, not black. */
-  --color-kumo-shadow-drop: rgba(43, 26, 4, 0.14);
+  /* Kumo follows the semantic shadow role in both modes. */
+  --color-kumo-shadow-drop: var(--c-shadow-drop);
 }
 
 body { background: var(--c-bg); color: var(--c-text); }
@@ -465,8 +466,9 @@ body { background: var(--c-bg); color: var(--c-text); }
 @utility p-text-2 { color: var(--c-text-2); }
 @utility p-text-3 { color: var(--c-text-3); }
 @utility p-text-4 { color: var(--c-text-4); }
+@utility p-accent { color: var(--c-accent-fg); }
 /* The mock's gold as TEXT — labels, active pills, links at rest. `p-accent`
-   is the silk bright end; this is the gold itself, the mock's --gold. */
+   is the bright end; this is the gold itself, the mock's --gold. */
 @utility p-gold { color: var(--c-accent); }
 
 @utility p-success { color: var(--c-success); }

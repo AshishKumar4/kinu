@@ -14,12 +14,12 @@ import { listAvailableModels } from "@/lib/user-api";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { renderThrownChain } from '@kinu.run/core/obs';
 
-/** The creation box's wording, in one place: both surfaces that render it read from here. */
+/** The one creation surface's wording, kept beside the action it explains. */
 export const MISSION_LABEL = "Mission";
 export const MISSION_PLACEHOLDER =
   'A standing brief for the whole workspace. "My personal assistant, Jarvis." "Own the checkout service: find bugs, keep the tests green, ship the fixes."';
 export const MISSION_HELP =
-  "This becomes the workspace's SOUL.md and its name. Nothing runs until you send the first message.";
+  "Becomes the workspace's SOUL.md. Nothing runs until the first message.";
 export const CONNECT_AI_MESSAGE = "Connect Cloudflare Workers AI before creating a workspace.";
 
 export function useCreateWorkspace() {
