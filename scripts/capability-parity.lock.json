@@ -47,6 +47,7 @@
   "movable packages/cf-backend/src/events/body.ts",
   "movable packages/cf-backend/src/facet-identity.ts",
   "movable packages/cf-backend/src/health-route.ts",
+  "movable packages/cf-backend/src/hooks/session-recovery.ts",
   "movable packages/cf-backend/src/lib/agent-naming.ts",
   "movable packages/cf-backend/src/lib/cli-film.ts",
   "movable packages/cf-backend/src/lib/cloudflare-oauth.ts",
