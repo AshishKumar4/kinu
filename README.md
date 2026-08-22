@@ -6,7 +6,10 @@
 </p>
 
 <p align="center">
-  <img alt="Recorded views of Kinu at work: a steered turn becoming a measured swarm search, the search growing node by node on the exploration canvas, and one node's transcript with its tool calls and report." src="docs/assets/kinu-film-readme.webp" width="900" height="562">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/kinu-app-dark.webp">
+    <img alt="A Kinu workspace with an agent turn, tool calls, the composer, and the work inspector." src="docs/assets/kinu-app-light.webp" width="900" height="563">
+  </picture>
 </p>
 
 <p align="center">

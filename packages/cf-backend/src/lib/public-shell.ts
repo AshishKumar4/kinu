@@ -263,8 +263,9 @@ a{color:inherit;text-decoration:none}
    of that grid rather than a card floating on it, so nothing nests. */
 .page{width:min(1200px,100%);flex:1;display:flex;flex-direction:column;
 border-inline:var(--rule);background:var(--c-bg)}
-.bar{display:flex;align-items:center;justify-content:space-between;gap:16px;
-min-height:58px;padding:0 var(--gutter);border-bottom:var(--rule);background:var(--c-sidebar)}
+.bar{width:100%;box-sizing:border-box;display:flex;align-items:center;
+justify-content:space-between;gap:16px;min-height:58px;padding:0 var(--gutter);
+border-bottom:var(--rule);background:var(--c-sidebar)}
 .brand{display:inline-flex;align-items:center;gap:9px;font-family:var(--font-display);
 font-size:17px;font-weight:500;letter-spacing:-0.015em}
 .brand .mark{color:var(--c-accent);flex:none}
@@ -416,9 +417,9 @@ transition:color 150ms var(--ease),border-color 150ms var(--ease)}
 .panel{margin-top:18px;max-width:620px}
 .panel .dim{margin:11px 0 0}
 
-footer{display:flex;align-items:center;justify-content:space-between;gap:16px;
-padding:20px var(--gutter);border-top:var(--rule);background:var(--c-sidebar);
-color:var(--c-text-3);font-size:13px}
+footer{width:100%;box-sizing:border-box;display:flex;align-items:center;
+justify-content:space-between;gap:16px;padding:20px var(--gutter);
+border-top:var(--rule);background:var(--c-sidebar);color:var(--c-text-3);font-size:13px}
 footer nav{display:flex;gap:18px}
 footer a:hover{color:var(--c-text)}
 .lockup{display:inline-flex;align-items:center;gap:8px;color:var(--c-text-2)}
@@ -427,10 +428,11 @@ footer a:hover{color:var(--c-text)}
 @media (max-width:880px){
 .page{border-inline:0}
 .grid.three,.grid.two{grid-template-columns:1fr}
+.nav{gap:8px}
 .nav .quiet{display:none}
-.cmd{grid-template-columns:auto 1fr;row-gap:10px}
-.cmd code{white-space:pre-wrap;overflow-wrap:anywhere}
-.copy{grid-column:1/-1;min-height:34px}
+.cmd{flex-wrap:wrap;align-items:flex-start;row-gap:10px}
+.cmd code{flex:1 1 100%;white-space:pre-wrap;overflow-wrap:anywhere}
+.copy{min-height:34px}
 .stats{gap:22px 32px}
 footer{flex-direction:column;align-items:flex-start;gap:14px}
 }

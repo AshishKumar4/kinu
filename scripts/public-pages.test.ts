@@ -61,8 +61,9 @@ interface Contrast {
 interface Facts {
   typed?: Typed;
   typedStill?: { before: string; after: string };
-  tree?: { pixels: number; tabSwitched: boolean; statusAfterSwitch: string };
+  tree?: { vertices: number; selectedPreset: string; statusAfterSwitch: string };
   treeStill?: boolean;
+  previews?: { controls: number; chapterMax: number; futureHidden: boolean; replayShown: number };
   overflow: Record<string, number>;
   targets: Record<string, number>;
   contrast: Contrast[];
@@ -136,38 +137,54 @@ beforeAll(async () => {
       }, { polling: 'raf', timeout: 15_000 }, early).then((h) => h.jsonValue());
       facts.typed = { early, later: String(later) };
 
-      // ── The tree drew, and its tabs switch the search ────────────────
-      const pixels = await page.evaluate(() => {
-        const canvas = document.querySelector<HTMLCanvasElement>('#hero-tree');
-        if (canvas === null) return -1;
-        const ctx = canvas.getContext('2d');
-        if (ctx === null) return -1;
-        const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-        let painted = 0;
-        for (let i = 3; i < data.length; i += 4) if (data[i]! > 8) painted += 1;
-        return painted;
-      });
-      await page.evaluate(() => {
-        document.querySelector<HTMLCanvasElement>('#hero-tree')?.toDataURL();
-      });
-      const statusBefore = await page.evaluate(
-        () => document.querySelector('[data-hero-status]')?.textContent ?? '',
+      // ── The real-data SVG rendered, and its tabs replay a preset ──────
+      const vertices = await page.evaluate(
+        () => document.querySelectorAll('.ht-graph[data-live] .ht-v').length,
       );
-      await page.click('[data-hero-tabs] [data-mode="ideate"]');
+      await page.click('[data-ht-tab="ideate"]');
       await page.waitForFunction(
-        () => document.querySelector('[data-hero-status]')?.textContent !== '',
+        () => document.querySelector('.ht-graph[data-preset="ideate"][data-live]') !== null
+          && !document.querySelector('[data-hero-search]')?.hasAttribute('data-playing'),
         { timeout: 8000 },
       );
-      // Settle wait for the redrawn tree after the tab switch; the canvas
-      // draws on rAF inside the page.
-      await new Promise((r) => setTimeout(r, 700));
-      const statusAfter = await page.evaluate(
-        () => document.querySelector('[data-hero-status]')?.textContent ?? '',
-      );
+      const selected = await page.evaluate(() => {
+        const graph = document.querySelector('.ht-graph[data-live]');
+        return {
+          preset: graph?.getAttribute('data-preset') ?? '',
+          status: document.querySelector('[data-hero-status]')?.textContent
+            ?? graph?.getAttribute('data-phase-end') ?? '',
+        };
+      });
       facts.tree = {
-        pixels,
-        tabSwitched: statusBefore !== statusAfter || statusAfter.length > 0,
-        statusAfterSwitch: statusAfter,
+        vertices,
+        selectedPreset: selected.preset,
+        statusAfterSwitch: selected.status,
+      };
+
+      // ── DOM previews expose chapters and replay; they do not loop blindly ──
+      await page.click('[data-preview="workspace"] [data-preview-go="4"]');
+      const chapter = await page.evaluate(() => {
+        const preview = document.querySelector('[data-preview="workspace"]');
+        const beats = [...(preview?.querySelectorAll<HTMLElement>('[data-beat]') ?? [])];
+        const shown = beats.filter((beat) => beat.hasAttribute('data-beat-shown'));
+        return {
+          controls: preview?.querySelectorAll('button').length ?? 0,
+          max: Math.max(...shown.map((beat) => Number(beat.dataset.beat))),
+          futureHidden: beats
+            .filter((beat) => Number(beat.dataset.beat) >= 4)
+            .every((beat) => !beat.hasAttribute('data-beat-shown')),
+        };
+      });
+      await page.click('[data-preview="workspace"] [data-preview-replay]');
+      const replayShown = await page.evaluate(
+        () => document.querySelector('[data-preview="workspace"]')
+          ?.querySelectorAll('[data-beat-shown]').length ?? 0,
+      );
+      facts.previews = {
+        controls: chapter.controls,
+        chapterMax: chapter.max,
+        futureHidden: chapter.futureHidden,
+        replayShown,
       };
 
       // ── Copy affordance ────────────────────────────────────────────────
@@ -247,15 +264,11 @@ beforeAll(async () => {
       );
       facts.typedStill = { before, after };
       facts.treeStill = await page.evaluate(() => {
-        const canvas = document.querySelector<HTMLCanvasElement>('#hero-tree');
-        if (canvas === null) return false;
-        const ctx = canvas.getContext('2d');
-        if (ctx === null) return false;
-        const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-        let painted = 0;
-        for (let i = 3; i < data.length; i += 4) if (data[i]! > 8) painted += 1;
-        window.__treePixels = painted;
-        return painted > 5000;
+        const graph = document.querySelector('.ht-graph[data-preset="optimise"][data-live]');
+        return graph !== null
+          && graph.hasAttribute('data-measured')
+          && graph.hasAttribute('data-lit')
+          && graph.querySelectorAll('.ht-v').length > 0;
       });
       await page.close();
     }
@@ -330,15 +343,25 @@ describe('the hero claim types itself', () => {
 });
 
 describe('the hero tree runs the shipped script', () => {
-  test('the canvas really painted, and the tabs answer', () => {
+  test('the search rendered real vertices, and the tabs answer', () => {
     const tree = facts.tree!;
-    expect(tree.pixels, 'the canvas stayed blank').toBeGreaterThan(5000);
-    expect(tree.tabSwitched, 'a preset tab did nothing').toBeTrue();
-    expect(tree.statusAfterSwitch.length).toBeGreaterThan(0);
+    expect(tree.vertices, 'the search rendered no vertices').toBeGreaterThan(5);
+    expect(tree.selectedPreset, 'a preset tab did nothing').toBe('ideate');
+    expect(tree.statusAfterSwitch).toContain('UNRANKED');
   });
 
-  test('refusing motion draws the settled search once', () => {
-    expect(facts.treeStill, 'reduced motion left a blank canvas').toBeTrue();
+  test('refusing motion serves the settled search', () => {
+    expect(facts.treeStill, 'reduced motion left the search unsettled').toBeTrue();
+  });
+});
+
+describe('the DOM previews answer the reader', () => {
+  test('chapter selection and replay move the workspace state', () => {
+    const preview = facts.previews!;
+    expect(preview.controls, 'the preview has no controls').toBeGreaterThanOrEqual(6);
+    expect(preview.chapterMax, 'the wake chapter did not stop at its state').toBe(3);
+    expect(preview.futureHidden, 'the wake chapter leaked later states').toBeTrue();
+    expect(preview.replayShown, 'replay did not restart at the first beat').toBe(1);
   });
 });
 
