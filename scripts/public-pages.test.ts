@@ -35,6 +35,7 @@ interface Facts {
   canvasPixels?: number;
   treeFlows?: boolean;
   prunedNodes?: number;
+  hiddenNodes?: number;
   heroGraphWidth?: number;
   workspace?: SurfaceFact;
   tui?: SurfaceFact;
@@ -159,6 +160,7 @@ beforeAll(async () => {
       facts.canvasPixels = await opaqueCanvasPixels(page);
       await page.waitForSelector('canvas[data-settled="true"]', { timeout: 10_000 });
       facts.prunedNodes = await page.$eval('canvas', (canvas) => Number(canvas.dataset.pruned ?? 0));
+      facts.hiddenNodes = await page.$eval('canvas', (canvas) => Number(canvas.dataset.hidden ?? 0));
       facts.heroGraphWidth = await page.$eval('[data-hero-graph]', (graph) => (
         Math.round(graph.getBoundingClientRect().width)
       ));
@@ -342,8 +344,9 @@ describe('the standalone landing runs', () => {
     expect(required(facts.treeFlows, 'settled tree motion')).toBeTrue();
   });
 
-  test('the abstract tree keeps visibly pruned branches', () => {
-    expect(required(facts.prunedNodes, 'pruned branch count')).toBeGreaterThan(20);
+  test('the abstract tree cuts pruned branches before their descendants', () => {
+    expect(required(facts.prunedNodes, 'pruned branch count')).toBeGreaterThan(3);
+    expect(required(facts.hiddenNodes, 'hidden descendant count')).toBeGreaterThan(0);
     expect(required(facts.heroGraphWidth, 'hero graph width')).toBeGreaterThan(620);
   });
 
