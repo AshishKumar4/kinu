@@ -29,6 +29,7 @@
  */
 
 import * as v from "valibot";
+import { renderThrownChain } from '@kinu.run/core/obs';
 
 /* ── timeout classification ─────────────────────────────────────────────────── */
 
@@ -39,7 +40,9 @@ import * as v from "valibot";
 const RPC_TIMEOUT_PATTERN = /^RPC call to .+ timed out after \d+ms$/;
 
 function isRpcTimeoutError<ErrorValue>(error: ErrorValue): boolean {
-  return error instanceof Error && RPC_TIMEOUT_PATTERN.test(error.message);
+  const parsed = v.safeParse(v.instance(Error), error);
+  return parsed.success
+    && RPC_TIMEOUT_PATTERN.test(renderThrownChain({ cause: parsed.output }));
 }
 
 /* ── corpse detection and forced redial ─────────────────────────────────────── */

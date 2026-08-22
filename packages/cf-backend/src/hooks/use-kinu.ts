@@ -26,13 +26,12 @@ import type {
 import type { ExecutorInfo } from "../lib/executors";
 import { applySignalCard, parseSignalCardEvent, type SignalCard } from "../components/background-event";
 import type { InlineSteer } from "@kinu.run/core";
-import { tolerate } from "@kinu.run/core/obs";
+import { diagnostics, renderThrownChain, toKinuError, tolerate } from "@kinu.run/core/obs";
 import {
   reconcilePreviewPorts,
   type ExecutorPortRefresh,
   type PinnedPreviewPort,
 } from "../lib/preview-ports";
-import { renderThrownChain } from "@kinu.run/core/obs";
 import {
   createSessionRecovery,
   fetchDeployedBuildSha,
@@ -799,7 +798,13 @@ export function useKinu(target?: string | KinuActorAddress) {
       const isFirst = recoveryFirstOpen.current;
       recoveryFirstOpen.current = false;
       sessionRecovery.socketOpened(isFirst);
-      if (!isFirst) void refreshDeployedBuild();
+      if (!isFirst) {
+        void refreshDeployedBuild().catch((error) => {
+          diagnostics.failure('session.build_check_failed', toKinuError({
+            doing: 'check the deployed build after reconnect', cause: error, otherwise: 'io',
+          }));
+        });
+      }
     };
     agent.addEventListener("open", onOpen);
     return () => agent.removeEventListener("open", onOpen);
