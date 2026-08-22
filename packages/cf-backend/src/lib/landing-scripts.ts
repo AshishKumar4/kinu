@@ -7,12 +7,39 @@
  * for reduced motion all get the designed still rather than a blank.
  */
 
-/** The hero claim types itself through the owner's six phrases — 42-88 ms
- *  per character in, 20 ms out, 2.6 s hold, 420 ms between phrases. The
- *  server ships phrase one COMPLETE with its caret, so a reader with no
- *  script reads the strongest claim and nothing overlaps, ever: one span is
- *  rewritten in place, there is no crossfade to ghost. Under reduced motion
- *  the script never starts. */
+/** Nav theme toggle. Mirrors the app's top-bar control: one button, sun or
+ *  moon by current mode, writes the same storage key the pre-paint script
+ *  reads, flips `data-mode` and `color-scheme` in place. No flash: the
+ *  pre-paint script pinned the mode before first paint. */
+export const MODE_TOGGLE_SCRIPT = `
+(() => {
+  const buttons = document.querySelectorAll('[data-mode-toggle]');
+  if (buttons.length === 0) return;
+  const paint = () => {
+    const light = document.documentElement.dataset.mode === 'light';
+    for (const b of buttons) {
+      b.setAttribute('aria-label', light ? 'Switch to dark mode' : 'Switch to light mode');
+      for (const icon of b.querySelectorAll('[data-icon]')) {
+        icon.style.display = (icon.dataset.icon === 'moon') === light ? '' : 'none';
+      }
+    }
+  };
+  for (const b of buttons) {
+    b.addEventListener('click', () => {
+      const next = document.documentElement.dataset.mode === 'light' ? 'dark' : 'light';
+      document.documentElement.setAttribute('data-mode', next);
+      document.documentElement.style.colorScheme = next;
+      try { localStorage.setItem('theme', next); } catch (e) {}
+      paint();
+    });
+  }
+  paint();
+})();`;
+
+/** The hero claim types itself through six phrases — in at human cadence,
+ *  hold, out, next. The server ships phrase one COMPLETE, so a reader with
+ *  no script reads the strongest claim and nothing can ever overlap: one
+ *  span is rewritten in place. Reduced motion never starts it. */
 export const TYPEWRITER_SCRIPT = `
 (() => {
   const phrases = ${JSON.stringify(['get better with use.', 'craft their own tools.', 'command scored swarms.', 'work while you sleep.', 'improve their prompts.', 'run cloud, or local.'])};
@@ -41,17 +68,12 @@ export const TYPEWRITER_SCRIPT = `
 })();`;
 
 /**
- * The hero figure: the owner's own procedural tree, ported line-for-line from
- * his artifact (buildTree + draw), with two serving changes. Colours read
- * tokens instead of hex literals, and reduced motion draws ONE settled frame
- * (the won state) instead of running the loop — the page's hide-then-put-back
- * contract, honoured by drawing the END.
- *
- * The tab grammar is his: optimise | research | ideate, staggered arrivals,
- * phase captions in the status slot, measured scores under labelled nodes,
- * the winning path lighting after phase two. INTERIM: his numbers are
- * invented (seeded rng) — MotionRedesign2's recorded-data module replaces
- * this script and the tab wiring wholesale.
+ * The hero figure: the owner's procedural tree from his artifact
+ * (buildTree + draw), ported line-for-line, with two serving changes.
+ * Colours are re-read from tokens when the mode attribute moves, so a theme
+ * toggle re-inks the canvas live; reduced motion draws ONE settled frame
+ * instead of animating. INTERIM data note stands: MotionRedesign2's
+ * recorded-data module replaces this script wholesale.
  */
 export const HERO_TREE_SCRIPT = `
 (() => {
@@ -59,16 +81,22 @@ export const HERO_TREE_SCRIPT = `
   if (canvas === null) return;
   const statusEl = document.querySelector('[data-hero-status]');
   const tabs = document.querySelectorAll('[data-hero-tabs] [data-mode]');
-  const css = getComputedStyle(document.documentElement);
-  const token = (name) => css.getPropertyValue(name).trim();
-  const ACCENT = token('--c-accent') || '#E0A458';
-  const SHEEN = token('--c-accent-fg') || '#E3D2AE';
-  const INK = token('--c-text-2') || '#A2968A';
-  const DIM = '#4A423A';
-  const FAINT = token('--c-text-3') || '#6E655B';
-  const GOOD = token('--c-success') || '#8FBC8B';
-  const PANEL = token('--c-surface') || '#181512';
-  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const tokenName = { ACCENT: '--c-accent', SHEEN: '--c-accent-fg', INK: '--c-text-2', FAINT: '--c-text-3', GOOD: '--c-success', PANEL: '--c-surface' };
+  let ACCENT, SHEEN, INK, GOOD, PANEL;
+  const FAINT = '#4A423A', DIM_INK = '#4A423A';
+  const resolveInk = () => {
+    const css = getComputedStyle(document.documentElement);
+    const read = (name, fallback) => {
+      const v = css.getPropertyValue(name).trim();
+      return /^#[0-9a-f]{6}$/i.test(v) ? v : fallback;
+    };
+    ACCENT = read(tokenName.ACCENT, '#E0A458');
+    SHEEN = read(tokenName.SHEEN, '#E3D2AE');
+    INK = read(tokenName.INK, '#A2968A');
+    GOOD = read(tokenName.GOOD, '#8FBC8B');
+    PANEL = read(tokenName.PANEL, '#181512');
+  };
+  resolveInk();
 
   let mode = 'optimise';
   let nodes = [], winner = null, winPath = new Set(), labeled = new Set();
@@ -97,7 +125,7 @@ export const HERO_TREE_SCRIPT = `
         const c = add(root.id, 1, 170 + i * (W - 340) / 3, H / 2 - 60);
         c.score = sc; return c;
       });
-      const top = [...cells].sort((a, b) => b.score - a.score).slice(0, 2);
+      const top = [...cells].sort((x, y) => y.score - x.score).slice(0, 2);
       top.forEach((c) => {
         for (let j = 0; j < 3; j++) {
           const ch = add(c.id, 2, c.x - 110 + j * 110, H - 240);
@@ -155,6 +183,7 @@ export const HERO_TREE_SCRIPT = `
       ? ['FANNING OUT', '5 CANDIDATES', 'ALL RETURNED · UNRANKED']
       : ['EXPANDING', 'MEASURING', 'WINNER · 112 MS'];
 
+  const mix = (hex, pct) => 'color-mix(in srgb, ' + hex + ' ' + Math.round(pct * 100) + '%, transparent)';
   const draw = (tAbs) => {
     const ctx = canvas.getContext('2d');
     const W = canvas.width, H = canvas.height;
@@ -163,7 +192,7 @@ export const HERO_TREE_SCRIPT = `
     const phase = t < totalAppear + 600 ? P[0] : (t < totalAppear + 2200 ? P[1] : P[2]);
     if (statusEl !== null && statusEl.textContent !== phase) statusEl.textContent = phase;
     ctx.clearRect(0, 0, W, H);
-    ctx.fillStyle = 'color-mix(in srgb, ' + INK + ' 12%, transparent)';
+    ctx.fillStyle = mix(INK, 12);
     for (let x = 20; x < W; x += 44) for (let y = 20; y < H; y += 44) ctx.fillRect(x, y, 2, 2);
     const measured = t > totalAppear + 600;
     const won = t > totalAppear + 2200 && winner !== null;
@@ -174,7 +203,7 @@ export const HERO_TREE_SCRIPT = `
       const ap = Math.min(1, Math.max(0, (t - n.appear) / 500));
       if (ap <= 0) continue;
       const onPath = won && winPath.has(n.id) && winPath.has(p.id);
-      ctx.strokeStyle = onPath ? 'color-mix(in srgb, ' + ACCENT + ' ' + Math.round((0.25 + 0.75 * winProg) * 100) + '%, transparent)' : 'color-mix(in srgb, ' + DIM + ' 90%, transparent)';
+      ctx.strokeStyle = onPath ? mix(ACCENT, 0.25 + 0.75 * winProg) : mix(DIM_INK, 0.9);
       ctx.lineWidth = onPath ? 2.5 : 1.2;
       ctx.beginPath();
       ctx.moveTo(p.x, p.y + 10);
@@ -193,19 +222,19 @@ export const HERO_TREE_SCRIPT = `
       const fresh = t - n.appear < 900;
       if (fresh && !measured) {
         ctx.beginPath(); ctx.arc(n.x, n.y, r + 7 + 4 * Math.sin(t / 180), 0, 7);
-        ctx.strokeStyle = 'color-mix(in srgb, ' + ACCENT + ' 25%, transparent)'; ctx.lineWidth = 1; ctx.stroke();
+        ctx.strokeStyle = mix(ACCENT, 0.25); ctx.lineWidth = 1; ctx.stroke();
       }
       ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, 7);
       if (isWin && won) {
         ctx.fillStyle = ACCENT; ctx.fill();
         ctx.beginPath(); ctx.arc(n.x, n.y, r + 8 + 3 * Math.sin(t / 250), 0, 7);
-        ctx.strokeStyle = 'color-mix(in srgb, ' + ACCENT + ' ' + Math.round(0.5 * winProg * 100) + '%, transparent)'; ctx.lineWidth = 1.5; ctx.stroke();
+        ctx.strokeStyle = mix(ACCENT, 0.5 * winProg); ctx.lineWidth = 1.5; ctx.stroke();
       } else if (onPath) {
         ctx.fillStyle = PANEL; ctx.fill(); ctx.strokeStyle = ACCENT; ctx.lineWidth = 2; ctx.stroke();
       } else if (isRoot) {
         ctx.fillStyle = PANEL; ctx.fill(); ctx.strokeStyle = SHEEN; ctx.lineWidth = 2; ctx.stroke();
       } else {
-        ctx.fillStyle = PANEL; ctx.fill(); ctx.strokeStyle = measured ? DIM : INK; ctx.lineWidth = 1.4; ctx.stroke();
+        ctx.fillStyle = PANEL; ctx.fill(); ctx.strokeStyle = measured ? DIM_INK : INK; ctx.lineWidth = 1.4; ctx.stroke();
       }
       if (measured && ap >= 1 && n.score != null && labeled.has(n.id)) {
         const good = mode === 'optimise' ? n.score <= 140 : n.score >= 0.75;
@@ -237,7 +266,7 @@ export const HERO_TREE_SCRIPT = `
     for (const tab of tabs) {
       const active = tab.dataset.mode === m;
       tab.style.color = active ? ACCENT : FAINT;
-      tab.style.borderBottom = active ? '1px solid color-mix(in srgb, ' + ACCENT + ' 50%, transparent)' : '1px solid transparent';
+      tab.style.borderBottom = active ? '1px solid ' + mix(ACCENT, 0.5) : '1px solid transparent';
     }
     buildTree(m);
     t0 = performance.now();
@@ -250,21 +279,73 @@ export const HERO_TREE_SCRIPT = `
   }
 
   buildTree(mode);
-  if (reduced) {
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
     // The finished search, drawn once: the won state at rest.
     draw(totalAppear + 2200 + 900);
     if (statusEl !== null) statusEl.textContent = phases(mode)[2];
-    return;
-  }
-  let running = true;
-  document.addEventListener('visibilitychange', () => {
-    running = document.visibilityState === 'visible';
-    if (running) { t0 = performance.now() - (performance.now() % cycle); requestAnimationFrame(loop); }
-  });
-  const loop = (now) => {
-    if (!running) return;
-    draw(now - t0);
+  } else {
+    let running = true;
+    const loop = (now) => {
+      if (!running) return;
+      draw(now - t0);
+      raf = requestAnimationFrame(loop);
+    };
+    document.addEventListener('visibilitychange', () => {
+      running = document.visibilityState === 'visible';
+      if (running) requestAnimationFrame(loop);
+    });
     raf = requestAnimationFrame(loop);
-  };
-  raf = requestAnimationFrame(loop);
+  }
+  // Live re-ink on theme change: the mode attribute is the theme store's own
+  // output, so observing it costs nothing and needs no store import.
+  new MutationObserver(() => {
+    resolveInk();
+    for (const tab of tabs) {
+      const active = tab.dataset.mode === mode;
+      tab.style.color = active ? ACCENT : FAINT;
+    }
+    draw(totalAppear + 2200 + 900);
+  }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-mode'] });
+})();`;
+
+/**
+ * The interactive previews (§03): beats reveal rows one at a time while the
+ * figure is on screen, hold the finished state briefly, then restart — and
+ * park completely under prefers-reduced-motion, where every beat ships on.
+ * The prerender sends ALL beats visible, so no script still reads the whole
+ * sequence as a transcript.
+ */
+export const PREVIEW_SCRIPT = `
+(() => {
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const STEP = 900;
+  const HOLD = 3200;
+  for (const fig of document.querySelectorAll('[data-preview]')) {
+    const beats = [...fig.querySelectorAll('[data-beat]')];
+    if (beats.length === 0) continue;
+    const total = Math.max(...beats.map((b) => Number(b.dataset.beat))) + 1;
+    let intervalId = 0;
+    let timeoutId = 0;
+    const show = (upto) => {
+      for (const b of beats) b.toggleAttribute('data-beat-shown', Number(b.dataset.beat) < upto);
+    };
+    const run = () => {
+      let at = 0;
+      show(0);
+      intervalId = setInterval(() => {
+        at += 1;
+        if (at > total) {
+          clearInterval(intervalId);
+          show(total + 1);
+          timeoutId = setTimeout(run, HOLD);
+          at = -2;
+        } else show(at);
+      }, STEP);
+    };
+    new IntersectionObserver((entries) => {
+      const on = entries[0].isIntersecting;
+      if (on && !intervalId) run();
+      if (!on) { clearInterval(intervalId); clearTimeout(timeoutId); intervalId = 0; show(total + 1); }
+    }, { threshold: 0.35 }).observe(fig);
+  }
 })();`;

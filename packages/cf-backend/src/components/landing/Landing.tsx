@@ -61,7 +61,7 @@ function Tick({ corner }: { corner: 'tl' | 'br' | 'tr' | 'bl' }): ReactElement {
 function HeroLeft({ install }: { install: string }): ReactElement {
   return (
     <div>
-      <div style={s.eyebrow}>THE SELF-EVOLVING AGENT PLATFORM</div>
+      <div className="eyebrow" style={{ marginBottom: 24 }}>THE SELF-EVOLVING AGENT PLATFORM</div>
       <h1 style={s.h1}>
         {'Agents that '}
         <span data-typewriter style={{ display: 'block', height: '1.08em', whiteSpace: 'nowrap', color: 'var(--c-accent)' }}>
@@ -69,12 +69,12 @@ function HeroLeft({ install }: { install: string }): ReactElement {
           <span data-caret aria-hidden="true" className="caret" />
         </span>
       </h1>
-      <p style={{ ...s.lede, margin: '0 0 34px 0', maxWidth: 540 }}>
+      <p className="lede hero-lede" style={{ margin: '0 0 34px 0', maxWidth: 540 }}>
         Persistent workspaces with files, sessions, and memory. Hosted on Cloudflare, so tasks
         keep running after you close the laptop — or fully native on your machine, in the
         terminal or your editor.
       </p>
-      <div className="cmd" style={{ maxWidth: 560 }}>
+      <div className="cmd hero-install" style={{ maxWidth: 560 }}>
         <Tick corner="tl" />
         <Tick corner="br" />
         <code><span className="dollar">$</span> {install}</code>
@@ -94,7 +94,7 @@ const TABS = ['optimise', 'research', 'ideate'] as const;
 
 function HeroRight(): ReactElement {
   return (
-    <div style={{ border: '1px solid var(--c-border)', background: 'var(--c-sidebar)', position: 'relative', padding: 16 }}>
+    <div className="hero-fig" style={{ position: 'relative', padding: '8px 0' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 12, flexWrap: 'wrap' }}>
         <div data-hero-tabs style={{ display: 'flex', gap: 14, alignItems: 'baseline' }}>
           <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '.16em', color: FAINT }}>FIG.01</span>
@@ -318,10 +318,62 @@ function Clients({ cliFilm }: { cliFilm: string }): ReactElement {
       {/* The recorded CLI film is generated markup from lib/cli-film — a
           projection of a recording, not authored JSX. */}
       <div dangerouslySetInnerHTML={{ __html: cliFilm }} />
+      <div className="duo prev-duo">
+        <TuiPreview />
+        <WorkspacePreview />
+      </div>
       <p className="dim" style={{ marginTop: 28 }}>
         Schedules, webhooks, and finished background jobs start turns the same way.
       </p>
     </section>
+  );
+}
+
+function TuiPreview(): ReactElement {
+  const lines: ReadonlyArray<readonly [kind: string, text: ReactElement]> = [
+    ['cmd', <><span className="dollar">$</span> kinu chat triage</>],
+    ['say', <>Reading the repo and timing every test file.</>],
+    ['tool', <>run · laptop <span style={{ color: FAINT }}>time bun test</span></>],
+    ['out', <>7 pass · 912 ms total</>],
+    ['say', <>Slowest: summary.test.ts (~864 ms). dedupe is O(n²) — a Map keyed by id makes it linear.</>],
+  ];
+  return (
+    <figure className="film tui-preview" data-preview="tui">
+      <div className="anno ruled"><span>FIG.04 · TUI · INTERACTIVE</span><span>KINU CHAT · LIVE PREVIEW</span></div>
+      <pre className="term" data-beats={String(lines.length + 1)}>
+        {lines.map(([kind, text], i) => (
+          <span className="line" data-kind={kind} data-beat={i} key={i}>{text}</span>
+        ))}
+        <span className="line" data-kind="status" data-beat={lines.length}>● swarm ready · 3 branches idle</span>
+      </pre>
+    </figure>
+  );
+}
+
+function WorkspacePreview(): ReactElement {
+  return (
+    <figure className="film ws-preview" data-preview="ws">
+      <div className="anno ruled"><span>FIG.05 · WORKSPACE · INTERACTIVE</span><span>WEB APP · SAME TOKENS</span></div>
+      <div className="ws">
+        <div className="ws-rail">
+          <div className="ws-item active">triage</div>
+          <div className="ws-item">research</div>
+          <div className="ws-item">site-reliability</div>
+        </div>
+        <div className="ws-main">
+          <div className="ws-bubble" data-beat="0">Find the slowest test in this repo and explain why.</div>
+          <div className="ws-tool" data-beat="1"><span className="key">▸ run</span> time bun test <span className="metric">7 pass · 912 ms</span></div>
+          <div className="ws-tool" data-beat="2"><span className="key">▸ run</span> bun test tests/summary.test.ts <span className="metric">864 ms</span></div>
+          <div className="ws-say" data-beat="3">Slowest: summary.test.ts (~864 ms of 912). dedupe is O(n²); a Map keyed by id makes it one pass.</div>
+          <div className="ws-job" data-beat="4"><span className="stat-k">JOB</span> detached · wakes when settled</div>
+          <div className="ws-inspector" data-beat="5">
+            <div className="fig">INSPECTOR</div>
+            <div>src/dedupe.ts <span className="metric">O(n²)</span></div>
+            <div>tests/summary.test.ts <span className="metric">864 ms</span></div>
+          </div>
+        </div>
+      </div>
+    </figure>
   );
 }
 

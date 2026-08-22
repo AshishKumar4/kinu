@@ -278,11 +278,18 @@ font-family:var(--font-mono);font-size:11.5px;letter-spacing:0.07em;text-transfo
 
 /* ── Sticky nav ────────────────────────────────────────────────────────
    Blurred ground at 92% so the page reads through it while scrolled. */
-.bar{position:sticky;top:0;z-index:10;margin:0 calc(-1 * var(--gutter));
-padding:0 var(--gutter);height:64px;display:flex;align-items:center;
-justify-content:space-between;gap:24px;border-bottom:1px solid var(--c-border);
+.bar{position:sticky;top:0;z-index:10;height:64px;display:flex;align-items:center;
+border-bottom:var(--rule);
 background:color-mix(in srgb,var(--c-bg) 92%,transparent);
 backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+.bar > *,footer.bleed > *{width:100%;max-width:1280px;margin:0 auto;
+display:flex;align-items:center;border-left:1px dashed var(--c-rail);
+border-right:1px dashed var(--c-rail)}
+.bar > *,footer.bleed > .page{padding:0 var(--gutter)}
+.bar > .page{justify-content:space-between;gap:24px}
+footer.bleed > .page{justify-content:space-between}
+footer.bleed > .page > .footer-in{display:flex;align-items:baseline;
+justify-content:space-between;width:100%;flex-wrap:wrap;gap:16px}
 .brand{display:inline-flex;align-items:baseline;gap:12px;font-weight:700;
 font-size:24px;letter-spacing:-.02em;color:var(--c-text)}
 .brand:hover{color:var(--c-text)}
@@ -441,6 +448,11 @@ export interface PublicPageOptions {
   /** Left-hand side of the header bar, as markup. Absent means the standard
    *  mark-plus-wordmark link home. */
   readonly brand?: string;
+  /** `'bleed'` moves the header and footer OUTSIDE the measured column: the
+   *  hairline runs the full viewport and their inner content stands in a
+   *  column of the same measure. The landing's artifact draws both that way;
+   *  the small utility pages stay inset. */
+  readonly chrome?: 'inset' | 'bleed';
   /** Right-hand side of the header bar. Absent means no bar at all, which is
    *  what the CLI approval pages want. */
   readonly nav?: string;
@@ -466,6 +478,13 @@ for (const button of document.querySelectorAll('[data-copy]')) {
 
 export function publicPage(options: PublicPageOptions): string {
   const description = options.description ?? '';
+  const bleed = options.chrome === 'bleed';
+  const header = options.nav === undefined
+    ? ''
+    : bleed
+      ? `<header class="bar"><div class="page bar-page">${options.brand ?? wordmark()}<nav class="nav">${options.nav}</nav></div></header>\n`
+      : `<header class="bar">${options.brand ?? wordmark()}<nav class="nav">${options.nav}</nav></header>\n`;
+
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -479,10 +498,9 @@ ${description ? `<meta name="description" content="${escapeHtml(description)}" /
 <style>${THEME_CSS}${SHELL_CSS}${options.styles ?? ''}</style>
 </head>
 <body>
-<div class="page">
-${options.nav === undefined ? '' : `<header class="bar">${options.brand ?? wordmark()}<nav class="nav">${options.nav}</nav></header>\n`}${options.body}
-${options.footer ?? ''}</div>
-${options.script ? `<script>${options.script}</script>\n` : ''}</body>
+${header}<div class="page">
+${options.body}
+${options.footer ?? ''}</div>${options.script ? `<script>${options.script}</script>\n` : ''}</body>
 </html>`;
 }
 
