@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { EXCLUSION_GROUPS, SERIAL_GATES, deployExclusions, deployWaves } from "./ladder";
+import * as v from "valibot";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
 const temporaryDirectories: string[] = [];
@@ -292,5 +293,53 @@ describe("deploy gate", () => {
     expect(run.status).toBe(2);
     expect(run.events).toEqual([]);
     expect(run.stdout).toContain("Usage: scripts/deploy.sh <production|staging>");
+  });
+});
+
+describe("CLI source archive", () => {
+  test("contains every patch declared by its packaged manifest", () => {
+    const directory = mkdtempSync(join(tmpdir(), "kinu-cli-archive-test-"));
+    temporaryDirectories.push(directory);
+    const archive = join(directory, "kinu-source.tar.gz");
+    const decoder = new TextDecoder();
+    const build = Bun.spawnSync(
+      ["bash", join(REPO_ROOT, "scripts", "build-cli-source-archive.sh"), archive],
+      { cwd: REPO_ROOT, stdout: "pipe", stderr: "pipe" },
+    );
+    expect(build.exitCode, decoder.decode(build.stderr)).toBe(0);
+
+    const manifestResult = Bun.spawnSync(
+      ["tar", "-xOzf", archive, "kinu/package.json"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    expect(manifestResult.exitCode, decoder.decode(manifestResult.stderr)).toBe(0);
+    const manifest = v.parse(
+      v.object({
+        patchedDependencies: v.optional(v.record(v.string(), v.string())),
+        scripts: v.optional(v.record(v.string(), v.string())),
+      }),
+      JSON.parse(decoder.decode(manifestResult.stdout)),
+    );
+    const patchPaths = Object.values(manifest.patchedDependencies ?? {});
+    expect(patchPaths.length, "the fixture stopped exercising archive patches").toBeGreaterThan(0);
+    expect(manifest.scripts?.prepare, "distribution archive retained the development prepare hook").toBeUndefined();
+
+    const listingResult = Bun.spawnSync(
+      ["tar", "-tzf", archive],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    expect(listingResult.exitCode, decoder.decode(listingResult.stderr)).toBe(0);
+    const members = new Set(decoder.decode(listingResult.stdout).trim().split("\n"));
+    const lockResult = Bun.spawnSync(
+      ["tar", "-xOzf", archive, "kinu/bun.lock"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    expect(lockResult.exitCode, decoder.decode(lockResult.stderr)).toBe(0);
+    const lock = decoder.decode(lockResult.stdout);
+
+    for (const patchPath of patchPaths) {
+      expect(members.has(`kinu/${patchPath}`), `archive omitted ${patchPath}`).toBe(true);
+      expect(lock, `archive lock stopped naming ${patchPath}`).toContain(patchPath);
+    }
   });
 });

@@ -22,6 +22,7 @@ paths=(
   package.json
   bun.lock
   packages
+  patches
 )
 
 for optional in tsconfig.json tsconfig.base.json; do
@@ -41,6 +42,18 @@ tar \
   --exclude='*.sqlite' \
   -cf - \
   -C "$ROOT" "${paths[@]}" | tar -xf - -C "$stage"
+
+# The archive is an installed CLI distribution, not a Git checkout. The root
+# prepare hook installs this repository's commit gates and imports source files
+# intentionally omitted from the distribution. Keep every other script for
+# source inspection, but never run development hook installation on end users.
+node -e "
+  const fs = require('fs');
+  const path = '$stage/package.json';
+  const manifest = require(path);
+  if (manifest.scripts) delete manifest.scripts.prepare;
+  fs.writeFileSync(path, JSON.stringify(manifest, null, 2) + '\n');
+"
 
 # Stamp the build into the CLI version (semver build metadata) so installed
 # binaries are distinguishable: "0.1.0+abc1234". package.json stays the single
