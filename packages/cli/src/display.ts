@@ -14,27 +14,26 @@ import cliPackage from '../package.json' with { type: 'json' };
 
 // ── Brand ────────────────────────────────────────────────────────
 
-// The silk palette (絹) the product renders — cf-backend index.css, silk dark.
-// Status hues are dye colours: bamboo for success, yamabuki amber for warning,
-// safflower for danger. Fixed hexes assume the dark terminal the TUI paints;
+// The Kinu design system the product renders — cf-backend index.css :root is
+// the source of truth. Fixed hexes assume the dark terminal the TUI paints;
 // NO_COLOR still strips everything through chalk.
-const SILK = {
-  sheen: '#F2DFB4',   // --c-accent-fg — brand ink
-  thread: '#E3D2AE',  // --c-accent — fills, strokes, the winning line
-  success: '#9BC7A2', // 若竹 bamboo
-  warning: '#DFAE72', // 山吹 amber
-  danger: '#E38A8A',  // 紅 safflower
-  dim: '#A69C8E',     // --c-text-3
+const INK = {
+  sheen: '#F0CF9B',   // --c-accent-fg — brand ink
+  thread: '#E0A458',  // --c-accent — fills, strokes, the winning line
+  success: '#9EBE7E', // --c-success — sage
+  warning: '#E8B97A', // --c-warning — tan
+  danger: '#E8907A',  // --c-danger — terracotta
+  dim: '#A19682',     // --c-text-3
 } as const;
 
-const BRAND = chalk.bold.hex(SILK.sheen)('Kinu');
+const BRAND = chalk.bold.hex(INK.sheen)('Kinu');
 const VERSION = cliPackage.version;
 const DIM = chalk.dim;
-const ACCENT = chalk.hex(SILK.thread);
-const OK = chalk.hex(SILK.success);
-const WARN = chalk.hex(SILK.warning);
-const ERR = chalk.hex(SILK.danger);
-const MUTED = chalk.hex(SILK.dim);
+const ACCENT = chalk.hex(INK.thread);
+const OK = chalk.hex(INK.success);
+const WARN = chalk.hex(INK.warning);
+const ERR = chalk.hex(INK.danger);
+const MUTED = chalk.hex(INK.dim);
 
 export { BRAND, VERSION, DIM, ACCENT, OK, WARN, ERR, MUTED };
 

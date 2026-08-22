@@ -1,37 +1,38 @@
 import { SyntaxStyle } from '@opentui/core';
 
-// The silk palette (絹) — cf-backend index.css, silk dark. Two threads: indigo
-// dye as the ground, raw silk fibre as the text; the accent is the thread
-// itself, the brightest thing on screen. Borders are the fibre blended over
-// the ground at the CSS alphas (0.20 / 0.28 / 0.36), precomputed because
-// opentui takes hex only. Status hues are dye colours — 若竹 bamboo, 山吹
-// amber, 紅 safflower — and info deliberately leaves the blue family: on an
-// indigo ground a blue status tone is the ground.
+// The Kinu design system, dark theme — packages/cf-backend/src/index.css
+// :root is the source of truth; this file mirrors it for the terminal. Warm
+// black ladder for ground and chrome, brass #E0A458 as the one accent. The
+// css draws hairlines as gold at alpha over the canvas; opentui takes hex
+// only, so those blends are precomputed here (border 0.14, input 0.18/0.22,
+// strong 0.28) — same recipe as the css, nothing invented. Status hues are
+// the system's sage/tan/terracotta lifted for AA, and info stays a cool
+// tone on purpose: a warm info hue would vanish into the ground.
 export const tuiColors = {
-  bg: '#111923',           // --c-bg — the canvas, indigo at reading depth
-  panel: '#142230',        // --c-sidebar — chrome: rails, panel headers
-  panelStrong: '#192B44',  // --c-surface — cards
-  panelDeep: '#080F17',    // --c-recessed — wells, tracks, inset code
-  selection: '#1F334F',    // --c-fill — chips, segments, hover
-  selectionDeep: '#1B3050',// --c-user-bg — the dye plane at full strength
-  bubbleBg: '#1B3050',     // the user's turn is the one saturated plane
-  bubbleBorder: '#5B646E', // --c-user-border blend over the dye plane
-  border: '#3B3E3F',       // --c-border blend
-  borderSubtle: '#22282E', // fibre at ~0.08 over bg
-  borderMuted: '#5D5C55',  // --c-border-strong blend
-  borderActive: '#E3D2AE', // the thread itself
-  text: '#F4EFE6',         // raw silk
-  textStrong: '#F2DFB4',   // the sheen — headings, identity
-  textBright: '#F4EFE6',
-  muted: '#B0A795',        // --c-text-3 — dim
-  accent: '#E3D2AE',       // --c-accent — fills, strokes, the winning line
-  accentStrong: '#F2DFB4', // --c-accent-fg — champagne sheen
-  accentDeep: '#D8CBA4',   // --c-code — one thread tone on a well
-  blue: '#93BFC8',         // --c-info — muted teal, not blue
-  green: '#9BC7A2',        // --c-success — 若竹 bamboo
-  amber: '#DFAE72',        // --c-warning — 山吹 amber
-  amberDeep: '#C9975F',    // warning deepened for borders on the dye plane
-  red: '#EC9393',          // --c-danger — 紅 safflower
+  bg: '#1A1613',           // --c-bg — the canvas, warm black at reading depth
+  panel: '#201A15',        // --c-sidebar — chrome: rails, panel headers
+  panelStrong: '#241E18',  // --c-surface — cards
+  panelDeep: '#120F0C',    // --c-recessed — wells, tracks, inset code
+  selection: '#2C251E',    // --c-fill / --c-elevated — chips, segments, hover
+  selectionDeep: '#2A211A',// --c-user-bg — the user turn's raised plane
+  bubbleBg: '#2A211A',     // --c-user-bg
+  bubbleBorder: '#3E301F', // --c-user-border (0.18) over bg
+  border: '#362A1D',       // --c-border (0.14) over bg
+  borderSubtle: '#292522', // --c-neutral-tint (0.07) over bg
+  borderMuted: '#513E26',  // --c-border-strong (0.28) over bg
+  borderActive: '#E0A458', // focus sits in the system's full-brass ration
+  text: '#F5EFE6',         // --c-text — the ink
+  textStrong: '#F0CF9B',   // --c-accent-fg — headings, identity
+  textBright: '#F5EFE6',
+  muted: '#A19682',        // --c-text-3 — dim
+  accent: '#E0A458',       // --c-accent — fills, strokes, the winning line
+  accentStrong: '#F0CF9B', // --c-accent-fg — bright end, hover
+  accentDeep: '#E8B97A',   // --c-code — one brass tone on a well
+  blue: '#8FB6D6',         // --c-info — links; deliberately cool on a warm ground
+  green: '#9EBE7E',        // --c-success — sage
+  amber: '#E8B97A',        // --c-warning — tan; the system has no separate warning hue
+  amberDeep: '#AE8B5C',    // warning mixed 25% toward black, for borders
+  red: '#E8907A',          // --c-danger — terracotta
 };
 
 export const markdownSyntax = SyntaxStyle.fromStyles({
