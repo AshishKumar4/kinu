@@ -36,7 +36,6 @@ interface TreePalette {
   readonly accent: Rgb;
   readonly bright: Rgb;
   readonly text: Rgb;
-  readonly danger: Rgb;
 }
 
 function cssRgb(name: string): Rgb {
@@ -63,7 +62,6 @@ function treePalette(): TreePalette {
     accent: cssRgb('--c-accent'),
     bright: cssRgb('--c-accent-fg'),
     text: cssRgb('--c-text'),
-    danger: cssRgb('--c-danger'),
   };
 }
 
@@ -79,8 +77,8 @@ function buildTree(width: number, height: number): TreeState {
   const random = pseudoRandom(417);
   const nodes: TreeNode[] = [];
   const levels = 6;
-  const left = width * 0.12;
-  const right = width * 0.9;
+  const left = width * 0.04;
+  const right = width * 0.97;
   const addNode = (parent: number | null, depth: number, top: number, bottom: number): void => {
     const span = bottom - top;
     const node: TreeNode = {
@@ -165,9 +163,9 @@ function drawTree(
     const pruned = node.pruned || parent.pruned;
     const selected = !pruned && state.winningPath.has(node.id) && state.winningPath.has(parent.id);
     if (pruned) {
-      context.setLineDash([3, 5]);
-      context.strokeStyle = rgba(palette.danger, 0.32);
-      context.lineWidth = 0.8;
+      context.setLineDash([2.5, 6]);
+      context.strokeStyle = rgba(palette.accent, 0.2);
+      context.lineWidth = 0.75;
     } else {
       context.setLineDash([]);
       const strength = selected ? 0.2 + 0.6 * winningProgress : 0.17;
@@ -198,16 +196,9 @@ function drawTree(
     const radius = (root ? 5 : leaf ? 3.6 : 2.6) * (0.5 + 0.5 * arrival);
     if (pruned) {
       context.beginPath();
-      context.arc(x, y, radius + 1, 0, Math.PI * 2);
-      context.fillStyle = rgba(palette.danger, 0.13);
+      context.arc(x, y, radius * 0.82, 0, Math.PI * 2);
+      context.fillStyle = rgba(palette.accent, 0.34);
       context.fill();
-      context.strokeStyle = rgba(palette.danger, 0.58);
-      context.lineWidth = 1;
-      context.stroke();
-      context.beginPath();
-      context.moveTo(x - radius - 2, y + radius + 2);
-      context.lineTo(x + radius + 2, y - radius - 2);
-      context.stroke();
       continue;
     }
     context.beginPath();
@@ -290,7 +281,7 @@ function SearchCanvas(): ReactElement {
       <canvas
         ref={canvasRef}
         aria-hidden="true"
-        className="absolute inset-0 size-full opacity-80 [mask-image:radial-gradient(ellipse_88%_82%_at_55%_50%,black_48%,transparent_96%)]"
+        className="absolute inset-0 size-full opacity-80"
       />
     </div>
   );
@@ -338,7 +329,7 @@ export function LandingHero({ install }: { install: string }): ReactElement {
   const { status, copy } = useCopy();
   return (
     <section id="top" className="relative overflow-hidden">
-      <div className="landing-shell relative grid items-center gap-10 lg:grid-cols-[minmax(0,600px)_minmax(0,1fr)]">
+      <div className="landing-shell relative grid items-center lg:grid-cols-[minmax(0,540px)_minmax(0,1fr)]">
         <div className="py-[72px] lg:py-[88px]">
           <div className="mb-7 inline-flex items-center gap-2 rounded-full border p-border p-surface px-3.5 py-1.5 text-xs p-text-2">
             <span className="size-[5px] rounded-full p-dot-accent" />
