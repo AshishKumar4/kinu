@@ -220,7 +220,7 @@ export function Section({ id, title, icon, badge, defaultOpen = true, children }
         />
         {icon}
         <span className="p-label">{title}</span>
-        {badge}
+        {badge && <span className="ml-auto inline-flex shrink-0">{badge}</span>}
       </button>
       {open && <div className="mt-2.5">{children}</div>}
     </section>

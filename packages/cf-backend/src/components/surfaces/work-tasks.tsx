@@ -49,7 +49,7 @@ function TaskRow({ task, depth }: { task: AgentTask; depth: number }) {
       />
       <code className="text-[10px] p-text-3 shrink-0 mt-[3px] w-7">{task.id}</code>
       <span
-        className={`text-xs min-w-0 break-words ${
+        className={`text-[13px] leading-[18px] min-w-0 break-words ${
           isSettled(task.status) ? "p-text-3 line-through" : task.status === "active" ? "p-text font-medium" : "p-text-2"
         }`}
       >
@@ -59,9 +59,9 @@ function TaskRow({ task, depth }: { task: AgentTask; depth: number }) {
   );
 }
 
-export function TaskTree({ task }: { task: AgentTaskTree }) {
+export function TaskTree({ task, grouped = false }: { task: AgentTaskTree; grouped?: boolean }) {
   return (
-    <div className="p-card px-3 py-2">
+    <div className={grouped ? "px-3 py-2" : "p-group px-3 py-2"}>
       <TaskRow task={task} depth={0} />
       {task.subtasks.map((sub) => <TaskRow key={sub.id} task={sub} depth={1} />)}
     </div>

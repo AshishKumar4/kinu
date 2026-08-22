@@ -64,9 +64,9 @@ describe('grouping a turn into blocks', () => {
     ])).toEqual(['run(3)']);
   });
 
-  test('too few calls to be worth a click stay as ordinary rows', () => {
+  test('two adjacent finished calls share one bordered tool card', () => {
     expect(kinds([tool('1', 'file', 'output-available'), tool('2', 'file', 'output-available')]))
-      .toEqual(['tool-file', 'tool-file']);
+      .toEqual(['run(2)']);
   });
 
   test('text between two runs splits them', () => {

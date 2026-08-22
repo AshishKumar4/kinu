@@ -150,19 +150,20 @@ export function WorkTab({
   return (
     <div className="space-y-6 animate-fade-in">
       {pendingActions.length > 0 && (
-        <Section id="work-needs-you" title="Needs you"
-          icon={<WarningCircleIcon size={14} className="p-accent" />}
-          badge={<Badge variant="secondary">{pendingActions.length}</Badge>}>
-          {/* The mock's Needs-you: a gold-tinted card holding the queue. */}
-          <div className="rounded-xl border border-[rgba(224,164,88,.32)] bg-[rgba(224,164,88,.06)] p-3.5 space-y-1.5">
-            {parkedCommands.length > 0 && (
-              <ParkedCommands actions={parkedCommands} rpc={rpc} />
-            )}
-            {elsewhere.map((action) => (
-              <PendingRow key={action.id} action={action} onOpenSurface={onOpenSurface} />
-            ))}
-          </div>
-        </Section>
+        <div className="rounded-lg border border-[rgba(224,164,88,.32)] bg-[rgba(224,164,88,.06)] px-[18px] pt-2.5 pb-3.5 [&_.p-label]:!text-[var(--c-accent)]">
+          <Section id="work-needs-you" title="Needs you"
+            icon={<WarningCircleIcon size={14} className="p-gold" />}
+            badge={<Badge variant="secondary">{pendingActions.length}</Badge>}>
+            <div className="divide-y divide-dashed divide-[var(--c-dash)]">
+              {parkedCommands.length > 0 && (
+                <ParkedCommands actions={parkedCommands} rpc={rpc} />
+              )}
+              {elsewhere.map((action) => (
+                <PendingRow key={action.id} action={action} onOpenSurface={onOpenSurface} />
+              ))}
+            </div>
+          </Section>
+        </div>
       )}
 
       <Section id="work-now" title="Now" icon={<PulseIcon size={14} className="p-text-2" />}>
@@ -186,7 +187,7 @@ export function WorkTab({
               </div>
             )}
             {openTasks.length === 0 && runningJobs.length === 0 && (
-              <p className="text-xs p-text-3">
+              <p className="text-[12.5px] leading-[1.6] p-text-3">
                 Nothing in flight. When the agent takes on work with more than a step or two it writes
                 the steps down here, and a tool call over 30s detaches as a job beside them.
               </p>
@@ -203,7 +204,7 @@ export function WorkTab({
             {FILTERS.map((chip) => (
               <button key={chip.id} type="button" onClick={() => setFilter(chip.id)}
                 aria-pressed={filter === chip.id}
-                className={`px-2.5 py-0.5 rounded-full transition-colors ${filter === chip.id ? "bg-[rgba(224,164,88,.1)] p-gold font-semibold" : "p-text-3 hover:p-gold"}`}>
+                className={`px-2.5 py-0.5 text-[11px] rounded-full transition-colors ${filter === chip.id ? "bg-[rgba(224,164,88,.1)] p-gold font-semibold" : "p-text-3 hover:p-gold"}`}>
                 {chip.label}
               </button>
             ))}
@@ -231,13 +232,13 @@ export function WorkTab({
               </p>
             )
           ) : (
-            <div className="space-y-2">
+            <div className="p-group">
               {visible.map((row) => (
                 <div key={row.key}>
-                  {row.kind === "job" && <JobCard job={row.job} onRefresh={onRefreshJobs} rpc={rpc} />}
-                  {row.kind === "task" && <TaskTree task={row.task} />}
+                  {row.kind === "job" && <JobCard grouped job={row.job} onRefresh={onRefreshJobs} rpc={rpc} />}
+                  {row.kind === "task" && <TaskTree grouped task={row.task} />}
                   {row.kind === "self" && (
-                    <ChangelogEntryCard entry={row.entry} seenAt={changelogSeenAt}
+                    <ChangelogEntryCard grouped entry={row.entry} seenAt={changelogSeenAt}
                       rpc={rpc} onReverted={reloadChangelog} />
                   )}
                 </div>
@@ -322,14 +323,14 @@ function ParkedCommands({ actions, rpc }: { actions: PendingAction[]; rpc: Rpc }
   };
 
   return (
-    <div className="p-card px-3 py-2.5 space-y-2">
+    <div className="py-1 space-y-2">
       <div className="flex items-start gap-2">
         <ShieldWarningIcon size={14} className="p-accent shrink-0 mt-0.5" />
         <div className="min-w-0 flex-1">
-          <div className="text-xs p-text leading-relaxed">
+          <div className="text-[13px] leading-[18px] p-text">
             {actions.length} command{actions.length === 1 ? "" : "s"} waiting on your approval
           </div>
-          <div className="text-[10px] p-text-3 mt-0.5">
+          <div className="text-[11px] leading-[16px] p-text-3 mt-0.5">
             None of these have run. The agent was told they are queued and carried on. Approving lets it
             run them when it picks the decision up.
           </div>
@@ -388,22 +389,22 @@ function PendingRow(
     <>
       <Icon size={14} className="p-accent shrink-0 mt-0.5" />
       <div className="min-w-0 flex-1">
-        <div className="text-xs p-text leading-relaxed">{action.title}</div>
+        <div className="text-[13px] leading-[18px] p-text">{action.title}</div>
         {action.detail && (
-          <div className="text-[10px] p-text-3 mt-0.5 line-clamp-2 break-words">{action.detail}</div>
+          <div className="text-[11.5px] leading-[16px] p-text-3 mt-0.5 line-clamp-2 break-words">{action.detail}</div>
         )}
-        <div className="text-[10px] p-text-3 mt-0.5">
+        <div className="text-[10.5px] leading-[15px] p-text-3 mt-0.5">
           {timeAgo(action.at)}{home.cta === null ? "" : ` · ${home.cta}`}
         </div>
       </div>
     </>
   );
   if (home.surface === null) {
-    return <div className="p-card px-3 py-2 flex items-start gap-2">{body}</div>;
+    return <div className="py-2 flex items-start gap-2">{body}</div>;
   }
   return (
     <button type="button" onClick={() => onOpenSurface(home.surface!)}
-      className="w-full p-card px-3 py-2 flex items-start gap-2 text-left hover:p-elevated transition-colors">
+      className="w-full rounded-md py-2 flex items-start gap-2 text-left hover:p-elevated transition-colors">
       {body}
       <CaretRightIcon size={12} className="p-text-3 shrink-0 mt-1" />
     </button>
