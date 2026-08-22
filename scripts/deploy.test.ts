@@ -197,6 +197,14 @@ describe("deploy gate", () => {
     expect(waves[2]).toEqual(["bun run gate:infra"]);
   });
 
+  test("every gate has a process-tree deadline", () => {
+    const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
+    expect(source).toContain("GATE_DEADLINE_SECONDS=180");
+    expect(source).toContain(
+      'timeout --signal=TERM --kill-after=5s "$GATE_DEADLINE_SECONDS" ${GATE_CMDS[pick]}',
+    );
+  });
+
   test("the exclusion table in the runner is the one the ladder declares", () => {
     // Written twice because the runner is bash and cannot import the
     // declaration, so it is asserted once. Without this the measured reason
