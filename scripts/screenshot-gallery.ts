@@ -7,13 +7,10 @@
  * only place a work surface can be photographed deterministically. This boots
  * its vite server, visits each frame once per theme, and writes PNGs.
  *
- * The theme is two attributes on <html> set pre-paint from localStorage, so
- * emulating `prefers-color-scheme` is not enough; both axes are seeded into
- * localStorage before the document loads.
+ * The mode is set pre-paint from localStorage, so emulating
+ * `prefers-color-scheme` is not enough; every capture seeds the explicit mode.
  *
- *   bun run scripts/screenshot-gallery.ts views viewblocks
- *   bun run scripts/screenshot-gallery.ts --out /tmp/shots views
- *   bun run scripts/screenshot-gallery.ts --palette silk --desktop forks chat
+ *   bun run scripts/screenshot-gallery.ts --desktop forks chat
  */
 
 import { mkdirSync } from 'node:fs';
@@ -28,7 +25,7 @@ const args = process.argv.slice(2);
 const outIndex = args.indexOf('--out');
 const outDir = outIndex === -1 ? join(REPO, 'docs', 'screenshots', 'gallery') : args[outIndex + 1]!;
 const frames = args.filter((a, i) => !a.startsWith('--') && i !== outIndex + 1
-  && args[i - 1] !== '--palette' && args[i - 1] !== '--widths');
+  && args[i - 1] !== '--widths');
 if (frames.length === 0) frames.push('views');
 /**
  * The widths a frame may be photographed at, by the number a reader would ask
@@ -61,26 +58,18 @@ const WIDTHS = args.includes('--widths')
     ? [widthSpec('1280')]
     : [widthSpec('1280'), widthSpec('390')];
 if (WIDTHS.length === 0) throw new Error('--widths names at least one width');
-/** Both palettes unless `--palette` names one. A frame is a different design in
- *  each, not a recolour of the same one, so the default is both. */
-const PALETTES = (['umber', 'silk'] as const).filter((p) => {
-  const named = args[args.indexOf('--palette') + 1];
-  return !args.includes('--palette') || named === p;
-});
-if (PALETTES.length === 0) throw new Error(`--palette must be umber or silk`);
 
 async function shoot(
   browser: Browser,
   origin: string,
   frame: string,
-  theme: { mode: 'dark' | 'light'; palette: 'umber' | 'silk' },
+  theme: { mode: 'dark' | 'light' },
   size: (typeof WIDTHS)[number],
 ): Promise<string> {
   const page = await browser.newPage();
   await page.setViewport({ width: size.width, height: size.height, deviceScaleFactor: 2 });
-  await page.evaluateOnNewDocument((t: { mode: string; palette: string }) => {
+  await page.evaluateOnNewDocument((t: { mode: string }) => {
     localStorage.setItem('theme', t.mode);
-    localStorage.setItem('palette', t.palette);
     // The mocks date themselves off the clock ("9:07 PM", "Active 2h ago"), so
     // two runs minutes apart differ in text that has nothing to do with the
     // change under review, and a before/after diff of the gallery is unreadable
@@ -119,18 +108,15 @@ async function shoot(
       animation.pause();
     }
   });
-  const label = `${theme.palette}-${theme.mode}`;
+  const label = theme.mode;
   const path: `${string}.png` = `${join(outDir, `${frame}-${size.name}-${label}`)}.png`;
   await page.screenshot({ path, fullPage: true });
-  const applied = await page.evaluate(() => ({
-    mode: document.documentElement.dataset.mode,
-    palette: document.documentElement.dataset.palette,
-  }));
+  const applied = await page.evaluate(() => document.documentElement.dataset.mode);
   await page.close();
   // A shot named for a theme it is not in is worse than no shot: it is evidence
   // for the wrong claim.
-  if (applied.mode !== theme.mode || applied.palette !== theme.palette) {
-    throw new Error(`${frame}: asked for ${label}, page rendered ${applied.palette}-${applied.mode}`);
+  if (applied !== theme.mode) {
+    throw new Error(`${frame}: asked for ${label}, page rendered ${String(applied)}`);
   }
   if (failures.length > 0) console.warn(`  ! ${frame}/${label} console errors:\n    ${failures.join('\n    ')}`);
   return path;
@@ -140,10 +126,8 @@ mkdirSync(outDir, { recursive: true });
 await withGallery(async ({ browser, origin }) => {
   for (const frame of frames) {
     for (const size of WIDTHS) {
-      for (const palette of PALETTES) {
-        for (const mode of ['dark', 'light'] as const) {
-          console.log(`wrote ${await shoot(browser, origin, frame, { mode, palette }, size)}`);
-        }
+      for (const mode of ['dark', 'light'] as const) {
+        console.log(`wrote ${await shoot(browser, origin, frame, { mode }, size)}`);
       }
     }
   }
