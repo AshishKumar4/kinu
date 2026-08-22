@@ -5,19 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/svg+xml" href="/assets/kinu-icon.svg" />
     <title>Kinu — Self-Evolving Agent</title>
-    <!-- Pre-paint theme, both axes, so the first frame is already the one the
-         user chose. Duplicates the resolution in `hooks/use-theme.ts` because
-         it has to run before any module loads; the two must agree. -->
+    <!-- Pre-paint theme so the first frame is already the one the user
+         chose. Duplicates the resolution in `hooks/use-theme.ts` because it
+         has to run before any module loads; the two must agree. -->
     <script>
       (() => {
         const stored = localStorage.getItem("theme");
         const mode = stored === "light" || stored === "dark"
           ? stored
           : (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
-        const saved = localStorage.getItem("palette");
-        const palette = saved === "umber" || saved === "silk" ? saved : "silk";
         document.documentElement.setAttribute("data-mode", mode);
-        document.documentElement.setAttribute("data-palette", palette);
         document.documentElement.style.colorScheme = mode;
       })();
     </script>

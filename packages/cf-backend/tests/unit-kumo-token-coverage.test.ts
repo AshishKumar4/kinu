@@ -89,13 +89,12 @@ describe('Kumo token coverage', () => {
       .filter(([, , value]) => !value!.includes('var(--c-') && !/^\s*(transparent|inherit|currentColor)\s*$/.test(value!))
       .map(([, prop, value]) => `${prop}: ${value!.trim()}`);
 
-    // Three escapes are intentional and asserted rather than silently allowed:
+    // One escape is intentional and asserted rather than silently allowed:
     // the shadow drop is a black/ink alpha with no palette equivalent, and it
-    // is re-declared by hand once per light face — warm ink for umber's paper,
-    // cool ink for silk's. A dark face keeps the `:root` black.
+    // is re-declared by hand for the light face — warm ink on paper. A dark
+    // face keeps the `:root` black.
     expect(literal.sort()).toEqual([
       '--color-kumo-shadow-drop: rgba(0, 0, 0, 0.3)',
-      '--color-kumo-shadow-drop: rgba(18, 26, 38, 0.14)',
       '--color-kumo-shadow-drop: rgba(43, 26, 4, 0.14)',
     ]);
   });

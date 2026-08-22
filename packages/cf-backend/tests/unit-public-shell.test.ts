@@ -27,7 +27,6 @@ import { resolve } from 'node:path';
 import {
   HERO_FACTS, RADII, REPO_URL, THEME_BLOCKS, THEME_BOOT, mark, markDocument, publicPage,
   MARK_IDS, KINU_MARK,
-  type Mode, type Palette,
 } from '../src/lib/public-shell';
 import {
   approvalDocument, authDocument, installDocument, landingDocument, loginDocument,
@@ -41,10 +40,8 @@ const INDEX_CSS = readFileSync(resolve(import.meta.dir, '../src/index.css'), 'ut
  *  and later declarations win, so a selector list in source order replays the
  *  cascade faithfully. */
 const CASCADE = {
-  'umber dark': [':root'],
-  'umber light': [':root', '[data-mode="light"]'],
-  'silk dark': [':root', '[data-palette="silk"]'],
-  'silk light': [':root', '[data-mode="light"]', '[data-palette="silk"]', '[data-palette="silk"][data-mode="light"]'],
+  'dark': [':root'],
+  'light': [':root', '[data-mode="light"]'],
 } satisfies Readonly<Record<string, readonly string[]>>;
 
 
@@ -76,19 +73,19 @@ function resolved(theme: string) {
   return out;
 }
 
-const NAMED = (palette: Palette, mode: Mode) => `${palette} ${mode}`;
 
-const FONT_PATH = '/assets/fonts/fraunces-latin-var.woff2';
+const UI_FONT_PATH = '/assets/fonts/schibsted-latin-var.woff2';
+const MONO_FONT_PATH = '/assets/fonts/fragmentmono-latin.woff2';
 
 describe('public shell tokens are the app palette', () => {
-  test('all four themes are projected', () => {
-    const projected: string[] = THEME_BLOCKS.map((b) => NAMED(b.palette, b.mode));
+  test('both themes are projected', () => {
+    const projected: string[] = THEME_BLOCKS.map((b) => b.mode);
     expect(projected.sort()).toEqual(Object.keys(CASCADE).sort());
   });
 
-  for (const { palette, mode, tokens, selector } of THEME_BLOCKS) {
-    test(`${NAMED(palette, mode)} matches index.css`, () => {
-      const app = resolved(NAMED(palette, mode));
+  for (const { mode, tokens, selector } of THEME_BLOCKS) {
+    test(`${mode} matches index.css`, () => {
+      const app = resolved(mode);
       for (const [token, value] of Object.entries(tokens)) {
         expect(app[token], `${token} in ${selector}`).toBe(value);
       }
@@ -108,24 +105,21 @@ describe('public shell tokens are the app palette', () => {
     }
   });
 
-  test('radius roles are the rungs index.css maps them to', () => {
-    const theme = block('@theme');
-    const rung = {
-      '--r-control': '--radius-sm',
-      '--r-row': '--radius-md',
-      '--r-card': '--radius-lg',
-      '--r-overlay': '--radius-xl',
-    } satisfies Readonly<Record<keyof typeof RADII, string>>;
-    // SAFETY: `Object.keys` of a closed object literal, narrowed to its own
-    // key union so the rung lookup below is checked.
-    for (const role of Object.keys(RADII) as (keyof typeof RADII)[]) {
-      const px = RADII[role];
-      // SAFETY: `Object.keys` of a closed literal, narrowed back to its own key
-      // union so the rung lookup below is checked rather than indexed by string.
-      const rem = theme[rung[role]];
-      expect(rem, `${role} → ${rung[role]}`).toBeString();
-      const value = Number(rem!.replace(/rem.*$/, '').trim());
-      expect(`${value * 16}px`, `${role} resolves through ${rung[role]}`).toBe(px);
+  test('radius roles match what index.css resolves', () => {
+    // control and row alias Tailwind rungs on purpose (a `.p-*` class and a
+    // `rounded-*` utility written beside one cannot disagree); card and
+    // overlay are the mock's own 14px literals. Resolve each the way the
+    // browser would.
+    const root = block(':root');
+    const rungs = block('@theme');
+    const remToPx = (rem: string) => `${Number(rem.replace(/rem.*$/, '').trim()) * 16}px`;
+    // SAFETY: each tuple is a closed literal pairing a RADII role with the
+    // rung `index.css` declares for it; both members exist by construction.
+    for (const [role, rung] of [['--r-control', '--radius-sm'], ['--r-row', '--radius-md']] as const) {
+      expect(RADII[role], `${role} resolves through ${rung}`).toBe(remToPx(rungs[rung]!));
+    }
+    for (const role of ['--r-card', '--r-overlay'] as const) {
+      expect(RADII[role], `${role} is its own literal`).toBe(remToPx(root[role]!));
     }
   });
 
@@ -138,42 +132,60 @@ describe('public shell tokens are the app palette', () => {
     expect(publicPage({ title: 't', body: '' })).toContain(`--font-display:${app!.replaceAll(', ', ',')}`);
   });
 
-  test('the display face leads with the shipped webfont in both stylesheets', () => {
-    // The face itself, not just the stack string: the app declares the
-    // @font-face over the same asset path the shell inlines, and the shell
-    // preloads it. A path that drifts between the two is a landing page in
+  test('both faces lead with the shipped webfonts in both stylesheets', () => {
+    // The faces themselves, not just the stack strings: the app declares the
+    // @font-face over the same asset paths the shell inlines, and the shell
+    // preloads them. A path that drifts between the two is a landing page in
     // the fallback face — exactly the drift this file exists to prevent.
-    expect(block(':root')['--font-display']).toStartWith('"Fraunces"');
-    expect(INDEX_CSS).toContain('src: url("/assets/fonts/fraunces-latin-var.woff2") format("woff2-variations")');
+    expect(block(':root')['--font-display']).toStartWith('"Schibsted Grotesk"');
+    expect(block(':root')['--font-mono']).toStartWith('"Fragment Mono"');
+    expect(INDEX_CSS).toContain('src: url("/assets/fonts/schibsted-latin-var.woff2") format("woff2-variations")');
+    expect(INDEX_CSS).toContain('src: url("/assets/fonts/fragmentmono-latin.woff2") format("woff2")');
     const page = publicPage({ title: 't', body: '' });
-    expect(page).toContain('@font-face{font-family:"Fraunces"');
-    expect(page).toContain('url("/assets/fonts/fraunces-latin-var.woff2") format("woff2-variations")');
+    expect(page).toContain('@font-face{font-family:"Schibsted Grotesk"');
+    expect(page).toContain('@font-face{font-family:"Fragment Mono"');
+    expect(page).toContain('url("/assets/fonts/schibsted-latin-var.woff2") format("woff2-variations")');
+    expect(page).toContain('url("/assets/fonts/fragmentmono-latin.woff2") format("woff2")');
     expect(page).toContain('font-display:swap');
-    expect(page).toContain('<link rel="preload" href="/assets/fonts/fraunces-latin-var.woff2" as="font" type="font/woff2" crossorigin />');
+    expect(page).toContain('<link rel="preload" href="/assets/fonts/schibsted-latin-var.woff2" as="font" type="font/woff2" crossorigin />');
+    expect(page).toContain('<link rel="preload" href="/assets/fonts/fragmentmono-latin.woff2" as="font" type="font/woff2" crossorigin />');
   });
 
-  test('the webfont is the latin variable subset, inside its byte budget', () => {
-    // 67,304 B today ([opsz,wght] latin). The budget refuses the full-axes
-    // build (121 KB) and any unsubset swap; the licence must travel with the
-    // file because OFL requires it.
-    const file = resolve(import.meta.dir, '../public', '.' + FONT_PATH);
+  test.each([
+    [UI_FONT_PATH, 50_000],
+    [MONO_FONT_PATH, 30_000],
+  ])('%s is a real woff2 latin subset inside its byte budget', (path, budget) => {
+    // 46,752 B Schibsted [wght] latin, 25,224 B Fragment Mono latin. The
+    // budgets refuse the full-axes builds and any unsubset swap; the licence
+    // must travel with the files because OFL requires it.
+    const file = resolve(import.meta.dir, '../public', '.' + path);
     const bytes = readFileSync(file);
     expect(new TextDecoder().decode(bytes.subarray(0, 4))).toBe('wOF2');
-    expect(bytes.byteLength).toBeLessThanOrEqual(70_000);
+    expect(bytes.byteLength).toBeLessThanOrEqual(budget);
     expect(readFileSync(resolve(file, '../OFL.txt'), 'utf8')).toContain('SIL Open Font License');
+  });
+
+  test('Newsreader stays app-only', () => {
+    // The app's serif voice (brand mark, the new-workspace headline) is not
+    // part of the signed-out shell, so its 58 KB never loads on the landing.
+    expect(publicPage({ title: 't', body: '' })).not.toContain('Newsreader');
+    expect(INDEX_CSS).toContain('/assets/fonts/newsreader-latin-var.woff2');
   });
 
   test('the landing page weight stays inside its envelope', () => {
     // What a first visit downloads before images: the document (gzipped, as
-    // served) plus the display font. 93 KB today; the envelope catches an
+    // served) plus the two fonts. ~97 KB today; the envelope catches an
     // unbounded regression while leaving room for the landing's inline
     // demos to grow deliberately.
     const html = landingDocument("curl -fsSL 'https://kinu.run/install.sh' | bash");
     const gz = Bun.gzipSync(new TextEncoder().encode(html)).byteLength;
-    const font = readFileSync(resolve(import.meta.dir, '../public', '.' + FONT_PATH)).byteLength;
-    expect(gz + font).toBeLessThanOrEqual(128 * 1024);
+    const fonts = [UI_FONT_PATH, MONO_FONT_PATH]
+      .map((p) => readFileSync(resolve(import.meta.dir, '../public', '.' + p)).byteLength)
+      .reduce((a, b) => a + b, 0);
+    expect(gz + fonts).toBeLessThanOrEqual(128 * 1024);
   });
 });
+
 
 describe('the pre-paint theme script', () => {
   /** Run the shipped snippet against stubbed storage and report what it set. */
@@ -196,11 +208,11 @@ describe('the pre-paint theme script', () => {
     // SAFETY: the snippet is this repo's own text, evaluated against the three
     // stub globals declared immediately above.
     new Function('document', 'localStorage', 'window', THEME_BOOT)(scope.document, scope.localStorage, scope.window);
-    return { mode: root.attrs['data-mode'], palette: root.attrs['data-palette'], colorScheme: root.style.colorScheme };
+    return { mode: root.attrs['data-mode'], colorScheme: root.style.colorScheme };
   }
 
-  test('silk is the public default, not umber', () => {
-    expect(boot({}, false)).toEqual({ mode: 'dark', palette: 'silk', colorScheme: 'dark' });
+  test('dark is the public default', () => {
+    expect(boot({}, false)).toEqual({ mode: 'dark', colorScheme: 'dark' });
   });
 
   test('the system preference decides the mode when nothing is stored', () => {
@@ -210,13 +222,10 @@ describe('the pre-paint theme script', () => {
   test("a returning user's stored choice wins over the system preference", () => {
     expect(boot({ theme: 'dark' }, true).mode).toBe('dark');
     expect(boot({ theme: 'light' }, false).mode).toBe('light');
-    expect(boot({ palette: 'umber' }, false).palette).toBe('umber');
   });
 
   test('a junk stored value falls back rather than shipping an unknown attribute', () => {
-    expect(boot({ theme: 'sepia', palette: 'neon' }, false)).toEqual({
-      mode: 'dark', palette: 'silk', colorScheme: 'dark',
-    });
+    expect(boot({ theme: 'sepia' }, false)).toEqual({ mode: 'dark', colorScheme: 'dark' });
   });
 });
 
@@ -311,7 +320,7 @@ describe('the mark', () => {
   test('the favicon declares its own colour, since it has no cascade', () => {
     const svg = markDocument();
     expect(svg).toContain('xmlns="http://www.w3.org/2000/svg"');
-    expect(svg).toContain('color="#E3D2AE');
+    expect(svg).toContain('color="#E0A458');
   });
 
   test('the favicon on disk is the mark this code renders', () => {
