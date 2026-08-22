@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { GearIcon, GithubLogoIcon, ListIcon, PlusIcon } from "@phosphor-icons/react";
 import Sidebar from "./Sidebar";
+import { KinuLogo } from "./ui/KinuLogo";
 
 /**
  * Top-level shell — left rail (Sidebar with user info + agent list) +
@@ -29,9 +30,8 @@ export default function Layout() {
           >
             <ListIcon size={18} />
           </button>
-          <Link to="/" className="flex items-center gap-[9px] rounded-md px-2 py-1.5">
-            <span aria-hidden="true" className="inline-block leading-none text-[18px] text-[var(--c-accent)] font-serif rotate-12">❯</span>
-            <span className="font-serif font-semibold text-[18px] tracking-[.01em]">Kinu</span>
+          <Link to="/" aria-label="Kinu home" className="flex items-center rounded-md px-2 py-1.5">
+            <KinuLogo compact />
           </Link>
         </div>
         <div className="flex items-center gap-1">

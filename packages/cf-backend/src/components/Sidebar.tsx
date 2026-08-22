@@ -24,6 +24,7 @@ import { Link, NavLink, useMatch, useNavigate } from "react-router-dom";
 import { GearIcon, TrashIcon, SignOutIcon, PencilSimpleIcon, CheckIcon, XIcon } from "@phosphor-icons/react";
 import { Button } from "@cloudflare/kumo";
 import { FilledButton } from "./ui/FilledButton";
+import { KinuLogo } from "./ui/KinuLogo";
 import { listWorkspaces, removeWorkspace, getProfile, type WorkspaceEntry, type UserProfile } from "../lib/user-api";
 import { useWorkspaceRpc } from "../hooks/use-kinu";
 import { ModeToggle } from "./theme-toggle";
@@ -244,9 +245,8 @@ export default function Sidebar() {
       {/* Brand — the mock's lockup: the chevron caught mid-turn, Newsreader,
           gold, rotated the way the stroke leans. */}
       <div className="flex items-center gap-2.5 px-5 pt-[18px] pb-2">
-        <Link to="/" className="flex items-center gap-[9px]" aria-label="Kinu home">
-          <span aria-hidden="true" className="inline-block leading-none text-[20px] text-[var(--c-accent)] font-serif rotate-12">❯</span>
-          <span className="font-serif font-semibold text-[20px] tracking-[.01em] p-text">Kinu</span>
+        <Link to="/" className="flex items-center" aria-label="Kinu home">
+          <KinuLogo />
         </Link>
       </div>
 
