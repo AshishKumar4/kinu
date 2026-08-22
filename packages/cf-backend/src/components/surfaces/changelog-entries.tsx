@@ -108,13 +108,15 @@ export function ChangelogFailure(
 
 export interface ChangelogEntryCardProps {
   entry: ChangelogEntry;
+  /** Render inside the journal's shared grouped-row container. */
+  grouped?: boolean;
   /** Entries newer than this were unseen when the surface opened. */
   seenAt: number;
   rpc: Rpc;
   onReverted: () => void;
 }
 
-export function ChangelogEntryCard({ entry, seenAt, rpc, onReverted }: ChangelogEntryCardProps) {
+export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReverted }: ChangelogEntryCardProps) {
   const [kept, setKept] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ text: string; ok: boolean } | null>(null);
@@ -164,15 +166,15 @@ export function ChangelogEntryCard({ entry, seenAt, rpc, onReverted }: Changelog
   const headline = (
     <div className="min-w-0 flex-1">
       <div className="flex items-center gap-2">
-        <span className="text-xs p-text leading-relaxed flex-1" title={entry.summary}>{entry.summary}</span>
+        <span className="text-[13px] leading-[18px] p-text flex-1" title={entry.summary}>{entry.summary}</span>
         {fresh && !kept && <span className="shrink-0 size-1.5 rounded-full bg-[var(--c-accent)]" />}
       </div>
-      <div className="mt-1 text-[10px] p-text-3">{timeAgo(entry.at)}</div>
+      <div className="mt-1 text-[10.5px] leading-[15px] p-text-3">{timeAgo(entry.at)}</div>
     </div>
   );
 
   return (
-    <div className={`p-card rounded-lg p-3 ${kept ? "opacity-70" : ""}`}>
+    <div className={`${grouped ? "p-3" : "p-group p-3"} ${kept ? "opacity-70" : ""}`}>
       <div className="flex items-start gap-2">
         <Icon size={14} className={`mt-0.5 shrink-0 ${fresh ? "p-accent" : "p-text-3"}`} />
         {hasDetails ? (

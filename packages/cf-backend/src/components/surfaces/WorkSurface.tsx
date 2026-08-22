@@ -18,8 +18,7 @@
  */
 import { useEffect, useRef } from "react";
 import {
-  MonitorIcon, TreeStructureIcon, GitDiffIcon, StackIcon, GaugeIcon,
-  PulseIcon, SparkleIcon, FingerprintIcon,
+  GaugeIcon, SparkleIcon,
 } from "@phosphor-icons/react";
 import type { AgentViewSummary, PendingAction, PlanReview } from "@kinu.run/core";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -51,14 +50,14 @@ export const agentViewSurface = (slug: string): AgentViewSurfaceKind => `view:${
 export const agentViewSlug = (surface: SurfaceKind): string | null =>
   surface.startsWith("view:") ? surface.slice("view:".length) : null;
 
-const SURFACE_ICON = {
-  Output: MonitorIcon,
-  Work: PulseIcon,
-  Releases: GitDiffIcon,
-  Exploration: TreeStructureIcon,
-  Agent: FingerprintIcon,
-  Environment: StackIcon,
-} satisfies Record<(typeof SURFACES)[number], React.ComponentType<{ size?: number }>>;
+const SURFACE_LABEL = {
+  Output: "Output",
+  Work: "Work",
+  Releases: "Releases",
+  Exploration: "Explore",
+  Agent: "Agent",
+  Environment: "Env",
+} satisfies Record<(typeof SURFACES)[number], string>;
 
 export interface WorkSurfaceProps {
   surface: SurfaceKind;
@@ -112,31 +111,29 @@ export function WorkSurface(props: WorkSurfaceProps) {
   }, [surface]);
 
   return (
-    <div className="@container flex flex-col h-full">
+    <div className="@container flex flex-col h-full p-sidebar">
       {/* Activity sits OUTSIDE the scrolling strip. It used to be pinned right
           by `ml-auto`, which worked only while the tabs fit; once Kinu can
           append its own, the strip overflows and an `ml-auto` button scrolls
           away with everything else. */}
       <div className="border-b p-border shrink-0 flex items-stretch">
-        {/* Below the breakpoint the switcher condenses to icons and only the
-            current surface keeps its word, so the row stays one thin line
-            instead of clipping a label; the strip still scrolls as the last
-            resort. Six labels reach lower than seven did — measured in the
-            gallery, not guessed. */}
-        <div ref={strip} className="p-tabstrip flex items-center min-w-0 flex-1 px-2 gap-0.5 -mb-px">
+        {/* Text labels match the mock and fit at its 430px inspector width.
+            The longer route names stay internal; the visible words are
+            Explore and Env, as in the owner's surface switcher. */}
+        <div ref={strip} className="p-tabstrip [--scroll-ground:var(--c-sidebar)] flex items-center min-w-0 flex-1 px-3 gap-0.5 -mb-px">
           {SURFACES.map((s) => {
-            const Icon = SURFACE_ICON[s];
             // Two signals, two homes, two encodings: live ports light Output
             // green, and decisions waiting on the owner light Work in accent.
             // Liveness gets no digit — something merely running needs nobody,
             // and the chat header's pulsing pill already says it.
             const badge = s === "Output" ? props.pinnedPorts.length
               : s === "Work" ? props.pendingActions.length : 0;
-            const badgeTone = s === "Work" ? "p-accent-subtle p-accent" : "p-badge-success";
+            const badgeTone = s === "Work" ? "p-accent-subtle p-gold" : "p-badge-success";
             return (
-              <button key={s} onClick={() => onSurface(s)} title={s} aria-current={surface === s ? "true" : undefined}
-                className={`${tabCls} ${surface === s ? "p-tab-active" : ""}`}>
-                <Icon size={14} /><span className={surface === s ? "" : "hidden @[34rem]:inline"}>{s}</span>
+              <button key={s} onClick={() => onSurface(s)} title={s} aria-label={s}
+                aria-current={surface === s ? "true" : undefined}
+                className={`${tabCls} ${surface === s ? "p-tab-active p-gold font-semibold" : ""}`}>
+                <span>{SURFACE_LABEL[s]}</span>
                 {badge > 0 && (
                   <span className={`inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full text-[10px] font-semibold p-num ${badgeTone}`}>{badge}</span>
                 )}
@@ -173,7 +170,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-5 min-h-0">
+      <div className="flex-1 overflow-y-auto p-[18px] min-h-0">
         <ErrorBoundary key={surface} label={surface}>
           {surface === "Output" && <OutputSurface
             pinnedPorts={props.pinnedPorts}

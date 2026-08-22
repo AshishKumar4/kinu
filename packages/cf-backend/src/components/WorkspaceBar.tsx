@@ -12,6 +12,7 @@
  * its history) stays on the chat column's tab strip.
  */
 import { useEffect, useState, type FormEvent } from "react";
+import { Tabs, type TabsItem } from "@cloudflare/kumo";
 import { Link } from "react-router-dom";
 import { CheckIcon, GearSixIcon, GitBranchIcon, PencilSimpleIcon, SunIcon, MoonIcon } from "@phosphor-icons/react";
 import type { ConnectionStatus } from "@/hooks/use-kinu";
@@ -20,6 +21,21 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 
 export const ALTITUDES = ["run", "supervise"] as const;
 export type Altitude = (typeof ALTITUDES)[number];
+
+const ALTITUDE_TAB_CLASS = "!my-0.5 !rounded-full !px-[18px] !text-[12.5px] !leading-[18px] !font-semibold !text-[var(--c-text-4)] hover:!text-[var(--c-accent)] aria-selected:!text-[var(--c-accent-on)]";
+
+const ALTITUDE_TABS = [
+  {
+    value: "run",
+    label: "Run",
+    className: ALTITUDE_TAB_CLASS,
+  },
+  {
+    value: "supervise",
+    label: "Supervise",
+    className: ALTITUDE_TAB_CLASS,
+  },
+] satisfies TabsItem[];
 
 export interface WorkspaceBarProps {
   title: string;
@@ -106,21 +122,17 @@ export function WorkspaceBar({
         >
           {mode === "light" ? <MoonIcon size={14} /> : <SunIcon size={14} />}
         </button>
-        <div className="flex items-center gap-0.5 rounded-full border p-border p-fill p-[3px]">
-          {ALTITUDES.map((value) => (
-            <button
-              key={value}
-              type="button"
-              onClick={() => onAltitude(value)}
-              aria-pressed={altitude === value}
-              className={`rounded-full px-[18px] py-1.5 text-[12.5px] font-semibold capitalize transition-colors ${
-                altitude === value ? "bg-[var(--c-accent)] text-[var(--c-accent-on)]" : "p-text-4 hover:p-gold"
-              }`}
-            >
-              {value}
-            </button>
-          ))}
-        </div>
+        <Tabs
+          tabs={ALTITUDE_TABS}
+          value={altitude}
+          onValueChange={(value) => {
+            if (value === "run" || value === "supervise") onAltitude(value);
+          }}
+          activateOnFocus
+          className="shrink-0 [&>div:first-child]:!h-9 [&>div:first-child]:!rounded-full [&>div:first-child]:!bg-[var(--c-fill)]"
+          listClassName="!h-9 !rounded-full !border !border-[var(--c-border)] !bg-[var(--c-fill)] !p-[3px] !ring-0"
+          indicatorClassName="!rounded-full !bg-[var(--c-accent)] !shadow-none !ring-0"
+        />
       </div>
     </div>
   );

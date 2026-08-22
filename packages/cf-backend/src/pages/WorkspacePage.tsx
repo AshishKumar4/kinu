@@ -422,7 +422,7 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
         </div>
       </ErrorBoundary>
 
-      <div className="border-t p-border">
+      <div className="border-t p-border p-sidebar">
         <Composer
           textareaRef={inputRef}
           value={input}
@@ -435,7 +435,7 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
           streaming={state.isStreaming}
           onSteer={steer}
           onStop={stop}
-          modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs" className="min-w-0 flex-1 basis-32 max-w-44" />}
+          modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs" />}
           notices={[
             ...(state.error
               ? [{ id: "load", tone: "danger" as const, text: state.error,
@@ -886,7 +886,7 @@ export default function WorkspacePage() {
       ) : (
       <PanelGroup className="flex-1">
         {/* ── Column A — Chat / Steer ─────────────────────────── */}
-        <Panel minSize={24} defaultSize={42}>
+        <Panel minSize="24%" groupResizeBehavior="preserve-relative-size">
           <div className="flex flex-col h-full border-r p-border">
             {/* Agent tabs — the workspace's orchestrator + durable subordinates.
                 Roster + live status ride the parent socket; the CHAT below
@@ -997,7 +997,7 @@ export default function WorkspacePage() {
                 `notices`, so a failure, a warning and a progress line all read
                 as the same kind of object instead of five improvised rows.
                 `Composer` owns paste, the file input and the attachment chips. */}
-            <div className="border-t p-border">
+            <div className="border-t p-border p-sidebar">
               <Composer
                 textareaRef={chatInputRef}
                 value={chatInput}
@@ -1015,7 +1015,7 @@ export default function WorkspacePage() {
                   onAdd: (files) => { void addFiles(files); },
                   onRemove: (i) => setPendingAttachments(prev => prev.filter((_, j) => j !== i)),
                 }}
-                modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs" className="min-w-0 flex-1 basis-32 max-w-44" />}
+                modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs" />}
                 notices={[
                   ...(state.error ? [{ id: "load", tone: "danger" as const, text: state.error,
                     action: { label: "Retry", icon: <ArrowsClockwiseIcon size={11} />, onClick: state.retryLoad } }] : []),
@@ -1052,10 +1052,12 @@ export default function WorkspacePage() {
           </div>
         </Panel>
 
-        <PanelResizeHandle className="w-[3px] bg-[var(--c-border)] hover:bg-[var(--c-accent-subtle)] transition-colors cursor-col-resize" />
+        <PanelResizeHandle className="z-[2] -ml-[3px] w-[5px] shrink-0 cursor-col-resize bg-transparent transition-colors hover:bg-[var(--c-accent-subtle)]" />
 
-        {/* ── Work Surface ────────────────────────────────────── */}
-        <Panel minSize={28} defaultSize={58}>
+        {/* The mock keeps the inspector at 430px and lets chat take the
+            remainder. It can still be dragged; resizing the window preserves
+            the inspector's useful reading width instead of a 42/58 ratio. */}
+        <Panel minSize="28%" defaultSize="430px" groupResizeBehavior="preserve-pixel-size">
           <WorkSurface
             surface={surface}
             onSurface={setSurface}

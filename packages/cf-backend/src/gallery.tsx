@@ -1710,7 +1710,7 @@ function GalleryComposer({ notices = [] }: { notices?: readonly ComposerNotice[]
   const [mode, setMode] = useState<ChatMode>("build");
   const [model, setModel] = useState("anthropic/claude-opus-4");
   return (
-    <div className="border-t p-border">
+    <div className="border-t p-border p-sidebar">
       <Composer
         value={value}
         onValueChange={setValue}
@@ -1721,7 +1721,7 @@ function GalleryComposer({ notices = [] }: { notices?: readonly ComposerNotice[]
         streaming={false}
         mode={{ value: mode, onChange: setMode, locked: false }}
         attachments={{ parts: [], onAdd: () => {}, onRemove: () => {} }}
-        modelPicker={<ModelPicker models={MODEL_STUBS()} value={model} onChange={setModel} size="xs" className="min-w-0 flex-1 basis-32 max-w-44" />}
+        modelPicker={<ModelPicker models={MODEL_STUBS()} value={model} onChange={setModel} size="xs" />}
         notices={notices}
       />
     </div>
@@ -1730,7 +1730,7 @@ function GalleryComposer({ notices = [] }: { notices?: readonly ComposerNotice[]
 
 function ChatMessages() {
   return (
-    <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8" data-gallery-chat>
+    <div className="flex-1 overflow-y-auto px-6 py-7 space-y-5 lg:px-8 [&>*]:max-w-[660px] [&>*]:mx-auto" data-gallery-chat>
       {MESSAGES.map((m, i) => (
         <div key={m.id} data-chat-row={m.id}>
           <MessageView message={m} isLast={i === MESSAGES.length - 1} isStreaming={false} onFork={() => {}} />
@@ -1754,7 +1754,7 @@ function ChatMessages() {
 
 function Shell(
   {
-    surface = "Output", mctsTrees = EMPTY_TREES, rpc = stubRpc, pendingActions = [],
+    surface = "Work", mctsTrees = EMPTY_TREES, rpc = workRpc, pendingActions = SHELL_PENDING_ACTIONS,
     headActivity = NO_HEAD_ACTIVITY, backgroundJobs = BACKGROUND_JOBS, notices = [],
   }:
   {
@@ -1782,17 +1782,18 @@ function Shell(
     <div className="flex h-screen w-screen flex-col p-bg p-text overflow-hidden md:flex-row">
       {/* Mirrors components/layout.tsx — a harness that photographs a
           different surface than the app renders is worse than no harness. */}
-      <aside className="hidden w-64 shrink-0 h-full p-sidebar border-r p-border md:block"><Sidebar /></aside>
+      <aside className="hidden w-60 shrink-0 h-full p-sidebar border-r p-border md:block"><Sidebar /></aside>
       <main className="min-h-0 flex-1 min-w-0 overflow-hidden">
         <div className="h-full flex flex-col">
           <GalleryWorkspaceBar />
           <div className="flex-1 flex min-h-0">
-            <div className="@container flex flex-col h-full border-r p-border" style={{ width: "42%" }}>
+            <div className="@container flex min-w-0 flex-1 flex-col h-full border-r p-border">
               <GalleryChatTabs />
               <ChatMessages />
               <GalleryComposer notices={notices} />
             </div>
-            <div className="flex-1 min-w-0">
+            <div className="z-[2] -ml-[3px] w-[5px] shrink-0" />
+            <div className="w-[430px] shrink-0 min-w-0">
               <WorkSurface
                 surface={surface} onSurface={() => {}} pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} agentStatus={null} tools={[]}
                 memory={[]} memoryContent="" onSearchMemory={() => {}} mctsTrees={mctsTrees} headActivity={headActivity} isStreaming={false}
@@ -2785,6 +2786,9 @@ const PENDING_ACTIONS: PendingAction[] = [
   },
 ];
 
+/** The shell oracle carries one owner decision, as the app mock does. */
+const SHELL_PENDING_ACTIONS = PENDING_ACTIONS.filter((action) => action.kind === "failed_job");
+
 const workRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "listAgentTasks") return rpcResult(AGENT_TASKS).json<T>();
   if (method === "getEvolutionChangelog") return rpcResult(CHANGELOG).json<T>();
@@ -2794,7 +2798,7 @@ const workRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
 function WorkFrame() {
   return (
     <div className="p-bg min-h-screen flex justify-center">
-      <div className="w-[720px] min-h-screen border-x p-border">
+      <div className="w-[430px] min-h-screen border-x p-border">
         <WorkSurface
           surface="Work" onSurface={() => {}}
           pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} agentStatus={null} tools={[]} memory={[]} memoryContent=""
