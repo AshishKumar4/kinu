@@ -28,15 +28,14 @@ function isFinished(part: AnyToolPart): boolean {
   return part.state === "output-available" || part.state === "output-error";
 }
 
-/** Below this a group costs a click and saves nothing. */
-const MIN_GROUP = 3;
+/** Two adjacent settled calls already form the tool card drawn by the mock. */
+const MIN_GROUP = 2;
 
 export function groupMessageParts(parts: readonly Part[]): PartBlock[] {
   const blocks: PartBlock[] = [];
   let run: AnyToolPart[] = [];
 
-  // A run only ever collapses if it is long enough to be worth a click;
-  // otherwise its calls go back to being ordinary rows.
+  // A short run stays as ordinary rows; adjacent calls coalesce into one card.
   const flush = () => {
     if (run.length >= MIN_GROUP) blocks.push({ kind: "tool-run", parts: run });
     else for (const part of run) blocks.push({ kind: "part", part });
