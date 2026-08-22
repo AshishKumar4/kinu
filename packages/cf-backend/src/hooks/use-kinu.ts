@@ -33,6 +33,12 @@ import {
   type PinnedPreviewPort,
 } from "../lib/preview-ports";
 import { renderThrownChain } from "@kinu.run/core/obs";
+import {
+  createSessionRecovery,
+  fetchDeployedBuildSha,
+  isNewerDeployedBuild,
+  type SessionRecovery,
+} from "./session-recovery";
 
 export type { ExecutorInfo };
 
@@ -679,6 +685,27 @@ export function useKinu(target?: string | KinuActorAddress) {
     if (streamError) setChatError({ body: streamError.message || String(streamError), replayed: false });
   }, [streamError]);
 
+  // ── Version-skew signal: /api/health's build sha, read once as this page's
+  // baseline and compared on each reconnect. A supersede the socket rode
+  // through leaves the running SPA stale against the deployment now serving
+  // it — say so once, with a reload affordance, instead of waiting for the
+  // next dynamic import to fail on a chunk that no longer exists.
+  const [newerDeployedBuild, setNewerDeployedBuild] = useState(false);
+  const deployedShaBaseline = useRef<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void fetchDeployedBuildSha().then((sha) => {
+      if (!cancelled && sha !== null && deployedShaBaseline.current === null) {
+        deployedShaBaseline.current = sha;
+      }
+    });
+    return () => { cancelled = true; };
+  }, []);
+  const refreshDeployedBuild = useCallback(async () => {
+    const live = await fetchDeployedBuildSha();
+    if (isNewerDeployedBuild(deployedShaBaseline.current, live)) setNewerDeployedBuild(true);
+  }, []);
+
   // ── A2: resume the durable stream on EVERY reconnect, not just first mount.
   // The framework's resume effect fires once; partysocket reconnects don't
   // retrigger it. We listen for the agent's "open" event and request the
@@ -696,6 +723,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     agent.addEventListener("open", onOpen);
     return () => agent.removeEventListener("open", onOpen);
   }, [agent]);
+
 
   // ── A4: 25s heartbeat keeps the WS warm against Cloudflare's edge reaping an
   // idle connection. Server no-ops unknown message types.
@@ -737,22 +765,67 @@ export function useKinu(target?: string | KinuActorAddress) {
     setMctsTrees((prev) => new Map(prev).set(rootId, tree));
   }, []);
 
+  // Fetch all tab data. Keyed on a generation counter because a ref cannot
+  // retrigger an effect: on failure the error is sticky and a backoff retry
+  // bumps the counter; every WS 'open' beyond the session's first bumps it
+  // too (session-recovery), so a reconnect re-fetches even when React never
+  // observed an intermediate disconnected state; `retryLoad` is the same
+  // path, driven by the user. The load no longer waits for `isConnected`:
+  // while the socket is down the call queues client-side and flushes on the
+  // next dial, so recovery starts the moment transport returns.
+  const [loadGeneration, setLoadGeneration] = useState(0);
+  const failureStreak = useRef(0);
+
+  // The corpse detector + forced-redial policy. Created once; `agentRef`
+  // indirection keeps its callbacks stable across renders.
+  const agentRef = useRef(agent);
+  agentRef.current = agent;
+  const sessionRecoveryRef = useRef<SessionRecovery | null>(null);
+  if (sessionRecoveryRef.current === null) {
+    sessionRecoveryRef.current = createSessionRecovery({
+      refetch: () => setLoadGeneration((g) => g + 1),
+      forceRedial: () => agentRef.current?.reconnect(),
+    });
+  }
+  const sessionRecovery = sessionRecoveryRef.current;
+  // ── Session recovery: every reconnect re-fetches what the dead transport
+  // silently missed, and a corpse socket — OPEN by readyState, timed-out by
+  // every RPC — is forced to redial once the evidence is unambiguous. The
+  // policy lives in hooks/session-recovery.ts; this is the wiring.
+  const recoveryFirstOpen = useRef(true);
+  useEffect(() => {
+    if (!agent) return;
+    const onOpen = () => {
+      const isFirst = recoveryFirstOpen.current;
+      recoveryFirstOpen.current = false;
+      sessionRecovery.socketOpened(isFirst);
+      if (!isFirst) void refreshDeployedBuild();
+    };
+    agent.addEventListener("open", onOpen);
+    return () => agent.removeEventListener("open", onOpen);
+  }, [agent, refreshDeployedBuild, sessionRecovery]);
+
   // Typed RPC — the single boundary cast (unknown → T) lives here so call sites
   // read rpc<T>("getFoo", []) cast-free. Memoized on `agent` so it's a stable
-  // identity (surface effects keyed on [rpc] don't refetch each render).
-  const rpc = useMemo(() => bindRpc(agent), [agent]);
+  // identity (surface effects keyed on [rpc] don't refetch each render). Every
+  // outcome feeds the corpse detector: a timeout while the socket claims OPEN
+  // is evidence, any other outcome is proof of life.
+  const rpc = useMemo(() => {
+    const call = bindRpc(agent);
+    return <T,>(method: string, args: unknown[] = []): Promise<T> =>
+      call<T>(method, args).then(
+        (value) => {
+          sessionRecovery.rpcSucceeded();
+          return value;
+        },
+        (cause) => {
+          sessionRecovery.rpcFailed(cause, agent.readyState === WebSocket.OPEN);
+          throw cause;
+        },
+      );
+  }, [agent, sessionRecovery]);
 
-  // Fetch all tab data on connect.
-  //
-  // Keyed on an attempt counter, because a ref cannot retrigger an effect: the
-  // old code reset `fetched.current` in the catch and nothing ever looked at
-  // it again, so one failed snapshot bricked the whole workspace view until a
-  // reload. On failure the error is sticky and a backoff retry is scheduled;
-  // `retryLoad` is the same path, driven by the user.
-  const [loadAttempt, setLoadAttempt] = useState(0);
-  const failureStreak = useRef(0);
   useEffect(() => {
-    if (!isConnected) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const label = isSubordinate ? "Subordinate" : "Workspace";
@@ -768,10 +841,10 @@ export function useKinu(target?: string | KinuActorAddress) {
         setSourceError("snapshot", `${label} snapshot failed: ${errorMessage(err)}`);
         const delay = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** failureStreak.current);
         failureStreak.current += 1;
-        timer = setTimeout(() => setLoadAttempt((a) => a + 1), delay);
+        timer = setTimeout(() => setLoadGeneration((g) => g + 1), delay);
       });
-    return () => { cancelled = true; if (timer) clearTimeout(timer); };
-  }, [actorKey, isConnected, isSubordinate, liveRefreshAdmission, loadAttempt, rpc, subordinate, workspace]);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [actorKey, isSubordinate, liveRefreshAdmission, loadGeneration, rpc, subordinate, workspace]);
 
   const refreshBackgroundJobs = useCallback(() => refreshCurrentLiveResource(
     "jobs",
@@ -987,9 +1060,9 @@ export function useKinu(target?: string | KinuActorAddress) {
   const retryLoad = useCallback(() => {
     failureStreak.current = 0;
     setSourceError("model", null);
-    setLoadAttempt((attempt) => attempt + 1);
+    sessionRecovery.manualRetry();
     if (!isSubordinate) void refreshLiveData();
-  }, [isSubordinate, refreshLiveData, setSourceError]);
+  }, [isSubordinate, refreshLiveData, sessionRecovery, setSourceError]);
 
   // Refresh surface data when a turn completes (streaming ends).
   const wasStreaming = useRef(false);
@@ -1081,14 +1154,14 @@ export function useKinu(target?: string | KinuActorAddress) {
   }, [isSubordinate, rpc, setSourceError]);
 
   useEffect(() => {
-    if (!isConnected || isSubordinate) return;
+    if (isSubordinate) return;
     void refreshSubordinates();
-  }, [isConnected, isSubordinate, refreshSubordinates, loadAttempt]);
+  }, [isSubordinate, refreshSubordinates, loadGeneration]);
 
   useEffect(() => {
     ++exposedPortsRefreshGeneration.current;
     ++subordinateRefreshGeneration.current;
-    setLoadAttempt(0);
+    setLoadGeneration(0);
     failureStreak.current = 0;
     wasStreaming.current = false;
     isFirstOpen.current = true;
@@ -1278,6 +1351,10 @@ export function useKinu(target?: string | KinuActorAddress) {
      *  `messages` being empty means "not delivered", not "there is nothing". */
     transcriptSeeded,
     connectionStatus,
+    /** The deployment's build sha changed since this page loaded — the tab is
+     *  stale against the server now answering it. Latched once per page load;
+     *  the surface renders the reload affordance from this. */
+    newerDeployedBuild,
     /** The sticky load/action failure, if any — never auto-expires. */
     error,
     /** Re-run the initial load now (also cancels the pending backoff retry and
