@@ -17,14 +17,14 @@ import { dirname, join } from 'node:path';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 import { Landing } from '../src/components/landing/Landing';
-import { cliFilmFigure } from '../src/lib/cli-film';
+import { condensedCliFilm } from '../src/lib/cli-film';
 
 const OUT = join(import.meta.dir, '..', 'src', 'lib', 'landing-body.generated.ts');
 
 const body = renderToStaticMarkup(
   <Landing
     install="@@INSTALL_COMMAND@@"
-    cliFilm={cliFilmFigure()}
+    cliFilm={condensedCliFilm()}
   />,
 );
 

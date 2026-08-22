@@ -440,7 +440,7 @@ function Deploy({ repoUrl }: { repoUrl: string }): ReactElement {
     ['STEP THREE', <><b>Prove the account.</b> The infra gate checks every declared resource exists and the deployed Worker is bound to it. It exits non-zero when one is not.</>, 'bun run gate:infra'],
   ];
   const values: ReadonlyArray<readonly [title: string, body: string]> = [
-    ['UNLIMITED WORKSPACES', 'Workspaces are Durable Objects: nothing is billed while they sit idle — spend follows what runs and what you store, not how many workspaces you keep.'],
+    ['UNLIMITED WORKSPACES', 'Workspaces are Durable Objects: nothing bills while they sit idle — you pay for what runs and what you store.'],
     [`${STORAGE_GB} GB PER WORKSPACE`, `Every workspace keeps its own durable file plane — files, shell state, runtimes — on SQLite-backed storage (${STORAGE_GB} GB on Workers Paid, platform-catalog do.storage.bytes).`],
     ['TRUE LINUX ON DEMAND', 'When an agent needs one, it attaches a full Linux sandbox on Cloudflare Containers.'],
     ['YOUR OWN DEVICES', 'Connect your PC and your agents can use it too — every access behind your consent.'],
