@@ -28,7 +28,7 @@ const REQUIRED_GATES = [
   "bun test --parallel=4 packages/cf-backend/",
   "bun run test:workerd",
   "bun test --parallel=4 packages/cli-backend/",
-  "bun test --parallel=4 packages/cli/",
+  "bun run test:cli",
   "bun test scripts/eval.test.ts scripts/eval-triage.test.ts",
   `bun test ${BENCH_GATE_FILES.join(" ")}`,
   "bun test scripts/secret-scan.test.ts scripts/sources.test.ts",

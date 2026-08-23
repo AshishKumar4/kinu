@@ -38,6 +38,7 @@ import { resolve } from 'node:path';
 import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
 import { isRunnableSuite, trackedFiles } from './sources';
+import { CLI_TEST_ROOT } from './test-cli';
 
 /** DERIVED, because it was hardcoded as 21 while the config carried 22 — a stale count in the
  *  document that tells a reader what a rung catches. Read from the enabled rules rather than from the
@@ -694,19 +695,16 @@ export const LADDER: readonly Gate[] = [
     blind: 'the CLI surface above it.',
   },
   {
-    // Measured 2026-08-22: 23.52s, four isolated workers.
-    run: 'bun test --parallel=4 packages/cli/',
+    // Measured 2026-08-23: 40.0s. `behavior.test.ts` alone took 23.36s and
+    // the other 43 files took 16.64s at parallel=4. Putting the slow file in
+    // that wave exceeded 180s through contention.
+    run: 'bun run test:cli',
     tier: 'ci',
-    seconds: 24,
+    seconds: 41,
     catches: 'the production CLI end to end, including the PTY and subprocess paths. Every '
-      + 'file it claims runs in no other tier, asserted in ladder.test.ts as an empty '
-      + 'overlap rather than as the count this sentence used to carry. It runs headless — '
-      + 'the "PTY tests need a terminal" exclusion was stale from 5183d69d — and this '
-      + 'gate\'s own exit code is the only honest statement of whether it passes. The pass '
-      + 'count quoted here for months (295) was 17 tests out of date, and the run that '
-      + 'produced it came from a shell exporting KINU_ORIGIN + KINU_TOKEN, which '
-      + 'silently moved ten of these tests onto their signed-in branch; '
-      + 'scripts/test-scratch-home.ts now strips those, so the result no longer depends '
+      + 'file it claims runs in no other tier. The runner derives all files in the directory, '
+      + 'isolates the measured contention-sensitive file, then runs the remainder at parallel=4. '
+      + 'scripts/test-scratch-home.ts strips ambient credentials, so the result does not depend '
       + 'on whose shell ran it.',
     blind: 'the deployed CLI archive and a real person\'s terminal outside the synthetic PTY. '
       + 'The download smoke and asset-integrity gates own the archive; neither proves terminal '
@@ -1343,6 +1341,9 @@ export function claims(command: string, tracked: readonly string[]): string[] {
     const body = packageScripts()[words[2] ?? ''];
     if (body === undefined) return [];
     return [...new Set(body.split('&&').flatMap((part) => claims(part.trim(), tracked)))];
+  }
+  if (words[0] === 'bun' && words[1] === 'scripts/test-cli.ts') {
+    return tracked.filter((path) => path.startsWith(`${CLI_TEST_ROOT}/`) && !bunWouldSkip(path));
   }
   if (words[0] === 'node') {
     return words.filter((word) => isRunnableSuite(word) && tracked.includes(word));
