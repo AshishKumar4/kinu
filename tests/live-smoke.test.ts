@@ -46,7 +46,7 @@ import { createWorkspace } from '../packages/core/src/identity/index';
 import { LocalAgentSession, type SessionEvent } from '../packages/cli-backend/src/local-session';
 import { openWorkspaceCLI } from '../packages/cli-backend/src/open';
 import { makeSql, makeWorkspaceSchemaSql } from '../packages/cli-backend/src/runtime';
-import { createCloudAgent, deleteCloudAgent } from '../packages/cli/src/cloud-api';
+import { callAgentRpc, createCloudAgent, deleteCloudAgent } from '../packages/cli/src/cloud-api';
 import { CloudAgentClient } from '../packages/cli/src/cloud-agent-client';
 import { requireSandboxedExecutors } from './evals/harness';
 import {
@@ -54,10 +54,16 @@ import {
   recordLiveModelSpend, reportLiveModelSpend, scratchDir, UNCONFIGURED_LLM,
   type LiveModelSession,
 } from '@kinu.run/test-utils';
+import * as v from 'valibot';
 
 const TARGET = liveModelTarget('Live Smoke');
 const LLM_CONFIG: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;
 const liveTest = test.skipIf(!TARGET);
+const ExecutorFileSchema = v.object({
+  content: v.optional(v.string()),
+  truncated: v.optional(v.boolean()),
+  error: v.optional(v.string()),
+});
 
 /**
  * The hosted arm needs a WORKER, not merely a model. An `AI_GATEWAY_*` pair
@@ -181,6 +187,20 @@ describe('Live Smoke — one real turn per backend', () => {
       console.log(`    hosted durable: ${String(status.messageCount)} message(s) in the DO, `
         + `model ${status.model}`);
       expect(status.messageCount).toBeGreaterThanOrEqual(2);
+      const smokeFile = await infraBoundary(
+        'reading smoke.txt from the hosted workspace',
+        () => callAgentRpc(
+          origin,
+          token,
+          created.name,
+          'readExecutorFile',
+          ExecutorFileSchema,
+          ['workspace', 'smoke.txt'],
+        ),
+      );
+      expect(smokeFile.error).toBeUndefined();
+      expect(smokeFile.truncated).not.toBe(true);
+      expect(smokeFile.content).toBe('live smoke ok');
     } finally {
       await client.close();
     }
@@ -237,6 +257,7 @@ describe('Live Smoke — one real turn per backend', () => {
       const messages = db.query<{ c: number }, []>('SELECT COUNT(*) as c FROM messages').get()?.c ?? 0;
       console.log(`    cli durable: ${String(messages)} message row(s)`);
       expect(messages).toBeGreaterThanOrEqual(2);
+      expect(await rt.storage.vfs.readFile('smoke.txt', { encoding: 'utf8' })).toBe('live smoke ok');
     } finally {
       // `kinu exec`'s own one-shot sequence, and it is not optional. The
       // session detaches durable fibers, and `end()` documents the hazard
