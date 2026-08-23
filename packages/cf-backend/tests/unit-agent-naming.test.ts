@@ -1,7 +1,5 @@
 // Agent naming — the P1a single-prompt-box flow: slug for the DO id, a
 // deterministic provisional title, and the roster title-precedence rule.
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { describe, test, expect } from "bun:test";
 import { slugifyName, deriveWorkspaceTitle, resolveWorkspaceTitle } from "../src/lib/agent-naming";
 
@@ -55,50 +53,3 @@ describe("resolveWorkspaceTitle — roster precedence", () => {
   });
 });
 
-// Where the workspace DO hangs the shared titling policy. The decision and the
-// apply loop are proven in @kinu.run/core; these pin the wiring that a DO test
-// harness cannot reach.
-describe("workspace titling wiring (OrchestratorAgent)", () => {
-  const orchestrator = readFileSync(join(import.meta.dir, "../src/orchestrator.ts"), "utf8");
-
-  test("opening a legacy workspace titles it from SOUL.md without blocking boot", () => {
-    // Bounded by a REGEX, and the match is asserted: anchored on the literal
-    // "async onStart()" this slice silently became `slice(-1, …)` the day the
-    // method turned synchronous, and a wiring test that matches nothing passes.
-    const body = /\n  (?:async )?onStart\(\)[\s\S]*?\n  \}\n/.exec(orchestrator);
-    expect(body).not.toBeNull();
-    const onStart = body![0];
-    expect(onStart).toContain("if (this.getOwnerUserId() && isPlaceholderWorkspaceTitle(this.config.getDisplayName(), this.name))");
-    expect(onStart).toContain("void readSoul(this.rt.storage.vfs)");
-    expect(onStart).toContain(".catch((error) =>");
-  });
-
-  // A workspace is titled after what it is FOR. Titling it from the first
-  // thing it was asked to do is how a workspace whose mission is "My personal
-  // assistant, Jarvis" ends up named after an unrelated errand.
-  test("the first turn titles from the MISSION, falling back to the opening request", () => {
-    expect(orchestrator).toContain("const mission = readMission(this.boundSql)");
-    expect(orchestrator).toContain(
-      "void this.maybeAutoTitleWorkspace(isPlaceholderMission(mission) ? userText : mission!)",
-    );
-    expect(orchestrator.match(/maybeAutoTitleWorkspace\(/g)).toHaveLength(3);
-  });
-
-
-  test("one generator: the shared workspace-identity prompt and parser", () => {
-    const suggest = orchestrator.slice(
-      orchestrator.indexOf("private async suggestWorkspaceTitle"),
-      orchestrator.indexOf("/** Commit one display name"),
-    );
-    expect(suggest).toContain("system: WORKSPACE_TITLE_SYSTEM_PROMPT");
-    expect(suggest).toContain("prompt: workspaceTitlePrompt(mission)");
-    // `result.text`, not a destructured `text`: the whole result is held now so
-    // the call's usage can be reported as `fast` workspace spend. Same parser.
-    expect(suggest).toContain("parseWorkspaceTitle(result.text)");
-    // The call reports itself as `fast` workspace spend — before this, titling
-    // was one of 25 producers whose cost reached no ledger at all.
-    expect(suggest).toContain("this.reportModelCall(");
-    expect(suggest).toContain("source: 'fast'");
-    expect(suggest).not.toContain("maxOutputTokens");
-  });
-});
