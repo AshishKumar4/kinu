@@ -40,10 +40,11 @@ export function StatusBar({ name, mode, model, reasoningEffort, onModelSelect, c
   const { width } = useTerminalDimensions();
   const innerWidth = Math.max(0, width - 4);
   const connection = connected ? '●' : '○';
+  const compactVersionTail = ` cli ${VERSION} ${connection}`;
   const tail = width >= 48
     ? `  cli ${VERSION}  ${connection}`
-    : width >= 30
-      ? ` cli ${VERSION} ${connection}`
+    : width >= 30 && innerWidth - compactVersionTail.length >= 14
+      ? compactVersionTail
       : ` ${connection}`;
   const available = Math.max(0, innerWidth - tail.length);
 
@@ -61,8 +62,14 @@ export function StatusBar({ name, mode, model, reasoningEffort, onModelSelect, c
   let identityName: string;
   if (nameBudget < 2) {
     identityPrefix = '';
-    identityTail = '';
-    identityName = clipText(`kinu ${mode}`, identityBudget);
+    const compactTail = ` ${mode}`;
+    if (identityBudget > compactTail.length + 1) {
+      identityTail = compactTail;
+      identityName = clipText(name, identityBudget - compactTail.length);
+    } else {
+      identityTail = '';
+      identityName = clipText(mode, identityBudget);
+    }
   } else {
     identityName = clipText(name, nameBudget);
   }
