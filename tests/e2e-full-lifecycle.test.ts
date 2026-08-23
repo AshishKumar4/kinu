@@ -224,38 +224,37 @@ describe('E2E Full Lifecycle', () => {
   liveTest('4. chat turn 2: code execution', async () => {
     const turn = await chatTurn(
       model, rt, tools,
-      'Write a JS function to check if a number is prime, then test it with 7, 10, and 13. Use the execute_tools tool.',
+      'Use execute_tools to write and run a JS prime checker for 7, 10, and 13. '
+        + 'Print exactly JSON.stringify({7:true,10:false,13:true}), then summarize.',
     );
     console.log(`  Response (${turn.assistantResponse.length} chars): ${turn.assistantResponse.slice(0, 200)}`);
     console.log(`  Steps: ${turn.steps}, Tools: ${turn.toolCalls.map(t => t.name).join(', ') || 'none'}`);
 
-    // Response should be non-empty even if last step was a tool call
+    const execution = turn.toolCalls.find((call) => call.name === 'execute_tools');
+    expect(execution, 'the model did not use execute_tools').toBeDefined();
+    const output = JSON.stringify(execution?.result);
+    expect(output).toContain('"7":true');
+    expect(output).toContain('"10":false');
+    expect(output).toContain('"13":true');
     expect(turn.assistantResponse.length).toBeGreaterThan(0);
-
-    if (turn.toolCalls.length > 0) {
-      console.log(`  Tool calls: ${turn.toolCalls.length}`);
-      for (const tc of turn.toolCalls) {
-        console.log(`    ${tc.name}: ${JSON.stringify(tc.args ?? {}).slice(0, 100)}`);
-      }
-    }
   }, 300_000);
 
-  // ── Step 5: Chat turn 3 — should use save_note ──────────────
+  // ── Step 5: Chat turn 3 — persist a memory note ───────────────
 
   liveTest('5. chat turn 3: save note to memory', async () => {
+    const fact = 'the project uses bun:sqlite for its database layer';
     const turn = await chatTurn(
       model, rt, tools,
-      'Remember this important fact: the project uses bun:sqlite for its database layer. Use the save_note tool.',
+      `Use the memory tool to save this exact fact: ${fact}`,
     );
     console.log(`  Response (${turn.assistantResponse.length} chars): ${turn.assistantResponse.slice(0, 200)}`);
     console.log(`  Steps: ${turn.steps}, Tools: ${turn.toolCalls.map(t => t.name).join(', ') || 'none'}`);
 
-    // Response should be non-empty even if last step was a tool call
-    expect(turn.assistantResponse.length).toBeGreaterThan(0);
-
-    // Verify memory was updated
+    const save = turn.toolCalls.find((call) => call.name === 'memory' && call.args.action === 'save');
+    expect(save, 'the model did not call memory.save').toBeDefined();
     const memory = await rt.memory.read('memory/MEMORY.md');
     if (!memory) throw new Error('memory note was not persisted');
+    expect(memory).toContain(fact);
     console.log(`  Memory size: ${memory.length} chars`);
   }, 120_000);
 
@@ -282,6 +281,8 @@ describe('E2E Full Lifecycle', () => {
     // Messages survived (at minimum: turns that completed × 2 messages each)
     const msgCount = db2.query<{ c: number }, []>('SELECT COUNT(*) as c FROM messages').get()?.c ?? 0;
     expect(msgCount).toBeGreaterThanOrEqual(2); // at least 1 turn completed
+    expect(await rt2.memory.read('memory/MEMORY.md'))
+      .toContain('the project uses bun:sqlite for its database layer');
 
     // SOUL.md survived
     expect(info.soul).toContain('JavaScript');

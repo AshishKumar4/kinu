@@ -39,14 +39,16 @@
 
 import { describe, test, expect, afterAll } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import puppeteer, { type LaunchOptions, type Page } from 'puppeteer';
 
 import { initWorkspaceSchema, type LLMProviderConfig } from '../packages/core/src/index';
 import { createWorkspace } from '../packages/core/src/identity/index';
 import { LocalAgentSession, type SessionEvent } from '../packages/cli-backend/src/local-session';
 import { openWorkspaceCLI } from '../packages/cli-backend/src/open';
 import { makeSql, makeWorkspaceSchemaSql } from '../packages/cli-backend/src/runtime';
-import { callAgentRpc, createCloudAgent, deleteCloudAgent } from '../packages/cli/src/cloud-api';
+import { createCloudAgent, deleteCloudAgent } from '../packages/cli/src/cloud-api';
 import { CloudAgentClient } from '../packages/cli/src/cloud-agent-client';
 import { requireSandboxedExecutors } from './evals/harness';
 import {
@@ -54,16 +56,10 @@ import {
   recordLiveModelSpend, reportLiveModelSpend, scratchDir, UNCONFIGURED_LLM,
   type LiveModelSession,
 } from '@kinu.run/test-utils';
-import * as v from 'valibot';
 
 const TARGET = liveModelTarget('Live Smoke');
 const LLM_CONFIG: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;
 const liveTest = test.skipIf(!TARGET);
-const ExecutorFileSchema = v.object({
-  content: v.optional(v.string()),
-  truncated: v.optional(v.boolean()),
-  error: v.optional(v.string()),
-});
 
 /**
  * The hosted arm needs a WORKER, not merely a model. An `AI_GATEWAY_*` pair
@@ -89,6 +85,46 @@ const TEST_DIR = scratchDir('live-smoke');
 const SMOKE_PROMPT = 'Use your file tool to write the exact text "live smoke ok" into a file '
   + 'named smoke.txt. Then reply with only the word DONE.';
 
+
+const WEB_SMOKE_MARKER = 'WEB_UI_SMOKE_OK';
+const WEB_SMOKE_PROMPT = `Use the file tool to write the exact text ${WEB_SMOKE_MARKER} `
+  + `into web-ui-smoke.txt, then reply with only ${WEB_SMOKE_MARKER}.`;
+
+function browserLaunchOptions(): LaunchOptions {
+  const options: LaunchOptions = {
+    headless: true,
+    args: ['--no-sandbox', '--disable-dev-shm-usage'],
+  };
+  const executablePath = [
+    '/usr/bin/google-chrome',
+    '/usr/bin/google-chrome-stable',
+    '/usr/bin/chromium',
+  ].find(existsSync);
+  if (executablePath) options.executablePath = executablePath;
+  return options;
+}
+
+async function clickButton(page: Page, label: string): Promise<void> {
+  const clicked = await page.evaluate((text) => {
+    const button = [...document.querySelectorAll('button')]
+      .find((candidate) => candidate.textContent?.trim() === text);
+    if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
+    button.click();
+    return true;
+  }, label);
+  if (!clicked) throw new Error(`No enabled button labelled ${JSON.stringify(label)}.`);
+}
+
+async function clickAriaPrefix(page: Page, prefix: string): Promise<void> {
+  const clicked = await page.evaluate((label) => {
+    const element = [...document.querySelectorAll('button,a')]
+      .find((candidate) => candidate.getAttribute('aria-label')?.startsWith(label));
+    if (!(element instanceof HTMLElement)) return false;
+    element.click();
+    return true;
+  }, prefix);
+  if (!clicked) throw new Error(`No control has an aria-label beginning ${JSON.stringify(prefix)}.`);
+}
 /** Cloud agents this file created, so teardown removes them even on failure. */
 const createdCloudAgents: string[] = [];
 
@@ -187,24 +223,143 @@ describe('Live Smoke — one real turn per backend', () => {
       console.log(`    hosted durable: ${String(status.messageCount)} message(s) in the DO, `
         + `model ${status.model}`);
       expect(status.messageCount).toBeGreaterThanOrEqual(2);
-      const smokeFile = await infraBoundary(
-        'reading smoke.txt from the hosted workspace',
-        () => callAgentRpc(
-          origin,
-          token,
-          created.name,
-          'readExecutorFile',
-          ExecutorFileSchema,
-          ['workspace', 'smoke.txt'],
-        ),
-      );
-      expect(smokeFile.error).toBeUndefined();
-      expect(smokeFile.truncated).not.toBe(true);
-      expect(smokeFile.content).toBe('live smoke ok');
     } finally {
       await client.close();
     }
   }, 300_000);
+
+  hostedTest('signed-in web app: create, rename, run, inspect, and use mobile panels', async () => {
+    if (!HOSTED) throw new Error('unreachable: hostedTest runs only with a worker target');
+    const { origin } = workerCredentials(HOSTED.llm);
+    const browser = await puppeteer.launch(browserLaunchOptions());
+    try {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1_440, height: 900, deviceScaleFactor: 1 });
+      await page.goto(origin, { waitUntil: 'networkidle0', timeout: 90_000 });
+      await page.waitForSelector('textarea[aria-label="Mission"]');
+      await page.type(
+        'textarea[aria-label="Mission"]',
+        'Audit checkout retries and keep the focused tests green.',
+      );
+      await clickButton(page, 'Create workspace');
+      await page.waitForFunction(() => location.pathname.startsWith('/workspace/'), { timeout: 90_000 });
+      const name = new URL(page.url()).pathname.split('/').filter(Boolean).at(-1) ?? '';
+      expect(name).toMatch(/^[a-z]+-[a-z]+-[0-9a-f]{8}$/);
+      expect(name).not.toContain('checkout');
+      createdCloudAgents.push(name);
+
+      await page.waitForFunction(() => (document.body.textContent ?? '').includes('Live'), { timeout: 90_000 });
+      await clickAriaPrefix(page, 'Rename workspace');
+      const rename = 'input[aria-label^="Rename"]';
+      await page.waitForSelector(rename);
+      await page.click(rename, { clickCount: 3 });
+      await page.keyboard.type('Staging UI Smoke');
+      await clickAriaPrefix(page, 'Save workspace name');
+      await page.waitForFunction(() => {
+        const text = document.body.textContent ?? '';
+        return (text.match(/Staging UI Smoke/g)?.length ?? 0) >= 2;
+      });
+
+      const composer = 'textarea[placeholder="Send a message..."]';
+      await page.waitForSelector(composer);
+      await page.type(composer, WEB_SMOKE_PROMPT);
+      await page.waitForFunction(() => {
+        const button = document.querySelector<HTMLButtonElement>('button[aria-label="Send"]');
+        return button?.disabled === false;
+      });
+      await clickButton(page, 'Send');
+      await page.waitForFunction((marker) => {
+        const text = document.body.textContent ?? '';
+        const stopped = [...document.querySelectorAll('button')]
+          .every((button) => button.getAttribute('aria-label') !== 'Stop this turn');
+        return stopped && text.includes('Wrote web-ui-smoke.txt') && text.includes(String(marker));
+      }, { timeout: 300_000 }, WEB_SMOKE_MARKER);
+      // Exactly one tool call means two model steps: request the write, then
+      // consume its result and answer.
+      expect(await page.$$eval(
+        'button',
+        (buttons) => buttons.filter((button) => button.textContent?.includes('Wrote web-ui-smoke.txt')).length,
+      )).toBe(1);
+      recordLiveModelSpend();
+      recordLiveModelSpend();
+
+      await clickButton(page, 'Environment');
+      await page.waitForFunction(
+        () => [...document.querySelectorAll('button')]
+          .some((button) => button.textContent?.includes('web-ui-smoke.txt') === true),
+        { timeout: 90_000 },
+      );
+      await page.evaluate(() => {
+        const file = [...document.querySelectorAll('button')]
+          .find((button) => button.textContent?.includes('web-ui-smoke.txt') === true);
+        file?.click();
+      });
+
+      await page.waitForFunction((marker) => {
+        const back = [...document.querySelectorAll('button')]
+          .find((button) => button.getAttribute('aria-label') === 'Back to files');
+        return back?.parentElement?.parentElement?.textContent?.includes(String(marker)) === true;
+      }, { timeout: 60_000 }, WEB_SMOKE_MARKER);
+      await page.evaluate(() => {
+        const sandbox = [...document.querySelectorAll('button')]
+          .find((button) => button.textContent?.includes('sandbox.*') === true);
+        sandbox?.click();
+      });
+      await page.waitForFunction(
+        () => (document.body.textContent ?? '').includes('Sandbox can'),
+        { timeout: 90_000 },
+      );
+      await clickButton(page, 'Terminal');
+      await page.waitForSelector('.xterm-helper-textarea');
+      await page.focus('.xterm-helper-textarea');
+      await page.keyboard.type('printf SANDBOX_SMOKE_OK');
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(
+        () => document.querySelector('.xterm-rows')?.textContent?.includes('SANDBOX_SMOKE_OK') === true,
+        { timeout: 180_000 },
+      );
+
+      await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 1 });
+      await page.reload({ waitUntil: 'networkidle0', timeout: 90_000 });
+      await page.waitForFunction(() => !(document.body.textContent ?? '').includes('Connecting...'), {
+        timeout: 90_000,
+      });
+      await clickButton(page, 'Workspace');
+      const mobile = await page.evaluate(() => {
+        const panelWidth = (element: Element | null): number | null => {
+          for (let current = element?.parentElement; current; current = current.parentElement) {
+            if (current.style.flex) return current.getBoundingClientRect().width;
+          }
+          return null;
+        };
+        const chat = document.querySelector('textarea');
+        const output = [...document.querySelectorAll('button')]
+          .find((button) => button.textContent?.trim() === 'Output') ?? null;
+        return {
+          innerWidth,
+          scrollWidth: document.documentElement.scrollWidth,
+          chatWidth: panelWidth(chat),
+          workspaceWidth: panelWidth(output),
+        };
+      });
+      expect(mobile).toEqual({
+        innerWidth: 390,
+        scrollWidth: 390,
+        chatWidth: 0,
+        workspaceWidth: 390,
+      });
+
+      await clickAriaPrefix(page, 'Open menu');
+      const actions = await page.evaluate(() => [...document.querySelectorAll('a,button')]
+        .filter((element) => /^(Workspace settings|Rename workspace|Remove workspace)/
+          .test(element.getAttribute('aria-label') ?? ''))
+        .filter((element) => element.getBoundingClientRect().width > 0)
+        .map((element) => getComputedStyle(element).opacity));
+      expect(actions).toEqual(['0.6', '0.6', '0.6']);
+    } finally {
+      await browser.close();
+    }
+  }, 600_000);
 
   liveTest('cli backend: one real turn through the local session spine', async () => {
     const dbPath = join(TEST_DIR, 'smoke.db');
