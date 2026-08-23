@@ -78,7 +78,6 @@
   "movable packages/cf-backend/src/providers/my-gateway.ts",
   "movable packages/cf-backend/src/providers/stream-usage-repair.ts",
   "movable packages/cf-backend/src/providers/workers-ai-catalog.ts",
-  "movable packages/cf-backend/src/providers/workers-ai.ts",
   "movable packages/cf-backend/src/user/credential-envelope.ts",
   "movable packages/cf-backend/src/user/credential-headers.ts",
   "movable packages/cf-backend/src/user/device-hub.ts",

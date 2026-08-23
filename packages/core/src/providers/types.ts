@@ -109,6 +109,7 @@ export interface WorkersAIBinding {
 export interface ProviderEnv {
   AI?: WorkersAIBinding;
   AI_GATEWAY_URL?: string;
+  DEV_USER_EMAIL?: string;
 }
 
 export interface ProviderDeps {
