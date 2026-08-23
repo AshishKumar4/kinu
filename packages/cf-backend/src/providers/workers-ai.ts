@@ -1,11 +1,9 @@
-// Workers AI provider — uses the logged-in user's Cloudflare OAuth credential.
-// Chat inference always uses the account-scoped REST endpoint below, not
-// env.AI.run. The installed workers-ai-provider binding path directly awaits
-// binding.run and exposes no typed/status-bearing capacity error to intercept;
-// env.AI remains limited to non-chat features such as embeddings/HTML repair.
-// The model is constructed synchronously; the account-scoped base URL and
-// bearer token are resolved from UserDO inside customFetch on each request.
+// Workers AI provider. Production uses the logged-in user's Cloudflare OAuth
+// credential, so billing stays on that account. A development identity can use
+// the Worker's direct AI binding; staging uses this for the isolated
+// eval-service account.
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+import { createWorkersAI, type WorkersAI } from 'workers-ai-provider';
 import type { LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo } from '@kinu.run/core';
 import { DEFAULT_WORKERS_AI_MODEL_ID, listModelsDevProviderModels } from '@kinu.run/core';
@@ -20,13 +18,18 @@ export interface WorkersAIOptions {
   /** Prefix-cache affinity key — routes same-key requests to the same replica. */
   sessionAffinity?: string;
 }
+type DirectWorkersAIModelId = Parameters<WorkersAI>[0];
 
-export function createWorkersAIProvider(opts: WorkersAIOptions = {}): ModelProvider {
+export function createWorkersAIProvider(
+  opts: WorkersAIOptions = {},
+  developmentBinding?: Ai,
+): ModelProvider {
   return {
     id: 'workers-ai',
     label: 'Cloudflare Workers AI',
     defaultModel: DEFAULT_WORKERS_AI_MODEL_ID,
     async isAvailable(deps) {
+      if (developmentBinding) return true;
       const auth = await deps.getAuth(CLOUDFLARE_OAUTH_CRED_KEY);
       return !!auth?.baseURL;
     },
@@ -36,6 +39,15 @@ export function createWorkersAIProvider(opts: WorkersAIOptions = {}): ModelProvi
       preferredIds: WORKERS_AI_PREFERRED_MODEL_IDS,
     }),
     createModel(modelId, deps): LanguageModel {
+      if (developmentBinding) {
+        // SAFETY: `normalizeSpecSync` checked the `workers-ai` provider prefix.
+        // The dynamic Cloudflare catalog supplies the remaining `@cf/*` id.
+        const directModelId = modelId as DirectWorkersAIModelId;
+        return createWorkersAI({ binding: developmentBinding })(
+          directModelId,
+          opts.sessionAffinity ? { sessionAffinity: opts.sessionAffinity } : {},
+        );
+      }
       const placeholder = 'https://kinu-workers-ai.invalid';
       const customFetch = createCloudflareAIFetch({
         credKey: CLOUDFLARE_OAUTH_CRED_KEY,

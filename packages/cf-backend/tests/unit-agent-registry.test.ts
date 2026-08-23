@@ -1,3 +1,4 @@
+import { generateText } from 'ai';
 import { describe, test, expect } from 'bun:test';
 import { userCredentialSource } from './helpers/user-credentials';
 import { readFileSync } from 'node:fs';
@@ -69,6 +70,32 @@ describe('AgentProviderRegistry composition', () => {
       userDO: fakeUserDOStub(),
     });
     expect(reg.normalizeSpecSync(null)).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
+  });
+
+  test('the staging identity runs Workers AI through the direct binding', async () => {
+    const calls: string[] = [];
+    const ai = Object.assign(stubAiBinding().binding, {
+      async run(model: string) {
+        calls.push(model);
+        return {
+          response: 'direct binding',
+          usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
+        };
+      },
+    });
+    const directBinding: Ai = Object.create(ai);
+    const env = {
+      DEV_USER_EMAIL: 'eval-service@kinu.run',
+      AI: directBinding,
+    };
+    const reg = createAgentProviderRegistry({ env, userDO: fakeUserDOStub() });
+    expect(await reg.registry.get('workers-ai')!.isAvailable(reg.deps)).toBe(true);
+    const result = await generateText({
+      model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6'),
+      prompt: 'reply',
+    });
+    expect(result.text).toBe('direct binding');
+    expect(calls).toEqual(['@cf/moonshotai/kimi-k2.6']);
   });
 
   test('normalizeSpecSync — catalog-shaped ids pass through, malformed ids throw', () => {

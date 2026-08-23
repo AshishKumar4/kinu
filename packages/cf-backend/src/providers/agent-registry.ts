@@ -108,7 +108,13 @@ export function createUserDOAuthResolver(source: UserCredentialSource | null): A
 export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProviderRegistry {
   const registry = createProviderRegistry();
 
-  registry.register(createWorkersAIProvider(opts.workersAI));
+  let developmentBinding: Ai | undefined;
+  if (opts.env.DEV_USER_EMAIL && opts.env.AI) {
+    // SAFETY: production callers pass the wrangler-generated `Env`, whose `AI`
+    // binding is Cloudflare's `Ai`. `ProviderEnv` exposes only its gateway seam.
+    developmentBinding = opts.env.AI as Ai;
+  }
+  registry.register(createWorkersAIProvider(opts.workersAI, developmentBinding));
   registry.register(createMyGatewayProvider());
   registry.register(createAIGatewayProvider());
   registry.register(createCodexProvider());
