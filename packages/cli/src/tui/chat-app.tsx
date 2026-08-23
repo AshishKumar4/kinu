@@ -80,7 +80,7 @@ import { renderSessionBrowser, selectSession } from './session-browser';
 import { initialInputState, reduceInput, type InputEffect, type InputMachineEvent } from './input-state';
 import { clipText } from './format';
 import { tuiColors } from './theme';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 
 export interface ChatAppOpts {
   client: AgentClient;
@@ -429,13 +429,24 @@ export function ChatApp({
       setModelCatalog(menu.models);
       setActiveSurface({ kind: 'model', menu, loading: false, error: null });
     } catch (err) {
-      if (modelRequestRef.current !== request) return;
-      setActiveSurface({
-        kind: 'model',
-        menu: EMPTY_MODEL_MENU,
-        loading: false,
-        error: renderThrownChain({ cause: err }),
-      });
+      if (modelRequestRef.current !== request) {
+        diagnostics.failure(
+          'tui.model_list_stale_failure',
+          toKinuError({
+            doing: 'listing models for a closed TUI panel',
+            cause: err,
+            otherwise: 'unavailable',
+          }),
+          { workspace: client.agentName },
+        );
+      } else {
+        setActiveSurface({
+          kind: 'model',
+          menu: EMPTY_MODEL_MENU,
+          loading: false,
+          error: renderThrownChain({ cause: err }),
+        });
+      }
     }
   }, [client]);
 
