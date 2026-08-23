@@ -64,10 +64,12 @@ case "$KINU_ENV" in
   production)
     KINU_URL="https://kinu.run/"
     KINU_WRANGLER_ARGS=()
+    KINU_APP_ROOT="landing-root"
     ;;
   staging)
     KINU_URL="https://staging.kinu.run/"
     KINU_WRANGLER_ARGS=(--env staging)
+    KINU_APP_ROOT="root"
     ;;
   *)
     echo -e "${RED}Unknown environment '$KINU_ENV'.${NC}"
@@ -503,11 +505,11 @@ fi
 
 if [ "$LIVE_STATUS" = "200" ]; then
   LIVE_HTML=$(curl -fsSL --max-time 15 "$KINU_URL" 2>/dev/null || true)
-  if grep -q 'id="landing-root"' <<< "$LIVE_HTML" \
+  if grep -q "id=\"$KINU_APP_ROOT\"" <<< "$LIVE_HTML" \
     && grep -q '<script type="module"' <<< "$LIVE_HTML"; then
-    echo -e "${GREEN}✅ Kinu live site serves the landing application shell${NC}"
+    echo -e "${GREEN}✅ Kinu live site serves the application shell${NC}"
   else
-    echo -e "${RED}❌ Kinu live site returned 200 without the landing application shell${NC}"
+    echo -e "${RED}❌ Kinu live site returned 200 without the application shell${NC}"
     SMOKE_FAIL=1
   fi
 fi
