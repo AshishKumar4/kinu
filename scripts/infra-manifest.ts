@@ -359,13 +359,6 @@ export const UNCAPTURED: readonly Uncaptured[] = [
  * is not in a list is indistinguishable from a pass.
  */
 export const UNOBSERVABLE = new Map<string, string>([
-  ['cron.kinu */15 * * * *',
-    'wrangler 4.97 can WRITE a Worker\'s triggers (`wrangler triggers deploy`) and has no command '
-    + 'that reads them back; `deployments status` and `versions view` carry bindings and no '
-    + 'schedule. `wrangler deploy` sets it from `triggers.crons` on every deploy, so it is '
-    + 'reconciled rather than drifting — but nothing here can say so. Check it in the dashboard '
-    + 'under the Worker\'s Settings → Triggers, or by watching for a MonitorDO probe within 15 '
-    + 'minutes of a deploy.'],
   ['ai-gateway.kinu-ai-gateway',
     'wrangler 4.97 exposes no `ai-gateway` command and the wrangler OAuth session has no `aig` '
     + 'scope (403 code 10000 against the REST API, measured 2026-08-18). Check it in the '
