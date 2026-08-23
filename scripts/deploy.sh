@@ -143,15 +143,16 @@ run_required_gate() {
   GATE_CMDS+=("$*")
 }
 
-# How many at once. Derived from the machine rather than declared, because it is
-# a property of the box and not a policy. Halved against the thread count: the
-# heavy members are test suites that already use more than one thread each, and
-# at full width they contend instead of overlapping (measured 2026-08-21 —
-# nproc=24: 12 jobs 96s, 24 jobs 103s).
+# Each heavy gate runs Bun with up to four workers. One outer process per four
+# hardware threads keeps the aggregate at the machine's thread count. The old
+# half-thread rule launched 12 outer gates and up to 48 inner workers here.
+# Measured 2026-08-23: that wave turned a 23.67s CLI file into a 173.54s run
+# and produced nine false timeout failures. Six outer gates keep all 24 threads
+# available without oversubscribing them.
 gate_jobs() {
   local threads
   threads="$(nproc 2>/dev/null || echo 4)"
-  echo "${KINU_DEPLOY_JOBS:-$(( threads / 2 > 0 ? threads / 2 : 1 ))}"
+  echo "${KINU_DEPLOY_JOBS:-$(( threads / 4 > 0 ? threads / 4 : 1 ))}"
 }
 
 # A gate that cannot exit is a failure, not an infinite deploy. The slowest
