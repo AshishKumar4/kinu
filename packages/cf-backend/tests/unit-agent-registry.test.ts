@@ -1,4 +1,4 @@
-import { generateText } from 'ai';
+import { generateText, streamText } from 'ai';
 import { describe, test, expect } from 'bun:test';
 import { userCredentialSource } from './helpers/user-credentials';
 import { readFileSync } from 'node:fs';
@@ -90,12 +90,15 @@ describe('AgentProviderRegistry composition', () => {
     };
     const reg = createAgentProviderRegistry({ env, userDO: fakeUserDOStub() });
     expect(await reg.registry.get('workers-ai')!.isAvailable(reg.deps)).toBe(true);
-    const result = await generateText({
-      model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6'),
-      prompt: 'reply',
-    });
-    expect(result.text).toBe('direct binding');
-    expect(calls).toEqual(['@cf/moonshotai/kimi-k2.6']);
+    const model = reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6');
+    const generated = await generateText({ model, prompt: 'reply' });
+    expect(generated.text).toBe('direct binding');
+    const streamed = streamText({ model, prompt: 'reply again' });
+    expect(await streamed.text).toBe('direct binding');
+    expect(calls).toEqual([
+      '@cf/moonshotai/kimi-k2.6',
+      '@cf/moonshotai/kimi-k2.6',
+    ]);
   });
 
   test('normalizeSpecSync — catalog-shaped ids pass through, malformed ids throw', () => {

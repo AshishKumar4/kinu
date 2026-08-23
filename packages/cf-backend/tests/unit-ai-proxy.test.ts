@@ -42,6 +42,7 @@ function setupEnv(opts: {
   token?: string;
   freshToken?: string;
   evalService?: boolean;
+  directOutput?: JsonObject;
 } = {}) {
   const gatewayId = opts.gatewayId === undefined ? 'my-gw' : opts.gatewayId;
   const token = opts.token ?? 'cf-user';
@@ -88,7 +89,7 @@ function setupEnv(opts: {
     const ai = {
       async run(model: string, inputs: JsonObject) {
         directRuns.push({ model, inputs });
-        return {
+        return opts.directOutput ?? {
           response: 'ok',
           usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
         };
@@ -219,6 +220,36 @@ describe('AI proxy model → upstream selection', () => {
         stream: false,
       },
     }]);
+  });
+
+  test('OpenAI-shaped binding output becomes a complete SSE response', async () => {
+    const { env } = setupEnv({
+      evalService: true,
+      directOutput: {
+        id: 'chatcmpl-direct',
+        object: 'chat.completion',
+        created: 1,
+        model: '@cf/moonshotai/kimi-k2.6',
+        choices: [{
+          index: 0,
+          message: { role: 'assistant', content: 'streamed' },
+          finish_reason: 'stop',
+        }],
+        usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
+      },
+    });
+    const res = await handleCliRequest(chatRequest(AI_TOKEN, {
+      model: '@cf/moonshotai/kimi-k2.6',
+      messages: [{ role: 'user', content: 'ping' }],
+      stream: true,
+    }), env);
+    expect(res?.status).toBe(200);
+    expect(res?.headers.get('content-type')).toBe('text/event-stream');
+    const body = await res?.text();
+    expect(body).toContain('"content":"streamed"');
+    expect(body).toContain('"finish_reason":"stop"');
+    expect(body).toContain('"prompt_tokens":2');
+    expect(body).toContain('data: [DONE]');
   });
 
   test('{author}/{model} ids ride the AI Gateway credential with cf-aig-gateway-id', async () => {
