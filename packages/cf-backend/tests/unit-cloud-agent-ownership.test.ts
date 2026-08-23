@@ -114,12 +114,10 @@ describe('cloud agent ownership safety', () => {
         suggestDisplayName: async () => 'React Hello World',
       });
 
-      // The slug is the DO name and the URL — permanent. It carries the
-      // mission's own words plus an id suffix, so the address says what the
-      // workspace is for; the memorable adjective-noun pair is only for a
-      // mission with no usable words. The owner reported that pair four times
-      // between 2026-07-13 and 2026-08-16 while this assertion demanded it.
-      expect(entry.name).toMatch(/^build-a-hello-world-app-[0-9a-f]{8}$/);
+      // The slug is a permanent URL and Durable Object name. It remains
+      // neutral; mission text is confined to the editable display name.
+      expect(entry.name).toMatch(/^[a-z]+-[a-z]+-[0-9a-f]{8}$/);
+      expect(entry.name).not.toContain('hello');
       expect(entry.displayName).toBe('Build a hello world app in react');
       expect(calls).toContain(`claim:${USER_ID}`);
       expect(calls).toContain('initial-title:Build a hello world app in react:auto');

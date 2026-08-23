@@ -17,7 +17,7 @@ describe('CLI mission workspace names', () => {
     );
 
     expect(identity).toEqual({
-      name: workspaceSlug('Build a benchmark for Rust web frameworks', 'abcdef123456'),
+      name: workspaceSlug('abcdef123456'),
       displayName: 'Rust Framework Benchmark',
       nameOrigin: 'auto',
     });
@@ -65,14 +65,14 @@ describe('CLI mission workspace names', () => {
     );
 
     expect(createdInput).toEqual({
-      name: workspaceSlug('Build a benchmark for Rust web frameworks', 'abcdef123456'),
+      name: workspaceSlug('abcdef123456'),
       displayName: 'Rust Framework Benchmark',
       purpose: 'Build a benchmark for Rust web frameworks',
       model: 'openai/gpt-5-mini',
       reasoningEffort: 'high',
     });
     expect(created).toMatchObject({
-      name: workspaceSlug('Build a benchmark for Rust web frameworks', 'abcdef123456'),
+      name: workspaceSlug('abcdef123456'),
       displayName: 'Rust Framework Benchmark',
     });
   });

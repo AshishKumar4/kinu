@@ -190,8 +190,10 @@ describe('toolCallEffect — consequence controls activity density', () => {
     expect(toolCallEffect('tasks', { action: 'update', id: 't3', status: 'done' })).toBe('mutate');
     expect(toolCallEffect('memory', { action: 'remember', key: 'deploy.target' })).toBe('mutate');
     expect(toolCallEffect('agents', { action: 'swarm', task: 'audit it' })).toBe('mutate');
-  });
+    expect(toolCallEffect('tasks', { action: 'mode', stance: 'build' })).toBe('mutate');
+    expect(toolCallEffect('tasks', { action: 'mode' })).toBe('observe');
 
+  });
   test('known observations collapse into the compact timeline', () => {
     expect(toolCallEffect('file', { action: 'read', path: '/workspace/report.md' })).toBe('observe');
     expect(toolCallEffect('web', { action: 'fetch', url: 'https://example.com' })).toBe('observe');

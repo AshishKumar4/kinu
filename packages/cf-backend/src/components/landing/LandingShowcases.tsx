@@ -80,7 +80,6 @@ function WorkspacePreview(): ReactElement {
                     message={message}
                     isLast={index === WORKSPACE_DEMO_MESSAGES.length - 1}
                     isStreaming={false}
-                    onFork={() => {}}
                   />
                 ))}
               </div>
