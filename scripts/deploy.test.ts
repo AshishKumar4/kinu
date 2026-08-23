@@ -343,11 +343,31 @@ describe("CLI source archive", () => {
       { stdout: "pipe", stderr: "pipe" },
     );
     expect(lockResult.exitCode, decoder.decode(lockResult.stderr)).toBe(0);
+
+    const extracted = join(directory, "extracted");
+    mkdirSync(extracted);
+    const unpack = Bun.spawnSync(
+      ["tar", "-xzf", archive, "-C", extracted],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    expect(unpack.exitCode, decoder.decode(unpack.stderr)).toBe(0);
+    const sourceRoot = join(extracted, "kinu");
+    const install = Bun.spawnSync(
+      [process.execPath, "install", "--frozen-lockfile"],
+      { cwd: sourceRoot, stdout: "pipe", stderr: "pipe" },
+    );
+    expect(install.exitCode, decoder.decode(install.stderr)).toBe(0);
+    const launch = Bun.spawnSync(
+      [process.execPath, "packages/cli/bin/cli.ts", "--version"],
+      { cwd: sourceRoot, stdout: "pipe", stderr: "pipe" },
+    );
+    expect(launch.exitCode, decoder.decode(launch.stderr)).toBe(0);
+    expect(decoder.decode(launch.stdout)).toMatch(/^0\.2\.0\+/);
     const lock = decoder.decode(lockResult.stdout);
 
     for (const patchPath of patchPaths) {
       expect(members.has(`kinu/${patchPath}`), `archive omitted ${patchPath}`).toBe(true);
       expect(lock, `archive lock stopped naming ${patchPath}`).toContain(patchPath);
     }
-  });
+  }, 120_000);
 });
