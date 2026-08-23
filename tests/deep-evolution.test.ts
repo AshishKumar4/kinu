@@ -15,7 +15,6 @@ import * as v from 'valibot';
 
 import {
   EvolutionEngine,
-  buildBuiltinTools,
   initWorkspaceSchema,
   readSoul,
   JsonObjectSchema,
@@ -29,7 +28,7 @@ import {
 import { createWorkspace } from '../packages/core/src/identity/index';
 import { openWorkspaceCLI } from '../packages/cli-backend/src/open';
 import { makeWorkspaceSchemaSql } from '../packages/cli-backend/src/runtime';
-import { requireSandboxedExecutors } from './evals/harness';
+import { buildLiveLocalTools, requireSandboxedExecutors } from './evals/harness';
 import {
   finalIntegerAnswer,
   liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, UNCONFIGURED_LLM,
@@ -167,7 +166,7 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
 
     events = [];
     engine = new EvolutionEngine(rt, { enabled: true });
-    tools = buildBuiltinTools({ rt });
+    tools = buildLiveLocalTools(rt);
     engine.onEvent(e => events.push(e));
 
     model = liveChatModel(LLM_CONFIG);

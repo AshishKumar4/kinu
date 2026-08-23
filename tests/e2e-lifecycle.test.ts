@@ -32,7 +32,6 @@ import * as v from 'valibot';
 import {
   collectStepText,
   EvolutionEngine,
-  buildBuiltinTools,
   initWorkspaceSchema,
   type AgentRuntime,
   type LLMProviderConfig,
@@ -50,7 +49,7 @@ import {
 import { createWorkspace, openWorkspace } from '../packages/core/src/identity/index';
 import { openWorkspaceCLI } from '../packages/cli-backend/src/open';
 import { makeWorkspaceSchemaSql } from '../packages/cli-backend/src/runtime';
-import { requireSandboxedExecutors } from './evals/harness';
+import { buildLiveLocalTools, requireSandboxedExecutors } from './evals/harness';
 import {
   liveChatModel, liveModelCallSink, liveModelTarget, recordLiveModelEpisode,
   recordLiveModelSpend, reportLiveModelSpend, UNCONFIGURED_LLM,
@@ -214,7 +213,7 @@ describe('E2E Lifecycle', () => {
     requireSandboxedExecutors('e2e-lifecycle', rt);
     events = [];
     engine = new EvolutionEngine(rt, { enabled: true });
-    tools = buildBuiltinTools({ rt });
+    tools = buildLiveLocalTools(rt);
     engine.onEvent(e => events.push(e));
     turns = [];
 

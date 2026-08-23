@@ -15,7 +15,6 @@ import { generateText, stepCountIs, type LanguageModel, type ToolSet, type StepR
 import * as v from 'valibot';
 
 import {
-  buildBuiltinTools,
   BUILTIN_TOOLS,
   collectStepText,
   initWorkspaceSchema,
@@ -30,9 +29,10 @@ import {
 import { createWorkspace, openWorkspace } from '../packages/core/src/identity/index';
 import { openWorkspaceCLI } from '../packages/cli-backend/src/open';
 import { makeWorkspaceSchemaSql } from '../packages/cli-backend/src/runtime';
-import { requireSandboxedExecutors } from './evals/harness';
+import { buildLiveLocalTools, requireSandboxedExecutors } from './evals/harness';
 import {
-  liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, UNCONFIGURED_LLM,
+  liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, toolExecute,
+  UNCONFIGURED_LLM,
 } from '@kinu.run/test-utils';
 
 // Proof against a real model, so a target is required. `liveModelTarget` states
@@ -147,7 +147,7 @@ describe('E2E Full Lifecycle', () => {
     ({ rt } = await openWorkspaceCLI(db, DB_PATH, { llm: LLM_CONFIG, hostRoot: null }));
     requireSandboxedExecutors('e2e-full-lifecycle', rt);
 
-    tools = buildBuiltinTools({ rt });
+    tools = buildLiveLocalTools(rt);
     model = liveChatModel(LLM_CONFIG);
     agentId = rt.identity.id;
     agentName = rt.identity.name;
@@ -190,12 +190,9 @@ describe('E2E Full Lifecycle', () => {
 
   // ── Step 2: Verify tools ─────────────────────────────────────
 
-  // buildBuiltinTools is dep-gated: a tool appears only when the backend
-  // supplied what it needs (skills store, facts store, agents fork/team/peer
-  // deps...). This runtime wires only `rt`, so the assertion is
-  // that the surface is exactly what those deps earn — never a stray name,
-  // and never a tool whose backend is absent.
-  test('2. buildBuiltinTools returns the dep-gated subset, all of it canonical', () => {
+  // The direct-generate eval uses the same execute_tools factory as the local
+  // session. Optional tools still appear only when their dependencies exist.
+  test('2. the live tool surface is canonical and executable', async () => {
     const names = Object.keys(tools);
     // `toContain` will not match a plain `string` against BUILTIN_TOOLS' literal
     // union element type. Widening by assignment rather than by assertion — the
@@ -207,6 +204,12 @@ describe('E2E Full Lifecycle', () => {
       expect(names).not.toContain(ungated);
     }
     console.log(`  Tools: ${names.join(', ')}`);
+    const execute = tools.execute_tools;
+    if (!execute) throw new Error('execute_tools is absent');
+    const result = await toolExecute<{ code: string }, unknown>(execute)({
+      code: 'return 6 * 7;',
+    });
+    expect(JSON.stringify(result)).toContain('42');
   });
 
   // ── Step 3: Chat turn 1 — simple, no tools ──────────────────

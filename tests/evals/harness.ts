@@ -46,23 +46,33 @@
 import { Database } from 'bun:sqlite';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import type { LanguageModel } from 'ai';
+import type { LanguageModel, ToolSet } from 'ai';
 import type { JsonValue } from '@vitest-evals/core';
 
 import type {
   AgentRuntime, EvalCase, LLMProviderConfig, RunEvent, SeekCursor, Shell,
 } from '../../packages/core/src/index';
 import {
-  RunEventRecorder, initWorkspaceSchema, listRuns,
+  RunEventRecorder, buildBuiltinTools, initWorkspaceSchema, listRuns,
 } from '../../packages/core/src/index';
 import { createWorkspace } from '../../packages/core/src/identity/index';
 import { LocalAgentSession } from '../../packages/cli-backend/src/local-session';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import { makeSql, makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime';
+import { createNodeExecuteToolFactory } from '../../packages/cli-backend/src/execute-tools-factory';
 import {
   hardTaskFor, recordLiveModelEpisode, scoreTrajectory, seedHardTask, verifyHardTask,
   type EvalArmState, type EvalScoreRow, type HardTask,
 } from '@kinu.run/test-utils';
+
+/** Production-shaped tools for live tests that drive `generateText` directly
+ * instead of going through `LocalAgentSession`, which wires this internally. */
+export function buildLiveLocalTools(rt: AgentRuntime): ToolSet {
+  return buildBuiltinTools({
+    rt,
+    createExecuteTool: createNodeExecuteToolFactory(),
+  });
+}
 
 /**
  * What one task run produced, as the WIRE shape a judge receives.
