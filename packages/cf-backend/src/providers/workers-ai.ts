@@ -3,12 +3,12 @@
 // the Worker's direct AI binding; staging uses this for the isolated
 // eval-service account.
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { createWorkersAI, type WorkersAI } from 'workers-ai-provider';
 import type { LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo } from '@kinu.run/core';
 import { DEFAULT_WORKERS_AI_MODEL_ID, listModelsDevProviderModels } from '@kinu.run/core';
 import { CLOUDFLARE_OAUTH_CRED_KEY } from '../lib/cloudflare-oauth';
 import { createCloudflareAIFetch } from './cloudflare-ai-fetch';
+import { createDirectWorkersAIFetch } from './direct-workers-ai-fetch';
 import {
   WORKERS_AI_FALLBACK_MODEL_CATALOG,
   WORKERS_AI_PREFERRED_MODEL_IDS,
@@ -18,7 +18,6 @@ export interface WorkersAIOptions {
   /** Prefix-cache affinity key — routes same-key requests to the same replica. */
   sessionAffinity?: string;
 }
-type DirectWorkersAIModelId = Parameters<WorkersAI>[0];
 
 export function createWorkersAIProvider(
   opts: WorkersAIOptions = {},
@@ -40,13 +39,11 @@ export function createWorkersAIProvider(
     }),
     createModel(modelId, deps): LanguageModel {
       if (developmentBinding) {
-        // SAFETY: `normalizeSpecSync` checked the `workers-ai` provider prefix.
-        // The dynamic Cloudflare catalog supplies the remaining `@cf/*` id.
-        const directModelId = modelId as DirectWorkersAIModelId;
-        return createWorkersAI({ binding: developmentBinding })(
-          directModelId,
-          opts.sessionAffinity ? { sessionAffinity: opts.sessionAffinity } : {},
-        );
+        return createOpenAICompatible({
+          name: 'workers-ai',
+          baseURL: 'https://kinu-direct-workers-ai.invalid',
+          fetch: createDirectWorkersAIFetch(developmentBinding),
+        }).chatModel(modelId);
       }
       const placeholder = 'https://kinu-workers-ai.invalid';
       const customFetch = createCloudflareAIFetch({
