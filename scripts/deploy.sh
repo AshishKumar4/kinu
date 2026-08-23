@@ -501,6 +501,17 @@ else
   SMOKE_FAIL=1
 fi
 
+if [ "$LIVE_STATUS" = "200" ]; then
+  LIVE_HTML=$(curl -fsSL --max-time 15 "$KINU_URL" 2>/dev/null || true)
+  if grep -q 'id="landing-root"' <<< "$LIVE_HTML" \
+    && grep -q '<script type="module"' <<< "$LIVE_HTML"; then
+    echo -e "${GREEN}✅ Kinu live site serves the landing application shell${NC}"
+  else
+    echo -e "${RED}❌ Kinu live site returned 200 without the landing application shell${NC}"
+    SMOKE_FAIL=1
+  fi
+fi
+
 
 # One GET that answers "did my deploy land?". /api/health reads its build stamp
 # out of the deployed asset bundle, so a mismatch here also means the CLI

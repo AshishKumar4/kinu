@@ -324,13 +324,25 @@ printf 'tier             %5ds\n' \
 echo "──────────────────────────────────────────────────────────"
 
 echo
-# EACH SINGLE-FAMILY ARM'S OWN LIVENESS, before the tier-wide one, because the
-# tier-wide one cannot fail on any single arm's behalf: the totals below are summed
-# across every suite, so a silent arm hides behind whatever the behaviour arm spent.
-# `--expect-live` comes from the SAME `EXPECT_LIVE` the banner printed — one target
-# resolution, so the line a reader saw and the assertion each arm is held to cannot
-# disagree — and with no target it is absent, which keeps the reproduce-anywhere
-# path intact: no credential, no calls, nothing to prove, exit 0.
+# EACH ARM'S OWN LIVENESS, before the tier-wide one. A tier-wide total cannot
+# fail on one arm's behalf because another arm's spend can hide it. The same
+# `EXPECT_LIVE` value controls the banner and every assertion.
+echo "── bun suites arm ─────────────────────────────────────────"
+BUN_SPEND_ARGS=("$SPEND_BUN")
+if [[ $EXPECT_LIVE -eq 1 ]]; then BUN_SPEND_ARGS+=(--expect-live); fi
+bun scripts/eval-spend.ts "${BUN_SPEND_ARGS[@]}"
+BUN_SPEND_STATUS=$?
+echo "──────────────────────────────────────────────────────────"
+
+echo
+echo "── behaviour evals arm ────────────────────────────────────"
+EVALS_SPEND_ARGS=("$SPEND_EVALS")
+if [[ $EXPECT_LIVE -eq 1 ]]; then EVALS_SPEND_ARGS+=(--expect-live); fi
+bun scripts/eval-spend.ts "${EVALS_SPEND_ARGS[@]}"
+EVALS_SPEND_STATUS=$?
+echo "──────────────────────────────────────────────────────────"
+
+echo
 echo "── live swarm arm ────────────────────────────────────────"
 SWARM_SPEND_ARGS=("$SPEND_SWARM")
 if [[ $EXPECT_LIVE -eq 1 ]]; then SWARM_SPEND_ARGS+=(--expect-live); fi
@@ -376,6 +388,14 @@ if [[ $RATCHET_STATUS -ne 0 ]]; then exit "$RATCHET_STATUS"; fi
 # The per-arm verdicts before the tier-wide one: "the research arm reached no model"
 # is a sharper sentence than "the tier reached no model", and each is the only one
 # a paid behaviour arm cannot mask.
+if [[ $BUN_SPEND_STATUS -ne 0 ]]; then
+  echo "eval-tier: the bun suites arm proved no liveness (exit $BUN_SPEND_STATUS)" >&2
+  exit "$BUN_SPEND_STATUS"
+fi
+if [[ $EVALS_SPEND_STATUS -ne 0 ]]; then
+  echo "eval-tier: the behaviour evals arm proved no liveness (exit $EVALS_SPEND_STATUS)" >&2
+  exit "$EVALS_SPEND_STATUS"
+fi
 if [[ $SWARM_SPEND_STATUS -ne 0 ]]; then
   echo "eval-tier: the live swarm arm proved no liveness (exit $SWARM_SPEND_STATUS)" >&2
   exit "$SWARM_SPEND_STATUS"
