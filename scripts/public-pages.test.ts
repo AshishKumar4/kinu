@@ -213,6 +213,22 @@ beforeAll(async () => {
       await page.waitForFunction(
         () => document.querySelector('[data-decision-state]')?.getAttribute('data-decision-state') === 'retried',
       );
+      expect(await page.evaluate(() => {
+        const root = document.querySelector('[data-tui-session]');
+        return [...(root?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
+          .some((button) => button.textContent?.includes('Jarvis') === true);
+      })).toBe(false);
+      await page.evaluate(() => {
+        const root = document.querySelector('[data-tui-session]');
+        const workspaces = [...(root?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
+          .find((button) => button.textContent?.includes('Ctrl+O workspaces') === true);
+        workspaces?.click();
+      });
+      await page.waitForFunction(() => {
+        const root = document.querySelector('[data-tui-session]');
+        return [...(root?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
+          .some((button) => button.textContent?.includes('Jarvis') === true);
+      });
       await page.evaluate(() => {
         const root = document.querySelector('[data-tui-session]');
         const jarvis = [...(root?.querySelectorAll<HTMLButtonElement>('button') ?? [])]

@@ -179,8 +179,8 @@ function TuiPreview(): ReactElement {
     },
   } as const;
   type SessionId = keyof typeof sessions;
-  const sessionIds: SessionId[] = ['checkout', 'migration', 'jarvis'];
   const [sessionId, setSessionId] = useState<SessionId>('checkout');
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const session = sessions[sessionId];
   const selectClass = (id: SessionId): string => (
     id === sessionId
@@ -200,20 +200,20 @@ function TuiPreview(): ReactElement {
           <span>{session.workspace}</span>
           <span className="inline-flex items-center gap-2 p-gold"><span className="size-1.5 rounded-full p-dot-accent motion-safe:animate-pulse" />{session.state}</span>
         </div>
-        <div className="hidden items-center gap-4 sm:flex"><span>{session.location}</span><span>Claude Opus 4</span><span>main</span></div>
+        <div className="flex items-center gap-3">
+          <div className="hidden items-center gap-4 sm:flex"><span>{session.location}</span><span>Claude Opus 4</span><span>main</span></div>
+          <button type="button" onClick={() => setDrawerOpen((open) => !open)} className="rounded-md border p-border px-2 py-1 p-text-3 hover:p-text">Ctrl+O workspaces</button>
+        </div>
       </div>
-      <div className="flex overflow-x-auto border-b border-[var(--c-border-strong)] bg-[var(--c-bg)] p-2 font-mono text-[10px] md:hidden">
-        {sessionIds.map((id) => <button type="button" key={id} onClick={() => setSessionId(id)} className={`shrink-0 rounded-full px-3 py-1.5 ${id === sessionId ? 'p-accent-subtle p-gold' : 'p-text-4'}`}>{sessions[id].label}</button>)}
-      </div>
-      <div className="grid min-h-[600px] grid-cols-1 md:grid-cols-[220px_minmax(0,1fr)]">
-        <aside className="hidden border-r border-[var(--c-border-strong)] bg-[var(--c-bg)] px-3 py-4 font-mono md:block">
+      <div className="relative min-h-[600px]">
+        {drawerOpen && <aside className="absolute inset-y-0 left-0 z-20 w-[220px] border-r border-[var(--c-border-strong)] bg-[var(--c-bg)] px-3 py-4 font-mono shadow-xl">
           <div className="mx-2 mb-2 text-[10px] uppercase tracking-[.16em] p-text-4">Local workspaces</div>
-          <button type="button" onClick={() => setSessionId('checkout')} className={`block w-full px-3 py-2 text-left text-xs ${selectClass('checkout')}`}>checkout audit</button>
-          <button type="button" onClick={() => setSessionId('migration')} className={`block w-full px-3 py-2 text-left text-xs ${selectClass('migration')}`}>migration review</button>
+          <button type="button" onClick={() => { setSessionId('checkout'); setDrawerOpen(false); }} className={`block w-full px-3 py-2 text-left text-xs ${selectClass('checkout')}`}>checkout audit</button>
+          <button type="button" onClick={() => { setSessionId('migration'); setDrawerOpen(false); }} className={`block w-full px-3 py-2 text-left text-xs ${selectClass('migration')}`}>migration review</button>
           <div className="mx-2 mb-2 mt-6 text-[10px] uppercase tracking-[.16em] p-text-4">Cloud workspaces</div>
-          <button type="button" onClick={() => setSessionId('jarvis')} className={`flex w-full items-center justify-between px-3 py-2 text-left text-xs ${selectClass('jarvis')}`}><span>Jarvis</span><span className="p-success">live</span></button>
-        </aside>
-        <div className="flex min-w-0 flex-col font-mono text-xs leading-[1.65]">
+          <button type="button" onClick={() => { setSessionId('jarvis'); setDrawerOpen(false); }} className={`flex w-full items-center justify-between px-3 py-2 text-left text-xs ${selectClass('jarvis')}`}><span>Jarvis</span><span className="p-success">live</span></button>
+        </aside>}
+        <div className="flex min-h-[600px] min-w-0 flex-col font-mono text-xs leading-[1.65]">
           <div className="flex-1 overflow-hidden px-4 py-5 sm:px-7 sm:py-6">
             <div className="mb-5 grid grid-cols-[52px_minmax(0,1fr)] gap-3">
               <span className="text-[10px] uppercase tracking-[.12em] p-gold">you</span>

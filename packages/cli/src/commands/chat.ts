@@ -62,6 +62,17 @@ export async function chatCommand(name: string | undefined, opts: {
     await runChatLoop({ client });
   } else {
     const { runTuiChat } = await import('../tui/chat-app');
-    await runTuiChat({ client, hydrateHistory });
+    await runTuiChat({
+      client,
+      hydrateHistory,
+      onWorkspaceSelect: async (selectedName) => {
+        if (!resolveAgentRef(selectedName) && !existsSync(agentDbPath(selectedName))) {
+          throw new Error(`Workspace "${selectedName}" is no longer available.`);
+        }
+        const selectedTarget = resolveAgentTarget(selectedName);
+        if (selectedTarget.mode === 'local') ensureLocalDaemonRunning();
+        return createAgentClient(selectedTarget, opts);
+      },
+    });
   }
 }

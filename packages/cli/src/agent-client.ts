@@ -4,7 +4,7 @@
  * LocalAgentClient over LocalAgentSession and CloudAgentClient over the
  * OrchestratorAgent DO websocket. UIs never branch on backend; anything only
  * one backend supports is exposed through the capability surfaces below
- * (`consents`, `localControls`, `checkpoints`) and is null elsewhere.
+ * (`consents`, `localControls`, `checkpoints`, `sessionHistory`) and is null elsewhere.
  */
 
 import { JsonObjectSchema } from '@kinu.run/core';
@@ -244,6 +244,14 @@ export interface LocalSessionControls {
   listModelProviders(): Promise<Array<{ id: string; available: boolean; unavailableReason?: string }>>;
 }
 
+/** Capability surface: recorded terminal sessions that restore the same
+ * durable conversation when selected. Cloud chat lives in one DO transcript,
+ * so a cloud client does not expose this until the server can restore one. */
+export interface SessionHistorySurface {
+  list(): CliSessionInfo[];
+  resume(sessionRef: string): Promise<void>;
+}
+
 export interface AgentClient {
   readonly mode: AgentClientMode;
   readonly agentName: string;
@@ -252,6 +260,7 @@ export interface AgentClient {
   readonly consents: DeviceConsentSurface | null;
   readonly localControls: LocalSessionControls | null;
   readonly checkpoints: FileCheckpointSurface | null;
+  readonly sessionHistory: SessionHistorySurface | null;
   /** Per-message aggregate cap on raw bytes this backend will accept inlined
    *  as data-URL file parts. A storage row limit on the cloud, a provider
    *  request budget locally — the two numbers differ by 8×, so the chat
@@ -300,11 +309,6 @@ export interface AgentClient {
   /** Canonical conversation history: the DO chat projection for cloud, the
    *  recorded terminal transcript for local. */
   history(): Promise<AgentTranscriptMessage[]>;
-  /** Recorded terminal sessions for this agent (local JSONL logs). */
-  listSessions(): CliSessionInfo[];
-  /** Re-point the client at a recorded session: swaps the JSONL log and, for
-   *  local agents, the durable conversation. */
-  resumeConversation(sessionRef: string): Promise<void>;
 
   status(): Promise<AgentClientStatus>;
   describeTools(): Promise<AgentToolSurface>;

@@ -1,9 +1,11 @@
-import type { SelectOption, SelectRenderable } from '@opentui/core';
+import type { KeyEvent, SelectOption, SelectRenderable } from '@opentui/core';
 import { useState, useEffect, useRef, type ReactNode } from 'react';
 import { formatContextWindow, type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry } from '@kinu.run/core';
 import { takeEvidence } from '@kinu.run/core';
-import type { SlashCommandInfo } from '../slash-commands';
+import { filterCommands, type SlashCommandInfo } from '../slash-commands';
+import type { ListedAgent } from '../agent-list';
 import { filterModels, type AgentModelEntry } from '../model-catalog';
+import type { CliSessionInfo } from '../session';
 import type { ProviderFailure } from '@kinu.run/core';
 import type { AgentChangelogView, ForkPoint } from '../agent-client';
 import type { DeviceConnectPromptState } from './use-device-connect';
@@ -21,25 +23,26 @@ interface CommandHintProps {
   terminal: OverlayGeometry;
 }
 
-/** The palette's standing instructions — copy, so their width is floor, not filler. */
+/** The full-width palette instruction. Narrow frames use the compact form. */
 const FILTER_HINT = 'Type to filter · Enter runs a completed command';
+const COMPACT_FILTER_HINT = 'Type to filter · Enter runs';
 
 export function CommandHintOverlay({ commands, terminal }: CommandHintProps) {
   if (commands.length === 0) return null;
-  const paletteHeight = Math.min(commands.length + 3, 11);
+  const paletteHeight = Math.min(commands.length + 5, 11, Math.max(3, terminal.height - 2));
   const maxCommandRows = Math.max(1, paletteHeight - 5);
   const hiddenCount = Math.max(0, commands.length - maxCommandRows);
   const visibleCommands = hiddenCount > 0
-    ? commands.slice(0, Math.max(1, maxCommandRows - 1))
-    : commands;
+    ? commands.slice(0, Math.max(0, maxCommandRows - 1))
+    : commands.slice(0, maxCommandRows);
   const nameWidth = Math.min(
     18,
     Math.max(8, ...visibleCommands.map((command) => command.name.length)),
   );
-  const moreLine = hiddenCount > 0 ? `… ${hiddenCount + 1} more commands. Keep typing to filter.` : '';
-  // The width floor keeps the instructions whole and lets only the rows clip.
-  const copyWidth = Math.max(FILTER_HINT.length, moreLine.length);
-  const paletteWidth = boundedPaletteWidth(terminal, 0.46, Math.max(44, copyWidth + 4), 74);
+  const moreLine = hiddenCount > 0 ? `… ${hiddenCount} more commands. Keep typing to filter.` : '';
+  const filterHint = terminal.width < 52 ? COMPACT_FILTER_HINT : FILTER_HINT;
+  const copyWidth = Math.max(filterHint.length, moreLine.length);
+  const paletteWidth = boundedPaletteWidth(terminal, 0.46, Math.max(32, copyWidth + 4), 74);
   const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'lower');
   const innerWidth = Math.max(1, paletteWidth - 4);
   return (
@@ -51,7 +54,7 @@ export function CommandHintOverlay({ commands, terminal }: CommandHintProps) {
       top={position.top}
       dim={false}
     >
-      <PaletteLine text={FILTER_HINT} width={innerWidth} color={tuiColors.muted} />
+      <PaletteLine text={filterHint} width={innerWidth} color={tuiColors.muted} />
       {visibleCommands.map((command) => (
         <PaletteLine
           key={command.name}
@@ -64,6 +67,381 @@ export function CommandHintOverlay({ commands, terminal }: CommandHintProps) {
       {moreLine !== '' && (
         <PaletteLine text={moreLine} width={innerWidth} color={tuiColors.muted} />
       )}
+    </PaletteFrame>
+  );
+}
+
+
+interface PaletteSearchInputProps {
+  placeholder: string;
+  onInput: (value: string) => void;
+  selectRef: { current: SelectRenderable | null };
+  onExtraKey?: (event: KeyEvent) => boolean;
+}
+
+function PaletteSearchInput({
+  placeholder,
+  onInput,
+  selectRef,
+  onExtraKey,
+}: PaletteSearchInputProps) {
+  return (
+    <input
+      focused={true}
+      placeholder={placeholder}
+      onInput={onInput}
+      onKeyDown={(event) => {
+        if (event.name === 'up') selectRef.current?.moveUp();
+        else if (event.name === 'down') selectRef.current?.moveDown();
+        else if (event.name === 'return') selectRef.current?.selectCurrent();
+        else if (!onExtraKey?.(event)) return;
+        event.preventDefault();
+      }}
+      style={{
+        width: '100%',
+        backgroundColor: tuiColors.panelStrong,
+        textColor: tuiColors.text,
+        focusedBackgroundColor: tuiColors.panelStrong,
+        focusedTextColor: tuiColors.textStrong,
+        placeholderColor: tuiColors.muted,
+        cursorColor: tuiColors.accentStrong,
+      }}
+    />
+  );
+}
+interface CommandPaletteProps {
+  commands: readonly SlashCommandInfo[];
+  terminal: OverlayGeometry;
+  onSelect: (command: SlashCommandInfo) => void;
+}
+
+export function CommandPaletteOverlay({ commands, terminal, onSelect }: CommandPaletteProps) {
+  const [filter, setFilter] = useState('');
+  const selectRef = useRef<SelectRenderable | null>(null);
+  const filtered = filter.trim() === ''
+    ? commands
+    : filterCommands(commands, `/${filter.trim().replace(/^\//, '')}`);
+  const paletteWidth = boundedPaletteWidth(terminal, 0.58, 42, 78);
+  const paletteHeight = Math.min(
+    Math.max(filtered.length + 7, 10),
+    Math.max(3, terminal.height - 2),
+    20,
+  );
+  const innerWidth = Math.max(1, paletteWidth - 4);
+  const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
+  const options: SelectOption[] = filtered.map((command) => ({
+    name: clipText(`${command.name.padEnd(14)} ${command.description}`, innerWidth),
+    description: '',
+    value: command,
+  }));
+  return (
+    <PaletteFrame
+      title="Commands"
+      width={paletteWidth}
+      height={paletteHeight}
+      left={position.left}
+      top={position.top}
+      dim={true}
+    >
+      <PaletteLine text="Type to filter · ↑/↓ move · Enter insert · Esc close" width={innerWidth} color={tuiColors.muted} />
+      <PaletteSearchInput
+        placeholder="Filter commands…"
+        onInput={setFilter}
+        selectRef={selectRef}
+      />
+      {options.length === 0 ? (
+        <PaletteLine text={`No command matches "${filter.trim()}".`} width={innerWidth} color={tuiColors.muted} />
+      ) : (
+        <select
+          ref={selectRef}
+          focused={false}
+          options={options}
+          showDescription={false}
+          showScrollIndicator={true}
+          wrapSelection={true}
+          onSelect={(index) => {
+            const command = filtered[index];
+            if (command) onSelect(command);
+          }}
+          style={{
+            width: '100%',
+            flexGrow: 1,
+            backgroundColor: tuiColors.panel,
+            textColor: tuiColors.text,
+            selectedBackgroundColor: tuiColors.accentDeep,
+            selectedTextColor: tuiColors.textBright,
+          }}
+        />
+      )}
+    </PaletteFrame>
+  );
+}
+
+interface WorkspaceDrawerProps {
+  workspaces: readonly ListedAgent[];
+  current: string;
+  terminal: OverlayGeometry;
+  onSelect: (workspace: ListedAgent) => void;
+}
+
+/** Workspace navigation stays off-canvas until Ctrl+O opens this drawer. */
+export function WorkspaceDrawerOverlay({
+  workspaces,
+  current,
+  terminal,
+  onSelect,
+}: WorkspaceDrawerProps) {
+  const [filter, setFilter] = useState('');
+  const selectRef = useRef<SelectRenderable | null>(null);
+  const query = filter.trim().toLowerCase();
+  const filtered = query === ''
+    ? workspaces
+    : workspaces.filter((workspace) =>
+        `${workspace.label} ${workspace.name} ${workspace.mode}`.toLowerCase().includes(query));
+  const drawerWidth = Math.min(46, Math.max(24, Math.floor(terminal.width * 0.38)), Math.max(1, terminal.width - 2));
+  const drawerHeight = Math.max(3, terminal.height - 2);
+  const innerWidth = Math.max(1, drawerWidth - 4);
+  const options: SelectOption[] = filtered.map((workspace) => ({
+    name: clipText(
+      `${workspace.name === current ? '●' : ' '} ${workspace.label} · ${workspace.mode}`,
+      innerWidth,
+    ),
+    description: '',
+    value: workspace,
+  }));
+  const selectedIndex = clamp(
+    filtered.findIndex((workspace) => workspace.name === current),
+    0,
+    Math.max(0, options.length - 1),
+  );
+  useEffect(() => {
+    if (options.length > 0) selectRef.current?.setSelectedIndex(selectedIndex);
+  }, [filter, options.length, selectedIndex]);
+
+  return (
+    <PaletteFrame
+      title="Workspaces"
+      width={drawerWidth}
+      height={drawerHeight}
+      left={1}
+      top={1}
+      dim={true}
+    >
+      <PaletteLine
+        text="Type to filter · ↑/↓ move · Enter open · Ctrl+O close"
+        width={innerWidth}
+        color={tuiColors.muted}
+      />
+      <PaletteSearchInput
+        placeholder="Filter workspaces…"
+        onInput={setFilter}
+        selectRef={selectRef}
+      />
+      {options.length === 0 ? (
+        <PaletteLine
+          text={workspaces.length === 0 ? 'No workspaces. Exit to create one.' : `No match for "${filter.trim()}".`}
+          width={innerWidth}
+          color={tuiColors.muted}
+        />
+      ) : (
+        <select
+          ref={selectRef}
+          focused={false}
+          options={options}
+          selectedIndex={selectedIndex}
+          showDescription={false}
+          showScrollIndicator={true}
+          wrapSelection={true}
+          onSelect={(index) => {
+            const workspace = filtered[index];
+            if (workspace) onSelect(workspace);
+          }}
+          style={{
+            width: '100%',
+            flexGrow: 1,
+            backgroundColor: tuiColors.panel,
+            textColor: tuiColors.text,
+            selectedBackgroundColor: tuiColors.accentDeep,
+            selectedTextColor: tuiColors.textBright,
+          }}
+        />
+      )}
+      <PaletteLine text="Local and cloud use the same chat surface." width={innerWidth} color={tuiColors.muted} />
+    </PaletteFrame>
+  );
+}
+
+interface SessionPickerProps {
+  sessions: readonly CliSessionInfo[];
+  cwd: string;
+  terminal: OverlayGeometry;
+  onSelect: (session: CliSessionInfo) => void;
+}
+
+export function SessionPickerOverlay({ sessions, cwd, terminal, onSelect }: SessionPickerProps) {
+  const [scope, setScope] = useState<'folder' | 'all'>('folder');
+  const [filter, setFilter] = useState('');
+  const selectRef = useRef<SelectRenderable | null>(null);
+  const scoped = scope === 'folder' ? sessions.filter((session) => session.cwd === cwd) : sessions;
+  const query = filter.trim().toLowerCase();
+  const filtered = query === ''
+    ? scoped
+    : scoped.filter((session) =>
+        `${session.name ?? ''} ${session.firstUserText ?? ''} ${session.id} ${session.cwd}`
+          .toLowerCase()
+          .includes(query));
+  const paletteWidth = boundedPaletteWidth(terminal, 0.66, 44, 88);
+  const paletteHeight = Math.min(
+    Math.max(filtered.length + 7, 11),
+    Math.max(3, terminal.height - 2),
+    22,
+  );
+  const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
+  const innerWidth = Math.max(1, paletteWidth - 4);
+  const options: SelectOption[] = filtered.map((session) => {
+    const title = session.name ?? session.firstUserText ?? session.id;
+    const location = scope === 'all' ? ` · ${session.cwd}` : '';
+    return {
+      name: clipText(`${title} · ${session.entries} entries${location}`, innerWidth),
+      description: '',
+      value: session,
+    };
+  });
+  return (
+    <PaletteFrame
+      title={`Resume · ${scope === 'folder' ? 'current folder' : 'all folders'}`}
+      width={paletteWidth}
+      height={paletteHeight}
+      left={position.left}
+      top={position.top}
+      dim={true}
+    >
+      <PaletteLine text="Type to filter · ↑/↓ move · Enter resume · Tab scope · Esc close" width={innerWidth} color={tuiColors.muted} />
+      <PaletteSearchInput
+        placeholder="Filter conversations…"
+        onInput={setFilter}
+        selectRef={selectRef}
+        onExtraKey={(event) => {
+          if (event.name !== 'tab') return false;
+          setScope((current) => current === 'folder' ? 'all' : 'folder');
+          return true;
+        }}
+      />
+      {options.length === 0 ? (
+        <PaletteLine
+          text={scope === 'folder'
+            ? 'No conversations in this folder. Press Tab for all folders.'
+            : `No conversation matches "${filter.trim()}".`}
+          width={innerWidth}
+          color={tuiColors.muted}
+        />
+      ) : (
+        <select
+          ref={selectRef}
+          focused={false}
+          options={options}
+          showDescription={false}
+          showScrollIndicator={true}
+          wrapSelection={true}
+          onSelect={(index) => {
+            const session = filtered[index];
+            if (session) onSelect(session);
+          }}
+          style={{
+            width: '100%',
+            flexGrow: 1,
+            backgroundColor: tuiColors.panel,
+            textColor: tuiColors.text,
+            selectedBackgroundColor: tuiColors.accentDeep,
+            selectedTextColor: tuiColors.textBright,
+          }}
+        />
+      )}
+      <PaletteLine
+        text={`${filtered.length}/${sessions.length} conversations · selection stays within this workspace`}
+        width={innerWidth}
+        color={tuiColors.muted}
+      />
+    </PaletteFrame>
+  );
+}
+
+export interface TuiSettingChoice {
+  id: string;
+  group: string;
+  label: string;
+  value: string;
+  command: string;
+}
+
+interface SettingsOverlayProps {
+  settings: readonly TuiSettingChoice[];
+  terminal: OverlayGeometry;
+  onSelect: (setting: TuiSettingChoice) => void;
+}
+
+/** Settings writes stay on the existing slash-command/config paths. */
+export function SettingsOverlay({ settings, terminal, onSelect }: SettingsOverlayProps) {
+  const [filter, setFilter] = useState('');
+  const selectRef = useRef<SelectRenderable | null>(null);
+  const query = filter.trim().toLowerCase();
+  const filtered = query === ''
+    ? settings
+    : settings.filter((setting) =>
+        `${setting.group} ${setting.label} ${setting.value}`.toLowerCase().includes(query));
+  const paletteWidth = boundedPaletteWidth(terminal, 0.58, 42, 78);
+  const paletteHeight = Math.min(
+    Math.max(filtered.length + 7, 11),
+    Math.max(3, terminal.height - 2),
+    22,
+  );
+  const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
+  const innerWidth = Math.max(1, paletteWidth - 4);
+  const options: SelectOption[] = filtered.map((setting) => ({
+    name: clipText(`${setting.group} · ${setting.label.padEnd(22)} ${setting.value}`, innerWidth),
+    description: '',
+    value: setting,
+  }));
+  return (
+    <PaletteFrame
+      title="Settings"
+      width={paletteWidth}
+      height={paletteHeight}
+      left={position.left}
+      top={position.top}
+      dim={true}
+    >
+      <PaletteLine text="Type to filter · ↑/↓ move · Enter apply · Esc close" width={innerWidth} color={tuiColors.muted} />
+      <PaletteSearchInput
+        placeholder="Filter settings…"
+        onInput={setFilter}
+        selectRef={selectRef}
+      />
+      {options.length === 0 ? (
+        <PaletteLine text={`No setting matches "${filter.trim()}".`} width={innerWidth} color={tuiColors.muted} />
+      ) : (
+        <select
+          ref={selectRef}
+          focused={false}
+          options={options}
+          showDescription={false}
+          showScrollIndicator={true}
+          wrapSelection={true}
+          onSelect={(index) => {
+            const setting = filtered[index];
+            if (setting) onSelect(setting);
+          }}
+          style={{
+            width: '100%',
+            flexGrow: 1,
+            backgroundColor: tuiColors.panel,
+            textColor: tuiColors.text,
+            selectedBackgroundColor: tuiColors.accentDeep,
+            selectedTextColor: tuiColors.textBright,
+          }}
+        />
+      )}
+      <PaletteLine text="Changes use the same config path as slash commands." width={innerWidth} color={tuiColors.muted} />
     </PaletteFrame>
   );
 }
@@ -103,7 +481,7 @@ export function ModelPickerOverlay({ models, failures, currentSpec, terminal, lo
   });
   const failureLines = (failures ?? []).map((failure) =>
     `! ${failure.label ?? failure.provider} unavailable — ${failure.reason}`);
-  const paletteHeight = Math.min(Math.max(models.length + failureLines.length + 7, 11), Math.max(11, terminal.height - 6), 22);
+  const paletteHeight = Math.min(Math.max(models.length + failureLines.length + 7, 11), Math.max(3, terminal.height - 2), 22);
   const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
   const selectedIndex = clamp(filteredModels.findIndex((model) => model.spec === currentSpec), 0, Math.max(0, options.length - 1));
   useEffect(() => {
@@ -120,26 +498,10 @@ export function ModelPickerOverlay({ models, failures, currentSpec, terminal, lo
       dim={true}
     >
       <PaletteLine text="Type to filter · ↑/↓ move · Enter select · Esc close" width={innerWidth} color={tuiColors.muted} />
-      <input
-        focused={true}
+      <PaletteSearchInput
         placeholder="Filter models…"
         onInput={setFilter}
-        onKeyDown={(event) => {
-          if (event.name === 'up') selectRef.current?.moveUp();
-          else if (event.name === 'down') selectRef.current?.moveDown();
-          else if (event.name === 'return') selectRef.current?.selectCurrent();
-          else return;
-          event.preventDefault();
-        }}
-        style={{
-          width: '100%',
-          backgroundColor: tuiColors.panelStrong,
-          textColor: tuiColors.text,
-          focusedBackgroundColor: tuiColors.panelStrong,
-          focusedTextColor: tuiColors.textStrong,
-          placeholderColor: tuiColors.muted,
-          cursorColor: tuiColors.accentStrong,
-        }}
+        selectRef={selectRef}
       />
       {loading ? (
         <PaletteLine text="Loading models…" width={innerWidth} color={tuiColors.accent} />
@@ -206,7 +568,7 @@ export function WalkbackOverlay({ candidates, terminal, onSelect }: WalkbackOver
     description: '',
     value: candidate,
   }));
-  const paletteHeight = Math.min(Math.max(options.length + 6, 10), Math.max(10, terminal.height - 6), 18);
+  const paletteHeight = Math.min(Math.max(options.length + 6, 10), Math.max(3, terminal.height - 2), 18);
   const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
   return (
     <PaletteFrame
@@ -267,7 +629,7 @@ export function ChangelogOverlay({ view, terminal, onSelect }: ChangelogOverlayP
     description: clipText(`${entry.evidence}${entry.revert ? ' · Enter reverts' : ' · informational'}`, innerWidth),
     value: entry,
   }));
-  const paletteHeight = Math.min(Math.max(options.length * 2 + 6, 11), Math.max(11, terminal.height - 6), 24);
+  const paletteHeight = Math.min(Math.max(options.length * 2 + 6, 11), Math.max(3, terminal.height - 2), 24);
   const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
   return (
     <PaletteFrame
@@ -336,7 +698,7 @@ export function TakesOverlay({ set, terminal, onSelect }: TakesOverlayProps) {
     ),
     value: candidate,
   }));
-  const paletteHeight = Math.min(Math.max(options.length * 2 + 7, 12), Math.max(12, terminal.height - 6), 22);
+  const paletteHeight = Math.min(Math.max(options.length * 2 + 7, 12), Math.max(3, terminal.height - 2), 22);
   const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
   return (
     <PaletteFrame

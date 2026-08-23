@@ -150,10 +150,10 @@ describe('LocalAgentClient', () => {
     await client.send('first question');
     const originalId = client.cliSession.id;
 
-    const sessions = client.listSessions();
+    const sessions = client.sessionHistory.list();
     expect(sessions.map((session) => session.id)).toContain(originalId);
 
-    await client.resumeConversation(originalId);
+    await client.sessionHistory.resume(originalId);
     expect(client.cliSession.id).toBe(originalId);
     const history = await client.history();
     expect(history.map((message) => message.role)).toEqual(['user', 'assistant']);
@@ -246,7 +246,7 @@ describe('LocalAgentClient', () => {
     expect(result.client).toBe(client);
     expect(client.cliSession.id).not.toBe(originalSessionId);
     expect(result.label).toBe(`session ${client.cliSession.id}`);
-    expect(client.listSessions().some((session) => session.id === client.cliSession.id)).toBe(true);
+    expect(client.sessionHistory.list().some((session) => session.id === client.cliSession.id)).toBe(true);
 
     // The forked conversation keeps turn one but not the walked-back message.
     await client.send('third question');

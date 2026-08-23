@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { createHostCheckpoints } from '@kinu.run/cli-backend';
 import { DEFAULT_ADVISOR_MIN_SEVERITY } from '@kinu.run/core';
 import type { EvolutionConfigView, FileCheckpointEntry } from '@kinu.run/core';
-import { commandsForClient, executeSlashCommand, groupCheckpointsByTurn, performUndo } from '../src/slash-commands';
+import { commandsForClient, executeSlashCommand, filterCommands, groupCheckpointsByTurn, performUndo } from '../src/slash-commands';
 import type { AgentClient, FileCheckpointSurface } from '../src/agent-client';
 import { createCliSession } from '../src/session';
 
@@ -25,12 +25,12 @@ function inertCheckpointSurface(): FileCheckpointSurface {
 function slashClient(checkpoints: FileCheckpointSurface | null): AgentClient {
   const client: AgentClient = {
     mode: 'local', agentName: 'test', cliSession: createCliSession('test', { noSession: true }),
-    consents: null, localControls: null, checkpoints, inlineAttachmentLimitBytes: 1024,
+    consents: null, localControls: null, checkpoints, sessionHistory: null, inlineAttachmentLimitBytes: 1024,
     connect: async () => {}, subscribe: () => () => {},
     send: async () => ({ text: '', toolCalls: [], steps: 0, durationMs: 0, hadError: false }),
     steer: () => false, branch: () => false,
     fork: async () => ({ client, label: 'test' }), stop: () => [], close: async () => {},
-    history: async () => [], listSessions: () => [], resumeConversation: async () => {},
+    history: async () => [],
     status: async () => ({ name: 'test', purpose: 'test', model: null, reasoningEffort: null }),
     describeTools: async () => ({ builtIn: [], crafted: [] }),
     changelog: async () => ({ entries: [], unseenCount: 0 }),
@@ -226,13 +226,53 @@ describe('/undo command surface', () => {
   });
 
   test('is offered only when the client has a checkpoint surface', async () => {
-    const withSurface = { localControls: null, consents: null, checkpoints: inertCheckpointSurface() };
-    const without = { localControls: null, consents: null, checkpoints: null };
+    const withSurface = {
+      localControls: null,
+      consents: null,
+      checkpoints: inertCheckpointSurface(),
+      sessionHistory: null,
+    };
+    const without = { localControls: null, consents: null, checkpoints: null, sessionHistory: null };
     expect(commandsForClient(withSurface).some((c) => c.name === '/undo')).toBe(true);
     expect(commandsForClient(without).some((c) => c.name === '/undo')).toBe(false);
 
     const outcome = await executeSlashCommand(slashClient(null), '/undo 2');
     expect(outcome).toEqual({ kind: 'unknown', command: '/undo' });
+  });
+
+  test('recorded conversation controls are local-only and cancellation is discoverable', () => {
+    const shared = {
+      localControls: null,
+      consents: null,
+      checkpoints: null,
+    };
+    const local = commandsForClient({
+      ...shared,
+      sessionHistory: { list: () => [], resume: async () => {} },
+    }).map((command) => command.name);
+    const cloud = commandsForClient({ ...shared, sessionHistory: null })
+      .map((command) => command.name);
+
+    expect(local).toContain('/resume');
+    expect(local).toContain('/sessions');
+    expect(cloud).not.toContain('/resume');
+    expect(cloud).not.toContain('/sessions');
+    expect(cloud).toContain('/cancel');
+    expect(cloud).toContain('/settings');
+  });
+
+  test('command filtering ranks exact, prefix, then stable fuzzy matches', () => {
+    const commands = [
+      { name: '/setup', description: 'Configure providers' },
+      { name: '/settings', description: 'Open interactive settings' },
+      { name: '/status', description: 'Show workspace state' },
+    ];
+    expect(filterCommands(commands, '/status').map((command) => command.name))
+      .toEqual(['/status']);
+    expect(filterCommands(commands, '/set').map((command) => command.name))
+      .toEqual(['/setup', '/settings']);
+    expect(filterCommands(commands, '/sttus').map((command) => command.name))
+      .toEqual(['/status']);
   });
 
   test('parses /undo [n] into the surface-owned outcome', async () => {
@@ -273,7 +313,12 @@ describe('/advisor command surface', () => {
 
   test('is offered to every client — both backends serve the config RPCs', () => {
     for (const checkpoints of [inertCheckpointSurface(), null]) {
-      const commands = commandsForClient({ localControls: null, consents: null, checkpoints });
+      const commands = commandsForClient({
+        localControls: null,
+        consents: null,
+        checkpoints,
+        sessionHistory: null,
+      });
       expect(commands.some((command) => command.name === '/advisor')).toBe(true);
     }
   });

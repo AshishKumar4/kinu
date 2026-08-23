@@ -26,9 +26,7 @@ import {
 } from './cloud-api';
 import {
   createCliSession,
-  listCliSessions,
   type CliSession,
-  type CliSessionInfo,
   type CliSessionOptions,
 } from './session';
 import { SessionRecorder } from './session-recorder';
@@ -249,6 +247,7 @@ export class CloudAgentClient implements AgentClient {
   readonly consents: DeviceConsentSurface;
   readonly localControls = null;
   readonly checkpoints: FileCheckpointSurface;
+  readonly sessionHistory = null;
   readonly inlineAttachmentLimitBytes = CLOUD_MAX_INLINE_ATTACHMENT_BYTES;
 
   private readonly origin: string;
@@ -499,14 +498,6 @@ export class CloudAgentClient implements AgentClient {
     }
   }
 
-  listSessions(): CliSessionInfo[] {
-    return listCliSessions(this.agentName, this.sessionOptions);
-  }
-
-  async resumeConversation(sessionRef: string): Promise<void> {
-    // Cloud chat history lives in the DO; only the terminal log is re-pointed.
-    this.activeCliSession = createCliSession(this.agentName, { ...this.sessionOptions, session: sessionRef });
-  }
 
   async status(): Promise<AgentClientStatus> {
     const status = await this.callHttp('getAgentStatus', CloudAgentStatusSchema);
