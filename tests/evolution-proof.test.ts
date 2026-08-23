@@ -24,7 +24,6 @@ import { generateText, stepCountIs, type LanguageModel, type ToolSet, type StepR
 import * as v from 'valibot';
 
 import {
-  buildBuiltinTools,
   collectStepText,
   EvolutionEngine,
   initWorkspaceSchema,
@@ -39,7 +38,7 @@ import {
 import { createWorkspace } from '../packages/core/src/identity/index';
 import { openWorkspaceCLI } from '../packages/cli-backend/src/open';
 import { makeWorkspaceSchemaSql } from '../packages/cli-backend/src/runtime';
-import { requireSandboxedExecutors } from './evals/harness';
+import { buildLiveLocalTools, requireSandboxedExecutors } from './evals/harness';
 import {
   finalIntegerAnswer, letterKey,
   liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, UNCONFIGURED_LLM,
@@ -369,7 +368,7 @@ describe('Evolution Proof', () => {
   let session1Results: TurnResult[] = [];
 
   liveTest('session 1, turn 1: RSA challenge (learn the pattern)', async () => {
-    const tools = buildBuiltinTools({ rt });
+    const tools = buildLiveLocalTools(rt);
     const toolNames = Object.keys(tools);
     console.log(`    Tools available: ${toolNames.join(', ')}`);
     expect(toolNames).toContain('execute_tools');
@@ -403,7 +402,7 @@ describe('Evolution Proof', () => {
   }, 600_000);
 
   liveTest('session 1, turn 2: Dijkstra challenge (learn algorithm pattern)', async () => {
-    const tools = buildBuiltinTools({ rt });
+    const tools = buildLiveLocalTools(rt);
     const result = await chatTurn(model, rt, tools, DIJKSTRA_CHALLENGE_1, 'session-1');
     session1Results.push(result);
 
@@ -429,7 +428,7 @@ describe('Evolution Proof', () => {
   }, 600_000);
 
   liveTest('session 1, turn 3: cipher challenge + session reflection', async () => {
-    const tools = buildBuiltinTools({ rt });
+    const tools = buildLiveLocalTools(rt);
     const result = await chatTurn(model, rt, tools, CIPHER_CHALLENGE, 'session-1');
     session1Results.push(result);
 
@@ -565,7 +564,7 @@ describe('Evolution Proof', () => {
   let inheritedToolNames: string[] = [];
 
   liveTest('session 2, turn 1: similar RSA challenge with inherited artifacts', async () => {
-    const tools = buildBuiltinTools({ rt });
+    const tools = buildLiveLocalTools(rt);
     console.log(`    Tools available: ${Object.keys(tools).join(', ')}`);
 
     // What session 2 inherits, from the store it inherits it in. Crafted tools
@@ -597,7 +596,7 @@ describe('Evolution Proof', () => {
   }, 600_000);
 
   liveTest('session 2, turn 2: similar graph challenge with inherited artifacts', async () => {
-    const tools = buildBuiltinTools({ rt });
+    const tools = buildLiveLocalTools(rt);
     const result = await chatTurn(model, rt, tools, DIJKSTRA_CHALLENGE_2, 'session-2');
     session2Results.push(result);
 

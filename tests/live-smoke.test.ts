@@ -236,7 +236,7 @@ describe('Live Smoke — one real turn per backend', () => {
       const page = await browser.newPage();
       await page.setViewport({ width: 1_440, height: 900, deviceScaleFactor: 1 });
       await page.goto(origin, { waitUntil: 'networkidle0', timeout: 90_000 });
-      await page.waitForSelector('textarea[aria-label="Mission"]');
+      await page.waitForSelector('textarea[aria-label="Mission"]', { timeout: 90_000 });
       await page.type(
         'textarea[aria-label="Mission"]',
         'Audit checkout retries and keep the focused tests green.',

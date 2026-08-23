@@ -15,11 +15,10 @@
 // `drill*` rows and one `settle-probe` — and nothing on the account could say
 // which harness had made any of them.
 //
-// So the credential is now the `eval-service` account's, read from the
-// environment, and the rule about where it may point lives with it in
-// `packages/test-utils/src/eval-identity.ts`. No session belonging to a person
-// is ever borrowed. A machine with no eval credential skips every live suite,
-// the skip-ratchet holds those skips accountable, and that is a result.
+// The credential belongs to the `eval-service` account. It comes from the
+// environment or the isolated `~/.config/kinu/eval-session/config.json`, never
+// from the person's normal Kinu config. The endpoint allowlist remains in
+// `packages/test-utils/src/eval-identity.ts`.
 //
 // WHY A SEPARATE PROCESS, still. `scripts/test-scratch-home.ts` strips the
 // ambient credential variables at preload in every test process, so a resolver
@@ -36,7 +35,34 @@
 // `resolveLiveModel` calls the same URL an `ai-gateway` target. Both then take
 // precedence over whatever this script resolved. So the endpoint is ruled on
 // here, by the same allowlist, before an origin is printed.
-import { refusedEvalEndpoint, resolveEvalIdentity } from '../packages/test-utils/src/eval-identity';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
+import {
+  EVAL_IDENTITY_ENV,
+  refusedEvalEndpoint,
+  resolveEvalIdentity,
+} from '../packages/test-utils/src/eval-identity';
+import * as v from 'valibot';
+
+const PersistedEvalIdentitySchema = v.object({
+  origin: v.string(),
+  accessToken: v.string(),
+});
+const persistedPath = `${homedir()}/.config/kinu/eval-session/config.json`;
+const identityEnv: NodeJS.ProcessEnv = { ...process.env };
+if (!identityEnv[EVAL_IDENTITY_ENV.token] && existsSync(persistedPath)) {
+  const permissions = statSync(persistedPath).mode & 0o077;
+  if (permissions !== 0) {
+    console.error(`eval-credentials: REFUSED — ${persistedPath} must be mode 0600`);
+    process.exit(1);
+  }
+  const persisted = v.parse(
+    PersistedEvalIdentitySchema,
+    JSON.parse(readFileSync(persistedPath, 'utf8')),
+  );
+  identityEnv[EVAL_IDENTITY_ENV.origin] = persisted.origin;
+  identityEnv[EVAL_IDENTITY_ENV.token] = persisted.accessToken;
+}
 
 const endpoint = refusedEvalEndpoint();
 if (endpoint) {
@@ -44,7 +70,7 @@ if (endpoint) {
   process.exit(1);
 }
 
-const resolved = resolveEvalIdentity();
+const resolved = resolveEvalIdentity(identityEnv);
 if (resolved.kind === 'refused') {
   console.error(`eval-credentials: REFUSED — ${resolved.reason}`);
   process.exit(1);

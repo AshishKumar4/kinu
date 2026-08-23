@@ -137,21 +137,20 @@ bun run test:eval                        # every arm, and it RESOLVES A CREDENTI
 ```
 
 **Who it runs as.** The tier authenticates as the `eval-service` account against
-the staging deployment. `scripts/eval-credentials.ts` resolves `KINU_EVAL_TOKEN`
-and `KINU_EVAL_ORIGIN` once, then exports the pair `resolveLiveModel` reads. No
-person's credential is ever borrowed: that script used to read
-`~/.kinu/config.json` and stopped. A machine with no eval credential skips every
-live suite, and an origin outside the allowlist is refused.
+staging. `scripts/eval-credentials.ts` reads `KINU_EVAL_TOKEN` or the isolated
+`~/.config/kinu/eval-session/config.json`. It never reads `~/.kinu/config.json`.
 
-Mint the credential against staging:
+Create the isolated staging session:
 
 ```bash
-kinu auth --origin https://staging.kinu.run
-kinu tokens create --name evals --scopes ai.proxy
+KINU_HOME=~/.config/kinu/eval-session \
+  kinu auth --origin https://staging.kinu.run
+chmod 600 ~/.config/kinu/eval-session/config.json
 ```
 
-Staging synthesizes one fixed identity for every request, so that session is
-`eval-service` and no personal account is involved.
+Staging synthesizes `eval-service@kinu.run` for every request. The session can
+create and remove its throwaway workspaces; a scoped `ai.proxy` token cannot,
+so it is insufficient for the hosted and browser smoke arms.
 
 **Where it runs.** `bun run test:eval` is the terminal `evals` tier. It is not a
 commit, push, CI or deploy gate — a deploy runs smoke only — so you run it on
