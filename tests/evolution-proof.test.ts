@@ -562,8 +562,9 @@ describe('Evolution Proof', () => {
   // ── SESSION 2: Similar challenges — should benefit from evolution ──
 
   let session2Results: TurnResult[] = [];
+  let inheritedToolNames: string[] = [];
 
-  liveTest('session 2, turn 1: similar RSA challenge (should benefit from pattern)', async () => {
+  liveTest('session 2, turn 1: similar RSA challenge with inherited artifacts', async () => {
     const tools = buildBuiltinTools({ rt });
     console.log(`    Tools available: ${Object.keys(tools).join(', ')}`);
 
@@ -574,9 +575,9 @@ describe('Evolution Proof', () => {
     // `Crafted tools loaded: -1` beside a correct `Crafted tools: 3` as soon as
     // the builtin count moved. The transfer is what this session is for, so it
     // is asserted rather than counted wrong.
-    const inherited = rt.craftStore.list().map(t => t.name);
-    console.log(`    Crafted tools inherited from session 1: ${inherited.join(', ')}`);
-    expect(inherited.length).toBeGreaterThan(0);
+    inheritedToolNames = rt.craftStore.list().map(t => t.name);
+    console.log(`    Crafted tools inherited from session 1: ${inheritedToolNames.join(', ')}`);
+    expect(inheritedToolNames.length).toBeGreaterThan(0);
 
     const result = await chatTurn(model, rt, tools, RSA_CHALLENGE_2, 'session-2');
     session2Results.push(result);
@@ -595,7 +596,7 @@ describe('Evolution Proof', () => {
     expect(answered).toBe(RSA_ANSWER_2);
   }, 600_000);
 
-  liveTest('session 2, turn 2: similar graph challenge (should benefit from pattern)', async () => {
+  liveTest('session 2, turn 2: similar graph challenge with inherited artifacts', async () => {
     const tools = buildBuiltinTools({ rt });
     const result = await chatTurn(model, rt, tools, DIJKSTRA_CHALLENGE_2, 'session-2');
     session2Results.push(result);
@@ -627,7 +628,7 @@ describe('Evolution Proof', () => {
     const s2Tools = session2Results.reduce((s, r) => s + r.toolCalls.length, 0);
 
     console.log(`    Session 1 (learning): ${s1Steps} steps, ${s1Tools} tool calls, ${(s1Time / 1000).toFixed(1)}s`);
-    console.log(`    Session 2 (evolved):  ${s2Steps} steps, ${s2Tools} tool calls, ${(s2Time / 1000).toFixed(1)}s`);
+    console.log(`    Session 2 (with artifacts): ${s2Steps} steps, ${s2Tools} tool calls, ${(s2Time / 1000).toFixed(1)}s`);
 
     // Compare RSA specifically
     const rsa1 = session1Results[0];
@@ -662,15 +663,14 @@ describe('Evolution Proof', () => {
 
     console.log('    ═══ END SUMMARY ═══\n');
 
-    // The test passes if:
-    // 1. Both sessions produced non-empty responses
     expect(session1Results.every(r => r.text.length > 0)).toBe(true);
     expect(session2Results.every(r => r.text.length > 0)).toBe(true);
-
-    // 2. Tools were used in session 1
     expect(s1Tools).toBeGreaterThan(0);
-
-    // 3. Every turn of both sessions is on the session tree
+    const reused = session2Results.some((result) => result.toolCalls.some((call) => {
+      const args = JSON.stringify(call.args);
+      return inheritedToolNames.some((name) => args.includes(name));
+    }));
+    expect(reused, 'session 2 did not call any crafted tool from session 1').toBe(true);
     expect(msgCount).toBeGreaterThan(0);
   });
 });
