@@ -26,7 +26,7 @@ import { renderThrownChain } from '../obs/index';
 export interface BackgroundJobControl {
   cancel(jobId: string): Promise<boolean>;
   cancelRunning(): string[];
-  create(kind: string, input: JsonValue, mode: WorkMode, controller: AbortController): string;
+  createRetry(sourceId: string, kind: string, input: JsonValue, mode: WorkMode, controller: AbortController): string | null;
   detach(jobId: string, kind: string, promise: Promise<JsonValue | undefined>): void;
 }
 
@@ -111,8 +111,11 @@ export function retryBackgroundJob(deps: BackgroundJobPlaneDeps, jobId: string):
   const translated = resumableAgentsInput(job.kind, input);
   if (translated) input = decodeJsonValue({ value: translated });
   const controller = new AbortController();
-  const newId = deps.jobRunner.create(job.kind, input, job.workMode, controller);
-  deps.jobs.markRetried(jobId, newId);
+  const newId = deps.jobRunner.createRetry(jobId, job.kind, input, job.workMode, controller);
+  if (newId === null) {
+    const replacement = deps.jobs.get(jobId)?.retriedBy;
+    return { ok: false, error: replacement ? `job already retried as ${replacement}` : 'job retry could not be reserved' };
+  }
   deps.logActivity('bg_job_retry', `${jobId} → ${newId}`);
   const promise = Promise.resolve(tool.execute(input, {
       abortSignal: controller.signal, toolCallId: newId, messages: [],

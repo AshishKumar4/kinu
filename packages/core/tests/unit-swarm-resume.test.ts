@@ -185,6 +185,53 @@ describe('harvesting a capped swarm', () => {
     const harvest = harvestSwarm({ sql, ledger }, TASK);
     expect(harvest?.candidates.map((candidate) => candidate.nodeId)).toEqual(['good']);
     expect(harvest?.candidates[0]?.artifact).toBe('usable answer');
+    expect(harvest?.unreadableNodes).toEqual(['bad']);
+    expect(harvest?.publication).toEqual({ state: { kind: 'open' }, caveat: null });
+  });
+
+  test('an all-corrupt harvest fails distinctly from an empty search', () => {
+    const { sql, ledger } = setupHarvest();
+    void sql`INSERT INTO search_nodes (id, parent_id, root_id, task, observation, depth)
+      VALUES ('bad', 'harvest-root', 'harvest-root', ${TASK}, 'unreadable answer', 1)`;
+    void sql`INSERT INTO swarm_node_records (node_id, root_id, record_json, created_at)
+      VALUES ('bad', 'harvest-root', '{', 2_000)`;
+    expect(() => harvestSwarm({ sql, ledger }, TASK)).toThrow('none can be decoded');
+  });
+
+  test('a sealed candidate carries its breach and publication caveat', () => {
+    const { sql, ledger } = setupHarvest();
+    void sql`INSERT INTO search_nodes (id, parent_id, root_id, task, observation, depth)
+      VALUES ('sealed', 'harvest-root', 'harvest-root', ${TASK}, 'candidate answer', 1)`;
+    const breach = {
+      floor: {
+        value: 1_200,
+        proof: 'every token appears in one comparison',
+        kind: 'certificate' as const,
+        bestKnownHonest: 2_992,
+      },
+      measured: { kind: 'measured' as const, value: 900, detail: 'oracle calls' },
+      margin: 0.599,
+      hypotheses: ['floor_wrong', 'verifier_gameable'] as const,
+    };
+    recordSwarmNode(sql, {
+      rootId: 'harvest-root',
+      nodeId: 'sealed',
+      record: {
+        outcome: {
+          kind: 'sealed',
+          measurement: breach.measured,
+          breach,
+        },
+        conclusion: 'candidate answer',
+        aggregated: [],
+        tokens: 10,
+      },
+      now: 2_000,
+    });
+    const harvest = harvestSwarm({ sql, ledger }, TASK);
+    expect(harvest?.candidates[0]?.breach).toEqual(breach);
+    expect(harvest?.publication.state).toEqual({ kind: 'sealed', breach, clearedBy: null });
+    expect(harvest?.publication.caveat).toContain('not publishable');
   });
 });
 
@@ -821,6 +868,27 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
     // fail a search that is about to continue.
     expect(ledger.get(rootId)?.status).toBe('running');
   }, 300_000);
+
+  test('a search-only root is offered to the resume gate before closure', async () => {
+    const { rt } = await workspace();
+    const ledger = new MctsSearchStore(rt.storage.sql);
+    const journal = new HeadJournal(rt.storage.sql);
+    beganSwarm(ledger, 'root-search-only', Date.now() - 1_000);
+    const offered: string[][] = [];
+
+    await reconcileInterruptedForks({
+      journal,
+      signals: idleAgent().signals,
+      search: ledger,
+      resume: async (roots) => {
+        offered.push([...roots]);
+        return roots;
+      },
+    });
+
+    expect(offered).toEqual([['root-search-only']]);
+    expect(ledger.get('root-search-only')?.status).toBe('running');
+  });
 
   test('a row with no journalled heads closes too, on its own evidence', async () => {
     // A `unit:'thought'` swarm journals no head rows, so the journal sweep has

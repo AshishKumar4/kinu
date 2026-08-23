@@ -109,13 +109,21 @@ describe('BackgroundJobStore', () => {
     expect(s.getInput('missing')).toBeNull();
   });
 
-  test('a retry relation is durable and cannot be overwritten', () => {
+  test('replacement creation and retry lineage are one durable write', () => {
     const s = newStore();
     s.create({ id: 'failed', kind: 'run', workMode: 'build', input: '{}', now: 1 });
     s.fail('failed', 0, 'boom', 2);
-    s.markRetried('failed', 'replacement-1');
-    s.markRetried('failed', 'replacement-2');
+    expect(s.createRetry({
+      sourceId: 'failed', id: 'replacement-1', kind: 'run',
+      workMode: 'build', input: '{}', now: 3,
+    })).toBe(true);
+    expect(s.createRetry({
+      sourceId: 'failed', id: 'replacement-2', kind: 'run',
+      workMode: 'build', input: '{}', now: 4,
+    })).toBe(false);
     expect(s.get('failed')?.retriedBy).toBe('replacement-1');
+    expect(s.get('replacement-1')?.status).toBe('running');
+    expect(s.get('replacement-2')).toBeNull();
   });
 
   test('dismiss removes only settled jobs; clearSettled keeps running ones', () => {

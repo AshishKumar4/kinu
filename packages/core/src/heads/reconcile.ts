@@ -252,7 +252,7 @@ export async function reconcileInterruptedForks(deps: {
    * whose every node stopped hours ago. When present, rows the resume gate did
    * not claim are closed `failed` beside the journal sweep.
    */
-  readonly search?: Pick<MctsSearchStore, 'runningSwarmCount' | 'closeUnclaimed'>;
+  readonly search?: Pick<MctsSearchStore, 'runningSwarmCount' | 'runningSwarmRoots' | 'closeUnclaimed'>;
   /**
    * The resume gate: re-drive what can continue these roots, and name the ones
    * claimed. Absent means a caller with no durable resume path at all, and then
@@ -292,8 +292,10 @@ export async function reconcileInterruptedForks(deps: {
   const gateNeeded = deps.resume !== undefined
     || interrupted.length > 0
     || (deps.search !== undefined && deps.search.runningSwarmCount() > 0);
+  const offeredRoots = new Set(interrupted.map((run) => run.rootId));
+  for (const root of deps.search?.runningSwarmRoots() ?? []) offeredRoots.add(root);
   const outcome: ResumeOutcome = gateNeeded
-    ? await resumeOutcome(deps.resume, interrupted)
+    ? await resumeOutcome(deps.resume, [...offeredRoots])
     : { kind: 'absent', claimed: new Set<string>() };
 
   // THE LEDGER'S HALF of the same sweep: close every running swarm row the gate
@@ -386,10 +388,9 @@ type ResumeOutcome =
 
 async function resumeOutcome(
   resume: ((roots: readonly string[]) => Promise<readonly string[]>) | undefined,
-  interrupted: readonly AbandonedHeadRun[],
+  roots: readonly string[],
 ): Promise<ResumeOutcome> {
   if (!resume) return { kind: 'absent', claimed: new Set<string>() };
-  const roots = interrupted.map((run) => run.rootId);
   try {
     return { kind: 'answered', claimed: new Set(await resume(roots)) };
   } catch (err) {

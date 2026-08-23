@@ -128,11 +128,5 @@ export function harvestBackgroundJob(
   if (!task.success) return null;
   const harvest = harvestSwarm(deps, task.output);
   if (!harvest) return null;
-  return {
-    rootId: harvest.rootId,
-    generations: harvest.generations,
-    iteration: harvest.iteration,
-    best: harvest.best === null ? null : { ...harvest.best },
-    candidates: harvest.candidates.map((candidate) => ({ ...candidate })),
-  };
+  return decodeJsonValue({ value: harvest });
 }

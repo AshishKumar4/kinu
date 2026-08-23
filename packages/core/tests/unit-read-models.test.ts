@@ -93,10 +93,11 @@ function jobPlane() {
   const runner: BackgroundJobControl = {
     cancel: () => Promise.resolve(true),
     cancelRunning: () => [],
-    create: (kind, input, mode) => {
+    createRetry: (sourceId, kind, input, mode) => {
       const id = `retry-${++created}`;
-      jobs.create({ id, kind, workMode: mode, input: JSON.stringify(input), now: Date.now() });
-      return id;
+      return jobs.createRetry({
+        sourceId, id, kind, workMode: mode, input: JSON.stringify(input), now: Date.now(),
+      }) ? id : null;
     },
     detach: (jobId, kind) => { detached.push({ jobId, kind }); },
   };
