@@ -107,6 +107,9 @@ export function toolCallEffect<Input>(toolName: string, input: Input): ToolCallE
   const parsed = v.safeParse(JsonObjectSchema, input);
   if (!parsed.success) return 'unknown';
   const action = str(parsed.output, 'action');
+  if (toolName === 'tasks' && action === 'mode') {
+    return str(parsed.output, 'stance') ? 'mutate' : 'observe';
+  }
   if (MUTATING_ACTIONS.get(toolName)?.has(action) === true) return 'mutate';
   if (OBSERVING_ACTIONS.get(toolName)?.has(action) === true) return 'observe';
   if (toolName === 'web_search' || toolName === 'web_fetch') return 'observe';

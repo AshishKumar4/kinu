@@ -47,6 +47,18 @@ describe('grouping a turn into blocks', () => {
     ])).toEqual(['text', 'run(4)', 'text']);
   });
 
+  test('step markers do not split a sequential tool run', () => {
+    const step: Part = { type: 'step-start' };
+    expect(kinds([
+      step,
+      tool('1', 'file', 'output-available'),
+      step,
+      tool('2', 'run', 'output-available'),
+      step,
+      tool('3', 'file', 'output-available'),
+    ])).toEqual(['run(3)']);
+  });
+
   test('a call still running keeps its own row, and does not join the group', () => {
     expect(kinds([
       tool('1', 'file', 'output-available'),

@@ -305,23 +305,23 @@ export default function Sidebar() {
                                 : null}
                         </span>
                         <span className={`min-w-0 flex-1 truncate text-[13px] ${isActive ? 'font-semibold p-text' : 'font-semibold p-text-2'}`}>{a.displayName}</span>
-                        {age && <span className="shrink-0 text-[10.5px] tabular-nums p-text-4 transition-opacity group-hover:opacity-0">{age}</span>}
+                        {age && <span className="shrink-0 text-[10.5px] tabular-nums p-text-4 opacity-0 transition-opacity lg:opacity-100 lg:group-hover:opacity-0">{age}</span>}
                       </NavLink>
                       <Link
                         to={`/settings/${a.name}`}
-                        className="absolute right-11 top-1/2 -translate-y-1/2 p-1 opacity-0 transition-all p-text-3 hover:p-gold focus-visible:opacity-100 group-hover:opacity-60"
+                        className="absolute right-11 top-1/2 -translate-y-1/2 p-1 opacity-60 transition-all p-text-3 hover:p-gold focus-visible:opacity-100 lg:opacity-0 lg:group-hover:opacity-60"
                         title="Workspace settings"
                         aria-label={`Workspace settings for ${a.displayName}`}
                       ><GearIcon size={11} /></Link>
                       <button
                         onClick={() => setEditingWorkspace(a.name)}
-                        className="absolute right-6 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-60 focus-visible:opacity-100 hover:!opacity-100 p-text-3 hover:p-text transition-all p-1"
+                        className="absolute right-6 top-1/2 -translate-y-1/2 p-1 opacity-60 transition-all p-text-3 hover:p-text focus-visible:opacity-100 lg:opacity-0 lg:group-hover:opacity-60"
                         title="Rename"
                         aria-label={`Rename workspace ${a.displayName}`}
                       ><PencilSimpleIcon size={11} /></button>
                       <button
                         onClick={() => { setDeleteError(null); setDeleteTarget(a); }}
-                        className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-60 focus-visible:opacity-100 hover:!opacity-100 p-text-3 hover:p-danger transition-all p-1"
+                        className="absolute right-1 top-1/2 -translate-y-1/2 p-1 opacity-60 transition-all p-text-3 hover:p-danger focus-visible:opacity-100 lg:opacity-0 lg:group-hover:opacity-60"
                         title="Remove"
                         aria-label={`Remove workspace ${a.displayName}`}
                       ><TrashIcon size={11} /></button>

@@ -43,6 +43,9 @@ export function groupMessageParts(parts: readonly Part[]): PartBlock[] {
   };
 
   for (const part of parts) {
+    // AI SDK step markers carry no visible content. Keeping them in the render
+    // stream split one long sequential tool run into dozens of singleton rows.
+    if (part.type === 'step-start') continue;
     if (isToolUIPart(part) && isFinished(part)) {
       run.push(part);
       continue;

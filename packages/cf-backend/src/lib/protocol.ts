@@ -146,6 +146,7 @@ export interface BackgroundJob {
 	error: string | null;
 	createdAt: number;
 	settledAt: number | null;
+	retriedBy?: string | null;
 }
 
 export type ReleaseStatus =

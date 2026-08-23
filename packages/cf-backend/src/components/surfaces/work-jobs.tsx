@@ -81,6 +81,11 @@ export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) 
           <div className="text-[10.5px] leading-[15px] p-text-3">
             {m.label} · started {timeAgo(job.createdAt)}{job.settledAt ? ` · settled ${timeAgo(job.settledAt)}` : ""}
           </div>
+          {job.retriedBy && (
+            <div className="mt-1 font-mono text-[10px] p-gold">
+              Retried as {job.retriedBy.replace(/^bgjob-/, "").slice(0, 8)}
+            </div>
+          )}
           {detail && <div className="text-[11.5px] leading-[16px] p-text-2 mt-1 line-clamp-3 whitespace-pre-wrap break-words font-mono">{detail}</div>}
           {err && <div className="text-[10px] p-danger mt-1">{err}</div>}
         </div>
@@ -92,10 +97,12 @@ export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) 
             </Button>
           ) : (
             <>
-              <Button size="sm" variant="ghost" disabled={busy} onClick={() => act("retryBackgroundJob")}
-                title="Re-run with the same input" aria-label="Retry">
-                <ArrowClockwiseIcon size={13} />
-              </Button>
+              {!job.retriedBy && (
+                <Button size="sm" variant="ghost" disabled={busy} onClick={() => act("retryBackgroundJob")}
+                  title="Re-run with the same input" aria-label="Retry">
+                  <ArrowClockwiseIcon size={13} />
+                </Button>
+              )}
               <Button size="sm" variant="ghost" disabled={busy} onClick={() => act("dismissBackgroundJob")}
                 title="Dismiss" aria-label="Dismiss">
                 <TrashIcon size={13} />
