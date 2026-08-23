@@ -13,6 +13,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { handleCliRequest } from '../src/cli/routes';
+import { buildCliInstallCommand } from '../src/cli/install-command';
 
 const ORIGIN = 'https://kinu.example.com';
 const tempDirs: string[] = [];
@@ -70,6 +71,7 @@ function makeSandbox(): InstallSandbox {
     '  if [ "$1" = "-o" ]; then shift; out="$1"; fi',
     '  shift',
     'done',
+    'if [ -z "$out" ]; then cat "$HOME/install.sh"; exit 0; fi',
     '[ -n "$out" ] || exit 1',
     `cat "${home}/stub-shim.sh" > "$out"`,
   ].join('\n');
@@ -140,6 +142,31 @@ describe('install.sh terminal handling', () => {
     expect(result.output).not.toContain('/dev/tty');
     expect(result.exitCode).toBe(0);
   }, 30_000);
+
+  test('the canonical install command activates kinu in its invoking shell', async () => {
+    const script = await installScript();
+    const { home, stubBin } = makeSandbox();
+    writeFileSync(join(home, 'install.sh'), script);
+    const install = buildCliInstallCommand({ origin: ORIGIN, setup: false });
+    const run = spawnSync('bash', ['-c', [
+      install,
+      'printf "ACTIVE=%s\\n" "$(command -v kinu)"',
+      'kinu --help',
+    ].join('\n')], {
+      encoding: 'utf8',
+      timeout: 30_000,
+      env: {
+        HOME: home,
+        KINU_HOME: join(home, '.kinu'),
+        PATH: `${stubBin}:/usr/bin:/bin`,
+        SHELL: '/bin/bash',
+      },
+    });
+
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.stdout).toContain(`ACTIVE=${join(home, '.kinu/bin/kinu')}`);
+    expect(run.stdout).toContain('setup   connect your account');
+  }, 40_000);
 
   test('interactive steps gate on actually opening /dev/tty and restore the terminal on failure', async () => {
     const script = await installScript();
