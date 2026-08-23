@@ -38,7 +38,7 @@ import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model
 const OFFLINE_PROVIDER = {
   baseUrl: 'http://localhost:0/v1',
   auth: 'Bearer conformance',
-  model: 'conformance-model',
+  model: 'openai-compatible/conformance-model',
 };
 
 // This suite wrote 274 of the 283 `agents` entries in the owner's REAL
@@ -116,7 +116,12 @@ function staticResolver(model: LanguageModel): LocalModelResolver {
 }
 
 async function observeCli(): Promise<{ observed: ObservedSurface; captured: CapturedTool[] }> {
-  await createCliAgent({ name: AGENT_NAME, mode: 'local', purpose: 'observe the conformance surface' });
+  await createCliAgent({
+    name: AGENT_NAME,
+    mode: 'local',
+    purpose: 'observe the conformance surface',
+    ...OFFLINE_PROVIDER,
+  });
 
   const dbPath = agentDbPath(AGENT_NAME);
   const db = new Database(dbPath);

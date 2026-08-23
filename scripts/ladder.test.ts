@@ -71,7 +71,7 @@ const ROOT_TEST_OMISSIONS = {
   'packages/test-utils': 'bun test packages/test-utils/',
   'packages/cf-backend': 'bun test --parallel=4 packages/cf-backend/',
   'packages/cli-backend': 'bun test --parallel=4 packages/cli-backend/',
-  'packages/cli': 'bun test --parallel=4 packages/cli/',
+  'packages/cli': 'bun run test:cli',
   'packages/pc-agent': 'bun test packages/pc-agent/',
 } satisfies Record<string, string>;
 
@@ -108,6 +108,8 @@ describe('the ladder measures something', () => {
     // nothing would make both of them pass over an empty set.
     expect(claims('bun test packages/core/', tracked).length).toBeGreaterThan(100);
     expect(claims('bun test scripts/deploy.test.ts', tracked)).toEqual(['scripts/deploy.test.ts']);
+    expect(claims('bun run test:cli', tracked).filter((path) => path.startsWith('packages/cli/tests/')).length)
+      .toBeGreaterThan(40);
     // Derived, not counted. This was `toBe(6)`, and it drifted to 8 the moment
     // two `tests/evals/*.eval.test.ts` suites landed — the same defect as the
     // bench glob below, one line apart, blocking every push twice in an hour. A
@@ -274,7 +276,7 @@ describe('every test file is claimed by some runner', () => {
     // 43rd landed. Derived as an empty overlap rather than as a count, for the
     // reason claims() gives above: a cardinality over a globbed set is drift by
     // construction, and this one drifted while nothing noticed.
-    const cliGate = 'bun test --parallel=4 packages/cli/';
+    const cliGate = 'bun run test:cli';
     const cliFiles = claims(cliGate, tracked);
     expect(cliFiles.length).toBeGreaterThan(0);
     const elsewhere = new Set(gatesFor('ci', deploy)
@@ -422,7 +424,7 @@ describe('cost, so a tier that stops being run is a decision and not a drift', (
     for (const run of [
       'bun test --parallel=4 packages/cf-backend/',
       'bun test --parallel=4 packages/cli-backend/',
-      'bun test --parallel=4 packages/cli/',
+      'bun run test:cli',
     ]) {
       expect(atCi.some((gate) => gate.run === run), `${run} is not a gate at ci`).toBeTrue();
     }
