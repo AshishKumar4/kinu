@@ -23,18 +23,16 @@ describe('CLI mission workspace names', () => {
     });
   });
 
-  test('derives BOTH names from the mission when model naming is unavailable', async () => {
-    // The 2026-07-15 contract — a fallback name must come from the mission,
-    // never a random pair — now covers the address too. It did not until
-    // 2026-08-16: the slug was `ironwood-elm-1234` here, and the owner reported
-    // that shape four times while every fix went to the display name.
+  test('keeps a neutral address when model naming is unavailable', async () => {
+    // Mission text remains in the editable display name. The permanent URL
+    // stays neutral even when the title generator is offline.
     const identity = await suggestAgentIdentityFromMission(
       'Review the OAuth callback flow',
       { id: '123456abcdef', generate: async () => { throw new Error('offline'); } },
     );
 
     expect(identity).toEqual({
-      name: 'review-the-oauth-56abcdef',
+      name: 'ironwood-elm-56abcdef',
       displayName: 'Review the OAuth callback flow',
       nameOrigin: 'auto',
     });
