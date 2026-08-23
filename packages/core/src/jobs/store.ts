@@ -111,6 +111,7 @@ export function initBackgroundJobsTable(execRaw: RawSqlExec, sql: SqlExecutor): 
     resume_attempts INTEGER NOT NULL DEFAULT 0,
     attempt_started_at INTEGER,
     retried_by TEXT,
+    retry_of TEXT UNIQUE,
     created_at  INTEGER NOT NULL,
     settled_at  INTEGER
   )`);
@@ -121,8 +122,11 @@ export function initBackgroundJobsTable(execRaw: RawSqlExec, sql: SqlExecutor): 
     resume_attempts: 'INTEGER NOT NULL DEFAULT 0',
     attempt_started_at: 'INTEGER',
     retried_by: 'TEXT',
+    retry_of: 'TEXT',
   });
   execRaw(`CREATE INDEX IF NOT EXISTS idx_background_jobs_status ON background_jobs(status)`);
+  execRaw(`CREATE UNIQUE INDEX IF NOT EXISTS idx_background_jobs_retry_of
+    ON background_jobs(retry_of) WHERE retry_of IS NOT NULL`);
 }
 
 export class BackgroundJobStore {
@@ -131,6 +135,33 @@ export class BackgroundJobStore {
   create(opts: { id: string; kind: string; workMode: WorkMode; label?: string; input?: string; now: number }): void {
     void this.sql`INSERT OR IGNORE INTO background_jobs (id, kind, label, work_mode, status, input_json, epoch, resume_attempts, created_at, attempt_started_at)
       VALUES (${opts.id}, ${opts.kind}, ${opts.label ?? null}, ${opts.workMode}, 'running', ${opts.input ?? null}, 0, 0, ${opts.now}, ${opts.now})`;
+  }
+
+  /** Create one replacement job and claim its settled source in the same SQL
+   *  statement. The unique `retry_of` edge prevents a reset or double click
+   *  from creating a second replacement. */
+  createRetry(opts: {
+    sourceId: string;
+    id: string;
+    kind: string;
+    workMode: WorkMode;
+    label?: string;
+    input: string;
+    now: number;
+  }): boolean {
+    void this.sql`INSERT OR IGNORE INTO background_jobs
+      (id, kind, label, work_mode, status, input_json, epoch, resume_attempts,
+       created_at, attempt_started_at, retry_of)
+      SELECT ${opts.id}, ${opts.kind}, ${opts.label ?? null}, ${opts.workMode},
+             'running', ${opts.input}, 0, 0, ${opts.now}, ${opts.now}, source.id
+      FROM background_jobs source
+      WHERE source.id=${opts.sourceId} AND source.status != 'running'
+        AND NOT EXISTS (
+          SELECT 1 FROM background_jobs replacement
+          WHERE replacement.retry_of=source.id
+        )`;
+    return this.sql<{ id: string }>`
+      SELECT id FROM background_jobs WHERE id=${opts.id} LIMIT 1`.length === 1;
   }
 
   /** Mark a running job completed. No-op if already settled (idempotent wake) or
@@ -186,11 +217,6 @@ export class BackgroundJobStore {
     void this.sql`DELETE FROM background_jobs WHERE id=${id} AND status != 'running'`;
   }
 
-  /** Record that a failed row was handled by creating a replacement job. */
-  markRetried(id: string, replacementId: string): void {
-    void this.sql`UPDATE background_jobs SET retried_by=${replacementId}
-      WHERE id=${id} AND status != 'running' AND retried_by IS NULL`;
-  }
 
   /** Remove all settled jobs. Running jobs are kept. Returns nothing. */
   clearSettled(): void {
@@ -205,14 +231,24 @@ export class BackgroundJobStore {
   }
 
   get(id: string): BackgroundJob | null {
-    const rows = this.sql<Row>`SELECT id, kind, label, work_mode, status, result, error, created_at, settled_at, epoch, resume_attempts, attempt_started_at, retried_by
-      FROM background_jobs WHERE id=${id} LIMIT 1`;
+    const rows = this.sql<Row>`SELECT job.id, job.kind, job.label, job.work_mode,
+      job.status, job.result, job.error, job.created_at, job.settled_at,
+      job.epoch, job.resume_attempts, job.attempt_started_at,
+      COALESCE(job.retried_by, replacement.id) AS retried_by
+      FROM background_jobs job
+      LEFT JOIN background_jobs replacement ON replacement.retry_of=job.id
+      WHERE job.id=${id} LIMIT 1`;
     return rows[0] ? toJob(rows[0]) : null;
   }
 
   list(limit = 20): BackgroundJob[] {
-    return this.sql<Row>`SELECT id, kind, label, work_mode, status, result, error, created_at, settled_at, epoch, resume_attempts, attempt_started_at, retried_by
-      FROM background_jobs ORDER BY created_at DESC LIMIT ${limit}`.map(toJob);
+    return this.sql<Row>`SELECT job.id, job.kind, job.label, job.work_mode,
+      job.status, job.result, job.error, job.created_at, job.settled_at,
+      job.epoch, job.resume_attempts, job.attempt_started_at,
+      COALESCE(job.retried_by, replacement.id) AS retried_by
+      FROM background_jobs job
+      LEFT JOIN background_jobs replacement ON replacement.retry_of=job.id
+      ORDER BY job.created_at DESC LIMIT ${limit}`.map(toJob);
   }
 
   /** How many jobs are still in flight — the input to the concurrent-detach

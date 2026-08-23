@@ -68,7 +68,7 @@ import type { HeadJournal } from '../heads/journal';
 import type { HeadStep } from '../heads/types';
 import type { MctsSearchStore } from '../mcts/search-store';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
-import type { FloorBreach, MeasuredValue } from './objective';
+import type { FloorBreach, MeasuredValue, PublicationState } from './objective';
 
 /**
  * What scoring one child produced, and what the tree must do about it.
@@ -429,6 +429,7 @@ export interface HarvestedCandidate {
   readonly score: number | null;
   /** What the outcome was, in the engine's own vocabulary. */
   readonly outcome: SettledChildOutcome['kind'] | 'unrecorded';
+  readonly breach: FloorBreach | null;
 }
 
 /** Everything an unfinished search can hand its caller. */
@@ -440,6 +441,13 @@ export interface SwarmHarvest {
   /** Children the ledger had counted at its last level barrier. */
   readonly iteration: number;
   readonly candidates: readonly HarvestedCandidate[];
+  /** Durable records omitted because they could not be decoded. */
+  readonly unreadableNodes: readonly string[];
+  /** Publication state inherited from any candidate that crossed its floor. */
+  readonly publication: {
+    readonly state: PublicationState;
+    readonly caveat: string | null;
+  };
   /** The best-scoring candidate, or null when nothing scored. Ranked on the
    *  normalised [0,1] the tree climbs, so no objective direction is needed here —
    *  the engine already resolved it when it wrote the record. */
@@ -509,7 +517,15 @@ export function harvestSwarm(deps: {
       artifact,
       score: outcome?.kind === 'scored' || outcome?.kind === 'judged' ? outcome.score : null,
       outcome: outcome?.kind ?? 'unrecorded',
+      breach: outcome?.kind === 'sealed' ? outcome.breach : null,
     });
+  }
+  if (candidates.length === 0 && unreadable.size > 0) {
+    throw new KinuError(
+      'io',
+      `the bounded search has ${String(unreadable.size)} candidate record(s), but none can be decoded: `
+        + [...unreadable].join(', '),
+    );
   }
   if (candidates.length === 0) return null;
 
@@ -519,11 +535,21 @@ export function harvestSwarm(deps: {
     if (best === null || candidate.score > (best.score ?? Number.NEGATIVE_INFINITY)) best = candidate;
   }
 
+  const firstBreach = candidates.find((candidate) => candidate.breach !== null)?.breach ?? null;
+  const publication: SwarmHarvest['publication'] = firstBreach === null
+    ? { state: { kind: 'open' }, caveat: null }
+    : {
+        state: { kind: 'sealed', breach: firstBreach, clearedBy: null },
+        caveat: 'At least one candidate crossed the objective floor. Harvested artifacts are not publishable until the floor is re-derived.',
+      };
+
   return {
     rootId: running.rootId,
     generations: running.epoch + 1,
     iteration: running.iteration,
     candidates,
     best,
+    unreadableNodes: [...unreadable],
+    publication,
   };
 }

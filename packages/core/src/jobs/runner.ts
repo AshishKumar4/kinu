@@ -239,6 +239,30 @@ export class BackgroundJobRunner {
     return id;
   }
 
+  /** Atomically reserve one replacement for a settled job, then register its
+   *  cancel handle. Null means another retry already owns the source row. */
+  createRetry<T>(
+    sourceId: string,
+    kind: string,
+    input: T,
+    mode: WorkMode,
+    controller: AbortController,
+  ): string | null {
+    const id = `bgjob-${nanoid()}`;
+    const created = this.deps.store.createRetry({
+      sourceId,
+      id,
+      kind,
+      workMode: mode,
+      input: serializeJobResult(input),
+      now: Date.now(),
+      label: describeJobInput(kind, input),
+    });
+    if (!created) return null;
+    this.controllers.set(id, controller);
+    return id;
+  }
+
   /** The surface's background policy — the detach threshold and the teardown
    *  grace, read by the backend that owns the session lifecycle. */
   get policy(): BackgroundPolicy {

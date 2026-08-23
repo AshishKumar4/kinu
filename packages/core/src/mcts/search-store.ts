@@ -323,6 +323,15 @@ export class MctsSearchStore {
       SELECT COUNT(*) AS n FROM mcts_search_runs WHERE status='running' AND engine='swarm'`[0]?.n ?? 0;
   }
 
+  /** Every running swarm root. Activation reconciliation offers these roots to
+   *  the durable-job resume gate even when no head row was written yet. */
+  runningSwarmRoots(): readonly string[] {
+    return this.sql<{ root_id: string }>`
+      SELECT root_id FROM mcts_search_runs
+      WHERE status='running' AND engine='swarm'
+      ORDER BY created_at ASC`.map((row) => row.root_id);
+  }
+
   /**
    * Close every `running` SWARM row EXCEPT the named roots, as `failed`, and
    * return the root ids it closed.
