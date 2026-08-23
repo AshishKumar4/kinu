@@ -11,7 +11,14 @@
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { handleCliRequest } from '../src/cli/routes';
-import { asFetchFunction, parseJsonObject, type JsonObject, type JsonValue } from '@kinu.run/core';
+import {
+  asFetchFunction,
+  parseJsonObject,
+  type GatewayRunRequest,
+  type JsonObject,
+  type JsonValue,
+  type WorkersAIBinding,
+} from '@kinu.run/core';
 import type { UserCaller } from '../src/user/workspace-capability';
 import * as v from 'valibot';
 
@@ -32,7 +39,12 @@ const ModelListSchema = v.object({
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
 
-function setupEnv(opts: { gatewayId?: string | null; token?: string; freshToken?: string } = {}) {
+function setupEnv(opts: {
+  gatewayId?: string | null;
+  token?: string;
+  freshToken?: string;
+  evalService?: boolean;
+} = {}) {
   const gatewayId = opts.gatewayId === undefined ? 'my-gw' : opts.gatewayId;
   const token = opts.token ?? 'cf-user';
   const userDO = {
@@ -68,15 +80,31 @@ function setupEnv(opts: { gatewayId?: string | null; token?: string; freshToken?
       return [{ key: 'cloudflare.oauth', kind: 'oauth', createdAt: 0, updatedAt: 0 }];
     },
   };
+  const gatewayRuns: GatewayRunRequest[] = [];
   const partialEnv: Partial<Env> = {};
   Object.assign(partialEnv, {
     UserDO: { idFromName: (name: string) => name, get: () => userDO },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   });
+  if (opts.evalService) {
+    const ai: WorkersAIBinding = {
+      gateway: () => ({
+        run: async (request) => {
+          gatewayRuns.push(request);
+          return completionResponse('@cf/moonshotai/kimi-k2.6');
+        },
+      }),
+    };
+    Object.assign(partialEnv, {
+      DEV_USER_EMAIL: 'eval-service@kinu.run',
+      AI_GATEWAY_URL: 'https://gateway.ai.cloudflare.com/v1/account/kinu-ai-gateway/workers-ai/v1',
+      AI: ai,
+    });
+  }
   // SAFETY: AI proxy tests reach only the constructed UserDO namespace and
   // credential key; every binding they access is present above.
   const env = partialEnv as Env;
-  return { env };
+  return { env, gatewayRuns };
 }
 
 function chatRequest(token: string | null, body: JsonValue, extraHeaders: Record<string, string> = {}) {
@@ -171,6 +199,24 @@ describe('AI proxy model → upstream selection', () => {
     expect(captured[0].body.messages).toEqual([{ role: 'user', content: 'ping' }]);
     // The proxied CLI bearer must never leak upstream.
     expect(captured[0].headers.get('authorization')).not.toContain(SESSION_TOKEN);
+  });
+
+  test('the staging eval identity uses the platform gateway binding', async () => {
+    const { env, gatewayRuns } = setupEnv({ evalService: true });
+    const res = await handleCliRequest(chatRequest(AI_TOKEN, {
+      model: '@cf/moonshotai/kimi-k2.6',
+      messages: [{ role: 'user', content: 'ping' }],
+    }, { 'x-session-affinity': 'eval-run' }), env);
+
+    expect(res?.status).toBe(200);
+    expect(gatewayRuns).toHaveLength(1);
+    expect(gatewayRuns[0]).toMatchObject({
+      provider: 'workers-ai',
+      endpoint: 'v1/chat/completions',
+      query: { model: '@cf/moonshotai/kimi-k2.6' },
+    });
+    expect(gatewayRuns[0]?.headers.authorization).toBeUndefined();
+    expect(gatewayRuns[0]?.headers['x-session-affinity']).toBe('eval-run');
   });
 
   test('{author}/{model} ids ride the AI Gateway credential with cf-aig-gateway-id', async () => {
