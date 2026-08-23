@@ -1,18 +1,14 @@
 # Architecture
 
-Kinu is a self-evolving agent platform. You create a **workspace** (a durable
-container with its own filesystem, execution environments, and sessions) and its
-agent answers chat, runs tools, searches a tree of agent nodes against an
-objective you declare, learns reusable tools, and can rewrite its own agentic
-loop.
+Kinu is an agent platform with durable adaptation mechanisms. You create a
+workspace with its own filesystem, execution environments, and sessions. Its
+agent answers chat, runs tools, can choose a tree search, builds reusable tools,
+and evaluates changes to its own loop.
 
-The design has one rule: **one shared brain, thin adapters.** Everything platform
-agnostic lives in `packages/core`, and a backend is the thin shell that gives it a
-place to run. We ship two: the cloud backend (`packages/cf-backend`, a Durable
-Object over Cloudflare's [Think](https://github.com/cloudflare/agents)) and the
-local POSIX backend (`packages/cli-backend`). Both run the same core loop. This
-document maps that structure to real modules; file
-paths are cited so you can jump to the source.
+Platform-neutral policy lives in `packages/core`. The Cloudflare and local
+backends supply storage, models, scheduling, and execution. They share Core
+orchestration but use different turn transports: Cloudflare Think and the local
+`runChat` loop. This document maps that structure to source modules.
 
 ## The workspace object model
 

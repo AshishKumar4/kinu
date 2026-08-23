@@ -28,9 +28,9 @@ const SECTION = 'border-t p-border py-20 lg:py-[104px] lg:pb-24';
 const CARD = 'min-w-0 rounded-[14px] border p-border p-surface';
 
 const FEATURES = [
-  ['Learns from use', 'Every turn is graded against your next message. Lessons that later turns confirm persist.'],
+  ['Learns from feedback', 'Explicit feedback and classifiable follow-ups become lessons that later evidence can confirm.'],
   ['Crafts its own tools', 'Recurring patterns become tools it builds, scores, and calls on its own.'],
-  ['Orchestrates subagent DAGs', 'Complex work branches across specialists, passes evidence forward, and converges into one result.'],
+  ['Builds subagent DAGs', 'Complex work branches across specialists that pass evidence to each dependent step.'],
   ['Your cloud, or yours alone', 'Run it on kinu.run today, or deploy the same Worker into your own account.'],
 ] as const;
 
@@ -60,14 +60,14 @@ function FeatureStrip(): ReactElement {
 function PlatformSection(): ReactElement {
   const examples = [
     ['Research, overnight', 'Hand it a question in the evening. The sourced brief is ready in the morning.'],
-    ['Review every pull request', 'A webhook wakes the workspace and posts the review before you open the PR.'],
-    ['Ship while you are away', 'Describe the change. The agent branches, builds, tests, and opens the pull request.'],
+    ['Investigate repository events', 'A signed webhook wakes the workspace and stores the result with the run.'],
+    ['Prepare changes while away', 'The agent can branch, build, and test while the durable workspace remains online.'],
   ] as const;
   return (
     <section id="platform" className={SECTION}>
       <RuleLabel>01 · The platform</RuleLabel>
       <SectionTitle>Close the laptop. <span className="p-gold">The agent keeps working.</span></SectionTitle>
-      <p className="mb-10 mt-3.5 max-w-[660px] text-[17px] leading-[1.6] p-text-3">Kinu runs durable cloud workspaces and fully local agents through the same core. Start in either place, then open the workspace from the client you prefer.</p>
+      <p className="mb-10 mt-3.5 max-w-[660px] text-[17px] leading-[1.6] p-text-3">Kinu runs durable cloud workspaces and fully local agents through the same core. Cloud workspaces open from every client. Local agents stay on your terminal.</p>
       <div className="mb-10 overflow-hidden rounded-2xl border p-border p-surface">
         <div className="grid md:grid-cols-2">
           <article className="min-w-0 p-7 sm:p-8">
@@ -92,19 +92,19 @@ function PlatformSection(): ReactElement {
 
 function QuickstartSection(): ReactElement {
   const clients = [
-    ['In the browser', 'Web', 'Sign in and create a workspace. Nothing to install, and the same workspace opens from every client.', <a key="web" href="/login" className="text-[13px] font-semibold p-gold">Sign in →</a>],
-    ['In the terminal', 'TUI', 'kinu chat opens the full-screen app. Pick a workspace, talk, and watch it work.', <code key="tui" className="rounded-[10px] border p-border p-recessed px-3.5 py-2.5 text-xs p-text-2"><span className="p-gold">$</span> kinu chat triage</code>],
-    ['In the terminal', 'CLI', 'One command installs Kinu on macOS or Linux. Create a workspace, then hand it a task.', <code key="cli" className="rounded-[10px] border p-border p-recessed px-3.5 py-2.5 text-xs leading-[1.9] p-text-2"><span className="p-gold">$</span> kinu create triage</code>],
+    ['In the browser', 'Web', 'Sign in and create a cloud workspace. Nothing to install, and the same workspace opens from every client.', <a key="web" href="/login" className="text-[13px] font-semibold p-gold">Sign in →</a>],
+    ['In the terminal', 'TUI', 'kinu chat opens the full-screen app for cloud or local workspaces.', <code key="tui" className="rounded-[10px] border p-border p-recessed px-3.5 py-2.5 text-xs p-text-2"><span className="p-gold">$</span> kinu chat triage</code>],
+    ['In the terminal', 'CLI', 'One command installs Kinu on Linux. Create a cloud or local workspace, then hand it a task.', <code key="cli" className="rounded-[10px] border p-border p-recessed px-3.5 py-2.5 text-xs leading-[1.9] p-text-2"><span className="p-gold">$</span> kinu create triage</code>],
   ] as const;
   return (
     <section id="quickstart" className={SECTION}>
       <RuleLabel>02 · Quickstart</RuleLabel>
       <SectionTitle>Start in the cloud, <span className="p-gold">or entirely on your own machines.</span></SectionTitle>
-      <p className="mb-10 mt-3.5 max-w-[620px] text-[17px] leading-[1.6] p-text-3">Both use the same core. Reach one workspace from the web app, TUI, or CLI.</p>
+      <p className="mb-10 mt-3.5 max-w-[620px] text-[17px] leading-[1.6] p-text-3">Cloud workspaces open in the browser, TUI, and CLI. Local workspaces use the terminal clients.</p>
       <div className="grid gap-5 md:grid-cols-3">
         {clients.map(([eyebrow, title, body, action]) => <div key={title} className={`${CARD} flex flex-col gap-3 p-7`}><div className="text-xs p-text-4">{eyebrow}</div><h3 className="text-xl font-semibold tracking-[-.02em]">{title}</h3><p className="flex-1 text-sm leading-[1.65] p-text-3">{body}</p>{action}</div>)}
       </div>
-      <p className="mt-7 text-[13px] p-text-4">A workspace created in one client opens from the others with its files, sessions, and search history intact.</p>
+      <p className="mt-7 text-[13px] p-text-4">A cloud workspace keeps its files, sessions, and search history across every client.</p>
     </section>
   );
 }
@@ -188,36 +188,36 @@ function SwarmDag(): ReactElement {
 function EvolutionSection(): ReactElement {
   const stages = [
     {
-      time: 'Every tool call',
+      time: 'After crafted code runs',
       title: 'Tool fitness',
-      evidence: 'Execution result · 7 tests passed',
-      change: 'Update the tool fitness score',
-      persists: 'A better tool choice on similar work',
-      detail: 'Success, failure, latency, and later turn evidence change which tools the agent trusts.',
+      evidence: 'The execute_tools result and later turn outcomes',
+      change: 'Update the crafted tool fitness score',
+      persists: 'Evidence for future crafted tool selection',
+      detail: 'Returned and raised outcomes update a crafted tool. Later turn evidence can revise the same score.',
     },
     {
-      time: 'After each turn',
+      time: 'After classifiable feedback',
       title: 'Lesson extraction',
-      evidence: 'Your next message grades the answer',
-      change: 'Confirm or reject the inferred lesson',
-      persists: 'A lesson in workspace memory',
-      detail: 'The next user response supplies the grade. Unconfirmed guesses do not become durable lessons.',
+      evidence: 'Explicit feedback, a classifiable follow-up, or execution evidence',
+      change: 'Record a provisional lesson',
+      persists: 'A durable lesson row',
+      detail: 'Unconfirmed lessons remain provisional and stay out of MEMORY.md. Corroborated lessons can enter workspace memory.',
     },
     {
-      time: 'At session boundaries',
-      title: 'Memory consolidation',
-      evidence: 'Related lessons and open conflicts',
-      change: 'Merge duplicates; preserve disagreement',
-      persists: 'Smaller, clearer workspace memory',
-      detail: 'Consolidation reduces repetition without hiding evidence that still conflicts.',
+      time: 'After a negative session window',
+      title: 'Session reflection',
+      evidence: 'Negative signal and recent turns',
+      change: 'Write a focused reflection',
+      persists: 'A reflection in workspace memory',
+      detail: 'A session with no negative signal adds no reflection.',
     },
     {
       time: 'Across many sessions',
       title: 'Scaffold evolution',
-      evidence: 'A repeated pattern with measured outcomes',
+      evidence: 'A repeated pattern with recorded outcomes',
       change: 'Evaluate a change to the agent loop',
       persists: 'A reversible scaffold version',
-      detail: 'A candidate loop must beat the current version. Every accepted scaffold keeps a rollback path.',
+      detail: 'Promotion requires the configured checks. Every accepted scaffold keeps a rollback path.',
     },
   ] as const;
   const [activeIndex, setActiveIndex] = useState(0);
@@ -265,7 +265,7 @@ function SwarmSection(): ReactElement {
     <section id="swarm" className={SECTION}>
       <RuleLabel>05 · Subagent DAGs</RuleLabel>
       <SectionTitle>Your agent can assemble <span className="p-gold">the specialists a task needs.</span></SectionTitle>
-      <p className="mb-10 mt-3.5 max-w-[780px] text-[17px] leading-[1.6] p-text-3">For complex work, the agent can build a DAG of subagents for research, optimization, ideation, planning, audit, and implementation. Nodes work in parallel, pass evidence forward, and converge into one integrated result.</p>
+      <p className="mb-10 mt-3.5 max-w-[780px] text-[17px] leading-[1.6] p-text-3">For complex work, the agent can build a DAG of subagents for research, optimization, ideation, planning, audit, and implementation. Nodes work in parallel and pass evidence to each dependent step.</p>
       <SwarmDag />
     </section>
   );
@@ -274,14 +274,15 @@ function SwarmSection(): ReactElement {
 function DeploySection(): ReactElement {
   const steps = [
     ['Step one', 'Bring the account.', 'Workers Paid plan, a zone, and a Wrangler login.', 'bun run infra:provision'],
-    ['Step two', 'Deploy, then provision again.', 'The deploy ships the Worker, Durable Objects, and container.', 'bun run deploy'],
-    ['Step three', 'Prove the account.', 'The infra gate checks every declared resource and binding.', 'bun run gate:infra'],
+    ['Step two', 'Deploy.', 'The deploy ships the Worker, Durable Objects, and container.', 'bun run deploy'],
+    ['Step three', 'Finish provisioning.', 'The second pass installs secrets after the Worker exists.', 'bun run infra:provision'],
+    ['Step four', 'Prove the account.', 'The infra gate checks every declared resource and binding.', 'bun run gate:infra'],
   ] as const;
   const values = [
     ['Isolated workspaces', 'Each workspace owns its files and sessions. Idle workspaces use no compute; stored data still uses storage.'],
     [`${String(STORAGE_GB)} GB file plane, each`, `Each paid-plan workspace can keep up to ${String(STORAGE_GB)} GB of durable files and shell state (do.storage.bytes).`],
     ['Linux on demand', 'An agent can attach a full Linux sandbox through Cloudflare Containers.'],
-    ['Your own devices', 'Connect a PC and allow each remote access request explicitly.'],
+    ['Your own devices', 'Connect a PC. Kinu asks once per workspace, then remembers the access decision.'],
   ] as const;
   return (
     <section id="deploy" className={SECTION}>

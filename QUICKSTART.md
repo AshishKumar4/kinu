@@ -1,20 +1,19 @@
 # Kinu Quick Start
 
-Two minutes to a durable agent workspace with a POSIX filesystem, shell,
-execution environments, sessions and memory.
+Create a durable agent workspace with a POSIX filesystem, shell, execution
+environments, sessions and memory.
 
 ## CLI
 
 ```bash
 curl -fsSL 'https://kinu.run/install.sh' | bash
-kinu setup
 kinu create triage --mode cloud
 kinu run triage "find the slowest query"
 ```
 
-The installer works on macOS and Linux, adds `~/.kinu/bin` to your PATH when
-needed, and runs setup unless you pass `--no-setup`. `kinu setup` handles
-browser login and optional local model-provider credentials.
+The tested installer path is Linux. The script also admits macOS, but no macOS
+CI job currently verifies installation or first launch. It adds `~/.kinu/bin`
+to PATH when needed and runs setup unless you pass `--no-setup`.
 
 Use `--mode cloud` for a persistent cloud workspace that uses your desktop daemon
 as the local execution engine, or `--mode local` for a fully local bun:sqlite

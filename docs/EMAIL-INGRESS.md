@@ -1,11 +1,11 @@
 # Mission Inbox — Email Ingress & Outbound
 
-Every Kinu agent is reachable by email. Mail to `<workspace-name>@EMAIL_DOMAIN`
-wakes the agent for a turn, and the agent's answer comes back as a real reply
-on the same thread. Evolution Changelog digests and background-job completions
-arrive in the owner's inbox over the same outbound path, and
-synthetic-monitoring alerts use it to reach `OPS_ALERT_EMAIL`. Email reaches an
-always-on durable agent with no app open and no session.
+Kinu includes email ingress and threaded replies. The channel works only after
+the domain has Email Routing, a verified destination, and a Worker rule.
+Production has not yet passed that live routing check. After setup, mail to
+`<workspace-name>@EMAIL_DOMAIN` wakes the workspace, and its answer returns on
+the same thread. The same outbound path carries changelog, job, and monitoring
+notifications.
 
 ## Flow
 

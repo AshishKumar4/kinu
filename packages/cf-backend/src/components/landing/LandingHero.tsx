@@ -5,7 +5,7 @@ import { useCopy } from '@/hooks/use-copy';
 import { LandingActionLink } from './LandingActionLink';
 
 const PHRASES = [
-  'get better with use.',
+  'learn from feedback.',
   'work while you sleep.',
   'build their own tools.',
   'run close to your code.',

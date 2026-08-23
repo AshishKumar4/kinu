@@ -1,9 +1,8 @@
 # Kinu user guide: install, first workspace, daily use
 
-This is the path I actually use: get it installed, make one workspace, then live
-with it. [QUICKSTART.md](../QUICKSTART.md) is the two-minute version and
-[docs/CLI.md](CLI.md) is the generated reference for every command and flag.
-This page sits between them, on what the pieces are and how a day goes.
+This is the path I use: install Kinu, make one workspace, then use it.
+[QUICKSTART.md](../QUICKSTART.md) is the short version. [docs/CLI.md](CLI.md)
+is the generated reference for every command and flag.
 
 ---
 
@@ -18,9 +17,10 @@ What you decide on day one is where a workspace lives.
 | --- | --- | --- |
 | Lives in | a Durable Object on `kinu.run` | `~/.kinu/<name>/agent.db` on this machine |
 | Keeps running when you close the laptop | yes | no |
-| Web UI, email inbox, webhooks, timers | yes | no |
+| Web UI, email inbox, webhooks | yes | no |
+| Timers | yes | yes, while `kinu daemon` runs |
 | Runs commands on your machine | through the desktop daemon you connect | directly |
-| Needs an account | yes | no (but signing in gets you free Workers AI) |
+| Needs an account | yes | no; account-backed Workers AI is billed to that Cloudflare account |
 
 You can have both, and you can move a cloud workspace to your machine later
 (§7). Everything else in this guide works the same for either.
@@ -29,15 +29,14 @@ You can have both, and you can move a cloud workspace to your machine later
 
 ```bash
 curl -fsSL 'https://kinu.run/install.sh' | bash
-kinu setup
 kinu create jarvis --mode cloud --alias jarvis --purpose "My coding assistant"
 jarvis "what changed in this repo today?"
 ```
 
-`kinu setup` does the browser sign-in and, if you want, stores local model
-credentials. Signing in with Cloudflare is what makes local workspaces free.
-They default to Workers AI with no key of your own. To bring your own provider
-instead:
+The installer runs `kinu setup` in an interactive terminal. Setup handles
+browser sign-in and optional local model credentials. A signed-in local
+workspace can use Workers AI without a separate API key. Inference bills the
+connected Cloudflare account. To bring your own provider instead:
 
 ```bash
 kinu providers list                 # what's connected, and where each key lives
@@ -154,18 +153,16 @@ release awaiting approval, a rewrite of its own scaffold sitting under trial, a
 failed job, or changes to itself you have not read.
 
 **Exploration** is where I go when the agent tried more than one thing. The
-`agents` tool's `swarm` action is the only verb that grows one of these. A swarm
-is a configured tree search over agent nodes. A preset fixes the shape of the
-search, and an objective says what is measured. Each node is a whole agent with
-its own home directory, running the same loop as the agent you talk to. A
-verifier you registered scores each candidate, so the tab compares measured
-numbers. Every search the workspace has run
-is a row, newest first, and all of them are drawn on one canvas as the trees
-they are. Score sits in a node's fill, rollouts in its radius, and the line the
-search paid for along the spine; a ring marks the answer it settled on. Results
-carry across runs, so a later search starts from what an earlier one proved.
-[docs/EXPLORATION.md](EXPLORATION.md) is the spec, with the six axes, the
-presets and what a refusal means.
+`agents` tool's `swarm` action grows a configured tree of full agent nodes. The
+agent chooses a preset and objective from the task. A measured search uses a
+registered verifier. A judged search uses an ensemble. Ideation returns
+unranked candidates. Local nodes receive private homes; hosted nodes share the
+workspace file plane.
+
+Every search is a row, newest first, and the canvas draws its tree. Score sits
+in a node's fill, rollouts in its radius, and a ring marks the settled answer.
+Measured records can carry into later searches.
+[docs/EXPLORATION.md](EXPLORATION.md) defines the six axes and presets.
 
 Kinu can add surfaces of its own. Ask it for a dashboard and it publishes a
 **view**: a tab, after the six, marked with a sparkle and labelled *Written by
@@ -197,9 +194,10 @@ Exporting a cloud workspace needs an interactive session (`kinu auth`). A
 scoped CI token can run tasks in a workspace but cannot walk off with its
 database.
 
-Two things to know. An archive is a complete copy of everything the workspace
-holds, so keep it where you'd keep a password. And `kinu workspace delete` is
-permanent, so export first. The prompt says so too.
+Cloud export is a live, paged read. Pause workspace writes first if you need a
+consistent backup. The archive excludes capability secrets and may omit changes
+made while pagination is in progress. Keep the archive where you keep other
+sensitive workspace data. `kinu workspace delete` is permanent, so export first.
 
 ## 8. Keeping the install healthy
 

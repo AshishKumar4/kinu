@@ -97,11 +97,10 @@ the six axes, `unit` `context` `expand` `score` `advance` `carry`.
 merges its members in dependency order. `advance:'archive'` keeps a grid of cells
 and one elite per coordinate.
 
-Every node is a whole agent. It runs the same turn loop the workspace agent runs
-(`runChat`), and it takes several turns to answer. Inside the one workspace
-filesystem it holds its own directory under `/home`, its own credential and its own
-`/tmp`. Work still running at 30 s detaches into a background job, and the node
-wakes when the job settles.
+Every node is a whole tool-calling agent and can take several turns to answer.
+Local nodes use `runChat` with a private home, credential, and `/tmp`. Hosted
+nodes also use the Core node loop, but share the parent workspace home. Work
+still running at 30 seconds detaches, and the node wakes when it settles.
 
 What a measured run reaches persists in `exploration_records`, so the next search of
 the same objective starts from it rather than rediscovering it.
@@ -129,8 +128,8 @@ to run on any backend. Two small interfaces carry everything platform-specific:
 provides the few things a turn loop needs from its host. We implement the pair
 twice: for Cloudflare Durable Objects, one per workspace, built on
 [Think](https://github.com/cloudflare/agents), and for POSIX, on `bun:sqlite` and
-real processes on your own machine. Implement them a third time and the same agent
-runs there. The cloud and the CLI run the same code, so they stay in step.
+real processes on your own machine. Both backends share Core orchestration.
+Cloudflare Think and the local CLI own different turn transports and loops.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/backend-dark.svg">
@@ -252,10 +251,10 @@ trying it:
   something no instrument can measure is `ideate`, which is flat and says so.
 - **`advance:'pareto'` is not implemented.** It needs a per-instance measurement path
   and a dominance comparison, and the error names both.
-- **`python` does not work in a hosted workspace.** Hosted runtimes come from R2 via
-  `NIMBUS_RUNTIME_CACHE`, which is currently unbound. Local workspaces install
-  `python3` and `pip` on demand. The container sandbox has no `python3` either; it
-  has git, npm, node, bun and jq.
+- **Hosted language runtimes require the seeded R2 catalog.** Production and
+  staging bind `NIMBUS_RUNTIME_CACHE`. A fresh self-host must seed that bucket
+  before Python, Bash, Ruby, or Clang can load. The container sandbox has git,
+  npm, node, bun and jq, but no `python3`.
 
 ## Documentation
 
@@ -263,7 +262,7 @@ trying it:
 
 | Document | Description |
 |----------|-------------|
-| [Quick start](QUICKSTART.md) | Install, sign in, first workspace: the two-minute version |
+| [Quick start](QUICKSTART.md) | Install, sign in, and create the first workspace |
 | [User guide](docs/USER-GUIDE.md) | The path from install to daily use: talking to a workspace, giving it your machine, triggers, backup, troubleshooting |
 | [CLI reference](docs/CLI.md) | Every command and flag, generated from the command registry |
 | [Configuration](docs/CONFIG.md) | `~/.kinu/config.json` fields and environment variables |

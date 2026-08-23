@@ -10,7 +10,6 @@
   "docs/AGENT-CLIENT-ARCHITECTURE-SPEC.md: symbol runCloudTurn",
   "docs/AGENT-CLIENT-ARCHITECTURE-SPEC.md: symbol runCloudTurnWithLocalModel",
   "docs/AGENT-CLIENT-ARCHITECTURE-SPEC.md: symbol transcriptToMessages",
-  "docs/APPLICATIONS.md: symbol StorageIsolated",
   "docs/BRANCH-ARCHIVE.md: path packages/cf-backend/scripts/merge-nimbus-assets.mjs",
   "docs/BRANCH-ARCHIVE.md: path packages/cf-backend/src/nimbus-measure.ts",
   "docs/CRAFT-ARCHITECTURE.md: path packages/cf-backend/src/craft-executor.ts",
