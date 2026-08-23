@@ -113,7 +113,8 @@ describe('CLI TUI layout', () => {
       );
       await renderSettled(renderOnce);
       const frame = captureCharFrame();
-      expect(frame).toContain('kinu local');
+      expect(frame).toContain('check');
+      expect(frame).toContain('local');
       expect(frame).toContain('●');
       for (const line of frame.split('\n')) {
         expect([...line].length).toBeLessThanOrEqual(20);
