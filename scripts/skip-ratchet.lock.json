@@ -84,16 +84,20 @@
     "reason": "needs a live model: closes session 1 and triggers session reflection."
   },
   {
-    "key": "tests/evolution-proof.test.ts › Evolution Proof › session 2, turn 1: similar RSA challenge (should benefit from pattern)",
-    "reason": "needs a live model: session 2 — the half that tests whether session 1's patterns transferred."
+    "key": "tests/evolution-proof.test.ts › Evolution Proof › session 2, turn 1: similar RSA challenge with inherited artifacts",
+    "reason": "needs a live model: session 2 must solve the checked RSA task and the final comparison now requires reuse of a crafted tool from session 1."
   },
   {
-    "key": "tests/evolution-proof.test.ts › Evolution Proof › session 2, turn 2: similar graph challenge (should benefit from pattern)",
-    "reason": "needs a live model: session 2 of the cross-session transfer proof."
+    "key": "tests/evolution-proof.test.ts › Evolution Proof › session 2, turn 2: similar graph challenge with inherited artifacts",
+    "reason": "needs a live model: session 2 must solve the checked graph task and contributes to the asserted crafted-tool reuse result."
   },
   {
     "key": "tests/live-smoke.test.ts › Live Smoke — one real turn per backend › hosted backend: one real turn through the deployed worker",
-    "reason": "needs the DEPLOYED worker, not merely a model: it creates a throwaway cloud agent, drives ONE turn through the OrchestratorAgent Durable Object over the same ticket-authenticated websocket `kinu chat` uses, asserts a real tool call and reads the durable write back out of the DO, then deletes the agent. There is no offline substitute — the claim under test is that the deployment runs a turn, and workerd conformance suites prove the DO in isolation, not the thing that is deployed. Measured at 16.5s. Runs in the eval tier with KINU_ORIGIN + KINU_TOKEN, or with any signed-in `kinu auth` session."
+    "reason": "needs the deployed Worker: creates a throwaway cloud workspace, drives one turn through the OrchestratorAgent over the ticket-authenticated WebSocket used by `kinu chat`, asserts a real tool call and durable chat rows, then deletes the workspace. Workerd tests cannot prove the deployed route and bindings. Runs in the eval tier."
+  },
+  {
+    "key": "tests/live-smoke.test.ts › Live Smoke — one real turn per backend › signed-in web app: create, rename, run, inspect, and use mobile panels",
+    "reason": "needs the deployed staging Worker and a live model: drives the signed-in React app through workspace creation, rename propagation, one tool turn, exact file inspection, a real sandbox command, mobile panel switching, and touch controls. Local gallery fixtures cannot prove any authenticated RPC or deployed binding."
   },
   {
     "key": "tests/live-smoke.test.ts › Live Smoke — one real turn per backend › cli backend: one real turn through the local session spine",
