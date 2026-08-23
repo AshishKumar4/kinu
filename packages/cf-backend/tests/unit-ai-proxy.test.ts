@@ -14,10 +14,8 @@ import { handleCliRequest } from '../src/cli/routes';
 import {
   asFetchFunction,
   parseJsonObject,
-  type GatewayRunRequest,
   type JsonObject,
   type JsonValue,
-  type WorkersAIBinding,
 } from '@kinu.run/core';
 import type { UserCaller } from '../src/user/workspace-capability';
 import * as v from 'valibot';
@@ -80,31 +78,33 @@ function setupEnv(opts: {
       return [{ key: 'cloudflare.oauth', kind: 'oauth', createdAt: 0, updatedAt: 0 }];
     },
   };
-  const gatewayRuns: GatewayRunRequest[] = [];
+  const directRuns: Array<{ model: string; inputs: JsonObject }> = [];
   const partialEnv: Partial<Env> = {};
   Object.assign(partialEnv, {
     UserDO: { idFromName: (name: string) => name, get: () => userDO },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   });
   if (opts.evalService) {
-    const ai: WorkersAIBinding = {
-      gateway: () => ({
-        run: async (request) => {
-          gatewayRuns.push(request);
-          return completionResponse('@cf/moonshotai/kimi-k2.6');
-        },
-      }),
+    const ai = {
+      async run(model: string, inputs: JsonObject) {
+        directRuns.push({ model, inputs });
+        return {
+          response: 'ok',
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        };
+      },
     };
     Object.assign(partialEnv, {
       DEV_USER_EMAIL: 'eval-service@kinu.run',
-      AI_GATEWAY_URL: 'https://gateway.ai.cloudflare.com/v1/account/kinu-ai-gateway/workers-ai/v1',
-      AI: ai,
+      // SAFETY: this constructed fixture implements `Ai.run`. The
+      // `DEV_USER_EMAIL` proxy branch reads no other member of `env.AI`.
+      AI: ai as Ai,
     });
   }
   // SAFETY: AI proxy tests reach only the constructed UserDO namespace and
   // credential key; every binding they access is present above.
   const env = partialEnv as Env;
-  return { env, gatewayRuns };
+  return { env, directRuns };
 }
 
 function chatRequest(token: string | null, body: JsonValue, extraHeaders: Record<string, string> = {}) {
@@ -201,22 +201,24 @@ describe('AI proxy model → upstream selection', () => {
     expect(captured[0].headers.get('authorization')).not.toContain(SESSION_TOKEN);
   });
 
-  test('the staging eval identity uses the platform gateway binding', async () => {
-    const { env, gatewayRuns } = setupEnv({ evalService: true });
+  test('the staging eval identity uses the direct Workers AI binding', async () => {
+    const { env, directRuns } = setupEnv({ evalService: true });
     const res = await handleCliRequest(chatRequest(AI_TOKEN, {
       model: '@cf/moonshotai/kimi-k2.6',
       messages: [{ role: 'user', content: 'ping' }],
+      stream: true,
     }, { 'x-session-affinity': 'eval-run' }), env);
 
     expect(res?.status).toBe(200);
-    expect(gatewayRuns).toHaveLength(1);
-    expect(gatewayRuns[0]).toMatchObject({
-      provider: 'workers-ai',
-      endpoint: 'v1/chat/completions',
-      query: { model: '@cf/moonshotai/kimi-k2.6' },
-    });
-    expect(gatewayRuns[0]?.headers.authorization).toBeUndefined();
-    expect(gatewayRuns[0]?.headers['x-session-affinity']).toBe('eval-run');
+    expect(res?.headers.get('content-type')).toBe('text/event-stream');
+    expect(await res?.text()).toContain('"content":"ok"');
+    expect(directRuns).toEqual([{
+      model: '@cf/moonshotai/kimi-k2.6',
+      inputs: {
+        messages: [{ role: 'user', content: 'ping' }],
+        stream: false,
+      },
+    }]);
   });
 
   test('{author}/{model} ids ride the AI Gateway credential with cf-aig-gateway-id', async () => {

@@ -28,15 +28,26 @@ import { MY_GATEWAY_PROVIDER_ID } from '../providers/my-gateway';
 import { listAvailableModels } from './available-models';
 import { json } from '../lib/http';
 import { ownerCaller } from './workspace-capability';
-import { createGatewayBindingFetch, USER_AI_PROXY_PATH, withRateLimitRetry } from '@kinu.run/core';
+import { JsonObjectSchema, USER_AI_PROXY_PATH, type JsonObject } from '@kinu.run/core';
 import { classify } from '@kinu.run/core/obs';
-import { resolvePlatformGateway } from '../providers/ai-gateway';
 import * as v from 'valibot';
 
 const PROXY_PLACEHOLDER = 'https://kinu-user-ai-proxy.invalid';
 const ChatCompletionRouteSchema = v.object({
   model: v.pipe(v.string(), v.trim(), v.minLength(1)),
 });
+const DirectWorkersAIOutputSchema = v.looseObject({
+  response: v.optional(v.string(), ''),
+  tool_calls: v.optional(v.array(v.looseObject({
+    id: v.optional(v.string()),
+    name: v.string(),
+    arguments: v.optional(v.union([v.string(), JsonObjectSchema]), ''),
+  })), []),
+  usage: v.optional(JsonObjectSchema),
+});
+interface DirectWorkersAIRunner {
+  run(model: string, inputs: JsonObject, options?: { signal?: AbortSignal }): Promise<JsonObject>;
+}
 
 export async function handleUserAIProxyRequest(
   request: Request,
@@ -65,9 +76,11 @@ export async function handleUserAIProxyRequest(
 
 async function proxyChatCompletion(request: Request, env: Env, userDO: DurableObjectStub<UserDO>): Promise<Response> {
   const body = await request.text();
+  let bodyValue: JsonObject;
   let model: string;
   try {
-    model = v.parse(ChatCompletionRouteSchema, JSON.parse(body)).model;
+    bodyValue = v.parse(JsonObjectSchema, JSON.parse(body));
+    model = v.parse(ChatCompletionRouteSchema, bodyValue).model;
   } catch (error) {
     if (classify({ cause: error }) !== 'malformed-input') throw error;
     return errorResponse(400, 'Body must be JSON with a non-empty model.');
@@ -78,16 +91,8 @@ async function proxyChatCompletion(request: Request, env: Env, userDO: DurableOb
   }
 
   if (workersAI && env.DEV_USER_EMAIL) {
-    const resolved = resolvePlatformGateway(env);
-    if ('reason' in resolved) {
-      return errorResponse(503, `Platform AI Gateway unavailable: ${resolved.reason}`);
-    }
-    const gatewayFetch = withRateLimitRetry(createGatewayBindingFetch(resolved));
-    return gatewayFetch(`${String(env.AI_GATEWAY_URL)}/chat/completions`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', ...affinityHeader(request) },
-      body,
-    });
+    if (!env.AI) return errorResponse(503, 'Workers AI binding unavailable.');
+    return directWorkersAICompletion(request, env.AI, model, bodyValue);
   }
 
   const aiFetch = createCloudflareAIFetch({
@@ -105,6 +110,88 @@ async function proxyChatCompletion(request: Request, env: Env, userDO: DurableOb
     headers: { 'content-type': 'application/json' },
     body,
   });
+}
+
+async function directWorkersAICompletion(
+  request: Request,
+  binding: Ai,
+  model: string,
+  requestBody: JsonObject,
+): Promise<Response> {
+  const stream = requestBody.stream === true;
+  const inputs: JsonObject = { ...requestBody, stream: false };
+  delete inputs.model;
+  // SAFETY: Cloudflare's `Ai` binding owns `run(model, JSON, options)`. This
+  // view removes methods the proxy cannot call and gives its parsed result the
+  // JSON domain that the binding promises for a non-streaming request.
+  const runner = binding as DirectWorkersAIRunner;
+  const raw = await runner.run(model, inputs, { signal: request.signal });
+  if (Array.isArray(raw.choices)) return json(raw);
+
+  const output = v.parse(DirectWorkersAIOutputSchema, raw);
+  const toolCalls = output.tool_calls.map((call, index) => ({
+    id: call.id ?? `call-${String(index + 1)}`,
+    type: 'function',
+    function: {
+      name: call.name,
+      arguments: v.is(v.string(), call.arguments)
+        ? call.arguments
+        : JSON.stringify(call.arguments),
+    },
+  }));
+  const finishReason = toolCalls.length > 0 ? 'tool_calls' : 'stop';
+  const id = `chatcmpl-${crypto.randomUUID()}`;
+  if (!stream) {
+    const message: JsonObject = {
+      role: 'assistant',
+      content: output.response,
+    };
+    if (toolCalls.length > 0) message.tool_calls = toolCalls;
+    const response: JsonObject = {
+      id,
+      object: 'chat.completion',
+      created: Math.floor(Date.now() / 1000),
+      model,
+      choices: [{
+        index: 0,
+        message,
+        finish_reason: finishReason,
+      }],
+    };
+    if (output.usage) response.usage = output.usage;
+    return json(response);
+  }
+
+  const delta: JsonObject = {
+    role: 'assistant',
+    content: output.response,
+  };
+  if (toolCalls.length > 0) {
+    delta.tool_calls = toolCalls.map((call, index) => ({ ...call, index }));
+  }
+  const start: JsonObject = {
+    id,
+    object: 'chat.completion.chunk',
+    created: Math.floor(Date.now() / 1000),
+    model,
+    choices: [{
+      index: 0,
+      delta,
+      finish_reason: null,
+    }],
+  };
+  const finish: JsonObject = {
+    id,
+    object: 'chat.completion.chunk',
+    created: Math.floor(Date.now() / 1000),
+    model,
+    choices: [{ index: 0, delta: {}, finish_reason: finishReason }],
+  };
+  if (output.usage) finish.usage = output.usage;
+  return new Response(
+    `data: ${JSON.stringify(start)}\n\ndata: ${JSON.stringify(finish)}\n\ndata: [DONE]\n\n`,
+    { headers: { 'content-type': 'text/event-stream' } },
+  );
 }
 
 /** Forward the client's Workers AI prefix-cache pin so same-agent local turns
