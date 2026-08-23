@@ -79,6 +79,14 @@ esac
 # the `bun run gate:infra` line below stays one string for scripts/ladder.ts to
 # parse while still checking the environment being deployed.
 export KINU_DEPLOY_ENV="$KINU_ENV"
+# The Cloudflare Vite plugin resolves named Wrangler environments at build
+# time. Passing `--env` only to the generated deploy config is too late: that
+# config already carries the root Worker's name, bindings, routes and assets.
+if [ "$KINU_ENV" = "staging" ]; then
+  export CLOUDFLARE_ENV="staging"
+else
+  unset CLOUDFLARE_ENV
+fi
 
 # Captured during deploy for final summary
 KINU_VERSION=""

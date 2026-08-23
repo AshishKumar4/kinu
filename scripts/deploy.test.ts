@@ -100,6 +100,7 @@ function runDeploy(failingGate: string, dirty = false, environment = "production
   const fixture = mkdtempSync(join(tmpdir(), "kinu-deploy-gate-"));
   temporaryDirectories.push(fixture);
   const log = join(fixture, "events.log");
+  const buildEnvironmentLog = join(fixture, "build-environment.log");
 
   mkdirSync(join(fixture, "scripts"));
   mkdirSync(join(fixture, "node_modules"));
@@ -126,6 +127,7 @@ exit 0
 `);
   executable(join(fixture, "bunx"), `#!/usr/bin/bash
 printf 'MUTATE bunx %s\\n' "$*" >> "$KINU_DEPLOY_GATE_LOG"
+printf '%s\n' "\${CLOUDFLARE_ENV:-root}" > "$KINU_DEPLOY_BUILD_ENV_LOG"
 exit 86
 `);
   executable(join(fixture, "npx"), `#!/usr/bin/bash
@@ -143,6 +145,7 @@ exit 87
       PATH: `${fixture}:/usr/bin:/bin`,
       KINU_DEPLOY_FAIL: failingGate,
       KINU_DEPLOY_GATE_LOG: log,
+      KINU_DEPLOY_BUILD_ENV_LOG: buildEnvironmentLog,
       KINU_DEPLOY_DIRTY: dirty ? "1" : "0",
       SKIP_E2E: "1",
     },
@@ -152,7 +155,10 @@ exit 87
   const events = existsSync(log)
     ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean)
     : [];
-  return { status: run.exitCode, events, stdout: run.stdout.toString() };
+  const buildEnvironment = existsSync(buildEnvironmentLog)
+    ? readFileSync(buildEnvironmentLog, "utf8").trim()
+    : null;
+  return { status: run.exitCode, events, stdout: run.stdout.toString(), buildEnvironment };
 }
 
 describe("deploy gate", () => {
@@ -177,6 +183,7 @@ describe("deploy gate", () => {
     expect(run.status).not.toBe(0);
     expect([...run.events].sort()).toEqual([...REQUIRED_GATES, "MUTATE bunx vite build"].sort());
     expect(run.events.at(-1)).toBe("MUTATE bunx vite build");
+    expect(run.buildEnvironment).toBe("root");
   });
 
   test("the serial gates run alone, and everything else runs concurrently", () => {
@@ -285,6 +292,7 @@ describe("deploy gate", () => {
     expect([...run.events].sort()).toEqual([...REQUIRED_GATES, "MUTATE bunx vite build"].sort());
     expect(run.stdout).toContain("Environment:  staging");
     expect(run.stdout).toContain("Target:       https://staging.kinu.run/");
+    expect(run.buildEnvironment).toBe("staging");
   });
 
   test("an unknown environment deploys nothing", () => {
