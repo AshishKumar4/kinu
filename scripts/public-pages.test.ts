@@ -218,10 +218,15 @@ beforeAll(async () => {
         return [...(root?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
           .some((button) => button.textContent?.includes('Jarvis') === true);
       })).toBe(false);
+      expect(await page.$eval(
+        '[aria-controls="landing-tui-workspaces"]',
+        (button) => button.getAttribute('aria-expanded'),
+      )).toBe('false');
       await page.evaluate(() => {
         const root = document.querySelector('[data-tui-session]');
         const workspaces = [...(root?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
           .find((button) => button.textContent?.includes('Ctrl+O workspaces') === true);
+        workspaces?.focus();
         workspaces?.click();
       });
       await page.waitForFunction(() => {
@@ -229,6 +234,7 @@ beforeAll(async () => {
         return [...(root?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
           .some((button) => button.textContent?.includes('Jarvis') === true);
       });
+      await page.waitForSelector('input[aria-label="Filter workspaces"]');
       await page.evaluate(() => {
         const root = document.querySelector('[data-tui-session]');
         const jarvis = [...(root?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
@@ -238,6 +244,11 @@ beforeAll(async () => {
       await page.waitForFunction(
         () => document.querySelector('[data-tui-session]')?.getAttribute('data-tui-session') === 'jarvis',
       );
+      await page.waitForFunction(() => {
+        const active = document.activeElement;
+        return active?.getAttribute('aria-controls') === 'landing-tui-workspaces'
+          && active.getAttribute('aria-expanded') === 'false';
+      });
       await page.waitForSelector('[data-cli-stage="4"]', { timeout: 5_000 });
       await page.click('button[aria-label="Replay CLI run"]');
       await page.waitForSelector('[data-cli-stage="0"]');

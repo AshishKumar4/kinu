@@ -240,7 +240,7 @@ describe('/undo command surface', () => {
     expect(outcome).toEqual({ kind: 'unknown', command: '/undo' });
   });
 
-  test('recorded conversation controls are local-only and cancellation is discoverable', () => {
+  test('recorded conversation controls are local-only and settings stay discoverable', () => {
     const shared = {
       localControls: null,
       consents: null,
@@ -257,7 +257,6 @@ describe('/undo command surface', () => {
     expect(local).toContain('/sessions');
     expect(cloud).not.toContain('/resume');
     expect(cloud).not.toContain('/sessions');
-    expect(cloud).toContain('/cancel');
     expect(cloud).toContain('/settings');
   });
 
@@ -273,6 +272,11 @@ describe('/undo command surface', () => {
       .toEqual(['/setup', '/settings']);
     expect(filterCommands(commands, '/sttus').map((command) => command.name))
       .toEqual(['/status']);
+    const fullRegistry = Array.from({ length: 12 }, (_, index) => ({
+      name: `/command-${String(index)}`,
+      description: `Command ${String(index)}`,
+    }));
+    expect(filterCommands(fullRegistry, '/')).toHaveLength(12);
   });
 
   test('parses /undo [n] into the surface-owned outcome', async () => {

@@ -1,5 +1,5 @@
 import { Button, Tabs, type TabsItem } from '@cloudflare/kumo';
-import { useEffect, useState, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
 import type { UIMessage } from 'ai';
 
 import { KinuLogo } from '@/components/ui/KinuLogo';
@@ -151,19 +151,15 @@ function TuiPreview(): ReactElement {
       label: 'checkout audit',
       workspace: 'checkout',
       location: 'local',
-      state: 'working',
       prompt: 'Audit the checkout flow, fix the coupon failure, and keep the tests green.',
-      thought: 'I found the request path. I will reproduce the failure before I change the handler.',
       answer: 'The migration only filled fixed coupons. I patched the backfill, added the percentage case, and started the focused suite.',
-      tools: [['run · workspace', 'bun test coupon', '7 pass'], ['file', 'read 0042_coupon_kind.sql', '1.8 KB'], ['file', 'edit 0042_coupon_kind.sql', 'saved'], ['agents', 'three independent checks', 'running']],
+      tools: [['run · workspace', 'bun test coupon', '7 pass'], ['file', 'read 0042_coupon_kind.sql', '1.8 KB'], ['file', 'edit 0042_coupon_kind.sql', 'saved'], ['agents', 'three independent checks', 'settled']],
     },
     migration: {
       label: 'migration review',
       workspace: 'migration',
       location: 'local',
-      state: 'reviewing',
       prompt: 'Review the migration plan and identify any destructive step.',
-      thought: 'The backfill is reversible, but the final column constraint is not. I will separate those operations.',
       answer: 'The plan now ships the backfill first, verifies both coupon kinds, then adds the constraint in a later release.',
       tools: [['file', 'read migrations/0042.sql', '2.1 KB'], ['agents', 'audit migration plan', '2 reports'], ['file', 'edit MIGRATION.md', 'saved']],
     },
@@ -171,9 +167,7 @@ function TuiPreview(): ReactElement {
       label: 'Jarvis',
       workspace: 'jarvis',
       location: 'cloud',
-      state: 'live',
       prompt: 'Summarize the overnight research and flag the decision I need to make.',
-      thought: 'Three sources agree on the failure mode. The rollout choice still depends on your risk tolerance.',
       answer: 'The evidence supports staged rollout. Decide whether the first cohort should be 5% or 10%; the rest is ready.',
       tools: [['web', 'compare three primary sources', '3 sources'], ['agents', 'independent risk review', 'settled'], ['report', 'prepare owner decision', 'ready']],
     },
@@ -181,11 +175,26 @@ function TuiPreview(): ReactElement {
   type SessionId = keyof typeof sessions;
   const [sessionId, setSessionId] = useState<SessionId>('checkout');
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerFilter, setDrawerFilter] = useState('');
+  const drawerTriggerRef = useRef<HTMLButtonElement | null>(null);
   const session = sessions[sessionId];
   const selectClass = (id: SessionId): string => (
     id === sessionId
       ? 'border-l-2 border-[var(--c-accent)] p-elevated p-text'
       : 'border-l-2 border-transparent p-text-3 hover:p-text'
+  );
+  const closeDrawer = () => {
+    setDrawerOpen(false);
+    queueMicrotask(() => drawerTriggerRef.current?.focus());
+  };
+  const chooseSession = (id: SessionId) => {
+    setSessionId(id);
+    closeDrawer();
+  };
+  const drawerMatches = (id: SessionId) => (
+    `${sessions[id].label} ${sessions[id].location}`
+      .toLowerCase()
+      .includes(drawerFilter.trim().toLowerCase())
   );
   return (
     <div data-tui-session={sessionId} aria-label="Kinu terminal interface preview" className="overflow-hidden rounded-xl border border-[var(--c-border-strong)] bg-[var(--c-input-bg)] shadow-[0_40px_110px_-50px_rgba(0,0,0,.95)]">
@@ -198,35 +207,58 @@ function TuiPreview(): ReactElement {
         <div className="flex min-w-0 flex-wrap items-center gap-3.5">
           <KinuLogo compact />
           <span>{session.workspace}</span>
-          <span className="inline-flex items-center gap-2 p-gold"><span className="size-1.5 rounded-full p-dot-accent motion-safe:animate-pulse" />{session.state}</span>
+          <span className="inline-flex items-center gap-2 p-gold"><span className="size-1.5 rounded-full p-dot-accent" />connected</span>
         </div>
         <div className="flex items-center gap-3">
-          <div className="hidden items-center gap-4 sm:flex"><span>{session.location}</span><span>Claude Opus 4</span><span>main</span></div>
-          <button type="button" onClick={() => setDrawerOpen((open) => !open)} className="rounded-md border p-border px-2 py-1 p-text-3 hover:p-text">Ctrl+O workspaces</button>
+          <div className="hidden items-center gap-4 sm:flex"><span>{session.location}</span><span>Claude Opus 4</span></div>
+          <button ref={drawerTriggerRef} type="button" aria-expanded={drawerOpen} aria-controls="landing-tui-workspaces" onClick={() => setDrawerOpen((open) => !open)} className="rounded-md border p-border px-2 py-1 p-text-3 hover:p-text">Ctrl+O workspaces</button>
         </div>
       </div>
       <div className="relative min-h-[600px]">
-        {drawerOpen && <aside className="absolute inset-y-0 left-0 z-20 w-[220px] border-r border-[var(--c-border-strong)] bg-[var(--c-bg)] px-3 py-4 font-mono shadow-xl">
-          <div className="mx-2 mb-2 text-[10px] uppercase tracking-[.16em] p-text-4">Local workspaces</div>
-          <button type="button" onClick={() => { setSessionId('checkout'); setDrawerOpen(false); }} className={`block w-full px-3 py-2 text-left text-xs ${selectClass('checkout')}`}>checkout audit</button>
-          <button type="button" onClick={() => { setSessionId('migration'); setDrawerOpen(false); }} className={`block w-full px-3 py-2 text-left text-xs ${selectClass('migration')}`}>migration review</button>
-          <div className="mx-2 mb-2 mt-6 text-[10px] uppercase tracking-[.16em] p-text-4">Cloud workspaces</div>
-          <button type="button" onClick={() => { setSessionId('jarvis'); setDrawerOpen(false); }} className={`flex w-full items-center justify-between px-3 py-2 text-left text-xs ${selectClass('jarvis')}`}><span>Jarvis</span><span className="p-success">live</span></button>
-        </aside>}
+        {drawerOpen && (
+          <>
+            <button type="button" tabIndex={-1} aria-label="Close workspace drawer" onClick={closeDrawer} className="absolute inset-0 z-10 bg-black/60" />
+            <aside
+              id="landing-tui-workspaces"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Workspaces"
+              onKeyDown={(event) => { if (event.key === 'Escape') closeDrawer(); }}
+              className="absolute inset-y-0 left-0 z-20 w-[220px] border-r border-[var(--c-border-strong)] bg-[var(--c-bg)] px-3 py-4 font-mono shadow-xl"
+            >
+              <div className="mb-3 flex items-center justify-between gap-2 px-2">
+                <span className="text-[10px] uppercase tracking-[.16em] p-text-4">Workspaces</span>
+                <button type="button" onClick={closeDrawer} aria-label="Close workspaces" className="p-text-4 hover:p-text">Esc</button>
+              </div>
+              <input
+                autoFocus
+                value={drawerFilter}
+                onChange={(event) => setDrawerFilter(event.currentTarget.value)}
+                aria-label="Filter workspaces"
+                placeholder="Filter workspaces…"
+                className="mb-4 w-full border p-border bg-[var(--c-input-bg)] px-2 py-1.5 text-xs p-text outline-none"
+              />
+              <div className="mx-2 mb-2 text-[10px] uppercase tracking-[.16em] p-text-4">Local</div>
+              {drawerMatches('checkout') && <button type="button" onClick={() => chooseSession('checkout')} className={`block w-full px-3 py-2 text-left text-xs ${selectClass('checkout')}`}>checkout audit</button>}
+              {drawerMatches('migration') && <button type="button" onClick={() => chooseSession('migration')} className={`block w-full px-3 py-2 text-left text-xs ${selectClass('migration')}`}>migration review</button>}
+              <div className="mx-2 mb-2 mt-6 text-[10px] uppercase tracking-[.16em] p-text-4">Cloud</div>
+              {drawerMatches('jarvis') && <button type="button" onClick={() => chooseSession('jarvis')} className={`flex w-full items-center justify-between px-3 py-2 text-left text-xs ${selectClass('jarvis')}`}><span>Jarvis</span><span className="p-success">live</span></button>}
+            </aside>
+          </>
+        )}
         <div className="flex min-h-[600px] min-w-0 flex-col font-mono text-xs leading-[1.65]">
           <div className="flex-1 overflow-hidden px-4 py-5 sm:px-7 sm:py-6">
             <div className="mb-5 grid grid-cols-[52px_minmax(0,1fr)] gap-3">
               <span className="text-[10px] uppercase tracking-[.12em] p-gold">you</span>
               <p className="p-text">{session.prompt}</p>
             </div>
-            <div className="mb-5 grid grid-cols-[52px_minmax(0,1fr)] gap-3 border-l border-[var(--c-border-strong)] pl-3 p-text-4">
-              <span className="text-[10px] uppercase tracking-[.12em]">think</span>
-              <p>{session.thought}</p>
-            </div>
             <div className="border-y border-[var(--c-border-strong)]">
               {session.tools.map(([tool, action, result], index) => (
-                <div key={`${tool}-${action}`} className={`grid grid-cols-[14px_120px_minmax(0,1fr)] gap-3 px-1 py-2.5 sm:grid-cols-[14px_150px_minmax(0,1fr)_auto] ${index > 0 ? 'border-t border-dashed border-[var(--c-dash)]' : ''}`}>
-                  <span className="p-gold">›</span><strong className="font-normal p-text-2">{tool}</strong><span className="truncate p-text-4">{action}</span><span className="hidden p-success sm:block">{result}</span>
+                <div key={`${tool}-${action}`} className={index > 0 ? 'border-t border-dashed border-[var(--c-dash)]' : ''}>
+                  <div className="grid grid-cols-[14px_120px_minmax(0,1fr)] gap-3 px-1 pb-1 pt-2.5 sm:grid-cols-[14px_150px_minmax(0,1fr)]">
+                    <span className="p-gold">›</span><strong className="font-normal p-text-2">{tool}</strong><span className="truncate p-text-4">{action}</span>
+                  </div>
+                  <div className="pb-2.5 pl-[17px] p-text-4">↳ <span className="p-success">{result}</span></div>
                 </div>
               ))}
             </div>

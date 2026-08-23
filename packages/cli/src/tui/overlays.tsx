@@ -31,10 +31,10 @@ export function CommandHintOverlay({ commands, terminal }: CommandHintProps) {
   if (commands.length === 0) return null;
   const paletteHeight = Math.min(commands.length + 5, 11, Math.max(3, terminal.height - 2));
   const maxCommandRows = Math.max(1, paletteHeight - 5);
-  const hiddenCount = Math.max(0, commands.length - maxCommandRows);
-  const visibleCommands = hiddenCount > 0
-    ? commands.slice(0, Math.max(0, maxCommandRows - 1))
-    : commands.slice(0, maxCommandRows);
+  const overflows = commands.length > maxCommandRows;
+  const visibleLimit = overflows ? Math.max(0, maxCommandRows - 1) : maxCommandRows;
+  const visibleCommands = commands.slice(0, visibleLimit);
+  const hiddenCount = commands.length - visibleCommands.length;
   const nameWidth = Math.min(
     18,
     Math.max(8, ...visibleCommands.map((command) => command.name.length)),
@@ -127,6 +127,7 @@ export function CommandPaletteOverlay({ commands, terminal, onSelect }: CommandP
     Math.max(3, terminal.height - 2),
     20,
   );
+  const compact = paletteHeight < 9;
   const innerWidth = Math.max(1, paletteWidth - 4);
   const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
   const options: SelectOption[] = filtered.map((command) => ({
@@ -143,7 +144,9 @@ export function CommandPaletteOverlay({ commands, terminal, onSelect }: CommandP
       top={position.top}
       dim={true}
     >
-      <PaletteLine text="Type to filter · ↑/↓ move · Enter insert · Esc close" width={innerWidth} color={tuiColors.muted} />
+      {!compact && (
+        <PaletteLine text="Type to filter · ↑/↓ move · Enter insert · Esc close" width={innerWidth} color={tuiColors.muted} />
+      )}
       <PaletteSearchInput
         placeholder="Filter commands…"
         onInput={setFilter}
@@ -168,7 +171,7 @@ export function CommandPaletteOverlay({ commands, terminal, onSelect }: CommandP
             flexGrow: 1,
             backgroundColor: tuiColors.panel,
             textColor: tuiColors.text,
-            selectedBackgroundColor: tuiColors.accentDeep,
+            selectedBackgroundColor: tuiColors.selectionDeep,
             selectedTextColor: tuiColors.textBright,
           }}
         />
@@ -200,11 +203,13 @@ export function WorkspaceDrawerOverlay({
         `${workspace.label} ${workspace.name} ${workspace.mode}`.toLowerCase().includes(query));
   const drawerWidth = Math.min(46, Math.max(24, Math.floor(terminal.width * 0.38)), Math.max(1, terminal.width - 2));
   const drawerHeight = Math.max(3, terminal.height - 2);
+  const compact = drawerHeight < 9;
   const innerWidth = Math.max(1, drawerWidth - 4);
   const options: SelectOption[] = filtered.map((workspace) => ({
-    name: clipText(
-      `${workspace.name === current ? '●' : ' '} ${workspace.label} · ${workspace.mode}`,
-      innerWidth,
+    name: paletteRow(
+      `${workspace.name === current ? '●' : ' '} ${workspace.label}`,
+      workspace.mode,
+      Math.max(1, innerWidth - 3),
     ),
     description: '',
     value: workspace,
@@ -227,11 +232,17 @@ export function WorkspaceDrawerOverlay({
       top={1}
       dim={true}
     >
-      <PaletteLine
-        text="Type to filter · ↑/↓ move · Enter open · Ctrl+O close"
-        width={innerWidth}
-        color={tuiColors.muted}
-      />
+      {!compact && (
+        <PaletteLine
+          text={innerWidth < 32
+            ? 'Enter · Esc close'
+            : innerWidth < 52
+              ? '↑/↓ move · Enter open · Esc close'
+              : 'Type to filter · ↑/↓ move · Enter open · Ctrl+O close'}
+          width={innerWidth}
+          color={tuiColors.muted}
+        />
+      )}
       <PaletteSearchInput
         placeholder="Filter workspaces…"
         onInput={setFilter}
@@ -261,12 +272,14 @@ export function WorkspaceDrawerOverlay({
             flexGrow: 1,
             backgroundColor: tuiColors.panel,
             textColor: tuiColors.text,
-            selectedBackgroundColor: tuiColors.accentDeep,
+            selectedBackgroundColor: tuiColors.selectionDeep,
             selectedTextColor: tuiColors.textBright,
           }}
         />
       )}
-      <PaletteLine text="Local and cloud use the same chat surface." width={innerWidth} color={tuiColors.muted} />
+      {!compact && (
+        <PaletteLine text="Local and cloud use the same chat surface." width={innerWidth} color={tuiColors.muted} />
+      )}
     </PaletteFrame>
   );
 }
@@ -296,13 +309,17 @@ export function SessionPickerOverlay({ sessions, cwd, terminal, onSelect }: Sess
     Math.max(3, terminal.height - 2),
     22,
   );
+  const compact = paletteHeight < 10;
   const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
   const innerWidth = Math.max(1, paletteWidth - 4);
   const options: SelectOption[] = filtered.map((session) => {
     const title = session.name ?? session.firstUserText ?? session.id;
-    const location = scope === 'all' ? ` · ${session.cwd}` : '';
+    const folder = session.cwd.replace(/[\\/]+$/, '').split(/[\\/]/).at(-1) ?? session.cwd;
+    const suffix = scope === 'all'
+      ? `${String(session.entries)} · ${folder}`
+      : `${String(session.entries)} entries`;
     return {
-      name: clipText(`${title} · ${session.entries} entries${location}`, innerWidth),
+      name: paletteRow(title, suffix, Math.max(1, innerWidth - 3)),
       description: '',
       value: session,
     };
@@ -316,7 +333,15 @@ export function SessionPickerOverlay({ sessions, cwd, terminal, onSelect }: Sess
       top={position.top}
       dim={true}
     >
-      <PaletteLine text="Type to filter · ↑/↓ move · Enter resume · Tab scope · Esc close" width={innerWidth} color={tuiColors.muted} />
+      {!compact && (
+        <PaletteLine
+          text={innerWidth < 58
+            ? '↑/↓ move · Enter · Tab scope · Esc close'
+            : 'Type to filter · ↑/↓ move · Enter resume · Tab scope · Esc close'}
+          width={innerWidth}
+          color={tuiColors.muted}
+        />
+      )}
       <PaletteSearchInput
         placeholder="Filter conversations…"
         onInput={setFilter}
@@ -352,16 +377,18 @@ export function SessionPickerOverlay({ sessions, cwd, terminal, onSelect }: Sess
             flexGrow: 1,
             backgroundColor: tuiColors.panel,
             textColor: tuiColors.text,
-            selectedBackgroundColor: tuiColors.accentDeep,
+            selectedBackgroundColor: tuiColors.selectionDeep,
             selectedTextColor: tuiColors.textBright,
           }}
         />
       )}
-      <PaletteLine
-        text={`${filtered.length}/${sessions.length} conversations · selection stays within this workspace`}
-        width={innerWidth}
-        color={tuiColors.muted}
-      />
+      {!compact && (
+        <PaletteLine
+          text={`${filtered.length}/${sessions.length} conversations · selection stays within this workspace`}
+          width={innerWidth}
+          color={tuiColors.muted}
+        />
+      )}
     </PaletteFrame>
   );
 }
@@ -395,10 +422,15 @@ export function SettingsOverlay({ settings, terminal, onSelect }: SettingsOverla
     Math.max(3, terminal.height - 2),
     22,
   );
+  const compact = paletteHeight < 10;
   const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
   const innerWidth = Math.max(1, paletteWidth - 4);
   const options: SelectOption[] = filtered.map((setting) => ({
-    name: clipText(`${setting.group} · ${setting.label.padEnd(22)} ${setting.value}`, innerWidth),
+    name: paletteRow(
+      `${setting.group} · ${setting.label}`,
+      setting.value,
+      Math.max(1, innerWidth - 3),
+    ),
     description: '',
     value: setting,
   }));
@@ -411,7 +443,15 @@ export function SettingsOverlay({ settings, terminal, onSelect }: SettingsOverla
       top={position.top}
       dim={true}
     >
-      <PaletteLine text="Type to filter · ↑/↓ move · Enter apply · Esc close" width={innerWidth} color={tuiColors.muted} />
+      {!compact && (
+        <PaletteLine
+          text={innerWidth < 54
+            ? '↑/↓ move · Enter apply · Esc close'
+            : 'Type to filter · ↑/↓ move · Enter apply · Esc close'}
+          width={innerWidth}
+          color={tuiColors.muted}
+        />
+      )}
       <PaletteSearchInput
         placeholder="Filter settings…"
         onInput={setFilter}
@@ -436,12 +476,14 @@ export function SettingsOverlay({ settings, terminal, onSelect }: SettingsOverla
             flexGrow: 1,
             backgroundColor: tuiColors.panel,
             textColor: tuiColors.text,
-            selectedBackgroundColor: tuiColors.accentDeep,
+            selectedBackgroundColor: tuiColors.selectionDeep,
             selectedTextColor: tuiColors.textBright,
           }}
         />
       )}
-      <PaletteLine text="Changes use the same config path as slash commands." width={innerWidth} color={tuiColors.muted} />
+      {!compact && (
+        <PaletteLine text="Changes use the same config path as slash commands." width={innerWidth} color={tuiColors.muted} />
+      )}
     </PaletteFrame>
   );
 }
@@ -481,7 +523,17 @@ export function ModelPickerOverlay({ models, failures, currentSpec, terminal, lo
   });
   const failureLines = (failures ?? []).map((failure) =>
     `! ${failure.label ?? failure.provider} unavailable — ${failure.reason}`);
-  const paletteHeight = Math.min(Math.max(models.length + failureLines.length + 7, 11), Math.max(3, terminal.height - 2), 22);
+  const paletteHeight = Math.min(
+    Math.max(models.length + failureLines.length + 7, 11),
+    Math.max(3, terminal.height - 2),
+    22,
+  );
+  const compact = paletteHeight < 9;
+  const failureCapacity = compact ? 0 : Math.max(0, paletteHeight - 7);
+  const hiddenFailures = Math.max(0, failureLines.length - failureCapacity);
+  const shownFailureLines = hiddenFailures > 0
+    ? failureLines.slice(0, Math.max(0, failureCapacity - 1))
+    : failureLines.slice(0, failureCapacity);
   const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
   const selectedIndex = clamp(filteredModels.findIndex((model) => model.spec === currentSpec), 0, Math.max(0, options.length - 1));
   useEffect(() => {
@@ -490,14 +542,18 @@ export function ModelPickerOverlay({ models, failures, currentSpec, terminal, lo
 
   return (
     <PaletteFrame
-      title="Select model"
+      title={compact && failureLines.length > 0
+        ? `Select model · ${String(failureLines.length)} unavailable`
+        : 'Select model'}
       width={paletteWidth}
       height={paletteHeight}
       left={position.left}
       top={position.top}
       dim={true}
     >
-      <PaletteLine text="Type to filter · ↑/↓ move · Enter select · Esc close" width={innerWidth} color={tuiColors.muted} />
+      {!compact && (
+        <PaletteLine text="Type to filter · ↑/↓ move · Enter select · Esc close" width={innerWidth} color={tuiColors.muted} />
+      )}
       <PaletteSearchInput
         placeholder="Filter models…"
         onInput={setFilter}
@@ -512,7 +568,9 @@ export function ModelPickerOverlay({ models, failures, currentSpec, terminal, lo
           text={models.length > 0
             ? `No models match "${filter.trim()}".`
             : failureLines.length > 0
-              ? 'Every connected provider failed to list — see below.'
+              ? compact
+                ? `${String(failureLines.length)} provider${failureLines.length === 1 ? '' : 's'} unavailable. Resize for details.`
+                : 'Every connected provider failed to list — see below.'
               : 'No connected model providers. Run kinu provider connect.'}
           width={innerWidth}
           color={tuiColors.muted}
@@ -532,7 +590,7 @@ export function ModelPickerOverlay({ models, failures, currentSpec, terminal, lo
           }}
           style={{
             flexGrow: 1,
-            height: Math.max(3, paletteHeight - 6),
+            height: compact ? 1 : Math.max(3, paletteHeight - 6),
             backgroundColor: tuiColors.panel,
             textColor: tuiColors.text,
             focusedBackgroundColor: tuiColors.panel,
@@ -544,9 +602,16 @@ export function ModelPickerOverlay({ models, failures, currentSpec, terminal, lo
           }}
         />
       )}
-      {!loading && failureLines.map((line) => (
+      {!loading && shownFailureLines.map((line) => (
         <PaletteLine key={line} text={line} width={innerWidth} color={tuiColors.amber} />
       ))}
+      {!loading && hiddenFailures > 0 && !compact && (
+        <PaletteLine
+          text={`${String(hiddenFailures + 1)} unavailable providers not shown`}
+          width={innerWidth}
+          color={tuiColors.amber}
+        />
+      )}
     </PaletteFrame>
   );
 }
@@ -569,6 +634,7 @@ export function WalkbackOverlay({ candidates, terminal, onSelect }: WalkbackOver
     value: candidate,
   }));
   const paletteHeight = Math.min(Math.max(options.length + 6, 10), Math.max(3, terminal.height - 2), 18);
+  const compact = paletteHeight < 8;
   const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
   return (
     <PaletteFrame
@@ -579,7 +645,9 @@ export function WalkbackOverlay({ candidates, terminal, onSelect }: WalkbackOver
       top={position.top}
       dim={true}
     >
-      <PaletteLine text="↑/↓ move · Enter forks before that message · Esc close" width={innerWidth} color={tuiColors.muted} />
+      {!compact && (
+        <PaletteLine text="↑/↓ move · Enter forks before that message · Esc close" width={innerWidth} color={tuiColors.muted} />
+      )}
       <select
         focused={true}
         options={options}
@@ -593,7 +661,7 @@ export function WalkbackOverlay({ candidates, terminal, onSelect }: WalkbackOver
         }}
         style={{
           flexGrow: 1,
-          height: Math.max(3, paletteHeight - 5),
+          height: compact ? Math.max(1, paletteHeight - 4) : Math.max(3, paletteHeight - 5),
           backgroundColor: tuiColors.panel,
           textColor: tuiColors.text,
           focusedBackgroundColor: tuiColors.panel,
@@ -630,6 +698,7 @@ export function ChangelogOverlay({ view, terminal, onSelect }: ChangelogOverlayP
     value: entry,
   }));
   const paletteHeight = Math.min(Math.max(options.length * 2 + 6, 11), Math.max(3, terminal.height - 2), 24);
+  const compact = paletteHeight < 8;
   const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
   return (
     <PaletteFrame
@@ -640,7 +709,9 @@ export function ChangelogOverlay({ view, terminal, onSelect }: ChangelogOverlayP
       top={position.top}
       dim={true}
     >
-      <PaletteLine text="↑/↓ move · Enter reverts the line · Esc keeps everything" width={innerWidth} color={tuiColors.muted} />
+      {!compact && (
+        <PaletteLine text="↑/↓ move · Enter reverts the line · Esc keeps everything" width={innerWidth} color={tuiColors.muted} />
+      )}
       {options.length === 0 ? (
         <PaletteLine text="No self-changes recorded yet." width={innerWidth} color={tuiColors.muted} />
       ) : (
@@ -657,7 +728,7 @@ export function ChangelogOverlay({ view, terminal, onSelect }: ChangelogOverlayP
           }}
           style={{
             flexGrow: 1,
-            height: Math.max(3, paletteHeight - 5),
+            height: compact ? Math.max(1, paletteHeight - 4) : Math.max(3, paletteHeight - 5),
             backgroundColor: tuiColors.panel,
             textColor: tuiColors.text,
             focusedBackgroundColor: tuiColors.panel,
@@ -699,6 +770,7 @@ export function TakesOverlay({ set, terminal, onSelect }: TakesOverlayProps) {
     value: candidate,
   }));
   const paletteHeight = Math.min(Math.max(options.length * 2 + 7, 12), Math.max(3, terminal.height - 2), 22);
+  const compact = paletteHeight < 8;
   const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
   return (
     <PaletteFrame
@@ -709,8 +781,12 @@ export function TakesOverlay({ set, terminal, onSelect }: TakesOverlayProps) {
       top={position.top}
       dim={true}
     >
-      <PaletteLine text={clipText(`Task: ${set.task.replace(/\s+/g, ' ')}`, innerWidth)} width={innerWidth} color={tuiColors.muted} />
-      <PaletteLine text="↑/↓ compare · Enter uses that take (recorded as preference) · Esc keep" width={innerWidth} color={tuiColors.muted} />
+      {!compact && (
+        <>
+          <PaletteLine text={clipText(`Task: ${set.task.replace(/\s+/g, ' ')}`, innerWidth)} width={innerWidth} color={tuiColors.muted} />
+          <PaletteLine text="↑/↓ compare · Enter uses that take (recorded as preference) · Esc keep" width={innerWidth} color={tuiColors.muted} />
+        </>
+      )}
       <select
         focused={true}
         options={options}
@@ -724,7 +800,7 @@ export function TakesOverlay({ set, terminal, onSelect }: TakesOverlayProps) {
         }}
         style={{
           flexGrow: 1,
-          height: Math.max(3, paletteHeight - 6),
+          height: compact ? Math.max(1, paletteHeight - 4) : Math.max(3, paletteHeight - 6),
           backgroundColor: tuiColors.panel,
           textColor: tuiColors.text,
           focusedBackgroundColor: tuiColors.panel,
@@ -748,24 +824,76 @@ interface DeviceConsentOverlayProps {
   terminal: OverlayGeometry;
 }
 
-export function DeviceConsentOverlay({ consent, terminal }: DeviceConsentOverlayProps) {
+interface DeviceConsentLayout {
+  paletteWidth: number;
+  paletteHeight: number;
+  innerWidth: number;
+  commandRows: number;
+  canApprove: boolean;
+}
+
+export function deviceConsentCanApprove(
+  consent: { command: string },
+  terminal: OverlayGeometry,
+): boolean {
+  return deviceConsentLayout(consent, terminal).canApprove;
+}
+
+function deviceConsentLayout(
+  consent: { command: string },
+  terminal: OverlayGeometry,
+): DeviceConsentLayout {
   const paletteWidth = boundedPaletteWidth(terminal, 0.52, 52, 86);
-  const paletteHeight = 9;
   const innerWidth = Math.max(1, paletteWidth - 4);
-  const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
+  // Half-width is conservative for wide Unicode glyphs. An ASCII shell command
+  // gets spare rows; a wide command never gets approved from an unseen tail.
+  const commandColumns = Math.max(1, Math.floor(innerWidth / 2));
+  const commandText = `Command: ${consent.command || '(command)'}`;
+  const commandRows = commandText.split('\n')
+    .reduce((rows, line) => rows + Math.max(1, Math.ceil([...line].length / commandColumns)), 0);
+  const preferredHeight = commandRows + 7;
+  const maxHeight = Math.max(3, terminal.height - 2);
+  return {
+    paletteWidth,
+    paletteHeight: Math.min(Math.max(9, preferredHeight), maxHeight),
+    innerWidth,
+    commandRows,
+    canApprove: preferredHeight <= maxHeight,
+  };
+}
+
+export function DeviceConsentOverlay({ consent, terminal }: DeviceConsentOverlayProps) {
+  const layout = deviceConsentLayout(consent, terminal);
+  const position = centeredPosition(
+    terminal,
+    layout.paletteWidth,
+    layout.paletteHeight,
+    'center',
+  );
+  const commandHeight = layout.canApprove
+    ? layout.commandRows
+    : Math.max(1, layout.paletteHeight - 8);
   return (
     <PaletteFrame
       title="Use your PC?"
-      width={paletteWidth}
-      height={paletteHeight}
+      width={layout.paletteWidth}
+      height={layout.paletteHeight}
       left={position.left}
       top={position.top}
       dim={true}
     >
-      <PaletteLine text={`Agent wants to use ${consent.deviceLabel} for a local action.`} width={innerWidth} color={tuiColors.text} />
-      <PaletteLine text={`Method: ${consent.method}`} width={innerWidth} color={tuiColors.muted} />
-      <PaletteLine text={`Command: ${consent.command || '(command)'}`} width={innerWidth} color={tuiColors.textStrong} />
-      <PaletteLine text="Y/O approve once · A always allow this agent · N deny" width={innerWidth} color={tuiColors.accentStrong} />
+      <PaletteLine text={`Agent wants to use ${consent.deviceLabel} for a local action.`} width={layout.innerWidth} color={tuiColors.text} />
+      <PaletteLine text={`Method: ${consent.method}`} width={layout.innerWidth} color={tuiColors.muted} />
+      <box style={{ width: '100%', height: commandHeight }}>
+        <text wrapMode="word"><span fg={tuiColors.textStrong}>Command: {consent.command || '(command)'}</span></text>
+      </box>
+      <PaletteLine
+        text={layout.canApprove
+          ? 'Y/O approve once · A always allow this agent · N deny'
+          : 'Resize to inspect the full command · N/Esc deny'}
+        width={layout.innerWidth}
+        color={layout.canApprove ? tuiColors.accentStrong : tuiColors.red}
+      />
     </PaletteFrame>
   );
 }
@@ -920,6 +1048,15 @@ function centeredPosition(terminal: OverlayGeometry, width: number, height: numb
 function boundedPaletteWidth(terminal: OverlayGeometry, fraction: number, min: number, max: number): number {
   const available = Math.max(1, terminal.width - 2);
   return clamp(Math.floor(terminal.width * fraction), Math.min(min, available), Math.min(max, available));
+}
+
+function paletteRow(primary: string, suffix: string, width: number): string {
+  if (suffix === '') return clipText(primary, width);
+  const gap = '  ';
+  const suffixWidth = Math.min(suffix.length, Math.max(1, Math.floor(width * 0.6)));
+  const shownSuffix = clipText(suffix, suffixWidth);
+  const primaryWidth = Math.max(1, width - gap.length - shownSuffix.length);
+  return `${clipText(primary, primaryWidth).padEnd(primaryWidth)}${gap}${shownSuffix}`;
 }
 
 function clamp(value: number, min: number, max: number) {

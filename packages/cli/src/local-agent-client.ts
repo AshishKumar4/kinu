@@ -271,6 +271,7 @@ export class LocalAgentClient implements AgentClient {
     this.sessionHistory = {
       list: () => listCliSessions(this.agentName, this.deps.sessionOptions),
       resume: async (sessionRef) => {
+        const previousCliSession = this.activeCliSession;
         const nextCliSession = createCliSession(this.agentName, {
           ...this.deps.sessionOptions,
           session: sessionRef,
@@ -278,6 +279,37 @@ export class LocalAgentClient implements AgentClient {
         await this.session.end();
         this.activeCliSession = nextCliSession;
         this.session = this.createAgentSession(this.conversationIdForAgentSession());
+        try {
+          await this.connect();
+        } catch (resumeError) {
+          let cleanupError: Error | null = null;
+          try {
+            await this.session.end();
+          } catch (error) {
+            cleanupError = new Error('Closing the failed resumed session failed.', { cause: error });
+          }
+          this.activeCliSession = previousCliSession;
+          this.session = this.createAgentSession(this.conversationIdForAgentSession());
+          try {
+            await this.connect();
+          } catch (rollbackError) {
+            throw new AggregateError(
+              cleanupError === null
+                ? [resumeError, rollbackError]
+                : [resumeError, cleanupError, rollbackError],
+              'Session resume and rollback both failed.',
+              { cause: resumeError },
+            );
+          }
+          if (cleanupError !== null) {
+            throw new AggregateError(
+              [resumeError, cleanupError],
+              'Session resume failed and its resources did not close.',
+              { cause: resumeError },
+            );
+          }
+          throw new Error('Resuming the selected session failed.', { cause: resumeError });
+        }
       },
     };
   }

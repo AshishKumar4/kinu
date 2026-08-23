@@ -85,6 +85,26 @@ describe('Esc / Esc-Esc state machine', () => {
     const allSettled = reduceInput(oneLeft.state, { type: 'turn-settled' });
     expect(allSettled.state.walkbackOpen).toBe(true);
   });
+
+  test('closing deferred walk-back drains the held queue', () => {
+    const busy = run(
+      initialInputState,
+      { type: 'turn-start' },
+      { type: 'queue', text: 'held follow-up' },
+      { type: 'open-walkback' },
+    );
+    const settled = reduceInput(busy.state, { type: 'turn-settled' });
+    expect(settled.state.walkbackOpen).toBe(true);
+    const activeAgain = reduceInput(settled.state, { type: 'turn-start' });
+    const postponed = reduceInput(activeAgain.state, esc(1_900));
+    expect(postponed.state.queue).toEqual(['held follow-up']);
+    expect(postponed.effects).toEqual([]);
+    expect(settled.state.queue).toEqual(['held follow-up']);
+    const closed = reduceInput(settled.state, esc(2_000));
+    expect(closed.state.walkbackOpen).toBe(false);
+    expect(closed.state.queue).toEqual([]);
+    expect(closed.effects).toEqual([{ kind: 'send-queued', text: 'held follow-up' }]);
+  });
 });
 
 describe('queue ordering', () => {

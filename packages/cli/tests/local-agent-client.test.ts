@@ -144,8 +144,14 @@ describe('LocalAgentClient', () => {
     await client.close();
   });
 
-  test('listSessions and resumeConversation re-point the terminal log', async () => {
+  test('session resume re-points the log and reconnects startup resources', async () => {
     const { client } = setup(fakeModel('first answer'));
+    const connect = client.connect.bind(client);
+    let connectCount = 0;
+    client.connect = async () => {
+      connectCount += 1;
+      await connect();
+    };
     await client.connect();
     await client.send('first question');
     const originalId = client.cliSession.id;
@@ -157,6 +163,27 @@ describe('LocalAgentClient', () => {
     expect(client.cliSession.id).toBe(originalId);
     const history = await client.history();
     expect(history.map((message) => message.role)).toEqual(['user', 'assistant']);
+    expect(connectCount).toBe(2);
+    await client.close();
+  });
+
+  test('failed session startup rolls back to the connected conversation', async () => {
+    const { client } = setup(fakeModel('answer'));
+    const connect = client.connect.bind(client);
+    let connectCount = 0;
+    client.connect = async () => {
+      connectCount += 1;
+      if (connectCount === 2) throw new Error('MCP startup failed');
+      await connect();
+    };
+    await client.connect();
+    await client.send('first question');
+    const originalId = client.cliSession.id;
+
+    await expect(client.sessionHistory.resume(originalId)).rejects.toThrow('Resuming the selected session failed.');
+    expect(client.cliSession.id).toBe(originalId);
+    expect(connectCount).toBe(3);
+    expect((await client.send('still connected')).text).toBe('answer');
     await client.close();
   });
 

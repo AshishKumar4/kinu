@@ -430,9 +430,12 @@ async function applySlashOutcome(client: AgentClient, rl: readline.Interface, ou
     case 'takes':
       console.log(`\n${MUTED(renderTakesText(outcome.set))}\n`);
       return 'ok';
-    case 'settings':
-      console.log(`\n${DIM('Settings:')} use /model, /effort, /approval, /always, or open the full-screen TUI.\n`);
+    case 'settings': {
+      const commands = ['/model', '/effort'];
+      if (client.localControls) commands.push('/approval', '/always');
+      console.log(`\n${DIM('Settings:')} use ${commands.join(', ')}, or open the full-screen TUI.\n`);
       return 'ok';
+    }
     case 'model-picker': {
       const current = await client.getModelSpec();
       console.log(`\n${DIM('Model:')} ${ACCENT(current ?? '(default)')}`);

@@ -86,7 +86,12 @@ export function reduceInput(state: InputState, event: InputMachineEvent): InputT
 
     case 'escape': {
       if (state.walkbackOpen) {
-        return { state: { ...state, walkbackOpen: false }, effects: [] };
+        const [next, ...rest] = state.queue;
+        const canDrain = state.activeTurns === 0 && next !== undefined;
+        return {
+          state: { ...state, walkbackOpen: false, queue: canDrain ? rest : state.queue },
+          effects: canDrain ? [{ kind: 'send-queued', text: next }] : [],
+        };
       }
       const busy = state.activeTurns > 0;
       const armed = state.escArmedAt !== null && event.now - state.escArmedAt <= ESC_ESC_BEAT_MS;

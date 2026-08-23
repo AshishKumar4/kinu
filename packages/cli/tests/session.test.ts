@@ -71,7 +71,7 @@ describe("CLI sessions", () => {
       { type: "tool-result", toolName: "read_file", toolCallId: "tc-1", result: "contents", success: true },
       { type: "text-delta", delta: "second text " },
       { type: "tool-call", toolName: "write_file", toolCallId: "tc-2", args: { path: "b.ts" } },
-      { type: "tool-result", toolName: "write_file", toolCallId: "tc-2", result: "ok", success: true },
+      { type: "tool-result", toolName: "write_file", toolCallId: "tc-2", result: "failed", success: false },
       { type: "text-delta", delta: "third text" },
       { type: "turn-end", turn: { text: turnText, toolCalls: [], steps: 2, durationMs: 1, hadError: false } },
     ];
@@ -90,6 +90,8 @@ describe("CLI sessions", () => {
       .toEqual(["first text", "second text", "third text"]);
     expect(messages.filter((m) => m.role === "tool_call").map((m) => m.toolName))
       .toEqual(["read_file", "write_file"]);
+    expect(messages.filter((m) => m.role === "tool_result").map((m) => m.success))
+      .toEqual([true, false]);
   });
 
   test("recorder falls back to turn.text when no deltas streamed", () => {
