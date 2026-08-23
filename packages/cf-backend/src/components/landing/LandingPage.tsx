@@ -71,7 +71,7 @@ function PlatformSection(): ReactElement {
       <div className="mb-10 overflow-hidden rounded-2xl border p-border p-surface">
         <div className="grid md:grid-cols-2">
           <article className="min-w-0 p-7 sm:p-8">
-            <div className="mb-7 flex items-center justify-between gap-4"><span className="font-mono text-[10px] uppercase tracking-[.16em] p-gold">Cloud</span><span className="font-mono text-[10px] p-text-4">Durable · always reachable</span></div>
+            <div className="mb-7 flex items-center justify-between gap-4"><span className="font-mono text-[10px] uppercase tracking-[.16em] p-gold">Cloud</span><span className="font-mono text-[10px] p-text-4">Durable · cloud hosted</span></div>
             <h3 className="mb-3 text-[24px] font-semibold tracking-[-.025em]">Hosted workspaces and sandboxes</h3>
             <p className="max-w-[480px] text-[15px] leading-[1.7] p-text-3">Start a task, close the browser, and return to the result. Schedules and webhooks keep the workspace active while you are away.</p>
           </article>

@@ -142,10 +142,10 @@ to find out. **Output** is what it produced. **Work** is what it is working
 through: the plan it wrote for itself, the jobs still running, everything that
 has settled, and anything waiting on you at the top. **Releases** is what it is
 shipping and what you have to approve. **Exploration** is every search it ran.
-**Agent** is what this agent is: identity, memory, learned tools, and whether it
-is measurably getting better. **Environment** is every executor it can reach,
-its files and its terminal. The gauge at the far right of the strip carries the
-run's own meters: context, cost and cache-hit rate.
+**Agent** shows identity, memory, crafted tools, and recorded adaptation
+evidence. **Environment** shows each executor, its files, and its terminal.
+The gauge at the far right of the strip carries the run's own meters: context,
+cost, and cache-hit rate.
 
 Anything the agent needs a decision on is counted on the **Work** tab and listed
 at the top of it. Each row takes you to where the decision is actually made: a
