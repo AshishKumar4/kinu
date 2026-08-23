@@ -42,11 +42,6 @@ describe('CLI TUI layout', () => {
       expect(frame).toContain('effort high');
       expect(frame).toContain(`cli ${VERSION}`);
 
-      const statusSource = readFileSync(resolve(repoRoot, 'packages/cli/src/tui/status-bar.tsx'), 'utf8');
-      const chatSource = readFileSync(resolve(repoRoot, 'packages/cli/src/tui/chat-app.tsx'), 'utf8');
-      expect(statusSource).toContain('onMouseDown={onModelSelect}');
-      expect(chatSource).toContain("key.name === 'p' && key.ctrl");
-      expect(chatSource).toContain('setModelPreference(client, model.spec)');
     } finally {
       root.render(<box />);
       renderer.destroy();

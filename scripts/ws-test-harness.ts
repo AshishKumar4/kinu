@@ -10,7 +10,7 @@
  */
 
 import * as v from "valibot";
-import { JsonValueSchema, parseJsonValue, type JsonValue } from "../packages/core/src/index";
+import { BUILTIN_TOOLS, JsonValueSchema, parseJsonValue, type JsonValue } from "../packages/core/src/index";
 
 const BASE_URL = process.argv[2] ?? "http://localhost:5173";
 const AGENT_NAME = process.argv[3] ?? "e2e-test-agent";
@@ -42,7 +42,7 @@ const modelListSchema = v.object({
   current: v.string(),
   models: v.array(JsonValueSchema),
 });
-const memorySearchSchema = v.array(v.object({ snippet: v.string() }));
+const memoryContentSchema = v.string();
 
 // ── helpers ──────────────────────────────────────────────────────
 
@@ -245,9 +245,9 @@ async function testRpcGetAgentStatus(ws: WebSocket) {
 async function testRpcGetToolList(ws: WebSocket) {
   try {
     const result = await rpc(ws, "getToolList", toolListSchema);
-    const expectedTools = ["execute_tools", "run", "explore", "save_note", "search_memory"];
+    const expectedTools: readonly string[] = BUILTIN_TOOLS;
     const hasAll = expectedTools.every(t => result.builtIn.includes(t));
-    if (hasAll && result.builtIn.length === 5) {
+    if (hasAll && result.builtIn.length === expectedTools.length) {
       pass("RPC getToolList", `builtIn=[${result.builtIn.join(",")}], crafted=${result.crafted.length}`);
     } else {
       fail("RPC getToolList", `builtIn=${JSON.stringify(result.builtIn)}`);
@@ -328,7 +328,7 @@ async function testChatToolCalls(ws: WebSocket) {
   try {
     const { bodies } = await chat(
       ws,
-      'Use the save_note tool to save a note with the content "e2e-test-marker-42". Then reply DONE.',
+      'Use the memory tool to save the exact content "e2e-test-marker-42". Then reply DONE.',
       60_000,
     );
     const allBody = bodies.join("");
@@ -336,7 +336,7 @@ async function testChatToolCalls(ws: WebSocket) {
     // (b) Tool calls appear in the response stream
     // The stream includes tool-call and tool-result parts in the UIMessageStream format
     const hasToolIndicator =
-      allBody.includes("save_note") ||
+      allBody.includes('"toolName":"memory"') ||
       allBody.includes("tool-call") ||
       allBody.includes("tool_call") ||
       allBody.includes("tool-result") ||
@@ -354,83 +354,63 @@ async function testChatToolCalls(ws: WebSocket) {
   }
 }
 
+let workspaceMarker = '';
+
 async function testWorkspaceReadFile(ws: WebSocket) {
   try {
+    if (!workspaceMarker) throw new Error('write-file probe did not produce a marker');
     const { bodies } = await chat(
       ws,
-      'Read the file "memory/MEMORY.md" using execute_tools with this code: return await workspace.readFile("memory/MEMORY.md")',
+      'Use the file tool to read test-e2e.txt, then reply with the exact file content.',
       60_000,
     );
     const allBody = bodies.join("");
-    if (allBody.length > 0 && !allBody.includes("getTools() FAILED")) {
-      pass("workspace.readFile()", `response received (${allBody.length} chars)`);
+    if (allBody.includes(workspaceMarker)) {
+      pass("file.read", `read marker "${workspaceMarker}"`);
     } else {
-      fail("workspace.readFile()", "empty or crashed");
+      fail("file.read", `marker absent from ${allBody.length} response characters`);
     }
   } catch (error) {
-    const message = errorMessage(error);
-    // Model validation errors (e.g. Llama returning int content) are a known
-    // model compatibility issue, not an agent bug. Treat as a soft pass.
-    if (message.includes("Type validation failed")) {
-      pass("workspace.readFile()", "tool invoked (model returned malformed stream — known model issue)");
-    } else {
-      fail("workspace.readFile()", message);
-    }
+    fail("file.read", errorMessage(error));
   }
 }
 
 async function testWorkspaceWriteFile(ws: WebSocket) {
   try {
-    const marker = `e2e-${Date.now()}`;
+    workspaceMarker = `e2e-${Date.now()}`;
     const { bodies } = await chat(
       ws,
-      `Write a file using execute_tools: await workspace.writeFile("test-e2e.txt", "${marker}"); return await workspace.readFile("test-e2e.txt")`,
+      `Use the file tool to write the exact text "${workspaceMarker}" to test-e2e.txt, `
+        + 'then read the file and reply with its content.',
       60_000,
     );
     const allBody = bodies.join("");
-    if (allBody.includes(marker)) {
-      pass("workspace.writeFile() + readFile() round-trip", `marker "${marker}" found in response`);
-    } else if (allBody.length > 0) {
-      pass("workspace.writeFile() + readFile() round-trip", `response received (tool was used)`);
+    if (allBody.includes(workspaceMarker)) {
+      pass("file.write + file.read round-trip", `marker "${workspaceMarker}" found in response`);
     } else {
-      fail("workspace.writeFile() + readFile() round-trip", "empty response");
+      fail("file.write + file.read round-trip", `marker absent from ${allBody.length} response characters`);
     }
   } catch (error) {
-    const message = errorMessage(error);
-    if (message.includes("Type validation failed")) {
-      pass("workspace.writeFile() + readFile() round-trip", "tool invoked (model returned malformed stream — known model issue)");
-    } else {
-      fail("workspace.writeFile() + readFile() round-trip", message);
-    }
+    fail("file.write + file.read round-trip", errorMessage(error));
   }
 }
 
-async function testSaveNoteSearchMemory(ws: WebSocket) {
+async function testMemorySave(ws: WebSocket) {
   try {
     const marker = `kinu-e2e-${Date.now()}`;
-
-    // Save a note with a unique marker
-    await chat(ws, `Use the save_note tool to save exactly this: "${marker}". Reply only DONE.`, 60_000);
-
-    // Search for it
-    const searchResult = await rpc(ws, "doSearchMemory", memorySearchSchema, [marker]);
-    if (searchResult.some(r => r.snippet.includes(marker))) {
-      pass("save_note + search_memory round-trip", `found marker "${marker}" in search results`);
-    } else if (searchResult.length > 0) {
-      // FTS may tokenize differently — if we got any results at all, partial pass
-      pass("save_note + search_memory round-trip", `search returned ${searchResult.length} results (marker may be tokenized)`);
+    await chat(
+      ws,
+      `Use the memory tool to save exactly this content: "${marker}". Reply only DONE.`,
+      60_000,
+    );
+    const memory = await rpc(ws, "getMemoryContent", memoryContentSchema);
+    if (memory.includes(marker)) {
+      pass("memory.save", `found marker "${marker}" in MEMORY.md`);
     } else {
-      // Try via chat as well
-      const { bodies } = await chat(ws, `Use the search_memory tool to search for "${marker}". What did you find?`, 60_000);
-      const allBody = bodies.join("");
-      if (allBody.includes(marker) || allBody.includes("Note saved") || allBody.includes("found")) {
-        pass("save_note + search_memory round-trip", "agent confirmed finding the note");
-      } else {
-        fail("save_note + search_memory round-trip", `search returned empty, chat: ${allBody.slice(0, 200)}`);
-      }
+      fail("memory.save", "MEMORY.md does not contain the saved marker");
     }
   } catch (error) {
-    fail("save_note + search_memory round-trip", errorMessage(error));
+    fail("memory.save", errorMessage(error));
   }
 }
 
@@ -484,12 +464,12 @@ async function main() {
 
   // §4 — Workspace operations via chat
   console.log(`\n§4. Workspace Operations`);
-  await testWorkspaceReadFile(ws);
   await testWorkspaceWriteFile(ws);
+  await testWorkspaceReadFile(ws);
 
   // §5 — Memory round-trip
   console.log(`\n§5. Memory Round-Trip`);
-  await testSaveNoteSearchMemory(ws);
+  await testMemorySave(ws);
 
   // Cleanup
   console.log(`\n§6. Cleanup`);
