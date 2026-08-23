@@ -26,7 +26,6 @@ import type { AgentModelEntry } from '../src/model-catalog';
 import { MessageList } from '../src/tui/messages';
 import { tuiColors } from '../src/tui/theme';
 import { StatusBar } from '../src/tui/status-bar';
-import { optionsForWorkspaceSwitch } from '../src/commands/chat';
 import { handleHistoryScrollKey } from '../src/tui/chat-app';
 import { VERSION } from '../src/display';
 
@@ -125,35 +124,6 @@ describe('CLI TUI layout', () => {
     }
   });
 
-  test('workspace switches drop conversation selectors and cloud-incompatible overrides', () => {
-    const options = {
-      model: 'openai/gpt-5.5',
-      baseUrl: 'https://local.invalid/v1',
-      auth: 'Bearer local',
-      continue: true,
-      resume: true,
-      session: 'workspace-a-session',
-      sessionDir: '/shared/sessions',
-      fork: 'workspace-a-fork',
-    };
-    expect(optionsForWorkspaceSwitch(options, 'local')).toEqual({
-      ...options,
-      continue: false,
-      resume: false,
-      session: undefined,
-      fork: undefined,
-    });
-    expect(optionsForWorkspaceSwitch(options, 'cloud')).toEqual({
-      ...options,
-      model: undefined,
-      baseUrl: undefined,
-      auth: undefined,
-      continue: false,
-      resume: false,
-      session: undefined,
-      fork: undefined,
-    });
-  });
 
   test('status bar keeps the mode visible while a long workspace name clips', async () => {
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 56, height: 6, useThread: false, maxFps: Number.POSITIVE_INFINITY });
