@@ -235,10 +235,8 @@ describe('E2E Full Lifecycle', () => {
 
     const execution = turn.toolCalls.find((call) => call.name === 'execute_tools');
     expect(execution, 'the model did not use execute_tools').toBeDefined();
-    const output = JSON.stringify(execution?.result);
-    expect(output).toContain('"7":true');
-    expect(output).toContain('"10":false');
-    expect(output).toContain('"13":true');
+    const output = v.parse(v.object({ logs: v.array(v.string()) }), execution?.result);
+    expect(output.logs).toContain('{"7":true,"10":false,"13":true}');
     expect(turn.assistantResponse.length).toBeGreaterThan(0);
   }, 300_000);
 

@@ -236,9 +236,10 @@ describe('Live Smoke — one real turn per backend', () => {
       const page = await browser.newPage();
       await page.setViewport({ width: 1_440, height: 900, deviceScaleFactor: 1 });
       await page.goto(origin, { waitUntil: 'networkidle0', timeout: 90_000 });
-      await page.waitForSelector('textarea[aria-label="Mission"]', { timeout: 90_000 });
+      const mission = 'textarea#workspace-mission';
+      await page.waitForSelector(mission, { timeout: 90_000 });
       await page.type(
-        'textarea[aria-label="Mission"]',
+        mission,
         'Audit checkout retries and keep the focused tests green.',
       );
       await clickButton(page, 'Create workspace');
@@ -252,13 +253,21 @@ describe('Live Smoke — one real turn per backend', () => {
       await clickAriaPrefix(page, 'Rename workspace');
       const rename = 'input[aria-label^="Rename"]';
       await page.waitForSelector(rename);
-      await page.click(rename, { clickCount: 3 });
+      await page.focus(rename);
+      await page.keyboard.down('Control');
+      await page.keyboard.press('A');
+      await page.keyboard.up('Control');
       await page.keyboard.type('Staging UI Smoke');
+      await page.waitForFunction(() => {
+        const save = [...document.querySelectorAll('button')]
+          .find((button) => button.getAttribute('aria-label') === 'Save workspace name');
+        return save?.disabled === false;
+      });
       await clickAriaPrefix(page, 'Save workspace name');
       await page.waitForFunction(() => {
         const text = document.body.textContent ?? '';
         return (text.match(/Staging UI Smoke/g)?.length ?? 0) >= 2;
-      });
+      }, { timeout: 90_000 });
 
       const composer = 'textarea[placeholder="Send a message..."]';
       await page.waitForSelector(composer);
@@ -283,15 +292,15 @@ describe('Live Smoke — one real turn per backend', () => {
       recordLiveModelSpend();
       recordLiveModelSpend();
 
-      await clickButton(page, 'Environment');
+      await clickAriaPrefix(page, 'Environment');
       await page.waitForFunction(
         () => [...document.querySelectorAll('button')]
-          .some((button) => button.textContent?.includes('web-ui-smoke.txt') === true),
+          .some((button) => button.textContent?.trim().startsWith('web-ui-smoke.txt') === true),
         { timeout: 90_000 },
       );
       await page.evaluate(() => {
         const file = [...document.querySelectorAll('button')]
-          .find((button) => button.textContent?.includes('web-ui-smoke.txt') === true);
+          .find((button) => button.textContent?.trim().startsWith('web-ui-smoke.txt') === true);
         file?.click();
       });
 
@@ -352,7 +361,8 @@ describe('Live Smoke — one real turn per backend', () => {
       await clickAriaPrefix(page, 'Open menu');
       const actions = await page.evaluate(() => [...document.querySelectorAll('a,button')]
         .filter((element) => /^(Workspace settings|Rename workspace|Remove workspace)/
-          .test(element.getAttribute('aria-label') ?? ''))
+          .test(element.getAttribute('aria-label') ?? '')
+          && element.getAttribute('aria-label')?.endsWith('Staging UI Smoke') === true)
         .filter((element) => element.getBoundingClientRect().width > 0)
         .map((element) => getComputedStyle(element).opacity));
       expect(actions).toEqual(['0.6', '0.6', '0.6']);
