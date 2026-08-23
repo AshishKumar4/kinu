@@ -89,7 +89,7 @@ engine refuses that composition by name.
 `advance` buys the selection rule. `uct` re-widens against an exploration term.
 `best-first` takes the best unexpanded node. `archive` keeps a grid of cells
 rather than one winner. `none` expands the root once and stops. `pareto` is not
-implemented; see *What the engine refuses outright*.
+implemented; see *Unsupported search shapes*.
 
 `carry` buys what outlives the run. `elites` and `artifacts` persist to the
 records store, which is what makes a sequence of runs cumulative. `reflections`
@@ -204,10 +204,9 @@ reader branches on the class rather than parsing the prose.
 Implemented across `strategy/swarm.ts`, `strategy/verifier-registry.ts` and
 `strategy/merge-back.ts`.
 
-## What the engine refuses outright
+## Unsupported search shapes
 
-Five shapes are refused rather than approximated, and each refusal names what to
-use instead:
+Five shapes are rejected because the engine cannot execute them faithfully:
 
 - **vector objectives**: no single scalar to climb.
 - **instanced objectives**: no per-instance measurement path.
@@ -250,8 +249,7 @@ Implemented by `strategy/objective.ts`; the raw-value path is
 ## Witness objectives
 
 A witness hunt's `proxy` is what the search actually optimises. A witness
-objective with no scalar proxy is refused; see *What the engine refuses
-outright*.
+objective with no scalar proxy is refused; see *Unsupported search shapes*.
 
 Implemented by `WitnessObjective` in `strategy/objective.ts`.
 

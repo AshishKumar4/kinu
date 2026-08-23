@@ -1,11 +1,9 @@
 # Formal Specification
 
-Kinu has one Lean 4 project in `lean/`. Measured on 2026-08-19 it compiles
-**330 named theorems** over **43 requirements**, with **0 `sorry`**, across
-hand-maintained abstract models of selected agent, evolution, execution,
-exploration, MCTS, safety, and storage behaviour. These are machine-checked
-statements about the Lean models. They are not a proof that the deployed
-TypeScript or SQLite implementation refines those models.
+The `lean/` project contains hand-maintained abstract models for selected agent,
+evolution, execution, exploration, MCTS, safety and storage behavior. `lake
+build` checks their theorem declarations. These checks do not establish that the
+deployed TypeScript and SQLite implementation refines the models.
 
 **Cite a theorem by name, never by line number.** A line citation slides onto
 different code the moment anything above it moves, and one rotted inside a single
