@@ -1,13 +1,12 @@
 # Self-hosting
 
-kinu.run is one deployment of this repository, not a special build of it. The
-same Worker, the same containers and the same searches run in any Cloudflare
-account, and an instance you deploy answers to you: your users, your data, your
-model spend.
+kinu.run is one deployment of this repository. A self-host uses the same Worker,
+containers, and search code. Hosted language runtimes are separate artifacts in
+`NIMBUS_RUNTIME_CACHE`; this repository does not yet include a reproducible
+catalog seed command for a fresh account.
 
-This document is the honest path from an empty account to your own instance.
-It is three steps, not one click. [docs/DEPLOYMENT.md](DEPLOYMENT.md) is the
-reference this page narrates; where the two disagree, that one wins.
+This document covers the path from an empty account to your own instance.
+[docs/DEPLOYMENT.md](DEPLOYMENT.md) is the reference.
 
 ## One click is step zero
 
@@ -26,6 +25,8 @@ against a fresh account. It cannot:
   `packages/cf-backend/wrangler.jsonc` by hand.
 - create an **AI Gateway**. No wrangler command can; it is made in the
   dashboard.
+- seed the **Nimbus runtime catalog**. Creating its R2 bucket does not upload
+  `catalog/v1.json`, manifests, or runtime blobs.
 - mint the **root secret**, `CREDENTIAL_ENCRYPTION_KEY`. A key the program
   invents and never shows anyone is a key nobody can restore from, so it is a
   prompt at a terminal, displayed exactly once.
@@ -67,9 +68,13 @@ bun run infra:provision      # the secrets; `wrangler secret put` needs the Work
 
 Provisioning runs twice because `wrangler secret put` refuses on a Worker that
 does not exist yet. The first run says so; the second creates nothing the first
-created. `bun run deploy` runs the repository's 49 required gates before it
-uploads anything, so a fork deploys through the same discipline production
-does, and a failed gate exits before Wrangler runs.
+created. `bun run deploy` runs the repository's 53 required gates before it
+uploads anything. A failed gate exits before Wrangler runs.
+
+The fresh deployment does not have hosted Python, Bash, Ruby, or Clang until an
+operator supplies a Nimbus runtime catalog. The base workspace and the
+Cloudflare container remain available. Do not advertise runtime parity for a
+fresh self-host until a seed command and content check exist.
 
 ## Step three: prove the account
 

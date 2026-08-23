@@ -11,10 +11,9 @@ agents are the actors that work inside it.
 │   identity   workspace_identity(id, name, owner_user_id) is the          │
 │              ownership root, read on every model call                    │
 │   file plane one authoritative Nimbus filesystem, durable, with a real   │
-│              shell, runtimes, processes and ports over the same bytes.   │
-│              The ONLY one. There is no mount table.                      │
-│   exec plane ExecutionRouter: every OTHER environment, each its own      │
-│              filesystem in its own native paths:                         │
+│              shell, runtimes, processes and ports over the base bytes.   │
+│              A mount table adds live `/pc` and `/sandbox` views.          │
+│   exec plane ExecutionRouter: every environment keeps its native path:   │
 │                sandbox.*   full Linux container   (when configured)      │
 │                laptop.*    the user's own machine  (connect + consent)   │
 │                parent.*    a facet's view of its parent workspace        │
@@ -48,28 +47,25 @@ agents are the actors that work inside it.
   single ownership root; the UserDO `user_workspaces` table is the user's
   registry of workspaces (source of truth for the sidebar, CLI list, and the
   ownership check on every `/api/workspaces/<name>/*` request).
-- **The file plane is the workspace's, and it is the only one.** `Storage.vfs`
-  is the workspace filesystem. On the hosted backend that is one authoritative
-  Nimbus session; locally it is the embedded Nimbus workspace over
-  `bun:sqlite`. A real shell runs over the same bytes, and relative paths
-  resolve at `/home/user` (`WORKSPACE_ROOT`). There is no mount table. Every other environment is an
-  executor with its own filesystem in its own native paths. `listMounts()` (an
-  orchestrator RPC) lists those environments with their live state and their
-  declared policy (`readOnly`, and `consistency` of `durable | ephemeral |
-  live-shared`). The web UI renders them on the **Environment** work surface
-  (`EnvironmentSurface.tsx`), one chip each plus a file browser; device
-  registration lives in Account settings.
+- **The file plane is the workspace's.** `Storage.vfs` starts with the
+  authoritative Nimbus filesystem on hosted workspaces and embedded Nimbus
+  over `bun:sqlite` locally. Relative paths resolve at `/home/user`
+  (`WORKSPACE_ROOT`). The mount table adds a connected device at `/pc` and a
+  container at `/sandbox`. Reads and writes cross through each executor's own
+  file API and retain its consent and access policy. The workspace shell sees
+  only the base tree; commands reach other machines through their namespaces.
+  `listMounts()` reports each live environment and its `readOnly` and
+  `consistency` policy. The web UI shows them on the **Environment** work
+  surface.
 - **One default agent, more on demand.** Three kinds of extra actor, and which
   one you get depends on whether the work is ephemeral, durable-in-workspace, or
   cross-workspace:
-  - **Swarm nodes** (`agents`, `action: 'swarm'`) are ephemeral. A node is a
-    full agent. It runs the same `runChat` loop the orchestrator and a
-    subordinate run, and it takes as many turns as it needs. A tool call that
-    outlives the surface's threshold moves to the background, and the node is
-    woken when that work settles: 30 s in an interactive session, 300 s under
-    `kinu exec` (`BACKGROUND_POLICY`, `core/src/jobs/threshold.ts:70-73`).
-    The node reports a candidate, and the caller's registered verifier scores
-    that report.
+  - **Swarm nodes** (`agents`, `action: 'swarm'`) are ephemeral, full agents.
+    They use the Core node turn loop and can take multiple turns. A tool call
+    that runs past 30 seconds moves to the background, and the node wakes when
+    it settles. The node reports a candidate. A registered verifier scores
+    measured searches; ideation returns unranked candidates, and judged
+    searches use a model ensemble.
 
     Hosted nodes run over the canonical workspace with actor-private shell
     state and scaffold. `facetRuntime` gives each one a `node:<name>` shell id

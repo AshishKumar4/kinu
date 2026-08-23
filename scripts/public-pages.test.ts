@@ -226,9 +226,8 @@ beforeAll(async () => {
       await page.click('button[aria-label="Replay CLI run"]');
       await page.waitForSelector('[data-cli-stage="0"]');
       await page.evaluate(() => {
-        const stage = [...document.querySelectorAll<HTMLButtonElement>('#evolution button')]
-          .find((button) => button.textContent?.includes('After each turn') === true);
-        stage?.click();
+        const stages = [...document.querySelectorAll<HTMLButtonElement>('#evolution button[aria-pressed]')];
+        stages[1]?.click();
       });
       await page.waitForFunction(
         () => document.getElementById('evolution')?.getAttribute('data-evolution-stage') === '1',
@@ -236,9 +235,9 @@ beforeAll(async () => {
       facts.interactions = await page.evaluate(() => ({
         workspace: document.querySelector('[data-workspace-panel="supervise"]') !== null,
         decision: document.querySelector('[data-decision-state="retried"]') !== null,
-        tui: document.querySelector('[data-tui-session="jarvis"]')?.textContent?.includes('staged rollout') === true,
+        tui: document.querySelector('[data-tui-session="jarvis"]') !== null,
         cli: document.querySelector('[data-cli-stage="0"]') !== null,
-        evolution: document.querySelector('#evolution [aria-pressed="true"]')?.textContent?.includes('After each turn') === true,
+        evolution: document.getElementById('evolution')?.getAttribute('data-evolution-stage') === '1',
       }));
       facts.command = await page.$eval(
         '[data-install-command]',

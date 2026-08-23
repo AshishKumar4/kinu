@@ -2,33 +2,29 @@
 
 ## 1. What Kinu Is
 
-Kinu is a self-evolving agent platform that improves with use. It:
+Kinu is an agent platform with durable adaptation mechanisms. It:
 
-- **Searches a tree of agents** against an objective the caller declares, and scores every candidate by running that objective's verifier
-- **Learns reusable tools** from successful conversations and applies them in future ones
-- **Rewrites its own execution logic** (scaffold) from observed performance patterns
-- **Remembers everything** in a persistent, FTS5-searchable memory
-- **Ships CI-gated Lean 4 models** of selected mechanisms, with assumptions and implementation-evidence gaps tracked explicitly
+- runs measured tree searches, judged searches, and unranked ideation swarms;
+- builds reusable tools and updates their fitness from execution and later outcomes;
+- evaluates reversible changes to its scaffold;
+- keeps persistent notes and searchable conversation text.
 
 ```mermaid
 graph LR
-    subgraph "Kinu"
-        B1[Learned Tools<br/>CraftStore + EMA scoring] --> B2[Persistent Memory<br/>FTS5 search + reflections]
-        B2 --> B3[Tree swarm<br/>candidates measured by a verifier]
-        B3 --> B4[Self-Modifying Scaffold<br/>4-gate validated]
-        B4 --> B5[Lean 4 Models<br/>CI-gated traceability]
-    end
-
+    B1[Crafted tools] --> B2[Persistent notes]
+    B2 --> B3[Tree swarms]
+    B3 --> B4[Versioned scaffold]
 ```
 
-Evolution happens at four timescales at once, and each one feeds the next:
 
-| Timescale | Frequency | What Evolves |
-|-----------|-----------|-------------|
-| **In-episode** | Every settled `execute_tools` call | Crafted-tool fitness on the step clock (`core/src/orchestrator/craft-cycle.ts`) |
-| **Turn** | Every response | Tool patterns extracted, quality reflected on |
-| **Session** | Every 5 turns | Patterns consolidated, scaffold mutation proposed |
-| **Lifetime** | Periodic / on-demand | Full MCTS exploration, tool retirement, strategic improvement |
+Adaptation runs at four timescales:
+
+| Timescale | Frequency | What changes |
+|-----------|-----------|--------------|
+| **In-episode** | Each settled `execute_tools` call | Crafted-tool fitness |
+| **Turn** | Classifiable feedback or execution evidence | Provisional lessons and outcome evidence |
+| **Session** | Session close with negative signal | A focused reflection in workspace memory |
+| **Lifetime** | Periodic or on demand | Search, tool retirement, and scaffold candidates |
 
 ## 2. Web Version Applications
 
@@ -139,17 +135,16 @@ config.setMctsOverrides({
 `config.getMctsOverrides()` is what the search reads, so a change takes effect on
 the next turn without a restart, and it survives one.
 
-## 4. Design Choices
+## 4. Design choices
 
-1. **Four-timescale evolution with machine-checked abstract models.** The Lean corpus checks selected properties of hand-maintained models; it does not prove the deployed TypeScript implementation. CI gates compilation, consistency, axiom closure, and traceability, while model-to-code differential fixtures remain planned.
-
-2. **Scaffold mutation with structural validation.** The agent rewrites its own agentic loop (the async generator that controls how it processes tasks). This is self-modifying code, guarded by 4 validation gates that prevent syntax errors, forbidden patterns, and data loss.
-
-3. **CraftStore with automatic lifecycle management.** Learned tools are scored via exponential moving average, time-decayed for relevance, and automatically retired when they stop being useful.
-
-4. **Swarm nodes as isolated Durable Objects.** On Cloudflare a swarm node and an MCTS branch each run inside their own facet with their own SQLite storage. Lean proves a `StorageIsolated` invariant over an abstract transition model; implementation correspondence is tracked but still needs a covering branch-storage integration assertion.
-
-5. **Traceable Lean and TypeScript models.** Each formal requirement records theorem names, modeled TypeScript source locations, classification, and remaining evidence. CI rejects missing theorems, undocumented axioms, and traceability mismatches. The models are hand-maintained rather than generated from TypeScript.
+1. **Shared Core policy.** Cloud and local backends share orchestration,
+   storage contracts, tools, delegation, and adaptation policy.
+2. **Versioned scaffold changes.** Candidate agent-loop changes pass the
+   configured checks and retain a rollback version.
+3. **Crafted tool lifecycle.** Crafted tools use an exponential moving score,
+   relevance decay, and retirement rules.
+4. **Facet-backed hosted nodes.** Hosted nodes run as facets with private shell
+   and scaffold state over the workspace's canonical files.
 
 ## 5. Current Limitations
 
