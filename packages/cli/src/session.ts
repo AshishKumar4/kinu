@@ -352,11 +352,14 @@ function entryToMessage(entry: CliSessionEntry): AgentTranscriptMessage | null {
     case 'tool_result':
       {
         const result = v.safeParse(v.string(), entry.result);
-        return {
+        const success = v.safeParse(v.boolean(), entry.success);
+        const message: AgentTranscriptMessage = {
           id: entry.id,
           role: 'tool_result',
           content: result.success ? result.output : safeJson(entry.result),
         };
+        if (success.success) message.success = success.output;
+        return message;
       }
     case 'error':
       {

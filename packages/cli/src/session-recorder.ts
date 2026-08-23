@@ -39,7 +39,12 @@ export class SessionRecorder {
         session.append('tool_call', { toolName: event.toolName, args: event.args, backend: this.backend });
         break;
       case 'tool-result':
-        session.append('tool_result', { toolName: event.toolName, result: event.result, backend: this.backend });
+        session.append('tool_result', {
+          toolName: event.toolName,
+          result: event.result,
+          success: event.success,
+          backend: this.backend,
+        });
         break;
       case 'turn-end':
         // turn.text is the authoritative full text; use it as the trailing

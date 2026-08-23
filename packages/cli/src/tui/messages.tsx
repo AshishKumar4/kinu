@@ -3,6 +3,7 @@
  * evolution events, and system messages.
  */
 
+import { useTerminalDimensions } from '@opentui/react';
 import { parseRefusal } from '@kinu.run/core';
 import { markdownSyntax, tuiColors } from './theme';
 import { clipText } from './format';
@@ -15,6 +16,7 @@ export interface DisplayMessage {
   content: string;
   toolName?: string;
   args?: string;
+  success?: boolean;
   timestamp?: string;
   /** Attachment chip labels (file mentions resolved at submit). */
   attachments?: string[];
@@ -73,19 +75,20 @@ function AssistantMessage({ content, live }: { content: string; live?: boolean }
   );
 }
 
-function ToolCallMessage({ toolName, args }: { toolName: string; args?: string }) {
+function ToolCallMessage({ toolName, args, previewWidth }: { toolName: string; args?: string; previewWidth: number }) {
+  const preview = args ? clipText(args.replace(/\s+/g, ' '), previewWidth) : '';
   return (
     <box style={{ paddingLeft: 4, marginBottom: 0 }}>
       <text>
-        <span fg={tuiColors.amberDeep}>▸ </span>
+        <span fg={tuiColors.amberDeep}>› </span>
         <span fg={tuiColors.amber}>{toolName}</span>
-        {args ? <span fg={tuiColors.muted}> {clipText(args, 80)}</span> : null}
+        {preview ? <span fg={tuiColors.muted}> {preview}</span> : null}
       </text>
     </box>
   );
 }
 
-function ToolResultMessage({ content }: { content: string }) {
+function ToolResultMessage({ content, success, previewWidth }: { content: string; success?: boolean; previewWidth: number }) {
   const refusal = parseRefusal(content);
   if (refusal) {
     const [head, ...rest] = refusal.error.split('\n');
@@ -93,19 +96,22 @@ function ToolResultMessage({ content }: { content: string }) {
       <box style={{ paddingLeft: 6, marginBottom: 1 }}>
         <text>
           <span fg={tuiColors.red}>✗ refused</span>
-          {head ? <span fg={tuiColors.text}> {clipText(head, 160)}</span> : null}
+          {head ? <span fg={tuiColors.text}> {clipText(head, previewWidth)}</span> : null}
           <span fg={tuiColors.muted}> ({refusal.reason})</span>
         </text>
-        {rest.map((line, i) => (
-          <text key={i}><span fg={tuiColors.muted}>{clipText(line, 160)}</span></text>
+        {rest.slice(0, 3).map((line, index) => (
+          <text key={`${String(index)}-${line}`}><span fg={tuiColors.muted}>{clipText(line, previewWidth)}</span></text>
         ))}
       </box>
     );
   }
+  const preview = clipText(content.replace(/\s+/g, ' '), previewWidth);
   return (
     <box style={{ paddingLeft: 6, marginBottom: 1 }}>
       <text>
-        <span fg={tuiColors.muted}>↳ {clipText(content, 200)}</span>
+        <span fg={success === false ? tuiColors.red : tuiColors.muted}>
+          {success === false ? '✗ ' : '↳ '}{preview}
+        </span>
       </text>
     </box>
   );
@@ -123,10 +129,12 @@ function EvolutionMessage({ content }: { content: string }) {
 }
 
 function SystemMessage({ content }: { content: string }) {
+  const failed = content.startsWith('Error:');
+  const shown = failed ? `✗ ${content}` : content;
   return (
     <box style={{ paddingLeft: 2, marginBottom: 1 }}>
       <text>
-        <span fg={tuiColors.muted}>{content}</span>
+        <span fg={failed ? tuiColors.red : tuiColors.muted}>{shown}</span>
       </text>
     </box>
   );
@@ -137,6 +145,9 @@ interface Props {
 }
 
 export function MessageList({ messages }: Props) {
+  const { width } = useTerminalDimensions();
+  const callPreviewWidth = Math.max(8, Math.min(80, width - 28));
+  const resultPreviewWidth = Math.max(8, Math.min(120, width - 12));
   return (
     <>
       {messages.map((msg) => {
@@ -147,9 +158,9 @@ export function MessageList({ messages }: Props) {
           case 'assistant':
             return <AssistantMessage key={msg.id} content={msg.content} live={msg.live} />;
           case 'tool_call':
-            return <ToolCallMessage key={msg.id} toolName={msg.toolName ?? ''} args={msg.args} />;
+            return <ToolCallMessage key={msg.id} toolName={msg.toolName ?? ''} args={msg.args} previewWidth={callPreviewWidth} />;
           case 'tool_result':
-            return <ToolResultMessage key={msg.id} content={msg.content} />;
+            return <ToolResultMessage key={msg.id} content={msg.content} success={msg.success} previewWidth={resultPreviewWidth} />;
           case 'evolution':
             return <EvolutionMessage key={msg.id} content={msg.content} />;
           case 'system':

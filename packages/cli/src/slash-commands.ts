@@ -41,7 +41,6 @@ export const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
   { name: '/approval', description: 'Show or set shell approval mode', usage: '/approval strict|allow_all|deny_all', requires: 'localControls' },
   { name: '/always', description: 'Manage always-active skills', usage: '/always <name...|none>', requires: 'localControls' },
   { name: '/advisor', description: 'Show or set the advisor. It is off by default. Turning it on adds one model call per turn.', usage: '/advisor [on|off|severity <nit|concern|blocker>]' },
-  { name: '/cancel', description: 'Close the active panel' },
   { name: '/exit', description: 'Exit chat' },
 ];
 
@@ -77,7 +76,6 @@ export function filterCommands(commands: readonly SlashCommandInfo[], draft: str
     .filter((candidate): candidate is { command: SlashCommandInfo; index: number; rank: number } =>
       candidate.rank !== null)
     .sort((left, right) => left.rank - right.rank || left.index - right.index)
-    .slice(0, 8)
     .map(({ command }) => command);
 }
 

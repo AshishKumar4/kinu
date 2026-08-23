@@ -64,9 +64,7 @@ export function listKnownAgents(): ListedAgent[] {
       .filter((agent) => agent.mode === 'cloud' || !localAgents.has(agent.localName ?? agent.name))
       .map((agent) => ({
         name: agent.name,
-        label: agent.mode === 'cloud'
-          ? `${agent.displayName ?? agent.name} (cloud)`
-          : agent.displayName ?? agent.name,
+        label: agent.displayName ?? agent.name,
         mode: agent.mode,
         localName: agent.localName,
         cloudName: agent.cloudName,

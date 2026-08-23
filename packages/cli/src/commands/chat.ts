@@ -9,10 +9,41 @@ import { installTurnDiagnostics } from '../turn-log';
 import { listKnownAgents } from '../agent-list';
 import { ask } from '../prompt';
 
-export async function chatCommand(name: string | undefined, opts: {
-  model?: string; baseUrl?: string; auth?: string; classic?: boolean;
-  continue?: boolean; resume?: boolean; session?: string; sessionDir?: string; noSession?: boolean; fork?: string;
-}): Promise<void> {
+export interface ChatCommandOptions {
+  model?: string;
+  baseUrl?: string;
+  auth?: string;
+  classic?: boolean;
+  continue?: boolean;
+  resume?: boolean;
+  session?: string;
+  sessionDir?: string;
+  noSession?: boolean;
+  fork?: string;
+}
+
+export function optionsForWorkspaceSwitch(
+  opts: ChatCommandOptions,
+  mode: 'local' | 'cloud',
+): ChatCommandOptions {
+  const selected: ChatCommandOptions = {
+    ...opts,
+    continue: false,
+    resume: false,
+    session: undefined,
+    fork: undefined,
+  };
+  if (mode === 'cloud') {
+    selected.model = undefined;
+    selected.baseUrl = undefined;
+    selected.auth = undefined;
+  }
+  return selected;
+}
+export async function chatCommand(
+  name: string | undefined,
+  opts: ChatCommandOptions,
+): Promise<void> {
   // No name: let user pick from existing agents
   if (!name) {
     if (!opts.classic && process.stdin.isTTY && process.stdout.isTTY) {
@@ -71,7 +102,8 @@ export async function chatCommand(name: string | undefined, opts: {
         }
         const selectedTarget = resolveAgentTarget(selectedName);
         if (selectedTarget.mode === 'local') ensureLocalDaemonRunning();
-        return createAgentClient(selectedTarget, opts);
+        const selectedOptions = optionsForWorkspaceSwitch(opts, selectedTarget.mode);
+        return createAgentClient(selectedTarget, selectedOptions);
       },
     });
   }

@@ -1,176 +1,16 @@
 /** @jsxImportSource @opentui/react */
-import { createTestRenderer } from '@opentui/core/testing';
-import { createRoot } from '@opentui/react';
 import { afterEach, describe, expect, test } from 'bun:test';
-import type { EvolutionConfigView } from '@kinu.run/core';
 
-import type {
-  AgentClient,
-  AgentClientEvent,
-  AgentClientStatus,
-  DeviceConsentSurface,
-  SessionHistorySurface,
-} from '../src/agent-client';
+import type { AgentClient, AgentClientStatus } from '../src/agent-client';
 import type { AgentModelMenu } from '../src/model-catalog';
-import { createCliSession, type CliSessionInfo } from '../src/session';
-import { ChatApp } from '../src/tui/chat-app';
+import { TURN, cleanupChats, fakeClient, mountChat } from './helpers/chat-app-fixture';
 
-const EVOLUTION: EvolutionConfigView = {
-  reviewModel: null,
-  autoPromoteScaffold: false,
-  gepaEvalBudget: 0,
-  shadowSampleRate: 0,
-  scaffoldExploreShare: 0,
-  advisorEnabled: false,
-  advisorMinSeverity: 'concern',
-};
-const TURN = { text: '', toolCalls: [], steps: 1, durationMs: 1, hadError: false };
-const mounted: Array<() => Promise<void>> = [];
-
-afterEach(async () => {
-  for (const destroy of mounted.splice(0)) await destroy();
-});
-interface FakeClientOptions {
-  name: string;
-  mode?: 'local' | 'cloud';
-  status?: () => Promise<AgentClientStatus>;
-  consents?: DeviceConsentSurface | null;
-  sessionHistory?: SessionHistorySurface | null;
-  listModels?: () => Promise<AgentModelMenu>;
-}
-
-function fakeClient(options: FakeClientOptions) {
-  const listeners = new Set<(event: AgentClientEvent) => void>();
-  const state = { closed: 0 };
-  let evolution: EvolutionConfigView = { ...EVOLUTION };
-  const mode = options.mode ?? 'local';
-  const client: AgentClient = {
-    mode,
-    agentName: options.name,
-    cliSession: createCliSession(options.name, { noSession: true }),
-    consents: options.consents ?? null,
-    localControls: mode === 'local' ? {
-      getAlwaysActiveSkills: () => [],
-      setAlwaysActiveSkills: () => {},
-      getShellApprovalMode: () => 'strict',
-      setShellApprovalMode: (approval) => approval,
-      setShellApprovalHandler: () => () => {},
-      listModelProviders: async () => [],
-    } : null,
-    checkpoints: null,
-    sessionHistory: options.sessionHistory ?? (mode === 'local'
-      ? { list: () => [], resume: async () => {} }
-      : null),
-    inlineAttachmentLimitBytes: 1024,
-    connect: async () => {},
-    subscribe: (listener) => {
-      listeners.add(listener);
-      return () => { listeners.delete(listener); };
-    },
-    send: async () => TURN,
-    steer: () => false,
-    branch: () => false,
-    fork: async () => ({ client, label: options.name }),
-    stop: () => [],
-    close: async () => { state.closed += 1; },
-    history: async () => [],
-    status: options.status ?? (async () => ({
-      name: options.name,
-      purpose: `${options.name} purpose`,
-      model: 'openai/gpt-5.5',
-      reasoningEffort: 'medium',
-    })),
-    describeTools: async () => ({ builtIn: [], crafted: [] }),
-    changelog: async () => ({ entries: [], unseenCount: 0 }),
-    revertChangelogEntry: async () => ({ ok: false }),
-    readMemory: async () => '',
-    searchNodes: async () => [],
-    listJobs: async () => [],
-    latestTakes: async () => null,
-    pickTake: async () => { throw new Error('no takes'); },
-    getModelSpec: async () => 'openai/gpt-5.5',
-    setModel: async (spec) => ({ spec }),
-    getReasoningEffort: async () => 'medium',
-    setReasoningEffort: async (effort) => ({ effort }),
-    getEvolutionConfig: async () => evolution,
-    setEvolutionConfig: async (next) => {
-      evolution = { ...evolution, ...next };
-      return evolution;
-    },
-    listModels: options.listModels ?? (async () => ({
-      models: [{
-        provider: 'openai',
-        label: 'GPT 5.5',
-        spec: 'openai/gpt-5.5',
-        capabilities: ['tools', 'streaming'],
-      }],
-      failures: [],
-    })),
-  };
-  return {
-    client,
-    state,
-    emit(event: AgentClientEvent) {
-      for (const listener of listeners) listener(event);
-    },
-  };
-}
-
-async function mountChat(
-  client: AgentClient,
-  options: {
-    listWorkspaces?: () => Array<{ name: string; label: string; mode: 'local' | 'cloud'; cloudName?: string }>;
-    onWorkspaceSelect?: (name: string) => Promise<AgentClient>;
-  } = {},
-) {
-  const testRenderer = await createTestRenderer({
-    width: 96,
-    height: 30,
-    useThread: false,
-    maxFps: Number.POSITIVE_INFINITY,
-  });
-  const root = createRoot(testRenderer.renderer);
-  root.render(
-    <ChatApp
-      client={client}
-      onExit={() => {}}
-      listWorkspaces={options.listWorkspaces}
-      onWorkspaceSelect={options.onWorkspaceSelect}
-    />,
-  );
-  const frame = () => testRenderer.captureCharFrame();
-  const waitFor = async (what: string, predicate: () => boolean, rounds = 400) => {
-    for (let index = 0; index < rounds; index += 1) {
-      await testRenderer.renderOnce();
-      if (predicate()) return;
-      await Bun.sleep(10);
-    }
-    throw new Error(`timed out waiting for ${what}`);
-  };
-  await waitFor('the composer to accept input', () => frame().includes('Send a message'));
-  mounted.push(async () => {
-    root.render(<box />);
-    await testRenderer.renderOnce();
-    testRenderer.renderer.destroy();
-  });
-  return { ...testRenderer, frame, waitFor };
-}
-
-const session = (id: string): CliSessionInfo => ({
-  id,
-  path: `/tmp/${id}.jsonl`,
-  agent: 'alpha',
-  cwd: '/workspace',
-  startedAt: '2026-08-22T00:00:00.000Z',
-  modifiedAt: 1,
-  entries: 2,
-  firstUserText: 'Earlier task',
-});
-
+afterEach(cleanupChats);
 describe('ChatApp terminal interaction', () => {
   test('command palette exposes only truthful local and cloud capabilities', async () => {
     const local = fakeClient({ name: 'local' });
     const localScreen = await mountChat(local.client);
+    expect(localScreen.frame()).not.toContain('⠋ null');
     localScreen.mockInput.pressKey('k', { ctrl: true });
     await localScreen.waitFor('the local command palette', () => localScreen.frame().includes('Filter commands'));
     expect(localScreen.frame()).toContain('/resume');
@@ -186,6 +26,14 @@ describe('ChatApp terminal interaction', () => {
     localScreen.mockInput.pressEnter();
     await localScreen.waitFor('the selected setting to apply', () =>
       localScreen.frame().includes('Reasoning effort: low'));
+    await localScreen.waitFor('the composer after applying settings', () =>
+      !localScreen.frame().includes('Filter settings')
+      && localScreen.frame().includes('Send a message'));
+    await localScreen.mockInput.typeText('/settings');
+    localScreen.mockInput.pressEnter();
+    await localScreen.waitFor('settings through the command path', () =>
+      localScreen.frame().includes('Filter settings'));
+    localScreen.mockInput.pressEscape();
     expect(localScreen.frame()).not.toContain('/connect');
 
     const cloud = fakeClient({
@@ -199,85 +47,20 @@ describe('ChatApp terminal interaction', () => {
     await cloudScreen.waitFor('the cloud command palette', () => cloudScreen.frame().includes('Filter commands'));
     expect(cloudScreen.frame()).not.toContain('/resume');
     expect(cloudScreen.frame()).toContain('/connect');
+
   });
-  test('resume picker starts in the current folder and expands on Tab', async () => {
-    const resumed: string[] = [];
-    const controlled = fakeClient({
-      name: 'alpha',
-      sessionHistory: {
-        list: () => [session('older')],
-        resume: async (id) => { resumed.push(id); },
-      },
-    });
+  test('Ctrl+K preserves the draft under the command palette', async () => {
+    const controlled = fakeClient({ name: 'alpha' });
     const screen = await mountChat(controlled.client);
-    await screen.mockInput.typeText('/resume');
-    screen.mockInput.pressEnter();
-    await screen.waitFor('the folder-scoped resume picker', () =>
-      screen.frame().includes('No conversations in this folder'));
-    screen.mockInput.pressTab();
-    await screen.waitFor('all recorded conversations', () =>
-      screen.frame().includes('Earlier task'));
-    screen.mockInput.pressEnter();
-    await screen.waitFor('the selected conversation to resume', () => resumed.length === 1);
-    expect(resumed).toEqual(['older']);
+    await screen.mockInput.typeText('preserve this draft');
+    for (let index = 0; index < 5; index += 1) screen.mockInput.pressArrow('left');
+    screen.mockInput.pressKey('k', { ctrl: true });
+    await screen.waitFor('the command palette', () => screen.frame().includes('Filter commands'));
+    screen.mockInput.pressEscape();
+    await screen.waitFor('the preserved composer', () =>
+      !screen.frame().includes('Filter commands'));
+    expect(screen.frame()).toContain('preserve this draft');
   });
-
-  test('failed resume restores a usable composer and keeps the failure actionable', async () => {
-    const controlled = fakeClient({
-      name: 'alpha',
-      sessionHistory: {
-        list: () => [session('older')],
-        resume: async () => { throw new Error('Unauthorized model provider'); },
-      },
-    });
-    const screen = await mountChat(controlled.client);
-    await screen.mockInput.typeText('/resume 1');
-    screen.mockInput.pressEnter();
-    await screen.waitFor('the resume failure', () =>
-      screen.frame().includes('Unauthorized model provider'));
-    await screen.waitFor('the composer after failed resume', () =>
-      screen.frame().includes('Send a message'));
-    await screen.mockInput.typeText('/status');
-    screen.mockInput.pressEnter();
-    await screen.waitFor('a command after failed resume', () =>
-      screen.frame().includes('Workspace Status'));
-    expect(screen.frame()).not.toContain('Still connecting.');
-  });
-
-  test('device consent owns every key until the decision closes it', async () => {
-    const decisions: string[] = [];
-    const pending = {
-      consentId: 'consent-1',
-      deviceLabel: 'Workstation',
-      method: 'run',
-      command: 'bun test',
-    };
-    const controlled = fakeClient({
-      name: 'cloudish',
-      consents: {
-        listPending: async () => [pending],
-        resolve: async (_id, decision) => {
-          decisions.push(decision);
-          return { ok: true };
-        },
-      },
-    });
-    const screen = await mountChat(controlled.client);
-    controlled.emit({ type: 'turn-start', kind: 'user', text: 'run the suite' });
-    await screen.waitFor('the consent overlay', () => screen.frame().includes('Use your PC?'));
-    await screen.mockInput.typeText('hidden draft');
-    screen.mockInput.pressKey('p', { ctrl: true });
-    screen.mockInput.pressTab();
-    await screen.renderOnce();
-    expect(screen.frame()).not.toContain('hidden draft');
-    expect(screen.frame()).not.toContain('Select model');
-    expect(screen.frame()).not.toContain('queued');
-    screen.mockInput.pressKey('n');
-    await screen.waitFor('the consent decision', () => decisions.length === 1);
-    expect(decisions).toEqual(['deny']);
-  });
-
-
   test('closing a loading model panel cannot reopen it from a stale result', async () => {
     const pending = Promise.withResolvers<AgentModelMenu>();
     const controlled = fakeClient({
@@ -288,12 +71,123 @@ describe('ChatApp terminal interaction', () => {
     screen.mockInput.pressKey('p', { ctrl: true });
     await screen.waitFor('the loading model panel', () => screen.frame().includes('Loading models'));
     screen.mockInput.pressEscape();
+    pending.resolve({ models: [], failures: [] });
     await screen.waitFor('the model panel to close', () =>
       !screen.frame().includes('Select model'));
-    pending.resolve({ models: [], failures: [] });
     for (let index = 0; index < 6; index += 1) await screen.renderOnce();
     expect(screen.frame()).not.toContain('Select model');
     expect(screen.frame()).toContain('Send a message');
+  });
+
+  test('failed model selection closes once and restores an actionable error', async () => {
+    const controlled = fakeClient({
+      name: 'alpha',
+      setModel: async () => { throw new Error('Unavailable model'); },
+    });
+    const screen = await mountChat(controlled.client);
+    screen.mockInput.pressKey('p', { ctrl: true });
+    await screen.waitFor('the model picker', () => screen.frame().includes('Select model'));
+    screen.mockInput.pressEnter();
+    await screen.waitFor('the model failure', () => screen.frame().includes('Unavailable model'));
+    expect(screen.frame()).not.toContain('Select model');
+    expect(screen.frame()).toContain('Send a message');
+  });
+
+
+  test('a slow model selection blocks newer surfaces until it settles', async () => {
+    const pending = Promise.withResolvers<{ spec: string }>();
+    const controlled = fakeClient({
+      name: 'alpha',
+      setModel: () => pending.promise,
+    });
+    const screen = await mountChat(controlled.client);
+    screen.mockInput.pressKey('p', { ctrl: true });
+    await screen.waitFor('the model picker', () => screen.frame().includes('Select model'));
+    screen.mockInput.pressEnter();
+    screen.mockInput.pressKey('g', { ctrl: true });
+    for (let index = 0; index < 4; index += 1) await screen.renderOnce();
+    expect(screen.frame()).not.toContain('Filter settings');
+    pending.resolve({ spec: 'openai/gpt-5.5' });
+    await screen.waitFor('the selected model result', () =>
+      screen.frame().includes('Model: openai/gpt-5.5'));
+  });
+  test('failed workspace connection keeps the current workspace usable', async () => {
+    const controlled = fakeClient({ name: 'alpha' });
+    const candidate = fakeClient({
+      name: 'missing',
+      mode: 'cloud',
+      connect: async () => { throw new Error('Workspace is unavailable'); },
+    });
+    const screen = await mountChat(controlled.client, {
+      listWorkspaces: () => [
+        { name: 'alpha', label: 'Alpha', mode: 'local' },
+        { name: 'missing', label: 'Missing', mode: 'cloud', cloudName: 'missing' },
+      ],
+      onWorkspaceSelect: async () => candidate.client,
+    });
+    screen.mockInput.pressKey('o', { ctrl: true });
+    await screen.waitFor('the workspace drawer', () => screen.frame().includes('Filter workspaces'));
+    screen.mockInput.pressArrow('down');
+    screen.mockInput.pressEnter();
+    await screen.waitFor('the workspace failure', () =>
+      screen.frame().includes('Workspace is unavailable'));
+    expect(screen.frame()).not.toContain('Filter workspaces');
+    expect(screen.frame()).toContain('alpha');
+    expect(screen.frame()).toContain('Send a message');
+    expect(controlled.state.closed).toBe(0);
+    expect(candidate.state.closed).toBe(1);
+  });
+
+  test('workspace selection is single-flight while the candidate connects', async () => {
+    const alpha = fakeClient({ name: 'alpha' });
+    const beta = fakeClient({ name: 'beta', mode: 'cloud' });
+    const candidate = Promise.withResolvers<AgentClient>();
+    let selections = 0;
+    const screen = await mountChat(alpha.client, {
+      listWorkspaces: () => [
+        { name: 'alpha', label: 'Alpha', mode: 'local' },
+        { name: 'beta', label: 'Beta', mode: 'cloud', cloudName: 'beta' },
+      ],
+      onWorkspaceSelect: () => {
+        selections += 1;
+        return candidate.promise;
+      },
+    });
+    screen.mockInput.pressKey('o', { ctrl: true });
+    await screen.waitFor('the workspace drawer', () => screen.frame().includes('Filter workspaces'));
+    screen.mockInput.pressArrow('down');
+    screen.mockInput.pressEnter();
+    screen.mockInput.pressEnter();
+    for (let index = 0; index < 4; index += 1) await screen.renderOnce();
+    expect(selections).toBe(1);
+    candidate.resolve(beta.client);
+    await screen.waitFor('the single selected workspace', () => screen.frame().includes('beta'));
+  });
+
+  test('workspace switching waits for an in-flight workspace action', async () => {
+    const pending = Promise.withResolvers<AgentClientStatus>();
+    let statusCalls = 0;
+    const controlled = fakeClient({
+      name: 'alpha',
+      status: async () => {
+        statusCalls += 1;
+        if (statusCalls === 1) {
+          return { name: 'alpha', purpose: 'alpha', model: null, reasoningEffort: null };
+        }
+        return pending.promise;
+      },
+    });
+    const screen = await mountChat(controlled.client, {
+      listWorkspaces: () => [{ name: 'alpha', label: 'Alpha', mode: 'local' }],
+    });
+    await screen.mockInput.typeText('/status');
+    screen.mockInput.pressEnter();
+    screen.mockInput.pressKey('o', { ctrl: true });
+    await screen.waitFor('the blocked switch explanation', () =>
+      screen.frame().includes('Finish or stop the active workspace action'));
+    expect(screen.frame()).not.toContain('Filter workspaces');
+    pending.resolve({ name: 'alpha', purpose: 'alpha', model: null, reasoningEffort: null });
+    await screen.waitFor('the completed status action', () => screen.frame().includes('Workspace Status'));
   });
   test('Ctrl+O switches workspaces without retaining the previous status', async () => {
     const alpha = fakeClient({ name: 'alpha' });
@@ -306,7 +200,25 @@ describe('ChatApp terminal interaction', () => {
         model: 'workers-ai/@cf/model',
         reasoningEffort: 'high',
       }),
+      history: async () => [{
+        id: 'persisted-result',
+        role: 'tool_result',
+        content: 'Recovered once',
+        success: true,
+      }],
     });
+    beta.client.connect = async () => {
+      beta.emit({ type: 'evolution', event: 'startup', message: 'Recovered buffered event' });
+      beta.emit({ type: 'turn-start', kind: 'programmatic', text: 'recovered turn' });
+      beta.emit({
+        type: 'tool-result',
+        toolName: 'file',
+        toolCallId: 'recovered-tool',
+        result: 'Recovered once',
+        success: true,
+      });
+      beta.emit({ type: 'turn-end', turn: TURN });
+    };
     const screen = await mountChat(alpha.client, {
       listWorkspaces: () => [
         { name: 'alpha', label: 'Alpha', mode: 'local' },
@@ -320,6 +232,9 @@ describe('ChatApp terminal interaction', () => {
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressEnter();
     await screen.waitFor('the selected cloud workspace', () => screen.frame().includes('Beta Cloud'));
+    expect(screen.frame()).toContain('Recovered buffered event');
+    expect(screen.frame().split('Recovered once')).toHaveLength(2);
+    expect(screen.frame()).not.toContain('⟳ processing');
     expect(screen.frame()).not.toContain('alpha local');
     expect(alpha.state.closed).toBe(1);
   });

@@ -61,6 +61,7 @@ import { MessageList, type DisplayMessage } from './messages';
 import {
   ChangelogOverlay,
   CommandHintOverlay,
+  deviceConsentCanApprove,
   CommandPaletteOverlay,
   DeviceConnectOverlay,
   DeviceConsentOverlay,
@@ -111,6 +112,16 @@ interface CaughtFailure {
   cause: unknown;
 }
 
+function persistedTranscriptEvent(event: AgentClientEvent): boolean {
+  return event.type === 'turn-start'
+    || event.type === 'text-delta'
+    || event.type === 'tool-call'
+    || event.type === 'tool-result'
+    || event.type === 'step-finish'
+    || event.type === 'turn-end'
+    || event.type === 'error';
+}
+
 let globalExit: (() => void) | null = null;
 
 export function ChatApp({
@@ -157,12 +168,20 @@ export function ChatApp({
   const inputShouldFocusRef = useRef(false);
   const machineRef = useRef(initialInputState);
   /** A fork swap re-points the message list itself — skip the next hydration. */
+  const selectionPendingRef = useRef(false);
   const skipHydrationRef = useRef(false);
+  const preconnectedClientRef = useRef<AgentClient | null>(null);
+  const preconnectedEventsRef = useRef<{
+    client: AgentClient;
+    events: AgentClientEvent[];
+    historyBoundary: number;
+    stop: () => void;
+  } | null>(null);
+  const clientGenerationRef = useRef(0);
+  const clientActionCountRef = useRef(0);
   /** Take sets already hinted at, so a turn without a new convergence is quiet. */
   const hintedTakesRef = useRef<string | null>(null);
-  /** Explicit workspace switches always hydrate the selected workspace. */
   const modelRequestRef = useRef(0);
-  const hydrateNextClientRef = useRef(false);
   const commands = useMemo(() => commandsForClient(client), [client]);
   const deviceConnect = useDeviceConnectPrompt();
   const settings = useMemo<TuiSettingChoice[]>(() => {
@@ -277,23 +296,27 @@ export function ChatApp({
    *  tokens) become attachments: images and PDFs inline as file parts, other
    *  files stay path references. */
   const sendPrompt = useCallback(async (input: string) => {
-    const prompt = await resolvePromptAttachments(input, { limitBytes: client.inlineAttachmentLimitBytes });
-    for (const problem of prompt.errors) addMessage({ role: 'system', content: problem });
-    const steering = machineRef.current.activeTurns > 0;
-    const message: Omit<DisplayMessage, 'id'> = {
-      role: 'user',
-      content: prompt.text,
-    };
-    if (prompt.attached.length > 0) message.attachments = prompt.attached.map(describePromptAttachment);
-    if (steering) message.steered = true;
-    addMessage(message);
-    const payload = prompt.files.length > 0 ? { text: prompt.text, files: prompt.files } : prompt.text;
-    if (steering && client.steer(payload, { cwd: process.cwd() })) return;
+    const generation = clientGenerationRef.current;
+    clientActionCountRef.current += 1;
     try {
+      const prompt = await resolvePromptAttachments(input, { limitBytes: client.inlineAttachmentLimitBytes });
+      if (clientGenerationRef.current !== generation) return;
+      for (const problem of prompt.errors) addMessage({ role: 'system', content: problem });
+      const steering = machineRef.current.activeTurns > 0;
+      const message: Omit<DisplayMessage, 'id'> = {
+        role: 'user',
+        content: prompt.text,
+      };
+      if (prompt.attached.length > 0) message.attachments = prompt.attached.map(describePromptAttachment);
+      if (steering) message.steered = true;
+      addMessage(message);
+      const payload = prompt.files.length > 0 ? { text: prompt.text, files: prompt.files } : prompt.text;
+      if (steering && client.steer(payload, { cwd: process.cwd() })) return;
       await client.send(payload, { cwd: process.cwd() });
     } catch (err) {
-      // Transport/pre-flight failures never reach the event stream.
-      addError({ cause: err });
+      if (clientGenerationRef.current === generation) addError({ cause: err });
+    } finally {
+      clientActionCountRef.current -= 1;
     }
   }, [addError, addMessage, client]);
 
@@ -313,6 +336,9 @@ export function ChatApp({
   /** Fork before the picked user message, truncate the rendered transcript to
    *  match, and put the message back in the input for editing. */
   const performWalkback = useCallback(async (point: ForkPoint) => {
+    if (selectionPendingRef.current) return;
+    selectionPendingRef.current = true;
+    setReady(false);
     dispatchInput({ type: 'walkback-closed' });
     try {
       const result = await client.fork(point);
@@ -320,6 +346,7 @@ export function ChatApp({
         setReady(false);
         setStatus(null);
         setModelSpec('');
+        clientGenerationRef.current += 1;
         setModelCatalog([]);
         setBranchTasks({});
         skipHydrationRef.current = true;
@@ -345,6 +372,9 @@ export function ChatApp({
       setInputText(point.text);
     } catch (err) {
       addError({ cause: err });
+    } finally {
+      selectionPendingRef.current = false;
+      setReady(true);
     }
   }, [addError, addMessage, client, dispatchInput, onClientChange, setInputText]);
   const switchWorkspace = useCallback(async (workspace: ListedAgent) => {
@@ -357,16 +387,45 @@ export function ChatApp({
       addMessage({ role: 'system', content: 'Workspace switching is unavailable in this host.' });
       return;
     }
+    if (machineRef.current.activeTurns > 0 || clientActionCountRef.current > 0) {
+      setActiveSurface(null);
+      addMessage({ role: 'system', content: 'Finish or stop the active workspace action before switching.' });
+      return;
+    }
+    if (selectionPendingRef.current) return;
+    selectionPendingRef.current = true;
+    setActiveSurface(null);
     setReady(false);
+    let candidate: AgentClient | null = null;
+    const bufferedEvents: AgentClientEvent[] = [];
+    let stopBuffering: (() => void) | null = null;
+    let historyBoundary = 0;
     try {
-      const next = await onWorkspaceSelect(workspace.name);
+      candidate = await onWorkspaceSelect(workspace.name);
+      stopBuffering = candidate.subscribe((event) => { bufferedEvents.push(event); });
+      await candidate.connect();
+      let history: DisplayMessage[] = [];
+      let historyFailure: string | null = null;
+      try {
+        history = await candidate.history();
+        historyBoundary = bufferedEvents.length;
+      } catch (error) {
+        historyFailure = errorLine(`Earlier messages could not be loaded: ${renderThrownChain({ cause: error })}`);
+      }
       const previous = client;
-      hydrateNextClientRef.current = true;
-      skipHydrationRef.current = false;
+      preconnectedClientRef.current = candidate;
+      preconnectedEventsRef.current = {
+        client: candidate,
+        events: bufferedEvents,
+        historyBoundary,
+        stop: stopBuffering,
+      };
+      stopBuffering = null;
+      skipHydrationRef.current = true;
+      clientGenerationRef.current += 1;
       activeSegmentRef.current = null;
       stream.clear();
       setTurnPhase(null);
-      setActiveSurface(null);
       setStatus(null);
       setModelSpec('');
       setModelCatalog([]);
@@ -374,10 +433,17 @@ export function ChatApp({
       machineRef.current = initialInputState;
       setInputState(initialInputState);
       setInputText('');
-      setMessages([welcomeMessage(next.agentName)]);
-      setActiveSessionId(next.cliSession.id);
-      setClient(next);
-      onClientChange?.(next);
+      setMessages([
+        welcomeMessage(candidate.agentName),
+        ...history,
+        ...(historyFailure
+          ? [{ id: `switch-history-${++msgIdRef.current}`, role: 'system' as const, content: historyFailure }]
+          : []),
+      ]);
+      setActiveSessionId(candidate.cliSession.id);
+      setClient(candidate);
+      onClientChange?.(candidate);
+      candidate = null;
       void previous.close().catch((error) => {
         addMessage({
           role: 'system',
@@ -385,8 +451,26 @@ export function ChatApp({
         });
       });
     } catch (error) {
+      stopBuffering?.();
+      if (candidate) {
+        try {
+          await candidate.close();
+        } catch (closeError) {
+          diagnostics.failure(
+            'tui.workspace_candidate_close_failed',
+            toKinuError({
+              doing: 'closing a failed workspace switch candidate',
+              cause: closeError,
+              otherwise: 'io',
+            }),
+            { workspace: candidate.agentName },
+          );
+        }
+      }
       setReady(true);
       addError({ cause: error });
+    } finally {
+      selectionPendingRef.current = false;
     }
   }, [addError, addMessage, client, onClientChange, onWorkspaceSelect, setInputText, stream]);
 
@@ -402,23 +486,36 @@ export function ChatApp({
       addMessage({ role: 'system', content: `No matching session for "${input}". Type /resume to choose again.` });
       return;
     }
+    if (selectionPendingRef.current) return;
+    selectionPendingRef.current = true;
+    setActiveSurface(null);
     setReady(false);
+    await new Promise<void>((resolve) => { setTimeout(resolve, 0); });
     try {
       await sessionHistory.resume(selected.info.id);
-      const history = await client.history();
       activeSegmentRef.current = null;
       stream.clear();
       setTurnPhase(null);
-      setActiveSurface(null);
       setActiveSessionId(client.cliSession.id);
-      setMessages([
-        { id: `resume-${selected.info.id}`, role: 'system', content: `Resumed ${selected.label}` },
-        ...history,
-      ]);
+      const resumed: DisplayMessage = {
+        id: `resume-${selected.info.id}`,
+        role: 'system',
+        content: `Resumed ${selected.label}`,
+      };
+      setMessages([resumed]);
+      try {
+        const history = await client.history();
+        setMessages([resumed, ...history]);
+      } catch (historyError) {
+        addError({ cause: historyError });
+      }
+    } catch (error) {
+      addError({ cause: error });
     } finally {
+      selectionPendingRef.current = false;
       setReady(true);
     }
-  }, [addMessage, client, stream]);
+  }, [addError, addMessage, client, stream]);
 
   const openModelPicker = useCallback(async () => {
     const request = ++modelRequestRef.current;
@@ -451,25 +548,34 @@ export function ChatApp({
   }, [client]);
 
   const selectModel = useCallback(async (model: AgentModelEntry) => {
+    if (selectionPendingRef.current) return;
+    setReady(false);
+    selectionPendingRef.current = true;
+    setActiveSurface(null);
     try {
       const result = await setModelPreference(client, model.spec);
       setModelSpec(result.spec);
-      setActiveSurface(null);
       addMessage({ role: 'system', content: `Model: ${result.spec}` });
     } catch (err) {
       addError({ cause: err });
+    } finally {
+      selectionPendingRef.current = false;
+      setReady(true);
     }
   }, [addError, addMessage, client]);
 
   /** Enter on a changelog line: revert revertables through the real paths,
    *  explain informational lines; the overlay refreshes with the new digest. */
   const revertChangelogEntry = useCallback(async (entry: ChangelogEntry) => {
-    if (!entry.revert) {
-      addMessage({ role: 'system', content: `"${entry.summary}" is informational (${entry.kind}) — nothing to revert.` });
-      return;
-    }
+    if (selectionPendingRef.current) return;
+    selectionPendingRef.current = true;
     setActiveSurface(null);
+    setReady(false);
     try {
+      if (!entry.revert) {
+        addMessage({ role: 'system', content: `"${entry.summary}" is informational (${entry.kind}) — nothing to revert.` });
+        return;
+      }
       const result = await client.revertChangelogEntry(entry.id);
       addMessage({
         role: 'system',
@@ -477,22 +583,30 @@ export function ChatApp({
           ? `Reverted: ${entry.summary}\n→ ${result.detail ?? 'done'}`
           : `Revert failed: ${result.error ?? 'unknown error'}`,
       });
-      if (result.ok) setActiveSurface({ kind: 'changelog', view: await client.changelog() });
     } catch (err) {
       addError({ cause: err });
+    } finally {
+      selectionPendingRef.current = false;
+      setReady(true);
     }
   }, [addError, addMessage, client]);
 
   /** Enter on a take: record the pick (ledger + repoint); a changed answer
    *  streams its continuation as the next programmatic turn. */
   const pickTake = useCallback(async (set: AlternateTakeSet, candidate: AlternateTakeCandidate) => {
+    if (selectionPendingRef.current) return;
+    selectionPendingRef.current = true;
     setActiveSurface(null);
+    setReady(false);
     try {
-      const index = set.candidates.findIndex((c) => c.nodeId === candidate.nodeId) + 1;
+      const index = set.candidates.findIndex((entry) => entry.nodeId === candidate.nodeId) + 1;
       const result = await client.pickTake(set.id, candidate.nodeId);
       addMessage({ role: 'system', content: describeTakePick(result, index) });
     } catch (err) {
       addError({ cause: err });
+    } finally {
+      selectionPendingRef.current = false;
+      setReady(true);
     }
   }, [addError, addMessage, client]);
 
@@ -526,6 +640,9 @@ export function ChatApp({
         return;
       case 'model-picker':
         await openModelPicker();
+        return;
+      case 'settings':
+        setActiveSurface({ kind: 'settings' });
         return;
       case 'sessions': {
         const sessions = client.sessionHistory?.list() ?? [];
@@ -638,8 +755,11 @@ export function ChatApp({
     }
     const submitted = text.startsWith('/') ? resolveCommandDraft(commands, text) : text;
     if (submitted.startsWith('/')) {
+      const generation = clientGenerationRef.current;
+      clientActionCountRef.current += 1;
       try {
         const outcome = await executeSlashCommand(client, submitted);
+        if (clientGenerationRef.current !== generation) return;
         if (outcome.kind === 'queue') {
           if (outcome.text) runInputEffects(dispatchInput({ type: 'queue', text: outcome.text }));
           else addMessage({ role: 'system', content: 'Usage: /queue <text> — it sends after the running turn (or immediately when idle).' });
@@ -682,7 +802,9 @@ export function ChatApp({
         }
         await applySlashOutcome(outcome);
       } catch (err) {
-        addError({ cause: err });
+        if (clientGenerationRef.current === generation) addError({ cause: err });
+      } finally {
+        clientActionCountRef.current -= 1;
       }
       return;
     }
@@ -718,7 +840,7 @@ export function ChatApp({
         break;
       case 'tool-result':
         setTurnPhase(`finished ${event.toolName}`);
-        addMessage({ role: 'tool_result', content: event.result });
+        addMessage({ role: 'tool_result', content: event.result, success: event.success });
         break;
       case 'step-finish':
         setTurnPhase(`step ${event.stepIndex}`);
@@ -727,34 +849,39 @@ export function ChatApp({
         addMessage({ role: 'evolution', content: `[${event.event}] ${event.message}` });
         break;
       case 'error':
-        // Informational: the lifecycle settles through the paired turn-end.
         sealSegment();
         addMessage({ role: 'system', content: errorLine(event.message) });
         break;
       case 'turn-end': {
-        // Flush the trailing streamed text into the live segment, then seal it.
-        // The streamed segments ARE the transcript — re-appending turn.text here
-        // would duplicate the text after the tool cards (the old regrouping bug).
         if (activeSegmentRef.current) stream.finish();
         sealSegment();
-        // Synthesized-text fallback: when the backend produced text without
-        // streaming deltas (ended on a tool call, server-built summary), no
-        // live segment captured it — surface it once.
         if (!turnStreamedTextRef.current && event.turn.text.trim()) {
           addMessage({ role: 'assistant', content: event.turn.text.trim() });
         }
         runInputEffects(dispatchInput({ type: 'turn-settled' }));
         if (machineRef.current.activeTurns === 0) setTurnPhase(null);
-        // A fork run may have converged on near-tied approaches — hint once
-        // per new take set so the comparison is one /takes away.
         if (event.turn.toolCalls.some((call) => call.name === 'agents')) {
+          const generation = clientGenerationRef.current;
           void client.latestTakes().then((set) => {
+            if (clientGenerationRef.current !== generation) return;
             if (!set || set.candidates.length < 2 || set.chosenNodeId) return;
             if (hintedTakesRef.current === set.id) return;
             hintedTakesRef.current = set.id;
             addMessage({ role: 'system', content: `${set.candidates.length} takes — /takes to compare` });
           }).catch((takesError) => {
-            addMessage({ role: 'system', content: errorLine(`This turn's takes could not be read: ${renderThrownChain({ cause: takesError })}`) });
+            if (clientGenerationRef.current === generation) {
+              addMessage({ role: 'system', content: errorLine(`This turn's takes could not be read: ${renderThrownChain({ cause: takesError })}`) });
+            } else {
+              diagnostics.failure(
+                'tui.stale_takes_read_failed',
+                toKinuError({
+                  doing: 'reading takes for a previous workspace',
+                  cause: takesError,
+                  otherwise: 'unavailable',
+                }),
+                { workspace: client.agentName },
+              );
+            }
           });
         }
         break;
@@ -781,38 +908,55 @@ export function ChatApp({
   // Connect once per client: event subscription, startup resources, initial
   // hydration. Re-runs when a walk-back fork swaps in a sibling client.
   useEffect(() => {
-    setReady(false);
-    const unsubscribe = client.subscribe(handleClientEvent);
+    const preconnected = preconnectedClientRef.current === client;
+    if (preconnected) preconnectedClientRef.current = null;
+    else setReady(false);
+    const generation = clientGenerationRef.current;
+    const buffered = preconnected && preconnectedEventsRef.current?.client === client
+      ? preconnectedEventsRef.current
+      : null;
+    const bufferedCount = buffered?.events.length ?? 0;
+    const unsubscribe = client.subscribe((event) => {
+      if (clientGenerationRef.current === generation) handleClientEvent(event);
+    });
+    if (buffered) {
+      buffered.stop();
+      preconnectedEventsRef.current = null;
+      const replay = buffered.events.slice(0, bufferedCount)
+        .filter((event, index) =>
+          index >= buffered.historyBoundary || !persistedTranscriptEvent(event));
+      for (const event of replay) handleClientEvent(event);
+    }
     let cancelled = false;
     void (async () => {
-      if ((hydrateHistory || hydrateNextClientRef.current) && !skipHydrationRef.current) {
+      if (hydrateHistory && !skipHydrationRef.current) {
         try {
           const history = await client.history();
           if (!cancelled && history.length > 0) {
             setMessages([welcomeMessage(client.agentName), ...history]);
           }
         } catch (historyError) {
-          // An unread history renders as an empty transcript, which is exactly
-          // what a brand-new workspace looks like. Say which this is.
           if (!cancelled) {
             addMessage({ role: 'system', content: errorLine(`Earlier messages could not be loaded: ${renderThrownChain({ cause: historyError })}`) });
           }
         }
       }
       skipHydrationRef.current = false;
-      hydrateNextClientRef.current = false;
-      await client.connect();
+      try {
+        if (!preconnected) await client.connect();
+      } catch (error) {
+        if (!cancelled) addError({ cause: error });
+        return;
+      }
       if (cancelled) return;
       setReady(true);
-      // Natural device access: a cloud chat with no connected PC offers to
-      // connect this one (at most once per CLI invocation).
       if (client.mode === 'cloud') void deviceConnect.offerIfUnconnected();
     })();
     return () => {
       cancelled = true;
       unsubscribe();
     };
-  }, [addMessage, client, deviceConnect.offerIfUnconnected, handleClientEvent, hydrateHistory]);
+  }, [addError, addMessage, client, deviceConnect.offerIfUnconnected, handleClientEvent, hydrateHistory]);
 
   useEffect(() => {
     let cancelled = false;
@@ -900,42 +1044,62 @@ export function ChatApp({
   }, [rendererInstance]);
 
   useKeyboard((key) => {
-    if (deviceConnect.handleKey(key)) return;
+    if (deviceConnect.handleKey(key)) {
+      key.preventDefault();
+      return;
+    }
     if (pendingConsent) {
+      key.preventDefault();
+      const canApprove = deviceConsentCanApprove(pendingConsent, { width, height });
       if (key.name === 'o' || key.name === 'y' || key.name === 'return') {
-        resolvePendingConsent('once');
+        if (canApprove) resolvePendingConsent('once');
       } else if (key.name === 'a') {
-        resolvePendingConsent('always');
+        if (canApprove) resolvePendingConsent('always');
       } else if (key.name === 'n' || key.name === 'escape') {
         resolvePendingConsent('deny');
       }
       return;
     }
+    if (selectionPendingRef.current) {
+      key.preventDefault();
+      return;
+    }
     if (key.name === 'g' && key.ctrl) {
+      key.preventDefault();
       if (settingsOpen) setActiveSurface(null);
       else if (!overlayOpen) setActiveSurface({ kind: 'settings' });
       return;
     }
     if (key.name === 'k' && key.ctrl) {
+      key.preventDefault();
       if (commandPalette) setActiveSurface(null);
       else if (!overlayOpen) setActiveSurface({ kind: 'commands' });
       return;
     }
     if (key.name === 'o' && key.ctrl) {
-      if (workspaceDrawer) setActiveSurface(null);
-      else if (!overlayOpen) setActiveSurface({ kind: 'workspaces', workspaces: listWorkspaces() });
+      key.preventDefault();
+      if (workspaceDrawer) {
+        setActiveSurface(null);
+      } else if (machineRef.current.activeTurns > 0 || clientActionCountRef.current > 0) {
+        addMessage({ role: 'system', content: 'Finish or stop the active workspace action before switching.' });
+      } else if (!overlayOpen) {
+        setActiveSurface({ kind: 'workspaces', workspaces: listWorkspaces() });
+      }
       return;
     }
     if (key.name === 'l' && key.ctrl && !overlayOpen) {
+      key.preventDefault();
       const url = lastUrlFromMessages(messagesRef.current);
       if (url) openBrowser(url);
       return;
     }
     if (key.name === 'p' && key.ctrl) {
+      key.preventDefault();
       if (!overlayOpen) void openModelPicker();
       return;
     }
     if (key.name === 'b' && key.ctrl) {
+      key.preventDefault();
       if (!overlayOpen) runInputEffects(dispatchInput({
         type: 'branch',
         draft: inputRef.current?.plainText ?? '',
@@ -957,7 +1121,9 @@ export function ChatApp({
       return;
     }
     if (key.name !== 'escape') return;
+    key.preventDefault();
     if (activeSurface) {
+      if (activeSurface.kind === 'model') modelRequestRef.current += 1;
       setActiveSurface(null);
       return;
     }

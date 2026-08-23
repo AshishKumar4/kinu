@@ -131,6 +131,7 @@ export interface AgentTranscriptMessage {
   content: string;
   toolName?: string;
   args?: string;
+  success?: boolean;
   /** User message delivered mid-turn through steer(). */
   steered?: boolean;
   /** User redirect run as a parallel branch through branch(). */

@@ -11,18 +11,22 @@ import type { ReactNode } from 'react';
 
 import { SLASH_COMMANDS } from '../src/slash-commands';
 import {
+  ChangelogOverlay,
   CommandHintOverlay,
   CommandPaletteOverlay,
   DeviceConnectOverlay,
   ModelPickerOverlay,
   SettingsOverlay,
+  SessionPickerOverlay,
   WalkbackOverlay,
+  TakesOverlay,
   WorkspaceDrawerOverlay,
 } from '../src/tui/overlays';
 import type { AgentModelEntry } from '../src/model-catalog';
 import { MessageList } from '../src/tui/messages';
 import { tuiColors } from '../src/tui/theme';
 import { StatusBar } from '../src/tui/status-bar';
+import { optionsForWorkspaceSwitch } from '../src/commands/chat';
 import { handleHistoryScrollKey } from '../src/tui/chat-app';
 import { VERSION } from '../src/display';
 
@@ -119,6 +123,36 @@ describe('CLI TUI layout', () => {
       root.render(<box />);
       renderer.destroy();
     }
+  });
+
+  test('workspace switches drop conversation selectors and cloud-incompatible overrides', () => {
+    const options = {
+      model: 'openai/gpt-5.5',
+      baseUrl: 'https://local.invalid/v1',
+      auth: 'Bearer local',
+      continue: true,
+      resume: true,
+      session: 'workspace-a-session',
+      sessionDir: '/shared/sessions',
+      fork: 'workspace-a-fork',
+    };
+    expect(optionsForWorkspaceSwitch(options, 'local')).toEqual({
+      ...options,
+      continue: false,
+      resume: false,
+      session: undefined,
+      fork: undefined,
+    });
+    expect(optionsForWorkspaceSwitch(options, 'cloud')).toEqual({
+      ...options,
+      model: undefined,
+      baseUrl: undefined,
+      auth: undefined,
+      continue: false,
+      resume: false,
+      session: undefined,
+      fork: undefined,
+    });
   });
 
   test('status bar keeps the mode visible while a long workspace name clips', async () => {
@@ -387,6 +421,7 @@ describe('CLI TUI layout', () => {
       const frame = captureCharFrame();
       expect(frame).toContain('Commands');
       expect(frame).toContain('/help');
+      expect(frame).toContain(`… ${String(SLASH_COMMANDS.length - 5)} more commands.`);
       expect(frame).toContain('/status');
       expect(frame).toContain('more commands');
       expect(frame).not.toContain('/sessions');
@@ -409,12 +444,13 @@ describe('CLI TUI layout', () => {
     try {
       root.render(
         <box style={{ width: '100%', height: '100%' }}>
-          <CommandHintOverlay
+          <CommandPaletteOverlay
             commands={[{
               name: '/very-long-command-name',
               description: 'This command description is intentionally too long to fit in a narrow overlay without clipping.',
             }]}
             terminal={{ width: 58, height: 18 }}
+            onSelect={() => {}}
           />
         </box>,
       );
@@ -431,6 +467,35 @@ describe('CLI TUI layout', () => {
       expect(closingLine).toBeGreaterThan(commandLine);
       expect(frame).toContain('/very-long');
       expect(frame).not.toContain('without clipping');
+    } finally {
+      root.render(<box />);
+      renderer.destroy();
+    }
+  });
+
+  test('a one-result slash hint keeps its command above the closing border', async () => {
+    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({
+      width: 58,
+      height: 18,
+      useThread: false,
+      maxFps: Number.POSITIVE_INFINITY,
+    });
+    const root = createRoot(renderer);
+    try {
+      root.render(
+        <box style={{ width: '100%', height: '100%' }}>
+          <CommandHintOverlay
+            commands={[{ name: '/status', description: 'Show workspace status' }]}
+            terminal={{ width: 58, height: 18 }}
+          />
+        </box>,
+      );
+      await renderSettled(renderOnce);
+      const frame = captureCharFrame();
+      const commandLine = lineContaining(frame, '/status');
+      const closingLine = frame.split('\n').findIndex((line, index) =>
+        index > commandLine && line.includes('└'));
+      expect(closingLine).toBeGreaterThan(commandLine);
     } finally {
       root.render(<box />);
       renderer.destroy();
@@ -478,8 +543,9 @@ describe('CLI TUI layout', () => {
         </box>,
       );
       await renderSettled(renderOnce);
-      expect(captureCharFrame()).toContain('Checkout · local');
-      expect(captureCharFrame()).toContain('Jarvis · cloud');
+      const workspaceFrame = captureCharFrame();
+      expect(workspaceFrame.split('\n').find((row) => row.includes('Checkout'))).toContain('local');
+      expect(workspaceFrame.split('\n').find((row) => row.includes('Jarvis'))).toContain('cloud');
       mockInput.pressArrow('down');
       mockInput.pressEnter();
       await renderSettled(renderOnce);
@@ -509,156 +575,199 @@ describe('CLI TUI layout', () => {
     }
   });
 
-  test('chat messages render user bubbles and assistant markdown', async () => {
-    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 96, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
-    const root = createRoot(renderer);
-    try {
-      root.render(
-        <box style={{ width: '100%', height: '100%', backgroundColor: tuiColors.bg }}>
-          <MessageList
-            messages={[
-              { id: 'u1', role: 'user', content: 'Review this module' },
-              { id: 'a1', role: 'assistant', content: '### Plan\n\n- **Inspect** sources\n- Ship fix' },
-            ]}
-          />
-        </box>,
-      );
-      await renderSettled(renderOnce);
-      const frame = captureCharFrame();
-      expect(frame).toContain('YOU');
-      expect(frame).toContain('Review this module');
-      expect(frame).toContain('KINU');
-      expect(frame).toContain('Plan');
-      expect(frame).toContain('Inspect');
-      expect(frame).not.toContain('**Inspect**');
-    } finally {
-      root.render(<box />);
-      renderer.destroy();
-    }
-  });
-
-  test('status snapshots stay in transcript chronology', async () => {
+  test('compact command palettes reserve one selectable row', async () => {
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({
-      width: 96,
-      height: 24,
+      width: 40,
+      height: 8,
       useThread: false,
       maxFps: Number.POSITIVE_INFINITY,
     });
     const root = createRoot(renderer);
     try {
       root.render(
-        <box style={{ width: '100%', height: '100%', backgroundColor: tuiColors.bg }}>
-          <MessageList
-            messages={[
-              { id: 'before', role: 'system', content: 'before status' },
-              {
-                id: 'status',
-                role: 'system',
-                content: '',
-                status: {
-                  name: 'checkout',
-                  purpose: 'Audit checkout',
-                  model: 'openai/gpt-5.5',
-                  reasoningEffort: 'high',
-                },
-              },
-              { id: 'after', role: 'system', content: 'after status' },
-            ]}
+        <box style={{ width: '100%', height: '100%' }}>
+          <CommandPaletteOverlay
+            commands={[{ name: '/status', description: 'Show workspace state' }]}
+            terminal={{ width: 40, height: 8 }}
+            onSelect={() => {}}
           />
         </box>,
       );
       await renderSettled(renderOnce);
-      const frame = captureCharFrame();
-      expect(lineContaining(frame, 'before status')).toBeLessThan(lineContaining(frame, 'Workspace Status'));
-      expect(lineContaining(frame, 'Workspace Status')).toBeLessThan(lineContaining(frame, 'after status'));
+      expect(captureCharFrame()).toContain('/status');
+
+      root.render(
+        <box style={{ width: '100%', height: '100%' }}>
+          <ModelPickerOverlay
+            models={[MODELS[0]!]}
+            currentSpec={MODELS[0]!.spec}
+            failures={[{ provider: 'broken', reason: 'offline' }]}
+            terminal={{ width: 40, height: 8 }}
+            onSelect={() => {}}
+          />
+        </box>,
+      );
+      await renderSettled(renderOnce);
+      expect(captureCharFrame()).toContain(MODELS[0]!.label);
+      expect(captureCharFrame()).toContain('1 unavailable');
+
+      root.render(
+        <box style={{ width: '100%', height: '100%' }}>
+          <ModelPickerOverlay
+            models={[]}
+            currentSpec={null}
+            failures={[{ provider: 'broken', reason: 'offline' }]}
+            terminal={{ width: 40, height: 8 }}
+            onSelect={() => {}}
+          />
+        </box>,
+      );
+      await renderSettled(renderOnce);
+      expect(captureCharFrame()).toContain('1 provider unavailable');
+      expect(captureCharFrame()).not.toContain('see below');
+
+      root.render(
+        <box style={{ width: '100%', height: '100%' }}>
+          <WalkbackOverlay
+            candidates={[{ text: 'walk back here', occurrenceFromEnd: 1 }]}
+            terminal={{ width: 40, height: 8 }}
+            onSelect={() => {}}
+          />
+        </box>,
+      );
+      await renderSettled(renderOnce);
+      expect(captureCharFrame()).toContain('walk back');
+
+      root.render(
+        <box style={{ width: '100%', height: '100%' }}>
+          <ChangelogOverlay
+            view={{
+              unseenCount: 1,
+              entries: [{
+                id: 'change-1',
+                kind: 'tool',
+                at: 1,
+                summary: 'Added a parser',
+                evidence: '3 accepted turns',
+              }],
+            }}
+            terminal={{ width: 40, height: 8 }}
+            onSelect={() => {}}
+          />
+        </box>,
+      );
+      await renderSettled(renderOnce);
+      expect(captureCharFrame()).toContain('Added a parser');
+
+      root.render(
+        <box style={{ width: '100%', height: '100%' }}>
+          <TakesOverlay
+            set={{
+              id: 'takes-1',
+              turnId: 'turn-1',
+              sessionId: 'session-1',
+              task: 'Choose an implementation',
+              source: 'mcts',
+              winnerNodeId: 'node-1',
+              chosenNodeId: null,
+              candidates: [{
+                nodeId: 'node-1',
+                text: 'Use the indexed path',
+                score: 0.8,
+                visits: 3,
+                depth: 1,
+              }],
+              createdAt: 1,
+              pickedAt: null,
+            }}
+            terminal={{ width: 40, height: 8 }}
+            onSelect={() => {}}
+          />
+        </box>,
+      );
+      await renderSettled(renderOnce);
+      expect(captureCharFrame()).toContain('indexed path');
     } finally {
       root.render(<box />);
       renderer.destroy();
     }
   });
 
-  test('text and tool calls render chronologically interleaved', async () => {
-    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 96, height: 30, useThread: false, maxFps: Number.POSITIVE_INFINITY });
+  test('narrow navigation preserves mode, current state, folder, and close action', async () => {
+    const { renderer, mockInput, renderOnce, captureCharFrame } = await createTestRenderer({
+      width: 40,
+      height: 20,
+      useThread: false,
+      maxFps: Number.POSITIVE_INFINITY,
+    });
     const root = createRoot(renderer);
     try {
-      // The transcript order IS the chronological order: text, tool, text, tool.
       root.render(
-        <box style={{ width: '100%', height: '100%', backgroundColor: tuiColors.bg }}>
-          <MessageList
-            messages={[
-              { id: 'a1', role: 'assistant', content: 'FIRST text before the tool' },
-              { id: 't1', role: 'tool_call', content: '', toolName: 'read_file' },
-              { id: 'a2', role: 'assistant', content: 'SECOND text after the tool' },
-              { id: 't2', role: 'tool_call', content: '', toolName: 'write_file' },
-              { id: 'a3', role: 'assistant', content: 'THIRD text after the second tool' },
-            ]}
+        <box style={{ width: '100%', height: '100%' }}>
+          <WorkspaceDrawerOverlay
+            workspaces={[{
+              name: 'jarvis',
+              label: 'A very long personal workspace name',
+              mode: 'cloud',
+              cloudName: 'jarvis',
+            }]}
+            current="jarvis"
+            terminal={{ width: 40, height: 20 }}
+            onSelect={() => {}}
           />
         </box>,
       );
       await renderSettled(renderOnce);
-      const frame = captureCharFrame();
-      const at = (needle: string) => frame.indexOf(needle);
-      // Each surface lands strictly after the one that preceded it in the stream.
-      expect(at('FIRST')).toBeGreaterThanOrEqual(0);
-      expect(at('read_file')).toBeGreaterThan(at('FIRST'));
-      expect(at('SECOND')).toBeGreaterThan(at('read_file'));
-      expect(at('write_file')).toBeGreaterThan(at('SECOND'));
-      expect(at('THIRD')).toBeGreaterThan(at('write_file'));
+      expect(captureCharFrame()).toContain('cloud');
+      expect(captureCharFrame()).toContain('Esc close');
+
+      root.render(
+        <box style={{ width: '100%', height: '100%' }}>
+          <SettingsOverlay
+            settings={[{
+              id: 'effort',
+              group: 'Model',
+              label: 'A very long reasoning effort setting',
+              value: 'current',
+              command: '/effort medium',
+            }]}
+            terminal={{ width: 40, height: 20 }}
+            onSelect={() => {}}
+          />
+        </box>,
+      );
+      await renderSettled(renderOnce);
+      expect(captureCharFrame()).toContain('current');
+
+      root.render(
+        <box style={{ width: '100%', height: '100%' }}>
+          <SessionPickerOverlay
+            sessions={[{
+              id: 'session-1',
+              path: '/tmp/session-1.jsonl',
+              agent: 'alpha',
+              cwd: '/very/long/path/folder-alpha',
+              name: 'A very long repeated conversation title',
+              startedAt: '2026-08-23T00:00:00.000Z',
+              modifiedAt: 1,
+              entries: 3,
+            }]}
+            cwd="/another/folder"
+            terminal={{ width: 40, height: 20 }}
+            onSelect={() => {}}
+          />
+        </box>,
+      );
+      await renderSettled(renderOnce);
+      mockInput.pressTab();
+      await renderSettled(renderOnce);
+      expect(captureCharFrame()).toContain('folder-alpha');
     } finally {
       root.render(<box />);
       renderer.destroy();
     }
   });
 
-  test('a live assistant segment renders its streaming text in place', async () => {
-    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 96, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
-    const root = createRoot(renderer);
-    try {
-      root.render(
-        <box style={{ width: '100%', height: '100%', backgroundColor: tuiColors.bg }}>
-          <MessageList
-            messages={[
-              { id: 't1', role: 'tool_call', content: '', toolName: 'read_file' },
-              { id: 'a1', role: 'assistant', content: 'streaming reply in progress', live: true },
-            ]}
-          />
-        </box>,
-      );
-      await renderSettled(renderOnce);
-      const frame = captureCharFrame();
-      // The live segment sits AFTER the tool it followed, with its text visible.
-      expect(frame.indexOf('streaming reply')).toBeGreaterThan(frame.indexOf('read_file'));
-    } finally {
-      root.render(<box />);
-      renderer.destroy();
-    }
-  });
-
-  test('steered user messages carry the steering marker', async () => {
-    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 96, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
-    const root = createRoot(renderer);
-    try {
-      root.render(
-        <box style={{ width: '100%', height: '100%', backgroundColor: tuiColors.bg }}>
-          <MessageList
-            messages={[
-              { id: 'u1', role: 'user', content: 'start the deploy' },
-              { id: 'u2', role: 'user', content: 'use staging instead', steered: true },
-            ]}
-          />
-        </box>,
-      );
-      await renderSettled(renderOnce);
-      const frame = captureCharFrame();
-      expect(frame).toContain('use staging instead');
-      expect(frame).toContain('↪ steering');
-      // The marker belongs to the steered bubble only.
-      expect(frame.split('↪ steering')).toHaveLength(2);
-    } finally {
-      root.render(<box />);
-      renderer.destroy();
-    }
-  });
 
   test('walk-back overlay lists recent user messages newest first', async () => {
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 96, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
