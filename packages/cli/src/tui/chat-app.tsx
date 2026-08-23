@@ -942,13 +942,14 @@ export function ChatApp({
         }
       }
       skipHydrationRef.current = false;
+      let connected = true;
       try {
         if (!preconnected) await client.connect();
       } catch (error) {
+        connected = false;
         if (!cancelled) addError({ cause: error });
-        return;
       }
-      if (cancelled) return;
+      if (!connected || cancelled) return;
       setReady(true);
       if (client.mode === 'cloud') void deviceConnect.offerIfUnconnected();
     })();
