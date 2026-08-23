@@ -4,21 +4,21 @@
  *   POST /api/user/ai/v1/chat/completions
  *   GET  /api/user/ai/v1/models
  *
- * Fronts the caller's stored Cloudflare credential so LOCAL agents run on the
- * same Workers AI / AI Gateway billing as cloud agents — refresh stays
- * server-side and no Cloudflare token ever lands on the user's disk. Auth is
- * the standard CLI bearer (interactive `ptc_…` session tokens, or scoped
- * `pta_…` access tokens carrying `ai.proxy`); the gate lives in cli/routes.ts.
+ * Fronts the caller's stored Cloudflare credential in production, so local
+ * agents use the same account as cloud agents. A staging or local deployment
+ * with `DEV_USER_EMAIL` uses the platform AI Gateway binding for Workers AI
+ * models; this lets the isolated eval-service account run without borrowing a
+ * person's Cloudflare login. Auth is the standard CLI bearer (interactive
+ * `ptc_…` session tokens, or scoped `pta_…` access tokens carrying
+ * `ai.proxy`); the gate lives in cli/routes.ts.
  *
  * The body's `model` field selects the upstream:
- *   @cf/...          → Workers AI                (cloudflare.oauth)
- *   {author}/{model} → the user's AI Gateway     (cloudflare.ai-gateway)
+ *   @cf/...          → production: the user's Workers AI account
+ *                      development/staging: the platform AI Gateway binding
+ *   {author}/{model} → the user's AI Gateway
  *
- * Both upstreams share {account}/ai/v1/chat/completions; only the credential
- * view (and its cf-aig-gateway-id header) differs. Streaming (SSE) responses
- * pass through the shared fetch's cached-usage repair (stream-usage-repair.ts)
- * but are otherwise untouched; failures get the same actionable mapping as
- * the my-gateway provider.
+ * Streaming responses pass through without buffering. Production failures use
+ * the same actionable mapping as the cloud providers.
  */
 import type { UserDO } from './user-do';
 import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY } from '../lib/cloudflare-oauth';
@@ -28,8 +28,9 @@ import { MY_GATEWAY_PROVIDER_ID } from '../providers/my-gateway';
 import { listAvailableModels } from './available-models';
 import { json } from '../lib/http';
 import { ownerCaller } from './workspace-capability';
-import { USER_AI_PROXY_PATH } from '@kinu.run/core';
+import { createGatewayBindingFetch, USER_AI_PROXY_PATH, withRateLimitRetry } from '@kinu.run/core';
 import { classify } from '@kinu.run/core/obs';
+import { resolvePlatformGateway } from '../providers/ai-gateway';
 import * as v from 'valibot';
 
 const PROXY_PLACEHOLDER = 'https://kinu-user-ai-proxy.invalid';
@@ -74,6 +75,19 @@ async function proxyChatCompletion(request: Request, env: Env, userDO: DurableOb
   const workersAI = model.startsWith('@cf/');
   if (!workersAI && !model.includes('/')) {
     return errorResponse(400, `Cannot route model "${model}" — use "@cf/{model}" (Workers AI) or "{provider}/{model}" (your AI Gateway).`);
+  }
+
+  if (workersAI && env.DEV_USER_EMAIL) {
+    const resolved = resolvePlatformGateway(env);
+    if ('reason' in resolved) {
+      return errorResponse(503, `Platform AI Gateway unavailable: ${resolved.reason}`);
+    }
+    const gatewayFetch = withRateLimitRetry(createGatewayBindingFetch(resolved));
+    return gatewayFetch(`${String(env.AI_GATEWAY_URL)}/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...affinityHeader(request) },
+      body,
+    });
   }
 
   const aiFetch = createCloudflareAIFetch({
