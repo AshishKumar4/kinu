@@ -22,7 +22,7 @@ export interface ChatCommandOptions {
   fork?: string;
 }
 
-export function optionsForWorkspaceSwitch(
+function optionsForWorkspaceSwitch(
   opts: ChatCommandOptions,
   mode: 'local' | 'cloud',
 ): ChatCommandOptions {
