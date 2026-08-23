@@ -70,8 +70,11 @@ kinu exec -w jarvis --json "…"      # line-delimited JSON events instead of pr
 kinu stop jarvis                    # stop the turn that's running
 ```
 
-Inside `kinu chat`, `/` opens the command list. The ones worth knowing on day
-one:
+The full-screen TUI keeps navigation off-canvas. Press `Ctrl+K` for commands,
+`Ctrl+O` for workspaces, `Ctrl+G` for settings, or `Ctrl+P` for models. Press
+`Esc` to close the active panel. Type `/` to filter commands in the composer.
+
+These commands are useful on the first day:
 
 | | |
 | --- | --- |
@@ -82,10 +85,13 @@ one:
 | `/takes [n]` | compare the last alternate takes and pick one |
 | `/changelog` | review what the agent changed about itself; revert by index |
 | `/model`, `/effort` | change model or reasoning effort mid-conversation |
+| `/settings` | open model, effort, shell approval, and always-active skill settings |
+| `/resume` | reopen a recorded local conversation; press `Tab` to include other folders |
 
-Sessions are recorded by default. `kinu sessions` lists them,
-`kinu chat <name> --session <id>` reopens one, and `--fork <id>` branches a
-new one from it. `--no-session` opts a run out.
+Local sessions are recorded by default. `kinu sessions` lists them.
+`kinu chat <name> --session <id>` reopens one, and `--fork <id>` branches it.
+Cloud chat history stays in the workspace and loads when the workspace opens.
+`--no-session` disables the terminal record for one run.
 
 ## 4. Letting it touch your machine
 

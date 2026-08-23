@@ -6,6 +6,8 @@
 import { parseRefusal } from '@kinu.run/core';
 import { markdownSyntax, tuiColors } from './theme';
 import { clipText } from './format';
+import type { AgentClientStatus } from '../agent-client';
+import { StatusView } from './help-view';
 
 export interface DisplayMessage {
   id: string;
@@ -18,6 +20,8 @@ export interface DisplayMessage {
   attachments?: string[];
   /** User message injected into a running turn (mid-turn steer). */
   steered?: boolean;
+  /** Chronological snapshot produced by /status. */
+  status?: AgentClientStatus;
   /** User redirect run as a parallel branch (Steer-as-Branch). */
   branched?: boolean;
   /** Assistant text segment still streaming — renders with the live cursor.
@@ -27,29 +31,19 @@ export interface DisplayMessage {
 
 function UserMessage({ content, attachments, steered, branched }: { content: string; attachments?: string[]; steered?: boolean; branched?: boolean }) {
   return (
-    <box flexDirection="row" justifyContent="flex-start" style={{ paddingLeft: 2, paddingRight: 2, marginBottom: 1 }}>
-      <box
-        flexDirection="column"
-        style={{
-          maxWidth: '82%',
-          backgroundColor: tuiColors.bubbleBg,
-          border: true,
-          borderStyle: 'single',
-          borderColor: steered || branched ? tuiColors.amberDeep : tuiColors.bubbleBorder,
-          paddingLeft: 1,
-          paddingRight: 1,
-          paddingTop: 0,
-          paddingBottom: 0,
-        }}
-      >
-        <text>
-          <strong fg={tuiColors.blue}>You</strong>
-          {steered ? <span fg={tuiColors.amber}> ↪ steering</span> : null}
-          {branched ? <span fg={tuiColors.amber}> ⎇ branching</span> : null}
-        </text>
+    <box flexDirection="row" style={{ width: '100%', paddingLeft: 2, paddingRight: 2, marginBottom: 1 }}>
+      <box style={{ width: 8 }}>
+        <text><strong fg={tuiColors.accent}>YOU</strong></text>
+      </box>
+      <box flexDirection="column" style={{ flexGrow: 1 }}>
+        {(steered || branched) && (
+          <text>
+            <span fg={tuiColors.amber}>{steered ? '↪ steering' : '⎇ branching'}</span>
+          </text>
+        )}
         <text><span fg={tuiColors.textBright}>{content}</span></text>
-        {attachments?.map((label, i) => (
-          <text key={i}><span fg={tuiColors.muted}>+ {label}</span></text>
+        {attachments?.map((label, index) => (
+          <text key={label || index}><span fg={tuiColors.muted}>+ {label}</span></text>
         ))}
       </box>
     </box>
@@ -58,17 +52,11 @@ function UserMessage({ content, attachments, steered, branched }: { content: str
 
 function AssistantMessage({ content, live }: { content: string; live?: boolean }) {
   return (
-    <box flexDirection="row" justifyContent="flex-start" style={{ paddingLeft: 2, paddingRight: 2, marginBottom: 1 }}>
-      <box
-        flexDirection="column"
-        style={{
-          width: '92%',
-          backgroundColor: tuiColors.bg,
-          paddingLeft: 1,
-          paddingRight: 1,
-        }}
-      >
-        <text><strong fg={tuiColors.accentStrong}>Agent</strong></text>
+    <box flexDirection="row" style={{ width: '100%', paddingLeft: 2, paddingRight: 2, marginBottom: 1 }}>
+      <box style={{ width: 8 }}>
+        <text><strong fg={tuiColors.accent}>KINU</strong></text>
+      </box>
+      <box flexDirection="column" style={{ flexGrow: 1, backgroundColor: tuiColors.bg }}>
         <markdown
           width="100%"
           syntaxStyle={markdownSyntax}
@@ -152,6 +140,7 @@ export function MessageList({ messages }: Props) {
   return (
     <>
       {messages.map((msg) => {
+        if (msg.status) return <StatusView key={msg.id} status={msg.status} />;
         switch (msg.role) {
           case 'user':
             return <UserMessage key={msg.id} content={msg.content} attachments={msg.attachments} steered={msg.steered} branched={msg.branched} />;

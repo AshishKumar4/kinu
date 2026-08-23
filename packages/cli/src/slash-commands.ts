@@ -14,7 +14,7 @@ export interface SlashCommandInfo {
   description: string;
   usage?: string;
   /** Only offered when the client exposes this capability surface. */
-  requires?: 'localControls' | 'consents' | 'checkpoints';
+  requires?: 'localControls' | 'consents' | 'checkpoints' | 'sessionHistory';
 }
 
 export const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
@@ -23,13 +23,14 @@ export const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
   { name: '/tools', description: 'List available tools' },
   { name: '/model', description: 'Open model picker or set a model', usage: '/model [spec]' },
   { name: '/effort', description: 'Show or set reasoning effort', usage: '/effort [low|medium|high]' },
+  { name: '/settings', description: 'Open interactive settings' },
   { name: '/models', description: 'List configured model providers', requires: 'localControls' },
   { name: '/memory', description: 'Show memory' },
   { name: '/changelog', description: 'Review self-changes; revert by index', usage: '/changelog [revert <n>]' },
   { name: '/takes', description: 'Compare the last alternate takes; pick by number', usage: '/takes [n]' },
   { name: '/tree', description: 'Show MCTS search tree' },
-  { name: '/resume', description: 'Resume a recorded CLI session', usage: '/resume [number/id]' },
-  { name: '/sessions', description: 'List recorded CLI sessions' },
+  { name: '/resume', description: 'Resume a recorded local conversation', usage: '/resume [number/id]', requires: 'sessionHistory' },
+  { name: '/sessions', description: 'List recorded local conversations', requires: 'sessionHistory' },
   { name: '/jobs', description: 'List background jobs' },
   { name: '/connect', description: 'Connect this PC for agent device access', requires: 'consents' },
   { name: '/stop', description: 'Stop the active turn' },
@@ -40,15 +41,16 @@ export const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
   { name: '/approval', description: 'Show or set shell approval mode', usage: '/approval strict|allow_all|deny_all', requires: 'localControls' },
   { name: '/always', description: 'Manage always-active skills', usage: '/always <name...|none>', requires: 'localControls' },
   { name: '/advisor', description: 'Show or set the advisor. It is off by default. Turning it on adds one model call per turn.', usage: '/advisor [on|off|severity <nit|concern|blocker>]' },
+  { name: '/cancel', description: 'Close the active panel' },
   { name: '/exit', description: 'Exit chat' },
 ];
 
-export function commandsForClient(client: Pick<AgentClient, 'localControls' | 'consents' | 'checkpoints'>): SlashCommandInfo[] {
+export function commandsForClient(client: Pick<AgentClient, 'localControls' | 'consents' | 'checkpoints' | 'sessionHistory'>): SlashCommandInfo[] {
   return SLASH_COMMANDS.filter((command) =>
     !command.requires || client[command.requires] !== null);
 }
 
-export function commandHelp(client: Pick<AgentClient, 'localControls' | 'consents' | 'checkpoints'>): string {
+export function commandHelp(client: Pick<AgentClient, 'localControls' | 'consents' | 'checkpoints' | 'sessionHistory'>): string {
   const lines = ['Commands'];
   for (const command of commandsForClient(client)) {
     const usage = command.usage ?? command.name;
@@ -56,14 +58,36 @@ export function commandHelp(client: Pick<AgentClient, 'localControls' | 'consent
   }
   return lines.join('\n');
 }
-
 export function filterCommands(commands: readonly SlashCommandInfo[], draft: string): SlashCommandInfo[] {
   const token = draft.trimStart();
   if (!token.startsWith('/')) return [];
   const query = token.slice(1).split(/\s+/, 1)[0]?.toLowerCase() ?? '';
   return commands
-    .filter((command) => command.name.slice(1).toLowerCase().startsWith(query))
-    .slice(0, 8);
+    .map((command, index) => {
+      const name = command.name.slice(1).toLowerCase();
+      const description = command.description.toLowerCase();
+      const rank = query === '' ? 3
+        : name === query ? 0
+        : name.startsWith(query) ? 1
+        : description.includes(query) ? 2
+        : fuzzySubsequence(query, name) ? 3
+        : null;
+      return { command, index, rank };
+    })
+    .filter((candidate): candidate is { command: SlashCommandInfo; index: number; rank: number } =>
+      candidate.rank !== null)
+    .sort((left, right) => left.rank - right.rank || left.index - right.index)
+    .slice(0, 8)
+    .map(({ command }) => command);
+}
+
+function fuzzySubsequence(query: string, target: string): boolean {
+  let queryIndex = 0;
+  for (const character of target) {
+    if (character === query[queryIndex]) queryIndex += 1;
+    if (queryIndex === query.length) return true;
+  }
+  return query.length === 0;
 }
 
 /** Complete an unambiguous command prefix (e.g. `/sta` → `/status`). */
@@ -85,6 +109,7 @@ export type SlashOutcome =
   | { kind: 'takes'; set: AlternateTakeSet }
   | { kind: 'exit' }
   | { kind: 'model-picker' }
+  | { kind: 'settings' }
   | { kind: 'model-set'; spec: string }
   | { kind: 'effort-set'; effort: ReasoningEffort }
   | { kind: 'sessions'; mode: 'list' | 'resume'; resumeRef?: string }
@@ -117,6 +142,8 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
       return { kind: 'cancel' };
     case '/help':
       return { kind: 'text', text: commandHelp(client) };
+    case '/settings':
+      return { kind: 'settings' };
     case '/status':
       return { kind: 'status', status: await client.status() };
     case '/tools': {
@@ -277,9 +304,13 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
       if (!client.checkpoints) return { kind: 'unknown', command: cmd };
       return { kind: 'undo', ref: arg || undefined };
     case '/sessions':
-      return { kind: 'sessions', mode: 'list' };
+      return client.sessionHistory
+        ? { kind: 'sessions', mode: 'list' }
+        : { kind: 'unknown', command: cmd };
     case '/resume':
-      return { kind: 'sessions', mode: 'resume', resumeRef: arg || undefined };
+      return client.sessionHistory
+        ? { kind: 'sessions', mode: 'resume', resumeRef: arg || undefined }
+        : { kind: 'unknown', command: cmd };
     default:
       return { kind: 'unknown', command: cmd };
   }

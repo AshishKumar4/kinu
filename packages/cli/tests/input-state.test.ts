@@ -24,15 +24,18 @@ const esc = (now: number, opts: { draft?: string; hasUserMessages?: boolean } = 
   ({ type: 'escape', now, draft: opts.draft ?? '', hasUserMessages: opts.hasUserMessages ?? true });
 
 describe('Esc / Esc-Esc state machine', () => {
-  test('first Esc while processing interrupts; second within the beat opens walk-back', () => {
+  test('Esc-Esc waits for the interrupted turn to settle before walk-back opens', () => {
     const busy = run(initialInputState, { type: 'turn-start' });
     const first = reduceInput(busy.state, esc(1_000));
     expect(first.effects).toEqual([{ kind: 'interrupt' }]);
     expect(first.state.walkbackOpen).toBe(false);
 
     const second = reduceInput(first.state, esc(1_000 + ESC_ESC_BEAT_MS - 1));
-    expect(second.state.walkbackOpen).toBe(true);
-    expect(second.effects).toEqual([]);
+    expect(second.state.walkbackOpen).toBe(false);
+    expect(second.state.walkbackPending).toBe(true);
+    const settled = reduceInput(second.state, { type: 'turn-settled' });
+    expect(settled.state.walkbackOpen).toBe(true);
+    expect(settled.state.walkbackPending).toBe(false);
   });
 
   test('a second Esc after the beat re-interrupts instead of opening walk-back', () => {
@@ -70,12 +73,17 @@ describe('Esc / Esc-Esc state machine', () => {
     expect(closed.effects).toEqual([]);
   });
 
-  test('a new turn does not disturb an armed Esc within the beat', () => {
+  test('walk-back waits for every active turn to settle', () => {
     const busy = run(initialInputState, { type: 'turn-start' });
     const armed = reduceInput(busy.state, esc(1_000));
     const withTurn = reduceInput(armed.state, { type: 'turn-start' });
     const second = reduceInput(withTurn.state, esc(1_400));
-    expect(second.state.walkbackOpen).toBe(true);
+    expect(second.state.walkbackPending).toBe(true);
+    const oneLeft = reduceInput(second.state, { type: 'turn-settled' });
+    expect(oneLeft.state.walkbackOpen).toBe(false);
+    expect(oneLeft.state.walkbackPending).toBe(true);
+    const allSettled = reduceInput(oneLeft.state, { type: 'turn-settled' });
+    expect(allSettled.state.walkbackOpen).toBe(true);
   });
 });
 

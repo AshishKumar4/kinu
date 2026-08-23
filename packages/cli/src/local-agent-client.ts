@@ -33,7 +33,6 @@ import {
   readCliSessionTranscript,
   transcriptMessages,
   type CliSession,
-  type CliSessionInfo,
   type CliSessionOptions,
 } from './session';
 import { SessionRecorder } from './session-recorder';
@@ -56,6 +55,7 @@ import type {
   AgentSearchNode,
   AgentToolSurface,
   AgentTranscriptMessage,
+  SessionHistorySurface,
   AgentTurnResult,
   FileCheckpointSurface,
   ForkPoint,
@@ -225,6 +225,7 @@ export class LocalAgentClient implements AgentClient {
   readonly consents = null;
   readonly localControls: LocalSessionControls;
   readonly checkpoints: FileCheckpointSurface;
+  readonly sessionHistory: SessionHistorySurface;
   readonly inlineAttachmentLimitBytes = LOCAL_MAX_INLINE_ATTACHMENT_BYTES;
 
   private readonly deps: LocalAgentClientDeps;
@@ -266,6 +267,18 @@ export class LocalAgentClient implements AgentClient {
       list: (limit, turnId) => this.session.listFileCheckpoints(limit, turnId),
       plan: (dir, id) => this.session.planFileRestore(dir, id),
       restore: (dir, id) => this.session.restoreFileCheckpoint(dir, id),
+    };
+    this.sessionHistory = {
+      list: () => listCliSessions(this.agentName, this.deps.sessionOptions),
+      resume: async (sessionRef) => {
+        const nextCliSession = createCliSession(this.agentName, {
+          ...this.deps.sessionOptions,
+          session: sessionRef,
+        });
+        await this.session.end();
+        this.activeCliSession = nextCliSession;
+        this.session = this.createAgentSession(this.conversationIdForAgentSession());
+      },
     };
   }
 
@@ -421,17 +434,6 @@ export class LocalAgentClient implements AgentClient {
     return transcriptMessages(transcript.entries);
   }
 
-  listSessions(): CliSessionInfo[] {
-    return listCliSessions(this.agentName, this.deps.sessionOptions);
-  }
-
-  async resumeConversation(sessionRef: string): Promise<void> {
-    const nextCliSession = createCliSession(this.agentName, { ...this.deps.sessionOptions, session: sessionRef });
-    await this.session.end();
-    this.activeCliSession = nextCliSession;
-    this.session = this.createAgentSession(this.conversationIdForAgentSession());
-    await this.connect();
-  }
 
   async status(): Promise<AgentClientStatus> {
     const info = await this.deps.refreshInfo();

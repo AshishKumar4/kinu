@@ -430,6 +430,9 @@ async function applySlashOutcome(client: AgentClient, rl: readline.Interface, ou
     case 'takes':
       console.log(`\n${MUTED(renderTakesText(outcome.set))}\n`);
       return 'ok';
+    case 'settings':
+      console.log(`\n${DIM('Settings:')} use /model, /effort, /approval, /always, or open the full-screen TUI.\n`);
+      return 'ok';
     case 'model-picker': {
       const current = await client.getModelSpec();
       console.log(`\n${DIM('Model:')} ${ACCENT(current ?? '(default)')}`);
@@ -446,14 +449,19 @@ async function applySlashOutcome(client: AgentClient, rl: readline.Interface, ou
       return 'ok';
     }
     case 'sessions': {
-      const sessions = client.listSessions();
+      const sessionHistory = client.sessionHistory;
+      if (!sessionHistory) {
+        console.log(`\n${DIM('Recorded conversation resume is available for local workspaces.')}\n`);
+        return 'ok';
+      }
+      const sessions = sessionHistory.list();
       if (outcome.mode === 'resume' && outcome.resumeRef) {
         const selected = selectSession(sessions, outcome.resumeRef);
         if (!selected) {
           console.log(WARN(`  No matching session for "${outcome.resumeRef}".`));
           return 'ok';
         }
-        await client.resumeConversation(selected.info.id);
+        await sessionHistory.resume(selected.info.id);
         console.log(`\n${DIM('Resumed')} ${ACCENT(selected.label)}\n`);
         return 'ok';
       }

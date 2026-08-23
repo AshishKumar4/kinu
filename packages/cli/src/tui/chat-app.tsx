@@ -49,6 +49,7 @@ import {
   type SlashOutcome,
 } from '../slash-commands';
 import { describePromptAttachment, resolvePromptAttachments } from '../attachments';
+import { listKnownAgents, type ListedAgent } from '../agent-list';
 import { watchDeviceConsents } from '../consent-watch';
 import { contextWindowForSpec, EMPTY_MODEL_MENU, type AgentModelEntry, type AgentModelMenu } from '../model-catalog';
 import { requireInteractiveTerminal } from '../prompt';
@@ -57,8 +58,21 @@ import { openBrowser } from '../commands/auth';
 import type { CliSessionInfo } from '../session';
 import { StatusBar } from './status-bar';
 import { MessageList, type DisplayMessage } from './messages';
-import { StatusView } from './help-view';
-import { ChangelogOverlay, CommandHintOverlay, DeviceConnectOverlay, DeviceConsentOverlay, ModelPickerOverlay, PhaseLine, TakesOverlay, WalkbackOverlay } from './overlays';
+import {
+  ChangelogOverlay,
+  CommandHintOverlay,
+  CommandPaletteOverlay,
+  DeviceConnectOverlay,
+  DeviceConsentOverlay,
+  ModelPickerOverlay,
+  PhaseLine,
+  SessionPickerOverlay,
+  TakesOverlay,
+  SettingsOverlay,
+  type TuiSettingChoice,
+  WalkbackOverlay,
+  WorkspaceDrawerOverlay,
+} from './overlays';
 import { useDeviceConnectPrompt } from './use-device-connect';
 import { estimateContextTokens } from './context-status';
 import { useStreamingBuffer } from './streaming-buffer';
@@ -76,13 +90,37 @@ export interface ChatAppOpts {
   /** A cloud walk-back fork swaps in a sibling client; the host needs the
    *  current one so exit cleanup closes the right connection. */
   onClientChange?: (client: AgentClient) => void;
+  /** Resolve one cached workspace choice through the same client factory used
+   *  at startup. The TUI keeps navigation backend-neutral. */
+  listWorkspaces?: () => readonly ListedAgent[];
+  onWorkspaceSelect?: (name: string) => Promise<AgentClient>;
 }
 
-const STATUS_VIEW = 'STATUS_VIEW';
+type ActiveSurface =
+  | { kind: 'commands' }
+  | { kind: 'settings' }
+  | { kind: 'workspaces'; workspaces: readonly ListedAgent[] }
+  | { kind: 'model'; menu: AgentModelMenu; loading: boolean; error: string | null }
+  | { kind: 'sessions'; sessions: CliSessionInfo[] }
+  | { kind: 'changelog'; view: AgentChangelogView }
+  | { kind: 'takes'; set: AlternateTakeSet }
+  | null;
+
+
+interface CaughtFailure {
+  cause: unknown;
+}
 
 let globalExit: (() => void) | null = null;
 
-export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClientChange }: ChatAppOpts) {
+export function ChatApp({
+  client: initialClient,
+  hydrateHistory,
+  onExit,
+  onClientChange,
+  listWorkspaces = listKnownAgents,
+  onWorkspaceSelect,
+}: ChatAppOpts) {
   const { width, height } = useTerminalDimensions();
   // The client can be swapped mid-session: a cloud walk-back fork returns a
   // sibling client pointed at the forked agent.
@@ -95,11 +133,15 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
   const [status, setStatus] = useState<AgentClientStatus | null>(null);
   const [modelSpec, setModelSpec] = useState<string>('');
   const [modelCatalog, setModelCatalog] = useState<AgentModelEntry[]>([]);
-  const [sessionPicker, setSessionPicker] = useState<{ sessions: CliSessionInfo[] } | null>(null);
-  const [modelPicker, setModelPicker] = useState<{ menu: AgentModelMenu; loading: boolean; error: string | null } | null>(null);
-  const [changelogView, setChangelogView] = useState<AgentChangelogView | null>(null);
-  const [takesView, setTakesView] = useState<AlternateTakeSet | null>(null);
+  const [activeSurface, setActiveSurface] = useState<ActiveSurface>(null);
   const [pendingConsent, setPendingConsent] = useState<PendingDeviceConsent | null>(null);
+  const sessionPicker = activeSurface?.kind === 'sessions' ? activeSurface : null;
+  const modelPicker = activeSurface?.kind === 'model' ? activeSurface : null;
+  const changelogView = activeSurface?.kind === 'changelog' ? activeSurface.view : null;
+  const takesView = activeSurface?.kind === 'takes' ? activeSurface.set : null;
+  const commandPalette = activeSurface?.kind === 'commands';
+  const workspaceDrawer = activeSurface?.kind === 'workspaces' ? activeSurface.workspaces : null;
+  const settingsOpen = activeSurface?.kind === 'settings';
   const [draft, setDraft] = useState('');
   const [activeSessionId, setActiveSessionId] = useState(client.cliSession.id);
   const [inputState, setInputState] = useState(initialInputState);
@@ -118,8 +160,53 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
   const skipHydrationRef = useRef(false);
   /** Take sets already hinted at, so a turn without a new convergence is quiet. */
   const hintedTakesRef = useRef<string | null>(null);
+  /** Explicit workspace switches always hydrate the selected workspace. */
+  const modelRequestRef = useRef(0);
+  const hydrateNextClientRef = useRef(false);
   const commands = useMemo(() => commandsForClient(client), [client]);
   const deviceConnect = useDeviceConnectPrompt();
+  const settings = useMemo<TuiSettingChoice[]>(() => {
+    const effort = status?.reasoningEffort ?? 'medium';
+    const rows: TuiSettingChoice[] = [
+      {
+        id: 'model',
+        group: 'Model',
+        label: 'Active model',
+        value: modelSpec || 'default',
+        command: '/model',
+      },
+      ...(['low', 'medium', 'high'] as const).map((value) => ({
+        id: `effort-${value}`,
+        group: 'Model',
+        label: `Reasoning effort: ${value}`,
+        value: value === effort ? 'current' : '',
+        command: `/effort ${value}`,
+      })),
+    ];
+    if (client.localControls) {
+      const approval = client.localControls.getShellApprovalMode();
+      rows.push(...(['strict', 'allow_all', 'deny_all'] as const).map((value) => ({
+        id: `approval-${value}`,
+        group: 'Local shell',
+        label: value.replaceAll('_', ' '),
+        value: value === approval ? 'current' : '',
+        command: `/approval ${value}`,
+      })));
+      const activeSkills = client.localControls.getAlwaysActiveSkills();
+      rows.push({
+        id: 'always-active-skills',
+        group: 'Skills',
+        label: 'Always active',
+        value: activeSkills.length > 0 ? activeSkills.join(', ') : 'none',
+        command: '/always ',
+      });
+    }
+    return rows;
+
+  }, [client, modelSpec, status?.reasoningEffort]);
+  useEffect(() => {
+    if (activeSurface?.kind !== 'model') modelRequestRef.current += 1;
+  }, [activeSurface?.kind]);
 
   const isProcessing = inputState.activeTurns > 0;
 
@@ -128,6 +215,10 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
     setMessages((prev) => [...prev, { ...msg, id }]);
   }, []);
 
+
+  const addError = useCallback((failure: CaughtFailure) => {
+    addMessage({ role: 'system', content: errorLine(renderThrownChain(failure)) });
+  }, [addMessage]);
   // ── Live assistant text segments — the key to chronological interleaving.
   // Streamed text-deltas flow into a `live` assistant message that sits at its
   // real position in the array. A tool-call SEALS the active segment so the
@@ -202,9 +293,9 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
       await client.send(payload, { cwd: process.cwd() });
     } catch (err) {
       // Transport/pre-flight failures never reach the event stream.
-      addMessage({ role: 'system', content: `Error: ${renderThrownChain({ cause: err })}` });
+      addError({ cause: err });
     }
-  }, [addMessage, client]);
+  }, [addError, addMessage, client]);
 
   /** Run the draft as a parallel branch of the live turn — never interrupts
    *  it; progress lands in the status bar and settles into /takes. Falls back
@@ -226,6 +317,11 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
     try {
       const result = await client.fork(point);
       if (result.client !== client) {
+        setReady(false);
+        setStatus(null);
+        setModelSpec('');
+        setModelCatalog([]);
+        setBranchTasks({});
         skipHydrationRef.current = true;
         const previous = client;
         setClient(result.client);
@@ -245,43 +341,101 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
         }];
       });
       setActiveSessionId(result.client.cliSession.id);
+
       setInputText(point.text);
     } catch (err) {
-      addMessage({ role: 'system', content: `Error: ${renderThrownChain({ cause: err })}` });
+      addError({ cause: err });
     }
-  }, [addMessage, client, dispatchInput, onClientChange, setInputText]);
+  }, [addError, addMessage, client, dispatchInput, onClientChange, setInputText]);
+  const switchWorkspace = useCallback(async (workspace: ListedAgent) => {
+    if (workspace.name === client.agentName) {
+      setActiveSurface(null);
+      return;
+    }
+    if (!onWorkspaceSelect) {
+      setActiveSurface(null);
+      addMessage({ role: 'system', content: 'Workspace switching is unavailable in this host.' });
+      return;
+    }
+    setReady(false);
+    try {
+      const next = await onWorkspaceSelect(workspace.name);
+      const previous = client;
+      hydrateNextClientRef.current = true;
+      skipHydrationRef.current = false;
+      activeSegmentRef.current = null;
+      stream.clear();
+      setTurnPhase(null);
+      setActiveSurface(null);
+      setStatus(null);
+      setModelSpec('');
+      setModelCatalog([]);
+      setBranchTasks({});
+      machineRef.current = initialInputState;
+      setInputState(initialInputState);
+      setInputText('');
+      setMessages([welcomeMessage(next.agentName)]);
+      setActiveSessionId(next.cliSession.id);
+      setClient(next);
+      onClientChange?.(next);
+      void previous.close().catch((error) => {
+        addMessage({
+          role: 'system',
+          content: errorLine(`The previous workspace did not close cleanly: ${renderThrownChain({ cause: error })}`),
+        });
+      });
+    } catch (error) {
+      setReady(true);
+      addError({ cause: error });
+    }
+  }, [addError, addMessage, client, onClientChange, onWorkspaceSelect, setInputText, stream]);
 
   const resumeSession = useCallback(async (input: string, available?: CliSessionInfo[]) => {
-    const sessions = available ?? client.listSessions();
+    const sessionHistory = client.sessionHistory;
+    if (!sessionHistory) {
+      addMessage({ role: 'system', content: 'Recorded conversation resume is available for local workspaces.' });
+      return;
+    }
+    const sessions = available ?? sessionHistory.list();
     const selected = selectSession(sessions, input);
     if (!selected) {
       addMessage({ role: 'system', content: `No matching session for "${input}". Type /resume to choose again.` });
       return;
     }
-    setSessionPicker(null);
-    setModelPicker(null);
     setReady(false);
-    activeSegmentRef.current = null;
-    stream.clear();
-    setTurnPhase(null);
-    await client.resumeConversation(selected.info.id);
-    const history = await client.history();
-    setActiveSessionId(client.cliSession.id);
-    setMessages([
-      { id: `resume-${selected.info.id}`, role: 'system', content: `Resumed ${selected.label}` },
-      ...history,
-    ]);
-    setReady(true);
+    try {
+      await sessionHistory.resume(selected.info.id);
+      const history = await client.history();
+      activeSegmentRef.current = null;
+      stream.clear();
+      setTurnPhase(null);
+      setActiveSurface(null);
+      setActiveSessionId(client.cliSession.id);
+      setMessages([
+        { id: `resume-${selected.info.id}`, role: 'system', content: `Resumed ${selected.label}` },
+        ...history,
+      ]);
+    } finally {
+      setReady(true);
+    }
   }, [addMessage, client, stream]);
 
   const openModelPicker = useCallback(async () => {
-    setModelPicker({ menu: EMPTY_MODEL_MENU, loading: true, error: null });
+    const request = ++modelRequestRef.current;
+    setActiveSurface({ kind: 'model', menu: EMPTY_MODEL_MENU, loading: true, error: null });
     try {
       const menu = await client.listModels();
+      if (modelRequestRef.current !== request) return;
       setModelCatalog(menu.models);
-      setModelPicker({ menu, loading: false, error: null });
+      setActiveSurface({ kind: 'model', menu, loading: false, error: null });
     } catch (err) {
-      setModelPicker({ menu: EMPTY_MODEL_MENU, loading: false, error: renderThrownChain({ cause: err }) });
+      if (modelRequestRef.current !== request) return;
+      setActiveSurface({
+        kind: 'model',
+        menu: EMPTY_MODEL_MENU,
+        loading: false,
+        error: renderThrownChain({ cause: err }),
+      });
     }
   }, [client]);
 
@@ -289,12 +443,12 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
     try {
       const result = await setModelPreference(client, model.spec);
       setModelSpec(result.spec);
-      setModelPicker(null);
+      setActiveSurface(null);
       addMessage({ role: 'system', content: `Model: ${result.spec}` });
     } catch (err) {
-      addMessage({ role: 'system', content: `Error: ${renderThrownChain({ cause: err })}` });
+      addError({ cause: err });
     }
-  }, [addMessage, client]);
+  }, [addError, addMessage, client]);
 
   /** Enter on a changelog line: revert revertables through the real paths,
    *  explain informational lines; the overlay refreshes with the new digest. */
@@ -303,7 +457,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
       addMessage({ role: 'system', content: `"${entry.summary}" is informational (${entry.kind}) — nothing to revert.` });
       return;
     }
-    setChangelogView(null);
+    setActiveSurface(null);
     try {
       const result = await client.revertChangelogEntry(entry.id);
       addMessage({
@@ -312,24 +466,24 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
           ? `Reverted: ${entry.summary}\n→ ${result.detail ?? 'done'}`
           : `Revert failed: ${result.error ?? 'unknown error'}`,
       });
-      if (result.ok) setChangelogView(await client.changelog());
+      if (result.ok) setActiveSurface({ kind: 'changelog', view: await client.changelog() });
     } catch (err) {
-      addMessage({ role: 'system', content: `Error: ${renderThrownChain({ cause: err })}` });
+      addError({ cause: err });
     }
-  }, [addMessage, client]);
+  }, [addError, addMessage, client]);
 
   /** Enter on a take: record the pick (ledger + repoint); a changed answer
    *  streams its continuation as the next programmatic turn. */
   const pickTake = useCallback(async (set: AlternateTakeSet, candidate: AlternateTakeCandidate) => {
-    setTakesView(null);
+    setActiveSurface(null);
     try {
       const index = set.candidates.findIndex((c) => c.nodeId === candidate.nodeId) + 1;
       const result = await client.pickTake(set.id, candidate.nodeId);
       addMessage({ role: 'system', content: describeTakePick(result, index) });
     } catch (err) {
-      addMessage({ role: 'system', content: `Error: ${renderThrownChain({ cause: err })}` });
+      addError({ cause: err });
     }
-  }, [addMessage, client]);
+  }, [addError, addMessage, client]);
 
   const applySlashOutcome = useCallback(async (outcome: SlashOutcome) => {
     switch (outcome.kind) {
@@ -337,10 +491,10 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
         addMessage({ role: 'system', content: outcome.text });
         return;
       case 'changelog':
-        setChangelogView(outcome.view);
+        setActiveSurface({ kind: 'changelog', view: outcome.view });
         return;
       case 'takes':
-        setTakesView(outcome.set);
+        setActiveSurface({ kind: 'takes', set: outcome.set });
         return;
       case 'model-set':
         setModelSpec(outcome.spec);
@@ -353,7 +507,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
       case 'status':
         setStatus(outcome.status);
         setModelSpec(outcome.status.model ?? '');
-        addMessage({ role: 'system', content: STATUS_VIEW });
+        addMessage({ role: 'system', content: '', status: outcome.status });
         return;
       case 'exit':
         if (onExit) onExit();
@@ -363,7 +517,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
         await openModelPicker();
         return;
       case 'sessions': {
-        const sessions = client.listSessions();
+        const sessions = client.sessionHistory?.list() ?? [];
         if (sessions.length === 0) {
           addMessage({ role: 'system', content: 'No recorded CLI sessions yet.' });
           return;
@@ -372,8 +526,11 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
           await resumeSession(outcome.resumeRef, sessions);
           return;
         }
-        if (outcome.mode === 'resume') setSessionPicker({ sessions });
-        addMessage({ role: 'system', content: renderSessionBrowser(outcome.mode, sessions) });
+        if (outcome.mode === 'resume') {
+          setActiveSurface({ kind: 'sessions', sessions });
+          return;
+        }
+        addMessage({ role: 'system', content: renderSessionBrowser('list', sessions) });
         return;
       }
       case 'device-connect':
@@ -384,28 +541,37 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
       case 'undo':
         // Surface-owned outcomes — handleSubmit intercepts them before this.
         return;
-      case 'cancel':
-        if (modelPicker) {
-          setModelPicker(null);
-          addMessage({ role: 'system', content: 'Model selection cancelled.' });
-        } else if (changelogView) {
-          setChangelogView(null);
-          addMessage({ role: 'system', content: 'Changelog closed — everything kept.' });
-        } else if (takesView) {
-          setTakesView(null);
-          addMessage({ role: 'system', content: 'Takes closed — the answered take stays.' });
-        } else if (sessionPicker) {
-          setSessionPicker(null);
-          addMessage({ role: 'system', content: 'Resume cancelled.' });
-        } else {
+      case 'cancel': {
+        if (!activeSurface) {
           addMessage({ role: 'system', content: 'Nothing to cancel.' });
+          return;
         }
+        const cancelled = {
+          settings: 'Settings closed.',
+          commands: 'Command palette closed.',
+          workspaces: 'Workspace drawer closed.',
+          model: 'Model selection cancelled.',
+          changelog: 'Changelog closed — everything kept.',
+          takes: 'Takes closed — the answered take stays.',
+          sessions: 'Resume cancelled.',
+        } satisfies Record<NonNullable<ActiveSurface>['kind'], string>;
+        setActiveSurface(null);
+        addMessage({ role: 'system', content: cancelled[activeSurface.kind] });
         return;
+      }
       case 'unknown':
         addMessage({ role: 'system', content: `Unknown command: ${outcome.command}. Type /help` });
         return;
     }
-  }, [addMessage, changelogView, client, deviceConnect.open, modelPicker, onExit, openModelPicker, resumeSession, sessionPicker, takesView]);
+  }, [
+    activeSurface,
+    addMessage,
+    client,
+    deviceConnect.open,
+    onExit,
+    openModelPicker,
+    resumeSession,
+  ]);
 
   const runInputEffects = useCallback((effects: InputEffect[]) => {
     // Steers accepted mid-turn but never delivered come back to the composer
@@ -455,7 +621,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
       try {
         await resumeSession(text, sessionPicker.sessions);
       } catch (err) {
-        addMessage({ role: 'system', content: `Error: ${renderThrownChain({ cause: err })}` });
+        addError({ cause: err });
       }
       return;
     }
@@ -505,12 +671,12 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
         }
         await applySlashOutcome(outcome);
       } catch (err) {
-        addMessage({ role: 'system', content: `Error: ${renderThrownChain({ cause: err })}` });
+        addError({ cause: err });
       }
       return;
     }
     await sendPrompt(submitted);
-  }, [addMessage, applySlashOutcome, client, commands, dispatchInput, messages, performBranch, performWalkback, ready, resumeSession, runInputEffects, sendPrompt, sessionPicker]);
+  }, [addError, addMessage, applySlashOutcome, client, commands, dispatchInput, messages, performBranch, performWalkback, ready, resumeSession, runInputEffects, sendPrompt, sessionPicker]);
 
   const handleClientEvent = useCallback((event: AgentClientEvent) => {
     switch (event.type) {
@@ -604,10 +770,11 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
   // Connect once per client: event subscription, startup resources, initial
   // hydration. Re-runs when a walk-back fork swaps in a sibling client.
   useEffect(() => {
+    setReady(false);
     const unsubscribe = client.subscribe(handleClientEvent);
     let cancelled = false;
     void (async () => {
-      if (hydrateHistory && !skipHydrationRef.current) {
+      if ((hydrateHistory || hydrateNextClientRef.current) && !skipHydrationRef.current) {
         try {
           const history = await client.history();
           if (!cancelled && history.length > 0) {
@@ -622,6 +789,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
         }
       }
       skipHydrationRef.current = false;
+      hydrateNextClientRef.current = false;
       await client.connect();
       if (cancelled) return;
       setReady(true);
@@ -668,7 +836,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
         const settle = (outcome: DeviceConsentDecision | 'cancelled') => {
           consentDecisionRef.current = null;
           setPendingConsent(null);
-          resolve(outcome);
+          setTimeout(() => { resolve(outcome); }, 0);
         };
         consentDecisionRef.current = settle;
         setPendingConsent(consent);
@@ -685,7 +853,9 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
     consentDecisionRef.current?.(decision);
   }, []);
 
-  const overlayOpen = Boolean(modelPicker || sessionPicker || changelogView || takesView || inputState.walkbackOpen);
+  const overlayOpen = Boolean(
+    activeSurface || inputState.walkbackOpen || pendingConsent || deviceConnect.state,
+  );
 
   // Auto-copy selected text to clipboard (OSC 52) on mouse release.
   const rendererInstance = useRenderer();
@@ -723,18 +893,28 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
     if (pendingConsent) {
       if (key.name === 'o' || key.name === 'y' || key.name === 'return') {
         resolvePendingConsent('once');
-        return;
-      }
-      if (key.name === 'a') {
+      } else if (key.name === 'a') {
         resolvePendingConsent('always');
-        return;
-      }
-      if (key.name === 'n' || key.name === 'escape') {
+      } else if (key.name === 'n' || key.name === 'escape') {
         resolvePendingConsent('deny');
-        return;
       }
+      return;
     }
-    // Ctrl+L: open the last URL from assistant messages in the browser.
+    if (key.name === 'g' && key.ctrl) {
+      if (settingsOpen) setActiveSurface(null);
+      else if (!overlayOpen) setActiveSurface({ kind: 'settings' });
+      return;
+    }
+    if (key.name === 'k' && key.ctrl) {
+      if (commandPalette) setActiveSurface(null);
+      else if (!overlayOpen) setActiveSurface({ kind: 'commands' });
+      return;
+    }
+    if (key.name === 'o' && key.ctrl) {
+      if (workspaceDrawer) setActiveSurface(null);
+      else if (!overlayOpen) setActiveSurface({ kind: 'workspaces', workspaces: listWorkspaces() });
+      return;
+    }
     if (key.name === 'l' && key.ctrl && !overlayOpen) {
       const url = lastUrlFromMessages(messagesRef.current);
       if (url) openBrowser(url);
@@ -745,28 +925,29 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
       return;
     }
     if (key.name === 'b' && key.ctrl) {
-      if (!overlayOpen) runInputEffects(dispatchInput({ type: 'branch', draft: inputRef.current?.plainText ?? '' }));
+      if (!overlayOpen) runInputEffects(dispatchInput({
+        type: 'branch',
+        draft: inputRef.current?.plainText ?? '',
+      }));
       return;
     }
     if (key.name === 'tab') {
-      if (!overlayOpen) runInputEffects(dispatchInput({ type: 'tab', draft: inputRef.current?.plainText ?? '' }));
+      if (!overlayOpen) runInputEffects(dispatchInput({
+        type: 'tab',
+        draft: inputRef.current?.plainText ?? '',
+      }));
       return;
     }
     if (key.name === 'backspace') {
-      if (!overlayOpen) runInputEffects(dispatchInput({ type: 'backspace', draft: inputRef.current?.plainText ?? '' }));
+      if (!overlayOpen) runInputEffects(dispatchInput({
+        type: 'backspace',
+        draft: inputRef.current?.plainText ?? '',
+      }));
       return;
     }
     if (key.name !== 'escape') return;
-    if (modelPicker) {
-      setModelPicker(null);
-      return;
-    }
-    if (changelogView) {
-      setChangelogView(null); // keep everything — the default
-      return;
-    }
-    if (takesView) {
-      setTakesView(null); // keep the answered take — the default
+    if (activeSurface) {
+      setActiveSurface(null);
       return;
     }
     runInputEffects(dispatchInput({
@@ -785,11 +966,44 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
   }, [handleSubmit, setInputText]);
 
   const draftLines = Math.min(6, Math.max(1, draft.split('\n').length));
-  const commandHints = !modelPicker && !changelogView && !takesView && !inputState.walkbackOpen && !isProcessing && !/\s/.test(draft.trimStart()) ? filterCommands(commands, draft) : [];
+  const commandHints = !settingsOpen && !commandPalette && !workspaceDrawer && !modelPicker
+    && !changelogView && !takesView && !inputState.walkbackOpen
+    && !isProcessing && !/\s/.test(draft.trimStart())
+    ? filterCommands(commands, draft)
+    : [];
+  const inputFocused = ready && !overlayOpen;
   const contextTokens = estimateContextTokens(messages);
   const contextWindow = contextWindowForSpec(modelCatalog, modelSpec);
   const walkbackList = inputState.walkbackOpen ? forkCandidates(messages) : [];
-  const inputFocused = ready && !modelPicker && !changelogView && !takesView && !deviceConnect.state && !inputState.walkbackOpen;
+  const surfaceTitle = settingsOpen
+    ? 'Settings ›'
+    : commandPalette
+      ? 'Commands ›'
+      : workspaceDrawer
+        ? 'Workspaces ›'
+        : modelPicker
+          ? 'Model picker ›'
+          : changelogView
+            ? 'Changelog ›'
+            : takesView
+              ? 'Takes ›'
+              : inputState.walkbackOpen
+                ? 'Walk back ›'
+                : sessionPicker
+                  ? 'Resume ›'
+                  : null;
+  const composerTitle = isProcessing
+    ? '⟳ processing…'
+    : surfaceTitle
+      ?? `${client.agentName} · ${activeSessionId.slice(0, 10)} · Ctrl+K commands · Ctrl+O workspaces · Ctrl+G settings`;
+  const composerPlaceholder = !ready
+    ? 'Connecting…'
+    : isProcessing
+      ? 'Type to steer · Tab queues · Ctrl+B branches · Esc interrupts'
+      : 'Send a message… · Shift+Enter newline';
+  useEffect(() => {
+    if (inputFocused) inputRef.current?.focus();
+  }, [inputFocused]);
   inputShouldFocusRef.current = inputFocused;
 
   return (
@@ -824,12 +1038,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
           },
         }}
       >
-        {status && messages.some((msg) => msg.role === 'system' && msg.content === STATUS_VIEW)
-          ? <StatusView status={status} />
-          : null}
-        <MessageList
-          messages={messages.filter((msg) => !(msg.role === 'system' && msg.content === STATUS_VIEW))}
-        />
+        <MessageList messages={messages} />
         <PhaseLine label={isProcessing ? (turnPhase ?? 'thinking') : null} />
       </scrollbox>
 
@@ -855,12 +1064,12 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
           backgroundColor: tuiColors.panelStrong,
           paddingLeft: 1,
         }}
-        title={isProcessing ? '⟳ processing…' : modelPicker ? 'Model picker' : changelogView ? 'Changelog ›' : takesView ? 'Takes ›' : inputState.walkbackOpen ? 'Walk back ›' : sessionPicker ? 'Resume ›' : `${client.agentName} · ${activeSessionId.slice(0, 18)} · Ctrl+P model ›`}
+        title={composerTitle}
       >
         <textarea
           ref={(value) => { inputRef.current = value; }}
           focused={inputFocused}
-          placeholder={!ready ? 'Connecting…' : isProcessing ? 'Type to steer · Tab queues · Ctrl+B branches · Esc interrupts' : modelPicker ? 'Select a model or Esc' : changelogView ? 'Enter reverts the selected line · Esc keeps everything' : takesView ? 'Enter uses the selected take · Esc keeps the answer' : inputState.walkbackOpen ? 'Pick a message to walk back to, or Esc' : sessionPicker ? 'Type session number/id or /cancel' : 'Type a message or /help · Shift+Enter for a new line'}
+          placeholder={composerPlaceholder}
           wrapMode="word"
           keyBindings={[
             { name: 'return', action: 'submit' },
@@ -876,7 +1085,34 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
         />
       </box>
 
-      {modelPicker ? (
+      {settingsOpen ? (
+        <SettingsOverlay
+          settings={settings}
+          terminal={{ width, height }}
+          onSelect={(setting) => {
+            setActiveSurface(null);
+            if (setting.command === '/model') void openModelPicker();
+            else if (setting.command.endsWith(' ')) setInputText(setting.command);
+            else void handleSubmit(setting.command);
+          }}
+        />
+      ) : workspaceDrawer ? (
+        <WorkspaceDrawerOverlay
+          workspaces={workspaceDrawer}
+          current={client.agentName}
+          terminal={{ width, height }}
+          onSelect={(workspace) => { void switchWorkspace(workspace); }}
+        />
+      ) : commandPalette ? (
+        <CommandPaletteOverlay
+          commands={commands}
+          terminal={{ width, height }}
+          onSelect={(command) => {
+            setActiveSurface(null);
+            setInputText(`${command.name}${command.usage ? ' ' : ''}`);
+          }}
+        />
+      ) : modelPicker ? (
         <ModelPickerOverlay
           models={modelPicker.menu.models}
           failures={modelPicker.menu.failures}
@@ -897,6 +1133,13 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
           set={takesView}
           terminal={{ width, height }}
           onSelect={(candidate) => { void pickTake(takesView, candidate); }}
+        />
+      ) : sessionPicker ? (
+        <SessionPickerOverlay
+          sessions={sessionPicker.sessions}
+          cwd={process.cwd()}
+          terminal={{ width, height }}
+          onSelect={(session) => { void resumeSession(session.id, sessionPicker.sessions); }}
         />
       ) : inputState.walkbackOpen && walkbackList.length > 0 ? (
         <WalkbackOverlay

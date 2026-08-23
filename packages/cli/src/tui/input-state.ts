@@ -19,6 +19,8 @@ export interface InputState {
   queue: string[];
   /** Walk-back picker overlay visibility. */
   walkbackOpen: boolean;
+  /** A walk-back request waiting for every interrupted turn to settle. */
+  walkbackPending: boolean;
 }
 
 export const initialInputState: InputState = {
@@ -26,6 +28,7 @@ export const initialInputState: InputState = {
   escArmedAt: null,
   queue: [],
   walkbackOpen: false,
+  walkbackPending: false,
 };
 
 export type InputMachineEvent =
@@ -60,6 +63,17 @@ export function reduceInput(state: InputState, event: InputMachineEvent): InputT
 
     case 'turn-settled': {
       const activeTurns = Math.max(0, state.activeTurns - 1);
+      if (activeTurns === 0 && state.walkbackPending) {
+        return {
+          state: {
+            ...state,
+            activeTurns,
+            walkbackPending: false,
+            walkbackOpen: true,
+          },
+          effects: [],
+        };
+      }
       if (activeTurns === 0 && state.queue.length > 0) {
         const [next, ...rest] = state.queue;
         return {
@@ -78,7 +92,23 @@ export function reduceInput(state: InputState, event: InputMachineEvent): InputT
       const armed = state.escArmedAt !== null && event.now - state.escArmedAt <= ESC_ESC_BEAT_MS;
       if (armed) {
         if (event.hasUserMessages) {
-          return { state: { ...state, escArmedAt: null, walkbackOpen: true }, effects: [] };
+          return busy
+            ? {
+                state: {
+                  ...state,
+                  escArmedAt: null,
+                  walkbackPending: true,
+                },
+                effects: [],
+              }
+            : {
+                state: {
+                  ...state,
+                  escArmedAt: null,
+                  walkbackOpen: true,
+                },
+                effects: [],
+              };
         }
         return busy
           ? { state: { ...state, escArmedAt: event.now }, effects: [{ kind: 'hint', text: 'Nothing to walk back to yet.' }] }
@@ -149,9 +179,14 @@ export function reduceInput(state: InputState, event: InputMachineEvent): InputT
     }
 
     case 'open-walkback':
-      return { state: { ...state, walkbackOpen: true, escArmedAt: null }, effects: [] };
+      return state.activeTurns > 0
+        ? { state: { ...state, walkbackPending: true, escArmedAt: null }, effects: [] }
+        : { state: { ...state, walkbackOpen: true, escArmedAt: null }, effects: [] };
 
     case 'walkback-closed':
-      return { state: { ...state, walkbackOpen: false }, effects: [] };
+      return {
+        state: { ...state, walkbackOpen: false, walkbackPending: false },
+        effects: [],
+      };
   }
 }

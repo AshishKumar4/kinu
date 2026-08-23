@@ -125,13 +125,13 @@ carries neither. It grew the surfaces the chat work actually needed. Read
 - Lifecycle. `connect()`, `close()`, `subscribe()`.
 - Turns. `send()`, `steer()`, `branch()`, `stop()`, `settleBackgroundWork?()`.
 - Walk-back. `fork(point)` plus `findForkPivot` and `forkCandidates`.
-- History. `history()`, `listSessions()`, `resumeConversation()`.
+- History. `history()`.
 - Reads. `status()`, `describeTools()`, `changelog()`, `readMemory()`,
   `searchNodes()`, `listJobs()`, `latestTakes()`.
 - Model. `getModelSpec()`, `setModel()`, `getReasoningEffort()`,
   `setReasoningEffort()`, `listModels()`.
 - Capability surfaces, nullable per backend. `consents`, `localControls`,
-  `checkpoints`.
+  `checkpoints`, `sessionHistory`.
 
 `AgentClientEvent` is the one event stream. Both adapters normalize into it:
 `turn-start`, `text-delta`, `tool-call`, `tool-result`, `step-finish`,
@@ -271,9 +271,9 @@ matching Durable Object callables are all deleted.
 **Spec §11.2 Cloud JSONL as state: SHIPPED.** `hydrateTranscript` and
 `transcriptToMessages` are gone. `readCliSessionTranscript` and
 `transcriptMessages` remain in `session.ts` and are read only by
-`local-agent-client.ts:412-415`. On the cloud client `history()` walks
-`getChatHistoryPage` to the end, and `resumeConversation()` re-points the
-terminal log only (`cloud-agent-client.ts:465-499`).
+`local-agent-client.ts`. On the cloud client, `history()` reads every
+`getChatHistoryPage`. The cloud client sets `sessionHistory` to `null` because a
+terminal log cannot restore Durable Object chat history.
 
 **Spec §11.3 Message mirrors and fallbacks: SHIPPED, by a different mechanism.** The
 spec wanted the mirror writes redirected. What landed makes
@@ -379,7 +379,7 @@ All four are answered in code.
 3. **Fork cut-point migration: RESOLVED.** The cut point is a canonical chat
    message id over the session-tree projection. See §11 and §12 of this file.
 4. **Cloud `/sessions` semantics: RESOLVED.** `kinu sessions` lists recorded
-   terminal logs and nothing else (`packages/cli/src/commands/sessions.ts`). On
-   the cloud client `listSessions()` returns those logs and
-   `resumeConversation()` swaps which log is being written, leaving Durable
-   Object history untouched.
+   terminal logs (`packages/cli/src/commands/sessions.ts`). The cloud client
+   does not expose `sessionHistory`, so the TUI does not present those logs as
+   resumable conversations. Opening a cloud workspace loads its Durable Object
+   history.

@@ -10,7 +10,15 @@ import * as v from 'valibot';
 import type { ReactNode } from 'react';
 
 import { SLASH_COMMANDS } from '../src/slash-commands';
-import { CommandHintOverlay, DeviceConnectOverlay, ModelPickerOverlay, WalkbackOverlay } from '../src/tui/overlays';
+import {
+  CommandHintOverlay,
+  CommandPaletteOverlay,
+  DeviceConnectOverlay,
+  ModelPickerOverlay,
+  SettingsOverlay,
+  WalkbackOverlay,
+  WorkspaceDrawerOverlay,
+} from '../src/tui/overlays';
 import type { AgentModelEntry } from '../src/model-catalog';
 import { MessageList } from '../src/tui/messages';
 import { tuiColors } from '../src/tui/theme';
@@ -73,6 +81,39 @@ describe('CLI TUI layout', () => {
       expect(frame).not.toContain('…');
       for (const line of frame.split('\n')) {
         expect([...line].length).toBeLessThanOrEqual(52);
+      }
+    } finally {
+      root.render(<box />);
+      renderer.destroy();
+    }
+  });
+
+  test('status bar keeps one coherent identity at twenty columns', async () => {
+    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({
+      width: 20,
+      height: 5,
+      useThread: false,
+      maxFps: Number.POSITIVE_INFINITY,
+    });
+    const root = createRoot(renderer);
+    try {
+      root.render(
+        <StatusBar
+          name="checkout-with-an-impossibly-long-name"
+          mode="local"
+          model="openai/gpt-5.5"
+          reasoningEffort="high"
+          connected={true}
+          scaffoldVersion={12}
+          toolCount={42}
+        />,
+      );
+      await renderSettled(renderOnce);
+      const frame = captureCharFrame();
+      expect(frame).toContain('kinu local');
+      expect(frame).toContain('●');
+      for (const line of frame.split('\n')) {
+        expect([...line].length).toBeLessThanOrEqual(20);
       }
     } finally {
       root.render(<box />);
@@ -382,8 +423,86 @@ describe('CLI TUI layout', () => {
       for (const line of frame.split('\n')) {
         expect([...line].length).toBeLessThanOrEqual(58);
       }
+      const hintLine = lineContaining(frame, 'Type to filter');
+      const commandLine = lineContaining(frame, '/very-long');
+      const closingLine = frame.split('\n').findIndex((line, index) =>
+        index > commandLine && line.includes('└'));
+      expect(commandLine).toBeGreaterThan(hintLine);
+      expect(closingLine).toBeGreaterThan(commandLine);
       expect(frame).toContain('/very-long');
       expect(frame).not.toContain('without clipping');
+    } finally {
+      root.render(<box />);
+      renderer.destroy();
+    }
+  });
+
+  test('interactive command, workspace, and settings surfaces select through one active row', async () => {
+    const { renderer, mockInput, renderOnce, captureCharFrame } = await createTestRenderer({
+      width: 72,
+      height: 24,
+      useThread: false,
+      maxFps: Number.POSITIVE_INFINITY,
+    });
+    const root = createRoot(renderer);
+    const selected: string[] = [];
+    try {
+      root.render(
+        <box style={{ width: '100%', height: '100%' }}>
+          <CommandPaletteOverlay
+            commands={SLASH_COMMANDS}
+            terminal={{ width: 72, height: 24 }}
+            onSelect={(command) => { selected.push(command.name); }}
+          />
+        </box>,
+      );
+      await renderSettled(renderOnce);
+      await mockInput.typeText('status');
+      await renderSettled(renderOnce);
+      expect(captureCharFrame()).toContain('/status');
+      mockInput.pressEnter();
+      await renderSettled(renderOnce);
+      expect(selected).toEqual(['/status']);
+
+      root.render(
+        <box style={{ width: '100%', height: '100%' }}>
+          <WorkspaceDrawerOverlay
+            workspaces={[
+              { name: 'checkout', label: 'Checkout', mode: 'local' },
+              { name: 'jarvis', label: 'Jarvis', mode: 'cloud', cloudName: 'jarvis' },
+            ]}
+            current="checkout"
+            terminal={{ width: 72, height: 24 }}
+            onSelect={(workspace) => { selected.push(workspace.name); }}
+          />
+        </box>,
+      );
+      await renderSettled(renderOnce);
+      expect(captureCharFrame()).toContain('Checkout · local');
+      expect(captureCharFrame()).toContain('Jarvis · cloud');
+      mockInput.pressArrow('down');
+      mockInput.pressEnter();
+      await renderSettled(renderOnce);
+      expect(selected).toContain('jarvis');
+
+      root.render(
+        <box style={{ width: '100%', height: '100%' }}>
+          <SettingsOverlay
+            settings={[
+              { id: 'model', group: 'Model', label: 'Active model', value: 'GPT 5.5', command: '/model' },
+              { id: 'effort', group: 'Model', label: 'Reasoning effort', value: 'high', command: '/effort high' },
+            ]}
+            terminal={{ width: 72, height: 24 }}
+            onSelect={(setting) => { selected.push(setting.command); }}
+          />
+        </box>,
+      );
+      await renderSettled(renderOnce);
+      expect(captureCharFrame()).toContain('Reasoning effort');
+      mockInput.pressArrow('down');
+      mockInput.pressEnter();
+      await renderSettled(renderOnce);
+      expect(selected).toContain('/effort high');
     } finally {
       root.render(<box />);
       renderer.destroy();
@@ -406,12 +525,52 @@ describe('CLI TUI layout', () => {
       );
       await renderSettled(renderOnce);
       const frame = captureCharFrame();
-      expect(frame).toContain('You');
+      expect(frame).toContain('YOU');
       expect(frame).toContain('Review this module');
-      expect(frame).toContain('Agent');
+      expect(frame).toContain('KINU');
       expect(frame).toContain('Plan');
       expect(frame).toContain('Inspect');
       expect(frame).not.toContain('**Inspect**');
+    } finally {
+      root.render(<box />);
+      renderer.destroy();
+    }
+  });
+
+  test('status snapshots stay in transcript chronology', async () => {
+    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({
+      width: 96,
+      height: 24,
+      useThread: false,
+      maxFps: Number.POSITIVE_INFINITY,
+    });
+    const root = createRoot(renderer);
+    try {
+      root.render(
+        <box style={{ width: '100%', height: '100%', backgroundColor: tuiColors.bg }}>
+          <MessageList
+            messages={[
+              { id: 'before', role: 'system', content: 'before status' },
+              {
+                id: 'status',
+                role: 'system',
+                content: '',
+                status: {
+                  name: 'checkout',
+                  purpose: 'Audit checkout',
+                  model: 'openai/gpt-5.5',
+                  reasoningEffort: 'high',
+                },
+              },
+              { id: 'after', role: 'system', content: 'after status' },
+            ]}
+          />
+        </box>,
+      );
+      await renderSettled(renderOnce);
+      const frame = captureCharFrame();
+      expect(lineContaining(frame, 'before status')).toBeLessThan(lineContaining(frame, 'Workspace Status'));
+      expect(lineContaining(frame, 'Workspace Status')).toBeLessThan(lineContaining(frame, 'after status'));
     } finally {
       root.render(<box />);
       renderer.destroy();
