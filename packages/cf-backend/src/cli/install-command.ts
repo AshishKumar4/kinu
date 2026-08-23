@@ -17,7 +17,8 @@ export function buildCliInstallCommand(options: CliInstallCommandOptions): strin
   if (options.label) args.push('--label', shellQuote(options.label));
 
   const bashArgs = args.length > 0 ? ` -s -- ${args.join(' ')}` : '';
-  return `curl -fsSL ${shellQuote(`${origin}/install.sh`)} | bash${bashArgs}`;
+  return `curl -fsSL ${shellQuote(`${origin}/install.sh`)} | KINU_PARENT_ACTIVATES=1 bash${bashArgs}`
+    + ' && export PATH="${KINU_HOME:-$HOME/.kinu}/bin:$PATH"';
 }
 
 export function buildCliSetupCommand(origin: string): string {

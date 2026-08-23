@@ -481,6 +481,8 @@ KINU_ORIGIN="\${KINU_ORIGIN:-${origin}}"
 KINU_HOME="\${KINU_HOME:-$HOME/.kinu}"
 BIN_DIR="$KINU_HOME/bin"
 BIN_PATH="$BIN_DIR/kinu"
+PARENT_ACTIVATES="\${KINU_PARENT_ACTIVATES:-0}"
+NEEDS_PARENT_ACTIVATION=0
 YES=0
 NO_SETUP=0
 CONNECT=0
@@ -630,6 +632,7 @@ fi
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
   *)
+    NEEDS_PARENT_ACTIVATION=1
     profile=""
     shell_name="$(basename "\${SHELL:-}")"
     if [ "$shell_name" = "zsh" ]; then profile="$HOME/.zshrc";
@@ -657,6 +660,10 @@ case ":$PATH:" in
     export PATH="$BIN_DIR:$PATH"
     ;;
 esac
+if [ "$NEEDS_PARENT_ACTIVATION" = "1" ] && [ "$PARENT_ACTIVATES" != "1" ]; then
+  say "To use kinu in this shell now, run:"
+  say "  export PATH=\\"$BIN_DIR:\\$PATH\\""
+fi
 
 say "Kinu installed."
 run_setup_if_requested

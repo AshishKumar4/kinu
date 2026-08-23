@@ -419,7 +419,7 @@ describe('auth and desktop security invariants', () => {
     expect(html).toContain('Install the Kinu.run CLI');
     expect(html).toContain('curl -fsSL');
     expect(html).toContain('https://kinu.example.com/install.sh');
-    expect(html).toContain('| bash');
+    expect(html).toContain('KINU_PARENT_ACTIVATES=1 bash');
     expect(html).not.toContain('OAuth sign-in required for the dashboard.');
     expect(html).not.toContain('View the raw installer');
     expect(html).not.toContain('href="/install.sh"');
@@ -478,13 +478,13 @@ describe('auth and desktop security invariants', () => {
 
   test('CLI setup commands are one-command defaults without embedded auth tokens', () => {
     expect(buildCliInstallCommand({ origin: 'https://kinu.example.com/' }))
-      .toBe("curl -fsSL 'https://kinu.example.com/install.sh' | bash");
+      .toBe("curl -fsSL 'https://kinu.example.com/install.sh' | KINU_PARENT_ACTIVATES=1 bash && export PATH=\"${KINU_HOME:-$HOME/.kinu}/bin:$PATH\"");
     expect(buildCliInstallCommand({
       origin: 'https://kinu.example.com',
       setup: false,
       connect: true,
       label: "Ashish's Mac",
-    })).toBe("curl -fsSL 'https://kinu.example.com/install.sh' | bash -s -- --no-setup --connect --label 'Ashish'\\''s Mac'");
+    })).toBe("curl -fsSL 'https://kinu.example.com/install.sh' | KINU_PARENT_ACTIVATES=1 bash -s -- --no-setup --connect --label 'Ashish'\\''s Mac' && export PATH=\"${KINU_HOME:-$HOME/.kinu}/bin:$PATH\"");
   });
 
   test('CLI model menu uses CLI bearer auth rather than browser-only user routes', () => {
