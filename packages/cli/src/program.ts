@@ -16,7 +16,7 @@ import { desktopCommand } from './commands/desktop';
 import { daemonCommand } from './commands/daemon';
 import { setupCommand } from './commands/setup';
 import { providersCommand } from './commands/providers';
-import { sessionsCommand } from './commands/sessions';
+import { transcriptsCommand } from './commands/transcripts';
 import { doctorCommand, uninstallCommand, updateCommand } from './commands/self';
 import { evolveCommand } from './commands/evolve';
 import { statusCommand } from './commands/status';
@@ -201,13 +201,8 @@ export function buildProgram(): Command {
       .helpGroup(RUNNING)
       .description('Run a workspace once, or open chat when no prompt is provided')
       .option('--mode <mode>', 'Output mode: text, json, or rpc', 'text')
-      .option('-c, --continue', 'Continue the latest recorded CLI session')
-      .option('-r, --resume', 'Resume the latest recorded CLI session')
-      .option('--session <idOrPath>', 'Use a recorded CLI session')
-      .option('--fork <idOrPath>', 'Fork a recorded CLI session into a new session')
-      .option('--session-dir <dir>', 'Override CLI session storage directory')
-      .option('--no-session', 'Do not record this CLI run')
-      .option('-n, --name <label>', 'Human-readable session label'),
+      .option('--transcript-dir <dir>', 'Override transcript storage directory')
+      .option('--no-transcript', 'Do not record a transcript for this run'),
   ).action(wrapAction(runCommand));
 
   llmOpts(
@@ -216,12 +211,8 @@ export function buildProgram(): Command {
       .helpGroup(RUNNING)
       .description('Interactive conversation with a workspace')
       .option('--classic', 'Use classic readline interface instead of TUI')
-      .option('-c, --continue', 'Continue the latest recorded CLI session')
-      .option('-r, --resume', 'Resume the latest recorded CLI session')
-      .option('--session <idOrPath>', 'Use a recorded CLI session')
-      .option('--fork <idOrPath>', 'Fork a recorded CLI session into a new session')
-      .option('--session-dir <dir>', 'Override CLI session storage directory')
-      .option('--no-session', 'Do not record this CLI chat'),
+      .option('--transcript-dir <dir>', 'Override transcript storage directory')
+      .option('--no-transcript', 'Do not record a transcript for this chat'),
   ).action(wrapAction(chatCommand));
 
   llmOpts(
@@ -230,7 +221,7 @@ export function buildProgram(): Command {
       .helpGroup(RUNNING)
       .description('Serve a workspace over the Agent Client Protocol on stdio (Zed, JetBrains, neovim)')
       .option('--no-auto-evolve', 'Run without turn/session auto-evolution (local workspaces)')
-      .option('--session-dir <dir>', 'Override CLI session storage directory'),
+      .option('--transcript-dir <dir>', 'Override transcript storage directory'),
   ).action(wrapAction(acpCommand));
 
   llmOpts(
@@ -241,10 +232,8 @@ export function buildProgram(): Command {
       .option('-w, --workspace <name>', 'Workspace to run (defaults to the only configured workspace)')
       .option('--json', 'Emit line-delimited JSON events')
       .option('--no-auto-evolve', 'Run without turn/session auto-evolution (local workspaces)')
-      .option('--resume <sessionId>', 'Continue a recorded CLI session')
-      .option('--session-dir <dir>', 'Override CLI session storage directory')
-      .option('--no-session', 'Do not record this run')
-      .option('-n, --name <label>', 'Human-readable session label'),
+      .option('--transcript-dir <dir>', 'Override transcript storage directory')
+      .option('--no-transcript', 'Do not record a transcript for this run'),
   ).action(wrapAction(execCommand));
 
   program
@@ -255,13 +244,13 @@ export function buildProgram(): Command {
     .action(wrapAction(executorsCommand));
 
   program
-    .command('sessions [workspace]')
+    .command('transcripts [agent]')
     .helpGroup(RUNNING)
-    .description('List recorded CLI sessions')
-    .option('--session-dir <dir>', 'Override CLI session storage directory')
-    .option('--path', 'Show session file paths')
-    .option('--show <idOrPath>', 'Show a specific session path')
-    .action(wrapAction(sessionsCommand));
+    .description('List recorded terminal transcripts (diagnostics; never conversations)')
+    .option('--transcript-dir <dir>', 'Override transcript storage directory')
+    .option('--path', 'Show transcript file paths')
+    .option('--show <idOrPath>', 'Show a specific transcript path')
+    .action(wrapAction(transcriptsCommand));
 
   program
     .command('stop <name>')

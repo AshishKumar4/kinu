@@ -302,14 +302,13 @@ describe('head containment is structural', () => {
 
   /**
    * The members that constitute the actor surface. `think`, `team` and `peers`
-   * open unbounded spawn trees; the head controller and inherited-context
-   * readers are the fork machinery itself; the journal RPCs are the root's
-   * control plane. A head must reach none of them.
+   * open unbounded spawn trees; inherited-context readers and the head runtime
+   * expose branching machinery; the journal RPCs are the root's control plane.
+   * A head must reach none of them.
    */
   const ACTOR_ONLY_MEMBERS = [
     'getAgentsToolDeps',
     'getRawTools',
-    'getHeadController',
     'getCFHeadRuntime',
     'readInheritedContext',
     'headJournalRecordSplit',

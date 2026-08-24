@@ -204,7 +204,6 @@ function fixture(over: {
 
     maxWallClockMs: 60_000,
     logger: createRecordingLogger(),
-    callTimeoutMs: STALL_MS,
     backgroundPolicy: () => ({
       detachAfterMs: DETACH_MS, settleGraceMs: SETTLE_MS, wakesAfterTurn: true,
     }),

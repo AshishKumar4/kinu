@@ -3,60 +3,20 @@ import * as v from 'valibot';
 import { diagnostics, KinuError } from '../obs/index';
 import { abortableSleep, providerPacer, type ProviderPacer } from './pacing';
 
-/**
- * How many times ONE request may be told to wait before this layer stops asking.
- *
- * The per-request attempt cap, and the default behind
- * {@link RateLimitRetryOptions.maxAttempts}. It bounds how many 429s a single
- * request will absorb; it says nothing about wall clock, which is what
- * {@link RATE_LIMIT_MAX_ELAPSED_MS} bounds, and nothing about the turn loop's
- * patience, which is {@link PROVIDER_WAIT_BUDGET_MS}.
- */
-const RATE_LIMIT_MAX_ATTEMPTS = 6;
-
-/** The wall clock one request may spend inside this layer's waits. Beyond it the
- *  429 is handed back to the SDK unchanged. The turn loop's own patience is
- *  derived from this — see {@link PROVIDER_WAIT_BUDGET_MS}. */
-const RATE_LIMIT_MAX_ELAPSED_MS = 180_000;
 
 /**
- * How many times the AI SDK may re-issue a model request of its own accord.
- *
- * THE VALUE IS THE SDK'S OWN DEFAULT, stated rather than changed, and the point
- * of stating it is arithmetic that nobody could previously do. This layer's waits
- * are bounded by {@link RATE_LIMIT_MAX_ELAPSED_MS}, so a reader concluded that a
- * rate-limited request could go quiet for at most 180 s — and then a live turn
- * was ended for 300 s of silence. The missing term is this one: an outer retry
- * RE-ENTERS this wrapper with a fresh elapsed budget, so the mandated silence one
- * request can produce is {@link PROVIDER_WAIT_BUDGET_MS}, not one budget.
- *
- * Passed explicitly at the `streamText` call rather than inherited, so the number
- * the watchdog derives its patience from is the number actually configured. A
- * vendor default that changes under us would otherwise silently move a bound in
- * a different file.
+ * How many times the AI SDK may re-issue a model request under its transport
+ * policy. The value is the SDK's own default, stated explicitly at `streamText`
+ * so a vendor update cannot move it in silence. This is not an elapsed-time
+ * retry: the chat loop never re-issues a call because time passed.
  */
 export const PROVIDER_SDK_RETRIES = 2;
-
-/**
- * The longest ONE uninterrupted silence may legitimately be provider-mandated.
- *
- * Every term is measured or configured: the SDK issues one request plus
- * {@link PROVIDER_SDK_RETRIES} more, and each of those may spend up to
- * {@link RATE_LIMIT_MAX_ELAPSED_MS} inside this layer's waits. Beyond it nothing
- * is holding off under instruction any more, so `chat.ts`'s watchdog stops
- * excusing the silence and ends the turn — naming the rate limit, which is the
- * distinction the incident turned on.
- */
-export const PROVIDER_WAIT_BUDGET_MS =
-  (PROVIDER_SDK_RETRIES + 1) * RATE_LIMIT_MAX_ELAPSED_MS;
 
 const DEFAULT_BASE_DELAY_MS = 2_000;
 const DEFAULT_BACKOFF_FACTOR = 2;
 const DEFAULT_MAX_DELAY_MS = 60_000;
 
 export interface RateLimitRetryOptions {
-  maxAttempts?: number;
-  maxElapsedMs?: number;
   baseDelayMs?: number;
   backoffFactor?: number;
   maxDelayMs?: number;
@@ -71,10 +31,9 @@ export interface RateLimitRetryOptions {
 
 /**
  * Add patient rate-limit handling at a model provider's HTTP boundary, and pace
- * the requests that reach it.
- *
- * Responses are returned unchanged when the retry budget is exhausted so the
- * provider SDK retains ownership of its normal error shape.
+ * the requests that reach it. A rate-limited request keeps following the
+ * provider's Retry-After responses until it succeeds, fails definitively, or
+ * the caller cancels it. Elapsed time and attempt count never terminate it.
  *
  * TWO THINGS BEYOND RETRYING, both because the provider is SHARED (see
  * `pacing.ts` for the incident):
@@ -83,16 +42,13 @@ export interface RateLimitRetryOptions {
  *     request STARTS against one host and holds each caller behind any wait the
  *     provider has already mandated. A whole swarm level starting at once used to
  *     arrive as N simultaneous first requests on one credential.
- *   - Every wait is DECLARED before it is taken, which is what makes it
- *     distinguishable from silence one level up. Without that the turn loop saw a
- *     mandated wait as a dead request and ended the turn.
+   *   - Every wait is declared before it is taken, so every sibling request for
+   *     this host respects the same provider-mandated cooldown.
  */
 export function withRateLimitRetry(
   fetchImpl: typeof globalThis.fetch,
   opts: RateLimitRetryOptions = {},
 ): typeof globalThis.fetch {
-  const maxAttempts = opts.maxAttempts ?? RATE_LIMIT_MAX_ATTEMPTS;
-  const maxElapsedMs = opts.maxElapsedMs ?? RATE_LIMIT_MAX_ELAPSED_MS;
   const baseDelayMs = opts.baseDelayMs ?? DEFAULT_BASE_DELAY_MS;
   const backoffFactor = opts.backoffFactor ?? DEFAULT_BACKOFF_FACTOR;
   const maxDelayMs = opts.maxDelayMs ?? DEFAULT_MAX_DELAY_MS;
@@ -110,7 +66,6 @@ export function withRateLimitRetry(
 
     const host = providerHost(input);
     const signal = init?.signal ?? undefined;
-    const startedAt = now();
     for (let attempt = 1; ; attempt++) {
       // THE LANE IS HELD ONLY WHILE THE REQUEST IS AWAITING HEADERS, which is the
       // same boundary Cloudflare's own connection budget frees at, and it is
@@ -124,25 +79,21 @@ export function withRateLimitRetry(
       } finally {
         release();
       }
-      if (!(await isRateLimited(response)) || attempt >= maxAttempts) return response;
+      if (!(await isRateLimited(response))) return response;
 
       const retryAfterMs = parseRetryAfter(response.headers.get('retry-after'), now());
       const backoffCeilingMs = Math.min(
         maxDelayMs,
-        baseDelayMs * backoffFactor ** (attempt - 1),
+        baseDelayMs * backoffFactor ** Math.min(attempt - 1, 32),
       );
       const waitMs = retryAfterMs ?? Math.floor(random() * backoffCeilingMs);
-      const remainingMs = maxElapsedMs - (now() - startedAt);
-      if (remainingMs <= 0 || waitMs >= remainingMs) return response;
 
-      // DECLARED FIRST, then reported, then taken. The declaration is what the
-      // watchdog reads and what every sibling request for this host now waits
-      // behind, so it must be true before anyone can observe the silence it
-      // explains.
+      // Declare the provider cooldown before this request sleeps so siblings
+      // join the same wait rather than starting another request immediately.
       pacer.declareWait(host, waitMs);
       warn(
-        `[kinu] ${host} rate-limited — waiting ${formatSeconds(waitMs)}s ` +
-        `(attempt ${attempt}/${maxAttempts})`,
+        `[kinu] ${host} rate-limited — waiting ${formatSeconds(waitMs)}s `
+        + `(attempt ${String(attempt)})`,
       );
       await sleep(waitMs, signal);
     }

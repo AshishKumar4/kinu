@@ -9,10 +9,8 @@
  * what makes a section evolvable (`evolution/gepa/section-bridge.ts`) without
  * making the branch conditions evolvable with it.
  */
-
 import type { AgentRuntime } from './types/agent-runtime';
 import {
-  AGENT_STANCE_SPECS,
   BUILTIN_TOOL_SPECS,
   type BuiltinToolName,
 } from './tools/registry';
@@ -40,6 +38,7 @@ import {
   LAPTOP_EXECUTOR_LINE,
   OFFLINE_LAPTOP_LINE,
   OPERATING_GUIDANCE,
+  ROLE_SECTION,
   OUTPUT_FORMAT_SECTION,
   PERSISTENCE_SECTION,
   SANDBOX_EXECUTOR_LINE,
@@ -53,7 +52,6 @@ import {
 import { WORKSPACE_ROOT } from './vfs/workspace-path';
 import { PLATFORM_CATALOG } from './platform-catalog';
 
-export type { AgentStance } from './tools/registry';
 export type {
   PromptBackend,
   PromptExecutorInfo,
@@ -125,15 +123,22 @@ function renderOperatingGuidance(surface: PromptSurface, render: RenderSection):
   return render(OPERATING_GUIDANCE, {
     kimi: family === 'kimi',
     gpt: family === 'gpt',
-    // Pre-joined with their leading newlines so the default stance (`general`,
-    // which has none) contributes no bytes at all. Iteration stays here because
-    // the specs are a typed table, not prose.
-    stanceGuidance: AGENT_STANCE_SPECS[surface.stance].guidance
-      .map((line) => `\n- ${line}`).join(''),
     backgroundResume: surface.provenance === 'background_resume',
     planMode: surface.workMode === 'plan',
     planSubmission: surface.planSubmissionAvailable,
   });
+}
+
+/** The ONE Role section, from the resolved turn profile. Nothing else in the
+ *  prompt or the tool docs repeats role prose — the section is the single
+ *  place a role's instructions reach the model. */
+function renderRoleSection(surface: PromptSurface, render: RenderSection): string {
+  if (!surface.roleSection || surface.roleSection.instructions.trim() === '') return '';
+  return render(ROLE_SECTION, {
+    id: surface.roleSection.id,
+    label: surface.roleSection.label,
+    instructions: surface.roleSection.instructions.trim(),
+  }).trim();
 }
 
 function renderBuiltinToolLine(name: BuiltinToolName, render: RenderSection): string {
@@ -294,6 +299,7 @@ export function buildSystemPromptSync(
   const render = sectionRenderer(opts.sectionOverrides);
   return [
     readSoulForPrompt(opts.soulOverride),
+    renderRoleSection(surface, render),
     renderRuntimeContext(opts),
     renderOperatingGuidance(surface, render),
     renderToolsSection(surface, render),

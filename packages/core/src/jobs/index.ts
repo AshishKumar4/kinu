@@ -19,7 +19,7 @@ export {
   type BackgroundRefusal,
   type BackgroundPolicy,
   type DetachOutcome,
-  type SessionSurface,
+  type InvocationSurface,
   type ThresholdDeps,
 } from './threshold';
 export {

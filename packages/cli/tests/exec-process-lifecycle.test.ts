@@ -36,6 +36,13 @@ const repoRoot = resolve(import.meta.dir, "../../..");
 const cliBin = join(repoRoot, "packages/cli/bin/cli.ts");
 const homes: string[] = [];
 
+/** Fresh throwaway project directory per spawn: the CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo. */
+function newProjectDir(): string {
+  const dir = scratchDir("cli-project");
+  homes.push(dir);
+  return dir;
+}
+
 /** Where {@link heartbeatCommand} records the pid of the writer it backgrounds,
  *  so cleanup can stop it instead of racing it. */
 const HEARTBEAT_PID = 'heartbeat.pid';
@@ -125,7 +132,7 @@ async function runCli(
 ): Promise<{ exitCode: number | null; elapsed: number; timedOut: boolean; stdout: string }> {
   const started = Date.now();
   const proc = Bun.spawn([process.execPath, cliBin, ...args], {
-    cwd: repoRoot,
+    cwd: newProjectDir(),
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",

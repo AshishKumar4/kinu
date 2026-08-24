@@ -5,15 +5,19 @@ import { loadConfigFile, saveConfigFile } from '../config';
 import { ACCENT, DIM, OK, WARN } from '../display';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
-export async function authCommand(opts: { origin?: string }): Promise<void> {
+export interface CliAuthCallbacks {
+  started?(flow: { verificationUrl: string; userCode: string }): void;
+  pending?(): void;
+  completed?(email: string): void;
+}
+
+export async function authenticateCli(
+  opts: { origin?: string },
+  callbacks: CliAuthCallbacks = {},
+): Promise<void> {
   const origin = defaultOrigin(opts);
   const flow = await startCliAuth(origin, hostname());
-
-  console.log('');
-  console.log(`${DIM('Open:')} ${ACCENT(flow.verificationUrl)}`);
-  console.log(`${DIM('Code:')} ${ACCENT(flow.userCode)}`);
-  console.log('');
-
+  callbacks.started?.({ verificationUrl: flow.verificationUrl, userCode: flow.userCode });
   openBrowser(flow.verificationUrl);
 
   const expiresAt = Date.parse(flow.expiresAt);
@@ -21,10 +25,9 @@ export async function authCommand(opts: { origin?: string }): Promise<void> {
     await delay(Math.max(1, flow.intervalSeconds) * 1000);
     const status = await pollCliAuth(origin, flow.deviceToken);
     if (status.status === 'pending') {
-      process.stdout.write('.');
+      callbacks.pending?.();
       continue;
     }
-    console.log('');
     if (status.status === 'expired') throw new Error(status.message ?? 'CLI auth expired.');
     if (!status.token || !status.user) throw new Error('Auth approved but no token returned.');
     const config = loadConfigFile();
@@ -35,11 +38,26 @@ export async function authCommand(opts: { origin?: string }): Promise<void> {
       tokenExpiresAt: status.expiresAt,
       user: status.user,
     });
-    console.log(`${OK('✓')} Signed in as ${ACCENT(status.user.email)}`);
+    callbacks.completed?.(status.user.email);
     return;
   }
+  throw new Error('CLI auth expired. Start sign-in again.');
+}
 
-  throw new Error('CLI auth expired. Run kinu auth again.');
+export async function authCommand(opts: { origin?: string }): Promise<void> {
+  console.log('');
+  await authenticateCli(opts, {
+    started(flow) {
+      console.log(`${DIM('Open:')} ${ACCENT(flow.verificationUrl)}`);
+      console.log(`${DIM('Code:')} ${ACCENT(flow.userCode)}`);
+      console.log('');
+    },
+    pending() { process.stdout.write('.'); },
+    completed(email) {
+      console.log('');
+      console.log(`${OK('✓')} Signed in as ${ACCENT(email)}`);
+    },
+  });
 }
 
 export async function whoamiCommand(opts: { origin?: string }): Promise<void> {

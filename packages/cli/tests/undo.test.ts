@@ -24,8 +24,8 @@ function inertCheckpointSurface(): FileCheckpointSurface {
 
 function slashClient(checkpoints: FileCheckpointSurface | null): AgentClient {
   const client: AgentClient = {
-    mode: 'local', agentName: 'test', cliSession: createCliSession('test', { noSession: true }),
-    consents: null, localControls: null, checkpoints, sessionHistory: null, inlineAttachmentLimitBytes: 1024,
+    mode: 'local', agentName: 'test', cliSession: createCliSession('test', { noTranscript: true }),
+    consents: null, localControls: null, checkpoints, inlineAttachmentLimitBytes: 1024,
     connect: async () => {}, subscribe: () => () => {},
     send: async () => ({ text: '', toolCalls: [], steps: 0, durationMs: 0, hadError: false }),
     steer: () => false, branch: () => false,
@@ -38,6 +38,7 @@ function slashClient(checkpoints: FileCheckpointSurface | null): AgentClient {
     searchNodes: async () => [], listJobs: async () => [], latestTakes: async () => null,
     pickTake: async () => { throw new Error('not used'); },
     getModelSpec: async () => null, setModel: async (spec) => ({ spec }),
+    setRole: async (role) => ({ role }),
     getReasoningEffort: async () => null, setReasoningEffort: async (effort) => ({ effort }),
     listModels: async () => ({ models: [], failures: [] }),
     getEvolutionConfig: async () => { throw new Error('not used'); },
@@ -230,9 +231,8 @@ describe('/undo command surface', () => {
       localControls: null,
       consents: null,
       checkpoints: inertCheckpointSurface(),
-      sessionHistory: null,
     };
-    const without = { localControls: null, consents: null, checkpoints: null, sessionHistory: null };
+    const without = { localControls: null, consents: null, checkpoints: null };
     expect(commandsForClient(withSurface).some((c) => c.name === '/undo')).toBe(true);
     expect(commandsForClient(without).some((c) => c.name === '/undo')).toBe(false);
 
@@ -240,24 +240,18 @@ describe('/undo command surface', () => {
     expect(outcome).toEqual({ kind: 'unknown', command: '/undo' });
   });
 
-  test('recorded conversation controls are local-only and settings stay discoverable', () => {
-    const shared = {
+  test('workspace chat exposes one conversation and keeps role/settings commands', () => {
+    const capabilities = {
       localControls: null,
       consents: null,
       checkpoints: null,
     };
-    const local = commandsForClient({
-      ...shared,
-      sessionHistory: { list: () => [], resume: async () => {} },
-    }).map((command) => command.name);
-    const cloud = commandsForClient({ ...shared, sessionHistory: null })
-      .map((command) => command.name);
+    const commands = commandsForClient(capabilities).map((command) => command.name);
 
-    expect(local).toContain('/resume');
-    expect(local).toContain('/sessions');
-    expect(cloud).not.toContain('/resume');
-    expect(cloud).not.toContain('/sessions');
-    expect(cloud).toContain('/settings');
+    expect(commands).not.toContain('/resume');
+    expect(commands).not.toContain('/sessions');
+    expect(commands).toContain('/role');
+    expect(commands).toContain('/settings');
   });
 
   test('command filtering ranks exact, prefix, then stable fuzzy matches', () => {
@@ -294,7 +288,6 @@ describe('/undo command surface', () => {
 describe('/advisor command surface', () => {
   function advisorClient(): AgentClient {
     const config: EvolutionConfigView = {
-      reviewModel: null,
       autoPromoteScaffold: false,
       gepaEvalBudget: 0,
       shadowSampleRate: 0,
@@ -321,7 +314,6 @@ describe('/advisor command surface', () => {
         localControls: null,
         consents: null,
         checkpoints,
-        sessionHistory: null,
       });
       expect(commands.some((command) => command.name === '/advisor')).toBe(true);
     }

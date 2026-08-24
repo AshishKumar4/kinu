@@ -1,0 +1,874 @@
+/**
+ * LocalAgentHost — the durable-agent substrate owned by the local daemon.
+ *
+ * The host keeps one LocalAgentSession per bound AGENT for the daemon's whole
+ * process lifetime: every root agent it was handed a ref for, and every live
+ * subordinate beneath one. A root is not "the workspace" — several roots share
+ * one virtual workspace as equal peers (see ./peers), and the workspace itself
+ * is the `{ cwd, workspaceId }` pair on their refs rather than any one of them.
+ *
+ * Durable work still lives in the existing EventLog/background_jobs/fibers/
+ * outbox_peer tables; this module adds no second queue and no second execution
+ * loop. It owns the process that drains those tables, recovers them after
+ * restart, and delivers session events to subscribers.
+ */
+
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { dirname } from 'node:path';
+import { Database } from 'bun:sqlite';
+import type { LanguageModel, ModelMessage } from 'ai';
+import {
+  EventLog,
+  ReplyChannelStore,
+  SubordinateRosterStore,
+  admitSubordinateTask,
+  createAgentConfigStore,
+  canonicalConversationId,
+  createLocalPeerEndpoint,
+  samePeerGroup,
+  createTeamToolDeps,
+  delegationBudgetAtDepth,
+  describeSubordinateHandoff,
+  inheritedContextFromHistory,
+  initWorkspaceSchema,
+  readSubordinateLiveStatus,
+  receiveSubordinateEvent,
+  renderSoulMarkdown,
+  slugifyName,
+  subordinateRelaysTurnEnd,
+  writeSoul,
+  type AdmittedSubordinateReport,
+  type AgentConfigStore,
+  type JsonObject,
+  type HostedAgentRef,
+  type LocalPeerEndpoint,
+  type PeerMessage,
+  type ReceiveResult,
+  type SqlExec,
+  type SubordinateHandoff,
+  type TeamToolDeps,
+  type SerializedMessage,
+  type WorkMode,
+} from '@kinu.run/core';
+import { createWorkspace } from '@kinu.run/core/identity';
+import { diagnostics, toKinuError } from '@kinu.run/core/obs';
+import {
+  makeSql, makeSqlExec, makeWorkspaceSchemaSql, shareLocalWorkspacePlane, type CLIRuntime,
+} from '../runtime';
+import { openWorkspaceCLI, type CLIOpenConfig } from '../open';
+import {
+  LocalAgentSession,
+  type LocalAgentSessionOpts,
+  type LocalPublishEventInput,
+  type LocalPublishEventResult,
+  type SessionEvent,
+} from '../local-session';
+import type { LocalModelResolver } from '../model-resolver';
+import type { McpServerConfig } from '../mcp';
+
+const REPORT_TOOL_NAME = 'report';
+const CHILD_DEPTH_KEY = 'subordinate.depth';
+
+/** Runtime inputs fixed for one bound agent while this host process is alive. */
+export interface LocalHostedAgent {
+  rt: CLIRuntime;
+  /** Provider/auth wiring reused when this agent hires a subordinate. */
+  openConfig: CLIOpenConfig;
+  modelResolver?: LocalModelResolver;
+  staticModel?: LanguageModel;
+  mcpServers?: Record<string, McpServerConfig>;
+}
+
+export interface LocalAgentHostOptions {
+  /**
+   * Every local agent this host may bind, re-read per call so a ref recorded
+   * after the process started becomes reachable without a restart.
+   *
+   * The refs are the authority on which roots exist and which virtual
+   * workspace each belongs to. A root with no ref is not hosted: it has no
+   * `cwd` to bind its plane to and no peer group, and binding it from the
+   * mere existence of an `agent.db` is the inference this cutover removes.
+   */
+  roster(): readonly HostedAgentRef[];
+  /** Build one already-created ROOT agent over the host-owned handle. The ref
+   *  carries the physical directory its plane must be bound to. */
+  open(ref: HostedAgentRef, db: Database, dbPath: string): Promise<LocalHostedAgent>;
+  dbPath(name: string): string;
+  /** Return `<child-root>/agent.db`. The host owns that child root and deletes
+   *  it recursively only for explicit keepHistory=false. */
+  childDbPath(parentDbPath: string, child: string): string;
+  /**
+   * Ask the driver to run another pass no later than `at` — the peer outbox's
+   * retry schedule, the local answer to the cloud backend's alarm.
+   *
+   * Optional because it only SHORTENS a wait already in progress: every
+   * {@link LocalAgentHost.tick} folds the soonest pending retry into the delay
+   * it returns, so a driver that re-reads that value after each pass already
+   * re-drives pending rows.
+   */
+  wakeAt?(at: number): void;
+}
+
+interface HostEntry {
+  /** Address inside this process: root, root/child, root/child/grandchild.
+   *  Root and child addresses are unchanged by virtual workspaces — the
+   *  grouping is metadata on {@link HostEntry.ref}, not a path segment. */
+  key: string;
+  /** Roster-local name. */
+  name: string;
+  /** This agent's own ref. A subordinate INHERITS its root's pair, so every
+   *  actor in one subtree binds the same directory and belongs to the same
+   *  virtual workspace as the root it hangs from. */
+  ref: HostedAgentRef;
+  parentKey: string | null;
+  dbPath: string;
+  db: Database;
+  ws: LocalHostedAgent;
+  sessionId: string;
+  session: LocalAgentSession;
+  config: AgentConfigStore;
+  eventLog: EventLog;
+  roster: SubordinateRosterStore;
+  team: TeamToolDeps | null;
+  /** Peer mail. Roots only: a subordinate holding this could message the root
+   *  of another tree and leave its own depth cap behind in one call. */
+  peers: LocalPeerEndpoint | null;
+  children: Map<string, HostEntry>;
+  childrenRecovered: boolean;
+  relay: { ownerDriven: boolean; reportedThisTurn: boolean; mode: WorkMode } | null;
+  pendingMode: WorkMode;
+}
+
+export type AgentEventListener = (agent: string, event: SessionEvent) => void;
+
+export class LocalAgentHost {
+  private readonly entries = new Map<string, HostEntry>();
+  private readonly listeners = new Set<AgentEventListener>();
+  /** First-open fence per address. Recovery must run once even when a timer,
+   *  client event, and team call arrive together on a cold daemon. */
+  private readonly opening = new Map<string, Promise<HostEntry>>();
+  private closed = false;
+
+  constructor(private readonly opts: LocalAgentHostOptions) {}
+
+  /** Session events stay live after an interactive client disconnects. */
+  subscribe(listener: AgentEventListener): () => void {
+    if (this.closed) throw new Error('LocalAgentHost is closed.');
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  /** Open once, recover once, keep alive until close(). Addresses may name a
+   *  root or a roster path such as `root/researcher/parser`. */
+  async acquire(address: string): Promise<LocalAgentSession> {
+    return (await this.resolveEntry(address)).session;
+  }
+
+  /** Already-acquired session, or null. */
+  peek(name: string): LocalAgentSession | null {
+    return this.entries.get(name)?.session ?? null;
+  }
+
+  /**
+   * Admit a durable external event. The call returns on storage admission; the
+   * result of the work arrives later through the normal durable event/session
+   * stream. No elapsed wait is hidden here.
+   */
+  async publishEvent(
+    name: string,
+    input: LocalPublishEventInput,
+  ): Promise<LocalPublishEventResult> {
+    const session = await this.acquire(name);
+    return session.publishEvent(input);
+  }
+
+  /**
+   * One daemon pass. The session methods are no-ops when nothing is due, so
+   * the host can service cross-process event rows without a second pending-state
+   * mirror.
+   */
+  async tick(name: string, now = Date.now()): Promise<number | null> {
+    const entry = await this.resolveEntry(name);
+    return this.tickEntry(entry, now);
+  }
+
+  /** Subordinate operations for one agent — hire, assign, status, dismiss.
+   *  Every bound agent has these, root or subordinate, down to the depth cap. */
+  async team(address: string): Promise<TeamToolDeps> {
+    const entry = await this.resolveEntry(address);
+    if (!entry.team) entry.team = this.buildTeam(entry);
+    return entry.team;
+  }
+
+  /** Peer mail for one ROOT agent — list/ask/send/reply across the equal roots
+   *  of its virtual workspace. Null for a subordinate, which has none. */
+  async peers(address: string): Promise<LocalPeerEndpoint | null> {
+    return (await this.resolveEntry(address)).peers;
+  }
+
+  /** End every session, then release every database handle. */
+  async close(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    const openings = await Promise.allSettled(this.opening.values());
+    for (const opening of openings) {
+      if (opening.status === 'rejected') {
+        diagnostics.failure(
+          'host.agent_open_failed',
+          toKinuError({ doing: 'opening a local agent during host shutdown', cause: opening.reason, otherwise: 'io' }),
+        );
+      }
+    }
+    for (const entry of [...this.entries.values()].reverse()) {
+      try {
+        await entry.session.end();
+      } catch (error) {
+        diagnostics.failure(
+          'host.session_teardown_failed',
+          toKinuError({ doing: 'ending a hosted local session', cause: error, otherwise: 'io' }),
+          { agent: entry.key },
+        );
+      }
+      entry.db.close();
+    }
+    this.entries.clear();
+  }
+
+  // ── host lifecycle ──────────────────────────────────────────────────
+  private async resolveEntry(address: string): Promise<HostEntry> {
+    if (this.closed) throw new Error('LocalAgentHost is closed.');
+    const pending = this.opening.get(address);
+    if (pending) {
+      const entry = await pending;
+      await this.recoverChildren(entry);
+      return entry;
+    }
+    const existing = this.entries.get(address);
+    if (existing) {
+      await this.recoverChildren(existing);
+      return existing;
+    }
+    const separator = address.lastIndexOf('/');
+    if (separator >= 0) {
+      if (separator === 0 || separator === address.length - 1) {
+        throw new Error(`invalid local agent address "${address}"`);
+      }
+      const parent = await this.resolveEntry(address.slice(0, separator));
+      const child = await this.openChildEntry(parent, address.slice(separator + 1));
+      await this.recoverChildren(child);
+      return child;
+    }
+    return await this.openTopLevelEntry(address);
+  }
+
+  private async openTopLevelEntry(name: string): Promise<HostEntry> {
+    const pending = this.opening.get(name);
+    if (pending) return await pending;
+    const existing = this.entries.get(name);
+    if (existing) return existing;
+    const opening = this.createTopLevel(name);
+    this.opening.set(name, opening);
+    try {
+      const entry = await opening;
+      await this.recoverChildren(entry);
+      return entry;
+    } finally {
+      if (this.opening.get(name) === opening) this.opening.delete(name);
+    }
+  }
+
+  private async createTopLevel(name: string): Promise<HostEntry> {
+    const ref = this.opts.roster().find((candidate) => candidate.name === name);
+    if (!ref) {
+      throw new Error(`agent "${name}" has no local ref — nothing records which`
+        + ' directory or virtual workspace it belongs to, so it cannot be bound.');
+    }
+    const dbPath = this.opts.dbPath(name);
+    if (!existsSync(dbPath)) throw new Error(`agent "${name}" does not exist at ${dbPath}`);
+    const db = new Database(dbPath);
+    try {
+      const ws = await this.opts.open(ref, db, dbPath);
+      return await this.buildEntry({
+        key: name,
+        name,
+        ref,
+        parentKey: null,
+        dbPath,
+        db,
+        ws,
+      });
+    } catch (error) {
+      db.close();
+      throw error;
+    }
+  }
+
+  private async buildEntry(input: {
+    key: string;
+    name: string;
+    ref: HostedAgentRef;
+    parentKey: string | null;
+    dbPath: string;
+    db: Database;
+    ws: LocalHostedAgent;
+  }): Promise<HostEntry> {
+    const config = createAgentConfigStore(input.ws.rt.storage.sql);
+    const hubSql = makeSqlExec(input.db);
+    const roster = new SubordinateRosterStore(hubSql);
+    roster.ensureSchema();
+    const sessionId = canonicalConversationId(config);
+    const sessionOpts: LocalAgentSessionOpts = {
+      rt: input.ws.rt,
+      db: input.db,
+      // The physical plane and the prompt's runtime context read ONE directory:
+      // the one on this agent's ref. Every peer and every subordinate under
+      // them binds the same bytes.
+      cwd: input.ref.cwd,
+      onEvent: (event) => this.onSessionEvent(input.key, event),
+    };
+    if (input.ws.modelResolver) sessionOpts.modelResolver = input.ws.modelResolver;
+    if (input.ws.staticModel) sessionOpts.model = input.ws.staticModel;
+    const session = new LocalAgentSession(sessionOpts);
+    const entry: HostEntry = {
+      ...input,
+      sessionId,
+      session,
+      config,
+      eventLog: new EventLog(hubSql),
+      roster,
+      team: null,
+      peers: null,
+      children: new Map(),
+      childrenRecovered: false,
+      relay: input.parentKey === null
+        ? null
+        : { ownerDriven: false, reportedThisTurn: false, mode: 'build' },
+      pendingMode: 'build',
+    };
+    this.entries.set(input.key, entry);
+    // THE REAL TEAM TRANSPORT. The roster needs the session's broadcast, which
+    // only exists once the session is constructed — so the deps are installed
+    // immediately after, before any turn can run.
+    entry.session.setTeam(this.buildTeam(entry));
+    // THE REAL PEER TRANSPORT, roots only. Same reason it lands here: the
+    // endpoint's inbox wakes this session, and the session has to exist first.
+    if (input.parentKey === null) {
+      entry.peers = this.buildPeerEndpoint(entry, hubSql);
+      entry.session.setPeers(entry.peers.deps);
+    }
+
+    try {
+      if (input.ws.mcpServers && Object.keys(input.ws.mcpServers).length > 0) {
+        await session.connectMcp(input.ws.mcpServers);
+      }
+      await session.recoverBackgroundJobs();
+      // A previous process could die after publishing but before its debounce
+      // timer fired. EventLog rows are the queue; drain them on every recovery.
+      await session.flushPendingDrains();
+      return entry;
+    } catch (error) {
+      this.entries.delete(input.key);
+      try {
+        await session.end();
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          `opening hosted agent "${input.key}" failed and its session did not close`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+  }
+
+  private async recoverChildren(parent: HostEntry): Promise<void> {
+    if (parent.childrenRecovered) return;
+    parent.childrenRecovered = true;
+    for (const roster of parent.roster.list()) {
+      try {
+        await this.openChildEntry(parent, roster.name);
+      } catch (error) {
+        diagnostics.failure(
+          'host.subordinate_recovery_failed',
+          toKinuError({ doing: 'recovering a local subordinate', cause: error, otherwise: 'io' }),
+          { parent: parent.key, subordinate: roster.name },
+        );
+      }
+    }
+  }
+
+  private async openChildEntry(parent: HostEntry, childName: string): Promise<HostEntry> {
+    if (this.closed) throw new Error('LocalAgentHost is closed.');
+    const key = `${parent.key}/${childName}`;
+    const pending = this.opening.get(key);
+    if (pending) return await pending;
+    const existing = parent.children.get(childName);
+    if (existing) return existing;
+
+    const opening = this.openExistingChild(parent, childName, key);
+    this.opening.set(key, opening);
+    try {
+      return await opening;
+    } finally {
+      if (this.opening.get(key) === opening) this.opening.delete(key);
+    }
+  }
+
+  private async openExistingChild(
+    parent: HostEntry,
+    childName: string,
+    key: string,
+  ): Promise<HostEntry> {
+    const dbPath = this.opts.childDbPath(parent.dbPath, childName);
+    if (!existsSync(dbPath)) {
+      throw new Error(`subordinate "${childName}" has a roster row but no actor state at ${dbPath}`);
+    }
+    const db = new Database(dbPath);
+    try {
+      const openConfig = this.childOpenConfig(parent);
+      const opened = await openWorkspaceCLI(db, dbPath, openConfig);
+      const rt = shareLocalWorkspacePlane(opened.rt, parent.ws.rt);
+      const ws: LocalHostedAgent = { rt, openConfig };
+      if (parent.ws.modelResolver) ws.modelResolver = parent.ws.modelResolver;
+      if (parent.ws.staticModel) ws.staticModel = parent.ws.staticModel;
+      if (parent.ws.mcpServers) ws.mcpServers = parent.ws.mcpServers;
+      const entry = await this.buildEntry({
+        key,
+        name: childName,
+        ref: childRef(parent, childName),
+        parentKey: parent.key,
+        dbPath,
+        db,
+        ws,
+      });
+      parent.children.set(childName, entry);
+      return entry;
+    } catch (error) {
+      db.close();
+      throw error;
+    }
+  }
+
+  /**
+   * The provider/auth wiring a subordinate opens with — its parent's, with the
+   * bound directory forced to the parent's ref.
+   *
+   * Forced rather than inherited verbatim because "a subordinate shares its
+   * root's bytes" then holds by construction: whatever the caller put in the
+   * root's `openConfig`, a child cannot be opened against a different plane.
+   */
+  private childOpenConfig(parent: HostEntry): CLIOpenConfig {
+    return { ...parent.ws.openConfig, cwd: parent.ref.cwd };
+  }
+
+  /** One agent's peer endpoint, over the same `outbox_peer`/`reply_channels`
+   *  tables its own SQLite file already holds. */
+  private buildPeerEndpoint(entry: HostEntry, hubSql: SqlExec): LocalPeerEndpoint {
+    // The store and the endpoint are mutually dependent — a reply routes back
+    // over the endpoint's outbox, and the endpoint answers through the store —
+    // so the dispatcher reads `entry.peers` at DISPATCH time, by then set.
+    const replyChannels = new ReplyChannelStore(hubSql, {
+      peer_back: {
+        dispatch: async (channel, payload) => {
+          const endpoint = entry.peers;
+          if (!endpoint) return { delivered: false, detail: 'this agent holds no peer transport' };
+          return endpoint.peerBack(channel, payload);
+        },
+      },
+    });
+    return createLocalPeerEndpoint({
+      self: entry.ref,
+      roster: () => this.opts.roster(),
+      sql: hubSql,
+      log: entry.eventLog,
+      replyChannels,
+      vfs: () => entry.ws.rt.storage.vfs,
+      deliver: (peer, msg) => this.deliverToPeer(entry, peer, msg),
+      scheduleDispatch: (at) => this.opts.wakeAt?.(at),
+      onAdmitted: () => this.wake(entry, 'peer message'),
+    });
+  }
+
+  /**
+   * The peer hop: open the named root inside this agent's virtual workspace and
+   * hand the message to its own endpoint.
+   *
+   * A name outside the group is REFUSED (the outbox dead-letters it), which is
+   * the enforcement half of peer membership — the roster check in the endpoint
+   * is the legibility half. A member that cannot be opened THROWS, so the
+   * outbox backs off and retries instead of losing the message.
+   */
+  private async deliverToPeer(
+    sender: HostEntry,
+    peer: string,
+    msg: PeerMessage,
+  ): Promise<ReceiveResult> {
+    const ref = this.opts.roster().find((candidate) => candidate.name === peer);
+    if (!ref || peer === sender.name || !samePeerGroup(ref, sender.ref)) {
+      return {
+        admitted: false,
+        reason: `"${peer}" is not a peer in virtual workspace "${sender.ref.workspaceId}"`,
+      };
+    }
+    const receiver = await this.resolveEntry(peer);
+    if (!receiver.peers) {
+      throw new Error(`peer "${peer}" is bound without a peer transport`);
+    }
+    return receiver.peers.receive(msg);
+  }
+
+  private async tickEntry(entry: HostEntry, now: number): Promise<number | null> {
+    await entry.session.fireDueTriggers(now);
+    await entry.session.flushPendingDrains();
+    await entry.session.runDueEvolution();
+
+    let next = nextTriggerAt(entry.db);
+    // Pending peer mail is durable, so a process that died mid-delivery has
+    // rows waiting. Draining here is what re-drives them after a restart, and
+    // the soonest retry rides back out so the driver's next sleep covers it.
+    if (entry.peers) {
+      const retryAt = await entry.peers.dispatch(now);
+      if (retryAt !== null) next = next === null ? retryAt : Math.min(next, retryAt);
+    }
+    for (const child of entry.children.values()) {
+      const childNext = await this.tickEntry(child, now);
+      if (childNext !== null) next = next === null ? childNext : Math.min(next, childNext);
+    }
+    return next;
+  }
+
+  private onSessionEvent(key: string, event: SessionEvent): void {
+    const entry = this.entries.get(key);
+    for (const listener of this.listeners) listener(entry?.key ?? key, event);
+    if (entry?.relay) this.observeChildTurn(entry, event);
+  }
+
+  // ── subordinate reports ─────────────────────────────────────────────
+
+  private observeChildTurn(child: HostEntry, event: SessionEvent): void {
+    const state = child.relay;
+    if (!state) return;
+    if (event.type === 'turn-start') {
+      state.ownerDriven = event.kind === 'user';
+      state.reportedThisTurn = false;
+      state.mode = child.pendingMode;
+      child.pendingMode = 'build';
+      return;
+    }
+    if (event.type === 'tool-call' && event.toolName === REPORT_TOOL_NAME) {
+      state.reportedThisTurn = true;
+      return;
+    }
+    if (event.type !== 'turn-end') return;
+    if (!subordinateRelaysTurnEnd({
+      reportedThisTurn: state.reportedThisTurn,
+      ownerDriven: state.ownerDriven,
+      assistantText: event.turn.assistantResponse,
+    })) return;
+    void this.relayToParent(child, event.turn.assistantResponse, state.mode).catch((error) => {
+      diagnostics.failure(
+        'host.subordinate_relay_failed',
+        toKinuError({ doing: 'relaying a subordinate report', cause: error, otherwise: 'io' }),
+        { subordinate: child.key },
+      );
+    });
+  }
+
+  private async relayToParent(child: HostEntry, content: string, mode: WorkMode): Promise<void> {
+    if (!child.parentKey) return;
+    const parent = this.entries.get(child.parentKey);
+    if (!parent) throw new Error(`parent "${child.parentKey}" is not hosted`);
+    await receiveSubordinateEvent({
+      log: parent.eventLog,
+      roster: parent.roster,
+      vfs: parent.ws.rt.storage.vfs,
+      transaction: (body) => body(),
+      announce: (report: AdmittedSubordinateReport) => {
+        const metadata: JsonObject = {
+          kind: 'report',
+          subordinate: report.subordinate,
+          timestamp: report.timestamp,
+        };
+        if (report.task) metadata.task = report.task;
+        parent.session.broadcast({
+          type: 'subordinate_event',
+          status: report.status,
+          text: report.content,
+          metadata,
+        });
+      },
+      onAdmitted: () => this.wake(parent, 'subordinate report'),
+    }, {
+      fromSubordinate: child.name,
+      status: 'progress',
+      content,
+      origin: 'turn_end',
+      mode,
+    }, Date.now());
+  }
+
+  // ── local SubordinateRuntime ────────────────────────────────────────
+
+  private buildTeam(parent: HostEntry): TeamToolDeps {
+    return createTeamToolDeps({
+      delegation: delegationBudgetAtDepth(treeDepthOf(parent.config)),
+      roster: parent.roster,
+      now: () => Date.now(),
+      inheritedContext: (): SerializedMessage[] =>
+        inheritedContextFromHistory(readConversationTail(parent)),
+      createName: (role) => {
+        const base = slugifyName(role).slice(0, 48) || 'subordinate';
+        return `${base}-${crypto.randomUUID().slice(0, 6)}`;
+      },
+      broadcast: (event) => parent.session.broadcast(event),
+      broadcastTask: (event) => parent.session.broadcast({
+        type: 'subordinate_event',
+        status: 'task',
+        text: event.content,
+        metadata: {
+          subordinate: event.subordinate,
+          timestamp: event.timestamp,
+        },
+      }),
+      runtime: {
+        spawn: async (input) => { await this.birthChild(parent, input); },
+        assign: async (name, input) => {
+          const child = await this.openChildEntry(parent, name);
+          return this.admitChildWork(parent, child, {
+            kind: 'task',
+            ...input,
+          });
+        },
+        status: async (name) => {
+          const child = await this.openChildEntry(parent, name);
+          return readSubordinateLiveStatus(makeSqlExec(child.db));
+        },
+        message: async (name, content, mode) => {
+          const child = await this.openChildEntry(parent, name);
+          return this.admitChildWork(parent, child, {
+            kind: 'message',
+            body: content,
+            mode,
+          });
+        },
+        dismiss: async (name, keepHistory) => {
+          await this.removeChild(parent, name, keepHistory);
+        },
+      },
+    });
+  }
+
+  /** Birth + seed the child before its LocalAgentSession becomes reachable.
+   *  The spawn input carries the ONE role story: a catalog roleId (with its
+   *  optional tier override and catalog version) or the legacy freeform line. */
+  private async birthChild(
+    parent: HostEntry,
+    input: {
+      name: string;
+      displayName: string;
+      roleId?: string;
+      legacyRole?: string;
+      tier?: string;
+      catalogVersion?: number;
+      mission: string;
+    },
+  ): Promise<HostEntry> {
+    if (this.closed) throw new Error('LocalAgentHost is closed.');
+    const key = `${parent.key}/${input.name}`;
+    if (this.opening.has(key) || this.entries.has(key)) {
+      throw new Error(`subordinate "${input.name}" is already being created`);
+    }
+    const opening = this.birthChildEntry(parent, input, key);
+    this.opening.set(key, opening);
+    try {
+      return await opening;
+    } finally {
+      if (this.opening.get(key) === opening) this.opening.delete(key);
+    }
+  }
+
+  private async birthChildEntry(
+    parent: HostEntry,
+    input: {
+      name: string;
+      displayName: string;
+      roleId?: string;
+      legacyRole?: string;
+      tier?: string;
+      catalogVersion?: number;
+      mission: string;
+    },
+    key: string,
+  ): Promise<HostEntry> {
+    const llm = parent.ws.openConfig.llm;
+    if (!llm) {
+      throw new Error('No provider configured for this host — subordinate creation needs a connected provider.');
+    }
+    const dbPath = this.opts.childDbPath(parent.dbPath, input.name);
+    if (existsSync(dbPath)) {
+      throw new Error(`subordinate "${input.name}" already has actor state at ${dbPath}`);
+    }
+    mkdirSync(dirname(dbPath), { recursive: true });
+    const db = new Database(dbPath);
+    db.exec('PRAGMA journal_mode = WAL');
+    try {
+      await createWorkspace(db, {
+        name: input.displayName,
+        purpose: input.mission,
+        llm,
+      });
+      initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+      const openConfig = this.childOpenConfig(parent);
+      const opened = await openWorkspaceCLI(db, dbPath, openConfig);
+      const rt = shareLocalWorkspacePlane(opened.rt, parent.ws.rt);
+      const config = createAgentConfigStore(rt.storage.sql);
+      config.setDisplayName(input.displayName);
+      // The child keeps the parent's model only as its STARTING point; its
+      // tier (when it has one) resolves at its own turn boundary. No model
+      // spec travels with a hire — tier is the one routing input.
+      const inheritedModel = parent.config.getModel();
+      if (inheritedModel) config.setModel(inheritedModel);
+      config.set(CHILD_DEPTH_KEY, String(treeDepthOf(parent.config) + 1));
+      // SOUL belongs to the AGENT, never to the shared directory. With a bound
+      // cwd, `storage.vfs` IS the user's project, so writing there would drop a
+      // SOUL.md into their repo and every peer's hire would overwrite the last
+      // one. `agentStateVfs` is this agent's own tree; the `??` is the spelling
+      // for backends where the two coincide.
+      await writeSoul(
+        rt.agentStateVfs ?? rt.storage.vfs,
+        rt.storage.sql,
+        [
+          renderSoulMarkdown({ name: input.displayName, mission: input.mission }),
+          '',
+          '## Role',
+          '',
+          input.roleId
+            ? `Role: ${input.roleId}${input.tier ? ` (tier ${input.tier})` : ''}`
+            : [
+              'Legacy role (assigned before this workspace had a role catalog):',
+              input.legacyRole ?? '',
+              'You keep these instructions until you are explicitly assigned a catalog role.',
+            ].join('\n'),
+        ].join('\n'),
+      );
+      const ws: LocalHostedAgent = { rt, openConfig };
+      if (parent.ws.modelResolver) ws.modelResolver = parent.ws.modelResolver;
+      if (parent.ws.staticModel) ws.staticModel = parent.ws.staticModel;
+      if (parent.ws.mcpServers) ws.mcpServers = parent.ws.mcpServers;
+      const entry = await this.buildEntry({
+        key,
+        name: input.name,
+        ref: childRef(parent, input.name),
+        parentKey: parent.key,
+        dbPath,
+        db,
+        ws,
+      });
+      parent.children.set(input.name, entry);
+      return entry;
+    } catch (error) {
+      db.close();
+      removeChildState(dbPath);
+      throw error;
+    }
+  }
+
+  private admitChildWork(
+    parent: HostEntry,
+    child: HostEntry,
+    input: {
+      kind: 'task' | 'message';
+      body: string;
+      mode: WorkMode;
+      deliverable?: string;
+      deadlineHint?: string;
+      inheritedContext?: string;
+    },
+  ): SubordinateHandoff {
+    if (this.closed) throw new Error('LocalAgentHost is closed.');
+    child.pendingMode = input.mode;
+    const admission = admitSubordinateTask(child.eventLog, {
+      fromWorkspace: parent.name,
+      kind: input.kind,
+      body: input.body,
+      deliverable: input.deliverable,
+      deadlineHint: input.deadlineHint,
+      inheritedContext: input.inheritedContext,
+      mode: input.mode,
+      now: Date.now(),
+    });
+    const handoff = describeSubordinateHandoff({
+      admission,
+      turnInFlight: child.session.turnInFlight(),
+      live: readSubordinateLiveStatus(makeSqlExec(child.db)),
+    });
+    if (admission.admitted) this.wake(child, 'subordinate task');
+    return handoff;
+  }
+
+  private async removeChild(parent: HostEntry, name: string, keepHistory: boolean): Promise<void> {
+    if (this.closed) throw new Error('LocalAgentHost is closed.');
+    const child = parent.children.get(name);
+    const dbPath = child?.dbPath ?? this.opts.childDbPath(parent.dbPath, name);
+    if (child) {
+      await child.session.end();
+      child.db.close();
+      parent.children.delete(name);
+      this.entries.delete(child.key);
+    }
+    if (!keepHistory) removeChildState(dbPath);
+  }
+
+  private wake(entry: HostEntry, source: string): void {
+    void entry.session.flushPendingDrains().catch((error) => {
+      diagnostics.failure(
+        'host.event_drain_failed',
+        toKinuError({ doing: 'draining hosted local events', cause: error, otherwise: 'io' }),
+        { agent: entry.key, source },
+      );
+    });
+  }
+}
+
+function treeDepthOf(config: AgentConfigStore): number {
+  const depth = Number(config.get(CHILD_DEPTH_KEY));
+  return Number.isInteger(depth) && depth > 0 ? depth : 0;
+}
+
+/**
+ * A subordinate's ref: its own name over its ROOT's pair.
+ *
+ * This is the whole of subordinate containment on the virtual-workspace axis.
+ * A child cannot name a different directory or a different workspace, so it
+ * binds its root's bytes and — since only roots hold peer mail — has no way to
+ * address anything outside the tree it hangs from.
+ */
+function childRef(parent: HostEntry, childName: string): HostedAgentRef {
+  return { name: childName, cwd: parent.ref.cwd, workspaceId: parent.ref.workspaceId };
+}
+
+function readConversationTail(entry: HostEntry): ModelMessage[] {
+  const rows = makeSql(entry.db)<{ role: string; content: string }>`
+    SELECT role, content FROM messages
+    WHERE session_id = ${entry.sessionId} AND role IN ('user', 'assistant')
+    ORDER BY created_at DESC, rowid DESC LIMIT 16`;
+  return rows.reverse().map((row): ModelMessage => ({
+    role: row.role === 'assistant' ? 'assistant' : 'user',
+    content: row.content,
+  }));
+}
+
+function nextTriggerAt(db: Database): number | null {
+  const table = db.query(`SELECT name FROM sqlite_master WHERE type='table' AND name='triggers'`).get();
+  if (!table) return null;
+  const row = db.query<{ next_fire_at: number | null }, []>(`
+    SELECT MIN(next_fire_at) AS next_fire_at FROM triggers
+    WHERE state = 'active' AND next_fire_at IS NOT NULL
+  `).get();
+  return row?.next_fire_at ?? null;
+}
+
+function removeChildState(dbPath: string): void {
+  const root = dirname(dbPath);
+  if (existsSync(root)) rmSync(root, { recursive: true, force: true });
+}

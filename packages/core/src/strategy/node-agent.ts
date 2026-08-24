@@ -133,10 +133,10 @@ export const NODE_WITHHELD_TOOLS = {
   // would let a node fund work outside the search's budget.
   agents: 'the delegation tool IS the search engine (an import ring), and a node funds '
     + 'more actors only through the arbiter, which holds the budget it cannot see',
-  memory: 'durable notes, facts and past sessions live in per-workspace stores the node '
-    + 'shares with its parent and its siblings; the search grades reports, not state left behind',
-  tasks: 'one `agent_tasks` list per workspace, shared with the parent and every sibling, '
-    + 'and its `mode` action writes the PARENT\'s stance into `agent_config`',
+  memory: 'durable notes, facts and the past conversation live in per-workspace stores the node '
+    + 'shares with its parent and siblings; search grades reports, not state left behind',
+  tasks: 'one `agent_tasks` list per workspace, shared with the parent and siblings; '
+    + 'its `mode` action selects the parent agent’s durable role',
 } as const satisfies Readonly<Record<string, string>>;
 
 /** The node's own branch route. One name, so reading a transcript tells a human
@@ -262,21 +262,12 @@ export interface NodeAgentDeps {
    * A CALLER-DECLARED deadline for this node, observed between its own steps.
    *
    * OPTIONAL — and that is the ruling, not an oversight: there is no default
-   * wall clock over a node's work any more (owner ruling, 2026-08-21 — no
-   * per-turn bounds; the sanctioned bound is one LLM call's silence window plus
-   * its retries). Absent, a node runs until its work is done, bounded from
-   * inside by the per-call window and whatever mission budget it charges.
-   * Present, it is the search (or a test) declaring a tighter deadline, which
-   * `runHeadInference`'s `stopWhen` honours at step boundaries. The former
-   * REQUIRED-with-derived-default shape existed so the abort signal was never a
-   * node's only clock; what replaced that hazard permanently is the per-call
-   * window inside every node turn, not a derived product over a deleted
-   * constant.
+   * wall clock over a node's work. Absent, a node runs until its work is done,
+   * the caller cancels it, a provider or tool fails definitively, or its mission
+   * budget refuses the next step. Present, the search or a test declared a
+   * tighter deadline, which `runHeadInference` honours at step boundaries.
    */
   maxWallClockMs?: number;
-  /** Per-call silence window override, in ms. Passed straight through to the turn
-   *  loop; see {@link NodeLoopDeps.callTimeoutMs}. */
-  callTimeoutMs?: number;
   /** Detach policy override for a node's tools; see
    *  {@link NodeLoopDeps.backgroundPolicy}. */
   backgroundPolicy?: () => BackgroundPolicy;
@@ -327,18 +318,15 @@ export interface NodeLoopDeps {
    * count declared here would be a second bound with no measurement behind it.
    */
   gradeReport?: (candidate: string) => Promise<string | null>;
-  /** Per-call silence window override, in ms — the turn loop's own bound, whose
-   *  default is ten minutes and therefore untestable in a suite that has to finish. */
-  callTimeoutMs?: number;
   /**
    * The detach policy a node's tools run to. Defaults to
    * `BACKGROUND_POLICY.interactive`, which is the right one: a node is a place a wake
    * can arrive, and that is exactly what `wakesAfterTurn` names.
    *
-   * Declared for the reason {@link NodeLoopDeps.callTimeoutMs} is, and for one more: a
-   * threshold whose only value is 30 s cannot be exercised by a test that has to
-   * finish, so the arm proving a node's turn ENDS with work still running would take
-   * half a minute per assertion. What a caller overrides is the MAGNITUDE.
+   * Declared because a threshold whose only value is 30 s cannot be exercised by a
+   * test that has to finish, so the arm proving a node's turn ENDS with work still
+   * running would take half a minute per assertion. What a caller overrides is
+   * the magnitude.
    */
   backgroundPolicy?: () => BackgroundPolicy;
 }
@@ -691,7 +679,6 @@ export async function runNodeLoop(
   if (deps.mission !== undefined) inference.mission = deps.mission;
   if (deps.reportStep !== undefined) inference.reportStep = deps.reportStep;
   if (deps.signal !== undefined) inference.signal = deps.signal;
-  if (deps.callTimeoutMs !== undefined) inference.callTimeoutMs = deps.callTimeoutMs;
 
   try {
     const report = await runHeadInference(spec.headInput, inference);
@@ -868,7 +855,6 @@ function nodeLoopDeps(input: NodeAgentInput, deps: NodeAgentDeps): NodeLoopDeps 
   if (deps.executeTool !== undefined) loop.executeTool = deps.executeTool;
   if (deps.webSearch !== undefined) loop.webSearch = deps.webSearch;
   if (deps.gradeReport !== undefined) loop.gradeReport = deps.gradeReport;
-  if (deps.callTimeoutMs !== undefined) loop.callTimeoutMs = deps.callTimeoutMs;
   if (deps.backgroundPolicy !== undefined) loop.backgroundPolicy = deps.backgroundPolicy;
   return loop;
 }

@@ -31,7 +31,6 @@ export interface WorkspaceBirthConfig {
   name: string;
   purpose: string;
   llm: LLMProviderConfig;
-  judge?: LLMProviderConfig;
   /** Custom initial scaffold (defaults to INITIAL_SCAFFOLD_SOURCE) */
   scaffold?: string;
 }
@@ -42,22 +41,19 @@ function buildComponents(
   sql: SqlExecutor,
   execRaw: RawSqlExec,
   workspace: ReturnType<typeof createInlineWorkspace>,
-  config: { llm: LLMProviderConfig; judge?: LLMProviderConfig; agentId: string; agentName: string },
+  config: { llm: LLMProviderConfig; agentId: string; agentName: string },
 ) {
   const vfs = workspace.vfs;
   const memory = createInlineMemory(db, vfs);
   const craftStore = createInlineCraftStore(db);
   const executor = createInlineExecutor();
   const llm = createVercelAILLM(config.llm);
-  // Cross-model judge only when configured — consumers document their own
-  // same-model fallback (mcts/evaluation.ts: judge ?? explorer).
-  const judgeModel = config.judge ? createVercelAILLM(config.judge) : undefined;
   const schedule = createInlineSchedule(sql);
 
   return buildRuntime({
     sql, execRaw, vfs, llm, executor, schedule, shell: workspace.shell,
     agentId: config.agentId, agentName: config.agentName,
-    memory, craftStore, judgeModel,
+    memory, craftStore,
     /**
      * This runtime does not implement branch spawning, and says so instead of
      * pretending to.
@@ -123,7 +119,7 @@ export async function createWorkspace(
   await workspace.vfs.writeFile('memory/MEMORY.md', `# ${config.name}\n\nCreated: ${new Date().toISOString()}\n`);
 
   const runtime = buildComponents(db, sql, execRaw, workspace, {
-    llm: config.llm, judge: config.judge, agentId: workspaceId, agentName: config.name,
+    llm: config.llm, agentId: workspaceId, agentName: config.name,
   });
   await resetWorkspaceBaseline(runtime);
   return runtime;

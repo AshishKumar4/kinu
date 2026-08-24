@@ -32,10 +32,9 @@ const TYPES_BASE = `  /** Save a prose note or lesson too long to be a keyed val
   /** Search memory notes — hybrid FTS5 + Vectorize (RRF) when a vector store
    *  is wired and available, FTS5-only otherwise. */
   search(query: string): Promise<string>;
-  /** Read past session transcripts: pass query to search (all terms must
-   *  match), around_message_id to scroll a window, or neither to browse
-   *  recent sessions. */
-  sessions(opts?: { query?: string; around_message_id?: string; window?: number; limit?: number; max_chars?: number }): Promise<unknown>;`;
+  /** Read this agent's past conversation: pass query to search, an
+   *  around_message_id to scroll a window, or neither to browse archived roots. */
+  conversations(opts?: { query?: string; around_message_id?: string; window?: number; limit?: number; max_chars?: number }): Promise<unknown>;`;
 
 const TYPES_FACTS = `
   /** Upsert a keyed fact you look up by name later — preferences, project
@@ -62,10 +61,10 @@ export function createMemoryCodemodeProvider(deps: () => MemoryToolDeps): Codemo
         return decodeMemoryResult({ pending: run({ action: 'save', content: String(args[0] ?? '') }) });
       case 'search':
         return decodeMemoryResult({ pending: run({ action: 'search', query: String(args[0] ?? '') }) });
-      case 'sessions': {
+      case 'conversations': {
         const options = v.safeParse(SessionOptionsSchema, args[0] ?? {});
-        if (!options.success) return { error: 'memory.sessions: invalid options' };
-        return decodeMemoryResult({ pending: run({ action: 'sessions', ...options.output }) });
+        if (!options.success) return { error: 'memory.conversations: invalid options' };
+        return decodeMemoryResult({ pending: run({ action: 'conversations', ...options.output }) });
       }
       case 'remember': {
         const confidence = v.safeParse(ConfidenceSchema, args[2]);
@@ -91,7 +90,7 @@ export function createMemoryCodemodeProvider(deps: () => MemoryToolDeps): Codemo
   const tools: CodemodeProvider['tools'] = {
     save: { description: 'Save a prose note or lesson too long to be a keyed value.', execute: dispatch('save') },
     search: { description: 'Search memory notes (hybrid FTS5 + Vectorize when wired).', execute: dispatch('search') },
-    sessions: { description: 'Read past session transcripts — search, scroll, or browse.', execute: dispatch('sessions') },
+    conversations: { description: 'Read this agent’s past conversation: search, scroll, or browse.', execute: dispatch('conversations') },
   };
   if (hasFacts) {
     tools.remember = { description: 'Upsert a keyed fact you look up by name later.', execute: dispatch('remember') };

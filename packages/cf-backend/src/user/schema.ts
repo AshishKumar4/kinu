@@ -10,6 +10,9 @@ import { initAccessTokenTable } from '../cli/access-token-store';
 import { initEgressVaultTables } from './egress-vault';
 import { initWorkspaceCapabilityTables } from './workspace-capability';
 
+/** The sole account profile-catalog row in user_config. */
+export const PROFILE_CATALOG_CONFIG_KEY = 'profile_catalog';
+
 /** `tagged` is the same storage as `sql`, as the tagged-template primitive:
  *  `reconcileColumns` asks `pragma_table_info` which columns are present rather
  *  than adding them and swallowing the duplicate-column error. */
@@ -85,13 +88,18 @@ export function initUserTables(sql: SqlExec, tagged: SqlExecutor): void {
 
   // User-level config (key/value). Defaults that new agents inherit:
   // default_model, default_strategy, default_inference_loop, default_approval_mode.
+  // `version` backs the profile_catalog row's compare-and-swap: a write must
+  // name the version it read and lands at version+1. Other rows keep 0 —
+  // only the catalog row is CAS-guarded.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_config (
       key        TEXT PRIMARY KEY,
       value      TEXT NOT NULL,
-      updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+      version    INTEGER NOT NULL DEFAULT 0
     )
   `);
+  reconcileColumns(tagged, (ddl) => { sql.exec(ddl); }, 'user_config', { version: 'INTEGER NOT NULL DEFAULT 0' });
 
   // In-flight Codex device-code state (deviceAuthId + userCode), one per
   // attempt. Cleared on successful poll or disconnect.

@@ -12,12 +12,13 @@ export async function rollbackScaffold(
   version: number,
 ): Promise<{ ok: boolean; error?: string }> {
   const versionPath = `${rt.identity.scaffold.path}.v${version}`;
-  const exists = await rt.storage.vfs.exists(versionPath);
+  const scaffoldVfs = rt.agentStateVfs ?? rt.storage.vfs;
+  const exists = await scaffoldVfs.exists(versionPath);
   if (!exists) {
     return { ok: false, error: `Version ${version} not found in scaffold history` };
   }
 
-  const backup = v.parse(v.string(), await rt.storage.vfs.readFile(
+  const backup = v.parse(v.string(), await scaffoldVfs.readFile(
     versionPath,
     { encoding: 'utf8' },
   ));

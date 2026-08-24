@@ -12,9 +12,9 @@
 import * as v from 'valibot';
 import { tolerate } from '../obs/index';
 
-/** Who owns the session, which is what makes a detach cheap or expensive.
- *  Not a toggle — every session has exactly one of these, fixed at construction. */
-export type SessionSurface = 'interactive' | 'one-shot';
+/** Which client surface owns the invocation, and therefore whether detaching
+ * work is cheap or expensive. Every invocation has one fixed surface. */
+export type InvocationSurface = 'interactive' | 'one-shot';
 
 export interface BackgroundPolicy {
   /** How long a tool call may run before it is moved to the background. */
@@ -70,7 +70,7 @@ export interface BackgroundPolicy {
 export const BACKGROUND_POLICY = {
   interactive: { detachAfterMs: 30_000, settleGraceMs: 300_000, wakesAfterTurn: true },
   'one-shot': { detachAfterMs: 300_000, settleGraceMs: 120_000, wakesAfterTurn: false },
-} as const satisfies Record<SessionSurface, BackgroundPolicy>;
+} as const satisfies Record<InvocationSurface, BackgroundPolicy>;
 
 /** Returned to the model when a tool call is moved to the background. */
 export interface BackgroundHandle {

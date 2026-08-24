@@ -48,6 +48,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { declaredClassMembers } from './helpers/declared-members';
 
 const REPO = resolve(import.meta.dir, '../../..');
 
@@ -124,7 +125,6 @@ const SHARED_TRANSPORTS = {
   cancelBackgroundJob: 'cancelBackgroundJob',
   cancelTrigger: 'cancelTrigger',
   createDurableWebhook: 'registerDurableWebhook',
-  createMCTSSession: 'createDurableMctsSession',
   createTimerTrigger: 'createTimerTrigger',
   // Both bodies were the SAME eight-field literal binding each live plane to the
   // store that answers it — `agentDynamicContext` owned which planes exist, but
@@ -132,7 +132,6 @@ const SHARED_TRANSPORTS = {
   // now holds that binding, so each side passes only what it alone knows: its
   // turn's memory tail and its own unreachable-MCP roster.
   dynamicContextSnapshot: 'collectDynamicContext',
-  emitHeadPhase: 'headPhaseRunEvent',
   getAlwaysActiveSkills: 'getAlwaysActiveSkills',
   getEvolutionChangelog: 'getEvolutionChangelog',
   getGepaRuns: 'listGepaRuns',
@@ -159,10 +158,10 @@ const SHARED_TRANSPORTS = {
   makeScaffoldLLMStream: 'createScaffoldLLMStream',
   markChangelogSeen: 'markChangelogSeen',
   pickAlternateTake: 'pickAlternateTake',
+  profileInputs: 'loadProfileAuthorityInputs',
   previewScaffoldLive: 'previewScaffoldLive',
   proposeCurriculumTasks: 'proposeCurriculumTasks',
   proposeScaffold: 'proposeScaffold',
-  recordHeadsTake: 'recordGroundedHeadsTake',
   recordSystemPromptHash: 'observeSystemPromptHash',
   resumeBackgroundJob: 'resumeBackgroundJob',
   revertChangelogEntry: 'revertChangelogEntryById',
@@ -181,6 +180,7 @@ const SHARED_TRANSPORTS = {
   setAlwaysActiveSkills: 'setAlwaysActiveSkills',
   setCurriculumTaskStatus: 'updateProposedTaskStatus',
   setModel: 'setModel',
+  setRole: 'changeActiveRole',
   setReasoningEffort: 'setReasoningEffort',
   setShellApprovalMode: 'setShellApprovalMode',
   settlePendingBranches: 'settlePendingBranches',
@@ -195,43 +195,6 @@ const CF_CLASSES = [
 ] as const;
 const CLI_CLASS = ['packages/cli-backend/src/local-session.ts', 'LocalAgentSession'] as const;
 
-/** The brace-matched body of `class <name>` in `file`, or null. */
-function classBody(file: string, name: string): string | null {
-  const text = readFileSync(resolve(REPO, file), 'utf8');
-  const head = new RegExp(`\\bclass\\s+${name}\\b[^{]*\\{`).exec(text);
-  if (!head) return null;
-  const open = head.index + head[0].length - 1;
-  let depth = 0;
-  for (let i = open; i < text.length; i++) {
-    if (text[i] === '{') depth++;
-    else if (text[i] === '}') {
-      depth--;
-      if (depth === 0) return text.slice(open + 1, i);
-    }
-  }
-  return null;
-}
-
-/** Member names declared at the top level of a class body. Nested braces
- *  (method bodies, object literals) are stripped first so closures and
- *  callback properties cannot masquerade as members. */
-function methodNames(body: string): Set<string> {
-  let depth = 0;
-  let top = '';
-  for (const ch of body) {
-    if (ch === '{') depth++;
-    if (depth === 0) top += ch;
-    if (ch === '}') depth--;
-  }
-  const names = new Set<string>();
-  const member =
-    /^ {2}(?:@[A-Za-z_][A-Za-z0-9_]*\((?:[^()]|\([^()]*\))*\)\s+)?(?:private |protected |public |readonly |override |static |async |get |set |\*)*([A-Za-z_][A-Za-z0-9_]*)\s*(?:<[^>\n]*>)?\(/gm;
-  for (const m of top.matchAll(member)) names.add(m[1]!);
-  for (const keyword of ['if', 'for', 'while', 'switch', 'catch', 'constructor', 'return', 'super']) {
-    names.delete(keyword);
-  }
-  return names;
-}
 
 interface TwinScan {
   cf: Set<string>;
@@ -245,15 +208,16 @@ function scanTwins(): TwinScan {
   const cf = new Set<string>();
   const cfBodies: string[] = [];
   for (const [file, cls] of CF_CLASSES) {
-    const body = classBody(file, cls);
-    expect({ file, cls, found: body !== null }).toEqual({ file, cls, found: true });
-    cfBodies.push(body!);
-    for (const name of methodNames(body!)) cf.add(name);
+    const source = readFileSync(resolve(REPO, file), 'utf8');
+    expect({ file, cls, found: source.includes(`class ${cls}`) })
+      .toEqual({ file, cls, found: true });
+    cfBodies.push(source);
+    for (const member of declaredClassMembers(source)) cf.add(member.name);
   }
-  const cliBody = classBody(CLI_CLASS[0], CLI_CLASS[1]);
-  expect(cliBody).not.toBeNull();
-  const cli = methodNames(cliBody!);
-  return { cf, cli, twins: [...cf].filter((n) => cli.has(n)).sort(), cfBodies, cliBody: cliBody! };
+  const cliBody = readFileSync(resolve(REPO, CLI_CLASS[0]), 'utf8');
+  expect(cliBody).toContain(`class ${CLI_CLASS[1]}`);
+  const cli = new Set(declaredClassMembers(cliBody).map((member) => member.name));
+  return { cf, cli, twins: [...cf].filter((name) => cli.has(name)).sort(), cfBodies, cliBody };
 }
 
 /** A member declaration sits at exactly two spaces of indentation (the same

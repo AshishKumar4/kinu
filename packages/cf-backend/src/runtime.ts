@@ -23,7 +23,7 @@ import type {
   TurnAccumulator,
   DeferredApprovalChannel,
   WriteObserver,
-  ModelCallSink, SpendSource,
+  ModelCallSink, SpendSource, ResolvedTurnProfile,
 } from "@kinu.run/core";
 import {
   nimbusSessionFiles, nimbusSessionShell,
@@ -37,9 +37,9 @@ import {
   createSandboxExecutor, createDeviceTunnelExecutor, type DeviceTransport,
   type NimbusSandboxHandle,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore,
-  decodeJsonValue,
-  effortFor,
-  createAgentConfigStore, initAgentConfigTable, initActorTables, selectFastModel,
+  decodeJsonValue, effortFor,
+  createAgentConfigStore, initAgentConfigTable, initActorTables,
+  parseModelSpec, reasoningEffortOptions, resolveModelRoute,
   type VectorStore,
 } from "@kinu.run/core";
 import type { SandboxHandle } from "@kinu.run/core";
@@ -64,7 +64,6 @@ import {
   type UserCredentialClient,
   type UserCredentialSource,
 } from "./providers/agent-registry";
-import { resolveReviewingModelSelection } from "./providers/judge-model";
 import { ownerCaller, type UserCaller } from "./user/workspace-capability";
 import { adaptMemory, backfillMemoryVectors } from "./memory-sync";
 import { agentAffinityKey, explorePrompt, formatInheritedContext, normalizeUsage, reflectionPrompt } from "@kinu.run/core";
@@ -305,6 +304,10 @@ export interface CFRuntimeHooks {
    * hides.
    */
   reportModelCall?: ModelCallSink;
+  /** Immutable profile resolved for the active turn. */
+  turnProfile?: () => ResolvedTurnProfile | null;
+  /** Resolve a profile for durable work that starts without a chat turn. */
+  resolveProfile?: () => Promise<ResolvedTurnProfile>;
 }
 
 /**
@@ -383,7 +386,9 @@ export function createCFRuntime(
     throw new Error("CF runtime requires env.LOADER binding (worker_loaders in wrangler.jsonc)");
   }
   const executor = createExecutor(envForExec.LOADER);
-  const llm = createDualPathLLM(agent, env, actor, sql, hooks.reportModelCall);
+  const llm = createDualPathLLM(
+    agent, env, actor, hooks.turnProfile, hooks.resolveProfile, hooks.reportModelCall,
+  );
   const schedule = createRealSchedule(agent);
   const identity = createIdentity(agent, access.ctx, vfs, sql, actor.scaffoldPath);
 
@@ -582,12 +587,25 @@ export function createCFRuntime(
     },
   }));
 
-  return {
+  const runtime: CFRuntime = {
     storage: { vfs: agentVfs, sql, execRaw },
+    agentStateVfs: workspaceVfs,
     memory, executor, llm, schedule, identity, craftStore,
-    judgeModel: createJudgeLLM(agent, env, actor, sql, hooks.reportModelCall),
-    fastLlm: createFastLLM(agent, env, actor, sql, hooks.reportModelCall),
-    advisorLlm: createAdvisorLLM(agent, env, actor, sql, hooks.reportModelCall),
+    get judgeModel() {
+      return createProfileLaneLLM(
+        agent, env, actor, hooks.turnProfile, hooks.resolveProfile, 'judge', hooks.reportModelCall,
+      );
+    },
+    get fastLlm() {
+      return createProfileLaneLLM(
+        agent, env, actor, hooks.turnProfile, hooks.resolveProfile, 'fast', hooks.reportModelCall,
+      );
+    },
+    get advisorLlm() {
+      return createProfileLaneLLM(
+        agent, env, actor, hooks.turnProfile, hooks.resolveProfile, 'advisor', hooks.reportModelCall,
+      );
+    },
     spawnBranch: createFacetSpawner(agent, env, actor),
     abortBranch: createFacetAborter(agent),
     releaseBranch: createFacetReleaser(agent),
@@ -598,6 +616,7 @@ export function createCFRuntime(
     vectorStore,
     sandboxHandle,
   };
+  return runtime;
 }
 
 
@@ -815,13 +834,6 @@ function createExecutor(loader: WorkerLoader): Executor {
   };
 }
 
-// LLM for evolution reflections. Uses the agent's configured provider via
-// the registry — picks up Codex/OpenRouter/etc. automatically when the user
-// has switched providers.
-function readStoredModelSpec(sql: SqlExecutor): string | null {
-  // Single canonical path through the typed config store — no raw SQL.
-  return createAgentConfigStore(sql).getModel();
-}
 
 /**
  * The actor's provider registry — one builder for every non-turn model seam.
@@ -863,25 +875,30 @@ function createDualPathLLM(
   agent: AgentHost,
   env: Env,
   actor: ActorRuntimeIdentity,
-  sql: SqlExecutor,
+  turnProfile: (() => ResolvedTurnProfile | null) | undefined,
+  resolveProfile: (() => Promise<ResolvedTurnProfile>) | undefined,
   report?: ModelCallSink,
 ): LLM {
   return {
     async *stream() { yield ""; },
     async complete(prompt: string): Promise<string> {
-      try {
-        const reg = actorProviderRegistry(agent, env, actor, 'Kinu');
-        const spec = reg.normalizeSpecSync(readStoredModelSpec(sql));
-        const result = await generateText({
-          model: reg.resolveModel(spec), prompt,
-          ...effortFor('reflection'),
-        });
-        reportCall(report, 'reflection', spec, result);
-        return result.text.trim();
-      } catch (error) {
-        diagnostics.event('runtime.reflection_unavailable', { error: renderThrownChain({ cause: error }) });
-        return "(reflection unavailable)";
-      }
+      const profile = turnProfile?.() ?? await resolveProfile?.();
+      if (!profile) throw new Error('reflection model lane has no active profile');
+      const route = resolveModelRoute('reflection', profile);
+      if (!route) throw new Error('reflection cannot use the fixed platform model route');
+      const registry = actorProviderRegistry(agent, env, actor, 'Kinu (reflection)');
+      const providerOptions = reasoningEffortOptions(
+        route.reasoningEffort,
+        parseModelSpec(route.model).provider,
+      );
+      const request: Parameters<typeof generateText>[0] = {
+        model: registry.resolveModel(route.model),
+        prompt,
+      };
+      if (providerOptions) request.providerOptions = providerOptions;
+      const result = await generateText(request);
+      reportCall(report, 'reflection', route.model, result);
+      return result.text.trim();
     },
   };
 }
@@ -904,132 +921,38 @@ function reportCall(
     : { source, spec, usage });
 }
 
-/**
- * The mechanical-work tier (rt.fastLlm): the chat vendor's own small model,
- * for the evolution engine's classification / labelling / short-reflection /
- * extraction calls and sleep-time compression. Resolved at CALL time from the
- * same registry and credentials the chat model uses, so a `fast_model` change
- * or a provider switch takes effect without a redeploy, and no second provider
- * path exists — only a cheaper model id on the one already connected.
- *
- * Returns null when the vendor has no smaller tier, so the runtime leaves
- * `fastLlm` unset and every reader's documented `?? rt.llm` fallback runs.
- */
-function createFastLLM(
+type ProfileLaneSource = 'judge' | 'fast' | 'advisor';
+
+/** Build one fixed-tier lane from the active immutable profile. */
+function createProfileLaneLLM(
   agent: AgentHost,
   env: Env,
   actor: ActorRuntimeIdentity,
-  sql: SqlExecutor,
+  turnProfile: (() => ResolvedTurnProfile | null) | undefined,
+  resolveProfile: (() => Promise<ResolvedTurnProfile>) | undefined,
+  source: ProfileLaneSource,
   report?: ModelCallSink,
 ): LLM | undefined {
-  const config = createAgentConfigStore(sql);
-  // Per call, like the other two seams: the availability decision below needs one
-  // now, and a captured registry could not see a provider connected since — which
-  // is the liveness this factory's own docstring promises.
-  const selected = () => {
-    const registry = actorProviderRegistry(agent, env, actor, 'Kinu (fast)');
-    return {
-      registry,
-      ...selectFastModel({
-        fastSpec: config.getRoleModel('fast'),
-        chatSpec: registry.normalizeSpecSync(readStoredModelSpec(sql)),
-        providers: registry.registry.list(),
-      }),
-    };
-  };
-  if (selected().source === 'chat-model') return undefined;
+  if (!turnProfile && !resolveProfile) return undefined;
   return {
     async *stream() { yield ""; },
     async complete(prompt: string): Promise<string> {
-      try {
-        const { registry, spec } = selected();
-        const result = await generateText({
-          model: registry.resolveModel(spec), prompt,
-          ...effortFor('reflection'),
-        });
-        reportCall(report, 'fast', spec, result);
-        return result.text.trim();
-      } catch (error) {
-        diagnostics.event('runtime.fast_unavailable', { error: renderThrownChain({ cause: error }) });
-        return "(reflection unavailable)";
-      }
-    },
-  };
-}
-
-/**
- * Cross-model judge for MCTS branch evaluation (rt.judgeModel). Resolves the
- * operator's pin for the `judge` producer at call time so judging can run on a
- * DIFFERENT model from the explorer — the self-enhancement-bias fix. With no pin
- * set it searches the registry for an available model from a different VENDOR
- * family than the chat model, because an unset key used to mean the agent graded
- * itself with itself; same-model judging survives only as the single-vendor
- * fallback (see core's selectJudgeModel). Errors propagate — the evaluator's
- * judge ensemble drops failed samples instead of misreading them as scores.
- */
-function createJudgeLLM(
-  agent: AgentHost,
-  env: Env,
-  actor: ActorRuntimeIdentity,
-  sql: SqlExecutor,
-  report?: ModelCallSink,
-): LLM {
-  return {
-    async *stream() { yield ""; },
-    async complete(prompt: string): Promise<string> {
-      const config = createAgentConfigStore(sql);
-      const registry = actorProviderRegistry(agent, env, actor, 'Kinu (judge)');
-      const { spec } = await resolveReviewingModelSelection({
-        registry,
-        pinned: config.getRoleModel('judge'),
-        chatSpec: config.getModel(),
-      });
-      const result = await generateText({
-        model: registry.resolveModel(spec), prompt,
-        ...effortFor('judge'),
-      });
-      reportCall(report, 'judge', spec, result);
-      return result.text.trim();
-    },
-  };
-}
-
-/**
- * The turn reviewer (rt.advisorLlm): the second model that reads a finished turn
- * and may say one thing about it (core advisor/review.ts).
- *
- * The same reviewing resolver the judge uses, on the `advisor` producer's own
- * pin, so an owner who pins nothing gets the cross-vendor default for the same
- * stated reason. Reported as its own producer, which is what makes the cost of
- * having a reviewer a line the owner can read rather than a rise in someone
- * else's row.
- *
- * Always built. Whether it RUNS is the owner's switch, read per turn by the
- * lane — not a wiring decision, because a workspace that turns the advisor on
- * must not have to be redeployed to get one.
- */
-function createAdvisorLLM(
-  agent: AgentHost,
-  env: Env,
-  actor: ActorRuntimeIdentity,
-  sql: SqlExecutor,
-  report?: ModelCallSink,
-): LLM {
-  return {
-    async *stream() { yield ""; },
-    async complete(prompt: string): Promise<string> {
-      const config = createAgentConfigStore(sql);
-      const registry = actorProviderRegistry(agent, env, actor, 'Kinu (advisor)');
-      const { spec } = await resolveReviewingModelSelection({
-        registry,
-        pinned: config.getRoleModel('advisor'),
-        chatSpec: config.getModel(),
-      });
-      const result = await generateText({
-        model: registry.resolveModel(spec), prompt,
-        ...effortFor('judge'),
-      });
-      reportCall(report, 'advisor', spec, result);
+      const profile = turnProfile?.() ?? await resolveProfile?.();
+      if (!profile) throw new Error(`${source} model lane has no active profile`);
+      const route = resolveModelRoute(source, profile);
+      if (!route) throw new Error(`${source} cannot use the fixed platform model route`);
+      const registry = actorProviderRegistry(agent, env, actor, `Kinu (${source})`);
+      const providerOptions = reasoningEffortOptions(
+        route.reasoningEffort,
+        parseModelSpec(route.model).provider,
+      );
+      const request: Parameters<typeof generateText>[0] = {
+        model: registry.resolveModel(route.model),
+        prompt,
+      };
+      if (providerOptions) request.providerOptions = providerOptions;
+      const result = await generateText(request);
+      reportCall(report, source, route.model, result);
       return result.text.trim();
     },
   };

@@ -79,32 +79,6 @@ export interface AgentConfig {
   scaffold: ScaffoldDefaults;
 }
 
-/**
- * How long ONE LLM call may sit silent before it is dead: no provider chunk and
- * no tool result for this long ends the call. This is the repository's ONLY
- * wall-clock bound on model work, fixed by owner ruling (2026-08-21): the former
- * per-turn envelope (600 s over a whole turn) and the per-turn step cap
- * (`DEFAULT_MAX_STEPS` / `KINU_MAX_STEPS`) are gone — a turn runs until its work
- * is done, and what bounds it from inside is one call's silence window, applied
- * per call, with {@link LLM_CALL_MAX_RETRIES} retries of a call the window killed.
- *
- * The window is SILENCE, never total duration: a call that keeps flowing is never
- * cut, however long it runs. Measured call latencies sit far inside it (the
- * longest single completion on record is a converged MCTS judge node at well
- * under half the window), and the value itself is the owner's number, not a
- * derived one.
- */
-export const LLM_CALL_TIMEOUT_MS = 600_000;
-
-/**
- * How many times a call the silence window killed is re-issued before the failure
- * surfaces as a turn error. Owner ruling, paired with {@link LLM_CALL_TIMEOUT_MS}:
- * up to 3 retries on a failed or timed-out call. Transport-level failures keep
- * their own policies (the SDK's `maxRetries`, provider rate-limit pacing,
- * overflow recovery) — this count governs the timeout path only.
- */
-export const LLM_CALL_MAX_RETRIES = 3;
-
 /** Sensible defaults — all tunable, zero secrets */
 export const DEFAULT_CONFIG: AgentConfig = {
   mcts: {

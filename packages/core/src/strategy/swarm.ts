@@ -32,6 +32,17 @@ import type {
   CarrySuppression, Floor, MeasuredValue, Objective, ObjectiveDirection, PublicationState,
   VerifierSpec,
 } from './objective';
+import {
+  type NamedSwarmPreset,
+  type SwarmPreset,
+} from './swarm-presets';
+export {
+  NAMED_SWARM_PRESETS,
+  SWARM_PRESETS,
+  type NamedSwarmPreset,
+  type SwarmPreset,
+} from './swarm-presets';
+import type { SwarmProfileSnapshot } from '../profiles/snapshot';
 import type { ExplorationRecordsReport } from './records';
 
 /**
@@ -340,41 +351,6 @@ export interface SwarmConfig {
    */
 }
 
-/**
- * The six tested paths, plus the honest declaration that none of them fits.
- *
- * `custom` is not a seventh preset. It is the statement that no preset is the
- * base, which matters because the matrix holds the techniques while the presets
- * pin six points: Reflexion, Graph-of-Thoughts, Mixture-of-Agents, GEPA,
- * Promptbreeder and ADAS are none of them, and naming one as the base for a
- * composition that overrode four of six axes would be a lie about provenance in
- * the run record.
- *
- * `prove` is the sixth and it is the second row with a checker. It exists because
- * a mathematical proof or a formal claim is the one search whose value signal is
- * EXACT — a checker accepts or it does not — and every other preset either has no
- * verifier or has a noisy one, so a proof run composed out of them would have been
- * `optimise` with its depth and its thresholds argued from scratch every time.
- */
-export const SWARM_PRESETS = [
-  'ideate', 'research', 'audit', 'redteam', 'optimise', 'prove', 'custom',
-] as const;
-export type SwarmPreset = (typeof SWARM_PRESETS)[number];
-
-/**
- * The named presets, i.e. everything a `from` may point at, and the picklist the tool
- * surface offers for it.
- *
- * Derived by exclusion rather than listed, so a sixth preset joins `from` by joining
- * {@link SWARM_PRESETS} — and `custom` cannot appear here, which is the type saying
- * what *Presets* says in prose: a composition cannot be seeded from "no preset is the
- * base".
- */
-export const NAMED_SWARM_PRESETS = SWARM_PRESETS.filter(
-  (preset): preset is Exclude<SwarmPreset, 'custom'> => preset !== 'custom',
-);
-
-export type NamedSwarmPreset = (typeof NAMED_SWARM_PRESETS)[number];
 
 /**
  * A call.
@@ -1701,4 +1677,5 @@ export interface SwarmResult {
    *  candidate was unmeasurable — refusing to read a winner out of no signal. */
   readonly best: SwarmCandidate | null;
   readonly candidates: readonly SwarmCandidate[];
+  readonly profile?: SwarmProfileSnapshot;
 }

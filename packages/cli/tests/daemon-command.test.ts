@@ -14,6 +14,13 @@ const repoRoot = resolve(__dirname, '../../..');
 const cliBin = join(repoRoot, 'packages/cli/bin/cli.ts');
 const homes: string[] = [];
 
+/** Fresh throwaway project directory per spawn: the CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo. */
+function newProjectDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'kinu-test-project-'));
+  homes.push(dir);
+  return dir;
+}
+
 afterEach(() => {
   for (const home of homes.splice(0)) {
     const pid = readPid(home);
@@ -31,7 +38,7 @@ function makeHome(): string {
 function runDaemon(home: string, action: string) {
   const proc = Bun.spawnSync({
     cmd: [process.execPath, cliBin, 'daemon', action],
-    cwd: repoRoot,
+    cwd: newProjectDir(),
     stdout: 'pipe',
     stderr: 'pipe',
     env: { ...process.env, KINU_HOME: home },

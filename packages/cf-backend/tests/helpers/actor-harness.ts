@@ -18,7 +18,11 @@
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import type { AgentContext } from 'agents';
 import type { ToolSet } from 'ai';
-import type { AgentRuntime, IngressDescriptor, SqlExecRow, SqlValue, SubordinateRosterStore } from '@kinu.run/core';
+import {
+  BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest,
+  type AgentOrchestrator, type AgentRuntime, type IngressDescriptor, type ProfileCatalogEnvelope,
+  type ProviderCatalogSnapshot, type SqlExecRow, type SqlValue, type SubordinateRosterStore,
+} from '@kinu.run/core';
 import * as v from 'valibot';
 import { mockAgentsSdk } from './agents-sdk';
 import { platformGatewayEnv } from './platform-gateway';
@@ -32,14 +36,31 @@ const { SubordinateAgent } = await import('../../src/subordinate-agent');
  *  workspace is empty, so nothing has written one. The soul is not declared:
  *  `setObservedSoul` pre-fills the cache the SYNCHRONOUS prompt builders read,
  *  while a turn refreshes that cache from the workspace filesystem below. */
+const HARNESS_PROFILE_ENVELOPE: ProfileCatalogEnvelope = {
+  authority: { kind: 'local' },
+  version: 0,
+  digest: profileCatalogDigest(BUILTIN_PROFILE_CATALOG),
+  catalog: BUILTIN_PROFILE_CATALOG,
+};
+const HARNESS_PROVIDER_SNAPSHOT: ProviderCatalogSnapshot = {
+  revision: 'actor-harness',
+  availableModels: [DEFAULT_WORKERS_AI_MODEL_SPEC],
+};
+
 /** The orchestrator a test drives, named so suites import the contract instead
  *  of reaching through `ReturnType<typeof orchestratorHarness>`. */
 export class HarnessOrchestratorAgent extends OrchestratorAgent {
   observeRawTools(): ToolSet { return this.getRawTools(); }
+  /** The backend-agnostic per-turn logic, for suites asserting what the
+   *  steering + opportunity ledger saw. */
+  observeOrch(): AgentOrchestrator { return this.orch; }
   /** The assembled runtime, for the conformance observer's `producer` plane. */
   observeRuntime(): AgentRuntime { return this.rt; }
   setObservedSoul(text: string): void { this._cachedSoulText = text; }
   declareScaffoldPresent(): void { this._scaffoldReady = true; }
+  protected override async profileInputs() {
+    return { envelope: HARNESS_PROFILE_ENVELOPE, provider: HARNESS_PROVIDER_SNAPSHOT };
+  }
   /** A cold activation: the owner row persists in SQL, in-memory latches do
    *  not — the state every claimOwner RPC meets on a freshly-activated DO. */
   forgetActivationLatches(): void { this._scaffoldReady = false; }
@@ -54,6 +75,11 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   /** The cadence a tick reads, and the deliberate disable a tick must respect. */
   observeAutoGepaCadence(): number { return this.config.getAutoGepaEveryNTurns(); }
   setAutoGepaCadence(turns: number): void { this.config.setAutoGepaEveryNTurns(turns); }
+  /** One auto-title round-trip — the private seam `maybeAutoTitleWorkspace`
+   *  wires into `applyWorkspaceTitle`'s `suggest` slot. */
+  harnessSuggestWorkspaceTitle(mission: string): Promise<string | null> {
+    return this.suggestWorkspaceTitle(mission);
+  }
   /** Admit one event, through the only writer allowed to: `publish` is the
    *  single admitted author of `kind='event'` rows, so a test that wants an
    *  event in the log goes through it rather than around it with an INSERT. */
@@ -66,6 +92,9 @@ class HarnessSubordinateAgent extends SubordinateAgent {
   observeRawTools(): ToolSet { return this.getRawTools(); }
   observeRuntime(): AgentRuntime { return this.rt; }
   declareScaffoldPresent(): void { this._scaffoldReady = true; }
+  protected override async profileInputs() {
+    return { envelope: HARNESS_PROFILE_ENVELOPE, provider: HARNESS_PROVIDER_SNAPSHOT };
+  }
 }
 
 export interface ActorHarness<T> {

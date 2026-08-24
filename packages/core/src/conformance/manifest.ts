@@ -27,7 +27,7 @@
 
 import { AGENTS_TOOL_ACTIONS, BUILTIN_TOOLS, MEMORY_FACT_ACTIONS, MEMORY_NOTE_ACTIONS } from '../tools/registry';
 import type { AgentsToolAction, BuiltinToolName, MemoryToolAction } from '../tools/registry';
-import type { RoutedSpendSource } from '../events/model-call';
+import type { SpendSource } from '../events/model-call';
 
 /**
  * Producers whose client a composition root builds UNCONDITIONALLY, so its
@@ -43,7 +43,7 @@ import type { RoutedSpendSource } from '../events/model-call';
  * manifest, and the first workspace on a vendor with a small tier would
  * contradict it.
  */
-export const CONFORMANCE_PRODUCERS = ['judge', 'advisor'] as const satisfies readonly RoutedSpendSource[];
+export const CONFORMANCE_PRODUCERS = ['judge', 'advisor'] as const satisfies readonly SpendSource[];
 export type ConformanceProducer = (typeof CONFORMANCE_PRODUCERS)[number];
 
 /** The composition roots that assemble a model-facing surface. cf splits by
@@ -93,9 +93,8 @@ export interface ConformanceManifest {
 const SUBORDINATE_SCOPED = (what: string): string =>
   `${what} is a workspace-level surface; a subordinate reaches it through its orchestrator, not directly`;
 const NO_USER_PLANE = (what: string): string =>
-  `${what} rides the owner's UserDO; a local session has no user plane to serve it`;
+  `${what} rides the owner's UserDO; a signed-out local runtime has no account plane to serve it`;
 const ORCHESTRATOR_IS_SINK = 'the orchestrator IS the report sink; only subordinate actors report upward';
-const CLI_HAS_NO_ROSTER = 'local sessions have no subordinate roster; the search rung is the whole local ladder';
 /** A subordinate tree is recursive: a subordinate holds the same roster surface
  *  its parent does, bounded by DELEGATION_MAX_DEPTH rather than by absence. The
  *  bound is a DERIVED budget — at the cap the team deps are not wired and these
@@ -104,7 +103,7 @@ const CLI_HAS_NO_ROSTER = 'local sessions have no subordinate roster; the search
 const TEAM_RECURSES = {
   'cf-orchestrator': WIRED,
   'cf-subordinate': WIRED,
-  cli: { absent: CLI_HAS_NO_ROSTER },
+  cli: WIRED,
 } satisfies RootStatuses;
 
 const NIMBUS_BASE = {
@@ -133,7 +132,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     report: {
       'cf-orchestrator': { absent: ORCHESTRATOR_IS_SINK },
       'cf-subordinate': WIRED,
-      cli: { absent: `${ORCHESTRATOR_IS_SINK}, and ${CLI_HAS_NO_ROSTER}` },
+      cli: { absent: ORCHESTRATOR_IS_SINK },
     },
   },
 
@@ -155,7 +154,12 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       // .peers). Cross-workspace reach is also an ownership boundary its parent
       // owns and it is not party to.
       'cf-subordinate': { absent: 'cross-workspace reach would let a subordinate mint a fresh tree root and escape its own depth cap; the peer boundary is its parent\'s to cross' },
-      cli: { absent: NO_USER_PLANE('peer messaging') },
+      // Wired locally too: a local virtual workspace groups several ROOT agents
+      // as equal peers over one directory, and LocalAgentHost gives each of them
+      // the same PeerHub transport the hosted backend runs. The boundary is the
+      // `{ cwd, workspaceId }` pair on their refs rather than an account plane,
+      // so being signed out withholds nothing.
+      cli: WIRED,
     },
     list: TEAM_RECURSES,
     dismiss: TEAM_RECURSES,
@@ -164,7 +168,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
   'memory-action': {
     save: EVERYWHERE,
     search: EVERYWHERE,
-    sessions: EVERYWHERE,
+    conversations: EVERYWHERE,
     remember: EVERYWHERE,
     recall: EVERYWHERE,
     forget: EVERYWHERE,
@@ -297,12 +301,12 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       // Created by SubordinateRosterStore's own ensureSchema on first read, so
       // it exists on a subordinate that has hired and on one that has not.
       'cf-subordinate': WIRED,
-      cli: { absent: CLI_HAS_NO_ROSTER },
+      cli: WIRED,
     },
     subordinate_identity: {
       'cf-orchestrator': { absent: 'lives on each subordinate DO, seeded by setSubordinateIdentity' },
       'cf-subordinate': WIRED,
-      cli: { absent: CLI_HAS_NO_ROSTER },
+      cli: { absent: 'lives in each local subordinate actor-state database, not the root workspace database' },
     },
     // The webhook gate — auth, replay window, rate limit — is core's, so a
     // local session provisions the same window table the cloud one does. What
@@ -370,7 +374,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     judge: {
       'cf-orchestrator': WIRED,
       'cf-subordinate': WIRED,
-      cli: { absent: 'wired only when the operator configured a second model; consumers apply core’s documented same-model fallback otherwise' },
+      cli: WIRED,
     },
     // The turn reviewer, everywhere. Whether it RUNS is the owner's switch, read
     // per turn — never a wiring decision, because a workspace that turns the

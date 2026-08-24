@@ -24,8 +24,9 @@
  *     // host.emit({ type: 'done', result }) → signals completion
  *   }
  *
- * If the scaffold throws or fails to emit a 'done' event within a timeout,
- * the orchestrator auto-falls-back to streamText() and queues a rollback.
+ * If the scaffold throws, or finishes without emitting a 'done' event, the
+ * run reports ok=false (or synthesizes 'done') and the orchestrator can
+ * auto-fall-back to streamText() and queue a rollback.
  *
  * Shadow mode: a pending scaffold version can run alongside the current
  * version for N turns; a judge LLM scores both; auto-promote on uplift.
@@ -138,30 +139,6 @@ export interface ScaffoldRunResult {
   finalResult?: JsonValue;
 }
 
-/**
- * Wall clock one scaffold turn gets, live or under evaluation.
- *
- * ONE number, deliberately. The promotion gate compares a candidate scaffold's
- * output against what the live loop produced, and an A/B whose arms get
- * different resource is not measuring what it claims to: a candidate evaluated
- * under a tenth of the live budget fails for running out of room, not for being
- * worse, so the gate systematically promotes scaffolds that finish fast and do
- * little. Both backends' live turns and the shadow evaluation read this
- * constant; nothing sets its own.
- *
- * That argument applies to the MAGNITUDE too, and it was 5 minutes — under the
- * 509 s longest turn on record, so BOTH arms were being cut and the gate was
- * comparing two truncations.
- *
- * THIS IS AN EVOLUTION-HARNESS BOUND around the codemode sandbox execution, not a
- * runtime bound: production turns carry no wall clock at all (owner ruling,
- * 2026-08-21 — the sanctioned bounds are one LLM call's silence window plus its
- * retries). A trial needs finite provisioning so candidates compare fairly and a
- * runaway trial ends instead of hanging the evaluation; the figure is the same
- * 600 s the former per-turn envelope carried, kept so trial records stay
- * comparable across the change.
- */
-export const SCAFFOLD_TURN_TIMEOUT_MS = 600_000;
 
 /** One host inference chunk before validation at the codemode JSON boundary. */
 export interface ScaffoldDefaultInferenceChunk {
@@ -235,8 +212,6 @@ export interface ScaffoldRunOptions {
    * orchestrator/scaffold-host.ts, which owns the budget.
    */
   history?: ScaffoldHistoryReader;
-  /** Hard timeout in milliseconds. Default {@link SCAFFOLD_TURN_TIMEOUT_MS}. */
-  timeoutMs?: number;
   /** Optional: override the scaffold code (for shadow-mode A/B). Default: rt.identity.scaffold.read(). */
   scaffoldCodeOverride?: string;
 }
@@ -402,17 +377,18 @@ function buildHostProvider(opts: {
 /**
  * Execute the agent's current scaffold for one turn.
  *
- * Wraps the scaffold's `run(...)` invocation in a try/catch + timeout race.
- * Host-side bridges (LLM streaming, tool calls, emits) are exposed as
- * codemode providers so the scaffold body — which runs inside a sandboxed
- * Worker via DynamicWorkerExecutor — can call them as `host.emit(...)`,
- * `host.llmStream(...)`, `host.callTool(...)`.
+ * Wraps the scaffold's `run(...)` invocation in a try/catch. Host-side bridges
+ * (LLM streaming, tool calls, emits) are exposed as codemode providers so the
+ * scaffold body — which runs inside a sandboxed Worker via DynamicWorkerExecutor
+ * — can call them as `host.emit(...)`, `host.llmStream(...)`, `host.callTool(...)`.
  *
- * On any failure (parse, throw, timeout) returns ok=false; the orchestrator
- * is expected to fall back to streamText() and queue a scaffold rollback.
+ * The run carries NO elapsed deadline (owner ruling: none on scaffold loops).
+ * It is awaited to settlement — completion, a thrown scaffold error, or the
+ * executor's own definitive failure — and on failure returns ok=false; the
+ * orchestrator is expected to fall back to streamText() and queue a rollback.
  */
 export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRunResult> {
-  const { rt, task, emit, llmStream, callTool, timeoutMs = SCAFFOLD_TURN_TIMEOUT_MS, scaffoldCodeOverride } = opts;
+  const { rt, task, emit, llmStream, callTool, scaffoldCodeOverride } = opts;
   const startedAt = Date.now();
   const capturedEvents: ScaffoldEvent[] = [];
   const state = {
@@ -462,19 +438,7 @@ export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRun
   const exec: Executor = rt.executor;
   const providers = await assembleProviders(rt, hostProvider);
 
-  const execPromise = exec.execute(wrapperCode, providers, { timeoutMs });
-  // The timer is cleared once the race settles. A live timer is invisible on
-  // the DO, but it pins a CLI process open for the whole budget after every
-  // scaffold turn — `kinu exec` hung for five minutes past its answer.
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<{ result: JsonValue | undefined; error: string }>((resolve) => {
-    timer = setTimeout(
-      () => resolve({ result: undefined, error: `scaffold timeout after ${timeoutMs}ms` }),
-      timeoutMs,
-    );
-  });
-
-  const result = await Promise.race([execPromise, timeoutPromise]).finally(() => clearTimeout(timer));
+  const result = await exec.execute(wrapperCode, providers);
   const durationMs = Date.now() - startedAt;
 
   if (result.error) {

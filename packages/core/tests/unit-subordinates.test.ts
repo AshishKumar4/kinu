@@ -70,7 +70,10 @@ function reportPayload(event: KinuEvent | undefined): SubordinateReportPayload {
 const identityInput = {
   name: 'researcher',
   displayName: 'Researcher',
-  role: 'market researcher',
+  roleId: 'researcher',
+  legacyRole: null,
+  tier: null,
+  catalogVersion: 1,
   mission: 'Map the market.',
   parentWorkspace: 'kinu-main',
   ownerUserId: 'owner-123',
@@ -149,7 +152,12 @@ describe('subordinate identity', () => {
     const identity = makeIdentityStore(db);
     identity.ensureSchema();
 
-    expect(identity.read()).toEqual(identityInput);
+    expect(identity.read()).toEqual({
+      ...identityInput,
+      roleId: null,
+      legacyRole: 'market researcher',
+      catalogVersion: null,
+    });
     expect(identity.delegationBudget()).toEqual({ depth: 1, maxDepth: 3 });
   });
 });

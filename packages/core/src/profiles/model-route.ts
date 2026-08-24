@@ -1,0 +1,104 @@
+// Exhaustive model routing — the ONE table that says where every producer's
+// model comes from.
+//
+// A SpendSource names a producer; this file alone decides what that producer
+// runs on. The `satisfies Record<SpendSource, ModelRoutePolicy>` below makes
+// adding a producer without a routing decision a compile error, and
+// `resolveModelRoute` is the only read path — so a producer cannot grow a
+// private resolver beside it.
+//
+//   invocation  the turn's own resolved tier (the agent's active role decides)
+//   fixed       one named tier slot for every caller of this producer
+//   platform    an explicit fixed-platform binding outside profile resolution;
+//               resolveModelRoute refuses it rather than guessing
+//
+// Every model construction consumes a ResolvedTurnProfile through this table,
+// or declares itself `platform`.
+import { SPEND_SOURCES, type SpendSource } from '../events/model-call';
+import type { ReasoningEffort } from '../strategy/effort';
+import type { TierId } from './catalog';
+import type { ResolvedTurnProfile } from './resolve';
+
+export type ModelRoutePolicy =
+  | { readonly kind: 'invocation' }
+  | { readonly kind: 'fixed'; readonly tier: TierId }
+  | { readonly kind: 'platform' };
+
+/** Routing per producer. Keyed by the full union so the compiler, not a test,
+ *  holds the exhaustiveness invariant. */
+export const MODEL_ROUTE_POLICY = {
+  // The turn's own work, and every delegation shape that carries the turn's
+  // immutable resolved tier with it.
+  agent: { kind: 'invocation' },
+  head: { kind: 'invocation' },
+  mcts: { kind: 'invocation' },
+  swarm: { kind: 'invocation' },
+  sandbox: { kind: 'invocation' },
+  // Fixed slots: account-wide tier assignments decide these, never a pin.
+  scaffold: { kind: 'fixed', tier: 'deep' },
+  judge: { kind: 'fixed', tier: 'deep' },
+  advisor: { kind: 'fixed', tier: 'slow' },
+  compaction: { kind: 'fixed', tier: 'fast' },
+  fast: { kind: 'fixed', tier: 'tiny' },
+  reflection: { kind: 'fixed', tier: 'fast' },
+  // Embeddings and other binding-bound calls: no profile route exists.
+  platform: { kind: 'platform' },
+} as const satisfies Record<SpendSource, ModelRoutePolicy>;
+
+/** Producers whose model the turn profile decides — everything but `platform`. */
+export type ProfileRoutedSource = {
+  [K in SpendSource]: (typeof MODEL_ROUTE_POLICY)[K] extends { kind: 'platform' } ? never : K
+}[SpendSource];
+
+function isProfileRouted(source: SpendSource): source is ProfileRoutedSource {
+  return MODEL_ROUTE_POLICY[source].kind !== 'platform';
+}
+
+export function isPlatformRouted(source: SpendSource): boolean {
+  return !isProfileRouted(source);
+}
+
+/** One producer's concrete model, as the immutable turn profile resolves it. */
+export interface ModelRouteResolution {
+  readonly source: ProfileRoutedSource;
+  /** The tier slot the policy named — the turn's own for `invocation`. */
+  readonly tier: TierId;
+  readonly model: string;
+  readonly reasoningEffort: ReasoningEffort;
+}
+
+function tierResolution(
+  profile: ResolvedTurnProfile,
+  tier: TierId,
+): { model: string; reasoningEffort: ReasoningEffort } {
+  const assignment = profile.tiers[tier];
+  if (!assignment) {
+    throw new Error(`turn profile carries no ${tier} tier resolution`);
+  }
+  return assignment;
+}
+
+/** Resolve one producer's model from the immutable turn profile. Returns null
+ *  only for the explicit platform exception — callers there construct their
+ *  binding-bound client directly, and nowhere else may bypass this table. */
+export function resolveModelRoute(
+  source: SpendSource,
+  profile: ResolvedTurnProfile,
+): ModelRouteResolution | null {
+  if (!isProfileRouted(source)) return null;
+  const policy = MODEL_ROUTE_POLICY[source];
+  const tier = policy.kind === 'invocation' ? profile.tier.id : policy.tier;
+  return Object.freeze({
+    source,
+    tier,
+    ...tierResolution(profile, tier),
+  });
+}
+
+/** Every producer's route in one deterministic pass — the surface a spend or
+ *  settings view needs to show where each producer's model comes from. */
+export function modelRouteTable(profile: ResolvedTurnProfile): ReadonlyMap<SpendSource, ModelRouteResolution | null> {
+  return new Map(SPEND_SOURCES.map((source) => [source, resolveModelRoute(source, profile)]));
+}
+
+export { SPEND_SOURCES };

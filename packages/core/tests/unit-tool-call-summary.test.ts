@@ -68,7 +68,7 @@ describe('tool call summaries — builtins', () => {
     expect(summarizeToolCall('memory', { action: 'search', query: 'deploy' })).toBe('search "deploy"');
     expect(summarizeToolCall('memory', { action: 'save', content: 'the deploy target is staging' }))
       .toBe('save — "the deploy target is staging"');
-    expect(summarizeToolCall('memory', { action: 'sessions' })).toBe('sessions');
+    expect(summarizeToolCall('memory', { action: 'conversations' })).toBe('conversations');
     // The keyed-fact actions read by their key, not by a query they never carry.
     expect(summarizeToolCall('memory', { action: 'remember', key: 'user.tz', value: 'UTC' }))
       .toBe('remember user.tz');

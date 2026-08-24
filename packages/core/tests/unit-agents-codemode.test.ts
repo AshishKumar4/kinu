@@ -24,8 +24,17 @@ import {
   createAgentsCodemodeProvider,
   createAgentsTool,
   decodeJsonValue,
+  parseAgentsToolInput,
+  roleSummaries,
+  resolveTurnProfile,
+  validateSwarmProfileSnapshot,
+  profileCatalogDigest,
+  BUILTIN_PROFILE_CATALOG,
+  DEFAULT_WORKERS_AI_MODEL_SPEC,
   type CodemodeProvider,
   type JsonValue,
+  type ProfileCatalog,
+  type ProfileCatalogEnvelope,
   SWARM_PRESET_DOCTRINE,
   type AgentsForkDeps,
   type AgentsToolDeps,
@@ -34,8 +43,13 @@ import {
   type TeamToolDeps,
   type SubordinateDelivery, type SubordinateHandoff,
 } from '../src/index';
-import { NAMED_SWARM_PRESETS, SWARM_PRESETS } from '../src/strategy/swarm';
+// The role/tier tests read the ONE field source and the resolver DIRECTLY, so
+// this suite stays green while unrelated barrel surface is in flight.
+import {
+  AGENTS_ACTION_FIELDS as ACTION_FIELDS,
+} from '../src/tools/agents-tool';
 import { ROOT_DELEGATION_BUDGET } from '../src/subordinates/depth';
+import { NAMED_SWARM_PRESETS, SWARM_PRESETS } from '../src/strategy/swarm';
 
 interface Call { action: string; input: JsonValue }
 
@@ -46,6 +60,16 @@ const AgentsInputSchemaContract = v.object({
       action: v.object({ enum: v.array(v.string()) }),
     }),
   }),
+});
+const ToolSchemaContract = v.object({
+  jsonSchema: v.object({
+    properties: v.record(v.string(), v.unknown()),
+  }),
+});
+const SpawnCallInputSchema = v.object({
+  roleId: v.optional(v.string()),
+  tier: v.optional(v.string()),
+  catalogVersion: v.optional(v.number()),
 });
 
 /** The namespace as sandbox code sees it: one callable per exposed member. */
@@ -178,6 +202,12 @@ describe('agents.* codemode namespace — dep gating', () => {
     }
   });
 
+  test('the codemode declaration exposes no elapsed deadline field', () => {
+    const provider = createAgentsCodemodeProvider(() => fullDeps());
+    expect(provider.types).not.toContain('timeout_seconds');
+    expect(provider.types).not.toContain('timeoutMs');
+  });
+
   test('an ungated action is structurally absent, not a runtime refusal', () => {
     const ns = namespaceOf(() => ({ fork: forkDeps() }));
     expect(ns.hire).toBeUndefined();
@@ -226,7 +256,7 @@ describe('agents.* codemode namespace — dispatch', () => {
     expect(stale.error).toContain('unknown field "settle"');
     expect(stale.error).toContain(
       'action "swarm" takes: task, preset, objective, key, config, from, label, name, branches, '
-      + 'depth, budget_usd, budget_tokens, budget_label',
+      + 'depth, role, tier, budget_usd, budget_tokens, budget_label',
     );
   });
 
@@ -271,12 +301,14 @@ describe('agents.* codemode namespace — dispatch', () => {
     expect(peers.calls.map((c) => c.action)).toEqual(['reply']);
   });
 
-  test('a peer ask from the sandbox rides the peer transport with the clamped timeout', async () => {
+  test('a peer ask from the sandbox rides the peer transport without a deadline', async () => {
     const peers = makePeers();
     const ns = namespaceOf(() => ({ peers: peers.deps }));
-    expect(await member(ns, 'ask').execute({ agent: 'scout', message: 'What changed?', topic: 'research', timeout_seconds: 9999 }))
+    expect(await member(ns, 'ask').execute({ agent: 'scout', message: 'What changed?', topic: 'research' }))
       .toEqual({ status: 'replied', from: 'scout', reply: 'answer' });
-    expect(peers.calls[0].input).toMatchObject({ agent: 'scout', topic: 'research', timeoutMs: 600_000 });
+    expect(peers.calls[0].input).toEqual({
+      agent: 'scout', topic: 'research', message: 'What changed?', mode: 'build',
+    });
   });
 
   test('deps are read per call, so a re-bound model/session lands without a rebuild', async () => {
@@ -326,17 +358,14 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
     expect(team.calls).toEqual([]);
   });
 
-  test('a misspelled field in a hand-built object is an error naming the field meant', async () => {
+  test('the retired timeout_seconds field is a sharp error', async () => {
     const team = makeTeam();
     const peers = makePeers();
     const ns = namespaceOf(() => ({ team: team.deps, peers: peers.deps }));
-    // The sandbox builds this object by hand with no schema behind it, so this
-    // is the surface where a name mistake was most invisible: the field was
-    // dropped and the call ran as if it had never been written.
     const result = v.parse(ErrorResultSchema, await member(ns, 'ask').execute({
-      agent: 'researcher', message: 'go', timeoutSeconds: 30,
+      agent: 'researcher', message: 'go', timeout_seconds: 30,
     }));
-    expect(result.error).toContain('agents.ask: unknown field "timeoutSeconds" — did you mean "timeout_seconds"?');
+    expect(result.error).toContain('agents.ask: unknown field "timeout_seconds"');
     expect(team.calls).toEqual([]);
   });
 
@@ -424,7 +453,8 @@ describe('agents.* codemode namespace — declared types', () => {
     expect(types).toContain('MEASURED rather than judged');
     expect(types).toContain('names a REGISTERED instrument');
     expect(types).toContain('names the axis');
-    expect(types).toMatch(/^ {4}preset: "ideate" \| "research"/m);
+    // `preset` is optional now: an omitted preset takes the role's default.
+    expect(types).toMatch(/^ {4}preset\?: "ideate" \| "research"/m);
     expect(types).not.toContain('settle');
     // The refusal's classification is declared, like the file dispatcher's.
     expect(types).toContain('{ reason: string; error: string }');
@@ -438,7 +468,7 @@ describe('agents.* codemode namespace — declared types', () => {
     // sandbox contract cannot come to offer a different set than the schema.
     const types = createAgentsCodemodeProvider(() => withBuildMode({ fork: forkDeps() })).types ?? '';
     for (const preset of SWARM_PRESETS) expect(types).toContain(`"${preset}"`);
-    expect(types).toContain(`preset: ${SWARM_PRESETS.map((preset) => `"${preset}"`).join(' | ')};`);
+    expect(types).toContain(`preset?: ${SWARM_PRESETS.map((preset) => `"${preset}"`).join(' | ')};`);
     expect(types).toContain(`from?: ${NAMED_SWARM_PRESETS.map((preset) => `"${preset}"`).join(' | ')};`);
     for (const line of SWARM_PRESET_DOCTRINE) expect(types).toContain(line);
   });
@@ -458,5 +488,217 @@ describe('agents.* codemode namespace — declared types', () => {
     const types = createAgentsCodemodeProvider(fullDeps).types ?? '';
     const order = [...types.matchAll(/^ {2}(\w+)\(input/gm)].map((m) => m[1]);
     expect(order).toEqual([...AGENTS_TOOL_ACTIONS]);
+  });
+});
+
+// ── one field source: native schema, codemode declaration and the parse ─────
+
+describe('agents surface — one action-field source', () => {
+  test('every codemode member declares EXACTLY its action’s fields, in order', () => {
+    const types = createAgentsCodemodeProvider(fullDeps).types ?? '';
+    for (const action of AGENTS_TOOL_ACTIONS) {
+      const body = types.slice(types.indexOf(`${action}(input:`));
+      const open = body.indexOf('{');
+      const close = body.indexOf('})', open);
+      const memberFields = [...body.slice(open, close).matchAll(/^\s{4}(\w+)/gm)].map((m) => m[1]);
+      expect(memberFields).toEqual([...ACTION_FIELDS[action]]);
+    }
+  });
+
+  test('the swarm member carries `name` — the drift that was measured', () => {
+    const types = createAgentsCodemodeProvider(fullDeps).types ?? '';
+    const swarm = types.slice(types.indexOf('swarm(input:'), types.indexOf('hire(input:'));
+    expect(swarm).toContain('name?: string;');
+    expect(swarm).toContain('role?: string;');
+    expect(swarm).toContain('tier?: "tiny" | "fast" | "default" | "slow" | "deep";');
+  });
+
+  test('the native tool schema advertises the same per-action fields it parses', () => {
+    // Read RAW: the contract parse above narrows to the fields it names, and
+    // this test needs every advertised property.
+    const schema = v.parse(
+      ToolSchemaContract,
+      createAgentsTool(withBuildMode({ fork: forkDeps(), team: makeTeam().deps, peers: makePeers().deps })).inputSchema,
+    );
+    const advertised = new Set(Object.keys(schema.jsonSchema.properties).filter((k) => k !== 'action'));
+    for (const action of AGENTS_TOOL_ACTIONS) {
+      for (const field of ACTION_FIELDS[action]) expect(advertised.has(field)).toBe(true);
+    }
+    // Direct model routing left the surface; tier replaced it.
+    expect(advertised.has('model')).toBe(false);
+    expect(advertised.has('tier')).toBe(true);
+  });
+
+  test('a direct model spec is refused on hire and swarm, naming tier instead', () => {
+    expect(() => parseAgentsToolInput({ action: 'hire', role: 'researcher', mission: 'm', model: 'openai/gpt' }))
+      .toThrow(/model/);
+    expect(() => parseAgentsToolInput({ action: 'swarm', preset: 'ideate', task: 't', model: 'openai/gpt' }))
+      .toThrow(/model/);
+  });
+});
+
+// ── role / tier / preset precedence through the one resolver ─────────────────
+
+const TEST_MODEL = DEFAULT_WORKERS_AI_MODEL_SPEC;
+const TIERED_CATALOG = {
+  roles: BUILTIN_PROFILE_CATALOG.roles,
+  tiers: {
+    default: { model: TEST_MODEL },
+    fast: { model: TEST_MODEL },
+    deep: { model: TEST_MODEL },
+  },
+};
+
+function builtinEnvelope() {
+  return {
+    authority: { kind: 'local' } as const,
+    version: 0,
+    digest: profileCatalogDigest(TIERED_CATALOG),
+    catalog: TIERED_CATALOG,
+  };
+}
+
+function profileDeps(overrides: Partial<AgentsToolDeps> = {}): TestAgentsToolDeps {
+  return {
+    fork: forkDeps(),
+    team: makeTeam().deps,
+    profile: () => ({
+      envelope: builtinEnvelope(),
+      provider: { revision: 'test-1', availableModels: [DEFAULT_WORKERS_AI_MODEL_SPEC] },
+      roleId: 'general',
+      availableTools: [],
+    }),
+    ...overrides,
+  };
+}
+
+describe('agents delegation — role/tier/preset precedence', () => {
+  test('hire resolves an explicit role through the catalog: role default tier, provenance recorded', async () => {
+    const team = makeTeam();
+    const tools = namespaceOf(() => profileDeps({ team: team.deps }));
+    await member(tools, 'hire').execute?.({ role: 'researcher', mission: 'map the landscape' });
+    const call = team.calls.find((c) => c.action === 'spawn');
+    expect(call).toBeDefined();
+    const input = v.parse(SpawnCallInputSchema, call!.input);
+    expect(input.roleId).toBe('researcher');
+    // The ROLE-default tier is NOT stored — the child re-derives it from its
+    // roleId at its own turn boundary. Only an explicit override rides along.
+    expect(input.catalogVersion).toBeDefined();
+  });
+
+  test('an explicit tier override rides to the identity; a spawn-forbidden role is refused', async () => {
+    const team = makeTeam();
+    const tools = namespaceOf(() => profileDeps({ team: team.deps }));
+    await member(tools, 'hire').execute?.({ role: 'planner', mission: 'plan', tier: 'deep' });
+    const input = v.parse(
+      SpawnCallInputSchema,
+      team.calls.find((call) => call.action === 'spawn')!.input,
+    );
+    expect(input.tier).toBe('deep');
+
+    const restrictedCatalog = {
+      roles: {
+        ...BUILTIN_PROFILE_CATALOG.roles,
+        lead: {
+          description: 'd',
+          instructions: 'i',
+          tier: 'default',
+          preset: 'ideate',
+          spawns: ['researcher'],
+        },
+      },
+      tiers: BUILTIN_PROFILE_CATALOG.tiers,
+    } satisfies ProfileCatalog;
+    const envelope = {
+      ...builtinEnvelope(),
+      version: 1,
+      catalog: restrictedCatalog,
+      digest: profileCatalogDigest(restrictedCatalog),
+    } satisfies ProfileCatalogEnvelope;
+    const restricted = profileDeps({
+      team: makeTeam().deps,
+      profile: () => ({
+        envelope,
+        provider: { revision: 'test-1', availableModels: [DEFAULT_WORKERS_AI_MODEL_SPEC] },
+        roleId: 'lead',
+        availableTools: [],
+      }),
+    });
+    const tools2 = namespaceOf(() => restricted);
+    const refused = await member(tools2, 'hire').execute?.({ role: 'auditor', mission: 'x' });
+    expect(refused).toMatchObject({ reason: 'bad_input' });
+    expect(v.parse(ErrorResultSchema, refused).error).toContain('auditor');
+  });
+
+  test('a role-homogeneous swarm takes its preset from the role when omitted', async () => {
+    // The refusal path proves resolution ran: an ideate-shaped run without an
+    // objective but WITH the role's default preset passes preset validation and
+    // fails later (at expansion), never at `preset`.
+    const deps = profileDeps();
+    const tools = namespaceOf(() => deps);
+    const noPreset = await member(tools, 'swarm').execute?.({ task: 'explore angles' });
+    // researcher is not the caller (general), so this resolves general→ideate.
+    expect(noPreset).not.toMatchObject({ reason: 'bad_input', error: expect.stringContaining('preset') });
+    const fork = deps.fork;
+    if (!fork) throw new Error('profile test needs the swarm substrate');
+    const row = fork.rt.storage.sql<{ config_json: string }>`
+      SELECT config_json FROM mcts_search_runs ORDER BY created_at DESC LIMIT 1
+    `[0];
+    if (!row) throw new Error('swarm did not persist its resolved config');
+    const config = v.parse(v.object({ profile: v.unknown() }), JSON.parse(row.config_json));
+    expect(validateSwarmProfileSnapshot(config.profile).sources.presetSource).toBe('role_default');
+  });
+
+  test('without a wired catalog, swarm demands an explicit preset and hire stays legacy', async () => {
+    const tools = namespaceOf(() => ({ fork: forkDeps(), team: makeTeam().deps }));
+    const refused = await member(tools, 'swarm').execute?.({ task: 'angles only' });
+    expect(refused).toMatchObject({ reason: 'bad_input' });
+    expect(v.parse(ErrorResultSchema, refused).error).toContain('preset');
+
+    const team = makeTeam();
+    const legacy = namespaceOf(() => ({ fork: forkDeps(), team: team.deps }));
+    await member(legacy, 'hire').execute?.({ role: 'competitive landscape scout', mission: 'scan' });
+    const input = v.parse(
+      SpawnCallInputSchema,
+      team.calls.find((call) => call.action === 'spawn')!.input,
+    );
+    expect(input.roleId).toBeUndefined(); // freeform text rides the legacy path
+  });
+
+  test('role summaries project into the native schema from the same catalog', () => {
+    const deps = withBuildMode(profileDeps());
+    expect(roleSummaries(deps)).toContain('researcher');
+    expect(roleSummaries(deps)).toContain('preset research');
+    // No catalog wired → no summaries, and nothing invented.
+    expect(roleSummaries(withBuildMode({ fork: forkDeps() }))).toBe('');
+  });
+});
+
+// ── durable snapshot round-trip ───────────────────────────────────────────────
+
+describe('swarm profile snapshot codec', () => {
+  test('a resolved profile survives JSON round-trip through the ledger gate', () => {
+    const resolved = resolveTurnProfile({
+      envelope: builtinEnvelope(),
+      provider: { revision: 'rev-1', availableModels: [DEFAULT_WORKERS_AI_MODEL_SPEC] },
+      roleId: 'researcher',
+      workMode: 'build',
+      availableTools: ['file', 'web'],
+      activeSkills: [],
+    });
+    // The ledger stores the one complete immutable profile. Re-drive never
+    // re-resolves work mode, role, tiers, skills, or actions.
+    const snapshot = {
+      profile: resolved,
+      sources: { roleSource: 'caller', tierSource: 'role', presetSource: 'role_default' },
+    };
+    const frozen = JSON.parse(JSON.stringify(snapshot));
+    const readBack = validateSwarmProfileSnapshot(frozen);
+    expect(readBack.profile.role.id).toBe('researcher');
+    expect(readBack.profile.tier.id).toBe('fast');
+    expect(readBack.profile.tier.source).toBe('role');
+    expect(readBack.sources.presetSource).toBe('role_default');
+    expect(() => validateSwarmProfileSnapshot({ ...frozen, sources: { ...frozen.sources, tierSource: 'bogus' } }))
+      .toThrow(/snapshot/);
   });
 });

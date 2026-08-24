@@ -7,30 +7,29 @@
 
 import { ADVISOR_SEVERITIES, isAdvisorSeverity, isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type BranchStatusEvent, type EvolutionConfigView, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu.run/core';
 import type { AgentChangelogView, AgentClient, AgentClientStatus, AgentSearchNode } from './agent-client';
-import { setDefaultReasoningEffort } from './config';
+import { loadActiveProfile, updateDefaultTier } from './profiles';
 
 export interface SlashCommandInfo {
   name: string;
   description: string;
   usage?: string;
   /** Only offered when the client exposes this capability surface. */
-  requires?: 'localControls' | 'consents' | 'checkpoints' | 'sessionHistory';
+  requires?: 'localControls' | 'consents' | 'checkpoints';
 }
 
 export const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
   { name: '/help', description: 'Show command help' },
   { name: '/status', description: 'Show agent state and stats' },
   { name: '/tools', description: 'List available tools' },
-  { name: '/model', description: 'Open model picker or set a model', usage: '/model [spec]' },
-  { name: '/effort', description: 'Show or set reasoning effort', usage: '/effort [low|medium|high]' },
+  { name: '/model', description: 'Open the account default-tier model picker or set it', usage: '/model [spec]' },
+  { name: '/effort', description: 'Show or set default-tier reasoning effort', usage: '/effort [low|medium|high]' },
+  { name: '/role', description: 'Show or select this agent role', usage: '/role [id]' },
   { name: '/settings', description: 'Open interactive settings' },
   { name: '/models', description: 'List configured model providers', requires: 'localControls' },
   { name: '/memory', description: 'Show memory' },
   { name: '/changelog', description: 'Review self-changes; revert by index', usage: '/changelog [revert <n>]' },
   { name: '/takes', description: 'Compare the last alternate takes; pick by number', usage: '/takes [n]' },
   { name: '/tree', description: 'Show MCTS search tree' },
-  { name: '/resume', description: 'Resume a recorded local conversation', usage: '/resume [number/id]', requires: 'sessionHistory' },
-  { name: '/sessions', description: 'List recorded local conversations', requires: 'sessionHistory' },
   { name: '/jobs', description: 'List background jobs' },
   { name: '/connect', description: 'Connect this PC for agent device access', requires: 'consents' },
   { name: '/stop', description: 'Stop the active turn' },
@@ -44,12 +43,12 @@ export const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
   { name: '/exit', description: 'Exit chat' },
 ];
 
-export function commandsForClient(client: Pick<AgentClient, 'localControls' | 'consents' | 'checkpoints' | 'sessionHistory'>): SlashCommandInfo[] {
+export function commandsForClient(client: Pick<AgentClient, 'localControls' | 'consents' | 'checkpoints'>): SlashCommandInfo[] {
   return SLASH_COMMANDS.filter((command) =>
     !command.requires || client[command.requires] !== null);
 }
 
-export function commandHelp(client: Pick<AgentClient, 'localControls' | 'consents' | 'checkpoints' | 'sessionHistory'>): string {
+export function commandHelp(client: Pick<AgentClient, 'localControls' | 'consents' | 'checkpoints'>): string {
   const lines = ['Commands'];
   for (const command of commandsForClient(client)) {
     const usage = command.usage ?? command.name;
@@ -110,7 +109,7 @@ export type SlashOutcome =
   | { kind: 'settings' }
   | { kind: 'model-set'; spec: string }
   | { kind: 'effort-set'; effort: ReasoningEffort }
-  | { kind: 'sessions'; mode: 'list' | 'resume'; resumeRef?: string }
+  | { kind: 'role-set'; role: string }
   | { kind: 'device-connect' }
   /** Queue text to send after the active turn (surface-owned queue). */
   | { kind: 'queue'; text?: string }
@@ -202,6 +201,14 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
     }
     case '/effort': {
       return executeEffortCommand(client, arg);
+    }
+    case '/role': {
+      if (!arg) {
+        const status = await client.status();
+        return { kind: 'text', text: `Role: ${status.roleId ?? 'general'}` };
+      }
+      const result = await client.setRole(arg);
+      return { kind: 'role-set', role: result.role };
     }
     case '/models': {
       if (!client.localControls) return { kind: 'unknown', command: cmd };
@@ -301,32 +308,26 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
     case '/undo':
       if (!client.checkpoints) return { kind: 'unknown', command: cmd };
       return { kind: 'undo', ref: arg || undefined };
-    case '/sessions':
-      return client.sessionHistory
-        ? { kind: 'sessions', mode: 'list' }
-        : { kind: 'unknown', command: cmd };
-    case '/resume':
-      return client.sessionHistory
-        ? { kind: 'sessions', mode: 'resume', resumeRef: arg || undefined }
-        : { kind: 'unknown', command: cmd };
     default:
       return { kind: 'unknown', command: cmd };
   }
 }
 
-/** /model scopes to THIS workspace: the client stores the spec on the agent,
- *  and the global default in config.json is nobody else's business. */
-export async function setModelPreference(client: Pick<AgentClient, 'setModel'>, spec: string): Promise<{ spec: string }> {
-  return await client.setModel(spec);
+/** /model edits the account-wide default tier. Every unresolved tier aliases it. */
+export async function setModelPreference(
+  _client: Pick<AgentClient, 'setModel'>,
+  spec: string,
+): Promise<{ spec: string }> {
+  const envelope = await updateDefaultTier({ model: spec });
+  return { spec: envelope.catalog.tiers.default.model };
 }
 
 export async function setReasoningEffortPreference(
-  client: Pick<AgentClient, 'setReasoningEffort'>,
+  _client: Pick<AgentClient, 'setReasoningEffort'>,
   effort: ReasoningEffort,
 ): Promise<{ effort: ReasoningEffort }> {
-  const result = await client.setReasoningEffort(effort);
-  setDefaultReasoningEffort(result.effort);
-  return result;
+  const envelope = await updateDefaultTier({ reasoningEffort: effort });
+  return { effort: envelope.catalog.tiers.default.reasoningEffort ?? 'medium' };
 }
 
 export async function executeEffortCommand(
@@ -334,11 +335,10 @@ export async function executeEffortCommand(
   arg: string,
 ): Promise<SlashOutcome> {
   if (!arg) {
-    const stored = await client.getReasoningEffort();
-    const current = stored ?? 'medium';
+    const current = (await loadActiveProfile()).catalog.tiers.default.reasoningEffort ?? 'medium';
     return {
       kind: 'text',
-      text: `Reasoning effort: ${current}${stored ? '' : ' (chat default)'}\nOptions: low, medium, high\nSet with /effort <level>.`,
+      text: `Default-tier reasoning effort: ${current}\nOptions: low, medium, high\nSet with /effort <level>.`,
     };
   }
   if (!isReasoningEffort(arg)) {

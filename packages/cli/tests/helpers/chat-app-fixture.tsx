@@ -8,14 +8,13 @@ import type {
   AgentClientEvent,
   AgentClientStatus,
   DeviceConsentSurface,
-  SessionHistorySurface,
 } from '../../src/agent-client';
 import type { AgentModelMenu } from '../../src/model-catalog';
-import { createCliSession, type CliSessionInfo } from '../../src/session';
+import { createCliSession } from '../../src/session';
 import { ChatApp } from '../../src/tui/chat-app';
+import type { TuiAgentSource } from '../../src/tui/tui-shell';
 
 const EVOLUTION: EvolutionConfigView = {
-  reviewModel: null,
   autoPromoteScaffold: false,
   gepaEvalBudget: 0,
   shadowSampleRate: 0,
@@ -35,7 +34,6 @@ interface FakeClientOptions {
   mode?: 'local' | 'cloud';
   status?: () => Promise<AgentClientStatus>;
   consents?: DeviceConsentSurface | null;
-  sessionHistory?: SessionHistorySurface | null;
   listModels?: () => Promise<AgentModelMenu>;
   setModel?: AgentClient['setModel'];
   connect?: AgentClient['connect'];
@@ -50,7 +48,7 @@ export function fakeClient(options: FakeClientOptions) {
   const client: AgentClient = {
     mode,
     agentName: options.name,
-    cliSession: createCliSession(options.name, { noSession: true }),
+    cliSession: createCliSession(options.name, { noTranscript: true }),
     consents: options.consents ?? null,
     localControls: mode === 'local' ? {
       getAlwaysActiveSkills: () => [],
@@ -61,9 +59,6 @@ export function fakeClient(options: FakeClientOptions) {
       listModelProviders: async () => [],
     } : null,
     checkpoints: null,
-    sessionHistory: options.sessionHistory ?? (mode === 'local'
-      ? { list: () => [], resume: async () => {} }
-      : null),
     inlineAttachmentLimitBytes: 1024,
     connect: options.connect ?? (async () => {}),
     subscribe: (listener) => {
@@ -93,6 +88,7 @@ export function fakeClient(options: FakeClientOptions) {
     pickTake: async () => { throw new Error('no takes'); },
     getModelSpec: async () => 'openai/gpt-5.5',
     setModel: options.setModel ?? (async (spec) => ({ spec })),
+    setRole: async (role) => ({ role }),
     getReasoningEffort: async () => 'medium',
     setReasoningEffort: async (effort) => ({ effort }),
     getEvolutionConfig: async () => evolution,
@@ -122,23 +118,36 @@ export function fakeClient(options: FakeClientOptions) {
 export async function mountChat(
   client: AgentClient,
   options: {
-    listWorkspaces?: () => Array<{ name: string; label: string; mode: 'local' | 'cloud'; cloudName?: string }>;
+    listWorkspaces?: () => Array<{ name: string; label: string; mode: 'local' | 'cloud'; cloudName?: string; cwd?: string; workspaceId?: string }>;
     onWorkspaceSelect?: (name: string) => Promise<AgentClient>;
+    width?: number;
   } = {},
 ) {
   const testRenderer = await createTestRenderer({
-    width: 96,
+    width: options.width ?? 96,
     height: 30,
     useThread: false,
     maxFps: Number.POSITIVE_INFINITY,
   });
   const root = createRoot(testRenderer.renderer);
+  const workspaceSource: TuiAgentSource | undefined = options.listWorkspaces
+    ? {
+        load: () => {
+          const items = options.listWorkspaces?.() ?? [];
+          return { items, total: items.length, nextCursor: null };
+        },
+      }
+    : undefined;
   root.render(
     <ChatApp
       client={client}
       onExit={() => {}}
-      listWorkspaces={options.listWorkspaces}
+      workspaceSource={workspaceSource}
       onWorkspaceSelect={options.onWorkspaceSelect}
+      profileMutations={{
+        setModel: (spec) => client.setModel(spec),
+        setReasoningEffort: (effort) => client.setReasoningEffort(effort),
+      }}
     />,
   );
   const frame = () => testRenderer.captureCharFrame();
@@ -159,15 +168,3 @@ export async function mountChat(
   return { ...testRenderer, frame, waitFor };
 }
 
-export function session(id: string): CliSessionInfo {
-  return {
-    id,
-    path: `/tmp/${id}.jsonl`,
-    agent: 'alpha',
-    cwd: '/workspace',
-    startedAt: '2026-08-22T00:00:00.000Z',
-    modifiedAt: 1,
-    entries: 2,
-    firstUserText: 'Earlier task',
-  };
-}

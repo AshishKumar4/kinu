@@ -1,61 +1,16 @@
 /**
- * A NODE THAT FAILED IS NOT A NODE STILL WORKING, and a level cannot wait forever.
+ * A DEFINITIVE NODE FAILURE IS NOT A NODE STILL WORKING.
  *
- * WHAT WAS MEASURED, and why this suite exists. One credentialled run of
- * `tests/evals/swarm.eval.ts` against a worker proxy whose upstream Cloudflare login had
- * expired left three depth-1 heads at `status:'running'`, `completed_at: NULL`, ZERO
- * steps, for sixty-three minutes — no store write, no exit — while their three siblings
- * errored in about a second with a clear upstream message. Two separate defects sat
- * behind that, and both are asserted here:
+ * One live run left three nodes `running` with no steps after an upstream
+ * credential expired, while their siblings recorded the authentication error.
+ * The durable requirement survives the time-policy cutover: a provider or host
+ * error must settle the node row and retain its cause, and a flat run must
+ * return every failed candidate with that reason.
  *
- *   - THE STORE COULD NOT SAY. `head_journal.status` reads `running` from `insertSpawn`
- *     until `recordReport` replaces it, so any path that reaches neither leaves a row
- *     claiming a node is mid-flight for the life of the store. That is `null`-for-absent
- *     and `null`-for-broken in one column: the engine had already counted the node as one
- *     it could not measure while the journal still said it was working.
- *   - THE BARRIER COULD NOT STOP. The wave was awaited with `Promise.allSettled`, and
- *     `allSettled` over a promise nothing can settle waits for the life of the process.
- *
- * THE WRITE SEQUENCE ONE NODE PRODUCES, since the defect is a gap in it. `runNodeAgent`
- * provisions the home, then `insertSpawn` writes the `head_journal` row as `running` with
- * `completed_at` NULL and no usage columns; then the loop runs and each finished step
- * INSERTs a `head_steps` row through `appendStep`, which is the only progress record there
- * is; then `recordReport` replaces the status with the report's own — `completed`,
- * `errored`, `aborted` or `budget_exceeded` — and stamps `completed_at`, the usage columns
- * and `error_message`. `abandonRunning` is the only other writer of that status.
- *
- * WHICH OF THOSE THE HUNG NODES REACHED: the first and nothing after it. Zero `head_steps`
- * rows means no step ever FINISHED, and `runHeadInference` catches every throw into an
- * `errored` report, so a node that neither stepped nor errored did not receive a model
- * response and did not fail trying — it was still inside its first `generateText` call
- * with nothing in this tree able to end it.
- *
- * WHERE THE BOUND LIVES NOW, and it is not this file's and not the barrier's. A node runs
- * on the shared turn loop, whose stall watchdog cuts a step where NOTHING flows — no
- * provider chunk, no tool result — so a request that goes silent before its first chunk is
- * ended from INSIDE the node and arrives at the barrier as a named failure. That is the
- * capability the node acquired by being put on the shared loop: the actor has had it all
- * along, and the node lacked it PRECISELY because it ran a loop of its own.
- *
- * The level clock that used to sit outside the members is gone. It was never a measured
- * quantity — reusing a measured constant does not measure a different thing — and its
- * first live outing gave up on three nodes at 600,002 / 600,028 / 600,029 ms and reported
- * "a provider or transport that is not answering" while that provider answered a direct
- * request in 1.5 s. It could not tell a node that never started from one legitimately
- * waiting, and now that a node can background work and await a wake, no elapsed-time
- * instrument can.
- *
- * WHAT IS UNDER TEST IS BOUNDEDNESS AND ATTRIBUTION, never a magnitude. `callTimeoutMs`
- * is a fixture value here for the reason the judge-call timeout is one in its own suite: a
- * bound whose only value is five minutes cannot be exercised by a test that has to finish.
- * The relationship asserted — a step where nothing flows ends, names itself, and leaves no
- * row reading `running` — is the same one {@link STALL_TIMEOUT_MS} runs in production, and
- * the derivation of that number lives on the constant beside the 30 s detach threshold it
- * was reasoned against.
- *
- * THE PROVIDERS ARE FAKE AND EXACT. One raises the upstream authentication error verbatim;
- * one never resolves at all. Both are what the measured run met, and neither costs a
- * credential or twenty minutes to reproduce.
+ * Elapsed silence is deliberately not a failure now. The shared turn loop has
+ * no watchdog or timeout retry, so this suite no longer invents a small clock to
+ * turn a pending provider into an error. Its slow-node arm instead proves that
+ * active work may outlive any former envelope and still complete.
  */
 import { describe, expect, test } from 'bun:test';
 import type { MockLanguageModelV3 } from 'ai/test';
@@ -63,7 +18,7 @@ import { scriptedTurnModel } from '@kinu.run/test-utils';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
 import { createTestRuntime } from './helpers';
 import { createRecordingLogger } from '../src/obs/index';
-import type { RecordingLogger, Refusal } from '../src/obs/index';
+import type { Refusal } from '../src/obs/index';
 import { HeadJournal } from '../src/heads/journal';
 import { runNodeAgent } from '../src/strategy/node-agent';
 import type { NodeAgentDeps, NodeAgentInput } from '../src/strategy/node-agent';
@@ -203,43 +158,23 @@ const RAISING_MODEL = scriptedTurnModel({
   doGenerate: () => Promise.reject(new Error(UPSTREAM)),
 });
 
-/** Never answers and never fails — the promise the barrier used to wait on forever.
- *  `withResolvers` without its resolvers is the honest spelling of that. */
-const SILENT_MODEL = scriptedTurnModel({
-  provider: 'fake',
-  modelId: 'fake-silent',
-  doGenerate: () => Promise.withResolvers<never>().promise,
-});
-
 /**
- * One node answers; every other node meets `siblings`.
- *
- * The answering node is chosen by its own SEED rather than by a call counter: siblings
- * run concurrently under one barrier, so a counter would pick whichever node the
- * scheduler happened to start first and could split one node's turns across both
- * behaviours. A seed is unique per sibling — each carries its own diversity angle — so
- * this keeps exactly one node answering across all of its steps.
- *
- * BOTH SIBLING FATES ARE THE MEASURED ONES. `silent` is the provider that never answers;
- * `raising` is the expired credential, which is what the live `preset:'ideate'` drill met
- * partway through its wave — one node had already reported when the login went.
+ * One node answers; every sibling gets the measured upstream authentication
+ * error. The answering node is chosen by its own seed rather than a call
+ * counter, because siblings run concurrently.
  */
-function oneAnsweringProvider(siblings: 'silent' | 'raising'): MockLanguageModelV3 {
+function oneAnsweringProvider(): MockLanguageModelV3 {
   let chosen: string | null = null;
   return scriptedTurnModel({
     provider: 'fake',
-    modelId: `fake-one-answers-${siblings}`,
+    modelId: 'fake-one-answers',
     doGenerate: ({ prompt }) => {
       let seed = '';
       for (const message of prompt) {
         if (message.role === 'user') seed = JSON.stringify(message.content);
       }
       chosen ??= seed;
-      if (seed !== chosen) {
-        return siblings === 'silent'
-          ? Promise.withResolvers<never>().promise
-          : Promise.reject(new Error(UPSTREAM));
-      }
+      if (seed !== chosen) return Promise.reject(new Error(UPSTREAM));
       const reported = prompt.some((message) => message.role === 'tool');
       const content: LanguageModelV3Content[] = reported
         ? [{ type: 'text', text: 'Reported: a single linear scan.' }]
@@ -266,20 +201,10 @@ function oneAnsweringProvider(siblings: 'silent' | 'raising'): MockLanguageModel
 }
 
 /**
- * A node that takes LONGER THAN ONE ENVELOPE IN TOTAL while never being silent for one —
- * the population a runtime bound would kill and a progress bound must not.
- *
- * It reads the reference, then reports, then closes, pausing before each answer. Every gap
- * is inside the envelope and the sum of them is outside it, which is the whole difference
- * between the two kinds of bound: the measured healthy nodes ran 1,216,358 ms with a step
- * every 55,289 ms, so this is their shape at test scale rather than a contrived one.
- *
- * REAL TIME, DELIBERATELY, and the only instrument that can answer this question. The
- * watchdog under test IS a `setTimeout` re-armed off `Date.now()`, so a frozen clock stops
- * it firing and a frozen `Date.now()` reads every member as idle for zero — the arm would
- * pass against a bound that does not exist. The pause is also cheaper than the
- * alternative: exceeding the envelope on real work alone would need roughly twenty steps
- * of VFS and SQL per node instead of three sleeps.
+ * A deliberately slow, active provider. It reads the reference, reports, then
+ * closes, pausing before each answer. The test reads the node's own
+ * `wall_clock_ms`, so real time is the observable contract here: the point is
+ * that no default elapsed envelope cuts work which continues to make progress.
  */
 function slowSteppingProvider(pauseMs: number): MockLanguageModelV3 {
   return scriptedTurnModel({
@@ -420,38 +345,25 @@ describe('a node that failed is not a node still working', () => {
   });
 });
 
-/* ── A level whose nodes never answer ends the run ─────────────────────────── */
-
-interface SilentRun {
+interface SwarmRunResult {
   readonly result: SwarmResult | Refusal;
   readonly rows: readonly HeadJournalRow[];
-  /** The tree the run actually wrote — the store the drill's own database was read back
-   *  from, where a dropped sibling leaves no row at all. */
+  /** The tree the run actually wrote — the same store the live view reads. */
   readonly tree: readonly SearchNode[];
-  readonly logger: RecordingLogger;
-  readonly elapsedMs: number;
 }
-
-const STALL_MS = 250;
 
 async function runWith(
   model: MockLanguageModelV3,
   call: ResolvedSwarm = resolved(),
-  callTimeoutMs: number = STALL_MS,
-): Promise<SilentRun> {
+): Promise<SwarmRunResult> {
   const { rt } = createTestRuntime();
-  // A real file, so a node that reads before it answers reads something. The read is what
-  // makes a step a step: a text-only turn ends the loop, so a node cannot demonstrate
-  // progress over several steps without a tool call in each of them.
   await rt.storage.vfs.mkdir('candidate', { recursive: true });
   await rt.storage.vfs.writeFile(REFERENCE_PATH, REFERENCE);
   const logger = createRecordingLogger();
-  const startedAt = Date.now();
   const result = await runSwarm(
-    { rt, model, mode: 'build', logger, callTimeoutMs },
+    { rt, model, mode: 'build', logger },
     call,
   );
-  const elapsedMs = Date.now() - startedAt;
   const rows = rt.storage.sql<HeadJournalRow>`
     SELECT id, parent_id, root_id, depth, task, rationale, status, spawned_at,
            completed_at, token_input, token_output, token_cache_read, token_cache_write,
@@ -460,112 +372,19 @@ async function runWith(
     FROM head_journal ORDER BY spawned_at`;
   const tree = rt.storage.sql<SearchNode>`
     SELECT * FROM search_nodes ORDER BY depth ASC, created_at ASC`;
-  return { result, rows, tree, logger, elapsedMs };
+  return { result, rows, tree };
 }
 
-describe('a level whose nodes never answer', () => {
-  test('every node ends itself, and the level that produced nothing ends the run by name', async () => {
-    const { result, rows, logger, elapsedMs } = await runWith(SILENT_MODEL);
-
-    // A REFUSAL and not a report: a run that crowned nothing over a level that produced
-    // nothing has a cause, and `stop:'budget'` would have said it ran out of room instead.
-    expect('reason' in result).toBe(true);
-    const refusal = 'reason' in result ? result : null;
-    expect(refusal?.reason).toBe('unavailable');
-    expect(refusal?.error).toContain('depth 1');
-    expect(refusal?.error).toContain('produced no candidate');
-    // THE CAUSE IS QUOTED, per node. A count alone is what made a dead provider read as
-    // `best: null` with nothing anywhere saying why.
-    expect(refusal?.error).toContain('stalled');
-    for (const row of rows) expect(refusal?.error).toContain(row.id);
-
-    // BOUNDED, and bounded from INSIDE each node: nothing outside the members is watching
-    // a clock any more. A generous multiple of one stall envelope still fails a barrier
-    // that waits forever, which is the defect this replaces.
-    expect(elapsedMs).toBeLessThan(STALL_MS * 20);
-
-    // THE STORE. Every node this run opened is settled, with its own cause on its own row
-    // — written by the node's own report rather than by a sweep at the level above.
-    expect(rows.length).toBe(BRANCHES);
-    for (const row of rows) {
-      expect(row.status).toBe('errored');
-      expect(row.completed_at).toBeGreaterThan(0);
-      expect(row.error_message).toContain('stalled');
-    }
-
-    // Attributed per node in the stream too, through the ordinary branch-failure event
-    // rather than a second vocabulary only a clock could reach.
-    const failed = logger.emitted.filter((line) => line.event === 'swarm.branch_failed');
-    expect(failed.length).toBe(BRANCHES);
-    for (const line of failed) expect(String(line.fields.error)).toContain('stalled');
-    // THE DELETED PATH, asserted absent: no event of the level clock's vocabulary is
-    // emitted at all, so a re-introduced clock fails here rather than passing quietly.
-    expect(logger.emitted.filter((line) => line.event === 'swarm.node_silent')).toEqual([]);
-    expect(logger.emitted.filter((line) => line.event === 'swarm.level_silent')).toEqual([]);
-  });
-
-  test('a level that answered once keeps that answer and reports the rest', async () => {
-    // The boundary: losing a member NARROWS the run, and only a level that produced
-    // nothing at all ends it. A barrier that refused on the first failed sibling would
-    // throw away work the search had already paid for.
-    const { result, rows, elapsedMs } = await runWith(oneAnsweringProvider('silent'));
+describe('a slow level has no default envelope', () => {
+  test('nodes complete after as much active work as they need', async () => {
+    const pauseMs = 125;
+    const { result, rows } = await runWith(slowSteppingProvider(pauseMs), resolved());
 
     expect('reason' in result).toBe(false);
-    expect(elapsedMs).toBeLessThan(STALL_MS * 60);
-
-    expect(rows.length).toBe(BRANCHES);
-    const answered = rows.filter((row) => row.status === 'completed');
-    const stalled = rows.filter((row) => row.error_message?.includes('stalled') ?? false);
-    expect(answered.length).toBe(1);
-    expect(stalled.length).toBe(BRANCHES - 1);
-    // No row is left mid-flight either way, which is the whole claim.
-    for (const row of rows) {
-      expect(row.status).not.toBe('running');
-      expect(row.completed_at).toBeGreaterThan(0);
-    }
-
-    // AND THE RUN REPORTS THE REST RATHER THAN SHEDDING IT. A node that ended `errored`
-    // was thrown at the barrier, so a caller saw a smaller wave and no reason for it.
-    if ('reason' in result) return;
-    expect(result.candidates).toHaveLength(BRANCHES);
-    for (const candidate of result.candidates.filter((entry) => entry.incomplete !== null)) {
-      expect(candidate.incomplete).toContain('stalled');
-      expect(candidate.measured).toBeNull();
-      expect(candidate.score).toBeNull();
-    }
-    // THE RANKING IS UNTOUCHED BY THAT: an unfinished node is not measured, not scored
-    // and cannot be crowned, so the node that answered is still the one that wins on the
-    // instrument's own number.
-    expect(result.best?.incomplete).toBeNull();
-    expect(result.best?.measured?.value).toBe(N - 1);
-  });
-
-  test('a node slower than the envelope survives it, because the bound is FLOW and not time', async () => {
-    // THE DIFFERENCE BETWEEN THE TWO KINDS OF BOUND, and the reason a runtime deadline
-    // cannot be substituted here. Every node outlives one stall envelope in total and none
-    // is ever silent for one, so a flat deadline would cut all three off mid-work while
-    // the watchdog lets them finish. Without this arm a refactor to a runtime bound passes.
-    const pauseMs = Math.floor(STALL_MS / 2);
-    // THE STALL BOUND THIS ARM RUNS UNDER IS ITS OWN, and the arithmetic is why. Every
-    // node here finishes through `report`, and the report contract now runs the
-    // objective's instrument inside that call, on one lane because every candidate is
-    // written to the same path. Measured: ~154 ms per exec-ratio pass, three branches,
-    // so the last node is silent for ~460 ms of queued instrument work — above the
-    // 250 ms fixture that was chosen when a report was a no-op. The RELATIONSHIP under
-    // test is untouched: the model still pauses half a stall envelope per step, every
-    // node still outlives one envelope in total, and none is ever silent for one. A
-    // flat runtime deadline would still cut all three off, which is the substitution
-    // this arm exists to fail.
-    const stallMs = 4 * STALL_MS;
-    const { result, rows } = await runWith(slowSteppingProvider(pauseMs), resolved(), stallMs);
-
-    expect('reason' in result).toBe(false);
-    expect(rows.length).toBe(BRANCHES);
+    expect(rows).toHaveLength(BRANCHES);
     for (const row of rows) {
       expect(row.status).toBe('completed');
-      // The load-bearing number: the node's own recorded lifetime is past the envelope it
-      // was watched against, and it was not cut off.
-      expect(row.wall_clock_ms).toBeGreaterThan(STALL_MS);
+      expect(row.wall_clock_ms).toBeGreaterThan(pauseMs);
       expect(row.error_message).toBeNull();
     }
   });
@@ -597,7 +416,7 @@ describe('a level whose nodes never answer', () => {
 describe('a flat preset returns every node it ran', () => {
   test('a 3-branch ideate returns 3 candidates when the credential dies under two of them', async () => {
     const { result, rows, tree } = await runWith(
-      oneAnsweringProvider('raising'), resolvedIdeate(),
+      oneAnsweringProvider(), resolvedIdeate(),
     );
     if ('reason' in result) throw new Error(`the run must not refuse: ${result.error}`);
 

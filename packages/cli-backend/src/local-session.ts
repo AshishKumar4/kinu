@@ -12,7 +12,10 @@
  * lives here once instead of being duplicated per frontend.
  */
 
-import { stepCountIs, type ModelMessage, type ToolSet, type LanguageModel } from 'ai';
+import {
+  generateText, stepCountIs,
+  type LanguageModel, type ModelMessage, type ToolSet,
+} from 'ai';
 import type { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
@@ -23,12 +26,12 @@ import {
 import type {
   ChatOptions, ChatEvent,
   CompletedTurn, TurnContinuity, FiberCtx,
-  ModelCallSink,
+  LLM, ModelCallSink, ModelRouteResolution,
   BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile,
-  SessionWriter, SkillsVfs, ActiveSkillSet, TurnSkillSurface, FactsStore, KinuExtension,
-  HeadRuntime, HeadGrounding, MergeResult, SerializedMessage, SplitPhaseEvent, AgentConfigStore, ShellApprovalMode,
+  SkillsVfs, ActiveSkillSet, TurnSkillSurface, FactsStore, KinuExtension,
+  HeadRuntime, HeadGrounding, SerializedMessage, AgentConfigStore, ShellApprovalMode,
   ShellApprovalRequest, ShellApprovalOutcome, RequestShellApproval,
-  AgentsForkDeps, AgentsToolDeps,
+  AgentsForkDeps, AgentsToolDeps, TeamToolDeps, PeersToolDeps,
   IngressDescriptor, KinuEvent, EventVariant, MissingCapability,
   RunEvent, RunEventInput, RunEventQuery, StepLike,
   ReleaseStore, ReleaseToolDeps, BuiltinToolName,
@@ -38,11 +41,12 @@ import type {
 } from '@kinu.run/core';
 import {
   AgentOrchestrator,
+  type TurnSteering,
   createAgentStores, type AgentStores, collectDynamicContext,
   type BackgroundJobStore, BackgroundJobRunner, type TaskListStore,
   wrapToolsForBackground, BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob,
   BACKGROUND_POLICY, type BackgroundPolicy,
-  type MctsSearchStore, createDurableMctsSession,
+  type MctsSearchStore,
   EventLog, ReplyChannelStore,
   type RunEventRecorder,
   TriggerRegistry,
@@ -55,10 +59,10 @@ import {
   readMemoryTail,
   listProposedTasks, updateProposedTaskStatus,
   buildStrategyForkDeps, agentsActionsFor,
-  HeadController, type HeadJournal, reconcileInterruptedForks,
+  type HeadJournal, reconcileInterruptedForks,
   jobRedriveResumeGate, resumableForkRoots,
   skillsVfsOver, resolveTurnSkills, filterToolSetBySkills, renderFactsForTurn,
-  recordGroundedHeadsTake, inheritedContextFromHistory, headPhaseRunEvent,
+  inheritedContextFromHistory,
   ModelCatalogSession,
   BUILTIN_TOOL_NAMES, isMcpToolKey,
   buildActorTools, withClampedToolResults, buildSystemPromptSync, currentDateForPrompt,
@@ -68,6 +72,7 @@ import {
   parseModelSpec, agentAffinityKey,
   OVERFLOW_RETRY_EVENT,
   openTurnRun, closeTurnRun, snapshotCompletedTurn, creditedTurnId,
+  normalizeUsage,
   persistMeasuredPromptTokens, applyOverflowRecovery, measureCompactionTrigger,
   CompletionGate, observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
   runAdvisorLane,
@@ -98,15 +103,20 @@ import {
   scaffoldChatTransform, type ScaffoldRunOptions,
   bootstrapScaffold,
   createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory,
-  SCAFFOLD_TURN_TIMEOUT_MS,
   type AlternateTakeSet, type TakePickOutcome,
   startBranchHead, settlePendingBranches, newBranchId,
   type PendingBranch, type BranchStatusEvent,
   type AlarmScheduler, type BackgroundJob, type SqlExec,
   type TimerTrigger, type TimerTriggerOpts, type TriggerView,
   type WebhookDelivery, type WebhookDeliveryResult, type WebhookSecretStore,
-  reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE,
-  type ReasoningEffort, decodeJsonValue, projectJsonValue,
+  reasoningEffortOptions,
+  BUILTIN_PROFILE_CATALOG, TIER_IDS, effectiveRoleCatalog, profileCatalogDigest,
+  changeActiveRole, agentsProfileContext, canonicalConversationId,
+  loadProfileAuthorityInputs, resolveAgentTurnProfile, sha256Hex,
+  readSoul,
+  type ProfileCatalog, type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
+  type ResolvedTurnProfile, type TierId,
+  decodeJsonValue, projectJsonValue,
   createAgentSelfProvider,
   // ── Read models: the same implementations the cloud backend's RPCs call ──
   cancelBackgroundJob, jobResult, listBackgroundJobs,
@@ -117,6 +127,7 @@ import {
   type EvolutionChangelogView,
   getRunEvents, listRuns, type RunListEntry, type Page, type PageRequest,
   priceCall, WORKSPACE_RUN_ID,
+  recordModelOperations, type ModelOperationSink,
 } from '@kinu.run/core';
 import { diagnostics, KinuError, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import { makeSqlExec, type CLIRuntime } from './runtime';
@@ -231,9 +242,10 @@ export interface LocalAgentSessionOpts {
   model?: LanguageModel;
   /** Display/canonical spec for static-model sessions with no modelResolver. */
   modelSpec?: string;
-  /** Optional provider-style resolver. When present, agent_config.model controls
-   *  the active chat model exactly like the DO backend's setModel/getModel path. */
+  /** Optional provider-style resolver. */
   modelResolver?: LocalModelResolver;
+  /** Canonical role/tier authority for this local agent. */
+  profileAuthority?: () => ProfileCatalogEnvelope | Promise<ProfileCatalogEnvelope>;
   onEvent: (event: SessionEvent) => void;
   /** Disable auto-evolution (turn + session reflection). Default: enabled. */
   noAutoEvolve?: boolean;
@@ -248,17 +260,26 @@ export interface LocalAgentSessionOpts {
   oneShot?: boolean;
   /** Turns between session-level reflections (default 5, matching the DO). */
   sessionReflectionInterval?: number;
-  /** Durable conversation key in the local messages table. Default: `default`. */
-  sessionId?: string;
-  /** Persist user/assistant messages to SQLite. Default: true. */
-  persistMessages?: boolean;
-  /** Working directory for AGENTS.md discovery + the prompt's runtime context.
-   *  Default: process.cwd(). */
+  /** Working directory for AGENTS.md discovery and the prompt's runtime
+   *  context. Defaults to the runtime's own bound plane, so the directory the
+   *  agent reads project instructions from is the directory its `file` tool and
+   *  its shell work in. Only a runtime with no bound plane falls back to the
+   *  process's own directory. */
   cwd?: string;
   /** How long a tool call may run before it is moved to the background, and how
    *  long teardown waits on work that has not settled. Fixed by the surface that
    *  opened the session (BACKGROUND_POLICY). Default: the interactive policy. */
   backgroundPolicy?: BackgroundPolicy;
+}
+
+const TurnTierMetadataSchema = v.object({
+  profile_tier: v.optional(v.picklist(TIER_IDS)),
+});
+
+function tierFromMetadata(metadata: ProgrammaticTurn['metadata']): TierId | undefined {
+  if (metadata === undefined) return undefined;
+  const parsed = v.safeParse(TurnTierMetadataSchema, metadata);
+  return parsed.success ? parsed.output.profile_tier : undefined;
 }
 
 interface QueueItem {
@@ -291,6 +312,13 @@ export class LocalAgentSession implements BackendHost {
   private readonly toolSets: Partial<Record<WorkMode, { raw: ToolSet; wrapped: ToolSet }>> = {};
   private readonly engine: EvolutionEngine;
   private readonly orch: AgentOrchestrator;
+
+  /** The per-turn mechanical-steering ledger — what fired at which step and
+   *  what came of it. A read-only named view; the orchestrator owns writes. */
+  get steering(): TurnSteering {
+    return this.orch.steering;
+  }
+
   /** The stores every agent has, from core — one list both backends inherit.
    *  The named fields below are its members, kept as fields because the call
    *  sites reach them by name. */
@@ -346,6 +374,17 @@ export class LocalAgentSession implements BackendHost {
     // dropped. Dropping them is the dishonesty this row type exists to remove.
     this.recordRunEvent(event, this.currentRunId ?? WORKSPACE_RUN_ID);
   };
+
+  /**
+   * Where this session's direct model operations record their start and end —
+   * the same log as `modelCallSink`, projected through core's one shared
+   * mapper. A start row with no end names the operation a dead process left
+   * in flight; nothing here reads a clock.
+   */
+  private readonly modelOperations: ModelOperationSink = recordModelOperations(
+    { emit: (runId, input): void => { this.recordRunEvent(input, runId); } },
+    () => this.currentRunId ?? WORKSPACE_RUN_ID,
+  );
   private readonly triggerRegistry: TriggerRegistry;
   /** Durable reply sinks for the events this session admits — the same table
    *  and TTLs the cloud backend writes, with no dispatcher in front of them:
@@ -360,12 +399,17 @@ export class LocalAgentSession implements BackendHost {
   private alarmTimer: ReturnType<typeof setTimeout> | null = null;
   private scheduledAlarmAt: number | null = null;
   private ended = false;
-  /** Branching-heads runtime (BackendHost seam) + its controller — local heads
-   *  run in-process over isolated ephemeral runtimes. */
+  /** Branching-heads runtime — local heads run in-process over isolated
+   *  ephemeral runtimes. */
   private _headRuntime: HeadRuntime;
-  private headController: HeadController;
   private readonly onEvent: (event: SessionEvent) => void;
   private shellApprovalHandler: ShellApprovalHandler | null = null;
+  private readonly profileAuthority: () => Promise<ProfileCatalogEnvelope>;
+  private turnProfile: ResolvedTurnProfile | null = null;
+  private turnProfileInputs: {
+    envelope: ProfileCatalogEnvelope;
+    provider: ProviderCatalogSnapshot;
+  } | null = null;
   private readonly sessionId: string;
   /** True when this process runs one task turn and exits — see the `oneShot`
    *  option. Decides turn continuity and whether the cadence lane may start. */
@@ -381,7 +425,6 @@ export class LocalAgentSession implements BackendHost {
     return this.oneShot ? 'independent_task' : 'conversation';
   }
   private readonly cwd: string;
-  private readonly persistMessagesEnabled: boolean;
   private readonly history: ModelMessage[] = [];
   private turnWorkMode: WorkMode = 'build';
 
@@ -433,13 +476,12 @@ export class LocalAgentSession implements BackendHost {
   constructor(opts: LocalAgentSessionOpts) {
     this.rt = opts.rt;
     this.onEvent = opts.onEvent;
-    this.sessionId = opts.sessionId ?? 'default';
     this.oneShot = opts.oneShot === true;
-    this.cwd = opts.cwd ?? process.cwd();
-    this.persistMessagesEnabled = opts.persistMessages !== false;
+    this.cwd = opts.cwd ?? this.rt.cwd ?? process.cwd();
     this.fallbackModel = opts.model ?? null;
     this.fallbackModelSpec = opts.modelSpec ?? 'local/static';
     this.modelResolver = opts.modelResolver ?? null;
+    this.rt.setModelForRoute?.((resolution) => this.localRouteLlm(resolution));
 
     // A session with neither a resolver nor a static model has no brain; the
     // failure belongs at the first use that needs one, named for that use.
@@ -509,6 +551,8 @@ export class LocalAgentSession implements BackendHost {
     this.headJournal = stores.headJournal;
     this.mctsSearchStore = stores.mctsSearchStore;
     this.config = stores.config;
+    this.sessionId = canonicalConversationId(this.config);
+    this.profileAuthority = async () => await (opts.profileAuthority?.() ?? this.bootstrapProfileEnvelope());
     this.factsStore = stores.facts;
     this.eventRecorder = stores.eventRecorder;
 
@@ -519,6 +563,11 @@ export class LocalAgentSession implements BackendHost {
     this.compactionState = createCompactionStateStore(this.rt.storage.sql);
     this.compactionExtension = createCompactionExtension({
       ports: {
+        // The plane the agent's own `file` tool reads, because a compacted
+        // range's transcript path is CITED to the model and has to be readable
+        // back (compaction/extension.ts's citablePath contract). Every spill
+        // under `.kinu/` is on this plane for the same reason; what moves to the
+        // private plane is what the agent IS, not what it can be told to read.
         transcripts: createVfsTranscriptStore(() => this.rt.storage.vfs),
         plans: this.compactionState.plans,
         // `@better-compact/core`'s `Logger` requires all four levels, so none can be
@@ -539,7 +588,7 @@ export class LocalAgentSession implements BackendHost {
       // The sink the summarizer already accepts, finally passed — see the same
       // call on the cloud actor. Without it `compaction` was a declared
       // SPEND_SOURCE that could never appear in the panel.
-      summarize: createModelSummarizer(() => this.ensureModelState(), undefined, {
+      summarize: createModelSummarizer(() => this.ensureModelState(), {
         source: 'compaction', report: (report) => this.modelCallSink(report),
       }),
       // The ladder's first rung prunes this plane before any tool output.
@@ -561,8 +610,8 @@ export class LocalAgentSession implements BackendHost {
       // a `LanguageModel`, which does not carry the spec it was built from.
       reportModelCall: (report) =>
         this.modelCallSink({ ...report, spec: this.fallbackModelSpec }),
+      operations: this.modelOperations,
       parentRuntime: this.rt,
-      cwd: this.cwd,
       webSearch: this.getWebSearchProvider(),
       codemodeExtras: () => this.headCodemodeExtras(),
       grounding: this.buildHeadGrounding(),
@@ -576,7 +625,6 @@ export class LocalAgentSession implements BackendHost {
       headRuntimeOptions.resolveModel = (spec) => modelResolver.resolveModel(spec);
     }
     this._headRuntime = createCLIHeadRuntime(headRuntimeOptions);
-    this.headController = new HeadController(this._headRuntime, this.headJournal);
 
     // The EventsHub substrate (reactor source of truth). Local external
     // ingresses enter through publishEvent(), then drain via AgentOrchestrator.
@@ -619,6 +667,9 @@ export class LocalAgentSession implements BackendHost {
       budget: this.budget,
       sessionReflectionInterval: opts.sessionReflectionInterval,
       oneShot: opts.oneShot === true,
+      roleCatalog: () => this.turnProfileInputs
+        ? Object.keys(effectiveRoleCatalog(this.turnProfileInputs.envelope.catalog))
+        : undefined,
       sinks: {
         onToolCallEvent: (ev) => this.recordRunEvent({ type: 'tool_call_end', ...ev }),
         onStepEvent: (ev) => this.recordRunEvent({ type: 'step_finish', ...ev }),
@@ -630,6 +681,7 @@ export class LocalAgentSession implements BackendHost {
     // find a ledger. A runtime holds ONE sink: the live session's, exactly as it
     // holds one turn file ledger and one approval channel.
     this.rt.setModelCallSink?.(this.modelCallSink);
+    this.rt.setModelOperations?.(this.modelOperations);
     this.jobRunner = new BackgroundJobRunner({
       store: this.jobs,
       policy: () => opts.backgroundPolicy ?? BACKGROUND_POLICY.interactive,
@@ -778,7 +830,33 @@ export class LocalAgentSession implements BackendHost {
 
   /** Effective normalized model spec used for new turns. */
   getEffectiveModelSpec(): string {
-    return this.normalizeModelSpec(this.config.getModel());
+    return this.turnProfile?.tier.model ?? this.normalizeModelSpec(this.config.getModel());
+  }
+
+  getActiveRoleId(): string {
+    return this.turnProfile?.role.id ?? this.config.getActiveRoleId();
+  }
+
+  getEffectiveTierId(): string {
+    if (this.turnProfile) return this.turnProfile.tier.id;
+    const roleId = this.config.getActiveRoleId();
+    return effectiveRoleCatalog(BUILTIN_PROFILE_CATALOG)[roleId]?.tier ?? 'default';
+  }
+
+  async setRole(roleId: string): Promise<{ role: string }> {
+    const envelope = await this.profileAuthority();
+    const changed = changeActiveRole({
+      config: this.config,
+      envelope,
+      to: roleId,
+      actor: 'user',
+    });
+    this.turnProfile = null;
+    this.turnProfileInputs = null;
+    if (changed.kind !== 'applied') {
+      throw new Error(`role "${roleId}" was refused: ${changed.kind === 'refused' ? changed.reason : changed.kind}`);
+    }
+    return { role: changed.to };
   }
 
   /** Validate + store a new model spec. Effective on the next turn and for new
@@ -791,8 +869,8 @@ export class LocalAgentSession implements BackendHost {
     }, spec);
   }
 
-  getReasoningEffort(): { effort: ReasoningEffort | null } {
-    return getReasoningEffort(this.config);
+  getReasoningEffort() {
+    return { effort: this.turnProfile?.tier.reasoningEffort ?? getReasoningEffort(this.config).effort };
   }
 
   setReasoningEffort(
@@ -1009,11 +1087,6 @@ export class LocalAgentSession implements BackendHost {
     return providers;
   }
 
-  /** Alternate-Takes capture of a completed heads run (core heads-support). */
-  private recordHeadsTake(merge: MergeResult, task: string): void {
-    recordGroundedHeadsTake(this.rt.storage.sql, merge, task);
-  }
-
   /** The drain-debounce timer (BackendHost seam) — a plain one-shot timeout.
    *  Skips a window that outlives the session so consumed events are never
    *  bound to a turn a dead pump will not run. */
@@ -1100,12 +1173,16 @@ export class LocalAgentSession implements BackendHost {
   /** Run a user turn (and any programmatic turns it cascades). Resolves when
    *  the user's own turn has finished. Attachments (data-URL PromptFiles)
    *  become file parts on the turn's user message. */
-  send(input: string | { text: string; files: ReadonlyArray<PromptFile> }): Promise<void> {
+  send(
+    input: string | { text: string; files: ReadonlyArray<PromptFile> },
+    opts: { tier?: TierId } = {},
+  ): Promise<void> {
     const { text, files } = normalizePromptInput(input);
-    return new Promise((resolve) => {
-      this.queue.push({ text, files, kind: 'user', resolve });
-      void this.pump();
-    });
+    const { promise, resolve } = Promise.withResolvers<void>();
+    const metadata = opts.tier === undefined ? undefined : { profile_tier: opts.tier };
+    this.queue.push({ text, files, metadata, kind: 'user', resolve });
+    this.pump();
+    return promise;
   }
 
   /**
@@ -1553,11 +1630,9 @@ export class LocalAgentSession implements BackendHost {
   }
 
   /** Append to the durable run-event log. Scoped to the in-flight run by
-   *  default (`runId` omitted); a caller that captured its OWN run id at
-   *  dispatch time (a detached fork's phase events — see emitHeadPhase) passes
-   *  it explicitly so a later phase still lands correctly once the calling
-   *  turn has moved on. Never throws: losing a history row must not fail a
-   *  turn. */
+   *  default (`runId` omitted); a caller with its OWN run id passes it
+   *  explicitly so the row lands on that run once the calling turn has moved
+   *  on. Never throws: losing a history row must not fail a turn. */
   private recordRunEvent(input: RunEventInput, runId?: string | null): void {
     const id = runId !== undefined ? runId : this.currentRunId;
     if (!id) return;
@@ -1581,6 +1656,7 @@ export class LocalAgentSession implements BackendHost {
       files: this.orch.acc.files,
       escalations: this.orch.acc.escalations,
       steering: this.orch.steering.snapshot(),
+      delegation: this.orch.steering.delegationSnapshot(),
       completionGate: this.completionGate.take(),
       craft: this.orch.craft.snapshot(),
       recoveries: this.orch.recoverySnapshot(),
@@ -1661,55 +1737,84 @@ export class LocalAgentSession implements BackendHost {
   /** The turn itself: assemble it, stream it, finalize it. Everything here may
    *  throw; processTurn owns what that means. */
   private async runTurn(item: QueueItem, event: string | undefined, startedAt: number): Promise<void> {
-    // Shadow-git checkpoints: arm the per-turn dedup so the first host-FS
-    // mutation of this turn snapshots its working directory (invisible /undo
     // substrate — see core checkpoints/types.ts).
     this.rt.checkpoints?.beginTurn({ turnId: crypto.randomUUID(), sessionId: this.sessionId });
+    const profileInputs = await this.profileInputs();
+    const activeRoleId = this.config.getActiveRoleId();
+    const roleSkills = effectiveRoleCatalog(profileInputs.envelope.catalog)[activeRoleId]?.skills ?? [];
     // A real user message grades the previous turn — dispatch the detached
     // outcome review (same core pipeline as the DO's beforeTurn hook). In a
     // one-shot process the previous turn belongs to an already-exited
     // invocation, so this prompt is a fresh task, not a verdict on it.
     if (item.kind === 'user') this.orch.observeUserTurn(item.text, this.turnContinuity);
-    // A one-shot task turn is graded by whatever it leaves on disk, with nobody
-    // to push back — so it arms the completion gate. Nothing else does.
     if (item.kind === 'user' && this.oneShot) this.completionGate.arm(item.text);
+    const executors = this.rt.executionRouter?.listExecutors() ?? [];
+    const { available: availableSkills, activeSkills } = await this.resolveTurnSkills(
+      item.text,
+      roleSkills,
+    );
+    const candidateBuiltins = this.filterToolsBySkills(activeSkills);
+    const candidateBuiltinNames = Object.keys(candidateBuiltins).filter(
+      (name): name is BuiltinToolName => BUILTIN_TOOL_NAMES.has(name),
+    );
+    const candidateExternalNames = Object.keys(this.extraTools);
+    const candidateAgentActions = agentsActionsFor(this.agentsToolDeps(this.turnWorkMode));
+    const profile = resolveAgentTurnProfile({
+      ...profileInputs,
+      activeRoleId: this.config.getActiveRoleId(),
+      workMode: this.turnWorkMode,
+      availableTools: [
+        ...candidateBuiltinNames,
+        ...candidateExternalNames,
+      ],
+      activeSkills: activeSkills?.active.map((skill) => skill.name) ?? [],
+      explicitTier: tierFromMetadata(item.metadata),
+    });
+    this.turnProfile = profile;
+    this.turnProfileInputs = profileInputs;
+    this.turnWorkMode = profile.workMode;
+    this.rt.setTurnProfile?.(profile);
+    this.invalidateModelState();
     const model = this.ensureModelState();
     this.activateToolMode(this.turnWorkMode);
-
-    // MEMORY.md is append-only — the TAIL holds the newest lessons/reflections.
-    // It is per-turn-read live state (lessons/reflections/take-pick
-    // corrections append constantly), so it rides the dynamic-context
-    // ledger: in the stable prefix every append would bust the cache and
-    // trip the prompt-hash telemetry with no real agent event.
-    const memoryTail = await readMemoryTail(this.rt.memory);
-    const executors = this.rt.executionRouter?.listExecutors() ?? [];
-    const { available: availableSkills, activeSkills } = await this.resolveTurnSkills(item.text);
-    // Skill-filtered built-ins + the connected MCP tools (always available).
-    const filteredBuiltins = this.filterToolsBySkills(activeSkills);
-    const turnTools = { ...filteredBuiltins, ...this.extraTools };
-    const availableBuiltins = Object.keys(filteredBuiltins).filter((name): name is BuiltinToolName =>
-      BUILTIN_TOOL_NAMES.has(name));
-    const externalTools = Object.keys(this.extraTools).map((name) => ({
+    const allowedTools = new Set(profile.allowedTools);
+    const toolAllowed = (name: string): boolean => allowedTools.has(name);
+    const filteredBuiltins = Object.fromEntries(
+      Object.entries(this.filterToolsBySkills(activeSkills)).filter(([name]) => toolAllowed(name)),
+    );
+    const filteredExternal = Object.fromEntries(
+      Object.entries(this.extraTools).filter(([name]) => toolAllowed(name)),
+    );
+    const turnTools = { ...filteredBuiltins, ...filteredExternal };
+    const availableBuiltins = Object.keys(filteredBuiltins).filter(
+      (name): name is BuiltinToolName => BUILTIN_TOOL_NAMES.has(name),
+    );
+    const externalTools = Object.keys(filteredExternal).map((name) => ({
       name,
       source: isMcpToolKey(name) ? 'mcp' as const : 'external' as const,
     }));
+    const resolvedAgentActions = toolAllowed('agents') ? candidateAgentActions : [];
+    const memoryTail = await readMemoryTail(this.rt.memory);
     // Nearest-file-wins AGENTS.md chain, re-read each turn so edits land
     // immediately (a handful of stat calls — negligible next to the LLM call).
     const agentsMd = discoverAgentsMd(this.cwd);
+    // The agent's SOUL.md, re-read each turn for the same reason as AGENTS.md.
+    // agentStateVfs is the identity tree when it differs from the working VFS;
+    // absent override renders the default soul, never an empty one.
+    const soul = await readSoul(this.rt.agentStateVfs ?? this.rt.storage.vfs);
     // The byte-stable cache prefix — system state (facts, executor status)
     // rides the dynamic ledger and activation reasons ride the turn-local
-    // tail below, sharing the seam with the DO backend.
-    const systemPromptOptions: Parameters<typeof buildSystemPromptSync>[1] = {
+    const systemPromptOptions: NonNullable<Parameters<typeof buildSystemPromptSync>[1]> = {
       executors,
       availableTools: availableBuiltins,
-      agentsActions: agentsActionsFor(this.agentsToolDeps(this.turnWorkMode)),
+      agentsActions: resolvedAgentActions,
       // Matches the execute_tools wiring: llm.query exists only with a resolver.
       rlmAvailable: this.modelResolver !== null,
       externalTools,
       backend: 'cli-local',
       workMode: this.turnWorkMode,
       provenance: turnProvenanceForMetadata(item.metadata),
-      stance: this.config.getStance(),
+      roleSection: profile.role,
       planSubmissionAvailable: false,
       model: { id: this.effectiveModelSpec() },
       cwd: this.cwd,
@@ -1722,6 +1827,7 @@ export class LocalAgentSession implements BackendHost {
     if (agentsMd.length > 0) systemPromptOptions.agentsMd = agentsMd;
     if (availableSkills.length > 0) systemPromptOptions.availableSkills = availableSkills;
     if (activeSkills) systemPromptOptions.activeSkills = activeSkills;
+    if (soul) systemPromptOptions.soulOverride = soul;
     const systemPrompt = buildSystemPromptSync(this.rt, systemPromptOptions);
     this.recordSystemPromptHash(systemPrompt);
 
@@ -1771,8 +1877,10 @@ export class LocalAgentSession implements BackendHost {
       .register({ name: 'kinu.steering', prepareStep: (ctx) => this.userSteer.prepareStep(ctx) })
       .register(this.orch.turnExtension);
     const cache = this.cacheIdentity();
-    const effort = this.config.getReasoningEffort() ?? REASONING_EFFORT_FOR_STAGE.chat;
-    const providerOptions = reasoningEffortOptions(effort, cache.providerId ?? '');
+    const providerOptions = reasoningEffortOptions(
+      profile.tier.reasoningEffort,
+      parseModelSpec(profile.tier.model).provider,
+    );
     // The measured compaction trigger, read from the durable state by core in
     // the one correct order (orchestrator/turn-context.ts). `historyLength` is
     // the durable length the measurement is bound to, so it is also what
@@ -1834,7 +1942,6 @@ export class LocalAgentSession implements BackendHost {
         llmStream: this.makeScaffoldLLMStream(model, turnTools),
         callTool: this.makeScaffoldCallTool(turnTools),
         history: this.makeScaffoldHistory(),
-        timeoutMs: SCAFFOLD_TURN_TIMEOUT_MS,
       },
     });
 
@@ -2183,13 +2290,15 @@ export class LocalAgentSession implements BackendHost {
     return this._webSearchProvider;
   }
 
-  /** Resolve this turn's skill surface (core turn-surface — the SAME
-   *  resolution the DO's beforeTurn runs). */
-  private resolveTurnSkills(userText: string): Promise<TurnSkillSurface> {
+  private resolveTurnSkills(
+    userText: string,
+    roleSkills: readonly string[] = [],
+  ): Promise<TurnSkillSurface> {
     return resolveTurnSkills({
       vfs: this.getSkillsVfs(),
       config: this.config,
       userText,
+      roleSkills,
     });
   }
 
@@ -2274,14 +2383,14 @@ export class LocalAgentSession implements BackendHost {
 
   /** Run the current scaffold for a one-shot task, capturing what it emits
    *  instead of injecting it into the conversation. */
-  runScaffoldOnce(task: string, opts?: { useShadowOverride?: boolean; timeoutMs?: number }) {
+  runScaffoldOnce(task: string, opts?: { useShadowOverride?: boolean }) {
     return runScaffoldOnce(this.scaffoldControl, task, opts);
   }
 
   /** Run an arbitrary archived scaffold version against a task — previewing a
    *  candidate live before promoting it. */
-  previewScaffoldLive(version: number, task: string, opts?: { timeoutMs?: number }) {
-    return previewScaffoldLive(this.scaffoldControl, version, task, opts);
+  previewScaffoldLive(version: number, task: string) {
+    return previewScaffoldLive(this.scaffoldControl, version, task);
   }
 
   /**
@@ -2395,7 +2504,7 @@ export class LocalAgentSession implements BackendHost {
    *  swarm's nodes run their loops in this process and get their private homes
    *  from this workspace's own uid-0 view. The CLI wires no team or peer
    *  transport, so swarm is the tool's only action here. */
-  private buildAgentsForkDeps(mode: WorkMode): AgentsForkDeps {
+  private buildAgentsForkDeps(): AgentsForkDeps {
     return buildStrategyForkDeps({
       rt: this.rt,
       model: this.cachedModel ?? this.defaultModel("an agents fork"),
@@ -2411,69 +2520,44 @@ export class LocalAgentSession implements BackendHost {
       // (`buildCLIHeadRuntime`, a bare AgentRuntime in a harness) wires none, and
       // then its nodes report `shared-origin-plane` rather than a home they lack.
       nodeHome: this.rt.nodeHome,
-      mcts: {
-        session: () => this.createMCTSSession(),
-        search: this.mctsSearchStore,
-        overrides: () => this.config.getMctsOverrides(),
-      },
-      heads: {
-        controller: () => this.headController,
-        inheritedContext: () => this.readInheritedContext(),
-        // Captured at dispatch, once per fork call — see emitHeadPhase.
-        onPhase: () => {
-          const runId = this.currentRunId;
-          return (e: SplitPhaseEvent) => this.emitHeadPhase(e, runId);
-        },
-        onComplete: (merge: MergeResult, task: string) => {
-          if (mode === 'build') this.recordHeadsTake(merge, task);
-        },
-      },
     });
   }
+  /** Team transport, injected by the owning LocalAgentHost. Present, the
+   *  local agent gets hire/ask/send/list/dismiss exactly like a hosted one;
+   *  absent keeps the historical one-per-process surface, with those actions
+   *  structurally missing from the `agents` tool, the `agents.*` sandbox
+   *  namespace and the prompt ladder. */
+  private teamDeps: TeamToolDeps | null = null;
+  /** Peer transport, injected by the owning LocalAgentHost for a ROOT agent.
+   *  Present, this agent can list, ask, send and reply across the equal roots
+   *  of its virtual workspace; absent, `reply` does not exist and ask/send
+   *  reach subordinates only. A subordinate never gets one. */
+  private peersDeps: PeersToolDeps | null = null;
 
-  /** This session's delegation deps. `team` / `peers` are deliberately absent:
-   *  hiring and peer messaging need a cross-agent transport, and local agents
-   *  are one-per-process SQLite sessions with no daemon to route between them.
-   *  Absent deps → those actions are structurally missing from the `agents`
-   *  tool, from the `agents.*` sandbox namespace, and from the prompt ladder.
-   *  Hosted agents get the full surface. */
+  /** The host installs these right after construction — a subordinate roster
+   *  and a peer inbox both need the session's own broadcast, which does not
+   *  exist yet inside the constructor. */
+  setTeam(deps: TeamToolDeps): void {
+    this.teamDeps = deps;
+  }
+
+  setPeers(deps: PeersToolDeps): void {
+    this.peersDeps = deps;
+  }
+
   private agentsToolDeps(mode: WorkMode): AgentsToolDeps {
-    return { mode, fork: this.buildAgentsForkDeps(mode), budget: this.budget };
+    const fork = this.buildAgentsForkDeps();
+    const base: AgentsToolDeps = { mode, fork, budget: this.budget };
+    base.profile = () => agentsProfileContext(this.turnProfile, this.turnProfileInputs);
+    if (this.teamDeps) base.team = this.teamDeps;
+    if (this.peersDeps) base.peers = this.peersDeps;
+    return base;
   }
 
   /** The recent conversation handed to each spawned head as inherited context
    *  (core heads-support; capped to bound the head's LLM context). */
   private readInheritedContext(): SerializedMessage[] {
     return inheritedContextFromHistory(this.history);
-  }
-
-  /** Record head_split / head_merge in the durable run-event log — the same
-   *  rows the DO writes, so a fork's cost and productivity survive the
-   *  process. Broadcast-only was why local runs (every benchmark trial) left
-   *  no trace of a fork, and 4-of-5 empty forks had to be found by reading
-   *  trajectories by hand. The recorder streams every row it writes as a
-   *  `run-event`, so recording IS the fan-out; broadcasting a second copy put
-   *  the split through `kinu exec --json` twice and reached no other
-   *  reader — no CLI surface consumes a head phase as a broadcast.
-   *
-   *  `runId` is the run captured at fork DISPATCH (buildAgentsForkDeps'
-   *  onPhase factory), not read live: a fork on the interactive surface now
-   *  detaches the instant it spawns, so the calling turn can close ITS run —
-   *  nulling `this.currentRunId` — before 'split' fires and always before
-   *  'merge' does. Passing null explicitly (a closed run) is deliberate and
-   *  distinct from omitting it (fall back to whatever is live) — see
-   *  recordRunEvent. */
-  private emitHeadPhase(event: SplitPhaseEvent, runId: string | null): void {
-    this.recordRunEvent(headPhaseRunEvent(event), runId);
-  }
-
-  /** A fresh SessionWriter for an MCTS run — the SAME durable writer the DO
-   *  uses (core mcts-session): the messages table is the source of truth, so
-   *  a search resumed after a process exit reconstructs its branch ancestry
-   *  from the persisted rows instead of an in-memory mirror that died with
-   *  the previous process (B6 parity). */
-  private createMCTSSession(): SessionWriter {
-    return createDurableMctsSession(this.rt.storage.sql);
   }
 
   /** The shared background wrap (core background-tools) — the SAME wrapper
@@ -2486,9 +2570,8 @@ export class LocalAgentSession implements BackendHost {
     });
   }
 
-  /** Persist the exchange (user, any mid-turn steers, assistant); returns the
-   *  assistant message id (the turn id the outcome ledger keys on), or null
-   *  when persistence is disabled.
+  /** Persist the exchange (user, any mid-turn steers, assistant) and return the
+   *  assistant message id (the turn id the outcome ledger keys on).
    *
    *  `turnId` is the identity of the row that OPENS the exchange: derived from
    *  the producer's name for the fact when the harness enqueued this turn, a
@@ -2508,8 +2591,7 @@ export class LocalAgentSession implements BackendHost {
     steeredTexts: ReadonlyArray<string>,
     assistantText: string,
     metadata?: JsonObject,
-  ): string | null {
-    if (!this.persistMessagesEnabled) return null;
+  ): string {
     const assistantId = crypto.randomUUID();
     const stamp = metadata === undefined ? null : JSON.stringify(stampTurnAuthor(metadata));
     void this.rt.storage.sql`INSERT OR IGNORE INTO messages (id, session_id, role, content, metadata)
@@ -2523,7 +2605,35 @@ export class LocalAgentSession implements BackendHost {
     }
     void this.rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content)
       VALUES (${assistantId}, ${this.sessionId}, ${parentId}, ${'assistant'}, ${assistantText})`;
+
     return assistantId;
+  }
+  private localRouteLlm(resolution: ModelRouteResolution): LLM {
+    const model = this.modelResolver
+      ? this.modelResolver.resolveModel(resolution.model)
+      : this.defaultModel(`${resolution.source} model lane`);
+    return {
+      async *stream() { yield ""; },
+      complete: async (prompt: string): Promise<string> => {
+        const providerOptions = reasoningEffortOptions(
+          resolution.reasoningEffort,
+          parseModelSpec(resolution.model).provider,
+        );
+        const request: Parameters<typeof generateText>[0] = { model, prompt };
+        if (providerOptions) request.providerOptions = providerOptions;
+        const result = await generateText(request);
+        const report = {
+          source: resolution.source,
+          spec: resolution.model,
+          usage: normalizeUsage(result.usage),
+        };
+        const modelId = result.response?.modelId;
+        this.modelCallSink(modelId
+          ? { ...report, modelId }
+          : report);
+        return result.text.trim();
+      },
+    };
   }
 
   /**
@@ -2555,9 +2665,8 @@ export class LocalAgentSession implements BackendHost {
       if (row.role !== 'user' && row.role !== 'assistant') continue;
       if (omitted > 0) { omitted++; continue; }
       const cost = estimateTokens(row.content.length);
-      // The newest message is always restored: a single message larger than
-      // the whole window is the compaction ladder's problem, not a reason to
-      // open the session with an empty transcript.
+      // The newest message is always restored. A single over-window message
+      // belongs to the compaction ladder, not an empty-history fallback.
       if (restored.length > 0 && tokens + cost > budget) { omitted++; continue; }
       tokens += cost;
       restored.push({ role: row.role, content: row.content });
@@ -2565,6 +2674,43 @@ export class LocalAgentSession implements BackendHost {
 
     if (omitted > 0) this.history.push(olderHistoryNotice(omitted, this.sessionId));
     this.history.push(...restored.reverse());
+  }
+
+  private bootstrapProfileEnvelope(): ProfileCatalogEnvelope {
+    const defaultModel = this.normalizeModelSpec(this.config.getModel());
+    const catalog: ProfileCatalog = {
+      roles: BUILTIN_PROFILE_CATALOG.roles,
+      tiers: { default: { model: defaultModel } },
+    };
+    return {
+      authority: { kind: 'local' },
+      version: 0,
+      digest: profileCatalogDigest(catalog),
+      catalog,
+    };
+  }
+
+  private async providerSnapshot(): Promise<ProviderCatalogSnapshot> {
+    const configured = this.normalizeModelSpec(this.config.getModel());
+    const listed = this.modelResolver
+      ? (await this.modelResolver.listModels()).models
+          .map((model) => `${model.provider}/${model.id}`)
+      : [this.fallbackModelSpec];
+    const availableModels = [...new Set([configured, ...listed])].sort();
+    return {
+      revision: sha256Hex(availableModels.join('\n')),
+      availableModels,
+    };
+  }
+
+  private async profileInputs(): Promise<{
+    envelope: ProfileCatalogEnvelope;
+    provider: ProviderCatalogSnapshot;
+  }> {
+    return loadProfileAuthorityInputs({
+      envelope: this.profileAuthority,
+      provider: () => this.providerSnapshot(),
+    });
   }
 
   private normalizeModelSpec(spec: string | null): string {
@@ -2575,7 +2721,7 @@ export class LocalAgentSession implements BackendHost {
   }
 
   private effectiveModelSpec(): string {
-    return this.cachedModelSpec ?? this.fallbackModelSpec;
+    return this.turnProfile?.tier.model ?? this.cachedModelSpec ?? this.fallbackModelSpec;
   }
   /** The session's model before any per-turn claim: the static model, or
    *  null on resolver sessions until a spec resolves. `what` names the use so
@@ -2607,7 +2753,7 @@ export class LocalAgentSession implements BackendHost {
   }
 
   private ensureModelState(): LanguageModel {
-    const spec = this.normalizeModelSpec(this.config.getModel());
+    const spec = this.turnProfile?.tier.model ?? this.normalizeModelSpec(this.config.getModel());
     if (this.cachedModel && this.cachedModelSpec === spec) return this.cachedModel;
     const model = this.modelResolver ? this.modelResolver.resolveModel(spec) : this.defaultModel("this static-model session");
     this.cachedModel = model;
@@ -2632,22 +2778,20 @@ export class LocalAgentSession implements BackendHost {
     // what prices the merge call this runtime makes. A later model switch rebuilds
     // the whole runtime, which is what keeps the pair honest.
     const spec = this.effectiveModelSpec();
-    // Branching heads — in-process runtime + controller (drives think strategy=heads).
+    // Branching heads — in-process runtime over an isolated ephemeral store.
     // The agent's VFS backs the shared findings scratch sibling heads write to.
     this._headRuntime = createCLIHeadRuntime({
       model: () => model,
       providerFamily: parseModelSpec(spec).provider,
       reportModelCall: (report) => this.modelCallSink({ ...report, spec }),
+      operations: this.modelOperations,
       parentRuntime: this.rt,
-      cwd: this.cwd,
       webSearch: this.getWebSearchProvider(),
       codemodeExtras: () => this.headCodemodeExtras(),
       grounding: this.buildHeadGrounding(),
       governor: () => this.budget,
       journal: () => this.headJournal,
     });
-    this.headController = new HeadController(this._headRuntime, this.headJournal);
-
     for (const mode of ['build'] as const) {
       const raw = buildActorTools({
         rt: this.rt,
@@ -2680,7 +2824,11 @@ export class LocalAgentSession implements BackendHost {
           createMemoryCodemodeProvider(() => ({
             memory: this.rt.memory, facts: this.factsStore, sql: this.rt.storage.sql,
           })),
-          createTasksCodemodeProvider(this.taskList, this.config),
+          createTasksCodemodeProvider(
+            this.taskList,
+            this.config,
+            () => this.turnProfileInputs?.envelope ?? null,
+          ),
           // `release.*` — left the native surface for codemode-only reach
           // (tools/release-codemode.ts); deps read live so a rebind lands
           // without rebuilding this toolset.
@@ -2694,6 +2842,7 @@ export class LocalAgentSession implements BackendHost {
         }),
         codemodeLoader: { __cli: true },
         agents: this.agentsToolDeps(mode),
+        roleAuthority: () => this.turnProfileInputs?.envelope ?? null,
         facts: this.factsStore,
         webSearch: this.getWebSearchProvider(),
       });

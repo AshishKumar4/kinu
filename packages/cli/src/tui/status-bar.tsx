@@ -1,21 +1,12 @@
-/**
- * Status bar — sits at the top of the TUI, shows agent identity and stats.
- *
- * Segment discipline, widest to narrowest terminal: the identity anchors left
- * (brand, workspace, mode — the mode never silently clips away, the name
- * does), the model control degrades whole — hint, then bare name, then gone —
- * and the middle segments earn their place by liveness — a running branch first,
- * then context burn, effort, evolve mode, tool count — dropping whole from
- * the right as width runs out.
- */
+import { useTerminalDimensions } from '@opentui/react';
+import type { ReasoningEffort, ResolvedTurnProfile } from '@kinu.run/core';
 
 import type { AgentClientMode } from '../agent-client';
-import type { ReasoningEffort } from '@kinu.run/core';
-import { useTerminalDimensions } from '@opentui/react';
 import { VERSION } from '../display';
+import { useKeybindingRegistry } from './actions';
 import { formatContextUsage, modelDisplayName } from './context-status';
 import { clipText } from './format';
-import { tuiColors } from './theme';
+import { useTuiTheme } from './theme';
 
 interface Props {
   name: string;
@@ -29,15 +20,16 @@ interface Props {
   autoEvolve?: boolean;
   contextTokens?: number;
   contextWindow?: number;
-  /** Steer-as-Branch runs in flight — the split progress segment. */
   branchCount?: number;
+  profile?: ResolvedTurnProfile;
 }
 
-/** Brand prefix and the separator that points at what follows it. */
 const IDENTITY_PREFIX = 'kinu ❯ ';
 
-export function StatusBar({ name, mode, model, reasoningEffort, onModelSelect, connected, scaffoldVersion, toolCount, autoEvolve, contextTokens = 0, contextWindow, branchCount = 0 }: Props) {
+export function StatusBar({ name, mode, model, reasoningEffort, onModelSelect, connected, scaffoldVersion, toolCount, autoEvolve, contextTokens = 0, contextWindow, branchCount = 0, profile }: Props) {
   const { width } = useTerminalDimensions();
+  const { colors } = useTuiTheme();
+  const keybindings = useKeybindingRegistry();
   const innerWidth = Math.max(0, width - 4);
   const connection = connected ? '●' : '○';
   const compactVersionTail = ` cli ${VERSION} ${connection}`;
@@ -47,9 +39,6 @@ export function StatusBar({ name, mode, model, reasoningEffort, onModelSelect, c
       ? compactVersionTail
       : ` ${connection}`;
   const available = Math.max(0, innerWidth - tail.length);
-
-  // Below 32 available cells, identity is the only content that competes with
-  // the connection marker. Wider rows allocate a stable share to identity.
   const identityBudget = Math.min(44, available < 32 ? available : Math.ceil(available * 0.42));
   const versionSuffix = scaffoldVersion !== undefined ? ` v${scaffoldVersion}` : '';
   let identityPrefix = IDENTITY_PREFIX;
@@ -74,29 +63,32 @@ export function StatusBar({ name, mode, model, reasoningEffort, onModelSelect, c
     identityName = clipText(name, nameBudget);
   }
   const identityWidth = identityPrefix.length + identityName.length + identityTail.length;
-
-  // The model control reserves its ideal width up front; metadata spends only
-  // what the identity and the control leave behind.
   const modelName = modelDisplayName(model) || 'model';
-  const modelFull = ` ${modelName} [Ctrl+P]`;
+  const modelHint = keybindings.hint('model.open');
+  const modelFull = ` ${modelName}${modelHint === '' ? '' : ` [${modelHint}]`}`;
   const modelBare = ` ${modelName}`;
   const modelIdeal = Math.min(34, modelFull.length);
-  const optionalSegments = [
+  const optionalSegments: Array<{ readonly kind: 'branch' | 'profile' | 'metadata'; readonly text: string; readonly color: string }> = [
     ...(branchCount > 0
       ? [{
+          kind: 'branch' as const,
           text: branchCount > 1 ? `  ⎇ ${branchCount} branches` : '  ⎇ branch',
-          color: tuiColors.amber,
+          color: colors.intent.warning,
         }]
       : []),
-    { text: `  ${formatContextUsage(model, contextTokens, contextWindow)}`, color: tuiColors.muted },
-    { text: `  effort ${reasoningEffort}`, color: tuiColors.muted },
+    ...(profile !== undefined
+      ? [{ kind: 'profile' as const, text: `  ${profile.role.label} · ${profile.tier.id}`, color: colors.intent.accent }]
+      : []),
+    { kind: 'metadata', text: `  ${formatContextUsage(model, contextTokens, contextWindow)}`, color: colors.text.muted },
+    { kind: 'metadata', text: `  effort ${reasoningEffort}`, color: colors.text.muted },
     ...(autoEvolve !== undefined
       ? [{
+          kind: 'metadata' as const,
           text: `  ${autoEvolve ? 'evolve auto' : 'evolve off'}`,
-          color: autoEvolve ? tuiColors.accent : tuiColors.muted,
+          color: autoEvolve ? colors.intent.accent : colors.text.muted,
         }]
       : []),
-    ...(toolCount !== undefined ? [{ text: `  ${toolCount} tools`, color: tuiColors.muted }] : []),
+    ...(toolCount !== undefined ? [{ kind: 'metadata' as const, text: `  ${toolCount} tools`, color: colors.text.muted }] : []),
   ];
   const metadataBudget = Math.max(0, available - identityWidth - modelIdeal);
   const metadata: typeof optionalSegments = [];
@@ -112,19 +104,14 @@ export function StatusBar({ name, mode, model, reasoningEffort, onModelSelect, c
     : modelBudget >= modelBare.length
       ? modelBare
       : '';
-  const branchText = metadata.find((segment) => segment.color === tuiColors.amber)?.text ?? '';
-  const metadataText = metadata
-    .filter((segment) => segment.color !== tuiColors.amber)
-    .map((segment) => segment.text)
-    .join('');
   return (
     <box
       style={{
         height: 3,
         border: true,
         borderStyle: 'single',
-        borderColor: tuiColors.border,
-        backgroundColor: tuiColors.panelStrong,
+        borderColor: colors.border.default,
+        backgroundColor: colors.background.surface,
         paddingLeft: 1,
         paddingRight: 1,
         flexDirection: 'row',
@@ -133,21 +120,20 @@ export function StatusBar({ name, mode, model, reasoningEffort, onModelSelect, c
       }}
     >
       <text>
-        <strong fg={tuiColors.accent}>{identityPrefix}</strong>
-        <strong fg={tuiColors.textStrong}>{identityName}</strong>
-        <span fg={tuiColors.muted}>{identityTail}</span>
+        <strong fg={colors.intent.accent}>{identityPrefix}</strong>
+        <strong fg={colors.text.strong}>{identityName}</strong>
+        <span fg={colors.text.muted}>{identityTail}</span>
       </text>
       <box style={{ flexDirection: 'row', alignItems: 'center' }}>
         {modelShown !== '' && (
           <box onMouseDown={onModelSelect} style={{ flexDirection: 'row' }}>
-            <text><span fg={tuiColors.text}>{modelShown}</span></text>
+            <text><span fg={colors.text.primary}>{modelShown}</span></text>
           </box>
         )}
         <text>
-          <span fg={tuiColors.amber}>{branchText}</span>
-          <span fg={tuiColors.muted}>{metadataText}</span>
-          <span fg={tuiColors.muted}>{tail.slice(0, -1)}</span>
-          <span fg={connected ? tuiColors.green : tuiColors.red}>{connection}</span>
+          {metadata.map((segment) => <span key={`${segment.kind}-${segment.text}`} fg={segment.color}>{segment.text}</span>)}
+          <span fg={colors.text.muted}>{tail.slice(0, -1)}</span>
+          <span fg={connected ? colors.intent.success : colors.intent.danger}>{connection}</span>
         </text>
       </box>
     </box>

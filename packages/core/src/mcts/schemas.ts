@@ -36,6 +36,10 @@ export const SEARCH_NODES_POST_RELEASE_COLUMNS = {
   code_used: 'TEXT',
   code_language: 'TEXT',
   root_id: 'TEXT',
+  /** Bounded per-branch evaluation facts (grounding, judge attempted/used,
+   *  score components) as JSON. Null for a node that was never evaluated —
+   *  the root, or a swarm node written by strategy/swarm-run.ts. */
+  evaluation_json: 'TEXT',
 } satisfies Readonly<Record<string, string>>;
 
 export function initSearchTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
@@ -56,6 +60,7 @@ export function initSearchTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
                        CHECK(status IN ('open','terminal','failed','pruned')),
       msg_id           TEXT,
       branch_agent_key TEXT,
+      evaluation_json  TEXT,
       created_at       INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
     )
   `);

@@ -642,63 +642,68 @@ describe('isParseFailure', () => {
   });
 });
 
-describe('a non-responding judge cannot hang the search', () => {
-  // A judge whose provider call accepts the request and then never answers —
-  // the promise stays pending forever. This is what froze a real production
-  // MCTS search: the engine awaits the judge ensemble inside Promise.all, so a
-  // single stuck call stalled the whole evaluation, and MCTS runs that inside a
-  // durable background fiber with no wall clock, so the search hung on its first
-  // expansion and its tree never grew again (read by the operator as "MCTS
-  // never goes live").
-  const hungJudge: LLM = {
-    async *stream() { yield ''; },
-    complete() { return new Promise<string>(() => { /* never settles */ }); },
-  };
+describe('a judge call carries no elapsed deadline — the evaluator joins it', () => {
+  // The old contract dropped a judge that had not answered inside a wall-clock
+  // envelope, which silently shrank the ensemble on slow providers. Judge
+  // calls now carry NO elapsed bound: each sample is awaited to settlement,
+  // however long the provider takes. What bounds spend is the CALL COUNT
+  // (judgeCallBudget), not the clock.
 
-  // Rejects (→ a failing test with a clear message) if `p` has not settled in
-  // `ms`, so the "without the fix it hangs" case fails fast instead of waiting
-  // out bun's default timeout. The timer is always cleared.
-  async function settlesWithin<T>(p: Promise<T>, ms: number): Promise<T> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const guard = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`evaluator did not settle within ${ms}ms`)), ms);
-    });
-    try { return await Promise.race([p, guard]); } finally { if (timer) clearTimeout(timer); }
+  /** A judge whose completion resolves only when `gate` is released. */
+  function gatedJudge(gate: Promise<void>, score: string): LLM & { calls: () => number } {
+    let calls = 0;
+    return {
+      async *stream() { yield ''; },
+      async complete() { calls++; await gate; return score; },
+      calls: () => calls,
+    };
   }
 
-  test('prose-only branch drops the dead judge and settles instead of hanging', async () => {
-    const result = await settlesWithin(
-      evaluateWithMultiModelJudging({
-        task: 'compare two approaches',
-        trajectory: 'a thoughtful prose-only comparison',
-        executor: exec(),
-        judge: hungJudge,
-        explorer: hungJudge,
-        judgeCallTimeoutMs: 50,
-      }),
-      3000,
-    );
-    expect(result.grounding).toBe('judge');
-    expect(result.judgeSamplesUsed).toBe(0);
-    expect(result.score).toBe(0);
+  test('the evaluation stays pending while the judge works, then counts its answer', async () => {
+    const gate = Promise.withResolvers<void>();
+    const judge = gatedJudge(gate.promise, '{"score": 0.9, "rationale": "late but real"}');
+    const evaluation = evaluateWithMultiModelJudging({
+      task: 'compare two approaches',
+      trajectory: 'a thoughtful prose-only comparison',
+      executor: exec(),
+      judge,
+      explorer: judge,
+      judgeSamples: 1,
+    });
+
+    // Still pending while the provider holds its answer back — no timer
+    // dropped the sample out from under the ensemble.
+    let settled = false;
+    void evaluation.then(() => { settled = true; });
+    expect(judge.calls()).toBe(1);
+    expect(settled).toBe(false);
+
+    gate.resolve();
+    const result = await evaluation;
+    expect(result.judgeSamplesUsed).toBe(1);
+    expect(result.score).toBeGreaterThan(0);   // the late answer WAS the score
   });
 
-  test('passing code still grounds to the pass floor when the judge never answers', async () => {
-    const result = await settlesWithin(
-      evaluateWithMultiModelJudging({
-        task: 'return 42',
-        trajectory: withCode('here is the code', 'const x = 42;'),
-        executor: exec(),
-        judge: hungJudge,
-        explorer: hungJudge,
-        judgeCallTimeoutMs: 50,
-      }),
-      3000,
-    );
-    expect(result.grounding).toBe('execution');
-    expect(result.execution?.passed).toBe(true);
-    expect(result.judgeSamplesUsed).toBe(0);
-    expect(result.score).toBeGreaterThanOrEqual(0.6); // PASS_FLOOR — execution carries it
+  test('every sample of the ensemble is awaited before aggregation', async () => {
+    const gate = Promise.withResolvers<void>();
+    const judge = gatedJudge(gate.promise, '{"score": 0.5}');
+    const evaluation = evaluateWithMultiModelJudging({
+      task: 't', trajectory: 'prose only',
+      executor: exec(), judge, explorer: judge,
+      judgeSamples: 3,
+    });
+    expect(judge.calls()).toBe(3);
+    gate.resolve();
+    const result = await evaluation;
+    expect(result.judgeSamplesAttempted).toBe(3);
+    expect(result.judgeSamplesUsed).toBe(3);
+  });
+
+  test('no timeout knob remains on the options or the module', () => {
+    type Options = Parameters<typeof evaluateWithMultiModelJudging>[0];
+    type HasJudgeTimeout = 'judgeCallTimeoutMs' extends keyof Options ? true : false;
+    const hasJudgeTimeout: HasJudgeTimeout = false;
+    expect(hasJudgeTimeout).toBe(false);
   });
 });
 

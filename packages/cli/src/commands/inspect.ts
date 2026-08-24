@@ -75,7 +75,8 @@ const SearchNodeSchema: v.GenericSchema<SearchNode> = v.object({
   code_used: v.nullable(v.string()), code_language: v.nullable(v.string()),
   visits: v.number(), value: v.number(), depth: v.number(),
   status: v.picklist(['open', 'terminal', 'failed', 'pruned']),
-  msg_id: v.nullable(v.string()), branch_agent_key: v.nullable(v.string()), created_at: v.number(),
+  msg_id: v.nullable(v.string()), branch_agent_key: v.nullable(v.string()),
+  evaluation_json: v.nullable(v.string()), created_at: v.number(),
 });
 interface ExecutorOutput {
   stdout?: string;

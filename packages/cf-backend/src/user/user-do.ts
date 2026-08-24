@@ -48,9 +48,14 @@ import {
   createExperienceLibrary,
   createReleaseStore,
   releaseSqlFromExec,
+  BUILTIN_PROFILE_CATALOG,
+  profileCatalogDigest,
+  validateProfileCatalog,
   type Credential,
   type ExperienceEntry,
   type ExperienceKind,
+  type ProfileCatalog,
+  type ProfileCatalogEnvelope,
   type PublishableCandidate,
   type ReleaseBoard,
   type ReleaseApproval,
@@ -86,9 +91,10 @@ import {
   toKinuError,
 } from '@kinu.run/core/obs';
 import * as v from 'valibot';
-import { initUserTables } from './schema';
+import { initUserTables, PROFILE_CATALOG_CONFIG_KEY } from './schema';
 import { bindAgentSql } from '../runtime';
 import {
+  CapabilityDeniedError,
   mintWorkspaceCapability,
   ownerCaller,
   requireTier,
@@ -150,6 +156,7 @@ const DEVICE_TOKEN_IDLE_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days
 const DEVICE_CONNECT_TICKET_TTL_MS = 60 * 1000;
 const CLI_AGENT_CONNECT_TICKET_TTL_MS = 60 * 1000;
 const CLI_AGENT_WEBSOCKET_CAPABILITY = 'agent.websocket' as const;
+
 /** Wire bound for the roster listing. A page past this size answers with the
  *  newest rows plus the whole-roster total — never a silent truncation.
  *  Numerically equal to core status.ts's MAX_HISTORY_LIMIT by coincidence
@@ -219,11 +226,44 @@ export interface WorkspaceEntry {
 }
 
 /** One bounded page of the workspace roster. `total` is the whole active
- *  roster, so `entries.length < total` states the remainder instead of
- *  silently dropping it. */
+ *  roster; `nextCursor` walks to the following page and is null past the end,
+ *  so the roster's tail is reachable instead of silently dropped. */
 export interface WorkspaceList {
   entries: WorkspaceEntry[];
   total: number;
+  nextCursor: string | null;
+}
+
+/** Outcome of a compare-and-swap catalog write. A typed domain result rather
+ *  than an exception because it crosses the DO RPC boundary, where error
+ *  classes do not survive and callers must branch on status codes anyway. */
+export type ProfileCatalogWriteResult =
+  | { readonly ok: true; readonly envelope: ProfileCatalogEnvelope }
+  | { readonly ok: false; readonly kind: 'conflict'; readonly currentVersion: number; readonly currentDigest: string }
+  | { readonly ok: false; readonly kind: 'malformed'; readonly reason: string };
+
+/** The one persisted account catalog row. It is parsed before profile code
+ * trusts its SQL values, so a damaged row cannot become a plausible default. */
+interface StoredProfileCatalogRow {
+  value: string;
+  version: number;
+}
+
+/** The catalog and its monotonic CAS version under one account's authority. */
+interface ProfileCatalogState {
+  version: number;
+  catalog: ProfileCatalog;
+}
+
+const StoredProfileCatalogRowSchema: v.GenericSchema<StoredProfileCatalogRow> = v.strictObject({
+  value: v.string(),
+  version: v.pipe(v.number(), v.integer(), v.minValue(0)),
+});
+
+/** A page request over the roster. `limit` clamps to [1, WORKSPACE_LIST_LIMIT]. */
+export interface WorkspaceListPageQuery {
+  cursor?: string | null;
+  limit?: number;
 }
 
 export interface CredentialSummary {
@@ -283,6 +323,34 @@ function cleanCliTokenLabel(label?: string): string {
 function parseCapabilityList(value: string): string[] {
   const parsed = v.safeParse(v.array(v.string()), tolerate(() => JSON.parse(value), 'malformed-input'));
   return parsed.success ? parsed.output : [];
+}
+
+/** The roster cursor is the ordering key of a page's last row — `(last_visited,
+ *  name)` under the listing's `last_visited DESC, name ASC` order — URL-encoded
+ *  JSON so it survives query strings without a second encoding scheme. */
+function encodeRosterCursor(entry: Pick<WorkspaceEntry, 'name' | 'lastVisited'>): string {
+  return encodeURIComponent(JSON.stringify({ v: entry.lastVisited, n: entry.name }));
+}
+
+const RosterCursorSchema = v.strictObject({ v: v.number(), n: v.string() });
+
+function decodeRosterCursor(cursor?: string | null): { v: number; n: string } | null {
+  if (cursor == null || cursor === '') return null;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(decodeURIComponent(cursor));
+  } catch (e) {
+    throw new Error('Invalid workspace roster cursor; start from page one.', { cause: e });
+  }
+  const parsed = v.safeParse(RosterCursorSchema, raw);
+  if (!parsed.success) throw new Error('Invalid workspace roster cursor; start from page one.');
+  return parsed.output;
+}
+
+function clampRosterLimit(limit?: number): number {
+  if (limit === undefined) return WORKSPACE_LIST_LIMIT;
+  if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('Workspace roster limit must be a positive integer.');
+  return Math.min(limit, WORKSPACE_LIST_LIMIT);
 }
 
 export class UserDO extends Agent<Env> {
@@ -412,12 +480,22 @@ export class UserDO extends Agent<Env> {
 
   // ── Workspace registry ─────────────────────────────────────────────
 
-  async listWorkspaces(caller: UserCaller): Promise<WorkspaceList> {
+  async listWorkspaces(caller: UserCaller, page?: WorkspaceListPageQuery): Promise<WorkspaceList> {
     await this.requireTier(caller, 'workspaces.read');
-    const entries = this.sqlx<{ name: string; display_name: string; created_at: number; last_visited: number; archived_at: number | null }>(
-      `SELECT name, display_name, created_at, last_visited, archived_at
-       FROM user_workspaces WHERE archived_at IS NULL ORDER BY last_visited DESC LIMIT ${WORKSPACE_LIST_LIMIT}`,
-    ).map((r) => ({
+    const limit = clampRosterLimit(page?.limit);
+    const cursor = decodeRosterCursor(page?.cursor);
+    const rows = this.sqlx<{ name: string; display_name: string; created_at: number; last_visited: number; archived_at: number | null }>(
+      cursor
+        ? `SELECT name, display_name, created_at, last_visited, archived_at
+           FROM user_workspaces
+           WHERE archived_at IS NULL AND (last_visited < ? OR (last_visited = ? AND name > ?))
+           ORDER BY last_visited DESC, name ASC LIMIT ${limit + 1}`
+        : `SELECT name, display_name, created_at, last_visited, archived_at
+           FROM user_workspaces WHERE archived_at IS NULL ORDER BY last_visited DESC, name ASC LIMIT ${limit + 1}`,
+      ...(cursor ? [cursor.v, cursor.v, cursor.n] : []),
+    );
+    const hasMore = rows.length > limit;
+    const entries = rows.slice(0, limit).map((r) => ({
       name: r.name,
       displayName: r.display_name,
       createdAt: r.created_at,
@@ -427,7 +505,8 @@ export class UserDO extends Agent<Env> {
     const { n } = this.sqlx<{ n: number }>(
       `SELECT COUNT(*) AS n FROM user_workspaces WHERE archived_at IS NULL`,
     )[0];
-    return { entries, total: n };
+    const last = entries.at(-1);
+    return { entries, total: n, nextCursor: hasMore && last ? encodeRosterCursor(last) : null };
   }
 
   /** Complete enumeration of the active roster for server-side fans (credential
@@ -1904,12 +1983,18 @@ export class UserDO extends Agent<Env> {
 
   async getConfig(caller: UserCaller, key: string): Promise<string | null> {
     await this.requireTier(caller, 'config');
+    if (key === PROFILE_CATALOG_CONFIG_KEY) {
+      throw new Error('profile_catalog has a dedicated typed CAS route.');
+    }
     const row = this.sqlx<{ value: string }>(`SELECT value FROM user_config WHERE key = ?`, key)[0];
     return row?.value ?? null;
   }
 
   async setConfig(caller: UserCaller, key: string, value: string): Promise<void> {
     await this.requireTier(caller, 'config');
+    if (key === PROFILE_CATALOG_CONFIG_KEY) {
+      throw new Error('profile_catalog has a dedicated typed CAS route.');
+    }
     this.sqlx(
       `INSERT INTO user_config (key, value, updated_at) VALUES (?, ?, ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
@@ -1919,10 +2004,130 @@ export class UserDO extends Agent<Env> {
 
   async listConfig(caller: UserCaller): Promise<Record<string, string>> {
     await this.requireTier(caller, 'config');
-    const rows = this.sqlx<{ key: string; value: string }>(`SELECT key, value FROM user_config`);
+    const rows = this.sqlx<{ key: string; value: string }>(
+      `SELECT key, value FROM user_config WHERE key <> ?`, PROFILE_CATALOG_CONFIG_KEY,
+    );
     const out: Record<string, string> = {};
     for (const r of rows) out[r.key] = r.value;
     return out;
+  }
+
+  // ── Profile catalog (the account authority over roles + tiers) ─────
+
+  /**
+   * The owner's profile-catalog read. Owner-session only: the account's
+   * role/tier configuration IS authority, so unlike tier-gated capabilities
+   * even a `full`-tier workspace is refused here — until the agent runtime
+   * integration adds its narrow read surface, workspace capability has no
+   * reach into the catalog plane.
+   */
+  private async requireOwnerSession(caller: UserCaller): Promise<void> {
+    const resolved = await this.requireTier(caller, 'config');
+    if (resolved.kind !== 'owner_session') {
+      throw new CapabilityDeniedError(
+        'The profile catalog is owner-only. Workspaces cannot read or write the account\'s roles and tiers.',
+      );
+    }
+  }
+
+  /** Parse the catalog value at its storage boundary. Corruption is an account
+   *  configuration error, not permission to substitute different authority. */
+  private parseStoredProfileCatalog(value: string): ProfileCatalog {
+    let json: JsonValue;
+    try {
+      json = decodeJsonValue({ value: JSON.parse(value) });
+    } catch (error) {
+      throw new Error(
+        'The stored account profile catalog cannot be decoded as JSON.',
+        { cause: error },
+      );
+    }
+    try {
+      return validateProfileCatalog(json);
+    } catch (error) {
+      throw new Error(
+        'The stored account profile catalog violates the profile catalog contract.',
+        { cause: error },
+      );
+    }
+  }
+
+  /** The envelope for a version + catalog pair under this account's authority. */
+  private profileCatalogEnvelope(version: number, catalog: ProfileCatalog): ProfileCatalogEnvelope {
+    return {
+      authority: { kind: 'account', accountId: this.ctx.id.name ?? this.ctx.id.toString() },
+      version,
+      digest: profileCatalogDigest(catalog),
+      catalog,
+    };
+  }
+
+  /** Current CAS state. A missing row starts at 0. Stored state is parsed
+   *  before use, so malformed configuration fails rather than changing roles. */
+  private readProfileCatalogState(): ProfileCatalogState {
+    const rawRow = this.sqlx(
+      `SELECT value, version FROM user_config WHERE key = ?`, PROFILE_CATALOG_CONFIG_KEY,
+    )[0];
+    if (!rawRow) return { version: 0, catalog: BUILTIN_PROFILE_CATALOG };
+
+    let row: StoredProfileCatalogRow;
+    try {
+      row = v.parse(StoredProfileCatalogRowSchema, rawRow);
+    } catch (error) {
+      throw new Error('The stored account profile catalog state is malformed.', { cause: error });
+    }
+    return { version: row.version, catalog: this.parseStoredProfileCatalog(row.value) };
+  }
+
+  async getProfileCatalog(caller: UserCaller): Promise<ProfileCatalogEnvelope> {
+    await this.requireOwnerSession(caller);
+    const current = this.readProfileCatalogState();
+    return this.profileCatalogEnvelope(current.version, current.catalog);
+  }
+
+  /** Profile authority exposed to the workspace that resolves the next turn.
+   * Shared workspaces may read it, but only an owner session may mutate it. */
+  async getWorkspaceProfileCatalog(caller: UserCaller): Promise<ProfileCatalogEnvelope> {
+    await this.requireTier(caller, 'profile.resolve');
+    const current = this.readProfileCatalogState();
+    return this.profileCatalogEnvelope(current.version, current.catalog);
+  }
+
+  /**
+   * Compare-and-swap write of the account catalog: the caller names the
+   * version it read, and a mismatch refuses with the current state rather
+   * than overwriting a concurrent change. Validation runs before any write;
+   * the read-check-write itself contains no await, so within this DO nothing
+   * can interleave and every accepted write increments the version by one.
+   */
+  async putProfileCatalog(caller: UserCaller, catalog: JsonValue, expectedVersion: number): Promise<ProfileCatalogWriteResult> {
+    await this.requireOwnerSession(caller);
+    if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0) {
+      return { ok: false, kind: 'malformed', reason: 'expectedVersion must be a non-negative integer.' };
+    }
+    let parsed: ProfileCatalog;
+    try {
+      parsed = validateProfileCatalog(catalog);
+    } catch (e) {
+      return { ok: false, kind: 'malformed', reason: e instanceof Error ? e.message : String(e) };
+    }
+    // No await from here to the write: DO input gates make the CAS atomic.
+    const current = this.readProfileCatalogState();
+    if (current.version !== expectedVersion) {
+      return {
+        ok: false,
+        kind: 'conflict',
+        currentVersion: current.version,
+        currentDigest: profileCatalogDigest(current.catalog),
+      };
+    }
+    const nextVersion = current.version + 1;
+    this.sqlx(
+      `INSERT INTO user_config (key, value, updated_at, version) VALUES (?, ?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, version = excluded.version`,
+      PROFILE_CATALOG_CONFIG_KEY, JSON.stringify(parsed), Date.now(), nextVersion,
+    );
+    return { ok: true, envelope: this.profileCatalogEnvelope(nextVersion, parsed) };
   }
 
   // ── MCP servers ────────────────────────────────────────────────────

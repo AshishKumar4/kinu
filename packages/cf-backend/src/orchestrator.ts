@@ -32,7 +32,7 @@ import {
   // The whole workspace's spend, grouped by producer, with its own coverage
   // fraction — `summarizeSteps` above is this agent's own turns only.
   workspaceSpend,
-  normalizeUsage,
+  normalizeUsage, beginModelOperation,
   initWorkspaceSchema,
   BUILTIN_TOOLS,
   BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS,
@@ -159,9 +159,8 @@ import {
   getAlwaysActiveSkills, getEvolutionConfig, getMctsConfig, getReasoningEffort,
   getShellApprovalMode, getShellApprovalGrants, revokeShellApprovalGrants,
   setAlwaysActiveSkills, setEvolutionConfig,
-  getModelRoles, setModelRoles,
   setMctsConfig, setReasoningEffort, setShellApprovalMode,
-  type EvolutionConfigView, type MctsConfigView, type ModelRolesView, type RoutedSpendSource,
+  type EvolutionConfigView, type MctsConfigView,
   getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
   PlanReviewStore, formatPlanWithLineNumbers,
   planReviewAwaitingDecision,
@@ -647,16 +646,16 @@ export class OrchestratorAgent extends ActorAgent {
         const { stub, caller } = await this.userHub();
         return teamPeers(this.name, await stub.listActiveWorkspaces(caller));
       },
-      ask: async ({ agent, topic, message, timeoutMs, mode }) => {
+      ask: async ({ agent, topic, message, mode, signal }) => {
         await requirePeer(agent);
-        return this.peerHub.ask({ agent, userId: requireOwner(), topic, message, timeoutMs, mode });
+        return this.peerHub.ask({ agent, userId: requireOwner(), topic, message, mode, signal });
       },
       send: async ({ agent, topic, message, mode }) => {
         await requirePeer(agent);
         return this.peerHub.send({ agent, userId: requireOwner(), topic, message, mode });
       },
       reply: async ({ eventId, message }) => this.peerHub.reply({ eventId, message }),
-      spawnWorkspace: async ({ name, purpose, message, timeoutMs, mode }): Promise<PeerSpawnOutcome> => {
+      spawnWorkspace: async ({ name, purpose, message, mode, signal }): Promise<PeerSpawnOutcome> => {
         const userId = requireOwner();
         const { stub: userDO, caller } = await this.userHub();
         let agentName = name;
@@ -668,7 +667,7 @@ export class OrchestratorAgent extends ActorAgent {
           created = true;
         }
         const outcome = await this.peerHub.ask({
-          agent: agentName, userId, topic: 'task', message, timeoutMs, mode,
+          agent: agentName, userId, topic: 'task', message, mode, signal,
         });
         return { agent: agentName, created, ...outcome };
       },
@@ -1097,23 +1096,38 @@ export class OrchestratorAgent extends ActorAgent {
    *  Reported as `fast` rather than `judge`: the review model is who serves it,
    *  but naming a workspace is mechanical work, and grouping it with the judges
    *  would make "what did grading cost" answer a question it did not ask. */
-  private async suggestWorkspaceTitle(mission: string): Promise<string | null> {
-    const result = await generateText({
-      model: await this.getModelForReview(),
-      system: WORKSPACE_TITLE_SYSTEM_PROMPT,
-      prompt: workspaceTitlePrompt(mission),
-      // No output cap: reasoning models spend their budget thinking before the
-      // JSON, and a cap starves them into empty text.
-      ...effortFor('judge'),
-    });
+  protected async suggestWorkspaceTitle(mission: string): Promise<string | null> {
+    // The frame opens BEFORE the request, so a call that never returns leaves
+    // a start row naming the naming pass rather than nothing at all.
+    const operation = beginModelOperation(
+      { source: 'fast', operations: this.modelOperations },
+      'complete',
+    );
+    let result;
+    try {
+      result = await generateText({
+        model: await this.getModelForReview(),
+        system: WORKSPACE_TITLE_SYSTEM_PROMPT,
+        prompt: workspaceTitlePrompt(mission),
+        // No output cap: reasoning models spend their budget thinking before the
+        // JSON, and a cap starves them into empty text.
+        ...effortFor('judge'),
+      });
+    } catch (err) {
+      operation.failed({ cause: err });
+      throw err;
+    }
     // No `spec`: `getModelForReview` resolves the review model behind its own
     // cache and hands back a `LanguageModel`, so this call site genuinely does
     // not know which spec served it, and re-running the selection to find out
     // would be a second resolution that could disagree with the first. The
     // provider's own `modelId` identifies the model; `usd` therefore stays
-    // absent, which already means unpriced rather than free.
+    // absent, which already means unpriced rather than free. The OPERATION
+    // closes here too — completed before the parse, like every seam that bills
+    // first and judges the answer after.
     const modelId = result.response?.modelId;
     const usage = normalizeUsage(result.usage);
+    operation.completed({ usage, modelId });
     this.reportModelCall(modelId ? { source: 'fast', usage, modelId } : { source: 'fast', usage });
     return parseWorkspaceTitle(result.text);
   }
@@ -1743,7 +1757,7 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   async getAgentStatus() {
-    return getAgentStatus({
+    const status = await getAgentStatus({
       sql: this.boundSql,
       vfs: this.rt.storage.vfs,
       config: this.config,
@@ -1753,6 +1767,12 @@ export class OrchestratorAgent extends ActorAgent {
       // AIChatAgent array is the only count there is.
       fallbackMessageCount: this.messages.length,
     });
+    const profile = this.resolvedTurnProfile();
+    return {
+      ...status,
+      roleId: profile?.role.id ?? this.config.getActiveRoleId(),
+      tierId: profile?.tier.id ?? 'default',
+    };
   }
 
   async getToolList() {
@@ -2050,7 +2070,7 @@ export class OrchestratorAgent extends ActorAgent {
    */
   async runScaffoldOnce(
     task: string,
-    opts?: { useShadowOverride?: boolean; timeoutMs?: number },
+    opts?: { useShadowOverride?: boolean },
   ): Promise<ScaffoldRunResult> {
     return runScaffoldOnce(this.scaffoldControl, task, opts);
   }
@@ -2058,7 +2078,7 @@ export class OrchestratorAgent extends ActorAgent {
   /** Cross-DO wire form for the MCP Worker adapter. */
   async runScaffoldOnceWire(
     task: string,
-    opts?: { useShadowOverride?: boolean; timeoutMs?: number },
+    opts?: { useShadowOverride?: boolean },
   ): Promise<string> {
     return JSON.stringify(await this.runScaffoldOnce(task, opts));
   }
@@ -2157,9 +2177,8 @@ export class OrchestratorAgent extends ActorAgent {
   async previewScaffoldLive(
     version: number,
     task: string,
-    opts?: { timeoutMs?: number },
   ): Promise<ScaffoldRunResult> {
-    return previewScaffoldLive(this.scaffoldControl, version, task, opts);
+    return previewScaffoldLive(this.scaffoldControl, version, task);
   }
 
   /**
@@ -2463,7 +2482,10 @@ export class OrchestratorAgent extends ActorAgent {
           // chosen from a different vendor family than the chat model — so this
           // is spend the actor's own catalog rate cannot price and the step
           // telemetry never saw.
-          spend: { source: 'judge', report: (report) => this.reportModelCall(report) },
+          spend: {
+            source: 'judge', report: (report) => this.reportModelCall(report),
+            operations: this.modelOperations,
+          },
         }),
       }),
     });
@@ -3219,15 +3241,6 @@ export class OrchestratorAgent extends ActorAgent {
     return setEvolutionConfig(this.config, config);
   }
 
-  /** Which model each routed producer runs on — the same producer names the
-   *  Spend panel shows. */
-  @callable() async getModelRoles(): Promise<ModelRolesView> {
-    return getModelRoles(this.config);
-  }
-
-  @callable() async setModelRoles(roles: Partial<Record<RoutedSpendSource, string | null>>): Promise<ModelRolesView> {
-    return setModelRoles(this.config, roles);
-  }
 
   // ── Fork RPCs ──────────────────────────────────────────────────
 

@@ -215,7 +215,8 @@ export interface CloudAgentClientOptions {
   agentName: string;
   /** DO instance name on the orchestrator-agent namespace. */
   cloudName: string;
-  session?: CliSessionOptions;
+  /** Recorder controls for this process's diagnostic transcript. */
+  transcript?: CliSessionOptions;
   /** One task turn, then exit. Stamped on each chat request so the DO knows
    *  this prompt is an independent task rather than a conversational
    *  follow-up, and never grades the previous turn from it. */
@@ -247,14 +248,13 @@ export class CloudAgentClient implements AgentClient {
   readonly consents: DeviceConsentSurface;
   readonly localControls = null;
   readonly checkpoints: FileCheckpointSurface;
-  readonly sessionHistory = null;
   readonly inlineAttachmentLimitBytes = CLOUD_MAX_INLINE_ATTACHMENT_BYTES;
 
   private readonly origin: string;
   private readonly token: string;
   private readonly cloudName: string;
   private readonly oneShot: boolean;
-  private readonly sessionOptions: CliSessionOptions;
+  private readonly transcriptOptions: CliSessionOptions;
   private activeCliSession: CliSession;
   private readonly listeners = new Set<(event: AgentClientEvent) => void>();
   private readonly recorder = new SessionRecorder('cloud');
@@ -270,8 +270,8 @@ export class CloudAgentClient implements AgentClient {
     this.agentName = opts.agentName;
     this.cloudName = opts.cloudName;
     this.oneShot = opts.oneShot === true;
-    this.sessionOptions = opts.session ?? {};
-    this.activeCliSession = createCliSession(opts.agentName, this.sessionOptions);
+    this.transcriptOptions = opts.transcript ?? {};
+    this.activeCliSession = createCliSession(opts.agentName, this.transcriptOptions);
     this.consents = {
       listPending: () => this.callHttp('listPendingConsents', v.array(PendingDeviceConsentSchema)),
       resolve: (consentId, decision) => this.callHttp(
@@ -378,6 +378,7 @@ export class CloudAgentClient implements AgentClient {
           trigger: 'submit-message',
         };
         if (opts.cwd) body.cwd = opts.cwd;
+        if (opts.tier) body.tier = opts.tier;
         if (this.oneShot) body.oneShot = true;
         const request: JsonObject = {
           id: requestId,
@@ -415,9 +416,9 @@ export class CloudAgentClient implements AgentClient {
       token: this.token,
       agentName: forkName,
       cloudName: forkName,
-      session: {
-        sessionDir: this.sessionOptions.sessionDir,
-        noSession: this.sessionOptions.noSession,
+      transcript: {
+        transcriptDir: this.transcriptOptions.transcriptDir,
+        noTranscript: this.transcriptOptions.noTranscript,
       },
     });
     return { client: sibling, label: `agent ${forkName}` };
@@ -506,6 +507,8 @@ export class CloudAgentClient implements AgentClient {
       purpose: status.purpose,
       model: status.model ?? null,
       reasoningEffort: status.reasoningEffort ?? null,
+      roleId: status.roleId,
+      tierId: status.tierId,
       scaffoldVersion: status.scaffoldVersion,
       messageCount: status.messageCount,
       searchNodeCount: status.searchNodeCount,
@@ -556,6 +559,10 @@ export class CloudAgentClient implements AgentClient {
 
   async pickTake(takeId: string, nodeId: string): Promise<TakePickOutcome> {
     return v.parse(TakePickOutcomeSchema, await this.callRpc('pickAlternateTake', [takeId, nodeId]));
+  }
+
+  async setRole(roleId: string): Promise<{ role: string }> {
+    return v.parse(v.object({ role: v.string() }), await this.callRpc('setRole', [roleId]));
   }
 
   async searchNodes(): Promise<AgentSearchNode[]> {

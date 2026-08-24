@@ -3,9 +3,9 @@
 // through PeerHub, the same seams the orchestrator wires to DO RPC. Covers the
 // peers-tool paths:
 // fire-and-forget, send-and-await round-trip, trust-grant enforcement,
-// timeout + late reply, crash redelivery dedupe, per-receiver ordering, the
-// spawn-a-specialist round-trip (fresh peer joins the network mid-flight), and
-// the reference-plus-digest spill for bodies past the brief budget.
+// timer-less waiter and post-eviction reply delivery, crash redelivery dedupe,
+// per-receiver ordering, the spawn-a-specialist round-trip, and the
+// reference-plus-digest spill for bodies past the brief budget.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
@@ -54,6 +54,8 @@ const PeerAgentPayloadSchema: v.GenericSchema<PeerAgentPayload> = v.object({
   body_path: v.optional(v.string()),
   kinu_mode: v.picklist(['plan', 'build']),
 });
+
+const RejectionErrorSchema = v.instance(Error);
 const PeerOutboxRowSchema = v.object({
   id: v.string(),
   message: v.string(),
@@ -137,6 +139,15 @@ function outboxRows(agent: TestAgent) {
   }));
 }
 
+/** Wait for the next asynchronous transport phase, not for a guessed duration. */
+async function until(fact: () => boolean, what: string): Promise<void> {
+  for (let turn = 0; turn < 100; turn++) {
+    if (fact()) return;
+    await Promise.resolve();
+  }
+  throw new Error(`${what} did not happen within 100 microtask turns`);
+}
+
 describe('fire-and-forget (send)', () => {
   test('delivers into the receiver hub and wakes it exactly once', async () => {
     const { addAgent } = makeNetwork();
@@ -175,16 +186,16 @@ describe('send-and-await (ask) round-trip', () => {
 
     const askPromise = alice.hub.ask({ mode: 'build',
       agent: 'bob', userId: bob.userId, topic: 'research',
-      message: 'What changed upstream?', timeoutMs: 2_000,
+      message: 'What changed upstream?',
     });
-    await Bun.sleep(0);   // delivery lands inside ask()'s dispatch await
+    await until(() => pendingPeerEvents(bob).length === 1, 'the ask delivery');
 
     // Bob was woken; his drained turn carries the mechanical reply route.
     const events = pendingPeerEvents(bob);
     expect(events).toHaveLength(1);
     expect(peerPayload(events[0]).reply_expected).toBe(true);
     const batch = buildDrainBatch(events)!;
-    expect(batch.text).toContain(`peers({action:'reply', event_id:'${events[0].id}'`);
+    expect(batch.text).toContain(`agents({action:'reply', event_id:'${events[0].id}'`);
 
     // Bob answers through the peer-back reply channel.
     const replied = await bob.hub.reply({ eventId: events[0].id, message: 'v2 API landed' });
@@ -223,9 +234,8 @@ describe('trust-grant enforcement (cross-owner)', () => {
     const { addAgent } = makeNetwork();
     const alice = addAgent('alice', userA);
     const mallory = addAgent('mallory', userB);
-
     const result = await mallory.hub.ask({ mode: 'build',
-      agent: 'alice', userId: userA, topic: 'probe', message: 'let me in', timeoutMs: 1_000,
+      agent: 'alice', userId: userA, topic: 'probe', message: 'let me in',
     });
     expect(result).toEqual({ status: 'rejected', reason: 'no grant from receiver for cross-owner sender' });
     expect(pendingPeerEvents(alice)).toHaveLength(0);
@@ -240,9 +250,9 @@ describe('trust-grant enforcement (cross-owner)', () => {
     alice.grants.add(`${userB}:carol`);   // alice accepts carol; carol grants nothing
 
     const askPromise = carol.hub.ask({ mode: 'build',
-      agent: 'alice', userId: userA, topic: 'question', message: 'What is your uptime?', timeoutMs: 2_000,
+      agent: 'alice', userId: userA, topic: 'question', message: 'What is your uptime?',
     });
-    await Bun.sleep(0);
+    await until(() => pendingPeerEvents(alice).length === 1, 'the cross-owner ask delivery');
     const events = pendingPeerEvents(alice);
     expect(events).toHaveLength(1);
     await alice.hub.reply({ eventId: events[0].id, message: '99.99%' });
@@ -287,25 +297,37 @@ describe('trust-grant enforcement (cross-owner)', () => {
   });
 });
 
-describe('ask timeout + late reply', () => {
-  test('a silent peer times out gracefully; the late answer arrives as a waking event', async () => {
+describe('timer-less ask waiter + cancellation', () => {
+  test('the live wait never expires; cancellation leaves the late reply as a waking event', async () => {
     const { addAgent } = makeNetwork();
     const alice = addAgent('alice', 'u1'.padEnd(32, '0'));
     const bob = addAgent('bob', alice.userId);
+    const abort = new AbortController();
 
-    const result = await alice.hub.ask({ mode: 'build',
-      agent: 'bob', userId: bob.userId, topic: 'slow', message: 'take your time', timeoutMs: 30,
+    const pending = alice.hub.ask({ mode: 'build',
+      agent: 'bob', userId: bob.userId, topic: 'slow', message: 'take your time',
+      signal: abort.signal,
     });
-    expect(result.status).toBe('no_reply');
-    expect(result.status === 'no_reply' && result.note).toContain('delivered');
+    let settled = false;
+    void pending.then(() => { settled = true; }, () => { settled = true; });
+    await until(() => pendingPeerEvents(bob).length === 1, 'the pending ask delivery');
+    expect(settled).toBe(false);
 
-    // Bob answers after the waiter expired — the reply is NOT lost: it lands
-    // as a pending peer event that wakes Alice's next turn.
+    abort.abort(new Error('cancelled by user'));
+    const cancellation = await pending.then(
+      () => null,
+      (rejection) => {
+        const parsed = v.safeParse(RejectionErrorSchema, rejection);
+        return parsed.success ? parsed.output : new Error(String(rejection));
+      },
+    );
+    expect(cancellation?.message).toBe('cancelled by user');
+
     const events = pendingPeerEvents(bob);
     const replied = await bob.hub.reply({ eventId: events[0].id, message: 'sorry, here it is' });
     expect(replied).toEqual({ ok: true });
+    await until(() => alice.wakes === 1, 'the late reply wake');
 
-    expect(alice.wakes).toBe(1);
     const late = pendingPeerEvents(alice);
     expect(late).toHaveLength(1);
     const payload = peerPayload(late[0]);
@@ -446,9 +468,9 @@ describe('spawn a specialist (fresh peer joins mid-flight)', () => {
     const specialist = addAgent('paper-summarizer', alice.userId);
     const askPromise = alice.hub.ask({ mode: 'build',
       agent: specialist.name, userId: alice.userId, topic: 'task',
-      message: 'Summarize the three latest papers', timeoutMs: 2_000,
+      message: 'Summarize the three latest papers',
     });
-    await Bun.sleep(0);
+    await until(() => pendingPeerEvents(specialist).length === 1, 'the specialist ask delivery');
 
     const events = pendingPeerEvents(specialist);
     expect(events).toHaveLength(1);

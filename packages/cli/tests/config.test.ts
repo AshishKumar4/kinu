@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 import {
-  DEFAULT_WORKERS_AI_MODEL_ID, JsonObjectSchema, JsonValueSchema, parseJsonValue,
+  DEFAULT_WORKERS_AI_MODEL_ID, JsonObjectSchema, JsonValueSchema,
+  ProfileCatalogEnvelopeSchema, parseJsonValue,
   type JsonObject, type JsonValue,
 } from "@kinu.run/core";
 import { validateAliasName, validateAgentName } from "../src/config";
@@ -68,15 +69,18 @@ describe("CLI config safety", () => {
     expect(result.stdout.toString().trim()).toBe(`ok ${ciToken}`);
   });
 
-  test("a /model selection scopes to the workspace; effort stays a validated global default", () => {
+  test("model and effort selections update the account-wide default tier", () => {
     const out = runPreferenceWrite();
     expect(out.modelResult).toEqual({ spec: "openai/gpt-5.5" });
-    // The spec lands on THIS agent only — the global default in config.json
-    // is untouched, so sibling commands and new workspaces never inherit a
-    // model one chat session picked.
-    expect(out.config).toMatchObject({ reasoningEffort: "high" });
-    expect(out.config.model).toBeUndefined();
-    expect(out.effortShow).toMatchObject({ kind: "text", text: expect.stringContaining("medium (chat default)") });
+    const profile = v.parse(ProfileCatalogEnvelopeSchema, out.config.localProfile);
+    expect(profile.catalog.tiers.default).toEqual({
+      model: 'openai/gpt-5.5',
+      reasoningEffort: 'high',
+    });
+    expect(out.effortShow).toMatchObject({
+      kind: 'text',
+      text: expect.stringContaining('Default-tier reasoning effort: medium'),
+    });
     expect(out.effortSet).toEqual({ kind: "effort-set", effort: "high" });
     expect(out.invalid).toMatchObject({ kind: "text", text: expect.stringContaining("Usage") });
     // A config file with one invalid field is reported, not silently replaced by

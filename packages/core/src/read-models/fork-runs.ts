@@ -344,6 +344,9 @@ function searchStatus(tree: TreeHalf): ForkRunStatus {
   if (tree.ledgerStatus === 'running') return 'running';
   if (tree.ledgerStatus === 'failed') return 'failed';
   if (tree.ledgerStatus === 'converged') return 'completed';
+  // This list's `failed` bucket is "settled without a usable answer". The
+  // exact `no_acceptable_candidate` cause remains on the run ledger.
+  if (tree.ledgerStatus === 'no_acceptable_candidate') return 'failed';
   // The ledger row was pruned (settled over a day ago) or never written: the tree
   // itself still says whether the search ever picked a winner.
   return tree.terminal > 0 ? 'completed' : 'partial';

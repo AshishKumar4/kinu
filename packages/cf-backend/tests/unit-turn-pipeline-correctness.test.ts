@@ -3,13 +3,17 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { memberBody } from '@kinu.run/test-utils';
 import {
+  BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, effectiveRoleCatalog, profileCatalogDigest,
+  type ProfileCatalog, type ProfileCatalogEnvelope,
+} from '@kinu.run/core';
+import {
   orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 import type { ToolSet, UIMessage } from 'ai';
 import * as v from 'valibot';
 
 const TasksToolProbeSchema = v.object({ execute: v.function() });
-const StanceResultSchema = v.object({ stance: v.string() });
+const RoleResultSchema = v.object({ role: v.string() });
 
 // The turn pipeline is split across the actor substrate (actor-agent.ts —
 // beforeTurn assembly, the BackendHost, the event-injection machinery) and
@@ -17,11 +21,11 @@ const StanceResultSchema = v.object({ stance: v.string() });
 const actor = readFileSync(join(import.meta.dir, '..', 'src', 'actor-agent.ts'), 'utf8');
 const source = readFileSync(join(import.meta.dir, '..', 'src', 'orchestrator.ts'), 'utf8');
 const headRuntime = readFileSync(join(import.meta.dir, '..', 'src', 'head-runtime.ts'), 'utf8');
+const takePick = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'read-models', 'evolution-views.ts'), 'utf8');
 const exploration = readFileSync(join(import.meta.dir, '..', 'src', 'exploration.ts'), 'utf8');
 const facetSpawn = readFileSync(join(import.meta.dir, '..', 'src', 'facet-spawn.ts'), 'utf8');
 const ownedModelServices = readFileSync(join(import.meta.dir, '..', 'src', 'owned-model-services.ts'), 'utf8');
 const generateJson = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'prompts', 'structured.ts'), 'utf8');
-const takePick = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'read-models', 'evolution-views.ts'), 'utf8');
 
 /** Every cf-backend source that turns a reasoning-effort level into provider
  *  options. Core owns the function; this names its callers, so a second
@@ -40,6 +44,33 @@ function effortDerivationSites(): string[] {
   walk(join(import.meta.dir, '..', 'src'));
   return sites.sort();
 }
+
+/** A second catalog, so a test can prove the roles are read off the ACTIVE
+ *  envelope rather than baked in at construction. Two custom roles over the
+ *  required default tier; the digest is the envelope's own content hash. */
+const CUSTOM_CATALOG: ProfileCatalog = {
+  roles: {
+    scout: {
+      description: 'Gathers evidence and reports findings.',
+      instructions: 'Look it up before you say it.',
+      tier: 'fast',
+      preset: 'research',
+    },
+    fixer: {
+      description: 'Applies a decided fix.',
+      instructions: 'Make the change and verify it.',
+      tier: 'default',
+      preset: 'optimise',
+    },
+  },
+  tiers: { default: { model: DEFAULT_WORKERS_AI_MODEL_SPEC } },
+};
+const CUSTOM_ENVELOPE: ProfileCatalogEnvelope = {
+  authority: { kind: 'local' },
+  version: 1,
+  digest: profileCatalogDigest(CUSTOM_CATALOG),
+  catalog: CUSTOM_CATALOG,
+};
 
 describe('turn-pipeline correctness wiring', () => {
   test('the actor prompt contains its loaded SOUL on both prompt-build paths', () => {
@@ -95,6 +126,26 @@ describe('turn-pipeline correctness wiring', () => {
     expect(headRuntime).not.toContain('createAgentProviderRegistry');
   });
 
+  test('the head runtime constructor receives this actor\'s operation sink', () => {
+    // A head's non-turn calls (its merge synthesis, its inference) must land
+    // in the ROOT's operation ledger — the actor hands over the one sink it
+    // holds, so the rows cannot strand in facet SQLite.
+    const rootRuntime = memberBody(actor, 'protected getCFHeadRuntime()');
+    expect(rootRuntime).toContain('operations: this.modelOperations');
+    expect(headRuntime).toContain('operations?: ModelOperationSink');
+  });
+
+  test('the agents fork substrate carries no strategy objects', () => {
+    // The fork action is gone; the mcts/heads wiring it consumed is gone with
+    // it, not kept warm. Only rt/model/costModel/nodeHost/nodeHome/
+    // compactShared cross the seam now.
+    const depsBody = memberBody(actor, 'private getAgentsToolDeps(workMode: WorkMode)');
+    expect(depsBody).toContain('buildStrategyForkDeps({');
+    expect(depsBody).not.toContain('mcts:');
+    expect(depsBody).not.toContain('heads:');
+    expect(actor).not.toContain('defaultOptions');
+  });
+
   test('the MEMORY.md tail is read once per turn and rides the per-step dynamic block', () => {
     // Parity with the CLI: the reflection loop assumes the model sees its
     // newest lessons in-turn. The tail is the ONE dynamic-context input behind
@@ -137,13 +188,13 @@ describe('turn-pipeline correctness wiring', () => {
     expect(assembleArgs).not.toContain('ledger:');
   });
 
-  test('beforeTurn merges user reasoning effort with cache provider options', () => {
+  test('beforeTurn merges profile reasoning effort with cache provider options', () => {
     const beforeTurn = actor.slice(
       actor.indexOf('async beforeTurn(ctx: TurnContext)'),
       actor.indexOf('beforeStep(ctx: PrepareStepContext)'),
     );
-    expect(beforeTurn).toContain('this.config.getReasoningEffort()');
-    expect(beforeTurn).toContain("REASONING_EFFORT_FOR_STAGE.chat");
+    expect(beforeTurn).toContain('profile.tier.reasoningEffort');
+    expect(beforeTurn).toContain('parseModelSpec(profile.tier.model).provider');
     expect(beforeTurn).toContain('reasoningEffortOptions');
     expect(beforeTurn).toContain('mergeProviderOptions(cacheOptions, reasoningOptions)');
     expect(beforeTurn).toContain('cfg.providerOptions = providerOptions');
@@ -164,12 +215,13 @@ describe('turn-pipeline correctness wiring', () => {
     expect(headRuntime).not.toContain('maxOutputTokens');
     expect(headRuntime).not.toContain('reasoningEffortOptions');
     expect(headRuntime).toContain("resolveModelWithEffort(deps.mergeModelSpec(), 'low')");
-    // Global rather than per-file, which is what makes it a census: an effort
-    // level becomes provider options in exactly two places on this backend — the
-    // shared services every auxiliary caller asks, and the turn's own beforeTurn
-    // merge. The heads path used to be a third, deriving its own options off a
-    // second provider registry it built for itself.
-    expect(effortDerivationSites()).toEqual(['actor-agent.ts', 'owned-model-services.ts']);
+    // Chat and all auxiliary profile lanes derive provider options at the
+    // point where their resolved concrete model is known.
+    expect(effortDerivationSites()).toEqual([
+      'actor-agent.ts',
+      'owned-model-services.ts',
+      'runtime.ts',
+    ]);
 
     // The shadow eval's judge is the control plane's, and the plane builds it
     // over the cross-family REVIEW model at the judge stage's own effort. The
@@ -428,18 +480,14 @@ describe('turn-pipeline correctness wiring', () => {
     expect(closeArgs).toContain('craft: this.orch.craft.snapshot()');
   });
 
-  test("the per-turn system prompt carries all three of the turn's axes", () => {
-    // Permission, provenance and stance are three independent facts and cf
-    // must pass all three: forcing them through one `mode` is what kept the
-    // background-resume overlay off every real wake (jobs/runner.ts stamps
-    // kinuEvent AND kinuMode, and the work mode used to win).
+  test("the per-turn system prompt carries permission, provenance, and role", () => {
     const beforeTurn = actor.slice(
       actor.indexOf('const promptOptions: NonNullable<Parameters<typeof buildSystemPromptSync>[1]> = {'),
       actor.indexOf('this.recordSystemPromptHash(systemOverride)'),
     );
     expect(beforeTurn).toContain('workMode,');
     expect(beforeTurn).toContain('provenance: this.turnProvenance()');
-    expect(beforeTurn).toContain('stance: this.config.getStance()');
+    expect(beforeTurn).toContain('roleSection: profile.role');
     const turnMode = actor.slice(
       actor.indexOf('protected turnWorkMode(): WorkMode'),
       actor.indexOf('/** What this turn was started BY:'),
@@ -472,18 +520,60 @@ describe('turn-pipeline correctness wiring', () => {
     }
   });
 
-  test('the stance the agent set is in the prompt the DO actually builds', async () => {
-    // Not a source grep: the real prompt, off the real config store, through
-    // the real cache key. Cutting `stance` out of either buildSystemPromptSync
-    // call in actor-agent.ts fails this.
+  test('the role the agent set is in the next prompt the DO builds', async () => {
     const harness = orchestratorHarness();
     const agent = harness.agent;
-    expect(agent.getSystemPrompt()).not.toContain('Audit stance:');
-
+    const turn = (content: string) => agent.beforeTurn({
+      system: 'sys',
+      messages: [{ role: 'user' as const, content }],
+      tools: {} satisfies ToolSet,
+      model: 'harness-model',
+      continuation: false,
+      body: {},
+    });
+    await turn('open the turn');
     const tasks = v.parse(TasksToolProbeSchema, agent.getTools().tasks);
-    const result = v.parse(StanceResultSchema, await tasks.execute({ action: 'mode', stance: 'audit' }));
-    expect(result.stance).toBe('audit');
-    expect(agent.getSystemPrompt()).toContain('Audit stance:');
+    const result = v.parse(RoleResultSchema, await tasks.execute({ action: 'mode', role: 'auditor' }));
+    expect(result.role).toBe('auditor');
+    const config = await turn('audit this change');
+    expect(config?.system).toContain('## Role: Auditor (auditor)');
+  });
+
+  test('a delegation opportunity carries every role the ACTIVE catalog offers', async () => {
+    // The wiring this pins: the DO hands its orchestrator a roleCatalog
+    // callback that reads the turn's active envelope LAZILY, so each
+    // opportunity row stamps the ids the catalog offers at that moment —
+    // the difference between an ignored hint under an empty catalog (wiring)
+    // and one under a full catalog (behaviour).
+    const harness = orchestratorHarness();
+    const agent = harness.agent;
+    const orch = agent.observeOrch();
+    const prepare = orch.turnExtension.prepareStep;
+    if (!prepare) throw new Error('Expected turn steering prepareStep extension');
+
+    await agent.beforeTurn({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'add caching to the api and update the docs' }],
+      tools: {} satisfies ToolSet,
+      model: 'harness-model',
+      continuation: false,
+      body: {},
+    });
+    prepare.call(orch.turnExtension, {
+      stepNumber: 0,
+      messages: [{ role: 'user' as const, content: 'add caching to the api and update the docs' }],
+    });
+    const [row] = orch.steering.delegationSnapshot();
+    expect(row?.roles).toEqual(Object.keys(effectiveRoleCatalog(BUILTIN_PROFILE_CATALOG)));
+
+    // Lazily read: swap the active envelope for a different catalog, and the
+    // SAME row now reports the new catalog's ids.
+    Reflect.set(agent, '_turnProfileInputs', {
+      envelope: CUSTOM_ENVELOPE,
+      provider: { revision: 'turn-pipeline-test', availableModels: [DEFAULT_WORKERS_AI_MODEL_SPEC] },
+    });
+    const swapped = orch.steering.delegationSnapshot();
+    expect(swapped[0]!.roles).toEqual(Object.keys(effectiveRoleCatalog(CUSTOM_CATALOG)));
   });
 
   test('the DO holds a keepAlive heartbeat until BOTH evolution lanes settle', () => {

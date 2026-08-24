@@ -80,7 +80,8 @@ function seedSearchRun(
     rootId: string; task: string; at: number; branches: number;
     /** What the engine wrote as the ROOT's own label — the run's name. */
     name?: string;
-    winner?: number; ledger?: 'running' | 'converged' | 'failed';
+    winner?: number;
+    ledger?: 'running' | 'converged' | 'failed' | 'no_acceptable_candidate';
   },
 ): void {
   const node = db.prepare(
@@ -227,6 +228,22 @@ describe('listForkRuns', () => {
     const { db, sql } = freshDb();
     seedSearchRun(db, { rootId: 'r1', task: 'doomed', at: 1000, branches: 1, ledger: 'failed' });
     expect(listForkRuns(sql).items[0]!.status).toBe('failed');
+  });
+
+  test('a settled search with no acceptable candidate never reads completed', () => {
+    const { db, sql } = freshDb();
+    seedSearchRun(db, {
+      rootId: 'r1',
+      task: 'nothing cleared the floor',
+      at: 1000,
+      branches: 2,
+      ledger: 'no_acceptable_candidate',
+    });
+    const [run] = listForkRuns(sql).items;
+    expect(run).toMatchObject({
+      status: 'failed',
+      winnerScore: null,
+    });
   });
 
   test('Steer-as-Branch redirects are not exploration runs', () => {

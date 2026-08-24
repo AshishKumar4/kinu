@@ -1,9 +1,9 @@
-import { existsSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
 import { runMCTS, DEFAULT_CONFIG, type MCTSProgressEvent, type SearchNode } from '@kinu.run/core';
 import type { AgentRuntime, SessionWriter, SessionMessage } from '@kinu.run/core';
 import { openWorkspaceCLI } from '@kinu.run/cli-backend';
-import { CONFIG_PATH, agentDbPath, createCodexAuthStore, requireLLMConfig, resolveAgentRef, resolveProviderCredentials } from '../config';
+import { CONFIG_PATH, createCodexAuthStore, requireLLMConfig, resolveAgentRef, resolveProviderCredentials } from '../config';
+import { requireLocalAgent } from '../local-target';
 import {
   printSearchTree, printError, createSpinner,
   BRAND, DIM, OK, WARN, ACCENT, MUTED,
@@ -19,12 +19,9 @@ export async function evolveCommand(name: string, opts: {
     console.log(`${DIM('Use:')} ${ACCENT(`kinu run ${configured.name} "improve yourself"`)}\n`);
     return;
   }
-  name = configured?.localName ?? configured?.name ?? name;
-  const dbPath = agentDbPath(name);
-  if (!existsSync(dbPath)) {
-    printError(`Workspace "${name}" not found.`, `Create it with: kinu create ${name}`);
-    process.exit(1);
-  }
+  const local = requireLocalAgent(name);
+  name = local.name;
+  const dbPath = local.dbPath;
 
   // One set of defaults: the engine's (core DEFAULT_CONFIG.mcts). The CLI
   // used to half them silently — a weaker search than every other caller ran.

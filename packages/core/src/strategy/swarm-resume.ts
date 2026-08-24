@@ -69,6 +69,7 @@ import type { HeadStep } from '../heads/types';
 import type { MctsSearchStore } from '../mcts/search-store';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { FloorBreach, MeasuredValue, PublicationState } from './objective';
+import type { SwarmProfileSnapshot } from '../profiles';
 
 /**
  * What scoring one child produced, and what the tree must do about it.
@@ -277,6 +278,9 @@ export interface SwarmReentry {
   /** Node rows the dead activation left `running`, settled through
    *  `HeadJournal.abandonRunning` — the count, for the run's own disclosure. */
   readonly abandoned: number;
+  /** The resolved profile the search STARTED under, off its ledger row. Null
+   *  for a run whose caller wired no catalog or that predates snapshots. */
+  readonly profile: SwarmProfileSnapshot | null;
 }
 
 interface NodeRow {
@@ -356,6 +360,11 @@ export function reenterSwarm(deps: {
   return {
     rootId: newest.rootId,
     epoch,
+    // The STARTED-UNDER profile, read back off the claimed row. A re-drive
+    // never resolves against today's catalog — this record is what the first
+    // attempt froze before it detached, so the tree continues under the role,
+    // tier and preset it began with. Null for a row that predates profiles.
+    profile: deps.ledger.readSwarmProfile(newest.rootId),
     nodes,
     superseded,
     abandoned: abandoned.reduce((total, run) => total + run.abandoned, 0),

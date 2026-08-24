@@ -57,7 +57,8 @@ function seedWorkspace(path: string): void {
 
 function runCli(home: string, args: string[], env: Record<string, string> = {}) {
   return Bun.spawn([process.execPath, cliBin, ...args], {
-    cwd: repoRoot,
+    // The CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo.
+    cwd: scratch('kinu-test-project-'),
     env: { ...process.env, KINU_HOME: home, NO_COLOR: '1', ...env },
     stdout: 'pipe',
     stderr: 'pipe',

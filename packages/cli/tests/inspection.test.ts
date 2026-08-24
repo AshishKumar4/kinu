@@ -6,6 +6,14 @@ import * as v from "valibot";
 import { afterEach, describe, expect, test } from "bun:test";
 
 const tempDirs: string[] = [];
+
+/** Fresh throwaway project directory per spawn: the CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo. */
+function newProjectDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), "kinu-test-project-"));
+  tempDirs.push(dir);
+  return dir;
+}
+
 const repoRoot = resolve(__dirname, "../../..");
 const cliBin = join(repoRoot, "packages/cli/bin/cli.ts");
 
@@ -16,7 +24,7 @@ afterEach(() => {
 function runCli(home: string, args: string[], extraEnv: Record<string, string> = {}) {
   return Bun.spawnSync({
     cmd: [process.execPath, cliBin, ...args],
-    cwd: repoRoot,
+    cwd: newProjectDir(),
     stdout: "pipe",
     stderr: "pipe",
     env: {
@@ -33,7 +41,7 @@ function runCli(home: string, args: string[], extraEnv: Record<string, string> =
 async function runCliServed(home: string, args: string[], extraEnv: Record<string, string> = {}) {
   const proc = Bun.spawn({
     cmd: [process.execPath, cliBin, ...args],
-    cwd: repoRoot,
+    cwd: newProjectDir(),
     stdout: "pipe",
     stderr: "pipe",
     env: { ...process.env, KINU_HOME: home, ...extraEnv },

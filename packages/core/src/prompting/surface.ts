@@ -2,8 +2,6 @@ import {
   AGENTS_TOOL_ACTIONS,
   BUILTIN_TOOLS,
   BUILTIN_TOOL_NAMES,
-  DEFAULT_AGENT_STANCE,
-  type AgentStance,
   type AgentsToolAction,
   type BuiltinToolName,
 } from '../tools/registry';
@@ -18,17 +16,15 @@ import * as v from 'valibot';
 
 export type PromptBackend = 'cf' | 'cli-local' | 'cli-cloud';
 
-// ── The three axes of a turn ────────────────────────────────────────────────
-// These are three independent facts, and forcing them through one variable is
-// what made two of them unreachable. A background-job wake IS a resume AND it
-// IS build work; a Plan turn woken by a timer is BOTH. So:
+// ── The axes of a turn ──────────────────────────────────────────────────────
+// These are independent facts, and forcing them through one variable is what
+// made two of them unreachable. A background-job wake IS a resume AND it IS
+// build work; a Plan turn woken by a timer is BOTH. So:
 //
-//   WorkMode      — what the turn may do. 'plan' is read-only and structural
-//                   (submit_plan exists only there, release.* is removed);
+//   WorkMode      — what the turn may do. 'plan' is read-only and structural;
 //                   'build' is the absence of constraint, shown as "Auto".
 //   TurnProvenance— why the turn is running. Adds an overlay, never a bar.
-//   AgentStance   — how the agent chose to work (tools/registry.ts). Guidance
-//                   only; it can neither widen nor narrow the other two.
+//   Role          — the resolved profile's one prompt section (prompt.ts).
 
 export type WorkMode = 'plan' | 'build';
 
@@ -132,9 +128,10 @@ export interface PromptSurfaceOptions {
   workMode?: WorkMode;
   /** Why the turn is running. Defaults to `chat`, which renders nothing. */
   provenance?: TurnProvenance;
-  /** How the agent has chosen to work (set through `tasks` action=mode).
-   *  Guidance only: it never changes what `workMode` allows. */
-  stance?: AgentStance;
+  /** The one Role section this turn renders, from the resolved turn profile.
+   *  Absent renders nothing — an actor resolved without a profile authority
+   *  keeps its plain surface. */
+  roleSection?: { id: string; label: string; instructions: string };
   /** Whether this Plan actor owns the submit_plan completion boundary. Heads
    * and subordinates report research back to their parent instead. */
   planSubmissionAvailable?: boolean;
@@ -152,8 +149,8 @@ export interface PromptSurface {
   backend?: PromptBackend;
   workMode: WorkMode;
   provenance: TurnProvenance;
-  stance: AgentStance;
   planSubmissionAvailable: boolean;
+  roleSection: { id: string; label: string; instructions: string } | null;
 }
 
 const EXECUTOR_PROMPT_ORDER = ['laptop', 'sandbox', 'workspace'];
@@ -250,16 +247,16 @@ export function compilePromptSurface(opts: PromptSurfaceOptions): PromptSurface 
   const builtinTools = uniqueBuiltinTools(opts.availableTools);
   return {
     builtinTools,
-    agentsActions: uniqueAgentsActions(opts.agentsActions, builtinTools),
     rlmAvailable: opts.rlmAvailable ?? false,
+    agentsActions: uniqueAgentsActions(opts.agentsActions, builtinTools),
     externalTools: uniqueExternalTools(opts.externalTools),
     executors,
     selectableExecutors: executors.filter(executorIsSelectable),
     model: resolvePromptModelProfile(opts.model),
+    roleSection: opts.roleSection ?? null,
     backend: opts.backend,
     workMode: opts.workMode ?? 'build',
     provenance: opts.provenance ?? 'chat',
-    stance: opts.stance ?? DEFAULT_AGENT_STANCE,
     planSubmissionAvailable: opts.planSubmissionAvailable ?? false,
   };
 }

@@ -1,12 +1,21 @@
 /**
- * Linux CLI runtime factory — uses bun:sqlite with agent-utils for
- * FTS5 memory search, the Nimbus workspace filesystem, and proper CraftStore.
+ * Linux CLI runtime factory — bun:sqlite, agent-utils for FTS5 memory search,
+ * and the same primitives cf-backend implements, bridged by adapter wrappers.
  *
- * Implements the same primitives as cf-backend via adapter wrappers
- * that bridge agent-utils types to @kinu.run/core's interfaces.
+ * A local runtime has TWO file planes and the difference is the whole design.
+ * The agent's own state — SOUL.md, its scaffold, memory, transcripts — lives in
+ * the Nimbus filesystem over its own SQLite, always. The WORKSPACE plane, which
+ * is what `file`, `run`, `execute_tools` and AGENTS.md address, binds to a
+ * physical directory when `config.cwd` names one, and every agent bound to that
+ * directory is working on the same bytes. With no directory bound both planes
+ * are the one in-SQLite tree, which is what an isolated fixture or an eval
+ * episode gets.
  */
 
-import type { AgentRuntime, CraftStore as CoreCraftStore, Shell } from '@kinu.run/core';
+import type {
+  AgentRuntime, CraftStore as CoreCraftStore, LLM, ModelRouteResolution,
+  ResolvedTurnProfile, Shell,
+} from '@kinu.run/core';
 import type {
   Schedule, Memory, VFS, SqlExec, SqlExecutor, SqlValue, RawSqlExec, WorkspaceSchemaSql,
 } from '@kinu.run/core';
@@ -24,8 +33,9 @@ import {
   DefaultExecutionRouter, createInlineExecutor, formatExecResult,
   withMountTable, standardMounts,
   withApprovalGatedShell,
-  selectFastModel, createAgentConfigStore, initAgentConfigTable, initActorTables,
-  type ModelCallSink, type NodeHomeHost,
+  createAgentConfigStore, initActorTables, initAgentConfigTable,
+  resolveModelRoute,
+  type ModelCallSink, type ModelOperationSink, type NodeHomeHost,
 } from '@kinu.run/core';
 import {
   createWorkspace as createWorkspaceFilesystem,
@@ -42,11 +52,11 @@ import { createSandboxedExecutor } from './executor';
 import { createHostCheckpoints } from './checkpoints';
 import { hostResourceLimits } from './cgroup-limits';
 import { hostToolchainCapabilities, HOST_UNMEASURED_CAPABILITIES } from './host-toolchain';
-import { createHostMountVFS } from './host-mount';
+import { createCwdPlaneVFS, createHostMountVFS } from './host-mount';
 import { createLinuxFiber, initFiberTable, detectOrphanedFibers } from './fiber';
 import { createBranchSpawner } from './branch-process';
 import {
-  createLocalModelResolver, createLocalProviderLLM, type LocalProviderCredentials,
+  createLocalProviderLLM, type LocalProviderCredentials,
 } from './model-resolver';
 import type { LocalCodexAuthStore } from './codex-auth-store';
 import type { OAuthCredential, FileCheckpoints } from '@kinu.run/core';
@@ -56,11 +66,22 @@ import * as v from 'valibot';
 
 export interface CLIRuntimeConfig {
   dbPath: string;
+  /**
+   * The physical directory this workspace's file and shell plane binds to —
+   * the canonical cwd stored on the agent's local ref, never `process.cwd()`.
+   *
+   * A string binds `file`, `run`, `execute_tools`, AGENTS.md discovery and the
+   * workspace shell to that directory, which is what makes every agent sharing
+   * it a peer rather than a stranger holding a private copy. Absent keeps the
+   * in-SQLite workspace filesystem, and absent deliberately does NOT mean
+   * "default to the process's directory": an eval episode handed an implicit
+   * host plane writes into the developer's repo (see `hostRoot`).
+   */
+  cwd?: string | null;
   /** The workspace's default endpoint for bare ids — null when nothing
    *  derives one. Explicit specs resolve through the registry regardless;
    *  the stored chat model (agent_config) drives the seams instead. */
   llm: LLMProviderConfig | null;
-  judge?: LLMProviderConfig;
   agentName?: string;
   providerCredentials?: LocalProviderCredentials;
   codexAuthStore?: LocalCodexAuthStore;
@@ -68,8 +89,9 @@ export interface CLIRuntimeConfig {
   onCodexRefresh?: (credential: OAuthCredential) => void;
   /**
    * Where the HOST plane is rooted — the `laptop` executor and the checkpointed
-   * host shell behind it, i.e. the developer's own filesystem. Defaults to
-   * `process.cwd()`, where `kinu` was invoked.
+   * host shell behind it, i.e. the developer's own filesystem. Defaults to the
+   * bound `cwd`, or to `process.cwd()` when nothing is bound: `/pc` and the
+   * agent's own workspace then name one directory rather than two.
    *
    * `null` withholds the plane entirely, and that is the only isolation there
    * is: `laptop.writeFile` resolves an ABSOLUTE path straight through and
@@ -99,16 +121,27 @@ export interface CLIRuntimeConfig {
  */
 export interface CLIRuntime extends AgentRuntime {
   setModelCallSink?(sink: ModelCallSink | null): void;
+  /** Where direct model operations record their lifecycle; the session binds
+   *  it beside {@link setModelCallSink}. Optional for the same reason. */
+  setModelOperations?(sink: ModelOperationSink | null): void;
+  /** The physical directory the workspace plane is bound to, or null when this
+   *  runtime keeps the in-SQLite plane. See CLIRuntimeConfig.cwd. */
+  cwd?: string | null;
+  setModelForRoute?(factory: (resolution: ModelRouteResolution) => LLM): void;
+  setTurnProfile?(profile: ResolvedTurnProfile): void;
+  turnProfile?(): ResolvedTurnProfile | null;
+  modelForRoute?(resolution: ModelRouteResolution): LLM;
   /**
    * The three host-owned things a swarm node's private home needs — the uid-0
    * view of this workspace's filesystem, the principal registry that scopes
    * `/tmp`, and the SQL the uid allocation is a row in. *Isolation*.
    *
-   * Present here and nowhere else because this backend's filesystem is an
+   * Present here and nowhere else because this backend's filesystem can be an
    * in-isolate `NimbusWorkspace`: the hosted backend reaches its workspace by RPC
    * to another Durable Object, where every pid-less filesystem call is the session
    * user and `confinePrincipal` has no RPC at all, so there is nothing there to
-   * hand over.
+   * hand over. Withheld here too once the plane is a physical directory, which
+   * has no principal registry to confine — see `createCLIRuntime`.
    *
    * A factory returning a promise, because the workspace boots: a turn that never
    * searches must not pay for a boot only a search needs. Optional for the same
@@ -321,92 +354,43 @@ export function createCLIRuntime(
   // three, and to it they are the same call.
   let modelCallSink: ModelCallSink | null = null;
   const report: ModelCallSink = (call) => modelCallSink?.(call);
-
+  // The lifecycle half of the same seam: the session binds this alongside the
+  // sink above, and until it does an unbound runtime is unattributed
+  // in-flight work, never work that never started.
+  let modelOperations: ModelOperationSink | null = null;
+  const operations: ModelOperationSink = (event) => modelOperations?.(event);
+  // Shared by every typed agent_config read this runtime does — at
+  // construction, and at exec time for the live shell-approval mode the gate
+  // consults on every command. Its DDL runs here because a runtime built
+  // WITHOUT `initWorkspaceSchema` (a branch worker, `kinu evolve`, a fixture)
+  // still reads the table on its first gated command.
   initAgentConfigTable(execRaw);
-  // Shared for every typed agent_config read/write this runtime needs at
-  // construction time — the fast-model lookup below, and the live shell-
-  // approval-mode getter the execution seam's gate reads on every command
-  // (see approvalPolicy below).
   const agentConfig = createAgentConfigStore(sql);
-
-  // The workspace's own chat model is the default-everything spec: reflection,
-  // fast-tier selection, advisor fallback. A registry-only endpoint (claude/…)
-  // derives none, so the stored spec is the whole answer; with neither, the
-  // seams still BUILD and an unresolvable id fails at the call that names it.
-  const chatSpec = agentConfig.getModel() ?? undefined;
-
-  const llm = createLocalProviderLLM({
+  let turnProfile: ResolvedTurnProfile | null = null;
+  let modelRouteFactory = (resolution: ModelRouteResolution): LLM => createLocalProviderLLM({
     llm: config.llm,
     credentials: config.providerCredentials,
     codexAuthStore: config.codexAuthStore,
     onCodexRefresh: config.onCodexRefresh,
-    spec: chatSpec,
-    // `rt.llm.complete` is the evolution engine's own reflection seam — the
-    // turn loop drives its chat model directly and reports as `step_finish`.
-    spend: { source: 'reflection', report },
+    spec: resolution.model,
+    spend: { source: resolution.source, report, operations },
   });
-  // The mechanical-work tier: the chat vendor's own small model, for the
-  // evolution engine's classification/labelling/short-reflection calls. Same
-  // resolver, same credentials — one cheaper model id (core selectFastModel).
-  // Resolved once here: a CLI process is one workspace's session, and a
-  // `fast_model` change takes effect on the next one.
-  const fastResolver = createLocalModelResolver({
-    llm: config.llm, credentials: config.providerCredentials,
-    codexAuthStore: config.codexAuthStore, onCodexRefresh: config.onCodexRefresh,
-  });
-  let normalizedChatSpec: string | null;
-  try {
-    normalizedChatSpec = chatSpec ?? fastResolver.normalizeSpecSync(null);
-  } catch (error) {
-    if (!(error instanceof Error) || !error.message.startsWith('No default model')) throw error;
-    // No endpoint and no stored model: nothing for the fast tier to differ from.
-    normalizedChatSpec = null;
-  }
-  const fast = normalizedChatSpec === null
-    ? { spec: '', source: 'chat-model' as const }
-    : selectFastModel({
-      fastSpec: agentConfig.getRoleModel('fast'),
-      chatSpec: normalizedChatSpec,
-      providers: fastResolver.fastModelCandidates(),
-    });
-  // Only when it IS a different model — otherwise leave it unset so every
-  // reader's documented `?? rt.llm` fallback is what runs, rather than a
-  // second identical client.
-  const fastLlm = fast.source === 'chat-model' ? undefined : createLocalProviderLLM({
-    llm: config.llm, credentials: config.providerCredentials,
-    codexAuthStore: config.codexAuthStore, onCodexRefresh: config.onCodexRefresh,
-    spec: fast.spec,
-    spend: { source: 'fast', report },
-  });
-
-  // Cross-model judge only when one is actually configured. Leaving this
-  // undefined lets consumers apply their documented same-model fallback
-  // (mcts/evaluation.ts judge ensemble, local-session auto-judge) instead of
-  // hiding it here.
-  const judgeModel = config.judge
-    ? createLocalProviderLLM({
-      llm: config.judge, credentials: config.providerCredentials,
-      codexAuthStore: config.codexAuthStore, onCodexRefresh: config.onCodexRefresh,
-      spend: { source: 'judge', report },
-    })
-    : undefined;
-
-  // The turn reviewer. Its pin wins; with none it runs on the configured judge
-  // (the same cross-model client, for the same reason — a reviewer sharing the
-  // reviewed model's family agrees with it); with neither it runs on the chat
-  // model, which is a local session's only remaining option and is the honest
-  // one rather than leaving the owner's switch inert.
-  //
-  // Resolved once, like the fast tier: a CLI process is one workspace's session.
-  const advisorSpec = agentConfig.getRoleModel('advisor');
-  const advisorConfig: Parameters<typeof createLocalProviderLLM>[0] = {
-    llm: advisorSpec ? config.llm : config.judge ?? config.llm,
-    credentials: config.providerCredentials,
-    codexAuthStore: config.codexAuthStore, onCodexRefresh: config.onCodexRefresh,
-    spend: { source: 'advisor', report },
+  const modelForRoute = (resolution: ModelRouteResolution): LLM =>
+    modelRouteFactory(resolution);
+  const llm: LLM = {
+    async *stream() { yield ""; },
+    async complete(prompt: string): Promise<string> {
+      if (!turnProfile) throw new Error('reflection model lane has no active profile');
+      const resolution = resolveModelRoute('reflection', turnProfile);
+      if (!resolution) throw new Error('reflection cannot use the fixed platform model route');
+      return modelForRoute(resolution).complete(prompt);
+    },
   };
-  if (advisorSpec) advisorConfig.spec = advisorSpec;
-  const advisorLlm = createLocalProviderLLM(advisorConfig);
+  const modelLanes = {
+    turnProfile: () => turnProfile,
+    llm: modelForRoute,
+  };
+
 
   const schedule: Schedule = {
     after: async (_ms, fn) => { setTimeout(fn, 0); },
@@ -418,16 +402,15 @@ export function createCLIRuntime(
   // own doc comment. Null tells it there is no directory rather than letting it
   // compute one from a value that is not a filename.
   const basePath = config.dbPath === ':memory:' ? null : config.dbPath.replace(/\.db$/, '');
-  const { spawn, abort } = createBranchSpawner(basePath, {
+  const { spawn: spawnBranch, abort: abortBranch } = createBranchSpawner(basePath, {
     llm: config.llm,
     providerCredentials: config.providerCredentials,
     codexConfigPath: config.codexConfigPath,
   });
-
-  // The workspace filesystem: Nimbus over this agent's own SQLite, the same
-  // component the cloud backend runs — a durable POSIX filesystem with a real
-  // shell over it. The user's actual machine is the `laptop` EXECUTOR, not a
-  // directory of this filesystem.
+  // The agent's own state stays in its SQLite-backed filesystem: SOUL.md, the
+  // scaffold, memory, transcripts. What binds to a physical directory is the
+  // WORKSPACE plane — the files and the shell a turn works in — and that is
+  // what makes two agents in one directory peers rather than strangers.
   const workspaceSql = nimbusSql(db);
   const workspace = createWorkspaceFilesystem({
     sql: workspaceSql,
@@ -435,84 +418,73 @@ export function createCLIRuntime(
     generation: nextWorkspaceGeneration(workspaceSql),
     runtimes: WORKSPACE_RUNTIMES,
   });
-  const vfs = workspace.vfs;
+  const agentStateVfs = workspace.vfs;
+  const checkpoints = createHostCheckpoints({ agent: agentName, keep: config.checkpointKeep });
+  const cwd = config.cwd ? resolvePath(config.cwd) : null;
+  const fileVfs = cwd ? createCwdPlaneVFS(cwd, checkpoints) : agentStateVfs;
 
-  const memoryStore = new MemoryStore(vfs, sql);
+  const memoryStore = new MemoryStore(agentStateVfs, sql);
   memoryStore.ensureSchema();
-  const memory = adaptMemory(memoryStore, vfs);
+  const memory = adaptMemory(memoryStore, agentStateVfs);
 
   const craftStoreImpl = new AgentUtilsCraftStore(sql);
   craftStoreImpl.ensureSchema();
   const craftStore = adaptCraftStore(craftStoreImpl);
-
-  // Shadow-git checkpoints for the HOST plane: both of its mutation paths
-  // (`laptop.exec`, through the checkpointed shell, and `laptop.writeFile`)
-  // snapshot their target directory before the first mutation of each turn.
-  // Invisible until /undo. Built even when there is no host plane, because
-  // `status()` and `list()` are asked either way and answer honestly — nothing
-  // mutated the host, so there is nothing to restore.
-  const checkpoints = createHostCheckpoints({ agent: agentName, keep: config.checkpointKeep });
-  // The live shell-approval policy every gated exec boundary below consults:
-  // `mode` reads agent_config directly (no staleness — a setShellApprovalMode
-  // RPC takes effect on the very next command, no toolset rebuild needed);
-  // `requestApproval` is a mutable slot a surface that owns a live user (ACP)
-  // fills in later via AgentRuntime.setShellApprovalChannel — this runtime is
-  // built before that surface exists, so the channel can only be attached
-  // after the fact.
   let approvalChannel: RequestShellApproval | null = null;
   let turnFileLedgerProvider: Parameters<NonNullable<AgentRuntime['setTurnFileLedgerProvider']>>[0] = null;
   const approvalPolicy: ShellApprovalPolicy = {
     mode: () => agentConfig.getShellApprovalMode(),
     granted: (grant) => agentConfig.getShellApprovalGrants()
-      .some((g) => g.rule === grant.rule && g.executor === grant.executor),
-    requestApproval: (req) => approvalChannel?.(req) ?? Promise.resolve(null),
+      .some((candidate) => candidate.rule === grant.rule && candidate.executor === grant.executor),
+    requestApproval: (request) => approvalChannel?.(request) ?? Promise.resolve(null),
   };
-  // The `workspace` runtime is the workspace filesystem's own shell, gated
-  // here because `gateProviderExec` deliberately skips it (execution/
-  // approval.ts). The host machine's shell is NOT gated here: it reaches the
-  // model only as the `laptop` ExecutorProvider below, which the router gates
-  // under that name. It used to be wrapped in both places, which reviewed
-  // every host command twice and asked the user twice for one command.
-  // Checkpointing still sits inside the gate, so a refused `rm -rf /` does
-  // not spend a snapshot on a command that never ran.
-  const shell: Shell = withApprovalGatedShell(workspace.shell, approvalPolicy);
+  // Bound to a directory, the workspace runtime IS the host shell there, and
+  // any command may mutate the tree, so it snapshots first. The in-SQLite
+  // shell touches no host file and names no host directory, so checkpointing
+  // it asked the shadow-git engine to snapshot the database file.
+  const shell: Shell = withApprovalGatedShell(
+    cwd ? withCheckpointedShell(createHostShell(cwd), checkpoints, cwd) : workspace.shell,
+    approvalPolicy,
+  );
   const executionRouter = new DefaultExecutionRouter(approvalPolicy);
-  // The agent's ONE file plane: the workspace tree extended by the mount
-  // table — /pc for the host machine (this backend's device is the process's
-  // own host), /sandbox absent because no container binding exists locally —
-  // resolved live off this router at every call. The `file` tool and
-  // `workspace.*` take this same object below; memory indexing keeps the base
-  // tree, because the FTS index must never ingest a user's whole machine.
-  const agentVfs = withMountTable(vfs, standardMounts((name) => executionRouter.getProvider(name)));
-  // Every executor registered below runs its commands in THIS process's
-  // container, so each carries its measured cgroup limits — the truth `nproc`
-  // cannot tell the model. Null off a cgroup, and then nothing is claimed.
+  const agentVfs = withMountTable(
+    fileVfs,
+    standardMounts((name) => executionRouter.getProvider(name)),
+  );
   const limits = hostResourceLimits();
-  // `sql` is not optional in practice: workspace.createTool seeds the crafted
-  // tool's score prior and writes the misevolution veto trail through it, and
-  // listTools quotes real EMA scores from it.
   const inlineOptions: Parameters<typeof createInlineExecutor>[0] = {
-    vfs: agentVfs, memory, craftStore, shell, sql,
+    vfs: agentVfs,
+    memory,
+    craftStore,
+    shell,
+    sql,
     ledger: () => turnFileLedgerProvider?.(),
     toolchain: workspaceToolchainCapabilities(WORKSPACE_RUNTIMES),
   };
   if (limits) inlineOptions.resourceLimits = limits;
   executionRouter.register(createInlineExecutor(inlineOptions));
-  // The HOST plane, when this runtime is allowed one. Withholding it is the
-  // whole isolation story for a measurement harness — see CLIRuntimeConfig.
-  const hostRoot = config.hostRoot === undefined ? process.cwd() : config.hostRoot;
+
+  const hostRoot = config.hostRoot === undefined ? cwd ?? process.cwd() : config.hostRoot;
   if (hostRoot !== null) {
     const hostShell = withCheckpointedShell(createHostShell(hostRoot), checkpoints, hostRoot);
     executionRouter.register(createLocalLaptopExecutor(hostRoot, hostShell, checkpoints, limits));
   }
 
-  // `Object.assign` onto the built runtime rather than a spread, so the one
-  // channel `buildRuntime` has no slot for is added to the same object every
-  // other seam already holds a reference to.
-  return Object.assign(buildRuntime({
-    sql, execRaw, vfs: agentVfs, llm, executor: createSandboxedExecutor(), schedule,
-    agentId, agentName, memory, craftStore, judgeModel, fastLlm, advisorLlm,
-    spawnBranch: spawn, abortBranch: abort,
+  const runtime: CLIRuntime = Object.assign(buildRuntime({
+    sql,
+    execRaw,
+    vfs: agentVfs,
+    agentStateVfs,
+    llm,
+    executor: createSandboxedExecutor(),
+    schedule,
+    agentId,
+    agentName,
+    memory,
+    craftStore,
+    modelLanes,
+    spawnBranch,
+    abortBranch,
     // A CLI branch is a forked child process with its own SQLite FILE, not a
     // facet inside a shared durable object. `abort` already does the whole
     // reap — SIGTERM the child and drop it from `activeBranches` — so there is
@@ -520,29 +492,81 @@ export function createCLIRuntime(
     // verbs are genuinely the same operation here. The distinction is real on
     // CF, where release additionally WIPES the facet's SQLite out of the root
     // DO's shared quota; it is degenerate on this backend, not overlooked.
-    releaseBranch: abort,
+    releaseBranch: abortBranch,
     executionRouter, shell, checkpoints,
     setShellApprovalChannel: (fn) => { approvalChannel = fn; },
     setTurnFileLedgerProvider: (provider) => { turnFileLedgerProvider = provider; },
   }), {
+    cwd,
     setModelCallSink: (sink: ModelCallSink | null) => { modelCallSink = sink; },
-    // A swarm node's home is provisioned against THIS filesystem — the same bytes
-    // `vfs` and the workspace shell address, so a node still reads everything the
-    // origin has — and the uid it is chown'ed to is a row in the same database
-    // that filesystem lives in, so a home outlives the activation that made it.
-    nodeHome: async () => ({ ...await workspace.privileged(), sql: workspaceSql }),
+    setModelOperations: (sink: ModelOperationSink | null) => { modelOperations = sink; },
+    setTurnProfile: (profile: ResolvedTurnProfile) => { turnProfile = profile; },
+    turnProfile: () => turnProfile,
+    modelForRoute,
+    setModelForRoute: (factory: (resolution: ModelRouteResolution) => LLM) => {
+      modelRouteFactory = factory;
+    },
+  });
+  // A swarm node's private home is a uid-confined directory INSIDE the plane it
+  // writes to: the privileged view and the uid it is chown'ed to are both rows
+  // in this database, so the home outlives the activation that made it. A
+  // physical directory has neither half — no principal registry to confine, and
+  // every node already shares the origin plane by construction — so the host is
+  // withheld rather than faked, and a node states `shared-origin-plane` instead
+  // of being handed a home in a filesystem its work cannot reach.
+  if (!cwd) {
+    runtime.nodeHome = async () => ({ ...await workspace.privileged(), sql: workspaceSql });
+  }
+  return runtime;
+}
+
+/**
+ * Join a subordinate to its parent's workspace plane, keeping its own SQL
+ * identity, conversation, scaffold closure and branch state.
+ *
+ * A physical directory needs no joining. A child opened with its parent's cwd
+ * already addresses the same bytes through its OWN executors, so its memory
+ * and craft store stay private — which is the contract — and the one thing
+ * genuinely shared per directory is the undo history: two agents editing one
+ * tree want one restore point, not two that can each revert the other's work.
+ *
+ * The in-SQLite plane is per-database, so there a child cannot see its
+ * parent's files at all without being moved onto them. That transplant is what
+ * this function was written for, and it stays for exactly that case.
+ */
+export function shareLocalWorkspacePlane(
+  actor: CLIRuntime,
+  workspace: CLIRuntime,
+): CLIRuntime {
+  if (workspace.cwd && actor.cwd === workspace.cwd) {
+    return Object.assign(actor, { checkpoints: workspace.checkpoints });
+  }
+  return Object.assign(actor, {
+    storage: { ...actor.storage, vfs: workspace.storage.vfs },
+    memory: workspace.memory,
+    craftStore: workspace.craftStore,
+    executionRouter: workspace.executionRouter,
+    shell: workspace.shell,
+    checkpoints: workspace.checkpoints,
+    cwd: workspace.cwd ?? null,
   });
 }
 
 /**
  * The runtime a single local head (a fork of the parent workspace) runs over.
  *
- * The local mirror of the cloud head: its OWN durable workspace filesystem
- * (private scratch a sibling cannot see), the parent's real execution surface,
- * and the parent's workspace reachable as the `parent` EXECUTOR — `parent.exec`
- * runs a command in the parent's real shell, `parent.readFile` reads its files.
- * It is not a directory of the head's own filesystem, for the same reason the
- * sandbox and the machine are not: it is a different workspace.
+ * The local mirror of the cloud head: its own private state, the parent's real
+ * execution surface, and the parent's workspace reachable as the `parent`
+ * EXECUTOR — `parent.exec` runs a command in the parent's real shell,
+ * `parent.readFile` reads its files.
+ *
+ * Where the head's canonical FILES are depends on what the parent is bound to.
+ * A parent bound to a physical directory shares it: a fork explores the same
+ * project, so the head addresses those bytes directly and `parent.*` reaches
+ * the same tree by another name. An in-SQLite parent has a per-database plane,
+ * so the head gets its own tree (private scratch a sibling cannot see) and the
+ * `parent` executor is the only way to its parent's files — a different
+ * workspace, for the same reason the sandbox and the machine are.
  *
  * The head also inherits the parent's `laptop` provider unchanged, so `run
  * laptop` and `laptop.*` reach the real machine at the parent's cwd — the fork's
@@ -551,7 +575,7 @@ export function createCLIRuntime(
 export function buildCLIHeadRuntime(
   db: Database,
   opts: {
-    parentRuntime: AgentRuntime; cwd: string; agentId: string; agentName: string;
+    parentRuntime: CLIRuntime; agentId: string; agentName: string;
     /** Watches every write this head makes to the PARENT workspace, so the
      *  split can report which files this head changed. Its own view is what
      *  makes the answer exact under concurrency. */
@@ -581,16 +605,29 @@ export function buildCLIHeadRuntime(
     generation: nextWorkspaceGeneration(nimbusSql(db)),
     runtimes: WORKSPACE_RUNTIMES,
   });
-  const vfs = workspace.vfs;
+  // What stays private is what makes this a fork rather than a second view of
+  // the parent: its own scaffold, memory, craft store and transcript, in its
+  // own scratch database.
+  const agentStateVfs = workspace.vfs;
+  const cwdPlane = parent.cwd ? createCwdPlaneVFS(parent.cwd, parent.checkpoints) : null;
+  // The observer watches whichever plane the head's writes actually land on, so
+  // the split can name the files this head changed. With a shared directory
+  // that is this plane; without one it is the `parent` executor's surface below.
+  const vfs = cwdPlane === null
+    ? agentStateVfs
+    : opts.writeObserver ? observeWrites(cwdPlane, opts.writeObserver) : cwdPlane;
 
-  const memoryStore = new MemoryStore(vfs, sql);
+  const memoryStore = new MemoryStore(agentStateVfs, sql);
   memoryStore.ensureSchema();
-  const memory = adaptMemory(memoryStore, vfs);
+  const memory = adaptMemory(memoryStore, agentStateVfs);
   const craftStoreImpl = new AgentUtilsCraftStore(sql);
   craftStoreImpl.ensureSchema();
   const craftStore = adaptCraftStore(craftStoreImpl);
 
-  const shell = withApprovalGatedShell(workspace.shell);
+  // One directory, one approval policy, one undo history: a head over a shared
+  // plane runs the parent's own gated and checkpointed shell rather than an
+  // in-SQLite shell that cannot see the files it is reading.
+  const shell = parent.cwd && parent.shell ? parent.shell : withApprovalGatedShell(workspace.shell);
   const executionRouter = new DefaultExecutionRouter();
   executionRouter.register(createInlineExecutor({
     vfs, memory, craftStore, shell, sql,
@@ -650,16 +687,22 @@ export function buildCLIHeadRuntime(
   const checkpoints = parent.checkpoints;
 
   const runtimeOptions: Parameters<typeof buildRuntime>[0] = {
-    sql, execRaw, vfs: agentVfs, llm: parent.llm, executor: parent.executor, schedule: parent.schedule,
-    agentId: opts.agentId, agentName: opts.agentName, memory, craftStore, judgeModel: parent.judgeModel,
-    // A CLI fork is a child of the same workspace, so it inherits the reviewer
-    // the parent built, exactly as it inherits the judge.
-    advisorLlm: parent.advisorLlm,
+    sql, execRaw, vfs: agentVfs, agentStateVfs,
+    llm: parent.llm, executor: parent.executor, schedule: parent.schedule,
+    agentId: opts.agentId, agentName: opts.agentName, memory, craftStore,
     spawnBranch: parent.spawnBranch, abortBranch: parent.abortBranch,
     releaseBranch: parent.releaseBranch,
     executionRouter, shell,
   };
   if (checkpoints) runtimeOptions.checkpoints = checkpoints;
+  const parentProfile = parent.turnProfile;
+  const parentModelForRoute = parent.modelForRoute;
+  if (parentProfile && parentModelForRoute) {
+    runtimeOptions.modelLanes = {
+      turnProfile: parentProfile,
+      llm: parentModelForRoute,
+    };
+  }
   return buildRuntime(runtimeOptions);
 }
 

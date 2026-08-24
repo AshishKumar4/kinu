@@ -1,6 +1,7 @@
 import {
   listAgentDirs,
   listConfiguredAgentRefs,
+  listLegacyAgentNames,
   requireAuthConfig,
   updateConfigFile,
   type AgentMode,
@@ -14,6 +15,130 @@ export interface ListedAgent {
   mode: AgentMode;
   localName?: string;
   cloudName?: string;
+  /** Canonical project root this local agent is placed in; unplaced legacy
+   *  agents carry neither this nor `workspaceId`. */
+  cwd?: string;
+  /** Virtual workspace inside `cwd`. Peers share the pair `{cwd, workspaceId}`. */
+  workspaceId?: string;
+}
+
+/** One virtual workspace: peer agents sharing a `{cwd, workspaceId}` pair. */
+export interface AgentWorkspaceGroup<T extends ListedAgent = ListedAgent> {
+  readonly cwd: string;
+  readonly workspaceId: string;
+  readonly agents: readonly T[];
+}
+
+export interface GroupedAgentWorkspaces<T extends ListedAgent = ListedAgent> {
+  readonly projectRoot: string;
+  /** Virtual workspaces, the current project's first, in first-seen order. */
+  readonly workspaces: readonly AgentWorkspaceGroup<T>[];
+  /** Local agents no ref places in any project (pre-placement `~/.kinu/<name>`). */
+  readonly unplaced: readonly T[];
+  /** Remote cloud workspaces. */
+  readonly remote: readonly T[];
+}
+
+/** The display label a placed local agent's workspace falls back to when its
+ *  ref predates `workspaceId`: the same directory-basename slug placement
+ *  writes. Display-only — placement itself always stores the real id. */
+function workspaceIdForRoot(root: string): string {
+  const base = root.replace(/\/+$/u, '').split('/').at(-1) ?? '';
+  const candidate = base
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/gu, '-')
+    .replace(/^-+|-+$/gu, '');
+  return candidate === '' ? 'workspace' : candidate;
+}
+
+/**
+ * The virtual-workspace bucket an agent belongs to: `'unplaced'` for a legacy
+ * local agent no ref places anywhere, `null` for cloud, otherwise the
+ * `{cwd, workspaceId}` pair peers share.
+ */
+export function agentWorkspaceKey(agent: ListedAgent, projectRoot: string): string | null {
+  if (agent.mode === 'cloud') return null;
+  if (agent.cwd === undefined && agent.workspaceId === undefined) return 'unplaced';
+  const cwd = agent.cwd ?? projectRoot;
+  return `${cwd}\u0000${agent.workspaceId ?? workspaceIdForRoot(cwd)}`;
+}
+
+/**
+ * Split a flat agent list into the sidebar's shape: virtual workspaces of the
+ * current project first, then any group another project contributed, then
+ * unplaced legacy agents, then cloud workspaces. Grouping is pure metadata —
+ * rows are never reordered inside their group.
+ */
+export function groupAgentWorkspaces<T extends ListedAgent>(
+  agents: readonly T[],
+  projectRoot: string,
+): GroupedAgentWorkspaces<T> {
+  const groups = new Map<string, { cwd: string; workspaceId: string; agents: T[] }>();
+  const unplaced: T[] = [];
+  const remote: T[] = [];
+  for (const agent of agents) {
+    const key = agentWorkspaceKey(agent, projectRoot);
+    if (key === null) {
+      remote.push(agent);
+      continue;
+    }
+    if (key === 'unplaced') {
+      unplaced.push(agent);
+      continue;
+    }
+    const cwd = agent.cwd ?? projectRoot;
+    const group = groups.get(key) ?? { cwd, workspaceId: key.slice(cwd.length + 1), agents: [] };
+    group.agents.push(agent);
+    groups.set(key, group);
+  }
+  const ordered = [...groups.values()].sort((left, right) =>
+    Number(right.cwd === projectRoot) - Number(left.cwd === projectRoot));
+  return { projectRoot, workspaces: ordered, unplaced, remote };
+}
+
+/** A local agent's row. `dirName` is the `~/.kinu/<name>` directory; the row
+ *  opens under the ref's config name when a ref exists, so aliases and cloud
+ *  links stay attached. */
+function localRow(configured: KinuAgentConfig | undefined, dirName: string): ListedAgent {
+  return {
+    name: configured?.name ?? dirName,
+    label: configured?.displayName ?? dirName,
+    mode: 'local',
+    localName: dirName,
+    cloudName: configured?.cloudName,
+    cwd: configured?.cwd,
+    workspaceId: configured?.workspaceId,
+  };
+}
+
+function localRefsByDirName(refs: readonly KinuAgentConfig[]): Map<string, KinuAgentConfig> {
+  return new Map(refs
+    .filter((agent) => agent.mode === 'local')
+    .map((agent) => [agent.localName ?? agent.name, agent]));
+}
+
+/**
+ * The TUI navigator roster for one directory: this project's placed agents,
+ * unplaced legacy agents (openable here; opening one adopts it), and the
+ * signed-in account's cloud workspaces. A cloud ref sharing a local agent's
+ * name stays listed — the two are different workspaces, not one row.
+ */
+export function listSidebarAgents(cwd = process.cwd()): ListedAgent[] {
+  const refs = listConfiguredAgentRefs();
+  const byDirName = localRefsByDirName(refs);
+  return [
+    ...listAgentDirs(cwd).map((name) => localRow(byDirName.get(name), name)),
+    ...listLegacyAgentNames().map((name) => localRow(byDirName.get(name), name)),
+    ...refs
+      .filter((agent) => agent.mode === 'cloud')
+      .map((agent) => ({
+        name: agent.name,
+        label: agent.displayName ?? agent.name,
+        mode: 'cloud' as const,
+        localName: agent.localName,
+        cloudName: agent.cloudName,
+      })),
+  ];
 }
 
 export function reconcileAgentRefs(
@@ -21,21 +146,8 @@ export function reconcileAgentRefs(
   configuredAgents: readonly KinuAgentConfig[],
   cloudAgents: readonly CloudAgent[],
 ): ListedAgent[] {
-  const localConfig = new Map(
-    configuredAgents
-      .filter((agent) => agent.mode === 'local')
-      .map((agent) => [agent.localName ?? agent.name, agent]),
-  );
-  const local = [...new Set(localAgentNames)].map((name) => {
-    const configured = localConfig.get(name);
-    return {
-      name,
-      label: configured?.displayName ?? name,
-      mode: 'local' as const,
-      localName: name,
-      cloudName: configured?.cloudName,
-    };
-  });
+  const localConfig = localRefsByDirName(configuredAgents);
+  const local = [...new Set(localAgentNames)].map((name) => localRow(localConfig.get(name), name));
 
   const seenCloudNames = new Set<string>();
   const cloud = cloudAgents.flatMap((agent) => {
@@ -53,14 +165,12 @@ export function reconcileAgentRefs(
 }
 
 export function listKnownAgents(): ListedAgent[] {
-  const localAgents = new Set(listAgentDirs());
-  const configured = new Map(listConfiguredAgentRefs().map((agent) => [agent.name, agent]));
+  const localAgents = new Set([...listAgentDirs(), ...listLegacyAgentNames()]);
+  const refs = listConfiguredAgentRefs();
+  const byDirName = localRefsByDirName(refs);
   return [
-    ...[...localAgents].map((name) => {
-      const agent = configured.get(name);
-      return { name, label: agent?.displayName ?? name, mode: 'local' as const, localName: name, cloudName: agent?.cloudName };
-    }),
-    ...listConfiguredAgentRefs()
+    ...[...localAgents].map((name) => localRow(byDirName.get(name), name)),
+    ...refs
       .filter((agent) => agent.mode === 'cloud' || !localAgents.has(agent.localName ?? agent.name))
       .map((agent) => ({
         name: agent.name,
@@ -68,6 +178,8 @@ export function listKnownAgents(): ListedAgent[] {
         mode: agent.mode,
         localName: agent.localName,
         cloudName: agent.cloudName,
+        cwd: agent.cwd,
+        workspaceId: agent.workspaceId,
       })),
   ];
 }

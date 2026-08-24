@@ -19,8 +19,7 @@ import {
   resolveSwarm, swarmValidity,
   type ResolvedSwarm, type SwarmInput,
 } from '../src/strategy/swarm';
-import { DEFAULT_JUDGE_CALL_TIMEOUT_MS, judgeCallBudget } from '../src/mcts/evaluation';
-import { PROVIDER_WAIT_BUDGET_MS } from '../src/providers/rate-limit-retry';
+import { judgeCallBudget } from '../src/mcts/evaluation';
 import { DEFAULT_CONFIG } from '../src/config';
 import type { Objective } from '../src/strategy/objective';
 
@@ -204,22 +203,6 @@ describe('a judged tree is funded at the ensemble it was admitted at', () => {
       maxLLMCalls: DEFAULT_CONFIG.mcts.maxEvalLLMCalls,
       offersRunnableCode: true,
     }).ensemble).toBe(3);
-  });
-
-  test('a DROPPED sample shrinks the ensemble, which is the second door the pool does not close', () => {
-    // Found by `SwarmRuntimeFix` while pacing the provider. The pool decides how many
-    // calls are ASKED FOR; `completeWithinTimeout` returns null for a judge call that
-    // lost its race and `sampleJudgeScore` returns null for one that would not parse, so
-    // `judgeSamplesUsed` can fall far below `judgeSamplesAttempted` with the pool
-    // perfectly funded. Under sustained rate limiting that is reachable rather than
-    // theoretical: one request may legitimately spend PROVIDER_WAIT_BUDGET_MS waiting to
-    // be sent, against a judge envelope only 60s longer.
-    //
-    // The arithmetic that makes it a real risk, asserted so a change to either constant
-    // fails here rather than in a run.
-    expect(PROVIDER_WAIT_BUDGET_MS).toBeLessThan(DEFAULT_JUDGE_CALL_TIMEOUT_MS);
-    expect(DEFAULT_JUDGE_CALL_TIMEOUT_MS - PROVIDER_WAIT_BUDGET_MS)
-      .toBeLessThan(PROVIDER_WAIT_BUDGET_MS);
   });
 
   test('the marginalisation floor is unchanged, because the evidence for it is unchanged', () => {

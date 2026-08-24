@@ -198,6 +198,43 @@ describe('HeadController.run', () => {
     expect(cached!.costSummary.headCount).toBe(result.costSummary.headCount);
   });
 
+  test('a head with no authored wall clock runs to completion — no default deadline is invented', async () => {
+    // maxWallClockMs is OPT-IN: a split whose budget carries none must let a
+    // slow head finish. The report lands after a gated delay, and the run
+    // completes with status `completed` — not `budget_exceeded`.
+    const { sql, journal } = newJournal();
+    const gate = Promise.withResolvers<void>();
+    const runtime = buildRuntime({});
+    const originalSpawn = runtime.spawnHead.bind(runtime);
+    runtime.spawnHead = async (input) => {
+      const handle = await originalSpawn(input);
+      return {
+        ...handle,
+        run: async () => {
+          await gate.promise;   // the head takes as long as it takes
+          return fakeReport(input.id, { summary: 'slow but done' });
+        },
+      };
+    };
+    const controller = new HeadController(runtime, journal);
+
+    let settled = false;
+    const run = controller.run({
+      mode: 'build',
+      parentHeadId: null,
+      inheritedContext: baseContext,
+      request: baseRequest,
+      parentBudget: { maxDepth: 2, spawnedAt: Date.now() },   // no maxWallClockMs
+    }).then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);   // still joined while the head works
+
+    gate.resolve();
+    await run;
+    const rows = sql<{ status: string }>`SELECT status FROM head_journal`;
+    expect(rows.every((r) => r.status === 'completed')).toBe(true);
+  });
+
   test('rejects split when maxDepth budget is exhausted', async () => {
     const { journal } = newJournal();
     const controller = new HeadController(buildRuntime({}), journal);

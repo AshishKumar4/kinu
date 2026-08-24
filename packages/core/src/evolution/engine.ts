@@ -247,7 +247,7 @@ function buildTurnReflectionPrompt(input: {
     `${turn.hadError ? 'An error occurred.\n' : ''}` +
     `${followup ? `The user then replied: "${evidenceWindow(followup, EVIDENCE_BUDGETS.outcomeFollowup)}"\n` : ''}\n` +
     `In one sentence of at most ${String(TURN_REFLECTION_MAX_CHARS)} characters, what specifically ` +
-    `should be done differently next time? It is stored as a lesson and read by later sessions that ` +
+    `should be done differently next time? It is stored as a lesson and read by later turns that ` +
     `have none of the evidence above, so name the trigger and the action, not the incident.\n` +
     `  Good: "When a run result's text begins \`Error (exit N)\`, treat it as a failure and re-run ` +
     `before reporting the work done."\n` +
@@ -802,9 +802,9 @@ export class EvolutionEngine {
   async onSessionComplete(session: CompletedSession): Promise<void> {
     if (!this.config.enabled) return;
 
-    const windowsClosed = this.agentConfig.countClosedSessionWindow();
+    const windowsClosed = this.agentConfig.countClosedTurnWindow();
 
-    // Reflect on the entire session (skip trivially short windows)
+    // Reflect on the turn window (skip trivially short windows).
     if (session.turns.length >= 3 && this.sessionWarrantsReflection(session)) {
       await this.onSessionReflection(session, windowsClosed);
     }
@@ -945,9 +945,9 @@ export class EvolutionEngine {
     const scaffoldExists = await this.rt.identity.scaffold.exists();
     if (!scaffoldExists) return;
 
-    // Skip if a pending scaffold is already in flight — consecutive sessions
-    // would otherwise orphan earlier pending versions. The current pending
-    // must be resolved (promoted or rolled back) before a new proposal.
+    // Skip if a scaffold proposal is already in flight. Consecutive windows
+    // would otherwise orphan earlier pending versions. The current proposal
+    // must settle before another begins.
     const pending = this.rt.storage.sql<{ version: number }>`
       SELECT version FROM scaffold_versions WHERE status = 'pending' LIMIT 1
     `;
@@ -1031,7 +1031,9 @@ export class EvolutionEngine {
    * Also callable manually via `kinu evolve`.
    */
   async onLifetimeEvolution(session?: SessionWriter): Promise<void> {
-    const purpose = summarizeSoul(await readSoul(this.rt.storage.vfs)) || 'be a helpful assistant';
+    const rt = this.rt;
+    const purpose = summarizeSoul(await readSoul(rt.agentStateVfs ?? rt.storage.vfs))
+      || 'be a helpful assistant';
 
     this.emit({
       type: 'mcts_started',

@@ -90,11 +90,10 @@ const INCUMBENT = target.source;
 const SAME_SIZE = `${INCUMBENT.slice(0, -6)}ASKED.`;
 const LONGER = `${INCUMBENT}\nAn extra sentence that makes this candidate strictly longer than the incumbent.`;
 
-describe('the nine sections are the GEPA targets', () => {
-  test('all nine are registered, and nothing else is', () => {
-    // ≥6 is the bar; nine is the answer, because a section held back would be
-    // the one nobody could fix without a deploy.
-    expect(PROMPT_SECTION_TARGETS).toHaveLength(9);
+describe('the ten sections are the GEPA targets', () => {
+  test('all ten are registered, and nothing else is', () => {
+    // Every addressable section is optimizable; the role profile is the tenth.
+    expect(PROMPT_SECTION_TARGETS).toHaveLength(10);
     expect(PROMPT_SECTION_TARGETS.map((s) => s.id).sort())
       .toEqual(PROMPT_SECTIONS.map((s) => s.id).sort());
   });

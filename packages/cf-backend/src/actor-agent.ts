@@ -55,7 +55,6 @@ import {
   createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory,
   queueTurnShadowTrial, runQueuedShadowTrials, createJsonJudge, type ScaffoldControl,
   effortFor, type CompletedTurn, type TurnContinuity, UNBOUNDED_STEPS,
-  SCAFFOLD_TURN_TIMEOUT_MS,
   runAdvisorLane,
   // canonical tool + prompt surface — single source of truth
   buildActorTools,
@@ -88,9 +87,9 @@ import {
   ACTIVE_TOOLS,
   nanoid,
   // Branching heads
-  HeadController, type HeadJournal, LiveHeadJournal,
+  type HeadJournal, LiveHeadJournal,
   type HeadId, type HeadInput, type HeadReport, type MergeStrategy,
-  type SerializedMessage, type SplitPhaseEvent, type HeadRuntime, type HeadGrounding, type MergeResult,
+  type SerializedMessage, type HeadRuntime, type HeadGrounding, type MergeResult,
   type NodeLoopHost, type NodeArbiter, type BranchProposal, type BranchDecision,
   // Canonical memory-note read (the dynamic-context MEMORY.md tail)
   readMemoryTail,
@@ -102,7 +101,9 @@ import {
   normalizeUsage, usageReported, type Usage,
   // Non-turn model calls: the row type, its sink, and where a call with no run
   // open is filed. The other 25 producers of workspace spend arrive this way.
-  WORKSPACE_RUN_ID, type ModelCallReport, type RunEventInput,
+  WORKSPACE_RUN_ID, type ModelCallReport, type ModelOperationSink, type ModelOperationEvent,
+  type RunEventInput,
+  recordModelOperations,
   // The ONE catalog pricing, so a model_call row prices exactly as the ledger
   // debits — and only when the rate belongs to the model that served it.
   priceCall,
@@ -113,11 +114,11 @@ import {
   // The stores every agent has, built once from its one SQL handle, and the
   // one binding of the live per-step planes to them.
   createAgentStores, type AgentConfigStore, collectDynamicContext,
-  type SessionWriter, type SqlExecutor,
-  // The agents tool's fork substrate (shared factory) + durable MCTS session
-  buildStrategyForkDeps, createDurableMctsSession, agentsActionsFor,
+  type SqlExecutor,
+  // The agents tool's fork substrate (shared factory)
+  buildStrategyForkDeps, agentsActionsFor,
   // Background-job system (#173 — auto-background past the surface threshold)
-  BackgroundJobRunner, BACKGROUND_POLICY, type SessionSurface,
+  BackgroundJobRunner, BACKGROUND_POLICY, type InvocationSurface,
   type BackgroundJobStore, type TaskListStore,
   wrapToolsForBackground, BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob,
   // The control plane both roots expose over the same core implementations.
@@ -129,9 +130,9 @@ import {
   // Skills + per-turn surface (core turn-surface)
   resolveTurnSkills, filterToolNamesBySkills, skillsVfsOver,
   type ActiveSkillSet, type SkillsVfs,
-  // Heads support (takes capture + inherited-context digest)
-  recordGroundedHeadsTake, INHERITED_CONTEXT_CAP,
-  inheritedContextFromRows, headPhaseRunEvent,
+  // Heads support (inherited-context digest)
+  INHERITED_CONTEXT_CAP,
+  inheritedContextFromRows,
   type ReleaseToolDeps,
   type SubmitPlanToolDeps,
   isVfsError,
@@ -159,12 +160,15 @@ import {
   settleUnpairedToolCalls,
   // AGENTS.md (agents.md standard) — cloud workspace discovery
   collectWorkspaceAgentsMd,
-  mergeProviderOptions, reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE,
+  mergeProviderOptions, reasoningEffortOptions,
   uiMessageText, tableExists, PROGRAMMATIC_MESSAGE_ID_PREFIX,
   TURN_AUTHOR_METADATA_KEY, stampTurnAuthor,
   // memory.* / tasks.* — codemode projections of the same-named native tools
-  createMemoryCodemodeProvider, createTasksCodemodeProvider,
-  JsonObjectSchema, JsonValueSchema, projectJsonValue, type JsonObject, type JsonValue,
+  JsonObjectSchema, JsonValueSchema, TIER_IDS, projectJsonValue, changeActiveRole,
+  agentsProfileContext, effectiveRoleCatalog, loadProfileAuthorityInputs,
+  resolveAgentTurnProfile, createMemoryCodemodeProvider, createTasksCodemodeProvider,
+  type JsonObject, type JsonValue, type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
+  type ResolvedTurnProfile, type TierId,
 } from "@kinu.run/core";
 import { bindAgentSql, createCFRuntime, type CFRuntime } from "./runtime";
 import { createExecuteToolsTool } from "./execute-tools";
@@ -221,6 +225,7 @@ interface UserHubCoreClient {
   readonly setWorkspaceDisplayName: UserDO['setWorkspaceDisplayName'];
   readonly deviceRpc: UserDO['deviceRpc'];
   readonly getProfile: UserDO['getProfile'];
+  readonly getWorkspaceProfileCatalog: UserDO['getWorkspaceProfileCatalog'];
   readonly getConfig: UserDO['getConfig'];
   readonly registerWorkspace: UserDO['registerWorkspace'];
   readonly reserveWorkspace: UserDO['reserveWorkspace'];
@@ -309,6 +314,11 @@ function readCliCwd(body?: JsonObject): string | null {
  */
 function readTurnContinuity(body?: JsonObject): TurnContinuity {
   return body?.oneShot === true ? 'independent_task' : 'conversation';
+}
+
+function readTurnTier(body?: JsonObject): TierId | undefined {
+  const parsed = v.safeParse(v.picklist(TIER_IDS), body?.tier);
+  return parsed.success ? parsed.output : undefined;
 }
 
 type UserModelMessage = Extract<ModelMessage, { role: 'user' }>;
@@ -672,9 +682,11 @@ export abstract class ActorAgent extends Think<Env> {
             const identity = {
               name: input.name,
               displayName: input.displayName,
-              role: input.role,
+              role: input.roleId ?? input.legacyRole ?? '',
               mission: input.mission,
-              model: input.model,
+              roleId: input.roleId,
+              tier: input.tier,
+              catalogVersion: input.catalogVersion,
               capabilityToken: capabilityToken ?? undefined,
             };
             await stub.setSubordinateIdentity(identity);
@@ -1036,6 +1048,7 @@ export abstract class ActorAgent extends Think<Env> {
         context: this.acc.context,
         files: this.acc.files,
         escalations: this.acc.escalations,
+        delegation: this.orch.steering.delegationSnapshot(),
         steering: this.orch.steering.snapshot(),
         craft: this.orch.craft.snapshot(),
         recoveries: this.orch.recoverySnapshot(),
@@ -1099,8 +1112,9 @@ export abstract class ActorAgent extends Think<Env> {
       // folding history is the producer that fires precisely when a
       // conversation got expensive, so the workspace total understated exactly
       // the sessions an owner asks about.
-      summarize: createModelSummarizer(() => this.getModel(), undefined, {
+      summarize: createModelSummarizer(() => this.getModel(), {
         source: 'compaction', report: (report) => this.reportModelCall(report),
+        operations: this.modelOperations,
       }),
       // The ladder's first rung prunes this plane before any tool output.
       ephemeral: this.dynamicLedger,
@@ -1148,6 +1162,9 @@ export abstract class ActorAgent extends Think<Env> {
         eventLog: this.eventLog,
         budget: this.budget,
         sessionReflectionInterval: SESSION_REFLECTION_INTERVAL,
+        roleCatalog: () => this._turnProfileInputs
+          ? Object.keys(effectiveRoleCatalog(this._turnProfileInputs.envelope.catalog))
+          : undefined,
         sinks: {
           logActivity: (e, d) => this.logActivity(e, d),
           onToolCallEvent: (ev) => {
@@ -1247,6 +1264,14 @@ export abstract class ActorAgent extends Think<Env> {
    */
   async reportFacetModelCall(report: ModelCallReport): Promise<void> {
     this.reportModelCall(report);
+  }
+
+  /** A facet's model-operation frames (the begin/end pair around one non-turn
+   *  call), to the same root log as reportFacetModelCall — an operation row
+   *  explains a spend row, so neither may strand in facet SQLite. Same
+   *  non-@callable, rpc-surface-allowlisted discipline as its twin above. */
+  async reportFacetModelOperation(event: ModelOperationEvent): Promise<void> {
+    this.modelOperations(event);
   }
 
   // ── The subtree's head journal, over this actor's control plane ──────
@@ -1500,7 +1525,6 @@ export abstract class ActorAgent extends Think<Env> {
         llmStream: this.makeScaffoldLLMStream(),
         callTool: this.makeScaffoldCallTool(),
         history: this.makeScaffoldHistory(),
-        timeoutMs: SCAFFOLD_TURN_TIMEOUT_MS,
       },
     });
   }
@@ -1591,8 +1615,7 @@ export abstract class ActorAgent extends Think<Env> {
             })));
         },
         // Branching-heads runtime (Facet spawner + merge LLM), resolved lazily —
-        // heads need the owner for UserDO auth, set by first-turn time. undefined
-        // before then ⇒ heads degrade (getHeadController throws the no-owner error).
+        // heads need the owner for UserDO auth, set by first-turn time.
         get headRuntime() { return getHeadRuntime(); },
       };
     }
@@ -1622,12 +1645,6 @@ export abstract class ActorAgent extends Think<Env> {
   // invocation without any registry or cache coherence work.
   private readonly _craftExecTools = new Map<string, ReturnType<typeof createExecuteToolsTool>>();
 
-  // Branching-heads controller — lazily built once per DO lifetime. Wraps a
-  // HeadJournal + HeadRuntime (Facet spawner + merge LLM). The `agents` fork
-  // drives it, injecting inheritedContext + an onPhase event sink via
-  // defaultOptions().
-  private _headController: HeadController | null = null;
-
   /** The stores every agent has, from core — one list both backends inherit,
    *  so a store added there exists for this actor too. Lazy inside: the bundle
    *  never touches `boundSql` until a store is first read, which is what lets
@@ -1638,7 +1655,8 @@ export abstract class ActorAgent extends Think<Env> {
 
   /**
    * The orchestrator's view of head activity (journal + runs + steps). Shared by
-   * getHeadController (write path) and getHeadRuns (read path).
+   * every head-journal write (the cross-DO facet RPCs, steer-as-branch) and
+   * getHeadRuns (read path).
    *
    * ANNOUNCING, and that is the whole of the liveness fix. This handed out the
    * raw store, so every write core made through it — a node's spawn, its steps
@@ -1715,6 +1733,17 @@ export abstract class ActorAgent extends Think<Env> {
       }), { source: report.source });
     }
   }
+
+  /**
+   * Where this actor's direct model operations record their start and end —
+   * the same log, projected through core's one shared mapper so both backends
+   * cannot drift. A start row with no end is the durable signature of a frame
+   * the platform destroyed mid-call; nothing here reads a clock.
+   */
+  protected readonly modelOperations: ModelOperationSink = recordModelOperations(
+    this.eventRecorder,
+    () => this._currentRunId || WORKSPACE_RUN_ID,
+  );
 
   // ── EventsHub: per-agent ingress + persistence + dispatch. ──────────────
   // Load-bearing primitives (spec §1):
@@ -1928,26 +1957,6 @@ export abstract class ActorAgent extends Think<Env> {
         // its runtime over the same remote session. So nodes here report
         // `shared-origin-plane`, and are graded on what they REPORT. Inventing a
         // directory would hand a node a boundary it does not have.
-        mcts: {
-          session: () => this.createMCTSSession(),
-          search: this.mctsSearchStore,
-          overrides: () => this.config.getMctsOverrides(),
-          // The search the operator watches. Bound at dispatch (the fork
-          // detaches on spawn-confirm), same as heads' onPhase.
-          onProgress: () => (event: MCTSProgressEvent) => this.onMctsProgress(event),
-        },
-        heads: {
-          controller: () => this.getHeadController(),
-          inheritedContext: () => this.readInheritedContext(),
-          // Captured at dispatch, once per fork call — see emitHeadPhase.
-          onPhase: () => {
-            const runId = this._currentRunId;
-            return (event: SplitPhaseEvent) => this.emitHeadPhase(event, runId);
-          },
-          onComplete: (merge: MergeResult, task: string) => {
-            if (workMode === 'build') this.recordHeadsTake(merge, task);
-          },
-        },
         // The *Inherited context* barrier: the SAME better-compact ladder the per-turn
         // extension runs, entered once per branch point. The swarm engine owns the
         // threshold; this owns the rewrite.
@@ -1958,8 +1967,9 @@ export abstract class ActorAgent extends Think<Env> {
             logger: this.compactionLogger,
           },
           archive: this.compactionState.archive,
-          summarize: createModelSummarizer(() => this.getModel(), undefined, {
+          summarize: createModelSummarizer(() => this.getModel(), {
             source: 'compaction', report: (report) => this.reportModelCall(report),
+            operations: this.modelOperations,
           }),
           // The swarm half compacts on the same policy every other production
           // path runs — the light preset — chosen here rather than inherited
@@ -1970,6 +1980,7 @@ export abstract class ActorAgent extends Think<Env> {
       }),
       budget: this.budget,
     };
+    deps.profile = () => agentsProfileContext(this._turnProfile, this._turnProfileInputs);
     if (actorDeps.team) deps.team = actorDeps.team;
     if (actorDeps.peers) deps.peers = actorDeps.peers;
     return deps;
@@ -1981,6 +1992,12 @@ export abstract class ActorAgent extends Think<Env> {
   // ── Skills (turn-scoped) ───────────────────────────────────────
   /** Resolved active set for the current turn. Built in beforeTurn, read by
    *  the system-prompt assembly via TurnConfig.system override. */
+  /** Immutable role/tier/tool profile resolved once for the active turn. */
+  private _turnProfileInputs: {
+    envelope: ProfileCatalogEnvelope;
+    provider: ProviderCatalogSnapshot;
+  } | null = null;
+  private _turnProfile: ResolvedTurnProfile | null = null;
   private _turnActiveSkills: ActiveSkillSet | null = null;
   /** Lazy SkillsVfs shim around rt.storage.vfs — built once, reused. */
   private _skillsVfs: SkillsVfs | null = null;
@@ -2150,6 +2167,14 @@ export abstract class ActorAgent extends Think<Env> {
       }, {
         deferrals: () => this.deferralChannel(),
         reportModelCall: (report) => this.reportModelCall(report),
+        turnProfile: () => this._turnProfile,
+        resolveProfile: async () => resolveAgentTurnProfile({
+          ...(await this.profileInputs()),
+          activeRoleId: this.config.getActiveRoleId(),
+          workMode: 'build',
+          availableTools: ACTIVE_TOOLS,
+          activeSkills: [],
+        }),
       });
       this.configureRuntime(runtime);
       this._rt = runtime;
@@ -2260,10 +2285,25 @@ export abstract class ActorAgent extends Think<Env> {
     return { workspaceToken };
   }
 
-  /** The owner's UserDO paired with this actor's identity — the two things
-   *  every privileged user-level call needs. */
+  /** The owner's UserDO paired with this actor's identity. */
   protected async userHub(): Promise<{ stub: UserHubClient; caller: UserCaller }> {
     return { stub: this.requireOwnerUserDO(), caller: await this.userCaller() };
+  }
+
+  protected async profileInputs(): Promise<{
+    envelope: ProfileCatalogEnvelope;
+    provider: ProviderCatalogSnapshot;
+  }> {
+    const { stub, caller } = await this.userHub();
+    return loadProfileAuthorityInputs({
+      envelope: () => stub.getWorkspaceProfileCatalog(caller),
+      provider: () => this.ownedModelServices.profileProviderSnapshot(),
+    });
+  }
+
+
+  protected resolvedTurnProfile(): ResolvedTurnProfile | null {
+    return this._turnProfile;
   }
 
   // ── Parent workspace file plane (worker-side DO RPC only) ──────────────
@@ -2394,6 +2434,21 @@ export abstract class ActorAgent extends Think<Env> {
     return getStoredModelSpec(this.config);
   }
 
+  @callable() async setRole(roleId: string): Promise<{ role: string }> {
+    const { envelope } = await this.profileInputs();
+    const changed = changeActiveRole({
+      config: this.config,
+      envelope,
+      to: roleId,
+      actor: 'user',
+    });
+    this._turnProfile = null;
+    this._turnProfileInputs = null;
+    if (changed.kind !== 'applied') {
+      throw new Error(`role "${roleId}" was refused: ${changed.kind === 'refused' ? changed.reason : changed.kind}`);
+    }
+    return { role: changed.to };
+  }
   @callable()
   async setModel(spec: string) {
     this.ensureSchema();
@@ -2443,12 +2498,12 @@ export abstract class ActorAgent extends Think<Env> {
 
   // ── Think lifecycle overrides ──────────────────────────────────
 
-  /** Think calls `getModel()` synchronously per turn. The memo lives in
-   *  OwnedModelServices, which every actor shares, so there is one cache and one
-   *  invalidation rather than a per-class copy. */
+  /** Think asks for a model before beforeTurn. The prior resolved profile is
+   * a warm hint; beforeTurn always overrides this turn with its fresh profile. */
   getModel(): LanguageModel {
     this.logActivity("getmodel");
-    return this.ownedModelServices.resolveModel(this.getStoredModelId());
+    const spec = this._turnProfile?.tier.model ?? this.getStoredModelId();
+    return this.ownedModelServices.resolveModel(spec);
   }
 
   /**
@@ -2491,10 +2546,8 @@ export abstract class ActorAgent extends Think<Env> {
     const actorDeps = this.actorToolDeps();
     const availableTools = actorActiveTools(actorDeps);
     const agentsActions = actorAgentsActions(actorDeps);
-    // The stance is durable agent state, the same class as the soul and the
-    // model — so it belongs in the cacheable base AND in its cache key.
-    const stance = this.config.getStance();
-    const key = `${this.getSoulText()}\u0000${execKey}\u0000${model.provider ?? ''}/${model.id ?? ''}\u0000${availableTools.join(',')}\u0000${agentsActions.join(',')}\u0000${stance}`;
+    const profileDigest = this._turnProfile?.digest ?? '';
+    const key = `${this.getSoulText()}\u0000${execKey}\u0000${model.provider ?? ''}/${model.id ?? ''}\u0000${availableTools.join(',')}\u0000${agentsActions.join(',')}\u0000${profileDigest}`;
     let base: string;
     if (this._cachedSystemPrompt && this._cachedSystemPromptKey === key) {
       base = this._cachedSystemPrompt;
@@ -2516,7 +2569,6 @@ export abstract class ActorAgent extends Think<Env> {
         rlmAvailable: true,
         backend: 'cf',
         model,
-        stance,
       });
       this._cachedSystemPrompt = base;
       this._cachedSystemPromptKey = key;
@@ -2600,6 +2652,7 @@ export abstract class ActorAgent extends Think<Env> {
         // stays lazy per action, so the cached toolset stays valid across
         // claimOwner.
         agents: this.getAgentsToolDeps(mode),
+        roleAuthority: () => this._turnProfileInputs?.envelope ?? null,
         // Vectorize-backed semantic memory. memory.search auto-uses
         // hybrid retrieval when this is provided + available; FTS5-only fallback.
         vectorStore: this.rt.vectorStore,
@@ -2634,28 +2687,6 @@ export abstract class ActorAgent extends Think<Env> {
     }
   }
 
-  /**
-   * Lazily build the HeadController that spawns ExplorationAgent Facets in
-   * head mode (initHead / runAsHead / abortHead). Driven by the `agents`
-   * tool's fork action; inheritedContext + the onPhase event sink are
-   * injected per call via readInheritedContext() / emitHeadPhase().
-   */
-  private getHeadController(): HeadController {
-    if (this._headController) return this._headController;
-    // The HeadRuntime flows through the BackendHost seam (CLI supplies a
-    // subprocess-backed one or undefined → single-shot degrade).
-    const runtime = this.host.headRuntime;
-    if (!runtime) throw new Error('Agent has no owner — branching heads need UserDO access for auth.');
-    this._headController = new HeadController(runtime, this.headJournal);
-    return this._headController;
-  }
-
-  /** Alternate-Takes capture of a completed agents fork (merge settle) run
-   *  (core recordGroundedHeadsTake). */
-  private recordHeadsTake(merge: MergeResult, task: string): void {
-    recordGroundedHeadsTake(this.boundSql, merge, task);
-  }
-
   /** Build the CF HeadRuntime (Facet spawner + merge LLM) once per DO lifetime,
    *  lazily — heads need the agent's owner for UserDO auth. undefined when the
    *  agent has no owner; surfaced via host.headRuntime. */
@@ -2680,6 +2711,7 @@ export abstract class ActorAgent extends Think<Env> {
       models: this.ownedModelServices,
       mergeModelSpec: () => this.getStoredModelId(),
       reportModelCall: (report) => this.reportModelCall(report),
+      operations: this.modelOperations,
       grounding,
     });
     return this._cfHeadRuntime;
@@ -2720,6 +2752,7 @@ export abstract class ActorAgent extends Think<Env> {
           ownerUserId,
           capabilityToken: await this.workspaceCapabilityToken(),
           // The PARENT's workspace, never this facet's own name: the file plane
+
           // is keyed by it, so a self-named node would derive a second, empty
           // filesystem — the regression unit-head-fork.test.ts pins.
           sharedParent: this.workspaceName(),
@@ -2837,31 +2870,6 @@ export abstract class ActorAgent extends Think<Env> {
     );
   }
 
-  /** Stream head_split / head_merge into the durable event log so SSE
-   *  subscribers + MCP `list_run_events` see the split lifecycle.
-   *
-   *  `runId` is captured at fork DISPATCH (getAgentsToolDeps' onPhase
-   *  factory), not read live off `_currentRunId`: a fork on the interactive
-   *  surface now detaches the instant it spawns, so the calling turn's own
-   *  run can close — and `_currentRunId` moves on to whatever turn runs next
-   *  — before 'split' fires and always before 'merge' does (it only fires once
-   *  the whole exploration finishes). Reading live would misattribute a late
-   *  phase to an unrelated later turn instead of dropping it silently, which
-   *  is worse. Passing '' (a closed run) is deliberate and distinct from
-   *  omitting it. */
-  private emitHeadPhase(event: SplitPhaseEvent, runId: string): void {
-    try {
-      if (!runId) return;
-      this.eventRecorder.emit(runId, headPhaseRunEvent(event));
-    } catch (err) {
-      diagnostics.failure('event.head_phase_emit_failed', toKinuError({
-        doing: 'recording a head split/merge phase run event',
-        cause: err,
-        otherwise: 'io',
-      }), { runId, phase: event.kind, rootId: event.rootId });
-    }
-  }
-
   /**
    * Fetch the user's MCP tool descriptors and reconstruct AI-SDK Tool
    * adapters whose `execute` closures dispatch back to UserDO via RPC.
@@ -2949,9 +2957,8 @@ export abstract class ActorAgent extends Think<Env> {
         },
       });
     }
-    // An MCP server is a bulk producer like any other — a 2MB API response
-    // rots the session exactly as a big `cat` does. Same clamp, same spill
-    // path, same turn budget as the builtins.
+    // An MCP server is a bulk producer like any other. Apply the same result
+    // clamp and spill path as built-in tools.
     const clamped = withClampedToolResults(tools, {
       vfs: this.rt.storage.vfs, budget: this.acc.context, producer: 'external_tool',
     });
@@ -2977,7 +2984,7 @@ export abstract class ActorAgent extends Think<Env> {
    *  of the resolved default model's real limit. Falls back to the raw spec
    *  only pre-claim (no provider registry yet). */
   private effectiveModelSpec(): string {
-    const stored = this.getStoredModelId();
+    const stored = this._turnProfile?.tier.model ?? this.getStoredModelId();
     try {
       return this.providerRegistry().normalizeSpecSync(stored);
     } catch (error) {
@@ -3046,6 +3053,11 @@ export abstract class ActorAgent extends Think<Env> {
     // this is the first place with a promise to await them on.
     await this.ensureOwnedScaffold();
     if (this._cachedSoulText === null) await this.refreshSoulText();
+    this._turnProfile = null;
+    const profileInputs = await this.profileInputs();
+    const activeRoleId = this.config.getActiveRoleId();
+    this._turnProfileInputs = profileInputs;
+    const roleSkills = effectiveRoleCatalog(profileInputs.envelope.catalog)[activeRoleId]?.skills ?? [];
     // Per-turn accounting reset + the turn's mission scope, together: what the
     // turn is allowed to spend is part of what the turn is.
     // The continuation flag resets mid-turn signal splice state: a continuation
@@ -3093,12 +3105,13 @@ export abstract class ActorAgent extends Think<Env> {
     // ladder renders only the actions this profile supports — then
     // restricted to the active skills' allowed union (core turn-surface).
     const turnActorDeps = this.actorToolDeps();
-    const workMode = this.turnWorkMode();
+    const requestedWorkMode = this.turnWorkMode();
     let activeTools: BuiltinToolName[] = actorActiveTools(turnActorDeps);
     const { available: availableSkills, activeSkills: activeSetForPrompt } = await resolveTurnSkills({
       vfs: this.getSkillsVfs(),
       config: this.config,
       userText: extractLastUserText(ctx.messages),
+      roleSkills,
     });
     if (activeSetForPrompt) {
       this._turnActiveSkills = activeSetForPrompt;
@@ -3120,13 +3133,46 @@ export abstract class ActorAgent extends Think<Env> {
       }));
     }
 
-    // Expose MCP tool keys to the active-tools allowlist so Think doesn't
-    // strip them out. Builtin names + MCP `mcp_<server>_<name>` keys are
-    // disjoint by construction (assertion above).
     const mcpToolNames = Object.keys(mcpTools);
-    const planToolNames = workMode === 'plan' && turnActorDeps.submitPlan ? ['submit_plan'] : [];
-    const effectiveActiveTools = [...activeTools, ...planToolNames, ...mcpToolNames];
-    const effectiveTools = mcpToolNames.length > 0 ? mcpTools : undefined;
+    const extensionTools = Object.fromEntries(
+      Object.entries(this.extensions.tools())
+        .filter(([name]) => !(name in ctx.tools) && !(name in mcpTools)),
+    );
+    const extensionToolNames = Object.keys(extensionTools);
+    const availableAgentActions = actorAgentsActions(turnActorDeps);
+    const availableTools = [
+      ...activeTools,
+      ...mcpToolNames,
+      ...extensionToolNames,
+      ...(turnActorDeps.submitPlan ? ['submit_plan'] : []),
+    ];
+    const profile = resolveAgentTurnProfile({
+      ...profileInputs,
+      activeRoleId: this.config.getActiveRoleId(),
+      workMode: requestedWorkMode,
+      availableTools,
+      activeSkills: activeSetForPrompt?.active.map((skill) => skill.name) ?? [],
+      explicitTier: readTurnTier(body),
+    });
+    this._turnProfile = profile;
+    const workMode = profile.workMode;
+    const allowedTools = new Set(profile.allowedTools);
+    const toolAllowed = (name: string): boolean => allowedTools.has(name);
+    const promptActiveTools = activeTools.filter(toolAllowed);
+    const resolvedAgentActions = toolAllowed('agents') ? availableAgentActions : [];
+    const planToolNames = workMode === 'plan' && turnActorDeps.submitPlan && toolAllowed('submit_plan')
+      ? ['submit_plan']
+      : [];
+    const effectiveActiveTools = [
+      ...promptActiveTools,
+      ...planToolNames,
+      ...mcpToolNames.filter(toolAllowed),
+      ...extensionToolNames.filter(toolAllowed),
+    ];
+    const effectiveTools: ToolSet = Object.fromEntries(
+      [...Object.entries(mcpTools), ...Object.entries(extensionTools)]
+        .filter(([name]) => toolAllowed(name)),
+    );
 
     // ── Per-turn device awareness ────────────────────────────────
     // One authoritative hub check (a cheap DO-to-DO RPC) so the executor list
@@ -3168,8 +3214,8 @@ export abstract class ActorAgent extends Think<Env> {
     const promptOptions: NonNullable<Parameters<typeof buildSystemPromptSync>[1]> = {
       soulOverride: this.getSoulText(),
       executors: execs,
-      availableTools: activeTools,
-      agentsActions: actorAgentsActions(turnActorDeps),
+      availableTools: promptActiveTools,
+      agentsActions: resolvedAgentActions,
       // `createRLMProvider` is unconditional in buildCfExecuteTools, so
       // `llm.query` is wired on every turn this backend runs. Omitting the flag
       // here defaulted it false and made the ONE authoritative prompt (this
@@ -3177,11 +3223,12 @@ export abstract class ActorAgent extends Think<Env> {
       // only surface that never said so — 143 tokens of decomposition doctrine
       // and the ladder's zeroth rung, absent from every shipped turn.
       rlmAvailable: true,
-      externalTools: mcpToolNames.map((name) => ({ name, source: 'mcp' as const })),
+      externalTools: mcpToolNames.filter(toolAllowed)
+        .map((name) => ({ name, source: 'mcp' as const })),
       backend: 'cf',
       workMode,
       provenance: this.turnProvenance(),
-      stance: this.config.getStance(),
+      roleSection: profile.role,
       planSubmissionAvailable: workMode === 'plan' && turnActorDeps.submitPlan !== undefined,
       model,
       currentDate: currentDateForPrompt(),
@@ -3196,7 +3243,10 @@ export abstract class ActorAgent extends Think<Env> {
     const systemOverride = buildSystemPromptSync(this.rt, promptOptions);
     this.recordSystemPromptHash(systemOverride);
 
-    const cfg: TurnConfig = { system: systemOverride };
+    const cfg: TurnConfig = {
+      system: systemOverride,
+      model: this.ownedModelServices.resolveModel(profile.tier.model),
+    };
 
     // The measured compaction trigger, read from the durable state by core in
     // the one correct order (orchestrator/turn-context.ts). Attachment
@@ -3240,19 +3290,8 @@ export abstract class ActorAgent extends Think<Env> {
     }
     cfg.messages = await assembleTurnMessages(assembly);
 
-    // Extension-contributed tools join the turn's ToolSet without ever
-    // shadowing a built-in or MCP tool (runChat's merge order, mirrored:
-    // caller tools win, only extension-vs-extension collisions throw).
-    const extensionTools = Object.fromEntries(
-      Object.entries(this.extensions.tools())
-        .filter(([name]) => !(name in ctx.tools) && !(name in mcpTools)),
-    );
-    const extensionToolNames = Object.keys(extensionTools);
-    const extraTools: ToolSet = { ...extensionTools, ...effectiveTools };
-    if (Object.keys(extraTools).length > 0) cfg.tools = extraTools;
-    cfg.activeTools = extensionToolNames.length > 0
-      ? [...effectiveActiveTools, ...extensionToolNames]
-      : effectiveActiveTools;
+    if (Object.keys(effectiveTools).length > 0) cfg.tools = effectiveTools;
+    cfg.activeTools = effectiveActiveTools;
 
     // Prompt-cache plan for this turn — the same core derivation `runChat`
     // uses (prompting/cache-breakpoints.ts `promptCachePlan`), so a change to
@@ -3274,8 +3313,8 @@ export abstract class ActorAgent extends Think<Env> {
       : null;
     const cacheOptions = cachePlan.providerOptions;
     const reasoningOptions = reasoningEffortOptions(
-      this.config.getReasoningEffort() ?? REASONING_EFFORT_FOR_STAGE.chat,
-      this.effectiveModelProviderFamily(),
+      profile.tier.reasoningEffort,
+      parseModelSpec(profile.tier.model).provider,
     );
     const providerOptions = mergeProviderOptions(cacheOptions, reasoningOptions);
     if (providerOptions) cfg.providerOptions = providerOptions;
@@ -3286,7 +3325,7 @@ export abstract class ActorAgent extends Think<Env> {
     // adds its tool-decision wrapping and, per step, the cache markers and the
     // dynamic-context block — all inert for a replay.
     const lastTurnOpts: Parameters<typeof streamText>[0] = {
-      model: ctx.model,
+      model: cfg.model ?? ctx.model,
       system: systemOverride,
       messages: cfg.messages,
       tools: { ...ctx.tools, ...cfg.tools },
@@ -3378,7 +3417,7 @@ export abstract class ActorAgent extends Think<Env> {
    *  an overflow retry) has nobody watching and is one-shot: detaching there
    *  buys nothing and costs a truncated turn plus a synthesis turn, and the
    *  model answers by polling its own jobs instead of working. */
-  protected turnSurface(): SessionSurface {
+  protected turnSurface(): InvocationSurface {
     // Two independent ways a turn can have nobody watching a stream, and both
     // count. A CLI one-shot invocation against this workspace stamps `oneShot`
     // on the request body (readTurnContinuity → 'independent_task'). A turn a
@@ -3501,16 +3540,16 @@ export abstract class ActorAgent extends Think<Env> {
     });
   }
 
-  /** Model for review/judge tasks: the operator's `review_model`, else a
-   *  different-vendor model when one is connected, else the chat model — the
-   *  self-preference policy in core's selectJudgeModel. Async because
-   *  cross-family availability is a credential-aware registry query; the
-   *  answer is cached until the owner's provider set is invalidated. */
-  protected getModelForReview(): Promise<import('ai').LanguageModel> {
-    return this.ownedModelServices.resolveJudgeModel({
-      reviewSpec: this.config.getRoleModel('judge'),
-      chatSpec: this.getStoredModelId(),
+  /** Review and judge work uses the account-wide deep tier. */
+  protected async getModelForReview(): Promise<LanguageModel> {
+    const profile = this._turnProfile ?? resolveAgentTurnProfile({
+      ...(await this.profileInputs()),
+      activeRoleId: this.config.getActiveRoleId(),
+      workMode: 'build',
+      availableTools: [],
+      activeSkills: [],
     });
+    return this.ownedModelServices.resolveModel(profile.tiers.deep.model);
   }
 
   // ── Fiber recovery — durable execution surviving DO eviction ──
@@ -3593,14 +3632,6 @@ export abstract class ActorAgent extends Think<Env> {
   async onCredentialsChanged(): Promise<{ ok: true }> {
     this.invalidateModelCaches();
     return { ok: true };
-  }
-
-  // ── Internal: MCTS session writer ──────────────────────────────
-
-  private createMCTSSession(): SessionWriter {
-    // The shared durable writer (core mcts-session): the messages table is
-    // the source of truth so a resumed search reconstructs ancestry (B6).
-    return createDurableMctsSession(this.boundSql);
   }
 
   /** Re-drive an evicted background job from its durable checkpoint (B6) —

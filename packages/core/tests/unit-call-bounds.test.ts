@@ -1,50 +1,73 @@
-// THE SANCTIONED BOUNDS (owner ruling, verbatim, 2026-08-21): "why is there a
-// 600s turn envelope or a max steps bound? I dont want those. We can maximum have
-// 600s timeout on the LLM call step, and then upto 3 retries on it, but no per
-// turn things."
-//
-// The former per-turn wall-clock envelope and the per-turn step cap are DELETED;
-// what remains is per-call only. This suite holds the two surviving constants to
-// the ruling and proves the deleted ones stay deleted at the type surface.
 import { describe, expect, test } from 'bun:test';
-import { LLM_CALL_TIMEOUT_MS, LLM_CALL_MAX_RETRIES } from '../src/config';
-import { DEFAULT_JUDGE_CALL_TIMEOUT_MS } from '../src/mcts/evaluation';
-import { DEFAULT_SETTLE_TIMEOUT_MS } from '../src/orchestrator/agent-orchestrator';
-import { SCAFFOLD_TURN_TIMEOUT_MS } from '../src/scaffold/executor';
+import * as config from '../src/config';
+import * as evaluation from '../src/mcts/evaluation';
+import * as scaffoldExecutor from '../src/scaffold/executor';
+import * as autoJudge from '../src/scaffold/auto-judge';
+import * as agentOrchestrator from '../src/orchestrator/agent-orchestrator';
+import type { EvaluateBranchOptions } from '../src/mcts/evaluation';
+import type { AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
 import { DEFAULT_ATTEMPT_BUDGET } from '../src/bench/types';
-import { UNBOUNDED_STEPS } from '../src/chat';
+import { UNBOUNDED_STEPS, DEFAULT_HEAD_BUDGET } from '../src/index';
 
-describe('the sanctioned per-call bounds', () => {
-  test('one LLM call gets exactly 600s of silence and up to 3 retries — the owner numbers', () => {
-    expect(LLM_CALL_TIMEOUT_MS).toBe(600_000);
-    expect(LLM_CALL_MAX_RETRIES).toBe(3);
+describe('the shared turn has no elapsed deadline', () => {
+  test('no LLM-call timeout or timeout-retry constant is exported', () => {
+    expect('LLM_CALL_TIMEOUT_MS' in config).toBe(false);
+    expect('LLM_CALL_MAX_RETRIES' in config).toBe(false);
   });
 
-  test('the judge call rides the same per-call bound — it IS an LLM call', () => {
-    expect(DEFAULT_JUDGE_CALL_TIMEOUT_MS).toBe(LLM_CALL_TIMEOUT_MS);
-  });
-
-  test('no per-turn bound exists: an unbounded stop condition is the default', () => {
+  test('the default stop condition never cuts a turn at a step count', () => {
     // The SDK's own default is stepCountIs(1); the loop MUST be given something.
-    // UNBOUNDED_STEPS never fires, so a turn ends only by model choice, budget,
-    // caller stopWhen, or the per-call window.
-    // SAFETY: this pin declares an invariant: UNBOUNDED_STEPS in src/chat.ts
-    // reads no field and returns false for any input, validated by its own
-    // one-clause body, so the cast fixes only the argument's nominal shape.
-    const impossibleInput = { steps: [], stepNumber: 99, maxSteps: undefined } as never;
-    expect(UNBOUNDED_STEPS(impossibleInput)).toBe(false);
+    // UNBOUNDED_STEPS never fires, so a turn ends only by model choice, mission
+    // budget, an explicit caller condition, cancellation, or a definitive error.
+    const input = { steps: [] } satisfies Parameters<typeof UNBOUNDED_STEPS>[0];
+    expect(UNBOUNDED_STEPS(input)).toBe(false);
   });
 });
 
-describe('bounds that are NOT per-turn keep their own derivations', () => {
-  test('the settle join is three sequential calls worth of per-call window', () => {
-    expect(DEFAULT_SETTLE_TIMEOUT_MS).toBe(3 * LLM_CALL_TIMEOUT_MS);
+describe('owned work carries no default elapsed deadline', () => {
+  test('MCTS judges expose no per-call wall clock', () => {
+    // A judge call is an LLM call: awaited to settlement, however long the
+    // provider takes. The ensemble degrades only on samples that fail to
+    // parse, never on samples that are merely slow.
+    expect('DEFAULT_JUDGE_CALL_TIMEOUT_MS' in evaluation).toBe(false);
   });
 
-  test('the scaffold trial bound and bench attempt budget are harness provisioning, pinned', () => {
-    // Measurement-harness bounds, not runtime ones: trials and attempts compare
-    // fairly under fixed provisioning. Values kept so records stay comparable.
-    expect(SCAFFOLD_TURN_TIMEOUT_MS).toBe(600_000);
+  test('the evaluator options expose no judgeCallTimeoutMs field', () => {
+    type HasJudgeTimeout = 'judgeCallTimeoutMs' extends keyof EvaluateBranchOptions ? true : false;
+    const hasJudgeTimeout: HasJudgeTimeout = false;
+    expect(hasJudgeTimeout).toBe(false);
+  });
+
+  test('scaffold runs expose no turn timeout constant or option field', () => {
+    // Scaffold loops have no elapsed deadline; the run joins the executor to
+    // settlement. The shadow trial's AutoJudgeConfig carries no knob either —
+    // cost is bounded by how many trials are QUEUED, never by starving a run.
+    expect('SCAFFOLD_TURN_TIMEOUT_MS' in scaffoldExecutor).toBe(false);
+    type ScaffoldOptions = Parameters<typeof scaffoldExecutor.runScaffold>[0];
+    type HasScaffoldTimeout = 'timeoutMs' extends keyof ScaffoldOptions ? true : false;
+    const hasScaffoldTimeout: HasScaffoldTimeout = false;
+    expect(hasScaffoldTimeout).toBe(false);
+    expect('scaffoldTimeoutMs' in autoJudge.DEFAULT_AUTO_JUDGE_CONFIG).toBe(false);
+  });
+
+  test('evolution settle exposes no join bound constant or dep field', () => {
+    // settleEvolution JOINS the turn lane with no elapsed bound: background
+    // evolution work is never abandoned by the clock.
+    expect('DEFAULT_SETTLE_TIMEOUT_MS' in agentOrchestrator).toBe(false);
+    type HasSettleTimeout = 'settleTimeoutMs' extends keyof AgentOrchestratorDeps ? true : false;
+    const hasSettleTimeout: HasSettleTimeout = false;
+    expect(hasSettleTimeout).toBe(false);
+  });
+
+  test('heads carry no default wall clock', () => {
+    // maxWallClockMs exists only when a caller explicitly authors one; absent
+    // means a head runs to completion.
+    expect('maxWallClockMs' in DEFAULT_HEAD_BUDGET).toBe(false);
+  });
+});
+
+describe('independent non-chat policies keep their existing values', () => {
+  test('the bench attempt keeps harness provisioning (another ticket owns it)', () => {
     expect(DEFAULT_ATTEMPT_BUDGET.wallClockMs).toBe(600_000);
     expect(DEFAULT_ATTEMPT_BUDGET.maxTokens).toBe(600_000);
   });

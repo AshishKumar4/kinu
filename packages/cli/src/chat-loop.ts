@@ -27,7 +27,6 @@ import {
   shouldOfferDeviceConnect,
 } from './device-connect';
 import { requireAuthConfig } from './config';
-import { renderSessionBrowser, selectSession } from './tui/session-browser';
 import {
   printToolCall, printToolResult, printEvolutionEvent, createTurnStatus, formatFailure,
   ACCENT, DIM, MUTED, ERR, OK, WARN, type TurnStatus,
@@ -415,6 +414,9 @@ async function applySlashOutcome(client: AgentClient, rl: readline.Interface, ou
     case 'effort-set':
       console.log(`\n${DIM('Reasoning effort:')} ${ACCENT(outcome.effort)}\n`);
       return 'ok';
+    case 'role-set':
+      console.log(`\n${DIM('Role:')} ${ACCENT(outcome.role)}\n`);
+      return 'ok';
     case 'status':
       console.log('');
       for (const line of renderStatusLines(outcome.status)) console.log(`  ${DIM(line)}`);
@@ -448,28 +450,6 @@ async function applySlashOutcome(client: AgentClient, rl: readline.Interface, ou
       for (const failure of menu.failures) {
         console.log(WARN(`  ! ${failure.label ?? failure.provider} could not be listed — ${failure.reason}`));
       }
-      console.log('');
-      return 'ok';
-    }
-    case 'sessions': {
-      const sessionHistory = client.sessionHistory;
-      if (!sessionHistory) {
-        console.log(`\n${DIM('Recorded conversation resume is available for local workspaces.')}\n`);
-        return 'ok';
-      }
-      const sessions = sessionHistory.list();
-      if (outcome.mode === 'resume' && outcome.resumeRef) {
-        const selected = selectSession(sessions, outcome.resumeRef);
-        if (!selected) {
-          console.log(WARN(`  No matching session for "${outcome.resumeRef}".`));
-          return 'ok';
-        }
-        await sessionHistory.resume(selected.info.id);
-        console.log(`\n${DIM('Resumed')} ${ACCENT(selected.label)}\n`);
-        return 'ok';
-      }
-      console.log(`\n${MUTED(renderSessionBrowser(outcome.mode, sessions))}`);
-      if (outcome.mode === 'resume') console.log(MUTED('Resume with /resume <number|id>.'));
       console.log('');
       return 'ok';
     }

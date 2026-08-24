@@ -29,7 +29,7 @@ import {
   DEFAULT_SHADOW_CONFIG, getPendingScaffold, getCurrentScaffoldVersion,
   recordShadowEvaluation, decidePromotion, applyPromotionDecision, readScaffoldVersion,
 } from './shadow';
-import { runScaffold, scaffoldEventText, SCAFFOLD_TURN_TIMEOUT_MS, type ScaffoldRunResult } from './executor';
+import { runScaffold, scaffoldEventText, type ScaffoldRunResult } from './executor';
 import { diagnostics, KinuError, toKinuError } from '../obs/index';
 
 /**
@@ -73,22 +73,15 @@ export interface AutoJudgeConfig {
   autoApply: boolean;
   /** Forwarded to decidePromotion. Default DEFAULT_SHADOW_CONFIG. */
   shadowConfig: ShadowConfig;
-  /** Wall-clock cap per scaffold run, in ms. Defaults to the LIVE turn budget
-   *  ({@link SCAFFOLD_TURN_TIMEOUT_MS}) — see below for why it cannot be less. */
-  scaffoldTimeoutMs: number;
 }
 
 export const DEFAULT_AUTO_JUDGE_CONFIG: AutoJudgeConfig = {
   autoApply: false,
   shadowConfig: DEFAULT_SHADOW_CONFIG,
-  // The candidate runs under the SAME wall clock the live loop got. This was
-  // 60s against a live 5 minutes, which does not measure scaffold quality: any
-  // candidate that attempted substantial work timed out, scored 0, and was
-  // rolled back for reasons unrelated to how good it was, so the gate could
-  // only ever promote scaffolds that finish fast and do little. Sampling — how
-  // many turns become trials at all — is where the cost is bounded, and it is
-  // applied when a trial is QUEUED, not when it runs.
-  scaffoldTimeoutMs: SCAFFOLD_TURN_TIMEOUT_MS,
+  // Cost is bounded by sampling — how many turns become trials at all — and
+  // that bound is applied when a trial is QUEUED, not when it runs. The trial
+  // itself carries no elapsed deadline (owner ruling: none on scaffold loops);
+  // the candidate runs to completion exactly as the live turn did.
 };
 
 export interface RunAutoShadowEvalOpts {
@@ -189,7 +182,6 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
       defaultInference: opts.defaultInference,
       history: opts.history,
       scaffoldCodeOverride: pendingCode,
-      timeoutMs: config.scaffoldTimeoutMs,
     });
   } catch (err) {
     diagnostics.failure(

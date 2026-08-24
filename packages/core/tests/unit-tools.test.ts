@@ -178,10 +178,12 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     };
     const stubPeers = {
       listPeers: async () => [],
-      ask: async () => ({ status: 'no_reply' as const, note: 'stub' }),
+      ask: async () => ({ status: 'replied' as const, from: 'a', reply: 'stub' }),
       send: async () => ({ status: 'queued' as const, message_id: 'm1' }),
       reply: async () => ({ ok: true as const }),
-      spawnWorkspace: async () => ({ agent: 'a', created: true, status: 'no_reply' as const, note: 'stub' }),
+      spawnWorkspace: async () => ({
+        agent: 'a', created: true, status: 'replied' as const, from: 'a', reply: 'stub',
+      }),
     };
     const stubReport = {
       report: async () => ({ delivered: true }),
@@ -303,7 +305,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
         properties: v.object({ action: v.object({ enum: v.array(v.string()) }) }),
       }),
     }), t.memory.inputSchema);
-    expect(schema.jsonSchema.properties.action.enum).toEqual(['save', 'search', 'sessions']);
+    expect(schema.jsonSchema.properties.action.enum).toEqual(['save', 'search', 'conversations']);
     // ...and the docstring does not advertise what the runtime cannot do.
     expect(t.memory.description).not.toContain('remember');
   });
@@ -415,7 +417,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const provider = createMemoryCodemodeProvider(() => ({ memory: rt.memory, sql: rt.storage.sql }));
     // No facts wired: remember/recall/forget are absent, matching the native
     // tool's own action-enum gating.
-    expect(Object.keys(provider.tools).sort()).toEqual(['save', 'search', 'sessions']);
+    expect(Object.keys(provider.tools).sort()).toEqual(['conversations', 'save', 'search']);
     const saved = await codemodeExecute(provider, 'save')('Remember: prefer snake_case');
     expect(String(saved)).toContain('saved');
     const found = await rt.memory.read('memory/MEMORY.md');

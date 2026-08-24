@@ -83,8 +83,12 @@ export const FULL_TOOL_SURFACE: readonly string[] = [...BUILTIN_TOOLS];
 /** pi's outcome union. A score is REACHABLE ONLY when the observation was
  *  scored, so an inert or errored trajectory cannot contribute a number — the
  *  property that makes `0` distinguishable from "never ran" in the type system
- *  rather than in a reviewer's memory. */
-export type EvalOutcome = 'scored' | 'inert' | 'errored' | 'skipped';
+ *  rather than in a reviewer's memory.
+ *
+ *  `incomplete` is the operator-cancellation outcome: the run was stopped while
+ *  this case was in flight, so there is no verdict to record — neither pass nor
+ *  fail, and never a score. */
+export type EvalOutcome = 'scored' | 'inert' | 'errored' | 'skipped' | 'incomplete';
 
 /** One scorer's verdict, flattened for persistence. */
 export interface EvalScoreRow {
@@ -104,6 +108,32 @@ export interface EvalScoreRow {
    * `outcomeRow` (eval-outcome.ts); the mechanism scorers do not set it.
    */
   readonly measured?: Readonly<Record<string, number>>;
+}
+
+/** One run event in an observation's provenance slice: structural facts only.
+ *  Content-bearing payloads (`args`, `result`, `messages`, error text, the user
+ *  prompt) are dropped at the collector, so a published record carries what the
+ *  episode DID without carrying what was said into it. */
+export interface EvalProvenanceEvent {
+  readonly runId: string;
+  readonly timestamp: string;
+  readonly eventIndex: number;
+  readonly type: string;
+  /** The tool name on a `tool_call_end` row. */
+  readonly name?: string;
+  readonly durationMs?: number;
+  /** Why a tool call failed, as the failure's CLASS (`exit_127`, `threw`,
+   *  `denied`, …) — never its text. */
+  readonly failureClass?: string;
+}
+
+/** A bounded slice of one observation's raw run-event ledger. `bound` states
+ *  the cap and `totalEvents` the untruncated count, so a reader can tell a full
+ *  trail from a clipped one without trusting either number's absence. */
+export interface EvalRunProvenance {
+  readonly totalEvents: number;
+  readonly bound: number;
+  readonly events: readonly EvalProvenanceEvent[];
 }
 
 /** One task attempted once. `repetition` plus `taskId` is the pairing identity;
@@ -138,7 +168,14 @@ export type EvalObservation =
     /** Reasoning tokens, when the provider reported them. Optional for the same
      *  reason as `toolNames`: the flash-a/b baselines predate it. */
     readonly reasoningOut?: number;
+    /** Measured observation duration. It is evidence, never a work deadline. */
     readonly ms: number;
+    /**
+     * Bounded raw run-event provenance for this episode — see
+     * {@link EvalRunProvenance}. Written by the behaviour harness; optional so
+     * records predating it stay readable.
+     */
+    readonly provenance?: EvalRunProvenance;
   }
   | {
     readonly taskId: string;
@@ -192,6 +229,9 @@ export interface EvalAdmissibility {
   readonly mechanismsAbsent: readonly string[];
   /** Why it is inadmissible, empty when it is. */
   readonly failures: readonly string[];
+  /** Observations the operator's cancellation caught mid-episode. Never
+   *  scored; their presence marks the whole record partial. */
+  readonly incomplete: number;
 }
 
 /** A complete run: what it ran, under what, and what it found. */
@@ -345,6 +385,7 @@ export function assessAdmissibility(
 ): EvalAdmissibility {
   const scored = observations.filter((o) => o.outcome === 'scored');
   const inert = observations.filter((o) => o.outcome === 'inert').length;
+  const incomplete = observations.filter((o) => o.outcome === 'incomplete').length;
   const gradedTurns = scored.reduce((n, o) => n + o.turns, 0);
   const toolCalls = scored.reduce((n, o) => n + o.toolCalls, 0);
 
@@ -376,9 +417,17 @@ export function assessAdmissibility(
     failures.push(`declared ${String(declaredTasks.length)} tasks but never attempted ${missing.join(', ')}`);
   }
 
+  // A cancelled run is partial evidence by construction: whatever it did settle
+  // stands, but the record must say out loud that it is incomplete rather than
+  // let a shorter denominator read as a finished measurement.
+  if (incomplete > 0) {
+    failures.push(`${String(incomplete)} case(s) never settled — the run was cancelled `
+      + 'mid-flight; this record is partial evidence, not a verdict');
+  }
+
   return {
     admissible: failures.length === 0,
-    scored: scored.length, inert, gradedTurns, toolCalls, outcomesScored,
+    scored: scored.length, inert, incomplete, gradedTurns, toolCalls, outcomesScored,
     mechanismsExercised: [...exercised].sort(),
     mechanismsAbsent: allNames.filter((n) => !exercised.has(n)),
     failures,
@@ -557,7 +606,8 @@ export function formatRunRecord(record: EvalRunRecord): string {
     `  tasks ${String(record.executedTasks.length)}/${String(record.declaredTasks.length)} `
       + `× ${String(record.repeats)} repeats, seed ${String(record.seed)}`,
     `  ADMISSIBLE: ${a.admissible ? 'yes' : 'NO'} — ${String(a.gradedTurns)} graded turns, `
-      + `${String(a.toolCalls)} tool calls, ${String(a.scored)} scored / ${String(a.inert)} inert`,
+      + `${String(a.toolCalls)} tool calls, ${String(a.scored)} scored / ${String(a.inert)} inert`
+      + (a.incomplete > 0 ? ` / ${String(a.incomplete)} INCOMPLETE (cancelled)` : ''),
   ];
   for (const failure of a.failures) lines.push(`    INADMISSIBLE: ${failure}`);
   if (a.mechanismsAbsent.length > 0) {

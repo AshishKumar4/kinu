@@ -1,44 +1,20 @@
 /**
- * ONE SHARED PROVIDER, PACED — and a provider-declared wait made OBSERVABLE.
+ * ONE SHARED PROVIDER, PACED.
  *
- * Two facts about one thing. A model provider is not per-agent: every node of a
- * swarm, every head, and the actor itself drive their turn loops against ONE
- * account credential, so a provider's rate limit is a property of the isolate
- * rather than of any one turn inside it. Nothing here held that fact, and two
- * defects followed from its absence — both measured on the owner's live
- * workspace (my-personal-assistant-f0e4afa6, kinu.run).
+ * A model provider is not per-agent: every swarm node, head, and actor drives
+ * requests against one account credential. A live `ideate` run opened a whole
+ * level at once, the account rate-limited every request together, and all
+ * members entered backoff together.
  *
- *  1. A FAN-OUT WITH NO PACING. `strategy/swarm-run.ts` starts a whole level of
- *     nodes in one expression, each running its own turn loop. A
- *     `preset:'ideate'` run therefore opened five concurrent first requests on
- *     one Cloudflare OAuth credential, the account rate-limited them together,
- *     and all five entered backoff together. Nothing spaced them, and nothing
- *     told the fourth node that the first had just been handed a `Retry-After`.
+ * `withRateLimitRetry` declares the provider's wait before it sleeps.
+ * {@link ProviderPacer.admit} makes sibling requests for that host respect the
+ * same cooldown and connection-lane budget. Every cooldown comes from
+ * `Retry-After` or the retry layer's backoff; none is an elapsed-work limit.
+ * The concurrency limit comes from the platform catalog.
  *
- *  2. A DECLARED WAIT READ AS SILENCE. `withRateLimitRetry` sleeps INSIDE
- *     `fetch`, which is inside `model.doStream()`, which is upstream of the
- *     first chunk `chat.ts`'s stall watchdog waits for. So "the provider told us
- *     to wait" and "this request is dead" were the same observation, and the
- *     watchdog ended the turn with `Turn stalled: nothing flowed for 300s`. Two
- *     heads of one run errored with exactly that text while a `wrangler tail` on
- *     the same workspace carried `provider.rate_limited` for the same window.
- *     The work was never wedged; it was queued behind a rate limit.
- *
- * So a wait is DECLARED here and READ here. {@link withRateLimitRetry} declares
- * one before it sleeps, {@link ProviderPacer.admit} makes every other request
- * for that host respect it, and `chat.ts`'s watchdog asks whether the silence it
- * is looking at is a wait somebody was told to take.
- *
- * NO DURATION IS INVENTED IN THIS FILE. The only waits it takes are ones the
- * provider named (`Retry-After`, or the retry layer's own bounded backoff), and
- * the only bound it declares is a CONCURRENCY, derived below.
- *
- * WHY A MODULE SINGLETON. The quantity being shared is an account's rate limit,
- * whose scope is the isolate — the same scope `diagnostics` has, and for the same
- * reason. Threading a pacer through six provider factories and every model call
- * would make the plumbing per-turn while the fact stayed per-account, which is
- * how node A ends up unable to see node B's `Retry-After`. {@link ProviderPacer}
- * is constructible for tests; production shares {@link providerPacer}.
+ * The pacer is isolate-scoped because the account limit is isolate-scoped.
+ * {@link ProviderPacer} remains constructible for tests; production shares
+ * {@link providerPacer}.
  */
 
 import { PLATFORM_CATALOG } from '../platform-catalog';
@@ -71,24 +47,6 @@ import { PLATFORM_CATALOG } from '../platform-catalog';
  */
 const PROVIDER_REQUEST_LANES =
   PLATFORM_CATALOG['worker.simultaneous_connections'].limit.value;
-
-/** What a caller timing a silence needs to know about provider-declared waits. */
-export interface ProviderWaitState {
-  /** The furthest declared deadline still in the future, or 0 when no wait is
-   *  open. A caller waiting on silence may wait this out without calling it a
-   *  stall: somebody was told to hold off until then. */
-  readonly untilMs: number;
-  /**
-   * Monotonic count of waits ever declared.
-   *
-   * Present because "is a wait open right now" cannot answer "was this silence
-   * caused by a rate limit". A wait that opened and elapsed inside the window a
-   * watchdog was timing is gone by the time the watchdog looks, and the turn
-   * would then be reported as unexplained silence when the cause is on record.
-   * Comparing this count across the window says whether one happened at all.
-   */
-  readonly declared: number;
-}
 
 /** Sleep that an abort ends, rejecting with the signal's own reason. Shared with
  *  {@link withRateLimitRetry}, which waits under the same signal for the same
@@ -160,7 +118,6 @@ export class ProviderPacer {
   private readonly now: () => number;
   private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
   private readonly hosts = new Map<string, HostLane>();
-  private declaredCount = 0;
 
   constructor(opts: ProviderPacerOptions = {}) {
     this.lanes = opts.lanes ?? PROVIDER_REQUEST_LANES;
@@ -231,17 +188,6 @@ export class ProviderPacer {
     if (!(ms > 0)) return;
     const lane = this.laneFor(host);
     lane.coolUntilMs = Math.max(lane.coolUntilMs, this.now() + ms);
-    this.declaredCount += 1;
-  }
-
-  /** Every open wait, as the turn loop's watchdog reads them. */
-  waits(): ProviderWaitState {
-    let untilMs = 0;
-    const now = this.now();
-    for (const lane of this.hosts.values()) {
-      if (lane.coolUntilMs > now && lane.coolUntilMs > untilMs) untilMs = lane.coolUntilMs;
-    }
-    return { untilMs, declared: this.declaredCount };
   }
 
   private laneFor(host: string): HostLane {

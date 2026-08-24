@@ -71,6 +71,7 @@ import {
   type NodeLoopDeps,
   type NodeLoopResult,
   type MissionScope,
+  type ModelOperationSink,
   type WorkMode,
 } from "@kinu.run/core";
 import { OwnedModelServices } from "./owned-model-services";
@@ -80,7 +81,7 @@ import { bindAgentSql, createCFRuntime, type CFRuntime, type CFRuntimeHooks } fr
 import { createExecuteToolsTool } from "./execute-tools";
 import { buildHeadToolSet } from "@kinu.run/core";
 import {
-  createAgentTracing, createConsoleLogger, type AgentTracing,
+  createAgentTracing, createConsoleLogger, diagnostics, toKinuError, type AgentTracing,
 } from "@kinu.run/core/obs";
 import { createAgentConfigStore, initAgentConfigTable } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
@@ -128,6 +129,26 @@ export class ExplorationAgent extends Agent<Env> {
     if (!this._boundSql) this._boundSql = bindAgentSql(this);
     return this._boundSql;
   }
+
+  /** Where THIS facet's model-operation frames go: forwarded over the same
+   *  root RPC the merge's cost report uses (`reportFacetModelOperation`), for
+   *  the reason that twin exists — a facet has no durable log of its own, so
+   *  an operation row written locally would strand one Durable Object away
+   *  from the spend row it explains. A missing parent is instrumentation
+   *  losing its destination, not the merge failing: reported and dropped,
+   *  exactly how core's shared projection treats a ledger fault. */
+  private readonly modelOperations: ModelOperationSink = (event) => {
+    const parent = this.getSharedParentStub();
+    if (!parent) {
+      diagnostics.failure('event.model_operation_emit_failed', toKinuError({
+        doing: 'forwarding a model_operation frame to the root workspace',
+        cause: new Error('no parent workspace'),
+        otherwise: 'io',
+      }), { operationId: event.operationId, phase: event.phase, source: event.source });
+      return;
+    }
+    void parent.reportFacetModelOperation(event);
+  };
 
   private _tracing: AgentTracing | null = null;
 
@@ -563,6 +584,8 @@ export class ExplorationAgent extends Agent<Env> {
       // Reported to the root over the same cross-DO port the journal above uses,
       // because that is where the workspace's total is assembled.
       reportModelCall: (report) => { void parent.reportFacetModelCall(report); },
+      // The merge's operation frames go to the root beside its cost report.
+      operations: this.modelOperations,
       // No `grounding`: a subtree's merge stays n=1 with neutral head scores.
       // Grounding one multiplies it into `mergeSamples` syntheses plus a judge
       // pass per head, and whether every level pays that is a heads-policy call.

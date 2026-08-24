@@ -1,5 +1,13 @@
 import { resolveCloudOrigin } from './config';
-import { decodeJsonValue, JsonValueSchema, type JsonValue, type ReasoningEffort } from '@kinu.run/core';
+import {
+  decodeJsonValue,
+  JsonValueSchema,
+  ProfileCatalogEnvelopeSchema,
+  type JsonValue,
+  type ProfileCatalog,
+  type ProfileCatalogEnvelope,
+  type ReasoningEffort,
+} from '@kinu.run/core';
 import { tolerateAsync } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
@@ -62,6 +70,8 @@ export interface CloudAgentStatus {
   messageCount: number;
   model?: string | null;
   reasoningEffort?: ReasoningEffort | null;
+  roleId?: string;
+  tierId?: string;
 }
 
 export interface CloudChatMessage {
@@ -157,6 +167,7 @@ export const CloudAgentStatusSchema: v.GenericSchema<CloudAgentStatus> = v.objec
   name: v.string(), displayName: v.optional(v.string()), purpose: v.string(), soul: v.string(),
   createdAt: v.number(), scaffoldVersion: v.number(), searchNodeCount: v.number(), craftedToolCount: v.number(),
   messageCount: v.number(), model: v.optional(v.nullable(v.string())), reasoningEffort: v.optional(v.nullable(ReasoningEffortSchema)),
+  roleId: v.optional(v.string()), tierId: v.optional(v.string()),
 });
 const ToolDescriptionSchema = v.object({ name: v.string(), description: v.string() });
 export const CloudToolDescriptionsSchema: v.GenericSchema<CloudToolDescriptions> = v.object({
@@ -250,6 +261,51 @@ export async function listCloudAvailableModels(origin: string, token: string): P
   return cloudJson(CloudModelMenuSchema, origin, '/api/cli/models', { token });
 }
 
+/** `GET /api/cli/profile` — the account's profile catalog envelope. The
+ *  server always answers with an envelope: an account that never customized
+ *  gets version 0 over the builtin default catalog. */
+export async function getCloudProfile(origin: string, token: string): Promise<ProfileCatalogEnvelope> {
+  const { status, body } = await cloudRequest(origin, '/api/cli/profile', { token });
+  assertCloudOk(status, body);
+  return v.parse(ProfileCatalogEnvelopeSchema, body);
+}
+
+export interface CloudProfileUpdateInput {
+  catalog: ProfileCatalog;
+  /** The envelope version this update was based on. A mismatch is a
+   *  conflict, never a silent overwrite. */
+  expectedVersion: number;
+}
+
+export type CloudProfileUpdateResult =
+  | { ok: true; envelope: ProfileCatalogEnvelope }
+  | { conflict: true; currentVersion: number; currentDigest: string };
+
+/** `PUT /api/cli/profile` — compare-and-swap the account's whole catalog.
+ *  A stale `expectedVersion` comes back as a structured conflict carrying
+ *  the current version and digest; nothing merges. */
+export async function updateCloudProfile(
+  origin: string,
+  token: string,
+  input: CloudProfileUpdateInput,
+): Promise<CloudProfileUpdateResult> {
+  const { status, body } = await cloudRequest(origin, '/api/cli/profile', {
+    method: 'PUT',
+    token,
+    body: decodeJsonValue({ value: input }),
+  });
+  if (status === 409) {
+    const conflict = v.parse(v.object({
+      error: v.string(),
+      currentVersion: v.number(),
+      currentDigest: v.string(),
+    }), body);
+    return { conflict: true, currentVersion: conflict.currentVersion, currentDigest: conflict.currentDigest };
+  }
+  assertCloudOk(status, body);
+  return { ok: true, envelope: v.parse(ProfileCatalogEnvelopeSchema, body) };
+}
+
 /** A stored credential as the account will describe it — key, kind, and when
  *  it changed. There is no read-back: once submitted, a secret is not
  *  viewable again from anywhere. */
@@ -287,6 +343,7 @@ export interface CreateCloudAgentInput {
   purpose?: string;
   model?: string;
   reasoningEffort?: ReasoningEffort;
+  role?: string;
 }
 
 export async function createCloudAgent(origin: string, token: string, input: CreateCloudAgentInput): Promise<CloudAgent> {
@@ -352,12 +409,16 @@ export async function listCloudDevices(origin: string, token: string): Promise<C
   return cloudJson(v.array(CloudDeviceSchema), origin, '/api/cli/devices', { token });
 }
 
-async function cloudJson<T>(
-  schema: v.GenericSchema<T>,
-  origin: string,
-  path: string,
-  opts: { method?: string; body?: JsonValue; token?: string } = {},
-): Promise<T> {
+interface CloudRequestOpts {
+  method?: string;
+  body?: JsonValue;
+  token?: string;
+}
+
+/** One transport for every CLI-plane call: bearer auth, JSON bodies, and the
+ *  server's body kept even on failure statuses so callers can react to
+ *  structured errors (a 409 conflict is data, not just a message). */
+async function cloudRequest(origin: string, path: string, opts: CloudRequestOpts = {}): Promise<{ status: number; body: JsonValue }> {
   const headers = new Headers();
   if (opts.body !== undefined) headers.set('content-type', 'application/json');
   if (opts.token) headers.set('authorization', `Bearer ${opts.token}`);
@@ -373,11 +434,27 @@ async function cloudJson<T>(
   const body: JsonValue = contentType.includes('application/json')
     ? (await tolerateAsync(async () => decodeJsonValue({ value: await res.json() }), 'malformed-input')) ?? {}
     : { error: await res.text() };
-  if (!res.ok) {
-    const error = v.safeParse(v.object({ error: v.string() }), body);
-    const message = error.success && error.output.error ? error.output.error : `HTTP ${res.status}`;
-    throw new Error(message);
-  }
+  return { status: res.status, body };
+}
+
+function assertCloudOk(status: number, body: JsonValue): void {
+  if (status >= 200 && status < 300) return;
+  throw new Error(cloudErrorMessage(status, body));
+}
+
+function cloudErrorMessage(status: number, body: JsonValue): string {
+  const error = v.safeParse(v.object({ error: v.string() }), body);
+  return error.success && error.output.error ? error.output.error : `HTTP ${status}`;
+}
+
+async function cloudJson<T>(
+  schema: v.GenericSchema<T>,
+  origin: string,
+  path: string,
+  opts: CloudRequestOpts = {},
+): Promise<T> {
+  const { status, body } = await cloudRequest(origin, path, opts);
+  assertCloudOk(status, body);
   return v.parse(schema, body);
 }
 

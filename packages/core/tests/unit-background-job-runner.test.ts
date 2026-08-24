@@ -11,7 +11,7 @@ import {
 import { SignalDelivery } from '../src/orchestrator/signals';
 import {
   BackgroundJobStore, initBackgroundJobsTable, BACKGROUND_POLICY,
-  type BackgroundPolicy, type BackgroundJob, type SessionSurface,
+  type BackgroundPolicy, type BackgroundJob, type InvocationSurface,
 } from '../src/jobs/index';
 import { buildDrainBatch, EventLog, initEventsHubTables } from '../src/events/hub/index';
 import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host';
@@ -531,7 +531,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     // Resolved per read, not captured once: a backend whose surface is a
     // property of the TURN (the cloud DO serves a watched chat turn and an
     // unwatched drain from one agent) switches policy between calls.
-    let surface: SessionSurface = 'interactive';
+    let surface: InvocationSurface = 'interactive';
     const perTurn = new BackgroundJobRunner({
       ...oneShot.runnerDeps, policy: () => BACKGROUND_POLICY[surface],
     });

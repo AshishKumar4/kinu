@@ -74,62 +74,74 @@ export function readSubordinateLiveStatus(sql: SqlExec): SubordinateLiveStatus {
 export interface SubordinateIdentity {
   name: string;
   displayName: string;
-  role: string;
+  /**
+   * The catalog role this subordinate runs under, or null when it was hired
+   * by an actor with no profile catalog. A catalog role REPLACES any legacy
+   * freeform line; the two never both carry instructions.
+   */
+  roleId: string | null;
+  /** The freeform role text a pre-catalog hire carried — rendered as the
+   *  labelled leading block of the role section until an explicit catalog
+   *  assignment replaces and clears it. Null for a catalog hire. */
+  legacyRole: string | null;
+  /** Optional inference-tier override (`tiny|fast|default|slow|deep`); absent
+   *  resolves through the role's default tier at the child's turn boundary. */
+  tier: string | null;
+  /** Catalog version the roleId was validated against, when known. */
+  catalogVersion: number | null;
   mission: string;
   /** The WORKSPACE this subordinate belongs to — its exec planes, credentials
    *  and capability all present this name. Inherited unchanged down a nested
    *  tree, so it is never the immediate parent's name past depth 1. */
   parentWorkspace: string;
   ownerUserId: string;
-  /**
-   * Where this subordinate sits in its workspace's tree: 1 = hired by the
-   * orchestrator, 2 = hired by one of those, and so on.
-   *
-   * DURABLE on purpose, and it is the reason the depth cap is a cap at all. The
-   * number is computed by the PARENT (deriveChildDelegationBudget) and written
-   * here at seeding; nothing the child sends can set it. Because it is stored
-   * rather than held in memory, an evicted subordinate that is later resumed
-   * reconstructs the same depth instead of re-entering the tree at 0 and
-   * rebuilding it beneath itself — the exact failure the deepseek harness needs
-   * its `max(header.delegationDepth, options.subagentDepth)` floor for
-   * (subagent/src/depth.ts:26-37: "a resumed child arrives with fresh options,
-   * and counting it from zero would let it delegate as if it were top-level").
-   * On a Durable Object eviction is routine, so an in-memory depth would make
-   * the cap hold only for trees that never sleep.
-   */
+  /** Durable tree depth (1 = hired by the orchestrator); the cap's backbone. */
   depth: number;
 }
 
 interface IdentityRow {
   name: string;
   display_name: string;
-  role: string;
+  role_id: string | null;
+  legacy_role: string | null;
+  tier: string | null;
+  catalog_version: number | null;
   mission: string;
   parent_workspace: string;
   owner_user_id: string;
   depth: number;
 }
 
-const IdentityRowSchema: v.GenericSchema<IdentityRow> = v.object({
+const IdentityRowSchema: v.GenericSchema<IdentityRow & { role?: string | null }> = v.object({
   name: v.string(),
   display_name: v.string(),
-  role: v.string(),
+  role: v.optional(v.nullable(v.string())),
+  role_id: v.nullable(v.string()),
+  legacy_role: v.nullable(v.string()),
+  tier: v.nullable(v.string()),
+  catalog_version: v.nullable(v.number()),
   mission: v.string(),
   parent_workspace: v.string(),
   owner_user_id: v.string(),
   depth: v.number(),
 });
 
-function parseIdentityRow<T>(row: T): IdentityRow | null {
+function parseIdentityRow<Input>(row: Input): (IdentityRow & { role?: string | null }) | null {
   const parsed = v.safeParse(IdentityRowSchema, row);
   return parsed.success ? parsed.output : null;
 }
 
-function mapIdentityRow(row: IdentityRow): SubordinateIdentity {
+
+function mapIdentityRow(row: IdentityRow & { role?: string | null }): SubordinateIdentity {
   return {
     name: row.name,
     displayName: row.display_name,
-    role: row.role,
+    roleId: row.role_id,
+    // A pre-roles row stored its freeform text in `role`; that column becomes
+    // the legacy block exactly once, at the read boundary.
+    legacyRole: row.role_id === null ? row.legacy_role ?? row.role ?? null : null,
+    tier: row.tier,
+    catalogVersion: row.catalog_version,
     mission: row.mission,
     parentWorkspace: row.parent_workspace,
     ownerUserId: row.owner_user_id,
@@ -140,7 +152,10 @@ function mapIdentityRow(row: IdentityRow): SubordinateIdentity {
 function identitiesEqual(a: SubordinateIdentity, b: SubordinateIdentity): boolean {
   return a.name === b.name
     && a.displayName === b.displayName
-    && a.role === b.role
+    && a.roleId === b.roleId
+    && a.legacyRole === b.legacyRole
+    && a.tier === b.tier
+    && a.catalogVersion === b.catalogVersion
     && a.mission === b.mission
     && a.parentWorkspace === b.parentWorkspace
     && a.ownerUserId === b.ownerUserId
@@ -173,6 +188,12 @@ export class SubordinateIdentityStore {
     // compatibility guess.
     reconcileColumns(this.tagged, (ddl) => { this.sql.exec(ddl); }, 'subordinate_identity', {
       depth: 'INTEGER NOT NULL DEFAULT 1',
+      // Catalog-role identity. A row seeded before roles existed leaves these
+      // null; its original `role` text reads back as the legacy block.
+      role_id: 'TEXT',
+      legacy_role: 'TEXT',
+      tier: 'TEXT',
+      catalog_version: 'INTEGER',
     });
   }
 
@@ -182,13 +203,22 @@ export class SubordinateIdentityStore {
       if (identitiesEqual(existing, identity)) return;
       throw new Error('Subordinate identity is already initialized and cannot be changed.');
     }
+    // One column holds the role story: a catalog hire stores roleId and may
+    // carry its tier override; a legacy hire stores the freeform line in the
+    // `role` column it always lived in and reads back as legacyRole. The two
+    // are mutually exclusive by construction.
     this.sql.exec(
       `INSERT INTO subordinate_identity
-         (id, name, display_name, role, mission, parent_workspace, owner_user_id, depth)
-       VALUES (1, ?, ?, ?, ?, ?, ?, ?)`,
+         (id, name, display_name, role, role_id, legacy_role, tier, catalog_version,
+          mission, parent_workspace, owner_user_id, depth)
+       VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       identity.name,
       identity.displayName,
-      identity.role,
+      identity.roleId ?? identity.legacyRole ?? '',
+      identity.roleId,
+      identity.roleId === null ? identity.legacyRole : null,
+      identity.tier,
+      identity.catalogVersion,
       identity.mission,
       identity.parentWorkspace,
       identity.ownerUserId,
@@ -198,7 +228,8 @@ export class SubordinateIdentityStore {
 
   read(): SubordinateIdentity | null {
     const rows = this.sql.exec(
-      `SELECT name, display_name, role, mission, parent_workspace, owner_user_id, depth
+      `SELECT name, display_name, role, role_id, legacy_role, tier, catalog_version,
+              mission, parent_workspace, owner_user_id, depth
        FROM subordinate_identity WHERE id = 1`,
     ).toArray();
     if (rows.length === 0) return null;
@@ -655,9 +686,14 @@ export interface SubordinateRuntime {
   spawn(input: {
     name: string;
     displayName: string;
-    role: string;
+    /** Catalog role id, when the caller resolved one. */
+    roleId?: string;
+    /** The freeform line a pre-catalog caller supplied — the labelled legacy
+     *  block until an explicit catalog assignment replaces it. */
+    legacyRole?: string;
+    tier?: string;
+    catalogVersion?: number;
     mission: string;
-    model?: string;
   }): Promise<void>;
   assign(name: string, input: {
     body: string;
@@ -775,9 +811,12 @@ export function createTeamToolDeps(deps: {
 
   const provision = async (input: {
     name?: string;
+    /** Catalog role id, when the caller resolved one; else the legacy line. */
     role: string;
+    roleId?: string;
+    tier?: string;
+    catalogVersion?: number;
     mission: string;
-    model?: string;
   }, ownerCreated: boolean, mode: WorkMode | null): Promise<{
     name: string;
     displayName: string;
@@ -792,14 +831,18 @@ export function createTeamToolDeps(deps: {
     }
     if (deps.roster.get(name)) throw new Error(`subordinate "${name}" already exists`);
 
+    // Exactly one role story per identity: a validated catalog id (with its
+    // optional tier override and catalog version) REPLACES any freeform text;
+    // without one, `role` is the labelled legacy block.
     const displayName = displayNameForRole(role);
     const spawnInput: Parameters<SubordinateRuntime['spawn']>[0] = {
       name,
       displayName,
-      role,
       mission,
+      ...(input.roleId !== undefined
+        ? { roleId: input.roleId, tier: input.tier, catalogVersion: input.catalogVersion }
+        : { legacyRole: role }),
     };
-    if (input.model) Object.assign(spawnInput, { model: input.model });
     await deps.runtime.spawn(spawnInput);
     let rosterCreated = false;
     const createdAt = deps.now();

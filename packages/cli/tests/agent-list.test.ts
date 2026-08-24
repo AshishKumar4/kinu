@@ -1,8 +1,8 @@
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { reconcileAgentRefs } from '../src/agent-list';
+import { agentWorkspaceKey, groupAgentWorkspaces, reconcileAgentRefs, type ListedAgent } from '../src/agent-list';
 import * as v from 'valibot';
 
 const tempDirs: string[] = [];
@@ -45,6 +45,31 @@ describe('CLI cloud agent registry sync', () => {
       { name: 'web-agent', label: 'Web Agent', mode: 'cloud' },
     ]);
     expect(reconciled.some((agent) => agent.name === 'stale')).toBeFalse();
+  });
+
+  test('reconciled local rows carry their placement metadata through', () => {
+    const reconciled = reconcileAgentRefs(
+      ['placed'],
+      [{
+        name: 'placed',
+        mode: 'local',
+        localName: 'placed',
+        cwd: '/repo/shop',
+        workspaceId: 'shop',
+        createdAt: '2026-06-08T00:00:00.000Z',
+        updatedAt: '2026-06-08T00:00:00.000Z',
+      }],
+      [],
+    );
+    expect(reconciled).toEqual([{
+      name: 'placed',
+      label: 'placed',
+      mode: 'local',
+      localName: 'placed',
+      cloudName: undefined,
+      cwd: '/repo/shop',
+      workspaceId: 'shop',
+    }]);
   });
 
   test('uses the cloud agent list as the source of truth for cloud refs', () => {
@@ -112,5 +137,122 @@ describe('CLI cloud agent registry sync', () => {
     expect(parsed.config.agents.localbot).toMatchObject({ mode: 'local', displayName: 'Local Bot' });
     expect(parsed.config.aliases).toEqual({ local: 'localbot' });
     expect(parsed.result.map((agent) => `${agent.name}:${agent.mode}`)).toContain('web-agent:cloud');
+  });
+});
+
+describe('virtual workspace grouping', () => {
+  const ROOT = '/repo/shop';
+  const row = (over: Partial<ListedAgent> & Pick<ListedAgent, 'name' | 'mode'>): ListedAgent => ({
+    label: over.name,
+    ...over,
+  });
+
+  test('peers group by their {cwd, workspaceId} pair; legacy and cloud rows keep their own buckets', () => {
+    const grouped = groupAgentWorkspaces([
+      row({ name: 'lead', mode: 'local', cwd: ROOT, workspaceId: 'shop' }),
+      row({ name: 'writer', mode: 'local', cwd: ROOT, workspaceId: 'docs' }),
+      row({ name: 'fixer', mode: 'local', cwd: ROOT, workspaceId: 'shop' }),
+      row({ name: 'oldbot', mode: 'local' }),
+      row({ name: 'jarvis', mode: 'cloud', cloudName: 'jarvis' }),
+      row({ name: 'faraway', mode: 'local', cwd: '/elsewhere/repo', workspaceId: 'other' }),
+    ], ROOT);
+    expect(grouped.workspaces.map((group) => `${group.cwd}:${group.workspaceId}:${group.agents.map((agent) => agent.name).join('+')}`)).toEqual([
+      `${ROOT}:shop:lead+fixer`,
+      `${ROOT}:docs:writer`,
+      '/elsewhere/repo:other:faraway',
+    ]);
+    expect(grouped.unplaced.map((agent) => agent.name)).toEqual(['oldbot']);
+    expect(grouped.remote.map((agent) => agent.name)).toEqual(['jarvis']);
+  });
+
+  test('a placed row without a recorded workspaceId falls back to the directory slug, matching placement', () => {
+    expect(agentWorkspaceKey(row({ name: 'a', mode: 'local', cwd: '/repo/My Shop!' }), ROOT))
+      .toBe('/repo/My Shop!\u0000my-shop');
+    expect(agentWorkspaceKey(row({ name: 'a', mode: 'local' }), ROOT)).toBe('unplaced');
+    expect(agentWorkspaceKey(row({ name: 'a', mode: 'cloud' }), ROOT)).toBeNull();
+    const grouped = groupAgentWorkspaces([row({ name: 'a', mode: 'local', cwd: ROOT })], ROOT);
+    expect(grouped.workspaces).toEqual([{ cwd: ROOT, workspaceId: 'shop', agents: [row({ name: 'a', mode: 'local', cwd: ROOT })] }]);
+  });
+});
+
+describe('the sidebar roster for one directory', () => {
+  test('lists this project, unplaced legacy agents, and cloud refs — never another project, and never merged duplicates', () => {
+    const home = mkdtempSync(join(tmpdir(), 'kinu-agent-list-'));
+    const projectDir = realpathSync(mkdtempSync(join(tmpdir(), 'kinu-agent-proj-')));
+    const otherDir = realpathSync(mkdtempSync(join(tmpdir(), 'kinu-agent-other-')));
+    tempDirs.push(home, projectDir, otherDir);
+    const stamp = '2026-06-08T00:00:00.000Z';
+    const localRef = (name: string, cwd?: string, workspaceId?: string, displayName?: string) => ({
+      name, mode: 'local', localName: name, cwd, workspaceId, displayName, createdAt: stamp, updatedAt: stamp,
+    });
+    for (const name of ['lead', 'fixer', 'writer', 'faraway', 'oldbot', 'audit', 'stray']) {
+      mkdirSync(join(home, name));
+      writeFileSync(join(home, name, 'agent.db'), '');
+    }
+    writeFileSync(join(home, 'config.json'), JSON.stringify({
+      agents: {
+        lead: localRef('lead', projectDir, 'shop'),
+        fixer: localRef('fixer', projectDir, 'shop'),
+        writer: localRef('writer', projectDir, 'docs', 'Writer'),
+        faraway: localRef('faraway', otherDir, 'other'),
+        oldbot: localRef('oldbot', undefined, undefined, 'Old Bot'),
+        audit: { name: 'audit', mode: 'cloud', cloudName: 'audit', displayName: 'Audit', createdAt: stamp, updatedAt: stamp },
+        jarvis: { name: 'jarvis', mode: 'cloud', cloudName: 'jarvis', displayName: 'Jarvis', createdAt: stamp, updatedAt: stamp },
+      },
+    }, null, 2));
+
+    const script = `
+      const { listSidebarAgents, groupAgentWorkspaces } = await import('./packages/cli/src/agent-list.ts');
+      const { canonicalProjectRoot } = await import('./packages/cli/src/config.ts');
+      const root = canonicalProjectRoot(${JSON.stringify(projectDir)});
+      const agents = listSidebarAgents(${JSON.stringify(projectDir)});
+      console.log(JSON.stringify({ root, agents, grouped: groupAgentWorkspaces(agents, root) }));
+    `;
+    const proc = Bun.spawnSync({
+      cmd: [process.execPath, '-e', script],
+      cwd: repoRoot,
+      env: { ...process.env, KINU_HOME: home },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    expect({ exitCode: proc.exitCode, stderr: proc.stderr.toString() }).toEqual({ exitCode: 0, stderr: '' });
+    const RowSchema = v.object({
+      name: v.string(),
+      label: v.string(),
+      mode: v.picklist(['local', 'cloud']),
+      localName: v.optional(v.string()),
+      cloudName: v.optional(v.string()),
+      cwd: v.optional(v.string()),
+      workspaceId: v.optional(v.string()),
+    });
+    const parsed = v.parse(v.object({
+      root: v.string(),
+      agents: v.array(RowSchema),
+      grouped: v.object({
+        projectRoot: v.string(),
+        workspaces: v.array(v.object({ cwd: v.string(), workspaceId: v.string(), agents: v.array(RowSchema) })),
+        unplaced: v.array(RowSchema),
+        remote: v.array(RowSchema),
+      }),
+    }), JSON.parse(proc.stdout.toString()));
+
+    expect(parsed.agents.map((agent) => `${agent.mode}:${agent.name}`)).toEqual([
+      // This project's placed agents, ordered by workspace then name…
+      'local:writer', 'local:fixer', 'local:lead',
+      // …then unplaced legacy workspaces (a cloud name collision stays separate)…
+      'local:audit', 'local:oldbot', 'local:stray',
+      // …then the account's cloud workspaces. `faraway` belongs to another project.
+      'cloud:audit', 'cloud:jarvis',
+    ]);
+    const oldbot = parsed.agents.find((agent) => agent.name === 'oldbot');
+    expect(oldbot?.label).toBe('Old Bot');
+    expect(oldbot?.cwd).toBeUndefined();
+    expect(oldbot?.workspaceId).toBeUndefined();
+    expect(parsed.grouped.workspaces.map((group) => `${group.workspaceId}:${group.agents.map((agent) => agent.name).join('+')}`)).toEqual([
+      'docs:writer',
+      'shop:fixer+lead',
+    ]);
+    expect(parsed.grouped.unplaced.map((agent) => agent.name)).toEqual(['audit', 'oldbot', 'stray']);
+    expect(parsed.grouped.remote.map((agent) => `${agent.mode}:${agent.name}`)).toEqual(['cloud:audit', 'cloud:jarvis']);
   });
 });

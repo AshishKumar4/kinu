@@ -13,6 +13,7 @@ import type {
   Schedule,
   Identity,
   Shell,
+  VFS,
 } from './primitives';
 import type { CraftedTool } from './craft';
 import type { Usage } from '../usage';
@@ -120,6 +121,19 @@ export type ReleaseBranch = (branchId: string) => Promise<void>;
 
 export interface AgentRuntime {
   storage: Storage;
+  /**
+   * Where this agent's own state lives, when that is not the same tree as
+   * `storage.vfs`. SOUL.md, the scaffold, memory and transcripts are what the
+   * agent knows about ITSELF, and a backend whose canonical file plane is a
+   * shared physical directory must not write them there: peers would overwrite
+   * each other's identity, and the user's project would carry files that are
+   * not the user's.
+   *
+   * Absent when the two coincide — a hosted workspace's plane IS its own
+   * durable filesystem — so every reader spells the fallback
+   * `agentStateVfs ?? storage.vfs` and gets the one right tree either way.
+   */
+  agentStateVfs?: VFS;
   memory: Memory;
   executor: Executor;
   llm: LLM;

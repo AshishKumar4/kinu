@@ -229,14 +229,6 @@ describe('AgentConfigStore — typed accessors', () => {
     expect(() => c.setShadowSampleRate(Number.NaN)).toThrow(/invalid shadow_sample_rate/);
     expect(c.getShadowSampleRate()).toBe(0.5);
 
-    c.setRoleModel('judge', 'anthropic/claude-opus-4-7');
-    expect(c.getRoleModel('judge')).toBe('anthropic/claude-opus-4-7');
-    c.setRoleModel('judge', '  openai/gpt-5  ');
-    expect(c.getRoleModel('judge')).toBe('openai/gpt-5');
-    c.setRoleModel('judge', null);
-    expect(c.getRoleModel('judge')).toBeNull();   // cleared → cross-family auto-pick
-    c.setRoleModel('judge', '   ');
-    expect(c.getRoleModel('judge')).toBeNull();
 
     // The budget's bounds are a cost policy, so a setter clamps rather than throws.
     c.setGepaEvalBudget(1000);
@@ -314,23 +306,20 @@ describe('AgentConfigStore — every key has a write path', () => {
     (c) => c.setCacheRetention('long'),
     (c) => c.setDisplayName('Ada'),
     (c) => c.setNameOrigin('user'),
-    (c) => c.setStance('audit'),
+    (c) => c.setRoleChangePolicy('approval'),
     (c) => c.setShellApprovalMode('allow_all'),
     (c) => c.grantShellApproval([{ rule: 'rm-recursive', executor: 'laptop' }]),
     (c) => c.setSleepTimeComputeEnabled(false),
     (c) => c.setAutoPromoteScaffold(false),
     (c) => c.setShadowSampleRate(0.5),
     (c) => c.setScaffoldExploreShare(0.3),
-    (c) => c.setRoleModel('judge', 'anthropic/claude-opus-4-7'),
-    (c) => c.setRoleModel('fast', 'anthropic/claude-haiku-4-5'),
-    (c) => c.setRoleModel('advisor', 'openai/gpt-5-mini'),
     (c) => c.setAdvisorEnabled(true),
     (c) => c.setAdvisorMinSeverity('blocker'),
     (c) => c.setAlwaysActiveSkills(['research']),
     (c) => c.setLastActiveExecutor('sandbox'),
     (c) => c.setAutoGepaEveryNTurns(10),
     (c) => c.setChangelogSeenAt(1_750_000_000_000),
-    (c) => c.countClosedSessionWindow(),
+    (c) => c.countClosedTurnWindow(),
     (c) => c.countIsolateGeneration(),
     (c) => c.setGepaEvalBudget(16),
     (c) => c.setMctsOverrides({
@@ -344,6 +333,7 @@ describe('AgentConfigStore — every key has a write path', () => {
    *  store (memory-sync's lazy Vectorize backfill). Exempt because the write
    *  path is real, just not a typed method here. */
   const GENERIC_WRITE_PATH: ReadonlyArray<string> = [
+    AGENT_CONFIG_KEYS.activeRoleId,
     AGENT_CONFIG_KEYS.memoryVectorBackfillDone,
     AGENT_CONFIG_KEYS.memoryVectorBackfillCursor,
   ];

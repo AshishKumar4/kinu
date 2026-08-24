@@ -22,7 +22,7 @@ import { safeValidateTypes } from '@ai-sdk/provider-utils';
 import { streamText, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { UNBOUNDED_STEPS } from '../chat';
 import { evidenceWindow } from '../prompts/evidence-window';
-import type { ModelCallSpend } from '../events/model-call';
+import { beginModelOperation, type ModelCallSpend } from '../events/model-call';
 import { normalizeUsage } from '../usage';
 import { decodeJsonValue } from '../utils/json';
 import { renderThrownChain } from '../obs/index';
@@ -63,31 +63,41 @@ export function createScaffoldLLMStream(opts: ScaffoldBridgeOpts): ScaffoldRunOp
     const toolSet: ToolSet = (call.tools && call.tools.length > 0)
       ? Object.fromEntries(call.tools.filter((n) => all[n]).map((n) => [n, all[n]]))
       : all;
-    const result = streamText({
-      model: opts.model,
-      system: call.system,
-      messages: call.messages,
-      tools: toolSet,
-      // NO STEP CAP here either: a scaffold's loop runs until its model stops
-      // calling tools, exactly like the live turn it may replace (owner ruling,
-      // 2026-08-21). Spend is governed by the mission ledger at the spend seam,
-      // not by a step count.
-      stopWhen: UNBOUNDED_STEPS,
-      ...opts.streamOptions,
-    });
-    for await (const chunk of result.textStream) yield chunk;
+    const spend = opts.spend;
+    // Opened before the request. A scaffold's loop is the longest-running direct
+    // operation in the system, so it is the one most likely to be interrupted —
+    // and the start row is what names it afterwards.
+    const operation = beginModelOperation(spend, 'stream');
+    let result;
+    try {
+      result = streamText({
+        model: opts.model,
+        system: call.system,
+        messages: call.messages,
+        tools: toolSet,
+        // NO STEP CAP here either: a scaffold's loop runs until its model stops
+        // calling tools, exactly like the live turn it may replace (owner ruling,
+        // 2026-08-21). Spend is governed by the mission ledger at the spend seam,
+        // not by a step count.
+        stopWhen: UNBOUNDED_STEPS,
+        ...opts.streamOptions,
+      });
+      for await (const chunk of result.textStream) yield chunk;
+    } catch (err) {
+      operation.failed({ cause: err });
+      throw err;
+    }
     // After the drain, because that is when usage exists — and `totalUsage`
     // rather than `usage`, because this is a genuine multi-step loop and the
     // last step's report would omit every step before it. A caller that
     // abandons the generator mid-loop reports nothing, which is honest: this
-    // seam never learns what an unfinished stream cost.
-    const spend = opts.spend;
+    // seam never learns what an unfinished stream cost, and the operation's
+    // open start row is what says the loop was entered.
+    const usage = normalizeUsage(await result.totalUsage);
+    const modelId = (await result.response).modelId;
+    operation.completed({ usage, modelId });
     if (spend) {
-      spend.report({
-        source: spend.source,
-        usage: normalizeUsage(await result.totalUsage),
-        modelId: (await result.response).modelId,
-      });
+      spend.report({ source: spend.source, usage, modelId });
     }
   };
 }

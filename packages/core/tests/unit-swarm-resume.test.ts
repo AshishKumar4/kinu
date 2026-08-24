@@ -475,17 +475,10 @@ function idleAgent() {
   return { enqueued, signals: new SignalDelivery(host) };
 }
 
-/** Where the frozen attempt's wave has to be before the test may look at the rows: both
- *  of its level-2 nodes journalled and stuck. Two, because `branches` is two — a gate on
- *  one would let the test read the journal between the two `insertSpawn` writes. */
+const MISSION_LABEL = 'nightly';
+/** Both children in the frozen level must start before the test reads its journal. */
 const FROZEN_NODES = 2;
 
-/** The sanctioned per-call silence window the frozen runs are given, small enough that
- *  a node stuck on its never-settling model ends (retries exhausted) while the test
- *  still owns the clock. No step cap exists to do that any more. */
-const FROZEN_CALL_TIMEOUT_MS = 250;
-
-const MISSION_LABEL = 'nightly';
 
 function treeOf(sql: SqlExecutor): SearchNode[] {
   return sql<SearchNode>`SELECT * FROM search_nodes ORDER BY depth ASC, created_at ASC`;
@@ -820,7 +813,7 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
     const journal = new HeadJournal(sql);
     const first = nodeModel({ freezeFromStart: 3 });
     void runSwarm(
-      { rt, model: first.model, mode: 'build', callTimeoutMs: FROZEN_CALL_TIMEOUT_MS, logger: createRecordingLogger() },
+      { rt, model: first.model, mode: 'build', logger: createRecordingLogger() },
       resolved(),
     );
     await first.script.frozen;
@@ -850,7 +843,7 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
     const journal = new HeadJournal(sql);
     const first = nodeModel({ freezeFromStart: 3 });
     void runSwarm(
-      { rt, model: first.model, mode: 'build', callTimeoutMs: FROZEN_CALL_TIMEOUT_MS, logger: createRecordingLogger() },
+      { rt, model: first.model, mode: 'build', logger: createRecordingLogger() },
       resolved(),
     );
     await first.script.frozen;

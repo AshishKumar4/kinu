@@ -251,3 +251,51 @@ describe('the resume loop reclaims its own engine only', () => {
       .toEqual([['mcts-root', 'mcts'], ['swarm-root', 'swarm']]);
   });
 });
+
+/**
+ * The settle status is CLASSIFIED. 'converged' is the ledger's claim that an
+ * acceptable answer was earned; a search that ran its loop out with every
+ * branch below minAcceptableScore settles as 'no_acceptable_candidate' instead
+ * — it did not break (`failed`) and it did not land an answer (`converged`).
+ */
+describe('the ledger classifies a search that earned no acceptable answer', () => {
+  function store() {
+    const { rt, db } = createTestRuntime();
+    initTables(rt);
+    const s = new MctsSearchStore(makeSql(db));
+    s.begin({
+      rootId: 'r1', task: TASK, engine: 'mcts', rootMsgId: 'm1',
+      config: { budget: 2, branches: 2 }, budget: 2, now: 1_000,
+    });
+    return { rt, s };
+  }
+
+  test('a nonconverged settle writes the classified status, not converged', () => {
+    const { s } = store();
+    s.noAcceptableCandidate('r1', 0, 2_000);
+    expect(s.get('r1')?.status).toBe('no_acceptable_candidate');
+    // And the run-level read model reports exactly that classification.
+    expect(s.list(10)[0]).toMatchObject({ rootId: 'r1', status: 'no_acceptable_candidate' });
+  });
+
+  test('the classified settle is fenced on epoch like every other terminal write', () => {
+    const { s } = store();
+    // A reclaimed search (epoch bumped) leaves the dead executor's settle a no-op:
+    // the row stays running for whoever holds the live lease.
+    s.reclaim('r1');
+    s.noAcceptableCandidate('r1', 0, 2_000);
+    expect(s.get('r1')?.status).toBe('running');
+    expect(s.findResumable(TASK)).not.toBeNull();
+  });
+
+  test('a classified row is settled: never resumed, never re-converged', () => {
+    const { s } = store();
+    s.noAcceptableCandidate('r1', 0, 2_000);
+    expect(s.findResumable(TASK)).toBeNull();
+    // The one write site in engine.ts only reaches converge() when
+    // result.converged, so a converged status can never overwrite this one —
+    // but the fence alone proves they are distinct writes.
+    s.converge('r1', 0, 3_000);
+    expect(s.get('r1')?.status).toBe('no_acceptable_candidate');
+  });
+});

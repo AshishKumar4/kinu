@@ -17,6 +17,7 @@ import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import { reconcileColumns } from '../identity/columns';
 import type { MCTSConfig } from '../types/mcts';
 import type { WorkMode } from '../prompting/surface';
+import { validateSwarmProfileSnapshot, type SwarmProfileSnapshot } from '../profiles';
 
 /** The serializable knobs of an MCTSConfig — everything a resumed loop needs,
  *  minus the live handles (AbortSignal, callbacks, the store itself, and the
@@ -35,6 +36,9 @@ const PersistedMCTSConfigSchema: v.GenericSchema<PersistedMCTSConfig> = v.object
   judgeSamples: v.optional(v.number()),
   maxEvalLLMCalls: v.optional(v.number()),
   takesEpsilon: v.optional(v.number()),
+});
+const StoredSwarmConfigSchema = v.looseObject({
+  profile: v.optional(v.unknown()),
 });
 
 /**
@@ -71,6 +75,14 @@ export interface PersistedSearchKnobs {
   /** Judge samples per branch the run ASKED for. What it REALISED is observed
    *  rather than predicted — see {@link MctsSearchStore.observeJudgeEnsemble}. */
   readonly judgeSamples?: number;
+  /**
+   * The resolved turn profile this run started under, with its precedence
+   * sources — swarm runs only (an MCTS loop has no role). Written by
+   * `runSwarm` at `begin`, so a durable detach and every later re-drive of the
+   * job replay THIS record instead of resolving against today's catalog:
+   * catalog edits are for later turns, never an in-flight tree.
+   */
+  readonly profile?: SwarmProfileSnapshot;
 }
 
 /** A resumable (interrupted) search: enough to continue the loop from checkpoint. */
@@ -105,14 +117,15 @@ export interface ResumableSwarm {
   readonly epoch: number;
 }
 
-type SearchStatus = 'running' | 'converged' | 'failed' | 'superseded';
+type SearchStatus = 'running' | 'converged' | 'failed' | 'superseded' | 'no_acceptable_candidate';
 
 /** The stored status, narrowed. Anything a writer of this table never wrote reads as
  *  `running`, which is the column's own default and the only reading that cannot
  *  invent an outcome: a row whose status is unrecognised has not been settled by
  *  anything here. */
 function readStatus(raw: string): SearchStatus {
-  return raw === 'converged' || raw === 'failed' || raw === 'superseded' ? raw : 'running';
+  return raw === 'converged' || raw === 'failed' || raw === 'superseded'
+    || raw === 'no_acceptable_candidate' ? raw : 'running';
 }
 
 interface Row {
@@ -314,6 +327,33 @@ export class MctsSearchStore {
         epoch: row.epoch,
       }));
   }
+
+  /**
+   * The durable profile snapshot ONE swarm row carries, or null when the row
+   * has none (a run started before profiles existed, or one whose caller
+   * wired no catalog). Validated on the way out: a blob this engine wrote that
+   * no longer parses is corruption, and resuming under a half-read profile is
+   * exactly the silent substitution the snapshot exists to prevent — so a bad
+   * blob THROWS rather than degrades.
+   */
+  readSwarmProfile(rootId: string): SwarmProfileSnapshot | null {
+    const row = this.sql<{ config_json: string }>`
+      SELECT config_json FROM mcts_search_runs WHERE root_id = ${rootId} LIMIT 1`[0];
+    if (!row) return null;
+    let raw: unknown;
+    try {
+      raw = JSON.parse(row.config_json);
+    } catch (error) {
+      throw new Error(`swarm run ${rootId}: its ledger config_json will not parse`, { cause: error });
+    }
+    let stored: v.InferOutput<typeof StoredSwarmConfigSchema>;
+    try {
+      stored = v.parse(StoredSwarmConfigSchema, raw);
+    } catch (error) {
+      throw new Error(`swarm run ${rootId}: its ledger config_json is not an object`, { cause: error });
+    }
+    return stored.profile === undefined ? null : validateSwarmProfileSnapshot(stored.profile);
+  }
   /** How many SWARM rows still claim a live executor. The start-of-life
    *  reconciliation reads this so a dead search's row reaches its closer even
    *  when the search journalled no heads of its own (`unit:'thought'` nodes
@@ -387,6 +427,14 @@ export class MctsSearchStore {
   /** Mark a search converged (fenced on epoch). */
   converge(rootId: string, epoch: number, now: number): void {
     void this.sql`UPDATE mcts_search_runs SET status='converged', updated_at=${now}
+      WHERE root_id=${rootId} AND status='running' AND epoch=${epoch}`;
+  }
+
+  /** Settle a search that finished without an acceptable answer (fenced on
+   *  epoch). This is distinct from `failed` (the search broke) and `converged`
+   *  (a candidate cleared the floor). */
+  noAcceptableCandidate(rootId: string, epoch: number, now: number): void {
+    void this.sql`UPDATE mcts_search_runs SET status='no_acceptable_candidate', updated_at=${now}
       WHERE root_id=${rootId} AND status='running' AND epoch=${epoch}`;
   }
 

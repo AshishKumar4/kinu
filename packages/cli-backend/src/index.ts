@@ -26,6 +26,12 @@ export {
   type ShellApprovalHandler,
 } from './local-session';
 export {
+  LocalAgentHost,
+  type AgentEventListener,
+  type LocalAgentHostOptions,
+  type LocalHostedAgent,
+} from './agent-host';
+export {
   createLocalModelResolver, cloudProxyBaseURL, CLOUD_PROXY_PROVIDER_IDS,
   type LocalModelResolver, type LocalModelResolverConfig, type LocalCloudSession,
   type LocalProviderCredentials, type LocalOpenAICompatCredential,

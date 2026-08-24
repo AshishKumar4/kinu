@@ -1,11 +1,11 @@
 import { closeSync, openSync, readFileSync, unlinkSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { spawn } from 'node:child_process';
-import { Database } from 'bun:sqlite';
-import { DEFAULT_SESSION_REFLECTION_INTERVAL } from '@kinu.run/core';
+import type { Database } from 'bun:sqlite';
 import { renderThrownChain, tolerate } from '@kinu.run/core/obs';
+import type { HostedAgentRef } from '@kinu.run/core';
 import {
-  LocalAgentSession,
+  LocalAgentHost,
   openWorkspaceCLI,
   writeSecretFile,
   type SessionEvent,
@@ -16,7 +16,7 @@ import {
   CONFIG_PATH,
   createCodexAuthStore,
   ensureAgentHome,
-  listAgentDirs,
+  listLocalRefsAllProjects,
   resolveMcpServers,
   resolveProviderCredentials,
 } from '../config';
@@ -32,7 +32,7 @@ const MIN_SLEEP_MS = 500;
 const STOP_GRACE_MS = 5_000;
 const STOP_FORCE_MS = 2_000;
 
-export async function daemonCommand(action: string | undefined, workspace?: string): Promise<void> {
+export async function daemonCommand(action: string | undefined, agent?: string): Promise<void> {
   const sub = action ?? 'status';
   if (sub === 'start') {
     const pid = startDaemon();
@@ -72,21 +72,32 @@ export async function daemonCommand(action: string | undefined, workspace?: stri
     await runDaemonLoop();
     return;
   }
-  // One foreground pass of the daemon's own per-workspace work — deferred turn
-  // reviews, due evolution — for hosts with no resident daemon (a bench
-  // container drains the reviews its `exec` trials queued, OUTSIDE the agent
-  // cap). Exactly tickAgent, exactly once, then exit.
+  // One foreground pass of the daemon-owned host for machines without a
+  // resident daemon. It drives the same recovery/event/trigger/evolution/
+  // peer-outbox path once, then releases every agent handle.
   if (sub === 'tick') {
     ensureAgentHome();
-    const names = workspace ? [workspace] : listAgentDirs();
-    const now = Date.now();
-    for (const name of names) {
-      await tickAgent(name, now);
-      console.log(`${OK('✓')} ticked ${name}`);
+    const host = createDaemonHost();
+    const unsubscribe = host.subscribe(logSessionEvent);
+    try {
+      const refs = listLocalRefsAllProjects();
+      const due = agent ? refs.filter((ref) => ref.name === agent) : refs;
+      if (agent && due.length === 0) {
+        throw new Error(`No local agent "${agent}" is placed in a project — `
+          + 'create it with `kinu create` or adopt it with `kinu adopt`.');
+      }
+      const now = Date.now();
+      for (const ref of due) {
+        await host.tick(ref.name, now);
+        console.log(`${OK('✓')} ticked ${ref.name} ${DIM(`${ref.workspaceId} · ${ref.cwd}`)}`);
+      }
+    } finally {
+      unsubscribe();
+      await host.close();
     }
     return;
   }
-  throw new Error('Usage: kinu daemon [start|stop|restart|status|logs|run|tick [workspace]]');
+  throw new Error('Usage: kinu daemon [start|stop|restart|status|logs|run|tick [agent]]');
 }
 
 export function ensureLocalDaemonRunning(): void {
@@ -175,131 +186,85 @@ async function runDaemonLoop(): Promise<void> {
   writePid(process.pid);
   log('local scheduler daemon started');
   let stopping = false;
-  // A stop must not wait out the poll interval — cut the sleep short.
   let wakeFromSleep: (() => void) | null = null;
   const stop = () => { stopping = true; wakeFromSleep?.(); };
   process.on('SIGTERM', stop);
   process.on('SIGINT', stop);
 
-  while (!stopping) {
-    const now = Date.now();
-    let nextAt: number | null = null;
-    for (const name of listAgentDirs()) {
-      try {
-        const agentNext = await tickAgent(name, now);
-        if (agentNext !== null) nextAt = nextAt === null ? agentNext : Math.min(nextAt, agentNext);
-      } catch (err) {
-        log(`${name}: ${renderThrownChain({ cause: err })}`);
-      }
-    }
-    const delay = nextAt === null
-      ? MAX_SLEEP_MS
-      : Math.min(MAX_SLEEP_MS, Math.max(MIN_SLEEP_MS, nextAt - Date.now()));
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(wake, delay);
-      wakeFromSleep = wake;
-      function wake() {
-        clearTimeout(timer);
-        wakeFromSleep = null;
-        resolve();
-      }
-    });
-  }
-
-  log('local scheduler daemon stopped');
-  tolerate(() => unlinkSync(PID_PATH), 'enoent');
-}
-
-async function tickAgent(name: string, now: number): Promise<number | null> {
-  const dbPath = agentDbPath(name);
-  const db = new Database(dbPath);
+  /** Soonest moment the host has asked to be re-driven — a peer outbox retry
+   *  armed while this loop was already asleep. Folded into the next delay and
+   *  cleared by the pass that honours it, so it never re-shortens a later one. */
+  let armedAt: number | null = null;
+  const host = createDaemonHost((at) => {
+    armedAt = armedAt === null ? at : Math.min(armedAt, at);
+    if (at <= Date.now()) wakeFromSleep?.();
+  });
+  const unsubscribe = host.subscribe(logSessionEvent);
   try {
-    const nextBefore = nextTriggerAt(db);
-    const triggersDue = nextBefore !== null && nextBefore <= now;
-    // The daemon is also the host for the evolution work a one-shot `kinu
-    // exec` process cannot afford to finish (see AgentOrchestrator's exit
-    // contract): the cadence pass its window is due, and the turn reviews it
-    // deferred. Both are checked with plain SQL so a workspace with nothing to
-    // do costs two queries, not a session.
-    const evolutionDue = sessionEvolutionDue(db) || deferredReviewsDue(db);
-    if (!triggersDue && !evolutionDue) return nextBefore;
-
-    const { llmConfig, resolver: modelResolver } = createConfiguredLocalModelResolver({ agentName: name });
-    const providerCredentials = resolveProviderCredentials();
-    const codexAuthStore = createCodexAuthStore();
-    const mcpServers = resolveMcpServers();
-    const { rt } = await openWorkspaceCLI(db, dbPath, { llm: llmConfig, providerCredentials, codexAuthStore, codexConfigPath: CONFIG_PATH });
-    const session = new LocalAgentSession({
-      rt,
-      db,
-      modelResolver,
-      onEvent: (event) => logSessionEvent(name, event),
-    });
-    try {
-      if (Object.keys(mcpServers).length > 0) await session.connectMcp(mcpServers);
-      await session.recoverBackgroundJobs();
-      if (triggersDue) {
-        const result = await session.fireDueTriggers(now);
-        if (result.fired > 0) log(`${name}: fired ${result.fired} timer trigger${result.fired === 1 ? '' : 's'}`);
-        // fireDueTriggers only ARMS the debounced drain; end() would disarm it
-        // before it fires. Flush synchronously so the fired trigger's autonomous
-        // turn actually runs (also drains any recovered background-job wake).
-        await session.flushPendingDrains();
+    while (!stopping) {
+      const now = Date.now();
+      let nextAt: number | null = armedAt;
+      armedAt = null;
+      // Every placed local agent, in every project. A resident scheduler keeps
+      // each virtual workspace's peers and background queues draining, so the
+      // directory this process happened to start in decides nothing.
+      for (const ref of listLocalRefsAllProjects()) {
+        try {
+          const agentNext = await host.tick(ref.name, now);
+          if (agentNext !== null) nextAt = nextAt === null ? agentNext : Math.min(nextAt, agentNext);
+        } catch (error) {
+          log(`${ref.name}: ${renderThrownChain({ cause: error })}`);
+        }
       }
-      // Last, so any turn this tick just ran is in the window it evolves over.
-      await session.runDueEvolution();
-    } finally {
-      try {
-        await session.end();
-      } catch (error) {
-        log(`${name}: session teardown failed: ${renderThrownChain({ cause: error })}`);
-      }
+      const delay = nextAt === null
+        ? MAX_SLEEP_MS
+        : Math.min(MAX_SLEEP_MS, Math.max(MIN_SLEEP_MS, nextAt - Date.now()));
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(wake, delay);
+        wakeFromSleep = wake;
+        function wake() {
+          clearTimeout(timer);
+          wakeFromSleep = null;
+          resolve();
+        }
+      });
     }
-    return nextTriggerAt(db);
   } finally {
-    db.close();
+    unsubscribe();
+    await host.close();
+    process.off('SIGTERM', stop);
+    process.off('SIGINT', stop);
+    log('local scheduler daemon stopped');
+    tolerate(() => unlinkSync(PID_PATH), 'enoent');
   }
 }
 
-/**
- * Whether this workspace's durable evolution window has reached the
- * session-reflection interval — the same test AgentOrchestrator applies, read
- * straight from the table so the daemon can skip idle workspaces without
- * opening a runtime. The interval is core's default (5); a session that
- * overrides it only makes the daemon's check conservative, and the pass itself
- * re-checks under the session's own interval before claiming anything.
- */
-function sessionEvolutionDue(db: Database): boolean {
-  const table = db.query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_window'`).get();
-  if (!table) return false;
-  const row = db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM session_window WHERE in_window = 1').get();
-  return (row?.n ?? 0) >= DEFAULT_SESSION_REFLECTION_INTERVAL;
-}
-
-/**
- * Whether any one-shot process left a turn review undrained
- * (evolution/review-queue.ts). Read the same way and for the same reason as the
- * window above — and it is a SEPARATE test, because a workspace driven only by
- * `kinu exec` accumulates reviews long before its window reaches the
- * reflection interval, and gating the tick on the window alone left exactly
- * those reviews with no host at all.
- */
-function deferredReviewsDue(db: Database): boolean {
-  const table = db.query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'turn_review_queue'`).get();
-  if (!table) return false;
-  const row = db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM turn_review_queue').get();
-  return (row?.n ?? 0) > 0;
-}
-
-function nextTriggerAt(db: Database): number | null {
-  const table = db.query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'triggers'`).get();
-  if (!table) return null;
-  const row = db.query<{ next_fire_at: number | null }, []>(`
-    SELECT MIN(next_fire_at) AS next_fire_at
-    FROM triggers
-    WHERE state = 'active' AND next_fire_at IS NOT NULL
-  `).get();
-  return row?.next_fire_at ?? null;
+function createDaemonHost(wakeAt?: (at: number) => void): LocalAgentHost {
+  const options = {
+    // The refs are the authority: which agents exist, which directory each
+    // binds, and which virtual workspace groups it with its peers.
+    roster: (): HostedAgentRef[] => listLocalRefsAllProjects(),
+    dbPath: agentDbPath,
+    childDbPath: (parentDbPath: string, child: string) =>
+      join(dirname(parentDbPath), 'subordinates', child, 'agent.db'),
+    open: async (ref: HostedAgentRef, db: Database, dbPath: string) => {
+      const { llmConfig, resolver: modelResolver } =
+        createConfiguredLocalModelResolver({ agentName: ref.name });
+      const openConfig = {
+        llm: llmConfig,
+        providerCredentials: resolveProviderCredentials(),
+        codexAuthStore: createCodexAuthStore(),
+        codexConfigPath: CONFIG_PATH,
+        // The stored directory, never process.cwd(): a daemon serves every
+        // project at once, so the plane an agent works in is the one its ref
+        // records and nothing about where this process was launched.
+        cwd: ref.cwd,
+      };
+      const { rt } = await openWorkspaceCLI(db, dbPath, openConfig);
+      return { rt, openConfig, modelResolver, mcpServers: resolveMcpServers() };
+    },
+  };
+  return new LocalAgentHost(wakeAt ? { ...options, wakeAt } : options);
 }
 
 function logSessionEvent(agentName: string, event: SessionEvent): void {

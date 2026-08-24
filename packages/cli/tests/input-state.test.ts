@@ -1,5 +1,4 @@
-// The TUI input state machine — Esc/Esc-Esc walk-back, the Tab queue, and
-// turn-lifecycle transitions, tested as the pure reducer the chat app drives.
+// The TUI input reducer: interrupt/walk-back, queue, branch, and turn lifecycle.
 import { describe, expect, test } from 'bun:test';
 import {
   ESC_ESC_BEAT_MS,
@@ -108,11 +107,11 @@ describe('Esc / Esc-Esc state machine', () => {
 });
 
 describe('queue ordering', () => {
-  test('Tab queues drafts in order; they drain FIFO, one per settled turn', () => {
+  test('the queue shortcut stores drafts in FIFO order, one per settled turn', () => {
     const busy = run(initialInputState, { type: 'turn-start' });
     const queued = run(busy.state,
-      { type: 'tab', draft: 'first queued' },
-      { type: 'tab', draft: 'second queued' },
+      { type: 'queue-shortcut', draft: 'first queued' },
+      { type: 'queue-shortcut', draft: 'second queued' },
     );
     expect(queued.state.queue).toEqual(['first queued', 'second queued']);
     expect(queued.effects).toEqual([{ kind: 'clear-input' }, { kind: 'clear-input' }]);
@@ -128,10 +127,10 @@ describe('queue ordering', () => {
     expect(settledTwice.state.queue).toEqual([]);
   });
 
-  test('Tab while idle is a no-op; /queue while idle sends immediately', () => {
-    const tab = reduceInput(initialInputState, { type: 'tab', draft: 'nothing running' });
-    expect(tab.effects).toEqual([]);
-    expect(tab.state.queue).toEqual([]);
+  test('the queue shortcut while idle is a no-op; /queue sends immediately', () => {
+    const shortcut = reduceInput(initialInputState, { type: 'queue-shortcut', draft: 'nothing running' });
+    expect(shortcut.effects).toEqual([]);
+    expect(shortcut.state.queue).toEqual([]);
 
     const queue = reduceInput(initialInputState, { type: 'queue', text: 'send me now' });
     expect(queue.effects).toEqual([{ kind: 'send-queued', text: 'send me now' }]);
@@ -140,8 +139,8 @@ describe('queue ordering', () => {
   test('Backspace on an empty input pops the last queued draft back for editing', () => {
     const busy = run(initialInputState,
       { type: 'turn-start' },
-      { type: 'tab', draft: 'keep' },
-      { type: 'tab', draft: 'edit me' },
+      { type: 'queue-shortcut', draft: 'keep' },
+      { type: 'queue-shortcut', draft: 'edit me' },
     );
     const popped = reduceInput(busy.state, { type: 'backspace', draft: '' });
     expect(popped.effects).toEqual([{ kind: 'set-input', text: 'edit me' }]);
@@ -156,8 +155,8 @@ describe('queue ordering', () => {
   test('Esc interrupt returns queued drafts to the composer instead of auto-firing them', () => {
     const busy = run(initialInputState,
       { type: 'turn-start' },
-      { type: 'tab', draft: 'next thing' },
-      { type: 'tab', draft: 'after that' },
+      { type: 'queue-shortcut', draft: 'next thing' },
+      { type: 'queue-shortcut', draft: 'after that' },
     );
     const interrupted = reduceInput(busy.state, esc(1_000, { draft: 'half typed' }));
     expect(interrupted.effects).toEqual([
@@ -175,7 +174,7 @@ describe('queue ordering', () => {
     const overlapped = run(initialInputState,
       { type: 'turn-start' },
       { type: 'turn-start' },
-      { type: 'tab', draft: 'after both' },
+      { type: 'queue-shortcut', draft: 'after both' },
       { type: 'turn-settled' },
     );
     expect(overlapped.effects.filter((effect) => effect.kind === 'send-queued')).toEqual([]);
@@ -184,7 +183,7 @@ describe('queue ordering', () => {
   });
 });
 
-describe('Ctrl+B steer-as-branch', () => {
+describe('semantic steer-as-branch', () => {
   test('branch while a turn runs sends the draft as a branch and clears the input', () => {
     const busy = run(initialInputState, { type: 'turn-start' });
     const branched = reduceInput(busy.state, { type: 'branch', draft: 'try the other approach' });
@@ -208,7 +207,7 @@ describe('Ctrl+B steer-as-branch', () => {
     const busy = run(initialInputState, { type: 'turn-start' });
     const hinted = reduceInput(busy.state, { type: 'branch', draft: '   ' });
     expect(hinted.effects).toEqual([
-      { kind: 'hint', text: 'Type the redirect first — Ctrl+B runs it as a parallel branch.' },
+      { kind: 'hint', text: 'Type the redirect first, then run the branch action.' },
     ]);
     expect(reduceInput(initialInputState, { type: 'branch', draft: '' }).effects).toEqual([]);
   });

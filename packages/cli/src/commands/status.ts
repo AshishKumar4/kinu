@@ -1,5 +1,5 @@
-import { existsSync, statSync } from 'node:fs';
-import { agentDbPath, requireAuthConfig } from '../config';
+import { statSync } from 'node:fs';
+import { requireAuthConfig } from '../config';
 import {
   callAgentRpc,
   CloudAgentStatusSchema,
@@ -9,8 +9,9 @@ import {
   type CloudAgentStatus,
 } from '../cloud-api';
 import * as v from 'valibot';
-import { ACCENT, DIM, OK, printAgentStatus, printError } from '../display';
+import { ACCENT, DIM, OK, printAgentStatus } from '../display';
 import { resolveAgentTarget } from '../agent-target';
+import { requireLocalAgent } from '../local-target';
 import { getLocalAgentInfo } from '../local-inspection';
 
 export async function statusCommand(name: string): Promise<void> {
@@ -33,15 +34,9 @@ export async function statusCommand(name: string): Promise<void> {
     });
     return;
   }
-  name = target.localName;
-  const dbPath = agentDbPath(name);
-  if (!existsSync(dbPath)) {
-    printError(`Workspace "${name}" not found.`, `Create it with: kinu create ${name}`);
-    process.exit(1);
-  }
-
-  const info = getLocalAgentInfo(name);
-  const dbSize = statSync(dbPath).size;
+  const local = requireLocalAgent(target.requestedName, { adopt: false });
+  const info = getLocalAgentInfo(local.name);
+  const dbSize = statSync(local.dbPath).size;
   printAgentStatus(info, dbSize, {
     conversationCount: info.conversationCount,
     model: info.model,

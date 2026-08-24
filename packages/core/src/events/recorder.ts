@@ -18,7 +18,11 @@ import type { RunEvent, RunEventInput, RunEventType } from './types';
 import { JsonValueSchema } from '../utils/json';
 import { UsageSchema } from '../usage';
 import { ESCALATION_OUTCOMES } from '../execution/escalation';
-import { SPEND_SOURCES, WORKSPACE_RUN_ID } from './model-call';
+import {
+  SPEND_SOURCES, WORKSPACE_RUN_ID,
+  MODEL_OPERATION_KINDS, MODEL_OPERATION_PHASES, MODEL_OPERATION_OUTCOMES,
+  type ModelOperationSink,
+} from './model-call';
 import { diagnostics, toKinuError } from '../obs/index';
 
 /** A stored model message, validated by the AI SDK's OWN schema rather than a
@@ -68,6 +72,12 @@ const RunEventSchema = v.variant('type', [
     source: v.picklist(SPEND_SOURCES), usage: v.optional(UsageSchema),
     usd: v.optional(v.number()), spec: v.optional(v.string()),
     modelId: v.optional(v.string()) }),
+  v.object({ ...BaseFields, type: v.literal('model_operation'),
+    operationId: v.string(), source: v.picklist(SPEND_SOURCES),
+    op: v.picklist(MODEL_OPERATION_KINDS), phase: v.picklist(MODEL_OPERATION_PHASES),
+    outcome: v.optional(v.picklist(MODEL_OPERATION_OUTCOMES)),
+    usage: v.optional(UsageSchema), spec: v.optional(v.string()),
+    modelId: v.optional(v.string()), error: v.optional(v.string()) }),
   v.object({ ...BaseFields, type: v.literal('head_split'), rootId: v.string(),
     headIds: v.array(v.string()), rationale: v.string() }),
   v.object({ ...BaseFields, type: v.literal('head_merge'), rootId: v.string(),
@@ -96,6 +106,11 @@ const RunEventSchema = v.variant('type', [
     trigger: v.picklist(['repeated_call', 'repeated_failure', 'no_progress',
       'long_turn_no_delegation', 'turn_start_no_delegation']),
     step: v.number(), tool: v.optional(v.string()), converted: v.boolean() }),
+  v.object({ ...BaseFields, type: v.literal('delegation_opportunity'),
+    opportunityId: v.string(), surface: v.picklist(['hint', 'unprompted']),
+    hintId: v.optional(v.string()),
+    trigger: v.optional(v.picklist(['long_turn_no_delegation', 'turn_start_no_delegation'])),
+    step: v.number(), roles: v.array(v.string()), converted: v.boolean() }),
   v.object({ ...BaseFields, type: v.literal('completion_gate'), converted: v.boolean() }),
   v.object({ ...BaseFields, type: v.literal('craft_cycle'), crafted: v.array(v.string()),
     invoked: v.array(v.string()), reused: v.array(v.string()), returned: v.number(),
@@ -294,6 +309,41 @@ export class RunEventRecorder {
     return open;
   }
 
+  /**
+   * Model operations this ledger opened and never closed — a `model_operation`
+   * start whose `operationId` reaches no end row.
+   *
+   * WHAT AN UNTERMINATED OPERATION IS, and it is the same argument
+   * {@link unterminatedRuns} makes one level down. An end row is written in the
+   * calling frame, so nothing writes one when the platform destroys that frame:
+   * a Durable Object eviction, a killed `bun test`, an operator interrupt. The
+   * start row is therefore the only evidence of what the dead activation was
+   * doing, and this is how it is read back.
+   *
+   * A start-of-life read, for the reason `unterminatedRuns` gives: an activation
+   * that has just started is running none of these, so every one it finds was
+   * left by an earlier one. NOTHING here consults a clock. An operation is open
+   * because no end row exists, never because one has been open "too long" —
+   * a long call and a dead process are different facts, and only one of them is
+   * observable from this table.
+   *
+   * Newest first, bounded, matched client-side over the `type` index for the
+   * reason {@link read} gives: `payload` is opaque TEXT to every SqlExecutor
+   * this runs on.
+   */
+  unterminatedModelOperations(window = 500): Array<Extract<RunEvent, { type: 'model_operation' }>> {
+    const rows = this.sql<{ payload: string }>`
+      SELECT payload FROM run_events
+      WHERE type = ${'model_operation' satisfies RunEventType}
+      ORDER BY ts DESC, rowid DESC LIMIT ${window}`;
+    const events = rows.map((row) => parseStoredRunEvent(row.payload))
+      .flatMap((event) => event.type === 'model_operation' ? [event] : []);
+    const ended = new Set(
+      events.filter((event) => event.phase === 'end').map((event) => event.operationId),
+    );
+    return events.filter((event) => event.phase === 'start' && !ended.has(event.operationId));
+  }
+
   /** Replay all events strictly after `afterIndex` — for SSE Last-Event-ID resume. */
   readSince(runId: string, afterIndex: number, limit = 500): RunEvent[] {
     const rows = this.sql<{ payload: string }>`
@@ -414,4 +464,38 @@ export class RunEventRecorder {
       SELECT MAX(rowid) AS seq FROM run_events WHERE run_id = ${runId}`;
     return rows[0]?.seq ?? null;
   }
+}
+
+/**
+ * Project one seam's model-operation lifecycle onto this durable log.
+ *
+ * Shared rather than written per backend for the reason the scaffold-control
+ * seam gives about its own two copies: two hand-written mappers of one row
+ * drift, and the drift is silent because each backend's tests only ever see its
+ * own. One mapper, both backends, one row shape.
+ *
+ * `runId` is read per event rather than captured, because an operation can open
+ * inside a turn and close after it: the evolution lanes fire between runs on
+ * purpose (a pass on a fiber, a title before the first turn exists), which is
+ * what {@link WORKSPACE_RUN_ID} is for.
+ *
+ * A failed write is reported and swallowed. This is instrumentation wrapped
+ * around a model call; a ledger fault must not become the reason the call the
+ * ledger was watching never happened.
+ */
+export function recordModelOperations(
+  recorder: { emit(runId: string, input: RunEventInput): void },
+  runId: () => string,
+): ModelOperationSink {
+  return (event) => {
+    try {
+      recorder.emit(runId(), { type: 'model_operation', ...event });
+    } catch (err) {
+      diagnostics.failure(
+        'event.model_operation_emit_failed',
+        toKinuError({ doing: 'recording a model_operation run event', cause: err, otherwise: 'io' }),
+        { operationId: event.operationId, phase: event.phase, source: event.source },
+      );
+    }
+  };
 }

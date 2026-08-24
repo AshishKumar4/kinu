@@ -140,7 +140,10 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   const ctx = {
     // Sealed values are bound to the Durable Object's id, so the harness has
     // to have one — a fixed value, so a DB written in one test opens in another.
-    id: { toString: () => options.durableObjectId ?? 'test-user-do' },
+    id: {
+      name: options.durableObjectId ?? 'test-user-do',
+      toString: () => options.durableObjectId ?? 'test-user-do',
+    },
     storage: { sql },
     getWebSockets: () => sockets,
     acceptWebSocket: () => {},

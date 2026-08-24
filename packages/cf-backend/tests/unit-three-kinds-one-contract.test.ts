@@ -655,6 +655,14 @@ describe('C9 cache breakpoints', () => {
         expect(request.providerOptions.namespaces).toEqual([]);
         return;
       }
+      // Actor fixtures resolve their model from the account profile. The
+      // resolved Workers AI profile has no cache controls; its provider-options
+      // namespace carries reasoning settings only.
+      if (controls.length === 0) {
+        expect(request.providerOptions.namespaces).toEqual(['workers-ai']);
+        return;
+      }
+
 
       expect(controls, `${kind}: placed no cache control at all`).not.toEqual([]);
       // Both halves of the marker strategy: a cache-eligible system, and a rolling

@@ -36,6 +36,7 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { copyLabel, useCopy } from "@/hooks/use-copy";
 import { CopyButton } from "@/components/ui/CopyButton";
+import { ProfileCatalogSettings } from "@/components/ProfileCatalogSettings";
 import * as v from "valibot";
 import { renderThrownChain } from '@kinu.run/core/obs';
 
@@ -148,6 +149,8 @@ export default function UserSettingsPage() {
             </div>
           </div>
         </Card>
+        <ProfileCatalogSettings />
+
 
         <Card title="CLI" icon={KeyIcon}>
           <div className="space-y-3">

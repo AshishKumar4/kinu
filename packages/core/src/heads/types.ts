@@ -56,9 +56,10 @@ export type MergeStrategy =
  *     that spawn heads; without a decrementing depth there is no fixed point and
  *     a single fork call can expand without bound. It never stops a running
  *     head — it refuses a NEW split.
- *   • `maxWallClockMs` is undefined unless a caller explicitly asks for one
- *     (`agents` fork `wall_clock_ms`). Opt-in, never a default.
- */
+ *   • `maxWallClockMs` exists only when a caller explicitly authors one —
+ *     `SplitRequest.budget`, the heads strategy's `ctx.budget.wallClockMs`,
+ *     or a node's `deps.maxWallClockMs`. Opt-in, never a default; absent
+ *     means the head runs to completion. */
 export interface HeadBudget {
   /** Remaining recursive-split depth; decremented per spawn. 0 rejects splits. */
   readonly maxDepth: number;

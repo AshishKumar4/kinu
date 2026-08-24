@@ -4,20 +4,21 @@
 
 import type { AgentClientStatus } from '../agent-client';
 import { renderStatusLines } from '../slash-commands';
-import { tuiColors } from './theme';
+import { useTuiTheme } from './theme';
 
 export function StatusView({ status }: { status: AgentClientStatus }) {
+  const { colors } = useTuiTheme();
   return (
     <box style={{ paddingLeft: 2, marginBottom: 1 }}>
       <text>
-        <strong fg={tuiColors.accentStrong}>Workspace Status</strong>
+        <strong fg={colors.intent.accentStrong}>Workspace Status</strong>
         {renderStatusLines(status).map((line) => {
           const [label = '', ...value] = line.split(/\s+/);
           return (
             <span key={label}>
               {'\n'}
-              <span fg={tuiColors.muted}>  {label.padEnd(10)}</span>
-              <span fg={tuiColors.textBright}>{value.join(' ')}</span>
+              <span fg={colors.text.muted}>  {label.padEnd(10)}</span>
+              <span fg={colors.text.primary}>{value.join(' ')}</span>
             </span>
           );
         })}

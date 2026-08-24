@@ -22,21 +22,16 @@
 import { describe, expect, test } from 'bun:test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import { createTestRuntime } from './helpers';
-import { LLM_CALL_TIMEOUT_MS } from '../src/config';
+import * as config from '../src/config';
 import { createRecordingLogger } from '../src/obs/index';
 import { HeadJournal } from '../src/heads/journal';
 import { runNodeAgent } from '../src/strategy/node-agent';
 import type { NodeRun } from '../src/strategy/node-agent';
 
-describe('a node has NO clock but the one its caller declares', () => {
-  test('the shipped deps carry no wall clock and no step cap', () => {
-    // The new contract, pinned at the type seam: NodeAgentDeps has neither
-    // maxSteps nor a required maxWallClockMs any more, and swarm-run wires
-    // maxWallClockMs ONLY when its caller declared one (owner ruling,
-    // 2026-08-21). What bounds a node lives inside its own turns — the per-call
-    // silence window (LLM_CALL_TIMEOUT_MS) and the mission governor.
-    const measuredMeanSteps = [55_289, 52_403, 51_417];
-    for (const mean of measuredMeanSteps) expect(mean).toBeLessThan(LLM_CALL_TIMEOUT_MS);
+describe('a node has NO default elapsed clock', () => {
+  test('the shared loop exports no LLM deadline or timeout retry', () => {
+    expect('LLM_CALL_TIMEOUT_MS' in config).toBe(false);
+    expect('LLM_CALL_MAX_RETRIES' in config).toBe(false);
   });
 });
 

@@ -38,24 +38,32 @@ import {
   type AgentsToolAction,
 } from './registry';
 import { SwarmConfigSchema, SwarmObjectiveSchema } from './swarm-input';
-import { type SwarmInput, resolveSwarm, swarmValidity, NAMED_SWARM_PRESETS, SWARM_PRESETS } from '../strategy/swarm';
 import { runSwarm, type SwarmRunDeps } from '../strategy/swarm-run';
 import type { NodeLoopHost } from '../strategy/node-agent';
-import type { NamedSwarmPreset, SwarmConfig, SwarmPreset } from '../strategy/swarm';
+import {
+  NAMED_SWARM_PRESETS, SWARM_PRESETS,
+  resolveSwarm, swarmValidity,
+  type NamedSwarmPreset, type SwarmConfig, type SwarmInput, type SwarmPreset,
+} from '../strategy/swarm';
+import {
+  TIER_IDS,
+  deriveRoleLabel, effectiveRoleCatalog,
+  resolveTurnProfile,
+  type ProfileAuthorityInputs, type ProfileProvenance,
+  type ResolvedTurnProfile, type RoleId, type TierId,
+} from '../profiles';
 import type { Objective } from '../strategy/objective';
 import { readResumeRedrive, readSpawnStarted } from '../jobs/threshold';
 import {
   localMissionScope, readMissionLimits,
   type MissionGovernor, type MissionScope,
 } from '../mission-budget';
-import type { BuiltinStrategyOptions } from '../strategy/types';
 import { agentHomeNodeProvisioner, type NodeHomeHost } from '../strategy/node-workspace';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { CostModel } from '../mcts/cost';
 import type { WorkMode } from '../prompting/surface';
 import { nanoid } from '../utils/nanoid';
 import { diagnostics, renderThrownChain } from '../obs/index';
-import { LLM_CALL_TIMEOUT_MS } from '../config';
 import {
   delegationDepthRefusal,
   delegationExhausted,
@@ -137,21 +145,29 @@ export interface TeamToolDeps {
   list(): Promise<SubordinateRosterEntry[]>;
   /** Create an idle durable subordinate identity. This is the owner-facing
    *  operation: a mission defines the agent, but does not become a task until
-   *  the owner explicitly messages or assigns it. */
+   *  the owner explicitly messages or assigns it.
+   *  `role` is a catalog role id when the caller validated one (`roleId`
+   *  set, with its tier override and catalog version); otherwise it is the
+   *  legacy freeform line. */
   create(input: {
     name?: string;
     role: string;
     mission: string;
-    model?: string;
+    roleId?: string;
+    tier?: TierId;
+    catalogVersion?: number;
   }): Promise<{
     name: string; displayName: string; subordinate: SubordinateRosterEntry;
   }>;
-  /** Create a durable subordinate; its first turn is the mission. */
+  /** Create a durable subordinate; its first turn is the mission. Same role
+   *  vocabulary as {@link create}. */
   spawn(input: {
     name?: string;
     role: string;
     mission: string;
-    model?: string;
+    roleId?: string;
+    tier?: TierId;
+    catalogVersion?: number;
     mode: WorkMode;
   }): Promise<{
     name: string; displayName: string;
@@ -191,7 +207,6 @@ export type PeerSendOutcome =
 
 export type PeerAskOutcome =
   | { status: 'replied'; from: string; reply: JsonValue | undefined }
-  | { status: 'no_reply'; note: string }
   | { status: 'rejected'; reason: string };
 
 export type PeerReplyOutcome = { ok: true } | { ok: false; error: string };
@@ -201,46 +216,21 @@ export type PeerSpawnOutcome = { agent: string; created: boolean } & PeerAskOutc
 export interface PeersToolDeps {
   /** The owner's other workspaces' agents this one may address (self excluded). */
   listPeers(): Promise<Array<{ name: string; displayName?: string }>>;
-  /** Send-and-await: deliver a message and wait for the peer's reply. */
-  ask(input: { agent: string; topic: string; message: string; timeoutMs: number; mode: WorkMode }): Promise<PeerAskOutcome>;
+  /** Send-and-await: deliver a message and wait for the reply. There is no
+   *  elapsed limit on the wait — it ends when the reply arrives, and a reply
+   *  that outlives this activation arrives as a peer event instead. */
+  ask(input: { agent: string; topic: string; message: string; mode: WorkMode; signal?: AbortSignal }): Promise<PeerAskOutcome>;
   /** Fire-and-forget: deliver a message without waiting for a reply. */
   send(input: { agent: string; topic: string; message: string; mode: WorkMode }): Promise<PeerSendOutcome>;
   /** Answer a peer message event received this (or an earlier) turn. */
   reply(input: { eventId: string; message: string }): Promise<PeerReplyOutcome>;
-  /** Create (or reuse by name) a specialist workspace, message its agent, await the result. */
-  spawnWorkspace(input: { name?: string; purpose: string; message: string; timeoutMs: number; mode: WorkMode }): Promise<PeerSpawnOutcome>;
+  /** Create (or reuse by name) a specialist workspace, message its agent, await
+   *  the result — under the same no-elapsed-limit wait as {@link ask}. */
+  spawnWorkspace(input: { name?: string; purpose: string; message: string; mode: WorkMode; signal?: AbortSignal }): Promise<PeerSpawnOutcome>;
 }
 
 /** Reserved topic for transport-generated reply envelopes; user sends must not claim it. */
 export const PEER_REPLY_TOPIC = 'peer_reply';
-
-/**
- * How long an `ask` (or a `hire scope=workspace`) waits for the addressed agent
- * to answer — several of its model calls, not one.
- *
- * This was 120_000 default / 600_000 ceiling. 120_000 is the same number, on the
- * same workload, that `branch-process.ts` measured wrong: on the default model
- * every peer whose turn took 151-509 s answered a caller that had already been
- * told `no_reply`. Softer than the branch case — the real reply is not lost, it
- * lands later as an event — but the calling turn concludes on a false premise and
- * may route around a peer that was working.
- *
- * The ceiling rides the sanctioned per-call bound {@link LLM_CALL_TIMEOUT_MS}
- * rather than any turn figure, because there is no turn figure any more (owner
- * ruling, 2026-08-21): an ask is a synchronous convenience over another agent's
- * work, and waiting longer than one LLM call's window belongs in the background
- * lane, where the reply arrives as an event anyway. There is no floor. It was
- * 5_000, which silently overrode a caller that asked for one second, and nothing
- * depends on it: a tiny timeout returns `no_reply` with the note saying the
- * answer arrives later as an event, which is honest. Zero is the floor a
- * duration has anyway.
- */
-const ASK_TIMEOUT_CEILING_MS = LLM_CALL_TIMEOUT_MS;
-
-function askTimeoutMs(timeoutSeconds: number | undefined): number {
-  if (timeoutSeconds === undefined || !Number.isFinite(timeoutSeconds)) return ASK_TIMEOUT_CEILING_MS;
-  return Math.min(ASK_TIMEOUT_CEILING_MS, Math.max(0, Math.round(timeoutSeconds * 1000)));
-}
 
 /** What the sender is told about a handoff, in the tool's snake_case shape. */
 function renderHandoff(handoff: SubordinateHandoff) {
@@ -265,10 +255,9 @@ const ASSIGN_NOTES = {
  * and the exploration substrate it names — the heads runtime, the durable MCTS
  * session — is the same substrate a search's nodes run on.
  *
- * `runSwarmAction` reads `rt`, `model`, `nodeHost` and `nodeHome`. The remaining
- * two carry the strategy plumbing the backends assemble around that substrate;
- * they are declared here because the backends' one builder produces the whole
- * bag, not because this module dispatches a strategy.
+ * `runSwarmAction` reads `rt`, `model`, `nodeHost`, `nodeHome` and
+ * `compactShared`. The members exist because the backends' one builder
+ * produces the whole bag, not because this module dispatches a strategy.
  */
 export interface AgentsForkDeps {
   rt: AgentRuntime;
@@ -280,7 +269,7 @@ export interface AgentsForkDeps {
   /**
    * Where a tool-using swarm node's loop runs, resolved per call.
    *
-   * A FACTORY for the same reason `costModel` and `heads.controller` are: a
+   * A FACTORY for the same reason `costModel` is: a
    * backend may not be able to build one until the actor has an owner, so
    * resolving it at dispatch keeps the refusal where it can be reported rather
    * than at wiring time. Absent is a backend with no facets, and then a node's
@@ -303,9 +292,6 @@ export interface AgentsForkDeps {
    * invented directory would be a boundary a node believes in and does not have.
    */
   nodeHome?: () => Promise<NodeHomeHost>;
-  /** Per-strategy infrastructure options the LLM must not set — e.g.
-   *  `{ mcts: { session }, heads: { controller, inheritedContext, onPhase } }`. */
-  defaultOptions?: () => BuiltinStrategyOptions;
   /**
    * The shared-prefix compaction ladder for *Inherited context*, over the same
    * `SwarmRunDeps.compactShared` seam the engine consumes. The backend wires the real
@@ -313,6 +299,41 @@ export interface AgentsForkDeps {
    * inherits verbatim and the provider refuses — the loud failure the seam documents.
    */
   compactShared?: SwarmRunDeps['compactShared'];
+}
+
+/**
+ * What an actor needs to resolve role/tier/preset precedence: the catalog
+ * authority its turns run under, a provider snapshot to check tier models
+ * against, its own active role, and the action surface role narrowing applies
+ * to. Wired under {@link AgentsToolDeps.profile} by every backend that has an
+ * authority — signed in (account catalog) or signed out (local catalog).
+ * Absent is an actor whose backend has no catalog yet: hire falls back to its
+ * legacy freeform behaviour, and swarm requires an explicit preset.
+ */
+export interface AgentsProfileContext extends ProfileAuthorityInputs {
+  /** The actor's own active role — what a swarm or hire without an explicit
+   *  role resolves through, and whose `spawns` list bounds both. */
+  readonly roleId: RoleId;
+  /** The caller's merged tool surface, for the resolver's narrowing half. */
+  readonly availableTools: readonly string[];
+}
+
+/** Project one resolved turn into the profile context the agents tool needs. */
+export function agentsProfileContext(
+  profile: ResolvedTurnProfile | null,
+  authority: ProfileAuthorityInputs | null,
+): AgentsProfileContext | null {
+  if (!profile || !authority) return null;
+  return {
+    ...authority,
+    roleId: profile.role.id,
+    availableTools: profile.allowedTools,
+  };
+}
+
+export interface DelegatedProfile {
+  readonly resolved: ResolvedTurnProfile;
+  readonly sources: ProfileProvenance;
 }
 
 export interface AgentsToolDeps {
@@ -345,6 +366,12 @@ export interface AgentsToolDeps {
    *  charge through as it makes them, so a cap stops the run rather than being reported
    *  after it. Unwired (or unscoped, the default) changes nothing. */
   budget?: MissionGovernor;
+  /** The actor's profile authority — the one resolver input set role/tier/
+   *  precedence reads. A thunk because a backend may sign in (or load its
+   *  local catalog) after the toolset was built, and an absent factory is an
+   *  actor with no catalog: hire keeps its legacy freeform behaviour and
+   *  swarm demands an explicit preset. */
+  profile?: () => AgentsProfileContext | null;
 }
 
 interface UnifiedRosterResult {
@@ -432,17 +459,24 @@ export interface AgentsToolInput {
   name?: string;
   branches?: number;
   depth?: number;
+  /** The role a delegation runs under — the swarm's nodes or the hired
+   *  subordinate. Explicit wins; omitted, a swarm rides the caller's own
+   *  active role. One swarm is ROLE-HOMOGENEOUS — mixed-role candidates
+   *  confound comparison, so there is one role per call, never a list. */
+  role?: RoleId;
+  /** The inference tier the delegation runs at: `tiny|fast|default|slow|deep`.
+   *  Explicit wins; omitted resolves through the role's default tier, then
+   *  `default`. This is the ONE routing input — direct model specs are not
+   *  part of this surface. */
+  tier?: TierId;
   // hire / converse
   agent?: string;
-  role?: string;
   mission?: string;
-  model?: string;
   scope?: 'subordinate' | 'workspace';
   message?: string;
   topic?: string;
   deliverable?: string;
   deadline_hint?: string;
-  timeout_seconds?: number;
   event_id?: string;
   keep_history?: boolean;
 }
@@ -481,10 +515,11 @@ export const AGENTS_ACTION_FIELDS = {
   // ignored. They join this list when something enforces them.
   swarm: [
     'task', 'preset', 'objective', 'key', 'config', 'from', 'label', 'name', 'branches', 'depth',
+    'role', 'tier',
     'budget_usd', 'budget_tokens', 'budget_label',
   ],
-  hire: ['agent', 'role', 'mission', 'model', 'scope', 'message', 'timeout_seconds'],
-  ask: ['agent', 'message', 'topic', 'timeout_seconds', 'deliverable', 'deadline_hint'],
+  hire: ['agent', 'role', 'mission', 'tier', 'scope', 'message'],
+  ask: ['agent', 'message', 'topic', 'deliverable', 'deadline_hint'],
   send: ['agent', 'message', 'topic'],
   reply: ['event_id', 'message'],
   list: ['agent'],
@@ -523,16 +558,70 @@ const AgentsInputEntries = {
   agent: v.optional(v.string()),
   role: v.optional(v.string()),
   mission: v.optional(v.string()),
-  model: v.optional(v.string()),
+  // The one routing input. A picklist, not a string: an unknown tier name is a
+  // caller error worth naming the five slots over, not a freeform value to
+  // guess at.
+  tier: v.optional(v.picklist(TIER_IDS)),
   scope: v.optional(v.picklist(['subordinate', 'workspace'])),
   message: v.optional(v.string()),
   topic: v.optional(v.string()),
   deliverable: v.optional(v.string()),
   deadline_hint: v.optional(v.string()),
-  timeout_seconds: v.optional(v.number()),
   event_id: v.optional(v.string()),
   keep_history: v.optional(v.boolean()),
 };
+
+/**
+ * The TypeScript type each input field renders as in the codemode
+ * declaration. Declared HERE, beside the field lists and the parse entries,
+ * because this is the one place that already owns every field name — the
+ * `agents.*` namespace renders its input types from this table plus
+ * {@link AGENTS_ACTION_FIELDS}, so a field that joins the surface without a
+ * rendered type fails to compile rather than silently missing from the
+ * sandbox contract.
+ */
+export const AGENTS_FIELD_TS_TYPES = {
+  task: 'string',
+  budget_usd: 'number',
+  budget_tokens: 'number',
+  budget_label: 'string',
+  preset: `"${SWARM_PRESETS.join('" | "')}"`,
+  objective: 'object',
+  key: 'string',
+  config: 'object',
+  from: `"${NAMED_SWARM_PRESETS.join('" | "')}"`,
+  label: 'string',
+  name: 'string',
+  branches: 'number',
+  depth: 'number',
+  role: 'string',
+  tier: `"${TIER_IDS.join('" | "')}"`,
+  agent: 'string',
+  mission: 'string',
+  scope: '"subordinate" | "workspace"',
+  message: 'string',
+  topic: 'string',
+  deliverable: 'string',
+  deadline_hint: 'string',
+  event_id: 'string',
+  keep_history: 'boolean',
+} as const satisfies Record<AgentsToolInputField, string>;
+
+/**
+ * The fields each action's caller MUST supply — the `?`-less half of the same
+ * relation {@link AGENTS_ACTION_FIELDS} states. The codemode declaration
+ * renders optionality from it; the dispatch arms re-check it at runtime
+ * because the sandbox parse cannot see which action is coming.
+ */
+export const AGENTS_ACTION_REQUIRED_FIELDS = {
+  swarm: ['task'],
+  hire: ['role', 'mission'],
+  ask: ['agent', 'message'],
+  send: ['agent', 'message'],
+  reply: ['event_id', 'message'],
+  list: [],
+  dismiss: ['agent'],
+} as const satisfies Record<AgentsToolAction, readonly AgentsToolInputField[]>;
 
 /**
  * The model-facing parse. `strictObject`, not `object`: valibot's `object`
@@ -886,7 +975,6 @@ function missionScope(
   return scope ? { governor: budget, scope } : null;
 }
 
-// ── Swarm dispatch (the configured-search rung) ──────────────────────────────
 
 /**
  * One `agents.swarm` call: resolve it, check it, run it — in that order, because each
@@ -912,25 +1000,123 @@ function missionScope(
  * construction, and `report.tokens` is the second of them, which is why this seam
  * records the spawn and charges no tokens of its own.
  */
+/**
+ * Role / tier precedence for one delegation, through the ONE resolver.
+ *
+ *   role:   explicit input -> the caller's own active role.
+ *   tier:   explicit input -> the role's default -> `default` (resolver).
+ *   preset: explicit input -> the role's default preset (the swarm arm).
+ *
+ * An explicit role must be one the caller's own role may spawn (`spawns`:
+ * absent inherits everything, exactly as an absent `allowedTools` does;
+ * a list allows exactly those roles).
+ * The resolver then produces the frozen profile the delegation runs under,
+ * and its tier source is carried through as provenance verbatim.
+ *
+ * Returns `{ error }` — a refusal VALUE in bad_input's vocabulary, never a
+ * throw — because every caller here answers the model.
+ */
+function resolveDelegatedProfile(
+  ctx: AgentsProfileContext,
+  role: RoleId | undefined,
+  tier: TierId | undefined,
+  presetSource: ProfileProvenance['presetSource'] = 'role_default',
+): DelegatedProfile | { error: string } {
+  const roles = effectiveRoleCatalog(ctx.envelope.catalog);
+  const callerRole = roles[ctx.roleId];
+  if (!callerRole) {
+    return { error: `unknown active role ${JSON.stringify(ctx.roleId)} — it is not in this `
+      + 'account\'s catalog; ask the owner to fix the catalog or pick an explicit role.' };
+  }
+
+  const spawns = callerRole.spawns;
+  // Absent inherits EVERYTHING, the same narrowing rule as allowedTools.
+  // A list allows exactly those roles; '*' is the explicit wildcard. A caller
+  // may always delegate under its own role.
+  if (role !== undefined && role !== ctx.roleId
+    && spawns !== undefined && spawns !== '*'
+    && !spawns.includes(role)) {
+    return { error: `role ${JSON.stringify(role)} is not one your role may delegate to — `
+      + `allowed: ${spawns.length > 0 ? spawns.join(', ') : '(none)'}.` };
+  }
+
+
+  try {
+    const resolved = resolveTurnProfile({
+      envelope: ctx.envelope,
+      provider: ctx.provider,
+      roleId: role ?? ctx.roleId,
+      explicitTier: tier,
+      workMode: 'build',
+      availableTools: ctx.availableTools,
+      activeSkills: [],
+    });
+    return {
+      resolved,
+      sources: {
+        roleSource: role !== undefined ? 'explicit' : 'caller',
+        tierSource: resolved.tier.source,
+        presetSource,
+      },
+    };
+  } catch (err) {
+    return { error: renderThrownChain({ cause: err }) };
+  }
+}
+
 async function runSwarmAction(
-  deps: AgentsForkDeps,
+  deps: AgentsToolDeps,
   input: AgentsToolInput,
   mode: WorkMode,
   toolOptions: AgentsToolCallOptions | undefined,
   budget?: MissionGovernor,
 ): Promise<object> {
-  if (!input.preset) {
-    return badInput(`swarm needs \`preset\` — the shape of the search. ${SWARM_PRESET_DOCTRINE.join(' ')}`);
+  const fork = deps.fork!;
+  // THIS CALL IS A RE-DRIVE, or it is not — and the distinction decides where
+  // the profile comes from BEFORE anything resolves: a re-drive replays a
+  // stored snapshot verbatim and never consults today's catalog, so a catalog
+  // edit cannot reach an in-flight tree mid-flight. Read off the options bag
+  // for the reason `RESUME_REDRIVE_OPTION` states: the input IS the durable
+  // row, and nothing in it could distinguish the two.
+  const redrive = readResumeRedrive(toolOptions);
+  if (!redrive && !input.preset && !deps.profile) {
+    return badInput(`swarm needs \`preset\` — the shape of the search${deps.profile ? '' : ' (no role catalog is wired here to take its default from)'}. ${SWARM_PRESET_DOCTRINE.join(' ')}`);
   }
   if (!input.task) {
     return badInput('swarm needs `task` — what the search is for, in prose. The measured '
       + 'quantity goes in `objective`, never here.');
   }
+
+  // ROLE / TIER / PRESET PRECEDENCE, resolved through the one resolver. A
+  // re-drive skips this entirely — its snapshot comes back off the claimed
+  // ledger row inside runSwarm — so the provenance below describes a FIRST
+  // attempt only.
+  let delegated: DelegatedProfile | undefined;
+  if (!redrive) {
+    const ctx = deps.profile?.();
+    if (ctx) {
+      const resolution = resolveDelegatedProfile(
+        ctx,
+        input.role,
+        input.tier,
+        input.preset === undefined ? 'role_default' : 'explicit',
+      );
+      if ('error' in resolution) return badInput(resolution.error);
+      delegated = resolution;
+    } else if (input.role !== undefined || input.tier !== undefined) {
+      return badInput('role and tier need a profile catalog, which this actor does not have — '
+        + 'call again without them.');
+    }
+    // Explicit preset wins; a wired catalog fills the gap from the role's own
+    // default; neither means the refusal above already fired.
+  }
+  const preset: SwarmPreset = input.preset ?? delegated?.resolved.defaultPreset ?? 'ideate';
+
   // One typed literal, not an Object.assign chain: every field is checked
   // against SwarmInput where the assign form checked nothing, and every
   // field is SUPPLIED where a conditional spread reads as absent.
   const call: SwarmInput = {
-    preset: input.preset,
+    preset,
     task: input.task,
     objective: input.objective,
     key: input.key,
@@ -955,11 +1141,18 @@ async function runSwarmAction(
   // measurement calls this process makes, and the PORT the run charges its own model
   // calls through as it makes them.
   const mission = missionScope(budget, input);
-  let rt: AgentRuntime = deps.rt;
+  let rt: AgentRuntime = fork.rt;
   if (mission) {
-    rt = { ...deps.rt, llm: mission.governor.govern(deps.rt.llm, mission.scope.labels) };
+    rt = { ...fork.rt, llm: mission.governor.govern(fork.rt.llm, mission.scope.labels) };
   }
-  const runDeps: SwarmRunDeps = { rt, model: deps.model, mode };
+  const runDeps: SwarmRunDeps = { rt, model: fork.model, mode };
+  // THE SNAPSHOT. A first attempt carries the resolved precedence record down
+  // to the runner, which writes it into the run's own ledger row BEFORE any
+  // node expands — the moment a durable detach could happen — so a re-drive
+  // re-enters under the profile it started under rather than today's catalog.
+  if (delegated) Object.assign(runDeps, {
+    profile: { profile: delegated.resolved, sources: delegated.sources },
+  });
   // THE SEARCH CHARGES ITS OWN CALLS. Wired here, an exhausted label stops the next
   // level from opening and stops an agent swarm node between its steps, so a cap the
   // caller set is enforced while the money is still there to save.
@@ -969,7 +1162,7 @@ async function runSwarmAction(
   // Resolved here rather than at wiring time, so a backend that cannot build a
   // host yet refuses where the refusal is reportable. Assigned only when there is
   // one: an absent key is what runs the loop in this isolate.
-  const host = deps.nodeHost?.();
+  const host = fork.nodeHost?.();
   if (host) Object.assign(runDeps, { host });
   // The per-node private home, from the ONE construction site: a backend hands
   // over the three things only a host has, never a provisioner of its own, so
@@ -977,20 +1170,17 @@ async function runSwarmAction(
   // swarm call and awaited per node, so a turn that never searches never boots a
   // filesystem, and an absent factory leaves the key absent — which is what makes
   // every node report the shared plane instead of a home it does not have.
-  const nodeHome = deps.nodeHome;
+  const nodeHome = fork.nodeHome;
   if (nodeHome) Object.assign(runDeps, { provisionHome: agentHomeNodeProvisioner(nodeHome()) });
   // The *Inherited context* barrier: the backend's real compaction ladder, handed to the
   // run so a fork parent past the threshold is rewritten once instead of inherited
   // verbatim until the provider refuses. Absent stays absent — the seam's documented
   // loud failure rather than a silent stub.
-  if (deps.compactShared) Object.assign(runDeps, { compactShared: deps.compactShared });
-  // THIS CALL IS A RE-DRIVE, or it is not — and only a re-drive re-enters an
-  // interrupted search. Read off the options bag rather than the input for the reason
-  // `RESUME_REDRIVE_OPTION` states: the input IS the durable row, and a re-drive
-  // replays it verbatim, so nothing in it could distinguish the two. Assigned only when
-  // true, so a first call leaves the key absent.
-  if (readResumeRedrive(toolOptions)) Object.assign(runDeps, { redrive: true });
+  if (fork.compactShared) Object.assign(runDeps, { compactShared: fork.compactShared });
   readSpawnStarted(toolOptions)?.();
+  // Only a re-drive re-enters an interrupted search; the flag was read at the
+  // top of this action, where it also decides where the profile comes from.
+  if (redrive) Object.assign(runDeps, { redrive: true });
   const result = await runSwarm(runDeps, resolved);
   if ('reason' in result) return result;
   // THE SPAWN, AND ONLY THE SPAWN. The tokens are already on the ledger: every model
@@ -1036,6 +1226,38 @@ type SchemaPropertiesFor<Action extends AgentsToolAction> =
  */
 type SwarmSchemaProperties = SchemaPropertiesFor<'swarm'>;
 
+/**
+ * The catalog's roles, projected as one bounded line each — the discovery half
+ * of "hire/swarm with a role": a model cannot pick a role it was never shown.
+ * Rendered into the `role` field descriptions of both the native schema and
+ * the codemode declaration, from the same context, so neither can list a role
+ * the resolver would refuse. Absent (no catalog wired) is an empty string —
+ * the legacy freeform wording covers that actor.
+ */
+export function roleSummaries(deps: AgentsToolDeps): string {
+  const ctx = deps.profile?.();
+  if (!ctx) return '';
+  const roles = effectiveRoleCatalog(ctx.envelope.catalog);
+  const callerSpawns = roles[ctx.roleId]?.spawns;
+  const allowed = (id: string): boolean => {
+    if (ctx.roleId === id) return true;
+    if (callerSpawns === undefined || callerSpawns === '*') return true;
+    return callerSpawns.includes(id);
+  };
+  return Object.entries(roles)
+    .filter(([id]) => allowed(id))
+    .map(([id, role]) => {
+      const label = role.label ?? deriveRoleLabel(id);
+      return `${id} (${label}, preset ${role.preset}): ${role.description}`;
+    })
+    .join('; ');
+}
+
+function roleSummaryText(deps: AgentsToolDeps): string {
+  const summaries = roleSummaries(deps);
+  return summaries ? ` Available roles: ${summaries}.` : '';
+}
+
 function swarmProperties(deps: AgentsToolDeps): SwarmSchemaProperties {
   if (!deps.fork) return {};
   return {
@@ -1067,6 +1289,8 @@ function swarmProperties(deps: AgentsToolDeps): SwarmSchemaProperties {
     name: { type: 'string', maxLength: 60, description: 'For action=swarm: a SHORT name for this search — two to four words, what you would call it in a sentence ("repo audit", "coupon 500 hunt"). It is what the exploration surface labels the tree and its row with, so a reader tells two searches apart without reading either task. Omit and the surface derives one from `task`, which is a paragraph and reads like one.' },
     branches: { type: 'integer', minimum: 1, description: 'For action=swarm: candidates per expansion. Omit to take the preset\'s own width.' },
     depth: { type: 'integer', minimum: 1, description: 'For action=swarm: how deep the search may go. Omit to take the preset\'s own depth. depth:1 is one measured expansion; deeper selects down a tree with `advance`, scoring each node against your own `objective`. The literature runs 3-7 (ToT <=3, LATS 7, Koh 5). advance:"none" has no selection step, so it fixes depth at 1 and a deeper cap is refused rather than silently flattened.' },
+    role: { type: 'string', description: `For action=swarm: the role every node runs under. Omit and the nodes ride your own active role. One swarm is role-homogeneous — there is no per-node role.${roleSummaryText(deps)}` },
+    tier: { type: 'string', enum: [...TIER_IDS], description: 'For action=swarm: the inference tier the nodes run at — tiny|fast|default|slow|deep. Omit to take the role\'s default tier.' },
     budget_usd: { type: 'number', minimum: 0, description: 'For action=swarm: cumulative USD cap for the whole search, including its measurements. Omit for no cap.' },
     budget_tokens: { type: 'integer', minimum: 1, description: 'For action=swarm: cumulative token cap, same scope as budget_usd.' },
     budget_label: { type: 'string', maxLength: 120, description: 'For action=swarm: name the sub-ledger so several calls share one cumulative budget.' },
@@ -1085,14 +1309,14 @@ function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
       type: 'string',
       description: `Agent name: ${askTargets}. Target for ask/send/dismiss; optional name for hire (auto-generated from the role when omitted) and detail filter for list.`,
     },
-    role: { type: 'string', maxLength: 200, description: 'For action=hire: one freeform role/purpose line (e.g. "researcher — competitive landscape").' },
+    role: { type: 'string', maxLength: 64, description: `For action=hire: the catalog role to hire — one of the ids listed below.${roleSummaryText(deps)}` },
     // Says what a mission is FOR, because the hire rung's context fact makes it
     // load-bearing: this text plus a bounded digest of the caller's recent
     // messages is the subordinate's whole starting knowledge. The sentence is
     // DELEGATION_INHERITANCE.hire.brief — the fork brief's opposite, from the
     // same per-action source, so neither field can be handed the other's rule.
     mission: { type: 'string', maxLength: 20000, description: `For action=hire: the helper's mission — it seeds its identity and runs as its first turn. ${DELEGATION_INHERITANCE.hire.brief}` },
-    model: { type: 'string', description: 'For action=hire: optional model spec override (defaults to the workspace model).' },
+    tier: { type: 'string', enum: [...TIER_IDS], description: 'For action=hire: optional inference tier override — tiny|fast|default|slow|deep. Omit to take the role\'s default tier.' },
     message: {
       type: 'string', maxLength: 20000,
       description: 'The work or note for ask/send, the answer for reply, or the first delegated task for hire scope=workspace.',
@@ -1106,7 +1330,6 @@ function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
         description: 'For action=hire: subordinate (default) hires into THIS workspace; workspace creates (or reuses by name) a specialist workspace of its own, sends `message` to it, and awaits the result.',
       },
       topic: { type: 'string', maxLength: 80, description: 'Optional short label for a peer ask/send (default "message").' },
-      timeout_seconds: { type: 'number', description: `For a peer ask / hire scope=workspace: seconds to wait for the reply (default and max ${LLM_CALL_TIMEOUT_MS / 1000}). On timeout the reply still arrives later as an event.` },
       event_id: { type: 'string', description: 'For action=reply: the agent message event id you were given.' },
     });
   }
@@ -1148,7 +1371,7 @@ function requestedTopic(input: AgentsToolInput): { topic: string } | { error: st
  * throwing into the model's script.
  *
  * `toolOptions` is the AI SDK tool-call options bag; only `abortSignal` is
- * read (search cancellation).
+ * read, for search cancellation and timer-less peer-wait cancellation.
  */
 export async function dispatchAgentsAction(
   deps: AgentsToolDeps,
@@ -1203,7 +1426,7 @@ export async function dispatchAgentsAction(
   try {
     switch (input.action) {
       case 'swarm':
-        return await runSwarmAction(deps.fork!, input, mode, toolOptions, deps.budget);
+        return await runSwarmAction(deps, input, mode, toolOptions, deps.budget);
 
       case 'hire': {
         if ((input.scope ?? 'subordinate') === 'workspace') {
@@ -1222,21 +1445,45 @@ export async function dispatchAgentsAction(
           const request: Parameters<PeersToolDeps['spawnWorkspace']>[0] = {
             purpose: input.mission,
             message: input.message,
-            timeoutMs: askTimeoutMs(input.timeout_seconds),
             mode,
           };
           if (input.agent) Object.assign(request, { name: input.agent });
+          if (toolOptions?.abortSignal) Object.assign(request, { signal: toolOptions.abortSignal });
           return await peers.spawnWorkspace(request);
         }
         if (!team) return { error: 'hiring subordinates is not available on this actor' };
         if (!input.role || !input.mission) return { error: 'hire requires role and mission' };
-        const request: Parameters<TeamToolDeps['spawn']>[0] = {
-          role: input.role,
-          mission: input.mission,
-          mode,
-        };
+        // The role is a CATALOG id here — validated, spawn-checked and carried
+        // onto the subordinate's durable identity with its tier override.
+        // Without a catalog the freeform text still hires (the legacy path),
+        // so an actor that never wired a profile keeps working; one that has
+        // one refuses an unresolvable role rather than seeding an identity the
+        // child's next turn cannot resolve.
+        let request: Parameters<TeamToolDeps['spawn']>[0];
+        const ctx = deps.profile?.();
+        if (ctx) {
+          const delegated = resolveDelegatedProfile(ctx, input.role, input.tier);
+          if ('error' in delegated) return badInput(delegated.error);
+          // Only an EXPLICIT override rides along: a role's own default tier
+          // is re-derived by the child at its next turn boundary from its
+          // roleId, so storing it twice would be a second source of truth.
+          const resolvedTier = input.tier !== undefined ? delegated.resolved.tier : undefined;
+          request = {
+            role: input.role,
+            mission: input.mission,
+            roleId: input.role,
+            mode,
+          };
+          if (resolvedTier !== undefined) Object.assign(request, { tier: resolvedTier.id });
+          if (delegated.resolved.catalogVersion !== null) {
+            Object.assign(request, { catalogVersion: delegated.resolved.catalogVersion });
+          }
+        } else {
+          // No catalog wired: the freeform line hires as the labelled legacy
+          // block, exactly as it did before roles existed.
+          request = { role: input.role, mission: input.mission, mode };
+        }
         if (input.agent) Object.assign(request, { name: input.agent });
-        if (input.model) Object.assign(request, { model: input.model });
         return await team.spawn(request);
       }
 
@@ -1261,11 +1508,11 @@ export async function dispatchAgentsAction(
           };
         }
         if (peers) {
-          return await peers.ask({
-            agent: input.agent, topic: asked.topic, message: input.message,
-            timeoutMs: askTimeoutMs(input.timeout_seconds),
-            mode,
-          });
+          const request: Parameters<PeersToolDeps['ask']>[0] = {
+            agent: input.agent, topic: asked.topic, message: input.message, mode,
+          };
+          if (toolOptions?.abortSignal) Object.assign(request, { signal: toolOptions.abortSignal });
+          return await peers.ask(request);
         }
         return { error: `unknown agent "${input.agent}" — check the roster with action:"list"` };
       }

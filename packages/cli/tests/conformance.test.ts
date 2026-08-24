@@ -19,14 +19,18 @@ import { join, resolve } from 'node:path';
 import type { LanguageModel } from 'ai';
 import type { LanguageModelV2 } from '@ai-sdk/provider';
 import {
-  BACKGROUND_POLICY,
   compareSurface, normalizeObservedTables, observedActionEnum, wiredProducers,
   renderConformanceFindings,
   type ObservedSurface,
 } from '@kinu.run/core';
-import { LocalAgentSession, openWorkspaceCLI, type LocalModelResolver } from '@kinu.run/cli-backend';
+import {
+  LocalAgentHost, openWorkspaceCLI,
+  type CLIRuntime, type LocalModelResolver,
+} from '@kinu.run/cli-backend';
 import { createCliAgent } from '../src/agent-create';
-import { resolveLLMConfig, agentDbPath, agentDir, AGENT_HOME, updateConfigFile } from '../src/config';
+import {
+  resolveLLMConfig, agentDbPath, agentDir, AGENT_HOME, listLocalRefs, updateConfigFile,
+} from '../src/config';
 import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model';
 
 // Dummy provider config so resolveLLMConfig succeeds offline — the capturing
@@ -124,29 +128,39 @@ async function observeCli(): Promise<{ observed: ObservedSurface; captured: Capt
   });
 
   const dbPath = agentDbPath(AGENT_NAME);
-  const db = new Database(dbPath);
-  const { rt } = await openWorkspaceCLI(db, dbPath, { llm: resolveLLMConfig(OFFLINE_PROVIDER) });
-
+  let runtime: CLIRuntime | null = null;
   let captured: CapturedTool[] = [];
   const model = capturingModel((tools) => { captured = tools; });
-  const session = new LocalAgentSession({
-    rt,
-    db,
-    model,
-    modelResolver: staticResolver(model),
-    noAutoEvolve: true,
-    backgroundPolicy: BACKGROUND_POLICY.interactive,
-    oneShot: false,
-    sessionId: 'conformance',
-    persistMessages: true,
-    onEvent: () => {},
+  const resolver = staticResolver(model);
+  const openConfig = { llm: resolveLLMConfig(OFFLINE_PROVIDER) };
+  const host = new LocalAgentHost({
+    // The real refs `kinu create` just wrote: the host binds planes and peer
+    // groups from placement, never from the existence of an agent.db.
+    roster: () => listLocalRefs(),
+    dbPath: () => dbPath,
+    childDbPath: (_parent, child) => join(agentDir(AGENT_NAME), '.kinu', 'agents', child, 'agent.db'),
+    open: async (_ref, db, path) => {
+      const opened = await openWorkspaceCLI(db, path, openConfig);
+      runtime = opened.rt;
+      return {
+        rt: opened.rt,
+        openConfig,
+        modelResolver: resolver,
+        staticModel: model,
+      };
+    },
   });
+  const session = await host.acquire(AGENT_NAME);
   await session.send('what can you do?');
-  await session.end();
 
-  const byName = new Map(captured.map((t) => [t.name, t]));
-  const tables = db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-    .all().map((row) => row.name);
+  const db = new Database(dbPath, { readonly: true });
+  const byName = new Map(captured.map((tool) => [tool.name, tool]));
+  const tables = db.query<{ name: string }, []>(
+    "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+  ).all().map((row) => row.name);
+  db.close();
+  await host.close();
+  if (!runtime) throw new Error('LocalAgentHost did not open the workspace runtime');
 
   return {
     captured,
@@ -157,7 +171,7 @@ async function observeCli(): Promise<{ observed: ObservedSurface; captured: Capt
         'agents-action': observedActionEnum(byName.get('agents')),
         'memory-action': observedActionEnum(byName.get('memory')),
         table: normalizeObservedTables(tables),
-        producer: wiredProducers(rt),
+        producer: wiredProducers(runtime),
       },
     },
   };
@@ -177,5 +191,9 @@ describe('cli backend conformance', () => {
     expect(captured.length).toBeGreaterThanOrEqual(5);
     expect(observed.planes.table!.size).toBeGreaterThanOrEqual(25);
     expect(observed.planes.tool!.has('execute_tools')).toBe(true);
+    // The peer transport reached the model: `reply` exists only when the host
+    // wired peers, so this is the local virtual workspace's mail showing up in
+    // the action enum a real model is handed.
+    expect(observed.planes['agents-action']!.has('reply')).toBe(true);
   }, 30_000);
 });

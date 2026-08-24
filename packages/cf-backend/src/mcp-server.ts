@@ -92,7 +92,7 @@ interface McpAgentClient {
   getToolList(): Promise<{ builtIn: string[]; crafted: ToolListEntry[] }>;
   runScaffoldOnceWire(
     task: string,
-    opts?: { useShadowOverride?: boolean; timeoutMs?: number },
+    opts?: { useShadowOverride?: boolean },
   ): Promise<string>;
   getShadowStatus(): Promise<ShadowStatus>;
   listRuns(request: PageRequest): Promise<Page<RunListEntry>>;

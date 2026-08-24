@@ -39,15 +39,16 @@ export const EXTERNAL_TOOL_LINE = definePromptSection(
 );
 
 /**
- * The turn's guidance, in three independent layers.
+ * The turn's guidance, in independent layers.
  *
- * Permission (workMode), provenance and stance are separate facts and each
- * renders on its own: a background-job wake is a resume AND it is plan or
- * build work, and the stance is neither. Collapsing them into one value is
- * what made the resume overlay unreachable — see prompting/surface.ts.
+ * Permission (workMode) and provenance are separate facts and each renders on
+ * its own: a background-job wake is a resume AND it is plan or build work.
+ * Collapsing them into one value is what made the resume overlay unreachable —
+ * see prompting/surface.ts. The role renders as its own section (ROLE_SECTION
+ * below), never as a branch of this one.
  *
- * Two of the three render nothing in their default state, on purpose: `build`
- * (Auto) is the absence of constraint, and so is the `general` stance.
+ * `build` (Auto) renders nothing here, on purpose: it is the absence of
+ * constraint.
  */
 export const OPERATING_GUIDANCE = definePromptSection(
   'guidance/operating',
@@ -59,12 +60,23 @@ export const OPERATING_GUIDANCE = definePromptSection(
 - Kimi K2.6 works best when tool use is concrete and continuous: preserve tool/result context and continue from each observation.
 - For long-horizon coding, write durable decisions down with \`memory\`.{{/if}}{{#if gpt}}
 - GPT/Codex-style reasoning models do best with direct success criteria: state assumptions briefly, use tools for current facts, and keep final answers outcome-focused.
-- For machine-readable tasks, take the schema-backed output whenever a schema or tool offers one.{{/if}}{{stanceGuidance}}{{#if backgroundResume}}
+- For machine-readable tasks, take the schema-backed output whenever a schema or tool offers one.{{/if}}{{#if backgroundResume}}
 - Background-resume mode: fetch the referenced job result first, synthesize it, then continue or close the original work.{{/if}}{{#if planMode}}
 - Plan mode: {{#if planSubmission}}investigate deeply, then submit a concrete Markdown plan with affected files, risks, and verification through \`submit_plan\`.{{else}}investigate deeply and report concrete findings to the parent Plan turn; the parent owns the reviewed plan.{{/if}}
 - Do not change files, system state, releases, or deployments. Ordinary tools remain available for inspection; use mutating operations only after approval starts a Build turn.
 - Do not expose ports or produce preview or output links. {{#if planSubmission}}The submitted plan is the only plan-mode output surface.{{else}}Your report is research input for the parent plan, not a separate user-facing output.{{/if}}
 {{#if planSubmission}}- Do not begin implementation until the plan is approved. End by calling \`submit_plan\`, or ask a question only when the missing answer must come from the user.{{else}}- Do not begin implementation. Return your research and recommendations to the parent without calling or inventing \`submit_plan\`.{{/if}}{{/if}}`,
+);
+
+/**
+ * The ONE Role section. Its body is the resolved role's own instructions and
+ * nothing else — no second surface copies role prose, so an authority that
+ * edits a definition changes exactly one rendered block.
+ */
+export const ROLE_SECTION = definePromptSection(
+  'role/profile',
+  `## Role: {{label}} ({{id}})
+{{instructions}}`,
 );
 
 /**
@@ -342,6 +354,7 @@ Final replies are plain markdown. Keep user-visible reasoning concise, name impo
  */
 export const PROMPT_SECTIONS: readonly PromptSection<string>[] = [
   OPERATING_GUIDANCE,
+  ROLE_SECTION,
   TOOLS_SECTION,
   EXECUTORS_SECTION,
   PERSISTENCE_SECTION,

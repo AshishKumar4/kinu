@@ -167,10 +167,10 @@ function fullDeps(): AgentsToolDeps {
     },
     peers: {
       listPeers: async () => [],
-      ask: async () => ({ status: 'no_reply', note: '' }),
+      ask: async () => ({ status: 'replied', from: 'a', reply: '' }),
       send: async () => ({ status: 'queued', message_id: 'm' }),
       reply: async () => ({ ok: true }),
-      spawnWorkspace: async () => ({ agent: 'a', created: true, status: 'no_reply', note: '' }),
+      spawnWorkspace: async () => ({ agent: 'a', created: true, status: 'replied', from: 'a', reply: '' }),
     },
   };
 }

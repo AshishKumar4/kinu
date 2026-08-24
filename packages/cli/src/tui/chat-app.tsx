@@ -4,33 +4,32 @@
  * LocalAgentSession, CloudAgentClient over the OrchestratorAgent DO). The
  * client owns transport, recording, and history; this renders its
  * AgentClientEvent stream into scrollable message history with streaming text,
- * tool cards, evolution markers, a status bar, model/session pickers, and the
- * device-consent overlay.
+ * tool rows, evolution markers, status, shared workspace navigation, profile
+ * hubs, and exclusive consent overlays.
  *
- * Input is driven by ONE state machine (tui/input-state.ts): Enter while a
- * turn runs STEERS it (client.steer), Tab queues the draft for after the turn,
- * Ctrl+B runs the draft as a parallel BRANCH (client.branch — settles into
- * Alternate Takes), Esc interrupts, and Esc-Esc opens the walk-back picker
- * that forks the conversation before an earlier user message (client.fork)
- * with that message pre-filled for editing.
+ * The input reducer owns turn state. The semantic action registry owns every
+ * key chord, so queue, branch, cancel, and editor behavior stay preset-safe.
  */
 
 import {
   createCliRenderer,
-  type KeyEvent,
   type ScrollBoxRenderable,
   type TextareaRenderable,
 } from '@opentui/core';
 import { createRoot, useKeyboard, useRenderer, useTerminalDimensions } from '@opentui/react';
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 
-import type { AlternateTakeCandidate, AlternateTakeSet, ChangelogEntry } from '@kinu.run/core';
+import {
+  TIER_IDS, effectiveRoleCatalog,
+  type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry, type TierId,
+} from '@kinu.run/core';
 import {
   findForkPivot,
   forkCandidates,
   type AgentChangelogView,
   type AgentClient,
   type AgentClientEvent,
+  type AgentClientSendOptions,
   type AgentClientStatus,
   type DeviceConsentDecision,
   type ForkPoint,
@@ -46,16 +45,17 @@ import {
   performUndo,
   resolveCommandDraft,
   setModelPreference,
+  setReasoningEffortPreference,
   type SlashOutcome,
 } from '../slash-commands';
 import { describePromptAttachment, resolvePromptAttachments } from '../attachments';
-import { listKnownAgents, type ListedAgent } from '../agent-list';
+import { listSidebarAgents } from '../agent-list';
 import { watchDeviceConsents } from '../consent-watch';
 import { contextWindowForSpec, EMPTY_MODEL_MENU, type AgentModelEntry, type AgentModelMenu } from '../model-catalog';
 import { requireInteractiveTerminal } from '../prompt';
+import { loadActiveProfile } from '../profiles';
 import { guideFailure } from '../provider-guidance';
 import { openBrowser } from '../commands/auth';
-import type { CliSessionInfo } from '../session';
 import { StatusBar } from './status-bar';
 import { MessageList, type DisplayMessage } from './messages';
 import {
@@ -67,20 +67,31 @@ import {
   DeviceConsentOverlay,
   ModelPickerOverlay,
   PhaseLine,
-  SessionPickerOverlay,
   TakesOverlay,
   SettingsOverlay,
   type TuiSettingChoice,
   WalkbackOverlay,
-  WorkspaceDrawerOverlay,
 } from './overlays';
 import { useDeviceConnectPrompt } from './use-device-connect';
 import { estimateContextTokens } from './context-status';
 import { useStreamingBuffer } from './streaming-buffer';
-import { renderSessionBrowser, selectSession } from './session-browser';
 import { initialInputState, reduceInput, type InputEffect, type InputMachineEvent } from './input-state';
 import { clipText } from './format';
-import { tuiColors } from './theme';
+import { createKeyDispatcher, openTuiKeyBindings, type TuiActionId } from './actions';
+import { HubOverlay, type TuiHubData, type TuiHubView } from './hubs';
+import { useTuiTheme } from './theme';
+import {
+  TuiProductProvider,
+  TuiShell,
+  tuiLayoutForWidth,
+  usePreservedScrollAnchor,
+  useTuiProduct,
+  useAgentRoster,
+  agentSourceFromList,
+  type TuiRuntimeOptions,
+  type TuiAgentSource,
+  type TuiAgentSummary,
+} from './tui-shell';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 
 export interface ChatAppOpts {
@@ -91,18 +102,21 @@ export interface ChatAppOpts {
   /** A cloud walk-back fork swaps in a sibling client; the host needs the
    *  current one so exit cleanup closes the right connection. */
   onClientChange?: (client: AgentClient) => void;
-  /** Resolve one cached workspace choice through the same client factory used
-   *  at startup. The TUI keeps navigation backend-neutral. */
-  listWorkspaces?: () => readonly ListedAgent[];
+  workspaceSource?: TuiAgentSource;
   onWorkspaceSelect?: (name: string) => Promise<AgentClient>;
+  profileMutations?: {
+    setModel(spec: string): Promise<{ spec: string }>;
+    setReasoningEffort(effort: 'low' | 'medium' | 'high'): Promise<{ effort: 'low' | 'medium' | 'high' }>;
+  };
+  tui?: TuiRuntimeOptions;
+  hubData?: TuiHubData;
 }
 
 type ActiveSurface =
   | { kind: 'commands' }
   | { kind: 'settings' }
-  | { kind: 'workspaces'; workspaces: readonly ListedAgent[] }
+  | { kind: 'hub'; view: TuiHubView }
   | { kind: 'model'; menu: AgentModelMenu; loading: boolean; error: string | null }
-  | { kind: 'sessions'; sessions: CliSessionInfo[] }
   | { kind: 'changelog'; view: AgentChangelogView }
   | { kind: 'takes'; set: AlternateTakeSet }
   | null;
@@ -124,15 +138,34 @@ function persistedTranscriptEvent(event: AgentClientEvent): boolean {
 
 let globalExit: (() => void) | null = null;
 
-export function ChatApp({
+export function ChatApp(props: ChatAppOpts) {
+  return (
+    <TuiProductProvider runtime={props.tui}>
+      <ChatScene {...props} />
+    </TuiProductProvider>
+  );
+}
+
+function ChatScene({
   client: initialClient,
   hydrateHistory,
   onExit,
   onClientChange,
-  listWorkspaces = listKnownAgents,
+  workspaceSource: workspaceSourceInput,
   onWorkspaceSelect,
+  profileMutations: suppliedProfileMutations,
+  hubData,
 }: ChatAppOpts) {
   const { width, height } = useTerminalDimensions();
+  const { colors } = useTuiTheme();
+  const { keybindings, updatePreferences } = useTuiProduct();
+  const keyDispatcher = useMemo(() => createKeyDispatcher(keybindings), [keybindings]);
+  const workspaceSource = useMemo(
+    () => workspaceSourceInput ?? agentSourceFromList(listSidebarAgents),
+    [workspaceSourceInput],
+  );
+  const roster = useAgentRoster(workspaceSource);
+  const [navigationOpen, setNavigationOpen] = useState(false);
   // The client can be swapped mid-session: a cloud walk-back fork returns a
   // sibling client pointed at the forked agent.
   const [client, setClient] = useState(initialClient);
@@ -143,28 +176,37 @@ export function ChatApp({
   const [ready, setReady] = useState(false);
   const [status, setStatus] = useState<AgentClientStatus | null>(null);
   const [modelSpec, setModelSpec] = useState<string>('');
+  const [nextTier, setNextTier] = useState<TierId | null>(null);
   const [modelCatalog, setModelCatalog] = useState<AgentModelEntry[]>([]);
   const [activeSurface, setActiveSurface] = useState<ActiveSurface>(null);
   const [pendingConsent, setPendingConsent] = useState<PendingDeviceConsent | null>(null);
-  const sessionPicker = activeSurface?.kind === 'sessions' ? activeSurface : null;
   const modelPicker = activeSurface?.kind === 'model' ? activeSurface : null;
   const changelogView = activeSurface?.kind === 'changelog' ? activeSurface.view : null;
   const takesView = activeSurface?.kind === 'takes' ? activeSurface.set : null;
   const commandPalette = activeSurface?.kind === 'commands';
-  const workspaceDrawer = activeSurface?.kind === 'workspaces' ? activeSurface.workspaces : null;
+  const hubView = activeSurface?.kind === 'hub' ? activeSurface.view : null;
   const settingsOpen = activeSurface?.kind === 'settings';
   const [draft, setDraft] = useState('');
-  const [activeSessionId, setActiveSessionId] = useState(client.cliSession.id);
   const [inputState, setInputState] = useState(initialInputState);
   /** Steer-as-Branch runs in flight, branchId → task (status-bar segment). */
+  const profileMutations = suppliedProfileMutations ?? {
+    setModel: (spec: string) => setModelPreference(client, spec),
+    setReasoningEffort: (effort: 'low' | 'medium' | 'high') =>
+      setReasoningEffortPreference(client, effort),
+  };
   const [branchTasks, setBranchTasks] = useState<Record<string, string>>({});
+  const [toolDetailsExpanded, setToolDetailsExpanded] = useState(false);
 
   const msgIdRef = useRef(0);
   const historyRef = useRef<ScrollBoxRenderable | null>(null);
   const inputRef = useRef<TextareaRenderable | null>(null);
-  // Mirrors the input's declarative `focused` condition so the mouse handler can
-  // reassert focus imperatively — a click moves OpenTUI's native focus without
-  // re-rendering React, so the declarative prop alone never wins it back.
+  const scrollAnchor = usePreservedScrollAnchor(historyRef);
+  const handleNavigationFocusChange = useCallback((focused: boolean) => {
+    if (focused) inputRef.current?.blur();
+    else if (ready) inputRef.current?.focus();
+  }, [ready]);
+  // Mirrors the input's declarative `focused` condition so a click can reassert
+  // focus without introducing a second focus state.
   const inputShouldFocusRef = useRef(false);
   const machineRef = useRef(initialInputState);
   /** A fork swap re-points the message list itself — skip the next hydration. */
@@ -311,14 +353,20 @@ export function ChatApp({
       if (steering) message.steered = true;
       addMessage(message);
       const payload = prompt.files.length > 0 ? { text: prompt.text, files: prompt.files } : prompt.text;
-      if (steering && client.steer(payload, { cwd: process.cwd() })) return;
-      await client.send(payload, { cwd: process.cwd() });
+      const sendOptions: AgentClientSendOptions = { cwd: process.cwd() };
+      if (nextTier) sendOptions.tier = nextTier;
+      if (steering && client.steer(payload, sendOptions)) {
+        setNextTier(null);
+        return;
+      }
+      setNextTier(null);
+      await client.send(payload, sendOptions);
     } catch (err) {
       if (clientGenerationRef.current === generation) addError({ cause: err });
     } finally {
       clientActionCountRef.current -= 1;
     }
-  }, [addError, addMessage, client]);
+  }, [addError, addMessage, client, nextTier]);
 
   /** Run the draft as a parallel branch of the live turn — never interrupts
    *  it; progress lands in the status bar and settles into /takes. Falls back
@@ -367,7 +415,6 @@ export function ChatApp({
           content: `Forked ${result.label} — edit the message and press Enter to resend.`,
         }];
       });
-      setActiveSessionId(result.client.cliSession.id);
 
       setInputText(point.text);
     } catch (err) {
@@ -377,24 +424,24 @@ export function ChatApp({
       setReady(true);
     }
   }, [addError, addMessage, client, dispatchInput, onClientChange, setInputText]);
-  const switchWorkspace = useCallback(async (workspace: ListedAgent) => {
-    if (workspace.name === client.agentName) {
-      setActiveSurface(null);
+  const switchWorkspace = useCallback(async (workspace: TuiAgentSummary) => {
+    if (workspace.name === client.agentName && workspace.mode === client.mode) {
+      setNavigationOpen(false);
       return;
     }
     if (!onWorkspaceSelect) {
-      setActiveSurface(null);
+      setNavigationOpen(false);
       addMessage({ role: 'system', content: 'Workspace switching is unavailable in this host.' });
       return;
     }
     if (machineRef.current.activeTurns > 0 || clientActionCountRef.current > 0) {
-      setActiveSurface(null);
+      setNavigationOpen(false);
       addMessage({ role: 'system', content: 'Finish or stop the active workspace action before switching.' });
       return;
     }
     if (selectionPendingRef.current) return;
     selectionPendingRef.current = true;
-    setActiveSurface(null);
+    setNavigationOpen(false);
     setReady(false);
     let candidate: AgentClient | null = null;
     const bufferedEvents: AgentClientEvent[] = [];
@@ -440,7 +487,6 @@ export function ChatApp({
           ? [{ id: `switch-history-${++msgIdRef.current}`, role: 'system' as const, content: historyFailure }]
           : []),
       ]);
-      setActiveSessionId(candidate.cliSession.id);
       setClient(candidate);
       onClientChange?.(candidate);
       candidate = null;
@@ -474,48 +520,6 @@ export function ChatApp({
     }
   }, [addError, addMessage, client, onClientChange, onWorkspaceSelect, setInputText, stream]);
 
-  const resumeSession = useCallback(async (input: string, available?: CliSessionInfo[]) => {
-    const sessionHistory = client.sessionHistory;
-    if (!sessionHistory) {
-      addMessage({ role: 'system', content: 'Recorded conversation resume is available for local workspaces.' });
-      return;
-    }
-    const sessions = available ?? sessionHistory.list();
-    const selected = selectSession(sessions, input);
-    if (!selected) {
-      addMessage({ role: 'system', content: `No matching session for "${input}". Type /resume to choose again.` });
-      return;
-    }
-    if (selectionPendingRef.current) return;
-    selectionPendingRef.current = true;
-    setActiveSurface(null);
-    setReady(false);
-    await new Promise<void>((resolve) => { setTimeout(resolve, 0); });
-    try {
-      await sessionHistory.resume(selected.info.id);
-      activeSegmentRef.current = null;
-      stream.clear();
-      setTurnPhase(null);
-      setActiveSessionId(client.cliSession.id);
-      const resumed: DisplayMessage = {
-        id: `resume-${selected.info.id}`,
-        role: 'system',
-        content: `Resumed ${selected.label}`,
-      };
-      setMessages([resumed]);
-      try {
-        const history = await client.history();
-        setMessages([resumed, ...history]);
-      } catch (historyError) {
-        addError({ cause: historyError });
-      }
-    } catch (error) {
-      addError({ cause: error });
-    } finally {
-      selectionPendingRef.current = false;
-      setReady(true);
-    }
-  }, [addError, addMessage, client, stream]);
 
   const openModelPicker = useCallback(async () => {
     const request = ++modelRequestRef.current;
@@ -553,7 +557,7 @@ export function ChatApp({
     selectionPendingRef.current = true;
     setActiveSurface(null);
     try {
-      const result = await setModelPreference(client, model.spec);
+      const result = await profileMutations.setModel(model.spec);
       setModelSpec(result.spec);
       addMessage({ role: 'system', content: `Model: ${result.spec}` });
     } catch (err) {
@@ -629,6 +633,10 @@ export function ChatApp({
         setStatus((current) => current ? { ...current, reasoningEffort: outcome.effort } : current);
         addMessage({ role: 'system', content: `Reasoning effort: ${outcome.effort}` });
         return;
+      case 'role-set':
+        setStatus((current) => current ? { ...current, roleId: outcome.role } : current);
+        addMessage({ role: 'system', content: `Role: ${outcome.role}` });
+        return;
       case 'status':
         setStatus(outcome.status);
         setModelSpec(outcome.status.model ?? '');
@@ -644,23 +652,6 @@ export function ChatApp({
       case 'settings':
         setActiveSurface({ kind: 'settings' });
         return;
-      case 'sessions': {
-        const sessions = client.sessionHistory?.list() ?? [];
-        if (sessions.length === 0) {
-          addMessage({ role: 'system', content: 'No recorded CLI sessions yet.' });
-          return;
-        }
-        if (outcome.mode === 'resume' && outcome.resumeRef) {
-          await resumeSession(outcome.resumeRef, sessions);
-          return;
-        }
-        if (outcome.mode === 'resume') {
-          setActiveSurface({ kind: 'sessions', sessions });
-          return;
-        }
-        addMessage({ role: 'system', content: renderSessionBrowser('list', sessions) });
-        return;
-      }
       case 'device-connect':
         await deviceConnect.open();
         return;
@@ -677,11 +668,10 @@ export function ChatApp({
         const cancelled = {
           settings: 'Settings closed.',
           commands: 'Command palette closed.',
-          workspaces: 'Workspace drawer closed.',
+          hub: 'Agent hub closed.',
           model: 'Model selection cancelled.',
           changelog: 'Changelog closed — everything kept.',
           takes: 'Takes closed — the answered take stays.',
-          sessions: 'Resume cancelled.',
         } satisfies Record<NonNullable<ActiveSurface>['kind'], string>;
         setActiveSurface(null);
         addMessage({ role: 'system', content: cancelled[activeSurface.kind] });
@@ -698,13 +688,11 @@ export function ChatApp({
     deviceConnect.open,
     onExit,
     openModelPicker,
-    resumeSession,
   ]);
 
   const runInputEffects = useCallback((effects: InputEffect[]) => {
-    // Steers accepted mid-turn but never delivered come back to the composer
-    // on interrupt — the same restore contract as the Tab queue (a queue
-    // restore in the same batch merges behind them instead of clobbering).
+    // Steers accepted mid-turn but not delivered return to the composer on
+    // interrupt. A queue restore in the same batch appends instead of replacing.
     let droppedSteers: string[] = [];
     for (const effect of effects) {
       switch (effect.kind) {
@@ -745,14 +733,6 @@ export function ChatApp({
       addMessage({ role: 'system', content: 'Still connecting.' });
       return;
     }
-    if (sessionPicker && !text.startsWith('/')) {
-      try {
-        await resumeSession(text, sessionPicker.sessions);
-      } catch (err) {
-        addError({ cause: err });
-      }
-      return;
-    }
     const submitted = text.startsWith('/') ? resolveCommandDraft(commands, text) : text;
     if (submitted.startsWith('/')) {
       const generation = clientGenerationRef.current;
@@ -767,7 +747,7 @@ export function ChatApp({
         }
         if (outcome.kind === 'branch') {
           if (outcome.text) await performBranch(outcome.text);
-          else addMessage({ role: 'system', content: 'Usage: /branch <text> (or Ctrl+B on a draft) — runs the redirect as a parallel branch of the running turn.' });
+          else addMessage({ role: 'system', content: `Usage: /branch <text> (or ${keybindings.hint('conversation.branch')} on a draft) — runs the redirect as a parallel branch of the running turn.` });
           return;
         }
         if (outcome.kind === 'fork') {
@@ -809,7 +789,7 @@ export function ChatApp({
       return;
     }
     await sendPrompt(submitted);
-  }, [addError, addMessage, applySlashOutcome, client, commands, dispatchInput, messages, performBranch, performWalkback, ready, resumeSession, runInputEffects, sendPrompt, sessionPicker]);
+  }, [addError, addMessage, applySlashOutcome, client, commands, dispatchInput, messages, performBranch, performWalkback, ready, runInputEffects, sendPrompt]);
 
   const handleClientEvent = useCallback((event: AgentClientEvent) => {
     switch (event.type) {
@@ -1010,8 +990,9 @@ export function ChatApp({
   }, []);
 
   const overlayOpen = Boolean(
-    activeSurface || inputState.walkbackOpen || pendingConsent || deviceConnect.state,
+    activeSurface || navigationOpen || inputState.walkbackOpen || pendingConsent || deviceConnect.state,
   );
+
 
   // Auto-copy selected text to clipboard (OSC 52) on mouse release.
   const rendererInstance = useRenderer();
@@ -1051,88 +1032,128 @@ export function ChatApp({
     }
     if (pendingConsent) {
       key.preventDefault();
+      const actionId = keyDispatcher.feed(key, ['consent']).actionId;
       const canApprove = deviceConsentCanApprove(pendingConsent, { width, height });
-      if (key.name === 'o' || key.name === 'y' || key.name === 'return') {
-        if (canApprove) resolvePendingConsent('once');
-      } else if (key.name === 'a') {
-        if (canApprove) resolvePendingConsent('always');
-      } else if (key.name === 'n' || key.name === 'escape') {
-        resolvePendingConsent('deny');
-      }
+      if (actionId === 'consent.once' && canApprove) resolvePendingConsent('once');
+      else if (actionId === 'consent.always' && canApprove) resolvePendingConsent('always');
+      else if (actionId === 'consent.deny') resolvePendingConsent('deny');
       return;
     }
     if (selectionPendingRef.current) {
       key.preventDefault();
       return;
     }
-    if (key.name === 'g' && key.ctrl) {
+    if (navigationOpen && tuiLayoutForWidth(width) !== 'wide') return;
+    const modalActive = activeSurface !== null || inputState.walkbackOpen;
+    const result = keyDispatcher.feed(key, modalActive ? ['modal'] : ['editor', 'conversation', 'global']);
+    if (result.pending) {
       key.preventDefault();
-      if (settingsOpen) setActiveSurface(null);
-      else if (!overlayOpen) setActiveSurface({ kind: 'settings' });
       return;
     }
-    if (key.name === 'k' && key.ctrl) {
-      key.preventDefault();
-      if (commandPalette) setActiveSurface(null);
-      else if (!overlayOpen) setActiveSurface({ kind: 'commands' });
-      return;
-    }
-    if (key.name === 'o' && key.ctrl) {
-      key.preventDefault();
-      if (workspaceDrawer) {
+    const actionId = result.actionId;
+    if (actionId === null) return;
+    if (modalActive) {
+      if (actionId === 'modal.close') {
+        key.preventDefault();
+        if (activeSurface?.kind === 'model') modelRequestRef.current += 1;
         setActiveSurface(null);
-      } else if (machineRef.current.activeTurns > 0 || clientActionCountRef.current > 0) {
-        addMessage({ role: 'system', content: 'Finish or stop the active workspace action before switching.' });
-      } else if (!overlayOpen) {
-        setActiveSurface({ kind: 'workspaces', workspaces: listWorkspaces() });
+        if (inputState.walkbackOpen) runInputEffects(dispatchInput({ type: 'walkback-closed' }));
       }
       return;
     }
-    if (key.name === 'l' && key.ctrl && !overlayOpen) {
+    if (actionId === 'settings.toggle') {
+      key.preventDefault();
+      setActiveSurface(settingsOpen ? null : { kind: 'settings' });
+      return;
+    }
+    if (actionId === 'palette.toggle') {
+      key.preventDefault();
+      setActiveSurface(commandPalette ? null : { kind: 'commands' });
+      return;
+    }
+    if (actionId === 'workspace.toggle') {
+      key.preventDefault();
+      if (machineRef.current.activeTurns > 0 || clientActionCountRef.current > 0) {
+        addMessage({ role: 'system', content: 'Finish or stop the active workspace action before switching.' });
+      } else if (tuiLayoutForWidth(width) === 'wide') {
+        updatePreferences((current) => ({ ...current, wideSidebarOpen: !current.wideSidebarOpen }));
+      } else {
+        setNavigationOpen((open) => !open);
+      }
+      return;
+    }
+    if (actionId === 'link.open-last') {
       key.preventDefault();
       const url = lastUrlFromMessages(messagesRef.current);
       if (url) openBrowser(url);
       return;
     }
-    if (key.name === 'p' && key.ctrl) {
+    if (actionId === 'model.open') {
       key.preventDefault();
-      if (!overlayOpen) void openModelPicker();
+      void openModelPicker();
       return;
     }
-    if (key.name === 'b' && key.ctrl) {
+    if (actionId === 'tier.cycle' || actionId === 'tier.cycle-reverse') {
       key.preventDefault();
-      if (!overlayOpen) runInputEffects(dispatchInput({
-        type: 'branch',
-        draft: inputRef.current?.plainText ?? '',
-      }));
+      const current = nextTier ?? TIER_IDS.find((id) => id === status?.tierId) ?? 'default';
+      const delta = actionId === 'tier.cycle' ? 1 : -1;
+      const index = (TIER_IDS.indexOf(current) + delta + TIER_IDS.length) % TIER_IDS.length;
+      setNextTier(TIER_IDS[index] ?? 'default');
       return;
     }
-    if (key.name === 'tab') {
-      if (!overlayOpen) runInputEffects(dispatchInput({
-        type: 'tab',
-        draft: inputRef.current?.plainText ?? '',
-      }));
+    if (actionId === 'hub.agents' || actionId === 'hub.roles' || actionId === 'hub.tiers'
+      || actionId === 'tier.quick') {
+      if (hubData === undefined) return;
+      key.preventDefault();
+      const view: TuiHubView = actionId === 'hub.agents'
+        ? 'agents'
+        : actionId === 'hub.roles' ? 'roles' : 'tiers';
+      setActiveSurface({ kind: 'hub', view });
       return;
     }
-    if (key.name === 'backspace') {
-      if (!overlayOpen) runInputEffects(dispatchInput({
-        type: 'backspace',
-        draft: inputRef.current?.plainText ?? '',
-      }));
+    if (actionId === 'tool.toggle') {
+      key.preventDefault();
+      setToolDetailsExpanded((expanded) => !expanded);
       return;
     }
-    if (key.name !== 'escape') return;
+    if (actionId === 'effort.cycle') {
+      key.preventDefault();
+      const efforts = ['low', 'medium', 'high'] as const;
+      const current = status?.reasoningEffort ?? 'medium';
+      const next = efforts[(efforts.indexOf(current) + 1) % efforts.length]!;
+      void profileMutations.setReasoningEffort(next)
+        .then(() => setStatus((value) => value === null ? value : { ...value, reasoningEffort: next }))
+        .catch((cause) => addError({ cause }));
+      return;
+    }
+    if (actionId === 'conversation.branch') {
+      key.preventDefault();
+      runInputEffects(dispatchInput({ type: 'branch', draft: inputRef.current?.plainText ?? '' }));
+      return;
+    }
+    if (actionId === 'queue.add') {
+      key.preventDefault();
+      runInputEffects(dispatchInput({ type: 'queue', text: inputRef.current?.plainText ?? '' }));
+      return;
+    }
+    if (actionId === 'queue.edit-last') {
+      runInputEffects(dispatchInput({ type: 'backspace', draft: inputRef.current?.plainText ?? '' }));
+      return;
+    }
+    if (actionId === 'history.page-up' || actionId === 'history.page-down' || actionId === 'history.line-up' || actionId === 'history.line-down') {
+      if (handleHistoryScrollAction(actionId, inputRef.current?.plainText ?? '', historyRef.current)) {
+        key.preventDefault();
+        scrollAnchor.remember();
+      }
+      return;
+    }
+    if (actionId !== 'conversation.cancel') return;
     key.preventDefault();
-    if (activeSurface) {
-      if (activeSurface.kind === 'model') modelRequestRef.current += 1;
-      setActiveSurface(null);
-      return;
-    }
     runInputEffects(dispatchInput({
       type: 'escape',
       now: Date.now(),
       draft: inputRef.current?.plainText ?? '',
-      hasUserMessages: messages.some((msg) => msg.role === 'user'),
+      hasUserMessages: messages.some((message) => message.role === 'user'),
     }));
   });
 
@@ -1144,8 +1165,8 @@ export function ChatApp({
   }, [handleSubmit, setInputText]);
 
   const draftLines = Math.min(6, Math.max(1, draft.split('\n').length));
-  const commandHints = !settingsOpen && !commandPalette && !workspaceDrawer && !modelPicker
-    && !changelogView && !takesView && !inputState.walkbackOpen
+  const commandHints = !settingsOpen && !commandPalette && !modelPicker && hubView === null
+    && !changelogView && !takesView && !inputState.walkbackOpen && !navigationOpen
     && !isProcessing && !/\s/.test(draft.trimStart())
     ? filterCommands(commands, draft)
     : [];
@@ -1157,8 +1178,8 @@ export function ChatApp({
     ? 'Settings ›'
     : commandPalette
       ? 'Commands ›'
-      : workspaceDrawer
-        ? 'Workspaces ›'
+      : hubView !== null
+        ? `${hubView[0]!.toUpperCase()}${hubView.slice(1)} ›`
         : modelPicker
           ? 'Model picker ›'
           : changelogView
@@ -1167,24 +1188,31 @@ export function ChatApp({
               ? 'Takes ›'
               : inputState.walkbackOpen
                 ? 'Walk back ›'
-                : sessionPicker
-                  ? 'Resume ›'
-                  : null;
+                : null;
   const composerTitle = isProcessing
     ? '⟳ processing…'
     : surfaceTitle
-      ?? `${client.agentName} · ${activeSessionId.slice(0, 10)} · Ctrl+K commands · Ctrl+O workspaces · Ctrl+G settings`;
+      ?? `${client.agentName} · ${keybindings.hint('palette.toggle')} commands · ${keybindings.hint('workspace.toggle')} workspaces · ${keybindings.hint('settings.toggle')} settings`;
   const composerPlaceholder = !ready
     ? 'Connecting…'
     : isProcessing
-      ? 'Type to steer · Tab queues · Ctrl+B branches · Esc interrupts'
-      : 'Send a message… · Shift+Enter newline';
+      ? `Type to steer · ${keybindings.hint('queue.add')} queues · ${keybindings.hint('conversation.branch')} branches · ${keybindings.hint('conversation.cancel')} interrupts`
+      : `Send a message… · ${keybindings.hint('editor.newline')} newline`;
   useEffect(() => {
     if (inputFocused) inputRef.current?.focus();
   }, [inputFocused]);
   inputShouldFocusRef.current = inputFocused;
 
   return (
+    <TuiShell
+      scene="chat"
+      roster={roster}
+      currentAgent={{ name: client.agentName, mode: client.mode }}
+      navigationOverlayOpen={navigationOpen}
+      onNavigationOverlayChange={setNavigationOpen}
+      onNavigationFocusChange={handleNavigationFocusChange}
+      onAgentSelect={(agent) => { void switchWorkspace(agent); }}
+    >
     <box flexDirection="column" style={{ width: '100%', height: '100%' }}>
       <StatusBar
         name={status?.name ?? client.agentName}
@@ -1199,6 +1227,7 @@ export function ChatApp({
         contextTokens={contextTokens}
         contextWindow={contextWindow}
         branchCount={Object.keys(branchTasks).length}
+        profile={hubData?.profile.resolved}
       />
 
       <scrollbox
@@ -1206,30 +1235,31 @@ export function ChatApp({
         focused={!isProcessing}
         stickyScroll={true}
         stickyStart="bottom"
+        onMouseScroll={() => queueMicrotask(scrollAnchor.remember)}
         style={{
           flexGrow: 1,
-          rootOptions: { backgroundColor: tuiColors.bg },
-          viewportOptions: { backgroundColor: tuiColors.bg },
-          contentOptions: { backgroundColor: tuiColors.bg },
+          rootOptions: { backgroundColor: colors.background.canvas },
+          viewportOptions: { backgroundColor: colors.background.canvas },
+          contentOptions: { backgroundColor: colors.background.canvas },
           scrollbarOptions: {
-            trackOptions: { foregroundColor: tuiColors.borderMuted, backgroundColor: tuiColors.panelStrong },
+            trackOptions: { foregroundColor: colors.border.strong, backgroundColor: colors.background.surface },
           },
         }}
       >
-        <MessageList messages={messages} />
-        <PhaseLine label={isProcessing ? (turnPhase ?? 'thinking') : null} />
+        <MessageList messages={messages} toolDetailsExpanded={toolDetailsExpanded} />
+        <PhaseLine label={isProcessing ? (turnPhase ?? 'thinking') : nextTier ? `next turn · ${nextTier}` : null} />
       </scrollbox>
 
       {inputState.queue.length > 0 && (
         <box flexDirection="column" style={{ paddingLeft: 2, paddingRight: 2 }}>
           {inputState.queue.map((text, i) => (
             <text key={`queued-${i}`}>
-              <span fg={tuiColors.amberDeep}>⧗ </span>
-              <span fg={tuiColors.muted}>{i + 1} · </span>
-              <span fg={tuiColors.text}>{clipText(text.replace(/\s+/g, ' '), Math.max(8, width - 12))}</span>
+              <span fg={colors.intent.warningMuted}>⧗ </span>
+              <span fg={colors.text.muted}>{i + 1} · </span>
+              <span fg={colors.text.primary}>{clipText(text.replace(/\s+/g, ' '), Math.max(8, width - 12))}</span>
             </text>
           ))}
-          <text><span fg={tuiColors.muted}>queued — sends after this turn · Backspace (empty input) edits the last</span></text>
+          <text><span fg={colors.text.muted}>queued · {keybindings.hint('queue.edit-last')} on an empty input edits the last</span></text>
         </box>
       )}
 
@@ -1238,8 +1268,8 @@ export function ChatApp({
           height: draftLines + 2,
           border: true,
           borderStyle: 'single',
-          borderColor: isProcessing ? tuiColors.borderMuted : tuiColors.border,
-          backgroundColor: tuiColors.panelStrong,
+          borderColor: isProcessing ? colors.border.strong : colors.border.default,
+          backgroundColor: colors.background.surface,
           paddingLeft: 1,
         }}
         title={composerTitle}
@@ -1250,14 +1280,9 @@ export function ChatApp({
           placeholder={composerPlaceholder}
           wrapMode="word"
           keyBindings={[
-            { name: 'return', action: 'submit' },
-            { name: 'return', shift: true, action: 'newline' },
-            { name: 'return', meta: true, action: 'newline' },
-            { name: 'j', ctrl: true, action: 'newline' },
+            ...openTuiKeyBindings(keybindings, 'editor.submit'),
+            ...openTuiKeyBindings(keybindings, 'editor.newline'),
           ]}
-          onKeyDown={(event) => {
-            handleHistoryScrollKey(event, inputRef.current?.plainText ?? '', historyRef.current);
-          }}
           onContentChange={() => setDraft(inputRef.current?.plainText ?? '')}
           onSubmit={onInputSubmit}
         />
@@ -1274,13 +1299,8 @@ export function ChatApp({
             else void handleSubmit(setting.command);
           }}
         />
-      ) : workspaceDrawer ? (
-        <WorkspaceDrawerOverlay
-          workspaces={workspaceDrawer}
-          current={client.agentName}
-          terminal={{ width, height }}
-          onSelect={(workspace) => { void switchWorkspace(workspace); }}
-        />
+      ) : hubView !== null && hubData !== undefined ? (
+        <HubOverlay view={hubView} data={hubData} width={width} height={height} />
       ) : commandPalette ? (
         <CommandPaletteOverlay
           commands={commands}
@@ -1312,13 +1332,6 @@ export function ChatApp({
           terminal={{ width, height }}
           onSelect={(candidate) => { void pickTake(takesView, candidate); }}
         />
-      ) : sessionPicker ? (
-        <SessionPickerOverlay
-          sessions={sessionPicker.sessions}
-          cwd={process.cwd()}
-          terminal={{ width, height }}
-          onSelect={(session) => { void resumeSession(session.id, sessionPicker.sessions); }}
-        />
       ) : inputState.walkbackOpen && walkbackList.length > 0 ? (
         <WalkbackOverlay
           candidates={walkbackList}
@@ -1331,6 +1344,7 @@ export function ChatApp({
       {pendingConsent && <DeviceConsentOverlay consent={pendingConsent} terminal={{ width, height }} />}
       {deviceConnect.state && <DeviceConnectOverlay prompt={deviceConnect.state} terminal={{ width, height }} />}
     </box>
+    </TuiShell>
   );
 }
 
@@ -1340,20 +1354,17 @@ interface HistoryScrollTarget {
   scrollTo(position: number): void;
 }
 
-export function handleHistoryScrollKey(
-  event: Pick<KeyEvent, 'name' | 'preventDefault'>,
+export function handleHistoryScrollAction(
+  actionId: Extract<TuiActionId, 'history.page-up' | 'history.page-down' | 'history.line-up' | 'history.line-down'>,
   draft: string,
   history: HistoryScrollTarget | null,
 ): boolean {
-  const isPageKey = event.name === 'pageup' || event.name === 'pagedown';
-  const isEmptyDraftArrow = draft.length === 0 && (event.name === 'up' || event.name === 'down');
-  if (!history || (!isPageKey && !isEmptyDraftArrow)) return false;
-
-  const direction = event.name === 'up' || event.name === 'pageup' ? -1 : 1;
-  const viewportFraction = isPageKey ? 0.5 : 0.2;
+  const page = actionId === 'history.page-up' || actionId === 'history.page-down';
+  if (history === null || (!page && draft.length > 0)) return false;
+  const direction = actionId === 'history.page-up' || actionId === 'history.line-up' ? -1 : 1;
+  const viewportFraction = page ? 0.5 : 0.2;
   const delta = Math.max(1, Math.floor(history.viewport.height * viewportFraction));
   history.scrollTo(history.scrollTop + direction * delta);
-  event.preventDefault();
   return true;
 }
 
@@ -1381,8 +1392,33 @@ function welcomeMessage(agentName: string): DisplayMessage {
   return { id: 'welcome', role: 'system', content: `Connected to ${agentName}. Type a message or /help for commands.` };
 }
 
+async function loadHubData(client: AgentClient, workspace: string): Promise<TuiHubData> {
+  const [envelope, status] = await Promise.all([loadActiveProfile(), client.status()]);
+  const roles = effectiveRoleCatalog(envelope.catalog);
+  const activeRoleId = status.roleId && roles[status.roleId] ? status.roleId : 'general';
+  const tierId = TIER_IDS.find((id) => id === status.tierId) ?? roles[activeRoleId]?.tier ?? 'default';
+  return {
+    agents: [{
+      id: workspace,
+      label: status.name,
+      kind: 'main',
+      status: 'idle',
+      roleId: activeRoleId,
+      tierId,
+      workspace,
+    }],
+    profile: {
+      envelope,
+      activeRoleId,
+      allowedRoleIds: Object.keys(roles),
+    },
+  };
+}
+
 export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
   requireInteractiveTerminal();
+  const hubData = opts.hubData ?? await loadHubData(opts.client, opts.client.agentName);
+  const renderOptions: ChatAppOpts = { ...opts, hubData };
   const renderer = await createCliRenderer({ exitOnCtrlC: false, useMouse: true });
   const root = createRoot(renderer);
   let currentClient = opts.client;
@@ -1404,7 +1440,7 @@ export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
   globalExit = () => { void cleanup(); };
   process.on('SIGINT', () => { void cleanup(); });
 
-  root.render(<ChatApp {...opts} onClientChange={(client) => { currentClient = client; }} />);
+  root.render(<ChatApp {...renderOptions} onClientChange={(client) => { currentClient = client; }} />);
 
   // Keep the process alive
   await new Promise<void>(() => {});

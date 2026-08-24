@@ -117,7 +117,8 @@ import { DEFAULT_CONFIG } from '../config';
 import { diversityAngle, siblingAngles } from '../mcts/diversity';
 import { explorePrompt, type ExplorePrompt } from '../mcts/explore-prompt';
 import { initSearchTables } from '../mcts/schemas';
-import { initMctsSearchTable, MctsSearchStore } from '../mcts/search-store';
+import { initMctsSearchTable, MctsSearchStore, type PersistedSearchKnobs } from '../mcts/search-store';
+import type { SwarmProfileSnapshot } from '../profiles';
 import { insertSearchNode } from '../mcts/record-node';
 import { backpropagate } from '../mcts/backpropagation';
 import { pruneLowValueBranches } from '../mcts/pruning';
@@ -241,17 +242,6 @@ export interface SwarmRunDeps {
    */
   readonly maxWallClockMs?: number;
   /**
-   * Per-call silence window override for a node's turns, in ms.
-   *
-   * The bound is the turn loop's own {@link LLM_CALL_TIMEOUT_MS} — the sanctioned
-   * per-call bound, firing only when NOTHING flows. Declared here for the reason
-   * `EvaluateBranchOptions.judgeCallTimeoutMs` is: a bound whose only value is ten
-   * minutes cannot be exercised by a test that has to finish, so the arm proving a
-   * node cuts its own silent step would either not exist or take ten minutes. What
-   * a caller overrides is the MAGNITUDE.
-   */
-  readonly callTimeoutMs?: number;
-  /**
    * The mission ledger this run charges, per model call, as the calls happen.
    *
    * EVERY MODEL CALL THIS RUN MAKES, not some of them: an agent swarm node's steps
@@ -319,6 +309,15 @@ export interface SwarmRunDeps {
     messages: readonly ModelMessage[],
     basis: { readonly contextWindow: number; readonly key: string },
   ) => Promise<readonly ModelMessage[]>;
+  /**
+   * The resolved turn profile this run STARTED under, with its precedence
+   * sources. Written into the run's ledger row at `begin` — before any node
+   * expands, which is the moment a durable detach becomes possible — so a
+   * re-drive re-enters under THIS record instead of resolving against
+   * today's catalog. Absent: the caller wired no profile authority, and the
+   * run records none.
+   */
+  readonly profile?: SwarmProfileSnapshot;
   /**
    * This call is an evict/exit RE-DRIVE of a durable job row, so it RE-ENTERS the
    * interrupted search for this task rather than starting a new one.
@@ -1159,14 +1158,13 @@ interface Expansion {
  * was wrong about the cause, which is worse than slack: an unwarranted bound
  * manufactures false diagnoses.
  *
- * What replaces it is not another bound. A node now runs on the shared turn loop, whose
- * stall watchdog ({@link LLM_CALL_TIMEOUT_MS}) cuts a call where NOTHING flows — no
- * provider chunk, no tool result — from INSIDE the node, at a value derived against the
- * 30 s background-detach threshold rather than guessed at the level above. So a member
- * that cannot start now fails, with a named reason, and the barrier has a settled
- * promise to read. And it MUST NOT be a clock here, because a node that can background
- * work legitimately records nothing while it awaits a wake: a node waiting an hour is
- * healthy, and no elapsed-time instrument can tell that from one that never began.
+ * What replaces it is not another bound. A node now runs on the shared turn
+ * loop until it finishes, the caller cancels it, the mission governor refuses a
+ * step, or a provider or tool fails definitively. The barrier awaits that
+ * settled outcome and never diagnoses elapsed silence. It MUST NOT run a clock
+ * here, because a node that can background work legitimately records nothing
+ * while it awaits a wake: a node waiting an hour is healthy, and no elapsed-time
+ * instrument can tell that from one that never began.
  */
 type NodeAnswer =
   | { readonly kind: 'expanded'; readonly expansion: Expansion }
@@ -1189,12 +1187,10 @@ interface LevelAnswer {
  * THE LEVEL BARRIER — every member answers or fails, and the barrier returns either way.
  *
  * It is `Promise.all` over classified members and not `allSettled`, because the
- * classification is the point: the barrier is where a promise's rejection reason stops
- * being a language value and becomes this run's failure, named against the node it
- * belongs to. Nothing here bounds a member's time. Every member settles because every
- * member is a turn loop that bounds its own steps, and the one failure mode that used to
- * settle nothing — a request that goes silent before its first chunk — is now cut inside
- * the node by the shared loop's stall watchdog and arrives here as a `failed`.
+ * classification is the point: a rejection becomes this run's failure, named
+ * against its node. Nothing here bounds a member's time. A member settles when
+ * its turn completes, the caller cancels it, or a provider or tool fails
+ * definitively; otherwise this barrier remains pending.
  */
 async function awaitLevel(members: readonly LevelMember[]): Promise<readonly LevelAnswer[]> {
   return Promise.all(members.map(async (member): Promise<LevelAnswer> => {
@@ -1499,10 +1495,10 @@ async function measureChild(input: {
  * pool fix does not close: `completeWithinTimeout` returns null for a judge call that
  * lost its race and `sampleJudgeScore` returns null for one that would not parse, so the
  * median can be taken over far fewer opinions than were asked for. Under sustained rate
- * limiting a request can legitimately spend most of its own envelope waiting to be sent
- * — `PROVIDER_WAIT_BUDGET_MS` is 540s against a 600s judge envelope — so this is
- * reachable rather than theoretical. Found by `SwarmRuntimeFix` while pacing the
- * provider, and it is the same defect the pool fix removes arriving by another door: an
+ * limiting, the transport may spend three 180 s retry windows waiting to send against
+ * the judge's 600 s envelope, so this is reachable rather than theoretical. Found by
+ * `SwarmRuntimeFix` while pacing the provider, and it is the same defect the pool fix
+ * removes arriving by another door: an
  * ensemble admitted at one size and MEDIANED at another.
  *
  * SO THE REPORTED ENSEMBLE IS THE ONE THE MEDIAN WAS TAKEN OVER, `judgeSamplesUsed`,
@@ -1847,6 +1843,25 @@ export async function runSwarm(
     })
     : null;
   /**
+   * THE PROFILE THIS RUN RUNS UNDER. First attempt: the caller's resolution,
+   * carried down in deps and written into the ledger row at `begin` below —
+   * the snapshot a later re-drive replays. Re-drive: the claimed row's own
+   * record, so today's catalog cannot reach an in-flight tree.
+   */
+  const runProfile = deps.profile ?? reentry?.profile ?? null;
+  if (runProfile && !deps.redrive) {
+    log.event('swarm.profile_snapshot', {
+      role: runProfile.profile.role.id, tier: runProfile.profile.tier.id,
+      model: runProfile.profile.tier.model, preset: resolved.preset,
+      roleSource: runProfile.sources.roleSource,
+      tierSource: runProfile.sources.tierSource,
+      presetSource: runProfile.sources.presetSource,
+      catalogVersion: runProfile.profile.catalogVersion,
+      digest: runProfile.profile.digest,
+    });
+  }
+
+  /**
    * AND IF IT IS NEITHER, IT IS NOTHING. A call that did not re-enter and finds a
    * search of its own task STILL RUNNING is refused rather than given a second tree.
    *
@@ -2085,6 +2100,16 @@ export async function runSwarm(
   // calling it here would throw away the lease this run just took and un-fence the
   // executor it was taken from. What the row needs is the truth about progress, which
   // is what the checkpoint carries.
+  const ledgerConfig: PersistedSearchKnobs = {
+    budget: expansionBudget,
+    branches,
+    mode: deps.mode,
+    maxDepth,
+    explorationWeight: resolved.config.explorationWeight,
+    judgeSamples: judgeSamples ?? undefined,
+  };
+  if (runProfile) Object.assign(ledgerConfig, { profile: runProfile });
+
   if (reentry) {
     searchLedger.checkpoint(
       rootId, ledgerEpoch, inheritedExpansions, budget.remaining, Date.now(),
@@ -2096,14 +2121,7 @@ export async function runSwarm(
       engine: 'swarm',
       // A swarm's root is the workspace as found, not a message in a conversation.
       rootMsgId: null,
-      config: {
-        budget: expansionBudget,
-        branches,
-        mode: deps.mode,
-        maxDepth,
-        explorationWeight: resolved.config.explorationWeight,
-        judgeSamples: judgeSamples ?? undefined,
-      },
+      config: ledgerConfig,
       budget: expansionBudget,
       now: Date.now(),
     });
@@ -2121,13 +2139,11 @@ export async function runSwarm(
   const nodeDeps: NodeAgentDeps = {
     rt: deps.rt, model: deps.model, journal, logger: log,
     // The wall clock is OPT-IN (deps.maxWallClockMs, wired below when declared):
-    // there is no default clock over a node's work any more. What bounds it lives
-    // inside every node turn — the per-call silence window and the mission
-    // governor — not in a product over deleted constants.
+    // there is no default clock over a node's work. Its turn runs until it is
+    // done, cancelled, refused by its mission governor, or fails definitively.
   };
   if (deps.signal !== undefined) nodeDeps.signal = deps.signal;
   if (deps.reportModelCall !== undefined) nodeDeps.reportModelCall = deps.reportModelCall;
-  if (deps.callTimeoutMs !== undefined) nodeDeps.callTimeoutMs = deps.callTimeoutMs;
   if (deps.maxWallClockMs !== undefined) nodeDeps.maxWallClockMs = deps.maxWallClockMs;
   if (deps.mission !== undefined) nodeDeps.mission = deps.mission;
   if (deps.provisionHome !== undefined) nodeDeps.provisionHome = deps.provisionHome;
@@ -2137,7 +2153,6 @@ export async function runSwarm(
   if (deps.host !== undefined) nodeDeps.host = deps.host;
   if (deps.executeTool !== undefined) nodeDeps.executeTool = deps.executeTool;
   if (deps.webSearch !== undefined) nodeDeps.webSearch = deps.webSearch;
-  if (deps.callTimeoutMs !== undefined) nodeDeps.callTimeoutMs = deps.callTimeoutMs;
   // THE REPORT CONTRACT, wired exactly where an instrument exists. A judged run gets no
   // gate at all — an absent key, because a check that passed and a check that never
   // existed are different facts — and the ABSENCE is what makes a judged node's report
@@ -2737,13 +2752,10 @@ export async function runSwarm(
     // explore-prompt.ts states: a candidate fenced in a language nothing here can run
     // is unverifiable, so the question has to name what the measurement can execute.
     //
-    // Every member SETTLES, which is what the barrier rests on and what it did not used
-    // to: `Promise.allSettled` over a node whose first request went silent waits for the
-    // life of the process, and this line held one measured run for sixty-three minutes
-    // with three rows reading `running`. A node now runs on the shared turn loop and its
-    // stall watchdog cuts a step where nothing flows, so the failure arrives here as a
-    // named `failed` instead of as an absence. See {@link NodeAnswer} for why the clock
-    // that used to sit outside the members was deleted rather than retuned.
+    // The barrier names every settled member. It deliberately remains pending
+    // while a member's provider remains pending: elapsed silence is not evidence
+    // of failure. Completion, explicit cancellation, or a definitive error is
+    // what produces the `expanded` or `failed` value read below.
     const answers = await awaitLevel(
       Array.from({ length: width }, (_unused, index): LevelMember => {
         const branch = grant?.proposal.branches[index];
@@ -3417,7 +3429,7 @@ export async function runSwarm(
   );
   if (aborted) searchLedger.fail(rootId, ledgerEpoch, Date.now());
   else searchLedger.converge(rootId, ledgerEpoch, Date.now());
-  return {
+  const result: SwarmResult = {
     preset: resolved.preset,
     label: resolved.label,
     config: resolved.config,
@@ -3435,6 +3447,8 @@ export async function runSwarm(
     best,
     candidates,
   };
+  if (runProfile) Object.assign(result, { profile: runProfile });
+  return result;
 }
 
 /**

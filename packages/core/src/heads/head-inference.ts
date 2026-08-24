@@ -448,17 +448,6 @@ export interface HeadInferenceDeps {
   /** Abort reason, surfaced in errorMessage. */
   abortReason?: () => string | null;
   /**
-   * Per-call silence window override, in ms. Default {@link LLM_CALL_TIMEOUT_MS}.
-   *
-   * The bound itself is not this module's and is not a new one: it is the turn
-   * loop's — the sanctioned per-call bound, firing only when NOTHING flows (no
-   * provider chunk, no tool result). This field exists for the reason the turn
-   * loop's own does: a bound whose only value is ten minutes cannot be exercised
-   * by a test that has to finish. What a caller overrides is the MAGNITUDE; the
-   * relationship is the one the default runs.
-   */
-  callTimeoutMs?: number;
-  /**
    * The mission ledger this head charges, when it runs under one.
    *
    * The head's own envelope has no token dimension on purpose — a fork gets its
@@ -554,12 +543,10 @@ const ConstructedModelSchema = v.object({ modelId: v.string(), provider: v.strin
  * REPORT.
  *
  * THE TURN BODY IS {@link runChat} AND NOTHING HERE REPEATS IT. This function
- * used to hold a second `generateText` call, which is how a fork came to be the
- * only agent in the tree with no stall watchdog, no dead-stream detection, no
- * mid-step abort, no step-boundary pruning and no unpaired-tool-call repair:
- * each of those exists once, in the turn body, and a second call site simply
- * did not reach them. Driving the same body instead is a deletion, and the
- * capabilities arrive with it.
+ * used to hold a second `generateText` call, which is how a fork missed the
+ * shared loop's dead-stream detection, mid-step abort, step-boundary pruning,
+ * and unpaired-tool-call repair. Each exists once in the turn body; driving the
+ * same body deletes the second path.
  *
  * WHAT IS LEFT HERE is what a turn body cannot know: how many turns this agent
  * gets, what a finished step means to its journal, which ledger it charges, and
@@ -697,7 +684,6 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
         onStep,
       };
       if (deps.signal !== undefined) turn.signal = deps.signal;
-      if (deps.callTimeoutMs !== undefined) turn.callTimeoutMs = deps.callTimeoutMs;
       for await (const event of runChat(turn)) {
         if (event.type !== 'done') continue;
         settled = true;

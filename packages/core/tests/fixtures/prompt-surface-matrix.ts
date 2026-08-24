@@ -8,11 +8,11 @@
  *
  * A conversion like that is only proven by a matrix, because the bytes are the
  * easy half: every branch in the builder has to keep taking the same branch, and
- * a branch nobody renders is a branch nobody checked. So this list covers each
- * conditional the nine sections carry at least once in each direction — the two
- * plan-submission spellings, both model-family overlays, each stance, the
- * background-resume overlay, an offline laptop, a preview-capable executor, the
- * empty tool surface, and the delegation rungs one at a time.
+ * a branch nobody renders is a branch nobody checked. This list covers each
+ * conditional at least once in each direction: the two plan-submission
+ * spellings, both model-family overlays, each built-in role, the background
+ * resume overlay, an offline laptop, a preview-capable executor, the empty
+ * tool surface, and the delegation rungs one at a time.
  *
  * `fixtures/prompt-golden.json` holds what these rendered BEFORE the conversion,
  * generated from the pre-change builder. Regenerate it only when a prompt change
@@ -21,7 +21,8 @@
  */
 
 import type { SystemPromptOptions } from '../../src/prompt';
-import { AGENT_STANCES, BUILTIN_TOOLS } from '../../src/tools/registry';
+import { BUILTIN_TOOLS } from '../../src/tools/registry';
+import { BUILTIN_ROLE_DEFINITIONS, deriveRoleLabel } from '../../src/profiles';
 import type { PromptExecutorInfo } from '../../src/prompting/surface';
 import type { ParsedSkill } from '../../src/skills/types';
 
@@ -59,6 +60,20 @@ const ALL_TOOLS = [...BUILTIN_TOOLS];
 export interface PromptCase {
   readonly name: string;
   readonly opts: SystemPromptOptions;
+}
+
+function rolePromptCase(
+  id: string,
+  role: (typeof BUILTIN_ROLE_DEFINITIONS)[keyof typeof BUILTIN_ROLE_DEFINITIONS],
+): PromptCase {
+  return {
+    name: `role-${id}`,
+    opts: {
+      availableTools: ['memory'],
+      roleSection: { id, label: deriveRoleLabel(id), instructions: role.instructions },
+      backend: 'cf',
+    },
+  };
 }
 
 export const PROMPT_MATRIX: readonly PromptCase[] = [
@@ -134,10 +149,7 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
     name: 'background-resume',
     opts: { availableTools: ['run'], provenance: 'background_resume', backend: 'cf' },
   },
-  ...AGENT_STANCES.map((stance) => ({
-    name: `stance-${stance}`,
-    opts: { availableTools: ['memory'] as const, stance, backend: 'cf' as const },
-  })).map((entry) => ({ name: entry.name, opts: { ...entry.opts, availableTools: [...entry.opts.availableTools] } })),
+  ...Object.entries(BUILTIN_ROLE_DEFINITIONS).map(([id, role]) => rolePromptCase(id, role)),
   {
     name: 'no-tools',
     opts: { availableTools: [], executors: [WORKSPACE], backend: 'cf' },

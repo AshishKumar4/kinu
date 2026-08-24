@@ -94,11 +94,14 @@ describe('buildDrainBatch', () => {
 });
 
 describe('buildDrainBatch — peer messages', () => {
-  test('an ask renders the mechanical reply route (peers reply + event id)', () => {
+  test('an ask renders the mechanical reply route (the agents reply action + event id)', () => {
     const batch = buildDrainBatch([peer('pe1', true)])!;
     expect(batch.text).toContain('[peer_agent] from peer agent (scout)');
     expect(batch.text).toContain('What changed upstream?');
-    expect(batch.text).toContain("peers({action:'reply', event_id:'pe1'");
+    // The tool is `agents`. Naming anything else here hands the model a call it
+    // cannot make: there is no `peers` tool on any backend.
+    expect(batch.text).toContain("agents({action:'reply', event_id:'pe1'");
+    expect(batch.text).not.toContain('peers({');
   });
 
   test('a fire-and-forget message carries no reply instruction', () => {

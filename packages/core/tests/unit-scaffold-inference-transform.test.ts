@@ -39,7 +39,6 @@ function runOpts(rt: AgentRuntime, scaffoldCode: string) {
     task: 'the task',
     llmStream: async function* () { yield ''; },
     scaffoldCodeOverride: scaffoldCode,
-    timeoutMs: 10_000,
   };
 }
 

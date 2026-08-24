@@ -88,6 +88,7 @@ export async function converge(
       winnerId: winner.id,
       winnerValue: winner.value,
       converged: false,
+      reason: 'undifferentiated',
       trajectory: [],
     };
   }
@@ -108,6 +109,7 @@ export async function converge(
       winnerId: winner.id,
       winnerValue: winner.value,
       converged: false,
+      reason: 'no_acceptable_candidate',
       trajectory: [],
     };
   }
