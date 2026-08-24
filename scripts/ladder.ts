@@ -479,9 +479,10 @@ export const LADDER: readonly Gate[] = [
     blind: 'a column that exists and is never written; that is dead-field territory.',
   },
   {
-    run: 'bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/doc-claims.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts',
+    run: 'bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/doc-claims.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts',
     tier: 'push',
-    seconds: 1.7,
+    // Measured 2026-08-24 after analytics dataset parity joined: 11.08s.
+    seconds: 12,
     catches: 'a gate whose decision boundary someone simplified. These are the tests '
       + 'that fail when a fingerprint stops distinguishing a renamed copy from a '
       + 'genuinely different body — and, for scratch-ownership, the three shapes that '

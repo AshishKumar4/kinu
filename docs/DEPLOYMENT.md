@@ -250,9 +250,9 @@ re-checks each one.
   `wrangler.jsonc`. Without it the bucket grows without bound, since the Sandbox
   SDK enforces snapshot TTL at restore time only.
 - **The Workers Paid plan**, and **the account**.
-- **The feedback R2 lifecycle rule.** `FEEDBACK_BUCKET` stores the screenshot
-  object. Set a retention rule that matches the feedback policy; the DO stores
-  only its pointer and exact metadata.
+- **The feedback R2 lifecycle rule.** Both feedback buckets expire the
+  `feedback/` prefix after 90 days. This was set and read back on 2026-08-24.
+  The DO stores only the object pointer and exact feedback metadata.
 
 ## Cloudflare Deployment
 
