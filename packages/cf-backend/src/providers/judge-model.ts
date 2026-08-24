@@ -25,11 +25,11 @@ const candidatesFor = (registry: AgentProviderRegistry) => (): Promise<string[]>
  * assessing your own output has a bias the smaller sibling shares — and a
  * second copy of that policy would be a second place for it to change.
  *
- * The MECHANICAL producers deliberately do NOT come through here. `selectFastModel`
- * is synchronous, and their seams need a synchronous answer at construction
- * time to decide whether to wire a distinct client at all; this one has to await
- * a live credential listing. One resolver over both would carry a branch neither
- * caller can reach.
+ * The MECHANICAL producers deliberately do NOT come through here. They resolve
+ * their model from the account's tier table (`MODEL_ROUTE_POLICY.fast` names the
+ * `tiny` tier) synchronously at construction time, to decide whether to wire a
+ * distinct client at all; this one has to await a live credential listing. One
+ * resolver over both would carry a branch neither caller can reach.
  */
 export async function resolveReviewingModelSelection(opts: {
   registry: AgentProviderRegistry;

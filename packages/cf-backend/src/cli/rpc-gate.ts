@@ -305,7 +305,12 @@ export function rejectOutOfScopeRpc<Message>(tags: Iterable<string>, message: Me
   // client we shipped with the wrong scope set or someone probing the surface,
   // and neither is distinguishable from the other — or from nothing at all —
   // while the denial is only a string handed back down the socket.
+  //
+  // `outcome` is stated rather than left to default: the sink reads 'ok' from a
+  // `diagnostics.event`, and a refusal that counts as a success is a denial rate
+  // of zero.
   diagnostics.event('rpc_gate.denied', {
+    outcome: 'denied',
     reason: access === 'never' ? 'not_invokable' : required ? 'scope_missing' : 'interactive_only',
     tool: method,
     source: required ?? 'interactive',

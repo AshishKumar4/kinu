@@ -1,25 +1,29 @@
 /** @jsxImportSource @opentui/react */
+import { join } from 'node:path';
+import { createTestRenderer } from '@opentui/core/testing';
+import { createRoot } from '@opentui/react';
 import { describe, expect, test } from 'bun:test';
+import { scratchDir } from '@kinu.run/test-utils';
 
 import {
   KEYMAP_PRESET_IDS,
   createKeybindingRegistry,
-  keyEventAction,
+  createKeyDispatcher,
+  type KeybindingRegistry,
   type TuiKeyEvent,
+  type KeyScope,
+  type TuiActionId,
 } from '../src/tui/actions';
 import {
   BUILTIN_TUI_THEMES,
+  TuiThemeProvider,
   createThemeRegistry,
   parseCustomTheme,
-  resolveThemeSelection,
-  themeContrastFailures,
+  useTuiTheme,
+  type ThemeAppearance,
+  type TuiThemeDefinition,
 } from '../src/tui/theme';
-import { deriveOnboardingState, type OnboardingReadiness } from '../src/tui/onboarding';
-import {
-  DEFAULT_TUI_PREFERENCES,
-  createMemoryTuiPreferenceStore,
-  parseTuiPreferences,
-} from '../src/tui/preferences';
+import { createFileTuiPreferenceStore } from '../src/tui/preferences';
 import { tuiLayoutForWidth } from '../src/tui/tui-shell';
 
 const key = (name: string, modifiers: Partial<TuiKeyEvent> = {}): TuiKeyEvent => ({
@@ -30,6 +34,17 @@ const key = (name: string, modifiers: Partial<TuiKeyEvent> = {}): TuiKeyEvent =>
   meta: false,
   ...modifiers,
 });
+
+/** What the app's own dispatcher resolves a stroke to. Every TUI surface feeds
+ *  keys through `createKeyDispatcher`, so the keymap is asserted at the seam the
+ *  product actually uses rather than at a resolver behind it. */
+const resolve = (
+  registry: KeybindingRegistry,
+  event: TuiKeyEvent,
+  scopes: readonly KeyScope[],
+): TuiActionId | null => createKeyDispatcher(registry).feed(event, scopes).actionId;
+
+const EDITING: readonly KeyScope[] = ['editor', 'conversation', 'global'];
 
 describe('TUI product registries', () => {
   test('every keymap preset binds the same semantic actions and pi-omp is the default', () => {
@@ -51,8 +66,8 @@ describe('TUI product registries', () => {
         'conversation.cancel': ['escape'],
       },
     });
-    expect(keyEventAction(registry, key('escape'), ['modal', 'conversation', 'global'])).toBe('modal.close');
-    expect(keyEventAction(registry, key('escape'), ['conversation', 'global'])).toBe('conversation.cancel');
+    expect(resolve(registry, key('escape'), ['modal', 'conversation', 'global'])).toBe('modal.close');
+    expect(resolve(registry, key('escape'), ['conversation', 'global'])).toBe('conversation.cancel');
   });
 
   test('overlapping key conflicts are rejected with both action ids', () => {
@@ -67,32 +82,39 @@ describe('TUI product registries', () => {
 
   test('pi-omp keeps editor conventions and the approved hub shortcuts', () => {
     const registry = createKeybindingRegistry({ presetId: 'pi-omp' });
-    expect(keyEventAction(registry, key('o', { ctrl: true }), ['editor', 'conversation', 'global'])).toBe('tool.toggle');
-    expect(keyEventAction(registry, key('g', { ctrl: true }), ['editor', 'conversation', 'global'])).toBe('editor.external');
-    expect(keyEventAction(registry, key('tab', { shift: true }), ['editor', 'conversation', 'global'])).toBe('effort.cycle');
-    expect(keyEventAction(registry, key('p', { ctrl: true }), ['editor', 'conversation', 'global'])).toBe('tier.cycle');
-    expect(keyEventAction(registry, key('p', { ctrl: true, shift: true }), ['editor', 'conversation', 'global'])).toBe('tier.cycle-reverse');
-    expect(keyEventAction(registry, key('p', { alt: true }), ['editor', 'conversation', 'global'])).toBe('tier.quick');
-    expect(keyEventAction(registry, key('a', { alt: true }), ['editor', 'conversation', 'global'])).toBe('hub.agents');
-    expect(keyEventAction(registry, key('l', { ctrl: true }), ['editor', 'conversation', 'global'])).toBe('model.open');
-    expect(keyEventAction(registry, key('w', { alt: true }), ['editor', 'conversation', 'global'])).toBe('workspace.toggle');
-    expect(keyEventAction(registry, key('tab'), ['editor', 'conversation', 'global'])).not.toBe('queue.add');
-    expect(keyEventAction(registry, key('b', { ctrl: true }), ['editor', 'conversation', 'global'])).not.toBe('conversation.branch');
+    expect(resolve(registry, key('o', { ctrl: true }), EDITING)).toBe('tool.toggle');
+    expect(resolve(registry, key('g', { ctrl: true }), EDITING)).toBe('editor.external');
+    expect(resolve(registry, key('tab', { shift: true }), EDITING)).toBe('effort.cycle');
+    expect(resolve(registry, key('p', { ctrl: true }), EDITING)).toBe('tier.cycle');
+    expect(resolve(registry, key('p', { ctrl: true, shift: true }), EDITING)).toBe('tier.cycle-reverse');
+    expect(resolve(registry, key('p', { alt: true }), EDITING)).toBe('tier.quick');
+    expect(resolve(registry, key('a', { alt: true }), EDITING)).toBe('hub.agents');
+    expect(resolve(registry, key('l', { ctrl: true }), EDITING)).toBe('model.open');
+    expect(resolve(registry, key('w', { alt: true }), EDITING)).toBe('workspace.toggle');
+    expect(resolve(registry, key('tab'), EDITING)).not.toBe('queue.add');
+    expect(resolve(registry, key('b', { ctrl: true }), EDITING)).not.toBe('conversation.branch');
   });
 
-  test('built-in themes validate contrast and system selection resolves an explicit pair', () => {
-    const registry = createThemeRegistry(BUILTIN_TUI_THEMES);
-    for (const theme of registry.themes) expect(themeContrastFailures(theme)).toEqual([]);
-    expect(resolveThemeSelection(registry, {
-      mode: 'system',
-      darkThemeId: 'kinu-dark',
-      lightThemeId: 'kinu-light',
-    }, 'dark').id).toBe('kinu-dark');
-    expect(resolveThemeSelection(registry, {
-      mode: 'system',
-      darkThemeId: 'kinu-dark',
-      lightThemeId: 'kinu-light',
-    }, 'light').id).toBe('kinu-light');
+  test('every built-in theme meets contrast, and one that does not is refused', () => {
+    expect(() => createThemeRegistry(BUILTIN_TUI_THEMES)).not.toThrow();
+
+    const dark = BUILTIN_TUI_THEMES.find((theme) => theme.id === 'kinu-dark')!;
+    const invisible: TuiThemeDefinition = {
+      ...dark,
+      id: 'invisible',
+      colors: {
+        ...dark.colors,
+        text: { ...dark.colors.text, primary: dark.colors.background.canvas },
+      },
+    };
+    expect(() => createThemeRegistry([invisible])).toThrow(/text\.primary\/background\.canvas contrast/);
+  });
+
+  test('a system theme selection follows the terminal appearance', async () => {
+    for (const [appearance, expected] of [['dark', 'kinu-dark'], ['light', 'kinu-light']] as const) {
+      const themeId = await renderedThemeId(appearance);
+      expect(themeId).toBe(expected);
+    }
   });
 
   test('custom themes reject malformed colors and unknown fields', () => {
@@ -109,44 +131,59 @@ describe('TUI product registries', () => {
 });
 
 
-describe('guided onboarding', () => {
-  test('readiness derivation resumes at the first incomplete, unskipped scene', () => {
-    const fresh: OnboardingReadiness = {
-      accountConnected: false,
-      providerConnected: false,
-      tierAliasesResolved: false,
-      themeSelected: false,
-      keymapSelected: false,
-      workspaceCount: 0,
-      skippedSteps: [],
-    };
-    expect(deriveOnboardingState(fresh).activeStep).toBe('location');
-    expect(deriveOnboardingState({
-      ...fresh,
-      location: 'cloud',
-      accountConnected: true,
-      defaultModel: 'workers-ai/deepseek',
-      tierAliasesResolved: true,
-      skippedSteps: ['theme'],
-    }).activeStep).toBe('keymap');
-  });
-
-});
-
-
-
 describe('adaptive TUI shell', () => {
   test('layout thresholds follow the sidebar plus conversation budget', () => {
     expect([40, 80, 120, 160].map(tuiLayoutForWidth)).toEqual(['narrow', 'medium', 'wide', 'wide']);
   });
 
   test('wide sidebar preference persists through a new provider', () => {
-    const store = createMemoryTuiPreferenceStore(DEFAULT_TUI_PREFERENCES);
-    const next = { ...store.read(), wideSidebarOpen: false };
-    store.write(next);
-    expect(store.read().wideSidebarOpen).toBe(false);
-    expect(parseTuiPreferences(JSON.stringify(store.read()), 'saved tui').wideSidebarOpen).toBe(false);
+    const path = join(scratchDir('tui-prefs'), 'tui.json');
+    const store = createFileTuiPreferenceStore(path);
+    expect(store.read().wideSidebarOpen).toBe(true);
+    store.write({ ...store.read(), wideSidebarOpen: false });
+    // A second store on the same file is what a restarted TUI holds: the saved
+    // shape has to survive the parse the reader puts it through.
+    expect(createFileTuiPreferenceStore(path).read().wideSidebarOpen).toBe(false);
   });
-
 });
 
+
+/** The theme the provider hands its children for a system selection, read the
+ *  way every TUI surface reads it — through `useTuiTheme` under a mounted
+ *  provider, so the terminal-appearance resolution really runs. */
+async function renderedThemeId(appearance: ThemeAppearance): Promise<string> {
+  const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({
+    width: 40,
+    height: 4,
+    useThread: false,
+    maxFps: Number.POSITIVE_INFINITY,
+  });
+  const root = createRoot(renderer);
+  try {
+    root.render(
+      <TuiThemeProvider
+        registry={createThemeRegistry(BUILTIN_TUI_THEMES)}
+        selection={{ mode: 'system', darkThemeId: 'kinu-dark', lightThemeId: 'kinu-light' }}
+        terminalAppearance={appearance}
+        colorCapability="truecolor"
+      >
+        <ActiveThemeProbe />
+      </TuiThemeProvider>,
+    );
+    for (let pass = 0; pass < 40; pass += 1) {
+      await renderOnce();
+      const marked = captureCharFrame().split('theme=')[1];
+      if (marked !== undefined && marked.trim() !== '') return marked.trimEnd();
+      await Bun.sleep(5);
+    }
+    throw new Error(`the theme probe never painted for a ${appearance} terminal`);
+  } finally {
+    root.render(<box />);
+    renderer.destroy();
+  }
+}
+
+function ActiveThemeProbe() {
+  const { definition } = useTuiTheme();
+  return <text>theme={definition.id}</text>;
+}

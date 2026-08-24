@@ -255,8 +255,10 @@ wedged, `kinu stop <name>` ends the current turn without losing its conversation
 ## 11. Feedback and the control plane
 
 Use **Feedback** in the app navigation to send a note. You can attach a
-full-page screenshot and draw annotations before submission. Kinu masks fields
-marked as sensitive. You can also send the note without a screenshot.
+full-page screenshot and draw annotations before submission. Kinu blocks out
+secrets before the image is made: password fields, an issued webhook secret and
+the curl command that carries it, and the headers of an MCP server. You can also
+send the note without a screenshot.
 
 Only configured operators can open `/control`. The control plane shows paged
 users and workspaces, incidents, feedback, weighted fleet metrics, exact run

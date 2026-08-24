@@ -18,6 +18,7 @@ import {
   createCodexAuthStore,
   ensureAgentHome,
   listLocalRefsAllProjects,
+  readProviderRevision,
   resolveMcpServers,
   resolveProviderCredentials,
 } from '../config';
@@ -90,8 +91,15 @@ export async function daemonCommand(action: string | undefined, agent?: string):
       }
       const now = Date.now();
       for (const ref of due) {
-        await host.tick(ref.name, now);
-        console.log(`${OK('✓')} ticked ${ref.name} ${DIM(`${ref.workspaceId} · ${ref.cwd}`)}`);
+        const result = await host.tick(ref.name, now);
+        const where = DIM(`${ref.workspaceId} · ${ref.cwd}`);
+        // A pass another driver owns converted nothing here, and printing a tick
+        // for it would be a claim this process cannot support. Naming the holder
+        // is also the answer to "why did nothing happen?".
+        console.log(result.ran
+          ? `${OK('✓')} ticked ${ref.name} ${where}`
+          : `${WARN('⋯')} deferred ${ref.name} ${DIM(`the ${result.heldBy?.kind ?? 'other'} driver`
+            + `${result.heldBy ? ` in process ${String(result.heldBy.pid)}` : ''} is running it`)} ${where}`);
       }
     } finally {
       unsubscribe();
@@ -212,7 +220,8 @@ async function runDaemonLoop(): Promise<void> {
       // directory this process happened to start in decides nothing.
       for (const ref of listLocalRefsAllProjects()) {
         try {
-          const agentNext = await host.tick(ref.name, now);
+          const result = await host.tick(ref.name, now);
+          const agentNext = result.nextAt;
           if (agentNext !== null) nextAt = nextAt === null ? agentNext : Math.min(nextAt, agentNext);
         } catch (error) {
           log(`${ref.name}: ${renderThrownChain({ cause: error })}`);
@@ -250,6 +259,14 @@ function createDaemonHost(wakeAt?: (at: number) => void): LocalAgentHost {
     childDbPath: (parentDbPath: string, child: string) =>
       join(dirname(parentDbPath), 'subordinates', child, 'agent.db'),
     open: openDaemonAgent,
+    // Both callers of this factory are the daemon: `daemon run` resident, and
+    // `daemon tick` one foreground pass. Saying so is what makes the lease
+    // behave as designed — the pass is handed back at the end of it, and a
+    // person at a prompt can take the conversation. Left unsaid, the host
+    // defaulted to `interactive`: the resident daemon held every lease until
+    // the process exited, and no foreground driver could ever preempt it,
+    // because the row it met claimed to be somebody's chat session.
+    driverKind: 'daemon' as const,
   };
   return new LocalAgentHost(wakeAt ? { ...options, wakeAt } : options);
 }
@@ -266,7 +283,7 @@ function createDaemonHost(wakeAt?: (at: number) => void): LocalAgentHost {
  * catalog, so a role only one of them knows about fails in one process and
  * runs in the other.
  */
-export async function openDaemonAgent(
+async function openDaemonAgent(
   ref: HostedAgentRef,
   db: Database,
   dbPath: string,
@@ -290,6 +307,10 @@ export async function openDaemonAgent(
     modelResolver,
     mcpServers: resolveMcpServers(),
     profileAuthority: createProfileAuthorityReader(),
+    // The resident daemon is the session that most needs this: it can stay bound
+    // to one agent for days, and every `kinu provider connect` in that time
+    // happens in a process it cannot see.
+    providerRevision: readProviderRevision,
   };
 }
 

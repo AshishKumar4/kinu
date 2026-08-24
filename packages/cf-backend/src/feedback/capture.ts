@@ -33,9 +33,9 @@ import {
  *  both themes rather than as a rendering failure. */
 const REDACTION_FILL = '#111111';
 
-/** Marks what the redaction actually replaced, so a test can assert on the
- *  clone instead of inferring privacy from pixels. */
-export const REDACTED_MARKER = 'data-feedback-redacted';
+/** Marks what the redaction actually replaced. Module-private: the count below
+ *  is what leaves this file, and the attribute is how it is counted. */
+const REDACTED_MARKER = 'data-feedback-redacted';
 
 /**
  * Total pixels a capture is scaled to fit. Device pixel ratio is honoured up to
@@ -63,10 +63,13 @@ export interface Capture {
  * as good as the last person who remembered it, and the failure is silent and
  * permanent — the secret is already in the image by the time anyone looks.
  *
- * Exported because it is the security property of this feature, and a property
- * that cannot be tested on its own is a property nobody can hold us to.
+ * Module-private, and the property is still held to: `scripts/feedback-ux.test.ts`
+ * drives the real components through `capturePage` and reads the rasteriser's own
+ * serialization of the clone this produces, which covers text, attributes and the
+ * field values the rasteriser copies in — more than a direct call on a
+ * hand-built tree could.
  */
-export function redactClone(root: Element): number {
+function redactClone(root: Element): number {
   for (const omit of root.querySelectorAll(`[${FEEDBACK_OMIT_ATTR}]`)) omit.remove();
 
   const targets = root.querySelectorAll<HTMLElement>(

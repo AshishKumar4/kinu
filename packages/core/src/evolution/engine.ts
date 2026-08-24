@@ -109,6 +109,7 @@ const GeneralizedToolSchema = v.object({
   code: v.optional(v.string()),
 });
 import { runMCTS } from '../mcts/engine';
+import { createDurableMctsSession } from '../orchestrator/mcts-session';
 import { createAgentConfigStore, initAgentConfigTable, type AgentConfigStore } from '../config/store';
 import { diagnostics, toKinuError } from '../obs/index';
 
@@ -302,7 +303,8 @@ export class EvolutionEngine {
    * The model the MECHANICAL calls run on — outcome classification, pathology
    * labels, the one-sentence turn reflection, the session reflection, and
    * pattern extraction. Short, schema-constrained jobs the chat vendor's small
-   * tier does as well as its flagship (providers/fast-model.ts). Falls back to
+   * tier does as well as its flagship, routed through `MODEL_ROUTE_POLICY.fast`
+   * to the account's `tiny` tier. Falls back to
    * the chat model when the vendor has no smaller tier, which is what every
    * backend did before this existed.
    *
@@ -1053,8 +1055,10 @@ export class EvolutionEngine {
     await periodicCraftConsolidation(this.rt);
     this.emit({ type: 'consolidation', message: 'CraftStore consolidation complete' });
 
-    // Build a session writer if not provided — enables auto-lifetime MCTS
-    const writer = session ?? this.createInternalSessionWriter();
+    // No writer supplied → the DURABLE one. An in-memory mirror lost a branch's
+    // ancestry the moment the process exited or the Durable Object was evicted,
+    // which is exactly what a resumed search re-enters needing.
+    const writer = session ?? createDurableMctsSession(this.rt.storage.sql);
 
     const task = `Given my purpose: "${purpose}", identify one specific improvement ` +
       `to be more effective. Consider: new tools, knowledge gaps, workflow improvements.`;
@@ -1125,27 +1129,6 @@ export class EvolutionEngine {
       this.emit({ type: 'replay_eval', message: `Replay eval failed: ${message}` });
       return null;
     }
-  }
-
-  /** Minimal in-memory session writer for auto-triggered MCTS */
-  private createInternalSessionWriter(): SessionWriter {
-    const messages: Array<{ id: string; parentId: string | null; role: string; content: string }> = [];
-    return {
-      async appendMessage(msg, parentId) {
-        const content = msg.parts.map(p => p.text).join('');
-        messages.push({ id: msg.id, parentId: parentId ?? null, role: msg.role, content });
-      },
-      getHistory(leafId) {
-        if (!leafId) return messages.map(m => ({ role: m.role, content: m.content }));
-        const result: Array<{ role: string; content: string }> = [];
-        let current = messages.find(m => m.id === leafId);
-        while (current) {
-          result.unshift({ role: current.role, content: current.content });
-          current = current.parentId ? messages.find(m => m.id === current!.parentId) : undefined;
-        }
-        return result;
-      },
-    };
   }
 
   // ── Internal helpers ────────────────────────────────────────────

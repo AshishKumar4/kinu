@@ -42,10 +42,7 @@ import { readFileSync } from 'node:fs';
 import { Visitor, parseSync, type VisitorObject } from 'oxc-parser';
 import * as v from 'valibot';
 
-import {
-  BOUNDARY_FAMILIES, FLEET_BOUNDARIES, boundaryOf, eventFamily,
-  type BoundaryFamily,
-} from '../src/analytics/boundaries';
+import { boundaryOf, eventFamily } from '../src/analytics/boundaries';
 import { AGENT_METRICS_SCHEMA, CONTROL_PLANE_OPS_SCHEMA } from '../src/analytics/schemas';
 import * as record from '../src/analytics/record';
 import type { AnalyticsEnv } from '../src/analytics/writer';
@@ -135,10 +132,126 @@ function sitesOf(file: string): readonly CallSite[] {
   return parsed;
 }
 
+const BOUNDARIES_FILE = 'packages/cf-backend/src/analytics/boundaries.ts';
+
+/**
+ * One recovered row.
+ *
+ * Every field is a string because that is what the syntax yields. The
+ * DECLARATION is still typed `readonly FleetBoundary[]`, so a mistyped family is
+ * a compile error where it is written; `mechanism` is narrowed again here because
+ * this gate BRANCHES on it, and a typo would quietly drop a boundary out of both
+ * halves of the equality instead of failing.
+ */
+const BoundaryRow = v.object({
+  id: v.string(),
+  family: v.string(),
+  event: v.string(),
+  site: v.string(),
+  mechanism: v.picklist(['diagnostics', 'writer']),
+  emitter: v.string(),
+  means: v.string(),
+});
+type BoundaryRow = v.InferOutput<typeof BoundaryRow>;
+
+const StringLiteral = v.object({ type: v.literal('Literal'), value: v.string() });
+const Concatenation = v.object({
+  type: v.literal('BinaryExpression'),
+  operator: v.literal('+'),
+  left: v.unknown(),
+  right: v.unknown(),
+});
+const ArrayLiteral = v.object({
+  type: v.literal('ArrayExpression'),
+  elements: v.array(v.unknown()),
+});
+const AsConst = v.object({ type: v.literal('TSAsExpression'), expression: v.unknown() });
+const ObjectLiteral = v.object({
+  type: v.literal('ObjectExpression'),
+  properties: v.array(v.object({
+    type: v.literal('Property'),
+    key: v.object({ name: v.string() }),
+    value: v.unknown(),
+  })),
+});
+const TopLevelConst = v.object({
+  type: v.literal('VariableDeclaration'),
+  declarations: v.array(v.object({ id: v.object({ name: v.string() }), init: v.unknown() })),
+});
+
+/** A string literal, or a `+` chain of them. `means` is written as a
+ *  concatenation because one sentence does not fit one line, and a recovery that
+ *  read only `Literal` would report every `means` as absent. */
+function stringValueOf(input: { node: unknown }): string | null {
+  const literal = v.safeParse(StringLiteral, input.node);
+  if (literal.success) return literal.output.value;
+  const joined = v.safeParse(Concatenation, input.node);
+  if (!joined.success) return null;
+  const left = stringValueOf({ node: joined.output.left });
+  const right = stringValueOf({ node: joined.output.right });
+  return left === null || right === null ? null : left + right;
+}
+
+/** The elements of the top-level array `const` of this name, past any `as
+ *  const`. Absent or not an array is a THROW rather than an empty list: an empty
+ *  list would make every loop below vacuous and the whole gate pass. */
+function declaredElements(name: string): readonly unknown[] {
+  const parsed = parseSync(BOUNDARIES_FILE, readFileSync(`${REPO}${BOUNDARIES_FILE}`, 'utf8'));
+  for (const statement of parsed.program.body) {
+    const declaration = v.safeParse(TopLevelConst, statement);
+    if (!declaration.success) continue;
+    for (const declarator of declaration.output.declarations) {
+      if (declarator.id.name !== name) continue;
+      const unwrapped = v.safeParse(AsConst, declarator.init);
+      return v.parse(ArrayLiteral, unwrapped.success ? unwrapped.output.expression : declarator.init)
+        .elements;
+    }
+  }
+  throw new Error(`${BOUNDARIES_FILE} declares no array named ${name}`);
+}
+
+/**
+ * The declaration, read from the module's own syntax.
+ *
+ * `FLEET_BOUNDARIES` and `BOUNDARY_FAMILIES` are module-private: production reads
+ * them through `boundaryOf`, and an export whose only consumer is this file is
+ * exactly the surface `gate:wired` exists to remove. So the declaration is read
+ * the way the emit sites already are — one walk over one file's AST — which also
+ * makes both sides of the set equality the same kind of measurement instead of
+ * one imported fact weighed against one parsed one.
+ *
+ * Parsed, never text-searched, for the reason stated at the top of this file: a
+ * text search over a table of names matches its own data.
+ */
+const FLEET_BOUNDARIES: readonly BoundaryRow[] = declaredElements('FLEET_BOUNDARIES')
+  .map((element) => {
+    const fields: Record<string, string> = {};
+    for (const property of v.parse(ObjectLiteral, element).properties) {
+      const held = stringValueOf({ node: property.value });
+      if (held !== null) fields[property.key.name] = held;
+    }
+    return v.parse(BoundaryRow, fields);
+  });
+
+const BOUNDARY_FAMILIES: readonly string[] = declaredElements('BOUNDARY_FAMILIES')
+  .map((element) => v.parse(StringLiteral, element).value);
+
 describe('the declared boundaries are the instrumented boundaries', () => {
+  test('the declaration was read, not silently read as empty', () => {
+    // THE ONE FAILURE THIS GATE CANNOT SURVIVE. Every check below iterates the
+    // recovered table, so a recovery that yielded nothing would pass all of them
+    // and prove nothing — the vacuity this file exists to prevent, turned on the
+    // file itself. `declaredElements` throws on an absent declaration; this
+    // catches the other shape, a declaration that parsed to no rows.
+    expect(FLEET_BOUNDARIES.length).toBeGreaterThanOrEqual(BOUNDARY_FAMILIES.length);
+    for (const boundary of FLEET_BOUNDARIES) {
+      for (const field of Object.values(boundary)) expect(field).not.toBe('');
+    }
+  });
+
   test('the family set is exactly the pinned five', () => {
     expect([...BOUNDARY_FAMILIES]).toEqual(['error', 'turn', 'provider', 'job', 'release']);
-    const declared = new Set<BoundaryFamily>(FLEET_BOUNDARIES.map((b) => b.family));
+    const declared = new Set<string>(FLEET_BOUNDARIES.map((b) => b.family));
     expect([...declared].sort()).toEqual([...BOUNDARY_FAMILIES].sort());
   });
 

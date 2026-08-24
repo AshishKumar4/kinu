@@ -54,15 +54,15 @@ import {
   type WorkMode,
 } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/identity';
-import { diagnostics, toKinuError, type Refusal } from '@kinu.run/core/obs';
+import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import {
   makeSql, makeExecRaw, makeSqlExec, makeWorkspaceSchemaSql, shareLocalWorkspacePlane,
   type CLIRuntime,
 } from '../runtime';
 import { openWorkspaceCLI, type CLIOpenConfig } from '../open';
 import {
-  acquireDriverLease, holdsDriverLease, releaseDriverLease,
-  type DriverKind, type DriverLeaseDeps,
+  DriverLeaseHold,
+  type DriverKind, type DriverLeaseHolder,
 } from './driver-lease';
 import {
   LocalAgentSession,
@@ -98,6 +98,13 @@ export interface LocalHostedAgent {
    * and not the daemon that runs its scheduled work.
    */
   profileAuthority?: ProfileEnvelopeSource;
+  /**
+   * This machine's provider-configuration revision, read live. Forwarded for
+   * the same reason as the authority above: the process that opened the agent
+   * owns the config file, and a resident daemon has to see a provider the user
+   * connected in another process without being restarted.
+   */
+  providerRevision?: () => number;
 }
 
 export interface LocalAgentHostOptions {
@@ -141,6 +148,26 @@ export interface LocalAgentHostOptions {
   driverKind?: DriverKind;
 }
 
+/**
+ * What one {@link LocalAgentHost.tick} did.
+ *
+ * `ran` is the whole reason this is an object rather than the schedule alone: a
+ * pass another driver owns converts nothing, and a caller handed only a
+ * timestamp cannot tell that from a pass that ran and found nothing to do. The
+ * foreground `kinu daemon tick` printed a tick it had not performed for exactly
+ * that reason.
+ */
+export interface LocalTickResult {
+  /** Whether this process actually drove the pass. */
+  readonly ran: boolean;
+  /** Soonest moment this agent asks to be re-driven, or null for nothing due.
+   *  Read from the durable schedule either way, so a deferred pass still tells
+   *  its caller when to come back. */
+  readonly nextAt: number | null;
+  /** Who is driving, when this pass was deferred. */
+  readonly heldBy?: DriverLeaseHolder;
+}
+
 interface HostEntry {
   /** Address inside this process: root, root/child, root/child/grandchild.
    *  Root and child addresses are unchanged by virtual workspaces — the
@@ -179,9 +206,9 @@ export class LocalAgentHost {
   /** First-open fence per address. Recovery must run once even when a timer,
    *  client event, and team call arrive together on a cold daemon. */
   private readonly opening = new Map<string, Promise<HostEntry>>();
-  /** The driver-lease token this process holds per bound agent. Absent means
-   *  this process is not currently the driver for that conversation. */
-  private readonly driverTokens = new Map<string, string>();
+  /** This process's lease on each bound agent's conversation. One per address,
+   *  built when the entry is, so every driving boundary asks the same object. */
+  private readonly driverHolds = new Map<string, DriverLeaseHold>();
   private closed = false;
 
   constructor(private readonly opts: LocalAgentHostOptions) {}
@@ -190,43 +217,48 @@ export class LocalAgentHost {
     return this.opts.driverKind ?? 'interactive';
   }
 
-  /** The lease's view of one agent's own database. */
-  private leaseDeps(entry: HostEntry): DriverLeaseDeps {
-    return { sql: makeSql(entry.db), execRaw: makeExecRaw(entry.db) };
+  /** This process's hold on one agent's conversation, created on first use. */
+  private driverHold(entry: HostEntry): DriverLeaseHold {
+    const existing = this.driverHolds.get(entry.key);
+    if (existing) return existing;
+    const hold = new DriverLeaseHold(
+      { sql: makeSql(entry.db), execRaw: makeExecRaw(entry.db) },
+      this.driverKind,
+    );
+    this.driverHolds.set(entry.key, hold);
+    return hold;
   }
 
   /**
-   * Make this process the driver for one agent, or report who is.
+   * Run one CONVERTING operation as this agent's driver, or decline and say who
+   * owns it. Converting means it binds durable rows to a turn — a pass, and the
+   * recovery drain a cold host performs on open, which is the same conversion
+   * with a different trigger.
    *
-   * Re-checks a token it already holds rather than trusting it: the whole point
-   * of preemption is that a lease can be lost between operations, so "I had it"
-   * is not "I have it".
+   * A daemon hands the lease back at the end, so an interactive process
+   * arriving between passes does not have to preempt anything. An interactive
+   * host keeps it until the session ends, which is what stops a daemon pass
+   * landing in the middle of somebody's conversation.
    */
-  private ensureDriver(entry: HostEntry): Refusal | null {
-    const deps = this.leaseDeps(entry);
-    const held = this.driverTokens.get(entry.key);
-    if (held !== undefined && holdsDriverLease(deps, held)) return null;
-    const outcome = acquireDriverLease(deps, this.driverKind);
-    if ('held' in outcome) {
-      this.driverTokens.set(entry.key, outcome.held.token);
-      return null;
+  private async drive<T>(
+    entry: HostEntry,
+    run: () => Promise<T>,
+  ): Promise<{ ran: true; value: T } | { ran: false; heldBy: DriverLeaseHolder }> {
+    const hold = this.driverHold(entry);
+    const refusal = hold.acquire();
+    if (refusal) {
+      diagnostics.event('driver.pass_deferred', {
+        agent: entry.key,
+        kind: this.driverKind,
+        reason: refusal.refused.reason,
+      });
+      return { ran: false, heldBy: refusal.holder };
     }
-    this.driverTokens.delete(entry.key);
-    return outcome.refused;
-  }
-
-  /** Whether this process still holds the lease it took for one agent. */
-  private stillDriving(entry: HostEntry): boolean {
-    const held = this.driverTokens.get(entry.key);
-    return held !== undefined && holdsDriverLease(this.leaseDeps(entry), held);
-  }
-
-  /** Give up one agent's lease, if this process is the holder. */
-  private releaseDriver(entry: HostEntry): void {
-    const held = this.driverTokens.get(entry.key);
-    if (held === undefined) return;
-    releaseDriverLease(this.leaseDeps(entry), held);
-    this.driverTokens.delete(entry.key);
+    try {
+      return { ran: true, value: await run() };
+    } finally {
+      if (this.driverKind === 'daemon') hold.release();
+    }
   }
 
   /** Session events stay live after an interactive client disconnects. */
@@ -269,29 +301,10 @@ export class LocalAgentHost {
    * binds pending events to a synthetic turn and fires due triggers — and two
    * processes doing that over one database convert the same row twice. Refused
    * is a normal outcome, not a failure: the other driver is doing this work, so
-   * this pass reports the schedule it read and waits.
-   *
-   * A daemon gives the lease back at the end of its pass so an interactive
-   * process arriving between passes does not have to preempt anything. An
-   * interactive host keeps it until the session ends, which is what stops a
-   * daemon pass landing in the middle of somebody's conversation.
+   * this pass reports the schedule it read, says it did not run, and waits.
    */
-  async tick(name: string, now = Date.now()): Promise<number | null> {
-    const entry = await this.resolveEntry(name);
-    const refusal = this.ensureDriver(entry);
-    if (refusal) {
-      diagnostics.event('driver.pass_deferred', {
-        agent: entry.key,
-        kind: this.driverKind,
-        reason: refusal.reason,
-      });
-      return nextTriggerAt(entry.db);
-    }
-    try {
-      return await this.tickEntry(entry, now);
-    } finally {
-      if (this.driverKind === 'daemon') this.releaseDriver(entry);
-    }
+  async tick(name: string, now = Date.now()): Promise<LocalTickResult> {
+    return await this.tickEntry(await this.resolveEntry(name), now);
   }
 
   /** Subordinate operations for one agent — hire, assign, status, dismiss.
@@ -336,11 +349,11 @@ export class LocalAgentHost {
       // where a daemon becomes able to drive again — without it, a conversation
       // stays locked to a process that has exited and only a liveness check
       // would recover it, which is the slower and less obvious path.
-      this.releaseDriver(entry);
+      this.driverHolds.get(entry.key)?.release();
       entry.db.close();
     }
     this.entries.clear();
-    this.driverTokens.clear();
+    this.driverHolds.clear();
   }
 
   // ── host lifecycle ──────────────────────────────────────────────────
@@ -423,7 +436,7 @@ export class LocalAgentHost {
   }): Promise<HostEntry> {
     const config = createAgentConfigStore(input.ws.rt.storage.sql);
     const hubSql = makeSqlExec(input.db);
-    const roster = new SubordinateRosterStore(hubSql);
+    const roster = new SubordinateRosterStore(hubSql, input.ws.rt.storage.sql);
     roster.ensureSchema();
     const sessionId = canonicalConversationId(config);
     const sessionOpts: LocalAgentSessionOpts = {
@@ -438,6 +451,7 @@ export class LocalAgentHost {
     if (input.ws.modelResolver) sessionOpts.modelResolver = input.ws.modelResolver;
     if (input.ws.staticModel) sessionOpts.model = input.ws.staticModel;
     if (input.ws.profileAuthority) sessionOpts.profileAuthority = input.ws.profileAuthority;
+    if (input.ws.providerRevision) sessionOpts.providerRevision = input.ws.providerRevision;
     const session = new LocalAgentSession(sessionOpts);
     const entry: HostEntry = {
       ...input,
@@ -463,7 +477,7 @@ export class LocalAgentHost {
     // THE DRIVER LEASE. Same reason it lands here: it closes over the entry.
     // The pump consults it before every turn, so an interactive process takes
     // the lease from a daemon at that boundary rather than interleaving with it.
-    entry.session.setDriverGate(() => this.ensureDriver(entry));
+    entry.session.setDriverGate(() => this.driverHold(entry).acquire()?.refused ?? null);
     // THE REAL PEER TRANSPORT, roots only. Same reason it lands here: the
     // endpoint's inbox wakes this session, and the session has to exist first.
     if (input.parentKey === null) {
@@ -478,7 +492,13 @@ export class LocalAgentHost {
       await session.recoverBackgroundJobs();
       // A previous process could die after publishing but before its debounce
       // timer fired. EventLog rows are the queue; drain them on every recovery.
-      await session.flushPendingDrains();
+      //
+      // Under the lease bracket, because a recovery drain converts rows exactly
+      // as a pass does: it binds pending events to a synthetic turn. Opening an
+      // agent is not a licence to drive one somebody else is driving, and gating
+      // HERE means the rows are never bound in the first place rather than bound
+      // and compensated back a moment later.
+      await this.drive(entry, () => session.flushPendingDrains());
       return entry;
     } catch (error) {
       this.entries.delete(input.key);
@@ -636,17 +656,43 @@ export class LocalAgentHost {
     return receiver.peers.receive(msg);
   }
 
-  private async tickEntry(entry: HostEntry, now: number): Promise<number | null> {
-    // Re-checked between each converting step, not once at the top. Preemption
-    // is the reason: an interactive process can take the lease while this pass
-    // is awaiting, and the next durable conversion must not happen after that.
-    // A pass that loses the lease stops here and reports its schedule — the
-    // work is not lost, the new driver owns it.
-    if (!this.stillDriving(entry)) return nextTriggerAt(entry.db);
+  /**
+   * One agent's pass, then each subordinate's.
+   *
+   * Every actor here has its OWN database and therefore its own driver row, so
+   * every one of them is bracketed separately. A subordinate used to be gated
+   * on a token nobody had taken for it, which meant its triggers, drains and
+   * evolution silently never ran on a cold host.
+   *
+   * `ran` describes THIS agent's pass. A subordinate that is busy elsewhere
+   * does not make its parent's pass a non-event, but its schedule still rides
+   * back so the driver's next sleep covers it.
+   */
+  private async tickEntry(entry: HostEntry, now: number): Promise<LocalTickResult> {
+    const outcome = await this.drive(entry, () => this.runPass(entry, now));
+    let nextAt = outcome.ran ? outcome.value : nextTriggerAt(entry.db);
+    for (const child of entry.children.values()) {
+      const childNext = (await this.tickEntry(child, now)).nextAt;
+      if (childNext !== null) nextAt = nextAt === null ? childNext : Math.min(nextAt, childNext);
+    }
+    return outcome.ran ? { ran: true, nextAt } : { ran: false, nextAt, heldBy: outcome.heldBy };
+  }
+
+  /**
+   * The converting steps of one agent's pass, under a lease its caller took.
+   *
+   * The lease is re-checked between each step, not once at the top. Preemption
+   * is the reason: an interactive process can take it while this pass is
+   * awaiting, and the next durable conversion must not happen after that. A
+   * pass that loses it stops and reports its schedule — the work is not lost,
+   * the new driver owns it.
+   */
+  private async runPass(entry: HostEntry, now: number): Promise<number | null> {
+    const hold = this.driverHold(entry);
     await entry.session.fireDueTriggers(now);
-    if (!this.stillDriving(entry)) return nextTriggerAt(entry.db);
+    if (!hold.held()) return nextTriggerAt(entry.db);
     await entry.session.flushPendingDrains();
-    if (!this.stillDriving(entry)) return nextTriggerAt(entry.db);
+    if (!hold.held()) return nextTriggerAt(entry.db);
     await entry.session.runDueEvolution();
 
     let next = nextTriggerAt(entry.db);
@@ -656,10 +702,6 @@ export class LocalAgentHost {
     if (entry.peers) {
       const retryAt = await entry.peers.dispatch(now);
       if (retryAt !== null) next = next === null ? retryAt : Math.min(next, retryAt);
-    }
-    for (const child of entry.children.values()) {
-      const childNext = await this.tickEntry(child, now);
-      if (childNext !== null) next = next === null ? childNext : Math.min(next, childNext);
     }
     return next;
   }
@@ -966,8 +1008,11 @@ export class LocalAgentHost {
     if (!keepHistory) removeChildState(dbPath);
   }
 
+  /** Drain now because something landed in this agent's inbox. Bracketed like
+   *  every other converting operation here: a wake that meets another driver is
+   *  simply that driver's work, and its rows are still pending for them. */
   private wake(entry: HostEntry, source: string): void {
-    void entry.session.flushPendingDrains().catch((error) => {
+    void this.drive(entry, () => entry.session.flushPendingDrains()).catch((error) => {
       diagnostics.failure(
         'host.event_drain_failed',
         toKinuError({ doing: 'draining hosted local events', cause: error, otherwise: 'io' }),

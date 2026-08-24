@@ -100,7 +100,11 @@ export async function chatCommand(
             throw new Error('This cloud session cannot create additional agents.');
           }
           const created = await current.createAdditionalAgent();
-          return { ...created, kind: 'cloud-additional' as const };
+          return {
+            ...created,
+            kind: 'cloud-additional' as const,
+            client: current.openAdditionalAgent(created.name),
+          };
         }
         const created = await createLocalPeerAgent();
         return { name: created.name, displayName: created.displayName ?? '', kind: 'local-peer' as const };

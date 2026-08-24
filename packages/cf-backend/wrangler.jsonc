@@ -240,6 +240,13 @@
     // With either absent the control plane's metrics view reports itself
     // unconfigured; every other admin view is unaffected.
     "CLOUDFLARE_ACCOUNT_ID": "f44999d1ddda7012e9a87729eba250f1",
+    // What this deployment appends to every Analytics Engine dataset NAME on the
+    // READ path. Writes go through the bindings below, which already name the
+    // right dataset per environment; the SQL API takes a name, and production's
+    // is the unsuffixed one. `scripts/analytics-datasets.test.ts` holds this
+    // equal to the `analytics_engine_datasets` block of the same environment,
+    // which is what stops staging's panels answering with production's numbers.
+    "ANALYTICS_DATASET_SUFFIX": "",
     // OAuth provider visibility is config-driven. A provider appears on
     // /login only when both its CLIENT_ID var and CLIENT_SECRET secret exist.
     // Set ids as vars and secrets via `wrangler secret put`:
@@ -500,7 +507,11 @@
         // locks rather than the only one — but it is the one a reader of this
         // file can check.
         "CONTROL_PLANE_ADMINS": "",
-        "CLOUDFLARE_ACCOUNT_ID": "f44999d1ddda7012e9a87729eba250f1"
+        "CLOUDFLARE_ACCOUNT_ID": "f44999d1ddda7012e9a87729eba250f1",
+        // Staging binds its own `*_staging` datasets and shares production's
+        // account, so without this its metrics view would query — and present as
+        // its own — production's rows.
+        "ANALYTICS_DATASET_SUFFIX": "_staging"
       }
     }
   }

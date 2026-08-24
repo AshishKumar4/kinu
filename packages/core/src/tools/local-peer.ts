@@ -72,7 +72,7 @@ export function samePeerGroup(
  * `workspaceId` is name-validated and cannot contain `:`, so the split point
  * stays unambiguous however the directory is spelled.
  */
-export function peerGroupId(ref: { cwd: string; workspaceId: string }): string {
+function peerGroupId(ref: { cwd: string; workspaceId: string }): string {
   return `local:${ref.workspaceId}:${ref.cwd}`;
 }
 
@@ -102,7 +102,6 @@ export interface LocalPeerEndpointDeps {
   scheduleDispatch(at: number): void;
   /** A peer message was admitted: wake this agent's loop. */
   onAdmitted(): void;
-  now?(): number;
 }
 
 /** One agent's peer endpoint: its tool deps, its inbox, its outbox pump. */
@@ -137,8 +136,11 @@ export function createLocalPeerEndpoint(deps: LocalPeerEndpointDeps): LocalPeerE
     hasGrant: async () => false,
     scheduleDispatch: async (at) => deps.scheduleDispatch(at),
     onAdmitted: () => deps.onAdmitted(),
+    // No `now`: `PeerHub` already defaults to `Date.now()`, and time enters this
+    // endpoint explicitly through `dispatch(now)`. A second, uninjectable clock
+    // beside the controllable one would stamp rows with real time while the
+    // pump ran on fabricated time.
   };
-  if (deps.now) hubOptions.now = deps.now;
   const hub = new PeerHub(hubOptions);
 
   /** The peers this agent may address: same pair, self excluded. */

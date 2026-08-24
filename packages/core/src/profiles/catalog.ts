@@ -26,14 +26,14 @@ export type TierId = (typeof TIER_IDS)[number];
 
 /** The roles every authority implicitly ships. A catalog may override any of
  *  them by key; it cannot remove them. */
-export const BUILTIN_ROLE_IDS = [
+const BUILTIN_ROLE_IDS = [
   'general', 'researcher', 'planner', 'implementer', 'auditor', 'designer',
 ] as const;
 export type BuiltinRoleId = (typeof BUILTIN_ROLE_IDS)[number];
 
 /** Kebab-case, lowercase-first: the same discipline skill names follow. */
 export const ROLE_ID_RE = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
-export const ROLE_ID_MAX_LEN = 64;
+const ROLE_ID_MAX_LEN = 64;
 
 export type RoleId = string;
 
@@ -62,7 +62,7 @@ export interface TierAssignment {
   reasoningEffort?: ReasoningEffort | undefined;
 }
 
-export const TierAssignmentSchema = v.strictObject({
+const TierAssignmentSchema = v.strictObject({
   model: v.pipe(v.string(), v.minLength(1)),
   reasoningEffort: v.optional(v.picklist(REASONING_EFFORTS)),
 });
@@ -75,7 +75,7 @@ export interface TierAssignments {
   deep?: TierAssignment | undefined;
 }
 
-export const TierAssignmentsSchema = v.strictObject({
+const TierAssignmentsSchema = v.strictObject({
   default: TierAssignmentSchema,
   tiny: v.optional(TierAssignmentSchema),
   fast: v.optional(TierAssignmentSchema),
@@ -102,7 +102,7 @@ export interface RoleDefinition {
   plan?: true | undefined;
 }
 
-export const RoleDefinitionSchema = v.strictObject({
+const RoleDefinitionSchema = v.strictObject({
   label: v.optional(v.pipe(v.string(), v.minLength(1))),
   description: v.pipe(v.string(), v.minLength(1)),
   instructions: v.pipe(v.string(), v.minLength(1)),
@@ -138,7 +138,7 @@ function allSpawnReferencesExist(
   return true;
 }
 
-export const ProfileCatalogSchema = v.pipe(
+const ProfileCatalogSchema = v.pipe(
   ProfileCatalogObjectSchema,
   v.check(
     allSpawnReferencesExist,

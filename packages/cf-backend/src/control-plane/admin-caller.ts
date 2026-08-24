@@ -21,12 +21,11 @@ import {
   adminControlToken, ControlPlaneUnconfiguredError, type ControlCaller, type ControlSecretEnv,
 } from './capability';
 
-export {
-  CONTROL_PLANE_CAPABILITIES, ControlDeniedError, ControlPlaneUnconfiguredError, internalCaller,
-  requireControl,
-  type ControlCapability, type ControlCaller, type ControlGrade, type ControlSecretEnv,
-  type PresentedCaller,
-} from './capability';
+/** The Worker-side door to the gate's module. Exactly what a Worker route needs
+ *  and nothing more: the DO takes its half from `./capability` directly, and a
+ *  name re-exported here that nobody imports through here is a second door to
+ *  the same room. */
+export { internalCaller, type ControlCaller } from './capability';
 
 /**
  * The operator caller.
@@ -85,7 +84,7 @@ export interface AdminGateEnv extends ControlSecretEnv {
  *  that is how every provider in `auth/providers.ts` treats them, and a
  *  case-sensitive allowlist would silently exclude the operator who typed their
  *  own address with a capital. */
-export function controlPlaneAdmins(env: AdminGateEnv): readonly string[] {
+function controlPlaneAdmins(env: AdminGateEnv): readonly string[] {
   return (env.CONTROL_PLANE_ADMINS ?? '')
     .split(',')
     .map((entry) => entry.trim().toLowerCase())
@@ -184,10 +183,20 @@ export function actorDigest(env: ControlSecretEnv, email: string): Promise<strin
  *
  * Denials are the one thing an operator surface must never drop silently: a
  * probe against `/api/control/*` is exactly the signal that matters, and the
- * scout audit of this backend recorded auth-denial telemetry as absent. The
- * event carries the denial REASON and never the email, because a rejected
- * address is an unverified string from a request.
+ * scout audit of this backend recorded auth-denial telemetry as absent.
+ *
+ * `reason` and `outcome` are the two ALLOWLISTED slots on the operations
+ * dataset, and they are what the emit has to fill. Reporting the denial under
+ * its own field name left every row reading `outcome: 'ok'` with an empty
+ * reason — a denial counted as a success, and the probe-versus-stale-sign-in
+ * discriminator gone. `AdminDenial` is already a closed vocabulary, which is
+ * exactly what the reason slot takes.
+ *
+ * `path` and `method` are reported for Workers Logs and are not allowlisted: a
+ * path here can name a workspace, and a workspace name is mission-derived user
+ * text. The email is never reported at all, because a rejected address is an
+ * unverified string from a request.
  */
 export function reportAdminDenial(denial: AdminDenial, path: string, method: string): void {
-  diagnostics.event('control_plane.denied', { denial, path, method });
+  diagnostics.event('control_plane.denied', { reason: denial, outcome: 'denied', path, method });
 }

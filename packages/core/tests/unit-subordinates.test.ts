@@ -374,6 +374,7 @@ describe('team action routing', () => {
       name: 'researcher-a1b2c3', displayName: 'Research Partner',
       subordinate: {
         name: 'researcher-a1b2c3', displayName: 'Research Partner', role: 'research partner',
+        nameOrigin: 'auto',
         createdBy: 'user', status: 'idle', currentTask: null,
         createdAt: 1_700_000_000_000, dismissedAt: null,
       },
@@ -400,6 +401,7 @@ describe('team action routing', () => {
       // Blank, and that is the point: nothing the owner said can name it yet.
       displayName: '',
       role: 'general',
+      nameOrigin: 'auto',
       createdBy: 'user',
       status: 'idle',
       currentTask: null,
@@ -489,6 +491,28 @@ describe('team action routing', () => {
     expect(h.broadcasts).toHaveLength(2);
   });
 
+  test('a stale automatic title cannot replace an owner rename on the parent roster', async () => {
+    const h = makeTeamHarness();
+    await h.team.create({});
+    const first = await h.team.recordTitle({
+      name: 'researcher-a1b2c3',
+      displayName: 'Callback Audit',
+    });
+    expect(first.applied).toBe(true);
+
+    await h.team.rename({ name: 'researcher-a1b2c3', displayName: 'Jarvis' });
+    const stale = await h.team.recordTitle({
+      name: 'researcher-a1b2c3',
+      displayName: 'Another automatic title',
+    });
+
+    expect(stale.applied).toBe(false);
+    expect(h.roster.requireActive('researcher-a1b2c3')).toMatchObject({
+      displayName: 'Jarvis',
+      nameOrigin: 'user',
+    });
+  });
+
   test('only the owner can dismiss an owner-created subordinate', async () => {
     const h = makeTeamHarness();
     await h.team.create({ role: 'researcher', mission: 'Own this role.' });
@@ -546,6 +570,7 @@ describe('team action routing', () => {
     });
     expect(await h.team.list()).toEqual([{
       name: 'researcher-a1b2c3', displayName: 'Market Researcher', role: 'market researcher',
+      nameOrigin: 'auto',
       createdBy: 'orchestrator', status: 'working', currentTask: 'Map the market.',
       createdAt: 1_700_000_000_000, dismissedAt: null,
     }]);

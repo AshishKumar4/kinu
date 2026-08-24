@@ -20,6 +20,7 @@ import { EmptyState } from "@/components/surfaces/shared";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { ScrollBoundary } from "@/components/ui/ScrollBoundary";
+import { SECRET_REGION, SecretValue } from "@/components/ui/SecretValue";
 import { describeError, lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { usePagedScroll } from "@/hooks/use-paged-scroll";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
@@ -425,29 +426,65 @@ function TriggerLine({ trigger, agentName, onRevoke }: {
   );
 }
 
-/* Newly-created webhook — the URL + secret shown ONCE, with a curl test. */
-function NewWebhookCard({ result, onDismiss }: {
-  result: CreateWebhookResult; onDismiss: () => void;
-}) {
-  const url = `${window.location.origin}${result.url}`;
-  const curlSnippet = result.auth_mode === "hmac"
-    ? `# HMAC test (compute SIGNATURE = HMAC-SHA256 of "<ts>.<body>")
+/**
+ * The curl that tests a new webhook, SPLIT AT THE CREDENTIAL.
+ *
+ * A template string cannot carry the screenshot's redaction marker, so a secret
+ * interpolated into one is a secret in the PNG. Splitting the command is what
+ * lets the credential render through `SecretValue` and nothing else.
+ *
+ * `secret` is the real credential or null: mTLS presents a client certificate
+ * and carries none, and a mode whose secret was somehow not returned reads with
+ * a placeholder, which belongs in the literal text because it is not a secret.
+ */
+interface CurlCommand {
+  readonly before: string;
+  readonly secret: string | null;
+  readonly after: string;
+}
+
+function curlCommand(url: string, result: CreateWebhookResult): CurlCommand {
+  // Empty whenever the credential is real, because the credential is then
+  // rendered as its own redacted region rather than as text in this string.
+  const placeholder = result.secret === null ? "<your-secret>" : "";
+  switch (result.auth_mode) {
+    case "hmac": return {
+      before: `# HMAC test (compute SIGNATURE = HMAC-SHA256 of "<ts>.<body>")
 TS=$(date +%s)
 BODY='{"hello":"world"}'
-SIG=$(printf "%s.%s" "$TS" "$BODY" | openssl dgst -sha256 -hmac "${result.secret ?? "<your-secret>"}" -hex | cut -d' ' -f2)
+SIG=$(printf "%s.%s" "$TS" "$BODY" | openssl dgst -sha256 -hmac "${placeholder}`,
+      secret: result.secret,
+      after: `" -hex | cut -d' ' -f2)
 curl -X POST '${url}' \\
   -H "x-kinu-timestamp: $TS" \\
   -H "x-kinu-signature: $SIG" \\
   -H "content-type: application/json" \\
-  -d "$BODY"`
-    : result.auth_mode === "bearer"
-    ? `curl -X POST '${url}' \\
-  -H "Authorization: Bearer ${result.secret ?? "<your-secret>"}" \\
+  -d "$BODY"`,
+    };
+    case "bearer": return {
+      before: `curl -X POST '${url}' \\
+  -H "Authorization: Bearer ${placeholder}`,
+      secret: result.secret,
+      after: `" \\
   -H "content-type: application/json" \\
-  -d '{"hello":"world"}'`
-    : `# mTLS — present your client certificate via your HTTP client
+  -d '{"hello":"world"}'`,
+    };
+    case "mtls": return {
+      before: `# mTLS — present your client certificate via your HTTP client
 curl -X POST '${url}' --cert client.pem --key client.key \\
-  -H "content-type: application/json" -d '{"hello":"world"}'`;
+  -H "content-type: application/json" -d '{"hello":"world"}'`,
+      secret: null,
+      after: "",
+    };
+  }
+}
+
+/* Newly-created webhook — the URL + secret shown ONCE, with a curl test. */
+export function NewWebhookCard({ result, onDismiss }: {
+  result: CreateWebhookResult; onDismiss: () => void;
+}) {
+  const url = `${window.location.origin}${result.url}`;
+  const curl = curlCommand(url, result);
 
   return (
     <div className="p-card p-5 space-y-3 border p-border mb-3">
@@ -471,14 +508,19 @@ curl -X POST '${url}' --cert client.pem --key client.key \\
           <div>
             <div className="p-eyebrow mb-1">Secret <span className="p-danger">(shown once)</span></div>
             <div className="flex items-center gap-2">
-              <code className="text-xs p-fill px-2 py-1.5 rounded-sm font-mono flex-1 break-all">{result.secret}</code>
+              <SecretValue value={result.secret}
+                className="text-xs p-fill px-2 py-1.5 rounded-sm font-mono flex-1 break-all" />
               <CopyButton value={result.secret} what="the secret" className="p-2 rounded-sm p-card p-card-hover" />
             </div>
           </div>
         )}
         <div>
           <div className="p-eyebrow mb-1">Test with curl</div>
-          <pre className="p-meta p-fill p-3 rounded-sm font-mono overflow-x-auto whitespace-pre">{curlSnippet}</pre>
+          <pre className="p-meta p-fill p-3 rounded-sm font-mono overflow-x-auto whitespace-pre">
+            {curl.before}
+            {curl.secret !== null && <SecretValue value={curl.secret} />}
+            {curl.after}
+          </pre>
         </div>
       </div>
     </div>
@@ -488,7 +530,7 @@ curl -X POST '${url}' --cert client.pem --key client.key \\
 /* Step-up auth: creating a durable webhook requires a fresh Kinu browser
  * session (≤5 min since login). On the step-up 401 we send the user through
  * Kinu login and return here. */
-function CreateWebhookModal({ agentName, onClose, onCreated }: {
+export function CreateWebhookModal({ agentName, onClose, onCreated }: {
   agentName: string;
   onClose: () => void;
   onCreated: (r: CreateWebhookResult) => void;
@@ -559,7 +601,12 @@ function CreateWebhookModal({ agentName, onClose, onCreated }: {
         {authMode !== "mtls" && (
           <label className="block">
             <div className="text-xs p-text-2 mb-1">Secret <span className="p-text-3">(blank = auto-generate)</span></div>
-            <input value={secret} onChange={(e) => setSecret(e.target.value)} className={inputCls} placeholder="leave blank to auto-generate" />
+            {/* A password field is redacted from a screenshot without being
+                annotated; the marker is carried too, so a later reveal toggle
+                that flips this to `text` cannot silently undo that. */}
+            <input {...SECRET_REGION} type="password" value={secret}
+              onChange={(e) => setSecret(e.target.value)} className={inputCls}
+              placeholder="leave blank to auto-generate" />
           </label>
         )}
         <label className="block">

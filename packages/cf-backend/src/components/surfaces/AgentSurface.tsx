@@ -295,10 +295,10 @@ function SubordinatesCard({ rpc, workspaceName }: { rpc: Rpc; workspaceName: str
   const roster = (lastValue(resource) ?? []).filter((sub) => sub.status !== "dismissed");
 
   return (
-    <Section id="subordinates" title="Subordinates" icon={<UsersIcon size={14} className="p-text-2" />}
+    <Section id="subordinates" title="Agents" icon={<UsersIcon size={14} className="p-text-2" />}
       badge={roster.length > 0 ? <Badge variant="secondary">{roster.length}</Badge> : undefined}>
       {resource.status === "error" ? (
-        <LoadFailure what="the subordinate roster" message={resource.message} onRetry={reload} />
+        <LoadFailure what="the agent roster" message={resource.message} onRetry={reload} />
       ) : roster.length === 0 ? (
         <p className="text-xs leading-relaxed p-text-4">
           No standing helpers. Each one outlives the turn and runs its own loop, sharing this

@@ -23,6 +23,16 @@ const STATUS_LABEL = {
   approved: 'Approved',
 } satisfies Record<DemoPlanStatus, string>;
 
+/**
+ * ENROLLED IN `scripts/wired.lock.json` — `gate:wired` cannot see this panel's
+ * consumer, and the absence is the gate's, not the code's. `BugFixDemo.tsx`
+ * reaches it through `lazy(() => import('./BugFixPlanPanel'))` plus two
+ * prefetches of the same specifier; a dynamic `import()` is an expression that
+ * binds no name, so there is no named edge to follow. `pages/MCTSExplorer.tsx`
+ * is locked for the identical reason. The split is deliberate: this surface
+ * pulls marked, katex, dompurify and web-highlighter, which stay out of the
+ * landing page's first paint.
+ */
 export default function BugFixPlanPanel({ plan }: { plan: DemoPlan }): ReactElement {
   const docRef = useRef<HTMLDivElement | null>(null);
   const blocks = useMemo(() => planReviewBlocks(plan.markdown), [plan.markdown]);

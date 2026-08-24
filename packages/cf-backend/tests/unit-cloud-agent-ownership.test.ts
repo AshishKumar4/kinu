@@ -5,9 +5,10 @@ import { testOwner } from './helpers/user-do';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createCloudWorkspaceForUser } from '../src/user/workspace-create';
-import { claimOwnedWorkspace } from '../src/user/workspace-access';
+import { claimOwnedWorkspace } from '../src/user/workspace-ownership';
 import { HarnessOrchestratorAgent, orchestratorHarness } from './helpers/actor-harness';
 import type { UserCaller } from '../src/user/workspace-capability';
+import type { PresentedCaller } from '../src/control-plane/capability';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 const ROOT = join(import.meta.dir, '..');
@@ -25,14 +26,47 @@ interface OwnershipTestBindings<UserStub, AgentStub> {
   UserDO: TestNamespace<UserStub>;
   OrchestratorAgent: TestNamespace<AgentStub>;
   CREDENTIAL_ENCRYPTION_KEY: string;
+  ControlPlaneDO?: TestNamespace<unknown>;
 }
 
 function testEnv<UserStub, AgentStub>(bindings: OwnershipTestBindings<UserStub, AgentStub>): Env {
   const env: Partial<Env> = {};
   Object.assign(env, bindings);
-  // SAFETY: The ownership paths reach only the two constructed namespaces and
-  // credential key; each typed binding required by those paths is present above.
+  // SAFETY: The ownership paths reach only the two constructed namespaces, the
+  // credential key, and — where a test supplies one — the control-plane index
+  // namespace the create feed writes through; each typed binding required by
+  // those paths is present above.
   return env as Env;
+}
+
+/** What the control-plane index was told by a create, in order. Named because
+ *  WHEN a create indexes is the property two tests below are about: a row
+ *  published before the workspace's own object accepted this account survives a
+ *  rollback that cannot destroy an object it does not own. */
+interface IndexFeed {
+  observed: string[];
+  forgotten: string[];
+  namespace: TestNamespace<unknown>;
+}
+
+function indexFeed(): IndexFeed {
+  const observed: string[] = [];
+  const forgotten: string[] = [];
+  return {
+    observed,
+    forgotten,
+    namespace: {
+      idFromName: (name: string) => name,
+      get: () => ({
+        async observeWorkspace(_caller: PresentedCaller, row: { userId: string; name: string }) {
+          observed.push(`${row.userId}/${row.name}`);
+        },
+        async forgetWorkspace(_caller: PresentedCaller, row: { userId: string; name: string }) {
+          forgotten.push(`${row.userId}/${row.name}`);
+        },
+      }),
+    },
+  };
 }
 
 function userStub(env: Env) {
@@ -162,8 +196,18 @@ describe('cloud agent ownership safety', () => {
     }
   });
 
-  test('rolls back the local roster row when orchestrator owner claim fails', async () => {
+  test('a create that loses the name releases its reservation and touches no other object', async () => {
+    // The cross-user shape, and the reason `removeWorkspace` is the WRONG undo
+    // here. A workspace name is unique inside one UserDO while
+    // `OrchestratorAgent` is addressed globally, so two accounts can register
+    // the same string and only one claim can win. The loser's rollback used to
+    // call `removeWorkspace`, whose `destroyAgent` correctly refuses against
+    // somebody else's workspace — and the refusal left the loser's roster row in
+    // place, pointing at an object it does not own, which every later ownership
+    // check then had to catch. `releaseWorkspaceReservation` drops exactly the
+    // row this create inserted and never contacts the target at all.
     const calls: string[] = [];
+    const index = indexFeed();
     const userDO = {
       async getConfig(_caller: UserCaller, key: string) {
         calls.push(`config:${key}`);
@@ -186,6 +230,10 @@ describe('cloud agent ownership safety', () => {
           existed: false,
         };
       },
+      async releaseWorkspaceReservation(_caller: UserCaller, name: string, createdAt: number) {
+        calls.push(`release:${name}:${String(createdAt)}`);
+        return true;
+      },
       async removeWorkspace(_caller: UserCaller, name: string, ownerUserId: string) {
         calls.push(`remove:${name}:${ownerUserId}`);
       },
@@ -194,6 +242,10 @@ describe('cloud agent ownership safety', () => {
       async claimOwner(userId: string) {
         calls.push(`claim:${userId}`);
         throw new Error('Agent owned by a different user');
+      },
+      async destroyAgent(ownerUserId: string) {
+        calls.push(`destroy:${ownerUserId}`);
+        throw new Error('Agent owner mismatch; refusing to destroy.');
       },
       async setSoul() {
         calls.push('soul');
@@ -210,7 +262,9 @@ describe('cloud agent ownership safety', () => {
       OrchestratorAgent: {
         idFromName(name: string) { return name; },
         get() { return orchestrator; },
-      }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
+      },
+      ControlPlaneDO: index.namespace,
+      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
     const originalFetch = globalThis.fetch;
     globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
     try {
@@ -225,8 +279,70 @@ describe('cloud agent ownership safety', () => {
 
     expect(calls).toContain('register:jarvis:Jarvis');
     expect(calls).toContain(`claim:${USER_ID}`);
-    expect(calls).toContain(`remove:jarvis:${USER_ID}`);
+    // The one roster row this create inserted, dropped by its own `createdAt`.
+    expect(calls).toContain('release:jarvis:1');
+    // And nothing that reaches the workspace the other account owns.
+    expect(calls).not.toContain(`remove:jarvis:${USER_ID}`);
+    expect(calls.some((call) => call.startsWith('destroy:'))).toBe(false);
     expect(calls).not.toContain('soul');
+    // The index never learned this account owns that name. Published at
+    // registration, the row would have survived — the rollback cannot destroy an
+    // object it does not own, so nothing would have removed it.
+    expect(index.observed).toEqual([]);
+    expect(index.forgotten).toEqual([`${USER_ID}/jarvis`]);
+  });
+
+  test('a create indexes only after the workspace accepts this account as its owner', async () => {
+    const calls: string[] = [];
+    const index = indexFeed();
+    const userDO = {
+      async getConfig(_caller: UserCaller) { return null; },
+      async getAuthHeaders(_caller: UserCaller) { return { authorization: 'Bearer token' }; },
+      async getCredentialBaseURL(_caller: UserCaller) {
+        return 'https://api.cloudflare.com/client/v4/accounts/account/ai/v1';
+      },
+      async listCredentials(_caller: UserCaller) { return []; },
+      async ensureWorkspaceCapability() { calls.push('capability'); },
+      async registerWorkspace(_caller: UserCaller, name: string, displayName?: string) {
+        calls.push(`register:${name}`);
+        return {
+          entry: { name, displayName: displayName ?? name, createdAt: 5, lastVisited: 5, archivedAt: null },
+          existed: false,
+        };
+      },
+      async releaseWorkspaceReservation() { calls.push('release'); return true; },
+      async removeWorkspace() { calls.push('remove'); },
+    };
+    const orchestrator = {
+      async claimOwner(userId: string) {
+        calls.push(`claim:${userId}`);
+        return { owner: userId, capabilityHash: null };
+      },
+      async setInitialDisplayName() { calls.push('initial-title'); },
+      async setSoul() { calls.push('soul'); },
+      async resetWorkspaceBaseline() { calls.push('baseline'); },
+      async setModel() { calls.push('model'); },
+      async beginGenesisTurn() { calls.push('genesis'); },
+    };
+    const env = testEnv({
+      UserDO: { idFromName(name: string) { return name; }, get() { return userDO; } },
+      OrchestratorAgent: { idFromName(name: string) { return name; }, get() { return orchestrator; } },
+      ControlPlaneDO: index.namespace,
+      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
+    try {
+      await createCloudWorkspaceForUser(env, USER_ID, userStub(env), await testOwner(), {
+        name: 'jarvis', displayName: 'Jarvis', purpose: 'Help with software projects',
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(index.observed).toEqual([`${USER_ID}/jarvis`]);
+    expect(index.forgotten).toEqual([]);
+    // Ordering, not just presence: the claim is what makes the index row true.
+    expect(calls.indexOf('genesis')).toBeGreaterThan(calls.indexOf(`claim:${USER_ID}`));
   });
 
   test('a failed create never destroys a pre-existing (archived) same-name agent', async () => {

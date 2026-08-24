@@ -111,6 +111,7 @@ export interface SubordinateRosterEntry {
 	name: string;
 	displayName: string;
 	role: string;
+	nameOrigin?: "user" | "auto";
 	createdBy: "orchestrator" | "user";
 	status: SubordinateStatus;
 	currentTask: string | null;

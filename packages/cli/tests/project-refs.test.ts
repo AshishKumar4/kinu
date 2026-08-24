@@ -21,7 +21,6 @@ import {
   defaultVirtualWorkspaceId,
   listAgentDirs,
   listLegacyAgentNames,
-  listLocalRefs,
   listLocalRefsAllProjects,
   loadConfigFile,
   localWorkspaceMembers,
@@ -72,9 +71,13 @@ afterAll(() => {
   else process.env.KINU_SKIP_DAEMON = daemonBefore;
 });
 
-/** The virtual workspaces a project holds, in listing order. */
+/** The virtual workspaces a project holds, in listing order. Read off the
+ *  machine-wide roster the scheduler iterates, filtered to one project — the
+ *  attribution under test is the ref's recorded `cwd` and nothing else. */
 function workspaceLabels(cwd: string): string[] {
-  return [...new Set(listLocalRefs(cwd).map((ref) => ref.workspaceId))];
+  return [...new Set(
+    listLocalRefsAllProjects().filter((ref) => ref.cwd === cwd).map((ref) => ref.workspaceId),
+  )];
 }
 
 /** A throwaway physical project directory, canonical so comparisons hold. */
@@ -212,7 +215,12 @@ describe('renaming changes no identity and moves no database', () => {
     const created = await create('renamed-label', cwd, 'bound');
     const dbPath = createdDbPath(created);
     const identity = readWorkspaceIdentityId(dbPath);
-    expect(identity).toBeTruthy();
+    if (identity === null) throw new Error(`the workspace at ${dbPath} carries no identity`);
+    // Creation records it on the ref too, keyed on the database rather than on
+    // the name — that recorded value is the only thing `resolveLocalAgent` can
+    // compare a later database against, so a create that left it unset would
+    // turn the mismatch guard off and say nothing.
+    expect(loadConfigFile().agents?.['renamed-label']?.identityId).toBe(identity);
 
     // The rename a user actually performs: the workspace's human name. `kinu
     // create` writes it and auto-titling rewrites it after the first turn.

@@ -180,7 +180,7 @@ export type { AgentConfig, MCTSDefaults, CraftStoreDefaults, ScaffoldDefaults } 
 // raw-SQL sites into a deep module with known-key getters/setters.
 export {
   createAgentConfigStore, initAgentConfigTable,
-  CONVERSATION_ID_CONFIG_KEY, FIRST_CONVERSATION_ID, canonicalConversationId,
+  canonicalConversationId,
   AGENT_CONFIG_KEYS, DEFAULT_AUTO_GEPA_EVERY_N_TURNS,
   DEFAULT_GEPA_EVAL_BUDGET, clampGepaEvalBudget,
   type AgentConfigStore, type MctsOverrides, type ShellApprovalMode,
@@ -447,7 +447,6 @@ export {
   // native ToolSet and the codemode namespaces `execute_tools` binds.
   narrowToolSurface,
   codemodeCapabilitiesFor,
-  CODEMODE_ONLY_CAPABILITIES,
   type ToolSurfaceNarrowing,
   type ToolReach,
   type AgentsToolAction,
@@ -459,11 +458,10 @@ export {
   createAgentsTool, agentsActionsFor, renderAgentsToolDescription, resumableAgentsInput,
   parseAgentsToolInput, agentsProfileContext,
   AGENTS_ACTION_FIELDS, AGENTS_ACTION_REQUIRED_FIELDS, AGENTS_FIELD_TS_TYPES,
-  roleSummaries,
   type AgentsToolInput, type AgentsProfileContext, type DelegatedProfile,
 } from './tools/agents-tool';
 export {
-  createLocalPeerEndpoint, peerGroupId, samePeerGroup,
+  createLocalPeerEndpoint, samePeerGroup,
   type HostedAgentRef, type LocalPeerEndpoint, type LocalPeerEndpointDeps,
 } from './tools/local-peer';
 // The same delegation dispatch, projected into the codemode sandbox.
@@ -723,9 +721,9 @@ export {
   initAlternateTakesTable, captureAlternateTakes, claimAlternateTakesForTurn,
   purgeUnclaimedAlternateTakes,
   listAlternateTakeSets, latestAlternateTakeSet, recordTakePick,
-  recordBranchTakeSet, recordHeadsTakeSet, buildTakeContinuationPrompt, takeEvidence,
+  recordBranchTakeSet, buildTakeContinuationPrompt, takeEvidence,
   type AlternateTakeCandidate, type AlternateTakeSet, type AlternateTakeSource,
-  type HeadTakeCandidate, type TakePickRecord, type TakePickOutcome,
+  type TakePickRecord, type TakePickOutcome,
 } from './mcts/takes';
 // Steer-as-Branch — a mid-turn redirect run as a parallel head that settles
 // into the Alternate Takes pipeline against the live turn's answer.
@@ -1020,7 +1018,6 @@ export {
   MODEL_OPERATION_PHASES,
   MODEL_OPERATION_OUTCOMES,
   beginModelOperation,
-  newModelOperationId,
   type ModelCallReport,
   type ModelCallSpend,
   type ModelCallSink,
@@ -1283,7 +1280,7 @@ export {
 } from './orchestrator/turn-accumulator';
 export {
   AgentOrchestrator, type AgentOrchestratorDeps,
-  type TurnContinuity, DEFAULT_SESSION_REFLECTION_INTERVAL,
+  type TurnContinuity,
 } from './orchestrator/agent-orchestrator';
 export { SignalDelivery } from './orchestrator/signals';
 export {
@@ -1329,11 +1326,10 @@ export {
 } from './orchestrator/turn-surface';
 export { ModelCatalogSession } from './orchestrator/model-catalog';
 export {
-  serializeContentForHeads, narrowInheritedRole, headPhaseRunEvent,
+  serializeContentForHeads, narrowInheritedRole,
   inheritedContextFromHistory, inheritedContextFromRows,
   INHERITED_CONTEXT_CAP, inheritedContextOmissionNote,
 } from './orchestrator/heads-support';
-export { recordGroundedHeadsTake } from './mcts/takes';
 
 // ── skills (Claude-Code / Hermes-compatible SKILL.md workflow store) ──
 // VFS-backed under /workspace/skills/. A skill is natural-language workflow
@@ -1575,12 +1571,11 @@ export type { EvolutionChangelogView, TakePickDeps } from './read-models/evoluti
 // Profile catalogs — tier/role configuration from an authority, resolved once
 // per turn into the frozen profile the turn runs under.
 export {
-  TIER_IDS, BUILTIN_ROLE_IDS, ROLE_ID_RE, ROLE_ID_MAX_LEN,
+  TIER_IDS, ROLE_ID_RE,
   isValidRoleId, validateProfileCatalog, validateProfileCatalogEnvelope,
   profileCatalogDigest, deriveRoleLabel, effectiveRoleCatalog,
   BUILTIN_ROLE_DEFINITIONS, BUILTIN_PROFILE_CATALOG,
-  TierAssignmentSchema, TierAssignmentsSchema, RoleDefinitionSchema,
-  ProfileCatalogSchema, ProfileCatalogEnvelopeSchema,
+  ProfileCatalogEnvelopeSchema,
 } from './profiles';
 export type {
   TierId, BuiltinRoleId, RoleId,
@@ -1588,14 +1583,12 @@ export type {
   ProfileAuthority, ProfileCatalogEnvelope,
 } from './profiles';
 export {
-  MODEL_ROUTE_POLICY, resolveModelRoute, isPlatformRouted, modelRouteTable,
+  resolveModelRoute,
   loadProfileAuthorityInputs, resolveTurnProfile, resolveAgentTurnProfile,
-  ProviderCatalogSnapshotSchema,
   type ProfileAuthorityInputs, type ProviderCatalogSnapshot, type TierSource,
   type ResolveTurnProfileInput, type ResolveAgentTurnProfileInput, type ResolvedTurnProfile,
   type ModelRoutePolicy, type ProfileRoutedSource, type ModelRouteResolution,
-  changeActiveRole, decideStagedRole, roleWidensCapabilities, roleChangeOutcomeText,
-  ROLE_POLICY_KEY,
+  changeActiveRole, roleChangeOutcomeText,
   type RoleChangeActor, type RoleChangePolicy, type RoleChangeOutcome,
   type RoleChangeRefusal, type RoleStateStore,
 } from './profiles';

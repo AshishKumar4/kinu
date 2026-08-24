@@ -39,8 +39,8 @@ describe('Plan mode browser contract', () => {
   });
 
   test('a new plan owns Outputs focus and preview cannot steal it mid-review', () => {
-    expect(page).toContain('state.activePlan?.status === "pending"');
-    expect(page).toContain('state.activePlan?.status === "changes_requested"');
+    expect(page).toContain('visiblePlan?.status === "pending"');
+    expect(page).toContain('visiblePlan?.status === "changes_requested"');
     expect(page).toContain('if (key && key !== previousPlanRef.current) setSurface("Output")');
     expect(output).toContain('type OutputView = "preview" | "diff" | "plan"');
     expect(output).toContain('lazy(() => import("./PlanReviewView"))');

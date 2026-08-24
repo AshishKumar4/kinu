@@ -51,17 +51,20 @@ export const ORCHESTRATOR_AGENT_PATH_RE = new RegExp(
   + `|/sub/${SUBORDINATE_AGENT_SLUG}/[^/]+(?:/(?!sub(?:/|$))[^/]+)*/?$)`,
 );
 
-const ORCHESTRATOR_ROOT_AGENT_PATH_RE = new RegExp(`^${ROOT_AGENT_PATH}/([^/]+)$`);
+const CLI_TICKET_AGENT_PATH_RE = new RegExp(
+  `^${ROOT_AGENT_PATH}/([^/]+)(?:$|/sub/${SUBORDINATE_AGENT_SLUG}/[^/]+/?$)`,
+);
 
 export function extractOrchestratorAgentName(pathname: string): string | null {
   const match = pathname.match(ORCHESTRATOR_AGENT_PATH_RE);
   return match ? decodeURIComponent(match[1]) : null;
 }
 
-/** Connect tickets are scoped to the root orchestrator socket. Facet sockets
- * authenticate through the browser session and parent ownership check. */
+/** Connect tickets stay scoped to the root workspace identity. The same ticket
+ * can enter one direct additional-agent facet beneath that root; the closed
+ * grammar still refuses every other namespace and every nested facet. */
 export function extractTicketOrchestratorAgentName(pathname: string): string | null {
-  const match = pathname.match(ORCHESTRATOR_ROOT_AGENT_PATH_RE);
+  const match = pathname.match(CLI_TICKET_AGENT_PATH_RE);
   return match ? decodeURIComponent(match[1]) : null;
 }
 

@@ -3,18 +3,13 @@ export {
   type AgentEventListener,
   type LocalAgentHostOptions,
   type LocalHostedAgent,
+  type LocalTickResult,
 } from './host';
 export {
-  OS_LEASE_PROCESS,
-  acquireDriverLease,
-  driverLeaseHolder,
-  holdsDriverLease,
-  initDriverLeaseTable,
-  releaseDriverLease,
+  DriverLeaseHold,
   type DriverKind,
-  type DriverLease,
   type DriverLeaseDeps,
   type DriverLeaseHolder,
-  type DriverLeaseResult,
+  type DriverLeaseRefusal,
   type LeaseProcess,
 } from './driver-lease';

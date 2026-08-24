@@ -3,8 +3,8 @@
  *
  * Two stores, one rule each:
  * - Signed out, the LOCAL authority is canonical: one envelope in
- *   config.json (`localProfile`), written only by explicit import or
- *   explicit replace.
+ *   config.json (`localProfile`), replaced whole by every edit and never
+ *   merged into.
  * - Signed in, the ACCOUNT is canonical on the server. This machine holds a
  *   per-account read-only cache in its own file, never inside KinuConfig,
  *   and refreshes it only from server responses.
@@ -76,39 +76,26 @@ export function loadLocalProfileAuthority(): ProfileCatalogEnvelope | null {
 }
 
 /**
- * Seed the local authority from a whole catalog. Refuses when one already
- * exists — replacing it deliberately is `replaceLocalProfile`; there is no
- * merge.
+ * Write the local authority. A signed-out machine holds exactly one catalog
+ * and nothing merges into it: every write replaces it whole, and the version
+ * counts the replacements so a reader can tell one from the next.
  */
-export function importLocalProfile(catalog: ProfileCatalog): ProfileCatalogEnvelope {
-  if (loadConfigFile().localProfile) {
-    throw new Error('a local profile authority already exists; replace it explicitly instead of importing over it');
-  }
-  return writeLocalProfile(catalog, 1);
-}
-
-/** Overwrite the local authority with a whole catalog, bumping its version. */
-export function replaceLocalProfile(catalog: ProfileCatalog): ProfileCatalogEnvelope {
-  const previous = loadConfigFile().localProfile;
-  return writeLocalProfile(catalog, previous ? previous.version + 1 : 1);
-}
-
-function writeLocalProfile(catalog: ProfileCatalog, version: number): ProfileCatalogEnvelope {
+function writeLocalProfile(catalog: ProfileCatalog): ProfileCatalogEnvelope {
   const validated = validateProfileCatalog(catalog);
+  const config = loadConfigFile();
   const envelope: ProfileCatalogEnvelope = {
     authority: { kind: 'local' },
-    version,
+    version: (config.localProfile?.version ?? 0) + 1,
     digest: profileCatalogDigest(validated),
     catalog: validated,
   };
-  const config = loadConfigFile();
   saveConfigFile({ ...config, localProfile: envelope });
   return envelope;
 }
 
 // ── Account cache (signed-in mirror of server truth, its own file) ──────────
 
-export function profileCachePath(): string {
+function profileCachePath(): string {
   return join(AGENT_HOME, 'profile-cache.json');
 }
 
@@ -152,7 +139,7 @@ export function loadCachedAccountProfile(accountId: string): ProfileCatalogEnvel
  * Store a server response as `accountId`'s read-only cache entry. Content
  * always comes from the server; this never authors catalog data.
  */
-export function cacheAccountProfile(accountId: string, envelope: ProfileCatalogEnvelope): void {
+function cacheAccountProfile(accountId: string, envelope: ProfileCatalogEnvelope): void {
   assertCachedEntry(accountId, envelope);
   const cache = readAccountCache();
   ensureSecretDir(AGENT_HOME);
@@ -219,7 +206,7 @@ export async function loadActiveProfile(): Promise<ProfileCatalogEnvelope> {
     if (existing) return existing;
     const model = resolveLLMConfig()?.model;
     if (!model) throw new Error('choose a default model before creating the local profile catalog');
-    return importLocalProfile({
+    return writeLocalProfile({
       roles: BUILTIN_PROFILE_CATALOG.roles,
       tiers: { default: { model } },
     });
@@ -276,12 +263,10 @@ export function createProfileAuthorityReader(): ProfileEnvelopeSource {
 }
 
 /**
- * What the authority half of turn setup cost, and what answered it. The
- * session's own `profile.inputs_resolved` reports the catalog version, the
- * authority kind and the provider snapshot's cache state around this call, so
- * this line carries only what it cannot see: whether the envelope came off the
- * network or off the disk. That is the difference between a turn that paid an
- * HTTP round trip before its first token and one that read a file.
+ * What the authority half of turn setup cost, and what answered it: whether
+ * the envelope came off the network, off the cache file, or out of
+ * config.json. That is the difference between a turn that paid an HTTP round
+ * trip before its first token and one that read a file.
  */
 function reportResolution(source: ProfileReadSource, startedAt: number): void {
   diagnostics.event('profile.authority_read', { source, durationMs: Date.now() - startedAt });
@@ -301,7 +286,7 @@ export async function updateDefaultTier(
     const defaultTier = patch.reasoningEffort === undefined
       ? { model: patch.model }
       : { model: patch.model, reasoningEffort: patch.reasoningEffort };
-    return importLocalProfile({
+    return writeLocalProfile({
       roles: BUILTIN_PROFILE_CATALOG.roles,
       tiers: { default: defaultTier },
     });
@@ -315,7 +300,7 @@ export async function updateDefaultTier(
     roles: current.catalog.roles,
     tiers: { ...current.catalog.tiers, default: defaultTier },
   };
-  if (current.authority.kind === 'local') return replaceLocalProfile(catalog);
+  if (current.authority.kind === 'local') return writeLocalProfile(catalog);
   const auth = requireStoredAuthConfig();
   const result = await updateCloudProfile(auth.origin, auth.token, {
     catalog,

@@ -41,7 +41,6 @@ export const DEMO_CUES = {
   end: 19_600,
 } as const;
 
-export type DemoCue = keyof typeof DEMO_CUES;
 
 export const DEMO_END = DEMO_CUES.end;
 
@@ -124,7 +123,7 @@ export function cursorAt(t: number): DemoCursor {
 
 /* ── the story fixtures ─────────────────────────────────────────────────── */
 
-export const DEMO_ASK
+const DEMO_ASK
   = 'The SAVE20 coupon started returning 500 after Tuesday\'s deploy. Find the cause and fix it.';
 
 const REASONING
@@ -139,7 +138,7 @@ const APPROVED_TEXT
 const FINAL_TEXT
   = 'Fixed. The migration now backfills `kind` from `coupon_catalog` and refuses rows without a catalog entry. All seven focused tests pass.';
 
-export const PLAN_R1 = `# Fix the SAVE20 coupon 500
+const PLAN_R1 = `# Fix the SAVE20 coupon 500
 
 ## Root cause
 Migration \`0042_coupon_kind.sql\` backfills \`kind\` for fixed coupons only. Percent rows keep \`kind = NULL\`, and \`applyCoupon\` throws on the NULL branch, so \`/api/cart/apply\` returns 500.
@@ -150,7 +149,7 @@ Migration \`0042_coupon_kind.sql\` backfills \`kind\` for fixed coupons only. Pe
 3. Verify with \`bun test packages/checkout\`. All seven focused cases must pass.
 `;
 
-export const PLAN_R2 = `# Fix the SAVE20 coupon 500
+const PLAN_R2 = `# Fix the SAVE20 coupon 500
 
 ## Root cause
 Migration \`0042_coupon_kind.sql\` backfills \`kind\` for fixed coupons only. Percent rows keep \`kind = NULL\`, and \`applyCoupon\` throws on the NULL branch, so \`/api/cart/apply\` returns 500.

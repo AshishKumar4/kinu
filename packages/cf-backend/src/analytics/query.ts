@@ -34,29 +34,32 @@
  * Text in, text out. Nothing here reads an environment, touches a binding or
  * makes a request: the control plane owns the transport, the credential and the
  * not-configured arm, and it must be able to render "analytics not configured"
- * without this module existing at runtime.
+ * without this module existing at runtime. The one deployment fact a query
+ * cannot avoid — WHICH dataset — arrives as `datasetSuffix`, an argument, and is
+ * resolved through `analyticsDataset` so the name is still declared once.
  */
+import { assertQuantileLevel } from './limits';
 import {
   AGENT_METRICS_SCHEMA, CONTROL_PLANE_OPS_SCHEMA,
-  blobColumn, doubleColumn, indexColumn,
+  analyticsDataset, blobColumn, doubleColumn, indexColumn,
   type AnalyticsSchema, type BlobName, type DoubleName,
 } from './schemas';
 
 /** `COUNT()`, weighted. The sample interval IS the count: one surviving row
  *  stands for `_sample_interval` originals. */
-export function weightedCount(): string {
+function weightedCount(): string {
   return 'SUM(_sample_interval)';
 }
 
 /** `SUM(metric)`, weighted. */
-export function weightedSum<S extends AnalyticsSchema>(schema: S, metric: DoubleName<S>): string {
+function weightedSum<S extends AnalyticsSchema>(schema: S, metric: DoubleName<S>): string {
   return `SUM(_sample_interval * ${doubleColumn(schema, metric)})`;
 }
 
 /** `AVG(metric)`, weighted — the weighted total over the weighted row count,
  *  which is what makes it an average of the ORIGINAL rows rather than of the
  *  survivors. */
-export function weightedAvg<S extends AnalyticsSchema>(schema: S, metric: DoubleName<S>): string {
+function weightedAvg<S extends AnalyticsSchema>(schema: S, metric: DoubleName<S>): string {
   return `SUM(_sample_interval * ${doubleColumn(schema, metric)}) / SUM(_sample_interval)`;
 }
 
@@ -65,14 +68,12 @@ export function weightedAvg<S extends AnalyticsSchema>(schema: S, metric: Double
  * its second argument and AE's documentation names `_sample_interval` as the
  * value to pass — the platform built the function for this.
  */
-export function weightedQuantile<S extends AnalyticsSchema>(
+function weightedQuantile<S extends AnalyticsSchema>(
   schema: S,
   metric: DoubleName<S>,
   quantile: number,
 ): string {
-  if (!(quantile > 0 && quantile < 1)) {
-    throw new RangeError(`quantile must be strictly between 0 and 1, got ${quantile}`);
-  }
+  assertQuantileLevel(quantile);
   return `quantileExactWeighted(${quantile})(${doubleColumn(schema, metric)}, _sample_interval)`;
 }
 
@@ -85,7 +86,7 @@ export function weightedQuantile<S extends AnalyticsSchema>(
  * calls. Dividing by the row count would report a fabricated discount that grows
  * with the number of unpriced calls.
  */
-export function weightedRatio<S extends AnalyticsSchema>(
+function weightedRatio<S extends AnalyticsSchema>(
   schema: S,
   numerator: DoubleName<S>,
   denominator: DoubleName<S>,
@@ -95,13 +96,23 @@ export function weightedRatio<S extends AnalyticsSchema>(
 }
 
 /** One selected metric: the expression, and the name it is reported under. */
-export interface QueryMetric {
+interface QueryMetric {
   readonly as: string;
   readonly expression: string;
 }
 
-export interface WeightedQuery<S extends AnalyticsSchema> {
+interface WeightedQuery<S extends AnalyticsSchema> {
   readonly schema: S;
+  /**
+   * Which deployment's copy of the dataset to read: '' for production,
+   * '_staging' for staging.
+   *
+   * REQUIRED, for the reason `since` is required. Staging binds its own datasets
+   * and shares production's account, so a caller who forgets this does not get
+   * an empty panel — it gets production's numbers under a staging heading, which
+   * is the one answer worse than no answer.
+   */
+  readonly datasetSuffix: string;
   /** Blob slots to group by, in order. Reported under their own slot names. */
   readonly groupBy: readonly BlobName<S>[];
   readonly metrics: readonly QueryMetric[];
@@ -112,6 +123,11 @@ export interface WeightedQuery<S extends AnalyticsSchema> {
   readonly where?: readonly string[];
   /** A reported metric name to order by, descending. */
   readonly orderBy?: string;
+  /**
+   * Rows to return at most. REQUIRED of any panel whose `groupBy` has open
+   * cardinality, and meaningless on one whose group-by is a closed vocabulary —
+   * see `PANEL_ROW_LIMIT` for which panels are which and why.
+   */
   readonly limit?: number;
 }
 
@@ -124,7 +140,7 @@ export interface WeightedQuery<S extends AnalyticsSchema> {
  * would make "the metrics page times out" a thing a caller could cause by
  * forgetting one argument.
  */
-export function buildWeightedQuery<S extends AnalyticsSchema>(query: WeightedQuery<S>): string {
+function buildWeightedQuery<S extends AnalyticsSchema>(query: WeightedQuery<S>): string {
   const { schema } = query;
   const grouped = query.groupBy.map((name) => `${blobColumn(schema, name)} AS ${String(name)}`);
   const selected = [
@@ -137,7 +153,7 @@ export function buildWeightedQuery<S extends AnalyticsSchema>(query: WeightedQue
   ];
   const lines = [
     `SELECT ${selected.join(', ')}`,
-    `FROM ${schema.dataset}`,
+    `FROM ${analyticsDataset(schema, query.datasetSuffix)}`,
     `WHERE ${predicates.join(' AND ')}`,
   ];
   if (query.groupBy.length > 0) {
@@ -161,6 +177,34 @@ export interface ControlPlaneMetricQueries {
 }
 
 /**
+ * Rows one panel may return.
+ *
+ * WHICH PANELS NEED IT. Four of the six below group by a blob whose cardinality
+ * nothing bounds: `latency` and `firstToken` and `tokens` group by `model` (a
+ * 128-byte slot holding whatever model id a provider or a user's own config
+ * names), and `toolFailures` groups by `tool`, which is the name of the tool the
+ * model called — including the crafted tools a workspace authors at runtime. One
+ * row per distinct value, times the outcome and code columns beside it, is a row
+ * count no deployment fact caps. The other two are closed vocabularies and take
+ * no bound: `turns` groups by `outcome` and `code`, which are a four-member union
+ * and core's own error codes, and `adminOps` groups by the tail of a
+ * `control_plane.*` event name and its outcome.
+ *
+ * WHY THIS NUMBER. The surface is `MetricTable` in `pages/ControlPage.tsx`: a
+ * plain table in a half-width card, six of them in one grid, rendering every row
+ * it is handed with no cursor, no pagination and no "show more". So a panel is a
+ * top-N table and always was — each of the four already orders by its own volume
+ * metric descending — and this is the N it never declared. 50 is the control
+ * plane's own answer to how many rows one uncursored read hands an operator
+ * (`control-plane/store.ts` `CONTROL_PAGE_DEFAULT`), restated rather than
+ * imported because that module reads this one and the dependency may not invert.
+ *
+ * The bound is also what keeps the read inside AE's 30-second query timeout,
+ * which is the same reason `since` is mandatory.
+ */
+const PANEL_ROW_LIMIT = 50;
+
+/**
  * The queries the control plane's metrics surface reads.
  *
  * Assembled here rather than there so slot positions never leave this module: the
@@ -173,11 +217,16 @@ export interface ControlPlaneMetricQueries {
  * unrecoverable from the dataset. `adminOps` ignores it: a different dataset with
  * a different index, where the same string would match nothing and a silently
  * empty panel is worse than an unfiltered one.
+ *
+ * `datasetSuffix` is what makes these queries read the deployment they are asked
+ * from rather than production. It is threaded onto every panel here, so a new
+ * panel cannot be added without one.
  */
 export function controlPlaneMetricsQueries(
-  opts: { sinceHours: number; workspaceDigest?: string },
+  opts: { sinceHours: number; datasetSuffix: string; workspaceDigest?: string },
 ): ControlPlaneMetricQueries {
   const since = `'${Math.max(1, Math.trunc(opts.sinceHours))}' HOUR`;
+  const { datasetSuffix } = opts;
   const agent = AGENT_METRICS_SCHEMA;
   const ops = CONTROL_PLANE_OPS_SCHEMA;
   const workspace = opts.workspaceDigest;
@@ -190,7 +239,7 @@ export function controlPlaneMetricsQueries(
   };
   return {
     turns: buildWeightedQuery({
-      schema: agent,
+      schema: agent, datasetSuffix,
       groupBy: ['outcome', 'code'],
       metrics: [
         { as: 'turns', expression: weightedCount() },
@@ -203,7 +252,7 @@ export function controlPlaneMetricsQueries(
       orderBy: 'turns',
     }),
     latency: buildWeightedQuery({
-      schema: agent,
+      schema: agent, datasetSuffix,
       groupBy: ['model'],
       metrics: [
         { as: 'turns', expression: weightedCount() },
@@ -213,9 +262,10 @@ export function controlPlaneMetricsQueries(
       since,
       where: scoped('turn'),
       orderBy: 'turns',
+      limit: PANEL_ROW_LIMIT,
     }),
     tokens: buildWeightedQuery({
-      schema: agent,
+      schema: agent, datasetSuffix,
       groupBy: ['provider', 'model'],
       metrics: [
         { as: 'calls', expression: weightedCount() },
@@ -230,9 +280,10 @@ export function controlPlaneMetricsQueries(
       since,
       where: scoped('model'),
       orderBy: 'calls',
+      limit: PANEL_ROW_LIMIT,
     }),
     toolFailures: buildWeightedQuery({
-      schema: agent,
+      schema: agent, datasetSuffix,
       groupBy: ['tool', 'outcome', 'code'],
       metrics: [
         { as: 'calls', expression: weightedCount() },
@@ -241,9 +292,10 @@ export function controlPlaneMetricsQueries(
       since,
       where: [...scoped('tool'), `${blobColumn(agent, 'outcome')} != 'ok'`],
       orderBy: 'calls',
+      limit: PANEL_ROW_LIMIT,
     }),
     firstToken: buildWeightedQuery({
-      schema: agent,
+      schema: agent, datasetSuffix,
       groupBy: ['provider', 'model'],
       metrics: [
         { as: 'turns', expression: weightedCount() },
@@ -258,9 +310,10 @@ export function controlPlaneMetricsQueries(
       // exactly the ones to keep apart when latency is the complaint.
       where: scoped('ttft'),
       orderBy: 'turns',
+      limit: PANEL_ROW_LIMIT,
     }),
     adminOps: buildWeightedQuery({
-      schema: ops,
+      schema: ops, datasetSuffix,
       groupBy: ['operation', 'outcome'],
       metrics: [
         { as: 'operations', expression: weightedCount() },

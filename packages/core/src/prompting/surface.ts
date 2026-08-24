@@ -132,8 +132,9 @@ export interface PromptSurfaceOptions {
    *  Absent renders nothing — an actor resolved without a profile authority
    *  keeps its plain surface. */
   roleSection?: { id: string; label: string; instructions: string };
-  /** Whether this Plan actor owns the submit_plan completion boundary. Heads
-   * and subordinates report research back to their parent instead. */
+  /** Whether this Plan actor owns the submit_plan completion boundary. A
+   * delegated turn reports to its parent; an owner chat can own an independent
+   * review even when the actor is an additional agent. */
   planSubmissionAvailable?: boolean;
   model?: PromptModelContext;
 }

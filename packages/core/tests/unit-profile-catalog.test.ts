@@ -11,7 +11,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import {
-  BUILTIN_PROFILE_CATALOG, BUILTIN_ROLE_DEFINITIONS, BUILTIN_ROLE_IDS,
+  BUILTIN_PROFILE_CATALOG, BUILTIN_ROLE_DEFINITIONS,
   TIER_IDS, deriveRoleLabel, profileCatalogDigest, validateProfileCatalog,
   validateProfileCatalogEnvelope,
   type BuiltinRoleId, type ProfileCatalog,
@@ -29,6 +29,13 @@ const SCOUT: RoleDefinition = {
 };
 
 const BUILTINS: Readonly<Record<BuiltinRoleId, RoleDefinition>> = BUILTIN_ROLE_DEFINITIONS;
+
+/** The six ids the product ships, spelled here rather than read from the
+ *  constant under test: comparing the shipped definitions against their own
+ *  id list can only ever agree, so a role renamed in both places would pass. */
+const BUILTIN_IDS = [
+  'general', 'researcher', 'planner', 'implementer', 'auditor', 'designer',
+] as const satisfies readonly BuiltinRoleId[];
 
 const VALID_CATALOG = {
   roles: { scout: SCOUT },
@@ -157,8 +164,8 @@ describe('the digest', () => {
 
 describe('built-in defaults', () => {
   test('six roles, exactly the declared ids', () => {
-    expect(Object.keys(BUILTIN_ROLE_DEFINITIONS).sort()).toEqual([...BUILTIN_ROLE_IDS].sort());
-    expect(BUILTIN_ROLE_IDS).toHaveLength(6);
+    expect(Object.keys(BUILTIN_ROLE_DEFINITIONS).sort()).toEqual([...BUILTIN_IDS].sort());
+    expect(BUILTIN_IDS).toHaveLength(6);
   });
 
   test('each ships the contracted tier and preset', () => {
@@ -170,12 +177,12 @@ describe('built-in defaults', () => {
       auditor: ['slow', 'audit'],
       designer: ['default', 'ideate'],
     } satisfies Record<BuiltinRoleId, readonly [TierId, NamedSwarmPreset]>;
-    for (const id of BUILTIN_ROLE_IDS) {
+    for (const id of BUILTIN_IDS) {
       expect(BUILTINS[id].tier).toBe(expected[id][0]);
       expect(BUILTINS[id].preset).toBe(expected[id][1]);
     }
     expect(BUILTINS.planner.plan).toBe(true);
-    for (const id of BUILTIN_ROLE_IDS) {
+    for (const id of BUILTIN_IDS) {
       if (id !== 'planner') expect(BUILTINS[id].plan).toBeUndefined();
     }
   });

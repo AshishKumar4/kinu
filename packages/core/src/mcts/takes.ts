@@ -12,7 +12,6 @@
 
 import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
-import type { MergeResult } from '../heads/types';
 import type { SearchNode } from '../types/mcts';
 import { recordTurnOutcome } from '../evolution/outcomes';
 import { reconcileColumns } from '../identity/columns';
@@ -214,63 +213,6 @@ export function recordBranchTakeSet(
   };
 }
 
-/** One comparable head answer feeding a heads-take set. */
-export interface HeadTakeCandidate {
-  /** The head id (used only to dedupe the synthetic node id). */
-  id: string;
-  /** The head's finding — the take candidate's text. */
-  text: string;
-  /** The head's grounded outcome in [0,1] — the score evidence on the chip. */
-  score: number;
-}
-
-/**
- * Persist an agents-fork fan-out as an alternate-takes set: each
- * comparable head answer is a candidate, ranked by its grounded score (highest =
- * the answer the merge favored). Like MCTS, heads run MID-TURN (before the
- * assistant message id exists), so the set is written UNCLAIMED (turn_id NULL)
- * and `claimAlternateTakesForTurn` attaches it at turn end — the same capture →
- * claim flow MCTS uses. The synthetic node ids never touch search_nodes:
- * recordTakePick skips the convergence re-point for heads-sourced sets
- * (source !== 'mcts'). So the preference ledger finally gets a sample from heads
- * (until now only MCTS convergence emitted takes). Returns null when fewer than
- * 2 distinct non-empty head answers exist (no real choice to offer).
- */
-export function recordHeadsTakeSet(
-  sql: SqlExecutor,
-  input: { task: string; heads: readonly HeadTakeCandidate[]; now?: number },
-): AlternateTakeSet | null {
-  const id = `take-${nanoid()}`;
-  const seen = new Set<string>();
-  const ranked = [...input.heads]
-    .filter((h) => {
-      const text = h.text.trim();
-      if (!text || seen.has(text)) return false;
-      seen.add(text);
-      return true;
-    })
-    .sort((a, b) => b.score - a.score);
-  if (ranked.length < 2) return null;
-
-  const candidates: AlternateTakeCandidate[] = ranked
-    .slice(0, MAX_TAKE_CANDIDATES)
-    .map((h) => ({
-      nodeId: `${id}-${h.id}`, text: h.text.trim(),
-      score: h.score, visits: 1, depth: 0,
-    }));
-  const now = input.now ?? nowMs();
-  void sql`INSERT INTO alternate_takes
-        (id, turn_id, session_id, task, source, winner_node_id, chosen_node_id, candidates, created_at, picked_at)
-      VALUES
-        (${id}, ${null}, ${null}, ${input.task.slice(0, 500)}, ${'heads'},
-         ${candidates[0]!.nodeId}, ${null}, ${JSON.stringify(candidates)}, ${now}, ${null})`;
-  return {
-    id, turnId: null, sessionId: null, task: input.task.slice(0, 500),
-    source: 'heads', winnerNodeId: candidates[0]!.nodeId, chosenNodeId: null,
-    candidates, createdAt: now, pickedAt: null,
-  };
-}
-
 /** Attach the take sets captured during the just-finished turn (MCTS runs
  *  mid-turn, before the assistant message id exists) to that turn's id.
  *  The claim is scoped to this turn's window: stale unclaimed sets left by a
@@ -425,16 +367,4 @@ export function buildTakeContinuationPrompt(set: AlternateTakeSet, chosen: Alter
     `${evidenceWindow(chosen.text, EVIDENCE_BUDGETS.takeChosen)}\n\n` +
     `Please continue with this approach — briefly acknowledge the switch, then carry the work forward from it.`
   );
-}
-
-/** Record the comparable heads of a completed fork with heads settlement as
- *  an unclaimed Alternate-Takes set — claimed against the turn at turn end,
- *  exactly like an MCTS capture. Only grounded scores are a real preference
- *  signal, so emit nothing when ungrounded. Shared by both backends. */
-export function recordGroundedHeadsTake(sql: SqlExecutor, merge: MergeResult, task: string): void {
-  if (!merge.grounded) return;
-  const heads = merge.headScores
-    .filter((s) => s.status === 'completed')
-    .map((s) => ({ id: s.id, text: s.text, score: s.score }));
-  recordHeadsTakeSet(sql, { task, heads });
 }

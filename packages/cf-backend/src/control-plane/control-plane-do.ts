@@ -26,6 +26,7 @@ import { diagnostics } from '@kinu.run/core/obs';
 import type { Page, PageRequest } from '@kinu.run/core';
 import type { FeedbackRecord } from '../feedback/contract';
 import { installAnalyticsDiagnostics } from '../analytics/install';
+import { openAnalyticsWindow } from '../analytics/writer';
 // `./capability`, never `./admin-caller`. The two modules answer different
 // questions, and the split exists so this one does not need the other's answer:
 // `admin-caller` re-exports this gate, but reaching it through that file puts
@@ -38,17 +39,16 @@ import { requireControl, type ControlCapability, type ControlGrade, type Present
 import type { ControlPlaneSql } from './sql';
 import * as store from './store';
 import type {
-  AuditOutcome, ControlAuditRow, ControlFeedbackRow, ControlOverview, ControlUserRow,
-  ControlWorkspaceRow, RosterWorkspace, UserObservation, WorkspaceObservation,
+  AuditOutcome, AuditSettlement, ControlAuditRow, ControlFeedbackRow, ControlOverview,
+  ControlUserRow, ControlWorkspaceRow, RosterWorkspace, UserObservation, WorkspaceObservation,
 } from './store';
 
 
 export type {
-  AuditOutcome, ControlAuditRow, ControlFeedbackRow, ControlOverview, ControlUserRow,
-  ControlWorkspaceRow, RosterWorkspace, UserObservation, WorkspaceObservation,
+  AuditOutcome, AuditSettlement, ControlAuditRow, ControlFeedbackRow, ControlOverview,
+  ControlUserRow, ControlWorkspaceRow, RosterWorkspace, UserObservation, WorkspaceObservation,
 };
-export { CONTROL_PAGE_DEFAULT, CONTROL_PAGE_MAX } from './store';
-export { CONTROL_PLANE_SINGLETON } from './stub';
+export { AUDIT_OUTCOMES, CONTROL_PAGE_DEFAULT, CONTROL_PAGE_MAX } from './store';
 
 export class ControlPlaneDO extends DurableObject<Env> {
   private readonly store: ControlPlaneSql;
@@ -70,6 +70,13 @@ export class ControlPlaneDO extends DurableObject<Env> {
   }
 
   private gate(caller: PresentedCaller, capability: ControlCapability): Promise<ControlGrade> {
+    // The 250-point Analytics budget is PER INVOCATION (analytics/limits.ts
+    // MAX_WRITES_PER_INVOCATION) and every RPC into this object is one. The
+    // constructor's install opens the window once per ACTIVATION, so a hot
+    // fleet singleton spent 250 points and then stopped producing audit
+    // evidence until eviction. Reopened here, which is the one line every RPC
+    // on this class passes through.
+    openAnalyticsWindow(this.env);
     return requireControl(this.env, caller, capability);
   }
 
@@ -153,30 +160,99 @@ export class ControlPlaneDO extends DurableObject<Env> {
     return store.listAudit(this.store, request);
   }
 
-  /* ── The audit log's only writer (grade: admin) ─────────────────────────── */
+  /** Attempts whose outcome was never recorded, newest first. The one class of
+   *  row the two-phase write deliberately leaves behind, so an operator can find
+   *  the actions that ran while the log could not be finished. */
+  async listPendingAudit(caller: PresentedCaller, limit?: number): Promise<ControlAuditRow[]> {
+    await this.gate(caller, 'audit.read');
+    return store.listPendingAudit(this.store, limit);
+  }
+
+  /* ── The audit log's only writers (grade: admin) ────────────────────────── */
 
   /**
-   * Append one operator action, and emit the fleet-level marker for it.
+   * Append one attempt, and emit its fleet-level marker once the outcome is
+   * known.
    *
-   * Both from one call, so the row and the metric cannot disagree about whether
-   * an action happened. The event carries a DIGEST of the actor while the row
+   * Row and marker from one call, so they cannot disagree about whether an
+   * action happened. The event carries a DIGEST of the actor while the row
    * carries the address: an audit trail that cannot name who acted is not one,
    * and a three-month-retention dataset an admin UI renders is not a place for an
    * address.
+   *
+   * A `pending` row emits NOTHING. It is an intent, not an outcome, and its
+   * marker is emitted by `settleAudit` — so one attempt is still exactly one ops
+   * row whichever way it goes.
    */
   async recordAudit(
     caller: PresentedCaller,
-    entry: store.AuditDraft & { actorDigest?: string },
+    entry: store.AuditDraft & OperationMarker,
   ): Promise<ControlAuditRow> {
     await this.gate(caller, 'audit.write');
     const row = store.appendAudit(this.store, entry);
+    this.publish(row, entry);
+    return row;
+  }
+
+  /**
+   * Record how a pending attempt ended.
+   *
+   * THROWS when no pending row matched. The caller asked to finish a specific
+   * attempt; if that attempt is not here, its outcome is unrecorded and saying so
+   * is the only honest answer — returning a row would let a lost settlement read
+   * as a written one.
+   */
+  async settleAudit(
+    caller: PresentedCaller,
+    settlement: { id: string; outcome: AuditSettlement; detail: string } & OperationMarker,
+  ): Promise<ControlAuditRow> {
+    await this.gate(caller, 'audit.write');
+    const row = store.settleAudit(this.store, settlement);
+    if (row === null) {
+      throw new Error(`no pending audit row ${settlement.id} to settle as ${settlement.outcome}`);
+    }
+    this.publish(row, settlement);
+    return row;
+  }
+
+  /**
+   * The fleet-level marker for one settled attempt.
+   *
+   * `reason` and `code` are CLOSED classifications supplied by the caller, never
+   * the row's `detail`. The detail is free text — for a thrown failure it is a
+   * rendered cause chain, whose head is an upstream exception message — and the
+   * analytics sink's own rule is that a cause chain is never written to a
+   * three-month dataset. The chain stays in the durable row, which is where an
+   * operator reads it under the same authorization that produced it.
+   */
+  private publish(row: ControlAuditRow, marker: OperationMarker): void {
+    if (row.outcome === 'pending') return;
     diagnostics.event('control_plane.operation_recorded', {
       operation: row.operation,
       outcome: row.outcome,
       targetKind: row.targetKind,
-      actor: entry.actorDigest ?? '',
-      reason: row.outcome === 'ok' ? '' : row.detail,
+      actor: marker.actorDigest ?? '',
+      reason: marker.reason ?? '',
+      code: marker.code ?? '',
     });
-    return row;
   }
+}
+
+/**
+ * What the ops dataset learns about one attempt, beyond the row itself.
+ *
+ * Every field is a token the sink's allowlist can hold: a digest, a snake_case
+ * classification, and one of core's `ErrorCode`s. Nothing here is free text, and
+ * that is the point — this is the only path from an admin action to a dataset
+ * whose retention this deployment does not control.
+ */
+export interface OperationMarker {
+  /** A stable, non-reversible stand-in for the operator's address. */
+  actorDigest?: string;
+  /** Why the attempt ended the way it did, as one snake_case word. */
+  reason?: string;
+  /** The classified code of a thrown failure, supplied by the action's own
+   *  `toKinuError` classification. `undefined` on every other arm, which
+   *  publishes as an empty slot rather than as a code nothing classified. */
+  code?: string;
 }

@@ -16,9 +16,9 @@ import type { Page, PageRequest } from '@kinu.run/core';
 import type { ControlPlaneSql } from '../src/control-plane/sql';
 import type { AuthIdentity } from '../src/auth/session';
 import {
-  adminCaller, adminDenialStatus, authorizeAdmin, ControlDeniedError, internalCaller,
-  requireControl,
+  adminCaller, adminDenialStatus, authorizeAdmin, internalCaller,
 } from '../src/control-plane/admin-caller';
+import { requireControl } from '../src/control-plane/capability';
 import * as store from '../src/control-plane/store';
 import { MalformedCursorError } from '../src/control-plane/store';
 import * as v from 'valibot';
@@ -154,9 +154,16 @@ describe('capability attenuation', () => {
     expect(await requireControl(ENV, caller, 'feedback.write')).toBe('ingest');
     // The whole point of two grades. A bug in the feedback endpoint — which any
     // signed-in user can reach — must not be one import away from every account's
-    // workspaces.
-    await expect(requireControl(ENV, caller, 'users.read')).rejects.toThrow(ControlDeniedError);
-    await expect(requireControl(ENV, caller, 'audit.write')).rejects.toThrow(ControlDeniedError);
+    // workspaces. Held to the refusal a caller can OBSERVE: workerd erases the
+    // error's subclass across the Worker→DO boundary and carries only the
+    // message, so the message is the contract — measured in
+    // `unit-control-plane-do-workerd.test.ts` and asserted here.
+    await expect(requireControl(ENV, caller, 'users.read')).rejects.toThrow(
+      "users.read requires the control plane's admin capability. This caller holds only ingest.",
+    );
+    await expect(requireControl(ENV, caller, 'audit.write')).rejects.toThrow(
+      "audit.write requires the control plane's admin capability. This caller holds only ingest.",
+    );
   });
 
   test('the admin caller holds both grades', async () => {
@@ -171,7 +178,13 @@ describe('capability attenuation', () => {
 
   test('an unrecognized caller is refused rather than defaulted', async () => {
     for (const caller of [undefined, null, {}, { controlToken: '' }, { controlToken: 'guess' }]) {
-      await expect(requireControl(ENV, caller, 'index.observe')).rejects.toThrow(ControlDeniedError);
+      // Named apart from an under-graded caller: "presented no recognized
+      // capability" is the arm a forged or absent token takes, and a gate that
+      // conflated the two would hide an attenuation failure behind a forgery.
+      await expect(requireControl(ENV, caller, 'index.observe')).rejects.toThrow(
+        "index.observe requires the control plane's ingest capability. "
+        + 'This caller presented no recognized capability.',
+      );
     }
   });
 
@@ -179,7 +192,10 @@ describe('capability attenuation', () => {
     // The authority is the deployment's secret, not the string's shape. A token
     // minted against another key is a well-formed value with no authority here.
     const foreign = await internalCaller({ CREDENTIAL_ENCRYPTION_KEY: 'a-different-secret-000000' });
-    await expect(requireControl(ENV, foreign, 'index.observe')).rejects.toThrow(ControlDeniedError);
+    await expect(requireControl(ENV, foreign, 'index.observe')).rejects.toThrow(
+      "index.observe requires the control plane's ingest capability. "
+      + 'This caller presented no recognized capability.',
+    );
   });
 });
 
@@ -380,17 +396,20 @@ describe('paging', () => {
 
   test('feedback and audit page by their own clocks', () => {
     const { sql, close } = freshStore();
+    // The audit ids are the store's, so the walk is asserted against the rows it
+    // wrote rather than against names this test chose.
+    const auditIds: string[] = [];
     for (let i = 0; i < 5; i += 1) {
       store.recordFeedback(sql, {
         id: `f${String(i)}`, createdAt: 1_000 + i, userId: 'u1', email: 'a@x',
         note: `note ${String(i)}`, route: '/workspace/x', workspace: 'x',
         objectKey: null, contentType: null, bytes: null, userAgent: null,
       });
-      store.appendAudit(sql, {
-        id: `a${String(i)}`, at: 1_000 + i, actorEmail: 'ops@kinu.run', actorUserId: 'u1',
+      auditIds.push(store.appendAudit(sql, {
+        actorEmail: 'ops@kinu.run', actorUserId: 'u1',
         operation: 'job_cancel', targetKind: 'job', target: `x/${String(i)}`,
         outcome: 'ok', detail: 'cancelled',
-      });
+      }, 1_000 + i).id);
     }
     const feedback = store.listFeedback(sql, { limit: 2 });
     expect(feedback.status).toBe('more');
@@ -398,7 +417,7 @@ describe('paging', () => {
 
     const audit = store.listAudit(sql, { limit: 2 });
     expect(audit.status).toBe('more');
-    expect(audit.items.map((row) => row.id)).toEqual(['a4', 'a3']);
+    expect(audit.items.map((row) => row.id)).toEqual([auditIds[4], auditIds[3]]);
     close();
   });
 });
@@ -449,20 +468,103 @@ describe('feedback rows', () => {
 });
 
 describe('the audit log', () => {
-  test('the store exposes no way to change or remove an entry', () => {
+  test('the store exposes no way to change or remove what an attempt recorded', () => {
     // Append-only stated as an API-surface fact rather than as a comment. The
-    // reachable set is what an operator's word against the log rests on.
+    // reachable set is what an operator's word against the log rests on. There
+    // are two writers now — one appends an attempt, one settles its outcome —
+    // and neither can delete a row or edit who did what to which workspace.
     const auditNames = Object.keys(store).filter((name) => /audit/i.test(name));
-    expect(auditNames.sort()).toEqual(['appendAudit', 'listAudit']);
+    expect(auditNames.sort())
+      .toEqual(['AUDIT_OUTCOMES', 'appendAudit', 'listAudit', 'listPendingAudit', 'settleAudit']);
+  });
+
+  test('the store chooses the row id and the clock, never the caller', () => {
+    // An append-only log whose caller picks the primary key is one whose caller
+    // can collide with a row already in it, so the same attempt appended twice
+    // is two rows rather than one overwrite. The clock is the caller's only
+    // through `now`, which is a parameter of the append and not a field of the
+    // draft — nothing an operator request carries can date a row.
+    const { sql, close } = freshStore();
+    const draft = {
+      actorEmail: 'ops@kinu.run', actorUserId: 'u1',
+      operation: 'jobs_clear', targetKind: 'workspace', target: `${'a'.repeat(32)}/alpha`,
+      outcome: 'ok', detail: 'cleared',
+    } as const;
+    const first = store.appendAudit(sql, draft, 1_000);
+    const second = store.appendAudit(sql, draft, 2_000);
+    expect(first.id).not.toBe(second.id);
+    expect([first.at, second.at]).toEqual([1_000, 2_000]);
+    expect(store.listAudit(sql).items.map((row) => row.id)).toEqual([second.id, first.id]);
+    close();
+  });
+
+  test('an intent is durable before its outcome is, and lists as pending', () => {
+    // The property the whole two-phase write exists for: the attempt is on the
+    // record before the mutation runs, so an action taken while the log could
+    // not be finished is findable afterwards instead of invisible.
+    const { sql, close } = freshStore();
+    const intent = store.appendAudit(sql, {
+      actorEmail: 'ops@kinu.run', actorUserId: 'u1',
+      operation: 'job_cancel', targetKind: 'job', target: `${'a'.repeat(32)}/alpha/j-7`,
+      outcome: 'pending', detail: 'in flight',
+    }, 3_000);
+    expect(intent.outcome).toBe('pending');
+    expect(intent.at).toBe(3_000);
+    expect(store.listPendingAudit(sql).map((row) => row.id)).toEqual([intent.id]);
+    expect(store.listAudit(sql).items[0]?.outcome).toBe('pending');
+    close();
+  });
+
+  test('a settlement fills the outcome and cannot touch what the attempt said', () => {
+    const { sql, close } = freshStore();
+    const intent = store.appendAudit(sql, {
+      actorEmail: 'ops@kinu.run', actorUserId: 'u1',
+      operation: 'job_cancel', targetKind: 'job', target: `${'a'.repeat(32)}/alpha/j-7`,
+      outcome: 'pending', detail: 'in flight',
+    }, 3_000);
+    const settled = store.settleAudit(
+      sql, { id: intent.id, outcome: 'ok', detail: 'cancelled j-7' },
+    );
+    expect(settled).toMatchObject({
+      id: intent.id, at: 3_000, actorEmail: 'ops@kinu.run', operation: 'job_cancel',
+      target: `${'a'.repeat(32)}/alpha/j-7`, outcome: 'ok', detail: 'cancelled j-7',
+    });
+    expect(store.listPendingAudit(sql)).toEqual([]);
+    close();
+  });
+
+  test('an already-settled row cannot be settled again', () => {
+    // A replayed or duplicated settlement must be a no-op, not a way to edit
+    // history. `null` says so rather than returning the row it did not write.
+    const { sql, close } = freshStore();
+    const intent = store.appendAudit(sql, {
+      actorEmail: 'ops@kinu.run', actorUserId: 'u1',
+      operation: 'jobs_clear', targetKind: 'workspace', target: `${'a'.repeat(32)}/alpha`,
+      outcome: 'pending', detail: 'in flight',
+    }, 3_000);
+    store.settleAudit(sql, { id: intent.id, outcome: 'denied', detail: 'nothing to clear' });
+    expect(store.settleAudit(sql, { id: intent.id, outcome: 'ok', detail: 'rewritten' }))
+      .toBe(null);
+    expect(store.listAudit(sql).items[0]).toMatchObject({
+      outcome: 'denied', detail: 'nothing to clear',
+    });
+    close();
+  });
+
+  test('settling a row that is not there is refused rather than invented', () => {
+    const { sql, close } = freshStore();
+    expect(store.settleAudit(sql, { id: 'ghost', outcome: 'ok', detail: 'x' })).toBe(null);
+    expect(store.listAudit(sql).items).toEqual([]);
+    close();
   });
 
   test('a refusal is recorded as such, and read back as such', () => {
     const { sql, close } = freshStore();
     store.appendAudit(sql, {
-      at: 2_000, actorEmail: 'ops@kinu.run', actorUserId: 'u1',
+      actorEmail: 'ops@kinu.run', actorUserId: 'u1',
       operation: 'workspace_remove', targetKind: 'workspace', target: 'alpha',
       outcome: 'denied', detail: 'the typed name did not match',
-    });
+    }, 2_000);
     const row = store.listAudit(sql).items[0];
     expect(row?.outcome).toBe('denied');
     expect(row?.detail).toBe('the typed name did not match');
@@ -484,10 +586,10 @@ describe('the audit log', () => {
     const { sql, close } = freshStore();
     expect(store.overview(sql).lastAdminActionAt).toBe(null);
     store.appendAudit(sql, {
-      at: 7_000, actorEmail: 'ops@kinu.run', actorUserId: 'u1',
+      actorEmail: 'ops@kinu.run', actorUserId: 'u1',
       operation: 'jobs_clear', targetKind: 'workspace', target: 'alpha',
       outcome: 'ok', detail: 'cleared',
-    });
+    }, 7_000);
     const summary = store.overview(sql);
     expect(summary.auditEntries).toBe(1);
     expect(summary.lastAdminActionAt).toBe(7_000);
@@ -513,17 +615,19 @@ describe('the audit log', () => {
 });
 
 describe('the admin action surface', () => {
+  const OWNER = 'b'.repeat(32);
+
   test('every action names a snake_case operation the audit log can group on', () => {
     // A dot in the operation would split one operation across two group keys in
     // the analytics sink, which groups on the tail after the first dot.
     const actions = [
-      { action: 'job.cancel', workspace: 'alpha', jobId: 'j1' },
-      { action: 'job.retry', workspace: 'alpha', jobId: 'j1' },
-      { action: 'job.dismiss', workspace: 'alpha', jobId: 'j1' },
-      { action: 'jobs.clear', workspace: 'alpha' },
-      { action: 'approvals.decide', workspace: 'alpha', ids: ['x'], decision: 'approved' },
-      { action: 'shell_grants.revoke', workspace: 'alpha' },
-      { action: 'workspace.remove', workspace: 'alpha', userId: 'b'.repeat(32), confirm: 'alpha' },
+      { action: 'job.cancel', userId: OWNER, workspace: 'alpha', jobId: 'j1' },
+      { action: 'job.retry', userId: OWNER, workspace: 'alpha', jobId: 'j1' },
+      { action: 'job.dismiss', userId: OWNER, workspace: 'alpha', jobId: 'j1' },
+      { action: 'jobs.clear', userId: OWNER, workspace: 'alpha' },
+      { action: 'approvals.decide', userId: OWNER, workspace: 'alpha', ids: ['x'], decision: 'approved' },
+      { action: 'shell_grants.revoke', userId: OWNER, workspace: 'alpha' },
+      { action: 'workspace.remove', userId: OWNER, workspace: 'alpha', confirm: 'alpha' },
     ] as const;
 
     for (const raw of actions) {
@@ -531,8 +635,26 @@ describe('the admin action surface', () => {
       const described = describeAction(parsed);
       expect(described.operation).not.toContain('.');
       expect(described.operation).toMatch(/^[a-z_]+$/);
-      expect(described.target.length).toBeGreaterThan(0);
       expect(['job', 'approval', 'workspace']).toContain(described.targetKind);
+      // The target names the ACCOUNT as well as the workspace. A workspace name
+      // is unique inside one UserDO and nowhere else, so an audit row carrying
+      // only the name cannot say whose data was touched.
+      expect(described.target.startsWith(`${OWNER}/alpha`)).toBe(true);
+    }
+  });
+
+  test('an action that does not name an account does not parse', () => {
+    // The defect this closes: a name-only action resolves the GLOBAL
+    // OrchestratorAgent for whichever account registered that string first.
+    for (const raw of [
+      { action: 'job.cancel', workspace: 'alpha', jobId: 'j1' },
+      { action: 'jobs.clear', workspace: 'alpha' },
+      { action: 'approvals.decide', workspace: 'alpha', ids: ['x'], decision: 'approved' },
+      { action: 'shell_grants.revoke', workspace: 'alpha' },
+      { action: 'workspace.remove', workspace: 'alpha', confirm: 'alpha' },
+      { action: 'job.cancel', userId: 'not-a-user-id', workspace: 'alpha', jobId: 'j1' },
+    ]) {
+      expect(v.safeParse(ControlActionSchema, raw).success).toBe(false);
     }
   });
 
@@ -540,12 +662,12 @@ describe('the admin action surface', () => {
     // The reach of the whole surface. A generic method bridge would have made the
     // orchestrator's ~90 callables reachable under one authorization.
     for (const raw of [
-      { action: 'setModel', workspace: 'alpha', model: 'anything' },
-      { action: 'destroyAgent', workspace: 'alpha' },
-      { action: 'job.cancel', workspace: 'alpha' },
-      { action: 'workspace.remove', workspace: 'alpha', userId: 'not-a-user-id', confirm: 'alpha' },
-      { action: 'approvals.decide', workspace: 'alpha', ids: [], decision: 'approved' },
-      { action: 'approvals.decide', workspace: 'alpha', ids: ['x'], decision: 'maybe' },
+      { action: 'setModel', userId: OWNER, workspace: 'alpha', model: 'anything' },
+      { action: 'destroyAgent', userId: OWNER, workspace: 'alpha' },
+      { action: 'job.cancel', userId: OWNER, workspace: 'alpha' },
+      { action: 'workspace.remove', userId: 'not-a-user-id', workspace: 'alpha', confirm: 'alpha' },
+      { action: 'approvals.decide', userId: OWNER, workspace: 'alpha', ids: [], decision: 'approved' },
+      { action: 'approvals.decide', userId: OWNER, workspace: 'alpha', ids: ['x'], decision: 'maybe' },
     ]) {
       expect(v.safeParse(ControlActionSchema, raw).success).toBe(false);
     }
@@ -556,7 +678,7 @@ describe('the admin action surface', () => {
     // that drifted from it would refuse a legal answer or forward an illegal one.
     for (const decision of ['approved', 'denied', 'always']) {
       const parsed = v.safeParse(ControlActionSchema, {
-        action: 'approvals.decide', workspace: 'alpha', ids: ['x'], decision,
+        action: 'approvals.decide', userId: OWNER, workspace: 'alpha', ids: ['x'], decision,
       });
       expect(parsed.success).toBe(true);
     }

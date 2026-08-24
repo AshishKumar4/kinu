@@ -127,18 +127,6 @@ const CODEMODE_ONLY_REACH: readonly CapabilityReach[] = Object.freeze(
   }),
 );
 
-/** Capability keys reachable ONLY inside the sandbox.
- *
- *  A backend that wires their providers must include these in the surface it
- *  hands the turn resolver, because a role's `allowedTools` is intersected with
- *  that surface: a key absent from it can never be named, so every narrowed
- *  role would silently lose the capability wholesale. Add only the ones actually
- *  wired — {@link codemodeCapabilitiesFor} does that from the provider list, so
- *  nobody has to keep a second list in step. */
-export const CODEMODE_ONLY_CAPABILITIES: readonly string[] = Object.freeze(
-  CODEMODE_ONLY_REACH.map((reach) => reach.name),
-);
-
 /** Which capabilities reach one codemode namespace. Plural because two do:
  *  `run` and `file` both reach `workspace`, so that namespace survives while
  *  EITHER of them does. Derived from the reach table at load, so a namespace

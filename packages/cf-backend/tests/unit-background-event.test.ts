@@ -10,8 +10,8 @@ import {
 } from '@kinu.run/core';
 import type { JsonValue, KinuEvent } from '@kinu.run/core';
 import {
-  applySignalCard, classifyProgrammaticTurn, eventVariantLabel, messageSignalId,
-  parseDrainedEvents, parseSignalCardEvent, type SignalCard,
+  applySignalCard, classifyProgrammaticTurn, eventSourceLabel, eventVariantLabel,
+  messageSignalId, parseDrainedEvents, parseSignalCardEvent, type SignalCard,
 } from '../src/components/background-event';
 
 describe('programmatic turn provenance', () => {
@@ -208,7 +208,8 @@ describe('drained event parsing', () => {
 
 describe('event variant labels', () => {
   test('known variants read as prose, unknown ones are de-snaked not relabelled', () => {
-    expect(eventVariantLabel('subordinate_report')).toBe('Subordinate report');
+    expect(eventVariantLabel('subordinate_report')).toBe('Agent report');
+    expect(eventSourceLabel('subordinate (surface-auditor)')).toBe('Agent (surface-auditor)');
     expect(eventVariantLabel('timer')).toBe('Scheduled trigger');
     expect(eventVariantLabel('some_future_variant')).toBe('some future variant');
   });

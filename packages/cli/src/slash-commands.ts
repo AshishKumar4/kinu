@@ -7,7 +7,6 @@
 
 import { ADVISOR_SEVERITIES, isAdvisorSeverity, isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type BranchStatusEvent, type EvolutionConfigView, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu.run/core';
 import type { AgentChangelogView, AgentClient, AgentClientStatus, AgentSearchNode } from './agent-client';
-import { renameLocalAgent } from './agent-create';
 import { loadActiveProfile, updateDefaultTier } from './profiles';
 
 export interface SlashCommandInfo {
@@ -15,7 +14,7 @@ export interface SlashCommandInfo {
   description: string;
   usage?: string;
   /** Only offered when the client exposes this capability surface. */
-  requires?: 'localControls' | 'consents' | 'checkpoints';
+  requires?: 'localControls' | 'consents' | 'checkpoints' | 'rename';
 }
 
 export const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
@@ -25,7 +24,7 @@ export const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
   { name: '/model', description: 'Open the account default-tier model picker or set it', usage: '/model [spec]' },
   { name: '/effort', description: 'Show or set default-tier reasoning effort', usage: '/effort [low|medium|high]' },
   { name: '/role', description: 'Show or select this agent role', usage: '/role [id]' },
-  { name: '/rename', description: 'Rename this agent; a name you choose is never auto-replaced', usage: '/rename <name>', requires: 'localControls' },
+  { name: '/rename', description: 'Rename this agent; a name you choose is never auto-replaced', usage: '/rename <name>', requires: 'rename' },
   { name: '/settings', description: 'Open interactive settings' },
   { name: '/models', description: 'List configured model providers', requires: 'localControls' },
   { name: '/memory', description: 'Show memory' },
@@ -45,12 +44,19 @@ export const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
   { name: '/exit', description: 'Exit chat' },
 ];
 
-export function commandsForClient(client: Pick<AgentClient, 'localControls' | 'consents' | 'checkpoints'>): SlashCommandInfo[] {
-  return SLASH_COMMANDS.filter((command) =>
-    !command.requires || client[command.requires] !== null);
+export function commandsForClient(
+  client: Pick<AgentClient, 'localControls' | 'consents' | 'checkpoints' | 'rename'>,
+): SlashCommandInfo[] {
+  return SLASH_COMMANDS.filter((command) => {
+    if (!command.requires) return true;
+    const capability = client[command.requires];
+    return capability !== null && capability !== undefined;
+  });
 }
 
-export function commandHelp(client: Pick<AgentClient, 'localControls' | 'consents' | 'checkpoints'>): string {
+export function commandHelp(
+  client: Pick<AgentClient, 'localControls' | 'consents' | 'checkpoints' | 'rename'>,
+): string {
   const lines = ['Commands'];
   for (const command of commandsForClient(client)) {
     const usage = command.usage ?? command.name;
@@ -140,11 +146,9 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
     case '/cancel':
       return { kind: 'cancel' };
     case '/rename': {
-      if (client.mode !== 'local') {
-        return { kind: 'text', text: 'Cloud workspaces are renamed from the web sidebar.' };
-      }
+      if (!client.rename) return { kind: 'text', text: 'This agent cannot be renamed from this client.' };
       if (!arg) return { kind: 'text', text: 'Usage: /rename <name>' };
-      const renamed = renameLocalAgent(client.agentName, arg);
+      const renamed = await client.rename(arg);
       return { kind: 'text', text: `Renamed to ${renamed.displayName}.` };
     }
     case '/help':

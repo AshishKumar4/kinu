@@ -156,50 +156,75 @@ describe('kinu daemon stop', () => {
 });
 
 describe('a daemon-hosted agent resolves the same profile authority as an interactive one', () => {
-  /** What the parity scenario prints: whether the open path supplied an
-   *  authority at all, and the default-tier model each read resolved. */
-  const HostedAuthorityParity = v.object({
-    supplied: v.string(),
-    hostedFirst: v.object({ model: v.string(), digest: v.string() }),
-    interactiveFirst: v.object({ model: v.string(), digest: v.string() }),
-    hostedSecond: v.object({ model: v.string() }),
+  /** What the scenario prints: every line the commands wrote, the authority
+   *  reads the daemon-driven turn performed, and what the interactive reader
+   *  resolves out of the same store. */
+  const DaemonTickRun = v.object({
+    printed: v.array(v.string()),
+    authorityReads: v.array(v.object({ source: v.string() })),
+    interactive: v.object({ model: v.string(), version: v.number() }),
   });
 
   /**
-   * Drives the real `openDaemonAgent` in a subprocess with its own
+   * One pass of the REGISTERED daemon surface — `kinu daemon tick <agent>` —
+   * over an agent `kinu create` really made, in a subprocess with its own
    * KINU_HOME: `config.ts` binds that at import, so a static import here
    * would bind the developer's own home instead of the scenario's.
+   *
+   * The trigger is what gives the pass work. An idle tick opens the agent and
+   * converts nothing, so it resolves no profile and would prove nothing about
+   * the authority; a due timer makes the daemon drive a real turn, which is
+   * the moment a hosted agent reads its catalog.
    */
-  function openHostedAgent(
-    home: string,
-    project: string,
-    body: string,
-  ): v.InferOutput<typeof HostedAuthorityParity> {
+  function tickWithDueTrigger(home: string, project: string): v.InferOutput<typeof DaemonTickRun> {
     const script = `
-      const { mkdirSync } = await import('node:fs');
-      const { join } = await import('node:path');
-      const { Database } = await import('bun:sqlite');
-      const { createWorkspace } = await import('@kinu.run/core/identity');
-      const { initWorkspaceSchema } = await import('@kinu.run/core');
-      const { makeWorkspaceSchemaSql } = await import('./packages/cli-backend/src/index.ts');
-      const { resolveLLMConfig } = await import('./packages/cli/src/config.ts');
-      const { openDaemonAgent } = await import('./packages/cli/src/commands/daemon.ts');
+      const { createRecordingLogger, setDiagnosticsSink } = await import('@kinu.run/core/obs');
+      const { createCliAgent } = await import('./packages/cli/src/agent-create.ts');
+      const { triggersCommand } = await import('./packages/cli/src/commands/control.ts');
+      const { daemonCommand } = await import('./packages/cli/src/commands/daemon.ts');
       const { createProfileAuthorityReader, updateDefaultTier } =
         await import('./packages/cli/src/profiles.ts');
 
-      const dir = join(process.env.KINU_HOME, 'daemonbot');
-      mkdirSync(dir, { recursive: true });
-      const dbPath = join(dir, 'agent.db');
-      {
-        const seed = new Database(dbPath);
-        seed.exec('PRAGMA journal_mode = WAL');
-        await createWorkspace(seed, { name: 'daemonbot', purpose: 'parity', llm: resolveLLMConfig() });
-        initWorkspaceSchema(makeWorkspaceSchemaSql(seed));
-        seed.close();
+      const printed = [];
+      const realLog = console.log;
+      console.log = (...args) => { printed.push(args.map(String).join(' ')); };
+      let payload;
+      try {
+        await createCliAgent({
+          name: 'daemonbot',
+          mode: 'local',
+          purpose: 'parity',
+          cwd: process.env.KINU_PROJECT,
+          baseUrl: process.env.KINU_BASE_URL,
+          apiKey: process.env.KINU_AUTH,
+          model: process.env.KINU_MODEL,
+        });
+        // The catalog the daemon must resolve: what \`/model\` writes.
+        await updateDefaultTier({ model: 'daemon-catalog-model' });
+        // \`kinu triggers daemonbot at <now>\` — already due, so the next pass
+        // converts it into a turn.
+        await triggersCommand('daemonbot', 'at', String(Date.now()), {});
+
+        const recorder = createRecordingLogger();
+        setDiagnosticsSink(recorder);
+        await daemonCommand('tick', 'daemonbot');
+        const authorityReads = recorder.emitted
+          .filter((line) => line.event === 'profile.authority_read')
+          .map((line) => ({ source: line.fields.source }));
+
+        const interactive = await createProfileAuthorityReader()();
+        payload = {
+          printed,
+          authorityReads,
+          interactive: {
+            model: interactive.catalog.tiers.default.model,
+            version: interactive.version,
+          },
+        };
+      } finally {
+        console.log = realLog;
       }
-      const ref = { name: 'daemonbot', cwd: process.env.KINU_PROJECT, workspaceId: 'parity' };
-      const hosted = await openDaemonAgent(ref, new Database(dbPath), dbPath);
-      ${body}
+      console.log(JSON.stringify(payload));
     `;
     const proc = Bun.spawnSync({
       cmd: [process.execPath, '-e', script],
@@ -210,44 +235,40 @@ describe('a daemon-hosted agent resolves the same profile authority as an intera
         ...process.env,
         KINU_HOME: home,
         KINU_PROJECT: project,
-        // An endpoint nothing connects to: opening a workspace and building a
-        // resolver must not need the network, and this proves it did not.
+        // No resident daemon: this scenario drives the foreground pass itself,
+        // and a child daemon would race it for the driver lease.
+        KINU_SKIP_DAEMON: '1',
+        // An endpoint nothing connects to: creating a workspace, opening it and
+        // resolving its catalog must not need the network, and this proves they
+        // did not. The turn's own model call fails against it, which is fine —
+        // the authority is resolved before the first token either way.
         KINU_BASE_URL: 'http://127.0.0.1:1/v1',
         KINU_AUTH: 'Bearer offline',
         KINU_MODEL: '@cf/test/model',
       },
     });
     if (proc.exitCode !== 0) {
-      throw new Error(`hosted-agent scenario failed (${proc.exitCode}): ${proc.stderr.toString()}`);
+      throw new Error(`daemon tick scenario failed (${proc.exitCode}): ${proc.stderr.toString()}`);
     }
-    return v.parse(HostedAuthorityParity, JSON.parse(proc.stdout.toString()));
+    return v.parse(DaemonTickRun, JSON.parse(proc.stdout.toString()));
   }
 
-  test('the open path supplies the shared reader, and it stays live after a tier edit', () => {
-    const parsed = openHostedAgent(makeHome(), newProjectDir(), `
-      await updateDefaultTier({ model: 'daemon-first' });
-      const hostedFirst = await hosted.profileAuthority?.();
-      const interactiveFirst = await createProfileAuthorityReader()();
-      await updateDefaultTier({ model: 'daemon-second' });
-      // The SAME closure the open call returned, re-invoked the way a second
-      // scheduled turn invokes it.
-      const hostedSecond = await hosted.profileAuthority?.();
-      console.log(JSON.stringify({
-        supplied: typeof hosted.profileAuthority,
-        hostedFirst: { model: hostedFirst?.catalog.tiers.default.model, digest: hostedFirst?.digest },
-        interactiveFirst: { model: interactiveFirst?.catalog.tiers.default.model, digest: interactiveFirst?.digest },
-        hostedSecond: { model: hostedSecond?.catalog.tiers.default.model },
-      }));
-    `);
-    // The daemon hands its hosted agent an authority at all — without one a
-    // scheduled turn resolves from the workspace bootstrap while an
-    // interactive turn of the same agent resolves from the real catalog.
-    expect(parsed.supplied).toBe('function');
-    // And it is the same authority: identical catalog, byte for byte.
-    expect(parsed.hostedFirst).toEqual(parsed.interactiveFirst);
-    expect(parsed.hostedFirst.model).toBe('daemon-first');
-    // Re-invoking it after an edit resolves the edit, so a long-lived daemon
-    // does not pin an agent to the catalog it booted with.
-    expect(parsed.hostedSecond.model).toBe('daemon-second');
-  });
+  test('the daemon-driven turn resolves the CLI profile store, not the workspace bootstrap', () => {
+    const run = tickWithDueTrigger(makeHome(), newProjectDir());
+
+    // The pass ran: the daemon opened a real agent over a real bun:sqlite
+    // database at a real path, through the host's own `open` seam.
+    expect(run.printed.some((line) => line.includes('ticked daemonbot'))).toBe(true);
+
+    // And the turn it drove resolved its catalog through the shared reader.
+    // Only that reader reports this, so an open path that stopped supplying
+    // one leaves the list empty: the session would silently fall back to the
+    // workspace's own bootstrap envelope, and a role the account knows about
+    // would run interactively and fail on a schedule.
+    expect(run.authorityReads).toEqual([{ source: 'local' }]);
+
+    // The store it read is the one holding this machine's catalog: the model
+    // the tier edit wrote, at the version that edit created.
+    expect(run.interactive).toEqual({ model: 'daemon-catalog-model', version: 1 });
+  }, 30_000);
 });

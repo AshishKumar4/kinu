@@ -1,8 +1,6 @@
 /**
  * The facet inherited-context digest — what a spawned head (or a steer
- * branch) sees of its parent conversation. Shared by both backends; the
- * Alternate-Takes capture lives with the takes store (mcts/takes.ts
- * recordGroundedHeadsTake).
+ * branch) sees of its parent conversation. Shared by both backends.
  *
  * The per-message window is applied HERE, at read time, as the digest is
  * built — not later at render time. A root materialises up to
@@ -16,8 +14,6 @@
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 import type { SerializedMessage } from '../heads/types';
-import type { SplitPhaseEvent } from '../heads/controller';
-import type { RunEventInput } from '../events/types';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 
 /** The parent-conversation cap handed to each spawned head — bounds head LLM
@@ -45,34 +41,6 @@ export function serializeContentForHeads(content: ModelMessage['content']): stri
         : part));
   }
   return JSON.stringify(content);
-}
-
-/**
- * A split's lifecycle as one durable run-event row.
- *
- * Both backends fan the same phase event to two places — the live broadcast
- * their frontends render the branch timeline from, and the run-event ledger
- * that outlives the process. Which fields a row carries is the thing worth
- * having once: the cost summary gained `headsWithFindings` for a reason, and
- * a backend that transcribed the row itself simply would not have it.
- */
-export function headPhaseRunEvent(event: SplitPhaseEvent): RunEventInput {
-  if (event.kind === 'split') {
-    return { type: 'head_split', rootId: event.rootId, headIds: [...event.headIds], rationale: event.rationale };
-  }
-  const merge: Extract<RunEventInput, { type: 'head_merge' }> = {
-    type: 'head_merge',
-    rootId: event.rootId,
-    headCount: event.cost.headCount,
-    headsWithFindings: event.cost.headsWithFindings,
-    mergedNarrative: event.mergedNarrative,
-    fileChanges: [...event.fileChanges],
-    blindSpots: [...event.blindSpots],
-  };
-  // Absent when no head in the split reported usage — an unmeasured split is
-  // not a free one.
-  if (event.cost.totalTokens !== undefined) merge.totalTokens = event.cost.totalTokens;
-  return merge;
 }
 
 /** Stored conversation rows as inherited context (the cf backend's source: it

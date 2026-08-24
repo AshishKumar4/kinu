@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@cloudflare/kumo";
 import { FilledButton } from "./ui/FilledButton";
@@ -8,7 +8,7 @@ import { Modal } from "./ui/Modal";
 import { renderThrownChain } from "@kinu.run/core/obs";
 
 /** What an agent with no name yet is called everywhere one renders. */
-export const NEW_AGENT_TITLE = "New agent";
+const NEW_AGENT_TITLE = "New agent";
 
 /** A roster entry's shown name. Blank means created-but-untitled: the
  *  first-message titler (or the owner's rename) fills it in, and until then
@@ -17,19 +17,15 @@ export function agentTitle(displayName: string): string {
   return displayName.trim() === "" ? NEW_AGENT_TITLE : displayName;
 }
 
-interface CreatedAgent {
-  name: string;
-  displayName: string;
-}
 
 interface SubordinateTabsProps {
   workspace: string;
   subordinates: readonly SubordinateRosterEntry[];
   activeName?: string;
-  /** One-click create — identity only, no form. The agent arrives idle with a
-   *  blank name; its inherited mission is internal and never shown. The strip
-   *  opens the new conversation itself. */
-  onCreate(): Promise<CreatedAgent>;
+  /** One-click create — identity only, no form. WorkspacePage owns the action
+   *  because the sidebar can invoke it while this strip is not mounted. */
+  onCreate(): Promise<void>;
+  creating: boolean;
   onDismiss(name: string): Promise<void>;
   /** Controls for the conversation this strip has open, pinned to its right
    *  edge — the chat column has no other chrome row to hang them on. */
@@ -48,42 +44,15 @@ function StatusMark({ subordinate }: { subordinate: SubordinateRosterEntry }) {
   );
 }
 
-export function SubordinateTabs({ workspace, subordinates, activeName, onCreate, onDismiss, trailing }: SubordinateTabsProps) {
+export function SubordinateTabs({
+  workspace, subordinates, activeName, onCreate, creating, onDismiss, trailing,
+}: SubordinateTabsProps) {
   const navigate = useNavigate();
-  const [creating, setCreating] = useState(false);
-  const [createError, setCreateError] = useState<string | null>(null);
-  // Re-entrancy fence for the two doors into one flow (the strip's + and the
-  // sidebar's row): state renders the spinner, the ref refuses the double.
-  const creatingRef = useRef(false);
   const [dismissTarget, setDismissTarget] = useState<SubordinateRosterEntry | null>(null);
   const [dismissing, setDismissing] = useState(false);
   const [dismissError, setDismissError] = useState<string | null>(null);
 
   const mainPath = `/workspace/${workspace}`;
-  const createAndOpen = useCallback(async () => {
-    if (creatingRef.current) return;
-    creatingRef.current = true;
-    setCreating(true);
-    setCreateError(null);
-    try {
-      const created = await onCreate();
-      navigate(`${mainPath}/agents/${created.name}`);
-    } catch (cause) {
-      setCreateError(renderThrownChain({ cause: cause }));
-    } finally {
-      creatingRef.current = false;
-      setCreating(false);
-    }
-  }, [mainPath, navigate, onCreate]);
-
-  // The sidebar's "+ New agent" row is the second door into this same flow —
-  // it has no socket of its own, so it asks the mounted strip over a window
-  // event rather than duplicating the create+open sequence.
-  useEffect(() => {
-    const h = () => { void createAndOpen(); };
-    window.addEventListener("kinu:new-agent", h);
-    return () => window.removeEventListener("kinu:new-agent", h);
-  }, [createAndOpen]);
 
   return (
     <>
@@ -133,7 +102,7 @@ export function SubordinateTabs({ workspace, subordinates, activeName, onCreate,
           })}
           <button
             type="button"
-            onClick={() => { void createAndOpen(); }}
+            onClick={() => { void onCreate(); }}
             disabled={creating}
             className="p-btn-ghost my-1 ml-1 flex size-7 shrink-0 self-center items-center justify-center disabled:opacity-50"
             title={NEW_AGENT_TITLE}
@@ -141,17 +110,6 @@ export function SubordinateTabs({ workspace, subordinates, activeName, onCreate,
           >
             <PlusIcon size={14} className={creating ? "animate-pulse" : undefined} />
           </button>
-          {createError && (
-            <button
-              type="button"
-              role="alert"
-              onClick={() => setCreateError(null)}
-              className="my-1 ml-1 max-w-64 shrink-0 self-center truncate rounded-md px-2 py-1 text-[11px] p-notice-danger"
-              title={`Couldn't create an agent: ${createError} — click to dismiss`}
-            >
-              Couldn't create an agent
-            </button>
-          )}
         </nav>
         {trailing && (
           <div className="flex shrink-0 items-center gap-2 border-b p-border pl-2 pr-3">{trailing}</div>

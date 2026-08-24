@@ -43,9 +43,7 @@
  * written through `analyticsDigest`.
  */
 import type { ReservedLogField } from '@kinu.run/core/obs';
-import {
-  MAX_BLOBS, MAX_BLOB_BYTES, MAX_DOUBLES, MAX_INDEX_BYTES,
-} from './limits';
+import { assertWithinPlatformLimits } from './limits';
 import { assertPublishableNames } from './privacy';
 
 /** The Env members that hold an Analytics Engine dataset. Named as a union so a
@@ -75,6 +73,10 @@ export interface IndexSlot {
 
 export interface AnalyticsSchema {
   readonly binding: AnalyticsBindingName;
+  /** The PRODUCTION dataset name, and the base every other deployment's name is
+   *  derived from — see `analyticsDataset`. Writers never read it: they write
+   *  through `binding`, which wrangler already points at the right dataset for
+   *  the environment being deployed. Only the SQL read path names a dataset. */
   readonly dataset: string;
   readonly index: IndexSlot;
   /** Slot order IS `blob1..blobN`. */
@@ -121,50 +123,25 @@ type SlotName<S extends AnalyticsSchema> = BlobName<S> | DoubleName<S> | IndexNa
  *
  * The runtime assertions duplicate what the type system already refuses, and
  * deliberately: the type check is erased before anything runs, so a test cannot
- * prove the ban fires. These can be, and are.
+ * prove the ban fires. `limits.ts` and `privacy.ts` hold them, beside the facts
+ * each enforces, and both are reachable by a test for that reason.
  */
-export function defineSchema<const S extends AnalyticsSchema>(
+function defineSchema<const S extends AnalyticsSchema>(
   schema: S
     & (Extract<SlotName<S>, ReservedLogField> extends never ? unknown : ReservedSlotIsNotWritable),
 ): S {
   const pinned: S = schema;
-  if (pinned.blobs.length > MAX_BLOBS) {
-    throw new RangeError(
-      `${pinned.dataset}: ${pinned.blobs.length} blob slots exceeds the platform's ${MAX_BLOBS}`,
-    );
-  }
-  if (pinned.doubles.length > MAX_DOUBLES) {
-    throw new RangeError(
-      `${pinned.dataset}: ${pinned.doubles.length} double slots exceeds the platform's ${MAX_DOUBLES}`,
-    );
-  }
-  if (pinned.index.maxBytes > MAX_INDEX_BYTES) {
-    throw new RangeError(
-      `${pinned.dataset}: index "${pinned.index.name}" declares ${pinned.index.maxBytes} bytes, `
-      + `over the platform's ${MAX_INDEX_BYTES}`,
-    );
-  }
-  let budget = 0;
-  for (const slot of pinned.blobs) budget += slot.maxBytes;
-  if (budget > MAX_BLOB_BYTES) {
-    throw new RangeError(
-      `${pinned.dataset}: blob slots declare ${budget} bytes in total, `
-      + `over the platform's ${MAX_BLOB_BYTES} per data point`,
-    );
-  }
-  const names = [
+  assertWithinPlatformLimits({
+    dataset: pinned.dataset,
+    blobBytes: pinned.blobs.map((slot) => slot.maxBytes),
+    doubles: pinned.doubles.length,
+    indexes: [pinned.index],
+  });
+  assertPublishableNames(pinned.dataset, [
     pinned.index.name,
     ...pinned.blobs.map((slot) => slot.name),
     ...pinned.doubles.map((slot) => slot.name),
-  ];
-  const seen: Record<string, true> = {};
-  for (const name of names) {
-    if (seen[name] === true) {
-      throw new RangeError(`${pinned.dataset}: slot "${name}" is declared twice`);
-    }
-    seen[name] = true;
-  }
-  assertPublishableNames(pinned.dataset, names);
+  ]);
   return pinned;
 }
 
@@ -187,6 +164,36 @@ export function doubleColumn<S extends AnalyticsSchema>(schema: S, name: DoubleN
  *  ever admits a second index. */
 export function indexColumn(_schema: AnalyticsSchema): string {
   return 'index1';
+}
+
+/**
+ * A dataset-name suffix: empty for production, `_staging` and its like
+ * elsewhere. Bounded and lowercase because the value is interpolated into SQL
+ * and comes from a deployment var — narrow input, but a var is still a string
+ * somebody edits.
+ */
+const DATASET_SUFFIX = /^(?:|_[a-z][a-z0-9_]{0,23})$/;
+
+/**
+ * The dataset a READER must name for this deployment.
+ *
+ * ONE PLACE, because the name is declared twice and nothing held the two equal:
+ * `wrangler.jsonc` binds `AGENT_METRICS` to `kinu_agent_metrics_staging` under
+ * `env.staging` while the query builder spelled the production name, and staging
+ * shares production's account — so staging wrote rows no reader named and its
+ * admin panels would have presented production's numbers as its own.
+ * `scripts/analytics-datasets.test.ts` asserts, per environment, that every
+ * wrangler binding's dataset equals the schema's base plus that suffix.
+ *
+ * A malformed suffix THROWS rather than falling back to '': falling back is
+ * exactly the defect — reading production from staging — and the value is our
+ * own deployment config, held correct by the gate.
+ */
+export function analyticsDataset(schema: AnalyticsSchema, suffix: string): string {
+  if (!DATASET_SUFFIX.test(suffix)) {
+    throw new RangeError(`"${suffix}" is not an analytics dataset suffix`);
+  }
+  return schema.dataset + suffix;
 }
 
 /**
@@ -222,6 +229,12 @@ export const AGENT_METRICS_SCHEMA = defineSchema({
     // row. One row never carries both.
     { name: 'tool', maxBytes: 64 },
     { name: 'source', maxBytes: 48 },
+    // WHY a refusal was refused, as one closed word. `code` names the CLASS of
+    // failure from core's nine-member vocabulary; a denial's reason is the arm
+    // that decided it, and `tier_too_low` versus `unrecognized_workspace` imply
+    // opposite responses while both are `denied`. APPENDED rather than inserted:
+    // slot order IS the wire format, so a new slot may only go last.
+    { name: 'reason', maxBytes: 32 },
   ],
   doubles: [
     // Always 1. Present so `SUM(_sample_interval * count)` reads as a weighted
@@ -290,6 +303,13 @@ export const FEEDBACK_MARKERS_SCHEMA = defineSchema({
     { name: 'screenshotBytes' },
     { name: 'noteLength' },
     { name: 'annotated' },
+    // 1 when the submission CARRIED a screenshot. Presence and size are two
+    // facts, and the marker held only one of them: a refusal decided before the
+    // bytes were measured wrote 0 bytes, which is indistinguishable from a
+    // note-only report — so the screenshot-refusal population, the one these
+    // columns exist to describe, counted itself as having no screenshots.
+    // APPENDED, because slot order is the wire format.
+    { name: 'screenshot' },
   ],
 });
 
@@ -325,10 +345,15 @@ export const CONTROL_PLANE_OPS_SCHEMA = defineSchema({
   ],
 });
 
-/** Every dataset, so a gate can assert over all of them rather than over the
- *  ones it happened to import. */
+/**
+ * Every dataset, keyed by the binding that carries it. `writer.ts` builds the
+ * one plane from this list, so a dataset added here is wired — and a binding
+ * wrangler declares that no schema claims fails the same equality from the other
+ * side (`scripts/analytics-datasets.test.ts`).
+ */
 export const ANALYTICS_SCHEMAS = [
   AGENT_METRICS_SCHEMA,
   FEEDBACK_MARKERS_SCHEMA,
   CONTROL_PLANE_OPS_SCHEMA,
 ] as const;
+

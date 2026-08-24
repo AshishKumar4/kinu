@@ -57,11 +57,11 @@ import { withAppSecurityHeaders } from "./lib/security-headers";
 import { parseCliAgentConnectTicketUserId } from "./user/user-do";
 import { ownerCaller } from "./user/workspace-capability";
 import { CLI_SCOPES_HEADER } from "./cli/rpc-gate";
-import { claimOwnedWorkspace } from "./user/workspace-access";
+import { claimOwnedWorkspace } from "./user/workspace-ownership";
 import { err } from "./lib/http";
 import { handleFeedbackRequest } from "./feedback/routes";
 import { handleControlRequest } from "./control-plane/routes";
-import { observeIdentity } from "./control-plane/index-feed";
+import { observeIdentity, observeWorkspaceUse } from "./control-plane/index-feed";
 import { installAnalyticsDiagnostics } from "./analytics/install";
 
 /** Public webhook delivery endpoint match. `/api/workspaces/<name>/webhook/<id>` —
@@ -474,16 +474,15 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
   const crossSite = crossSiteRejection(request);
   if (crossSite) return crossSite;
 
-  // The control-plane index learns who exists from the request path, retained so
-  // it never delays a response and memoised per isolate so it is not a Durable
-  // Object round trip per request. Every row it writes is a derived fact whose
-  // source of truth is a UserDO, which is why a dropped observation costs a
-  // briefly stale operator list and nothing else. Placed after the CSRF gate so
-  // a cross-site request never feeds it.
-  observeIdentity(env, identity, {
-    workspace: extractAgentName(url.pathname),
-    retain: ctx,
-  });
+  // The control-plane index learns WHO exists here, retained so it never delays
+  // a response and memoised per isolate so it is not a Durable Object round trip
+  // per request. Every row it writes is a derived fact whose source of truth is a
+  // UserDO, which is why a dropped observation costs a briefly stale operator
+  // list and nothing else. Placed after the CSRF gate so a cross-site request
+  // never feeds it. What it deliberately does NOT do here is index the workspace
+  // the path names: at this point that name is a string the caller chose, and
+  // the ownership gate has not run. See step 10.
+  observeIdentity(env, identity, { retain: ctx });
 
   // 8. /api/feedback — any signed-in user may file a report. Deliberately not on
   //    the public bypass list: a report carries a screenshot of a signed-in
@@ -519,6 +518,11 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     // UserDO, ExplorationAgent, KinuSandbox and Nimbus* worker-side-only.
     const denial = await ensureAgentOwnership(env, identity, agentName);
     if (denial) return denial;
+    // Now the path's workspace name is evidence: this account has been shown to
+    // own it. Indexed here rather than at the auth gate, where a 403'd request
+    // for a name the caller invented would still have written a row attributed
+    // to them.
+    observeWorkspaceUse(env, identity, agentName, { retain: ctx });
     // Inject the userId so downstream handlers can resolve UserDO without
     // re-running auth. Worker → DO requests preserve headers.
     const reqWithId = new Request(authenticatedRequest, {

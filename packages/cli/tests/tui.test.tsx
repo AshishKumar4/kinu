@@ -25,7 +25,8 @@ import type { KinuConfig } from '../src/config';
 import { MessageList } from '../src/tui/messages';
 import { BUILTIN_TUI_THEMES } from '../src/tui/theme';
 import { StatusBar } from '../src/tui/status-bar';
-import { handleHistoryScrollAction } from '../src/tui/chat-app';
+import { ChatApp } from '../src/tui/chat-app';
+import { fakeClient } from './helpers/chat-app-fixture';
 import { VERSION } from '../src/display';
 
 const TEST_TUI_BACKGROUND = BUILTIN_TUI_THEMES[0]!.colors.background.canvas;
@@ -355,23 +356,66 @@ describe('CLI TUI layout', () => {
     }
   });
 
-  test('chat history keys scroll without stealing multiline draft arrows', () => {
-    const history = {
-      scrollTop: 100,
-      viewport: { height: 20 },
-      scrollTo(position: number) {
-        this.scrollTop = position;
-      },
-    };
+  test('history keys scroll the transcript, and a multiline draft keeps its own arrows', async () => {
+    const { renderer, mockInput, renderOnce, captureCharFrame } = await createTestRenderer({
+      width: 80,
+      height: 24,
+      useThread: false,
+      maxFps: Number.POSITIVE_INFINITY,
+    });
+    const root = createRoot(renderer);
+    // Plain system rows: one line each, no markdown, so which rows are on
+    // screen is an exact read of where the transcript is scrolled to.
+    const transcript = Array.from({ length: 60 }, (_, index) => ({
+      id: `line-${index}`,
+      role: 'system' as const,
+      content: `line-${String(index).padStart(2, '0')}`,
+    }));
+    const agent = fakeClient({ name: 'scroller', history: async () => transcript });
+    try {
+      root.render(<ChatApp client={agent.client} hydrateHistory={true} onExit={() => {}} />);
+      await renderSettled(renderOnce);
+      // Sticky-bottom: the newest row is on screen and the oldest is not.
+      expect(captureCharFrame()).toContain('line-59');
+      expect(captureCharFrame()).not.toContain('line-00');
+      const bottom = topVisibleTranscriptLine(captureCharFrame());
 
-    expect(handleHistoryScrollAction('history.line-up', '', history)).toBe(true);
-    expect(history.scrollTop).toBe(96);
-    expect(handleHistoryScrollAction('history.line-down', 'line one\nline two', history)).toBe(false);
-    expect(history.scrollTop).toBe(96);
-    expect(handleHistoryScrollAction('history.page-up', 'draft text', history)).toBe(true);
-    expect(history.scrollTop).toBe(86);
-    expect(handleHistoryScrollAction('history.page-down', 'draft text', history)).toBe(true);
-    expect(history.scrollTop).toBe(96);
+      // Up with an empty composer belongs to the transcript, not the composer.
+      mockInput.pressArrow('up');
+      await renderSettled(renderOnce);
+      expect(captureCharFrame()).not.toContain('line-59');
+      const lineStep = bottom - topVisibleTranscriptLine(captureCharFrame());
+      expect(lineStep).toBeGreaterThan(0);
+
+      // Down returns to the bottom, so both steps are measured from one place.
+      mockInput.pressArrow('down');
+      await renderSettled(renderOnce);
+      expect(topVisibleTranscriptLine(captureCharFrame())).toBe(bottom);
+
+      // A page is a bigger jump than a line, not merely a jump.
+      mockInput.pressKey('\u001B[5~');
+      await renderSettled(renderOnce);
+      const pageStep = bottom - topVisibleTranscriptLine(captureCharFrame());
+      expect(pageStep).toBeGreaterThan(lineStep);
+
+      // A multiline draft owns its own arrows: Down must not move the transcript.
+      await mockInput.typeText('first line');
+      mockInput.pressEnter({ shift: true });
+      await mockInput.typeText('second line');
+      await renderSettled(renderOnce);
+      const beforeDraftArrow = topVisibleTranscriptLine(captureCharFrame());
+      mockInput.pressArrow('down');
+      await renderSettled(renderOnce);
+      expect(topVisibleTranscriptLine(captureCharFrame())).toBe(beforeDraftArrow);
+
+      // Page keys still reach the transcript over a draft, and come back down.
+      mockInput.pressKey('\u001B[6~');
+      await renderSettled(renderOnce);
+      expect(topVisibleTranscriptLine(captureCharFrame())).toBeGreaterThan(beforeDraftArrow);
+    } finally {
+      root.render(<box />);
+      renderer.destroy();
+    }
   });
 
   test('slash command hints render as a palette without numeric hotkeys', async () => {
@@ -1034,6 +1078,14 @@ function lineContaining(frame: string, text: string) {
   const line = frame.split('\n').findIndex((candidate) => candidate.includes(text));
   expect(line).toBeGreaterThanOrEqual(0);
   return line;
+}
+
+/** Where the transcript is scrolled to, as the number of the topmost seeded
+ *  `line-NN` row still on screen. Larger means further down the history. */
+function topVisibleTranscriptLine(frame: string): number {
+  const numbers = [...frame.matchAll(/line-(\d\d)/gu)].map(([, digits]) => Number(digits));
+  expect(numbers.length).toBeGreaterThan(0);
+  return Math.min(...numbers);
 }
 
 const WORKSPACE_NAMES = ['alpha', 'beta', 'gamma'] as const;

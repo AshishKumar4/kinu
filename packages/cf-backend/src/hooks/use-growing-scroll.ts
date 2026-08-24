@@ -29,6 +29,32 @@ const PIN_THRESHOLD = 40;
  *  before the reader gets there, or "infinite" scroll is a series of stalls. */
 const PREFETCH_THRESHOLD = 400;
 
+type PendingScrollRestore =
+  | { readonly kind: "load-more" }
+  | { readonly kind: "restore"; readonly scrollTop: number };
+
+interface GrowingScrollHost {
+  readonly style: { overflowAnchor: string };
+  readonly scrollHeight: number;
+  readonly clientHeight: number;
+  scrollTop: number;
+  addEventListener(
+    type: 'scroll', listener: () => void, options?: AddEventListenerOptions,
+  ): void;
+  removeEventListener(type: 'scroll', listener: () => void): void;
+}
+
+/** Decide whether the loaded pages can represent a saved absolute offset.
+ * Clamping is terminal only when the store says there are no older pages. */
+function resolvePendingScrollRestore(input: {
+  readonly target: number;
+  readonly maxScrollTop: number;
+  readonly exhausted: boolean;
+}): PendingScrollRestore {
+  if (input.maxScrollTop < input.target && !input.exhausted) return { kind: "load-more" };
+  return { kind: "restore", scrollTop: Math.min(input.target, input.maxScrollTop) };
+}
+
 export interface GrowingScrollOptions {
   /** Which end fetched pages land at. */
   grows: "up" | "down";
@@ -44,6 +70,9 @@ export interface GrowingScrollOptions {
    *  again before a previous call has settled — this fires on every scroll
    *  tick and again after each page lands. */
   onReachEdge?: (() => void) | undefined;
+  /** The backing walk has no older page. A restore larger than the final
+   * content settles only after this becomes true. */
+  exhausted?: boolean | undefined;
   /** Where this reader last was, for an "up" scroller that is remounted per
    *  conversation. A pixel offset is applied once the content is tall enough
    *  to hold it; 'pinned' (or absence) keeps the newest-edge default, because
@@ -55,8 +84,9 @@ export interface GrowingScrollOptions {
   onScrollPosition?: ((position: ConversationScroll) => void) | undefined;
 }
 
-export function useGrowingScroll<T extends HTMLElement>({
-  grows, content, fetched, loading = false, onReachEdge, initialScroll, onScrollPosition,
+export function useGrowingScroll<T extends GrowingScrollHost>({
+  grows, content, fetched, loading = false, exhausted = false,
+  onReachEdge, initialScroll, onScrollPosition,
 }: GrowingScrollOptions) {
   const el = useRef<T | null>(null);
   const pinned = useRef(grows === "up");
@@ -73,6 +103,8 @@ export function useGrowingScroll<T extends HTMLElement>({
   reportPosition.current = onScrollPosition;
   const latestInitialScroll = useRef(initialScroll);
   latestInitialScroll.current = initialScroll;
+  const latestExhausted = useRef(exhausted);
+  latestExhausted.current = exhausted;
   // A saved offset waits here until the transcript is tall enough to hold it —
   // the container mounts before its content arrives, and restoring into an
   // empty scroller clamps to 0 and calls that done. Re-armed on every attach:
@@ -82,11 +114,21 @@ export function useGrowingScroll<T extends HTMLElement>({
 
   const tryRestore = useCallback((node: T) => {
     const target = pendingRestore.current;
-    if (target === null || node.scrollHeight <= node.clientHeight) return;
+    if (target === null) return;
+    const resolution = resolvePendingScrollRestore({
+      target,
+      maxScrollTop: Math.max(0, node.scrollHeight - node.clientHeight),
+      exhausted: latestExhausted.current,
+    });
+    if (resolution.kind === "load-more") {
+      reachEdge.current?.();
+      return;
+    }
     pendingRestore.current = null;
-    node.scrollTop = target;
+    node.scrollTop = resolution.scrollTop;
     pinned.current = grows === "up"
       && node.scrollHeight - node.scrollTop - node.clientHeight < PIN_THRESHOLD;
+    reportPosition.current?.(pinned.current ? "pinned" : node.scrollTop);
   }, [grows]);
 
   const maybeLoadMore = useCallback((node: T) => {
@@ -185,7 +227,7 @@ export function useGrowingScroll<T extends HTMLElement>({
     // this re-check the next page only starts on their next scroll EVENT, and
     // a flick that ends at the edge produces no more events at all.
     if (fetchedChanged || !loadingChanged) maybeLoadMore(node);
-  }, [grows, content, fetched, loading, maybeLoadMore, tryRestore]);
+  }, [grows, content, exhausted, fetched, loading, maybeLoadMore, tryRestore]);
 
   useEffect(() => {
     if (loading || !settlingPrepend.current) return;

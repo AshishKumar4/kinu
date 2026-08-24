@@ -34,7 +34,7 @@ import { groupMessageParts, type AnyToolPart } from "@/components/tool-call-grou
 import { liveTail } from "@/components/message-live-tail";
 import { segmentBySteers } from "@kinu.run/core";
 import {
-  classifyProgrammaticTurn, eventVariantLabel, isSteeredMessage, parseDrainedEvents,
+  classifyProgrammaticTurn, eventSourceLabel, eventVariantLabel, isSteeredMessage, parseDrainedEvents,
   type DrainedEvent, type ProgrammaticTurn, type SignalCard,
 } from "@/components/background-event";
 
@@ -459,7 +459,7 @@ function DrainedEventRow({ event }: { event: DrainedEvent }) {
     >
       <div className="flex items-center gap-1.5 text-[11px]">
         <span className="shrink-0 font-medium p-text-2">{eventVariantLabel(event.variant)}</span>
-        <span className="min-w-0 truncate p-text-3">{event.source}</span>
+        <span className="min-w-0 truncate p-text-3">{eventSourceLabel(event.source)}</span>
         {event.replyExpected && (
           <span className="shrink-0 rounded-sm px-1 py-0.5 p-badge-warning" title="The sender is waiting on the agent's reply">
             reply expected

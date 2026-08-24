@@ -26,9 +26,7 @@ export type RoleChangeRefusal = 'locked' | 'unknown-role' | 'invalid-role-id';
 export type RoleChangeOutcome =
   | { readonly kind: 'applied'; readonly from: RoleId; readonly to: RoleId; readonly catalogVersion: number }
   | { readonly kind: 'staged'; readonly from: RoleId; readonly to: RoleId }
-  | { readonly kind: 'dismissed'; readonly from: RoleId; readonly to: RoleId }
-  | { readonly kind: 'refused'; readonly reason: RoleChangeRefusal }
-  | { readonly kind: 'none' };
+  | { readonly kind: 'refused'; readonly reason: RoleChangeRefusal };
 
 /**
  * What to tell the caller about a role change, for every outcome the union has.
@@ -46,9 +44,9 @@ export type RoleChangeOutcome =
  * changes nothing.
  *
  * Every message says which role is live afterwards, because that is the thing
- * the caller has to act on. `currentRole` is consulted ONLY for the members
- * carrying no `from` of their own, so the sentence can never disagree with the
- * outcome about which role that is.
+ * the caller has to act on. `currentRole` is consulted ONLY by `refused`, the
+ * one member carrying no `from` of its own, so the sentence can never disagree
+ * with the outcome about which role that is.
  */
 export function roleChangeOutcomeText(
   requested: string,
@@ -64,9 +62,6 @@ export function roleChangeOutcomeText(
       return `role ${JSON.stringify(outcome.to)} is awaiting owner approval, because it widens `
         + `what this agent can reach. Nothing is lost and there is nothing to retry: this turn `
         + `and the next continue under ${JSON.stringify(outcome.from)}.`;
-    case 'dismissed':
-      return `the owner declined the change to role ${JSON.stringify(outcome.to)}. `
-        + `${JSON.stringify(outcome.from)} stays active.`;
     case 'refused': {
       const live = JSON.stringify(currentRole);
       const because = {
@@ -80,8 +75,6 @@ export function roleChangeOutcomeText(
       } satisfies Record<RoleChangeRefusal, string>;
       return because[outcome.reason];
     }
-    case 'none':
-      return `this agent is already in role ${JSON.stringify(currentRole)}; nothing changed.`;
   }
 }
 
@@ -93,14 +86,14 @@ export interface RoleStateStore {
   set(key: string, value: string): void;
 }
 
-export const ROLE_POLICY_KEY = 'role_change_policy';
+const ROLE_POLICY_KEY = 'role_change_policy';
 const ACTIVE_ROLE_KEY = 'active_role_id';
 const PENDING_ROLE_KEY = 'pending_role_id';
 
 /** Whether `to` can reach any tool `from` could not. An absent allowedTools
  *  list IS the full surface: restricted to full widens, full to anything does
  *  not, and two restricted lists compare by membership. */
-export function roleWidensCapabilities(from: RoleDefinition, to: RoleDefinition): boolean {
+function roleWidensCapabilities(from: RoleDefinition, to: RoleDefinition): boolean {
   if (to.allowedTools === undefined) return from.allowedTools !== undefined;
   if (from.allowedTools === undefined) return false;
   const fromSet = new Set(from.allowedTools);
@@ -125,6 +118,10 @@ function applyRole(
   actor: RoleChangeActor,
 ): void {
   config.set(ACTIVE_ROLE_KEY, to);
+  // An applied change supersedes any request waiting on the owner: the owner
+  // setting a role IS the answer to one, and a pending id nothing can clear
+  // would outlive the request forever.
+  config.set(PENDING_ROLE_KEY, '');
   config.set('role_changed_from', from);
   config.set('role_changed_by', actor);
   config.set('role_changed_at', String(Date.now()));
@@ -163,21 +160,4 @@ export function changeActiveRole(input: {
 
   applyRole(input.config, envelope, from, input.to, input.actor);
   return { kind: 'applied', from, to: input.to, catalogVersion: envelope.version };
-}
-
-/** The owner's answer to a staged change: land it as the owner's own act, or
- *  dismiss it. No staged change reads as `none`. */
-export function decideStagedRole(input: {
-  envelope: ProfileCatalogEnvelope;
-  config: RoleStateStore;
-  approve: boolean;
-}): RoleChangeOutcome {
-  const staged = input.config.get(PENDING_ROLE_KEY);
-  if (!staged) return { kind: 'none' };
-  const from = input.config.get(ACTIVE_ROLE_KEY) ?? 'general';
-  input.config.set(PENDING_ROLE_KEY, '');
-  if (!input.approve) return { kind: 'dismissed', from, to: staged };
-  const envelope = validateProfileCatalogEnvelope(input.envelope);
-  applyRole(input.config, envelope, from, staged, 'user');
-  return { kind: 'applied', from, to: staged, catalogVersion: envelope.version };
 }

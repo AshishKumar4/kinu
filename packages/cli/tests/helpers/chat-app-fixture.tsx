@@ -39,6 +39,7 @@ interface FakeClientOptions {
   setModel?: AgentClient['setModel'];
   connect?: AgentClient['connect'];
   history?: AgentClient['history'];
+  rename?: AgentClient['rename'];
 }
 
 export function fakeClient(options: FakeClientOptions) {
@@ -107,6 +108,10 @@ export function fakeClient(options: FakeClientOptions) {
       failures: [],
     })),
   };
+  const rename = options.rename ?? (mode === 'local'
+    ? async (displayName: string) => ({ name: options.name, displayName })
+    : undefined);
+  if (rename) Object.assign(client, { rename });
   return {
     client,
     state,

@@ -18,6 +18,7 @@ export interface TuiAgentHubEntry {
   readonly label: string;
   readonly kind: 'main' | 'subordinate' | 'swarm-node';
   readonly status: 'idle' | 'running' | 'needs-you' | 'failed' | 'settled';
+
   /** Role/tier are shown when known — the open agent's come from its live
    *  status; a peer's own database is not opened just to label a row. */
   readonly roleId?: string;
@@ -27,6 +28,11 @@ export interface TuiAgentHubEntry {
   /** The conversation this TUI session has open. */
   readonly current?: boolean;
 }
+const AGENT_KIND_LABEL = {
+  main: 'main',
+  subordinate: 'agent',
+  'swarm-node': 'swarm node',
+} as const satisfies Record<TuiAgentHubEntry['kind'], string>;
 
 /**
  * The Agent Hub's rows, projected live from the navigator roster: the current
@@ -181,7 +187,7 @@ function AgentHubRows({ data, newAgentHint }: {
                 {agent.kind !== 'main' && <span fg={colors.border.strong}>└ </span>}
                 <span fg={statusColor(agent.status, colors)}>{agent.status === 'running' ? '● ' : '○ '}</span>
                 <strong fg={colors.text.strong}>{agent.label}</strong>
-                <span fg={colors.text.muted}> · {agent.kind}{agent.roleId !== undefined && agent.tierId !== undefined ? ` · ${agent.roleId}/${agent.tierId}` : ''}{agent.current === true ? ' · open' : ''}</span>
+                <span fg={colors.text.muted}> · {AGENT_KIND_LABEL[agent.kind]}{agent.roleId !== undefined && agent.tierId !== undefined ? ` · ${agent.roleId}/${agent.tierId}` : ''}{agent.current === true ? ' · open' : ''}</span>
               </text>
               {agent.task !== undefined && <text><span fg={colors.text.muted}>{agent.kind === 'main' ? '' : '  '}{agent.task}</span></text>}
             </box>

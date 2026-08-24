@@ -45,9 +45,20 @@ queries always weight `_sample_interval`. Exact feedback text, screenshot
 pointers, users, workspaces, and admin audit rows live in `ControlPlaneDO`.
 Screenshot bytes live in `FEEDBACK_BUCKET`.
 
-The Metrics tab needs `ANALYTICS_SQL_API_TOKEN` and
-`CLOUDFLARE_ACCOUNT_ID`. If either is absent, writes continue and the tab states
-that queries are not configured.
+The 250-write budget is per invocation, so each isolate reopens its window where
+an invocation starts: the Worker at `fetch` and `scheduled`, an actor at the
+start of a turn, and `UserDO`, `MonitorDO`, `ControlPlaneDO` and
+`ExplorationAgent` at their own RPC entries. A constructor is not such a point.
+It runs once per activation, and a window opened there gave a hot Durable Object
+one budget for its whole life.
+
+The Metrics tab needs `ANALYTICS_SQL_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. If
+either is absent, writes continue and the tab states that queries are not
+configured. Reads also need `ANALYTICS_DATASET_SUFFIX`, which names the
+deployment's own datasets: it is empty in production and `_staging` under
+`env.staging`. Writes do not use it, because a binding already names the right
+dataset. `scripts/analytics-datasets.test.ts` holds the two equal per
+environment.
 
 ## Where spans are open
 

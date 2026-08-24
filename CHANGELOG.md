@@ -238,6 +238,32 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **A feedback screenshot no longer photographs a secret.** The capture blanked
+  password inputs and regions marked for redaction, and none of the app's real
+  secret surfaces was either: a webhook secret is shown once as text, the curl
+  command that tests it carries the same secret inline, the create dialog's own
+  field was a plain text input, and the MCP server form takes
+  `{"Authorization": "Bearer …"}` in a textarea. All four reached the screenshot
+  bucket. There is one rendering of a credential now — a shared `SecretValue`
+  region that carries the redaction marker by construction — the curl command is
+  split at its credential rather than interpolated, and the dialog's field is a
+  password input as well as a marked region. The browser gate drives those real
+  components through the shipped capture and reads the rasteriser's own clone,
+  so a secret is proven absent from the text, the attributes, the copied field
+  values and the pixels.
+- **A feedback body is bounded as it arrives.** `content-length` was the only
+  size check, and an absent header parses as zero, so a chunked or HTTP/2
+  upload of any size was materialised whole before the screenshot part was
+  measured. The body is counted through a reader now and abandoned at the chunk
+  carrying the first excess byte, with the upload cancelled rather than drained.
+  The declared length stays as an early refusal that reads no body at all.
+- **A refused object store is a report we lost, and it says so.** A rejected R2
+  write left the request as a platform 500 with no marker and no row — the one
+  outcome the rejection rate exists to count, invisible to it. It answers 503
+  `storage_unavailable` with exactly one marker now, the same arm a deployment
+  with no bucket answers with. A body that is not the multipart it declared
+  answers 400 instead of throwing, and every screenshot refusal reports that a
+  screenshot was carried and how big it was, instead of claiming there was none.
 - `kinu events` renders rows against a cloud workspace, not raw JSON. The
   cloud read answered `{ events: [...] }` where its four sibling list reads and
   the local events read all answer a bare array, so the row formatter's array

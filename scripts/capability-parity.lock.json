@@ -48,6 +48,7 @@
   "movable packages/cf-backend/src/components/surfaces/swarm-resolution.ts",
   "movable packages/cf-backend/src/components/swarm-tree-model.ts",
   "movable packages/cf-backend/src/components/tool-call-grouping.ts",
+  "movable packages/cf-backend/src/components/ui/SecretValue.tsx",
   "movable packages/cf-backend/src/components/ui/form.tsx",
   "movable packages/cf-backend/src/components/ui/score-bar.tsx",
   "movable packages/cf-backend/src/control-plane/analytics-sql.ts",

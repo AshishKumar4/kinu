@@ -16,7 +16,7 @@ import {
 } from "@kinu.run/core";
 import type {
   AlternateTakeSet, FileCheckpointEntry, FileCheckpointListing,
-  FileRestoreChange, FileRestorePlan, TakePickOutcome,
+  FileRestoreChange, FileRestorePlan, PlanReview, TakePickOutcome,
 } from "@kinu.run/core";
 import { useKinu } from "@/hooks/use-kinu";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
@@ -42,7 +42,7 @@ import { SubordinateTabs, agentTitle } from "@/components/SubordinateTabs";
 import { WorkspaceBar, InlineRenameTitle, type Altitude } from "@/components/WorkspaceBar";
 import { Composer } from "@/components/Composer";
 import { dataUrlRawBytes } from "@/components/AttachmentChip";
-import type { PendingConsent, SubordinateActivityEvent } from "@/lib/protocol";
+import type { PendingConsent, Rpc, SubordinateActivityEvent } from "@/lib/protocol";
 import { renderThrownChain } from "@kinu.run/core/obs";
 // The model picker reads /api/user/models (which unions the connected
 // providers' menus); the result is cached for the SPA session (see user-api).
@@ -298,6 +298,12 @@ function ForkModal({
 
 /* ── Subordinate chat (Column A body when a subordinate tab is active) ── */
 
+interface SubordinatePlanContext {
+  name: string;
+  plan: PlanReview | null;
+  rpc: Rpc;
+}
+
 /** Drives one additional agent's conversation over its own facet socket. The
  *  Work Surface and Timeline stay workspace-scoped on the parent socket (§A5) —
  *  only the chat switches here. An ordinary conversation: messages, model pick,
@@ -309,13 +315,20 @@ function ForkModal({
  *  source of truth the tabs and sidebar read, so the header reads it too and
  *  the first-message auto-title lands everywhere in one broadcast. `onRename`
  *  goes through the parent for the same reason. */
-function SubordinateChatColumn({ workspace, subName, title, onRename }: {
+function SubordinateChatColumn({
+  workspace, subName, title, onRename, onPlanContext,
+}: {
   workspace: string;
   subName: string;
   title: string;
   onRename: (displayName: string) => Promise<string>;
+  onPlanContext: (context: SubordinatePlanContext | null) => void;
 }) {
   const state = useKinu({ workspace, subordinate: subName });
+  useEffect(() => {
+    onPlanContext({ name: subName, plan: state.activePlan, rpc: state.rpc });
+    return () => onPlanContext(null);
+  }, [onPlanContext, state.activePlan, state.rpc, subName]);
 
   // The picker is fire-and-forget: setModel records the failure on state.error
   // and rolls the picker back to the stored spec, so this call site has nothing
@@ -330,6 +343,10 @@ function SubordinateChatColumn({ workspace, subName, title, onRename }: {
   // until the owner decides.
   const planAwaitingDecision = planReviewAwaitingDecision(state.activePlan);
   const effectiveMode = planAwaitingDecision ? "plan" : ui.mode;
+  useEffect(() => {
+    if (planAwaitingDecision) ui.setMode("plan");
+    else if (state.activePlan?.status === "approved") ui.setMode("build");
+  }, [planAwaitingDecision, state.activePlan?.status, ui.setMode]);
   // The same older-history walk the workspace column runs, over this facet's
   // own storage. A subordinate keeps its own conversation, and a helper that
   // worked for an hour has more of one than the SDK's hydration window holds.
@@ -342,6 +359,7 @@ function SubordinateChatColumn({ workspace, subName, title, onRename }: {
     onReachEdge: history.loadMore,
     initialScroll: ui.savedScroll,
     onScrollPosition: ui.rememberScroll,
+    exhausted: history.exhausted,
   });
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -402,7 +420,7 @@ function SubordinateChatColumn({ workspace, subName, title, onRename }: {
         </div>
       </div>
 
-      <ErrorBoundary label="Subordinate chat">
+      <ErrorBoundary label="Agent chat">
         <div ref={messagesRef} className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8 [&>*]:max-w-[780px] [&>*]:mx-auto">
           {/* Above the oldest message, exactly as the workspace column has it:
               a walk in progress, a failed page with its retry, or the store's
@@ -496,6 +514,34 @@ export default function WorkspacePage() {
   const navigate = useNavigate();
   const state = useKinu(agentId);
   const { entries: workspaceEntries } = useWorkspaceRoster();
+  const [subordinatePlanContext, setSubordinatePlanContext] =
+    useState<SubordinatePlanContext | null>(null);
+  const syncSubordinatePlanContext = useCallback((context: SubordinatePlanContext | null) => {
+    setSubordinatePlanContext(context);
+  }, []);
+  const [creatingAgent, setCreatingAgent] = useState(false);
+  const creatingAgentRef = useRef(false);
+  const [createAgentError, setCreateAgentError] = useState<string | null>(null);
+  const createAndOpenAgent = useCallback(async () => {
+    if (!agentId || creatingAgentRef.current) return;
+    creatingAgentRef.current = true;
+    setCreatingAgent(true);
+    setCreateAgentError(null);
+    try {
+      const created = await state.createSubordinate();
+      navigate(`/workspace/${agentId}/agents/${created.name}`);
+    } catch (cause) {
+      setCreateAgentError(renderThrownChain({ cause }));
+    } finally {
+      creatingAgentRef.current = false;
+      setCreatingAgent(false);
+    }
+  }, [agentId, navigate, state.createSubordinate]);
+  useEffect(() => {
+    const open = () => { void createAndOpenAgent(); };
+    window.addEventListener("kinu:new-agent", open);
+    return () => window.removeEventListener("kinu:new-agent", open);
+  }, [createAndOpenAgent]);
 
   // The picker is fire-and-forget: setModel records the failure on state.error
   // and rolls the picker back to the stored spec, so this call site has nothing
@@ -530,6 +576,11 @@ export default function WorkspacePage() {
     return () => media.removeEventListener("change", sync);
   }, []);
   // Output still takes over the moment there is something running to look at.
+  const subordinateReview = subName !== undefined
+    && subordinatePlanContext?.name === subName
+    ? subordinatePlanContext
+    : null;
+  const visiblePlan = subName === undefined ? state.activePlan : subordinateReview?.plan ?? null;
   const [surface, setSurface] = useState<SurfaceKind>("Work");
   // Draft, Auto/Plan and reading position belong to THIS conversation — the
   // orchestrator's — and survive tab switches and revisits without leaking
@@ -572,6 +623,7 @@ export default function WorkspacePage() {
     onReachEdge: history.loadMore,
     initialScroll: ui.savedScroll,
     onScrollPosition: ui.rememberScroll,
+    exhausted: history.exhausted,
   });
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   // Pending chat attachments — fed by the attach button, paste, and drag-drop
@@ -663,22 +715,33 @@ export default function WorkspacePage() {
   useEffect(() => {
     const n = state.pinnedPorts.length;
     const planOwnsOutput = chatMode === "plan"
-      || state.activePlan?.status === "pending"
-      || state.activePlan?.status === "changes_requested";
+      || visiblePlan?.status === "pending"
+      || visiblePlan?.status === "changes_requested";
     if (n > prevPortCountRef.current && !planOwnsOutput) setSurface("Output");
     prevPortCountRef.current = n;
-  }, [chatMode, state.activePlan?.status, state.pinnedPorts.length]);
+  }, [chatMode, state.pinnedPorts.length, visiblePlan?.status]);
 
   // A new durable revision owns focus once. Annotation saves update the same
   // revision and must not keep dragging the owner back after they navigate.
   const previousPlanRef = useRef<string | null>(null);
   useEffect(() => {
-    const key = state.activePlan ? `${state.activePlan.id}/${state.activePlan.revision}` : null;
+    const key = visiblePlan
+      ? `${subName ?? "main"}/${visiblePlan.id}/${visiblePlan.revision}`
+      : null;
     if (key && key !== previousPlanRef.current) setSurface("Output");
-    if (planAwaitingDecision) setChatMode("plan");
-    else if (state.activePlan?.status === "approved") setChatMode("build");
+    if (subName === undefined) {
+      if (planAwaitingDecision) setChatMode("plan");
+      else if (state.activePlan?.status === "approved") setChatMode("build");
+    }
     previousPlanRef.current = key;
-  }, [planAwaitingDecision, state.activePlan?.id, state.activePlan?.revision, state.activePlan?.status]);
+  }, [
+    planAwaitingDecision,
+    setChatMode,
+    state.activePlan?.status,
+    subName,
+    visiblePlan?.id,
+    visiblePlan?.revision,
+  ]);
 
   const handleSend = useCallback(() => {
     const t = chatInput.trim();
@@ -910,6 +973,14 @@ export default function WorkspacePage() {
         altitude={altitude}
         onAltitude={setAltitude}
       />
+      {createAgentError && (
+        <div role="alert" className="flex items-center justify-center gap-3 border-b p-border px-3 py-1.5 text-xs p-notice-danger">
+          <span>Couldn't create an agent: {createAgentError}</span>
+          <button type="button" className="font-medium underline" onClick={() => setCreateAgentError(null)}>
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {altitude === "supervise" ? (
         <div className="flex-1 min-h-0">
@@ -943,7 +1014,8 @@ export default function WorkspacePage() {
               workspace={agentId}
               subordinates={state.subordinates}
               activeName={subName}
-              onCreate={state.createSubordinate}
+              onCreate={createAndOpenAgent}
+              creating={creatingAgent}
               onDismiss={(name) => state.dismissSubordinate(name).then(() => {})}
               trailing={!subName && state.messages.length > 0 && (
                 <Button variant="ghost" {...SQUARE_BUTTON_PROPS} size="sm"
@@ -963,6 +1035,7 @@ export default function WorkspacePage() {
                   subName={subName}
                   title={rosterEntry ? agentTitle(rosterEntry.displayName) : subName}
                   onRename={(displayName) => state.renameSubordinate(subName, displayName).then((entry) => entry.displayName)}
+                  onPlanContext={syncSubordinatePlanContext}
                 />
               );
             })() : (
@@ -1127,7 +1200,8 @@ export default function WorkspacePage() {
             pinnedPorts={state.pinnedPorts}
             previewError={state.previewError}
             onRefreshPorts={state.refreshExposedPorts}
-            plan={state.activePlan}
+            plan={visiblePlan}
+            planRpc={subordinateReview?.rpc}
             agentStatus={state.agentStatus}
             tools={state.tools}
             memory={state.memory}

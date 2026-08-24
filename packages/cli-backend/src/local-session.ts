@@ -194,6 +194,18 @@ export const LOCAL_MAX_INLINE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 /** The minimal bun:sqlite handle the EventsHub SqlExec adapter needs. */
 export type LocalSessionDb = Pick<Database, 'prepare'>;
 
+/**
+ * The spec a session with no `modelResolver` reports for its one model.
+ *
+ * Fixed rather than an option, because a static session is a TEST shape: every
+ * production surface resolves through the registry. The interactive client
+ * REQUIRES a resolver (`LocalAgentClientDeps.modelResolver`, cli/src/local-agent
+ * -client.ts) and the daemon's host always builds one (cli/src/commands/
+ * daemon.ts, `openDaemonAgent`), so a caller free to name its own static spec
+ * would be naming it for nobody.
+ */
+const STATIC_MODEL_SPEC = 'local/static';
+
 /** What the frontends render. A superset of runChat's ChatEvent with the
  *  lifecycle + side-channel (evolution, broadcast, background) events. */
 export type SessionEvent =
@@ -258,12 +270,27 @@ export interface LocalAgentSessionOpts {
    *  without a modelResolver. Required there; with a resolver, turns resolve
    *  through the registry and this is only the pre-claim fallback. */
   model?: LanguageModel;
-  /** Display/canonical spec for static-model sessions with no modelResolver. */
-  modelSpec?: string;
   /** Optional provider-style resolver. */
   modelResolver?: LocalModelResolver;
   /** Canonical role/tier authority for this local agent, read live. */
   profileAuthority?: ProfileEnvelopeSource;
+  /**
+   * This machine's provider-configuration revision, read live — a counter every
+   * credential connected, revoked or signed in advances.
+   *
+   * It exists because the provider listing is invalidated by SIGNAL and never
+   * by elapsed time, and the one signal a long-lived session cannot see is a
+   * mutation made by ANOTHER PROCESS: `kinu provider connect` runs in its own
+   * process while a daemon or a chat session stays resident, so nothing in this
+   * process is there to call {@link LocalAgentSession.refreshProviderListing}.
+   * A number in the canonical config crosses that boundary; comparing it at
+   * every resolution is what turns a file edit into the missing signal.
+   *
+   * Absent means nobody is publishing one, and the listing is then invalidated
+   * only from inside this process — correct for a fixture, and for a session
+   * whose credentials cannot change under it.
+   */
+  providerRevision?: () => number;
   onEvent: (event: SessionEvent) => void;
   /** Disable auto-evolution (turn + session reflection). Default: enabled. */
   noAutoEvolve?: boolean;
@@ -276,8 +303,6 @@ export interface LocalAgentSessionOpts {
    *      the local scheduler daemon instead.
    *  Default false: the REPL, TUI and daemon are all long-lived. */
   oneShot?: boolean;
-  /** Turns between session-level reflections (default 5, matching the DO). */
-  sessionReflectionInterval?: number;
   /** Working directory for AGENTS.md discovery and the prompt's runtime
    *  context. Defaults to the runtime's own bound plane, so the directory the
    *  agent reads project instructions from is the directory its `file` tool and
@@ -310,7 +335,19 @@ interface QueueItem {
    *  the row the first one wrote (see `persist`). */
   idempotencyKey?: string;
   kind: 'user' | 'programmatic';
-  resolve: () => void;
+  /**
+   * Settle whoever queued this item — exactly once, and told whether the turn
+   * RAN.
+   *
+   * A refusal is the driver lease saying another process owns this
+   * conversation, which means this turn did not happen. That has to reach the
+   * producer, because the producer is the only one who can put things back: an
+   * event drain has rows bound to a turn nobody will run, and a person has a
+   * message that was never sent. Reporting a refused item as a completed one
+   * (this used to be a bare success-only `resolve()`) loses the event and
+   * discards the message in silence.
+   */
+  settle: (refusal: Refusal | null) => void;
 }
 
 type CurriculumStatus = 'pending' | 'accepted' | 'rejected' | 'completed';
@@ -318,7 +355,6 @@ type CurriculumStatus = 'pending' | 'accepted' | 'rejected' | 'completed';
 export class LocalAgentSession implements BackendHost {
   private readonly rt: CLIRuntime;
   private readonly fallbackModel: LanguageModel | null;
-  private readonly fallbackModelSpec: string;
   private readonly modelResolver: LocalModelResolver | null;
   private cachedModel: LanguageModel | null = null;
   private cachedModelSpec: string | null = null;
@@ -423,6 +459,11 @@ export class LocalAgentSession implements BackendHost {
   private readonly onEvent: (event: SessionEvent) => void;
   private shellApprovalHandler: ShellApprovalHandler | null = null;
   private readonly profileAuthority: () => Promise<ProfileCatalogEnvelope>;
+  private readonly readProviderRevision: (() => number) | null;
+  /** The provider revision the cached listing was measured under. Null until
+   *  the first resolution reads one: the first read establishes the baseline,
+   *  it never invalidates. */
+  private observedProviderRevision: number | null = null;
   private turnProfile: ResolvedTurnProfile | null = null;
   private turnProfileInputs: {
     envelope: ProfileCatalogEnvelope;
@@ -497,7 +538,6 @@ export class LocalAgentSession implements BackendHost {
     this.oneShot = opts.oneShot === true;
     this.cwd = opts.cwd ?? this.rt.cwd ?? process.cwd();
     this.fallbackModel = opts.model ?? null;
-    this.fallbackModelSpec = opts.modelSpec ?? 'local/static';
     this.modelResolver = opts.modelResolver ?? null;
     this.rt.setModelForRoute?.((resolution) => this.localRouteLlm(resolution));
 
@@ -578,6 +618,7 @@ export class LocalAgentSession implements BackendHost {
     // omitted at construction and never seeing an authority created later.
     this.profileAuthority = async () =>
       (await opts.profileAuthority?.()) ?? this.bootstrapProfileEnvelope();
+    this.readProviderRevision = opts.providerRevision ?? null;
     // Routed lanes that begin outside a chat turn (review, evolution cadence,
     // reflection, advisor) resolve through this rather than finding every lane
     // unset. Live: it re-reads the authority and the provider snapshot.
@@ -633,12 +674,15 @@ export class LocalAgentSession implements BackendHost {
 
     const headRuntimeOptions: Parameters<typeof createCLIHeadRuntime>[0] = {
       model: () => this.cachedModel ?? this.defaultModel("a head with no model of its own"),
-      providerFamily: parseModelSpec(this.fallbackModelSpec).provider,
-      // The merge runs on `model` above — the model THIS spec resolved — so the
-      // spec is this session's to attach and not head-runtime's: that seam holds
-      // a `LanguageModel`, which does not carry the spec it was built from.
+      providerFamily: parseModelSpec(STATIC_MODEL_SPEC).provider,
+      // A static session has ONE model, so this constant IS its spec. On a
+      // resolver session it is the wrong label: the head runs on `model` above,
+      // whatever `cachedModelSpec` resolved, and its calls are reported as the
+      // static spec regardless. `effectiveModelSpec()` is the honest answer for
+      // both fields, but `providerFamily` is a value read once at construction
+      // rather than a callback, so the two move together or not at all.
       reportModelCall: (report) =>
-        this.modelCallSink({ ...report, spec: this.fallbackModelSpec }),
+        this.modelCallSink({ ...report, spec: STATIC_MODEL_SPEC }),
       operations: this.modelOperations,
       parentRuntime: this.rt,
       webSearch: this.getWebSearchProvider(),
@@ -694,7 +738,6 @@ export class LocalAgentSession implements BackendHost {
       engine: this.engine,
       eventLog: this.eventLog,
       budget: this.budget,
-      sessionReflectionInterval: opts.sessionReflectionInterval,
       oneShot: opts.oneShot === true,
       roleCatalog: () => this.turnProfileInputs
         ? Object.keys(effectiveRoleCatalog(this.turnProfileInputs.envelope.catalog))
@@ -1165,7 +1208,10 @@ export class LocalAgentSession implements BackendHost {
       text: input.text,
       metadata: input.metadata,
       kind: 'programmatic',
-      resolve: () => resolve({ status: 'queued' }),
+      // 'skipped' is what a producer with a durable retry plane acts on: the
+      // signal seam compensates on anything but 'queued', which is how an event
+      // drain gets its rows back when another process holds the driver lease.
+      settle: (refusal) => resolve({ status: refusal ? 'skipped' : 'queued' }),
     };
     if (input.idempotencyKey !== undefined) item.idempotencyKey = input.idempotencyKey;
     this.queue.push(item);
@@ -1208,15 +1254,29 @@ export class LocalAgentSession implements BackendHost {
 
   /** Run a user turn (and any programmatic turns it cascades). Resolves when
    *  the user's own turn has finished. Attachments (data-URL PromptFiles)
-   *  become file parts on the turn's user message. */
+   *  become file parts on the turn's user message.
+   *
+   *  REJECTS when another process holds this conversation's driver lease. The
+   *  message was not sent and no turn ran, so resolving would tell the person
+   *  their words landed when they were dropped; the rejection names the holder
+   *  and what to do about it. */
   send(
     input: string | { text: string; files: ReadonlyArray<PromptFile> },
     opts: { tier?: TierId } = {},
   ): Promise<void> {
     const { text, files } = normalizePromptInput(input);
-    const { promise, resolve } = Promise.withResolvers<void>();
+    const { promise, resolve, reject } = Promise.withResolvers<void>();
     const metadata = opts.tier === undefined ? undefined : { profile_tier: opts.tier };
-    this.queue.push({ text, files, metadata, kind: 'user', resolve });
+    this.queue.push({
+      text, files, metadata, kind: 'user',
+      settle: (refusal) => {
+        if (!refusal) { resolve(); return; }
+        reject(new KinuError(
+          refusal.reason,
+          `${refusal.error}. Close that session, or send this from it.`,
+        ));
+      },
+    });
     this.pump();
     return promise;
   }
@@ -1312,6 +1372,17 @@ export class LocalAgentSession implements BackendHost {
    *  must not suddenly run an autonomous turn. */
   async flushPendingDrains(): Promise<void> {
     if (this.ended) return;
+    // Gated HERE as well as at the pump, because the drain BINDS the rows it
+    // selects (markConsumed) on its way to the pump. A refusal one step later
+    // is recoverable — the queue item settles refused and the drain hands the
+    // rows back — but a refusal here means they were never bound at all, which
+    // is the outcome to prefer when the answer is already knowable. The gate is
+    // the same object either way, and re-asking it costs one row read.
+    const refusal = this.driverGate?.();
+    if (refusal) {
+      diagnostics.event('driver.drain_deferred', { reason: refusal.reason });
+      return;
+    }
     await this.orch.drainPendingEvents();
   }
 
@@ -1631,19 +1702,25 @@ export class LocalAgentSession implements BackendHost {
     try {
       let item: QueueItem | undefined;
       while ((item = this.queue.shift())) {
+        // Checked per ITEM, immediately before the turn runs. A turn is the
+        // longest thing this process does and it writes the conversation, so
+        // two processes running turns over one database interleave them. An
+        // interactive gate takes the lease from a daemon here, which is what
+        // stops a user's turn landing inside a daemon-driven one; a gate that
+        // refuses means another process of this same kind is driving, and
+        // there is nothing to wait for.
+        //
+        // Settled with the refusal rather than emitted as an error: this turn
+        // did not run, and the ONE thing that must happen is that its producer
+        // hears so — an event drain compensates its rows back to pending, a
+        // person's send fails loudly. The producer owns what to say about it.
+        const refusal = this.driverGate?.();
+        if (refusal) {
+          diagnostics.event('driver.turn_deferred', { kind: item.kind, reason: refusal.reason });
+          item.settle(refusal);
+          continue;
+        }
         try {
-          // Checked per ITEM, immediately before the turn runs. A turn is the
-          // longest thing this process does and it writes the conversation, so
-          // two processes running turns over one database interleave them. An
-          // interactive gate takes the lease from a daemon here, which is what
-          // stops a user's turn landing inside a daemon-driven one; a gate that
-          // refuses means another process of this same kind is driving, and
-          // there is nothing to wait for.
-          const refusal = this.driverGate?.();
-          if (refusal) {
-            this.emit({ type: 'error', message: refusal.error });
-            continue;
-          }
           await this.processTurn(item);
         } catch (err) {
           diagnostics.failure(
@@ -1651,7 +1728,7 @@ export class LocalAgentSession implements BackendHost {
             toKinuError({ doing: 'processing a queued turn', cause: err, otherwise: 'io' }),
           );
         } finally {
-          item.resolve();
+          item.settle(null);
         }
       }
     } finally {
@@ -2133,7 +2210,10 @@ export class LocalAgentSession implements BackendHost {
           text: leftover.map((steer) => steer.text).join('\n\n'),
           files: leftover.flatMap((steer) => steer.files ?? []),
           kind: 'user',
-          resolve: () => {},
+          // Nobody is awaiting this one: its send() already resolved on the turn
+          // it was steering into. A refusal is reported by the pump's own
+          // diagnostic, and the steer text is still in the durable transcript.
+          settle: () => {},
         });
       }
 
@@ -2256,7 +2336,10 @@ export class LocalAgentSession implements BackendHost {
       text: completionGateText({ task: this.completionGate.task, observed }),
       kind: 'programmatic',
       metadata: { kinuEvent: COMPLETION_GATE_EVENT },
-      resolve: () => {},
+      // The gate fired for THIS process's one-shot turn; a driver that no longer
+      // owns the conversation has nothing to confirm, and `fire()` already
+      // recorded the gate so it does not re-ask.
+      settle: () => {},
     });
   }
 
@@ -2817,12 +2900,26 @@ export class LocalAgentSession implements BackendHost {
   private providerListingSweep: Promise<{ models: readonly string[]; failures: readonly ProviderFailure[] }> | null = null;
 
   /**
+   * Bumped by every invalidation. A sweep that was already in flight when the
+   * signal arrived measured the world BEFORE the change, so it must not install
+   * its answer as the cache — otherwise a credential the user just connected
+   * stays invisible for the life of the session, which is the whole defect this
+   * signal exists to prevent.
+   */
+  private providerListingGeneration = 0;
+
+  /**
    * Drop the cached provider listing. The caller has changed something the
    * listing depends on and this session cannot observe: a credential added or
    * revoked, a provider connected, a sign-in. The next resolution sweeps again.
+   *
+   * The in-flight sweep goes too. Leaving it would hand its pre-change answer
+   * to every caller that joined it, and re-cache it on the way out.
    */
   refreshProviderListing(): void {
     this.providerListing = null;
+    this.providerListingSweep = null;
+    this.providerListingGeneration += 1;
   }
 
   /**
@@ -2849,14 +2946,20 @@ export class LocalAgentSession implements BackendHost {
       listing = await this.providerListingSweep;
       cache = 'joined';
     } else {
+      const generation = this.providerListingGeneration;
       const sweep = this.sweepProviderListing();
       this.providerListingSweep = sweep;
       try {
         listing = await sweep;
       } finally {
-        this.providerListingSweep = null;
+        // Only if it is still OURS: an invalidation mid-sweep replaced it with
+        // null, and clearing unconditionally would also discard a newer sweep
+        // that started after that.
+        if (this.providerListingSweep === sweep) this.providerListingSweep = null;
       }
-      if (listing.failures.length === 0) this.providerListing = listing;
+      if (listing.failures.length === 0 && generation === this.providerListingGeneration) {
+        this.providerListing = listing;
+      }
       cache = 'miss';
     }
     const configured = this.normalizeModelSpec(this.config.getModel());
@@ -2881,9 +2984,36 @@ export class LocalAgentSession implements BackendHost {
   }
 
   private async sweepProviderListing(): Promise<{ models: readonly string[]; failures: readonly ProviderFailure[] }> {
-    if (!this.modelResolver) return { models: [this.fallbackModelSpec], failures: [] };
+    if (!this.modelResolver) return { models: [STATIC_MODEL_SPEC], failures: [] };
     const menu = await this.modelResolver.listModels();
     return { models: menu.models.map((model) => `${model.provider}/${model.id}`), failures: menu.failures };
+  }
+
+  /**
+   * The cross-process half of listing invalidation: read the published provider
+   * revision and, when it differs from the one the cached listing was measured
+   * under, drop that listing.
+   *
+   * Compared BEFORE the resolution rather than after, because the envelope and
+   * the listing are loaded together (`loadProfileAuthorityInputs` runs both at
+   * once) and an invalidation that landed after the snapshot was taken would
+   * apply to the turn after this one. That off-by-one turn is the whole bug: a
+   * tier that moved to a model a newly connected provider exposes fails
+   * resolution until the session restarts.
+   *
+   * Compared, never expired. A revision that did not change means nothing
+   * changed, so there is nothing here a clock could usefully do — and a model
+   * an account stopped offering must keep failing rather than come back by
+   * waiting.
+   */
+  private observeProviderRevision(): void {
+    if (!this.readProviderRevision) return;
+    const revision = this.readProviderRevision();
+    const previous = this.observedProviderRevision;
+    this.observedProviderRevision = revision;
+    if (previous === null || previous === revision) return;
+    diagnostics.event('provider.listing_invalidated', { from: previous, to: revision });
+    this.refreshProviderListing();
   }
 
   /**
@@ -2903,6 +3033,9 @@ export class LocalAgentSession implements BackendHost {
     provider: ProviderCatalogSnapshot;
   }> {
     const startedAt = Date.now();
+    // Before the loads below, so a provider mutation made in another process
+    // reaches THIS resolution rather than the next one.
+    this.observeProviderRevision();
     let providerCache: 'hit' | 'joined' | 'miss' = 'hit';
     const inputs = await loadProfileAuthorityInputs({
       envelope: this.profileAuthority,
@@ -2945,7 +3078,7 @@ export class LocalAgentSession implements BackendHost {
   private normalizeModelSpec(spec: string | null): string {
     if (this.modelResolver) return this.modelResolver.normalizeSpecSync(spec);
     const s = (spec ?? '').trim();
-    if (!s || s === this.fallbackModelSpec) return this.fallbackModelSpec;
+    if (!s || s === STATIC_MODEL_SPEC) return STATIC_MODEL_SPEC;
     throw new Error('Model switching is unavailable for this local session; construct it with a modelResolver.');
   }
 
@@ -2957,17 +3090,17 @@ export class LocalAgentSession implements BackendHost {
    */
   private resolveModelForSpec(spec: string): LanguageModel {
     if (this.modelResolver) return this.modelResolver.resolveModel(spec);
-    if (this.normalizeModelSpec(spec) === this.fallbackModelSpec) {
+    if (this.normalizeModelSpec(spec) === STATIC_MODEL_SPEC) {
       return this.defaultModel(`the ${spec} model`);
     }
     throw new Error(
       `this session cannot resolve ${spec}: it was built with a single static model `
-      + `(${this.fallbackModelSpec}) and has no provider registry.`,
+      + `(${STATIC_MODEL_SPEC}) and has no provider registry.`,
     );
   }
 
   private effectiveModelSpec(): string {
-    return this.turnProfile?.tier.model ?? this.cachedModelSpec ?? this.fallbackModelSpec;
+    return this.turnProfile?.tier.model ?? this.cachedModelSpec ?? STATIC_MODEL_SPEC;
   }
   /** The session's model before any per-turn claim: the static model, or
    *  null on resolver sessions until a spec resolves. `what` names the use so

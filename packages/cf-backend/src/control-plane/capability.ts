@@ -47,7 +47,7 @@ const GRADE_RANK = { ingest: 1, admin: 2 } satisfies Record<ControlGrade, number
  * `requireControl` is called first thing in that method — so adding a method
  * without a capability is a type error at the call to the gate, not a hole.
  */
-export const CONTROL_PLANE_CAPABILITIES = {
+const CONTROL_PLANE_CAPABILITIES = {
   // Feeds. A signed-in user's own request causes these.
   'index.observe': 'ingest',
   'index.workspace': 'ingest',
@@ -126,8 +126,11 @@ export async function adminControlToken(env: ControlSecretEnv): Promise<ControlC
 }
 
 /** Thrown by `requireControl`. Crosses the Worker→DO RPC boundary as its
- *  message, like `CapabilityDeniedError` does for the user plane. */
-export class ControlDeniedError extends Error {
+ *  message, like `CapabilityDeniedError` does for the user plane — and only as
+ *  its message: workerd erases the subclass, so this class is module-private and
+ *  the wording is the whole contract. `unit-control-plane-do-workerd.test.ts`
+ *  measures both halves. */
+class ControlDeniedError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'ControlDeniedError';

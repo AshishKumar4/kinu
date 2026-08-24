@@ -235,13 +235,19 @@ export type CapabilityDenialReason =
  * NEITHER THE TOKEN NOR THE MESSAGE IS A FIELD. The message names the workspace,
  * and a workspace name here is mission-derived user text; the reason and the
  * capability are our own vocabulary and are what a rate is grouped by.
+ *
+ * `outcome` is stated rather than left to default. The analytics sink reads a
+ * plain `diagnostics.event` as a success, so without it every refusal this
+ * authorization surface produces was counted as one that went through.
  */
 function denyCapability(
   reason: CapabilityDenialReason,
   capability: WorkspaceCapability,
   message: string,
 ): never {
-  diagnostics.event('capability.denied', { reason, capability, source: 'workspace_capability' });
+  diagnostics.event('capability.denied', {
+    reason, capability, outcome: 'denied', source: 'workspace_capability',
+  });
   throw new CapabilityDeniedError(message);
 }
 

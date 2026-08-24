@@ -8,11 +8,11 @@ import { useRef, useState } from 'react';
 import { describe, expect, test } from 'bun:test';
 
 import { canonicalProjectRoot } from '../src/config';
-import { DEFAULT_TUI_PREFERENCES, createMemoryTuiPreferenceStore, type TuiPreferenceStore } from '../src/tui/preferences';
+import { type TuiPreferenceStore } from '../src/tui/preferences';
+import { createMemoryTuiPreferenceStore } from './helpers/tui-preferences';
 import {
   TuiProductProvider,
   TuiShell,
-  buildSidebarRows,
   usePreservedScrollAnchor,
   type ScrollAnchorController,
   type TuiAgentPage,
@@ -49,61 +49,6 @@ function saveFrame(name: string, frame: string): void {
   writeFileSync(join(FRAME_DIR, `${name}.txt`), `${frame}\n`);
 }
 
-describe('grouped sidebar projection', () => {
-  test('current-cwd workspaces come first, the cloud section starts collapsed, and paging stays a row', () => {
-    const rows = buildSidebarRows(
-      pageOf([...GROUPED_ITEMS, { name: 'faraway', label: 'faraway', mode: 'local', cwd: '/elsewhere/repo', workspaceId: 'other' }], 'page-2'),
-      ROOT,
-      { collapsedWorkspaces: [], remoteExpanded: false },
-    );
-    expect(rows.map((row) => row.kind === 'agent' ? `agent:${row.agent.mode}:${row.agent.name}` : row.key)).toEqual([
-      `ws:${ROOT}\u0000shop`,
-      'agent:local:audit',
-      'agent:local:fixer',
-      `ws:${ROOT}\u0000docs`,
-      'agent:local:writer',
-      'ws:/elsewhere/repo\u0000other',
-      'agent:local:faraway',
-      'ws:unplaced',
-      'agent:local:oldbot',
-      'remote',
-      'load-more',
-    ]);
-    const shop = rows[0]!;
-    if (shop.kind !== 'workspace') throw new Error('expected a workspace header first');
-    expect(shop.label).toBe('shop');
-    expect(shop.agentCount).toBe(2);
-    expect(shop.runningCount).toBe(1);
-    const remote = rows.find((row) => row.kind === 'remote');
-    expect(remote?.kind === 'remote' && remote.expanded).toBeFalse();
-    expect(remote?.kind === 'remote' && remote.loaded).toBe(2);
-  });
-
-  test('expansion state is honored: a collapsed group hides only its peers, an expanded cloud section lists remote agents', () => {
-    const rows = buildSidebarRows(pageOf(GROUPED_ITEMS), ROOT, {
-      collapsedWorkspaces: [`ws:${ROOT}\u0000shop`],
-      remoteExpanded: true,
-    });
-    const keys = rows.map((row) => row.key);
-    expect(keys).not.toContain('agent:local:audit');
-    expect(keys).not.toContain('agent:local:fixer');
-    expect(keys).toContain('agent:local:writer');
-    // The duplicate names survive as distinct rows because mode is part of the key.
-    expect(keys).toContain('agent:cloud:audit');
-    expect(keys).toContain('agent:cloud:jarvis');
-    expect(keys).not.toContain('load-more');
-  });
-
-  test('a legacy agent placed by no ref groups under Unplaced, never under the current project', () => {
-    const rows = buildSidebarRows(pageOf([{ name: 'oldbot', label: 'oldbot', mode: 'local' }]), ROOT, {
-      collapsedWorkspaces: [],
-      remoteExpanded: false,
-    });
-    expect(rows.map((row) => row.key)).toEqual(['ws:unplaced', 'agent:local:oldbot']);
-    const header = rows[0]!;
-    expect(header.kind === 'workspace' && header.label).toBe('Unplaced');
-  });
-});
 
 let probeTextarea: TextareaRenderable | null = null;
 let probeSetNavigationOpen: ((open: boolean) => void) | null = null;
@@ -175,7 +120,7 @@ async function mountProbe(options: {
     maxFps: Number.POSITIVE_INFINITY,
   });
   const root = createRoot(testRenderer.renderer);
-  const store = createMemoryTuiPreferenceStore(DEFAULT_TUI_PREFERENCES);
+  const store = createMemoryTuiPreferenceStore();
   const activations: Array<{ name: string; mode: 'local' | 'cloud' }> = [];
   root.render(
     <GroupedShellProbe
@@ -219,11 +164,71 @@ describe('grouped workspace navigator', () => {
         expect(frame).toContain('Cloud · 2');
         expect(frame).toContain('└ reviewer · auditor');
         expect(frame).not.toContain('Jarvis');
+        // A page with no cursor offers no paging row at all.
+        expect(frame).not.toContain('Load more');
         const lines = frame.split('\n');
         expect(lines.findIndex((line) => line.includes('shop · 2'))).toBeLessThan(lines.findIndex((line) => line.includes('Cloud · 2')));
       } finally {
         await probe.destroy();
       }
+    }
+  });
+
+  test('groups order current project first, then foreign projects, then unplaced, then cloud, with one paging row', async () => {
+    const probe = await mountProbe({
+      width: 160,
+      page: pageOf(
+        [...GROUPED_ITEMS, { name: 'faraway', label: 'faraway', mode: 'local', cwd: '/elsewhere/repo', workspaceId: 'other' }],
+        'page-2',
+      ),
+    });
+    try {
+      const frame = probe.frame();
+      const lines = frame.split('\n');
+      const at = (text: string) => {
+        const index = lines.findIndex((line) => line.includes(text));
+        if (index < 0) throw new Error(`No frame line containing ${text}`);
+        return index;
+      };
+
+      // Header counts, and the running dot that only a group with a running
+      // peer earns.
+      expect(frame).toContain('shop · 2 ●');
+      expect(lines[at('docs · 1')]).not.toContain('●');
+
+      // Peers sit under their own header, in page order.
+      expect(at('shop · 2')).toBeLessThan(at('● audit'));
+      expect(at('● audit')).toBeLessThan(at('fixer'));
+      expect(at('fixer')).toBeLessThan(at('docs · 1'));
+
+      // Another project's workspace gets its own group after this project's.
+      expect(at('docs · 1')).toBeLessThan(at('other · 1'));
+      expect(at('other · 1')).toBeLessThan(at('faraway'));
+
+      // Unplaced legacy agents, then the collapsed cloud section, then paging.
+      expect(at('faraway')).toBeLessThan(at('Unplaced · 1'));
+      expect(at('Unplaced · 1')).toBeLessThan(at('▸ Cloud · 2'));
+      expect(frame).not.toContain('Jarvis');
+      expect(at('▸ Cloud · 2')).toBeLessThan(at('Load more · 7 of 7'));
+      expect(lines.filter((line) => line.includes('Load more'))).toHaveLength(1);
+    } finally {
+      await probe.destroy();
+    }
+  });
+
+  test('a legacy agent placed by no ref groups under Unplaced, never under the current project', async () => {
+    const probe = await mountProbe({
+      width: 160,
+      page: pageOf([{ name: 'oldbot', label: 'oldbot', mode: 'local' }]),
+    });
+    try {
+      const frame = probe.frame();
+      expect(frame).toContain('Unplaced · 1');
+      expect(frame).toContain('oldbot');
+      // Exactly one group header, so the current project never claimed it.
+      expect(frame.split('▾ ')).toHaveLength(2);
+    } finally {
+      await probe.destroy();
     }
   });
 
@@ -441,7 +446,7 @@ describe('adaptive TUI shell renderer', () => {
       maxFps: Number.POSITIVE_INFINITY,
     });
     const root = createRoot(renderer);
-    const store = createMemoryTuiPreferenceStore(DEFAULT_TUI_PREFERENCES);
+    const store = createMemoryTuiPreferenceStore();
     try {
       root.render(<ShellProbe store={store} />);
       await renderSettled(renderOnce);

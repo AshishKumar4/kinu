@@ -3,7 +3,8 @@ import type { Browser, Page } from 'puppeteer';
 
 // Type-only: the timeline module declares `window.__kinuBugfixDemo`, the
 // deterministic drive this suite seeks the bug-fix demo through.
-import type { DemoCue } from '../packages/cf-backend/src/components/landing/bugfix-demo-timeline';
+import type { BugFixDemoHandle } from '../packages/cf-backend/src/components/landing/bugfix-demo-timeline';
+type DemoCue = keyof BugFixDemoHandle['cues'];
 
 import { withGallery } from './gallery-harness';
 import { THEMES, type Theme } from './computed-style';

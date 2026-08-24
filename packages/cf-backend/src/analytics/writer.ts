@@ -19,13 +19,20 @@
  * ## The window, and where it stops being exact
  *
  * The platform's write cap is per INVOCATION. An invocation is not a thing this
- * module can observe, so the cap is applied to a WINDOW that a caller opens:
- * `install.ts` opens one at the Worker's fetch and scheduled entries, and the
- * actor opens one when a turn begins. In the Worker the window is exactly an
- * invocation. Inside a Durable Object it is a turn, which may span invocations —
- * so the cap there is CONSERVATIVE: past 250 rows in one turn it can refuse a
- * write the platform would have accepted. That is the direction to be wrong in,
- * and it is not silent — the refusal is counted and reported.
+ * module can observe, so the cap is applied to a WINDOW that a caller opens at
+ * every seam an invocation is known to begin: the Worker's fetch and scheduled
+ * entries, an actor's turn, and each Durable Object's own RPC gate. Opening it
+ * once per ACTIVATION instead would be one budget for the whole life of a hot
+ * object, which is how a fleet singleton stopped producing audit evidence after
+ * its 250th row and stayed silent until eviction.
+ *
+ * TWO WAYS IT IS STILL INEXACT, both in the safe direction and neither silent.
+ * An actor's turn may span invocations, so past 250 rows in one turn it can
+ * refuse a write the platform would have accepted. And the plane is memoised on
+ * the ENVIRONMENT object, which a Worker shares across concurrent requests, so a
+ * second request's entry re-opens the counter mid-flight of the first — the
+ * shared window bounds neither request exactly. Both cases are counted as
+ * `refused` and reported once per window.
  *
  * ONE WINDOW FOR ALL THREE DATASETS, because the platform's sentence is "each
  * call to `writeDataPoint` counts towards this limit" — the cap is per
@@ -36,15 +43,13 @@
  *
  * Every call site is fire-and-forget from inside a turn, a route handler or a
  * `.catch()`. A telemetry write that can fail a turn is worse than no telemetry.
- * So the projection is TOTAL — every value is clamped, coerced or counted — and
- * the single call that could still throw is the platform's own, whose documented
- * behaviour is to report nothing at all.
  */
 import { diagnostics } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { MAX_WRITES_PER_INVOCATION } from './limits';
 import {
-  AGENT_METRICS_SCHEMA, CONTROL_PLANE_OPS_SCHEMA, FEEDBACK_MARKERS_SCHEMA,
+  AGENT_METRICS_SCHEMA, ANALYTICS_SCHEMAS, CONTROL_PLANE_OPS_SCHEMA,
+  FEEDBACK_MARKERS_SCHEMA,
   type AnalyticsRow, type AnalyticsSchema,
 } from './schemas';
 
@@ -117,7 +122,7 @@ export interface AnalyticsWindow {
   readonly refused: number;
 }
 
-export function createAnalyticsWindow(capacity = MAX_WRITES_PER_INVOCATION): AnalyticsWindow {
+function createAnalyticsWindow(capacity = MAX_WRITES_PER_INVOCATION): AnalyticsWindow {
   let remaining = capacity;
   let refused = 0;
   return {
@@ -200,7 +205,7 @@ function slotOf(row: SlotLookup, name: string): string | number | undefined {
  * not writing because there is no binding" is distinguishable from "we are not
  * writing because nothing called us".
  */
-export function createAnalyticsWriter<S extends AnalyticsSchema>(
+function createAnalyticsWriter<S extends AnalyticsSchema>(
   dataset: AnalyticsEngineDataset | undefined,
   schema: S,
   window: AnalyticsWindow,
@@ -246,12 +251,15 @@ export function createAnalyticsWriter<S extends AnalyticsSchema>(
   };
 }
 
-/** The three writers and the window they share. */
+/** The three writers, the schemas they project, and the window they share. The
+ *  census travels with the writers so the set a caller can ask for and the set
+ *  this module builds cannot drift apart silently. */
 export interface AnalyticsPlane {
   readonly agent: AnalyticsWriter<typeof AGENT_METRICS_SCHEMA>;
   readonly feedback: AnalyticsWriter<typeof FEEDBACK_MARKERS_SCHEMA>;
   readonly ops: AnalyticsWriter<typeof CONTROL_PLANE_OPS_SCHEMA>;
   readonly window: AnalyticsWindow;
+  readonly schemas: typeof ANALYTICS_SCHEMAS;
 }
 
 /**
@@ -269,19 +277,27 @@ export function analyticsPlane(env: AnalyticsEnv): AnalyticsPlane {
   const existing = PLANES.get(env);
   if (existing) return existing;
   const window = createAnalyticsWindow();
-  const plane: AnalyticsPlane = {
+  // Built FROM the census rather than beside it: a dataset added to
+  // `ANALYTICS_SCHEMAS` lands here, and a binding the env declares that no
+  // schema claims is a type error on `AnalyticsEnv` itself.
+  const plane = {
     window,
     agent: createAnalyticsWriter(env.AGENT_METRICS, AGENT_METRICS_SCHEMA, window),
     feedback: createAnalyticsWriter(env.FEEDBACK_MARKERS, FEEDBACK_MARKERS_SCHEMA, window),
     ops: createAnalyticsWriter(env.CONTROL_PLANE_OPS, CONTROL_PLANE_OPS_SCHEMA, window),
-  };
+    schemas: ANALYTICS_SCHEMAS,
+  } satisfies AnalyticsPlane;
   PLANES.set(env, plane);
   return plane;
 }
 
 /**
- * Start a new write window for this environment. Called where a bounded unit of
- * work begins: the Worker's fetch and scheduled entries, and an actor's turn.
+ * Start a new write window for this environment.
+ *
+ * Called at every seam where a bounded unit of work begins: the Worker's fetch
+ * and scheduled entries, an actor's turn, and the RPC gate of each Durable
+ * Object that writes rows. A constructor is NOT such a seam — it runs once per
+ * activation, and the platform's budget is per invocation.
  */
 export function openAnalyticsWindow(env: AnalyticsEnv): void {
   analyticsPlane(env).window.open();

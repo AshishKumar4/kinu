@@ -31,12 +31,13 @@ export interface OutputSurfaceProps {
   lastActiveExecutor?: string | null;
   plan: PlanReview | null;
   rpc: Rpc;
+  planRpc?: Rpc;
 }
 
 type OutputView = "preview" | "diff" | "plan";
 
 export function OutputSurface({
-  pinnedPorts, previewError, onRefreshPorts, executors, lastActiveExecutor, plan, rpc,
+  pinnedPorts, previewError, onRefreshPorts, executors, lastActiveExecutor, plan, rpc, planRpc,
 }: OutputSurfaceProps) {
   const [view, setView] = useState<OutputView>(plan ? "plan" : pinnedPorts.length > 0 ? "preview" : "diff");
   useEffect(() => {
@@ -61,7 +62,7 @@ export function OutputSurface({
         {view === "preview" ? <PreviewView pinnedPorts={pinnedPorts} error={previewError} onRetry={onRefreshPorts} />
           : view === "diff" ? <DiffView executors={executors} lastActiveExecutor={lastActiveExecutor} rpc={rpc} />
             : <Suspense fallback={<div className="h-full grid place-items-center"><Loader size="sm" /></div>}>
-                <PlanReviewView plan={plan} rpc={rpc} />
+                <PlanReviewView plan={plan} rpc={planRpc ?? rpc} />
               </Suspense>}
       </div>
     </div>

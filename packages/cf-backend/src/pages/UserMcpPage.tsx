@@ -23,6 +23,7 @@ import {
   type McpServerSummary, type McpTransport,
 } from "../lib/user-api";
 import { inputCls } from "@/components/ui/form";
+import { SECRET_REGION } from "@/components/ui/SecretValue";
 import * as v from "valibot";
 import { renderThrownChain } from '@kinu.run/core/obs';
 
@@ -212,7 +213,7 @@ export default function UserMcpPage() {
 
 // ── Add Server card ─────────────────────────────────────────────────
 
-function AddServerCard({ onCancel, onAdded }: { onCancel: () => void; onAdded: () => void }) {
+export function AddServerCard({ onCancel, onAdded }: { onCancel: () => void; onAdded: () => void }) {
   const [name, setName] = useState('');
   const [serverUrl, setServerUrl] = useState('');
   const [transport, setTransport] = useState<McpTransport>('auto');
@@ -271,12 +272,16 @@ function AddServerCard({ onCancel, onAdded }: { onCancel: () => void; onAdded: (
           placeholder="https://mcp.example.com/v1" />
       </div>
       <div className="space-y-1">
-	        <label className="text-xs p-text-3">
-	          Static headers (optional JSON, for private or bearer-protected servers)
-	        </label>
-	        <textarea value={headersText} onChange={(e) => setHeadersText(e.target.value)}
-	          rows={2} className={inputCls + ' font-mono'}
-	          placeholder='{"Authorization": "Bearer xyz"}' />
+        <label className="text-xs p-text-3">
+          Static headers (optional JSON, for private or bearer-protected servers)
+        </label>
+        {/* A credential region, not a hint: what a person types here is
+            `{"Authorization": "Bearer …"}`, and a textarea cannot be a password
+            field. The marker is what keeps it out of a feedback screenshot. */}
+        <textarea {...SECRET_REGION} value={headersText}
+          onChange={(e) => setHeadersText(e.target.value)}
+          rows={2} className={inputCls + ' font-mono'}
+          placeholder='{"Authorization": "Bearer xyz"}' />
       </div>
       <div className="space-y-1">
         <label className="text-xs p-text-3">Allowed tools (optional, comma-separated; empty = all)</label>

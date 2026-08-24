@@ -90,6 +90,7 @@ import {
 import { createAgentConfigStore, initAgentConfigTable } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { installAnalyticsDiagnostics } from "./analytics/install";
+import { openAnalyticsWindow } from "./analytics/writer";
 
 export class ExplorationAgent extends Agent<Env> {
   constructor(ctx: AgentContext, env: Env) {
@@ -396,6 +397,12 @@ export class ExplorationAgent extends Agent<Env> {
     mode: WorkMode,
     siblings: readonly string[] = [],
   ): Promise<BranchExploration> {
+    // Every work entry on this class reopens the analytics write window. The
+    // platform's 250-point budget is per INVOCATION and the constructor's
+    // install opens one per ACTIVATION, so a long exploration on a hot facet
+    // host spent one budget across the whole run and then went silent — on the
+    // rows that are the only fleet evidence exploration ran at all.
+    openAnalyticsWindow(this.env);
     if (!isWorkMode(mode)) throw new Error('Branch exploration requires a trusted work mode');
     return await this.tracing.invocation('rpc', 'mcts.branch', async (invocation) => {
       const route = resolveModelRoute('mcts', await this.facetProfile());
@@ -451,6 +458,7 @@ export class ExplorationAgent extends Agent<Env> {
    *  returned here (engine.ts:443), so only the operation frame is ours. */
   @callable()
   async generateReflection(task: string, outcome?: string): Promise<BranchReflection> {
+    openAnalyticsWindow(this.env);
     const traces = this.sql<{ text: string }>`SELECT text FROM traces ORDER BY step`;
     const route = resolveModelRoute('mcts', await this.facetProfile());
     if (!route) throw new Error('an MCTS reflection cannot use the fixed platform model route');
@@ -510,6 +518,7 @@ export class ExplorationAgent extends Agent<Env> {
    *  observable. */
   @callable()
   async runAsHead(): Promise<HeadReport> {
+    openAnalyticsWindow(this.env);
     if (!this.headInput) throw new Error("ExplorationAgent.runAsHead() called before initHead()");
     const input = this.headInput;
     return await this.tracing.invocation('rpc', 'head.run', async (invocation, root) => {
@@ -569,6 +578,7 @@ export class ExplorationAgent extends Agent<Env> {
    */
   @callable()
   async runAsNode(): Promise<NodeLoopResult> {
+    openAnalyticsWindow(this.env);
     if (!this.nodeSpec) throw new Error("ExplorationAgent.runAsNode() called before initNode()");
     const spec = this.nodeSpec;
     return await this.tracing.invocation('rpc', 'swarm.node', async (invocation, root) => {

@@ -37,18 +37,28 @@
 import { RESERVED_LOG_FIELDS } from '@kinu.run/core/obs';
 
 /**
- * Refuse a set of publishable names that includes a reserved one, at module load
- * rather than at the write that would have published it.
+ * Refuse a set of publishable names that includes a reserved one, or the same
+ * name twice, at module load rather than at the write that would have published
+ * it.
  *
  * Called from the two places a name becomes publishable — a dataset's slot list
- * and the diagnostics sink's field allowlist — so the ban holds over both without
- * either knowing the other exists.
+ * and the diagnostics sink's field allowlist — so both bans hold over both
+ * callers without either knowing the other exists.
+ *
+ * THE DUPLICATE IS THE SAME CLASS OF DEFECT, checked here because it is a
+ * property of this SET rather than of either caller: a name declared twice is two
+ * names for one position, and both readers resolve a slot BY NAME, so the second
+ * declaration is unreachable and every row silently carries the first one's value
+ * under the second one's heading.
  */
 export function assertPublishableNames(where: string, names: readonly string[]): void {
+  const seen: Record<string, true> = {};
   for (const name of names) {
     if (RESERVED_LOG_FIELDS.some((field) => field === name)) {
       throw new RangeError(`${where}: "${name}" is a reserved field name and may not be published`);
     }
+    if (seen[name] === true) throw new RangeError(`${where}: "${name}" is declared twice`);
+    seen[name] = true;
   }
 }
 

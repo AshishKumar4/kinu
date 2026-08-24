@@ -5,6 +5,7 @@ import {
   JsonObjectSchema,
   JsonValueSchema,
   ORCHESTRATOR_AGENT_SLUG,
+  SUBORDINATE_AGENT_SLUG,
   decodeJsonValue,
   parseJsonValue,
   type JsonObject,
@@ -121,6 +122,9 @@ const ForkAgentResultSchema = v.nullable(v.object({ name: v.optional(v.string())
 /** Both additional-agent calls answer with the slug to address the agent by
  *  and its shown title, which is empty until something names it. */
 const AdditionalAgentSchema = v.object({ name: v.string(), displayName: v.string() });
+const AdditionalAgentEnvelopeSchema = v.object({
+  subordinate: AdditionalAgentSchema,
+});
 const ChangelogRevertActionSchema = v.variant('type', [
   v.object({ type: v.literal('scaffold_rollback'), target: v.string() }),
   v.object({ type: v.literal('craft_retire'), target: v.string() }),
@@ -218,6 +222,9 @@ export interface CloudAgentClientOptions {
   agentName: string;
   /** DO instance name on the orchestrator-agent namespace. */
   cloudName: string;
+  /** Direct facet beneath `cloudName`, when this client is an additional
+   * agent rather than the root workspace conversation. */
+  subordinateName?: string;
   /** Recorder controls for this process's diagnostic transcript. */
   transcript?: CliSessionOptions;
   /** One task turn, then exit. Stamped on each chat request so the DO knows
@@ -252,10 +259,12 @@ export class CloudAgentClient implements AgentClient {
   readonly localControls = null;
   readonly checkpoints: FileCheckpointSurface;
   readonly inlineAttachmentLimitBytes = CLOUD_MAX_INLINE_ATTACHMENT_BYTES;
+  readonly rename?: (displayName: string) => Promise<{ name: string; displayName: string }>;
 
   private readonly origin: string;
   private readonly token: string;
   private readonly cloudName: string;
+  private readonly subordinateName: string | null;
   private readonly oneShot: boolean;
   private readonly transcriptOptions: CliSessionOptions;
   private activeCliSession: CliSession;
@@ -272,6 +281,11 @@ export class CloudAgentClient implements AgentClient {
     this.token = opts.token;
     this.agentName = opts.agentName;
     this.cloudName = opts.cloudName;
+    this.subordinateName = opts.subordinateName ?? null;
+    const subordinateName = this.subordinateName;
+    if (subordinateName) {
+      this.rename = (displayName) => this.renameAdditionalAgent(subordinateName, displayName);
+    }
     this.oneShot = opts.oneShot === true;
     this.transcriptOptions = opts.transcript ?? {};
     this.activeCliSession = createCliSession(opts.agentName, this.transcriptOptions);
@@ -432,6 +446,13 @@ export class CloudAgentClient implements AgentClient {
    *  history, status). Live-session ops (branch, fork, takes, checkpoints)
    *  ride callRpc on the already-open socket instead. */
   private callHttp<T>(method: string, schema: v.GenericSchema<T>, args: JsonValue[] = []): Promise<T> {
+    if (this.subordinateName) {
+      return this.callRpc(method, args).then((result) => v.parse(schema, result));
+    }
+    return this.callParentHttp(method, schema, args);
+  }
+
+  private callParentHttp<T>(method: string, schema: v.GenericSchema<T>, args: JsonValue[] = []): Promise<T> {
     return callAgentRpc(this.origin, this.token, this.cloudName, method, schema, args);
   }
 
@@ -572,16 +593,34 @@ export class CloudAgentClient implements AgentClient {
    *  the workspace's mission and comes back with a BLANK `displayName`, which
    *  its first owner message replaces. `name` is the slug to open it by. */
   async createAdditionalAgent(): Promise<{ name: string; displayName: string }> {
-    return v.parse(AdditionalAgentSchema, await this.callRpc('createSubordinateAgent', []));
+    const result = this.subordinateName
+      ? await this.callParentHttp('createSubordinateAgent', AdditionalAgentSchema)
+      : v.parse(AdditionalAgentSchema, await this.callRpc('createSubordinateAgent', []));
+    return result;
+  }
+
+  /** Open the direct facet socket for an additional agent while retaining the
+   * parent workspace name for ticket scope and parent-owned actions. */
+  openAdditionalAgent(name: string): CloudAgentClient {
+    return new CloudAgentClient({
+      origin: this.origin,
+      token: this.token,
+      agentName: name,
+      cloudName: this.cloudName,
+      subordinateName: name,
+      transcript: this.transcriptOptions,
+    });
   }
 
   /** Name one of this workspace's agents. The title becomes the owner's and is
    *  never auto-replaced afterwards. */
   async renameAdditionalAgent(name: string, displayName: string): Promise<{ name: string; displayName: string }> {
-    return v.parse(
-      AdditionalAgentSchema,
-      await this.callRpc('renameSubordinateAgent', [name, displayName]),
+    const result = await this.callParentHttp(
+      'renameSubordinateAgent',
+      AdditionalAgentEnvelopeSchema,
+      [name, displayName],
     );
+    return result.subordinate;
   }
 
   async searchNodes(): Promise<AgentSearchNode[]> {
@@ -671,7 +710,11 @@ export class CloudAgentClient implements AgentClient {
 
   private async openSocket(): Promise<void> {
     const { ticket } = await createCloudAgentConnectTicket(this.origin, this.token, this.cloudName);
-    const url = new URL(`/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(this.cloudName)}`, this.origin.replace(/\/+$/, ''));
+    const actorPath = this.subordinateName
+      ? `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(this.cloudName)}`
+        + `/sub/${SUBORDINATE_AGENT_SLUG}/${encodeURIComponent(this.subordinateName)}`
+      : `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(this.cloudName)}`;
+    const url = new URL(actorPath, this.origin.replace(/\/+$/, ''));
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
     url.searchParams.set('ticket', ticket);
 

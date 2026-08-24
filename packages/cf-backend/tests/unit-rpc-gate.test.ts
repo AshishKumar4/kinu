@@ -19,6 +19,7 @@ import {
   requiredRpcAccess,
   rpcAccessScope,
 } from '../src/cli/rpc-gate';
+import { extractTicketOrchestratorAgentName } from '../src/agent-routing';
 
 const root = join(import.meta.dir, '..');
 
@@ -181,10 +182,16 @@ describe('wiring invariants (edge → ticket → DO, one policy table)', () => {
     expect(server).toContain('next.delete(CLI_SCOPES_HEADER)');
     expect(server).toContain('next.set(CLI_SCOPES_HEADER, identity.cliScopes');
     expect(server).toContain('if (verified.scopes) identity.cliScopes = verified.scopes');
-    // Tickets only authenticate the agent's root websocket path — sub-paths
-    // would expose child-agent callables to scoped sockets. The anchored path
-    // regex lives in the agent-routing policy module server.ts routes through.
-    expect(source('src/agent-routing.ts')).toContain('([^/]+)$');
+    // Tickets remain scoped to one workspace. They admit its root and one
+    // direct additional-agent facet, but never a nested or foreign namespace.
+    expect(extractTicketOrchestratorAgentName('/agents/orchestrator-agent/workspace')).toBe('workspace');
+    expect(extractTicketOrchestratorAgentName(
+      '/agents/orchestrator-agent/workspace/sub/subordinate-agent/researcher',
+    )).toBe('workspace');
+    expect(extractTicketOrchestratorAgentName(
+      '/agents/orchestrator-agent/workspace/sub/subordinate-agent/researcher/sub/subordinate-agent/nested',
+    )).toBeNull();
+    expect(extractTicketOrchestratorAgentName('/agents/user-d-o/victim')).toBeNull();
   });
 
   test('ticket verification resolves the bearer scopes at verify time', () => {

@@ -8,7 +8,7 @@ import {
 import { renderThrownChain, tolerate } from '@kinu.run/core/obs';
 import { checkClaudeAvailability, checkOpenCodeAvailability, createOpenCodeProvider } from '@kinu.run/cli-backend';
 import { setCloudCredential } from '../cloud-api';
-import { loadConfigFile, resolveCloudSession, saveConfigFile, setDefaultModel, updateConfigFile, type KinuConfig } from '../config';
+import { bumpProviderRevision, loadConfigFile, resolveCloudSession, saveConfigFile, setDefaultModel, updateConfigFile, type KinuConfig } from '../config';
 import { ACCENT, DIM, OK, WARN } from '../display';
 import { ask, askSecret, canPrompt, confirm } from '../prompt';
 import { authCommand, openBrowser } from './auth';
@@ -62,6 +62,9 @@ export async function storeProviderSecret(opts: {
   }
   opts.clearLocally();
   setDefaultModel(opts.model);
+  // The account now holds a credential it did not hold a moment ago, and the
+  // local copy is gone. Both change what a resident session can resolve.
+  bumpProviderRevision();
   return 'account';
 }
 
@@ -327,10 +330,20 @@ export async function setupCommand(opts: {
 const INSTALL_HINT_OPENCODE = 'Install opencode: https://opencode.ai';
 const LOGIN_HINT_OPENCODE = 'Run `opencode auth login` to authenticate opencode, then run `kinu setup` again.';
 
+/**
+ * The one shape every LOCAL provider write takes: this machine's credential
+ * set plus the model spec that points at it.
+ *
+ * The provider revision advances here rather than at each call site, because
+ * every caller of this function is by definition changing what a model
+ * resolution can reach — that is what the function is for — and a new provider
+ * branch added below would otherwise silently skip the signal.
+ */
 function withProvider(config: KinuConfig, patch: Pick<KinuConfig, 'model' | 'providers'>): KinuConfig {
   return {
     ...config,
     model: patch.model,
+    providerRevision: (config.providerRevision ?? 0) + 1,
     providers: {
       ...config.providers,
       ...patch.providers,

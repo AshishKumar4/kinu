@@ -80,6 +80,7 @@ import {
   type SettledSignals,
   type AgentsToolAction,
   type AgentsToolDeps,
+  type AgentsForkDeps,
   type BuiltinToolName,
   type TurnProvenance,
   type PromptModelContext,
@@ -134,7 +135,9 @@ import {
   INHERITED_CONTEXT_CAP,
   inheritedContextFromRows,
   type ReleaseToolDeps,
-  type SubmitPlanToolDeps,
+  PlanReviewStore, admitPlanReviewAnnotations, formatPlanWithLineNumbers,
+  type PlanEdit, type PlanReview, type PlanReviewAnnotation,
+  type PlanReviewDecision, type PlanReviewResult, type SubmitPlanToolDeps,
   isVfsError,
   type ParentRpcResult, type ParentExecResult,
   type ParentRpcWrite,
@@ -197,8 +200,6 @@ import {
   recordModelRow, recordToolRow, recordTtftRow, recordTurnRow, type AgentKind,
 } from "./analytics/record";
 import * as v from 'valibot';
-
-const SESSION_REFLECTION_INTERVAL = 5; // turns between session reflections
 
 interface ClientRpcFrame {
   id: string;
@@ -399,8 +400,8 @@ export interface ActorToolDeps {
   /** Subordinate → parent progress spine — subordinate-only. */
   report?: ReportToolDeps;
   releases?: ReleaseToolDeps | undefined;
-  /** Orchestrator-owned plan review submitter. Present structurally on the
-   *  workspace actor, then surfaced only when this turn is in Plan mode. */
+  /** Owner-chat plan review submitter. Present structurally on actors whose
+   * current turn belongs to the owner, then surfaced only in Plan mode. */
   submitPlan?: SubmitPlanToolDeps;
 }
 
@@ -588,6 +589,139 @@ export abstract class ActorAgent extends Think<Env> {
    * trusted worker callers while denying the same method to client sockets. */
   protected isClientRpcMethodDenied(_method: string): boolean { return false; }
 
+  // ── Plan review ─────────────────────────────────────────────────────
+  // Every full-loop actor owns its own review stream. The concrete profile
+  // decides whether THIS turn may submit into it: an owner-driven additional
+  // agent does; a task delegated by its parent keeps the report lane instead.
+
+  private _planReviews: PlanReviewStore | null = null;
+
+  /** One SQL-backed review stream, local to this actor's durable storage. */
+  protected get planReviews(): PlanReviewStore {
+    if (!this._planReviews) this._planReviews = new PlanReviewStore(this.boundSql);
+    return this._planReviews;
+  }
+
+  protected submitPlanEdits(edits: readonly PlanEdit[]): PlanReviewResult {
+    const result = this.planReviews.submit('default', edits);
+    if (result.ok) this.broadcastPlanUpdate(result.plan);
+    return result;
+  }
+
+  private broadcastPlanUpdate(plan: PlanReview): void {
+    this.host.broadcast({ type: 'plan_updated', plan });
+  }
+
+  @callable()
+  async getActivePlanReview(): Promise<PlanReview | null> {
+    return this.planReviews.getActive('default');
+  }
+
+  @callable()
+  async savePlanReviewAnnotations(
+    id: string,
+    revision: number,
+    annotations: PlanReviewAnnotation[],
+  ): Promise<PlanReviewResult> {
+    const admitted = admitPlanReviewAnnotations(annotations);
+    if (!admitted.ok) {
+      return { ok: false, error: admitted.error, plan: this.planReviews.get(id, revision) };
+    }
+    const result = this.planReviews.saveAnnotations(id, revision, admitted.annotations);
+    if (result.ok) this.broadcastPlanUpdate(result.plan);
+    return result;
+  }
+
+  /** Persist the verdict before starting the next turn. The queued handoff
+   * keeps implementation outside the Plan tool surface. */
+  @callable()
+  async decidePlanReview(
+    id: string,
+    revision: number,
+    decision: PlanReviewDecision,
+    feedback?: string,
+  ): Promise<PlanReviewResult | {
+    readonly ok: true;
+    readonly plan: PlanReview;
+    readonly queued: boolean;
+    readonly queueError?: string;
+  }> {
+    const result = this.planReviews.decide(id, revision, decision, feedback);
+    if (!result.ok) return result;
+    if (result.plan.handoffAccepted) {
+      return { ok: true, plan: result.plan, queued: true };
+    }
+    this.broadcastPlanUpdate(result.plan);
+
+    const plan = result.plan;
+    const text = decision === 'request_changes'
+      ? [
+          `The owner requested changes to plan ${plan.id} revision ${plan.revision}.`,
+          '',
+          '## Review feedback',
+          plan.feedback ?? '',
+          '',
+          `## Current plan (${plan.content.split('\n').length} lines)`,
+          'Use these exact pre-edit line numbers in the next submit_plan call:',
+          '',
+          '```',
+          formatPlanWithLineNumbers(plan.content),
+          '```',
+          '',
+          'Revise the plan with targeted submit_plan edits. Do not implement or create previews.',
+        ].join('\n')
+      : [
+          `The owner approved plan ${plan.id} revision ${plan.revision}.`,
+          ...(plan.feedback ? ['', 'Approval notes:', plan.feedback] : []),
+          '',
+          'Implement the exact approved plan below. Verify the result and report any necessary deviation explicitly.',
+          '',
+          '<approved-plan>',
+          plan.content,
+          '</approved-plan>',
+        ].join('\n');
+    const metadata = {
+      kinuEvent: decision === 'approve' ? 'plan_approved' : 'plan_feedback',
+      kinuMode: decision === 'approve' ? 'build' : 'plan',
+      planId: plan.id,
+      revision: plan.revision,
+      decision,
+    };
+    const enqueue = (attempt: number) => this.host.enqueueTurn({
+      text,
+      metadata,
+      idempotencyKey: `plan:${plan.id}:${plan.revision}:${decision}:${attempt}`,
+    });
+    try {
+      let attempt = this.planReviews.handoffAttempt(plan.id, plan.revision);
+      let queued = await enqueue(attempt);
+      if (queued.status === 'skipped'
+        && queued.durable
+        && !queued.durable.accepted
+        && (queued.durable.status === 'aborted'
+          || queued.durable.status === 'skipped'
+          || queued.durable.status === 'error')) {
+        attempt = this.planReviews.advanceHandoffAttempt(plan.id, plan.revision, attempt);
+        queued = await enqueue(attempt);
+      }
+      if (queued.status !== 'queued') {
+        return { ok: true, plan, queued: false, queueError: 'the durable turn submission was skipped' };
+      }
+      const accepted = this.planReviews.markHandoffAccepted(plan.id, plan.revision);
+      if (!accepted.ok) return accepted;
+      this.broadcastPlanUpdate(accepted.plan);
+      return { ok: true, plan: accepted.plan, queued: true };
+    } catch (error) {
+      return {
+        ok: true,
+        plan,
+        queued: false,
+        queueError: renderThrownChain({ cause: error }),
+      };
+    }
+  }
+
+
   // ── The subordinate tree ────────────────────────────────────────────
   // Hoisted here from the orchestrator when `hire` became recursive: an actor
   // that can hold a roster is not a kind of actor, it is every actor with tree
@@ -640,7 +774,7 @@ export abstract class ActorAgent extends Think<Env> {
 
   protected get subordinateRoster(): SubordinateRosterStore {
     if (!this._subordinateRoster) {
-      this._subordinateRoster = new SubordinateRosterStore(this.ctx.storage.sql);
+      this._subordinateRoster = new SubordinateRosterStore(this.ctx.storage.sql, this.boundSql);
       this._subordinateRoster.ensureSchema();
     }
     return this._subordinateRoster;
@@ -788,10 +922,13 @@ export abstract class ActorAgent extends Think<Env> {
    * `receiveSubordinateEvent` — possession of the parent stub is the
    * authorization.
    */
-  async recordSubordinateTitle(name: string, displayName: string): Promise<{ ok: true }> {
+  async recordSubordinateTitle(
+    name: string,
+    displayName: string,
+  ): Promise<{ ok: true; applied: boolean }> {
     this.ensureSchema();
-    await this.getTeamToolDeps().recordTitle({ name, displayName });
-    return { ok: true };
+    const result = await this.getTeamToolDeps().recordTitle({ name, displayName });
+    return { ok: true, applied: result.applied };
   }
 
   /**
@@ -878,16 +1015,13 @@ export abstract class ActorAgent extends Think<Env> {
     // constructor because that is the one point guaranteed to precede every RPC
     // (`onStart` is not — see `OrchestratorAgent.claimOwner`), and idempotent per
     // isolate, so a re-activation costs nothing.
-    // The workspace is passed LAZILY and as `this.name` rather than
-    // `workspaceName()`. A SUBORDINATE's workspace name is a STORAGE READ of its
-    // `subordinate_identity` row (subordinate-agent.ts `workspaceName`), and in
-    // the constructor that row — and on a fresh facet the table itself — does not
-    // exist, so asking for it here threw `no such table: subordinate_identity` on
-    // every new facet's first activation. `this.name` is the actor's own durable
-    // name, always available, and it is the right dimension anyway: it names the
-    // EMITTER. A line that knows a different workspace still carries it as a
-    // field, and a field wins over the installed default.
-    installAnalyticsDiagnostics(this.env, () => this.name);
+    // The workspace is NOT passed. An isolate-level default would be wrong the
+    // moment two actors share an isolate — `setDiagnosticsSink` is module-global
+    // and Cloudflare co-locates Durable Objects, so the first actor to install
+    // would own the attribution of every actor beside it. Each emit that knows
+    // its workspace says so, as a `workspace` field; the rest are honestly
+    // unattributed. See `analytics/install.ts`.
+    installAnalyticsDiagnostics(this.env);
     // Scoped `pta_…` access tokens reach this DO over ticket-authenticated
     // websockets, and the REST scope gate never sees websocket frames — so
     // out-of-scope @callable requests are rejected here, ahead of the
@@ -1181,7 +1315,9 @@ export abstract class ActorAgent extends Think<Env> {
       const { provider, modelId } = parseModelSpec(spec);
       return { provider, model: modelId };
     } catch (error) {
-      diagnostics.event('actor.model_spec_unparseable', { error: renderThrownChain({ cause: error }) });
+      diagnostics.event('actor.model_spec_unparseable', {
+        workspace: this.name, error: renderThrownChain({ cause: error }),
+      });
       return UNRESOLVED_MODEL;
     }
   }
@@ -1305,7 +1441,6 @@ export abstract class ActorAgent extends Think<Env> {
         engine: this.engine,
         eventLog: this.eventLog,
         budget: this.budget,
-        sessionReflectionInterval: SESSION_REFLECTION_INTERVAL,
         roleCatalog: () => this._turnProfileInputs
           ? Object.keys(effectiveRoleCatalog(this._turnProfileInputs.envelope.catalog))
           : undefined,
@@ -2132,55 +2267,60 @@ export abstract class ActorAgent extends Think<Env> {
     // depend on strategy/ — an inverted edge the layer gate refused, correctly.
     // Nothing outside this class ever read it, so the indirection bought nothing.
     const nodeLoopHost = this.getCFNodeHost();
+    // Named and annotated rather than nested inline: this is the ONE production
+    // construction site of `AgentsForkDeps` on this backend, and a literal buried
+    // inside the outer one is a supply no reader — human or gate — can attribute
+    // to the interface it satisfies. The CLI's `buildAgentsForkDeps` is its twin.
+    const fork: AgentsForkDeps = {
+      rt: this.rt,
+      model: this.getModel(),
+      resolveModel: (spec: string) => this.ownedModelServices.resolveModel(spec),
+      // Same catalog session that answers the context window and prices the
+      // mission ledger — so a search's pre-run estimate and the ledger that
+      // later debits it read one rate.
+      costModel: () => ({
+        spec: this.effectiveModelSpec(),
+        pricing: this.modelCatalog.pricing(),
+      }),
+      // Where a tool-using node's loop runs. Through the same BackendHost seam
+      // `headRuntime` uses, because it is the same question one level down: the
+      // CLI wires none and its nodes run in process.
+      nodeHost: nodeLoopHost === undefined ? undefined : () => nodeLoopHost,
+      // `nodeHome` is deliberately NOT wired, and this is the one place a reader
+      // would look for it. *Isolation* needs a uid-0 view of the workspace
+      // filesystem and the principal registry that scopes `/tmp`; this backend
+      // reaches its workspace by RPC to a Nimbus Durable Object, where every
+      // pid-less filesystem call acts as the session user
+      // (@nimbus-sh/worker session/rpc.js `callerCred`) and `confinePrincipal`
+      // has no RPC at all — it is a method on `SqliteVFS`, which lives in that
+      // other isolate. A facet is no better placed: an ExplorationAgent builds
+      // its runtime over the same remote session. So nodes here report
+      // `shared-origin-plane`, and are graded on what they REPORT. Inventing a
+      // directory would hand a node a boundary it does not have.
+      // The *Inherited context* barrier: the SAME better-compact ladder the per-turn
+      // extension runs, entered once per branch point. The swarm engine owns the
+      // threshold; this owns the rewrite.
+      compactShared: createSharedPrefixCompactor({
+        ports: {
+          transcripts: createVfsTranscriptStore(() => this.rt.storage.vfs),
+          plans: this.compactionState.plans,
+          logger: this.compactionLogger,
+        },
+        archive: this.compactionState.archive,
+        summarize: createModelSummarizer(() => this.getModel(), {
+          source: 'compaction', report: (report) => this.reportModelCall(report),
+          operations: this.modelOperations,
+        }),
+        // The swarm half compacts on the same policy every other production
+        // path runs — the light preset — chosen here rather than inherited
+        // from an internal default, because this is the one construction
+        // site of the seam.
+        profile: COMPACTION_PRESETS.light,
+      }),
+    };
     const deps: AgentsToolDeps = {
       mode: workMode,
-      fork: {
-        rt: this.rt,
-        model: this.getModel(),
-        resolveModel: (spec: string) => this.ownedModelServices.resolveModel(spec),
-        // Same catalog session that answers the context window and prices the
-        // mission ledger — so a search's pre-run estimate and the ledger that
-        // later debits it read one rate.
-        costModel: () => ({
-          spec: this.effectiveModelSpec(),
-          pricing: this.modelCatalog.pricing(),
-        }),
-        // Where a tool-using node's loop runs. Through the same BackendHost seam
-        // `headRuntime` uses, because it is the same question one level down: the
-        // CLI wires none and its nodes run in process.
-        nodeHost: nodeLoopHost === undefined ? undefined : () => nodeLoopHost,
-        // `nodeHome` is deliberately NOT wired, and this is the one place a reader
-        // would look for it. *Isolation* needs a uid-0 view of the workspace
-        // filesystem and the principal registry that scopes `/tmp`; this backend
-        // reaches its workspace by RPC to a Nimbus Durable Object, where every
-        // pid-less filesystem call acts as the session user
-        // (@nimbus-sh/worker session/rpc.js `callerCred`) and `confinePrincipal`
-        // has no RPC at all — it is a method on `SqliteVFS`, which lives in that
-        // other isolate. A facet is no better placed: an ExplorationAgent builds
-        // its runtime over the same remote session. So nodes here report
-        // `shared-origin-plane`, and are graded on what they REPORT. Inventing a
-        // directory would hand a node a boundary it does not have.
-        // The *Inherited context* barrier: the SAME better-compact ladder the per-turn
-        // extension runs, entered once per branch point. The swarm engine owns the
-        // threshold; this owns the rewrite.
-        compactShared: createSharedPrefixCompactor({
-          ports: {
-            transcripts: createVfsTranscriptStore(() => this.rt.storage.vfs),
-            plans: this.compactionState.plans,
-            logger: this.compactionLogger,
-          },
-          archive: this.compactionState.archive,
-          summarize: createModelSummarizer(() => this.getModel(), {
-            source: 'compaction', report: (report) => this.reportModelCall(report),
-            operations: this.modelOperations,
-          }),
-          // The swarm half compacts on the same policy every other production
-          // path runs — the light preset — chosen here rather than inherited
-          // from an internal default, because this is the one construction
-          // site of the seam.
-          profile: COMPACTION_PRESETS.light,
-        }),
-      },
+      fork,
       budget: this.budget,
     };
     deps.profile = () => agentsProfileContext(this._turnProfile, this._turnProfileInputs);
@@ -2825,13 +2965,18 @@ export abstract class ActorAgent extends Think<Env> {
         persist: (name) => this.persistAutoTitle(name),
         suggest: (text) => this.suggestTitle(text),
       });
-      if (title) diagnostics.event('agent.auto_titled', { agent: this.name, title });
+      if (title) diagnostics.event('agent.auto_titled', { workspace: this.name, title });
     } catch (err) {
+      // `workspace`, not `agent`: the analytics sink publishes from a closed set
+      // of field NAMES, and `agent` is not one of them — so this actor's
+      // identity was being dropped on the way to the dataset while looking like
+      // it was reported. `title` is deliberately still not published; it is
+      // derived from the mission, which is the person's own sentence.
       diagnostics.failure('agent.auto_title_failed', toKinuError({
         doing: 'deriving a title from the mission',
         cause: err,
         otherwise: 'unavailable',
-      }), { agent: this.name });
+      }), { workspace: this.name });
     }
   }
 
@@ -3368,7 +3513,9 @@ export abstract class ActorAgent extends Think<Env> {
       const { provider, modelId } = parseModelSpec(spec);
       return { id: modelId, provider };
     } catch (error) {
-      diagnostics.event('actor.model_spec_unparseable', { error: renderThrownChain({ cause: error }) });
+      diagnostics.event('actor.model_spec_unparseable', {
+        workspace: this.name, error: renderThrownChain({ cause: error }),
+      });
       return { id: spec };
     }
   }

@@ -29,10 +29,10 @@ import {
   type TerminalColorCapability,
 } from './theme';
 
-export const WORKSPACE_SIDEBAR_COLUMNS = 28;
-export const MIN_CONVERSATION_COLUMNS = 68;
-export const PINNED_SIDEBAR_MIN_COLUMNS = WORKSPACE_SIDEBAR_COLUMNS + MIN_CONVERSATION_COLUMNS + 2;
-export const MEDIUM_LAYOUT_MIN_COLUMNS = 64;
+const WORKSPACE_SIDEBAR_COLUMNS = 28;
+const MIN_CONVERSATION_COLUMNS = 68;
+const PINNED_SIDEBAR_MIN_COLUMNS = WORKSPACE_SIDEBAR_COLUMNS + MIN_CONVERSATION_COLUMNS + 2;
+const MEDIUM_LAYOUT_MIN_COLUMNS = 64;
 
 export type TuiLayout = 'wide' | 'medium' | 'narrow';
 
@@ -228,7 +228,7 @@ export function usePreservedScrollAnchor(
 
 // ── Sidebar rows — the grouped projection the navigator renders ─────────────
 
-export type TuiSidebarRow =
+type TuiSidebarRow =
   | {
       readonly kind: 'workspace';
       readonly key: string;
@@ -241,14 +241,14 @@ export type TuiSidebarRow =
   | { readonly kind: 'remote'; readonly key: 'remote'; readonly expanded: boolean; readonly loaded: number }
   | { readonly kind: 'load-more'; readonly key: 'load-more'; readonly loaded: number; readonly total: number };
 
-export interface TuiSidebarExpansion {
+interface TuiSidebarExpansion {
   /** Collapsed virtual-workspace keys; groups start expanded. */
   readonly collapsedWorkspaces: readonly string[];
   /** The remote cloud section starts collapsed. */
   readonly remoteExpanded: boolean;
 }
 
-export function agentRowKey(agent: Pick<ListedAgent, 'name' | 'mode'>): string {
+function agentRowKey(agent: Pick<ListedAgent, 'name' | 'mode'>): string {
   return `agent:${agent.mode}:${agent.name}`;
 }
 
@@ -263,7 +263,7 @@ function workspaceRowKey(agent: ListedAgent, projectRoot: string): string {
  * paging row. Every row is selectable; subordinates render under their peer
  * agent's row and are not rows themselves.
  */
-export function buildSidebarRows(
+function buildSidebarRows(
   page: TuiAgentPage,
   projectRoot: string,
   expansion: TuiSidebarExpansion,

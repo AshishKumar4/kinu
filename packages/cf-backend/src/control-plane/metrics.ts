@@ -10,14 +10,15 @@
  * index value at volume and an unweighted `COUNT()` under-reports by exactly the
  * sample rate — worst precisely for the busiest workspace.
  *
- * This file therefore does three things and no more: pick the window, resolve a
- * workspace filter to the digest the dataset is indexed by, and hand the batch to
- * the transport.
+ * This file therefore does four things and no more: pick the window, name the
+ * deployment's own datasets, resolve a workspace filter to the digest the
+ * dataset is indexed by, and hand the batch to the transport.
  */
 import { analyticsDigest } from '../analytics/privacy';
 import { controlPlaneMetricsQueries } from '../analytics/query';
 import {
-  analyticsMissingSettings, runAnalyticsBatch, type AnalyticsPanels, type AnalyticsSqlEnv,
+  analyticsMissingSettings, clearAnalyticsCache, runAnalyticsBatch,
+  type AnalyticsPanels, type AnalyticsSqlEnv,
 } from './analytics-sql';
 
 /**
@@ -40,6 +41,7 @@ function resolveWindow(hours: number): number {
  *  empty, when no workspace filter applies. */
 interface MetricsQueryRequest {
   sinceHours: number;
+  datasetSuffix: string;
   workspaceDigest?: string;
 }
 
@@ -49,6 +51,15 @@ export interface MetricsRequest {
    *  and the raw name is deliberately unrecoverable from analytics — a workspace
    *  name is mission-derived, and therefore user text. */
   workspace?: string;
+  /**
+   * Ignore the batch cache and re-run the queries.
+   *
+   * The view's refresh button is the one caller: a dashboard whose refresh
+   * answered from the same thirty-second-old batch would look broken while being
+   * correct, and "correct" is not what an operator pressing refresh is asking
+   * for.
+   */
+  forceRefresh?: boolean;
 }
 
 export interface ControlMetrics {
@@ -81,11 +92,16 @@ export async function controlPlaneMetrics(
   // filter must leave the property ABSENT, and `analyticsDigest('')` returns ''
   // rather than a hash, so a spread that guessed would send an empty digest and
   // silently match nothing.
-  const ask: MetricsQueryRequest = { sinceHours: windowHours };
-  if (workspace !== undefined && workspace.length > 0) {
-    ask.workspaceDigest = await analyticsDigest(workspace);
-  }
+  const ask: MetricsQueryRequest = {
+    sinceHours: windowHours,
+    // Staging binds its own datasets and shares production's account, so a
+    // reader that did not say which deployment it is would answer a staging
+    // panel with production's numbers.
+    datasetSuffix: env.ANALYTICS_DATASET_SUFFIX ?? '',
+  };
+  if (workspace) ask.workspaceDigest = analyticsDigest(workspace);
   const queries = new Map(Object.entries(controlPlaneMetricsQueries(ask)));
+  if (request.forceRefresh === true) clearAnalyticsCache();
   return { windowHours, missing, panels: await runAnalyticsBatch(env, queries) };
 }
 

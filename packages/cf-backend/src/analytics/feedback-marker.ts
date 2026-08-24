@@ -100,9 +100,14 @@ export interface FeedbackMarker {
   readonly outcome: 'accepted' | 'rejected';
   readonly rejectReason: FeedbackRejectReason;
   readonly routeFamily: FeedbackRouteFamily;
-  /** Kept alongside `screenshotBytes` because a 0-byte accepted PNG and no
-   *  screenshot at all are different failures, and one number cannot say which. */
+  /** Whether the submission CARRIED a screenshot part. Read from the part's
+   *  presence, never inferred from a byte count: a refusal can happen before the
+   *  bytes are measured, and inferring there is what made the screenshot-refusal
+   *  population report itself as having no screenshots. */
   readonly hasScreenshot: boolean;
+  /** How many bytes that screenshot was. What ARRIVED for a refusal, and what
+   *  was STORED for an accepted report, because a refusal happens before the
+   *  metadata chunks are dropped and there is no stored size to report. */
   readonly screenshotBytes: number;
   /** Characters. Never the note. */
   readonly noteLength: number;
@@ -123,7 +128,12 @@ export function writeFeedbackMarker(env: AnalyticsEnv, marker: FeedbackMarker): 
     rejectReason: marker.rejectReason,
     routeFamily: marker.routeFamily,
     count: 1,
-    screenshotBytes: marker.hasScreenshot ? marker.screenshotBytes : 0,
+    // Both facts, each written once. `screenshotBytes` used to be gated on the
+    // flag, which meant a refusal that carried a screenshot and was refused
+    // before the bytes were measured wrote 0 — and 0 bytes is what a note-only
+    // report writes too, so the two populations pooled.
+    screenshot: marker.hasScreenshot ? 1 : 0,
+    screenshotBytes: marker.screenshotBytes,
     noteLength: marker.noteLength,
     annotated: marker.annotated ? 1 : 0,
   };

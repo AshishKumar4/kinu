@@ -53,6 +53,12 @@ const ResultSchema = v.object({
     auditId: v.string(),
     actorEmail: v.string(),
     refusedAfterRestart: v.boolean(),
+    /** How many unsettled attempts the second process found. The whole point of
+     *  writing the intent first is that this is not zero. */
+    pendingSurvived: v.number(),
+    settledAfterRestart: v.string(),
+    pendingAfterSettlement: v.number(),
+    resettleRefused: v.boolean(),
   }),
   isolate: v.object({
     sinkInstalls: v.number(),
@@ -151,9 +157,15 @@ describe('ControlPlaneDO in workerd', () => {
   test('the index and the audit log outlive the object', async () => {
     const result = await reported;
 
-    expect(result.writes).toEqual({
-      users: 1, workspaces: 1, auditEntries: 1, auditId: 'audit-fixture-1',
-    });
+    expect(result.writes.users).toBe(1);
+    expect(result.writes.workspaces).toBe(1);
+    expect(result.writes.auditEntries).toBe(2);
+    // The id the OBJECT minted. `AuditDraft` carries none, so a caller cannot
+    // choose the primary key of an append-only log, and what the second process
+    // finds below is the row the first one was given rather than a name this
+    // fixture asked for.
+    expect(result.writes.auditId)
+      .toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
     // Same numbers, read from a second workerd process on the same storage. The
     // first runtime — its isolate, its object and its process — is gone.
     expect(result.persistence.users).toBe(result.writes.users);
@@ -169,6 +181,22 @@ describe('ControlPlaneDO in workerd', () => {
     expect(result.isolate.sinkInstalls).toBe(2);
   }, 120_000);
 
+  test('an attempt whose outcome was never recorded survives, and can be finished', async () => {
+    // The two-phase write's reason to exist, measured across a real process
+    // boundary: the first runtime appended an intent and died without settling
+    // it, which is exactly what an eviction between the phases produces. If that
+    // row did not come back, an action taken across an eviction would leave no
+    // evidence at all — the defect this design replaced, in which the row was
+    // written after the action and a failed write was logged and swallowed.
+    const { persistence } = await reported;
+
+    expect(persistence.pendingSurvived).toBe(1);
+    expect(persistence.settledAfterRestart).toBe('ok');
+    expect(persistence.pendingAfterSettlement).toBe(0);
+    // And a replayed settlement cannot rewrite a settled row.
+    expect(persistence.resettleRefused).toBe(true);
+  }, 120_000);
+
   test('the audit marker is emitted inside the object, and carries no address', async () => {
     const { isolate } = await reported;
 
@@ -177,7 +205,10 @@ describe('ControlPlaneDO in workerd', () => {
     // installs its own. If that stopped happening, every audit marker would go to
     // Workers Logs, the operations dataset would stay empty, and every test would
     // still be green.
-    expect(isolate.operationMarkers).toBe(1);
+    //
+    // Two markers for three audit writes: the pending intent is not an outcome
+    // and does not produce an operations row, so one attempt is still one row.
+    expect(isolate.operationMarkers).toBe(2);
     expect(isolate.actorPublishedAsDigest).toBe(true);
     // The row carries the address, the event carries a digest. Checked over every
     // line the isolate emitted, because this dataset is retained on the platform's

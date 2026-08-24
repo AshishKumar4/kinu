@@ -91,6 +91,9 @@ export interface SubordinateRosterEntry {
   name: string;
   displayName: string;
   role: string;
+  /** Who owns the current title. Stored on the parent row so an automatic
+   * child update can never overwrite an owner rename that raced it. */
+  nameOrigin?: 'user' | 'auto';
   createdBy: 'orchestrator' | 'user';
   status: SubordinateStatus;
   currentTask: string | null;
@@ -190,7 +193,7 @@ export interface TeamToolDeps {
    *  is the authority on whose title it is; this row carries only the text
    *  every roster reader shows. */
   recordTitle(input: { name: string; displayName: string }): Promise<{
-    ok: true; name: string; displayName: string;
+    ok: true; name: string; displayName: string; applied: boolean;
   }>;
   /** Create a durable subordinate; its first turn is the mission. Same role
    *  vocabulary as {@link create}. */
@@ -1307,7 +1310,7 @@ type SwarmSchemaProperties = SchemaPropertiesFor<'swarm'>;
  * the resolver would refuse. Absent (no catalog wired) is an empty string —
  * the legacy freeform wording covers that actor.
  */
-export function roleSummaries(deps: AgentsToolDeps): string {
+function roleSummaries(deps: AgentsToolDeps): string {
   const ctx = deps.profile?.();
   if (!ctx) return '';
   const roles = effectiveRoleCatalog(ctx.envelope.catalog);

@@ -14,7 +14,7 @@
 import type { AgentConfigStore } from './store';
 
 /** agent_config row holding the canonical conversation id. */
-export const CONVERSATION_ID_CONFIG_KEY = 'conversation.id';
+const CONVERSATION_ID_CONFIG_KEY = 'conversation.id';
 
 /**
  * The conversation every workspace starts in.
@@ -24,7 +24,7 @@ export const CONVERSATION_ID_CONFIG_KEY = 'conversation.id';
  * adopting it keeps that history continuous instead of stranding it under an
  * id nothing reads any more.
  */
-export const FIRST_CONVERSATION_ID = 'default';
+const FIRST_CONVERSATION_ID = 'default';
 
 /** Resolve — creating on first use — the agent's canonical conversation id. */
 export function canonicalConversationId(config: AgentConfigStore): string {

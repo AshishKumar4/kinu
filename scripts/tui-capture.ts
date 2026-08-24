@@ -66,8 +66,8 @@ const { HomeApp } = await import('../packages/cli/src/tui/home-app');
 const { MessageList } = await import('../packages/cli/src/tui/messages');
 const { StatusBar } = await import('../packages/cli/src/tui/status-bar');
 const { PhaseLine, TakesOverlay, CommandHintOverlay } = await import('../packages/cli/src/tui/overlays');
-const { DEFAULT_THEME_REGISTRY } = await import('../packages/cli/src/tui/theme');
-const captureColors = DEFAULT_THEME_REGISTRY.get('kinu-dark').colors;
+const { BUILTIN_TUI_THEMES, createThemeRegistry } = await import('../packages/cli/src/tui/theme');
+const captureColors = createThemeRegistry(BUILTIN_TUI_THEMES).get('kinu-dark').colors;
 const { renderSearchTree, SLASH_COMMANDS } = await import('../packages/cli/src/slash-commands');
 
 async function settle(renderOnce: () => Promise<void>, passes = 12): Promise<void> {

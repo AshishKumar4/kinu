@@ -159,12 +159,9 @@ import {
   setMctsConfig, setReasoningEffort, setShellApprovalMode,
   type EvolutionConfigView, type MctsConfigView,
   getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
-  PlanReviewStore, formatPlanWithLineNumbers,
   planReviewAwaitingDecision,
   JsonValueSchema, type JsonValue, type KinuEvent,
-  admitPlanReviewAnnotations,
-  type PlanEdit, type PlanReview, type PlanReviewAnnotation, type PlanReviewDecision,
-  type PlanReviewResult, type WorkMode,
+  type WorkMode,
   resolveModelRoute, type ResolvedTurnProfile,
 } from "@kinu.run/core";
 import * as v from 'valibot';
@@ -285,7 +282,6 @@ function clampLimit(requested: number | undefined, max: number): number {
 }
 
 export class OrchestratorAgent extends ActorAgent {
-  private _planReviews: PlanReviewStore | null = null;
 
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
@@ -295,13 +291,6 @@ export class OrchestratorAgent extends ActorAgent {
   /** The workspace's own top-level actor — the one a person talks to. */
   protected actorKind(): AgentKind {
     return 'orchestrator';
-  }
-
-  /** One SQL-backed review stream. Constructed lazily because ActorAgent's
-   * constructor seals the RPC surface before onStart initializes the schema. */
-  private get planReviews(): PlanReviewStore {
-    if (!this._planReviews) this._planReviews = new PlanReviewStore(this.boundSql);
-    return this._planReviews;
   }
 
   protected override turnWorkMode(): WorkMode {
@@ -315,15 +304,6 @@ export class OrchestratorAgent extends ActorAgent {
       : requested;
   }
 
-  private submitPlanEdits(edits: readonly PlanEdit[]): PlanReviewResult {
-    const result = this.planReviews.submit('default', edits);
-    if (result.ok) this.broadcastPlanUpdate(result.plan);
-    return result;
-  }
-
-  private broadcastPlanUpdate(plan: PlanReview): void {
-    this.host.broadcast({ type: 'plan_updated', plan });
-  }
 
   private async completeEventBatch(turnId: string, assistantText: string): Promise<boolean> {
     try {
@@ -1289,116 +1269,6 @@ export class OrchestratorAgent extends ActorAgent {
     return { decided: decided.map((a) => a.id) };
   }
 
-  // ── Plan review — durable revisions + serialized mode handoff ────────
-
-  @callable()
-  async getActivePlanReview(): Promise<PlanReview | null> {
-    return this.planReviews.getActive('default');
-  }
-
-  @callable()
-  async savePlanReviewAnnotations(
-    id: string,
-    revision: number,
-    annotations: PlanReviewAnnotation[],
-  ): Promise<PlanReviewResult> {
-    const admitted = admitPlanReviewAnnotations(annotations);
-    if (!admitted.ok) return { ok: false, error: admitted.error, plan: this.planReviews.get(id, revision) };
-    const result = this.planReviews.saveAnnotations(id, revision, admitted.annotations);
-    if (result.ok) this.broadcastPlanUpdate(result.plan);
-    return result;
-  }
-
-  /** Persist the owner's verdict before starting the next turn. This is a
-   * mode boundary, so it deliberately enqueues behind the planning turn
-   * instead of splicing into that turn's next step: implementation must never
-   * begin under the Plan prompt/tool surface. */
-  @callable()
-  async decidePlanReview(
-    id: string,
-    revision: number,
-    decision: PlanReviewDecision,
-    feedback?: string,
-  ): Promise<PlanReviewResult | {
-    readonly ok: true;
-    readonly plan: PlanReview;
-    readonly queued: boolean;
-    readonly queueError?: string;
-  }> {
-    const result = this.planReviews.decide(id, revision, decision, feedback);
-    if (!result.ok) return result;
-    if (result.plan.handoffAccepted) {
-      return { ok: true, plan: result.plan, queued: true };
-    }
-    this.broadcastPlanUpdate(result.plan);
-
-    const plan = result.plan;
-    const text = decision === 'request_changes'
-      ? [
-          `The owner requested changes to plan ${plan.id} revision ${plan.revision}.`,
-          '',
-          '## Review feedback',
-          plan.feedback ?? '',
-          '',
-          `## Current plan (${plan.content.split('\n').length} lines)`,
-          'Use these exact pre-edit line numbers in the next submit_plan call:',
-          '',
-          '```',
-          formatPlanWithLineNumbers(plan.content),
-          '```',
-          '',
-          'Revise the plan with targeted submit_plan edits. Do not implement or create previews.',
-        ].join('\n')
-      : [
-          `The owner approved plan ${plan.id} revision ${plan.revision}.`,
-          ...(plan.feedback ? ['', 'Approval notes:', plan.feedback] : []),
-          '',
-          'Implement the exact approved plan below. Verify the result and report any necessary deviation explicitly.',
-          '',
-          '<approved-plan>',
-          plan.content,
-          '</approved-plan>',
-        ].join('\n');
-    const metadata = {
-      kinuEvent: decision === 'approve' ? 'plan_approved' : 'plan_feedback',
-      kinuMode: decision === 'approve' ? 'build' : 'plan',
-      planId: plan.id,
-      revision: plan.revision,
-      decision,
-    };
-    const enqueue = (attempt: number) => this.host.enqueueTurn({
-        text,
-        metadata,
-        idempotencyKey: `plan:${plan.id}:${plan.revision}:${decision}:${attempt}`,
-      });
-    try {
-      let attempt = this.planReviews.handoffAttempt(plan.id, plan.revision);
-      let queued = await enqueue(attempt);
-      if (queued.status === 'skipped'
-        && queued.durable
-        && !queued.durable.accepted
-        && (queued.durable.status === 'aborted'
-          || queued.durable.status === 'skipped'
-          || queued.durable.status === 'error')) {
-        attempt = this.planReviews.advanceHandoffAttempt(plan.id, plan.revision, attempt);
-        queued = await enqueue(attempt);
-      }
-      if (queued.status !== 'queued') {
-        return { ok: true, plan, queued: false, queueError: 'the durable turn submission was skipped' };
-      }
-      const accepted = this.planReviews.markHandoffAccepted(plan.id, plan.revision);
-      if (!accepted.ok) return accepted;
-      this.broadcastPlanUpdate(accepted.plan);
-      return { ok: true, plan: accepted.plan, queued: true };
-    } catch (error) {
-      return {
-        ok: true,
-        plan,
-        queued: false,
-        queueError: renderThrownChain({ cause: error }),
-      };
-    }
-  }
 
   // ── DO initialization ──────────────────────────────────────────
 

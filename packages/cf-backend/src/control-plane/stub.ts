@@ -16,8 +16,10 @@ import type { ControlPlaneDO } from './control-plane-do';
 
 /** One instance, by name. Fleet state is not per-user or per-workspace, and this
  *  is the only place the name is spelled — a second literal is how two callers
- *  end up addressing two different objects. */
-export const CONTROL_PLANE_SINGLETON = 'site';
+ *  end up addressing two different objects. Module-private for the same reason:
+ *  `controlPlaneStub` is how a caller reaches the object, so nobody outside needs
+ *  the string. */
+const CONTROL_PLANE_SINGLETON = 'site';
 
 /** The bindings a control-plane caller needs, stated structurally so a module can
  *  type its own env against it without editing the generated `Env`. */

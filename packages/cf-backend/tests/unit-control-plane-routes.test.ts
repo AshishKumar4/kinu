@@ -1,18 +1,20 @@
 /**
- * `/api/control/*` end to end, over the real gate, the real store and the real
- * action dispatcher.
+ * `/api/control/*` end to end, over the real gate, the real store, the real
+ * ownership resolution and the real action dispatcher.
  *
  * Only the TRANSPORT is stood in for: `ControlPlaneDO` is backed by the same
- * `store.ts` functions the deployed object calls, over a real SQLite database,
- * and each workspace stub records which existing `@callable` the action reached.
- * Everything the assertions are about — who is refused, what a refused mutation
- * leaves behind, which RPC an action proxies to, whether one account's rows can
- * appear in another's list — is production code running unmodified.
+ * `store.ts` functions the deployed object calls, over a real SQLite database;
+ * each UserDO stub keeps a real roster; each workspace stub keeps a real owner
+ * identity row and refuses a claim by anybody else, exactly as
+ * `OrchestratorAgent.claimOwner` does. Everything the assertions are about — who
+ * is refused, what a refused mutation leaves behind, which RPC an action proxies
+ * to, whether one account's roster row can reach another account's workspace —
+ * is production code running unmodified.
  *
  * The reason to test at this altitude rather than at the store's: the properties
- * that matter here are properties of the ROUTE. "Every mutation is audited" is
- * not a fact about a SQL function; it is a fact about the order of operations in
- * one handler, and a store test cannot see it.
+ * that matter here are properties of the ROUTE. "Every mutation is audited
+ * before it runs" is not a fact about a SQL function; it is a fact about the
+ * order of operations in one handler, and a store test cannot see it.
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -25,8 +27,8 @@ import { mockAgentsSdk } from './helpers/agents-sdk';
 import { sqlExec } from './helpers/user-do';
 
 mockAgentsSdk();
-// `routes.ts` reaches `agents` (and through it `cloudflare:email`) at module
-// load, so it is imported after the mock is registered.
+// `routes.ts` reaches the orchestrator's module graph at load, so it is imported
+// after the mock is registered.
 const { handleControlRequest } = await import('../src/control-plane/routes');
 const { requireControl } = await import('../src/control-plane/capability');
 /** The bindings the route reads. Named for its role rather than its structure:
@@ -63,15 +65,46 @@ interface WorkspaceBehaviour {
   throws?: string;
 }
 
-function harness(
-  options: { admins?: string; behaviour?: WorkspaceBehaviour; rosterError?: string } = {},
-): Harness {
+/** One roster row, as a UserDO holds it. */
+interface RosterRow {
+  name: string;
+  displayName: string;
+  createdAt: number;
+  lastVisited: number;
+}
+
+/** Which phase of the two-phase audit write is broken, when a test breaks one.
+ *  `append` is the store being unreachable before the action; `settle` is it
+ *  becoming unreachable after. */
+type AuditFault = 'append' | 'settle';
+
+interface World {
+  admins?: string;
+  behaviour?: WorkspaceBehaviour;
+  rosterError?: string;
+  /** Each account's roster. An account absent here owns nothing. */
+  rosters?: Record<string, RosterRow[]>;
+  /** Each workspace's own identity row: the account its Durable Object believes
+   *  owns it. A name absent here is an unclaimed workspace. */
+  owners?: Record<string, string>;
+  audit?: AuditFault;
+}
+
+function roster(...names: string[]): RosterRow[] {
+  return names.map((name, index) => ({
+    name, displayName: name, createdAt: 100 + index, lastVisited: 900 - index,
+  }));
+}
+
+function harness(options: World = {}): Harness {
   const db = new Database(':memory:');
   const sql = sqlExec(db);
   store.initControlPlaneSchema(sql);
   const rpc: RpcLog = { calls: [] };
   const removed: { userId: string; workspace: string }[] = [];
   const behaviour = options.behaviour ?? {};
+  const rosters = new Map(Object.entries(options.rosters ?? { [USER_ID]: roster('alpha') }));
+  const owners = new Map(Object.entries(options.owners ?? { alpha: USER_ID }));
 
   // The control-plane DO, backed by the real store. The capability gate is the
   // production one: the route derives a caller and this forwards it, so a route
@@ -109,11 +142,41 @@ function harness(
       await gate(caller, 'audit.read'); return store.listAudit(sql, request);
     },
     async recordAudit(caller: PresentedCaller, entry: store.AuditDraft) {
-      await gate(caller, 'audit.write'); return store.appendAudit(sql, entry);
+      await gate(caller, 'audit.write');
+      if (options.audit === 'append') throw new Error('the control plane is unreachable');
+      return store.appendAudit(sql, entry);
+    },
+    async settleAudit(
+      caller: PresentedCaller,
+      settlement: { id: string; outcome: store.AuditSettlement; detail: string },
+    ) {
+      await gate(caller, 'audit.write');
+      if (options.audit === 'settle') throw new Error('the control plane is unreachable');
+      const row = store.settleAudit(sql, settlement);
+      if (row === null) throw new Error(`no pending audit row ${settlement.id}`);
+      return row;
     },
   };
 
   const workspaceStub = (name: string) => ({
+    // The workspace's own identity check, in the shape `OrchestratorAgent`
+    // implements it: an unclaimed object accepts the first claimant, a claimed
+    // one refuses anybody else. This is what a roster row in the wrong account
+    // runs into, so a stub that always said yes would test nothing.
+    async claimOwner(userId: string) {
+      rpc.calls.push({ workspace: name, method: 'claimOwner', args: [userId] });
+      const current = owners.get(name);
+      if (current === undefined) {
+        owners.set(name, userId);
+        return { owner: userId, capabilityHash: null };
+      }
+      if (current !== userId) {
+        throw new Error(
+          `Agent owned by a different user (stored=${current.slice(0, 8)}…, caller=${userId.slice(0, 8)}…)`,
+        );
+      }
+      return { owner: current, capabilityHash: null };
+    },
     async cancelBackgroundJob(jobId: string) {
       if (behaviour.throws) throw new Error(behaviour.throws);
       rpc.calls.push({ workspace: name, method: 'cancelBackgroundJob', args: [jobId] });
@@ -170,17 +233,29 @@ function harness(
   });
 
   const userStub = (userId: string) => ({
+    async hasWorkspace(_caller: PresentedCaller, name: string) {
+      return (rosters.get(userId) ?? []).some((row) => row.name === name);
+    },
+    async ensureWorkspaceCapability(name: string, _hash: string | null) {
+      if (!(rosters.get(userId) ?? []).some((row) => row.name === name)) {
+        throw new Error(`Workspace ${name} not in your registry`);
+      }
+    },
     async listWorkspaces() {
       if (options.rosterError) throw new Error(options.rosterError);
-      return {
-        entries: userId === USER_ID
-          ? [{ name: 'alpha', displayName: 'Alpha', createdAt: 100, lastVisited: 900, archivedAt: null }]
-          : [],
-        total: userId === USER_ID ? 1 : 0,
-        nextCursor: null,
-      };
+      const entries = rosters.get(userId) ?? [];
+      return { entries, total: entries.length, nextCursor: null };
     },
     async removeWorkspace(_caller: PresentedCaller, workspace: string, owner: string) {
+      // `UserDO.removeWorkspace` tears the object down FIRST, and
+      // `destroyAgent` refuses unless the stored owner is this account. A
+      // teardown failure keeps the registry row, which is what fail-closed
+      // means here.
+      const stored = owners.get(workspace);
+      rpc.calls.push({ workspace, method: 'destroyAgent', args: [owner] });
+      if (stored !== owner) throw new Error('Agent owner mismatch; refusing to destroy.');
+      owners.delete(workspace);
+      rosters.set(userId, (rosters.get(userId) ?? []).filter((row) => row.name !== workspace));
       removed.push({ userId: owner, workspace });
     },
   });
@@ -315,7 +390,7 @@ describe('mutations', () => {
     const h = harness();
     const stale = identity({ authTime: Date.now() - 6 * 60 * 1000 });
     const answer = await handleControlRequest(
-      post('/actions', { action: 'jobs.clear', workspace: 'alpha' }), h.env, stale,
+      post('/actions', { action: 'jobs.clear', userId: USER_ID, workspace: 'alpha' }), h.env, stale,
     );
 
     expect(answer?.status).toBe(403);
@@ -332,7 +407,7 @@ describe('mutations', () => {
   test('a body the schema does not recognize is refused AND audited', async () => {
     const h = harness();
     const answer = await handleControlRequest(
-      post('/actions', { action: 'setModel', workspace: 'alpha', model: 'anything' }),
+      post('/actions', { action: 'setModel', userId: USER_ID, workspace: 'alpha', model: 'anything' }),
       h.env, identity(),
     );
     expect(answer?.status).toBe(400);
@@ -346,18 +421,17 @@ describe('mutations', () => {
   test('a fresh operator action reaches the existing RPC and is audited as ok', async () => {
     const h = harness();
     const answer = await handleControlRequest(
-      post('/actions', { action: 'job.cancel', workspace: 'alpha', jobId: 'job-7' }),
+      post('/actions', { action: 'job.cancel', userId: USER_ID, workspace: 'alpha', jobId: 'job-7' }),
       h.env, identity(),
     );
 
     expect(answer?.status).toBe(200);
     // The action proxied to the callable the owner's own UI calls — not to a
-    // second implementation of cancelling a job.
-    expect(h.rpc.calls).toEqual([
-      { workspace: 'alpha', method: 'cancelBackgroundJob', args: ['job-7'] },
-    ]);
+    // second implementation of cancelling a job — and only after the workspace's
+    // own object confirmed this account owns it.
+    expect(h.rpc.calls.map((c) => c.method)).toEqual(['claimOwner', 'cancelBackgroundJob']);
     expect(store.listAudit(h.sql).items[0]).toMatchObject({
-      operation: 'job_cancel', targetKind: 'job', target: 'alpha/job-7', outcome: 'ok',
+      operation: 'job_cancel', targetKind: 'job', target: `${USER_ID}/alpha/job-7`, outcome: 'ok',
     });
     h.close();
   });
@@ -365,7 +439,7 @@ describe('mutations', () => {
   test('a refusal by the owning object is a 409, and its reason is the audited detail', async () => {
     const h = harness({ behaviour: { retry: { ok: false, error: 'that job already succeeded' } } });
     const answer = await handleControlRequest(
-      post('/actions', { action: 'job.retry', workspace: 'alpha', jobId: 'job-7' }),
+      post('/actions', { action: 'job.retry', userId: USER_ID, workspace: 'alpha', jobId: 'job-7' }),
       h.env, identity(),
     );
 
@@ -379,12 +453,14 @@ describe('mutations', () => {
   test('a throwing RPC is a 502 audited as failed, kept apart from a refusal', async () => {
     const h = harness({ behaviour: { throws: 'the workspace is evicted' } });
     const answer = await handleControlRequest(
-      post('/actions', { action: 'job.cancel', workspace: 'alpha', jobId: 'job-7' }),
+      post('/actions', { action: 'job.cancel', userId: USER_ID, workspace: 'alpha', jobId: 'job-7' }),
       h.env, identity(),
     );
     expect(answer?.status).toBe(502);
     const row = store.listAudit(h.sql).items[0];
     expect(row?.outcome).toBe('failed');
+    // The rendered chain stays in the durable row. What the analytics sink gets
+    // instead is a closed word, which `unit-analytics-plane` covers.
     expect(row?.detail).toContain('the workspace is evicted');
     h.close();
   });
@@ -392,10 +468,11 @@ describe('mutations', () => {
   test('revoking shell grants reads them first, so the audited count is real', async () => {
     const h = harness({ behaviour: { grants: { grants: [{ kind: 'git' }, { kind: 'npm' }] } } });
     await handleControlRequest(
-      post('/actions', { action: 'shell_grants.revoke', workspace: 'alpha' }), h.env, identity(),
+      post('/actions', { action: 'shell_grants.revoke', userId: USER_ID, workspace: 'alpha' }),
+      h.env, identity(),
     );
     expect(h.rpc.calls.map((c) => c.method)).toEqual([
-      'getShellApprovalGrants', 'revokeShellApprovalGrants',
+      'claimOwner', 'getShellApprovalGrants', 'revokeShellApprovalGrants',
     ]);
     expect(store.listAudit(h.sql).items[0]?.detail).toBe('revoked 2, 0 remain');
     h.close();
@@ -404,16 +481,17 @@ describe('mutations', () => {
   test('revoking nothing is a refusal, not an "ok" with nothing revoked', async () => {
     const h = harness({ behaviour: { grants: { grants: [] } } });
     const answer = await handleControlRequest(
-      post('/actions', { action: 'shell_grants.revoke', workspace: 'alpha' }), h.env, identity(),
+      post('/actions', { action: 'shell_grants.revoke', userId: USER_ID, workspace: 'alpha' }),
+      h.env, identity(),
     );
     expect(answer?.status).toBe(409);
-    expect(h.rpc.calls.map((c) => c.method)).toEqual(['getShellApprovalGrants']);
+    expect(h.rpc.calls.map((c) => c.method)).toEqual(['claimOwner', 'getShellApprovalGrants']);
     expect(store.listAudit(h.sql).items[0]?.outcome).toBe('denied');
     h.close();
   });
 
   test('removing a workspace needs the name retyped, and the refusal is audited', async () => {
-    const h = harness();
+    const h = harness({ rosters: { [OTHER_ID]: roster('alpha') }, owners: { alpha: OTHER_ID } });
     const answer = await handleControlRequest(
       post('/actions', {
         action: 'workspace.remove', workspace: 'alpha', userId: OTHER_ID, confirm: 'alpha-typo',
@@ -422,6 +500,9 @@ describe('mutations', () => {
     );
     expect(answer?.status).toBe(409);
     expect(h.removed).toEqual([]);
+    // The typo is caught before anything is woken, so not even the identity
+    // check reaches the workspace.
+    expect(h.rpc.calls).toEqual([]);
     expect(store.listAudit(h.sql).items[0]).toMatchObject({
       operation: 'workspace_remove', outcome: 'denied', detail: 'the typed name did not match',
     });
@@ -429,7 +510,7 @@ describe('mutations', () => {
   });
 
   test('a confirmed removal proxies to the registry and tombstones the index', async () => {
-    const h = harness();
+    const h = harness({ rosters: { [OTHER_ID]: roster('alpha') }, owners: { alpha: OTHER_ID } });
     store.observeWorkspace(h.sql, { userId: OTHER_ID, name: 'alpha', displayName: 'Alpha', at: 1_000 });
     const answer = await handleControlRequest(
       post('/actions', {
@@ -449,17 +530,18 @@ describe('mutations', () => {
     h.close();
   });
 
-  test('every mutation path this route accepts leaves exactly one audit row', async () => {
-    // The property stated as a sweep rather than as seven separate assertions:
-    // whatever the outcome, one attempt is one row.
+  test('every mutation path this route accepts leaves exactly one settled audit row', async () => {
+    // The property stated as a sweep rather than as eight separate assertions:
+    // whatever the outcome, one attempt is one row — and none of them is left
+    // pending, because a pending row means an outcome nobody recorded.
     const attempts: JsonValue[] = [
-      { action: 'job.cancel', workspace: 'alpha', jobId: 'j' },
-      { action: 'job.retry', workspace: 'alpha', jobId: 'j' },
-      { action: 'job.dismiss', workspace: 'alpha', jobId: 'j' },
-      { action: 'jobs.clear', workspace: 'alpha' },
-      { action: 'approvals.decide', workspace: 'alpha', ids: ['x'], decision: 'approved' },
-      { action: 'shell_grants.revoke', workspace: 'alpha' },
-      { action: 'workspace.remove', workspace: 'alpha', userId: OTHER_ID, confirm: 'alpha' },
+      { action: 'job.cancel', userId: USER_ID, workspace: 'alpha', jobId: 'j' },
+      { action: 'job.retry', userId: USER_ID, workspace: 'alpha', jobId: 'j' },
+      { action: 'job.dismiss', userId: USER_ID, workspace: 'alpha', jobId: 'j' },
+      { action: 'jobs.clear', userId: USER_ID, workspace: 'alpha' },
+      { action: 'approvals.decide', userId: USER_ID, workspace: 'alpha', ids: ['x'], decision: 'approved' },
+      { action: 'shell_grants.revoke', userId: USER_ID, workspace: 'alpha' },
+      { action: 'workspace.remove', userId: USER_ID, workspace: 'alpha', confirm: 'alpha' },
       // Refused shapes count too: an unaudited rejected attempt is the gap.
       { action: 'nonsense' },
     ];
@@ -467,7 +549,64 @@ describe('mutations', () => {
     for (const attempt of attempts) {
       await handleControlRequest(post('/actions', attempt), h.env, identity());
     }
-    expect(store.listAudit(h.sql, { limit: 50 }).items.length).toBe(attempts.length);
+    const rows = store.listAudit(h.sql, { limit: 50 }).items;
+    expect(rows.length).toBe(attempts.length);
+    expect(store.listPendingAudit(h.sql)).toEqual([]);
+    // All seven verbs the union declares are reachable and named in the log.
+    expect(new Set(rows.map((row) => row.operation))).toEqual(new Set([
+      'job_cancel', 'job_retry', 'job_dismiss', 'jobs_clear',
+      'approvals_decide', 'shell_grants_revoke', 'workspace_remove', 'action_rejected',
+    ]));
+    h.close();
+  });
+});
+
+describe('the audit log is written before the action, not after', () => {
+  test('an unavailable audit store runs NOTHING', async () => {
+    // The defect this closes: the row used to be appended after the mutation, and
+    // a failed append was logged and swallowed — so a successful job clear, an
+    // approval decision or a grant revocation could return 200 with no durable
+    // record that anybody had done it.
+    const h = harness({ audit: 'append' });
+    const attempts: JsonValue[] = [
+      { action: 'job.cancel', userId: USER_ID, workspace: 'alpha', jobId: 'j' },
+      { action: 'jobs.clear', userId: USER_ID, workspace: 'alpha' },
+      { action: 'approvals.decide', userId: USER_ID, workspace: 'alpha', ids: ['x'], decision: 'approved' },
+      { action: 'shell_grants.revoke', userId: USER_ID, workspace: 'alpha' },
+      { action: 'workspace.remove', userId: USER_ID, workspace: 'alpha', confirm: 'alpha' },
+      // And the refusals: a plane that cannot record its own refusal says so.
+      { action: 'nonsense' },
+    ];
+    for (const attempt of attempts) {
+      const answer = await handleControlRequest(post('/actions', attempt), h.env, identity());
+      expect(answer?.status).toBe(503);
+    }
+    expect(h.rpc.calls).toEqual([]);
+    expect(h.removed).toEqual([]);
+    expect(store.listAudit(h.sql).items).toEqual([]);
+    h.close();
+  });
+
+  test('a lost settlement leaves a pending row and does not answer success', async () => {
+    // The action has already happened; the honest answer is that its outcome was
+    // not recorded, plus a durable row an operator can find.
+    const h = harness({ audit: 'settle' });
+    const answer = await handleControlRequest(
+      post('/actions', { action: 'job.cancel', userId: USER_ID, workspace: 'alpha', jobId: 'job-7' }),
+      h.env, identity(),
+    );
+
+    expect(answer?.status).toBe(500);
+    expect(await bodyOf(answer)).toMatchObject({
+      error: expect.stringContaining('still pending in the audit log'),
+    });
+    expect(h.rpc.calls.map((c) => c.method)).toEqual(['claimOwner', 'cancelBackgroundJob']);
+    const pending = store.listPendingAudit(h.sql);
+    expect(pending.length).toBe(1);
+    expect(pending[0]).toMatchObject({
+      operation: 'job_cancel', outcome: 'pending', target: `${USER_ID}/alpha/job-7`,
+      actorEmail: OPERATOR,
+    });
     h.close();
   });
 });
@@ -495,7 +634,7 @@ describe('cross-user isolation', () => {
 
     const answer = await handleControlRequest(get(`/users/${USER_ID}`), h.env, identity());
     const detail = await bodyOf(answer);
-    expect(detail).toMatchObject({ reconciled: true, viewer: OPERATOR });
+    expect(detail).toMatchObject({ reconcile: { status: 'ok' }, viewer: OPERATOR });
     // `alpha` is what the fake registry holds; `stale` is what the index held.
     // The reconcile is what makes the second one a tombstone.
     const rows = store.listWorkspaces(h.sql, {}, { userId: USER_ID }).items;
@@ -510,7 +649,9 @@ describe('cross-user isolation', () => {
 
     const answer = await handleControlRequest(get(`/users/${USER_ID}`), h.env, identity());
     const detail = await bodyOf(answer);
-    expect(detail).toMatchObject({ reconciled: false });
+    expect(detail).toMatchObject({
+      reconcile: { status: 'failed', reason: expect.stringContaining('the user object is evicted') },
+    });
     // Nothing tombstoned on a failed read: an operator deciding to remove a
     // workspace must not be shown a list that a failure emptied.
     expect(store.listWorkspaces(h.sql, {}, { userId: USER_ID }).items.map((r) => r.name)).toEqual(['kept']);
@@ -521,6 +662,101 @@ describe('cross-user isolation', () => {
     const h = harness();
     const answer = await handleControlRequest(get('/users/not-a-user-id'), h.env, identity());
     expect(answer?.status).toBe(400);
+    h.close();
+  });
+
+  test('a workspace read without an owner is refused, because the name is not an address', async () => {
+    const h = harness();
+    const answer = await handleControlRequest(get('/workspaces/alpha'), h.env, identity());
+    expect(answer?.status).toBe(400);
+    expect(h.rpc.calls).toEqual([]);
+    h.close();
+  });
+});
+
+/**
+ * Two accounts, one global workspace name.
+ *
+ * `OrchestratorAgent` is addressed by name across the whole deployment while a
+ * roster row is per-account, so two accounts CAN hold a row for the same string
+ * and only one of them can own the object. Everything below is that situation.
+ */
+describe('a global-name collision between two accounts', () => {
+  /** The loser's roster row: it exists in their UserDO and names a workspace the
+   *  other account's Durable Object owns. Reachable in production when a create
+   *  registered its row and then lost the ownership claim. */
+  const collided = () => harness({
+    rosters: { [USER_ID]: roster('contested'), [OTHER_ID]: roster('contested') },
+    owners: { contested: USER_ID },
+  });
+
+  test('the owner reaches the workspace and the other account does not', async () => {
+    const h = collided();
+    const mine = await handleControlRequest(
+      get(`/workspaces/contested?userId=${USER_ID}`), h.env, identity(),
+    );
+    expect(mine?.status).toBe(200);
+    expect(await bodyOf(mine)).toMatchObject({ workspace: 'contested', userId: USER_ID });
+
+    h.rpc.calls.length = 0;
+    const theirs = await handleControlRequest(
+      get(`/workspaces/contested?userId=${OTHER_ID}`), h.env, identity(),
+    );
+    // 403: a genuine cross-user collision, refused by the workspace's own
+    // identity row rather than by a guess about the name.
+    expect(theirs?.status).toBe(403);
+    // The refusal happened at the identity check. Not one panel RPC ran, so the
+    // operator never saw a byte of the owner's runs, spend, jobs or approvals.
+    expect(h.rpc.calls.map((c) => c.method)).toEqual(['claimOwner']);
+    h.close();
+  });
+
+  test('a stale roster row cannot mutate the account that really owns the name', async () => {
+    const h = collided();
+    const attempts: JsonValue[] = [
+      { action: 'job.cancel', userId: OTHER_ID, workspace: 'contested', jobId: 'j' },
+      { action: 'job.retry', userId: OTHER_ID, workspace: 'contested', jobId: 'j' },
+      { action: 'job.dismiss', userId: OTHER_ID, workspace: 'contested', jobId: 'j' },
+      { action: 'jobs.clear', userId: OTHER_ID, workspace: 'contested' },
+      { action: 'approvals.decide', userId: OTHER_ID, workspace: 'contested', ids: ['x'], decision: 'approved' },
+      { action: 'shell_grants.revoke', userId: OTHER_ID, workspace: 'contested' },
+      { action: 'workspace.remove', userId: OTHER_ID, workspace: 'contested', confirm: 'contested' },
+    ];
+    for (const attempt of attempts) {
+      const answer = await handleControlRequest(post('/actions', attempt), h.env, identity());
+      expect(answer?.status, JSON.stringify(attempt)).not.toBe(200);
+    }
+
+    // Every attempt was refused by the object's own identity check — the six
+    // proxied verbs at `claimOwner`, the removal at `destroyAgent` — and not one
+    // of them reached a method that reads or changes the owner's state.
+    expect(new Set(h.rpc.calls.map((c) => c.method))).toEqual(new Set(['claimOwner', 'destroyAgent']));
+    expect(h.removed).toEqual([]);
+    // The owner still owns it, and the audit log has one settled row per attempt.
+    const rows = store.listAudit(h.sql, { limit: 50 }).items;
+    expect(rows.length).toBe(7);
+    expect(store.listPendingAudit(h.sql)).toEqual([]);
+    for (const row of rows) expect(row.outcome).not.toBe('ok');
+    h.close();
+  });
+
+  test('a failed cross-user create leaves the loser no roster row and no index row', async () => {
+    // The other half of the same defect, proven through the account's own
+    // registry rather than through the control plane: after the losing create
+    // rolled back, the loser's drilldown reconciles to an empty list and the
+    // owner's workspace is untouched.
+    const h = harness({
+      rosters: { [USER_ID]: roster('contested'), [OTHER_ID]: [] },
+      owners: { contested: USER_ID },
+    });
+    store.observeUser(h.sql, { userId: OTHER_ID, email: 'loser@example.com', at: 1_000 });
+
+    const answer = await handleControlRequest(get(`/users/${OTHER_ID}`), h.env, identity());
+    expect(await bodyOf(answer)).toMatchObject({
+      reconcile: { status: 'ok' },
+      workspaces: { items: [] },
+    });
+    expect(store.listWorkspaces(h.sql, {}, { userId: USER_ID }).items).toEqual([]);
     h.close();
   });
 });
@@ -555,6 +791,51 @@ describe('paging over HTTP', () => {
     h.close();
   });
 
+  test('250 of one account\u2019s workspaces are walkable, and only page one reconciles', async () => {
+    // The defect: the drilldown asked for exactly one `CONTROL_PAGE_MAX` page, so
+    // an account with more than 200 workspaces had every row past 200
+    // unreachable under copy that said the table was the registry's. And the
+    // reconcile REWRITES `last_seen_at`, which the cursor orders on, so running
+    // it again mid-walk would reorder the list underneath the walk.
+    const many = roster(...Array.from({ length: 250 }, (_, i) => `w${String(i).padStart(3, '0')}`));
+    const h = harness({ rosters: { [USER_ID]: many }, owners: {} });
+    store.observeUser(h.sql, { userId: USER_ID, email: OPERATOR, at: 1_000 });
+
+    const DetailSchema = v.object({
+      reconcile: v.union([
+        v.object({ status: v.literal('ok') }),
+        v.object({ status: v.literal('skipped'), reason: v.string() }),
+        v.object({ status: v.literal('failed'), reason: v.string() }),
+      ]),
+      workspaces: v.variant('status', [
+        v.object({
+          status: v.literal('more'),
+          items: v.array(v.object({ name: v.string() })),
+          next: v.object({ after: v.string() }),
+        }),
+        v.object({ status: v.literal('end'), items: v.array(v.object({ name: v.string() })) }),
+      ]),
+    });
+
+    const seen: string[] = [];
+    const reconciles: string[] = [];
+    let query = '?limit=200';
+    for (let pages = 0; pages < 5; pages += 1) {
+      const answer = await handleControlRequest(get(`/users/${USER_ID}${query}`), h.env, identity());
+      expect(answer?.status).toBe(200);
+      const detail = v.parse(DetailSchema, await answered(answer).json());
+      reconciles.push(detail.reconcile.status);
+      for (const row of detail.workspaces.items) seen.push(row.name);
+      if (detail.workspaces.status === 'end') break;
+      query = `?limit=200&cursor=${encodeURIComponent(detail.workspaces.next.after)}`;
+    }
+
+    expect(seen.length).toBe(250);
+    expect(new Set(seen).size).toBe(250);
+    expect(reconciles).toEqual(['ok', 'skipped']);
+    h.close();
+  });
+
   test('a cursor the plane did not issue is refused rather than restarting the walk', async () => {
     const h = harness();
     store.observeUser(h.sql, { userId: USER_ID, email: OPERATOR, at: 1_000 });
@@ -570,10 +851,13 @@ describe('paging over HTTP', () => {
 describe('reads that reach through', () => {
   test('the workspace drilldown reports a down panel instead of blanking the page', async () => {
     const h = harness();
-    const answer = await handleControlRequest(get('/workspaces/alpha'), h.env, identity());
+    const answer = await handleControlRequest(
+      get(`/workspaces/alpha?userId=${USER_ID}`), h.env, identity(),
+    );
     const detail = await bodyOf(answer);
     expect(detail).toMatchObject({
       workspace: 'alpha',
+      userId: USER_ID,
       runs: { status: 'ok' },
       jobs: { status: 'ok' },
       // The one stub that throws. A workspace whose sandbox is down still has

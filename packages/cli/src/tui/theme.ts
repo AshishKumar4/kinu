@@ -343,9 +343,9 @@ export function createThemeRegistry(themes: readonly TuiThemeDefinition[]): Them
   });
 }
 
-export const DEFAULT_THEME_REGISTRY = createThemeRegistry(BUILTIN_TUI_THEMES);
+const DEFAULT_THEME_REGISTRY = createThemeRegistry(BUILTIN_TUI_THEMES);
 
-export function resolveThemeSelection(
+function resolveThemeSelection(
   registry: ThemeRegistry,
   selection: ThemeSelection,
   terminalAppearance: ThemeAppearance,
@@ -388,7 +388,7 @@ export function parseCustomTheme(json: string, filename: string): TuiThemeDefini
   return freezeTheme(theme);
 }
 
-export function themeContrastFailures(theme: TuiThemeDefinition): string[] {
+function themeContrastFailures(theme: TuiThemeDefinition): string[] {
   const { background, border, text, intent } = theme.colors;
   const pairs = [
     ['text.primary/background.canvas', text.primary, background.canvas, 4.5],
@@ -407,7 +407,7 @@ export function themeContrastFailures(theme: TuiThemeDefinition): string[] {
   });
 }
 
-export function detectTerminalAppearance(environment: Readonly<Record<string, string | undefined>> = process.env): ThemeAppearance {
+function detectTerminalAppearance(environment: Readonly<Record<string, string | undefined>> = process.env): ThemeAppearance {
   const colorFgBg = environment.COLORFGBG?.split(';').at(-1);
   if (colorFgBg !== undefined && /^\d+$/u.test(colorFgBg)) {
     const background = Number(colorFgBg);
@@ -416,13 +416,13 @@ export function detectTerminalAppearance(environment: Readonly<Record<string, st
   return environment.TERM_PROGRAM?.toLowerCase().includes('apple_terminal') === true ? 'light' : 'dark';
 }
 
-export function detectTerminalColorCapability(environment: Readonly<Record<string, string | undefined>> = process.env): TerminalColorCapability {
+function detectTerminalColorCapability(environment: Readonly<Record<string, string | undefined>> = process.env): TerminalColorCapability {
   const colorTerm = environment.COLORTERM?.toLowerCase() ?? '';
   if (colorTerm.includes('truecolor') || colorTerm.includes('24bit')) return 'truecolor';
   return environment.TERM?.includes('256color') === true ? 'ansi256' : 'ansi16';
 }
 
-export function projectTheme(theme: TuiThemeDefinition, capability: TerminalColorCapability): TuiThemeDefinition {
+function projectTheme(theme: TuiThemeDefinition, capability: TerminalColorCapability): TuiThemeDefinition {
   if (capability === 'truecolor') return theme;
   const palette = capability === 'ansi256' ? ANSI_256 : ANSI_16;
   const project = (color: string): string => closestColor(color, palette);
@@ -431,7 +431,7 @@ export function projectTheme(theme: TuiThemeDefinition, capability: TerminalColo
 }
 
 
-export function markdownSyntaxForTheme(theme: TuiThemeDefinition): SyntaxStyle {
+function markdownSyntaxForTheme(theme: TuiThemeDefinition): SyntaxStyle {
   const { background, border, text, intent } = theme.colors;
   return SyntaxStyle.fromStyles({
     text: { fg: text.primary },

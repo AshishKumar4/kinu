@@ -137,6 +137,22 @@ export interface KinuConfig {
   deviceConnectPromptDismissed?: boolean;
   /** Shadow-git file checkpoints kept per working directory (default 50). */
   checkpointKeep?: number;
+  /**
+   * How many times this machine's PROVIDER configuration has changed — every
+   * credential connected, revoked, or signed in or out advances it by one.
+   *
+   * It exists to cross a process boundary. A resident daemon or a live chat
+   * session caches the provider listing and invalidates it by signal rather
+   * than by time, and `kinu provider connect` runs in a different process
+   * entirely, so nothing in the resident one is there to raise that signal.
+   * This counter is what it reads instead: a number that differs from the one
+   * its cached listing was measured under means sweep again.
+   *
+   * Monotonic and meaningless in absolute terms — only inequality is read, so
+   * there is no clock here and nothing expires. Absent reads as 0, which is the
+   * correct baseline for a machine that has never changed a provider.
+   */
+  providerRevision?: number;
   /** Signed-out profile authority: the one local envelope, canonical when
    *  no account session governs this machine. Never holds account data. */
   localProfile?: ProfileCatalogEnvelope;
@@ -205,6 +221,7 @@ const KinuConfigSchema: v.GenericSchema<KinuConfig> = v.object({
   mcpServers: v.optional(v.record(v.string(), McpServerConfigSchema)),
   deviceConnectPromptDismissed: v.optional(v.boolean()),
   checkpointKeep: v.optional(v.number()),
+  providerRevision: v.optional(v.number()),
   localProfile: v.optional(ProfileCatalogEnvelopeSchema),
 });
 
@@ -300,7 +317,7 @@ export function listLocalRefsAllProjects(): LocalAgentRef[] {
 
 /** One project's refs. A legacy workspace with no recorded placement is NOT
  *  attributed here — attribution is adoption, and adoption is per-agent. */
-export function listLocalRefs(cwd = process.cwd()): LocalAgentRef[] {
+function listLocalRefs(cwd = process.cwd()): LocalAgentRef[] {
   const root = canonicalProjectRoot(cwd);
   return listLocalRefsAllProjects().filter((ref) => ref.cwd === root);
 }
@@ -476,6 +493,38 @@ export function updateConfigFile(mutator: (config: KinuConfig) => KinuConfig | v
   const config = loadConfigFile();
   const next = mutator(config) ?? config;
   saveConfigFile(next);
+  return next;
+}
+
+/**
+ * This machine's current provider revision — see {@link KinuConfig.providerRevision}.
+ *
+ * Read by every resident session at every profile resolution, so it stays a
+ * plain file read and never a network call. An unreadable config throws, which
+ * is right: the alternative is answering 0 for a machine whose real revision is
+ * higher, and that reads as "nothing changed".
+ */
+export function readProviderRevision(): number {
+  return loadConfigFile().providerRevision ?? 0;
+}
+
+/**
+ * Publish that this machine's provider configuration changed.
+ *
+ * Called by every command that connects, disconnects, signs in or signs out —
+ * anything that changes the set of providers a model resolution can reach. It
+ * is the ONLY signal a resident daemon or chat session gets that its cached
+ * provider listing is stale, so a mutation that skips it leaves that session
+ * refusing a model the user just connected until it restarts.
+ *
+ * Returns the new value so a caller can log or assert on it.
+ */
+export function bumpProviderRevision(): number {
+  let next = 0;
+  updateConfigFile((config) => {
+    next = (config.providerRevision ?? 0) + 1;
+    config.providerRevision = next;
+  });
   return next;
 }
 

@@ -109,19 +109,19 @@ const aTurn = (i: number, origin: 'user' | 'programmatic' = 'user'): CompletedTu
 });
 
 describe('AgentOrchestrator.recordTurn — session cadence', () => {
-  test('session reflection fires every N turns', async () => {
+  test('session reflection fires every five turns — the shipped cadence', async () => {
     const { engine, sessions } = fakeEngine();
     const { host } = fakeHost();
-    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog(), sessionReflectionInterval: 3 });
-    for (let i = 0; i < 7; i++) {
+    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+    for (let i = 0; i < 12; i++) {
       orch.recordTurn(aTurn(i), 'conversation');
       // The pass claims the window and settles it only once it has run, so a
       // second pass cannot start while the first is live. Real turns are
       // minutes apart; the test just lets the pass finish.
       await orch.runDueSessionEvolution();
     }
-    expect(sessions).toEqual([3, 3]);         // reflected at turn 3 and 6 (window closes)
-    expect(orch.sessionTurnIndex).toBe(1);    // 7th turn left 1 in the new window
+    expect(sessions).toEqual([5, 5]);         // reflected at turn 5 and 10 (window closes)
+    expect(orch.sessionTurnIndex).toBe(2);    // turns 11 and 12 left 2 in the new window
   });
 
   // The turn's review runs later, and often elsewhere: at the next user message,
@@ -149,7 +149,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
   test('a partial window survives the session ending — it is not force-closed or graded', async () => {
     const { engine, reviews, sessions } = fakeEngine();
     const { host } = fakeHost();
-    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog(), sessionReflectionInterval: 5 });
+    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
     for (let i = 0; i < 2; i++) orch.recordTurn(aTurn(i), 'conversation');   // below the interval
     expect(sessions).toEqual([]);
     await orch.settleEvolution();
@@ -169,9 +169,9 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
       await gate;
       sessions.push(session.turns.length);
     };
-    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog(), sessionReflectionInterval: 2 });
-    orch.recordTurn(aTurn(0), 'conversation');
-    orch.recordTurn(aTurn(1), 'conversation');   // reaches the interval → dispatches the pass
+    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+    for (let i = 0; i < 4; i++) orch.recordTurn(aTurn(i), 'conversation');
+    orch.recordTurn(aTurn(4), 'conversation');   // reaches the interval → dispatches the pass
     // The pass recordTurn just started, not a second one.
     const pass = orch.runDueSessionEvolution();
     expect(sessions).toEqual([]);            // still in flight
@@ -181,24 +181,23 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     expect(sessions).toEqual([]);
     release();
     await pass;
-    expect(sessions).toEqual([2]);
+    expect(sessions).toEqual([5]);
   });
 
   test('a one-shot host never STARTS the cadence pass — the window carries to the daemon', async () => {
     const { engine, sessions } = fakeEngine();
     const { host } = fakeHost();
     const eventLog = newEventLog();
-    const oneShot = new AgentOrchestrator({ host, engine, eventLog, sessionReflectionInterval: 2, oneShot: true });
-    oneShot.recordTurn(aTurn(0), 'independent_task');
-    oneShot.recordTurn(aTurn(1), 'independent_task');
+    const oneShot = new AgentOrchestrator({ host, engine, eventLog, oneShot: true });
+    for (let i = 0; i < 5; i++) oneShot.recordTurn(aTurn(i), 'independent_task');
     await oneShot.settleEvolution();
     expect(sessions).toEqual([]);                    // nothing ran in the exec process
-    expect(oneShot.sessionTurnIndex).toBe(2);        // and nothing was consumed
+    expect(oneShot.sessionTurnIndex).toBe(5);        // and nothing was consumed
 
     // The daemon (a host that can afford the work) picks up the SAME turns.
-    const daemon = new AgentOrchestrator({ host, engine, eventLog, sessionReflectionInterval: 2 });
+    const daemon = new AgentOrchestrator({ host, engine, eventLog });
     await daemon.runDueSessionEvolution();
-    expect(sessions).toEqual([2]);
+    expect(sessions).toEqual([5]);
     expect(daemon.sessionTurnIndex).toBe(0);
   });
 
@@ -316,9 +315,8 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
   test('with auto-evolution off, a turn leaves no evolution state at all', () => {
     const { engine, reviews, sessions } = fakeEngine({ enabled: false });
     const { host } = fakeHost();
-    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog(), sessionReflectionInterval: 2 });
-    orch.recordTurn(aTurn(0), 'conversation');
-    orch.recordTurn(aTurn(1), 'conversation');
+    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+    for (let i = 0; i < 5; i++) orch.recordTurn(aTurn(i), 'conversation');
     orch.observeUserTurn('anything', 'conversation');
     expect(sessions).toEqual([]);
     expect(reviews).toEqual([]);
@@ -336,7 +334,7 @@ describe('AgentOrchestrator — the durable session window', () => {
     let last: AgentOrchestrator | null = null;
     for (let i = 0; i < 5; i++) {
       const { host } = fakeHost();
-      last = new AgentOrchestrator({ host, engine, eventLog, sessionReflectionInterval: 5 });
+      last = new AgentOrchestrator({ host, engine, eventLog });
       last.recordTurn(aTurn(i), 'conversation');
     }
     // recordTurn detaches the cadence pass; join the one it started.

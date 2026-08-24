@@ -21,11 +21,9 @@ import {
   type SpawnedHead, type SerializedMessage, type MergeOutput,
   type Executor, type LLM,
   initHeadsTables,
-  initAlternateTakesTable, recordHeadsTakeSet, claimAlternateTakesForTurn,
-  listAlternateTakeSets, recordTakePick,
 } from '../src/index';
 import { createJSONLLM } from '@kinu.run/test-utils';
-import { makeSql, makeExecRaw, createTestWorkspace, captureConsole } from './helpers';
+import { makeSql, makeExecRaw, captureConsole } from './helpers';
 
 // ── fakes ────────────────────────────────────────────────────────────
 
@@ -338,53 +336,5 @@ describe('evidence is not clipped into the merge', () => {
     const prompt = mergePrompts[0]!;
     expect(prompt).toContain(longBody);            // full body, not truncated
     expect(prompt).toContain('finding-8');         // the 9th evidence item (past the old slice(0,6))
-  });
-});
-
-// ── 4. heads → Alternate-Takes ledger ─────────────────────────────────
-
-describe('heads emit an Alternate-Takes set into the preference ledger', () => {
-  test('recordHeadsTakeSet writes a heads-sourced set; claim + pick credits the turn', () => {
-    // The production schema, minus search_nodes on purpose: the synthetic node
-    // ids of a heads-sourced set have no convergence record, and only an absent
-    // table proves the pick never reaches for one.
-    const { sql, execRaw } = createTestWorkspace();
-    execRaw('DROP TABLE search_nodes');
-
-    const set = recordHeadsTakeSet(sql, {
-      task: 'compare approaches',
-      heads: [
-        { id: 'h1', text: 'approach one', score: 0.8 },
-        { id: 'h2', text: 'approach two', score: 0.4 },
-      ],
-    });
-    expect(set).not.toBeNull();
-    expect(set!.source).toBe('heads');
-    // Winner = highest grounded score.
-    expect(set!.candidates[0]!.text).toBe('approach one');
-    expect(set!.turnId).toBeNull(); // unclaimed until turn end
-
-    // Claimed against the finished turn (the MCTS capture flow).
-    claimAlternateTakesForTurn(sql, { turnId: 'msg-1', sessionId: 's', startedAt: 0 });
-    const claimed = listAlternateTakeSets(sql)[0]!;
-    expect(claimed.turnId).toBe('msg-1');
-    expect(claimed.source).toBe('heads');
-
-    // Picking the lower-scored head is a 'corrected' preference signal; the
-    // synthetic node ids never touch search_nodes (no re-point crash).
-    const pick = recordTakePick(sql, { takeId: claimed.id, nodeId: claimed.candidates[1]!.nodeId });
-    expect(pick.outcome).toBe('corrected');
-    const ledger = sql<{ source: string; outcome: string }>`SELECT source, outcome FROM turn_outcomes`;
-    expect(ledger).toHaveLength(1);
-    expect(ledger[0]!.source).toBe('take_pick');
-    expect(ledger[0]!.outcome).toBe('corrected');
-  });
-
-  test('returns null when fewer than 2 distinct head answers exist', () => {
-    const db = new Database(':memory:');
-    const sql = makeSql(db);
-    initAlternateTakesTable(makeExecRaw(db), makeSql(db));
-    expect(recordHeadsTakeSet(sql, { task: 't', heads: [{ id: 'h1', text: 'same', score: 0.5 }, { id: 'h2', text: 'same', score: 0.6 }] })).toBeNull();
-    expect(recordHeadsTakeSet(sql, { task: 't', heads: [{ id: 'h1', text: 'lonely', score: 0.5 }] })).toBeNull();
   });
 });

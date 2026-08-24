@@ -69,7 +69,9 @@ const ControlAuditRowSchema = v.object({
   operation: v.string(),
   targetKind: v.string(),
   target: v.string(),
-  outcome: v.picklist(['ok', 'denied', 'failed']),
+  /** `pending` is an attempt whose outcome was never recorded — the row the
+   *  two-phase write leaves behind when a settlement is lost. */
+  outcome: v.picklist(['pending', 'ok', 'denied', 'failed']),
   detail: v.string(),
 });
 export type ControlAuditRow = v.InferOutput<typeof ControlAuditRowSchema>;
@@ -115,6 +117,10 @@ export type Panel = v.InferOutput<typeof PanelSchema>;
 
 const WorkspaceDetailSchema = v.object({
   workspace: v.string(),
+  /** The account the server resolved this read through. Every action button
+   *  binds to THIS, not to the address bar, so a control can only act on the
+   *  pair the read already proved. */
+  userId: v.string(),
   runs: PanelSchema,
   activity: PanelSchema,
   jobs: PanelSchema,
@@ -125,13 +131,65 @@ const WorkspaceDetailSchema = v.object({
 });
 export type WorkspaceDetail = v.InferOutput<typeof WorkspaceDetailSchema>;
 
+/**
+ * The two panels the drilldown renders as ROWS rather than as raw JSON, because
+ * they are the two an operator ACTS on.
+ *
+ * Narrow on purpose: each names exactly the fields a row and its buttons need,
+ * and valibot ignores the rest, so the orchestrator can add a field without this
+ * page caring. Declared here beside the other row schemas rather than in the
+ * component, because everything the browser parses off this plane is parsed in
+ * one module.
+ */
+export const BackgroundJobRowSchema = v.object({
+  id: v.string(),
+  kind: v.string(),
+  label: v.nullable(v.string()),
+  status: v.picklist(['running', 'completed', 'failed', 'cancelled']),
+  error: v.nullable(v.string()),
+  createdAt: v.number(),
+  settledAt: v.nullable(v.number()),
+});
+export type BackgroundJobRow = v.InferOutput<typeof BackgroundJobRowSchema>;
+
+export const DeferredApprovalRowSchema = v.object({
+  id: v.string(),
+  command: v.string(),
+  executor: v.string(),
+  reason: v.string(),
+  status: v.picklist(['queued', 'approved', 'denied', 'used']),
+  requestedAt: v.number(),
+  decidedAt: v.nullable(v.number()),
+});
+export type DeferredApprovalRow = v.InferOutput<typeof DeferredApprovalRowSchema>;
+
+/** Read a settled panel as typed rows, or answer `null` when it is down or in a
+ *  shape this page does not know. `null` is the honest answer for both: the
+ *  panel still renders its own reason, and a row view that invented an empty
+ *  list would say "no jobs" about a workspace whose job list failed to load. */
+export function panelRows<Row>(
+  panel: Panel, schema: v.GenericSchema<Row>,
+): Row[] | null {
+  if (panel.status !== 'ok') return null;
+  const parsed = v.safeParse(v.array(schema), panel.value);
+  return parsed.success ? parsed.output : null;
+}
+
+/** What a drilldown page did about the index it is showing. Three states, not a
+ *  boolean: "reconciled", "the registry could not be read" and "page four of a
+ *  walk that reconciled at page one" are three different things to tell an
+ *  operator who is deciding whether to remove a workspace. */
+const ReconcileSchema = v.variant('status', [
+  v.object({ status: v.literal('ok') }),
+  v.object({ status: v.literal('failed'), reason: v.string() }),
+  v.object({ status: v.literal('skipped'), reason: v.string() }),
+]);
+export type ReconcileReport = v.InferOutput<typeof ReconcileSchema>;
+
 const UserDetailSchema = v.object({
   user: v.nullable(ControlUserRowSchema),
   workspaces: pageSchema(ControlWorkspaceRowSchema),
-  /** False when the roster read failed, so the rows shown are the index's own
-   *  belief rather than the registry's. Surfaced, never hidden. */
-  reconciled: v.boolean(),
-  reconcileError: v.optional(v.string()),
+  reconcile: ReconcileSchema,
   viewer: v.string(),
 });
 export type UserDetail = v.InferOutput<typeof UserDetailSchema>;
@@ -225,8 +283,16 @@ export function fetchUsers(
   return control(pageSchema(ControlUserRowSchema), `/users${pageQuery(cursor, limit)}`);
 }
 
-export function fetchUserDetail(userId: string): Promise<ControlAnswer<UserDetail>> {
-  return control(UserDetailSchema, `/users/${encodeURIComponent(userId)}`);
+/** One account's profile plus a PAGE of the workspaces it owns. Cursored like
+ *  every other list here: an account with more than the page ceiling had every
+ *  row past it unreachable while the page said the table was reconciled. */
+export function fetchUserDetail(
+  userId: string, cursor: string | null = null, limit?: number,
+): Promise<ControlAnswer<UserDetail>> {
+  return control(
+    UserDetailSchema,
+    `/users/${encodeURIComponent(userId)}${pageQuery(cursor, limit)}`,
+  );
 }
 
 /** Which workspaces a list should carry. Mirrors the store's own filter so the
@@ -253,8 +319,16 @@ export function fetchWorkspaces(
   );
 }
 
-export function fetchWorkspaceDetail(name: string): Promise<ControlAnswer<WorkspaceDetail>> {
-  return control(WorkspaceDetailSchema, `/workspaces/${encodeURIComponent(name)}`);
+/** One workspace, named by the account that owns it. The `userId` is required
+ *  because a workspace name is unique inside one UserDO and `OrchestratorAgent`
+ *  is addressed globally — the pair is the address, the name alone is a guess. */
+export function fetchWorkspaceDetail(
+  userId: string, name: string,
+): Promise<ControlAnswer<WorkspaceDetail>> {
+  return control(
+    WorkspaceDetailSchema,
+    `/workspaces/${encodeURIComponent(name)}?userId=${encodeURIComponent(userId)}`,
+  );
 }
 
 export function fetchIncidents(): Promise<ControlAnswer<{ incidents: MonitorIncident[] }>> {
@@ -274,10 +348,15 @@ export function fetchAudit(
 }
 
 export function fetchMetrics(
-  hours: number, workspace?: string,
+  hours: number,
+  workspace?: string,
+  /** Re-run the queries rather than answering from the 30-second batch cache.
+   *  The view's refresh button is the one caller. */
+  refresh?: boolean,
 ): Promise<ControlAnswer<ControlMetrics>> {
   const params = new URLSearchParams({ hours: String(hours) });
   if (workspace !== undefined && workspace.length > 0) params.set('workspace', workspace);
+  if (refresh === true) params.set('refresh', '1');
   return control(ControlMetricsSchema, `/metrics?${params.toString()}`);
 }
 

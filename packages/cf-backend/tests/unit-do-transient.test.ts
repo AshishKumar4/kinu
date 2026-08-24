@@ -10,7 +10,7 @@
 import { describe, test, expect } from 'bun:test';
 import { PLATFORM_CATALOG } from '@kinu.run/core';
 import { retryTransientDO, classifyTransientDO } from '../src/lib/do-rpc';
-import { claimOwnedWorkspace } from '../src/user/workspace-access';
+import { claimOwnedWorkspace } from '../src/user/workspace-ownership';
 
 const USER = '0123456789abcdef0123456789abcdef';
 const CONNECTION_LOST = 'Network connection lost.';

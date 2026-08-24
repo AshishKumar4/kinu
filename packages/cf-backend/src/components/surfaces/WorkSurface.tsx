@@ -67,6 +67,8 @@ export interface WorkSurfaceProps {
   previewError: string | null;
   onRefreshPorts: () => void;
   plan: PlanReview | null;
+  /** The actor that owns `plan`. Other surfaces remain workspace-scoped. */
+  planRpc?: Rpc;
   // Agent
   agentStatus: AgentStatus | null;
   tools: ToolInfo[];
@@ -177,6 +179,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
             previewError={props.previewError}
             onRefreshPorts={props.onRefreshPorts}
             plan={props.plan}
+            planRpc={props.planRpc}
             executors={props.executors}
             lastActiveExecutor={props.lastActiveExecutor}
             rpc={props.rpc}

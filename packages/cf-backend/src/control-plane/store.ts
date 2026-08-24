@@ -123,8 +123,18 @@ export type ControlFeedbackRow = FeedbackRecord;
 
 /** What an operator did. `denied` and `failed` are kept apart because a refused
  *  attempt and a broken one are different facts, and pooling them makes both
- *  useless. */
-export type AuditOutcome = 'ok' | 'denied' | 'failed';
+ *  useless.
+ *
+ *  `pending` is the INTENT, written before the mutation runs. A row that is
+ *  still pending is the evidence that an action was attempted and its result was
+ *  never recorded — which is a fact an operator surface must be able to show,
+ *  and the reason the write happens first. */
+export const AUDIT_OUTCOMES = ['pending', 'ok', 'denied', 'failed'] as const;
+export type AuditOutcome = (typeof AUDIT_OUTCOMES)[number];
+
+/** The outcomes an attempt can SETTLE on. `pending` is excluded by
+ *  construction, so a settlement cannot write the row back to unfinished. */
+export type AuditSettlement = Exclude<AuditOutcome, 'pending'>;
 
 export interface ControlAuditRow {
   id: string;
@@ -544,7 +554,7 @@ export function listAudit(sql: ControlPlaneSql, request: PageRequest = {}): Page
   return seekPage(found.map(projectAudit), limit, (row) => anchor(row.at, row.id));
 }
 
-/* ── The audit log's only writer ─────────────────────────────────────────── */
+/* ── The audit log's only writers ────────────────────────────────────────── */
 
 export interface AuditDraft {
   actorEmail: string;
@@ -554,21 +564,27 @@ export interface AuditDraft {
   target: string;
   outcome: AuditOutcome;
   detail: string;
-  id?: string;
-  at?: number;
 }
 
 /**
- * Append one operator action.
+ * Append one attempt.
  *
- * `INSERT` only. There is no UPDATE and no DELETE against `cp_audit` anywhere in
- * this file, which is what append-only means here: a property of the reachable
- * surface rather than a promise in a comment.
+ * INSERT only, and every column it writes is written once: who acted, when, on
+ * what. That is what append-only means for the part of the row that matters —
+ * the record of the ATTEMPT can never be edited or removed, because the only
+ * other statement in this file that touches `cp_audit` settles an outcome and
+ * cannot reach any of those columns.
+ *
+ * THE ID AND THE CLOCK ARE THIS FUNCTION'S, never the draft's. A caller that
+ * could choose the primary key of an append-only log could collide with a row
+ * already in it, and one that could choose `at` could date an attempt into the
+ * past. No caller needs either — `recordAudit` is the only writer and supplies
+ * neither — and a test that needs a fixed clock passes `now`.
  */
 export function appendAudit(sql: ControlPlaneSql, draft: AuditDraft, now = Date.now()): ControlAuditRow {
   const row: ControlAuditRow = {
-    id: draft.id ?? crypto.randomUUID(),
-    at: draft.at ?? now,
+    id: crypto.randomUUID(),
+    at: now,
     actorEmail: draft.actorEmail,
     actorUserId: draft.actorUserId,
     operation: draft.operation,
@@ -584,6 +600,47 @@ export function appendAudit(sql: ControlPlaneSql, draft: AuditDraft, now = Date.
     row.id, row.at, row.actorEmail, row.actorUserId,
     row.operation, row.targetKind, row.target, row.outcome, row.detail);
   return row;
+}
+
+/**
+ * Settle a pending attempt.
+ *
+ * `WHERE outcome = 'pending'` is the whole safety property: an already-settled
+ * row cannot be rewritten, so a replayed or duplicated settlement is a no-op
+ * rather than a way to edit history. Nothing else in this file updates
+ * `cp_audit`, and this statement names only `outcome` and `detail` — the actor,
+ * the operation, the target and the timestamp stay exactly as the attempt wrote
+ * them.
+ *
+ * Returns the settled row, or `null` when there was no pending row to settle —
+ * which the caller must treat as a fact rather than as success, because it means
+ * the attempt it thought it was finishing is not the row in this table.
+ */
+export function settleAudit(
+  sql: ControlPlaneSql,
+  settlement: { id: string; outcome: AuditSettlement; detail: string },
+): ControlAuditRow | null {
+  run(sql,
+    `UPDATE cp_audit SET outcome = ?, detail = ? WHERE id = ? AND outcome = 'pending'`,
+    settlement.outcome, settlement.detail, settlement.id);
+  const found = select(sql, AuditSqlRowSchema,
+    `SELECT id, at, actor_email, actor_user, operation, target_kind, target, outcome, detail
+       FROM cp_audit WHERE id = ?`,
+    settlement.id);
+  const row = found[0];
+  if (row === undefined || row.outcome !== settlement.outcome) return null;
+  return projectAudit(row);
+}
+
+/** Attempts whose outcome was never recorded. An operator reads this to find
+ *  the actions that ran against a workspace while the audit log could not be
+ *  finished — the one class of row this design deliberately leaves behind
+ *  instead of hiding. */
+export function listPendingAudit(sql: ControlPlaneSql, limit = CONTROL_PAGE_DEFAULT): ControlAuditRow[] {
+  return select(sql, AuditSqlRowSchema,
+    `SELECT id, at, actor_email, actor_user, operation, target_kind, target, outcome, detail
+       FROM cp_audit WHERE outcome = 'pending' ORDER BY at DESC, id ASC LIMIT ?`,
+    clampPage(limit)).map(projectAudit);
 }
 
 /* ── Projections ─────────────────────────────────────────────────────────── */
@@ -636,9 +693,9 @@ function projectAudit(row: AuditSqlRow): ControlAuditRow {
     operation: row.operation,
     targetKind: row.target_kind,
     target: row.target,
-    // Written by `appendAudit` only, from a closed union — narrowed on read so a
-    // hand-edited database cannot widen the type.
-    outcome: row.outcome === 'ok' || row.outcome === 'denied' ? row.outcome : 'failed',
+    // Written by `appendAudit` and `settleAudit` only, from a closed union —
+    // narrowed on read so a hand-edited database cannot widen the type.
+    outcome: AUDIT_OUTCOMES.find((known) => known === row.outcome) ?? 'failed',
     detail: row.detail,
   };
 }

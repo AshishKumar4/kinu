@@ -91,7 +91,7 @@ describe('F1 defense 1 — the /agents/* transport is pinned to the orchestrator
     expect(extractTicketOrchestratorAgentName('/agents/orchestrator-agent/my-workspace/get-messages')).toBeNull();
   });
 
-  test('ownership extraction includes direct subordinates but CLI tickets stay root-only', () => {
+  test('ownership and CLI ticket extraction include direct additional-agent facets', () => {
     expect(extractOrchestratorAgentName('/agents/orchestrator-agent/my-workspace')).toBe('my-workspace');
     expect(extractOrchestratorAgentName('/agents/orchestrator-agent/my-workspace/sub/subordinate-agent/researcher/websocket')).toBe('my-workspace');
     expect(extractOrchestratorAgentName('/agents/orchestrator-agent/my-workspace/sub/exploration-agent/head-1')).toBeNull();
@@ -99,7 +99,7 @@ describe('F1 defense 1 — the /agents/* transport is pinned to the orchestrator
     expect(extractOrchestratorAgentName('/agents/user-d-o/victim')).toBeNull();
 
     expect(extractTicketOrchestratorAgentName('/agents/orchestrator-agent/my-workspace')).toBe('my-workspace');
-    expect(extractTicketOrchestratorAgentName('/agents/orchestrator-agent/my-workspace/sub/subordinate-agent/researcher')).toBeNull();
+    expect(extractTicketOrchestratorAgentName('/agents/orchestrator-agent/my-workspace/sub/subordinate-agent/researcher')).toBe('my-workspace');
   });
 
   test('server.ts rejects foreign namespaces with a 404 before ownership + routing', () => {

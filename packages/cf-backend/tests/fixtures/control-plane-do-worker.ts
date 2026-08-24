@@ -119,11 +119,22 @@ const AuditDraftSchema = v.object({
   operation: v.string(),
   targetKind: v.string(),
   target: v.string(),
+  outcome: v.picklist(['pending', 'ok', 'denied', 'failed']),
+  detail: v.string(),
+  actorDigest: v.optional(v.string()),
+  reason: v.optional(v.string()),
+  code: v.optional(v.string()),
+});
+
+/** A settlement of a pending attempt. `pending` is absent from the picklist by
+ *  construction: a settlement cannot write a row back to unfinished. */
+const AuditSettlementSchema = v.object({
+  id: v.pipe(v.string(), v.nonEmpty()),
   outcome: v.picklist(['ok', 'denied', 'failed']),
   detail: v.string(),
-  id: v.optional(v.string()),
-  at: v.optional(v.number()),
   actorDigest: v.optional(v.string()),
+  reason: v.optional(v.string()),
+  code: v.optional(v.string()),
 });
 
 /** One step: which method, which caller, and the method's own argument. Keyed on
@@ -133,6 +144,8 @@ const StepSchema = v.variant('method', [
   v.object({ method: v.literal('observeUser'), caller: CallerKindSchema, observation: UserObservationSchema }),
   v.object({ method: v.literal('observeWorkspace'), caller: CallerKindSchema, observation: WorkspaceObservationSchema }),
   v.object({ method: v.literal('recordAudit'), caller: CallerKindSchema, entry: AuditDraftSchema }),
+  v.object({ method: v.literal('settleAudit'), caller: CallerKindSchema, settlement: AuditSettlementSchema }),
+  v.object({ method: v.literal('listPendingAudit'), caller: CallerKindSchema }),
   v.object({ method: v.literal('overview'), caller: CallerKindSchema }),
   v.object({ method: v.literal('listUsers'), caller: CallerKindSchema, request: v.optional(PageRequestSchema) }),
   v.object({ method: v.literal('listWorkspaces'), caller: CallerKindSchema, request: v.optional(PageRequestSchema) }),
@@ -189,6 +202,10 @@ async function callStep(
       return null;
     case 'recordAudit':
       return projectJsonValue({ value: await stub.recordAudit(caller, step.entry) });
+    case 'settleAudit':
+      return projectJsonValue({ value: await stub.settleAudit(caller, step.settlement) });
+    case 'listPendingAudit':
+      return projectJsonValue({ value: await stub.listPendingAudit(caller) });
     case 'overview':
       return projectJsonValue({ value: await stub.overview(caller) });
     case 'listUsers':
