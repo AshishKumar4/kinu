@@ -121,7 +121,6 @@ describe('reachability gate, against the real tree', () => {
   /** RPC → the one UI file that invokes it, verified live below. */
   const WIRES = {
     previewScaffoldLive: 'packages/cf-backend/src/components/surfaces/ScaffoldLineage.tsx',
-    retryBackgroundJob: 'packages/cf-backend/src/components/surfaces/work-jobs.tsx',
     listTurnFeedback: 'packages/cf-backend/src/pages/WorkspacePage.tsx',
   } satisfies Record<string, string>;
 

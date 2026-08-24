@@ -344,6 +344,14 @@ export const UNCAPTURED: readonly Uncaptured[] = [
     check: 'npx wrangler r2 bucket lifecycle list kinu-backups',
   },
   {
+    what: 'A 90-day R2 lifecycle rule on the `feedback/` prefix of both feedback buckets. '
+      + 'The screenshot object is exact user feedback and the DO retains only its pointer.',
+    evidence: 'lifecycle rules are not expressible in wrangler.jsonc. Production and staging '
+      + 'were set and read back on 2026-08-24.',
+    check: 'npx wrangler r2 bucket lifecycle list kinu-feedback && '
+      + 'npx wrangler r2 bucket lifecycle list kinu-feedback-staging',
+  },
+  {
     what: 'The KV namespace TITLES. `wrangler.jsonc` binds AUTH_KV by namespace id, and the '
       + '`kv_namespaces` block has no title field at all — so `kinu-auth` and '
       + '`kinu-auth-staging`, the names an operator reads and types, exist only in the account '
@@ -370,6 +378,12 @@ export const UNOBSERVABLE = new Map<string, string>([
     'wrangler 4.97 exposes no `ai-gateway` command and the wrangler OAuth session has no `aig` '
     + 'scope (403 code 10000 against the REST API, measured 2026-08-18). Check it in the '
     + 'dashboard: https://dash.cloudflare.com/?to=/:account/ai/ai-gateway'],
+  ['cron.kinu */15 * * * *',
+    'Wrangler writes cron triggers from config but exposes no command that reads them back. '
+    + 'Check Workers & Pages > kinu > Triggers in the Cloudflare dashboard.'],
+  ['cron.kinu-staging */15 * * * *',
+    'Wrangler writes cron triggers from config but exposes no command that reads them back. '
+    + 'Check Workers & Pages > kinu-staging > Triggers in the Cloudflare dashboard.'],
 ]);
 
 /* ── Supplying what the manifest does not ─────────────────────────────── */
