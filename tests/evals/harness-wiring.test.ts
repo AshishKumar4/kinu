@@ -22,7 +22,7 @@
  *                       fires in either runtime — it is the reachability floor
  *                       for the scorer, not a guard on the runtime swap.
  */
-import { describe, test, expect, afterAll, beforeAll } from 'bun:test';
+import { describe, test, expect, afterAll, beforeAll, beforeEach } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -37,13 +37,14 @@ import {
   initWorkspaceSchema, listRuns, observedActionEnum, renderConformanceFindings,
   RunEventRecorder,
 } from '../../packages/core/src/index';
-import { DIGEST_LIMIT, JsonObjectSchema } from '../../packages/core/src/utils/json';
+import { DIGEST_LIMIT, JsonObjectSchema, JsonValueSchema } from '../../packages/core/src/utils/json';
 import { createWorkspace } from '../../packages/core/src/identity/index';
 import { makeSql, makeWorkspaceSchemaSql, type CLIRuntime } from '../../packages/cli-backend/src/runtime';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import {
-  HARD_TASKS, liveModelSpend, recordLiveModelEpisode, resetLiveModelSpend,
-  hardTaskCases, toolExecute, type EvalArmState,
+  AdoptedSpendMeter, HARD_TASKS, caseKey, findResumableEvalDir, formatAdoptedSpend,
+  liveModelSpend, openEvalProgress, recordLiveModelEpisode, resetLiveModelSpend,
+  hardTaskCases, toolExecute, type EvalArmState, type EvalObservation,
 } from '@kinu.run/test-utils';
 // The two file names belong to the measurement substrate, which moved to core so a
 // registered verifier kind resolves to code the tool surface can reach.
@@ -944,5 +945,201 @@ describe('episode spend — the meter is fed by the session, not by silence', ()
     // fixed-input case in scripts/eval.test.ts, where the count cannot drift.
     expect(rendered).toContain('1 EPISODE(S) UNACCOUNTED');
     expect(rendered).toContain('NOT A TOTAL');
+  });
+});
+
+/**
+ * ADOPTED SPEND — what a resumed run publishes for the cases it did NOT run.
+ *
+ * The behavioural tier survives an interruption by reading `eval-progress.json`,
+ * rehydrating every case whose episode already finished, and running only what
+ * is left. That is what makes a crash cost minutes instead of a corpus.
+ *
+ * The observations came back. The SPEND did not. The meter is per-process, so
+ * one published record carried the whole run's case list beside the LAST
+ * process's cost — an unqualified total that got smaller the more times the run
+ * was interrupted, which is the `0 model call(s)` defect one process boundary
+ * further out.
+ *
+ * These run on the REAL store: the progress file is written by the writer the
+ * live tier writes with and reopened by the resume path the live tier reopens
+ * with, so the durable round trip of the model-step tally is under test and not
+ * assumed. Only the token totals are fixtures, which is what makes the proof
+ * free.
+ */
+describe('adopted spend — a resumed run pays for the cases it adopted, exactly once', () => {
+  const SIGNATURE = 'adopted-spend-run-signature';
+  const PREFIX = 'behaviour-flash-';
+
+  /** The case the interrupted process FINISHED. Every field the adopter reads is
+   *  nonzero and distinct, so a dropped one fails loudly instead of rounding
+   *  into a plausible total. */
+  const FINISHED: Extract<EvalObservation, { outcome: 'scored' }> = {
+    taskId: 'ws-inventory', repetition: 0, outcome: 'scored', scores: [],
+    turns: 2, toolCalls: 3, tokensIn: 41_000, tokensOut: 2_300, ms: 1_234,
+  };
+  const FINISHED_STEPS = 12;
+
+  /** The case it DIED under: started, tallied, and never settled. */
+  const CRASHED: EvalObservation = {
+    taskId: 'ws-fix-broken', repetition: 0, outcome: 'incomplete',
+    reason: 'previous process ended before the case settled',
+  };
+  const CRASHED_STEPS = 4;
+
+  const keyOf = (o: EvalObservation) => caseKey(o.taskId, o.repetition);
+
+  /**
+   * A RESUME_DIR exactly as an interrupted process leaves one.
+   *
+   * The finished case is durable at `progress` with the tally its own events
+   * wrote, one `markActivity` per step because that is how the live suite writes
+   * it. The in-flight case is left at `started`, which is the only state a
+   * process that died can leave behind — the resume path is what reclassifies
+   * it.
+   *
+   * The stored envelope carries the observation alone. `output` is optional in
+   * that payload and the adopter never reads it, so a full `BehaviourOutput`
+   * fixture here would assert the suite's own schema rather than this seam.
+   */
+  function seedResumeDir(): string {
+    const root = mkdtempSync(join(dir, 'adopted-spend-'));
+    const store = openEvalProgress(join(root, `${PREFIX}1700000000000`), SIGNATURE);
+    store.markPlanned([FINISHED, CRASHED]
+      .map(({ taskId, repetition }) => ({ taskId, repetition })));
+
+    store.markStarted(keyOf(FINISHED));
+    for (let step = 0; step < FINISHED_STEPS; step += 1) {
+      store.markActivity(keyOf(FINISHED), { modelSteps: 1 });
+    }
+    store.markProgress(
+      keyOf(FINISHED), v.parse(JsonValueSchema, { observation: FINISHED }), 'scored',
+    );
+
+    store.markStarted(keyOf(CRASHED));
+    for (let step = 0; step < CRASHED_STEPS; step += 1) {
+      store.markActivity(keyOf(CRASHED), { modelSteps: 1 });
+    }
+    store.flush();
+    return root;
+  }
+
+  /** Reopen it the way the tier does: find the unfinished directory by signature
+   *  and expected keys, then classify what was still in flight. */
+  function resume(root: string) {
+    const resumeDir = findResumableEvalDir(
+      root, PREFIX, SIGNATURE, new Set([keyOf(FINISHED), keyOf(CRASHED)]),
+    );
+    if (resumeDir === null) throw new Error('the seeded run should have been resumable');
+    const store = openEvalProgress(resumeDir, SIGNATURE);
+    store.markInFlightIncomplete('previous process ended before the case settled');
+    return store;
+  }
+
+  // Absolutes, not deltas: every case here states the whole meter, so a stray
+  // contribution from anywhere else in this file reads as a failure rather than
+  // hiding inside a bound.
+  beforeEach(() => { resetLiveModelSpend(); });
+
+  test('a finished case adopted from RESUME_DIR contributes its stored spend', () => {
+    const store = resume(seedResumeDir());
+    const record = store.record(keyOf(FINISHED));
+    expect(record?.phase, 'the finished case stays durable at progress').toBe('progress');
+    expect(record?.output, 'a resumed run adopts the output, so it has to survive').toBeDefined();
+    expect(record?.activity?.modelSteps, 'markProgress must carry the tally across')
+      .toBe(FINISHED_STEPS);
+
+    const meter = new AdoptedSpendMeter();
+    meter.adopt(FINISHED, record?.activity);
+
+    const spent = liveModelSpend();
+    // THE DEFECT, in one line: every one of these was 0 or absent. The case
+    // rejoined the record and what it cost did not.
+    expect(spent.calls).toBe(FINISHED_STEPS);
+    expect(spent.usage.input).toBe(FINISHED.tokensIn);
+    expect(spent.usage.output).toBe(FINISHED.tokensOut);
+    // Accounted in full, so there is no hole to declare and no floor to warn
+    // about. Those two must stay quiet when the evidence is whole.
+    expect(spent.episodesUnmeasured).toBe(0);
+    expect(spent.callsWithoutUsage).toBe(0);
+
+    expect(meter.summary()).toEqual({ accounted: 1, unaccounted: 0 });
+    expect(formatAdoptedSpend(meter.summary()))
+      .toContain('the spend below covers this process plus 1 adopted case(s)');
+  });
+
+  test('the two visits a resumed case gets charge it once', () => {
+    const store = resume(seedResumeDir());
+    const activity = store.record(keyOf(FINISHED))?.activity;
+
+    const meter = new AdoptedSpendMeter();
+    // Visit one: the run rehydrates its observations before any work begins.
+    meter.adopt(FINISHED, activity);
+    // Visit two: the harness hands the stored episode back instead of re-running
+    // it, so the same record reaches the meter a second time. Double-charging
+    // here would inflate the very total this exists to make true.
+    meter.adopt(FINISHED, activity);
+
+    const spent = liveModelSpend();
+    expect(spent.calls).toBe(FINISHED_STEPS);
+    expect(spent.usage.input).toBe(FINISHED.tokensIn);
+    expect(spent.usage.output).toBe(FINISHED.tokensOut);
+    expect(meter.summary()).toEqual({ accounted: 1, unaccounted: 0 });
+  });
+
+  test('a crash record with no usable call evidence is labelled, never folded in', () => {
+    const store = resume(seedResumeDir());
+    const crashed = store.record(keyOf(CRASHED));
+    // The resume path reclassified the in-flight case, and its tally survived:
+    // four model steps were paid for. What no record can say is what they cost.
+    expect(crashed?.phase).toBe('incomplete');
+    expect(crashed?.activity?.modelSteps).toBe(CRASHED_STEPS);
+
+    const meter = new AdoptedSpendMeter();
+    meter.adopt(FINISHED, store.record(keyOf(FINISHED))?.activity);
+    meter.adopt(CRASHED, crashed?.activity);
+
+    const spent = liveModelSpend();
+    // The crashed attempt contributed no fabricated zero to the token total...
+    expect(spent.usage.input).toBe(FINISHED.tokensIn);
+    expect(spent.calls).toBe(FINISHED_STEPS);
+    // ...and it is on the books as a hole, which is the sentence a total alone
+    // could never say about itself.
+    expect(spent.episodesUnmeasured).toBe(1);
+
+    const note = formatAdoptedSpend(meter.summary());
+    expect(note).toContain('PARTIAL SPEND');
+    expect(note).toContain('1 case(s) from the interrupted run recorded no usable call evidence');
+    expect(note).toContain('not the run\'s total');
+  });
+
+  test('a finished case whose steps reported no usage is labelled, never priced at zero', () => {
+    const meter = new AdoptedSpendMeter();
+    meter.adopt(
+      { ...FINISHED, tokensIn: 0, tokensOut: 0 },
+      { turns: 1, toolCalls: 0, modelSteps: 3 },
+    );
+
+    const spent = liveModelSpend();
+    // `input: 0` would read as a measured zero, which is the fabrication the
+    // Usage contract exists to refuse — so the field is absent and the case is
+    // declared instead of priced.
+    expect(spent.usage.input).toBeUndefined();
+    expect(spent.calls).toBe(0);
+    expect(spent.episodesUnmeasured).toBe(1);
+    expect(meter.summary()).toEqual({ accounted: 0, unaccounted: 1 });
+  });
+
+  test('a resume that could account for nothing says the total is this process only', () => {
+    const meter = new AdoptedSpendMeter();
+    meter.adopt(CRASHED, { turns: 0, toolCalls: 0, modelSteps: CRASHED_STEPS });
+    expect(formatAdoptedSpend(meter.summary())).toContain('THIS PROCESS ONLY');
+  });
+
+  test('an ordinary run adopts nothing and qualifies nothing', () => {
+    // The silence half of the same rule: a qualifier printed over a run that
+    // resumed nothing would teach a reader to skip it on the run that did.
+    expect(formatAdoptedSpend(new AdoptedSpendMeter().summary())).toBeNull();
+    expect(liveModelSpend().episodesUnmeasured).toBe(0);
   });
 });

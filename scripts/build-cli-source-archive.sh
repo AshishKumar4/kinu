@@ -55,6 +55,40 @@ node -e "
   fs.writeFileSync(path, JSON.stringify(manifest, null, 2) + '\n');
 "
 
+# The distribution must resolve its lockfile the same way on every Bun.
+#
+# bunfig.toml is NOT in `paths`, and it must not be: it points `bun install` at
+# ./scripts/security-scanner.ts and `bun test` at ./scripts/test-preload.ts,
+# neither of which the distribution ships, and a bunfig naming an absent
+# scanner makes `bun install` exit 1 outright. But one line of it IS
+# load-bearing here — `[install] linker`. Bun 1.3.0 and 1.3.1 default a
+# WORKSPACE to the isolated linker, and 1.3.1 predates the `configVersion`
+# field this lockfile carries, so it cannot read the "hoisted" intent recorded
+# there. Under isolated linking a package sees only what it declares, and this
+# monorepo shares its runtime dependencies through the root manifest — so
+# `packages/core` lost `@ai-sdk/provider-utils` and the installed CLI died on
+# launch with `Cannot find module` on a fresh machine. Stamp the repository's
+# own linker into a minimal distribution bunfig: one source of truth, carried.
+linker="$(
+  node -e "
+    const text = require('fs').readFileSync('$ROOT/bunfig.toml', 'utf8');
+    const match = /^\s*linker\s*=\s*[\"']([^\"']+)[\"']/m.exec(text);
+    process.stdout.write(match ? match[1] : '');
+  "
+)"
+if [ -z "$linker" ]; then
+  echo "build-cli-source-archive: bunfig.toml declares no [install] linker — the" >&2
+  echo "distribution's resolution would depend on the installing Bun's default." >&2
+  exit 1
+fi
+cat > "$stage/bunfig.toml" <<EOF
+# Kinu CLI distribution. Pinned from the repository's bunfig.toml so an install
+# resolves bun.lock identically on every Bun version, whatever that version
+# defaults a workspace to.
+[install]
+linker = "$linker"
+EOF
+
 # Stamp the build into the CLI version (semver build metadata) so installed
 # binaries are distinguishable: "0.1.0+abc1234". package.json stays the single
 # version source; the sha only exists in the shipped archive.

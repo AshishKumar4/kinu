@@ -39,7 +39,7 @@ const REQUIRED_GATES = [
   "bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts",
   "bun test scripts/gate-set-equality.test.ts",
   "bun test scripts/wired.test.ts",
-  "bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts",
+  "bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts",
   "bun test scripts/public-pages.test.ts",
       "bun test scripts/swarm-tree-geometry.test.ts",
   "bun test scripts/chat-scroll.test.ts",
@@ -83,6 +83,29 @@ afterEach(() => {
 function executable(path: string, source: string): void {
   writeFileSync(path, source);
   chmodSync(path, 0o755);
+}
+
+/** A CLI launched to prove an install works must read no state but the install's.
+ *  Left on the ambient environment it opens the developer's own ~/.kinu — live
+ *  config and SQLite that another process may be writing — so a launch failure
+ *  could mean anything, which is the one thing a smoke test must not mean. */
+function freshHome(directory: string) {
+  const home = join(directory, "home");
+  mkdirSync(home, { recursive: true });
+  return { ...process.env, HOME: home, KINU_HOME: join(home, ".kinu") };
+}
+
+/** Why a launch failed, in the assertion message. A bare exit code hides a
+ *  signal kill behind an empty stderr, and this suite installs two ~2 GB trees
+ *  into tmpfs: a red that says nothing cannot be told from a red that means
+ *  the distribution no longer resolves. */
+function launchFailure(result: Bun.SyncSubprocess): string {
+  const decoder = new TextDecoder();
+  return [
+    `exit=${String(result.exitCode)} signal=${String(result.signalCode)}`,
+    decoder.decode(result.stderr).trim(),
+    decoder.decode(result.stdout).trim(),
+  ].filter((part) => part.length > 0).join("\n");
 }
 
 function commandStub(name: string): string {
@@ -359,9 +382,9 @@ describe("CLI source archive", () => {
     expect(install.exitCode, decoder.decode(install.stderr)).toBe(0);
     const launch = Bun.spawnSync(
       [process.execPath, "packages/cli/bin/cli.ts", "--version"],
-      { cwd: sourceRoot, stdout: "pipe", stderr: "pipe" },
+      { cwd: sourceRoot, env: freshHome(directory), stdout: "pipe", stderr: "pipe" },
     );
-    expect(launch.exitCode, decoder.decode(launch.stderr)).toBe(0);
+    expect(launch.exitCode, launchFailure(launch)).toBe(0);
     expect(decoder.decode(launch.stdout)).toMatch(/^0\.2\.0\+/);
     const lock = decoder.decode(lockResult.stdout);
 
@@ -370,4 +393,80 @@ describe("CLI source archive", () => {
       expect(lock, `archive lock stopped naming ${patchPath}`).toContain(patchPath);
     }
   }, 120_000);
+
+  // The install this asserts is the one a stranger runs, and its outcome must not
+  // depend on which Bun they happen to have. It did: Bun 1.3.0 and 1.3.1 default a
+  // WORKSPACE to the isolated linker, 1.3.1 predates the `configVersion` field that
+  // records this project's hoisted intent, and the archive shipped no bunfig — so a
+  // fresh macOS install resolved isolated, `packages/core` saw only its declared
+  // dependencies, and `kinu --version` died with
+  // `Cannot find module '@ai-sdk/provider-utils'`. The test above could not catch it,
+  // because it inherits the RUNNER's default rather than stating the distribution's.
+  //
+  // `configVersion: 1` is Bun's own switch for "default this workspace to isolated",
+  // so rewriting it reproduces the 1.3.1 default on any current Bun. The install runs
+  // with no linker flag: a flag would override the shipped bunfig and test nothing.
+  test("installs and launches on a Bun that defaults a workspace to isolated", () => {
+    const directory = mkdtempSync(join(tmpdir(), "kinu-cli-linker-test-"));
+    temporaryDirectories.push(directory);
+    const decoder = new TextDecoder();
+    const archive = join(directory, "kinu-source.tar.gz");
+    const build = Bun.spawnSync(
+      ["bash", join(REPO_ROOT, "scripts", "build-cli-source-archive.sh"), archive],
+      { cwd: REPO_ROOT, stdout: "pipe", stderr: "pipe" },
+    );
+    expect(build.exitCode, decoder.decode(build.stderr)).toBe(0);
+
+    const extracted = join(directory, "extracted");
+    mkdirSync(extracted);
+    const unpack = Bun.spawnSync(
+      ["tar", "-xzf", archive, "-C", extracted],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    expect(unpack.exitCode, decoder.decode(unpack.stderr)).toBe(0);
+    const sourceRoot = join(extracted, "kinu");
+
+    // The pin is the repository's own line, not a second copy of the decision.
+    const repositoryLinker = /^\s*linker\s*=\s*"([^"]+)"/m
+      .exec(readFileSync(join(REPO_ROOT, "bunfig.toml"), "utf8"))?.[1];
+    expect(repositoryLinker, "the repository stopped declaring an [install] linker").toBeDefined();
+    const shipped = readFileSync(join(sourceRoot, "bunfig.toml"), "utf8");
+    expect(shipped, "the distribution bunfig drifted from the repository's linker")
+      .toContain(`linker = "${repositoryLinker ?? ""}"`);
+    // Shipping the repository's bunfig verbatim exits `bun install` 1 outright:
+    // it names ./scripts/security-scanner.ts, which the distribution omits.
+    expect(shipped, "the distribution bunfig names a scanner it does not ship")
+      .not.toContain("scanner");
+
+    const lockPath = join(sourceRoot, "bun.lock");
+    const lock = readFileSync(lockPath, "utf8");
+    expect(lock, "bun.lock stopped carrying configVersion").toMatch(/"configVersion": \d+/);
+    writeFileSync(lockPath, lock.replace(/"configVersion": \d+/, '"configVersion": 1'));
+
+    const install = Bun.spawnSync(
+      [process.execPath, "install", "--frozen-lockfile"],
+      { cwd: sourceRoot, stdout: "pipe", stderr: "pipe" },
+    );
+    expect(install.exitCode, decoder.decode(install.stderr)).toBe(0);
+    expect(
+      existsSync(join(sourceRoot, "node_modules", ".bun")),
+      "the distribution installed isolated: the shipped linker pin was not honoured",
+    ).toBe(false);
+
+    const launched = freshHome(directory);
+    const version = Bun.spawnSync(
+      [process.execPath, "packages/cli/bin/cli.ts", "--version"],
+      { cwd: sourceRoot, env: launched, stdout: "pipe", stderr: "pipe" },
+    );
+    expect(version.exitCode, launchFailure(version)).toBe(0);
+    expect(decoder.decode(version.stdout)).toMatch(/^0\.2\.0\+/);
+
+    // What install.sh itself greps for before calling the install good.
+    const help = Bun.spawnSync(
+      [process.execPath, "packages/cli/bin/cli.ts", "--help"],
+      { cwd: sourceRoot, env: launched, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+    );
+    expect(help.exitCode, launchFailure(help)).toBe(0);
+    expect(decoder.decode(help.stdout)).toMatch(/^[ \t]+setup[ \t]/m);
+  }, 300_000);
 });

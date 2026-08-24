@@ -91,6 +91,9 @@ const EnvironmentSchema = v.object({
     id: v.string(),
   }))),
   vectorize: v.optional(v.array(v.object({ binding: v.string(), index_name: v.string() }))),
+  analytics_engine_datasets: v.optional(v.array(v.object({
+    binding: v.string(), dataset: v.string(),
+  }))),
 });
 
 const WranglerConfigSchema = v.object({
@@ -214,7 +217,11 @@ export function envFields(source = readFileSync(join(REPO, ENV_TYPES), 'utf8')):
       continue;
     }
     if (line.length === 0 || line.startsWith('//') || line.startsWith('*')) continue;
-    const member = /^(\w+)(\??):\s*(.+);$/u.exec(line);
+    // `readonly` is legal on an interface member and says nothing about whether
+    // the deployment may omit the binding — which is the only thing this reader
+    // is after. Accepted rather than rejected, because a parser that refuses
+    // valid TypeScript turns a correct declaration into a gate failure.
+    const member = /^(?:readonly\s+)?(\w+)(\??):\s*(.+);$/u.exec(line);
     if (member === null) throw new Error(`${ENV_TYPES}: cannot read Env member \`${line}\``);
     fields.push({ name: member[1] ?? '', optional: member[2] === '?', type: member[3] ?? '' });
   }
@@ -409,6 +416,33 @@ export interface Supply {
  * while being an R2 bucket, and the way that survives is by nobody ever having
  * to write down what supplies a name.
  */
+/** What each bucket is for, and what deleting it costs. Keyed by binding rather
+ *  than written as a chain of ternaries: the chain silently gave every bucket
+ *  added after the second one the SECOND one's description, which is a wrong
+ *  answer in the place an operator reads before a teardown. */
+const R2_PURPOSE = {
+  BACKUP_BUCKET: 'sandbox /workspace snapshots (squashfs archives)',
+  NIMBUS_RUNTIME_CACHE:
+    'the Nimbus runtime artifact store a hosted workspace installs its toolchain from',
+  FEEDBACK_BUCKET: 'screenshots attached to in-product feedback reports',
+} satisfies Record<string, string>;
+
+const R2_HOLDS = {
+  BACKUP_BUCKET: 'every sandbox workspace snapshot. Deleting it makes every outstanding restore '
+    + 'handle dangle.',
+  NIMBUS_RUNTIME_CACHE: 'the seeded runtime catalog and content-addressed blobs (clang, python, '
+    + 'ruby, bash, cpython). Deleting it makes every hosted `python3` exit 127.',
+  FEEDBACK_BUCKET: 'every submitted screenshot. The metadata rows in ControlPlaneDO survive '
+    + 'independently, so deleting it leaves each report readable with its image gone.',
+} satisfies Record<string, string>;
+
+/** Read one of the two closed tables above by a binding name the config supplied.
+ *  A closed record has no index signature, so the lookup is a function rather
+ *  than a subscript — which is also where the absent case gets its answer. */
+function describedR2(table: Record<string, string>, binding: string): string | undefined {
+  return Object.hasOwn(table, binding) ? table[binding] : undefined;
+}
+
 export const SUPPLY = new Map<string, Supply>([
   ['CREDENTIAL_ENCRYPTION_KEY', {
     handling: 'prompt',
@@ -419,6 +453,15 @@ export const SUPPLY = new Map<string, Supply>([
     source: 'generated at the prompt (32 random bytes, base64) or pasted from the operator\'s '
       + 'password manager. It is displayed exactly once, because Cloudflare cannot show it '
       + 'again and losing it means every user reconnects every provider.',
+  }],
+  ['ANALYTICS_SQL_API_TOKEN', {
+    handling: 'prompt',
+    required: false,
+    absent: 'the control plane\'s metrics view reports itself unconfigured and names this '
+      + 'variable. Every other admin view, and every analytics WRITE, is unaffected: writing '
+      + 'goes through the dataset bindings and needs no token. Only reading does.',
+    source: 'https://dash.cloudflare.com/profile/api-tokens — a custom token with '
+      + 'Account | Account Analytics | Read, scoped to this account.',
   }],
   ['CREDENTIAL_ENCRYPTION_KEY_PREVIOUS', {
     handling: 'out-of-band',
@@ -556,6 +599,7 @@ function environmentRow(key: string, topName: string, config: WranglerEnvironmen
     ...(config.kv_namespaces ?? []).map((k) => k.binding),
     ...(config.r2_buckets ?? []).map((r) => r.binding),
     ...(config.vectorize ?? []).map((x) => x.binding),
+    ...(config.analytics_engine_datasets ?? []).map((d) => d.binding),
     ...(config.durable_objects?.bindings ?? []).map((d) => d.name),
     ...(config.worker_loaders ?? []).map((w) => w.binding),
     ...(config.send_email ?? []).map((e) => e.name),
@@ -609,14 +653,11 @@ function draftsFor(
       name: bucket.bucket_name,
       origin: 'wrangler-cli',
       binding: bucket.binding,
-      purpose: bucket.binding === 'BACKUP_BUCKET'
-        ? 'sandbox /workspace snapshots (squashfs archives)'
-        : 'the Nimbus runtime artifact store a hosted workspace installs its toolchain from',
-      holds: bucket.binding === 'BACKUP_BUCKET'
-        ? 'every sandbox workspace snapshot. Deleting it makes every outstanding restore handle '
-          + 'dangle.'
-        : 'the seeded runtime catalog and content-addressed blobs (clang, python, ruby, bash, '
-          + 'cpython). Deleting it makes every hosted `python3` exit 127.',
+      purpose: describedR2(R2_PURPOSE, bucket.binding)
+        ?? 'an R2 bucket this Worker binds, with no purpose declared in the manifest',
+      holds: describedR2(R2_HOLDS, bucket.binding)
+        ?? 'unstated. A bucket whose contents the manifest cannot describe is one a teardown '
+          + 'cannot be reasoned about, so the absence is said rather than guessed.',
       create: ['r2', 'bucket', 'create', bucket.bucket_name],
       destroy: ['r2', 'bucket', 'delete', bucket.bucket_name],
     });

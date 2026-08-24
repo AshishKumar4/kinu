@@ -1,6 +1,10 @@
 import { beforeAll, describe, expect, test } from 'bun:test';
 import type { Browser, Page } from 'puppeteer';
 
+// Type-only: the timeline module declares `window.__kinuBugfixDemo`, the
+// deterministic drive this suite seeks the bug-fix demo through.
+import type { DemoCue } from '../packages/cf-backend/src/components/landing/bugfix-demo-timeline';
+
 import { withGallery } from './gallery-harness';
 import { THEMES, type Theme } from './computed-style';
 
@@ -29,9 +33,35 @@ interface SurfaceFact {
   readonly text: string;
 }
 
+/** Horizontal integrity of one landing width. `scroll` alone cannot prove it:
+ *  the landing root is `overflow-x-clip`, so a child wider than the viewport
+ *  produces NO scrollable overflow — documentElement.scrollWidth stays equal
+ *  to clientWidth while the browser silently cuts the child (the 390px hero
+ *  shipped exactly that way). `clipped` counts elements whose box leaves the
+ *  viewport with no ancestor that legitimately contains them. */
+interface WidthIntegrity {
+  readonly scroll: number;
+  readonly clipped: number;
+  readonly worst: readonly string[];
+}
+
+interface DemoBeat {
+  readonly phase: string;
+  readonly surface: string;
+  readonly box: string;
+  readonly planStatus: string | null;
+  readonly planRevision: string | null;
+  readonly highlight: boolean;
+  readonly candidates: string;
+  readonly tests: string | null;
+  readonly cursor: string;
+  readonly cursorShown: boolean;
+}
+
 interface Facts {
   typed?: { early: string; later: string };
   reduced?: { before: string; after: string; pixels: number; animations: number };
+  reducedDemo?: { settled: string | null; phase: string | null; tests: string | null; controls: number };
   canvasPixels?: number;
   treeFlows?: boolean;
   prunedNodes?: number;
@@ -41,13 +71,15 @@ interface Facts {
   tui?: SurfaceFact;
   cli?: SurfaceFact;
   interactions?: { workspace: boolean; decision: boolean; tui: boolean; cli: boolean; evolution: boolean };
+  demoBeats?: Record<string, DemoBeat>;
+  demoControls?: { replayed: boolean; pausedAfter: boolean; playLabelBefore: string | null };
   command?: string;
   copied?: boolean;
   homeLink?: { visible: boolean; hasGraphic: boolean };
   deploy?: { button: string | null; guide: string | null };
   providers?: string[];
   loginLayout?: { dialog: boolean; cardOffset: number; barOffset: number; footer: boolean };
-  landingOverflow: Record<string, number>;
+  landingOverflow: Record<string, WidthIntegrity>;
   publicOverflow: Record<string, number>;
   landingTargets?: number[];
   publicTargets?: number[];
@@ -279,6 +311,64 @@ beforeAll(async () => {
         cli: document.querySelector('[data-cli-stage="0"]') !== null,
         evolution: document.getElementById('evolution')?.getAttribute('data-evolution-stage') === '1',
       }));
+
+      // The bug-fix demo: seek the one timeline through its beats and record
+      // what each beat put on the stage. `seek` resolves only once the beat's
+      // DOM is settled, so every readback below is post-paint.
+      await page.evaluate(() => {
+        document.querySelector('[data-bugfix-demo]')?.scrollIntoView({ block: 'center' });
+        window.__kinuBugfixDemo?.pause();
+      });
+      const demoBeats: Record<string, DemoBeat> = {};
+      const beats: readonly [DemoCue | 'mid-travel', number][] = [
+        ['userAsk', 700],
+        ['rootCauseText', 4_100],
+        ['mid-travel', 5_200],
+        ['planOpen', 6_200],
+        ['annotation', 7_600],
+        ['requestChanges', 8_800],
+        ['planRevised', 10_400],
+        ['approve', 11_200],
+        ['candidatesAppear', 13_300],
+        ['candidateCPass', 15_500],
+        ['testDone', 17_800],
+        ['end', 19_600],
+      ];
+      for (const [name, at] of beats) {
+        demoBeats[name] = await page.evaluate(async (seekTo: number) => {
+          await window.__kinuBugfixDemo?.seek(seekTo);
+          const stage = document.querySelector<HTMLElement>('[data-bugfix-demo]');
+          const rect = stage?.getBoundingClientRect();
+          const cursor = document.querySelector<HTMLElement>('[data-demo-cursor]');
+          const plan = document.querySelector<HTMLElement>('[data-demo-plan]');
+          return {
+            phase: stage?.dataset.demoPhase ?? '',
+            surface: stage?.dataset.demoSurface ?? '',
+            box: rect === undefined ? '' : `${String(Math.round(rect.width))}x${String(Math.round(rect.height))}`,
+            planStatus: plan?.dataset.demoPlanStatus ?? null,
+            planRevision: plan?.dataset.demoPlanRevision ?? null,
+            highlight: document.querySelector('[data-demo-plan] .annotation-highlight') !== null,
+            candidates: [...document.querySelectorAll<HTMLElement>('[data-demo-candidate]')]
+              .map((node) => node.dataset.demoCandidate).join(','),
+            tests: document.querySelector<HTMLElement>('[data-demo-tests]')?.dataset.demoTests ?? null,
+            cursor: cursor?.style.transform ?? '',
+            cursorShown: cursor !== null && Number(cursor.style.opacity || '0') > 0,
+          };
+        }, at);
+      }
+      facts.demoBeats = demoBeats;
+      const playLabelBefore = await page.evaluate(() => (
+        document.querySelector('button[aria-label="Play the demo"], button[aria-label="Pause the demo"]')
+          ?.getAttribute('aria-label') ?? null
+      ));
+      await page.click('button[aria-label="Replay the demo"]');
+      const replayed = await page.waitForFunction(() => {
+        const state = window.__kinuBugfixDemo?.state();
+        return state !== undefined && state.playing && state.t < 4_000 ? true : null;
+      }, { timeout: 5_000 }).then(() => true);
+      await page.click('button[aria-label="Pause the demo"]');
+      const pausedAfter = await page.evaluate(() => window.__kinuBugfixDemo?.state().playing === false);
+      facts.demoControls = { replayed, pausedAfter, playLabelBefore };
       facts.command = await page.$eval(
         '[data-install-command]',
         (element) => element.textContent?.trim() ?? '',
@@ -347,14 +437,56 @@ beforeAll(async () => {
           () => document.getAnimations().filter((animation) => animation.playState === 'running').length,
         ),
       };
+      // Under reduced motion the bug-fix demo never plays: it renders the
+      // settled final state, with no playback controls to press.
+      facts.reducedDemo = await page.evaluate(() => {
+        const stage = document.querySelector<HTMLElement>('[data-bugfix-demo]');
+        return {
+          settled: stage?.dataset.demoSettled ?? null,
+          phase: stage?.dataset.demoPhase ?? null,
+          tests: document.querySelector<HTMLElement>('[data-demo-tests]')?.dataset.demoTests ?? null,
+          controls: [...(stage?.querySelectorAll('button[aria-label$="the demo"]') ?? [])].length,
+        };
+      });
       await page.close();
     }
 
     for (const [label, size] of LANDING_WIDTHS) {
       const page = await openLanding(size);
-      facts.landingOverflow[label] = await page.evaluate(
-        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
-      );
+      // documentElement.scrollWidth CANNOT see this defect class: the landing
+      // root is overflow-x-clip, so an oversized child creates no scrollable
+      // overflow and the browser just cuts it. Prove containment per element:
+      // a box may leave the viewport only under an ancestor that itself fits
+      // and either scrolls (overflow-x auto/scroll) or is a single-line
+      // ellipsis truncation. Everything else is silent clipping.
+      facts.landingOverflow[label] = await page.evaluate(() => {
+        const viewport = document.documentElement.clientWidth;
+        const contained = (start: Element): boolean => {
+          for (let node = start.parentElement; node !== null && node !== document.body; node = node.parentElement) {
+            const style = getComputedStyle(node);
+            const scrollable = style.overflowX === 'auto' || style.overflowX === 'scroll';
+            const truncation = (style.overflowX === 'hidden' || style.overflowX === 'clip')
+              && style.textOverflow === 'ellipsis';
+            if (!scrollable && !truncation) continue;
+            const box = node.getBoundingClientRect();
+            if (box.left >= -1 && box.right <= viewport + 1) return true;
+          }
+          return false;
+        };
+        const worst: string[] = [];
+        for (const element of document.querySelectorAll('main *, header *, footer *')) {
+          const box = element.getBoundingClientRect();
+          if (box.width === 0 || box.height === 0) continue;
+          if ((box.right > viewport + 1 || box.left < -1) && !contained(element)) {
+            worst.push(`${element.tagName.toLowerCase()}.${element.className.toString().slice(0, 60)} [${String(Math.round(box.left))},${String(Math.round(box.right))}]`);
+          }
+        }
+        return {
+          scroll: document.documentElement.scrollWidth - viewport,
+          clipped: worst.length,
+          worst: worst.slice(0, 6),
+        };
+      });
       const surfacesFit = await page.evaluate(() => {
         const viewport = document.documentElement.clientWidth;
         return [
@@ -466,6 +598,62 @@ describe('the standalone landing runs', () => {
   });
 });
 
+describe('the bug-fix demo plays one timeline', () => {
+  test('the story reaches every beat in order', () => {
+    const beat = required(facts.demoBeats, 'demo beats');
+    expect(beat.userAsk?.phase).toBe('asking');
+    expect(beat.rootCauseText?.phase).toBe('investigating');
+    expect(beat.planOpen?.surface).toBe('plan');
+    expect(beat.planOpen?.planStatus).toBe('pending');
+    expect(beat.planOpen?.planRevision).toBe('1');
+    expect(beat.annotation?.highlight).toBeTrue();
+    expect(beat.requestChanges?.planStatus).toBe('changes_requested');
+    expect(beat.planRevised?.planRevision).toBe('2');
+    expect(beat.planRevised?.highlight).toBeFalse();
+    expect(beat.approve?.planStatus).toBe('approved');
+    expect(beat.candidatesAppear?.candidates).toBe('running,running,running');
+    expect(beat.candidateCPass?.candidates).toBe('failed,failed,passed');
+    expect(beat.testDone?.tests).toBe('settled');
+    expect(beat.end?.phase).toBe('done');
+    expect(beat.end?.surface).toBe('chat');
+  });
+
+  test('the cursor travels and clicks between meaningful controls', () => {
+    const beat = required(facts.demoBeats, 'demo beats');
+    // Hidden while the agent works alone, visible once review needs a human.
+    expect(beat.rootCauseText?.cursorShown).toBeFalse();
+    for (const name of ['mid-travel', 'annotation', 'requestChanges', 'approve', 'candidatesAppear'] as const) {
+      expect(beat[name]?.cursorShown, `cursor at ${name}`).toBeTrue();
+    }
+    const spots = ['mid-travel', 'annotation', 'requestChanges', 'approve', 'candidatesAppear']
+      .map((name) => beat[name]?.cursor ?? '');
+    expect(new Set(spots).size).toBe(spots.length);
+    expect(beat.end?.cursorShown).toBeFalse();
+  });
+
+  test('no beat moves the stage: the demo cannot shift the page', () => {
+    const beat = required(facts.demoBeats, 'demo beats');
+    const boxes = new Set(Object.values(beat).map((entry) => entry.box));
+    expect(boxes.size).toBe(1);
+    expect([...boxes][0]).not.toBe('');
+  });
+
+  test('replay and pause work from the keyboard-reachable controls', () => {
+    const controls = required(facts.demoControls, 'demo controls');
+    expect(controls.playLabelBefore).not.toBeNull();
+    expect(controls.replayed).toBeTrue();
+    expect(controls.pausedAfter).toBeTrue();
+  });
+
+  test('reduced motion holds the settled final state with no controls', () => {
+    const reduced = required(facts.reducedDemo, 'reduced-motion demo');
+    expect(reduced.settled).toBe('true');
+    expect(reduced.phase).toBe('done');
+    expect(reduced.tests).toBe('settled');
+    expect(reduced.controls).toBe(0);
+  });
+});
+
 describe('public actions work', () => {
   test('the install command uses this origin and copies', () => {
     expect(required(facts.command, 'install command')).toBe(
@@ -503,8 +691,12 @@ describe('public actions work', () => {
 
 describe('public pages are responsive', () => {
   test('the landing fits every required viewport', () => {
-    for (const [where, overflow] of Object.entries(facts.landingOverflow)) {
-      expect(overflow, `landing@${where}`).toBeLessThanOrEqual(0);
+    for (const [where, integrity] of Object.entries(facts.landingOverflow)) {
+      expect(integrity.scroll, `landing@${where} scrolls sideways`).toBeLessThanOrEqual(0);
+      expect(
+        integrity.clipped,
+        `landing@${where} silently clips: ${integrity.worst.join(' · ')}`,
+      ).toBe(0);
     }
   });
 

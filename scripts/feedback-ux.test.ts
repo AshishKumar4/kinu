@@ -1,0 +1,530 @@
+/**
+ * The feedback capture, driven in a real browser, because every claim it makes
+ * is about pixels and none of them is checkable from source.
+ *
+ * The load-bearing assertion is the REDACTION one, and it is made against the
+ * captured image's actual pixels rather than against the clone: a secret is only
+ * gone if the bytes that would have left the browser do not carry it. The
+ * negative control matters as much as the positive ones — a blank or all-black
+ * capture would satisfy every "this region is uniform" test for the wrong
+ * reason, so an unmarked paragraph must come back NOT uniform.
+ *
+ * The oversized refusal is driven with real bytes: `?noise=1` renders an
+ * incompressible canvas, so the PNG genuinely exceeds the 8 MiB limit instead of
+ * a size being stubbed.
+ *
+ * `/api/feedback` does not exist under the gallery's Vite server, so the POST is
+ * answered by request interception. Everything on the browser side of that
+ * boundary — the multipart body, the client's own size refusal, the retry that
+ * reuses the capture in memory — is the shipped code path.
+ */
+import { beforeAll, describe, expect, test } from 'bun:test';
+import type { HTTPRequest, Page } from 'puppeteer';
+import { withGallery } from './gallery-harness';
+
+const FEEDBACK = '/api/feedback';
+/** One sampled region of the captured image. */
+interface Region {
+  /** Every sampled pixel was the redaction fill (#111111). */
+  uniformlyRedacted: boolean;
+  /** How many distinct colours the region holds — 1 means a solid block. */
+  colours: number;
+  sampled: number;
+  /** Sampled pixels that were NOT the fill. Reported so a failure says how big
+   *  the leak is: a handful is an antialiased edge, hundreds are glyphs. */
+  offFill: number;
+}
+
+/** One outgoing submission, as the client actually built it. */
+interface Submission {
+  fields: string[];
+  note: string;
+  route: string;
+  workspace: string;
+  annotated: string;
+  /** Absent when the report carries no screenshot. */
+  screenshot: { size: number; type: string; name: string } | null;
+}
+
+/**
+ * Watch what the client sends, from INSIDE the page.
+ *
+ * Puppeteer returns nothing for a multipart body (`postData()` is empty for a
+ * binary payload), and the interesting facts are the `FormData` entries the
+ * component assembled — the PNG's real size and type included. So the recorder
+ * wraps `fetch` at document start, records, and delegates. The gallery wraps
+ * `fetch` too, later, so this recorder sits underneath and sees the call either
+ * way; the request still reaches the network, where interception answers it.
+ */
+declare global {
+  interface Window {
+    /** Installed by `recordSubmissions` at document start. Declared rather than
+     *  asserted at each read: the recorder below is its only writer, so the
+     *  shape is this file's own and there is nothing external to validate. */
+    __feedbackSent?: Submission[];
+  }
+}
+
+async function recordSubmissions(page: Page): Promise<void> {
+  await page.evaluateOnNewDocument((endpoint: string) => {
+    const real = window.fetch.bind(window);
+    const seen: Submission[] = [];
+    window.__feedbackSent = seen;
+    window.fetch = Object.assign((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const body = init?.body;
+      if (url.endsWith(endpoint) && body instanceof FormData) {
+        const shot = body.get('screenshot');
+        seen.push({
+          fields: [...body.keys()],
+          note: String(body.get('note') ?? ''),
+          route: String(body.get('route') ?? ''),
+          workspace: String(body.get('workspace') ?? ''),
+          annotated: String(body.get('annotated') ?? ''),
+          screenshot: shot instanceof File ? { size: shot.size, type: shot.type, name: shot.name } : null,
+        });
+      }
+      return real(input, init);
+    }, { preconnect: real.preconnect });
+  }, FEEDBACK);
+}
+
+async function submissions(page: Page): Promise<Submission[]> {
+  return page.evaluate(() => window.__feedbackSent ?? []);
+}
+
+/**
+ * Answer `/api/feedback` at the network. `failFirst` aborts the first attempt so
+ * the retry path runs against a real connection failure rather than a simulated
+ * error state.
+ *
+ * Vite's HMR socket is refused on the way in. Sibling work in this tree touches
+ * `src/` while a gate is running, and an HMR update re-mounts the React root
+ * mid-interaction — the dialog simply vanishes. Only the socket carrying
+ * `vite-hmr` is stubbed, so module loading is untouched.
+ */
+async function serveFeedback(page: Page, options: { failFirst?: boolean } = {}): Promise<void> {
+  await page.evaluateOnNewDocument(() => {
+    const Real = WebSocket;
+    const Stub = function (url: string, protocols?: string | string[]) {
+      const wanted = protocols === undefined ? [] : Array.isArray(protocols) ? protocols : [protocols];
+      if (wanted.includes('vite-hmr')) {
+        return { readyState: 3, close() { /* never opened */ }, send() { /* never opened */ },
+          addEventListener() { /* never fires */ }, removeEventListener() { /* never fires */ } };
+      }
+      return new Real(url, protocols);
+    };
+    Object.assign(window, { WebSocket: Stub });
+  });
+  await recordSubmissions(page);
+  let attempt = 0;
+  await page.setRequestInterception(true);
+  page.on('request', (request: HTTPRequest) => {
+    if (!request.url().endsWith(FEEDBACK)) {
+      void request.continue();
+      return;
+    }
+    attempt += 1;
+    if (options.failFirst === true && attempt === 1) {
+      void request.abort('connectionrefused');
+      return;
+    }
+    void request.respond({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({ id: 'fb-0001-abcdef' }),
+    });
+  });
+}
+
+/** Open the dialog and wait for the capture to settle either way. */
+async function openDialog(page: Page, selector = '[data-feedback-open]'): Promise<void> {
+  await page.click(selector);
+  await page.waitForSelector('[data-feedback-note]');
+  await page.waitForFunction(
+    () => document.querySelector('[data-feedback-shot="ready"], [data-feedback-shot="failed"]') !== null,
+    { timeout: 90_000 },
+  );
+  // A canvas EXISTS as soon as the ready state renders; it is only DRAWN once
+  // the decode resolves and the paint effect stamps it. Reading pixels between
+  // those two is how this gate flaked, so every path that samples the image
+  // waits for the stamp rather than for the element.
+  await page.waitForFunction(
+    () => document.querySelector('[data-feedback-shot="failed"]') !== null
+      || document.querySelector('[data-feedback-canvas][data-feedback-painted]') !== null,
+    { timeout: 90_000 },
+  );
+}
+
+/**
+ * Sample the captured image at the on-page position of `selector`.
+ *
+ * The capture omitted the dialog and the dialog is a fixed overlay, so the live
+ * page's layout is the layout that was photographed: a live bounding box scaled
+ * by the capture's own scale factor is where that element's pixels are.
+ *
+ * The box is inset by 8 device pixels, which is past this design system's
+ * `rounded-md` corner. Antialiasing where a rounded block meets the page ground
+ * is not a leak, and demanding a pixel-perfect rectangle would force the
+ * redaction to be square for the test's convenience. What is asserted instead is
+ * the interior: every pixel the block claims to cover IS covered. `offFill`
+ * carries the count that failed it, so a real leak (hundreds of glyph pixels)
+ * cannot hide behind a plausible handful of edge pixels.
+ */
+async function readRegion(page: Page, selector: string): Promise<Region> {
+  return page.evaluate((target: string) => {
+    const canvas = document.querySelector<HTMLCanvasElement>('[data-feedback-canvas]');
+    const node = document.querySelector<HTMLElement>(target);
+    if (canvas === null || node === null) throw new Error(`no canvas or no ${target}`);
+    const context = canvas.getContext('2d');
+    if (context === null) throw new Error('no 2d context');
+    const scale = canvas.width / document.documentElement.clientWidth;
+    const box = node.getBoundingClientRect();
+    const inset = 8;
+    const x = Math.round(box.left * scale) + inset;
+    const y = Math.round(box.top * scale) + inset;
+    const w = Math.max(1, Math.round(box.width * scale) - inset * 2);
+    const h = Math.max(1, Math.round(box.height * scale) - inset * 2);
+    const pixels = context.getImageData(x, y, w, h).data;
+    const colours = new Set<string>();
+    let offFill = 0;
+    let sampled = 0;
+    for (let i = 0; i < pixels.length; i += 4) {
+      sampled += 1;
+      colours.add(`${String(pixels[i])},${String(pixels[i + 1])},${String(pixels[i + 2])}`);
+      if (pixels[i] !== 17 || pixels[i + 1] !== 17 || pixels[i + 2] !== 17) offFill += 1;
+    }
+    return { uniformlyRedacted: sampled > 0 && offFill === 0, colours: colours.size, sampled, offFill };
+  }, selector);
+}
+
+/** The preview canvas's own PNG size, which is what the client measures. */
+async function readShot(page: Page): Promise<{ width: number; height: number; redacted: number }> {
+  return page.evaluate(() => {
+    const canvas = document.querySelector<HTMLCanvasElement>('[data-feedback-canvas]');
+    const meta = document.querySelector<HTMLElement>('[data-feedback-shot-meta]');
+    if (canvas === null) throw new Error('no preview canvas');
+    return {
+      width: canvas.width,
+      height: canvas.height,
+      redacted: Number(meta?.dataset.feedbackShotMeta ?? '0'),
+    };
+  });
+}
+
+interface Observed {
+  desktop: {
+    shot: { width: number; height: number; redacted: number };
+    password: Region;
+    token: Region;
+    control: Region;
+    consent: string;
+    sent: Submission[];
+    toast: string;
+  };
+  annotated: { before: number; afterDrag: number; afterUndo: number; sentAnnotated: string };
+  noteOnly: { shotSectionPresent: boolean; sent: Submission[] };
+  oversized: { message: string; sendableWithoutShot: boolean; sent: Submission[] };
+  retry: {
+    errorText: string; buttonLabel: string; canvasSurvived: boolean;
+    attempts: number; sizes: number[]; toast: string;
+  };
+  mobile: { buttonVisible: boolean; dialogWithin: boolean; captureSucceeded: boolean };
+}
+
+async function run(): Promise<Observed> {
+  return withGallery(async ({ browser, origin }) => {
+    // ── desktop: capture, redaction, send ────────────────────────────────
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 900 });
+    await serveFeedback(page);
+    await page.goto(`${origin}/gallery.html?frame=feedback`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('[data-secret-input]');
+    await openDialog(page);
+    await page.waitForSelector('[data-feedback-canvas]');
+
+    const shot = await readShot(page);
+    const password = await readRegion(page, '[data-secret-input]');
+    const token = await readRegion(page, '[data-secret-token]');
+    const control = await readRegion(page, '[data-visible-copy]');
+    const consent = await page.$eval('[data-feedback-consent]', (node) => node.textContent ?? '');
+
+    await page.type('[data-feedback-note]', 'the key field renders behind the label');
+    await page.click('[data-feedback-send]');
+    await page.waitForSelector('[data-feedback-sent]', { timeout: 30_000 });
+    const toast = await page.$eval('[data-feedback-sent]', (node) => node.textContent ?? '');
+    const sent = await submissions(page);
+    await page.close();
+
+    // ── annotation ───────────────────────────────────────────────────────
+    const draw = await browser.newPage();
+    await draw.setViewport({ width: 1280, height: 900 });
+    await serveFeedback(draw);
+    await draw.goto(`${origin}/gallery.html?frame=feedback`, { waitUntil: 'networkidle0' });
+    await openDialog(draw);
+    await draw.waitForSelector('[data-feedback-canvas]');
+
+    const colourCount = async (): Promise<number> => (await readRegion(draw, '[data-visible-copy]')).colours;
+    const before = await colourCount();
+    await draw.click('[data-feedback-tool="hide"]');
+    const box = await draw.$eval('[data-feedback-canvas]', (node) => {
+      const rect = node.getBoundingClientRect();
+      return { x: rect.left, y: rect.top, w: rect.width, h: rect.height };
+    });
+    const target = await draw.$eval('[data-visible-copy]', (node) => {
+      const rect = node.getBoundingClientRect();
+      return { top: rect.top, height: rect.height };
+    });
+    // Drag across the control paragraph's own band of the image, in canvas
+    // display coordinates: covering it is what a reporter does to something the
+    // automatic redaction could not know about.
+    const bandTop = box.y + (target.top / (await draw.evaluate(() => document.documentElement.clientHeight))) * box.h;
+    await draw.mouse.move(box.x + box.w * 0.05, bandTop + 2);
+    await draw.mouse.down();
+    await draw.mouse.move(box.x + box.w * 0.9, bandTop + Math.max(12, (target.height / 900) * box.h), { steps: 8 });
+    await draw.mouse.up();
+    // The canvas states how many marks it has painted, so the measurement waits
+    // on the PAINT rather than on the button's enabled state — those used to be
+    // different commits, which is how an async repaint read as a lost undo.
+    const painted = async (count: number): Promise<void> => {
+      await draw.waitForFunction(
+        (want: number) => document.querySelector('[data-feedback-canvas]')
+          ?.getAttribute('data-feedback-painted') === String(want),
+        { timeout: 30_000 }, count,
+      );
+    };
+    await painted(1);
+    const afterDrag = await colourCount();
+    await draw.click('[data-feedback-undo]');
+    await painted(0);
+    const afterUndo = await colourCount();
+
+    // Re-draw one mark so the sent body reports annotation.
+    await draw.mouse.move(box.x + box.w * 0.05, bandTop + 2);
+    await draw.mouse.down();
+    await draw.mouse.move(box.x + box.w * 0.9, bandTop + 20, { steps: 8 });
+    await draw.mouse.up();
+    await painted(1);
+    await draw.type('[data-feedback-note]', 'covering the middle paragraph');
+    await draw.click('[data-feedback-send]');
+    await draw.waitForSelector('[data-feedback-sent]', { timeout: 30_000 });
+    const sentAnnotated = (await submissions(draw)).at(-1)?.annotated ?? '';
+    await draw.close();
+
+    // ── note only ────────────────────────────────────────────────────────
+    const bare = await browser.newPage();
+    await bare.setViewport({ width: 1280, height: 900 });
+    await serveFeedback(bare);
+    await bare.goto(`${origin}/gallery.html?frame=feedback`, { waitUntil: 'networkidle0' });
+    await openDialog(bare);
+    await bare.click('[data-feedback-include-shot]');
+    await bare.waitForFunction(() => document.querySelector('[data-feedback-shot]') === null);
+    const shotSectionPresent = await bare.$('[data-feedback-shot]') !== null;
+    await bare.type('[data-feedback-note]', 'no screenshot for this one');
+    await bare.click('[data-feedback-send]');
+    await bare.waitForSelector('[data-feedback-sent]', { timeout: 30_000 });
+    const bareSent = await submissions(bare);
+    await bare.close();
+
+    // ── oversized, with real incompressible bytes ────────────────────────
+    const big = await browser.newPage();
+    await big.setViewport({ width: 1280, height: 900 });
+    await serveFeedback(big);
+    await big.goto(`${origin}/gallery.html?frame=feedback&noise=1`, { waitUntil: 'networkidle0' });
+    await openDialog(big);
+    await big.waitForSelector('[data-feedback-shot="failed"]', { timeout: 120_000 });
+    const message = await big.$eval('[data-feedback-shot="failed"]', (node) => node.textContent ?? '');
+    await big.type('[data-feedback-note]', 'the page is too big to photograph');
+    const sendableWithoutShot = await big.$eval('[data-feedback-send]', (node) => !node.hasAttribute('disabled'));
+    await big.click('[data-feedback-send]');
+    await big.waitForSelector('[data-feedback-sent]', { timeout: 30_000 });
+    const bigSent = await submissions(big);
+    await big.close();
+
+    // ── a failed send keeps the capture, and retry sends it ──────────────
+    const flaky = await browser.newPage();
+    await flaky.setViewport({ width: 1280, height: 900 });
+    await serveFeedback(flaky, { failFirst: true });
+    await flaky.goto(`${origin}/gallery.html?frame=feedback`, { waitUntil: 'networkidle0' });
+    await openDialog(flaky);
+    await flaky.waitForSelector('[data-feedback-canvas]');
+    await flaky.type('[data-feedback-note]', 'first attempt will not reach the server');
+    await flaky.click('[data-feedback-send]');
+    await flaky.waitForSelector('[data-feedback-error]', { timeout: 30_000 });
+    const errorText = await flaky.$eval('[data-feedback-error]', (node) => node.textContent ?? '');
+    const buttonLabel = await flaky.$eval('[data-feedback-send]', (node) => node.textContent ?? '');
+    const canvasSurvived = await flaky.$('[data-feedback-canvas]') !== null;
+    await flaky.click('[data-feedback-send]');
+    await flaky.waitForSelector('[data-feedback-sent]', { timeout: 30_000 });
+    const retryToast = await flaky.$eval('[data-feedback-sent]', (node) => node.textContent ?? '');
+    const flakySent = await submissions(flaky);
+    await flaky.close();
+
+    // ── mobile ───────────────────────────────────────────────────────────
+    const phone = await browser.newPage();
+    await phone.setViewport({ width: 390, height: 844, deviceScaleFactor: 2 });
+    await serveFeedback(phone);
+    await phone.goto(`${origin}/gallery.html?frame=feedback`, { waitUntil: 'networkidle0' });
+    const buttonVisible = await phone.$eval('[data-feedback-open]', (node) => {
+      const rect = node.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0 && rect.right <= window.innerWidth + 1;
+    });
+    await openDialog(phone);
+    const dialogWithin = await phone.$eval('[role="dialog"]', (node) => {
+      const rect = node.getBoundingClientRect();
+      return rect.left >= -1 && rect.right <= window.innerWidth + 1;
+    });
+    const captureSucceeded = await phone.$('[data-feedback-shot="ready"]') !== null;
+    await phone.close();
+
+    return {
+      desktop: { shot, password, token, control, consent, sent, toast },
+      annotated: { before, afterDrag, afterUndo, sentAnnotated },
+      noteOnly: { shotSectionPresent, sent: bareSent },
+      oversized: { message, sendableWithoutShot, sent: bigSent },
+      retry: {
+        errorText, buttonLabel, canvasSurvived, toast: retryToast,
+        attempts: flakySent.length,
+        sizes: flakySent.map((one) => one.screenshot?.size ?? 0),
+      },
+      mobile: { buttonVisible, dialogWithin, captureSucceeded },
+    };
+  });
+}
+
+let observed: Observed;
+beforeAll(async () => { observed = await run(); }, 600_000);
+
+describe('the screenshot never carries a secret', () => {
+  test('a password field is a solid block, without being marked for redaction', () => {
+    // No `data-feedback-redact` on that input. Being a password is the whole
+    // qualification, because an opt-in list is only as good as the last person
+    // who remembered it.
+    expect(observed.desktop.password.sampled).toBeGreaterThan(100);
+    expect(observed.desktop.password.offFill).toBe(0);
+    expect(observed.desktop.password.colours).toBe(1);
+    expect(observed.desktop.password.uniformlyRedacted).toBe(true);
+  });
+
+  test('a marked region holding a token rendered as text is a solid block too', () => {
+    expect(observed.desktop.token.sampled).toBeGreaterThan(100);
+    expect(observed.desktop.token.offFill).toBe(0);
+    expect(observed.desktop.token.colours).toBe(1);
+    expect(observed.desktop.token.uniformlyRedacted).toBe(true);
+  });
+
+  test('the rest of the page is really there — the control that stops the above passing on a blank image', () => {
+    expect(observed.desktop.control.sampled).toBeGreaterThan(100);
+    expect(observed.desktop.control.colours).toBeGreaterThan(1);
+    expect(observed.desktop.control.uniformlyRedacted).toBe(false);
+  });
+
+  test('the dialog reports how many fields it hid, so redaction is visible rather than promised', () => {
+    expect(observed.desktop.shot.redacted).toBeGreaterThanOrEqual(2);
+  });
+
+  test('the capture has real dimensions', () => {
+    expect(observed.desktop.shot.width).toBeGreaterThan(1000);
+    expect(observed.desktop.shot.height).toBeGreaterThan(400);
+  });
+});
+
+describe('sending a report', () => {
+  test('the body carries the note, the route and a real PNG, and nothing else', () => {
+    const submission = observed.desktop.sent.at(-1);
+    expect(submission).toBeDefined();
+    expect(new Set(submission?.fields)).toEqual(new Set(['note', 'route', 'workspace', 'annotated', 'screenshot']));
+    expect(submission?.note).toBe('the key field renders behind the label');
+    expect(submission?.route).toBe('/');
+    expect(submission?.screenshot?.type).toBe('image/png');
+    expect(submission?.screenshot?.name).toBe('feedback.png');
+    // A real capture, not an empty file — and inside the limit both halves hold.
+    expect(submission?.screenshot?.size ?? 0).toBeGreaterThan(5_000);
+    expect(submission?.screenshot?.size ?? 0).toBeLessThanOrEqual(8 * 1024 * 1024);
+  });
+
+  test('success is stated, with the id the server returned', () => {
+    expect(observed.desktop.toast).toContain('fb-0001');
+  });
+
+  test('the consent line says what leaves the browser, before anything does', () => {
+    expect(observed.desktop.consent).toContain('note');
+    expect(observed.desktop.consent).toContain('screenshot');
+    expect(observed.desktop.consent).toContain('email');
+    expect(observed.desktop.consent).toMatch(/[Pp]assword/u);
+  });
+});
+
+describe('annotation', () => {
+  test('a drag covers what it was dragged over, and undo puts it back', () => {
+    expect(observed.annotated.afterDrag).toBeLessThan(observed.annotated.before);
+    expect(observed.annotated.afterUndo).toBe(observed.annotated.before);
+  });
+
+  test('an annotated report says so, so the marker can count it', () => {
+    expect(observed.annotated.sentAnnotated).toBe('1');
+  });
+});
+
+describe('a report without a screenshot', () => {
+  test('unticking the box removes the whole screenshot section', () => {
+    expect(observed.noteOnly.shotSectionPresent).toBe(false);
+  });
+
+  test('the note alone is a complete report', () => {
+    const submission = observed.noteOnly.sent.at(-1);
+    expect(submission?.fields).not.toContain('screenshot');
+    expect(submission?.note).toBe('no screenshot for this one');
+  });
+});
+
+describe('a capture too large to send', () => {
+  test('it is refused in the browser, with the limit named', () => {
+    expect(observed.oversized.message).toMatch(/MiB/u);
+    expect(observed.oversized.message).toContain('note');
+  });
+
+  test('the note is still sendable, and goes without an image', () => {
+    expect(observed.oversized.sendableWithoutShot).toBe(true);
+    expect(observed.oversized.sent.at(-1)?.fields).not.toContain('screenshot');
+  });
+});
+
+describe('a send that fails', () => {
+  test('the reporter is told, and told the work is not lost', () => {
+    expect(observed.retry.errorText).toContain('Not sent');
+    expect(observed.retry.errorText).toMatch(/still here/u);
+  });
+
+  test('nothing retries on its own — the button becomes Retry and waits', () => {
+    expect(observed.retry.buttonLabel).toBe('Retry');
+    expect(observed.retry.canvasSurvived).toBe(true);
+    // Exactly two attempts for exactly two clicks: the one that was refused at
+    // the connection, and the one the reporter asked for. A third would mean
+    // something retried by itself.
+    expect(observed.retry.attempts).toBe(2);
+  });
+
+  test('retry sends the same capture, kept in memory across the failure', () => {
+    expect(observed.retry.toast).toContain('fb-0001');
+    // Both attempts carried a screenshot of the same size — the bytes were
+    // reused, not re-captured, which is what "kept in memory" means.
+    expect(observed.retry.sizes).toHaveLength(2);
+    expect(observed.retry.sizes[0]).toBeGreaterThan(5_000);
+    expect(observed.retry.sizes[0]).toBe(observed.retry.sizes[1]);
+  });
+});
+
+describe('on a phone', () => {
+  test('the feedback affordance is reachable and inside the viewport', () => {
+    expect(observed.mobile.buttonVisible).toBe(true);
+  });
+
+  test('the dialog does not overflow a 390px screen', () => {
+    expect(observed.mobile.dialogWithin).toBe(true);
+  });
+
+  test('the capture works at device-pixel-ratio 2', () => {
+    expect(observed.mobile.captureSucceeded).toBe(true);
+  });
+});

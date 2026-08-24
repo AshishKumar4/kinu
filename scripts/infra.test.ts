@@ -365,7 +365,8 @@ describe('what the manifest cannot express is recorded rather than assumed', () 
     // NOT here, because `wrangler kv namespace create` makes a second namespace
     // instead of finding the first one — see the manifest's `manual` note.
     expect(creatable.map((resource) => resource.id).sort()).toEqual([
-      'r2.kinu-backups', 'r2.kinu-backups-staging', 'r2.nimbus-runtime-cache',
+      'r2.kinu-backups', 'r2.kinu-backups-staging',
+      'r2.kinu-feedback', 'r2.kinu-feedback-staging', 'r2.nimbus-runtime-cache',
       'vectorize.kinu-memory', 'vectorize.kinu-memory-staging',
     ]);
     for (const resource of creatable) {
