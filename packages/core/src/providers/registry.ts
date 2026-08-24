@@ -117,6 +117,41 @@ export function createProviderRegistry(): ProviderRegistry {
   function providerFor(providerId: string): ModelProvider | undefined {
     return byId.get(providerId) ?? dynamic?.get(providerId);
   }
+  /**
+   * Probe every provider AT ONCE, isolate each failure, and answer in
+   * REGISTRATION ORDER.
+   *
+   * The listing methods below used to await each provider in a `for` loop, so
+   * one slow vendor added its whole latency to every provider behind it — and
+   * this call now sits in front of a turn's first token, where that sum is
+   * time the user spends watching nothing. The probes are independent: no
+   * provider's availability or model list is an input to another's.
+   *
+   * ORDER COMES FROM THE INPUT, NEVER FROM COMPLETION. `Promise.all` resolves
+   * positionally, so the fast provider that finished first does not overtake
+   * the slow one in the menu. A menu that reordered itself by whichever vendor
+   * answered quickest would be a different list on every call, and callers
+   * compare these lists.
+   *
+   * NO DEADLINE, deliberately: a provider is slow or it is broken, and a clock
+   * here would convert "slow" into "absent", which downstream reads as a model
+   * that does not exist. Failures are reported as failures.
+   */
+  async function probeEach<T>(
+    providers: readonly ModelProvider[],
+    probe: (provider: ModelProvider) => Promise<T>,
+  ): Promise<Array<
+    | { readonly provider: ModelProvider; readonly ok: true; readonly value: T }
+    | { readonly provider: ModelProvider; readonly ok: false; readonly error: unknown }
+  >> {
+    return Promise.all(providers.map(async (provider) => {
+      try {
+        return { provider, ok: true as const, value: await probe(provider) };
+      } catch (error) {
+        return { provider, ok: false as const, error };
+      }
+    }));
+  }
 
   return {
     register(provider) {
@@ -136,15 +171,18 @@ export function createProviderRegistry(): ProviderRegistry {
     async listProviders(deps) {
       const { providers, failures } = await allProviders(deps);
       const out: ProviderInfo[] = [];
-      for (const p of providers) {
-        try {
-          const available = await p.isAvailable(deps);
-          const info: ProviderInfo = { id: p.id, label: p.label, available };
-          if (!available && p.unavailableReason) info.unavailableReason = await p.unavailableReason(deps);
-          out.push(info);
-        } catch (err) {
-          out.push({ id: p.id, label: p.label, available: false, unavailableReason: providerFailureReason({ error: err }) });
-        }
+      for (const probed of await probeEach(providers, async (p) => {
+        const available = await p.isAvailable(deps);
+        const info: ProviderInfo = { id: p.id, label: p.label, available };
+        if (!available && p.unavailableReason) info.unavailableReason = await p.unavailableReason(deps);
+        return info;
+      })) {
+        out.push(probed.ok ? probed.value : {
+          id: probed.provider.id,
+          label: probed.provider.label,
+          available: false,
+          unavailableReason: providerFailureReason({ error: probed.error }),
+        });
       }
       for (const failure of failures) {
         out.push({ id: failure.provider, label: failure.label, available: false, unavailableReason: failure.reason });
@@ -156,13 +194,23 @@ export function createProviderRegistry(): ProviderRegistry {
       const { providers, failures: sourceFailures } = await allProviders(deps);
       const models: Array<ModelInfo & { provider: string }> = [];
       const failures = [...sourceFailures];
-      for (const p of providers) {
-        try {
-          if (!(await p.isAvailable(deps))) continue;
-          for (const m of await p.listModels(deps)) models.push({ ...m, provider: p.id });
-        } catch (err) {
-          failures.push({ provider: p.id, label: p.label, reason: providerFailureReason({ error: err }) });
+      // An UNAVAILABLE provider is not a failure — it is a provider nobody
+      // connected — so it contributes neither models nor a row, exactly as the
+      // sequential form did. `null` carries that "available: false" answer out
+      // of the probe without a second call.
+      for (const probed of await probeEach(providers, async (p) => (
+        await p.isAvailable(deps) ? await p.listModels(deps) : null
+      ))) {
+        if (!probed.ok) {
+          failures.push({
+            provider: probed.provider.id,
+            label: probed.provider.label,
+            reason: providerFailureReason({ error: probed.error }),
+          });
+          continue;
         }
+        if (probed.value === null) continue;
+        for (const m of probed.value) models.push({ ...m, provider: probed.provider.id });
       }
       return { models, failures };
     },
@@ -180,6 +228,13 @@ export function createProviderRegistry(): ProviderRegistry {
     async defaultSpec(deps) {
       // Preference order, first usable wins — a provider that throws is
       // skipped so a broken credential cannot leave the agent with no model.
+      //
+      // SEQUENTIAL ON PURPOSE, unlike the two listing methods above. This is a
+      // first-match scan, not an enumeration: it stops at the first provider
+      // that can serve, so it already does the least work available. Probing
+      // them all at once would list models from providers whose answer is
+      // never read, which costs requests and credentials to save latency the
+      // short-circuit has usually already saved.
       for (const p of (await allProviders(deps)).providers) {
         try {
           if (!(await p.isAvailable(deps))) continue;

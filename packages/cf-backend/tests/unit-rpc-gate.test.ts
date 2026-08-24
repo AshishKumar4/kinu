@@ -149,7 +149,8 @@ describe('rpc gate on scoped connections', () => {
       'resolveDeviceConsent', 'setShellApprovalMode', 'setMctsConfig',
       'forkAgent', 'revertChangelogEntry', 'restoreFileCheckpoint',
       'pickAlternateTake', 'branchTurn', 'setModel', 'setDisplayName',
-      'markChangelogSeen', 'createTimerTrigger', 'spawnSubordinate', 'dismissSubordinate',
+      'markChangelogSeen', 'createTimerTrigger', 'createSubordinateAgent',
+      'renameSubordinateAgent', 'dismissSubordinate',
       'savePlanReviewAnnotations', 'decidePlanReview',
     ]) {
       const rejection = rejectOutOfScopeRpc(READ_EXEC, rpcFrame(method, 'rpc-9'));

@@ -24,7 +24,7 @@
 
 import { argumentDigest, scheduledOutbox, type Outbox, type SqlExec } from '@kinu.run/core';
 import * as v from 'valibot';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 
 /** A rendered outbound message — exactly the `send_email` binding's payload. */
 export interface OutboundEmailMessage {
@@ -74,6 +74,18 @@ export class EmailOutbox {
           // A refused send is a value here: the disposition the outbox backs
           // off on. Rendered rather than rethrown so the stored `last_error`
           // keeps the whole cause chain.
+          //
+          // Counted as well as stored, because the RETRY LOOP was the silent
+          // part: a row's `last_error` is only read by whoever already opened
+          // that row, so mail that took six attempts to leave and mail that
+          // left first time were indistinguishable at fleet scale. No address,
+          // no subject and no body — the count and the classification are the
+          // whole signal.
+          diagnostics.failure('email.outbox_send_failed', toKinuError({
+            doing: 'sending a queued outbound message',
+            cause: err,
+            otherwise: 'unavailable',
+          }));
           return { status: 'retry', reason: renderThrownChain({ cause: err }) };
         }
       },

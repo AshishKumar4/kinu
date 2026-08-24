@@ -36,6 +36,7 @@
  * tier no matter which tool gate someone forgets.
  */
 import { nanoid, type SqlExec } from '@kinu.run/core';
+import { diagnostics } from '@kinu.run/core/obs';
 import { hmacSha256Hex, sha256Hex, timingSafeEqual } from '../lib/crypto';
 import * as v from 'valibot';
 
@@ -208,6 +209,42 @@ export class CapabilityDeniedError extends Error {
   }
 }
 
+/**
+ * Why a call was refused, as a closed word. The MESSAGE is written for whoever
+ * reads the error and names the workspace; the reason is written for whoever
+ * counts the denials and must not, which is why there are two of them.
+ */
+export type CapabilityDenialReason =
+  | 'no_caller_identity'
+  | 'unrecognized_owner'
+  | 'no_workspace_identity'
+  | 'unrecognized_workspace'
+  | 'no_tier_registered'
+  | 'tier_too_low';
+
+/**
+ * Refuse a privileged call, and count it.
+ *
+ * Every denial in this file goes through here rather than constructing the error
+ * directly. That is the whole reason it exists: five separate `throw` sites are
+ * five chances for the next one to be added without telemetry, and an
+ * authorization surface with no denial rate is one whose misconfiguration is
+ * invisible until a person complains. The return type is `never`, so a call site
+ * reads as the refusal it is.
+ *
+ * NEITHER THE TOKEN NOR THE MESSAGE IS A FIELD. The message names the workspace,
+ * and a workspace name here is mission-derived user text; the reason and the
+ * capability are our own vocabulary and are what a rate is grouped by.
+ */
+function denyCapability(
+  reason: CapabilityDenialReason,
+  capability: WorkspaceCapability,
+  message: string,
+): never {
+  diagnostics.event('capability.denied', { reason, capability, source: 'workspace_capability' });
+  throw new CapabilityDeniedError(message);
+}
+
 export function initWorkspaceCapabilityTables(sql: SqlExec): void {
   // One row per workspace that has ever claimed an owner. `token_hash` is the
   // workspace's proof of identity; the raw token lives only in that workspace's
@@ -304,23 +341,26 @@ const UserCallerSchema = v.union([
   v.object({ workspaceToken: v.string() }),
 ]);
 
-async function resolveCaller<Caller>(sql: SqlExec, env: OwnerCapabilityEnv, caller: Caller): Promise<ResolvedCaller> {
+async function resolveCaller<Caller>(
+  sql: SqlExec,
+  env: OwnerCapabilityEnv,
+  caller: Caller,
+  capability: WorkspaceCapability,
+): Promise<ResolvedCaller> {
   const parsedCaller = v.safeParse(UserCallerSchema, caller);
   if (!parsedCaller.success) {
-    throw new CapabilityDeniedError(
-      'This call carried no valid caller identity. Privileged user-level calls must present a capability token.',
-    );
+    denyCapability('no_caller_identity', capability,
+      'This call carried no valid caller identity. Privileged user-level calls must present a capability token.');
   }
   if ('ownerToken' in parsedCaller.output) {
     const presentedOwner = parsedCaller.output.ownerToken;
     if (timingSafeEqual(presentedOwner, await ownerToken(env))) return { kind: 'owner_session' };
-    throw new CapabilityDeniedError('Unrecognized owner capability.');
+    denyCapability('unrecognized_owner', capability, 'Unrecognized owner capability.');
   }
   const token = parsedCaller.output.workspaceToken;
   if (token === '') {
-    throw new CapabilityDeniedError(
-      'This call carried no workspace identity. Privileged user-level calls must present a workspace capability token.',
-    );
+    denyCapability('no_workspace_identity', capability,
+      'This call carried no workspace identity. Privileged user-level calls must present a workspace capability token.');
   }
   const tokenHash = await sha256Hex(token);
   const row = v.safeParse(v.object({ workspace_name: v.string() }), sql.exec(
@@ -328,13 +368,12 @@ async function resolveCaller<Caller>(sql: SqlExec, env: OwnerCapabilityEnv, call
   ).toArray()[0]);
   const workspace = row.success ? row.output.workspace_name : null;
   if (!workspace) {
-    throw new CapabilityDeniedError('Unrecognized workspace capability token.');
+    denyCapability('unrecognized_workspace', capability, 'Unrecognized workspace capability token.');
   }
   const tier = getWorkspaceTier(sql, workspace);
   if (!tier) {
-    throw new CapabilityDeniedError(
-      `Workspace "${workspace}" has no capability tier registered; refusing the call.`,
-    );
+    denyCapability('no_tier_registered', capability,
+      `Workspace "${workspace}" has no capability tier registered; refusing the call.`);
   }
   return { kind: 'workspace', workspace, tier };
 }
@@ -348,15 +387,14 @@ export async function requireTier<Caller>(
   caller: Caller,
   capability: WorkspaceCapability,
 ): Promise<ResolvedCaller> {
-  const resolved = await resolveCaller(sql, env, caller);
+  const resolved = await resolveCaller(sql, env, caller, capability);
   if (resolved.kind === 'owner_session') return resolved;
   const minimum = WORKSPACE_CAPABILITY_TIERS[capability];
   if (TIER_RANK[resolved.tier] < TIER_RANK[minimum]) {
-    throw new CapabilityDeniedError(
+    denyCapability('tier_too_low', capability,
       `"${capability}" is not available to a ${resolved.tier} workspace. `
       + `Workspace "${resolved.workspace}" is shared with someone other than its owner, `
-      + 'so it keeps full capability inside itself but cannot reach the owner\'s wider account.',
-    );
+      + 'so it keeps full capability inside itself but cannot reach the owner\'s wider account.');
   }
   return resolved;
 }

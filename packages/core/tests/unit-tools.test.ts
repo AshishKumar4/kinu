@@ -28,6 +28,7 @@ import { tool, jsonSchema } from 'ai';
 import * as v from 'valibot';
 import { createTestRuntime } from './helpers';
 import {
+  narrowToolSurface, codemodeCapabilitiesFor, CODEMODE_ONLY_CAPABILITIES, TOOL_REACH,
   buildActorTools,
   buildBuiltinTools,
   BUILTIN_TOOLS,
@@ -170,6 +171,16 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
           currentTask: null, createdAt: 1, dismissedAt: null,
         },
       }),
+      rename: async () => ({
+        ok: true as const,
+        name: 's',
+        displayName: 'S',
+        subordinate: {
+          name: 's', displayName: 'S', role: 'researcher', createdBy: 'user', status: 'idle',
+          currentTask: null, createdAt: 1, dismissedAt: null,
+        },
+      }),
+      recordTitle: async () => ({ ok: true as const, name: 's', displayName: 'S' }),
       spawn: async () => ({ name: 's', displayName: 'S' }),
       assign: async () => ({ ok: true as const, name: 's', ...stubHandoff }),
       status: async () => ({}),
@@ -600,4 +611,141 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   // v2.1(E): same-turn codemode.<name> for a NEW tool is no longer supported.
   // The Proxy live-lookup path used host-side new Function and was removed.
   // Tools created this turn become available next turn (getTools rebuilds).
+});
+
+/**
+ * Role narrowing over BOTH surfaces from ONE merged set.
+ *
+ * Narrowing used to be applied to the native ToolSet only, while `execute_tools`
+ * built its codemode providers from unfiltered deps. So a role that allowed
+ * `execute_tools` and denied `agents` still delegated, hired, and wrote memory
+ * through `agents.*` and `memory.*` — the narrowing was decorative for any role
+ * that kept the sandbox, which is every role that can do real work.
+ */
+describe('a role narrows the sandbox as well as the tool list', () => {
+  /** The shape a restricted role resolves to: it keeps the sandbox and the
+   *  workspace, and loses delegation, memory and the task list. */
+  const RESTRICTED = ['execute_tools', 'run', 'file'];
+
+  test('an excluded capability loses its namespace, not just its tool', () => {
+    const narrowing = narrowToolSurface(RESTRICTED);
+    // The pairs written out rather than re-derived from TOOL_REACH: the test
+    // states which namespace each excluded capability owns, so a table that
+    // silently re-pointed one would fail here instead of agreeing with itself.
+    for (const [capability, namespace] of [
+      ['agents', 'agents'], ['memory', 'memory'], ['tasks', 'tasks'],
+    ] as const) {
+      expect(TOOL_REACH[capability].codemode).toBe(namespace);
+      expect(narrowing.allowsTool(capability)).toBe(false);
+      expect(narrowing.allowsNamespace(namespace)).toBe(false);
+    }
+    // And the providers actually go, which is the form a backend consumes:
+    // handing this list to `execute_tools` is what binds the namespaces.
+    expect(narrowing.narrowProviders([
+      { name: 'agents' }, { name: 'memory' }, { name: 'tasks' }, { name: 'workspace' },
+    ])).toEqual([{ name: 'workspace' }]);
+  });
+
+  test('a namespace two capabilities reach survives while EITHER does', () => {
+    // `run` and `file` both reach `workspace`. Losing one must not take the
+    // filesystem away, and losing both must.
+    expect(narrowToolSurface(['execute_tools', 'run']).allowsNamespace('workspace')).toBe(true);
+    expect(narrowToolSurface(['execute_tools', 'file']).allowsNamespace('workspace')).toBe(true);
+    expect(narrowToolSurface(['execute_tools']).allowsNamespace('workspace')).toBe(false);
+  });
+
+  test('an absent list allows everything — absent inherits, as it does in the resolver', () => {
+    const open = narrowToolSurface(undefined);
+    expect(open.allowsTool('agents')).toBe(true);
+    expect(open.allowsNamespace('agents')).toBe(true);
+    expect(open.allowsNamespace('anything-a-backend-wired')).toBe(true);
+    const providers = [{ name: 'agents' }, { name: 'pc' }];
+    expect(open.narrowProviders(providers)).toEqual(providers);
+  });
+
+  test('an EXTERNAL namespace follows execute_tools, because no role list can name it', () => {
+    // Executor planes and backend-wired providers have no reach row, so there is
+    // no name an owner could write to keep them. Denying them per-namespace
+    // would silently take the machine away from every narrowed role — a worse
+    // failure than the one being fixed, and a much quieter one.
+    expect(narrowToolSurface(RESTRICTED).allowsNamespace('pc')).toBe(true);
+    expect(narrowToolSurface(['run', 'file']).allowsNamespace('pc')).toBe(false);
+  });
+
+  test('the codemode-only capabilities a role may name are the ones actually wired', () => {
+    // A role's list is intersected with the surface a backend declares, so a
+    // capability absent from that surface can never be named — and one present
+    // but unwired would let a role allow a lane that cannot run.
+    expect(codemodeCapabilitiesFor([{ name: 'release' }, { name: 'llm' }])).toEqual(['release', 'llm']);
+    expect(codemodeCapabilitiesFor([{ name: 'agents' }, { name: 'workspace' }])).toEqual([]);
+    expect(codemodeCapabilitiesFor([])).toEqual([]);
+    // Plan mode filters `release` out of its provider list, so a Plan turn's
+    // role list cannot name a lane that is physically absent — for free.
+    expect(codemodeCapabilitiesFor([{ name: 'agent' }, { name: 'llm' }])).toEqual(['agent', 'llm']);
+  });
+
+  test('the codemode-only set is derived from the reach table, not restated', () => {
+    expect([...CODEMODE_ONLY_CAPABILITIES].sort()).toEqual(
+      Object.entries(TOOL_REACH).filter(([, reach]) => !reach.native).map(([name]) => name).sort(),
+    );
+  });
+
+  test('a named codemode-only capability keeps its namespace', () => {
+    expect(narrowToolSurface(['execute_tools', 'release']).allowsNamespace('release')).toBe(true);
+    expect(narrowToolSurface(['execute_tools']).allowsNamespace('release')).toBe(false);
+  });
+
+  /** A provider namespace as a backend hands it to the sandbox: a name and the
+   *  members bound under it. */
+  const provider = (name: string, member: string, answer: string): CodemodeProvider => ({
+    name,
+    types: '',
+    tools: { [member]: { description: `${name}.${member}`, execute: async () => answer } },
+  });
+
+  /** Bind exactly the providers handed over, the way a codemode loader does:
+   *  one parameter per namespace. Nothing else is in scope, so a namespace that
+   *  was filtered out is an unbound name rather than an empty object — which is
+   *  the difference between "cannot be called" and "answers nothing". */
+  function sandboxOver(providers: readonly CodemodeProvider[]): (code: string) => Promise<string> {
+    const names = providers.map((p) => p.name);
+    const values = providers.map((p) => Object.fromEntries(
+      Object.entries(p.tools).map(([member, entry]) => [member, entry.execute]),
+    ));
+    // Parsed on the way out rather than asserted: every program below answers a
+    // string, and a program that stopped doing so should fail here by name
+    // instead of flowing on as an unchecked value.
+    return async (code) => {
+      const fn = new Function(...names, `return (async () => { ${code} })()`);
+      return v.parse(v.string(), await fn(...values));
+    };
+  }
+
+  test('a namespace the role lost is not reachable from inside the sandbox', async () => {
+    // The end of the escape route: a role that keeps `execute_tools` and loses
+    // `agents` used to delegate and hire through `agents.*` anyway, because the
+    // providers were built from unfiltered deps. `typeof` rather than a call,
+    // because an unbound name throws a ReferenceError while a bound-but-empty
+    // namespace would still be there to reach for.
+    const providers = [
+      provider('agents', 'swarm', 'delegated'),
+      provider('memory', 'save', 'remembered'),
+      provider('tasks', 'add', 'listed'),
+      provider('workspace', 'readFile', 'bytes'),
+    ];
+    const narrowed = narrowToolSurface(RESTRICTED).narrowProviders(providers);
+    const run = sandboxOver(narrowed);
+
+    expect(await run('return typeof agents;')).toBe('undefined');
+    expect(await run('return typeof memory;')).toBe('undefined');
+    expect(await run('return typeof tasks;')).toBe('undefined');
+    // And what the role KEPT still works, which is the half a blunt fix breaks.
+    expect(await run('return await workspace.readFile();')).toBe('bytes');
+  });
+
+  test('an unnarrowed actor reaches every namespace it was given', async () => {
+    const providers = [provider('agents', 'swarm', 'delegated')];
+    const run = sandboxOver(narrowToolSurface(undefined).narrowProviders(providers));
+    expect(await run('return await agents.swarm();')).toBe('delegated');
+  });
 });

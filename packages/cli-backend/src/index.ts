@@ -23,13 +23,25 @@ export { createNodeExecuteToolFactory, type NodeExecuteToolFactoryDeps } from '.
 export {
   LocalAgentSession, LOCAL_MAX_INLINE_ATTACHMENT_BYTES,
   type LocalAgentSessionOpts, type SessionEvent, type LocalSessionDb,
-  type ShellApprovalHandler,
+  type ShellApprovalHandler, type ProfileEnvelopeSource,
 } from './local-session';
 export {
   LocalAgentHost,
   type AgentEventListener,
   type LocalAgentHostOptions,
   type LocalHostedAgent,
+  OS_LEASE_PROCESS,
+  acquireDriverLease,
+  driverLeaseHolder,
+  holdsDriverLease,
+  initDriverLeaseTable,
+  releaseDriverLease,
+  type DriverKind,
+  type DriverLease,
+  type DriverLeaseDeps,
+  type DriverLeaseHolder,
+  type DriverLeaseResult,
+  type LeaseProcess,
 } from './agent-host';
 export {
   createLocalModelResolver, cloudProxyBaseURL, CLOUD_PROXY_PROVIDER_IDS,

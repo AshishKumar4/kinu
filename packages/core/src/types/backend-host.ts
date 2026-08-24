@@ -41,6 +41,8 @@ export interface BroadcastEvent {
   readonly takeSetId?: string;
   readonly turnId?: string;
   readonly message?: string;
+  /** `workspace_renamed`: the agent's new shown title. */
+  readonly displayName?: string;
   readonly jobId?: string;
 }
 

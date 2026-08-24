@@ -16,7 +16,7 @@ import { callable, type AgentContext, type SubAgentClass } from "agents";
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from "./rpc-surface";
 import { writeNimbusWorkspaceSoul } from "./nimbus-route";
 import { getSandbox } from "@cloudflare/sandbox";
-import { generateText, convertToModelMessages } from "ai";
+import { convertToModelMessages } from "ai";
 import type {
   ActivitySnapshot,
   WorkspaceAgent,
@@ -32,7 +32,6 @@ import {
   // The whole workspace's spend, grouped by producer, with its own coverage
   // fraction — `summarizeSteps` above is this agent's own turns only.
   workspaceSpend,
-  normalizeUsage, beginModelOperation,
   initWorkspaceSchema,
   BUILTIN_TOOLS,
   BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS,
@@ -71,8 +70,6 @@ import {
   // Hybrid search (FTS5 + Vectorize via RRF)
   hybridSearch, memorySnippetRehydrator, type HybridHit,
   type CompletedTurn, type ToolCallRecord,
-  // Adaptive reasoning_effort per stage
-  effortFor,
   type BackgroundJob, type AgentTaskTree, TriggerRegistry, ReplyChannelStore,
   type ReasoningEffort, type ShellApprovalMode,
   type AlarmScheduler, type ReplyDispatcher, type ReplyChannelRow,
@@ -108,9 +105,9 @@ import {
   type EnqueueTurnResult,
   ROOT_DELEGATION_BUDGET, type DelegationBudget,
   readSoul, readMission, summarizeSoul, writeSoul, workspaceGenesisSignal,
-  // Automatic workspace titling (first turn + legacy slug heal)
-  applyWorkspaceTitle, isPlaceholderMission, isPlaceholderWorkspaceTitle, parseWorkspaceTitle,
-  WORKSPACE_TITLE_SYSTEM_PROMPT, workspaceTitlePrompt,
+  // Which titling SOURCE this root offers the shared policy, and the wake-time
+  // heal's own trigger. The policy itself lives on ActorAgent.
+  isPlaceholderMission, isPlaceholderWorkspaceTitle,
   // Device shadow-git checkpoints (forwarded to the pc-agent daemon)
   isDeviceNotConnectedError,
   // The one definition of "this executor output is a failure", shared with the
@@ -168,9 +165,11 @@ import {
   admitPlanReviewAnnotations,
   type PlanEdit, type PlanReview, type PlanReviewAnnotation, type PlanReviewDecision,
   type PlanReviewResult, type WorkMode,
+  resolveModelRoute, type ResolvedTurnProfile,
 } from "@kinu.run/core";
 import * as v from 'valibot';
 import { ActorAgent, type ActorToolDeps } from "./actor-agent";
+import { recordJobSettled, type AgentKind } from "./analytics/record";
 import { resolveEnsembleJudgeSelection } from "./providers/judge-model";
 import { SubordinateAgent } from "./subordinate-agent";
 import {
@@ -291,6 +290,11 @@ export class OrchestratorAgent extends ActorAgent {
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
     sealRpcSurface(this, ORCHESTRATOR_RPC_SURFACE);
+  }
+
+  /** The workspace's own top-level actor — the one a person talks to. */
+  protected actorKind(): AgentKind {
+    return 'orchestrator';
   }
 
   /** One SQL-backed review stream. Constructed lazily because ActorAgent's
@@ -1013,7 +1017,7 @@ export class OrchestratorAgent extends ActorAgent {
       // own has only the opening request to go on. Fire-and-forget; once-only
       // (persisting an auto title marks name_origin).
       const mission = readMission(this.boundSql);
-      void this.maybeAutoTitleWorkspace(isPlaceholderMission(mission) ? userText : mission!);
+      void this.maybeAutoTitle(isPlaceholderMission(mission) ? userText : mission!);
 
       // Trace-driven continuous self-optimization (when enabled): run GEPA once
       // enough new turns have accrued. Fire-and-forget; no-op when disabled.
@@ -1063,73 +1067,17 @@ export class OrchestratorAgent extends ActorAgent {
     }
   }
 
-  /** Automatic titling — one path, two triggers: the first turn of a workspace
-   *  that was never titled, and the wake of a legacy workspace still showing
-   *  its raw slug (created before mission-derived titling existed). The shared
-   *  policy decides; a title the operator chose is never touched, and persisting
-   *  an auto title marks name_origin='auto', so this runs at most once.
-   *  The slug is NOT part of this: it is fixed at creation and permanent. */
-  private async maybeAutoTitleWorkspace(mission: string): Promise<void> {
-    try {
-      const title = await applyWorkspaceTitle({
-        slug: this.name,
-        displayName: this.config.getDisplayName(),
-        nameOrigin: this.config.getNameOrigin(),
-        mission,
-      }, {
-        persist: async (name) => (await this.setAutoDisplayName(name)).applied,
-        suggest: (text) => this.suggestWorkspaceTitle(text),
-      });
-      if (title) diagnostics.event('workspace.auto_titled', { workspace: this.name, title });
-    } catch (err) {
-      diagnostics.failure('workspace.auto_title_failed', toKinuError({
-        doing: 'deriving a workspace title from the mission',
-        cause: err,
-        otherwise: 'unavailable',
-      }), { workspace: this.name });
-    }
+  /** What this workspace is FOR. The titling source for the root itself, and
+   *  what an additional agent the owner adds to it inherits. */
+  protected ownMission(): string {
+    return readMission(this.boundSql) ?? '';
   }
 
-  /** The shared workspace-naming round-trip (same prompt and parser the create
-   *  path uses), against this workspace's review model.
-   *
-   *  Reported as `fast` rather than `judge`: the review model is who serves it,
-   *  but naming a workspace is mechanical work, and grouping it with the judges
-   *  would make "what did grading cost" answer a question it did not ask. */
-  protected async suggestWorkspaceTitle(mission: string): Promise<string | null> {
-    // The frame opens BEFORE the request, so a call that never returns leaves
-    // a start row naming the naming pass rather than nothing at all.
-    const operation = beginModelOperation(
-      { source: 'fast', operations: this.modelOperations },
-      'complete',
-    );
-    let result;
-    try {
-      result = await generateText({
-        model: await this.getModelForReview(),
-        system: WORKSPACE_TITLE_SYSTEM_PROMPT,
-        prompt: workspaceTitlePrompt(mission),
-        // No output cap: reasoning models spend their budget thinking before the
-        // JSON, and a cap starves them into empty text.
-        ...effortFor('judge'),
-      });
-    } catch (err) {
-      operation.failed({ cause: err });
-      throw err;
-    }
-    // No `spec`: `getModelForReview` resolves the review model behind its own
-    // cache and hands back a `LanguageModel`, so this call site genuinely does
-    // not know which spec served it, and re-running the selection to find out
-    // would be a second resolution that could disagree with the first. The
-    // provider's own `modelId` identifies the model; `usd` therefore stays
-    // absent, which already means unpriced rather than free. The OPERATION
-    // closes here too — completed before the parse, like every seam that bills
-    // first and judges the answer after.
-    const modelId = result.response?.modelId;
-    const usage = normalizeUsage(result.usage);
-    operation.completed({ usage, modelId });
-    this.reportModelCall(modelId ? { source: 'fast', usage, modelId } : { source: 'fast', usage });
-    return parseWorkspaceTitle(result.text);
+  /** UserDO is authoritative for a workspace's shown name, so an auto title
+   *  commits through the same propagation an owner rename does — which is
+   *  also where the "a manual rename claimed it first" refusal lives. */
+  protected async persistAutoTitle(displayName: string): Promise<boolean> {
+    return (await this.setAutoDisplayName(displayName)).applied;
   }
 
   /** Commit one display name to the owner roster, actor config and live clients.
@@ -1165,29 +1113,51 @@ export class OrchestratorAgent extends ActorAgent {
     return listBackgroundJobs(this.jobs, limit);
   }
 
+  /**
+   * One background-job lifecycle operation and whether it took effect.
+   *
+   * Wrapped rather than emitted at each of the four sites, because the four are
+   * one boundary and the interesting number is the RATIO — a retry rate that
+   * climbs is the visible half of jobs that keep dying, and no single call site
+   * can see that. The job id is not a field: it is high-cardinality and answers
+   * no fleet question.
+   */
+  private countJobOperation<Outcome extends { ok: boolean }>(
+    operation: string,
+    outcome: Outcome,
+  ): Outcome {
+    recordJobSettled(this.env, {
+      workspace: this.name,
+      agentKind: this.actorKind(),
+      operation,
+      outcome: outcome.ok ? 'ok' : 'refused',
+    });
+    return outcome;
+  }
+
   @callable()
   async cancelBackgroundJob(jobId: string): Promise<{ ok: boolean }> {
-    return cancelBackgroundJob(this.jobRunner, jobId);
+    return this.countJobOperation('cancel', await cancelBackgroundJob(this.jobRunner, jobId));
   }
 
   @callable()
   async retryBackgroundJob(jobId: string): Promise<RetryOutcome> {
-    return retryBackgroundJob({
+    return this.countJobOperation('retry', await retryBackgroundJob({
       jobs: this.jobs,
       jobRunner: this.jobRunner,
       rawTools: (mode) => this.getRawToolsForWorkMode(mode),
       logActivity: (event, detail) => this.logActivity(event, detail),
-    }, jobId);
+    }, jobId));
   }
 
   @callable()
   async dismissBackgroundJob(jobId: string): Promise<{ ok: boolean }> {
-    return dismissBackgroundJob(this.jobs, jobId);
+    return this.countJobOperation('dismiss', await dismissBackgroundJob(this.jobs, jobId));
   }
 
   @callable()
   async clearBackgroundJobs(): Promise<{ ok: boolean }> {
-    return clearBackgroundJobs(this.jobs);
+    return this.countJobOperation('clear', await clearBackgroundJobs(this.jobs));
   }
 
   /** The agent's own task list, for the Tasks surface. Read-only on purpose:
@@ -1595,7 +1565,7 @@ export class OrchestratorAgent extends ActorAgent {
     // Fire-and-forget: boot never waits on a model call.
     if (this.getOwnerUserId() && isPlaceholderWorkspaceTitle(this.config.getDisplayName(), this.name)) {
       void readSoul(this.rt.storage.vfs)
-        .then((soul) => this.maybeAutoTitleWorkspace(summarizeSoul(soul ?? '')))
+        .then((soul) => this.maybeAutoTitle(summarizeSoul(soul ?? '')))
         .catch((error) => {
           diagnostics.failure('workspace.auto_title_soul_read_failed', toKinuError({
             doing: 'reading SOUL.md to title a legacy workspace',
@@ -2458,29 +2428,50 @@ export class OrchestratorAgent extends ActorAgent {
   /**
    * Put the hand-labeled turns to the panel — one blind pass per judge, stored
    * append-only. Judges come from `specs` when the owner names them, else one
-   * model per connected vendor family other than the chat model's.
+   * model per connected vendor family other than the one the graded turns ran
+   * on.
    *
    * Fewer than two families available is reported as the gap it is (by
    * `runEnsemble`, after the prerequisites the owner would fix first); nothing
    * is padded with a second model from the same vendor, which would agree with
    * the first for reasons that have nothing to do with the turn.
+   *
+   * The baseline is the ROUTED turn model, not the stored spec. What this panel
+   * has to differ from is whatever actually graded-work ran on, and
+   * `MODEL_ROUTE_POLICY.agent` is `invocation` — the tier the active role
+   * selected. Reading `getStoredModelId()` instead named the account's chat
+   * default, so a role running on any other tier could have its own model
+   * selected as an "independent" judge: a panel agreeing with the turn because
+   * it IS the turn.
+   *
+   * This panel is the ONE declared exception to `MODEL_ROUTE_POLICY`'s
+   * exhaustiveness, and the rationale lives in that table's own header rather
+   * than here — a claim of exhaustiveness has to carry its own counter-example,
+   * and a comment in this package is invisible from the file making the claim.
+   * Read `core/src/profiles/model-route.ts` before changing this: the short
+   * version is that its members must disagree for reasons other than the turn,
+   * so `resolveModelRoute('judge', …)` would read as tidier and silently make
+   * every judge the same model. The spend label stays `judge` because that is
+   * what the work IS, and the EFFORT stays on the stage table for the reason
+   * the header gives.
    */
   @callable()
   async runOutcomeEnsemble(specs?: string[]): Promise<EnsembleRunResult> {
     const registry = this.providerRegistry();
+    const turnRoute = resolveModelRoute('agent', await this.routingProfile());
     return runEnsemble(this.boundSql, {
       specs: async () => (await resolveEnsembleJudgeSelection({
         registry,
         specs: specs ?? null,
-        chatSpec: this.getStoredModelId(),
+        chatSpec: turnRoute?.model ?? this.getStoredModelId(),
       })).specs,
       judge: (spec) => ({
         spec,
         llm: createCompletionLLM({
           model: registry.resolveModel(spec), spec, stage: 'judge',
           // One call per judge per hand-labelled turn, on a model deliberately
-          // chosen from a different vendor family than the chat model — so this
-          // is spend the actor's own catalog rate cannot price and the step
+          // chosen from a different vendor family than the graded turns' — so
+          // this is spend the actor's own catalog rate cannot price and the step
           // telemetry never saw.
           spend: {
             source: 'judge', report: (report) => this.reportModelCall(report),
@@ -2610,6 +2601,34 @@ export class OrchestratorAgent extends ActorAgent {
       this.headJournal.appendStep(headId, seq, step);
       return { ok: true };
     });
+  }
+
+  /**
+   * The immutable turn profile a facet of this workspace runs under.
+   *
+   * A facet resolves its own model, its own provider registry and its own
+   * runtime, but it must NOT resolve its own profile. Two reasons, and the
+   * second is the one that bit:
+   *
+   *   • `MODEL_ROUTE_POLICY.mcts`, `.head` and `.swarm` are `invocation` —
+   *     the tier the ACTIVE ROLE selected for this turn. A facet knows neither
+   *     the role nor the turn, so a locally resolved profile would answer a
+   *     different question and quietly run the account default while the turn
+   *     it belongs to ran somewhere else.
+   *   • A second resolution can disagree with the first. The provider snapshot
+   *     moves whenever a credential does, so a facet resolving moments later
+   *     can land a different `providerRevision` and a different digest — and a
+   *     search whose branches ran under a profile the parent never resolved is
+   *     unreproducible for exactly the reason the digest exists.
+   *
+   * So the parent's profile is the answer, and this is the one wire it crosses.
+   * `routingProfile()` returns the live turn's profile when a turn is open and
+   * resolves one otherwise, which is what a durable head that outlived its
+   * turn needs.
+   */
+  @callable()
+  async facetTurnProfile(): Promise<ResolvedTurnProfile> {
+    return this.routingProfile();
   }
 
   /**
@@ -3004,12 +3023,35 @@ export class OrchestratorAgent extends ActorAgent {
     return this.getTeamToolDeps().list();
   }
 
-  @callable() async spawnSubordinate(role: string, mission: string): Promise<{
+
+  /**
+   * Add an agent to this workspace with nothing said about it.
+   *
+   * The whole point is that the owner supplies NOTHING: no name, no mission,
+   * no role. It inherits this workspace's mission, runs as the catalog's
+   * `general`, and comes back with a blank `displayName` — which is not a gap
+   * to fill in with a placeholder string but the state the first-interaction
+   * title policy reads (`SubordinateAgent.onChatResponse`). Its `name` is a
+   * stable slug and is the thing to route to.
+   */
+  @callable() async createSubordinateAgent(): Promise<{
     name: string;
     displayName: string;
     subordinate: SubordinateRosterEntry;
   }> {
-    return this.getTeamToolDeps().create({ role, mission });
+    return this.getTeamToolDeps().create({});
+  }
+
+  /** Retitle one of this workspace's agents. Writes the child and this
+   *  authoritative roster row together and marks the title the OWNER'S, which
+   *  is what stops it being auto-titled afterwards. */
+  @callable() async renameSubordinateAgent(name: string, displayName: string): Promise<{
+    ok: true;
+    name: string;
+    displayName: string;
+    subordinate: SubordinateRosterEntry;
+  }> {
+    return this.getTeamToolDeps().rename({ name, displayName });
   }
 
   @callable() async dismissSubordinate(name: string): Promise<{

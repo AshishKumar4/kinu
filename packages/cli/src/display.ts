@@ -223,12 +223,12 @@ export function printAgentList(agents: Array<{
   dbSize?: number;
 }>): void {
   if (agents.length === 0) {
-    console.log(`\n${DIM('No workspaces found.')} Create one with: ${ACCENT('kinu create <name>')}\n`);
+    console.log(`\n${DIM('No agents found.')} Create one with: ${ACCENT('kinu create <name>')}\n`);
     return;
   }
 
   console.log('');
-  console.log(`${BRAND} ${DIM(`— ${agents.length} workspace${agents.length === 1 ? '' : 's'}`)}`);
+  console.log(`${BRAND} ${DIM(`— ${agents.length} agent${agents.length === 1 ? '' : 's'}`)}`);
   console.log('');
 
   // Adaptive column widths. NAME is an IDENTIFIER: it is what the user pastes

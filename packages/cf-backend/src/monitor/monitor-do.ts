@@ -15,11 +15,24 @@
 
 import { DurableObject } from 'cloudflare:workers';
 import { EmailOutbox } from '../email/outbox';
-import { ensureMonitorSchema, recordProbeRun, type MonitorRunResult } from './incidents';
+import { ensureMonitorSchema, listIncidents, recordProbeRun, type MonitorRunResult } from './incidents';
 import { runSyntheticProbes } from './probes';
+import { installAnalyticsDiagnostics } from '../analytics/install';
 
 /** One instance, by name — site health is not per-user or per-workspace. */
 export const MONITOR_SINGLETON = 'site';
+
+/** One open incident, in the shape that crosses the RPC boundary. The ledger's
+ *  own row is snake_case SQL; this is the camelCase projection an admin list
+ *  renders, declared here because this class is its only producer. */
+export interface MonitorIncident {
+  probe: string;
+  detail: string;
+  openedAt: number;
+  /** When the alert for this incident went out, or null when it is still owed. */
+  alertedAt: number | null;
+  failures: number;
+}
 
 export class MonitorDO extends DurableObject<Env> {
   private readonly outbox: EmailOutbox;
@@ -30,6 +43,10 @@ export class MonitorDO extends DurableObject<Env> {
     // every run — an alarm would be a second scheduler for the same job.
     this.outbox = new EmailOutbox(ctx.storage.sql);
     ensureMonitorSchema(ctx.storage.sql);
+    // Its own isolate, so its own sink — see `ActorAgent`'s constructor. The
+    // outbox failures this DO's own mail produces are counted through the
+    // diagnostics seam, and without this they reach Workers Logs and no dataset.
+    installAnalyticsDiagnostics(env);
   }
 
   /** Run every probe against the public origin and alert on what changed. */
@@ -48,5 +65,33 @@ export class MonitorDO extends DurableObject<Env> {
       origin,
       now,
     }, outcomes);
+  }
+
+  /**
+   * The open incidents, for the admin control plane.
+   *
+   * The ledger has always existed and has never had a reader: an outage was
+   * observable only as email, so an operator who missed the mail had no way to
+   * ask what is currently red. This is that read and nothing more — it takes no
+   * argument that could change state and it cannot open, close or alert.
+   *
+   * Ungated, exactly like `check()`: this object has no capability scheme, its
+   * stub is held only by the Worker, and the authorization that matters is the
+   * operator gate in `control-plane/routes.ts`. Adding a second capability
+   * system here would be a parallel one.
+   *
+   * Bounded because the caller is a browser list. One row per probe means the
+   * bound is never reached today, which is the right time to state it.
+   */
+  async listIncidents(limit = 100): Promise<MonitorIncident[]> {
+    return listIncidents(this.ctx.storage.sql)
+      .slice(0, Math.max(1, Math.trunc(limit)))
+      .map((row) => ({
+        probe: row.probe,
+        detail: row.detail,
+        openedAt: row.opened_at,
+        alertedAt: row.alerted_at,
+        failures: row.failures,
+      }));
   }
 }

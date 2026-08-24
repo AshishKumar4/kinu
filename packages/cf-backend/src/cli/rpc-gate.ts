@@ -33,7 +33,7 @@
  * them.
  */
 import { JsonValueSchema } from '@kinu.run/core';
-import { tolerate } from '@kinu.run/core/obs';
+import { diagnostics, tolerate } from '@kinu.run/core/obs';
 import type { OrchestratorAgent } from '../orchestrator';
 import {
   ACCESS_TOKEN_SCOPES, type AccessTokenScope, normalizeAccessTokenScopes,
@@ -144,6 +144,11 @@ export const AGENT_RPC_ACCESS = {
   // listing is interactive for the same reason `listPendingActions` is: it is
   // the surface an owner reads immediately before authorising something.
   decideDeferredApprovals: 'interactive',
+  // Adding an agent to the workspace, and naming one. Both are the owner's
+  // own decisions about who is in their workspace, so both are interactive
+  // for the same reason `dismissSubordinate` is.
+  createSubordinateAgent: 'interactive',
+  renameSubordinateAgent: 'interactive',
   decidePlanReview: 'interactive',
   listDeferredApprovals: 'interactive',
   savePlanReviewAnnotations: 'interactive',
@@ -210,7 +215,6 @@ export const AGENT_RPC_ACCESS = {
   setShellApprovalMode: 'interactive',
   setSoul: 'interactive',
   setTurnFeedback: 'interactive',
-  spawnSubordinate: 'interactive',
   steerTurn: 'interactive',
 
   // ── Never remotely invokable (documented denial, same as off-table) ──
@@ -296,5 +300,15 @@ export function rejectOutOfScopeRpc<Message>(tags: Iterable<string>, message: Me
     : required
       ? `This access token does not have the ${required} scope required by ${method}.`
       : `${method} requires an interactive CLI session token. Sign in with: kinu auth`;
+  // The refused METHOD and the scope it wanted, never the token and never the
+  // frame. A scoped token asking for something outside its scope is either a
+  // client we shipped with the wrong scope set or someone probing the surface,
+  // and neither is distinguishable from the other — or from nothing at all —
+  // while the denial is only a string handed back down the socket.
+  diagnostics.event('rpc_gate.denied', {
+    reason: access === 'never' ? 'not_invokable' : required ? 'scope_missing' : 'interactive_only',
+    tool: method,
+    source: required ?? 'interactive',
+  });
   return JSON.stringify({ type: 'rpc', id, success: false, error });
 }

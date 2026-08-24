@@ -46,7 +46,10 @@
 import { Agent, callable, type AgentContext, type SubAgentClass } from "agents";
 import { EXPLORATION_RPC_SURFACE, sealRpcSurface } from "./rpc-surface";
 import { generateText } from "ai";
-import { explorePrompt, formatInheritedContext, isWorkMode, normalizeUsage, reflectionPrompt } from "@kinu.run/core";
+import {
+  beginModelOperation, explorePrompt, formatInheritedContext, isWorkMode, normalizeUsage,
+  reflectionPrompt, resolveModelRoute,
+} from "@kinu.run/core";
 import type { OrchestratorAgent } from "./orchestrator";
 import {
   type CraftedTool,
@@ -73,6 +76,7 @@ import {
   type MissionScope,
   type ModelOperationSink,
   type WorkMode,
+  type ResolvedTurnProfile,
 } from "@kinu.run/core";
 import { OwnedModelServices } from "./owned-model-services";
 import { FacetIdentity } from "./facet-identity";
@@ -85,11 +89,16 @@ import {
 } from "@kinu.run/core/obs";
 import { createAgentConfigStore, initAgentConfigTable } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
+import { installAnalyticsDiagnostics } from "./analytics/install";
 
 export class ExplorationAgent extends Agent<Env> {
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
     sealRpcSurface(this, EXPLORATION_RPC_SURFACE);
+    // Its own isolate, so its own sink — see `ActorAgent`'s constructor. A head,
+    // a branch and a swarm node all run in here, and their diagnostics are the
+    // only fleet evidence that exploration ran at all.
+    installAnalyticsDiagnostics(this.env);
   }
 
   /** A facet that splits further spawns the class it already is. Satisfies
@@ -150,6 +159,83 @@ export class ExplorationAgent extends Agent<Env> {
     void parent.reportFacetModelOperation(event);
   };
 
+  /**
+   * The parent workspace's resolved turn profile — the one thing a facet must
+   * NOT resolve for itself.
+   *
+   * Every model a facet builds routes through `MODEL_ROUTE_POLICY`, and the
+   * routes it needs split two ways. `mcts`, `head` and `swarm` are `invocation`:
+   * the tier the parent's ACTIVE ROLE selected for the turn this work belongs
+   * to, which a facet cannot know — it has no role and no turn. The lanes its
+   * runtime exposes (`reflection`, `judge`, `fast`, `advisor`) are fixed tiers,
+   * which it could read from any envelope, but resolving a second time can
+   * still disagree with the first: the provider snapshot moves whenever a
+   * credential does, so a facet resolving moments later can land a different
+   * `providerRevision` and a different digest. A search whose branches ran
+   * under a profile the parent never resolved is unreproducible, which is the
+   * reason the digest exists at all.
+   *
+   * One RPC per activation, memoized on the PROMISE so concurrent lanes share
+   * the one round trip rather than racing three. A rejection is not cached: a
+   * facet that outlived a transient parent fault would otherwise refuse every
+   * later call citing a failure that has already passed.
+   */
+  private _facetProfile: Promise<ResolvedTurnProfile> | null = null;
+  /** Bumped per fetch. A fetch that fails clears the memo only if it is still
+   *  the current one, so a stale failure cannot discard a newer fetch. */
+  private _facetProfileGeneration = 0;
+  private facetProfile(): Promise<ResolvedTurnProfile> {
+    if (this._facetProfile) return this._facetProfile;
+    const parent = this.getSharedParentStub();
+    if (!parent) {
+      throw new Error(
+        'This facet was spawned without a parent workspace, so it cannot reach the '
+        + 'profile that decides its model; setSharedParent must run before it does any model work.',
+      );
+    }
+    const generation = ++this._facetProfileGeneration;
+    this._facetProfile = (async (): Promise<ResolvedTurnProfile> => {
+      try {
+        return await parent.facetTurnProfile();
+      } catch (cause) {
+        // Dropped rather than kept: a facet that outlived a transient parent
+        // fault would otherwise refuse every later call citing a failure that
+        // has already passed. The rejection still reaches this call's own
+        // caller — only the MEMO is discarded.
+        if (this._facetProfileGeneration === generation) this._facetProfile = null;
+        diagnostics.failure('facet.turn_profile_unavailable', toKinuError({
+          doing: "fetching the parent workspace's resolved turn profile",
+          cause,
+          otherwise: 'io',
+        }), { facet: this.name });
+        throw cause;
+      }
+    })();
+    return this._facetProfile;
+  }
+
+  /**
+   * The spec this facet's work runs on: the one its parent NAMED for it, or the
+   * route's when the parent named none.
+   *
+   * The pin wins deliberately — heterogeneous heads are a real feature, and a
+   * search that assigned one head a different model meant it. What changed is
+   * the fallback. An absent pin used to reach `resolveModel(null)`, which asks
+   * the REGISTRY for the account default and so never consults the profile at
+   * all: a role running on any tier but the default had its heads, its nodes and
+   * its crafted scripts served by a model it did not select, while its spend was
+   * filed against the route that chose differently.
+   */
+  private async facetModelSpec(
+    source: 'head' | 'swarm' | 'sandbox',
+    pinned: string | null | undefined,
+  ): Promise<string> {
+    if (pinned) return pinned;
+    const route = resolveModelRoute(source, await this.facetProfile());
+    if (!route) throw new Error(`a facet's ${source} work cannot use the fixed platform model route`);
+    return route.model;
+  }
+
   private _tracing: AgentTracing | null = null;
 
   /**
@@ -208,7 +294,17 @@ export class ExplorationAgent extends Agent<Env> {
       shellId: `${scope}:${this.name}`,
       scaffoldPath: `.kinu/${scope}s/${encodeURIComponent(this.name)}/scaffold/agent.js`,
       capabilityToken: async () => this.identity.capabilityToken(),
-    }, hooks);
+    }, {
+      ...hooks,
+      // The profile seam every lane on this runtime reads. Absent, `rt.llm`
+      // threw 'reflection model lane has no active profile' and `judgeModel` /
+      // `fastLlm` / `advisorLlm` were all UNDEFINED — which a facet-hosted MCTS
+      // search then met as an evaluation that throws, a band floor of 0 and a
+      // false `no_acceptable_candidate` over branches that had really answered.
+      // Assigned after the spread because no caller may override it: a facet
+      // has exactly one profile and it is the parent's.
+      resolveProfile: () => this.facetProfile(),
+    });
   }
 
   /** A head's runtime: the shared plane above wrapped with this run's observer
@@ -229,6 +325,7 @@ export class ExplorationAgent extends Agent<Env> {
     if (!userId) throw new Error('userId required');
     this.identity.setOwner(userId, capabilityToken);
     this.ownedModelServices.invalidate();
+    this._facetProfile = null;
     return { ok: true };
   }
 
@@ -275,7 +372,22 @@ export class ExplorationAgent extends Agent<Env> {
   /** Traced because this is the ONE model call a branch makes, so its span IS the
    *  branch's latency — and a 120s branch-RPC cap once silently killed every
    *  rollout against turns measuring 151/294/509s. A measured span is what makes
-   *  the next such number arguable instead of guessed. */
+   *  the next such number arguable instead of guessed.
+   *
+   *  The model is the TURN's, resolved through `MODEL_ROUTE_POLICY.mcts` —
+   *  `invocation`, so a rollout runs on the same tier the turn that ordered the
+   *  search runs on. It used to pass a null spec at a hardcoded `'low'`, which
+   *  never consults the profile at all: every branch ran the account default at
+   *  an effort nothing chose, so a role on any other tier was searched by models
+   *  it had not selected and the comparison was between the wrong things.
+   *
+   *  Spend is reported by the ENGINE, not here, and deliberately: it returns
+   *  `usage` to `mcts/engine.ts`, which files one `mcts` row per branch call
+   *  from it (engine.ts:244) because only the engine can tell a completed call
+   *  from a rejected or malformed one. A second report here would double-count
+   *  every rollout. The OPERATION frame has no such owner — the engine holds no
+   *  operation sink and could not open one across the RPC — so it belongs to the
+   *  seam that makes the call, which is this one. */
   @callable()
   async explore(
     priorHistory: Array<{ role: string; content: string }>,
@@ -286,7 +398,11 @@ export class ExplorationAgent extends Agent<Env> {
   ): Promise<BranchExploration> {
     if (!isWorkMode(mode)) throw new Error('Branch exploration requires a trusted work mode');
     return await this.tracing.invocation('rpc', 'mcts.branch', async (invocation) => {
-      const { model, providerOptions } = this.ownedModelServices.resolveModelWithEffort(null, 'low');
+      const route = resolveModelRoute('mcts', await this.facetProfile());
+      if (!route) throw new Error('an MCTS branch cannot use the fixed platform model route');
+      const { model, providerOptions } = this.ownedModelServices.resolveModelWithEffort(
+        route.model, route.reasoningEffort,
+      );
       const { system, user } = explorePrompt({
         mode,
         context: formatInheritedContext(priorHistory),
@@ -301,22 +417,46 @@ export class ExplorationAgent extends Agent<Env> {
         messages: [{ role: "user" as const, content: user }],
       };
       if (providerOptions) request.providerOptions = providerOptions;
+      // Opened BEFORE the request so a branch killed mid-call leaves a start row
+      // naming the rollout rather than nothing at all — which is the whole of
+      // what `swarm.node_silent` could not distinguish.
+      const operation = beginModelOperation(
+        { source: 'mcts', operations: this.modelOperations },
+        'complete',
+        { spec: route.model },
+      );
       const { text, usage } = await invocation.span('mcts.branch.model', async (span) => {
-        const answer = await generateText(request);
+        let answer;
+        try {
+          answer = await generateText(request);
+        } catch (cause) {
+          operation.failed({ cause });
+          throw cause;
+        }
         span.setAttribute('kinu.output_tokens', answer.usage.outputTokens ?? 0);
         return answer;
       });
+      const normalized = normalizeUsage(usage);
+      operation.completed({ usage: normalized, modelId: route.model });
 
       const trimmed = text.trim();
       void this.sql`INSERT INTO traces (step, text) VALUES (1, ${trimmed})`;
-      return { text: trimmed, usage: normalizeUsage(usage) };
+      return { text: trimmed, usage: normalized };
     });
   }
 
+  /** The failure post-mortem for a branch that has already been scored. Same
+   *  route, same reporting split and same reason as {@link explore}: `mcts` is
+   *  `invocation`, and the engine files this call's spend from the `usage`
+   *  returned here (engine.ts:443), so only the operation frame is ours. */
   @callable()
   async generateReflection(task: string, outcome?: string): Promise<BranchReflection> {
     const traces = this.sql<{ text: string }>`SELECT text FROM traces ORDER BY step`;
-    const { model, providerOptions } = this.ownedModelServices.resolveModelWithEffort(null, 'low');
+    const route = resolveModelRoute('mcts', await this.facetProfile());
+    if (!route) throw new Error('an MCTS reflection cannot use the fixed platform model route');
+    const { model, providerOptions } = this.ownedModelServices.resolveModelWithEffort(
+      route.model, route.reasoningEffort,
+    );
     const request: Parameters<typeof generateText>[0] = {
       model,
       messages: [{
@@ -325,8 +465,21 @@ export class ExplorationAgent extends Agent<Env> {
       }],
     };
     if (providerOptions) request.providerOptions = providerOptions;
-    const { text, usage } = await generateText(request);
-    return { text: text.trim(), usage: normalizeUsage(usage) };
+    const operation = beginModelOperation(
+      { source: 'mcts', operations: this.modelOperations },
+      'complete',
+      { spec: route.model },
+    );
+    let result;
+    try {
+      result = await generateText(request);
+    } catch (cause) {
+      operation.failed({ cause });
+      throw cause;
+    }
+    const usage = normalizeUsage(result.usage);
+    operation.completed({ usage, modelId: route.model });
+    return { text: result.text.trim(), usage };
   }
 
   // ── Head mode @callables  ───────────────────────────────────
@@ -365,11 +518,13 @@ export class ExplorationAgent extends Agent<Env> {
       // The loop + report assembly live in core (runHeadInference); the Facet
       // supplies its model + the forked tool surface. Abort is driven by
       // abortHead() flipping this.headAborted.
+      const modelSpec = await this.facetModelSpec('head', input.model);
+      const sandboxSpec = await this.facetModelSpec('sandbox', input.model);
       const headOptions = invocation.span('head.deps', (): Parameters<typeof runHeadInference>[1] => {
         const mission = this.missionScope(input);
         const options: Parameters<typeof runHeadInference>[1] = {
-          model: this.ownedModelServices.resolveModel(input.model),
-          tools: this.buildHeadTools(input, capture),
+          model: this.ownedModelServices.resolveModel(modelSpec),
+          tools: this.buildHeadTools(input, capture, sandboxSpec),
           capture,
           workspaceLayout: 'shared-workspace',
           isAborted: () => this.headAborted,
@@ -418,6 +573,11 @@ export class ExplorationAgent extends Agent<Env> {
     const spec = this.nodeSpec;
     return await this.tracing.invocation('rpc', 'swarm.node', async (invocation, root) => {
       root.setAttribute('kinu.node_id', spec.headInput.id);
+      // Resolved before the span because the route is an await and the deps
+      // builder is synchronous — and it must stay synchronous, since the span's
+      // whole diagnostic value is that it either ends or names where it blocked.
+      const modelSpec = await this.facetModelSpec('swarm', spec.headInput.model);
+      const sandboxSpec = await this.facetModelSpec('sandbox', spec.headInput.model);
       const deps = invocation.span('swarm.node.deps', (): NodeLoopDeps => {
         // Named `parent` like every other acquisition of this stub, and not only for
         // style: unit-rpc-surface.test.ts derives a facet's cross-DO calls by that
@@ -432,14 +592,14 @@ export class ExplorationAgent extends Agent<Env> {
         const webSearch = this.ownedModelServices.getWebSearchProvider();
         const built: NodeLoopDeps = {
           rt,
-          model: this.ownedModelServices.resolveModel(spec.headInput.model),
+          model: this.ownedModelServices.resolveModel(modelSpec),
           logger: createConsoleLogger(),
           // The runtime half of the arbitration rule. Its build-time half is
           // `spec.canPropose`, which the search decided: a stub is always non-null, so
           // presence alone cannot answer whether a branch could be granted.
           arbitrate: spec.canPropose ? (proposal) => parent.nodeArbitrate(nodeId, proposal) : null,
           reportStep: this.stepSink(parent, nodeId),
-          executeTool: this.facetExecuteTool(rt, spec.headInput, webSearch),
+          executeTool: this.facetExecuteTool(rt, sandboxSpec, webSearch),
           webSearch,
         };
         // Assigned rather than spread: an unbudgeted node must leave the key ABSENT,
@@ -509,14 +669,14 @@ export class ExplorationAgent extends Agent<Env> {
 
   // ── Head-mode tool builders ─────────────────────────────────────
 
-  private buildHeadTools(input: HeadInput, capture: HeadCapture) {
+  private buildHeadTools(input: HeadInput, capture: HeadCapture, sandboxSpec: string) {
     const rt = this.headRuntime(capture);
     const webSearch = this.ownedModelServices.getWebSearchProvider();
     return buildHeadToolSet({
       input,
       capture,
       rt,
-      executeTool: this.facetExecuteTool(rt, input, webSearch),
+      executeTool: this.facetExecuteTool(rt, sandboxSpec, webSearch),
       webSearch,
       split: (request) => this.runRecursiveSplit(request, input.budget, input),
     });
@@ -524,14 +684,16 @@ export class ExplorationAgent extends Agent<Env> {
 
   /** The `execute_tools` surface a facet's mode gets over its own runtime. One
    *  builder for a head and a node, because they differ in nothing but which
-   *  `HeadInput` names the model a crafted script may call. */
-  private facetExecuteTool(rt: CFRuntime, input: HeadInput, webSearch: WebSearchProvider) {
+   *  model a crafted script may call — and that spec now arrives already routed
+   *  (`MODEL_ROUTE_POLICY.sandbox` is `invocation`), rather than being read off
+   *  the `HeadInput` where an absent pin fell through to the account default. */
+  private facetExecuteTool(rt: CFRuntime, sandboxSpec: string, webSearch: WebSearchProvider) {
     return createExecuteToolsTool({
       loader: this.env.LOADER,
       rt,
       sql: this.boundSql,
       registry: this.ownedModelServices.providerRegistry(),
-      modelSpec: () => input.model ?? null,
+      modelSpec: () => sandboxSpec,
       webSearch,
     });
   }
@@ -580,7 +742,10 @@ export class ExplorationAgent extends Agent<Env> {
         sharedParent: this.identity.parentWorkspace(),
       }),
       models: this.ownedModelServices,
-      mergeModelSpec: () => parentInput.model ?? null,
+      // The merge resolves `judge` — the account-wide deep tier — off this
+      // profile. It used to pass `parentInput.model`, so a synthesis filed as
+      // deep-tier grading ran on whatever model the head itself was given.
+      profile: () => this.facetProfile(),
       // Reported to the root over the same cross-DO port the journal above uses,
       // because that is where the workspace's total is assembled.
       reportModelCall: (report) => { void parent.reportFacetModelCall(report); },

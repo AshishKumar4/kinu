@@ -304,12 +304,16 @@ export function liveChatModel(llm: LLMProviderConfig): LanguageModel {
  * to `KINU_EVAL_SPEND_FILE`, and the eval tier sums the files into the one
  * number a run reports.
  *
- * TWO FEEDS, ONE METER, because there are two kinds of live suite and only two.
- * A suite that calls `generateText` itself holds the SDK result and reports per
- * call (`recordLiveModelSpend`). A suite that drives a `LocalAgentSession` never
- * sees a result, so it reports per episode off the store the session wrote
- * (`recordLiveModelEpisode`). Both write the same counters — a second meter for
- * the second kind is how one tier learns to report a number the other cannot.
+ * THREE FEEDS, ONE METER, because there are three ways a suite comes to know
+ * what a call cost and only three. A suite that calls `generateText` itself
+ * holds the SDK result and reports per call (`recordLiveModelSpend`). A suite
+ * that drives a `LocalAgentSession` never sees a result, so it reports per
+ * episode off the store the session wrote (`recordLiveModelEpisode`). A suite
+ * RESUMING an interrupted run reports neither, because the process that made
+ * those calls is gone: it adopts what that process wrote down
+ * (`recordAdoptedLiveModelSpend`). All three write the same counters — a second
+ * meter for any one of them is how a tier learns to report a number the others
+ * cannot.
  *
  * A ZERO IS NEVER SILENT. `calls: 0` used to mean both "nothing ran" and
  * "nothing was measured", and the behavioural tier printed the second while
@@ -337,8 +341,9 @@ export interface LiveModelSpend {
    * The difference between "this tier cost nothing" and "this tier was not
    * measured", which `calls: 0` alone cannot express and which cost the owner a
    * behavioural tier reporting `0 model call(s)` over ~584,751 real neurons. A
-   * suite that drives episodes registers each one here, so a zero it did not
-   * earn arrives labelled instead of clean.
+   * suite that drives episodes registers each one here, and so does a resumed
+   * run that adopts a case whose durable record cannot say what it cost, so a
+   * zero neither of them earned arrives labelled instead of clean.
    */
   readonly episodesUnmeasured: number;
 }
@@ -445,6 +450,54 @@ export function recordLiveModelEpisode(sql: SqlExecutor): void {
   spendCalls += spend.total.calls;
   spendCallsWithoutUsage += spend.total.callsWithoutUsage;
   spendUsage = addUsage(spendUsage, spend.total.usage);
+}
+
+/**
+ * What a durable case record says a PREVIOUS process spent on one case.
+ *
+ * `calls` is the model-step count that process wrote as its own events landed;
+ * `usage` is the token total its finished output stored. Both are read back
+ * rather than recomputed, because the process that could recompute them is the
+ * one that died.
+ */
+export interface AdoptedCaseSpend {
+  readonly calls: number;
+  readonly usage: Usage;
+}
+
+/** Whether a durable record could account for the case it belongs to. */
+export type AdoptedSpendVerdict = 'accounted' | 'unaccounted';
+
+/**
+ * Record what a resumed run ADOPTED rather than drove.
+ *
+ * A run that spans processes publishes ONE record over every case, and the
+ * spend beside those cases used to be whatever the LAST process happened to
+ * pay. So the total SHRANK on every resume while the observation list it sat
+ * next to stayed whole — a per-process figure printed where a reader takes the
+ * run's cost, which is the same shape of error as reporting `0 model call(s)`
+ * over an episode that spent hundreds of thousands of neurons.
+ *
+ * EVIDENCE OR A LABEL, never a silent zero. A record that counted no model step,
+ * or that stored no token total, cannot say what its case cost: the call count
+ * without the tokens reports a measured zero, and the tokens without the call
+ * count report usage nothing made. Either way the case joins
+ * `episodesUnmeasured` — the same sentence a driven episode gets when its store
+ * accounts for nothing, because it is the same fact: the run drove work whose
+ * cost it cannot state.
+ *
+ * ADOPTING TWICE is the caller's hazard, not this function's, which counts
+ * whatever it is handed. `AdoptedSpendMeter` in eval-adopted-spend.ts owns the
+ * once-per-case rule, because it is what holds the case keys.
+ */
+export function recordAdoptedLiveModelSpend(adopted: AdoptedCaseSpend): AdoptedSpendVerdict {
+  if (adopted.calls <= 0 || !usageReported(adopted.usage)) {
+    spendEpisodesUnmeasured += 1;
+    return 'unaccounted';
+  }
+  spendCalls += adopted.calls;
+  spendUsage = addUsage(spendUsage, adopted.usage);
+  return 'accounted';
 }
 
 export function liveModelSpend(): LiveModelSpend {

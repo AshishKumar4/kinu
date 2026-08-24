@@ -116,6 +116,8 @@ import {
 } from './egress-vault';
 import { randomToken, sha256Hex } from '../lib/crypto';
 import { resolveWorkspaceTitle } from '../lib/agent-naming';
+import { installAnalyticsDiagnostics } from '../analytics/install';
+import { recordReleaseTransition } from '../analytics/record';
 import {
   DEVICE_CONSENT_SCOPE, DEVICE_CONSENT_SCOPE_FULL_FS,
   DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED,
@@ -357,6 +359,11 @@ export class UserDO extends Agent<Env> {
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
     sealRpcSurface(this, USER_DO_RPC_SURFACE);
+    // A Durable Object is its own isolate, so the Worker's diagnostics sink is
+    // not installed here — see the same call in `ActorAgent`'s constructor. The
+    // capability denials this DO's gate produces are the fleet's authorization
+    // signal, and without this they reach Workers Logs and no dataset.
+    installAnalyticsDiagnostics(this.env);
   }
 
   private _initialized = false;
@@ -1309,7 +1316,20 @@ export class UserDO extends Agent<Env> {
 
   async transitionReleaseChange(caller: UserCaller, changeId: string, to: ReleaseStatus): Promise<ReleaseChange> {
     await this.requireTier(caller, 'release');
-    return this.releases().transitionChange(changeId, to);
+    const change = this.releases().transitionChange(changeId, to);
+    // A release moving is a control-plane operation, so it lands on the audit
+    // dataset beside the rows a reader compares it with rather than on the agent
+    // one. The status is the release store's own closed vocabulary; the change id
+    // is digested because it identifies one user's work.
+    recordReleaseTransition(this.env, {
+      actor: this.name,
+      operation: 'transition',
+      reason: to,
+      target: changeId,
+      outcome: 'ok',
+      code: '',
+    });
+    return change;
   }
 
   async recordReleaseCheck(
@@ -1343,7 +1363,16 @@ export class UserDO extends Agent<Env> {
     input: { environment: ReleaseDeployment['environment']; workerVersionId?: string | null; deploymentId?: string | null; rollbackTarget?: string | null },
   ): Promise<ReleaseDeployment> {
     await this.requireTier(caller, 'release');
-    return this.releases().recordDeployment(changeId, input);
+    const deployment = this.releases().recordDeployment(changeId, input);
+    recordReleaseTransition(this.env, {
+      actor: this.name,
+      operation: 'deployment',
+      reason: input.environment,
+      target: changeId,
+      outcome: 'ok',
+      code: '',
+    });
+    return deployment;
   }
 
   async getReleaseBoard(caller: UserCaller, agentName?: string, limit = 20): Promise<ReleaseBoard> {

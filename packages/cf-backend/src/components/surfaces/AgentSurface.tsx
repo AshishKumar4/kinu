@@ -30,6 +30,7 @@ import { MarkdownContent, EmptyState, EMPTY_HINTS, Section } from "./shared";
 import { ScaffoldLineage } from "./ScaffoldLineage";
 import { GepaView, QualityView } from "./evolution-panels";
 import { LoadFailure } from "@/components/ui/LoadFailure";
+import { agentTitle } from "@/components/SubordinateTabs";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import * as v from "valibot";
 
@@ -309,7 +310,7 @@ function SubordinatesCard({ rpc, workspaceName }: { rpc: Rpc; workspaceName: str
             <div key={sub.name} className="flex items-center gap-2.5 px-4 py-3">
               <span className={`size-1.5 shrink-0 rounded-full ${sub.status === "working" ? "p-dot-success p-dot-pulse" : sub.status === "awaiting_input" ? "p-dot-warning" : "bg-[var(--c-fill)] border p-border"}`} />
               <div className="min-w-0 flex-1">
-                <div className="truncate text-[13px] p-text-2">{sub.displayName}</div>
+                <div className={`truncate text-[13px] ${sub.displayName ? "p-text-2" : "italic p-text-3"}`}>{agentTitle(sub.displayName)}</div>
                 <div className="truncate text-[11px] p-text-4">{sub.role}{sub.currentTask ? ` · ${sub.currentTask}` : ""}</div>
               </div>
               <Link

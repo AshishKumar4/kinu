@@ -43,6 +43,18 @@ export function isValidRoleId(value: string): value is RoleId {
   return value.length <= ROLE_ID_MAX_LEN && ROLE_ID_RE.test(value);
 }
 
+/** Membership set over the tier ids, widened to `string` at the binding so a
+ *  value off a durable row can be tested without a cast. */
+const TIER_ID_MEMBERS: ReadonlySet<string> = new Set(TIER_IDS);
+
+/** Whether a stored string names one of the five tiers. A GUARD rather than an
+ *  assertion at the read sites: a durable row can hold a value written by
+ *  another build, and narrowing it here is what keeps those readers free of
+ *  casts. */
+export function isTierId(value: string): value is TierId {
+  return TIER_ID_MEMBERS.has(value);
+}
+
 // ── Wire shapes ──────────────────────────────────────────────────
 
 export interface TierAssignment {

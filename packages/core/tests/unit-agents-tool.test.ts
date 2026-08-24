@@ -124,10 +124,21 @@ function makeTeam(overrides: Partial<TeamToolDeps> = {}) {
       name: input.name ?? 'researcher',
       displayName: 'Researcher',
       subordinate: {
-        name: input.name ?? 'researcher', displayName: 'Researcher', role: input.role,
+        name: input.name ?? 'researcher', displayName: 'Researcher', role: input.role ?? 'general',
         createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null,
       },
     }),
+    rename: async (input) => {
+      calls.push({ action: 'rename', input });
+      return {
+        ok: true, name: input.name, displayName: input.displayName,
+        subordinate: { ...rosterEntry, name: input.name, displayName: input.displayName },
+      };
+    },
+    recordTitle: async (input) => {
+      calls.push({ action: 'recordTitle', input });
+      return { ok: true, name: input.name, displayName: input.displayName };
+    },
     spawn: async (input) => {
       calls.push({ action: 'spawn', input });
       return { name: input.name ?? 'researcher', displayName: 'Researcher' };

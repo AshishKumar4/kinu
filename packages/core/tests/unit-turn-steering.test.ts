@@ -685,6 +685,67 @@ describe('delegation opportunities — which hint reached which step, and what c
     expect(delegationRows(orch)[0]!.roles).toEqual([]);
   });
 
+  test('the roles a row carries are the ones live WHEN IT WAS DELIVERED', () => {
+    // The distinction this instrument exists to draw is "ignored under an empty
+    // catalog" (a wiring gap) against "ignored under a full one" (behaviour).
+    // Read at turn end, a catalog that changed after delivery rewrites history
+    // and answers the wrong question — and the catalog CAN change, which is why
+    // the read is a callback rather than a constructor argument.
+    let live: readonly string[] = ['general', 'researcher'];
+    const orch = newTurn();
+    orch.steering.observeRoles(() => live);
+    step(orch, 0, [user(fresh)]);
+    expect(delegationRows(orch)[0]!.roles).toEqual(['general', 'researcher']);
+
+    live = ['general', 'auditor', 'implementer'];
+    expect(delegationRows(orch)[0]!.roles).toEqual(['general', 'researcher']);
+  });
+
+  test('each opportunity keeps its OWN moment, not the last one', () => {
+    // Two deliveries in one turn, with the catalog moving between them: the
+    // turn-start hint and, much later, the long-turn recovery steer. One shared
+    // read at settle would give both rows the same list and lose the fact that
+    // the second was offered more than the first.
+    let live: readonly string[] = ['general'];
+    const orch = newTurn();
+    orch.steering.observeRoles(() => live);
+    step(orch, 0, [user(fresh)]);
+    live = ['general', 'auditor'];
+    step(orch, LONG_TURN_STEPS_BEFORE_STEER, followUp(fresh));
+
+    const rows = delegationRows(orch);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.roles).toEqual(['general']);
+    expect(rows[1]!.roles).toEqual(['general', 'auditor']);
+  });
+
+  test('an autonomous delegation stamps the roles live when the call landed', () => {
+    // The unprompted arm reads at the same moment for the same reason: what the
+    // agent could have chosen among is a fact about when it chose.
+    let live: readonly string[] = ['general', 'researcher'];
+    const orch = newTurn();
+    orch.steering.observeRoles(() => live);
+    step(orch, 0, followUp(fresh));
+    orch.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'hire' } });
+    live = [];
+
+    const rows = delegationRows(orch);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.surface).toBe('unprompted');
+    expect(rows[0]!.roles).toEqual(['general', 'researcher']);
+  });
+
+  test('a captured list cannot be mutated through the row it was reported on', () => {
+    // The rows cross a JSON boundary as evidence. Handing out the stored array
+    // would let a consumer edit the record of what was offered.
+    const roleList = ['general', 'researcher'];
+    const orch = newTurn();
+    orch.steering.observeRoles(() => roleList);
+    step(orch, 0, [user(fresh)]);
+    delegationRows(orch)[0]!.roles.push('smuggled');
+    expect(delegationRows(orch)[0]!.roles).toEqual(['general', 'researcher']);
+  });
+
   test('a new turn starts with clean opportunity state', () => {
     const orch = newTurnWithRoles();
     step(orch, 0, [user(fresh)]);

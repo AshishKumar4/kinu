@@ -184,10 +184,33 @@ export function listKnownAgents(): ListedAgent[] {
   ];
 }
 
-export async function syncCloudAgentRefs(): Promise<ListedAgent[]> {
+/**
+ * A server workspace whose name a local ref already holds on this machine.
+ * The local ref stands and the cloud workspace is not recorded under that
+ * name: the mode was chosen when the workspace was created, and flipping it
+ * would drop a placed agent out of its project, its peer group and the
+ * scheduler's roster while its files stayed on disk.
+ */
+export interface CloudRefCollision {
+  /** The contested name, as the server spells it. */
+  name: string;
+  /** The local workspace directory holding it, which a ref may alias. */
+  localName: string;
+  cloudDisplayName: string;
+}
+
+export interface CloudRefSync {
+  agents: ListedAgent[];
+  /** Empty on the ordinary path. A name here reached neither store's roster
+   *  as cloud, so a caller that shows the roster has to show these too. */
+  collisions: CloudRefCollision[];
+}
+
+export async function syncCloudAgentRefs(): Promise<CloudRefSync> {
   const { origin, token } = requireAuthConfig();
   const cloudAgents = await listCloudAgents(origin, token);
   const now = new Date().toISOString();
+  const collisions: CloudRefCollision[] = [];
   updateConfigFile((config) => {
     const current = config.agents ?? {};
     const cloudNames = new Set(cloudAgents.map((agent) => agent.name));
@@ -198,6 +221,14 @@ export async function syncCloudAgentRefs(): Promise<ListedAgent[]> {
     }
     for (const agent of cloudAgents) {
       const existing = next[agent.name];
+      if (existing?.mode === 'local') {
+        collisions.push({
+          name: agent.name,
+          localName: existing.localName ?? existing.name,
+          cloudDisplayName: agent.displayName,
+        });
+        continue;
+      }
       next[agent.name] = {
         ...existing,
         name: agent.name,
@@ -218,5 +249,5 @@ export async function syncCloudAgentRefs(): Promise<ListedAgent[]> {
       }
     }
   });
-  return listKnownAgents();
+  return { agents: listKnownAgents(), collisions };
 }

@@ -411,6 +411,250 @@ describe('account cache isolation', () => {
   });
 });
 
+// The one reader a turn resolves through, on both the interactive and the
+// daemon side. Two properties it exists for: a signed-in turn survives an
+// unreachable origin from the cache the fetch would have refreshed, and a
+// signed-out turn sees a catalog edit made after the session started.
+describe('the turn profile authority reader', () => {
+  /** Signed in as `accountId`, with `origin` as the account's cloud origin. */
+  function signedIn(accountId: string, origin: string): string {
+    return `
+      const { mkdirSync, writeFileSync } = await import('node:fs');
+      mkdirSync(process.env.KINU_HOME, { recursive: true });
+      writeFileSync(process.env.KINU_HOME + '/config.json', JSON.stringify({
+        origin: ${JSON.stringify(origin)},
+        accessToken: 'ptc_session',
+        tokenExpiresAt: new Date(Date.now() + 3600_000).toISOString(),
+        user: { id: ${JSON.stringify(accountId)}, email: 'a@example.com' },
+      }), { mode: 0o600 });
+    `;
+  }
+
+  /** Caches one account entry through the real write path. */
+  function cached(accountId: string, catalog: ProfileCatalog, version: number): string {
+    return `
+      {
+        const { cacheAccountProfile } = await import('./packages/cli/src/profiles.ts');
+        const { profileCatalogDigest } = await import('@kinu.run/core');
+        const catalog = ${JSON.stringify(catalog)};
+        cacheAccountProfile(${JSON.stringify(accountId)}, {
+          authority: { kind: 'account', accountId: ${JSON.stringify(accountId)} },
+          version: ${version},
+          digest: profileCatalogDigest(catalog),
+          catalog,
+        });
+      }
+    `;
+  }
+
+  /** Records diagnostics so the fallback's own report is assertable: a
+   *  fallback nobody can see is a silent substitution. */
+  const RECORD_DIAGNOSTICS = `
+    const { createRecordingLogger, setDiagnosticsSink } = await import('@kinu.run/core/obs');
+    const recorder = createRecordingLogger();
+    setDiagnosticsSink(recorder);
+  `;
+
+  /** Nothing listens here, so the profile GET fails at connect. A stubbed
+   *  fetch would prove the branch; an unreachable port proves the failure
+   *  shape a real offline machine produces. */
+  const DEAD_ORIGIN = 'http://127.0.0.1:1';
+
+  const ParsedFallback = v.object({
+    envelope: ParsedEnvelope,
+    diagnostics: v.array(v.object({
+      event: v.string(),
+      code: v.nullable(v.string()),
+      fields: v.record(v.string(), v.union([v.string(), v.number(), v.boolean()])),
+    })),
+  });
+
+  test('a warm cache answers when the origin is unreachable, and says which version it served', () => {
+    const steps = runScenario(`
+      ${signedIn('acc-a', DEAD_ORIGIN)}
+      ${cached('acc-a', catalogA(), 9)}
+      ${RECORD_DIAGNOSTICS}
+      await step('resolved', async () => {
+        const { createProfileAuthorityReader } = await import('./packages/cli/src/profiles.ts');
+        const envelope = await createProfileAuthorityReader()();
+        return { envelope, diagnostics: recorder.emitted };
+      });
+    `);
+    const served = v.parse(ParsedFallback, expectOk(steps.resolved));
+    // The turn completed, under this account's own catalog.
+    expect(served.envelope.authority).toEqual({ kind: 'account', accountId: 'acc-a' });
+    expect(served.envelope.version).toBe(9);
+    expect(Object.keys(served.envelope.catalog.roles).sort()).toEqual(['general', 'researcher']);
+    // It reported the substitution, naming the version it ran under, and the
+    // resolution itself carries what answered and what it cost.
+    const [fallback, resolved] = served.diagnostics;
+    expect(served.diagnostics.map((line) => line.event))
+      .toEqual(['profile.account_cache_served', 'profile.authority_read']);
+    expect(fallback?.code).toBe('unavailable');
+    expect(fallback?.fields).toMatchObject({ account: 'acc-a', cachedVersion: 9 });
+    expect(fallback?.fields.cachedDigest).toBe(served.envelope.digest);
+    expect(resolved?.fields).toMatchObject({ source: 'cache' });
+    expect(resolved?.fields.durationMs).toBeTypeOf('number');
+  });
+
+  test('repeated turn setup re-reads the cache file instead of the server, and sees a write to it', () => {
+    const steps = runScenario(`
+      ${signedIn('acc-a', 'https://kinu.test')}
+      ${RECORD_DIAGNOSTICS}
+      const served = ${JSON.stringify(accountEnvelope('acc-a', catalogA(), 4))};
+      let fetches = 0;
+      globalThis.fetch = async (input) => {
+        if (!String(input).endsWith('/api/cli/profile')) throw new Error(String(input));
+        fetches += 1;
+        return Response.json(served);
+      };
+      const { createProfileAuthorityReader, cacheAccountProfile } =
+        await import('./packages/cli/src/profiles.ts');
+      // ONE reader, the way a live session builds it once at construction.
+      const read = createProfileAuthorityReader();
+      await step('firstThenRepeat', async () => {
+        const first = await read();
+        const second = await read();
+        const third = await read();
+        return { fetches, versions: [first?.version, second?.version, third?.version] };
+      });
+      await step('afterCacheWrite', async () => {
+        const { profileCatalogDigest } = await import('@kinu.run/core');
+        const catalog = ${JSON.stringify(catalogB())};
+        // What a CAS through updateDefaultTier leaves behind: a newer entry
+        // in the cache FILE, with no fetch involved.
+        cacheAccountProfile('acc-a', {
+          authority: { kind: 'account', accountId: 'acc-a' },
+          version: 5,
+          digest: profileCatalogDigest(catalog),
+          catalog,
+        });
+        const next = await read();
+        return { fetches, version: next?.version, roles: Object.keys(next?.catalog.roles ?? {}) };
+      });
+      await step('sources', async () => recorder.emitted
+        .filter((line) => line.event === 'profile.authority_read')
+        .map((line) => line.fields.source));
+    `);
+    // The server answered once. Turns two and three cost a file read.
+    expect(v.parse(
+      v.object({ fetches: v.number(), versions: v.array(v.number()) }),
+      expectOk(steps.firstThenRepeat),
+    )).toEqual({ fetches: 1, versions: [4, 4, 4] });
+    // A write to the cache file is observed without asking the server: the
+    // reuse is of the FILE, not of an object captured in memory.
+    expect(v.parse(
+      v.object({ fetches: v.number(), version: v.number(), roles: v.array(v.string()) }),
+      expectOk(steps.afterCacheWrite),
+    )).toEqual({ fetches: 1, version: 5, roles: ['auditor'] });
+    expect(expectOk(steps.sources)).toEqual(['server', 'cache', 'cache', 'cache']);
+  });
+
+  test('another account\u2019s cache never answers for this one', () => {
+    const steps = runScenario(`
+      ${signedIn('acc-b', DEAD_ORIGIN)}
+      ${cached('acc-a', catalogA(), 9)}
+      ${RECORD_DIAGNOSTICS}
+      await step('resolved', async () => {
+        const { createProfileAuthorityReader } = await import('./packages/cli/src/profiles.ts');
+        return await createProfileAuthorityReader()();
+      });
+      await step('leaked', async () => {
+        const { loadCachedAccountProfile } = await import('./packages/cli/src/profiles.ts');
+        return {
+          holdsA: loadCachedAccountProfile('acc-a') !== null,
+          holdsB: loadCachedAccountProfile('acc-b') !== null,
+          reported: recorder.emitted.length,
+        };
+      });
+    `);
+    // acc-a's entry is on disk and stays unread: a cache is keyed to its
+    // account, so an unrelated one is a miss rather than a fallback, and the
+    // connect failure the fetch raised is what reaches the caller.
+    expectError(steps.resolved, 'Unable to connect');
+    expect(v.parse(
+      v.object({ holdsA: v.boolean(), holdsB: v.boolean(), reported: v.number() }),
+      expectOk(steps.leaked),
+    )).toEqual({ holdsA: true, holdsB: false, reported: 0 });
+  });
+
+  test('no cache for this account rethrows rather than inventing a catalog', () => {
+    const steps = runScenario(`
+      ${signedIn('acc-a', DEAD_ORIGIN)}
+      ${RECORD_DIAGNOSTICS}
+      await step('resolved', async () => {
+        const { createProfileAuthorityReader } = await import('./packages/cli/src/profiles.ts');
+        return await createProfileAuthorityReader()();
+      });
+      await step('reported', async () => recorder.emitted.length);
+    `);
+    expectError(steps.resolved, 'Unable to connect');
+    expect(expectOk(steps.reported)).toBe(0);
+  });
+
+  const ParsedDefaultTier = v.object({
+    version: v.number(),
+    catalog: v.object({
+      tiers: v.object({
+        default: v.looseObject({ model: v.string(), reasoningEffort: v.optional(v.string()) }),
+      }),
+    }),
+  });
+
+  // The defect shape this replaces captured the envelope at construction
+  // (`const local = loadLocalProfileAuthority(); () => local`), so a session
+  // that ALREADY had an authority when it started never saw an edit to it.
+  // That is the case to hold: a reader built before the edit.
+  test('signed out, a reader built over an existing authority still sees a later /model and /effort', () => {
+    const steps = runScenario(`
+      const { createProfileAuthorityReader, updateDefaultTier } =
+        await import('./packages/cli/src/profiles.ts');
+      await updateDefaultTier({ model: 'model-at-startup' });
+      // Built ONCE, AFTER an authority exists — the way a live session builds
+      // it at construction.
+      const read = createProfileAuthorityReader();
+      await step('atStartup', async () => await read());
+      await step('afterModel', async () => {
+        await updateDefaultTier({ model: 'model-chosen-later' });
+        return await read();
+      });
+      await step('afterEffort', async () => {
+        await updateDefaultTier({ reasoningEffort: 'high' });
+        return await read();
+      });
+    `);
+    const startup = v.parse(ParsedDefaultTier, expectOk(steps.atStartup));
+    expect(startup.catalog.tiers.default.model).toBe('model-at-startup');
+    const afterModel = v.parse(ParsedDefaultTier, expectOk(steps.afterModel));
+    expect(afterModel.catalog.tiers.default.model).toBe('model-chosen-later');
+    expect(afterModel.version).toBeGreaterThan(startup.version);
+    const afterEffort = v.parse(ParsedDefaultTier, expectOk(steps.afterEffort));
+    expect(afterEffort.catalog.tiers.default.reasoningEffort).toBe('high');
+    // Each read is the whole current envelope, not a patch against the one the
+    // session started with.
+    expect(afterEffort.catalog.tiers.default.model).toBe('model-chosen-later');
+  });
+
+  test('signed out with no authority yet, the first /model becomes the next turn\u2019s tier', () => {
+    const steps = runScenario(`
+      const { createProfileAuthorityReader, updateDefaultTier } =
+        await import('./packages/cli/src/profiles.ts');
+      const read = createProfileAuthorityReader();
+      await step('beforeAnyAuthority', async () => await read());
+      await step('afterModel', async () => {
+        await updateDefaultTier({ model: 'first-model' });
+        return await read();
+      });
+    `);
+    // Nothing imported yet: the workspace's own configuration decides, and the
+    // reader must not seed a catalog from the global default model.
+    expect(expectOk(steps.beforeAnyAuthority)).toBeNull();
+    // The authority the edit CREATED is visible to the reader that predates it.
+    expect(v.parse(ParsedDefaultTier, expectOk(steps.afterModel)).catalog.tiers.default.model)
+      .toBe('first-model');
+  });
+});
+
 /** The only key these scenarios ever seed into a fresh config.json. */
 interface SeededConfig {
   localProfile: unknown;

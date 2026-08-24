@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 
 import type { AgentClient, AgentClientStatus } from '../src/agent-client';
 import type { AgentModelMenu } from '../src/model-catalog';
+import type { TuiHubData } from '../src/tui/hubs';
 import { TURN, cleanupChats, fakeClient, mountChat } from './helpers/chat-app-fixture';
 
 afterEach(cleanupChats);
@@ -14,6 +15,7 @@ describe('ChatApp terminal interaction', () => {
     localScreen.mockInput.pressKey('k', { ctrl: true });
     await localScreen.waitFor('the local command palette', () => localScreen.frame().includes('Filter commands'));
     expect(localScreen.frame()).toContain('/role');
+    expect(localScreen.frame()).toContain('/rename');
     localScreen.mockInput.pressEscape();
     await localScreen.waitFor('the command palette to close', () =>
       !localScreen.frame().includes('Filter commands'));
@@ -49,6 +51,7 @@ describe('ChatApp terminal interaction', () => {
     expect(cloudScreen.frame()).not.toContain('/resume');
     expect(cloudScreen.frame()).toContain('/role');
 
+    expect(cloudScreen.frame()).not.toContain('/rename');
   });
   test('Ctrl+K preserves the draft under the command palette', async () => {
     const controlled = fakeClient({ name: 'alpha' });
@@ -253,5 +256,134 @@ describe('ChatApp terminal interaction', () => {
     expect(screen.frame()).not.toContain('⟳ processing');
     expect(screen.frame()).not.toContain('alpha local');
     expect(alpha.state.closed).toBe(1);
+  });
+
+  const HUB_FIXTURE: TuiHubData = {
+    agents: [{
+      id: 'agent-main', label: 'Checkout', kind: 'main', status: 'idle',
+      roleId: 'general', tierId: 'default', workspace: 'shop',
+    }],
+    profile: {
+      envelope: {
+        authority: { kind: 'local' },
+        version: 1,
+        digest: 'digest',
+        catalog: {
+          roles: { general: { description: 'General work', instructions: 'Work directly.', tier: 'default', preset: 'ideate' } },
+          tiers: { default: { model: 'workers-ai/deepseek', reasoningEffort: 'medium' } },
+        },
+      },
+      activeRoleId: 'general',
+      allowedRoleIds: ['general'],
+    },
+  };
+
+  test('the Agent Hub creates a local peer with one key and opens its conversation', async () => {
+    const main = fakeClient({ name: 'checkout' });
+    const peer = fakeClient({ name: 'agent-1', status: async () => ({
+      name: 'agent-1', purpose: '', model: 'openai/gpt-5.5', reasoningEffort: 'medium',
+    }) });
+    const cwd = process.cwd();
+    let created = 0;
+    const screen = await mountChat(main.client, {
+      hubData: HUB_FIXTURE,
+      listWorkspaces: () => [
+        { name: 'checkout', label: 'Checkout', mode: 'local', cwd, workspaceId: 'shop' },
+        ...(created > 0 ? [{ name: 'agent-1', label: '', mode: 'local' as const, cwd, workspaceId: 'shop' }] : []),
+      ],
+      onWorkspaceSelect: async (name) => {
+        if (name !== 'agent-1') throw new Error(`unexpected switch to ${name}`);
+        return peer.client;
+      },
+      onNewAgent: async (client) => {
+        created += 1;
+        expect(client.mode).toBe('local');
+        return { name: 'agent-1', displayName: '', kind: 'local-peer' };
+      },
+    });
+
+    screen.mockInput.pressKey('a', { meta: true });
+    await screen.waitFor('the agent hub', () => screen.frame().includes('Agent Hub'));
+    // The one-key affordance is announced; no form ever appears.
+    expect(screen.frame()).toContain('new agent');
+    screen.mockInput.pressKey('n');
+    await screen.waitFor('the created peer conversation', () => screen.frame().includes('Connected to agent-1'));
+    expect(created).toBe(1);
+    expect(screen.frame()).not.toContain('Role:');
+    expect(screen.frame()).not.toContain('Mission:');
+
+    // Reopened, the hub lists the workspace's members with the untitled peer
+    // as "New agent" — the current, open conversation.
+    screen.mockInput.pressKey('a', { meta: true });
+    await screen.waitFor('the refreshed hub roster', () => screen.frame().includes('New agent'));
+    expect(screen.frame()).toContain('Checkout · main');
+    expect(screen.frame()).toContain('New agent · main');
+    expect(screen.frame()).toContain('· open');
+    screen.mockInput.pressEscape();
+  });
+
+  test('the Agent Hub creates a cloud additional agent through the backend client, without leaving', async () => {
+    const cloud = fakeClient({ name: 'shop-cloud', mode: 'cloud' });
+    let created = 0;
+    const screen = await mountChat(cloud.client, {
+      hubData: HUB_FIXTURE,
+      onNewAgent: async (client) => {
+        created += 1;
+        expect(client.mode).toBe('cloud');
+        return { name: 'sub-1', displayName: '', kind: 'cloud-additional' };
+      },
+    });
+    screen.mockInput.pressKey('a', { meta: true });
+    await screen.waitFor('the agent hub', () => screen.frame().includes('Agent Hub'));
+    screen.mockInput.pressKey('n');
+    await screen.waitFor('the creation notice', () => screen.frame().includes('Created New agent (sub-1)'));
+    expect(created).toBe(1);
+    // No switch happened: the current conversation stays open.
+    expect(screen.frame()).toContain('Connected to shop-cloud');
+  });
+
+  test('a hub with no wired creator offers no new-agent key', async () => {
+    const local = fakeClient({ name: 'solo' });
+    const screen = await mountChat(local.client, { hubData: HUB_FIXTURE });
+    screen.mockInput.pressKey('a', { meta: true });
+    await screen.waitFor('the agent hub', () => screen.frame().includes('Agent Hub'));
+    expect(screen.frame()).not.toContain('new agent');
+    screen.mockInput.pressKey('n');
+    // Nothing was created and the hub stays put — n is not a hub action here.
+    expect(screen.frame()).toContain('Agent Hub');
+    screen.mockInput.pressEscape();
+  });
+
+  test('drafts stay with their conversation across a workspace switch', async () => {
+    const alpha = fakeClient({ name: 'alpha' });
+    const beta = fakeClient({ name: 'beta' });
+    const screen = await mountChat(alpha.client, {
+      listWorkspaces: () => [
+        { name: 'alpha', label: 'Alpha', mode: 'local' },
+        { name: 'beta', label: 'Beta', mode: 'local' },
+      ],
+      onWorkspaceSelect: async (name) => {
+        if (name === 'alpha') return alpha.client;
+        if (name === 'beta') return beta.client;
+        throw new Error(`unexpected switch to ${name}`);
+      },
+      width: 80,
+    });
+    await screen.mockInput.typeText('half a thought for alpha');
+    screen.mockInput.pressKey('w', { meta: true });
+    await screen.waitFor('the workspace drawer', () => screen.frame().includes('Esc close'));
+    // Selection opens on the current agent's row; one step reaches the peer.
+    screen.mockInput.pressArrow('down');
+    screen.mockInput.pressEnter();
+    await screen.waitFor('the beta workspace', () => screen.frame().includes('Connected to beta'));
+    // Beta's composer starts clean — alpha's draft did not travel.
+    expect(screen.frame()).not.toContain('half a thought for alpha');
+    await screen.mockInput.typeText('beta draft');
+    screen.mockInput.pressKey('w', { meta: true });
+    await screen.waitFor('the workspace drawer again', () => screen.frame().includes('Esc close'));
+    screen.mockInput.pressArrow('up');
+    screen.mockInput.pressEnter();
+    await screen.waitFor('alpha back with its own draft', () => screen.frame().includes('half a thought for alpha'));
+    expect(screen.frame()).not.toContain('beta draft');
   });
 });

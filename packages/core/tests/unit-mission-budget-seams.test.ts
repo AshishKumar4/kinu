@@ -105,10 +105,18 @@ function searchableDeps(opts: {
         name: input.name ?? 'helper',
         displayName: 'Helper',
         subordinate: {
-          name: input.name ?? 'helper', displayName: 'Helper', role: input.role,
+          name: input.name ?? 'helper', displayName: 'Helper', role: input.role ?? 'general',
           createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null,
         },
       }),
+      rename: async (input) => ({
+        ok: true, name: input.name, displayName: input.displayName,
+        subordinate: {
+          name: input.name, displayName: input.displayName, role: 'general',
+          createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null,
+        },
+      }),
+      recordTitle: async (input) => ({ ok: true, name: input.name, displayName: input.displayName }),
       spawn: async (input) => { spawns.push(`hire:${input.role}`); return { name: 'helper', displayName: 'Helper' }; },
       assign: async (input) => { spawns.push(`ask:${input.name}`); return { ok: true, name: input.name, ...handoff() }; },
       status: async () => ({}),

@@ -14,6 +14,24 @@
 //
 // Every model construction consumes a ResolvedTurnProfile through this table,
 // or declares itself `platform`.
+//
+// ONE DECLARED EXCEPTION, named here because a claim of exhaustiveness has to
+// carry its own counter-example. A judge PANEL — the outcome ensemble, which
+// puts one model per connected vendor family to the same hand-labelled turns —
+// files as `judge` and cannot route through `judge`'s fixed slot: one tier is
+// one model, and a panel of one model is not a weaker panel, it is the absence
+// of the instrument. Its whole point is that its members disagree for reasons
+// other than the turn.
+//
+// It stays off this table rather than growing a row, and its EFFORT stays on
+// the stage table (`REASONING_EFFORT_FOR_STAGE.judge`) rather than being taken
+// from the deep tier. That pairing is deliberate: a tier is a (model, effort)
+// pair, so applying the effort of a tier whose model was deliberately not used
+// would be half a tier — and a half-applied profile reads as routed while only
+// one axis is, which is worse than one that is plainly not.
+//
+// What it MUST NOT become is `resolveModelRoute('judge', …)`. That reads tidier
+// and silently makes every judge the same model.
 import { SPEND_SOURCES, type SpendSource } from '../events/model-call';
 import type { ReasoningEffort } from '../strategy/effort';
 import type { TierId } from './catalog';

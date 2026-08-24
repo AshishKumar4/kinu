@@ -102,6 +102,139 @@ export function isBuiltinToolName(value: string): value is BuiltinToolName {
   return BUILTIN_TOOL_NAMES.has(value);
 }
 
+/** One capability and the codemode namespace it owns. */
+interface CapabilityReach {
+  readonly name: CapabilityName;
+  readonly namespace: string;
+}
+
+/**
+ * The reach table walked once, into the two indexes the narrowing needs.
+ *
+ * SAFETY: `TOOL_REACH` is a `const` object literal declared in this module, so
+ * its runtime keys ARE its key union — `Object.keys` loses that in the lib
+ * signature and nothing outside this file can add a key. This is the only place
+ * that recovers it, so the derivations below index a typed name.
+ */
+const CAPABILITY_NAMES = Object.keys(TOOL_REACH) as readonly CapabilityName[];
+
+/** Codemode-only capabilities with the namespace each owns. Derived rather than
+ *  listed again, so a capability that changes reach cannot fall out of step. */
+const CODEMODE_ONLY_REACH: readonly CapabilityReach[] = Object.freeze(
+  CAPABILITY_NAMES.flatMap((name) => {
+    const reach = TOOL_REACH[name];
+    return reach.native ? [] : [{ name, namespace: reach.codemode }];
+  }),
+);
+
+/** Capability keys reachable ONLY inside the sandbox.
+ *
+ *  A backend that wires their providers must include these in the surface it
+ *  hands the turn resolver, because a role's `allowedTools` is intersected with
+ *  that surface: a key absent from it can never be named, so every narrowed
+ *  role would silently lose the capability wholesale. Add only the ones actually
+ *  wired — {@link codemodeCapabilitiesFor} does that from the provider list, so
+ *  nobody has to keep a second list in step. */
+export const CODEMODE_ONLY_CAPABILITIES: readonly string[] = Object.freeze(
+  CODEMODE_ONLY_REACH.map((reach) => reach.name),
+);
+
+/** Which capabilities reach one codemode namespace. Plural because two do:
+ *  `run` and `file` both reach `workspace`, so that namespace survives while
+ *  EITHER of them does. Derived from the reach table at load, so a namespace
+ *  cannot join the surface without joining this index. */
+const CAPABILITIES_BY_NAMESPACE: Readonly<Record<string, readonly CapabilityName[]>> = (() => {
+  const index: Record<string, CapabilityName[]> = {};
+  for (const name of CAPABILITY_NAMES) {
+    const namespace = TOOL_REACH[name].codemode;
+    if (namespace === null) continue;
+    (index[namespace] ??= []).push(name);
+  }
+  return Object.freeze(index);
+})();
+
+/**
+ * The codemode-only capabilities a wired provider list actually reaches.
+ *
+ * For the surface a backend hands the resolver: pass the provider list as
+ * built, after every conditional and after the Plan-mode filter, and get back
+ * exactly the keys whose namespace is present. A capability whose provider was
+ * not wired is not returned, so a role's list can never allow a lane that is
+ * physically absent — which would be the same silent lie, from the other side,
+ * as a lane reachable despite being excluded.
+ *
+ * Namespaces belonging to natively-nameable capabilities contribute nothing:
+ * the native tool id already names those.
+ */
+export function codemodeCapabilitiesFor(
+  providers: readonly { readonly name: string }[],
+): string[] {
+  const wired = new Set(providers.map((provider) => provider.name));
+  return CODEMODE_ONLY_REACH
+    .filter((reach) => wired.has(reach.namespace))
+    .map((reach) => reach.name);
+}
+
+/**
+ * One role's tool surface, over BOTH places a capability can be reached.
+ *
+ * THE POINT IS THE SINGLE SET. Role narrowing used to be applied to the native
+ * ToolSet only, while `execute_tools` built its codemode providers from
+ * unfiltered deps — so a role allowed `execute_tools` and denied `agents` still
+ * delegated, hired and wrote memory through `agents.*`, and the narrowing was
+ * decorative for any role that kept the sandbox. Both surfaces now read the
+ * same merged list, so they cannot disagree.
+ */
+export interface ToolSurfaceNarrowing {
+  /** Whether a native tool id survives. */
+  allowsTool(name: string): boolean;
+  /** Whether a codemode namespace may be bound inside `execute_tools`. */
+  allowsNamespace(namespace: string): boolean;
+  /** The provider list narrowed to the namespaces this role may reach. */
+  narrowProviders<P extends { readonly name: string }>(providers: readonly P[]): P[];
+}
+
+/**
+ * Build the narrowing for one resolved turn.
+ *
+ * `allowedTools` is the resolver's merged output — the caller's surface already
+ * intersected with the role's list. `undefined` allows everything, the same
+ * rule the resolver applies to a role with no list at all: absent inherits.
+ *
+ * A DECLARED namespace (some capability's `codemode` in TOOL_REACH) is exposed
+ * when at least one capability reaching it is named.
+ *
+ * An EXTERNAL namespace — an executor plane like `pc` or `sandbox`, or any
+ * provider a backend wired without a reach row — is exposed when
+ * `execute_tools` itself is. Core does not invent a per-namespace denial for a
+ * name the owner cannot write in a role's list: that would silently take away
+ * the filesystem from every narrowed role, which is a worse failure than the
+ * one being fixed and a much quieter one.
+ */
+export function narrowToolSurface(
+  allowedTools: readonly string[] | undefined,
+): ToolSurfaceNarrowing {
+  if (allowedTools === undefined) {
+    return {
+      allowsTool: () => true,
+      allowsNamespace: () => true,
+      narrowProviders: (providers) => [...providers],
+    };
+  }
+  const allowed = new Set(allowedTools);
+  const sandbox = allowed.has('execute_tools');
+  const allowsNamespace = (namespace: string): boolean => {
+    const reaching = CAPABILITIES_BY_NAMESPACE[namespace];
+    if (!reaching) return sandbox;
+    return reaching.some((name) => allowed.has(name));
+  };
+  return {
+    allowsTool: (name) => allowed.has(name),
+    allowsNamespace,
+    narrowProviders: (providers) => providers.filter((p) => allowsNamespace(p.name)),
+  };
+}
+
 export interface BuiltinToolSpec {
   name: BuiltinToolName;
   /** What the tool IS, in one sentence. The only field the system prompt's

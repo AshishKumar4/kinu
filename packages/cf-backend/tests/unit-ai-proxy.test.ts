@@ -37,12 +37,27 @@ const ModelListSchema = v.object({
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
 
+/** The direct binding's default event stream: what a streamed turn really gets
+ *  back from `Ai.run`, rather than a finished completion the adapter would
+ *  refuse to replay. */
+const DIRECT_SSE = [
+  'data: {"response":"ok"}\n\n',
+  'data: {"response":"","usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\n\n',
+  'data: [DONE]\n\n',
+].join('');
+
 function setupEnv(opts: {
   gatewayId?: string | null;
   token?: string;
   freshToken?: string;
   evalService?: boolean;
+  /** The binding's answer to a request for one whole completion. */
   directOutput?: JsonObject;
+  /** The event stream the binding answers a streamed request with. */
+  directStream?: string;
+  /** A whole completion the binding answers a STREAMED request with, which is a
+   *  model that will not stream and which the adapter refuses. */
+  directRefusal?: JsonObject;
 } = {}) {
   const gatewayId = opts.gatewayId === undefined ? 'my-gw' : opts.gatewayId;
   const token = opts.token ?? 'cf-user';
@@ -89,10 +104,16 @@ function setupEnv(opts: {
     const ai = {
       async run(model: string, inputs: JsonObject) {
         directRuns.push({ model, inputs });
-        return opts.directOutput ?? {
-          response: 'ok',
-          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-        };
+        if (inputs.stream !== true) {
+          return opts.directOutput ?? {
+            response: 'ok',
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          };
+        }
+        if (opts.directRefusal) return opts.directRefusal;
+        return new Response(opts.directStream ?? DIRECT_SSE, {
+          headers: { 'content-type': 'text/event-stream' },
+        });
       },
     };
     Object.assign(partialEnv, {
@@ -202,7 +223,7 @@ describe('AI proxy model → upstream selection', () => {
     expect(captured[0].headers.get('authorization')).not.toContain(SESSION_TOKEN);
   });
 
-  test('the staging eval identity uses the direct Workers AI binding', async () => {
+  test('the staging eval identity streams over the direct Workers AI binding', async () => {
     const { env, directRuns } = setupEnv({ evalService: true });
     const res = await handleCliRequest(chatRequest(AI_TOKEN, {
       model: '@cf/moonshotai/kimi-k2.6',
@@ -212,31 +233,34 @@ describe('AI proxy model → upstream selection', () => {
 
     expect(res?.status).toBe(200);
     expect(res?.headers.get('content-type')).toBe('text/event-stream');
-    expect(await res?.text()).toContain('"content":"ok"');
+    const body = await res?.text();
+    expect(body).toContain('"content":"ok"');
+    expect(body).toContain('"finish_reason":"stop"');
+    expect(body).toContain('"prompt_tokens":1');
+    expect(body?.trimEnd().endsWith('data: [DONE]')).toBe(true);
+    // The binding is asked to stream, and asked for the usage an OpenAI-style
+    // stream reports only on request.
     expect(directRuns).toEqual([{
       model: '@cf/moonshotai/kimi-k2.6',
       inputs: {
         messages: [{ role: 'user', content: 'ping' }],
-        stream: false,
+        stream: true,
+        stream_options: { include_usage: true },
       },
     }]);
   });
 
-  test('OpenAI-shaped binding output becomes a complete SSE response', async () => {
+  test('OpenAI-shaped binding chunks reach the client unchanged', async () => {
     const { env } = setupEnv({
       evalService: true,
-      directOutput: {
-        id: 'chatcmpl-direct',
-        object: 'chat.completion',
-        created: 1,
-        model: '@cf/moonshotai/kimi-k2.6',
-        choices: [{
-          index: 0,
-          message: { role: 'assistant', content: 'streamed' },
-          finish_reason: 'stop',
-        }],
-        usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
-      },
+      directStream: [
+        'data: {"id":"chatcmpl-direct","object":"chat.completion.chunk","created":1,'
+          + '"model":"@cf/moonshotai/kimi-k2.6","choices":[{"index":0,"delta":{"role":"assistant","content":"streamed"}}]}\n\n',
+        'data: {"id":"chatcmpl-direct","object":"chat.completion.chunk","created":1,'
+          + '"model":"@cf/moonshotai/kimi-k2.6","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],'
+          + '"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}\n\n',
+        'data: [DONE]\n\n',
+      ].join(''),
     });
     const res = await handleCliRequest(chatRequest(AI_TOKEN, {
       model: '@cf/moonshotai/kimi-k2.6',
@@ -250,6 +274,31 @@ describe('AI proxy model → upstream selection', () => {
     expect(body).toContain('"finish_reason":"stop"');
     expect(body).toContain('"prompt_tokens":2');
     expect(body).toContain('data: [DONE]');
+  });
+
+  test('a binding that answers a whole completion refuses the streamed request', async () => {
+    const { env } = setupEnv({
+      evalService: true,
+      directRefusal: {
+        id: 'chatcmpl-direct',
+        object: 'chat.completion',
+        created: 1,
+        model: '@cf/moonshotai/kimi-k2.6',
+        choices: [{ index: 0, message: { role: 'assistant', content: 'never-replayed' }, finish_reason: 'stop' }],
+      },
+    });
+    const res = await handleCliRequest(chatRequest(AI_TOKEN, {
+      model: '@cf/moonshotai/kimi-k2.6',
+      messages: [{ role: 'user', content: 'ping' }],
+      stream: true,
+    }), env);
+
+    // The CLI client is told the model does not stream here, rather than being
+    // handed a finished answer dressed as a stream.
+    expect(res?.status).toBe(502);
+    const message = v.parse(MessageErrorSchema, await handled(res).json()).error.message;
+    expect(message).toContain('did not stream');
+    expect(message).not.toContain('never-replayed');
   });
 
   test('{author}/{model} ids ride the AI Gateway credential with cf-aig-gateway-id', async () => {

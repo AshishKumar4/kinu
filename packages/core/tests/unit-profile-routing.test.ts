@@ -13,9 +13,9 @@ import { resolveTurnProfile } from '../src/profiles/resolve';
 import {
   MODEL_ROUTE_POLICY, SPEND_SOURCES, isPlatformRouted, modelRouteTable, resolveModelRoute,
 } from '../src/profiles/model-route';
-import { changeActiveRole, roleWidensCapabilities } from '../src/profiles/role-change';
+import { changeActiveRole, roleChangeOutcomeText, roleWidensCapabilities } from '../src/profiles/role-change';
+import type { RoleChangeOutcome, RoleStateStore } from '../src/profiles/role-change';
 import type { ProfileCatalogEnvelope } from '../src/profiles';
-import type { RoleStateStore } from '../src/profiles/role-change';
 
 
 function envelope(catalog = BUILTIN_PROFILE_CATALOG): ProfileCatalogEnvelope {
@@ -179,5 +179,68 @@ describe('durable role change', () => {
     expect(changeActiveRole({ envelope: envelope(), config, to: 'no-such-role', actor: 'agent' }))
       .toEqual({ kind: 'refused', reason: 'unknown-role' });
     expect(config.get('active_role_id')).toBeNull();
+  });
+});
+
+/** The one sentence both backends speak about a role change. Owned in core
+ *  because the two callers live in packages with no dependency between them:
+ *  written twice, a new outcome member earns a wrong sentence in two places
+ *  instead of a compile error in one. */
+describe('what a caller is told about a role change', () => {
+  const say = (outcome: RoleChangeOutcome, requested = 'auditor', current = 'general') =>
+    roleChangeOutcomeText(requested, outcome, current);
+
+  test('a STAGED change is not reported as a failure', () => {
+    // The defect this replaces: both backends threw `role "x" was refused:
+    // staged`, which tells the agent to retry something already pending and
+    // makes an approval policy read as a broken one. Staged SUCCEEDED; its
+    // effect is waiting on the owner.
+    const text = say({ kind: 'staged', from: 'general', to: 'auditor' });
+    expect(text).toContain('awaiting owner approval');
+    expect(text).not.toContain('refused');
+    // And it names what runs meanwhile, which is the actionable half.
+    expect(text).toContain('"general"');
+  });
+
+  test('the two outcomes retrying cannot fix say so', () => {
+    expect(say({ kind: 'refused', reason: 'locked' })).toContain('retrying will not change that');
+    expect(say({ kind: 'refused', reason: 'unknown-role' })).toContain('not in this account\'s catalog');
+    expect(say({ kind: 'refused', reason: 'invalid-role-id' })).toContain('not a well-formed role id');
+  });
+
+  test('every outcome names the role that is live afterwards', () => {
+    const outcomes: RoleChangeOutcome[] = [
+      { kind: 'applied', from: 'general', to: 'auditor', catalogVersion: 3 },
+      { kind: 'staged', from: 'general', to: 'auditor' },
+      { kind: 'dismissed', from: 'general', to: 'auditor' },
+      { kind: 'refused', reason: 'locked' },
+      { kind: 'refused', reason: 'unknown-role' },
+      { kind: 'refused', reason: 'invalid-role-id' },
+      { kind: 'none' },
+    ];
+    for (const outcome of outcomes) {
+      const text = say(outcome);
+      expect(text.length).toBeGreaterThan(0);
+      // The role a caller has to act on appears in every arm: the new one where
+      // the change landed, the standing one where it did not.
+      expect(text).toMatch(/"(auditor|general)"/);
+    }
+  });
+
+  test('an applied change says when it takes effect, not that it already has', () => {
+    // profiles/role-change.ts's contract: the running step keeps the profile it
+    // already resolved. A message claiming the switch is live now would
+    // contradict the turn the agent is in.
+    const text = say({ kind: 'applied', from: 'general', to: 'auditor', catalogVersion: 3 });
+    expect(text).toContain('next turn');
+  });
+
+  test('the message reads the OUTCOME\'s roles, not the caller\'s guess', () => {
+    // `currentRole` is consulted only for the members carrying no `from`, so a
+    // stale read passed by a caller cannot make the sentence disagree with what
+    // actually happened.
+    const text = say({ kind: 'staged', from: 'scout', to: 'generalist' }, 'generalist', 'stale-value');
+    expect(text).toContain('"scout"');
+    expect(text).not.toContain('stale-value');
   });
 });

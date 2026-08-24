@@ -19,12 +19,71 @@ import {
 export type RoleChangeActor = 'user' | 'agent';
 export type RoleChangePolicy = 'allow' | 'approval' | 'locked';
 
+/** Why a change could not be made. Named because two places speak it: the
+ *  outcome union below and the message table over it. */
+export type RoleChangeRefusal = 'locked' | 'unknown-role' | 'invalid-role-id';
+
 export type RoleChangeOutcome =
   | { readonly kind: 'applied'; readonly from: RoleId; readonly to: RoleId; readonly catalogVersion: number }
   | { readonly kind: 'staged'; readonly from: RoleId; readonly to: RoleId }
   | { readonly kind: 'dismissed'; readonly from: RoleId; readonly to: RoleId }
-  | { readonly kind: 'refused'; readonly reason: 'locked' | 'unknown-role' | 'invalid-role-id' }
+  | { readonly kind: 'refused'; readonly reason: RoleChangeRefusal }
   | { readonly kind: 'none' };
+
+/**
+ * What to tell the caller about a role change, for every outcome the union has.
+ *
+ * TOTAL over {@link RoleChangeOutcome}, and owned here rather than at the
+ * callsites because the two callers sit in packages with no dependency between
+ * them: written twice, a new member earns a wrong sentence in two places
+ * instead of a compile error in one.
+ *
+ * `staged` IS NOT A REFUSAL, and that distinction is why this exists. A staged
+ * change SUCCEEDED — it is recorded and waiting on the owner — so wording it as
+ * a failure tells the agent to retry something already pending and makes an
+ * approval policy look like a broken one. "Refused" is for `locked` and for a
+ * role the catalog cannot carry: the two where nothing is pending and retrying
+ * changes nothing.
+ *
+ * Every message says which role is live afterwards, because that is the thing
+ * the caller has to act on. `currentRole` is consulted ONLY for the members
+ * carrying no `from` of their own, so the sentence can never disagree with the
+ * outcome about which role that is.
+ */
+export function roleChangeOutcomeText(
+  requested: string,
+  outcome: RoleChangeOutcome,
+  currentRole: string,
+): string {
+  const asked = JSON.stringify(requested);
+  switch (outcome.kind) {
+    case 'applied':
+      return `role is now ${JSON.stringify(outcome.to)}, was ${JSON.stringify(outcome.from)}. `
+        + 'It applies from the next turn; this one keeps the profile it already resolved.';
+    case 'staged':
+      return `role ${JSON.stringify(outcome.to)} is awaiting owner approval, because it widens `
+        + `what this agent can reach. Nothing is lost and there is nothing to retry: this turn `
+        + `and the next continue under ${JSON.stringify(outcome.from)}.`;
+    case 'dismissed':
+      return `the owner declined the change to role ${JSON.stringify(outcome.to)}. `
+        + `${JSON.stringify(outcome.from)} stays active.`;
+    case 'refused': {
+      const live = JSON.stringify(currentRole);
+      const because = {
+        locked: `role changes are locked on this agent by its owner, so ${asked} cannot be set `
+          + `here and retrying will not change that. ${live} stays active.`,
+        'unknown-role': `role ${asked} is not in this account's catalog, so there is nothing to `
+          + `switch to. ${live} stays active — ask the owner to add the role, or pick one the `
+          + 'catalog carries.',
+        'invalid-role-id': `${asked} is not a well-formed role id, so it names no role. `
+          + `${live} stays active.`,
+      } satisfies Record<RoleChangeRefusal, string>;
+      return because[outcome.reason];
+    }
+    case 'none':
+      return `this agent is already in role ${JSON.stringify(currentRole)}; nothing changed.`;
+  }
+}
 
 /** The slice of AgentConfigStore a role change reads and writes. Generic
  *  get/set keeps this module free of a store import cycle; the typed

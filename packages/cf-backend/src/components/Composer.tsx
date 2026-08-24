@@ -153,7 +153,8 @@ export interface ComposerProps {
   onStop: () => void;
   /** Statuses above the draft, oldest first. Empty renders nothing. */
   notices?: readonly ComposerNotice[];
-  /** Turn mode. Omitted on surfaces that have none (subordinates inherit it). */
+  /** Turn mode. Every agent conversation passes its own; omitted only on
+   *  static gallery frames that photograph the composer without one. */
   mode?: { value: ChatMode; onChange: (mode: ChatMode) => void; locked: boolean };
   /** Attachments. Omitted where the surface cannot take files. */
   attachments?: {

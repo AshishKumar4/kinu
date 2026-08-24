@@ -395,7 +395,9 @@ export class TurnSteering {
 
   /** Where the agent's delegatable roles come from, read at the moment a hint
    *  is delivered or an unprompted delegation lands — not at construction,
-   *  because the catalog can change between turns. Absent reads as an empty
+   *  because the catalog can change between turns, and NOT at turn end, because
+   *  by then the catalog may no longer be the one the agent was offered. Each
+   *  row keeps the list captured at its own creation. Absent reads as an empty
    *  list, which the row states honestly rather than guessing. */
   private roleCatalog?: () => readonly string[] | undefined;
 
@@ -413,14 +415,24 @@ export class TurnSteering {
    *  carry whether anything came of it. A LIST, because a turn can carry two —
    *  the turn-start hint and, much later, the recovery steer for the shape it
    *  failed to prevent — and folding them into one slot would silently drop
-   *  the first delivery's record. */
+   *  the first delivery's record.
+   *
+   *  `roles` is captured HERE, at delivery, not read at turn end. What the
+   *  agent could have delegated into is a fact about the moment the hint
+   *  reached it: a catalog that changes later — a role added mid-turn, an
+   *  envelope swapped between the hint and the settle — would otherwise
+   *  rewrite history and make an ignored hint under an empty catalog
+   *  indistinguishable from one under a full catalog, which is the exact
+   *  distinction this row exists to draw. */
   private opportunities: Array<{
-    id: string; trigger: DelegationHintTrigger; step: number; hintId: string; converted: boolean;
+    id: string; trigger: DelegationHintTrigger; step: number; hintId: string;
+    roles: readonly string[]; converted: boolean;
   }> = [];
   /** The autonomous arm: an `agents` call on a turn no hint was delivered to.
    *  Recorded as its own fact rather than folded into the instructed rows, so
-   *  each arm keeps its own denominator (`delegation_opportunity.surface`). */
-  private unpromptedDelegation: { step: number } | null = null;
+   *  each arm keeps its own denominator (`delegation_opportunity.surface`).
+   *  Its roles are captured when the call lands, for the reason above. */
+  private unpromptedDelegation: { step: number; roles: readonly string[] } | null = null;
   /** The most recent step boundary {@link steerFor} saw; -1 before the first.
    *  The step an unprompted delegation is stamped with. */
   private lastBoundaryStep = -1;
@@ -453,7 +465,7 @@ export class TurnSteering {
       // The model reached for delegation with no hint behind it. That is the
       // autonomous arm doing exactly what the instructed arm is measured for —
       // recorded once, at its first call, so a swarm plus its children's calls
-      this.unpromptedDelegation = { step: this.lastBoundaryStep };
+      this.unpromptedDelegation = { step: this.lastBoundaryStep, roles: this.currentRoles() };
     }
     if (this.fired && this.answersTheSteer(ctx)) this.converted = true;
   }
@@ -627,6 +639,7 @@ export class TurnSteering {
       trigger,
       step,
       hintId: `${trigger}:${fnv1a64(template)}`,
+      roles: this.currentRoles(),
       converted: false,
     });
   }
@@ -651,7 +664,7 @@ export class TurnSteering {
         hintId: opportunity.hintId,
         trigger: opportunity.trigger,
         step: opportunity.step,
-        roles: this.currentRoles(),
+        roles: [...opportunity.roles],
         converted: opportunity.converted,
       });
     }
@@ -660,7 +673,7 @@ export class TurnSteering {
         opportunityId: `dop-${nanoid(10)}`,
         surface: 'unprompted',
         step: this.unpromptedDelegation.step,
-        roles: this.currentRoles(),
+        roles: [...this.unpromptedDelegation.roles],
         converted: true,
       });
     }

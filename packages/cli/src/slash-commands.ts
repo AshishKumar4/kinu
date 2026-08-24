@@ -7,6 +7,7 @@
 
 import { ADVISOR_SEVERITIES, isAdvisorSeverity, isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type BranchStatusEvent, type EvolutionConfigView, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu.run/core';
 import type { AgentChangelogView, AgentClient, AgentClientStatus, AgentSearchNode } from './agent-client';
+import { renameLocalAgent } from './agent-create';
 import { loadActiveProfile, updateDefaultTier } from './profiles';
 
 export interface SlashCommandInfo {
@@ -24,6 +25,7 @@ export const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
   { name: '/model', description: 'Open the account default-tier model picker or set it', usage: '/model [spec]' },
   { name: '/effort', description: 'Show or set default-tier reasoning effort', usage: '/effort [low|medium|high]' },
   { name: '/role', description: 'Show or select this agent role', usage: '/role [id]' },
+  { name: '/rename', description: 'Rename this agent; a name you choose is never auto-replaced', usage: '/rename <name>', requires: 'localControls' },
   { name: '/settings', description: 'Open interactive settings' },
   { name: '/models', description: 'List configured model providers', requires: 'localControls' },
   { name: '/memory', description: 'Show memory' },
@@ -137,6 +139,14 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
       return { kind: 'exit' };
     case '/cancel':
       return { kind: 'cancel' };
+    case '/rename': {
+      if (client.mode !== 'local') {
+        return { kind: 'text', text: 'Cloud workspaces are renamed from the web sidebar.' };
+      }
+      if (!arg) return { kind: 'text', text: 'Usage: /rename <name>' };
+      const renamed = renameLocalAgent(client.agentName, arg);
+      return { kind: 'text', text: `Renamed to ${renamed.displayName}.` };
+    }
     case '/help':
       return { kind: 'text', text: commandHelp(client) };
     case '/settings':
@@ -313,7 +323,16 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
   }
 }
 
-/** /model edits the account-wide default tier. Every unresolved tier aliases it. */
+/**
+ * `/model` and `/effort` edit the DEFAULT TIER of whichever store is
+ * canonical right now: the account's catalog when signed in, the local
+ * authority when not. Every unresolved tier aliases that one.
+ *
+ * The client is not asked to do anything. The session resolves its authority
+ * per turn, so writing the envelope is what makes the next turn run under the
+ * new tier — a second write through the client would be a duplicate of the
+ * same setting in a second place.
+ */
 export async function setModelPreference(
   _client: Pick<AgentClient, 'setModel'>,
   spec: string,

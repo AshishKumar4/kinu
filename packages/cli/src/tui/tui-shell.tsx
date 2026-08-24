@@ -6,7 +6,7 @@ import { useKeyboard, useRenderer, useTerminalDimensions } from '@opentui/react'
 
 import { AGENT_HOME, canonicalProjectRoot } from '../config';
 import { agentWorkspaceKey, groupAgentWorkspaces, type ListedAgent } from '../agent-list';
-import { clipText } from './format';
+import { agentDisplayLabel, clipText } from './format';
 import {
   createKeybindingRegistry,
   createKeyDispatcher,
@@ -679,14 +679,14 @@ function NavigatorRow(props: {
           {marker}
           <span fg={colors.text.muted}>{row.nested ? '  ' : ''}</span>
           <span fg={agent.status === 'running' ? colors.intent.accent : colors.text.muted}>{agent.status === 'running' ? '● ' : '○ '}</span>
-          <span fg={props.selected || props.active ? colors.text.strong : colors.text.primary}>{clipText(agent.label, 16)}</span>
+          <span fg={props.selected || props.active ? colors.text.strong : colors.text.primary}>{clipText(agentDisplayLabel(agent.label), 16)}</span>
         </text>
       </box>
       {agent.subordinates?.map((subordinate) => (
         <text key={subordinate.id}>
           <span fg={colors.border.strong}>{row.nested ? '    └ ' : '  └ '}</span>
           <span fg={subordinate.status === 'running' ? colors.intent.success : colors.text.muted}>
-            {clipText(subordinate.roleId === undefined ? subordinate.label : `${subordinate.label} · ${subordinate.roleId}`, 18)}
+            {clipText(subordinate.roleId === undefined ? agentDisplayLabel(subordinate.label) : `${agentDisplayLabel(subordinate.label)} · ${subordinate.roleId}`, 18)}
           </span>
         </text>
       ))}

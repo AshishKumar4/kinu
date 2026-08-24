@@ -8,7 +8,7 @@
 // for known keys, generic get/set/delete for everything else, all() for fork.
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import { isReasoningEffort, type ReasoningEffort } from '../strategy/effort';
-import { isValidRoleId, type RoleId } from '../profiles/catalog';
+import { isTierId, isValidRoleId, type RoleId, type TierId } from '../profiles/catalog';
 import {
   DEFAULT_CACHE_RETENTION, isCacheRetention, type CacheRetention,
 } from '../prompting/cache-breakpoints';
@@ -39,6 +39,15 @@ export const AGENT_CONFIG_KEYS = {
   activeRoleId: 'active_role_id',
   /** The owner's self-switch policy: 'allow' | 'approval' | 'locked'. */
   roleChangePolicy: 'role_change_policy',
+  /** The inference tier a PARENT pinned on this agent when it hired it.
+   *
+   *  Unset is the ordinary case and it is not a default: it means no tier was
+   *  pinned, so the turn boundary derives one from the role, which is the
+   *  documented promise that "a role's own default tier is re-derived by the
+   *  child at its next turn boundary from its roleId". A pin is what a hire
+   *  with an EXPLICIT tier leaves behind, because that choice is not
+   *  recoverable from the roleId. */
+  assignedTier: 'assigned_tier',
   /** The shell-approval MODE the owner set (strict | allow_all | deny_all). */
   shellApprovalMode: 'shell_approval_mode',
   /** Comma-separated `<rule>@<executor>` pairs the owner has said "always" to.
@@ -130,6 +139,20 @@ export interface AgentConfigStore {
    *  role on first read (research→researcher, build→implementer,
    *  audit→auditor). */
   getActiveRoleId(): RoleId;
+  /** Set the agent's durable active role. The NEXT resolved turn reads it; a
+   *  running step keeps the profile it already resolved (profiles/
+   *  role-change.ts). This is the writer a hire uses to seed a child's role,
+   *  and the reason it is typed: the value must be a catalog role id, and a
+   *  generic `set` let an unvalidated string reach a reader that answers
+   *  `general` for anything it does not recognise — a dropped assignment that
+   *  looks exactly like an agent nobody assigned. */
+  setActiveRoleId(roleId: RoleId): void;
+  /** The tier a parent pinned at hire, or null when none was. Null is the
+   *  instruction to derive from the role rather than a tier of its own, so
+   *  callers pass `?? undefined` as the resolver's `explicitTier`. */
+  getAssignedTier(): TierId | null;
+  /** Pin the hired tier, or clear it with null. */
+  setAssignedTier(tier: TierId | null): void;
   /** The owner's self-switch policy for this agent. Unset reads as `allow`. */
   getRoleChangePolicy(): 'allow' | 'approval' | 'locked';
   setRoleChangePolicy(policy: 'allow' | 'approval' | 'locked'): void;
@@ -345,6 +368,21 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
       if (mapped !== null) set(AGENT_CONFIG_KEYS.activeRoleId, mapped);
       if (legacy !== null) void sql`DELETE FROM agent_config WHERE key = ${'agent_stance'}`;
       return mapped ?? 'general';
+    },
+    setActiveRoleId(roleId) { set(AGENT_CONFIG_KEYS.activeRoleId, roleId); },
+    getAssignedTier(): TierId | null {
+      const stored = get(AGENT_CONFIG_KEYS.assignedTier);
+      // An unrecognised value reads as unpinned rather than throwing: the
+      // honest answer for a tier this build does not know is "no pin", and the
+      // role's own tier is a working turn instead of a dead agent.
+      return stored !== null && isTierId(stored) ? stored : null;
+    },
+    setAssignedTier(tier) {
+      if (tier === null) {
+        void sql`DELETE FROM agent_config WHERE key = ${AGENT_CONFIG_KEYS.assignedTier}`;
+        return;
+      }
+      set(AGENT_CONFIG_KEYS.assignedTier, tier);
     },
     getRoleChangePolicy(): 'allow' | 'approval' | 'locked' {
       const v = get(AGENT_CONFIG_KEYS.roleChangePolicy);

@@ -319,6 +319,21 @@ export interface SwarmRunDeps {
    */
   readonly profile?: SwarmProfileSnapshot;
   /**
+   * Turns a resolved tier's model SPEC into the model a node runs on.
+   *
+   * Wired by `agents-tool.ts` from `AgentsForkDeps.resolveModel`, which every
+   * backend with a profile authority supplies. It exists because {@link model}
+   * is the CALLER's turn model and a delegation's `tier` is documented as the
+   * one routing input: without this seam the run recorded the tier's model in
+   * {@link profile} and then ran the caller's, so the spend and the provenance
+   * both named a model that never executed.
+   *
+   * Required whenever {@link profile} is present — the run REFUSES otherwise
+   * rather than run one model under a record naming another. Absent with no
+   * profile is the unrouted case: no catalog, no tier, nodes run {@link model}.
+   */
+  readonly resolveModel?: (spec: string) => LanguageModel;
+  /**
    * This call is an evict/exit RE-DRIVE of a durable job row, so it RE-ENTERS the
    * interrupted search for this task rather than starting a new one.
    *
@@ -926,6 +941,10 @@ function modelSpecOf(model: LanguageModel): string {
  *  verbatim below the threshold and compacted ONCE above it. See the note above
  *  `modelSpecOf`. */
 async function sharedPrefix(input: {
+  /** The model the CHILDREN of this parent run on, which is the window this
+   *  threshold has to be measured against — the caller's own model is not what
+   *  will be asked to hold the prefix. */
+  readonly model: LanguageModel;
   readonly parent: TreeNode;
   readonly deps: SwarmRunDeps;
   readonly log: Logger;
@@ -937,7 +956,7 @@ async function sharedPrefix(input: {
   const chars = parent.transcript.reduce(
     (total, message) => total + JSON.stringify(message.content).length, 0,
   );
-  const window = contextWindowForModel(modelSpecOf(deps.model));
+  const window = contextWindowForModel(modelSpecOf(input.model));
   const room = window * CONTEXT_COMPACTION_THRESHOLD;
   if (estimateTokens(chars) < room) return parent.transcript;
   if (!deps.compactShared) {
@@ -1862,6 +1881,51 @@ export async function runSwarm(
   }
 
   /**
+   * THE MODEL EVERY NODE RUNS ON, decided once, here.
+   *
+   * `deps.model` is the CALLER's own turn model. When a profile record exists,
+   * its `tier.model` is what this delegation was routed to, so that is what the
+   * nodes run — and BOTH cases read the same field, which is what makes a
+   * re-drive continue on the model it started on. Today's catalog cannot reach
+   * an in-flight tree because today's catalog is never consulted: the re-drive
+   * arm reads the claimed ledger row, and the row was frozen before the first
+   * attempt detached.
+   *
+   * REFUSED, not degraded, in both directions. When the seam is MISSING,
+   * running the caller's model while the ledger row names the tier's would put
+   * a model that never executed into the provenance AND into the spend, and
+   * both are read later as evidence of what this search cost. When the seam
+   * THROWS — a session with no registry to build that spec, an unknown
+   * provider, a revoked credential — the honest answer is that this tier is
+   * unreachable HERE, and a refusal says so where a propagated throw would hand
+   * the operator a stack instead of the fact. The cause chain is kept, because
+   * the provider's own reason is the actionable half.
+   */
+  let nodeModel = deps.model;
+  if (runProfile) {
+    const spec = runProfile.profile.tier.model;
+    const tier = runProfile.profile.tier.id;
+    if (!deps.resolveModel) {
+      return unsupported(
+        `this search is routed to the ${tier} tier, model ${JSON.stringify(spec)}, but no model `
+        + 'resolver is wired in this runner — so its nodes could only run the caller\'s own '
+        + 'model while the run records the tier\'s. Wire AgentsForkDeps.resolveModel on this '
+        + 'backend.',
+      );
+    }
+    try {
+      nodeModel = deps.resolveModel(spec);
+    } catch (error) {
+      return refusalOf(new KinuError('unavailable',
+        `this search is routed to the ${tier} tier, model ${JSON.stringify(spec)}, and this `
+        + 'runtime cannot build that model, so the tier it was routed to is unreachable here. '
+        + 'Point the tier at a model this session can resolve, or give the session a resolver '
+        + 'that can.',
+        { cause: error }));
+    }
+  }
+
+  /**
    * AND IF IT IS NEITHER, IT IS NOTHING. A call that did not re-enter and finds a
    * search of its own task STILL RUNNING is refused rather than given a second tree.
    *
@@ -2137,7 +2201,7 @@ export async function runSwarm(
    * tool at all.
    */
   const nodeDeps: NodeAgentDeps = {
-    rt: deps.rt, model: deps.model, journal, logger: log,
+    rt: deps.rt, model: nodeModel, journal, logger: log,
     // The wall clock is OPT-IN (deps.maxWallClockMs, wired below when declared):
     // there is no default clock over a node's work. Its turn runs until it is
     // done, cancelled, refused by its mission governor, or fails definitively.
@@ -2230,7 +2294,7 @@ export async function runSwarm(
     });
     if (!agentNodes) {
       const result = await generateText({
-        model: deps.model,
+        model: nodeModel,
         system: prompt.system,
         prompt: prompt.user,
         abortSignal: deps.signal,
@@ -2574,7 +2638,7 @@ export async function runSwarm(
           aggregated: consumed,
           ancestors: pathTo(nodes, primary),
           prefix: agentNodes
-            ? await sharedPrefix({ parent: primary, deps, log, preset: resolved.preset })
+            ? await sharedPrefix({ parent: primary, deps, model: nodeModel, log, preset: resolved.preset })
             : [],
         }));
       } catch (error) {
@@ -2733,7 +2797,9 @@ export async function runSwarm(
     // The *Inherited context* barrier: ONE compacted view per branch point, computed
     // before any child of this parent starts, so nothing a level is ranked on can be a
     // fact about which sibling's compaction kept the useful paragraph.
-    const prefix = agentNodes ? await sharedPrefix({ parent, deps, log, preset: resolved.preset }) : [];
+    const prefix = agentNodes
+      ? await sharedPrefix({ parent, deps, model: nodeModel, log, preset: resolved.preset })
+      : [];
     // What a child starts from: the proposal's per-branch answer where one was
     // granted, otherwise the run's `context`. `expand:'mutate'` used to ask this and
     // was cut for exactly that reason — it was a second spelling of `context`.

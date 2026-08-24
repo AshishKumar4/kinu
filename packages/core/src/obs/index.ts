@@ -54,6 +54,7 @@ export {
   type Refusal,
 } from './error';
 export {
+  createCompositeLogger,
   createConsoleLogger,
   createLineLogger,
   createRecordingLogger,

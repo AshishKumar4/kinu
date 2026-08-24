@@ -11,7 +11,10 @@ export type {
   TierAssignment, TierAssignments, RoleDefinition, RoleCatalog, ProfileCatalog,
   ProfileAuthority, ProfileCatalogEnvelope,
 } from './catalog';
-export { loadProfileAuthorityInputs, resolveTurnProfile, resolveAgentTurnProfile } from './resolve';
+export {
+  loadProfileAuthorityInputs, resolveTurnProfile, resolveAgentTurnProfile,
+  ProviderCatalogSnapshotSchema,
+} from './resolve';
 export type {
   ProfileAuthorityInputs, ProviderCatalogSnapshot, TierSource,
   ResolveTurnProfileInput, ResolveAgentTurnProfileInput, ResolvedTurnProfile,
@@ -21,8 +24,10 @@ export {
   type ModelRoutePolicy, type ProfileRoutedSource, type ModelRouteResolution,
 } from './model-route';
 export {
-  changeActiveRole, decideStagedRole, roleWidensCapabilities, ROLE_POLICY_KEY,
-  type RoleChangeActor, type RoleChangePolicy, type RoleChangeOutcome, type RoleStateStore,
+  changeActiveRole, decideStagedRole, roleWidensCapabilities, roleChangeOutcomeText,
+  ROLE_POLICY_KEY,
+  type RoleChangeActor, type RoleChangePolicy, type RoleChangeOutcome,
+  type RoleChangeRefusal, type RoleStateStore,
 } from './role-change';
 export {
   validateSwarmProfileSnapshot,

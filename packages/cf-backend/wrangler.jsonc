@@ -103,7 +103,15 @@
       // (keyed by agent name). Binding name MUST be "Sandbox" — the SDK's
       // proxyToSandbox hardcodes `env.Sandbox` lookup (see
       // @cloudflare/sandbox/dist/file-stream-*.js:3448).
-      { "class_name": "KinuSandbox", "name": "Sandbox" }
+      { "class_name": "KinuSandbox", "name": "Sandbox" },
+      // Control plane — one instance ("site"), the singleton the admin surface
+      // reads. It is a singleton because its questions are fleet-wide: "who are
+      // the users", "which workspaces exist", "what did an admin do" have no
+      // per-user shard that could answer them, and a fan-out over every UserDO
+      // is a subrequest count that grows with the account. It holds an INDEX and
+      // an AUDIT LOG and no business logic: every action it exposes proxies an
+      // existing @callable on the DO that already owns that state.
+      { "class_name": "ControlPlaneDO", "name": "ControlPlaneDO" }
       //
       // SSH/laptop (user's local machine via WebSocket tunnel):
       //   No binding needed — users run a local daemon. The executor becomes
@@ -125,10 +133,9 @@
       }
     }
   ],
-  // This worker name has never been deployed, so it has no class-registration
-  // history: every SQLite-backed DO class is new under one tag. The sequence
-  // becomes append-only from the FIRST deploy onwards — a later class gets its
-  // own tag, and this one is never edited again. `ExplorationAgent` is here
+  // Append-only from the first deploy onwards. `v1` registered the six classes
+  // this Worker shipped with and is never edited again — a later SQLite class
+  // gets its own tag, which is what `v2` is. `ExplorationAgent` is in v1
   // without a binding above because it is reached as a facet of
   // OrchestratorAgent rather than by name.
   "migrations": [
@@ -138,6 +145,10 @@
         "OrchestratorAgent", "ExplorationAgent", "KinuSandbox", "UserDO",
         "NimbusSession", "MonitorDO"
       ]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["ControlPlaneDO"]
     }
   ],
   // Synthetic monitoring. Every 15 minutes the worker probes its own public
@@ -214,6 +225,21 @@
     // Where synthetic-monitoring alerts land. Same mail path as the Mission
     // Inbox, so it works exactly when outbound email does.
     "OPS_ALERT_EMAIL": "me@ashishkumarsingh.com",
+    // Who may reach /control and /api/control/*. A comma-separated allowlist of
+    // verified session emails, deliberately a var rather than a secret: an
+    // allowlist that cannot be read is an allowlist nobody can audit, and the
+    // addresses are not credentials. EMPTY MEANS NOBODY, and the admin plane
+    // then answers 404 to every caller including this owner — which is the
+    // right default for any deployment that has not decided its operators.
+    "CONTROL_PLANE_ADMINS": "me@ashishkumarsingh.com",
+    // Account the Analytics Engine SQL API is queried against. The same id as
+    // `account_id` above; a plain var because it is in this file already, and
+    // the Worker cannot read the deploy-time field. Its companion is the
+    // ANALYTICS_SQL_API_TOKEN secret (Account Analytics: Read):
+    //   npx wrangler secret put ANALYTICS_SQL_API_TOKEN
+    // With either absent the control plane's metrics view reports itself
+    // unconfigured; every other admin view is unaffected.
+    "CLOUDFLARE_ACCOUNT_ID": "f44999d1ddda7012e9a87729eba250f1",
     // OAuth provider visibility is config-driven. A provider appears on
     // /login only when both its CLIENT_ID var and CLIENT_SECRET secret exist.
     // Set ids as vars and secrets via `wrangler secret put`:
@@ -239,6 +265,20 @@
   // user's own chat calls deliberately do NOT ride this binding: they carry that
   // user's Cloudflare OAuth credential so the usage bills to their account.
   "ai": { "binding": "AI" },
+  // Analytics Engine — the fleet-level aggregate plane. Three datasets rather
+  // than one because sampling is keyed on `index1`: a single dataset would let
+  // a noisy turn stream sample away the admin audit markers, and three unrelated
+  // row shapes would have to share twenty blob slots. Writes are unsampled
+  // fire-and-forget from the Worker; reads go over the SQL API, which is why
+  // CLOUDFLARE_ACCOUNT_ID + ANALYTICS_SQL_API_TOKEN exist. NOTHING user-authored
+  // is written here — no prompt, no message, no free text, no email, no header:
+  // the two identifiers that could carry user text (workspace name, admin
+  // email) are digested before they are written.
+  "analytics_engine_datasets": [
+    { "binding": "AGENT_METRICS", "dataset": "kinu_agent_metrics" },
+    { "binding": "FEEDBACK_MARKERS", "dataset": "kinu_feedback_markers" },
+    { "binding": "CONTROL_PLANE_OPS", "dataset": "kinu_control_plane_ops" }
+  ],
   // R2 bucket for sandbox /workspace snapshots (squashfs archives), written and
   // read by KinuSandbox. Bucket: `wrangler r2 bucket create kinu-backups`
   // (already created). Set an R2 lifecycle rule on the `backups/` prefix to GC
@@ -268,7 +308,13 @@
   // 127 while the local CLI (which ships the runtimes as npm packages) worked.
   "r2_buckets": [
     { "binding": "BACKUP_BUCKET", "bucket_name": "kinu-backups" },
-    { "binding": "NIMBUS_RUNTIME_CACHE", "bucket_name": "nimbus-runtime-cache" }
+    { "binding": "NIMBUS_RUNTIME_CACHE", "bucket_name": "nimbus-runtime-cache" },
+    // In-product feedback screenshots. Bytes live here and NEVER in a Durable
+    // Object row or an analytics blob: a PNG is megabytes, a DO row is read by
+    // the admin list view, and an AE datapoint has a 16 KiB budget. The row in
+    // ControlPlaneDO carries the object key only.
+    //   wrangler r2 bucket create kinu-feedback
+    { "binding": "FEEDBACK_BUCKET", "bucket_name": "kinu-feedback" }
   ],
   // Browser sessions, one-time OAuth state, and CLI browser-approval state.
   // All of it expires on its own clock, and all of it is read at the edge on
@@ -352,7 +398,8 @@
           { "class_name": "UserDO", "name": "UserDO" },
           { "class_name": "MonitorDO", "name": "MonitorDO" },
           { "class_name": "NimbusSession", "name": "NIMBUS_SESSION" },
-          { "class_name": "KinuSandbox", "name": "Sandbox" }
+          { "class_name": "KinuSandbox", "name": "Sandbox" },
+          { "class_name": "ControlPlaneDO", "name": "ControlPlaneDO" }
         ]
       },
       "containers": [
@@ -363,8 +410,8 @@
           "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 }
         }
       ],
-      // Same reasoning as production's: `kinu-staging` has never been deployed
-      // either, so one tag registers the lot.
+      // Append-only here too, and for the same reason: `v1` is the shipped set
+      // and `v2` adds the control plane. The two environments stay one shape.
       "migrations": [
         {
           "tag": "v1",
@@ -372,6 +419,10 @@
             "OrchestratorAgent", "ExplorationAgent", "KinuSandbox", "UserDO",
             "NimbusSession", "MonitorDO"
           ]
+        },
+        {
+          "tag": "v2",
+          "new_sqlite_classes": ["ControlPlaneDO"]
         }
       ],
       // No cron trigger and no OPS_ALERT_EMAIL here: staging has no OAuth
@@ -382,6 +433,14 @@
       // Inbox stays off (no routing rule points here; outbound sends skip).
       "send_email": [{ "name": "EMAIL" }],
       "ai": { "binding": "AI" },
+      // Staging's OWN datasets. Analytics Engine datasets are account-scoped, so
+      // a shared name is an eval run writing into the numbers an operator reads —
+      // the same class of leak as the R2 and Vectorize notes below.
+      "analytics_engine_datasets": [
+        { "binding": "AGENT_METRICS", "dataset": "kinu_agent_metrics_staging" },
+        { "binding": "FEEDBACK_MARKERS", "dataset": "kinu_feedback_markers_staging" },
+        { "binding": "CONTROL_PLANE_OPS", "dataset": "kinu_control_plane_ops_staging" }
+      ],
       // BACKUP_BUCKET is staging's OWN bucket. It used to be production's
       // `kinu-backups`, which meant every /workspace snapshot an eval's
       // sandbox took was written into the bucket holding real users' archives —
@@ -394,7 +453,8 @@
       // prove the hosted path rather than a copy of it.
       "r2_buckets": [
         { "binding": "BACKUP_BUCKET", "bucket_name": "kinu-backups-staging" },
-        { "binding": "NIMBUS_RUNTIME_CACHE", "bucket_name": "nimbus-runtime-cache" }
+        { "binding": "NIMBUS_RUNTIME_CACHE", "bucket_name": "nimbus-runtime-cache" },
+        { "binding": "FEEDBACK_BUCKET", "bucket_name": "kinu-feedback-staging" }
       ],
       // Staging's own memory index, at the 384 dimensions the Workers AI
       // embedder produces. Production's index is NOT bound here: a shared one
@@ -430,7 +490,17 @@
         // packages/test-utils/src/eval-identity.ts.
         "DEV_USER_EMAIL": "eval-service@kinu.run",
         // Same single choice as production — see the note on the production var.
-        "SANDBOX_TRANSPORT": "rpc"
+        "SANDBOX_TRANSPORT": "rpc",
+        // EMPTY, AND THIS IS THE LOAD-BEARING LINE IN THIS ENVIRONMENT.
+        // `DEV_USER_EMAIL` above makes every request to this deployment resolve
+        // to one synthesized identity with a fresh auth time, so a non-empty
+        // allowlist here would hand full admin authority to any unauthenticated
+        // caller who can reach staging.kinu.run. The admin gate independently
+        // refuses a `provider: 'dev'` identity, so this is the second of two
+        // locks rather than the only one — but it is the one a reader of this
+        // file can check.
+        "CONTROL_PLANE_ADMINS": "",
+        "CLOUDFLARE_ACCOUNT_ID": "f44999d1ddda7012e9a87729eba250f1"
       }
     }
   }

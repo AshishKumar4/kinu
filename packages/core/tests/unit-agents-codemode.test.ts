@@ -95,9 +95,18 @@ function withBuildMode(deps: TestAgentsToolDeps): AgentsToolDeps {
   return { mode: 'build', ...deps };
 }
 
+/** The swarm substrate, with the tier-model seam wired.
+ *
+ *  `resolveModel` is required in effect wherever a profile catalog is: a run
+ *  carrying a resolved snapshot and finding no resolver refuses rather than run
+ *  the caller's model under a record naming the tier's. This fixture answers
+ *  with one model for every spec because these tests are about the delegation
+ *  surface; WHICH model a tier reaches is pinned in
+ *  unit-swarm-profile-routing.test.ts. */
 function forkDeps(overrides: Partial<AgentsForkDeps> = {}): AgentsForkDeps {
   const { rt } = createTestRuntime();
-  return { rt, model: new MockLanguageModelV3(), ...overrides };
+  const model = new MockLanguageModelV3();
+  return { rt, model, resolveModel: () => model, ...overrides };
 }
 
 const rosterEntry: SubordinateRosterEntry = {
@@ -123,10 +132,21 @@ function makeTeam() {
         name: input.name ?? 'researcher',
         displayName: 'Researcher',
         subordinate: {
-          name: input.name ?? 'researcher', displayName: 'Researcher', role: input.role,
+          name: input.name ?? 'researcher', displayName: 'Researcher', role: input.role ?? 'general',
           createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null,
         },
       }),
+      rename: async (input) => {
+        recordCall(calls, 'rename', input);
+        return {
+          ok: true, name: input.name, displayName: input.displayName,
+          subordinate: { ...rosterEntry, name: input.name, displayName: input.displayName },
+        };
+      },
+      recordTitle: async (input) => {
+        recordCall(calls, 'recordTitle', input);
+        return { ok: true, name: input.name, displayName: input.displayName };
+      },
       spawn: async (input) => {
         recordCall(calls, 'spawn', input);
         return { name: input.name ?? 'researcher', displayName: 'Researcher' };

@@ -135,12 +135,12 @@ describe('turn-pipeline correctness wiring', () => {
     expect(headRuntime).toContain('operations?: ModelOperationSink');
   });
 
-  test('the agents fork substrate carries no strategy objects', () => {
-    // The fork action is gone; the mcts/heads wiring it consumed is gone with
-    // it, not kept warm. Only rt/model/costModel/nodeHost/nodeHome/
-    // compactShared cross the seam now.
+  test('the agents swarm substrate carries no strategy objects', () => {
+    // The fork action is gone. Each backend builds the typed swarm substrate
+    // directly, with no pass-through wrapper and no dormant strategy objects.
     const depsBody = memberBody(actor, 'private getAgentsToolDeps(workMode: WorkMode)');
-    expect(depsBody).toContain('buildStrategyForkDeps({');
+    expect(depsBody).toContain('fork: {');
+    expect(depsBody).toContain('resolveModel:');
     expect(depsBody).not.toContain('mcts:');
     expect(depsBody).not.toContain('heads:');
     expect(actor).not.toContain('defaultOptions');
@@ -201,20 +201,26 @@ describe('turn-pipeline correctness wiring', () => {
     expect(beforeTurn).toContain('lastTurnOpts.providerOptions = providerOptions');
   });
 
-  test('provider-agnostic auxiliary calls use low effort without implicit output caps', () => {
+  test('provider-agnostic auxiliary calls take their effort from the route, not a constant', () => {
     expect(exploration).not.toContain('maxOutputTokens');
     // Low effort is no longer DERIVED here. Every auxiliary caller asks the
     // shared owner-scoped services for it, and those services are the single
     // place that turns an effort level into provider options.
     expect(exploration).not.toContain('reasoningEffortOptions');
-    // Two askers in this file: the MCTS rollout and the pruned-branch
-    // reflection. The recursive-split merge asks through the one HeadRuntime,
-    // over this same services object.
-    expect(exploration.match(/resolveModelWithEffort\([^)]*'low'\)/g)?.length).toBe(2);
+    // And no auxiliary caller NAMES an effort any more. `'low'` was a second
+    // decision sitting beside a routed model: the tier that chose the model
+    // already chose how hard to run it, and a constant here overrode it. The
+    // two askers in this file — the MCTS rollout and the pruned-branch
+    // reflection — both read `route.reasoningEffort` now.
+    expect(exploration).not.toMatch(/resolveModelWithEffort\([^)]*'(low|medium|high)'\)/);
+    expect(exploration.match(/resolveModelWithEffort\(\s*\n?\s*route\.model, route\.reasoningEffort,?\s*\n?\s*\)/g)?.length).toBe(2);
     expect(ownedModelServices.match(/reasoningEffortOptions\(/g)?.length).toBe(1);
     expect(headRuntime).not.toContain('maxOutputTokens');
     expect(headRuntime).not.toContain('reasoningEffortOptions');
-    expect(headRuntime).toContain("resolveModelWithEffort(deps.mergeModelSpec(), 'low')");
+    // The recursive-split merge asks through the one HeadRuntime, over the same
+    // services object, on the tier its `judge` spend label routes to.
+    expect(headRuntime).toContain("resolveModelRoute('judge', await deps.profile())");
+    expect(headRuntime).toContain('route.model, route.reasoningEffort,');
     // Chat and all auxiliary profile lanes derive provider options at the
     // point where their resolved concrete model is known.
     expect(effortDerivationSites()).toEqual([
@@ -539,12 +545,16 @@ describe('turn-pipeline correctness wiring', () => {
     expect(config?.system).toContain('## Role: Auditor (auditor)');
   });
 
-  test('a delegation opportunity carries every role the ACTIVE catalog offers', async () => {
+  test('a delegation opportunity carries the roles the catalog offered AT DELIVERY', async () => {
     // The wiring this pins: the DO hands its orchestrator a roleCatalog
-    // callback that reads the turn's active envelope LAZILY, so each
-    // opportunity row stamps the ids the catalog offers at that moment —
-    // the difference between an ignored hint under an empty catalog (wiring)
-    // and one under a full catalog (behaviour).
+    // callback, and the steering object reads it at the moment a hint is
+    // delivered — so each row stamps the ids that were on offer then. That is
+    // the difference between an ignored hint under an empty catalog (a wiring
+    // gap) and one under a full catalog (behaviour).
+    //
+    // A CALLBACK rather than a constructor argument because the catalog changes
+    // between turns; captured at delivery rather than read at turn end because
+    // a catalog that moved afterwards would rewrite what the agent was offered.
     const harness = orchestratorHarness();
     const agent = harness.agent;
     const orch = agent.observeOrch();
@@ -566,14 +576,25 @@ describe('turn-pipeline correctness wiring', () => {
     const [row] = orch.steering.delegationSnapshot();
     expect(row?.roles).toEqual(Object.keys(effectiveRoleCatalog(BUILTIN_PROFILE_CATALOG)));
 
-    // Lazily read: swap the active envelope for a different catalog, and the
-    // SAME row now reports the new catalog's ids.
+    // Swap the active envelope for a different catalog AFTER the hint was
+    // delivered. The already-recorded row keeps what was on offer when it was
+    // delivered — the row is evidence about a moment, not a live view.
     Reflect.set(agent, '_turnProfileInputs', {
       envelope: CUSTOM_ENVELOPE,
       provider: { revision: 'turn-pipeline-test', availableModels: [DEFAULT_WORKERS_AI_MODEL_SPEC] },
     });
     const swapped = orch.steering.delegationSnapshot();
-    expect(swapped[0]!.roles).toEqual(Object.keys(effectiveRoleCatalog(CUSTOM_CATALOG)));
+    expect(swapped[0]!.roles).toEqual(Object.keys(effectiveRoleCatalog(BUILTIN_PROFILE_CATALOG)));
+
+    // And the NEXT delivery reads the swapped catalog, which is what keeps the
+    // callback load-bearing rather than a constructor argument in disguise.
+    orch.beginTurn(Date.now());
+    prepare.call(orch.turnExtension, {
+      stepNumber: 0,
+      messages: [{ role: 'user' as const, content: 'now do a different fresh thing entirely' }],
+    });
+    expect(orch.steering.delegationSnapshot()[0]!.roles)
+      .toEqual(Object.keys(effectiveRoleCatalog(CUSTOM_CATALOG)));
   });
 
   test('the DO holds a keepAlive heartbeat until BOTH evolution lanes settle', () => {

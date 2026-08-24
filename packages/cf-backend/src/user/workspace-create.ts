@@ -18,6 +18,7 @@ import type { UserCredentialClient } from '../providers/agent-registry';
 import type { UserCaller } from './workspace-capability';
 import { listAvailableModels, type ModelMenuEntry } from './available-models';
 import type { WorkspaceEntry } from './user-do';
+import { indexNewWorkspace } from '../control-plane/index-feed';
 
 export interface CloudWorkspaceRegistry extends UserCredentialClient {
   getConfig(caller: UserCaller, key: string): Promise<string | null>;
@@ -66,6 +67,14 @@ export async function createCloudWorkspaceForUser(
   const identity = createInitialCloudAgentIdentity(input, purpose);
 
   const { entry, existed } = await userDO.registerWorkspace(caller, identity.name, identity.displayName, purpose);
+  // The control-plane index learns about a workspace the instant it is
+  // registered, so one created from an API call and never opened is still in the
+  // operator's list. Reported and non-fatal: the registry row is the truth and
+  // this is a copy of it, and the user drilldown reconciles from that row
+  // anyway.
+  await indexNewWorkspace(env, {
+    userId, name: entry.name, displayName: entry.displayName, createdAt: entry.createdAt,
+  });
   try {
     const initialization: InitializeOrchestratorInput = {
       env, userId, userDO, agentName: entry.name, displayName: entry.displayName,

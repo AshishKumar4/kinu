@@ -324,36 +324,98 @@ describe('the mark', () => {
 });
 
 /**
- * The README shows the real app as two static theme captures. A slideshow can
- * hide a weak frame between strong ones; the picture element instead gives
- * each colour mode one stable surface that a reviewer can inspect.
+ * The README opens on the bug-fix film.
+ *
+ * An animated WebP paints frame over frame, so its failure mode is a leak: a
+ * frame that alpha-blends onto the canvas leaves every earlier state showing
+ * through, which is how an earlier landing film shipped rendering the chat, the
+ * approval card and the tree all at once. Two properties rule that out and both
+ * are asserted here. The base frame paints the whole canvas, and every frame
+ * OVERWRITES its rectangle rather than blending into it, so no earlier pixel can
+ * survive under a later one. The third assertion is layout: the declared width
+ * and height are the canvas's own, so the page reserves the space before the
+ * bytes arrive and nothing below the film moves when it loads.
  */
-describe('the README app capture', () => {
-  const DARK = readFileSync(resolve(import.meta.dir, '../../../docs/assets/kinu-app-dark.webp'));
-  const LIGHT = readFileSync(resolve(import.meta.dir, '../../../docs/assets/kinu-app-light.webp'));
+describe('the README demo film', () => {
+  const FILM = readFileSync(resolve(import.meta.dir, '../../../docs/assets/kinu-bugfix-demo.webp'));
   const README = readFileSync(resolve(import.meta.dir, '../../../README.md'), 'utf8');
 
-  test('both theme captures are static WebP images', () => {
-    for (const [name, image] of [['dark', DARK], ['light', LIGHT]] as const) {
-      expect(image.subarray(0, 4).toString(), `${name} capture has no RIFF header`).toBe('RIFF');
-      expect(image.subarray(8, 12).toString(), `${name} capture is not WebP`).toBe('WEBP');
-      expect(image.includes('ANIM'), `${name} capture is an animation`).toBeFalse();
-      expect(image.includes('ANMF'), `${name} capture carries animation frames`).toBeFalse();
+  interface Frame {
+    readonly x: number; readonly y: number;
+    readonly width: number; readonly height: number;
+    /** False when the frame overwrites its rectangle, which is what we require. */
+    readonly blends: boolean;
+  }
+  interface Film {
+    readonly width: number; readonly height: number;
+    /** 0 is the WebP spelling of "loop forever". */
+    readonly loops: number;
+    readonly animated: boolean;
+    readonly frames: readonly Frame[];
+  }
+
+  /** WebP writes its geometry as little-endian 24-bit fields. */
+  function u24(buffer: Buffer, at: number): number {
+    return buffer[at]! | (buffer[at + 1]! << 8) | (buffer[at + 2]! << 16);
+  }
+
+  function readFilm(webp: Buffer): Film {
+    let width = 0, height = 0, loops = -1, animated = false;
+    const frames: Frame[] = [];
+    for (let at = 12; at + 8 <= webp.byteLength;) {
+      const tag = webp.subarray(at, at + 4).toString();
+      const size = webp.readUInt32LE(at + 4);
+      const body = webp.subarray(at + 8, at + 8 + size);
+      if (tag === 'VP8X') { width = u24(body, 4) + 1; height = u24(body, 7) + 1; }
+      if (tag === 'ANIM') { animated = true; loops = body.readUInt16LE(4); }
+      if (tag === 'ANMF') {
+        frames.push({
+          // The frame origin is stored halved, so the encoder can only place a
+          // frame on an even pixel.
+          x: u24(body, 0) * 2, y: u24(body, 3) * 2,
+          width: u24(body, 6) + 1, height: u24(body, 9) + 1,
+          // Flags bit 1: clear means alpha-blend onto the canvas, set means
+          // overwrite it.
+          blends: (body[15]! & 0x02) === 0,
+        });
+      }
+      at += 8 + size + (size & 1);
     }
-    expect(DARK.equals(LIGHT), 'dark and light modes use one recolored file').toBeFalse();
-    expect(DARK.byteLength + LIGHT.byteLength, 'README captures exceed 2.5 MB').toBeLessThan(2_500_000);
+    return { width, height, loops, animated, frames };
+  }
+
+  const film = readFilm(FILM);
+
+  test('the film is an animated WebP that loops forever', () => {
+    expect(FILM.subarray(0, 4).toString(), 'no RIFF header').toBe('RIFF');
+    expect(FILM.subarray(8, 12).toString(), 'not WebP').toBe('WEBP');
+    expect(film.animated, 'the film carries no animation chunk').toBeTrue();
+    expect(film.frames.length, 'a film needs more than one frame').toBeGreaterThan(1);
+    expect(film.loops, 'the film stops instead of looping').toBe(0);
+    expect(FILM.byteLength, 'the README film exceeds 2.5 MB').toBeLessThan(2_500_000);
   });
 
-  test('the README selects by colour mode and reserves its layout', () => {
+  test('no frame can smear the one before it', () => {
+    const base = film.frames[0]!;
+    expect(
+      { x: base.x, y: base.y, width: base.width, height: base.height },
+      'the first frame must paint the whole canvas, or frame one shows through',
+    ).toEqual({ x: 0, y: 0, width: film.width, height: film.height });
+
+    const blending = film.frames.filter((frame) => frame.blends).length;
+    expect(blending, 'frames that alpha-blend composite every earlier state into the current one').toBe(0);
+
+    const escaping = film.frames.filter((f) => f.x + f.width > film.width || f.y + f.height > film.height);
+    expect(escaping, 'a frame paints outside the canvas').toBeEmpty();
+  });
+
+  test('the README reserves the film layout and shows it before the install steps', () => {
     expect(README).toContain(
-      '<source media="(prefers-color-scheme: dark)" srcset="docs/assets/kinu-app-dark.webp">',
+      `src="docs/assets/kinu-bugfix-demo.webp" width="${String(film.width)}" height="${String(film.height)}">`,
     );
-    expect(README).toMatch(
-      /<img alt="[^"]+" src="docs\/assets\/kinu-app-light\.webp" width="900" height="563">/,
-    );
-    expect(README.indexOf('kinu-app-dark.webp'))
+    expect(README).toMatch(/<img alt="[^"]+" src="docs\/assets\/kinu-bugfix-demo\.webp"/);
+    expect(README.indexOf('kinu-bugfix-demo.webp'))
       .toBeLessThan(README.indexOf('## Install'));
-    expect(README).not.toContain('kinu-film-readme.webp');
   });
 });
 

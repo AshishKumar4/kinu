@@ -443,6 +443,12 @@ export {
   // panel, which used to guess it from ToolSet keys.
   TOOL_REACH,
   isBuiltinToolName,
+  // Role narrowing over BOTH surfaces from ONE merged allowed-tool set: the
+  // native ToolSet and the codemode namespaces `execute_tools` binds.
+  narrowToolSurface,
+  codemodeCapabilitiesFor,
+  CODEMODE_ONLY_CAPABILITIES,
+  type ToolSurfaceNarrowing,
   type ToolReach,
   type AgentsToolAction,
   type BuiltinToolName,
@@ -1316,7 +1322,6 @@ export {
 export {
   wrapToolsForBackground, CONFINED_BACKGROUNDABLE_TOOLS, type BackgroundableTool,
 } from './jobs/background-wrap';
-export { buildStrategyForkDeps, type ForkDepsWiring } from './orchestrator/fork-deps';
 export { createDurableMctsSession } from './orchestrator/mcts-session';
 export {
   skillsVfsOver, resolveTurnSkills, filterToolNamesBySkills, filterToolSetBySkills,
@@ -1585,12 +1590,14 @@ export type {
 export {
   MODEL_ROUTE_POLICY, resolveModelRoute, isPlatformRouted, modelRouteTable,
   loadProfileAuthorityInputs, resolveTurnProfile, resolveAgentTurnProfile,
+  ProviderCatalogSnapshotSchema,
   type ProfileAuthorityInputs, type ProviderCatalogSnapshot, type TierSource,
   type ResolveTurnProfileInput, type ResolveAgentTurnProfileInput, type ResolvedTurnProfile,
   type ModelRoutePolicy, type ProfileRoutedSource, type ModelRouteResolution,
-  changeActiveRole, decideStagedRole, roleWidensCapabilities,
+  changeActiveRole, decideStagedRole, roleWidensCapabilities, roleChangeOutcomeText,
   ROLE_POLICY_KEY,
-  type RoleChangeActor, type RoleChangePolicy, type RoleChangeOutcome, type RoleStateStore,
+  type RoleChangeActor, type RoleChangePolicy, type RoleChangeOutcome,
+  type RoleChangeRefusal, type RoleStateStore,
 } from './profiles';
 export type { ReasoningEffort } from './strategy/effort';
 export { REASONING_EFFORTS } from './strategy/effort';

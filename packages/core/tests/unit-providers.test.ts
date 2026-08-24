@@ -168,6 +168,108 @@ describe('ProviderRegistry', () => {
       expect(await r.defaultSpec(baseDeps())).toBe('alpha/a');
     });
   });
+
+  /** The listing methods sit in front of a turn's first token, so one slow
+   *  vendor used to add its whole latency to every provider behind it. These
+   *  pin the two properties that fix costs nothing: probes overlap, and the
+   *  answer's ORDER still comes from registration rather than from whoever
+   *  replied first. */
+  describe('provider probes overlap instead of queueing', () => {
+    /** A provider that yields the event loop `ticks` times inside its listing,
+     *  recording when it starts and finishes. Microtasks only — no timers, so
+     *  the proof is deterministic and a sequential regression fails rather than
+     *  hanging on a clock. */
+    function tracedProvider(id: string, ticks: number, trace: string[]): ModelProvider {
+      const model = new MockLanguageModelV3({ provider: id });
+      return {
+        id,
+        label: `${id} label`,
+        isAvailable: () => true,
+        listModels: async () => {
+          trace.push(`${id}:start`);
+          for (let i = 0; i < ticks; i += 1) await Promise.resolve();
+          trace.push(`${id}:end`);
+          return [{ id: `${id}-model` }];
+        },
+        createModel: () => model,
+      };
+    }
+
+    test('a slow provider does not delay the start of the ones after it', async () => {
+      const trace: string[] = [];
+      const r = createProviderRegistry();
+      r.register(tracedProvider('slow', 8, trace));
+      r.register(tracedProvider('quick', 0, trace));
+
+      await r.listAllModels(baseDeps());
+
+      // THE PROOF: `quick` both starts AND finishes while `slow` is still
+      // running. Sequentially that is unreachable — `slow:end` would precede
+      // `quick:start` — so this assertion cannot pass on a queued
+      // implementation, whatever the tick counts are.
+      expect(trace.indexOf('quick:start')).toBeLessThan(trace.indexOf('slow:end'));
+      expect(trace.indexOf('quick:end')).toBeLessThan(trace.indexOf('slow:end'));
+    });
+
+    test('the menu keeps registration order even when the later provider answers first', async () => {
+      const trace: string[] = [];
+      const r = createProviderRegistry();
+      r.register(tracedProvider('slow', 8, trace));
+      r.register(tracedProvider('quick', 0, trace));
+
+      const { models, failures } = await r.listAllModels(baseDeps());
+      // Completion order was quick-then-slow; the answer is slow-then-quick.
+      // A menu that reordered itself by vendor latency would be a different
+      // list on every call, and callers compare these lists.
+      expect(trace.indexOf('quick:end')).toBeLessThan(trace.indexOf('slow:end'));
+      expect(models.map((m) => m.provider)).toEqual(['slow', 'quick']);
+      expect(failures).toEqual([]);
+    });
+
+    test('one provider throwing is isolated while the others still overlap', async () => {
+      const trace: string[] = [];
+      const r = createProviderRegistry();
+      r.register(tracedProvider('slow', 8, trace));
+      r.register({
+        id: 'broken',
+        label: 'broken label',
+        isAvailable: () => true,
+        listModels: () => { throw new Error('broken credential is revoked'); },
+        createModel: () => new MockLanguageModelV3({ provider: 'broken' }),
+      });
+      r.register(tracedProvider('quick', 0, trace));
+
+      const { models, failures } = await r.listAllModels(baseDeps());
+      expect(models.map((m) => m.provider)).toEqual(['slow', 'quick']);
+      expect(failures).toEqual([
+        { provider: 'broken', label: 'broken label', reason: 'broken credential is revoked' },
+      ]);
+      expect(trace.indexOf('quick:start')).toBeLessThan(trace.indexOf('slow:end'));
+    });
+
+    test('listProviders overlaps its availability probes too', async () => {
+      const trace: string[] = [];
+      const probing = (id: string, ticks: number): ModelProvider => ({
+        id,
+        label: `${id} label`,
+        isAvailable: async () => {
+          trace.push(`${id}:start`);
+          for (let i = 0; i < ticks; i += 1) await Promise.resolve();
+          trace.push(`${id}:end`);
+          return true;
+        },
+        listModels: () => [{ id: `${id}-model` }],
+        createModel: () => new MockLanguageModelV3({ provider: id }),
+      });
+      const r = createProviderRegistry();
+      r.register(probing('slow', 8));
+      r.register(probing('quick', 0));
+
+      const list = await r.listProviders(baseDeps());
+      expect(list.map((p) => p.id)).toEqual(['slow', 'quick']);
+      expect(trace.indexOf('quick:end')).toBeLessThan(trace.indexOf('slow:end'));
+    });
+  });
 });
 
 describe('OpenAI-compat provider', () => {

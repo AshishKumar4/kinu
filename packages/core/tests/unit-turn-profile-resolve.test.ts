@@ -154,6 +154,58 @@ describe('provider availability', () => {
     expect(message).toContain('fast');
     expect(message).toContain('rev-7');
   });
+
+  // A LISTING FAILURE IS NOT AN ABSENCE. `availableModels` is a positive list,
+  // so a model missing from it means either "the provider answered and does not
+  // have it" or "nobody managed to ask". Treating the second as the first is how
+  // one vendor's 503 came to refuse every turn on the account — including turns
+  // whose own tier runs somewhere else entirely, because the resolver checks all
+  // five slots.
+  const degraded = (models: string[]): ProviderCatalogSnapshot => ({
+    revision: 'rev-7-degraded',
+    availableModels: models,
+    unavailableProviders: [{ provider: 'vendor-b', label: 'Vendor B', reason: 'HTTP 503' }],
+  });
+
+  test('a model missing while a listing FAILED resolves, unverified, rather than refusing', () => {
+    const profile = resolve({
+      roleId: 'scout', explicitTier: 'fast', availableTools: [],
+      provider: degraded(['m-default']),
+    });
+    // The configured model stands: it was never looked up, so nothing about it
+    // was disproved, and substituting m-default would be the silent swap the
+    // test above forbids.
+    expect(profile.tier).toEqual({
+      id: 'fast', source: 'explicit', model: 'm-fast', reasoningEffort: 'low',
+    });
+  });
+
+  test('the SAME missing model refuses once the listing is complete', () => {
+    // The pair that makes the distinction observable: identical catalog,
+    // identical availableModels, and the only difference is whether the
+    // snapshot admits a listing failed.
+    const clean: ProviderCatalogSnapshot = { revision: 'rev-7', availableModels: ['m-default'] };
+    const asking = (snapshot: ProviderCatalogSnapshot) => () => resolve({
+      roleId: 'scout', explicitTier: 'fast', availableTools: [], provider: snapshot,
+    });
+    // Absent and empty are the SAME assertion — "I enumerated everything" — so
+    // a producer with no failure channel is not accidentally treated as
+    // degraded, which would disable the check for every caller that predates it.
+    expect(asking(clean)).toThrow(/m-fast/);
+    expect(asking({ ...clean, unavailableProviders: [] })).toThrow(/m-fast/);
+    expect(asking(degraded(['m-default']))).not.toThrow();
+  });
+
+  test('a degraded listing does not refuse a turn over an unrelated tier slot', () => {
+    // The composed failure: `tierSlot` validates every configured tier, so
+    // before this rule an account pinning ANY tier to a degraded provider's
+    // model refused every turn, whatever tier that turn itself ran at.
+    const profile = resolve({
+      roleId: 'general', availableTools: [], provider: degraded(['m-default']),
+    });
+    expect(profile.tier.model).toBe('m-default');
+    expect(profile.tiers.fast.model).toBe('m-fast');
+  });
 });
 
 describe('role validation', () => {

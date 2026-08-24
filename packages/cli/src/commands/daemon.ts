@@ -8,6 +8,7 @@ import {
   LocalAgentHost,
   openWorkspaceCLI,
   writeSecretFile,
+  type LocalHostedAgent,
   type SessionEvent,
 } from '@kinu.run/cli-backend';
 import {
@@ -21,6 +22,7 @@ import {
   resolveProviderCredentials,
 } from '../config';
 import { createConfiguredLocalModelResolver } from '../local-model-resolver';
+import { createProfileAuthorityReader } from '../profiles';
 import { appendDaemonLog, readDaemonLogTail } from '../daemon-log';
 import { DIM, OK, WARN } from '../display';
 
@@ -247,24 +249,48 @@ function createDaemonHost(wakeAt?: (at: number) => void): LocalAgentHost {
     dbPath: agentDbPath,
     childDbPath: (parentDbPath: string, child: string) =>
       join(dirname(parentDbPath), 'subordinates', child, 'agent.db'),
-    open: async (ref: HostedAgentRef, db: Database, dbPath: string) => {
-      const { llmConfig, resolver: modelResolver } =
-        createConfiguredLocalModelResolver({ agentName: ref.name });
-      const openConfig = {
-        llm: llmConfig,
-        providerCredentials: resolveProviderCredentials(),
-        codexAuthStore: createCodexAuthStore(),
-        codexConfigPath: CONFIG_PATH,
-        // The stored directory, never process.cwd(): a daemon serves every
-        // project at once, so the plane an agent works in is the one its ref
-        // records and nothing about where this process was launched.
-        cwd: ref.cwd,
-      };
-      const { rt } = await openWorkspaceCLI(db, dbPath, openConfig);
-      return { rt, openConfig, modelResolver, mcpServers: resolveMcpServers() };
-    },
+    open: openDaemonAgent,
   };
   return new LocalAgentHost(wakeAt ? { ...options, wakeAt } : options);
+}
+
+/**
+ * One daemon-hosted agent's runtime inputs. Everything a turn needs that this
+ * process owns rather than the agent database: its provider wiring, its model
+ * resolver, its MCP servers, and the profile authority its turns resolve
+ * under.
+ *
+ * That last one is the same reader the interactive clients install. Without
+ * it a daemon-driven turn resolves from the workspace's own bootstrap while an
+ * interactive turn of the SAME agent resolves from the account or local
+ * catalog, so a role only one of them knows about fails in one process and
+ * runs in the other.
+ */
+export async function openDaemonAgent(
+  ref: HostedAgentRef,
+  db: Database,
+  dbPath: string,
+): Promise<LocalHostedAgent> {
+  const { llmConfig, resolver: modelResolver } =
+    createConfiguredLocalModelResolver({ agentName: ref.name });
+  const openConfig = {
+    llm: llmConfig,
+    providerCredentials: resolveProviderCredentials(),
+    codexAuthStore: createCodexAuthStore(),
+    codexConfigPath: CONFIG_PATH,
+    // The stored directory, never process.cwd(): a daemon serves every
+    // project at once, so the plane an agent works in is the one its ref
+    // records and nothing about where this process was launched.
+    cwd: ref.cwd,
+  };
+  const { rt } = await openWorkspaceCLI(db, dbPath, openConfig);
+  return {
+    rt,
+    openConfig,
+    modelResolver,
+    mcpServers: resolveMcpServers(),
+    profileAuthority: createProfileAuthorityReader(),
+  };
 }
 
 function logSessionEvent(agentName: string, event: SessionEvent): void {

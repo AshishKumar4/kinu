@@ -132,6 +132,23 @@ export interface CLIRuntime extends AgentRuntime {
   turnProfile?(): ResolvedTurnProfile | null;
   modelForRoute?(resolution: ModelRouteResolution): LLM;
   /**
+   * The live resolver every routed lane falls back to when no turn has
+   * installed a profile. Bound after construction like the two sinks above,
+   * because the session owns the role/tier authority and the runtime is built
+   * before it. Re-invoked per resolution, so a catalog written since the last
+   * one is observed rather than cached.
+   */
+  setProfileResolver?(resolve: (() => Promise<ResolvedTurnProfile>) | null): void;
+  /**
+   * The profile routed lanes must have. Returns the installed one when a turn
+   * is open, else resolves one now and installs it, so durable work that began
+   * outside a chat turn — the review lane, the evolution cadence, reflection,
+   * the advisor — routes through the same table a turn does instead of finding
+   * every lane unset. An already-installed profile is never replaced, so this
+   * cannot disturb a running turn.
+   */
+  ensureProfile?(): Promise<ResolvedTurnProfile>;
+  /**
    * The three host-owned things a swarm node's private home needs — the uid-0
    * view of this workspace's filesystem, the principal registry that scopes
    * `/tmp`, and the SQL the uid allocation is a row in. *Isolation*.
@@ -367,6 +384,23 @@ export function createCLIRuntime(
   initAgentConfigTable(execRaw);
   const agentConfig = createAgentConfigStore(sql);
   let turnProfile: ResolvedTurnProfile | null = null;
+  let profileResolver: (() => Promise<ResolvedTurnProfile>) | null = null;
+  /**
+   * The profile a routed lane runs against. A turn's own resolution wins; with
+   * no turn open the live resolver supplies one and it is installed, so the
+   * next lane in the same pass does not resolve it again. The `??=` is the race
+   * guard: a turn that landed while this awaited keeps its own profile, because
+   * a turn's profile is immutable for the length of the turn.
+   */
+  const ensureProfile = async (): Promise<ResolvedTurnProfile> => {
+    if (turnProfile) return turnProfile;
+    if (!profileResolver) {
+      throw new Error('this runtime has no profile resolver: model lanes cannot route before a turn');
+    }
+    const resolved = await profileResolver();
+    turnProfile ??= resolved;
+    return turnProfile;
+  };
   let modelRouteFactory = (resolution: ModelRouteResolution): LLM => createLocalProviderLLM({
     llm: config.llm,
     credentials: config.providerCredentials,
@@ -380,8 +414,7 @@ export function createCLIRuntime(
   const llm: LLM = {
     async *stream() { yield ""; },
     async complete(prompt: string): Promise<string> {
-      if (!turnProfile) throw new Error('reflection model lane has no active profile');
-      const resolution = resolveModelRoute('reflection', turnProfile);
+      const resolution = resolveModelRoute('reflection', await ensureProfile());
       if (!resolution) throw new Error('reflection cannot use the fixed platform model route');
       return modelForRoute(resolution).complete(prompt);
     },
@@ -506,6 +539,10 @@ export function createCLIRuntime(
     setModelForRoute: (factory: (resolution: ModelRouteResolution) => LLM) => {
       modelRouteFactory = factory;
     },
+    setProfileResolver: (resolve: (() => Promise<ResolvedTurnProfile>) | null) => {
+      profileResolver = resolve;
+    },
+    ensureProfile,
   });
   // A swarm node's private home is a uid-confined directory INSIDE the plane it
   // writes to: the privileged view and the uid it is chown'ed to are both rows

@@ -40,6 +40,7 @@ import {
 import { SwarmConfigSchema, SwarmObjectiveSchema } from './swarm-input';
 import { runSwarm, type SwarmRunDeps } from '../strategy/swarm-run';
 import type { NodeLoopHost } from '../strategy/node-agent';
+import { readStartedSwarmProfile } from '../strategy/swarm-resume';
 import {
   NAMED_SWARM_PRESETS, SWARM_PRESETS,
   resolveSwarm, swarmValidity,
@@ -146,18 +147,50 @@ export interface TeamToolDeps {
   /** Create an idle durable subordinate identity. This is the owner-facing
    *  operation: a mission defines the agent, but does not become a task until
    *  the owner explicitly messages or assigns it.
+   *
+   *  EVERY FIELD IS OPTIONAL, because an owner adding a second agent to a
+   *  workspace has usually decided nothing about it yet. Omitted, `role` is
+   *  the catalog's `general` and `mission` is the CREATING ACTOR'S OWN
+   *  mission — the workspace's purpose, which is what a further agent in it
+   *  is for. A caller that supplies nothing to name the agent by gets a blank
+   *  display name and `auto` origin, which is what lets the shared
+   *  first-interaction title policy claim it (identity/naming.ts). The
+   *  model's `hire` goes through {@link spawn} and stays strict.
+   *
    *  `role` is a catalog role id when the caller validated one (`roleId`
    *  set, with its tier override and catalog version); otherwise it is the
    *  legacy freeform line. */
   create(input: {
     name?: string;
-    role: string;
-    mission: string;
+    /** A title the owner typed. Given, the name is THEIRS: origin `user`,
+     *  never auto-retitled. */
+    displayName?: string;
+    role?: string;
+    mission?: string;
     roleId?: string;
     tier?: TierId;
     catalogVersion?: number;
   }): Promise<{
     name: string; displayName: string; subordinate: SubordinateRosterEntry;
+  }>;
+  /** Retitle a subordinate on the OWNER's behalf: the child's own naming
+   *  state and this authoritative roster row, written together, with the
+   *  title marked the OWNER'S — which is what permanently stops auto-titling,
+   *  since `planWorkspaceTitle` refuses a `user` origin. */
+  rename(input: { name: string; displayName: string }): Promise<{
+    ok: true; name: string; displayName: string; subordinate: SubordinateRosterEntry;
+  }>;
+  /** Record a title the CHILD has already settled on its own naming state —
+   *  the first-interaction auto-title, which only the child can run because
+   *  only the child sees its own owner-driven turns.
+   *
+   *  Roster-only, and deliberately so: this is called BY the child, mid-turn,
+   *  and writing back into it would be a re-entrant call into a Durable
+   *  Object that is busy running the turn that produced the title. The child
+   *  is the authority on whose title it is; this row carries only the text
+   *  every roster reader shows. */
+  recordTitle(input: { name: string; displayName: string }): Promise<{
+    ok: true; name: string; displayName: string;
   }>;
   /** Create a durable subordinate; its first turn is the mission. Same role
    *  vocabulary as {@link create}. */
@@ -250,10 +283,8 @@ const ASSIGN_NOTES = {
 
 /**
  * What an actor needs to run a search of its own: a model to expand with and a
- * workspace to measure in. Wired under the `fork` key on {@link AgentsToolDeps}
- * because that is the key both backends already build (`buildStrategyForkDeps`),
- * and the exploration substrate it names — the heads runtime, the durable MCTS
- * session — is the same substrate a search's nodes run on.
+ * workspace to measure in. Wired under the `fork` key on
+ * {@link AgentsToolDeps}; both backends construct the same typed contract.
  *
  * `runSwarmAction` reads `rt`, `model`, `nodeHost`, `nodeHome` and
  * `compactShared`. The members exist because the backends' one builder
@@ -262,6 +293,30 @@ const ASSIGN_NOTES = {
 export interface AgentsForkDeps {
   rt: AgentRuntime;
   model: LanguageModel;
+  /**
+   * The ONE seam that turns a resolved tier's model SPEC into the model a
+   * delegated node actually runs on.
+   *
+   * `model` above is the CALLER's own turn model, and until this existed it was
+   * also every node's: `tier` was documented as "the ONE routing input" for a
+   * delegation, the resolver produced the tier's model, the run recorded it in
+   * its durable snapshot — and then handed the caller's model to every node. A
+   * `tier:'deep'` search ran at the caller's tier and its ledger said
+   * otherwise, which is worse than not routing at all: the spend and the
+   * provenance both name a model that never ran.
+   *
+   * Takes the spec in the same spelling as `ProfileCatalogEnvelope` tier
+   * assignments and `ProviderCatalogSnapshot.availableModels`, so the string
+   * the owner configured is the string resolved here.
+   *
+   * OPTIONAL IN THE TYPE, REQUIRED IN EFFECT wherever
+   * {@link AgentsToolDeps.profile} is wired: a run carrying a profile snapshot
+   * and finding no resolver REFUSES (`runSwarm`), rather than running one model
+   * under a record claiming another. Absent with no catalog is the honest
+   * unrouted case — there is no tier to route to — and then nodes run
+   * `model`.
+   */
+  resolveModel?: (spec: string) => LanguageModel;
   /** What the resolved model charges, for gates on projected spend before
    *  starting. Backends wire the ModelCatalogSession they already hold;
    *  absence makes the gate blend and say so. */
@@ -1110,7 +1165,20 @@ async function runSwarmAction(
     // Explicit preset wins; a wired catalog fills the gap from the role's own
     // default; neither means the refusal above already fired.
   }
-  const preset: SwarmPreset = input.preset ?? delegated?.resolved.defaultPreset ?? 'ideate';
+  // A RE-DRIVE WITH NO PRESET IS NOT AN `ideate`. The durable row holds the raw
+  // tool input, so a first attempt that took its preset from its role's default
+  // stored none — and the fallback at the end of this expression would re-enter
+  // an audit's own tree, at its own root id and claimed epoch, under a
+  // different search's branches, depth, carry and settle. So the preset comes
+  // off the SAME record the role, tier and model do: read here, before the axes
+  // resolve, because `resolveSwarm` needs it and the claim happens later.
+  const started = redrive && input.preset === undefined
+    ? readStartedSwarmProfile(fork.rt.storage, input.task)
+    : null;
+  const preset: SwarmPreset = input.preset
+    ?? delegated?.resolved.defaultPreset
+    ?? started?.profile.defaultPreset
+    ?? 'ideate';
 
   // One typed literal, not an Object.assign chain: every field is checked
   // against SwarmInput where the assign form checked nothing, and every
@@ -1146,6 +1214,11 @@ async function runSwarmAction(
     rt = { ...fork.rt, llm: mission.governor.govern(fork.rt.llm, mission.scope.labels) };
   }
   const runDeps: SwarmRunDeps = { rt, model: fork.model, mode };
+  // THE TIER'S OWN MODEL. Forwarded, never pre-resolved here: a re-drive's
+  // profile comes off the claimed ledger row INSIDE the runner, so the runner
+  // is the only place that can see both cases, and resolving one of them here
+  // would leave the other running today's model under yesterday's record.
+  if (fork.resolveModel) Object.assign(runDeps, { resolveModel: fork.resolveModel });
   // THE SNAPSHOT. A first attempt carries the resolved precedence record down
   // to the runner, which writes it into the run's own ledger row BEFORE any
   // node expands — the moment a durable detach could happen — so a re-drive

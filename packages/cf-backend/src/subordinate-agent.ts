@@ -1,3 +1,4 @@
+import * as v from 'valibot';
 import { callable, getAgentByName, type AgentContext, type SubAgentClass } from 'agents';
 import { SUBORDINATE_RPC_SURFACE, sealRpcSurface } from './rpc-surface';
 import { convertToModelMessages } from 'ai';
@@ -14,11 +15,13 @@ import {
   // report.* — codemode projection of the native `report` tool.
   createReportCodemodeProvider, type CodemodeProvider,
   type DelegationBudget,
+  TIER_IDS,
 } from '@kinu.run/core';
 import {
   ActorAgent,
   type ActorToolDeps,
 } from './actor-agent';
+import type { AgentKind } from './analytics/record';
 import type { OrchestratorAgent } from './orchestrator';
 import {
   SubordinateIdentityStore,
@@ -38,7 +41,14 @@ const WORKSPACE_ACTOR_CLASS = 'OrchestratorAgent' satisfies keyof Env;
 
 export interface SetSubordinateIdentityInput {
   name: string;
+  /** The title to seed. EMPTY is legal and meaningful: the owner added this
+   *  agent without naming it, so it has no honest title yet and the
+   *  first-interaction policy will give it one. */
   displayName: string;
+  /** Whose title `displayName` is — `auto` for anything derived or blank,
+   *  `user` for one the owner typed. `user` is what makes auto-titling
+   *  refuse for good (`planWorkspaceTitle`). */
+  nameOrigin: 'user' | 'auto';
   /** Catalog role id, when the hiring actor resolved one; else null/absent
    *  and `role` carries the legacy freeform line. */
   roleId?: string | null;
@@ -72,6 +82,13 @@ export class SubordinateAgent extends ActorAgent {
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
     sealRpcSurface(this, SUBORDINATE_RPC_SURFACE);
+  }
+
+  /** A persistent helper facet inside someone else's workspace. Distinct from
+   *  the orchestrator on the operational dataset because its turns are the
+   *  delegated ones, and a rate that pools the two answers no question. */
+  protected actorKind(): AgentKind {
+    return 'subordinate';
   }
 
   private _schemaReady = false;
@@ -153,11 +170,22 @@ export class SubordinateAgent extends ActorAgent {
   }
 
   protected shellId(): string { return `subordinate:${this.name}`; }
+
+  /** What this subordinate is FOR. Its own mission, which for an agent the
+   *  owner added without saying anything is the workspace's, inherited at
+   *  creation. Also what its own further hires inherit. */
+  protected ownMission(): string {
+    return this.identity.read()?.mission ?? '';
+  }
+
   protected async loadSoulText(): Promise<string> {
     const identity = this.identity.read();
     return identity
       ? renderSoulMarkdown({
-        name: identity.displayName,
+        // A title nobody has chosen yet is blank; the slug is the name this
+        // agent is genuinely addressed by, so that is what it calls itself
+        // until the first interaction titles it.
+        name: identity.displayName || identity.name,
         mission: `${this.identityRoleBlock(identity)}\n\n${identity.mission}`,
       })
       : '';
@@ -259,7 +287,10 @@ export class SubordinateAgent extends ActorAgent {
 
   @callable()
   async setSubordinateIdentity(input: SetSubordinateIdentityInput): Promise<{ ok: true }> {
-    if (!input.name || !input.displayName || !input.role || !input.mission) {
+    // `displayName` is deliberately NOT required: blank is the honest state of
+    // an agent the owner added without naming, and the title policy fills it
+    // on the first interaction.
+    if (!input.name || !input.role || !input.mission) {
       throw new Error('complete subordinate identity is required');
     }
     this.ensureSchema();
@@ -288,7 +319,25 @@ export class SubordinateAgent extends ActorAgent {
       ownerUserId: bootstrap.ownerUserId,
       depth: bootstrap.depth,
     });
-    this.config.setDisplayName(input.displayName);
+    // Both rows together: the shown title and WHOSE it is. Seeding the title
+    // alone left `name_origin` unset, which the title policy reads as "never
+    // titled" — so a role-derived name a parent chose was eligible to be
+    // replaced by a model call the owner never asked for.
+    this.config.setDisplayNameOrigin(input.displayName, input.nameOrigin);
+    // The identity row above is what this subordinate IS — its prompt reads
+    // `roleId` from it. These two rows are what its TURNS resolve against, and
+    // they live in a different store (`agent_config`), so seeding only the
+    // identity left every turn resolving the workspace-default role: a hired
+    // auditor got the auditor prose in its soul and the general role's prompt,
+    // tools, skills and tier at inference time.
+    if (input.roleId) this.config.setActiveRoleId(input.roleId);
+    // An absent or unrecognised tier CLEARS the pin, which is the instruction to
+    // derive from the role rather than a tier of its own. PARSED, not asserted:
+    // `tier` arrives over RPC from the hiring actor, so this is its I/O boundary
+    // and a bad value must never become a stored row a later read has to
+    // tolerate. Same schema the turn resolver uses (profiles/resolve.ts).
+    const pinnedTier = v.safeParse(v.picklist(TIER_IDS), input.tier);
+    this.config.setAssignedTier(pinnedTier.success ? pinnedTier.output : null);
     if (input.capabilityToken) await this.installWorkspaceCapability(input.capabilityToken);
     // No concrete model is pinned from the caller: the child's own turn
     // resolution maps its tier (or the default) onto a model at its next turn.
@@ -297,6 +346,44 @@ export class SubordinateAgent extends ActorAgent {
     this.invalidateModelCaches();
     await this.ensureOwnedScaffold();
     return { ok: true };
+  }
+
+  /**
+   * Write this subordinate's own naming state.
+   *
+   * Worker-side facet RPC from the parent, which owns the roster row the UI
+   * reads and writes it in the same operation (`TeamToolDeps.rename`). Not a
+   * client `@callable`: renaming is the parent's to do, so that one call
+   * updates both halves and neither can be left behind.
+   */
+  async setSubordinateNaming(displayName: string, nameOrigin: 'user' | 'auto'): Promise<{ ok: true }> {
+    this.ensureSchema();
+    this.config.setDisplayNameOrigin(displayName, nameOrigin);
+    this._cachedSoulText = null;
+    this._cachedSystemPrompt = null;
+    this.broadcast(JSON.stringify({ type: 'workspace_renamed', displayName }));
+    return { ok: true };
+  }
+
+  /**
+   * An auto title lands on this subordinate's own config first, then on the
+   * parent's roster row — which is the one every roster reader shows, so
+   * skipping it would leave the owner looking at a blank tab for an agent
+   * that has named itself.
+   *
+   * The parent write is not swallowed: a title only this facet knows about is
+   * a title nobody can see, and reporting `false` would claim the owner
+   * renamed it, re-arming a titling pass that already spent a model call.
+   */
+  protected async persistAutoTitle(displayName: string): Promise<boolean> {
+    if (this.config.getNameOrigin() === 'user') return false;
+    this.config.setDisplayNameOrigin(displayName, 'auto');
+    this._cachedSoulText = null;
+    this._cachedSystemPrompt = null;
+    this.broadcast(JSON.stringify({ type: 'workspace_renamed', displayName }));
+    const parent = await this.parentActor();
+    await parent.recordSubordinateTitle(this.name, displayName);
+    return true;
   }
 
   /** Synchronous by contract — see `OrchestratorAgent.onStart`. The scaffold this
@@ -437,6 +524,21 @@ export class SubordinateAgent extends ActorAgent {
     if (result.message.id) completedTurn.turnId = result.message.id;
     const turn: CompletedTurn = snapshotCompletedTurn(this.acc, completedTurn);
     if (turnMode !== 'plan') this.settleCompletedTurn(turn);
+
+    // Title this agent from the first thing its OWNER said to it.
+    //
+    // The mission is deliberately not the source here, and that is the one
+    // place this differs from the workspace root. A subordinate's mission is
+    // either its hire brief — already turned into a role-derived name its
+    // parent chose — or, for an agent the owner added with nothing to say,
+    // the workspace's own mission, which every sibling shares. Titling from
+    // it would name them all the same thing. What actually distinguishes this
+    // agent is what the owner brings to it, so that is what names it.
+    //
+    // Fire-and-forget and once-only: persisting marks `name_origin`, after
+    // which the shared policy no longer matches. A programmatic turn is not a
+    // trigger — a parent's assignment is not the owner talking.
+    if (ownerDriven && turnMode !== 'plan') void this.maybeAutoTitle(userText);
 
     if (subordinateRelaysTurnEnd({ reportedThisTurn: this.reportedThisTurn, ownerDriven, assistantText })) {
       void this.sendReport('progress', assistantText, 'turn_end')

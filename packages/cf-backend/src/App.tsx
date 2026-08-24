@@ -12,6 +12,11 @@ import { Loader } from "@cloudflare/kumo";
 // MCTS explorer pulls d3 (~12KB) — split out of main bundle.
 const MCTSExplorer = lazy(() => import("./pages/MCTSExplorer"));
 
+// The admin control plane. Split out because almost nobody who loads this app is
+// an operator, and every read behind it answers 404 to everyone who is not — so
+// its code has no business in the bundle every signed-in user downloads.
+const ControlPage = lazy(() => import("./pages/ControlPage"));
+
 function LazyFallback() {
   return (
     <div className="flex items-center justify-center h-full">
@@ -50,6 +55,13 @@ export default function App() {
             <ErrorBoundary label="mcts-explorer">
               <Suspense fallback={<LazyFallback />}>
                 <MCTSExplorer />
+              </Suspense>
+            </ErrorBoundary>
+          } />
+          <Route path="/control" element={
+            <ErrorBoundary label="control-plane">
+              <Suspense fallback={<LazyFallback />}>
+                <ControlPage />
               </Suspense>
             </ErrorBoundary>
           } />

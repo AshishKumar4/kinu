@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { GithubLogoIcon, ListIcon, PlusIcon } from "@phosphor-icons/react";
 import Sidebar from "./Sidebar";
+import { FeedbackButton } from "./FeedbackButton";
 import { KinuLogo } from "./ui/KinuLogo";
 import { WorkspaceRosterProvider } from "@/hooks/use-workspace-roster";
 
@@ -37,6 +38,7 @@ export default function Layout() {
           </Link>
         </div>
         <div className="flex items-center gap-1">
+          <FeedbackButton compact />
           <a href="https://github.com/AshishKumar4/kinu" target="_blank" rel="noopener noreferrer" aria-label="GitHub repository" className="flex size-9 items-center justify-center rounded-md p-text-2 p-card-hover hover:p-text">
             <GithubLogoIcon size={17} />
           </a>

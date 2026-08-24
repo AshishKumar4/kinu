@@ -402,6 +402,20 @@ export class SubordinateRosterStore {
     ).toArray().map(parseStoredRosterRow);
   }
 
+  /** Retitle one roster row. The parent's row is what every roster reader
+   *  shows, so a title the child settled on — an owner's rename, or the
+   *  first-interaction auto-title — is not visible until it lands here. The
+   *  child's own `agent_config` remains the authority on WHOSE title it is;
+   *  this table carries only the text. */
+  setDisplayName(name: string, displayName: string): void {
+    this.requireActive(name);
+    this.sql.exec(
+      `UPDATE workspace_subordinates SET display_name = ? WHERE name = ?`,
+      displayName,
+      name,
+    );
+  }
+
   assign(name: string, task: string): void {
     this.requireActive(name);
     this.sql.exec(
@@ -685,7 +699,13 @@ export function admitSubordinateReport(log: EventLog, input: {
 export interface SubordinateRuntime {
   spawn(input: {
     name: string;
+    /** The title to seed, empty when nothing the caller said can name this
+     *  agent yet — a provisional blank the title policy is free to claim. */
     displayName: string;
+    /** Whose title `displayName` is. `auto` includes the blank: it is a title
+     *  nobody chose, so the first-interaction policy may replace it once.
+     *  `user` is final. */
+    nameOrigin: 'user' | 'auto';
     /** Catalog role id, when the caller resolved one. */
     roleId?: string;
     /** The freeform line a pre-catalog caller supplied — the labelled legacy
@@ -704,6 +724,10 @@ export interface SubordinateRuntime {
   }): Promise<SubordinateHandoff>;
   status(name: string): Promise<SubordinateLiveStatus>;
   message(name: string, content: string, mode: WorkMode): Promise<SubordinateHandoff>;
+  /** Write the child's own naming state. Called with `user` for an owner's
+   *  rename, which is what makes the refusal in `planWorkspaceTitle` durable
+   *  on the side that runs the title policy. */
+  rename(name: string, displayName: string, nameOrigin: 'user' | 'auto'): Promise<void>;
   dismiss(name: string, keepHistory: boolean): Promise<void>;
 }
 
@@ -715,6 +739,12 @@ export interface SubordinatesChangedEvent {
     task: string;
   };
 }
+
+/** The catalog role an additional agent gets when the owner named none. It is
+ *  the same default `AgentConfigStore.getActiveRoleId` answers with, so an
+ *  agent created with nothing said about it runs as the workspace's own kind
+ *  of agent rather than a specialist nobody asked for. */
+export const DEFAULT_SUBORDINATE_ROLE_ID = 'general';
 
 function displayNameForRole(role: string): string {
   return role.trim().split(/\s+/).slice(0, 4)
@@ -797,6 +827,12 @@ export function createTeamToolDeps(deps: {
   createName(role: string): string;
   now(): number;
   inheritedContext(): SerializedMessage[];
+  /** THIS actor's own mission — the workspace's purpose as it knows it. What
+   *  an owner-created additional agent inherits when the owner gave it none,
+   *  because an agent added to a workspace is there for what the workspace is
+   *  for. Read at create time rather than captured, so an agent added after
+   *  the mission was edited inherits the current one. */
+  ownMission(): string;
   broadcast(event: SubordinatesChangedEvent): void;
   broadcastTask(event: { subordinate: string; content: string; timestamp: number }): void;
 }): TeamToolDeps {
@@ -811,33 +847,53 @@ export function createTeamToolDeps(deps: {
 
   const provision = async (input: {
     name?: string;
+    displayName?: string;
     /** Catalog role id, when the caller resolved one; else the legacy line. */
-    role: string;
+    role?: string;
     roleId?: string;
     tier?: string;
     catalogVersion?: number;
-    mission: string;
+    mission?: string;
   }, ownerCreated: boolean, mode: WorkMode | null): Promise<{
     name: string;
     displayName: string;
     createdAt: number;
     subordinate: SubordinateRosterEntry;
   }> => {
-    const role = requiredText(input.role, 'role');
-    const mission = requiredText(input.mission, 'mission');
+    // The owner may say nothing at all; the model must say both. `spawn` has
+    // already refused an empty mission by the time it reaches here, and the
+    // agents tool refuses a hire without a role before that, so these two
+    // defaults are only ever the owner's.
+    const role = ownerCreated
+      ? optionalText(input.role) ?? DEFAULT_SUBORDINATE_ROLE_ID
+      : requiredText(input.role ?? '', 'role');
+    const mission = ownerCreated
+      ? requiredText(optionalText(input.mission) ?? deps.ownMission(), 'mission')
+      : requiredText(input.mission ?? '', 'mission');
     const name = input.name?.trim() || deps.createName(role);
     if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(name)) {
       throw new Error('subordinate name must be a lowercase URL-safe slug (letters, digits, hyphens)');
     }
     if (deps.roster.get(name)) throw new Error(`subordinate "${name}" already exists`);
 
+    // Whose title this is, decided by what the caller actually supplied. A
+    // typed title is the owner's and final. A role — theirs or the model's —
+    // yields the deterministic role name, which nobody chose but which says
+    // something true, so it is `auto` and stands. Nothing said leaves the
+    // title BLANK: there is no honest name yet, and a blank is what the
+    // shared title policy reads as a placeholder it may claim once, from the
+    // first thing the owner actually says to this agent.
+    const chosen = optionalText(input.displayName);
+    const provisional = ownerCreated && optionalText(input.role) === undefined;
+    const displayName = chosen ?? (provisional ? '' : displayNameForRole(role));
+    const nameOrigin: 'user' | 'auto' = chosen ? 'user' : 'auto';
     // Exactly one role story per identity: a validated catalog id (with its
     // optional tier override and catalog version) REPLACES any freeform text;
     // without one, `role` is the labelled legacy block.
-    const displayName = displayNameForRole(role);
     const spawnInput: Parameters<SubordinateRuntime['spawn']>[0] = {
       name,
       displayName,
+      nameOrigin,
       mission,
       ...(input.roleId !== undefined
         ? { roleId: input.roleId, tier: input.tier, catalogVersion: input.catalogVersion }
@@ -889,6 +945,33 @@ export function createTeamToolDeps(deps: {
       const { name, displayName, subordinate } = await provision(input, true, null);
       changed();
       return { name, displayName, subordinate };
+    },
+
+    rename: async (input) => {
+      const displayName = requiredText(input.displayName, 'displayName');
+      const before = deps.roster.requireActive(input.name);
+      // Roster first, then the facet, restored exactly if the facet refuses —
+      // the same order every other operation here uses, and the reason is the
+      // same: the roster write is local and synchronous, so it is the half
+      // that can be undone reliably.
+      deps.roster.setDisplayName(input.name, displayName);
+      try {
+        await deps.runtime.rename(input.name, displayName, 'user');
+      } catch (error) {
+        rollback(error, () => deps.roster.restore(before), 'subordinate rename');
+      }
+      changed();
+      return {
+        ok: true, name: input.name, displayName,
+        subordinate: deps.roster.requireActive(input.name),
+      };
+    },
+
+    recordTitle: async (input) => {
+      const displayName = requiredText(input.displayName, 'displayName');
+      deps.roster.setDisplayName(input.name, displayName);
+      changed();
+      return { ok: true, name: input.name, displayName };
     },
 
     spawn: async (input) => {

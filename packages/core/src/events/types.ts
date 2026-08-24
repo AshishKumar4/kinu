@@ -56,6 +56,7 @@ export type RunEventType =
   | 'file_edit'
   | 'turn_steering'
   | 'delegation_opportunity'
+  | 'profile_resolution'
   | 'completion_gate'
   | 'craft_cycle'
   | 'execution_recovery'
@@ -302,6 +303,14 @@ export type RunEvent =
       /** An `agents` call followed. Always true on an `unprompted` row, which is
        *  what that row records; on a `hint` row it is the conversion. */
       converted: boolean })
+  /** Profile authority and provider availability resolved before model work. */
+  | (RunEventBase & { type: 'profile_resolution';
+      durationMs: number;
+      providerCache: 'hit' | 'joined' | 'miss';
+      providerRevision: string;
+      unavailableProviders: number;
+      catalogVersion: number;
+      authority: 'local' | 'account' })
   /** The one-shot completion gate fired: the harness refused to let the run end
    *  on the model's own say-so and handed it freshly observed state first.
    *  At most one per one-shot run, written by the settle spine when the

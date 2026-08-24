@@ -22,7 +22,16 @@
  *                                  one column
  *   /gallery.html?frame=modal    → modal open
  *   /gallery.html?frame=home     → HomePage
- *   /gallery.html?frame=tabs     → the agent tab strip, active + idle + working
+ *   /gallery.html?frame=control  → the admin control plane: every tab, the
+ *                                  account drilldown and a workspace drilldown.
+ *                                  `/api/control/*` is answered by request
+ *                                  interception, so the page, its client and its
+ *                                  five non-ok read states are the shipped ones.
+ *   /gallery.html?frame=agentchats → the interactive agent-conversation rig:
+ *                                  one-click create, rename, per-conversation
+ *                                  Auto/Plan + draft/scroll — the real
+ *                                  components over a scripted roster, driven
+ *                                  by the chat-and-files browser gate
  *   /gallery.html?frame=markdown → everything MarkdownContent has to render
  *   /gallery.html?frame=views    → an agent-authored View, in Column C's chrome
  *   /gallery.html?frame=viewfail → the same View when its spec stops validating
@@ -61,7 +70,7 @@
  */
 import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useParams } from "react-router-dom";
 import type { UIMessage } from "ai";
 import { tolerate } from "@kinu.run/core/obs";
 import { Button } from "@cloudflare/kumo";
@@ -77,7 +86,7 @@ import {
 import Sidebar from "@/components/Sidebar";
 import { ModelPicker } from "@/components/ModelPicker";
 import { Composer, type ChatMode, type ComposerNotice } from "@/components/Composer";
-import { WorkspaceBar } from "@/components/WorkspaceBar";
+import { WorkspaceBar, InlineRenameTitle } from "@/components/WorkspaceBar";
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { BranchRunChip } from "@/components/AlternateTakes";
 import { WorkSurface, ACTIVITY_SURFACE, type SurfaceKind } from "@/components/surfaces/WorkSurface";
@@ -85,13 +94,17 @@ import { AgentViewSurface } from "@/components/surfaces/AgentViewSurface";
 import { ReleasesSurface } from "@/components/surfaces/ReleasesSurface";
 import { AgentSurface } from "@/components/surfaces/AgentSurface";
 import { HistoryBoundary, EmptyState, MarkdownContent } from "@/components/surfaces/shared";
-import { SubordinateTabs } from "@/components/SubordinateTabs";
+import { SubordinateTabs, agentTitle } from "@/components/SubordinateTabs";
 import { Modal } from "@/components/ui/Modal";
+import { inputCls } from "@/components/ui/form";
+import { FeedbackButton } from "@/components/FeedbackButton";
+import { FEEDBACK_ENDPOINT } from "@/feedback/contract";
 import { MessageView, SteerBubble } from "@/components/MessageView";
 import { buildTranscript } from "@kinu.run/core";
 import WorkspacePage, { ConversationSkeleton, DeviceConsentCard, ChatErrorCard, EmptyConversation } from "@/pages/WorkspacePage";
 import { usePagedScroll } from "@/hooks/use-paged-scroll";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
+import { useConversationUiState } from "@/hooks/use-conversation-ui-state";
 import { useTheme } from "@/hooks/use-theme";
 import { WorkspaceRosterProvider } from "@/hooks/use-workspace-roster";
 import { SupervisePage } from "@/pages/SupervisePage";
@@ -184,6 +197,16 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
   if (response !== undefined && (!init?.method || init.method === "GET")) {
     return Promise.resolve(new Response(JSON.stringify(response), { headers: { "content-type": "application/json" } }));
   }
+  // The two `/api/` prefixes a browser gate answers for itself. The feedback
+  // POST is driven end to end — multipart body, the client's own size refusal,
+  // the retry that reuses a capture held in memory — and the control plane's
+  // reads are driven for their FIVE non-ok states, which is the whole reason
+  // that page is worth a browser: 404 must read as "not an operator" and not as
+  // an empty table. Both have to reach the network, where request interception
+  // decides their fate. Stubbing a 404 here would make every send in every frame
+  // look like a failed send, and would make the control plane untestable in the
+  // one state it most needs to be tested in.
+  if (path === FEEDBACK_ENDPOINT || path.startsWith('/api/control/')) return realFetch(input, init);
   if (path.startsWith("/api/")) {
     return Promise.resolve(new Response(JSON.stringify({ error: "gallery stub" }), { status: 404 }));
   }
@@ -539,11 +562,55 @@ const stubRpc: Rpc = async <T,>(method: string): Promise<T> => {
   return rpcResult({}).json<T>();
 };
 
-const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => (
-  AGENT_RPC.has(method)
+/* The `workspacepage` frame's stateful half: the additional-agent roster the
+   REAL page mutates through its own hook. Creation, rename, navigation and the
+   facet snapshot are page wiring and run for real here; only the chat behind
+   the stub socket stays inert (the interactive `agentchats` rig covers send
+   and the first-message titler). */
+const GALLERY_SUBS: {
+  name: string; displayName: string; role: string; createdBy: string;
+  status: string; currentTask: string | null; createdAt: number; dismissedAt: number | null;
+}[] = [];
+let gallerySubSeq = 0;
+
+const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (method === "listSubordinates") return rpcResult([...GALLERY_SUBS]).json<T>();
+  if (method === "createSubordinateAgent") {
+    const name = `agent-${++gallerySubSeq}`;
+    const entry = {
+      name, displayName: "", role: "agent", createdBy: "user",
+      status: "idle", currentTask: null, createdAt: NOW, dismissedAt: null,
+    };
+    GALLERY_SUBS.push(entry);
+    return rpcResult({ name, displayName: "", subordinate: entry }).json<T>();
+  }
+  if (method === "renameSubordinateAgent") {
+    const [name, displayName] = v.parse(v.tuple([v.string(), v.string()]), args);
+    const entry = GALLERY_SUBS.find((sub) => sub.name === name);
+    if (!entry) throw new Error(`gallery: no subordinate "${name}"`);
+    entry.displayName = displayName;
+    return rpcResult({ ...entry }).json<T>();
+  }
+  if (method === "dismissSubordinate") {
+    const [name] = v.parse(v.tuple([v.string()]), args);
+    const index = GALLERY_SUBS.findIndex((sub) => sub.name === name);
+    if (index >= 0) GALLERY_SUBS.splice(index, 1);
+    return rpcResult({ ok: true, name, historyKept: true }).json<T>();
+  }
+  if (method === "getSubordinateSnapshot") {
+    // The facet's own view. Identity mirrors the roster; the mission stays
+    // internal — the header renders the ROSTER title, never this field.
+    const latest = GALLERY_SUBS.at(-1);
+    return rpcResult({
+      name: latest?.name ?? "agent-0", displayName: latest?.displayName ?? "",
+      role: "agent", mission: "", model: null,
+    }).json<T>();
+  }
+  if (method === "getChatHistoryPage") return rpcResult({ status: "end", items: [] }).json<T>();
+  return AGENT_RPC.has(method)
     ? rpcResult(AGENT_RPC.get(method)).json<T>()
-    : stubRpc<T>(method, args)
-);
+    : stubRpc<T>(method, args);
+};
 
 /* ── swarm searches: the shipped model's own states ─────────────── */
 
@@ -1689,7 +1756,7 @@ function GalleryChatTabs({ clearable = true }: { clearable?: boolean }) {
   return (
     <SubordinateTabs
       workspace="checkout-fixes" subordinates={SUBORDINATES} activeName={undefined}
-      onSpawn={async () => ({ name: "x", displayName: "x" })} onDismiss={async () => {}}
+      onCreate={async () => ({ name: "x", displayName: "" })} onDismiss={async () => {}}
       trailing={clearable && <Button variant="ghost" {...SQUARE_BUTTON_PROPS} size="sm" icon={<TrashIcon size={12} />} aria-label="Clear history" />}
     />
   );
@@ -2157,6 +2224,9 @@ const SUBORDINATES: Parameters<typeof SubordinateTabs>[0]["subordinates"] = [
   { name: "coupon-tester", displayName: "Coupon tester", role: "QA", createdBy: "orchestrator", status: "working", currentTask: "Running the checkout regression suite", createdAt: NOW - 36e5, dismissedAt: null },
   { name: "migration-review", displayName: "Migration review", role: "Reviewer", createdBy: "orchestrator", status: "awaiting_input", currentTask: "Needs a call on the backfill order", createdAt: NOW - 72e5, dismissedAt: null },
   { name: "docs", displayName: "Release notes", role: "Writer", createdBy: "user", status: "idle", currentTask: null, createdAt: NOW - 108e5, dismissedAt: null },
+  // A one-click agent the titler has not reached: blank name, shown as
+  // "New agent" in the provisional register.
+  { name: "agent-4f2c", displayName: "", role: "agent", createdBy: "user", status: "idle", currentTask: null, createdAt: NOW - 6e5, dismissedAt: null },
 ];
 
 /* The strip sits at the top of Column A, on the chat column's own ground —
@@ -2168,7 +2238,7 @@ function TabsFrame() {
         <div key={w} className="flex flex-col border p-border overflow-hidden" style={{ width: w, height: 190 }}>
           <SubordinateTabs
             workspace="checkout-fixes" subordinates={SUBORDINATES} activeName={undefined}
-            onSpawn={async () => ({ name: "x", displayName: "x" })} onDismiss={async () => {}}
+            onCreate={async () => ({ name: "x", displayName: "" })} onDismiss={async () => {}}
           />
           <div className="flex-1 px-5 py-4 p-row-text p-text-3">Main chat body</div>
         </div>
@@ -2176,10 +2246,155 @@ function TabsFrame() {
       <div className="flex flex-col border p-border overflow-hidden" style={{ width: 520, height: 190 }}>
         <SubordinateTabs
           workspace="checkout-fixes" subordinates={SUBORDINATES} activeName="coupon-tester"
-          onSpawn={async () => ({ name: "x", displayName: "x" })} onDismiss={async () => {}}
+          onCreate={async () => ({ name: "x", displayName: "" })} onDismiss={async () => {}}
         />
         <div className="flex-1 px-5 py-4 p-row-text p-text-3">Subordinate chat body</div>
       </div>
+    </div>
+  );
+}
+
+/* ── Agent conversations (interactive rig) ─────────────────────── */
+
+/** The inherited mission a one-click agent carries INTERNALLY. The browser
+ *  gate asserts this string never reaches the document — creation is
+ *  identity-only, and the mission is the machinery's business. */
+const AGENTCHATS_MISSION = "Audit the checkout flow end to end and fix what breaks";
+
+type GalleryRosterEntry = Parameters<typeof SubordinateTabs>[0]["subordinates"][number];
+
+const AGENTCHATS_SEED: readonly GalleryRosterEntry[] = [
+  // The role string is deliberately distinctive: the gate asserts it never
+  // renders — an agent's being subordinate shows as hierarchy, not as a badge.
+  { name: "scout", displayName: "Checkout scout", role: "Fixture-role QA lead", createdBy: "user", status: "idle", currentTask: null, createdAt: NOW - 36e5, dismissedAt: null },
+];
+
+const AGENTCHATS_ROWS = 40;
+
+/** One conversation pane, wired the way SubordinateChatColumn wires the real
+ *  ones: the same rename editor, the same composer mode segment, and the same
+ *  per-conversation state hook carrying draft/mode/scroll across switches. */
+function AgentChatsPane({ conversation, title, transcript, onRename, onSend }: {
+  conversation: string;
+  title: string;
+  transcript: readonly string[];
+  onRename: ((displayName: string) => Promise<string>) | null;
+  onSend: (text: string, mode: ChatMode) => void;
+}) {
+  const ui = useConversationUiState(conversation);
+  const scrollRef = useGrowingScroll<HTMLDivElement>({
+    grows: "up",
+    content: transcript,
+    fetched: false,
+    initialScroll: ui.savedScroll,
+    onScrollPosition: ui.rememberScroll,
+  });
+  return (
+    <div className="@container relative flex min-h-0 flex-1 flex-col" data-agent-pane={conversation}>
+      <div className="flex items-center gap-3 border-b p-border px-5 py-3.5">
+        {onRename
+          ? <InlineRenameTitle title={title} onRename={onRename} subject="agent" textClass="text-sm font-medium" />
+          : <span className="truncate text-sm font-medium p-text" data-agent-header>{title}</span>}
+      </div>
+      <div ref={scrollRef} data-agent-scroll className="flex-1 space-y-3 overflow-y-auto px-6 py-5">
+        {transcript.length === 0
+          ? <p className="text-sm p-text-3">This agent's conversation starts here.</p>
+          : transcript.map((row, i) => (
+            <div key={i} data-agent-row className="rounded-lg border p-border px-3 py-2 text-sm p-text-2">{row}</div>
+          ))}
+      </div>
+      <div className="border-t p-border p-sidebar">
+        <Composer
+          value={ui.draft}
+          onValueChange={ui.setDraft}
+          onSend={() => {
+            const text = ui.draft.trim();
+            if (!text) return;
+            onSend(text, ui.mode);
+            ui.setDraft("");
+          }}
+          placeholder={`Message ${title}…`}
+          disabled={false}
+          streaming={false}
+          onStop={() => {}}
+          mode={{ value: ui.mode, onChange: ui.setMode, locked: false }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function AgentChatsScene() {
+  const { subName } = useParams();
+  const [roster, setRoster] = useState<readonly GalleryRosterEntry[]>(AGENTCHATS_SEED);
+  const [transcripts, setTranscripts] = useState<Record<string, readonly string[]>>({
+    main: Array.from({ length: AGENTCHATS_ROWS }, (_, i) => `Main turn ${i + 1}: enough rows for the scroller to hold a position.`),
+    scout: Array.from({ length: AGENTCHATS_ROWS }, (_, i) => `Scout turn ${i + 1}: an existing conversation with history.`),
+  });
+  const [sent, setSent] = useState<readonly { agent: string; mode: ChatMode; text: string }[]>([]);
+  const counter = useRef(0);
+  // What the backend keeps to itself: the inherited mission, keyed off-DOM.
+  const missions = useRef<Record<string, string>>({});
+
+  const create = async () => {
+    const name = `agent-${++counter.current}`;
+    missions.current[name] = AGENTCHATS_MISSION;
+    setRoster((current) => [...current, {
+      name, displayName: "", role: "agent", createdBy: "user",
+      status: "idle", currentTask: null, createdAt: NOW, dismissedAt: null,
+    }]);
+    return { name, displayName: "" };
+  };
+  const send = (agent: string) => (text: string, mode: ChatMode) => {
+    setSent((current) => [...current, { agent, mode, text }]);
+    setTranscripts((current) => ({ ...current, [agent]: [...(current[agent] ?? []), text] }));
+    // The first-message titler, a beat later — the `subordinates_changed`
+    // delivery the roster consumes in the app.
+    setTimeout(() => {
+      setRoster((current) => current.map((entry) =>
+        entry.name === agent && entry.displayName === ""
+          ? { ...entry, displayName: text.slice(0, 32) }
+          : entry));
+    }, 120);
+  };
+  const active = subName ? roster.find((entry) => entry.name === subName) : undefined;
+  return (
+    <div className="p-bg p-text flex h-screen flex-col" data-agentchats>
+      <div className="mx-auto flex h-full w-full max-w-3xl min-w-0 flex-col border-x p-border">
+        <SubordinateTabs
+          workspace="checkout-fixes"
+          subordinates={roster}
+          activeName={subName}
+          onCreate={create}
+          onDismiss={async (name) => {
+            setRoster((current) => current.filter((entry) => entry.name !== name));
+          }}
+        />
+        {subName && active ? (
+          <AgentChatsPane
+            key={subName}
+            conversation={`checkout-fixes/agents/${subName}`}
+            title={agentTitle(active.displayName)}
+            transcript={transcripts[subName] ?? []}
+            onRename={async (displayName) => {
+              setRoster((current) => current.map((entry) =>
+                entry.name === subName ? { ...entry, displayName } : entry));
+              return displayName;
+            }}
+            onSend={send(subName)}
+          />
+        ) : (
+          <AgentChatsPane
+            key="main"
+            conversation="checkout-fixes/main"
+            title="Checkout fixes"
+            transcript={transcripts["main"] ?? []}
+            onRename={null}
+            onSend={send("main")}
+          />
+        )}
+      </div>
+      <div data-sent-log={JSON.stringify(sent)} />
     </div>
   );
 }
@@ -3631,6 +3846,86 @@ function OpenConfigDisclosures({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+/**
+ * The page a feedback screenshot is TAKEN OF, and the thing that makes the
+ * redaction claim checkable rather than promised.
+ *
+ * Three regions, each with a stable hook so the gate can read the captured
+ * image's pixels at their coordinates:
+ *
+ *   [data-secret-input]  a password field holding a real-looking secret. It
+ *                        carries no redaction attribute — the point is that a
+ *                        password is blacked out WITHOUT being annotated.
+ *   [data-secret-token]  a marked region holding a token rendered as TEXT,
+ *                        which no `type=password` rule would catch.
+ *   [data-visible-copy]  the negative control. If the capture were blank or
+ *                        black, every redaction assertion would pass for the
+ *                        wrong reason, so this region must NOT be uniform.
+ *
+ * `?noise=1` swaps in an incompressible canvas, which is how the oversized
+ * refusal is driven with real bytes instead of a stubbed size.
+ */
+function FeedbackFrame({ noise }: { noise: boolean }) {
+  const noiseRef = useRef<HTMLCanvasElement | null>(null);
+  useEffect(() => {
+    const canvas = noiseRef.current;
+    if (canvas === null) return;
+    const context = canvas.getContext("2d");
+    if (context === null) return;
+    // Random pixels do not compress, so the PNG lands near its raw size and
+    // crosses the 8 MiB limit the endpoint and the client both enforce.
+    const frame = context.createImageData(canvas.width, canvas.height);
+    for (let i = 0; i < frame.data.length; i += 4) {
+      frame.data[i] = Math.random() * 256;
+      frame.data[i + 1] = Math.random() * 256;
+      frame.data[i + 2] = Math.random() * 256;
+      frame.data[i + 3] = 255;
+    }
+    context.putImageData(frame, 0, 0);
+  }, []);
+
+  return (
+    <div className="min-h-screen p-bg p-text">
+      <header className="flex items-center justify-between border-b p-border p-sidebar px-4 py-3">
+        <span className="text-sm font-semibold">Account settings</span>
+        <FeedbackButton compact />
+      </header>
+      <div className="space-y-5 p-6">
+        <p data-visible-copy className="max-w-xl text-sm p-text-2">
+          Connected providers bill to your own account. Rotating a key takes effect on the next
+          turn; running turns keep the credential they started with.
+        </p>
+        <label className="block max-w-sm space-y-1.5">
+          <span className="text-xs font-medium p-text-2">Anthropic API key</span>
+          <input
+            data-secret-input
+            type="password"
+            defaultValue="sk-ant-api03-REDACTION-MUST-REMOVE-THIS"
+            className={inputCls}
+          />
+        </label>
+        <div className="max-w-sm space-y-1.5">
+          <span className="text-xs font-medium p-text-2">Device token</span>
+          <code
+            data-secret-token
+            data-feedback-redact
+            className="block rounded-md border p-border px-3 py-2 font-mono text-[12.5px]"
+          >
+            ptc_LEAKED_IF_REDACTION_FAILS_0123456789
+          </code>
+        </div>
+        {/* Rendered at its INTRINSIC size, not `w-full`. A scaled-down canvas is
+            resampled into the capture's own pixels, so 3.9 megapixels of noise
+            displayed 1280px wide compresses back under the limit and the frame
+            proves nothing. 1280x4000 of incompressible pixels is what actually
+            crosses 8 MiB. */}
+        {noise && <canvas ref={noiseRef} width={1280} height={4000} style={{ width: 1280, height: 4000 }} />}
+      </div>
+      <FeedbackButton />
+    </div>
+  );
+}
+
 async function mount() {
   // Standalone public string documents render without the app shell.
   const document_ = publicDocument(frame);
@@ -3683,9 +3978,23 @@ async function mount() {
     node = <Routes><Route path="/mcts/:agentId" element={<div className="h-screen p-bg p-text"><MCTSExplorer /></div>} /></Routes>;
   }
   else if (frame === "modal") node = <GalleryModal />;
+  else if (frame === "feedback") {
+    node = <FeedbackFrame noise={new URLSearchParams(location.search).get("noise") === "1"} />;
+  }
   else if (frame === "palette") node = <Palette />;
   else if (frame === "marks") node = <MarksFrame />;
   else if (frame === "tabs") node = <TabsFrame />;
+  // The interactive rig routes like the app so the strip's own navigation is
+  // exercised: create lands on the new conversation's URL, Main goes back.
+  else if (frame === "agentchats") {
+    entries = ["/workspace/checkout-fixes"];
+    node = (
+      <Routes>
+        <Route path="/workspace/:agentId" element={<AgentChatsScene />} />
+        <Route path="/workspace/:agentId/agents/:subName" element={<AgentChatsScene />} />
+      </Routes>
+    );
+  }
   else if (frame === "markdown") node = <MarkdownFrame />;
   else if (frame === "chat") node = <ChatFrame />;
   else if (frame === "chatsteer") node = <ChatSteerFrame />;
@@ -3717,7 +4026,14 @@ async function mount() {
   else if (frame === "workspacepage") {
     serveGalleryRpc(workspacePageRpc);
     entries = ["/workspace/checkout-fixes"];
-    node = <Routes><Route path="/workspace/:agentId" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} /></Routes>;
+    // Both app routes, exactly as App.tsx keys them: creating an agent
+    // navigates to its conversation, and the frame must be able to land there.
+    node = (
+      <Routes>
+        <Route path="/workspace/:agentId" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
+        <Route path="/workspace/:agentId/agents/:subName" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
+      </Routes>
+    );
   }
   else if (frame === "settings") {
     const { default: SettingsPage } = await import("@/pages/SettingsPage");
@@ -3730,6 +4046,19 @@ async function mount() {
           path="/workspace/:agentId/settings"
           element={<div className="min-h-screen p-bg p-text"><SettingsPage /></div>}
         />
+      </Routes>
+    );
+  }
+  // The admin control plane. Routed, because the page keeps its tab, the
+  // selected account and the selected workspace in the URL — an operator sends a
+  // colleague the exact view they are looking at, and a bare mount could not
+  // render any of it.
+  else if (frame === "control") {
+    const { default: ControlPage } = await import("@/pages/ControlPage");
+    entries = ["/control"];
+    node = (
+      <Routes>
+        <Route path="/control" element={<div className="h-screen p-bg p-text"><ControlPage /></div>} />
       </Routes>
     );
   }

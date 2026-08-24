@@ -159,6 +159,16 @@ function fullDeps(): AgentsToolDeps {
           currentTask: null, createdAt: 1, dismissedAt: null,
         },
       }),
+      rename: async () => ({
+        ok: true as const,
+        name: 'n',
+        displayName: 'N',
+        subordinate: {
+          name: 'n', displayName: 'N', role: 'researcher', createdBy: 'user', status: 'idle',
+          currentTask: null, createdAt: 1, dismissedAt: null,
+        },
+      }),
+      recordTitle: async () => ({ ok: true as const, name: 'n', displayName: 'N' }),
       spawn: async () => ({ name: 'n', displayName: 'N' }),
       assign: async () => ({ ok: true as const, name: 'n', ...codemodeHandoff }),
       status: async () => ({}),

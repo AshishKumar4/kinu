@@ -333,6 +333,9 @@ const ACTOR_AGENT_RPC_SURFACE = [
   'onCredentialsChanged',
   'readWorkspaceFile',
   'receiveSubordinateEvent',
+  // A child titling itself reaches its parent's roster the same way its
+  // reports do — parent-side, both directions of a nested tree.
+  'recordSubordinateTitle',
   'reportFacetModelCall',
   'reportFacetModelOperation',
   'statWorkspaceFile',
@@ -363,6 +366,7 @@ const ORCHESTRATOR_METHODS = [
   'beginGenesisTurn',
   'claimOwner',
   'createDurableWebhook',
+  'facetTurnProfile',
   'getEmailIngress',
   'getRunEvents',
   'getRunEventsWire',
@@ -411,6 +415,7 @@ const SUBORDINATE_METHODS = [
   'enqueueSubordinateTask',
   'getSubordinateStatus',
   'setSubordinateIdentity',
+  'setSubordinateNaming',
 ] as const satisfies readonly (keyof SubordinateAgent)[];
 
 export const SUBORDINATE_RPC_SURFACE: readonly string[] = [

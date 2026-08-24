@@ -126,7 +126,10 @@ describe('CLI cloud agent registry sync', () => {
 
     expect(proc.exitCode).toBe(0);
     const parsed = v.parse(v.object({
-      result: v.array(v.object({ name: v.string(), mode: v.string(), label: v.string() })),
+      result: v.object({
+        agents: v.array(v.object({ name: v.string(), mode: v.string(), label: v.string() })),
+        collisions: v.array(v.looseObject({ name: v.string() })),
+      }),
       config: v.object({
         agents: v.record(v.string(), v.object({ mode: v.string(), displayName: v.optional(v.string()) })),
         aliases: v.optional(v.record(v.string(), v.string())),
@@ -136,7 +139,100 @@ describe('CLI cloud agent registry sync', () => {
     expect(parsed.config.agents['web-agent']).toMatchObject({ mode: 'cloud', displayName: 'Web Agent' });
     expect(parsed.config.agents.localbot).toMatchObject({ mode: 'local', displayName: 'Local Bot' });
     expect(parsed.config.aliases).toEqual({ local: 'localbot' });
-    expect(parsed.result.map((agent) => `${agent.name}:${agent.mode}`)).toContain('web-agent:cloud');
+    expect(parsed.result.agents.map((agent) => `${agent.name}:${agent.mode}`)).toContain('web-agent:cloud');
+    // Distinct names, so nothing was contested.
+    expect(parsed.result.collisions).toEqual([]);
+  });
+
+  test('a cloud workspace whose name a placed local ref holds leaves the placement alone and reports the clash', () => {
+    const home = mkdtempSync(join(tmpdir(), 'kinu-agent-list-'));
+    const project = realpathSync(mkdtempSync(join(tmpdir(), 'kinu-project-')));
+    tempDirs.push(home, project);
+    mkdirSync(join(home, 'shopbot'), { recursive: true });
+    // `listLocalRefsAllProjects` only counts a ref whose database exists.
+    writeFileSync(join(home, 'shopbot', 'agent.db'), '');
+    writeFileSync(join(home, 'config.json'), JSON.stringify({
+      origin: 'https://kinu.test',
+      accessToken: 'ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz',
+      agents: {
+        shopbot: {
+          name: 'shopbot',
+          mode: 'local',
+          displayName: 'Shop Bot',
+          localName: 'shopbot',
+          cwd: project,
+          workspaceId: 'shop-floor',
+          createdAt: '2026-06-08T00:00:00.000Z',
+          updatedAt: '2026-06-08T00:00:00.000Z',
+        },
+      },
+      aliases: { shop: 'shopbot' },
+    }, null, 2));
+
+    // The server offers a workspace under the SAME name as the placed local one.
+    const script = `
+      globalThis.fetch = async () => Response.json([
+        { name: 'shopbot', displayName: 'Cloud Shop', createdAt: 1790000000000, lastVisited: 1790000000000, archivedAt: null }
+      ]);
+      const { syncCloudAgentRefs } = await import('./packages/cli/src/agent-list.ts');
+      const { listLocalRefsAllProjects } = await import('./packages/cli/src/config.ts');
+      const { readFileSync } = await import('node:fs');
+      const result = await syncCloudAgentRefs();
+      console.log(JSON.stringify({
+        result,
+        config: JSON.parse(readFileSync('${join(home, 'config.json')}', 'utf8')),
+        placed: listLocalRefsAllProjects(),
+      }));
+    `;
+    const proc = Bun.spawnSync({
+      cmd: [process.execPath, '-e', script],
+      cwd: repoRoot,
+      env: { ...process.env, KINU_HOME: home },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+
+    expect(proc.exitCode).toBe(0);
+    const parsed = v.parse(v.object({
+      result: v.object({
+        agents: v.array(v.looseObject({ name: v.string(), mode: v.string() })),
+        collisions: v.array(v.object({
+          name: v.string(),
+          localName: v.string(),
+          cloudDisplayName: v.string(),
+        })),
+      }),
+      config: v.object({
+        agents: v.record(v.string(), v.looseObject({
+          mode: v.string(),
+          displayName: v.optional(v.string()),
+          cwd: v.optional(v.string()),
+          workspaceId: v.optional(v.string()),
+        })),
+        aliases: v.optional(v.record(v.string(), v.string())),
+      }),
+      placed: v.array(v.looseObject({ name: v.string(), workspaceId: v.string() })),
+    }), JSON.parse(proc.stdout.toString()));
+
+    // The placement survives byte for byte: mode, directory and workspace.
+    expect(parsed.config.agents.shopbot).toMatchObject({
+      mode: 'local',
+      displayName: 'Shop Bot',
+      cwd: project,
+      workspaceId: 'shop-floor',
+    });
+    // So the scheduler's roster still holds it, which is what the mode flip
+    // used to destroy: placedRef requires mode 'local'.
+    expect(parsed.placed.map((ref) => `${ref.name}@${ref.workspaceId}`)).toEqual(['shopbot@shop-floor']);
+    expect(parsed.config.aliases).toEqual({ shop: 'shopbot' });
+    // And the clash is reported rather than resolved by overwriting.
+    expect(parsed.result.collisions).toEqual([{
+      name: 'shopbot',
+      localName: 'shopbot',
+      cloudDisplayName: 'Cloud Shop',
+    }]);
+    // One row for that name, and it is the local one.
+    expect(parsed.result.agents.filter((agent) => agent.name === 'shopbot').map((a) => a.mode)).toEqual(['local']);
   });
 });
 
