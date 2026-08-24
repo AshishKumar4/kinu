@@ -10,13 +10,16 @@ import { describe, expect, test } from 'bun:test';
 import { canonicalProjectRoot } from '../src/config';
 import { type TuiPreferenceStore } from '../src/tui/preferences';
 import { createMemoryTuiPreferenceStore } from './helpers/tui-preferences';
+import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
 import {
   TuiProductProvider,
   TuiShell,
+  useAgentRoster,
   usePreservedScrollAnchor,
   type ScrollAnchorController,
   type TuiAgentPage,
   type TuiAgentRoster,
+  type TuiAgentSource,
   type TuiAgentSummary,
 } from '../src/tui/tui-shell';
 
@@ -579,3 +582,134 @@ async function renderSettled(renderOnce: () => Promise<void>): Promise<void> {
     await Bun.sleep(5);
   }
 }
+
+// ── Roster failure ownership — the real hook under the shell ────────────────
+
+let failingRoster: TuiAgentRoster | null = null;
+
+function RosterFailureProbe(props: { readonly store: TuiPreferenceStore; readonly source: TuiAgentSource }) {
+  const roster = useAgentRoster(props.source);
+  failingRoster = roster;
+  return (
+    <TuiProductProvider runtime={{ preferenceStore: props.store, terminalAppearance: 'dark', colorCapability: 'truecolor' }}>
+      <TuiShell
+        scene="chat"
+        roster={roster}
+        navigationOverlayOpen={false}
+        onNavigationOverlayChange={() => {}}
+      >
+        <box />
+      </TuiShell>
+    </TuiProductProvider>
+  );
+}
+
+async function mountRosterProbe(source: TuiAgentSource) {
+  const testRenderer = await createTestRenderer({
+    width: 160,
+    height: 28,
+    useThread: false,
+    maxFps: Number.POSITIVE_INFINITY,
+  });
+  const root = createRoot(testRenderer.renderer);
+  root.render(<RosterFailureProbe store={createMemoryTuiPreferenceStore()} source={source} />);
+  await renderSettled(testRenderer.renderOnce);
+  return {
+    frame: () => testRenderer.captureCharFrame(),
+    async settle() {
+      await renderSettled(testRenderer.renderOnce);
+    },
+    async clickLine(text: string) {
+      const index = testRenderer.captureCharFrame().split('\n').findIndex((line) => line.includes(text));
+      if (index < 0) throw new Error(`No frame line containing ${text}`);
+      await testRenderer.mockMouse.click(4, index);
+    },
+    async destroy() {
+      root.render(<box />);
+      await testRenderer.renderOnce();
+      testRenderer.renderer.destroy();
+      failingRoster = null;
+    },
+  };
+}
+
+const rosterItem = (name: string): TuiAgentSummary => ({
+  name, label: name, mode: 'local', cwd: ROOT, workspaceId: 'shop',
+});
+
+describe('agent roster failure ownership', () => {
+  test('a failed page shows the whole cause chain and keeps Load more retryable', async () => {
+    let pageReads = 0;
+    const source: TuiAgentSource = {
+      load(cursor) {
+        if (cursor === null) return { items: [rosterItem('alpha'), rosterItem('beta')], total: 4, nextCursor: 'p2' };
+        pageReads += 1;
+        if (pageReads === 1) throw new Error('page failed', { cause: new Error('boom') });
+        return { items: [rosterItem('gamma'), rosterItem('delta')], total: 4, nextCursor: null };
+      },
+    };
+    const probe = await mountRosterProbe(source);
+    try {
+      expect(probe.frame()).toContain('Load more');
+      await probe.clickLine('Load more');
+      await probe.settle();
+      const failed = probe.frame();
+      // The whole chain reaches the person, and the paging row survives the
+      // failure — a failed page must never read as the end of the list.
+      expect(failed).toContain('page failed: boom');
+      expect(failed).toContain('Load more');
+      expect(failed).toContain('2 of 4');
+      await probe.clickLine('Load more');
+      await probe.settle();
+      const recovered = probe.frame();
+      expect(recovered).toContain('gamma');
+      expect(recovered).toContain('4 of 4');
+      expect(recovered).not.toContain('page failed');
+      expect(recovered).not.toContain('Load more');
+    } finally {
+      await probe.destroy();
+    }
+  });
+
+  test('a failed roster read shows the whole cause chain in the navigator', async () => {
+    const source: TuiAgentSource = {
+      load() {
+        throw new Error('roster failed', { cause: new Error('locked') });
+      },
+    };
+    const probe = await mountRosterProbe(source);
+    try {
+      expect(probe.frame()).toContain('roster failed: locked');
+    } finally {
+      await probe.destroy();
+    }
+  });
+
+  test('a superseded page failure lands in diagnostics, never on the fresh view', async () => {
+    const recorder = createRecordingLogger();
+    const restore = setDiagnosticsSink(recorder);
+    const pending = Promise.withResolvers<TuiAgentPage>();
+    const source: TuiAgentSource = {
+      load(cursor) {
+        if (cursor === null) return { items: [rosterItem('alpha')], total: 2, nextCursor: 'p2' };
+        return pending.promise;
+      },
+    };
+    const probe = await mountRosterProbe(source);
+    try {
+      await probe.clickLine('Load more');
+      await probe.settle();
+      await failingRoster?.reload();
+      await probe.settle();
+      pending.reject(new Error('page failed', { cause: new Error('boom') }));
+      await probe.settle();
+      expect(probe.frame()).not.toContain('page failed');
+      const recorded = recorder.emitted.find((line) => line.event === 'tui.roster_page_superseded');
+      expect(recorded?.code).toBe('unavailable');
+      expect(recorded?.cause).toContain('page failed: boom');
+    } finally {
+      restore();
+      await probe.destroy();
+    }
+  });
+});

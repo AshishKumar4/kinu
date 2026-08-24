@@ -1,6 +1,7 @@
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
-import { describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'bun:test';
 import { asFetchFunction } from '@kinu.run/core';
+import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
 import { testOwner } from './helpers/user-do';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -72,6 +73,35 @@ function indexFeed(): IndexFeed {
 function userStub(env: Env) {
   return env.UserDO.get(env.UserDO.idFromName(USER_ID));
 }
+
+/**
+ * The registry surface a create reaches when nothing about the roster is what
+ * the test is asking about: it registers, it can be asked to undo, and it
+ * answers the credential reads the model menu makes. Each rollback test below
+ * overrides exactly the one method whose failure it is about, so the method that
+ * failed is the only difference between them.
+ */
+function registryStub() {
+  return {
+    async getConfig(_caller: UserCaller) { return null; },
+    async getAuthHeaders(_caller: UserCaller) { return { authorization: 'Bearer token' }; },
+    async getCredentialBaseURL(_caller: UserCaller) {
+      return 'https://api.cloudflare.com/client/v4/accounts/account/ai/v1';
+    },
+    async listCredentials(_caller: UserCaller) { return []; },
+    async ensureWorkspaceCapability() {},
+    async registerWorkspace(_caller: UserCaller, name: string, displayName?: string) {
+      return {
+        entry: { name, displayName: displayName ?? name, createdAt: 1, lastVisited: 1, archivedAt: null },
+        existed: false,
+      };
+    },
+    async releaseWorkspaceReservation() { return true; },
+    async removeWorkspace() {},
+  };
+}
+
+afterEach(() => { setDiagnosticsSink(createRecordingLogger()); });
 
 describe('cloud agent ownership safety', () => {
   test('mission-only create does not block on generated cloud naming', async () => {
@@ -290,6 +320,106 @@ describe('cloud agent ownership safety', () => {
     // object it does not own, so nothing would have removed it.
     expect(index.observed).toEqual([]);
     expect(index.forgotten).toEqual([`${USER_ID}/jarvis`]);
+  });
+
+  test('a release the roster refuses propagates, and the create still answers with its OWN failure', async () => {
+    // The rollback's two failures are not one failure. `releaseWorkspaceReservation`
+    // touches nothing but this account's own roster, so a refusal there is a
+    // fault rather than a state the undo knows how to leave behind — and it must
+    // not become the answer, because the caller asked to create a workspace and
+    // why THAT failed is what it needs. Swallowed, both facts read as one line.
+    const recording = createRecordingLogger();
+    setDiagnosticsSink(recording);
+    const index = indexFeed();
+    const userDO = {
+      ...registryStub(),
+      async releaseWorkspaceReservation() {
+        throw new Error('the roster row is not this session’s to release');
+      },
+    };
+    const orchestrator = {
+      async claimOwner() { throw new Error('Agent owned by a different user'); },
+    };
+    const env = testEnv({
+      UserDO: { idFromName(name: string) { return name; }, get() { return userDO; } },
+      OrchestratorAgent: { idFromName(name: string) { return name; }, get() { return orchestrator; } },
+      ControlPlaneDO: index.namespace,
+      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
+    try {
+      await expect(createCloudWorkspaceForUser(env, USER_ID, userStub(env), await testOwner(), {
+        name: 'jarvis', displayName: 'Jarvis', purpose: 'Help with software projects',
+      })).rejects.toThrow('Agent owned by a different user');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    // Recorded as the undo's own fault, under its own name, with both frames of
+    // the chain — not filed as the tolerated fail-closed teardown, which is a
+    // decision this rollback did not make.
+    const unexpected = recording.emitted.find(
+      (line) => line.event === 'workspace.create_rollback_unexpected',
+    );
+    expect(unexpected).toBeDefined();
+    expect(unexpected?.cause).toContain('undoing a failed workspace create');
+    expect(unexpected?.cause).toContain('releasing the roster row a failed create reserved');
+    expect(unexpected?.cause).toContain('not this session’s to release');
+    expect(unexpected?.fields).toMatchObject({ workspace: 'jarvis' });
+    expect(recording.emitted.some((line) => line.event === 'workspace.create_rollback_failed'))
+      .toBe(false);
+    // The roster row survived the failed release, so its index copy must too.
+    expect(index.forgotten).toEqual([]);
+  });
+
+  test('a teardown that fails closed is tolerated, and the index keeps the row it left standing', async () => {
+    // The ONE rollback failure that is a state. `removeWorkspace` tears the
+    // Durable Object down before dropping the row and fails closed when the
+    // teardown does not happen, so the row standing is deliberate: a same-name
+    // recreate must not reconnect to resources nothing destroyed. Propagating
+    // this would replace the create's own error with a cleanup's, and
+    // tombstoning the index would tell an operator the opposite of the truth.
+    const recording = createRecordingLogger();
+    setDiagnosticsSink(recording);
+    const index = indexFeed();
+    const userDO = {
+      ...registryStub(),
+      async removeWorkspace() {
+        throw new Error('destroyAgent did not complete; refusing to drop the row');
+      },
+    };
+    const orchestrator = {
+      async claimOwner(userId: string) { return { owner: userId, capabilityHash: null }; },
+      async setInitialDisplayName() {},
+      async setSoul() { throw new Error('the workspace could not seed its soul'); },
+    };
+    const env = testEnv({
+      UserDO: { idFromName(name: string) { return name; }, get() { return userDO; } },
+      OrchestratorAgent: { idFromName(name: string) { return name; }, get() { return orchestrator; } },
+      ControlPlaneDO: index.namespace,
+      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
+    try {
+      await expect(createCloudWorkspaceForUser(env, USER_ID, userStub(env), await testOwner(), {
+        name: 'jarvis', displayName: 'Jarvis', purpose: 'Help with software projects',
+      })).rejects.toThrow('the workspace could not seed its soul');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const tolerated = recording.emitted.find(
+      (line) => line.event === 'workspace.create_rollback_failed',
+    );
+    expect(tolerated).toBeDefined();
+    expect(tolerated?.code).toBe('unavailable');
+    expect(tolerated?.cause).toContain('tearing down the workspace a failed create registered');
+    expect(tolerated?.fields).toMatchObject({ workspace: 'jarvis', contested: false });
+    expect(recording.emitted.some((line) => line.event === 'workspace.create_rollback_unexpected'))
+      .toBe(false);
+    expect(index.forgotten).toEqual([]);
   });
 
   test('a create indexes only after the workspace accepts this account as its owner', async () => {

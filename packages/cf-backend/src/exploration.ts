@@ -88,6 +88,7 @@ import {
   createAgentTracing, createConsoleLogger, diagnostics, toKinuError, type AgentTracing,
 } from "@kinu.run/core/obs";
 import { createAgentConfigStore, initAgentConfigTable } from "@kinu.run/core";
+import { forwardFacetModelOperations } from "./obs/facet-operations";
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { installAnalyticsDiagnostics } from "./analytics/install";
 import { openAnalyticsWindow } from "./analytics/writer";
@@ -140,25 +141,11 @@ export class ExplorationAgent extends Agent<Env> {
     return this._boundSql;
   }
 
-  /** Where THIS facet's model-operation frames go: forwarded over the same
-   *  root RPC the merge's cost report uses (`reportFacetModelOperation`), for
-   *  the reason that twin exists — a facet has no durable log of its own, so
-   *  an operation row written locally would strand one Durable Object away
-   *  from the spend row it explains. A missing parent is instrumentation
-   *  losing its destination, not the merge failing: reported and dropped,
-   *  exactly how core's shared projection treats a ledger fault. */
-  private readonly modelOperations: ModelOperationSink = (event) => {
-    const parent = this.getSharedParentStub();
-    if (!parent) {
-      diagnostics.failure('event.model_operation_emit_failed', toKinuError({
-        doing: 'forwarding a model_operation frame to the root workspace',
-        cause: new Error('no parent workspace'),
-        otherwise: 'io',
-      }), { operationId: event.operationId, phase: event.phase, source: event.source });
-      return;
-    }
-    void parent.reportFacetModelOperation(event);
-  };
+  /** Where THIS facet's model-operation frames go. The thunk, rather than the
+   *  stub: `_cf_initAsFacet` seeds the parent AFTER every field initializer has
+   *  run, so a value captured here would be the null it started as. */
+  private readonly modelOperations: ModelOperationSink =
+    forwardFacetModelOperations(() => this.getSharedParentStub());
 
   /**
    * The parent workspace's resolved turn profile — the one thing a facet must

@@ -100,7 +100,22 @@ export async function createCloudWorkspaceForUser(
     // Roll back ONLY a row this create inserted. A pre-existing row — even an
     // archived one, which registerWorkspace resurrects on name conflict — must
     // never be destroyed here: removeWorkspace wipes the agent's whole DO.
-    if (!existed) await rollbackRegistration({ env, userId, userDO, caller, entry, cause: err });
+    //
+    // A ROLLBACK FAULT MUST NOT REPLACE THE FAULT THAT CAUSED IT. The caller
+    // asked for a workspace, and why the create failed is the answer it needs;
+    // an undo that could not finish is a second, separate fact. So the undo's
+    // own failure is recorded under its own name here and the original still
+    // propagates.
+    if (!existed) {
+      await rollbackRegistration({ env, userId, userDO, caller, entry, cause: err })
+        .catch((rollbackFailure) => {
+          diagnostics.failure('workspace.create_rollback_unexpected', toKinuError({
+            doing: 'undoing a failed workspace create',
+            cause: rollbackFailure,
+            otherwise: 'unavailable',
+          }), { workspace: entry.name });
+        });
+    }
     throw err;
   }
 }
@@ -118,6 +133,16 @@ export async function createCloudWorkspaceForUser(
  * check then had to catch. `releaseWorkspaceReservation` exists for exactly this
  * case: it drops the one row this create inserted, matched on its own
  * `createdAt`, and never contacts the target object at all.
+ *
+ * ONE ROLLBACK FAILURE IS A STATE, THE REST ARE FAULTS. `removeWorkspace` fails
+ * closed on purpose, so a teardown it could not finish deliberately leaves the
+ * roster row standing — and the index row with it, which is why the tombstone
+ * below is not reached on that path. That outcome is recorded with its class and
+ * tolerated. The release path touches nothing but this account's own roster, so
+ * a failure there is not a state this undo knows how to leave behind: it
+ * propagates to the create, which records it beside the fault that started the
+ * rollback. Returning nothing for both was how a rollback that never ran read
+ * exactly like one that did.
  */
 async function rollbackRegistration(input: {
   env: Env;
@@ -135,12 +160,18 @@ async function rollbackRegistration(input: {
     } else {
       await userDO.removeWorkspace(caller, entry.name, userId);
     }
-  } catch (rollbackErr) {
-    diagnostics.failure('workspace.create_rollback_failed', toKinuError({
-      doing: 'rolling back a partially created workspace',
-      cause: rollbackErr,
+  } catch (cause) {
+    const failure = toKinuError({
+      doing: contested
+        ? 'releasing the roster row a failed create reserved'
+        : 'tearing down the workspace a failed create registered',
+      cause,
       otherwise: 'unavailable',
-    }), { workspace: entry.name, contested });
+    });
+    if (contested) throw failure;
+    diagnostics.failure('workspace.create_rollback_failed', failure, {
+      workspace: entry.name, contested,
+    });
     return;
   }
   // The index row this create published, if it got that far. A tombstone for a

@@ -115,6 +115,35 @@ describe('ChatApp terminal interaction', () => {
     await screen.waitFor('the selected model result', () =>
       screen.frame().includes('Model: openai/gpt-5.5'));
   });
+
+  test('a failed initial connection reports the whole cause chain', async () => {
+    const controlled = fakeClient({
+      name: 'alpha',
+      connect: async () => {
+        throw new Error('the workspace socket refused', { cause: new Error('ECONNREFUSED 127.0.0.1') });
+      },
+    });
+    const screen = await mountChat(controlled.client, {
+      settled: (frame) => frame.includes('the workspace socket refused'),
+    });
+    // The whole chain reaches the person; the composer says the truth about readiness.
+    expect(screen.frame()).toContain('Error: the workspace socket refused: ECONNREFUSED 127.0.0.1');
+    expect(screen.frame()).toContain('Connecting…');
+  });
+
+  test('a failed slash command reports the whole cause chain', async () => {
+    const controlled = fakeClient({
+      name: 'alpha',
+      rename: async () => {
+        throw new Error('the rename was refused', { cause: new Error('name already taken') });
+      },
+    });
+    const screen = await mountChat(controlled.client);
+    await screen.mockInput.typeText('/rename beta');
+    screen.mockInput.pressEnter();
+    await screen.waitFor('the submit failure with its chain', () =>
+      screen.frame().includes('Error: the rename was refused: name already taken'));
+  });
   test('failed workspace connection keeps the current workspace usable', async () => {
     const controlled = fakeClient({ name: 'alpha' });
     const candidate = fakeClient({

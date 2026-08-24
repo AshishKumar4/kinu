@@ -115,6 +115,96 @@ describe('guided onboarding renderer', () => {
       renderer.destroy();
     }
   });
+
+  test('a failed readiness read shows the whole cause chain, not a stuck spinner', async () => {
+    const operations: TuiOnboardingOperations = {
+      readReadiness: () => {
+        throw new Error('readiness read failed', { cause: new Error('no such table: onboarding') });
+      },
+      chooseLocation: () => {},
+      connectAccount: () => {},
+      connectProvider: () => {},
+      configureTiers: () => {},
+      selectTheme: () => {},
+      selectKeymap: () => {},
+      createWorkspace: () => {},
+      skip: () => {},
+    };
+    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({
+      width: 80,
+      height: 24,
+      useThread: false,
+      maxFps: Number.POSITIVE_INFINITY,
+    });
+    const root = createRoot(renderer);
+    try {
+      root.render(
+        <TuiProductProvider runtime={{ preferenceStore: createMemoryTuiPreferenceStore(), terminalAppearance: 'dark', colorCapability: 'truecolor' }}>
+          <GuidedOnboarding
+            operations={operations}
+            roles={[]}
+            onReady={() => {}}
+            onExit={() => {}}
+          />
+        </TuiProductProvider>,
+      );
+      await waitForFrame(renderOnce, captureCharFrame, 'readiness read failed: no such table: onboarding');
+      expect(captureCharFrame()).not.toContain('Checking readiness…');
+    } finally {
+      root.render(<box />);
+      renderer.destroy();
+    }
+  });
+
+  test('a failed step action surfaces the whole cause chain beside the step', async () => {
+    const readiness: OnboardingReadiness = {
+      accountConnected: false,
+      providerConnected: false,
+      tierAliasesResolved: false,
+      themeSelected: false,
+      keymapSelected: false,
+      workspaceCount: 0,
+      skippedSteps: [],
+    };
+    const operations: TuiOnboardingOperations = {
+      readReadiness: () => readiness,
+      chooseLocation: () => {
+        throw new Error('the location could not be saved', { cause: new Error('config.json is read-only') });
+      },
+      connectAccount: () => {},
+      connectProvider: () => {},
+      configureTiers: () => {},
+      selectTheme: () => {},
+      selectKeymap: () => {},
+      createWorkspace: () => {},
+      skip: () => {},
+    };
+    const { renderer, mockInput, renderOnce, captureCharFrame } = await createTestRenderer({
+      width: 80,
+      height: 24,
+      useThread: false,
+      maxFps: Number.POSITIVE_INFINITY,
+    });
+    const root = createRoot(renderer);
+    try {
+      root.render(
+        <TuiProductProvider runtime={{ preferenceStore: createMemoryTuiPreferenceStore(), terminalAppearance: 'dark', colorCapability: 'truecolor' }}>
+          <GuidedOnboarding
+            operations={operations}
+            roles={[{ id: 'general', label: 'General', description: 'General work' }]}
+            onReady={() => {}}
+            onExit={() => {}}
+          />
+        </TuiProductProvider>,
+      );
+      await waitForFrame(renderOnce, captureCharFrame, 'Step 1/6 · location');
+      mockInput.pressEnter();
+      await waitForFrame(renderOnce, captureCharFrame, 'the location could not be saved: config.json is read-only');
+    } finally {
+      root.render(<box />);
+      renderer.destroy();
+    }
+  });
 });
 
 async function renderSettled(renderOnce: () => Promise<void>): Promise<void> {

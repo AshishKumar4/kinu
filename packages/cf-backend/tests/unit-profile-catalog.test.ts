@@ -163,16 +163,26 @@ describe('profile catalog compare-and-swap writes', () => {
     harness.close();
   });
 
-  test('a malformed catalog is rejected before any write', async () => {
+  test('a malformed catalog is rejected before any write, naming the field at fault', async () => {
     const harness = createTestUserDO();
     await write(harness, 0, catalog());
 
-    const cases: Array<[string, JsonValue]> = [
+    // The third member is the path the refusal MUST name. This reason is the
+    // whole of what an owner is shown about a catalog the account would not
+    // take, so a refusal that says only "invalid" leaves them guessing which of
+    // two dozen fields to look at. It is rendered from the whole cause chain for
+    // the same reason: the frame that names the path can sit one `cause` below a
+    // wrapper, and the outermost message is the least informative one.
+    const cases: Array<[string, JsonValue, string]> = [
       ['role missing its description', {
         roles: { general: { instructions: 'Do the task directly.', tier: 'default', preset: 'ideate' } },
         tiers: { default: { model: MODEL } },
-      }],
-      ['unknown tier id', { roles: {}, tiers: { default: { model: MODEL }, giant: { model: MODEL } } }],
+      }, 'roles.general.description'],
+      [
+        'unknown tier id',
+        { roles: {}, tiers: { default: { model: MODEL }, giant: { model: MODEL } } },
+        'tiers.giant',
+      ],
       ['definition repeating its record key', {
         roles: {
           general: {
@@ -184,13 +194,13 @@ describe('profile catalog compare-and-swap writes', () => {
           },
         },
         tiers: { default: { model: MODEL } },
-      }],
-      ['tier without a model', { roles: {}, tiers: { default: {} } }],
+      }, 'roles.general.id'],
+      ['tier without a model', { roles: {}, tiers: { default: {} } }, 'tiers.default.model'],
     ];
-    for (const [name, bad] of cases) {
+    for (const [name, bad, path] of cases) {
       const result = await write(harness, 1, bad);
       expect(result.ok, name).toBe(false);
-      if (!result.ok && result.kind === 'malformed') expect(result.reason.length, name).toBeGreaterThan(0);
+      if (!result.ok && result.kind === 'malformed') expect(result.reason, name).toContain(path);
     }
 
     const read = await harness.userDO.getProfileCatalog(await testOwner());

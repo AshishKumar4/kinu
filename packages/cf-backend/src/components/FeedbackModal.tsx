@@ -19,7 +19,7 @@ import { Button } from "@cloudflare/kumo";
 import { FilledButton } from "./ui/FilledButton";
 import { Modal } from "./ui/Modal";
 import { inputCls } from "./ui/form";
-import { renderThrownChain, tolerateAsync } from "@kinu.run/core/obs";
+import { diagnostics, renderThrownChain, toKinuError, tolerateAsync } from "@kinu.run/core/obs";
 import * as v from "valibot";
 import {
   capturePage,
@@ -89,6 +89,12 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
   const take = useCallback(() => {
     setShot({ phase: "capturing" });
     setMarks([]);
+    const captureFailed = <Thrown,>(thrown: Thrown): void => {
+      diagnostics.failure("feedback.capture_failed", toKinuError({
+        doing: "capture the page for a feedback report", cause: thrown, otherwise: "unsupported",
+      }));
+      setShot({ phase: "failed", reason: renderThrownChain({ cause: thrown }) });
+    };
     // One frame, so the dialog's own paint lands before the clone is taken —
     // otherwise the omit hook removes nodes the browser has not laid out and
     // the page underneath is captured mid-reflow.
@@ -102,9 +108,7 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
             }
             : { phase: "ready", capture });
         },
-        <Thrown,>(thrown: Thrown) => {
-          setShot({ phase: "failed", reason: renderThrownChain({ cause: thrown }) });
-        },
+        captureFailed,
       );
     });
   }, []);
@@ -123,12 +127,16 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
       return;
     }
     let live = true;
+    const decodeFailed = <Thrown,>(thrown: Thrown): void => {
+      diagnostics.failure("feedback.decode_failed", toKinuError({
+        doing: "decode the captured screenshot for preview", cause: thrown, otherwise: "bad_input",
+      }));
+      if (live) setShot({ phase: "failed", reason: renderThrownChain({ cause: thrown }) });
+    };
     void createImageBitmap(shot.capture.blob).then((decoded) => {
       if (!live) { decoded.close(); return; }
       setBitmap((current) => { current?.close(); return decoded; });
-    }, () => {
-      setShot({ phase: "failed", reason: "the captured image could not be decoded for preview" });
-    });
+    }, decodeFailed);
     return () => { live = false; };
   }, [shot]);
 
@@ -204,6 +212,13 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
 
   const submit = useCallback(() => {
     setSend({ phase: "sending" });
+    const sendFailed = <Thrown,>(thrown: Thrown): void => {
+      // The capture stays in state, so Retry sends the same bytes.
+      diagnostics.failure("feedback.send_failed", toKinuError({
+        doing: "send a feedback report", cause: thrown, otherwise: "io",
+      }));
+      setSend({ phase: "failed", reason: renderThrownChain({ cause: thrown }) });
+    };
     const form = new FormData();
     form.set(FEEDBACK_FIELDS.note, trimmed);
     form.set(FEEDBACK_FIELDS.route, location.pathname);
@@ -236,10 +251,7 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
         }
         setSend({ phase: "sent", id: reply.id ?? "" });
       })
-      .catch(<Thrown,>(thrown: Thrown) => {
-        // The capture stays in state, so Retry sends the same bytes.
-        setSend({ phase: "failed", reason: renderThrownChain({ cause: thrown }) });
-      });
+      .catch(sendFailed);
   }, [location.pathname, marks, shot, trimmed]);
 
   if (send.phase === "sent") {

@@ -89,6 +89,7 @@
   "movable packages/cf-backend/src/lib/web-provider.ts",
   "movable packages/cf-backend/src/memory-sync.ts",
   "movable packages/cf-backend/src/monitor/probes.ts",
+  "movable packages/cf-backend/src/obs/facet-operations.ts",
   "movable packages/cf-backend/src/providers/ai-gateway.ts",
   "movable packages/cf-backend/src/providers/cloudflare-ai-fetch.ts",
   "movable packages/cf-backend/src/providers/direct-workers-ai-fetch.ts",
