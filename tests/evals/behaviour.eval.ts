@@ -58,7 +58,8 @@ import type { LanguageModel } from 'ai';
 import type { EvalCase, JsonValue, LLMProviderConfig, RunEvent } from '../../packages/core/src/index';
 import { JsonValueSchema, minimumPairsForSignificance, parseCorpus } from '../../packages/core/src/index';
 import {
-  EVAL_MODELS, FULL_TOOL_SURFACE, caseKey, findResumableEvalDir, formatCaseCensus, hardTaskCases,
+  AdoptedSpendMeter, EVAL_MODELS, FULL_TOOL_SURFACE, caseKey, findResumableEvalDir,
+  formatAdoptedSpend, formatCaseCensus, hardTaskCases,
   hardTaskFor, liveChatModel, liveModelTarget, openEvalProgress, preRegister,
   publishRunRecord, reportLiveModelSpend, TASK_OUTCOME, UNCONFIGURED_LLM,
   type CaseActivity, type EvalArmState, type EvalObservation, type EvalProgressCase,
@@ -213,6 +214,10 @@ mkdirSync(TRANSCRIPTS, { recursive: true });
 const progress = openEvalProgress(TRANSCRIPTS, RUN_SIGNATURE);
 const opened: Database[] = [];
 const observationByKey = new Map<string, EvalObservation>();
+/** What this process adopted from an interrupted predecessor rather than drove.
+ *  A rehydrated observation used to arrive without the spend that bought it, so
+ *  the record's case list covered the run and its cost covered one process. */
+const adoptedSpend = new AdoptedSpendMeter();
 let model: LanguageModel;
 let published = false;
 
@@ -358,14 +363,22 @@ for (const { task, repetition } of CASES) {
     if (record.output === undefined) {
       throw new Error(`${key}: completed progress has no stored output`);
     }
-    upsertObservation(storedCaseProgress(record.output).observation);
+    const observation = storedCaseProgress(record.output).observation;
+    upsertObservation(observation);
+    adoptedSpend.adopt(observation, record.activity);
   } else if (record?.phase === 'incomplete') {
-    upsertObservation({
+    const observation: EvalObservation = {
       taskId: task.id,
       repetition,
       outcome: 'incomplete',
       reason: record.reason ?? 'case did not settle',
-    });
+    };
+    upsertObservation(observation);
+    // A crash record is adopted for its spend too, and it has none to give: the
+    // attempt that died stored no totals. Registering it is what turns the
+    // omission into a stated one — this process will retry the case and pay for
+    // it again, and the first attempt's cost stays outside the published figure.
+    adoptedSpend.adopt(observation, record.activity);
   }
 }
 
@@ -470,6 +483,10 @@ const OUTCOME_BEARING = CORPUS.filter((c) => hardTaskFor(c) !== undefined).lengt
 
 function publishBehaviourRecord(): void {
   if (published) return;
+  // Before the number, never after it: what the total spans is the first thing a
+  // reader of a resumed run needs, and `reportLiveModelSpend` prints the total.
+  const adopted = formatAdoptedSpend(adoptedSpend.summary());
+  if (adopted) console.log(`\n${adopted}`);
   const spend = reportLiveModelSpend('Behaviour Evals');
   const observations = currentObservations();
   // The five states, over the corpus the run DECLARED. Printed beside the
@@ -587,6 +604,10 @@ describeEval('Agent behaviour over the run-event ledger', {
           throw new Error(`${key}: a scored progress record lost its harness output`);
         }
         upsertObservation(stored.observation);
+        // The second visit to this record — the module-level rehydrate above was
+        // the first. The meter is keyed by case, so this is a no-op and the
+        // adopted spend cannot be charged twice.
+        adoptedSpend.adopt(stored.observation, storedRecord.activity);
         return {
           output: stored.output,
           usage: {

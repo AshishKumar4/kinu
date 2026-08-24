@@ -847,12 +847,13 @@ export const LADDER: readonly Gate[] = [
       + 'which is what four independent instrument bugs cost us to learn.',
   },
   {
-    run: 'bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts',
+    run: 'bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts',
     tier: 'ci',
-    seconds: 30,
-    catches: 'the two UI gates\' own decision logic, including the one that would have '
+    // Measured 2026-08-24 after control-plane and feedback browser flows joined: 113.68s.
+    seconds: 120,
+    catches: 'the four UI gates\' own decision logic, including the one that would have '
       + 'caught `--radius` being undefined at `:root` while 191 `rounded-*` sites '
-      + 'computed 0px. Both self-tests ran in NO tier until this line: the gates were '
+      + 'computed 0px. The original two self-tests ran in NO tier until this line: the gates were '
       + 'built, deliberately kept off the deploy path for their Chrome cost, and their '
       + 'logic was then guarded by nothing anywhere. Now also the THEME axis, which had '
       + 'no coverage at all: `gallery.html:7-22` resolves the initial `data-mode` and '
@@ -874,19 +875,26 @@ export const LADDER: readonly Gate[] = [
       + 'MOST OF THE GALLERY: only `shell`, `streaming` and `environment` carry any '
       + 'assertion here, while gallery.tsx dispatches ~29 frames, so the rest are proven '
       + 'to mount and nothing more. The three non-default themes are audited on `shell` '
-      + 'alone. And the signed-in SPA is unreachable in this environment — no OAuth '
-      + 'provider is configured — so everything past sign-in is unmeasured rather than '
-      + 'green.',
+      + 'alone. The control-plane and feedback frames use authenticated gallery fixtures, not '
+      + 'a deployed OAuth flow. Browser capture fidelity outside those fixed frames remains '
+      + 'unmeasured rather than green.',
   },
   {
     run: 'bun test scripts/public-pages.test.ts',
     tier: 'ci',
-    seconds: 25,
+    // Re-measured 2026-08-24 after the suite grew the bug-fix demo drive and
+    // the per-element clipping sweep across six widths.
+    seconds: 51,
     catches: 'the signed-out pages as a browser renders them: the hero tree grows and '
       + 'settles on the landing page, the sign-in and install pages carry the shell, '
       + 'and every public surface holds zero case-insensitive proteus in visible text. '
       + 'The gallery async_hooks stub regression lived exactly here: every frame '
-      + 'rendered an empty document while the source-reading gates stayed green.',
+      + 'rendered an empty document while the source-reading gates stayed green. '
+      + 'Also the bug-fix demo timeline beat by beat, and the clipping class '
+      + 'documentElement.scrollWidth cannot see: the landing root is overflow-x-clip, '
+      + 'so a child wider than the viewport is cut with no scrollable overflow — the '
+      + '390px hero shipped that way, its install row forcing a 519px track into a '
+      + '350px shell.',
     blind: 'It renders the WORKER-built pages in a local browser, never the deployed '
       + 'edge — a stale cached object at Cloudflare (measured on staging 2026-08-21) '
       + 'passes here and serves anyway. No pixel is compared, so a legible-but-ugly '

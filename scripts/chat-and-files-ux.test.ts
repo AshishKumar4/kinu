@@ -597,3 +597,232 @@ describe('the gallery shell photographs a healthy neighbour', () => {
     });
   }, 120_000);
 });
+
+/**
+ * Agent conversations, as a browser drives them.
+ *
+ * `?frame=agentchats` mounts the real pieces — the tab strip's one-click
+ * create, the rename editor, the composer's Auto/Plan segment, and the
+ * per-conversation draft/mode/scroll store — over a scripted roster whose only
+ * behaviours are the wire's: a zero-input create answers a blank name, and a
+ * first message titles the roster row a beat later. `?frame=workspacepage`
+ * then proves the REAL page wires the same flow: its own hook, its own
+ * navigation, its own facet column.
+ */
+describe('an additional agent, as an ordinary conversation', () => {
+  const MISSION = 'Audit the checkout flow end to end and fix what breaks';
+  const SEED_ROLE = 'Fixture-role QA lead';
+
+  interface RigDriver {
+    page: Page;
+    activeTab(): Promise<string>;
+    clickTab(label: string): Promise<void>;
+    draft(): Promise<string>;
+    bodyText(): Promise<string>;
+  }
+
+  async function openRig(browser: Browser, origin: string, viewport: { width: number; height: number }): Promise<RigDriver> {
+    const page = await browser.newPage();
+    await page.setViewport(viewport);
+    await page.goto(`${origin}/gallery.html?frame=agentchats`, { waitUntil: 'networkidle0' });
+    await page.reload({ waitUntil: 'networkidle0' });
+    await page.waitForSelector('[data-agentchats] nav[aria-label="Workspace agents"]');
+    return {
+      page,
+      activeTab: () => page.$eval(
+        'nav[aria-label="Workspace agents"] [aria-current="page"]',
+        (el) => (el.textContent ?? '').trim(),
+      ),
+      clickTab: async (label: string) => {
+        for (const link of await page.$$('nav[aria-label="Workspace agents"] a')) {
+          const text = await link.evaluate((el) => el.textContent ?? '');
+          if (text.includes(label)) {
+            await link.click();
+            return;
+          }
+        }
+        throw new Error(`no tab labelled ${label}`);
+      },
+      // Puppeteer types the handle from the selector's trailing tag, so the
+      // value read needs no assertion.
+      draft: () => page.$eval('[data-agent-pane] textarea', (el) => el.value),
+      bodyText: () => page.evaluate(() => document.body.innerText),
+    };
+  }
+
+  test('create is one click; the title, mode, draft, and scroll stay with their conversation', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const rig = await openRig(browser, origin, { width: 1280, height: 900 });
+      const { page } = rig;
+
+      // The inherited mission is internal, and the roster's role string is
+      // machinery — neither may render, before or after any interaction.
+      expect(await rig.bodyText()).not.toContain(MISSION);
+      expect(await rig.bodyText()).not.toContain(SEED_ROLE);
+
+      // One click. No dialog, no role field, no mission field — the click
+      // lands directly in the new agent's conversation, titled provisionally.
+      await page.click('[aria-label="New agent"]');
+      await page.waitForFunction(() => (
+        (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').includes('New agent')
+      ), { timeout: 10_000 });
+      const afterCreate = await rig.bodyText();
+      expect(afterCreate).not.toContain('Add a subordinate');
+      expect(afterCreate).not.toContain('Role');
+      expect(afterCreate).not.toContain('Mission');
+      expect(afterCreate).not.toContain(MISSION);
+      expect(await page.$eval('[data-agent-pane]', (el) => el.getAttribute('data-agent-pane')))
+        .toBe('checkout-fixes/agents/agent-1');
+      expect(afterCreate).toContain("This agent's conversation starts here.");
+
+      // Plan is THIS conversation's mode.
+      await page.evaluate(() => {
+        for (const button of document.querySelectorAll('[data-agent-pane] [aria-label="Turn mode"] button')) {
+          if (button instanceof HTMLButtonElement && button.textContent === 'Plan') button.click();
+        }
+      });
+      await page.waitForFunction(() => (
+        [...document.querySelectorAll('[data-agent-pane] [aria-label="Turn mode"] button')]
+          .some((button) => button.textContent === 'Plan' && button.getAttribute('aria-pressed') === 'true')
+      ));
+
+      // First message: sent in Plan, attributed to THIS agent, and the
+      // auto-title lands on the roster a beat later.
+      await page.type('[data-agent-pane] textarea', 'Fix the coupon flow properly');
+      await page.click('[aria-label="Send"]');
+      await page.waitForFunction(() => (
+        (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '')
+          .includes('Fix the coupon flow properly')
+      ), { timeout: 10_000 });
+      const sentLogAfterFirst = await page.$eval(
+        '[data-sent-log]',
+        (el) => el.getAttribute('data-sent-log') ?? '[]',
+      );
+      const sentAfterFirst: unknown = JSON.parse(sentLogAfterFirst);
+      expect(sentAfterFirst).toEqual([{ agent: 'agent-1', mode: 'plan', text: 'Fix the coupon flow properly' }]);
+
+      // A draft typed here stays here; Main keeps its own draft and its own
+      // Auto mode; coming back finds both the draft and Plan untouched.
+      await page.type('[data-agent-pane] textarea', 'half a thought');
+      await rig.clickTab('Main');
+      await page.waitForSelector('[data-agent-pane="checkout-fixes/main"]');
+      expect(await rig.draft()).toBe('');
+      expect(await page.$$eval(
+        '[data-agent-pane] [aria-label="Turn mode"] button',
+        (buttons) => buttons.map((button) => `${button.textContent}:${button.getAttribute('aria-pressed')}`),
+      )).toEqual(['Auto:true', 'Plan:false']);
+      await page.type('[data-agent-pane] textarea', 'main draft');
+      await rig.clickTab('Fix the coupon flow properly');
+      await page.waitForSelector('[data-agent-pane="checkout-fixes/agents/agent-1"]');
+      expect(await rig.draft()).toBe('half a thought');
+      expect(await page.$$eval(
+        '[data-agent-pane] [aria-label="Turn mode"] button',
+        (buttons) => buttons.map((button) => `${button.textContent}:${button.getAttribute('aria-pressed')}`),
+      )).toEqual(['Auto:false', 'Plan:true']);
+
+      // Rename through the header — the same editor the workspace bar uses —
+      // and the roster follows.
+      await page.click('[title="Rename agent"]');
+      await page.waitForSelector('[aria-label="Agent name"]');
+      await page.type('[aria-label="Agent name"]', 'Coupon fixer');
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(() => (
+        (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').includes('Coupon fixer')
+      ), { timeout: 10_000 });
+
+      // The reader's position belongs to the conversation: leave an existing
+      // transcript at its top, visit another tab, come back to the same spot
+      // (without the restore, an "up" scroller pins to the bottom on mount).
+      await rig.clickTab('Checkout scout');
+      await page.waitForSelector('[data-agent-pane="checkout-fixes/agents/scout"]');
+      const geometry = await page.$eval('[data-agent-scroll]', (el) => ({
+        scrollable: el.scrollHeight > el.clientHeight,
+        atBottom: el.scrollHeight - el.scrollTop - el.clientHeight < 60,
+      }));
+      expect(geometry.scrollable).toBe(true);
+      expect(geometry.atBottom).toBe(true);
+      await page.$eval('[data-agent-scroll]', (el) => { el.scrollTop = 0; });
+      // The passive scroll listener records the position on its own tick.
+      await page.waitForFunction(() => (document.querySelector('[data-agent-scroll]')?.scrollTop ?? -1) === 0);
+      await rig.clickTab('Main');
+      await page.waitForSelector('[data-agent-pane="checkout-fixes/main"]');
+      await rig.clickTab('Checkout scout');
+      await page.waitForSelector('[data-agent-pane="checkout-fixes/agents/scout"]');
+      const restored = await page.$eval('[data-agent-scroll]', (el) => ({
+        scrollTop: el.scrollTop,
+        scrollable: el.scrollHeight > el.clientHeight,
+      }));
+      expect(restored.scrollable).toBe(true);
+      expect(restored.scrollTop).toBeLessThan(60);
+
+      // Main's own draft survived the whole excursion.
+      await rig.clickTab('Main');
+      await page.waitForSelector('[data-agent-pane="checkout-fixes/main"]');
+      expect(await rig.draft()).toBe('main draft');
+
+      // After every interaction the machinery stayed internal.
+      expect(await rig.bodyText()).not.toContain(MISSION);
+      expect(await rig.bodyText()).not.toContain(SEED_ROLE);
+      await page.close();
+    });
+  }, 240_000);
+
+  test('mobile: one-click create and per-conversation drafts at 375px, with no overflow', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const rig = await openRig(browser, origin, { width: 375, height: 812 });
+      const { page } = rig;
+      await page.click('[aria-label="New agent"]');
+      await page.waitForSelector('[data-agent-pane="checkout-fixes/agents/agent-1"]');
+      expect(await rig.activeTab()).toContain('New agent');
+      expect(await rig.bodyText()).not.toContain('Add a subordinate');
+      expect(await rig.bodyText()).not.toContain(MISSION);
+
+      await page.type('[data-agent-pane] textarea', 'thumb-typed draft');
+      await rig.clickTab('Main');
+      await page.waitForSelector('[data-agent-pane="checkout-fixes/main"]');
+      expect(await rig.draft()).toBe('');
+      await rig.clickTab('New agent');
+      await page.waitForSelector('[data-agent-pane="checkout-fixes/agents/agent-1"]');
+      expect(await rig.draft()).toBe('thumb-typed draft');
+
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
+      expect(overflow).toBe(0);
+      await page.close();
+    });
+  }, 240_000);
+
+  test('the real WorkspacePage creates, opens, and renames an agent through its own wiring', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1280, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('nav[aria-label="Workspace agents"]');
+
+      // One click on the page's own strip: the hook's zero-argument RPC, the
+      // navigate, the facet column — all the page's real wiring.
+      await page.click('[aria-label="New agent"]');
+      await page.waitForFunction(() => (
+        (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').includes('New agent')
+      ), { timeout: 15_000 });
+      const body = await page.evaluate(() => document.body.innerText);
+      expect(body).not.toContain('Add a subordinate');
+      expect(body).not.toContain('Mission');
+
+      // The facet conversation carries the full composer contract — the same
+      // Auto/Plan segment the main column has.
+      await page.waitForSelector('[aria-label="Turn mode"]', { timeout: 15_000 });
+      await page.waitForSelector('[title="Rename agent"]', { timeout: 15_000 });
+
+      // Rename lands on the parent roster the tabs read.
+      await page.click('[title="Rename agent"]');
+      await page.waitForSelector('[aria-label="Agent name"]');
+      await page.type('[aria-label="Agent name"]', 'Payments triage');
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(() => (
+        (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').includes('Payments triage')
+      ), { timeout: 15_000 });
+      await page.close();
+    });
+  }, 240_000);
+});
