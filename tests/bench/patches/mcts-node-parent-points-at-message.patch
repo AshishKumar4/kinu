@@ -1,12 +1,13 @@
 diff --git a/packages/core/src/mcts/record-node.ts b/packages/core/src/mcts/record-node.ts
+index ea463fd95..2c111fb62 100644
 --- a/packages/core/src/mcts/record-node.ts
 +++ b/packages/core/src/mcts/record-node.ts
-@@ -74,7 +74,7 @@ export function insertSearchNode(
+@@ -107,7 +107,7 @@ export function insertSearchNode(
   INSERT INTO search_nodes
-       (id, parent_id, root_id, task, action, observation, code_used, code_language, depth, msg_id)
+       (id, parent_id, root_id, task, action, observation, code_used, code_language, depth, msg_id, evaluation_json)
      VALUES
 -      (${node.nodeId}, ${node.parentNodeId ?? null}, ${node.rootId},
 +      (${node.nodeId}, ${node.parentMsgId ?? null}, ${node.rootId},
         ${node.task}, ${node.action}, ${node.observation},
-        ${node.codeUsed ?? null}, ${node.codeLanguage ?? null}, ${node.depth}, ${node.msgId})
-   `;
+        ${node.codeUsed ?? null}, ${node.codeLanguage ?? null}, ${node.depth}, ${node.msgId},
+        ${node.evaluation ? JSON.stringify(node.evaluation) : null})

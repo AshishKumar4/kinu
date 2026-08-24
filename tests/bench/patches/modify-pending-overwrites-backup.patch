@@ -1,12 +1,13 @@
 diff --git a/packages/core/src/scaffold/modify.ts b/packages/core/src/scaffold/modify.ts
+index 439bb3d92..7752722be 100644
 --- a/packages/core/src/scaffold/modify.ts
 +++ b/packages/core/src/scaffold/modify.ts
-@@ -130,7 +130,7 @@
+@@ -133,7 +133,7 @@ INSERT INTO scaffold_versions (version, written_at, rationale, status, parent_ve
    // flip with no on-disk consequence. Now the live `scaffold/agent.js` stays
    // on the current version's content throughout shadow eval; promotion is a
    // genuine file swap. See applyPromotionDecision in shadow.ts.
--  await rt.storage.vfs.writeFile(`${rt.identity.scaffold.path}.v${newVersion}`, code);
-+  await rt.storage.vfs.writeFile(`${rt.identity.scaffold.path}.v${currentVersion}`, code);
+-  await scaffoldVfs.writeFile(`${rt.identity.scaffold.path}.v${newVersion}`, code);
++  await scaffoldVfs.writeFile(`${rt.identity.scaffold.path}.v${currentVersion}`, code);
    await rt.memory.append(
      `memory/logs/${today()}.md`,
      `\n## Scaffold v${newVersion} (pending)\n${rationale}\n`,
