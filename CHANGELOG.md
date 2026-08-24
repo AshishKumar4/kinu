@@ -14,6 +14,21 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Added
 
+- Additional agents are ordinary conversations now, created with one click.
+  The role+mission spawn dialog is gone: the tab strip's `+` (and the
+  sidebar's "+ New agent" row) creates an idle agent immediately, opens its
+  conversation, and shows "New agent" until the first message titles it. Each
+  agent conversation carries the same Auto/Plan mode control as the main one,
+  an editable name in its header (the workspace bar's own rename pattern), and
+  its own draft, mode, and reading position — switching tabs no longer leaks a
+  half-typed message or a scroll position into another agent's composer. The
+  inherited mission stays internal and is never rendered. In the TUI, the
+  Agent Hub gained the same one-key action (`n`): a local peer in the current
+  virtual workspace opens in place; a cloud additional agent is created
+  through the backend client and announced. `/rename` names a local agent
+  permanently, drafts survive workspace switches, and untitled agents read
+  "New agent" in the navigator and hub instead of a blank row.
+
 - An interrupted fork now closes its own span in the durable run-event ledger.
   `head_split` went in at dispatch and `head_merge` when the split settled, but
   a fork killed by a process exit, a Durable Object eviction or an operator

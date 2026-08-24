@@ -195,6 +195,9 @@ only. Cloudflare never returns a value, and nothing here asks for one.
 | `BACKUP_BUCKET_NAME`, `CLOUDFLARE_R2_ACCOUNT_ID` | **config var**: plain values in `vars`, not secrets | no | As above. |
 | `GOOGLE_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_ID` | **config var**, beside their secrets | no | That provider is not on `/login`. |
 | `GOOGLE_OAUTH_SCOPES`, `GITHUB_OAUTH_SCOPES`, `CLOUDFLARE_OAUTH_SCOPES` | **config var**: overrides only | no | The provider default applies (`CLOUDFLARE_WORKERS_AI_SCOPES` in `lib/cloudflare-oauth.ts`). |
+| `ANALYTICS_SQL_API_TOKEN` | **out of band**: Account Analytics Read token | for `/control` metrics queries | Analytics Engine writes continue; the Metrics tab reports that queries are not configured. |
+| `CONTROL_PLANE_ADMINS` | **config var**: comma-separated operator email addresses | for `/control` | The control route returns 404 and no admin link appears. Staging keeps this empty. |
+| `CLOUDFLARE_ACCOUNT_ID` | **config var** | for Analytics Engine queries | The Metrics tab reports that queries are not configured. |
 
 
 There is deliberately no "generate it silently" handling. The only value this
@@ -202,6 +205,11 @@ repository could mint unattended is the root secret, and a key the program
 invents and never shows anyone is a key nobody can restore from. Losing it means
 every user reconnects every provider. So it is a prompt, at a terminal,
 displayed exactly once.
+
+`wrangler.jsonc` declares three Analytics Engine bindings. Cloudflare creates
+each dataset on its first write. Analytics Engine retains rows for three months
+and can sample writes. Every query in `analytics/query.ts` weights
+`_sample_interval`.
 
 ### What the binding manifest cannot express
 
@@ -242,6 +250,9 @@ re-checks each one.
   `wrangler.jsonc`. Without it the bucket grows without bound, since the Sandbox
   SDK enforces snapshot TTL at restore time only.
 - **The Workers Paid plan**, and **the account**.
+- **The feedback R2 lifecycle rule.** `FEEDBACK_BUCKET` stores the screenshot
+  object. Set a retention rule that matches the feedback policy; the DO stores
+  only its pointer and exact metadata.
 
 ## Cloudflare Deployment
 
@@ -276,6 +287,9 @@ openssl rand -base64 32 | bunx wrangler secret put CREDENTIAL_ENCRYPTION_KEY
 printf '<google-client-secret>' | bunx wrangler secret put GOOGLE_OAUTH_CLIENT_SECRET
 printf '<github-client-secret>' | bunx wrangler secret put GITHUB_OAUTH_CLIENT_SECRET
 printf '<cloudflare-client-secret>' | bunx wrangler secret put CLOUDFLARE_OAUTH_CLIENT_SECRET
+
+# The control plane queries Analytics Engine through the account SQL API.
+printf '<account-analytics-read-token>' | bunx wrangler secret put ANALYTICS_SQL_API_TOKEN
 ```
 
 #### Rotating CREDENTIAL_ENCRYPTION_KEY

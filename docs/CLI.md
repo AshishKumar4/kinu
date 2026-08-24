@@ -160,6 +160,7 @@ Create a new workspace.
 | `--mode <mode>` | Workspace mode: cloud or local |
 | `--alias <name>` | Create an executable alias command |
 | `--origin <url>` | Kinu app origin for first-use sign-in |
+| `--join` | Add an agent to the workspace already here, inheriting its mission — no name or purpose needed |
 | `--no-alias-shim` | Do not create an alias shim |
 | `--model <id>` | Model ID (env: KINU_MODEL) |
 | `--base-url <url>` | LLM API base URL (env: KINU_BASE_URL) |

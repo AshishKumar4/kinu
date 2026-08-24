@@ -23,7 +23,31 @@ suites that exercise it are in [Testing](TESTING.md).
 | `refusalText`: the refusal on the string channel | built, all five executor tools converted | `execution/exec-result.ts:80` |
 | `Logger` / `ReservedLogField`: the typed logger and its ban | built | `obs/log.ts` |
 | `gate:silent-drop`: the census of what the lint rules cannot see | built, ratcheted at 90 instances over 77 sites (2026-08-19) | `scripts/silent-drop.ts` |
+| Analytics Engine fleet metrics | built, three datasets | `cf-backend/src/analytics/` |
+| Control-plane audit and exact feedback index | built | `cf-backend/src/control-plane/` |
+| Feedback screenshot objects | built, stored in R2 | `cf-backend/src/feedback/` |
 | `Result<T, KinuError>` via `neverthrow` | rejected, see below | — |
+
+## Fleet metrics, exact state, and feedback
+
+Per-workspace `run_events` remains the exact agent behavior record. Analytics
+Engine stores fleet aggregates for turns, tools, models, errors, latency, spend,
+feedback markers, and control actions.
+
+The Analytics Engine writer uses one typed slot map per dataset. It enforces the
+platform limits before each write: one index, 20 blobs, 20 doubles, 16 KiB of
+blob data, and 250 writes per Worker invocation. It stores digested identifiers.
+It never stores prompts, messages, notes, email addresses, credentials, or
+headers.
+
+Analytics Engine can sample and retains data for three months. Control-plane
+queries always weight `_sample_interval`. Exact feedback text, screenshot
+pointers, users, workspaces, and admin audit rows live in `ControlPlaneDO`.
+Screenshot bytes live in `FEEDBACK_BUCKET`.
+
+The Metrics tab needs `ANALYTICS_SQL_API_TOKEN` and
+`CLOUDFLARE_ACCOUNT_ID`. If either is absent, writes continue and the tab states
+that queries are not configured.
 
 ## Where spans are open
 

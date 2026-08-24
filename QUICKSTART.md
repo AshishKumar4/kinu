@@ -1,7 +1,10 @@
 # Kinu Quick Start
 
-Create a durable agent workspace with a POSIX filesystem, shell, execution
-environments, sessions and memory.
+Kinu gives AI agents a durable computer of their own. It adapts and improves with
+use, runs locally or fully in the cloud, and solves hard tasks by exploring multiple
+approaches and letting executable checks choose the winner.
+
+This page makes your first workspace.
 
 ## CLI
 

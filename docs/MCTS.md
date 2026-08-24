@@ -1,8 +1,8 @@
 # MCTS Exploration
 
-The Monte Carlo Tree Search engine. It explores a tree of solution approaches in
-parallel, and each branch is an isolated Durable Object facet with its own SQLite
-database. No tool reaches it.
+The Monte Carlo Tree Search engine explores a tree of solution approaches in
+parallel. Cloud branches run as isolated Durable Object facets. Local branches
+run in isolated processes with their own SQLite state. No tool reaches it.
 
 ## No tool reaches this engine
 
@@ -19,12 +19,12 @@ the ancestor mean, `record-node.ts` for the one INSERT, and `pruning.ts` for
 retirement. They share no dispatch. When the caller is a model, read
 [EXPLORATION.md](./EXPLORATION.md) instead of this file.
 
-This engine is registered, and code reaches it programmatically:
+Code reaches this engine programmatically:
 
-- `strategy/mcts.ts` is registered in the `StrategyRegistry` on every backend
-  (`orchestrator/fork-deps.ts`), so anything dispatching an `ExplorationStrategy`
-  by id can drive it. The eval harness's A/B runner takes any two of them
-  (`runEvalPair` in `core/src/eval/runner.ts`).
+- `createMCTSStrategy` in `strategy/mcts.ts` adapts the engine for programmatic
+  and evaluation callers. There is no production strategy registry.
+- The evaluation A/B runner takes strategy objects directly (`runEvalPair` in
+  `core/src/eval/runner.ts`).
 - The lifetime evolution cycle calls `runMCTS` directly (`evolution/engine.ts`,
   under `lifetimeMCTSBudget`).
 - A search interrupted by an eviction or a process exit resumes from its own

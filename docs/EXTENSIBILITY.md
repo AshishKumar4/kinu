@@ -22,71 +22,36 @@ Per-call state flows through `ProviderDeps` and `StrategyContext`.
 
 ## Registration is not reachability
 
-An interface earns its callers from the code that dispatches it. Registering an
-implementation only makes it findable. `ExplorationStrategy` is the clearest
-case in the tree, so read this before you add a strategy.
+An interface earns its callers from the code that dispatches it. Making an
+implementation importable does not put it on a model-facing surface.
 
-`buildStrategyForkDeps` (`core/src/orchestrator/fork-deps.ts:106-135`) creates
-one `StrategyRegistry` and registers three strategies into it: single-shot
-(`core/src/strategy/single-shot.ts`), MCTS (`core/src/strategy/mcts.ts`) and
-branching heads (`core/src/strategy/heads.ts`, whose id is
-`FORK_STRATEGY_ID = 'heads'` at line 36). Both backends call that builder:
-`cf-backend/src/actor-agent.ts:1810` and
-`cli-backend/src/local-session.ts:2302`. The registry arrives at the `agents`
-tool on the `fork` key of `AgentsForkDeps`
-(`core/src/tools/agents-tool.ts:265-286`).
+`ExplorationStrategy` adapters exist for programmatic callers and evaluation.
+Production reaches each engine through its owning path:
 
-**Nothing in production reads it.** Established by grep on 2026-08-19, in this
-worktree:
+- Lifetime evolution calls `runMCTS` in `core/src/evolution/engine.ts`.
+- Branching work runs through `HeadController`.
+- The model-facing `agents.swarm()` path calls `runSwarm` and resolves a named
+  preset before it spends anything.
 
-- `registry` appears three times in `core/src/tools/agents-tool.ts`: the import
-  of the sibling module `./registry` (line 39), the field declaration
-  `registry: StrategyRegistry` (line 266), and comments at lines 348-350 that
-  talk about the tool registry rather than this one. No call site.
-- `deps.fork` is read as a presence flag (lines 337, 355, 955, 1257) and once
-  at dispatch, `runSwarmAction(deps.fork!, …)` on line 1120. `runSwarmAction`
-  (lines 864-928) reads `deps.rt`, `deps.model` and `deps.nodeHost` and touches
-  nothing else. The module's own docblock says so at lines 260-263.
-- A repository-wide grep for `registry.get(`, `registry.list(` and `.registry`
-  across `packages/*/src`, `scripts/` and `bench/` returns provider registries,
-  the trigger registry and the workspace command registry. It returns no read
-  of a `StrategyRegistry`.
-- `defaultOptions()`, the per-strategy infrastructure bag the same builder
-  produces, has no production reader either. Only `packages/core/tests` calls it.
-- `strategy.explore()` has one production call site,
-  `core/src/eval/runner.ts:55`. Its only caller, `scripts/eval.ts`, builds the
-  strategy inline (`pinnedSingleShot`, lines 135-160) instead of resolving one
-  from a registry.
-- `createSingleShotStrategy`, `createMCTSStrategy` and `createHeadsStrategy` are
-  constructed at `core/src/orchestrator/fork-deps.ts:108-110` and in tests.
-  Nowhere else.
+There is no production `StrategyRegistry`. Each backend constructs
+`AgentsForkDeps` directly. That contract carries the runtime, the caller model,
+the tier-model resolver, pricing, node isolation, and shared-prefix compaction.
+It carries no strategy objects.
 
-What actually runs reaches the engines directly and bypasses the strategy
-adapters. Lifetime evolution calls `runMCTS` at
-`core/src/evolution/engine.ts:862`.
-Branching heads run through a `HeadController` constructed at
-`cf-backend/src/actor-agent.ts:2501`, `cf-backend/src/exploration.ts:574`,
-`cli-backend/src/head-runtime.ts:229`, and
-`cli-backend/src/local-session.ts:558` and `:2529`. The model-facing search is
-`agents` with `action:'swarm'`, which calls `runSwarm`
-(`core/src/strategy/swarm-run.ts`) and scores candidates against the caller's
-own `objective` through `core/src/strategy/verifier-registry.ts`.
+To make another search policy model-facing, add it to the closed swarm preset
+and validity system, then add the engine dispatch that executes the resolved
+tuple. Adding an `ExplorationStrategy` adapter alone makes it available only to
+callers that import it.
 
-So the strategy registry is live wiring with no live reader. Treat it as such
-when you add a strategy. Registering yours changes no behaviour until a
-dispatcher resolves it.
+The `agents` tool has seven actions: `swarm`, `hire`, `ask`, `send`, `reply`,
+`list`, and `dismiss`. `fork` remains a context axis inside swarm, a workspace
+copy operation, and a durable-conversation branch command. It is not a
+delegation action.
 
-The `agents` tool has no `fork` action. `AGENTS_TOOL_ACTIONS`
-(`core/src/tools/registry.ts:168`) is exactly `swarm`, `hire`, `ask`, `send`,
-`reply`, `list`, `dismiss`. The word `fork` survives in internal identifiers
-(`AgentsForkDeps`, `buildStrategyForkDeps`, `FORK_STRATEGY_ID`), in the swarm's
-`context: 'fork' | 'fresh'` axis, in workspace fork
-(`cf-backend/src/user/workspace-fork.ts`), and in the CLI session fork. None of
-those is a delegation action a model can name.
+`toolSurfacing` is another example. It is a build option on
+`buildBuiltinTools`, but no backend passes it. A caller must wire the option
+before its policy affects an agent.
 
-`toolSurfacing` is a second example of the same distinction. It is a real build
-option on `buildBuiltinTools` (`core/src/tools/builtins.ts:174`), and a grep for
-the name finds that one file. No backend passes it and no test exercises it.
 
 ## Two extension points that no longer exist
 
@@ -459,14 +424,12 @@ the codemode sandbox.
   `query` would change the toolset every turn and break the byte-stable prompt
   prefix the caches depend on. There is no config switch for it and no test
   over it.
-- **MCTS strategy adapter**, `core/strategy/mcts.ts`, wrapping the existing
-  `runMCTS` engine behind the strategy interface. Registered by
-  `buildStrategyForkDeps` and reached by no production dispatcher; see
-  *Registration is not reachability*.
-- **Heads strategy adapter**, `core/strategy/heads.ts`, wrapping
-  `HeadController` behind the same interface, with the same reachability
-  status. Its behaviour is pinned by
-  `packages/core/tests/unit-heads-strategy-budget.test.ts` and
+- **MCTS strategy adapter**, `core/strategy/mcts.ts`, wraps the existing
+  `runMCTS` engine for programmatic and evaluation callers. Production lifetime
+  evolution calls the engine directly.
+- **Heads strategy adapter**, `core/strategy/heads.ts`, wraps
+  `HeadController` for programmatic and evaluation callers. Its behaviour is
+  pinned by `packages/core/tests/unit-heads-strategy-budget.test.ts` and
   `packages/core/tests/unit-heads-file-report.test.ts`.
 - **Eval harness**, `core/eval/{types,runner,judge,corpus,report}.ts`. A JSONL
   corpus loader, an A/B runner over any two `ExplorationStrategy`s, and
