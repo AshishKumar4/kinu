@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/react */
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { Database } from 'bun:sqlite';
@@ -21,6 +21,7 @@ import {
   TakesOverlay,
 } from '../src/tui/overlays';
 import type { AgentModelEntry } from '../src/model-catalog';
+import type { KinuConfig } from '../src/config';
 import { MessageList } from '../src/tui/messages';
 import { BUILTIN_TUI_THEMES } from '../src/tui/theme';
 import { StatusBar } from '../src/tui/status-bar';
@@ -1048,17 +1049,20 @@ const INHERITED_CREDENTIALS = [
   'KINU_TOKEN',
 ];
 
-const homeScreenPrelude = (width = 100, height = 40) => `
+/** `fetchStub` is the whole handler body, installed BEFORE the screen mounts:
+ *  the cloud roster sync runs on mount, so a stub swapped in from a driver
+ *  would race it. */
+const homeScreenPrelude = (width = 100, height = 40, fetchStub?: string) => `
   import { mock } from 'bun:test';
   import * as core from '@opentui/core';
   import { createTestRenderer } from '@opentui/core/testing.js';
 
   process.stdin.isTTY = true;
   process.stdout.isTTY = true;
-  globalThis.fetch = async () => new Response('{}', {
+  globalThis.fetch = ${fetchStub ?? `async () => new Response('{}', {
     status: 200,
     headers: { 'content-type': 'application/json' },
-  });
+  })`};
   const { renderer, mockInput, renderOnce, captureCharFrame } = await createTestRenderer({
     width: ${width},
     height: ${height},
@@ -1142,16 +1146,79 @@ const homeScreenPrelude = (width = 100, height = 40) => `
     }
   });
 
+  test('a cloud workspace whose name a local one holds is named on screen, not silently dropped', () => {
+    const project = realpathSync(mkdtempSync(resolve(tmpdir(), 'kinu-home-project-')));
+    const run = runHomeScreen({
+      workspaces: ['shopbot'],
+      config: {
+        origin: 'https://kinu.test',
+        accessToken: 'ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz',
+        tokenExpiresAt: '2099-01-01T00:00:00.000Z',
+        user: { id: 'acc-a', email: 'a@example.com' },
+        agents: {
+          shopbot: {
+            name: 'shopbot',
+            mode: 'local',
+            displayName: 'Shop Bot',
+            localName: 'shopbot',
+            cwd: project,
+            workspaceId: 'shop-floor',
+            createdAt: '2026-06-08T00:00:00.000Z',
+            updatedAt: '2026-06-08T00:00:00.000Z',
+          },
+        },
+      },
+      // The server offers a workspace under the same name as the placed local
+      // one; everything else the screen reads answers empty.
+      fetchStub: `async (input) => String(input).endsWith('/api/cli/workspaces')
+        ? Response.json([{ name: 'shopbot', displayName: 'Cloud Shop', createdAt: 1790000000000, lastVisited: 1790000000000, archivedAt: null }])
+        : new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })`,
+      driver: `
+        // Either wording, so a sync that FAILED reports as itself rather than
+        // as "the notice never rendered". The local workspace is also a roster
+        // row, so anchoring on its name alone would pass on the sidebar.
+        const noticeRow = () => frame().split('\\n')
+          .find((row) => row.includes('holds this name') || row.includes('could not be refreshed')) ?? '';
+        await waitFor('the roster notice to render', () => noticeRow() !== '', 1200);
+        console.log(JSON.stringify({ notice: noticeRow().replace(/\\s+/gu, ' ').trim() }));
+      `,
+    });
+    try {
+      const observed = v.parse(v.object({ notice: v.string() }), JSON.parse(run.stdout));
+      // The row is clipped to the panel, so the contested NAME has to survive
+      // the clip: without it the reader cannot tell which workspace is missing
+      // from the roster, and silence would read as "no such cloud workspace".
+      expect(observed.notice).toContain('shopbot');
+      expect(observed.notice).toContain('a local workspace holds this name');
+    } finally {
+      rmSync(run.home, { recursive: true, force: true });
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
 /** Drives the home screen the CLI actually runs, in a subprocess so that one
  *  KINU_HOME and one renderer swap belong to one test. `driver` runs with
  *  `frame`, `rowWith`, `waitFor`, `settle`, `mockInput`, `action` (whatever the
  *  screen has finished with, or null) and `opened` in scope, and prints the one
  *  JSON line the caller asserts on. The caller owns the returned home. */
-function runHomeScreen(options: { driver: string; workspaces?: readonly string[]; width?: number; height?: number }) {
+function runHomeScreen(options: {
+  driver: string;
+  workspaces?: readonly string[];
+  width?: number;
+  height?: number;
+  /** Merged over the default config.json — a signed-in session, extra refs.
+   *  The real config type, so a seeded field that no longer exists is a
+   *  compile error rather than a scenario quietly configuring nothing. */
+  config?: Partial<KinuConfig>;
+  /** Whole `globalThis.fetch` handler body, for a screen whose cloud reads
+   *  have to answer with something specific. */
+  fetchStub?: string;
+}) {
   const home = mkdtempSync(resolve(tmpdir(), 'kinu-home-tui-'));
   writeFileSync(resolve(home, 'config.json'), JSON.stringify({
     model: 'openai/gpt-5.5',
     providers: { openai: { apiKey: 'sk-test' } },
+    ...options.config,
   }));
   for (const name of options.workspaces ?? []) {
     mkdirSync(resolve(home, name));
@@ -1161,7 +1228,11 @@ function runHomeScreen(options: { driver: string; workspaces?: readonly string[]
   for (const name of INHERITED_CREDENTIALS) delete env[name];
 
   const proc = Bun.spawnSync({
-    cmd: [process.execPath, '-e', `${homeScreenPrelude(options.width, options.height)}${options.driver}`],
+    cmd: [
+      process.execPath,
+      '-e',
+      `${homeScreenPrelude(options.width, options.height, options.fetchStub)}${options.driver}`,
+    ],
     cwd: repoRoot,
     env,
     stdout: 'pipe',

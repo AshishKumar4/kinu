@@ -11,7 +11,8 @@ import type {
 } from '../../src/agent-client';
 import type { AgentModelMenu } from '../../src/model-catalog';
 import { createCliSession } from '../../src/session';
-import { ChatApp } from '../../src/tui/chat-app';
+import { ChatApp, type ChatAppOpts } from '../../src/tui/chat-app';
+import type { TuiHubData } from '../../src/tui/hubs';
 import type { TuiAgentSource } from '../../src/tui/tui-shell';
 
 const EVOLUTION: EvolutionConfigView = {
@@ -120,6 +121,8 @@ export async function mountChat(
   options: {
     listWorkspaces?: () => Array<{ name: string; label: string; mode: 'local' | 'cloud'; cloudName?: string; cwd?: string; workspaceId?: string }>;
     onWorkspaceSelect?: (name: string) => Promise<AgentClient>;
+    hubData?: TuiHubData;
+    onNewAgent?: ChatAppOpts['onNewAgent'];
     width?: number;
   } = {},
 ) {
@@ -144,6 +147,8 @@ export async function mountChat(
       onExit={() => {}}
       workspaceSource={workspaceSource}
       onWorkspaceSelect={options.onWorkspaceSelect}
+      hubData={options.hubData}
+      onNewAgent={options.onNewAgent}
       profileMutations={{
         setModel: (spec) => client.setModel(spec),
         setReasoningEffort: (effort) => client.setReasoningEffort(effort),

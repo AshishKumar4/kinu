@@ -10,6 +10,7 @@ import type { OrchestratorAgent } from "./src/orchestrator";
 import type { KinuSandbox } from "./src/kinu-sandbox";
 import type { UserDO } from "./src/user/user-do";
 import type { MonitorDO } from "./src/monitor/monitor-do";
+import type { ControlPlaneDO } from "./src/control-plane/control-plane-do";
 import type { NimbusSession } from "@nimbus-sh/sdk/worker";
 import type { VectorizeIndex as KinuVectorizeIndex } from "@kinu.run/core";
 
@@ -39,6 +40,11 @@ declare global {
     UserDO: DurableObjectNamespace<UserDO>;
     /** Singleton DO holding synthetic monitoring's open incidents + alert outbox. */
     MonitorDO: DurableObjectNamespace<MonitorDO>;
+    /** Singleton DO holding the admin control plane's cross-user index (users,
+     *  workspaces, feedback) and the append-only admin audit log. Reachable only
+     *  from Worker code holding a capability token derived from
+     *  CREDENTIAL_ENCRYPTION_KEY — see control-plane/admin-caller.ts. */
+    ControlPlaneDO: DurableObjectNamespace<ControlPlaneDO>;
     /** Nimbus SDK session DO — built-in lightweight dev environment. */
     NIMBUS_SESSION: DurableObjectNamespace<NimbusSession>;
     /** Sandbox container DO — @cloudflare/sandbox. One per agent.
@@ -60,6 +66,25 @@ declare global {
     R2_ACCESS_KEY_ID?: string;
     R2_SECRET_ACCESS_KEY?: string;
     BACKUP_BUCKET_NAME?: string;
+    /** In-product feedback screenshots. The metadata row in ControlPlaneDO
+     *  carries the object key; the bytes never enter a DO row or an analytics
+     *  blob. Absent ⇒ note-only feedback still lands and a screenshot
+     *  submission is refused with a reason. */
+    FEEDBACK_BUCKET?: R2Bucket;
+    /** Analytics Engine datasets — the fleet-level aggregate plane. All three
+     *  OPTIONAL so a deployment without the bindings degrades to
+     *  console-only diagnostics instead of throwing. Nothing user-authored is
+     *  written to them: the workspace name and the admin email are digested
+     *  before they become an index value. */
+    readonly AGENT_METRICS?: AnalyticsEngineDataset;
+    readonly FEEDBACK_MARKERS?: AnalyticsEngineDataset;
+    readonly CONTROL_PLANE_OPS?: AnalyticsEngineDataset;
+    /** Account the Analytics Engine SQL API is queried against, and the
+     *  Account-Analytics-Read token that authorizes the query. A var and a
+     *  Wrangler secret respectively. Either absent ⇒ the control plane's
+     *  metrics view reports itself unconfigured; nothing else degrades. */
+    CLOUDFLARE_ACCOUNT_ID?: string;
+    ANALYTICS_SQL_API_TOKEN?: string;
     CLOUDFLARE_R2_ACCOUNT_ID?: string;
     AI_GATEWAY_URL: string;
     /** Zone isolated previews are served under, one capability hostname per
@@ -115,6 +140,13 @@ declare global {
     /** Browser approval origin for CLI auth. In production this should be the
      *  public app origin so approval uses the user's browser session. */
     CLI_APPROVAL_ORIGIN?: string;
+    /** Verified session emails allowed to reach the admin control plane,
+     *  comma-separated. A var, not a secret: an allowlist nobody can read is an
+     *  allowlist nobody can audit, and these are addresses rather than
+     *  credentials. Unset or empty ⇒ the control plane is unreachable, which is
+     *  the correct default for a deployment that has not named its operators.
+     *  A `provider: 'dev'` identity is refused whatever this contains. */
+    CONTROL_PLANE_ADMINS?: string;
   }
 }
 

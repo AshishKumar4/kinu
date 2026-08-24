@@ -3040,16 +3040,12 @@ describe('LocalAgentSession — the durable run-event log', () => {
     expect(runs[0]!.eventCount).toBeGreaterThan(0);
 
     const events = session.getRunEvents(runs[0]!.runId);
-    // `turn_steering` belongs here: this is the session's FIRST turn, so the
-    // step-0 delegation hint fires (turn-steering.ts's freshAsk — no assistant
-    // message yet, and the ask is not a question), and the settle spine records
-    // every hint it spliced. A first turn with no steering row would mean the
-    // hint never reached the model. Its `delegation_opportunity` rides the same
-    // settle spine, one row per delivered hint, carrying what could be
-    // delegated into and whether anything came of it.
+    // Profile resolution lands before the step. This is also the session's
+    // first turn, so the step-0 delegation hint fires and the settle spine
+    // records both the hint and its conversion opportunity.
     expect(events.map((e) => e.type)).toEqual([
-      'run_start', 'turn_start', 'step_finish', 'turn_steering', 'delegation_opportunity',
-      'turn_end', 'run_end',
+      'run_start', 'turn_start', 'profile_resolution', 'step_finish',
+      'turn_steering', 'delegation_opportunity', 'turn_end', 'run_end',
     ]);
 
     const start = events[0];
@@ -3063,9 +3059,9 @@ describe('LocalAgentSession — the durable run-event log', () => {
     expect(end.error).toBeUndefined();
 
     // Monotonic indices are what makes a resume possible at all.
-    expect(events.map((e) => e.eventIndex)).toEqual([0, 1, 2, 3, 4, 5, 6]);
+    expect(events.map((e) => e.eventIndex)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
     // …and `since` replays the tail, exactly as an SSE Last-Event-ID does.
-    expect(session.getRunEvents(runs[0]!.runId, { since: 3 }).map((e) => e.type))
+    expect(session.getRunEvents(runs[0]!.runId, { since: 4 }).map((e) => e.type))
       .toEqual(['turn_steering', 'delegation_opportunity', 'turn_end', 'run_end']);
 
     await session.end();

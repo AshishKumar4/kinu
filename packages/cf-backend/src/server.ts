@@ -13,12 +13,15 @@
  *   6. /api/health — public build-info endpoint (no auth).
  *   6b. /mcp/v1/* — MCP server; CLI-bearer-token or session auth + ownership
  *       enforced inside (external MCP clients can't do browser OAuth).
- *   7. AUTH GATE — every other request needs a Kinu browser session
+ *   7. AUTH GATE — every other request needs a Kinu session
  *      (or DEV_USER_EMAIL in local/staging dev).
- *   8. /api/user/* — user-scoped (profile, agents, credentials, codex flow).
- *   9. /api/workspaces/<name>/* — owner check via UserDO.hasWorkspace.
- *   10. /agents/* — Think DOs (chat WebSocket).
- *   11. env.ASSETS fallback — SPA for everything else.
+ *   8. /api/feedback — in-product feedback; any signed-in user.
+ *   8b. /api/control/* — admin control plane; an allowlisted operator only, and
+ *       a fresh sign-in for anything that mutates.
+ *   9. /api/user/* — user-scoped (profile, agents, credentials, codex flow).
+ *   10. /api/workspaces/<name>/* — owner check via UserDO.hasWorkspace.
+ *   11. /agents/* — Think DOs (chat WebSocket).
+ *   12. env.ASSETS fallback — SPA for everything else.
  */
 
 import { routeAgentRequest } from "agents";
@@ -56,6 +59,10 @@ import { ownerCaller } from "./user/workspace-capability";
 import { CLI_SCOPES_HEADER } from "./cli/rpc-gate";
 import { claimOwnedWorkspace } from "./user/workspace-access";
 import { err } from "./lib/http";
+import { handleFeedbackRequest } from "./feedback/routes";
+import { handleControlRequest } from "./control-plane/routes";
+import { observeIdentity } from "./control-plane/index-feed";
+import { installAnalyticsDiagnostics } from "./analytics/install";
 
 /** Public webhook delivery endpoint match. `/api/workspaces/<name>/webhook/<id>` —
  *  the only `/api/workspaces/<name>/...` route that bypasses browser OAuth (it has
@@ -81,6 +88,8 @@ export { ContainerProxy } from "@cloudflare/sandbox";
 export { UserDO } from "./user/user-do";
 // Synthetic monitoring's durable state: open incidents + the alert outbox.
 export { MonitorDO } from "./monitor/monitor-do";
+// The admin control plane's index and audit log. One instance ("site").
+export { ControlPlaneDO } from "./control-plane/control-plane-do";
 // All nine are load-bearing, and only ONE is bound by `class_name`
 // (NimbusSession). The other eight are resolved by workerd's
 // `enable_ctx_exports`, which walks THIS module's exports and auto-populates
@@ -229,6 +238,13 @@ async function authenticateCliAgentTicketRequest(
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
+    // Composes the analytics sink onto the console logger for THIS isolate, so
+    // core's dotted diagnostics events reach the fleet datasets as well as
+    // Workers Logs. Idempotent per invocation. It has to be repeated in
+    // `scheduled` and inside every Durable Object activation: a sink installed
+    // in the Worker isolate is invisible to code running inside a DO, which is a
+    // different isolate with its own module scope.
+    installAnalyticsDiagnostics(env);
     const url = new URL(request.url);
     // Cleartext gets a redirect and nothing else; everything actually served
     // leaves through the one pin.
@@ -250,6 +266,7 @@ export default {
   // self-reported rather than user-reported. All state and alert dedupe live
   // in MonitorDO; a failed run must not take the schedule down with it.
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
+    installAnalyticsDiagnostics(env);
     ctx.waitUntil((async () => {
       try {
         const monitor = env.MonitorDO.get(env.MonitorDO.idFromName(MONITOR_SINGLETON));
@@ -456,6 +473,31 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
   //     so a state-changing request must prove the app issued it.
   const crossSite = crossSiteRejection(request);
   if (crossSite) return crossSite;
+
+  // The control-plane index learns who exists from the request path, retained so
+  // it never delays a response and memoised per isolate so it is not a Durable
+  // Object round trip per request. Every row it writes is a derived fact whose
+  // source of truth is a UserDO, which is why a dropped observation costs a
+  // briefly stale operator list and nothing else. Placed after the CSRF gate so
+  // a cross-site request never feeds it.
+  observeIdentity(env, identity, {
+    workspace: extractAgentName(url.pathname),
+    retain: ctx,
+  });
+
+  // 8. /api/feedback — any signed-in user may file a report. Deliberately not on
+  //    the public bypass list: a report carries a screenshot of a signed-in
+  //    session, so an unauthenticated writer would be an anonymous upload
+  //    endpoint.
+  const feedbackResp = await handleFeedbackRequest(authenticatedRequest, env, identity);
+  if (feedbackResp) return feedbackResp;
+
+  // 8b. /api/control/* — the admin control plane. The allowlist, the
+  //     dev-identity refusal and the step-up window all live inside that module,
+  //     never here: a route whose authorization is performed by its caller is one
+  //     refactor away from being unguarded.
+  const controlResp = await handleControlRequest(authenticatedRequest, env, identity);
+  if (controlResp) return controlResp;
 
   // 9. /api/user/* — user-scoped routes.
   const userResp = await handleUserRequest(authenticatedRequest, env, identity, ctx);

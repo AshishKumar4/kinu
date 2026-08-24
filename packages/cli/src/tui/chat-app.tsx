@@ -54,6 +54,7 @@ import { watchDeviceConsents } from '../consent-watch';
 import { contextWindowForSpec, EMPTY_MODEL_MENU, type AgentModelEntry, type AgentModelMenu } from '../model-catalog';
 import { requireInteractiveTerminal } from '../prompt';
 import { loadActiveProfile } from '../profiles';
+import { canonicalProjectRoot } from '../config';
 import { guideFailure } from '../provider-guidance';
 import { openBrowser } from '../commands/auth';
 import { StatusBar } from './status-bar';
@@ -76,9 +77,9 @@ import { useDeviceConnectPrompt } from './use-device-connect';
 import { estimateContextTokens } from './context-status';
 import { useStreamingBuffer } from './streaming-buffer';
 import { initialInputState, reduceInput, type InputEffect, type InputMachineEvent } from './input-state';
-import { clipText } from './format';
+import { agentDisplayLabel, clipText } from './format';
 import { createKeyDispatcher, openTuiKeyBindings, type TuiActionId } from './actions';
-import { HubOverlay, type TuiHubData, type TuiHubView } from './hubs';
+import { buildAgentHubEntries, HubOverlay, type TuiHubData, type TuiHubView } from './hubs';
 import { useTuiTheme } from './theme';
 import {
   TuiProductProvider,
@@ -94,6 +95,16 @@ import {
 } from './tui-shell';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 
+/** What a host's one-click creator produced, and how the scene proceeds:
+ *  a `local-peer` is a full root in the current virtual workspace and is
+ *  opened in place; a `cloud-additional` agent runs beside the workspace's
+ *  conversation server-side, so the scene announces it instead. */
+export interface TuiCreatedAgent {
+  name: string;
+  displayName: string;
+  kind: 'local-peer' | 'cloud-additional';
+}
+
 export interface ChatAppOpts {
   client: AgentClient;
   /** Seed the message list from client.history() before accepting input. */
@@ -104,6 +115,10 @@ export interface ChatAppOpts {
   onClientChange?: (client: AgentClient) => void;
   workspaceSource?: TuiAgentSource;
   onWorkspaceSelect?: (name: string) => Promise<AgentClient>;
+  /** One-click additional agent beside the CURRENT client's conversation —
+   *  no role, no mission form. Wired by the host because creation is a host
+   *  concern (local ref registry / cloud backend client). */
+  onNewAgent?: (client: AgentClient) => Promise<TuiCreatedAgent>;
   profileMutations?: {
     setModel(spec: string): Promise<{ spec: string }>;
     setReasoningEffort(effort: 'low' | 'medium' | 'high'): Promise<{ effort: 'low' | 'medium' | 'high' }>;
@@ -153,6 +168,7 @@ function ChatScene({
   onClientChange,
   workspaceSource: workspaceSourceInput,
   onWorkspaceSelect,
+  onNewAgent,
   profileMutations: suppliedProfileMutations,
   hubData,
 }: ChatAppOpts) {
@@ -186,7 +202,16 @@ function ChatScene({
   const commandPalette = activeSurface?.kind === 'commands';
   const hubView = activeSurface?.kind === 'hub' ? activeSurface.view : null;
   const settingsOpen = activeSurface?.kind === 'settings';
+  // The hub was loaded once for the client this scene STARTED with; a switch
+  // or a fork re-points the client, and a hub describing the old workspace's
+  // role/tier would be a stale screenshot. Refreshed per client, kept on
+  // failure — a hub one beat old beats no hub at all.
+  const [hub, setHub] = useState(hubData);
+  const hubClientRef = useRef(initialClient);
   const [draft, setDraft] = useState('');
+  // Each conversation keeps its own composer draft across switches — leaving
+  // saves under the OLD client's key, arriving restores under the new one's.
+  const draftsRef = useRef(new Map<string, string>());
   const [inputState, setInputState] = useState(initialInputState);
   /** Steer-as-Branch runs in flight, branchId → task (status-bar segment). */
   const profileMutations = suppliedProfileMutations ?? {
@@ -460,6 +485,9 @@ function ChatScene({
         historyFailure = errorLine(`Earlier messages could not be loaded: ${renderThrownChain({ cause: error })}`);
       }
       const previous = client;
+      // The draft belongs to the conversation being left, and the one being
+      // entered gets its own back (or a clean line the first time).
+      draftsRef.current.set(`${previous.mode}:${previous.agentName}`, inputRef.current?.plainText ?? '');
       preconnectedClientRef.current = candidate;
       preconnectedEventsRef.current = {
         client: candidate,
@@ -479,7 +507,7 @@ function ChatScene({
       setBranchTasks({});
       machineRef.current = initialInputState;
       setInputState(initialInputState);
-      setInputText('');
+      setInputText(draftsRef.current.get(`${candidate.mode}:${candidate.agentName}`) ?? '');
       setMessages([
         welcomeMessage(candidate.agentName),
         ...history,
@@ -520,6 +548,72 @@ function ChatScene({
     }
   }, [addError, addMessage, client, onClientChange, onWorkspaceSelect, setInputText, stream]);
 
+
+  /** One-click additional agent — the Agent Hub's `n`. Local peers open in
+   *  place through the same switch path a navigator pick takes; a cloud
+   *  additional agent lives beside the workspace's own conversation
+   *  server-side, so it is announced rather than opened. */
+  const createNewAgent = useCallback(async () => {
+    if (onNewAgent === undefined || selectionPendingRef.current) return;
+    if (machineRef.current.activeTurns > 0 || clientActionCountRef.current > 0) {
+      addMessage({ role: 'system', content: 'Finish or stop the active workspace action before creating an agent.' });
+      return;
+    }
+    addMessage({ role: 'system', content: 'Creating a new agent…' });
+    try {
+      const created = await onNewAgent(client);
+      if (created.kind === 'cloud-additional') {
+        addMessage({
+          role: 'system',
+          content: `Created ${agentDisplayLabel(created.displayName)} (${created.name}) in this workspace. `
+            + 'It runs beside this conversation and names itself from your first message to it; open it from the web workspace to chat.',
+        });
+        return;
+      }
+      await roster.reload();
+      await switchWorkspace({ name: created.name, label: agentDisplayLabel(created.displayName), mode: 'local' });
+    } catch (error) {
+      addError({ cause: error });
+    }
+  }, [addError, addMessage, client, onNewAgent, roster, switchWorkspace]);
+
+  useEffect(() => {
+    if (hubClientRef.current === client) return;
+    hubClientRef.current = client;
+    if (hubData === undefined) return;
+    let cancelled = false;
+    loadHubData(client, client.agentName)
+      .then((fresh) => { if (!cancelled) setHub(fresh); })
+      .catch((error) => {
+        diagnostics.failure(
+          'tui.hub_refresh_failed',
+          toKinuError({ doing: 'refreshing the agent hub', cause: error, otherwise: 'unavailable' }),
+          { workspace: client.agentName },
+        );
+      });
+    return () => { cancelled = true; };
+  }, [client, hubData]);
+
+  // The hub's agent rows, live: the current virtual workspace's members from
+  // the same roster the navigator reads, with the open agent's role/tier from
+  // its loaded profile row and its status from this scene.
+  const projectRoot = useMemo(() => canonicalProjectRoot(), []);
+  const hubLive = useMemo<TuiHubData | undefined>(() => hub && {
+    ...hub,
+    agents: buildAgentHubEntries({
+      items: roster.page.items,
+      current: { name: client.agentName, mode: client.mode },
+      currentEntry: {
+        ...(hub.agents[0] ?? { kind: 'main' as const }),
+        id: `${client.mode}:${client.agentName}`,
+        label: status?.name ?? client.agentName,
+        kind: 'main',
+        status: isProcessing ? 'running' : 'idle',
+        workspace: hub.agents[0]?.workspace ?? client.agentName,
+      },
+      projectRoot,
+    }),
+  }, [hub, roster.page.items, client, status?.name, isProcessing, projectRoot]);
 
   const openModelPicker = useCallback(async () => {
     const request = ++modelRequestRef.current;
@@ -1053,6 +1147,13 @@ function ChatScene({
     const actionId = result.actionId;
     if (actionId === null) return;
     if (modalActive) {
+      if (actionId === 'hub.new-agent' && activeSurface?.kind === 'hub'
+        && activeSurface.view === 'agents' && onNewAgent !== undefined) {
+        key.preventDefault();
+        setActiveSurface(null);
+        void createNewAgent();
+        return;
+      }
       if (actionId === 'modal.close') {
         key.preventDefault();
         if (activeSurface?.kind === 'model') modelRequestRef.current += 1;
@@ -1103,7 +1204,7 @@ function ChatScene({
     }
     if (actionId === 'hub.agents' || actionId === 'hub.roles' || actionId === 'hub.tiers'
       || actionId === 'tier.quick') {
-      if (hubData === undefined) return;
+      if (hub === undefined) return;
       key.preventDefault();
       const view: TuiHubView = actionId === 'hub.agents'
         ? 'agents'
@@ -1227,7 +1328,7 @@ function ChatScene({
         contextTokens={contextTokens}
         contextWindow={contextWindow}
         branchCount={Object.keys(branchTasks).length}
-        profile={hubData?.profile.resolved}
+        profile={hub?.profile.resolved}
       />
 
       <scrollbox
@@ -1299,8 +1400,14 @@ function ChatScene({
             else void handleSubmit(setting.command);
           }}
         />
-      ) : hubView !== null && hubData !== undefined ? (
-        <HubOverlay view={hubView} data={hubData} width={width} height={height} />
+      ) : hubView !== null && hubLive !== undefined ? (
+        <HubOverlay
+          view={hubView}
+          data={hubLive}
+          width={width}
+          height={height}
+          {...(onNewAgent !== undefined ? { newAgentHint: keybindings.hint('hub.new-agent') } : {})}
+        />
       ) : commandPalette ? (
         <CommandPaletteOverlay
           commands={commands}

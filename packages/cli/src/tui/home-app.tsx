@@ -11,7 +11,9 @@ import {
   isLocalModelConfigured,
   suggestAgentIdentityFromMission,
 } from '../agent-create';
-import { listKnownAgents, listSidebarAgents, syncCloudAgentRefs } from '../agent-list';
+import {
+  listKnownAgents, listSidebarAgents, syncCloudAgentRefs, type CloudRefCollision,
+} from '../agent-list';
 import { listCloudAvailableModels } from '../cloud-api';
 import { authenticateCli } from '../commands/auth';
 import {
@@ -110,7 +112,9 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
   const [catalogHint, setCatalogHint] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [cloudSyncError, setCloudSyncError] = useState<string | null>(null);
+  // Both things that make the roster on screen less than the whole truth: a
+  // refresh that failed, and a name the two stores contest.
+  const [cloudSyncNotice, setCloudSyncNotice] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [focusArea, setFocusArea] = useState<HomeFocus>('mission');
   const modelPickerRequestRef = useRef(0);
@@ -152,15 +156,18 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
     if (!cloudReady) return;
     let cancelled = false;
     void syncCloudAgentRefs()
-      .then(async () => {
+      .then(async (sync) => {
         if (cancelled) return;
         await roster.reload();
-        if (!cancelled) setCloudSyncError(null);
+        if (cancelled) return;
+        // A contested name reached the roster as neither store's cloud row.
+        // Saying nothing would read as "you have no such cloud workspace".
+        setCloudSyncNotice(sync.collisions.length === 0 ? null : collisionNotice(sync.collisions));
       })
       .catch((err) => {
         if (cancelled) return;
         // A list that could not be refreshed must not read as the list itself.
-        setCloudSyncError(`Cloud workspaces could not be refreshed: ${renderThrownChain({ cause: err })}`);
+        setCloudSyncNotice(`Cloud workspaces could not be refreshed: ${renderThrownChain({ cause: err })}`);
       });
     return () => { cancelled = true; };
   }, [cloudReady, roster.reload]);
@@ -518,8 +525,8 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
               <span fg={localReady ? colors.intent.success : colors.text.muted}>{localReady ? '●' : '○'} Local provider</span>
             </text>
           )}
-          {cloudSyncError && (
-            <text><span fg={colors.intent.warningMuted}>{clipText(cloudSyncError, Math.max(8, panelWidth - 2))}</span></text>
+          {cloudSyncNotice && (
+            <text><span fg={colors.intent.warningMuted}>{clipText(cloudSyncNotice, Math.max(8, panelWidth - 2))}</span></text>
           )}
         </box>
 
@@ -705,6 +712,21 @@ function nextFocus(current: HomeFocus, sidebarFocusable: boolean): HomeFocus {
     : ['mission', 'mode', 'model', 'effort'];
   const index = order.indexOf(current);
   return order[(index + 1) % order.length] ?? order[0]!;
+}
+
+/**
+ * What a contested name costs the reader: the cloud workspace is not on the
+ * roster, the local one kept the name, and only a rename settles it — the
+ * same posture `resolveAgentTarget` takes when a bare name has two candidates.
+ *
+ * Names first, because this row is clipped to the panel width and the names
+ * are the part the reader cannot reconstruct from anything else on screen.
+ */
+function collisionNotice(collisions: readonly CloudRefCollision[]): string {
+  const names = collisions.map((hit) => hit.name).join(', ');
+  return collisions.length === 1
+    ? `${names}: a local workspace holds this name, so the cloud one is not listed. Rename one of them.`
+    : `${names}: local workspaces hold these names, so their cloud ones are not listed. Rename one side.`;
 }
 
 async function loadHomeModelCatalog(mode: AgentMode, opts: HomeTuiOptions): Promise<AgentModelMenu> {

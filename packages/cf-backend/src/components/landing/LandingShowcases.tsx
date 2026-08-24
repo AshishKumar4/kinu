@@ -5,6 +5,8 @@ import type { UIMessage } from 'ai';
 import { KinuLogo } from '@/components/ui/KinuLogo';
 import { MessageView } from '@/components/MessageView';
 
+import { BugFixDemo } from './BugFixDemo';
+
 const RUN_TABS: TabsItem[] = [{ value: 'run', label: 'Run' }, { value: 'supervise', label: 'Supervise' }];
 
 const WORKSPACE_DEMO_MESSAGES: UIMessage[] = [
@@ -377,6 +379,13 @@ export function LandingShowcases({
           </div>
         </div>
         <WorkspacePreview />
+      </section>
+      <section data-showcase="bugfix" className="pt-24">
+        <div className="mb-9 grid items-end gap-6 md:grid-cols-[minmax(0,.72fr)_minmax(0,1.28fr)] md:gap-[52px]">
+          <div><div className="mb-3.5 flex items-center gap-3 text-[13px] font-semibold p-gold"><span className="h-px w-[22px] bg-[color-mix(in_srgb,var(--c-accent)_55%,transparent)]" />One bug, end to end</div><h2 className="text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">From bug report <span className="p-gold">to green tests.</span></h2></div>
+          <p className="max-w-[580px] text-base leading-[1.65] p-text-3">A replay of one workspace session. Kinu reproduces a coupon failure, you annotate and approve its plan, three candidate patches race, and the focused suite picks the winner.</p>
+        </div>
+        <BugFixDemo />
       </section>
       <section data-showcase="tui" className="pt-24">
         <div className="mb-9 grid items-end gap-6 md:grid-cols-[minmax(0,.72fr)_minmax(0,1.28fr)] md:gap-[52px]">

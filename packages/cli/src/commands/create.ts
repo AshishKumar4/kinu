@@ -1,5 +1,5 @@
 import { ensureAgentHome, pathHint, type AgentMode } from '../config';
-import { createCliAgent } from '../agent-create';
+import { createCliAgent, createLocalPeerAgent } from '../agent-create';
 import { ACCENT, DIM, OK, WARN, createSpinner, printCreatedCard, printFailure } from '../display';
 import { findUnusableModel } from '../local-model-resolver';
 import { ask, canPrompt } from '../prompt';
@@ -12,8 +12,16 @@ interface ModelWarningInput {
 export async function createCommand(name: string | undefined, opts: {
   purpose?: string; model?: string; baseUrl?: string; auth?: string;
   mode?: string; alias?: string; aliasShim?: boolean; origin?: string;
+  join?: boolean;
 }): Promise<void> {
   ensureAgentHome();
+  // Joining takes nothing: the agent inherits the mission of a peer already
+  // here, and its first message names it. Asking for a name and a purpose is
+  // exactly what this path exists to stop asking for.
+  if (opts.join) {
+    await joinWorkspace(opts);
+    return;
+  }
   const interactive = canPrompt() && (!name || !opts.mode);
   if (!name) {
     name = interactive
@@ -59,6 +67,28 @@ export async function createCommand(name: string | undefined, opts: {
     if (hint) console.log(DIM(hint));
   } catch (err) {
     spinner.fail('Create failed');
+    printFailure(err);
+    process.exit(1);
+  }
+}
+
+/** `kinu create --join`: one more agent in the workspace already here. It has
+ *  no name to print because it does not have one yet — the slug is how it is
+ *  addressed, and its first message titles it. */
+async function joinWorkspace(opts: { model?: string; baseUrl?: string; auth?: string }): Promise<void> {
+  const spinner = createSpinner('Adding an agent to this workspace...');
+  spinner.start();
+  try {
+    const created = await createLocalPeerAgent();
+    spinner.stop('Agent added');
+    console.log(`\n${OK('✓')} ${ACCENT(created.name)} ${DIM(`joined "${created.workspaceId}"`)}`);
+    console.log(DIM(`Mission inherited from ${created.peers?.length ?? 0} peer(s). It names itself on your first message.`));
+    await warnUnusableModel(
+      opts.model ? { agentName: created.name, model: opts.model } : { agentName: created.name },
+    );
+    console.log(`\n${DIM('Run:')} ${ACCENT(`kinu chat ${created.name}`)}\n`);
+  } catch (err) {
+    spinner.fail('Could not add an agent');
     printFailure(err);
     process.exit(1);
   }

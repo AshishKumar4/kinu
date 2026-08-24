@@ -18,6 +18,11 @@ export interface UserProfile {
   displayName: string | null;
   createdAt: number;
   lastSeenAt: number;
+  /** True when this session's email is on the control-plane operator list.
+   *  Decided server-side by the same function that guards `/api/control/*`, so
+   *  it drives the nav entry's visibility and nothing else — the gate answers
+   *  for itself on every request. */
+  controlPlane?: boolean;
 }
 
 export interface WorkspaceEntry {
@@ -68,6 +73,10 @@ const ErrorBodySchema = v.object({ error: v.optional(v.string()) });
 const OkSchema = v.object({ ok: v.boolean() });
 const UserProfileSchema = v.nullable(v.object({
   email: v.string(), displayName: v.nullable(v.string()), createdAt: v.number(), lastSeenAt: v.number(),
+  /** Whether this session may reach the admin control plane. Optional so a
+   *  client running against an older Worker reads `undefined` and hides the nav
+   *  entry, rather than failing to parse a profile it otherwise understands. */
+  controlPlane: v.optional(v.boolean()),
 }));
 const WorkspaceEntrySchema = v.object({
   name: v.string(), displayName: v.string(), createdAt: v.number(), lastVisited: v.number(),

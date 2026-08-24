@@ -15,6 +15,12 @@ const galleryRoot = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // @plannotator/web-highlighter ships UMD only (its `module` field points at
+  // the same min.js), so served raw it has no `default` export and the plan
+  // panel's lazy chunk dies in dev. Prebundle it; builds interop natively.
+  optimizeDeps: {
+    include: ["@plannotator/web-highlighter"],
+  },
   resolve: {
     alias: {
       "@": resolve(galleryRoot, "src"),

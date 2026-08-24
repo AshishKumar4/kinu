@@ -1,13 +1,23 @@
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@cloudflare/kumo";
 import { FilledButton } from "./ui/FilledButton";
-import { HouseIcon, PlusIcon, TrashIcon, UserPlusIcon } from "@phosphor-icons/react";
+import { HouseIcon, PlusIcon, TrashIcon } from "@phosphor-icons/react";
 import type { SubordinateRosterEntry } from "@kinu.run/core";
 import { Modal } from "./ui/Modal";
 import { renderThrownChain } from "@kinu.run/core/obs";
 
-interface SpawnResult {
+/** What an agent with no name yet is called everywhere one renders. */
+export const NEW_AGENT_TITLE = "New agent";
+
+/** A roster entry's shown name. Blank means created-but-untitled: the
+ *  first-message titler (or the owner's rename) fills it in, and until then
+ *  every surface says the same thing instead of an empty string. */
+export function agentTitle(displayName: string): string {
+  return displayName.trim() === "" ? NEW_AGENT_TITLE : displayName;
+}
+
+interface CreatedAgent {
   name: string;
   displayName: string;
 }
@@ -16,7 +26,10 @@ interface SubordinateTabsProps {
   workspace: string;
   subordinates: readonly SubordinateRosterEntry[];
   activeName?: string;
-  onSpawn(role: string, mission: string): Promise<SpawnResult>;
+  /** One-click create — identity only, no form. The agent arrives idle with a
+   *  blank name; its inherited mission is internal and never shown. The strip
+   *  opens the new conversation itself. */
+  onCreate(): Promise<CreatedAgent>;
   onDismiss(name: string): Promise<void>;
   /** Controls for the conversation this strip has open, pinned to its right
    *  edge — the chat column has no other chrome row to hang them on. */
@@ -35,88 +48,42 @@ function StatusMark({ subordinate }: { subordinate: SubordinateRosterEntry }) {
   );
 }
 
-export function SpawnSubordinateDialog({ onClose, onSpawn }: {
-  onClose(): void;
-  onSpawn(role: string, mission: string): Promise<SpawnResult>;
-}) {
-  const [role, setRole] = useState("");
-  const [mission, setMission] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!role.trim() || !mission.trim() || saving) return;
-    setSaving(true);
-    setError(null);
-    try {
-      await onSpawn(role.trim(), mission.trim());
-      onClose();
-    } catch (cause) {
-      setError(renderThrownChain({ cause: cause }));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <Modal
-      title="Add a subordinate"
-      icon={<UserPlusIcon size={18} className="p-accent" />}
-      onClose={onClose}
-      busy={saving}
-      footer={<>
-        <Button size="sm" variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
-        <FilledButton type="submit" form="spawn-subordinate" disabled={!role.trim() || !mission.trim() || saving}>
-          {saving ? "Creating…" : "Create agent"}
-        </FilledButton>
-      </>}
-    >
-      <form id="spawn-subordinate" onSubmit={submit} className="space-y-3">
-        <label className="block space-y-1.5">
-          <span className="text-xs font-medium p-text-2">Role</span>
-          <input
-            autoFocus
-            value={role}
-            onChange={(event) => setRole(event.target.value)}
-            placeholder="e.g. Research lead"
-            maxLength={120}
-            className="w-full border p-border p-card px-3 py-2 text-sm p-text placeholder:p-text-3 focus:outline-none focus:border-[var(--c-accent)]"
-          />
-        </label>
-        <label className="block space-y-1.5">
-          <span className="text-xs font-medium p-text-2">Mission</span>
-          <textarea
-            value={mission}
-            onChange={(event) => setMission(event.target.value)}
-            placeholder="Describe the outcome this subordinate should deliver."
-            rows={5}
-            maxLength={4_000}
-            className="w-full resize-y border p-border p-card px-3 py-2 text-sm leading-relaxed p-text placeholder:p-text-3 focus:outline-none focus:border-[var(--c-accent)]"
-          />
-        </label>
-        <p className="text-[11px] leading-relaxed p-text-3">
-          The mission defines this agent’s standing role. It stays idle until you open its tab and send the first message.
-        </p>
-        {error && <div role="alert" className="rounded-md px-2.5 py-2 text-xs p-notice-danger">{error}</div>}
-      </form>
-    </Modal>
-  );
-}
-
-export function SubordinateTabs({ workspace, subordinates, activeName, onSpawn, onDismiss, trailing }: SubordinateTabsProps) {
+export function SubordinateTabs({ workspace, subordinates, activeName, onCreate, onDismiss, trailing }: SubordinateTabsProps) {
   const navigate = useNavigate();
-  const [showSpawn, setShowSpawn] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  // Re-entrancy fence for the two doors into one flow (the strip's + and the
+  // sidebar's row): state renders the spinner, the ref refuses the double.
+  const creatingRef = useRef(false);
   const [dismissTarget, setDismissTarget] = useState<SubordinateRosterEntry | null>(null);
   const [dismissing, setDismissing] = useState(false);
   const [dismissError, setDismissError] = useState<string | null>(null);
 
   const mainPath = `/workspace/${workspace}`;
-  const createAndOpen = async (role: string, mission: string): Promise<SpawnResult> => {
-    const created = await onSpawn(role, mission);
-    navigate(`${mainPath}/agents/${created.name}`);
-    return created;
-  };
+  const createAndOpen = useCallback(async () => {
+    if (creatingRef.current) return;
+    creatingRef.current = true;
+    setCreating(true);
+    setCreateError(null);
+    try {
+      const created = await onCreate();
+      navigate(`${mainPath}/agents/${created.name}`);
+    } catch (cause) {
+      setCreateError(renderThrownChain({ cause: cause }));
+    } finally {
+      creatingRef.current = false;
+      setCreating(false);
+    }
+  }, [mainPath, navigate, onCreate]);
+
+  // The sidebar's "+ New agent" row is the second door into this same flow —
+  // it has no socket of its own, so it asks the mounted strip over a window
+  // event rather than duplicating the create+open sequence.
+  useEffect(() => {
+    const h = () => { void createAndOpen(); };
+    window.addEventListener("kinu:new-agent", h);
+    return () => window.removeEventListener("kinu:new-agent", h);
+  }, [createAndOpen]);
 
   return (
     <>
@@ -140,23 +107,24 @@ export function SubordinateTabs({ workspace, subordinates, activeName, onSpawn, 
           </Link>
           {subordinates.map((subordinate) => {
             const active = activeName === subordinate.name;
+            const title = agentTitle(subordinate.displayName);
             return (
               <div key={subordinate.name} className="group/tab relative shrink-0">
                 <Link
                   to={`${mainPath}/agents/${subordinate.name}`}
                   aria-current={active ? "page" : undefined}
-                  title={`${subordinate.role}${subordinate.currentTask ? ` — ${subordinate.currentTask}` : ""}`}
+                  title={subordinate.currentTask ?? title}
                   className={`p-tab -mb-px flex h-full max-w-52 items-center gap-2 py-2 pl-3 pr-8 text-xs transition-colors ${active ? "p-tab-active font-medium" : ""}`}
                 >
-                  <span className="truncate">{subordinate.displayName}</span>
+                  <span className={`truncate ${subordinate.displayName ? "" : "italic p-text-3"}`}>{title}</span>
                   <StatusMark subordinate={subordinate} />
                 </Link>
                 <button
                   type="button"
                   onClick={() => { setDismissError(null); setDismissTarget(subordinate); }}
                   className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-sm p-1 opacity-0 p-text-3 transition-all hover:p-danger focus-visible:opacity-100 group-hover/tab:opacity-70"
-                  title={`Dismiss ${subordinate.displayName}`}
-                  aria-label={`Dismiss ${subordinate.displayName}`}
+                  title={`Dismiss ${title}`}
+                  aria-label={`Dismiss ${title}`}
                 >
                   <TrashIcon size={11} />
                 </button>
@@ -165,24 +133,34 @@ export function SubordinateTabs({ workspace, subordinates, activeName, onSpawn, 
           })}
           <button
             type="button"
-            onClick={() => setShowSpawn(true)}
-            className="p-btn-ghost my-1 ml-1 flex size-7 shrink-0 self-center items-center justify-center"
-            title="Add a subordinate"
-            aria-label="Add a subordinate"
+            onClick={() => { void createAndOpen(); }}
+            disabled={creating}
+            className="p-btn-ghost my-1 ml-1 flex size-7 shrink-0 self-center items-center justify-center disabled:opacity-50"
+            title={NEW_AGENT_TITLE}
+            aria-label={NEW_AGENT_TITLE}
           >
-            <PlusIcon size={14} />
+            <PlusIcon size={14} className={creating ? "animate-pulse" : undefined} />
           </button>
+          {createError && (
+            <button
+              type="button"
+              role="alert"
+              onClick={() => setCreateError(null)}
+              className="my-1 ml-1 max-w-64 shrink-0 self-center truncate rounded-md px-2 py-1 text-[11px] p-notice-danger"
+              title={`Couldn't create an agent: ${createError} — click to dismiss`}
+            >
+              Couldn't create an agent
+            </button>
+          )}
         </nav>
         {trailing && (
           <div className="flex shrink-0 items-center gap-2 border-b p-border pl-2 pr-3">{trailing}</div>
         )}
       </div>
 
-      {showSpawn && <SpawnSubordinateDialog onClose={() => setShowSpawn(false)} onSpawn={createAndOpen} />}
-
       {dismissTarget && (
         <Modal
-          title={`Dismiss ${dismissTarget.displayName}?`}
+          title={`Dismiss ${agentTitle(dismissTarget.displayName)}?`}
           icon={<TrashIcon size={18} className="p-danger" />}
           onClose={() => setDismissTarget(null)}
           busy={dismissing}

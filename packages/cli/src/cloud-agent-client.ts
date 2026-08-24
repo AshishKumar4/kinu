@@ -118,6 +118,9 @@ const BranchTurnResultSchema = v.nullable(v.object({
   reason: v.optional(v.string()),
 }));
 const ForkAgentResultSchema = v.nullable(v.object({ name: v.optional(v.string()) }));
+/** Both additional-agent calls answer with the slug to address the agent by
+ *  and its shown title, which is empty until something names it. */
+const AdditionalAgentSchema = v.object({ name: v.string(), displayName: v.string() });
 const ChangelogRevertActionSchema = v.variant('type', [
   v.object({ type: v.literal('scaffold_rollback'), target: v.string() }),
   v.object({ type: v.literal('craft_retire'), target: v.string() }),
@@ -563,6 +566,22 @@ export class CloudAgentClient implements AgentClient {
 
   async setRole(roleId: string): Promise<{ role: string }> {
     return v.parse(v.object({ role: v.string() }), await this.callRpc('setRole', [roleId]));
+  }
+
+  /** Add an agent to this workspace with nothing said about it: it inherits
+   *  the workspace's mission and comes back with a BLANK `displayName`, which
+   *  its first owner message replaces. `name` is the slug to open it by. */
+  async createAdditionalAgent(): Promise<{ name: string; displayName: string }> {
+    return v.parse(AdditionalAgentSchema, await this.callRpc('createSubordinateAgent', []));
+  }
+
+  /** Name one of this workspace's agents. The title becomes the owner's and is
+   *  never auto-replaced afterwards. */
+  async renameAdditionalAgent(name: string, displayName: string): Promise<{ name: string; displayName: string }> {
+    return v.parse(
+      AdditionalAgentSchema,
+      await this.callRpc('renameSubordinateAgent', [name, displayName]),
+    );
   }
 
   async searchNodes(): Promise<AgentSearchNode[]> {

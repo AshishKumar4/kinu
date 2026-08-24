@@ -73,14 +73,25 @@ describe('AgentProviderRegistry composition', () => {
   });
 
   test('the staging identity runs Workers AI through the direct binding', async () => {
-    const calls: string[] = [];
+    const calls: Array<{ model: string; stream: boolean }> = [];
     const ai = Object.assign(stubAiBinding().binding, {
-      async run(model: string) {
-        calls.push(model);
-        return {
-          response: 'direct binding',
-          usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
-        };
+      async run(model: string, inputs: { stream?: boolean }) {
+        const stream = inputs.stream === true;
+        calls.push({ model, stream });
+        if (!stream) {
+          return {
+            response: 'direct binding',
+            usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
+          };
+        }
+        // A streamed turn goes over the binding as a real event stream. It is
+        // never a finished completion replayed as one frame: that is what the
+        // adapter refuses, so a stub answering the old way would fail here.
+        return new Response([
+          'data: {"response":"direct binding"}\n\n',
+          'data: {"response":"","usage":{"prompt_tokens":2,"completion_tokens":2,"total_tokens":4}}\n\n',
+          'data: [DONE]\n\n',
+        ].join(''), { headers: { 'content-type': 'text/event-stream' } });
       },
     });
     const directBinding: Ai = Object.create(ai);
@@ -95,9 +106,10 @@ describe('AgentProviderRegistry composition', () => {
     expect(generated.text).toBe('direct binding');
     const streamed = streamText({ model, prompt: 'reply again' });
     expect(await streamed.text).toBe('direct binding');
+    expect(await streamed.usage).toMatchObject({ inputTokens: 2, outputTokens: 2 });
     expect(calls).toEqual([
-      '@cf/moonshotai/kimi-k2.6',
-      '@cf/moonshotai/kimi-k2.6',
+      { model: '@cf/moonshotai/kimi-k2.6', stream: false },
+      { model: '@cf/moonshotai/kimi-k2.6', stream: true },
     ]);
   });
 

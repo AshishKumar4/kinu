@@ -68,27 +68,32 @@ export function StatusBar({ name, mode, model, reasoningEffort, onModelSelect, c
   const modelFull = ` ${modelName}${modelHint === '' ? '' : ` [${modelHint}]`}`;
   const modelBare = ` ${modelName}`;
   const modelIdeal = Math.min(34, modelFull.length);
-  const optionalSegments: Array<{ readonly kind: 'branch' | 'profile' | 'metadata'; readonly text: string; readonly color: string }> = [
+  // `id` is the segment's identity across renders. Segments must NOT remount
+  // when their text ticks (context usage changes every stream delta): opentui's
+  // TextNode child insert/remove is where the "Child not found in children"
+  // crash lives, so each segment below renders as its OWN <text> sibling —
+  // box-child reconciliation — and its key never encodes its value.
+  const optionalSegments: Array<{ readonly id: string; readonly text: string; readonly color: string }> = [
     ...(branchCount > 0
       ? [{
-          kind: 'branch' as const,
+          id: 'branch',
           text: branchCount > 1 ? `  ⎇ ${branchCount} branches` : '  ⎇ branch',
           color: colors.intent.warning,
         }]
       : []),
     ...(profile !== undefined
-      ? [{ kind: 'profile' as const, text: `  ${profile.role.label} · ${profile.tier.id}`, color: colors.intent.accent }]
+      ? [{ id: 'profile', text: `  ${profile.role.label} · ${profile.tier.id}`, color: colors.intent.accent }]
       : []),
-    { kind: 'metadata', text: `  ${formatContextUsage(model, contextTokens, contextWindow)}`, color: colors.text.muted },
-    { kind: 'metadata', text: `  effort ${reasoningEffort}`, color: colors.text.muted },
+    { id: 'context', text: `  ${formatContextUsage(model, contextTokens, contextWindow)}`, color: colors.text.muted },
+    { id: 'effort', text: `  effort ${reasoningEffort}`, color: colors.text.muted },
     ...(autoEvolve !== undefined
       ? [{
-          kind: 'metadata' as const,
+          id: 'evolve',
           text: `  ${autoEvolve ? 'evolve auto' : 'evolve off'}`,
           color: autoEvolve ? colors.intent.accent : colors.text.muted,
         }]
       : []),
-    ...(toolCount !== undefined ? [{ kind: 'metadata' as const, text: `  ${toolCount} tools`, color: colors.text.muted }] : []),
+    ...(toolCount !== undefined ? [{ id: 'tools', text: `  ${toolCount} tools`, color: colors.text.muted }] : []),
   ];
   const metadataBudget = Math.max(0, available - identityWidth - modelIdeal);
   const metadata: typeof optionalSegments = [];
@@ -130,8 +135,10 @@ export function StatusBar({ name, mode, model, reasoningEffort, onModelSelect, c
             <text><span fg={colors.text.primary}>{modelShown}</span></text>
           </box>
         )}
+        {metadata.map((segment) => (
+          <text key={segment.id}><span fg={segment.color}>{segment.text}</span></text>
+        ))}
         <text>
-          {metadata.map((segment) => <span key={`${segment.kind}-${segment.text}`} fg={segment.color}>{segment.text}</span>)}
           <span fg={colors.text.muted}>{tail.slice(0, -1)}</span>
           <span fg={connected ? colors.intent.success : colors.intent.danger}>{connection}</span>
         </text>

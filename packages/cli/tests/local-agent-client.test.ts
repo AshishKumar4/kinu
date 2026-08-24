@@ -113,6 +113,7 @@ function setup(model: LanguageModel) {
     mcpServers: {},
     noAutoEvolve: true,
     transcript: { transcriptDir: join(home, 'sessions') },
+    naming: { generate: async () => JSON.stringify({ title: 'Named By Test' }) },
     surface: 'interactive',
   });
   return { client, home, rt };
@@ -145,6 +146,7 @@ function openPersistentClient(
     mcpServers: {},
     noAutoEvolve: true,
     transcript: transcriptOptions,
+    naming: { generate: async () => JSON.stringify({ title: 'Named By Test' }) },
     surface: 'interactive',
   });
 }

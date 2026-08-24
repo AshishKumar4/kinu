@@ -75,10 +75,10 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   /** The cadence a tick reads, and the deliberate disable a tick must respect. */
   observeAutoGepaCadence(): number { return this.config.getAutoGepaEveryNTurns(); }
   setAutoGepaCadence(turns: number): void { this.config.setAutoGepaEveryNTurns(turns); }
-  /** One auto-title round-trip — the private seam `maybeAutoTitleWorkspace`
-   *  wires into `applyWorkspaceTitle`'s `suggest` slot. */
+  /** One auto-title round-trip — the shared `ActorAgent.suggestTitle` seam
+   *  that `applyWorkspaceTitle`'s `suggest` slot wires into. */
   harnessSuggestWorkspaceTitle(mission: string): Promise<string | null> {
-    return this.suggestWorkspaceTitle(mission);
+    return this.suggestTitle(mission);
   }
   /** Admit one event, through the only writer allowed to: `publish` is the
    *  single admitted author of `kind='event'` rows, so a test that wants an
@@ -88,6 +88,13 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   }
 }
 
+/** An actor's stored naming state as a test reads it — the same two rows
+ *  `planWorkspaceTitle` decides from. */
+export interface ObservedNaming {
+  displayName: string | null;
+  nameOrigin: 'user' | 'auto' | null;
+}
+
 class HarnessSubordinateAgent extends SubordinateAgent {
   observeRawTools(): ToolSet { return this.getRawTools(); }
   observeRuntime(): AgentRuntime { return this.rt; }
@@ -95,6 +102,16 @@ class HarnessSubordinateAgent extends SubordinateAgent {
   protected override async profileInputs() {
     return { envelope: HARNESS_PROFILE_ENVELOPE, provider: HARNESS_PROVIDER_SNAPSHOT };
   }
+  /** One first-interaction titling pass — the call `onChatResponse` makes on an
+   *  owner-driven turn. */
+  titleFromFirstMessage(userText: string): Promise<void> { return this.maybeAutoTitle(userText); }
+  /** Whose title this child believes it carries. The authority that decides
+   *  whether a later auto-title may run at all. */
+  observeNaming(): ObservedNaming {
+    return { displayName: this.config.getDisplayName(), nameOrigin: this.config.getNameOrigin() };
+  }
+  /** The identity row its parent seeded, which is what its prompt reads. */
+  observeIdentitySoul(): Promise<string> { return this.loadSoulText(); }
 }
 
 export interface ActorHarness<T> {
@@ -205,9 +222,19 @@ function emptyWorkspaceSession() {
   return { idFromName: (name: string) => name, get: () => stub };
 }
 
-/** Env with the bindings actor construction reaches. LOADER and UserDO are
- *  present-but-inert: deps construction captures them; using them throws. */
-function makeEnv(): Env {
+/**
+ * Env with the bindings actor construction reaches. LOADER and UserDO are
+ * present-but-inert: deps construction captures them; using them throws.
+ *
+ * `parent` binds a REAL orchestrator instance under the `OrchestratorAgent`
+ * name, which is how a subordinate reaches the agent that hired it
+ * (`getAgentByName(env.OrchestratorAgent, …)`). Both halves of the parent↔child
+ * handshake — seeding an identity, recording a title on the parent's roster —
+ * then run as production code against a production roster, in one process. The
+ * facet itself is still workerd-only, so this is the parent hop and nothing
+ * else.
+ */
+function makeEnv(parent?: HarnessOrchestratorAgent): Env {
   const bindings = {
     LOADER: { get: () => { throw new Error('harness LOADER: codemode is not executable under bun'); } },
     NIMBUS_SESSION: emptyWorkspaceSession(),
@@ -224,6 +251,11 @@ function makeEnv(): Env {
       }),
     },
   };
+  if (parent) {
+    Object.assign(bindings, {
+      OrchestratorAgent: { idFromName: (n: string) => n, get: () => parent },
+    });
+  }
   const env: Partial<Env> = {};
   Object.assign(env, bindings);
   // SAFETY: the ActorAgent dependency contract only reads the constructed
@@ -232,8 +264,12 @@ function makeEnv(): Env {
   return env as Env;
 }
 
-function instantiate<T extends object>(Actor: new (ctx: AgentContext, env: Env) => T, db: Database): ActorHarness<T> {
-  const agent = new Actor(makeCtx(db), makeEnv());
+function instantiate<T extends object>(
+  Actor: new (ctx: AgentContext, env: Env) => T,
+  db: Database,
+  parent?: HarnessOrchestratorAgent,
+): ActorHarness<T> {
+  const agent = new Actor(makeCtx(db), makeEnv(parent));
   return {
     agent,
     db,
@@ -285,5 +321,58 @@ export function subordinateHarness(): ActorHarness<HarnessSubordinateAgent> {
      VALUES (1, 'harness-sub', 'Harness Sub', 'specialist', 'observe conformance', 'harness-parent', 'harness-owner')`,
   ).run();
   harness.agent.declareScaffoldPresent();
+  return harness;
+}
+
+/**
+ * A real SubordinateAgent hanging off a real OrchestratorAgent, in one process.
+ *
+ * Nothing about the identity is pre-inserted: the child is seeded through the
+ * production `setSubordinateIdentity`, which reaches back to the parent's
+ * `getSubordinateBootstrapIdentity` for the owner, workspace and depth it is
+ * not allowed to state itself. So the seeded row is the one production writes,
+ * and the parent's roster is a real roster the child can reach.
+ *
+ * `parentPath` is what the SDK records at facet creation and the only thing
+ * that says which agent hired this one; it is declared here because facets are
+ * workerd-only, and it names the parent's CLASS so the production class check
+ * runs rather than being bypassed.
+ */
+export async function hiredSubordinateHarness(
+  parent: ActorHarness<HarnessOrchestratorAgent>,
+  identity: {
+    name: string;
+    displayName: string;
+    nameOrigin: 'user' | 'auto';
+    role: string;
+    roleId?: string;
+    mission: string;
+  },
+): Promise<ActorHarness<HarnessSubordinateAgent>> {
+  const harness = instantiate(HarnessSubordinateAgent, new Database(':memory:'), parent.agent);
+  Object.defineProperty(harness.agent, 'name', { value: identity.name, configurable: true });
+  Object.defineProperty(harness.agent, 'parentPath', {
+    value: [{ className: 'OrchestratorAgent', name: 'harness-parent' }],
+    configurable: true,
+  });
+  Object.defineProperty(harness.agent, 'messages', { value: [], configurable: true });
+  ensureActorSchema(harness.agent);
+  harness.agent.declareScaffoldPresent();
+  await harness.agent.setSubordinateIdentity(identity);
+  // The parent addresses its children through `subAgent`, which needs a facet.
+  // Resolve that ONE name to the real child instead, so both directions of the
+  // handshake — the parent renaming a child, the child recording its title —
+  // run as production code against production state. Every other name keeps
+  // the SDK stub's honest refusal.
+  const resolveFacet = harness.agent;
+  type SubAgentArgs = Parameters<HarnessOrchestratorAgent['subAgent']>;
+  const parentSubAgent = parent.agent.subAgent.bind(parent.agent);
+  Object.defineProperty(parent.agent, 'subAgent', {
+    value: async (cls: SubAgentArgs[0], name: SubAgentArgs[1]): Promise<object> => {
+      const stub = await parentSubAgent(cls, name);
+      return name === identity.name ? resolveFacet : stub;
+    },
+    configurable: true,
+  });
   return harness;
 }

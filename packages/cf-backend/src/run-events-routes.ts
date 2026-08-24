@@ -21,7 +21,27 @@ import * as v from 'valibot';
 import {
   decodeRunEventWire, resumeIndexFromLastEventId, type RunEventWire,
 } from './lib/orchestrator-wire';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+
+/**
+ * One 500 from this file, counted. The route used to answer with a rendered cause
+ * and record nothing, so a workspace whose history was unreachable produced no
+ * fleet signal at all — the failure was visible to the one person looking at the
+ * panel and to nobody else.
+ *
+ * The workspace NAME is not a field. It is mission-derived user text; naming the
+ * SURFACE instead answers the question this row exists for, which is which route
+ * is failing rather than whose workspace it was.
+ */
+function reportRouteFailure(input: { surface: string; cause: unknown }): Response {
+  const { surface, cause } = input;
+  diagnostics.failure('http.run_events_failed', toKinuError({
+    doing: `answering a ${surface} request for the durable run-event log`,
+    cause,
+    otherwise: 'unavailable',
+  }), { source: surface });
+  return Response.json({ error: renderThrownChain({ cause }) }, { status: 500 });
+}
 
 const SSE_POLL_MS = 500;
 const SSE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
@@ -71,7 +91,7 @@ export async function handleRunEventsRequest(request: Request, env: Env): Promis
       const stub = await resolveAgent(env, agentName);
       return Response.json(await stub.listRuns({ limit, cursor: after ? { after } : undefined }));
     } catch (err) {
-      return Response.json({ error: renderThrownChain({ cause: err }) }, { status: 500 });
+      return reportRouteFailure({ surface: 'runs', cause: err });
     }
   }
 
@@ -89,7 +109,7 @@ export async function handleRunEventsRequest(request: Request, env: Env): Promis
       const events = decodeRunEventWire(await stub.getRunEventsWire(runId, opts));
       return Response.json(events);
     } catch (err) {
-      return Response.json({ error: renderThrownChain({ cause: err }) }, { status: 500 });
+      return reportRouteFailure({ surface: 'events', cause: err });
     }
   }
 
@@ -127,6 +147,24 @@ function streamRunEvents(
       signal.addEventListener('abort', () => { closed = true; }, { once: true });
 
       const stub = await resolveAgent(env, agentName);
+      const resolvedAt = Date.now();
+
+      // First byte, measured once. What a reader of this stream actually waits
+      // for is not the response headers — those return immediately, because the
+      // body is a stream — but the first EVENT. `resolveMs` separates the two
+      // costs that make it up: reaching the Durable Object (a cold activation
+      // pays for its own init here) and the first ledger read.
+      let firstByteReported = false;
+      const reportFirstByte = (events: number): void => {
+        if (firstByteReported) return;
+        firstByteReported = true;
+        diagnostics.event('sse.run_events_first_byte', {
+          ms: Date.now() - startedAt,
+          resolveMs: resolvedAt - startedAt,
+          events,
+          resumed: sinceIndex > 0,
+        });
+      };
 
       const send = (ev: RunEventWire) => {
         const lines = [
@@ -147,6 +185,10 @@ function streamRunEvents(
           await stub.getRunEventsWire(runId, { since: cursor + 1, limit: 500 }),
         );
         for (const ev of backlog) send(ev);
+        // Reported even when the replay is EMPTY: a run with nothing new to say
+        // still made the reader wait for the round trip, and a measurement that
+        // only counted streams with a backlog would report the fast half.
+        reportFirstByte(backlog.length);
 
         // Poll loop until run_end, client disconnect, or timeout. Cloudflare
         // Workers can hold a single SSE connection for up to several minutes;

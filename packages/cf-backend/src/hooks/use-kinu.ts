@@ -1440,12 +1440,15 @@ export function useKinu(target?: string | KinuActorAddress) {
     subordinateEvents,
     signalCards,
     refreshSubordinates,
-    spawnSubordinate: async (role: string, mission: string) => {
+    /** One-click additional agent: identity only, no role/mission form. The
+     *  server answers with a blank displayName — the UI shows "New agent"
+     *  until the first-message titler lands over `subordinates_changed`. */
+    createSubordinate: async () => {
       const result = await rpc<{
         name: string;
         displayName: string;
         subordinate: SubordinateRosterEntry;
-      }>("spawnSubordinate", [role, mission]);
+      }>("createSubordinateAgent", []);
       ++subordinateRefreshGeneration.current;
       setSubordinates((current) => [
         ...current.filter((entry) => entry.name !== result.subordinate.name),
@@ -1453,6 +1456,17 @@ export function useKinu(target?: string | KinuActorAddress) {
       ]);
       setSourceError("roster", null);
       return result;
+    },
+    /** Owner rename. Lands on the parent roster AND the child's own identity;
+     *  a user-chosen name permanently blocks auto-retitling (server-side). */
+    renameSubordinate: async (name: string, displayName: string) => {
+      const entry = await rpc<SubordinateRosterEntry>("renameSubordinateAgent", [name, displayName]);
+      ++subordinateRefreshGeneration.current;
+      setSubordinates((current) => current.map(
+        (existing) => existing.name === entry.name ? entry : existing,
+      ));
+      setSourceError("roster", null);
+      return entry;
     },
     dismissSubordinate: async (name: string) => {
       const result = await rpc<{ ok: true; name: string; historyKept: boolean }>("dismissSubordinate", [name]);

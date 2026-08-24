@@ -2,7 +2,7 @@
   "name": "kinu",
   "private": true,
   "packageManager": "bun@1.4.0",
-  "description": "Self-evolving agent with MCTS parallel exploration, mutable scaffolding, and durable skill evolution",
+  "description": "Kinu gives AI agents a durable computer of their own. It adapts and improves with use, runs locally or fully in the cloud, and solves hard tasks by exploring multiple approaches and letting executable checks choose the winner.",
   "license": "MIT",
   "keywords": [
     "agent",

@@ -15,13 +15,13 @@
  * The nested agent rows are real data for exactly one workspace: the one open
  * this session (only a mounted WorkspacePage has a live socket, and it bridges
  * its subordinate roster here over `kinu:workspace-activity`). "+ New agent"
- * asks that page to open its spawn dialog (`kinu:hire-subordinate`); with no
- * workspace mounted there is nothing to hire INTO, so the row only renders
- * under an open workspace.
+ * asks that page's tab strip to create one and open its conversation
+ * (`kinu:new-agent`) — one click, no form; with no workspace mounted there is
+ * nothing to create INTO, so the row only renders under an open workspace.
  */
 import { useEffect, useState, useCallback, useRef, type FormEvent } from "react";
 import { Link, NavLink, useMatch, useNavigate } from "react-router-dom";
-import { GearIcon, TrashIcon, SignOutIcon, PencilSimpleIcon, CheckIcon, XIcon, PlusIcon } from "@phosphor-icons/react";
+import { GearIcon, TrashIcon, SignOutIcon, PencilSimpleIcon, CheckIcon, XIcon, PlusIcon, ShieldCheckIcon } from "@phosphor-icons/react";
 import { Button } from "@cloudflare/kumo";
 import { FilledButton } from "./ui/FilledButton";
 import { KinuLogo } from "./ui/KinuLogo";
@@ -29,6 +29,8 @@ import { removeWorkspace, getProfile, type WorkspaceEntry, type UserProfile } fr
 import { useWorkspaceRpc } from "../hooks/use-kinu";
 import { useWorkspaceRoster } from "../hooks/use-workspace-roster";
 import { ModeToggle } from "./theme-toggle";
+import { FeedbackButton } from "./FeedbackButton";
+import { agentTitle } from "./SubordinateTabs";
 import { Modal } from "./ui/Modal";
 import * as v from "valibot";
 import { renderCauseChain, renderThrownChain } from "@kinu.run/core/obs";
@@ -43,14 +45,12 @@ const WORKSPACE_SCOPED_SECTIONS = ["workspace", "mcts", "settings", "triggers"];
 interface SidebarAgent {
   name: string;
   displayName: string;
-  role: string;
   status: string;
 }
 
 const SidebarAgentSchema = v.object({
   name: v.string(),
   displayName: v.string(),
-  role: v.string(),
   status: v.string(),
 });
 
@@ -338,15 +338,14 @@ export default function Sidebar() {
                         key={sub.name}
                         to={`/workspace/${a.name}/agents/${sub.name}`}
                         className="flex items-center gap-2 rounded-lg px-2.5 py-[5px] transition-colors hover:bg-[var(--c-elevated)]"
-                        title={sub.role}
+                        title={agentTitle(sub.displayName)}
                       >
                         <span className={`size-1.5 shrink-0 rounded-full ${sub.status === "working" ? "p-dot-success p-dot-pulse" : sub.status === "awaiting_input" ? "p-dot-warning" : "bg-[var(--c-fill)] border p-border"}`} />
-                        <span className="min-w-0 flex-1 truncate text-[12.5px] p-text-2">{sub.displayName}</span>
-                        <span className="shrink-0 max-w-20 truncate text-[10px] p-text-4">{sub.role}</span>
+                        <span className={`min-w-0 flex-1 truncate text-[12.5px] ${sub.displayName ? "p-text-2" : "italic p-text-3"}`}>{agentTitle(sub.displayName)}</span>
                       </NavLink>
                     ))}
                     <button
-                      onClick={() => window.dispatchEvent(new CustomEvent("kinu:hire-subordinate"))}
+                      onClick={() => window.dispatchEvent(new CustomEvent("kinu:new-agent"))}
                       className="w-full rounded-lg px-2.5 py-[5px] text-left text-[11.5px] p-text-4 transition-colors hover:p-gold"
                     >
                       + New agent
@@ -356,7 +355,7 @@ export default function Sidebar() {
                 {isActive && activeAgents && activeAgents.length === 0 && (
                   <div className="ml-[21px] mt-0.5 border-l p-border pl-2.5">
                     <button
-                      onClick={() => window.dispatchEvent(new CustomEvent("kinu:hire-subordinate"))}
+                      onClick={() => window.dispatchEvent(new CustomEvent("kinu:new-agent"))}
                       className="w-full rounded-lg px-2.5 py-[5px] text-left text-[11.5px] p-text-4 transition-colors hover:p-gold"
                     >
                       + New agent
@@ -391,7 +390,15 @@ export default function Sidebar() {
               <GearIcon size={14} />
               <span>Account settings</span>
             </Link>
+            {profile?.controlPlane === true && (
+              <Link to="/control" onClick={() => setShowUserMenu(false)}
+                className="flex items-center gap-2 px-2 py-1.5 text-sm rounded-sm p-card-hover">
+                <ShieldCheckIcon size={14} />
+                <span>Control plane</span>
+              </Link>
+            )}
             <ModeToggle />
+            <FeedbackButton />
             <a
               href="/logout"
               className="flex items-center gap-2 px-2 py-1.5 text-sm rounded-sm p-card-hover"

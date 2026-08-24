@@ -58,7 +58,7 @@ import {
   EvolutionEngine,
   readMemoryTail,
   listProposedTasks, updateProposedTaskStatus,
-  buildStrategyForkDeps, agentsActionsFor,
+  agentsActionsFor,
   type HeadJournal, reconcileInterruptedForks,
   jobRedriveResumeGate, resumableForkRoots,
   skillsVfsOver, resolveTurnSkills, filterToolSetBySkills, renderFactsForTurn,
@@ -113,9 +113,10 @@ import {
   BUILTIN_PROFILE_CATALOG, TIER_IDS, effectiveRoleCatalog, profileCatalogDigest,
   changeActiveRole, agentsProfileContext, canonicalConversationId,
   loadProfileAuthorityInputs, resolveAgentTurnProfile, sha256Hex,
+  roleChangeOutcomeText, narrowToolSurface, codemodeCapabilitiesFor,
   readSoul,
   type ProfileCatalog, type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
-  type ResolvedTurnProfile, type TierId,
+  type ProviderFailure, type ResolvedTurnProfile, type TierId,
   decodeJsonValue, projectJsonValue,
   createAgentSelfProvider,
   // ── Read models: the same implementations the cloud backend's RPCs call ──
@@ -129,7 +130,7 @@ import {
   priceCall, WORKSPACE_RUN_ID,
   recordModelOperations, type ModelOperationSink,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, renderThrownChain, toKinuError, type Refusal } from '@kinu.run/core/obs';
 import { makeSqlExec, type CLIRuntime } from './runtime';
 import { discoverAgentsMd } from './agents-md';
 import { createNodeCraftedExecute } from './craft-executor';
@@ -232,6 +233,23 @@ export interface LocalDurableWebhook {
   secret: string | null;
 }
 
+/**
+ * Where a local agent's role/tier catalog comes from, read LIVE.
+ *
+ * Re-invoked at every resolution rather than captured once, so a catalog
+ * written after this session started — the signed-out `/model` that creates the
+ * local authority mid-session, an account catalog pushed while a daemon is
+ * resident — is observed by the next turn instead of the next process.
+ *
+ * `null` means "no explicit authority is configured", which is NOT the same as
+ * "no authority": the session falls back to its own bootstrap envelope, built
+ * from this workspace's stored model. A caller that cannot answer must return
+ * null rather than invent a catalog, because substituting one silently swaps
+ * the model every producer resolves (profiles/resolve.ts:5-8).
+ */
+export type ProfileEnvelopeSource =
+  () => ProfileCatalogEnvelope | null | Promise<ProfileCatalogEnvelope | null>;
+
 export interface LocalAgentSessionOpts {
   rt: CLIRuntime;
   /** Raw bun:sqlite handle — backs the EventsHub SqlExec adapter. */
@@ -244,8 +262,8 @@ export interface LocalAgentSessionOpts {
   modelSpec?: string;
   /** Optional provider-style resolver. */
   modelResolver?: LocalModelResolver;
-  /** Canonical role/tier authority for this local agent. */
-  profileAuthority?: () => ProfileCatalogEnvelope | Promise<ProfileCatalogEnvelope>;
+  /** Canonical role/tier authority for this local agent, read live. */
+  profileAuthority?: ProfileEnvelopeSource;
   onEvent: (event: SessionEvent) => void;
   /** Disable auto-evolution (turn + session reflection). Default: enabled. */
   noAutoEvolve?: boolean;
@@ -552,7 +570,18 @@ export class LocalAgentSession implements BackendHost {
     this.mctsSearchStore = stores.mctsSearchStore;
     this.config = stores.config;
     this.sessionId = canonicalConversationId(this.config);
-    this.profileAuthority = async () => await (opts.profileAuthority?.() ?? this.bootstrapProfileEnvelope());
+    // Awaited BEFORE the `??`: an async source returns a Promise, which is
+    // truthy, so coalescing on the unawaited call made the bootstrap fallback
+    // unreachable for every async authority. Awaiting first is also what makes
+    // a `null` return meaningful — "no explicit authority, use the bootstrap" —
+    // so the source can stay installed and answer live instead of being
+    // omitted at construction and never seeing an authority created later.
+    this.profileAuthority = async () =>
+      (await opts.profileAuthority?.()) ?? this.bootstrapProfileEnvelope();
+    // Routed lanes that begin outside a chat turn (review, evolution cadence,
+    // reflection, advisor) resolve through this rather than finding every lane
+    // unset. Live: it re-reads the authority and the provider snapshot.
+    this.rt.setProfileResolver?.(() => this.resolvePreTurnProfile());
     this.factsStore = stores.facts;
     this.eventRecorder = stores.eventRecorder;
 
@@ -843,6 +872,15 @@ export class LocalAgentSession implements BackendHost {
     return effectiveRoleCatalog(BUILTIN_PROFILE_CATALOG)[roleId]?.tier ?? 'default';
   }
 
+  /**
+   * Change the durable active role. Takes effect on the NEXT resolved turn —
+   * `runTurn` re-reads `config.getActiveRoleId()` every time, so there is no
+   * cache to invalidate here and the running turn keeps the profile it already
+   * resolved (core profiles/role-change.ts:1-5). Clearing the memo instead
+   * would mutate a turn that had already resolved its model and tools, and
+   * clearing it before the outcome check did that even for a change that never
+   * landed.
+   */
   async setRole(roleId: string): Promise<{ role: string }> {
     const envelope = await this.profileAuthority();
     const changed = changeActiveRole({
@@ -851,10 +889,8 @@ export class LocalAgentSession implements BackendHost {
       to: roleId,
       actor: 'user',
     });
-    this.turnProfile = null;
-    this.turnProfileInputs = null;
     if (changed.kind !== 'applied') {
-      throw new Error(`role "${roleId}" was refused: ${changed.kind === 'refused' ? changed.reason : changed.kind}`);
+      throw new Error(roleChangeOutcomeText(roleId, changed, this.config.getActiveRoleId()));
     }
     return { role: changed.to };
   }
@@ -1566,6 +1602,21 @@ export class LocalAgentSession implements BackendHost {
     return upcoming ?? null;
   }
 
+  /**
+   * The owning host's driver-lease check, installed right after construction
+   * like the team and peer transports.
+   *
+   * Absent means nothing is coordinating this database — a bare session in a
+   * fixture, or a single process that is the only driver by construction — and
+   * an absent gate drives freely. It is not a degrade: with no second process
+   * there is no interleaving to prevent.
+   */
+  private driverGate: (() => Refusal | null) | null = null;
+
+  setDriverGate(gate: () => Refusal | null): void {
+    this.driverGate = gate;
+  }
+
   /** Kick the serialized turn pump if idle — idempotent, so a concurrent
    *  enqueueTurn just appends and the running pump picks it up. The active
    *  run's promise is tracked (pumpPromise) so settleBackgroundWork() can
@@ -1581,6 +1632,18 @@ export class LocalAgentSession implements BackendHost {
       let item: QueueItem | undefined;
       while ((item = this.queue.shift())) {
         try {
+          // Checked per ITEM, immediately before the turn runs. A turn is the
+          // longest thing this process does and it writes the conversation, so
+          // two processes running turns over one database interleave them. An
+          // interactive gate takes the lease from a daemon here, which is what
+          // stops a user's turn landing inside a daemon-driven one; a gate that
+          // refuses means another process of this same kind is driving, and
+          // there is nothing to wait for.
+          const refusal = this.driverGate?.();
+          if (refusal) {
+            this.emit({ type: 'error', message: refusal.error });
+            continue;
+          }
           await this.processTurn(item);
         } catch (err) {
           diagnostics.failure(
@@ -1718,6 +1781,16 @@ export class LocalAgentSession implements BackendHost {
       this.closeRun(message.slice(0, 500));
       this.emit({ type: 'error', message });
       this.emit({ type: 'turn-end', turn: this.snapshotTurn(item, '') });
+    } finally {
+      // The turn's profile is immutable FOR the turn, so it is released here
+      // rather than by whatever changed the config underneath it. Between turns
+      // the role/tier/model readers fall through to the durable config, which is
+      // how a role changed mid-turn becomes visible exactly once the turn it
+      // could not affect is over. The RUNTIME keeps its copy on purpose: the
+      // detached review and advisor lanes belong to the turn that just ran and
+      // route against its profile.
+      this.turnProfile = null;
+      this.turnProfileInputs = null;
     }
   }
 
@@ -1766,9 +1839,21 @@ export class LocalAgentSession implements BackendHost {
       availableTools: [
         ...candidateBuiltinNames,
         ...candidateExternalNames,
+        // `release` / `agent` / `llm` are reachable only inside the sandbox, so
+        // no native tool id names them. Without them here the intersection
+        // drops every one from a role that declares a tool list, and a narrowed
+        // role silently loses its codemode lanes wholesale. Derived from the
+        // providers actually wired, so a capability can never be offered whose
+        // namespace is absent.
+        ...codemodeCapabilitiesFor(this.codemodeProviders(this.turnWorkMode)),
       ],
       activeSkills: activeSkills?.active.map((skill) => skill.name) ?? [],
-      explicitTier: tierFromMetadata(item.metadata),
+      // Most specific first: the tier named on THIS message, then the tier the
+      // parent pinned when it hired this agent, then nothing — which lets the
+      // resolver take the role's own default. An absent pin must not read as
+      // "the workspace default"; the role's tier is what an unpinned hire asked
+      // for.
+      explicitTier: tierFromMetadata(item.metadata) ?? this.config.getAssignedTier() ?? undefined,
     });
     this.turnProfile = profile;
     this.turnProfileInputs = profileInputs;
@@ -2330,6 +2415,8 @@ export class LocalAgentSession implements BackendHost {
       },
       model: () => this.ensureModelState(),
       judge: createLlmJsonJudge(this.rt.judgeModel ?? this.rt.llm),
+      reportModelCall: this.modelCallSink,
+      operations: this.modelOperations,
     };
   }
 
@@ -2413,7 +2500,15 @@ export class LocalAgentSession implements BackendHost {
   /** `host.llmStream` — the scaffold's inference bridge (core scaffold-host)
    *  over THIS turn's tool surface. */
   private makeScaffoldLLMStream(model: LanguageModel, turnTools: ToolSet): ScaffoldRunOptions['llmStream'] {
-    return createScaffoldLLMStream({ model, tools: () => turnTools });
+    return createScaffoldLLMStream({
+      model,
+      tools: () => turnTools,
+      spend: {
+        source: 'scaffold',
+        report: this.modelCallSink,
+        operations: this.modelOperations,
+      },
+    });
   }
 
   /** `host.callTool` — dispatch into THIS turn's tool surface by name (core
@@ -2499,13 +2594,10 @@ export class LocalAgentSession implements BackendHost {
     this.lastSystemPromptHash = hash;
   }
 
-  /** The `agents` tool's fork substrate — the SAME shared factory the DO
-   *  wires (core fork-deps): host-injected infra recomputed per fork call. A
-   *  swarm's nodes run their loops in this process and get their private homes
-   *  from this workspace's own uid-0 view. The CLI wires no team or peer
-   *  transport, so swarm is the tool's only action here. */
+  /** The `agents` tool's swarm substrate. A swarm's nodes run their loops in
+   *  this process and get private homes from this workspace's uid-0 view. */
   private buildAgentsForkDeps(): AgentsForkDeps {
-    return buildStrategyForkDeps({
+    return {
       rt: this.rt,
       model: this.cachedModel ?? this.defaultModel("an agents fork"),
       // Same catalog session that answers the context window and prices the
@@ -2515,12 +2607,19 @@ export class LocalAgentSession implements BackendHost {
         spec: this.effectiveModelSpec(),
         pricing: this.modelCatalog.pricing(),
       }),
+      // A node's model comes from the tier its profile snapshot names, and only
+      // the runner knows which snapshot applies — the caller's on a first
+      // attempt, the frozen one on a re-drive. So the model is not pre-resolved
+      // here; the resolver is handed over and the runner picks the spec. Without
+      // it a swarm carrying a profile refuses rather than silently running the
+      // caller's own model under a snapshot claiming the tier's.
+      resolveModel: (spec: string) => this.resolveModelForSpec(spec),
       // *Isolation*: this backend's filesystem is in this isolate, so it can hand
       // over the uid-0 view a home is chown'ed with. A runtime built elsewhere
       // (`buildCLIHeadRuntime`, a bare AgentRuntime in a harness) wires none, and
       // then its nodes report `shared-origin-plane` rather than a home they lack.
       nodeHome: this.rt.nodeHome,
-    });
+    };
   }
   /** Team transport, injected by the owning LocalAgentHost. Present, the
    *  local agent gets hire/ask/send/list/dismiss exactly like a hosted one;
@@ -2690,26 +2789,156 @@ export class LocalAgentSession implements BackendHost {
     };
   }
 
-  private async providerSnapshot(): Promise<ProviderCatalogSnapshot> {
-    const configured = this.normalizeModelSpec(this.config.getModel());
-    const listed = this.modelResolver
-      ? (await this.modelResolver.listModels()).models
-          .map((model) => `${model.provider}/${model.id}`)
-      : [this.fallbackModelSpec];
-    const availableModels = [...new Set([configured, ...listed])].sort();
-    return {
-      revision: sha256Hex(availableModels.join('\n')),
-      availableModels,
-    };
+  /**
+   * The provider listing — the one expensive half of a profile resolution. It
+   * sweeps every configured provider, network included, and it sits on the
+   * turn's critical path ahead of the first token, so it is cached.
+   *
+   * Invalidated by SIGNAL, never by elapsed time. A configured model the
+   * listing does not carry is an ERROR (profiles/resolve.ts:5-8), and a TTL
+   * would let that model reappear by waiting — the silent substitution the
+   * resolver exists to refuse. `refreshProviderListing` is the signal.
+   *
+   * Only a COMPLETE listing is stored. A listing with failures describes a
+   * partial view of what exists, which makes every configured model
+   * admitted-unverified rather than checked; caching that would hold the
+   * unverified window open past the fault and freeze `revision` at a degraded
+   * value. So a failing provider costs a sweep per resolution until it recovers,
+   * which is the right price for not serving a known-partial picture.
+   *
+   * The CONFIGURED spec is deliberately not part of what is cached: it is read
+   * per call below, so `setModel` changes the snapshot's identity with no
+   * invalidation to miss.
+   */
+  private providerListing: { models: readonly string[]; failures: readonly ProviderFailure[] } | null = null;
+  /** One sweep serves every caller that arrives while it is running. A one-shot
+   *  process opens its turn and its review lane together, and without this each
+   *  starts its own provider refresh. */
+  private providerListingSweep: Promise<{ models: readonly string[]; failures: readonly ProviderFailure[] }> | null = null;
+
+  /**
+   * Drop the cached provider listing. The caller has changed something the
+   * listing depends on and this session cannot observe: a credential added or
+   * revoked, a provider connected, a sign-in. The next resolution sweeps again.
+   */
+  refreshProviderListing(): void {
+    this.providerListing = null;
   }
 
+  /**
+   * What the resolver could list, and what it could not reach.
+   *
+   * The two halves travel together because they answer one question. An empty
+   * `unavailableProviders` asserts the listing was COMPLETE, which is what lets
+   * the resolver treat a configured-but-unlisted model as an error instead of
+   * guessing. A non-empty one declares the view partial, so the same model is
+   * admitted unverified rather than reported absent — a provider that was
+   * unreachable is not a provider that dropped the model.
+   *
+   * The failure set is folded into `revision` for the same reason: a provider
+   * going away changes what this snapshot means, so it must not present the
+   * same identity as the clean listing it came from.
+   */
+  private async providerSnapshot(): Promise<{ snapshot: ProviderCatalogSnapshot; cache: 'hit' | 'joined' | 'miss' }> {
+    let cache: 'hit' | 'joined' | 'miss';
+    let listing: { models: readonly string[]; failures: readonly ProviderFailure[] };
+    if (this.providerListing) {
+      listing = this.providerListing;
+      cache = 'hit';
+    } else if (this.providerListingSweep) {
+      listing = await this.providerListingSweep;
+      cache = 'joined';
+    } else {
+      const sweep = this.sweepProviderListing();
+      this.providerListingSweep = sweep;
+      try {
+        listing = await sweep;
+      } finally {
+        this.providerListingSweep = null;
+      }
+      if (listing.failures.length === 0) this.providerListing = listing;
+      cache = 'miss';
+    }
+    const configured = this.normalizeModelSpec(this.config.getModel());
+    const availableModels = [...new Set([configured, ...listing.models])].sort();
+    const unavailableProviders = listing.failures
+      .map((failure) => ({
+        provider: failure.provider,
+        label: failure.label ?? failure.provider,
+        reason: failure.reason,
+      }))
+      .sort((a, b) => (a.provider === b.provider ? a.reason.localeCompare(b.reason) : a.provider.localeCompare(b.provider)));
+    const snapshot: ProviderCatalogSnapshot = {
+      // `!` cannot begin a model spec, so a failure line never collides with one.
+      revision: sha256Hex([
+        ...availableModels,
+        ...unavailableProviders.map((f) => `!${f.provider}\t${f.reason}`),
+      ].join('\n')),
+      availableModels,
+      unavailableProviders,
+    };
+    return { snapshot, cache };
+  }
+
+  private async sweepProviderListing(): Promise<{ models: readonly string[]; failures: readonly ProviderFailure[] }> {
+    if (!this.modelResolver) return { models: [this.fallbackModelSpec], failures: [] };
+    const menu = await this.modelResolver.listModels();
+    return { models: menu.models.map((model) => `${model.provider}/${model.id}`), failures: menu.failures };
+  }
+
+  /**
+   * The two inputs every resolution needs, with evidence for what each cost.
+   *
+   * The envelope is read LIVE on purpose and the listing is cached on purpose,
+   * and those are opposite decisions about the same call, so the event records
+   * which half was paid for. `providerCache` distinguishes the three cases that
+   * matter: `hit` is free, `joined` means a concurrent lane was already paying,
+   * and `miss` is a provider sweep on this turn's critical path — a run of
+   * turns all reporting `miss` means either an invalidation is firing that
+   * should not, or a provider is failing and the listing is deliberately not
+   * being cached.
+   */
   private async profileInputs(): Promise<{
     envelope: ProfileCatalogEnvelope;
     provider: ProviderCatalogSnapshot;
   }> {
-    return loadProfileAuthorityInputs({
+    const startedAt = Date.now();
+    let providerCache: 'hit' | 'joined' | 'miss' = 'hit';
+    const inputs = await loadProfileAuthorityInputs({
       envelope: this.profileAuthority,
-      provider: () => this.providerSnapshot(),
+      provider: async () => {
+        const resolved = await this.providerSnapshot();
+        providerCache = resolved.cache;
+        return resolved.snapshot;
+      },
+    });
+    this.recordRunEvent({
+      type: 'profile_resolution',
+      durationMs: Date.now() - startedAt,
+      providerCache,
+      providerRevision: inputs.provider.revision,
+      unavailableProviders: inputs.provider.unavailableProviders?.length ?? 0,
+      catalogVersion: inputs.envelope.version,
+      authority: inputs.envelope.authority.kind,
+    });
+    return inputs;
+  }
+
+  /**
+   * A profile for work that starts outside a chat turn. Same authority, same
+   * provider snapshot, same role and tier as a turn — only the tool surface is
+   * empty, because these lanes resolve TIERS and never call a tool. Resolving
+   * it here rather than reusing whatever a past turn left behind is what lets a
+   * fresh runtime run the review and evolution lanes at all.
+   */
+  private async resolvePreTurnProfile(): Promise<ResolvedTurnProfile> {
+    return resolveAgentTurnProfile({
+      ...(await this.profileInputs()),
+      activeRoleId: this.config.getActiveRoleId(),
+      workMode: this.turnWorkMode,
+      availableTools: [],
+      activeSkills: [],
+      explicitTier: this.config.getAssignedTier() ?? undefined,
     });
   }
 
@@ -2718,6 +2947,23 @@ export class LocalAgentSession implements BackendHost {
     const s = (spec ?? '').trim();
     if (!s || s === this.fallbackModelSpec) return this.fallbackModelSpec;
     throw new Error('Model switching is unavailable for this local session; construct it with a modelResolver.');
+  }
+
+  /**
+   * One concrete model from a tier's spec. A static-model session has no
+   * registry to resolve against, so it can only answer for its own model —
+   * anything else is refused by name rather than silently served the wrong
+   * one, which is the whole reason a node's spec travels with it.
+   */
+  private resolveModelForSpec(spec: string): LanguageModel {
+    if (this.modelResolver) return this.modelResolver.resolveModel(spec);
+    if (this.normalizeModelSpec(spec) === this.fallbackModelSpec) {
+      return this.defaultModel(`the ${spec} model`);
+    }
+    throw new Error(
+      `this session cannot resolve ${spec}: it was built with a single static model `
+      + `(${this.fallbackModelSpec}) and has no provider registry.`,
+    );
   }
 
   private effectiveModelSpec(): string {
@@ -2773,6 +3019,51 @@ export class LocalAgentSession implements BackendHost {
     this.cachedModelSpec = null;
   }
 
+  /**
+   * Every codemode namespace this session wires, in one place.
+   *
+   * ONE list with two readers: the turn resolver asks it which codemode-only
+   * capabilities exist so a role can name them, and the tool builder asks it
+   * what to narrow. Two lists would let a role allow a capability whose
+   * provider is absent, or narrow a set the resolver never saw.
+   *
+   * Conditionals stay here rather than at either reader: `release` is
+   * build-mode only and `llm.query` needs a real provider registry, so a Plan
+   * turn and a static-model session each genuinely offer less.
+   */
+  private codemodeProviders(mode: WorkMode): CodemodeProvider[] {
+    return [
+      createAgentSelfProvider(this),
+      // `agents.*` — the delegation tool projected into the sandbox, over
+      // the same deps the top-level tool holds. Locally that is fork only.
+      createAgentsCodemodeProvider(() => this.agentsToolDeps(mode)),
+      createWebCodemodeProvider(this.getWebSearchProvider()),
+      // `memory.*` / `tasks.*` — unconditional codemode projections of
+      // the same-named native tools (tools/memory-tool.ts, tools/tasks-
+      // tool.ts); `this.taskList` is the SAME TaskListStore instance the
+      // dynamic-context snapshot reads.
+      // No vectorStore: Vectorize hybrid search is CF-only, same as the
+      // native `memory` tool's wiring below (search stays FTS5-only here).
+      createMemoryCodemodeProvider(() => ({
+        memory: this.rt.memory, facts: this.factsStore, sql: this.rt.storage.sql,
+      })),
+      createTasksCodemodeProvider(
+        this.taskList,
+        this.config,
+        () => this.turnProfileInputs?.envelope ?? null,
+      ),
+      // `release.*` — left the native surface for codemode-only reach
+      // (tools/release-codemode.ts); deps read live so a rebind lands
+      // without rebuilding this toolset.
+      ...(mode === 'build' ? [createReleaseCodemodeProvider(() => this.releaseToolDeps())] : []),
+      // llm.query (RLM) — CLI parity with the cf backend. Needs a real
+      // resolver to spawn sub-calls; static-model sessions have none.
+      ...(this.modelResolver
+        ? [createRLMProvider(this.modelResolver, () => this.getEffectiveModelSpec())]
+        : []),
+    ];
+  }
+
   private rebuildModelBoundState(model: LanguageModel): void {
     // Captured, not re-read: this is the spec `model` was resolved from, so it is
     // what prices the merge call this runtime makes. A later model switch rebuilds
@@ -2809,36 +3100,12 @@ export class LocalAgentSession implements BackendHost {
       escalations: this.orch.acc.escalations,
       craftedToolExecute: createNodeCraftedExecute(),
         createExecuteTool: createNodeExecuteToolFactory({
-          extraProviders: [
-          createAgentSelfProvider(this),
-          // `agents.*` — the delegation tool projected into the sandbox, over
-          // the same deps the top-level tool holds. Locally that is fork only.
-          createAgentsCodemodeProvider(() => this.agentsToolDeps(mode)),
-          createWebCodemodeProvider(this.getWebSearchProvider()),
-          // `memory.*` / `tasks.*` — unconditional codemode projections of
-          // the same-named native tools (tools/memory-tool.ts, tools/tasks-
-          // tool.ts); `this.taskList` is the SAME TaskListStore instance the
-          // dynamic-context snapshot reads.
-          // No vectorStore: Vectorize hybrid search is CF-only, same as the
-          // native `memory` tool's wiring below (search stays FTS5-only here).
-          createMemoryCodemodeProvider(() => ({
-            memory: this.rt.memory, facts: this.factsStore, sql: this.rt.storage.sql,
-          })),
-          createTasksCodemodeProvider(
-            this.taskList,
-            this.config,
-            () => this.turnProfileInputs?.envelope ?? null,
-          ),
-          // `release.*` — left the native surface for codemode-only reach
-          // (tools/release-codemode.ts); deps read live so a rebind lands
-          // without rebuilding this toolset.
-          ...(mode === 'build' ? [createReleaseCodemodeProvider(() => this.releaseToolDeps())] : []),
-          // llm.query (RLM) — CLI parity with the cf backend. Needs a real
-          // resolver to spawn sub-calls; static-model sessions have none.
-          ...(this.modelResolver
-            ? [createRLMProvider(this.modelResolver, () => this.getEffectiveModelSpec())]
-            : []),
-          ],
+          // Narrowed by the SAME set the native surface is narrowed by, so a
+          // role cannot lose a tool natively and keep it through the sandbox.
+          // An unresolved profile narrows nothing, which is the resolver's own
+          // rule for a role that declares no tool list.
+          extraProviders: narrowToolSurface(this.turnProfile?.allowedTools)
+            .narrowProviders(this.codemodeProviders(mode)),
         }),
         codemodeLoader: { __cli: true },
         agents: this.agentsToolDeps(mode),

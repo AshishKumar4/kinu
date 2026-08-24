@@ -33,7 +33,7 @@ import {
   type CompactionStateStore, type Logger as CompactionLogger,
 } from "@kinu.run/compaction";
 import { Think, Session } from "@cloudflare/think";
-import { streamText, tool, jsonSchema } from "ai";
+import { streamText, generateText, tool, jsonSchema } from "ai";
 import type { LanguageModel, ModelMessage, SystemModelMessage, ToolSet, UIMessage } from "ai";
 import {
   SerializableToolDescriptorSchema,
@@ -115,8 +115,8 @@ import {
   // one binding of the live per-step planes to them.
   createAgentStores, type AgentConfigStore, collectDynamicContext,
   type SqlExecutor,
-  // The agents tool's fork substrate (shared factory)
-  buildStrategyForkDeps, agentsActionsFor,
+  // The agents tool's shared swarm substrate
+  agentsActionsFor,
   // Background-job system (#173 — auto-background past the surface threshold)
   BackgroundJobRunner, BACKGROUND_POLICY, type InvocationSurface,
   type BackgroundJobStore, type TaskListStore,
@@ -148,6 +148,9 @@ import {
   delegationExhausted, deriveChildDelegationBudget, type DelegationBudget,
   type DynamicDelegate,
   readSoul, bootstrapScaffold,
+  // Automatic titling — one policy for every root that can be talked to
+  applyWorkspaceTitle, parseWorkspaceTitle,
+  WORKSPACE_TITLE_SYSTEM_PROMPT, workspaceTitlePrompt,
   parseModelSpec, catalogModelInfo,
   // Model-capability attachment sanitization (the PDF-400 fix)
   type MediaModality,
@@ -167,8 +170,10 @@ import {
   JsonObjectSchema, JsonValueSchema, TIER_IDS, projectJsonValue, changeActiveRole,
   agentsProfileContext, effectiveRoleCatalog, loadProfileAuthorityInputs,
   resolveAgentTurnProfile, createMemoryCodemodeProvider, createTasksCodemodeProvider,
+  resolveModelRoute, roleChangeOutcomeText, narrowToolSurface, codemodeCapabilitiesFor,
+  beginModelOperation,
   type JsonObject, type JsonValue, type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
-  type ResolvedTurnProfile, type TierId,
+  type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend,
 } from "@kinu.run/core";
 import { bindAgentSql, createCFRuntime, type CFRuntime } from "./runtime";
 import { createExecuteToolsTool } from "./execute-tools";
@@ -186,6 +191,11 @@ import { diagnostics, KinuError, toKinuError, tolerate } from "@kinu.run/core/ob
 import type { UserDO } from "./user/user-do";
 import type { UserCaller } from "./user/workspace-capability";
 import { sha256Hex } from "./lib/crypto";
+import { installAnalyticsDiagnostics } from "./analytics/install";
+import { openAnalyticsWindow } from "./analytics/writer";
+import {
+  recordModelRow, recordToolRow, recordTtftRow, recordTurnRow, type AgentKind,
+} from "./analytics/record";
 import * as v from 'valibot';
 
 const SESSION_REFLECTION_INTERVAL = 5; // turns between session reflections
@@ -194,6 +204,22 @@ interface ClientRpcFrame {
   id: string;
   method: string;
 }
+
+/**
+ * The two dimensions a fleet row files a model call under. A named contract
+ * rather than an inferred pair, so the analytics writer and the actor cannot
+ * disagree about which half is the provider.
+ */
+interface ModelDimensions {
+  readonly provider: string;
+  readonly model: string;
+}
+
+/** No model resolved. Empty rather than a plausible default: a dataset that
+ *  attributed an unresolvable spec to some real provider would be worse than one
+ *  that says it does not know. */
+const UNRESOLVED_MODEL: ModelDimensions = { provider: '', model: '' };
+
 interface SettledTurnEvents {
   drainTurnId: string | undefined;
   programmaticUserMessage: UIMessage | null;
@@ -414,6 +440,18 @@ export abstract class ActorAgent extends Think<Env> {
    *  The orchestrator reads workspace_identity; a facet actor reads the
    *  owner row its parent seeded. */
   protected abstract getOwnerUserId(): string | null;
+
+  /**
+   * Which kind of actor this class is, for the operational dataset's `agentKind`
+   * dimension.
+   *
+   * Abstract rather than derived from `constructor.name`, which a bundler is free
+   * to rewrite, and rather than a string at each emit site, which is how a
+   * dimension ends up with three spellings of one value. It sits in the actor
+   * profile with the rest of "the whole difference between actor kinds", so a new
+   * actor class cannot be added without deciding how its work is attributed.
+   */
+  protected abstract actorKind(): AgentKind;
 
   /** The workspace whose exec planes (authoritative workspace, sandbox,
    *  /pc device consent) this actor rides. A top-level workspace DO is its
@@ -663,6 +701,7 @@ export abstract class ActorAgent extends Think<Env> {
       roster: this.subordinateRoster,
       now: () => Date.now(),
       inheritedContext: () => this.readInheritedContext(),
+      ownMission: () => this.ownMission(),
       createName: (role) => {
         const base = slugifyName(role).slice(0, 48) || 'subordinate';
         return `${base}-${nanoid(6)}`;
@@ -682,6 +721,7 @@ export abstract class ActorAgent extends Think<Env> {
             const identity = {
               name: input.name,
               displayName: input.displayName,
+              nameOrigin: input.nameOrigin,
               role: input.roleId ?? input.legacyRole ?? '',
               mission: input.mission,
               roleId: input.roleId,
@@ -726,11 +766,32 @@ export abstract class ActorAgent extends Think<Env> {
           return (await this.subAgent(facet, name))
             .enqueueSubordinateTask({ kind: 'message', body: content, mode });
         },
+        rename: async (name, displayName, nameOrigin) => {
+          await (await this.subAgent(facet, name)).setSubordinateNaming(displayName, nameOrigin);
+        },
         dismiss: async (name, keepHistory) => {
           if (!keepHistory) await this.deleteSubAgent(facet, name);
         },
       },
     });
+  }
+
+  /**
+   * Record a title one of this actor's own children settled on.
+   *
+   * Called BY that child, over the facet spine, right after it wrote its own
+   * naming state — so it writes this roster row and nothing else. Calling the
+   * child back from here would re-enter a Durable Object that is mid-turn.
+   *
+   * Not a `@callable`: the browser renames through `rename`, which writes
+   * both sides. This is worker-side facet RPC, in the same trust domain as
+   * `receiveSubordinateEvent` — possession of the parent stub is the
+   * authorization.
+   */
+  async recordSubordinateTitle(name: string, displayName: string): Promise<{ ok: true }> {
+    this.ensureSchema();
+    await this.getTeamToolDeps().recordTitle({ name, displayName });
+    return { ok: true };
   }
 
   /**
@@ -810,6 +871,23 @@ export abstract class ActorAgent extends Think<Env> {
     super(ctx, env);
     // Before any read or write of it can happen — see initCapabilitySchema.
     this.initCapabilitySchema();
+    // A Durable Object is a DIFFERENT ISOLATE from the Worker that routes to it,
+    // with its own module-level state — so the diagnostics sink installed at the
+    // Worker's fetch entry does not exist in here, and every `diagnostics` line
+    // an actor produces would reach Workers Logs and no dataset. Installed in the
+    // constructor because that is the one point guaranteed to precede every RPC
+    // (`onStart` is not — see `OrchestratorAgent.claimOwner`), and idempotent per
+    // isolate, so a re-activation costs nothing.
+    // The workspace is passed LAZILY and as `this.name` rather than
+    // `workspaceName()`. A SUBORDINATE's workspace name is a STORAGE READ of its
+    // `subordinate_identity` row (subordinate-agent.ts `workspaceName`), and in
+    // the constructor that row — and on a fresh facet the table itself — does not
+    // exist, so asking for it here threw `no such table: subordinate_identity` on
+    // every new facet's first activation. `this.name` is the actor's own durable
+    // name, always available, and it is the right dimension anyway: it names the
+    // EMITTER. A line that knows a different workspace still carries it as a
+    // field, and a field wins over the installed default.
+    installAnalyticsDiagnostics(this.env, () => this.name);
     // Scoped `pta_…` access tokens reach this DO over ticket-authenticated
     // websockets, and the REST scope gate never sees websocket frames — so
     // out-of-scope @callable requests are rejected here, ahead of the
@@ -1056,6 +1134,72 @@ export abstract class ActorAgent extends Think<Env> {
         error: errorText,
       });
     }
+    // The fleet row. Separate from the durable run above and deliberately not a
+    // projection of it: `closeTurnRun` writes one workspace's own history, which
+    // is only readable by opening that workspace, and the question this answers —
+    // are turns getting slower, is one model failing, what is the fleet spending
+    // — cannot be asked of a per-workspace log at all. It carries no message and
+    // no error text; the classification and the numbers are the whole row.
+    recordTurnRow(this.env, {
+      workspace: this.workspaceName(),
+      agentKind: this.actorKind(),
+      ...this.analyticsModel(),
+      outcome: completed ? 'ok' : errorText === undefined ? 'refused' : 'failed',
+      code: '',
+      durationMs: this.acc.startedAt > 0 ? Date.now() - this.acc.startedAt : 0,
+      steps: this.acc.stepCount,
+      toolCalls: this.acc.toolCalls.length,
+      usage: this.acc.usage,
+      usd: this.priceAt(this.acc.usage),
+    });
+  }
+
+  /**
+   * The provider and model dimensions of a fleet row, for the actor's own model.
+   *
+   * `effectiveModelSpec` rather than the stored spec, for the reason that method
+   * exists: the stored value can be null or an un-normalized alias, and a dataset
+   * whose `model` column holds three spellings of one model cannot be grouped by
+   * it.
+   */
+  private analyticsModel(): ModelDimensions {
+    return this.analyticsModelOf(this.effectiveModelSpec());
+  }
+
+  /**
+   * The same two dimensions for an arbitrary resolved spec.
+   *
+   * `parseModelSpec` throws on a shape it does not recognise, and `report.spec`
+   * arrives from twenty-five producers rather than from the registry — so a
+   * malformed one is a real possibility here in a way it is not for
+   * `effectiveModelSpec`. It costs the row its two dimensions and nothing else;
+   * throwing would cost the caller its turn.
+   */
+  private analyticsModelOf(spec: string): ModelDimensions {
+    if (!spec) return UNRESOLVED_MODEL;
+    try {
+      const { provider, modelId } = parseModelSpec(spec);
+      return { provider, model: modelId };
+    } catch (error) {
+      diagnostics.event('actor.model_spec_unparseable', { error: renderThrownChain({ cause: error }) });
+      return UNRESOLVED_MODEL;
+    }
+  }
+
+  /**
+   * A usage report priced at the actor's own catalog rate, or undefined when the
+   * catalog holds none.
+   *
+   * Undefined rather than 0: an unpriced call and a free one are different facts,
+   * and the dataset keeps them apart with its own `priced` witness so an average
+   * cost cannot be diluted by calls nobody could price. Whether the rate IS the
+   * call's own is the CALLER's guard — pricing a judge, which `selectJudgeModel`
+   * sends cross-family on purpose, at the actor's rate would put a fabricated
+   * number in the dataset.
+   */
+  private priceAt(usage: Usage): number | undefined {
+    const pricing = this.modelCatalog.pricing();
+    return pricing ? priceCall(usage, pricing) : undefined;
   }
 
   /** Durable per-session compaction state (plan snapshot + the measured
@@ -1168,6 +1312,17 @@ export abstract class ActorAgent extends Think<Env> {
         sinks: {
           logActivity: (e, d) => this.logActivity(e, d),
           onToolCallEvent: (ev) => {
+            // The fleet row first, because the durable emit below is the one that
+            // can throw and a caught failure there must not also cost the count.
+            // Name, verdict and duration only: `ev` carries `args` and `result`,
+            // which are whatever the user's workspace contains.
+            recordToolRow(this.env, {
+              workspace: this.workspaceName(),
+              agentKind: this.actorKind(),
+              tool: ev.name,
+              failed: ev.error !== undefined && ev.error !== '',
+              durationMs: ev.durationMs ?? 0,
+            });
             try {
               if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'tool_call_end', ...ev });
             } catch (err) {
@@ -1445,17 +1600,42 @@ export abstract class ActorAgent extends Think<Env> {
         // to do with the scaffold being judged. The CLI's replay reaches the
         // invariant through runChat (cli-backend local-session.ts); this is the
         // other half of that one path.
-        defaultInference: () => projectDefaultInference(streamText({
-          model: this.getModel(),
-          messages: context && context.length > 0
-            ? settleUnpairedToolCalls(context) ?? [...context]
-            : [{ role: 'user', content: task }],
-          tools: this.getRawTools(),
-          ...effortFor('scaffold_mutation'),
-        }).toUIMessageStream()),
+        defaultInference: () => {
+          const spend = this.scaffoldSpend();
+          // Opened before the request, drained on finish. A raw `streamText` has
+          // no spend seam of its own, so without this the candidate's whole
+          // replay — the most expensive thing the scaffold plane runs — filed
+          // neither a cost nor an in-flight row, and a process that died here
+          // left nothing naming what was running.
+          const operation = beginModelOperation(spend, 'stream');
+          return projectDefaultInference(streamText({
+            model: this.ownedModelServices.resolveModel(this.modelSpecForSource('scaffold')),
+            messages: context && context.length > 0
+              ? settleUnpairedToolCalls(context) ?? [...context]
+              : [{ role: 'user', content: task }],
+            tools: this.getRawTools(),
+            ...effortFor('scaffold_mutation'),
+            // `totalUsage`, not the last step's: this is a real multi-step loop
+            // and the last step alone would omit every step before it.
+            onFinish: (event) => {
+              const usage = normalizeUsage(event.totalUsage);
+              const modelId = event.response.modelId;
+              operation.completed({ usage, modelId });
+              spend.report({ source: 'scaffold', usage, modelId });
+            },
+            onError: (event) => { operation.failed({ cause: event.error }); },
+          }).toUIMessageStream());
+        },
       }),
-      model: () => this.getModel(),
+      // The scaffold plane's own chat model. `scaffold` is a FIXED tier in
+      // MODEL_ROUTE_POLICY, so a candidate is judged on the tier the account
+      // assigned that work rather than on whatever the turn happened to run.
+      model: async () => (await this.modelForSource('scaffold')).model,
       judge: createJsonJudge(() => this.getModelForReview()),
+      // The two halves of the plane's attribution, which the actor never wired:
+      // the reflection LM that rewrites the scaffold had no sink at all.
+      reportModelCall: (report) => this.reportModelCall(report),
+      operations: this.modelOperations,
     };
   }
 
@@ -1466,9 +1646,12 @@ export abstract class ActorAgent extends Think<Env> {
    *  comparisons between them measure the scaffold, not a handicap. */
   protected makeScaffoldLLMStream(): ScaffoldRunOptions['llmStream'] {
     return createScaffoldLLMStream({
-      model: this.getModel(),
+      model: this.ownedModelServices.resolveModel(this.modelSpecForSource('scaffold')),
       tools: () => this.getRawTools(),
       streamOptions: effortFor('scaffold_mutation'),
+      // The bridge already opens an operation and reports `totalUsage` once the
+      // loop drains — it just needed a seam to report THROUGH.
+      spend: this.scaffoldSpend(),
     });
   }
 
@@ -1732,6 +1915,25 @@ export abstract class ActorAgent extends Think<Env> {
         otherwise: 'io',
       }), { source: report.source });
     }
+    // Every producer, not just the turn loop: a judge, the fast tier, an
+    // evolution pass, a compaction fold. `spec` is what the caller resolved and
+    // is absent on the seams that never had one, so the actor's own effective
+    // model stands in — an absent model column would make the row uncountable
+    // against the provider it actually reached.
+    const dimensions = report.spec === undefined
+      ? this.analyticsModel()
+      : this.analyticsModelOf(report.spec);
+    recordModelRow(this.env, {
+      workspace: this.workspaceName(),
+      agentKind: this.actorKind(),
+      provider: dimensions.provider,
+      model: report.modelId ?? dimensions.model,
+      source: report.source,
+      usage: report.usage,
+      // Only where the rate was this call's own — the same guard the durable row
+      // above applies, for the same reason.
+      usd: report.spec === this.effectiveModelSpec() ? this.priceAt(report.usage) : undefined,
+    });
   }
 
   /**
@@ -1932,9 +2134,10 @@ export abstract class ActorAgent extends Think<Env> {
     const nodeLoopHost = this.getCFNodeHost();
     const deps: AgentsToolDeps = {
       mode: workMode,
-      fork: buildStrategyForkDeps({
+      fork: {
         rt: this.rt,
         model: this.getModel(),
+        resolveModel: (spec: string) => this.ownedModelServices.resolveModel(spec),
         // Same catalog session that answers the context window and prices the
         // mission ledger — so a search's pre-run estimate and the ledger that
         // later debits it read one rate.
@@ -1977,7 +2180,7 @@ export abstract class ActorAgent extends Think<Env> {
           // site of the seam.
           profile: COMPACTION_PRESETS.light,
         }),
-      }),
+      },
       budget: this.budget,
     };
     deps.profile = () => agentsProfileContext(this._turnProfile, this._turnProfileInputs);
@@ -2168,13 +2371,7 @@ export abstract class ActorAgent extends Think<Env> {
         deferrals: () => this.deferralChannel(),
         reportModelCall: (report) => this.reportModelCall(report),
         turnProfile: () => this._turnProfile,
-        resolveProfile: async () => resolveAgentTurnProfile({
-          ...(await this.profileInputs()),
-          activeRoleId: this.config.getActiveRoleId(),
-          workMode: 'build',
-          availableTools: ACTIVE_TOOLS,
-          activeSkills: [],
-        }),
+        resolveProfile: () => this.routingProfile(),
       });
       this.configureRuntime(runtime);
       this._rt = runtime;
@@ -2217,27 +2414,51 @@ export abstract class ActorAgent extends Think<Env> {
     ];
   }
 
+  /**
+   * Every codemode namespace this turn wires, in one place.
+   *
+   * ONE list with two readers: `beforeTurn` asks it which codemode-only
+   * capabilities exist so a role can name them, and `getExecuteToolsTool` asks
+   * it what to narrow. Two lists would let a role allow a capability whose
+   * provider is absent, or narrow a set the resolver never saw.
+   *
+   * Plan mode is the only turn whose set differs: `release` is physically absent
+   * from the type declaration and the dispatcher, while every ordinary
+   * executor/provider stays present.
+   */
+  protected turnCodemodeProviders(mode: WorkMode): CodemodeProvider[] {
+    return [...this.baseCodemodeProviders(), ...this.extraCodemodeProviders()]
+      .filter((provider) => mode !== 'plan' || provider.name !== 'release');
+  }
+
   /** Build (or return cached) this DO's execute_tools tool. Construction (see
    *  execute-tools.ts) is once per DO lifetime; crafted tools saved mid-turn
    *  still become callable because the executor re-reads craftStore per call. */
   private getExecuteToolsTool(mode: WorkMode, profileKey: string): ReturnType<typeof createExecuteToolsTool> {
-    const key = `${mode === 'plan' ? 'plan' : 'default'}:${profileKey}`;
+    // The role's narrowing is PART OF THE KEY. `profileKey` is the actor's
+    // active tool names, which two roles can share while reaching different
+    // namespaces — so without the digest the first role's provider set is
+    // served to the next one for the rest of this DO's life.
+    const narrowing = narrowToolSurface(this._turnProfile?.allowedTools);
+    const key = `${mode === 'plan' ? 'plan' : 'default'}:${profileKey}:${this._turnProfile?.digest ?? ''}`;
     if (!this._craftExecTools.has(key)) {
       this._craftExecTools.set(key, createExecuteToolsTool({
         loader: this.env.LOADER,
         rt: this.rt,
         sql: this.boundSql,
         registry: this.providerRegistry(),
-        modelSpec: () => this.getStoredModelId(),
+        // `llm.query` is the agent reaching its OWN model from inside a script,
+        // so it runs on the turn's invocation tier like the turn does — not on
+        // whatever spec happens to be stored. Resolved through the route table
+        // rather than read off the profile, so it follows MODEL_ROUTE_POLICY.
+        modelSpec: () => this.modelSpecForSource('agent'),
         webSearch: this.getWebSearchProvider(),
         // `agents.*` in the sandbox — the same deps the top-level tool holds,
         // so a script delegates through the one path with the one action gate.
         agents: () => this.getAgentsToolDeps(mode),
-        // Plan mode is the only turn whose codemode provider set differs:
-        // `release` is physically absent from the type declaration and the
-        // dispatcher, while every ordinary executor/provider stays present.
-        extraProviders: () => [...this.baseCodemodeProviders(), ...this.extraCodemodeProviders()]
-          .filter((provider) => mode !== 'plan' || provider.name !== 'release'),
+        // Narrowed by the SAME set the native surface is narrowed by, so a role
+        // cannot lose a tool natively and keep it through the sandbox.
+        extraProviders: () => narrowing.narrowProviders(this.turnCodemodeProviders(mode)),
         // Record which executor the agent actually works in, so the UI (diff /
         // file manager) defaults to where work happened. One upsert per executor
         // per turn (debounced via _executorsUsedThisTurn, reset in beforeTurn).
@@ -2251,6 +2472,35 @@ export abstract class ActorAgent extends Think<Env> {
     const tool = this._craftExecTools.get(key);
     if (tool === undefined) throw new Error(`execute_tools profile ${key} was not built`);
     return tool;
+  }
+
+  /**
+   * One producer's model SPEC, read synchronously from the turn's profile.
+   *
+   * The async {@link modelForSource} is the general path; this exists for the
+   * seams whose types are synchronous — the sandbox's `modelSpec` and the
+   * scaffold bridge's `model`. Both run inside a turn or in a trial detached
+   * from one, so the profile is present; the stored id is the same fallback
+   * `effectiveModelSpec` uses for a producer that somehow ran before any turn
+   * resolved, and it keeps a mis-timed call working rather than throwing.
+   *
+   * Still the route table, never `profile.tiers.<name>`: a hand-picked tier here
+   * would stop following MODEL_ROUTE_POLICY the moment the policy moved.
+   */
+  private modelSpecForSource(source: SpendSource): string | null {
+    const profile = this._turnProfile;
+    if (!profile) return this.getStoredModelId();
+    return resolveModelRoute(source, profile)?.model ?? this.getStoredModelId();
+  }
+
+  /** The spend seam every scaffold-plane producer files through — one object so
+   *  a cost can never be filed for an operation that was never opened. */
+  private scaffoldSpend(): ModelCallSpend {
+    return {
+      source: 'scaffold',
+      report: (report) => this.reportModelCall(report),
+      operations: this.modelOperations,
+    };
   }
 
   // ── Model resolution ───────────────────────────────────────────
@@ -2434,6 +2684,14 @@ export abstract class ActorAgent extends Think<Env> {
     return getStoredModelSpec(this.config);
   }
 
+  /**
+   * Change the durable active role. Takes effect on the NEXT resolved turn —
+   * `beforeTurn` re-reads `config.getActiveRoleId()` every time, so there is no
+   * cache to invalidate here and the running turn keeps the profile it already
+   * resolved (core profiles/role-change.ts:1-5). Clearing the memo instead
+   * mutated a turn that had already resolved its model and tools, and clearing
+   * it before the outcome check did that even for a change that never landed.
+   */
   @callable() async setRole(roleId: string): Promise<{ role: string }> {
     const { envelope } = await this.profileInputs();
     const changed = changeActiveRole({
@@ -2442,10 +2700,8 @@ export abstract class ActorAgent extends Think<Env> {
       to: roleId,
       actor: 'user',
     });
-    this._turnProfile = null;
-    this._turnProfileInputs = null;
     if (changed.kind !== 'applied') {
-      throw new Error(`role "${roleId}" was refused: ${changed.kind === 'refused' ? changed.reason : changed.kind}`);
+      throw new Error(roleChangeOutcomeText(roleId, changed, this.config.getActiveRoleId()));
     }
     return { role: changed.to };
   }
@@ -2534,6 +2790,105 @@ export abstract class ActorAgent extends Think<Env> {
   }
   private getSoulText(): string {
     return this._cachedSoulText ?? '';
+  }
+
+  /**
+   * This actor's own mission — the workspace's purpose as it knows it.
+   *
+   * Read for two things: the source an auto-title may be derived from, and
+   * what an additional agent the owner adds INHERITS, because an agent added
+   * to a workspace is there for what the workspace is for. Each root answers
+   * from wherever its mission durably lives.
+   */
+  protected abstract ownMission(): string;
+
+  /**
+   * Automatic titling — one path, shared by every root that can be talked to.
+   *
+   * The decision is core's (`planWorkspaceTitle`): a title the operator chose
+   * is never touched, an actor with nothing to be named from is left alone,
+   * and persisting an auto title marks `name_origin`, so this runs at most
+   * once. The slug is NOT part of it: fixed at creation and permanent.
+   *
+   * A failed generation is not swallowed into silence — the deterministic
+   * title has already landed by then, so the failure is reported and the
+   * title that landed stands.
+   */
+  protected async maybeAutoTitle(mission: string): Promise<void> {
+    try {
+      const title = await applyWorkspaceTitle({
+        slug: this.name,
+        displayName: this.config.getDisplayName(),
+        nameOrigin: this.config.getNameOrigin(),
+        mission,
+      }, {
+        persist: (name) => this.persistAutoTitle(name),
+        suggest: (text) => this.suggestTitle(text),
+      });
+      if (title) diagnostics.event('agent.auto_titled', { agent: this.name, title });
+    } catch (err) {
+      diagnostics.failure('agent.auto_title_failed', toKinuError({
+        doing: 'deriving a title from the mission',
+        cause: err,
+        otherwise: 'unavailable',
+      }), { agent: this.name });
+    }
+  }
+
+  /** Commit one auto title wherever this root's naming state is authoritative.
+   *  `false` means a manual rename claimed the title first, which is what
+   *  makes the owner's choice win a race with the model call above. */
+  protected abstract persistAutoTitle(displayName: string): Promise<boolean>;
+
+  /**
+   * The shared naming round-trip: the same prompt and parser the create path
+   * uses.
+   *
+   * Filed as `fast`, and RUN as `fast`. Naming is mechanical work, so
+   * grouping it with the judges would make "what did grading cost" answer a
+   * question it did not ask — and because `MODEL_ROUTE_POLICY.fast` is the
+   * `tiny` tier, that same attribution decides the model. One `'fast'`
+   * literal feeds both the route and the spend label, so the two cannot
+   * disagree.
+   */
+  protected async suggestTitle(mission: string): Promise<string | null> {
+    const { model, spec, providerOptions } = await this.modelForSource('fast');
+    // The frame opens BEFORE the request, so a call that never returns leaves
+    // a start row naming the naming pass rather than nothing at all.
+    const operation = beginModelOperation(
+      { source: 'fast', operations: this.modelOperations },
+      'complete',
+      { spec },
+    );
+    let result;
+    try {
+      const request: Parameters<typeof generateText>[0] = {
+        model,
+        system: WORKSPACE_TITLE_SYSTEM_PROMPT,
+        prompt: workspaceTitlePrompt(mission),
+        // No output cap: reasoning models spend their budget thinking before
+        // the JSON, and a cap starves them into empty text.
+      };
+      if (providerOptions) request.providerOptions = providerOptions;
+      result = await generateText(request);
+    } catch (err) {
+      operation.failed({ cause: err });
+      throw err;
+    }
+    // `spec` came back with the model it built, so it is the exact string the
+    // call was priced against rather than a second resolution that could
+    // disagree; `modelId` is what the provider says served it, and the two are
+    // worth keeping apart. The OPERATION closes here too — completed before
+    // the parse, like every seam that bills first and judges the answer after.
+    const modelId = result.response?.modelId;
+    const usage = normalizeUsage(result.usage);
+    operation.completed({ usage, modelId: modelId ?? spec });
+    this.reportModelCall(
+      modelId
+        ? { source: 'fast', usage, spec, modelId }
+        : { source: 'fast', usage, spec },
+    );
+    return parseWorkspaceTitle(result.text);
   }
 
   getSystemPrompt(): string {
@@ -2709,7 +3064,10 @@ export abstract class ActorAgent extends Think<Env> {
         sharedParent: this.workspaceName(),
       }),
       models: this.ownedModelServices,
-      mergeModelSpec: () => this.getStoredModelId(),
+      // The merge is a JUDGE call, so its model and its effort come from the
+      // route table rather than from the actor's stored chat spec at a constant
+      // effort — the head runtime resolves the route from this profile.
+      profile: () => this.routingProfile(),
       reportModelCall: (report) => this.reportModelCall(report),
       operations: this.modelOperations,
       grounding,
@@ -3084,6 +3442,12 @@ export abstract class ActorAgent extends Think<Env> {
     // (Supervise altitude) can show what kicked each run off. This is the chat
     // path → caused_by:'chat'; event-triggered runs set ingress_kind/trigger_id.
     this._currentRunId = `run-${nanoid()}`;
+    // A new analytics write window. The platform caps writes per INVOCATION,
+    // which is not a thing this code can observe from inside a Durable Object; a
+    // TURN is, and it is the unit whose row count can actually run away (a turn
+    // with two hundred tool calls writes four hundred rows). Opening it here
+    // makes the cap bound the thing that can exceed it.
+    openAnalyticsWindow(this.env);
     // Tag this turn for device-side file checkpoints: the user message id is
     // what the web turn card holds, so restore-by-turn resolves directly.
     {
@@ -3140,11 +3504,19 @@ export abstract class ActorAgent extends Think<Env> {
     );
     const extensionToolNames = Object.keys(extensionTools);
     const availableAgentActions = actorAgentsActions(turnActorDeps);
+    // The turn's WHOLE nameable surface. `release` / `agent` / `llm` are
+    // reachable only inside `execute_tools`, so no native tool id names them and
+    // without them here the role intersection drops every one — a narrowed role
+    // would silently lose its codemode lanes wholesale. Derived from the
+    // providers actually wired for this mode, so a capability is never offered
+    // whose namespace is absent (Plan mode drops `release` for free).
+    const turnCodemodeProviders = this.turnCodemodeProviders(requestedWorkMode);
     const availableTools = [
       ...activeTools,
       ...mcpToolNames,
       ...extensionToolNames,
       ...(turnActorDeps.submitPlan ? ['submit_plan'] : []),
+      ...codemodeCapabilitiesFor(turnCodemodeProviders),
     ];
     const profile = resolveAgentTurnProfile({
       ...profileInputs,
@@ -3152,7 +3524,12 @@ export abstract class ActorAgent extends Think<Env> {
       workMode: requestedWorkMode,
       availableTools,
       activeSkills: activeSetForPrompt?.active.map((skill) => skill.name) ?? [],
-      explicitTier: readTurnTier(body),
+      // Most specific first: the tier named on THIS request, then the tier the
+      // parent pinned when it hired this agent, then nothing — which lets the
+      // resolver take the role's own default. An absent pin must not read as
+      // "the workspace default"; the role's tier is what an unpinned hire asked
+      // for.
+      explicitTier: readTurnTier(body) ?? this.config.getAssignedTier() ?? undefined,
     });
     this._turnProfile = profile;
     const workMode = profile.workMode;
@@ -3400,6 +3777,20 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   onChunk(_ctx: ChunkContext): void {
+    // Time to first token, read before the accumulator latches its flag: this is
+    // the last moment the answer to "was this the first chunk" is still yes.
+    //
+    // Measured from the turn's own start, so it is USER-VISIBLE first token on
+    // whatever provider served it — not a transport first byte, which excludes
+    // SDK parsing and only exists on one of the two transports.
+    if (!this.acc.firstChunkSeen && this.acc.startedAt > 0) {
+      recordTtftRow(this.env, {
+        workspace: this.workspaceName(),
+        agentKind: this.actorKind(),
+        ...this.analyticsModel(),
+        ttftMs: Date.now() - this.acc.startedAt,
+      });
+    }
     this.acc.onFirstChunk();
   }
 
@@ -3540,16 +3931,60 @@ export abstract class ActorAgent extends Think<Env> {
     });
   }
 
-  /** Review and judge work uses the account-wide deep tier. */
-  protected async getModelForReview(): Promise<LanguageModel> {
-    const profile = this._turnProfile ?? resolveAgentTurnProfile({
+  /**
+   * The profile every producer's model routes through: the live turn's when a
+   * turn is open, else one resolved now for durable work that began without a
+   * chat turn (the review lane, a recovered fiber, a background job's wake).
+   *
+   * MODEL_ROUTE_POLICY is read against THIS, so a producer that resolves a
+   * model any other way has bypassed the one routing table.
+   */
+  protected async routingProfile(): Promise<ResolvedTurnProfile> {
+    if (this._turnProfile) return this._turnProfile;
+    return resolveAgentTurnProfile({
       ...(await this.profileInputs()),
       activeRoleId: this.config.getActiveRoleId(),
       workMode: 'build',
       availableTools: [],
       activeSkills: [],
+      explicitTier: this.config.getAssignedTier() ?? undefined,
     });
-    return this.ownedModelServices.resolveModel(profile.tiers.deep.model);
+  }
+
+  /**
+   * One producer's resolved model, with the spec that prices it and the provider
+   * options for the effort its tier chose.
+   *
+   * All three are ONE decision, so they are returned together: a caller that
+   * re-derived any of them beside this could disagree with the route it came
+   * from — a spend row priced against a different spec than the call used, or an
+   * effort nobody chose. Effort derivation stays inside `owned-model-services`,
+   * which is what keeps the three-site invariant that
+   * `unit-turn-pipeline-correctness.test.ts` pins.
+   *
+   * Reading `profile.tiers.<name>` at a callsite instead would re-state that
+   * producer's routing decision beside the table that owns it, so a change to
+   * MODEL_ROUTE_POLICY would leave the callsite silently on the old tier —
+   * same shape, wrong model, correct-looking spend row.
+   */
+  protected async modelForSource(source: SpendSource): Promise<{
+    model: LanguageModel;
+    spec: string;
+    providerOptions: ReturnType<OwnedModelServices['resolveModelWithEffort']>['providerOptions'];
+  }> {
+    const route = resolveModelRoute(source, await this.routingProfile());
+    if (!route) {
+      throw new Error(`${source} is platform-routed: it has no model in the turn profile`);
+    }
+    return {
+      spec: route.model,
+      ...this.ownedModelServices.resolveModelWithEffort(route.model, route.reasoningEffort),
+    };
+  }
+
+  /** Review and judge work. The route table says which tier that is. */
+  protected async getModelForReview(): Promise<LanguageModel> {
+    return (await this.modelForSource('judge')).model;
   }
 
   // ── Fiber recovery — durable execution surviving DO eviction ──

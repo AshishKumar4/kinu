@@ -7,7 +7,10 @@ import {
   changeActiveRole, createAgentConfigStore,
   fallbackWorkspaceIdentity,
   initWorkspaceSchema,
+  isPlaceholderMission,
   parseWorkspaceTitle,
+  readMission,
+  workspaceSlug,
   type LLMProviderConfig,
   type ReasoningEffort,
   type SuggestedWorkspaceIdentity,
@@ -15,7 +18,7 @@ import {
 import { loadActiveProfile } from './profiles';
 import { createWorkspace } from '@kinu.run/core/identity';
 import { diagnostics, renderThrownChain } from '@kinu.run/core/obs';
-import { makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
+import { makeSql, makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
 import {
   agentDbPath,
   agentDir,
@@ -211,7 +214,10 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   let identityId: string | undefined;
   try {
     db.exec('PRAGMA journal_mode = WAL');
-    const rt = await createWorkspace(db, { name: displayName, purpose, llm: llmConfig });
+    // A blank display name is the provisional state of an agent added without
+    // one; the slug is what it is genuinely called until a title lands, so it
+    // is what the workspace identity and SOUL open with.
+    const rt = await createWorkspace(db, { name: displayName || name, purpose, llm: llmConfig });
     identityId = rt.storage.sql<{ id: string }>`SELECT id FROM workspace_identity LIMIT 1`[0]?.id;
     // Every table a workspace has, on any backend — one list, in core.
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
@@ -219,8 +225,9 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
     agentConfig.setModel(modelSpecForAgentConfig(llmConfig, input.model));
     const reasoningEffort = input.reasoningEffort ?? loadConfigFile().reasoningEffort;
     if (reasoningEffort) agentConfig.setReasoningEffort(reasoningEffort);
-    agentConfig.setDisplayName(displayName);
-    agentConfig.setNameOrigin(input.nameOrigin ?? 'user');
+    // Title and whose it is, in one write. The origin is what the title policy
+    // reads to decide whether it may ever name this agent itself.
+    agentConfig.setDisplayNameOrigin(displayName, input.nameOrigin ?? 'user');
     if (input.role && input.role !== 'general') {
       const changed = changeActiveRole({
         config: agentConfig,
@@ -252,6 +259,102 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
     name, displayName, mode: 'local', purpose, model: llmConfig.model,
     dbPath, aliasPath, cwd, workspaceId, peers,
   };
+}
+
+/**
+ * Add an agent to the virtual workspace already in this directory, with
+ * nothing said about it.
+ *
+ * The owner supplies no name, no mission and no role. It inherits the mission
+ * of a peer already in the workspace — the same text the cloud path inherits
+ * from its parent workspace — takes a stable slug of its own, and starts with
+ * a BLANK title and `auto` origin so its first owner message names it
+ * (`autoTitleLocalWorkspace`).
+ *
+ * Refuses when the workspace has no peer yet: there would be nothing to
+ * inherit, and inventing a mission is not the same thing as inheriting one.
+ * `kinu create` is the command that opens a workspace; this one joins it.
+ */
+export async function createLocalPeerAgent(
+  input: { cwd?: string; workspaceId?: string; role?: string } = {},
+): Promise<CreatedCliAgent> {
+  ensureAgentHome();
+  const cwd = canonicalProjectRoot(input.cwd);
+  const workspaceId = input.workspaceId ?? defaultVirtualWorkspaceId(cwd);
+  validateWorkspaceId(workspaceId);
+  const peers = localWorkspaceMembers(workspaceId, cwd);
+  const purpose = inheritedPeerMission(peers);
+  if (!purpose) {
+    throw new Error(
+      `No agent in workspace "${workspaceId}" to inherit a mission from. `
+      + 'Create the first one with: kinu create',
+    );
+  }
+  const created: CreateCliAgentInput = {
+    // Same permanent-address shape the cloud path mints: a neutral memorable
+    // pair plus id digits, never mission text.
+    name: workspaceSlug(crypto.randomUUID()),
+    displayName: '',
+    nameOrigin: 'auto',
+    purpose,
+    mode: 'local',
+    cwd,
+    workspaceId,
+  };
+  if (input.role) created.role = input.role;
+  return createCliAgent(created);
+}
+
+/** The mission an additional agent in this workspace inherits: the first peer
+ *  that has one. Peers share a directory and a purpose, so which one answers
+ *  does not matter — only that the text is a real mission somebody wrote. */
+function inheritedPeerMission(peers: readonly { name: string }[]): string | null {
+  for (const peer of peers) {
+    const dbPath = agentDbPath(peer.name);
+    if (!existsSync(dbPath)) continue;
+    const db = new Database(dbPath, { readonly: true });
+    try {
+      const mission = readMission(makeSql(db));
+      if (mission && !isPlaceholderMission(mission)) return mission;
+    } finally {
+      db.close();
+    }
+  }
+  return null;
+}
+
+/** What a local rename settled on: the slug it is addressed by, unchanged, and
+ *  the title it now shows. */
+export interface RenamedLocalAgent {
+  name: string;
+  displayName: string;
+}
+
+/**
+ * Retitle a local agent on the owner's behalf.
+ *
+ * Writes the agent's own naming state and the `~/.kinu/config.json` ref
+ * together, and marks the title the OWNER'S — which is what permanently stops
+ * `autoTitleLocalWorkspace` from replacing it, since the shared
+ * `planWorkspaceTitle` refuses a `user` origin.
+ */
+export function renameLocalAgent(name: string, displayName: string): RenamedLocalAgent {
+  const title = displayName.trim();
+  if (!title) throw new Error('A name is required.');
+  const dbPath = agentDbPath(name);
+  if (!existsSync(dbPath)) throw new Error(`Agent "${name}" not found.`);
+  const db = new Database(dbPath);
+  try {
+    createAgentConfigStore(makeSql(db)).setDisplayNameOrigin(title, 'user');
+  } finally {
+    db.close();
+  }
+  const configured = resolveAgentRef(name);
+  upsertAgentConfig({
+    ...(configured ?? { name, mode: 'local', localName: name }),
+    displayName: title,
+  });
+  return { name, displayName: title };
 }
 
 /** An agent name is a directory under `~/.kinu`, so it is unique per machine.

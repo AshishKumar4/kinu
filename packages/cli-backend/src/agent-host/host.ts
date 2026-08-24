@@ -17,6 +17,7 @@ import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel, ModelMessage } from 'ai';
+import * as v from 'valibot';
 import {
   EventLog,
   ReplyChannelStore,
@@ -33,10 +34,12 @@ import {
   initWorkspaceSchema,
   readSubordinateLiveStatus,
   receiveSubordinateEvent,
+  readMission,
   renderSoulMarkdown,
   slugifyName,
   subordinateRelaysTurnEnd,
   writeSoul,
+  TIER_IDS,
   type AdmittedSubordinateReport,
   type AgentConfigStore,
   type JsonObject,
@@ -51,16 +54,22 @@ import {
   type WorkMode,
 } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/identity';
-import { diagnostics, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, toKinuError, type Refusal } from '@kinu.run/core/obs';
 import {
-  makeSql, makeSqlExec, makeWorkspaceSchemaSql, shareLocalWorkspacePlane, type CLIRuntime,
+  makeSql, makeExecRaw, makeSqlExec, makeWorkspaceSchemaSql, shareLocalWorkspacePlane,
+  type CLIRuntime,
 } from '../runtime';
 import { openWorkspaceCLI, type CLIOpenConfig } from '../open';
+import {
+  acquireDriverLease, holdsDriverLease, releaseDriverLease,
+  type DriverKind, type DriverLeaseDeps,
+} from './driver-lease';
 import {
   LocalAgentSession,
   type LocalAgentSessionOpts,
   type LocalPublishEventInput,
   type LocalPublishEventResult,
+  type ProfileEnvelopeSource,
   type SessionEvent,
 } from '../local-session';
 import type { LocalModelResolver } from '../model-resolver';
@@ -77,6 +86,18 @@ export interface LocalHostedAgent {
   modelResolver?: LocalModelResolver;
   staticModel?: LanguageModel;
   mcpServers?: Record<string, McpServerConfig>;
+  /**
+   * Where this agent's role/tier catalog comes from, read live.
+   *
+   * The host FORWARDS it and never builds one: the caller that opened the agent
+   * knows whether the authority is an account catalog or the local one, and a
+   * host that invented a default would resolve turns against a catalog nobody
+   * chose. Absent means the session falls back to its own bootstrap envelope —
+   * which is what a daemon-hosted agent silently did for every turn before this
+   * was forwarded, so an account's roles and tiers reached interactive sessions
+   * and not the daemon that runs its scheduled work.
+   */
+  profileAuthority?: ProfileEnvelopeSource;
 }
 
 export interface LocalAgentHostOptions {
@@ -107,6 +128,17 @@ export interface LocalAgentHostOptions {
    * re-drives pending rows.
    */
   wakeAt?(at: number): void;
+  /**
+   * What kind of driver this process is, which decides only one thing: who may
+   * take the driver lease from whom. An interactive process may take it from a
+   * live daemon, because a person waiting at a prompt outranks background
+   * maintenance; a daemon never takes it from a live interactive owner, because
+   * that would interleave its programmatic turns with the user's own.
+   *
+   * Defaults to `interactive`: a host built without saying is a foreground one,
+   * and the daemon is the single caller that has to declare itself.
+   */
+  driverKind?: DriverKind;
 }
 
 interface HostEntry {
@@ -147,9 +179,55 @@ export class LocalAgentHost {
   /** First-open fence per address. Recovery must run once even when a timer,
    *  client event, and team call arrive together on a cold daemon. */
   private readonly opening = new Map<string, Promise<HostEntry>>();
+  /** The driver-lease token this process holds per bound agent. Absent means
+   *  this process is not currently the driver for that conversation. */
+  private readonly driverTokens = new Map<string, string>();
   private closed = false;
 
   constructor(private readonly opts: LocalAgentHostOptions) {}
+
+  private get driverKind(): DriverKind {
+    return this.opts.driverKind ?? 'interactive';
+  }
+
+  /** The lease's view of one agent's own database. */
+  private leaseDeps(entry: HostEntry): DriverLeaseDeps {
+    return { sql: makeSql(entry.db), execRaw: makeExecRaw(entry.db) };
+  }
+
+  /**
+   * Make this process the driver for one agent, or report who is.
+   *
+   * Re-checks a token it already holds rather than trusting it: the whole point
+   * of preemption is that a lease can be lost between operations, so "I had it"
+   * is not "I have it".
+   */
+  private ensureDriver(entry: HostEntry): Refusal | null {
+    const deps = this.leaseDeps(entry);
+    const held = this.driverTokens.get(entry.key);
+    if (held !== undefined && holdsDriverLease(deps, held)) return null;
+    const outcome = acquireDriverLease(deps, this.driverKind);
+    if ('held' in outcome) {
+      this.driverTokens.set(entry.key, outcome.held.token);
+      return null;
+    }
+    this.driverTokens.delete(entry.key);
+    return outcome.refused;
+  }
+
+  /** Whether this process still holds the lease it took for one agent. */
+  private stillDriving(entry: HostEntry): boolean {
+    const held = this.driverTokens.get(entry.key);
+    return held !== undefined && holdsDriverLease(this.leaseDeps(entry), held);
+  }
+
+  /** Give up one agent's lease, if this process is the holder. */
+  private releaseDriver(entry: HostEntry): void {
+    const held = this.driverTokens.get(entry.key);
+    if (held === undefined) return;
+    releaseDriverLease(this.leaseDeps(entry), held);
+    this.driverTokens.delete(entry.key);
+  }
 
   /** Session events stay live after an interactive client disconnects. */
   subscribe(listener: AgentEventListener): () => void {
@@ -183,13 +261,37 @@ export class LocalAgentHost {
   }
 
   /**
-   * One daemon pass. The session methods are no-ops when nothing is due, so
+   * One driver pass. The session methods are no-ops when nothing is due, so
    * the host can service cross-process event rows without a second pending-state
    * mirror.
+   *
+   * Gated on the driver lease, because this pass CONVERTS durable rows — it
+   * binds pending events to a synthetic turn and fires due triggers — and two
+   * processes doing that over one database convert the same row twice. Refused
+   * is a normal outcome, not a failure: the other driver is doing this work, so
+   * this pass reports the schedule it read and waits.
+   *
+   * A daemon gives the lease back at the end of its pass so an interactive
+   * process arriving between passes does not have to preempt anything. An
+   * interactive host keeps it until the session ends, which is what stops a
+   * daemon pass landing in the middle of somebody's conversation.
    */
   async tick(name: string, now = Date.now()): Promise<number | null> {
     const entry = await this.resolveEntry(name);
-    return this.tickEntry(entry, now);
+    const refusal = this.ensureDriver(entry);
+    if (refusal) {
+      diagnostics.event('driver.pass_deferred', {
+        agent: entry.key,
+        kind: this.driverKind,
+        reason: refusal.reason,
+      });
+      return nextTriggerAt(entry.db);
+    }
+    try {
+      return await this.tickEntry(entry, now);
+    } finally {
+      if (this.driverKind === 'daemon') this.releaseDriver(entry);
+    }
   }
 
   /** Subordinate operations for one agent — hire, assign, status, dismiss.
@@ -229,9 +331,16 @@ export class LocalAgentHost {
           { agent: entry.key },
         );
       }
+      // Released BEFORE the handle closes, and only if the row is still ours.
+      // An interactive process holds its lease for the whole session, so this is
+      // where a daemon becomes able to drive again — without it, a conversation
+      // stays locked to a process that has exited and only a liveness check
+      // would recover it, which is the slower and less obvious path.
+      this.releaseDriver(entry);
       entry.db.close();
     }
     this.entries.clear();
+    this.driverTokens.clear();
   }
 
   // ── host lifecycle ──────────────────────────────────────────────────
@@ -328,6 +437,7 @@ export class LocalAgentHost {
     };
     if (input.ws.modelResolver) sessionOpts.modelResolver = input.ws.modelResolver;
     if (input.ws.staticModel) sessionOpts.model = input.ws.staticModel;
+    if (input.ws.profileAuthority) sessionOpts.profileAuthority = input.ws.profileAuthority;
     const session = new LocalAgentSession(sessionOpts);
     const entry: HostEntry = {
       ...input,
@@ -350,6 +460,10 @@ export class LocalAgentHost {
     // only exists once the session is constructed — so the deps are installed
     // immediately after, before any turn can run.
     entry.session.setTeam(this.buildTeam(entry));
+    // THE DRIVER LEASE. Same reason it lands here: it closes over the entry.
+    // The pump consults it before every turn, so an interactive process takes
+    // the lease from a daemon at that boundary rather than interleaving with it.
+    entry.session.setDriverGate(() => this.ensureDriver(entry));
     // THE REAL PEER TRANSPORT, roots only. Same reason it lands here: the
     // endpoint's inbox wakes this session, and the session has to exist first.
     if (input.parentKey === null) {
@@ -432,6 +546,11 @@ export class LocalAgentHost {
       if (parent.ws.modelResolver) ws.modelResolver = parent.ws.modelResolver;
       if (parent.ws.staticModel) ws.staticModel = parent.ws.staticModel;
       if (parent.ws.mcpServers) ws.mcpServers = parent.ws.mcpServers;
+      // A child resolves its role and tier against its ROOT's authority: the
+      // catalog is the account's, not the agent's, so a subordinate that
+      // bootstrapped its own would resolve a hired role the catalog never
+      // carried.
+      if (parent.ws.profileAuthority) ws.profileAuthority = parent.ws.profileAuthority;
       const entry = await this.buildEntry({
         key,
         name: childName,
@@ -518,8 +637,16 @@ export class LocalAgentHost {
   }
 
   private async tickEntry(entry: HostEntry, now: number): Promise<number | null> {
+    // Re-checked between each converting step, not once at the top. Preemption
+    // is the reason: an interactive process can take the lease while this pass
+    // is awaiting, and the next durable conversion must not happen after that.
+    // A pass that loses the lease stops here and reports its schedule — the
+    // work is not lost, the new driver owns it.
+    if (!this.stillDriving(entry)) return nextTriggerAt(entry.db);
     await entry.session.fireDueTriggers(now);
+    if (!this.stillDriving(entry)) return nextTriggerAt(entry.db);
     await entry.session.flushPendingDrains();
+    if (!this.stillDriving(entry)) return nextTriggerAt(entry.db);
     await entry.session.runDueEvolution();
 
     let next = nextTriggerAt(entry.db);
@@ -616,6 +743,9 @@ export class LocalAgentHost {
       now: () => Date.now(),
       inheritedContext: (): SerializedMessage[] =>
         inheritedContextFromHistory(readConversationTail(parent)),
+      // What this agent is FOR, as its own workspace records it — inherited by
+      // an additional agent the owner adds beneath it without saying anything.
+      ownMission: () => readMission(parent.ws.rt.storage.sql) ?? '',
       createName: (role) => {
         const base = slugifyName(role).slice(0, 48) || 'subordinate';
         return `${base}-${crypto.randomUUID().slice(0, 6)}`;
@@ -651,6 +781,11 @@ export class LocalAgentHost {
             mode,
           });
         },
+        rename: async (name, displayName, nameOrigin) => {
+          const child = await this.openChildEntry(parent, name);
+          child.config.setDisplayNameOrigin(displayName, nameOrigin);
+          child.session.broadcast({ type: 'workspace_renamed', displayName });
+        },
         dismiss: async (name, keepHistory) => {
           await this.removeChild(parent, name, keepHistory);
         },
@@ -663,15 +798,7 @@ export class LocalAgentHost {
    *  optional tier override and catalog version) or the legacy freeform line. */
   private async birthChild(
     parent: HostEntry,
-    input: {
-      name: string;
-      displayName: string;
-      roleId?: string;
-      legacyRole?: string;
-      tier?: string;
-      catalogVersion?: number;
-      mission: string;
-    },
+    input: Parameters<LocalAgentHost['birthChildEntry']>[1],
   ): Promise<HostEntry> {
     if (this.closed) throw new Error('LocalAgentHost is closed.');
     const key = `${parent.key}/${input.name}`;
@@ -691,7 +818,9 @@ export class LocalAgentHost {
     parent: HostEntry,
     input: {
       name: string;
+      /** Empty when nothing the caller said can name this agent yet. */
       displayName: string;
+      nameOrigin: 'user' | 'auto';
       roleId?: string;
       legacyRole?: string;
       tier?: string;
@@ -713,7 +842,9 @@ export class LocalAgentHost {
     db.exec('PRAGMA journal_mode = WAL');
     try {
       await createWorkspace(db, {
-        name: input.displayName,
+        // The slug when nothing has titled it yet: SOUL should not open with a
+        // blank name, and the slug is what this agent is genuinely called.
+        name: input.displayName || input.name,
         purpose: input.mission,
         llm,
       });
@@ -722,7 +853,22 @@ export class LocalAgentHost {
       const opened = await openWorkspaceCLI(db, dbPath, openConfig);
       const rt = shareLocalWorkspacePlane(opened.rt, parent.ws.rt);
       const config = createAgentConfigStore(rt.storage.sql);
-      config.setDisplayName(input.displayName);
+      // Title and whose it is, together — the title policy reads `name_origin`
+      // to decide whether it may name this agent on its first interaction.
+      config.setDisplayNameOrigin(input.displayName, input.nameOrigin);
+      // The hire's role and tier become DURABLE state on the child, because
+      // that is what its own turn boundary reads. Prose in SOUL.md tells the
+      // model who it is; only these two rows make its turns actually resolve
+      // the assigned role's prompt, tools, skills and tier. Writing only the
+      // prose is what made a hired auditor resolve `general` on every turn.
+      if (input.roleId) config.setActiveRoleId(input.roleId);
+      // An absent or unknown tier CLEARS the pin, which is the instruction to
+      // derive from the role rather than a tier of its own. PARSED, not asserted:
+      // `tier` is the hiring caller's input, so this is its I/O boundary and a
+      // bad value must never become a stored row a later read has to tolerate.
+      // Same schema the turn resolver uses (profiles/resolve.ts).
+      const pinnedTier = v.safeParse(v.picklist(TIER_IDS), input.tier);
+      config.setAssignedTier(pinnedTier.success ? pinnedTier.output : null);
       // The child keeps the parent's model only as its STARTING point; its
       // tier (when it has one) resolves at its own turn boundary. No model
       // spec travels with a hire — tier is the one routing input.
@@ -738,7 +884,7 @@ export class LocalAgentHost {
         rt.agentStateVfs ?? rt.storage.vfs,
         rt.storage.sql,
         [
-          renderSoulMarkdown({ name: input.displayName, mission: input.mission }),
+          renderSoulMarkdown({ name: input.displayName || input.name, mission: input.mission }),
           '',
           '## Role',
           '',
@@ -755,6 +901,7 @@ export class LocalAgentHost {
       if (parent.ws.modelResolver) ws.modelResolver = parent.ws.modelResolver;
       if (parent.ws.staticModel) ws.staticModel = parent.ws.staticModel;
       if (parent.ws.mcpServers) ws.mcpServers = parent.ws.mcpServers;
+      if (parent.ws.profileAuthority) ws.profileAuthority = parent.ws.profileAuthority;
       const entry = await this.buildEntry({
         key,
         name: input.name,

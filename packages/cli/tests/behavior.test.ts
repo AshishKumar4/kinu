@@ -390,13 +390,13 @@ describe("kinu exec (headless)", () => {
         const parsed = v.safeParse(RunEventEnvelopeSchema, event);
         return parsed.success ? [parsed.output.event] : [];
       });
-      // `closeTurnRun` writes both conditional rows between `step_finish` and
-      // `turn_end`. The mock answers in one step and never delegates, so the
-      // start nudge fires and its opportunity row records the non-conversion.
-      // Pin both names so the evidence cannot disappear while the turn still
-      // looks complete.
+      // Profile resolution lands before the step. `closeTurnRun` then writes
+      // both conditional rows between `step_finish` and `turn_end`. The mock
+      // answers in one step and never delegates, so the start nudge fires and
+      // its opportunity row records the non-conversion. Pin all three names so
+      // the evidence cannot disappear while the turn still looks complete.
       expect(ledger.map((e) => e.type)).toEqual([
-        "run_start", "turn_start", "step_finish", "turn_steering",
+        "run_start", "turn_start", "profile_resolution", "step_finish", "turn_steering",
         "delegation_opportunity", "turn_end", "run_end",
       ]);
       const nudges = events.flatMap((e) => {

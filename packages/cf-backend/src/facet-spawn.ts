@@ -79,8 +79,13 @@ export interface ExplorationFacetIdentity {
   /** The ROOT orchestrator's workspace name — the workspace a head forks: its
    *  exec planes, its files, and the findings space the whole tree shares.
    *  Propagated UNCHANGED through recursive splits so an intermediate head never
-   *  becomes the tree's workspace. Absent for MCTS branches, which fork nothing:
-   *  a branch has no runtime at all. */
+   *  becomes the tree's workspace.
+   *
+   *  An MCTS branch carries it too, and forks NOTHING with it. A branch has no
+   *  runtime — containment is that it never calls `facetRuntime()` — but every
+   *  facet needs the parent's resolved turn profile to know which model its work
+   *  routes to, and the parent's name is how it reaches it. Absent, a branch
+   *  silently ran the account default instead of the turn's tier. */
   readonly sharedParent?: string | null;
 }
 

@@ -340,8 +340,11 @@ export function LandingHero({ install }: { install: string }): ReactElement {
   const { status, copy } = useCopy();
   return (
     <section id="top" className="relative overflow-hidden">
-      <div className="landing-shell relative grid items-center lg:grid-cols-[minmax(0,540px)_minmax(0,1fr)]">
-        <div className="py-[72px] lg:py-[88px]">
+      {/* Base column is an explicit minmax(0,1fr): with no template, the
+          implicit auto track takes the install row's ~519px min-content and
+          the root's overflow-x-clip hides the clipping from scrollWidth. */}
+      <div className="landing-shell relative grid grid-cols-1 items-center lg:grid-cols-[minmax(0,540px)_minmax(0,1fr)]">
+        <div className="min-w-0 py-[72px] lg:py-[88px]">
           <div className="mb-7 inline-flex items-center gap-2 rounded-full border p-border p-surface px-3.5 py-1.5 text-xs p-text-2">
             <span className="size-[5px] rounded-full p-dot-accent" />
             The self-evolving agent platform
@@ -350,7 +353,7 @@ export function LandingHero({ install }: { install: string }): ReactElement {
             Agents that <span className="block h-[2.02em] overflow-hidden p-gold">{phrase}<span aria-hidden className="ml-[.06em] inline-block h-[.8em] w-[.075em] translate-y-[.1em] bg-[var(--c-accent)] motion-safe:animate-pulse" /></span>
           </h1>
           <p className="mb-8 max-w-[520px] text-[17.5px] leading-[1.65] text-pretty p-text-3">
-            Persistent workspaces with files, memory, and one conversation per agent. Cloud agents keep working after you close the laptop. Local agents run in your terminal or editor.
+            Kinu gives AI agents a durable computer of their own. It adapts and improves with use, runs locally or fully in the cloud, and solves hard tasks by exploring multiple approaches and letting executable checks choose the winner.
           </p>
           <div className="flex max-w-[540px] items-center justify-between gap-4 rounded-xl border p-border p-recessed px-4 py-3.5">
             <code className="min-w-0 flex-1 truncate font-mono text-[12.5px] p-text-2"><span className="p-gold">$</span> <span data-install-command>{install}</span></code>

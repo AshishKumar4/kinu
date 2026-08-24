@@ -85,7 +85,7 @@ export function WorkspaceBar({
     // a phone cannot hold a name, a pill and a switch on one line.
     <div className="@container flex min-h-14 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b p-border p-sidebar px-5 py-2">
       <div className="flex min-w-0 basis-full items-center gap-3 @[30rem]:basis-0 @[30rem]:flex-1">
-        <InlineWorkspaceTitle title={title} onRename={onRename} />
+        <InlineRenameTitle title={title} onRename={onRename} subject="workspace" />
         <LivePill status={connectionStatus} working={working} />
         {model && (
           <span
@@ -133,9 +133,17 @@ export function WorkspaceBar({
   );
 }
 
-function InlineWorkspaceTitle({ title, onRename }: {
+/**
+ * The click-to-edit identity control, shared by the workspace bar and each
+ * agent conversation's header — one rename affordance, whatever it names.
+ * `subject` labels the accessible controls; `textClass` carries the mounting
+ * row's type scale so the still text and the editor agree.
+ */
+export function InlineRenameTitle({ title, onRename, subject, textClass = "text-[15px] font-semibold" }: {
   title: string;
   onRename: (displayName: string) => Promise<string>;
+  subject: string;
+  textClass?: string;
 }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(title);
@@ -171,14 +179,14 @@ function InlineWorkspaceTitle({ title, onRename }: {
           onChange={(event) => setValue(event.target.value)}
           onKeyDown={(event) => { if (event.key === "Escape") setEditing(false); }}
           onBlur={() => { if (!saving) setEditing(false); }}
-          className="w-48 rounded-md border border-[var(--c-accent)] p-elevated px-2 py-1 text-[15px] font-semibold p-text outline-none"
-          aria-label="Workspace name"
+          className={`w-48 rounded-md border border-[var(--c-accent)] p-elevated px-2 py-1 ${textClass} p-text outline-none`}
+          aria-label={`${subject[0]!.toUpperCase()}${subject.slice(1)} name`}
         />
         <button
           type="submit"
           disabled={saving || !value.trim()}
           className="rounded-sm p-1 p-text-3 hover:p-text disabled:opacity-40"
-          aria-label="Save workspace name"
+          aria-label={`Save ${subject} name`}
         ><CheckIcon size={13} /></button>
         <button
           type="button"
@@ -196,10 +204,10 @@ function InlineWorkspaceTitle({ title, onRename }: {
       type="button"
       onClick={() => setEditing(true)}
       className="group/title flex min-w-0 items-center gap-1.5 rounded-md px-1 py-0.5 -mx-1 transition-colors hover:bg-[var(--c-elevated)]"
-      title="Rename workspace"
+      title={`Rename ${subject}`}
     >
-      {/* 15px/600 is the mock's top-bar name weight. */}
-      <span className="truncate text-[15px] font-semibold p-text">{title}</span>
+      {/* 15px/600 is the mock's top-bar name weight; headers pass their own. */}
+      <span className={`truncate ${textClass} p-text`}>{title}</span>
       <PencilSimpleIcon size={11} className="shrink-0 p-text-4 opacity-0 transition-opacity group-hover/title:opacity-100" />
     </button>
   );

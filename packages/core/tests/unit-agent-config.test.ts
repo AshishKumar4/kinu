@@ -307,6 +307,8 @@ describe('AgentConfigStore — every key has a write path', () => {
     (c) => c.setDisplayName('Ada'),
     (c) => c.setNameOrigin('user'),
     (c) => c.setRoleChangePolicy('approval'),
+    (c) => c.setActiveRoleId('auditor'),
+    (c) => c.setAssignedTier('deep'),
     (c) => c.setShellApprovalMode('allow_all'),
     (c) => c.grantShellApproval([{ rule: 'rm-recursive', executor: 'laptop' }]),
     (c) => c.setSleepTimeComputeEnabled(false),
@@ -333,7 +335,6 @@ describe('AgentConfigStore — every key has a write path', () => {
    *  store (memory-sync's lazy Vectorize backfill). Exempt because the write
    *  path is real, just not a typed method here. */
   const GENERIC_WRITE_PATH: ReadonlyArray<string> = [
-    AGENT_CONFIG_KEYS.activeRoleId,
     AGENT_CONFIG_KEYS.memoryVectorBackfillDone,
     AGENT_CONFIG_KEYS.memoryVectorBackfillCursor,
   ];
@@ -355,5 +356,53 @@ describe('AgentConfigStore — every key has a write path', () => {
     const written = new Set([...Object.keys(c.all()), ...GENERIC_WRITE_PATH]);
     expect(Object.values(AGENT_CONFIG_KEYS).filter((k) => !written.has(k)))
       .toEqual([AGENT_CONFIG_KEYS.model]);
+  });
+});
+
+/** A hired subordinate's assignment: the role its parent gave it, and the tier
+ *  its parent pinned. Both are read at the child's next turn boundary, which is
+ *  where a dropped assignment turns into an agent running as `general` at the
+ *  default tier with nothing saying so. */
+describe('the hired assignment a child reads at its turn boundary', () => {
+  test('role and tier round-trip through the typed accessors', () => {
+    const c = setup();
+    c.setActiveRoleId('auditor');
+    c.setAssignedTier('deep');
+    expect(c.getActiveRoleId()).toBe('auditor');
+    expect(c.getAssignedTier()).toBe('deep');
+  });
+
+  test('an unpinned tier reads null — the instruction to derive from the role', () => {
+    // Null is not "the default tier". It says nothing was pinned, so the
+    // resolver takes the role's own — the documented promise that a role's
+    // default tier is re-derived from its roleId at the next boundary.
+    const c = setup();
+    c.setActiveRoleId('auditor');
+    expect(c.getAssignedTier()).toBeNull();
+  });
+
+  test('clearing the pin returns the child to its role\'s own tier', () => {
+    const c = setup();
+    c.setAssignedTier('tiny');
+    expect(c.getAssignedTier()).toBe('tiny');
+    c.setAssignedTier(null);
+    expect(c.getAssignedTier()).toBeNull();
+    expect(c.get(AGENT_CONFIG_KEYS.assignedTier)).toBeNull();
+  });
+
+  test('a tier this build does not know reads as unpinned, never as a throw', () => {
+    // A working turn beats a dead agent: the role's own tier is a correct
+    // answer for a value nothing here can interpret.
+    const c = setup();
+    c.set(AGENT_CONFIG_KEYS.assignedTier, 'gargantuan');
+    expect(c.getAssignedTier()).toBeNull();
+  });
+
+  test('a role id the catalog cannot carry reads as general', () => {
+    // The reader's existing rule, restated against the new writer: the typed
+    // setter is what keeps an uninterpretable value out in the first place.
+    const c = setup();
+    c.set(AGENT_CONFIG_KEYS.activeRoleId, 'not a role id');
+    expect(c.getActiveRoleId()).toBe('general');
   });
 });

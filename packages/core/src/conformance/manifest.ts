@@ -237,6 +237,28 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // per actor is what makes the list mean anything.
     agent_tasks: EVERYWHERE,
     background_jobs: EVERYWHERE,
+    // The single-driver lease over ONE local conversation. Local-only, and the
+    // asymmetry is the platform's rather than an omission: a Durable Object IS
+    // the single writer, so on either cf root one activation owns the storage
+    // and there is nothing to arbitrate. Locally a workspace is one SQLite FILE
+    // and the participants are separate OS processes — a detached daemon and
+    // every `kinu chat`/`kinu exec` — so two of them can bind the same pending
+    // event and convert it twice. The in-process claim the orchestrator makes
+    // holds w.r.t. one event loop, which is exactly the boundary the CLI
+    // crosses and cf does not.
+    driver_lease: {
+      'cf-orchestrator': {
+        absent: 'a Durable Object is the platform\'s own single writer: one activation owns the '
+          + 'storage, so no second process can drive the same workspace and there is nothing to '
+          + 'arbitrate',
+      },
+      'cf-subordinate': {
+        absent: 'a Durable Object is the platform\'s own single writer: one activation owns the '
+          + 'storage, so no second process can drive the same workspace and there is nothing to '
+          + 'arbitrate',
+      },
+      cli: WIRED,
+    },
     // Gated commands parked on the owner. The TABLE is part of the shared
     // workspace schema everywhere; what differs is who can decide the rows —
     // the deferral channel is wired into the approval policy on cf, where the

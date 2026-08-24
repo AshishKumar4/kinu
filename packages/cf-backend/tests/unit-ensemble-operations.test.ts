@@ -12,9 +12,12 @@ import { describe, expect, test } from 'bun:test';
 import type { LanguageModel } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import {
+  BUILTIN_PROFILE_CATALOG,
   createProviderRegistry,
+  profileCatalogDigest,
   recordOutcomeLabels,
   recordTurnOutcome,
+  resolveTurnProfile,
   RunEventRecorder,
   WORKSPACE_RUN_ID,
   type RunEvent,
@@ -55,6 +58,43 @@ function judgeRegistry(
     },
     normalizeSpecSync: (spec) => spec ?? 'test/model',
   };
+}
+
+/** `MODEL_ROUTE_POLICY.fast` is the `tiny` tier, so the naming pass must resolve
+ *  THIS spec and no other. Given a distinct value from the chat and deep tiers
+ *  so a wrong route names a different model rather than accidentally agreeing.
+ *
+ *  The effort is explicit and deliberately implausible for a naming pass: an
+ *  assertion against a DEFAULT effort would pass whether or not the tier's own
+ *  assignment was read, which is the thing the old hardcoded effort got wrong. */
+const TINY_MODEL = 'fake-a/m1';
+const TINY_EFFORT = 'high' as const;
+
+function titleProfile() {
+  const catalog = {
+    ...BUILTIN_PROFILE_CATALOG,
+    tiers: {
+      default: { model: 'fake-chat/m1' },
+      tiny: { model: TINY_MODEL, reasoningEffort: TINY_EFFORT },
+      deep: { model: 'fake-deep/m1' },
+    },
+  };
+  return resolveTurnProfile({
+    envelope: {
+      authority: { kind: 'account', accountId: 'acct-1' },
+      version: 1,
+      digest: profileCatalogDigest(catalog),
+      catalog,
+    },
+    provider: {
+      revision: 'rev-1',
+      availableModels: ['fake-chat/m1', TINY_MODEL, 'fake-deep/m1'],
+    },
+    roleId: 'general',
+    workMode: 'build',
+    availableTools: [],
+    activeSkills: [],
+  });
 }
 
 async function ensembleHarness() {
@@ -144,8 +184,8 @@ describe('runOutcomeEnsemble — the judges write their operation lifecycle', ()
   });
 });
 
-describe('suggestWorkspaceTitle — the fast-model naming pass writes its lifecycle', () => {
-  test('the title call leaves a start/end pair filed under fast, beside its cost row', async () => {
+describe('suggestWorkspaceTitle — the fast-model naming pass', () => {
+  test('the title call runs the TINY tier and files a start/end pair under fast', async () => {
     const harness = orchestratorHarness();
     const titleModel = new MockLanguageModelV3({
       doGenerate: async () => ({
@@ -158,9 +198,21 @@ describe('suggestWorkspaceTitle — the fast-model naming pass writes its lifecy
         warnings: [],
       }),
     });
+    // Only MODEL CONSTRUCTION is substituted. `modelForSource('fast')` runs its
+    // real body — `resolveModelRoute` against the profile below, then this
+    // resolver — so the route and the spec it returns are the production ones.
+    // `resolved` records what the route asked for, which is the assertion with
+    // teeth: the old wiring called `getModelForReview()`, the account-wide DEEP
+    // tier, while filing the spend as `fast`.
+    const resolved: Array<{ spec: string | null | undefined; effort: string }> = [];
     Object.assign(harness.agent, {
-      providerRegistry: (): AgentProviderRegistry => judgeRegistry([['fake-a/m1', titleModel]]),
-      getModelForReview: async () => titleModel,
+      routingProfile: async () => titleProfile(),
+      ownedModelServices: {
+        resolveModelWithEffort: (spec: string | null | undefined, effort: string) => {
+          resolved.push({ spec, effort });
+          return { model: titleModel, providerOptions: undefined };
+        },
+      },
     });
 
     // Driven through the harness accessor for the same call
@@ -168,13 +220,19 @@ describe('suggestWorkspaceTitle — the fast-model naming pass writes its lifecy
     const title = await harness.agent.harnessSuggestWorkspaceTitle('track launches');
     expect(title).toBe('Mission Control');
 
+    // `fast` routes to `tiny`, and the effort is the tier's own.
+    expect(resolved).toEqual([{ spec: TINY_MODEL, effort: TINY_EFFORT }]);
+
     const operations = operationsOf(new RunEventRecorder(sqlOver(harness.db)));
     expect(operations.map((e) => e.phase)).toEqual(['start', 'end']);
     expect(operations[0]!.operationId).toBe(operations[1]!.operationId);
     expect(operations.every((e) => e.source === 'fast' && e.op === 'complete')).toBe(true);
     expect(operations[1]!.outcome).toBe('ok');
     expect(operations[1]!.usage).toEqual({ input: 41, output: 7 });
-    // This seam resolves the model behind a cache and knows no spec.
-    expect(operations.every((e) => e.spec === undefined)).toBe(true);
+    // The spec is KNOWN now, and that is the fix: the route resolved it from the
+    // profile, so it is the same string the model was built from. It used to be
+    // absent because the seam resolved a model behind a cache and could not say
+    // which one — leaving the one row that prices the call unpriceable.
+    expect(operations.every((e) => e.spec === TINY_MODEL)).toBe(true);
   });
 });

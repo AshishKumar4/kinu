@@ -257,10 +257,9 @@ describe('the shell over the bound directory', () => {
   test('what a command may have changed is snapshotted, and the snapshot names that directory', async () => {
     const { state, project } = roots('cwd-plane-checkpoints');
     writeFileSync(join(project, 'before.txt'), 'the state to restore\n');
-    // Its own agent name, because the shadow store is keyed by agent and holds
-    // every directory that agent has snapshotted — a name shared with another
-    // test would make `list()` answer for both.
-    const rt = agentRuntime(state, 'checkpointer', project);
+    // Checkpoint storage is global per agent name, so this fixture mints a
+    // unique name. A stable test name would read valid stores from prior runs.
+    const rt = agentRuntime(state, `checkpointer-${state.slice(-6)}`, project);
     createAgentConfigStore(rt.storage.sql).setShellApprovalMode('allow_all');
     const checkpoints = rt.checkpoints;
     if (!checkpoints) throw new Error('a bound runtime must have a checkpoint engine');

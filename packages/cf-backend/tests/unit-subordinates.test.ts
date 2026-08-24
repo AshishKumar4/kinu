@@ -101,30 +101,63 @@ describe('subordinate wiring', () => {
     const orchestrator = source('orchestrator.ts');
     const subordinate = source('subordinate-agent.ts');
     expect(orchestrator).toContain('return this.getTeamToolDeps().list();');
-    expect(orchestrator).toContain('return this.getTeamToolDeps().create({ role, mission });');
+    expect(orchestrator).toContain('return this.getTeamToolDeps().create({});');
+    expect(orchestrator).toContain('return this.getTeamToolDeps().rename({ name, displayName });');
     expect(orchestrator).toContain("return this.getTeamToolDeps().dismiss({ name, requestedBy: 'user' });");
     expect(subordinate).not.toContain('spawnSubordinate(');
     expect(subordinate).not.toContain('dismissSubordinate(');
     expect(subordinate).not.toContain('listSubordinates(');
   });
 
-  test('manual creation is identity-only and opens the durable agent directly', () => {
+  test('manual creation is one click, identity-only, and opens the conversation directly', () => {
     const tabs = source('components/SubordinateTabs.tsx');
-    expect(tabs).toContain('The mission defines this agent’s standing role.');
+    // No form stands between the click and the agent: the role+mission dialog
+    // is gone (the only Modal left is the dismiss confirm) and create takes
+    // ZERO arguments — identity only, mission internal.
+    expect(tabs).not.toContain('SpawnSubordinateDialog');
+    expect(tabs).toContain('onCreate(): Promise<CreatedAgent>');
     expect(tabs).toContain('navigate(`${mainPath}/agents/${created.name}`)');
     expect(tabs).toContain('if (dismissTarget.name === activeName) navigate(mainPath);');
+    // Both doors — the strip's + and the sidebar's row — run the ONE flow.
+    expect(tabs).toContain('"kinu:new-agent"');
+    expect(source('components/Sidebar.tsx')).toContain('new CustomEvent("kinu:new-agent")');
+    // A blank name renders as the provisional title everywhere, never as ''.
+    expect(tabs).toContain('NEW_AGENT_TITLE = "New agent"');
     expect(tabs).not.toContain('sends the mission as its first turn');
     expect(tabs).not.toContain('permanently deletes its conversation');
   });
 
-  test('manual create and dismiss reconcile the roster from their successful RPC result', () => {
+  test('the additional-agent conversation hides its inherited mission and identity internals', () => {
+    const page = source('pages/WorkspacePage.tsx');
+    const column = page.slice(
+      page.indexOf('function SubordinateChatColumn'),
+      page.indexOf('/* ── Main page'),
+    );
+    // An ordinary conversation: no purpose line under the name, no SOUL text
+    // in the empty state — the mission a one-click agent inherits is the
+    // machinery's business, and the empty state says only where things start.
+    expect(column).not.toContain('as?.purpose');
+    expect(column).not.toContain('as?.soul');
+    // The same composer contract as the main column: this agent's own mode…
+    expect(column).toContain('mode={{ value: effectiveMode, onChange: ui.setMode, locked: planAwaitingDecision }}');
+    // …and the same rename affordance the workspace bar carries.
+    expect(column).toContain('<InlineRenameTitle title={title} onRename={onRename} subject="agent"');
+  });
+
+  test('manual create, rename, and dismiss reconcile the roster from their successful RPC result', () => {
     const hook = source('hooks/use-kinu.ts');
     expect(hook).toContain('result.subordinate');
     expect(hook).toContain('entry.name !== result.subordinate.name');
     expect(hook).toContain('entry.name !== result.name');
-    const mutations = hook.slice(hook.indexOf('spawnSubordinate: async'), hook.indexOf('\n  };', hook.indexOf('spawnSubordinate: async')));
+    // Zero-argument create: the server owns identity; the client sends nothing.
+    expect(hook).toContain('rpc<{');
+    expect(hook).toContain('>("createSubordinateAgent", [])');
+    expect(hook).toContain('("renameSubordinateAgent", [name, displayName])');
+    const mutations = hook.slice(hook.indexOf('createSubordinateAgent'), hook.indexOf('\n  };', hook.indexOf('createSubordinateAgent')));
     expect(mutations).not.toContain('await refreshSubordinates()');
-    expect(mutations.match(/\+\+subordinateRefreshGeneration\.current;/g)).toHaveLength(2);
+    // One generation bump per mutation — create, rename, dismiss — so a stale
+    // in-flight roster read cannot overwrite any of their results.
+    expect(mutations.match(/\+\+subordinateRefreshGeneration\.current;/g)).toHaveLength(3);
   });
 
   test('stale roster reads cannot overwrite a mutation, broadcast, or actor reset', () => {

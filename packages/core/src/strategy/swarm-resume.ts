@@ -66,7 +66,7 @@ import { KinuError } from '../obs/error';
 import { tolerate } from '../obs/index';
 import type { HeadJournal } from '../heads/journal';
 import type { HeadStep } from '../heads/types';
-import type { MctsSearchStore } from '../mcts/search-store';
+import { initMctsSearchTable, MctsSearchStore } from '../mcts/search-store';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { FloorBreach, MeasuredValue, PublicationState } from './objective';
 import type { SwarmProfileSnapshot } from '../profiles';
@@ -369,6 +369,42 @@ export function reenterSwarm(deps: {
     superseded,
     abandoned: abandoned.reduce((total, run) => total + run.abandoned, 0),
   };
+}
+
+/**
+ * The profile the interrupted search for this task STARTED under, read WITHOUT
+ * claiming it.
+ *
+ * WHY A SECOND READER EXISTS. A re-drive replays the durable row's raw tool
+ * input, and a first attempt that took its preset from its role's default never
+ * had a `preset` to store — so the re-drive arrives with the field absent and,
+ * resolving nothing, lands on the literal fallback. That is not a smaller
+ * search, it is a DIFFERENT one: `ideate`'s branches, depth, carry and settle
+ * re-enter the auditor's own tree, under the auditor's root id and claimed
+ * epoch. The axes are resolved before {@link reenterSwarm} runs, which is why
+ * the record has to be readable before the claim.
+ *
+ * THE SAME SELECTION `reenterSwarm` makes — the newest running row for the task
+ * — because a preset derived from one row while a different row is re-entered
+ * is exactly the drift this shares code to prevent.
+ *
+ * READ-ONLY: no supersede, no reclaim, no abandon. The claim still happens
+ * exactly once, inside `reenterSwarm`. A row that settles between this read and
+ * that claim turns the re-drive into a fresh search, which is already the
+ * behaviour there, and a fresh search resolves its own preset.
+ *
+ * The tables are initialised here for `runSwarm`'s reason: a workspace that has
+ * never run a search has no `mcts_search_runs`, and this read would be a query
+ * against a table that does not exist.
+ */
+export function readStartedSwarmProfile(storage: {
+  readonly sql: SqlExecutor;
+  readonly execRaw: RawSqlExec;
+}, task: string): SwarmProfileSnapshot | null {
+  initMctsSearchTable(storage.execRaw, storage.sql);
+  const ledger = new MctsSearchStore(storage.sql);
+  const [newest] = ledger.findRunningSwarms(task);
+  return newest ? ledger.readSwarmProfile(newest.rootId) : null;
 }
 
 /**

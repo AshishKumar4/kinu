@@ -221,6 +221,56 @@ export function createLineLogger(write: (line: string) => void): Logger {
 }
 
 /**
+ * One line, several destinations. The reason this exists rather than each host
+ * wrapping its own: `setDiagnosticsSink` REPLACES, so a host that installs a
+ * durable sink silently stops writing to the platform's own log collection, and
+ * the platform log is the one a person reaches for during an incident. A
+ * composite is how a host ADDS a destination.
+ *
+ * MEMBER ORDER IS THE CONTRACT. Members are offered the line in order, so the
+ * cheapest and most reliable destination goes first: `createConsoleLogger()`
+ * reaches Workers Logs and the daemon journal with no binding, no network and no
+ * quota, so it is the member that must have received the line before anything
+ * else can go wrong.
+ *
+ * NOTHING IS CAUGHT HERE, and that is deliberate rather than an omission. A
+ * member that throws is a defect in that member, and `createLineLogger` does not
+ * catch either — so the composite preserves the single-sink contract exactly:
+ * same failure behaviour, more destinations. Absorbing it would make a broken
+ * sink indistinguishable from a working one, which is the defect a logging seam
+ * exists to remove. The throw is deferred to the END of the fan-out so one
+ * broken member cannot stop the others from receiving the line, and the FIRST
+ * thrown value is the one that propagates: it is the one whose member ran before
+ * any state the later members touched.
+ */
+export function createCompositeLogger(members: readonly Logger[]): Logger {
+  const fan = (deliver: (member: Logger) => void): void => {
+    let thrown: { value: unknown } | null = null;
+    for (const member of members) {
+      try {
+        deliver(member);
+      } catch (error) {
+        thrown ??= { value: error };
+      }
+    }
+    if (thrown) throw thrown.value;
+  };
+  // Parameters are deliberately NOT annotated: they are contextually typed from
+  // `Logger`, so `fields` arrives as the caller's own already-checked generic and
+  // is forwarded as one. Writing `fields?: LogFields` here would narrow it to the
+  // open field map that `LoggableFields` exists to refuse, and the forward would
+  // stop compiling — the same reason `diagnostics` below leaves them off.
+  return {
+    event(name, fields) {
+      fan((member) => member.event(name, fields));
+    },
+    failure(name, error, fields) {
+      fan((member) => member.failure(name, error, fields));
+    },
+  };
+}
+
+/**
  * The logger the backends use. One JSON line per event on the platform's own
  * sink, which is what both readers already collect: `console` on workerd reaches
  * Workers Logs, and on the CLI it reaches the daemon journal, which captures both

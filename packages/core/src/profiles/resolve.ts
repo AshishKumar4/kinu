@@ -33,12 +33,44 @@ import {
  *  turns user-visible work at. */
 const DEFAULT_TURN_REASONING_EFFORT: ReasoningEffort = REASONING_EFFORT_FOR_STAGE.chat;
 
+/**
+ * What the provider plane could enumerate, and what it could not.
+ *
+ * `availableModels` is a POSITIVE list and nothing else: presence proves a
+ * model exists, absence proves nothing on its own. `unavailableProviders`
+ * carries the listing calls that failed, so a reader can tell the two apart —
+ * without it a vendor 503 is indistinguishable from "not connected", which is
+ * how one degraded provider came to refuse every turn on the account,
+ * including turns whose own tier ran somewhere else entirely.
+ *
+ * PRODUCER OBLIGATION on `revision`: it must change when the availability
+ * picture changes, the failure set included. A snapshot taken while a provider
+ * was down is a DIFFERENT picture from a healthy one, and anything keyed on
+ * revision — a cache, a resolved profile's `providerRevision` — would
+ * otherwise serve the degraded view as though it were complete. That fact is
+ * recorded nowhere else: the resolved profile deliberately carries no
+ * "admitted unverified" flag, because a new field there would churn the
+ * profile digest and every snapshot already stored under it.
+ */
 export const ProviderCatalogSnapshotSchema = v.looseObject({
   revision: v.string(),
   availableModels: v.array(v.string()),
+  /** Provider listings that FAILED, shaped as `providers/registry.ts` reports
+   *  them so a producer passes its own failure list through unmapped. Empty
+   *  (or absent, for a producer with no failure channel) asserts the listing
+   *  was COMPLETE — which is the assertion strict absence rests on. */
+  unavailableProviders: v.optional(v.array(v.strictObject({
+    provider: v.string(),
+    label: v.string(),
+    reason: v.string(),
+  })), []),
 });
 
-export type ProviderCatalogSnapshot = v.InferOutput<typeof ProviderCatalogSnapshotSchema>;
+/** The shape a PRODUCER supplies. Input-side rather than output-side on
+ *  purpose: `unavailableProviders` is optional to emit — a producer with no
+ *  failure channel has nothing to say — while the resolver reads the parsed
+ *  form, where the default has already filled it in. */
+export type ProviderCatalogSnapshot = v.InferInput<typeof ProviderCatalogSnapshotSchema>;
 
 export type TierSource = 'explicit' | 'role' | 'default';
 export interface ProfileAuthorityInputs {
@@ -164,9 +196,40 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
   }
   const parsedProvider = v.safeParse(ProviderCatalogSnapshotSchema, input.provider);
   if (!parsedProvider.success) {
-    throw new Error('provider snapshot must carry {revision, availableModels}');
+    throw new Error('provider snapshot must carry {revision, availableModels} and, when '
+      + 'present, unavailableProviders as {provider, label, reason} rows');
   }
   const provider = parsedProvider.output;
+  // ABSENCE IS ONLY EVIDENCE WHEN THE LISTING WAS COMPLETE.
+  //
+  // `availableModels` is a positive list, so a model missing from it means one
+  // of two unrelated things: the provider answered and does not carry it (a
+  // misconfiguration, worth catching here at the turn boundary), or a listing
+  // call failed and this view never covered it (nothing proved). The snapshot
+  // says which by carrying its failures, so the rule is: claim absence only
+  // when nothing failed.
+  //
+  // COMPLETENESS rather than per-provider matching, deliberately. A failure
+  // row does not reliably name the model specs it cost: a failed catalog
+  // enumeration reports one row for the catalog itself and drops every dynamic
+  // provider it would have listed, unnamed. So matching a spec's provider
+  // against the failure set would fail open precisely where the outage is
+  // widest, which is the shape this rule exists to stop. A partial view proves
+  // nothing about anything.
+  //
+  // The cost, stated rather than rediscovered as a bug: while any listing is
+  // degraded, a retired or mistyped model on a HEALTHY provider stops being
+  // caught here and fails at call time instead, where the provider names it.
+  // That is the trade for never refusing a turn over a model nobody looked up.
+  const listingComplete = provider.unavailableProviders.length === 0;
+  const requireAvailable = (model: string, id: TierId): void => {
+    if (!listingComplete || provider.availableModels.includes(model)) return;
+    throw new Error(
+      `model ${JSON.stringify(model)} configured for the ${id} tier `
+      + `is unavailable on provider revision ${JSON.stringify(provider.revision)}; `
+      + 'configure a different model for the tier or pick another tier',
+    );
+  };
   const roles = effectiveRoleCatalog(envelope.catalog);
 
   const role = roles[input.roleId];
@@ -188,13 +251,7 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
     assignment = envelope.catalog.tiers.default;
   }
 
-  if (!provider.availableModels.includes(assignment.model)) {
-    throw new Error(
-      `model ${JSON.stringify(assignment.model)} configured for the ${tierId} tier `
-      + `is unavailable on provider revision ${JSON.stringify(provider.revision)}; `
-      + 'configure a different model for the tier or pick another tier',
-    );
-  }
+  requireAvailable(assignment.model, tierId);
 
   const availableTools = role.allowedTools === undefined
     ? uniqueTools(input.availableTools)
@@ -204,20 +261,13 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
   const workMode: WorkMode = role.plan === true ? 'plan' : input.workMode;
 
   // The whole tier table, resolved once: an unconfigured slot aliases the
-  // default assignment, and a configured model the provider does not list is
-  // an error — the same rule the turn's own tier follows above, applied to
-  // every slot so no producer can meet a misconfiguration later.
+  // default assignment, and every slot meets the same availability rule as the
+  // turn's own tier above, so no producer can meet a misconfiguration later.
   const defaultAssignment = envelope.catalog.tiers.default;
   if (!defaultAssignment) throw new Error('profile catalog has no default tier assignment');
   const tierSlot = (id: TierId): { model: string; reasoningEffort: ReasoningEffort } => {
     const slot = id === 'default' ? defaultAssignment : (envelope.catalog.tiers[id] ?? defaultAssignment);
-    if (!provider.availableModels.includes(slot.model)) {
-      throw new Error(
-        `model ${JSON.stringify(slot.model)} configured for the ${id} tier `
-        + `is unavailable on provider revision ${JSON.stringify(provider.revision)}; `
-        + 'configure a different model for the tier or pick another tier',
-      );
-    }
+    requireAvailable(slot.model, id);
     return Object.freeze({
       model: slot.model,
       reasoningEffort: slot.reasoningEffort ?? DEFAULT_TURN_REASONING_EFFORT,

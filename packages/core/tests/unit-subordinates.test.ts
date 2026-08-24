@@ -298,16 +298,24 @@ interface TeamHarness {
   team: ReturnType<typeof createTeamToolDeps>;
   calls: string[];
   assignments: Array<{ body: string; inheritedContext?: string }>;
+  /** Every identity seed the facet substrate was handed, whole — the naming
+   *  state a child is born with is only observable here. */
+  seeds: Array<Parameters<SubordinateRuntime['spawn']>[0]>;
   broadcasts: number[];
   tasks: Array<{ subordinate: string; content: string; timestamp: number }>;
   failures: Set<keyof SubordinateRuntime>;
 }
+
+/** The workspace mission this harness's actor holds — what an owner-created
+ *  additional agent inherits when the owner supplies none. */
+const HARNESS_OWN_MISSION = 'Keep the release train moving.';
 
 function makeTeamHarness(inheritedContext: SerializedMessage[] = []): TeamHarness {
   const roster = new SubordinateRosterStore(makeSql());
   roster.ensureSchema();
   const calls: string[] = [];
   const assignments: Array<{ body: string; inheritedContext?: string }> = [];
+  const seeds: Array<Parameters<SubordinateRuntime['spawn']>[0]> = [];
   const broadcasts: number[] = [];
   const tasks: Array<{ subordinate: string; content: string; timestamp: number }> = [];
   const failures = new Set<keyof SubordinateRuntime>();
@@ -315,7 +323,11 @@ function makeTeamHarness(inheritedContext: SerializedMessage[] = []): TeamHarnes
     if (failures.has(operation)) throw new Error(`${operation} failed`);
   };
   const runtime: SubordinateRuntime = {
-    async spawn(input) { calls.push(`spawn:${input.name}:${input.mission}`); fail('spawn'); },
+    async spawn(input) {
+      seeds.push(input);
+      calls.push(`spawn:${input.name}:${input.mission}`);
+      fail('spawn');
+    },
     async assign(name, input) {
       calls.push(`assign:${name}:${input.body}`);
       assignments.push(input);
@@ -334,6 +346,10 @@ function makeTeamHarness(inheritedContext: SerializedMessage[] = []): TeamHarnes
       fail('message');
       return fakeHandoff('queued');
     },
+    async rename(name, displayName, nameOrigin) {
+      calls.push(`rename:${name}:${displayName}:${nameOrigin}`);
+      fail('rename');
+    },
     async dismiss(name, keepHistory) { calls.push(`dismiss:${name}:${keepHistory}`); fail('dismiss'); },
   };
   const team = createTeamToolDeps({
@@ -343,10 +359,11 @@ function makeTeamHarness(inheritedContext: SerializedMessage[] = []): TeamHarnes
     createName: () => 'researcher-a1b2c3',
     now: () => 1_700_000_000_000,
     inheritedContext: () => inheritedContext,
+    ownMission: () => HARNESS_OWN_MISSION,
     broadcast: () => { broadcasts.push(Date.now()); },
     broadcastTask: (event) => { tasks.push(event); },
   });
-  return { roster, team, calls, assignments, broadcasts, tasks, failures };
+  return { roster, team, calls, seeds, assignments, broadcasts, tasks, failures };
 }
 
 describe('team action routing', () => {
@@ -368,6 +385,108 @@ describe('team action routing', () => {
     expect(h.assignments).toEqual([]);
     expect(h.tasks).toEqual([]);
     expect(h.broadcasts).toHaveLength(1);
+  });
+
+  // The owner adding a second agent to a workspace has usually decided nothing
+  // about it. Every field is optional, and what fills the gaps is the workspace
+  // itself, never an invented default.
+  test('an owner-created agent with nothing said about it inherits the mission and the general role', async () => {
+    const h = makeTeamHarness();
+
+    const created = await h.team.create({});
+
+    expect(created.subordinate).toEqual({
+      name: 'researcher-a1b2c3',
+      // Blank, and that is the point: nothing the owner said can name it yet.
+      displayName: '',
+      role: 'general',
+      createdBy: 'user',
+      status: 'idle',
+      currentTask: null,
+      createdAt: 1_700_000_000_000,
+      dismissedAt: null,
+    });
+    expect(created.displayName).toBe('');
+    // The mission is the workspace's, read at create time.
+    expect(h.seeds).toEqual([{
+      name: 'researcher-a1b2c3',
+      displayName: '',
+      nameOrigin: 'auto',
+      mission: HARNESS_OWN_MISSION,
+      legacyRole: 'general',
+    }]);
+    // Idle: a mission defines it, and does not become a task.
+    expect(h.assignments).toEqual([]);
+    expect(h.tasks).toEqual([]);
+  });
+
+  test('an owner who names the agent owns that name; a role alone is only a derived one', async () => {
+    const named = makeTeamHarness();
+    await named.team.create({ displayName: 'Jarvis' });
+    expect(named.seeds[0]).toMatchObject({ displayName: 'Jarvis', nameOrigin: 'user' });
+
+    const byRole = makeTeamHarness();
+    await byRole.team.create({ role: 'auditor' });
+    expect(byRole.seeds[0]).toMatchObject({ displayName: 'Auditor', nameOrigin: 'auto' });
+  });
+
+  // The model's rung is unchanged: it states a role and a mission or it gets
+  // nothing. The owner's defaults must not leak into it.
+  test('a model hire still refuses to invent a role or a mission', async () => {
+    const h = makeTeamHarness();
+
+    await expect(h.team.spawn({ role: '', mission: 'Do the thing.', mode: 'build' }))
+      .rejects.toThrow('role must be non-empty');
+    await expect(h.team.spawn({ role: 'auditor', mission: '   ', mode: 'build' }))
+      .rejects.toThrow('mission must be non-empty');
+    expect(h.seeds).toEqual([]);
+    expect(h.roster.list()).toEqual([]);
+  });
+
+  test('a rename writes the child and the roster together, and marks the title the owner\'s', async () => {
+    const h = makeTeamHarness();
+    await h.team.create({});
+
+    const renamed = await h.team.rename({ name: 'researcher-a1b2c3', displayName: '  Release Warden  ' });
+
+    expect(renamed).toMatchObject({ ok: true, displayName: 'Release Warden' });
+    expect(renamed.subordinate.displayName).toBe('Release Warden');
+    expect(h.roster.requireActive('researcher-a1b2c3').displayName).toBe('Release Warden');
+    // `user` is what makes it permanent: planWorkspaceTitle refuses that origin.
+    expect(h.calls).toContain('rename:researcher-a1b2c3:Release Warden:user');
+  });
+
+  test('a rename the child refuses leaves the roster exactly as it was', async () => {
+    const h = makeTeamHarness();
+    await h.team.create({ displayName: 'Before' });
+    h.failures.add('rename');
+
+    await expect(h.team.rename({ name: 'researcher-a1b2c3', displayName: 'After' }))
+      .rejects.toThrow('rename failed');
+    expect(h.roster.requireActive('researcher-a1b2c3').displayName).toBe('Before');
+  });
+
+  test('an empty rename is refused rather than blanking a name somebody chose', async () => {
+    const h = makeTeamHarness();
+    await h.team.create({ displayName: 'Jarvis' });
+
+    await expect(h.team.rename({ name: 'researcher-a1b2c3', displayName: '  ' }))
+      .rejects.toThrow('displayName must be non-empty');
+    expect(h.roster.requireActive('researcher-a1b2c3').displayName).toBe('Jarvis');
+  });
+
+  // The child titles itself, because only the child sees its own owner-driven
+  // turns. It then reports the text, and the roster is the half that has to
+  // learn it — without the parent calling back into a child that is mid-turn.
+  test('a title the child settled on reaches the roster without touching the child again', async () => {
+    const h = makeTeamHarness();
+    await h.team.create({});
+
+    await h.team.recordTitle({ name: 'researcher-a1b2c3', displayName: 'Callback Audit' });
+
+    expect(h.roster.requireActive('researcher-a1b2c3').displayName).toBe('Callback Audit');
+    expect(h.calls).toEqual(['spawn:researcher-a1b2c3:Keep the release train moving.']);
+    expect(h.broadcasts).toHaveLength(2);
   });
 
   test('only the owner can dismiss an owner-created subordinate', async () => {
@@ -532,6 +651,7 @@ describe('team action routing', () => {
         observed.push({ operation: 'message', roster: roster.get(name) });
         return fakeHandoff('starts_now');
       },
+      async rename(name) { observed.push({ operation: 'rename', roster: roster.get(name) }); },
       async dismiss(name) { observed.push({ operation: 'dismiss', roster: roster.get(name) }); },
     };
     const team = createTeamToolDeps({
@@ -541,6 +661,7 @@ describe('team action routing', () => {
       createName: () => 'researcher-a1b2c3',
       now: () => 123,
       inheritedContext: () => [],
+      ownMission: () => HARNESS_OWN_MISSION,
       broadcast: () => {},
       broadcastTask: () => {},
     });

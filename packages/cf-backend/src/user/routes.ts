@@ -48,6 +48,7 @@ import { handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged } from
 import { err, json, safeJson } from '../lib/http';
 import { retryTransientDO } from '../lib/do-rpc';
 import { OwnerCapabilityUnavailableError, ownerCaller, type UserCaller } from './workspace-capability';
+import { authorizeAdmin } from '../control-plane/admin-caller';
 import * as v from 'valibot';
 
 const OptionalLabelSchema = v.object({ label: v.optional(v.string()) });
@@ -117,7 +118,14 @@ export async function handleUserRequest(
 
   // ── Profile ────────────────────────────────────────────────────────
   if (path === '/profile' && method === 'GET') {
-    return json(await stub.getProfile(await ownerCaller(env)));
+    const profile = await stub.getProfile(await ownerCaller(env));
+    // Whether this session may reach the admin control plane, decided by the
+    // SAME function that guards `/api/control/*` rather than by a second reading
+    // of the allowlist — so the nav entry and the gate cannot disagree, and the
+    // link is absent for everyone the gate would 404. It is not authorization:
+    // the gate answers for itself on every request.
+    const controlPlane = authorizeAdmin(env, identity, { mutating: false }).ok;
+    return json(profile === null ? null : { ...profile, controlPlane });
   }
 
   // ── Profile catalog (account authority over roles + tiers) ──────────

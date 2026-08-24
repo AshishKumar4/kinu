@@ -136,6 +136,7 @@ export function buildProgram(): Command {
       .option('--mode <mode>', 'Workspace mode: cloud or local')
       .option('--alias <name>', 'Create an executable alias command')
       .option('--origin <url>', 'Kinu app origin for first-use sign-in')
+      .option('--join', 'Add an agent to the workspace already here, inheriting its mission — no name or purpose needed')
       .option('--no-alias-shim', 'Do not create an alias shim'),
   ).action(wrapAction(createCommand));
 

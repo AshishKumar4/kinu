@@ -1014,6 +1014,13 @@ function createFacetSpawner(agent: AgentHost, env: Env, actor: ActorRuntimeIdent
       return await spawnBranchFacet(agent, branchId, {
         ownerUserId: actor.ownerUserId(),
         capabilityToken: await actor.capabilityToken(),
+        // Without this a branch has no parent stub, so it cannot reach the
+        // profile that decides its tier — and `mcts` is `invocation`-routed, so
+        // every branch ran the account default at an effort nothing chose while
+        // the turn it belongs to may be on any tier its role selected. It grants
+        // no runtime: containment stays with the branch never calling
+        // `facetRuntime()`, which unit-exploration-containment.test.ts pins.
+        sharedParent: actor.workspaceName,
       });
     } catch (err) {
       diagnostics.failure('mcts.branch_facet_spawn_failed', toKinuError({

@@ -7,7 +7,10 @@ import { createMockFetch } from '@kinu.run/test-utils';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { OwnedModelServices } from '../src/owned-model-services';
-import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@kinu.run/core';
+import {
+  BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest, resolveTurnProfile,
+  type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
+} from '@kinu.run/core';
 import type { LanguageModel } from 'ai';
 import type { CredentialHeaders } from '../src/user/credential-headers';
 import type { UserCaller } from '../src/user/workspace-capability';
@@ -184,5 +187,219 @@ describe('OwnedModelServices', () => {
     expect(services.providerRegistry()).not.toBe(beforeRegistry);
     expect(services.getWebSearchProvider()).toBe(web);
     expect((await web.search('after claim')).source).toBe('tavily');
+  });
+});
+
+/**
+ * The provider snapshot: what it preserves, and when it is allowed to be reused.
+ *
+ * NOTE ON DETERMINISM — no test here mocks a HEALTHY models.dev. `models-dev.ts`
+ * memoizes its catalog in a module-level variable for 5 minutes, so a healthy
+ * fetch anywhere in this file would be served to every later test and the
+ * degraded cases below would silently stop being degraded. A 503 is not cached
+ * (it takes the `models_dev.catalog_fallback` path), so 503-only mocking is
+ * order-independent.
+ *
+ * The two shapes used below are chosen because they differ in EXACTLY the failure
+ * set: an owner-bound registry consults the dynamic catalog source, so a 503
+ * there is a listing that failed; an unowned one has no dynamic source at all,
+ * so the same 503 leaves its listing complete. Same models, one failure apart.
+ */
+function snapshotServices(
+  owner: string | null,
+  credentials: Readonly<Record<string, CredentialHeaders>> = {},
+): OwnedModelServices {
+  return new OwnedModelServices({
+    env: fakeEnv(fakeUserDO(credentials), platformGatewayEnv()),
+    agentName: () => 'snapshot',
+    appTitle: 'Kinu',
+    ownerRequired: false,
+    getOwnerUserId: () => owner,
+    getUserCaller: async () => ({ workspaceToken: 'wt' }),
+  });
+}
+
+/** An owner-bound registry holding a CATALOG-backed credential: enumerating it
+ *  needs models.dev, so a 503 there is a listing that genuinely FAILED. Without
+ *  the credential there is nothing to enumerate and the same 503 is only a
+ *  metadata fallback — which is exactly the clean case beside it. */
+function degradedServices(): OwnedModelServices {
+  return snapshotServices('owner-1', { 'groq.bearer': { Authorization: 'Bearer gsk' } });
+}
+
+function catalogDown() {
+  const mock = createMockFetch([
+    { match: 'models.dev/api.json', respond: { status: 503, body: 'upstream down' } },
+  ]);
+  globalThis.fetch = mock.fetch;
+  return mock;
+}
+
+describe('OwnedModelServices — the provider snapshot', () => {
+  test('a failed provider listing is preserved, never dropped into model absence', async () => {
+    catalogDown();
+
+    const snapshot = await degradedServices().profileProviderSnapshot();
+
+    expect(snapshot.unavailableProviders?.map((p) => p.provider)).toEqual(['catalog']);
+    // The row is carried whole: a reader has the provider, a human label and the
+    // real reason, so "could not ask" is distinguishable from "asked, absent".
+    expect(snapshot.unavailableProviders?.[0]).toEqual({
+      provider: 'catalog',
+      label: 'models.dev catalog',
+      reason: 'models.dev returned HTTP 503',
+    });
+  });
+
+  test('revision moves when only the failure set moves', async () => {
+    catalogDown();
+
+    const degraded = await degradedServices().profileProviderSnapshot();
+    const clean = await snapshotServices(null).profileProviderSnapshot();
+
+    // Identical positive listings...
+    expect(degraded.availableModels).toEqual(clean.availableModels);
+    expect(clean.unavailableProviders).toEqual([]);
+    // ...and still different revisions, which is the producer obligation: nothing
+    // keyed on revision may serve a partial picture as though it were complete.
+    expect(degraded.revision).not.toBe(clean.revision);
+  });
+
+  test('a complete listing is memoized, and only a change expires it', async () => {
+    catalogDown();
+    const services = snapshotServices(null);
+
+    const first = await services.profileProviderSnapshot();
+    expect(await services.profileProviderSnapshot()).toBe(first);
+
+    services.invalidate();
+    const afterChange = await services.profileProviderSnapshot();
+    expect(afterChange).not.toBe(first);
+    // Re-swept, not merely re-wrapped — and the world had not changed, so the
+    // revision is identical. Nothing here expires on a clock.
+    expect(afterChange.revision).toBe(first.revision);
+  });
+
+  test('a degraded listing is never memoized, so recovery lands on the next turn', async () => {
+    catalogDown();
+    const services = degradedServices();
+
+    const first = await services.profileProviderSnapshot();
+    const second = await services.profileProviderSnapshot();
+
+    expect(first.unavailableProviders).toHaveLength(1);
+    // A fresh object each time: caching this would hold the unverified-admission
+    // window open past the fault and freeze `revision` at a degraded value.
+    expect(second).not.toBe(first);
+  });
+
+  test('concurrent callers share one sweep instead of racing their own', async () => {
+    const mock = catalogDown();
+    // Baseline: what ONE sweep costs. Not a fixed number — a single sweep issues
+    // more than one catalog request (enumeration, then metadata fallback), so
+    // the claim being tested is "three callers cost one sweep", not "one fetch".
+    await degradedServices().profileProviderSnapshot();
+    const oneSweep = mock.matching('models.dev/api.json').length;
+    expect(oneSweep).toBeGreaterThan(0);
+    mock.reset();
+
+    const services = degradedServices();
+    const [a, b, c] = await Promise.all([
+      services.profileProviderSnapshot(),
+      services.profileProviderSnapshot(),
+      services.profileProviderSnapshot(),
+    ]);
+
+    expect(b).toBe(a);
+    expect(c).toBe(a);
+    // This is the TTFT half: three streams opening together used to start three
+    // credential sweeps, each one a models.dev and Codex refresh deep.
+    expect(mock.matching('models.dev/api.json')).toHaveLength(oneSweep);
+  });
+
+  test('a sweep that started before a credential change never populates the cache', async () => {
+    catalogDown();
+    const services = snapshotServices(null);
+
+    const inFlight = services.profileProviderSnapshot();
+    services.invalidate();
+    const answered = await inFlight;
+
+    // Its own caller is answered — the listing really happened — but the result
+    // describes the world before the change, so it must not become the answer
+    // for every turn after it.
+    expect(answered.availableModels.length).toBeGreaterThan(0);
+    expect(await services.profileProviderSnapshot()).not.toBe(answered);
+  });
+});
+
+/**
+ * The seam this producer exists to serve: a real snapshot resolved by core.
+ *
+ * The whole point of carrying failures is what the RESOLVER does with them, and
+ * that is one decision made in two places — this file produces the evidence,
+ * `profiles/resolve.ts` acts on it. Asserted end to end rather than on the shape
+ * alone, because a snapshot that carries a perfect failure list into a resolver
+ * that ignores it fixes nothing.
+ */
+describe('a degraded listing versus a confirmed-missing model', () => {
+  /** A tier pinned to a model no listing here can see. Deliberately a catalog
+   *  provider: on a models.dev outage its models vanish AND the only failure row
+   *  says `catalog`, which is the case a prefix match would have missed. */
+  const PINNED = 'groq/llama-3.3-70b-versatile';
+
+  function envelopeWithDeepPin(defaultModel: string): ProfileCatalogEnvelope {
+    const catalog = {
+      ...BUILTIN_PROFILE_CATALOG,
+      tiers: {
+        ...BUILTIN_PROFILE_CATALOG.tiers,
+        default: { model: defaultModel },
+        deep: { model: PINNED },
+      },
+    };
+    return {
+      authority: { kind: 'account', accountId: 'acct-1' },
+      version: 1,
+      digest: profileCatalogDigest(catalog),
+      catalog,
+    };
+  }
+
+  function resolveWith(provider: ProviderCatalogSnapshot) {
+    const defaultModel = provider.availableModels[0];
+    if (!defaultModel) throw new Error('fixture needs at least one available model');
+    return resolveTurnProfile({
+      envelope: envelopeWithDeepPin(defaultModel),
+      provider,
+      roleId: 'general',
+      workMode: 'build',
+      availableTools: [],
+      activeSkills: [],
+    });
+  }
+
+  test('one provider listing 503 does not classify its pinned tier as confirmed missing', async () => {
+    catalogDown();
+    const degraded = await degradedServices().profileProviderSnapshot();
+    expect(degraded.unavailableProviders).toHaveLength(1);
+
+    const profile = resolveWith(degraded);
+
+    // Admitted UNVERIFIED: the listing could not prove the model absent, and the
+    // owner's signed catalog stands. Before this, one vendor being unreachable
+    // refused every turn on the account — including turns whose own tier ran on
+    // a provider that was answering perfectly.
+    expect(profile.tiers.deep.model).toBe(PINNED);
+    expect(profile.providerRevision).toBe(degraded.revision);
+  });
+
+  test('a provider that answers without the model still refuses', async () => {
+    catalogDown();
+    const clean = await snapshotServices(null).profileProviderSnapshot();
+    expect(clean.unavailableProviders).toEqual([]);
+
+    // An empty failure set ASSERTS the listing was complete, so absence is proof
+    // and the refusal is the correct answer rather than a guess.
+    expect(() => resolveWith(clean)).toThrow(/unavailable on provider revision/);
   });
 });

@@ -11,6 +11,11 @@
  *
  * Nothing promotes, merges or falls back between the stores. Logging out or
  * switching accounts flips which store resolution reads; it never copies.
+ *
+ * The account cache is a read-only mirror, so it answers one question the
+ * server cannot answer while the network is down: what this account's catalog
+ * was the last time this machine saw it. A turn reads through it. It is never
+ * a substitute for another account's catalog, and never invented when absent.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -25,12 +30,15 @@ import {
   type ReasoningEffort,
 } from '@kinu.run/core';
 import * as v from 'valibot';
-import { ensureSecretDir, writeSecretFile } from '@kinu.run/cli-backend';
+import {
+  ensureSecretDir, writeSecretFile, type ProfileEnvelopeSource,
+} from '@kinu.run/cli-backend';
 import {
   AGENT_HOME, loadConfigFile, requireStoredAuthConfig, resolveLLMConfig,
   saveConfigFile, sessionExpired,
 } from './config';
 import { getCloudProfile, updateCloudProfile } from './cloud-api';
+import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 
 /** Where authority for this machine's profile reads lives right now. */
 export type ProfileAuthoritySource = { kind: 'local' } | { kind: 'account'; accountId: string };
@@ -160,6 +168,50 @@ function assertCachedEntry(accountId: string, envelope: ProfileCatalogEnvelope):
   assertDigestMatches(envelope);
 }
 
+/** Which store answered an account read: the server, or its cache. */
+type AccountReadSource = 'server' | 'cache';
+
+/** Where one resolution's envelope came from. The local authority is a file
+ *  read with no second store behind it, so it has no cache state. */
+type ProfileReadSource = AccountReadSource | 'local';
+
+interface AccountRead {
+  envelope: ProfileCatalogEnvelope;
+  source: AccountReadSource;
+}
+
+/**
+ * This account's catalog: the server's answer, which also refreshes the
+ * cache, or the cache when the server cannot be reached. Keyed on the account
+ * whose fetch failed and validated on read, so another account's catalog can
+ * never answer for this one. No entry rethrows — a catalog this machine never
+ * saw is not one to guess at.
+ */
+async function readAccountProfile(accountId: string): Promise<AccountRead> {
+  const auth = requireStoredAuthConfig();
+  try {
+    const envelope = await getCloudProfile(auth.origin, auth.token);
+    cacheAccountProfile(accountId, envelope);
+    return { envelope, source: 'server' };
+  } catch (error) {
+    const cached = loadCachedAccountProfile(accountId);
+    if (!cached) throw error;
+    diagnostics.failure(
+      'profile.account_cache_served',
+      toKinuError({ doing: 'reading the account profile catalog', cause: error, otherwise: 'unavailable' }),
+      { account: accountId, cachedVersion: cached.version, cachedDigest: cached.digest },
+    );
+    return { envelope: cached, source: 'cache' };
+  }
+}
+
+/**
+ * The authority envelope from its own store, asking the server when the
+ * account is canonical. This is the read a WRITE goes through: a CAS needs
+ * the version the server currently holds, so it never settles for the cache
+ * except when the fetch failed outright, where the write is going to fail on
+ * the network anyway.
+ */
 export async function loadActiveProfile(): Promise<ProfileCatalogEnvelope> {
   const authority = resolveProfileAuthority();
   if (authority.kind === 'local') {
@@ -172,13 +224,75 @@ export async function loadActiveProfile(): Promise<ProfileCatalogEnvelope> {
       tiers: { default: { model } },
     });
   }
-  const auth = requireStoredAuthConfig();
-  const envelope = await getCloudProfile(auth.origin, auth.token);
-  cacheAccountProfile(authority.accountId, envelope);
-  return envelope;
+  return (await readAccountProfile(authority.accountId)).envelope;
 }
 
-/** Update the account-wide default tier. Missing tiers continue to alias it. */
+/**
+ * The one authority read a turn resolves through, shared by the interactive
+ * clients and the daemon so the same agent resolves the same catalog whichever
+ * process drives it.
+ *
+ * Nothing is memoized. Signed out, `config.json` is re-read every call, so a
+ * `/model` or `/effort` edit lands on the next turn of a live session. Signed
+ * in, the first resolution asks the server and the rest re-read the cache
+ * FILE that fetch wrote, so repeated turn setup costs a file read instead of
+ * a round trip — and because it is the file rather than an object in memory,
+ * an edit this process CASes back, or one another process makes, is seen on
+ * the next turn.
+ *
+ * There is no expiry. A model the account stopped offering must keep failing
+ * resolution, so nothing here may bring one back by waiting. A failed fetch
+ * does not count as the authoritative read either: the next turn tries again
+ * rather than pinning the session to what the cache happened to hold.
+ *
+ * `null` means no authority is configured for this machine yet, the signed-out
+ * state before any import. The session's own workspace config decides then —
+ * this must not seed one from the global default model, because that would
+ * swap the model an agent was created with.
+ */
+export function createProfileAuthorityReader(): ProfileEnvelopeSource {
+  const askedServer = new Set<string>();
+  return async () => {
+    const startedAt = Date.now();
+    const authority = resolveProfileAuthority();
+    if (authority.kind === 'local') {
+      const local = loadLocalProfileAuthority();
+      if (local) reportResolution('local', startedAt);
+      return local;
+    }
+    const { accountId } = authority;
+    if (askedServer.has(accountId)) {
+      const cached = loadCachedAccountProfile(accountId);
+      if (cached) {
+        reportResolution('cache', startedAt);
+        return cached;
+      }
+    }
+    const read = await readAccountProfile(accountId);
+    if (read.source === 'server') askedServer.add(accountId);
+    reportResolution(read.source, startedAt);
+    return read.envelope;
+  };
+}
+
+/**
+ * What the authority half of turn setup cost, and what answered it. The
+ * session's own `profile.inputs_resolved` reports the catalog version, the
+ * authority kind and the provider snapshot's cache state around this call, so
+ * this line carries only what it cannot see: whether the envelope came off the
+ * network or off the disk. That is the difference between a turn that paid an
+ * HTTP round trip before its first token and one that read a file.
+ */
+function reportResolution(source: ProfileReadSource, startedAt: number): void {
+  diagnostics.event('profile.authority_read', { source, durationMs: Date.now() - startedAt });
+}
+
+/**
+ * Update the default tier of whichever store is canonical: the account's
+ * catalog through a CAS, or the local authority in place. Missing tiers
+ * continue to alias it. A first `model` with no local authority yet creates
+ * one, which is how a signed-out machine gets its catalog.
+ */
 export async function updateDefaultTier(
   patch: { model?: string; reasoningEffort?: ReasoningEffort },
 ): Promise<ProfileCatalogEnvelope> {

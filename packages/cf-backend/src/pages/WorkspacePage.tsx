@@ -21,6 +21,7 @@ import type {
 import { useKinu } from "@/hooks/use-kinu";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { useChatHistory } from "@/hooks/use-chat-history";
+import { useConversationUiState } from "@/hooks/use-conversation-ui-state";
 import { useSteerActions } from "@/hooks/use-steer-actions";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { touchWorkspace } from "@/lib/user-api";
@@ -37,8 +38,8 @@ import { WorkSurface, type SurfaceKind } from "@/components/surfaces/WorkSurface
 import { HistoryBoundary } from "@/components/surfaces/shared";
 import { KinuMark } from "@/components/ui/KinuLogo";
 import { SupervisePage } from "./SupervisePage";
-import { SubordinateTabs, SpawnSubordinateDialog } from "@/components/SubordinateTabs";
-import { WorkspaceBar, type Altitude } from "@/components/WorkspaceBar";
+import { SubordinateTabs, agentTitle } from "@/components/SubordinateTabs";
+import { WorkspaceBar, InlineRenameTitle, type Altitude } from "@/components/WorkspaceBar";
 import { Composer } from "@/components/Composer";
 import { dataUrlRawBytes } from "@/components/AttachmentChip";
 import type { PendingConsent, SubordinateActivityEvent } from "@/lib/protocol";
@@ -297,11 +298,23 @@ function ForkModal({
 
 /* ── Subordinate chat (Column A body when a subordinate tab is active) ── */
 
-/** Drives one subordinate's conversation over its own facet socket. The Work
- *  Surface and Timeline stay workspace-scoped on the parent socket (§A5) — only
- *  the chat switches here. A focused surface: messages, model pick, send/stop
- *  (no fork/feedback/takes/restore — the facet exposes none of those). */
-function SubordinateChatColumn({ workspace, subName }: { workspace: string; subName: string }) {
+/** Drives one additional agent's conversation over its own facet socket. The
+ *  Work Surface and Timeline stay workspace-scoped on the parent socket (§A5) —
+ *  only the chat switches here. An ordinary conversation: messages, model pick,
+ *  Auto/Plan, rename, send/steer/stop (no fork/feedback/takes/restore — the
+ *  facet exposes none of those). Draft, mode and reading position are this
+ *  conversation's own, carried by useConversationUiState across tab switches.
+ *
+ *  `title` is the parent roster's name for this agent — the roster is the
+ *  source of truth the tabs and sidebar read, so the header reads it too and
+ *  the first-message auto-title lands everywhere in one broadcast. `onRename`
+ *  goes through the parent for the same reason. */
+function SubordinateChatColumn({ workspace, subName, title, onRename }: {
+  workspace: string;
+  subName: string;
+  title: string;
+  onRename: (displayName: string) => Promise<string>;
+}) {
   const state = useKinu({ workspace, subordinate: subName });
 
   // The picker is fire-and-forget: setModel records the failure on state.error
@@ -309,7 +322,14 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
   // to add to what the banner already shows.
   const setModel = state.setModel;
   const onPickModel = useCallback((spec: string) => { void setModel(spec); }, [setModel]);
-  const [input, setInput] = useState("");
+  const ui = useConversationUiState(`${workspace}/agents/${subName}`);
+  const input = ui.draft;
+  const setInput = ui.setDraft;
+  // The same Plan gate as the workspace column: an additional agent runs the
+  // same turn pipeline, so a plan it submitted locks its composer to Plan
+  // until the owner decides.
+  const planAwaitingDecision = planReviewAwaitingDecision(state.activePlan);
+  const effectiveMode = planAwaitingDecision ? "plan" : ui.mode;
   // The same older-history walk the workspace column runs, over this facet's
   // own storage. A subordinate keeps its own conversation, and a helper that
   // worked for an hour has more of one than the SDK's hydration window holds.
@@ -320,6 +340,8 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
     fetched: history.fetched,
     loading: history.loading,
     onReachEdge: history.loadMore,
+    initialScroll: ui.savedScroll,
+    onScrollPosition: ui.rememberScroll,
   });
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -333,17 +355,17 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
   const send = useCallback(() => {
     const t = input.trim();
     if (!t || state.isStreaming) return;
-    state.sendChat(t);
+    state.sendChat(t, [], effectiveMode);
     setInput("");
-  }, [input, state]);
+  }, [input, state, effectiveMode, setInput]);
 
   const messageIds = useMemo(() => transcript.map((msg) => msg.id), [transcript]);
   const { notice: steerNotice, steer, stop, liveSteers } = useSteerActions({
     steerChat: state.steerChat,
     abortChat: state.abortChat,
-    sendChat: (text) => state.sendChat(text),
+    sendChat: (text) => state.sendChat(text, [], effectiveMode),
     draft: input,
-    setDraft: setInput,
+    setDraft: ui.updateDraft,
     steerRuns: state.steerRuns,
     messageIds,
   });
@@ -368,7 +390,7 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
           <ConnectionIndicator status={state.connectionStatus} />
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <span className="font-medium text-sm p-text truncate">{as?.displayName || subName}</span>
+              <InlineRenameTitle title={title} onRename={onRename} subject="agent" textClass="text-sm font-medium" />
               {state.isStreaming && (
                   <span className="shrink-0 inline-flex items-center gap-1.5 px-1.5 @[34rem]:px-2 py-0.5 rounded-full p-accent-subtle" title="The agent is working">
                     <span className="size-1.5 rounded-full p-dot-accent animate-pulse" />
@@ -376,7 +398,6 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
                   </span>
                 )}
             </div>
-            {as?.purpose && <span className="block text-[11px] p-text-3 truncate">{as.purpose}</span>}
           </div>
         </div>
       </div>
@@ -398,8 +419,7 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
           {thread.entries.length === 0 && !state.isStreaming && !history.loading && (
             <div className="flex h-full flex-col items-center justify-center text-center">
               <KinuMark size={30} className="mb-3 text-[var(--c-accent)] opacity-60" />
-              <p className="text-sm p-text-3">This subordinate's conversation starts here.</p>
-              {as?.soul && <p className="mt-2 max-w-sm whitespace-pre-wrap text-xs p-text-3">{as.soul}</p>}
+              <p className="text-sm p-text-3">This agent's conversation starts here.</p>
             </div>
           )}
           {thread.entries.map(({ message: msg, steers }, i) => (
@@ -431,12 +451,13 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
           onValueChange={setInput}
           onSend={send}
           placeholder={state.isStreaming
-            ? `Steer ${as?.displayName || subName}…`
-            : `Message ${as?.displayName || subName}…`}
+            ? `Steer ${title}…`
+            : `Message ${title}…`}
           disabled={state.connectionStatus !== "connected"}
           streaming={state.isStreaming}
           onSteer={steer}
           onStop={stop}
+          mode={{ value: effectiveMode, onChange: ui.setMode, locked: planAwaitingDecision }}
           modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs" />}
           notices={[
             ...(state.error
@@ -510,21 +531,18 @@ export default function WorkspacePage() {
   }, []);
   // Output still takes over the moment there is something running to look at.
   const [surface, setSurface] = useState<SurfaceKind>("Work");
-  const [chatMode, setChatMode] = useState<"plan" | "build">("build");
+  // Draft, Auto/Plan and reading position belong to THIS conversation — the
+  // orchestrator's — and survive tab switches and revisits without leaking
+  // into any additional agent's composer.
+  const ui = useConversationUiState(`${agentId ?? ""}/main`);
+  const chatMode = ui.mode;
+  const setChatMode = ui.setMode;
   const planAwaitingDecision = planReviewAwaitingDecision(state.activePlan);
   const effectiveChatMode = planAwaitingDecision ? "plan" : chatMode;
-  const [chatInput, setChatInput] = useState("");
+  const chatInput = ui.draft;
+  const setChatInput = ui.setDraft;
   const [forkFor, setForkFor] = useState<string | null>(null); // message id to fork at, or null
   const [showClearConfirm, setShowClearConfirm] = useState(false);
-  // The sidebar's "+ New agent" opens the SAME spawn dialog the chat tab strip
-  // owns — one flow, one form, two doors into it. Only meaningful while the
-  // workspace socket is live, which is exactly when the sidebar shows the row.
-  const [hireOpen, setHireOpen] = useState(false);
-  useEffect(() => {
-    const h = () => { if (state.connectionStatus === "connected") setHireOpen(true); };
-    window.addEventListener("kinu:hire-subordinate", h);
-    return () => window.removeEventListener("kinu:hire-subordinate", h);
-  }, [state.connectionStatus]);
   // ── Older history ────────────────────────────────────────────────────────
   // `state.messages` is the LIVE list: the SDK's `get-messages` seed (which is
   // `Think.messages`, a bounded newest window governed by hydrationByteBudget)
@@ -552,6 +570,8 @@ export default function WorkspacePage() {
     fetched: history.fetched,
     loading: history.loading,
     onReachEdge: history.loadMore,
+    initialScroll: ui.savedScroll,
+    onScrollPosition: ui.rememberScroll,
   });
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   // Pending chat attachments — fed by the attach button, paste, and drag-drop
@@ -626,7 +646,7 @@ export default function WorkspacePage() {
         running,
         unseenChangelog: state.changelogUnseen,
         agents: state.subordinates.map((sub) => ({
-          name: sub.name, displayName: sub.displayName, role: sub.role, status: sub.status,
+          name: sub.name, displayName: sub.displayName, status: sub.status,
         })),
       },
     }));
@@ -682,7 +702,7 @@ export default function WorkspacePage() {
     // identity check leaves anything typed while the RPC was in flight alone.
     state.rpc<{ accepted: boolean; reason?: string }>("branchTurn", [t])
       .then((r) => {
-        if (r.accepted) setChatInput((current) => current.trim() === t ? "" : current);
+        if (r.accepted) ui.updateDraft((current) => current.trim() === t ? "" : current);
         else setBranchNotice(r.reason ?? "Branching is unavailable right now.");
       })
       .catch((err) => setBranchNotice(renderThrownChain({ cause: err })));
@@ -698,7 +718,7 @@ export default function WorkspacePage() {
     abortChat: state.abortChat,
     sendChat: (text) => state.sendChat(text, [], effectiveChatMode),
     draft: chatInput,
-    setDraft: setChatInput,
+    setDraft: ui.updateDraft,
     hasAttachments: pendingAttachments.length > 0,
     steerRuns: state.steerRuns,
     messageIds,
@@ -923,7 +943,7 @@ export default function WorkspacePage() {
               workspace={agentId}
               subordinates={state.subordinates}
               activeName={subName}
-              onSpawn={state.spawnSubordinate}
+              onCreate={state.createSubordinate}
               onDismiss={(name) => state.dismissSubordinate(name).then(() => {})}
               trailing={!subName && state.messages.length > 0 && (
                 <Button variant="ghost" {...SQUARE_BUTTON_PROPS} size="sm"
@@ -931,9 +951,21 @@ export default function WorkspacePage() {
                   icon={<TrashIcon size={12} />} aria-label="Clear history" />
               )}
             />
-            {subName ? (
-              <SubordinateChatColumn key={subName} workspace={agentId} subName={subName} />
-            ) : (
+            {subName ? (() => {
+              // The parent roster is the one source the tabs and sidebar read,
+              // so the header reads it too; a deep link that lands before the
+              // roster row arrives shows the address until it does.
+              const rosterEntry = state.subordinates.find((entry) => entry.name === subName);
+              return (
+                <SubordinateChatColumn
+                  key={subName}
+                  workspace={agentId}
+                  subName={subName}
+                  title={rosterEntry ? agentTitle(rosterEntry.displayName) : subName}
+                  onRename={(displayName) => state.renameSubordinate(subName, displayName).then((entry) => entry.displayName)}
+                />
+              );
+            })() : (
             <div className="@container relative flex flex-col flex-1 min-h-0"
               onDragOver={onChatDragOver} onDragLeave={onChatDragLeave} onDrop={onChatDrop}>
             {dragOver && (
@@ -1145,12 +1177,6 @@ export default function WorkspacePage() {
           onCancel={() => setRestorePlan(null)} onConfirm={applyRestore} />
       )}
 
-      {hireOpen && (
-        <SpawnSubordinateDialog
-          onClose={() => setHireOpen(false)}
-          onSpawn={state.spawnSubordinate}
-        />
-      )}
       {showClearConfirm && (
         <Modal
           title="Clear conversation history"

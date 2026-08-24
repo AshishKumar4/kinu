@@ -55,8 +55,12 @@ export default defineConfig({
   plugins: [stubClientNodeBuiltins, agents(), react(), cloudflare(), tailwindcss()],
   // The fabric outbox is the one pre-bundled dep that imports a stubbed
   // builtin; excluded, it serves as source and the resolveId hook reaches it.
+  // @plannotator/web-highlighter is the inverse: UMD-only (its `module` field
+  // names the same min.js), so served as source it has no `default` export
+  // and the plan surface dies in dev. Prebundled, interop applies.
   optimizeDeps: {
     exclude: ["@nimbus-sh/fabric/outbox.js"],
+    include: ["@plannotator/web-highlighter"],
   },
   resolve: {
     alias: {

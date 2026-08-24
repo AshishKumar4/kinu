@@ -1,5 +1,7 @@
 import { resolveAgentTarget } from '../agent-target';
 import { agentTargetExists, requireAgentTarget } from '../local-target';
+import { CloudAgentClient } from '../cloud-agent-client';
+import { createLocalPeerAgent } from '../agent-create';
 import { createAgentClient } from '../client-factory';
 import { runChatLoop } from '../chat-loop';
 import { ensureLocalDaemonRunning } from './daemon';
@@ -89,6 +91,19 @@ export async function chatCommand(
         if (selectedTarget.mode === 'local') ensureLocalDaemonRunning();
         const selectedOptions = optionsForWorkspaceSwitch(opts, selectedTarget.mode);
         return createAgentClient(selectedTarget, selectedOptions);
+      },
+      onNewAgent: async (current) => {
+        if (current.mode === 'cloud') {
+          // The class IS the capability: only the cloud client can create an
+          // additional agent on the workspace it is connected to.
+          if (!(current instanceof CloudAgentClient)) {
+            throw new Error('This cloud session cannot create additional agents.');
+          }
+          const created = await current.createAdditionalAgent();
+          return { ...created, kind: 'cloud-additional' as const };
+        }
+        const created = await createLocalPeerAgent();
+        return { name: created.name, displayName: created.displayName ?? '', kind: 'local-peer' as const };
       },
     });
   }

@@ -6,7 +6,7 @@
 // between the three consumers.
 import type { AuthResolution, AuthResolver } from '@kinu.run/core';
 import { asFetchFunction, withRateLimitRetry } from '@kinu.run/core';
-import { tolerate } from '@kinu.run/core/obs';
+import { diagnostics, tolerate, toKinuError } from '@kinu.run/core/obs';
 import { repairSseCachedUsage } from './stream-usage-repair';
 import * as v from 'valibot';
 
@@ -79,6 +79,20 @@ export function createCloudflareAIFetch(opts: CloudflareAIFetchOptions): typeof 
         resolved = refreshed;
         res = await send(resolved);
       }
+    }
+    if (!res.ok) {
+      // The upstream refusal, counted before it is mapped into a message. What a
+      // consumer's `mapError` returns is prose for a person, and the prose is
+      // where the cause is currently the ONLY record: a dead Cloudflare login
+      // reached six production runs as the plain text `Unauthorized` and left no
+      // fleet signal at all, which is why status and credential-key NAME are a
+      // row here. Never the credential, never the body — a gateway's error body
+      // can carry an upstream key.
+      diagnostics.failure('provider.error', toKinuError({
+        doing: `a request to the account's AI endpoint (HTTP ${res.status})`,
+        cause: new Error(`upstream answered ${res.status}`),
+        otherwise: res.status === 401 || res.status === 403 ? 'denied' : 'unavailable',
+      }), { provider: opts.credKey, source: String(res.status) });
     }
     if (!res.ok && opts.mapError) return opts.mapError(res, resolved);
     // A 401 that survived the forced refresh is a dead Cloudflare login, and it
