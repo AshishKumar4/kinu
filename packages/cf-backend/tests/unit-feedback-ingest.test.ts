@@ -431,15 +431,28 @@ describe('how much of a body it will read', () => {
   });
 
   test('a body that is not the multipart it declared is a 400, never a throw', async () => {
+    const recording = createRecordingLogger();
+    setDiagnosticsSink(recording);
     const rec = recorder();
+    const body = new TextEncoder().encode('plain bytes, no parts, no final boundary');
     const response = await routeFeedback(new Request(URL_, {
       method: 'POST',
       headers: { 'content-type': 'multipart/form-data; boundary=nothing-like-this' },
-      body: new TextEncoder().encode('plain bytes, no parts, no final boundary'),
+      body,
     }), ME, rec.deps);
     expect(response?.status).toBe(400);
     expect(rec.marks).toHaveLength(1);
     expect(rec.marks[0]?.rejectReason).toBe('malformed');
+
+    // The parse failure is RECORDED, and recorded as the caller's. Returned as
+    // `null` it read exactly like an absent form, and it was filed under
+    // `unavailable` — a class that says the platform broke, which would put a
+    // malformed upload into every query for our own outages.
+    const line = recording.emitted.find((emitted) => emitted.event === 'feedback.body_unparseable');
+    expect(line).toBeDefined();
+    expect(line?.code).toBe('bad_input');
+    expect(line?.cause).toContain('parsing a feedback submission as multipart/form-data');
+    expect(line?.fields).toMatchObject({ bytes: body.byteLength });
   });
 });
 

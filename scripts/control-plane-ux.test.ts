@@ -26,7 +26,7 @@ import { describe, expect, test } from 'bun:test';
 import type { HTTPRequest, Page } from 'puppeteer';
 import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
 import * as v from 'valibot';
-import { withGallery } from './gallery-harness';
+import { diagnosticsSettled, recordDiagnostics, withGallery } from './gallery-harness';
 
 /** One canned answer for an intercepted read. `JsonValue` because a fixture IS
  *  the bytes the route would have serialized. */
@@ -366,6 +366,65 @@ describe('the control plane in a browser', () => {
       // And it says the rest of the plane still works, so nobody goes looking
       // for an outage that does not exist.
       expect(text).toContain('Every other view here is unaffected');
+      await browserPage.close();
+    });
+  }, 120_000);
+
+  test('a read the transport refuses settles to a visible failure, recorded once per attempt, and Refresh retries', async () => {
+    // `control()` names HTTP-level failures in its answer; this is the arm
+    // UNDER that — `fetch` itself rejecting. The defect ruled out: an
+    // unhandled rejection and a spinner that never resolves.
+    await withGallery(async ({ browser, origin }) => {
+      const browserPage = await browser.newPage();
+      const diagnostics = recordDiagnostics(browserPage);
+      let serveOk = false;
+      let refused = 0;
+      await browserPage.setRequestInterception(true);
+      browserPage.on('request', (request: HTTPRequest) => {
+        if (!new URL(request.url()).pathname.startsWith('/api/control/')) {
+          void request.continue();
+          return;
+        }
+        if (!serveOk) {
+          refused += 1;
+          void request.abort('connectionrefused');
+          return;
+        }
+        void request.respond({
+          status: 200, contentType: 'application/json', body: JSON.stringify(OVERVIEW),
+        });
+      });
+      await openControl(browserPage, origin);
+
+      // The failure is a sentence in the panel, not an eternal spinner.
+      await browserPage.waitForFunction(
+        () => document.body.innerText.includes('Failed to fetch'),
+        { timeout: 10_000 },
+      );
+
+      // One classified record per refused attempt — StrictMode re-runs the
+      // mount read, so the attempt count is the runtime's business; the
+      // equality is what holds. Each record carries the class and the WHOLE
+      // chain, the `doing` frame first.
+      await diagnosticsSettled(diagnostics, refused);
+      expect(refused).toBeGreaterThanOrEqual(1);
+      expect(diagnostics).toHaveLength(refused);
+      for (const line of diagnostics) {
+        expect(line.event).toBe('control.read_failed');
+        expect(line.code).toBe('io');
+        expect(line.cause).toBe('run a control-plane read: Failed to fetch');
+      }
+
+      // Refresh is the retry: the read that failed re-runs and lands.
+      serveOk = true;
+      const recordedBeforeRetry = diagnostics.length;
+      await browserPage.click('button[title="Refresh"]');
+      await browserPage.waitForFunction(
+        () => document.body.innerText.toLowerCase().includes('workspaces\n7'),
+        { timeout: 10_000 },
+      );
+      // The retry that succeeded records nothing.
+      expect(diagnostics).toHaveLength(recordedBeforeRetry);
       await browserPage.close();
     });
   }, 120_000);

@@ -129,6 +129,8 @@ export async function mountChat(
     hubData?: TuiHubData;
     onNewAgent?: ChatAppOpts['onNewAgent'];
     width?: number;
+    /** What "mounted" means for this test; defaults to the ready composer. */
+    settled?: (frame: string) => boolean;
   } = {},
 ) {
   const testRenderer = await createTestRenderer({
@@ -169,7 +171,8 @@ export async function mountChat(
     }
     throw new Error(`timed out waiting for ${what}`);
   };
-  await waitFor('the composer to accept input', () => frame().includes('Send a message'));
+  const settled = options.settled ?? ((view: string) => view.includes('Send a message'));
+  await waitFor('the chat surface to settle', () => settled(frame()));
   mounted.push(async () => {
     root.render(<box />);
     await testRenderer.renderOnce();

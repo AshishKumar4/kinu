@@ -28,7 +28,7 @@
  */
 
 import type { AuthIdentity } from '../auth/session';
-import { diagnostics, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 import { err, json } from '../lib/http';
 import { sanitizePng, type PngFault } from './png';
 import {
@@ -203,7 +203,8 @@ async function readBounded(
 }
 
 /**
- * The bounded bytes as the multipart form they claim to be, or null.
+ * The bounded bytes as the multipart form they claim to be, or the classified
+ * failure that says they are not.
  *
  * A NEW request rather than the original: the original's body is spent by the
  * bounded read, and the parser needs nothing else from it but the content type
@@ -212,15 +213,24 @@ async function readBounded(
  * only thing that changed is which object holds the bytes.
  *
  * `formData()` rejects with a `TypeError` on a body that is not the multipart it
- * declared, and a `TypeError` is none of the classified tolerable failures — so
- * it is caught and recorded here. Left to propagate it was a platform 500 for a
- * request this endpoint has a 400 for.
+ * declared. Left to propagate that was a platform 500 for a request this
+ * endpoint has a 400 for. Returned as `null` it was the opposite defect: `null`
+ * is what an ABSENT form reads as too, so the policy could not tell a body it
+ * should refuse from one it never got, and it recorded the fault under a class
+ * (`unavailable`) that blamed the platform for a caller's bytes.
+ *
+ * So the failure travels, classified, and the policy records it and refuses from
+ * it. `bad_input` is the class for an unrecognised failure at a decoder: these
+ * bytes are not the shape they were declared to be. A fault the platform names
+ * for itself — an abort, a memory wall — keeps that class through
+ * `classifyErrorCode`, so the diagnostic separates our failures from theirs even
+ * though the answer is the one 400 this endpoint has for an unusable body.
  */
 async function parseMultipart(
   url: string,
   contentType: string,
   bytes: Uint8Array<ArrayBuffer>,
-): Promise<FormData | null> {
+): Promise<FormData | KinuError> {
   const carrier = new Request(url, {
     method: 'POST',
     headers: { 'content-type': contentType },
@@ -229,12 +239,11 @@ async function parseMultipart(
   try {
     return await carrier.formData();
   } catch (cause) {
-    diagnostics.failure('feedback.body_unparseable', toKinuError({
+    return toKinuError({
       doing: 'parsing a feedback submission as multipart/form-data',
       cause,
-      otherwise: 'unavailable',
-    }), { bytes: bytes.byteLength });
-    return null;
+      otherwise: 'bad_input',
+    });
   }
 }
 
@@ -279,7 +288,11 @@ async function handleFeedbackSubmission(
   }
 
   const form = await parseMultipart(request.url, contentType, bounded);
-  if (form === null) {
+  if (form instanceof KinuError) {
+    // Recorded HERE rather than inside the decoder, because the byte count that
+    // makes the line worth reading belongs to this frame and a decoder that
+    // logged would be deciding what its caller's failure means.
+    diagnostics.failure('feedback.body_unparseable', form, { bytes: bounded.byteLength });
     return refuse(deps, 400, UNREADABLE_FORM, 'malformed', blank);
   }
 

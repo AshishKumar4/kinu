@@ -2151,8 +2151,12 @@ export class UserDO extends Agent<Env> {
     let parsed: ProfileCatalog;
     try {
       parsed = validateProfileCatalog(catalog);
-    } catch (e) {
-      return { ok: false, kind: 'malformed', reason: e instanceof Error ? e.message : String(e) };
+    } catch (cause) {
+      // The whole chain, not the outermost frame. This reason is the only thing
+      // an owner is shown about a catalog the account refused, and the frame
+      // that names the offending path can be one `cause` below the wrapper —
+      // which is exactly the loss `renderThrownChain` exists to stop.
+      return { ok: false, kind: 'malformed', reason: renderThrownChain({ cause }) };
     }
     // No await from here to the write: DO input gates make the CAS atomic.
     const current = this.readProfileCatalogState();

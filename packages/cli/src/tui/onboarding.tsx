@@ -2,6 +2,8 @@ import type { TextareaRenderable } from '@opentui/core';
 import { useKeyboard } from '@opentui/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { renderThrownChain } from '@kinu.run/core/obs';
+
 import {
   KEYMAP_PRESET_IDS,
   createKeyDispatcher,
@@ -116,7 +118,7 @@ export function GuidedOnboarding(props: {
   }, [props.onReady, props.operations]);
 
   useEffect(() => {
-    void refresh().catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+    void refresh().catch((cause) => setError(renderThrownChain({ cause })));
   }, [refresh]);
 
   useEffect(() => {
@@ -131,7 +133,7 @@ export function GuidedOnboarding(props: {
       await operation();
       await refresh();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(renderThrownChain({ cause }));
     } finally {
       setBusy(false);
     }
@@ -227,7 +229,13 @@ export function GuidedOnboarding(props: {
   });
 
   if (readiness === null || derived === null) {
-    return <box style={{ paddingLeft: 2, paddingTop: 1 }}><text><span fg={colors.text.muted}>Checking readiness…</span></text></box>;
+    return (
+      <box flexDirection="column" style={{ paddingLeft: 2, paddingTop: 1 }}>
+        {error === null
+          ? <text><span fg={colors.text.muted}>Checking readiness…</span></text>
+          : <text><span fg={colors.intent.danger}>{error}</span></text>}
+      </box>
+    );
   }
 
   if (activeStep === null) return null;

@@ -19,7 +19,7 @@
  * weighted; this file's job is to not undo that, which it does by never
  * post-processing a number.
  */
-import { diagnostics, toKinuError, renderThrownChain } from '@kinu.run/core/obs';
+import { diagnostics, renderThrownChain, toKinuError, type KinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 /** Documented endpoint shape. The account id is a var and the token a secret. */
@@ -68,9 +68,17 @@ const SqlResponseSchema = v.object({
 
 /** An API error answer, so a 4xx reports Cloudflare's own message instead of a
  *  bare status. A wrong dataset name or an under-scoped token both land here,
- *  and both are worth reading verbatim. */
+ *  and both are worth reading verbatim.
+ *
+ *  `errors` is REQUIRED, and that is what makes this schema a test of whether a
+ *  body IS this envelope. Optional, it matched every JSON value with a property
+ *  bag — including an array, since valibot's `object` reads one as an object with
+ *  no `errors` — so `[1,2,3]` from a misrouted endpoint parsed as an envelope
+ *  with nothing to say and rendered as a bare status code. The array's PRESENCE
+ *  is the documented shape; an empty one is a refusal with no message, which is a
+ *  different fact and now reads as one. */
 const SqlErrorSchema = v.object({
-  errors: v.optional(v.array(v.object({ message: v.optional(v.string()) }))),
+  errors: v.array(v.object({ message: v.optional(v.string()) })),
 });
 type SqlErrorEnvelope = v.InferOutput<typeof SqlErrorSchema>;
 
@@ -160,40 +168,64 @@ async function runAnalyticsSql(env: AnalyticsSqlEnv, sql: string): Promise<Analy
 }
 
 /**
- * Cloudflare's own message when it has one, so a mis-scoped token or an unknown
- * dataset says which rather than reporting a status code.
+ * What an error response's body turned out to be.
  *
- * The body is parsed with a schema that ALREADY tolerates a non-envelope: an
- * error response from an edge that never reached the API is HTML, and valibot
- * refusing it is the same answer as the envelope carrying no message. So there
- * is no catch here to turn a parse failure into a sentinel — the failure and the
- * absence are genuinely the same fact, and the status still reaches the caller.
+ * Two arms rather than one tolerant envelope. The absent-message envelope and a
+ * body that is not an envelope AT ALL used to reduce to the same `{}`, so a
+ * response from an edge the API never saw — HTML, or a proxy's own error page —
+ * rendered as a bare status code indistinguishable from a clean API refusal
+ * carrying no message. They are different faults with different fixes: one is a
+ * query or a token, the other is the route to Cloudflare.
  */
-function apiErrorReason(status: number, body: string): string {
-  const message = v.parse(SqlErrorSchema, jsonOrAbsent(body)).errors?.[0]?.message;
-  return message !== undefined && message.length > 0
-    ? `analytics API ${String(status)}: ${message}`
-    : `analytics API ${String(status)}`;
+type ErrorBody =
+  | { readonly status: 'envelope'; readonly envelope: SqlErrorEnvelope }
+  | { readonly status: 'unreadable'; readonly failure: KinuError; readonly bytes: number };
+
+/**
+ * Decode a body that may not be JSON, or may be JSON that is not the envelope.
+ *
+ * `bad_input` is the class for an unrecognised failure here because that is what
+ * one MEANS at a decoder: these bytes are not the shape they were declared to
+ * be. The caller reports it and names it in the reason it renders.
+ */
+function errorBodyOf(text: string): ErrorBody {
+  try {
+    return { status: 'envelope', envelope: v.parse(SqlErrorSchema, JSON.parse(text)) };
+  } catch (cause) {
+    return {
+      status: 'unreadable',
+      failure: toKinuError({
+        doing: 'decoding an analytics API error body',
+        cause,
+        otherwise: 'bad_input',
+      }),
+      bytes: text.length,
+    };
+  }
 }
 
 /**
- * Decode a body that may not be JSON at all.
+ * Cloudflare's own message when it has one, so a mis-scoped token or an unknown
+ * dataset says which rather than reporting a status code.
  *
- * Returns the ABSENT envelope rather than a sentinel of a different type: the
- * caller's next step is a schema parse either way, so `{}` and unparseable text
- * lead to the same place, and the error is recorded before it is discarded so a
- * consistently unparseable endpoint is visible rather than silently rendered as
- * a bare status code.
+ * An unreadable body is reported with its chain and SAID SO in the reason, which
+ * is the difference between an operator reading "analytics API 502" and looking
+ * for a bad query, and reading that something else came back and looking at what
+ * sits in front of the API.
  */
-function jsonOrAbsent(text: string): SqlErrorEnvelope {
-  try {
-    return v.parse(SqlErrorSchema, JSON.parse(text));
-  } catch (cause) {
-    diagnostics.event('control_plane.analytics_error_body_unreadable', {
-      reason: renderThrownChain({ cause }), bytes: text.length,
+function apiErrorReason(status: number, body: string): string {
+  const decoded = errorBodyOf(body);
+  if (decoded.status === 'unreadable') {
+    diagnostics.failure('control_plane.analytics_error_body_unreadable', decoded.failure, {
+      status, bytes: decoded.bytes,
     });
-    return {};
+    return `analytics API ${String(status)}: the body was not the documented error envelope `
+      + `(${String(decoded.bytes)} bytes)`;
   }
+  const message = decoded.envelope.errors[0]?.message;
+  return message !== undefined && message.length > 0
+    ? `analytics API ${String(status)}: ${message}`
+    : `analytics API ${String(status)}`;
 }
 
 /**
@@ -216,20 +248,34 @@ export async function runAnalyticsBatch(
   const cached = batches.get(key);
   if (cached && now - cached.at < BATCH_TTL_MS) return cached.result;
 
-  const result = (async () => {
-    const answers = await Promise.all(
-      named.map(async ([name, sql]) => [name, await runAnalyticsSql(env, sql)] as const),
-    );
-    return Object.fromEntries(answers);
+  // Eviction lives INSIDE the fill rather than on a `.catch` beside it. A
+  // handler bolted on outside had to end in either a swallow — the caller then
+  // awaiting a promise that resolved to nothing while its own copy rejected —
+  // or a rethrow onto a derived promise nobody holds, which is an unhandled
+  // rejection with no request attached. In here the rejection is evicted,
+  // recorded with its class, and then continues to the one caller awaiting it.
+  const result = (async (): Promise<AnalyticsPanels> => {
+    try {
+      const answers = await Promise.all(
+        named.map(async ([name, sql]) => [name, await runAnalyticsSql(env, sql)] as const),
+      );
+      return Object.fromEntries(answers);
+    } catch (cause) {
+      // A rejected fill must not be cached, or one transient failure is served
+      // for the whole TTL. `runAnalyticsSql` returns rather than throws, so this
+      // is reached only on a programming error — exactly when a sticky cache
+      // entry is hardest to diagnose.
+      batches.delete(key);
+      throw toKinuError({
+        doing: 'filling a control-plane analytics batch',
+        cause,
+        otherwise: 'unavailable',
+      });
+    }
   })();
 
   if (batches.size >= BATCH_CACHE_MAX) batches.clear();
   batches.set(key, { at: now, result });
-  // A rejected fill must not be cached, or one transient failure is served for
-  // the whole TTL. `runAnalyticsSql` already returns rather than throws, so this
-  // only fires on a programming error — which is exactly when a sticky cache
-  // entry is hardest to diagnose.
-  result.catch(() => { batches.delete(key); });
   return result;
 }
 

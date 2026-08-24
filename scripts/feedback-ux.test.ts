@@ -20,7 +20,7 @@
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
 import type { HTTPRequest, Page } from 'puppeteer';
-import { withGallery } from './gallery-harness';
+import { diagnosticsSettled, recordDiagnostics, withGallery, type DiagnosticLine } from './gallery-harness';
 
 const FEEDBACK = '/api/feedback';
 /** One sampled region of the captured image. */
@@ -76,6 +76,14 @@ const LEAK_TYPED = 'typedLEAKSifREDACTIONfails0003';
 const LEAK_MCP = 'mcpLEAKSifREDACTIONfails0004';
 const MCP_HEADERS = `{"Authorization": "Bearer ${LEAK_MCP}"}`;
 
+/** The sabotage, chained TWO frames deep on purpose: the assertions can then
+ *  tell a preserved chain from its outermost message — the exact loss
+ *  `gate:silent-drop`'s `message_only` class exists to catch. */
+const CAPTURE_SABOTAGE = { outer: 'the encoder was sabotaged', inner: 'toBlob broken by this gate' };
+const CAPTURE_CHAIN = `${CAPTURE_SABOTAGE.outer}: ${CAPTURE_SABOTAGE.inner}`;
+const DECODE_SABOTAGE = { outer: 'the preview decoder was sabotaged', inner: 'createImageBitmap broken by this gate' };
+const DECODE_CHAIN = `${DECODE_SABOTAGE.outer}: ${DECODE_SABOTAGE.inner}`;
+
 /** One outgoing submission, as the client actually built it. */
 interface Submission {
   fields: string[];
@@ -106,6 +114,9 @@ declare global {
     /** Installed by `recordSerialized`. Holds the rasteriser's own DOM
      *  serializations — the clone, as it goes into the image. */
     __serialized?: string[];
+    /** Installed by the sabotage stages; each puts the broken global back. */
+    __restoreCapture?: () => void;
+    __restoreDecode?: () => void;
   }
 }
 
@@ -424,7 +435,13 @@ interface Observed {
   retry: {
     errorText: string; buttonLabel: string; canvasSurvived: boolean;
     attempts: number; sizes: number[]; toast: string;
+    diagnostics: DiagnosticLine[];
   };
+  captureFailure: {
+    message: string; sendableWithNote: boolean;
+    diagnostics: DiagnosticLine[]; retook: boolean;
+  };
+  decodeFailure: { message: string; diagnostics: DiagnosticLine[]; retook: boolean };
   mobile: { buttonVisible: boolean; dialogWithin: boolean; captureSucceeded: boolean };
   /** The shipped webhook cards and the MCP headers editor. */
   cards: SurfaceProbe;
@@ -545,6 +562,7 @@ async function run(): Promise<Observed> {
     const flaky = await browser.newPage();
     await flaky.setViewport({ width: 1280, height: 900 });
     await serveFeedback(flaky, { failFirst: true });
+    const flakyDiagnostics = recordDiagnostics(flaky);
     await flaky.goto(`${origin}/gallery.html?frame=feedback`, { waitUntil: 'networkidle0' });
     await openDialog(flaky);
     await flaky.waitForSelector('[data-feedback-canvas]');
@@ -558,7 +576,67 @@ async function run(): Promise<Observed> {
     await flaky.waitForSelector('[data-feedback-sent]', { timeout: 30_000 });
     const retryToast = await flaky.$eval('[data-feedback-sent]', (node) => node.textContent ?? '');
     const flakySent = await submissions(flaky);
+    await diagnosticsSettled(flakyDiagnostics, 1);
     await flaky.close();
+
+    // ── a capture that fails: told, recorded, retakable ──────────────────
+    const broken = await browser.newPage();
+    await broken.setViewport({ width: 1280, height: 900 });
+    await serveFeedback(broken);
+    const captureDiagnostics = recordDiagnostics(broken);
+    await broken.goto(`${origin}/gallery.html?frame=feedback`, { waitUntil: 'networkidle0' });
+    // Break the PNG encoder underneath `capturePage`, so the capture rejects
+    // with this chain and nothing else on the page is touched.
+    await broken.evaluate((outer: string, inner: string) => {
+      const original = HTMLCanvasElement.prototype.toBlob;
+      window.__restoreCapture = () => { HTMLCanvasElement.prototype.toBlob = original; };
+      HTMLCanvasElement.prototype.toBlob = () => { throw new Error(outer, { cause: new Error(inner) }); };
+    }, CAPTURE_SABOTAGE.outer, CAPTURE_SABOTAGE.inner);
+    await openDialog(broken);
+    const captureMessage = await broken.$eval('[data-feedback-shot="failed"]', (node) => node.textContent ?? '');
+    await broken.type('[data-feedback-note]', 'the note survives a failed capture');
+    const captureNoteSendable = await broken.$eval('[data-feedback-send]', (node) => !node.hasAttribute('disabled'));
+    await diagnosticsSettled(captureDiagnostics, 1);
+    // The failed state's retry affordance is the checkbox: off, then on again.
+    await broken.evaluate(() => window.__restoreCapture?.());
+    await broken.click('[data-feedback-include-shot]');
+    await broken.waitForFunction(() => document.querySelector('[data-feedback-shot]') === null);
+    await broken.click('[data-feedback-include-shot]');
+    await broken.waitForFunction(
+      () => document.querySelector('[data-feedback-canvas][data-feedback-painted]') !== null,
+      { timeout: 90_000 },
+    );
+    const captureRetook = await broken.$('[data-feedback-shot="ready"]') !== null;
+    await broken.close();
+
+    // ── a preview decode that fails: told, recorded, retakable ───────────
+    const undecodable = await browser.newPage();
+    await undecodable.setViewport({ width: 1280, height: 900 });
+    await serveFeedback(undecodable);
+    const decodeDiagnostics = recordDiagnostics(undecodable);
+    await undecodable.goto(`${origin}/gallery.html?frame=feedback`, { waitUntil: 'networkidle0' });
+    // The capture succeeds; the preview decode is what rejects.
+    await undecodable.evaluate((outer: string, inner: string) => {
+      const original = window.createImageBitmap.bind(window);
+      window.__restoreDecode = () => { Object.assign(window, { createImageBitmap: original }); };
+      Object.assign(window, {
+        createImageBitmap: () => Promise.reject(new Error(outer, { cause: new Error(inner) })),
+      });
+    }, DECODE_SABOTAGE.outer, DECODE_SABOTAGE.inner);
+    await openDialog(undecodable);
+    await undecodable.waitForSelector('[data-feedback-shot="failed"]', { timeout: 90_000 });
+    const decodeMessage = await undecodable.$eval('[data-feedback-shot="failed"]', (node) => node.textContent ?? '');
+    await diagnosticsSettled(decodeDiagnostics, 1);
+    await undecodable.evaluate(() => window.__restoreDecode?.());
+    await undecodable.click('[data-feedback-include-shot]');
+    await undecodable.waitForFunction(() => document.querySelector('[data-feedback-shot]') === null);
+    await undecodable.click('[data-feedback-include-shot]');
+    await undecodable.waitForFunction(
+      () => document.querySelector('[data-feedback-canvas][data-feedback-painted]') !== null,
+      { timeout: 90_000 },
+    );
+    const decodeRetook = await undecodable.$('[data-feedback-shot="ready"]') !== null;
+    await undecodable.close();
 
     // ── mobile ───────────────────────────────────────────────────────────
     const phone = await browser.newPage();
@@ -624,6 +702,18 @@ async function run(): Promise<Observed> {
         errorText, buttonLabel, canvasSurvived, toast: retryToast,
         attempts: flakySent.length,
         sizes: flakySent.map((one) => one.screenshot?.size ?? 0),
+        diagnostics: [...flakyDiagnostics],
+      },
+      captureFailure: {
+        message: captureMessage,
+        sendableWithNote: captureNoteSendable,
+        diagnostics: [...captureDiagnostics],
+        retook: captureRetook,
+      },
+      decodeFailure: {
+        message: decodeMessage,
+        diagnostics: [...decodeDiagnostics],
+        retook: decodeRetook,
       },
       mobile: { buttonVisible, dialogWithin, captureSucceeded },
       cards,
@@ -809,6 +899,60 @@ describe('a send that fails', () => {
     expect(observed.retry.sizes).toHaveLength(2);
     expect(observed.retry.sizes[0]).toBeGreaterThan(5_000);
     expect(observed.retry.sizes[0]).toBe(observed.retry.sizes[1]);
+  });
+
+  test('the failure is recorded exactly once, classified, with its cause', () => {
+    // One click that failed, one classified record. The retry that succeeded
+    // adds nothing, and the UI string above is a display, not the record.
+    expect(observed.retry.diagnostics).toEqual([
+      { event: 'feedback.send_failed', code: 'io', cause: 'send a feedback report: Failed to fetch', fields: {} },
+    ]);
+  });
+});
+
+describe('a capture that fails', () => {
+  test('the reporter is told, with the whole cause chain, and the note still sends', () => {
+    expect(observed.captureFailure.message).toContain('No screenshot:');
+    expect(observed.captureFailure.message).toContain(CAPTURE_CHAIN);
+    expect(observed.captureFailure.message).toContain('sent on its own');
+    expect(observed.captureFailure.sendableWithNote).toBe(true);
+  });
+
+  test('every failed attempt is recorded, classified, with the chain intact', () => {
+    // StrictMode re-runs the opening effect, so the attempt COUNT is the
+    // runtime's business. What this gate holds per attempt: the one event
+    // name, the class, and the WHOLE chain — the `doing` frame first, never
+    // the head of the chain alone.
+    expect(observed.captureFailure.diagnostics.length).toBeGreaterThanOrEqual(1);
+    for (const line of observed.captureFailure.diagnostics) {
+      expect(line.event).toBe('feedback.capture_failed');
+      expect(line.code).toBe('unsupported');
+      expect(line.cause).toBe(`capture the page for a feedback report: ${CAPTURE_CHAIN}`);
+    }
+  });
+
+  test('the checkbox retakes once the page can be photographed again', () => {
+    expect(observed.captureFailure.retook).toBe(true);
+  });
+});
+
+describe('a preview that cannot be decoded', () => {
+  test('the shot is a failure the reporter can read, not a blank canvas', () => {
+    expect(observed.decodeFailure.message).toContain('No screenshot:');
+    expect(observed.decodeFailure.message).toContain(DECODE_CHAIN);
+  });
+
+  test('every failed decode is recorded, classified, with the chain intact', () => {
+    expect(observed.decodeFailure.diagnostics.length).toBeGreaterThanOrEqual(1);
+    for (const line of observed.decodeFailure.diagnostics) {
+      expect(line.event).toBe('feedback.decode_failed');
+      expect(line.code).toBe('bad_input');
+      expect(line.cause).toBe(`decode the captured screenshot for preview: ${DECODE_CHAIN}`);
+    }
+  });
+
+  test('a retake recovers the preview', () => {
+    expect(observed.decodeFailure.retook).toBe(true);
   });
 });
 

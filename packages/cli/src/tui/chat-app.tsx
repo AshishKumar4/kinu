@@ -834,9 +834,13 @@ function ChatScene({
       addMessage({ role: 'system', content: 'Still connecting.' });
       return;
     }
-    const submitted = text.startsWith('/') ? resolveCommandDraft(commands, text) : text;
-    if (submitted.startsWith('/')) {
-      const generation = clientGenerationRef.current;
+    const generation = clientGenerationRef.current;
+    try {
+      const submitted = text.startsWith('/') ? resolveCommandDraft(commands, text) : text;
+      if (!submitted.startsWith('/')) {
+        await sendPrompt(submitted);
+        return;
+      }
       clientActionCountRef.current += 1;
       try {
         const outcome = await executeSlashCommand(client, submitted);
@@ -882,14 +886,19 @@ function ChatScene({
           return;
         }
         await applySlashOutcome(outcome);
-      } catch (err) {
-        if (clientGenerationRef.current === generation) addError({ cause: err });
       } finally {
         clientActionCountRef.current -= 1;
       }
-      return;
+    } catch (err) {
+      if (clientGenerationRef.current === generation) addError({ cause: err });
+      else {
+        diagnostics.failure(
+          'tui.stale_submit_failed',
+          toKinuError({ doing: 'finishing a submit for a previous workspace', cause: err, otherwise: 'unavailable' }),
+          { workspace: client.agentName },
+        );
+      }
     }
-    await sendPrompt(submitted);
   }, [addError, addMessage, applySlashOutcome, client, commands, dispatchInput, messages, performBranch, performWalkback, ready, runInputEffects, sendPrompt]);
 
   const handleClientEvent = useCallback((event: AgentClientEvent) => {
@@ -1009,7 +1018,7 @@ function ChatScene({
       for (const event of replay) handleClientEvent(event);
     }
     let cancelled = false;
-    void (async () => {
+    const connect = async () => {
       if (hydrateHistory && !skipHydrationRef.current) {
         try {
           const history = await client.history();
@@ -1032,8 +1041,20 @@ function ChatScene({
       }
       if (!connected || cancelled) return;
       setReady(true);
-      if (client.mode === 'cloud') void deviceConnect.offerIfUnconnected();
-    })();
+      if (client.mode !== 'cloud') return;
+      try {
+        await deviceConnect.offerIfUnconnected();
+      } catch (cause) {
+        // A courtesy offer, never the user's work: its failure is a
+        // diagnostic, not a conversation line.
+        diagnostics.failure(
+          'tui.device_connect_offer_failed',
+          toKinuError({ doing: 'offering the device-connect prompt', cause, otherwise: 'unavailable' }),
+          { workspace: client.agentName },
+        );
+      }
+    };
+    void connect();
     return () => {
       cancelled = true;
       unsubscribe();

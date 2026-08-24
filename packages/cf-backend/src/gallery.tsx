@@ -564,6 +564,20 @@ const stubRpc: Rpc = async <T,>(method: string): Promise<T> => {
   return rpcResult({}).json<T>();
 };
 
+/* `?createFails=1`: the FIRST create attempt rejects with a two-frame cause
+   chain, the way a workspace that refuses would. The browser gates drive it
+   twice — once to watch the failure being shown (workspacepage) or recorded
+   (agentchats), once to prove the affordance still works. */
+const CREATE_FAILS = new URLSearchParams(location.search).get("createFails") === "1";
+let createRefused = false;
+function maybeRefuseCreate(): void {
+  if (!CREATE_FAILS || createRefused) return;
+  createRefused = true;
+  throw new Error("the workspace refused the new agent", {
+    cause: new Error("subordinate quota exhausted"),
+  });
+}
+
 /* The `workspacepage` frame's stateful half: the additional-agent roster the
    REAL page mutates through its own hook. Creation, rename, navigation and the
    facet snapshot are page wiring and run for real here; only the chat behind
@@ -591,6 +605,7 @@ let galleryAgentPlan: PlanReview = {
 const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "listSubordinates") return rpcResult([...GALLERY_SUBS]).json<T>();
   if (method === "createSubordinateAgent") {
+    maybeRefuseCreate();
     const name = `agent-${++gallerySubSeq}`;
     const entry = {
       name, displayName: "", role: "agent", createdBy: "user",
@@ -2387,6 +2402,7 @@ function AgentChatsScene() {
   const missions = useRef<Record<string, string>>({});
 
   const create = async () => {
+    maybeRefuseCreate();
     const name = `agent-${++counter.current}`;
     missions.current[name] = AGENTCHATS_MISSION;
     setRoster((current) => [...current, {

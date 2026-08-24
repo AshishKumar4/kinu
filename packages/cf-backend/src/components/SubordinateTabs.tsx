@@ -5,7 +5,7 @@ import { FilledButton } from "./ui/FilledButton";
 import { HouseIcon, PlusIcon, TrashIcon } from "@phosphor-icons/react";
 import type { SubordinateRosterEntry } from "@kinu.run/core";
 import { Modal } from "./ui/Modal";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { diagnostics, toKinuError, renderThrownChain } from "@kinu.run/core/obs";
 
 /** What an agent with no name yet is called everywhere one renders. */
 const NEW_AGENT_TITLE = "New agent";
@@ -23,7 +23,8 @@ interface SubordinateTabsProps {
   subordinates: readonly SubordinateRosterEntry[];
   activeName?: string;
   /** One-click create — identity only, no form. WorkspacePage owns the action
-   *  because the sidebar can invoke it while this strip is not mounted. */
+   *  and its failure banner because the sidebar can invoke it while this strip
+   *  is not mounted. */
   onCreate(): Promise<void>;
   creating: boolean;
   onDismiss(name: string): Promise<void>;
@@ -102,7 +103,18 @@ export function SubordinateTabs({
           })}
           <button
             type="button"
-            onClick={() => { void onCreate(); }}
+            onClick={async () => {
+              try {
+                await onCreate();
+              } catch (cause) {
+                // WorkspacePage shows the failure banner; this catch owns the
+                // strip's own click, so a parent that rejects is recorded
+                // rather than becoming an unhandled rejection with no context.
+                diagnostics.failure("subordinates.create_failed", toKinuError({
+                  doing: "create a subordinate agent", cause, otherwise: "io",
+                }));
+              }
+            }}
             disabled={creating}
             className="p-btn-ghost my-1 ml-1 flex size-7 shrink-0 self-center items-center justify-center disabled:opacity-50"
             title={NEW_AGENT_TITLE}

@@ -4,6 +4,8 @@ import { createContext, useCallback, useContext, useEffect, useLayoutEffect, use
 import type { ScrollBoxRenderable } from '@opentui/core';
 import { useKeyboard, useRenderer, useTerminalDimensions } from '@opentui/react';
 
+import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+
 import { AGENT_HOME, canonicalProjectRoot } from '../config';
 import { agentWorkspaceKey, groupAgentWorkspaces, type ListedAgent } from '../agent-list';
 import { agentDisplayLabel, clipText } from './format';
@@ -73,7 +75,10 @@ export interface TuiAgentRoster {
   readonly loading: boolean;
   readonly error: string | null;
   reload(): Promise<void>;
-  loadMore(): Promise<void>;
+  /** Fire-and-forget by contract: a failure lands in `error` (with its whole
+   *  cause chain) and the paging row stays, so paging is retryable and a failed
+   *  page can never read as the end of the list. Implementations never reject. */
+  loadMore(): void;
 }
 
 const EMPTY_AGENT_PAGE: TuiAgentPage = Object.freeze({ items: Object.freeze([]), total: 0, nextCursor: null });
@@ -105,8 +110,14 @@ export function useAgentRoster(source: TuiAgentSource): TuiAgentRoster {
       setPage(next);
       setError(null);
     } catch (cause) {
-      if (request !== requestRef.current) return;
-      setError(cause instanceof Error ? cause.message : String(cause));
+      if (request === requestRef.current) setError(renderThrownChain({ cause }));
+      else {
+        // A newer request owns the view; the superseded failure is background.
+        diagnostics.failure(
+          'tui.roster_reload_superseded',
+          toKinuError({ doing: 'reloading the agent roster', cause, otherwise: 'unavailable' }),
+        );
+      }
     } finally {
       if (request === requestRef.current) setLoading(false);
     }
@@ -129,8 +140,13 @@ export function useAgentRoster(source: TuiAgentSource): TuiAgentRoster {
       }));
       setError(null);
     } catch (cause) {
-      if (request !== requestRef.current) return;
-      setError(cause instanceof Error ? cause.message : String(cause));
+      if (request === requestRef.current) setError(renderThrownChain({ cause }));
+      else {
+        diagnostics.failure(
+          'tui.roster_page_superseded',
+          toKinuError({ doing: 'loading the next agent page', cause, otherwise: 'unavailable' }),
+        );
+      }
     } finally {
       if (request === requestRef.current) setLoading(false);
     }
@@ -429,7 +445,7 @@ export function TuiShell(props: TuiShellProps) {
         props.onAgentSelect?.(row.agent);
         return;
       case 'load-more':
-        void props.roster.loadMore();
+        props.roster.loadMore();
         return;
     }
   }, [applySelection, props.onAgentSelect, props.roster, toggleWorkspace]);
@@ -460,7 +476,7 @@ export function TuiShell(props: TuiShellProps) {
     }
     if (target === start) target = Math.max(0, Math.min(rowsNow.length - 1, start + direction));
     applySelection(rowsNow[target]?.key ?? null);
-    if (direction === 1 && start === rowsNow.length - 1 && page.nextCursor !== null) void props.roster.loadMore();
+    if (direction === 1 && start === rowsNow.length - 1 && page.nextCursor !== null) props.roster.loadMore();
   }, [applySelection, page.nextCursor, props.roster, selectedRowNow]);
 
   useKeyboard((event) => {

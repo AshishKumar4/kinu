@@ -9,6 +9,7 @@
  * allowed to ask, which is the worst possible answer.
  */
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import { Loader } from '@cloudflare/kumo';
 import { ArrowClockwiseIcon, LockKeyIcon, WarningIcon } from '@phosphor-icons/react';
 import type { ControlAnswer } from '../../lib/control-api';
@@ -41,7 +42,24 @@ export function useControlRead<Value>(
   useEffect(() => {
     let live = true;
     setLoad({ phase: 'loading' });
-    void read().then((answer) => { if (live) setLoad({ phase: 'settled', answer }); });
+    // `control()` names HTTP-level failures in its answer, so a rejection is
+    // the transport itself refusing. Settled as `failed` rather than left as
+    // an unhandled rejection with the panel spinning on `loading` forever.
+    const readFailed = <Thrown,>(thrown: Thrown): void => {
+      diagnostics.failure('control.read_failed', toKinuError({
+        doing: 'run a control-plane read', cause: thrown, otherwise: 'io',
+      }));
+      if (live) {
+        setLoad({
+          phase: 'settled',
+          answer: { status: 'failed', reason: renderThrownChain({ cause: thrown }) },
+        });
+      }
+    };
+    void read().then(
+      (answer) => { if (live) setLoad({ phase: 'settled', answer }); },
+      readFailed,
+    );
     return () => { live = false; };
     // `read` is a fresh closure every render, so it is deliberately not a
     // dependency: the caller's `deps` state what the read actually depends on,

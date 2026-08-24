@@ -19,9 +19,10 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { createServer as createHttpServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import puppeteer, { type Browser, type LaunchOptions } from 'puppeteer';
+import puppeteer, { type Browser, type LaunchOptions, type Page } from 'puppeteer';
 import { createServer as createViteServer } from 'vite';
 import * as v from 'valibot';
+import { tolerate } from '@kinu.run/core/obs';
 
 const REPO = join(import.meta.dir, '..');
 const CF = join(REPO, 'packages', 'cf-backend');
@@ -33,6 +34,61 @@ export interface Gallery {
   readonly browser: Browser;
   /** `http://127.0.0.1:<port>` — this run's server, never another worktree's. */
   readonly origin: string;
+}
+
+/** A classified diagnostic, as the page's `diagnostics` sink writes it to the
+ *  console: the JSON envelope `createLineLogger` emits. `cause` is the rendered
+ *  chain for a `failure` line and absent for an `event` line. */
+export interface DiagnosticLine {
+  readonly event: string;
+  readonly code?: string;
+  readonly cause?: string;
+  readonly fields: Readonly<Record<string, string | number | boolean>>;
+}
+
+const DiagnosticLineSchema = v.object({
+  event: v.string(),
+  code: v.optional(v.string()),
+  cause: v.optional(v.string()),
+  fields: v.record(v.string(), v.union([v.string(), v.number(), v.boolean()])),
+});
+
+/**
+ * Collect every classified diagnostic a page emits, in order. The gates over
+ * failure handling assert on these: a handled failure must be RECORDED, and the
+ * record must carry the whole cause chain — neither is observable in the DOM.
+ * Console output that is not a diagnostic line (Vite's banner, the product's
+ * own prose) does not parse and is not collected.
+ */
+export function recordDiagnostics(page: Page): DiagnosticLine[] {
+  const lines: DiagnosticLine[] = [];
+  page.on('console', (message) => {
+    const parsed = v.safeParse(
+      DiagnosticLineSchema,
+      tolerate(() => JSON.parse(message.text()), 'malformed-input'),
+    );
+    if (parsed.success) lines.push(parsed.output);
+  });
+  return lines;
+}
+
+/** Wait for at least `count` collected diagnostics: the console relay is
+ *  asynchronous, so a click's diagnostic lands a beat after its DOM effect.
+ *  Fails naming what DID arrive rather than timing out silently. */
+export async function diagnosticsSettled(
+  lines: readonly DiagnosticLine[], count: number, timeoutMs = 10_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (lines.length < count) {
+    if (Date.now() > deadline) {
+      throw new Error(
+        `waited ${String(timeoutMs)}ms for ${String(count)} diagnostic(s); saw ${JSON.stringify(lines)}`,
+      );
+    }
+    const tick = Promise.withResolvers<void>();
+    setTimeout(tick.resolve, 50);
+    await tick.promise;
+  }
 }
 
 

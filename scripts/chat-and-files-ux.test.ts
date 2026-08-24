@@ -27,7 +27,7 @@
 import { beforeAll, describe, expect, test } from 'bun:test';
 import type { Browser, Page } from 'puppeteer';
 
-import { withGallery } from './gallery-harness';
+import { diagnosticsSettled, recordDiagnostics, withGallery } from './gallery-harness';
 
 /** One live-tail message, as the browser laid it out. */
 interface TailFrame {
@@ -621,10 +621,12 @@ describe('an additional agent, as an ordinary conversation', () => {
     bodyText(): Promise<string>;
   }
 
-  async function openRig(browser: Browser, origin: string, viewport: { width: number; height: number }): Promise<RigDriver> {
+  async function openRig(
+    browser: Browser, origin: string, viewport: { width: number; height: number }, query = '',
+  ): Promise<RigDriver> {
     const page = await browser.newPage();
     await page.setViewport(viewport);
-    await page.goto(`${origin}/gallery.html?frame=agentchats`, { waitUntil: 'networkidle0' });
+    await page.goto(`${origin}/gallery.html?frame=agentchats${query}`, { waitUntil: 'networkidle0' });
     await page.reload({ waitUntil: 'networkidle0' });
     await page.waitForSelector('[data-agentchats] nav[aria-label="Workspace agents"]');
     return {
@@ -787,6 +789,78 @@ describe('an additional agent, as an ordinary conversation', () => {
 
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
       expect(overflow).toBe(0);
+      await page.close();
+    });
+  }, 240_000);
+
+  /** The chain `?createFails=1` makes the first create reject with. Spelled
+   *  here as well so a chain the gallery stopped chaining fails the equality
+   *  instead of passing a weaker containment. */
+  const CREATE_REFUSAL_CHAIN = 'the workspace refused the new agent: subordinate quota exhausted';
+
+  test('a create the workspace refuses is recorded once, classified, and the strip keeps working', async () => {
+    // The strip owns its own click: `onCreate` may reject, and the void on it
+    // must not become an unhandled rejection with no context. The parent's
+    // banner is WorkspacePage's; the bare rig has no parent, so the record is
+    // the whole observable outcome here.
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const rig = await openRig(browser, origin, { width: 1280, height: 900 }, '&createFails=1');
+      const { page } = rig;
+      const diagnostics = recordDiagnostics(page);
+      const unhandled: string[] = [];
+      page.on('pageerror', (error) => { unhandled.push(String(error)); });
+
+      await page.click('[aria-label="New agent"]');
+      await diagnosticsSettled(diagnostics, 1);
+      expect(diagnostics).toEqual([{
+        event: 'subordinates.create_failed', code: 'io',
+        cause: `create a subordinate agent: ${CREATE_REFUSAL_CHAIN}`, fields: {},
+      }]);
+      // The refused click navigated nowhere.
+      expect(await rig.activeTab()).toContain('Main');
+
+      // The affordance is intact: the next click creates and opens the agent.
+      await page.click('[aria-label="New agent"]');
+      await page.waitForFunction(() => (
+        (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').includes('New agent')
+      ), { timeout: 10_000 });
+      // Exactly one record for exactly one failure — the create that landed
+      // added nothing, and nothing was ever unhandled.
+      expect(diagnostics).toHaveLength(1);
+      expect(unhandled).toEqual([]);
+      await page.close();
+    });
+  }, 240_000);
+
+  test('the real WorkspacePage shows a refused create and the next click still lands', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1280, height: 900 });
+      const diagnostics = recordDiagnostics(page);
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&createFails=1`, { waitUntil: 'networkidle0' });
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('nav[aria-label="Workspace agents"]');
+
+      // The page's own catch turns the refusal into its banner, whole chain
+      // shown, with a way out.
+      await page.click('[aria-label="New agent"]');
+      await page.waitForSelector('[role="alert"]', { timeout: 15_000 });
+      const banner = await page.$eval('[role="alert"]', (node) => node.textContent ?? '');
+      expect(banner).toContain("Couldn't create an agent");
+      expect(banner).toContain(CREATE_REFUSAL_CHAIN);
+      // The + button is not stuck in `creating`.
+      expect(await page.$eval('[aria-label="New agent"]', (node) => node.hasAttribute('disabled'))).toBe(false);
+
+      // The parent absorbed the rejection, so the strip's own net — the
+      // record for a parent that LEAKS — stays silent: one owner per failure.
+      expect(diagnostics.filter((line) => line.event === 'subordinates.create_failed')).toEqual([]);
+
+      // Retry lands: the banner clears and the new conversation opens.
+      await page.click('[aria-label="New agent"]');
+      await page.waitForFunction(() => (
+        (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').includes('New agent')
+      ), { timeout: 15_000 });
+      expect(await page.evaluate(() => document.body.innerText)).not.toContain("Couldn't create an agent");
       await page.close();
     });
   }, 240_000);
