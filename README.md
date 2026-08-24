@@ -6,15 +6,9 @@
 </p>
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/kinu-app-dark.webp">
-    <img alt="A Kinu workspace with an agent turn, tool calls, the composer, and the work inspector." src="docs/assets/kinu-app-light.webp" width="900" height="563">
-  </picture>
-</p>
-
-<p align="center">
-  <strong>Persistent agents for cloud and local workspaces.<br>
-  Agents can delegate complex tasks across a DAG of subagents.</strong><br>
+  <strong>Kinu gives AI agents a durable computer of their own.<br>
+  It adapts and improves with use, runs locally or fully in the cloud, and solves hard tasks<br>
+  by exploring multiple approaches and letting executable checks choose the winner.</strong><br>
   <strong><a href="https://kinu.run">kinu.run</a></strong>
 </p>
 
@@ -37,6 +31,29 @@
   <a href="docs/EXPLORATION.md">Tree swarm</a> &nbsp;·&nbsp;
   <a href="docs/CLI.md">CLI reference</a>
 </p>
+
+## Demo
+
+<p align="center">
+  <img alt="Kinu fixes a coupon bug end to end. It reproduces the 500, the reviewer annotates the plan and approves revision 2, three candidate patches race, and the focused suite selects the one that passes all seven tests." src="docs/assets/kinu-bugfix-demo.webp" width="976" height="648">
+</p>
+
+<p align="center"><em>A bug fix end to end. The plan gets approved, three candidate patches race, and the focused suite picks the one that passes.</em></p>
+
+## What you get
+
+**A machine that stays up.** A workspace is a durable POSIX filesystem, a shell,
+execution environments, agent conversations, memory and an event log. Close the
+laptop and a cloud workspace keeps going; a schedule, webhook or email starts the
+next turn with nobody at the keyboard.
+
+**Each task improves the next one.** Turns can produce scored tools, durable
+lessons and reversible versions of the agent loop. The next task starts with
+those verified changes.
+
+**More than one attempt at a hard task, settled by code.** The agent can run a tree
+search whose nodes are whole agents. A verifier runs in the workspace, reports a raw
+number, and that number picks the winner.
 
 ## Install
 
@@ -63,6 +80,144 @@ cd packages/cf-backend
 # .dev.vars needs AI Gateway credentials; see docs/DEPLOYMENT.md
 CLOUDFLARE_ACCOUNT_ID=<your-id> npx vite dev --port 5173 --host 0.0.0.0
 ```
+
+## A complete example
+
+This takes about two minutes. Make a workspace, give it real work, then look at
+what it kept.
+
+```bash
+kinu create film --mode local            # a workspace on this machine
+kinu run film "Find the slowest test in this repo and say why it is slow."
+```
+
+The agent reads the repository through the `file` tool, runs the suite through `run`,
+and writes throwaway measurement code through `execute_tools`. It answers in the
+terminal when the turn settles.
+
+```bash
+kinu status film                         # turns, lessons, scaffold version
+kinu tools film                          # the 8 built-ins, plus anything it crafted
+```
+
+If a pattern repeated often enough to be worth keeping, it is a crafted tool now,
+with a score attached. Give it the follow-up:
+
+```bash
+kinu run film "Fix it, then prove the fix with the same measurement."
+```
+
+This turn starts from the first one. The measurement code is a tool it already has,
+the repository layout is in memory, and the fix is checked by re-running what it
+built the first time. Then see the bill and the conversation:
+
+```bash
+kinu spend film                          # by producer and by mission
+kinu chat film                           # keep going interactively
+```
+
+Everything above works the same against `--mode cloud`, and a cloud workspace also
+opens in the browser at [kinu.run](https://kinu.run) and in your editor over
+`kinu acp`.
+
+## Why Kinu
+
+| | Common shape | Kinu |
+|---|---|---|
+| Between sessions | The chat history | A durable workspace: files, shell, sessions, memory, event log |
+| When you close the laptop | Work stops | A cloud workspace keeps running; schedules, webhooks and email start turns |
+| Tool set | Fixed when the product shipped | 8 built in, plus the tools the agent writes, scores and reuses |
+| The agent loop | Fixed when the product shipped | Code the agent can rewrite, behind four structural gates, every version reversible |
+| A hard task | One attempt | A tree of agents, settled by a verifier that runs in the workspace |
+| Where it runs | The vendor's cloud | Cloudflare Durable Objects or your own machine, same agent, MIT licensed |
+
+## Status
+
+The CLI is at 0.2.0 (`packages/cli/package.json`, which is what `kinu --version`
+reports). I use it daily and it is not finished. What I would want to know before
+trying it:
+
+- **Self-evolution runs, and its gain is not measured yet.** The machine is 17,081
+  lines of non-test TypeScript across `core/src/evolution`, `core/src/mcts`,
+  `core/src/scaffold` and `core/src/craft`, measured 2026-08-24. A live-model
+  Terminal-Bench 2.1 run on 2026-08-17 caught it acting: 4 of 5 candidate trials
+  emitted an evolution event and 4 turns were execution-graded, against 0 of 6
+  baseline trials. That run reached 13 of its 80 designed trials, and its paired
+  comparison was inadmissible because the baseline arm billed no measurable tokens,
+  so the effect size is still open. [docs/BENCH.md](docs/BENCH.md) is the instrument
+  for closing it: 159 seeded-defect tasks scored by this repository's own checks, a
+  held-out split, no model in the scoring path, and rejection by default. If the
+  answer turns out to be that evolution does nothing, that is the answer I want.
+- **`archive` coverage runs need a measurable objective.** `research`, `audit` and
+  `redteam` keep a grid of cells and rank each cell by the objective's own
+  instrument, so all three require `objective` and a coverage `key`. A search over
+  something no instrument can measure is `ideate`, which is flat and says so.
+- **`advance:'pareto'` is not implemented.** It needs a per-instance measurement path
+  and a dominance comparison, and the error names both.
+- **Hosted language runtimes require the seeded R2 catalog.** Production and
+  staging bind `NIMBUS_RUNTIME_CACHE`. A fresh self-host must seed that bucket
+  before Python, Bash, Ruby, or Clang can load. The container sandbox has git,
+  npm, node, bun and jq, but no `python3`.
+
+## Architecture
+
+Kinu agents are platform agnostic. They live in `packages/core` and can be extended
+to run on any backend. Two small interfaces carry everything platform-specific:
+`AgentRuntime` provides storage, memory, models and scheduling, and `BackendHost`
+provides the few things a turn loop needs from its host. We implement the pair
+twice: for Cloudflare Durable Objects, one per workspace, built on
+[Think](https://github.com/cloudflare/agents), and for POSIX, on `bun:sqlite` and
+real processes on your own machine. Both backends share Core orchestration.
+Cloudflare Think and the local CLI own different turn transports and loops.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/backend-dark.svg">
+  <img alt="Clients and autonomous ingress feed packages/core, which owns the turn pipeline, tools, delegation, evolution, context, the canonical workspace file plane, the execution router and the event log. Below it the AgentRuntime and BackendHost interfaces are implemented twice: by cf-backend on Cloudflare Durable Objects, and by cli-backend on your own machine." src="docs/diagrams/backend.svg" width="900">
+</picture>
+
+A turn arrives from a person, a schedule, or a finished background job. It is
+assembled once: the system prompt, then the conversation history, compacted when
+it outgrows the context window. After that it is a step loop. Between steps the
+agent re-reads live workspace state, and everything asynchronous, from a finished
+job to a message from another agent, joins the turn through one path.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/turn-dark.svg">
+  <img alt="A turn arrives from a user message or a programmatic wake and is queued one at a time. It is assembled once, as a system prompt plus transformed history, where the compaction ladder fires, then runs a step loop that re-weaves dynamic context, marks the cache tail and calls tools. Signals splice into the running step or queue the next turn. On settle the turn is snapshotted, recorded and reviewed, and pending events wake the next turn." src="docs/diagrams/turn.svg" width="900">
+</picture>
+
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) has what these leave out: the workspace
+object model, message flow, events and ingress, and the Think lifecycle.
+
+## Documentation
+
+**Using it**
+
+| Document | Description |
+|----------|-------------|
+| [Quick start](QUICKSTART.md) | Install, sign in, and create the first workspace |
+| [User guide](docs/USER-GUIDE.md) | The path from install to daily use: talking to a workspace, giving it your machine, triggers, backup, troubleshooting |
+| [CLI reference](docs/CLI.md) | Every command and flag, generated from the command registry |
+| [Configuration](docs/CONFIG.md) | `~/.kinu/config.json` fields and environment variables |
+
+**How it works**
+
+| Document | Description |
+|----------|-------------|
+| [Workspaces](docs/WORKSPACES.md) | The object model: workspace = container (file plane, identity, sessions), agents = actors inside it |
+| [Architecture](docs/ARCHITECTURE.md) | System design, message flow, package structure, Think lifecycle |
+| [Exploration](docs/EXPLORATION.md) | The six search axes, the node contract, the publication seal, settle and merge-back |
+| [Evolution](docs/EVOLUTION.md) | 4-timescale self-evolution, CraftStore lifecycle, scaffold mutation |
+| [MCTS](docs/MCTS.md) | Monte Carlo Tree Search, UCT formula, branch isolation, convergence |
+| [Tools](docs/TOOLS.md) | The eight builtin tools, the file plane, the `agents` delegation surface, the codemode sandbox and crafted tools |
+| [Context budget](docs/CONTEXT-BUDGET.md) | The reference-plus-digest invariant: where bulk spills, the turn-cumulative clamp, and the trip counters |
+| [Observability](docs/OBSERVABILITY.md) | The failure classification, the typed logger and its reserved-field ban, what is wired and what is not |
+| [Storage](docs/STORAGE.md) | Data model, workspace files over the Nimbus VFS, MemoryStore FTS5, table schemas |
+| [Deployment](docs/DEPLOYMENT.md) | Local dev, Cloudflare deploy, AI Gateway setup, secrets |
+| [Formal spec](docs/FORMAL-SPEC.md) | Lean 4 abstract models, assumptions, traceability, and CI gates |
+| [Bench](docs/BENCH.md) | Machine-scored harness for whether self-evolution helps: sealed split, paired stats, rejection by default |
+| [Testing](docs/TESTING.md) | Conventions, what "all tests" actually runs, and the eval tier that calls a real model and bills the signed-in session |
+| [Changelog](CHANGELOG.md) | What changed in each version, and the release checklist every user-visible change runs |
 
 ## What a workspace is
 
@@ -119,36 +274,6 @@ the turn it is already running, so the caller keeps working.
 [docs/EXPLORATION.md](docs/EXPLORATION.md) has the six axes, the seven presets and
 their shapes, the rules a call must satisfy, the publication seal and the records
 store in full.
-
-## Architecture
-
-Kinu agents are platform agnostic. They live in `packages/core` and can be extended
-to run on any backend. Two small interfaces carry everything platform-specific:
-`AgentRuntime` provides storage, memory, models and scheduling, and `BackendHost`
-provides the few things a turn loop needs from its host. We implement the pair
-twice: for Cloudflare Durable Objects, one per workspace, built on
-[Think](https://github.com/cloudflare/agents), and for POSIX, on `bun:sqlite` and
-real processes on your own machine. Both backends share Core orchestration.
-Cloudflare Think and the local CLI own different turn transports and loops.
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/backend-dark.svg">
-  <img alt="Clients and autonomous ingress feed packages/core, which owns the turn pipeline, tools, delegation, evolution, context, the canonical workspace file plane, the execution router and the event log. Below it the AgentRuntime and BackendHost interfaces are implemented twice: by cf-backend on Cloudflare Durable Objects, and by cli-backend on your own machine." src="docs/diagrams/backend.svg" width="900">
-</picture>
-
-A turn arrives from a person, a schedule, or a finished background job. It is
-assembled once: the system prompt, then the conversation history, compacted when
-it outgrows the context window. After that it is a step loop. Between steps the
-agent re-reads live workspace state, and everything asynchronous, from a finished
-job to a message from another agent, joins the turn through one path.
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/turn-dark.svg">
-  <img alt="A turn arrives from a user message or a programmatic wake and is queued one at a time. It is assembled once, as a system prompt plus transformed history, where the compaction ladder fires, then runs a step loop that re-weaves dynamic context, marks the cache tail and calls tools. Signals splice into the running step or queue the next turn. On settle the turn is snapshotted, recorded and reviewed, and pending events wake the next turn." src="docs/diagrams/turn.svg" width="900">
-</picture>
-
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) has what these leave out: the workspace
-object model, message flow, events and ingress, and the Think lifecycle.
 
 ## What else is in the box
 
@@ -231,60 +356,6 @@ Access tokens are scoped. `workspace.exec` runs tasks and `workspace.read` inspe
 state. Webhooks, device registration, workspace creation and consent decisions stay
 interactive-only, enforced server-side. `kinu tokens list` shows last use, and
 `kinu tokens revoke ci` kills one immediately.
-
-## Status
-
-The CLI is at 0.2.0 (`packages/cli/package.json`, which is what `kinu --version`
-reports). I use it daily and it is not finished. What I would want to know before
-trying it:
-
-- **The self-evolution machine has no measured effect yet.** Measured 2026-08-19:
-  15,645 lines of non-test TypeScript across `core/src/evolution`, `core/src/mcts`,
-  `core/src/scaffold` and `core/src/craft`, and no live-model run has scored any of
-  it. [docs/BENCH.md](docs/BENCH.md) is the instrument built to produce that number:
-  159 seeded-defect tasks scored by this repository's own checks, a held-out split,
-  no model in the scoring path, and rejection by default. If the answer turns out to
-  be that evolution does nothing, that is the answer I want.
-- **`archive` coverage runs need a measurable objective.** `research`, `audit` and
-  `redteam` keep a grid of cells and rank each cell by the objective's own
-  instrument, so all three require `objective` and a coverage `key`. A search over
-  something no instrument can measure is `ideate`, which is flat and says so.
-- **`advance:'pareto'` is not implemented.** It needs a per-instance measurement path
-  and a dominance comparison, and the error names both.
-- **Hosted language runtimes require the seeded R2 catalog.** Production and
-  staging bind `NIMBUS_RUNTIME_CACHE`. A fresh self-host must seed that bucket
-  before Python, Bash, Ruby, or Clang can load. The container sandbox has git,
-  npm, node, bun and jq, but no `python3`.
-
-## Documentation
-
-**Using it**
-
-| Document | Description |
-|----------|-------------|
-| [Quick start](QUICKSTART.md) | Install, sign in, and create the first workspace |
-| [User guide](docs/USER-GUIDE.md) | The path from install to daily use: talking to a workspace, giving it your machine, triggers, backup, troubleshooting |
-| [CLI reference](docs/CLI.md) | Every command and flag, generated from the command registry |
-| [Configuration](docs/CONFIG.md) | `~/.kinu/config.json` fields and environment variables |
-
-**How it works**
-
-| Document | Description |
-|----------|-------------|
-| [Workspaces](docs/WORKSPACES.md) | The object model: workspace = container (file plane, identity, sessions), agents = actors inside it |
-| [Architecture](docs/ARCHITECTURE.md) | System design, message flow, package structure, Think lifecycle |
-| [Exploration](docs/EXPLORATION.md) | The six search axes, the node contract, the publication seal, settle and merge-back |
-| [Evolution](docs/EVOLUTION.md) | 4-timescale self-evolution, CraftStore lifecycle, scaffold mutation |
-| [MCTS](docs/MCTS.md) | Monte Carlo Tree Search, UCT formula, branch isolation, convergence |
-| [Tools](docs/TOOLS.md) | The eight builtin tools, the file plane, the `agents` delegation surface, the codemode sandbox and crafted tools |
-| [Context budget](docs/CONTEXT-BUDGET.md) | The reference-plus-digest invariant: where bulk spills, the turn-cumulative clamp, and the trip counters |
-| [Observability](docs/OBSERVABILITY.md) | The failure classification, the typed logger and its reserved-field ban, what is wired and what is not |
-| [Storage](docs/STORAGE.md) | Data model, workspace files over the Nimbus VFS, MemoryStore FTS5, table schemas |
-| [Deployment](docs/DEPLOYMENT.md) | Local dev, Cloudflare deploy, AI Gateway setup, secrets |
-| [Formal spec](docs/FORMAL-SPEC.md) | Lean 4 abstract models, assumptions, traceability, and CI gates |
-| [Bench](docs/BENCH.md) | Machine-scored harness for whether self-evolution helps: sealed split, paired stats, rejection by default |
-| [Testing](docs/TESTING.md) | Conventions, what "all tests" actually runs, and the eval tier that calls a real model and bills the signed-in session |
-| [Changelog](CHANGELOG.md) | What changed in each version, and the release checklist every user-visible change runs |
 
 ## Packages
 

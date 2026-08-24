@@ -8,10 +8,10 @@ is the generated reference for every command and flag.
 
 ## 1. What you're creating
 
-You create **workspaces**. A workspace is a durable container: its own files,
-its own execution environments, its own sessions and memory, with an agent
-working inside it. [docs/WORKSPACES.md](WORKSPACES.md) has the object model.
-What you decide on day one is where a workspace lives.
+You create **workspaces**. A workspace owns files and execution environments.
+It can contain more than one agent, and each agent has one durable conversation
+and its own memory. [docs/WORKSPACES.md](WORKSPACES.md) has the object model.
+What you decide on day one is where the workspace runs.
 
 | | `--mode cloud` | `--mode local` |
 | --- | --- | --- |
@@ -244,10 +244,24 @@ environment variable.
 | --- | --- |
 | `Not authenticated. Run: kinu auth` | the CLI session expired. Run `kinu auth` |
 | `Source checksum mismatch` on install or update | the download and its checksum disagree; the site is mid-deploy or broken. Retry, then check `/api/health` |
-| A model error the moment a turn starts | no usable credential for the chosen model. Run `kinu providers list`, then `kinu providers connect …` |
-| `No workspaces found` | you have none yet. Run `kinu create <name>` |
+| A model error the moment a turn starts | no usable credential for the chosen model. Run `kinu provider list`, then `kinu provider connect …` |
+| `No agents found` | you have none yet. Run `kinu create <name>` |
 | A cloud workspace won't run commands on your machine | the daemon isn't attached. Run `kinu desktop status`, then `kinu connect` |
 | The daemon died and timers stopped | `kinu daemon restart`, and `kinu daemon logs` for why |
 
 `kinu doctor` answers the install-shaped ones. If a workspace itself is
-wedged, `kinu stop <name>` ends the current turn without losing the session.
+wedged, `kinu stop <name>` ends the current turn without losing its conversation.
+
+## 11. Feedback and the control plane
+
+Use **Feedback** in the app navigation to send a note. You can attach a
+full-page screenshot and draw annotations before submission. Kinu masks fields
+marked as sensitive. You can also send the note without a screenshot.
+
+Only configured operators can open `/control`. The control plane shows paged
+users and workspaces, incidents, feedback, weighted fleet metrics, exact run
+history, jobs, approvals, executors, and its admin audit log. Destructive
+actions require a fresh sign-in and explicit confirmation.
+
+Feedback text and screenshot pointers are exact durable records. Screenshot
+bytes live in R2. Analytics Engine receives a marker without the note or image.

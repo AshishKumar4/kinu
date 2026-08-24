@@ -597,13 +597,10 @@ runtimes are installed. Do not infer capability from older backend labels.
 `preset` into a full axis tuple, validity is checked over that tuple, and only
 the last step spends anything.
 
-**The swarm path bypasses the strategy registry.** `runSwarmAction` calls
-`resolveSwarm`, then `swarmValidity`, then `runSwarm` directly. `AgentsForkDeps`
-does carry a `registry: StrategyRegistry`, and `buildStrategyForkDeps` still
-registers `single-shot`, `mcts` and `heads` into it, so a reader who sees that
-member can reasonably expect a dispatch that is not there. Nothing on the swarm
-path reads it. `registry` is in the bag because the backends build the whole bag
-at once, not because this rung resolves a strategy by id.
+The swarm path calls `resolveSwarm`, `swarmValidity`, and `runSwarm` directly.
+`AgentsForkDeps` carries only the execution substrate: runtime, model resolver,
+pricing, node isolation, and shared-prefix compaction. It carries no strategy
+registry or dormant strategy objects.
 
 Three refusal classes, kept apart by vocabulary:
 

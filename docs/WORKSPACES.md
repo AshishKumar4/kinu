@@ -49,7 +49,7 @@ agents are the actors that work inside it.
   ownership check on every `/api/workspaces/<name>/*` request).
 - **Locally, the virtual workspace is metadata, not a place.** It is the pair
   `{ cwd, workspaceId }` recorded on each root agent's ref
-  (`packages/cli-backend/src/agent-host/peers.ts`). Every root carrying the
+  (`packages/core/src/tools/local-peer.ts`). Every root carrying the
   same pair is an EQUAL PEER of the others: one physical directory, one shell,
   and each agent with its own SQLite identity, role and scaffold. None of them
   is the workspace, so mail between them is peer mail rather than a report up
@@ -57,7 +57,7 @@ agents are the actors that work inside it.
   their workspace plane but keep their own SQL identity, and they never hold
   the peer transport. Each agent owns ONE durable conversation; its id lives in
   `agent_config` (`canonicalConversationId`,
-  `packages/cli-backend/src/agent-host/conversation.ts`), so an interactive
+  `packages/core/src/config/conversation.ts`), so an interactive
   CLI, a one-shot `kinu exec` and the daemon's agent host all drive the same
   conversation instead of minting one per process. Recorded JSONL files
   are diagnostics from here on.
