@@ -85,9 +85,9 @@ interface ConversationTurn {
  * suite's title, so it is threaded here, once, for every caller.
  *
  * `sent` IS RETURNED BECAUSE CONTENT CANNOT PROVE THREADING. The agent holds a
- * `memory` tool whose session-search mode queries the very `messages` table
- * this function writes to (core/src/tools/memory-tool.ts:92-101 over
- * core/src/memory/session-search.ts), so a later turn can RETRIEVE the
+ * `memory` tool whose conversation-search action queries the same `messages`
+ * table this function writes to (core/src/tools/memory-tool.ts over
+ * core/src/memory/conversation-search.ts), so a later turn can RETRIEVE the
  * conversation whether or not it was threaded. Measured 2026-08-20: with
  * `messages: [user]` restored — history built but never handed over — turn 5
  * still answered "Here's a summary of our previous discussion" and reproduced

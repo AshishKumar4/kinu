@@ -1,8 +1,8 @@
-diff --git a/packages/core/src/memory/session-search.ts b/packages/core/src/memory/session-search.ts
-index 8c21c0e..184877a 100644
---- a/packages/core/src/memory/session-search.ts
-+++ b/packages/core/src/memory/session-search.ts
-@@ -145,7 +145,7 @@ export class SessionSearchStore {
+diff --git a/packages/core/src/memory/conversation-search.ts b/packages/core/src/memory/conversation-search.ts
+index baaff5146..93e45ea73 100644
+--- a/packages/core/src/memory/conversation-search.ts
++++ b/packages/core/src/memory/conversation-search.ts
+@@ -149,7 +149,7 @@ export class ConversationSearchStore {
        WHERE session_id = ${anchor.session_id}
          AND (created_at < ${anchor.created_at}
               OR (created_at = ${anchor.created_at} AND rowid < ${anchor.rid}))
