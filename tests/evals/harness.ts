@@ -48,30 +48,315 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { LanguageModel, ToolSet } from 'ai';
 import type { JsonValue } from '@vitest-evals/core';
+import * as v from 'valibot';
 
 import type {
-  AgentRuntime, EvalCase, LLMProviderConfig, RunEvent, SeekCursor, Shell,
+  AgentRuntime, AgentsToolAction, AgentsForkDeps, AgentsToolDeps, BuiltinToolName,
+  EvalCase, LLMProviderConfig, RunEvent, SeekCursor, Shell,
 } from '../../packages/core/src/index';
 import {
-  RunEventRecorder, buildBuiltinTools, initWorkspaceSchema, listRuns,
+  RunEventRecorder, activePromptSectionOverrides, agentsActionsFor, buildActorTools,
+  buildSystemPromptSync, classifyToolFailure, createAgentConfigStore, createFactsStore,
+  createAgentsCodemodeProvider, createMemoryCodemodeProvider, createTasksCodemodeProvider,
+  currentDateForPrompt, initWorkspaceSchema, isBuiltinToolName, listRuns, TaskListStore,
 } from '../../packages/core/src/index';
+import {
+  createDefaultWebSearchProvider, createWebCodemodeProvider,
+} from '../../packages/core/src/web/index';
 import { createWorkspace } from '../../packages/core/src/identity/index';
-import { LocalAgentSession } from '../../packages/cli-backend/src/local-session';
+import { LocalAgentSession, type SessionEvent } from '../../packages/cli-backend/src/local-session';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
-import { makeSql, makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime';
+import {
+  makeSql, makeWorkspaceSchemaSql, type CLIRuntime,
+} from '../../packages/cli-backend/src/runtime';
 import { createNodeExecuteToolFactory } from '../../packages/cli-backend/src/execute-tools-factory';
+import { createNodeCraftedExecute } from '../../packages/cli-backend/src/craft-executor';
 import {
   hardTaskFor, recordLiveModelEpisode, scoreTrajectory, seedHardTask, verifyHardTask,
   type EvalArmState, type EvalScoreRow, type HardTask,
 } from '@kinu.run/test-utils';
 
-/** Production-shaped tools for live tests that drive `generateText` directly
- * instead of going through `LocalAgentSession`, which wires this internally. */
-export function buildLiveLocalTools(rt: AgentRuntime): ToolSet {
-  return buildBuiltinTools({
+/**
+ * THE EVAL AGENT'S SURFACE, BUILT BY THE PRODUCTION ROOTS.
+ *
+ * Two suites drive `generateText` directly rather than through
+ * `LocalAgentSession` — the evolution proof, which needs a turn boundary it
+ * controls so it can fire `reviewTurn` per challenge, and the exploration eval,
+ * which measures whether the model REACHES for delegation. Both therefore build
+ * the surface themselves, and both used to build a DIFFERENT one from the
+ * product:
+ *
+ *   - the tools came from `buildBuiltinTools`, which by construction cannot
+ *     hold `agents` (tools/actor-tools.ts: the delegation tool's implementation
+ *     IS the search engine, so the factory that emits a node's own surface
+ *     cannot register it). The product's actor root is `buildActorTools`. So
+ *     every eval that asked "did the model delegate?" asked a model that had no
+ *     delegation tool, and a zero was unreadable: model declined, or nothing to
+ *     decline?
+ *   - the prompt came from a hand-assembled `buildSystemPromptSync` option set.
+ *     `agentsActions` was never passed and `agents` was never on
+ *     `availableTools`, so `renderAgentStateSection` (prompt.ts:236) skipped the
+ *     whole delegation ladder. The model was not shown the surface it was being
+ *     scored on reaching for.
+ *   - the codemode namespaces production wires as `extraProviders` (`agents.*`,
+ *     `web.*`, `memory.*`, `tasks.*`) were absent, so `execute_tools` code the
+ *     prompt teaches threw `not a function` inside the eval only.
+ *
+ * This builds BOTH from the roots `rebuildModelBoundState`
+ * (cli-backend/src/local-session.ts:2822) and the turn assembly
+ * (local-session.ts:1785) use, with the same deps, so a capability cannot be on
+ * one and off the other. `craftedToolExecute` is the load-bearing one and the
+ * reason this is a function rather than a literal: measured without it,
+ * `workspace.createTool` succeeded, the store grew a row, and
+ * `codemode.doubleIt(21)` still failed with "is not a function", because that
+ * dep is what makes `craftedTools()` read the store and its absence SKIPS
+ * crafted bindings silently rather than erroring. A craft score then recorded a
+ * reuse that never executed.
+ *
+ * DECLARED DIFFERENCES FROM A LIVE SESSION, each named rather than left to be
+ * discovered. All are documented non-degrading absences on their own
+ * declarations, and none changes the surface the model is SHOWN:
+ *   - `costModel` is a `ModelCatalogSession` a session owns; absent, a swarm's
+ *     pre-run spend gate blends and says it blended (AgentsForkDeps:267-270).
+ *   - `heads` strategy options are not wired, because a local head runs over a
+ *     FORK of the session's own CLIRuntime. `defaultOptions` has no consumer in
+ *     the shipped tree anyway: declared at agents-tool.ts:299, produced by
+ *     fork-deps.ts:145, read nowhere.
+ *   - `rlmAvailable` is `false` and `llm.query` is unwired, which is what
+ *     production does for a static-model session with no resolver
+ *     (local-session.ts:1790, :2885).
+ * `report` stays unwired: the conformance manifest declares it absent on the
+ * `cli` root, so wiring it here would make the eval surface WIDER than the
+ * product's.
+ */
+export interface EvalAgentSurfaceDeps {
+  /** The runtime `openWorkspaceCLI` returned — the real one, not birth's
+   *  degraded inline VFS/Memory/Executor. */
+  readonly rt: CLIRuntime;
+  /** The model this surface's turns will run on. Held because `agents` needs a
+   *  model to expand a search with; the same value the caller drives. */
+  readonly model: LanguageModel;
+  /** The workspace's provider config, for the prompt's runtime-context model
+   *  line — the one production renders from its effective spec. */
+  readonly llm: LLMProviderConfig;
+}
+
+export interface EvalAgentSurface {
+  /** What `generateText` is handed. */
+  readonly tools: ToolSet;
+  /** The builtin names on it, which is also what the prompt is rendered from. */
+  readonly builtinTools: readonly BuiltinToolName[];
+  /** The `agents` actions this surface's deps actually wire, from the same
+   *  `agentsActionsFor` the tool's own input enum is built from. */
+  readonly agentsActions: readonly AgentsToolAction[];
+  /** The production system prompt for one turn on this surface. A function
+   *  because `activePromptSectionOverrides` is a read the evolution loop can
+   *  change between turns, exactly as in the product. */
+  systemPrompt(): string;
+}
+
+export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurface {
+  const { rt, model, llm } = deps;
+  const sql = rt.storage.sql;
+  const facts = createFactsStore(sql);
+  const taskList = new TaskListStore(sql);
+  const config = createAgentConfigStore(sql);
+  const webSearch = createDefaultWebSearchProvider({ fetch: globalThis.fetch });
+  // `nodeHome` exactly as production passes it (local-session.ts:2499): the
+  // uid-0 view is a property of an in-isolate filesystem, so it rides the
+  // runtime, and a runtime without one makes its nodes report
+  // `shared-origin-plane` rather than a home they lack.
+  const fork: AgentsForkDeps = rt.nodeHome
+    ? { rt, model, nodeHome: rt.nodeHome }
+    : { rt, model };
+  const agents: AgentsToolDeps = { mode: 'build', fork };
+  const tools = buildActorTools({
     rt,
-    createExecuteTool: createNodeExecuteToolFactory(),
+    craftedToolExecute: createNodeCraftedExecute(),
+    createExecuteTool: createNodeExecuteToolFactory({
+      extraProviders: [
+        createAgentsCodemodeProvider(() => agents),
+        createWebCodemodeProvider(webSearch),
+        createMemoryCodemodeProvider(() => ({ memory: rt.memory, facts, sql })),
+        createTasksCodemodeProvider(taskList, config),
+      ],
+    }),
+    codemodeLoader: { __cli: true },
+    agents,
+    facts,
+    webSearch,
   });
+  const builtinTools = Object.keys(tools).filter(isBuiltinToolName);
+  const agentsActions = agentsActionsFor(agents);
+  return {
+    tools,
+    builtinTools,
+    agentsActions,
+    systemPrompt: () => buildSystemPromptSync(rt, {
+      executors: rt.executionRouter?.listExecutors() ?? [],
+      availableTools: builtinTools,
+      agentsActions,
+      // No model resolver here, same as a static-model session: the prompt must
+      // not advertise a decomposition path that would throw.
+      rlmAvailable: false,
+      externalTools: [],
+      backend: 'cli-local',
+      workMode: 'build',
+      planSubmissionAvailable: false,
+      model: { id: llm.model },
+      currentDate: currentDateForPrompt(),
+      sectionOverrides: activePromptSectionOverrides(sql),
+    }),
+  };
+}
+
+/**
+ * WHAT THE PROVIDER WAS ACTUALLY ASKED WITH.
+ *
+ * PRD §9.5's instrument: record whether the model saw the agents surface, and
+ * never treat autonomous non-use as a wiring defect without raw prompt/response
+ * evidence.
+ *
+ * The tool list is read off `LanguageModelV2CallOptions.tools` — the wire-level
+ * argument the provider receives, after `generateText` has resolved the ToolSet,
+ * applied every filter and serialised the schemas. That is a different fact from
+ * `Object.keys(tools)` at the call site: the call site is what the harness
+ * INTENDED to offer, this is what the model WAS offered. A run reporting zero
+ * delegation calls now carries the evidence that separates "declined" from "was
+ * never asked", and the two stop being the same observation.
+ */
+export interface RequestSurfaceEvidence {
+  /** Provider calls observed. Zero means the episode never reached the model,
+   *  which is an unmeasured episode rather than a model that declined. */
+  readonly calls: number;
+  /** Union of every tool name offered across those calls, sorted. */
+  readonly toolsOffered: readonly string[];
+  /** Whether `agents` was among them — the delegation surface, in the request. */
+  readonly agentsOffered: boolean;
+  /** Whether the system prompt the provider received rendered the delegation
+   *  ladder. Both halves are needed: a tool with no prompt section is a
+   *  capability the model was not taught, and a section with no tool is one it
+   *  cannot reach. */
+  readonly delegationSectionShown: boolean;
+  /** System-prompt size, so a truncated or empty projection is visible without
+   *  publishing the prompt itself. */
+  readonly systemChars: number;
+}
+
+/** The swarm rung's marker in the RENDERED section (section-templates.ts:296):
+ *  `action=swarm` appears only when the ladder was rendered WITH the swarm
+ *  rung, which is the fact §9.5 wants — not merely that a heading exists. */
+const DELEGATION_MARKER = 'action=swarm';
+
+/**
+ * The two fields of a provider call this reads, in the shape BOTH model
+ * specifications share. Structural rather than either version's own call-options
+ * type: `LanguageModel` is `string | LanguageModelV3 | LanguageModelV2`
+ * (ai/dist/index.d.ts:96), the two versions' options are separate nominal types,
+ * and this observer needs exactly the two members they agree on. A system
+ * message's content is a string in both, so a non-string is skipped rather than
+ * coerced.
+ */
+interface ObservedRequest {
+  readonly prompt: readonly { readonly role: string; readonly content: unknown }[];
+  readonly tools?: readonly { readonly name: string }[];
+}
+
+/** The two model specifications `LanguageModel` unions over. Named so each
+ *  branch of the wrapper below can be annotated: a literal typed as the union
+ *  gets no contextual parameter types, and the callbacks fall to `any`. */
+type ModelV2 = Extract<LanguageModel, { specificationVersion: 'v2' }>;
+type ModelV3 = Extract<LanguageModel, { specificationVersion: 'v3' }>;
+
+/**
+ * Wrap a model so every request it receives is observed. The wrapper forwards
+ * verbatim — it is not a fake and it changes nothing about the call — so the
+ * evidence is of the real request and a suite keeps driving the real model.
+ *
+ * Branched on `specificationVersion` rather than spread once, because a single
+ * spread over the union widens `doGenerate` to a signature that satisfies
+ * neither version: the two carry incompatible content and stream-part types, and
+ * the compiler is right to refuse. The branches are byte-identical because the
+ * observer only reads what both specifications share.
+ */
+export interface RecordedRequestSurface {
+  readonly model: LanguageModel;
+  evidence(): RequestSurfaceEvidence;
+}
+
+/** The I/O-boundary check for this wrapper's input. `LanguageModel` unions a
+ *  bare model-id STRING with the two resolved specifications, and only the
+ *  resolved ones carry a spec tag — so a successful parse IS the proof of
+ *  resolution, and it doubles as the type guard the branches below need. */
+const RESOLVED_LANGUAGE_MODEL = v.object({
+  specificationVersion: v.picklist(['v2', 'v3']),
+});
+
+function isResolvedLanguageModel(model: LanguageModel): model is ModelV2 | ModelV3 {
+  return v.safeParse(RESOLVED_LANGUAGE_MODEL, model).success;
+}
+
+/** The system message both model specifications agree on: role tag plus plain
+ *  text. Parsing each prompt message against it is how the ladder probe reads
+ *  the system block without reaching into representation. */
+const SYSTEM_MESSAGE = v.object({ role: v.literal('system'), content: v.string() });
+
+/**
+ * Wrap a model so every request it receives is observed. The wrapper forwards
+ * verbatim — it is not a fake and it changes nothing about the call — so the
+ * evidence is of the real request and a suite keeps driving the real model.
+ *
+ * Branched on `specificationVersion` rather than spread once, because a single
+ * spread over the union widens `doGenerate` to a signature that satisfies
+ * neither version: the two carry incompatible content and stream-part types,
+ * and the compiler is right to refuse. The branches delegate identically
+ * because the observer only reads what both specifications share.
+ */
+export function recordRequestSurface(model: LanguageModel): RecordedRequestSurface {
+  if (!isResolvedLanguageModel(model)) {
+    throw new Error(
+      'recordRequestSurface needs a resolved LanguageModel, not a model id string: '
+      + 'a string is resolved inside the SDK, where the request cannot be observed');
+  }
+  const offered = new Set<string>();
+  let calls = 0;
+  let systemChars = 0;
+  let delegationSectionShown = false;
+
+  const observe = (options: ObservedRequest): void => {
+    calls += 1;
+    for (const entry of options.tools ?? []) offered.add(entry.name);
+    const system = options.prompt
+      .map((message) => v.safeParse(SYSTEM_MESSAGE, message))
+      .filter((parsed) => parsed.success)
+      .map((parsed) => parsed.output.content)
+      .join('\n');
+    systemChars = Math.max(systemChars, system.length);
+    if (system.includes(DELEGATION_MARKER)) delegationSectionShown = true;
+  };
+
+  const recording: LanguageModel = model.specificationVersion === 'v2'
+    ? ({
+      ...model,
+      doGenerate: (options) => { observe(options); return model.doGenerate(options); },
+      doStream: (options) => { observe(options); return model.doStream(options); },
+    } satisfies ModelV2)
+    : ({
+      ...model,
+      doGenerate: (options) => { observe(options); return model.doGenerate(options); },
+      doStream: (options) => { observe(options); return model.doStream(options); },
+    } satisfies ModelV3);
+
+  return {
+    model: recording,
+    evidence: () => ({
+      calls,
+      toolsOffered: [...offered].sort(),
+      agentsOffered: offered.has('agents'),
+      delegationSectionShown,
+      systemChars,
+    }),
+  };
 }
 
 /**
@@ -99,6 +384,23 @@ export interface BehaviourScoreJson {
   [key: string]: JsonValue;
 }
 
+export type BehaviourProvenanceEventJson = Record<string, JsonValue> & {
+  runId: string;
+  timestamp: string;
+  eventIndex: number;
+  type: string;
+  name?: string;
+  durationMs?: number;
+  failureClass?: string;
+};
+
+export interface BehaviourProvenanceJson {
+  totalEvents: number;
+  bound: number;
+  events: BehaviourProvenanceEventJson[];
+  [key: string]: JsonValue;
+}
+
 export interface BehaviourOutput {
   taskId: string;
   turns: number;
@@ -108,6 +410,12 @@ export interface BehaviourOutput {
   tokensIn: number;
   tokensOut: number;
   reasoningOut: number;
+  /**
+   * Bounded raw run-event provenance for this episode — what the ledger says
+   * happened, with every content-bearing payload stripped. See
+   * {@link collectRunEventProvenance}.
+   */
+  provenance: BehaviourProvenanceJson;
   [key: string]: JsonValue;
 }
 
@@ -245,6 +553,68 @@ export function readLedgerTotals(db: Database): LedgerTotals {
   return { turns, toolCalls, toolNames, tokensIn, tokensOut, reasoningOut, steps, failures };
 }
 
+/** How many run events one observation's provenance may carry. A long episode
+ *  can produce thousands of rows; the bound keeps a published record a record
+ *  rather than a second copy of the ledger, and `totalEvents` beside it says
+ *  exactly how much a clipped slice is not showing. */
+const PROVENANCE_EVENT_BOUND = 500;
+
+/**
+ * The episode's raw run-event trail, bounded and stripped of everything that
+ * could quote the prompt or a secret.
+ *
+ * WHY AT ALL. The published observation used to carry aggregates only — counts
+ * with no order, no tool names beyond the flat list, no failure classes — so a
+ * reader of the record asking "what did this attempt actually DO" had to reopen
+ * the SQLite store named in `transcripts`, and after any retention sweep could
+ * not answer at all. This carries the ledger's shape: every event in order,
+ * each reduced to its structural facts.
+ *
+ * WHAT IS DROPPED, deliberately: `userMessage` (the prompt), `args`, `result`,
+ * `messages`, `error`/`details` text (an error string can quote file contents),
+ * and the model-authored prose fields (`rationale`, `mergedNarrative`,
+ * `blindSpots`). What survives is what happened, never what was said. A failed
+ * tool call keeps its failure CLASS from `classifyToolFailure` (`exit_127`,
+ * `threw`, `denied`, …) so a record can be triaged without reopening anything.
+ */
+export function collectRunEventProvenance(db: Database): BehaviourProvenanceJson {
+  const recorder = new RunEventRecorder(makeSql(db));
+  const events: RunEvent[] = [];
+  let cursor: SeekCursor | null = null;
+  for (;;) {
+    const page = listRuns(recorder, cursor);
+    for (const run of page.items) events.push(...recorder.read(run.runId, { limit: 100_000 }));
+    if (page.status === 'end') break;
+    cursor = page.next;
+  }
+  events.sort((a, b) =>
+    a.timestamp.localeCompare(b.timestamp)
+    || a.runId.localeCompare(b.runId)
+    || a.eventIndex - b.eventIndex);
+  const projected = events.map((event): BehaviourProvenanceEventJson => {
+    const base = {
+      runId: event.runId,
+      timestamp: event.timestamp,
+      eventIndex: event.eventIndex,
+      type: event.type,
+    };
+    if (event.type !== 'tool_call_end') return base;
+    const toolCall: BehaviourProvenanceEventJson = {
+      ...base,
+      name: event.name,
+    };
+    if (event.durationMs !== undefined) toolCall.durationMs = event.durationMs;
+    const failure = classifyToolFailure(event);
+    if (failure) toolCall.failureClass = failure.reason;
+    return toolCall;
+  });
+  return {
+    totalEvents: projected.length,
+    bound: PROVENANCE_EVENT_BOUND,
+    events: projected.slice(0, PROVENANCE_EVENT_BOUND),
+  };
+}
+
 export interface BehaviourHarnessOptions {
   readonly dir: string;
   readonly model: LanguageModel;
@@ -254,6 +624,11 @@ export interface BehaviourHarnessOptions {
    *  harness closing eagerly, because the run record is written last and reads
    *  these stores after every task has finished. */
   readonly opened: Database[];
+  /** Observe the episode's events AS THEY LAND. The behaviour suite uses this to
+   *  make an in-flight case's progress durable, so a run killed mid-episode
+   *  reports what that case got through instead of losing it. Defaults to a
+   *  no-op, which is what every non-resumable caller wants. */
+  readonly onEvent?: (event: SessionEvent) => void;
 }
 
 /** Thrown when a trajectory recorded nothing gradable. A distinct type so the
@@ -468,7 +843,7 @@ export async function runBehaviourTask(
   if (task.tags?.includes('workspace')) await seedWorkspaceTree(rt);
 
   const session = new LocalAgentSession({
-    rt, db, model: opts.model, onEvent: () => {},
+    rt, db, model: opts.model, onEvent: opts.onEvent ?? (() => {}),
     // The arm, not a convenience default: a run whose evolution was off is not a
     // measurement of evolution, and the run record says which it was.
     noAutoEvolve: !opts.arm.evolution,
@@ -520,5 +895,6 @@ export async function runBehaviourTask(
     tokensIn: totals.tokensIn,
     tokensOut: totals.tokensOut,
     reasoningOut: totals.reasoningOut,
+    provenance: collectRunEventProvenance(db),
   };
 }

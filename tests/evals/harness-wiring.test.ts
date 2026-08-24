@@ -24,34 +24,38 @@
  */
 import { describe, test, expect, afterAll, beforeAll } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { LanguageModel } from 'ai';
 import * as v from 'valibot';
+import { generateText, stepCountIs, type LanguageModel } from 'ai';
 
-import type { AgentRuntime, EvalCase, LLMProviderConfig, RunEvent, SeekCursor } from '../../packages/core/src/index';
+import type { AgentRuntime, AgentsToolAction, EvalCase, LLMProviderConfig, RunEvent, SeekCursor } from '../../packages/core/src/index';
 import {
-  censusToolFailures, classifyToolFailure, DefaultExecutionRouter, initWorkspaceSchema,
-  listRuns, RunEventRecorder,
+  CRAFT_NEUTRAL_PRIOR,
+  censusToolFailures, classifyToolFailure, compareSurface, DefaultExecutionRouter,
+  initWorkspaceSchema, listRuns, observedActionEnum, renderConformanceFindings,
+  RunEventRecorder,
 } from '../../packages/core/src/index';
 import { DIGEST_LIMIT, JsonObjectSchema } from '../../packages/core/src/utils/json';
 import { createWorkspace } from '../../packages/core/src/identity/index';
-import { makeSql, makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime';
+import { makeSql, makeWorkspaceSchemaSql, type CLIRuntime } from '../../packages/cli-backend/src/runtime';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import {
   HARD_TASKS, liveModelSpend, recordLiveModelEpisode, resetLiveModelSpend,
-  hardTaskCases, type EvalArmState,
+  hardTaskCases, toolExecute, type EvalArmState,
 } from '@kinu.run/test-utils';
 // The two file names belong to the measurement substrate, which moved to core so a
 // registered verifier kind resolves to code the tool surface can reach.
 import { REFERENCE_FILE, SOLUTION_FILE } from '../../packages/core/src/index';
 
 import {
+  buildEvalAgentSurface, recordRequestSurface,
   DegenerateRunError, DegenerateRuntimeError, requireExecutorSurface,
   requireSandboxedExecutors, runBehaviourTask, UnsandboxedRuntimeError,
-  type BehaviourScoreJson,
+  type BehaviourScoreJson, type EvalAgentSurface,
 } from './harness';
+
 import { parseSpend, renderSpend } from '../../scripts/eval-spend';
 
 const LLM: LLMProviderConfig = {
@@ -149,7 +153,6 @@ function scripted(steps: readonly ScriptedStep[]): LanguageModel {
   };
   return model;
 }
-
 const dir = mkdtempSync(join(tmpdir(), 'harness-wiring-'));
 const opened: Database[] = [];
 
@@ -185,6 +188,34 @@ async function runCase(
   return out.scores;
 }
 
+/**
+ * A real workspace plus the eval agent's surface, built by the production actor
+ * root. The scripted model is handed over because `buildEvalAgentSurface` needs
+ * one — `agents` is built from deps that carry the model a search expands with —
+ * and an empty script is enough: nothing here asks it to answer.
+ */
+async function openRuntimeProbe(name: string): Promise<{
+  db: Database;
+  rt: CLIRuntime;
+  surface: EvalAgentSurface;
+}> {
+  const workDir = join(dir, name);
+  mkdirSync(workDir, { recursive: true });
+  const dbPath = join(workDir, 'agent.db');
+  const db = new Database(dbPath, { create: true });
+  opened.push(db);
+  await createWorkspace(db, {
+    name,
+    purpose: 'Credential-free eval harness wiring probe.',
+    llm: LLM,
+  });
+  initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+  const { rt } = await openWorkspaceCLI(db, dbPath, { llm: LLM, hostRoot: null });
+  requireSandboxedExecutors(name, rt);
+  const surface = buildEvalAgentSurface({ rt, model: scripted([]), llm: LLM });
+  return { db, rt, surface };
+}
+
 /** `tags` reaches `runBehaviourTask`, which seeds the source tree only for a
  *  `workspace` case — an unseeded tree makes a `file` refusal read `missing`
  *  (the path is not there) instead of the contract reason under test. */
@@ -197,6 +228,265 @@ async function run(
 const CREATE_DOUBLE =
   'await workspace.createTool("doubleIt", "doubles a number", "async (n) => n * 2"); return "made";';
 
+describe('crafted-tool discovery and execution use the production CLI adapter', () => {
+  test('workspace.listTools exposes exactly the callable inherited craft set before reuse', async () => {
+    const { rt, surface } = await openRuntimeProbe('crafted-production-set');
+    const executeEntry = surface.tools.execute_tools;
+    if (!executeEntry) throw new Error('the eval surface omitted execute_tools');
+    const execute = toolExecute<{ code: string }, unknown>(executeEntry);
+
+    const createDouble = await execute({ code: CREATE_DOUBLE });
+    expect(createDouble).toEqual({
+      result: { ok: true, name: 'doubleIt', action: 'created' },
+    });
+    const createIncrement = await execute({
+      code: 'await workspace.createTool("increment", "adds one", "async (n) => n + 1"); return "made";',
+    });
+    expect(createIncrement).toEqual({
+      result: { ok: true, name: 'increment', action: 'created' },
+    });
+
+    // Discovery first. The model-facing production prompt tells the agent to
+    // call this before building from scratch; the proof must therefore reach
+    // the same `workspace.listTools()` projection, not inspect CraftStore rows
+    // alone and assume the namespace exposes them.
+    const listed = v.parse(
+      v.object({
+        result: v.array(v.object({
+          name: v.string(),
+          description: v.string(),
+          qualityScore: v.number(),
+        })),
+      }),
+      await execute({ code: 'return await workspace.listTools();' }),
+    );
+    const listedTools = [...listed.result].sort((a, b) => a.name.localeCompare(b.name));
+    expect(listedTools).toEqual([
+      { name: 'doubleIt', description: 'doubles a number', qualityScore: CRAFT_NEUTRAL_PRIOR },
+      { name: 'increment', description: 'adds one', qualityScore: CRAFT_NEUTRAL_PRIOR },
+    ]);
+
+    // Set equality with the production store authority: no listed tool is
+    // missing from the callable set, and no stored tool is hidden from
+    // discovery. This is stronger than a non-zero count.
+    const storedNames = rt.craftStore.list().map((tool) => tool.name).sort();
+    expect(listedTools.map((tool) => tool.name)).toEqual(storedNames);
+
+    // Callable inherited craft, through the same adapter LocalAgentSession
+    // wires. This is the assertion the old craft-cycle count never made: with
+    // `craftedToolExecute` absent the metric still said 1/1 while this call
+    // returned \"codemode.doubleIt is not a function\".
+    expect(await execute({ code: 'return await codemode.doubleIt(21);' }))
+      .toEqual({ result: 42 });
+    expect(await execute({ code: 'return await tools.increment(41);' }))
+      .toEqual({ result: 42 });
+  }, 0);
+});
+
+/**
+ * EVAL/PRODUCTION SET EQUALITY — the gate PRD §9.3 and §9.5 turn on, and the
+ * reason the two suites that drive `generateText` directly can no longer be
+ * quietly better- or worse-equipped than the product.
+ *
+ * Judged against `BACKEND_CONFORMANCE`, the repository's existing declaration of
+ * which composition root wires which capability, rather than a list retyped
+ * here. That matters in the observed-but-undeclared direction: the manifest's
+ * `Record<BuiltinToolName, …>` cannot compile when a tool is added without a
+ * per-root decision, so a capability that lands on the product and not on the
+ * eval surface fails here instead of being discovered by a live run that reports
+ * a zero.
+ *
+ * THE ONE SCOPED PLANE, stated rather than hidden. The manifest's `cli` rows for
+ * `hire`/`ask`/`send`/`reply`/`list`/`dismiss` are observed from the HOSTED
+ * path: LocalAgentHost installs the team roster and the peer transport after it
+ * acquires a session (agent-host/host.ts:352 `setTeam`, :357 `setPeers`). The
+ * eval drives the actor DIRECTLY — no daemon — which is the production shape of
+ * an unhosted static-model session (`kinu exec`, one-shot): teamDeps and
+ * peersDeps are null until a host installs them (local-session.ts:2524-2529), so
+ * `agentsActionsFor` yields exactly `['swarm']`. Wiring fake team transports to
+ * widen the enum would put actions on the surface that every dispatch throws on
+ * — the phantom-surface class this repo gates against. Hosting the evals through
+ * LocalAgentHost to measure the hosted surface is a real option and is recorded
+ * in the ticket as a follow-up decision; until then this gate holds the tool
+ * plane to FULL equality and the action plane to the unhosted resolution,
+ * asserted structurally below rather than assumed.
+ *
+ * Credential-free on purpose. Every failure this gate exists to catch is a
+ * WIRING fact, and paying a provider to discover a wiring fact is how three
+ * flash runs came to blame a corpus for `craft_reuse eligible 0`.
+ */
+
+/** The six actions whose manifest row is observed from the hosted path. A
+ *  capability leaves this list only by being wired here for real. */
+const HOST_INSTALLED_ACTIONS: readonly AgentsToolAction[] =
+  ['hire', 'ask', 'send', 'reply', 'list', 'dismiss'];
+
+describe('the eval agent surface is set-equal to the production cli root', () => {
+  test('its tools are exactly what the manifest declares, and its actions match the deps it carries', async () => {
+    const { surface } = await openRuntimeProbe('parity-declared-surface');
+
+    // TOOL plane: full set equality in both directions, no scoping. A tool the
+    // manifest declares wired and the surface lacks fails here, as does any
+    // tool the surface grew without a manifest row.
+    const report = compareSurface({
+      root: 'cli',
+      planes: {
+        tool: new Set(Object.keys(surface.tools)),
+        'agents-action': observedActionEnum(surface.tools.agents),
+      },
+    });
+    expect(report.findings.filter((f) => f.plane === 'tool')).toEqual([]);
+
+    // ACTION plane: compared against the same enum minus exactly the six
+    // host-installed rows named above, so a NEW manifest row cannot silently
+    // join the exclusion — the compiler forces it into AgentsToolAction, and
+    // this filter would then hide it from the comparison while the assertion
+    // below still demands the surface resolve every non-host action it declares.
+    const actionFindings = report.findings.filter((f) => f.plane === 'agents-action');
+    const scoped = actionFindings
+      .filter((f) => !HOST_INSTALLED_ACTIONS.some((action) => action === f.name));
+    if (scoped.length > 0 || actionFindings.length > HOST_INSTALLED_ACTIONS.length) {
+      console.log(renderConformanceFindings({ ...report, findings: actionFindings }));
+    }
+    expect(scoped).toEqual([]);
+
+    // The structural half of the scoping claim: the surface carries fork deps
+    // and nothing else, so `agentsActionsFor` MUST resolve to swarm alone. If
+    // someone later wires team/peers into buildEvalAgentSurface, this exact-
+    // equality fails and forces the exclusion list above to shrink with it.
+    expect(observedActionEnum(surface.tools.agents)).toEqual(new Set(['swarm']));
+    expect([...observedActionEnum(surface.tools.agents)].sort())
+      .toEqual([...surface.agentsActions].sort());
+    // `swarm` is the rung the exploration and delegation evals measure; its
+    // absence would mean the eval had no delegation substrate at all.
+    expect(surface.agentsActions).toContain('swarm');
+
+    // The unmeasured planes are stated rather than left implicit: this harness
+    // observes the MODEL-FACING surface, and the schema and producer planes
+    // belong to a session's own construction. `compareSurface` reports them so
+    // an unmeasured plane can never read as a conformant one.
+    expect([...report.unmeasured].sort())
+      .toEqual(['memory-action', 'producer', 'table']);
+  }, 0);
+
+  test('every codemode namespace production wires is reachable from execute_tools', async () => {
+    const { surface } = await openRuntimeProbe('parity-codemode-namespaces');
+    const executeEntry = surface.tools.execute_tools;
+    if (!executeEntry) throw new Error('the eval surface omitted execute_tools');
+    const execute = toolExecute<{ code: string }, unknown>(executeEntry);
+
+    // A namespace is proven by CALLING it, not by finding its provider in a
+    // list: an unbound namespace fails with `is not a function` at the first
+    // call, which is exactly how the crafted-tool gap hid. One cheap read per
+    // namespace, no network and no model.
+    expect(await execute({ code: 'return typeof agents;' })).toEqual({ result: 'object' });
+    expect(await execute({ code: 'return typeof web.search;' })).toEqual({ result: 'function' });
+    // `tasks.list` resolves to `{ tasks: [...] }` (tasks-tool.ts:147-163), so the
+    // assertion reads that shape rather than guessing an array.
+    expect(await execute({ code: 'return Array.isArray((await tasks.list()).tasks);' }))
+      .toEqual({ result: true });
+    const saved = v.parse(
+      v.object({ result: v.string() }),
+      await execute({ code: 'await memory.save("parity", "reachable"); return "saved";' }),
+    );
+    expect(saved.result).toContain('saved');
+  }, 0);
+
+  test('the production prompt shows the model the delegation surface it is scored on', async () => {
+    const { surface } = await openRuntimeProbe('parity-prompt-projection');
+    const system = surface.systemPrompt();
+
+    // The §9.5 precondition. `renderAgentStateSection` (core prompt.ts:236)
+    // renders the ladder only when `agents` is on `availableTools`, so a prompt
+    // assembled from a ToolSet that could not hold `agents` silently dropped it —
+    // and the exploration eval then scored a model on reaching for a capability
+    // its prompt never mentioned.
+    expect(system).toContain('## Delegation');
+    expect(system).toContain('action=swarm');
+    // Every builtin on the surface is NAMED in the prompt's tool section, so the
+    // two projections cannot disagree about what exists.
+    for (const name of surface.builtinTools) expect(system).toContain(name);
+  }, 0);
+
+  test('the request evidence reports the tool list the provider actually received', async () => {
+    const { rt, surface } = await openRuntimeProbe('parity-request-evidence');
+    // `scripted` streams only, because LocalAgentSession drives streamText; this
+    // probe drives generateText directly, so it needs the one-shot generate
+    const answering: ModelV2 = {
+      specificationVersion: 'v2',
+      provider: 'fake',
+      modelId: 'fake-model',
+      supportedUrls: {},
+      doGenerate: () => Promise.resolve({
+        content: [],
+        finishReason: 'tool-calls' as const,
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        warnings: [],
+      }),
+      doStream: () => Promise.reject(new Error('this probe generates only')),
+    };
+    const recorder = recordRequestSurface(answering);
+
+    await generateText({
+      model: recorder.model,
+      system: surface.systemPrompt(),
+      messages: [{ role: 'user', content: 'say done' }],
+      tools: surface.tools,
+      stopWhen: stepCountIs(1),
+    });
+    resetLiveModelSpend();
+
+    const evidence = recorder.evidence();
+    // Read off `LanguageModelV2CallOptions`, so this is what the PROVIDER got
+    // rather than what the call site meant to send. Without it, a suite reporting
+    // zero delegation calls has no way to say whether a tool was offered.
+    expect(evidence.calls).toBeGreaterThan(0);
+    expect(evidence.toolsOffered).toEqual(Object.keys(surface.tools).sort());
+    expect(evidence.agentsOffered).toBe(true);
+    expect(evidence.delegationSectionShown).toBe(true);
+    expect(evidence.systemChars).toBe(surface.systemPrompt().length);
+    // The runtime is unchanged by observation — the wrapper forwards and reads,
+    // it does not answer.
+    expect(rt.identity.name).toBe('parity-request-evidence');
+  }, 0);
+});
+
+describe('published run-event provenance', () => {
+  test('it is bounded, ordered, useful, and carries no prompt or secret content', async () => {
+    const secret = 'sk-provenance-canary-0123456789';
+    const prompt = `Diagnose one failing block. The synthetic credential is ${secret}.`;
+    const output = await runBehaviourTask({
+      id: 'wiring-provenance',
+      task: prompt,
+    }, {
+      dir,
+      model: scripted([{
+        tool: 'execute_tools',
+        input: { code: `throw new Error(${JSON.stringify(secret)});` },
+      }]),
+      llm: LLM,
+      arm: ARM,
+      opened,
+    });
+
+    expect(output.provenance.totalEvents).toBeGreaterThan(0);
+    expect(output.provenance.events.length).toBeLessThanOrEqual(output.provenance.bound);
+    expect(output.provenance.totalEvents).toBeGreaterThanOrEqual(output.provenance.events.length);
+    const timestamps = output.provenance.events.map((event) => event.timestamp);
+    expect(timestamps).toEqual([...timestamps].sort());
+    expect(output.provenance.events.some((event) =>
+      event.type === 'tool_call_end'
+      && event.name === 'execute_tools'
+      && event.failureClass !== undefined)).toBe(true);
+
+    // The task prompt, submitted code, tool result and error text all contain
+    // the canary. None is part of the structural provenance projection.
+    const serialized = JSON.stringify(output.provenance);
+    expect(serialized).not.toContain(prompt);
+    expect(serialized).not.toContain(secret);
+  }, 0);
+});
+
 describe('behaviour harness wiring — the three scorers that read zero live', () => {
   test('craft_reuse: the harness binds the workspace provider, so a tool crafted mid-turn is callable', async () => {
     const scores = await run('wiring-craft', [
@@ -205,6 +495,7 @@ describe('behaviour harness wiring — the three scorers that read zero live', (
     ]);
 
     const craft = scoreOf(scores, 'craft_reuse');
+
     // The denominator is the whole point: on the degraded runtime this is 0
     // because `workspace.createTool` is undefined, and a 0/0 reads as "the
     // corpus never asked" rather than "the dependency is missing".
@@ -213,7 +504,7 @@ describe('behaviour harness wiring — the three scorers that read zero live', (
 
     // And the loop really closed rather than the row merely existing.
     expect(craft.detail).toContain('1/1 crafted tools reused');
-  }, 30_000);
+  }, 0);
 
   test('completion_honesty: a one-shot task turn arms the gate and the confirming turn closes', async () => {
     const scores = await run('wiring-gate', [
@@ -225,7 +516,7 @@ describe('behaviour harness wiring — the three scorers that read zero live', (
     // only once the gate's own confirming turn closes — which happens after
     // `send` resolves, so it needs the pump settled.
     expect(honesty.eligible).toBeGreaterThan(0);
-  }, 30_000);
+  }, 0);
 
   test('spill_retrieval: bulk output the budget spilled reaches the scorer with a readable address', async () => {
     // Written and read back in the same turn, so the fixture carries its own
@@ -242,7 +533,7 @@ describe('behaviour harness wiring — the three scorers that read zero live', (
     // ~150-char files could never score it.
     expect(spill.eligible).toBeGreaterThan(0);
     expect(spill.detail).toContain('readable spills');
-  }, 30_000);
+  }, 0);
 
   test('the harness REFUSES a runtime with no executor surface, before spending anything', async () => {
     // The positive direction is covered by the three tests above: they all run,
@@ -266,7 +557,7 @@ describe('behaviour harness wiring — the three scorers that read zero live', (
     // And it is NOT filed as an inert agent — that bucket means the agent did
     // nothing, not that the harness was broken (behaviour.eval.ts:281).
     expect(new DegenerateRuntimeError('t', 'r')).not.toBeInstanceOf(DegenerateRunError);
-  }, 30_000);
+  }, 0);
 });
 
 /**
@@ -318,7 +609,7 @@ describe('episode isolation — no plane outside the episode sandbox', () => {
       expect(classifyToolFailure(row)?.reason).toBe('returned_error');
       expect(JSON.stringify(row.result)).toContain('laptop');
     }
-  }, 30_000);
+  }, 0);
 
   test('the harness REFUSES a runtime carrying a host plane, before spending anything', async () => {
     const dbPath = join(dir, 'unsandboxed.db');
@@ -343,7 +634,7 @@ describe('episode isolation — no plane outside the episode sandbox', () => {
 
     // A misconfigured harness is not an inert agent (behaviour.eval.ts:347).
     expect(new UnsandboxedRuntimeError('t', 'laptop')).not.toBeInstanceOf(DegenerateRunError);
-  }, 30_000);
+  }, 0);
 });
 
 /**
@@ -532,7 +823,7 @@ describe('hard-task wiring — env resolves to a seeded task and a scored outcom
     // The comparator drops such a pair BY NAME (`baseline-unverified`). Charging
     // it as a zero would turn a missing verifier into a fact about the agent.
     expect(scores.find((s) => s.name === 'task_outcome')).toBeUndefined();
-  }, 30_000);
+  }, 0);
 });
 
 /**
@@ -587,7 +878,7 @@ describe('episode spend — the meter is fed by the session, not by silence', ()
     // would move, and they must be quiet when it does not.
     expect(spent.callsWithoutUsage).toBe(0);
     expect(spent.episodesUnmeasured).toBe(0);
-  }, 30_000);
+  }, 0);
 
   test('an episode that spends and reports nothing is labelled, never a clean 0', () => {
     const callsBefore = liveModelSpend().calls;

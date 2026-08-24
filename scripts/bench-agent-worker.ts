@@ -75,7 +75,6 @@ async function main(): Promise<void> {
       }
     },
     noAutoEvolve: !input.autoEvolve,
-    sessionId: input.sessionId,
     cwd: process.cwd(),
   });
 

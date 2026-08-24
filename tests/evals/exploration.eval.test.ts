@@ -35,13 +35,10 @@ import { tmpdir } from 'node:os';
 import { generateText, stepCountIs, type LanguageModel, type ToolSet, type StepResult } from 'ai';
 
 import {
-  buildActorTools,
   createMCTSStrategy,
   createStrategyRegistry,
   DEFAULT_CONFIG,
   initWorkspaceSchema,
-  readSoul,
-  type AgentRuntime,
   type LLMProviderConfig,
   type MCTSProgressEvent,
   type SessionMessage,
@@ -50,8 +47,11 @@ import {
 } from '../../packages/core/src/index';
 import { createWorkspace } from '../../packages/core/src/identity/index';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
-import { makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime';
-import { requireSandboxedExecutors } from './harness';
+import { makeWorkspaceSchemaSql, type CLIRuntime } from '../../packages/cli-backend/src/runtime';
+import {
+  buildEvalAgentSurface, recordRequestSurface, requireSandboxedExecutors,
+  type EvalAgentSurface,
+} from './harness';
 import {
   liveChatModel, liveModelCallSink, liveModelTarget, recordLiveModelEpisode, recordLiveModelSpend,
   reportLiveModelSpend, scoreExploration, scoreSettleVisibility, UNCONFIGURED_LLM,
@@ -121,10 +121,15 @@ function makeSessionWriter(): SessionWriter {
 
 describe('Exploration evals — MCTS reached, ranked, and readable', () => {
   let db: InstanceType<typeof Database>;
-  let rt: AgentRuntime;
+  let rt: CLIRuntime;
   let model: LanguageModel;
   let registry: StrategyRegistry;
-  let tools: ToolSet;
+  /** The eval agent's surface from the PRODUCTION actor root. This used to
+   *  assemble `buildActorTools` with a hand-rolled `agents.fork` — the same
+   *  shape, minus every dep production passes — which made the surface a
+   *  near-miss of the product's and kept this file one drift away from scoring
+   *  its own construction. */
+  let surface: EvalAgentSurface;
 
   beforeAll(async () => {
     mkdirSync(TEST_DIR, { recursive: true });
@@ -151,7 +156,11 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     // trusted, because this suite spends real money to find out.
     ({ rt } = await openWorkspaceCLI(db, DB_PATH, { llm: LLM_CONFIG, hostRoot: null }));
     requireSandboxedExecutors('exploration-eval', rt);
+    // The model first, then the surface through the shared production
+    // construction (`buildEvalAgentSurface`, harness.ts): same factory, same
+    // craftedToolExecute, same codemode providers, same fork-deps shape.
     model = liveChatModel(LLM_CONFIG);
+    surface = buildEvalAgentSurface({ rt, model, llm: LLM_CONFIG });
 
     // `mcts` is registered for the WORKS test to drive DIRECTLY. It is no longer
     // reachable from the tool's own surface — `agents-tool.ts:911` dispatches
@@ -163,18 +172,6 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     // way around the tool.
     registry = createStrategyRegistry();
     registry.register(createMCTSStrategy());
-
-    tools = buildActorTools({
-      rt,
-      agents: {
-        mode: 'build',
-        fork: {
-          rt,
-          model,
-          defaultOptions: () => ({ mcts: { session: makeSessionWriter() } }),
-        },
-      },
-    });
   });
 
   afterAll(() => {
@@ -187,10 +184,16 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     // Credential-free, and the precondition every eval below rests on. Without
     // it "the model did not fork" would be indistinguishable from "the model
     // could not fork", and the delegation rate would be measuring the harness.
-    expect(Object.keys(tools)).toContain('agents');
+    expect(Object.keys(surface.tools)).toContain('agents');
+    // And the prompt names it: a tool the model is never told about is not
+    // offered in any sense that matters (PRD §9.5 — production prompt AND tool
+    // projection).
+    const system = surface.systemPrompt();
+    expect(system).toContain('## Delegation');
+    expect(system).toContain('action=swarm');
   });
 
-  liveTest('WORKS: a driven mcts search branches and ranks, durably', async () => {
+  liveTest('DRIVEN (instructed): a direct mcts search branches and ranks, durably', async () => {
     // Driven through the STRATEGY, not through `agents.execute`. The tool used to
     // reach this with `{ action:'fork', settle:'mcts' }`; `settle` is gone from
     // the model-facing surface (it survives only as a stored-row translation in
@@ -298,7 +301,7 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     // And the ranking survived into the store as exactly one terminal node, so
     // a later reader sees the same winner this run picked.
     expect(score.durablyRankedRuns).toBe(score.searchRuns);
-  }, 900_000);
+  }, 0);
 
   liveTest('VISIBLE: every settle mode wrote where the Exploration reader reads', () => {
     const score = scoreSettleVisibility(rt.storage.sql);
@@ -325,15 +328,21 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     expect(score.invisibleRoots).toEqual([]);
   });
 
-  liveTest('USED: the model reaches for exploration on a task that warrants it', async () => {
-    const soul = await readSoul(rt.storage.vfs) ?? '';
+  liveTest('AUTONOMOUS: the model reaches for exploration on a task that warrants it', async () => {
     const calls: string[] = [];
+    // THE §9.5 FIX. This used to pass `system: soul` — the workspace SOUL file
+    // alone, which never mentions delegation — over a ToolSet that could not
+    // hold `agents`. Whatever that measured, it was not the product's
+    // conversion behaviour: the model was scored on reaching for a capability it
+    // was neither offered nor told about. Now the turn runs the PRODUCTION
+    // projection and the PRODUCTION tool surface.
+    const recorder = recordRequestSurface(model);
 
     const result = await generateText({
-      model,
-      system: soul,
+      model: recorder.model,
+      system: surface.systemPrompt(),
       messages: [{ role: 'user' as const, content: EXPLORATION_TASK }],
-      tools,
+      tools: surface.tools,
       stopWhen: stepCountIs(12),
       onStepFinish: (step: StepResult<ToolSet>) => {
         for (const call of step.toolCalls ?? []) calls.push(call.toolName);
@@ -345,6 +354,22 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     console.log(`    tools called: ${calls.join(', ') || '(none)'}`);
     console.log(`    delegation-tool reaches: ${String(reached)} of ${String(calls.length)} calls`);
 
+    // REQUEST EVIDENCE, per §9.5. A zero below now arrives with the proof of
+    // what the provider was actually asked with, so "the model declined" and
+    // "the harness never asked" can never again be the same observation. The
+    // evidence itself is asserted because it is harness fact, not model
+    // behaviour: if this fails the wiring is broken and no conversion number in
+    // the run means anything.
+    const evidence = recorder.evidence();
+    console.log(`    request evidence: ${String(evidence.calls)} call(s), tools offered `
+      + `${evidence.toolsOffered.join(', ')}, agents=${String(evidence.agentsOffered)}, `
+      + `delegation ladder shown=${String(evidence.delegationSectionShown)}, `
+      + `system ${String(evidence.systemChars)} chars`);
+    expect(evidence.calls).toBeGreaterThan(0);
+    expect(evidence.toolsOffered).toEqual(Object.keys(surface.tools).sort());
+    expect(evidence.agentsOffered).toBe(true);
+    expect(evidence.delegationSectionShown).toBe(true);
+
     // The denominator is one eligible turn, stated. This is a SAMPLE of a rate,
     // not the rate: a single turn cannot measure a conversion percentage, and
     // the aggregate lives in the delegation eval over run_events.
@@ -352,7 +377,8 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     // What is asserted is the part that is not model-dependent: the turn
     // completed and produced observable tool traffic, so a zero above is the
     // model declining rather than the harness failing to ask. A run where the
-    // model called nothing at all cannot distinguish those two.
+    // model called nothing at all cannot distinguish those two — but with the
+    // request evidence above, at least the offer itself is proven.
     expect(calls.length).toBeGreaterThan(0);
-  }, 600_000);
+  }, 0);
 });

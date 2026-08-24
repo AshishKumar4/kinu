@@ -214,41 +214,54 @@ beforeAll(async () => {
         () => document.querySelector('[data-decision-state]')?.getAttribute('data-decision-state') === 'retried',
       );
       expect(await page.evaluate(() => {
-        const root = document.querySelector('[data-tui-session]');
-        return [...(root?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
-          .some((button) => button.textContent?.includes('Jarvis') === true);
-      })).toBe(false);
-      expect(await page.$eval(
-        '[aria-controls="landing-tui-workspaces"]',
-        (button) => button.getAttribute('aria-expanded'),
-      )).toBe('false');
+        const pinned = document.querySelector('[aria-label="Pinned workspaces"]');
+        const trigger = document.querySelector('[aria-controls="landing-tui-workspaces"]');
+        const user = document.querySelector('[data-tui-role="user"]');
+        const assistant = document.querySelector('[data-tui-role="assistant"]');
+        const buttons = [...(pinned?.querySelectorAll<HTMLButtonElement>('button') ?? [])];
+        return {
+          pinned: (pinned?.getClientRects().length ?? 0) > 0,
+          trigger: (trigger?.getClientRects().length ?? 0) > 0,
+          userLabel: user?.textContent?.includes('YOU') === true,
+          assistantLabel: assistant?.querySelector('span')?.textContent ?? null,
+          adaptiveHint: document.querySelector('[data-tui-agent]')?.textContent?.includes('Alt+W workspaces') === true,
+          groupHeader: buttons.some((button) => button.textContent?.replace(/\s+/gu, ' ').includes('checkout · 2') === true),
+          subordinate: pinned?.textContent?.includes('└ reviewer · auditor') === true,
+          cloudCollapsedHidesJarvis: buttons.every((button) => button.textContent?.includes('Jarvis') !== true),
+        };
+      })).toEqual({
+        pinned: true,
+        trigger: false,
+        userLabel: true,
+        assistantLabel: null,
+        adaptiveHint: true,
+        groupHeader: true,
+        subordinate: true,
+        cloudCollapsedHidesJarvis: true,
+      });
+      // Expanding the collapsed cloud section reveals the remote workspace;
+      // selecting the agent, not the section, swaps the surface.
       await page.evaluate(() => {
-        const root = document.querySelector('[data-tui-session]');
-        const workspaces = [...(root?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
-          .find((button) => button.textContent?.includes('Ctrl+O workspaces') === true);
-        workspaces?.focus();
-        workspaces?.click();
+        const pinned = document.querySelector('[aria-label="Pinned workspaces"]');
+        const cloud = [...(pinned?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
+          .find((button) => button.getAttribute('aria-expanded') === 'false' && button.textContent?.includes('Cloud') === true);
+        cloud?.click();
       });
       await page.waitForFunction(() => {
-        const root = document.querySelector('[data-tui-session]');
-        return [...(root?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
+        const pinned = document.querySelector('[aria-label="Pinned workspaces"]');
+        return [...(pinned?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
           .some((button) => button.textContent?.includes('Jarvis') === true);
       });
-      await page.waitForSelector('input[aria-label="Filter workspaces"]');
+      expect(await page.evaluate(() => document.querySelector('[data-tui-agent]')?.getAttribute('data-tui-agent'))).toBe('audit');
       await page.evaluate(() => {
-        const root = document.querySelector('[data-tui-session]');
-        const jarvis = [...(root?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
+        const pinned = document.querySelector('[aria-label="Pinned workspaces"]');
+        const jarvis = [...(pinned?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
           .find((button) => button.textContent?.includes('Jarvis') === true);
         jarvis?.click();
       });
       await page.waitForFunction(
-        () => document.querySelector('[data-tui-session]')?.getAttribute('data-tui-session') === 'jarvis',
+        () => document.querySelector('[data-tui-agent]')?.getAttribute('data-tui-agent') === 'jarvis',
       );
-      await page.waitForFunction(() => {
-        const active = document.activeElement;
-        return active?.getAttribute('aria-controls') === 'landing-tui-workspaces'
-          && active.getAttribute('aria-expanded') === 'false';
-      });
       await page.waitForSelector('[data-cli-stage="4"]', { timeout: 5_000 });
       await page.click('button[aria-label="Replay CLI run"]');
       await page.waitForSelector('[data-cli-stage="0"]');
@@ -262,7 +275,7 @@ beforeAll(async () => {
       facts.interactions = await page.evaluate(() => ({
         workspace: document.querySelector('[data-workspace-panel="supervise"]') !== null,
         decision: document.querySelector('[data-decision-state="retried"]') !== null,
-        tui: document.querySelector('[data-tui-session="jarvis"]') !== null,
+        tui: document.querySelector('[data-tui-agent="jarvis"]') !== null,
         cli: document.querySelector('[data-cli-stage="0"]') !== null,
         evolution: document.getElementById('evolution')?.getAttribute('data-evolution-stage') === '1',
       }));

@@ -45,21 +45,24 @@
  * judges here are built from the ledger scorers, which cannot score a trajectory
  * that never reached them.
  */
+import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { createHarness, createJudge, describeEval } from 'vitest-evals';
+import * as v from 'valibot';
 import type { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 
-import type { EvalCase, LLMProviderConfig } from '../../packages/core/src/index';
-import { minimumPairsForSignificance, parseCorpus } from '../../packages/core/src/index';
+import type { EvalCase, JsonValue, LLMProviderConfig, RunEvent } from '../../packages/core/src/index';
+import { JsonValueSchema, minimumPairsForSignificance, parseCorpus } from '../../packages/core/src/index';
 import {
-  EVAL_MODELS, FULL_TOOL_SURFACE, hardTaskCases, hardTaskFor,
-  liveChatModel, liveModelTarget, preRegister, publishRunRecord, reportLiveModelSpend,
-  TASK_OUTCOME, UNCONFIGURED_LLM,
-  type EvalArmState, type EvalObservation, type EvalTier,
+  EVAL_MODELS, FULL_TOOL_SURFACE, caseKey, findResumableEvalDir, formatCaseCensus, hardTaskCases,
+  hardTaskFor, liveChatModel, liveModelTarget, openEvalProgress, preRegister,
+  publishRunRecord, reportLiveModelSpend, TASK_OUTCOME, UNCONFIGURED_LLM,
+  type CaseActivity, type EvalArmState, type EvalObservation, type EvalProgressCase,
+  type EvalTier,
 } from '@kinu.run/test-utils';
 import { DegenerateRunError, runBehaviourTask, type BehaviourOutput } from './harness';
 import { resolveArtifactRoot } from '../../scripts/bench-retention';
@@ -163,21 +166,208 @@ const CASES = CORPUS.flatMap((task) =>
  * reads. The path is recorded in the run record, so a number and its evidence
  * are one hop apart.
  */
-const TRANSCRIPTS = join(
+const ARTIFACT_ROOT = resolveArtifactRoot({
   // `runRoot: tmpdir()` states the truth about this tier rather than filling a
   // parameter: it writes nothing under a throwaway run root, and the check that
   // matters — the root is not under a swept directory — is the one mkdtemp
   // failed.
-  resolveArtifactRoot({
-    flag: undefined, env: { BENCH_ARTIFACTS: process.env.BENCH_ARTIFACTS },
-    repoRoot: REPO_ROOT, runRoot: tmpdir(),
-  }),
-  `behaviour-${TIER}-${String(Date.now())}`,
+  flag: undefined,
+  env: { BENCH_ARTIFACTS: process.env.BENCH_ARTIFACTS },
+  repoRoot: REPO_ROOT,
+  runRoot: tmpdir(),
+});
+const RUN_SIGNATURE = createHash('sha256').update(JSON.stringify({
+  family: 'behaviour',
+  tier: TIER,
+  model: LLM.model,
+  repeats: REPEATS,
+  seed: SEED,
+  arm: ARM,
+  cases: CASES.map(({ task, repetition }) => ({
+    id: task.id,
+    task: task.task,
+    tags: task.tags ?? [],
+    repetition,
+  })),
+})).digest('hex');
+/** The corpus as the progress store names it. One list, so the resume check,
+ *  the census and the report all speak about the same set of cases. */
+const PROGRESS_CASES: EvalProgressCase[] = CASES.map(({ task, repetition }) => ({
+  taskId: task.id,
+  repetition,
+}));
+const EXPECTED_KEYS = new Set(
+  PROGRESS_CASES.map(({ taskId, repetition }) => caseKey(taskId, repetition)),
 );
+const RUN_PREFIX = `behaviour-${TIER}-`;
+const RESUME_DIR = TARGET === null
+  ? null
+  : findResumableEvalDir(
+      ARTIFACT_ROOT,
+      RUN_PREFIX,
+      RUN_SIGNATURE,
+      EXPECTED_KEYS,
+    );
+const TRANSCRIPTS = RESUME_DIR ?? join(ARTIFACT_ROOT, `${RUN_PREFIX}${String(Date.now())}`);
 mkdirSync(TRANSCRIPTS, { recursive: true });
+const progress = openEvalProgress(TRANSCRIPTS, RUN_SIGNATURE);
 const opened: Database[] = [];
-const observations: EvalObservation[] = [];
+const observationByKey = new Map<string, EvalObservation>();
 let model: LanguageModel;
+let published = false;
+
+interface StoredCaseProgress {
+  output?: BehaviourOutput;
+  observation: EvalObservation;
+}
+
+const ProgressScoreSchema: v.GenericSchema<BehaviourOutput['scores'][number]> = v.object({
+  name: v.string(),
+  asserts: v.string(),
+  eligible: v.number(),
+  passed: v.number(),
+  rate: v.nullable(v.number()),
+  detail: v.string(),
+  measured: v.optional(v.record(v.string(), v.number())),
+});
+
+const ProgressProvenanceEventSchema: v.GenericSchema<
+  BehaviourOutput['provenance']['events'][number]
+> = v.object({
+  runId: v.string(),
+  timestamp: v.string(),
+  eventIndex: v.number(),
+  type: v.string(),
+  name: v.optional(v.string()),
+  durationMs: v.optional(v.number()),
+  failureClass: v.optional(v.string()),
+});
+
+const ProgressProvenanceSchema: v.GenericSchema<BehaviourOutput['provenance']> = v.object({
+  totalEvents: v.number(),
+  bound: v.number(),
+  events: v.array(ProgressProvenanceEventSchema),
+});
+
+const ProgressOutputSchema: v.GenericSchema<BehaviourOutput> = v.object({
+  taskId: v.string(),
+  turns: v.number(),
+  toolCalls: v.number(),
+  toolNames: v.array(v.string()),
+  scores: v.array(ProgressScoreSchema),
+  tokensIn: v.number(),
+  tokensOut: v.number(),
+  reasoningOut: v.number(),
+  provenance: ProgressProvenanceSchema,
+});
+
+const ScoredProgressObservationSchema: v.GenericSchema<
+  Extract<EvalObservation, { outcome: 'scored' }>
+> = v.object({
+  taskId: v.string(),
+  repetition: v.number(),
+  outcome: v.literal('scored'),
+  scores: v.array(ProgressScoreSchema),
+  turns: v.number(),
+  toolCalls: v.number(),
+  toolNames: v.optional(v.array(v.string())),
+  tokensIn: v.number(),
+  tokensOut: v.number(),
+  reasoningOut: v.optional(v.number()),
+  provenance: v.optional(ProgressProvenanceSchema),
+  ms: v.number(),
+});
+
+const UnscoredProgressObservationSchema: v.GenericSchema<
+  Exclude<EvalObservation, { outcome: 'scored' }>
+> = v.object({
+  taskId: v.string(),
+  repetition: v.number(),
+  outcome: v.picklist(['inert', 'errored', 'skipped', 'incomplete']),
+  reason: v.string(),
+});
+
+const ProgressObservationSchema: v.GenericSchema<EvalObservation> = v.union([
+  ScoredProgressObservationSchema,
+  UnscoredProgressObservationSchema,
+]);
+
+const StoredCaseProgressSchema: v.GenericSchema<StoredCaseProgress> = v.object({
+  output: v.optional(ProgressOutputSchema),
+  observation: ProgressObservationSchema,
+});
+
+/** Parse the progress payload this suite itself wrote. An invalid payload is a
+ * broken durable record, never a signal to spend again. */
+function storedCaseProgress(value: JsonValue): StoredCaseProgress {
+  const parsed = v.safeParse(StoredCaseProgressSchema, value);
+  if (!parsed.success) {
+    throw new Error('eval progress lost its observation payload; refusing to repeat paid work');
+  }
+  return parsed.output;
+}
+
+
+function upsertObservation(observation: EvalObservation): void {
+  observationByKey.set(caseKey(observation.taskId, observation.repetition), observation);
+}
+
+/**
+ * Every declared case's observation, in corpus order — including the ones this
+ * run never reached.
+ *
+ * A case the run did not get to is reported as `incomplete`, which is what
+ * makes a partial run inadmissible instead of silently measuring a shorter
+ * denominator. It is emitted only for a task that ran at least once: a task
+ * with no observation at all is already named, by id, by
+ * `assessAdmissibility`'s declared-versus-executed check, and adding a row for
+ * it would put its id into the record's `executedTasks` — a false statement,
+ * and the loss of the one place that names it. Between the two, every unreached
+ * case is accounted for and both verdicts are inadmissible.
+ */
+function currentObservations(): EvalObservation[] {
+  const attempted = new Set([...observationByKey.values()].map((o) => o.taskId));
+  return CASES.flatMap(({ task, repetition }): EvalObservation[] => {
+    const observation = observationByKey.get(caseKey(task.id, repetition));
+    if (observation) return [observation];
+    if (!attempted.has(task.id)) return [];
+    return [{
+      taskId: task.id,
+      repetition,
+      outcome: 'incomplete',
+      reason: 'never attempted — the run ended before this case was reached',
+    }];
+  });
+}
+
+// Classify, then declare, then rehydrate — in that order, before any new work.
+//
+// A `started` row can only be a previous process that died mid-case, since this
+// one has not begun: `markInFlightIncomplete` is the same operation the
+// cancellation handler runs, so an interruption is recorded the same way
+// whichever end of the process boundary observes it. Declaring the corpus next
+// turns a case nobody has reached into a row rather than an absence, so the
+// census can count what this run still owes. The plan may then retry an
+// incomplete case and replace that fact with a settled attempt.
+progress.markInFlightIncomplete('previous process ended before the case settled');
+progress.markPlanned(PROGRESS_CASES);
+for (const { task, repetition } of CASES) {
+  const key = caseKey(task.id, repetition);
+  const record = progress.record(key);
+  if (record?.phase === 'progress' || record?.phase === 'settled') {
+    if (record.output === undefined) {
+      throw new Error(`${key}: completed progress has no stored output`);
+    }
+    upsertObservation(storedCaseProgress(record.output).observation);
+  } else if (record?.phase === 'incomplete') {
+    upsertObservation({
+      taskId: task.id,
+      repetition,
+      outcome: 'incomplete',
+      reason: record.reason ?? 'case did not settle',
+    });
+  }
+}
 
 /**
  * A ledger scorer as a `vitest-evals` judge.
@@ -259,6 +449,13 @@ const JUDGES = [
   'recovery_durability', 'completion_honesty', 'spill_retrieval', 'tool_outcomes',
 ].map(ledgerJudge).concat([tagExpectation]);
 
+/** This tier's `craft_reuse` is the AUTONOMOUS arm. The instructed transfer arm
+ * lives in evolution-proof.test.ts and is reported under that name. A corpus
+ * case that tells the model to create/reuse a crafted tool would mix the two
+ * populations, so the credential-free corpus check below refuses one. */
+const INSTRUCTED_CRAFTING =
+  /\bworkspace\.(?:createTool|listTools)\b|\bcodemode\.|\b(?:create|craft|reuse) (?:a |the )?(?:crafted |reusable )?tool\b|\buse (?:the )?(?:crafted|saved|inherited) tool\b/i;
+
 /**
  * Pairs the headline can actually be computed over.
  *
@@ -271,6 +468,56 @@ const JUDGES = [
  */
 const OUTCOME_BEARING = CORPUS.filter((c) => hardTaskFor(c) !== undefined).length;
 
+function publishBehaviourRecord(): void {
+  if (published) return;
+  const spend = reportLiveModelSpend('Behaviour Evals');
+  const observations = currentObservations();
+  // The five states, over the corpus the run DECLARED. Printed beside the
+  // record and before it, because a reader who meets a pass rate before meeting
+  // the denominator it was taken over will read a partial run as a finished
+  // one. Suppressed when nothing ran at all: `publishRunRecord` already says
+  // why there is no record, and a wall of `not-run` under it adds no fact.
+  if (observations.length > 0) {
+    console.log(`\n${formatCaseCensus(progress.census(PROGRESS_CASES))}`);
+  }
+  publishRunRecord({
+    family: 'behaviour',
+    tier: TIER,
+    modelId: LLM.model,
+    repeats: REPEATS,
+    seed: SEED,
+    arm: ARM,
+    declaredTasks: CORPUS.map((c) => c.id),
+    observations,
+    spend,
+    transcripts: TRANSCRIPTS,
+    repoRoot: REPO_ROOT,
+  });
+  published = true;
+}
+
+const onOperatorCancel = (signal: NodeJS.Signals): void => {
+  const reason = `cancelled by operator (${signal})`;
+  for (const key of progress.markInFlightIncomplete(reason)) {
+    const record = progress.record(key);
+    if (!record) continue;
+    upsertObservation({
+      taskId: record.taskId,
+      repetition: record.repetition,
+      outcome: 'incomplete',
+      reason,
+    });
+  }
+  // Synchronous durable writes: this listener runs before Vitest's own signal
+  // handler tears the worker down, so cancellation itself cannot erase the case
+  // it interrupted or turn it into a test failure with no classification.
+  progress.flush();
+  publishBehaviourRecord();
+};
+
+process.prependListener('SIGINT', onOperatorCancel);
+process.prependListener('SIGTERM', onOperatorCancel);
+
 beforeAll(() => {
   model = liveChatModel(LLM);
   const pre = preRegister(OUTCOME_BEARING, REPEATS);
@@ -280,6 +527,13 @@ beforeAll(() => {
     + `${String(ARM.tools.length)} tools, seed ${String(SEED)}`);
   console.log(`corpus:  ${String(CORPUS.length)} tasks x ${String(REPEATS)} repeats `
     + `= ${String(CASES.length)} observations`);
+  if (RESUME_DIR) {
+    const resumed = progress.census(PROGRESS_CASES);
+    const done = resumed.total - resumed.states.notRun.length - resumed.states.incomplete.length;
+    console.log(`resume:  ${TRANSCRIPTS} (${String(done)} case(s) already finished, `
+      + `${String(resumed.states.incomplete.length)} interrupted, `
+      + `${String(resumed.states.notRun.length)} never reached)`);
+  }
   console.log(`headline: ${String(OUTCOME_BEARING)} of those declare ground truth, so `
     + `${String(OUTCOME_BEARING)} is the pair count — the rest are covariates only`);
   console.log(`design:  ${pre.note}`);
@@ -289,18 +543,31 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  const spend = reportLiveModelSpend('Behaviour Evals');
-  publishRunRecord({
-    family: 'behaviour', tier: TIER, modelId: LLM.model, repeats: REPEATS, seed: SEED,
-    arm: ARM, declaredTasks: CORPUS.map((c) => c.id), observations, spend,
-    transcripts: TRANSCRIPTS, repoRoot: REPO_ROOT,
-  });
+  publishBehaviourRecord();
+  process.off('SIGINT', onOperatorCancel);
+  process.off('SIGTERM', onOperatorCancel);
 
   // Closed, not deleted. Closing is what checkpoints each store's WAL, so the
   // retained file is readable by the next process; deleting is what made every
   // published tool-failure count unauditable.
   for (const db of opened) db.close();
 });
+
+/** What one counted run-event adds to its case's tally.
+ *
+ * Three types, and only three: a turn closing, a tool call returning, a model
+ * step finishing. Everything else the recorder forwards is detail about one of
+ * those three, and counting it would make the tally grow without saying more.
+ */
+function activityDelta(event: RunEvent): Partial<CaseActivity> | undefined {
+  switch (event.type) {
+    case 'turn_end': return { turns: 1 };
+    case 'tool_call_end': return { toolCalls: 1 };
+    case 'step_finish': return { modelSteps: 1 };
+    default: return undefined;
+  }
+}
+
 
 describeEval('Agent behaviour over the run-event ledger', {
   // `createHarness` rather than a bare object: a `Harness` must return a fully
@@ -309,35 +576,98 @@ describeEval('Agent behaviour over the run-event ledger', {
   harness: createHarness<EvalInput, BehaviourOutput>({
     name: 'kinu-local-session',
     async run({ input }) {
+      const key = caseKey(input.task.id, input.repetition);
+      const storedRecord = progress.record(key);
+      if (storedRecord?.phase === 'progress') {
+        if (storedRecord.output === undefined) {
+          throw new Error(`${key}: progress is complete but carries no output`);
+        }
+        const stored = storedCaseProgress(storedRecord.output);
+        if (!stored.output) {
+          throw new Error(`${key}: a scored progress record lost its harness output`);
+        }
+        upsertObservation(stored.observation);
+        return {
+          output: stored.output,
+          usage: {
+            inputTokens: stored.output.tokensIn,
+            outputTokens: stored.output.tokensOut,
+          },
+          messages: [{ role: 'user', content: input.task.task }],
+        };
+      }
+
+      progress.markStarted(key);
       const startedAt = Date.now();
       try {
         const output = await runBehaviourTask(input.task, {
-          dir: join(TRANSCRIPTS, `rep${String(input.repetition)}`), model, llm: LLM, arm: ARM, opened,
+          dir: join(TRANSCRIPTS, `rep${String(input.repetition)}`),
+          model,
+          llm: LLM,
+          arm: ARM,
+          opened,
+          // The case's own turn, tool and model events, made durable AS THEY
+          // LAND. `run-event` is the recorder's live forward of the row it just
+          // wrote, so this counts the same ledger the scores are computed from
+          // rather than a second one kept beside it. Without this an episode
+          // the process dies under leaves nothing but `started`, and hours of
+          // spend read as a case that never did anything.
+          onEvent: (event) => {
+            if (event.type !== 'run-event') return;
+            const delta = activityDelta(event.event);
+            if (delta) progress.markActivity(key, delta);
+          },
         });
-        observations.push({
-          taskId: input.task.id, repetition: input.repetition, outcome: 'scored',
-          scores: output.scores, turns: output.turns, toolCalls: output.toolCalls,
-          // Computed by the harness since the first run and dropped here until
-          // now, which is why "did it ever enter codemode" had to be re-derived
-          // from source rather than read off the artifact.
+        const observation: EvalObservation = {
+          taskId: input.task.id,
+          repetition: input.repetition,
+          outcome: 'scored',
+          scores: output.scores,
+          turns: output.turns,
+          toolCalls: output.toolCalls,
           toolNames: output.toolNames,
-          tokensIn: output.tokensIn, tokensOut: output.tokensOut,
-          reasoningOut: output.reasoningOut, ms: Date.now() - startedAt,
-        });
+          tokensIn: output.tokensIn,
+          tokensOut: output.tokensOut,
+          reasoningOut: output.reasoningOut,
+          provenance: output.provenance,
+          ms: Date.now() - startedAt,
+        };
+        upsertObservation(observation);
+        // The episode is COMPLETE before any judge runs. Persist its full output
+        // now, so a crash in the reporting layer adopts rather than repeats it.
+        const durableProgress = v.parse(
+          JsonValueSchema,
+          v.parse(StoredCaseProgressSchema, { output, observation } satisfies StoredCaseProgress),
+        );
+        progress.markProgress(key, durableProgress, 'scored');
         return {
           output,
           usage: { inputTokens: output.tokensIn, outputTokens: output.tokensOut },
           messages: [{ role: 'user', content: input.task.task }],
         };
       } catch (error) {
-        // `inert` and `errored` are different facts and the record must not
-        // conflate them: one is an agent that did nothing, the other a harness
-        // that broke. Either way the throw propagates, so no score is published.
-        observations.push({
-          taskId: input.task.id, repetition: input.repetition,
-          outcome: error instanceof DegenerateRunError ? 'inert' : 'errored',
-          reason: error instanceof Error ? error.message : String(error),
-        });
+        // The signal handler already classified this exact state when the
+        // operator cancelled. Do not overwrite `incomplete` with `errored` as
+        // the aborted model promise unwinds.
+        if (progress.record(key)?.phase !== 'incomplete') {
+          const inert = error instanceof DegenerateRunError;
+          const observation: EvalObservation = {
+            taskId: input.task.id,
+            repetition: input.repetition,
+            outcome: inert ? 'inert' : 'errored',
+            reason: error instanceof Error ? error.message : String(error),
+          };
+          upsertObservation(observation);
+          const durableProgress = v.parse(
+            JsonValueSchema,
+            v.parse(StoredCaseProgressSchema, { observation } satisfies StoredCaseProgress),
+          );
+          progress.markProgress(key, durableProgress, inert ? 'inert' : 'errored');
+          // Terminal: an episode that threw has produced its verdict, and no
+          // judge reads a failed case. A restart skips it rather than paying
+          // for the same failure twice.
+          progress.markSettled(key);
+        }
         throw error;
       }
     },
@@ -347,6 +677,11 @@ describeEval('Agent behaviour over the run-event ledger', {
   skipIf: () => TARGET === null,
 }, (it) => {
   it.for(CASES)('$task.id rep$repetition', async (input, { run }) => {
+    const key = caseKey(input.task.id, input.repetition);
+    if (progress.record(key)?.phase === 'settled') {
+      console.log(`    [resume] ${key}: settled — not repeated`);
+      return;
+    }
     const result = await run(input);
     const out = result.output;
 
@@ -376,6 +711,10 @@ describeEval('Agent behaviour over the run-event ledger', {
     for (const judge of JUDGES) {
       await expect(result).toSatisfyJudge(judge, { threshold: null });
     }
+
+    // The observer and all judges consumed the stored episode. This is the final
+    // state transition; a restart now skips the case altogether.
+    progress.markSettled(key);
   });
 });
 
@@ -395,6 +734,13 @@ describeEval('Agent behaviour over the run-event ledger', {
  * recorded in full and explains a moved outcome after the fact. It is not a bar.
  */
 describe('corpus quality — can this corpus rank anything at all', () => {
+  test('craft reuse here is autonomous; no case instructs crafting or reuse', () => {
+    const instructed = CORPUS
+      .filter((evalCase) => INSTRUCTED_CRAFTING.test(evalCase.task))
+      .map((evalCase) => evalCase.id);
+    expect(instructed).toEqual([]);
+  });
+
   /**
    * Static, so it runs without a credential and without spending anything: below
    * `minimumPairsForSignificance()` DIFFERING pairs no exact paired test can
@@ -424,7 +770,7 @@ describe('corpus quality — can this corpus rank anything at all', () => {
    * never read as a satisfied property.
    */
   test.skipIf(TARGET === null)('the corpus is not saturated — arms could disagree on it', () => {
-    const rates = observations
+    const rates = currentObservations()
       .filter((o): o is Extract<EvalObservation, { outcome: 'scored' }> => o.outcome === 'scored')
       .flatMap((o) => o.scores.filter((s) => s.name === TASK_OUTCOME))
       .filter((s) => s.eligible > 0)
@@ -440,5 +786,28 @@ describe('corpus quality — can this corpus rank anything at all', () => {
     expect(fellShortSomewhere, 'every attempt scored 1.000 — this corpus is SATURATED and has no '
       + 'headroom, so two arms cannot disagree on it and it ranks nothing. Add tasks you expect '
       + 'to fail.').toBe(true);
+  });
+});
+
+/**
+ * RUN COMPLETENESS — declared last so it runs last, over what every case above
+ * actually reached.
+ *
+ * The property is not "the agent did well". It is that this process finished
+ * the work it declared. Before it existed, a run killed between two cases
+ * published a record over a shorter denominator and exited green: the cases it
+ * never reached were an ABSENCE, and nothing counts an absence. Resuming makes
+ * that cheap to fix — the next invocation completes the remainder — but only if
+ * the incomplete one is red, because a green partial run is one nobody reruns.
+ *
+ * Skipped without a credential, where not-run is the whole corpus and correct.
+ */
+describe('run completeness — an unfinished run is not a green one', () => {
+  test.skipIf(TARGET === null)('every declared case reached one of the five states', () => {
+    const census = progress.census(PROGRESS_CASES);
+    const counted = Object.values(census.states).reduce((n, list) => n + list.length, 0);
+    expect(counted, 'the five states must partition the corpus: a case in none of them is a '
+      + 'case the report cannot see').toBe(census.total);
+    expect(census.complete, `\n${formatCaseCensus(census)}\n`).toBe(true);
   });
 });

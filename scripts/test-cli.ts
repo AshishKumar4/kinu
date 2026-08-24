@@ -9,11 +9,12 @@ const ISOLATED = [
   'behavior.test.ts',
   'chat-app.test.tsx',
   'chat-app-consent.test.tsx',
-  'chat-app-resume.test.tsx',
   'tui.test.tsx',
   'tui-messages.test.tsx',
+  'tui-product-onboarding.test.tsx',
+  'tui-product-shell.test.tsx',
+  'tui-product-hubs.test.tsx',
 ] as const;
-
 function run(files: readonly string[], parallel: number): void {
   const result = Bun.spawnSync(
     [process.execPath, 'test', `--parallel=${String(parallel)}`, ...files],
