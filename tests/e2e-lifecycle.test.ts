@@ -48,8 +48,8 @@ import {
 } from '../packages/core/src/index';
 import { createWorkspace, openWorkspace } from '../packages/core/src/identity/index';
 import { openWorkspaceCLI } from '../packages/cli-backend/src/open';
-import { makeWorkspaceSchemaSql } from '../packages/cli-backend/src/runtime';
-import { buildLiveLocalTools, requireSandboxedExecutors } from './evals/harness';
+import { makeWorkspaceSchemaSql, type CLIRuntime } from '../packages/cli-backend/src/runtime';
+import { buildEvalAgentSurface, requireSandboxedExecutors } from './evals/harness';
 import {
   liveChatModel, liveModelCallSink, liveModelTarget, recordLiveModelEpisode,
   recordLiveModelSpend, reportLiveModelSpend, UNCONFIGURED_LLM,
@@ -183,7 +183,7 @@ function makeSessionWriter(): SessionWriter {
 
 describe('E2E Lifecycle', () => {
   let db: InstanceType<typeof Database>;
-  let rt: AgentRuntime;
+  let rt: CLIRuntime;
   let tools: ToolSet;
   let engine: EvolutionEngine;
   let events: EvolutionEvent[];
@@ -213,11 +213,14 @@ describe('E2E Lifecycle', () => {
     requireSandboxedExecutors('e2e-lifecycle', rt);
     events = [];
     engine = new EvolutionEngine(rt, { enabled: true });
-    tools = buildLiveLocalTools(rt);
     engine.onEvent(e => events.push(e));
     turns = [];
 
+    // Model first: the production actor root builds `agents` from deps carrying
+    // the model a search expands with, so a surface built before it would be the
+    // product's minus its delegation tool.
     model = liveChatModel(LLM_CONFIG);
+    tools = buildEvalAgentSurface({ rt, model, llm: LLM_CONFIG }).tools;
   });
 
   afterAll(() => {

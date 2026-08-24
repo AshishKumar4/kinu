@@ -964,6 +964,7 @@
     "admissible": false,
     "scored": 12,
     "inert": 1,
+    "incomplete": 0,
     "gradedTurns": 14,
     "toolCalls": 126,
     "outcomesScored": 0,

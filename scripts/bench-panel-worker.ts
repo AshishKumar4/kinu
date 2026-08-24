@@ -98,7 +98,6 @@ async function main(): Promise<void> {
   const headRuntime = createCLIHeadRuntime({
     model: () => benchChatModel(analyst),
     parentRuntime: rt,
-    cwd: process.cwd(),
     resolveModel: (spec: string) => {
       const cfg = byIndex.get(spec);
       if (!cfg) throw new Error(`panel worker: no provider for fork spec "${spec}"`);

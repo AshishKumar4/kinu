@@ -66,7 +66,8 @@ const { HomeApp } = await import('../packages/cli/src/tui/home-app');
 const { MessageList } = await import('../packages/cli/src/tui/messages');
 const { StatusBar } = await import('../packages/cli/src/tui/status-bar');
 const { PhaseLine, TakesOverlay, CommandHintOverlay } = await import('../packages/cli/src/tui/overlays');
-const { tuiColors } = await import('../packages/cli/src/tui/theme');
+const { DEFAULT_THEME_REGISTRY } = await import('../packages/cli/src/tui/theme');
+const captureColors = DEFAULT_THEME_REGISTRY.get('kinu-dark').colors;
 const { renderSearchTree, SLASH_COMMANDS } = await import('../packages/cli/src/slash-commands');
 
 async function settle(renderOnce: () => Promise<void>, passes = 12): Promise<void> {
@@ -98,7 +99,7 @@ function chatScreen(messages: readonly DisplayMessage[], phase: string | null, p
     : 'Type a message or /help · Shift+Enter for a new line';
   return React.createElement(
     'box',
-    { flexDirection: 'column', style: { width: '100%', height: '100%', backgroundColor: tuiColors.bg } },
+    { flexDirection: 'column', style: { width: '100%', height: '100%', backgroundColor: captureColors.background.canvas } },
     React.createElement(StatusBar, {
       key: 'bar', name: WORKSPACE, mode: 'local' as const, model: MODEL,
       reasoningEffort: 'medium' as const, connected: true,
@@ -113,10 +114,10 @@ function chatScreen(messages: readonly DisplayMessage[], phase: string | null, p
         stickyStart: 'bottom',
         style: {
           flexGrow: 1,
-          rootOptions: { backgroundColor: tuiColors.bg },
-          viewportOptions: { backgroundColor: tuiColors.bg },
-          contentOptions: { backgroundColor: tuiColors.bg },
-          scrollbarOptions: { trackOptions: { foregroundColor: tuiColors.borderMuted, backgroundColor: tuiColors.panelStrong } },
+          rootOptions: { backgroundColor: captureColors.background.canvas },
+          viewportOptions: { backgroundColor: captureColors.background.canvas },
+          contentOptions: { backgroundColor: captureColors.background.canvas },
+          scrollbarOptions: { trackOptions: { foregroundColor: captureColors.border.subtle, backgroundColor: captureColors.background.surface } },
         },
       },
       React.createElement(MessageList, { key: 'list', messages: [...messages] }),
@@ -126,7 +127,7 @@ function chatScreen(messages: readonly DisplayMessage[], phase: string | null, p
       'box',
       {
         key: 'input',
-        style: { height: 3, border: true, borderStyle: 'single' as const, borderColor: processing ? tuiColors.borderMuted : tuiColors.border, backgroundColor: tuiColors.panelStrong, paddingLeft: 1 },
+        style: { height: 3, border: true, borderStyle: 'single' as const, borderColor: processing ? captureColors.border.subtle : captureColors.border.default, backgroundColor: captureColors.background.surface, paddingLeft: 1 },
         title,
       },
       React.createElement('text', { key: 't' }, placeholder),

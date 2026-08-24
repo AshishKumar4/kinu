@@ -203,7 +203,8 @@ describe('the record is never trusted about itself', () => {
       runId: 'stale',
       observations: [scored('ws-edit', 0, [row({ name: 'edit_landing', eligible: 1, passed: 1 })])],
       admissibility: {
-        admissible: true, scored: 1, inert: 0, gradedTurns: 1, toolCalls: 4, outcomesScored: 0,
+        admissible: true, scored: 1, inert: 0, incomplete: 0,
+        gradedTurns: 1, toolCalls: 4, outcomesScored: 0,
         mechanismsExercised: ['edit_landing'], mechanismsAbsent: [], failures: [],
       },
     })], []);

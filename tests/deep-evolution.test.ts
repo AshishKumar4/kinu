@@ -27,8 +27,8 @@ import {
 } from '../packages/core/src/index';
 import { createWorkspace } from '../packages/core/src/identity/index';
 import { openWorkspaceCLI } from '../packages/cli-backend/src/open';
-import { makeWorkspaceSchemaSql } from '../packages/cli-backend/src/runtime';
-import { buildLiveLocalTools, requireSandboxedExecutors } from './evals/harness';
+import { makeWorkspaceSchemaSql, type CLIRuntime } from '../packages/cli-backend/src/runtime';
+import { buildEvalAgentSurface, requireSandboxedExecutors } from './evals/harness';
 import {
   finalIntegerAnswer,
   liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, UNCONFIGURED_LLM,
@@ -133,7 +133,7 @@ async function solveProblem(
 
 describe('Deep Evolution — 8 Algorithmic Challenges', () => {
   let db: InstanceType<typeof Database>;
-  let rt: AgentRuntime;
+  let rt: CLIRuntime;
   let tools: ToolSet;
   let engine: EvolutionEngine;
   let events: EvolutionEvent[];
@@ -166,10 +166,14 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
 
     events = [];
     engine = new EvolutionEngine(rt, { enabled: true });
-    tools = buildLiveLocalTools(rt);
     engine.onEvent(e => events.push(e));
 
+    // The model is resolved BEFORE the surface, because the production actor
+    // root needs one: `agents` is built from deps that carry the model a search
+    // expands with, so a surface built first would be the product's minus its
+    // delegation tool.
     model = liveChatModel(LLM_CONFIG);
+    tools = buildEvalAgentSurface({ rt, model, llm: LLM_CONFIG }).tools;
   });
 
   afterAll(() => {

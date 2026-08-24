@@ -60,9 +60,12 @@ export default defineConfig({
     // use afterAll() outside of the test runner` and fails the tier at
     // collection.
     setupFiles: ['./scripts/test-preload-vitest.ts'],
-    // One task is a full agent episode against a remote model: minutes, not
-    // seconds. A default 5s timeout would report the tier as broken.
-    testTimeout: 1_800_000,
+    // One task is a full agent episode against a remote model. Its completion
+    // is decided by the episode, never by elapsed wall time. `0` is Vitest's
+    // documented disabled-timeout value; operator cancellation is persisted as
+    // `incomplete` by the behaviour runner instead of being turned into a
+    // pass/fail verdict here.
+    testTimeout: 0,
     hookTimeout: 300_000,
     // Each file drives real model calls against one account. Running them
     // concurrently buys little and makes rate-limit failures look like

@@ -28,8 +28,8 @@ import {
 } from '../packages/core/src/index';
 import { createWorkspace, openWorkspace } from '../packages/core/src/identity/index';
 import { openWorkspaceCLI } from '../packages/cli-backend/src/open';
-import { makeWorkspaceSchemaSql } from '../packages/cli-backend/src/runtime';
-import { buildLiveLocalTools, requireSandboxedExecutors } from './evals/harness';
+import { makeWorkspaceSchemaSql, type CLIRuntime } from '../packages/cli-backend/src/runtime';
+import { buildEvalAgentSurface, requireSandboxedExecutors } from './evals/harness';
 import {
   liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, toolExecute,
   UNCONFIGURED_LLM,
@@ -116,7 +116,7 @@ async function chatTurn(
 
 describe('E2E Full Lifecycle', () => {
   let db: InstanceType<typeof Database>;
-  let rt: AgentRuntime;
+  let rt: CLIRuntime;
   let tools: ToolSet;
   let model: LanguageModel;
   let agentId: string;
@@ -147,8 +147,11 @@ describe('E2E Full Lifecycle', () => {
     ({ rt } = await openWorkspaceCLI(db, DB_PATH, { llm: LLM_CONFIG, hostRoot: null }));
     requireSandboxedExecutors('e2e-full-lifecycle', rt);
 
-    tools = buildLiveLocalTools(rt);
+    // Model first: the production actor root builds `agents` from deps carrying
+    // the model a search expands with, so a surface built before it would be the
+    // product's minus its delegation tool.
     model = liveChatModel(LLM_CONFIG);
+    tools = buildEvalAgentSurface({ rt, model, llm: LLM_CONFIG }).tools;
     agentId = rt.identity.id;
     agentName = rt.identity.name;
   });
@@ -190,8 +193,9 @@ describe('E2E Full Lifecycle', () => {
 
   // ── Step 2: Verify tools ─────────────────────────────────────
 
-  // The direct-generate eval uses the same execute_tools factory as the local
-  // session. Optional tools still appear only when their dependencies exist.
+  // The direct-generate eval uses the production actor factory and the local
+  // runtime's real swarm dependency. Optional tools still appear only when
+  // their dependencies exist.
   test('2. the live tool surface is canonical and executable', async () => {
     const names = Object.keys(tools);
     // `toContain` will not match a plain `string` against BUILTIN_TOOLS' literal
@@ -199,10 +203,10 @@ describe('E2E Full Lifecycle', () => {
     // point of the check is that each built name IS one of those literals.
     const canonical: readonly string[] = BUILTIN_TOOLS;
     for (const name of names) expect(canonical).toContain(name);
-    for (const core of ['execute_tools', 'run', 'file', 'memory']) expect(names).toContain(core);
-    for (const ungated of ['skills', 'agents', 'release']) {
-      expect(names).not.toContain(ungated);
+    for (const core of ['execute_tools', 'run', 'file', 'memory', 'agents']) {
+      expect(names).toContain(core);
     }
+    for (const ungated of ['skills', 'release']) expect(names).not.toContain(ungated);
     console.log(`  Tools: ${names.join(', ')}`);
     const execute = tools.execute_tools;
     if (!execute) throw new Error('execute_tools is absent');

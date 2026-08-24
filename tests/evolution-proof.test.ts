@@ -27,21 +27,25 @@ import {
   collectStepText,
   EvolutionEngine,
   initWorkspaceSchema,
-  readSoul,
+  readMemoryTail,
+  renderDynamicContextBlock,
   JsonObjectSchema,
   projectJsonValue,
-  type AgentRuntime,
   type LLMProviderConfig,
   type CompletedTurn,
   type ToolCallRecord,
 } from '../packages/core/src/index';
 import { createWorkspace } from '../packages/core/src/identity/index';
 import { openWorkspaceCLI } from '../packages/cli-backend/src/open';
-import { makeWorkspaceSchemaSql } from '../packages/cli-backend/src/runtime';
-import { buildLiveLocalTools, requireSandboxedExecutors } from './evals/harness';
+import { makeWorkspaceSchemaSql, type CLIRuntime } from '../packages/cli-backend/src/runtime';
+import {
+  buildEvalAgentSurface, recordRequestSurface, requireSandboxedExecutors,
+  type EvalAgentSurface, type RequestSurfaceEvidence,
+} from './evals/harness';
 import {
   finalIntegerAnswer, letterKey,
-  liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, UNCONFIGURED_LLM,
+  liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, toolExecute,
+  UNCONFIGURED_LLM,
 } from '@kinu.run/test-utils';
 
 // Proof against a real model, so a target is required. `liveModelTarget` states
@@ -50,41 +54,97 @@ import {
 const TARGET = liveModelTarget('Evolution Proof');
 const liveTest = test.skipIf(!TARGET);
 
+
+const ToolListResultSchema = v.object({
+  result: v.array(v.object({
+    name: v.string(),
+    description: v.string(),
+    qualityScore: v.number(),
+  })),
+});
+
+/** How far one direct `codemode.<name>()` call got. `unbound` is the adapter not
+ *  wired and is a harness fault; `threw` is the model-authored body's own
+ *  business and still proves the binding executed. Keeping them apart is what
+ *  stops a de-parity reading as a bad artifact. */
+const InvocationReportSchema = v.object({
+  result: v.array(v.object({
+    name: v.string(),
+    phase: v.picklist(['unbound', 'returned', 'threw']),
+  })),
+});
+
+/** EXPOSURE, PRD §9.3's first of three metrics, with its own denominator. Not
+ *  folded into reuse: a reuse rate over an unexposed surface is a number about
+ *  nothing, and the two failures look identical in one ratio. */
+interface ExposureTally {
+  /** Crafted tools session 1 left in the store. */
+  readonly inherited: number;
+  /** Of those, how many `workspace.listTools()` projected. */
+  readonly discovered: number;
+  /** Of those, how many a direct `codemode.<name>()` call reached the body of. */
+  readonly reachedBody: number;
+  /** Names that did not resolve to a callable at all — the wiring failure. */
+  readonly unbound: readonly string[];
+  /** A harness-crafted tool with a KNOWN signature returned its value, so
+   *  "an invocation succeeded" means a value came back and not only that a body
+   *  ran. */
+  readonly probeReturned: boolean;
+}
 const LLM_CONFIG: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;
 
 const TEST_DIR = join(tmpdir(), 'kinu-evolution-proof-' + Date.now());
 const DB_PATH = join(TEST_DIR, 'agent.db');
+
+type ReuseMode = 'instructed' | 'autonomous';
 
 interface TurnResult {
   text: string;
   toolCalls: ToolCallRecord[];
   steps: number;
   durationMs: number;
+  reuseMode: ReuseMode;
+  /** What the PROVIDER was asked with, off the wire-level call options. PRD
+   *  §9.5: a turn that made no delegation call has to carry the evidence that
+   *  says whether it was offered one, or "the model declined" and "the harness
+   *  never asked" stay the same observation. */
+  request: RequestSurfaceEvidence;
 }
 
 async function chatTurn(
   model: LanguageModel,
-  rt: AgentRuntime,
-  tools: ToolSet,
+  rt: CLIRuntime,
+  surface: EvalAgentSurface,
   userMessage: string,
   sessionId: string,
 ): Promise<TurnResult> {
   const start = Date.now();
-  const soul = await readSoul(rt.storage.vfs) ?? '';
-  const knowledge = (await rt.memory.read('memory/MEMORY.md'))?.slice(0, 3000) ?? '';
+  const memoryTail = await readMemoryTail(rt.memory);
+  // The PRODUCTION projection, from the production tool surface. This used to
+  // assemble its own option set — no `agentsActions`, no `workMode`, no
+  // `sectionOverrides`, and `soulOverride` which the CLI turn path does not pass
+  // — over a ToolSet that could not contain `agents`. So the prompt the model
+  // read here was one the product never sends, and the delegation ladder
+  // (prompt.ts:236) was absent from every turn this proof measured.
+  const system = surface.systemPrompt();
+  // The wrapper forwards the call unchanged; it only reads the tool list and the
+  // system message the provider actually receives.
+  const recorder = recordRequestSurface(model);
+  const dynamicContext = renderDynamicContextBlock({ memoryTail });
+  const reuseMode: ReuseMode =
+    /\b(?:must\s+)?use execute_tools\b/i.test(userMessage) ? 'instructed' : 'autonomous';
 
   const tcRecords: ToolCallRecord[] = [];
   let stepCount = 0;
 
   const result = await generateText({
-    model,
-    system: [
-      soul,
-      '\n\n## Knowledge\n', knowledge,
-      '\n\nAfter using tools, always summarize what you did and the results.',
-    ].join(''),
-    messages: [{ role: 'user' as const, content: userMessage }],
-    tools,
+    model: recorder.model,
+    system,
+    messages: [
+      ...(dynamicContext ? [{ role: 'user' as const, content: dynamicContext }] : []),
+      { role: 'user' as const, content: userMessage },
+    ],
+    tools: surface.tools,
     stopWhen: stepCountIs(500),
     onStepFinish: (step: StepResult<ToolSet>) => {
       stepCount++;
@@ -116,7 +176,14 @@ async function chatTurn(
   void rt.storage.sql`INSERT INTO messages (id, session_id, role, content) VALUES (${id}, ${sessionId}, ${'user'}, ${userMessage})`;
   void rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content) VALUES (${crypto.randomUUID()}, ${sessionId}, ${id}, ${'assistant'}, ${responseText})`;
 
-  return { text: responseText, toolCalls: tcRecords, steps: stepCount, durationMs: Date.now() - start };
+  return {
+    text: responseText,
+    toolCalls: tcRecords,
+    steps: stepCount,
+    durationMs: Date.now() - start,
+    reuseMode,
+    request: recorder.evidence(),
+  };
 }
 
 // ── Challenges, as DATA ──────────────────────────────────────────
@@ -329,9 +396,15 @@ const CIPHER_ANSWER = atbash(CIPHER.ciphertext);
 
 describe('Evolution Proof', () => {
   let db: InstanceType<typeof Database>;
-  let rt: AgentRuntime;
+  let rt: CLIRuntime;
   let engine: EvolutionEngine;
   let model: LanguageModel;
+  /** Built ONCE, in setup, from the production actor root. It was rebuilt per
+   *  turn from `buildLiveLocalTools`, which is how the two sessions could
+   *  disagree about what existed: production rebuilds a toolset only on a model
+   *  change (`rebuildModelBoundState`), and a surface rebuilt per turn is a
+   *  different lifetime from the one the product runs. */
+  let surface: EvalAgentSurface;
 
   beforeAll(async () => {
     mkdirSync(TEST_DIR, { recursive: true });
@@ -354,6 +427,7 @@ describe('Evolution Proof', () => {
     requireSandboxedExecutors('evolution-proof', rt);
     model = liveChatModel(LLM_CONFIG);
     engine = new EvolutionEngine(rt, { enabled: true });
+    surface = buildEvalAgentSurface({ rt, model, llm: LLM_CONFIG });
     engine.onEvent(e => console.log(`    [evolution] ${e.type}: ${e.message.slice(0, 80)}`));
   });
 
@@ -368,12 +442,23 @@ describe('Evolution Proof', () => {
   let session1Results: TurnResult[] = [];
 
   liveTest('session 1, turn 1: RSA challenge (learn the pattern)', async () => {
-    const tools = buildLiveLocalTools(rt);
-    const toolNames = Object.keys(tools);
-    console.log(`    Tools available: ${toolNames.join(', ')}`);
-    expect(toolNames).toContain('execute_tools');
+    console.log(`    Tools available: ${Object.keys(surface.tools).join(', ')}`);
+    console.log(`    agents actions: ${surface.agentsActions.join(', ') || '(none)'}`);
+    expect(Object.keys(surface.tools)).toContain('execute_tools');
 
-    const result = await chatTurn(model, rt, tools, RSA_CHALLENGE_1, 'session-1');
+    const result = await chatTurn(model, rt, surface, RSA_CHALLENGE_1, 'session-1');
+    // The request evidence, per turn, from the wire: what the provider was
+    // offered and whether the delegation ladder was in the system message it
+    // received. Printed on the FIRST turn because that is where a broken
+    // projection would be cheapest to notice.
+    console.log(`    request: ${String(result.request.calls)} call(s), tools offered `
+      + `${result.request.toolsOffered.join(', ')}, agents=${String(result.request.agentsOffered)}, `
+      + `delegation ladder shown=${String(result.request.delegationSectionShown)}, `
+      + `system ${String(result.request.systemChars)} chars`);
+    expect(result.request.calls).toBeGreaterThan(0);
+    expect(result.request.toolsOffered).toEqual(Object.keys(surface.tools).sort());
+    expect(result.request.agentsOffered).toBe(true);
+    expect(result.request.delegationSectionShown).toBe(true);
     session1Results.push(result);
 
     console.log(`    Response: ${result.text.slice(0, 200)}`);
@@ -399,11 +484,10 @@ describe('Evolution Proof', () => {
       feedback: 'positive',
       hadError: false,
     }, null);
-  }, 600_000);
+  }, 0);
 
   liveTest('session 1, turn 2: Dijkstra challenge (learn algorithm pattern)', async () => {
-    const tools = buildLiveLocalTools(rt);
-    const result = await chatTurn(model, rt, tools, DIJKSTRA_CHALLENGE_1, 'session-1');
+    const result = await chatTurn(model, rt, surface, DIJKSTRA_CHALLENGE_1, 'session-1');
     session1Results.push(result);
 
     console.log(`    Response: ${result.text.slice(0, 200)}`);
@@ -425,11 +509,10 @@ describe('Evolution Proof', () => {
       feedback: 'positive',
       hadError: false,
     }, null);
-  }, 600_000);
+  }, 0);
 
   liveTest('session 1, turn 3: cipher challenge + session reflection', async () => {
-    const tools = buildLiveLocalTools(rt);
-    const result = await chatTurn(model, rt, tools, CIPHER_CHALLENGE, 'session-1');
+    const result = await chatTurn(model, rt, surface, CIPHER_CHALLENGE, 'session-1');
     session1Results.push(result);
 
     console.log(`    Response: ${result.text.slice(0, 200)}`);
@@ -476,7 +559,7 @@ describe('Evolution Proof', () => {
       startedAt: Date.now() - 60000,
       endedAt: Date.now(),
     });
-  }, 600_000);
+  }, 0);
 
   // ── Verify evolution happened ────────────────────────────────
 
@@ -562,10 +645,13 @@ describe('Evolution Proof', () => {
 
   let session2Results: TurnResult[] = [];
   let inheritedToolNames: string[] = [];
+  /** Filled by the exposure block below, reported beside the two reuse rates in
+   *  the summary. `null` until then, so a summary over a session-2 turn that
+   *  never ran says so instead of printing zeros. */
+  let exposure: ExposureTally | null = null;
 
   liveTest('session 2, turn 1: similar RSA challenge with inherited artifacts', async () => {
-    const tools = buildLiveLocalTools(rt);
-    console.log(`    Tools available: ${Object.keys(tools).join(', ')}`);
+    console.log(`    Tools available: ${Object.keys(surface.tools).join(', ')}`);
 
     // What session 2 inherits, from the store it inherits it in. Crafted tools
     // are codemode-only — reached as `codemode.<name>` inside `execute_tools`,
@@ -578,7 +664,81 @@ describe('Evolution Proof', () => {
     console.log(`    Crafted tools inherited from session 1: ${inheritedToolNames.join(', ')}`);
     expect(inheritedToolNames.length).toBeGreaterThan(0);
 
-    const result = await chatTurn(model, rt, tools, RSA_CHALLENGE_2, 'session-2');
+    const executeEntry = surface.tools.execute_tools;
+    if (!executeEntry) throw new Error('session 2 has no execute_tools dispatcher');
+    const execute = toolExecute<{ code: string }, unknown>(executeEntry);
+
+    // ── EXPOSURE, measured before reuse is asked for ────────────────────────
+    //
+    // PRD §9.3 separates EXPOSURE from reuse, and this is why: a reuse rate over
+    // a surface that never exposed the tools is a number about nothing. Three
+    // rows, because there are three independent ways the projection can fail and
+    // each one used to be invisible:
+    //
+    //   discovery — `workspace.listTools()` is what the prompt tells the agent to
+    //     call before building from scratch. Store rows alone do not prove that
+    //     projection.
+    //   binding   — a listed name still has to RESOLVE inside the sandbox.
+    //     Measured with `craftedToolExecute` absent: three rows listed, and
+    //     `codemode.doubleIt` was `undefined`. The reuse metric read 1/1.
+    //   invocation — a resolved binding still has to reach the tool BODY. This is
+    //     the row that separates a wiring fault from the tool's own contract: an
+    //     unbound name is the harness's failure, and a body that threw on absent
+    //     arguments is the artifact's own business.
+    const listed = v.parse(
+      ToolListResultSchema,
+      await execute({ code: 'return await workspace.listTools();' }),
+    );
+    const listedNames = listed.result.map((tool) => tool.name).sort();
+    expect(listedNames).toEqual([...inheritedToolNames].sort());
+
+    // Invoked with no argument on purpose: these bodies are the MODEL's
+    // artifacts, so their signatures are not known here and inventing arguments
+    // would test the model's codegen rather than the adapter. What is asserted is
+    // the part that is the harness's own: every name reaches its body.
+    const invocations = v.parse(InvocationReportSchema, await execute({
+      code: `const report = [];
+for (const name of ${JSON.stringify(inheritedToolNames)}) {
+  if (typeof codemode[name] !== 'function') { report.push({ name, phase: 'unbound' }); continue; }
+  try { await codemode[name](); report.push({ name, phase: 'returned' }); }
+  catch (err) { report.push({ name, phase: 'threw' }); }
+}
+return report;`,
+    }));
+    const unbound = invocations.result.filter((row) => row.phase === 'unbound').map((row) => row.name);
+    const reachedBody = invocations.result.filter((row) => row.phase !== 'unbound');
+    for (const row of invocations.result) console.log(`      codemode.${row.name}: ${row.phase}`);
+
+    // One invocation with a KNOWN signature, so "an invocation succeeded" is a
+    // returned VALUE and not only a body that ran. Crafted through
+    // `workspace.createTool` — the same production path evolution writes
+    // through — and created AFTER `inheritedToolNames` was captured, so it is
+    // outside every transfer measurement below.
+    await execute({
+      code: 'await workspace.createTool("parityProbe", "returns its input doubled", '
+        + '"async (n) => n * 2"); return "made";',
+    });
+    const probe = await execute({ code: 'return await codemode.parityProbe(21);' });
+
+    exposure = {
+      inherited: inheritedToolNames.length,
+      discovered: listedNames.length,
+      reachedBody: reachedBody.length,
+      unbound,
+      probeReturned: JSON.stringify(probe) === JSON.stringify({ result: 42 }),
+    };
+    console.log(`    exposure: ${String(exposure.discovered)}/${String(exposure.inherited)} discoverable, `
+      + `${String(exposure.reachedBody)}/${String(exposure.inherited)} reached their body, `
+      + `unbound ${unbound.join(', ') || '(none)'}, known-signature probe returned `
+      + `${String(exposure.probeReturned)}`);
+
+    // An unbound name is the craft adapter not wired — the exact de-parity this
+    // suite exists to refuse, and never a fact about the model.
+    expect(unbound).toEqual([]);
+    expect(exposure.reachedBody).toBe(inheritedToolNames.length);
+    expect(exposure.probeReturned).toBe(true);
+
+    const result = await chatTurn(model, rt, surface, RSA_CHALLENGE_2, 'session-2');
     session2Results.push(result);
 
     console.log(`    Response: ${result.text.slice(0, 200)}`);
@@ -593,11 +753,10 @@ describe('Evolution Proof', () => {
     const answered = finalIntegerAnswer(result.text);
     console.log(`    Answered ${String(answered)}, expected ${String(RSA_ANSWER_2)}`);
     expect(answered).toBe(RSA_ANSWER_2);
-  }, 600_000);
+  }, 0);
 
   liveTest('session 2, turn 2: similar graph challenge with inherited artifacts', async () => {
-    const tools = buildLiveLocalTools(rt);
-    const result = await chatTurn(model, rt, tools, DIJKSTRA_CHALLENGE_2, 'session-2');
+    const result = await chatTurn(model, rt, surface, DIJKSTRA_CHALLENGE_2, 'session-2');
     session2Results.push(result);
 
     console.log(`    Response: ${result.text.slice(0, 200)}`);
@@ -609,7 +768,7 @@ describe('Evolution Proof', () => {
     const answered = finalIntegerAnswer(result.text);
     console.log(`    Answered ${String(answered)}, expected ${String(DIJKSTRA_ANSWER_2)}`);
     expect(answered).toBe(DIJKSTRA_ANSWER_2);
-  }, 600_000);
+  }, 0);
 
   // ── Final analysis ─────────────────────────────────────────────
 
@@ -665,11 +824,68 @@ describe('Evolution Proof', () => {
     expect(session1Results.every(r => r.text.length > 0)).toBe(true);
     expect(session2Results.every(r => r.text.length > 0)).toBe(true);
     expect(s1Tools).toBeGreaterThan(0);
-    const reused = session2Results.some((result) => result.toolCalls.some((call) => {
-      const args = JSON.stringify(call.args);
-      return inheritedToolNames.some((name) => args.includes(name));
-    }));
-    expect(reused, 'session 2 did not call any crafted tool from session 1').toBe(true);
+    // THREE metrics, three denominators, PRD §9.3. Exposure is not a kind of
+    // reuse: it is whether the mechanism was reachable at all, and folding it in
+    // is what let a run report reuse over a surface where `codemode.<name>` was
+    // undefined. Reuse then splits by population, because these challenge
+    // prompts explicitly command `use execute_tools` — so this proof measures
+    // INSTRUCTED transfer, and the behaviour eval's corpus, which mechanically
+    // forbids that instruction, measures autonomous transfer. A missing
+    // autonomous opportunity is `n/a`, never a zero folded into this rate.
+    if (!exposure) throw new Error('the exposure block did not run, so no reuse rate here has a denominator');
+    console.log(`    Exposure: ${String(exposure.discovered)}/${String(exposure.inherited)} discoverable, `
+      + `${String(exposure.reachedBody)}/${String(exposure.inherited)} callable, `
+      + `known-signature probe returned ${String(exposure.probeReturned)}`);
+
+    interface ReuseTally {
+      eligible: number;
+      passed: number;
+    }
+
+    interface ReuseByMode {
+      instructed: ReuseTally;
+      autonomous: ReuseTally;
+    }
+
+    const reuseByMode: ReuseByMode = {
+      instructed: { eligible: 0, passed: 0 },
+      autonomous: { eligible: 0, passed: 0 },
+    };
+    for (const result of session2Results) {
+      const bucket = reuseByMode[result.reuseMode];
+      bucket.eligible += 1;
+      const reusedInherited = result.toolCalls.some((call) => {
+        const args = JSON.stringify(call.args);
+        return inheritedToolNames.some((name) => args.includes(name));
+      });
+      if (reusedInherited) bucket.passed += 1;
+    }
+    console.log(`    Instructed reuse: ${String(reuseByMode.instructed.passed)}/`
+      + `${String(reuseByMode.instructed.eligible)}`);
+    console.log(`    Autonomous reuse: ${reuseByMode.autonomous.eligible === 0
+      ? 'n/a — no autonomous turn in this proof'
+      : `${String(reuseByMode.autonomous.passed)}/${String(reuseByMode.autonomous.eligible)}`}`);
+
+    // The delegation surface, per turn, from the requests themselves. Asserted
+    // over EVERY turn rather than the first: a surface rebuilt mid-run, or a
+    // prompt whose section disappeared once `sectionOverrides` changed, would
+    // otherwise pass on turn one and go unmeasured afterwards.
+    const shownEveryTurn = [...session1Results, ...session2Results]
+      .every((turn) => turn.request.agentsOffered && turn.request.delegationSectionShown);
+    console.log(`    Delegation surface shown on every turn: ${String(shownEveryTurn)}`);
+
+    // EXPOSURE first, because it is the denominator's precondition.
+    expect(exposure.discovered).toBe(exposure.inherited);
+    expect(exposure.reachedBody).toBe(exposure.inherited);
+    expect(exposure.unbound).toEqual([]);
+    expect(exposure.probeReturned).toBe(true);
+    expect(shownEveryTurn).toBe(true);
+    expect(reuseByMode.instructed.eligible).toBe(session2Results.length);
+    expect(
+      reuseByMode.instructed.passed,
+      'session 2 did not call any crafted tool from session 1',
+    ).toBeGreaterThan(0);
+    expect(reuseByMode.autonomous.eligible).toBe(0);
     expect(msgCount).toBeGreaterThan(0);
   });
 });
