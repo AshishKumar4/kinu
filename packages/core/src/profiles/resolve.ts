@@ -52,7 +52,7 @@ const DEFAULT_TURN_REASONING_EFFORT: ReasoningEffort = REASONING_EFFORT_FOR_STAG
  * "admitted unverified" flag, because a new field there would churn the
  * profile digest and every snapshot already stored under it.
  */
-export const ProviderCatalogSnapshotSchema = v.looseObject({
+const ProviderCatalogSnapshotSchema = v.looseObject({
   revision: v.string(),
   availableModels: v.array(v.string()),
   /** Provider listings that FAILED, shaped as `providers/registry.ts` reports

@@ -3,7 +3,10 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import type { Server, ServerWebSocket } from 'bun';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
-import { JsonArraySchema, JsonObjectSchema, parseJsonObject, type JsonObject } from '@kinu.run/core';
+import {
+  JsonArraySchema, JsonObjectSchema, parseJsonObject,
+  type JsonObject, type JsonValue,
+} from '@kinu.run/core';
 import { CloudAgentClient } from '../src/cloud-agent-client';
 import type { AgentClientEvent } from '../src/agent-client';
 import * as v from 'valibot';
@@ -15,6 +18,7 @@ interface MockAgentServer {
   frames: JsonObject[];
   ticketRequests: Array<{ name: string; auth: string | null }>;
   connectUrls: URL[];
+  rpcRequests: Array<{ method: string; args: JsonValue[] }>;
   /** Rows served from /api/cli/workspaces/:name/messages (the DO chat projection). */
   chatMessages: Array<{ id: string; role: string; content: string; createdAt: number }>;
   socket(): ServerWebSocket<unknown>;
@@ -32,6 +36,7 @@ function startMockAgentServer(): MockAgentServer {
   const frames: JsonObject[] = [];
   const ticketRequests: Array<{ name: string; auth: string | null }> = [];
   const connectUrls: URL[] = [];
+  const rpcRequests: MockAgentServer['rpcRequests'] = [];
   const chatMessages: MockAgentServer['chatMessages'] = [];
   let ws: ServerWebSocket<unknown> | null = null;
 
@@ -52,6 +57,7 @@ function startMockAgentServer(): MockAgentServer {
         const method = v.parse(v.string(), request.method);
         const parsedArgs = v.safeParse(JsonArraySchema, request.args);
         const args = parsedArgs.success ? parsedArgs.output : [];
+        rpcRequests.push({ method, args });
         // Pages of two, so the client's walk is really exercised: a fixture of
         // four messages that came back whole would not have noticed the client
         // reading only the first page and calling it the whole conversation.
@@ -71,6 +77,27 @@ function startMockAgentServer(): MockAgentServer {
         }
         if (method === 'getReasoningEffort') return Response.json({ result: { effort: 'medium' } });
         if (method === 'setReasoningEffort') return Response.json({ result: { ok: true, effort: args[0] ?? null } });
+        if (method === 'renameSubordinateAgent') {
+          const [name, displayName] = v.parse(v.tuple([v.string(), v.string()]), args);
+          return Response.json({
+            result: {
+              ok: true,
+              name,
+              displayName,
+              subordinate: {
+                name,
+                displayName,
+                nameOrigin: 'user',
+                role: 'general',
+                createdBy: 'user',
+                status: 'idle',
+                currentTask: null,
+                createdAt: 1,
+                dismissedAt: null,
+              },
+            },
+          });
+        }
         return Response.json({ error: `No such agent RPC method: ${method}` }, { status: 404 });
       }
       if (url.pathname.startsWith('/agents/orchestrator-agent/')) {
@@ -94,6 +121,7 @@ function startMockAgentServer(): MockAgentServer {
     frames,
     ticketRequests,
     connectUrls,
+    rpcRequests,
     chatMessages,
     socket() {
       if (!ws) throw new Error('no websocket connection yet');
@@ -159,6 +187,66 @@ describe('CloudAgentClient protocol', () => {
     await expect(client.getReasoningEffort()).resolves.toBe('medium');
     await expect(client.setReasoningEffort('high')).resolves.toEqual({ effort: 'high' });
     await client.close();
+  });
+
+  test('opens a created cloud additional agent and renames it through its parent workspace', async () => {
+    const mock = startMockAgentServer();
+    const parent = newClient(mock);
+
+    const creating = parent.createAdditionalAgent();
+    const createRpc = await waitFor(
+      () => mock.frames.find((frame) => frame.type === 'rpc' && frame.method === 'createSubordinateAgent'),
+      'create additional-agent rpc',
+    );
+    mock.reply({
+      type: 'rpc',
+      id: createRpc.id,
+      success: true,
+      done: true,
+      result: {
+        name: 'researcher-a1b2c3',
+        displayName: '',
+        subordinate: {
+          name: 'researcher-a1b2c3',
+          displayName: '',
+          nameOrigin: 'auto',
+          role: 'general',
+          createdBy: 'user',
+          status: 'idle',
+          currentTask: null,
+          createdAt: 1,
+          dismissedAt: null,
+        },
+      },
+    });
+    const created = await creating;
+    const child = parent.openAdditionalAgent(created.name);
+    if (!child.rename) throw new Error('cloud additional agent has no rename capability');
+    await expect(child.rename('Research partner')).resolves.toEqual({
+      name: 'researcher-a1b2c3',
+      displayName: 'Research partner',
+    });
+    expect(mock.rpcRequests).toContainEqual({
+      method: 'renameSubordinateAgent',
+      args: ['researcher-a1b2c3', 'Research partner'],
+    });
+
+    const turn = child.send('Review the release');
+    const request = await waitFor(
+      () => mock.frames.filter((frame) => frame.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST).length > 0
+        ? chatRequestFrame(mock)
+        : undefined,
+      'additional-agent chat request',
+    );
+    expect(mock.connectUrls.at(-1)?.pathname).toBe(
+      '/agents/orchestrator-agent/helios/sub/subordinate-agent/researcher-a1b2c3',
+    );
+    expect(mock.ticketRequests.at(-1)).toEqual({ name: 'helios', auth: 'Bearer ptc_token' });
+    mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'Reviewed' }, true));
+    await expect(turn).resolves.toMatchObject({ text: 'Reviewed' });
+
+    await child.close();
+    await parent.close();
   });
 
   test('send transmits only the new user message and streams the reply', async () => {

@@ -35,6 +35,47 @@ interface Region {
   offFill: number;
 }
 
+/** A sampled region, named so a failure says WHICH one leaked. */
+interface NamedRegion extends Region {
+  label: string;
+}
+
+/** Where a secret really is in the LIVE page. Asserted BEFORE anything is
+ *  asserted absent: a needle nobody rendered is absent from every clone and
+ *  every pixel, and proves nothing. */
+interface LivePresence {
+  needle: string;
+  inText: boolean;
+  inAttrs: boolean;
+  inValues: boolean;
+}
+
+/** One secret-bearing surface, measured every way it could leak. */
+interface SurfaceProbe {
+  live: LivePresence[];
+  clone: { serializations: number; bytes: number; leaked: string[] };
+  regions: NamedRegion[];
+  /** Every marked FIELD, and how it is typed. A secret input has to be a
+   *  password field as well as a marked region; a textarea cannot be one, which
+   *  is why the two are reported rather than assumed alike. */
+  fields: { tag: string; type: string }[];
+  control: Region;
+  redacted: number;
+}
+
+/* The secrets `gallery.tsx`'s `FeedbackSecretsFrame` renders. Spelled here as
+ * well because the gate has to know them independently of the page — and the
+ * live-presence check is what makes a mismatch fail instead of pass. */
+const LEAK_HMAC = 'whsec_hmacLEAKSifREDACTIONfails0001';
+const LEAK_BEARER = 'whsec_bearerLEAKSifREDACTIONfails0002';
+/** Typed into the create dialog's own field, which the reporter fills in before
+ *  any secret has been issued. */
+const LEAK_TYPED = 'typedLEAKSifREDACTIONfails0003';
+/** Pasted into the MCP headers editor, which is a textarea and therefore cannot
+ *  be a password field. */
+const LEAK_MCP = 'mcpLEAKSifREDACTIONfails0004';
+const MCP_HEADERS = `{"Authorization": "Bearer ${LEAK_MCP}"}`;
+
 /** One outgoing submission, as the client actually built it. */
 interface Submission {
   fields: string[];
@@ -62,6 +103,9 @@ declare global {
      *  asserted at each read: the recorder below is its only writer, so the
      *  shape is this file's own and there is nothing external to validate. */
     __feedbackSent?: Submission[];
+    /** Installed by `recordSerialized`. Holds the rasteriser's own DOM
+     *  serializations — the clone, as it goes into the image. */
+    __serialized?: string[];
   }
 }
 
@@ -212,6 +256,158 @@ async function readShot(page: Page): Promise<{ width: number; height: number; re
   });
 }
 
+/**
+ * Record every DOM serialization the rasteriser performs.
+ *
+ * `modern-screenshot` puts the redacted CLONE inside an SVG `foreignObject` and
+ * turns it into an image through `new XMLSerializer().serializeToString(…)`.
+ * Wrapping that one call is how this gate reads the real clone — every text
+ * node, every attribute, and the input values the rasteriser copies in itself
+ * (it writes a live `value` attribute onto each cloned field, which is the leak
+ * `redactClone` exists to undo). A reconstruction of that clone would be a
+ * second implementation of it, and would drift.
+ *
+ * The markup stays in the page. Only counts and the needles found in it cross
+ * back, because a full-page serialization is megabytes.
+ */
+async function recordSerialized(page: Page): Promise<void> {
+  await page.evaluateOnNewDocument(() => {
+    const seen: string[] = [];
+    window.__serialized = seen;
+    const real = XMLSerializer.prototype.serializeToString;
+    XMLSerializer.prototype.serializeToString = function record(node: Node): string {
+      const markup = real.call(this, node);
+      seen.push(markup);
+      return markup;
+    };
+  });
+}
+
+/** What the clone carried. `serializations` guards the vacuous pass: a needle
+ *  cannot be absent from markup that was never produced. */
+async function cloneLeaks(
+  page: Page, needles: readonly string[],
+): Promise<{ serializations: number; bytes: number; leaked: string[] }> {
+  return page.evaluate((wanted: string[]) => {
+    const seen = window.__serialized ?? [];
+    return {
+      serializations: seen.length,
+      bytes: seen.reduce((total, markup) => total + markup.length, 0),
+      leaked: wanted.filter((needle) => seen.some((markup) => markup.includes(needle))),
+    };
+  }, [...needles]);
+}
+
+/** Where each secret sits in the live page: in rendered text, in an attribute,
+ *  or in a field's value. All three are channels the clone could carry. */
+async function livePresence(page: Page, needles: readonly string[]): Promise<LivePresence[]> {
+  return page.evaluate((wanted: string[]) => wanted.map((needle) => {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let inText = false;
+    for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+      if ((node.textContent ?? '').includes(needle)) inText = true;
+    }
+    let inAttrs = false;
+    let inValues = false;
+    for (const element of document.body.querySelectorAll('*')) {
+      for (const attribute of element.attributes) {
+        if (attribute.value.includes(needle)) inAttrs = true;
+      }
+      const field = element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement
+        ? element.value
+        : '';
+      if (field.includes(needle)) inValues = true;
+    }
+    return { needle, inText, inAttrs, inValues };
+  }), [...needles]);
+}
+
+/**
+ * Sample EVERY region the shipped redaction selector covers, in the captured
+ * image, at each region's own on-page position.
+ *
+ * The selector is `redactClone`'s own, so this measures the product's contract
+ * rather than a list this file maintains: a secret the components forgot to mark
+ * is not sampled here at all, which is what the live-presence and clone checks
+ * are for. The descendant clause is left off because a marked region that holds
+ * child elements is covered by its own box.
+ *
+ * The inset is PROPORTIONAL, unlike the flat eight device pixels above: these
+ * are real components, and one of them is a single line of monospace inside a
+ * shell snippet, where a flat inset would sample nothing at all.
+ *
+ * And the box is CLIPPED to what the page actually paints. The curl snippet
+ * scrolls horizontally, so the redacted secret inside it genuinely extends past
+ * the edge of the block that holds it; sampling the unclipped layout box reads
+ * the card behind that edge and calls the card a leak.
+ */
+async function readSecretRegions(page: Page): Promise<NamedRegion[]> {
+  return page.evaluate(() => {
+    const canvas = document.querySelector<HTMLCanvasElement>('[data-feedback-canvas]');
+    if (canvas === null) throw new Error('no preview canvas');
+    const context = canvas.getContext('2d');
+    if (context === null) throw new Error('no 2d context');
+    const scale = canvas.width / document.documentElement.clientWidth;
+    const found: NamedRegion[] = [];
+    let index = 0;
+    for (const node of document.querySelectorAll<HTMLElement>('[data-feedback-redact], input[type="password"]')) {
+      index += 1;
+      // The painted box: the node's own, narrowed by every clipping ancestor to
+      // that ancestor's CONTENT box. Measured, not assumed: a scroll container's
+      // child paints to the content edge and not into the padding, so the curl
+      // block's redaction ends twelve pixels short of the `<pre>` it sits in.
+      const box = node.getBoundingClientRect();
+      let left = box.left; let top = box.top; let right = box.right; let bottom = box.bottom;
+      for (let parent = node.parentElement; parent !== null; parent = parent.parentElement) {
+        const style = getComputedStyle(parent);
+        if (style.overflowX === 'visible' && style.overflowY === 'visible') continue;
+        const clip = parent.getBoundingClientRect();
+        const edge = (...widths: string[]): number =>
+          widths.reduce((total, width) => total + (Number.parseFloat(width) || 0), 0);
+        left = Math.max(left, clip.left + edge(style.borderLeftWidth, style.paddingLeft));
+        top = Math.max(top, clip.top + edge(style.borderTopWidth, style.paddingTop));
+        right = Math.min(right, clip.right - edge(style.borderRightWidth, style.paddingRight));
+        bottom = Math.min(bottom, clip.bottom - edge(style.borderBottomWidth, style.paddingBottom));
+      }
+      const inset = Math.max(1, Math.min(6, Math.round(Math.min(right - left, bottom - top) * scale * 0.2)));
+      const x = Math.round(left * scale) + inset;
+      const y = Math.round(top * scale) + inset;
+      const w = Math.round((right - left) * scale) - inset * 2;
+      const h = Math.round((bottom - top) * scale) - inset * 2;
+      const label = `${String(index)}:${node.tagName.toLowerCase()}${node.getAttribute('type') ?? ''}`;
+      if (w < 1 || h < 1 || y + h > canvas.height || x + w > canvas.width) {
+        found.push({ label, uniformlyRedacted: false, colours: 0, sampled: 0, offFill: 0 });
+        continue;
+      }
+      const pixels = context.getImageData(x, y, w, h).data;
+      const colours = new Set<string>();
+      let offFill = 0;
+      let sampled = 0;
+      for (let i = 0; i < pixels.length; i += 4) {
+        sampled += 1;
+        colours.add(`${String(pixels[i])},${String(pixels[i + 1])},${String(pixels[i + 2])}`);
+        if (pixels[i] !== 17 || pixels[i + 1] !== 17 || pixels[i + 2] !== 17) offFill += 1;
+      }
+      found.push({ label, uniformlyRedacted: sampled > 0 && offFill === 0, colours: colours.size, sampled, offFill });
+    }
+    return found;
+  });
+}
+
+/** One surface, measured every way it could leak. */
+async function probeSurface(page: Page, needles: readonly string[]): Promise<SurfaceProbe> {
+  return {
+    live: await livePresence(page, needles),
+    clone: await cloneLeaks(page, needles),
+    regions: await readSecretRegions(page),
+    fields: await page.evaluate(() => [...document.querySelectorAll('[data-feedback-redact]')]
+      .filter((node) => node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement)
+      .map((node) => ({ tag: node.tagName.toLowerCase(), type: node.getAttribute('type') ?? '' }))),
+    control: await readRegion(page, '[data-visible-copy]'),
+    redacted: (await readShot(page)).redacted,
+  };
+}
+
 interface Observed {
   desktop: {
     shot: { width: number; height: number; redacted: number };
@@ -230,6 +426,10 @@ interface Observed {
     attempts: number; sizes: number[]; toast: string;
   };
   mobile: { buttonVisible: boolean; dialogWithin: boolean; captureSucceeded: boolean };
+  /** The shipped webhook cards and the MCP headers editor. */
+  cards: SurfaceProbe;
+  /** The shipped create-webhook dialog, with a secret typed into its field. */
+  dialog: SurfaceProbe;
 }
 
 async function run(): Promise<Observed> {
@@ -377,6 +577,44 @@ async function run(): Promise<Observed> {
     const captureSucceeded = await phone.$('[data-feedback-shot="ready"]') !== null;
     await phone.close();
 
+    // ── the REAL secret-bearing surfaces ─────────────────────────────────
+    // The frame above proves the two mechanisms on markup written for the
+    // purpose. These two stages prove the product: the components a person has
+    // open when they press Feedback, driven through the same capture.
+    const cardsPage = await browser.newPage();
+    await cardsPage.setViewport({ width: 1280, height: 1000 });
+    await serveFeedback(cardsPage);
+    await recordSerialized(cardsPage);
+    await cardsPage.goto(`${origin}/gallery.html?frame=feedbacksecrets`, { waitUntil: 'networkidle0' });
+    // The MCP form's only textarea. Typed rather than seeded, because a pasted
+    // bearer header lives in the field's VALUE and never in its markup — which
+    // is the half of this leak no source read would have found.
+    await cardsPage.waitForSelector('textarea');
+    await cardsPage.type('textarea', MCP_HEADERS);
+    // Typing scrolls the field into view. The capture starts at the document
+    // origin, so every sampled coordinate below assumes the page is at the top.
+    await cardsPage.evaluate(() => { window.scrollTo(0, 0); });
+    await openDialog(cardsPage);
+    const cards = await probeSurface(cardsPage, [LEAK_HMAC, LEAK_BEARER, LEAK_MCP]);
+    await cardsPage.close();
+
+    const dialogPage = await browser.newPage();
+    await dialogPage.setViewport({ width: 1280, height: 1000 });
+    await serveFeedback(dialogPage);
+    await recordSerialized(dialogPage);
+    await dialogPage.goto(`${origin}/gallery.html?frame=feedbacksecrets&modal=1`, { waitUntil: 'networkidle0' });
+    // The create dialog's secret field, addressed by EITHER protection so the
+    // harness survives the loss of one and the assertions do the talking: a
+    // selector that named only the type turned a missing password field into a
+    // 30-second timeout instead of a failed expectation.
+    const secretField = 'input[type="password"], [data-feedback-redact]';
+    await dialogPage.waitForSelector(secretField);
+    await dialogPage.type(secretField, LEAK_TYPED);
+    await dialogPage.evaluate(() => { window.scrollTo(0, 0); });
+    await openDialog(dialogPage);
+    const dialog = await probeSurface(dialogPage, [LEAK_TYPED]);
+    await dialogPage.close();
+
     return {
       desktop: { shot, password, token, control, consent, sent, toast },
       annotated: { before, afterDrag, afterUndo, sentAnnotated },
@@ -388,6 +626,8 @@ async function run(): Promise<Observed> {
         sizes: flakySent.map((one) => one.screenshot?.size ?? 0),
       },
       mobile: { buttonVisible, dialogWithin, captureSucceeded },
+      cards,
+      dialog,
     };
   });
 }
@@ -426,6 +666,63 @@ describe('the screenshot never carries a secret', () => {
   test('the capture has real dimensions', () => {
     expect(observed.desktop.shot.width).toBeGreaterThan(1000);
     expect(observed.desktop.shot.height).toBeGreaterThan(400);
+  });
+});
+
+describe('the real secret-bearing surfaces the app actually shows', () => {
+  test('every secret is genuinely on the page — the control that stops the rest passing on an empty one', () => {
+    const [hmac, bearer, mcp] = observed.cards.live;
+    // The issued secret and the curl that tests it are TEXT, which no
+    // password-input rule can reach.
+    expect(hmac?.inText).toBe(true);
+    expect(bearer?.inText).toBe(true);
+    // A pasted bearer header lives in a field's value and nowhere in the markup.
+    expect(mcp?.inValues).toBe(true);
+    expect(observed.dialog.live[0]?.inValues).toBe(true);
+  });
+
+  test('no secret survives into the clone the screenshot is rasterised from', () => {
+    // Text, attributes and the values the rasteriser copies in itself: the clone
+    // is read as the rasteriser serialized it, so all three are covered at once.
+    expect(observed.cards.clone.serializations).toBeGreaterThan(0);
+    expect(observed.cards.clone.bytes).toBeGreaterThan(10_000);
+    expect(observed.cards.clone.leaked).toEqual([]);
+    expect(observed.dialog.clone.serializations).toBeGreaterThan(0);
+    expect(observed.dialog.clone.leaked).toEqual([]);
+  });
+
+  test('every marked region is a solid block in the captured image', () => {
+    for (const region of [...observed.cards.regions, ...observed.dialog.regions]) {
+      expect({ label: region.label, offFill: region.offFill, colours: region.colours })
+        .toEqual({ label: region.label, offFill: 0, colours: 1 });
+      expect(region.sampled).toBeGreaterThan(20);
+    }
+  });
+
+  test('all four surfaces are covered, not only the ones somebody remembered', () => {
+    // Two cards, each with an issued secret AND the secret inside its curl, plus
+    // the MCP headers editor: five regions. A card that stopped marking one of
+    // its two renderings would still pass a count of one.
+    expect(observed.cards.regions).toHaveLength(5);
+    expect(observed.cards.redacted).toBe(5);
+    // The dialog's field, redacted as a password AND as a marked region.
+    expect(observed.dialog.regions).toHaveLength(1);
+    expect(observed.dialog.redacted).toBe(1);
+  });
+
+  test('a secret input is a password field as well as a marked region', () => {
+    // Both, deliberately: the type is what keeps it out of a screenshot without
+    // anyone annotating it, and the marker is what survives someone adding a
+    // reveal toggle that flips the type to `text`.
+    expect(observed.dialog.fields).toEqual([{ tag: 'input', type: 'password' }]);
+    // The MCP headers editor is a textarea, which cannot be a password field at
+    // all, so the marker is the whole of its protection.
+    expect(observed.cards.fields).toEqual([{ tag: 'textarea', type: '' }]);
+  });
+
+  test('the surfaces around them are really rendered', () => {
+    expect(observed.cards.control.colours).toBeGreaterThan(1);
+    expect(observed.dialog.control.colours).toBeGreaterThan(1);
   });
 });
 

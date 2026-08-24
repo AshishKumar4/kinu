@@ -28,7 +28,7 @@ import { tool, jsonSchema } from 'ai';
 import * as v from 'valibot';
 import { createTestRuntime } from './helpers';
 import {
-  narrowToolSurface, codemodeCapabilitiesFor, CODEMODE_ONLY_CAPABILITIES, TOOL_REACH,
+  narrowToolSurface, codemodeCapabilitiesFor, TOOL_REACH,
   buildActorTools,
   buildBuiltinTools,
   BUILTIN_TOOLS,
@@ -180,7 +180,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
           currentTask: null, createdAt: 1, dismissedAt: null,
         },
       }),
-      recordTitle: async () => ({ ok: true as const, name: 's', displayName: 'S' }),
+      recordTitle: async () => ({ ok: true as const, name: 's', displayName: 'S', applied: true }),
       spawn: async () => ({ name: 's', displayName: 'S' }),
       assign: async () => ({ ok: true as const, name: 's', ...stubHandoff }),
       status: async () => ({}),
@@ -685,9 +685,12 @@ describe('a role narrows the sandbox as well as the tool list', () => {
   });
 
   test('the codemode-only set is derived from the reach table, not restated', () => {
-    expect([...CODEMODE_ONLY_CAPABILITIES].sort()).toEqual(
-      Object.entries(TOOL_REACH).filter(([, reach]) => !reach.native).map(([name]) => name).sort(),
-    );
+    const nonNative = Object.entries(TOOL_REACH).filter(([, reach]) => !reach.native);
+    const everyNamespace = [...new Set(
+      nonNative.flatMap(([, reach]) => reach.codemode === null ? [] : [reach.codemode]),
+    )].map((name) => ({ name }));
+    expect([...codemodeCapabilitiesFor(everyNamespace)].sort())
+      .toEqual(nonNative.map(([name]) => name).sort());
   });
 
   test('a named codemode-only capability keeps its namespace', () => {

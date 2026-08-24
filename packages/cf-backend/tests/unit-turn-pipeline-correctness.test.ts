@@ -135,12 +135,21 @@ describe('turn-pipeline correctness wiring', () => {
     expect(headRuntime).toContain('operations?: ModelOperationSink');
   });
 
-  test('the agents swarm substrate carries no strategy objects', () => {
+  test('the agents swarm substrate is built as an ANNOTATED AgentsForkDeps, with no strategy objects', () => {
     // The fork action is gone. Each backend builds the typed swarm substrate
     // directly, with no pass-through wrapper and no dormant strategy objects.
+    //
+    // The annotation is load-bearing, not style: `gate:wired` attributes a
+    // field supply by the WRITTEN type on the literal, and it does not descend
+    // into a nested one. Built inline under `fork:` the substrate's own optional
+    // wires — `nodeHost`, `compactShared` — were supplied here and reported as
+    // supplied by nobody, which is how a live wire looks identical to a missing
+    // one. So the shape this asserts is the shape that stays measurable.
     const depsBody = memberBody(actor, 'private getAgentsToolDeps(workMode: WorkMode)');
-    expect(depsBody).toContain('fork: {');
+    expect(depsBody).toContain('const fork: AgentsForkDeps = {');
     expect(depsBody).toContain('resolveModel:');
+    expect(depsBody).toContain('nodeHost:');
+    expect(depsBody).toContain('compactShared:');
     expect(depsBody).not.toContain('mcts:');
     expect(depsBody).not.toContain('heads:');
     expect(actor).not.toContain('defaultOptions');

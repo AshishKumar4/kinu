@@ -20,7 +20,10 @@
  * this list and the emit sites actually present in the named files, and that the
  * families covered are exactly the pinned five. Deleting an emit line reds it;
  * adding a boundary without instrumenting it reds it; instrumenting something
- * without declaring it reds it.
+ * without declaring it reds it. The list is module-private, so the gate recovers
+ * it from this file's own syntax with the parser it already walks the emit sites
+ * with — the declaration is one side of a source-structure equality, and reading
+ * it the same way as the other side is what keeps the two halves comparable.
  *
  * ## Why the mechanism is part of the declaration
  *
@@ -42,9 +45,9 @@ import type { LogEventName } from '@kinu.run/core/obs';
  * jobs settling", "are releases moving" — which is why the set is closed: a
  * sixth family is a new question and should have to be argued for, not appear.
  */
-export const BOUNDARY_FAMILIES = ['error', 'turn', 'provider', 'job', 'release'] as const;
+const BOUNDARY_FAMILIES = ['error', 'turn', 'provider', 'job', 'release'] as const;
 
-export type BoundaryFamily = (typeof BOUNDARY_FAMILIES)[number];
+type BoundaryFamily = (typeof BOUNDARY_FAMILIES)[number];
 
 /**
  * How a boundary reaches Analytics Engine.
@@ -57,9 +60,9 @@ export type BoundaryFamily = (typeof BOUNDARY_FAMILIES)[number];
  * what makes it correct inside a Durable Object where an installed sink from the
  * Worker's isolate would not be present.
  */
-export type BoundaryMechanism = 'diagnostics' | 'writer';
+type BoundaryMechanism = 'diagnostics' | 'writer';
 
-export interface FleetBoundary {
+interface FleetBoundary {
   /** Stable id, written to the `boundary` blob. Never renamed: it is the join
    *  key between a dataset three months deep and this file. */
   readonly id: string;
@@ -79,7 +82,7 @@ export interface FleetBoundary {
   readonly means: string;
 }
 
-export const FLEET_BOUNDARIES: readonly FleetBoundary[] = [
+const FLEET_BOUNDARIES: readonly FleetBoundary[] = [
   {
     id: 'http.run_events',
     family: 'error',

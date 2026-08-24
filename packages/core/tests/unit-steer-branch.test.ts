@@ -18,7 +18,6 @@ import {
   BRANCH_HEAD_BUDGET, BRANCH_RATIONALE, startBranchHead, settleBranchIntoTakes,
   settlePendingBranches, type BranchStatusEvent, type PendingBranch,
 } from '../src/steer-branch';
-import { headPhaseRunEvent } from '../src/orchestrator/heads-support';
 
 function setup() {
   const ws = createTestWorkspace();
@@ -263,36 +262,5 @@ describe('settlePendingBranches — the drain both backends run at turn end', ()
     const events: BranchStatusEvent[] = [];
     settlePendingBranches({ sql, sessionId: 'default', broadcast: (e) => { events.push(e); } }, [], 'turn-1', 'x');
     expect(events).toEqual([]);
-  });
-});
-
-describe('headPhaseRunEvent — one row shape for both backends', () => {
-  test('a split carries the real head ids and the rationale', () => {
-    expect(headPhaseRunEvent({
-      kind: 'split', rootId: 'run-7', headIds: ['h1', 'h2'], rationale: 'two ways in',
-    })).toEqual({ type: 'head_split', rootId: 'run-7', headIds: ['h1', 'h2'], rationale: 'two ways in' });
-  });
-
-  test('a merge carries the whole cost summary, not just a head count', () => {
-    // headsWithFindings is the productivity figure: 4-of-5 empty forks were
-    // invisible until it was recorded, and a backend transcribing the row by
-    // hand is exactly how it goes missing again. fileChanges is the same
-    // argument for the split's EFFECT: what it did, not only what it spent.
-    // blindSpots is the same argument once more, for a field whose own value is
-    // still unmeasured: it can only be judged by reading it across real splits,
-    // which requires it to be on the row.
-    expect(headPhaseRunEvent({
-      kind: 'merge',
-      rootId: 'run-7',
-      cost: { headCount: 3, headsWithFindings: 1, totalTokens: 900, totalWallClockMs: 0, maxDepth: 0 },
-      mergedNarrative: 'one lead held up',
-      fileChanges: [{ id: 'h1', changes: [{ path: '/workspace/a.ts', status: 'changed', added: 4, removed: 1 }] }],
-      blindSpots: ['nobody checked the migration path'],
-    })).toEqual({
-      type: 'head_merge', rootId: 'run-7', headCount: 3, headsWithFindings: 1,
-      totalTokens: 900, mergedNarrative: 'one lead held up',
-      fileChanges: [{ id: 'h1', changes: [{ path: '/workspace/a.ts', status: 'changed', added: 4, removed: 1 }] }],
-      blindSpots: ['nobody checked the migration path'],
-    });
   });
 });

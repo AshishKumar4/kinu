@@ -44,6 +44,16 @@
  * daemon that interrupted a live interactive owner would interleave its
  * programmatic turns with the user's own — the thing that must not happen.
  * A daemon meeting a live interactive holder waits for the next pass instead.
+ *
+ * ## One public surface
+ *
+ * {@link DriverLeaseHold} is the whole entry: take it, ask whether it is still
+ * mine, give it back. The three primitives it composes and the OS liveness seam
+ * are module-private, because an export nothing outside this file imports is an
+ * export the wired gate is right to refuse. A suite that has to read the row
+ * from a SECOND connection — the observation a rival process makes, and the
+ * only one that proves exclusion — does it through `tests/driver-lease-probe.ts`
+ * rather than through a surface production never asks for.
  */
 import { KinuError, refusalOf, toKinuError, type Refusal } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -76,7 +86,7 @@ export type DriverKind = 'interactive' | 'daemon';
 
 /** The lease as its holder sees it. `token` is the capability: every gated
  *  operation presents it, and only it can release the row. */
-export interface DriverLease {
+interface DriverLease {
   readonly token: string;
   readonly kind: DriverKind;
   readonly pid: number;
@@ -106,7 +116,7 @@ export interface LeaseProcess {
  * process this user may not signal, and reading that as dead would let a
  * daemon take the lease from a live owner it merely cannot see.
  */
-export const OS_LEASE_PROCESS: LeaseProcess = {
+const OS_LEASE_PROCESS: LeaseProcess = {
   pid: process.pid,
   isAlive(pid: number): boolean {
     try {
@@ -130,9 +140,14 @@ export const OS_LEASE_PROCESS: LeaseProcess = {
   },
 };
 
-export type DriverLeaseResult =
-  | { readonly held: DriverLease }
-  | { readonly refused: Refusal; readonly holder: DriverLeaseHolder };
+/** A lease that was not granted, and who has it. Named because it travels on
+ *  its own: a driver that stood down reports the holder to whoever asked. */
+export interface DriverLeaseRefusal {
+  readonly refused: Refusal;
+  readonly holder: DriverLeaseHolder;
+}
+
+type DriverLeaseResult = { readonly held: DriverLease } | DriverLeaseRefusal;
 
 export interface DriverLeaseDeps {
   /** Tagged-template SQL over this workspace's own database. */
@@ -149,7 +164,7 @@ interface LeaseRow {
   kind: string;
 }
 
-export function initDriverLeaseTable(execRaw: RawSqlExec): void {
+function initDriverLeaseTable(execRaw: RawSqlExec): void {
   execRaw(DRIVER_LEASE_DDL);
 }
 
@@ -176,7 +191,7 @@ interface DriverLeaseHolderRow extends DriverLeaseHolder {
  * no row count for a write, and a re-read is the honest question anyway: after
  * two processes race, exactly one of them finds its own token in the row.
  */
-export function acquireDriverLease(
+function acquireDriverLease(
   deps: DriverLeaseDeps,
   kind: DriverKind,
 ): DriverLeaseResult {
@@ -243,14 +258,8 @@ export function acquireDriverLease(
  * between operations. A holder that was preempted must stop driving at the
  * next boundary, not at the end of its pass.
  */
-export function holdsDriverLease(deps: Pick<DriverLeaseDeps, 'sql'>, token: string): boolean {
+function holdsDriverLease(deps: Pick<DriverLeaseDeps, 'sql'>, token: string): boolean {
   return readRow(deps.sql)?.token === token;
-}
-
-/** Who is driving, or null when nobody is. */
-export function driverLeaseHolder(deps: Pick<DriverLeaseDeps, 'sql'>): DriverLeaseHolder | null {
-  const row = readRow(deps.sql);
-  return row ? { pid: row.pid, kind: row.kind } : null;
 }
 
 /**
@@ -260,9 +269,60 @@ export function driverLeaseHolder(deps: Pick<DriverLeaseDeps, 'sql'>): DriverLea
  * pass cannot delete its successor's claim — the release is for OUR lease, and
  * a stale token releases nothing. Returns whether the row was actually ours.
  */
-export function releaseDriverLease(deps: Pick<DriverLeaseDeps, 'sql'>, token: string): boolean {
+function releaseDriverLease(deps: Pick<DriverLeaseDeps, 'sql'>, token: string): boolean {
   const held = holdsDriverLease(deps, token);
   if (!held) return false;
   void deps.sql`DELETE FROM driver_lease WHERE id = ${LEASE_ROW_ID} AND token = ${token}`;
   return true;
+}
+
+/**
+ * One process's hold on one conversation's lease.
+ *
+ * Every driver performs the same three operations in the same order — take it,
+ * ask whether it is still mine, give it back — so they live together here
+ * rather than being re-implemented per driver. The daemon host keeps one of
+ * these per bound agent; an interactive client keeps one for its session. That
+ * is what makes "am I still the driver?" the same question in both: it is
+ * answered from the row, never from the token this object remembers.
+ */
+export class DriverLeaseHold {
+  private token: string | null = null;
+
+  constructor(
+    private readonly deps: DriverLeaseDeps,
+    readonly kind: DriverKind,
+  ) {}
+
+  /**
+   * Become the driver, or report who is — the refusal carries its holder, so a
+   * caller that has to say why it stood down does not go asking again.
+   *
+   * A token already held is RE-CHECKED rather than trusted: the whole point of
+   * preemption is that a lease can be lost between operations, so "I had it" is
+   * not "I have it".
+   */
+  acquire(): DriverLeaseRefusal | null {
+    if (this.token !== null && holdsDriverLease(this.deps, this.token)) return null;
+    const outcome = acquireDriverLease(this.deps, this.kind);
+    if ('held' in outcome) {
+      this.token = outcome.held.token;
+      return null;
+    }
+    this.token = null;
+    return { refused: outcome.refused, holder: outcome.holder };
+  }
+
+  /** Whether this process still holds what it took. */
+  held(): boolean {
+    return this.token !== null && holdsDriverLease(this.deps, this.token);
+  }
+
+  /** Give the lease back, if the row is still ours. A stale token releases
+   *  nothing, so a preempted holder cannot evict its successor. */
+  release(): void {
+    if (this.token === null) return;
+    releaseDriverLease(this.deps, this.token);
+    this.token = null;
+  }
 }

@@ -1,9 +1,9 @@
-import { createContext, useContext, useMemo, type ReactNode } from 'react';
+import { createContext, useContext, type ReactNode } from 'react';
 
 export const KEYMAP_PRESET_IDS = ['pi-omp', 'kinu', 'opencode'] as const;
 export type KeymapPresetId = (typeof KEYMAP_PRESET_IDS)[number];
 
-export const KEY_SCOPES = ['consent', 'device', 'modal', 'home', 'editor', 'conversation', 'global'] as const;
+const KEY_SCOPES = ['consent', 'device', 'modal', 'home', 'editor', 'conversation', 'global'] as const;
 export type KeyScope = (typeof KEY_SCOPES)[number];
 
 export interface TuiKeyEvent {
@@ -16,7 +16,7 @@ export interface TuiKeyEvent {
   preventDefault?: () => void;
 }
 
-export const TUI_ACTIONS = {
+const TUI_ACTIONS = {
   'consent.once': { scope: 'consent', label: 'Allow once' },
   'consent.always': { scope: 'consent', label: 'Always allow' },
   'consent.deny': { scope: 'consent', label: 'Deny' },
@@ -246,7 +246,7 @@ export function createKeybindingRegistry(input: {
   });
 }
 
-export function keyEventAction(
+function keyEventAction(
   registry: KeybindingRegistry,
   event: TuiKeyEvent,
   activeScopes: readonly KeyScope[],
@@ -338,9 +338,6 @@ export function useKeybindingRegistry(): KeybindingRegistry {
   return useContext(ActionRegistryContext);
 }
 
-export function useKeyDispatcher(registry: KeybindingRegistry): TuiKeyDispatcher {
-  return useMemo(() => createKeyDispatcher(registry), [registry]);
-}
 
 function parseSequence(input: string): readonly KeyStroke[] {
   const value = input.trim().toLowerCase();

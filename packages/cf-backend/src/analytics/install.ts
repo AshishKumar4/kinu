@@ -27,6 +27,12 @@
  * span. What crosses into Analytics is the CLASSIFICATION, which is a closed set
  * of nine words and is what an aggregate wanted anyway.
  *
+ * The allowlist alone cannot enforce that, because a caller can put the chain in
+ * a field the allowlist WANTS — `reason` — and the name is then correct while the
+ * value is prose. So the three classification slots, `outcome`, `reason` and
+ * `code`, are checked against their VOCABULARY as well as their name: see
+ * `CLASSIFICATION` and `errorCode` below.
+ *
  * ## Why this is not sufficient on its own
  *
  * A Durable Object is a different isolate from the Worker that routes to it, with
@@ -39,7 +45,7 @@
  * must therefore be installed in every isolate those run in.
  */
 import {
-  createCompositeLogger, createConsoleLogger, diagnostics, setDiagnosticsSink,
+  ERROR_CODES, createCompositeLogger, createConsoleLogger, diagnostics, setDiagnosticsSink,
   type ErrorCode, type KinuError, type LogEventName, type LogFields, type Logger,
 } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -65,10 +71,14 @@ const CONTROL_PLANE_PREFIX = 'control_plane.';
  * is passed through. That guard is here rather than at the caller because this is
  * the last point before a three-month dataset an admin UI renders, and an address
  * arriving from any future call site would be unrecoverable.
+ *
+ * `outcome`, `reason` and `code` are read through the closed-vocabulary readers
+ * below rather than as text: being NAMED correctly is not the same as being
+ * VALUED correctly, and those three slots hold a classification.
  */
 const PUBLISHABLE_TEXT = [
   'workspace', 'agentKind', 'provider', 'model', 'tool', 'source',
-  'outcome', 'reason', 'targetKind', 'target', 'actor', 'operation',
+  'outcome', 'reason', 'code', 'targetKind', 'target', 'actor', 'operation',
 ] as const;
 
 /** Numeric fields a diagnostic may publish, by slot name. */
@@ -103,6 +113,48 @@ function count(fields: LogFields, name: PublishableNumber): number {
   return held.success ? held.output : 0;
 }
 
+/**
+ * The grammar of a classification: one lowercase snake_case token.
+ *
+ * This is NOT a value scrubber, and the distinction is why it may exist beside
+ * the name allowlist. A scrubber has to recognise a secret, and the lesson of
+ * `RESERVED_LOG_FIELDS` is that you cannot. This recognises the declared TYPE of
+ * a slot: `outcome` and `reason` hold a closed vocabulary, and prose is not a
+ * member of one.
+ *
+ * It exists because a caller can reach an allowlisted name with the wrong KIND
+ * of value, which the allowlist cannot see because the name is right. The
+ * control plane published `reason: row.detail`, and on a thrown failure that
+ * detail is a rendered cause chain whose head is an upstream exception message —
+ * clamped to the slot's 48 bytes and kept for three months. The chain belongs in
+ * the durable audit row, which stores it; what crosses into Analytics is the
+ * word.
+ */
+const CLASSIFICATION = /^[a-z][a-z0-9_]{0,31}$/;
+
+/** An allowlisted classification field, or the fallback. A value that is not a
+ *  classification reads as one that was not supplied, so the row keeps the
+ *  meaning its event name gives it instead of carrying a fragment of prose. */
+function classification(fields: LogFields, name: PublishableText, fallback = ''): string {
+  const held = text(fields, name);
+  return CLASSIFICATION.test(held) ? held : fallback;
+}
+
+/**
+ * The `code` slot: a member of core's `ERROR_CODES`, or nothing.
+ *
+ * A `diagnostics.failure`'s own code always wins, because it came from a
+ * `KinuError` rather than from an untyped field map. The field is read only for
+ * `diagnostics.event`, where a call site has already classified a failure it did
+ * not throw — the control plane's audit marker is that case: the action failed
+ * inside another Durable Object and arrives here as an outcome, not an error.
+ */
+function errorCode(fields: LogFields, reported: ErrorCode | ''): ErrorCode | '' {
+  if (reported !== '') return reported;
+  const held = text(fields, 'code');
+  return ERROR_CODES.find((candidate) => candidate === held) ?? '';
+}
+
 /** An email address published as itself would be the one leak a name allowlist
  *  cannot catch, because the field is legitimately named. */
 function identityValue(raw: string): string {
@@ -112,8 +164,9 @@ function identityValue(raw: string): string {
 function opsRow(
   event: LogEventName,
   fields: LogFields,
-  code: ErrorCode | '',
+  reported: ErrorCode | '',
 ): AnalyticsRow<typeof CONTROL_PLANE_OPS_SCHEMA> {
+  const code = errorCode(fields, reported);
   return {
     actor: identityValue(text(fields, 'actor')),
     kind: 'op',
@@ -121,10 +174,10 @@ function opsRow(
     // `workspace_remove`. An explicit `operation` field wins, so a caller whose
     // event name is coarser than its operation can say so.
     operation: text(fields, 'operation', event.slice(CONTROL_PLANE_PREFIX.length)),
-    outcome: text(fields, 'outcome', code === '' ? 'ok' : 'failed'),
+    outcome: classification(fields, 'outcome', code === '' ? 'ok' : 'failed'),
     code,
     targetKind: text(fields, 'targetKind'),
-    reason: text(fields, 'reason'),
+    reason: classification(fields, 'reason'),
     target: identityValue(text(fields, 'target')),
     count: 1,
     durationMs: count(fields, 'durationMs'),
@@ -135,18 +188,22 @@ function opsRow(
 function agentRow(
   event: LogEventName,
   fields: LogFields,
-  code: ErrorCode | '',
-  workspace: string,
+  reported: ErrorCode | '',
 ): AnalyticsRow<typeof AGENT_METRICS_SCHEMA> {
+  const code = errorCode(fields, reported);
   return {
-    // A field-supplied workspace wins over the installer's: a UserDO handling
-    // one user's several workspaces knows which one a line is about, and the
-    // installer only knows the isolate it is in.
-    workspace: analyticsDigest(text(fields, 'workspace', workspace)),
+    // THE ONLY SOURCE IS THE LINE ITSELF. There is deliberately no isolate-level
+    // default: `setDiagnosticsSink` is module-global, Cloudflare co-locates
+    // Durable Objects in one isolate, and the first actor to install would own
+    // the default for every actor that landed beside it. A default here does not
+    // attribute a row, it MIS-attributes it, and AE's per-index sampling
+    // isolation goes wrong with it. A line that knows which workspace it is
+    // about says so; one that does not is honestly unattributed.
+    workspace: analyticsDigest(text(fields, 'workspace')),
     kind: 'event',
     family: eventFamily(event),
     event,
-    outcome: text(fields, 'outcome', code === '' ? 'ok' : 'failed'),
+    outcome: classification(fields, 'outcome', code === '' ? 'ok' : 'failed'),
     code,
     boundary: boundaryOf(event),
     agentKind: text(fields, 'agentKind'),
@@ -154,6 +211,7 @@ function agentRow(
     model: text(fields, 'model'),
     tool: text(fields, 'tool'),
     source: text(fields, 'source'),
+    reason: classification(fields, 'reason'),
     count: 1,
     durationMs: count(fields, 'durationMs'),
     ttftMs: count(fields, 'ttftMs'),
@@ -174,38 +232,22 @@ function agentRow(
 }
 
 /**
- * How the sink learns which workspace an isolate's lines belong to.
+ * The Analytics half of the composite.
  *
- * A THUNK, not a string, and this is load-bearing rather than a style choice. The
- * sink is installed in a Durable Object's CONSTRUCTOR, because that is the one
- * point guaranteed to precede every RPC — and at that moment a facet actor may
- * not know its own placement yet: a `SubordinateAgent`'s WORKSPACE is its
- * parent's, and `workspaceName()` throws by design until the parent seeds the
- * identity row. Passing a string made `new SubordinateAgent(...)` throw before
- * seeding, including on a cold activation arriving ahead of the RPC that would
- * have seeded it.
- *
- * THE THUNK MUST BE TOTAL. It is read on the diagnostics path, so a throw there
- * would break the log line it is describing, and reporting the throw would
- * recurse into this same sink. Callers therefore pass something that always has
- * an answer — `() => this.name`, the actor's OWN durable name, which is what
- * identifies the emitter anyway and is digested before it is written.
+ * Private, because `installAnalyticsDiagnostics` is the only way production ever
+ * builds one and a second door onto a global sink is a second thing to keep
+ * consistent. The projection it performs has no return value to check, so it is
+ * asserted the way production reaches it: install the composite, emit through
+ * core's `diagnostics` seam, read the data point.
  */
-export type WorkspaceSource = () => string;
-
-/**
- * The Analytics half of the composite. Exported for the tests that assert the
- * projection directly: an instrument nobody asserts on is an instrument nobody
- * notices has stopped, and this one has no return value to check.
- */
-export function createAnalyticsLogger(env: AnalyticsEnv, workspace?: WorkspaceSource): Logger {
+function createAnalyticsLogger(env: AnalyticsEnv): Logger {
   const plane = analyticsPlane(env);
   const route = (name: LogEventName, fields: LogFields, code: ErrorCode | ''): void => {
     if (name.startsWith(CONTROL_PLANE_PREFIX)) {
       plane.ops.write(opsRow(name, fields, code));
       return;
     }
-    plane.agent.write(agentRow(name, fields, code, workspace === undefined ? '' : workspace()));
+    plane.agent.write(agentRow(name, fields, code));
   };
   return {
     event(name: LogEventName, fields?: LogFields): void {
@@ -224,31 +266,32 @@ const INSTALLED = new WeakSet<AnalyticsEnv>();
 /**
  * Install the composite sink for this isolate and open a write window.
  *
- * Called at the Worker's `fetch` and `scheduled` entries, and in every Durable
- * Object's activation path. Both are necessary: the entries are where a Worker
- * invocation's window begins, and the Durable Objects are different isolates
- * where the Worker's sink does not exist.
+ * Called once per isolate. The Worker's `fetch` and `scheduled` entries and every
+ * Durable Object's constructor call it, because a Durable Object is a different
+ * isolate and the Worker's sink does not exist inside one.
+ *
+ * INSTALLING IS NOT THE SAME AS OPENING A WINDOW, and conflating them is what
+ * left three Durable Objects writing on one 250-point budget per activation. A
+ * constructor runs once per activation; the platform's cap is per INVOCATION. So
+ * this opens a window as a convenience for the Worker entries, where the two
+ * coincide, and every other invocation seam calls `openAnalyticsWindow` directly.
  *
  * IDEMPOTENT PER ISOLATE. A second install would otherwise wrap the composite in
  * another composite — one Analytics row and two identical console lines per event,
- * growing with every invocation. Repeated calls therefore only re-open the write
- * window, which is what a repeated call at an invocation boundary means anyway.
+ * growing with every invocation.
  *
  * The returned function restores the previous sink. Calling it is optional: the
  * window it would end is re-opened by the next install, so skipping it costs a
  * wider write budget rather than correctness.
  */
-export function installAnalyticsDiagnostics(
-  env: AnalyticsEnv,
-  workspace?: WorkspaceSource,
-): () => void {
+export function installAnalyticsDiagnostics(env: AnalyticsEnv): () => void {
   const plane = analyticsPlane(env);
   plane.window.open();
   if (INSTALLED.has(env)) return () => {};
   INSTALLED.add(env);
   const restore = setDiagnosticsSink(createCompositeLogger([
     createConsoleLogger(),
-    createAnalyticsLogger(env, workspace),
+    createAnalyticsLogger(env),
   ]));
   diagnostics.event('analytics.sink_installed', {
     agentMetrics: env.AGENT_METRICS !== undefined,

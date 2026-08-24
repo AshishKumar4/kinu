@@ -44,7 +44,7 @@ export type ModelRoutePolicy =
 
 /** Routing per producer. Keyed by the full union so the compiler, not a test,
  *  holds the exhaustiveness invariant. */
-export const MODEL_ROUTE_POLICY = {
+const MODEL_ROUTE_POLICY = {
   // The turn's own work, and every delegation shape that carries the turn's
   // immutable resolved tier with it.
   agent: { kind: 'invocation' },
@@ -70,10 +70,6 @@ export type ProfileRoutedSource = {
 
 function isProfileRouted(source: SpendSource): source is ProfileRoutedSource {
   return MODEL_ROUTE_POLICY[source].kind !== 'platform';
-}
-
-export function isPlatformRouted(source: SpendSource): boolean {
-  return !isProfileRouted(source);
 }
 
 /** One producer's concrete model, as the immutable turn profile resolves it. */
@@ -111,12 +107,6 @@ export function resolveModelRoute(
     tier,
     ...tierResolution(profile, tier),
   });
-}
-
-/** Every producer's route in one deterministic pass — the surface a spend or
- *  settings view needs to show where each producer's model comes from. */
-export function modelRouteTable(profile: ResolvedTurnProfile): ReadonlyMap<SpendSource, ModelRouteResolution | null> {
-  return new Map(SPEND_SOURCES.map((source) => [source, resolveModelRoute(source, profile)]));
 }
 
 export { SPEND_SOURCES };

@@ -37,6 +37,8 @@ const AUTH_TTL_MS = 10 * 60 * 1000;
 /** How long a finished request stays readable past its deadline, so a late
  *  poll is told "already delivered" instead of "unknown request". */
 const RETENTION_MS = 10 * 60 * 1000;
+// Independent of DEFAULT_SESSION_REFLECTION_INTERVAL: this is a client polling
+// cadence, while that constant counts completed turns between reflection work.
 const POLL_INTERVAL_SECONDS = 5;
 const RATE_WINDOW_MS = 10 * 60 * 1000;
 

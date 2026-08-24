@@ -144,10 +144,6 @@ export interface LocalModelResolver {
    *  judge/panel selection walks (core's `availableJudgeSpecs`, the same rule
    *  the DO backend uses). */
   judgeCandidates(): Promise<string[]>;
-  /** The registered providers' small-tier declarations — what core's
-   *  `selectFastModel` walks to find a cheaper model of the SAME vendor for
-   *  the mechanical evolution calls. */
-  fastModelCandidates(): ReadonlyArray<Pick<ModelProvider, 'id' | 'fastModel'>>;
   /** Resolve auth headers for a credential key (e.g. `tavily` for the web
    *  search upgrade) through the same local auth store model resolution uses. */
   getAuth: AuthResolver;
@@ -198,9 +194,10 @@ function reportCall(
  * The workspace LLM seam over the local registry.
  *
  * `spec` overrides which model it resolves — that is how the MECHANICAL
- * evolution calls reach the chat vendor's small tier (core's selectFastModel)
- * without a second provider path: same resolver, same credentials, one
- * different model id. Omitted = the workspace's configured chat model.
+ * producers reach a different model without a second provider path: same
+ * resolver, same credentials, one different model id. WHICH model comes from
+ * the turn profile's tier route (core's profiles/model-route.ts), never from
+ * this seam. Omitted = the workspace's configured chat model.
  *
  * Every judge, classifier, reflection, craft-generalization and sleep-time
  * compute call in a local workspace comes through here, and each of them used to
@@ -440,9 +437,6 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     },
     judgeCandidates() {
       return availableJudgeSpecs(registry, deps);
-    },
-    fastModelCandidates() {
-      return registry.list();
     },
     listModels() {
       return registry.listAllModels(deps);

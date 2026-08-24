@@ -21,11 +21,13 @@ import {
   fetchAudit, fetchFeedback, fetchIncidents, fetchMetrics, fetchOverview, fetchUserDetail,
   fetchUsers, fetchWorkspaces,
   type ControlAuditRow, type ControlFeedbackRow, type ControlUserRow, type ControlWorkspaceRow,
+  type ReconcileReport,
 } from '../lib/control-api';
 import { METRICS_WINDOWS } from '../control-plane/metrics';
 import {
   bytes, Notice, PageWalker, Panel, SectionHeader, Stat, useControlRead, when,
 } from '../components/control/panels';
+import { type AnalyticsPanel } from '../lib/control-api';
 import { WorkspaceDrilldown } from '../components/control/WorkspaceDrilldown';
 
 const TABS = {
@@ -44,6 +46,16 @@ function isTab(value: string | null): value is TabKey {
   return value !== null && Object.hasOwn(TABS, value);
 }
 
+/**
+ * ENROLLED IN `scripts/wired.lock.json` — `gate:wired` cannot see this page's
+ * consumer, and the absence is the gate's, not the code's. `App.tsx` reaches it
+ * through `lazy(() => import('./pages/ControlPage'))`; a dynamic `import()` is
+ * an expression that binds no name, so there is no named edge to follow, while
+ * a static `import Page from` would be followed. `pages/MCTSExplorer.tsx` is
+ * locked for the identical reason. The split is deliberate: every read behind
+ * this page answers 404 to non-operators, so its code has no business in the
+ * bundle every signed-in user downloads.
+ */
 export default function ControlPage(): ReactNode {
   const [params, setParams] = useSearchParams();
   const raw = params.get('tab');
@@ -95,10 +107,18 @@ export default function ControlPage(): ReactNode {
             >
               <ArrowLeftIcon size={12} /> Back
             </button>
-            <WorkspaceDrilldown
-              workspace={workspace}
-              {...(user === null ? {} : { ownerUserId: user })}
-            />
+            {user === null ? (
+              // A workspace name is unique inside one account and nowhere else,
+              // so the plane refuses to read one without being told whose it is.
+              // Reached only by a hand-edited URL: every row that opens this view
+              // carries its owner.
+              <Notice tone="warn">
+                A workspace has to be opened from a list row, which is what names the
+                account that owns it. Pick it from Workspaces or from an account.
+              </Notice>
+            ) : (
+              <WorkspaceDrilldown workspace={workspace} ownerUserId={user} />
+            )}
           </div>
         ) : user !== null ? (
           <UserDetailView userId={user} onOpenWorkspace={(name) => go({ workspace: name })}
@@ -192,12 +212,26 @@ function UsersView({ onOpen }: { onOpen: (userId: string) => void }): ReactNode 
   );
 }
 
+/** The three things a drilldown page can say about the index it is showing. Read
+ *  off the server's own report rather than derived, so a continuation page does
+ *  not claim a reconcile it did not run. */
+const RECONCILE_HINT = {
+  ok: 'Reconciled against this account\u2019s own registry on open, so these rows are the registry\u2019s.',
+  failed: 'The registry could not be read, so these rows are the index\u2019s own belief.',
+  skipped: 'A later page of the walk that reconciled on its first page.',
+} satisfies Record<ReconcileReport['status'], string>;
+
 function UserDetailView(
   { userId, onOpenWorkspace, onBack }: {
     userId: string; onOpenWorkspace: (name: string) => void; onBack: () => void;
   },
 ): ReactNode {
-  const { load, reload } = useControlRead(() => fetchUserDetail(userId), [userId]);
+  // Walked like every other list here. An account with more than one page of
+  // workspaces previously had every row past the ceiling unreachable, under copy
+  // that said the table was the registry's.
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
+  const { load, reload } = useControlRead(() => fetchUserDetail(userId, cursor), [userId, cursor]);
   return (
     <div className="space-y-3">
       <button onClick={onBack} className="text-xs p-text-3 hover:p-text flex items-center gap-1">
@@ -208,14 +242,12 @@ function UserDetailView(
           <div className="space-y-3">
             <SectionHeader
               title={detail.user?.email ?? userId}
-              hint={detail.reconciled
-                ? 'Reconciled against this account\u2019s own registry on open, so these rows are the registry\u2019s.'
-                : 'The registry could not be read, so these rows are the index\u2019s own belief.'}
+              hint={RECONCILE_HINT[detail.reconcile.status]}
               onRefresh={reload}
             />
-            {!detail.reconciled && (
+            {detail.reconcile.status === 'failed' && (
               <Notice tone="warn">
-                {detail.reconcileError ?? 'The roster read failed.'} Nothing was changed in the index.
+                {detail.reconcile.reason} Nothing was changed in the index.
               </Notice>
             )}
             <Table
@@ -232,6 +264,16 @@ function UserDetailView(
                 ],
               }))}
               empty="This account owns no workspaces."
+            />
+            <PageWalker
+              status={detail.workspaces.status} page={page}
+              onNext={() => {
+                if (detail.workspaces.status === 'more') {
+                  setCursor(detail.workspaces.next.after);
+                  setPage((p) => p + 1);
+                }
+              }}
+              onFirst={() => { setCursor(null); setPage(0); }}
             />
           </div>
         )}
@@ -384,7 +426,13 @@ function FeedbackView(): ReactNode {
 
 function MetricsView(): ReactNode {
   const [hours, setHours] = useState(24);
-  const { load, reload } = useControlRead(() => fetchMetrics(hours), [hours]);
+  // A refresh re-asks the server, and `refresh=1` makes the server re-ask
+  // Analytics: without it, the button would answer from the same 30-second-old
+  // batch and look broken while being correct.
+  const { load, reload } = useControlRead(
+    (refresh?: boolean) => fetchMetrics(hours, undefined, refresh),
+    [hours],
+  );
   return (
     <div className="space-y-3">
       <SectionHeader
@@ -433,9 +481,7 @@ function MetricsView(): ReactNode {
 /** A metric answer, rendered from whatever columns the query aliased. The
  *  columns are the query's business, so this reads them off the first row rather
  *  than hard-coding a set the builder owns. */
-function MetricTable(
-  { rows }: { rows: readonly Record<string, string | number | boolean | null>[] },
-): ReactNode {
+function MetricTable({ rows }: { rows: Extract<AnalyticsPanel, { status: 'ok' }>['rows'] }): ReactNode {
   const columns = useMemo(() => Object.keys(rows[0] ?? {}), [rows]);
   if (rows.length === 0) return <div className="text-xs p-text-3">No events in this window.</div>;
   return (

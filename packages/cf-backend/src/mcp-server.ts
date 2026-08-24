@@ -69,7 +69,7 @@ import { RELEASE_STATUSES, isEngineOwnedTransitionTarget } from "@kinu.run/core"
 import type { OrchestratorAgent } from "./orchestrator";
 import { AuthError, authenticateRequest } from "./auth/session";
 import { authenticateCliToken, readBearer } from "./cli/auth-store";
-import { claimOwnedWorkspace } from "./user/workspace-access";
+import { claimOwnedWorkspace } from "./user/workspace-ownership";
 import { decodeRunEventWire, decodeScaffoldRunWire } from './lib/orchestrator-wire';
 import { renderThrownChain } from '@kinu.run/core/obs';
 

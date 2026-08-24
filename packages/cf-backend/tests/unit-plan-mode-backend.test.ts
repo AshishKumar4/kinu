@@ -1,21 +1,25 @@
 import { describe, expect, test } from 'bun:test';
+import type { ToolSet } from 'ai';
 import {
   decodeJsonValue,
   type BackendHost,
   type BroadcastEvent,
+  type JsonObject,
   type JsonValue,
   type PlanReviewAnnotation,
   type ProgrammaticTurn,
 } from '@kinu.run/core';
-import { orchestratorHarness } from './helpers/actor-harness';
+import {
+  orchestratorHarness,
+  subordinateHarness,
+  type HarnessOrchestratorAgent,
+  type HarnessSubordinateAgent,
+} from './helpers/actor-harness';
+import { toolExecute } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
-type HarnessAgent = ReturnType<typeof orchestratorHarness>['agent'];
+type HarnessAgent = HarnessOrchestratorAgent | HarnessSubordinateAgent;
 
-const ToolSetProbeSchema = v.record(v.string(), v.object({
-  description: v.optional(v.string()),
-  execute: v.optional(v.function()),
-}));
 const WorkModeSchema = v.picklist(['plan', 'build']);
 const PlanStoreProbeSchema = v.object({ markHandoffAccepted: v.function() });
 
@@ -32,8 +36,8 @@ function prototypeMethod(agent: HarnessAgent, name: string) {
   throw new Error(`${name} is missing from the actor prototype`);
 }
 
-function rawTools(agent: HarnessAgent) {
-  return v.parse(ToolSetProbeSchema, prototypeMethod(agent, 'getRawTools').call(agent));
+function rawTools(agent: HarnessAgent): ToolSet {
+  return agent.observeRawTools();
 }
 
 function turnWorkMode(agent: HarnessAgent) {
@@ -41,13 +45,13 @@ function turnWorkMode(agent: HarnessAgent) {
 }
 
 async function executeTool(
-  tools: ReturnType<typeof rawTools>,
+  tools: ToolSet,
   name: string,
   input: JsonValue,
 ) {
-  const execute = tools[name]?.execute;
-  if (!execute) throw new Error(`${name} is not executable`);
-  return decodeJsonValue({ value: await execute(input) });
+  const entry = tools[name];
+  if (!entry) throw new Error(`${name} is not executable`);
+  return decodeJsonValue({ value: await toolExecute<JsonValue, JsonValue>(entry)(input) });
 }
 
 function setActorField(agent: HarnessAgent, name: string, value: JsonValue | BackendHost): void {
@@ -61,6 +65,24 @@ function setMode(agent: HarnessAgent, mode: 'plan' | 'build'): void {
     parts: [{ type: 'text', text: `${mode} this change` }],
     metadata: { kinuMode: mode },
   }]);
+}
+
+function setSubordinateTurn(
+  agent: HarnessSubordinateAgent,
+  mode: 'plan' | 'build',
+  programmatic: boolean,
+): void {
+  const metadata: JsonObject = { kinuMode: mode };
+  if (programmatic) metadata.kinuEvent = 'subordinate_task';
+  const message = {
+    id: `subordinate-${programmatic ? 'assigned' : 'owner'}-${mode}`,
+    role: 'user' as const,
+    parts: [{ type: 'text' as const, text: `${mode} this change` }],
+    metadata,
+  };
+  Object.defineProperty(agent, 'messages', { value: [message], configurable: true });
+  setActorField(agent, '_cachedMessages', [message]);
+  setActorField(agent, '_activeProgrammaticUserMessage', programmatic ? message : null);
 }
 
 describe('Plan mode tool lifecycle', () => {
@@ -99,6 +121,83 @@ describe('Plan mode tool lifecycle', () => {
     expect(unlabelledProgrammaticTools.submit_plan).toBeUndefined();
     expect(unlabelledProgrammaticTools.execute_tools?.description)
       .toContain('export declare const release:');
+  });
+
+  test('an owner Plan turn on an additional agent has its own review, while assigned Plan work reports to its parent', async () => {
+    const ownerHarness = subordinateHarness();
+    const owner = ownerHarness.agent;
+    const broadcasts: BroadcastEvent[] = [];
+    const queued: ProgrammaticTurn[] = [];
+    setActorField(owner, '_host', {
+      broadcast: (event) => broadcasts.push(event),
+      enqueueTurn: async (turn) => {
+        queued.push(turn);
+        return { status: 'queued' };
+      },
+      turnInFlight: () => false,
+      setTimer: () => {},
+    });
+    setSubordinateTurn(owner, 'plan', false);
+
+    const ownerTools = rawTools(owner);
+    expect(ownerTools.submit_plan).toBeDefined();
+    expect(ownerTools.report).toBeUndefined();
+    const ownerTurn = await owner.beforeTurn({
+      system: 'base',
+      messages: [{ role: 'user', content: 'plan this change' }],
+      tools: ownerTools,
+      model: 'harness-model',
+      continuation: false,
+      body: {},
+    });
+    expect(ownerTurn?.system).toContain('submit a concrete Markdown plan');
+    expect(ownerTurn?.system).not.toContain('report concrete findings to the parent Plan turn');
+
+    expect(await executeTool(ownerTools, 'submit_plan', {
+      edits: [{ start: 1, content: '# Agent plan\n\nInspect\nChange\nVerify' }],
+    })).toMatchObject({ ok: true, revision: 1, status: 'pending' });
+    const plan = await owner.getActivePlanReview();
+    if (!plan) throw new Error('additional-agent plan was not persisted');
+    expect(await owner.savePlanReviewAnnotations(plan.id, plan.revision, [{
+      id: 'agent-note',
+      blockId: 'paragraph-1',
+      startOffset: 0,
+      endOffset: 6,
+      type: 'COMMENT',
+      text: 'Name the verification command',
+      originalText: 'Verify',
+      createdA: 1,
+    }])).toMatchObject({ ok: true, plan: { annotations: [{ id: 'agent-note' }] } });
+    expect(await owner.decidePlanReview(plan.id, plan.revision, 'approve')).toMatchObject({
+      ok: true,
+      queued: true,
+      plan: { status: 'approved', handoffAccepted: true },
+    });
+    expect(queued).toHaveLength(1);
+    expect(queued[0]).toMatchObject({
+      metadata: { kinuEvent: 'plan_approved', kinuMode: 'build' },
+    });
+    expect(broadcasts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'plan_updated', plan: expect.objectContaining({ status: 'pending' }) }),
+      expect.objectContaining({ type: 'plan_updated', plan: expect.objectContaining({ status: 'approved' }) }),
+    ]));
+
+    const assignedHarness = subordinateHarness();
+    const assigned = assignedHarness.agent;
+    setSubordinateTurn(assigned, 'plan', true);
+    const assignedTools = rawTools(assigned);
+    expect(assignedTools.submit_plan).toBeUndefined();
+    expect(assignedTools.report).toBeDefined();
+    const assignedTurn = await assigned.beforeTurn({
+      system: 'base',
+      messages: [{ role: 'user', content: 'research the delegated task' }],
+      tools: assignedTools,
+      model: 'harness-model',
+      continuation: false,
+      body: {},
+    });
+    expect(assignedTurn?.system).toContain('report concrete findings to the parent Plan turn');
+    expect(assignedTurn?.system).not.toContain('submit a concrete Markdown plan');
   });
 
   test('submit, annotations, feedback, revision, and approval survive through the public RPCs', async () => {

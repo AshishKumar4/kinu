@@ -95,7 +95,7 @@ export interface ObservedNaming {
   nameOrigin: 'user' | 'auto' | null;
 }
 
-class HarnessSubordinateAgent extends SubordinateAgent {
+export class HarnessSubordinateAgent extends SubordinateAgent {
   observeRawTools(): ToolSet { return this.getRawTools(); }
   observeRuntime(): AgentRuntime { return this.rt; }
   declareScaffoldPresent(): void { this._scaffoldReady = true; }

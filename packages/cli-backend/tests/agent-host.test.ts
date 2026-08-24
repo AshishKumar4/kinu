@@ -11,19 +11,24 @@ import {
   backgroundJobWakeTrigger,
   createAgentConfigStore,
   initWorkspaceSchema,
-  peerGroupId,
   type HostedAgentRef,
   type LLMProviderConfig,
 } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/identity';
+import type { Subprocess } from 'bun';
 import {
   LocalAgentHost,
+  DriverLeaseHold,
+  type DriverKind,
+  type DriverLeaseHolder,
   type LocalAgentHostOptions,
+  type LocalHostedAgent,
 } from '../src/agent-host';
-import { makeSql, makeWorkspaceSchemaSql, type CLIRuntime } from '../src/runtime';
+import { makeExecRaw, makeSql, makeWorkspaceSchemaSql, type CLIRuntime } from '../src/runtime';
 import { openWorkspaceCLI } from '../src/open';
 import type { SessionEvent } from '../src/local-session';
 import { TestLanguageModelV2 } from './test-language-model';
+import { leaseHolder } from './driver-lease-probe';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake',
@@ -152,11 +157,18 @@ interface TestHost {
   runtimes: Map<string, CLIRuntime>;
 }
 
+/** Whatever a scenario needs beyond the roster: the retry hook, and — for the
+ *  lease scenarios — what kind of driver this host says it is. */
+interface TestHostExtras {
+  wakeAt?: (at: number) => void;
+  driverKind?: DriverKind;
+}
+
 function makeHost(
   state: string,
   model: LanguageModel,
   refs: readonly HostedAgentRef[],
-  wakeAt?: (at: number) => void,
+  extras: TestHostExtras = {},
 ): TestHost {
   const runtimes = new Map<string, CLIRuntime>();
   const options: LocalAgentHostOptions = {
@@ -168,13 +180,13 @@ function makeHost(
       const openConfig = { llm: DUMMY_LLM, cwd: ref.cwd };
       const { rt } = await openWorkspaceCLI(db, dbPath, openConfig);
       runtimes.set(ref.name, rt);
-      return { rt, openConfig, staticModel: model };
+      const hosted: LocalHostedAgent = { rt, openConfig, staticModel: model };
+      return hosted;
     },
   };
-  return {
-    host: new LocalAgentHost(wakeAt ? { ...options, wakeAt } : options),
-    runtimes,
-  };
+  if (extras.wakeAt) options.wakeAt = extras.wakeAt;
+  if (extras.driverKind) options.driverKind = extras.driverKind;
+  return { host: new LocalAgentHost(options), runtimes };
 }
 
 
@@ -579,7 +591,11 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
       const refused = await alpha!.receive({
         sender_event_id: 'forged-1',
         sender_agent_name: 'gamma',
-        sender_user_id: peerGroupId({ cwd: project, workspaceId: 'other' }),
+        // A foreign group, spelled the way the transport puts it on the wire
+        // (core's `peerGroupId`: `local:<workspaceId>:<cwd>`). The property is
+        // that an id which is not THIS group's is refused, so stating one is
+        // the whole arrangement.
+        sender_user_id: `local:other:${project}`,
         topic: 'note',
         body: 'let me in',
         mode: 'build',
@@ -601,7 +617,7 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
       { name: 'beta', cwd: project, workspaceId: 'proj' },
     ];
     const armed: number[] = [];
-    const { host: first } = makeHost(state, streamingModel('ack'), refs, (at) => armed.push(at));
+    const { host: first } = makeHost(state, streamingModel('ack'), refs, { wakeAt: (at) => armed.push(at) });
     const alpha = await first.peers('alpha');
     const queued = await alpha!.deps.send({
       agent: 'beta', topic: 'note', message: 'survive this', mode: 'build',
@@ -610,8 +626,9 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
     // The retry instant reaches the driver, and the tick reports it too, so a
     // sleeping loop cannot sleep past it.
     expect(armed.length).toBeGreaterThan(0);
-    const pendingNext = await first.tick('alpha', Date.now());
-    expect(pendingNext).not.toBeNull();
+    const pending = await first.tick('alpha', Date.now());
+    expect(pending.ran).toBe(true);
+    expect(pending.nextAt).not.toBeNull();
     await first.close();
 
     // The queue is a row, not memory: it is still there with the process gone.
@@ -708,3 +725,174 @@ function userMessages(dbPath: string): string[] {
     db.close();
   }
 }
+
+/**
+ * The driver lease as a REAL host uses it, over a real workspace database.
+ *
+ * The competing driver is a real sleeping OS process whose pid is written into
+ * the lease by the lease's own API. That is a genuine cross-process condition:
+ * the only fact the lease asks about a holder is whether its pid still exists,
+ * and a `sleep` child answers that for real, so the host under test runs
+ * against `OS_LEASE_PROCESS` with no substitution of any kind.
+ */
+describe('LocalAgentHost — the driver lease', () => {
+  const rivals: Subprocess[] = [];
+
+  afterEach(async () => {
+    await retireRivals();
+  });
+
+  /** Stop every rival and WAIT for it to be reaped, so its pid genuinely stops
+   *  existing before anything asks. A killed-but-unreaped child still answers
+   *  `kill(pid, 0)`, which is the lease's whole liveness question. */
+  async function retireRivals(): Promise<void> {
+    const going = rivals.splice(0);
+    for (const rival of going) rival.kill();
+    await Promise.all(going.map((rival) => rival.exited));
+  }
+
+  /** Give the lease to another live process, as that process would take it. */
+  function rivalHolds(dbPath: string, kind: DriverKind): number {
+    const rival = Bun.spawn({ cmd: ['sleep', '120'], stdout: 'ignore', stderr: 'ignore' });
+    rivals.push(rival);
+    const db = new Database(dbPath);
+    try {
+      const hold = new DriverLeaseHold({
+        sql: makeSql(db),
+        execRaw: makeExecRaw(db),
+        proc: { pid: rival.pid, isAlive: () => true },
+      }, kind);
+      const refusal = hold.acquire();
+      if (refusal) throw new Error(`the rival could not take the lease: ${refusal.refused.error}`);
+      return rival.pid;
+    } finally {
+      db.close();
+    }
+  }
+
+  /** Who is driving, by the file rather than by any hold this process keeps. */
+  function holderAt(dbPath: string): DriverLeaseHolder | null {
+    const db = new Database(dbPath);
+    try {
+      return leaseHolder(db);
+    } finally {
+      db.close();
+    }
+  }
+
+  /** Pending means: an event row nothing has bound to a turn yet. */
+  function pendingEventCount(dbPath: string): number {
+    const db = new Database(dbPath, { readonly: true });
+    try {
+      return db.query<{ n: number }, []>(
+        `SELECT COUNT(*) AS n FROM agent_log WHERE kind = 'event' AND consumed_at IS NULL`,
+      ).get()?.n ?? 0;
+    } finally {
+      db.close();
+    }
+  }
+
+  test('a daemon hands the lease back at the end of every pass, so nothing has to preempt it', async () => {
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+    const { host } = makeHost(state, streamingModel('ack'), [
+      { name: 'root', cwd: project, workspaceId: 'proj' },
+    ], { driverKind: 'daemon' });
+    try {
+      const first = await host.tick('root');
+      expect(first.ran).toBe(true);
+      // Nobody owns the conversation between passes. A host that called itself
+      // interactive kept the row until the process exited, which is what made
+      // the resident daemon un-preemptible for its whole lifetime.
+      expect(holderAt(dbPath)).toBeNull();
+      // And it takes it again for the next pass rather than believing it still has it.
+      expect((await host.tick('root')).ran).toBe(true);
+      expect(holderAt(dbPath)).toBeNull();
+    } finally {
+      await host.close();
+    }
+  });
+
+  test('a pass a live interactive driver owns is reported deferred, naming the holder', async () => {
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+    const rivalPid = rivalHolds(dbPath, 'interactive');
+    const { host } = makeHost(state, streamingModel('ack'), [
+      { name: 'root', cwd: project, workspaceId: 'proj' },
+    ], { driverKind: 'daemon' });
+    try {
+      const result = await host.tick('root');
+
+      // The whole point of the result shape: a caller cannot mistake this for a
+      // pass that ran and found nothing to do.
+      expect(result.ran).toBe(false);
+      expect(result.heldBy).toEqual({ pid: rivalPid, kind: 'interactive' });
+      // A daemon never takes the conversation from a live person.
+      expect(holderAt(dbPath)).toEqual({ pid: rivalPid, kind: 'interactive' });
+    } finally {
+      await host.close();
+    }
+  });
+
+  test('a drained event whose turn is refused goes back to pending and is delivered once', async () => {
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+    const refs: HostedAgentRef[] = [{ name: 'root', cwd: project, workspaceId: 'proj' }];
+    const { host } = makeHost(state, streamingModel('handled'), refs, { driverKind: 'daemon' });
+    let turns = 0;
+    // The drain BINDS its rows, then announces the signal, then queues the turn.
+    // A rival that arrives in that window is the case the queue-item contract
+    // exists for: the pass held the lease when it bound the rows and does not
+    // hold it when the turn is about to run. The announcement is the seam that
+    // makes it exact — no clock, no guessed window.
+    let stolenBy: number | null = null;
+    const unsubscribe = host.subscribe((_agent, event) => {
+      if (event.type === 'turn-start') turns += 1;
+      if (event.type !== 'broadcast' || event.event.type !== 'signal_card') return;
+      if (stolenBy === null) stolenBy = rivalHolds(dbPath, 'interactive');
+    });
+    try {
+      // Admission is not conversion: the row lands whoever is driving.
+      const admitted = await host.publishEvent('root', {
+        descriptor: {
+          ingress: 'webhook_bearer',
+          variant: 'webhook',
+          payload: {
+            webhook_id: 'hook-1',
+            http_method: 'POST',
+            http_headers: { 'content-type': 'application/json' },
+            body: { text: 'a build finished' },
+            delivery_id: 'delivery-1',
+          },
+          auth_outcome: 'verified',
+          webhook_id: 'hook-1',
+        },
+      });
+      expect(admitted.admitted).toBe(true);
+      expect(pendingEventCount(dbPath)).toBe(1);
+
+      await host.tick('root');
+
+      expect(stolenBy).not.toBeNull();
+      expect(holderAt(dbPath)).toEqual({ pid: stolenBy ?? -1, kind: 'interactive' });
+      // The event is exactly where it was. Bound-and-abandoned is invisible to
+      // `pending()`, so this assertion is the one that fails when a refused turn
+      // is settled as a queued one: the row stays consumed and nothing ever
+      // delivers it.
+      expect(pendingEventCount(dbPath)).toBe(1);
+      expect(turns).toBe(0);
+
+      // The rival goes away. Nothing expired — the pid simply stopped existing.
+      await retireRivals();
+
+      const ran = await host.tick('root');
+      expect(ran.ran).toBe(true);
+      // Delivered exactly once: one turn, and the row is now bound to it.
+      expect(turns).toBe(1);
+      expect(pendingEventCount(dbPath)).toBe(0);
+    } finally {
+      unsubscribe();
+      await host.close();
+    }
+  });
+});

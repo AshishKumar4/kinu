@@ -4,7 +4,7 @@ import { createRoot } from '@opentui/react';
 import { describe, expect, test } from 'bun:test';
 
 import { GuidedOnboarding, type OnboardingReadiness, type TuiOnboardingOperations } from '../src/tui/onboarding';
-import { DEFAULT_TUI_PREFERENCES, createMemoryTuiPreferenceStore } from '../src/tui/preferences';
+import { createMemoryTuiPreferenceStore } from './helpers/tui-preferences';
 import { TuiProductProvider } from '../src/tui/tui-shell';
 
 describe('guided onboarding renderer', () => {
@@ -41,7 +41,7 @@ describe('guided onboarding renderer', () => {
       maxFps: Number.POSITIVE_INFINITY,
     });
     const root = createRoot(renderer);
-    const store = createMemoryTuiPreferenceStore(DEFAULT_TUI_PREFERENCES);
+    const store = createMemoryTuiPreferenceStore();
     const scene = (
       <TuiProductProvider runtime={{ preferenceStore: store, terminalAppearance: 'dark', colorCapability: 'truecolor' }}>
         <GuidedOnboarding
@@ -63,6 +63,53 @@ describe('guided onboarding renderer', () => {
       root.render(scene);
       await waitForFrame(renderOnce, captureCharFrame, 'Step 5/6 · keymap');
       expect(readiness.skippedSteps).toEqual(['theme']);
+    } finally {
+      root.render(<box />);
+      renderer.destroy();
+    }
+  });
+
+  test('a wholly fresh install opens on the first scene', async () => {
+    const readiness: OnboardingReadiness = {
+      accountConnected: false,
+      providerConnected: false,
+      tierAliasesResolved: false,
+      themeSelected: false,
+      keymapSelected: false,
+      workspaceCount: 0,
+      skippedSteps: [],
+    };
+    const operations: TuiOnboardingOperations = {
+      readReadiness: () => readiness,
+      chooseLocation: () => {},
+      connectAccount: () => {},
+      connectProvider: () => {},
+      configureTiers: () => {},
+      selectTheme: () => {},
+      selectKeymap: () => {},
+      createWorkspace: () => {},
+      skip: () => {},
+    };
+    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({
+      width: 80,
+      height: 24,
+      useThread: false,
+      maxFps: Number.POSITIVE_INFINITY,
+    });
+    const root = createRoot(renderer);
+    try {
+      root.render(
+        <TuiProductProvider runtime={{ preferenceStore: createMemoryTuiPreferenceStore(), terminalAppearance: 'dark', colorCapability: 'truecolor' }}>
+          <GuidedOnboarding
+            operations={operations}
+            roles={[{ id: 'general', label: 'General', description: 'General work' }]}
+            onReady={() => {}}
+            onExit={() => {}}
+          />
+        </TuiProductProvider>,
+      );
+      await waitForFrame(renderOnce, captureCharFrame, 'Step 1/6 · location');
+      expect(captureCharFrame()).toContain('Where will your workspaces live?');
     } finally {
       root.render(<box />);
       renderer.destroy();

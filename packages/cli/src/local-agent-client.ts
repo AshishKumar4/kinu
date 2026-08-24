@@ -4,8 +4,11 @@ import type { LanguageModel } from 'ai';
 import type { AgentConfigStore, AgentRuntime, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject } from '@kinu.run/core';
 import type { WorkspaceInfo } from '@kinu.run/core/identity';
 import { applyWorkspaceTitle, canonicalConversationId, createAgentConfigStore, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, decodeJsonValue, usageReported, type GepaOptimizationResult } from '@kinu.run/core';
-import { diagnostics, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 import {
+  DriverLeaseHold,
+  makeExecRaw,
+  makeSql,
   LOCAL_MAX_INLINE_ATTACHMENT_BYTES,
   LocalAgentSession,
   openWorkspaceCLI,
@@ -21,11 +24,16 @@ import {
   createCodexAuthStore,
   listConfiguredAgentRefs,
   loadConfigFile,
+  readProviderRevision,
   resolveMcpServers,
   resolveProviderCredentials,
   upsertAgentConfig,
 } from './config';
-import { suggestAgentIdentityFromMission, type SuggestAgentIdentityOptions } from './agent-create';
+import {
+  renameLocalAgent,
+  suggestAgentIdentityFromMission,
+  type SuggestAgentIdentityOptions,
+} from './agent-create';
 import { createConfiguredLocalModelResolver } from './local-model-resolver';
 import { createProfileAuthorityReader } from './profiles';
 import {
@@ -256,6 +264,7 @@ export class LocalAgentClient implements AgentClient {
   readonly checkpoints: FileCheckpointSurface;
   private readonly deps: LocalAgentClientDeps;
   readonly inlineAttachmentLimitBytes = LOCAL_MAX_INLINE_ATTACHMENT_BYTES;
+  readonly rename = async (displayName: string) => renameLocalAgent(this.agentName, displayName);
 
   /** Workspace-level agent_config, read straight off the same database the
    *  session uses. Config outlives the session, so a walk-back fork's session
@@ -271,6 +280,22 @@ export class LocalAgentClient implements AgentClient {
   private pending: PendingLocalTurn | null = null;
   private closed = false;
   private readonly recorder = new SessionRecorder('local');
+  /**
+   * This process's claim on the one durable conversation in that database.
+   *
+   * Held for the CLIENT's lifetime rather than per turn, and that is the point:
+   * `kinu chat`, `run` and the TUI all auto-start the resident scheduler daemon,
+   * so the daemon and this process are BOTH live over one SQLite file. They
+   * drive the same durable work — the pending event drain, the trigger
+   * registry, the queued-turn pump — and `EventLog.markConsumed` has no
+   * compare-and-set predicate, so two drivers bind the same rows and one
+   * external event becomes two turns.
+   *
+   * `interactive`, so it takes the conversation from a live daemon: a person
+   * waiting at a prompt outranks background maintenance. It survives a
+   * walk-back fork, which replaces the session but not the database.
+   */
+  private readonly driverLease: DriverLeaseHold;
 
   constructor(deps: LocalAgentClientDeps) {
     this.deps = deps;
@@ -284,6 +309,12 @@ export class LocalAgentClient implements AgentClient {
       ...deps.transcript,
       conversationId: deps.transcript.conversationId ?? this.canonicalConversation,
     });
+    // Built BEFORE the session, because createAgentSession installs it as the
+    // session's driver gate.
+    this.driverLease = new DriverLeaseHold(
+      { sql: makeSql(deps.db), execRaw: makeExecRaw(deps.db) },
+      'interactive',
+    );
     this.session = this.createAgentSession();
     this.localControls = {
       getAlwaysActiveSkills: () => this.session.getAlwaysActiveSkills(),
@@ -309,7 +340,23 @@ export class LocalAgentClient implements AgentClient {
     return this.activeCliSession;
   }
 
+  /**
+   * Become this conversation's driver, then bring up MCP.
+   *
+   * The lease comes first because it has to be held before ANY pump: every
+   * driving surface calls this before its first `send`, and a client that drove
+   * without it would interleave with the daemon it just auto-started. Refusing
+   * here rather than at the first message is the honest order — the person
+   * learns the conversation is taken before they type into it.
+   */
   async connect(): Promise<void> {
+    const refusal = this.driverLease.acquire();
+    if (refusal) {
+      throw new KinuError(
+        refusal.refused.reason,
+        `${refusal.refused.error}. Close that session, or continue the conversation there.`,
+      );
+    }
     if (Object.keys(this.deps.mcpServers).length > 0) {
       await this.session.connectMcp(this.deps.mcpServers);
     }
@@ -441,6 +488,12 @@ export class LocalAgentClient implements AgentClient {
     try {
       await this.session.end();
     } finally {
+      // Released BEFORE the handle closes, and even when settling threw: an
+      // interactive lease is held for the whole session, so this is the moment
+      // the daemon becomes able to drive this conversation again. Skipping it
+      // would leave the row naming a process that has exited, recoverable only
+      // by the next driver's liveness check — slower, and less obvious.
+      this.driverLease.release();
       // The handle goes back even when settling failed, or the next open finds the file locked.
       this.deps.db.close();
     }
@@ -568,8 +621,17 @@ export class LocalAgentClient implements AgentClient {
       // captured: `/model` and `/effort` write the authority, and the turn
       // after one runs under what it wrote.
       profileAuthority: createProfileAuthorityReader(),
+      // Same reason, other file: a chat session that stays open for hours must
+      // see a provider connected in another process on its next turn.
+      providerRevision: readProviderRevision,
     };
-    return new LocalAgentSession(options);
+    const session = new LocalAgentSession(options);
+    // The lease RE-CHECKED at every turn boundary, not trusted from connect():
+    // preemption means a lease can be lost between turns, and a session that
+    // kept driving after losing it is the interleaving this exists to prevent.
+    // Installed on every session, including the one a walk-back fork builds.
+    session.setDriverGate(() => this.driverLease.acquire()?.refused ?? null);
+    return session;
   }
 
   private handleSessionEvent(event: SessionEvent): void {

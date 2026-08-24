@@ -29,7 +29,7 @@ import {
 } from '@kinu.run/cli-backend';
 import { createCliAgent } from '../src/agent-create';
 import {
-  resolveLLMConfig, agentDbPath, agentDir, AGENT_HOME, listLocalRefs, updateConfigFile,
+  resolveLLMConfig, agentDbPath, agentDir, AGENT_HOME, listLocalRefsAllProjects, updateConfigFile,
 } from '../src/config';
 import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model';
 
@@ -114,7 +114,6 @@ function staticResolver(model: LanguageModel): LocalModelResolver {
     listModels: async () => ({ models: [], failures: [] }),
     modelInfo: async () => null,
     judgeCandidates: async () => [],
-    fastModelCandidates: () => [],
     getAuth: async () => null,
   };
 }
@@ -134,9 +133,10 @@ async function observeCli(): Promise<{ observed: ObservedSurface; captured: Capt
   const resolver = staticResolver(model);
   const openConfig = { llm: resolveLLMConfig(OFFLINE_PROVIDER) };
   const host = new LocalAgentHost({
-    // The real refs `kinu create` just wrote: the host binds planes and peer
-    // groups from placement, never from the existence of an agent.db.
-    roster: () => listLocalRefs(),
+    // The real refs `kinu create` just wrote, read through the same roster the
+    // daemon iterates: the host binds planes and peer groups from placement,
+    // never from the existence of an agent.db.
+    roster: () => listLocalRefsAllProjects(),
     dbPath: () => dbPath,
     childDbPath: (_parent, child) => join(agentDir(AGENT_NAME), '.kinu', 'agents', child, 'agent.db'),
     open: async (_ref, db, path) => {

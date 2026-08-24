@@ -24,7 +24,8 @@
  */
 import { describe, expect, test } from 'bun:test';
 import type { HTTPRequest, Page } from 'puppeteer';
-import type { JsonValue } from '@kinu.run/core';
+import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
+import * as v from 'valibot';
 import { withGallery } from './gallery-harness';
 
 /** One canned answer for an intercepted read. `JsonValue` because a fixture IS
@@ -66,11 +67,17 @@ interface Fixture {
   [suffix: string]: Answer;
 }
 
-/** Serve `/api/control/*` from a fixture, and count what was asked. */
-async function serveControl(
-  browserPage: Page, fixture: Fixture,
-): Promise<{ asked: string[] }> {
-  const asked: string[] = [];
+/** What the page did over the wire: which reads it issued, and the body of every
+ *  action it POSTed. The bodies are the point for the action controls — a button
+ *  that opened a modal and sent nothing would satisfy a click-only assertion. */
+interface Probe {
+  asked: string[];
+  posted: JsonValue[];
+}
+
+/** Serve `/api/control/*` from a fixture, and record what was asked. */
+async function serveControl(browserPage: Page, fixture: Fixture): Promise<Probe> {
+  const probe: Probe = { asked: [], posted: [] };
   await browserPage.setRequestInterception(true);
   browserPage.on('request', (request: HTTPRequest) => {
     const url = new URL(request.url());
@@ -78,7 +85,11 @@ async function serveControl(
       void request.continue();
       return;
     }
-    asked.push(url.pathname + url.search);
+    if (request.method() === 'POST') {
+      const body = request.postData();
+      if (body !== undefined) probe.posted.push(v.parse(JsonValueSchema, JSON.parse(body)));
+    }
+    probe.asked.push(url.pathname + url.search);
     const suffix = url.pathname.replace('/api/control/', '');
     // Longest declared prefix wins, so `users/<id>` beats `users`.
     const key = Object.keys(fixture)
@@ -96,7 +107,7 @@ async function serveControl(
       status, contentType: 'application/json', body: JSON.stringify(body),
     });
   });
-  return { asked };
+  return probe;
 }
 
 /**
@@ -165,6 +176,116 @@ const OVERVIEW = {
   users: 3, workspaces: 7, workspacesRemoved: 1, feedback: 4, auditEntries: 12,
   lastAdminActionAt: 1_700_000_000_000, activeUsers24h: 2, activeUsers7d: 3,
 };
+
+/** The one workspace every drilldown test opens, as the list row names it. The
+ *  row is what supplies the OWNER, which is what makes the name an address. */
+function workspaceRow(): JsonValue {
+  return {
+    userId: OTHER_ID, email: 'owner@example.com', name: 'checkout-fixes',
+    displayName: 'Checkout fixes', createdAt: 1_000, lastSeenAt: 2_000, removedAt: null,
+  };
+}
+
+/** A background job with the fields the row view reads. */
+const JOB = {
+  id: 'job-7', kind: 'research', label: 'read the changelog', status: 'running',
+  error: null, createdAt: 1_700_000_000_000, settledAt: null,
+};
+
+/** One command parked on the owner. `queued` is the only status whose answers
+ *  are offered — a decided one has nothing left to decide. */
+const APPROVAL = {
+  id: 'ap-1', command: 'rm -rf /tmp/build', executor: 'sandbox',
+  reason: 'a destructive path outside the workspace', status: 'queued',
+  requestedAt: 1_700_000_000_000, decidedAt: null,
+};
+
+/** The drilldown body, with every panel healthy unless a test overrides one. */
+function detailBody(over: Record<string, JsonValue>): JsonValue {
+  return {
+    workspace: 'checkout-fixes',
+    userId: OTHER_ID,
+    runs: { status: 'ok', value: [] },
+    activity: { status: 'ok', value: { spend: { usd: 0 } } },
+    jobs: { status: 'ok', value: [] },
+    approvals: { status: 'ok', value: [] },
+    consents: { status: 'ok', value: [] },
+    executors: { status: 'ok', value: [] },
+    shellGrants: { status: 'ok', value: { grants: [] } },
+    ...over,
+  };
+}
+
+/** Open the drilldown the way an operator does: click the list row, then wait
+ *  for the panel grid the read produces. Network idle is not readiness — the
+ *  intercepted answer settles before React commits. */
+async function openWorkspaceRow(browserPage: Page): Promise<void> {
+  await browserPage.evaluate(() => {
+    const row = [...document.querySelectorAll('tbody tr')]
+      .find((node) => node.textContent?.includes('checkout-fixes'));
+    if (row instanceof HTMLElement) row.click();
+  });
+  // Lowercased, because `innerText` is RENDERED text and the panel titles carry
+  // an `uppercase` class — the same reason the assertions below compare in lower
+  // case rather than pinning a CSS transform.
+  await browserPage.waitForFunction(
+    () => document.body.innerText.toLowerCase().includes('recent runs'), { timeout: 15_000 },
+  );
+}
+
+/** Click the first enabled button whose label matches, and report whether there
+ *  was one. A missing control is a failure to name here rather than a later
+ *  assertion about a body nobody sent. */
+async function clickButton(browserPage: Page, label: string): Promise<boolean> {
+  return await browserPage.evaluate((wanted: string) => {
+    const button = [...document.querySelectorAll('button')]
+      .find((node) => node.textContent?.trim() === wanted && !node.hasAttribute('disabled'));
+    if (!(button instanceof HTMLElement)) return false;
+    button.click();
+    return true;
+  }, label);
+}
+
+/** Wait until a control with this label exists AND is enabled. Every action
+ *  reloads the panel it lives in, so between two actions the control is briefly
+ *  absent — a click fired into that window finds nothing and reads as a missing
+ *  control rather than as the race it is. */
+async function waitForEnabled(browserPage: Page, label: string): Promise<void> {
+  await browserPage.waitForFunction(
+    (wanted: string) => [...document.querySelectorAll('button')]
+      .some((node) => node.textContent?.trim() === wanted && !node.hasAttribute('disabled')),
+    { timeout: 15_000 }, label,
+  );
+}
+
+/**
+ * Open a control's confirmation, read it, and answer it.
+ *
+ * Every wait here is on a state the page produces rather than on the network:
+ * the click that opens the dialog only schedules a React commit, and answering
+ * it reloads the panel the control lives in. Returns the dialog's own text, so a
+ * caller can assert what the operator was shown before they agreed.
+ */
+async function confirmControl(
+  browserPage: Page, open: string, answer: string,
+): Promise<string> {
+  await waitForEnabled(browserPage, open);
+  if (!await clickButton(browserPage, open)) throw new Error(`no enabled control labelled ${open}`);
+  await browserPage.waitForSelector('[role="dialog"]', { timeout: 15_000 });
+  const shown = await browserPage.evaluate(() =>
+    document.querySelector('[role="dialog"]')?.textContent ?? '');
+  await waitForEnabled(browserPage, answer);
+  if (!await clickButton(browserPage, answer)) throw new Error(`the ${open} dialog offered no ${answer}`);
+  await browserPage.waitForSelector('[role="dialog"]', { hidden: true, timeout: 15_000 });
+  return shown;
+}
+
+async function removeDisabled(browserPage: Page): Promise<boolean | undefined> {
+  return await browserPage.evaluate(() =>
+    [...document.querySelectorAll('button')]
+      .find((node) => node.textContent?.trim() === 'Remove')
+      ?.hasAttribute('disabled'));
+}
 
 describe('the control plane in a browser', () => {
   test('an operator sees the fleet counts, not a spinner that never resolves', async () => {
@@ -296,35 +417,14 @@ describe('the control plane in a browser', () => {
   test('a workspace drilldown reports a down panel instead of blanking the page', async () => {
     await withGallery(async ({ browser, origin }) => {
       const browserPage = await browser.newPage();
-      await serveControl(browserPage, {
+      const probe = await serveControl(browserPage, {
         overview: page(200, OVERVIEW),
         workspaces: (url) => url.pathname.endsWith('/workspaces')
-          ? answer(200, {
-            status: 'end',
-            items: [{
-              userId: OTHER_ID, email: 'owner@example.com', name: 'checkout-fixes',
-              displayName: 'Checkout fixes', createdAt: 1_000, lastSeenAt: 2_000, removedAt: null,
-            }],
-          })
-          : answer(200, {
-            workspace: 'checkout-fixes',
-            runs: { status: 'ok', value: [] },
-            activity: { status: 'ok', value: { spend: { usd: 0 } } },
-            jobs: { status: 'ok', value: [] },
-            approvals: { status: 'ok', value: [] },
-            consents: { status: 'ok', value: [] },
-            executors: { status: 'failed', reason: 'the sandbox is not reachable' },
-            shellGrants: { status: 'ok', value: { grants: [] } },
-          }),
+          ? answer(200, { status: 'end', items: [workspaceRow()] })
+          : answer(200, detailBody({ executors: { status: 'failed', reason: 'the sandbox is not reachable' } })),
       });
       await openControl(browserPage, origin, 'Workspaces');
-
-      await browserPage.evaluate(() => {
-        const row = [...document.querySelectorAll('tbody tr')]
-          .find((node) => node.textContent?.includes('checkout-fixes'));
-        if (row instanceof HTMLElement) row.click();
-      });
-      await browserPage.waitForNetworkIdle();
+      await openWorkspaceRow(browserPage);
 
       const text = (await browserPage.evaluate(() => document.body.innerText)).toLowerCase();
       expect(text).toContain('recent runs');
@@ -333,6 +433,12 @@ describe('the control plane in a browser', () => {
       // workspace an operator is looking at.
       expect(text).toContain('the sandbox is not reachable');
       expect(text).toContain('clear settled jobs');
+      // The read named the account that owns it. A workspace name is unique
+      // inside one UserDO and `OrchestratorAgent` is addressed globally, so a
+      // page that asked by name alone would be asking about whichever account
+      // registered that string first.
+      const detailAsk = probe.asked.find((path) => path.includes('/workspaces/checkout-fixes'));
+      expect(detailAsk).toContain(`userId=${OTHER_ID}`);
       await browserPage.close();
     });
   }, 120_000);
@@ -344,64 +450,164 @@ describe('the control plane in a browser', () => {
         overview: page(200, OVERVIEW),
         users: page(200, { status: 'end', items: [userRow(OTHER_ID, 'owner@example.com', 3_000)] }),
         workspaces: (url) => url.pathname.endsWith('/workspaces')
-          ? answer(200, {
-            status: 'end',
-            items: [{
-              userId: OTHER_ID, email: 'owner@example.com', name: 'checkout-fixes',
-              displayName: 'Checkout fixes', createdAt: 1_000, lastSeenAt: 2_000, removedAt: null,
-            }],
-          })
-          : answer(200, {
-            workspace: 'checkout-fixes',
-            runs: { status: 'ok', value: [] },
-            activity: { status: 'ok', value: {} },
-            jobs: { status: 'ok', value: [] },
-            approvals: { status: 'ok', value: [] },
-            consents: { status: 'ok', value: [] },
-            executors: { status: 'ok', value: [] },
-            shellGrants: { status: 'ok', value: { grants: [] } },
-          }),
+          ? answer(200, { status: 'end', items: [workspaceRow()] })
+          : answer(200, detailBody({})),
       });
       // Reached the way an operator reaches it: the workspaces list, then the
-      // row. The removal is offered only where the OWNER is known, because the
-      // action needs the owning UserDO — and clicking a row is what supplies it.
+      // row. Clicking a row is what supplies the owning account, and the plane
+      // refuses to read a workspace without one.
       await openControl(browserPage, origin, 'Workspaces');
+      await openWorkspaceRow(browserPage);
+
+      expect(await clickButton(browserPage, 'Remove workspace')).toBe(true);
+      await browserPage.waitForSelector('input');
+
+      expect(await removeDisabled(browserPage)).toBe(true);
+      await browserPage.type('input', 'checkout-fix');
+      // A prefix is not the name. The gate is equality, not "looks close".
+      expect(await removeDisabled(browserPage)).toBe(true);
+      await browserPage.type('input', 'es');
+      expect(await removeDisabled(browserPage)).toBe(false);
+      await browserPage.close();
+    });
+  }, 120_000);
+
+  /**
+   * The four verbs that used to be API-only.
+   *
+   * `job.cancel`, `job.retry`, `job.dismiss` and `approvals.decide` were declared
+   * in the action union, proxied, and audited — and reachable from nothing but
+   * curl, because the jobs and approvals panels rendered a count and a
+   * `JSON.stringify`. This is the repo's built-but-unwired defect class, and the
+   * assertion that closes it is the SENT BODY: a button that opened a
+   * confirmation and posted nothing would satisfy a click-only check.
+   */
+  test('every job and approval control sends its action, bound to the owning account', async () => {
+    await withGallery(async ({ browser, origin }) => {
+      const browserPage = await browser.newPage();
+      const probe = await serveControl(browserPage, {
+        overview: page(200, OVERVIEW),
+        workspaces: (url) => url.pathname.endsWith('/workspaces')
+          ? answer(200, { status: 'end', items: [workspaceRow()] })
+          : answer(200, detailBody({
+            jobs: { status: 'ok', value: [JOB] },
+            approvals: { status: 'ok', value: [APPROVAL] },
+          })),
+        actions: page(200, { outcome: 'ok', detail: 'done' }),
+      });
+      await openControl(browserPage, origin, 'Workspaces');
+      await openWorkspaceRow(browserPage);
+
+      // The rows themselves, not a JSON blob: an operator has to be able to read
+      // which job and which command they are about to act on.
+      const rendered = await browserPage.evaluate(() => document.body.innerText);
+      expect(rendered).toContain('rm -rf /tmp/build');
+      expect(rendered).toContain('research');
+
+      for (const [label, confirmLabel] of [
+        ['Cancel', 'Confirm'], ['Retry', 'Confirm'], ['Dismiss', 'Confirm'],
+        ['Approve', 'Confirm'], ['Deny', 'Confirm'], ['Always', 'Remove'],
+      ] as const) {
+        // Every control asks first, and the dialog names the account — this panel
+        // is reached from a list where the row above belongs to somebody else.
+        const shown = await confirmControl(browserPage, label, confirmLabel);
+        expect(shown, label).toContain(OTHER_ID);
+      }
+
+      expect(probe.posted).toEqual([
+        { action: 'job.cancel', userId: OTHER_ID, workspace: 'checkout-fixes', jobId: 'job-7' },
+        { action: 'job.retry', userId: OTHER_ID, workspace: 'checkout-fixes', jobId: 'job-7' },
+        { action: 'job.dismiss', userId: OTHER_ID, workspace: 'checkout-fixes', jobId: 'job-7' },
+        { action: 'approvals.decide', userId: OTHER_ID, workspace: 'checkout-fixes', ids: ['ap-1'], decision: 'approved' },
+        { action: 'approvals.decide', userId: OTHER_ID, workspace: 'checkout-fixes', ids: ['ap-1'], decision: 'denied' },
+        { action: 'approvals.decide', userId: OTHER_ID, workspace: 'checkout-fixes', ids: ['ap-1'], decision: 'always' },
+      ]);
+      await browserPage.close();
+    });
+  }, 180_000);
+
+  test('the two workspace-wide controls also confirm before they act', async () => {
+    await withGallery(async ({ browser, origin }) => {
+      const browserPage = await browser.newPage();
+      const probe = await serveControl(browserPage, {
+        overview: page(200, OVERVIEW),
+        workspaces: (url) => url.pathname.endsWith('/workspaces')
+          ? answer(200, { status: 'end', items: [workspaceRow()] })
+          : answer(200, detailBody({})),
+        actions: page(200, { outcome: 'ok', detail: 'done' }),
+      });
+      await openControl(browserPage, origin, 'Workspaces');
+      await openWorkspaceRow(browserPage);
+
+      for (const label of ['Clear settled jobs', 'Revoke shell grants']) {
+        await confirmControl(browserPage, label, 'Confirm');
+      }
+
+      expect(probe.posted).toEqual([
+        { action: 'jobs.clear', userId: OTHER_ID, workspace: 'checkout-fixes' },
+        { action: 'shell_grants.revoke', userId: OTHER_ID, workspace: 'checkout-fixes' },
+      ]);
+      await browserPage.close();
+    });
+  }, 120_000);
+
+  test("250 of one account's workspaces are reachable, page by page", async () => {
+    // The defect: the drilldown rendered `detail.workspaces.items` with no walk,
+    // so row 201 and later were unreachable while the copy above the table said
+    // it had been reconciled against the registry.
+    await withGallery(async ({ browser, origin }) => {
+      const browserPage = await browser.newPage();
+      const rows = Array.from({ length: 250 }, (_, i) => ({
+        userId: OTHER_ID, email: 'owner@example.com',
+        name: `w${String(i).padStart(3, '0')}`, displayName: `Workspace ${String(i)}`,
+        createdAt: 1_000, lastSeenAt: 2_000_000 - i, removedAt: null,
+      }));
+      await serveControl(browserPage, {
+        overview: page(200, OVERVIEW),
+        users: page(200, { status: 'end', items: [userRow(OTHER_ID, 'owner@example.com', 3_000)] }),
+        [`users/${OTHER_ID}`]: (url) => {
+          const cursor = url.searchParams.get('cursor');
+          const start = cursor === null ? 0 : Number(cursor.split('\u0000')[1]);
+          const slice = rows.slice(start, start + 200);
+          const end = start + slice.length;
+          return answer(200, {
+            user: userRow(OTHER_ID, 'owner@example.com', 3_000),
+            // The server reconciles only on the first page, because the
+            // reconcile rewrites the column the cursor orders on.
+            reconcile: cursor === null
+              ? { status: 'ok' }
+              : { status: 'skipped', reason: 'a later page of the same walk' },
+            workspaces: end < rows.length
+              ? { status: 'more', items: slice, next: { after: `2000000\u0000${String(end)}` } }
+              : { status: 'end', items: slice },
+            viewer: OPERATOR,
+          });
+        },
+      });
+      await openControl(browserPage, origin, 'Users');
       await browserPage.evaluate(() => {
         const row = [...document.querySelectorAll('tbody tr')]
-          .find((node) => node.textContent?.includes('checkout-fixes'));
+          .find((node) => node.textContent?.includes('owner@example.com'));
         if (row instanceof HTMLElement) row.click();
       });
       await browserPage.waitForNetworkIdle();
 
-      const opened = await browserPage.evaluate(() => {
-        const button = [...document.querySelectorAll('button')]
-          .find((node) => node.textContent?.includes('Remove workspace'));
-        if (button instanceof HTMLElement) button.click();
-        return button instanceof HTMLElement;
-      });
-      expect(opened).toBe(true);
-      await browserPage.waitForSelector('input');
+      const first = await browserPage.evaluate(() => document.body.innerText);
+      expect(first).toContain('w000');
+      expect(first).not.toContain('w200');
 
-      const disabledEmpty = await browserPage.evaluate(() =>
-        [...document.querySelectorAll('button')]
-          .find((node) => node.textContent?.trim() === 'Remove')
-          ?.hasAttribute('disabled'));
-      expect(disabledEmpty).toBe(true);
+      // `PageWalker`'s own label, arrow included: an exact match is what keeps
+      // the job row's Cancel apart from the modal's.
+      expect(await clickButton(browserPage, 'Next page \u2192')).toBe(true);
+      await browserPage.waitForNetworkIdle();
 
-      await browserPage.type('input', 'checkout-fix');
-      const disabledPartial = await browserPage.evaluate(() =>
-        [...document.querySelectorAll('button')]
-          .find((node) => node.textContent?.trim() === 'Remove')
-          ?.hasAttribute('disabled'));
-      // A prefix is not the name. The gate is equality, not "looks close".
-      expect(disabledPartial).toBe(true);
-
-      await browserPage.type('input', 'es');
-      const enabled = await browserPage.evaluate(() =>
-        [...document.querySelectorAll('button')]
-          .find((node) => node.textContent?.trim() === 'Remove')
-          ?.hasAttribute('disabled'));
-      expect(enabled).toBe(false);
+      const second = await browserPage.evaluate(() => document.body.innerText);
+      // The rows that were unreachable before, and the honest statement that this
+      // page did not re-reconcile.
+      expect(second).toContain('w200');
+      expect(second).toContain('w249');
+      expect(second).toContain('end of list');
+      expect(second).toContain('later page of the walk');
       await browserPage.close();
     });
   }, 120_000);

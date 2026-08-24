@@ -322,24 +322,41 @@ describe('ChatApp terminal interaction', () => {
     screen.mockInput.pressEscape();
   });
 
-  test('the Agent Hub creates a cloud additional agent through the backend client, without leaving', async () => {
+  test('the Agent Hub opens and renames a cloud additional agent', async () => {
     const cloud = fakeClient({ name: 'shop-cloud', mode: 'cloud' });
+    const renamed: string[] = [];
+    const child = fakeClient({
+      name: 'sub-1',
+      mode: 'cloud',
+      rename: async (displayName) => {
+        renamed.push(displayName);
+        return { name: 'sub-1', displayName };
+      },
+    });
     let created = 0;
     const screen = await mountChat(cloud.client, {
       hubData: HUB_FIXTURE,
       onNewAgent: async (client) => {
         created += 1;
         expect(client.mode).toBe('cloud');
-        return { name: 'sub-1', displayName: '', kind: 'cloud-additional' };
+        return {
+          name: 'sub-1',
+          displayName: '',
+          kind: 'cloud-additional',
+          client: child.client,
+        };
       },
     });
     screen.mockInput.pressKey('a', { meta: true });
     await screen.waitFor('the agent hub', () => screen.frame().includes('Agent Hub'));
     screen.mockInput.pressKey('n');
-    await screen.waitFor('the creation notice', () => screen.frame().includes('Created New agent (sub-1)'));
+    await screen.waitFor('the created cloud conversation', () => screen.frame().includes('Connected to sub-1'));
     expect(created).toBe(1);
-    // No switch happened: the current conversation stays open.
-    expect(screen.frame()).toContain('Connected to shop-cloud');
+
+    await screen.mockInput.typeText('/rename Research partner');
+    screen.mockInput.pressEnter();
+    await screen.waitFor('the cloud rename result', () => screen.frame().includes('Renamed to Research partner.'));
+    expect(renamed).toEqual(['Research partner']);
   });
 
   test('a hub with no wired creator offers no new-agent key', async () => {

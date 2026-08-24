@@ -25,7 +25,7 @@ import {
   createAgentsTool,
   decodeJsonValue,
   parseAgentsToolInput,
-  roleSummaries,
+
   resolveTurnProfile,
   validateSwarmProfileSnapshot,
   profileCatalogDigest,
@@ -145,7 +145,7 @@ function makeTeam() {
       },
       recordTitle: async (input) => {
         recordCall(calls, 'recordTitle', input);
-        return { ok: true, name: input.name, displayName: input.displayName };
+        return { ok: true, name: input.name, displayName: input.displayName, applied: true };
       },
       spawn: async (input) => {
         recordCall(calls, 'spawn', input);
@@ -686,11 +686,13 @@ describe('agents delegation — role/tier/preset precedence', () => {
   });
 
   test('role summaries project into the native schema from the same catalog', () => {
-    const deps = withBuildMode(profileDeps());
-    expect(roleSummaries(deps)).toContain('researcher');
-    expect(roleSummaries(deps)).toContain('preset research');
+    const rendered = (deps: TestAgentsToolDeps): string =>
+      JSON.stringify(createAgentsTool(withBuildMode(deps)).inputSchema);
+    const withCatalog = rendered(profileDeps());
+    expect(withCatalog).toContain('researcher');
+    expect(withCatalog).toContain('preset research');
     // No catalog wired → no summaries, and nothing invented.
-    expect(roleSummaries(withBuildMode({ fork: forkDeps() }))).toBe('');
+    expect(rendered({ fork: forkDeps() })).not.toContain('Available roles');
   });
 });
 

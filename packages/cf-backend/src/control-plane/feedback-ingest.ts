@@ -18,7 +18,7 @@ import type { FeedbackRecord } from '../feedback/contract';
 import { controlPlaneStub, hasControlPlane, type ControlPlaneEnv } from './stub';
 import { internalCaller } from './admin-caller';
 
-export { CONTROL_PLANE_SINGLETON, controlPlaneStub, type ControlPlaneEnv } from './stub';
+export type { ControlPlaneEnv } from './stub';
 
 export type FeedbackIngestOutcome = { id: string } | { error: string };
 

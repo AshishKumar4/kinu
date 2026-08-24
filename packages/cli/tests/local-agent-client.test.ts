@@ -81,7 +81,6 @@ function fakeResolver(model: LanguageModel): LocalModelResolver {
     listModels: async () => ({ models: [{ id: 'fake-model', label: 'Fake Model', provider: 'fake' }], failures: [] }),
     modelInfo: async () => null,
     judgeCandidates: async () => [],
-    fastModelCandidates: () => [],
     getAuth: async () => null,
   };
 }

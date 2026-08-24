@@ -55,13 +55,13 @@ export interface TuiOnboardingOperations {
   skip(step: OnboardingStepId): void | Promise<void>;
 }
 
-export interface DerivedOnboardingState {
+interface DerivedOnboardingState {
   readonly activeStep: OnboardingStepId | null;
   readonly activeIndex: number;
   readonly ready: boolean;
 }
 
-export function deriveOnboardingState(readiness: OnboardingReadiness): DerivedOnboardingState {
+function deriveOnboardingState(readiness: OnboardingReadiness): DerivedOnboardingState {
   for (let index = 0; index < ONBOARDING_STEP_IDS.length; index += 1) {
     const step = ONBOARDING_STEP_IDS[index]!;
     if (readiness.skippedSteps.includes(step) || onboardingStepReady(step, readiness)) continue;
@@ -70,7 +70,7 @@ export function deriveOnboardingState(readiness: OnboardingReadiness): DerivedOn
   return Object.freeze({ activeStep: null, activeIndex: ONBOARDING_STEP_IDS.length, ready: true });
 }
 
-export function onboardingStepReady(step: OnboardingStepId, readiness: OnboardingReadiness): boolean {
+function onboardingStepReady(step: OnboardingStepId, readiness: OnboardingReadiness): boolean {
   switch (step) {
     case 'location':
       return readiness.location !== undefined;

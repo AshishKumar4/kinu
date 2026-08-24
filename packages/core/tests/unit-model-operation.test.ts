@@ -9,7 +9,7 @@ import { Database } from 'bun:sqlite';
 import { MockLanguageModelV3 } from 'ai/test';
 import {
   beginModelOperation, createCompletionLLM, createVercelAILLM,
-  initRunEventTables, newModelOperationId, recordModelOperations, RunEventRecorder,
+  initRunEventTables, recordModelOperations, RunEventRecorder,
   WORKSPACE_RUN_ID,
   type RunEvent,
 } from '../src/index';
@@ -121,9 +121,9 @@ describe('recordModelOperations — one projection, filed under the live run', (
     const { recorder } = setup();
     let runId: string = WORKSPACE_RUN_ID;
     const sink = recordModelOperations(recorder, () => runId);
-    sink({ operationId: newModelOperationId(), source: 'advisor', op: 'complete', phase: 'start' });
+    sink({ operationId: 'op-before', source: 'advisor', op: 'complete', phase: 'start' });
     runId = 'run-open';
-    sink({ operationId: newModelOperationId(), source: 'advisor', op: 'complete', phase: 'start' });
+    sink({ operationId: 'op-after', source: 'advisor', op: 'complete', phase: 'start' });
     expect(operationsOf(recorder, WORKSPACE_RUN_ID)).toHaveLength(1);
     expect(operationsOf(recorder, 'run-open')).toHaveLength(1);
   });

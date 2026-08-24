@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 import {
-  JsonValueSchema, profileCatalogDigest, validateProfileCatalog,
+  BUILTIN_PROFILE_CATALOG, JsonValueSchema, profileCatalogDigest, validateProfileCatalog,
   type JsonObject, type JsonValue, type ProfileCatalog, type ProfileCatalogEnvelope,
 } from "@kinu.run/core";
 import * as v from 'valibot';
@@ -33,7 +33,8 @@ function catalogA(): ProfileCatalog {
   };
 }
 
-/** Disjoint content from catalogA — replace must leave zero traces of A. */
+/** Disjoint content from catalogA, so an entry that reached the wrong store
+ *  is visible by its role names alone. */
 function catalogB(): ProfileCatalog {
   return {
     roles: {
@@ -129,12 +130,78 @@ function expectError(step: StepOutcome | undefined, fragment: string): void {
   expect(step?.error ?? '').toContain(fragment);
 }
 
+/** Signed in as `accountId`, with `origin` as the account's cloud origin.
+ *  Writes the whole config file, so it runs before anything a scenario keeps. */
+function signedIn(accountId: string, origin: string): string {
+  return `
+    {
+      const { mkdirSync, writeFileSync } = await import('node:fs');
+      mkdirSync(process.env.KINU_HOME, { recursive: true });
+      writeFileSync(process.env.KINU_HOME + '/config.json', JSON.stringify({
+        origin: ${JSON.stringify(origin)},
+        accessToken: 'ptc_session',
+        tokenExpiresAt: new Date(Date.now() + 3600_000).toISOString(),
+        user: { id: ${JSON.stringify(accountId)}, email: 'a@example.com' },
+      }), { mode: 0o600 });
+    }
+  `;
+}
+
+/** Signed out the way `kinu logout` leaves the file: the session keys are
+ *  dropped entirely, which is what the config schema requires (null is not a
+ *  string). Everything else on disk survives. */
+const SIGNED_OUT = `
+  {
+    const { writeFileSync } = await import('node:fs');
+    const { loadConfigFile } = await import('./packages/cli/src/config.ts');
+    const next = { ...loadConfigFile() };
+    delete next.accessToken;
+    delete next.tokenExpiresAt;
+    delete next.user;
+    writeFileSync(process.env.KINU_HOME + '/config.json', JSON.stringify(next), { mode: 0o600 });
+  }
+`;
+
+/**
+ * Fills `accountId`'s cache entry the only way production ever fills it: a
+ * signed-in resolution whose fetch the server answered. Nothing else writes
+ * that file, so seeding it by hand would pin a shape the product cannot
+ * produce.
+ *
+ * Leaves the scenario signed in as `accountId`. A caller that needs another
+ * session runs {@link signedIn} or {@link SIGNED_OUT} after it.
+ */
+function cached(accountId: string, catalog: ProfileCatalog, version: number): string {
+  return `
+    {
+      ${signedIn(accountId, 'https://kinu.test')}
+      const served = ${JSON.stringify(accountEnvelope(accountId, catalog, version))};
+      const network = globalThis.fetch;
+      globalThis.fetch = async (input, init) => String(input).endsWith('/api/cli/profile')
+        ? Response.json(served)
+        : network(input, init);
+      try {
+        const { loadActiveProfile } = await import('./packages/cli/src/profiles.ts');
+        await loadActiveProfile();
+      } finally {
+        globalThis.fetch = network;
+      }
+    }
+  `;
+}
+
 describe('local profile authority', () => {
-  test('import seeds version 1 under local authority and persists into config.json', () => {
+  /** What a tier edit seeds on a signed-out machine: the six shipped roles,
+   *  and the one tier the edit named. */
+  function seededCatalog(model: string): ProfileCatalog {
+    return { roles: BUILTIN_PROFILE_CATALOG.roles, tiers: { default: { model } } };
+  }
+
+  test('the first tier edit seeds version 1 under local authority and persists into config.json', () => {
     const steps = runScenario(`
-      await step('import', async () => {
-        const { importLocalProfile } = await import('./packages/cli/src/profiles.ts');
-        return importLocalProfile(${JSON.stringify(catalogA())});
+      await step('seeded', async () => {
+        const { updateDefaultTier } = await import('./packages/cli/src/profiles.ts');
+        return updateDefaultTier({ model: 'deepseek' });
       });
       await step('reload', async () => {
         const { loadLocalProfileAuthority } = await import('./packages/cli/src/profiles.ts');
@@ -145,11 +212,11 @@ describe('local profile authority', () => {
         return readFileSync(process.env.KINU_HOME + '/config.json', 'utf-8');
       });
     `);
-    const imported = v.parse(ParsedEnvelope, expectOk(steps.import));
-    expect(imported.authority).toEqual({ kind: 'local' });
-    expect(imported.version).toBe(1);
-    expect(imported.digest).toBe(profileCatalogDigest(validateProfileCatalog(catalogA())));
-    expect(v.parse(ParsedEnvelope, expectOk(steps.reload))).toEqual(imported);
+    const seeded = v.parse(ParsedEnvelope, expectOk(steps.seeded));
+    expect(seeded.authority).toEqual({ kind: 'local' });
+    expect(seeded.version).toBe(1);
+    expect(seeded.digest).toBe(profileCatalogDigest(validateProfileCatalog(seededCatalog('deepseek'))));
+    expect(v.parse(ParsedEnvelope, expectOk(steps.reload))).toEqual(seeded);
     // The envelope lives in config.json under the local slot, and nowhere
     // does the file claim account authority.
     const onDisk = String(expectOk(steps.configOnDisk));
@@ -174,76 +241,38 @@ describe('local profile authority', () => {
     expect(loaded.catalog.tiers.default.model).toBe('test/model');
   });
 
-  test('a second import refuses and names the explicit replacement path', () => {
+  test('a later edit supersedes the envelope wholesale and bumps its version', () => {
     const steps = runScenario(`
-      await step('first', async () => {
-        const { importLocalProfile } = await import('./packages/cli/src/profiles.ts');
-        return importLocalProfile(${JSON.stringify(catalogA())});
-      });
-      await step('second', async () => {
-        const { importLocalProfile } = await import('./packages/cli/src/profiles.ts');
-        return importLocalProfile(${JSON.stringify(catalogB())});
-      });
-      await step('stillA', async () => {
-        const { loadLocalProfileAuthority } = await import('./packages/cli/src/profiles.ts');
-        return loadLocalProfileAuthority();
+      const { loadLocalProfileAuthority, updateDefaultTier } =
+        await import('./packages/cli/src/profiles.ts');
+      await step('first', async () => updateDefaultTier({ model: 'deepseek' }));
+      await step('second', async () => updateDefaultTier({ model: 'other-model' }));
+      await step('reloaded', async () => loadLocalProfileAuthority());
+      await step('configOnDisk', async () => {
+        const { readFileSync } = await import('node:fs');
+        return readFileSync(process.env.KINU_HOME + '/config.json', 'utf-8');
       });
     `);
-    expectOk(steps.first);
-    expectError(steps.second, 'replace');
-    // Refused means refused: the first import still stands untouched.
-    expect(v.parse(ParsedEnvelope, expectOk(steps.stillA)).catalog.roles).toHaveProperty('general');
-  });
-
-  test('replace overwrites wholesale and bumps the version — nothing merges', () => {
-    const steps = runScenario(`
-      await step('import', async () => {
-        const { importLocalProfile } = await import('./packages/cli/src/profiles.ts');
-        return importLocalProfile(${JSON.stringify(catalogA())});
-      });
-      await step('replace', async () => {
-        const { replaceLocalProfile } = await import('./packages/cli/src/profiles.ts');
-        return replaceLocalProfile(${JSON.stringify(catalogB())});
-      });
-      await step('reloaded', async () => {
-        const { loadLocalProfileAuthority } = await import('./packages/cli/src/profiles.ts');
-        return loadLocalProfileAuthority();
-      });
-    `);
-    expect(v.parse(ParsedEnvelope, expectOk(steps.import)).version).toBe(1);
-    expect(v.parse(ParsedEnvelope, expectOk(steps.replace)).version).toBe(2);
+    expect(v.parse(ParsedEnvelope, expectOk(steps.first)).version).toBe(1);
+    expect(v.parse(ParsedEnvelope, expectOk(steps.second)).version).toBe(2);
     const reloaded = v.parse(ParsedEnvelope, expectOk(steps.reloaded));
-    expect(Object.keys(reloaded.catalog.roles)).toEqual(['auditor']);
     expect(reloaded.catalog.tiers.default.model).toBe('other-model');
-    expect(reloaded.digest).toBe(profileCatalogDigest(validateProfileCatalog(catalogB())));
-  });
-
-  test('an invalid catalog fails validation instead of landing on disk', () => {
-    const steps = runScenario(`
-      await step('badRole', async () => {
-        const { importLocalProfile } = await import('./packages/cli/src/profiles.ts');
-        return importLocalProfile({ roles: { 'Bad_Id': { description: 'x', instructions: 'y', tier: 'default', preset: 'ideate' } }, tiers: { default: { model: 'm' } } });
-      });
-      await step('absent', async () => {
-        const { loadLocalProfileAuthority } = await import('./packages/cli/src/profiles.ts');
-        return loadLocalProfileAuthority();
-      });
-    `);
-    expectError(steps.badRole, 'invalid profile catalog');
-    expect(expectOk(steps.absent)).toBeNull();
+    // Re-derived over the whole new catalog rather than carried from the old.
+    expect(reloaded.digest)
+      .toBe(profileCatalogDigest(validateProfileCatalog(seededCatalog('other-model'))));
+    // Superseded, not merged: the model the first edit wrote leaves no trace.
+    expect(String(expectOk(steps.configOnDisk))).not.toContain('deepseek');
   });
 });
 
 describe('account cache isolation', () => {
-  /** Caches two disjoint account entries through the real write path. */
+  /** Two disjoint account entries, each written by the path that writes them
+   *  in production, then the session cleared so neither id can reach
+   *  config.json and pass for cache data. */
   const SEED_ACCOUNTS = `
-    const A = ${JSON.stringify(catalogA())};
-    const B = ${JSON.stringify(catalogB())};
-    const { cacheAccountProfile } = await import('./packages/cli/src/profiles.ts');
-    const { profileCatalogDigest } = await import('@kinu.run/core');
-    for (const [id, catalog] of [['acc-a', A], ['acc-b', B]]) {
-      cacheAccountProfile(id, { authority: { kind: 'account', accountId: id }, version: 3, digest: profileCatalogDigest(catalog), catalog });
-    }
+    ${cached('acc-a', catalogA(), 3)}
+    ${cached('acc-b', catalogB(), 3)}
+    ${SIGNED_OUT}
   `;
 
   test('entries are keyed by account, live outside KinuConfig, and never bleed across', () => {
@@ -311,20 +340,6 @@ describe('account cache isolation', () => {
     `;
   }
 
-  /** Mirrors logoutCommand: undefined values drop the keys entirely, which
-   *  is also what the config schema requires (null is not a string). */
-  function clearSessionPatch(): string {
-    return `
-      const { writeFileSync } = await import('node:fs');
-      const { loadConfigFile } = await import('./packages/cli/src/config.ts');
-      const next = { ...loadConfigFile() };
-      delete next.accessToken;
-      delete next.tokenExpiresAt;
-      delete next.user;
-      writeFileSync(process.env.KINU_HOME + '/config.json', JSON.stringify(next), { mode: 0o600 });
-    `;
-  }
-
   test('logout and account switching flip resolution without promoting or merging anything', () => {
     const steps = runScenario(`
       ${SEED_ACCOUNTS}
@@ -349,7 +364,7 @@ describe('account cache isolation', () => {
         return { source, cachedRoles: Object.keys(cachedForB?.catalog.roles ?? {}), local: loadLocalProfileAuthority() };
       });
       await step('logout', async () => {
-        ${clearSessionPatch()}
+        ${SIGNED_OUT}
         const { resolveProfileAuthority, loadLocalProfileAuthority, loadCachedAccountProfile } = await import('./packages/cli/src/profiles.ts');
         return {
           source: resolveProfileAuthority(),
@@ -416,36 +431,6 @@ describe('account cache isolation', () => {
 // unreachable origin from the cache the fetch would have refreshed, and a
 // signed-out turn sees a catalog edit made after the session started.
 describe('the turn profile authority reader', () => {
-  /** Signed in as `accountId`, with `origin` as the account's cloud origin. */
-  function signedIn(accountId: string, origin: string): string {
-    return `
-      const { mkdirSync, writeFileSync } = await import('node:fs');
-      mkdirSync(process.env.KINU_HOME, { recursive: true });
-      writeFileSync(process.env.KINU_HOME + '/config.json', JSON.stringify({
-        origin: ${JSON.stringify(origin)},
-        accessToken: 'ptc_session',
-        tokenExpiresAt: new Date(Date.now() + 3600_000).toISOString(),
-        user: { id: ${JSON.stringify(accountId)}, email: 'a@example.com' },
-      }), { mode: 0o600 });
-    `;
-  }
-
-  /** Caches one account entry through the real write path. */
-  function cached(accountId: string, catalog: ProfileCatalog, version: number): string {
-    return `
-      {
-        const { cacheAccountProfile } = await import('./packages/cli/src/profiles.ts');
-        const { profileCatalogDigest } = await import('@kinu.run/core');
-        const catalog = ${JSON.stringify(catalog)};
-        cacheAccountProfile(${JSON.stringify(accountId)}, {
-          authority: { kind: 'account', accountId: ${JSON.stringify(accountId)} },
-          version: ${version},
-          digest: profileCatalogDigest(catalog),
-          catalog,
-        });
-      }
-    `;
-  }
 
   /** Records diagnostics so the fallback's own report is assertable: a
    *  fallback nobody can see is a silent substitution. */
@@ -471,8 +456,8 @@ describe('the turn profile authority reader', () => {
 
   test('a warm cache answers when the origin is unreachable, and says which version it served', () => {
     const steps = runScenario(`
-      ${signedIn('acc-a', DEAD_ORIGIN)}
       ${cached('acc-a', catalogA(), 9)}
+      ${signedIn('acc-a', DEAD_ORIGIN)}
       ${RECORD_DIAGNOSTICS}
       await step('resolved', async () => {
         const { createProfileAuthorityReader } = await import('./packages/cli/src/profiles.ts');
@@ -501,14 +486,14 @@ describe('the turn profile authority reader', () => {
     const steps = runScenario(`
       ${signedIn('acc-a', 'https://kinu.test')}
       ${RECORD_DIAGNOSTICS}
-      const served = ${JSON.stringify(accountEnvelope('acc-a', catalogA(), 4))};
+      let served = ${JSON.stringify(accountEnvelope('acc-a', catalogA(), 4))};
       let fetches = 0;
       globalThis.fetch = async (input) => {
         if (!String(input).endsWith('/api/cli/profile')) throw new Error(String(input));
         fetches += 1;
         return Response.json(served);
       };
-      const { createProfileAuthorityReader, cacheAccountProfile } =
+      const { createProfileAuthorityReader, loadActiveProfile } =
         await import('./packages/cli/src/profiles.ts');
       // ONE reader, the way a live session builds it once at construction.
       const read = createProfileAuthorityReader();
@@ -519,18 +504,18 @@ describe('the turn profile authority reader', () => {
         return { fetches, versions: [first?.version, second?.version, third?.version] };
       });
       await step('afterCacheWrite', async () => {
-        const { profileCatalogDigest } = await import('@kinu.run/core');
-        const catalog = ${JSON.stringify(catalogB())};
-        // What a CAS through updateDefaultTier leaves behind: a newer entry
-        // in the cache FILE, with no fetch involved.
-        cacheAccountProfile('acc-a', {
-          authority: { kind: 'account', accountId: 'acc-a' },
-          version: 5,
-          digest: profileCatalogDigest(catalog),
-          catalog,
-        });
+        // A newer entry lands in the cache FILE from outside this reader —
+        // what a CAS through updateDefaultTier, or another process, leaves
+        // behind. loadActiveProfile is that write path.
+        served = ${JSON.stringify(accountEnvelope('acc-a', catalogB(), 5))};
+        await loadActiveProfile();
+        const asked = fetches;
         const next = await read();
-        return { fetches, version: next?.version, roles: Object.keys(next?.catalog.roles ?? {}) };
+        return {
+          readFetches: fetches - asked,
+          version: next?.version,
+          roles: Object.keys(next?.catalog.roles ?? {}),
+        };
       });
       await step('sources', async () => recorder.emitted
         .filter((line) => line.event === 'profile.authority_read')
@@ -541,19 +526,19 @@ describe('the turn profile authority reader', () => {
       v.object({ fetches: v.number(), versions: v.array(v.number()) }),
       expectOk(steps.firstThenRepeat),
     )).toEqual({ fetches: 1, versions: [4, 4, 4] });
-    // A write to the cache file is observed without asking the server: the
-    // reuse is of the FILE, not of an object captured in memory.
+    // The reader asked the server for none of it: the newer version reached it
+    // through the FILE, not through an object it captured in memory.
     expect(v.parse(
-      v.object({ fetches: v.number(), version: v.number(), roles: v.array(v.string()) }),
+      v.object({ readFetches: v.number(), version: v.number(), roles: v.array(v.string()) }),
       expectOk(steps.afterCacheWrite),
-    )).toEqual({ fetches: 1, version: 5, roles: ['auditor'] });
+    )).toEqual({ readFetches: 0, version: 5, roles: ['auditor'] });
     expect(expectOk(steps.sources)).toEqual(['server', 'cache', 'cache', 'cache']);
   });
 
   test('another account\u2019s cache never answers for this one', () => {
     const steps = runScenario(`
-      ${signedIn('acc-b', DEAD_ORIGIN)}
       ${cached('acc-a', catalogA(), 9)}
+      ${signedIn('acc-b', DEAD_ORIGIN)}
       ${RECORD_DIAGNOSTICS}
       await step('resolved', async () => {
         const { createProfileAuthorityReader } = await import('./packages/cli/src/profiles.ts');
@@ -701,17 +686,27 @@ describe('malformed profile data fails loudly', () => {
     expectError(steps.load, 'digest mismatch');
   });
 
-  test('cache writes refuse an envelope whose authority does not match the key', () => {
-    const envelope = JSON.stringify(accountEnvelope('acc-a', catalogA()));
+  test('a server answer keyed to another account is refused, never cached', () => {
     const steps = runScenario(`
-      const ENVELOPE = ${envelope};
+      ${signedIn('acc-b', 'https://kinu.test')}
+      const served = ${JSON.stringify(accountEnvelope('acc-a', catalogA()))};
+      globalThis.fetch = async (input) => {
+        if (!String(input).endsWith('/api/cli/profile')) throw new Error(String(input));
+        return Response.json(served);
+      };
       await step('misKeyed', async () => {
-        const { cacheAccountProfile } = await import('./packages/cli/src/profiles.ts');
-        cacheAccountProfile('acc-b', ENVELOPE);
+        const { loadActiveProfile } = await import('./packages/cli/src/profiles.ts');
+        await loadActiveProfile();
         return 'written';
+      });
+      await step('cacheFile', async () => {
+        const { existsSync } = await import('node:fs');
+        return existsSync(process.env.KINU_HOME + '/profile-cache.json');
       });
     `);
     expectError(steps.misKeyed, 'mismatching authority');
+    // Refused means nothing landed: no entry under either account id.
+    expect(expectOk(steps.cacheFile)).toBe(false);
   });
 
   test('authority kinds cannot cross slots in either store', () => {

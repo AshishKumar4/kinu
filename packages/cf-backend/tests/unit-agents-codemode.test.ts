@@ -168,7 +168,7 @@ function fullDeps(): AgentsToolDeps {
           currentTask: null, createdAt: 1, dismissedAt: null,
         },
       }),
-      recordTitle: async () => ({ ok: true as const, name: 'n', displayName: 'N' }),
+      recordTitle: async () => ({ ok: true as const, name: 'n', displayName: 'N', applied: true }),
       spawn: async () => ({ name: 'n', displayName: 'N' }),
       assign: async () => ({ ok: true as const, name: 'n', ...codemodeHandoff }),
       status: async () => ({}),

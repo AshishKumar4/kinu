@@ -256,6 +256,9 @@ export interface AgentClient {
   readonly consents: DeviceConsentSurface | null;
   readonly localControls: LocalSessionControls | null;
   readonly checkpoints: FileCheckpointSurface | null;
+  /** Rename this conversation's agent when the backend exposes a complete
+   * owner-authoritative path. Root cloud workspaces keep the web sidebar path. */
+  readonly rename?: (displayName: string) => Promise<{ name: string; displayName: string }>;
   /** Per-message aggregate cap on raw bytes this backend will accept inlined
    *  as data-URL file parts. A storage row limit on the cloud, a provider
    *  request budget locally — the two numbers differ by 8×, so the chat

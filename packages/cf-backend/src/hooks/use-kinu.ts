@@ -204,11 +204,16 @@ const SubordinateRosterEntrySchema = v.object({
   name: v.string(),
   displayName: v.string(),
   role: v.string(),
+  nameOrigin: v.optional(v.picklist(["user", "auto"])),
   createdBy: v.picklist(["orchestrator", "user"]),
   status: v.picklist(["idle", "working", "awaiting_input", "dismissed"]),
   currentTask: v.nullable(v.string()),
   createdAt: v.number(),
   dismissedAt: v.nullable(v.number()),
+});
+
+const SubordinateMutationEnvelopeSchema = v.object({
+  subordinate: SubordinateRosterEntrySchema,
 });
 
 const SubordinateActivityEventSchema = v.object({
@@ -1130,15 +1135,17 @@ export function useKinu(target?: string | KinuActorAddress) {
     const snapshot = await rpc<{
       name: string;
       displayName: string;
-      role: string;
+      roleId: string | null;
+      legacyRole: string | null;
       mission: string;
       model: string | null;
+      activePlan: unknown;
     }>("getSubordinateSnapshot", []);
     if (!isCurrent()) return;
     setAgentStatus({
       name: snapshot.name,
       displayName: snapshot.displayName,
-      purpose: snapshot.role,
+      purpose: snapshot.roleId ?? snapshot.legacyRole ?? "general",
       soul: snapshot.mission,
       createdAt: 0,
       scaffoldVersion: 0,
@@ -1148,6 +1155,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       model: snapshot.model ?? "",
       forkLineage: null,
     });
+    setActivePlan(parseActivePlanReview(snapshot.activePlan));
   }
 
   const refreshSubordinates = useCallback(() => {
@@ -1460,7 +1468,11 @@ export function useKinu(target?: string | KinuActorAddress) {
     /** Owner rename. Lands on the parent roster AND the child's own identity;
      *  a user-chosen name permanently blocks auto-retitling (server-side). */
     renameSubordinate: async (name: string, displayName: string) => {
-      const entry = await rpc<SubordinateRosterEntry>("renameSubordinateAgent", [name, displayName]);
+      const result = v.parse(
+        SubordinateMutationEnvelopeSchema,
+        await rpc<unknown>("renameSubordinateAgent", [name, displayName]),
+      );
+      const entry = result.subordinate;
       ++subordinateRefreshGeneration.current;
       setSubordinates((current) => current.map(
         (existing) => existing.name === entry.name ? entry : existing,

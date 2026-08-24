@@ -219,7 +219,23 @@ const WORKSPACE = {
 const AUDIT = {
   actorEmail: 'operator@example.test', actorUserId: 'user-operator',
   operation: 'workspace.remove', targetKind: 'workspace', target: 'user-alpha/research',
-  outcome: 'ok', detail: 'affected=1', id: 'audit-fixture-1', at: AT + 1,
+  outcome: 'ok', detail: 'affected=1',
+  actorDigest: 'deadbeefdeadbeefdeadbeefdeadbeef',
+};
+
+/**
+ * An attempt whose outcome is written by a DIFFERENT PROCESS.
+ *
+ * The two-phase audit write exists so a mutation cannot run unrecorded: the
+ * intent lands before the action and the outcome lands after. This row is
+ * appended by the first runtime and never settled by it, which is exactly the
+ * shape a Durable Object eviction between the two phases produces. The second
+ * runtime has to find it still pending and be able to finish it.
+ */
+const INTENT = {
+  actorEmail: 'operator@example.test', actorUserId: 'user-operator',
+  operation: 'job.cancel', targetKind: 'job', target: 'user-alpha/research/job-7',
+  outcome: 'pending', detail: 'in flight: the outcome has not been recorded',
   actorDigest: 'deadbeefdeadbeefdeadbeefdeadbeef',
 };
 
@@ -250,6 +266,14 @@ const REFUSALS = [
 
 const first = runtime();
 const findings = { platform: {}, refusals: [], writes: {}, persistence: {} };
+
+/** The ids and the clock the OBJECT minted, carried across the process boundary
+ *  by this driver rather than chosen by it. `AuditDraft` has no `id` and no `at`
+ *  — the store owns both — so the only way the second runtime can name a row the
+ *  first one wrote is to be told what came back. */
+let auditId = '';
+let intentId = '';
+let intentAt = 0;
 
 try {
   const denials = await settle(first, REFUSALS.map((entry) => entry.step));
@@ -306,6 +330,8 @@ try {
     { method: 'observeUser', caller: 'ingest', observation: USER },
     { method: 'observeWorkspace', caller: 'ingest', observation: WORKSPACE },
     { method: 'recordAudit', caller: 'admin', entry: AUDIT },
+    // Appended and deliberately NOT settled by this process.
+    { method: 'recordAudit', caller: 'admin', entry: INTENT },
     { method: 'overview', caller: 'admin' },
   ]);
   written.forEach((outcome, index) => {
@@ -316,15 +342,27 @@ try {
   });
 
   const auditRow = written[2].value;
-  assert.equal(auditRow.id, AUDIT.id);
+  auditId = auditRow.id;
+  assert.match(
+    auditId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    `the object did not mint a row id: ${JSON.stringify(auditId)}`,
+  );
   assert.equal(auditRow.operation, 'workspace.remove');
   assert.equal(auditRow.outcome, 'ok');
 
-  const overview = written[3].value;
+  const intentRow = written[3].value;
+  intentId = intentRow.id;
+  intentAt = intentRow.at;
+  assert.notEqual(intentId, auditId, 'two appends were given one id');
+  assert.equal(
+    intentRow.outcome, 'pending',
+    'the intent row settled itself; a pending append must stay pending until a settlement',
+  );
+
+  const overview = written[4].value;
   assert.equal(overview.users, 1, 'the ingest-graded user observation did not land');
   assert.equal(overview.workspaces, 1, 'the ingest-graded workspace observation did not land');
-  assert.equal(overview.auditEntries, 1, 'the admin-graded audit append did not land');
-  assert.equal(overview.lastAdminActionAt, AUDIT.at);
+  assert.equal(overview.auditEntries, 2, 'the admin-graded audit appends did not land');
   findings.writes = {
     users: overview.users,
     workspaces: overview.workspaces,
@@ -348,20 +386,40 @@ try {
     { method: 'listUsers', caller: 'admin' },
     { method: 'listWorkspaces', caller: 'admin' },
     { method: 'listAudit', caller: 'admin' },
+    // The attempt the first process never finished. It has to be findable here,
+    // because that is the whole reason it is written before the mutation runs.
+    { method: 'listPendingAudit', caller: 'admin' },
+    {
+      method: 'settleAudit', caller: 'admin',
+      settlement: {
+        id: intentId, outcome: 'ok', detail: 'cancelled job-7',
+        actorDigest: INTENT.actorDigest, reason: 'ok',
+      },
+    },
+    { method: 'listPendingAudit', caller: 'admin' },
+    // A settlement of an already-settled row is refused rather than allowed to
+    // rewrite it: a replayed finish must not become a way to edit history.
+    {
+      method: 'settleAudit', caller: 'admin',
+      settlement: { id: intentId, outcome: 'failed', detail: 'rewritten', reason: 'threw' },
+    },
     // The refusal has to survive a restart too: the gate derives its tokens in
     // module scope, so a re-activated isolate deriving them again is the path a
     // long-lived deployment actually takes.
     { method: 'overview', caller: 'forged' },
   ]);
 
-  const [overview, users, workspaces, audit, refusedAfterRestart] = survived;
+  const [
+    overview, users, workspaces, audit,
+    pendingBefore, settled, pendingAfter, replayed, refusedAfterRestart,
+  ] = survived;
   assert.equal(overview.settled, 'resolved', `overview after restart: ${overview.message}`);
   assert.equal(
     overview.value.users, 1,
     'the index did not survive the restart: user rows are gone, so storage was not durable',
   );
   assert.equal(
-    overview.value.auditEntries, 1,
+    overview.value.auditEntries, 2,
     'the audit log did not survive the restart: an audit log that a process restart '
     + 'empties is not an audit log',
   );
@@ -377,12 +435,34 @@ try {
   assert.equal(workspaces.value.items[0].name, WORKSPACE.name);
   assert.equal(workspaces.value.items[0].removedAt, null);
 
-  assert.equal(audit.value.items.length, 1);
-  assert.equal(audit.value.items[0].id, AUDIT.id);
-  assert.equal(audit.value.items[0].actorEmail, AUDIT.actorEmail);
+  const settledRow = audit.value.items.find((row) => row.id === auditId);
+  assert.ok(settledRow, 'the settled audit row did not come back');
+  assert.equal(settledRow.actorEmail, AUDIT.actorEmail);
   assert.equal(
-    audit.value.items[0].target, AUDIT.target,
+    settledRow.target, AUDIT.target,
     'the audit row came back without the address it exists to record',
+  );
+
+  assert.equal(pendingBefore.settled, 'resolved', `listPendingAudit: ${pendingBefore.message}`);
+  assert.equal(
+    pendingBefore.value.length, 1,
+    'the unsettled attempt did not survive the process that wrote it, so an action taken '
+    + 'across an eviction would leave no evidence at all',
+  );
+  assert.equal(pendingBefore.value[0].id, intentId);
+  assert.equal(pendingBefore.value[0].target, INTENT.target);
+
+  assert.equal(settled.settled, 'resolved', `settleAudit: ${settled.message}`);
+  assert.equal(settled.value.outcome, 'ok');
+  assert.equal(settled.value.detail, 'cancelled job-7');
+  // The attempt's own columns are untouched by the settlement.
+  assert.equal(settled.value.at, intentAt);
+  assert.equal(settled.value.actorEmail, INTENT.actorEmail);
+  assert.equal(settled.value.target, INTENT.target);
+  assert.equal(pendingAfter.value.length, 0, 'a settled attempt is still listed as pending');
+  assert.equal(
+    replayed.settled, 'rejected',
+    'an already-settled audit row was settled a SECOND time, which is a way to edit history',
   );
 
   assert.equal(
@@ -394,9 +474,13 @@ try {
     users: overview.value.users,
     workspaces: overview.value.workspaces,
     auditEntries: overview.value.auditEntries,
-    auditId: audit.value.items[0].id,
-    actorEmail: audit.value.items[0].actorEmail,
+    auditId: settledRow.id,
+    actorEmail: settledRow.actorEmail,
     refusedAfterRestart: refusedAfterRestart.settled === 'rejected',
+    pendingSurvived: pendingBefore.value.length,
+    settledAfterRestart: settled.value.outcome,
+    pendingAfterSettlement: pendingAfter.value.length,
+    resettleRefused: replayed.settled === 'rejected',
   };
 } finally {
   await second.dispose();
@@ -421,15 +505,36 @@ assert.ok(
   `the sink installed without the operations dataset in reach: ${installed.join(' | ')}`,
 );
 
-// `recordAudit` writes the row and emits the marker from one call, so the two
-// cannot disagree about whether an action happened.
+// A marker per SETTLED attempt, and none for a pending one. Three audit writes
+// happened across the two runtimes — one terminal append, one pending append,
+// one settlement — and the pending append is an intent rather than an outcome,
+// so it must not produce an ops row of its own. Two markers for three writes IS
+// the property: one attempt, one marker, whichever way it goes.
 const recorded = isolateDiagnostics
   .filter((line) => line.includes('"control_plane.operation_recorded"'));
 assert.equal(
-  recorded.length, 1,
-  `expected exactly one operation marker, got ${recorded.length}`,
+  recorded.length, 2,
+  `expected one marker per settled attempt, got ${recorded.length}`,
 );
-assert.match(recorded[0], new RegExp(`"actor":"${AUDIT.actorDigest}"`));
+assert.ok(
+  recorded.every((line) => line.includes(`"actor":"${AUDIT.actorDigest}"`)),
+  `a marker was published without the actor digest: ${recorded.join(' | ')}`,
+);
+assert.ok(
+  !recorded.some((line) => line.includes('"outcome":"pending"')),
+  'a pending intent produced an operations row; only a settled attempt may',
+);
+// The reason slot is a CLOSED classification, never the row's detail. The detail
+// of a thrown failure is a rendered cause chain, and the sink's own rule is that
+// a cause chain never reaches a dataset this deployment does not age out.
+assert.ok(
+  recorded.some((line) => line.includes('"reason":"ok"')),
+  `the settlement published no closed reason: ${recorded.join(' | ')}`,
+);
+assert.ok(
+  !recorded.some((line) => line.includes('cancelled job-7') || line.includes('affected=1')),
+  `an audit row's detail text reached the operations dataset: ${recorded.join(' | ')}`,
+);
 
 // The split the audit path exists to keep: the ROW carries the address, the EVENT
 // carries a digest. The row was checked above; this is the other half, and it is
@@ -445,7 +550,7 @@ assert.deepEqual(
 findings.isolate = {
   sinkInstalls: installed.length,
   operationMarkers: recorded.length,
-  actorPublishedAsDigest: recorded[0].includes(`"actor":"${AUDIT.actorDigest}"`),
+  actorPublishedAsDigest: recorded.every((line) => line.includes(`"actor":"${AUDIT.actorDigest}"`)),
   addressLeaks: leakedAddress.length,
   lines: isolateDiagnostics.length,
 };

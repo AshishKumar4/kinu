@@ -11,14 +11,14 @@ import {
   normalizeUsage,
   type ReasoningEffort,
 } from '@kinu.run/core';
-import { diagnostics, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import type { OrchestratorAgent } from '../orchestrator';
 import { createAgentProviderRegistry } from '../providers/agent-registry';
 import type { UserCredentialClient } from '../providers/agent-registry';
 import type { UserCaller } from './workspace-capability';
 import { listAvailableModels, type ModelMenuEntry } from './available-models';
 import type { WorkspaceEntry } from './user-do';
-import { indexNewWorkspace } from '../control-plane/index-feed';
+import { indexNewWorkspace, unindexWorkspace } from '../control-plane/index-feed';
 
 export interface CloudWorkspaceRegistry extends UserCredentialClient {
   getConfig(caller: UserCaller, key: string): Promise<string | null>;
@@ -29,6 +29,10 @@ export interface CloudWorkspaceRegistry extends UserCredentialClient {
     purpose?: string,
   ): Promise<{ entry: WorkspaceEntry; existed: boolean }>;
   removeWorkspace(caller: UserCaller, name: string, ownerUserId: string): Promise<void>;
+  /** Drop the exact roster row this create inserted, matched on its own
+   *  `createdAt`, without touching the workspace's Durable Object. The only
+   *  correct undo when the object turned out to belong to another account. */
+  releaseWorkspaceReservation(caller: UserCaller, name: string, createdAt: number): Promise<boolean>;
   ensureWorkspaceCapability(name: string, presentedHash: string | null): Promise<void>;
 }
 
@@ -67,14 +71,6 @@ export async function createCloudWorkspaceForUser(
   const identity = createInitialCloudAgentIdentity(input, purpose);
 
   const { entry, existed } = await userDO.registerWorkspace(caller, identity.name, identity.displayName, purpose);
-  // The control-plane index learns about a workspace the instant it is
-  // registered, so one created from an API call and never opened is still in the
-  // operator's list. Reported and non-fatal: the registry row is the truth and
-  // this is a copy of it, and the user drilldown reconciles from that row
-  // anyway.
-  await indexNewWorkspace(env, {
-    userId, name: entry.name, displayName: entry.displayName, createdAt: entry.createdAt,
-  });
   try {
     const initialization: InitializeOrchestratorInput = {
       env, userId, userDO, agentName: entry.name, displayName: entry.displayName,
@@ -84,6 +80,18 @@ export async function createCloudWorkspaceForUser(
     if (input.reasoningEffort) initialization.reasoningEffort = input.reasoningEffort;
     if (input.role) initialization.role = input.role;
     await initializeOrchestrator(initialization);
+    // AFTER the workspace's own object has accepted this account as its owner,
+    // never before. `OrchestratorAgent` is addressed by a GLOBAL name while a
+    // roster row is per-account, so two accounts can register the same name and
+    // only one claim can win. Indexing at registration published a row saying
+    // this account owns that workspace while the claim was still outstanding —
+    // and the loser's row survived, because the rollback below cannot destroy a
+    // Durable Object it does not own. Reported and non-fatal: the registry row
+    // is the truth and this is a copy of it, and the user drilldown reconciles
+    // from that row anyway.
+    await indexNewWorkspace(env, {
+      userId, name: entry.name, displayName: entry.displayName, createdAt: entry.createdAt,
+    });
     if (identity.nameOrigin === 'auto' && purpose) {
       scheduleCloudAgentDisplayNameGeneration(env, userDO, caller, entry.name, purpose, model, options);
     }
@@ -92,20 +100,60 @@ export async function createCloudWorkspaceForUser(
     // Roll back ONLY a row this create inserted. A pre-existing row — even an
     // archived one, which registerWorkspace resurrects on name conflict — must
     // never be destroyed here: removeWorkspace wipes the agent's whole DO.
-    if (!existed) {
-      try {
-        await userDO.removeWorkspace(caller, entry.name, userId);
-      } catch (rollbackErr) {
-        diagnostics.failure('workspace.create_rollback_failed', toKinuError({
-          doing: 'rolling back a partially created workspace',
-          cause: rollbackErr,
-          otherwise: 'unavailable',
-        }), { workspace: entry.name });
-      }
-    }
+    if (!existed) await rollbackRegistration({ env, userId, userDO, caller, entry, cause: err });
     throw err;
   }
 }
+
+/**
+ * Undo the roster row a failed create inserted.
+ *
+ * TWO PATHS, and picking the wrong one is a cross-user defect rather than an
+ * untidy rollback. `removeWorkspace` is the right undo for a workspace this
+ * account owns: it tears the Durable Object down first and fails closed if that
+ * teardown fails. But when the create failed BECAUSE the object already belongs
+ * to somebody else, that teardown is a call into a victim's workspace which
+ * correctly refuses — and the refusal used to leave this account's roster row in
+ * place, pointing at a workspace it does not own, which every later ownership
+ * check then had to catch. `releaseWorkspaceReservation` exists for exactly this
+ * case: it drops the one row this create inserted, matched on its own
+ * `createdAt`, and never contacts the target object at all.
+ */
+async function rollbackRegistration(input: {
+  env: Env;
+  userId: string;
+  userDO: CloudWorkspaceRegistry;
+  caller: UserCaller;
+  entry: WorkspaceEntry;
+  cause: unknown;
+}): Promise<void> {
+  const { env, userId, userDO, caller, entry } = input;
+  const contested = OWNED_BY_ANOTHER.test(renderThrownChain({ cause: input.cause }));
+  try {
+    if (contested) {
+      await userDO.releaseWorkspaceReservation(caller, entry.name, entry.createdAt);
+    } else {
+      await userDO.removeWorkspace(caller, entry.name, userId);
+    }
+  } catch (rollbackErr) {
+    diagnostics.failure('workspace.create_rollback_failed', toKinuError({
+      doing: 'rolling back a partially created workspace',
+      cause: rollbackErr,
+      otherwise: 'unavailable',
+    }), { workspace: entry.name, contested });
+    return;
+  }
+  // The index row this create published, if it got that far. A tombstone for a
+  // row that was never written is a no-op, which is why this is unconditional
+  // rather than guarded by a flag that could disagree with the truth.
+  await unindexWorkspace(env, { userId, name: entry.name });
+}
+
+/** `OrchestratorAgent.claimOwner`'s refusal when the name is already another
+ *  account's workspace. Matched rather than typed because it crosses a Durable
+ *  Object RPC boundary, where an error class does not survive and the message is
+ *  the contract — the same reading `claimOwnedWorkspace` does to answer 403. */
+const OWNED_BY_ANOTHER = /owned by a different user/i;
 
 interface InitialCloudAgentIdentity {
   name: string;

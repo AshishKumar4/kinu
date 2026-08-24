@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { parseJsonObject, type JsonObject } from '@kinu.run/core';
+import * as v from 'valibot';
 
 const repoRoot = resolve(__dirname, '../../..');
 const tempDirs: string[] = [];
@@ -104,6 +105,52 @@ describe('providers command — Claude subscription', () => {
     const absent = runProviders(['list'], { home: freshHome() });
     expect(absent.stdout).toContain('Claude subscription');
     expect(absent.stdout).toContain('kinu provider connect claude');
+  });
+});
+
+/**
+ * The cross-process provider signal. A resident daemon or chat session caches
+ * its provider listing and invalidates it by SIGNAL rather than by time, and
+ * every `kinu provider` command runs in a different process — so the number in
+ * config.json is the only thing that can carry the news.
+ */
+describe('providers command — the provider revision', () => {
+  function revisionOf(home: string): number {
+    const parsed = v.safeParse(v.number(), parseJsonObject(
+      readFileSync(join(home, 'config.json'), 'utf8'),
+    ).providerRevision);
+    return parsed.success ? parsed.output : 0;
+  }
+
+  test('a disconnect that removes a stored credential advances it', () => {
+    const home = freshHome();
+    writeFileSync(join(home, 'config.json'), JSON.stringify({
+      model: 'openai/gpt-5.5',
+      providers: { openai: { apiKey: 'sk' } },
+    }));
+    // An absent field reads as 0: a machine that has never changed a provider.
+    expect(revisionOf(home)).toBe(0);
+
+    const res = runProviders(['disconnect', 'openai'], { home });
+
+    expect(res.exitCode).toBe(0);
+    expect(revisionOf(home)).toBe(1);
+  });
+
+  test('the subscription bridges advance it too, and each command advances it once', () => {
+    const home = freshHome();
+    // Kinu stores no credential for the claude bridge, but its availability is
+    // exactly what a listing sweep probes — so a resident session has no other
+    // way to learn the probe now succeeds.
+    expect(runProviders(['connect', 'claude'], { claude: 'ready', home }).exitCode).toBe(0);
+    expect(revisionOf(home)).toBe(1);
+
+    expect(runProviders(['disconnect', 'claude'], { home }).exitCode).toBe(0);
+    expect(revisionOf(home)).toBe(2);
+
+    // A read is not a mutation.
+    expect(runProviders(['list'], { home }).exitCode).toBe(0);
+    expect(revisionOf(home)).toBe(2);
   });
 });
 

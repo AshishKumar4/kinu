@@ -55,7 +55,6 @@ export {
   MODEL_OPERATION_PHASES,
   MODEL_OPERATION_OUTCOMES,
   beginModelOperation,
-  newModelOperationId,
   type ModelCallReport,
   type ModelCallSpend,
   type ModelCallSink,

@@ -40,7 +40,6 @@ import * as v from 'valibot';
  *  fake satisfies the whole seam rather than the slice under test. */
 const resolverRest = {
   judgeCandidates: async () => [],
-  fastModelCandidates: () => [],
   getAuth: async () => null,
 };
 
@@ -1053,6 +1052,68 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(session.getShellApprovalMode()).toEqual({ mode: 'allow_all' });
     expect(session.setShellApprovalMode('deny_all')).toEqual({ ok: true, mode: 'deny_all' });
     expect(session.getShellApprovalMode()).toEqual({ mode: 'deny_all' });
+  });
+
+  test('a provider connected in another process reaches the next turn, with no restart and no TTL', async () => {
+    // What a provider sweep would find right now. Another process editing
+    // ~/.kinu/config.json changes this; nothing inside the session can see that
+    // happen, which is the entire reason a revision exists.
+    let connected = ['local/a'];
+    let sweeps = 0;
+    let revision = 1;
+    const resolver: LocalModelResolver = {
+      normalizeSpecSync: (spec) => spec?.trim() || 'local/a',
+      resolveModel: (spec) => fakeModel(spec === 'local/b' ? 'from b' : 'from a'),
+      listProviders: async () => [],
+      listModels: async () => {
+        sweeps += 1;
+        return {
+          models: connected.map((spec) => {
+            const [provider, id] = spec.split('/');
+            return { provider, id, label: id, capabilities: ['streaming' as const] };
+          }),
+          failures: [],
+        };
+      },
+      modelInfo: async () => null,
+      ...resolverRest,
+    };
+    // The authority is read live, so the tier the account moves to arrives on
+    // its own — the listing is the half that used to be frozen for the session.
+    let tierModel = 'local/a';
+    const envelope = (): ProfileCatalogEnvelope => {
+      const catalog = { roles: {}, tiers: { default: { model: tierModel } } };
+      return { authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog };
+    };
+    const { session, events } = setupWithResolver(resolver, {
+      profileAuthority: envelope,
+      providerRevision: () => revision,
+    });
+
+    await session.send('first');
+    expect(sweeps).toBe(1);
+
+    // An unchanged revision sweeps NOTHING. No TTL: waiting is not an event,
+    // and a model the account stopped offering must keep failing.
+    await session.send('second');
+    expect(sweeps).toBe(1);
+
+    // `kinu provider connect` in its own process: a new provider, a tier that
+    // points at it, and the number it published.
+    connected = ['local/a', 'local/b'];
+    tierModel = 'local/b';
+    revision += 1;
+
+    await session.send('third');
+
+    // Swept again, and the turn ran on the newly reachable model. Without the
+    // signal the complete-but-stale listing makes `local/b` a configured model
+    // nothing lists, which resolution refuses outright.
+    expect(sweeps).toBe(2);
+    const answers = events
+      .filter((event) => event.type === 'turn-end')
+      .map((event) => event.type === 'turn-end' ? event.turn.assistantResponse : '');
+    expect(answers).toEqual(['from a', 'from a', 'from b']);
   });
 
   test('the account default tier drives the next turn model', async () => {

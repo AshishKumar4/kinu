@@ -111,15 +111,14 @@ describe('subordinate wiring', () => {
 
   test('manual creation is one click, identity-only, and opens the conversation directly', () => {
     const tabs = source('components/SubordinateTabs.tsx');
-    // No form stands between the click and the agent: the role+mission dialog
-    // is gone (the only Modal left is the dismiss confirm) and create takes
-    // ZERO arguments — identity only, mission internal.
+    const page = source('pages/WorkspacePage.tsx');
+    // No form stands between the click and the agent. WorkspacePage owns the
+    // identity-only action because it stays mounted on both Run and Supervise.
     expect(tabs).not.toContain('SpawnSubordinateDialog');
-    expect(tabs).toContain('onCreate(): Promise<CreatedAgent>');
-    expect(tabs).toContain('navigate(`${mainPath}/agents/${created.name}`)');
+    expect(tabs).toContain('onCreate(): Promise<void>');
+    expect(page).toContain('window.addEventListener("kinu:new-agent", open)');
+    expect(page).toContain('navigate(`/workspace/${agentId}/agents/${created.name}`)');
     expect(tabs).toContain('if (dismissTarget.name === activeName) navigate(mainPath);');
-    // Both doors — the strip's + and the sidebar's row — run the ONE flow.
-    expect(tabs).toContain('"kinu:new-agent"');
     expect(source('components/Sidebar.tsx')).toContain('new CustomEvent("kinu:new-agent")');
     // A blank name renders as the provisional title everywhere, never as ''.
     expect(tabs).toContain('NEW_AGENT_TITLE = "New agent"');
@@ -211,7 +210,8 @@ describe('subordinate wiring', () => {
       'const ownerDriven = !programmaticUserMessage && !this.lastUserTurnIsProgrammatic();');
     expect(subordinate).toContain(
       'if (subordinateRelaysTurnEnd({ reportedThisTurn: this.reportedThisTurn, ownerDriven, assistantText }))');
-    expect(subordinate).toContain('if (!this.lastUserTurnIsProgrammatic()) return deps;');
+    expect(subordinate).toContain('if (!this.lastUserTurnIsProgrammatic()) {');
+    expect(subordinate).toContain('submitPlan: { submit: (edits) => this.submitPlanEdits(edits) }');
     expect(subordinate).toContain('return report ? [createReportCodemodeProvider(() => report)] : [];');
 
     // The parent half — the drop, and that it happens before any file is

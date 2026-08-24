@@ -89,7 +89,7 @@ export interface SwarmProfileSnapshot {
   readonly sources: ProfileProvenance;
 }
 
-export const SwarmProfileSnapshotSchema: v.GenericSchema<SwarmProfileSnapshot> = v.strictObject({
+const SwarmProfileSnapshotSchema: v.GenericSchema<SwarmProfileSnapshot> = v.strictObject({
   profile: ResolvedTurnProfileSchema,
   sources: ProvenanceSchema,
 });

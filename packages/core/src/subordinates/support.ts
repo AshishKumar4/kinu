@@ -261,64 +261,41 @@ export class SubordinateIdentityStore {
   }
 }
 
-interface RosterRow {
-  name: string;
-  display_name: string;
-  role: string;
-  created_by: 'orchestrator' | 'user';
-  status: SubordinateStatus;
-  current_task: string | null;
-  created_at: number;
-  dismissed_at: number | null;
-}
-
 const ROSTER_COLUMNS =
-  'name, display_name, role, created_by, status, current_task, created_at, dismissed_at';
+  'name, display_name, name_origin, role, created_by, status, current_task, created_at, dismissed_at';
+const ROSTER_PROJECTION =
+  'name, display_name AS displayName, name_origin AS nameOrigin, role, '
+  + 'created_by AS createdBy, status, current_task AS currentTask, '
+  + 'created_at AS createdAt, dismissed_at AS dismissedAt';
 
-const RosterRowSchema: v.GenericSchema<RosterRow> = v.object({
+const RosterEntrySchema: v.GenericSchema<SubordinateRosterEntry> = v.object({
   name: v.string(),
-  display_name: v.string(),
+  displayName: v.string(),
+  nameOrigin: v.picklist(['user', 'auto']),
   role: v.string(),
-  created_by: v.picklist(['orchestrator', 'user']),
+  createdBy: v.picklist(['orchestrator', 'user']),
   status: v.picklist(['idle', 'working', 'awaiting_input', 'dismissed']),
-  current_task: v.nullable(v.string()),
-  created_at: v.number(),
-  dismissed_at: v.nullable(v.number()),
+  currentTask: v.nullable(v.string()),
+  createdAt: v.number(),
+  dismissedAt: v.nullable(v.number()),
 });
 
-function parseRosterRow<T>(row: T): RosterRow | null {
-  const parsed = v.safeParse(RosterRowSchema, row);
-  return parsed.success ? parsed.output : null;
-}
-
-function mapRosterRow(row: RosterRow): SubordinateRosterEntry {
-  return {
-    name: row.name,
-    displayName: row.display_name,
-    role: row.role,
-    createdBy: row.created_by,
-    status: row.status,
-    currentTask: row.current_task,
-    createdAt: row.created_at,
-    dismissedAt: row.dismissed_at,
-  };
-}
-
 function parseStoredRosterRow<T>(row: T): SubordinateRosterEntry {
-  const parsed = parseRosterRow(row);
-  if (!parsed) throw new Error('Stored subordinate roster row is malformed.');
-  return mapRosterRow(parsed);
+  const parsed = v.safeParse(RosterEntrySchema, row);
+  if (!parsed.success) throw new Error('Stored subordinate roster row is malformed.');
+  return parsed.output;
 }
 
 /** Parent-DO product roster. All status policy lives here so tools, report
  * ingress, snapshots, and the future UI cannot drift. */
 export class SubordinateRosterStore {
-  constructor(private readonly sql: SqlExec) {}
+  constructor(private readonly sql: SqlExec, private readonly tagged?: SqlExecutor) {}
 
   ensureSchema(): void {
     this.sql.exec(`CREATE TABLE IF NOT EXISTS workspace_subordinates (
       name          TEXT PRIMARY KEY,
       display_name  TEXT NOT NULL,
+      name_origin   TEXT NOT NULL DEFAULT 'auto' CHECK (name_origin IN ('user','auto')),
       role          TEXT NOT NULL,
       created_by    TEXT NOT NULL CHECK (created_by IN ('orchestrator','user')),
       status        TEXT NOT NULL CHECK (status IN ('idle','working','awaiting_input','dismissed')),
@@ -326,13 +303,19 @@ export class SubordinateRosterStore {
       created_at    INTEGER NOT NULL,
       dismissed_at INTEGER
     )`);
+    if (this.tagged) {
+      reconcileColumns(this.tagged, (ddl) => { this.sql.exec(ddl); }, 'workspace_subordinates', {
+        name_origin: "TEXT NOT NULL DEFAULT 'auto' CHECK (name_origin IN ('user','auto'))",
+      });
+    }
   }
 
   create(entry: SubordinateRosterEntry): void {
     this.sql.exec(
-      `INSERT INTO workspace_subordinates (${ROSTER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO workspace_subordinates (${ROSTER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       entry.name,
       entry.displayName,
+      entry.nameOrigin ?? 'auto',
       entry.role,
       entry.createdBy,
       entry.status,
@@ -345,9 +328,10 @@ export class SubordinateRosterStore {
   /** Exact upsert used only for compensating a failed facet operation. */
   restore(entry: SubordinateRosterEntry): void {
     this.sql.exec(
-      `INSERT INTO workspace_subordinates (${ROSTER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO workspace_subordinates (${ROSTER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(name) DO UPDATE SET
          display_name = excluded.display_name,
+         name_origin = excluded.name_origin,
          role = excluded.role,
          created_by = excluded.created_by,
          status = excluded.status,
@@ -356,6 +340,7 @@ export class SubordinateRosterStore {
          dismissed_at = excluded.dismissed_at`,
       entry.name,
       entry.displayName,
+      entry.nameOrigin ?? 'auto',
       entry.role,
       entry.createdBy,
       entry.status,
@@ -371,7 +356,7 @@ export class SubordinateRosterStore {
 
   get(name: string): SubordinateRosterEntry | null {
     const rows = this.sql.exec(
-      `SELECT ${ROSTER_COLUMNS} FROM workspace_subordinates WHERE name = ?`,
+      `SELECT ${ROSTER_PROJECTION} FROM workspace_subordinates WHERE name = ?`,
       name,
     ).toArray();
     return rows.length === 0 ? null : parseStoredRosterRow(rows[0]);
@@ -391,29 +376,46 @@ export class SubordinateRosterStore {
 
   list(): SubordinateRosterEntry[] {
     return this.sql.exec(
-      `SELECT ${ROSTER_COLUMNS} FROM workspace_subordinates
+      `SELECT ${ROSTER_PROJECTION} FROM workspace_subordinates
        WHERE status != 'dismissed' ORDER BY created_at, name`,
     ).toArray().map(parseStoredRosterRow);
   }
 
   listAll(): SubordinateRosterEntry[] {
     return this.sql.exec(
-      `SELECT ${ROSTER_COLUMNS} FROM workspace_subordinates ORDER BY created_at, name`,
+      `SELECT ${ROSTER_PROJECTION} FROM workspace_subordinates ORDER BY created_at, name`,
     ).toArray().map(parseStoredRosterRow);
   }
 
-  /** Retitle one roster row. The parent's row is what every roster reader
-   *  shows, so a title the child settled on — an owner's rename, or the
-   *  first-interaction auto-title — is not visible until it lands here. The
-   *  child's own `agent_config` remains the authority on WHOSE title it is;
-   *  this table carries only the text. */
-  setDisplayName(name: string, displayName: string): void {
+  /** Retitle one roster row and record who owns the new title. */
+  setDisplayName(
+    name: string,
+    displayName: string,
+    nameOrigin: 'user' | 'auto',
+  ): void {
     this.requireActive(name);
     this.sql.exec(
-      `UPDATE workspace_subordinates SET display_name = ? WHERE name = ?`,
+      `UPDATE workspace_subordinates SET display_name = ?, name_origin = ? WHERE name = ?`,
+      displayName,
+      nameOrigin,
+      name,
+    );
+  }
+
+  /** Claim an automatic title only while the row remains auto-owned. The read
+   * and write are synchronous in the parent actor, so a concurrent owner
+   * rename is wholly before or after this operation and wins in either order. */
+  setProvisionalDisplayName(name: string, displayName: string): boolean {
+    const entry = this.requireActive(name);
+    if (entry.nameOrigin !== 'auto') return false;
+    this.sql.exec(
+      `UPDATE workspace_subordinates
+       SET display_name = ?, name_origin = 'auto'
+       WHERE name = ?`,
       displayName,
       name,
     );
+    return true;
   }
 
   assign(name: string, task: string): void {
@@ -744,7 +746,7 @@ export interface SubordinatesChangedEvent {
  *  the same default `AgentConfigStore.getActiveRoleId` answers with, so an
  *  agent created with nothing said about it runs as the workspace's own kind
  *  of agent rather than a specialist nobody asked for. */
-export const DEFAULT_SUBORDINATE_ROLE_ID = 'general';
+const DEFAULT_SUBORDINATE_ROLE_ID = 'general';
 
 function displayNameForRole(role: string): string {
   return role.trim().split(/\s+/).slice(0, 4)
@@ -907,6 +909,7 @@ export function createTeamToolDeps(deps: {
         name,
         displayName,
         role,
+        nameOrigin,
         createdBy: ownerCreated ? 'user' : 'orchestrator',
         status: ownerCreated ? 'idle' : 'working',
         currentTask: ownerCreated ? null : mission,
@@ -954,7 +957,7 @@ export function createTeamToolDeps(deps: {
       // the same order every other operation here uses, and the reason is the
       // same: the roster write is local and synchronous, so it is the half
       // that can be undone reliably.
-      deps.roster.setDisplayName(input.name, displayName);
+      deps.roster.setDisplayName(input.name, displayName, 'user');
       try {
         await deps.runtime.rename(input.name, displayName, 'user');
       } catch (error) {
@@ -969,9 +972,9 @@ export function createTeamToolDeps(deps: {
 
     recordTitle: async (input) => {
       const displayName = requiredText(input.displayName, 'displayName');
-      deps.roster.setDisplayName(input.name, displayName);
-      changed();
-      return { ok: true, name: input.name, displayName };
+      const applied = deps.roster.setProvisionalDisplayName(input.name, displayName);
+      if (applied) changed();
+      return { ok: true, name: input.name, displayName, applied };
     },
 
     spawn: async (input) => {

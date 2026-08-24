@@ -1,6 +1,6 @@
 import { checkClaudeAvailability, checkOpenCodeAvailability } from '@kinu.run/cli-backend';
 import { deleteCloudCredential, listCloudCredentials, type CloudCredentialSummary } from '../cloud-api';
-import { loadConfigFile, resolveCloudSession, updateConfigFile, type KinuConfig } from '../config';
+import { bumpProviderRevision, loadConfigFile, resolveCloudSession, updateConfigFile, type KinuConfig } from '../config';
 import { ACCENT, DIM, OK, WARN } from '../display';
 import { authCommand } from './auth';
 import { setupCommand } from './setup';
@@ -106,6 +106,11 @@ async function connectClaude(): Promise<void> {
   console.log('');
   if (binary && loggedIn) {
     console.log(`${OK('✓')} ${CLAUDE_READY}`);
+    // Nothing was written here — the `claude` binary owns its own login — but
+    // this command is how the user says they have just connected it, and its
+    // availability is what a listing sweep probes. A resident session has no
+    // other way to learn that the probe now succeeds.
+    bumpProviderRevision();
   } else if (binary) {
     console.log(`${WARN('!')} ${CLAUDE_LOGIN_HINT}`);
   } else {
@@ -236,6 +241,10 @@ async function disconnectProvider(provider: ProviderName): Promise<void> {
     console.log(`${WARN('!')} Kinu stores no ${tool} credential — it drives the ${tool} login.`);
     console.log(DIM(`  Sign out of ${tool} itself: ${command}`));
     clearDefaultModelFor(provider);
+    // Kinu holds no credential for these two, but the user ran this command
+    // because they are signing out of that tool — and its login is exactly what
+    // a listing sweep re-probes, so a resident session must sweep again.
+    bumpProviderRevision();
     return;
   }
 
@@ -265,6 +274,10 @@ async function disconnectProvider(provider: ProviderName): Promise<void> {
   if (!removed) console.log(`${WARN('!')} ${provider} was not connected — nothing to remove.`);
 
   clearDefaultModelFor(provider);
+  // Published whether or not a row was found: the command's whole job is to
+  // change what a model resolution can reach, and a resident session that keeps
+  // offering a revoked provider is the defect this signal closes.
+  bumpProviderRevision();
 
   const live = credential.envVars.filter((name) => process.env[name]);
   if (live.length > 0) {
@@ -293,6 +306,7 @@ async function disconnectAccountProvider(name: string): Promise<void> {
   await deleteCloudCredential(cloud.origin, cloud.token, credKey);
   console.log(`${OK('✓')} Removed the ${ACCENT(name)} credential from your Kinu account.`);
   clearDefaultModelPrefixes([`${name}/`]);
+  bumpProviderRevision();
 }
 
 /** Drop the default model spec when it names the provider being removed. */

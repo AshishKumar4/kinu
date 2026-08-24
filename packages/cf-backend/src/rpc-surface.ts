@@ -412,9 +412,12 @@ export const ORCHESTRATOR_RPC_SURFACE: readonly string[] = [
  * relationship.
  */
 const SUBORDINATE_METHODS = [
+  'decidePlanReview',
   'enqueueSubordinateTask',
+  'getActivePlanReview',
   'getSubordinateStatus',
   'setSubordinateIdentity',
+  'savePlanReviewAnnotations',
   'setSubordinateNaming',
 ] as const satisfies readonly (keyof SubordinateAgent)[];
 

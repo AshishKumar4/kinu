@@ -118,6 +118,18 @@ async function addedAgent(seed: {
   return { parent, child, name, suggested };
 }
 
+interface Deferred {
+  readonly promise: Promise<void>;
+  readonly resolve: () => void;
+}
+
+function deferred(): Deferred {
+  let resolve: (() => void) | undefined;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  if (!resolve) throw new Error('deferred resolver was not installed');
+  return { promise, resolve };
+}
+
 describe('an agent the owner added without naming it', () => {
   test('is born with no title, the general role and the workspace mission', async () => {
     const { child } = await addedAgent({
@@ -190,6 +202,60 @@ describe('an agent the owner added without naming it', () => {
     expect(child.agent.observeNaming()).toEqual({ displayName: 'Jarvis', nameOrigin: 'user' });
     expect(parent.agent.harnessRoster().requireActive(name).displayName).toBe('Jarvis');
     expect(suggested).toEqual([TINY_MODEL]);
+  });
+
+  test('a rename that lands while the child is carrying its auto title to the parent wins on both sides', async () => {
+    const { parent, child, name } = await addedAgent({
+      displayName: '', nameOrigin: 'auto', role: 'general', roleId: 'general',
+      title: 'Callback Audit',
+    });
+    const reachedParent = deferred();
+    const releaseParent = deferred();
+    const recordTitle = parent.agent.recordSubordinateTitle.bind(parent.agent);
+    Object.defineProperty(parent.agent, 'recordSubordinateTitle', {
+      configurable: true,
+      value: async (agentName: string, displayName: string) => {
+        reachedParent.resolve();
+        await releaseParent.promise;
+        return recordTitle(agentName, displayName);
+      },
+    });
+
+    const titling = child.agent.titleFromFirstMessage('Audit the OAuth callback flow');
+    await reachedParent.promise;
+    await parent.agent.renameSubordinateAgent(name, 'Jarvis');
+    releaseParent.resolve();
+    await titling;
+
+    expect(child.agent.observeNaming()).toEqual({ displayName: 'Jarvis', nameOrigin: 'user' });
+    expect(parent.agent.harnessRoster().requireActive(name).displayName).toBe('Jarvis');
+  });
+
+  test('a rename waiting on the child also blocks an auto title from reclaiming the parent row', async () => {
+    const { parent, child, name } = await addedAgent({
+      displayName: '', nameOrigin: 'auto', role: 'general', roleId: 'general',
+      title: 'Callback Audit',
+    });
+    const reachedChild = deferred();
+    const releaseChild = deferred();
+    const setNaming = child.agent.setSubordinateNaming.bind(child.agent);
+    Object.defineProperty(child.agent, 'setSubordinateNaming', {
+      configurable: true,
+      value: async (displayName: string, origin: 'user' | 'auto') => {
+        reachedChild.resolve();
+        await releaseChild.promise;
+        return setNaming(displayName, origin);
+      },
+    });
+
+    const renaming = parent.agent.renameSubordinateAgent(name, 'Jarvis');
+    await reachedChild.promise;
+    await child.agent.titleFromFirstMessage('Audit the OAuth callback flow');
+    releaseChild.resolve();
+    await renaming;
+
+    expect(child.agent.observeNaming()).toEqual({ displayName: 'Jarvis', nameOrigin: 'user' });
+    expect(parent.agent.harnessRoster().requireActive(name).displayName).toBe('Jarvis');
   });
 });
 

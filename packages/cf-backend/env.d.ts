@@ -85,6 +85,10 @@ declare global {
      *  metrics view reports itself unconfigured; nothing else degrades. */
     CLOUDFLARE_ACCOUNT_ID?: string;
     ANALYTICS_SQL_API_TOKEN?: string;
+    /** What this deployment appends to a dataset NAME when the SQL API is asked
+     *  for one: '' in production, `_staging` under `env.staging`. Read path
+     *  only — writes go through the three bindings above. */
+    ANALYTICS_DATASET_SUFFIX?: string;
     CLOUDFLARE_R2_ACCOUNT_ID?: string;
     AI_GATEWAY_URL: string;
     /** Zone isolated previews are served under, one capability hostname per

@@ -4,7 +4,7 @@ import { createRoot } from '@opentui/react';
 import { describe, expect, test } from 'bun:test';
 
 import { HubOverlay, type TuiHubData, type TuiHubView } from '../src/tui/hubs';
-import { DEFAULT_TUI_PREFERENCES, createMemoryTuiPreferenceStore } from '../src/tui/preferences';
+import { createMemoryTuiPreferenceStore } from './helpers/tui-preferences';
 import { TuiProductProvider } from '../src/tui/tui-shell';
 
 describe('role, tier, and agent hubs', () => {
@@ -78,10 +78,10 @@ describe('role, tier, and agent hubs', () => {
       maxFps: Number.POSITIVE_INFINITY,
     });
     const root = createRoot(renderer);
-    const store = createMemoryTuiPreferenceStore(DEFAULT_TUI_PREFERENCES);
+    const store = createMemoryTuiPreferenceStore();
     try {
       for (const [view, expected] of [
-        ['agents', 'Reviewer · subordinate · auditor/slow'],
+        ['agents', 'Reviewer · agent · auditor/slow'],
         ['roles', 'Review claims and run checks.'],
         ['tiers', 'fast → default'],
       ] as const satisfies readonly (readonly [TuiHubView, string])[]) {
@@ -94,12 +94,13 @@ describe('role, tier, and agent hubs', () => {
         );
         await waitForFrame(renderOnce, captureCharFrame, expected);
         if (view !== 'agents') continue;
+        expect(captureCharFrame().toLowerCase()).not.toContain('subordinate');
         // Entries group under their workspace heading; subordinates indent
         // under the peer they belong to.
         const lines = captureCharFrame().split('\n').map((line) => line.replaceAll('│', ' ').trim());
         const checkout = lines.findIndex((line) => line === 'checkout');
         const main = lines.findIndex((line) => line.includes('Checkout · main'));
-        const reviewer = lines.findIndex((line) => line.startsWith('└ ') && line.includes('Reviewer · subordinate'));
+        const reviewer = lines.findIndex((line) => line.startsWith('└ ') && line.includes('Reviewer · agent'));
         const jarvisHeading = lines.findIndex((line) => line === 'jarvis');
         expect(checkout).toBeGreaterThanOrEqual(0);
         expect(main).toBeGreaterThan(checkout);

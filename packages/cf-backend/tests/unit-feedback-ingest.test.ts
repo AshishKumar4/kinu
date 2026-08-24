@@ -1,5 +1,6 @@
-// Behaviour of POST /api/feedback: what it refuses, what it stores, and what it
-// cleans up when the store and the row disagree.
+// Behaviour of POST /api/feedback: how much of a body it will read, what it
+// refuses, what it stores, and what it cleans up when the store and the row
+// disagree.
 //
 // The policy is driven through its injected effects rather than through a
 // Worker, so every arm — including "R2 took the bytes and the row write then
@@ -141,6 +142,66 @@ function submit(fields: {
 
 function pngPart(bytes: Uint8Array<ArrayBuffer>): Blob {
   return new Blob([bytes], { type: 'image/png' });
+}
+
+/**
+ * One multipart body as BYTES, padded to exactly `total`.
+ *
+ * Assembled by hand rather than through `FormData`, because these tests are
+ * about the SIZE of a body and a body assembled for you is one whose length you
+ * can only measure afterwards. Every byte here is ASCII, so the encoded length
+ * is the string length and `total` means what it says.
+ */
+function rawMultipart(total: number) {
+  const boundary = '----kinuFeedbackBound';
+  const head = `--${boundary}\r\nContent-Disposition: form-data; name="${FEEDBACK_FIELDS.note}"\r\n\r\n`;
+  const tail = `\r\n--${boundary}--\r\n`;
+  const padding = total - head.length - tail.length;
+  if (padding < 1) throw new Error(`${String(total)} bytes cannot hold this body's own framing`);
+  return {
+    contentType: `multipart/form-data; boundary=${boundary}`,
+    bytes: new TextEncoder().encode(`${head}${'n'.repeat(padding)}${tail}`),
+  };
+}
+
+/** What the producer of a chunked body saw. `reachedEnd` is the load-bearing
+ *  one: a bound that answers only after EOF has measured an upload rather than
+ *  refused it. */
+interface BodySource {
+  pulls: number;
+  delivered: number;
+  reachedEnd: boolean;
+  cancelled: boolean;
+}
+
+/**
+ * A body that ARRIVES in `chunk`-sized pieces, with the producer's own pulls and
+ * cancellation observable. A request built over this declares no length, which
+ * is the shape a chunked or HTTP/2 upload actually has.
+ *
+ * `highWaterMark: 0` so `pulls` counts what the CONSUMER asked for. The default
+ * strategy pre-fills one chunk the moment the stream is constructed, which reads
+ * as the handler having touched a body it never opened.
+ */
+function chunked(bytes: Uint8Array, chunk: number) {
+  const source: BodySource = { pulls: 0, delivered: 0, reachedEnd: false, cancelled: false };
+  let at = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      source.pulls += 1;
+      if (at >= bytes.length) {
+        source.reachedEnd = true;
+        controller.close();
+        return;
+      }
+      const slice = bytes.slice(at, Math.min(at + chunk, bytes.length));
+      at += slice.length;
+      source.delivered += slice.length;
+      controller.enqueue(slice);
+    },
+    cancel() { source.cancelled = true; },
+  }, { highWaterMark: 0 });
+  return { body, source };
 }
 
 async function replyOf(response: Response): Promise<v.InferOutput<typeof ReplySchema>> {
@@ -293,6 +354,95 @@ describe('what the endpoint refuses', () => {
   });
 });
 
+describe('how much of a body it will read', () => {
+  test('a body at exactly the limit is accepted, and no declared length admitted it', async () => {
+    const rec = recorder();
+    const { contentType, bytes } = rawMultipart(FEEDBACK_MAX_REQUEST_BYTES);
+    const request = new Request(URL_, { method: 'POST', headers: { 'content-type': contentType }, body: bytes });
+    // The boundary only means something if the header path is not what let it
+    // through: a byte body carries no `content-length` for a handler to read.
+    expect(request.headers.get('content-length')).toBeNull();
+
+    const response = await routeFeedback(request, ME, rec.deps);
+    expect(response?.status).toBe(201);
+    expect(rec.rows).toHaveLength(1);
+    expect(rec.marks.at(-1)).toMatchObject({ outcome: 'accepted', rejectReason: '' });
+  });
+
+  test('one byte past the limit, with nothing declaring a length, is refused', async () => {
+    const rec = recorder();
+    const { contentType, bytes } = rawMultipart(FEEDBACK_MAX_REQUEST_BYTES + 1);
+    const response = await routeFeedback(
+      new Request(URL_, { method: 'POST', headers: { 'content-type': contentType }, body: bytes }), ME, rec.deps);
+    expect(response?.status).toBe(413);
+    expect(rec.rows).toEqual([]);
+    expect(rec.marks).toHaveLength(1);
+    expect(rec.marks[0]?.rejectReason).toBe('too_large');
+  });
+
+  test('a chunked oversize body is abandoned mid-upload: cancelled, never read to EOF, nothing written', async () => {
+    const rec = recorder();
+    const chunk = 64 * 1024;
+    const { contentType, bytes } = rawMultipart(FEEDBACK_MAX_REQUEST_BYTES + chunk * 8);
+    const { body, source } = chunked(bytes, chunk);
+
+    const response = await routeFeedback(
+      new Request(URL_, { method: 'POST', headers: { 'content-type': contentType }, body }), ME, rec.deps);
+
+    expect(response?.status).toBe(413);
+    // The whole point. The upload was STOPPED, not measured: EOF never arrived,
+    // the producer was cancelled, and the bytes it never sent are the difference
+    // between refusing an 8 MiB upload and buffering one.
+    expect(source.cancelled).toBe(true);
+    expect(source.reachedEnd).toBe(false);
+    expect(source.delivered).toBeLessThan(bytes.length);
+    // At most the chunk carrying the first excess byte, and no more.
+    expect(source.delivered).toBeLessThanOrEqual(FEEDBACK_MAX_REQUEST_BYTES + chunk);
+    // And nothing downstream ran: no object, no row, exactly one marker.
+    expect(rec.objects.size).toBe(0);
+    expect(rec.rows).toEqual([]);
+    expect(rec.marks).toHaveLength(1);
+    expect(rec.marks[0]?.rejectReason).toBe('too_large');
+  });
+
+  test('a chunked body at the limit still succeeds, so the bound counts bytes and not chunks', async () => {
+    const rec = recorder();
+    const { contentType, bytes } = rawMultipart(FEEDBACK_MAX_REQUEST_BYTES);
+    const { body, source } = chunked(bytes, 64 * 1024);
+    const response = await routeFeedback(
+      new Request(URL_, { method: 'POST', headers: { 'content-type': contentType }, body }), ME, rec.deps);
+    expect(response?.status).toBe(201);
+    expect(source.reachedEnd).toBe(true);
+    expect(source.cancelled).toBe(false);
+  });
+
+  test('a declared length still short-circuits, so the header stays an optimisation', async () => {
+    const rec = recorder();
+    const { contentType, bytes } = rawMultipart(4096);
+    const { body, source } = chunked(bytes, 1024);
+    const response = await routeFeedback(new Request(URL_, {
+      method: 'POST',
+      headers: { 'content-type': contentType, 'content-length': String(FEEDBACK_MAX_REQUEST_BYTES + 1) },
+      body,
+    }), ME, rec.deps);
+    expect(response?.status).toBe(413);
+    // Not one pull: a refusal that reads nothing is why the header is checked at all.
+    expect(source.pulls).toBe(0);
+  });
+
+  test('a body that is not the multipart it declared is a 400, never a throw', async () => {
+    const rec = recorder();
+    const response = await routeFeedback(new Request(URL_, {
+      method: 'POST',
+      headers: { 'content-type': 'multipart/form-data; boundary=nothing-like-this' },
+      body: new TextEncoder().encode('plain bytes, no parts, no final boundary'),
+    }), ME, rec.deps);
+    expect(response?.status).toBe(400);
+    expect(rec.marks).toHaveLength(1);
+    expect(rec.marks[0]?.rejectReason).toBe('malformed');
+  });
+});
+
 describe('what the endpoint stores', () => {
   test('a note-only report is a first-class row with every screenshot column null', async () => {
     const rec = recorder();
@@ -406,12 +556,35 @@ describe('when the row write fails, the object does not survive it', () => {
     // told the report was not saved, which is the fact that matters to them.
     expect(rec.marks.at(-1)?.rejectReason).toBe('row_write_failed');
   });
+});
 
-  test('a store that refuses the write never produces a row pointing at nothing', async () => {
+describe('when the object store refuses the write', () => {
+  test('the answer is a 503 naming the outage, and no row is written', async () => {
+    const recording = createRecordingLogger();
+    setDiagnosticsSink(recording);
     const rec = recorder({ putThrows: true });
-    await expect(routeFeedback(
-      submit({ note: 'x', screenshot: pngPart(realPng()) }), ME, rec.deps)).rejects.toThrow('R2 refused');
+    const response = await routeFeedback(
+      submit({ note: 'x', screenshot: pngPart(realPng()) }), ME, rec.deps);
+
+    // NOT a throw. Uncaught, this was a platform 500 with no marker and no row —
+    // a lost report invisible to the rate that exists to count lost reports.
+    expect(response?.status).toBe(503);
+    expect((await replyOf(response!)).error).toContain('note');
     expect(rec.rows).toEqual([]);
+    expect(rec.objects.size).toBe(0);
+    // Nothing to orphan: the object was never written, so nothing is deleted.
+    expect(rec.deleted).toEqual([]);
+    expect(rec.marks).toHaveLength(1);
+    expect(rec.marks[0]).toMatchObject({
+      outcome: 'rejected',
+      rejectReason: 'storage_unavailable',
+      hasScreenshot: true,
+    });
+    expect(rec.marks[0]?.screenshotBytes).toBeGreaterThan(0);
+    // The key is recorded, because a failed write is the one thing an operator
+    // needs to be able to look for.
+    const failed = recording.emitted.find((line) => line.event === 'feedback.screenshot_store_failed');
+    expect(failed?.fields).toMatchObject({ objectKey: 'feedback/user-7/id-1.png' });
   });
 });
 
@@ -470,5 +643,48 @@ describe('the analytics marker', () => {
       await routeFeedback(request, ME, rec.deps);
       expect(rec.marks).toHaveLength(1);
     }
+  });
+
+  test('a screenshot-refusal marker says a screenshot was carried, and how big the part was', async () => {
+    // Every arm that refuses a submission WHICH HAD a screenshot. All of them
+    // used to report `hasScreenshot: false` and zero bytes, because the flag was
+    // derived from a byte count set only on the accept path — so the screenshot
+    // dimensions under-counted exactly the population they describe.
+    const png = realPng();
+    const forged = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, ...Array.from({ length: 128 }, () => 0x41)]);
+    const arms: { request: Request; reason: FeedbackMarker['rejectReason']; bytes: number }[] = [
+      // Named as something else.
+      { request: submit({ note: 'x', screenshot: pngPart(png), filename: 'shot.jpg' }), reason: 'bad_content_type', bytes: png.length },
+      // Declared PNG, bytes are not.
+      { request: submit({ note: 'x', screenshot: pngPart(forged) }), reason: 'malformed', bytes: forged.length },
+    ];
+    for (const arm of arms) {
+      const rec = recorder();
+      await routeFeedback(arm.request, ME, rec.deps);
+      expect(rec.marks).toHaveLength(1);
+      expect(rec.marks[0]).toMatchObject({
+        rejectReason: arm.reason, hasScreenshot: true, screenshotBytes: arm.bytes,
+      });
+    }
+    // And the arm that is the deployment's fault rather than the reporter's.
+    const noBucket = recorder({ bucket: false });
+    await routeFeedback(submit({ note: 'x', screenshot: pngPart(png) }), ME, noBucket.deps);
+    expect(noBucket.marks[0]).toMatchObject({
+      rejectReason: 'storage_unavailable', hasScreenshot: true, screenshotBytes: png.length,
+    });
+  });
+
+  test('a note-only report is not credited with a screenshot', async () => {
+    const rec = recorder();
+    await routeFeedback(submit({ note: 'no image here' }), ME, rec.deps);
+    expect(rec.marks[0]).toMatchObject({ outcome: 'accepted', hasScreenshot: false, screenshotBytes: 0 });
+  });
+
+  test('a string under the screenshot field name is not a screenshot', async () => {
+    const rec = recorder();
+    await routeFeedback(submit({ note: 'x', screenshotText: 'not a file' }), ME, rec.deps);
+    expect(rec.marks[0]).toMatchObject({
+      rejectReason: 'bad_content_type', hasScreenshot: false, screenshotBytes: 0,
+    });
   });
 });

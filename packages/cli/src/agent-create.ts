@@ -7,7 +7,6 @@ import {
   changeActiveRole, createAgentConfigStore,
   fallbackWorkspaceIdentity,
   initWorkspaceSchema,
-  isPlaceholderMission,
   parseWorkspaceTitle,
   readMission,
   workspaceSlug,
@@ -27,6 +26,7 @@ import {
   ensureAgentHome,
   loadConfigFile,
   localWorkspaceMembers,
+  readWorkspaceIdentityId,
   requireAuthConfig,
   requireLLMConfig,
   resolveAgentRef,
@@ -211,14 +211,12 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   const llmConfig = requireLLMConfig(input);
   mkdirSync(agentDir(name), { recursive: true });
   const db = new Database(dbPath);
-  let identityId: string | undefined;
   try {
     db.exec('PRAGMA journal_mode = WAL');
     // A blank display name is the provisional state of an agent added without
     // one; the slug is what it is genuinely called until a title lands, so it
     // is what the workspace identity and SOUL open with.
     const rt = await createWorkspace(db, { name: displayName || name, purpose, llm: llmConfig });
-    identityId = rt.storage.sql<{ id: string }>`SELECT id FROM workspace_identity LIMIT 1`[0]?.id;
     // Every table a workspace has, on any backend — one list, in core.
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const agentConfig = createAgentConfigStore(rt.storage.sql);
@@ -251,7 +249,10 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
     alias: input.alias || undefined,
     cwd,
     workspaceId,
-    identityId,
+    // The database's own durable id, read back through the one helper that
+    // knows both the current table and the pre-rename one — so a ref records
+    // the same identity whether creation wrote it or adoption found it.
+    identityId: readWorkspaceIdentityId(dbPath) ?? undefined,
   });
   const aliasPath = input.alias ? writeAliasShim(name, input.alias) : undefined;
   ensureLocalDaemonRunning();
@@ -306,8 +307,8 @@ export async function createLocalPeerAgent(
 }
 
 /** The mission an additional agent in this workspace inherits: the first peer
- *  that has one. Peers share a directory and a purpose, so which one answers
- *  does not matter — only that the text is a real mission somebody wrote. */
+ * that has one. Placeholder missions are still the workspace's stored brief;
+ * refusing them makes an existing missionless workspace look empty. */
 function inheritedPeerMission(peers: readonly { name: string }[]): string | null {
   for (const peer of peers) {
     const dbPath = agentDbPath(peer.name);
@@ -315,7 +316,7 @@ function inheritedPeerMission(peers: readonly { name: string }[]): string | null
     const db = new Database(dbPath, { readonly: true });
     try {
       const mission = readMission(makeSql(db));
-      if (mission && !isPlaceholderMission(mission)) return mission;
+      if (mission) return mission;
     } finally {
       db.close();
     }

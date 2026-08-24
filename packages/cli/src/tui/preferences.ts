@@ -37,7 +37,7 @@ export interface TuiPreferenceStore {
   write(preferences: TuiPreferences): void;
 }
 
-export const DEFAULT_TUI_PREFERENCES: TuiPreferences = Object.freeze({
+const DEFAULT_TUI_PREFERENCES: TuiPreferences = Object.freeze({
   theme: Object.freeze({ mode: 'system', darkThemeId: 'kinu-dark', lightThemeId: 'kinu-light' }),
   keymapPreset: 'pi-omp',
   keyOverrides: Object.freeze({}),
@@ -61,15 +61,6 @@ export function createFileTuiPreferenceStore(path = join(AGENT_HOME, 'tui.json')
   };
 }
 
-export function createMemoryTuiPreferenceStore(initial: TuiPreferences = DEFAULT_TUI_PREFERENCES): TuiPreferenceStore {
-  let current = parseTuiPreferences(JSON.stringify(initial), 'memory preferences');
-  return {
-    read: () => current,
-    write(preferences) {
-      current = parseTuiPreferences(JSON.stringify(preferences), 'memory preferences');
-    },
-  };
-}
 
 const ThemeSelectionSchema = v.variant('mode', [
   v.strictObject({
@@ -95,7 +86,7 @@ const TuiPreferencesSchema = v.strictObject({
   skippedOnboardingSteps: v.array(v.picklist(ONBOARDING_STEP_IDS)),
 });
 
-export function parseTuiPreferences(json: string, source: string): TuiPreferences {
+function parseTuiPreferences(json: string, source: string): TuiPreferences {
   let raw: unknown;
   try {
     raw = JSON.parse(json);

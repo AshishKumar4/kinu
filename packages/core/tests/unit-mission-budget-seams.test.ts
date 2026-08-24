@@ -116,7 +116,7 @@ function searchableDeps(opts: {
           createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null,
         },
       }),
-      recordTitle: async (input) => ({ ok: true, name: input.name, displayName: input.displayName }),
+      recordTitle: async (input) => ({ ok: true, name: input.name, displayName: input.displayName, applied: true }),
       spawn: async (input) => { spawns.push(`hire:${input.role}`); return { name: 'helper', displayName: 'Helper' }; },
       assign: async (input) => { spawns.push(`ask:${input.name}`); return { ok: true, name: input.name, ...handoff() }; },
       status: async () => ({}),

@@ -849,8 +849,8 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts',
     tier: 'ci',
-    // Measured 2026-08-24 after control-plane and feedback browser flows joined: 113.68s.
-    seconds: 120,
+    // Measured 2026-08-24 after plan review, control and redaction checks: 150.98s.
+    seconds: 160,
     catches: 'the four UI gates\' own decision logic, including the one that would have '
       + 'caught `--radius` being undefined at `:root` while 191 `rounded-*` sites '
       + 'computed 0px. The original two self-tests ran in NO tier until this line: the gates were '
@@ -882,9 +882,8 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun test scripts/public-pages.test.ts',
     tier: 'ci',
-    // Re-measured 2026-08-24 after the suite grew the bug-fix demo drive and
-    // the per-element clipping sweep across six widths.
-    seconds: 51,
+    // Measured 2026-08-24 after the bug-fix drive and six-width clipping sweep: 51.28s.
+    seconds: 55,
     catches: 'the signed-out pages as a browser renders them: the hero tree grows and '
       + 'settles on the landing page, the sign-in and install pages carry the shell, '
       + 'and every public surface holds zero case-insensitive proteus in visible text. '

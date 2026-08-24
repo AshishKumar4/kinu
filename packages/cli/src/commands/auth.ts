@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { hostname, platform } from 'node:os';
 import { defaultOrigin, logout, pollCliAuth, startCliAuth, whoami } from '../cloud-api';
-import { loadConfigFile, saveConfigFile } from '../config';
+import { bumpProviderRevision, loadConfigFile, saveConfigFile } from '../config';
 import { ACCENT, DIM, OK, WARN } from '../display';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
@@ -38,6 +38,10 @@ export async function authenticateCli(
       tokenExpiresAt: status.expiresAt,
       user: status.user,
     });
+    // Signing in changes which providers a model resolution can reach — the
+    // account's credentials become available through the proxy — so a resident
+    // session's cached provider listing is now stale.
+    bumpProviderRevision();
     callbacks.completed?.(status.user.email);
     return;
   }
@@ -83,6 +87,8 @@ export async function logoutCommand(opts: { origin?: string }): Promise<void> {
     }
   }
   saveConfigFile({ ...config, accessToken: undefined, tokenExpiresAt: undefined, user: undefined });
+  // The inverse of sign-in: every account-held provider just became unreachable.
+  bumpProviderRevision();
   console.log(`${OK('✓')} Logged out`);
 }
 

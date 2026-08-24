@@ -262,12 +262,11 @@ grounds to draw the next set with the panel and hand-audit a slice.
 
 ## Session-level evolution
 
-The cadence lives in `AgentOrchestrator` rather than the engine. Every
-`sessionReflectionInterval` turns it calls `engine.onSessionComplete()` with the
-accumulated turns. The interval is 5 on both backends. The cloud backend passes
-5 explicitly (`cf-backend/src/actor-agent.ts:1125`) and the CLI backend takes
-`DEFAULT_SESSION_REFLECTION_INTERVAL`, which is also 5
-(`core/src/orchestrator/agent-orchestrator.ts:95`).
+The cadence lives in `AgentOrchestrator` rather than the engine. Every five
+turns it calls `engine.onSessionComplete()` with the accumulated turns. Five is
+not a per-backend option: nothing a host can read chooses it, so both backends
+take the one constant in
+`core/src/orchestrator/agent-orchestrator.ts`.
 
 `onSessionComplete` is selective. It needs at least 3 turns in the window, and
 `sessionWarrantsReflection()` requires that some turn errored, drew negative

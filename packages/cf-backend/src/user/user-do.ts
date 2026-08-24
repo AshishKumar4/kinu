@@ -118,6 +118,7 @@ import { randomToken, sha256Hex } from '../lib/crypto';
 import { resolveWorkspaceTitle } from '../lib/agent-naming';
 import { installAnalyticsDiagnostics } from '../analytics/install';
 import { recordReleaseTransition } from '../analytics/record';
+import { openAnalyticsWindow } from '../analytics/writer';
 import {
   DEVICE_CONSENT_SCOPE, DEVICE_CONSENT_SCOPE_FULL_FS,
   DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED,
@@ -389,10 +390,19 @@ export class UserDO extends Agent<Env> {
     return this.ctx.storage.sql.exec<T>(query, ...bindings).toArray();
   }
 
-  /** The attenuation gate. First statement of every privileged method below —
-   *  the check lives here, next to the secrets, rather than in any caller. */
+  /**
+   * The attenuation gate. First statement of every privileged method below —
+   * the check lives here, next to the secrets, rather than in any caller.
+   *
+   * Also where this object's analytics write window reopens, for the same reason
+   * it is the gate: it runs exactly once per RPC, and the platform's 250-point
+   * budget is per INVOCATION. Opening it in the constructor alone gave a hot
+   * UserDO one budget for a whole activation, after which its capability denials
+   * and release transitions stopped reaching the dataset with nothing to say so.
+   */
   private requireTier(caller: UserCaller, capability: WorkspaceCapability): Promise<ResolvedCaller> {
     this.ensureInit();
+    openAnalyticsWindow(this.env);
     return requireTier(this.ctx.storage.sql, this.env, caller, capability);
   }
 
@@ -419,9 +429,13 @@ export class UserDO extends Agent<Env> {
    * Durable Object of the named workspace, which must already be in this user's
    * registry. The worst a caller can do is force a rotation, after which both
    * sides still agree and the tier is untouched.
+   *
+   * Being the only ungated method is also why it opens the analytics window
+   * itself: every other entry reaches `requireTier`, which does it.
    */
   async ensureWorkspaceCapability(workspaceName: string, presentedHash: string | null): Promise<void> {
     this.ensureInit();
+    openAnalyticsWindow(this.env);
     validateWorkspaceName(workspaceName);
     if (!this.workspaceRegistered(workspaceName)) {
       throw new Error(`Workspace ${workspaceName} is not in your registry.`);

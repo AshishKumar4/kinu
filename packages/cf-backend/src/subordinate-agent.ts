@@ -15,6 +15,8 @@ import {
   // report.* — codemode projection of the native `report` tool.
   createReportCodemodeProvider, type CodemodeProvider,
   type DelegationBudget,
+  planReviewAwaitingDecision,
+  type PlanReview,
   TIER_IDS,
 } from '@kinu.run/core';
 import {
@@ -221,6 +223,18 @@ export class SubordinateAgent extends ActorAgent {
     return this._engine;
   }
 
+  /** An owner chat owns this actor's review. Parent-assigned work keeps the
+   * mode it was delegated with and never gets captured by an unrelated owner
+   * review that happens to be pending on the same actor. */
+  protected override turnWorkMode(): WorkMode {
+    const requested = super.turnWorkMode();
+    if (this.lastUserTurnIsProgrammatic()) return requested;
+    return requested === 'build'
+      && planReviewAwaitingDecision(this.planReviews.getActive('default'))
+      ? 'plan'
+      : requested;
+  }
+
   /**
    * Two halves with different lifetimes, and that is why they gate differently.
    *
@@ -233,7 +247,12 @@ export class SubordinateAgent extends ActorAgent {
    */
   protected actorToolDeps(): ActorToolDeps {
     const deps: ActorToolDeps = { ...this.teamProfile() };
-    if (!this.lastUserTurnIsProgrammatic()) return deps;
+    if (!this.lastUserTurnIsProgrammatic()) {
+      return {
+        ...deps,
+        submitPlan: { submit: (edits) => this.submitPlanEdits(edits) },
+      };
+    }
     return {
       ...deps,
       report: {
@@ -450,6 +469,7 @@ export class SubordinateAgent extends ActorAgent {
     catalogVersion: number | null;
     mission: string;
     model: string | null;
+    activePlan: PlanReview | null;
   }> {
     this.ensureSchema();
     const identity = this.identity.read();
@@ -463,6 +483,7 @@ export class SubordinateAgent extends ActorAgent {
       catalogVersion: identity.catalogVersion,
       mission: identity.mission,
       model: this.getStoredModelId(),
+      activePlan: await this.getActivePlanReview(),
     };
   }
 

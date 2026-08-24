@@ -137,7 +137,7 @@ function makeTeam(overrides: Partial<TeamToolDeps> = {}) {
     },
     recordTitle: async (input) => {
       calls.push({ action: 'recordTitle', input });
-      return { ok: true, name: input.name, displayName: input.displayName };
+      return { ok: true, name: input.name, displayName: input.displayName, applied: true };
     },
     spawn: async (input) => {
       calls.push({ action: 'spawn', input });

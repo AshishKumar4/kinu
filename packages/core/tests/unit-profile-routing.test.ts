@@ -1,6 +1,6 @@
 // Focused proofs for the profile integration slice:
-//   - MODEL_ROUTE_POLICY is compiler-exhaustive and resolves every producer
-//     through the immutable turn profile (platform excepted).
+//   - resolveModelRoute covers every producer and resolves each through the
+//     immutable turn profile (platform excepted).
 //   - The resolver carries the whole tier table so producers never re-resolve.
 //   - Durable role change: persistence, next-turn resolution, locked/approval
 //     policy, capability-widening classification.
@@ -10,10 +10,8 @@ import {
   profileCatalogDigest,
 } from '../src/profiles/catalog';
 import { resolveTurnProfile } from '../src/profiles/resolve';
-import {
-  MODEL_ROUTE_POLICY, SPEND_SOURCES, isPlatformRouted, modelRouteTable, resolveModelRoute,
-} from '../src/profiles/model-route';
-import { changeActiveRole, roleChangeOutcomeText, roleWidensCapabilities } from '../src/profiles/role-change';
+import { SPEND_SOURCES, resolveModelRoute } from '../src/profiles/model-route';
+import { changeActiveRole, roleChangeOutcomeText } from '../src/profiles/role-change';
 import type { RoleChangeOutcome, RoleStateStore } from '../src/profiles/role-change';
 import type { ProfileCatalogEnvelope } from '../src/profiles';
 
@@ -56,23 +54,34 @@ function memoryConfig(): RoleStateStore & { dump: () => Map<string, string> } {
   };
 }
 
+/** The lanes whose tier the ACCOUNT fixes, so a turn cannot move them. */
+const FIXED_LANES = [
+  ['scaffold', 'deep'], ['judge', 'deep'], ['advisor', 'slow'],
+  ['compaction', 'fast'], ['fast', 'tiny'], ['reflection', 'fast'],
+] as const;
+
+/** The lanes that ride the TURN's own tier, because they carry its resolved
+ *  profile with them. */
+const INVOCATION_LANES = ['agent', 'head', 'mcts', 'swarm', 'sandbox'] as const;
+
 describe('exhaustive model routing', () => {
-  test('every SpendSource has a policy row', () => {
-    for (const source of SPEND_SOURCES) expect(MODEL_ROUTE_POLICY[source]).toBeDefined();
+  test('every producer resolves, and only platform refuses', () => {
+    const profile = resolveTurnProfile(baseInput());
+    for (const source of SPEND_SOURCES) {
+      const route = resolveModelRoute(source, profile);
+      if (source === 'platform') expect(route).toBeNull();
+      else expect(route).toMatchObject({ source });
+    }
   });
 
   test('the PRD lane map is the shipped policy', () => {
-    expect(MODEL_ROUTE_POLICY.agent).toEqual({ kind: 'invocation' });
-    for (const s of ['head', 'mcts', 'swarm', 'sandbox'] as const) {
-      expect(MODEL_ROUTE_POLICY[s]).toEqual({ kind: 'invocation' });
+    const profile = resolveTurnProfile(baseInput());
+    for (const [source, tier] of FIXED_LANES) {
+      expect(resolveModelRoute(source, profile)?.tier).toBe(tier);
     }
-    expect(MODEL_ROUTE_POLICY.scaffold).toEqual({ kind: 'fixed', tier: 'deep' });
-    expect(MODEL_ROUTE_POLICY.judge).toEqual({ kind: 'fixed', tier: 'deep' });
-    expect(MODEL_ROUTE_POLICY.advisor).toEqual({ kind: 'fixed', tier: 'slow' });
-    expect(MODEL_ROUTE_POLICY.compaction).toEqual({ kind: 'fixed', tier: 'fast' });
-    expect(MODEL_ROUTE_POLICY.fast).toEqual({ kind: 'fixed', tier: 'tiny' });
-    expect(MODEL_ROUTE_POLICY.reflection).toEqual({ kind: 'fixed', tier: 'fast' });
-    expect(MODEL_ROUTE_POLICY.platform).toEqual({ kind: 'platform' });
+    for (const source of INVOCATION_LANES) {
+      expect(resolveModelRoute(source, profile)?.tier).toBe(profile.tier.id);
+    }
   });
 
   test('producers resolve concrete models off the turn profile; platform refuses', () => {
@@ -86,18 +95,14 @@ describe('exhaustive model routing', () => {
     }));
     const judge = resolveModelRoute('judge', profile);
     expect(judge).toMatchObject({ source: 'judge', tier: 'deep', model: '@cf/b/model-b' });
+    // A fixed lane resolves its OWN slot's model, not the turn's.
+    expect(resolveModelRoute('agent', profile)?.model).toBe('@cf/a/model-a');
     // invocation routes ride the ROLE's tier (researcher → fast), not a pin.
     const researcherProfile = resolveTurnProfile(baseInput({ roleId: 'researcher' }));
     // The built-in catalog ships only `default`, so the role's `fast` slot
     // aliases it — the invocation route still follows the ROLE.
     expect(resolveModelRoute('agent', researcherProfile)?.tier).toBe('default');
-    expect(isPlatformRouted('platform')).toBe(true);
     expect(resolveModelRoute('platform', researcherProfile)).toBeNull();
-    // Every non-platform producer resolves in one pass.
-    for (const [source, route] of modelRouteTable(researcherProfile)) {
-      if (source === 'platform') expect(route).toBeNull();
-      else expect(route).not.toBeNull();
-    }
   });
 });
 
@@ -170,9 +175,8 @@ describe('durable role change', () => {
     const widened = changeActiveRole({ envelope: restricted, config, to: 'generalist', actor: 'agent' });
     expect(widened).toEqual({ kind: 'staged', from: 'scout', to: 'generalist' });
     expect(config.get('active_role_id')).toBe('scout');
-    expect(roleWidensCapabilities(
-      restricted.catalog.roles.scout!, restricted.catalog.roles.generalist!,
-    )).toBe(true);
+    // The widening classification itself is proved by the two outcomes above:
+    // the narrowing switch landed and the widening one staged.
   });
   test('unknown roles are refused with nothing stored', () => {
     const config = memoryConfig();
@@ -212,11 +216,9 @@ describe('what a caller is told about a role change', () => {
     const outcomes: RoleChangeOutcome[] = [
       { kind: 'applied', from: 'general', to: 'auditor', catalogVersion: 3 },
       { kind: 'staged', from: 'general', to: 'auditor' },
-      { kind: 'dismissed', from: 'general', to: 'auditor' },
       { kind: 'refused', reason: 'locked' },
       { kind: 'refused', reason: 'unknown-role' },
       { kind: 'refused', reason: 'invalid-role-id' },
-      { kind: 'none' },
     ];
     for (const outcome of outcomes) {
       const text = say(outcome);

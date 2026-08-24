@@ -19,7 +19,6 @@ import {
   reconcileInterruptedForks, FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
 } from '../src/heads/reconcile';
 import { RunEventRecorder, initRunEventTables } from '../src/events/recorder';
-import { headPhaseRunEvent } from '../src/orchestrator/heads-support';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store';
 import { SignalDelivery } from '../src/orchestrator/signals';
 import {
@@ -182,11 +181,10 @@ describe('an operator-cancelled fork is not reported as running', () => {
     initRunEventTables(makeExecRaw(w.db));
     const recorder = new RunEventRecorder(makeSql(w.db));
 
-    // The dispatching turn, recorded exactly as both backends record it
-    // (actor-agent.ts emitHeadPhase / local-session.ts emitHeadPhase).
-    recorder.emit(RUN, headPhaseRunEvent({
-      kind: 'split', rootId: ROOT, headIds: ['h1', 'h2', 'h3', 'h4'], rationale: RATIONALE,
-    }));
+    // The dispatching turn, as the ledger records a split.
+    recorder.emit(RUN, {
+      type: 'head_split', rootId: ROOT, headIds: ['h1', 'h2', 'h3', 'h4'], rationale: RATIONALE,
+    });
     // …and that run ended with the process. The fork outlived it, which is the
     // whole situation: nothing was ever going to append to this run again.
     recorder.emit(RUN, { type: 'run_end', reason: 'done' });
@@ -241,9 +239,9 @@ describe('an operator-cancelled fork is not reported as running', () => {
 
     // The turn that dispatched the fork, cut before it could close itself.
     recorder.emit(RUN, { type: 'run_start', agentId: 'a' });
-    recorder.emit(RUN, headPhaseRunEvent({
-      kind: 'split', rootId: ROOT, headIds: ['h1', 'h2', 'h3', 'h4'], rationale: RATIONALE,
-    }));
+    recorder.emit(RUN, {
+      type: 'head_split', rootId: ROOT, headIds: ['h1', 'h2', 'h3', 'h4'], rationale: RATIONALE,
+    });
     // A turn that DID close itself, on the same ledger — the control that makes
     // the assertion below attributable to being open rather than to being old.
     recorder.emit('run-that-finished', { type: 'run_start', agentId: 'a' });

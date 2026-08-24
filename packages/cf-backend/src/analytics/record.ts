@@ -101,6 +101,10 @@ function agentRow(input: {
     model: input.model ?? '',
     tool: input.tool ?? '',
     source: input.source ?? '',
+    // Structurally empty here. A typed row's verdict is already fully carried by
+    // `outcome` plus `code`; the slot exists for the diagnostics path, where a
+    // refusal's deciding ARM is a fact neither of those two can hold.
+    reason: '',
     count: 1,
     durationMs: input.durationMs ?? 0,
     ttftMs: input.ttftMs ?? 0,

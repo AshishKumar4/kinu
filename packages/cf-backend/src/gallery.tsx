@@ -70,7 +70,7 @@
  */
 import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { MemoryRouter, Route, Routes, useParams } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import type { UIMessage } from "ai";
 import { tolerate } from "@kinu.run/core/obs";
 import { Button } from "@cloudflare/kumo";
@@ -107,11 +107,13 @@ import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { useConversationUiState } from "@/hooks/use-conversation-ui-state";
 import { useTheme } from "@/hooks/use-theme";
 import { WorkspaceRosterProvider } from "@/hooks/use-workspace-roster";
-import { SupervisePage } from "@/pages/SupervisePage";
+import { CreateWebhookModal, NewWebhookCard, SupervisePage } from "@/pages/SupervisePage";
+import { AddServerCard } from "@/pages/UserMcpPage";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
 import {
   BUILTIN_TOOLS, BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS, CHARS_PER_TOKEN, TOOL_REACH,
-  JsonObjectSchema, JsonValueSchema, mergeTranscript, seekPage, type JsonValue,
+  JsonObjectSchema, JsonValueSchema, mergeTranscript, seekPage,
+  type JsonValue, type PlanReview,
 } from "@kinu.run/core";
 import type { ActivitySnapshot, BackgroundJob, ForkNode, Rpc, ToolInfo } from "@/lib/protocol";
 import { buildTree, type MctsRow } from "@/lib/fork-tree-rows";
@@ -572,6 +574,19 @@ const GALLERY_SUBS: {
   status: string; currentTask: string | null; createdAt: number; dismissedAt: number | null;
 }[] = [];
 let gallerySubSeq = 0;
+let galleryAgentPlan: PlanReview = {
+  id: "gallery-agent-plan",
+  sessionId: "default",
+  revision: 1,
+  content: "# Additional agent plan\n\n1. Inspect the checkout path.\n2. Fix the coupon guard.\n3. Run the focused tests.",
+  status: "pending",
+  annotations: [],
+  feedback: null,
+  handoffAccepted: false,
+  createdAt: NOW,
+  updatedAt: NOW,
+  decidedAt: null,
+};
 
 const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "listSubordinates") return rpcResult([...GALLERY_SUBS]).json<T>();
@@ -582,6 +597,15 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
       status: "idle", currentTask: null, createdAt: NOW, dismissedAt: null,
     };
     GALLERY_SUBS.push(entry);
+    galleryAgentPlan = {
+      ...galleryAgentPlan,
+      status: "pending",
+      annotations: [],
+      feedback: null,
+      handoffAccepted: false,
+      updatedAt: NOW,
+      decidedAt: null,
+    };
     return rpcResult({ name, displayName: "", subordinate: entry }).json<T>();
   }
   if (method === "renameSubordinateAgent") {
@@ -589,7 +613,7 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
     const entry = GALLERY_SUBS.find((sub) => sub.name === name);
     if (!entry) throw new Error(`gallery: no subordinate "${name}"`);
     entry.displayName = displayName;
-    return rpcResult({ ...entry }).json<T>();
+    return rpcResult({ ok: true, name, displayName, subordinate: { ...entry } }).json<T>();
   }
   if (method === "dismissSubordinate") {
     const [name] = v.parse(v.tuple([v.string()]), args);
@@ -602,9 +626,33 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
     // internal — the header renders the ROSTER title, never this field.
     const latest = GALLERY_SUBS.at(-1);
     return rpcResult({
-      name: latest?.name ?? "agent-0", displayName: latest?.displayName ?? "",
-      role: "agent", mission: "", model: null,
+      name: latest?.name ?? "agent-0",
+      displayName: latest?.displayName ?? "",
+      roleId: "general",
+      legacyRole: null,
+      mission: "",
+      model: null,
+      activePlan: galleryAgentPlan,
     }).json<T>();
+  }
+  if (method === "getActivePlanReview") return rpcResult(galleryAgentPlan).json<T>();
+  if (method === "savePlanReviewAnnotations") {
+    return rpcResult({ ok: true, plan: galleryAgentPlan }).json<T>();
+  }
+  if (method === "decidePlanReview") {
+    const [, , decision, feedback] = v.parse(
+      v.tuple([v.string(), v.number(), v.picklist(["approve", "request_changes"]), v.optional(v.string())]),
+      args,
+    );
+    galleryAgentPlan = {
+      ...galleryAgentPlan,
+      status: decision === "approve" ? "approved" : "changes_requested",
+      feedback: feedback ?? null,
+      handoffAccepted: true,
+      updatedAt: Date.now(),
+      decidedAt: Date.now(),
+    };
+    return rpcResult({ ok: true, plan: galleryAgentPlan, queued: true }).json<T>();
   }
   if (method === "getChatHistoryPage") return rpcResult({ status: "end", items: [] }).json<T>();
   return AGENT_RPC.has(method)
@@ -1756,7 +1804,7 @@ function GalleryChatTabs({ clearable = true }: { clearable?: boolean }) {
   return (
     <SubordinateTabs
       workspace="checkout-fixes" subordinates={SUBORDINATES} activeName={undefined}
-      onCreate={async () => ({ name: "x", displayName: "" })} onDismiss={async () => {}}
+      onCreate={async () => {}} creating={false} onDismiss={async () => {}}
       trailing={clearable && <Button variant="ghost" {...SQUARE_BUTTON_PROPS} size="sm" icon={<TrashIcon size={12} />} aria-label="Clear history" />}
     />
   );
@@ -2238,7 +2286,7 @@ function TabsFrame() {
         <div key={w} className="flex flex-col border p-border overflow-hidden" style={{ width: w, height: 190 }}>
           <SubordinateTabs
             workspace="checkout-fixes" subordinates={SUBORDINATES} activeName={undefined}
-            onCreate={async () => ({ name: "x", displayName: "" })} onDismiss={async () => {}}
+            onCreate={async () => {}} creating={false} onDismiss={async () => {}}
           />
           <div className="flex-1 px-5 py-4 p-row-text p-text-3">Main chat body</div>
         </div>
@@ -2246,7 +2294,7 @@ function TabsFrame() {
       <div className="flex flex-col border p-border overflow-hidden" style={{ width: 520, height: 190 }}>
         <SubordinateTabs
           workspace="checkout-fixes" subordinates={SUBORDINATES} activeName="coupon-tester"
-          onCreate={async () => ({ name: "x", displayName: "" })} onDismiss={async () => {}}
+          onCreate={async () => {}} creating={false} onDismiss={async () => {}}
         />
         <div className="flex-1 px-5 py-4 p-row-text p-text-3">Subordinate chat body</div>
       </div>
@@ -2286,6 +2334,7 @@ function AgentChatsPane({ conversation, title, transcript, onRename, onSend }: {
     grows: "up",
     content: transcript,
     fetched: false,
+    exhausted: true,
     initialScroll: ui.savedScroll,
     onScrollPosition: ui.rememberScroll,
   });
@@ -2326,6 +2375,7 @@ function AgentChatsPane({ conversation, title, transcript, onRename, onSend }: {
 
 function AgentChatsScene() {
   const { subName } = useParams();
+  const navigate = useNavigate();
   const [roster, setRoster] = useState<readonly GalleryRosterEntry[]>(AGENTCHATS_SEED);
   const [transcripts, setTranscripts] = useState<Record<string, readonly string[]>>({
     main: Array.from({ length: AGENTCHATS_ROWS }, (_, i) => `Main turn ${i + 1}: enough rows for the scroller to hold a position.`),
@@ -2343,7 +2393,7 @@ function AgentChatsScene() {
       name, displayName: "", role: "agent", createdBy: "user",
       status: "idle", currentTask: null, createdAt: NOW, dismissedAt: null,
     }]);
-    return { name, displayName: "" };
+    navigate(`/workspace/checkout-fixes/agents/${name}`);
   };
   const send = (agent: string) => (text: string, mode: ChatMode) => {
     setSent((current) => [...current, { agent, mode, text }]);
@@ -2366,6 +2416,7 @@ function AgentChatsScene() {
           subordinates={roster}
           activeName={subName}
           onCreate={create}
+          creating={false}
           onDismiss={async (name) => {
             setRoster((current) => current.filter((entry) => entry.name !== name));
           }}
@@ -3926,6 +3977,70 @@ function FeedbackFrame({ noise }: { noise: boolean }) {
   );
 }
 
+/**
+ * The REAL secret-bearing surfaces, on one page, for the capture to photograph.
+ *
+ * `FeedbackFrame` above proves the two redaction MECHANISMS against markup built
+ * for the purpose. This frame proves the PRODUCT: the components a person has
+ * open when they press Feedback. All four of these leaked into the screenshot
+ * bucket, and not one of them is reachable from a fixture that restates their
+ * markup — which is why the leak survived a gate that already sampled pixels.
+ *
+ *   the issued webhook secret   shown once, as text, with a copy button
+ *   the curl that tests it      the same secret inside a shell command
+ *   the create dialog's field   the secret a person types before it is issued
+ *   the MCP headers editor      `{"Authorization": "Bearer …"}`, pasted
+ *
+ * `?modal=1` renders the create dialog instead of the cards, because a fixed
+ * overlay cannot share a page with what it covers. The feedback affordance moves
+ * above that overlay in the same stage — harness-only positioning, so the button
+ * is reachable while the dialog it photographs stays exactly as it ships.
+ *
+ * The secrets are distinctive on purpose: the gate asserts each one is present in
+ * the LIVE page and absent from the clone and the pixels, so a typo in either
+ * half fails loudly instead of passing on a string nobody rendered.
+ */
+const LEAK_HMAC = "whsec_hmacLEAKSifREDACTIONfails0001";
+const LEAK_BEARER = "whsec_bearerLEAKSifREDACTIONfails0002";
+
+function FeedbackSecretsFrame({ modal }: { modal: boolean }) {
+  return (
+    <div className="min-h-screen p-bg p-text">
+      <header className="flex items-center justify-between border-b p-border p-sidebar px-4 py-3">
+        <span className="text-sm font-semibold">Automations</span>
+        {!modal && <FeedbackButton compact />}
+      </header>
+      <div className="mx-auto max-w-3xl space-y-5 p-6">
+        <p data-visible-copy className="text-sm p-text-2">
+          A webhook fires a turn in this workspace. Revoking a trigger stops it; the URL stays
+          valid until you do.
+        </p>
+        {/* One stage or the other, never both: a dimmed card behind a scrim is
+            neither the shipped card nor a readable measurement of one. */}
+        {modal ? (
+          <CreateWebhookModal agentName="checkout-fixes"
+            onClose={() => { /* the dialog stays up for the capture */ }}
+            onCreated={() => { /* the gate never submits */ }} />
+        ) : (
+          <>
+            <NewWebhookCard
+              result={{ trigger_id: "trg_01", url: "/api/hooks/checkout-fixes/trg_01", auth_mode: "hmac", secret: LEAK_HMAC }}
+              onDismiss={() => { /* the card stays up for the capture */ }}
+            />
+            <NewWebhookCard
+              result={{ trigger_id: "trg_02", url: "/api/hooks/checkout-fixes/trg_02", auth_mode: "bearer", secret: LEAK_BEARER }}
+              onDismiss={() => { /* the card stays up for the capture */ }}
+            />
+            <AddServerCard onCancel={() => { /* the form stays up for the capture */ }}
+              onAdded={() => { /* nothing is added; the gate never submits */ }} />
+          </>
+        )}
+      </div>
+      {modal && <div className="fixed right-4 top-4 z-[60]"><FeedbackButton compact /></div>}
+    </div>
+  );
+}
+
 async function mount() {
   // Standalone public string documents render without the app shell.
   const document_ = publicDocument(frame);
@@ -3980,6 +4095,9 @@ async function mount() {
   else if (frame === "modal") node = <GalleryModal />;
   else if (frame === "feedback") {
     node = <FeedbackFrame noise={new URLSearchParams(location.search).get("noise") === "1"} />;
+  }
+  else if (frame === "feedbacksecrets") {
+    node = <FeedbackSecretsFrame modal={new URLSearchParams(location.search).get("modal") === "1"} />;
   }
   else if (frame === "palette") node = <Palette />;
   else if (frame === "marks") node = <MarksFrame />;

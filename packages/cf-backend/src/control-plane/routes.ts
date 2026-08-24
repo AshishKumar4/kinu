@@ -27,7 +27,7 @@
  * audited" checkable by reading one function instead of trusting eight.
  */
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
-import { getAgentByName } from 'agents';
+import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import type { Page, PageRequest } from '@kinu.run/core';
 import * as v from 'valibot';
 import type { AuthIdentity } from '../auth/session';
@@ -46,8 +46,10 @@ import {
   type ActionEnv, type ActionIdentity,
 } from './actions';
 import { controlPlaneMetrics, type MetricsRequest } from './metrics';
-import { CONTROL_PAGE_MAX, type AuditOutcome } from './control-plane-do';
-import type { WorkspaceFilter } from './store';
+import type {
+  AuditOutcome, AuditSettlement, ControlAuditRow, OperationMarker,
+} from './control-plane-do';
+import type { AuditDraft, WorkspaceFilter } from './store';
 
 /** Bound on the per-workspace detail reads. Each is a separate Durable Object
  *  query and the panel shows a recent window, not a history — the history has
@@ -129,7 +131,7 @@ async function dispatch(
     case 'users': {
       const userId = segments[1];
       if (userId === undefined) return json(await stub.listUsers(caller, pageQuery(url)));
-      return await handleUserDetail(env, admin, caller, userId);
+      return await handleUserDetail(env, admin, caller, userId, url);
     }
 
     case 'workspaces': {
@@ -145,7 +147,15 @@ async function dispatch(
         if (userId !== null) filter.userId = userId;
         return json(await stub.listWorkspaces(caller, pageQuery(url), filter));
       }
-      return json(await workspaceDetail(env, name));
+      // A workspace name is not an address — `?userId=` is what makes it one.
+      // Required rather than optional: the alternative resolves the global
+      // Durable Object for whatever account happens to hold that name first,
+      // which is the reach this route exists to bound.
+      const owner = url.searchParams.get('userId');
+      if (owner === null || !USER_ID.test(owner)) {
+        return err(400, 'a workspace read must name the account that owns it (?userId=)');
+      }
+      return await handleWorkspaceDetail(env, owner, name);
     }
 
     case 'incidents':
@@ -163,6 +173,7 @@ async function dispatch(
       const ask: MetricsRequest = { hours: numberParam(url, 'hours') ?? 24 };
       const workspace = url.searchParams.get('workspace');
       if (workspace !== null) ask.workspace = workspace;
+      if (url.searchParams.get('refresh') === '1') ask.forceRefresh = true;
       return json(await controlPlaneMetrics(env, ask));
     }
 
@@ -176,12 +187,24 @@ async function dispatch(
 /**
  * Run one admin action, and write an audit row whichever way it goes.
  *
- * THE ORDER MATTERS AND IT IS THE POINT OF THIS FUNCTION. A stale sign-in, a
- * malformed body and a refusal by the owning object are all audited, because the
- * attempts an operator surface most needs to have recorded are the ones that did
- * not work. Only a caller who never got past `admin()` produces no row, and that
- * one is not an operator action at all — it is reported as
- * `control_plane.denied` instead.
+ * THE ORDER MATTERS AND IT IS THE POINT OF THIS FUNCTION.
+ *
+ * THE INTENT IS WRITTEN BEFORE THE MUTATION RUNS, and a failure to write it
+ * STOPS the mutation. An audit log that is appended after the fact records only
+ * the actions that happened to be followed by a working audit log; the one it
+ * misses is the one taken while the plane was degraded, which is exactly the
+ * action an operator later needs to find. Writing first inverts the failure:
+ * either the attempt is on the record, or it never happened.
+ *
+ * THE SETTLEMENT CAN STILL BE LOST, and that is visible rather than hidden. A
+ * pending row is the durable statement "this ran and nobody recorded how it
+ * ended", which `listPendingAudit` surfaces; the response is a failure, so the
+ * operator knows to go and look.
+ *
+ * A stale sign-in and a malformed body are audited too, because the attempts an
+ * operator surface most needs recorded are the ones that did not work. Only a
+ * caller who never got past `admin()` produces no row, and that one is not an
+ * operator action at all — it is reported as `control_plane.denied` instead.
  */
 async function handleAction(
   request: Request,
@@ -191,117 +214,210 @@ async function handleAction(
 ): Promise<Response> {
   const body = await safeJson(request, ControlActionSchema);
   if (body === null) {
-    await audit(env, admin, caller, {
+    return await refuse(env, admin, caller, {
       operation: 'action_rejected', targetKind: 'request', target: '',
-      outcome: 'denied', detail: 'the request body is not a recognized control action',
+    }, {
+      status: 400,
+      message: 'unrecognized control action',
+      detail: 'the request body is not a recognized control action',
+      reason: 'unrecognized_action',
     });
-    return err(400, 'unrecognized control action');
   }
 
   const described = describeAction(body);
   if (!admin.fresh) {
-    await audit(env, admin, caller, {
-      ...described, outcome: 'denied', detail: 'refused: the sign-in was not fresh',
+    return await refuse(env, admin, caller, described, {
+      status: 403,
+      message: adminDenialMessage('stale_auth'),
+      detail: 'refused: the sign-in was not fresh',
+      reason: 'stale_auth',
     });
-    return err(403, adminDenialMessage('stale_auth'));
   }
 
-  const started = Date.now();
+  // PHASE ONE. Nothing below this line runs unless the attempt is on the record.
+  let intent: ControlAuditRow;
+  try {
+    intent = await appendAudit(env, admin, caller, { ...described, outcome: 'pending', detail: PENDING_DETAIL });
+  } catch (cause) {
+    reportAuditFailure('intent', { cause }, described.operation);
+    return err(503, AUDIT_UNAVAILABLE);
+  }
+
   const outcome = await runControlAction(env, body);
-  const entry: AuditRequest = {
-    ...described,
-    outcome: outcome.outcome,
-    detail: outcome.detail,
-    durationMs: Date.now() - started,
-  };
-  if (outcome.affected !== undefined) entry.affected = outcome.affected;
-  await audit(env, admin, caller, entry);
+
+  // PHASE TWO. The action has already happened; this records how it ended.
+  try {
+    const settlement: AuditSettlementRequest = {
+      id: intent.id,
+      outcome: outcome.outcome,
+      detail: outcome.detail,
+      actorDigest: await actorDigest(env, admin.email),
+      reason: outcome.reason,
+      // The thrown arm's classification, and `undefined` on every other — which
+      // the marker publishes as an empty slot. Written with the rest of the
+      // settlement rather than assigned after it, so one statement carries the
+      // whole shape a settled attempt reports.
+      code: outcome.code,
+    };
+    await controlPlaneStub(env).settleAudit(caller, settlement);
+  } catch (cause) {
+    reportAuditFailure('settle', { cause }, described.operation);
+    // Not a success, whatever the action did. The operator is told the row is
+    // unfinished and where to find it, because the alternative is a green answer
+    // over an audit log that cannot say what happened.
+    return err(500, `${AUDIT_UNSETTLED} (audit row ${intent.id})`);
+  }
+
   // A refusal by the owning object is a 409, not a 500: the request was
   // well-formed and authorized, and the state said no.
   const status = outcome.outcome === 'ok' ? 200 : outcome.outcome === 'denied' ? 409 : 502;
   return json({ outcome: outcome.outcome, detail: outcome.detail }, { status });
 }
 
-/**
- * Append the audit row.
- *
- * A failure to write the row is NOT swallowed into the action's own result: the
- * action either happened or it did not, and losing the record of it is a
- * separate, worse fact that deserves its own reported failure. It cannot undo
- * the action, so it does not pretend to.
- */
-interface AuditRequest extends ActionIdentity {
-  outcome: AuditOutcome;
-  detail: string;
-  /** How many things changed. Absent when the action has no count worth
-   *  recording, which is different from zero. */
-  affected?: number;
-  durationMs?: number;
-}
+/** What a pending row says while its action is in flight. Read by an operator,
+ *  so it states the fact rather than leaving the column empty. */
+const PENDING_DETAIL = 'in flight: the outcome has not been recorded';
 
-async function audit(
+const AUDIT_UNAVAILABLE =
+  'the admin audit log could not record this attempt, so nothing was run';
+const AUDIT_UNSETTLED =
+  'the action ran and its outcome could not be recorded; the attempt is still pending in the audit log';
+
+/**
+ * Audit a refusal this plane made, and answer with it.
+ *
+ * One terminal row: there is no mutation to bracket, so a pending phase would
+ * describe an action that was never going to run. The audit write is still
+ * fail-closed — an operator told "refused" by a plane that recorded nothing has
+ * been told half the truth.
+ */
+async function refuse(
   env: ControlEnv,
   admin: AuthorizedAdmin,
   caller: ControlCaller,
-  entry: AuditRequest,
-): Promise<void> {
+  identity: ActionIdentity,
+  refusal: { status: number; message: string; detail: string; reason: string },
+): Promise<Response> {
   try {
-    await controlPlaneStub(env).recordAudit(caller, {
-      actorEmail: admin.email,
-      actorUserId: admin.userId,
-      actorDigest: await actorDigest(env, admin.email),
-      operation: entry.operation,
-      targetKind: entry.targetKind,
-      target: entry.target,
-      outcome: entry.outcome,
-      detail: entry.detail,
+    await appendAudit(env, admin, caller, {
+      ...identity, outcome: 'denied', detail: refusal.detail, reason: refusal.reason,
     });
   } catch (cause) {
-    diagnostics.failure('control_plane.audit_write_failed', toKinuError({
-      doing: 'appending an admin audit row',
-      cause,
-      otherwise: 'unavailable',
-    }), { operation: entry.operation, outcome: entry.outcome });
+    reportAuditFailure('intent', { cause }, identity.operation);
+    return err(503, AUDIT_UNAVAILABLE);
   }
+  return err(refusal.status, refusal.message);
+}
+
+/**
+ * Append one row, with the operator's digest attached.
+ *
+ * Throws on failure, and every caller treats that as fatal to the request. That
+ * is the whole change from the version this replaced, which caught the failure,
+ * logged a line and returned success over an action nobody recorded.
+ */
+interface AuditSettlementRequest extends OperationMarker {
+  id: string;
+  outcome: AuditSettlement;
+  detail: string;
+}
+
+async function appendAudit(
+  env: ControlEnv,
+  admin: AuthorizedAdmin,
+  caller: ControlCaller,
+  entry: ActionIdentity & { outcome: AuditOutcome; detail: string; reason?: string },
+): Promise<ControlAuditRow> {
+  const draft: AuditDraft & OperationMarker = {
+    actorEmail: admin.email,
+    actorUserId: admin.userId,
+    actorDigest: await actorDigest(env, admin.email),
+    operation: entry.operation,
+    targetKind: entry.targetKind,
+    target: entry.target,
+    outcome: entry.outcome,
+    detail: entry.detail,
+  };
+  if (entry.reason !== undefined) draft.reason = entry.reason;
+  return await controlPlaneStub(env).recordAudit(caller, draft);
+}
+
+/** Both audit phases share one searchable event; phase stays queryable. */
+function reportAuditFailure(
+  phase: 'intent' | 'settle', failure: { cause: unknown }, operation: string,
+): void {
+  diagnostics.failure('control_plane.audit_write_failed', toKinuError({
+    doing: 'writing an admin audit row',
+    cause: failure.cause,
+    otherwise: 'unavailable',
+  }), { operation, phase });
 }
 
 /* ── Reads that reach through to the owning object ───────────────────────── */
 
+/** A UserDO name. The one shape a `userId` may take on this surface, spelled
+ *  once because the detail route and the workspace route both refuse anything
+ *  else. */
+const USER_ID = /^[a-f0-9]{32}$/;
+
 /**
- * One account: its index row, and its roster read from the UserDO that owns it.
+ * One account: its index row, and a cursored page of the workspaces it owns.
  *
- * Reconciling on every open is what makes the index safe to be behind. The
- * roster read is the source of truth, `replaceUserWorkspaces` settles the
- * difference, and the response is built from the reconciled rows — so an
- * operator never sees a list this request already knew was stale.
+ * RECONCILED ON THE FIRST PAGE, NEVER MID-WALK. The roster read is the source of
+ * truth and `replaceUserWorkspaces` settles the difference, so opening an
+ * account repairs its rows before any of them are shown. But that reconcile
+ * REWRITES `last_seen_at`, which is the column the cursor orders on — running it
+ * again on page two would reorder the list underneath a walk already in
+ * progress, and a walk whose ordering changes silently repeats and skips rows.
+ * So the walk reconciles once, at the top, and says so.
+ *
+ * PAGED, because an account with more than `CONTROL_PAGE_MAX` workspaces
+ * previously had every row past 200 unreachable while the page's own copy said
+ * the table was reconciled.
  */
 async function handleUserDetail(
   env: ControlEnv,
   admin: AuthorizedAdmin,
   caller: ControlCaller,
   userId: string,
+  url: URL,
 ): Promise<Response> {
-  if (!/^[a-f0-9]{32}$/.test(userId)) return err(400, 'not a user id');
+  if (!USER_ID.test(userId)) return err(400, 'not a user id');
   const stub = controlPlaneStub(env);
   const user = await stub.getUser(caller, userId);
 
+  const request = pageQuery(url);
+  const reconcile = await reconcileRoster(env, caller, userId, request.cursor === undefined);
+  const workspaces = await stub.listWorkspaces(caller, request, { userId, includeRemoved: true });
+  return json({ user, workspaces, reconcile, viewer: admin.email });
+}
+
+/**
+ * What a drilldown page did about the index it is showing.
+ *
+ * Three states, not a boolean, because "reconciled", "the registry could not be
+ * read" and "this is page four of a walk that reconciled at page one" are three
+ * different things to tell an operator who is deciding whether to remove a
+ * workspace.
+ */
+export type ReconcileReport =
+  | { status: 'ok' }
+  | { status: 'failed'; reason: string }
+  | { status: 'skipped'; reason: string };
+
+const CONTINUATION = 'this walk reconciled on its first page; these rows are from that same read';
+
+async function reconcileRoster(
+  env: ControlEnv,
+  caller: ControlCaller,
+  userId: string,
+  firstPage: boolean,
+): Promise<ReconcileReport> {
+  if (!firstPage) return { status: 'skipped', reason: CONTINUATION };
   const roster = await readRoster(env, userId);
-  if (roster.status === 'ok') {
-    await stub.replaceUserWorkspaces(caller, userId, roster.workspaces);
-  }
-  const workspaces = await stub.listWorkspaces(caller, { limit: CONTROL_PAGE_MAX }, {
-    userId, includeRemoved: true,
-  });
-  return json({
-    user,
-    workspaces,
-    // Stated rather than hidden: a reconcile that could not run means the rows
-    // above are the index's own belief, and an operator deciding to remove a
-    // workspace should know which of the two they are looking at.
-    reconciled: roster.status === 'ok',
-    ...(roster.status === 'ok' ? undefined : { reconcileError: roster.reason }),
-    viewer: admin.email,
-  });
+  if (roster.status !== 'ok') return { status: 'failed', reason: roster.reason };
+  await controlPlaneStub(env).replaceUserWorkspaces(caller, userId, roster.workspaces);
+  return { status: 'ok' };
 }
 
 /** The subset of a roster entry the index stores. Named because both the walk
@@ -366,13 +482,24 @@ async function readRoster(env: ControlEnv, userId: string): Promise<RosterRead> 
 /**
  * One workspace, read from the Durable Object that owns it.
  *
+ * RESOLVED THROUGH THE OWNER, exactly as an action is. The panels below are a
+ * workspace's conversation runs, its spend, its pending approvals and its
+ * standing shell grants — reading them for the wrong account is the same
+ * cross-user reach as acting on it, and `OrchestratorAgent` is addressed by a
+ * name that is unique only inside one UserDO. `claimOwnedWorkspace` refuses
+ * before any panel RPC is issued.
+ *
  * Every field comes from an existing `@callable`. Each is settled independently
  * so one unavailable surface degrades to a stated reason instead of blanking the
  * page — a workspace whose sandbox is down still has runs, jobs and approvals
  * worth reading, and that is exactly the workspace an operator is looking at.
  */
-async function workspaceDetail(env: ControlEnv, workspace: string): Promise<WorkspaceDetail> {
-  const agent = await getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, workspace);
+async function handleWorkspaceDetail(
+  env: ControlEnv, userId: string, workspace: string,
+): Promise<Response> {
+  const owned = await claimOwnedWorkspace(env, userId, workspace);
+  if (!owned.ok) return err(owned.status, owned.error);
+  const agent = owned.agent;
   const [runs, activity, jobs, approvals, consents, executors, grants] = await Promise.allSettled([
     agent.getRunSummaries({ limit: DETAIL_WINDOW }),
     agent.getActivitySnapshot({ steps: DETAIL_WINDOW, logs: DETAIL_WINDOW }),
@@ -382,8 +509,9 @@ async function workspaceDetail(env: ControlEnv, workspace: string): Promise<Work
     agent.getExecutors(),
     agent.getShellApprovalGrants(),
   ]);
-  return {
+  const detail: WorkspaceDetail = {
     workspace,
+    userId,
     runs: settled(runs),
     activity: settled(activity),
     jobs: settled(jobs),
@@ -392,6 +520,7 @@ async function workspaceDetail(env: ControlEnv, workspace: string): Promise<Work
     executors: settled(executors),
     shellGrants: settled(grants),
   };
+  return json(detail);
 }
 
 /** A panel's value, or why it has none. Never a silent `null`: a missing panel
@@ -410,6 +539,10 @@ export type SettledPanel<Value> =
  */
 export interface WorkspaceDetail {
   workspace: string;
+  /** The account this read was resolved through. Echoed so a browser holding the
+   *  answer can bind its action buttons to the same pair the read proved, rather
+   *  than to whatever is in the address bar. */
+  userId: string;
   runs: SettledPanel<Awaited<ReturnType<OrchestratorAgent['getRunSummaries']>>>;
   activity: SettledPanel<Awaited<ReturnType<OrchestratorAgent['getActivitySnapshot']>>>;
   jobs: SettledPanel<Awaited<ReturnType<OrchestratorAgent['listBackgroundJobs']>>>;

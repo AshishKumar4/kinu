@@ -243,7 +243,7 @@ const OPERATION_ERROR_MAX_CHARS = 300;
  *  rather than counted: an activation's counter restarts at eviction and would
  *  hand the second life's first operation the first life's id, which then reads
  *  as its missing end. */
-export function newModelOperationId(): string {
+function newModelOperationId(): string {
   return `op-${nanoid(10)}`;
 }
 

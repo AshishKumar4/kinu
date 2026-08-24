@@ -103,6 +103,9 @@ export interface TuiCreatedAgent {
   name: string;
   displayName: string;
   kind: 'local-peer' | 'cloud-additional';
+  /** A host-prepared client for a conversation that is not in the workspace
+   * navigator, such as a direct cloud additional-agent facet. */
+  client?: AgentClient;
 }
 
 export interface ChatAppOpts {
@@ -449,12 +452,15 @@ function ChatScene({
       setReady(true);
     }
   }, [addError, addMessage, client, dispatchInput, onClientChange, setInputText]);
-  const switchWorkspace = useCallback(async (workspace: TuiAgentSummary) => {
-    if (workspace.name === client.agentName && workspace.mode === client.mode) {
+  const switchWorkspace = useCallback(async (
+    workspace: TuiAgentSummary,
+    preparedClient?: AgentClient,
+  ) => {
+    if (!preparedClient && workspace.name === client.agentName && workspace.mode === client.mode) {
       setNavigationOpen(false);
       return;
     }
-    if (!onWorkspaceSelect) {
+    if (!onWorkspaceSelect && !preparedClient) {
       setNavigationOpen(false);
       addMessage({ role: 'system', content: 'Workspace switching is unavailable in this host.' });
       return;
@@ -473,7 +479,9 @@ function ChatScene({
     let stopBuffering: (() => void) | null = null;
     let historyBoundary = 0;
     try {
-      candidate = await onWorkspaceSelect(workspace.name);
+      if (preparedClient) candidate = preparedClient;
+      else if (onWorkspaceSelect) candidate = await onWorkspaceSelect(workspace.name);
+      else throw new Error('Workspace switching is unavailable in this host.');
       stopBuffering = candidate.subscribe((event) => { bufferedEvents.push(event); });
       await candidate.connect();
       let history: DisplayMessage[] = [];
@@ -549,10 +557,9 @@ function ChatScene({
   }, [addError, addMessage, client, onClientChange, onWorkspaceSelect, setInputText, stream]);
 
 
-  /** One-click additional agent — the Agent Hub's `n`. Local peers open in
-   *  place through the same switch path a navigator pick takes; a cloud
-   *  additional agent lives beside the workspace's own conversation
-   *  server-side, so it is announced rather than opened. */
+  /** One-click additional agent — the Agent Hub's `n`. Both backends open the
+   * new conversation in place; cloud supplies a prepared facet client because
+   * that conversation is nested under its parent workspace. */
   const createNewAgent = useCallback(async () => {
     if (onNewAgent === undefined || selectionPendingRef.current) return;
     if (machineRef.current.activeTurns > 0 || clientActionCountRef.current > 0) {
@@ -562,12 +569,12 @@ function ChatScene({
     addMessage({ role: 'system', content: 'Creating a new agent…' });
     try {
       const created = await onNewAgent(client);
-      if (created.kind === 'cloud-additional') {
-        addMessage({
-          role: 'system',
-          content: `Created ${agentDisplayLabel(created.displayName)} (${created.name}) in this workspace. `
-            + 'It runs beside this conversation and names itself from your first message to it; open it from the web workspace to chat.',
-        });
+      if (created.client) {
+        await roster.reload();
+        await switchWorkspace(
+          { name: created.name, label: agentDisplayLabel(created.displayName), mode: 'cloud' },
+          created.client,
+        );
         return;
       }
       await roster.reload();
@@ -1461,7 +1468,7 @@ interface HistoryScrollTarget {
   scrollTo(position: number): void;
 }
 
-export function handleHistoryScrollAction(
+function handleHistoryScrollAction(
   actionId: Extract<TuiActionId, 'history.page-up' | 'history.page-down' | 'history.line-up' | 'history.line-down'>,
   draft: string,
   history: HistoryScrollTarget | null,

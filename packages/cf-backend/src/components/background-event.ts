@@ -231,8 +231,8 @@ const VARIANT_LABELS = new Map([
   ["process_done", "Process finished"],
   ["timer", "Scheduled trigger"],
   ["peer_agent", "Peer agent"],
-  ["subordinate_task", "Subordinate task"],
-  ["subordinate_report", "Subordinate report"],
+  ["subordinate_task", "Agent task"],
+  ["subordinate_report", "Agent report"],
   ["file_changed", "File changed"],
   ["email", "Email"],
   ["internal", "Internal"],
@@ -245,4 +245,9 @@ const VARIANT_LABELS = new Map([
  *  than relabelled, so a new backend variant still reads sensibly. */
 export function eventVariantLabel(variant: string): string {
   return VARIANT_LABELS.get(variant) ?? variant.replace(/_/g, " ");
+}
+
+/** Internal event sources keep their stable vocabulary; owner copy does not. */
+export function eventSourceLabel(source: string): string {
+  return source.replace(/^subordinate(?=$|[\s(])/i, "Agent");
 }

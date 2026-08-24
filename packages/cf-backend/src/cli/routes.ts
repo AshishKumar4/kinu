@@ -17,7 +17,8 @@ import { ACCESS_TOKEN_SCOPES, type AccessTokenScope } from './access-token-store
 import { isAgentRpcMethod, requiredRpcAccess, rpcAccessScope } from './rpc-gate';
 import { buildCliInstallCommand } from './install-command';
 import { listAvailableModels } from '../user/available-models';
-import { claimOwnedWorkspace, handleCreateWorkspaceRequest } from '../user/workspace-access';
+import { handleCreateWorkspaceRequest } from '../user/workspace-access';
+import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import { handleUserAIProxyRequest } from '../user/ai-proxy';
 import { USER_AI_PROXY_FORWARD_PREFIX, handleUserProviderProxyRequest } from '../user/provider-proxy';
 import { OwnerCapabilityUnavailableError, ownerCaller } from '../user/workspace-capability';

@@ -18,6 +18,7 @@ import { EmailOutbox } from '../email/outbox';
 import { ensureMonitorSchema, listIncidents, recordProbeRun, type MonitorRunResult } from './incidents';
 import { runSyntheticProbes } from './probes';
 import { installAnalyticsDiagnostics } from '../analytics/install';
+import { openAnalyticsWindow } from '../analytics/writer';
 
 /** One instance, by name — site health is not per-user or per-workspace. */
 export const MONITOR_SINGLETON = 'site';
@@ -49,8 +50,16 @@ export class MonitorDO extends DurableObject<Env> {
     installAnalyticsDiagnostics(env);
   }
 
-  /** Run every probe against the public origin and alert on what changed. */
+  /**
+   * Run every probe against the public origin and alert on what changed.
+   *
+   * Opens the analytics write window, as does every other RPC on this class: the
+   * platform's 250-point budget is per INVOCATION, and the constructor's install
+   * opens one per ACTIVATION — so a hot monitor stopped counting its own outbox
+   * failures and said nothing about it.
+   */
   async check(now: number = Date.now()): Promise<MonitorRunResult> {
+    openAnalyticsWindow(this.env);
     const origin = this.env.CLI_PUBLIC_ORIGIN;
     if (!origin) {
       throw new Error('CLI_PUBLIC_ORIGIN is not configured; there is no origin to probe.');
@@ -84,6 +93,7 @@ export class MonitorDO extends DurableObject<Env> {
    * bound is never reached today, which is the right time to state it.
    */
   async listIncidents(limit = 100): Promise<MonitorIncident[]> {
+    openAnalyticsWindow(this.env);
     return listIncidents(this.ctx.storage.sql)
       .slice(0, Math.max(1, Math.trunc(limit)))
       .map((row) => ({

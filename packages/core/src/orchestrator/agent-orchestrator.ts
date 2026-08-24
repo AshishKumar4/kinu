@@ -98,8 +98,10 @@ import { diagnostics, toKinuError } from '../obs/index';
 export type TurnContinuity = 'conversation' | 'independent_task';
 
 /** Turns between session-level evolution passes — the cadence the durable
- *  window is measured against when a host states no interval of its own. */
-export const DEFAULT_SESSION_REFLECTION_INTERVAL = 5;
+ *  window is measured against. Not an option: nothing a host can read (config
+ *  key, flag, profile field) chooses it, so a per-host knob was a second copy
+ *  of this number and nothing more. */
+const DEFAULT_SESSION_REFLECTION_INTERVAL = 5;
 
 export interface AgentOrchestratorDeps {
   host: BackendHost;
@@ -121,9 +123,6 @@ export interface AgentOrchestratorDeps {
   /** The actor's mission budget governor. Absent = this backend wires no
    *  governor at all; present-but-unscoped is the normal uncapped turn. */
   budget?: MissionGovernor;
-  /** Turns between session-level reflections (default
-   *  DEFAULT_SESSION_REFLECTION_INTERVAL). */
-  sessionReflectionInterval?: number;
   /** The delegatable role ids as the active catalog offers them, read lazily.
    *  Stamped onto every delegation-opportunity row, because a zero conversion
    *  under an empty catalog is a wiring fact and one under a full catalog is
@@ -190,7 +189,7 @@ export class AgentOrchestrator {
   private observeRecoveries = false;
   private turnEvolutionEnabled = false;
   private activeWorkMode: WorkMode = 'build';
-  private readonly reflectionInterval: number;
+  private readonly reflectionInterval = DEFAULT_SESSION_REFLECTION_INTERVAL;
   /** Debounces ingress-triggered drains so an event burst → ONE turn. */
   private readonly drains: DrainScheduler;
   /** TURN LANE: turn-level evolution this instance dispatched and has not yet
@@ -218,7 +217,6 @@ export class AgentOrchestrator {
       (e, d) => deps.sinks?.logActivity?.(e, d),
       () => this.activeWorkMode,
     );
-    this.reflectionInterval = deps.sessionReflectionInterval ?? DEFAULT_SESSION_REFLECTION_INTERVAL;
     // Read per opportunity, never cached: the catalog can change between turns,
     // and the row must name what was available when the hint was delivered.
     if (deps.roleCatalog) this.steering.observeRoles(deps.roleCatalog);

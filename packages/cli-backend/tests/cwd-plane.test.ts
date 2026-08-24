@@ -17,7 +17,7 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import type { AgentRuntime, LLMProviderConfig, WriteEvent, WriteObserver } from '@kinu.run/core';
 import { createAgentConfigStore, initWorkspaceSchema, isVfsError, WORKSPACE_ROOT } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/identity';
@@ -259,7 +259,7 @@ describe('the shell over the bound directory', () => {
     writeFileSync(join(project, 'before.txt'), 'the state to restore\n');
     // Checkpoint storage is global per agent name, so this fixture mints a
     // unique name. A stable test name would read valid stores from prior runs.
-    const rt = agentRuntime(state, `checkpointer-${state.slice(-6)}`, project);
+    const rt = agentRuntime(state, `checkpointer-${basename(dirname(state))}`, project);
     createAgentConfigStore(rt.storage.sql).setShellApprovalMode('allow_all');
     const checkpoints = rt.checkpoints;
     if (!checkpoints) throw new Error('a bound runtime must have a checkpoint engine');
