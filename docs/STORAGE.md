@@ -275,7 +275,7 @@ same `initWorkspaceSchema()` pass:
 | Swarm leaderboard | `exploration_records` (cumulative across runs) | `core/src/strategy/records.ts` |
 | Scaffold shadow mode | `scaffold_evaluations`, `scaffold_trial_queue` | `core/src/scaffold/shadow.ts` |
 | Facts | `agent_facts` | `core/src/memory/facts.ts` |
-| Session search | `messages_fts` (FTS5 + sync triggers) | `core/src/memory/session-search.ts` |
+| Conversation search | `messages_fts` (FTS5 + sync triggers) | `core/src/memory/conversation-search.ts` |
 | Background jobs | `background_jobs` | `core/src/jobs/store.ts` |
 | Task list | `agent_tasks` (one plan per actor) | `core/src/tasks/store.ts` |
 | Deferred approvals | `deferred_approvals` | `core/src/safety/deferred-approval.ts` |

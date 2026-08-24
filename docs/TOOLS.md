@@ -18,8 +18,8 @@ subordinate gets `report` and never gets the `reply` action of `agents`.
 | `run` | One shell command in one explicitly selected runtime |
 | `file` | The one file plane, over the same workspace filesystem every other surface addresses. `read` a file, `edit` exact text inside it, `write` it whole |
 | `agents` | The whole delegation surface: `swarm \| hire \| ask \| send \| reply \| list \| dismiss` |
-| `memory` | The one durable-state tool: `save \| search` prose memory, `remember \| recall \| forget` typed keyed facts, `sessions` to recall past session transcripts |
-| `tasks` | The agent's own task list and working stance: `add` titles (with a `parent` for subtasks), `update` one item's status, `list` it back, `mode` to set or read the stance. One row per item in `agent_tasks`; the open half renders into the live context block every step, and into the Tasks tab |
+| `memory` | The one durable-state tool: `save \| search` prose memory, `remember \| recall \| forget` typed keyed facts, `conversations` to search or browse this agent's own past conversation |
+| `tasks` | The agent's own task list and active role: `add` titles (with a `parent` for subtasks), `update` one item's status, `list` it back, `mode` to set or read the role. One row per item in `agent_tasks`; the open half renders into the live context block every step, and into the Tasks tab |
 | `web` | Live web access: `search` returns ranked results (title, url, snippet, date), `fetch` returns one URL as clean, citation-ready markdown. Key-less via DuckDuckGo + the Cloudflare markdown service; a stored `tavily` credential upgrades search |
 | `report` | A subordinate's progress spine back to its orchestrator: `progress \| completed \| blocked` |
 
@@ -106,7 +106,9 @@ codemode calls (`workspace.readFile` / `writeFile`), so there is one vocabulary
 across the tool surface and the sandbox.
 
 Everything goes through `rt.storage.vfs`. On the hosted backend that is the
-authoritative `NIMBUS_SESSION`; on the CLI it is the local workspace VFS. The
+authoritative `NIMBUS_SESSION`. On the CLI it is the plane the runtime binds:
+the stored working directory when one is set (`CLIRuntimeConfig.cwd`), otherwise
+the agent's own in-SQLite tree. The
 same bytes are addressed by `file`, `run { runtime: "workspace" }`, and
 `workspace.*`. There is no second Nimbus filesystem. Optional containers and
 devices keep their own files and are reached through `sandbox.*` and
@@ -188,8 +190,8 @@ rung first made the section a *classification*, and the correct classification
 of "I am not sure" is to do it alone, so every ambiguous turn failed closed.
 The doctrine converted **0%** of eligible turns where the mechanical splice in
 `orchestrator/turn-steering.ts` converted 24%. An exemption list fails the
-other way. The same file now also states the shape test at **step 0** of a
-session's first ask (`turn_start_no_delegation`), because the 25-step steer
+other way. The same file now also states the shape test at **step 0** of the
+conversation's first ask (`turn_start_no_delegation`), because the 25-step steer
 beside it can only ever be recovery from a shape already chosen serially.
 
 The rungs themselves:
@@ -199,19 +201,22 @@ The rungs themselves:
    provider is wired, and weight-ordered here because it is the cheapest helper
    there is.
 2. **Configured search** (`swarm`) is the measured rung. `preset` fixes the
-   shape of the search, `objective` says what is measured, and `depth` says how
-   deep the search may go. A verifier registered in
-   `strategy/verifier-registry.ts` scores every candidate, and it runs in this
-   workspace. Each swarm node is a full agent with its own multi-step tool loop.
+   shape of the search, `objective` says what is measured, and `depth` says
+   how deep the search may go. A verifier registered in
+   `strategy/verifier-registry.ts` scores every candidate of a verify-scored
+   search, and it runs in this workspace.
+   Each swarm node is a full agent with its own multi-step tool loop.
    Tree search of every depth lives here; [EXPLORATION.md](./EXPLORATION.md) is
    the document for the search itself.
 3. **Persistent subordinate** (`hire`) is long-lived. It starts from a blank
    context, keeps its own across turns, and stays in the roster.
 
-A swarm has no settlement to choose. Its candidates are measured and the number
-decides. That is why a swarm needs an `objective`, and why there is no route
-from a swarm to a judged ensemble. This surface does not offer ranking by a
-panel of model opinions.
+A swarm has no settle field to choose. The answer's shape is DERIVED from
+`score` and `advance`, never supplied. `score:"verify"` measures every
+candidate through a registered verifier; `score:"judge"` ranks by a model
+ensemble sized with the tagged `samples` parameter, under the marginalisation
+floor (`JUDGE_MARGINALISATION_MIN`); `score:"none"` returns unranked
+candidates. A measured search needs an `objective`; an ideation does not.
 
 **The `fork` action is gone.** It took 2-6 briefs the caller wrote, ran one copy
 of the agent per brief, and merged what they reported. `AGENTS_TOOL_ACTIONS`
@@ -238,9 +243,9 @@ and `list` address agents by name, and the name decides the transport:
   archived unless `keep_history: false` is passed.
 - **A peer** is one of the owner's *other* workspaces, reached over the
   EventsHub peer transport. Its axis is neither lifetime nor measurement, which
-  is why it sits outside the ladder. `ask` waits for the reply, with
-  `timeout_seconds` defaulting to and capped at 600 s — the sanctioned per-call
-  bound (`LLM_CALL_TIMEOUT_MS`); a late reply still arrives as an event.
+  is why it sits outside the ladder. `ask` delivers the message and waits for
+  the reply with no elapsed limit; a reply that outlives this activation
+  arrives as a peer event instead, and the turn's abort signal ends the wait.
   `send` does not wait, `reply` answers an agent message event by its `event_id`,
   and `hire` with `scope: workspace` creates or reuses a whole specialist
   workspace.
@@ -264,17 +269,17 @@ that names the field meant:
 ```
 unknown field "budgetUsd" — did you mean "budget_usd"?
 field "budget_usd" does not apply to action "hire" — it is read by swarm, and
-hire would ignore it. action "hire" takes: agent, role, mission, model, scope,
-message, timeout_seconds.
+hire would ignore it. action "hire" takes: agent, role, mission, tier, scope,
+message.
 ```
 
 The declared relation, action by action:
 
 | Action | Fields its handler reads |
 |---|---|
-| `swarm` | `task`, `preset`, `objective`, `key`, `config`, `from`, `label`, `name`, `branches`, `depth`, `budget_usd`, `budget_tokens`, `budget_label` |
-| `hire` | `agent`, `role`, `mission`, `model`, `scope`, `message`, `timeout_seconds` |
-| `ask` | `agent`, `message`, `topic`, `timeout_seconds`, `deliverable`, `deadline_hint` |
+| `swarm` | `task`, `preset`, `objective`, `key`, `config`, `from`, `label`, `name`, `branches`, `depth`, `role`, `tier`, `budget_usd`, `budget_tokens`, `budget_label` |
+| `hire` | `agent`, `role`, `mission`, `tier`, `scope`, `message` |
+| `ask` | `agent`, `message`, `topic`, `deliverable`, `deadline_hint` |
 | `send` | `agent`, `message`, `topic` |
 | `reply` | `event_id`, `message` |
 | `list` | `agent` |
@@ -292,7 +297,9 @@ enforced. The two absent ones join the list when something enforces them.
 
 `models` was removed on 2026-08-19 for that same reason. It promised per-node
 model routing and no runner read it, so a caller who named a cheap model for the
-deep levels got the workspace model and no error.
+deep levels got the workspace model and no error. Routing reaches a search
+through `role` and `tier` now. The resolver turns them into one immutable
+profile before the first node runs.
 
 The contract exists because the schema was one flat `v.object`, and valibot's
 `object` **excludes** an unknown entry instead of rejecting it. Measured against
@@ -324,9 +331,10 @@ own competing approaches from `task` alone, exactly as the stored
 settle did, and because the row carries no `objective`. A measured preset would
 need a metric, a unit, a direction and a verifier the original call never
 supplied. The replay cannot carry the RANKING, because the judged ensemble that
-ordered those approaches is not reachable from a swarm, so `ranking` is named
-in `agents.resume.fields_dropped` beside the dropped fields. A resumed search
-that quietly stopped ranking is worse than one that records the loss.
+ordered those approaches is not reachable from a swarm, so the loss is named
+`settlement` in `agents.resume.fields_dropped` beside the dropped fields.
+A resumed search that quietly stopped ranking is worse than one that records
+the loss.
 
 ### The delivery contract
 
@@ -379,7 +387,7 @@ two callers, the same pattern `agents.*`/`web.*` established:
 
 | Namespace | Members | Shared with |
 |---|---|---|
-| `memory.*` | `save`, `search`, `sessions`, and (when a FactsStore is wired) `remember`/`recall`/`forget` | `createMemoryDispatcher` (`tools/memory-tool.ts`) |
+| `memory.*` | `save`, `search`, `conversations`, and (when a FactsStore is wired) `remember`/`recall`/`forget` | `createMemoryDispatcher` (`tools/memory-tool.ts`) |
 | `tasks.*` | `add`, `update`, `list`, `mode` | `createTasksDispatcher` over the same `TaskListStore` instance (`tools/tasks-tool.ts`) |
 | `report.*` | `send(status, content)` | the native `report` tool's `ReportToolDeps.report` |
 | `release.*` | `board`/`bindSource`/`create`/`update`/`transition`/`requestApproval`, plus `apply`/`runChecks`/`preview`/`deploy`/`rollback` (engine backends) or `recordCheck`/`recordDeployment` (ledger-only backends) | `runReleaseAction` (`tools/release-tool.ts`); release has no native tool at all, so this is its only reach |
@@ -428,9 +436,10 @@ return settled
 builds the namespace, and every member lands in the same `dispatchAgentsAction`
 the top-level `agents` tool calls, over the same deps. That is one delegation
 path with one more caller. Which members exist is `agentsActionsFor(deps)`, the
-identical gate behind the tool's action enum: an
-orchestrator gets all seven, a subordinate or a local CLI session gets `swarm`
-alone, and a head, handed no delegation deps, has no `agents` namespace at all.
+identical gate behind the tool's action enum: `team` opens `hire`, `ask`,
+`send`, `list` and `dismiss`, `peers` adds `reply`, and a workspace
+orchestrator, which wires both beside the search substrate, gets all seven.
+A head, handed no delegation deps, has no `agents` namespace at all.
 The workspace-clone `forkAgent` RPC is deliberately not projected.
 
 One limitation applies. A search started inside the sandbox rides the enclosing
@@ -606,8 +615,10 @@ Three refusal classes, kept apart by vocabulary:
 
 Only one of the three is worth correcting, which is why they are not one bucket.
 
-A run that started returns a report: the axes in force, the caps, the settle
-report, the publication marker, the best candidate and every candidate. A run
+A run that started returns a report: the axes in force, the caps, the frozen
+resolved profile the run started under (`profile`, the snapshot a durable
+re-drive reads back), the settle report, the publication marker, the best
+candidate and every candidate. A run
 that did not start returns a refusal. Those are two shapes on purpose. A caller
 branching on `reason` asks a different question from one reading a report.
 
@@ -741,4 +752,4 @@ out temporary task progress. A task list answers "what is still in front
 of me", which is live plan state, re-read every step out of the dynamic-context
 block and closed out as the work lands. Folding it in would have made `memory`'s
 summary untrue and put five more properties (`titles`, `parent`, `id`, `status`,
-`stance`) on the schema the model reads for every durable-state decision.
+`role`) on the schema the model reads for every durable-state decision.

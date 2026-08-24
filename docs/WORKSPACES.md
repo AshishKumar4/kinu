@@ -17,7 +17,7 @@ agents are the actors that work inside it.
 │                sandbox.*   full Linux container   (when configured)      │
 │                laptop.*    the user's own machine  (connect + consent)   │
 │                parent.*    a facet's view of its parent workspace        │
-│   state      sessions · SOUL.md · memory · scaffold · craft store ·      │
+│   state      conversations · SOUL.md · memory · scaffold · craft store · │
 │              evolution ledgers · triggers · release changes              │
 │                                                                          │
 │   ┌───────────────────────────────────────────────────────────────────┐  │
@@ -47,9 +47,30 @@ agents are the actors that work inside it.
   single ownership root; the UserDO `user_workspaces` table is the user's
   registry of workspaces (source of truth for the sidebar, CLI list, and the
   ownership check on every `/api/workspaces/<name>/*` request).
-- **The file plane is the workspace's.** `Storage.vfs` starts with the
-  authoritative Nimbus filesystem on hosted workspaces and embedded Nimbus
-  over `bun:sqlite` locally. Relative paths resolve at `/home/user`
+- **Locally, the virtual workspace is metadata, not a place.** It is the pair
+  `{ cwd, workspaceId }` recorded on each root agent's ref
+  (`packages/cli-backend/src/agent-host/peers.ts`). Every root carrying the
+  same pair is an EQUAL PEER of the others: one physical directory, one shell,
+  and each agent with its own SQLite identity, role and scaffold. None of them
+  is the workspace, so mail between them is peer mail rather than a report up
+  a tree. Subordinates stay children: they inherit their root's directory as
+  their workspace plane but keep their own SQL identity, and they never hold
+  the peer transport. Each agent owns ONE durable conversation; its id lives in
+  `agent_config` (`canonicalConversationId`,
+  `packages/cli-backend/src/agent-host/conversation.ts`), so an interactive
+  CLI, a one-shot `kinu exec` and the daemon's agent host all drive the same
+  conversation instead of minting one per process. Recorded JSONL files
+  are diagnostics from here on.
+- **The file plane is the workspace's.** On a hosted workspace `Storage.vfs`
+  is the authoritative Nimbus filesystem. A LOCAL workspace keeps TWO planes,
+  and the split is deliberate: the agent's own state (SOUL.md, its scaffold,
+  memory, craft store, conversation, every ledger) always lives in its own
+  SQLite-backed filesystem, while the WORKSPACE plane that `file`, `run`,
+  `execute_tools` and AGENTS.md address binds to the physical directory stored
+  on the agent's ref (`CLIRuntimeConfig.cwd`, never `process.cwd()`). With no
+  directory bound, both planes are the one in-SQLite tree, which is what an
+  isolated fixture or an eval episode gets.
+  Relative paths resolve at `/home/user`
   (`WORKSPACE_ROOT`). The mount table adds a connected device at `/pc` and a
   container at `/sandbox`. Reads and writes cross through each executor's own
   file API and retain its consent and access policy. The workspace shell sees
@@ -70,30 +91,31 @@ agents are the actors that work inside it.
     Hosted nodes run over the canonical workspace with actor-private shell
     state and scaffold. `facetRuntime` gives each one a `node:<name>` shell id
     and a scaffold at `.kinu/nodes/<name>/scaffold/agent.js` over the
-    PARENT's file plane (`cf-backend/src/exploration.ts:178-191`). Local nodes
-    use private scratch and address the canonical parent through `parent.*`.
-    MCTS rollouts use the same facet class in a separate toolless mode and
-    acquire no runtime.
+    PARENT's file plane (`cf-backend/src/exploration.ts`). MCTS rollouts use
+    the same facet class in a separate toolless mode and acquire no runtime.
 
-    The LOCAL backend gives each node a private `/home/node-<id>`, with its own
-    credential and its own `/tmp`.
-    `agentHomeNodeProvisioner` and `nodeAgentName` build it
-    (`core/src/strategy/node-workspace.ts`), `AgentsForkDeps.nodeHome` carries
-    the three host-owned members it needs, and `runSwarmAction` builds the
-    provisioner from them. `createCLIRuntime` supplies those members from
-    `WorkspaceBundle.privileged()`, because that workspace is an in-isolate
-    `NimbusWorkspace`. Measured 2026-08-19, a shipped `agents.swarm` run there
-    reports `private-home`. The hosted backend supplies none and has nothing to
-    supply. It reaches its workspace by RPC to a Nimbus Durable Object, where a
-    filesystem call arriving without a pid acts as the session user and
-    `confinePrincipal` has no RPC form, so two of the three members do
-    not exist on that side. A hosted node therefore works in the parent's home
-    and reports `shared-origin-plane`, which is a permanent asymmetry rather
-    than an unfinished one. `docs/EXPLORATION.md` is the spec for the six axes,
+    Node isolation follows the workspace plane. `AgentsForkDeps.nodeHome`
+    carries the three host-owned members a private home needs, and
+    `agentHomeNodeProvisioner` with `nodeAgentName` builds `/home/node-<id>`
+    with its own credential and its own `/tmp`
+    (`core/src/strategy/node-workspace.ts`). A LOCAL runtime whose plane is
+    its in-SQLite tree wires those members from `WorkspaceBundle.privileged()`
+    and provisions that private home. A runtime bound to a physical directory
+    wires none, because a directory has no principal registry to confine
+    `/tmp` with, so every node shares the origin plane. The hosted backend
+    supplies none either: it reaches its workspace by RPC to a Nimbus Durable
+    Object, where a filesystem call arriving without a pid acts as the session
+    user and `confinePrincipal` has no RPC form, so two of the three members
+    do not exist on that side. A node always reports the isolation it actually
+    got, `private-home` or `shared-origin-plane`; nothing invents a boundary.
+    `docs/EXPLORATION.md` is the spec for the six axes,
     the presets, the report contract and the isolation states.
+
   - **Subordinates** (`agents`, `action: 'hire'`) are durable. Each is a
     `SubordinateAgent` facet with its own SQL history and full turn loop, using
     the canonical workspace files and the parent's sandbox/laptop planes.
+    Locally it opens over its root's stored directory, which keeps the parent's
+    plane while its memory, craft store and conversation stay its own.
     Assigned tasks and reports ride the `subordinate` ingress. Owner-driven chat
     is private; `report` is exposed only on a parent-assigned turn.
   - **Peers** are the owner's other workspace agents, addressed through

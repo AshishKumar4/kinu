@@ -131,7 +131,7 @@ carries neither. It grew the surfaces the chat work actually needed. Read
 - Model. `getModelSpec()`, `setModel()`, `getReasoningEffort()`,
   `setReasoningEffort()`, `listModels()`.
 - Capability surfaces, nullable per backend. `consents`, `localControls`,
-  `checkpoints`, `sessionHistory`.
+  `checkpoints`.
 
 `AgentClientEvent` is the one event stream. Both adapters normalize into it:
 `turn-start`, `text-delta`, `tool-call`, `tool-result`, `step-finish`,
@@ -219,8 +219,8 @@ fails if any of them returns.
 **Spec §9 One TUI over `AgentClient`: SHIPPED.** `tui/chat-app.tsx` is the only TUI
 chat app, and it serves both modes. The shared pieces are `tui/messages.tsx`
 (`MessageList`), `tui/streaming-buffer.ts` (`useStreamingBuffer`),
-`tui/overlays.tsx`, `tui/status-bar.tsx`, `tui/session-browser.ts`,
-`tui/format.ts` and `slash-commands.ts`.
+`tui/overlays.tsx`, `tui/status-bar.tsx`, `tui/format.ts` and
+`slash-commands.ts`.
 
 Backend-specific work sits in the adapter. The local client owns session resume
 and transcript hydration. The cloud client owns Durable Object history hydration
@@ -272,8 +272,9 @@ matching Durable Object callables are all deleted.
 `transcriptToMessages` are gone. `readCliSessionTranscript` and
 `transcriptMessages` remain in `session.ts` and are read only by
 `local-agent-client.ts`. On the cloud client, `history()` reads every
-`getChatHistoryPage`. The cloud client sets `sessionHistory` to `null` because a
-terminal log cannot restore Durable Object chat history.
+`getChatHistoryPage`. No client carries a session-history capability any more:
+a terminal transcript is diagnostics, never state, and chat history reaches a
+surface through `history()` over the canonical read alone.
 
 **Spec §11.3 Message mirrors and fallbacks: SHIPPED, by a different mechanism.** The
 spec wanted the mirror writes redirected. What landed makes
@@ -297,23 +298,23 @@ to create itself through the explicit route, and the message names that route
 
 **Spec §11.5 Duplicate naming paths: SHIPPED.** Covered in §10 above.
 
-## 12. Forks, and which ones are real
-
-`fork` names two live features here. One walks a conversation back and one forks
-a recorded CLI session. A third, the `fork` delegation action, was deleted.
+`fork` names two live features here. One walks a conversation back and one
+forks a cloud workspace. A third, the `fork` delegation action, was deleted.
 
 **Walk-back fork.** `/fork [n]` in either chat surface picks an earlier user
 message and restarts the conversation just before it. `forkCandidates` builds
 the picker from rendered user messages, and `findForkPivot` locates the pivot in
 the canonical row list by verbatim text plus occurrence counted from the newest
-(`agent-client.ts:139-192`). A local workspace re-points the same client at a
-forked CLI session. A cloud workspace calls the `forkAgent` RPC
-(`orchestrator.ts:3168`) and hands back a sibling client for the new workspace
-(`cloud-agent-client.ts:391-410`). Forking is refused while a turn is in flight.
+(`agent-client.ts:139-192`). Locally the walked-back tail moves under an
+archive conversation id and the workspace continues its ONE durable
+conversation with the kept prefix (`local-agent-client.ts`, `fork`). A cloud
+workspace calls the `forkAgent` RPC (`orchestrator.ts:3260`) and hands back a
+sibling client for the new workspace (`cloud-agent-client.ts:401-412`).
+Forking is refused while a turn is in flight.
 
-**Recorded session fork.** `--fork <idOrPath>` on `kinu chat` and
-`kinu run` forks a recorded CLI session into a new one
-(`packages/cli/src/program.ts:206,221`, and [CLI.md](CLI.md)).
+**The recorder fork is gone.** No CLI flag forks a recorded terminal transcript.
+Transcripts are diagnostics of runs that finished; the durable conversation is
+the only state a fork touches.
 
 **The delegation action is gone.** `AGENTS_TOOL_ACTIONS` in
 `packages/core/src/tools/registry.ts:168` is `swarm`, `hire`, `ask`, `send`,
@@ -378,8 +379,9 @@ All four are answered in code.
    consumption from the stored bearer hash. See §7 of this file.
 3. **Fork cut-point migration: RESOLVED.** The cut point is a canonical chat
    message id over the session-tree projection. See §11 and §12 of this file.
-4. **Cloud `/sessions` semantics: RESOLVED.** `kinu sessions` lists recorded
-   terminal logs (`packages/cli/src/commands/sessions.ts`). The cloud client
-   does not expose `sessionHistory`, so the TUI does not present those logs as
+4. **Cloud `/sessions` semantics: RESOLVED.** `kinu transcripts` lists recorded
+   terminal transcripts (`packages/cli/src/commands/transcripts.ts`) and labels
+   them diagnostics, never conversations to reopen. No client carries a
+   session-history capability, so the TUI does not present those transcripts as
    resumable conversations. Opening a cloud workspace loads its Durable Object
    history.

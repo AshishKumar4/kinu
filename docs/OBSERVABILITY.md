@@ -241,12 +241,12 @@ binary in `tools/oxlint/anti-slop/no-swallow.gate.test.ts`.
 ## Turn-review spend: metered once, governed, read by three of four consumers
 
 The evolution TURN LANE is the outcome review, `EvolutionEngine.reviewTurn`
-(`packages/core/src/evolution/engine.ts:331`). It makes up to three fast-model
+(`packages/core/src/evolution/engine.ts:449`). It makes up to three fast-model
 completions per graded turn: the classifier
-(`classifyTurnOutcome`, `evolution/outcomes.ts:265`, calling at `:269`), the one-sentence
-reflection (`engine.ts:1033`) and pattern extraction's generalize call
-(`engine.ts:1059`). All three resolve through one getter, `fastLlm`
-(`engine.ts:259-261`: `return this.rt.fastLlm ?? this.rt.llm`).
+(`classifyTurnOutcome`, `evolution/outcomes.ts:299`, called at `engine.ts:473`),
+the one-sentence reflection (`engine.ts:905`) and pattern extraction's
+generalize call (`engine.ts:1182`). All three resolve through one getter,
+`fastLlm` (`engine.ts:314-315`: `return this.rt.fastLlm ?? this.rt.llm`).
 
 **It IS metered.** `LLM.complete` returns a bare string
 (`packages/core/src/types/primitives.ts:157`), so no caller in `evolution/`
@@ -254,21 +254,33 @@ ever sees a token count. Every backend's implementation still captures the
 provider's usage before narrowing the result and reports it through a
 `ModelCallSink`:
 
-- CLI: `createLocalProviderLLM.complete` reports at
-  `packages/cli-backend/src/model-resolver.ts:253`; the runtime binds
-  `spend: { source: 'reflection' }` for `rt.llm` and `{ source: 'fast' }` for
-  `rt.fastLlm` (`packages/cli-backend/src/runtime.ts:328`, `:357`), and the sink
-  writes a durable `model_call` run event
-  (`packages/cli-backend/src/local-session.ts:322-355`).
-- cf: `createFastLLM` / `createDualPathLLM` report through `reportCall`
-  (`packages/cf-backend/src/runtime.ts:878-895`, wired at `:579-580`), landing
-  in the same row type via `ActorAgent.reportModelCall`
-  (`packages/cf-backend/src/actor-agent.ts:1607-1626`).
+- Every producer's model comes from `MODEL_ROUTE_POLICY`
+  (`core/src/profiles/model-route.ts`), the one table keyed by `SpendSource`.
+  `agent`, `head`, `mcts`, `swarm` and `sandbox` ride the turn's own resolved
+  tier. Fixed slots decide the rest: `scaffold` and `judge` run `deep`,
+  `advisor` runs `slow`, `compaction` and `reflection` run `fast`, and
+  `fast` itself runs `tiny`. `resolveModelRoute` is the only read path,
+  so a producer cannot grow a private resolver beside it.
+- CLI: the runtime resolves each lane through `resolveModelRoute` against the
+  immutable turn profile and reports with `{ source: resolution.source }`. The
+  report leaves `createLocalProviderLLM.complete` through `reportCall`
+  (`packages/cli-backend/src/model-resolver.ts:185`, called at `:252`), and
+  the `LocalAgentSession.modelCallSink` writes a durable `model_call` run
+  event per completed call
+  (`packages/cli-backend/src/local-session.ts`).
+- cf: every fixed lane is `createProfileLaneLLM` over its source
+  (`packages/cf-backend/src/runtime.ts:926`, wired for `fast`, `judge` and
+  `advisor` beside the runtime). It resolves the same route, runs it, and
+  reports through `reportCall` (`:907`) into `ActorAgent.reportModelCall`
+  (`packages/cf-backend/src/actor-agent.ts:1715`), landing in the same row
+  type the CLI writes.
 
 `workspaceSpend()` reads exactly those rows
-(`packages/core/src/read-models/workspace-spend.ts:182-187`) and buckets them
-under the `fast` and `reflection` producers, which is what the Activity cost
-panel renders. **So the workspace total includes review spend.**
+(`packages/core/src/read-models/workspace-spend.ts`) and groups them by
+producer, so the `fast` and `reflection` rows carry review spend and the
+`advisor` row carries the turn reviewer's slow-tier call. That grouping is
+what the Activity cost panel renders. **So the workspace total includes
+review spend.**
 
 `workspaceSpend()` now reports that total on TWO axes. `producers` groups it by
 what kind of work made the call, over the named window. `missions` groups it by
@@ -347,7 +359,7 @@ open, so its reviews are never drained, and `ArmSpend.executionGradedTurns`
 (`scripts/bench-external.ts:197`, `:161`, probed through `turn_outcomes`) reads 0 for
 an `evolve=true` arm. That is truthful rather than broken. The turn genuinely was
 not graded inside the trial. It does mean a preregistered arm's grading figure
-is not comparable across this change, and the `bench-agent-worker.ts` session is
+is not comparable across this change, and the `bench-agent-worker.ts` process is
 unaffected because it is built on the interactive surface (no `oneShot`), so it
 still reviews inline and its proxy still counts the tokens.
 
