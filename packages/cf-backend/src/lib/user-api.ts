@@ -3,7 +3,13 @@
  * attached automatically by the HttpOnly cookie (or local dev's DEV_USER_EMAIL
  * is synthesized server-side), so these fetches are bare.
  */
-import { JsonObjectSchema, type Credential } from '@kinu.run/core';
+import {
+  JsonObjectSchema,
+  ProfileCatalogEnvelopeSchema,
+  type Credential,
+  type ProfileCatalog,
+  type ProfileCatalogEnvelope,
+} from '@kinu.run/core';
 import { tolerateAsync } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
@@ -221,6 +227,15 @@ export const listConfig       = () => api(StringConfigSchema, 'GET', '/config');
 export const getConfig        = (key: string) => api(ConfigEntrySchema, 'GET', `/config/${encodeURIComponent(key)}`);
 export const setConfig        = (key: string, value: string) =>
   api(OkSchema, 'PUT', `/config/${encodeURIComponent(key)}`, { value });
+
+// ── Account roles and model tiers ─────────────────────────────────
+export const getProfileCatalog = (): Promise<ProfileCatalogEnvelope> =>
+  api(ProfileCatalogEnvelopeSchema, 'GET', '/profile-catalog');
+export const updateProfileCatalog = (
+  catalog: ProfileCatalog,
+  expectedVersion: number,
+): Promise<ProfileCatalogEnvelope> =>
+  api(ProfileCatalogEnvelopeSchema, 'PUT', '/profile-catalog', { catalog, expectedVersion });
 
 // ── Models + providers ─────────────────────────────────────────────
 // The model menu only changes when a provider is connected/disconnected, so it

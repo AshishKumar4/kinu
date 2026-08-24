@@ -6,13 +6,11 @@
  * same AgentClient `kinu chat` uses.
  */
 
-import { existsSync } from 'node:fs';
 import { Writable } from 'node:stream';
 import { ndJsonStream } from '@agentclientprotocol/sdk';
 import { createAcpAgent } from '../acp/agent';
 import { createAgentClient } from '../client-factory';
-import { resolveAgentTarget } from '../agent-target';
-import { agentDbPath, resolveAgentRef } from '../config';
+import { requireAgentTarget } from '../local-target';
 import { ensureLocalDaemonRunning } from './daemon';
 import { VERSION } from '../display';
 
@@ -21,16 +19,13 @@ export interface AcpCommandOptions {
   baseUrl?: string;
   auth?: string;
   noAutoEvolve?: boolean;
-  sessionDir?: string;
+  transcriptDir?: string;
 }
 
 export async function acpCommand(name: string, opts: AcpCommandOptions): Promise<void> {
-  if (!resolveAgentRef(name) && !existsSync(agentDbPath(name))) {
-    // stdout is the protocol channel — diagnostics must never touch it.
-    console.error(`Workspace "${name}" not found. Create it with: kinu create ${name}`);
-    process.exit(1);
-  }
-  const target = resolveAgentTarget(name);
+  // printError writes to stderr: stdout is the protocol channel and diagnostics
+  // must never touch it.
+  const target = requireAgentTarget(name);
   if (target.mode === 'local') ensureLocalDaemonRunning();
 
   const app = createAcpAgent({
@@ -42,7 +37,7 @@ export async function acpCommand(name: string, opts: AcpCommandOptions): Promise
       baseUrl: opts.baseUrl,
       auth: opts.auth,
       noAutoEvolve: opts.noAutoEvolve,
-      sessionDir: opts.sessionDir,
+      transcriptDir: opts.transcriptDir,
     }),
   });
 

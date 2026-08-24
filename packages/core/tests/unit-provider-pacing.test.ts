@@ -178,49 +178,6 @@ describe('a wait one caller was told to take holds its siblings', () => {
   });
 });
 
-describe('a declared wait is readable by whoever is timing the silence', () => {
-  test('an open wait reports its deadline; an elapsed one reports only that it happened', () => {
-    // The two questions the turn loop's watchdog asks, and they are different.
-    // "Is a wait open" says whether to keep waiting. "Did one happen at all" says
-    // whether the silence it is about to end was explained — a wait that opened
-    // AND elapsed inside the window is gone by the time the watchdog looks, and
-    // the turn would otherwise be reported as an unexplained stall with the cause
-    // sitting in the log.
-    const clock = fixedClock();
-    const pacer = new ProviderPacer({ now: clock.now });
-
-    expect(pacer.waits()).toEqual({ untilMs: 0, declared: 0 });
-
-    pacer.declareWait(HOST, 5_000);
-    const open = pacer.waits();
-    expect(open.untilMs).toBe(clock.now() + 5_000);
-    expect(open.declared).toBe(1);
-
-    clock.advance(5_001);
-    const elapsed = pacer.waits();
-    expect(elapsed.untilMs).toBe(0);
-    expect(elapsed.declared).toBe(1);
-  });
-
-  test('the furthest open deadline wins across hosts', () => {
-    const clock = fixedClock();
-    const pacer = new ProviderPacer({ now: clock.now });
-    pacer.declareWait(HOST, 2_000);
-    pacer.declareWait('api.openai.com', 9_000);
-    expect(pacer.waits().untilMs).toBe(clock.now() + 9_000);
-  });
-
-  test('a non-wait is not recorded as one', () => {
-    // `parseRetryAfter` legitimately yields 0 for `Retry-After: 0`, and a
-    // zero-length wait that still bumped the count would make the watchdog blame
-    // a rate limit for a silence nobody was asked to take.
-    const pacer = new ProviderPacer({ now: fixedClock().now });
-    pacer.declareWait(HOST, 0);
-    pacer.declareWait(HOST, -1);
-    expect(pacer.waits()).toEqual({ untilMs: 0, declared: 0 });
-  });
-});
-
 describe('a cancelled caller stops waiting', () => {
   test('an abort releases a request queued behind a full lane budget', async () => {
     // Without this a cancelled node sits in the queue until an unrelated release

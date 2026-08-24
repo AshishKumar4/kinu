@@ -1,5 +1,5 @@
-import type { SessionSurface } from '@kinu.run/core';
-import { requireAuthConfig } from './config';
+import type { InvocationSurface } from '@kinu.run/core';
+import { requireAuthConfig, resolveLocalAgent } from './config';
 import type { AgentTarget } from './agent-target';
 import type { AgentClient } from './agent-client';
 import type { CliSessionOptions } from './session';
@@ -32,7 +32,7 @@ export interface AgentClientFlags {
 export async function createAgentClient(
   target: AgentTarget,
   opts: AgentClientFlags & CliSessionOptions,
-  surface: SessionSurface = 'interactive',
+  surface: InvocationSurface = 'interactive',
 ): Promise<AgentClient> {
   if (target.mode === 'cloud') {
     rejectLocalLlmFlags(opts);
@@ -42,18 +42,23 @@ export async function createAgentClient(
       token: auth.token,
       agentName: target.name,
       cloudName: target.cloudName,
-      session: opts,
+      transcript: opts,
       oneShot: opts.oneShot,
     });
   }
-  return openLocalAgentClient(target.localName, {
+  // The one local resolution: the database, and the project directory every
+  // peer agent in this virtual workspace shares. Binding the planes to the
+  // recorded placement is what stops them following the invocation directory.
+  const local = resolveLocalAgent(target.requestedName);
+  return openLocalAgentClient(local.name, {
     model: opts.model,
     baseUrl: opts.baseUrl,
     auth: opts.auth,
     noAutoEvolve: opts.noAutoEvolve,
     oneShot: opts.oneShot,
-    session: opts,
+    transcript: opts,
     surface,
+    cwd: local.cwd,
   });
 }
 

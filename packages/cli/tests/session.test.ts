@@ -4,13 +4,11 @@ import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   createCliSession,
-  defaultConversationIdForCliOptions,
+  findTranscriptPath,
   listCliSessions,
   readCliSessionTranscript,
-  resolveRequestedSession,
   transcriptMessages,
 } from "../src/session";
-import { renderSessionBrowser, selectSession } from "../src/tui/session-browser";
 import { SessionRecorder } from "../src/session-recorder";
 import type { AgentClientEvent } from "../src/agent-client";
 
@@ -20,38 +18,50 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-function tempSessionDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "kinu-session-"));
+function tempTranscriptDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), "kinu-transcripts-"));
   tempDirs.push(dir);
   return dir;
 }
 
-describe("CLI sessions", () => {
+describe("CLI transcripts", () => {
   test("records the durable conversation id separately from the transcript id", () => {
-    const sessionDir = tempSessionDir();
-    const conversationId = defaultConversationIdForCliOptions()!;
-    const session = createCliSession("jarvis", { sessionDir, conversationId });
+    const dir = tempTranscriptDir();
+    const conversationId = "default";
+    const session = createCliSession("jarvis", { transcriptDir: dir, conversationId });
     session.append("user", { text: "hello" });
     session.append("assistant", { text: "hi" });
 
-    const [info] = listCliSessions("jarvis", { sessionDir });
-    expect(info?.id).toBe(session.id);
-    expect(info?.conversationId).toBe(conversationId);
+    // A later process records a NEW artifact under the SAME conversation id:
+    // transcripts are diagnostics, never conversations to reopen.
+    const next = createCliSession("jarvis", { transcriptDir: dir, conversationId });
+    expect(next.id).not.toBe(session.id);
+    expect(next.conversationId).toBe(conversationId);
 
-    const resumed = createCliSession("jarvis", { sessionDir, session: session.id });
-    expect(resumed.id).toBe(session.id);
-    expect(resumed.conversationId).toBe(conversationId);
+    const infos = listCliSessions("jarvis", { transcriptDir: dir });
+    expect(infos.map((info) => info.id).sort()).toEqual([session.id, next.id].sort());
+    expect(infos.every((info) => info.conversationId === conversationId)).toBe(true);
+  });
+
+  test("noTranscript records nothing on disk", () => {
+    const dir = tempTranscriptDir();
+    const session = createCliSession("jarvis", { transcriptDir: dir, noTranscript: true });
+    expect(session.mode).toBe("none");
+    expect(session.append("user", { text: "hello" })).toBeNull();
+
+    expect(listCliSessions("jarvis", { transcriptDir: dir })).toEqual([]);
+    expect(findTranscriptPath("jarvis", session.id, { transcriptDir: dir })).toBeNull();
   });
 
   test("hydrates recorded turns into TUI messages", () => {
-    const sessionDir = tempSessionDir();
-    const session = createCliSession("jarvis", { sessionDir, conversationId: "default" });
+    const dir = tempTranscriptDir();
+    const session = createCliSession("jarvis", { transcriptDir: dir, conversationId: "default" });
     session.append("user", { text: "build it" });
     session.append("tool_call", { toolName: "workspace.writeFile", args: { path: "a.ts" } });
     session.append("tool_result", { toolName: "workspace.writeFile", result: "ok" });
     session.append("assistant", { text: "done" });
 
-    const transcript = readCliSessionTranscript("jarvis", session.id, { sessionDir });
+    const transcript = readCliSessionTranscript("jarvis", session.id, { transcriptDir: dir });
     const messages = transcriptMessages(transcript.entries);
 
     expect(messages.map((message) => message.role)).toEqual(["user", "tool_call", "tool_result", "assistant"]);
@@ -59,8 +69,8 @@ describe("CLI sessions", () => {
   });
 
   test("recorder persists text and tool calls in chronological order", () => {
-    const sessionDir = tempSessionDir();
-    const session = createCliSession("jarvis", { sessionDir, conversationId: "default" });
+    const dir = tempTranscriptDir();
+    const session = createCliSession("jarvis", { transcriptDir: dir, conversationId: "default" });
     const recorder = new SessionRecorder("local");
     const turnText = "first text second text third text";
     // A turn that streams: text → tool → text → tool → text.
@@ -77,7 +87,7 @@ describe("CLI sessions", () => {
     ];
     for (const event of events) recorder.record(session, event);
 
-    const transcript = readCliSessionTranscript("jarvis", session.id, { sessionDir });
+    const transcript = readCliSessionTranscript("jarvis", session.id, { transcriptDir: dir });
     const messages = transcriptMessages(transcript.entries);
 
     // Text segments land at their true positions, NOT regrouped after the tools.
@@ -95,8 +105,8 @@ describe("CLI sessions", () => {
   });
 
   test("recorder falls back to turn.text when no deltas streamed", () => {
-    const sessionDir = tempSessionDir();
-    const session = createCliSession("jarvis", { sessionDir, conversationId: "default" });
+    const dir = tempTranscriptDir();
+    const session = createCliSession("jarvis", { transcriptDir: dir, conversationId: "default" });
     const recorder = new SessionRecorder("local");
     // The backend synthesized text without streaming deltas (ended on a tool).
     for (const event of [
@@ -106,43 +116,34 @@ describe("CLI sessions", () => {
       { type: "turn-end", turn: { text: "synthesized answer", toolCalls: [], steps: 1, durationMs: 1, hadError: false } },
     ] satisfies AgentClientEvent[]) recorder.record(session, event);
 
-    const transcript = readCliSessionTranscript("jarvis", session.id, { sessionDir });
+    const transcript = readCliSessionTranscript("jarvis", session.id, { transcriptDir: dir });
     const messages = transcriptMessages(transcript.entries);
     expect(messages.map((m) => m.role)).toEqual(["tool_call", "tool_result", "assistant"]);
     expect(messages.at(-1)?.content).toBe("synthesized answer");
   });
 
-  test("skips malformed session headers when listing", () => {
-    const sessionDir = tempSessionDir();
-    const agentDir = join(sessionDir, "jarvis");
+  test("skips malformed headers when listing and locating", () => {
+    const dir = tempTranscriptDir();
+    const agentDir = join(dir, "jarvis");
     mkdirSync(agentDir, { recursive: true });
     writeFileSync(join(agentDir, "bad.jsonl"), `${JSON.stringify({ type: "session", version: 1 })}\n`);
 
-    expect(listCliSessions("jarvis", { sessionDir })).toEqual([]);
+    expect(listCliSessions("jarvis", { transcriptDir: dir })).toEqual([]);
+    expect(findTranscriptPath("jarvis", "bad", { transcriptDir: dir })).toBe(agentDir + "/bad.jsonl");
   });
 
-  test("rejects ambiguous session prefixes", () => {
-    const sessionDir = tempSessionDir();
-    const agentDir = join(sessionDir, "jarvis");
+  test("locates one transcript by exact id or path, never by selection", () => {
+    const dir = tempTranscriptDir();
+    const agentDir = join(dir, "jarvis");
     mkdirSync(agentDir, { recursive: true });
-    writeSession(agentDir, "abc111", "conv-a");
-    writeSession(agentDir, "abc222", "conv-b");
+    writeSession(agentDir, "20260101T000000-abc111", "conv-a");
 
-    expect(() => resolveRequestedSession("jarvis", { sessionDir, session: "abc" })).toThrow("ambiguous");
-  });
-
-  test("renders and selects sessions without choosing ambiguous prefixes", () => {
-    const sessionDir = tempSessionDir();
-    const agentDir = join(sessionDir, "jarvis");
-    mkdirSync(agentDir, { recursive: true });
-    writeSession(agentDir, "abc111", "conv-a");
-    writeSession(agentDir, "abc222", "conv-b");
-    const sessions = listCliSessions("jarvis", { sessionDir });
-
-    expect(renderSessionBrowser("resume", sessions)).toContain("Type a number or session id to resume");
-    expect(selectSession(sessions, "1")?.info.id).toBe(sessions[0]?.id);
-    expect(selectSession(sessions, "abc111")?.info.id).toBe("abc111");
-    expect(selectSession(sessions, "abc")).toBeNull();
+    const byId = findTranscriptPath("jarvis", "20260101T000000-abc111", { transcriptDir: dir });
+    expect(byId).toBe(join(agentDir, "20260101T000000-abc111.jsonl"));
+    expect(findTranscriptPath("jarvis", byId!, { transcriptDir: dir })).toBe(byId);
+    expect(findTranscriptPath("jarvis", "missing-id", { transcriptDir: dir })).toBeNull();
+    // No prefix matching: a diagnostic lookup either names the artifact or fails.
+    expect(findTranscriptPath("jarvis", "20260101", { transcriptDir: dir })).toBeNull();
   });
 });
 

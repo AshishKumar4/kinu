@@ -3,8 +3,7 @@
  * REPL, one-shot run, rpc) drives, with one adapter per backend:
  * LocalAgentClient over LocalAgentSession and CloudAgentClient over the
  * OrchestratorAgent DO websocket. UIs never branch on backend; anything only
- * one backend supports is exposed through the capability surfaces below
- * (`consents`, `localControls`, `checkpoints`, `sessionHistory`) and is null elsewhere.
+ * one backend supports is exposed through the capability surfaces below.
  */
 
 import { JsonObjectSchema } from '@kinu.run/core';
@@ -13,10 +12,10 @@ import type {
   FileCheckpointListing, FileRestorePlan, FileRestoreResult,
   AlternateTakeSet, TakePickOutcome,
   EvolutionConfigView,
-  ReasoningEffort, Usage, RunEvent, JsonObject, JsonValue,
+  ReasoningEffort, TierId, Usage, RunEvent, JsonObject, JsonValue,
 } from '@kinu.run/core';
 import type { ShellApprovalHandler } from '@kinu.run/cli-backend';
-import type { CliSession, CliSessionInfo } from './session';
+import type { CliSession } from './session';
 import type { AgentModelMenu } from './model-catalog';
 import * as v from 'valibot';
 
@@ -79,6 +78,8 @@ export type AgentClientEvent =
 
 export interface AgentClientSendOptions {
   cwd?: string;
+  /** One-turn inference tier override. The backend snapshots it with the turn. */
+  tier?: TierId;
 }
 
 export interface AgentClientStatus {
@@ -96,6 +97,8 @@ export interface AgentClientStatus {
   toolCount?: number;
   /** Local-only: whether turn/session auto-evolution is enabled. */
   autoEvolve?: boolean;
+  roleId?: string;
+  tierId?: string;
 }
 
 export interface AgentToolDescription {
@@ -245,14 +248,6 @@ export interface LocalSessionControls {
   listModelProviders(): Promise<Array<{ id: string; available: boolean; unavailableReason?: string }>>;
 }
 
-/** Capability surface: recorded terminal sessions that restore the same
- * durable conversation when selected. Cloud chat lives in one DO transcript,
- * so a cloud client does not expose this until the server can restore one. */
-export interface SessionHistorySurface {
-  list(): CliSessionInfo[];
-  resume(sessionRef: string): Promise<void>;
-}
-
 export interface AgentClient {
   readonly mode: AgentClientMode;
   readonly agentName: string;
@@ -261,15 +256,14 @@ export interface AgentClient {
   readonly consents: DeviceConsentSurface | null;
   readonly localControls: LocalSessionControls | null;
   readonly checkpoints: FileCheckpointSurface | null;
-  readonly sessionHistory: SessionHistorySurface | null;
   /** Per-message aggregate cap on raw bytes this backend will accept inlined
    *  as data-URL file parts. A storage row limit on the cloud, a provider
    *  request budget locally — the two numbers differ by 8×, so the chat
    *  surfaces ask rather than assume. */
   readonly inlineAttachmentLimitBytes: number;
 
-  /** Bring up startup resources (MCP servers, orphaned-job recovery). Input
-   *  should not be accepted before this resolves. */
+  /** Bring up client-owned startup resources (local MCP servers). The daemon
+   *  owns orphaned-job recovery, so reconnecting a client cannot redrive work. */
   connect(): Promise<void>;
   /** Observe the full event stream: user turns, programmatic/reactor turns,
    *  evolution markers, and errors. */
@@ -307,8 +301,10 @@ export interface AgentClient {
   settleBackgroundWork?(): Promise<void>;
   close(): Promise<void>;
 
-  /** Canonical conversation history: the DO chat projection for cloud, the
-   *  recorded terminal transcript for local. */
+  /** Rendered history for hydrating a chat surface: the DO chat projection
+   *  for cloud, this process's recorded transcript for local. The local
+   *  durable conversation lives in the workspace database and seeds the model
+   *  without hydration. */
   history(): Promise<AgentTranscriptMessage[]>;
 
   status(): Promise<AgentClientStatus>;
@@ -328,6 +324,8 @@ export interface AgentClient {
    *  re-points the convergence record on a sibling pick, and (when the pick
    *  changes the answer) queues the continuation turn. */
   pickTake(takeId: string, nodeId: string): Promise<TakePickOutcome>;
+  /** Durably select one owner-configured role for the next turn. */
+  setRole(roleId: string): Promise<{ role: string }>;
   getModelSpec(): Promise<string | null>;
   /** Set the agent's model. Local: the session/agent_config spec; cloud: the
    *  durable agent model (same semantics as the web UI). */

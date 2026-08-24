@@ -1,6 +1,5 @@
-import { existsSync } from 'node:fs';
-import { agentDbPath, resolveAgentRef } from '../config';
 import { resolveAgentTarget } from '../agent-target';
+import { agentTargetExists, requireAgentTarget } from '../local-target';
 import { createAgentClient } from '../client-factory';
 import { runChatLoop } from '../chat-loop';
 import { ensureLocalDaemonRunning } from './daemon';
@@ -14,25 +13,15 @@ export interface ChatCommandOptions {
   baseUrl?: string;
   auth?: string;
   classic?: boolean;
-  continue?: boolean;
-  resume?: boolean;
-  session?: string;
-  sessionDir?: string;
-  noSession?: boolean;
-  fork?: string;
+  transcript?: boolean;
+  transcriptDir?: string;
 }
 
 function optionsForWorkspaceSwitch(
   opts: ChatCommandOptions,
   mode: 'local' | 'cloud',
 ): ChatCommandOptions {
-  const selected: ChatCommandOptions = {
-    ...opts,
-    continue: false,
-    resume: false,
-    session: undefined,
-    fork: undefined,
-  };
+  const selected: ChatCommandOptions = { ...opts };
   if (mode === 'cloud') {
     selected.model = undefined;
     selected.baseUrl = undefined;
@@ -75,19 +64,14 @@ export async function chatCommand(
     }
   }
 
-  if (!resolveAgentRef(name) && !existsSync(agentDbPath(name))) {
-    printError(`Workspace "${name}" not found.`, `Create it with: kinu create ${name}`);
-    process.exit(1);
-  }
-
-  const target = resolveAgentTarget(name);
+  const target = requireAgentTarget(name);
   if (target.mode === 'local') ensureLocalDaemonRunning();
   installTurnDiagnostics();
   const client = await createAgentClient(target, opts);
-  // A cloud workspace keeps its transcript server-side, so opening one always
-  // replays it; a local one replays only the recorded session you asked for.
-  const hydrateHistory = target.mode === 'cloud'
-    || Boolean(opts.session || opts.continue || opts.resume || opts.fork);
+  // A cloud workspace keeps its conversation server-side, so opening one
+  // replays it. A local workspace's durable conversation lives in the agent
+  // database and seeds the model directly; the terminal starts blank.
+  const hydrateHistory = target.mode === 'cloud';
 
   if (opts.classic || !process.stdin.isTTY || !process.stdout.isTTY) {
     await runChatLoop({ client });
@@ -97,10 +81,11 @@ export async function chatCommand(
       client,
       hydrateHistory,
       onWorkspaceSelect: async (selectedName) => {
-        if (!resolveAgentRef(selectedName) && !existsSync(agentDbPath(selectedName))) {
+        const selectedTarget = resolveAgentTarget(selectedName);
+        // Mid-session, so this throws for the TUI to show rather than exiting.
+        if (!agentTargetExists(selectedTarget)) {
           throw new Error(`Workspace "${selectedName}" is no longer available.`);
         }
-        const selectedTarget = resolveAgentTarget(selectedName);
         if (selectedTarget.mode === 'local') ensureLocalDaemonRunning();
         const selectedOptions = optionsForWorkspaceSwitch(opts, selectedTarget.mode);
         return createAgentClient(selectedTarget, selectedOptions);

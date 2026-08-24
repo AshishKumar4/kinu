@@ -16,10 +16,10 @@
 import { generateText, type LanguageModel } from 'ai';
 import {
   type HeadRuntime, type HeadGrounding, type SpawnedHead, type HeadInput, type HeadReport, type MergeOutput,
-  type WebSearchProvider, type AgentRuntime, type CodemodeProvider,
+  type WebSearchProvider, type CodemodeProvider,
   type HeadSplitRequest, type HeadSplitResult,
-  type MissionGovernor, type ModelCallSink,
-  HeadCapture, runHeadInference, buildHeadToolSet, HeadController, HeadJournal, initHeadsTables,
+  type MissionGovernor, type ModelCallSink, type ModelOperationSink,
+  HeadCapture, beginModelOperation, runHeadInference, buildHeadToolSet, HeadController, HeadJournal, initHeadsTables,
   extractJsonObject, MergeOutputSchema, normalizeUsage, reasoningEffortOptions,
   localMissionScope,
 } from '@kinu.run/core';
@@ -27,7 +27,7 @@ import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import { Database } from 'bun:sqlite';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { makeSql, makeExecRaw, buildCLIHeadRuntime } from './runtime';
+import { makeSql, makeExecRaw, buildCLIHeadRuntime, type CLIRuntime } from './runtime';
 import { createNodeExecuteToolFactory } from './execute-tools-factory';
 import { kinuHome } from './home';
 import * as v from 'valibot';
@@ -50,10 +50,7 @@ export interface CLIHeadRuntimeDeps {
   resolveModel?: (spec: string) => LanguageModel;
   /** The parent session's runtime — the real execution surface every head forks
    *  (host executor, files, llm/executor/schedule, checkpoints). */
-  parentRuntime: AgentRuntime;
-  /** The directory the CLI was invoked in — the head's /workspace root, where
-   *  the task's files live. */
-  cwd: string;
+  parentRuntime: CLIRuntime;
   /** The shared web research provider — same seam the main loop uses. Backs the
    *  head's `web` tool. */
   webSearch: WebSearchProvider;
@@ -86,6 +83,13 @@ export interface CLIHeadRuntimeDeps {
    *  counted nowhere else. It reports as `judge`, which is what it is: one
    *  grading/synthesis pass over what the forks came back with. */
   reportModelCall?: ModelCallSink;
+  /** Where the merge call's operation lifecycle — its start/end rows — is
+   *  filed. Rides beside `reportModelCall` for the same reason core's
+   *  `generateJson` keeps them on one `spend`: two facts about ONE call, and
+   *  a caller that wired them separately could report a cost for an operation
+   *  it never opened. Omit ⇒ the merge runs unwatched, like any seam with no
+   *  sink. */
+  operations?: ModelOperationSink;
 }
 
 /** Per-head abort flag — flipped by SpawnedHead.abort (a caller-requested
@@ -175,7 +179,6 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, flag: Ab
     const capture = new HeadCapture();
     const rt = buildCLIHeadRuntime(db, {
       parentRuntime: deps.parentRuntime,
-      cwd: deps.cwd,
       agentId: input.id,
       agentName: `head-${input.id.slice(0, 8)}`,
       writeObserver: capture.files,
@@ -260,15 +263,28 @@ async function mergeViaLLM(deps: CLIHeadRuntimeDeps, prompt: string): Promise<Me
     prompt,
   };
   if (providerOptions) request.providerOptions = providerOptions;
-  const result = await generateText(request);
+  // The frame opens BEFORE the request, so a call that never returns leaves a
+  // start row naming the merge rather than nothing at all.
+  const operation = beginModelOperation(
+    { source: 'judge', operations: deps.operations },
+    'generate_json',
+  );
+  let result;
+  try {
+    result = await generateText(request);
+  } catch (err) {
+    operation.failed({ cause: err });
+    throw err;
+  }
   // Reported BEFORE the schema check, and deliberately: a reply that arrived and
   // was billed still cost what it cost, even when the merge then rejects it as
-  // unparseable. A call that THREW reports nothing — it produced no usage and,
-  // as far as this seam can see, was not billed.
-  deps.reportModelCall?.({
-    source: 'judge',
-    usage: normalizeUsage(result.totalUsage),
-    modelId: result.response.modelId,
-  });
+  // unparseable. The OPERATION also ends here for the same reason — it
+  // succeeded; what the output turns out to be is the controller's verdict. A
+  // call that THREW reports nothing — it produced no usage and, as far as this
+  // seam can see, was not billed; its frame closes failed above instead.
+  const usage = normalizeUsage(result.totalUsage);
+  const modelId = result.response.modelId;
+  operation.completed({ usage, modelId });
+  deps.reportModelCall?.({ source: 'judge', usage, modelId });
   return v.parse(MergeOutputSchema, extractJsonObject(result.text));
 }

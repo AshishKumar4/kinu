@@ -1,10 +1,10 @@
-// Behavior tests for SessionSearchStore — zero-LLM FTS5 transcript search
+// Behavior tests for ConversationSearchStore, the zero-LLM transcript reader
 // over the canonical `messages` table (the store both backends persist to).
 import { describe, test, expect } from 'bun:test';
 import { createTestSql, type TestSql } from '@kinu.run/test-utils';
-import { SessionSearchStore, initAllTables } from '../src/index';
+import { ConversationSearchStore, initAllTables } from '../src/index';
 
-interface Fixture { sql: TestSql['sql']; store: SessionSearchStore }
+interface Fixture { sql: TestSql['sql']; store: ConversationSearchStore }
 
 let nextRow = 0;
 function insert(sql: TestSql['sql'], sessionId: string, role: string, content: string, createdAt?: number): string {
@@ -18,17 +18,17 @@ function insert(sql: TestSql['sql'], sessionId: string, role: string, content: s
 function setup(): Fixture {
   const { sql, execRaw } = createTestSql();
   initAllTables(execRaw, sql);
-  return { sql, store: new SessionSearchStore(sql) };
+  return { sql, store: new ConversationSearchStore(sql) };
 }
 
-describe('SessionSearchStore.search', () => {
+describe('ConversationSearchStore.search', () => {
   test('backfills messages persisted before the index existed', () => {
     const { sql, store } = setup();
     insert(sql, 'alpha', 'user', 'we decided to deploy with wrangler to staging');
     insert(sql, 'alpha', 'assistant', 'staging deploy done via wrangler');
     const hits = store.search('wrangler staging');
     expect(hits.length).toBe(2);
-    expect(hits[0]!.sessionId).toBe('alpha');
+    expect(hits[0]!.conversationId).toBe('alpha');
     expect(hits[0]!.snippet).toContain('[wrangler]');
   });
 
@@ -39,17 +39,17 @@ describe('SessionSearchStore.search', () => {
     const hits = store.search('kubernetes ingress');
     expect(hits.length).toBe(1);
     expect(hits[0]!.role).toBe('user');
-    expect(hits[0]!.sessionId).toBe('beta');
+    expect(hits[0]!.conversationId).toBe('beta');
   });
 
-  test('ranks the denser match first and carries session/message refs', () => {
+  test('ranks the denser match first and carries conversation/message refs', () => {
     const { sql, store } = setup();
     insert(sql, 'a', 'assistant', 'postgres mentioned once in passing among many other words here');
     const dense = insert(sql, 'b', 'assistant', 'postgres tuning: postgres vacuum and postgres indexes');
     const hits = store.search('postgres');
     expect(hits.length).toBe(2);
     expect(hits[0]!.messageId).toBe(dense);
-    expect(hits[0]!.sessionId).toBe('b');
+    expect(hits[0]!.conversationId).toBe('b');
     expect(Number.isFinite(hits[0]!.createdAt)).toBe(true);
   });
 
@@ -66,7 +66,7 @@ describe('SessionSearchStore.search', () => {
     insert(sql, 'mcts', 'assistant', 'topicword inside the mcts tree');
     for (let i = 0; i < 15; i++) insert(sql, 'chat', 'user', `topicword number ${i}`);
     expect(store.search('topicword', 50).length).toBe(10);   // clamped to 10
-    expect(store.search('topicword').every((h) => h.sessionId === 'chat')).toBe(true);
+    expect(store.search('topicword').every((hit) => hit.conversationId === 'chat')).toBe(true);
   });
 
   test('is safe for empty and FTS-hostile queries', () => {
@@ -77,13 +77,13 @@ describe('SessionSearchStore.search', () => {
   });
 });
 
-describe('SessionSearchStore.scroll', () => {
+describe('ConversationSearchStore.scroll', () => {
   test('returns the anchored window in transcript order with edge counts', () => {
     const { sql, store } = setup();
     const ids = Array.from({ length: 9 }, (_, i) =>
       insert(sql, 'long', i % 2 === 0 ? 'user' : 'assistant', `message number ${i}`));
     const view = store.scroll(ids[4]!, 2)!;
-    expect(view.sessionId).toBe('long');
+    expect(view.conversationId).toBe('long');
     expect(view.messages.map((m) => m.content)).toEqual([
       'message number 2', 'message number 3', 'message number 4',
       'message number 5', 'message number 6',
@@ -93,9 +93,9 @@ describe('SessionSearchStore.scroll', () => {
     expect(view.messagesAfter).toBe(2);    // messages 7,8 outside the window
   });
 
-  test('clips at session start/end and never crosses sessions', () => {
+  test('clips at conversation edges and never crosses archived roots', () => {
     const { sql, store } = setup();
-    insert(sql, 'other', 'user', 'unrelated session');
+    insert(sql, 'other', 'user', 'unrelated conversation');
     const first = insert(sql, 'short', 'user', 'first');
     insert(sql, 'short', 'assistant', 'second');
     const view = store.scroll(first, 5)!;
@@ -121,18 +121,18 @@ describe('SessionSearchStore.scroll', () => {
   });
 });
 
-describe('SessionSearchStore.browse', () => {
-  test('lists sessions newest-active first with counts and previews', () => {
+describe('ConversationSearchStore.browse', () => {
+  test('lists archived roots newest-active first with counts and previews', () => {
     const { sql, store } = setup();
     insert(sql, 'old', 'user', 'old kickoff question', 1000);
     insert(sql, 'old', 'assistant', 'old answer', 2000);
     insert(sql, 'new', 'user', 'new kickoff question', 3000);
     insert(sql, 'mcts', 'user', 'tree node', 9000);
-    const sessions = store.browse();
-    expect(sessions.map((s) => s.sessionId)).toEqual(['new', 'old']);
-    expect(sessions[1]!.messageCount).toBe(2);
-    expect(sessions[1]!.startedAt).toBe(1000);
-    expect(sessions[1]!.lastActiveAt).toBe(2000);
-    expect(sessions[1]!.preview).toBe('old kickoff question');
+    const conversations = store.browse();
+    expect(conversations.map((conversation) => conversation.conversationId)).toEqual(['new', 'old']);
+    expect(conversations[1]!.messageCount).toBe(2);
+    expect(conversations[1]!.startedAt).toBe(1000);
+    expect(conversations[1]!.lastActiveAt).toBe(2000);
+    expect(conversations[1]!.preview).toBe('old kickoff question');
   });
 });

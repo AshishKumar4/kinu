@@ -35,11 +35,13 @@ export interface CLIOpenConfig {
   /** The default endpoint for bare ids — null when nothing derives one.
    *  Explicit specs resolve through the registry regardless. */
   llm: LLMProviderConfig | null;
-  judge?: LLMProviderConfig;
   providerCredentials?: LocalProviderCredentials;
   codexAuthStore?: LocalCodexAuthStore;
   codexConfigPath?: string;
   onCodexRefresh?: (credential: OAuthCredential) => void;
+  /** The canonical physical directory every agent in this virtual workspace
+   *  shares as its file and shell plane. See CLIRuntimeConfig.cwd. */
+  cwd?: string | null;
   /** Where the `laptop` executor is rooted, or `null` for a runtime with no
    *  host plane at all. See CLIRuntimeConfig.hostRoot — a measurement harness
    *  passes `null` so an episode cannot write into the developer's repo. */
@@ -53,7 +55,7 @@ export interface CLIOpenConfig {
  *
  * Unlike core's openWorkspace (which uses degraded inline VFS/Memory/Executor),
  * this uses:
- * - the Nimbus workspace filesystem
+ * - the workspace plane `config.cwd` names, or the Nimbus filesystem with none
  * - MemoryStore with FTS5 (BM25 ranking, markdown chunking)
  * - Sandboxed executor (Bun subprocess with timeout)
  * - Real MCTS branch spawner (child processes with LLM calls)
@@ -78,23 +80,22 @@ export async function openWorkspaceCLI(
   `[0];
   if (!identity) throw new Error('No workspace identity found. Use createWorkspace() to create one.');
 
-  // Built before the reads below, because SOUL.md and the memory total are
-  // FILES now and this is what owns the filesystem they live in.
+  // Build the runtime before reading the agent-private SOUL file.
   const rt = createCLIRuntime(db, {
     dbPath,
     llm: config.llm,
-    judge: config.judge,
     providerCredentials: config.providerCredentials,
     codexAuthStore: config.codexAuthStore,
     codexConfigPath: config.codexConfigPath,
     onCodexRefresh: config.onCodexRefresh,
     checkpointKeep: config.checkpointKeep,
     hostRoot: config.hostRoot,
+    cwd: config.cwd,
     agentName: identity.name,
   });
 
-  // Read SOUL.md — a file in the workspace filesystem the runtime just built.
-  const soul = await readSoul(rt.storage.vfs);
+  // SOUL belongs to the agent, not to the shared physical project directory.
+  const soul = await readSoul(rt.agentStateVfs ?? rt.storage.vfs);
   if (!soul) throw new Error('No SOUL.md found. Database may be corrupted.');
 
   // Gather stats for WorkspaceInfo display
@@ -105,8 +106,9 @@ export async function openWorkspaceCLI(
   const searchNodeCount = sql<{ c: number }>`SELECT COUNT(*) as c FROM search_nodes`[0]?.c ?? 0;
   const taskCount = sql<{ c: number }>`SELECT COUNT(*) as c FROM task_history`[0]?.c ?? 0;
 
-  // Memory size — walked through the filesystem the agent itself uses.
-  const memorySize = await memoryBytes(rt.storage.vfs);
+  // Memory is the agent's own, so it is measured on the agent's own plane —
+  // never on a shared project directory, where `memory/` does not belong.
+  const memorySize = await memoryBytes(rt.agentStateVfs ?? rt.storage.vfs);
 
   return {
     rt,

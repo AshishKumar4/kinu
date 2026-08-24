@@ -3,8 +3,8 @@
  * Idempotent: every statement uses IF NOT EXISTS.
  *
  * This is the single source of truth for what constitutes a workspace:
- * ~20 tables in one SQLite file = one workspace (the container that owns the
- * file plane, sessions, evolution state, and its default orchestrator agent).
+ * About twenty tables in one SQLite file make one workspace: the file plane,
+ * one conversation per agent, evolution state, and the default orchestrator.
  */
 
 import { reconcileColumns } from './columns';

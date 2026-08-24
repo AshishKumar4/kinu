@@ -6,7 +6,7 @@ import { describe, test, expect } from 'bun:test';
 import {
   runAutoShadowEval,
   initScaffoldTables, initShadowTables, getPendingScaffold,
-  DEFAULT_SHADOW_CONFIG, DEFAULT_AUTO_JUDGE_CONFIG, SCAFFOLD_TURN_TIMEOUT_MS,
+  DEFAULT_SHADOW_CONFIG, DEFAULT_AUTO_JUDGE_CONFIG,
   type JudgeOutput,
   type StructuredJudgeFn,
 } from '../src/index';
@@ -248,14 +248,46 @@ describe('runAutoShadowEval', () => {
     expect(DEFAULT_SHADOW_CONFIG.promoteThreshold).toBe(0.6);
   });
 
-  test('the candidate is evaluated under the LIVE turn budget, not a smaller one', () => {
-    // The gate compares a candidate's output against what the live loop
-    // produced. It ran the candidate for 60s against a live 5 minutes, so any
-    // candidate attempting substantial work timed out and was rolled back for
-    // running out of room rather than for being worse — the gate could only
-    // promote scaffolds that finish fast and do little. Cost is bounded by
-    // how many turns become trials at all, never by starving one arm.
-    expect(DEFAULT_AUTO_JUDGE_CONFIG.scaffoldTimeoutMs).toBe(SCAFFOLD_TURN_TIMEOUT_MS);
+  test('the trial carries no elapsed deadline — the config exposes no timeout knob', () => {
+    // A trial used to run the candidate under a wall clock; a candidate that
+    // attempted substantial work was cut and scored 0 for running out of room
+    // rather than for being worse. The candidate now runs to completion
+    // exactly as the live turn did, so there is no field left to tune and no
+    // default to drift.
+    expect('scaffoldTimeoutMs' in DEFAULT_AUTO_JUDGE_CONFIG).toBe(false);
+    expect('scaffoldTimeoutMs' in structuredClone(DEFAULT_AUTO_JUDGE_CONFIG)).toBe(false);
+  });
+
+  test('a slow pending scaffold is awaited, not cut', async () => {
+    const rt = await setup();
+    // The executor holds the trial's scaffold run open until released; the
+    // eval must still be pending while it runs, then complete on the run's
+    // own settlement — never on a timer.
+    const gate = Promise.withResolvers<void>();
+    let executorReleased = false;
+    rt.executor = {
+      languages: ['javascript'],
+      execute: async () => {
+        await gate.promise;
+        executorReleased = true;
+        return { result: undefined };
+      },
+    };
+    const evalPromise = runAutoShadowEval({
+      rt, task: 'slow candidate', currentOutput: LIVE_OUTPUT,
+      judge: makeJudge('pending', LIVE_OUTPUT),
+      llmStream: noOpLlmStream,
+      random: () => 0,
+    });
+    await Promise.resolve();
+    let settled = false;
+    void evalPromise.then(() => { settled = true; });
+    expect(settled).toBe(false);          // still running with the executor gated
+
+    gate.resolve();
+    const result = await evalPromise;
+    expect(executorReleased).toBe(true);
+    expect(result.skipped).toBe(false);
   });
 });
 

@@ -33,7 +33,7 @@ export {
   createCompactionStateStore,
   type CompactionStateStore,
 } from './stores';
-export { createModelSummarizer, SUMMARIZER_TIMEOUT_MS } from './summarizer';
+export { createModelSummarizer } from './summarizer';
 // The compaction-ladder layer-gate slice (core declares the layer; this
 // package measures it — see scripts/layergate.ts for the merged report).
 export {

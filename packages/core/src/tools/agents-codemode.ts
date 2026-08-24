@@ -40,11 +40,11 @@ import {
   agentsActionsFor,
   dispatchAgentsAction,
   parseAgentsToolInput,
+  AGENTS_ACTION_FIELDS, AGENTS_ACTION_REQUIRED_FIELDS, AGENTS_FIELD_TS_TYPES,
   type AgentsToolDeps,
 } from './agents-tool';
-import { NAMED_SWARM_PRESETS, SWARM_PRESETS } from '../strategy/swarm';
-import { renderThrownChain } from '../obs/index';
 
+import { renderThrownChain } from '../obs/index';
 /**
  * The sandbox-visible declaration of each action, one block per member.
  *
@@ -58,11 +58,15 @@ import { renderThrownChain } from '../obs/index';
  * renders byte-identically on every backend — the sandbox contract does not
  * change shape depending on where the agent happens to be running.
  */
-const AGENTS_CODEMODE_MEMBERS = {
+const AGENTS_CODEMODE_MEMBER_DOCS = {
   swarm: `  /** Run a configured search whose candidates are MEASURED rather than judged.
    *  You name the shape with \`preset\` and what counts with \`objective\`, and
    *  every candidate is scored by your own verifier running in this workspace.
 ${SWARM_PRESET_DOCTRINE.map((line) => `   *    ${line}`).join('\n')}
+   *  \`role\` puts every node under one catalog role (omit for your own active
+   *  role — a swarm is role-homogeneous, never mixed); \`tier\` picks the
+   *  inference tier when the role's default is not what you want. A search
+   *  without \`preset\` takes your role's default preset.
    *  \`verify\` names a REGISTERED instrument and carries its whole spec: a
    *  script path invented here does not resolve and the call is refused, which
    *  is the one guard that makes a measured number worth anything. A \`floor\`
@@ -75,63 +79,55 @@ ${SWARM_PRESET_DOCTRINE.map((line) => `   *    ${line}`).join('\n')}
    *  sandbox call, and execute_tools declines background resume because its
    *  side effects cannot be safely re-run. Script quick fan-out here; call the
    *  top-level \`agents\` tool for one long search that must survive an
-   *  eviction, which resumes from its search checkpoint. */
-  swarm(input: {
-    preset: ${SWARM_PRESETS.map((preset) => `"${preset}"`).join(' | ')};
-    task: string;
-    objective?: object;
-    key?: string;
-    config?: object;
-    from?: ${NAMED_SWARM_PRESETS.map((preset) => `"${preset}"`).join(' | ')};
-    label?: string;
-    branches?: number;
-    depth?: number;
-    budget_usd?: number;
-    budget_tokens?: number;
-    budget_label?: string;
-  }): Promise<{ preset: string; config: unknown; caps: unknown; report: unknown; publication: unknown; best: unknown; candidates: unknown[] } | { reason: string; error: string }>;`,
-
+   *  eviction, which resumes from its search checkpoint. */`,
   hire: `  /** Create a persistent named helper that keeps its own context across turns.
    *  It starts FRESH — it did not see this conversation — so the mission is its
-   *  whole brief. Default scope:"subordinate" hires into THIS workspace (role +
-   *  mission required); scope:"workspace" creates a specialist workspace of its
-   *  own, sends it \`message\`, and awaits the result. */
-  hire(input: {
-    role?: string;
-    mission: string;
-    agent?: string;
-    model?: string;
-    scope?: "subordinate" | "workspace";
-    message?: string;
-    timeout_seconds?: number;
-  }): Promise<unknown>;`,
-
+   *  whole brief. \`role\` is a catalog role id (the ids are listed on the
+   *  native agents tool's role fields); \`tier\` optionally overrides that
+   *  role's default inference tier. Default scope:"subordinate" hires into
+   *  THIS workspace; scope:"workspace" creates a specialist workspace of its
+   *  own, sends it \`message\`, and awaits the result. */`,
   ask: `  /** Hand an agent work and expect the answer back. A subordinate's report
    *  arrives later as an event that wakes you — it does NOT resolve here; a
-   *  peer workspace agent's reply is awaited up to timeout_seconds. */
-  ask(input: {
-    agent: string;
-    message: string;
-    deliverable?: string;
-    deadline_hint?: string;
-    topic?: string;
-    timeout_seconds?: number;
-  }): Promise<unknown>;`,
-
-  send: `  /** Fire-and-forget message to any agent by name (no reply awaited). */
-  send(input: { agent: string; message: string; topic?: string }): Promise<unknown>;`,
-
-  reply: `  /** Answer an incoming agent message event by the event_id you were given. */
-  reply(input: { event_id: string; message: string }): Promise<unknown>;`,
-
+   *  peer workspace agent's reply is awaited until it arrives, however long
+   *  the peer's work takes. */`,
+  send: `  /** Fire-and-forget message to any agent by name (no reply awaited). */`,
+  reply: `  /** Answer an incoming agent message event by the event_id you were given. */`,
   list: `  /** The unified roster: subordinates here plus the owner's other workspace
-   *  agents. Pass \`agent\` for one subordinate's live status instead. */
-  list(input?: { agent?: string }): Promise<unknown>;`,
-
+   *  agents. Pass \`agent\` for one subordinate's live status instead. */`,
   dismiss: `  /** Retire a subordinate. Archived by default (its context is kept); pass
-   *  keep_history:false ONLY to permanently wipe its storage. */
-  dismiss(input: { agent: string; keep_history?: boolean }): Promise<unknown>;`,
+   *  keep_history:false ONLY to permanently wipe its storage. */`,
 } satisfies Record<AgentsToolAction, string>;
+
+/** Per-member return annotations. `unknown` where the caller only reads it
+ *  incidentally; the swarm union is spelled out because scripts branch on it. */
+const AGENTS_CODEMODE_RETURNS = {
+  swarm: 'Promise<{ preset: string; config: unknown; caps: unknown; report: unknown; publication: unknown; best: unknown; candidates: unknown[] } | { reason: string; error: string }>',
+  hire: 'Promise<unknown>',
+  ask: 'Promise<unknown>',
+  send: 'Promise<unknown>',
+  reply: 'Promise<unknown>',
+  list: 'Promise<unknown>',
+  dismiss: 'Promise<unknown>',
+} satisfies Record<AgentsToolAction, string>;
+
+/** Render ONE action's sandbox input object from {@link AGENTS_ACTION_FIELDS}
+ *  — the same lists the tool schema and the parse read. Field order, names,
+ *  optionality and types all come from that single source plus the two tables
+ *  beside it, so the sandbox contract cannot drift from the surface it mirrors
+ *  (this rendering is exactly where a hand-written copy once lost the swarm's
+ *  `name` field). */
+function renderInputType(action: AgentsToolAction): string {
+  const required: Record<string, true> = {};
+  for (const field of AGENTS_ACTION_REQUIRED_FIELDS[action]) required[field] = true;
+  const fields = AGENTS_ACTION_FIELDS[action]
+    .map((field) => `    ${field}${required[field] ? '' : '?'}: ${AGENTS_FIELD_TS_TYPES[field]};`)
+    .join('\n');
+  return `${AGENTS_CODEMODE_MEMBER_DOCS[action]}
+  ${action}(input: {
+${fields}
+  }): ${AGENTS_CODEMODE_RETURNS[action]};`;
+}
 
 /** One-line member descriptions for the provider record. */
 const AGENTS_CODEMODE_DESCRIPTIONS = {
@@ -149,7 +145,7 @@ const AGENTS_CODEMODE_DESCRIPTIONS = {
 function renderTypes(actions: readonly AgentsToolAction[]): string {
   return [
     'export declare const agents: {',
-    ...actions.map((action) => AGENTS_CODEMODE_MEMBERS[action]),
+    ...actions.map(renderInputType),
     '};',
     '',
   ].join('\n');

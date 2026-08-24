@@ -13,6 +13,13 @@ const repoRoot = resolve(__dirname, '../../..');
 const cliBin = join(repoRoot, 'packages/cli/bin/cli.ts');
 const tempDirs: string[] = [];
 
+/** Fresh throwaway project directory per spawn: the CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo. */
+function newProjectDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'kinu-test-project-'));
+  tempDirs.push(dir);
+  return dir;
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
@@ -37,7 +44,7 @@ describe('kinu workspace delete', () => {
 
     try {
       const proc = Bun.spawn([process.execPath, cliBin, 'workspace', 'delete', 'web-agent', '--yes'], {
-        cwd: repoRoot,
+        cwd: newProjectDir(),
         env: {
           ...process.env,
           KINU_HOME: home,
@@ -73,7 +80,7 @@ describe('kinu workspace delete', () => {
   test('requires explicit confirmation when no terminal is attached', async () => {
     const home = workspaceHome('https://kinu.invalid');
     const proc = Bun.spawn([process.execPath, cliBin, 'workspace', 'delete', 'web-agent'], {
-      cwd: repoRoot,
+      cwd: newProjectDir(),
       detached: true,
       env: { ...process.env, KINU_HOME: home, NO_COLOR: '1' },
       stdout: 'pipe',

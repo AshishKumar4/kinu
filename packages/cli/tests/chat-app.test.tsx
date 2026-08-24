@@ -13,11 +13,12 @@ describe('ChatApp terminal interaction', () => {
     expect(localScreen.frame()).not.toContain('⠋ null');
     localScreen.mockInput.pressKey('k', { ctrl: true });
     await localScreen.waitFor('the local command palette', () => localScreen.frame().includes('Filter commands'));
-    expect(localScreen.frame()).toContain('/resume');
+    expect(localScreen.frame()).toContain('/role');
     localScreen.mockInput.pressEscape();
     await localScreen.waitFor('the command palette to close', () =>
       !localScreen.frame().includes('Filter commands'));
-    localScreen.mockInput.pressKey('g', { ctrl: true });
+    await localScreen.mockInput.typeText('/settings');
+    localScreen.mockInput.pressEnter();
     await localScreen.waitFor('interactive settings', () =>
       localScreen.frame().includes('Filter settings'));
     expect(localScreen.frame()).toContain('Reasoning effort');
@@ -46,7 +47,7 @@ describe('ChatApp terminal interaction', () => {
     cloudScreen.mockInput.pressKey('k', { ctrl: true });
     await cloudScreen.waitFor('the cloud command palette', () => cloudScreen.frame().includes('Filter commands'));
     expect(cloudScreen.frame()).not.toContain('/resume');
-    expect(cloudScreen.frame()).toContain('/connect');
+    expect(cloudScreen.frame()).toContain('/role');
 
   });
   test('Ctrl+K preserves the draft under the command palette', async () => {
@@ -68,7 +69,7 @@ describe('ChatApp terminal interaction', () => {
       listModels: () => pending.promise,
     });
     const screen = await mountChat(controlled.client);
-    screen.mockInput.pressKey('p', { ctrl: true });
+    screen.mockInput.pressKey('l', { ctrl: true });
     await screen.waitFor('the loading model panel', () => screen.frame().includes('Loading models'));
     screen.mockInput.pressEscape();
     pending.resolve({ models: [], failures: [] });
@@ -85,7 +86,7 @@ describe('ChatApp terminal interaction', () => {
       setModel: async () => { throw new Error('Unavailable model'); },
     });
     const screen = await mountChat(controlled.client);
-    screen.mockInput.pressKey('p', { ctrl: true });
+    screen.mockInput.pressKey('l', { ctrl: true });
     await screen.waitFor('the model picker', () => screen.frame().includes('Select model'));
     screen.mockInput.pressEnter();
     await screen.waitFor('the model failure', () => screen.frame().includes('Unavailable model'));
@@ -101,7 +102,7 @@ describe('ChatApp terminal interaction', () => {
       setModel: () => pending.promise,
     });
     const screen = await mountChat(controlled.client);
-    screen.mockInput.pressKey('p', { ctrl: true });
+    screen.mockInput.pressKey('l', { ctrl: true });
     await screen.waitFor('the model picker', () => screen.frame().includes('Select model'));
     screen.mockInput.pressEnter();
     screen.mockInput.pressKey('g', { ctrl: true });
@@ -124,9 +125,15 @@ describe('ChatApp terminal interaction', () => {
         { name: 'missing', label: 'Missing', mode: 'cloud', cloudName: 'missing' },
       ],
       onWorkspaceSelect: async () => candidate.client,
+      width: 80,
     });
-    screen.mockInput.pressKey('o', { ctrl: true });
-    await screen.waitFor('the workspace drawer', () => screen.frame().includes('Filter workspaces'));
+    screen.mockInput.pressKey('w', { meta: true });
+    await screen.waitFor('the workspace drawer', () => screen.frame().includes('Esc close'));
+    // The selection starts on the open agent; the cloud section below it
+    // expands first, then its workspace row opens.
+    screen.mockInput.pressArrow('down');
+    screen.mockInput.pressEnter();
+    await screen.waitFor('the expanded cloud section', () => screen.frame().includes('Missing'));
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressEnter();
     await screen.waitFor('the workspace failure', () =>
@@ -152,9 +159,13 @@ describe('ChatApp terminal interaction', () => {
         selections += 1;
         return candidate.promise;
       },
+      width: 80,
     });
-    screen.mockInput.pressKey('o', { ctrl: true });
-    await screen.waitFor('the workspace drawer', () => screen.frame().includes('Filter workspaces'));
+    screen.mockInput.pressKey('w', { meta: true });
+    await screen.waitFor('the workspace drawer', () => screen.frame().includes('Esc close'));
+    screen.mockInput.pressArrow('down');
+    screen.mockInput.pressEnter();
+    await screen.waitFor('the expanded cloud section', () => screen.frame().includes('Beta'));
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressEnter();
     screen.mockInput.pressEnter();
@@ -179,17 +190,18 @@ describe('ChatApp terminal interaction', () => {
     });
     const screen = await mountChat(controlled.client, {
       listWorkspaces: () => [{ name: 'alpha', label: 'Alpha', mode: 'local' }],
+      width: 80,
     });
     await screen.mockInput.typeText('/status');
     screen.mockInput.pressEnter();
-    screen.mockInput.pressKey('o', { ctrl: true });
+    screen.mockInput.pressKey('w', { meta: true });
     await screen.waitFor('the blocked switch explanation', () =>
       screen.frame().includes('Finish or stop the active workspace action'));
     expect(screen.frame()).not.toContain('Filter workspaces');
     pending.resolve({ name: 'alpha', purpose: 'alpha', model: null, reasoningEffort: null });
     await screen.waitFor('the completed status action', () => screen.frame().includes('Workspace Status'));
   });
-  test('Ctrl+O switches workspaces without retaining the previous status', async () => {
+  test('Alt+W switches workspaces without retaining the previous status', async () => {
     const alpha = fakeClient({ name: 'alpha' });
     const beta = fakeClient({
       name: 'beta',
@@ -225,10 +237,14 @@ describe('ChatApp terminal interaction', () => {
         { name: 'beta', label: 'Beta', mode: 'cloud', cloudName: 'beta' },
       ],
       onWorkspaceSelect: async () => beta.client,
+      width: 80,
     });
     expect(screen.frame()).not.toContain('Filter workspaces');
-    screen.mockInput.pressKey('o', { ctrl: true });
-    await screen.waitFor('the workspace drawer', () => screen.frame().includes('Filter workspaces'));
+    screen.mockInput.pressKey('w', { meta: true });
+    await screen.waitFor('the workspace drawer', () => screen.frame().includes('Esc close'));
+    screen.mockInput.pressArrow('down');
+    screen.mockInput.pressEnter();
+    await screen.waitFor('the expanded cloud section', () => screen.frame().includes('Beta'));
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressEnter();
     await screen.waitFor('the selected cloud workspace', () => screen.frame().includes('Beta Cloud'));

@@ -27,6 +27,9 @@ import type { JsonObject } from '../src/utils/json';
 import { makeSqlExec } from './helpers';
 
 const user = (text: string): ModelMessage => ({ role: 'user', content: text });
+/** The session's first ask — the turn-start hint's own fixture, shared with the
+ *  delegation-opportunity block below. */
+const fresh = 'add caching to the api and update the docs';
 const assistant = (text: string): ModelMessage => ({ role: 'assistant', content: text });
 
 /** A FOLLOW-UP turn's opening context: an ask with this agent's own work behind
@@ -534,7 +537,6 @@ describe('long-turn trigger', () => {
 // above arrives after the shape is already a fact, which is what a 24%
 // conversion rate at step 25 is a rate of.
 describe('turn-start trigger', () => {
-  const fresh = 'add caching to the api and update the docs';
 
   test('a fresh ask is nudged at step 0, naming the search rung, as a hint', () => {
     const orch = newTurn();
@@ -597,6 +599,97 @@ describe('turn-start trigger', () => {
     orch.beginTurn(Date.now());
     expect(rows(orch)).toEqual([]);
     expect(injected(step(orch, 0, [user(fresh)]))).toHaveLength(1);
+  });
+});
+
+describe('delegation opportunities — which hint reached which step, and what came of it', () => {
+  const roles = ['general', 'researcher', 'auditor'];
+  const delegationRows = (orch: AgentOrchestrator) => orch.steering.delegationSnapshot();
+
+  /** A turn whose role catalog the steering object can read, as a backend with
+   *  an active profile catalog wires it. */
+  function newTurnWithRoles(): AgentOrchestrator {
+    const orch = newTurn();
+    orch.steering.observeRoles(() => roles);
+    return orch;
+  }
+
+  test('a delivered hint leaves one row carrying step, hint id and the roles at that moment', () => {
+    const orch = newTurnWithRoles();
+    expect(injected(step(orch, 0, [user(fresh)]))).toHaveLength(1);
+
+    const opportunity = delegationRows(orch);
+    expect(opportunity).toHaveLength(1);
+    const row = opportunity[0]!;
+    expect(row.surface).toBe('hint');
+    expect(row.trigger).toBe('turn_start_no_delegation');
+    expect(row.step).toBe(0);
+    expect(row.roles).toEqual(roles);
+    // Not yet converted: the row exists at delivery, before any call followed.
+    expect(row.converted).toBe(false);
+    // The hint id names the wording (trigger + digest), stable across turns;
+    // the opportunity id names THIS occasion, unique per delivery.
+    expect(row.hintId).toMatch(/^turn_start_no_delegation:[0-9a-f]+$/);
+    expect(row.opportunityId).toMatch(/^dop-/);
+    const second = newTurnWithRoles();
+    step(second, 0, [user(fresh)]);
+    expect(delegationRows(second)[0]!.hintId).toBe(row.hintId);
+    expect(delegationRows(second)[0]!.opportunityId).not.toBe(row.opportunityId);
+  });
+
+  test('a converted opportunity is distinguishable from an ignored one', () => {
+    const converted = newTurnWithRoles();
+    step(converted, 0, [user(fresh)]);
+    converted.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'swarm' } });
+
+    const ignored = newTurnWithRoles();
+    step(ignored, 0, [user(fresh)]);
+
+    expect(delegationRows(converted)[0]).toMatchObject({ surface: 'hint', converted: true });
+    expect(delegationRows(ignored)[0]).toMatchObject({ surface: 'hint', converted: false });
+  });
+
+  test('the long-turn recovery steer records its own occasion, at its own step', () => {
+    const orch = newTurnWithRoles();
+    step(orch, 0, [user(fresh)]);
+    step(orch, LONG_TURN_STEPS_BEFORE_STEER, followUp(fresh));
+    const rows = delegationRows(orch);
+    expect(rows).toHaveLength(2);
+    expect(rows[1]).toMatchObject({
+      surface: 'hint', trigger: 'long_turn_no_delegation',
+      step: LONG_TURN_STEPS_BEFORE_STEER, converted: false,
+    });
+    expect(rows[1]!.opportunityId).not.toBe(rows[0]!.opportunityId);
+  });
+
+  test('an agents call on a turn no hint reached records the autonomous arm separately', () => {
+    const orch = newTurnWithRoles();
+    expect(injected(step(orch, 0, followUp(fresh)))).toEqual([]);
+    orch.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'hire' } });
+
+    const rows = delegationRows(orch);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.surface).toBe('unprompted');
+    expect(rows[0]!.trigger).toBeUndefined();
+    expect(rows[0]!.hintId).toBeUndefined();
+    expect(rows[0]!.roles).toEqual(roles);
+    expect(rows[0]!.converted).toBe(true);
+    // One occasion per turn even when the tool is reached for repeatedly.
+    orch.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'swarm' } });
+    expect(delegationRows(orch)).toHaveLength(1);
+  });
+
+  test('an absent role catalog reads as empty — stated, never guessed', () => {
+    const orch = newTurn();
+    step(orch, 0, [user(fresh)]);
+    expect(delegationRows(orch)[0]!.roles).toEqual([]);
+  });
+
+  test('a new turn starts with clean opportunity state', () => {
+    const orch = newTurnWithRoles();
+    step(orch, 0, [user(fresh)]);
+    orch.beginTurn(Date.now());
+    expect(delegationRows(orch)).toEqual([]);
   });
 });
 

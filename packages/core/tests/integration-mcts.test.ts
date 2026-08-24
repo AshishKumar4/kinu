@@ -9,11 +9,13 @@
 
 import { describe, test, expect } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
-import { createTestRuntime, createMockSession, captureConsole } from './helpers';
+import * as v from 'valibot';
+import { createTestRuntime, createMockSession, captureConsole, makeSql } from './helpers';
 import { runMCTS } from '../src/mcts/engine';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initScaffoldTables } from '../src/scaffold/schemas';
 import { initCraftScoreTables } from '../src/craft/schemas';
+import { MctsSearchStore, initMctsSearchTable } from '../src/mcts/search-store';
 import type { MCTSProgressEvent, SearchNode } from '../src/types/mcts';
 import type { Executor, LLM } from '../src/types/primitives';
 import type { BranchHandle } from '../src/types/agent-runtime';
@@ -770,5 +772,192 @@ describe('MCTS strategy — stored operator overrides', () => {
       options: { mcts: { session: createMockSession(), budget: 1, branches: 2, judgeSamples: 1 } },
     });
     expect(llm.judgeCalls()).toBe(2); // 2 branches × 1 sample
+  });
+});
+
+const StoredBranchEvaluationSchema = v.object({
+  grounding: v.picklist(['execution', 'judge', 'unrunnable']),
+  score: v.number(),
+  judgeSamplesAttempted: v.number(),
+  judgeSamplesUsed: v.number(),
+  execution: v.optional(v.object({
+    passed: v.boolean(),
+    passedChecks: v.optional(v.number()),
+    totalChecks: v.optional(v.number()),
+    assertionsGenerated: v.boolean(),
+  })),
+  unrunnableLanguage: v.optional(v.string()),
+});
+type StoredBranchEvaluation = v.InferOutput<typeof StoredBranchEvaluationSchema>;
+
+function parseStoredBranchEvaluation(raw: string | null): StoredBranchEvaluation {
+  if (raw === null) throw new Error('expected stored branch evaluation');
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch (error) {
+    throw new Error('stored branch evaluation is not JSON', { cause: error });
+  }
+  return v.parse(StoredBranchEvaluationSchema, json);
+}
+
+describe('MCTS branch evaluation diagnostics', () => {
+  test('every evaluated branch persists grounding, judge attempted/used, and score components', async () => {
+    let branchCounter = 0;
+    const { rt } = createTestRuntime({
+      llmResponses: {
+        'verification harness': '```js\ntrue;\n```\n```js\nFAIL_MARKER;\n```',
+        'scoring ONE candidate': '{"score": 0.5}',
+      },
+    });
+    rt.executor = markerExecutor();
+    rt.spawnBranch = async () => {
+      const i = branchCounter++;
+      return {
+        explore: async () => ({
+          text: i % 2 === 0
+            ? `branch ${i} explored\n\`\`\`js\nconst ok = 1;\n\`\`\``
+            : `prose branch ${i} explored`,
+        }),
+        generateReflection: async () => ({ text: 'n/a' }),
+      };
+    };
+
+    initTables(rt);
+    await runMCTS(rt, createMockSession(), 'diagnostics task', { budget: 1, branches: 2 });
+
+    const rows = rt.storage.sql<{
+      parent_id: string | null;
+      evaluation_json: string | null;
+    }>`SELECT parent_id, evaluation_json FROM search_nodes`;
+    // The root was never evaluated — no fabricated diagnostics for it.
+    expect(rows.filter((r) => r.parent_id === null).map((r) => r.evaluation_json)).toEqual([null]);
+
+    const children = rows.filter((r) => r.parent_id !== null)
+      .map((row) => parseStoredBranchEvaluation(row.evaluation_json));
+    expect(children).toHaveLength(2);
+
+    const executed = children.find((d) => d.grounding === 'execution')!;
+    // The exact key set is the bound: no proposal text and no error text.
+    expect(Object.keys(executed).sort())
+      .toEqual(['execution', 'grounding', 'judgeSamplesAttempted', 'judgeSamplesUsed', 'score']);
+    expect(Object.keys(executed.execution!).sort())
+      .toEqual(['assertionsGenerated', 'passed', 'passedChecks', 'totalChecks']);
+    expect(executed.execution).toMatchObject({
+      passed: false,
+      passedChecks: 1,
+      totalChecks: 2,
+      assertionsGenerated: true,
+    });
+    // Shipped defaults request and realise three samples; all three parsed.
+    expect(executed.judgeSamplesAttempted).toBe(3);
+    expect(executed.judgeSamplesUsed).toBe(3);
+    // FAIL_FLOOR + FAIL_SPAN × (1 / 2) = 0.175.
+    expect(executed.score).toBeCloseTo(0.175, 10);
+
+    const judged = children.find((d) => d.grounding === 'judge')!;
+    expect(Object.keys(judged).sort())
+      .toEqual(['grounding', 'judgeSamplesAttempted', 'judgeSamplesUsed', 'score']);
+    expect(judged.judgeSamplesAttempted).toBe(3);
+    expect(judged.judgeSamplesUsed).toBe(3);
+    expect(judged.score).toBeCloseTo(0.15, 10);
+  });
+});
+
+describe('MCTS below-floor outcome classification', () => {
+  function runtimeWithLedger() {
+    const bundle = createTestRuntime({
+      llmResponses: { alpha: '{"score": 0.1}', beta: '{"score": 0.2}' },
+    });
+    initTables(bundle.rt);
+    initMctsSearchTable(bundle.rt.storage.execRaw, bundle.rt.storage.sql);
+    return { ...bundle, store: new MctsSearchStore(makeSql(bundle.db)) };
+  }
+
+  test('a search whose every branch sits below the floor classifies its settle', async () => {
+    let branchCounter = 0;
+    const { rt, store } = runtimeWithLedger();
+    rt.spawnBranch = async () => {
+      const i = branchCounter++;
+      // One branch fails before evaluation and scores 0. The surviving prose
+      // branch scores 0.75 × 0.2 = 0.15. Both sit below 0.3, and the unequal
+      // values ensure this exercises the floor rather than the exact-tie guard.
+      if (i === 0) return malformedBranch();
+      return {
+        explore: async () => ({ text: 'approach beta' }),
+        generateReflection: async () => ({ text: 'n/a' }),
+      };
+    };
+
+    const result = await runMCTS(rt, createMockSession(), 'unreachable floor task', {
+      budget: 1, branches: 2, search: store,
+    });
+
+    expect(result.converged).toBe(false);
+    expect(result.reason).toBe('no_acceptable_candidate');
+
+    // Both nonconverged branches carry bounded evaluator facts. The empty
+    // exploration records "never asked" (0/0); the surviving branch records
+    // three attempted and three usable samples. Those are different failures.
+    const diagnostics = rt.storage.sql<{ evaluation_json: string }>`
+      SELECT evaluation_json FROM search_nodes
+      WHERE parent_id IS NOT NULL AND evaluation_json IS NOT NULL`
+      .map((row) => parseStoredBranchEvaluation(row.evaluation_json));
+    expect(diagnostics).toHaveLength(2);
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      grounding: 'judge',
+      score: 0,
+      judgeSamplesAttempted: 0,
+      judgeSamplesUsed: 0,
+    }));
+    const sampled = diagnostics.find((diagnostic) => diagnostic.judgeSamplesAttempted === 3)!;
+    expect(sampled).toMatchObject({
+      grounding: 'judge',
+      judgeSamplesAttempted: 3,
+      judgeSamplesUsed: 3,
+    });
+    expect(sampled.score).toBeCloseTo(0.15, 10);
+
+    // No terminal row may report a winner that the acceptance floor refused.
+    expect(rt.storage.sql<{ id: string }>`
+      SELECT id FROM search_nodes WHERE status = 'terminal'`).toHaveLength(0);
+    expect(rt.storage.sql<{ id: string }>`
+      SELECT id FROM search_nodes WHERE status = 'open'`).toHaveLength(0);
+
+    // The exact classification reaches the run ledger and is never resumable.
+    expect(store.list(10)).toHaveLength(1);
+    expect(store.list(10)[0]).toMatchObject({
+      engine: 'mcts',
+      status: 'no_acceptable_candidate',
+    });
+    expect(store.findResumable('unreachable floor task')).toBeNull();
+  });
+
+  test('an above-floor winner still settles the ledger as converged', async () => {
+    let branchCounter = 0;
+    const { rt, store } = runtimeWithLedger();
+    rt.executor = markerExecutor();
+    rt.spawnBranch = async () => {
+      const i = branchCounter++;
+      return {
+        explore: async () => ({
+          text: i === 0
+            ? 'approach alpha\n```js\nconst ok = 1;\n```'
+            : 'approach beta',
+        }),
+        generateReflection: async () => ({ text: 'n/a' }),
+      };
+    };
+
+    const result = await runMCTS(rt, createMockSession(), 'reachable task', {
+      budget: 1, branches: 2, search: store,
+    });
+
+    expect(result.converged).toBe(true);
+    expect(result.reason).toBeUndefined();
+    expect(rt.storage.sql<{ id: string }>`
+      SELECT id FROM search_nodes WHERE status = 'terminal'`)
+      .toEqual([{ id: result.winnerId }]);
+    expect(store.list(10)[0]).toMatchObject({ engine: 'mcts', status: 'converged' });
   });
 });

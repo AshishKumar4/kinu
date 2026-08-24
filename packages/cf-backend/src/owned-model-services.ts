@@ -1,7 +1,7 @@
 import type { LanguageModel } from 'ai';
 import {
-  agentAffinityKey, parseModelSpec, reasoningEffortOptions,
-  type ReasoningEffort, type WebSearchProvider,
+  agentAffinityKey, parseModelSpec, reasoningEffortOptions, sha256Hex,
+  type ProviderCatalogSnapshot, type ReasoningEffort, type WebSearchProvider,
 } from '@kinu.run/core';
 import { buildCfWebSearchProvider } from './lib/web-provider';
 import {
@@ -85,6 +85,19 @@ export class OwnedModelServices {
     return {
       model: this.resolveModel(normalized),
       providerOptions: reasoningEffortOptions(effort, parseModelSpec(normalized).provider),
+    };
+  }
+
+  /** Credential-aware model set used by profile resolution. */
+  async profileProviderSnapshot(): Promise<ProviderCatalogSnapshot> {
+    const { registry, deps } = this.providerRegistry();
+    const menu = await registry.listAllModels(deps);
+    const availableModels = [...new Set(
+      menu.models.map((model) => `${model.provider}/${model.id}`),
+    )].sort();
+    return {
+      revision: sha256Hex(availableModels.join('\n')),
+      availableModels,
     };
   }
 

@@ -91,7 +91,7 @@ export class MemoryStore {
 		this.memoryDir = config?.memoryDir ?? "memory";
 		this.logsDir = config?.logsDir ?? `${this.memoryDir}/logs`;
 		this.curatedFile = config?.curatedFile ?? `${this.memoryDir}/MEMORY.md`;
-		this.indexedPrefixes = config?.indexedPrefixes ?? ["memory/", "sessions/", "identity.md"];
+		this.indexedPrefixes = config?.indexedPrefixes ?? ["memory/", "identity.md"];
 		this.indexedFiles = config?.indexedFiles ?? [];
 		this.snippetMaxChars = config?.snippetMaxChars ?? DEFAULT_SNIPPET_MAX_CHARS;
 		this.searchConfig = {

@@ -66,14 +66,14 @@
  * (Koh et al. arXiv:2407.01476).
  */
 
-import * as v from 'valibot';
-import type { LLM, Executor } from '../types/primitives';
-import type { EvaluationGrounding } from '../types/evaluation';
-import { fencedBlocks, readProposalCode } from '../execution/code-fence';
-import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
-import { renderThrownChain, tolerate } from '../obs/index';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
-import { DEFAULT_CONFIG, LLM_CALL_TIMEOUT_MS } from '../config';
+/** Wall clock on a SINGLE judge completion.
+ *
+ * Judge calls carry NO elapsed deadline (owner ruling, 2026-08: none on LLM
+ * calls). Each sample is awaited to settlement, however long the provider
+ * takes; the search's durable background fiber is the work's owner and there
+ * is no clock above it to race. What bounds spend is the CALL COUNT
+ * (`judgeCallBudget`), which is a resource budget, not a clock.
+ */
 
 /** Score bands. Execution verdicts dominate: fail ceiling < pass floor, and
  *  prose confidence is capped below a passing branch with a median judge.
@@ -87,54 +87,14 @@ const FAIL_SPAN = 0.25;
 const FAIL_CEIL = FAIL_FLOOR + FAIL_SPAN;
 const PROSE_CONFIDENCE = 0.75;
 
-/**
- * Wall clock on a SINGLE judge completion.
- *
- * The judge is an ordinary provider call (`generateText` with no abort signal),
- * so an upstream that accepts the request and then never responds leaves the
- * promise pending forever. The evaluator awaits these calls inside a
- * `Promise.all` / `Promise.allSettled`, which resolves only when EVERY member
- * settles — so one non-responding judge stalls the whole evaluation. MCTS runs
- * that evaluation inside a durable background fiber that carries no wall clock
- * of its own (fork wall_clock_ms is intentionally unset so real work runs to
- * completion), and nothing aborts it, so the stall becomes a permanent hang:
- * the search freezes on its first expansion and the tree never grows again.
- *
- * A timed-out judge is DROPPED (see sampleJudgeScore / generateAssertionSuite), so
- * the ensemble degrades to the samples that did answer instead of the search
- * dying. That is exactly why the number has to be generous rather than prudent: a
- * bound under a real completion's latency does not error, it shrinks the ensemble
- * invisibly, and a median over the two samples that answered is not the ensemble
- * the caller asked for. A judge that FAILS is not the same thing and is not
- * dropped: it propagates to the engine's allSettled, which reports branch-failed
- * with the reason and scores the branch 0.
- *
- * So one completion gets the sanctioned per-call bound — {@link LLM_CALL_TIMEOUT_MS},
- * the owner-fixed silence window every LLM call runs under (a judge call IS an LLM
- * call; there is no other wall clock in the tree to borrow). This was 120_000, which
- * was under every turn in that measurement and was never checked against a
- * completion's latency at all. Override per-evaluation via
- * EvaluateBranchOptions.judgeCallTimeoutMs.
- */
-export const DEFAULT_JUDGE_CALL_TIMEOUT_MS = LLM_CALL_TIMEOUT_MS;
-
-/** `judge.complete`, bounded. Returns null when the provider does not answer
- *  within `timeoutMs` — the timeout is the ensemble's own envelope, so it is a
- *  value here rather than a throw nobody can tell from a broken provider. The
- *  underlying call cannot be cancelled without an abort signal the LLM seam
- *  does not carry, but losing the race unblocks the evaluator, which is the
- *  freeze this fixes. */
-async function completeWithinTimeout(judge: LLM, prompt: string, timeoutMs: number): Promise<string | null> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<null>((resolve) => {
-    timer = setTimeout(() => resolve(null), timeoutMs);
-  });
-  try {
-    return await Promise.race([judge.complete(prompt), timeout]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
+import * as v from 'valibot';
+import type { LLM, Executor } from '../types/primitives';
+import type { EvaluationGrounding } from '../types/evaluation';
+import { fencedBlocks, readProposalCode } from '../execution/code-fence';
+import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
+import { renderThrownChain, tolerate } from '../obs/index';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
+import { DEFAULT_CONFIG } from '../config';
 
 export interface EvaluateBranchOptions {
   task: string;
@@ -160,10 +120,6 @@ export interface EvaluateBranchOptions {
    *  ONE pool. The operator's spend dial — see
    *  DEFAULT_CONFIG.mcts.maxEvalLLMCalls — and the ceiling on `judgeSamples`. */
   maxLLMCalls?: number;
-  /** Wall clock on each individual judge call, so a non-responding judge is
-   *  dropped rather than hanging the whole search. Defaults to
-   *  DEFAULT_JUDGE_CALL_TIMEOUT_MS. */
-  judgeCallTimeoutMs?: number;
 }
 
 export interface BranchEvaluation {
@@ -339,7 +295,6 @@ export async function evaluateWithMultiModelJudging(
   const defaults = DEFAULT_CONFIG.mcts;
   const maxLLMCalls = Math.max(1, opts.maxLLMCalls ?? defaults.maxEvalLLMCalls);
   const judge = opts.judge ?? opts.explorer;
-  const judgeTimeoutMs = opts.judgeCallTimeoutMs ?? DEFAULT_JUDGE_CALL_TIMEOUT_MS;
 
   const proposal = opts.executionPolicy === 'judge-only'
     ? null
@@ -358,7 +313,7 @@ export async function evaluateWithMultiModelJudging(
     const { code, language } = proposal;
     let checks: readonly string[] = [];
     if (generatesChecks) {
-      checks = await generateAssertionSuite(judge, opts.task, code, language, judgeTimeoutMs);
+      checks = await generateAssertionSuite(judge, opts.task, code, language);
     }
     execution = await runForVerdict(opts.executor, code, checks, language);
     // Cascade stage 0: source that never parsed has decided its own verdict.
@@ -374,7 +329,7 @@ export async function evaluateWithMultiModelJudging(
   // Layer 2: judge ensemble (median, parse-failure-robust).
   const prompt = buildJudgePrompt(opts.task, trajectory, opts.siblings ?? [], execution);
   const samples = await Promise.all(
-    Array.from({ length: k }, () => sampleJudgeScore(judge, prompt, judgeTimeoutMs)),
+    Array.from({ length: k }, () => sampleJudgeScore(judge, prompt)),
   );
   const parsed = samples.filter((s): s is number => s !== null);
   const judgeScore = parsed.length > 0 ? median(parsed) : null;
@@ -441,8 +396,8 @@ export const MAX_GENERATED_CHECKS = 4;
  * demands: a pass/fail bit gives a search nothing to climb
  * (test-utils/src/eval-outcome.ts).
  *
- * Empty when the judge declines, does not answer inside its envelope, or emits
- * no usable fence — generation is best-effort, never a hard dependency. A judge
+ * Empty when the judge declines, emits no usable fence, or answers
+ * UNVERIFIABLE — generation is best-effort, never a hard dependency. A judge
  * that FAILS is a fault and propagates: a branch must not be run bare because
  * the provider is broken.
  *
@@ -454,7 +409,6 @@ export async function generateAssertionSuite(
   task: string,
   code: string,
   language: string,
-  timeoutMs: number = DEFAULT_JUDGE_CALL_TIMEOUT_MS,
 ): Promise<readonly string[]> {
   const prompt = `You are writing a verification harness for code proposed by another agent.
 
@@ -479,8 +433,8 @@ printing — just exercise and fail loudly.
 If the code cannot be meaningfully verified by assertions, reply with exactly:
 UNVERIFIABLE`;
 
-  const text = await completeWithinTimeout(judge, prompt, timeoutMs);
-  if (text === null || /^\s*UNVERIFIABLE\s*$/.test(text)) return [];
+  const text = await judge.complete(prompt);
+  if (/^\s*UNVERIFIABLE\s*$/.test(text)) return [];
   return fencedBlocks(text)
     .filter((block) => (block.language ?? language) === language)
     .map((block) => block.code)
@@ -581,13 +535,13 @@ ${jsonObjectOnlyInstruction()}`;
 
 const JudgeScoreSchema = v.object({ score: v.union([v.number(), v.string()]) });
 
-/** One judge sample. A sample the judge did not answer inside its envelope, or
- *  whose text is not a score object, is DROPPED (null), never scored 0 — a
- *  single flaky parse must not crater the ensemble median. Anything else is a
- *  fault and propagates: the engine reports it as branch-failed. */
-async function sampleJudgeScore(judge: LLM, prompt: string, timeoutMs: number): Promise<number | null> {
-  const text = await completeWithinTimeout(judge, prompt, timeoutMs);
-  if (text === null) return null;
+/** One judge sample. A sample whose text is not a score object is DROPPED
+ *  (null), never scored 0 — a single flaky parse must not crater the ensemble
+ *  median. The call itself is awaited to settlement with no elapsed bound; a
+ *  judge that FAILS is a fault and propagates: the engine reports it as
+ *  branch-failed. */
+async function sampleJudgeScore(judge: LLM, prompt: string): Promise<number | null> {
+  const text = await judge.complete(prompt);
   const json = tolerate(() => extractJsonObject(text), 'malformed-input');
   if (json === undefined) return null;
   const parsed = v.safeParse(JudgeScoreSchema, json);

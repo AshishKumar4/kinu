@@ -7,7 +7,7 @@
  *   • emits flow through to the callback
  *   • doneEmitted is true iff scaffold called host.emit({type:'done'})
  *   • errors are captured and ok=false
- *   • timeouts trigger fallback
+ *   • a slow scaffold runs to completion — nothing races an elapsed deadline
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -157,7 +157,6 @@ describe('runScaffold', () => {
     expect(result.ok).toBe(true);
     expect(calls).toEqual([{ name: 'save_note', args: { content: 'hi' } }]);
   });
-
   test('host.llmStream forwards llmStream output as text_delta events', async () => {
     const events: ScaffoldEvent[] = [];
     const rt = makeRtWithMockedExecutor(async (_code, providers) => {
@@ -175,5 +174,39 @@ describe('runScaffold', () => {
 
     const deltas = events.flatMap((event) => event.type === 'text_delta' ? [event.text] : []);
     expect(deltas).toEqual(['one ', 'two ', 'three']);
+  });
+
+  test('a scaffold run stays pending until the executor completes — no elapsed deadline cuts it', async () => {
+    const events: ScaffoldEvent[] = [];
+    // The executor settles only when this test releases it, so "still pending"
+    // is observed directly instead of guessed from a wall-clock window.
+    const gate = Promise.withResolvers<void>();
+    let released = false;
+    const rt = makeRtWithMockedExecutor(async (_code, providers) => {
+      await gate.promise;
+      released = true;
+      const host = hostProvider(providers);
+      await host.fns.emit({ type: 'text_delta', text: 'finally done' });
+      return { result: undefined };
+    });
+    rt.identity.scaffold.read = async () => 'async function run() {}';
+
+    const run = runScaffold({
+      rt, task: 'x', emit: (e) => { events.push(e); }, llmStream: () => asyncOf(),
+    });
+
+    // The run is still pending while the executor works — nothing raced a
+    // deadline against it. A microtask turn is enough to prove no timer path
+    // has resolved it behind our back.
+    await Promise.resolve();
+    expect(released).toBe(false);
+
+    gate.resolve();
+    const result = await run;
+
+    expect(released).toBe(true);
+    expect(result.ok).toBe(true);
+    expect(result.error).toBeUndefined();
+    expect(events.some((e) => e.type === 'text_delta')).toBe(true);
   });
 });

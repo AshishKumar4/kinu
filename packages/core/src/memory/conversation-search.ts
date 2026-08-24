@@ -1,14 +1,12 @@
 /**
- * Zero-LLM transcript search over past session messages (Hermes
- * session_search borrow). FTS5 over the canonical `messages` table — the one
- * store BOTH backends already persist turns into (DO SQLite on CF,
- * bun:sqlite on the CLI), so a single implementation over the SqlExecutor
- * seam serves both.
+ * Zero-LLM transcript search over past conversation messages. FTS5 covers the
+ * canonical `messages` table, the store both backends already persist turns
+ * into (DO SQLite on CF and bun:sqlite on the CLI).
  *
- * Three shapes, mirroring Hermes's mode inference:
- *   - search(query)        — ranked FTS5 snippets with session/message refs
+ * Three operations:
+ *   - search(query)        — ranked FTS5 snippets with conversation/message refs
  *   - scroll(messageId)    — a ±window slice of messages around an anchor
- *   - browse()             — recent sessions with counts + previews
+ *   - browse()             — recent archived conversation roots with counts
  *
  * The FTS index is additive: an external-content FTS5 table + sync triggers
  * over `messages`, created lazily on first use and backfilled once via the
@@ -27,15 +25,15 @@ import type { SqlExecutor } from '../types/primitives';
 const MAX_MESSAGE_CHARS = 700;
 const SNIPPET_TOKENS = 24;
 
-export interface SessionSearchHit {
-  sessionId: string;
+export interface ConversationSearchHit {
+  conversationId: string;
   messageId: string;
   role: string;
   createdAt: number;
   snippet: string;
 }
 
-export interface SessionScrollMessage {
+export interface ConversationScrollMessage {
   id: string;
   role: string;
   content: string;
@@ -43,17 +41,17 @@ export interface SessionScrollMessage {
   anchor?: true;
 }
 
-export interface SessionScrollResult {
-  sessionId: string;
-  messages: SessionScrollMessage[];
-  /** Messages in the session earlier than the returned window. */
+export interface ConversationScrollResult {
+  conversationId: string;
+  messages: ConversationScrollMessage[];
+  /** Messages in the conversation earlier than the returned window. */
   messagesBefore: number;
-  /** Messages in the session later than the returned window. */
+  /** Messages in the conversation later than the returned window. */
   messagesAfter: number;
 }
 
-export interface SessionSummary {
-  sessionId: string;
+export interface ConversationSummary {
+  conversationId: string;
   messageCount: number;
   startedAt: number;
   lastActiveAt: number;
@@ -75,7 +73,7 @@ function truncate(text: string, maxChars = MAX_MESSAGE_CHARS): string {
 interface HitRow { id: string; session_id: string; role: string; created_at: number; snip: string }
 interface MsgRow { id: string; role: string; content: string; created_at: number; rid: number }
 
-export class SessionSearchStore {
+export class ConversationSearchStore {
   private ensured = false;
 
   constructor(private readonly sql: SqlExecutor) {}
@@ -116,7 +114,7 @@ export class SessionSearchStore {
 
   /** Ranked FTS5 hits, best first. Falls back to OR-matching when the
    *  AND-default query has no hits (same recall policy as MemoryStore). */
-  search(query: string, limit = 5): SessionSearchHit[] {
+  search(query: string, limit = 5): ConversationSearchHit[] {
     this.ensure();
     if (!query.trim()) return [];
     const lim = clamp(limit, 1, 10);
@@ -127,7 +125,7 @@ export class SessionSearchStore {
       if (tokens.length > 1) rows = this.runFtsQuery(tokens.join(' OR '), lim);
     }
     return rows.map((r) => ({
-      sessionId: r.session_id,
+      conversationId: r.session_id,
       messageId: r.id,
       role: r.role,
       createdAt: r.created_at,
@@ -137,7 +135,7 @@ export class SessionSearchStore {
 
   /** A window of ±`window` messages around the anchor message, in transcript
    *  order. Returns null when the anchor id doesn't exist. */
-  scroll(aroundMessageId: string, window = 5, maxChars?: number): SessionScrollResult | null {
+  scroll(aroundMessageId: string, window = 5, maxChars?: number): ConversationScrollResult | null {
     this.ensure();
     const anchor = this.sql<MsgRow & { session_id: string }>`
       SELECT id, session_id, role, content, created_at, rowid AS rid
@@ -164,38 +162,38 @@ export class SessionSearchStore {
     const totalAfter = this.count(anchor.session_id, anchor.created_at, anchor.rid, 'after');
 
     const perMessage = maxChars !== undefined ? Math.max(50, Math.trunc(maxChars)) : MAX_MESSAGE_CHARS;
-    const toMessage = (m: MsgRow): SessionScrollMessage => ({
+    const toMessage = (m: MsgRow): ConversationScrollMessage => ({
       id: m.id, role: m.role, content: truncate(m.content, perMessage), createdAt: m.created_at,
     });
     return {
-      sessionId: anchor.session_id,
+      conversationId: anchor.session_id,
       messages: [...before.map(toMessage), { ...toMessage(anchor), anchor: true }, ...after.map(toMessage)],
       messagesBefore: totalBefore - before.length,
       messagesAfter: totalAfter - after.length,
     };
   }
 
-  /** Recent sessions, most recently active first. */
-  browse(limit = 10): SessionSummary[] {
+  /** Recent conversation roots, most recently active first. */
+  browse(limit = 10): ConversationSummary[] {
     this.ensure();
     const lim = clamp(limit, 1, 20);
-    const sessions = this.sql<{ session_id: string; n: number; started_at: number; last_active: number }>`
+    const conversations = this.sql<{ session_id: string; n: number; started_at: number; last_active: number }>`
       SELECT session_id, COUNT(*) AS n, MIN(created_at) AS started_at, MAX(created_at) AS last_active
       FROM messages
       WHERE session_id NOT IN ('mcts')
       GROUP BY session_id
       ORDER BY last_active DESC
       LIMIT ${lim}`;
-    return sessions.map((s) => {
+    return conversations.map((conversation) => {
       const first = this.sql<{ content: string }>`
         SELECT content FROM messages
-        WHERE session_id = ${s.session_id} AND role = 'user'
+        WHERE session_id = ${conversation.session_id} AND role = 'user'
         ORDER BY created_at ASC, rowid ASC LIMIT 1`[0];
       return {
-        sessionId: s.session_id,
-        messageCount: s.n,
-        startedAt: s.started_at,
-        lastActiveAt: s.last_active,
+        conversationId: conversation.session_id,
+        messageCount: conversation.n,
+        startedAt: conversation.started_at,
+        lastActiveAt: conversation.last_active,
         preview: truncate(first?.content ?? ''),
       };
     });

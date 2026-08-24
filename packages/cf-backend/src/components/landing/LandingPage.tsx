@@ -78,7 +78,7 @@ function PlatformSection(): ReactElement {
           <article className="min-w-0 border-t p-border p-7 sm:p-8 md:border-l md:border-t-0">
             <div className="mb-7 flex items-center justify-between gap-4"><span className="font-mono text-[10px] uppercase tracking-[.16em] p-gold">Local</span><span className="font-mono text-[10px] p-text-4">Files stay on your machine</span></div>
             <h3 className="mb-3 text-[24px] font-semibold tracking-[-.025em]">TUI, CLI, or your editor</h3>
-            <p className="max-w-[480px] text-[15px] leading-[1.7] p-text-3">Create a local workspace in the terminal, or connect the TUI to a cloud workspace. The same sessions and tools follow.</p>
+            <p className="max-w-[480px] text-[15px] leading-[1.7] p-text-3">Create a local workspace in the terminal, or connect the TUI to a cloud workspace. The same agents, conversations, and tools follow.</p>
           </article>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-3 border-t p-border p-recessed px-7 py-4 font-mono text-[11px] p-text-4"><span>ONE BACKEND-AGNOSTIC CORE</span><span>web · TUI · CLI · ACP</span></div>
@@ -104,14 +104,14 @@ function QuickstartSection(): ReactElement {
       <div className="grid gap-5 md:grid-cols-3">
         {clients.map(([eyebrow, title, body, action]) => <div key={title} className={`${CARD} flex flex-col gap-3 p-7`}><div className="text-xs p-text-4">{eyebrow}</div><h3 className="text-xl font-semibold tracking-[-.02em]">{title}</h3><p className="flex-1 text-sm leading-[1.65] p-text-3">{body}</p>{action}</div>)}
       </div>
-      <p className="mt-7 text-[13px] p-text-4">A cloud workspace keeps its files, sessions, and search history across every client.</p>
+      <p className="mt-7 text-[13px] p-text-4">A cloud workspace keeps its files, agents, conversations, and search history across every client.</p>
     </section>
   );
 }
 
 function ClientsSection(): ReactElement {
   const clients = [
-    ['The browser', 'kinu.run shows your workspaces, files, sessions, and searches.'],
+    ['The browser', 'kinu.run shows your workspaces, agents, files, conversations, and searches.'],
     ['The terminal', 'kinu chat opens a conversation. kinu run executes one task and exits for scripts and CI.'],
     ['Your editor', 'kinu acp speaks the Agent Client Protocol, so editors such as Zed can drive a workspace.'],
     ['Webhooks', 'A signed webhook starts a turn from CI, an issue tracker, or another service.'],
@@ -204,15 +204,15 @@ function EvolutionSection(): ReactElement {
       detail: 'Unconfirmed lessons remain provisional and stay out of MEMORY.md. Corroborated lessons can enter workspace memory.',
     },
     {
-      time: 'After a negative session window',
-      title: 'Session reflection',
+      time: 'After a corrected turn window',
+      title: 'Turn reflection',
       evidence: 'Negative signal and recent turns',
       change: 'Write a focused reflection',
       persists: 'A reflection in workspace memory',
-      detail: 'A session with no negative signal adds no reflection.',
+      detail: 'A window with no negative signal adds no reflection.',
     },
     {
-      time: 'Across many sessions',
+      time: 'Across many turn windows',
       title: 'Scaffold evolution',
       evidence: 'A repeated pattern with recorded outcomes',
       change: 'Evaluate a change to the agent loop',
@@ -279,7 +279,7 @@ function DeploySection(): ReactElement {
     ['Step four', 'Prove the account.', 'The infra gate checks every declared resource and binding.', 'bun run gate:infra'],
   ] as const;
   const values = [
-    ['Isolated workspaces', 'Each workspace owns its files and sessions. Idle workspaces use no compute; stored data still uses storage.'],
+    ['Isolated workspaces', 'Each workspace owns its files and agents. Idle workspaces use no compute; stored data still uses storage.'],
     [`${String(STORAGE_GB)} GB file plane, each`, `Each paid-plan workspace can keep up to ${String(STORAGE_GB)} GB of durable files and shell state (do.storage.bytes).`],
     ['Linux on demand', 'An agent can attach a full Linux sandbox through Cloudflare Containers.'],
     ['Your own devices', 'Connect a PC. Kinu asks once per workspace, then remembers the access decision.'],

@@ -39,9 +39,16 @@ const WORKSPACE_ACTOR_CLASS = 'OrchestratorAgent' satisfies keyof Env;
 export interface SetSubordinateIdentityInput {
   name: string;
   displayName: string;
+  /** Catalog role id, when the hiring actor resolved one; else null/absent
+   *  and `role` carries the legacy freeform line. */
+  roleId?: string | null;
+  /** The freeform role text — the labelled legacy block for a pre-catalog
+   *  hire, cleared by any explicit catalog assignment. */
   role: string;
+  /** Optional tier override (`tiny|fast|default|slow|deep`) for catalog hires. */
+  tier?: string | null;
+  catalogVersion?: number | null;
   mission: string;
-  model?: string;
   /** The PARENT workspace's capability token, pushed down at spawn so this
    *  facet reaches the owner's UserDO as its workspace — and is attenuated
    *  with it. Refreshed by the parent's installWorkspaceCapability fan-out if
@@ -146,15 +153,30 @@ export class SubordinateAgent extends ActorAgent {
   }
 
   protected shellId(): string { return `subordinate:${this.name}`; }
-
   protected async loadSoulText(): Promise<string> {
     const identity = this.identity.read();
     return identity
       ? renderSoulMarkdown({
         name: identity.displayName,
-        mission: `Role: ${identity.role}\n\n${identity.mission}`,
+        mission: `${this.identityRoleBlock(identity)}\n\n${identity.mission}`,
       })
       : '';
+  }
+
+  /**
+   * The leading block of the identity section — the SAME position the
+   * freeform line always occupied. A catalog hire shows its role id; a
+   * pre-catalog hire keeps its original text as a LABELLED legacy block, so
+   * no user prose silently changes shape or place, until an explicit catalog
+   * assignment replaces and clears it.
+   */
+  private identityRoleBlock(identity: { roleId: string | null; legacyRole: string | null }): string {
+    if (identity.roleId) return `Role: ${identity.roleId}`;
+    return [
+      'Legacy role (assigned before this workspace had a role catalog):',
+      identity.legacyRole ?? '(none)',
+      'You keep these instructions until you are explicitly assigned a catalog role.',
+    ].join('\n');
   }
 
   protected get engine(): EvolutionEngine {
@@ -257,7 +279,10 @@ export class SubordinateAgent extends ActorAgent {
     this.identity.seed({
       name: input.name,
       displayName: input.displayName,
-      role: input.role,
+      roleId: input.roleId ?? null,
+      legacyRole: input.roleId ? null : input.role,
+      tier: input.tier ?? null,
+      catalogVersion: input.catalogVersion ?? null,
       mission: input.mission,
       parentWorkspace: bootstrap.parentWorkspace,
       ownerUserId: bootstrap.ownerUserId,
@@ -265,8 +290,8 @@ export class SubordinateAgent extends ActorAgent {
     });
     this.config.setDisplayName(input.displayName);
     if (input.capabilityToken) await this.installWorkspaceCapability(input.capabilityToken);
-    const model = input.model ?? bootstrap.model;
-    if (model) this.config.setModel(model);
+    // No concrete model is pinned from the caller: the child's own turn
+    // resolution maps its tier (or the default) onto a model at its next turn.
     this._cachedSoulText = null;
     this._cachedSystemPrompt = null;
     this.invalidateModelCaches();
@@ -330,7 +355,12 @@ export class SubordinateAgent extends ActorAgent {
   async getSubordinateSnapshot(): Promise<{
     name: string;
     displayName: string;
-    role: string;
+    /** Catalog role id, or null for a legacy hire. */
+    roleId: string | null;
+    /** The freeform line a pre-catalog hire carries; cleared on reassignment. */
+    legacyRole: string | null;
+    tier: string | null;
+    catalogVersion: number | null;
     mission: string;
     model: string | null;
   }> {
@@ -340,7 +370,10 @@ export class SubordinateAgent extends ActorAgent {
     return {
       name: identity.name,
       displayName: identity.displayName,
-      role: identity.role,
+      roleId: identity.roleId,
+      legacyRole: identity.legacyRole,
+      tier: identity.tier,
+      catalogVersion: identity.catalogVersion,
       mission: identity.mission,
       model: this.getStoredModelId(),
     };

@@ -4,15 +4,17 @@ import { createRoot } from '@opentui/react';
 import { describe, expect, test } from 'bun:test';
 
 import { MessageList } from '../src/tui/messages';
-import { tuiColors } from '../src/tui/theme';
+import { BUILTIN_TUI_THEMES } from '../src/tui/theme';
+
+const TEST_TUI_BACKGROUND = BUILTIN_TUI_THEMES[0]!.colors.background.canvas;
 
 describe('TUI transcript rendering', () => {
-  test('chat messages render user bubbles and assistant markdown', async () => {
+  test('only user messages carry a speaker label; assistant markdown stays unprefixed', async () => {
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 96, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
     try {
       root.render(
-        <box style={{ width: '100%', height: '100%', backgroundColor: tuiColors.bg }}>
+        <box style={{ width: '100%', height: '100%', backgroundColor: TEST_TUI_BACKGROUND }}>
           <MessageList
             messages={[
               { id: 'u1', role: 'user', content: 'Review this module' },
@@ -25,7 +27,7 @@ describe('TUI transcript rendering', () => {
       const frame = captureCharFrame();
       expect(frame).toContain('YOU');
       expect(frame).toContain('Review this module');
-      expect(frame).toContain('KINU');
+      expect(frame).not.toContain('KINU');
       expect(frame).toContain('Plan');
       expect(frame).toContain('Inspect');
       expect(frame).not.toContain('**Inspect**');
@@ -45,7 +47,7 @@ describe('TUI transcript rendering', () => {
     const root = createRoot(renderer);
     try {
       root.render(
-        <box style={{ width: '100%', height: '100%', backgroundColor: tuiColors.bg }}>
+        <box style={{ width: '100%', height: '100%', backgroundColor: TEST_TUI_BACKGROUND }}>
           <MessageList
             messages={[
               { id: 'before', role: 'system', content: 'before status' },
@@ -81,7 +83,7 @@ describe('TUI transcript rendering', () => {
     try {
       // The transcript order IS the chronological order: text, tool, text, tool.
       root.render(
-        <box style={{ width: '100%', height: '100%', backgroundColor: tuiColors.bg }}>
+        <box style={{ width: '100%', height: '100%', backgroundColor: TEST_TUI_BACKGROUND }}>
           <MessageList
             messages={[
               { id: 'a1', role: 'assistant', content: 'FIRST text before the tool' },
@@ -121,7 +123,7 @@ describe('TUI transcript rendering', () => {
     const root = createRoot(renderer);
     try {
       root.render(
-        <box style={{ width: '100%', height: '100%', backgroundColor: tuiColors.bg }}>
+        <box style={{ width: '100%', height: '100%', backgroundColor: TEST_TUI_BACKGROUND }}>
           <MessageList
             messages={[
               { id: 't1', role: 'tool_call', content: '', toolName: 'read_file' },
@@ -145,7 +147,7 @@ describe('TUI transcript rendering', () => {
     const root = createRoot(renderer);
     try {
       root.render(
-        <box style={{ width: '100%', height: '100%', backgroundColor: tuiColors.bg }}>
+        <box style={{ width: '100%', height: '100%', backgroundColor: TEST_TUI_BACKGROUND }}>
           <MessageList
             messages={[
               { id: 'u1', role: 'user', content: 'start the deploy' },

@@ -297,7 +297,7 @@ describe('the cloud backend selects its background policy per turn', () => {
   });
 
   test('both unwatched populations are one-shot; only real chat is interactive', () => {
-    const surface = /protected turnSurface\(\): SessionSurface \{([\s\S]*?)\n  \}/.exec(actor);
+    const surface = /protected turnSurface\(\): InvocationSurface \{([\s\S]*?)\n  \}/.exec(actor);
     expect(surface).not.toBeNull();
     // A CLI one-shot invocation AND a signal-driven autonomous turn both have
     // nobody watching a stream. Continuity alone misses the whole autonomous

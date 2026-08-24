@@ -121,10 +121,10 @@ export interface Executor {
   execute(
     code: string,
     providers: ResolvedProvider[] | Record<string, (...args: JsonValue[]) => Promise<JsonValue | undefined>>,
-    /** Caller-declared wall-clock budget. Tool-call code gets the executor's
-     *  own short default; a scaffold turn is a whole agentic loop and declares
-     *  its own (runScaffold). Executors that cannot honour it may ignore it —
-     *  every caller races its own timeout regardless. */
+    /** Caller-declared wall-clock budget. Tool-call-scale code omits it and
+     *  gets the executor's own default; agentic-loop callers (runScaffold)
+     *  declare none at all and run to settlement. Executors that cannot
+     *  honour a declared budget may ignore it. */
     opts?: {
       timeoutMs?: number;
       /** Omitted means the executor's first declared language. */

@@ -12,10 +12,10 @@ import type { LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
 import type { LanguageModelV2, LanguageModelV2CallOptions } from '@ai-sdk/provider';
 import {
-  HeadController, HeadJournal, initHeadsTables, buildHeadToolSet, HeadCapture,
+  HeadController, HeadJournal, initHeadsTables, buildHeadToolSet, HeadCapture, MergeOutputSchema,
   MissionGovernor, CRAFT_NEUTRAL_PRIOR,
   type HeadInput, type WebSearchProvider, type AgentRuntime, type JsonObject,
-  type ModelCallReport,
+  type ModelCallReport, type ModelOperationEvent,
 } from '@kinu.run/core';
 import { scratchDir, scratchPath, toolExecute } from '@kinu.run/test-utils';
 import { createCLIHeadRuntime, type CLIHeadRuntimeDeps } from '../src/head-runtime';
@@ -66,7 +66,7 @@ function headDeps(model: LanguageModel, over?: Partial<CLIHeadRuntimeDeps>): CLI
   const governor = makeGovernor();
   const journal = makeJournal();
   return {
-    model: () => model, parentRuntime: makeParent(), cwd: process.cwd(),
+    model: () => model, parentRuntime: makeParent(),
     webSearch: stubWeb, codemodeExtras: () => [],
     governor: () => governor, journal: () => journal, ...over,
   };
@@ -318,7 +318,7 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
     await parent.storage.vfs.writeFile('hello.txt', 'from the parent workspace');
     const headDb = new Database(':memory:');
     const rt = buildCLIHeadRuntime(headDb, {
-      parentRuntime: parent, cwd: dir, agentId: 'h', agentName: 'head-h',
+      parentRuntime: parent, agentId: 'h', agentName: 'head-h',
     });
 
     // The parent's workspace, through the parent EXECUTOR — the exact thing the
@@ -345,7 +345,7 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
     const dir = scratchDir('head-runtime-cwd');
     writeFileSync(join(dir, 'note.txt'), 'real file content');
     const rt = buildCLIHeadRuntime(new Database(':memory:'), {
-      parentRuntime: makeParent(), cwd: dir, agentId: 'h2', agentName: 'head-h2',
+      parentRuntime: makeParent(), agentId: 'h2', agentName: 'head-h2',
     });
     const capture = new HeadCapture();
     const tools = buildHeadToolSet({
@@ -374,8 +374,7 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
    */
   test('its own workspace plane scores the tools it crafts', async () => {
     const rt = buildCLIHeadRuntime(new Database(':memory:'), {
-      parentRuntime: makeParent(), cwd: scratchDir('head-runtime-cwd'),
-      agentId: 'h3', agentName: 'head-h3',
+      parentRuntime: makeParent(), agentId: 'h3', agentName: 'head-h3',
     });
     const workspace = rt.executionRouter!.getProvider('workspace')!;
 
@@ -542,10 +541,8 @@ function sharedWorkspaceProbeModel(arrive: () => Promise<void>): LanguageModel {
 
 describe('a head reports the files IT changed, with concurrent siblings on the same plane', () => {
   test('two heads writing at the same time do not smear into each other', async () => {
-    const dir = scratchDir('head-runtime-shared-plane');
     const runtime = createCLIHeadRuntime(headDeps(
       sharedWorkspaceProbeModel(barrier(2, () => {})),
-      { cwd: dir },
     ));
 
     const [alpha, beta] = await Promise.all([
@@ -692,5 +689,79 @@ describe('createCLIHeadRuntime — a fork runs the model it was given', () => {
 
     expect(report.status).toBe('completed');
     expect(seen).toEqual(['session']);
+  });
+});
+
+describe("the merge synthesis' operation lifecycle", () => {
+  /** A model that answers ONLY the merge call, scripted per test. The usage is
+   *  what the provider said — the shape the operation's end row must carry. */
+  function mergeModel(text: string): LanguageModel {
+    return new TestLanguageModelV2({
+      provider: 'fake', modelId: 'fake',
+      doGenerate: async () => ({
+        content: [{ type: 'text', text }],
+        finishReason: 'stop' as const,
+        usage: { inputTokens: 8, outputTokens: 12, totalTokens: 20 },
+        response: { id: 'r', modelId: 'fake-merge', timestamp: new Date(0) },
+        warnings: [],
+      }),
+    });
+  }
+
+  const GOOD_MERGE =
+    '{"narrative":"Unified: both heads agree the parser is sound.","selected_decisions":[],"unresolved_questions":[],"recommendations":["ship it"]}';
+
+  function runtimeWith(model: LanguageModel) {
+    const operations: ModelOperationEvent[] = [];
+    const reports: ModelCallReport[] = [];
+    const runtime = createCLIHeadRuntime(headDeps(model, {
+      operations: (event) => operations.push(event),
+      reportModelCall: (report) => reports.push(report),
+    }));
+    return { operations, reports, runtime };
+  }
+
+  test('a successful merge writes start and end rows joined by operationId, with usage', async () => {
+    const { operations, reports, runtime } = runtimeWith(mergeModel(GOOD_MERGE));
+
+    await runtime.mergeLLM('merging the findings of 2 heads', MergeOutputSchema);
+
+    expect(operations.map((e) => e.phase)).toEqual(['start', 'end']);
+    expect(operations[0]!.operationId).toBe(operations[1]!.operationId);
+    expect(operations.every((e) => e.source === 'judge' && e.op === 'generate_json')).toBe(true);
+    expect(operations[1]!.outcome).toBe('ok');
+    expect(operations[1]!.usage).toEqual({ input: 8, output: 12 });
+    expect(operations[1]!.modelId).toBe('fake-merge');
+    // The cost report is unchanged by the lifecycle beside it.
+    expect(reports).toEqual([{ source: 'judge', usage: { input: 8, output: 12 }, modelId: 'fake-merge' }]);
+  });
+
+  test('a thrown provider leaves a failed end row and rethrows', async () => {
+    const { operations, reports, runtime } = runtimeWith(new TestLanguageModelV2({
+      provider: 'fake', modelId: 'fake',
+      doGenerate: async () => { throw new Error('socket hung up'); },
+    }));
+
+    await expect(runtime.mergeLLM('merging the findings of 2 heads', MergeOutputSchema)).rejects.toThrow('socket hung up');
+
+    expect(operations.map((e) => e.phase)).toEqual(['start', 'end']);
+    expect(operations[1]!.outcome).toBe('failed');
+    expect(operations[1]!.error).toContain('socket hung up');
+    // No provider answer ⇒ no usage anywhere, and no cost report either.
+    expect(operations[1]!.usage).toBeUndefined();
+    expect(reports).toEqual([]);
+  });
+
+  test('malformed JSON still records completed provider usage before the parse refusal', async () => {
+    const { operations, reports, runtime } = runtimeWith(mergeModel('not json at all'));
+
+    await expect(runtime.mergeLLM('merging the findings of 2 heads', MergeOutputSchema)).rejects.toThrow();
+
+    // The OPERATION succeeded — the provider answered and was billed; whether
+    // the output parses is the controller's verdict, not this frame's.
+    expect(operations.map((e) => e.phase)).toEqual(['start', 'end']);
+    expect(operations[1]!.outcome).toBe('ok');
+    expect(operations[1]!.usage).toEqual({ input: 8, output: 12 });
+    expect(reports).toHaveLength(1);
   });
 });

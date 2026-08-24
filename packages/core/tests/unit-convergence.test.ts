@@ -32,6 +32,8 @@ describe('Convergence', () => {
     expect(result.converged).toBe(true);
     expect(result.winnerId).toBe('winner');
     expect(result.winnerValue).toBeCloseTo(0.85, 2);
+    // A converged result carries no non-convergence reason.
+    expect(result.reason).toBeUndefined();
   });
 
   test('BUG-4: returns converged=false when all scores below threshold', async () => {
@@ -47,12 +49,22 @@ describe('Convergence', () => {
 
     const result = await converge(rt, session, 'r');
     expect(result.converged).toBe(false);
+    // The outcome is CLASSIFIED, not just false: the loop ran and nothing
+    // cleared the floor.
+    expect(result.reason).toBe('no_acceptable_candidate');
     expect(result.trajectory).toHaveLength(0);
 
     // Failed search closes its open nodes so the next task starts fresh.
     const statuses = rt.storage.sql<{ id: string; status: string }>`
         SELECT id, status FROM search_nodes ORDER BY id`;
     expect(statuses.map((r) => r.status)).toEqual(['failed', 'failed']);
+
+    // And the close fabricates nothing: a search with no acceptable candidate
+    // has NO terminal row — a terminal node would report a winner the floor
+    // refused, and every read model keys "did this run land an answer" on it.
+    const terminals = rt.storage.sql<{ id: string }>`
+        SELECT id FROM search_nodes WHERE status = 'terminal'`;
+    expect(terminals).toHaveLength(0);
   });
 
   // With no value signal every node carries the same number, so `ORDER BY value
@@ -76,7 +88,13 @@ describe('Convergence', () => {
     // 0.6 clears minAcceptableScore — the old code shipped it as a winner.
     expect(result.winnerValue).toBeCloseTo(0.6, 10);
     expect(result.converged).toBe(false);
+    expect(result.reason).toBe('undifferentiated');
     expect(result.trajectory).toHaveLength(0);
+
+    // Zero signal is also no acceptance: nothing terminal may be fabricated.
+    const terminals = rt.storage.sql<{ id: string }>`
+        SELECT id FROM search_nodes WHERE status = 'terminal'`;
+    expect(terminals).toHaveLength(0);
   });
 
   // The guard must not fire on a real result. A genuine ordering — even a very

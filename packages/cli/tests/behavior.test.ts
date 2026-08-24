@@ -24,6 +24,14 @@ function toText(bytes: Buffer): string {
 
 
 const tempDirs: string[] = [];
+
+/** Fresh throwaway project directory per spawn: the CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo. */
+function newProjectDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), "kinu-test-project-"));
+  tempDirs.push(dir);
+  return dir;
+}
+
 const repoRoot = resolve(__dirname, "../../..");
 const cliBin = join(repoRoot, "packages/cli/bin/cli.ts");
 const RequestBodySchema = v.object({ stream: v.optional(v.boolean()) });
@@ -106,7 +114,7 @@ function runCli(args: string[], opts: { home?: string; stdin?: string; env?: Rec
   if (opts.home) env.KINU_HOME = opts.home;
   return Bun.spawnSync({
     cmd: [process.execPath, cliBin, ...args],
-    cwd: repoRoot,
+    cwd: newProjectDir(),
     stdin: opts.stdin ? Buffer.from(opts.stdin) : undefined,
     stdout: "pipe",
     stderr: "pipe",
@@ -122,7 +130,7 @@ async function runCliAsync(
   if (opts.home) env.KINU_HOME = opts.home;
   const proc = Bun.spawn({
     cmd: [process.execPath, cliBin, ...args],
-    cwd: repoRoot,
+    cwd: newProjectDir(),
     stdin: opts.stdin ? Buffer.from(opts.stdin) : undefined,
     stdout: "pipe",
     stderr: "pipe",
@@ -146,7 +154,7 @@ function runCliInPty(args: string[], opts: { home: string; stdin?: string }) {
 
   return Bun.spawnSync({
     cmd: ["script", "-qefc", command, "/dev/null"],
-    cwd: repoRoot,
+    cwd: newProjectDir(),
     stdin: opts.stdin ? Buffer.from(opts.stdin) : undefined,
     stdout: "pipe",
     stderr: "pipe",
@@ -266,15 +274,19 @@ describe("CLI behavior", () => {
     expect(out).not.toContain("Self-evolving AI agent with MCTS exploration");
   });
 
-  test("chat exposes first-class session controls", () => {
+  test("chat help offers transcript controls, never resume or fork selection", () => {
     const proc = runCli(["chat", "--help"]);
     const out = toText(proc.stdout);
 
     expect(proc.exitCode).toBe(0);
     expect(out).toContain("Usage: kinu chat");
-    expect(out).toContain("--resume");
-    expect(out).toContain("--session <idOrPath>");
-    expect(out).toContain("--fork <idOrPath>");
+    expect(out).toContain("--transcript-dir <dir>");
+    expect(out).toContain("--no-transcript");
+    expect(out).not.toContain("--resume");
+    expect(out).not.toContain("--session");
+    expect(out).not.toContain("--fork");
+    expect(out).not.toContain("-c, --continue");
+    expect(out).not.toContain("-r, --resume");
   });
 
   test("no-name chat can select a configured cloud agent", () => {
@@ -337,7 +349,7 @@ describe("kinu exec (headless)", () => {
   // The real hermetic smoke: a local agent created and exec'd through the
   // spawned CLI binary against a mock OpenAI-compatible endpoint — proving
   // exit codes and the line-delimited JSON event shape end to end.
-  test("runs a local workspace end-to-end with --json, resumable sessions, and honest exit codes", async () => {
+  test("runs a local workspace end-to-end with --json and honest exit codes", async () => {
     const home = mkdtempSync(join(tmpdir(), "kinu-cli-exec-smoke-"));
     tempDirs.push(home);
     const server = startMockLlm("Hello from mock.");
@@ -378,15 +390,14 @@ describe("kinu exec (headless)", () => {
         const parsed = v.safeParse(RunEventEnvelopeSchema, event);
         return parsed.success ? [parsed.output.event] : [];
       });
-      // `turn_steering` sits between `step_finish` and `turn_end` because
-      // `closeTurnRun` writes the turn's conditional records there. It fires
-      // deterministically in this fixture rather than incidentally: the mock
-      // model answers in one step and never delegates, which is exactly the
-      // turn-start delegation nudge's trigger. Asserted by name so a future
-      // change that stops the nudge firing fails here instead of quietly
-      // reverting the ledger to the shorter sequence.
+      // `closeTurnRun` writes both conditional rows between `step_finish` and
+      // `turn_end`. The mock answers in one step and never delegates, so the
+      // start nudge fires and its opportunity row records the non-conversion.
+      // Pin both names so the evidence cannot disappear while the turn still
+      // looks complete.
       expect(ledger.map((e) => e.type)).toEqual([
-        "run_start", "turn_start", "step_finish", "turn_steering", "turn_end", "run_end",
+        "run_start", "turn_start", "step_finish", "turn_steering",
+        "delegation_opportunity", "turn_end", "run_end",
       ]);
       const nudges = events.flatMap((e) => {
         const parsed = v.safeParse(StartNudgeEnvelopeSchema, e);
@@ -398,15 +409,15 @@ describe("kinu exec (headless)", () => {
       expect(ledger.every((e) => e.runId.length > 0)).toBe(true);
       expect(new Set(ledger.map((e) => e.runId)).size).toBe(1);
 
-      // --resume continues the same recorded session instead of opening a new one.
-      const sessionId = v.parse(SessionEventSchema, events[0]).id;
-      const resumed = await runCliAsync(["exec", "--workspace", "smokey", "--json", "--resume", sessionId, "Say hello again"], { home, env });
-      expect(resumed.exitCode).toBe(0);
-      const resumedHeader = v.parse(
+      // A second exec opens a fresh transcript; the durable conversation
+      // carries the history, never a selectable JSONL artifact.
+      const second = await runCliAsync(["exec", "--workspace", "smokey", "--json", "Say hello again"], { home, env });
+      expect(second.exitCode).toBe(0);
+      const secondHeader = v.parse(
         SessionEventSchema,
-        parseJsonObject(toText(resumed.stdout).trim().split("\n")[0]!),
+        parseJsonObject(toText(second.stdout).trim().split("\n")[0]!),
       );
-      expect(resumedHeader.id).toBe(sessionId);
+      expect(secondHeader.id).not.toBe(v.parse(SessionEventSchema, events[0]).id);
     } finally {
       server.stop();
     }

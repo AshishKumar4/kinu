@@ -11,14 +11,14 @@ import type { CodemodeProvider } from '../rlm';
 import * as v from 'valibot';
 import { TASK_STATUSES, type TaskListStore } from '../tasks/store';
 import type { AgentConfigStore } from '../config/store';
-import { AGENT_STANCES, STANCE_CHOICES, TOOL_REACH } from './registry';
+import { TOOL_REACH } from './registry';
+import type { ProfileCatalogEnvelope } from '../profiles/catalog';
 import { decodeJsonValue } from '../utils/json';
 import { createTasksDispatcher } from './tasks-tool';
 
 const TitlesSchema = v.array(v.string());
 const ParentSchema = v.optional(v.string());
 const TaskStatusSchema = v.picklist(TASK_STATUSES);
-const StanceSchema = v.picklist(AGENT_STANCES);
 
 const TYPES = `export declare const tasks: {
   /** Write down the whole plan in one call — one title per task, in the
@@ -30,9 +30,9 @@ const TYPES = `export declare const tasks: {
   update(id: string, status: "open" | "active" | "done" | "dropped"): Promise<unknown>;
   /** Read the whole list back, closed items included. */
   list(): Promise<unknown>;
-  /** Set the stance you work in, or read it back with no argument.
-   *  ${STANCE_CHOICES} */
-  mode(stance?: ${AGENT_STANCES.map((stance) => `"${stance}"`).join(' | ')}): Promise<unknown>;
+  /** Switch your durable active role, or read the current role id with no
+   *  argument. Applies from your NEXT turn. */
+  mode(role?: string): Promise<unknown>;
 };
 `;
 
@@ -43,8 +43,9 @@ const TYPES = `export declare const tasks: {
 export function createTasksCodemodeProvider(
   taskList: TaskListStore,
   config: AgentConfigStore,
+  roleAuthority?: () => ProfileCatalogEnvelope | null,
 ): CodemodeProvider {
-  const run = createTasksDispatcher(taskList, config);
+  const run = createTasksDispatcher(taskList, config, roleAuthority);
   return {
     name: TOOL_REACH.tasks.codemode,
     types: TYPES,
@@ -81,11 +82,12 @@ export function createTasksCodemodeProvider(
         execute: async () => decodeJsonValue({ value: run({ action: 'list' }) }),
       },
       mode: {
-        description: `Set the stance you work in, or read it back with no argument. ${STANCE_CHOICES}`,
+        description: 'Switch your durable active role by id (applies from your next turn), or read the current role id with no argument.',
         execute: async (...args: unknown[]) => {
-          const stance = v.safeParse(StanceSchema, args[0]);
+          const parsedRole = v.safeParse(v.string(), args[0]);
+          const role = parsedRole.success ? parsedRole.output : undefined;
           return decodeJsonValue({
-            value: run({ action: 'mode', stance: stance.success ? stance.output : undefined }),
+            value: run({ action: 'mode', role }),
           });
         },
       },

@@ -110,6 +110,15 @@ import type { AgentSignal } from '../types/signals';
 import type { BuiltinToolName } from '../tools/registry';
 import type { RecoveryFinding } from '../evolution/recovery';
 import { fnv1a64 } from '../prompting/volatile-context';
+import { nanoid } from '../utils/nanoid';
+import type { DelegationOpportunityRecord } from '../events/types';
+
+/** The two hints whose delivery PRD §9.6 records as delegation opportunities.
+ *  Derived from the durable row's own picklist rather than re-declared, so the
+ *  producer cannot drift from what the recorder accepts. */
+type DelegationHintTrigger = NonNullable<
+  DelegationOpportunityRecord['trigger']
+>;
 import {
   isJsonObject,
   type JsonObject,
@@ -195,10 +204,18 @@ function noProgressText(steps: number): string {
     + 'This is a hint, not an instruction — push on if the ground you are re-covering is the right ground.';
 }
 
+/** The long-turn hint's body with the step number factored out. The id below
+ *  digests THIS string, so it names the wording rather than one rendering of
+ *  it — a hint delivered at step 25 and one at step 40 are the same
+ *  instrument, and a conversion rate must be able to say so. The zero never
+ *  reaches the model: only the digest reads this form. */
+const LONG_TURN_HINT_BODY =
+  '{steps} steps into this turn with no delegation. Work this long is work that splits: '
+  + `search now (\`${DELEGATION_TOOL}\` action=swarm) to run the independent parts in parallel instead of grinding them one at a time. `
+  + 'This is a hint, not an instruction — push on alone if the rest is genuinely sequential.';
+
 function longTurnText(steps: number): string {
-  return `${steps} steps into this turn with no delegation. Work this long is work that splits: `
-    + `search now (\`${DELEGATION_TOOL}\` action=swarm) to run the independent parts in parallel instead of grinding them one at a time. `
-    + 'This is a hint, not an instruction — push on alone if the rest is genuinely sequential.';
+  return LONG_TURN_HINT_BODY.replace('{steps}', String(steps));
 }
 
 /**
@@ -210,10 +227,13 @@ function longTurnText(steps: number): string {
  * carries no number: nothing here is evidence about THIS turn, only about when
  * the decision is open.
  */
+const TURN_START_HINT_BODY =
+  'Settle the shape first: what the parts are, and what each one owes the others. That decision is yours. '
+  + `Then run the independent parts as one search (\`${DELEGATION_TOOL}\` action=swarm) in one call, and carry on with what is left. `
+  + 'This is a hint, not an instruction — work alone if the whole thing is one coherent change.';
+
 function turnStartDelegationText(): string {
-  return 'Settle the shape first: what the parts are, and what each one owes the others. That decision is yours. '
-    + `Then run the independent parts as one search (\`${DELEGATION_TOOL}\` action=swarm) in one call, and carry on with what is left. `
-    + 'This is a hint, not an instruction — work alone if the whole thing is one coherent change.';
+  return TURN_START_HINT_BODY;
 }
 
 /** A user message's parts, read for their text alone: an image or a file part
@@ -364,6 +384,47 @@ export class TurnSteering {
   private lastProgress = -1;
   private stalledSteps = 0;
 
+  // ── The delegation-opportunity ledger ────────────────────────────
+  //
+  // The `turn_steering` rows above answer "did a steer convert". These fields
+  // record the OPPORTUNITY itself — which hint text reached the model, at
+  // which step, with which role catalog behind it — because PRD §9.6's
+  // question needs more than `converted`: an ignored hint under an empty role
+  // catalog is a wiring gap, and one under a full catalog is behaviour, and
+  // without the roles those two observations are indistinguishable.
+
+  /** Where the agent's delegatable roles come from, read at the moment a hint
+   *  is delivered or an unprompted delegation lands — not at construction,
+   *  because the catalog can change between turns. Absent reads as an empty
+   *  list, which the row states honestly rather than guessing. */
+  private roleCatalog?: () => readonly string[] | undefined;
+
+  /** Bind where the role catalog is read from. Called once when the host wires
+   *  the steering object up; re-calling replaces it. */
+  observeRoles(read: () => readonly string[] | undefined): void {
+    this.roleCatalog = read;
+  }
+
+  private currentRoles(): string[] {
+    return [...(this.roleCatalog?.() ?? [])];
+  }
+
+  /** Every delivered delegation hint, held until turn end so each row can
+   *  carry whether anything came of it. A LIST, because a turn can carry two —
+   *  the turn-start hint and, much later, the recovery steer for the shape it
+   *  failed to prevent — and folding them into one slot would silently drop
+   *  the first delivery's record. */
+  private opportunities: Array<{
+    id: string; trigger: DelegationHintTrigger; step: number; hintId: string; converted: boolean;
+  }> = [];
+  /** The autonomous arm: an `agents` call on a turn no hint was delivered to.
+   *  Recorded as its own fact rather than folded into the instructed rows, so
+   *  each arm keeps its own denominator (`delegation_opportunity.surface`). */
+  private unpromptedDelegation: { step: number } | null = null;
+  /** The most recent step boundary {@link steerFor} saw; -1 before the first.
+   *  The step an unprompted delegation is stamped with. */
+  private lastBoundaryStep = -1;
+
   /** Clear for a new turn. */
   reset(): void {
     this.failures.clear();
@@ -376,12 +437,24 @@ export class TurnSteering {
     this.repeating = null;
     this.lastProgress = -1;
     this.stalledSteps = 0;
+    this.opportunities = [];
+    this.unpromptedDelegation = null;
+    this.lastBoundaryStep = -1;
   }
 
   onToolCall(ctx: ToolCallContext): void {
     const delegating = ctx.toolName === DELEGATION_TOOL;
     if (delegating) this.delegated = true;
     if (this.startFired && delegating) this.startConverted = true;
+    if (delegating) {
+      for (const opportunity of this.opportunities) opportunity.converted = true;
+    }
+    if (this.opportunities.length === 0 && delegating && this.unpromptedDelegation === null) {
+      // The model reached for delegation with no hint behind it. That is the
+      // autonomous arm doing exactly what the instructed arm is measured for —
+      // recorded once, at its first call, so a swarm plus its children's calls
+      this.unpromptedDelegation = { step: this.lastBoundaryStep };
+    }
     if (this.fired && this.answersTheSteer(ctx)) this.converted = true;
   }
 
@@ -493,6 +566,9 @@ export class TurnSteering {
    */
   steerFor(ctx: PrepareStepContext, files: TurnProgressInputs = NO_FILE_PROGRESS): AgentSignal | null {
     const step = ctx.stepNumber;
+    // The boundary the NEXT tool call is observed from — what an unprompted
+    // delegation row stamps, since onToolCall sees no step of its own.
+    this.lastBoundaryStep = step;
     // Sampled on every boundary, including ones where a steer has already
     // fired: this is the turn's own accounting, and letting it drift would
     // make the number meaningless if the trigger order ever changes.
@@ -519,6 +595,7 @@ export class TurnSteering {
     }
     if (step >= LONG_TURN_STEPS_BEFORE_STEER && !this.delegated) {
       this.fired = { trigger: 'long_turn_no_delegation', step };
+      this.recordOpportunity('long_turn_no_delegation', step, LONG_TURN_HINT_BODY);
       return signal(longTurnText(step));
     }
     // Last, and only ever at step 0 — where none of the four above can have
@@ -526,9 +603,68 @@ export class TurnSteering {
     // this turn and outranks a hint that is about every turn.
     if (step === 0 && !this.startFired && freshAsk(ctx.messages)) {
       this.startFired = true;
+      this.recordOpportunity('turn_start_no_delegation', 0, TURN_START_HINT_BODY);
       return signal(turnStartDelegationText());
     }
     return null;
+  }
+
+  /**
+   * One delivered hint = one recorded opportunity. The id pair is minted here,
+   * at the moment of delivery: `hintId` digests the hint's TEMPLATE so it names
+   * the wording rather than one rendering (a step-25 and a step-40 long-turn
+   * hint are the same instrument), and `opportunityId` is unique to THIS
+   * occasion. The role list is read NOW, because "what could the agent have
+   * delegated into" is a question about that moment, not about turn end.
+   */
+  private recordOpportunity(
+    trigger: DelegationHintTrigger,
+    step: number,
+    template: string,
+  ): void {
+    this.opportunities.push({
+      id: `dop-${nanoid(10)}`,
+      trigger,
+      step,
+      hintId: `${trigger}:${fnv1a64(template)}`,
+      converted: false,
+    });
+  }
+
+  /**
+   * The turn's delegation opportunities, for `closeTurnRun` — the instructed
+   * arm's rows when hints were delivered, plus the autonomous arm's row when
+   * an `agents` call arrived on a turn no hint reached. Empty on a turn with
+   * neither, which keeps each arm's denominator its own.
+   *
+   * The unprompted row's `step` is the last step boundary before the delegating
+   * call was observed; -1 means it landed before any boundary ran, which only a
+   * tool call outside any step can produce and which the row states rather
+   * than hides.
+   */
+  delegationSnapshot(): DelegationOpportunityRecord[] {
+    const rows: DelegationOpportunityRecord[] = [];
+    for (const opportunity of this.opportunities) {
+      rows.push({
+        opportunityId: opportunity.id,
+        surface: 'hint',
+        hintId: opportunity.hintId,
+        trigger: opportunity.trigger,
+        step: opportunity.step,
+        roles: this.currentRoles(),
+        converted: opportunity.converted,
+      });
+    }
+    if (this.unpromptedDelegation) {
+      rows.push({
+        opportunityId: `dop-${nanoid(10)}`,
+        surface: 'unprompted',
+        step: this.unpromptedDelegation.step,
+        roles: this.currentRoles(),
+        converted: true,
+      });
+    }
+    return rows;
   }
 
   /** Did this call do the thing the fired steer asked for? Per trigger,

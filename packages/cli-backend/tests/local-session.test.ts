@@ -8,7 +8,7 @@ import { describe, test, expect } from 'bun:test';
 import { createTestSql, scratchDir, scratchPath, toolExecute } from '@kinu.run/test-utils';
 import { MissionGovernor } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { LanguageModel } from 'ai';
 import type { ToolExecutionOptions } from 'ai';
@@ -24,8 +24,9 @@ import {
   initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, SignalDelivery,
   backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage,
   JsonObjectSchema, WORKSPACE_RUN_ID, BACKGROUND_POLICY,
+  profileCatalogDigest, BUILTIN_PROFILE_CATALOG, effectiveRoleCatalog,
   type AgentsToolDeps, type ModelInfo, type JsonObject, type JsonValue,
-  type ModelCallSink,
+  type ModelCallSink, type ProfileCatalogEnvelope,
   createAgentSelfProvider,
 } from '@kinu.run/core';
 import { createCLIRuntime, makeExecRaw, makeSql } from '../src/runtime';
@@ -291,11 +292,16 @@ function searchingModel(): LanguageModel {
   });
 }
 
-function setupWithResolver(resolver: LocalModelResolver) {
+function setupWithResolver(
+  resolver: LocalModelResolver,
+  extra: Partial<LocalAgentSessionOpts> = {},
+) {
   const { db, rt } = workspaceRuntime();
   const events: SessionEvent[] = [];
   const session = new LocalAgentSession({
-    rt, db, model: fakeModel('fallback'), modelResolver: resolver, onEvent: (e) => events.push(e), noAutoEvolve: true,
+    rt, db, model: fakeModel('fallback'), modelResolver: resolver,
+    onEvent: (event) => events.push(event), noAutoEvolve: true,
+    ...extra,
   });
   return { db, rt, session, events };
 }
@@ -600,7 +606,6 @@ describe('LocalAgentSession.send — a user turn', () => {
     const resumed = new LocalAgentSession({
       rt,
       db,
-      sessionId: 'default',
       model: historyCapturingModel('next answer', (messages) => { observed = messages; }),
       onEvent: (e) => events.push(e),
       noAutoEvolve: true,
@@ -638,7 +643,7 @@ describe('LocalAgentSession.send — a user turn', () => {
     function resume(db: Database, rt: ReturnType<typeof createCLIRuntime>) {
       let observed: PromptMessage[] = [];
       const session = new LocalAgentSession({
-        rt, db, sessionId: 'default',
+        rt, db,
         model: historyCapturingModel('ok', (messages) => { observed = messages; }),
         onEvent: () => {}, noAutoEvolve: true,
       });
@@ -795,8 +800,8 @@ function messageText(message: PromptMessage): string {
 }
 
 describe('LocalAgentSession — shadow-git checkpoint wiring', () => {
-  test('each turn arms the engine with a fresh turn id and the durable session id', async () => {
-    const { rt, session } = setup('ok', undefined, { sessionId: 'chat-1' });
+  test('each turn arms the engine with a fresh turn id and the canonical conversation id', async () => {
+    const { rt, session } = setup('ok');
     const turns: Array<{ turnId: string; sessionId: string }> = [];
     rt.checkpoints = {
       beginTurn: (meta) => { turns.push(meta); },
@@ -810,8 +815,8 @@ describe('LocalAgentSession — shadow-git checkpoint wiring', () => {
     await session.send('first');
     await session.send('second');
     expect(turns).toHaveLength(2);
-    expect(turns[0]!.sessionId).toBe('chat-1');
-    expect(turns[1]!.sessionId).toBe('chat-1');
+    expect(turns[0]!.sessionId).toBe('default');
+    expect(turns[1]!.sessionId).toBe('default');
     expect(turns[0]!.turnId).not.toBe(turns[1]!.turnId);
   });
 
@@ -1050,34 +1055,39 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(session.getShellApprovalMode()).toEqual({ mode: 'deny_all' });
   });
 
-  test('setModel persists agent_config.model and drives the next turn model', async () => {
+  test('the account default tier drives the next turn model', async () => {
     const resolver: LocalModelResolver = {
       normalizeSpecSync: (spec) => spec?.trim() || 'local/a',
       resolveModel: (spec) => fakeModel(spec === 'local/b' ? 'from b' : 'from a'),
       listProviders: async () => [],
-      listModels: async () => ({ models: [], failures: [] }),
+      listModels: async () => ({
+        models: [
+          { provider: 'local', id: 'a', label: 'a', capabilities: ['streaming'] },
+          { provider: 'local', id: 'b', label: 'b', capabilities: ['streaming'] },
+        ],
+        failures: [],
+      }),
       modelInfo: async () => null,
       ...resolverRest,
     };
-    const { session, events } = setupWithResolver(resolver);
-
-    expect(session.getStoredModelSpec()).toEqual({ spec: null });
-    expect(session.getEffectiveModelSpec()).toBe('local/a');
+    const catalog = { roles: {}, tiers: { default: { model: 'local/b' } } };
+    const envelope: ProfileCatalogEnvelope = {
+      authority: { kind: 'local' },
+      version: 1,
+      digest: profileCatalogDigest(catalog),
+      catalog,
+    };
+    const { session, events } = setupWithResolver(resolver, {
+      profileAuthority: () => envelope,
+    });
 
     await session.send('first');
     const firstTurn = events.find((event) => event.type === 'turn-end');
     if (!firstTurn || firstTurn.type !== 'turn-end') throw new Error('first turn-end event was not emitted');
-    expect(firstTurn.turn.assistantResponse).toBe('from a');
-
-    expect(session.setModel('local/b')).toEqual({ ok: true, spec: 'local/b' });
-    expect(session.getStoredModelSpec()).toEqual({ spec: 'local/b' });
-
-    await session.send('second');
-    const turns = events.filter((e): e is Extract<SessionEvent, { type: 'turn-end' }> => e.type === 'turn-end');
-    expect(turns[1]!.turn.assistantResponse).toBe('from b');
+    expect(firstTurn.turn.assistantResponse).toBe('from b');
   });
 
-  test('reasoning effort persists and merges with prompt-cache options on the main chat turn', async () => {
+  test('tier reasoning effort merges with prompt-cache options', async () => {
     let providerOptions: LanguageModelV2CallOptions['providerOptions'];
     const base = fakeModel('reasoned');
     const model = new TestLanguageModelV2({
@@ -1091,16 +1101,24 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       normalizeSpecSync: () => 'openai/gpt-5.5',
       resolveModel: () => model,
       listProviders: async () => [],
-      listModels: async () => ({ models: [], failures: [] }),
+      listModels: async () => ({
+        models: [{ provider: 'openai', id: 'gpt-5.5', label: 'gpt', capabilities: ['streaming'] }],
+        failures: [],
+      }),
       modelInfo: async () => null,
       ...resolverRest,
     };
-    const { session } = setupWithResolver(resolver);
-
-    expect(session.getReasoningEffort()).toEqual({ effort: null });
-    expect(session.setReasoningEffort('high')).toEqual({ ok: true, effort: 'high' });
-    expect(session.getReasoningEffort()).toEqual({ effort: 'high' });
-    expect(() => session.setReasoningEffort('extreme')).toThrow('Invalid reasoning effort');
+    const catalog = {
+      roles: {},
+      tiers: { default: { model: 'openai/gpt-5.5', reasoningEffort: 'high' as const } },
+    };
+    const envelope: ProfileCatalogEnvelope = {
+      authority: { kind: 'local' },
+      version: 1,
+      digest: profileCatalogDigest(catalog),
+      catalog,
+    };
+    const { session } = setupWithResolver(resolver, { profileAuthority: () => envelope });
 
     await session.send('think hard');
     expect(providerOptions).toEqual({
@@ -1109,6 +1127,44 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         reasoningEffort: 'high',
       },
     });
+  });
+
+  test('an explicit tier applies to one turn and is consumed', async () => {
+    const resolver: LocalModelResolver = {
+      normalizeSpecSync: (spec) => spec?.trim() || 'local/a',
+      resolveModel: (spec) => fakeModel(spec === 'local/b' ? 'from b' : 'from a'),
+      listProviders: async () => [],
+      listModels: async () => ({
+        models: [
+          { provider: 'local', id: 'a', label: 'a', capabilities: ['streaming'] },
+          { provider: 'local', id: 'b', label: 'b', capabilities: ['streaming'] },
+        ],
+        failures: [],
+      }),
+      modelInfo: async () => null,
+      ...resolverRest,
+    };
+    const catalog = {
+      roles: {},
+      tiers: {
+        default: { model: 'local/a' },
+        slow: { model: 'local/b' },
+      },
+    };
+    const envelope: ProfileCatalogEnvelope = {
+      authority: { kind: 'local' },
+      version: 1,
+      digest: profileCatalogDigest(catalog),
+      catalog,
+    };
+    const { session, events } = setupWithResolver(resolver, { profileAuthority: () => envelope });
+
+    await session.send('slow once', { tier: 'slow' });
+    await session.send('then default');
+
+    const turns = events.filter((event) => event.type === 'turn-end');
+    expect(turns.map((event) => event.type === 'turn-end' ? event.turn.assistantResponse : null))
+      .toEqual(['from b', 'from a']);
   });
 
   test('broadcast fans out as a SessionEvent', () => {
@@ -1723,9 +1779,8 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
       created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
     const rt = createCLIRuntime(db, { dbPath: scratchPath('local-session-review', 'agent.db'), llm: DUMMY_LLM });
     // The classifier + reflection ride rt.llm.complete — stub it so the review
-    // runs without a network LLM.
     const completions: string[] = [];
-    Object.defineProperty(rt, 'llm', { value: {
+    const reviewLlm = {
       stream: rt.llm.stream.bind(rt.llm),
       complete: async (prompt: string) => {
         completions.push(prompt);
@@ -1734,7 +1789,9 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
           ? classifierJson
           : 'verify the cluster name before rotating keys';
       },
-    } });
+    };
+    // runs without a network LLM.
+    Object.defineProperty(rt, 'llm', { value: reviewLlm });
     const events: SessionEvent[] = [];
     const sessionOpts: LocalAgentSessionOpts = {
       rt, db,
@@ -1746,7 +1803,8 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
       sessionOpts.backgroundPolicy = BACKGROUND_POLICY['one-shot'];
     }
     const session = new LocalAgentSession(sessionOpts);
-    return { db, rt, session, events, completions };
+    rt.setModelForRoute?.(() => reviewLlm);
+    return { db, rt, session, events, completions, reviewLlm };
   }
 
   test('the next user message grades the previous turn into the durable outcome ledger', async () => {
@@ -1797,7 +1855,7 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
   // graded by the same constant.
   test('the window and the pending review survive end() — the next run grades the turn', async () => {
     const classifierJson = '{"outcome":"corrected","confidence":0.9,"evidence":"user re-asked"}';
-    const { db, rt, session } = setupWithEvolution(classifierJson);
+    const { db, rt, session, reviewLlm } = setupWithEvolution(classifierJson);
 
     await session.send('please summarize the deployment runbook for me');
     await session.end();
@@ -1811,6 +1869,7 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
 
     // A second run against the same workspace: its prompt IS the follow-up.
     const next = new LocalAgentSession({ rt, db, model: fakeModel('here is the runbook'), onEvent: () => {} });
+    rt.setModelForRoute?.(() => reviewLlm);
     await next.send('no — that summary missed the rollback step entirely');
     await next.end();
 
@@ -1950,23 +2009,23 @@ describe('LocalAgentSession — AGENTS.md + session transcript recall', () => {
     await session.end();
   });
 
-  test('persisted turns are searchable through the session-search seam', async () => {
-    const { SessionSearchStore } = await import('@kinu.run/core');
+  test('persisted turns are searchable through the conversation-search seam', async () => {
+    const { ConversationSearchStore } = await import('@kinu.run/core');
     const { rt, session } = setup('the staging deploy used wrangler version three');
     await session.send('how did we deploy to staging?');
 
-    // Same seam the memory tool's `sessions` action uses: rt.storage.sql.
-    const store = new SessionSearchStore(rt.storage.sql);
+    // Same seam the memory tool's `conversations` action uses: rt.storage.sql.
+    const store = new ConversationSearchStore(rt.storage.sql);
     const hits = store.search('wrangler staging');
     expect(hits.length).toBeGreaterThan(0);
-    expect(hits[0]!.sessionId).toBe('default');
+    expect(hits[0]!.conversationId).toBe('default');
 
     const view = store.scroll(hits[0]!.messageId, 2)!;
     expect(view.messages.some((m) => m.content.includes('how did we deploy'))).toBe(true);
 
-    const sessions = store.browse();
-    expect(sessions[0]!.sessionId).toBe('default');
-    expect(sessions[0]!.preview).toContain('how did we deploy');
+    const conversations = store.browse();
+    expect(conversations[0]!.conversationId).toBe('default');
+    expect(conversations[0]!.preview).toContain('how did we deploy');
     await session.end();
   });
 });
@@ -2899,6 +2958,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
     expect(job.status).toBe('completed');
     // The halves are LINKED: the dispatch row names the job that carries the
     // outcome, so the ledger never leaves a spawn with no reachable result.
+    const rawJobResult = jobResult(db, job.id);
     expect(String(dispatch!.result)).toContain(job.id);
 
     // What it PRODUCED and what it COST, off the settled row: two branches
@@ -2908,7 +2968,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
         report: v.object({ stop: v.string(), expansions: v.number(), tokens: v.number() }),
         candidates: v.array(v.object({ artifact: v.string() })),
       }),
-      JSON.parse(jobResult(db, job.id)),
+      JSON.parse(rawJobResult),
     );
     expect(settled.report.stop).toBe('settled');
     expect(settled.report.expansions).toBe(2);
@@ -2984,9 +3044,12 @@ describe('LocalAgentSession — the durable run-event log', () => {
     // step-0 delegation hint fires (turn-steering.ts's freshAsk — no assistant
     // message yet, and the ask is not a question), and the settle spine records
     // every hint it spliced. A first turn with no steering row would mean the
-    // hint never reached the model.
+    // hint never reached the model. Its `delegation_opportunity` rides the same
+    // settle spine, one row per delivered hint, carrying what could be
+    // delegated into and whether anything came of it.
     expect(events.map((e) => e.type)).toEqual([
-      'run_start', 'turn_start', 'step_finish', 'turn_steering', 'turn_end', 'run_end',
+      'run_start', 'turn_start', 'step_finish', 'turn_steering', 'delegation_opportunity',
+      'turn_end', 'run_end',
     ]);
 
     const start = events[0];
@@ -3000,10 +3063,10 @@ describe('LocalAgentSession — the durable run-event log', () => {
     expect(end.error).toBeUndefined();
 
     // Monotonic indices are what makes a resume possible at all.
-    expect(events.map((e) => e.eventIndex)).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(events.map((e) => e.eventIndex)).toEqual([0, 1, 2, 3, 4, 5, 6]);
     // …and `since` replays the tail, exactly as an SSE Last-Event-ID does.
     expect(session.getRunEvents(runs[0]!.runId, { since: 3 }).map((e) => e.type))
-      .toEqual(['turn_steering', 'turn_end', 'run_end']);
+      .toEqual(['turn_steering', 'delegation_opportunity', 'turn_end', 'run_end']);
 
     await session.end();
   });
@@ -3246,9 +3309,8 @@ describe('agents.* codemode namespace — node sandbox', () => {
     const result = await sandboxWith(deps)(
       'return { members: Object.keys(agents), hire: typeof agents.hire, swarm: typeof agents.swarm };',
     );
-    // Local sessions wire the exploration SUBSTRATE only — no daemon routes
-    // hiring or peer mail — and the single rung that substrate carries is the
-    // search: a model to expand with and a workspace to measure in.
+    // A standalone local turn wires the exploration substrate only.
+    // LocalAgentHost supplies durable subordinate and peer routing for a daemon-owned workspace.
     expect(result).toEqual({ result: { members: ['swarm'], hire: 'undefined', swarm: 'function' } });
   });
 
@@ -3264,8 +3326,8 @@ describe('agents.* codemode namespace — node sandbox', () => {
     `));
     await session.send('what can you delegate to?');
     expect(events.some((e) => e.type === 'tool-result' && e.toolName === 'execute_tools' && e.success)).toBe(true);
-    // Local sessions wire the exploration substrate only, and the search is the
-    // one rung that rides it.
+    // This standalone fixture wires only the exploration substrate; the daemon
+    // conformance suite covers durable local subordinates.
     const probe = await rt.storage.vfs.readFile('/workspace/probe/agents.json', { encoding: 'utf8' });
     expect(JSON.parse(String(probe))).toEqual({
       members: ['swarm'], swarm: 'function', hire: 'undefined',
@@ -3273,7 +3335,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
     await session.end();
   });
 
-  test('local sessions reject Plan rather than presenting a mode with no review surface', async () => {
+  test('a standalone local turn rejects Plan when no review surface is wired', async () => {
     const probeCode = (path: string) => `
       await workspace.writeFile('${path}', JSON.stringify({
         releaseType: typeof release,
@@ -3331,9 +3393,9 @@ function runThenAnswerModel(confirmWith: 'text' | 'tool' = 'text'): LanguageMode
         stream: new ReadableStream({
           start(controller) {
             controller.enqueue({ type: 'stream-start', warnings: [] });
-            if (at === 1) call(controller, 'call-1', 'echo working');
+            if (at === 1) call(controller, 'call-1', 'echo working > gate-proof.txt');
             else if (at === 2) answer(controller, 'all done, the task is complete');
-            else if (at === 3 && confirmWith === 'tool') call(controller, 'call-2', 'echo fixing');
+            else if (at === 3 && confirmWith === 'tool') call(controller, 'call-2', 'echo fixing > gate-proof.txt');
             else answer(controller, 'confirmed');
             controller.close();
           },
@@ -3354,8 +3416,8 @@ describe('LocalAgentSession — the one-shot completion gate', () => {
     await session.settleBackgroundWork();
 
     const gate = gateTurn(events);
-    expect(gate).toBeDefined();
     // Harness-authored, and the model's "the task is complete" did not prevent it.
+    expect(gate).toBeDefined();
     expect(gate!.text).toContain('[Runtime check');
     expect(gate!.text).toContain('write the report');
     // Observed, not asserted: the real probe output from the real shell.
@@ -3428,7 +3490,7 @@ describe('LocalAgentSession — the one-shot completion gate', () => {
 // The two axes, proven on the prompt the model is ACTUALLY handed — not on the
 // builder in isolation, and not on a source grep. `systemCapturingModel` reads
 // the role:'system' entry off the LanguageModelV2 call.
-describe('LocalAgentSession — provenance and stance reach the model', () => {
+describe('LocalAgentSession — provenance and durable roles reach the model', () => {
   test('a background-job wake carries the resume guidance even though it also carries a work mode', async () => {
     // jobs/runner.ts stamps BOTH kinuEvent and kinuMode on the wake, and
     // `background_jobs.work_mode` is never null. Under the old single-`mode`
@@ -3457,15 +3519,14 @@ describe('LocalAgentSession — provenance and stance reach the model', () => {
     await session.end();
   });
 
-  test('a stance the agent sets through `tasks` is in the next turn\'s system prompt', async () => {
-    // Durable across sessions, because that is what a stance is: the second
-    // session builds its prompt from the same workspace config the first
-    // session's tool call wrote.
+  test('a role the agent sets through `tasks` is in the next turn\'s system prompt', async () => {
+    // Durable across process reconstruction: both agents read one active role
+    // id from the workspace config and resolve it through the same catalog.
     const { db, rt } = workspaceRuntime();
     const events: SessionEvent[] = [];
     const setter = new LocalAgentSession({
       rt, db, noAutoEvolve: true, onEvent: (e) => events.push(e),
-      model: toolSequenceModel([{ name: 'tasks', input: { action: 'mode', stance: 'research' } }]),
+      model: toolSequenceModel([{ name: 'tasks', input: { action: 'mode', role: 'researcher' } }]),
     });
     await setter.send('work carefully from here');
     await setter.end();
@@ -3476,8 +3537,60 @@ describe('LocalAgentSession — provenance and stance reach the model', () => {
       model: systemCapturingModel('ok', (s) => { system = s; }),
     });
     await next.send('carry on');
-    expect(system).toContain('Research stance:');
-    expect(system).toContain('name the file and line each claim rests on');
+    expect(system).toContain('Role: Researcher');
+    expect(system).toContain('Search before you conclude.');
     await next.end();
+  });
+
+  test('a custom SOUL.md reaches the model request, re-read each turn', async () => {
+    // The identity file is the agent's, so it must be the soul the model
+    // speaks with — read from agentStateVfs (falling back to the working VFS)
+    // PER TURN: an edit between turns lands in the next request, not after a
+    // session restart.
+    const { db, rt } = workspaceRuntime();
+    const vfs = rt.agentStateVfs ?? rt.storage.vfs;
+    await vfs.writeFile('SOUL.md', '# Soul\n\nYou are Atlas. Hold the owner\'s stated intent above the letter of the ask.');
+    let system = '';
+    const session = new LocalAgentSession({
+      rt, db, noAutoEvolve: true, onEvent: () => {},
+      model: systemCapturingModel('ok', (s) => { system = s; }),
+    });
+    await session.send('first turn');
+    expect(system).toContain('You are Atlas.');
+
+    await vfs.writeFile('SOUL.md', '# Soul\n\nYou are Rhea. Prefer deleting code over adding it.');
+    await session.send('second turn');
+    expect(system).toContain('You are Rhea.');
+    expect(system).not.toContain('You are Atlas.');
+    await session.end();
+  });
+});
+
+describe('LocalAgentSession — delegation roles + head-runtime root wiring', () => {
+  test('a turn-start opportunity stamps every role id the active catalog offers', async () => {
+    const { session } = setup('ok', fakeModel('ok'));
+    // A fresh ask delivers the turn-start hint through the real step pipeline;
+    // the row's roles come from the orchestrator's roleCatalog callback — the
+    // active envelope's ids, whatever they resolve to at stamp time.
+    await session.send('add caching to the api and update the docs');
+    const rows = session.steering.delegationSnapshot();
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows[0]!.roles).toEqual(Object.keys(effectiveRoleCatalog(BUILTIN_PROFILE_CATALOG)));
+    await session.end();
+  });
+
+  test('both CLI head-runtime roots hand the session\'s operation sink over', () => {
+    // The runtime is constructed inside this module at exactly two sites; each
+    // must pass the session sink, or a head's non-turn calls strand uncounted.
+    const source = readFileSync(join(import.meta.dir, '..', 'src', 'local-session.ts'), 'utf8');
+    const calls = [...source.matchAll(/= createCLIHeadRuntime\(/g)].map((m) => m.index ?? -1);
+    expect(calls.length).toBe(2);
+    // The session-constructor root builds its deps into `headRuntimeOptions`
+    // before calling; the model-rebind root inlines them. Each assertion ends
+    // at that root's own call, so neither can pass for the other.
+    const ctorRoot = source.slice(source.indexOf('const headRuntimeOptions'), calls[0]!);
+    expect(ctorRoot).toContain('operations: this.modelOperations');
+    const rebindRoot = source.slice(calls[1]!, source.indexOf('});', calls[1]!));
+    expect(rebindRoot).toContain('operations: this.modelOperations');
   });
 });

@@ -101,16 +101,13 @@ export async function openWorkspace(db: AgentDatabase, config: WorkspaceResumeCo
   const craftStore = createInlineCraftStore(db);
 
   const llm = createVercelAILLM(config.llm);
-  // Cross-model judge only when configured — consumers document their own
-  // same-model fallback (mcts/evaluation.ts: judge ?? explorer).
-  const judgeModel = config.judge ? createVercelAILLM(config.judge) : undefined;
 
   const schedule = createInlineSchedule(sql);
 
   const rt = buildRuntime({
     sql, execRaw, vfs, llm, executor: createInlineExecutor(), schedule, shell: workspace.shell,
     agentId: identity.id, agentName: identity.name,
-    memory, craftStore, judgeModel,
+    memory, craftStore,
     spawnBranch: async () => ({
       explore: async () => ({ text: 'exploration' }),
       generateReflection: async () => ({ text: 'reflection' }),

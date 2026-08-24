@@ -5,12 +5,27 @@
 
 import type { ModelPricing } from '../providers/types';
 
-export interface ConvergenceResult {
-  winnerId: string;
-  winnerValue: number;
-  converged: boolean;
-  trajectory: Array<{ role: string; content: string }>;
+/**
+ * Why a finished search produced no acceptable answer.
+ *
+ * `no_acceptable_candidate`: the loop ran and every branch scored below
+ * minAcceptableScore. `undifferentiated`: distinct approaches scored
+ * identically, so argmax was noise and no winner was earned (DO-NOW #3).
+ */
+export type NonConvergenceReason = 'no_acceptable_candidate' | 'undifferentiated';
+
+interface ConvergenceBase {
+  readonly winnerId: string;
+  readonly winnerValue: number;
+  readonly trajectory: Array<{ role: string; content: string }>;
 }
+
+export type ConvergenceResult =
+  | (ConvergenceBase & { readonly converged: true; readonly reason?: never })
+  | (ConvergenceBase & {
+      readonly converged: false;
+      readonly reason: NonConvergenceReason;
+    });
 
 /** Whether a candidate ran, contained no code, or used an unsupported language. */
 export type EvaluationGrounding = 'execution' | 'judge' | 'unrunnable';

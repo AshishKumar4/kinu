@@ -13,7 +13,8 @@ import {
   DELEGATION_INHERITANCE,
   DELEGATION_RUNGS,
   modelSupportsTools,
-  AGENT_STANCE_SPECS,
+  BUILTIN_ROLE_DEFINITIONS,
+  deriveRoleLabel,
   turnProvenanceForMetadata,
   workModeForTurnMetadata,
   splitPromptSections,
@@ -454,7 +455,7 @@ describe('buildSystemPromptSync', () => {
     expect(kimi).toContain('Call the tools listed here');
   });
 
-  test('memory sessions scroll contract is schema-only', () => {
+  test('memory conversations scroll contract is schema-only', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
     // The mode contract (query searches, around_message_id scrolls, neither
@@ -513,29 +514,29 @@ describe('buildSystemPromptSync', () => {
     expect(cliWithRlm).toMatch(/llm\.query/);
   });
 
-  test('does not advertise the removed Session context tools/blocks', () => {
+  test('does not advertise removed context tools or blocks', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
-    // These tools are never generated (no writable/searchable Session blocks);
-    // advertising them sent the model to call no-op tools. Memory now lives in
-    // the agent_facts world model + the `memory` prose tool, both real.
+    // These tools are never generated. Advertising them sent the model to
+    // no-op calls. Durable state now lives in agent_facts, memory notes, and the
+    // canonical conversation transcript, all through the one memory surface.
     expect(prompt).not.toMatch(/set_context|search_context|load_context/);
-    expect(prompt).not.toMatch(/Session context blocks/);
-    expect(BUILTIN_TOOL_DESCRIPTIONS.memory).toContain('past session transcripts');
+    expect(prompt).not.toMatch(/context blocks/iu);
+    expect(BUILTIN_TOOL_DESCRIPTIONS.memory).toContain('past conversations');
   });
 
   test('durable-state doctrine is schema-only: no `## Memory and facts` section', () => {
     // The section restated the memory schema's own whenToUse in five bullets —
-    // keyed facts for precise lookup, save/search for prose, sessions before
-    // re-deriving, update a stale key in place. Two phrasings of one rule cost
-    // the adherence budget twice and invite a reconciliation cost on GPT-5.
+    // keyed facts for precise lookup, save/search for prose, conversations
+    // before re-deriving, and stale-key replacement. Two phrasings of one rule
+    // cost adherence twice and invite reconciliation.
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
     expect(prompt).not.toContain('## Memory and facts');
     const memory = BUILTIN_TOOL_DESCRIPTIONS.memory;
-    expect(memory).toMatch(/remember\/recall\/forget name state you look up precisely/);
+    expect(memory).toMatch(/remember\/recall hold a small named value/);
     expect(memory).toMatch(/update a stale key rather than adding a contradictory second fact/);
-    expect(memory).toMatch(/sessions reads what past sessions said, before re-deriving/);
+    expect(memory).toMatch(/conversations reads what this agent said before/);
   });
 
   test('no release overlay survives: nothing could ever stamp it', () => {
@@ -996,51 +997,50 @@ describe('buildSystemPromptSync', () => {
     expect(buildSystemPromptSync(rt, base)).not.toContain('Turn mode');
   });
 
-  test('a selected stance renders its guidance verbatim into the operating guidance', () => {
-    // The wiring proof: the text comes from AGENT_STANCE_SPECS, so cutting the
-    // render loop in renderOperatingGuidance fails this, and editing the
-    // doctrine without touching the prompt cannot make it pass vacuously.
+  test('a resolved role renders exactly once in its own prompt section', () => {
     const { rt } = createTestRuntime();
-    for (const stance of ['research', 'build', 'audit'] as const) {
-      const prompt = buildSystemPromptSync(rt, { stance });
-      const guidance = AGENT_STANCE_SPECS[stance].guidance;
-      expect(guidance.length).toBeGreaterThan(0);
-      for (const line of guidance) expect(prompt).toContain(line);
-      // In the guidance section, not loose somewhere else in the prefix.
-      expect(prompt.indexOf(guidance[0]!)).toBeGreaterThan(prompt.indexOf('## Operating guidance'));
+    for (const [id, role] of Object.entries(BUILTIN_ROLE_DEFINITIONS)) {
+      const prompt = buildSystemPromptSync(rt, {
+        roleSection: {
+          id,
+          label: deriveRoleLabel(id),
+          instructions: role.instructions,
+        },
+      });
+      expect(prompt).toContain(`## Role: ${deriveRoleLabel(id)} (${id})`);
+      expect(prompt.split(role.instructions)).toHaveLength(2);
     }
   });
 
-  test('the general stance adds nothing at all, byte for byte', () => {
-    // Same contract as Auto above: the default is the absence of constraint,
-    // and spending prefix bytes to announce it would be the thing this whole
-    // axis exists to avoid.
+  test('a role never widens Plan mode', () => {
     const { rt } = createTestRuntime();
-    const base = { backend: 'cf' as const, model: { id: 'x' } };
-    expect(AGENT_STANCE_SPECS.general.guidance).toEqual([]);
-    expect(buildSystemPromptSync(rt, { ...base, stance: 'general' }))
-      .toBe(buildSystemPromptSync(rt, base));
-  });
-
-  test('a stance never widens what a turn may do: Plan keeps its bar under every stance', () => {
-    // Stance is guidance; permission is workMode, and Plan is enforced
-    // structurally on top of it (submit_plan only exists on a Plan turn,
-    // release.* is mechanically absent). `build` is deliberately the hostile
-    // case: it is the stance whose NAME matches the permissive work mode.
-    const { rt } = createTestRuntime();
-    const planOnly = buildSystemPromptSync(rt, { workMode: 'plan', planSubmissionAvailable: true });
-    for (const stance of ['general', 'research', 'build', 'audit'] as const) {
+    const planOnly = buildSystemPromptSync(rt, {
+      workMode: 'plan',
+      planSubmissionAvailable: true,
+    });
+    for (const [id, role] of Object.entries(BUILTIN_ROLE_DEFINITIONS)) {
       const prompt = buildSystemPromptSync(rt, {
-        workMode: 'plan', planSubmissionAvailable: true, stance,
+        workMode: 'plan',
+        planSubmissionAvailable: true,
+        roleSection: {
+          id,
+          label: deriveRoleLabel(id),
+          instructions: role.instructions,
+        },
       });
       expect(prompt).toContain('Do not change files, system state, releases, or deployments');
       expect(prompt).toContain('Do not begin implementation until the plan is approved');
       expect(prompt).toContain('Do not expose ports or produce preview or output links');
-      // The stance ADDS lines and removes none: the Plan prompt is a subset.
       for (const line of planOnly.split('\n')) expect(prompt).toContain(line);
     }
-    // And no stance can turn a Plan turn into an unconstrained one.
-    expect(compilePromptSurface({ workMode: 'plan', stance: 'build' }).workMode).toBe('plan');
+    expect(compilePromptSurface({
+      workMode: 'plan',
+      roleSection: {
+        id: 'implementer',
+        label: 'Implementer',
+        instructions: BUILTIN_ROLE_DEFINITIONS.implementer.instructions,
+      },
+    }).workMode).toBe('plan');
   });
 
   test('renders the date-only current date in runtime context', () => {

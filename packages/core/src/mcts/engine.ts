@@ -15,7 +15,7 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { MCTSConfig, MCTSPhase, MCTSProgressBody } from '../types/mcts';
 import { missionMeter } from '../mission-budget';
 import type { ConvergenceResult } from '../types/evaluation';
-import type { SessionWriter } from './record-node';
+import type { NodeEvaluationDiagnostics, SessionWriter } from './record-node';
 import { DEFAULT_CONFIG } from '../config';
 import { initSearchTables } from './schemas';
 import { initAlternateTakesTable } from './takes';
@@ -24,7 +24,7 @@ import { siblingAngles } from './diversity';
 import { backpropagate } from './backpropagation';
 import { recordNode } from './record-node';
 import { converge, abandonSearchTree } from './convergence';
-import { evaluateWithMultiModelJudging, executionObservation } from './evaluation';
+import { evaluateWithMultiModelJudging, executionObservation, type BranchEvaluation } from './evaluation';
 import { readProposalCode } from '../execution/code-fence';
 import { pruneLowValueBranches } from './pruning';
 import { isCraftable, maybeStoreCraftedTool } from '../craft/discovery';
@@ -308,6 +308,10 @@ export async function runMCTS(
         // scores. Null for a branch that never reached it — prose, plan mode,
         // an unrunnable language, or an evaluation that failed outright.
         const observations: Array<string | null> = [];
+        // Each branch's own evaluation, same indexing — the bounded facts a
+        // node row persists so a search that earns no answer is diagnosable
+        // from the tree alone. Null where the evaluation failed outright.
+        const evaluations: Array<BranchEvaluation | null> = [];
         for (const [i, r] of scoreResults.entries()) {
           if (r.status === 'fulfilled') {
             const language = r.value.unrunnableLanguage;
@@ -349,6 +353,7 @@ export async function runMCTS(
             }
             scores.push(r.value.score);
             observations.push(executionObservation(r.value.execution));
+            evaluations.push(r.value);
             continue;
           }
           report({
@@ -357,6 +362,7 @@ export async function runMCTS(
           });
           scores.push(0);
           observations.push(null);
+          evaluations.push(null);
         }
 
         // RECORD nodes — action plus the observation it earned, which is the
@@ -379,6 +385,7 @@ export async function runMCTS(
             codeUsed: code?.kind === 'runnable' ? code.code : null,
             codeLanguage: code?.kind === 'runnable' ? code.language : null,
             depth: selected.depth + 1,
+            evaluation: nodeEvaluationDiagnostics(evaluations[i]),
           });
           void rt.storage.sql`
    UPDATE search_nodes SET branch_agent_key = ${childId}
@@ -512,9 +519,16 @@ export async function runMCTS(
     // process died mid-flight. Order: close the tree, then record the outcome.
     // A crash between the two is safe in one direction only — a closed tree with
     // a still-'running' row is inert (nothing is selectable) and resumable.
+    // The status is equally load-bearing: `converged` means a candidate cleared
+    // the acceptance floor. A false result closed the tree without a terminal
+    // node, so it must settle as `no_acceptable_candidate`.
     try {
       const result = await converge(rt, session, rootId, minAcceptableScore, takesEpsilon, mode);
-      search?.converge(rootId, searchEpoch, Date.now());
+      if (result.converged) {
+        search?.converge(rootId, searchEpoch, Date.now());
+      } else {
+        search?.noAcceptableCandidate(rootId, searchEpoch, Date.now());
+      }
       return result;
     } catch (err) {
       // The budget is spent, so a resume would re-enter with nothing left to
@@ -527,6 +541,26 @@ export async function runMCTS(
   });
 }
 
+/** Fixed scalar facts only. Proposal text stays in `observation`; bounded
+ * execution feedback stays in the session message. */
+function nodeEvaluationDiagnostics(
+  evaluation: BranchEvaluation | null | undefined,
+): NodeEvaluationDiagnostics | null {
+  if (!evaluation) return null;
+  return {
+    grounding: evaluation.grounding,
+    score: evaluation.score,
+    judgeSamplesAttempted: evaluation.judgeSamplesAttempted,
+    judgeSamplesUsed: evaluation.judgeSamplesUsed,
+    execution: evaluation.execution && {
+      passed: evaluation.execution.passed,
+      passedChecks: evaluation.execution.passedChecks,
+      totalChecks: evaluation.execution.totalChecks,
+      assertionsGenerated: evaluation.execution.assertionsGenerated,
+    },
+    unrunnableLanguage: evaluation.unrunnableLanguage,
+  };
+}
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
   if (!signal?.aborted) return;

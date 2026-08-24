@@ -1,9 +1,9 @@
 import { existsSync, statSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
-import type { AgentConfigStore, AgentRuntime, EvolutionConfigView, SessionSurface, ShellApprovalMode, ReasoningEffort, JsonObject } from '@kinu.run/core';
+import type { AgentConfigStore, AgentRuntime, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject } from '@kinu.run/core';
 import type { WorkspaceInfo } from '@kinu.run/core/identity';
-import { applyWorkspaceTitle, createAgentConfigStore, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, decodeJsonValue, usageReported, type GepaOptimizationResult } from '@kinu.run/core';
+import { applyWorkspaceTitle, canonicalConversationId, createAgentConfigStore, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, decodeJsonValue, usageReported, type GepaOptimizationResult } from '@kinu.run/core';
 import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import {
   LOCAL_MAX_INLINE_ATTACHMENT_BYTES,
@@ -12,6 +12,7 @@ import {
   type CLIRuntime,
   type LocalModelResolver,
   type McpServerConfig,
+  type LocalAgentSessionOpts,
   type SessionEvent,
 } from '@kinu.run/cli-backend';
 import {
@@ -20,16 +21,21 @@ import {
   createCodexAuthStore,
   listConfiguredAgentRefs,
   loadConfigFile,
+  requireStoredAuthConfig,
   resolveMcpServers,
   resolveProviderCredentials,
   upsertAgentConfig,
 } from './config';
 import { suggestAgentIdentityFromMission, type SuggestAgentIdentityOptions } from './agent-create';
 import { createConfiguredLocalModelResolver } from './local-model-resolver';
+import { getCloudProfile } from './cloud-api';
+import {
+  cacheAccountProfile,
+  loadLocalProfileAuthority,
+  resolveProfileAuthority,
+} from './profiles';
 import {
   createCliSession,
-  defaultConversationIdForCliOptions,
-  listCliSessions,
   readCliSessionTranscript,
   transcriptMessages,
   type CliSession,
@@ -55,7 +61,6 @@ import type {
   AgentSearchNode,
   AgentToolSurface,
   AgentTranscriptMessage,
-  SessionHistorySurface,
   AgentTurnResult,
   FileCheckpointSurface,
   ForkPoint,
@@ -69,10 +74,15 @@ export interface LocalAgentClientOptions {
   noAutoEvolve?: boolean;
   /** One task turn, then exit — see LocalAgentClientDeps.oneShot. */
   oneShot?: boolean;
-  session?: CliSessionOptions;
-  /** Who is driving — fixes the session's background policy. Default:
+  /** Recorder controls for this process's diagnostic transcript. */
+  transcript?: CliSessionOptions;
+  /** Which invocation surface drives background policy. Default:
    *  'interactive'. */
-  surface?: SessionSurface;
+  surface?: InvocationSurface;
+  /** Canonical directory the workspace file and shell tools bind to — the
+   *  placement recorded on the agent's ref, shared by its peers. Absent leaves
+   *  the runtime on its own in-database plane. */
+  cwd?: string;
 }
 
 /** Open a local agent database and wrap its LocalAgentSession as an AgentClient. */
@@ -88,6 +98,7 @@ export async function openLocalAgentClient(name: string, opts: LocalAgentClientO
   const openConfig = {
     llm: llmConfig, providerCredentials, codexAuthStore, codexConfigPath: CONFIG_PATH,
     checkpointKeep: loadConfigFile().checkpointKeep,
+    cwd: opts.cwd,
   };
   const { rt, info } = await openWorkspaceCLI(db, dbPath, openConfig);
   autoTitleLocalWorkspace(name, rt, info.purpose, opts);
@@ -101,7 +112,7 @@ export async function openLocalAgentClient(name: string, opts: LocalAgentClientO
     modelResolver: resolver,
     mcpServers: resolveMcpServers(),
     noAutoEvolve: opts.noAutoEvolve ?? false,
-    sessionOptions: opts.session ?? {},
+    transcript: opts.transcript ?? {},
     surface: opts.surface ?? 'interactive',
   });
 }
@@ -187,12 +198,12 @@ export interface LocalAgentClientDeps {
   modelResolver: LocalModelResolver;
   mcpServers: Record<string, McpServerConfig>;
   noAutoEvolve: boolean;
-  sessionOptions: CliSessionOptions;
+  transcript: CliSessionOptions;
   /** Which surface this process is. 'one-shot' (`kinu exec`/`run`) both
    *  selects the background detach/grace policy AND decides turn continuity
    *  for the outcome ledger, keeping the cadence-heavy evolution pass off the
    *  exit path. One fact, one field. */
-  surface: SessionSurface;
+  surface: InvocationSurface;
 }
 
 interface PendingLocalTurn {
@@ -225,14 +236,17 @@ export class LocalAgentClient implements AgentClient {
   readonly consents = null;
   readonly localControls: LocalSessionControls;
   readonly checkpoints: FileCheckpointSurface;
-  readonly sessionHistory: SessionHistorySurface;
+  private readonly deps: LocalAgentClientDeps;
   readonly inlineAttachmentLimitBytes = LOCAL_MAX_INLINE_ATTACHMENT_BYTES;
 
-  private readonly deps: LocalAgentClientDeps;
   /** Workspace-level agent_config, read straight off the same database the
-   *  session uses. Config outlives the session, so fork/resume swaps do not
-   *  invalidate this. */
+   *  session uses. Config outlives the session, so a walk-back fork's session
+   *  swap does not invalidate this. */
   private readonly config: AgentConfigStore;
+  /** Product state: the one durable conversation this workspace keeps.
+   *  JSONL transcripts are diagnostics/export artifacts and carry this id so
+   *  an export can be tied back to the conversation it recorded. */
+  private readonly canonicalConversation: string;
   private readonly listeners = new Set<(event: AgentClientEvent) => void>();
   private session: LocalAgentSession;
   private activeCliSession: CliSession;
@@ -242,14 +256,17 @@ export class LocalAgentClient implements AgentClient {
 
   constructor(deps: LocalAgentClientDeps) {
     this.deps = deps;
-    this.config = createAgentConfigStore(deps.rt.storage.sql);
     this.agentName = deps.agentName;
+    initAgentConfigTable(deps.rt.storage.execRaw);
+    this.config = createAgentConfigStore(deps.rt.storage.sql);
+    this.canonicalConversation = canonicalConversationId(this.config);
+    // Every artifact records which durable conversation it observed, so a
+    // diagnostic export stays interpretable outside the workspace database.
     this.activeCliSession = createCliSession(deps.agentName, {
-      ...deps.sessionOptions,
-      conversationId: deps.sessionOptions.conversationId
-        ?? defaultConversationIdForCliOptions(deps.sessionOptions),
+      ...deps.transcript,
+      conversationId: deps.transcript.conversationId ?? this.canonicalConversation,
     });
-    this.session = this.createAgentSession(this.conversationIdForAgentSession());
+    this.session = this.createAgentSession();
     this.localControls = {
       getAlwaysActiveSkills: () => this.session.getAlwaysActiveSkills(),
       setAlwaysActiveSkills: (names) => this.session.setAlwaysActiveSkills(names),
@@ -262,55 +279,11 @@ export class LocalAgentClient implements AgentClient {
         unavailableReason: provider.unavailableReason,
       })),
     };
-    // Closures read this.session so the surface survives fork/resume swaps.
+    // Closures read this.session so the surface survives walk-back forks.
     this.checkpoints = {
       list: (limit, turnId) => this.session.listFileCheckpoints(limit, turnId),
       plan: (dir, id) => this.session.planFileRestore(dir, id),
       restore: (dir, id) => this.session.restoreFileCheckpoint(dir, id),
-    };
-    this.sessionHistory = {
-      list: () => listCliSessions(this.agentName, this.deps.sessionOptions),
-      resume: async (sessionRef) => {
-        const previousCliSession = this.activeCliSession;
-        const nextCliSession = createCliSession(this.agentName, {
-          ...this.deps.sessionOptions,
-          session: sessionRef,
-        });
-        await this.session.end();
-        this.activeCliSession = nextCliSession;
-        this.session = this.createAgentSession(this.conversationIdForAgentSession());
-        try {
-          await this.connect();
-        } catch (resumeError) {
-          let cleanupError: Error | null = null;
-          try {
-            await this.session.end();
-          } catch (error) {
-            cleanupError = new Error('Closing the failed resumed session failed.', { cause: error });
-          }
-          this.activeCliSession = previousCliSession;
-          this.session = this.createAgentSession(this.conversationIdForAgentSession());
-          try {
-            await this.connect();
-          } catch (rollbackError) {
-            throw new AggregateError(
-              cleanupError === null
-                ? [resumeError, rollbackError]
-                : [resumeError, cleanupError, rollbackError],
-              'Session resume and rollback both failed.',
-              { cause: resumeError },
-            );
-          }
-          if (cleanupError !== null) {
-            throw new AggregateError(
-              [resumeError, cleanupError],
-              'Session resume failed and its resources did not close.',
-              { cause: resumeError },
-            );
-          }
-          throw new Error('Resuming the selected session failed.', { cause: resumeError });
-        }
-      },
     };
   }
 
@@ -322,7 +295,6 @@ export class LocalAgentClient implements AgentClient {
     if (Object.keys(this.deps.mcpServers).length > 0) {
       await this.session.connectMcp(this.deps.mcpServers);
     }
-    await this.session.recoverBackgroundJobs();
   }
 
   subscribe(listener: (event: AgentClientEvent) => void): () => void {
@@ -345,7 +317,7 @@ export class LocalAgentClient implements AgentClient {
     const pending: PendingLocalTurn = { result: null };
     this.pending = pending;
     try {
-      await this.session.send(files.length > 0 ? { text, files } : text);
+      await this.session.send(files.length > 0 ? { text, files } : text, { tier: opts.tier });
       return pending.result ?? unfinishedTurn();
     } finally {
       if (this.pending === pending) this.pending = null;
@@ -383,49 +355,36 @@ export class LocalAgentClient implements AgentClient {
     return true;
   }
 
-  /** Walk-back fork: copy the durable conversation strictly before the picked
-   *  user message into a fresh conversation, recorded as a forked CLI session
-   *  (the existing --fork lineage), and re-point this client at it. */
+  /** Walk-back fork: everything from the picked user message on leaves the
+   *  one durable conversation (archived under a throwaway id) and the client
+   *  continues on the truncated conversation. A fresh transcript artifact
+   *  takes the entries recorded after the walk-back. Works whether or not
+   *  this process records — the fork reads the durable store, never JSONL. */
   async fork(point: ForkPoint): Promise<AgentForkResult> {
     if (this.pending) throw new Error('Cannot fork while a turn is running.');
-    if (this.activeCliSession.mode === 'none') {
-      throw new Error('This chat is not recorded (--no-session), so there is no conversation to fork.');
-    }
-    const conversationId = this.conversationIdForAgentSession();
     const rows = this.deps.rt.storage.sql<{ id: string; parent_id: string | null; role: string; content: string; created_at: number }>`
       SELECT id, parent_id, role, content, created_at
       FROM messages
-      WHERE session_id = ${conversationId} AND role IN ('user', 'assistant')
+      WHERE session_id = ${this.canonicalConversation} AND role IN ('user', 'assistant')
       ORDER BY created_at ASC, rowid ASC`;
     const pivot = findForkPivot(rows, point);
     if (pivot < 0) {
-      throw new Error('Could not locate that message in the durable conversation; it may predate recording.');
+      throw new Error('Could not locate that message in the durable conversation.');
     }
 
-    const next = createCliSession(this.agentName, {
-      ...this.deps.sessionOptions,
-      fork: this.activeCliSession.id,
-      session: undefined,
-      continue: undefined,
-      resume: undefined,
-      conversationId: undefined,
-    });
-    // Copy rows before the pivot under fresh ids (id is the table PK), keeping
-    // timestamps and remapping the parent chain.
-    const idMap = new Map<string, string>();
-    for (const row of rows.slice(0, pivot)) {
-      const newId = crypto.randomUUID();
-      idMap.set(row.id, newId);
-      const parent = row.parent_id ? idMap.get(row.parent_id) ?? null : null;
-      void this.deps.rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
-                                    VALUES (${newId}, ${next.conversationId}, ${parent}, ${row.role}, ${row.content}, ${row.created_at})`;
+    const archivedConversation = `archive-${crypto.randomUUID()}`;
+    for (const row of rows.slice(pivot)) {
+      void this.deps.rt.storage.sql`
+        UPDATE messages SET session_id = ${archivedConversation} WHERE id = ${row.id}`;
     }
-
     await this.session.end();
-    this.activeCliSession = next;
-    this.session = this.createAgentSession(this.conversationIdForAgentSession());
+    this.activeCliSession = createCliSession(this.agentName, {
+      ...this.deps.transcript,
+      conversationId: this.canonicalConversation,
+    });
+    this.session = this.createAgentSession();
     await this.connect();
-    return { client: this, label: `session ${next.id}` };
+    return { client: this, label: `branch ${this.activeCliSession.id}` };
   }
 
   stop(): string[] {
@@ -462,10 +421,9 @@ export class LocalAgentClient implements AgentClient {
 
   async history(): Promise<AgentTranscriptMessage[]> {
     if (this.activeCliSession.mode !== 'record') return [];
-    const transcript = readCliSessionTranscript(this.agentName, this.activeCliSession.id, this.deps.sessionOptions);
+    const transcript = readCliSessionTranscript(this.agentName, this.activeCliSession.id, this.deps.transcript);
     return transcriptMessages(transcript.entries);
   }
-
 
   async status(): Promise<AgentClientStatus> {
     const info = await this.deps.refreshInfo();
@@ -474,6 +432,8 @@ export class LocalAgentClient implements AgentClient {
       purpose: info.purpose,
       model: this.session.getEffectiveModelSpec(),
       reasoningEffort: this.session.getReasoningEffort().effort,
+      roleId: this.session.getActiveRoleId(),
+      tierId: this.session.getEffectiveTierId(),
       scaffoldVersion: info.scaffoldVersion,
       searchNodeCount: info.searchNodeCount,
       craftedToolCount: info.craftedToolCount,
@@ -511,6 +471,10 @@ export class LocalAgentClient implements AgentClient {
 
   async pickTake(takeId: string, nodeId: string) {
     return this.session.pickAlternateTake(takeId, nodeId);
+  }
+
+  async setRole(roleId: string): Promise<{ role: string }> {
+    return this.session.setRole(roleId);
   }
 
   async readMemory(): Promise<string> {
@@ -562,14 +526,8 @@ export class LocalAgentClient implements AgentClient {
     return normalizeModelMenu({ payload: await this.session.listAvailableModels() });
   }
 
-  private conversationIdForAgentSession(): string {
-    return this.activeCliSession.mode === 'none'
-      ? this.activeCliSession.id
-      : this.activeCliSession.conversationId;
-  }
-
-  private createAgentSession(sessionId: string): LocalAgentSession {
-    return new LocalAgentSession({
+  private createAgentSession(): LocalAgentSession {
+    const options: LocalAgentSessionOpts = {
       rt: this.deps.rt,
       db: this.deps.db,
       model: this.deps.model,
@@ -577,10 +535,21 @@ export class LocalAgentClient implements AgentClient {
       noAutoEvolve: this.deps.noAutoEvolve,
       backgroundPolicy: BACKGROUND_POLICY[this.deps.surface],
       oneShot: this.deps.surface === 'one-shot',
-      sessionId,
-      persistMessages: this.activeCliSession.mode !== 'none',
       onEvent: (event) => this.handleSessionEvent(event),
-    });
+    };
+    const authority = resolveProfileAuthority();
+    if (authority.kind === 'local') {
+      const local = loadLocalProfileAuthority();
+      if (local) options.profileAuthority = () => local;
+    } else {
+      options.profileAuthority = async () => {
+        const auth = requireStoredAuthConfig();
+        const envelope = await getCloudProfile(auth.origin, auth.token);
+        cacheAccountProfile(authority.accountId, envelope);
+        return envelope;
+      };
+    }
+    return new LocalAgentSession(options);
   }
 
   private handleSessionEvent(event: SessionEvent): void {

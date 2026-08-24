@@ -12,7 +12,7 @@ import { generateText, streamText } from 'ai';
 import type { LanguageModel, StepResult, ToolSet } from 'ai';
 import * as v from 'valibot';
 import type { LLM } from './types/primitives';
-import type { ModelCallSpend } from './events/model-call';
+import { beginModelOperation, type ModelCallSpend } from './events/model-call';
 import { normalizeUsage } from './usage';
 import { parseModelSpec } from './providers/types';
 import { withRateLimitRetry } from './providers/rate-limit-retry';
@@ -65,48 +65,64 @@ export function createVercelAILLM(config: LLMProviderConfig): LLM {
 
   return {
     async *stream(opts) {
-      const result = streamText({
-        model,
-        system: opts.system,
-        messages: opts.messages.map(m => ({
-          role: m.role,
-          content: m.content,
-        })),
-        ...cap,
-      });
-      for await (const chunk of result.textStream) {
-        yield chunk;
+      // Opened before the request for the reason the whole pair exists: a
+      // consumer that abandons this generator, or a platform that destroys the
+      // frame, leaves the start row as the only record of what was running.
+      const operation = beginModelOperation(spend, 'stream');
+      let result;
+      try {
+        result = streamText({
+          model,
+          system: opts.system,
+          messages: opts.messages.map(m => ({
+            role: m.role,
+            content: m.content,
+          })),
+          ...cap,
+        });
+        for await (const chunk of result.textStream) {
+          yield chunk;
+        }
+      } catch (err) {
+        operation.failed({ cause: err });
+        throw err;
       }
       // Usage is only knowable once the stream has finished, so the report goes
       // here. A consumer that abandons the generator mid-way never reaches this
       // line and reports nothing — honest, because the cost of a stream nobody
-      // drained is not something this seam ever learns. `totalUsage` rather than
+      // drained is not something this seam ever learns, and the operation's
+      // start row is what says the work was begun. `totalUsage` rather than
       // `usage`: the latter is the LAST step only.
+      const usage = normalizeUsage(await result.totalUsage);
+      const modelId = (await result.response).modelId;
+      operation.completed({ usage, modelId });
       if (spend) {
-        spend.report({
-          source: spend.source,
-          usage: normalizeUsage(await result.totalUsage),
-          modelId: (await result.response).modelId,
-        });
+        spend.report({ source: spend.source, usage, modelId });
       }
     },
 
     async complete(prompt) {
-      const result = await generateText({
-        model,
-        prompt,
-        ...cap,
-      });
+      const operation = beginModelOperation(spend, 'complete');
+      let result;
+      try {
+        result = await generateText({
+          model,
+          prompt,
+          ...cap,
+        });
+      } catch (err) {
+        operation.failed({ cause: err });
+        throw err;
+      }
       // Reported even when the provider said nothing: `normalizeUsage` returns
       // `{}` and the CALL still lands, which is what keeps a silent provider
       // distinguishable from a free one. No `spec`: this factory is configured
       // with a base URL and a model name rather than a catalog spec, and
       // synthesizing one would name a route the catalog cannot price.
-      spend?.report({
-        source: spend.source,
-        usage: normalizeUsage(result.totalUsage),
-        modelId: result.response.modelId,
-      });
+      const usage = normalizeUsage(result.totalUsage);
+      const modelId = result.response.modelId;
+      operation.completed({ usage, modelId });
+      spend?.report({ source: spend.source, usage, modelId });
       return result.text.trim();
     },
   };
@@ -144,18 +160,30 @@ export function createCompletionLLM(opts: {
       throw new Error(`createCompletionLLM(${opts.spec}) has no streaming path`);
     },
     async complete(prompt) {
-      const result = await generateText({
-        model: opts.model,
-        prompt,
-        providerOptions,
-      });
+      // The frame opens BEFORE the request, so a process killed mid-call leaves
+      // a start row naming this operation rather than nothing at all.
+      const operation = beginModelOperation(spend, 'complete', { spec: opts.spec });
+      let result;
+      try {
+        result = await generateText({
+          model: opts.model,
+          prompt,
+          providerOptions,
+        });
+      } catch (err) {
+        operation.failed({ cause: err });
+        throw err;
+      }
       // `spec` is what the caller resolved and therefore what the catalog
       // prices; `modelId` is what the provider says served it.
+      const usage = normalizeUsage(result.totalUsage);
+      const modelId = result.response.modelId;
+      operation.completed({ usage, modelId });
       spend?.report({
         source: spend.source,
-        usage: normalizeUsage(result.totalUsage),
+        usage,
         spec: opts.spec,
-        modelId: result.response.modelId,
+        modelId,
       });
       return result.text.trim();
     },

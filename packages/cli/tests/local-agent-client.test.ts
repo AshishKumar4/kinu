@@ -1,8 +1,8 @@
 // LocalAgentClient — the local AgentClient adapter over LocalAgentSession,
 // driven by the authentic createCLIRuntime and a fake streaming model (no
 // network LLM). Verifies the unified seam: event stream, turn results, JSONL
-// recording, history hydration, resume, and stop() reaching the session abort.
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+// recording, history hydration, walk-back fork, and stop() reaching the abort.
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
@@ -13,6 +13,7 @@ import type { LLMProviderConfig } from '@kinu.run/core';
 import { createCLIRuntime, type LocalModelResolver } from '@kinu.run/cli-backend';
 import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model';
 import { LocalAgentClient } from '../src/local-agent-client';
+import type { CliSessionOptions } from '../src/session';
 import type { AgentClientEvent } from '../src/agent-client';
 
 const DUMMY_LLM: LLMProviderConfig = {
@@ -111,10 +112,41 @@ function setup(model: LanguageModel) {
     modelResolver: fakeResolver(model),
     mcpServers: {},
     noAutoEvolve: true,
-    sessionOptions: { sessionDir: join(home, 'sessions') },
+    transcript: { transcriptDir: join(home, 'sessions') },
     surface: 'interactive',
   });
   return { client, home, rt };
+}
+function openPersistentClient(
+  home: string,
+  model: LanguageModel,
+  transcriptOptions: CliSessionOptions,
+): LocalAgentClient {
+  const dbPath = join(home, 'agent.db');
+  const db = new Database(dbPath);
+  db.exec(`CREATE TABLE IF NOT EXISTS messages (
+    id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
+    role TEXT NOT NULL, content TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
+  const rt = createCLIRuntime(db, { dbPath, llm: DUMMY_LLM });
+  const info = {
+    id: 'agent-1', name: 'jarvis', purpose: 'test agent', soul: '', scaffoldVersion: 1,
+    craftedToolCount: 0, searchNodeCount: 0, taskCount: 0, memorySize: 0, createdAt: Date.now(),
+  };
+  return new LocalAgentClient({
+    agentName: 'jarvis',
+    rt,
+    db,
+    dbPath,
+    info,
+    refreshInfo: async () => info,
+    model,
+    modelResolver: fakeResolver(model),
+    mcpServers: {},
+    noAutoEvolve: true,
+    transcript: transcriptOptions,
+    surface: 'interactive',
+  });
 }
 
 describe('LocalAgentClient', () => {
@@ -144,46 +176,50 @@ describe('LocalAgentClient', () => {
     await client.close();
   });
 
-  test('session resume re-points the log and reconnects startup resources', async () => {
-    const { client } = setup(fakeModel('first answer'));
-    const connect = client.connect.bind(client);
-    let connectCount = 0;
-    client.connect = async () => {
-      connectCount += 1;
-      await connect();
-    };
-    await client.connect();
-    await client.send('first question');
-    const originalId = client.cliSession.id;
+  test('the diagnostic recorder never chooses or disables the durable conversation', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'kinu-client-persistent-'));
+    tempDirs.push(home);
+    const transcriptDir = join(home, 'sessions');
 
-    const sessions = client.sessionHistory.list();
-    expect(sessions.map((session) => session.id)).toContain(originalId);
+    const unrecorded = openPersistentClient(home, fakeModel('first answer'), {
+      noTranscript: true,
+      transcriptDir,
+    });
+    await unrecorded.connect();
+    await unrecorded.send('first question');
+    await unrecorded.close();
+    expect(existsSync(transcriptDir)).toBe(false);
 
-    await client.sessionHistory.resume(originalId);
-    expect(client.cliSession.id).toBe(originalId);
-    const history = await client.history();
-    expect(history.map((message) => message.role)).toEqual(['user', 'assistant']);
-    expect(connectCount).toBe(2);
-    await client.close();
+    let prompt: LanguageModelV2Prompt = [];
+    const recorded = openPersistentClient(
+      home,
+      fakeModel('second answer', (next) => { prompt = next; }),
+      { transcriptDir },
+    );
+    await recorded.connect();
+    await recorded.send('second question');
+    expect(JSON.stringify(prompt)).toContain('first question');
+    expect(JSON.stringify(prompt)).toContain('first answer');
+    expect(recorded.cliSession.mode).toBe('record');
+    await recorded.close();
+
+    const db = new Database(join(home, 'agent.db'));
+    const sessions = db.query<{ session_id: string }, []>(
+      'SELECT DISTINCT session_id FROM messages ORDER BY session_id',
+    ).all();
+    const conversation = db.query<{ value: string }, []>(
+      "SELECT value FROM agent_config WHERE key = 'conversation.id'",
+    ).get();
+    expect(sessions).toEqual([{ session_id: 'default' }]);
+    expect(conversation?.value).toBe('default');
+    db.close();
   });
 
-  test('failed session startup rolls back to the connected conversation', async () => {
+  test('workspace chat exposes no selectable session surface', async () => {
     const { client } = setup(fakeModel('answer'));
-    const connect = client.connect.bind(client);
-    let connectCount = 0;
-    client.connect = async () => {
-      connectCount += 1;
-      if (connectCount === 2) throw new Error('MCP startup failed');
-      await connect();
-    };
     await client.connect();
     await client.send('first question');
-    const originalId = client.cliSession.id;
-
-    await expect(client.sessionHistory.resume(originalId)).rejects.toThrow('Resuming the selected session failed.');
-    expect(client.cliSession.id).toBe(originalId);
-    expect(connectCount).toBe(3);
-    expect((await client.send('still connected')).text).toBe('answer');
+    expect((await client.history()).map((message) => message.role)).toEqual(['user', 'assistant']);
     await client.close();
   });
 
@@ -272,8 +308,7 @@ describe('LocalAgentClient', () => {
     const result = await client.fork({ text: 'second question', occurrenceFromEnd: 1 });
     expect(result.client).toBe(client);
     expect(client.cliSession.id).not.toBe(originalSessionId);
-    expect(result.label).toBe(`session ${client.cliSession.id}`);
-    expect(client.sessionHistory.list().some((session) => session.id === client.cliSession.id)).toBe(true);
+    expect(result.label).toBe(`branch ${client.cliSession.id}`);
 
     // The forked conversation keeps turn one but not the walked-back message.
     await client.send('third question');

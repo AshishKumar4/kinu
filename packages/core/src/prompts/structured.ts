@@ -1,6 +1,6 @@
 import { generateText, type LanguageModel } from 'ai';
 import * as v from 'valibot';
-import type { ModelCallSpend } from '../events/model-call';
+import { beginModelOperation, type ModelCallSpend } from '../events/model-call';
 import { normalizeUsage } from '../usage';
 import { parseJsonArray, parseJsonObject, type JsonObject, type JsonValue } from '../utils/json';
 
@@ -91,21 +91,32 @@ export async function generateJson<TOutput>(opts: {
    *  Absent means this producer's spend is attributed to nothing. */
   spend?: ModelCallSpend;
 }): Promise<TOutput> {
-  const result = await generateText({
-    model: opts.model,
-    prompt: `${opts.prompt}\n\n${jsonObjectOnlyInstruction()}`,
-    maxOutputTokens: opts.maxOutputTokens,
-    providerOptions: opts.providerOptions,
-  });
+  const spend = opts.spend;
+  // Opened before the request: this substrate carries the judge lanes, and a
+  // judge killed mid-call used to leave the ledger with no trace of the grading
+  // it was in the middle of.
+  const operation = beginModelOperation(spend, 'generate_json');
+  let result;
+  try {
+    result = await generateText({
+      model: opts.model,
+      prompt: `${opts.prompt}\n\n${jsonObjectOnlyInstruction()}`,
+      maxOutputTokens: opts.maxOutputTokens,
+      providerOptions: opts.providerOptions,
+    });
+  } catch (err) {
+    operation.failed({ cause: err });
+    throw err;
+  }
   // Before the extract-and-validate, and outside it: the call COMPLETED and was
   // billed whether or not its output turns out to be JSON this schema accepts,
   // and every caller handles that throw by falling back to something cheaper —
-  // so a report placed after it would drop exactly the spend of a bad model.
-  const spend = opts.spend;
-  spend?.report({
-    source: spend.source,
-    usage: normalizeUsage(result.totalUsage),
-    modelId: result.response.modelId,
-  });
+  // so a report placed after it would drop exactly the spend of a bad model. The
+  // operation ends here for the same reason: the OPERATION succeeded, and what
+  // the output turned out to be is the caller's verdict, not this seam's.
+  const usage = normalizeUsage(result.totalUsage);
+  const modelId = result.response.modelId;
+  operation.completed({ usage, modelId });
+  spend?.report({ source: spend.source, usage, modelId });
   return v.parse(opts.schema, extractJsonObject(result.text));
 }

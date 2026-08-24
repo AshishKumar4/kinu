@@ -471,8 +471,9 @@ export async function readScaffoldVersion(
   version: number,
 ): Promise<string | null> {
   const versioned = `${rt.identity.scaffold.path}.v${version}`;
-  if (await rt.storage.vfs.exists(versioned)) {
-    return v.parse(v.string(), await rt.storage.vfs.readFile(versioned, { encoding: 'utf8' }));
+  const scaffoldVfs = rt.agentStateVfs ?? rt.storage.vfs;
+  if (await scaffoldVfs.exists(versioned)) {
+    return v.parse(v.string(), await scaffoldVfs.readFile(versioned, { encoding: 'utf8' }));
   }
   // No versioned backup — happens for v0 (the bootstrap writes the live file
   // but not a versioned backup). Fall back to live ONLY for the version the

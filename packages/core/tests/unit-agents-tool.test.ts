@@ -17,12 +17,12 @@ import * as v from 'valibot';
 import { AGENTS_ACTION_FIELDS } from '../src/tools/agents-tool';
 import { SWARM_PRESETS } from '../src/strategy/swarm';
 import {
-  agentsActionsFor, buildBuiltinTools, createAgentsTool,
+  agentsActionsFor, buildBuiltinTools, createAgentsTool, parseAgentsToolInput,
   renderAgentsToolDescription, resumableAgentsInput,
   AGENTS_TOOL_ACTIONS, BUILTIN_TOOL_DESCRIPTIONS, DELEGATION_INHERITANCE, DELEGATION_RUNGS,
   delegationBudgetAtDepth, ROOT_DELEGATION_BUDGET,
   SWARM_PRESET_DOCTRINE,
-  LLM_CALL_TIMEOUT_MS, PEER_REPLY_TOPIC, SPAWN_STARTED_OPTION,
+  PEER_REPLY_TOPIC, SPAWN_STARTED_OPTION,
   classifyToolFailure, JsonObjectSchema,
   type AgentsToolInput,
   type AgentsForkDeps, type AgentsToolDeps, type PeersToolDeps,
@@ -353,6 +353,8 @@ describe('agents tool — the field contract', () => {
     const advertised = propertyNames({ value: agentsTool(fullDeps()).inputSchema }).sort();
     const claimed = [...new Set(AGENTS_TOOL_ACTIONS.flatMap((action) => [...AGENTS_ACTION_FIELDS[action]]))];
     expect(advertised).toEqual(['action', ...claimed].sort());
+    expect(advertised).not.toContain('timeout_seconds');
+    expect(claimed).not.toContain('timeout_seconds');
   });
 
   test('a dep-gated actor advertises a subset, and never a field no action of its own reads', () => {
@@ -533,14 +535,16 @@ describe('agents tool — subordinate actions', () => {
     ]);
   });
 
-  test('hire forwards role/mission (+ optional agent name/model) to team.spawn', async () => {
+  test('hire forwards role/mission (+ optional agent name/tier) to team.spawn', async () => {
     const { deps, calls } = makeTeam();
     const t = agentsTool({ team: deps });
     const result = await t.execute({
-      action: 'hire', role: 'researcher', mission: 'Map the landscape', model: 'openai/gpt-5',
+      action: 'hire', agent: 'scout', role: 'researcher', mission: 'Map the landscape',
     });
-    expect(result).toEqual({ name: 'researcher', displayName: 'Researcher' });
-    expect(calls[0].input).toEqual({ role: 'researcher', mission: 'Map the landscape', model: 'openai/gpt-5', mode: 'build' });
+    expect(result).toEqual({ name: 'scout', displayName: 'Researcher' });
+    expect(calls[0].input).toEqual({
+      name: 'scout', role: 'researcher', mission: 'Map the landscape', mode: 'build',
+    });
   });
 
   test('ask to a roster name assigns the work and says the report arrives as an event', async () => {
@@ -727,22 +731,21 @@ describe('agents tool — peer workspace actions', () => {
     expect(peers.calls).toEqual([]);
   });
 
-  test('peer ask defaults: topic "message", one measured turn; a small ask is honoured, a huge one clamps', async () => {
+  test('peer ask has no elapsed deadline and refuses the retired field', async () => {
     const { deps, calls } = makePeers();
     const t = agentsTool({ peers: deps });
     await t.execute({ action: 'ask', agent: 'scout', message: 'x' });
-    await t.execute({ action: 'ask', agent: 'scout', message: 'x', timeout_seconds: 1 });
-    await t.execute({ action: 'ask', agent: 'scout', message: 'x', timeout_seconds: 9999 });
-    const peerInputs = calls.map((call) => v.parse(v.object({
-      timeoutMs: v.number(), topic: v.string(),
-    }), call.input));
-    // The default IS the ceiling, because an ask waits on the addressed agent's whole
-    // turn and 120_000 was under every turn measured. A caller asking for 1s gets 1s:
-    // the 5_000 floor that used to raise it silently overrode a deliberate request,
-    // and a `no_reply` whose note says the answer lands later as an event is honest.
-    expect(peerInputs.map((input) => input.timeoutMs))
-      .toEqual([LLM_CALL_TIMEOUT_MS, 1_000, LLM_CALL_TIMEOUT_MS]);
-    expect(peerInputs[0]?.topic).toBe('message');
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.input).toEqual({
+      agent: 'scout', topic: 'message', message: 'x', mode: 'build',
+    });
+    expect('timeoutMs' in (calls[0]?.input ?? {})).toBe(false);
+
+    expect(() => parseAgentsToolInput({
+      action: 'ask', agent: 'scout', message: 'x', timeout_seconds: 1,
+    })).toThrow('unknown field "timeout_seconds"');
+    expect(calls).toHaveLength(1);
   });
 
   test('send is fire-and-forget; reply forwards the event id', async () => {
@@ -761,10 +764,8 @@ describe('agents tool — peer workspace actions', () => {
       action: 'hire', scope: 'workspace', mission: 'summarize research papers', message: 'Summarize X',
     });
     expect(result).toMatchObject({ agent: 'specialist', created: true, status: 'replied' });
-    expect(calls[0].input).toMatchObject({
-      purpose: 'summarize research papers', message: 'Summarize X',
-      timeoutMs: LLM_CALL_TIMEOUT_MS,
-      mode: 'build',
+    expect(calls[0].input).toEqual({
+      purpose: 'summarize research papers', message: 'Summarize X', mode: 'build',
     });
   });
 

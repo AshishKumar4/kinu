@@ -77,14 +77,16 @@ describe('the sectionised builder renders the pre-change bytes', () => {
 
 describe('the byte-identity comparison is sensitive to one character', () => {
   const { rt } = createTestRuntime();
-  // The surface that renders all nine sections at once, so a mutation to any of
-  // them has somewhere to show up.
+  // The general surface renders every unconditional section. Role/profile is
+  // intentionally conditional, so its own matrix case is its proof surface.
   const full = PROMPT_MATRIX.find((c) => c.name === 'cf-full-surface');
-  if (!full) throw new Error('matrix lost its full-surface case');
+  const roleCase = PROMPT_MATRIX.find((c) => c.name === 'role-general');
+  if (!full || !roleCase) throw new Error('matrix lost a required proof surface');
 
-  test('all nine sections reach that surface', () => {
-    const prompt = buildSystemPromptSync(rt, full.opts);
+  test('all ten sections reach a surface that enables them', () => {
     for (const section of PROMPT_SECTIONS) {
+      const target = section.id === 'role/profile' ? roleCase : full;
+      const prompt = buildSystemPromptSync(rt, target.opts);
       // Up to the newline OR the first tag: `## Delegation` is followed
       // immediately by its first `{{#if}}`, with no newline between them.
       const heading = /^## [^\n{]*/u.exec(section.source)?.[0] ?? '';
@@ -98,13 +100,14 @@ describe('the byte-identity comparison is sensitive to one character', () => {
       // Through `sectionOverrides`, which is the real promotion path: this is
       // simultaneously the red proof for part 1 and the proof that a promoted
       // section actually reaches the model.
+      const target = section.id === 'role/profile' ? roleCase : full;
       const mutated = buildSystemPromptSync(rt, {
-        ...full.opts,
+        ...target.opts,
         sectionOverrides: { [section.id]: mutateOneCharacter(section.source) },
       });
-      expect(mutated).not.toBe(golden[full.name]);
+      expect(mutated).not.toBe(golden[target.name]);
       // And it differs by exactly that character, nowhere else.
-      expect(mutated.length).toBe((golden[full.name] ?? '').length);
+      expect(mutated.length).toBe((golden[target.name] ?? '').length);
     });
   }
 
@@ -133,6 +136,10 @@ describe('the prose left the builder', () => {
 
   for (const section of PROMPT_SECTIONS) {
     test(`${section.id} — its prose is not in prompt.ts`, () => {
+      if (section.id === 'role/profile') {
+        expect(source.includes('## Role:')).toBe(false);
+        return;
+      }
       const phrase = longestLiteralRun(section.source);
       expect(phrase.length).toBeGreaterThan(40);
       expect(source.includes(phrase)).toBe(false);
@@ -142,7 +149,7 @@ describe('the prose left the builder', () => {
   test('the builder still renders every section through its template', () => {
     // The other half: prose absent because the section was DELETED would pass
     // the checks above and fail the model. Each section renders through one
-    // `render(CONSTANT, …)` call, so the builder must carry at least nine.
+    // `render(CONSTANT, …)` call, so the builder must carry at least ten.
     const rendered = source.match(/\brender\([A-Z][A-Z_]*,/gu) ?? [];
     expect(rendered.length).toBeGreaterThanOrEqual(PROMPT_SECTIONS.length);
     // …and the one seam they all go through is built from the turn's overrides,
@@ -152,9 +159,9 @@ describe('the prose left the builder', () => {
 });
 
 describe('PROMPT_SECTIONS — the addressing scheme', () => {
-  test('nine sections, unique ids, every one a real template', () => {
-    expect(PROMPT_SECTIONS).toHaveLength(9);
-    expect(new Set(PROMPT_SECTIONS.map((s) => s.id)).size).toBe(9);
+  test('ten sections, unique ids, every one a real template', () => {
+    expect(PROMPT_SECTIONS).toHaveLength(10);
+    expect(new Set(PROMPT_SECTIONS.map((s) => s.id)).size).toBe(10);
     for (const section of PROMPT_SECTIONS) {
       expect(section.source.startsWith('## ')).toBe(true);
       // Compiles, and its contract is readable — what the promotion gate compares

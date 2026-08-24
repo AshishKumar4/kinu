@@ -206,32 +206,38 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     const { engine, reviews, sql } = fakeEngine();
     const { host } = fakeHost();
     // A review that never finishes: on a host that joins the lane this is the
-    // whole settle bound, which is exactly the 64.9s exit tail being removed.
+    // whole join, which is exactly why the exec process must not START the
+    // work it cannot afford.
     engine.reviewTurn = () => new Promise<void>(() => {});
-    const orch = new AgentOrchestrator({
-      host, engine, eventLog: newEventLog(), oneShot: true, settleTimeoutMs: 5_000,
-    });
+    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog(), oneShot: true });
     orch.recordTurn(aTurn(0), 'independent_task');
 
-    const startedAt = Date.now();
     await orch.settleEvolution();
-    expect(Date.now() - startedAt).toBeLessThan(100);   // the lane is EMPTY, not waited out
     expect(reviews).toEqual([]);                        // nothing ran in the exec process
     expect(countQueuedTurnReviews(sql)).toBe(1);        // and the review is owed, durably
   });
 
-  test('an interactive host still runs the review inline — the settle bound is what it costs', async () => {
+  test('an interactive host JOINS the inline review until it settles — no elapsed bound', async () => {
     const { engine, sql } = fakeEngine();
     const { host } = fakeHost();
-    engine.reviewTurn = () => new Promise<void>(() => {});
-    const orch = new AgentOrchestrator({
-      host, engine, eventLog: newEventLog(), settleTimeoutMs: 50,
-    });
+    // The review resolves only when the test releases it; settleEvolution
+    // must still be pending while it runs, then return only once it has run.
+    const gate = Promise.withResolvers<void>();
+    let reviewed = false;
+    engine.reviewTurn = async () => { await gate.promise; reviewed = true; };
+    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
     orch.recordTurn(aTurn(0), 'independent_task');
-    const startedAt = Date.now();
-    await orch.settleEvolution();
-    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(50);  // it JOINED the lane
-    expect(countQueuedTurnReviews(sql)).toBe(0);                // nothing was deferred
+
+    let settled = false;
+    const settle = orch.settleEvolution().then(() => { settled = true; });
+    await Promise.resolve();
+    expect(reviewed).toBe(false);
+    expect(settled).toBe(false);          // joined, not abandoned at some bound
+
+    gate.resolve();
+    await settle;
+    expect(reviewed).toBe(true);
+    expect(countQueuedTurnReviews(sql)).toBe(0);   // nothing was deferred
   });
 
   test('the deferred review is re-driven at the next open, with the same inputs', async () => {
@@ -284,20 +290,27 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     expect(reviews[0].followup).toBeNull();             // … and it stays absent
   });
 
-  test('settleEvolution abandons the turn lane at its bound rather than waiting forever', async () => {
+  test('settleEvolution JOINS the turn lane until it settles — background work is never abandoned by the clock', async () => {
     const { engine } = fakeEngine();
     const { host } = fakeHost();
-    const orch = new AgentOrchestrator({
-      host, engine, eventLog: newEventLog(), settleTimeoutMs: 10,
-    });
-    let release = () => {};
-    const stuck = new Promise<void>((resolve) => { release = resolve; });
-    orch.track(stuck, 'Turn review');
-    const startedAt = Date.now();
-    await orch.settleEvolution();                    // returns on the bound, not on `stuck`
-    expect(Date.now() - startedAt).toBeLessThan(2000);
-    release();
-    await stuck;
+    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+    // Work that finishes only when released: settleEvolution stays pending
+    // for as long as the work runs, then completes. The old bound ABANDONED
+    // this lane and logged `evolution.settle_timed_out` — honest evolution
+    // work killed by a clock.
+    const gate = Promise.withResolvers<void>();
+    let done = false;
+    orch.track(gate.promise.then(() => { done = true; }), 'Turn review');
+
+    let settled = false;
+    const settle = orch.settleEvolution().then(() => { settled = true; });
+    await Promise.resolve();
+    expect(done).toBe(false);
+    expect(settled).toBe(false);   // still joined while the work runs
+
+    gate.resolve();
+    await settle;
+    expect(done).toBe(true);
   });
 
   test('with auto-evolution off, a turn leaves no evolution state at all', () => {

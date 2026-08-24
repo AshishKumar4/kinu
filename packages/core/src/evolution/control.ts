@@ -27,13 +27,13 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { LLM, SqlExecutor } from '../types/primitives';
 import type { AgentConfigStore } from '../config/store';
 import { clampGepaEvalBudget } from '../config/store';
-import type { ModelCallSink } from '../events/model-call';
+import { beginModelOperation, type ModelCallSink, type ModelOperationSink } from '../events/model-call';
 import { normalizeUsage } from '../usage';
 import { effortFor } from '../strategy/effort';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 import { extractJsonObject, generateJson, jsonObjectOnlyInstruction } from '../prompts/structured';
 import {
-  runScaffold, scaffoldEventText, SCAFFOLD_TURN_TIMEOUT_MS,
+  runScaffold, scaffoldEventText,
   type ScaffoldRunOptions, type ScaffoldRunResult,
 } from '../scaffold/executor';
 import { modifyScaffold } from '../scaffold/modify';
@@ -133,6 +133,14 @@ export interface ScaffoldControl {
    * Optional: a backend that wires no sink runs the plane exactly as before.
    */
   readonly reportModelCall?: ModelCallSink;
+  /**
+   * Where this plane's operation lifecycle goes — the start/end pair that
+   * names what was in flight when a process died. Same optional contract as
+   * the sink above: absent means the plane's in-flight work is unattributable,
+   * which the ledger states rather than hides. Backends build both from one
+   * recorder through {@link recordModelOperations}.
+   */
+  readonly operations?: ModelOperationSink;
 }
 
 function scaffoldRunOptions(
@@ -158,8 +166,9 @@ function scaffoldRunOptions(
  * `candidateCode` this is the GEPA metric's rollout; without it, it rolls the
  * LIVE scaffold — the replay-eval harness's current-config runner.
  *
- * The wall clock is the live turn budget, not a smaller one: this run IS the
- * candidate's score, and a candidate cut off early scores as a bad candidate.
+ * The rollout carries no elapsed deadline, like the live turn: this run IS
+ * the candidate's score, and a candidate cut off early would score as a bad
+ * candidate rather than be measured.
  */
 export async function runScaffoldCaptureText(
   control: ScaffoldControl,
@@ -170,7 +179,6 @@ export async function runScaffoldCaptureText(
   const result = await runScaffold(scaffoldRunOptions(control, task, {
     emit: (ev) => { text += scaffoldEventText(ev) ?? ''; },
     scaffoldCodeOverride: candidateCode,
-    timeoutMs: SCAFFOLD_TURN_TIMEOUT_MS,
   }));
   if (!result.ok && result.error) throw new Error(result.error);
   return text;
@@ -185,13 +193,12 @@ export async function runScaffoldCaptureText(
 export async function runScaffoldOnce(
   control: ScaffoldControl,
   task: string,
-  opts?: { useShadowOverride?: boolean; timeoutMs?: number },
+  opts?: { useShadowOverride?: boolean },
 ): Promise<ScaffoldRunResult> {
   const pending = opts?.useShadowOverride ? getPendingScaffold(control.sql) : null;
   const codeOverride = pending ? await readScaffoldVersion(control.rt, pending.version) : null;
   return runScaffold(scaffoldRunOptions(control, task, {
     scaffoldCodeOverride: codeOverride ?? undefined,
-    timeoutMs: opts?.timeoutMs,
   }));
 }
 
@@ -332,7 +339,6 @@ export async function previewScaffoldLive(
   control: ScaffoldControl,
   version: number,
   task: string,
-  opts?: { timeoutMs?: number },
 ): Promise<ScaffoldRunResult> {
   const codeOverride = await readScaffoldVersion(control.rt, version);
   if (codeOverride == null) {
@@ -340,7 +346,6 @@ export async function previewScaffoldLive(
   }
   return runScaffold(scaffoldRunOptions(control, task, {
     scaffoldCodeOverride: codeOverride,
-    timeoutMs: opts?.timeoutMs,
   }));
 }
 
@@ -466,12 +471,23 @@ export async function applyScaffoldDecision(
  */
 function reflectionLmFor(control: ScaffoldControl, model: LanguageModel): ReflectionLM {
   return async (prompt) => {
-    const result = await generateText({ model, prompt, ...effortFor('scaffold_mutation') });
-    control.reportModelCall?.({
-      source: 'reflection',
-      usage: normalizeUsage(result.totalUsage),
-      modelId: result.response.modelId,
-    });
+    // The frame opens before the request: a GEPA pass killed mid-rewrite is
+    // exactly the operation §9.1's start row exists to name.
+    const operation = beginModelOperation(
+      { source: 'reflection', operations: control.operations },
+      'complete',
+    );
+    let result;
+    try {
+      result = await generateText({ model, prompt, ...effortFor('scaffold_mutation') });
+    } catch (err) {
+      operation.failed({ cause: err });
+      throw err;
+    }
+    const usage = normalizeUsage(result.totalUsage);
+    const modelId = result.response.modelId;
+    operation.completed({ usage, modelId });
+    control.reportModelCall?.({ source: 'reflection', usage, modelId });
     return result.text;
   };
 }
@@ -959,13 +975,16 @@ export async function advancePromptSectionLane(
 export function createJsonJudge(
   model: () => LanguageModel | Promise<LanguageModel>,
   reportModelCall?: ModelCallSink,
+  operations?: ModelOperationSink,
 ): JsonGenerator {
   return async (opts) => generateJson({
     model: await model(),
     schema: opts.schema,
     prompt: opts.prompt,
     providerOptions: effortFor('judge').providerOptions,
-    spend: reportModelCall ? { source: 'judge', report: reportModelCall } : undefined,
+    spend: reportModelCall || operations
+      ? { source: 'judge', report: reportModelCall ?? (() => {}), operations }
+      : undefined,
   });
 }
 

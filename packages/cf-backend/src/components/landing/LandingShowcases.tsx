@@ -146,40 +146,47 @@ function WorkspacePreview(): ReactElement {
 }
 
 function TuiPreview(): ReactElement {
-  const sessions = {
-    checkout: {
-      label: 'checkout audit',
-      workspace: 'checkout',
+  const agents = {
+    audit: {
+      label: 'audit',
       location: 'local',
+      subordinate: 'reviewer · auditor',
       prompt: 'Audit the checkout flow, fix the coupon failure, and keep the tests green.',
       answer: 'The migration only filled fixed coupons. I patched the backfill, added the percentage case, and started the focused suite.',
       tools: [['run · workspace', 'bun test coupon', '7 pass'], ['file', 'read 0042_coupon_kind.sql', '1.8 KB'], ['file', 'edit 0042_coupon_kind.sql', 'saved'], ['agents', 'three independent checks', 'settled']],
     },
-    migration: {
-      label: 'migration review',
-      workspace: 'migration',
+    migrations: {
+      label: 'migrations',
       location: 'local',
+      subordinate: null,
       prompt: 'Review the migration plan and identify any destructive step.',
       answer: 'The plan now ships the backfill first, verifies both coupon kinds, then adds the constraint in a later release.',
       tools: [['file', 'read migrations/0042.sql', '2.1 KB'], ['agents', 'audit migration plan', '2 reports'], ['file', 'edit MIGRATION.md', 'saved']],
     },
     jarvis: {
       label: 'Jarvis',
-      workspace: 'jarvis',
       location: 'cloud',
+      subordinate: null,
       prompt: 'Summarize the overnight research and flag the decision I need to make.',
       answer: 'The evidence supports staged rollout. Decide whether the first cohort should be 5% or 10%; the rest is ready.',
       tools: [['web', 'compare three primary sources', '3 sources'], ['agents', 'independent risk review', 'settled'], ['report', 'prepare owner decision', 'ready']],
     },
   } as const;
-  type SessionId = keyof typeof sessions;
-  const [sessionId, setSessionId] = useState<SessionId>('checkout');
+  type AgentId = keyof typeof agents;
+  const LOCAL_AGENTS: readonly AgentId[] = ['audit', 'migrations'];
+  const CLOUD_AGENTS: readonly AgentId[] = ['jarvis'];
+  const [agentId, setAgentId] = useState<AgentId>('audit');
+  const [checkoutOpen, setCheckoutOpen] = useState(true);
+  const [cloudOpen, setCloudOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerFilter, setDrawerFilter] = useState('');
   const drawerTriggerRef = useRef<HTMLButtonElement | null>(null);
-  const session = sessions[sessionId];
-  const selectClass = (id: SessionId): string => (
-    id === sessionId
+  const agent = agents[agentId];
+  // The open agent's section never renders collapsed.
+  const cloudExpanded = cloudOpen || agentId === 'jarvis';
+  const checkoutExpanded = checkoutOpen || agentId !== 'jarvis';
+  const selectClass = (id: AgentId): string => (
+    id === agentId
       ? 'border-l-2 border-[var(--c-accent)] p-elevated p-text'
       : 'border-l-2 border-transparent p-text-3 hover:p-text'
   );
@@ -187,34 +194,63 @@ function TuiPreview(): ReactElement {
     setDrawerOpen(false);
     queueMicrotask(() => drawerTriggerRef.current?.focus());
   };
-  const chooseSession = (id: SessionId) => {
-    setSessionId(id);
+  const chooseAgent = (id: AgentId) => {
+    setAgentId(id);
     closeDrawer();
   };
-  const drawerMatches = (id: SessionId) => (
-    `${sessions[id].label} ${sessions[id].location}`
-      .toLowerCase()
-      .includes(drawerFilter.trim().toLowerCase())
+  const filter = drawerFilter.trim().toLowerCase();
+  const drawerMatches = (id: AgentId) => (
+    `${agents[id].label} ${agents[id].location}`.toLowerCase().includes(filter)
+  );
+  const agentRows = (ids: readonly AgentId[], onChoose: (id: AgentId) => void, filtered: boolean): ReactElement[] => (
+    ids.filter((id) => !filtered || drawerMatches(id)).map((id) => (
+      <div key={id}>
+        <button type="button" onClick={() => onChoose(id)} className={`flex w-full items-center justify-between px-3 py-2 text-left text-xs ${selectClass(id)}`}>
+          <span><span className={agents[id].location === 'cloud' ? 'p-success' : 'p-gold'}>{id === agentId ? '● ' : '○ '}</span>{agents[id].label}</span>
+          {agents[id].location === 'cloud' && <span className="p-success">live</span>}
+        </button>
+        {agents[id].subordinate !== null && (
+          <div className="ml-7 border-l p-border pl-2 text-[10px] leading-6 p-text-4">└ {agents[id].subordinate}</div>
+        )}
+      </div>
+    ))
+  );
+  const groupHeader = (label: string, count: number, expanded: boolean, onToggle: () => void) => (
+    <button type="button" aria-expanded={expanded} onClick={onToggle} className="block w-full px-2 py-2 text-left text-[10px] uppercase tracking-[.16em] p-text-4 hover:p-text">
+      {`${expanded ? '▾' : '▸'} ${label} · ${count}`}
+    </button>
+  );
+  const workspaceGroups = (filtered: boolean, onChoose: (id: AgentId) => void) => (
+    <>
+      {groupHeader('checkout', LOCAL_AGENTS.length, checkoutExpanded, () => setCheckoutOpen(!checkoutExpanded))}
+      {(filtered || checkoutExpanded) && agentRows(LOCAL_AGENTS, onChoose, filtered)}
+      {groupHeader('Cloud', CLOUD_AGENTS.length, cloudExpanded, () => setCloudOpen(!cloudExpanded))}
+      {(filtered || cloudExpanded) && agentRows(CLOUD_AGENTS, onChoose, filtered)}
+    </>
   );
   return (
-    <div data-tui-session={sessionId} aria-label="Kinu terminal interface preview" className="overflow-hidden rounded-xl border border-[var(--c-border-strong)] bg-[var(--c-input-bg)] shadow-[0_40px_110px_-50px_rgba(0,0,0,.95)]">
+    <div data-tui-agent={agentId} aria-label="Kinu terminal interface preview" className="overflow-hidden rounded-xl border border-[var(--c-border-strong)] bg-[var(--c-input-bg)] shadow-[0_40px_110px_-50px_rgba(0,0,0,.95)]">
       <div className="grid h-10 grid-cols-[1fr_auto_1fr] items-center border-b border-[var(--c-border-strong)] p-sidebar px-4 font-mono text-[10px] p-text-4">
         <div className="flex gap-2"><span className="size-2 rounded-full bg-[var(--c-danger)] opacity-70" /><span className="size-2 rounded-full bg-[var(--c-warning)] opacity-70" /><span className="size-2 rounded-full bg-[var(--c-success)] opacity-70" /></div>
-        <span className="uppercase tracking-[.14em]">kinu tui — {session.workspace}</span>
+        <span className="uppercase tracking-[.14em]">kinu tui — {agent.label}</span>
         <span className="justify-self-end uppercase tracking-[.1em]">terminal</span>
       </div>
       <div className="flex min-h-12 items-center justify-between gap-4 border-b border-[var(--c-border-strong)] p-recessed px-4 py-2 font-mono text-[11px] uppercase tracking-[.06em] p-text-4">
         <div className="flex min-w-0 flex-wrap items-center gap-3.5">
           <KinuLogo compact />
-          <span>{session.workspace}</span>
+          <span>{agent.label}</span>
           <span className="inline-flex items-center gap-2 p-gold"><span className="size-1.5 rounded-full p-dot-accent" />connected</span>
         </div>
         <div className="flex items-center gap-3">
-          <div className="hidden items-center gap-4 sm:flex"><span>{session.location}</span><span>Claude Opus 4</span></div>
-          <button ref={drawerTriggerRef} type="button" aria-expanded={drawerOpen} aria-controls="landing-tui-workspaces" onClick={() => setDrawerOpen((open) => !open)} className="rounded-md border p-border px-2 py-1 p-text-3 hover:p-text">Ctrl+O workspaces</button>
+          <div className="hidden items-center gap-4 sm:flex"><span>{agent.location}</span><span>general · default</span><span>Claude Opus 4</span></div>
+          <button ref={drawerTriggerRef} type="button" aria-expanded={drawerOpen} aria-controls="landing-tui-workspaces" onClick={() => setDrawerOpen((open) => !open)} className="rounded-md border p-border px-2 py-1 p-text-3 hover:p-text lg:hidden">Alt+W workspaces</button>
         </div>
       </div>
-      <div className="relative min-h-[600px]">
+      <div className="relative grid min-h-[600px] lg:grid-cols-[220px_minmax(0,1fr)]">
+        <aside aria-label="Pinned workspaces" className="hidden border-r border-[var(--c-border-strong)] bg-[var(--c-bg)] px-3 py-4 font-mono lg:block">
+          <div className="mb-3 px-2 text-[10px] uppercase tracking-[.16em] p-text-4">Workspaces · 3 of 3</div>
+          {workspaceGroups(false, setAgentId)}
+        </aside>
         {drawerOpen && (
           <>
             <button type="button" tabIndex={-1} aria-label="Close workspace drawer" onClick={closeDrawer} className="absolute inset-0 z-10 bg-black/60" />
@@ -224,7 +260,7 @@ function TuiPreview(): ReactElement {
               aria-modal="true"
               aria-label="Workspaces"
               onKeyDown={(event) => { if (event.key === 'Escape') closeDrawer(); }}
-              className="absolute inset-y-0 left-0 z-20 w-[220px] border-r border-[var(--c-border-strong)] bg-[var(--c-bg)] px-3 py-4 font-mono shadow-xl"
+              className="absolute inset-y-0 left-0 z-20 w-[220px] border-r border-[var(--c-border-strong)] bg-[var(--c-bg)] px-3 py-4 font-mono shadow-xl lg:hidden"
             >
               <div className="mb-3 flex items-center justify-between gap-2 px-2">
                 <span className="text-[10px] uppercase tracking-[.16em] p-text-4">Workspaces</span>
@@ -238,22 +274,18 @@ function TuiPreview(): ReactElement {
                 placeholder="Filter workspaces…"
                 className="mb-4 w-full border p-border bg-[var(--c-input-bg)] px-2 py-1.5 text-xs p-text outline-none"
               />
-              <div className="mx-2 mb-2 text-[10px] uppercase tracking-[.16em] p-text-4">Local</div>
-              {drawerMatches('checkout') && <button type="button" onClick={() => chooseSession('checkout')} className={`block w-full px-3 py-2 text-left text-xs ${selectClass('checkout')}`}>checkout audit</button>}
-              {drawerMatches('migration') && <button type="button" onClick={() => chooseSession('migration')} className={`block w-full px-3 py-2 text-left text-xs ${selectClass('migration')}`}>migration review</button>}
-              <div className="mx-2 mb-2 mt-6 text-[10px] uppercase tracking-[.16em] p-text-4">Cloud</div>
-              {drawerMatches('jarvis') && <button type="button" onClick={() => chooseSession('jarvis')} className={`flex w-full items-center justify-between px-3 py-2 text-left text-xs ${selectClass('jarvis')}`}><span>Jarvis</span><span className="p-success">live</span></button>}
+              {workspaceGroups(filter !== '', chooseAgent)}
             </aside>
           </>
         )}
         <div className="flex min-h-[600px] min-w-0 flex-col font-mono text-xs leading-[1.65]">
           <div className="flex-1 overflow-hidden px-4 py-5 sm:px-7 sm:py-6">
-            <div className="mb-5 grid grid-cols-[52px_minmax(0,1fr)] gap-3">
-              <span className="text-[10px] uppercase tracking-[.12em] p-gold">you</span>
-              <p className="p-text">{session.prompt}</p>
+            <div data-tui-role="user" className="mb-5 grid grid-cols-[52px_minmax(0,1fr)] gap-3">
+              <span className="text-[10px] uppercase tracking-[.12em] p-gold">YOU</span>
+              <p className="p-text">{agent.prompt}</p>
             </div>
             <div className="border-y border-[var(--c-border-strong)]">
-              {session.tools.map(([tool, action, result], index) => (
+              {agent.tools.map(([tool, action, result], index) => (
                 <div key={`${tool}-${action}`} className={index > 0 ? 'border-t border-dashed border-[var(--c-dash)]' : ''}>
                   <div className="grid grid-cols-[14px_120px_minmax(0,1fr)] gap-3 px-1 pb-1 pt-2.5 sm:grid-cols-[14px_150px_minmax(0,1fr)]">
                     <span className="p-gold">›</span><strong className="font-normal p-text-2">{tool}</strong><span className="truncate p-text-4">{action}</span>
@@ -262,14 +294,13 @@ function TuiPreview(): ReactElement {
                 </div>
               ))}
             </div>
-            <div className="mt-5 grid grid-cols-[52px_minmax(0,1fr)] gap-3">
-              <span className="text-[10px] uppercase tracking-[.12em] p-gold">kinu</span>
-              <p className="font-sans text-[13.5px] leading-[1.65] p-text">{session.answer}</p>
+            <div data-tui-role="assistant" className="mt-5 px-1">
+              <p className="font-sans text-[13.5px] leading-[1.65] p-text">{agent.answer}</p>
             </div>
           </div>
           <div className="border-t border-[var(--c-border-strong)] p-recessed px-4 pb-3 pt-3">
             <div className="border border-[var(--c-border-strong)] bg-[var(--c-bg)] px-3 py-2.5 p-text-4"><span className="mr-2 p-gold">❯</span>Send a message…</div>
-            <div className="mt-2 flex flex-wrap justify-between gap-3 text-[10px] p-text-4"><span>auto · {session.location} workspace · connected</span><span>ctrl+k commands · ctrl+o workspaces · esc cancel</span></div>
+            <div className="mt-2 flex flex-wrap justify-between gap-3 text-[10px] p-text-4"><span>auto · {agent.location} workspace · connected</span><span>Ctrl+K commands · Alt+W workspaces · Alt+A agents · Alt+P tiers</span></div>
           </div>
         </div>
       </div>
@@ -338,7 +369,7 @@ export function LandingShowcases({
       <section data-showcase="workspace" className="pt-24">
         <div className="mx-auto mb-11 max-w-[760px] text-center">
           <h2 className="mb-3 text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">Have your agents <span className="p-gold">live in the cloud.</span></h2>
-          <p className="mx-auto max-w-[700px] text-base leading-[1.65] p-text-3">Each workspace keeps durable files, sessions, and memory. Attach an isolated Linux computer for heavier work, or securely connect your own machine.</p>
+          <p className="mx-auto max-w-[700px] text-base leading-[1.65] p-text-3">Each workspace keeps durable files, memory, and one conversation per agent. Attach isolated Linux for heavier work, or connect your own machine.</p>
           <div className="mt-5 flex flex-wrap justify-center gap-2 font-mono text-[10.5px] p-text-3">
             <span className="rounded-full border p-border p-recessed px-3 py-1.5">{String(storageGb)} GB durable workspace</span>
             <span className="rounded-full border p-border p-recessed px-3 py-1.5">{String(sandboxVcpu)} vCPU · {String(sandboxMemoryGb)} GB RAM · {String(sandboxDiskGb)} GB disk sandbox</span>

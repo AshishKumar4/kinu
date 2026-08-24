@@ -8,6 +8,7 @@
  */
 
 import type { SqlExecutor } from '../types/primitives';
+import type { EvaluationGrounding } from '../types/evaluation';
 import { nanoid } from '../utils/nanoid';
 
 /** SessionMessage with correct `parts` field (not `content`) */
@@ -26,6 +27,35 @@ export interface SessionMessage {
 export interface SessionWriter {
   appendMessage(message: SessionMessage, parentId?: string | null): Promise<void>;
   getHistory(leafId?: string | null): Array<{ role: string; content: string }>;
+}
+/**
+ * Fixed-size evaluator facts persisted with a branch node. This deliberately
+ * excludes proposal text (`observation`) and execution error text (the bounded
+ * session feedback). Nonconverged trees therefore remain diagnosable without
+ * copying their trajectories.
+ */
+export interface NodeEvaluationDiagnostics {
+  /** How the score was grounded: ran, judged prose-only, or unrunnable code. */
+  grounding: EvaluationGrounding;
+  /** This branch's own evaluation score in [0,1] — what backpropagation
+   *  averaged into `value`. */
+  score: number;
+  /** Judge samples the ensemble ASKED for (after the per-evaluation budget
+   *  clamped it). */
+  judgeSamplesAttempted: number;
+  /** Of those attempted, how many parsed. Attempted with zero used is an
+   *  ensemble that answered nothing usable — distinct from never asked. */
+  judgeSamplesUsed: number;
+  /** Execution score components when the branch's code ran. The measured
+   *  check fraction lives here as passed/total, not recomputed anywhere. */
+  execution?: {
+    passed: boolean;
+    passedChecks?: number;
+    totalChecks?: number;
+    assertionsGenerated: boolean;
+  };
+  /** Present when the branch offered code this executor cannot run. */
+  unrunnableLanguage?: string;
 }
 
 export interface RecordNodeOpts {
@@ -53,6 +83,9 @@ export interface RecordNodeOpts {
   codeUsed: string | null;
   codeLanguage?: string | null;
   depth: number;
+  /** Bounded evaluation facts for this branch, or null/absent when the node
+   *  was never evaluated (the root; a swarm node). */
+  evaluation?: NodeEvaluationDiagnostics | null;
 }
 
 /**
@@ -72,11 +105,12 @@ export function insertSearchNode(
 ): void {
   void sql`
  INSERT INTO search_nodes
-      (id, parent_id, root_id, task, action, observation, code_used, code_language, depth, msg_id)
+      (id, parent_id, root_id, task, action, observation, code_used, code_language, depth, msg_id, evaluation_json)
     VALUES
       (${node.nodeId}, ${node.parentNodeId ?? null}, ${node.rootId},
        ${node.task}, ${node.action}, ${node.observation},
-       ${node.codeUsed ?? null}, ${node.codeLanguage ?? null}, ${node.depth}, ${node.msgId})
+       ${node.codeUsed ?? null}, ${node.codeLanguage ?? null}, ${node.depth}, ${node.msgId},
+       ${node.evaluation ? JSON.stringify(node.evaluation) : null})
   `;
 }
 

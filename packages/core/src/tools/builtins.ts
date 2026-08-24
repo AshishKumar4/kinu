@@ -33,12 +33,11 @@
  *                       what put six tests in the TDZ. No confined surface has
  *                       this tool anyway (HEAD_BUILTIN_TOOLS omits it), so the
  *                       split costs nothing it was buying.
- *   5. memory         — the ONE durable-state tool: prose notes (save / search,
- *                       auto-hybrid FTS5 + Vectorize when a VectorStore is
- *                       wired), the typed keyed world model (remember / recall
- *                       / forget, gated on deps.facts) and past session
- *                       transcripts (sessions).
- *   6. tasks          — the agent's own task list: add / update / list over
+ *   5. memory         — one durable-state tool: prose notes (save/search), the
+ *                       typed keyed world model (remember/recall/forget), and
+ *                       this agent's past conversation transcript
+ *                       (conversations).
+ *   6. tasks          — the agent's own task list: add/update/list over
  *                       one workspace table. Unconditional; every runtime has
  *                       rt.storage.sql.
  *   7. web            — live web access: search / fetch. Gated on
@@ -68,8 +67,8 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import {
   BUILTIN_TOOL_DESCRIPTIONS, memoryToolSpec, renderToolSchemaDescription,
   memoryActionsFor, TASKS_TOOL_ACTIONS, WEB_TOOL_ACTIONS, unknownActionError, type WebToolAction,
-  AGENT_STANCES, STANCE_CHOICES,
 } from './registry';
+import type { ProfileCatalogEnvelope } from '../profiles/catalog';
 import { TaskListStore, TASK_STATUSES } from '../tasks/store';
 import { createAgentConfigStore } from '../config/store';
 import { clampToolResult, withClampedToolResult } from './clamp';
@@ -213,6 +212,9 @@ export interface BuiltinToolDeps {
    * stopped.
    */
   logger?: Logger;
+  /** THIS turn's profile catalog envelope, for tasks action=mode role
+   *  switches. Absent: switching refuses with a clear reason. */
+  roleAuthority?: () => ProfileCatalogEnvelope | null;
 }
 
 // ── Report (subordinate → parent) tool contract ─────────────────────────────
@@ -610,10 +612,10 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   });
 
   // ── 5. memory — the ONE durable-state tool ────────────────────────────────
-  // Prose notes (save / search), the typed keyed world model (remember /
-  // recall / forget) and past session transcripts (sessions) are one concept —
-  // state written down now to be read back later — so they are actions here
-  // rather than separate tools the model must choose between by storage shape.
+  // Prose notes (save/search), the typed keyed world model
+  // (remember/recall/forget), and the past conversation transcript are one
+  // concept: state written now to be read later. They are actions here rather
+  // than separate tools chosen by storage shape.
   // search auto-hybridises: Vectorize-backed semantic + FTS5 lexical merged via
   // RRF when a VectorStore is wired + available; pure FTS5 otherwise.
   // Dispatch lives in memory-tool.ts, shared verbatim with the `memory.*`
@@ -631,8 +633,8 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           type: 'string',
           enum: [...memoryActionsFor(!!facts)],
           description: facts
-            ? 'remember/recall/forget a keyed fact, save/search prose notes, or read past session transcripts (sessions)'
-            : 'save a note, search memory notes, or recall past session transcripts (sessions)',
+            ? 'remember/recall/forget a keyed fact, save/search prose notes, or read this agent’s past conversation'
+            : 'save a note, search memory notes, or read this agent’s past conversation',
         },
         key: { type: 'string', description: 'For action=remember/recall/forget: a stable identifier (e.g. "user.tz", "deploy.target").' },
         value: { description: 'For action=remember: any JSON value — string, number, object, array.' },
@@ -640,23 +642,23 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         content: { type: 'string', description: 'For action=save: the note text.' },
         query: {
           type: 'string',
-          description: 'For action=search: the search query. For action=sessions: full-text query over past session messages (all terms must match; omit to browse recent sessions).',
+          description: 'For action=search: the note query. For action=conversations: full-text query over prior messages (all terms must match; omit to browse archived roots).',
         },
         around_message_id: {
           type: 'string',
-          description: 'For action=sessions: scroll — return the messages around this message id (from a prior search hit or scroll window) instead of searching.',
+          description: 'For action=conversations: return messages around this message id instead of searching.',
         },
         window: {
           type: 'number',
-          description: 'For action=sessions scroll: messages on each side of the anchor (default 5, max 20).',
+          description: 'For action=conversations scroll: messages on each side of the anchor (default 5, max 20).',
         },
         max_chars: {
           type: 'number',
-          description: 'For action=sessions scroll: per-message character budget (default 700). Raise it to read full messages — truncated messages say how much was cut.',
+          description: 'For action=conversations scroll: per-message character budget (default 700). Raise it to read full messages; truncation says how much was cut.',
         },
         limit: {
           type: 'number',
-          description: 'For action=sessions: max search hits (default 5, max 10) or browsed sessions (default 10, max 20).',
+          description: 'For action=conversations: max search hits (default 5, max 10) or archived roots (default 10, max 20).',
         },
       },
       required: ['action'],
@@ -664,14 +666,14 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     execute: async (args: MemoryToolInput) => runMemoryAction(args),
   });
 
-  // ── 6. tasks — the agent's own task list and working stance ───────────────
+  // ── 6. tasks — the agent's own task list and durable role ─────────────────
   // Unconditional, like `file` and `memory`: it needs one SQL handle and every
-  // runtime has one. Both stores are constructed here rather than injected for
-  // the same reason SessionSearchStore is — neither holds state of its own.
+  // runtime has one. Both stores are constructed here rather than injected;
+  // neither TaskListStore nor ConversationSearchStore holds process state.
   // Dispatch lives in tasks-tool.ts, shared verbatim with the `tasks.*`
   // codemode namespace (tasks-codemode.ts).
   const taskList = new TaskListStore(rt.storage.sql);
-  const runTasksAction = createTasksDispatcher(taskList, createAgentConfigStore(rt.storage.sql));
+  const runTasksAction = createTasksDispatcher(taskList, createAgentConfigStore(rt.storage.sql), deps.roleAuthority);
   tools.tasks = tool({
     description: BUILTIN_TOOL_DESCRIPTIONS.tasks,
     inputSchema: jsonSchema<TasksToolInput>({
@@ -680,7 +682,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         action: {
           type: 'string',
           enum: [...TASKS_TOOL_ACTIONS],
-          description: 'add tasks, update one task\'s status, list the whole task list, or set the stance you are working in',
+          description: 'add tasks, update one task\'s status, list the whole task list, or switch your durable active role',
         },
         titles: {
           type: 'array',
@@ -697,10 +699,9 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           enum: [...TASK_STATUSES],
           description: 'For action=update: active when you start the item, done when it is finished, dropped when it is no longer needed, open to reopen it.',
         },
-        stance: {
+        role: {
           type: 'string',
-          enum: [...AGENT_STANCES],
-          description: `For action=mode: ${STANCE_CHOICES}. Omit to read the stance you are in now.`,
+          description: 'For action=mode: the role id to switch to (kebab-case; the catalog defines which exist — unknown ids are refused with the known list). The switch applies from your NEXT turn. Omit to read the active role id.',
         },
       },
       required: ['action'],

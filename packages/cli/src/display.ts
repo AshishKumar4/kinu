@@ -383,7 +383,7 @@ export const HELP_EXAMPLES: ReadonlyArray<string> = [
   'kinu provider connect codex',
   'kinu create jarvis --mode cloud --alias jarvis',
   'jarvis "review this repo"',
-  'kinu sessions jarvis',
+  'kinu transcripts jarvis',
   'kinu daemon status',
   'kinu connect',
 ];

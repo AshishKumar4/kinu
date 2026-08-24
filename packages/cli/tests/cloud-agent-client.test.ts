@@ -126,7 +126,7 @@ function newClient(mock: MockAgentServer): CloudAgentClient {
     token: 'ptc_token',
     agentName: 'helios',
     cloudName: 'helios',
-    session: { noSession: true },
+    transcript: { noTranscript: true },
   });
 }
 

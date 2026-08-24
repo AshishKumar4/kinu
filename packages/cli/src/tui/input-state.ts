@@ -1,10 +1,7 @@
 /**
- * The ONE input state machine for the TUI chat surface: turn lifecycle
- * (paired turn-start/turn-end events), Esc / Esc-Esc (interrupt → walk-back
- * picker), the Tab queue, Ctrl+B steer-as-branch, and queued-draft editing. A pure reducer — the
- * keyboard handler and the client event stream both dispatch through it, so
- * no parallel keypress handlers fight over state, and the transitions are
- * directly testable.
+ * The TUI chat input state machine owns turn lifecycle, interrupt and
+ * walk-back, queueing, branching, and queued-draft editing. Keyboard and
+ * client events both dispatch semantic events through this reducer.
  */
 
 /** Esc pressed again within this window of the arming Esc opens walk-back. */
@@ -15,7 +12,7 @@ export interface InputState {
   activeTurns: number;
   /** Timestamp of the Esc that armed walk-back, or null. */
   escArmedAt: number | null;
-  /** Drafts queued (Tab / /queue) to send after the current turn, FIFO. */
+  /** Drafts queued by the queue action or /queue, in FIFO order. */
   queue: string[];
   /** Walk-back picker overlay visibility. */
   walkbackOpen: boolean;
@@ -35,7 +32,7 @@ export type InputMachineEvent =
   | { type: 'turn-start' }
   | { type: 'turn-settled' }
   | { type: 'escape'; now: number; draft: string; hasUserMessages: boolean }
-  | { type: 'tab'; draft: string }
+  | { type: 'queue-shortcut'; draft: string }
   | { type: 'backspace'; draft: string }
   | { type: 'queue'; text: string }
   | { type: 'branch'; draft: string }
@@ -143,7 +140,7 @@ export function reduceInput(state: InputState, event: InputMachineEvent): InputT
       return { state, effects: [{ kind: 'exit' }] };
     }
 
-    case 'tab': {
+    case 'queue-shortcut': {
       if (state.activeTurns === 0) return { state, effects: [] };
       return reduceInput(state, { type: 'queue', text: event.draft });
     }
@@ -165,7 +162,7 @@ export function reduceInput(state: InputState, event: InputMachineEvent): InputT
       const text = event.draft.trim();
       if (!text) {
         return state.activeTurns > 0
-          ? { state, effects: [{ kind: 'hint', text: 'Type the redirect first — Ctrl+B runs it as a parallel branch.' }] }
+          ? { state, effects: [{ kind: 'hint', text: 'Type the redirect first, then run the branch action.' }] }
           : { state, effects: [] };
       }
       if (state.activeTurns > 0) {

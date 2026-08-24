@@ -26,10 +26,13 @@ import {
 } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
 import { createInlineWorkspace } from '@kinu.run/core/identity';
-import { agentDbPath, agentDir, ensureAgentHome, requireStoredAuthConfig } from '../config';
+import {
+  adoptLegacyLocalAgent, agentDbPath, agentDir, ensureAgentHome,
+  requireStoredAuthConfig, resolveAgentRef, resolveLocalAgent,
+} from '../config';
 import { resolveAgentTarget } from '../agent-target';
 import { callAgentRpc } from '../cloud-api';
-import { formatBytes, printError, OK, ACCENT, DIM } from '../display';
+import { formatBytes, printError, OK, WARN, ACCENT, DIM } from '../display';
 import * as v from 'valibot';
 
 interface RestoredArchiveCounts {
@@ -120,8 +123,21 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
   renameSync(partial, dbPath);
   console.log(
     `\n${OK('✓')} Imported workspace ${ACCENT(name)} from ${DIM(file)}`
-    + ` ${DIM(`— ${restored.tables} tables, ${restored.rows} records`)}\n`,
+    + ` ${DIM(`— ${restored.tables} tables, ${restored.rows} records`)}`,
   );
+
+  // A restored workspace belongs to the project it was restored into, exactly as
+  // a created one does. One config key holds one ref, so a name a cloud
+  // workspace already answers to cannot also name this copy: say what that
+  // costs rather than overwriting the ref that is already there.
+  const claimed = resolveAgentRef(name);
+  if (claimed && claimed.mode !== 'local') {
+    console.log(`  ${WARN('!')} "${name}" already names a cloud workspace here, so the restored copy has no local name.`);
+    console.log(`  ${DIM('Re-run with --name to give it one.')}\n`);
+    return;
+  }
+  const placed = adoptLegacyLocalAgent(name);
+  console.log(`  ${DIM('workspace:')} ${placed.workspaceId} ${DIM('in')} ${placed.cwd}\n`);
 }
 
 async function* cloudArchivePages(name: string): AsyncGenerator<ArchivePage> {
@@ -138,10 +154,7 @@ async function* cloudArchivePages(name: string): AsyncGenerator<ArchivePage> {
 }
 
 async function* localArchivePages(name: string): AsyncGenerator<ArchivePage> {
-  const dbPath = agentDbPath(name);
-  if (!existsSync(dbPath)) {
-    throw new Error(`Workspace "${name}" not found.`);
-  }
+  const { dbPath } = resolveLocalAgent(name, { adopt: false });
   const db = new Database(dbPath, { readonly: true });
   try {
     const sql = archiveSqlFromDatabase(db);

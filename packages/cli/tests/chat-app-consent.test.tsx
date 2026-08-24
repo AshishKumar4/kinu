@@ -25,12 +25,13 @@ describe('ChatApp consent ownership', () => {
       },
     });
     const screen = await mountChat(controlled.client);
-    screen.mockInput.pressKey('g', { ctrl: true });
+    await screen.mockInput.typeText('/settings');
+    screen.mockInput.pressEnter();
     await screen.waitFor('settings below consent', () => screen.frame().includes('Filter settings'));
     controlled.emit({ type: 'turn-start', kind: 'user', text: 'run the suite' });
     await screen.waitFor('the consent overlay', () => screen.frame().includes('Use your PC?'));
     await screen.mockInput.typeText('hidden draft');
-    screen.mockInput.pressKey('p', { ctrl: true });
+    screen.mockInput.pressKey('l', { ctrl: true });
     screen.mockInput.pressTab();
     await screen.renderOnce();
     expect(screen.frame()).not.toContain('hidden draft');
@@ -61,7 +62,8 @@ describe('ChatApp consent ownership', () => {
       },
     });
     const screen = await mountChat(controlled.client);
-    screen.mockInput.pressKey('g', { ctrl: true });
+    await screen.mockInput.typeText('/settings');
+    screen.mockInput.pressEnter();
     await screen.waitFor('settings below consent', () => screen.frame().includes('Filter settings'));
     controlled.emit({ type: 'turn-start', kind: 'user', text: 'run the suite' });
     await screen.waitFor('consent above settings', () => screen.frame().includes('Use your PC?'));

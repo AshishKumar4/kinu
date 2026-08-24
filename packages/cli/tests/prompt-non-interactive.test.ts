@@ -38,7 +38,8 @@ interface CliResult {
 function runDetachedCli(args: string[], home: string, timeoutMs = 20_000): Promise<CliResult> {
   return new Promise((resolvePromise) => {
     const child = spawn(process.execPath, [cliBin, ...args], {
-      cwd: repoRoot,
+      // The CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo.
+      cwd: tempHome(),
       detached: true,
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env, KINU_HOME: home },

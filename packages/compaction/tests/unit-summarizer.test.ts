@@ -1,30 +1,13 @@
-/** The bounded model summarizer (H1 latent-hang fix): a hung provider call
- *  rejects at the wall-clock budget instead of wedging the awaited
- *  transformContext, and the extension degrades to deterministic previews so
- *  the turn always proceeds. */
+/** The model summarizer waits for provider completion unless its caller
+ * cancels the surrounding work. Elapsed time alone never fails an active fold. */
 
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test, vi } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModel } from 'ai';
 import type { ModelCallReport } from '@kinu.run/core';
 import type { LanguageModelV3GenerateResult } from '@ai-sdk/provider';
-import { createCompactionExtension, createModelSummarizer } from '../src/index';
-import type { CompactionProfile } from '../src/index';
-import { history, memoryArchive, memoryPorts } from './helpers';
+import { createModelSummarizer } from '../src/index';
 
-/** A model whose generate call NEVER resolves on its own — it settles only
- *  when the request's abortSignal fires (exactly how a hung provider fetch
- *  behaves under AbortSignal.timeout). */
-function hangingModel(): LanguageModel {
-  return new MockLanguageModelV3({
-    doGenerate: (options) =>
-      new Promise((_, reject) => {
-        const signal = options.abortSignal;
-        if (signal?.aborted) { reject(signal.reason); return; }
-        signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
-      }),
-  });
-}
 
 /** One completed fold, typed off the provider spec so the double cannot drift
  *  from what a real provider returns. */
@@ -38,12 +21,48 @@ const FOLDED: LanguageModelV3GenerateResult = {
   warnings: [],
 };
 
+function deferredModel() {
+  const deferred = Promise.withResolvers<LanguageModelV3GenerateResult>();
+  const started = Promise.withResolvers<void>();
+  return {
+    model: () => new MockLanguageModelV3({
+      doGenerate: () => {
+        started.resolve();
+        return deferred.promise;
+      },
+    }),
+    started: started.promise,
+    complete: () => deferred.resolve(FOLDED),
+  };
+}
+
+function failingModel(): LanguageModel {
+  return new MockLanguageModelV3({
+    doGenerate: async () => {
+      throw new Error('provider connection failed');
+    },
+  });
+}
+
 describe('createModelSummarizer', () => {
-  test('a hanging model call rejects at the timeout budget', async () => {
-    const summarize = createModelSummarizer(hangingModel, 25);
-    const started = Date.now();
-    await expect(summarize('summarize this')).rejects.toThrow();
-    expect(Date.now() - started).toBeLessThan(5_000);
+  test('waits for provider completion without an elapsed deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const deferred = deferredModel();
+      let settled = false;
+      const pending = createModelSummarizer(deferred.model)('summarize this')
+        .then((result) => {
+          settled = true;
+          return result;
+        });
+      await deferred.started;
+      vi.advanceTimersByTime(600_001);
+      expect(settled).toBe(false);
+      deferred.complete();
+      expect(await pending).toBe('folded');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test('a completed fold reports one model_call under the `compaction` producer', async () => {
@@ -54,7 +73,6 @@ describe('createModelSummarizer', () => {
     const reports: ModelCallReport[] = [];
     const summarize = createModelSummarizer(
       () => new MockLanguageModelV3({ doGenerate: async () => FOLDED }),
-      undefined,
       { source: 'compaction', report: (report) => { reports.push(report); } },
     );
 
@@ -65,43 +83,13 @@ describe('createModelSummarizer', () => {
     expect(reports[0]?.usage).toMatchObject({ input: 4_000, output: 120 });
   });
 
-  test('a fold that never completed reports nothing — an aborted call cost nothing', async () => {
+  test('a provider failure reports no model_call usage', async () => {
     const reports: ModelCallReport[] = [];
-    const summarize = createModelSummarizer(hangingModel, 25, {
+    const summarize = createModelSummarizer(failingModel, {
       source: 'compaction', report: (report) => { reports.push(report); },
     });
-    await expect(summarize('fold this')).rejects.toThrow();
+    await expect(summarize('fold this')).rejects.toThrow('provider connection failed');
     expect(reports).toEqual([]);
   });
 
-  test('a hanging summarizer never blocks transformContext — the turn proceeds on deterministic previews', async () => {
-    const profile: CompactionProfile = {
-      preset: 'custom',
-      triggerPercent: 85,
-      targetPercent: 30,
-      recentToolTokens: 2_000,
-      summarizerConcurrency: 2,
-    };
-    const extension = createCompactionExtension({
-      ports: memoryPorts(),
-      archive: memoryArchive(),
-      summarize: createModelSummarizer(hangingModel, 25),
-      ephemeral: { dropSuperseded: () => 0 },
-      profile,
-    });
-    if (!extension.transformContext) throw new Error('extension must implement transformContext');
-
-    // 'force' guarantees a rebuild whose summary jobs all hit the hung model.
-    const transformed = await extension.transformContext({
-      sessionKey: 'hang-test',
-      messages: history(12, 3_000),
-      system: 'system prompt',
-      contextWindow: 10_000,
-      trigger: 'force',
-    });
-    // The plan applied without a single LLM summary — pruned history returned,
-    // not a hang and not a throw.
-    expect(transformed).toBeDefined();
-    expect(transformed!.length).toBeGreaterThan(0);
-  }, 10_000);
 });

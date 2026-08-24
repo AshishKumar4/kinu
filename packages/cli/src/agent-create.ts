@@ -4,7 +4,7 @@ import { generateText } from 'ai';
 import {
   WORKSPACE_TITLE_SYSTEM_PROMPT,
   workspaceTitlePrompt,
-  createAgentConfigStore,
+  changeActiveRole, createAgentConfigStore,
   fallbackWorkspaceIdentity,
   initWorkspaceSchema,
   parseWorkspaceTitle,
@@ -12,18 +12,24 @@ import {
   type ReasoningEffort,
   type SuggestedWorkspaceIdentity,
 } from '@kinu.run/core';
+import { loadActiveProfile } from './profiles';
 import { createWorkspace } from '@kinu.run/core/identity';
 import { diagnostics, renderThrownChain } from '@kinu.run/core/obs';
 import { makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
 import {
   agentDbPath,
   agentDir,
+  canonicalProjectRoot,
+  defaultVirtualWorkspaceId,
   ensureAgentHome,
   loadConfigFile,
+  localWorkspaceMembers,
   requireAuthConfig,
   requireLLMConfig,
+  resolveAgentRef,
   resolveLLMConfig,
   upsertAgentConfig,
+  validateWorkspaceId,
   writeAliasShim,
   type AgentMode,
 } from './config';
@@ -51,6 +57,12 @@ export interface CreateCliAgentInput {
   origin?: string;
   allowInteractiveAuth?: boolean;
   reasoningEffort?: ReasoningEffort;
+  role?: string;
+  /** Physical project directory. Defaults to the invocation cwd. */
+  cwd?: string;
+  /** Virtual workspace to join, existing or new. Defaults to the project's own
+   *  label, so two `kinu create` calls in one directory produce peers. */
+  workspaceId?: string;
 }
 
 export interface CreatedCliAgent {
@@ -61,6 +73,11 @@ export interface CreatedCliAgent {
   model?: string;
   cloudName?: string;
   dbPath?: string;
+  cwd?: string;
+  workspaceId?: string;
+  /** Agents already in that virtual workspace — empty when this call opened a
+   *  new one, populated when it joined an existing one as a peer. */
+  peers?: string[];
   aliasPath?: string;
 }
 
@@ -99,7 +116,7 @@ export interface CreateCloudAgentFromMissionOptions {
 }
 
 export async function createCloudAgentFromMission(
-  input: Pick<CreateCliAgentInput, 'name' | 'displayName' | 'nameOrigin' | 'purpose' | 'model' | 'baseUrl' | 'auth' | 'reasoningEffort'>,
+  input: Pick<CreateCliAgentInput, 'name' | 'displayName' | 'nameOrigin' | 'purpose' | 'model' | 'baseUrl' | 'auth' | 'reasoningEffort' | 'role'>,
   options: CreateCloudAgentFromMissionOptions,
 ): Promise<CloudAgent> {
   const userNamed = Boolean(input.name) && input.nameOrigin !== 'auto';
@@ -119,6 +136,7 @@ export async function createCloudAgentFromMission(
   };
   if (input.model) createInput.model = input.model;
   if (input.reasoningEffort) createInput.reasoningEffort = input.reasoningEffort;
+  if (input.role) createInput.role = input.role;
   return options.create(createInput);
 }
 
@@ -174,17 +192,27 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   }
 
   const name = input.name;
-  if (!name) throw new Error('Workspace name required for local workspaces.');
+  if (!name) throw new Error('Agent name required for a local workspace.');
   const displayName = input.displayName ?? name;
-  const dir = agentDir(name);
+  const cwd = canonicalProjectRoot(input.cwd);
+  const workspaceId = input.workspaceId ?? defaultVirtualWorkspaceId(cwd);
+  validateWorkspaceId(workspaceId);
+  const claimed = resolveAgentRef(name);
+  if (claimed && claimed.mode !== 'local') {
+    throw new Error(`"${name}" is already a cloud workspace. Choose another name.`);
+  }
   const dbPath = agentDbPath(name);
-  if (existsSync(dbPath)) throw new Error(`Agent "${name}" already exists.`);
+  if (existsSync(dbPath)) throw new Error(nameTaken(name, dbPath, claimed));
+  // Read before the workspace exists, so it reports who this agent JOINS.
+  const peers = localWorkspaceMembers(workspaceId, cwd).map((peer) => peer.name);
   const llmConfig = requireLLMConfig(input);
-  mkdirSync(dir, { recursive: true });
+  mkdirSync(agentDir(name), { recursive: true });
   const db = new Database(dbPath);
+  let identityId: string | undefined;
   try {
     db.exec('PRAGMA journal_mode = WAL');
     const rt = await createWorkspace(db, { name: displayName, purpose, llm: llmConfig });
+    identityId = rt.storage.sql<{ id: string }>`SELECT id FROM workspace_identity LIMIT 1`[0]?.id;
     // Every table a workspace has, on any backend — one list, in core.
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const agentConfig = createAgentConfigStore(rt.storage.sql);
@@ -193,6 +221,17 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
     if (reasoningEffort) agentConfig.setReasoningEffort(reasoningEffort);
     agentConfig.setDisplayName(displayName);
     agentConfig.setNameOrigin(input.nameOrigin ?? 'user');
+    if (input.role && input.role !== 'general') {
+      const changed = changeActiveRole({
+        config: agentConfig,
+        envelope: await loadActiveProfile(),
+        to: input.role,
+        actor: 'user',
+      });
+      if (changed.kind !== 'applied') {
+        throw new Error(`role "${input.role}" was refused: ${changed.kind === 'refused' ? changed.reason : changed.kind}`);
+      }
+    }
   } finally {
     db.close();
   }
@@ -203,10 +242,26 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
     displayName,
     localName: name,
     alias: input.alias || undefined,
+    cwd,
+    workspaceId,
+    identityId,
   });
   const aliasPath = input.alias ? writeAliasShim(name, input.alias) : undefined;
   ensureLocalDaemonRunning();
-  return { name, displayName, mode: 'local', purpose, model: llmConfig.model, dbPath, aliasPath };
+  return {
+    name, displayName, mode: 'local', purpose, model: llmConfig.model,
+    dbPath, aliasPath, cwd, workspaceId, peers,
+  };
+}
+
+/** An agent name is a directory under `~/.kinu`, so it is unique per machine.
+ *  Say which project and workspace already hold it: creating the same name in a
+ *  second project is exactly how a user reaches this. */
+function nameTaken(name: string, dbPath: string, held: { cwd?: string; workspaceId?: string } | null): string {
+  const placement = held?.cwd && held.workspaceId
+    ? ` It belongs to workspace "${held.workspaceId}" in ${held.cwd}.`
+    : '';
+  return `Workspace "${name}" already exists at ${dbPath}.${placement} Choose another name.`;
 }
 
 async function generateTitleJson(mission: string, opts: SuggestAgentIdentityOptions): Promise<string> {

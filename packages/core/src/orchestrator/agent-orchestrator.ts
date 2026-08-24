@@ -20,10 +20,9 @@
 // the only evolution that ticks inside a single long autonomous turn.
 //
 //   TURN LANE — the outcome review (classifier → reflection/extraction/lesson).
-//     Seconds to ~a minute. `settleEvolution()` JOINS this lane, bounded by
-//     `settleTimeoutMs` (default DEFAULT_SETTLE_TIMEOUT_MS); whatever is still
-//     running when the bound expires is LOGGED by label and abandoned, never
-//     silently waited on forever.
+//     Seconds to minutes. `settleEvolution()` JOINS this lane with no elapsed
+//     bound: a host that runs it is a host that can afford it, and evolution
+//     work is never abandoned by the clock (owner ruling, 2026-08).
 //     A `oneShot` host does not run it at all. Joining it was the largest item
 //     on that process's exit tail — 64.9s of `evolution.settled
 //     waitedOn:"Turn review"` against a 27.4s turn (TB2.1, 2026-08-20) — so the
@@ -78,7 +77,6 @@ import { nanoid } from '../utils/nanoid';
 import { workModeForTurnMetadata, type WorkMode } from '../prompting/surface';
 import type { JsonObject } from '../utils/json';
 import { diagnostics, toKinuError } from '../obs/index';
-import { LLM_CALL_TIMEOUT_MS } from '../config';
 
 /**
  * Whether an arriving user message is a genuine conversational follow-up —
@@ -103,16 +101,6 @@ export type TurnContinuity = 'conversation' | 'independent_task';
  *  window is measured against when a host states no interval of its own. */
 export const DEFAULT_SESSION_REFLECTION_INTERVAL = 5;
 
-/** How long `settleEvolution` waits for the turn lane before it gives up and
- *  says what it dropped. The lane is the outcome classifier plus the
- *  reflection/extraction calls it opens — several sequential completions — so
- *  the join bound is a small multiple of the sanctioned per-call bound: three
- *  LLM_CALL_TIMEOUT_MS, one for each sequential call the slowest chain plausibly
- *  makes. It was 120_000, which abandoned honest evolution work and logged it as
- *  dropped; then it borrowed core's former per-turn envelope, which no longer
- *  exists (owner ruling, 2026-08-21: no wall clock over a turn). */
-export const DEFAULT_SETTLE_TIMEOUT_MS = 3 * LLM_CALL_TIMEOUT_MS;
-
 export interface AgentOrchestratorDeps {
   host: BackendHost;
   engine: Pick<
@@ -136,6 +124,11 @@ export interface AgentOrchestratorDeps {
   /** Turns between session-level reflections (default
    *  DEFAULT_SESSION_REFLECTION_INTERVAL). */
   sessionReflectionInterval?: number;
+  /** The delegatable role ids as the active catalog offers them, read lazily.
+   *  Stamped onto every delegation-opportunity row, because a zero conversion
+   *  under an empty catalog is a wiring fact and one under a full catalog is
+   *  behaviour. Absent reads as an empty list — stated, never guessed. */
+  roleCatalog?: () => readonly string[] | undefined;
   /** This host runs ONE task turn and exits (`kinu exec` / `kinu run`),
    *  so it cannot finish the cadence lane and never STARTS it — see the exit
    *  contract above. Its window stays open and the local scheduler daemon runs
@@ -143,8 +136,6 @@ export interface AgentOrchestratorDeps {
    *  graded from a follow-up is a separate, per-turn question (TurnContinuity),
    *  because the Durable Object can afford the pass for a one-shot request. */
   oneShot?: boolean;
-  /** Turn-lane join bound (default DEFAULT_SETTLE_TIMEOUT_MS). */
-  settleTimeoutMs?: number;
 }
 
 export class AgentOrchestrator {
@@ -204,7 +195,8 @@ export class AgentOrchestrator {
   private readonly drains: DrainScheduler;
   /** TURN LANE: turn-level evolution this instance dispatched and has not yet
    *  settled, by label. Detached so it never blocks a turn; tracked so a
-   *  process about to exit can wait for it under a bound (settleEvolution). */
+   *  process about to exit can join it (settleEvolution, with no elapsed
+   *  bound). */
   private readonly inFlight = new Map<Promise<void>, string>();
   /** CADENCE LANE: the session-evolution pass this instance is running, or
    *  null. At most one at a time — a second would re-run the same window,
@@ -216,7 +208,6 @@ export class AgentOrchestrator {
    *  window's latch would let a no-op drain hide a window that had just
    *  filled. */
   private shadowTrials: Promise<void> | null = null;
-  private readonly settleTimeoutMs: number;
 
   constructor(private readonly deps: AgentOrchestratorDeps) {
     this.acc = new TurnAccumulator(deps.sinks, deps.budget);
@@ -228,7 +219,9 @@ export class AgentOrchestrator {
       () => this.activeWorkMode,
     );
     this.reflectionInterval = deps.sessionReflectionInterval ?? DEFAULT_SESSION_REFLECTION_INTERVAL;
-    this.settleTimeoutMs = deps.settleTimeoutMs ?? DEFAULT_SETTLE_TIMEOUT_MS;
+    // Read per opportunity, never cached: the catalog can change between turns,
+    // and the row must name what was available when the hint was delivered.
+    if (deps.roleCatalog) this.steering.observeRoles(deps.roleCatalog);
     this.drains = new DrainScheduler(
       () => this.drainPendingEvents(),
       (fn, ms) => deps.host.setTimer(fn, ms),
@@ -382,8 +375,8 @@ export class AgentOrchestrator {
    * instead and the next host that can afford the work runs it, which is
    * exactly what the cadence lane's shadow-trial queue already does.
    *
-   * The mode is structural — `deps.oneShot`, fixed at construction from the
-   * host's SessionSurface (jobs/threshold.ts) — never sniffed at the call site.
+   * The mode is structural: `deps.oneShot`, fixed at construction from the
+   * host's InvocationSurface, never inferred inside the review path.
    */
   private dispatchReview(turn: CompletedTurn, followup: string | null): void {
     if (this.deps.oneShot) {
@@ -482,58 +475,31 @@ export class AgentOrchestrator {
 
   /**
    * Wait for the TURN LANE this instance dispatched — the outcome review and
-   * the sampled shadow eval — under `settleTimeoutMs`. Evolution makes LLM
-   * calls that outlive a turn, so a process about to exit must wait or the
-   * work is simply killed, which is what made headless runs produce no
-   * evolution at all. But waiting without a bound is how one exec invocation
-   * came to own a whole lifetime cycle's wall clock, so the bound is real and
-   * what it abandons is logged by name rather than silently dropped.
+   * the sampled shadow eval — with NO elapsed bound. Evolution makes LLM calls
+   * that outlive a turn, so a process about to exit must wait or the work is
+   * simply killed, which is what made headless runs produce no evolution at
+   * all. A host that joins is a host that chose to run the lane; abandoning
+   * honest work because it takes long would only relabel the old exit-tail
+   * defect. Work still in flight when this returns never happens: there is no
+   * such path here.
    *
    * The cadence lane is deliberately NOT joined here (see the exit contract in
    * the module header). Neither window needs flushing: both are durable.
    */
   async settleEvolution(): Promise<void> {
     const started = Date.now();
-    const deadline = started + this.settleTimeoutMs;
     // Named on the SUCCESS path too: an exit tail is silent exactly when it is
     // slow, and 100-600s of unattributed post-answer wall has been chased
     // across environments twice (TB2.1, 2026-08-20).
     const waitedOn = [...new Set(this.inFlight.values())];
     while (this.inFlight.size > 0) {
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) {
-        const abandoned = [...new Set(this.inFlight.values())].join(', ');
-        diagnostics.failure(
-          'evolution.settle_timed_out',
-          toKinuError({
-            doing: 'wait for the turn lane to settle before exit',
-            cause: new Error(`still running: ${abandoned}`),
-            otherwise: 'timeout',
-          }),
-          { timeoutMs: this.settleTimeoutMs, abandoned },
-        );
-        return;
-      }
-      await this.raceInFlight(remaining);
+      // A lap over one snapshot; work dispatched by settled work lands in the
+      // map during the await and is joined by the next lap.
+      await Promise.all(this.inFlight.keys());
     }
     const waitedMs = Date.now() - started;
     if (waitedMs > 1_000) {
       diagnostics.event('evolution.settled', { waitedMs, waitedOn: waitedOn.join(', ') });
-    }
-  }
-
-  /** Resolve when every currently-tracked turn-lane promise settles, or when
-   *  `ms` elapses — whichever first. The timer is always cleared, so a losing
-   *  race leaves nothing pending on the platform. */
-  private async raceInFlight(ms: number): Promise<void> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      await Promise.race([
-        Promise.all(this.inFlight.keys()),
-        new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); }),
-      ]);
-    } finally {
-      if (timer !== undefined) clearTimeout(timer);
     }
   }
 

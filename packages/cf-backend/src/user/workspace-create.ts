@@ -37,6 +37,7 @@ export interface CreateCloudWorkspaceInput {
   purpose?: string;
   model?: string;
   reasoningEffort?: ReasoningEffort;
+  role?: string;
 }
 
 export interface CreateCloudWorkspaceOptions {
@@ -72,6 +73,7 @@ export async function createCloudWorkspaceForUser(
     };
     if (purpose) initialization.mission = purpose;
     if (input.reasoningEffort) initialization.reasoningEffort = input.reasoningEffort;
+    if (input.role) initialization.role = input.role;
     await initializeOrchestrator(initialization);
     if (identity.nameOrigin === 'auto' && purpose) {
       scheduleCloudAgentDisplayNameGeneration(env, userDO, caller, entry.name, purpose, model, options);
@@ -212,10 +214,14 @@ interface InitializeOrchestratorInput {
   mission?: string;
   model?: string;
   reasoningEffort?: ReasoningEffort;
+  role?: string;
 }
 
 async function initializeOrchestrator(input: InitializeOrchestratorInput): Promise<void> {
-  const { env, userId, userDO, agentName, displayName, nameOrigin, mission, model, reasoningEffort } = input;
+  const {
+    env, userId, userDO, agentName, displayName, nameOrigin,
+    mission, model, reasoningEffort, role,
+  } = input;
   // SAFETY: Env.OrchestratorAgent is generated from the OrchestratorAgent binding and exposes its RPC methods.
   const orchestrator = env.OrchestratorAgent.get(
     env.OrchestratorAgent.idFromName(agentName),
@@ -234,6 +240,7 @@ async function initializeOrchestrator(input: InitializeOrchestratorInput): Promi
   await orchestrator.resetWorkspaceBaseline();
   if (model) await orchestrator.setModel(model);
   if (reasoningEffort) await orchestrator.setReasoningEffort(reasoningEffort);
+  if (role && role !== 'general') await orchestrator.setRole(role);
   // The agent takes the first turn. Last, so the soul, model and effort it runs
   // under are all already durable — and the mission it reads is the one the row
   // holds, not a second copy passed down this call.

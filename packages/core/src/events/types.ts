@@ -18,7 +18,9 @@ import type { EscalationSnapshot } from '../execution/escalation';
 import type { MissionBudgetRefusal } from '../mission-budget';
 import type { HeadFileChangeSet } from '../heads/types';
 import type { Usage } from '../usage';
-import type { SpendSource } from './model-call';
+import type {
+  SpendSource, ModelOperationKind, ModelOperationOutcome, ModelOperationPhase,
+} from './model-call';
 
 /**
  * What one finished step cost — the provider's own report, plus what we priced
@@ -43,6 +45,7 @@ export type RunEventType =
   | 'tool_call_end'
   | 'step_finish'
   | 'model_call'
+  | 'model_operation'
   | 'head_split'
   | 'head_merge'
   | 'head_abandoned'
@@ -52,6 +55,7 @@ export type RunEventType =
   | 'context_budget'
   | 'file_edit'
   | 'turn_steering'
+  | 'delegation_opportunity'
   | 'completion_gate'
   | 'craft_cycle'
   | 'execution_recovery'
@@ -154,6 +158,38 @@ export type RunEvent =
       spec?: string;
       modelId?: string;
     })
+  /** One direct model operation's start, or its end.
+   *
+   *  The `model_call` row above is written after a call returns, so a frame the
+   *  platform destroys mid-call leaves nothing: the durable trail could not say
+   *  which operation was in flight, and a killed evolution pass read exactly
+   *  like one that never started. This pair fixes that, in the shape
+   *  `run_start`/`run_end` already uses one level up — a start whose
+   *  `operationId` never reaches an end row is the visible signature of a dead
+   *  process (`RunEventRecorder.unterminatedModelOperations`), and no elapsed
+   *  reading is taken anywhere to decide it.
+   *
+   *  `usage` rides the END row alone, because usage does not exist until the
+   *  provider answers. It is deliberately the same normalized report
+   *  `model_call` carries rather than a second accounting: the two rows are
+   *  written from one value on one line, and the census reads `model_call`
+   *  alone so this pair can never double-count it. */
+  | (RunEventBase & {
+      type: 'model_operation';
+      /** Stable across the pair; unique in the log. */
+      operationId: string;
+      source: SpendSource;
+      op: ModelOperationKind;
+      phase: ModelOperationPhase;
+      /** End rows only. */
+      outcome?: ModelOperationOutcome;
+      /** End rows only, and `{}` where the provider reported nothing. */
+      usage?: Usage;
+      spec?: string;
+      modelId?: string;
+      /** Failed end rows only: the cause chain, bounded by the producer. */
+      error?: string;
+    })
   | (RunEventBase & { type: 'head_split'; rootId: string; headIds: string[]; rationale: string })
   /** A split settled. `headsWithFindings` vs `headCount` is how many forks came
    *  back with something against how many returned empty, `totalTokens` is what
@@ -226,6 +262,45 @@ export type RunEvent =
       /** The model did what the steer asked: reached for `agents` after a
        *  delegation steer, or called something other than the repeating call
        *  after a repeat steer. */
+      converted: boolean })
+  /** A delegation opportunity, and what the model did with it.
+   *
+   *  SEPARATE FROM `turn_steering` ON PURPOSE, and the reason is denominators.
+   *  A `turn_steering` row exists only where a mechanical trigger fired, so its
+   *  count IS the instructed denominator and every scorer built on it reads that
+   *  way. Autonomous delegation fires no trigger, so folding it in would inflate
+   *  the instructed denominator with turns nothing instructed — the exact
+   *  laundering of zero conversion into apparent success that measuring the two
+   *  arms separately exists to prevent.
+   *
+   *  `surface` is which arm: `hint` rows are the INSTRUCTED denominator and
+   *  `converted` is its numerator; `unprompted` rows are the autonomous
+   *  numerator, against `turn_end` as the denominator every per-turn row in this
+   *  union already uses.
+   *
+   *  `hintId` is a digest of the exact text delivered, so a reworded hint is a
+   *  different id and a conversion rate is never averaged across two different
+   *  things. `roles` is the role catalog the agent could actually have delegated
+   *  to at that moment — a zero conversion under an empty catalog is a wiring
+   *  fact, not a behavioural one, and without the list the two are
+   *  indistinguishable. */
+  | (RunEventBase & { type: 'delegation_opportunity';
+      /** Stable id for this occasion — joins the hint to what followed it. */
+      opportunityId: string;
+      /** Where the opportunity came from: a delivered hint, or the model's own
+       *  reach on a turn no hint was delivered to. */
+      surface: 'hint' | 'unprompted';
+      /** Digest of the hint text delivered (`hint` rows only). */
+      hintId?: string;
+      /** Which delegation hint fired (`hint` rows only). */
+      trigger?: 'long_turn_no_delegation' | 'turn_start_no_delegation';
+      /** Step boundary the opportunity was observed at. */
+      step: number;
+      /** Role ids the catalog offered at that moment. Empty means the agent had
+       *  no role catalog to delegate into — see the note above. */
+      roles: string[];
+      /** An `agents` call followed. Always true on an `unprompted` row, which is
+       *  what that row records; on a `hint` row it is the conversion. */
       converted: boolean })
   /** The one-shot completion gate fired: the harness refused to let the run end
    *  on the model's own say-so and handed it freshly observed state first.
@@ -306,6 +381,15 @@ export type TurnSteeringRecord =
   Omit<Extract<RunEvent, { type: 'turn_steering' }>, keyof RunEventBase | 'type'>;
 
 export type TurnSteeringTrigger = TurnSteeringRecord['trigger'];
+
+/** One delegation opportunity — what the steering object reports and what the
+ *  settle spine writes, derived from the durable schema for the same reason the
+ *  steering record is: one declaration, no drift. */
+export type DelegationOpportunityRecord =
+  Omit<Extract<RunEvent, { type: 'delegation_opportunity' }>, keyof RunEventBase | 'type'>;
+
+/** Which arm of the delegation measurement a row belongs to. */
+export type DelegationSurface = DelegationOpportunityRecord['surface'];
 
 /** One run's completion gate — derived from the durable schema for the same
  *  reason as the steering record: one declaration, no drift. */

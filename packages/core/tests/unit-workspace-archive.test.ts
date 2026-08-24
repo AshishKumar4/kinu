@@ -22,7 +22,7 @@ import {
 } from '../src/index';
 import { makeSql, makeExecRaw } from './helpers';
 import { createWorkspaceBundle } from './helpers';
-import { SessionSearchStore } from "../src/memory/session-search";
+import { ConversationSearchStore } from "../src/memory/conversation-search";
 
 function fresh() {
   const db = new Database(':memory:');
@@ -52,7 +52,7 @@ async function seeded() {
   await ws.vfs.mkdir('notes', { recursive: true });
   await ws.vfs.writeFile('notes/plan.md', 'a plan with a "quote" and a \\ backslash');
   // External-content FTS5 over `messages`, maintained by triggers.
-  new SessionSearchStore(ws.sql).search('sqlite');
+  new ConversationSearchStore(ws.sql).search('sqlite');
   return { ...ws, bytes };
 }
 
@@ -90,7 +90,7 @@ describe('workspace archive', () => {
     const target = fresh();
     await restoreWorkspaceArchive(target.archive, lines);
 
-    const hits = new SessionSearchStore(target.sql).search('sqlite');
+    const hits = new ConversationSearchStore(target.sql).search('sqlite');
     expect(hits.length).toBe(5);
     // The FTS shadow tables are the index's private storage: rebuilt on the
     // target, never carried as rows.

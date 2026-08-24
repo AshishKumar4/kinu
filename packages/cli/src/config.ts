@@ -3,8 +3,12 @@
  * `kinu setup`; direct LLM env vars remain as explicit local overrides.
  */
 
-import { existsSync, readFileSync, mkdirSync, readdirSync, statSync, writeFileSync, chmodSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import {
+  chmodSync, existsSync, readFileSync, mkdirSync, readdirSync, realpathSync,
+  writeFileSync, unlinkSync,
+} from 'node:fs';
+import { basename, join, resolve } from 'node:path';
+import { Database } from 'bun:sqlite';
 import {
   ANTHROPIC_BASE_URL,
   ANTHROPIC_DEFAULT_MODEL,
@@ -15,8 +19,10 @@ import {
   OPENAI_DEFAULT_MODEL,
   OPENROUTER_BASE_URL,
   JsonObjectSchema,
-  type LLMProviderConfig,
+  ProfileCatalogEnvelopeSchema,
   type JsonObject,
+  type LLMProviderConfig,
+  type ProfileCatalogEnvelope,
   type ReasoningEffort,
 } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
@@ -60,7 +66,7 @@ const RESERVED_ALIASES = new Set([
   'alias',
   'unalias',
   'aliases',
-  'sessions',
+  'transcripts',
   'desktop',
   'daemon',
   'connect',
@@ -81,6 +87,15 @@ export interface KinuAgentConfig {
   alias?: string;
   localName?: string;
   cloudName?: string;
+  /** Canonical physical project directory this local agent works in. Recorded
+   *  at creation; its file and shell plane binds here. */
+  cwd?: string;
+  /** Virtual workspace label grouping peer agents inside `cwd`. Metadata: it
+   *  names a group, never a directory — state stays at `~/.kinu/<name>`. */
+  workspaceId?: string;
+  /** `workspace_identity.id` of the database this ref addresses, so a reused
+   *  name cannot silently re-point the ref at a different workspace. */
+  identityId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -122,6 +137,9 @@ export interface KinuConfig {
   deviceConnectPromptDismissed?: boolean;
   /** Shadow-git file checkpoints kept per working directory (default 50). */
   checkpointKeep?: number;
+  /** Signed-out profile authority: the one local envelope, canonical when
+   *  no account session governs this machine. Never holds account data. */
+  localProfile?: ProfileCatalogEnvelope;
 }
 
 export interface CloudAuthConfig {
@@ -138,6 +156,9 @@ const KinuAgentConfigSchema = v.object({
   alias: v.optional(v.string()),
   localName: v.optional(v.string()),
   cloudName: v.optional(v.string()),
+  cwd: v.optional(v.string()),
+  workspaceId: v.optional(v.string()),
+  identityId: v.optional(v.string()),
   createdAt: v.string(),
   updatedAt: v.string(),
 });
@@ -184,6 +205,7 @@ const KinuConfigSchema: v.GenericSchema<KinuConfig> = v.object({
   mcpServers: v.optional(v.record(v.string(), McpServerConfigSchema)),
   deviceConnectPromptDismissed: v.optional(v.boolean()),
   checkpointKeep: v.optional(v.number()),
+  localProfile: v.optional(ProfileCatalogEnvelopeSchema),
 });
 
 export function ensureAgentHome(): void {
@@ -195,23 +217,232 @@ export function ensureBinDir(): void {
   mkdirSync(BIN_DIR, { recursive: true });
 }
 
-export function agentDbPath(name: string): string {
-  validateAgentName(name);
-  return join(AGENT_HOME, name, 'agent.db');
+/** The canonical physical project directory: one identity per project, so two
+ *  spellings of the same directory are not two projects.
+ *
+ *  A directory that is not there has no canonical form, and the absolute path is
+ *  the honest answer for it — a project whose directory was moved or removed has
+ *  to read as a different place, not abort the command with a bare `lstat`. */
+export function canonicalProjectRoot(cwd = process.cwd()): string {
+  const absolute = resolve(cwd);
+  return existsSync(absolute) ? realpathSync(absolute) : absolute;
 }
 
+/** A project's default virtual-workspace label — its directory name, slugged.
+ *  A label grouping peer agents, never a path segment. */
+export function defaultVirtualWorkspaceId(cwd = process.cwd()): string {
+  const candidate = basename(canonicalProjectRoot(cwd))
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/gu, '-')
+    .replace(/^-+|-+$/gu, '');
+  return candidate && AGENT_NAME_RE.test(candidate) ? candidate : 'workspace';
+}
+
+/** The one owner of local agent state paths. Nothing else joins AGENT_HOME
+ *  with an agent name. A virtual workspace groups these; it never nests them. */
 export function agentDir(name: string): string {
   validateAgentName(name);
   return join(AGENT_HOME, name);
 }
 
-export function listAgentDirs(): string[] {
+export function agentDbPath(name: string): string {
+  return join(agentDir(name), 'agent.db');
+}
+
+/** A local agent placed in a project: the directory its file and shell plane
+ *  binds to, and the virtual workspace grouping it with its peers. */
+export interface LocalAgentRef {
+  name: string;
+  displayName?: string;
+  cwd: string;
+  workspaceId: string;
+  dbPath: string;
+}
+
+/** `recorded` — placement written when the agent was created. `adopted` — this
+ *  resolve bound a legacy `~/.kinu/<name>` workspace to the caller's project.
+ *  `unplaced` — read without binding anything. */
+export type LocalPlacement = 'recorded' | 'adopted' | 'unplaced';
+
+export interface ResolvedLocalAgent extends LocalAgentRef {
+  placement: LocalPlacement;
+}
+
+/** The ref as a placed local agent, or null when it records no placement —
+ *  which is what makes a legacy workspace belong to no project, rather than to
+ *  whichever directory the CLI happened to start in. */
+function placedRef(agent: KinuAgentConfig): LocalAgentRef | null {
+  if (agent.mode !== 'local' || !agent.cwd || !agent.workspaceId) return null;
+  // A recorded directory that no longer exists places nothing: the planes cannot
+  // bind to it, and treating the ref as placed anyway would drop the agent out
+  // of both this listing and the unplaced one, which is how renaming a project
+  // directory would make its agents disappear from every roster.
+  if (!existsSync(agent.cwd)) return null;
+  const name = agent.localName ?? agent.name;
+  if (!AGENT_NAME_RE.test(name)) return null;
+  return {
+    name,
+    displayName: agent.displayName,
+    cwd: agent.cwd,
+    workspaceId: agent.workspaceId,
+    dbPath: agentDbPath(name),
+  };
+}
+
+/** Every placed local ref, in any project. The machine-wide view: a scheduler
+ *  must not be scoped to the directory it was launched from. */
+export function listLocalRefsAllProjects(): LocalAgentRef[] {
+  return Object.values(loadConfigFile().agents ?? {})
+    .map(placedRef)
+    .filter((ref): ref is LocalAgentRef => ref !== null && existsSync(ref.dbPath))
+    .sort((a, b) => a.workspaceId.localeCompare(b.workspaceId) || a.name.localeCompare(b.name));
+}
+
+/** One project's refs. A legacy workspace with no recorded placement is NOT
+ *  attributed here — attribution is adoption, and adoption is per-agent. */
+export function listLocalRefs(cwd = process.cwd()): LocalAgentRef[] {
+  const root = canonicalProjectRoot(cwd);
+  return listLocalRefsAllProjects().filter((ref) => ref.cwd === root);
+}
+
+/** Peers: the agents sharing one project directory and one workspace label. */
+export function localWorkspaceMembers(workspaceId: string, cwd = process.cwd()): LocalAgentRef[] {
+  return listLocalRefs(cwd).filter((ref) => ref.workspaceId === workspaceId);
+}
+
+export function listAgentDirs(cwd = process.cwd()): string[] {
+  return listLocalRefs(cwd).map((ref) => ref.name);
+}
+
+/** Local workspaces on this machine that no ref places in a project: made
+ *  before placement was recorded. Readable, and adopted one at a time. */
+export function listLegacyAgentNames(): string[] {
   if (!existsSync(AGENT_HOME)) return [];
-  return readdirSync(AGENT_HOME).filter(name => {
-    if (!AGENT_NAME_RE.test(name)) return false;
-    const dir = join(AGENT_HOME, name);
-    return statSync(dir).isDirectory() && existsSync(join(dir, 'agent.db'));
+  const placed = new Set(listLocalRefsAllProjects().map((ref) => ref.name));
+  return readdirSync(AGENT_HOME)
+    .filter((name) => AGENT_NAME_RE.test(name)
+      && !placed.has(name)
+      && existsSync(join(AGENT_HOME, name, 'agent.db')))
+    .sort();
+}
+
+/** The durable id of a local workspace database, or null when it carries none.
+ *  `agent_identity` is the pre-rename table: a local workspace is a file that
+ *  outlives the rename, so adoption keys on it too. */
+export function readWorkspaceIdentityId(dbPath: string): string | null {
+  if (!existsSync(dbPath)) return null;
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    for (const table of ['workspace_identity', 'agent_identity']) {
+      const present = db.query<{ n: number }, [string]>(
+        `SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = ?`,
+      ).get(table);
+      if (!present || present.n === 0) continue;
+      const row = db.query<{ id: string }, []>(`SELECT id FROM ${table} LIMIT 1`).get();
+      if (row?.id) return row.id;
+    }
+    return null;
+  } finally {
+    db.close();
+  }
+}
+
+export interface AdoptLegacyAgentOptions {
+  cwd?: string;
+  workspaceId?: string;
+}
+
+/**
+ * Bind ONE legacy `~/.kinu/<name>` workspace to a project, keyed on that
+ * database's own workspace identity. Bounded on purpose: it takes a name, so
+ * nothing can sweep every legacy directory into whichever directory the CLI
+ * happened to start in. An already-placed ref comes back unchanged.
+ */
+export function adoptLegacyLocalAgent(name: string, opts: AdoptLegacyAgentOptions = {}): LocalAgentRef {
+  const dbPath = agentDbPath(name);
+  if (!existsSync(dbPath)) {
+    throw new Error(`Workspace "${name}" not found at ${dbPath}; there is nothing to adopt.`);
+  }
+  const existing = loadConfigFile().agents?.[name];
+  if (existing && existing.mode !== 'local') {
+    throw new Error(`"${name}" is already configured as a cloud workspace.`);
+  }
+  const already = existing ? placedRef(existing) : null;
+  if (already) return already;
+  const cwd = canonicalProjectRoot(opts.cwd);
+  const workspaceId = opts.workspaceId ?? defaultVirtualWorkspaceId(cwd);
+  const saved = upsertAgentConfig({
+    ...existing,
+    name,
+    mode: 'local',
+    displayName: existing?.displayName ?? name,
+    localName: name,
+    cwd,
+    workspaceId,
+    identityId: readWorkspaceIdentityId(dbPath) ?? undefined,
   });
+  return { name, displayName: saved.displayName, cwd, workspaceId, dbPath };
+}
+
+/** A named local workspace has no database. Carries the remedy separately so
+ *  a command renders it as a hint instead of folding it into the message. */
+export class MissingLocalWorkspaceError extends Error {
+  readonly hint: string;
+
+  constructor(workspaceName: string) {
+    super(`Workspace "${workspaceName}" not found.`);
+    this.name = 'MissingLocalWorkspaceError';
+    this.hint = `Create it with: kinu create ${workspaceName}`;
+  }
+}
+
+export interface ResolveLocalAgentOptions {
+  cwd?: string;
+  /** Label to adopt an unplaced workspace into. Default: the project's own. */
+  workspaceId?: string;
+  /** Record the placement for an unplaced workspace. Leave it on for a real
+   *  open; pass false for a read that must not change configuration. */
+  adopt?: boolean;
+}
+
+/**
+ * The one local resolution: the database path plus the project its file and
+ * shell plane binds to. Commands call this instead of joining paths, so the
+ * placement a peer group depends on cannot drift between call sites.
+ */
+export function resolveLocalAgent(input: string, opts: ResolveLocalAgentOptions = {}): ResolvedLocalAgent {
+  const ref = resolveAgentRef(input);
+  if (ref && ref.mode !== 'local') {
+    throw new Error(`"${input}" is a cloud workspace; it has no local database.`);
+  }
+  const name = ref?.localName ?? ref?.name ?? input;
+  const dbPath = agentDbPath(name);
+  if (!existsSync(dbPath)) throw new MissingLocalWorkspaceError(name);
+  const placed = ref ? placedRef(ref) : null;
+  if (ref && placed) {
+    assertIdentityUnchanged(ref, placed);
+    return { ...placed, placement: 'recorded' };
+  }
+  const cwd = canonicalProjectRoot(opts.cwd);
+  const workspaceId = opts.workspaceId ?? defaultVirtualWorkspaceId(cwd);
+  if (opts.adopt === false) {
+    return { name, displayName: ref?.displayName, cwd, workspaceId, dbPath, placement: 'unplaced' };
+  }
+  return { ...adoptLegacyLocalAgent(name, { cwd, workspaceId }), placement: 'adopted' };
+}
+
+/** A ref is bound to one durable workspace. When the recorded identity no
+ *  longer matches the database at that path the name was reused, and carrying
+ *  on would attach one project's history to a different workspace. */
+function assertIdentityUnchanged(agent: KinuAgentConfig, ref: LocalAgentRef): void {
+  if (!agent.identityId) return;
+  const actual = readWorkspaceIdentityId(ref.dbPath);
+  if (actual === null || actual === agent.identityId) return;
+  throw new Error(
+    `Workspace "${ref.name}" at ${ref.dbPath} is not the one recorded for ${ref.cwd}: `
+    + `expected identity ${agent.identityId}, found ${actual}. `
+    + 'Rename one of them, or remove the stale entry from ~/.kinu/config.json.',
+  );
 }
 
 export function loadConfigFile(): KinuConfig {
@@ -277,7 +508,9 @@ function storedAuthConfig(missingTokenMessage: string): CloudAuthConfig {
   return { origin: resolveCloudOrigin(), token, user: config.user };
 }
 
-function sessionExpired(config: KinuConfig): boolean {
+/** True when the stored interactive session's expiry has passed. Shared by
+ *  auth gating and profile authority resolution. */
+export function sessionExpired(config: KinuConfig): boolean {
   if (!config.tokenExpiresAt) return false;
   const expiresAt = Date.parse(config.tokenExpiresAt);
   return Number.isFinite(expiresAt) && expiresAt <= Date.now();
@@ -311,6 +544,7 @@ export function upsertAgentConfig(agent: Omit<KinuAgentConfig, 'createdAt' | 'up
   if (agent.alias) validateAliasName(agent.alias);
   if (agent.localName) validateAgentName(agent.localName);
   if (agent.cloudName) validateAgentName(agent.cloudName);
+  if (agent.workspaceId) validateWorkspaceId(agent.workspaceId);
   const now = new Date().toISOString();
   let saved!: KinuAgentConfig;
   updateConfigFile((config) => {
@@ -410,6 +644,14 @@ function shellQuote(value: string): string {
 export function validateAgentName(name: string): void {
   if (!AGENT_NAME_RE.test(name)) {
     throw new Error('Agent name must be 1-64 characters: letters, numbers, dashes, or underscores; it must start with a letter or number.');
+  }
+}
+
+/** A virtual workspace label. Same shape as an agent name because a user
+ *  types both on the command line. */
+export function validateWorkspaceId(workspaceId: string): void {
+  if (!AGENT_NAME_RE.test(workspaceId)) {
+    throw new Error('Workspace id must be 1-64 characters: letters, numbers, dashes, or underscores; it must start with a letter or number.');
   }
 }
 

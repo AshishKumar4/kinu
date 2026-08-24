@@ -481,7 +481,7 @@ describe('the turn-reflection prompt', () => {
 
   test('asks for a trigger and an action by contrast, because the reader has no evidence', async () => {
     const { prompt } = await reflect('re-run the command before reporting done');
-    expect(prompt).toContain('read by later sessions that have none of the evidence above');
+    expect(prompt).toContain('read by later turns that have none of the evidence above');
     expect(prompt).toContain('name the trigger and the action, not the incident');
     expect(prompt).toContain('Good: "When a run result\'s text begins `Error (exit N)`');
     expect(prompt).toContain('Bad: "Should have been more careful here."');

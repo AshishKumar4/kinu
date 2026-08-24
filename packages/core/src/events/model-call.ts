@@ -26,6 +26,8 @@
  */
 
 import type { Usage } from '../usage';
+import { nanoid } from '../utils/nanoid';
+import { renderThrownChain } from '../obs/index';
 
 /**
  * Which producer issued a model call. The attribution axis of a workspace's
@@ -96,33 +98,6 @@ export const SPEND_SOURCE_DETAIL = {
   advisor: 'the turn reviewer: one call after a turn ends, when it is switched on',
 } as const satisfies Readonly<Record<SpendSource, string>>;
 
-/**
- * The producers whose model the owner can pin — the routing vocabulary, drawn
- * from the spend taxonomy above so one set of names answers both "where did the
- * money go" and "what runs there".
- *
- * ROUTED is the load-bearing word, and this is a SUBSET rather than the whole
- * taxonomy because an offered control that changes nothing is worse than an
- * absent one. A producer is here only when a resolver stands between it and its
- * model (providers/role-model.ts). The others, and why each is absent:
- *
- *   - `agent` IS the chat model. It already has a picker, and a second key for
- *     it would be two names for one setting.
- *   - `reflection` runs on the `fast` tier's own client (evolution/engine.ts
- *     `fastLlm`). Its spend is reported separately because the QUESTION differs;
- *     the model does not.
- *   - `compaction`, `head`, `mcts`, `swarm` and `sandbox` take the session's
- *     chat model at the call site. Rerouting one is a behavioural change to
- *     that producer, not a config key.
- *   - `platform` is a Workers AI binding. There is no model id to set.
- */
-export const ROUTED_SPEND_SOURCES = ['judge', 'fast', 'advisor'] as const satisfies readonly SpendSource[];
-
-export type RoutedSpendSource = (typeof ROUTED_SPEND_SOURCES)[number];
-
-export function isRoutedSpendSource<Value>(value: Value): value is Value & RoutedSpendSource {
-  return ROUTED_SPEND_SOURCES.some((source) => source === value);
-}
 
 /**
  * One model call, as the producer that made it can report it.
@@ -172,6 +147,172 @@ export type ModelCallSink = (report: ModelCallReport) => void;
 export interface ModelCallSpend {
   readonly source: SpendSource;
   readonly report: ModelCallSink;
+  /**
+   * Where this seam's operation lifecycle goes, if anywhere.
+   *
+   * A third field rather than a second struct: the lifecycle and the cost are
+   * two facts about ONE call, produced on the same line, and a caller that
+   * wired them separately could report a cost for an operation it never opened.
+   */
+  readonly operations?: ModelOperationSink;
+}
+
+// ── The operation lifecycle ──────────────────────────────────────
+
+/**
+ * What kind of direct model operation ran.
+ *
+ * Coarse on purpose. The seam that holds the SDK result knows the SHAPE of the
+ * call it issued and nothing about why it was issued; WHICH producer wanted it
+ * is {@link SpendSource}, and the pair is the producer lane a reader needs —
+ * `fast`+`complete` is a mechanical classification, `judge`+`generate_json` is
+ * a graded verdict. A per-call-site name would have to be threaded from every
+ * caller, and a name nobody threads is a name that lies.
+ */
+export const MODEL_OPERATION_KINDS = ['complete', 'stream', 'generate_json'] as const;
+export type ModelOperationKind = (typeof MODEL_OPERATION_KINDS)[number];
+
+export const MODEL_OPERATION_PHASES = ['start', 'end'] as const;
+export type ModelOperationPhase = (typeof MODEL_OPERATION_PHASES)[number];
+
+/**
+ * How an operation ended.
+ *
+ * `failed` covers a provider throw and a cancellation alike: an aborted call
+ * arrives at this seam as a thrown abort, and the recorded error text is what
+ * separates the two. NOTHING here reads a clock — an operation with no end row
+ * is a fact about the process that died, never a verdict about how long the
+ * call was taking.
+ */
+export const MODEL_OPERATION_OUTCOMES = ['ok', 'failed'] as const;
+export type ModelOperationOutcome = (typeof MODEL_OPERATION_OUTCOMES)[number];
+
+/**
+ * One end of one direct model operation.
+ *
+ * WHY A START ROW EXISTS. {@link ModelCallReport} is written after a call
+ * returns, so a process that dies mid-call leaves nothing at all: the durable
+ * trail could not name which operation was in flight, and a killed evolution
+ * pass was indistinguishable from one that never ran. The pair here is the
+ * shape `run_start`/`run_end` already uses one level up, and it is read the
+ * same way — a start with no end is the visible signature of a frame the
+ * platform destroyed (`RunEventRecorder.unterminatedModelOperations`).
+ *
+ * `operationId` joins the two rows. Minted at the start, so it is stable for
+ * the operation's whole life and unique within the log.
+ *
+ * `usage` rides the END row alone, because usage does not exist until the
+ * provider has answered. It is the same normalized report
+ * {@link ModelCallReport} carries — `{}` where the provider said nothing, so an
+ * unmeasured operation stays distinguishable from a free one.
+ */
+export interface ModelOperationEvent {
+  readonly operationId: string;
+  readonly source: SpendSource;
+  readonly op: ModelOperationKind;
+  readonly phase: ModelOperationPhase;
+  /** End rows only. */
+  readonly outcome?: ModelOperationOutcome;
+  /** End rows only, and only what the provider reported. */
+  readonly usage?: Usage;
+  readonly spec?: string;
+  readonly modelId?: string;
+  /** Failed end rows only: the cause chain, bounded. */
+  readonly error?: string;
+}
+
+/**
+ * Where a seam sends its operation lifecycle.
+ *
+ * A separate sink from {@link ModelCallSink} rather than more arms on it,
+ * because one of the two readers is a census: `model_call` is what the
+ * workspace spend total counts, and start rows entering that stream would count
+ * every operation twice and halve the window the coverage fraction is measured
+ * over.
+ *
+ * Optional wherever it is accepted, for the same reason `report` is: a seam
+ * with no lifecycle wired is a seam whose in-flight work cannot be attributed,
+ * and saying so beats pretending the frame was never opened.
+ */
+export type ModelOperationSink = (event: ModelOperationEvent) => void;
+
+/** Characters of a failure's cause chain kept on the end row. Enough to name
+ *  the provider fault; never a whole prompt echoed back inside an error. */
+const OPERATION_ERROR_MAX_CHARS = 300;
+/** The stable id one operation is known by, start row to end row. Random
+ *  rather than counted: an activation's counter restarts at eviction and would
+ *  hand the second life's first operation the first life's id, which then reads
+ *  as its missing end. */
+export function newModelOperationId(): string {
+  return `op-${nanoid(10)}`;
+}
+
+/**
+ * An open operation frame. Exactly one end row is written, whichever way the
+ * call leaves — and a frame that is never closed is the evidence, not a leak.
+ */
+export interface ModelOperation {
+  /** The call returned. `usage` is the provider's own report, normalized. */
+  completed(result: { usage?: Usage; modelId?: string }): void;
+  /** The call threw — a provider fault, or an abort the caller asked for.
+   *  The thrown value rides as `{ cause }`, the same shape
+   *  `renderThrownChain` and every diagnostics call site already speak. */
+  failed(into: { readonly cause: unknown }): void;
+}
+
+/** A frame nobody is watching. Shared rather than allocated per call: a seam
+ *  with no lifecycle sink takes this path on every model call it makes. */
+const UNWATCHED_OPERATION: ModelOperation = {
+  completed(): void { /* no sink wired: nothing to record */ },
+  failed(): void { /* no sink wired: nothing to record */ },
+};
+
+/**
+ * Open a durable frame around one direct model operation.
+ *
+ * Called immediately BEFORE the provider call, so the start row is written
+ * while the call is in flight — which is the whole point: the row exists to be
+ * found by a LATER activation asking what the previous one was doing when it
+ * stopped.
+ */
+export function beginModelOperation(
+  spend: Pick<ModelCallSpend, 'source' | 'operations'> | ModelCallSpend | undefined,
+  op: ModelOperationKind,
+  detail?: { readonly spec?: string },
+): ModelOperation {
+  const sink = spend?.operations;
+  if (!sink) return UNWATCHED_OPERATION;
+  const operationId = newModelOperationId();
+  const source = spend.source;
+  const spec = detail?.spec;
+  const base = spec === undefined
+    ? { operationId, source, op }
+    : { operationId, source, op, spec };
+  sink({ ...base, phase: 'start' });
+  // One end row per frame. A stream whose consumer drains it and then throws
+  // would otherwise close the same operation twice, and two ends for one start
+  // is a shape no reader can interpret.
+  let settled = false;
+  return {
+    completed(result): void {
+      if (settled) return;
+      settled = true;
+      const usage = result.usage ?? {};
+      sink(result.modelId === undefined
+        ? { ...base, phase: 'end', outcome: 'ok', usage }
+        : { ...base, phase: 'end', outcome: 'ok', usage, modelId: result.modelId });
+    },
+    failed({ cause }): void {
+      if (settled) return;
+      settled = true;
+      sink({
+        ...base,
+        phase: 'end',
+        outcome: 'failed',
+        error: renderThrownChain({ cause }).slice(0, OPERATION_ERROR_MAX_CHARS),
+      });
+    },
+  };
 }
 
 /**

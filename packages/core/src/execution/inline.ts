@@ -205,7 +205,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         // tool's edit action uses (createFileDispatcher, tools/file-tool.ts),
         // read live so an edit gated here refuses identically to a
         // native-tool edit over the SAME turn's read state — cheap
-        // (closures only, no I/O), the same cost SessionSearchStore accepts.
+        // (closures only, no I/O), the same cost ConversationSearchStore accepts.
         return currentFileDispatch()({ action: 'edit', path, edits: list });
       },
     },

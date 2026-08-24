@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do';
 import { declaredClassMembers, isInternalMember } from './helpers/declared-members';
 import { sha256Hex } from '../src/lib/crypto';
+import { BUILTIN_PROFILE_CATALOG, decodeJsonValue } from '@kinu.run/core';
 import {
   CapabilityDeniedError,
   WORKSPACE_CAPABILITY_TIERS,
@@ -169,6 +170,7 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'config', name: 'getConfig', run: (u, c) => u.getConfig(c, 'default_model') },
   { capability: 'config', name: 'setConfig', run: (u, c) => u.setConfig(c, 'default_model', 'x') },
   { capability: 'config', name: 'listConfig', run: (u, c) => u.listConfig(c) },
+  { capability: 'profile.resolve', name: 'getWorkspaceProfileCatalog', run: (u, c) => u.getWorkspaceProfileCatalog(c) },
 
   { capability: 'auth_tokens', name: 'mintCliToken', run: (u, c) => u.mintCliToken(c, USER_ID) },
   { capability: 'auth_tokens', name: 'verifyCliToken', run: (u, c) => u.verifyCliToken(c, `ptc_${USER_ID}_${'x'.repeat(44)}`) },
@@ -199,9 +201,21 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'codex_auth', name: 'getCodexStatus', run: (u, c) => u.getCodexStatus(c) },
 ];
 
+const OWNER_ONLY_CALLS = [
+  { name: 'getProfileCatalog', run: (userDO: UserDOInstance, caller: UserCaller) => userDO.getProfileCatalog(caller) },
+  {
+    name: 'putProfileCatalog',
+    run: (userDO: UserDOInstance, caller: UserCaller) => userDO.putProfileCatalog(
+      caller,
+      decodeJsonValue({ value: BUILTIN_PROFILE_CATALOG }),
+      0,
+    ),
+  },
+] as const;
+
 /** Did the boundary refuse this call, as opposed to the call failing for its
  *  own reasons (no device connected, unknown change id, stubbed MCP client)? */
-async function refused(call: GatedCall, userDO: UserDOInstance, caller: UserCaller): Promise<boolean> {
+async function refused(call: Pick<GatedCall, 'run'>, userDO: UserDOInstance, caller: UserCaller): Promise<boolean> {
   try {
     await call.run(userDO, caller);
     return false;
@@ -635,13 +649,26 @@ describe('no privileged UserDO method escapes the gate', () => {
     expect(declared.filter(isInternalMember).length).toBeGreaterThan(5);
   });
 
+  test('owner-only profile writes reject every workspace token and accept an owner session', async () => {
+    const harness = await setupWorkspaces();
+    const workspace: UserCaller = { workspaceToken: harness.fullToken };
+    for (const call of OWNER_ONLY_CALLS) {
+      expect(await refused(call, harness.userDO, workspace)).toBe(true);
+      expect(await refused(call, harness.userDO, await testOwner())).toBe(false);
+    }
+    harness.close();
+  });
+
   test('every gated method is exercised by the matrix above', () => {
     const declared = new Set(
       declaredMembers()
         .filter((m) => !isInternalMember(m) && m.params.startsWith('caller: UserCaller'))
         .map((m) => m.name),
     );
-    const exercised = new Set(GATED_CALLS.map((c) => c.name.replace(/\(.*$/, '')));
+    const exercised = new Set([
+      ...GATED_CALLS.map((call) => call.name.replace(/\(.*$/u, '')),
+      ...OWNER_ONLY_CALLS.map((call) => call.name),
+    ]);
     expect([...declared].filter((name) => !exercised.has(name)).sort()).toEqual([]);
   });
 

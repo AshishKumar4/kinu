@@ -69,7 +69,6 @@ function runOpts(
     task: 'the task',
     llmStream: async function* () { yield ''; },
     scaffoldCodeOverride: scaffoldCode,
-    timeoutMs: 10_000,
   };
   if (callTool) options.callTool = callTool;
   return options;

@@ -55,10 +55,8 @@ export class AgentWakeQueue implements SignalDeliverer {
    * that backgrounded three jobs takes three turns and then ends.
    *
    * There is no timer here and there must not be: an agent awaiting a wake is
-   * HEALTHY however long it waits, and a clock that cannot tell that from an agent
-   * that never started is the wrong instrument by construction. What bounds the
-   * work is the thing that actually blocks — a step where nothing flows — and that
-   * is bounded from inside the turn by the shared loop's stall watchdog.
+   * healthy however long it waits. It resumes when a wake arrives, or ends when
+   * its caller cancels it or its work fails definitively.
    */
   async next(holding: () => boolean): Promise<readonly ModelMessage[] | null> {
     for (;;) {

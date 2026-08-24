@@ -188,7 +188,7 @@ describe('the attenuation matrix', () => {
 
   test('the surviving capabilities are only the agent-function ones', () => {
     const kept = CAPABILITIES.filter((c) => WORKSPACE_CAPABILITY_TIERS[c] === 'shared');
-    expect(kept.sort()).toEqual(['credentials.model', 'workspaces.rename_self']);
+    expect(kept.sort()).toEqual(['credentials.model', 'profile.resolve', 'workspaces.rename_self']);
   });
 
   test('an owner session is never attenuated', async () => {

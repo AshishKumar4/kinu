@@ -1414,6 +1414,7 @@ function asSearchNode(row: MctsRow, rootId: string): SearchNode {
     status: row.status === "running" ? "open" : row.status,
     msg_id: row.msg_id ?? null,
     branch_agent_key: row.branch_agent_key ?? null,
+    evaluation_json: null,
     created_at: row.created_at ?? NOW,
   };
 }

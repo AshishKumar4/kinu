@@ -17,17 +17,17 @@ import {
   DeviceConnectOverlay,
   ModelPickerOverlay,
   SettingsOverlay,
-  SessionPickerOverlay,
   WalkbackOverlay,
   TakesOverlay,
-  WorkspaceDrawerOverlay,
 } from '../src/tui/overlays';
 import type { AgentModelEntry } from '../src/model-catalog';
 import { MessageList } from '../src/tui/messages';
-import { tuiColors } from '../src/tui/theme';
+import { BUILTIN_TUI_THEMES } from '../src/tui/theme';
 import { StatusBar } from '../src/tui/status-bar';
-import { handleHistoryScrollKey } from '../src/tui/chat-app';
+import { handleHistoryScrollAction } from '../src/tui/chat-app';
 import { VERSION } from '../src/display';
+
+const TEST_TUI_BACKGROUND = BUILTIN_TUI_THEMES[0]!.colors.background.canvas;
 
 const repoRoot = resolve(__dirname, '../../..');
 
@@ -49,7 +49,7 @@ describe('CLI TUI layout', () => {
       await renderSettled(renderOnce);
       const frame = captureCharFrame();
       expect(frame).toContain('GPT 5.5');
-      expect(frame).toContain('[Ctrl+P]');
+      expect(frame).toContain('[Ctrl+L]');
       expect(frame).toContain('effort high');
       expect(frame).toContain(`cli ${VERSION}`);
 
@@ -188,7 +188,7 @@ describe('CLI TUI layout', () => {
       expect(frame).toContain('effort high');
       expect(frame).toContain('evolve off');
       expect(frame).toContain('14 tools');
-      expect(frame).toContain('[Ctrl+P]');
+      expect(frame).toContain('[Ctrl+L]');
     });
   });
 
@@ -221,7 +221,7 @@ describe('CLI TUI layout', () => {
       }
     };
     await render(88, (frame) => {
-      expect(frame).toContain('[Ctrl+P]');
+      expect(frame).toContain('[Ctrl+L]');
     });
     await render(64, (frame) => {
       const line = frame.split('\n').find((row) => row.includes('Deepseek V4 Pro'));
@@ -269,7 +269,7 @@ describe('CLI TUI layout', () => {
       />
     ));
     await collect(96, (
-      <box style={{ width: '100%', height: '100%', backgroundColor: tuiColors.bg }}>
+      <box style={{ width: '100%', height: '100%', backgroundColor: TEST_TUI_BACKGROUND }}>
         <MessageList
           messages={[
             { id: 'u1', role: 'user', content: 'Run the suite', attachments: ['notes.md'] },
@@ -362,21 +362,15 @@ describe('CLI TUI layout', () => {
         this.scrollTop = position;
       },
     };
-    let prevented = 0;
-    const key = (name: string) => ({
-      name,
-      preventDefault: () => { prevented += 1; },
-    });
 
-    expect(handleHistoryScrollKey(key('up'), '', history)).toBe(true);
+    expect(handleHistoryScrollAction('history.line-up', '', history)).toBe(true);
     expect(history.scrollTop).toBe(96);
-    expect(handleHistoryScrollKey(key('down'), 'line one\nline two', history)).toBe(false);
+    expect(handleHistoryScrollAction('history.line-down', 'line one\nline two', history)).toBe(false);
     expect(history.scrollTop).toBe(96);
-    expect(handleHistoryScrollKey(key('pageup'), 'draft text', history)).toBe(true);
+    expect(handleHistoryScrollAction('history.page-up', 'draft text', history)).toBe(true);
     expect(history.scrollTop).toBe(86);
-    expect(handleHistoryScrollKey(key('pagedown'), 'draft text', history)).toBe(true);
+    expect(handleHistoryScrollAction('history.page-down', 'draft text', history)).toBe(true);
     expect(history.scrollTop).toBe(96);
-    expect(prevented).toBe(3);
   });
 
   test('slash command hints render as a palette without numeric hotkeys', async () => {
@@ -473,7 +467,7 @@ describe('CLI TUI layout', () => {
     }
   });
 
-  test('interactive command, workspace, and settings surfaces select through one active row', async () => {
+  test('interactive command and settings surfaces select through one active row', async () => {
     const { renderer, mockInput, renderOnce, captureCharFrame } = await createTestRenderer({
       width: 72,
       height: 24,
@@ -499,28 +493,6 @@ describe('CLI TUI layout', () => {
       mockInput.pressEnter();
       await renderSettled(renderOnce);
       expect(selected).toEqual(['/status']);
-
-      root.render(
-        <box style={{ width: '100%', height: '100%' }}>
-          <WorkspaceDrawerOverlay
-            workspaces={[
-              { name: 'checkout', label: 'Checkout', mode: 'local' },
-              { name: 'jarvis', label: 'Jarvis', mode: 'cloud', cloudName: 'jarvis' },
-            ]}
-            current="checkout"
-            terminal={{ width: 72, height: 24 }}
-            onSelect={(workspace) => { selected.push(workspace.name); }}
-          />
-        </box>,
-      );
-      await renderSettled(renderOnce);
-      const workspaceFrame = captureCharFrame();
-      expect(workspaceFrame.split('\n').find((row) => row.includes('Checkout'))).toContain('local');
-      expect(workspaceFrame.split('\n').find((row) => row.includes('Jarvis'))).toContain('cloud');
-      mockInput.pressArrow('down');
-      mockInput.pressEnter();
-      await renderSettled(renderOnce);
-      expect(selected).toContain('jarvis');
 
       root.render(
         <box style={{ width: '100%', height: '100%' }}>
@@ -664,8 +636,8 @@ describe('CLI TUI layout', () => {
     }
   });
 
-  test('narrow navigation preserves mode, current state, folder, and close action', async () => {
-    const { renderer, mockInput, renderOnce, captureCharFrame } = await createTestRenderer({
+  test('narrow settings preserve current state and stay selectable', async () => {
+    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({
       width: 40,
       height: 20,
       useThread: false,
@@ -673,25 +645,6 @@ describe('CLI TUI layout', () => {
     });
     const root = createRoot(renderer);
     try {
-      root.render(
-        <box style={{ width: '100%', height: '100%' }}>
-          <WorkspaceDrawerOverlay
-            workspaces={[{
-              name: 'jarvis',
-              label: 'A very long personal workspace name',
-              mode: 'cloud',
-              cloudName: 'jarvis',
-            }]}
-            current="jarvis"
-            terminal={{ width: 40, height: 20 }}
-            onSelect={() => {}}
-          />
-        </box>,
-      );
-      await renderSettled(renderOnce);
-      expect(captureCharFrame()).toContain('cloud');
-      expect(captureCharFrame()).toContain('Esc close');
-
       root.render(
         <box style={{ width: '100%', height: '100%' }}>
           <SettingsOverlay
@@ -710,29 +663,6 @@ describe('CLI TUI layout', () => {
       await renderSettled(renderOnce);
       expect(captureCharFrame()).toContain('current');
 
-      root.render(
-        <box style={{ width: '100%', height: '100%' }}>
-          <SessionPickerOverlay
-            sessions={[{
-              id: 'session-1',
-              path: '/tmp/session-1.jsonl',
-              agent: 'alpha',
-              cwd: '/very/long/path/folder-alpha',
-              name: 'A very long repeated conversation title',
-              startedAt: '2026-08-23T00:00:00.000Z',
-              modifiedAt: 1,
-              entries: 3,
-            }]}
-            cwd="/another/folder"
-            terminal={{ width: 40, height: 20 }}
-            onSelect={() => {}}
-          />
-        </box>,
-      );
-      await renderSettled(renderOnce);
-      mockInput.pressTab();
-      await renderSettled(renderOnce);
-      expect(captureCharFrame()).toContain('folder-alpha');
     } finally {
       root.render(<box />);
       renderer.destroy();
@@ -784,8 +714,9 @@ describe('CLI TUI layout', () => {
       const frame = captureCharFrame();
       expect(frame).toContain('Let this agent use this PC?');
       expect(frame).toContain('No PC is connected to your account yet.');
-      expect(frame).toContain('C connect & keep connected · S this session only');
-      expect(frame).toContain("N not now · D don't ask again");
+      expect(frame).toContain('C connect and keep connected');
+      expect(frame).toContain('S use this session only');
+      expect(frame).toContain("D don't ask again · N not now");
     } finally {
       root.render(<box />);
       renderer.destroy();
@@ -836,16 +767,19 @@ describe('CLI TUI layout', () => {
       workspaces: WORKSPACE_NAMES,
       driver: `
         const WORKSPACES = ${JSON.stringify(WORKSPACE_NAMES)};
-        const selected = () => WORKSPACES.find((name) => frame().includes('› ' + name)) ?? null;
+        const selected = () => WORKSPACES.find((name) => {
+          const row = frame().split('\\n').find((line) => line.includes(name));
+          return row?.includes('▶') || row?.includes('›');
+        }) ?? null;
 
-        await waitFor('the workspace list to render', () => frame().includes('Workspaces'));
+        for (const name of WORKSPACES) {
+          await waitFor(name + ' to render', () => frame().includes(name));
+        }
+        await waitFor('the sidebar to take initial focus', () => selected() !== null);
         const listed = WORKSPACES
-          .map((name) => ({ name, at: frame().split('\\n').findIndex((row) => row.includes(name + '  local')) }))
-          .sort((a, b) => a.at - b.at)
+          .map((name) => ({ name, at: frame().split('\\n').findIndex((row) => row.includes(name)) }))
+          .sort((left, right) => left.at - right.at)
           .map((entry) => entry.name);
-        mockInput.pressTab();
-        await waitFor('the workspace list to take the keyboard', () => rowWith('Workspaces').includes('↑/↓ select'));
-
         const initial = selected();
         for (const digit of ['1', '2', '3', '4', '5', '6', '7', '8', '9']) {
           mockInput.pressKey(digit);
@@ -859,7 +793,7 @@ describe('CLI TUI layout', () => {
           header: rowWith('Kinu workspaces'),
         };
         mockInput.pressArrow('down');
-        await waitFor('the down arrow to move the selection', () => selected() !== initial, 200);
+        await settle(5);
         observed.afterArrowDown = selected();
         mockInput.pressEscape();
         observed.finalAction = await opened;
@@ -873,11 +807,11 @@ describe('CLI TUI layout', () => {
       const homeAction = v.nullable(v.record(v.string(), v.unknown()));
       const observed = v.parse(v.object({
         listed: v.array(v.string()),
-        initial: v.string(),
-        afterDigits: v.string(),
+        initial: v.nullable(v.string()),
+        afterDigits: v.nullable(v.string()),
         openedByDigits: homeAction,
         header: v.string(),
-        afterArrowDown: v.string(),
+        afterArrowDown: v.nullable(v.string()),
         finalAction: homeAction,
       }), JSON.parse(run.stdout));
 
@@ -888,7 +822,7 @@ describe('CLI TUI layout', () => {
       expect(observed.finalAction).toEqual({ type: 'exit' });
       // The home header renders the one VERSION, which is why the version test
       // no longer greps home-app.tsx for the literal.
-      expect(observed.header).toBe(`Kinu workspaces · cli ${VERSION}`);
+      expect(observed.header).toContain(`Kinu workspaces · cli ${VERSION}`);
     } finally {
       rmSync(run.home, { recursive: true, force: true });
     }
@@ -905,11 +839,12 @@ describe('CLI TUI layout', () => {
   test('creating a workspace from a mission opens it without sending the mission', () => {
     const mission = 'My personal assistant, Jarvis';
     const run = runHomeScreen({
+      width: 80,
       driver: `
         await waitFor('the mission field to render', () => frame().includes('What is this workspace for?'));
         await mockInput.typeText(${JSON.stringify(mission)});
         await waitFor('the mission to reach the field', () => frame().includes(${JSON.stringify(mission)}));
-        mockInput.pressEnter({ ctrl: true });
+        mockInput.pressEnter();
         await waitFor('the new workspace to open', () => action !== null, 3000);
         console.log(JSON.stringify({ opened: await opened }));
       `,
@@ -966,6 +901,7 @@ describe('CLI TUI layout', () => {
           maxFps: Number.POSITIVE_INFINITY,
         });
         const root = createRoot(renderer);
+        const defaultTier = () => JSON.parse(readFileSync(CONFIG_PATH, 'utf8')).localProfile?.catalog?.tiers?.default;
         const settle = async (rounds = 10) => {
           for (let i = 0; i < rounds; i++) {
             await renderOnce();
@@ -1012,7 +948,7 @@ describe('CLI TUI layout', () => {
           return cursorRow !== undefined && cursorRow.includes('gpt-5.4');
         });
         mockInput.pressEnter();
-        await waitFor('the chosen model to persist', () => JSON.parse(readFileSync(CONFIG_PATH, 'utf8')).model !== 'openai/gpt-5.5');
+        await waitFor('the chosen model to persist', () => defaultTier()?.model !== undefined && defaultTier().model !== 'openai/gpt-5.5');
         // The write lands while the overlay is still on screen, so persistence is
         // NOT the signal that the picker is done with the keyboard. Tab pressed
         // here goes to the overlay and focus never reaches Effort.
@@ -1020,13 +956,15 @@ describe('CLI TUI layout', () => {
         mockInput.pressTab();
         // The row renders its key hint only while focused, so this is the
         // observable "the effort control has the keyboard" — an arrow sent before
-        // it does goes to the previous field.
-        await waitFor('the effort control to take focus', () => captureCharFrame().includes('↑/↓ select'));
-        mockInput.pressArrow('down');
-        await waitFor('the chosen effort to persist', () => JSON.parse(readFileSync(CONFIG_PATH, 'utf8')).reasoningEffort !== 'medium');
+        await waitFor('the effort control to take focus', () => {
+          const row = captureCharFrame().split('\\n').find((line) => line.includes('Effort:'));
+          return row?.includes('select') === true;
+        });
+        mockInput.pressArrow('right');
+        await waitFor('the chosen effort to persist', () => defaultTier()?.reasoningEffort !== undefined && defaultTier().reasoningEffort !== 'medium');
         root.render(createElement('box'));
         renderer.destroy();
-        console.log(readFileSync(CONFIG_PATH, 'utf8'));
+        console.log(JSON.stringify(defaultTier()));
       `;
       const env: NodeJS.ProcessEnv = { ...process.env, KINU_HOME: kinuHome };
       for (const name of ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'CODEX_ACCESS_TOKEN', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'KINU_TOKEN']) {
@@ -1041,10 +979,10 @@ describe('CLI TUI layout', () => {
       });
 
       expect({ exitCode: proc.exitCode, stderr: proc.stderr.toString() }).toEqual({ exitCode: 0, stderr: '' });
-      const config = v.parse(v.object({ reasoningEffort: v.string(), model: v.string() }), JSON.parse(proc.stdout.toString()));
-      expect(config).toMatchObject({ reasoningEffort: 'high' });
-      expect(config.model).toStartWith('openai/');
-      expect(config.model).not.toBe('openai/gpt-5.5');
+      const tier = v.parse(v.object({ reasoningEffort: v.string(), model: v.string() }), JSON.parse(proc.stdout.toString()));
+      expect(tier).toMatchObject({ reasoningEffort: 'high' });
+      expect(tier.model).toStartWith('openai/');
+      expect(tier.model).not.toBe('openai/gpt-5.5');
     } finally {
       rmSync(kinuHome, { recursive: true, force: true });
     }

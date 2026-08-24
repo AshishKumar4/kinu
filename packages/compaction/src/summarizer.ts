@@ -1,33 +1,14 @@
 /**
  * The one summarizer transport both backends inject into
- * `createCompactionExtension`: a generateText call on the session's active
- * model, bounded by a wall-clock budget.
+ * `createCompactionExtension`: a generateText call on the active model.
  *
- * The bound is the load-bearing part — the extension's summarize calls are
- * awaited inside `transformContext`, which the turn assembly awaits, and on
- * the cloud backend that whole path runs inside Think's serialized turn
- * queue: one hung provider call would wedge every subsequent turn on the
- * workspace until eviction. A timeout rejection lands in the extension's
- * existing fail-open path (deterministic previews), so the turn always
- * proceeds.
+ * The caller owns cancellation. This transport does not turn elapsed time into
+ * a provider failure or discard an active fold.
  */
 
 import { generateText, type LanguageModel } from 'ai';
-import { normalizeUsage, LLM_CALL_TIMEOUT_MS, type ModelCallSpend } from '@kinu.run/core';
+import { beginModelOperation, normalizeUsage, type ModelCallSpend } from '@kinu.run/core';
 
-/**
- * It was 60_000 — half what the judge seam gives one completion, for a prompt
- * that is by construction the largest in the system (the range of turns
- * compaction exists to shrink), on whatever model the session has active. Under
- * the sanctioned per-call window ({@link LLM_CALL_TIMEOUT_MS} — a summarize call
- * IS one LLM call), a working
- * summarize call loses the race and the extension falls open to a deterministic
- * preview — a quieter failure than a wedged queue and a worse one, because the
- * turn proceeds with a weaker context and nothing says so. So the bound stays,
- * at exactly the window one LLM call is entitled to and nothing of its own to
- * drift from.
- */
-export const SUMMARIZER_TIMEOUT_MS = LLM_CALL_TIMEOUT_MS;
 
 /**
  * `spend` carries both the sink and the label — `compaction` for the fold this
@@ -38,23 +19,28 @@ export const SUMMARIZER_TIMEOUT_MS = LLM_CALL_TIMEOUT_MS;
  */
 export function createModelSummarizer(
   getModel: () => LanguageModel,
-  timeoutMs: number = SUMMARIZER_TIMEOUT_MS,
   spend?: ModelCallSpend,
 ): (prompt: string) => Promise<string> {
   return async (prompt) => {
-    const result = await generateText({
-      model: getModel(),
-      prompt,
-      abortSignal: AbortSignal.timeout(timeoutMs),
-    });
-    // A timeout rejection never reaches this line: it produced no usage and, as
-    // far as this seam can see, no bill, so reporting it would count a call that
-    // cost nothing against the measured fraction.
-    spend?.report({
-      source: spend.source,
-      usage: normalizeUsage(result.totalUsage),
-      modelId: result.response.modelId,
-    });
+    // Opened before the request. If the process stops, the unmatched start row
+    // names the in-flight fold on the next activation.
+    const operation = beginModelOperation(spend, 'complete');
+    let result;
+    try {
+      result = await generateText({
+        model: getModel(),
+        prompt,
+      });
+    } catch (err) {
+      operation.failed({ cause: err });
+      throw err;
+    }
+    // A thrown request has no provider usage report. Its failed operation row
+    // records the cause without inventing spend.
+    const usage = normalizeUsage(result.totalUsage);
+    const modelId = result.response.modelId;
+    operation.completed({ usage, modelId });
+    spend?.report({ source: spend.source, usage, modelId });
     return result.text;
   };
 }

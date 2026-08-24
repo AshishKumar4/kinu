@@ -23,6 +23,7 @@ export async function handleCreateWorkspaceRequest(
     name: v.optional(v.string()),
     displayName: v.optional(v.string()),
     purpose: v.optional(v.string()),
+    role: v.optional(v.string()),
   }));
   if (!body) return err(400, 'Body must be JSON');
   if (!body.name?.trim() && !body.purpose?.trim()) return err(400, 'purpose required');

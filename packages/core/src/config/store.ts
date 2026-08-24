@@ -8,11 +8,7 @@
 // for known keys, generic get/set/delete for everything else, all() for fork.
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import { isReasoningEffort, type ReasoningEffort } from '../strategy/effort';
-import {
-  DEFAULT_AGENT_STANCE,
-  isAgentStance,
-  type AgentStance,
-} from '../tools/registry';
+import { isValidRoleId, type RoleId } from '../profiles/catalog';
 import {
   DEFAULT_CACHE_RETENTION, isCacheRetention, type CacheRetention,
 } from '../prompting/cache-breakpoints';
@@ -22,7 +18,6 @@ import {
 import {
   DEFAULT_ADVISOR_MIN_SEVERITY, isAdvisorSeverity, type AdvisorSeverity,
 } from '../advisor/review';
-import type { RoutedSpendSource } from '../events/model-call';
 
 export type ShellApprovalMode = 'strict' | 'allow_all' | 'deny_all';
 
@@ -37,9 +32,14 @@ export const AGENT_CONFIG_KEYS = {
   displayName: 'display_name',
   /** 'user' once the operator sets a name explicitly — suppresses auto-titling. */
   nameOrigin: 'name_origin',
-  /** The working stance the AGENT selected for itself through `tasks`
-   *  action=mode. Guidance only — permission is the Plan/Auto axis. */
-  agentStance: 'agent_stance',
+  /** The agent's durable active role (profiles/catalog.ts). The NEXT turn
+   *  resolves it; a running step keeps the profile it already resolved.
+   *  Unset reads as `general` — and a pre-profile `agent_stance` value
+   *  migrates into it on first read. */
+  activeRoleId: 'active_role_id',
+  /** The owner's self-switch policy: 'allow' | 'approval' | 'locked'. */
+  roleChangePolicy: 'role_change_policy',
+  /** The shell-approval MODE the owner set (strict | allow_all | deny_all). */
   shellApprovalMode: 'shell_approval_mode',
   /** Comma-separated `<rule>@<executor>` pairs the owner has said "always" to.
    *  Sits beside the approval MODE deliberately: both are the same knob — how
@@ -51,24 +51,10 @@ export const AGENT_CONFIG_KEYS = {
   /** Fraction of scaffold proposals that branch from an archived variant
    *  instead of the live current (DGM archive exploration). */
   scaffoldExploreShare: 'scaffold_explore_share',
-  /** `<provider>/<modelId>` the agent's own output is judged on. The `judge`
-   *  producer's role key, under the name it has always had rather than
-   *  `model_role.judge` — see {@link roleConfigKey}. Unset = the first
-   *  available cross-family model (selectJudgeModel). */
-  reviewModel: 'review_model',
-  /** `<provider>/<modelId>` the MECHANICAL evolution calls run on (outcome
-   *  classification, pathology labels, short reflections, pattern extraction,
-   *  sleep-time compression). The `fast` producer's role key. Unset = the chat
-   *  vendor's own small tier, or the chat model where it has none
-   *  (selectFastModel). */
-  fastModel: 'fast_model',
+  advisorMinSeverity: 'advisor_min_severity',
   /** 'true' switches the turn reviewer on. Off by default: it is one more model
    *  call per turn, and the owner pays for it. */
   advisorEnabled: 'advisor_enabled',
-  /** The lowest severity an advisor note needs to reach the conversation.
-   *  Below it a note is a Changelog row. Unset reads as
-   *  DEFAULT_ADVISOR_MIN_SEVERITY. */
-  advisorMinSeverity: 'advisor_min_severity',
   /** Comma-separated list of skill names the operator wants always-on. */
   alwaysActiveSkills: 'always_active_skills',
   /** The executor namespace the agent most recently ran a tool in — so the UI
@@ -81,11 +67,9 @@ export const AGENT_CONFIG_KEYS = {
   /** Epoch ms of the operator's last Evolution Changelog view — entries newer
    *  than this drive the unseen badge. */
   changelogSeenAt: 'changelog_seen_at',
-  /** Session windows this agent has closed over its lifetime — the pace the
-   *  lifetime timescale (replay eval → consolidation → MCTS) runs at. Durable
-   *  because no agent instance outlives it: a `kinu exec` process handles
-   *  one turn, and a Durable Object is evicted between requests. */
-  closedSessionWindows: 'closed_session_windows',
+  /** Turn windows this agent has closed over its lifetime. The lifetime
+   * timescale runs replay evaluation and consolidation at this pace. */
+  closedTurnWindows: 'closed_turn_windows',
   /** Total outcome-labeled instances a GEPA run draws into its train/val
    *  split (buildOutcomeEvalSplit) — see DEFAULT_GEPA_EVAL_BUDGET. */
   gepaEvalBudget: 'gepa_eval_budget',
@@ -113,18 +97,6 @@ export const AGENT_CONFIG_KEYS = {
   isolateGen: 'isolate_gen',
 } as const;
 
-/**
- * The `agent_config` key a producer's pinned model is stored under.
- *
- * `judge` and `fast` keep the keys they already had, so no workspace loses a
- * setting and nothing has to migrate. This is the whole of the compatibility
- * story: an alias in one accessor, not a migration and not a second table.
- */
-export function roleConfigKey(source: RoutedSpendSource): string {
-  if (source === 'judge') return AGENT_CONFIG_KEYS.reviewModel;
-  if (source === 'fast') return AGENT_CONFIG_KEYS.fastModel;
-  return `model_role.${source}`;
-}
 
 export interface AgentConfigStore {
   // ── Generic accessors ──
@@ -153,10 +125,14 @@ export interface AgentConfigStore {
   setNameOrigin(origin: 'user' | 'auto'): void;
   /** Persist the visible title and its ownership in one SQLite statement. */
   setDisplayNameOrigin(name: string, origin: 'user' | 'auto'): void;
-  /** The agent's current working stance. Always answers: unset or unknown
-   *  reads as `general`, which renders no guidance at all. */
-  getStance(): AgentStance;
-  setStance(stance: AgentStance): void;
+  /** The agent's durable active role. Always answers: unset reads as
+   *  `general`, and a pre-profile `agent_stance` value migrates into the
+   *  role on first read (research→researcher, build→implementer,
+   *  audit→auditor). */
+  getActiveRoleId(): RoleId;
+  /** The owner's self-switch policy for this agent. Unset reads as `allow`. */
+  getRoleChangePolicy(): 'allow' | 'approval' | 'locked';
+  setRoleChangePolicy(policy: 'allow' | 'approval' | 'locked'): void;
   getShellApprovalMode(): ShellApprovalMode;
   setShellApprovalMode(mode: ShellApprovalMode): void;
   /** Standing (rule, executor) grants. Never widens what a command may reach;
@@ -179,13 +155,6 @@ export interface AgentConfigStore {
   /** Archive-exploration share for proposal base selection (0..1, default 0.2). */
   getScaffoldExploreShare(): number;
   setScaffoldExploreShare(share: number): void;
-  /** The model this producer is pinned to, or null to let its class default
-   *  choose (providers/role-model.ts). One accessor for every routed producer,
-   *  because a per-producer getter pair is how the two that existed came to
-   *  disagree with the names the Spend panel shows. */
-  getRoleModel(source: RoutedSpendSource): string | null;
-  /** Pin a producer's model; null / blank clears the pin. */
-  setRoleModel(source: RoutedSpendSource, spec: string | null): void;
   /** Whether the turn reviewer runs. False unless the owner switched it on. */
   getAdvisorEnabled(): boolean;
   setAdvisorEnabled(enabled: boolean): void;
@@ -210,8 +179,8 @@ export interface AgentConfigStore {
   /** Epoch ms of the last changelog view (0 = never seen). */
   getChangelogSeenAt(): number;
   setChangelogSeenAt(ms: number): void;
-  /** Count one more closed session window and return the new lifetime total. */
-  countClosedSessionWindow(): number;
+  /** Count one more closed turn window and return the new lifetime total. */
+  countClosedTurnWindow(): number;
   /** Count one more construction of this agent object and return the new
    *  generation. Called once per activation, from `onStart`; the RETURNED value is
    *  what every span carries, so a discontinuity between two spans on one
@@ -361,11 +330,27 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
         ON CONFLICT(key) DO UPDATE SET value = excluded.value
       `;
     },
-    getStance() {
-      const stored = get(AGENT_CONFIG_KEYS.agentStance);
-      return isAgentStance(stored) ? stored : DEFAULT_AGENT_STANCE;
+    getActiveRoleId(): RoleId {
+      const stored = get(AGENT_CONFIG_KEYS.activeRoleId);
+      if (stored !== null) return isValidRoleId(stored) ? stored : 'general';
+      // One-time stance→role migration: the pre-profile behavior selection
+      // maps onto the catalog role that carries the same intent, then the
+      // legacy key dies. Unknown values read as `general` and are dropped.
+      const legacy = get('agent_stance');
+      const mapped = legacy === 'research' ? 'researcher'
+        : legacy === 'build' ? 'implementer'
+        : legacy === 'audit' ? 'auditor'
+        : legacy === 'general' ? 'general'
+        : null;
+      if (mapped !== null) set(AGENT_CONFIG_KEYS.activeRoleId, mapped);
+      if (legacy !== null) void sql`DELETE FROM agent_config WHERE key = ${'agent_stance'}`;
+      return mapped ?? 'general';
     },
-    setStance(stance) { set(AGENT_CONFIG_KEYS.agentStance, stance); },
+    getRoleChangePolicy(): 'allow' | 'approval' | 'locked' {
+      const v = get(AGENT_CONFIG_KEYS.roleChangePolicy);
+      return v === 'approval' || v === 'locked' ? v : 'allow';
+    },
+    setRoleChangePolicy(policy) { set(AGENT_CONFIG_KEYS.roleChangePolicy, policy); },
     getShellApprovalMode(): ShellApprovalMode {
       const v = get(AGENT_CONFIG_KEYS.shellApprovalMode);
       return v === 'allow_all' || v === 'deny_all' ? v : 'strict';
@@ -405,13 +390,6 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
       return Number.isFinite(n) && n >= 0 && n <= 1 ? n : 0.2;
     },
     setScaffoldExploreShare(share) { set(AGENT_CONFIG_KEYS.scaffoldExploreShare, String(unitInterval('scaffold_explore_share', share))); },
-    getRoleModel(source) { return get(roleConfigKey(source)); },
-    setRoleModel(source, spec) {
-      const key = roleConfigKey(source);
-      const trimmed = spec?.trim();
-      if (trimmed) set(key, trimmed);
-      else void sql`DELETE FROM agent_config WHERE key = ${key}`;
-    },
     getAdvisorEnabled() { return get(AGENT_CONFIG_KEYS.advisorEnabled) === 'true'; },
     setAdvisorEnabled(enabled) { set(AGENT_CONFIG_KEYS.advisorEnabled, String(enabled)); },
     getAdvisorMinSeverity() {
@@ -462,8 +440,13 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
     setChangelogSeenAt(ms) {
       if (Number.isFinite(ms) && ms > 0) set(AGENT_CONFIG_KEYS.changelogSeenAt, String(Math.floor(ms)));
     },
-    countClosedSessionWindow() {
-      return increment(AGENT_CONFIG_KEYS.closedSessionWindows);
+    countClosedTurnWindow() {
+      if (get(AGENT_CONFIG_KEYS.closedTurnWindows) === null) {
+        const legacy = get('closed_session_windows');
+        if (legacy !== null) set(AGENT_CONFIG_KEYS.closedTurnWindows, legacy);
+        void sql`DELETE FROM agent_config WHERE key = ${'closed_session_windows'}`;
+      }
+      return increment(AGENT_CONFIG_KEYS.closedTurnWindows);
     },
     countIsolateGeneration() {
       return increment(AGENT_CONFIG_KEYS.isolateGen);

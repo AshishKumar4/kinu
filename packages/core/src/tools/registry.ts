@@ -313,7 +313,7 @@ export const SWARM_PRESET_DOCTRINE = [
 
 /** Always present: the memory plane is `rt.memory` plus the canonical
  *  messages table, which every runtime has. */
-export const MEMORY_NOTE_ACTIONS = ['save', 'search', 'sessions'] as const;
+export const MEMORY_NOTE_ACTIONS = ['save', 'search', 'conversations'] as const;
 
 /** Present only where a FactsStore is wired. */
 export const MEMORY_FACT_ACTIONS = ['remember', 'recall', 'forget'] as const;
@@ -376,71 +376,6 @@ export function unknownActionError(
 export const TASKS_TOOL_ACTIONS = ['add', 'update', 'list', 'mode'] as const;
 export type TasksToolAction = (typeof TASKS_TOOL_ACTIONS)[number];
 
-// ── Stance doctrine (single source) ─────────────────────────────────────────
-// A stance is HOW the agent is working right now. It is not a permission: what
-// a turn may do is decided by the Plan/Auto axis (prompting/surface.ts's
-// WorkMode), and Plan is enforced structurally — submit_plan exists only on a
-// Plan turn and `release.*` is mechanically removed from the namespace. A
-// stance only adds lines to the operating guidance, so no stance can widen or
-// narrow that. It rides `tasks` because it is the same kind of state the task
-// list is: the agent's own record of the work in front of it.
-//
-// `general` is the default and renders NOTHING. That is deliberate — the
-// absence of constraint is how the agent already works, and giving the default
-// a paragraph would spend the model's attention saying so.
-
-export const AGENT_STANCES = ['general', 'research', 'build', 'audit'] as const;
-export type AgentStance = (typeof AGENT_STANCES)[number];
-export const DEFAULT_AGENT_STANCE: AgentStance = 'general';
-
-/** Narrows a stored config value or a model-supplied argument to a stance. */
-export function isAgentStance(value: string | null | undefined): value is AgentStance {
-  return AGENT_STANCES.some((stance) => stance === value);
-}
-
-export interface AgentStanceSpec {
-  /** What picking this stance is for. Schema-only — the enum description the
-   *  model reads when it decides, mirroring BuiltinToolSpec.whenToUse. */
-  pick: string;
-  /** The lines added to the prompt's operating guidance while this stance is
-   *  set. Rendered verbatim by prompt.ts and written nowhere else. */
-  guidance: readonly string[];
-}
-
-export const AGENT_STANCE_SPECS = {
-  general: {
-    pick: 'the default — work the way the task in front of you needs',
-    guidance: [],
-  },
-  research: {
-    pick: 'understanding something before deciding what to do about it',
-    guidance: [
-      'Research stance: read the code, logs and data yourself, and name the file and line each claim rests on.',
-      'Say which parts you confirmed, which are still open, and what evidence would close them.',
-    ],
-  },
-  build: {
-    pick: 'carrying a change through to something that runs',
-    guidance: [
-      'Build stance: carry the change through to something that runs, and show the command output that proves it.',
-      'Keep each changed line traceable to the request or to the root cause behind it.',
-    ],
-  },
-  audit: {
-    pick: 'going over a surface end to end and reporting what is there',
-    guidance: [
-      'Audit stance: cover the whole surface in front of you, and give every finding a file and line.',
-      'Lead with what matters most, and say what you checked to reach each finding.',
-    ],
-  },
-} satisfies Record<AgentStance, AgentStanceSpec>;
-
-/** The stance choices, composed from the same specs the prompt renders so
- *  there is one place to edit. Read by the `tasks` docstring below and by the
- *  `stance` property description in tools/builtins.ts — the two places a model
- *  can learn a stance exists. */
-export const STANCE_CHOICES: string =
-  AGENT_STANCES.map((stance) => `${stance} = ${AGENT_STANCE_SPECS[stance].pick}`).join('. ');
 
 export type MemoryToolAction =
   | (typeof MEMORY_NOTE_ACTIONS)[number]
@@ -452,27 +387,27 @@ export type MemoryToolAction =
  * the gated one when no FactsStore is supplied.
  */
 export function memoryToolSpec(hasFacts: boolean): BuiltinToolSpec {
-  // The sessions mode contract (query searches, around_message_id scrolls,
-  // neither browses) lives ONLY in the input-schema property descriptions.
+  // The conversations mode contract (query searches, around_message_id scrolls,
+  // neither browses) lives only in the input-schema property descriptions.
   return {
     name: 'memory',
     summary: hasFacts
-      ? 'Durable state you read back in a later turn: keyed facts, prose notes, past session transcripts.'
-      : 'Durable state you read back in a later turn: prose notes, past session transcripts.',
+      ? 'Durable state you read back in a later turn: keyed facts, prose notes, past conversations.'
+      : 'Durable state you read back in a later turn: prose notes and past conversations.',
     whenToUse:
       'Use for anything that must outlive this turn. '
       + (hasFacts
-        ? 'remember/recall/forget name state you look up precisely — preferences, project state, URLs, configuration, dates, decisions; update a stale key rather than adding a contradictory second fact. '
+        ? 'remember/recall hold a small named value; update a stale key rather than adding a contradictory second fact; '
         : '')
-      + 'save/search hold a lesson or note too long to be a value; sessions reads what past sessions said, before re-deriving context you already have.',
+      + 'save/search hold a lesson or note too long to be a value; conversations reads what this agent said before.',
     whenNotToUse: 'Do not store temporary task progress, stale logs, or anything this turn already carries.',
     // Not a usage rule but a fact about what is already in the store: the
     // harness writes failed work here as lessons, so the search is worth
     // making before the retry rather than after it.
     doctrine: 'Your own failures are recorded as lessons in here — search before retrying similar work.',
     result: hasFacts
-      ? 'Returns save or fact-mutation status, recalled fact values, note search hits, or session transcript slices.'
-      : 'Returns save status, note search hits, or session transcript slices.',
+      ? 'Returns save or fact-mutation status, recalled fact values, note search hits, or conversation transcript slices.'
+      : 'Returns save status, note search hits, or conversation transcript slices.',
     example: hasFacts
       ? "memory({action:'remember', key:'deploy.target', value:'staging'})"
       : "memory({action:'save', content:'Staging deploys need the tunnel up first.'})",
@@ -663,13 +598,13 @@ export const BUILTIN_TOOL_SPECS = {
   memory: memoryToolSpec(true),
   tasks: {
     name: 'tasks',
-    summary: 'Your own task list and working stance — write down the steps, mark one active, close it when it lands, and set how you are working.',
+    summary: 'Your own task list and durable role — write down the steps, mark one active, close it when it lands, and select how you work.',
     whenToUse:
       'Use whenever the work ahead is more than a step or two, and at the moment you learn a step has parts: '
       + 'add writes several titles in one call, so one call records the whole plan; pass parent to file them under a task you already wrote. '
       + 'update moves one item to active as you start it and done as you finish it, or to dropped when it turns out not to be needed. '
       + 'list reads the whole list back, closed items included. '
-      + `mode sets the stance you work in — ${STANCE_CHOICES} — and reads the current one back when called with no stance.`,
+      + `mode switches your durable role — pass \`role\` to switch (it applies from your NEXT turn; the current one keeps its resolved profile), or call with no argument to read the active role id.`,
     // A standing fact about where the list is READ, which is what makes
     // keeping it current worth the call.
     doctrine:
@@ -680,7 +615,7 @@ export const BUILTIN_TOOL_SPECS = {
       'add returns the new ids in order, with any title it refused and why. '
       + 'update returns the item at its new status, and says how many of its subtasks are still open when you close a parent. '
       + 'list returns every item, each task carrying its subtasks. '
-      + 'mode returns the stance now in force; its guidance joins your operating guidance from your next turn, and it never changes what a turn is allowed to do.',
+      + 'mode returns the active role; a switch applies from the next turn and never changes what the current turn is allowed to do.',
     example: "tasks({action:'add', titles:['Reproduce the 502', 'Patch the gateway timeout', 'Add a regression test']})",
   },
   web: {
@@ -733,7 +668,6 @@ export const BUILTIN_TOOL_DESCRIPTIONS = {
  * The `execute_tools` docstring the model actually receives: this registry's
  * doctrine for the tool, the two standing facts about the sandbox itself, then
  * the TypeScript declaration of every namespace that sandbox binds.
- *
  * BOTH backends compose it here, because until they did they described one tool
  * two incompatible ways and neither was complete. The CF backend passed no
  * description to @cloudflare/codemode's createCodeTool, so production shipped

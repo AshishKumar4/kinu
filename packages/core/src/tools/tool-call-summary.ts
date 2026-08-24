@@ -90,7 +90,7 @@ const MUTATING_ACTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
 const OBSERVING_ACTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['file', new Set(['read', 'list', 'search'])],
   ['tasks', new Set(['list'])],
-  ['memory', new Set(['search', 'get', 'list', 'recall', 'sessions'])],
+  ['memory', new Set(['search', 'get', 'list', 'recall', 'conversations'])],
   ['agents', new Set(['list', 'status'])],
   ['web', new Set(['search', 'fetch'])],
   ['fact', new Set(['get', 'list'])],

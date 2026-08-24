@@ -2,12 +2,14 @@ import { statSync } from 'node:fs';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import { listCloudAgents } from '../cloud-api';
 import { reconcileAgentRefs } from '../agent-list';
-import { agentDbPath, listAgentDirs, loadConfigFile, resolveCloudSession } from '../config';
+import { agentDbPath, listAgentDirs, listLegacyAgentNames, loadConfigFile, resolveCloudSession } from '../config';
 import { printAgentList } from '../display';
 import { getLocalAgentInfo } from '../local-inspection';
 
 export async function listCommand(): Promise<void> {
-  const localAgents = listAgentDirs();
+  // This project's agents, then the ones no project claims yet, so listing
+  // stays machine-wide while grouping stays honest about placement.
+  const localAgents = [...listAgentDirs(), ...listLegacyAgentNames()];
   const configuredAgents = Object.values(loadConfigFile().agents ?? {});
   const cloudSession = resolveCloudSession();
   const cloudAgents = cloudSession

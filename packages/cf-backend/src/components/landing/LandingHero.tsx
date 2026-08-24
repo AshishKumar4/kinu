@@ -350,7 +350,7 @@ export function LandingHero({ install }: { install: string }): ReactElement {
             Agents that <span className="block h-[2.02em] overflow-hidden p-gold">{phrase}<span aria-hidden className="ml-[.06em] inline-block h-[.8em] w-[.075em] translate-y-[.1em] bg-[var(--c-accent)] motion-safe:animate-pulse" /></span>
           </h1>
           <p className="mb-8 max-w-[520px] text-[17.5px] leading-[1.65] text-pretty p-text-3">
-            Persistent workspaces with files, sessions, and memory. Hosted on Cloudflare, so tasks keep running after you close the laptop — or fully native on your machine, in the terminal or your editor.
+            Persistent workspaces with files, memory, and one conversation per agent. Cloud agents keep working after you close the laptop. Local agents run in your terminal or editor.
           </p>
           <div className="flex max-w-[540px] items-center justify-between gap-4 rounded-xl border p-border p-recessed px-4 py-3.5">
             <code className="min-w-0 flex-1 truncate font-mono text-[12.5px] p-text-2"><span className="p-gold">$</span> <span data-install-command>{install}</span></code>

@@ -8,8 +8,9 @@ import * as v from 'valibot';
 import {
   buildBuiltinTools, initAllTables, initTaskListTable, BUILTIN_TOOL_SPECS,
   createTasksCodemodeProvider, TaskListStore, initAgentConfigTable,
-  buildSystemPromptSync, createAgentConfigStore, AGENT_STANCES,
-  type AgentRuntime, type CodemodeProvider, type JsonValue,
+  buildSystemPromptSync, createAgentConfigStore,
+  BUILTIN_PROFILE_CATALOG, BUILTIN_ROLE_DEFINITIONS, deriveRoleLabel, profileCatalogDigest,
+  type AgentRuntime, type CodemodeProvider, type JsonValue, type ProfileCatalogEnvelope,
 } from '../src/index';
 
 type TasksResult = object | string | number | boolean | null | undefined;
@@ -19,7 +20,7 @@ interface TasksTestInput {
   parent?: string;
   id?: string;
   status?: string;
-  stance?: string;
+  role?: string;
 }
 type Exec = (args: TasksTestInput) => Promise<TasksResult>;
 
@@ -35,8 +36,15 @@ const TaskListSchema = v.object({
   })),
 });
 
+const PROFILE_ENVELOPE: ProfileCatalogEnvelope = {
+  authority: { kind: 'local' },
+  version: 0,
+  digest: profileCatalogDigest(BUILTIN_PROFILE_CATALOG),
+  catalog: BUILTIN_PROFILE_CATALOG,
+};
+
 function nativeTasks(rt: AgentRuntime): Exec {
-  const entry = buildBuiltinTools({ rt }).tasks;
+  const entry = buildBuiltinTools({ rt, roleAuthority: () => PROFILE_ENVELOPE }).tasks;
   if (!entry) throw new Error('Expected tasks tool to be registered');
   return toolExecute<TasksTestInput, TasksResult>(entry);
 }
@@ -231,12 +239,10 @@ describe('tasks.* codemode — the SAME dispatcher and store the native tool use
   });
 });
 
-// The wiring this whole axis stands on: what the agent SETS through the tool
-// has to be what the next turn's system prompt CARRIES. Cut any link — the
-// dispatcher's write, the config accessor, the prompt's stance option, or the
-// render loop — and these fail.
-describe('tasks action=mode — the agent\'s own working stance', () => {
-  function stanceSetup() {
+// The wiring this axis stands on: what the agent sets through the tool is what
+// the next turn resolves from the catalog.
+describe('tasks action=mode — the agent\'s durable role', () => {
+  function roleSetup() {
     const { rt, testSql } = createTestRuntime();
     initAllTables(testSql.execRaw, rt.storage.sql);
     initTaskListTable(testSql.execRaw);
@@ -244,62 +250,60 @@ describe('tasks action=mode — the agent\'s own working stance', () => {
     return { tasks: nativeTasks(rt), rt, config: createAgentConfigStore(rt.storage.sql) };
   }
 
-  test('a stance the agent sets reaches the system prompt it is built with next', async () => {
-    const { tasks, rt, config } = stanceSetup();
-    // Before: nothing.
-    expect(buildSystemPromptSync(rt, { stance: config.getStance() }))
-      .not.toContain('Research stance:');
+  function roleSection(roleId: keyof typeof BUILTIN_ROLE_DEFINITIONS) {
+    return {
+      id: roleId,
+      label: deriveRoleLabel(roleId),
+      instructions: BUILTIN_ROLE_DEFINITIONS[roleId].instructions,
+    };
+  }
 
-    expect(await tasks({ action: 'mode', stance: 'research' })).toEqual({ stance: 'research' });
+  test('a role switch persists for the next prompt', async () => {
+    const { tasks, rt, config } = roleSetup();
+    expect(config.getActiveRoleId()).toBe('general');
+    expect(await tasks({ action: 'mode', role: 'researcher' })).toEqual({ role: 'researcher' });
+    expect(config.getActiveRoleId()).toBe('researcher');
 
-    // The backend reads exactly this on the next turn (actor-agent.ts
-    // `stance: this.config.getStance()`, local-session.ts likewise).
-    const prompt = buildSystemPromptSync(rt, { stance: config.getStance() });
-    expect(prompt).toContain('Research stance:');
-    expect(prompt).toContain('name the file and line each claim rests on');
+    const prompt = buildSystemPromptSync(rt, { roleSection: roleSection('researcher') });
+    expect(prompt).toContain('Role: Researcher');
+    expect(prompt).toContain(BUILTIN_ROLE_DEFINITIONS.researcher.instructions);
   });
 
-  test('mode with no stance reads the current one back, and it is general until set', async () => {
-    const { tasks } = stanceSetup();
-    expect(await tasks({ action: 'mode' })).toEqual({ stance: 'general' });
-    await tasks({ action: 'mode', stance: 'audit' });
-    expect(await tasks({ action: 'mode' })).toEqual({ stance: 'audit' });
+  test('mode with no role reads the current role', async () => {
+    const { tasks } = roleSetup();
+    expect(await tasks({ action: 'mode' })).toEqual({ role: 'general' });
+    await tasks({ action: 'mode', role: 'auditor' });
+    expect(await tasks({ action: 'mode' })).toEqual({ role: 'auditor' });
   });
 
-  test('an unknown stance is refused with the vocabulary, and changes nothing', async () => {
-    const { tasks } = stanceSetup();
-    await tasks({ action: 'mode', stance: 'audit' });
-    expect(await tasks({ action: 'mode', stance: 'yolo' }))
-      .toEqual({ error: `tasks.mode requires \`stance\` — one of ${AGENT_STANCES.join(', ')}` });
-    expect(await tasks({ action: 'mode' })).toEqual({ stance: 'audit' });
+  test('an unknown role is refused and changes nothing', async () => {
+    const { tasks } = roleSetup();
+    await tasks({ action: 'mode', role: 'auditor' });
+    expect(await tasks({ action: 'mode', role: 'yolo' }))
+      .toMatchObject({ error: expect.stringContaining('unknown role yolo') });
+    expect(await tasks({ action: 'mode' })).toEqual({ role: 'auditor' });
   });
 
-  test('setting a stance mid-Plan-turn does not lift the Plan bar', async () => {
-    // The permission axis is the only thing that decides this, and `build` is
-    // the hostile stance name to try it with.
-    const { tasks, rt, config } = stanceSetup();
-    expect(await tasks({ action: 'mode', stance: 'build' })).toEqual({ stance: 'build' });
+  test('switching to implementer during a Plan turn does not lift the Plan bar', async () => {
+    const { tasks, rt } = roleSetup();
+    expect(await tasks({ action: 'mode', role: 'implementer' })).toEqual({ role: 'implementer' });
 
     const plan = buildSystemPromptSync(rt, {
-      workMode: 'plan', planSubmissionAvailable: true, stance: config.getStance(),
+      workMode: 'plan',
+      planSubmissionAvailable: true,
+      roleSection: roleSection('implementer'),
     });
-    expect(plan).toContain('Build stance:');
+    expect(plan).toContain('Role: Implementer');
     expect(plan).toContain('Do not change files, system state, releases, or deployments');
     expect(plan).toContain('Do not begin implementation until the plan is approved');
-
-    // And the structural half is untouched: submit_plan's presence is decided
-    // by the Plan deps, and the stance is not an input to tool construction.
     expect(Object.keys(buildBuiltinTools({ rt }))).not.toContain('submit_plan');
   });
 
-  test('the model can discover the action and its values from the schema alone', async () => {
-    // A self-selected stance the agent is never told about is unreachable by
-    // construction, so the vocabulary has to be in what the provider reads.
+  test('the model can discover durable role switching from the schema', () => {
     const { rt } = createTestRuntime();
-    const entry = buildBuiltinTools({ rt }).tasks;
+    const entry = buildBuiltinTools({ rt, roleAuthority: () => PROFILE_ENVELOPE }).tasks;
     const description = entry?.description ?? '';
-    expect(description).toContain('mode sets the stance you work in');
-    for (const stance of AGENT_STANCES) expect(description).toContain(`${stance} = `);
-    expect(BUILTIN_TOOL_SPECS.tasks.whenToUse).toContain('mode sets the stance you work in');
+    expect(description).toContain('mode switches your durable role');
+    expect(BUILTIN_TOOL_SPECS.tasks.whenToUse).toContain('mode switches your durable role');
   });
 });

@@ -16,6 +16,14 @@ import * as v from 'valibot';
 
 const repoRoot = resolve(__dirname, '../../..');
 const tempDirs: string[] = [];
+
+/** Fresh throwaway project directory per spawn: the CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo. */
+function newProjectDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'kinu-test-project-'));
+  tempDirs.push(dir);
+  return dir;
+}
+
 const sleepers: Subprocess[] = [];
 const stubs: Server<unknown>[] = [];
 
@@ -270,11 +278,11 @@ describe('classic cloud chat connect prompt', () => {
       'chat',
       'jarvis',
       '--classic',
-      '--no-session',
+      '--no-transcript',
     ].join(' ');
     const proc = Bun.spawn({
       cmd: ['script', '-qefc', command, '/dev/null'],
-      cwd: repoRoot,
+      cwd: newProjectDir(),
       stdin: 'pipe',
       stdout: 'pipe',
       stderr: 'pipe',
@@ -342,8 +350,8 @@ describe('classic cloud chat connect prompt', () => {
     const cliBin = resolve(repoRoot, 'packages/cli/bin/cli.ts');
 
     const proc = Bun.spawn({
-      cmd: [process.execPath, cliBin, 'chat', 'jarvis', '--no-session'],
-      cwd: repoRoot,
+      cmd: [process.execPath, cliBin, 'chat', 'jarvis', '--no-transcript'],
+      cwd: newProjectDir(),
       stdin: Buffer.from('/exit\n'),
       stdout: 'pipe',
       stderr: 'pipe',
@@ -365,7 +373,7 @@ describe('/connect slash command', () => {
     const { commandsForClient, executeSlashCommand } = await import('../src/slash-commands');
     const clientOptions = {
       origin: 'https://kinu.invalid', token: 'test', agentName: 'test', cloudName: 'test',
-      session: { noSession: true },
+      transcript: { noTranscript: true },
     };
     const cloudish = new CloudAgentClient(clientOptions);
     const localish = new CloudAgentClient(clientOptions);

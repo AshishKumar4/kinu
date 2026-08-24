@@ -55,6 +55,7 @@ export async function resolveTurnSkills(opts: {
   vfs: SkillsVfs;
   config: TurnSkillsConfig;
   userText: string;
+  roleSkills?: readonly string[];
 }): Promise<TurnSkillSurface> {
   let available: ParsedSkill[];
   try {
@@ -67,7 +68,10 @@ export async function resolveTurnSkills(opts: {
     available = [...BUILTIN_SKILLS];
   }
   const explicit = extractExplicitInvocations(opts.userText);
-  const alwaysActive = opts.config.getAlwaysActiveSkills();
+  const alwaysActive = [
+    ...opts.config.getAlwaysActiveSkills(),
+    ...(opts.roleSkills ?? []),
+  ];
   const activeSet = resolveActiveSkills({
     available, explicit, userMessage: opts.userText, alwaysActive,
   });

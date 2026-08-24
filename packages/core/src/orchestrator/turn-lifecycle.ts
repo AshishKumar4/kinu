@@ -18,7 +18,8 @@
 import type { TurnContextBudget } from '../context-budget';
 import type { TurnFileLedger } from '../tools/file-ledger';
 import type {
-  CompletionGateRecord, CraftCycleRecord, ExecutionRecoveryRecord, RunEventInput, TurnSteeringRecord,
+  CompletionGateRecord, CraftCycleRecord, DelegationOpportunityRecord, ExecutionRecoveryRecord,
+  RunEventInput, TurnSteeringRecord,
 } from '../events/types';
 import type { TurnEscalationLedger } from '../execution/escalation';
 import type { CompletedTurn } from '../evolution/types';
@@ -89,6 +90,11 @@ export function closeTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
    *  empty on a turn that was never steered, `turn_end` being the denominator
    *  here too. */
   steering?: readonly TurnSteeringRecord[] | undefined;
+  /** The turn's delegation opportunities (orch.steering.delegationSnapshot())
+   *  — the hint arm when a hint was delivered, the unprompted arm when the
+   *  model delegated with no hint. Each arm's denominator is its own; see the
+   *  row type for why they are not folded into `turn_steering`. */
+  delegation?: readonly DelegationOpportunityRecord[] | undefined;
   /** The one-shot completion gate's verdict (gate.take()), or null on every
    *  run that is not the confirming turn — one row per gated run. */
   completionGate?: CompletionGateRecord | null | undefined;
@@ -112,6 +118,12 @@ export function closeTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
       recorder.emit(runId, { type: 'file_edit', ...opts.files.snapshot() });
     }
     for (const steer of opts.steering ?? []) recorder.emit(runId, { type: 'turn_steering', ...steer });
+    // The delegation opportunities ride the same settle spine, AFTER the
+    // steering rows: a hint row and its opportunity describe one delivery, and
+    // reading them in delivery order keeps that pairing visible in the raw log.
+    for (const delegation of opts.delegation ?? []) {
+      recorder.emit(runId, { type: 'delegation_opportunity', ...delegation });
+    }
     if (opts.completionGate) recorder.emit(runId, { type: 'completion_gate', ...opts.completionGate });
     if (opts.craft) recorder.emit(runId, { type: 'craft_cycle', ...opts.craft });
     if (opts.recoveries) recorder.emit(runId, { type: 'execution_recovery', ...opts.recoveries });

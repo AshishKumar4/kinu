@@ -31,6 +31,34 @@ describe('UserDO schema bootstrap', () => {
     db.close();
   });
 
+  test('reconciles the catalog CAS version onto user_config, with no parallel table', () => {
+    const db = new Database(':memory:');
+    db.run(`
+      CREATE TABLE user_config (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+    db.run(
+      `INSERT INTO user_config (key, value, updated_at) VALUES (?, ?, ?)`,
+      ['default_model', 'workers-ai/example', 1],
+    );
+
+    initUserTables(sqlExec(db), taggedSql(db));
+
+    expect(columns(db, 'user_config')).toEqual(['key', 'value', 'updated_at', 'version']);
+    const row = required(db.query<{ value: string; version: number }, []>(
+      `SELECT value, version FROM user_config WHERE key = 'default_model'`,
+    ).get());
+    expect(row).toEqual({ value: 'workers-ai/example', version: 0 });
+    const tables = db.query<{ name: string }, []>(
+      `SELECT name FROM sqlite_master WHERE type = 'table'`,
+    ).all().map((entry) => entry.name);
+    expect(tables).not.toContain('profile_catalog');
+    db.close();
+  });
+
   test('peer-grant store: default deny, idempotent grant, revoke', () => {
     const db = new Database(':memory:');
     initUserTables(sqlExec(db), taggedSql(db));

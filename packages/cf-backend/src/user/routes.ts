@@ -5,11 +5,13 @@
  *
  * Routes:
  *   GET    /api/user/profile                       — user info
+ *   GET    /api/user/profile-catalog               — the account's role/tier catalog envelope
+ *   PUT    /api/user/profile-catalog               — compare-and-swap update ({ catalog, expectedVersion })
  *   GET    /api/user/cli                           — CLI setup commands
- *   GET    /api/user/workspaces                        — agent registry
- *   POST   /api/user/workspaces                        — register new agent
- *   POST   /api/user/workspaces/:name/touch            — update last_visited
- *   DELETE /api/user/workspaces/:name                  — remove from registry
+ *   GET    /api/user/workspaces                    — agent roster page (?cursor=&limit=, nextCursor walks)
+ *   POST   /api/user/workspaces                    — register new agent
+ *   POST   /api/user/workspaces/:name/touch        — update last_visited
+ *   DELETE /api/user/workspaces/:name              — remove from registry
  *   GET    /api/user/credentials                   — key/kind/timestamps only; no secret is readable back
  *   POST   /api/user/credentials/:key              — set
  *   DELETE /api/user/credentials/:key              — delete
@@ -37,6 +39,7 @@
  */
 import type { AuthIdentity } from '../auth/session';
 import type { UserDO } from './user-do';
+import { PROFILE_CATALOG_CONFIG_KEY } from './schema';
 import { DEVICE_CONSENT_SCOPE, DEVICE_CONSENT_SCOPE_FULL_FS, JsonValueSchema } from '@kinu.run/core';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '../cli/install-command';
@@ -116,6 +119,29 @@ export async function handleUserRequest(
   if (path === '/profile' && method === 'GET') {
     return json(await stub.getProfile(await ownerCaller(env)));
   }
+
+  // ── Profile catalog (account authority over roles + tiers) ──────────
+  if (path === '/profile-catalog' && method === 'GET') {
+    return json(await stub.getProfileCatalog(owner));
+  }
+  if (path === '/profile-catalog' && method === 'PUT') {
+    const body = await safeJson(request, v.object({
+      catalog: JsonValueSchema,
+      expectedVersion: v.number(),
+    }));
+    if (!body) return err(400, 'Body must be { catalog, expectedVersion }.');
+    const result = await stub.putProfileCatalog(owner, body.catalog, body.expectedVersion);
+    if (result.ok) return json(result.envelope);
+    if (result.kind === 'conflict') {
+      return json({
+        error: `Version conflict: the stored catalog is at version ${result.currentVersion}.`,
+        currentVersion: result.currentVersion,
+        currentDigest: result.currentDigest,
+      }, { status: 409 });
+    }
+    return err(400, result.reason);
+  }
+
   if (path === '/cli' && method === 'GET') {
     const cliOrigin = normalizeCliOrigin(env.CLI_PUBLIC_ORIGIN || url.origin);
     return json({
@@ -128,7 +154,12 @@ export async function handleUserRequest(
 
   // ── Agents ─────────────────────────────────────────────────────────
   if (path === '/workspaces' && method === 'GET') {
-    return json(await stub.listWorkspaces(await ownerCaller(env)));
+    const cursor = url.searchParams.get('cursor');
+    const limitRaw = url.searchParams.get('limit');
+    return json(await stub.listWorkspaces(owner, {
+      cursor,
+      limit: limitRaw === null ? undefined : Number(limitRaw),
+    }));
   }
   if (path === '/workspaces' && method === 'POST') {
     return handleCreateWorkspaceRequest(request, env, identity.userId, stub, ctx);
@@ -236,6 +267,9 @@ export async function handleUserRequest(
   const cfgMatch = path.match(/^\/config\/([^/]+)$/);
   if (cfgMatch) {
     const key = decodeURIComponent(cfgMatch[1]);
+    if (key === PROFILE_CATALOG_CONFIG_KEY) {
+      return err(400, 'Profile catalogs use /api/user/profile-catalog.');
+    }
     if (method === 'GET') {
       return json({ key, value: await stub.getConfig(await ownerCaller(env), key) });
     }

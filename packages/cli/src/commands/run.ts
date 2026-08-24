@@ -34,19 +34,15 @@ import {
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { installTurnDiagnostics } from '../turn-log';
 
-/** Session flags as Commander actually delivers them: `--no-session` arrives
- *  as `session: false` on the shared option key, not as `noSession: true`. */
-interface OneShotSessionFlags {
-  continue?: boolean;
-  resume?: boolean;
-  session?: string | false;
-  sessionDir?: string;
-  noSession?: boolean;
-  name?: string;
-  fork?: string;
+/** Transcript flags as Commander actually delivers them: `--no-transcript`
+ *  arrives as `transcript: false` on the shared option key, not as
+ *  `noTranscript: true`. */
+interface TranscriptFlags {
+  transcript?: boolean;
+  transcriptDir?: string;
 }
 
-export async function runCommand(name: string, promptParts: string[], opts: AgentClientFlags & OneShotSessionFlags & {
+export async function runCommand(name: string, promptParts: string[], opts: AgentClientFlags & TranscriptFlags & {
   classic?: boolean;
   mode?: string;
 }): Promise<void> {
@@ -66,7 +62,7 @@ export async function runCommand(name: string, promptParts: string[], opts: Agen
       baseUrl: opts.baseUrl,
       auth: opts.auth,
       classic: opts.classic,
-      ...sessionOptions(opts),
+      ...transcriptOptions(opts),
     });
     return;
   }
@@ -83,10 +79,8 @@ export interface ExecOptions extends Omit<AgentClientFlags, 'noAutoEvolve'> {
   json?: boolean;
   /** Commander delivers `--no-auto-evolve` as `autoEvolve: false`. */
   autoEvolve?: boolean;
-  resume?: string;
-  session?: string | false;
-  sessionDir?: string;
-  name?: string;
+  transcript?: boolean;
+  transcriptDir?: string;
 }
 
 /**
@@ -107,9 +101,7 @@ export async function execCommand(promptParts: string[], opts: ExecOptions): Pro
     baseUrl: opts.baseUrl,
     auth: opts.auth,
     noAutoEvolve: opts.autoEvolve === false,
-    session: opts.resume ?? opts.session,
-    sessionDir: opts.sessionDir,
-    name: opts.name,
+    ...transcriptOptions(opts),
   }, {
     json: opts.json === true,
     headless: true,
@@ -156,7 +148,7 @@ function resolveExecWorkspaceName(explicit?: string): string {
 async function runOneShot(
   target: AgentTarget,
   rawPrompt: string,
-  opts: AgentClientFlags & OneShotSessionFlags,
+  opts: AgentClientFlags & TranscriptFlags,
   surface: { json: boolean; headless: boolean },
 ): Promise<boolean> {
   // The daemon is this process's deferred-work host: a one-shot run never
@@ -169,7 +161,7 @@ async function runOneShot(
   if (!surface.json) installTurnDiagnostics();
   const client = await createAgentClient(
     target,
-    { model: opts.model, baseUrl: opts.baseUrl, auth: opts.auth, noAutoEvolve: opts.noAutoEvolve, ...sessionOptions(opts) },
+    { model: opts.model, baseUrl: opts.baseUrl, auth: opts.auth, noAutoEvolve: opts.noAutoEvolve, ...transcriptOptions(opts) },
     'one-shot',
   );
 
@@ -223,16 +215,10 @@ async function runOneShot(
   return failed;
 }
 
-function sessionOptions(opts: OneShotSessionFlags): CliSessionOptions {
-  const session = v.safeParse(v.string(), opts.session);
+function transcriptOptions(opts: TranscriptFlags): CliSessionOptions {
   return {
-    continue: opts.continue,
-    resume: opts.resume === true,
-    session: session.success ? session.output : undefined,
-    sessionDir: opts.sessionDir,
-    noSession: opts.noSession === true || opts.session === false,
-    name: opts.name,
-    fork: opts.fork,
+    transcriptDir: opts.transcriptDir,
+    noTranscript: opts.transcript === false,
   };
 }
 
@@ -258,10 +244,10 @@ function askLineOnce(question: string, signal: AbortSignal): Promise<string | nu
 
 async function runRpc(
   target: AgentTarget,
-  opts: AgentClientFlags & OneShotSessionFlags,
+  opts: AgentClientFlags & TranscriptFlags,
 ): Promise<void> {
   const output = (input: { value: unknown }) => process.stdout.write(`${JSON.stringify(decodeJsonValue(input))}\n`);
-  const clientOpts = { model: opts.model, baseUrl: opts.baseUrl, auth: opts.auth, ...sessionOptions(opts) };
+  const clientOpts = { model: opts.model, baseUrl: opts.baseUrl, auth: opts.auth, ...transcriptOptions(opts) };
 
   if (target.mode === 'cloud') {
     const auth = requireAuthConfig();
@@ -306,7 +292,8 @@ async function runRpc(
   const client = await createAgentClient(target, clientOpts);
   client.subscribe((event) => output({ value: { type: 'event', event } }));
   output({ value: { type: 'session', id: client.cliSession.id, workspace: target.name, backend: 'local', cwd: process.cwd() } });
-  // Defer MCP connection and job recovery until the first prompt.
+  // Defer client-owned MCP connection until the first prompt. The daemon
+  // already owns orphaned-job recovery.
   let connected = false;
   const ensureConnected = async () => {
     if (connected) return;

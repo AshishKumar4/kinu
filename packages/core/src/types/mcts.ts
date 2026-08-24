@@ -33,6 +33,9 @@ export interface SearchNode {
   status: NodeStatus;
   msg_id: string | null;
   branch_agent_key: string | null;
+  /** JSON-encoded bounded facts from this branch's evaluator. Null for a node
+   *  that was never evaluated (the root; a swarm node). */
+  evaluation_json: string | null;
   created_at: number;
 }
 

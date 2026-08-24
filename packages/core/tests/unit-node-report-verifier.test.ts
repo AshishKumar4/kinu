@@ -35,8 +35,6 @@ import { initHeadsTables } from '../src/heads/schema';
 import { runNodeAgent } from '../src/strategy/node-agent';
 import type { NodeAgentDeps, NodeAgentInput } from '../src/strategy/node-agent';
 
-const STALL_MS = 4_000;
-
 /** What the gate says when it refuses, as the node sees it. */
 const UNRUNNABLE = 'the candidate did not parse: unexpected token at line 1';
 
@@ -130,7 +128,6 @@ function fixture(over: {
 
     maxWallClockMs: 60_000,
     logger: createRecordingLogger(),
-    callTimeoutMs: STALL_MS,
   };
   if (over.gradeReport !== undefined) deps.gradeReport = over.gradeReport;
   return { input, deps };

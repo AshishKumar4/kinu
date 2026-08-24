@@ -5,7 +5,7 @@
  * lives in DeviceConnectOverlay and key routing in the host's useKeyboard.
  */
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { requireAuthConfig } from '../config';
 import {
   connectDevice,
@@ -15,6 +15,7 @@ import {
   shouldOfferDeviceConnect,
 } from '../device-connect';
 import { renderThrownChain } from '@kinu.run/core/obs';
+import { createKeyDispatcher, useKeybindingRegistry, type TuiKeyEvent } from './actions';
 
 export type DeviceConnectPromptState =
   | { phase: 'ask'; statusLine: string }
@@ -32,10 +33,12 @@ export interface DeviceConnectPrompt {
   /** Open unconditionally with current device status (the /connect command). */
   open(): Promise<void>;
   /** Route a key press; true when the prompt consumed it. */
-  handleKey(key: { name: string }): boolean;
+  handleKey(key: TuiKeyEvent): boolean;
 }
 
 export function useDeviceConnectPrompt(): DeviceConnectPrompt {
+  const keybindings = useKeybindingRegistry();
+  const dispatcher = useMemo(() => createKeyDispatcher(keybindings), [keybindings]);
   const [state, setState] = useState<DeviceConnectPromptState | null>(null);
   const stateRef = useRef<DeviceConnectPromptState | null>(null);
   const doneRef = useRef<(() => void) | null>(null);
@@ -55,10 +58,12 @@ export function useDeviceConnectPrompt(): DeviceConnectPrompt {
     done?.();
   }, [update]);
 
-  const beginAsk = useCallback((statusLine: string) => new Promise<void>((resolve) => {
+  const beginAsk = useCallback((statusLine: string) => {
+    const { promise, resolve } = Promise.withResolvers<void>();
     doneRef.current = resolve;
     update({ phase: 'ask', statusLine });
-  }), [update]);
+    return promise;
+  }, [update]);
 
   const offerIfUnconnected = useCallback(async () => {
     if (stateRef.current) return;
@@ -92,24 +97,25 @@ export function useDeviceConnectPrompt(): DeviceConnectPrompt {
     })();
   }, [close, update]);
 
-  const handleKey = useCallback((key: { name: string }): boolean => {
+  const handleKey = useCallback((key: TuiKeyEvent): boolean => {
     const current = stateRef.current;
     if (!current) return false;
     if (current.phase === 'ask') {
-      if (key.name === 'c') startConnect(false);
-      else if (key.name === 's') startConnect(true);
-      else if (key.name === 'd') {
+      const result = dispatcher.feed(key, ['device']);
+      if (result.actionId === 'device.connect') startConnect(false);
+      else if (result.actionId === 'device.ssh') startConnect(true);
+      else if (result.actionId === 'device.dismiss') {
         dismissDeviceConnectPrompt();
         close();
-      } else if (key.name === 'n' || key.name === 'escape') close();
+      } else if (result.actionId === 'device.not-now') close();
       return true;
     }
     if (current.phase === 'result') {
       close();
       return true;
     }
-    return true; // connecting — swallow keys while the daemon comes up
-  }, [close, startConnect]);
+    return true;
+  }, [close, dispatcher, startConnect]);
 
   return { state, offerIfUnconnected, open, handleKey };
 }

@@ -1,11 +1,9 @@
 /**
- * The `memory` tool's dispatch logic — prose notes (save/search, auto-hybrid
- * FTS5 + Vectorize), the typed keyed world model (remember/recall/forget,
- * gated on a FactsStore), and past session transcripts (sessions).
+ * The durable memory surface: prose notes (save/search), keyed facts
+ * (remember/recall/forget), and this agent's past conversation transcript.
  *
- * Factored out so `memory.*` can reach the SAME implementation from inside
- * execute_tools (tools/memory-codemode.ts) that the native `memory` tool
- * calls — one dispatcher, two callers, mirroring tools/agents-tool.ts.
+ * memory.* reaches this same implementation from execute_tools. One
+ * dispatcher serves both surfaces.
  */
 import type { Memory, SqlExecutor } from '../types/primitives';
 import * as v from 'valibot';
@@ -13,7 +11,7 @@ import type { FactsStore } from '../memory/facts';
 import type { VectorStore } from '../memory/vector-store';
 import { appendMemoryNote } from '../memory/note';
 import { hybridSearch, memorySnippetRehydrator, type LexicalHit } from '../memory/hybrid-search';
-import { SessionSearchStore } from '../memory/session-search';
+import { ConversationSearchStore } from '../memory/conversation-search';
 import { decodeJsonValue, type JsonValue } from '../utils/json';
 import {
   memoryActionsFor, unknownActionError,
@@ -32,7 +30,7 @@ export interface MemoryToolDeps {
   /** Typed keyed world-model store. remember/recall/forget are only
    *  reachable when this is wired. */
   facts?: FactsStore;
-  /** Backs the `sessions` action's zero-LLM FTS5 transcript recall. */
+  /** Backs the `conversations` action's zero-LLM transcript recall. */
   sql: SqlExecutor;
 }
 
@@ -52,9 +50,9 @@ export interface MemoryToolInput {
   max_chars?: number;
 }
 
-/** Build a memory dispatcher over one runtime's stores. Constructed once —
- *  SessionSearchStore holds no state of its own, so this is cheap — and
- *  reused by every call the returned function serves. */
+/** Build a memory dispatcher over one runtime's stores. Constructed once.
+ * ConversationSearchStore holds no state of its own, so the dispatcher is
+ * reused by every call the returned function serves. */
 export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryToolInput) => Promise<JsonValue> {
   const { memory, vectorStore: vs, facts } = deps;
 
@@ -86,19 +84,19 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
       .join('\n\n');
   };
 
-  // `sessions` action — zero-LLM FTS5 transcript recall over the canonical
-  // messages table (one store, both backends). Mode inferred Hermes-style:
-  // around_message_id → scroll, query → search, neither → browse.
-  const sessionSearch = new SessionSearchStore(deps.sql);
-  const runSessionsAction = (args: MemoryToolInput): JsonValue => {
+  // `conversations` action: zero-LLM FTS5 transcript recall over the canonical
+  // messages table. Mode is inferred from the input:
+  // around_message_id -> scroll, query -> search, neither -> browse.
+  const conversationSearch = new ConversationSearchStore(deps.sql);
+  const runConversationsAction = (args: MemoryToolInput): JsonValue => {
     try {
       if (args.around_message_id) {
-        const view = sessionSearch.scroll(args.around_message_id, args.window ?? 5, args.max_chars);
+        const view = conversationSearch.scroll(args.around_message_id, args.window ?? 5, args.max_chars);
         if (!view) return { error: `no message with id ${args.around_message_id}` };
         return decodeJsonValue({ value: { mode: 'scroll', ...view } });
       }
       if (args.query?.trim()) {
-        const hits = sessionSearch.search(args.query, args.limit ?? 5);
+        const hits = conversationSearch.search(args.query, args.limit ?? 5);
         return decodeJsonValue({ value: {
           mode: 'search', query: args.query, hits,
           hint: hits.length > 0
@@ -107,10 +105,10 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
         } });
       }
       return decodeJsonValue({
-        value: { mode: 'browse', sessions: sessionSearch.browse(args.limit ?? 10) },
+        value: { mode: 'browse', conversations: conversationSearch.browse(args.limit ?? 10) },
       });
     } catch (err) {
-      return { error: `session search unavailable: ${renderThrownChain({ cause: err })}` };
+      return { error: `conversation search unavailable: ${renderThrownChain({ cause: err })}` };
     }
   };
 
@@ -164,8 +162,8 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
       case 'search':
         if (!args.query) return 'memory.search requires `query`.';
         return searchMemory(args.query);
-      case 'sessions':
-        return runSessionsAction(args);
+      case 'conversations':
+        return runConversationsAction(args);
       case 'remember':
       case 'recall':
       case 'forget':

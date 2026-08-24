@@ -23,6 +23,7 @@ import {
   type HeadRuntime,
   type MergeOutput,
   type ModelCallSink,
+  type ModelOperationSink,
 } from "@kinu.run/core";
 import { spawnHeadFacet, type ExplorationFacetIdentity, type FacetHost } from "./facet-spawn";
 import type { OwnedModelServices } from "./owned-model-services";
@@ -44,6 +45,11 @@ interface HeadRuntimeDeps {
   readonly mergeModelSpec: () => string | null;
   /** Where the merge call's cost is filed. */
   readonly reportModelCall: ModelCallSink;
+  /** Where the merge call's operation lifecycle — its start/end rows — is
+   *  filed. Rides `spend` beside `report`: two facts about ONE call, and a
+   *  caller that wired them separately could report a cost for an operation
+   *  it never opened. */
+  readonly operations?: ModelOperationSink;
   /** Omit ⇒ n=1 merge and empty head scores (`HeadRuntime.grounding`). */
   readonly grounding?: HeadGrounding;
 }
@@ -57,7 +63,7 @@ export function createHeadRuntime(deps: HeadRuntimeDeps): HeadRuntime {
         model,
         schema: MergeOutputSchema,
         prompt,
-        spend: { source: 'judge', report: deps.reportModelCall },
+        spend: { source: 'judge', report: deps.reportModelCall, operations: deps.operations },
       };
       if (providerOptions) options.providerOptions = providerOptions;
       return generateJson(options);

@@ -21,6 +21,9 @@ export {
   writeSoul,
 } from './identity/soul';
 export { WORKSPACE_IDENTITY_DDL } from './identity/schema';
+export { validateSwarmProfileSnapshot } from './profiles';
+export type { ProfileProvenance, SwarmProfileSnapshot } from './profiles';
+export { DEFAULT_WORKERS_AI_MODEL_SPEC } from './providers/workers-ai';
 export {
   forkWorkspaceStorage, snapshotWorkspaceForFork, writeForkSnapshot, readForkLineage,
   type ForkOpts, type ForkResult, type ForkLineageRow, type ForkSnapshot,
@@ -169,9 +172,7 @@ export {
 // surface is no longer exported.
 
 // Configuration
-export {
-  DEFAULT_CONFIG, LLM_CALL_MAX_RETRIES, LLM_CALL_TIMEOUT_MS,
-} from './config';
+export { DEFAULT_CONFIG } from './config';
 export { UNBOUNDED_STEPS } from './chat';
 export type { AgentConfig, MCTSDefaults, CraftStoreDefaults, ScaffoldDefaults } from './config';
 
@@ -179,6 +180,7 @@ export type { AgentConfig, MCTSDefaults, CraftStoreDefaults, ScaffoldDefaults } 
 // raw-SQL sites into a deep module with known-key getters/setters.
 export {
   createAgentConfigStore, initAgentConfigTable,
+  CONVERSATION_ID_CONFIG_KEY, FIRST_CONVERSATION_ID, canonicalConversationId,
   AGENT_CONFIG_KEYS, DEFAULT_AUTO_GEPA_EVERY_N_TURNS,
   DEFAULT_GEPA_EVAL_BUDGET, clampGepaEvalBudget,
   type AgentConfigStore, type MctsOverrides, type ShellApprovalMode,
@@ -422,19 +424,12 @@ export {
   BUILTIN_TOOL_DESCRIPTIONS,
   BUILTIN_TOOL_SPECS,
   AGENTS_TOOL_ACTIONS,
-  AGENT_STANCES,
-  AGENT_STANCE_SPECS,
-  DEFAULT_AGENT_STANCE,
-  STANCE_CHOICES,
   TASKS_TOOL_ACTIONS,
   WEB_TOOL_ACTIONS,
   FILE_TOOL_ACTIONS,
   memoryActionsFor,
   type WebToolAction,
   type FileToolAction,
-  isAgentStance,
-  type AgentStance,
-  type AgentStanceSpec,
   type TasksToolAction,
   DELEGATION_FRAME,
   DELEGATION_INHERITANCE,
@@ -456,8 +451,15 @@ export {
 export { mcpToolKey, isMcpToolKey } from './tools/mcp-naming';
 export {
   createAgentsTool, agentsActionsFor, renderAgentsToolDescription, resumableAgentsInput,
-  type AgentsToolInput,
+  parseAgentsToolInput, agentsProfileContext,
+  AGENTS_ACTION_FIELDS, AGENTS_ACTION_REQUIRED_FIELDS, AGENTS_FIELD_TS_TYPES,
+  roleSummaries,
+  type AgentsToolInput, type AgentsProfileContext, type DelegatedProfile,
 } from './tools/agents-tool';
+export {
+  createLocalPeerEndpoint, peerGroupId, samePeerGroup,
+  type HostedAgentRef, type LocalPeerEndpoint, type LocalPeerEndpointDeps,
+} from './tools/local-peer';
 // The same delegation dispatch, projected into the codemode sandbox.
 export { createAgentsCodemodeProvider } from './tools/agents-codemode';
 // `agent.*` — self-direction (curriculum, scaffold proposals, schedules,
@@ -778,7 +780,6 @@ export {
 export {
   runScaffold,
   scaffoldEventText,
-  SCAFFOLD_TURN_TIMEOUT_MS,
   type ScaffoldRunOptions,
   type ScaffoldRunResult,
   type ScaffoldDefaultInferenceChunk,
@@ -958,13 +959,13 @@ export {
 export { memoryBytes } from './memory/note';
 export { appendMemoryNote, readMemoryTail, MEMORY_TAIL_MAX_CHARS } from './memory/note';
 
-// Zero-LLM transcript search over the canonical `messages` table (FTS5).
-// Backs the `memory` tool's `sessions` action on both backends.
+// Zero-LLM transcript search over the canonical `messages` table.
+// Backs the `memory` tool's `conversations` action on both backends.
 export {
-  SessionSearchStore,
-  type SessionSearchHit, type SessionScrollMessage,
-  type SessionScrollResult, type SessionSummary,
-} from './memory/session-search';
+  ConversationSearchStore,
+  type ConversationSearchHit, type ConversationScrollMessage,
+  type ConversationScrollResult, type ConversationSummary,
+} from './memory/conversation-search';
 
 // agent_facts — typed, idempotent, keyed world-model store. Built on DO SQL.
 // Top-K recent facts are auto-rendered into the system prompt every turn.
@@ -992,6 +993,7 @@ export {
 export type {
   RunEvent, RunEventBase, RunEventInput, RunEventType, StepCost,
   CompletionGateRecord, TurnSteeringRecord, TurnSteeringTrigger, CraftCycleRecord,
+  DelegationOpportunityRecord, DelegationSurface,
   ExecutionRecoveryRecord,
   CacheHitStats, StepTelemetry,
 } from './events/index';
@@ -999,6 +1001,7 @@ export {
   FAILURE_WITHOUT_ERROR,
   initRunEventTables,
   parseStoredRunEvent,
+  recordModelOperations,
   RunEventRecorder,
   cacheHitRate,
   summarizeSteps,
@@ -1007,13 +1010,21 @@ export {
   SPEND_SOURCE_LABEL,
   SPEND_SOURCE_DETAIL,
   WORKSPACE_RUN_ID,
+  MODEL_OPERATION_KINDS,
+  MODEL_OPERATION_PHASES,
+  MODEL_OPERATION_OUTCOMES,
+  beginModelOperation,
+  newModelOperationId,
   type ModelCallReport,
   type ModelCallSpend,
   type ModelCallSink,
+  type ModelOperation,
+  type ModelOperationEvent,
+  type ModelOperationKind,
+  type ModelOperationOutcome,
+  type ModelOperationPhase,
+  type ModelOperationSink,
   type SpendSource,
-  ROUTED_SPEND_SOURCES,
-  isRoutedSpendSource,
-  type RoutedSpendSource,
   type RunEventListener,
   type RunEventQuery,
 } from './events/index';
@@ -1247,7 +1258,7 @@ export {
   BackgroundJobRunner, JobNotResumable, EVICTION_INTERRUPT_ERROR, BACKGROUND_POLICY, MAX_CONCURRENT_DETACHED_JOBS,
   backgroundJobWakeTrigger,
   type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type BackgroundRefusal, type ThresholdDeps,
-  type BackgroundPolicy, type DetachOutcome, type SessionSurface,
+  type BackgroundPolicy, type DetachOutcome, type InvocationSurface,
   type BackgroundJobRunnerDeps, type JobResumer, type JobClaim,
 } from './jobs/index';
 
@@ -1266,7 +1277,7 @@ export {
 } from './orchestrator/turn-accumulator';
 export {
   AgentOrchestrator, type AgentOrchestratorDeps,
-  type TurnContinuity, DEFAULT_SETTLE_TIMEOUT_MS, DEFAULT_SESSION_REFLECTION_INTERVAL,
+  type TurnContinuity, DEFAULT_SESSION_REFLECTION_INTERVAL,
 } from './orchestrator/agent-orchestrator';
 export { SignalDelivery } from './orchestrator/signals';
 export {
@@ -1508,13 +1519,13 @@ export type {
   BackgroundJobControl, BackgroundJobPlaneDeps, CancelWorkDeps, CancelWorkOutcome, RetryOutcome,
 } from './read-models/background-jobs';
 export {
-  getAlwaysActiveSkills, getEvolutionConfig, getMctsConfig, getModelRoles, getReasoningEffort,
-  getShellApprovalMode, getStoredModelSpec, setAlwaysActiveSkills, setEvolutionConfig,
-  setMctsConfig, setModel, setModelRoles, setReasoningEffort, setShellApprovalMode,
-  getShellApprovalGrants, revokeShellApprovalGrants,
+  getAlwaysActiveSkills, getEvolutionConfig, getMctsConfig, getReasoningEffort,
+  getShellApprovalMode, getShellApprovalGrants, revokeShellApprovalGrants,
+  getStoredModelSpec, setAlwaysActiveSkills, setEvolutionConfig,
+  setMctsConfig, setModel, setReasoningEffort, setShellApprovalMode,
 } from './read-models/config-plane';
 export type {
-  EvolutionConfigView, MctsConfigView, ModelRolesView, SetModelDeps,
+  EvolutionConfigView, MctsConfigView, SetModelDeps,
 } from './read-models/config-plane';
 
 // The advisor — one severity-tagged note per turn, the rules that keep it quiet,
@@ -1555,3 +1566,32 @@ export {
   getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
 } from './read-models/evolution-views';
 export type { EvolutionChangelogView, TakePickDeps } from './read-models/evolution-views';
+
+// Profile catalogs — tier/role configuration from an authority, resolved once
+// per turn into the frozen profile the turn runs under.
+export {
+  TIER_IDS, BUILTIN_ROLE_IDS, ROLE_ID_RE, ROLE_ID_MAX_LEN,
+  isValidRoleId, validateProfileCatalog, validateProfileCatalogEnvelope,
+  profileCatalogDigest, deriveRoleLabel, effectiveRoleCatalog,
+  BUILTIN_ROLE_DEFINITIONS, BUILTIN_PROFILE_CATALOG,
+  TierAssignmentSchema, TierAssignmentsSchema, RoleDefinitionSchema,
+  ProfileCatalogSchema, ProfileCatalogEnvelopeSchema,
+} from './profiles';
+export type {
+  TierId, BuiltinRoleId, RoleId,
+  TierAssignment, TierAssignments, RoleDefinition, RoleCatalog, ProfileCatalog,
+  ProfileAuthority, ProfileCatalogEnvelope,
+} from './profiles';
+export {
+  MODEL_ROUTE_POLICY, resolveModelRoute, isPlatformRouted, modelRouteTable,
+  loadProfileAuthorityInputs, resolveTurnProfile, resolveAgentTurnProfile,
+  type ProfileAuthorityInputs, type ProviderCatalogSnapshot, type TierSource,
+  type ResolveTurnProfileInput, type ResolveAgentTurnProfileInput, type ResolvedTurnProfile,
+  type ModelRoutePolicy, type ProfileRoutedSource, type ModelRouteResolution,
+  changeActiveRole, decideStagedRole, roleWidensCapabilities,
+  ROLE_POLICY_KEY,
+  type RoleChangeActor, type RoleChangePolicy, type RoleChangeOutcome, type RoleStateStore,
+} from './profiles';
+export type { ReasoningEffort } from './strategy/effort';
+export { REASONING_EFFORTS } from './strategy/effort';
+export type { NamedSwarmPreset } from './strategy/swarm';

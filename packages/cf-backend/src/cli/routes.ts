@@ -140,6 +140,31 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     return json({ ok: true });
   }
 
+  // ── Profile catalog — interactive owner session only. The route gate
+  // blocks scoped tokens; the UserDO separately blocks workspace callers. ──
+  if (path === '/profile' && method === 'GET') {
+    return json(await cli.userDO.getProfileCatalog(await ownerCaller(env)));
+  }
+  if (path === '/profile' && method === 'PUT') {
+    const body = await safeJson(request, v.object({
+      catalog: JsonValueSchema,
+      expectedVersion: v.number(),
+    }));
+    if (!body) return err(400, 'Body must be { catalog, expectedVersion }.');
+    const result = await cli.userDO.putProfileCatalog(
+      await ownerCaller(env), body.catalog, body.expectedVersion,
+    );
+    if (result.ok) return json(result.envelope);
+    if (result.kind === 'conflict') {
+      return json({
+        error: `Version conflict: the stored catalog is at version ${result.currentVersion}.`,
+        currentVersion: result.currentVersion,
+        currentDigest: result.currentDigest,
+      }, { status: 409 });
+    }
+    return err(400, result.reason);
+  }
+
   // ── CI access tokens — interactive-session-only management surface ──
   if (path === '/tokens' && method === 'GET') {
     return json({ tokens: await cli.userDO.listAccessTokens(await ownerCaller(env)) });

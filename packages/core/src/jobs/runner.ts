@@ -720,13 +720,11 @@ export class BackgroundJobRunner {
    * incident's job was one reclaim short of the cap with two completed candidates
    * in its journal, and the next eviction would have discarded them.
    *
-   * THERE IS NO WALL CLOCK HERE, and that is a decision rather than an omission,
-   * twice over. Time since `createdAt` is the wrong quantity: a Durable Object
-   * evicted overnight was not WORKING overnight. And no attempt clock exists
-   * either any more: every hang class inside the work is bounded per LLM call by
-   * the shared turn loop's silence window (owner ruling, 2026-08-21), so a fixed
-   * attempt bound could only ever kill sanctioned long work. Across generations,
-   * the cap is the bound.
+   * THERE IS NO WALL CLOCK HERE. Time since `createdAt` is the wrong quantity:
+   * a Durable Object evicted overnight was not working overnight. No attempt
+   * clock exists either; elapsed silence is not a failure. Work remains pending
+   * until it completes, is cancelled, or fails definitively. Across
+   * generations, the cap is the bound.
    *
    * A job THIS runner is already driving is left alone. Both entry points can
    * name the same job in one activation — a resume leaves its own fiber row, so

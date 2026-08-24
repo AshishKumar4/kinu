@@ -1,7 +1,8 @@
-// The workspace listing is bounded on the wire: a page of the most recently
-// visited active workspaces beside the whole-roster total, so a short page is
-// never mistaken for a complete roster. Server-side fans that must reach every
-// active workspace enumerate through the exact read, not the capped page.
+// The workspace listing is bounded per page: the most recently visited active
+// workspaces beside the whole-roster total, with a cursor that walks to the
+// next page — so no roster row is unreachable, and a short page is never
+// mistaken for a complete roster. Server-side fans that must reach every
+// active workspace enumerate through the exact read, not the paged listing.
 import { describe, expect, test } from 'bun:test';
 import { createTestUserDO, testOwner, type TestUserDO } from './helpers/user-do';
 
@@ -72,6 +73,59 @@ describe('listActiveWorkspaces', () => {
     const all = await harness.userDO.listActiveWorkspaces(owner);
     expect(all.map((w) => w.name)).not.toContain('gone');
     expect(all.length).toBe(2);
+    harness.close();
+  });
+});
+
+describe('listWorkspaces pages', () => {
+  test('the roster past the wire bound is reachable page by page, exactly once', async () => {
+    const harness = createTestUserDO();
+    const owner = await seedRoster(harness, OVERFLOW);
+    const expected = Array.from({ length: OVERFLOW }, (_, i) => `ws-${String(i).padStart(3, '0')}`);
+
+    const names: string[] = [];
+    let cursor: string | null = null;
+    let total = -1;
+    do {
+      const page = await harness.userDO.listWorkspaces(owner, { cursor, limit: 50 });
+      expect(page.entries.length).toBeLessThanOrEqual(50);
+      names.push(...page.entries.map((w) => w.name));
+      total = page.total;
+      cursor = page.nextCursor;
+    } while (cursor);
+
+    expect(names.slice().sort()).toEqual(expected.slice().sort());
+    expect(new Set(names).size).toBe(OVERFLOW);
+    expect(total).toBe(OVERFLOW);
+    harness.close();
+  });
+
+  test('a truncated default page reports the cursor that continues it', async () => {
+    const harness = createTestUserDO();
+    const owner = await seedRoster(harness, OVERFLOW);
+
+    const page = await harness.userDO.listWorkspaces(owner);
+    expect(page.entries.length).toBe(200);
+    expect(page.total).toBe(OVERFLOW);
+    expect(page.nextCursor).not.toBeNull();
+    harness.close();
+  });
+
+  test('a request over the wire bound clamps instead of widening', async () => {
+    const harness = createTestUserDO();
+    const owner = await seedRoster(harness, OVERFLOW);
+
+    const page = await harness.userDO.listWorkspaces(owner, { limit: 1000 });
+    expect(page.entries.length).toBe(200);
+    harness.close();
+  });
+
+  test('an invalid cursor is an error, never a silent restart from page one', async () => {
+    const harness = createTestUserDO();
+    const owner = await seedRoster(harness, 2);
+
+    await expect(harness.userDO.listWorkspaces(owner, { cursor: 'garbage' }))
+      .rejects.toThrow('Invalid workspace roster cursor');
     harness.close();
   });
 });

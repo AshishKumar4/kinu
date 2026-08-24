@@ -15,18 +15,22 @@ import * as v from 'valibot';
 import { AGENT_HOME } from './config';
 import type { AgentTranscriptMessage } from './agent-client';
 
-export type CliSessionMode = 'record' | 'none';
-
+/**
+ * Recorder controls for one CLI process. There is deliberately no way to
+ * select, continue, or fork a recorded transcript: JSONL files are diagnostic
+ * artifacts of terminal activity, never conversations to reopen.
+ */
 export interface CliSessionOptions {
-  continue?: boolean;
-  resume?: boolean;
-  session?: string;
-  sessionDir?: string;
-  noSession?: boolean;
-  name?: string;
-  fork?: string;
+  /** Write artifacts somewhere other than the default store. */
+  transcriptDir?: string;
+  /** Record nothing for this process (in-memory sink). */
+  noTranscript?: boolean;
+  /** Durable conversation these entries belong to. Defaults to the
+   *  artifact's own id. */
   conversationId?: string;
 }
+
+export type CliSessionMode = 'record' | 'none';
 
 export interface CliSessionHeader {
   type: 'session';
@@ -35,8 +39,6 @@ export interface CliSessionHeader {
   agent: string;
   cwd: string;
   startedAt: string;
-  name?: string;
-  parentSession?: string;
   conversationId?: string;
 }
 
@@ -62,7 +64,6 @@ export interface CliSessionInfo {
   path: string;
   agent: string;
   cwd: string;
-  name?: string;
   conversationId?: string;
   startedAt: string;
   modifiedAt: number;
@@ -75,7 +76,6 @@ export interface CliSessionTranscript {
   entries: CliSessionEntry[];
 }
 
-const DEFAULT_SESSION_ID = 'default';
 
 const CliSessionHeaderSchema = v.object({
   type: v.literal('session'),
@@ -84,8 +84,6 @@ const CliSessionHeaderSchema = v.object({
   agent: v.string(),
   cwd: v.string(),
   startedAt: v.string(),
-  name: v.optional(v.string()),
-  parentSession: v.optional(v.string()),
   conversationId: v.optional(v.string()),
 });
 
@@ -96,49 +94,27 @@ const CliSessionEntrySchema = v.objectWithRest({
   timestamp: v.string(),
 }, JsonValueSchema);
 
-interface SessionPointer {
-  id: string;
-  path: string;
-  lastEntryId: string | null;
-  conversationId: string;
-}
-
 interface ParsedSession {
   header: CliSessionHeader | null;
   entries: CliSessionEntry[];
-  lastEntryId: string | null;
   entryCount: number;
   firstUserText?: string;
 }
 
-export function defaultConversationIdForCliOptions(opts: Pick<CliSessionOptions, 'continue' | 'resume' | 'session' | 'fork' | 'noSession'> = {}): string | undefined {
-  if (opts.noSession || opts.continue || opts.resume || opts.session || opts.fork) return undefined;
-  return DEFAULT_SESSION_ID;
-}
 
-export function defaultSessionRoot(): string {
-  return join(AGENT_HOME, 'sessions');
-}
-
-export function sessionRoot(opts?: Pick<CliSessionOptions, 'sessionDir'>): string {
-  return opts?.sessionDir ? resolve(opts.sessionDir) : defaultSessionRoot();
+/** The store keeps its historical on-disk name; only the vocabulary moved. */
+function transcriptRoot(opts?: Pick<CliSessionOptions, 'transcriptDir'>): string {
+  return opts?.transcriptDir ? resolve(opts.transcriptDir) : join(AGENT_HOME, 'sessions');
 }
 
 export function createCliSession(agent: string, opts: CliSessionOptions = {}): CliSession {
-  if (opts.noSession) {
+  if (opts.noTranscript) {
     return inMemorySession(agent);
   }
 
-  const root = sessionRoot(opts);
-  const agentDir = join(root, cleanPathSegment(agent));
+  const agentDir = join(transcriptRoot(opts), cleanPathSegment(agent));
   mkdirSync(agentDir, { recursive: true });
 
-  const existing = resolveRequestedSession(agent, opts);
-  if (existing && !opts.fork) {
-    return fileSession(agent, existing.path, existing.id, existing.lastEntryId, existing.conversationId);
-  }
-
-  const parent = opts.fork ? resolveRequestedSession(agent, { ...opts, session: opts.fork, fork: undefined }) : null;
   const id = createSessionId();
   const conversationId = opts.conversationId ?? id;
   const path = join(agentDir, `${id}.jsonl`);
@@ -151,26 +127,13 @@ export function createCliSession(agent: string, opts: CliSessionOptions = {}): C
     startedAt: new Date().toISOString(),
     conversationId,
   };
-  if (opts.name) header.name = opts.name;
-  if (parent?.id) header.parentSession = parent.id;
   writeFileSync(path, `${JSON.stringify(header)}\n`, { mode: 0o600 });
 
-  if (parent) {
-    appendFileSync(path, `${JSON.stringify({
-      type: 'forked_from',
-      id: createEntryId(),
-      parentId: null,
-      timestamp: new Date().toISOString(),
-      source: parent.id,
-      sourcePath: parent.path,
-    })}\n`);
-  }
-
-  return fileSession(agent, path, id, null, conversationId);
+  return fileSession(agent, path, id, conversationId);
 }
 
-export function listCliSessions(agent: string, opts: Pick<CliSessionOptions, 'sessionDir'> = {}): CliSessionInfo[] {
-  const dir = join(sessionRoot(opts), cleanPathSegment(agent));
+export function listCliSessions(agent: string, opts: Pick<CliSessionOptions, 'transcriptDir'> = {}): CliSessionInfo[] {
+  const dir = join(transcriptRoot(opts), cleanPathSegment(agent));
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
     .filter((name) => name.endsWith('.jsonl'))
@@ -179,50 +142,32 @@ export function listCliSessions(agent: string, opts: Pick<CliSessionOptions, 'se
     .sort((a, b) => b.modifiedAt - a.modifiedAt);
 }
 
-export function resolveRequestedSession(
+/** Locate one recorded transcript by exact id or explicit file path — the
+ *  diagnostic viewer's lookup. Null when nothing matches. */
+export function findTranscriptPath(
   agent: string,
-  opts: CliSessionOptions = {},
-): SessionPointer | null {
-  const explicit = opts.session;
-  if (explicit) {
-    const byPath = explicit.includes('/') || explicit.endsWith('.jsonl')
-      ? resolve(explicit)
-      : null;
-    if (byPath && existsSync(byPath)) return sessionPointer(byPath);
-
-    const matches = listCliSessions(agent, opts).filter((s) => s.id === explicit || s.id.startsWith(explicit));
-    if (matches.length === 0) throw new Error(`Session not found: ${explicit}`);
-    if (matches.length > 1) throw new Error(`Session reference is ambiguous: ${explicit}`);
-    const match = matches[0]!;
-    return sessionPointer(match.path);
+  ref: string,
+  opts: Pick<CliSessionOptions, 'transcriptDir'> = {},
+): string | null {
+  if (ref.includes('/') || ref.endsWith('.jsonl')) {
+    const byPath = resolve(ref);
+    return existsSync(byPath) ? byPath : null;
   }
-
-  if (opts.continue || opts.resume) {
-    const latest = listCliSessions(agent, opts)[0];
-    if (latest) return sessionPointer(latest.path);
-  }
-
-  return null;
-}
-
-export function exportSessionPath(agent: string, ref: string | undefined, opts: CliSessionOptions = {}): string | null {
-  if (ref) {
-    return resolveRequestedSession(agent, { ...opts, session: ref })?.path ?? null;
-  }
-  return listCliSessions(agent, opts)[0]?.path ?? null;
+  const byId = join(transcriptRoot(opts), cleanPathSegment(agent), `${ref}.jsonl`);
+  return existsSync(byId) ? byId : null;
 }
 
 export function readCliSessionTranscript(
   agent: string,
   ref: string,
-  opts: Pick<CliSessionOptions, 'sessionDir'> = {},
+  opts: Pick<CliSessionOptions, 'transcriptDir'> = {},
 ): CliSessionTranscript {
-  const pointer = resolveRequestedSession(agent, { ...opts, session: ref });
-  if (!pointer) throw new Error(`Session not found: ${ref}`);
-  const parsed = readSessionRaw(pointer.path);
-  if (!parsed.header) throw new Error(`Invalid session file: ${pointer.path}`);
+  const path = findTranscriptPath(agent, ref, opts);
+  if (!path) throw new Error(`Transcript not found: ${ref}`);
+  const parsed = readSessionRaw(path);
+  if (!parsed.header) throw new Error(`Invalid transcript file: ${path}`);
   return {
-    info: sessionInfoFromParsed(pointer.path, parsed.header, parsed.entryCount, parsed.firstUserText),
+    info: sessionInfoFromParsed(path, parsed.header, parsed.entryCount, parsed.firstUserText),
     entries: parsed.entries,
   };
 }
@@ -239,8 +184,8 @@ function inMemorySession(agent: string): CliSession {
   };
 }
 
-function fileSession(agent: string, path: string, id: string, parentId: string | null, conversationId: string): CliSession {
-  let lastId = parentId;
+function fileSession(agent: string, path: string, id: string, conversationId: string): CliSession {
+  let lastId: string | null = null;
   return {
     mode: 'record',
     id,
@@ -263,16 +208,6 @@ function fileSession(agent: string, path: string, id: string, parentId: string |
   };
 }
 
-function sessionPointer(path: string): SessionPointer {
-  const parsed = readSessionRaw(path);
-  if (!parsed.header) throw new Error(`Invalid session file: ${path}`);
-  return {
-    id: parsed.header.id,
-    path,
-    lastEntryId: parsed.lastEntryId,
-    conversationId: parsed.header.conversationId ?? parsed.header.id,
-  };
-}
 
 function readSessionInfo(path: string): CliSessionInfo | null {
   const parsed = readSessionRaw(path);
@@ -283,7 +218,6 @@ function readSessionInfo(path: string): CliSessionInfo | null {
 function readSessionRaw(path: string): ParsedSession {
   let header: CliSessionHeader | null = null;
   const entries: CliSessionEntry[] = [];
-  let lastEntryId: string | null = null;
   let entryCount = 0;
   let firstUserText: string | undefined;
   const content = readFileSync(path, 'utf-8');
@@ -304,13 +238,12 @@ function readSessionRaw(path: string): ParsedSession {
     const entry = parsedEntry.output;
     entries.push(entry);
     entryCount += 1;
-    lastEntryId = entry.id;
     const text = v.safeParse(v.string(), entry.text);
     if (!firstUserText && entry.type === 'user' && text.success) {
       firstUserText = text.output.slice(0, 160);
     }
   }
-  return { header, entries, lastEntryId, entryCount, firstUserText };
+  return { header, entries, entryCount, firstUserText };
 }
 
 /** Map recorded JSONL entries to renderable transcript messages. */
@@ -414,7 +347,6 @@ function sessionInfoFromParsed(
     path,
     agent: header.agent,
     cwd: header.cwd,
-    name: header.name,
     conversationId: header.conversationId,
     startedAt: header.startedAt,
     modifiedAt: st.mtimeMs,

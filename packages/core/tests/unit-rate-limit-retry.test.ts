@@ -68,33 +68,51 @@ describe('withRateLimitRetry', () => {
 
   test('uses exponential full jitter bounded by the per-wait cap', async () => {
     const harness = retryHarness(
-      Array.from({ length: 8 }, () => new Response('limited', { status: 429 })),
+      [...Array.from({ length: 8 }, () => new Response('limited', { status: 429 })), new Response('ok')],
       {
         baseDelayMs: 2_000,
         backoffFactor: 2,
         maxDelayMs: 60_000,
-        maxAttempts: 8,
-        maxElapsedMs: 300_000,
         random: () => 0.999,
       },
     );
 
     await harness.wrapped('https://api.example.com/v1/chat', { body: '{}' });
 
-    expect(harness.waits).toEqual([1_998, 3_996, 7_992, 15_984, 31_968, 59_940, 59_940]);
+    expect(harness.waits).toEqual([1_998, 3_996, 7_992, 15_984, 31_968, 59_940, 59_940, 59_940]);
     expect(harness.waits.every((wait) => wait <= 60_000)).toBe(true);
   });
 
-  test('gives up at the wall-clock budget and returns the last response', async () => {
-    const first = new Response('first', { status: 429, headers: { 'Retry-After': '60' } });
-    const last = new Response('last', { status: 429, headers: { 'Retry-After': '60' } });
-    const harness = retryHarness([first, last], { maxElapsedMs: 90_000 });
+  test('continues through provider-mandated waits until success', async () => {
+    const harness = retryHarness([
+      new Response('first', { status: 429, headers: { 'Retry-After': '60' } }),
+      new Response('second', { status: 429, headers: { 'Retry-After': '60' } }),
+      new Response('ok'),
+    ]);
 
     const response = await harness.wrapped('https://api.example.com/v1/chat', { body: '{}' });
 
-    expect(response).toBe(last);
-    expect(harness.calls()).toBe(2);
-    expect(harness.waits).toEqual([60_000]);
+    expect(await response.text()).toBe('ok');
+    expect(harness.calls()).toBe(3);
+    expect(harness.waits).toEqual([60_000, 60_000]);
+  });
+
+  test('stops provider waits only when the caller cancels', async () => {
+    const controller = new AbortController();
+    const reason = new Error('cancelled by user');
+    const wrapped = withRateLimitRetry(
+      asFetchFunction(async () => new Response('limited', { status: 429 })),
+      {
+        sleep: async () => { controller.abort(reason); },
+        pacer: new ProviderPacer({ sleep: async () => {} }),
+        warn: () => {},
+      },
+    );
+
+    await expect(wrapped('https://api.example.com/v1/chat', {
+      body: '{}',
+      signal: controller.signal,
+    })).rejects.toBe(reason);
   });
 
   test('passes non-string request bodies through without retrying', async () => {
@@ -147,7 +165,7 @@ describe('withRateLimitRetry', () => {
     await harness.wrapped('https://api.example.com/v1/chat', { body: '{}' });
 
     expect(harness.warnings).toEqual([
-      '[kinu] api.example.com rate-limited — waiting 2s (attempt 1/6)',
+      '[kinu] api.example.com rate-limited — waiting 2s (attempt 1)',
     ]);
   });
 });

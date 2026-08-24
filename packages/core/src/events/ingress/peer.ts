@@ -31,8 +31,9 @@
  * the receiving agent answers with the agents tool's reply action. The answer
  * rides the same outbox transport back (topic `peer_reply`, body
  * `{ in_reply_to, content }`); the sender's in-memory ask waiter consumes it
- * inline — a late answer past the timeout arrives as a normal peer event that
- * wakes the sender's next turn instead.
+ * inline — an answer that outlives the waiting activation arrives as a normal
+ * peer event that wakes the sender's next turn instead. No elapsed bound exists
+ * on either side: delivery is durable and event-based.
  */
 
 import * as v from 'valibot';
@@ -215,8 +216,8 @@ export interface PeerHubDeps {
  */
 export class PeerHub {
   /** In-memory ask waiters keyed by outbox id — alive only while an ask()
-   *  awaits inside the current activation. A reply with no waiter (timeout
-   *  passed, or the agent evicted) stays a pending event and wakes a normal
+   *  awaits inside the current activation. A reply with no live waiter (the
+   *  asking activation was evicted) stays a pending event and wakes a normal
    *  turn. */
   private readonly waiters = new Map<string, (envelope: { content: JsonValue | undefined }) => void>();
   /** The shared durable outbox this transport's rows live in. */
@@ -321,10 +322,14 @@ export class PeerHub {
     return { status: row?.state === 'sent' ? 'delivered' : 'queued', message_id: id };
   }
 
-  /** Send-and-await over the async transport. */
-  async ask(input: { agent: string; userId: string; topic: string; message: string; timeoutMs: number; mode: WorkMode }): Promise<PeerAskOutcome> {
+  /** Send-and-await over the async transport. The wait has NO elapsed limit:
+   *  it ends when the reply is consumed, when the caller cancels it, or
+   *  immediately when the row dead-letters (a definitive refusal). */
+  async ask(input: {
+    agent: string; userId: string; topic: string; message: string; mode: WorkMode; signal?: AbortSignal;
+  }): Promise<PeerAskOutcome> {
     const askId = await this.enqueue(input.agent, input.userId, input.topic, input.message, input.mode, true);
-    const wait = this.registerWaiter(askId, input.timeoutMs);
+    const wait = this.registerWaiter(askId, input.signal);
     await this.dispatchOutbox();
     const row = this.outbox.status(askId);
     if (row?.state === 'dlq') {
@@ -333,12 +338,12 @@ export class PeerHub {
     }
     const reply = await wait.promise;
     if (reply) return { status: 'replied', from: input.agent, reply: reply.content };
-    return {
-      status: 'no_reply',
-      note: `${input.agent} did not answer within ${Math.round(input.timeoutMs / 1000)}s. ` +
-        `The message was ${row?.state === 'sent' ? 'delivered' : 'queued for delivery'}; ` +
-        'a late answer will arrive as a peer event that wakes you.',
-    };
+    if (input.signal?.aborted) {
+      throw input.signal.reason instanceof Error
+        ? input.signal.reason
+        : new Error('peer ask cancelled');
+    }
+    throw new Error('the peer ask waiter resolved without a reply, cancellation, or a dead-letter');
   }
 
   /** Answer a received peer ask through its peer-back reply channel. */
@@ -442,22 +447,30 @@ export class PeerHub {
     return this.outbox.nextRetryAt();
   }
 
-  private registerWaiter(askId: string, timeoutMs: number) {
+  /** Register one ask waiter. Timer-less by ruling: it lives until a reply,
+   *  explicit cancellation, or activation eviction. */
+  private registerWaiter(askId: string, signal?: AbortSignal) {
     let cancel!: () => void;
     const promise = new Promise<{ content: JsonValue | undefined } | null>((resolve) => {
-      const timer = setTimeout(() => {
+      let finished = false;
+      const cleanup = (): boolean => {
+        if (finished) return false;
+        finished = true;
         this.waiters.delete(askId);
-        resolve(null);
-      }, timeoutMs);
-      cancel = () => {
-        clearTimeout(timer);
-        this.waiters.delete(askId);
-        resolve(null);
+        signal?.removeEventListener('abort', onAbort);
+        return true;
       };
+      const onAbort = () => {
+        if (cleanup()) resolve(null);
+      };
+      cancel = onAbort;
+      if (signal?.aborted) {
+        onAbort();
+        return;
+      }
+      signal?.addEventListener('abort', onAbort, { once: true });
       this.waiters.set(askId, (envelope) => {
-        clearTimeout(timer);
-        this.waiters.delete(askId);
-        resolve(envelope);
+        if (cleanup()) resolve(envelope);
       });
     });
     return { promise, cancel };
