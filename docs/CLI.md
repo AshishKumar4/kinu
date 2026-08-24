@@ -45,7 +45,7 @@ kinu <command> [options]
 | [`kinu acp <name>`](#kinu-acp-name) | Serve a workspace over the Agent Client Protocol on stdio (Zed, JetBrains, neovim) |
 | [`kinu exec [prompt...]`](#kinu-exec-prompt) | Run one workspace task headlessly and exit (CI-friendly; executor passthrough lives under `executors`) |
 | [`kinu executors <name> [executor] [command...]`](#kinu-executors-name-executor-command) | List executors, or run a command in one |
-| [`kinu sessions [workspace]`](#kinu-sessions-workspace) | List recorded CLI sessions |
+| [`kinu transcripts [agent]`](#kinu-transcripts-agent) | List recorded terminal transcripts (diagnostics; never conversations) |
 | [`kinu stop <name>`](#kinu-stop-name) | Stop current cloud work or cancel local background jobs |
 
 ### Configure
@@ -222,13 +222,8 @@ Run a workspace once, or open chat when no prompt is provided.
 | Option | What it does |
 | --- | --- |
 | `--mode <mode>` | Output mode: text, json, or rpc (default: "text") |
-| `-c, --continue` | Continue the latest recorded CLI session |
-| `-r, --resume` | Resume the latest recorded CLI session |
-| `--session <idOrPath>` | Use a recorded CLI session |
-| `--fork <idOrPath>` | Fork a recorded CLI session into a new session |
-| `--session-dir <dir>` | Override CLI session storage directory |
-| `--no-session` | Do not record this CLI run |
-| `-n, --name <label>` | Human-readable session label |
+| `--transcript-dir <dir>` | Override transcript storage directory |
+| `--no-transcript` | Do not record a transcript for this run |
 | `--model <id>` | Model ID (env: KINU_MODEL) |
 | `--base-url <url>` | LLM API base URL (env: KINU_BASE_URL) |
 | `--auth <header>` | Auth header value (env: KINU_AUTH) |
@@ -240,12 +235,8 @@ Interactive conversation with a workspace.
 | Option | What it does |
 | --- | --- |
 | `--classic` | Use classic readline interface instead of TUI |
-| `-c, --continue` | Continue the latest recorded CLI session |
-| `-r, --resume` | Resume the latest recorded CLI session |
-| `--session <idOrPath>` | Use a recorded CLI session |
-| `--fork <idOrPath>` | Fork a recorded CLI session into a new session |
-| `--session-dir <dir>` | Override CLI session storage directory |
-| `--no-session` | Do not record this CLI chat |
+| `--transcript-dir <dir>` | Override transcript storage directory |
+| `--no-transcript` | Do not record a transcript for this chat |
 | `--model <id>` | Model ID (env: KINU_MODEL) |
 | `--base-url <url>` | LLM API base URL (env: KINU_BASE_URL) |
 | `--auth <header>` | Auth header value (env: KINU_AUTH) |
@@ -257,7 +248,7 @@ Serve a workspace over the Agent Client Protocol on stdio (Zed, JetBrains, neovi
 | Option | What it does |
 | --- | --- |
 | `--no-auto-evolve` | Run without turn/session auto-evolution (local workspaces) |
-| `--session-dir <dir>` | Override CLI session storage directory |
+| `--transcript-dir <dir>` | Override transcript storage directory |
 | `--model <id>` | Model ID (env: KINU_MODEL) |
 | `--base-url <url>` | LLM API base URL (env: KINU_BASE_URL) |
 | `--auth <header>` | Auth header value (env: KINU_AUTH) |
@@ -271,10 +262,8 @@ Run one workspace task headlessly and exit (CI-friendly; executor passthrough li
 | `-w, --workspace <name>` | Workspace to run (defaults to the only configured workspace) |
 | `--json` | Emit line-delimited JSON events |
 | `--no-auto-evolve` | Run without turn/session auto-evolution (local workspaces) |
-| `--resume <sessionId>` | Continue a recorded CLI session |
-| `--session-dir <dir>` | Override CLI session storage directory |
-| `--no-session` | Do not record this run |
-| `-n, --name <label>` | Human-readable session label |
+| `--transcript-dir <dir>` | Override transcript storage directory |
+| `--no-transcript` | Do not record a transcript for this run |
 | `--model <id>` | Model ID (env: KINU_MODEL) |
 | `--base-url <url>` | LLM API base URL (env: KINU_BASE_URL) |
 | `--auth <header>` | Auth header value (env: KINU_AUTH) |
@@ -287,15 +276,15 @@ List executors, or run a command in one.
 | --- | --- |
 | `--json` | Print raw JSON |
 
-### kinu sessions [workspace]
+### kinu transcripts [agent]
 
-List recorded CLI sessions.
+List recorded terminal transcripts (diagnostics; never conversations).
 
 | Option | What it does |
 | --- | --- |
-| `--session-dir <dir>` | Override CLI session storage directory |
-| `--path` | Show session file paths |
-| `--show <idOrPath>` | Show a specific session path |
+| `--transcript-dir <dir>` | Override transcript storage directory |
+| `--path` | Show transcript file paths |
+| `--show <idOrPath>` | Show a specific transcript path |
 
 ### kinu stop <name>
 
@@ -560,7 +549,7 @@ kinu setup
 kinu provider connect codex
 kinu create jarvis --mode cloud --alias jarvis
 jarvis "review this repo"
-kinu sessions jarvis
+kinu transcripts jarvis
 kinu daemon status
 kinu connect
 ```

@@ -244,9 +244,9 @@ test passed, because the only per-turn assertion was `length > 0`.
 
 Threading the history is half the fix. The other half is a finding, measured
 2026-08-20. **Content assertions cannot prove threading on this agent.** The
-`memory` builtin exposes session search over the very `messages` table the suite
-writes (`core/src/tools/memory-tool.ts:92-101` over
-`core/src/memory/session-search.ts`), so a later turn can RETRIEVE the
+`memory` builtin exposes conversation search over the very `messages` table the
+suite writes (`core/src/tools/memory-tool.ts:92-101` over
+`core/src/memory/conversation-search.ts`), so a later turn can RETRIEVE the
 conversation it was never handed. With the history deliberately unthreaded, turn
 5 still answered "Here's a summary of our previous discussion" and reproduced
 turn 1's code verbatim, while the injected knowledge was 118 characters holding

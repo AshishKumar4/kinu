@@ -86,12 +86,13 @@ These commands are useful on the first day:
 | `/changelog` | review what the agent changed about itself; revert by index |
 | `/model`, `/effort` | change model or reasoning effort mid-conversation |
 | `/settings` | open model, effort, shell approval, and always-active skill settings |
-| `/resume` | reopen a recorded local conversation; press `Tab` to include other folders |
+| `/role [id]` | show or switch this agent's active role |
 
-Local sessions are recorded by default. `kinu sessions` lists them.
-`kinu chat <name> --session <id>` reopens one, and `--fork <id>` branches it.
-Cloud chat history stays in the workspace and loads when the workspace opens.
-`--no-session` disables the terminal record for one run.
+Terminal transcripts are recorded by default. `kinu transcripts` lists them.
+They are diagnostic artifacts of past runs, never conversations to reopen; your
+conversation with a workspace lives in the workspace and loads when it opens.
+`--no-transcript` disables the record for one run, and
+`--transcript-dir <dir>` chooses where transcripts are stored.
 
 ## 4. Letting it touch your machine
 
