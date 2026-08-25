@@ -156,9 +156,13 @@ gate_jobs() {
 }
 
 # A gate that cannot exit is a failure, not an infinite deploy. The slowest
-# measured source gate is ~60s under the full 12-job wave (2026-08-22); 180s
-# preserves that work while bounding leaked worker processes.
-GATE_DEADLINE_SECONDS=180
+# gate is the five-suite UI batch: 198.5s SOLO on an idle 24-thread box
+# (measured 2026-08-25, 99 tests — the drive, terminal and consent proofs
+# grew it past the old 180s bound, which had been calibrated against a ~60s
+# source gate on 2026-08-22 and could no longer pass as composed). 480s
+# preserves that work under the full concurrent wave while still bounding
+# leaked worker processes.
+GATE_DEADLINE_SECONDS=480
 
 # Run everything enqueued, then clear the queue. Each gate's output goes to its
 # own file and is printed ONLY if it fails: 52 concurrent streams interleaved
