@@ -2,13 +2,11 @@
 
 Devbox presents an ephemeral Cloudflare container as a machine that stays.
 
-A container is spot capacity. The platform can recycle it between two calls, and
-the disk comes back blank. Devbox makes that container look asleep rather than
-gone. Files stay. Background processes come back. A preview URL keeps its
-hostname.
+A container is spot capacity. The platform recycles it between calls and the
+disk comes back blank. Devbox keeps files, revives background processes, and
+keeps a preview URL hostname.
 
-Devbox extends `Sandbox` from `@cloudflare/sandbox`. You use it the way you use
-`Sandbox`: extend the class, override the protected hooks.
+Devbox extends `Sandbox` from `@cloudflare/sandbox`:
 
 ```ts
 import { Devbox } from '@kinu.run/devbox';
@@ -20,31 +18,26 @@ export class MyBox extends Devbox<Env> {
 }
 ```
 
-A subclass that overrides nothing is a working box with no durability. It
-reports that on every call instead of pretending.
+A subclass with no overrides is a working box with no durability. It reports
+that on every call.
 
-## What each part hides
+## Lifecycle
 
-**`Devbox`** hides the container lifecycle. Six things happen in an order that
-matters, and the class owns the order:
+`Devbox` owns this order:
 
-1. `onStart` does nothing slow. It takes the activity lease and arms two
-   schedule rows. The hook runs inside `blockConcurrencyWhile`, so anything slow
-   there shares one platform cancel window with the container cold start.
-2. A scheduled callback attaches the filesystem, restarts processes, and
-   re-exposes ports, all outside that gate and all under a real budget.
-3. Every operation waits on a readiness gate, so a caller never sees a
-   half-attached or half-restored box. A failed attach refuses operations with
-   its reason and re-arms the retry, instead of resetting the object.
-4. A heartbeat holds the activity lease. Three gates must agree before the box
-   stops.
-5. A graceful stop commits a final checkpoint, disables keep-alive, then sends
-   `SIGTERM`.
-6. A lifecycle failure is written down before anyone is told, and delivery
-   retries until the host accepts it.
+1. `onStart` takes the activity lease and arms two schedule rows. It does no
+   slow work because it runs inside `blockConcurrencyWhile`.
+2. A schedule attaches the filesystem, restarts processes, and re-exposes ports
+   outside that gate under a real budget.
+3. Operations wait on readiness. A failed attach refuses with its reason and
+   re-arms its retry instead of resetting the object.
+4. A heartbeat holds the lease. Three gates must agree before a stop.
+5. A graceful stop checkpoints, disables keep-alive, then sends `SIGTERM`.
+6. A lifecycle failure is stored before delivery retries until the host accepts
+   it.
 
-**`DevboxStorage`** hides how bytes become durable. It has three methods,
-because three is what the two real strategies need.
+`DevboxStorage` hides durable bytes behind the three methods its two strategies
+need:
 
 ```ts
 interface DevboxStorage {
@@ -54,330 +47,215 @@ interface DevboxStorage {
 }
 ```
 
-`attach()` takes no deadline. The container-start hook has the budget, and
-`withContainerStartDeadline` applies it around the whole attach. Neither strategy would
-read a deadline argument, so neither gets one.
+`attach()` takes no deadline. The container-start hook owns the budget and
+`withContainerStartDeadline` wraps the whole attach. Neither strategy would use
+a deadline argument.
 
-**`lifecycle.ts`** holds every decision as a pure function. Nothing in it
-touches a container, a bucket, or a clock. A container lifecycle is hard to
-drive from a test, so the reasoning is separated from the platform and the
-reasoning is what the tests pin.
+`lifecycle.ts` holds pure decisions. It touches no container, bucket, or clock,
+so tests can pin the reasoning without the platform.
 
-## Three strategies
+## Storage strategies
 
 ### `snapshot-chain`
 
-One immutable base plus one cumulative delta, both squashfs archives in R2,
-attached as lazy FUSE layers.
+The chain is one immutable base plus one cumulative delta, both squashfs archives
+in R2, attached as lazy FUSE layers. The first checkpoint archives the work
+directory. Each later checkpoint archives the overlay upper directory, including
+whiteouts, into one delta replaced by atomic `PUT`. The chain never exceeds two
+layers.
 
-The first checkpoint archives the whole work directory as the base. Later
-checkpoints archive the overlay upper directory, which holds exactly the changed
-set including whiteouts, into one delta object. Each checkpoint replaces that
-object with an atomic `PUT`. The chain is always at most two layers deep, however
-many checkpoints have happened.
+Attach mounts the store subtree read-only, then base, delta, and a fresh writable
+upper through `squashfuse` and `fuse-overlayfs`. It moves no bytes until a read,
+so it fits the container-start budget at any work-directory size.
 
-An attach moves no bytes. The store subtree mounts read-only, `squashfuse` mounts
-the base and the delta out of it, and `fuse-overlayfs` lays a fresh writable
-upper on top. Bytes arrive when something reads them. An attach therefore fits
-inside the container-start budget for a work directory of any size.
+The atomic `PUT` lets a reader see the old delta or the new one. Devbox writes
+the state record before cleanup. A crash between them leaves a complete unnamed
+delta that the next attach adopts. Squashfs checks its superblock, so the mount
+validates the object.
 
-Two ordering rules carry the crash safety:
+Keys are `backups/<uuid>/data.sqsh` and `backups/<uuid>/delta.sqsh`. Key
+builders require a UUID, so no key can use `..` or another box's guess.
 
-- The delta is replaced by an atomic `PUT`. A reader sees the old object or the
-  new one.
-- The state record is written before any cleanup. A crash between the `PUT` and
-  the record leaves a complete delta that the record does not name yet, and the
-  next attach adopts it. The `PUT` was all or nothing, and squashfs verifies its
-  own superblock, so the mount is the validator.
+Extraction is only for local development. A store mount needs outbound
+interception that plain local `wrangler dev` lacks, and extraction reads every
+byte on every attach. The host declares permission through `allowExtraction`,
+default false. A refused mount fails its checkpoint with its own reason, and an
+extract-mode record is refused at attach.
 
-Object keys are `backups/<uuid>/data.sqsh` and `backups/<uuid>/delta.sqsh`. A
-chain id must be a UUID. Every key builder validates it, so no key can be
-assembled from `..` or from another box's guess.
+I set that default after a deployed failure. A failed mount fell back to
+extraction, the box archived a base, and every later write was lost: a plain
+directory has no overlay upper, so it has no changed set to archive. Two phases
+later the error was `delta content lost across restore`.
 
-Extraction is the local development path and nothing else. A store mount needs
-container outbound interception, which a plain local `wrangler dev` does not
-have. Extraction archives and extracts whole trees, so it costs a full pass over
-every byte on every attach.
-
-The host DECLARES whether extraction is allowed, through `allowExtraction`, and
-the default is false. Nothing discovers it. Where it is not allowed, a mount that
-fails is a failed checkpoint carrying the mount's own reason, and an extract-mode
-record is refused at attach.
-
-That rule comes from a deployed measurement. A failed mount was converted into
-extraction, the box archived a base, and every write after it was lost: a plain
-directory has no overlay upper, so there was no changed set to archive. The loss
-surfaced two phases later as `delta content lost across restore`. A fallback
-nobody asked for is how a silent mode split gets into production.
-
-The strategy still proves its mode by performing a mount rather than asking the
-platform whether it could, so a box only writes a chain after it has mounted one.
-And the persisted mode is the attach postcondition: a chain-mode record must end
-as an overlay or the attach throws.
+A chain is written only after a mount proves its mode. Its stored attach
+postcondition is strict: a chain-mode record must end as an overlay or attach
+throws.
 
 ### `r2fs`
 
-The work directory is an s3fs mount of the box prefix in R2, with a disk cache
-underneath.
+`r2fs` mounts the box's R2 prefix with s3fs over a disk cache. It has no archive
+or restore. Attach is a mount, so it is fast whatever the prefix holds.
 
-There is no archive and no restore. An attach is a mount, and a mount is fast
-whatever the prefix holds.
+- A write becomes durable when the writer closes it. s3fs buffers locally and
+  uploads on release. An open file loses unclosed data when the container stops.
+  The chain can archive its upper directory with an open handle.
+- `sync` pushes dirty pages into s3fs, but s3fs uploads only on close. A
+  checkpoint commits closed files, never open files, and reports bytes held in
+  the prefix rather than bytes moved.
+- Reads use cache while the entity tag matches, then R2. Metadata caches for
+  `stat_cache_expire` seconds.
+- `rename` copies then deletes. It is not atomic and costs object bytes.
+- One prefix has one writer. Two containers on it lose each other's writes.
 
-The consistency rules differ from the chain, and the difference is not a detail:
+`use_cache` avoids an R2 request for every read. The options set
+`stat_cache_expire=300`, `max_stat_cache_size=200000`, `enable_noobj_cache`,
+`multipart_size=16`, `parallel_count=20`, `ensure_diskfree=1024`, and
+`del_cache`. The cache and work directory share one disk. s3fs sets no cache
+limit, so an unbounded cache fills the disk and an unrelated write fails with
+ENOSPC.
 
-- A write becomes durable when the writer closes the file. s3fs buffers the file
-  locally and uploads it on release. A file still open when the container stops
-  loses whatever was not closed. The chain does not have this property, because
-  it archives the upper directory whether or not a handle is open.
-- There is no flush-to-store call. `sync` pushes the kernel dirty pages into
-  s3fs, and s3fs uploads on close. A checkpoint commits everything closed and
-  cannot commit anything open. `checkpoint` therefore reports the bytes the
-  prefix holds, not the bytes it moved.
-- Reads come from the disk cache while the cached entity tag matches, and from
-  R2 otherwise. Metadata is cached for `stat_cache_expire` seconds.
-- `rename` is a copy then a delete. It is not atomic and it costs the object
-  bytes.
-- One writer only. Two containers on one prefix lose each other's writes.
-
-`use_cache` is why this strategy is worth measuring. Without it, every read is
-an R2 request. The option set also raises `stat_cache_expire` to 300 and
-`max_stat_cache_size` to 200000, keeps `enable_noobj_cache`, raises
-`multipart_size` to 16 with `parallel_count` 20, and bounds the cache with
-`ensure_diskfree=1024` and `del_cache`.
-
-The bound matters. The cache and the work directory share one container disk and
-s3fs bounds the cache at nothing, so an unbounded cache fills the disk and an
-unrelated write fails with ENOSPC, far from the cause.
-
-Two options are deliberately absent, both measured on the shipped image.
-`compat_dir` is not an option s3fs 1.90 accepts: passing it failed every mount
-with `fuse: unknown option 'compat_dir'`, and the behaviour it asked for is the
-default there anyway. Its negative, `notsup_compat_dir`, stays out because it
-turns that default off, which would make a prefix written through the R2 binding
-read as empty. Nothing here passes `use_path_request_style`, `url`, `ahbe_conf`
-or `ro` either: the SDK supplies those after the caller's options.
+The shipped s3fs 1.90 rejects `compat_dir` with
+`fuse: unknown option 'compat_dir'`; its requested behaviour is already the
+default. `notsup_compat_dir` disables that default, making an R2-binding-written
+prefix read empty. The SDK adds `use_path_request_style`, `url`, `ahbe_conf`,
+and `ro` after caller options, so Devbox does not pass them.
 
 ### `overlay-cas`
 
-A content-addressed overlay. The prefix's materialized `tree/` mounts read-only as
-the lower, a fresh native fuse-overlayfs upper goes on top, and an attach replays
-only the journal entries newer than the folded cursor, so recovery costs the
-pending change rather than the whole tree.
+`overlay-cas` mounts its materialized `tree/` read-only as a lower layer and a
+fresh native fuse-overlayfs upper over it. Attach replays only journal entries
+newer than the folded cursor, so recovery costs the pending change.
 
-A tick scans the upper, stages new chunk blobs, and appends one journal object per
-batch of 64 entries, blob before journal. Class-A cost is then the new chunk blobs
-plus `ceil(p / 64)` rather than one `PUT` per changed path. That is why the strategy
-exists: an npm-shaped tick touches thousands of paths and almost none of their
-bytes.
+A tick scans the upper, stages chunk blobs, then appends one journal object per
+batch of 64 entries, blob before journal. Class-A cost is new blobs plus
+`ceil(p / 64)`, not one `PUT` per changed path. This suits npm-shaped ticks that
+touch thousands of paths but few bytes.
 
-`overlay-cas.test.ts` pins that behaviour, including a red-first test that the
-batching is one `PUT` per batch and not one per entry. What is not measured is the
-cost on a deployed box: no deployed run has observed the batching yet.
+`overlay-cas.test.ts` red-tests one `PUT` per batch. The deployed cost remains
+unmeasured: no deployed run has observed batching.
 
-## The attach does not belong in `onStart`
+## Platform constraints
 
-`onStart` is awaited inside `blockConcurrencyWhile`. Putting the attach there
-makes a container cold start and the attach share one platform cancel window,
-and when it expires the runtime resets the object.
+`onStart` runs inside `blockConcurrencyWhile`. I measured a deployed Worker
+where its first operation after a stop answered 500:
+`A call to blockConcurrencyWhile() in a Durable Object waited for too long.
+The call was canceled and the Durable Object was reset.` A timer inside that
+block cannot fire until the block releases, so `withContainerStartDeadline`
+could not help. Attach runs in the `devboxStartup` schedule row instead.
 
-Measured on a deployed Worker: the first operation after a stop answered 500
-with `A call to blockConcurrencyWhile() in a Durable Object waited for too long.
-The call was canceled and the Durable Object was reset.` A bound inside that
-window does not help, because a timer set inside the block is not delivered
-until the block releases. So `withContainerStartDeadline` could never fire there, and the
-platform's reset happened instead.
+Every operation awaits `ensureReady()`. A failed attach records an incident,
+refuses with its reason, and re-arms a heartbeat-cadence schedule. Per-operation
+retry would record an incident for every operation on one broken box.
 
-The attach therefore runs in the `devboxStartup` schedule row. Nothing observes
-a half-attached box, because every operation awaits `ensureReady()` and that is
-what `ensureReady()` waits for. A failed attach records an incident, refuses
-operations with the reason, and re-arms a retry at the heartbeat cadence. The
-retry is a schedule rather than the next operation: retrying per operation would
-record an incident per operation for one broken box.
+`fuse-overlayfs` does not expose `lowerdir`, `upperdir`, or `workdir` in
+`/proc/mounts`; kernel overlay does. An earlier chain parsed `upperdir`, passed
+local kernel-overlay tests, then failed deployed with `produced an overlay whose
+upper directory (unnamed) does not exist`. Devbox asks the mount line only if it
+is mounted and overlay-family. The strategy verifies its chosen upper directory
+by direct probe and reads the delta there. Chain matches `overlay`; r2fs matches
+`s3fs`, because `fuse.fuse-overlayfs` and `fuse.s3fs` are distinct mechanisms.
+A generic `fuse` test would let either strategy claim the other's box.
 
-## Ask each mechanism the question it can answer
+The activity lease prevents only our own inactivity sleep. I held a probe box
+through an 11-minute true idle. The final tick was
+`running, ping ok, armedNext, decision hold`; one heartbeat row remained
+pending and no inactivity sleep occurred. The marker in the container still
+vanished because the platform replaced the instance.
 
-`fuse-overlayfs` does not publish `lowerdir`, `upperdir` or `workdir` in
-`/proc/mounts`. Kernel overlay does. An earlier version of the chain parsed
-`upperdir` out of the mount line, which passed every local proof (those used
-kernel overlay) and then failed on a deployed container with `produced an
-overlay whose upper directory (unnamed) does not exist`.
+The heartbeat renews the SDK clock, and quiesce is the only deliberate stop.
+Continuity survives replacement: each restored instance writes a boot id under
+`/tmp` and mirrors it durably. A different id, or no id, increments
+`state.replacedCount` and restores immediately. `state.bootId` identifies the
+instance the durable state expects. Replacement is a platform fact, not a
+package failure.
 
-So the mount line answers only what it can: is something mounted here, and is it
-overlay-family. The upper directory is the path the strategy CHOSE and passed to
-the mount command, and it is verified with a direct existence probe. The delta
-archive reads from that same chosen path. Nothing re-derives it.
+Three of four schedule rows re-arm themselves. A broken chain does not restart
+itself. Devbox now arms all three initial rows because `devboxHeartbeat` cannot
+supply its own first link. Its idempotence guard counts only strictly-future
+rows: the SDK retains a fired row until its callback returns, so counting the
+active row used to suppress its successor.
 
-The strategies also have to be told apart by mechanism, not by family.
-fuse-overlayfs reports `fuse.fuse-overlayfs` and s3fs reports `fuse.s3fs`, so a
-test for `fuse` would let each strategy claim the other's box. The chain matches
-`overlay` and r2fs matches `s3fs`.
+Devbox never enables `setKeepAlive(true)`. The SDK alarm loop's activity branch
+returns without an alarm. With keepAlive on, `onActivityExpired` logs, then an
+idle box expires, stops neither itself nor its alarm, and leaves unreachable
+rows. Devbox renews the SDK clock and overrides `onActivityExpired` to make a
+final checkpoint before stop. `state.lastTick` records each heartbeat because
+these failures look the same from outside.
 
-## What the hold actually guarantees
+Attach verifies a mount line and an existing writable layer before a checkpoint
+can report a change. A live container once reported a successful attach with no
+overlay mount; forced checkpoint returned `unchanged`, and restart found an empty
+work directory.
 
-Measured on a deployed container, not inferred. The activity lease keeps a box
-from sleeping because of ITS OWN inactivity, and nothing more. The platform can
-reclaim a container instance at any moment, and no keepalive vetoes that.
-
-A probe held a box through an 11-minute true idle. The heartbeat chain ticked the
-whole way: the last tick reported `running, ping ok, armedNext, decision hold`,
-one heartbeat row pending, no inactivity sleep. The ephemeral marker inside the
-container still vanished, because the instance underneath had been replaced.
-
-So the guarantee is two things, stated separately because they have different
-mechanisms:
-
-- The box never sleeps from our own inactivity. The heartbeat renews the clock
-  the SDK reads, and the quiesce decision is the only thing that stops a box on
-  purpose.
-- Continuity survives replacement. Each restored instance is stamped with a boot
-  id under `/tmp`, mirrored in durable storage. The id dies with the instance,
-  which is the whole point: a heartbeat that reads a different id, or none, knows
-  the instance was replaced, counts it, and re-drives the restoration
-  immediately rather than waiting for the next operation. Idle is exactly when
-  nobody is watching.
-
-`state.replacedCount` is therefore a measured fact about the platform rather than
-a failure of this package, and `state.bootId` says which instance the durable
-state believes it is talking to.
-
-## A self-re-arming schedule is a chain, and chains break quietly
-
-Three of this class's four schedule rows re-arm themselves, so each is a chain
-that runs forever once started and never starts on its own. Two separate
-breakages of that chain reached a deployed container.
-
-The first: nothing armed the heartbeat initially. `devboxHeartbeat` re-arms
-itself at every exit, so `onStart` is the only place a first link can be, and
-without it the lease never ticked and quiesce was unreachable. `onStart` now arms
-all three.
-
-The second: the guard that made arming idempotent counted the row being
-dispatched. The container SDK deletes a fired row AFTER its callback returns, so
-while a callback runs its own row is still in the table. The callback asked "is a
-row already pending for me", saw itself, decided it had nothing to do, and was
-deleted a moment later. The guard now counts only rows scheduled strictly in the
-future, so the firing row never suppresses its own successor.
-
-The third, which is not a chain break but ends the same way: `setKeepAlive(true)`.
-The container alarm loop is one self-perpetuating chain, and its activity branch
-is the one place that returns without setting the next alarm. With keepAlive on,
-`onActivityExpired` only logs, so an idle box expires its clock, is not stopped,
-sets no alarm, and goes quiet with its rows unreachable. keepAlive is never
-enabled here. The heartbeat renews the activity clock the SDK actually reads, and
-`onActivityExpired` is overridden to take a final checkpoint before letting the
-container stop.
-
-All three are pinned, and a durable tick row (`state.lastTick`) records what each
-heartbeat saw, because from outside these three failures look identical.
-
-## Both strategies must prove their own attach
-
-A live container once reported every step of an attach as fine while
-`/proc/mounts` held no overlay line for the work directory. A forced checkpoint
-then answered `unchanged`, and after a restart the work directory was empty.
-Nothing threw.
-
-So an attach reads its result back from the kernel. It needs a mount line and a
-writable layer that exists. A checkpoint asks whether the directory is attached
-before it asks whether anything changed, so a box that is not attached reports a
-failure rather than `skipped`. A commit reports a byte count, so a caller can
-check that number against the store.
-
-## The change gate needs a baseline
-
-`checkChanges` answers whether a path changed since the version you hold. A box
-that has never checkpointed holds no version, and the SDK answers a call with no
-`since` as `unchanged`. It is establishing a baseline, not reporting on one.
-
-Consulting the gate there is how a fresh box writes files, stops, and saves
-nothing while every call reports success. Devbox reproduced that against a real
-container. With no baseline, content counts as a change, and the only remaining
-question is whether the directory holds anything at all.
+`checkChanges` also needs a baseline. The SDK returns `unchanged` without
+`since`, but a never-checkpointed box has no baseline. I reproduced a fresh box
+that wrote files, stopped, and saved nothing while every call succeeded. Without
+a baseline, content counts as change.
 
 ## Tests
 
-`bun test packages/devbox` runs six suites. Three things about them hold whatever
-the count is: every suite passes, every suite also passes standalone, and the six
-standalone counts sum to exactly the directory total. `bunx tsc --noEmit -p
-packages/devbox` exits 0.
+`bun test packages/devbox` runs six suites. `bunx tsc --noEmit -p
+packages/devbox` exits 0. Each suite passes standalone and their standalone
+counts equal the directory total.
 
-The count itself is 170, at 2026-08-25T07:28Z. It is deliberately not pinned to a
-commit. This package sits in an uncommitted worktree, so two people can measure
-the same hash a minute apart and get 163 and 170, which happened while this file
-was being written. A hash identifies committed state and nobody here is measuring
-committed state, so the clock is the only honest anchor and the number moves as
-siblings land.
+The count is 170, at 2026-08-25T07:28Z. It is not tied to a commit: this
+uncommitted worktree produced 163 and 170 for the same hash one minute apart
+while this file was written. The count changes as siblings land.
 
-- `decisions.test.ts` pins every pure rule at its boundary: the quiesce timing
-  matrix, restart ordering, port tokens, listener probes, incident backoff, the
-  start budget, mount parsing, UUID refusals, and the interval gate.
-- `snapshot-chain.test.ts` drives the chain through fake ports. It asserts the
-  crash ordering, delta adoption, the two attach postconditions, and the
-  unattached-checkpoint refusal. Its last two tests assert a denominator, so
-  adding an outcome kind without exercising it turns the suite red.
-- `overlay-cas.test.ts` pins the content-addressed overlay: the journal fold, the
-  replay cursor, chunk staging, and the blob-before-journal ordering.
-- `r2fs.test.ts` does the same for the mount strategy.
-- `independence.test.ts` reads the files on disk and fails if `src` or `bench`
-  imports the product core, or if the manifest declares any workspace dependency.
-  Its third test proves the check can fail, against a specifier that must be
-  caught.
-- `workspace-resolution.test.ts` fails if `@kinu.run/*` resolves outside this
-  checkout. Every package here carries it, because the failure is silent: a
-  checkout whose `node_modules` points at another one runs green while testing
-  the other tree's source.
+- `decisions.test.ts` pins quiesce timing, restart order, port tokens, listener
+  probes, incident backoff, start budget, mount parsing, UUID refusals, and the
+  interval gate.
+- `snapshot-chain.test.ts` covers crash order, delta adoption, attach
+  postconditions, and unattached checkpoint refusal. Its denominator tests make
+  an unexercised outcome kind fail.
+- `overlay-cas.test.ts` covers journal folding, replay cursor, chunk staging,
+  and blob-before-journal order. `r2fs.test.ts` covers the mount strategy.
+- `independence.test.ts` rejects product-core imports and workspace dependencies;
+  its third test proves the check can fail.
+- `workspace-resolution.test.ts` rejects `@kinu.run/*` resolving outside this
+  checkout. A wrong `node_modules` can otherwise test another tree's source.
 
-The suites import the modules directly rather than the package index, because
-the index pulls in the `Sandbox` runtime and `cloudflare:workers`, which does not
-exist outside a Worker. That the decisions run without the platform is the point
-of separating them.
+Suites import modules rather than the package index. The index loads `Sandbox`
+and `cloudflare:workers`, neither available outside a Worker.
 
-## The benchmark fixture
+## Benchmark fixture
 
-`bench/` holds a Worker that raises a real container and runs both strategies
-against one workload. It is not part of any product deploy.
+`bench/` raises a real container and runs both strategies against one workload.
+It is not part of a product deploy. Local `wrangler dev` lacks outbound
+interception, so it is only smoke. `wrangler dev --remote` refuses Durable
+Objects. A real deployment is the only route to a number.
 
-`wrangler dev` gives a local container, a local store, and no outbound
-interception. That is enough for a smoke test and it is not a measurement.
-`wrangler dev --remote` refuses Durable Objects, so a real deployment is the only
-route to a number.
+Run `POST /verify` before any workload. It checks the four facts above; a
+never-attached box only measures its blank disk.
 
-`POST /verify` runs the lifecycle and checks the four facts above. Run it before
-any workload. An arm that measures a box which never attached is measuring the
-container's own blank disk.
+Routes are `/create`, `/verify`, `/exec`, `/write`, `/checkpoint`, `/stop`,
+`/wake`, `/state`, `/ops`, `/ops/reset`, `/teardown`. Each requires
+`Authorization: Bearer $BENCH_TOKEN`. An absent token refuses everything, so an
+old fixture is inert.
 
-Routes: `/create`, `/verify`, `/exec`, `/write`, `/checkpoint`, `/stop`,
-`/wake`, `/state`, `/ops`, `/ops/reset`, `/teardown`. Every route needs
-`Authorization: Bearer $BENCH_TOKEN`. An absent token refuses everything, so a
-fixture that outlives its run is inert.
-
-Two facts about the op counter, both measured the hard way. s3fs traffic does not
-go through the Durable Object binding, so the `ContainerProxy` env is the only
-place that sees every call. And `uploadPart` and `complete` are calls on the
-handle that `createMultipartUpload` returned, so a wrapper that stops at the
-bucket reported two class-A operations for a phase that wrote 111 MiB.
+s3fs traffic bypasses the Durable Object binding, so `ContainerProxy` is the
+only place that sees every operation. `uploadPart` and `complete` are methods on
+the handle from `createMultipartUpload`; wrapping only the bucket reported two
+class-A operations for a phase that wrote 111 MiB.
 
 A purge cannot promise an empty bucket. Pending multipart uploads count towards
-emptiness and the Workers binding cannot list them. Use a dedicated bucket with
+emptiness, but the Workers binding cannot list them. Use a dedicated bucket with
 a lifecycle rule that aborts incomplete multipart uploads.
 
-## Independence
+## Independence and evidence
 
-Devbox declares no dependency on any workspace package. Its three declared
-dependencies are `@cloudflare/sandbox`, `@cloudflare/containers` and `valibot`.
-`independence.test.ts` enforces that by reading the source and the manifest: it
-refuses any import of the product core's scope and any `workspace:` range, and it
-reads the forbidden scope out of the sibling manifest rather than writing it down,
-so a rename cannot leave the guard checking a name nothing uses.
+Devbox declares three dependencies, `@cloudflare/sandbox`,
+`@cloudflare/containers`, and `valibot`, and no workspace dependency.
+`independence.test.ts` rejects product-core imports and `workspace:` ranges. It
+reads the forbidden scope from a sibling manifest, so a rename cannot leave a
+dead guard.
 
-The vendored patch `patches/@cloudflare%2Fsandbox@0.12.8.patch` applies here too.
-It makes the SDK merge `outboundHandlers` instead of assigning them, so
-configuring a bucket mount cannot unbind a handler the host installed.
+`patches/@cloudflare%2Fsandbox@0.12.8.patch` makes the SDK merge
+`outboundHandlers` rather than assign them. A bucket mount cannot then unbind a
+host handler.
 
-## What is proven and measured
-
-Every rule above is pinned by a unit test. Two deployed production-workerd runs
-of `bun scripts/sandbox-durability-probe.ts --run` passed all six phases on
+Every rule above has a unit test. Two deployed production-workerd runs of
+`bun scripts/sandbox-durability-probe.ts --run` passed all six phases on
 2026-08-24.
 
 | Run | P1 | P2 | P3 | P4 | P5 | P6 |
@@ -385,17 +263,10 @@ of `bun scripts/sandbox-durability-probe.ts --run` passed all six phases on
 | `31158290` | 64 MiB base | wake 79 ms; deep slice 82 ms | 4,096 B committed | HTTP 200 before and after restart | heartbeat chain alive for 11 minutes; platform replaced and healed the container | workspace intact |
 | `e54c7de8` | passed; no separate byte figure recorded | wake 443 ms; deep slice 72 ms | passed | passed | passed | passed |
 
-These are two observations from the deployed builds that ran them. They do not
-measure a latency distribution or later source changes. The product probe now
-writes the complete JSON record for every future attempt under the ignored
-`bench-artifacts/` directory, including partial evidence and the error when a
-phase fails.
+These are two observations, not a latency distribution or evidence for later
+source changes. The probe writes each later JSON record under ignored
+`bench-artifacts/`, including partial evidence and the phase error.
 
-The source still records older failure observations that explain the policies.
-They are not performance numbers. `onStart` in `src/devbox.ts` records an
-11-minute idle with keep-alive on where the box slept. `#stampBootId` records a
-platform replacement underneath a healthy heartbeat chain. The
-`allowExtraction` reasoning in `src/snapshot-chain.ts` records a mount failure
-converted into extraction that lost every write after the base. The
-`ContainerProxy` note in `bench/worker.ts` records a wrapper that reported two
-class-A operations for a phase that wrote 111 MiB.
+The source keeps the earlier failure records behind these policies: `onStart` in
+`src/devbox.ts`, `#stampBootId`, the `allowExtraction` reasoning in
+`src/snapshot-chain.ts`, and the `ContainerProxy` note in `bench/worker.ts`.

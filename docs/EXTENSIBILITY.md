@@ -1,12 +1,9 @@
 # Kinu extensibility
 
-Add a model provider, an exploration strategy, an actor kind, or a turn
-extension, and the orchestrator stays as it is.
+Add a model provider, exploration strategy, actor kind, or turn extension. The
+orchestrator stays as it is.
 
 ## The four extension points
-
-Kinu exposes four extension points, so a new idea plugs in at the right
-altitude.
 
 | Extension point | Interface | Lives in | Adds | Example use cases |
 |---|---|---|---|---|
@@ -15,46 +12,38 @@ altitude.
 | **`ActorAgent`** | `cf-backend/src/actor-agent.ts` | `packages/cf-backend/src/` | A new *kind of agent* running the full turn loop | OrchestratorAgent, SubordinateAgent |
 | **`KinuExtension`** | `core/extension.ts` | any package | Per-turn observation and light rewriting | compaction, event injection, CLI steering |
 
-Only the first is a registry in production. `AgentProviderRegistry` holds
-`ModelProvider` implementations and stays stateless; per-call state flows
-through `ProviderDeps`. `createStrategyRegistry` exists in
-`core/strategy/types.ts`, but no production path calls it, so an
-`ExplorationStrategy` reaches work through the dispatcher that owns its engine.
-The next section says which. `ActorAgent` is class-level. `KinuExtension` is
-per-turn, and [EXTENSIONS.md](./EXTENSIONS.md) documents it on its own.
+Only `ModelProvider` is a production registry. `AgentProviderRegistry` holds
+stateless implementations; per-call state flows through `ProviderDeps`.
+`createStrategyRegistry` exists in `core/strategy/types.ts`, but production
+never calls it. An `ExplorationStrategy` reaches work through the dispatcher
+that owns its engine. `ActorAgent` is class-level; `KinuExtension` is
+per-turn and [EXTENSIONS.md](./EXTENSIONS.md) documents it separately.
 
 ## Registration is not reachability
 
-An interface earns its callers from the code that dispatches it. Making an
-implementation importable does not put it on a model-facing surface.
-
-`ExplorationStrategy` adapters exist for programmatic callers and evaluation.
-Production reaches each engine through its owning path:
-
-- Lifetime evolution calls `runMCTS` in `core/src/evolution/engine.ts`.
-- Branching work runs through `HeadController`.
-- The model-facing `agents.swarm()` path calls `runSwarm` and resolves a named
-  preset before it spends anything.
+An importable implementation is not automatically model-facing. Production
+reaches exploration engines through their own paths: lifetime evolution calls
+`runMCTS` in `core/src/evolution/engine.ts`; branching work runs through
+`HeadController`; `agents.swarm()` calls `runSwarm` and resolves a named preset
+before spending anything. `ExplorationStrategy` adapters serve programmatic
+callers and evaluation.
 
 No production path builds a `StrategyRegistry`. Each backend constructs
-`AgentsForkDeps` (`core/src/tools/agents-tool.ts:296`) directly, and its seven
-members are the runtime, the caller's own model, the tier-model resolver, the
-cost model, the swarm-node loop host, the swarm-node private home, and
-shared-prefix compaction. It carries no strategy objects.
-
-To make another search policy model-facing, add it to the closed swarm preset
-and validity system, then add the engine dispatch that executes the resolved
-tuple. Adding an `ExplorationStrategy` adapter alone makes it available only to
-callers that import it.
+`AgentsForkDeps` (`core/src/tools/agents-tool.ts:296`) directly: runtime,
+caller's model, tier-model resolver, cost model, swarm-node loop host,
+swarm-node private home, shared-prefix compaction. It carries no strategy
+objects. To make another policy model-facing, add it to the closed swarm
+preset and validity system, then dispatch the resolved tuple to its engine.
+An adapter alone reaches only callers that import it.
 
 The `agents` tool has seven actions: `swarm`, `hire`, `ask`, `send`, `reply`,
-`list`, and `dismiss`. `fork` remains a context axis inside swarm, a workspace
-copy operation, and a durable-conversation branch command. It is not a
-delegation action.
+`list`, and `dismiss`. `fork` remains a swarm context axis, workspace copy
+operation and durable-conversation branch command. It is not a delegation
+action.
 
-`toolSurfacing` is another example. It is a build option on
-`buildBuiltinTools`, but no backend passes it. A caller must wire the option
-before its policy affects an agent.
+`toolSurfacing` makes the same point. It is a `buildBuiltinTools` option, but
+no backend passes it. A caller must wire it before the policy affects an
+agent.
 
 ## Two extension points that no longer exist
 
@@ -63,15 +52,15 @@ turn's inference loop is the mutable scaffold's job, through Think's
 `_transformInferenceResult` (`core/src/scaffold/inference-transform.ts`).
 
 There is no `CredentialStore` interface. Credentials moved wholesale into
-`UserDO`, so `core/src/credentials/store.ts` now holds only the value shapes:
+`UserDO`, so `core/src/credentials/store.ts` holds only these value shapes:
 `Credential`, `BearerCredential`, `OAuthCredential` and
-`OpenAICompatCredential`. An agent no longer stores, refreshes, or reads a raw
+`OpenAICompatCredential`. An agent never stores, refreshes, or reads a raw
 credential.
 
 ## Adding a new actor kind
 
-`ActorAgent` (`cf-backend/src/actor-agent.ts:464`) is the base class for a new
-kind of agent. Extend it and supply ten abstract members:
+`ActorAgent` (`cf-backend/src/actor-agent.ts:464`) is the base class. Extend
+it and supply ten abstract members:
 
 ```ts
 export class MyAgent extends ActorAgent {
@@ -88,48 +77,41 @@ export class MyAgent extends ActorAgent {
 }
 ```
 
-The last two carry the auto-title path. Core plans the name and this class
-stores it. See *Where a backend plugs into core* below.
+`ownMission()` and `persistAutoTitle()` carry auto-title: Core plans the name,
+the class stores it. All else is inherited: CF runtime assembly, `BackendHost`,
+shared `AgentOrchestrator`, `ExtensionHost` plus compaction, dynamic-context
+ledger, prompt/model/tool caches, and the Think hook bridge.
 
-Three hooks are optional, each with a default on the base class:
-`workspaceName()` returns `this.name` (line 489), `extraCodemodeProviders()`
-returns `[]` (line 595), and `isClientRpcMethodDenied(method)` returns `false`
-(line 619). Override `extraCodemodeProviders()` for extra sandbox namespaces,
-which is how the orchestrator gets `agent.*` and a subordinate does not.
-Override `isClientRpcMethodDenied` for RPCs a browser socket must not reach.
+Three hooks are optional: `workspaceName()` returns `this.name` (line 489),
+`extraCodemodeProviders()` returns `[]` (line 595), and
+`isClientRpcMethodDenied(method)` returns `false` (line 619). Override the
+first provider hook for extra sandbox namespaces: the orchestrator gets
+`agent.*`, a subordinate does not. Override the RPC hook for methods a browser
+socket must not reach.
 
-Everything else is inherited: the CF runtime assembly, the `BackendHost`, the
-shared `AgentOrchestrator`, `ExtensionHost` plus compaction, the dynamic-context
-ledger, the prompt, model and tool caches, and the whole Think hook bridge.
+The tool surface follows from `actorToolDeps()` alone. `DEPS_GATED_TOOLS` is
+in Core (`core/src/tools/registry.ts:137`), so a builtin rename moves its gate;
+the old cf-local `['report']` matched nothing after a rename. The Core list
+still holds `report`, and `actorActiveTools()` (line 437) drops it when
+unwired. `team` and `peers` gate `agents` actions through
+`actorAgentsActions()` (line 448), which always passes a `fork` marker, so
+every CF actor advertises `swarm`. `release` left the native surface;
+`deps.releases` feeds only the `release.*` codemode namespace and gates
+nothing in `actorActiveTools()`. No flag or allowlist decides this.
 
-The tool surface follows from `actorToolDeps()` alone. `DEPS_GATED_TOOLS` moved
-to core, at `core/src/tools/registry.ts:137`, so a rename of the builtin moves
-the gate with it; the old cf-local copy was a bare `['report']` matching
-nothing after a rename. It still holds one name, `report`, and
-`actorActiveTools()` (line 437) drops that name when `report` is unwired.
-`team` and `peers` gate the `agents` tool's actions rather than a tool name,
-through `actorAgentsActions()` (line 448), which always passes a `fork` marker,
-so every cf actor advertises `swarm`. `release` left the native surface, so
-`deps.releases` now feeds only the `release.*` codemode namespace and gates
-nothing in `actorActiveTools()`. No flag and no allowlist decides any of this.
+`ActorToolDeps` (line 405) has `team`, `peers`, `report`, `releases` and
+`submitPlan`. `teamProfile()` (line 798) returns `{ team }` while an actor has
+tree below it and `{}` at the depth cap, so delegation budget, not class,
+stops recursion. `SubordinateAgent.actorToolDeps()`
+(`cf-backend/src/subordinate-agent.ts:250`) adds `report` on a parent-assigned
+turn or `submitPlan` on an owner turn.
 
-`ActorToolDeps` (line 405) has five members: `team`, `peers`, `report`,
-`releases` and `submitPlan`.
-
-A subordinate can hire below itself. `teamProfile()` (line 798) returns
-`{ team }` for every actor with tree left below it and `{}` at the depth cap, so
-the recursion stops on the delegation budget rather than on the class.
-`SubordinateAgent.actorToolDeps()`
-(`cf-backend/src/subordinate-agent.ts:250`) adds one tool on top of that
-profile, and which one depends on whose turn it is: `report` on a
-parent-assigned turn, `submitPlan` on an owner turn.
-
-Per-actor model and provider state lives in `OwnedModelServices`
-(`cf-backend/src/owned-model-services.ts:33`) by composition:
-`providerRegistry()`, `resolveModel(spec)`, `getWebSearchProvider()` and
-`invalidate()`. `ActorAgent` constructs it with `ownerRequired: true`
+`OwnedModelServices` (`cf-backend/src/owned-model-services.ts:33`) holds
+per-actor model/provider state by composition: `providerRegistry()`,
+`resolveModel(spec)`, `getWebSearchProvider()`, `invalidate()`. `ActorAgent`
+constructs it with `ownerRequired: true`
 (`cf-backend/src/actor-agent.ts:1031`). `ExplorationAgent` is not an
-`ActorAgent`, and constructs its own with `ownerRequired: false`
+`ActorAgent`; it constructs its own with `ownerRequired: false`
 (`cf-backend/src/exploration.ts:127`).
 
 ## Adding a new ModelProvider
@@ -157,28 +139,24 @@ Per-actor model and provider state lives in `OwnedModelServices`
 3. Optionally add a credential UI section in
    `cf-backend/src/pages/SettingsPage.tsx`, so users can store the API key.
 
-Declare `fastModel` when the vendor has a genuinely smaller tier. The
-mechanical jobs run on it: outcome classification, pathology labels, short
-reflections, pattern extraction and sleep-time compression. It reuses the same
-credential, so it adds no provider path. Omit it where naming one tier would be
-arbitrary, as for `openai-compat` and `openrouter`, and those jobs then run on
-the chat model.
+Declare `fastModel` only for a genuinely smaller tier. It runs outcome
+classification, pathology labels, short reflections, pattern extraction and
+sleep-time compression using the same credential. Omit it where one tier would
+be arbitrary, as for `openai-compat` and `openrouter`; those jobs use the chat
+model.
 
-Keep `createModel` synchronous. All auth and refresh work belongs inside the
-`customFetch` you pass to the AI SDK, which keeps Think's synchronous
-`getModel()` working unchanged. See `core/providers/codex.ts` for the
-retry-once-on-401 pattern.
+Keep `createModel` synchronous. Put auth and refresh in the AI SDK
+`customFetch`, preserving Think's synchronous `getModel()`. See
+`core/providers/codex.ts` for retry-once-on-401.
 
-Do not hardcode `listModels`. Hydrate from the live models.dev catalog
-(`listModelsDevProviderModels` in `core/src/providers/models-dev.ts`, with a
-5-minute cache) and pass a static `FALLBACK_MODELS` array for when that fetch
-fails, returns a non-200, or filters to nothing. The Anthropic and OpenAI
-providers both do exactly that. If your provider already appears in models.dev,
-skip the hand-written provider. `registry.registerDynamic`
-(`cf-backend/src/providers/agent-registry.ts:131`) makes every catalog id usable
-once the user stores a `<id>.bearer` credential. Wrap your fetch in
-`withRateLimitRetry`, or build it with the shared `createAuthedFetch`, which
-already does.
+Do not hardcode `listModels`. Hydrate from models.dev
+(`listModelsDevProviderModels` in `core/src/providers/models-dev.ts`, 5-minute
+cache) and provide a static `FALLBACK_MODELS` array for a failed, non-200, or
+empty filtered fetch. Anthropic and OpenAI do this. If models.dev already
+carries your provider, skip a handwritten provider:
+`registry.registerDynamic` (`cf-backend/src/providers/agent-registry.ts:131`)
+makes every catalog id usable once the user stores a `<id>.bearer` credential.
+Wrap a fetch in `withRateLimitRetry` or use the shared `createAuthedFetch`.
 
 ## Adding a new ExplorationStrategy
 
@@ -197,82 +175,65 @@ export function createToTStrategy(): ExplorationStrategy {
 }
 ```
 
-The interface is `id`, an optional `label` and `description`, an optional
-`advertised` flag, and `explore`. Set `advertised: false` for a strategy that
-programmatic and eval callers dispatch by id but a chat model never needs, as
-the single-shot baseline does. The strategy returns a `StrategyResult`, which
-carries `strategy`, `best`, `all`, an optional `trace`, and `cost`. Always
-respect `ctx.signal` for cancellation and `ctx.budget` for budget enforcement.
-
-Then read *Registration is not reachability* above and decide which dispatcher
-will call yours. Adding a value to a tool field is not one of the options,
-because no tool field selects a strategy today.
+The interface has `id`, optional `label` and `description`, optional
+`advertised`, and `explore`. Set `advertised: false` for an id programmatic
+and eval callers dispatch but a chat model never needs, as for the single-shot
+baseline. `StrategyResult` carries `strategy`, `best`, `all`, optional `trace`,
+and `cost`. Always respect `ctx.signal` for cancellation and `ctx.budget` for
+budget enforcement. Then choose the dispatcher that calls yours; no tool field
+selects a strategy today.
 
 ## Replacing the inference loop
 
 There is no `InferenceLoop` registry. Think's `_runInferenceLoop` is private, so
-the hook is `_transformInferenceResult`
-(`core/src/scaffold/inference-transform.ts`, overridden at
-`cf-backend/src/actor-agent.ts:1987`). When the workspace has an evolved
-`scaffold/agent.js` at a version above 0, that generator becomes the turn's
-inference loop. An un-evolved agent gets the default result back untouched, the
-same object, with zero overhead.
+the hook is
+`_transformInferenceResult` (`core/src/scaffold/inference-transform.ts`,
+overridden at `cf-backend/src/actor-agent.ts:1987`). An evolved
+`scaffold/agent.js` above version 0 becomes the turn's inference loop. An
+un-evolved agent gets the default result back untouched, the same object, with
+zero overhead.
 
-`host.defaultInference()` is what makes this safe. The scaffold receives the one
-already-prepared stream, so a scaffold that only delegates is byte-faithful by
-construction. A second call to `defaultInference()` surfaces as a
-`defaultInference failed` event. A scaffold that never delegates gets the
-eagerly-fired default stream cancelled rather than left running.
-
-The scaffold version selects the loop, and there is no config key. The path to a
-new loop is the evolution pipeline: propose, pass the 4 gates and the
-misevolution veto, survive shadow evaluation, and get promoted. See
-[EVOLUTION.md](./EVOLUTION.md).
+`host.defaultInference()` supplies one prepared stream, so a scaffold that
+only delegates is byte-faithful. A second call emits `defaultInference failed`;
+a scaffold that never delegates gets the eagerly-fired default stream
+cancelled rather than left running. Scaffold version selects the loop, with no
+config key: propose, pass the 4 gates and misevolution veto, survive shadow
+evaluation, get promoted. See [EVOLUTION.md](./EVOLUTION.md).
 
 ### Reading the conversation with `host.history()`
 
-A scaffold used to receive one string (`task`) and a prepared default stream.
-That is enough to wrap the default loop and not enough to manage context. An
-inference loop has to see its own conversation before it can reshape, reweight or
-navigate it, so a scaffold built for context discipline had nothing to work on.
-
-`host.history(query)` closes that. It is read-only and budgeted
-(`core/src/orchestrator/scaffold-host.ts`, one implementation both backends
-wire: the CLI session's message array, and the DO's prepared turn options).
+A scaffold formerly received one `task` string and a prepared default stream.
+That wraps a loop but cannot manage context. `host.history(query)` provides
+read-only, budgeted conversation access
+(`core/src/orchestrator/scaffold-host.ts`; both backends wire it from the CLI
+message array or the DO's prepared turn options):
 
 ```js
 const page = await host.history({ offset: -40, limit: 40, maxChars: 2000 });
 // { total, offset, clipped, entries: [{ index, role, chars, text, truncated }] }
 ```
 
-A negative `offset` counts back from the end, and the default is the tail.
-`total` and each entry's `chars` report how much the page leaves out, so a
-scaffold can ask for more pages instead of asking for everything. The bounds are
-structural rather than advisory: at most `SCAFFOLD_HISTORY_MAX_LIMIT` (100)
-messages, at most `SCAFFOLD_HISTORY_MAX_MESSAGE_CHARS` (8,000) per message, and
-a page stops at `SCAFFOLD_HISTORY_MAX_PAGE_CHARS` (40,000) characters however it
-was asked for. Prose comes back as written. Tool traffic comes back named, as
-`[tool-call run {...}]`, rather than dumped.
+A negative `offset` counts from the end; the default is the tail. `total` and
+entry `chars` show what the page leaves out. Bounds are structural: at most
+`SCAFFOLD_HISTORY_MAX_LIMIT` (100) messages,
+`SCAFFOLD_HISTORY_MAX_MESSAGE_CHARS` (8,000) per message, and
+`SCAFFOLD_HISTORY_MAX_PAGE_CHARS` (40,000) characters per page. Prose returns
+as written; tool traffic returns named as `[tool-call run {...}]`, not dumped.
 
-Read-only is structural too. The bridge returns plain data and exposes no
-writer. A scaffold that wants to shrink its context still goes through the
-compaction ladder, which remains the single owner of the model-visible stream.
-
-The bridge is passed to the shadow-eval run for the same reason `callTool` is. A
-pending version judged without a capability the live turn had is judged on a
-handicap, and a context-discipline scaffold would lose every trial.
+The bridge returns plain data and exposes no writer. Context shrinking still
+goes through the compaction ladder, the sole owner of the model-visible stream.
+Shadow evaluation receives this bridge for the same reason it receives
+`callTool`: judging a pending version without a live capability is a handicap.
 
 ## Reasoning-effort budgets
 
-`low | medium | high` is the one dial, and two commands set it at two different
-altitudes. `kinu effort <name> [level]` sets one workspace, stored as
-`agent_config.reasoning_effort`, and mirrors the value into
-`~/.kinu/config.json` as the CLI-side default. The `/effort` slash command sets
-the active profile's default tier, stored as `tiers.default.reasoningEffort` in
-the local profile file or the cloud profile. So `/effort` moves every workspace
-that has not been set on its own, and `kinu effort` moves exactly one.
-`reasoningEffortOptions(effort, providerFamily)` in `core/strategy/effort.ts`
-translates the resolved level to each family's native knob.
+`low | medium | high` is the one dial. `kinu effort <name> [level]` sets one
+workspace in `agent_config.reasoning_effort` and mirrors it to
+`~/.kinu/config.json` as the CLI default. `/effort` sets the active profile
+default in `tiers.default.reasoningEffort` in the local profile or cloud
+profile. `/effort` moves every workspace not set on its own; `kinu effort`
+moves exactly one. `reasoningEffortOptions(effort, providerFamily)` in
+`core/strategy/effort.ts` translates the level to each provider's native knob.
 
 | Family | Emitted `providerOptions` |
 |---|---|
@@ -282,10 +243,9 @@ translates the resolved level to each family's native knob.
 | `anthropic` | `{ anthropic: { thinking: { type: 'enabled', budgetTokens } } }`, at 4,000 / 16,000 / 32,000 |
 | anything else | `undefined` |
 
-Internal stages that should not cost chat-grade thinking take their level from
-`REASONING_EFFORT_FOR_STAGE` instead of the user's setting. Note that
-`effortFor()` returns only the Workers AI option shape. Reach for
-`reasoningEffortOptions` when the provider family is not known to be Workers AI.
+Internal stages take their level from `REASONING_EFFORT_FOR_STAGE`, not the
+user setting. `effortFor()` returns only the Workers AI shape; use
+`reasoningEffortOptions` unless the provider family is known to be Workers AI.
 
 ```ts
 import { effortFor } from '@kinu.run/core';
@@ -300,152 +260,135 @@ generateText({ model, prompt, ...effortFor('mcts_rollout') });
 streamText({ model, prompt, ...effortFor('scaffold_mutation') });
 ```
 
-The nine stages are `chat`, `judge`, `mcts_judge` and `head_merge` at medium,
-`reflection`, `mcts_rollout`, `rlm_subcall` and `memory_compress` at low, and
-`scaffold_mutation` at high. Effort, rather than an output-token cap, is the
-cheapness lever on most of these paths.
+`chat`, `judge`, `mcts_judge`, `head_merge` use medium; `reflection`,
+`mcts_rollout`, `rlm_subcall`, `memory_compress` use low;
+`scaffold_mutation` uses high. Effort, not an output-token cap, is the
+cheapness lever on most paths.
 
 ## The agent's runtime surface
 
-`TOOL_REACH` (`core/src/tools/registry.ts:52`) is the authoritative map of what
-is native, what is codemode-only, and which namespace each capability projects
-into. The top-level tools are the 8 it marks native, listed in `BUILTIN_TOOLS`
-at line 81: `execute_tools`, `run`, `file`, `agents`, `memory`, `tasks`, `web`
-and `report`. `actorActiveTools()` narrows that list per actor. Three
-capabilities are codemode-only by decision: `release`, `agent` and `llm`.
-`skills` appears in neither list, because a SKILL.md file is an ordinary path
-under `/workspace/skills/` on the VFS that `workspace.*` already addresses, so a
-dedicated surface would have been a third path to the same bytes. See
-[TOOLS.md](./TOOLS.md) for the full list, and for what became an owner-facing
-RPC rather than agent-facing at all (`experience`).
+`TOOL_REACH` (`core/src/tools/registry.ts:52`) is the authoritative map of
+native and codemode-only capabilities and their namespaces. `BUILTIN_TOOLS`
+line 81 marks 8 native tools: `execute_tools`, `run`, `file`, `agents`,
+`memory`, `tasks`, `web`, `report`; `actorActiveTools()` narrows them per
+actor. `release`, `agent`, `llm` are codemode-only. `skills` is neither: a
+SKILL.md is an ordinary `/workspace/skills/` path on the VFS that
+`workspace.*` already addresses. A dedicated surface would be a third path to
+the same bytes. See [TOOLS.md](./TOOLS.md) for the full list and the
+owner-facing `experience` RPC.
 
-Inside `execute_tools`, the LLM additionally sees:
+Inside `execute_tools`, the LLM also sees:
 
-- `workspace.*`, the VFS including `editFile` for exact-match edits, plus
-  shell, memory, `createTool` and `createView`. It is always available, and it
-  is where `run` and `file` project to.
-- `sandbox.*`, Linux container exec and port preview, when bound.
-- `agents.*`, `memory.*`, `tasks.*`, `web.*` and `report.*`, codemode
-  projections of the same-named native tool. Each shares one dispatcher with
-  its native side, so a script and a direct tool call see identical state.
-- `release.*` and `agent.*`, which have no native tool at all. The orchestrator
-  gets both from its `extraCodemodeProviders()`
-  (`cf-backend/src/orchestrator.ts:798-803`); a subordinate returns only a
-  report provider, so it gets neither.
-- `llm.query(text, opts?)`, Recursive Language Models. A sub-call has no
-  `llm.query` in scope, so depth is bounded at 1 by construction.
-- Crafted tools, as `tools.<name>(args)` literals in lexical scope, injected
-  through the preamble. See `cf-backend/src/crafted-tool-registry.ts`.
+- `workspace.*`: VFS, including exact-match `editFile`, shell, memory,
+  `createTool`, `createView`; always available, and where `run` and `file`
+  project.
+- `sandbox.*`: Linux container exec and port preview when bound.
+- `agents.*`, `memory.*`, `tasks.*`, `web.*`, `report.*`: codemode projections
+  sharing one dispatcher with their native tool, so scripts and direct calls
+  see identical state.
+- `release.*`, `agent.*`: no native tool. The orchestrator gets both from
+  `extraCodemodeProviders()` (`cf-backend/src/orchestrator.ts:798-803`); a
+  subordinate returns only a report provider and gets neither.
+- `llm.query(text, opts?)`: Recursive Language Models. A sub-call has no
+  `llm.query`, so depth is 1 by construction.
+- Crafted tools: `tools.<name>(args)` literals injected into lexical scope by
+  the preamble (`cf-backend/src/crafted-tool-registry.ts`).
 
-`tools.<name>(args)` is the one callable form for a crafted tool, on every
-backend. `core/src/tools/sandbox-contract.ts` states it and both sandboxes
-build from its two constants. `codemode.<name>` stays declared, so the tool
-appears in the generated types the model reads and can be discovered, but it is
-a refusing alias: calling it THROWS `craftedNamespaceCorrection(name)`, which
-names the right form. It throws rather than returning `{ error }` because a
-returned error is a value the model reads as a result and the runtime reads as
-a successful call, and an in-episode fitness observation could then be taken on
-a call that never ran.
+`tools.<name>(args)` is the one crafted-tool call form on every backend.
+`core/src/tools/sandbox-contract.ts` states it, and both sandboxes build from
+its two constants. `codemode.<name>` remains declared for generated-type
+discovery but is a refusing alias: it THROWS
+`craftedNamespaceCorrection(name)`, naming the right form. It cannot return
+`{ error }`: the model would read a value as a result, the runtime would read
+a successful call, and an in-episode fitness observation could be taken on a
+call that never ran.
 
 ## The agent's persistent state
 
-- `agent_facts`, a typed, idempotent, keyed world model, driven by the `memory`
-  tool's remember, recall and forget actions. `renderFactsForTurn`
+- `agent_facts`: typed, idempotent, keyed world model driven by memory
+  remember/recall/forget. `renderFactsForTurn`
   (`core/src/orchestrator/turn-surface.ts:123`) renders the 20 most recent
-  facts into the turn's dynamic-context block, capped at 2,000 characters.
-- `MEMORY.md`, unstructured prose with FTS5 and Vectorize hybrid search.
-- Dynamic context, held by the `DynamicContextLedger`
-  (`core/src/prompting/volatile-context.ts`). It re-reads live state at every
-  model step and appends a fresh `<dynamic_context>` block only when its render
-  changes, freezing earlier blocks so provider cache breakpoints survive. Live
-  state means facts, the MEMORY.md tail, executor availability, running
-  background work, the open delegate roster, and approvals parked on the user.
-  It is woven in the step pipeline and never at turn assembly, so a compaction
-  plugin never sees it.
-- `crafted_tools`, the LLM-authored skill library, EMA-scored.
+  facts in dynamic context, capped at 2,000 characters.
+- `MEMORY.md`: unstructured prose with FTS5 and Vectorize hybrid search.
+- `DynamicContextLedger` (`core/src/prompting/volatile-context.ts`): re-reads
+  facts, MEMORY.md tail, executor availability, running background work, open
+  delegate roster, and approvals parked on the user at each model step. It
+  appends `<dynamic_context>` only when the render changes, freezing prior
+  blocks for provider cache breakpoints. It is woven in the step pipeline,
+  never turn assembly, so compaction never sees it.
+- `crafted_tools`: EMA-scored LLM-authored skill library.
 
-Credentials are deliberately absent from that list. They live in `UserDO`'s
-`user_credentials` table, one set per user across all their workspaces. An agent
-asks for a resolved auth header and never holds the secret.
+Credentials are deliberately absent. They live in `UserDO`'s
+`user_credentials`, one set per user across workspaces; an agent asks for a
+resolved auth header and never holds the secret.
 
 ## Runtime guarantees
 
-These hold in the runtime today. We considered two paranoid mechanisms and
-rejected both, because each would hurt model UX or performance without
-addressing a real threat. `agent_facts` secret-pattern redaction was rejected
-because secrets the agent sees are already in conversation context, so blocking
-the keyed-fact write rejects legitimate values. Crafted-tool description
-sanitization was rejected because tools are agent-self-authored, there is no
-external attacker, and the cap truncates useful "when to use" guidance.
+I rejected two mechanisms because they hurt model UX or performance without
+addressing a real threat: secret-pattern redaction for `agent_facts` would
+reject values already in conversation context; crafted-tool description
+sanitization assumes an external attacker for self-authored tools and truncates
+useful "when to use" guidance.
 
 - **Rate-limit patience on every model fetch.** `withRateLimitRetry`
-  (`core/src/providers/rate-limit-retry.ts`) wraps the fetch of every provider:
-  the shared `createAuthedFetch`, Workers AI, the AI Gateway, codex and
-  opencode. On a 429, a 529 or an overload-shaped 503 it waits and retries. It
-  honours `Retry-After` when the server sends one, and otherwise waits a
-  full-jitter draw under a ceiling that doubles from 2 s to a 60 s cap. Neither
-  elapsed time nor attempt count ends the loop: it stops on success, on a
-  definitive failure, or when the caller cancels. Non-replayable bodies pass
-  through untouched. Do not add an attempt cap here expecting the SDK to cover
-  the rest; `PROVIDER_SDK_RETRIES` is 2, and a cap under a real provider
-  cooldown turns a wait into a failed turn.
-- **Request starts are paced per provider host.** Every attempt goes out
-  through `ProviderPacer.admit` (`core/src/providers/pacing.ts`), which spaces
-  starts against one host and holds each caller behind any cooldown that host
-  has already mandated. A whole swarm level used to arrive as N simultaneous
-  first requests on one credential. The lane is held only while a request
-  awaits headers, so a request sleeping out a `Retry-After` frees capacity a
-  sibling can use, and streaming bodies are not throttled.
-- **OAuth error sanitization.** `sanitizeErrorBody` in
-  `core/src/providers/codex-oauth.ts` strips token-shaped substrings from
-  upstream error bodies before they are attached to thrown errors. It defends
-  against the OAuth server echoing tokens back. Only the error-log path is
-  affected, so there is no LLM-path cost.
+  (`core/src/providers/rate-limit-retry.ts`) wraps shared `createAuthedFetch`,
+  Workers AI, AI Gateway, codex and opencode. On 429, 529 or overload-shaped
+  503 it honours `Retry-After`, else waits a full-jitter draw under a ceiling
+  doubling from 2 s to 60 s. No elapsed time or attempt count ends the loop;
+  it stops on success, definitive failure or caller cancellation.
+  Non-replayable bodies pass through untouched. Do not cap attempts expecting
+  the SDK to cover the rest: `PROVIDER_SDK_RETRIES` is 2, and a cap under a
+  real cooldown turns a wait into a failed turn.
+- **Request starts are paced per provider host.** `ProviderPacer.admit`
+  (`core/src/providers/pacing.ts`) spaces starts and holds callers behind a
+  host's cooldown. A swarm level used to send N simultaneous first requests
+  on one credential. It holds the lane only through headers, so a request
+  sleeping for `Retry-After` frees capacity and streaming bodies are not
+  throttled.
+- **OAuth error sanitization.** `sanitizeErrorBody`
+  (`core/src/providers/codex-oauth.ts`) strips token-shaped text from upstream
+  error bodies before attaching them to thrown errors. It defends against an
+  OAuth server echoing a token; only the error-log path changes.
 - **Refresh happens above the provider.** Providers never see a
-  `refresh_token`. The resolver owns refresh. On a 401 a provider retries
-  exactly once with `getAuth(key, { forceRefresh: true })`, and UserDO makes
-  the refresh-or-preserve decision, so a transient 500 during refresh cannot
-  wipe a live credential.
-- **Per-user MCP auth.** `/mcp/v1/<agentName>` (`cf-backend/src/mcp-server.ts`)
-  authenticates every request. External MCP clients send the per-user CLI
-  bearer token, `Authorization: Bearer ptc_…`, verified through
-  `authenticateCliToken`. Browsers use the OAuth session. Agent ownership is
-  enforced before any tool runs. There is no shared secret.
-- **`AgentConfigStore`.** Typed accessors over `agent_config`
-  (`core/src/config/store.ts`) with known-key getters and setters. Adding a
-  tunable means adding one accessor.
+  `refresh_token`. The resolver owns refresh; on 401 a provider retries once
+  with `getAuth(key, { forceRefresh: true })`. UserDO makes the
+  refresh-or-preserve decision, so a transient 500 cannot wipe a live
+  credential.
+- **Per-user MCP auth.** `/mcp/v1/<agentName>`
+  (`cf-backend/src/mcp-server.ts`) authenticates every request. External MCP
+  clients send `Authorization: Bearer ptc_…`, verified by
+  `authenticateCliToken`; browsers use OAuth. Ownership is checked before a
+  tool runs. There is no shared secret.
+- **`AgentConfigStore`.** Typed known-key accessors over `agent_config`
+  (`core/src/config/store.ts`). Add one accessor for a new tunable.
 - **Provider and model cache invalidation.** `invalidateModelCaches()`
   (`cf-backend/src/actor-agent.ts:4606`) calls
-  `ownedModelServices.invalidate()`, which drops the resolved model and the
-  owner-bound provider registry together, so a disconnected provider stops
-  being marked available. It fires on owner claim, `setModel`, subordinate
-  identity seeding, and the `onCredentialsChanged` fan-out the Worker sends
-  when the user's credentials change in UserDO.
-- **Sleep-time compute skips atomically on error.** `applySleepTimeUpdate`
-  pre-filters non-serializable upsert values, so a partial write cannot leave
-  the facts store inconsistent.
-- **`decidePromotion` breaks ties toward the incumbent.** At `maxTrials`, only
-  `winRate > 0.5` promotes (`core/src/scaffold/shadow.ts:560`, the rule at
-  `:592`). A tie rolls back to current.
-- **SSE resume validates `Last-Event-ID`.** `resumeIndexFromLastEventId`
-  (`cf-backend/src/lib/orchestrator-wire.ts:59`) accepts an integer at or above
-  the `-1` sentinel. Every other value replays from the start, including a
-  blank header, which a client sends when its last-event buffer is empty.
+  `ownedModelServices.invalidate()`, dropping the resolved model and
+  owner-bound registry together. It fires on owner claim, `setModel`,
+  subordinate identity seeding and UserDO's `onCredentialsChanged` fan-out.
+- **Sleep-time compute skips atomically on error.**
+  `applySleepTimeUpdate` pre-filters non-serializable upserts, so a partial
+  write cannot leave the facts store inconsistent.
+- **`decidePromotion` breaks ties toward the incumbent.** At `maxTrials`,
+  only `winRate > 0.5` promotes (`core/src/scaffold/shadow.ts:560`, rule
+  `:592`); a tie rolls back to current.
+- **SSE resume validates `Last-Event-ID`.**
+  `resumeIndexFromLastEventId` (`cf-backend/src/lib/orchestrator-wire.ts:59`)
+  accepts an integer at or above `-1`; every other value, including a blank
+  header, replays from the start.
 - **Credential keys are validated.** `cf-backend/src/user/validate.ts:60`
-  restricts credential keys to `[a-zA-Z0-9._-]{1,128}`, so a
-  path-traversal-shaped URL cannot reach the store.
+  restricts them to `[a-zA-Z0-9._-]{1,128}`, so a path-traversal-shaped URL
+  cannot reach the store.
 - **Code fences resolve through one alias map.**
-  `core/src/execution/code-fence.ts` maps `js`, `mjs`, `cjs` and `node` to
-  `javascript`, `ts` to `typescript`, and `py` and `python3` to `python`. An
-  LLM that tags a fence `js` gets its code executed rather than scored as
-  prose. `readProposalCode` in the same file selects the last runnable block
-  and preserves the language of an unrunnable one.
+  `core/src/execution/code-fence.ts` maps `js`, `mjs`, `cjs`, `node` to
+  `javascript`, `ts` to `typescript`, `py` and `python3` to `python`.
+  `readProposalCode` selects the last runnable block and preserves the
+  language of an unrunnable one, so `js` code executes rather than being
+  scored as prose.
 
 ## Where a backend plugs into core
 
-A backend used to reimplement parts of a turn. Six of those parts now live in
-`packages/core` and each backend calls in. Before you write one of these in a
-backend, check whether core already owns it.
+Core owns these six turn parts. Check it before writing one in a backend.
 
 | What | Core owns | A backend supplies |
 |---|---|---|
@@ -456,68 +399,60 @@ backend, check whether core already owns it.
 | Provider snapshot cache | `ProviderListingCache` and `buildProviderCatalogSnapshot` (`core/src/profiles/provider-catalog.ts:106`, `:53`) | the sweep that lists providers |
 | The default role | `DEFAULT_ROLE_ID`, which is `general` (`core/src/profiles/catalog.ts:43`) | nothing; a backend compares against it rather than spelling the string |
 
-One `model_call` builder means a spend census reads one row shape. One
-`DEFAULT_ROLE_ID` means a backend that hardcoded `'general'` cannot drift from
-the catalog that defines it.
+One `model_call` builder gives a spend census one row shape. One
+`DEFAULT_ROLE_ID` stops a hardcoded `'general'` drifting from its catalog.
 
 ## Worked example: Recursive Language Models
 
-This one is already built. The provider is `packages/core/src/rlm.ts`, 165 lines
-measured 2026-08-24. The shape was:
+`packages/core/src/rlm.ts` is already built, 165 lines measured 2026-08-24:
 
-1. Build a codemode provider exposing `query(text, opts?)`
+1. Build a `query(text, opts?)` codemode provider
    (`createRLMProvider`, `core/src/rlm.ts:94`).
-2. Resolve models through the provider registry, which handles a per-call
-   `model` override.
-3. Register the provider alongside the crafted-tool provider and the executor
-   providers. The cloud backend does that in
-   `cf-backend/src/execute-tools.ts:88`; the CLI backend does it in
-   `cli-backend/src/local-session.ts:1158`. For an actor-specific namespace,
-   return your provider from that actor's `extraCodemodeProviders()` instead.
-4. Teach the LLM about it through the prompt template, not a literal. The
-   `llm.query` paragraph lives in `CODE_EXECUTION_SECTION`
-   (`core/src/prompting/section-templates.ts:210`) behind an
-   `{{#if rlmAvailable}}` conditional, and `core/src/prompt.ts:233` renders that
-   section with the flag each backend wired.
+2. Resolve models through the provider registry, including a per-call `model`
+   override.
+3. Register it beside crafted-tool and executor providers:
+   `cf-backend/src/execute-tools.ts:88` for cloud,
+   `cli-backend/src/local-session.ts:1158` for CLI. For an actor namespace,
+   return it from `extraCodemodeProviders()`.
+4. Teach the LLM through the prompt template, never a literal. The `llm.query`
+   paragraph is in `CODE_EXECUTION_SECTION`
+   (`core/src/prompting/section-templates.ts:210`) behind
+   `{{#if rlmAvailable}}`; `core/src/prompt.ts:233` renders it with the
+   backend-wired flag.
 
-The same template applies to any new tool that LLM-authored code can call inside
-the codemode sandbox.
+The same template applies to any new tool LLM-authored code can call in the
+codemode sandbox.
 
 ## What is wired today
 
-- **Anthropic direct provider**, `core/providers/anthropic.ts`. Messages API
-  with the `x-api-key` header, default `claude-opus-4-7`, plus Sonnet 4.6 and
-  Haiku 4.5. Covered by `packages/core/tests/contract-providers.test.ts` and
+- **Anthropic direct provider**, `core/providers/anthropic.ts`: Messages API,
+  `x-api-key`, default `claude-opus-4-7`, Sonnet 4.6, Haiku 4.5; covered by
+  `packages/core/tests/contract-providers.test.ts` and
   `packages/core/tests/contract-cache-markers.test.ts`.
 - **Tool Search, Voyager-style.** `buildBuiltinTools({ toolSurfacing: { mode:
-  'relevant', query } })` filters crafted tools by an FTS5 relevance and
-  frequency union. It is a build option and nothing passes it. A per-turn
-  `query` would change the toolset every turn and break the byte-stable prompt
-  prefix the caches depend on. There is no config switch for it and no test
-  over it.
-- **MCTS strategy adapter**, `core/strategy/mcts.ts`, wraps the existing
-  `runMCTS` engine for programmatic and evaluation callers. Production lifetime
-  evolution calls the engine directly.
-- **Heads strategy adapter**, `core/strategy/heads.ts`, wraps
-  `HeadController` for programmatic and evaluation callers. Its behaviour is
-  pinned by `packages/core/tests/unit-heads-strategy-budget.test.ts` and
+  'relevant', query } })` filters crafted tools by FTS5 relevance and
+  frequency union. Nothing passes it: per-turn `query` would change the
+  toolset and break the cache-dependent byte-stable prompt prefix. No config
+  switch or test covers it.
+- **MCTS strategy adapter**, `core/strategy/mcts.ts`, wraps `runMCTS` for
+  programmatic/eval callers; lifetime evolution calls the engine directly.
+- **Heads strategy adapter**, `core/strategy/heads.ts`, wraps `HeadController`
+  for programmatic/eval callers; pinned by
+  `packages/core/tests/unit-heads-strategy-budget.test.ts` and
   `packages/core/tests/unit-heads-file-report.test.ts`.
-- **Eval harness**, `core/eval/{types,runner,judge,corpus,report}.ts`. A JSONL
-  corpus loader, an A/B runner over any two `ExplorationStrategy`s, and
-  structured judge verdicts through Valibot. The seed corpus is at
-  `tests/eval/corpus/seed.jsonl`. `scripts/eval.ts` is the runnable caller and
-  gates on a quality floor, exiting 0 when the aggregate clears the floor and 1
-  on a regression or a misconfiguration.
-- **Voyager curriculum proposer**, `core/curriculum/proposer.ts`. It reads
-  CraftStore plus recent outcomes and asks the LLM for N candidate tasks at the
-  "barely succeeds" band, with predicted success in [0.3, 0.7] by default, then
-  persists them to `proposed_tasks`. The RPCs are `proposeCurriculumTasks`,
-  `listCurriculumTasks` and `setCurriculumTaskStatus`
+- **Eval harness**, `core/eval/{types,runner,judge,corpus,report}.ts`: JSONL
+  corpus loader, A/B runner over two `ExplorationStrategy`s, Valibot verdicts.
+  Seed corpus: `tests/eval/corpus/seed.jsonl`. `scripts/eval.ts` gates a
+  quality floor, exits 0 when the aggregate clears it and 1 on regression or
+  misconfiguration.
+- **Voyager curriculum proposer**, `core/curriculum/proposer.ts`: reads
+  CraftStore plus outcomes, asks for N "barely succeeds" tasks at predicted
+  success [0.3, 0.7] by default, persists `proposed_tasks`. RPCs:
+  `proposeCurriculumTasks`, `listCurriculumTasks`, `setCurriculumTaskStatus`
   (`cf-backend/src/orchestrator.ts:3147-3155`).
-- **Sleep-time compute**, `core/memory/sleep-time-compute.ts`. Background
-  memory compression over the facts store and nothing else. A
-  `SleepTimeUpdate` is exactly `{ upserts, decay }`, and `applySleepTimeUpdate`
-  touches only `agent_facts`. It fires fire-and-forget from `onChatResponse`
-  and is on by default, through `agent_config.sleep_time_compute`, which
-  disables it on the literal string `'false'`. Fact upserts surface in the
-  Evolution Changelog and are revertable there.
+- **Sleep-time compute**, `core/memory/sleep-time-compute.ts`: background
+  facts compression only. `SleepTimeUpdate` is exactly `{ upserts, decay }`;
+  `applySleepTimeUpdate` touches only `agent_facts`. It fires fire-and-forget
+  from `onChatResponse`, defaults on through `agent_config.sleep_time_compute`,
+  disables on literal `'false'`, and makes fact upserts revertable in the
+  Evolution Changelog.

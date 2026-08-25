@@ -1,15 +1,14 @@
-# Context Budget: the reference-plus-digest invariant, enforced
+# Context Budget: digest plus reference
 
-One rule governs every payload that can reach the model's token stream.
+One rule governs model-bound bulk:
 
-> **Anything bulk that enters the root's context arrives as a bounded digest plus a resolvable reference to the lossless whole.** Below the threshold it inlines untouched. Making a root fetch its own ordinary material costs a round trip and buys nothing.
+> Anything bulk that enters the root's context arrives as a bounded digest plus a resolvable reference to the lossless whole. Below the threshold it inlines untouched. Making a root fetch its own ordinary material costs a round trip and buys nothing.
 
-The threshold is expressed in chars and bytes at two scales. Tool-borne bulk (a
-command's stdout, a fetched page, an MCP response) clamps at **40,000 chars**
-(`DEFAULT_TOOL_RESULT_MAX_CHARS`). Message-borne bulk (an attachment, a pasted
-document) clamps at **8 KiB** (`INLINE_TEXT_MAX_BYTES`). Every clamp writes the
-full payload somewhere the agent can read it back. A digest with no readable
-whole is data loss.
+Tool-borne bulk (stdout, fetched pages, MCP responses) clamps at 40,000 chars
+(`DEFAULT_TOOL_RESULT_MAX_CHARS`). Message-borne bulk (attachments and pasted
+documents) clamps at 8 KiB (`INLINE_TEXT_MAX_BYTES`). Every clamp writes the
+full payload somewhere the agent can read it back. Without that whole, a digest
+is data loss.
 
 ## The producers, and where each one spills
 
@@ -25,59 +24,38 @@ whole is data loss.
 | Subordinate reports / peer replies | `EVENT_BRIEF_MAX_CHARS` brief, 600 chars | `.kinu/event-content/<hash>.txt` | `core/src/events/hub/content-spill.ts` |
 | Compacted history ranges | checkpoint summary | `.kinu/compaction/<session>/<range>.md` | `@kinu.run/compaction` `stores.ts` |
 
-`SPILL_DIRS` in `core/src/context-budget.ts` is the single source of truth for
-those four directories, and every producer builds its paths from it. The paths
-are written unrooted, so they resolve at the workspace root for every surface
-that reads them. A `file` read is the one producer that writes nothing. The
-whole text is already addressable at its own path, so the marker names the
-offset that continues it instead.
+`SPILL_DIRS` in `core/src/context-budget.ts` owns the four directories. Paths
+are unrooted and resolve at the workspace root. A `file` read writes nothing:
+its source path already addresses the whole, and the marker gives the next
+offset.
 
-**Accepted images are deliberately exempt from the size ceiling.** A spilled
-image is a file the agent can read as bytes and still cannot *see*, so the
-reference would not be resolvable in any useful sense. Documents (PDF) keep the
-ceiling because there are real read-back recipes for them: extract in the
-sandbox, or slice and summarise.
+Accepted images are exempt. A spilled image is bytes the agent can read but
+cannot see. Documents keep the ceiling because the agent can extract them in
+the sandbox or slice and summarise them.
 
 ## The turn-cumulative budget
 
-A per-result cap leaves a gap. Eight in-budget results still bury the root, and
-they persist in durable history until the compaction ladder reaps them. So the
-clamp is also **turn-cumulative** (`TurnContextBudget`):
+Eight individually valid results can still bury the root. `TurnContextBudget`
+therefore makes the clamp turn-cumulative:
 
-- The turn admits tool-result text at the full per-result cap until it has taken
-  **120,000 chars**. That is three full-size results, enough for the navigation
-  reads that open a turn.
-- After that, the per-result cap for the remainder of the turn drops to **8,000
-  chars**. Full text is still spilled and the marker recipe is unchanged; the
-  root stops paying for the bulk inline.
-- The cap for result N is a pure function of the sizes of results 1..N-1, so a
-  replayed turn clamps identically.
-- The budget is **per root**. Every toolset build either receives its root's
-  accumulator budget (`TurnAccumulator.context`, which resets with the rest of
-  the turn's accounting) or gets a fresh `TurnContextBudget`, so no two roots
-  share one ledger.
+- Admit full per-result text through 120,000 chars, enough for three full-size
+  navigation reads.
+- Then cap each result at 8,000 chars. Spill the full text and keep the same
+  marker recipe.
+- Result N depends only on results 1..N-1, so replay clamps identically.
+- The budget is per root: use `TurnAccumulator.context`, reset with the turn,
+  or a fresh `TurnContextBudget`. Roots never share a ledger.
 
-A swarm node is a root of its own by that rule. It builds its own tool surface
-in `buildNodeToolSet` (`core/src/strategy/node-agent.ts`) and passes no
-`contextBudget`, so it clamps against a budget nobody else can spend. A node
-writes no `context_budget` row, because that row comes from an actor's settle
-spine and a node has none.
-
-`clampToolResult` appends the reason to the truncation marker when the cap has
-tightened, rather than stating it in the system prompt. The fact reaches the
-model where it is actionable and costs nothing on the turns that never reach
-the floor.
-
-This is RLMEnv's "the root sees a bounded slice of REPL output per iteration"
-made deterministic at the point Kinu already owned, with no new subsystem,
-mode or flag.
+`buildNodeToolSet` (`core/src/strategy/node-agent.ts`) passes no
+`contextBudget`, so a swarm node has its own budget and no `context_budget` row.
+`clampToolResult` writes a tightened-cap reason into the marker, where the
+model can act on it, instead of the system prompt.
 
 ## The counters
 
-Every trip is recorded on the same object. The turn's settle spine
-(`core/src/orchestrator/turn-lifecycle.ts`) writes one durable `context_budget`
-run event beside `turn_end`, which is the denominator; a turn that neither
-admitted nor spilled bulk writes no row.
+The settle spine (`core/src/orchestrator/turn-lifecycle.ts`) writes one durable
+`context_budget` event beside `turn_end`. That event is the denominator; turns
+that neither admit nor spill bulk write none.
 
 | Field | Meaning |
 |---|---|
@@ -88,23 +66,16 @@ admitted nor spilled bulk writes no row.
 | `tightened` | trips clamped at the floor because the turn's admit budget was spent |
 | `followUps` | tool calls this turn that cited a spill address (the recipe being *used* rather than emitted) |
 
-Query them like any other run event (`RunEventRecorder.read(runId, { types:
-['context_budget'] })`). `followUps` counts any call whose arguments name a
-spill directory, which covers the three shapes the recipe takes: a plain
-read-back, a `slice + llm.query` burst over a spilled file, and a swarm node
-handed a spill path.
-
-The counters measure how often the real workload crosses the bulk thresholds at
-all, which is the prior question every context-management decision depends on. A
-mechanism whose counters show fewer than one trip per 50 real turns is not worth
-tuning, whatever the paper number looks like.
+`RunEventRecorder.read(runId, { types: ['context_budget'] })` reads the event.
+`followUps` counts calls naming a spill directory, including read-back,
+`slice + llm.query`, and a swarm node given a spill path. Fewer than one trip
+per 50 real turns means the mechanism is not worth tuning.
 
 ## Pre-registered decision thresholds
 
-Recorded before the numbers exist, so they cannot be argued into significance
-afterwards. `M2` is this document's label for the long-context/long-horizon
-bench slice: **(a)** single-query digestion, **(b)** multi-episode continuation
-across forced compaction boundaries. Neither arm is measured yet.
+I recorded these before the numbers existed. `M2` means (a) single-query
+digestion and (b) multi-episode continuation across forced compaction
+boundaries. Neither arm is measured yet.
 
 | Change | Ships permanently if | Reverts if |
 |---|---|---|
@@ -113,7 +84,5 @@ across forced compaction boundaries. Neither arm is measured yet.
 | The 120,000 / 8,000 constants | tuned on M2, not on intuition | n/a |
 
 The bench is the seeded-defect corpus in `docs/BENCH.md`. Its patches under
-`tests/bench/patches/` numbered 159 when counted on 2026-08-19 and 157 on
-2026-08-24, after drifted fixtures were retired. The constants above are
-pre-registrations rather than derivations, and they encode "meaningful and
-detectable at bench power". `docs/BENCH.md`'s MDE math governs final power.
+`tests/bench/patches/` numbered 159 on 2026-08-19 and 157 on 2026-08-24 after
+drifted fixtures were retired. `docs/BENCH.md`'s MDE math governs final power.

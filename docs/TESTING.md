@@ -1,12 +1,9 @@
 # Testing Kinu
 
-Kinu runs most of its tests on Bun, across the shared core, the Cloudflare
-backend, the local backend and the CLI. Two things Bun cannot do have their own
-runners: the Durable Object suites run under vitest inside workerd, and the
-behavioural eval arms run under vitest. The two UI gates run under `bun test`
-but drive a real Chrome through puppeteer. This doc gives the commands, the
-counts and their dates, the conventions, and how to add a test with a new
-feature.
+Most tests run on Bun: core, cf-backend, cli-backend, cli. Durable Object tests
+run under vitest inside workerd, behavioural evals run under vitest, and two UI
+gates drive Chrome through puppeteer. This doc gives commands, measured counts,
+and test conventions.
 
 ## TL;DR
 
@@ -18,22 +15,13 @@ bash scripts/test.sh packages/core/tests/contract-providers.test.ts   # one file
 bun run check                            # TypeScript type-check (every package)
 ```
 
-With no pattern, `scripts/test.sh` runs four directories in one `bun test`
-invocation (`scripts/test.sh:36-40`):
-
-    packages/core/tests
-    packages/cf-backend/tests
-    packages/cli-backend/tests
-    packages/cli/tests
-
-So `agent-utils`, `compaction` and `pc-agent` are not in "all tests". The root
-`bun run test` script is a different, partly disjoint set (`agent-utils`,
-`core`, `compaction`), and `scripts/deploy.sh` runs both that and
-`bun test packages/pc-agent/` as separate gates (`scripts/deploy.sh:132,181`).
-Given a pattern, `scripts/test.sh` passes it straight to `bun test`. Flags are
-forwarded unchanged.
-
-To cover the packages `scripts/test.sh` skips:
+Without a pattern, `scripts/test.sh` runs `packages/core/tests`,
+`packages/cf-backend/tests`, `packages/cli-backend/tests`, and
+`packages/cli/tests` in one `bun test` invocation (`scripts/test.sh:36-40`).
+It excludes `agent-utils`, `compaction`, and `pc-agent`. Root `bun run test` is
+a partly disjoint `agent-utils` / `core` / `compaction` set; `scripts/deploy.sh`
+also runs `bun test packages/pc-agent/` (`scripts/deploy.sh:132,181`). Patterns
+and flags pass to `bun test`. Cover the omissions:
 
 ```bash
 bash scripts/test.sh
@@ -42,17 +30,13 @@ bun test packages/agent-utils/tests packages/compaction/tests
 
 ### A bare package path is a substring filter
 
-`bun test packages/cli` does not mean "the cli package". Bun matches the
-argument against the whole path, so it also selects `packages/cli-backend/tests`.
-Measured 2026-08-19: `bun test packages/cli/tests` runs 312 tests and
-`bun test packages/cli` runs 625, which is those 312 plus cli-backend's 313.
-Name the directory when you mean the directory.
+`bun test packages/cli` also selects `packages/cli-backend/tests`. Measured
+2026-08-19: `packages/cli/tests` ran 312 tests; bare `packages/cli` ran 625,
+including cli-backend's 313. Name the test directory.
 
-`--cwd` has a second trap. There is no `bunfig.toml` under any package, so
-`bun test --cwd packages/cf-backend` reads no config. It loses the root
-`preload` and the root `pathIgnorePatterns`, and then walks into
-`tests/workerd/`, whose files import `cloudflare:workers` and fail instantly
-outside the Workers runtime. Run the directory from the repo root instead:
+No package has a `bunfig.toml`. `--cwd` loses the root `preload` and
+`pathIgnorePatterns`, then finds `tests/workerd/`, whose `cloudflare:workers`
+imports fail outside Workers. Run directories from the repo root:
 
 ```bash
 bun test packages/core/tests
@@ -62,9 +46,8 @@ bun test packages/cli-backend/tests
 
 ## The counts, measured 2026-08-19
 
-One `scripts/test.sh` run in this worktree: **5,658 pass, 3 skip, 0 fail. 5,661
-tests ran across 451 files in 175.49 s.** Per directory, from separate runs the
-same day:
+One `scripts/test.sh` run in this worktree: **5,658 pass, 3 skip, 0 fail.
+5,661 tests across 451 files in 175.49 s.** Separate same-day runs:
 
 | Directory | Pass | Skip | Fail | Files |
 |---|---|---|---|---|
@@ -73,15 +56,9 @@ same day:
 | `packages/cli-backend/tests` | 313 | 0 | 0 | 32 |
 | `packages/cli/tests` | 312 | 0 | 0 | 43 |
 
-The four sum to 5,658, so they account for the aggregate exactly.
-
-`bun test packages/compaction packages/agent-utils` is **110 pass, 0 fail over
-12 files, measured 2026-08-19.** The two were measured together and not apart:
-`compaction/tests` holds 7 test files and `agent-utils/tests` holds 5, but their
-pass counts are not measured separately.
-
-Type a bare package path and you get a different number, for the two reasons
-above. Measured the same day, for contrast:
+The four sum to 5,658. `bun test packages/compaction packages/agent-utils`
+measured **110 pass, 0 fail over 12 files** on 2026-08-19 (7 + 5); I did not
+measure the packages separately. Bare paths, same day:
 
 | Command | Pass | Files | Why it differs |
 |---|---|---|---|
@@ -89,46 +66,35 @@ above. Measured the same day, for contrast:
 | `bun test packages/cf-backend` | 1,353 | 134 | `tests/` holds 139 files; root `bunfig.toml` excludes the 5 in `tests/workerd` |
 | `bun test packages/cli` | 625 | 75 | the substring also selects `packages/cli-backend/tests` |
 
-Two suites are not measured today, so do not quote a test count for either:
+Do not quote counts for **workerd** or the **UI gates**. `bun run test:workerd`
+is `vitest run --root packages/cf-backend tests/workerd/`; its five files were
+verified 2026-08-19: `do-alarm`, `do-init-gate`, `do-retention`,
+`do-socket-attachment`, `do-transaction`. The UI command is
+`bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts`.
+It drives Chromium over the gallery. `scripts/ladder.ts:703-705` assigns ci
+23 s; `gate:computed-style` stays standalone at vite plus Chrome over 19
+frames, ~68 s.
 
-- **workerd.** `bun run test:workerd` is `vitest run --root packages/cf-backend
-  tests/workerd/`. That directory holds 5 test files, verified 2026-08-19:
-  `do-alarm`, `do-init-gate`, `do-retention`, `do-socket-attachment`,
-  `do-transaction`. Its test count is not measured.
-- **The UI gates.** `bun test scripts/chat-and-files-ux.test.ts
-  scripts/computed-style.test.ts` drives a real Chromium over the component
-  gallery. `scripts/ladder.ts:703-705` declares it at ci tier and 23 s. Its test
-  count is not measured, and `gate:computed-style` itself (vite plus Chrome over
-  19 frames, declared at ~68 s) stays a standalone run.
+### Ambient credentials no longer change what a suite measures
 
-### A signed-in shell no longer changes what a suite measures
-
-`bun test packages/cli/tests` used to depend on whose shell ran it.
-`resolveCloudSession()` prefers `KINU_TOKEN` over the config file and
-`resolveCloudOrigin()` prefers `KINU_ORIGIN` over it, so a shell that had run
-`kinu chat` or `bun run test:eval` moved thirteen tests across six files onto
-their signed-in branch, even though each had built an isolated `KINU_HOME`
-holding no session. Measured 2026-08-19 at `3ec8eded`, one variable pair changed
-and nothing else (`packages/test-utils/src/ambient-env.ts:12-25`):
+`resolveCloudSession()` prefers `KINU_TOKEN`; `resolveCloudOrigin()` prefers
+`KINU_ORIGIN`. A shell that had run `kinu chat` moved thirteen tests across six
+files onto their signed-in branch despite an empty isolated `KINU_HOME`.
+Measured 2026-08-19 at `3ec8eded`, changing one pair only
+(`packages/test-utils/src/ambient-env.ts:12-25`):
 
     unset KINU_ORIGIN KINU_TOKEN   312 pass,  0 fail
     both exported                        302 pass, 10 fail
 
-Which ten of the thirteen went red depended on what the ambient origin answered,
-so the failures moved between runs and read as a defect in the code under test.
+The ten failures depended on the ambient origin, so they moved between runs.
+`scripts/test-scratch-home.ts` strips those credentials at preload for both
+runners and reports removals on stderr. `KINU_EVAL_LIVE=1` remains the spending
+consent boundary. `LIVE_MODEL_ENV` supplies the names, so a newly resolved
+target is stripped too.
 
-`scripts/test-scratch-home.ts` now strips the ambient credentials at preload, in
-every test process, for both runners. It names the variables it removed on
-stderr rather than doing it quietly. `KINU_EVAL_LIVE=1` is the one exception,
-because that is already the consent boundary for the tier that means to spend.
-The names come from `LIVE_MODEL_ENV`, so a target the resolver learns to read is
-a target the strip removes on the same commit.
-
-The same preload gives every test process a throwaway `KINU_HOME`. That
-started as a containment fix: `createCLIRuntime` builds a shadow-git checkpoint
-engine under `$KINU_HOME/checkpoints`, and
-`packages/cli-backend/tests/mount-plane.test.ts` put ~580 checkpoint stores into
-the developer's real home before it existed.
+The preload also assigns a throwaway `KINU_HOME`. `createCLIRuntime` builds its
+shadow-git checkpoints under `$KINU_HOME/checkpoints`; before this containment,
+`mount-plane.test.ts` put ~580 checkpoint stores in my real home.
 
 ## The eval tier, which calls a real model
 
@@ -136,11 +102,9 @@ the developer's real home before it existed.
 bun run test:eval                        # every arm, and it RESOLVES A CREDENTIAL BY ITSELF
 ```
 
-**Who it runs as.** The tier authenticates as the `eval-service` account against
-staging. `scripts/eval-credentials.ts` reads `KINU_EVAL_TOKEN` or the isolated
-`~/.config/kinu/eval-session/config.json`. It never reads `~/.kinu/config.json`.
-
-Create the isolated staging session:
+The tier uses the staging `eval-service` account. `scripts/eval-credentials.ts`
+reads `KINU_EVAL_TOKEN` or `~/.config/kinu/eval-session/config.json`, never
+`~/.kinu/config.json`. Create the isolated session once:
 
 ```bash
 KINU_HOME=~/.config/kinu/eval-session \
@@ -148,26 +112,22 @@ KINU_HOME=~/.config/kinu/eval-session \
 chmod 600 ~/.config/kinu/eval-session/config.json
 ```
 
-Staging synthesizes `eval-service@kinu.run` for every request. The session can
-create and remove its throwaway workspaces; a scoped `ai.proxy` token cannot,
-so it is insufficient for the hosted and browser smoke arms.
+Staging synthesizes `eval-service@kinu.run`. That session can create and remove
+throwaway workspaces; a scoped `ai.proxy` token cannot, so it cannot cover
+hosted or browser smoke arms.
 
-**Where it runs.** `bun run test:eval` is the terminal `evals` tier. It is not a
-commit, push, CI or deploy gate — a deploy runs smoke only — so you run it on
-purpose.
-
-The script prints its target and its cost basis before it spends anything. It
-once asked for two environment variables nothing exported, ran to completion
-reporting `TOTAL: 0 model call(s)` with every live test skipped, and passed a
-deploy gate that way.
+This is the terminal `evals` tier, never a commit, push, CI, or deploy gate. A
+deploy runs smoke only. It prints target and cost basis before spending. It once
+asked for two unexported variables, reported `TOTAL: 0 model call(s)` with every
+live test skipped, and passed a deploy gate that way.
 
 ### The five arms
 
-Two arms exist because the tier needs two runners and neither sees the other's
-files: `bun test` matches only `*.test.ts` / `*_test.*` / `*.spec.*`, never
-`*.eval.ts`. The other three are single files on the vitest side, split off for
-cost accounting. The tier writes one spend file per arm, so an arm is also the
-unit it asserts liveness over.
+`bun test` matches `*.test.ts` / `*_test.*` / `*.spec.*`, never `*.eval.ts`.
+The other three arms are separate vitest files because `scripts/eval-spend.ts
+--expect-live` sums one spend file per arm. A paid subject sharing a file could
+stop reaching a model while the shared total still passed; its own zero fails
+under the printed `EXPECT_LIVE`.
 
 | Arm | What runs | What it measures |
 |---|---|---|
@@ -177,37 +137,21 @@ unit it asserts liveness over.
 | research | `vitest … tests/evals/research.eval.ts` | one agent episode whose only source for a fictional topic is a controlled MCP archive this repo serves (`tests/evals/fixtures/`); scored by exact match on planted numbers and a canary token. That proves reading, names fabrication, and needs no LLM judge |
 | optimization | `vitest … tests/evals/optimization.eval.ts` | one agent episode against the swarm arm's own metered instrument (`hard-majority-vote`), full tool surface offered, held to a pre-registered `task_outcome ≥ 0.5`; swarm use and tree shape recorded, never dictated |
 
-**Why each single-family eval is its own arm.** `scripts/eval-spend.ts
---expect-live` sums the lines in the spend file it is given, so a single-subject
-eval sharing a file with five paid suites could stop reaching a model entirely
-and the tier would still report `proven`. An arm whose whole subject is one live
-claim (a search, a retrieval from a controlled source, a measured episode) is an
-arm whose zero has to be its own failure, so each gets its own spend file and its
-own assertion, driven by the same `EXPECT_LIVE` the banner printed. The line
-you read and the assertion the run is held to cannot disagree.
+The swarm arm requires a winner, oracle calls against its baseline,
+`exploration_records` read through the reader under the objective identity and
+floor digest, and report `judgeEnsemble` / `fanIn` / `carry` values matching its
+axes. Its credential-free half runs at every tier: the action is offered and a
+strict parse refuses an unknown field by name.
 
-Everything the swarm arm asserts is measured rather than judged: a winner crowned,
-its artifact's oracle-call count against the run's own measured baseline,
-`exploration_records` rows read back through the store's own reader under the
-objective's identity and floor digest, and the `judgeEnsemble` / `fanIn` /
-`carry` disclosures checked against the axes the report itself carries. Its
-credential-free half runs at every tier: the action is offered, and the strict
-parse refuses an unknown field, naming the field it meant.
-
-The research arm's controlled corpus lives in ONE module
-(`tests/evals/fixtures/veldmar-corpus.ts`): the planted values, the canary and
-the served text, with the eval importing its expected answers from it. Its
-credential-free half runs at every tier: the corpus-integrity test (facts in
-the archive, none in the prompt, the canary in exactly one entry; delete the
-canary and this goes red naming it before anything is spent) and the MCP
-handshake through the product's own `connectMcpServers` client. The optimization
-arm's credential-free half asserts the threshold is a bar something can clear
-and something can miss.
+`tests/evals/fixtures/veldmar-corpus.ts` holds research facts, canary, served
+text, and expected answers. Its free checks require facts only in the archive,
+the canary in exactly one entry, and the product `connectMcpServers` handshake;
+deleting the canary fails before spend. The optimization free check requires a
+threshold that is both clearable and missable.
 
 ### Which agent an arm runs against: `--backend local | cloud`
 
-Tests and evals are ONE suite. Which agent the suite drives is configuration, and
-`packages/test-utils/src/eval-target.ts` is that configuration's type.
+Targets are typed in `packages/test-utils/src/eval-target.ts`.
 
 ```bash
 bun run test:eval                        # local target: the in-process cli-backend runtime
@@ -215,61 +159,40 @@ bun run evals:cloud                      # cloud target: a real workspace on sta
 bun run staging:preflight                # does staging run this branch? (the cloud arm's gate)
 ```
 
-The two targets are two turn loops. The local target runs core `runChat`
-(`packages/core/src/chat.ts`), which passes its stop condition straight to
-`streamText`. The cloud target runs `@cloudflare/think` inside the deployed
-Durable Object, which keeps its own `stepCountIs(maxSteps)` condition and appends
-the caller's rather than substituting it. So "the behaviour eval passed" is two
-different claims, and until this seam existed the tier could only make the first
-one.
+Local calls core `runChat` (`packages/core/src/chat.ts`) and passes its stop
+condition to `streamText`. Cloud runs `@cloudflare/think` in the deployed
+Durable Object, which keeps `stepCountIs(maxSteps)` and appends the caller's
+condition. "The behaviour eval passed" therefore names two distinct loops.
 
-That mattered. Production turns were capped at ten model steps, four of four
-capped runs across two workspaces reported `run_end: 'completed'` with the model
-still emitting tool calls, and nothing in the tree could see it. The live swarm
-eval could not: it opens its workspace with `openWorkspaceCLI`, so the capped
-loop was structurally unreachable from the one suite whose header claims to prove
-the search works. Two holes, one shape:
+Production exposed the gap: four of four capped runs across two workspaces
+reported `run_end: 'completed'` at ten model steps while the model still called
+tools. The swarm eval opens with `openWorkspaceCLI`, so it could not reach that
+capped loop.
 
 | Hole | What the local target has | What the deployment has |
 |---|---|---|
 | wrong loop | core `runChat`, genuinely unbounded | `@cloudflare/think`, which keeps its own step bound |
-| wrong executor | the CLI's local shell with a real `node` | the Nimbus `node` shim, which cannot transform `.mjs` — so `exec-ratio`, the only registered verifier kind, returns `unavailable` |
+| wrong executor | the CLI's local shell with a real `node` | the Nimbus `node` shim, which cannot transform `.mjs`, so `exec-ratio`, the only registered verifier kind, returns `unavailable` |
 
-**What the seam exposes,** and nothing wider — every member is there because a
-shipped assertion reads it: the run-event log, the workspace's spend, a
-capability probe, the workspace filesystem and shell, the five search-ledger
-reads, the additional-agent roster, and teardown. There is no `sql`: a deployed
-workspace's SQLite lives inside its Durable Object and is reachable only as read
-models over RPC, and a seam with a member one target cannot honour teaches a
-suite to branch on its target.
+The target exposes only the run-event log, workspace spend, a capability probe,
+filesystem and shell, five search-ledger reads, additional-agent roster, and
+teardown. It exposes no `sql`: a deployed workspace's SQLite stays in its
+Durable Object and is read over RPC. `VerifierProbe` writes a module and runs
+`node`; its predecessor only asserted a verifier shell existed. `probeVerifier`
+lives in the target so both arms use it.
 
-**The probe RUNS the instrument, and it is one instrument.** `VerifierProbe`
-answers whether an `exec-ratio` measurement harness can execute here, by writing
-a module and running `node` on it. The eval it replaces asserted that a verifier
-shell EXISTS, which is a different fact and the reason the deployed breakage was
-invisible. `probeVerifier` lives in the seam, so both arms run the same code
-rather than two copies that claim to match.
-
-**Spend has one definition on both targets.** `getActivitySnapshot().spend` is
-`workspaceSpend({ events, sql })` computed inside the Durable Object
-(`packages/cf-backend/src/orchestrator.ts`), so the cloud arm reports the same
-read model as every other arm rather than folding `run_end` usage itself. It
-aggregates the whole log on both targets, so there is no window to disclose and
-no floor to refuse; `recordWorkspaceSpend` is the one accumulator, and an episode
-that accounted for nothing counts as UNMEASURED rather than as a zero.
-
-**A platform-specific assertion says so inline.** `platformSpecific(plan, only,
-reason, assert)` in `tests/evals/target.ts` makes a one-target assertion a
-declared value with a printed reason. A bare `if (backend === 'local')` around an
-expectation is indistinguishable from an assertion somebody quietly turned off
-for the arm it kept failing on.
+Both targets compute spend as `getActivitySnapshot().spend` through
+`workspaceSpend({ events, sql })` inside the Durable Object
+(`packages/cf-backend/src/orchestrator.ts`). `recordWorkspaceSpend` is the one
+accumulator. An episode with no accounting is UNMEASURED, never zero.
+`platformSpecific(plan, only, reason, assert)` marks one-target checks and
+prints their reason. Do not hide one in `if (backend === 'local')`.
 
 #### The cloud arm is explicit, manual, and cleans up after itself
 
-It requires `--backend cloud` on top of everything the live tier already
-requires, so no gate tier can reach it and a credential sitting in a shell cannot
-make a commit hook create workspaces on a shared account. It refuses politely and
-names the fix when it cannot run:
+`--backend cloud` is required in addition to live-tier requirements. No gate
+can create workspaces on a shared account through shell credentials. Refusals
+name their fix:
 
 | State | What it says |
 |---|---|
@@ -277,135 +200,86 @@ names the fix when it cannot run:
 | staging runs another build | both shas and `bun run deploy:staging`. `--allow-stale` measures the deployed build on purpose |
 | staging has no build stamp | its asset bundle is incomplete, so its CLI downloads are broken too: re-run `bun run deploy:staging` |
 | staging unreachable | the transport failure verbatim, because the status code is the whole evidence for calling it infrastructure |
-| credential fronts a model, not a deployment | an AI Gateway creates nothing, so there is no workspace API — mint an eval-service credential |
+| credential fronts a model, not a deployment | an AI Gateway creates nothing, so there is no workspace API; mint an eval-service credential |
 
-Workspaces carry the `eval-` prefix so a survivor is attributable by name, and
-`teardown` deletes them; the suites call it in a `finally`. Every network step is
-wrapped by `infraBoundary`, so a cold start or a 5xx is labelled `INFRA FAILURE`
-and never read as "the agent stopped calling tools" — `scripts/skip-ratchet.ts`
-reads the same marker, so the classification survives into the tier's report.
+Workspaces use the `eval-` prefix and `finally` calls `teardown`.
+`infraBoundary` marks a cold start or 5xx `INFRA FAILURE`; `skip-ratchet.ts`
+keeps that classification in the tier report.
 
-**The cloud arm runs a named subset, and the list names what READS THE KNOB.** A
-suite can answer both targets' questions only once it provisions through
-`resolveEvalTarget`; a suite that calls `provisionLocalTarget` itself is local
-whatever the variable says. Naming one on the cloud arm anyway is worse than
-omitting it, because the run gets a CLOUD banner and `-cloud` filenames over an
-in-process measurement. So an arm that cannot read the knob is skipped and NAMED.
+A cloud arm must provision through `resolveEvalTarget`. A suite that calls
+`provisionLocalTarget` is local regardless of its banner, so skip and name it.
+Today this applies to `tests/live-smoke.test.ts` plus the swarm cross-target arm
+that provisions staging and alone reaches `@cloudflare/think`.
+`tests/e2e-lifecycle.test.ts` drives `generateText`, `EvolutionEngine`, and
+`runMCTS` over a `CLIRuntime`, so it skips under `=cloud`; swarm in-process arms
+do the same. `scripts/eval-tier.sh` owns this list. Backend-specific filenames
+prevent a cloud run overwriting local evidence.
 
-Today the cloud arm is `tests/live-smoke.test.ts` plus the swarm suite's
-cross-target arm, which provisions its own staging workspace and is the only arm
-in the tree that reaches `@cloudflare/think`. `tests/e2e-lifecycle.test.ts` is
-NOT on it: every assertion in it drives `generateText`, `EvolutionEngine` and
-`runMCTS` over a `CLIRuntime`, so it reads the knob and skips itself under
-`=cloud` rather than standing under that banner. The swarm suite's in-process
-arms do the same. The list lives in `scripts/eval-tier.sh` and grows in the same
-commit that migrates a suite. Reports and spend files carry the backend in their
-filenames, so a cloud run cannot overwrite a local run's evidence and liveness is
-still asserted per arm.
+#### Both new families drive the spawned CLI
 
-#### The two new families drive the SPAWNED CLI
+Each runs `kinu create <name> --mode local`, then `kinu exec --workspace
+<name> --json`, in a scratch `KINU_HOME`. It judges the child event stream and
+`$home/<workspace>/agent.db`; `tests/evals/cli-driver.ts` is the glue and
+`bench/harbor/kinu_agent.py` the precedent.
 
-Both arms run `kinu create <name> --mode local`, then `kinu exec --workspace
-<name> --json`, in a scratch `KINU_HOME`, and judge the child's own event
-stream plus the ledgers in `$home/<workspace>/agent.db`. The glue is
-`tests/evals/cli-driver.ts`; the precedent is `bench/harbor/kinu_agent.py`.
+The child CWD is scratch. `createCLIRuntime` uses `cwd ?? process.cwd()` for
+the `laptop` executor unless `hostRoot: null`; spawned CLI has no flag, so the
+driver CWD is its filesystem. On 2026-08-24 evals left `reference.mjs`,
+`solution.mjs`, `test-eval.mjs`, `.kinu/tool-output/`, and `attachments/` in
+this repository. Children now use `<home>/project`.
 
-The child's CWD is scratch too. `createCLIRuntime` roots the host `laptop`
-executor at `cwd ?? process.cwd()` unless a caller passes `hostRoot: null`, and a
-spawned CLI has no flag for that — so the driver's `cwd` IS the child agent's
-filesystem. It was this repository, and the eval runs of 2026-08-24 left
-`reference.mjs`, `solution.mjs`, `test-eval.mjs`, `.kinu/tool-output/` and
-`attachments/` in the repository root. Each child now gets `<home>/project`.
+An eval must drive the shipped agent, not `LocalAgentSession` in-process. The
+latter bypasses turn assembly, client boundary, and research MCP resolution.
+`resolveMcpServers()` reads `mcpServers` from `~/.kinu/config.json`, and
+`LocalAgentClient` connects them; handing `connectMcp` servers proves none of
+that. Create and exec with the same child environment: measured 2026-08-20,
+creating against one endpoint then execing against another failed every turn
+with `Your Cloudflare login is no longer valid` while the latter answered a
+direct request.
 
-That is the rule. An eval drives the WHOLE agent through a shipped surface.
-Driving `LocalAgentSession` in-process would skip the CLI's turn assembly, its
-client boundary and, for the research family specifically, MCP config
-resolution, which is the thing that family is about. A user's servers
-reach the agent because `resolveMcpServers()` reads the `mcpServers` block of
-`~/.kinu/config.json` and `LocalAgentClient` connects them; a suite that
-hands `connectMcp` its own servers proves none of that.
+#### The five-turn conversation, and a finding about judging it
 
-One measured trap, worth knowing before writing a third family. The workspace
-must be CREATED with the same child environment it is later exec'd with.
-`create` persists the resolved provider config into the store and `exec` prefers
-what the store carries, so a workspace born under a different endpoint keeps
-answering from it. Measured 2026-08-20: a workspace created with a wrong base
-URL then exec'd with the right one still failed every turn with `Your
-Cloudflare login is no longer valid` while that endpoint answered a direct
-request fine.
+`tests/e2e-lifecycle.test.ts` certifies the core loop: soul and memory reach
+the model, tools round-trip, history accumulates, evolution and MCTS run. It is
+an inner API, without turn assembly, reactor, wakes, or prompt cache. The
+spawned-surface arms cover those paths.
 
-#### What the five-turn conversation certifies, and a finding about judging it
+It once sent `messages: [user]`: five one-turn conversations. Turn 5 asked
+"Summarize what we discussed", received "nothing", and passed on `length > 0`.
+Threading alone is insufficient. Measured 2026-08-20, the `memory` builtin
+searches the same `messages` table (`core/src/tools/memory-tool.ts:92-101`,
+`core/src/memory/conversation-search.ts`). An unthreaded turn 5 reproduced turn
+1 code and said "Here's a summary of our previous discussion" from 118
+characters holding only turn 3's note; two runs scored 6/0 and 5/1.
 
-`tests/e2e-lifecycle.test.ts` certifies the CORE TURN LOOP: soul and memory
-reach the model, native tool calling round-trips, the conversation accumulates,
-and evolution and MCTS run over the turns. It is an inner API by construction
-(no turn assembly, no reactor, no backgrounding wakes, no prompt cache), so the
-shipped-surface arms above are what cover the product. The suite's header names
-both.
+The suite labels both checks. MECHANISM reads the message list HANDED to the
+model; removing history reliably reports `turn 2 was handed 1 message(s) but
+should carry every earlier exchange plus its own prompt`. BEHAVIOUR reads the
+reply. Either alone is insufficient.
 
-It used to send `messages: [user]`, one message per turn with no history. That is
-five one-turn conversations wearing the title of one. Turn 5 asked "Summarize
-what we discussed", the model answered that nothing had been discussed, and the
-test passed, because the only per-turn assertion was `length > 0`.
+Two non-defects: FTS stemming matches turn 4's "validation" prompt to turn 3's
+"validate" note. The cap rose from 600 s to 1,800 s after two runs reached
+600,008 ms and 600,003 ms; turn 2 alone made 12 tool calls.
 
-Threading the history is half the fix. The other half is a finding, measured
-2026-08-20. **Content assertions cannot prove threading on this agent.** The
-`memory` builtin exposes conversation search over the very `messages` table the
-suite writes (`core/src/tools/memory-tool.ts:92-101` over
-`core/src/memory/conversation-search.ts`), so a later turn can RETRIEVE the
-conversation it was never handed. With the history deliberately unthreaded, turn
-5 still answered "Here's a summary of our previous discussion" and reproduced
-turn 1's code verbatim, while the injected knowledge was 118 characters holding
-only turn 3's note; two such runs scored 6/0 and 5/1. So the content assertions
-are real but non-deterministic as a red.
+### Run records and the reader
 
-The suite therefore asserts on both, and labels which is which. The MECHANISM
-assertions read the message list each turn HANDED the model (the one witness a
-second channel cannot satisfy), and unthreading the history makes them red every
-time, naming the turn: `turn 2 was handed 1 message(s) but should carry every
-earlier exchange plus its own prompt`. The BEHAVIOUR assertions read the replies
-and prove the model used what it was given. Neither alone is enough. Mechanism
-only would pass a model that ignored its context, and content only passes a
-model that went and fetched it.
+An arm that attempts a task writes `run-record.json` (schema 1, `EvalRunRecord`
+in `packages/test-utils/src/eval-run.ts`) and transcripts under
+`bench-artifacts/`. It records family, verdicts, wall `ms`, turns, tool calls
+and names, tokens, spend, and optimization `swarm_use.measured` (nodes, depth,
+records written) with `threshold_attained`. `bun scripts/eval-report.ts` groups
+records by family.
 
-Two things that did NOT turn out to be defects, recorded so nobody re-opens
-them. Turn 4's memory search finds turn 3's note despite the prompt saying
-"validation" and the note saying "validate". FTS stemming handles it, measured
-green repeatedly. And the test's 600 s cap was raised to 1,800 s on a
-measurement rather than to clear a red. Threading lengthens every turn, and two
-consecutive runs hit the old cap at 600,008 ms and 600,003 ms with turn 2 alone
-spending 12 tool calls.
+`publishRunRecord` is the only writer and writes NOTHING without observations.
+Without credentials, arm `afterAll` handlers once wrote 81 of the first 89
+records with zero observations. The writer guard protects future families.
+Records can show outcome movement, swarm use versus attainment (the report's
+2×2), family time/spend, called tools, and transcripts. They cannot yet show
+single-observation significance, causal swarm benefit, or per-step time.
 
-### The run records and the reader
-
-Every vitest eval arm that attempted at least one task writes a `run-record.json`
-(schema 1, `EvalRunRecord` in `packages/test-utils/src/eval-run.ts`) beside its
-retained transcripts under `bench-artifacts/`, carrying the eval family,
-per-observation verdicts, wall `ms`, turns, tool calls and names, tokens, spend,
-and, for optimization runs, the swarm tree shape (`swarm_use.measured`: nodes,
-depth, records written) and `threshold_attained`. `bun scripts/eval-report.ts`
-renders every accumulated record, grouped by family, into one comparison.
-
-`publishRunRecord` is the only path that writes a record, and it writes NOTHING
-for a run with no observations. Without a credential every case skips and each
-arm's `afterAll` used to write the record regardless. 81 of the corpus's first 89
-records reported zero observations, and no reader could use one. The guard lives
-in the writer rather than in the three arms, so a fourth family cannot bring the
-shape back.
-
-What the accumulated data can answer: did task outcomes move between runs of one
-family and arm; did swarm use correlate with attainment on the optimization
-instrument (a 2×2 the report prints); where the tier's time and spend go, per
-family; and which tools an episode called, with the transcripts one hop away for
-"why did that call fail". What it cannot answer yet: significance for the
-single-observation families (one pair accrues per run), causal swarm
-attribution (`swarm_use` is the agent's own choice, not an assigned arm), and
-per-step time (that lives in each record's transcripts directory).
-
-The behaviour arm's own knobs, documented nowhere else
-(`tests/evals/behaviour.eval.ts:80-82,110`, and `KINU_EVAL_RECORD` in
-`packages/test-utils/src/eval-run.ts:493`; the tier and record knobs are read the
-same way by the research and optimization arms):
+Behaviour knobs (`tests/evals/behaviour.eval.ts:80-82,110`; `KINU_EVAL_RECORD`
+in `packages/test-utils/src/eval-run.ts:493`; research and optimization use the
+same tier and record knobs):
 
 | Variable | Effect |
 |---|---|
@@ -413,15 +287,12 @@ same way by the research and optimization arms):
 | `KINU_EVAL_REPEATS` | repetitions per task; default 2 for flash, 1 for pro |
 | `KINU_EVAL_SEED` | the run seed; default 1 |
 | `KINU_EVAL_EVOLUTION=0` | turns evolution off |
-| `KINU_EVAL_RECORD` | where the run record is written; default is beside the retained transcripts under `bench-artifacts/` |
+| `KINU_EVAL_RECORD` | where the run record is written; default beside the retained transcripts under `bench-artifacts/` |
 
-### Triaging a run, after every `bun run evals:full`
+### Triaging after `bun run evals:full`
 
-A run record names what failed. It does not name what KIND of failure each one
-is, and the four kinds need four different repairs. `bun scripts/eval-triage.ts`
-reads the same records as the reader above, groups every failure by scorer, by
-`tool·action·reason` failure key and by task, and gives each group a class and a
-ranked position:
+`bun scripts/eval-triage.ts` groups failures by scorer, `tool·action·reason`,
+and task. The classes require different action:
 
 | Class | What it means | Who acts |
 |---|---|---|
@@ -430,65 +301,40 @@ ranked position:
 | `flake` | one commit and one arm gave this task and scorer both verdicts | nobody yet; measure ψ with `scripts/eval-dispersion.ts` |
 | `model-behaviour` | the mechanism had its opportunity and the model did not take it | nobody; this is the finding |
 
-The standing process:
+Run the tier, then the script. With no arguments it reads `bench-artifacts/`
+and `tests/eval/runs/`, exits 0, and gates nothing. Read each evidence pointer;
+record a ruling in `scripts/eval-triage.verdicts.json` with group key, class,
+date, what you READ, and note. `UNVERIFIED` needs a ruling. A non-failure ruling
+prints `STALE VERDICT`. Report `model-behaviour`; do not repair it.
 
-1. Run the tier: `bun run evals:full`.
-2. Run `bun scripts/eval-triage.ts`. With no arguments it reads
-   `bench-artifacts/` and `tests/eval/runs/`. It exits 0 and gates nothing.
-3. Read the top of the worklist. Open the evidence pointer on each group you
-   intend to act on. A group prints as `UNVERIFIED` until somebody rules on it.
-4. Write your ruling into `scripts/eval-triage.verdicts.json`: the group key, the
-   class, the date, what you READ, and the note. The verdict annotates the group.
-   It never hides one, and a verdict naming a group that no failure produced
-   prints as `STALE VERDICT` on the next run.
-5. Act by class. A `product-defect` group becomes a fix in the code under test. An
-   `eval-defect` group becomes a fix in the harness, the corpus or the scorer. A
-   `flake` group becomes a repeat and a ψ measurement. A `model-behaviour` group
-   is the result. Report it rather than repair it.
+The script recomputes admissibility because stored verdicts reflect their old
+policy: both published baselines said `admissible: true` but failed the current
+rule until republished. It uses `toolFailurePartOfKey`, so the published mix and
+live census agree. Old records can name no failing call; an empty
+`product-defect` group then means unmeasured, not clean.
 
-Two things to know when reading it. It RECOMPUTES admissibility instead of
-trusting the stored verdict, because a stored verdict is the policy the run was
-written under. Both published baselines recorded `admissible: true` and failed
-today's rule until they were republished under it.
-And it reads a failure key's census part through `toolFailurePartOfKey`, the same
-policy the census wrote, so a published mix and a live census cannot disagree.
+First triage, 2026-08-20: 89 records, 24 groups, no product defect, 10 eval
+defects, 2 flakes, 12 mechanism findings. The largest group was 45 records that
+attempted nothing; the writer now refuses that pre-fix shape. Two of 89 records
+are tracked. `bench-artifacts/` is gitignored, so group shape matters more than
+its moving count; tracked-only reads 19 groups.
 
-It also prints its blind spot on the success path. A record written before the
-failure mix existed names no failing call, so no product defect is findable in it
-at all. An empty `product-defect` class over such records means unmeasured rather
-than clean.
+`flash-a` and `flash-b` are RETIRED. Neither declares a hard-task corpus task,
+has a verifier or `measured` payload, or names a transcripts directory because
+teardown deleted stores. No `task_outcome` can be derived. They were republished
+under current policy without new facts; `compareRuns` refuses them rather than
+pairing and dropping 13 attempts. No baseline exists until a credentialed run
+publishes one. The verdict file has seven hand-checked rulings, one overriding
+the machine.
 
-The first triage, on 2026-08-20, read 89 records and produced 24 groups: no
-product defect, 10 eval defects, 2 flakes, and 12 mechanism findings. The largest
-group was 45 records that attempted nothing and wrote a record anyway. The writer
-refuses those now, so that group can only hold records written before the fix.
-Only two of the 89 are tracked. `bench-artifacts/` is gitignored and grows with
-every local run, so the record count moves and the group SHAPES are the stable
-part. Over the two tracked records alone the same triage reads 19 groups.
+### Cost and duration
 
-Those two records, `flash-a` and `flash-b`, are RETIRED as baselines. No task
-either declares is in the hard-task corpus, so no verifier exists to run; no
-score row carries a `measured` payload; and neither names a transcripts
-directory, because the tier deleted its stores in teardown at the time. So no
-`task_outcome` row can be derived from anything they carry, and inventing one
-would be a fact about the agent that nothing measured. Both were republished
-under today's admissibility policy instead, which recomputes over their own
-observations and adds nothing. `compareRuns` refuses them by name rather than
-pairing 13 attempts and dropping all 13. The tier therefore has NO baseline until
-a credentialed run publishes one. `scripts/eval-triage.verdicts.json` holds seven
-hand-checked rulings, one of which overrides the machine.
-
-### What it costs and how long it takes
-
-Every figure below came from a run whose log recorded it. A cell with no
-measurement reads "not measured" instead of carrying a guess. The two bun-arm
-rows are corroborated by `scripts/ladder.ts`'s evals-gate declaration. Rows
-without a date predate the tier recording one, so treat each as "the run whose
-spend file survives" rather than as today's cost.
+Every figure comes from a logged run. "not measured" is not a guess; undated
+rows mean "the run whose spend file survives", not a current cost.
 
 | | wall clock | model calls | input tokens |
 |---|---|---|---|
-| whole tier, credential-free (2026-08-19, five arms) | 9 s | 0 | — |
+| whole tier, credential-free (2026-08-19, five arms) | 9 s | 0 | n/a |
 | bun suites, credentialed | 2,745 s | 48 | 601.6k |
 | bun suites, credentialed (second run) | 3,843 s | 49 | 600.8k |
 | behaviour evals, credentialed | not measured | not measured | not measured |
@@ -497,158 +343,90 @@ spend file survives" rather than as today's cost.
 | optimization, credentialed (2026-08-20) | 669 s | 18 | 1,143.8k (50.8k out) |
 | `tests/live-smoke.test.ts` alone | 74 s | 3 | 55.6k |
 
-The two bun-half rows are the two runs whose spend files still exist.
-`scripts/ladder.ts` declares this gate at 3,228 s / 64 calls / 967k from a third
-run whose artifact does not survive. Both surviving runs show ~48 calls and
-~601k, so the declared figure is a budgeted ceiling rather than a typical cost.
-The 3,843 s run also contains 1,200 s of tests being killed rather than working:
-a 900 s exploration timeout and a 300 s MCTS one, both since fixed, those same
-steps now completing in 437 s and 456 s. Do not derive a post-fix cost from it.
+`scripts/ladder.ts` declares 3,228 s / 64 calls / 967k from a lost third
+artifact: budget ceiling, not typical. The 3,843 s run includes 1,200 s of
+killed tests (900 s exploration, 300 s MCTS); both are fixed, now 437 s and
+456 s. Do not use it for post-fix cost.
 
-The research and optimization rows were measured on 2026-08-20 against
-`@cf/deepseek-ai/deepseek-v4-flash-0731` through the worker proxy, each arm a
-single agent episode driven as the SPAWNED `kinu` CLI. Both passed on that
-run. What the episodes did, from their own run records:
+Research and optimization were measured 2026-08-20 on
+`@cf/deepseek-ai/deepseek-v4-flash-0731` through the worker proxy. Both were
+spawned `kinu` CLI episodes and passed. Research made 2 turns, 6 archive-only
+tool calls, 4 steps, and ran 260 s; it returned 1847, 96.4, 27.3, and the
+canary. Optimization made 2 turns, 17 calls, 18 steps, and ran 666 s. It scored
+`task_outcome` 1.000 against 0.5 with 2,972 oracle calls, against a 2,880,000
+reference and 2,992 corpus target; the log score clamped from 1.0010. It used
+NO swarm: 0 search nodes and 0 `agents` calls. One row is not a conclusion.
 
-- **research**: 2 turns, 6 tool calls, ALL SIX to the controlled archive, 4
-  steps, 260 s in the episode. The reply carried all three planted numbers
-  exactly (1847, 96.4, 27.3) and the canary verbatim.
-- **optimization**: 2 turns, 17 tool calls, 18 steps, 666 s in the episode.
-  `task_outcome` 1.000 against the pre-registered bar of 0.5: 2,972 oracle calls
-  where the handed reference costs 2,880,000 and the corpus target is 2,992, so
-  the agent BEAT the target and the log-scale score clamped from 1.0010. It used
-  NO swarm: 0 search nodes, 0 `agents` calls. One run is one run; that is the
-  first row of the swarm-versus-attainment table rather than a conclusion.
+Optimization used 14× research input tokens on the same credential. The
+five-turn e2e measured 5 calls / 20.0k input, then 9 / 39.8k; turn 2 made 12
+tool calls in the second. Budget from the larger figure. The 34-episode
+behaviour arm has no measured wall time because it produced no report before
+that change.
 
-Costs vary widely with what the model chooses to do. The optimization arm spent
-14× the research arm's input tokens on the same credential, and the 5-turn e2e
-conversation was measured twice at 5 calls / 20.0k in and 9 calls / 39.8k in.
-The second run's turn 2 alone made 12 tool calls. Budget from the larger figure.
-
-The behaviour arm is 34 full agent episodes and dominates the tier. Its wall
-clock is the number that row is waiting on. The tier now reports per arm, and
-the run record it writes carries per-episode `ms`, so the figure will be read
-off an artifact rather than estimated. It had never been measured because the
-arm produced no report at all until that change.
-
-**The live swarm row is a RED run rather than a passing one.** One credentialed
-run completed and reported 1,338 s wall, 3 model calls accounted for, 2,453,377
-input / 134,076 output tokens, baseline 2,880,000 oracle calls (exactly 2·1200²,
-the reference counting every token against every other, on both instances),
-`stop: aborted`, `expansions: 3`, no winner, `records.written: 0`, and
-`fanIn.levels: 0` with all three parents unusable. The eval failed on its first
-assertion, `expect(report.stop).not.toBe('aborted')`, which is the bound
-working. A run that did not settle is refused rather than measured. What is
-still owed is a run that SETTLES, and with it the winner and the
+**The live swarm row is RED.** One run took 1,338 s and 3 calls, used 2,453,377
+input / 134,076 output tokens, and had a 2,880,000 oracle baseline (exactly
+2·1200²). It stopped `aborted` after 3 expansions: no winner,
+`records.written: 0`, `fanIn.levels: 0`, three unusable parents. Its first
+assertion, `expect(report.stop).not.toBe('aborted')`, failed. An unsettled run
+is refused, not measured. Still needed: a settled run with winner and
 winner/baseline ratio.
 
-Three earlier attempts, each stopped for a stated reason:
+Earlier attempts: camelCase floor input was refused as `Invalid key: Expected
+"best_known_honest"`; an expired login made three depth-1 heads error in ~1 s
+while three others stayed running at zero steps for 63 minutes with no write or
+exit, though `live-smoke.test.ts` passed 5 calls / 55.7k tokens an hour later;
+and a healthy credential ran one 26-minute, 91% CPU step on a 50,000-token
+`hard-select-kth`. The eval therefore uses `hard-majority-vote` (n=1200).
 
-1. Refused before any model call. The objective's floor was sent camelCase and
-   `SwarmObjectiveSchema` returned `Invalid key: Expected "best_known_honest"`.
-   The wire boundary worked; the eval's transform is now in one named place.
-2. The worker proxy's upstream Cloudflare login had expired. Three depth-1 heads
-   errored in ~1 s with `Your Cloudflare login is no longer valid … (upstream:
-   Authentication error)`, and three more sat at `status:'running'`, zero steps,
-   for 63 minutes with no store write and no exit. `tests/live-smoke.test.ts`
-   passed 5 calls / 55.7k tokens an hour later, so that was a window rather than
-   an outage.
-3. Healthy credential, real work, wrong instance. Three heads read the
-   reference, found the measure harness, and wrote and ran their own benchmark.
-   Then one step ran 26 minutes on the 50,000-token `hard-select-kth` instance
-   while the runner held 91% CPU. The eval now uses `hard-majority-vote`
-   (n=1200) for that measured reason. Instance size is what a node's own
-   experimentation costs, and the workspace substrate executes in-process.
+### Sizing before you run it
 
-### Sizing this arm before you run it
+`runSwarmAction` sets neither node budget (`core/src/strategy/swarm-run.ts:1776-1785`).
+There is no step cap (owner ruling 2026-08-21): `runNodeLoop` ends when tools
+stop. Wall clock is `deps.maxWallClockMs` only when the caller supplies it;
+otherwise it is absent and `runHeadInference` observes it between steps.
 
-A swarm node gets two budgets, and `runSwarmAction` sets neither, so both take
-their derived default (`core/src/strategy/swarm-run.ts:1776-1785`):
+`LLM_CALL_TIMEOUT_MS` and `LLM_CALL_MAX_RETRIES` are gone. The only references
+assert their absence (`core/tests/unit-call-bounds.test.ts:35-36`,
+`unit-swarm-node-envelope.test.ts:33-34`). A rate-limited request waits
+indefinitely (`rate-limit-retry.ts:69`: `for (let attempt = 1; ; attempt++)`).
+`PROVIDER_SDK_RETRIES = 2` (`rate-limit-retry.ts:13`) is the transport retry at
+`streamText`. A call ends when the provider answers, fails definitively, or is
+cancelled; a turn ends on completion, user stop, or throw; `classifyRunEnd`
+names the result. `AGENTS_ACTION_FIELDS.swarm` (`core/src/tools/agents-tool.ts:440-446`)
+records the deliberately absent iteration and wall-clock inputs.
 
-- **Steps.** None — no per-turn step cap exists (owner ruling 2026-08-21);
-  `runNodeLoop` ends when its model stops calling tools.
-- **Wall clock.** `deps.maxWallClockMs` when the caller declares one;
-  otherwise absent. The caller-declared deadline is observed between steps by
-  `runHeadInference`'s `stopWhen`.
+One wave had three nodes: 22, 25, 26 steps; 25, 27, 27 tool calls;
+1,216-1,337 s each; ~2.45M input tokens; no candidate. No node finished, so 26
+is a floor, not a typical demand. `depth × branches` bounds shape. Inside a
+turn only `abortSignal` bounds work. It recorded all three as `aborted` when
+the 20-minute envelope fired. That envelope cut healthy nodes before one real
+job completed, so no default node clock remains (owner ruling 2026-08-21).
+`node-agent.ts:656` checks `isAborted` only between steps, explaining why a
+26-minute in-process step ignored both that timer and vitest `testTimeout`.
 
-With neither declared, nothing inside a node's turn is bounded by elapsed time
-at all. `LLM_CALL_TIMEOUT_MS` and `LLM_CALL_MAX_RETRIES` are GONE — they left
-with the per-turn bounds ruling, and the only references left in the tree are
-two tests asserting their absence (`core/tests/unit-call-bounds.test.ts:35-36`,
-`unit-swarm-node-envelope.test.ts:33-34`). There is no per-call silence window:
-a rate-limited request waits, and neither elapsed time nor attempt count ends it
-(`core/src/providers/rate-limit-retry.ts:69` is `for (let attempt = 1; ;
-attempt++)`). The separate lever is the SDK's transport retry,
-`PROVIDER_SDK_RETRIES = 2` (`rate-limit-retry.ts:13`), stated at `streamText` so
-a vendor bump cannot move it silently. A call ends when the provider answers,
-fails definitively, or the caller cancels; a turn ends when the model finishes,
-the user stops it, or it throws, and `classifyRunEnd`
-(`core/src/orchestrator/turn-lifecycle.ts`) names which.
-
-`AGENTS_ACTION_FIELDS.swarm` (`core/src/tools/agents-tool.ts:440-446`) records
-that an iteration cap and a wall-clock cap are absent from the tool's INPUT
-fields, deliberately, until something enforces a caller-supplied one. The
-derived defaults above are not caller-settable through the tool.
-
-Measured over one wave of three nodes: 22, 25 and 26 model steps; 25, 27 and 27
-tool calls per node; 1,216-1,337 s each; ~2.45M input tokens between them; and
-not one measurable candidate. No node in that run finished, so 26 steps is a
-floor on the demand rather than a typical cost, and how many steps a node needs
-to FINISH on this model is not measured. `depth × branches` bounds the shape of
-the search; nothing inside a node's turn bounds elapsed time or the step count,
-so the caller's `abortSignal` is the only bound in force.
-
-The caller's `abortSignal` is a bound, and it works. All three nodes settled
-`status:'aborted'` with their step counts recorded when the 20-minute envelope
-fired — which is exactly why no default node clock exists any more (owner
-ruling 2026-08-21): that envelope cut three healthy nodes mid-work because it
-was smaller than one node's real job. A clock over node work now exists only
-when a caller declares one. The signal is consulted between steps too
-(`core/src/strategy/node-agent.ts:656`, the `isAborted` predicate the inference
-loop calls), which is why attempt 3 saw neither that timer nor vitest's own
-`testTimeout` fire while the substrate executed in-process for 26 minutes.
-
-Cost here is time rather than rate. The account's limit is 300 requests/minute
-and a full tier run averages under one, so nothing you do to this tier makes it
-hit a rate limit. What it costs you is an afternoon. The tier prints a
-`── per arm ──` block with each arm's own seconds and tokens, so the log names
-which half the time was in.
-
-**Do not run two live tiers against one account.** Two concurrent runs produce
-`orchestrator.detached_work_failed / Request Timeout` and turns that come back
-with zero steps. That is the same signature as a deployment outage, and neither
-run's wall clock is then the tier's cost.
-
-To prove one thing, run one suite rather than the tier.
-`KINU_EVAL_LIVE=1 bun test ./tests/live-smoke.test.ts` is 74 s and proves the
-deployed worker and the local session spine each take a real turn.
+The account allows 300 requests/minute; a full tier averages under one. Run one
+live tier per account. Concurrent tiers yield
+`orchestrator.detached_work_failed / Request Timeout` and zero-step turns, the
+same shape as an outage. For one proof,
+`KINU_EVAL_LIVE=1 bun test ./tests/live-smoke.test.ts` takes 74 s and proves a
+real turn on both the deployed worker and local session spine.
 
 ### What a failure means
 
-Four different things, kept apart because they need opposite repairs.
+- **A suite failed.** Model behaviour or an outage. Only `infraBoundary`
+  (`packages/test-utils/src/live-model.ts`) marks infrastructure; the skip
+  ratchet prints it separately. Unmarked failures stay behavioural.
+- **An undeclared skip.** It is absent from `scripts/skip-ratchet.lock.json`.
+  Make it run, or record the reason it cannot.
+- **No liveness proven.** A resolved target did not show a model call.
+  `eval-spend.ts` names one of four shapes and checks both the arm spend file
+  and tier total.
+- **Nothing at all, loudly.** Without credentials, live tests skip, the ratchet
+  checks the declared skips, and liveness says nothing to prove.
 
-- **A suite failed.** Either the model answered wrongly, which is a finding, or
-  the environment never answered, which is an outage. The tier does not guess. A
-  failure counts as infrastructure only where the code raising it marked it
-  through `infraBoundary` (`packages/test-utils/src/live-model.ts`), and the
-  skip ratchet prints the two lists separately. An unmarked failure lands in the
-  behavioural list, which under-claims outages rather than over-claiming them.
-- **An undeclared skip.** A test skipped that `scripts/skip-ratchet.lock.json`
-  does not declare. Make it run, or add it to the lock with the reason it
-  cannot, which is a sentence you will have to defend.
-- **The run proved no liveness.** A target was resolved and the run cannot show
-  it reached a model. That is the tier reporting on itself, and
-  `eval-spend.ts` names which of the four shapes it is. It is asserted twice,
-  once over the live swarm arm's own spend file and once over the tier's total,
-  because a tier-wide sum cannot fail on one arm's behalf.
-- **Nothing at all, loudly.** With no credential anywhere the tier still runs
-  and still passes. Every live test skips, the ratchet proves the skips are the
-  declared ones, and the liveness assertion reports that it has nothing to
-  prove. That is the path that reproduces anywhere.
+### Pointing it elsewhere
 
-### Credentials, if you want to point it somewhere else
-
-Either pair, and an explicit one is never overridden:
+Either pair is explicit and never overridden:
 
 ```bash
 KINU_ORIGIN=… KINU_TOKEN=…            # deployed/preview worker proxy; mint with
@@ -656,24 +434,20 @@ KINU_ORIGIN=… KINU_TOKEN=…            # deployed/preview worker proxy; mint 
 AI_GATEWAY_BASE_URL=… AI_GATEWAY_AUTH=…     # an AI Gateway, for models the proxy does not front
 ```
 
-`KINU_BASE_URL` + `KINU_AUTH` are accepted as aliases of the second pair.
-
-`KINU_EVAL_LIVE=1` is the consent switch, and `scripts/eval-tier.sh` is the
-only thing that sets it, so a credential sitting in your shell cannot make a
-commit hook bill anyone. Running a live suite by hand means setting it yourself.
+`KINU_BASE_URL` + `KINU_AUTH` alias the second pair. Only
+`scripts/eval-tier.sh` sets `KINU_EVAL_LIVE=1`; hand-running a live suite means
+setting it yourself.
 
 ### The bench harness is a different thing
 
-`bun scripts/bench.ts` scores whether self-evolution helps, against 159 seeded
-defects in this repo (`scripts/bench-corpus-gate.ts:13`, which re-checks all 159
-patches still apply). It shares no credentials with the eval tier: it reads
-`BENCH_BASE_URL` / `BENCH_AUTH` / `BENCH_MODEL` and borrows nothing, and its
-deterministic variants need no model at all. See [Bench](BENCH.md).
+`bun scripts/bench.ts` tests whether self-evolution helps against 159 seeded
+defects; `scripts/bench-corpus-gate.ts:13` re-checks all 159 patches. It uses
+only `BENCH_BASE_URL` / `BENCH_AUTH` / `BENCH_MODEL`, not eval credentials. See
+[Bench](BENCH.md).
 
 ## Test categories
 
-Each test file is named to indicate its category. The categories are conventions
-enforced by filename, with no separate config:
+Filename convention, not config:
 
 | Prefix | What it covers | Speed | Real I/O? |
 |---|---|---|---|
@@ -683,15 +457,9 @@ enforced by filename, with no separate config:
 | `e2e/*.test.ts` | Full system through public APIs | ~seconds | In-memory but realistic |
 | `smoke-*.test.ts` | "Does it boot / import" | <100ms | None |
 
-The convention holds in `core` and `cf-backend`, where nearly every file carries
-a prefix. `cli-backend/tests` and `cli/tests` use bare `<name>.test.ts`, so
-treat the prefix as a strong convention rather than a rule the tooling enforces.
-
-Most tests live in `packages/<pkg>/tests/`. Six in `core` are colocated beside
-the code instead: `core/src/skills/skills.test.ts`,
-`core/src/scaffold/ui-stream.test.ts`, and four under
-`core/src/evolution/gepa/`. That is why `bun test packages/core` counts 248
-files and `packages/core/tests` counts 242.
+Core and cf-backend follow it. CLI suites use bare `<name>.test.ts`. Six core
+tests are colocated, `skills/skills.test.ts`, `scaffold/ui-stream.test.ts`, and
+four under `evolution/gepa/`, hence 248 rather than 242 files.
 
 ## What lives where
 
@@ -741,20 +509,17 @@ tests/
 └─ evals/               (behaviour.eval.ts, swarm.eval.ts, the vitest arms)
 ```
 
-`bun test tests` and `bun test tests/` both match nothing. Only `./tests/`
-selects the root suites, which `scripts/ladder.ts:626-628` calls out as exactly
-the kind of silent zero the ladder asserts against.
+`bun test tests` matches nothing; only `./tests/` selects root suites.
+`scripts/ladder.ts:626-628` guards that silent-zero class.
 
-`packages/agent-utils` holds no `SqliteFS` and no shell. `SqliteFS` was deleted
-on 2026-08-12 (`core/src/checkpoints/types.ts:29`), both backends now run
-Nimbus's workspace filesystem over their own SQLite, and the shell is Nimbus's
-`runtime-bash`. The five `agent-utils` test files are the memory and
-workspace-resolution ones listed above.
+`packages/agent-utils` has no `SqliteFS` or shell. `SqliteFS` was deleted on
+2026-08-12 (`core/src/checkpoints/types.ts:29`). Both backends use Nimbus's
+workspace filesystem over their own SQLite and its `runtime-bash` shell. Its
+five files cover memory and workspace resolution.
 
 ## Mocking philosophy
 
-Mock at real boundaries rather than at internal functions. Internal mocks couple
-tests to implementation and produce false confidence.
+Mock boundaries, never the pure function under test.
 
 | Boundary | Mock how |
 |---|---|
@@ -766,8 +531,7 @@ tests to implementation and produce false confidence.
 | AgentRuntime | `createTestRuntime()`: full minimal AgentRuntime |
 | Crafted-tool sandbox | already mocked by `createNodeCraftedExecute` from `@kinu.run/cli-backend` |
 
-Do not mock a pure function inside the same package. If `parseModelSpec` or
-`effortFor` is what you are testing, call it directly.
+Call `parseModelSpec` or `effortFor` directly when either is the subject.
 
 ## Writing a new test
 
@@ -851,27 +615,21 @@ test('my-strategy explores within budget', async () => {
 
 ## What Bun cannot load
 
-The `@cloudflare/agents` package transitively imports `cloudflare:email`, which
-resolves only inside the Workers runtime. Anything importing the `agents`
-package directly is unreachable from `bun test`: `ActorAgent` and its
-subclasses, `ExplorationAgent`, and the auth/routes dispatcher.
+`@cloudflare/agents` imports `cloudflare:email`, which only Workers resolves.
+`ActorAgent`, its subclasses, `ExplorationAgent`, and the auth/routes dispatcher
+therefore cannot load in `bun test`.
 
-Two runners cover it:
+- **`bun run test:workerd`** runs the five `packages/cf-backend/tests/workerd/`
+  files in vitest/workerd. They import `cloudflare:workers` and
+  `cloudflare:test`; root `bunfig.toml` excludes them and
+  `packages/cf-backend/vitest.config.ts:63` includes them. `ladder.test.ts`
+  requires disjoint, non-empty globs and a runner for every excluded file.
+- **The eval tier's vitest arms** cover episodes that need `bun:sqlite` in
+  vitest.
 
-- **`bun run test:workerd`** runs `packages/cf-backend/tests/workerd/` under
-  vitest inside workerd. Those 5 files import `cloudflare:workers` and
-  `cloudflare:test`, so the root `bunfig.toml` excludes the directory from
-  `bun test` and `packages/cf-backend/vitest.config.ts:63` includes exactly it.
-  `scripts/ladder.test.ts` asserts the two globs are disjoint, that each selects
-  a non-empty set, and that every excluded file is claimed by some other runner.
-- **The eval tier's vitest arms**, for the behavioural episodes that need
-  `bun:sqlite` under vitest.
-
-For everything else the pattern is to extract the pure URL, parsing and policy
-logic into a file with no `agents` import, unit-test that in Bun, and leave the
-orchestration file that wires it to real DO calls to the integration and e2e
-harness. That is why `packages/cf-backend/tests` holds 1,353 passing Bun tests
-over 134 files despite the constraint.
+Extract pure URL, parsing, and policy code into an `agents`-free file for Bun;
+leave orchestration to integration/e2e. This is how cf-backend has 1,353 Bun
+passes over 134 files.
 
 ## Running with coverage
 
@@ -879,27 +637,19 @@ over 134 files despite the constraint.
 bash scripts/test.sh --coverage
 ```
 
-Coverage is per-file with funcs % / lines %. It is useful for finding gaps and
-it is not a goal. The goal is that the behaviours you care about are tested, so
-do not game the number.
+It reports per-file funcs % / lines % and finds gaps, not a target to game.
+Intentional low coverage: `core/tests/e2e/ai-gateway-llm.ts`,
+`test-utils/src/runtime.ts`, and DO/Worker paths covered by `test:workerd` and
+deploy smoke.
 
-Areas with intentionally low coverage:
+## Adding a new package
 
-- `packages/core/tests/e2e/ai-gateway-llm.ts`, a real-LLM helper, expected to be
-  uncovered in the unit pass
-- `packages/test-utils/src/runtime.ts`, itself a fixture, exercised indirectly
-- DO and Worker integration paths, covered by `bun run test:workerd` and the
-  deploy smoke test rather than by `bun test`
-
-## Adding a new package to the test suite
-
-1. Create `packages/<your-pkg>/tests/`, matching the existing pattern.
-2. Add `"@kinu.run/test-utils": "workspace:*"` to your package's
-   `devDependencies` so the fixtures resolve.
-3. Update `scripts/test.sh` to include the new test directory.
-4. Write tests using the conventions above.
+1. Create `packages/<your-pkg>/tests/`.
+2. Add `"@kinu.run/test-utils": "workspace:*"` to devDependencies.
+3. Add the directory to `scripts/test.sh`.
+4. Follow these conventions.
 
 ## CI
 
-`scripts/test.sh` is for both local dev and CI. It exits non-zero on failure.
-For CI, add `--bail` if you want to stop at the first error.
+`scripts/test.sh` serves local development and CI, exiting non-zero on failure.
+Add `--bail` to stop at the first error.

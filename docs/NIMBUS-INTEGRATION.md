@@ -7,7 +7,7 @@ describes lives in `packages/cf-backend/src/runtime.ts` and
 ## Where the packages come from
 
 The tree carries no Nimbus source and no Nimbus patch. Every patch was
-upstreamed to `AshishKumar4/Nimbus` and published. The packages come from the
+upstreamed to `AshishKumar4/Nimbus` and published. Packages come from the
 registry at exact pinned versions, checked against the package manifests and
 `bun.lock` on 2026-08-24:
 
@@ -31,9 +31,9 @@ second makes the SDK's handler-map assignments MERGE, so configuring a bucket
 mount cannot unbind an outbound handler the host installed
 (`KinuSandbox.outboundHandlers`, `cf-backend/src/kinu-sandbox.ts`). `bun run gate:patch-parity`
 (`scripts/patch-parity.ts`) reads `patchedDependencies` out of the root
-`package.json` (`package.json:129-132`), so it governs both. It governs nothing
-Nimbus-shaped. The gate's own header still narrates the `@nimbus-sh/core` patch
-incident it was written for, because that incident is why the gate exists.
+`package.json` (`package.json:129-132`), so it governs both and nothing
+Nimbus-shaped. Its header still narrates the `@nimbus-sh/core` patch incident,
+because that incident is why the gate exists.
 
 ## Ownership
 
@@ -48,9 +48,9 @@ The Nimbus session ID is a SHA-256 digest of the owner ID and the workspace
 name, truncated to 24 hex characters (`nimbusWorkspaceSessionId`,
 `nimbus-route.ts:11-19`). `createNimbusWorkspaceSandbox()` is the only
 constructor for that handle, so execution, export, forking, and destruction all
-address the same session. Fresh workspaces start on this layout directly. The
-code holds no cutover, legacy copy, dual read, synchronization bridge, or
-fallback filesystem.
+address the same session. Fresh workspaces start on this layout directly; there
+is no cutover, legacy copy, dual read, synchronization bridge, or fallback
+filesystem.
 
 `Storage.vfs`, the native `file` tool, `run` with `runtime: "workspace"`, and
 the `workspace.*` codemode namespace all address that same session. A write
@@ -84,7 +84,7 @@ The orchestrator, its durable subordinates, and exploration heads share the
 workspace's files, processes, and ports. They do not share mutable shell cwd or
 exported environment state. `ActorRuntimeIdentity.shellId`
 (`cf-backend/src/runtime.ts`) supplies a stable actor-specific key on every exec,
-process, and run-code call. It is `agent:<name>` for the orchestrator
+process, and run-code call: `agent:<name>` for the orchestrator
 (`cf-backend/src/actor-agent.ts:491`), `subordinate:<name>` for a durable
 subordinate (`cf-backend/src/subordinate-agent.ts:176`), and `<scope>:<name>`
 for an exploration facet (`cf-backend/src/exploration.ts:282`). The published
@@ -94,15 +94,15 @@ registry stay shared.
 
 Each actor's automatic scaffold lifecycle targets a distinct path. The default
 agent uses `scaffold/agent.js`; facets use their internal actor path. Routine
-bootstrap and evolution writes therefore stay separate. Cooperative actors share
-an unrestricted workspace VFS on purpose, so the separation is a convention and
-not an ACL.
+bootstrap and evolution writes therefore stay separate. Actors deliberately
+share an unrestricted workspace VFS, so the separation is a convention and not
+an ACL.
 
 ## Processes and previews
 
 Nimbus process creation is non-blocking and returns a live PID. Process state,
 logs, signals, ports, and runtime availability come from Nimbus rather than
-from a frontend inference.
+from frontend inference.
 
 Exposing a port returns a random per-registration capability. Kinu encodes
 the session, the port, the capability, and an HMAC in a dedicated preview
@@ -125,11 +125,11 @@ The preview edge:
   Kinu SPA asset handler. `run_worker_first: true` in
   `packages/cf-backend/wrangler.jsonc` puts the Worker ahead of asset routing.
 
-The production suffix is an ordinary subdomain suffix and not a Public Suffix
-List boundary. Platform credentials are isolated, but browser `Domain` cookies
-can still span sibling preview hosts. Strong registrable-site isolation needs a
+The production suffix is an ordinary subdomain suffix, not a Public Suffix List
+boundary. Platform credentials are isolated, but browser `Domain` cookies can
+still span sibling preview hosts. Strong registrable-site isolation needs a
 preview suffix whose DNS and PSL policy makes each capability hostname a
-separate site. A Worker-only flag cannot deliver it honestly.
+separate site; a Worker-only flag cannot deliver it honestly.
 `packages/cf-backend/src/lib/preview-origin.ts` carries the reasoning.
 
 ## Lifecycle and portability
@@ -149,8 +149,8 @@ separate site. A Worker-only flag cannot deliver it honestly.
   before Nimbus destruction preserves the authoritative workspace.
 - A same-name recreation never reconnects to an undeleted Nimbus session.
 
-These are fresh-state invariants. The code holds no migration path and no
-old-layout compatibility path, on purpose.
+These are fresh-state invariants. There is no migration path and no old-layout
+compatibility path, on purpose.
 
 ## Configuration and package boundary
 

@@ -215,6 +215,13 @@ const DOCUMENTED_ABSENCE: readonly Absence[] = [
     reason: 'The same VFS path, in the document that describes reading it.',
   },
   {
+    file: 'docs/OBSERVABILITY.md',
+    cites: 'AbortError',
+    reason: 'The web platform DOMException name an aborted AbortController throws,'
+      + ' quoted from a dated bun measurement (2026-08-17). The runtime mints the'
+      + ' name; no identifier in this repository spells it.',
+  },
+  {
     file: 'docs/NIMBUS-INTEGRATION.md',
     cites: 'scaffold/agent.js',
     reason: 'The same VFS path, in the document that says which actor writes which'
@@ -311,29 +318,18 @@ const DOCUMENTED_ABSENCE: readonly Absence[] = [
   },
   {
     file: 'docs/BENCH.md',
-    cites: 'mountBucketR2Egress',
-    reason: 'A function inside @cloudflare/sandbox, not in this repository. The'
-      + ' benchmark calls the public `sandbox.mountBucket`; the document names the'
-      + ' SDK internal because how it assembles the s3fs `-o` argument is what'
-      + ' distinguishes one arm from another, so a reader who cannot see that name'
-      + ' cannot check the arm definitions against the option sets.',
+    cites: 'docs/research/BENCH-RUNS.md',
+    reason: 'The run-by-run record behind the bench verdicts, kept out of the'
+      + ' public tree by the `docs/research/` ignore rule. A visitor-facing'
+      + ' instrument document still has to be able to name where its evidence'
+      + ' lives.',
   },
   {
-    file: 'docs/BENCH.md',
-    cites: 'isR2Bucket',
-    reason: 'The duck-check inside @cloudflare/sandbox that gates which object'
-      + ' reaches its egress handler. Named in the correction note because it is'
-      + ' the reason the counting bucket must expose own-property members, and'
-      + ' therefore the reason the multipart fix works at all. Nothing here'
-      + ' declares it and nothing should.',
-  },
-  {
-    file: 'docs/BENCH.md',
-    cites: 'MemTotal',
-    reason: 'A Linux `/proc/meminfo` field label, quoted inside verbatim container'
-      + ' output. It is a kernel name rather than a code name; this tree only ever'
-      + ' passes it as text to `grep`, so no file uses it as an identifier and'
-      + ' renaming it would misquote what the container reported.',
+    file: 'AGENTS.md',
+    cites: 'docs/research/REQUESTS-LEDGER.md',
+    reason: 'The same ignore rule: process tracking is machine-local and does'
+      + ' not belong in a public repository, but the instruction to read it'
+      + ' before claiming a request is closed belongs here.',
   },
 ];
 
