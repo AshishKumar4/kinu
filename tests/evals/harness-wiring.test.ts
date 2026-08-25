@@ -277,11 +277,13 @@ describe('crafted-tool discovery and execution use the production CLI adapter', 
     expect(listedTools.map((tool) => tool.name)).toEqual(storedNames);
 
     // Callable inherited craft, through the same adapter LocalAgentSession
-    // wires. This is the assertion the old craft-cycle count never made: with
-    // `craftedToolExecute` absent the metric still said 1/1 while this call
-    // returned \"codemode.doubleIt is not a function\".
-    expect(await execute({ code: 'return await codemode.doubleIt(21);' }))
+    // wires. `tools.<name>` is the ONE callable form (registry.ts namespace
+    // contract); `codemode.<name>` is type-declared for discovery and REFUSES
+    // at call time with the correction naming the callable spelling.
+    expect(await execute({ code: 'return await tools.doubleIt(21);' }))
       .toEqual({ result: 42 });
+    const aliasRefusal = await execute({ code: 'return await codemode.doubleIt(21);' });
+    expect(JSON.stringify(aliasRefusal)).toContain('tools.doubleIt');
     expect(await execute({ code: 'return await tools.increment(41);' }))
       .toEqual({ result: 42 });
   }, 0);
@@ -495,7 +497,7 @@ describe('behaviour harness wiring — the three scorers that read zero live', (
   test('craft_reuse: the harness binds the workspace provider, so a tool crafted mid-turn is callable', async () => {
     const scores = await run('wiring-craft', [
       { tool: 'execute_tools', input: { code: CREATE_DOUBLE } },
-      { tool: 'execute_tools', input: { code: 'return await codemode.doubleIt(21);' } },
+      { tool: 'execute_tools', input: { code: 'return await tools.doubleIt(21);' } },
     ]);
 
     const craft = scoreOf(scores, 'craft_reuse');
