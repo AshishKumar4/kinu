@@ -1,36 +1,35 @@
 # Data Model
 
-A hosted workspace has two explicit durable authorities. `NIMBUS_SESSION` owns
-the workspace files and execution state. The `OrchestratorAgent` Durable
-Object's SQLite owns relational actor state. The schema is split across several
-subsystems, each owning its tables and creating them idempotently. There is no
-shadow VFS or synchronization path between those authorities.
+A hosted workspace has two durable authorities. `NIMBUS_SESSION` owns the
+workspace files and execution state. The `OrchestratorAgent` Durable Object's
+SQLite owns relational actor state. Each subsystem owns its tables and creates
+them idempotently. There is no shadow VFS or synchronization path between the
+two.
 
-Three other Durable Object classes hold their own isolated databases.
+Three other Durable Object classes hold isolated databases of their own.
 `SubordinateAgent` gets the full workspace schema plus a one-row
 `subordinate_identity`. `ExplorationAgent` gets `traces` from its own `onStart`
-and a one-row `facet_identity` created on first touch; those two tables carry
-the isolation MCTS branches and heads depend on. `UserDO` holds the per-user
-`user_*` and `device_*` tables and the owner's `experience_library`, which
-belong to the user rather than to any workspace.
+and a one-row `facet_identity`; those two tables carry the isolation MCTS
+branches and heads depend on. `UserDO` holds the per-user `user_*` and
+`device_*` tables and the owner's `experience_library`, which belong to the
+user rather than to any workspace.
 
-Four things live outside actor SQLite entirely: browser auth in the `AUTH_KV` KV
-namespace, sandbox `/workspace` backups in the `BACKUP_BUCKET` R2 bucket, the
-authoritative Nimbus workspace, and optional embedding recall in the
-`MEMORY_VECTORS` Vectorize index. Vectorize is an addition to FTS5 and never the
+Four things live outside actor SQLite entirely: browser auth in the `AUTH_KV`
+KV namespace, sandbox `/workspace` backups in the `BACKUP_BUCKET` R2 bucket,
+the authoritative Nimbus workspace, and optional embedding recall in the
+`MEMORY_VECTORS` Vectorize index. Vectorize extends FTS5 and is never the
 source of truth.
 
-`AUTH_KV` holds only expiring records: browser sessions, one-time OAuth handoff
-state, and CLI browser-approval state. Each write carries its own TTL, so each
-record expires on its own. None of it is a source of truth. A user's identity
-lives in that user's `UserDO`, addressed by a userId derived from the verified
-email, so an emptied namespace costs everyone a fresh sign-in and nothing more.
+`AUTH_KV` holds only expiring records: browser sessions, one-time OAuth
+handoff state, CLI browser-approval state, each carrying its own TTL. None of
+it is a source of truth. A user's identity lives in their `UserDO`, keyed on a
+userId derived from the verified email, so an emptied namespace costs everyone
+a fresh sign-in and nothing more.
 
 ## Entity Relationship
 
-The relational workspace tables, as created by the Core schema initializers and
-agent-utils stores. The workspace's files live in the Nimbus filesystem
-described below.
+The relational workspace tables, as created by the Core schema initializers
+and agent-utils stores; workspace files live in the Nimbus filesystem below.
 
 ```mermaid
 erDiagram
@@ -177,10 +176,10 @@ erDiagram
 
 ## Agent Identity (SOUL.md)
 
-The agent's identity document lives at `SOUL.md` in the workspace filesystem, on
-both backends. `readSoul`/`writeSoul`/`seedSoul` (`core/src/identity/soul.ts`)
-are the accessors; the system prompt, evolution engine, and `setSoul` RPC all go
-through them. `writeSoul` also maintains `workspace_identity.mission`, so a
+The identity document is `SOUL.md` in the workspace filesystem, on both
+backends. `readSoul`/`writeSoul`/`seedSoul` (`core/src/identity/soul.ts`) are
+the accessors; the system prompt, evolution engine and `setSoul` RPC go through
+them. `writeSoul` also maintains `workspace_identity.mission`, so a
 read-only listing reads the mission from that row. The owner may edit SOUL.md;
 the agent does not rewrite its own identity.
 
@@ -190,42 +189,43 @@ Both backends run Nimbus's workspace filesystem over their own SQLite. The
 class is `SqliteVFS`, from `@nimbus-sh/core`. Nothing in this repository
 implements a filesystem.
 
-- **Hosted.** The workspace lives in its `NIMBUS_SESSION` Durable Object,
-  reached through the remote session adapter in `core/src/execution/nimbus.ts`.
-  The orchestrator DO creates none of the filesystem tables.
-- **Local.** `createWorkspace` (`core/src/vfs/nimbus-workspace.ts`, imported as
-  `createWorkspaceFilesystem`) builds the same component over `bun:sqlite` in
-  the session's own database (`cli-backend/src/runtime.ts:493`).
+Hosted, the workspace lives in its `NIMBUS_SESSION` Durable Object, reached
+through the remote session adapter in `core/src/execution/nimbus.ts`; the
+orchestrator DO creates none of the filesystem tables. Local, `createWorkspace`
+(`core/src/vfs/nimbus-workspace.ts`, imported as `createWorkspaceFilesystem`)
+builds the same component over `bun:sqlite` in the session's own database
+(`cli-backend/src/runtime.ts:493`).
 
-Nimbus owns those bytes and their tables. `core/src/conformance/manifest.ts`
-declares the exact set. That set is what `NimbusWorkspace.destroy()` drops, so
-an addition to it means the dependency changed its storage contract. The set is
+Nimbus owns those bytes and their tables;
+`core/src/conformance/manifest.ts` declares the exact set, and that set is what
+`NimbusWorkspace.destroy()` drops, so an addition means the dependency changed
+its storage contract. It is
 `inodes`, `file_chunks`, `content_lifecycle`, `vfs_schema_migrations`,
 `vfs_append_receipts`, `vfs_append_writer_state`, `vfs_append_module_state`,
 `vfs_append_pid_revocations`, `vfs_append_acked_gaps`, plus Kinu's own
 `kinu_workspace_generation`. All ten are declared present on the CLI root and
 absent on both hosted roots.
 
-Three properties follow from that layout:
+Three properties follow:
 
-- **Content addressing.** `inodes(path, content_id)` points at
+- Content addressing: `inodes(path, content_id)` points at
   `file_chunks(content_id, chunk_id, data)`, with a `content_lifecycle` GC
   table. A snapshot of the plane copies the small inode index and no blobs.
-- **Real POSIX semantics.** One filesystem, addressed identically by
+- Real POSIX semantics: one filesystem, addressed identically by
   `vfs.readFile('/etc/passwd')` and by `run "cat /etc/passwd"`. Relative paths
   resolve at `WORKSPACE_ROOT` (`/home/user`). Ownership is uid/gid/mode on real
   inodes, which is how a swarm node's `/home/<node>` and its private `/tmp` are
   a boundary rather than a convention (`core/src/vfs/agent-home.ts`).
-- **Chunked blobs.** `SqliteVFS` splits file content into `file_chunks` rows of
+- Chunked blobs: `SqliteVFS` splits file content into `file_chunks` rows of
   `CHUNK_SIZE` bytes, 65,536 as `@nimbus-sh/platform` declares it. Merge-back
   costs a write batch against the same constant, so this repository imports it
   rather than restating the number (`core/src/strategy/merge-back.ts:55`).
 
 `packages/agent-utils` supplies the `VFS` interface both planes satisfy
-(`agent-utils/src/vfs/types.ts`) and nothing else on this axis. It has no
-filesystem implementation and no shell emulator; the shell is Nimbus's
-`runtime-bash`. Memory indexing reads through the active VFS on either backend,
-so the relational `memory_chunks` index never becomes a second file authority.
+(`agent-utils/src/vfs/types.ts`) and nothing else on this axis: no filesystem
+implementation, no shell emulator. The shell is Nimbus's `runtime-bash`.
+Memory indexing reads through the active VFS on either backend, so relational
+`memory_chunks` never becomes a second file authority.
 
 One table named `vfs_files` still appears in the tree, in
 `packages/cli/tests/export-import.test.ts`, where the test creates it as a blob
@@ -233,19 +233,20 @@ fixture for the archive reader. No product path creates or reads it.
 
 ## MemoryStore (FTS5 Search)
 
-From `@kinu.run/agent-utils`. Provides full-text search over markdown files stored in the workspace filesystem.
-
-**Schema:** `memory_chunks` table with `memory_chunks_fts` FTS5 virtual table (external content via `content='memory_chunks'`). `initMemoryChunkTables` is the one DDL; `MemoryStore.ensureSchema()` delegates to it.
-
-**Indexing:** Files are chunked using a line-aware sliding window (`DEFAULT_CHUNK_TARGET_CHARS` 1600, `DEFAULT_CHUNK_OVERLAP_CHARS` 320). Each chunk gets a SHA-256 hash for deduplication, so the next pass skips unchanged chunks.
-
-**Search:** FTS5 MATCH with BM25 ranking. `sanitizeFtsQuery` removes FTS5 operators and stop words. Falls back to OR-joined tokens if the AND query returns no results.
+`@kinu.run/agent-utils` provides FTS5 full-text search over markdown files in
+the workspace filesystem: a `memory_chunks` table with a `memory_chunks_fts`
+virtual table (external content via `content='memory_chunks'`), one DDL
+(`initMemoryChunkTables`, which `MemoryStore.ensureSchema()` delegates to).
+Files are chunked with a line-aware sliding window
+(`DEFAULT_CHUNK_TARGET_CHARS` 1600, `DEFAULT_CHUNK_OVERLAP_CHARS` 320); each
+chunk carries a SHA-256 hash so the next pass skips unchanged chunks. Search
+is FTS5 MATCH with BM25 ranking; `sanitizeFtsQuery` removes operators and stop
+words and falls back to OR-joined tokens when the AND query returns nothing.
 
 ## Think message persistence
 
 Chat history belongs to the SDK. `Think` extends the agents SDK's
-`Agent` and holds a `Session` from `agents/experimental/memory/session`, which
-creates and owns:
+`Agent` and holds a `Session` from `agents/experimental/memory/session`, which owns:
 
 - `assistant_messages`: the durable message path
 - `assistant_sessions`: session metadata
@@ -261,8 +262,8 @@ which is what `messages_fts` and the outcome joins read.
 ## The rest of the schema
 
 The ER diagram above covers the shared actor substrate. Every subsystem added
-since owns its own DDL, all of it `IF NOT EXISTS`, and all of it runs from the
-same `initWorkspaceSchema()` pass:
+since owns its own DDL, all `IF NOT EXISTS`, all run from the same
+`initWorkspaceSchema()` pass:
 
 | Subsystem | Tables | Owner |
 |---|---|---|
@@ -300,21 +301,19 @@ Five more groups are created outside that pass, by the root that owns each:
 | Email + webhooks | no boot DDL; the outbound mail rows are the shared outbox's `outbox_email` | `cf-backend/src/email/outbox.ts` |
 | Ingress gates | `webhook_rate_windows`, `webhook_secrets` (both backends) | `core/src/events/ingress/rate-limit.ts`, `secrets.ts` |
 
-Three tables are created lazily. `session_window` and `turn_review_queue` come
-from the evolution engine's constructor, and `mission_budget` from the mission
-governor's first write.
+Three tables are created lazily: `session_window` and `turn_review_queue` by
+the evolution engine's constructor, `mission_budget` by the mission governor's
+first write.
 
-The two durable retry outboxes are created lazily too, by `@nimbus-sh/fabric`
-on the first queue or drain: `outbox_peer` for the peer transport and
-`outbox_email` for outbound mail. Their schema belongs to the library, not to
-this repository. `core/src/events/outbox.ts` is the port that supplies the SQL
-handle and the alarm.
+Two durable retry outboxes are lazy too, created by `@nimbus-sh/fabric` on the
+first queue or drain: `outbox_peer` for the peer transport and `outbox_email`
+for outbound mail. Their schema belongs to the library;
+`core/src/events/outbox.ts` supplies the SQL handle and the alarm.
 
 `core/src/conformance/manifest.ts` declares every one of these per root
-(`cf-orchestrator`, `cf-subordinate`, `cli`), as wired or as deliberately absent
-with a stated reason, and the conformance suite compares that declaration
-against the real `sqlite_master`. Read the manifest first. This page is a
-narrative over it.
+(`cf-orchestrator`, `cf-subordinate`, `cli`), wired or deliberately absent with
+a stated reason, and the conformance suite compares the declaration against the
+real `sqlite_master`. Read the manifest first; this page narrates over it.
 
 ## Schema initialization
 
@@ -347,13 +346,13 @@ Then each root adds what only it carries. The orchestrator DO also runs
 call is gated by an in-memory flag so it runs once per activation, and no
 persistent schema version is tracked because a cold activation always re-runs.
 
-Two consequences worth knowing. Each table has exactly one owning module, and
-the duplicate copies that `identity/schema.ts` used to carry are gone. A second
-definition of `search_nodes` is how `code_language` went missing on a live
-workspace, and a second `scaffold_versions` is how `status` and `parent_version`
-did. Where a workspace predates a column, the owning module reconciles it by
-asking `pragma_table_info` (`reconcileColumns`) rather than attempting an ALTER
-and swallowing the failure. And DO SQLite cannot ALTER a `CHECK` constraint and
-forbids explicit transactions. Widening one, as `turn_outcomes` and the
+Each table now has exactly one owning module; the duplicate copies that
+`identity/schema.ts` used to carry are gone. A second definition of
+`search_nodes` is how `code_language` went missing on a live workspace, and a
+second `scaffold_versions` is how `status` and `parent_version` did. Where a
+workspace predates a column, the owning module reconciles it by asking
+`pragma_table_info` (`reconcileColumns`) instead of attempting an ALTER and
+swallowing the failure. DO SQLite also cannot ALTER a `CHECK` constraint and
+forbids explicit transactions; widening one, as `turn_outcomes` and the
 events-hub tables have both needed, is an in-place table rebuild with a resume
 branch for a crash mid-sequence.

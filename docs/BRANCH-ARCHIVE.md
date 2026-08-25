@@ -1,39 +1,22 @@
-# Branch Archive: what makes a branch safe to delete
+# Branch Archive: safe branch deletion
 
-Some unmerged branches hold file content that exists nowhere in `main`'s history.
-Deleting those branches is safe only because an `archive/*` tag pins the same
-commits, and nothing in the repository recorded which tag covered which branch.
-A prune that deleted a tag it did not know was load-bearing would destroy
-content silently. No test fails, no gate fires, the blobs become unreachable
-and the next `git gc` collects them.
+`archive/*` tags retain content absent from `main` after a branch is deleted.
+Deleting a load-bearing tag destroys it silently: no test fails, no gate fires,
+and `git gc` collects the blobs.
 
-This file is that record. It exists so the mapping cannot be lost, not because
-archive tags are interesting.
+## Rule
 
-## The rule
-
-Never delete a tag under `refs/tags/archive/` without re-running the test below
-and getting a novel-blob count of zero. A tag with a nonzero count is the only
-remaining home for that content. Tags are cheap and the content is not
-reproducible.
-
-Deleting the *branch* is the safe operation. Deleting the *tag* is the dangerous
-one, and the two look equally harmless in a prune script.
+Never delete a tag under `refs/tags/archive/` until the test reports zero novel
+blobs. A nonzero count is the last home. Delete branches, not tags.
 
 ## Tag inventory
 
-Forty tags live under `refs/tags/archive/`. All are lightweight tags on a
-commit. Thirty-one were added by the 2026-08-21 prune wave and carry their own
-table below. Both counts for the first nine were measured on 2026-08-21
-against `main` at `29f654bd`, with the commands in the next section; the wave
-table was measured the same day against `main` at `c143c4b6`.
+Forty lightweight tags live under `refs/tags/archive/`; thirty-one came from the
+2026-08-21 prune wave. The first nine use `main` at `29f654bd`; the wave uses
+`c143c4b6`, both measured 2026-08-21.
 
-- **Blobs `main` lacks** counts blobs reachable from the tag that no commit in
-  `main`'s history holds. This is the durable question, because branches get
-  pruned and `main`'s history does not.
-- **Sole copy** counts blobs that no other ref in the repository reaches. This
-  number falls as work lands and rises as branches are pruned, so re-measure it
-  rather than trusting the figure here.
+- **Blobs `main` lacks** are absent from its history.
+- **Sole copy** blobs have no other ref. Re-measure this count after pruning.
 
 | Tag | Commit | Commits | Blobs `main` lacks | Sole copy |
 |---|---|---|---|---|
@@ -47,19 +30,10 @@ table was measured the same day against `main` at `c143c4b6`.
 | `archive/pre-reroot` | `8e98574c` | 1529 | 5062 | 0 |
 | `archive/stability-audit` | `1a1c9341` | 229 | 843 | 0 |
 
-Every tag has a nonzero novel-blob count, so by the rule above no archive tag is
-safe to delete today. The counts are large because `main` has been re-rooted
-twice: each rewrite replaced its history with a fresh single-root line (982
-commits after the first, 84 measured 2026-08-21 after the second), so the
-pre-launch history these tags sit on is not in it, and every intermediate
-revision on those branches counts as a blob `main` never held. The second
-rewrite is why every count in the table is larger than its 2026-08-19 reading.
-`archive/pre-reroot` is no exception. It preserves the commit graph and
-authorship of the history that `git filter-repo --mailmap` rewrote, and it holds
-5,062 blobs `main`'s history no longer reaches.
-
-Four tags name the branch they pin. The other five record only their tip commit
-and its subject, and the branch name was never written down.
+No tag is safe to delete. Two re-roots (982 commits, then 84 measured
+2026-08-21) left `main` without this pre-launch history. `archive/pre-reroot`
+retains the graph and authorship `git filter-repo --mailmap` rewrote, including
+5,062 blobs. That explains the larger 2026-08-19 readings.
 
 | Tag | Pins the tip of |
 |---|---|
@@ -68,27 +42,19 @@ and its subject, and the branch name was never written down.
 | `archive/stability-audit` | `feat/agent-view-redesign` (branch deleted) |
 | `archive/latency-instrumentation` | `fix/latency-instrumentation` (branch deleted) |
 
-The `feat/one-filesystem` design was rejected deliberately (AGENTS.md
-§ Execution Layer, and `packages/cli-backend/tests/mount-plane.test.ts` enforces
-the rejection), so that branch is safe to delete. Its tag is not.
+Five tags have no recorded branch name. I rejected `feat/one-filesystem`
+(AGENTS.md § Execution Layer; `packages/cli-backend/tests/mount-plane.test.ts`),
+so delete its branch, not its tag.
 
-`archive/pre-launch-history` pins no branch. It pins the tip `main` itself sat
-on until 2026-08-20, when a reset moved `main` back to `7cfdd992` and the
-history rewrite that followed left the old line unreachable. The tag is the only
-ref that still reaches that line: 1,149 commits `main` lacks, the 2026-08-19
-measurement base `5dbc0f1b` among them, and — measured during the 2026-08-20
-prune wave — the tips of 60+ working branches since deleted. It is the most
-load-bearing tag in this table: 307 of its blobs exist nowhere else.
+`archive/pre-launch-history` reaches 1,149 commits `main` lacks, the
+2026-08-19 base `5dbc0f1b`, and (during the 2026-08-20 prune wave) 60+ deleted
+branch tips. 307 blobs exist nowhere else.
 
 ### The 2026-08-21 prune wave
 
-Thirty-one branches were judged against `main` on content and deleted, each
-behind a tag created and verified before the delete. Every tag pins the tip of
-the branch named in it, minus the type prefix (`fix/reliability-a1a3` pins as
-`archive/reliability-a1a3`). Counts were measured against `main` at
-`c143c4b6`. Sole copy is 0 for every row: these branches share their whole
-pre-rewrite commit graph with surviving siblings, so no blob is exclusively
-theirs. The novel-blob count is what makes each tag load-bearing.
+I created and verified each tag before deleting its branch. Tags omit the type
+prefix (`fix/reliability-a1a3` becomes `archive/reliability-a1a3`). Counts use
+`main` at `c143c4b6`; sibling refs make sole copy 0.
 
 | Branch (deleted) | Tag | Commit | Commits | Blobs `main` lacks | Sole copy |
 |---|---|---|---|---|---|
@@ -124,33 +90,20 @@ theirs. The novel-blob count is what makes each tag load-bearing.
 | `feat/executor-errors` | `archive/executor-errors` | `e2fe40cb` | 1756 | 5638 | 0 |
 | `fix/reliability-a1a3` | `archive/reliability-a1a3` | `2b5d8dfe` | 1093 | 3344 | 0 |
 
-The judgment that sent each branch here came from its shipped successor, not
-from its name: the strategy branches land in `packages/core/src/strategy/`,
-the antislop branches in `tools/oxlint/anti-slop/`, the KV auth cutover in
-`packages/cf-backend/src/auth/store.ts`, the commit-hygiene gate in
-`scripts/commit-hygiene.ts`. Branches with no traced landing evidence were not
-touched; they wait on an owner ruling.
+I traced successors in `packages/core/src/strategy/`, `tools/oxlint/anti-slop/`,
+`packages/cf-backend/src/auth/store.ts`, and `scripts/commit-hygiene.ts`.
+Untraced branches wait on an owner ruling.
 
-`archive/reliability-a1a3` is the one tag that pins a commit made during the
-prune rather than a bare branch tip. Its worktree held a crashed
-`git worktree add` from 2026-08-10: a stale `index.lock`, no index, and 272 of
-1,179 files checked out, every one byte-identical to its blob in the branch
-tip `df014c73`. That crash state was committed verbatim, and the tag holds the
-commit whose parent is `df014c73`, so both the snapshot and the record of what
-the crash left behind stay reachable. The branch's own work had landed long
-before: `packages/cf-backend/src/hooks/use-kinu.ts` cites STABILITY-AUDIT §A1
-and §A3 by name.
+`archive/reliability-a1a3` records a 2026-08-10 crash: stale `index.lock`, no
+index, and 272 of 1,179 files at `df014c73`. Its work had landed:
+`packages/cf-backend/src/hooks/use-kinu.ts` cites STABILITY-AUDIT §A1 and §A3.
 
-## Reproducing the test
+## Reproduce the test
 
-Ancestry answers nothing here. `git filter-repo --mailmap` rewrote 2,242
-commits, so no pre-rewrite branch is an ancestor of `main`, and that says
-nothing about content. Measured 2026-08-21: none of the nine tags is an
-ancestor of `main`. The exploitable invariant is that `--mailmap` rewrites
-*commit* objects only. Tree and blob SHAs are untouched, so content identity
-survives the rewrite and compares cleanly across it.
+`git filter-repo --mailmap` rewrote 2,242 commits. Measured 2026-08-21, none
+of the nine tags is a `main` ancestor; tree and blob SHAs remain comparable.
 
-Blobs `main` lacks, for one tag:
+Blobs `main` lacks:
 
 ```sh
 export LC_ALL=C
@@ -159,11 +112,9 @@ git rev-list --objects "$REF" | cut -d' ' -f1 | sort -u > /tmp/ref.objs
 comm -23 /tmp/ref.objs /tmp/main.objs \
   | git cat-file --batch-check | awk '$2 == "blob"' | wc -l
 ```
+Compare against `main`'s history, never its tip.
 
-Compare against `main`'s whole history, never its tip. The question is whether
-`main` ever held those bytes.
-
-Blobs no other ref reaches, for one tag:
+Blobs no other ref reaches:
 
 ```sh
 export LC_ALL=C
@@ -172,54 +123,30 @@ git rev-list --objects "$REF"                 | cut -d' ' -f1 | sort -u > /tmp/r
 comm -23 /tmp/ref.objs /tmp/others.objs \
   | git cat-file --batch-check | awk '$2 == "blob"' | wc -l
 ```
+Use `LC_ALL=C`: locale sorting breaks `comm`. `--exclude` needs the full
+refname; `--exclude="archive/$REF"` reports 0 sole copies. Measured 2026-08-21,
+the short form reported 0 for all nine; the form above reports the table.
 
-`LC_ALL=C` matters. `comm` compares bytes, so a locale-collated `sort` feeds it
-input it reads as unsorted and the answer is wrong without warning.
+## Archived blobs I rejected
 
-`--exclude` needs the FULL refname. A pattern holding a slash matches against
-the whole refname, so `--exclude="archive/$REF"` matches nothing: the tag then
-reaches itself through `--all` and the test reports a sole copy of 0 for every
-tag, which reads as safe to delete. Measured 2026-08-21: the short form reported
-0 for all nine tags; the form above reports the table.
+Six blobs are absent from `main`'s history, measured 2026-08-19. Read their
+tag paths with `git cat-file -p <blob>`.
 
-## What was read and judged, and why none of it was landed
-
-Six blobs were read in full and judged on content. All six are absent from
-`main`'s history, measured 2026-08-19. None was worth landing.
-
-**None of the paths in the table below exists in the working tree.** Each one
-names a path inside the tag. Read one with `git cat-file -p <blob>`; a checkout
-will not find it.
-
-| Blob | Tag that reaches it | Path inside the tag | Verdict |
+| Blob | Tag | Path inside the tag | Verdict |
 |---|---|---|---|
-| `127f460c` | `archive/latency-instrumentation` | `packages/cf-backend/src/orchestrator.ts` | Superseded, proven. The only source file in the set. Its commit added first-chunk latency instrumentation through `console.log`. `main`'s own `70307e10`, an ancestor of `main` 88 minutes later, landed the same feature through a trace helper that also broadcasts to the UI, plus three more trace points. The whole diff is 29 branch-only lines, every one a `console.log` timing call. The feature lives today at `cf-backend/src/actor-agent.ts:4188`, which calls `onFirstChunk()` at `core/src/orchestrator/turn-accumulator.ts:190`. Landing the branch version would also regress the anti-slop gate: it carries an empty `catch` and `(err as Error).message`. |
-| `4fa27d58` | `archive/stability-audit` | `docs/STABILITY-AUDIT.md` | Superseded snapshot. A real 18-finding forensic audit from 2026-04-24, and its findings landed. `main`'s source cites the audit's finding IDs by name: A1, A2, A3 and D5 in `cf-backend/src/hooks/use-kinu.ts` (`:635`, `:725`, `:926`, `:1339`), A1 and D2 in `cf-backend/src/pages/WorkspacePage.tsx`, D2 in `cf-backend/src/components/ErrorBoundary.tsx`, B4 in `cf-backend/src/orchestrator.ts:3073`, and B2/B3 in `core/src/execution/sandbox.ts:136`. The audit's own `file:line` citations are months stale, so landing it would ship a document whose every pointer is wrong. |
-| `6a7dec61` `859726b7` `174d731b` `f6f19ee2` | `archive/stability-audit` | `docs/REQUIREMENTS-AUDIT.md`, four revisions | Superseded session bookkeeping, and now contradictory. A per-conversation request tracker from 2026-04-24. Item 9 records Nimbus as deferred and item 11 asks to remove `workspace` from the user-facing executor list, which inverts the current architecture where `workspace` is the one canonical file and execution plane. It also cites `docs/EXECUTOR-V2.md`, deleted from the working tree; two commits in `main`'s history still touch that path, so that one file needs no tag to recover. The tracker cites pre-rewrite SHAs that are not `main` ancestors as well. Landing it would assert false current state. |
+| `127f460c` | `archive/latency-instrumentation` | `packages/cf-backend/src/orchestrator.ts` | Superseded by `70307e10` 88 minutes later; 29 branch-only `console.log` lines also fail anti-slop. |
+| `4fa27d58` | `archive/stability-audit` | `docs/STABILITY-AUDIT.md` | 18-finding 2026-04-24 audit. Current source cites its IDs; its `file:line` pointers are stale. |
+| `6a7dec61` `859726b7` `174d731b` `f6f19ee2` | `archive/stability-audit` | `docs/REQUIREMENTS-AUDIT.md`, four revisions | 2026-04-24 tracker contradicting current `workspace` architecture. It cites deleted `docs/EXECUTOR-V2.md` (two `main` commits still touch it) and pre-rewrite SHAs. |
 
-The A4 finding is the one case where the code itself records the loss. The
-25-second WebSocket heartbeat it justified still ships, at
-`cf-backend/src/hooks/use-kinu.ts:832-845`, and that code no longer names A4.
-The account of the loss sits in `core/src/platform-catalog.ts:1979`, under
-`edge.websocket_idle_reap_ms`. That entry is labelled speculative, and its notes
-record the whole chain: the heartbeat cited a bare `STABILITY-AUDIT §A4`, the
-document is not in the working tree, only its recovered text survives, and the
-recovered text asserts a documented 100 s reap while citing no URL.
-`scripts/platform-catalog.ts:139` is what keeps that citation followable. It
-refuses a provenance string naming a repo path that is gone, and accepts the
-same path written `git <sha>:<path>`, because a pinned blob cannot drift.
+The recovered A4 account is speculative: `core/src/platform-catalog.ts:1979`
+claims a documented 100 s reap without a URL; its 25-second heartbeat is at
+`cf-backend/src/hooks/use-kinu.ts:832-845`. Use `git <sha>:<path>` provenance.
 
-`archive/nimbus-measure` is the only tag holding a file worth keeping, its
-measurement write-up. That write-up is deliberately out of this repository.
-It went with the other internal design records, and its load-bearing figures
-were carried into AGENTS.md § Deploy Discipline first: the 185-252 ms Worker
-startup range measured 2026-08-04 against Cloudflare's 1-second startup limit,
-and the 6,254.64 KiB gzip bundle reading of the same date that later readings
-are compared against. Both stand there on their own dates.
+AGENTS.md § Deploy Discipline retains `archive/nimbus-measure`'s 185-252 ms
+Worker startup range measured 2026-08-04 against Cloudflare's 1-second startup
+limit and its 6,254.64 KiB gzip bundle reading.
 
-The throwaway probe Worker beside it was left tag-only on purpose. Its three
-paths were deleted from the working tree, so read them out of the tag rather
-than looking for them in a checkout:
+The throwaway probe Worker remains tag-only:
 
 ```sh
 git ls-tree -r --name-only archive/nimbus-measure | grep -E \

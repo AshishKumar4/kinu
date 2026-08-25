@@ -1,7 +1,7 @@
 # The workspace and agent object model
 
-In Kinu you create **workspaces**. A workspace holds the state, and
-agents are the actors that work inside it.
+In Kinu you create workspaces. A workspace holds the state, and agents are the
+actors that work inside it.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
@@ -39,61 +39,58 @@ agents are the actors that work inside it.
 
 ## What this means concretely
 
-- **The name is the workspace's.** The Durable Object address, the container key
+- The name is the workspace's. The Durable Object address, the container key
   (`kinu-<name>`, `cf-backend/src/orchestrator.ts:2583`), the Nimbus session key
   (`nimbusWorkspaceSessionId`, `cf-backend/src/nimbus-route.ts:11-19`), the email
   address (`<name>@EMAIL_DOMAIN`, `cf-backend/src/email/inbound.ts:35`), and the
-  registry row all key on the workspace name.
-  The default agent has no separate name. It *is* the workspace's voice.
-- **Ownership is workspace-level.** `workspace_identity.owner_user_id` is the
+  registry row all key on the workspace name. The default agent has no separate
+  name; it is the workspace's voice.
+- Ownership is workspace-level. `workspace_identity.owner_user_id` is the
   single ownership root; the UserDO `user_workspaces` table is the user's
   registry of workspaces (source of truth for the sidebar, CLI list, and the
   ownership check on every `/api/workspaces/<name>/*` request).
-- **Locally, the virtual workspace is metadata, not a place.** It is the pair
-  `{ cwd, workspaceId }` recorded on each root agent's ref
-  (`packages/core/src/tools/local-peer.ts`). Every root carrying the
-  same pair is an EQUAL PEER of the others: one physical directory, one shell,
-  and each agent with its own SQLite identity, role and scaffold. None of them
-  is the workspace, so mail between them is peer mail rather than a report up
-  a tree. Subordinates stay children: they inherit their root's directory as
-  their workspace plane but keep their own SQL identity, and they never hold
-  the peer transport. Each agent owns ONE durable conversation; its id lives in
-  `agent_config` (`canonicalConversationId`,
-  `packages/core/src/config/conversation.ts`), so an interactive
-  CLI, a one-shot `kinu exec` and the daemon's agent host all drive the same
-  conversation instead of minting one per process. Recorded JSONL files
-  are diagnostics from here on.
-- **The file plane is the workspace's.** On a hosted workspace `Storage.vfs`
-  is the authoritative Nimbus filesystem. A LOCAL workspace keeps TWO planes,
-  and the split is deliberate: the agent's own state (SOUL.md, its scaffold,
-  memory, craft store, conversation, every ledger) always lives in its own
-  SQLite-backed filesystem, while the WORKSPACE plane that `file`, `run`,
-  `execute_tools` and AGENTS.md address binds to the physical directory stored
-  on the agent's ref (`CLIRuntimeConfig.cwd`, never `process.cwd()`). With no
-  directory bound, both planes are the one in-SQLite tree, which is what an
-  isolated fixture or an eval episode gets.
-  Relative paths resolve at `/home/user`
-  (`WORKSPACE_ROOT`, `core/src/vfs/workspace-path.ts:2`). The mount table adds a
-  connected device at `/pc` and a container at `/sandbox`. Reads and writes
-  cross through each executor's own file API and retain its consent and access
-  policy. Inside the container itself the working directory is `/workspace`, and
-  every command it runs starts there (`DEVBOX_WORKDIR`,
-  `devbox/src/storage.ts`). The workspace shell sees only the base tree;
-  commands reach other machines through their namespaces.
-  `listMounts()` reports each live environment and its `readOnly` and
-  `consistency` policy. The web UI shows them on the **Environment** work
-  surface.
-- **One default agent, more on demand.** Three kinds of extra actor, and which
+- Locally, the virtual workspace is metadata, not a place: the pair
+  `{ cwd, workspaceId }` on each root agent's ref
+  (`packages/core/src/tools/local-peer.ts`). Roots sharing the pair are EQUAL
+  PEERS, one physical directory and one shell, each with its own SQLite
+  identity, role and scaffold; none of them is the workspace, so mail between
+  them is peer mail rather than a report up a tree. Subordinates stay
+  children: they inherit their root's directory as their workspace plane, keep
+  their own SQL identity, and never hold the peer transport. Each agent owns
+  ONE durable conversation, its id recorded in `agent_config`
+  (`canonicalConversationId`, `packages/core/src/config/conversation.ts`), so
+  an interactive CLI, a one-shot `kinu exec` and the daemon's agent host drive
+  the same conversation instead of minting one per process. Recorded JSONL
+  files are diagnostics.
+- The file plane is the workspace's. Hosted, `Storage.vfs` is the
+  authoritative Nimbus filesystem. A LOCAL workspace keeps TWO planes,
+  deliberately: agent state (SOUL.md, scaffold, memory, craft store,
+  conversation, every ledger) always lives in its own SQLite-backed
+  filesystem, while the WORKSPACE plane that `file`, `run`, `execute_tools`
+  and AGENTS.md address binds to the directory on the agent's ref
+  (`CLIRuntimeConfig.cwd`, never `process.cwd()`); with no directory bound,
+  both planes are the one in-SQLite tree an isolated fixture or eval episode
+  gets. Relative paths resolve at `/home/user` (`WORKSPACE_ROOT`,
+  `core/src/vfs/workspace-path.ts:2`). The mount table adds a connected device
+  at `/pc` and a container at `/sandbox`; reads and writes cross through each
+  executor's own file API and retain its consent and access policy. Inside
+  the container the working directory is `/workspace` (`DEVBOX_WORKDIR`,
+  `devbox/src/storage.ts`) and every command starts there. The workspace
+  shell sees only the base tree; commands reach other machines through their
+  namespaces. `listMounts()` reports each live environment with its
+  `readOnly` and `consistency` policy; the web UI shows them on the
+  Environment work surface.
+- One default agent, more on demand. Three kinds of extra actor, and which
   one you get depends on whether the work is ephemeral, durable-in-workspace, or
   cross-workspace:
-  - **Swarm nodes** (`agents`, `action: 'swarm'`) are ephemeral, full agents.
-    They use the Core node turn loop and can take multiple turns. A tool call
-    that runs past the detach window moves to the background, and the node wakes
-    when it settles: 30 seconds on an interactive surface and 300 seconds on a
-    one-shot (`BACKGROUND_POLICY`, `core/src/jobs/threshold.ts:71-72`). The work
-    itself carries no elapsed deadline once it detaches. The node reports a
-    candidate. A registered verifier scores measured searches; ideation returns
-    unranked candidates, and judged searches use a model ensemble.
+  - Swarm nodes (`agents`, `action: 'swarm'`) are ephemeral, full agents on
+    the Core node turn loop, able to take multiple turns. A tool call past the
+    detach window moves to the background and the node wakes when it settles:
+    30 seconds on an interactive surface, 300 on a one-shot
+    (`BACKGROUND_POLICY`, `core/src/jobs/threshold.ts:71-72`); the work itself
+    carries no elapsed deadline once detached. The node reports a candidate: a
+    registered verifier scores measured searches, ideation returns unranked
+    candidates, judged searches use a model ensemble.
 
     Hosted nodes run over the canonical workspace with actor-private shell
     state and scaffold. `facetRuntime` gives each one a `node:<name>` shell id
@@ -102,41 +99,41 @@ agents are the actors that work inside it.
     the same facet class in a separate toolless mode and acquire no runtime.
 
     Node isolation follows the workspace plane. `AgentsForkDeps.nodeHome`
-    carries the three host-owned members a private home needs, and
+    carries the three host-owned members a private home needs;
     `agentHomeNodeProvisioner` with `nodeAgentName` builds `/home/node-<id>`
-    with its own credential and its own `/tmp`
-    (`core/src/strategy/node-workspace.ts:104-144`). A LOCAL runtime whose plane
-    is its in-SQLite tree wires those members from `WorkspaceBundle.privileged()`
-    and provisions that private home. A runtime bound to a physical directory
-    wires none, because a directory has no principal registry to confine
-    `/tmp` with, so every node shares the origin plane. The hosted backend
-    supplies none either: it reaches its workspace by RPC to a Nimbus Durable
-    Object, where a filesystem call arriving without a pid acts as the session
-    user and `confinePrincipal` has no RPC form, so two of the three members
-    do not exist on that side. A node always reports the isolation it actually
-    got, `private-home` or `shared-origin-plane`; nothing invents a boundary.
-    `docs/EXPLORATION.md` is the spec for the six axes,
-    the presets, the report contract and the isolation states.
+    with its own credential and `/tmp`
+    (`core/src/strategy/node-workspace.ts:104-144`). A LOCAL runtime whose
+    plane is its in-SQLite tree wires those members from
+    `WorkspaceBundle.privileged()` and provisions that private home. A runtime
+    bound to a physical directory wires none: a directory has no principal
+    registry to confine `/tmp` with, so every node shares the origin plane.
+    The hosted backend supplies none either, reaching its workspace by RPC to
+    a Nimbus Durable Object, where a filesystem call arriving without a pid
+    acts as the session user and `confinePrincipal` has no RPC form, so two of
+    the three members do not exist on that side. A node always reports the
+    isolation it actually got, `private-home` or `shared-origin-plane`;
+    nothing invents a boundary. `docs/EXPLORATION.md` is the spec for the six
+    axes, presets, report contract and isolation states.
 
-  - **Subordinates** (`agents`, `action: 'hire'`) are durable. Each is a
-    `SubordinateAgent` facet with its own SQL history and full turn loop, using
-    the canonical workspace files and the parent's sandbox/laptop planes.
-    Locally it opens over its root's stored directory, which keeps the parent's
-    plane while its memory, craft store and conversation stay its own.
-    Assigned tasks and reports ride the `subordinate` ingress. Owner-driven chat
-    is private; `report` is exposed only on a parent-assigned turn.
-  - **Peers** are the owner's other workspace agents, addressed through
-    `agents` actions `ask`, `send`, `reply`, and `list`. `hire` with
+  - Subordinates (`agents`, `action: 'hire'`) are durable: a
+    `SubordinateAgent` facet with its own SQL history and full turn loop,
+    using the canonical workspace files and the parent's sandbox/laptop
+    planes. Locally it opens over its root's stored directory, keeping the
+    parent's plane while memory, craft store and conversation stay its own.
+    Assigned tasks and reports ride the `subordinate` ingress; owner-driven
+    chat is private, and `report` is exposed only on a parent-assigned turn.
+  - Peers are the owner's other workspace agents, addressed through `agents`
+    actions `ask`, `send`, `reply`, and `list`. `hire` with
     `scope: 'workspace'` spawns a whole specialist workspace instead of a
-    subordinate, and only the workspace orchestrator may do it. A fresh
-    workspace is the root of its own delegation tree, so a subordinate that
-    could call it would escape the depth cap.
+    subordinate, and only the workspace orchestrator may: a fresh workspace is
+    the root of its own delegation tree, so a subordinate that could call it
+    would escape the depth cap.
 
   `getWorkspaceAgents()` (RPC, `cf-backend/src/orchestrator.ts:2920`) returns the
   roster the UI shows: the default orchestrator first, then this workspace's
   durable subordinates. Nodes stay off it, because they live only for the search
   that spawned them.
-- **Fork = a new workspace.** Forking copies SOUL.md, messages, and memory to
+- Fork = a new workspace. Forking copies SOUL.md, messages, and memory to
   a fresh workspace by a new name and records `fork_lineage`
   (`source_workspace_id/name`). `forkWorkspaceStorage`
   (`core/src/identity/fork.ts:417`) does the copy; `deliverCloudFork`

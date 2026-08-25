@@ -31,7 +31,7 @@ an export archive, land where you point them and are the one exception.
 | `tokenExpiresAt` | ISO date | When that token expires. The CLI refuses it after this and asks you to re-auth. |
 | `user` | `{id, email, displayName?}` | Who the token belongs to. `kinu whoami` prints it. |
 
-`KINU_TOKEN` overrides `accessToken` for CI. In CI, use a scoped token from
+`KINU_TOKEN` overrides `accessToken` for CI; use a scoped token from
 `kinu tokens create`.
 
 ## Workspaces

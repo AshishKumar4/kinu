@@ -62,8 +62,8 @@ live code still holds the property — say what you searched.
 
 **A verification claim must match what was exercised.** Beyond the `node_modules` trap below: a
 suite run in a shared checkout proves nothing about your branch (green may be someone else's
-in-flight work, red usually is), a number recalled is not a number measured — a platform limit was
-once asserted here against a value that had not existed for ten months — and a subagent's summary
+in-flight work, red usually is), a number recalled is not a number measured (a platform limit was
+once asserted here against a value that had not existed for ten months), and a subagent's summary
 is a claim to check, not evidence. Say which tree, which command, and which revision.
 
 The anti-slop plugin is **vendored**, not a dependency: upstream
@@ -137,7 +137,7 @@ other ref reaches. No test or gate fires when a tag disappears.
 - `GET /api/health` reports `{version, sha, builtAt}` for the deployed build, read back out of the asset bundle. Check it after any deploy or rollback; `ok: false` means the asset half did not land.
 - **The Worker's gzip bundle is the binding build budget, and it is measured, not assumed.** After a vite build, `bunx wrangler deploy --dry-run` in `packages/cf-backend` prints the authoritative `Total Upload / gzip` figure the deploy API enforces — Vite's per-chunk `gzip:` line covers one chunk and understates the total by more than 2x. Three readings, same method: **6,254.64 KiB on 2026-08-04** (spike branch, Nimbus 0.1.x), **6,983.03 KiB on 2026-08-18** (`17318b3f`, Nimbus `worker@0.2.3`), and **7,091.83 KiB on 2026-08-19** (Nimbus `core@0.5.0`/`worker@0.3.0`, every Nimbus patch dropped and `@nimbus-sh/fabric@0.1.0` newly in the graph). A fourth reading: **7,138.34 KiB on 2026-08-20** (`a38d2b73`, pins unchanged) — +46.5 KiB over its own-day baseline of 7,091.83, attributed by measuring both sides of one commit: the `@kinu.run` scope rename lengthens every specifier that survives into the bundle. One trap this section has already caught once: the dry-run only measures a FRESH build — `dist/` from an earlier build measures identically forever, and cf-backend has no `build` script, so the build step is `bunx vite build` (with `CLOUDFLARE_ENV` for staging), never `bun run build`. Against the paid **10 MB** gzip cap that is roughly **69% consumed, ~3 MB free**; raw upload 27,471 KiB against the 64 MB pre-compression cap is not close. The third reading is what makes the second interpretable: the 0.2.x→0.3.x major bump plus a whole new package cost **+109 KiB**, so the earlier **+728 KiB** was overwhelmingly main's own growth rather than the Nimbus pin, which is the split that reading could not perform. Most of the floor is structural: `server.ts:85-95` re-exports `NimbusSession` plus eight sibling Nimbus entrypoint classes, and an exported entrypoint cannot be tree-shaken, so the Worker pays for Nimbus's whole session machinery whether or not a request touches it. Re-measure on both sides of anything that adds a dependency, a DO class, or top-level work. A Worker over the cap fails validation at upload — the same shape of failure as the assetless deploy above, where the site looks fine
   A fifth fresh-build reading is **7,259.24 KiB on 2026-08-24** (`feat/profiles-tui`, after final review). The raw upload is **27,965.43 KiB**. The ControlPlaneDO, three Analytics Engine datasets, feedback flow, profile routing, and UI changes add **120.90 KiB gzip** over the 2026-08-20 reading. The bundle uses **70.9%** of the paid 10 MB cap.
-- Startup time is **not** the constraint: **185–252 ms, measured 2026-08-04** against Cloudflare's startup limit of **1 second**, about a fifth of it. The limit was raised from 400 ms on 2025-10-10, so **do not cite 400 ms**. The spike write-up that compared against the old 400 ms limit is deliberately out of this repository — it went with the other internal design records — so the two bullets here are the evidence for both budgets, each carrying its own date. Re-measure rather than re-deriving either figure from memory
+- Startup time is **not** the constraint: **185–252 ms, measured 2026-08-04** against Cloudflare's startup limit of **1 second**, about a fifth of it. The limit was raised from 400 ms on 2025-10-10, so **do not cite 400 ms**. The spike write-up that compared against the old 400 ms limit is deliberately out of this repository (it went with the other internal design records), so the two bullets here are the evidence for both budgets, each carrying its own date. Re-measure rather than re-deriving either figure from memory
 
 ## Commit Messages
 
@@ -153,13 +153,14 @@ other ref reaches. No test or gate fires when a tag disappears.
 
 ## The Requests Ledger
 
-[docs/REQUESTS-LEDGER.md](docs/REQUESTS-LEDGER.md) holds every request made in
+`docs/research/REQUESTS-LEDGER.md` holds every request made in
 conversation, with the state last verified and the command that verifies it. A
 row is DONE only when its command passes. A row with no verifying command is
 UNVERIFIED and counts as open. It exists because an audit found four requests
 that were designed, discussed, built and never wired, and memory was the
 tracking mechanism. Read it before claiming a request is closed, and add a row
-when a new one arrives.
+when a new one arrives. The ledger was moved off the public tree into
+gitignored, machine-local `docs/research/`.
 
 ## Working Style
 

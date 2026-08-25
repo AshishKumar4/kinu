@@ -5,7 +5,7 @@ containers, and search code. Hosted language runtimes are separate artifacts in
 `NIMBUS_RUNTIME_CACHE`; this repository does not yet include a reproducible
 catalog seed command for a fresh account.
 
-This document covers the path from an empty account to your own instance.
+This is the path from an empty account to your own instance.
 [docs/DEPLOYMENT.md](DEPLOYMENT.md) is the reference.
 
 ## One click is step zero
@@ -16,32 +16,31 @@ That flow forks the repository into your GitHub account and starts a Workers
 Build from the fork. That is all it can do, and it has not been rehearsed
 against a fresh account. It cannot:
 
-- put your account on the **Workers Paid** plan. SQLite Durable Objects,
+- put your account on the Workers Paid plan. SQLite Durable Objects,
   Containers and Worker Loaders are plan-gated.
-- hold a **zone**, or create the proxied DNS records that previews and a
-  staging route need. wrangler has no DNS command at all.
-- create the **KV namespaces**. KV titles are not unique, so provisioning
-  refuses to create them, and their ids are pasted into
+- hold a zone, or create the proxied DNS records that previews and a staging
+  route need. wrangler has no DNS command at all.
+- create the KV namespaces. KV titles are not unique, so provisioning refuses
+  to create them, and their ids are pasted into
   `packages/cf-backend/wrangler.jsonc` by hand.
-- create an **AI Gateway**. No wrangler command can; it is made in the
-  dashboard.
-- seed the **Nimbus runtime catalog**. Creating its R2 bucket does not upload
+- create an AI Gateway. No wrangler command can; you make one in the dashboard.
+- seed the Nimbus runtime catalog. Creating its R2 bucket does not upload
   `catalog/v1.json`, manifests, or runtime blobs.
-- mint the **root secret**, `CREDENTIAL_ENCRYPTION_KEY`. A key the program
-  invents and never shows anyone is a key nobody can restore from, so it is a
-  prompt at a terminal, displayed exactly once.
-- register the **OAuth applications** sign-in needs. Those are created at
-  Google, GitHub and Cloudflare, on their websites.
+- mint the root secret, `CREDENTIAL_ENCRYPTION_KEY`. A key the program invents
+  and never shows anyone is a key nobody can restore from, so it is a prompt at
+  a terminal, displayed exactly once.
+- register the OAuth applications sign-in needs. Those are created at Google,
+  GitHub and Cloudflare, on their websites.
 
-So treat the button as a fork with intent. The supported path is the three
-steps below, run from a checkout of that fork.
+Treat the button as a fork with intent. The supported path is the three steps
+below, run from a checkout of that fork.
 
 ## Step one: bring the account
 
 Prerequisites nothing here can create for you:
 
-- a Cloudflare account on the **Workers Paid** plan;
-- a **zone** for the app hostname, active on that account;
+- a Cloudflare account on the Workers Paid plan;
+- a zone for the app hostname, active on that account;
 - a wrangler login (`npx wrangler login`) with Workers, KV, R2, Vectorize,
   Containers and Email scopes.
 
@@ -69,7 +68,7 @@ bun run infra:provision      # the secrets; `wrangler secret put` needs the Work
 Provisioning runs twice because `wrangler secret put` refuses on a Worker that
 does not exist yet. The first run says so; the second creates nothing the first
 created. `bun run deploy` runs the repository's 54 required gates before it
-uploads anything. A failed gate exits before Wrangler runs.
+uploads anything; a failed gate exits before Wrangler runs.
 
 The fresh deployment does not have hosted Python, Bash, Ruby, or Clang until an
 operator supplies a Nimbus runtime catalog. The base workspace and the
@@ -82,8 +81,8 @@ fresh self-host until a seed command and content check exist.
 bun run gate:infra
 ```
 
-The gate checks that every resource `wrangler.jsonc` declares exists **and
-that the deployed Worker is bound to it**, one verdict per resource, and exits
+The gate checks that every resource `wrangler.jsonc` declares exists and that
+the deployed Worker is bound to it, one verdict per resource, and exits
 non-zero on any failure. What no CLI can observe is declared with its manual
 check instead of skipped; `scripts/infra-verify.ts` carries the reasoning.
 
@@ -105,8 +104,8 @@ scopes and grant types are in [docs/DEPLOYMENT.md](DEPLOYMENT.md#oauth-setup).
 
 ## What works when
 
-Each surface is off until its owner step is done, and absence is treated as
-"off", not as an error.
+Each surface stays off until its owner step is done, and absence means "off",
+not an error.
 
 | Surface | Works after |
 | --- | --- |

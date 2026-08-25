@@ -131,7 +131,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   was never recorded is skipped rather than attributed to an unrelated turn.
 
 - The step clock gained a knowledge channel: when a tool keeps failing (the
-  same streak the mechanical steer fires on) and a **changed** call of that
+  same streak the mechanical steer fires on) and a changed call of that
   tool then runs clean, the runtime records the pairing as a durable
   execution-recovery finding and injects the newest five into every later
   step's dynamic-context block, so what a long autonomous episode proves
@@ -158,8 +158,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   return finally says so.
 - `kinu create` warns when the new workspace's model has no connected
   provider, instead of leaving the first turn to discover it.
-- Headless turns can now earn a POSITIVE evolution signal, not just a negative
-  one. A `kinu exec` turn that acted on the world and finished clean is
+- Headless turns can now earn a positive evolution signal; previously only a
+  negative one was recorded. A `kinu exec` turn that acted on the world and finished clean is
   recorded as an execution-grounded success (`source: execution` in the outcome
   ledger); one that errored is recorded as an execution-grounded failure. User
   feedback is unchanged and still first-class, and the two are kept distinguishable
@@ -538,7 +538,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 The first versioned release. Kinu sat on a frozen `0.1.0` for four months
 while the system was built out, so the entries below are reconstructed from git
-history and grouped by **arc** rather than per commit, because there is no earlier
+history and grouped by arc rather than per commit, because there is no earlier
 release to diff against. Versioning discipline (see the release checklist at the
 bottom of this file) starts here.
 
