@@ -186,16 +186,16 @@ the agent does not rewrite its own identity.
 
 ## The workspace filesystem
 
-`SqliteFS`, the hand-rolled `vfs_files` adapter this section used to describe,
-was deleted on 2026-08-12; `core/src/checkpoints/types.ts:29` records the date.
-Both backends now run Nimbus's workspace filesystem over their own SQLite.
+Both backends run Nimbus's workspace filesystem over their own SQLite. The
+class is `SqliteVFS`, from `@nimbus-sh/core`. Nothing in this repository
+implements a filesystem.
 
 - **Hosted.** The workspace lives in its `NIMBUS_SESSION` Durable Object,
   reached through the remote session adapter in `core/src/execution/nimbus.ts`.
   The orchestrator DO creates none of the filesystem tables.
 - **Local.** `createWorkspace` (`core/src/vfs/nimbus-workspace.ts`, imported as
   `createWorkspaceFilesystem`) builds the same component over `bun:sqlite` in
-  the session's own database (`cli-backend/src/runtime.ts:370-380`).
+  the session's own database (`cli-backend/src/runtime.ts:493`).
 
 Nimbus owns those bytes and their tables. `core/src/conformance/manifest.ts`
 declares the exact set. That set is what `NimbusWorkspace.destroy()` drops, so
@@ -206,8 +206,7 @@ an addition to it means the dependency changed its storage contract. The set is
 `kinu_workspace_generation`. All ten are declared present on the CLI root and
 absent on both hosted roots.
 
-Three properties follow from that layout, and none of them was true of the old
-adapter:
+Three properties follow from that layout:
 
 - **Content addressing.** `inodes(path, content_id)` points at
   `file_chunks(content_id, chunk_id, data)`, with a `content_lifecycle` GC
@@ -217,8 +216,10 @@ adapter:
   resolve at `WORKSPACE_ROOT` (`/home/user`). Ownership is uid/gid/mode on real
   inodes, which is how a swarm node's `/home/<node>` and its private `/tmp` are
   a boundary rather than a convention (`core/src/vfs/agent-home.ts`).
-- **Chunked blobs.** `@nimbus-sh/core`'s `sqlite-vfs.js` splits file content at
-  `CHUNK_SIZE = 1_800_000` bytes per `file_chunks` row.
+- **Chunked blobs.** `SqliteVFS` splits file content into `file_chunks` rows of
+  `CHUNK_SIZE` bytes, 65,536 as `@nimbus-sh/platform` declares it. Merge-back
+  costs a write batch against the same constant, so this repository imports it
+  rather than restating the number (`core/src/strategy/merge-back.ts:55`).
 
 `packages/agent-utils` supplies the `VFS` interface both planes satisfy
 (`agent-utils/src/vfs/types.ts`) and nothing else on this axis. It has no
@@ -273,6 +274,7 @@ same `initWorkspaceSchema()` pass:
 | Branching heads | `head_runs`, `head_journal`, `head_evidence`, `head_steps`, `head_merge_results` | `core/src/heads/schema.ts` |
 | MCTS | `mcts_search_runs` (durable checkpoints), `alternate_takes` | `core/src/mcts/search-store.ts`, `takes.ts` |
 | Swarm leaderboard | `exploration_records` (cumulative across runs) | `core/src/strategy/records.ts` |
+| Swarm node content | `swarm_node_records` (what a swarm re-entry reads) | `core/src/strategy/swarm-resume.ts` |
 | Scaffold shadow mode | `scaffold_evaluations`, `scaffold_trial_queue` | `core/src/scaffold/shadow.ts` |
 | Facts | `agent_facts` | `core/src/memory/facts.ts` |
 | Conversation search | `messages_fts` (FTS5 + sync triggers) | `core/src/memory/conversation-search.ts` |
@@ -286,6 +288,7 @@ same `initWorkspaceSchema()` pass:
 | Imported experience | `imported_experience` (staged until a turn outcome settles it) | `core/src/experience/imports.ts` |
 | Compaction | `compaction_state`, `compaction_archive` | `core/src/identity/workspace-schema.ts` (the DDL lives in core because `@kinu.run/compaction` sits above it in the dependency graph) |
 | Typed config | `agent_config` | `core/src/config/store.ts` |
+| Prompt sections | `prompt_section_versions`, `prompt_section_evaluations` | `core/src/prompting/section-store.ts` |
 
 Five more groups are created outside that pass, by the root that owns each:
 
@@ -294,17 +297,18 @@ Five more groups are created outside that pass, by the root that owns each:
 | Subordinates | `workspace_subordinates` (every actor that can hire), `subordinate_identity` (child DO) | `core/src/subordinates/support.ts` |
 | Workspace-diff baseline | `vfs_baseline` | `core/src/read-models/workspace-diff.ts`, called by each root's schema pass |
 | Orchestrator-local | `turn_feedback`, `turn_craft_usage` | `cf-backend/src/orchestrator.ts`, inline |
-| Email + webhooks | (no boot DDL — the outbound mail rows are the shared outbox's `outbox_email`) | `cf-backend/src/email/outbox.ts` |
+| Email + webhooks | no boot DDL; the outbound mail rows are the shared outbox's `outbox_email` | `cf-backend/src/email/outbox.ts` |
 | Ingress gates | `webhook_rate_windows`, `webhook_secrets` (both backends) | `core/src/events/ingress/rate-limit.ts`, `secrets.ts` |
 
-`session_window` and `mission_budget` are created lazily, by the evolution
-engine's constructor and by the mission governor's first write.
+Three tables are created lazily. `session_window` and `turn_review_queue` come
+from the evolution engine's constructor, and `mission_budget` from the mission
+governor's first write.
 
-The two durable retry outboxes — `outbox_peer` (the peer transport) and
-`outbox_email` (outbound mail) — are created lazily too, by
-`@nimbus-sh/fabric` on the first queue or drain. Their schema belongs to the
-library, not to this repository: `core/src/events/outbox.ts` is the port that
-supplies the SQL handle and the alarm.
+The two durable retry outboxes are created lazily too, by `@nimbus-sh/fabric`
+on the first queue or drain: `outbox_peer` for the peer transport and
+`outbox_email` for outbound mail. Their schema belongs to the library, not to
+this repository. `core/src/events/outbox.ts` is the port that supplies the SQL
+handle and the alarm.
 
 `core/src/conformance/manifest.ts` declares every one of these per root
 (`cf-orchestrator`, `cf-subordinate`, `cli`), as wired or as deliberately absent

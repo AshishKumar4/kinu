@@ -21,8 +21,10 @@ retirement. They share no dispatch. When the caller is a model, read
 
 Code reaches this engine programmatically:
 
-- `createMCTSStrategy` in `strategy/mcts.ts` adapts the engine for programmatic
-  and evaluation callers. There is no production strategy registry.
+- `createMCTSStrategy` in `strategy/mcts.ts` adapts the engine to a strategy
+  object. Its only callers are the eval and integration suites, so there is no
+  production strategy registry and `createStrategyRegistry` has no production
+  reader either.
 - The evaluation A/B runner takes strategy objects directly (`runEvalPair` in
   `core/src/eval/runner.ts`).
 - The lifetime evolution cycle calls `runMCTS` directly (`evolution/engine.ts`,
@@ -60,8 +62,8 @@ programming setup is itself not ReAct-shaped. Verbatim, §5.2:
 > directly use the percentage of passed tests as the backpropagated reward.
 
 That is what runs here: one action is one complete candidate solution, the
-environment is `rt.executor` plus a judge-generated assert suite
-(`generateAssertions`), simulation is skipped, and the execution verdict picks
+environment is `rt.executor` plus a judge-generated check suite
+(`generateAssertionSuite`), simulation is skipped, and the execution verdict picks
 the backpropagated reward's band. Selection, expansion, evaluation,
 backpropagation and reflection are the §4.2 operations.
 
@@ -122,14 +124,14 @@ Where:
 - `parent_visits` = number of times the parent was visited
 - `node_visits` = number of times this node was visited
 
-Implemented in SQL (`mcts/uct.ts`). Selection is a **global argmax over every open node** rather than a root-down descent, one self-join to look up parent visits and one `ORDER BY … LIMIT 1`:
+Implemented in SQL (`mcts/uct.ts`). Selection is an **argmax over every open node in this search's own tree** rather than a root-down descent, one self-join to look up parent visits and one `ORDER BY … LIMIT 1`:
 ```sql
 SELECT
   s.*,
   COALESCE(p.visits, max(2, s.visits)) AS parent_visits
 FROM search_nodes s
 LEFT JOIN search_nodes p ON s.parent_id = p.id
-WHERE s.status = 'open' AND s.depth < :maxDepth
+WHERE s.root_id = :rootId AND s.status = 'open' AND s.depth < :maxDepth
 ORDER BY (
   s.value + W * sqrt(
     (log(max(2.0, COALESCE(p.visits, max(2, s.visits)))) / log(exp(1.0))) /
@@ -139,7 +141,7 @@ ORDER BY (
 LIMIT 1
 ```
 
-Three things in that query are deliberate:
+Four things in that query are deliberate:
 
 - SQLite's `log()` is log₁₀, so natural log is computed as `log(x) / log(exp(1.0))`.
 - **Root re-widening.** The root has no parent, so a literal `ln(N(parent))`
@@ -152,18 +154,28 @@ Three things in that query are deliberate:
   expands children at `d+1`, so only nodes below `maxDepth` can still produce
   in-bounds children; selection skips the capped ones and keeps spending budget
   on the shallower frontier instead of dying when the argmax happens to be deep.
+- **The tree scope is a `WHERE` clause too.** `root_id` confines the argmax to
+  this search's own frontier. Without it, selection ranged over every open node in
+  the workspace, so a tree left open by an interrupted or failed search captured
+  the next task's budget.
 
 Defaults (`core/src/config.ts`): `budget: 5`, `branches: 3`, `maxDepth: 5`,
 `explorationWeight: Math.SQRT2`, `pruneThreshold: 0.25`,
 `minAcceptableScore: 0.3`, `minVisitsForPrune: 2`, `reflectionThreshold: 0.35`,
-`judgeSamples: 3`, `maxEvalLLMCalls: 4`, `maxCostUSD: 10`. Lifetime evolution
-runs a smaller search (budget 2, branches 2), and an operator can override
-iterations, branches, judge samples, eval-call ceiling, and the exploration
-weight per workspace through `agent_config`.
+`judgeSamples: 3`, `maxEvalLLMCalls: 4`, `maxCostUSD: 10`. Lifetime evolution runs
+a smaller search (budget 2, branches 2).
 
-The depth cap is NOT one of them. A form that offers a depth cap beside an
-iteration budget offers two spellings of one limit, so depth is owned by the
-default above and, for a swarm, by the preset the call resolved.
+Six of those are overridable per workspace. `MctsOverrides`
+(`core/src/config/store.ts`) carries the exploration weight, the iteration budget,
+the depth cap, the branch count, the judge ensemble size and the eval-call
+ceiling, all held in `agent_config`. Lifetime evolution reads five of them and
+keeps its own iteration cadence (`evolution/engine.ts`).
+
+The operator surface is narrower on purpose. `getMctsConfig` and `setMctsConfig`
+(`read-models/config-plane.ts`) carry the exploration constant, the iteration
+budget and the branch budget, and nothing else. A form that offered a depth cap
+beside an iteration budget would offer two spellings of one limit, so that surface
+does not, and a swarm's depth comes from the preset the call resolved.
 
 ## Scoring: execution picks the band, and inside the fail band it positions too
 
@@ -269,21 +281,21 @@ Reward is clamped to `[0, 1]` before backpropagation.
 
 **Running mean formula**: `new_value = (old_value × visits + reward) / (visits + 1)`
 
-## Branch Isolation
+## Branch isolation
 
 Each MCTS branch runs in an isolated environment:
 
 | Platform | Mechanism | Isolation |
 |----------|-----------|-----------|
-| CF Workers | `agent.subAgent(ExplorationAgent, branchId)`, Facets | Separate DO with own SQLite. Proven in Lean: `StorageIsolated` invariant. |
+| CF Workers | `agent.subAgent(ExplorationAgent, branchId)`, Facets | Separate DO with own SQLite. Proven in Lean: `MCTS/StorageIsolation.lean — transition_preserves_isolation`. |
 | CF Workers (fallback) | Inline LLM calls | No storage access at all. Captures only LLM config, never agent reference. |
-| CLI | `child_process.fork('branch-worker.ts')` | Separate OS process with its own SQLite file under `~/.kinu/<agent>/branches/` |
+| CLI | `child_process.fork('branch-worker.ts')` | Separate OS process with its own SQLite file in a `branches/` directory beside the workspace database (`createBranchSpawner`) |
 
 Branches only **explore**; scoring is engine-level, so both backends score
 through the same `evaluation.ts` and the reward is execution-grounded either
 way. `ExplorationAgent`'s MCTS-mode `@callable()` methods are:
 
-- `explore(history, craftedTools, languages, mode, siblingAngles)`: propose one approach under the parent's trusted work mode
+- `explore(priorHistory, craftedTools, languages, mode, siblings)`: propose one approach under the parent's trusted work mode
 - `generateReflection(task, outcome?)`: explain what went wrong (for pruned branches), given the environment's verdict on the attempt
 
 plus `setOwner` / `setSharedParent` for bootstrap. `mcts/diversity.ts` hands each
@@ -380,6 +392,7 @@ it did not earn.
 |--------|------|-------------|
 | `id` | TEXT PK | Node ID (nanoid) |
 | `parent_id` | TEXT | Parent node ID (null for root) |
+| `root_id` | TEXT | The search this node belongs to; selection is scoped by it |
 | `task` | TEXT | The task being explored |
 | `action` | TEXT | The approach taken at this node |
 | `observation` | TEXT | Result of the exploration |
@@ -391,12 +404,13 @@ it did not earn.
 | `code_language` | TEXT | Executor language for `code_used`; null when no runnable code was offered |
 | `msg_id` | TEXT | Session message ID for tree navigation |
 | `branch_agent_key` | TEXT | Maps to the Facet agent key |
+| `evaluation_json` | TEXT | Bounded per-branch evaluation facts as JSON; null for a node that was never evaluated |
 | `created_at` | INTEGER | Epoch milliseconds |
 
-## Formal Properties (Lean 4)
+## Formal properties (Lean 4)
 
-Eleven of the corpus's 330 published theorems live in `lean/Proteus/MCTS/`
-(counted 2026-08-19). The backpropagation model is exact scaled-integer
+Eleven of the corpus's 405 published theorems live in `lean/Proteus/MCTS/`
+(counted 2026-08-25). The backpropagation model is exact scaled-integer
 arithmetic, so these are statements about that model. SQLite backpropagates in
 IEEE-754 `REAL`. See [FORMAL-SPEC.md](./FORMAL-SPEC.md) for the claim taxonomy and
 what each status does and does not assert.

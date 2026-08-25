@@ -1,8 +1,11 @@
-# Mission Inbox — Email Ingress & Outbound
+# Mission Inbox: email ingress and outbound
 
 Kinu includes email ingress and threaded replies. The channel works only after
 the domain has Email Routing, a verified destination, and a Worker rule.
-Production has not yet passed that live routing check. After setup, mail to
+Production has not passed that live check: verified 2026-08-20, the `kinu.run`
+zone holds zero DNS records and neither Email Routing nor Email Sending is
+onboarded, even though the binding, the var and the `email()` handler are all
+present and correct. After setup, mail to
 `<workspace-name>@EMAIL_DOMAIN` wakes the workspace, and its answer returns on
 the same thread. The same outbound path carries changelog, job, and monitoring
 notifications.

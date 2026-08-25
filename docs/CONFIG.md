@@ -1,7 +1,7 @@
 # Configuration: `~/.kinu/config.json` and the environment
 
 Every CLI setting lives in one JSON file. `kinu setup`, `kinu auth`,
-`kinu providers connect` and `kinu create` write it for you; this page is
+`kinu provider connect` and `kinu create` write it for you; this page is
 for when you want to read or edit it yourself. The authoritative shape is
 `KinuConfig` in `packages/cli/src/config.ts`.
 
@@ -44,6 +44,8 @@ an export archive, land where you point them and are the one exception.
 | `agents.<name>.cloudName` / `localName` | string | Its name on that side, when it differs from the key. |
 | `agents.<name>.displayName` | string | The human name shown in the web app. |
 | `agents.<name>.alias` | string | The alias shim created for it, if any. |
+| `agents.<name>.cwd` | string | For a local workspace placed in a project: the directory its file and shell plane binds to. |
+| `agents.<name>.workspaceId` / `identityId` | string | The virtual workspace that groups it with its peers, and its own identity row. |
 | `agents.<name>.createdAt` / `updatedAt` | ISO date | Bookkeeping. |
 | `aliases` | map | `alias → workspace name`. `kinu alias` / `unalias` maintain it, and each alias also has a shim in `bin/`. |
 
@@ -86,7 +88,7 @@ account session the local store is the only source.
 | `providers.openai.apiKey` | OpenAI API key. |
 | `providers.anthropic.apiKey` | Anthropic API key. |
 | `providers.openrouter.apiKey` | OpenRouter API key. |
-| `providers.codex` | The ChatGPT device-flow tokens (`accessToken`, `refreshToken`, `expiresAt`, `metadata`), written by `kinu providers connect codex`. |
+| `providers.codex` | The ChatGPT device-flow tokens (`accessToken`, `refreshToken`, `expiresAt`, `metadata`), written by `kinu provider connect codex`. |
 | `providers.openaiCompat.<name>` | An OpenAI-compatible endpoint: `{baseURL, apiKey?, headers?, extraHeaders?}`. |
 
 The Claude subscription provider stores nothing here. Kinu drives Anthropic's
@@ -115,6 +117,8 @@ by local workspaces. Cloud workspaces get MCP servers from your account instead.
 | `updateLatestSeen` | string | — | The newest served version the notice has seen. |
 | `deviceConnectPromptDismissed` | boolean | `false` | "Don't ask again" for the chat device-connect prompt. |
 | `checkpointKeep` | number | `50` | Shadow-git file checkpoints kept per working directory. `/undo` restores from them. |
+| `providerRevision` | number | `0` | How many times this machine's provider configuration has changed. It exists to cross a process boundary: `kinu provider connect` runs in a different process from a resident daemon or a live chat session, so nothing there can raise a signal. Only inequality is read, so there is no clock and nothing expires. |
+| `localProfile` | envelope | — | The signed-out profile authority: one local envelope carrying `authority`, `version`, `digest` and the catalog. It is canonical when no account session governs this machine, and it never holds account data. |
 
 ## Environment variables
 

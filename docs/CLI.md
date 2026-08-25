@@ -384,7 +384,6 @@ Show what the whole workspace spent, by producer and by mission.
 
 | Option | What it does |
 | --- | --- |
-| `--limit <n>` | Event rows read per row type (default 2000) |
 | `--json` | Print raw JSON |
 
 ### kinu memory <name> [query...]
@@ -495,7 +494,7 @@ Link this computer as the desktop execution daemon (the link renews itself while
 
 | Option | What it does |
 | --- | --- |
-| `--label <name>` | Device label |
+| `--label <name>` | Name for this device (default: user@hostname); skips the name prompt |
 
 ### kinu desktop [action]
 
@@ -503,7 +502,7 @@ Connect or inspect the local desktop execution daemon.
 
 | Option | What it does |
 | --- | --- |
-| `--label <name>` | Device label |
+| `--label <name>` | Name for this device (default: user@hostname); skips the name prompt |
 
 ### kinu daemon [action] [workspace]
 

@@ -1,4 +1,4 @@
-# Context Budget — the reference-plus-digest invariant, enforced
+# Context Budget: the reference-plus-digest invariant, enforced
 
 One rule governs every payload that can reach the model's token stream.
 
@@ -22,7 +22,7 @@ whole is data loss.
 | Text attachments over 8 KiB | reference text part | same | same |
 | Documents the model *can* accept, over 1 MiB | reference text part | same | same |
 | Pasted user text over 8 KiB | 2,000-char head + address | same | same |
-| Subordinate reports / peer replies | 600-char brief | `.kinu/event-content/<hash>.txt` | `core/src/events/hub/content-spill.ts` |
+| Subordinate reports / peer replies | `EVENT_BRIEF_MAX_CHARS` brief, 600 chars | `.kinu/event-content/<hash>.txt` | `core/src/events/hub/content-spill.ts` |
 | Compacted history ranges | checkpoint summary | `.kinu/compaction/<session>/<range>.md` | `@kinu.run/compaction` `stores.ts` |
 
 `SPILL_DIRS` in `core/src/context-budget.ts` is the single source of truth for
@@ -110,9 +110,10 @@ across forced compaction boundaries. Neither arm is measured yet.
 |---|---|---|
 | Ingress unification (spill every message-borne bulk producer) | correctness-motivated, so it ships on tests; counters retained | n/a |
 | Turn-cumulative egress budget | M2(a) pass-rate delta CI excludes 0 in favour, **and** the 159-task defect bench + M2(b) show no regression (CI excludes −5pp) | any regression on the existing bench |
-| The 120,000 / 8,000 constants | tuned on M2, not on intuition | — |
+| The 120,000 / 8,000 constants | tuned on M2, not on intuition | n/a |
 
-The bench is the seeded-defect corpus in `docs/BENCH.md`; its 159 patches under
-`tests/bench/patches/` were counted on 2026-08-19. The constants above are
+The bench is the seeded-defect corpus in `docs/BENCH.md`. Its patches under
+`tests/bench/patches/` numbered 159 when counted on 2026-08-19 and 157 on
+2026-08-24, after drifted fixtures were retired. The constants above are
 pre-registrations rather than derivations, and they encode "meaningful and
 detectable at bench power". `docs/BENCH.md`'s MDE math governs final power.

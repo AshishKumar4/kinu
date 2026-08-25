@@ -8,7 +8,8 @@ describes lives in `packages/cf-backend/src/runtime.ts` and
 
 The tree carries no Nimbus source and no Nimbus patch. Every patch was
 upstreamed to `AshishKumar4/Nimbus` and published. The packages come from the
-registry at exact pinned versions:
+registry at exact pinned versions, checked against the package manifests and
+`bun.lock` on 2026-08-24:
 
 | Package | Version | Declared in |
 |---|---|---|
@@ -18,15 +19,21 @@ registry at exact pinned versions:
 | `@nimbus-sh/runtime-bash` | 5.2.37 | `packages/cli-backend` |
 | `@nimbus-sh/runtime-cpython` | 3.13.14 | `packages/cli-backend` |
 
-`packages/core` also declares `@nimbus-sh/fabric` at 0.2.0, and imports it
-directly: `events/outbox.ts` builds its outbox on `@nimbus-sh/fabric/outbox.js`.
+`packages/core` is the only workspace package that declares
+`@nimbus-sh/fabric`, at 0.2.0 (`packages/core/package.json:15`), and it imports
+it directly: `core/src/events/outbox.ts:30` builds its outbox on
+`@nimbus-sh/fabric/outbox.js`. `@nimbus-sh/worker` also depends on fabric, so
+the resolved tree holds it either way.
 
-`patches/` holds one patch file, `@plannotator%2Fui@0.30.0.patch`, and it is
-not a Nimbus patch. `bun run gate:patch-parity` (`scripts/patch-parity.ts`)
-reads `patchedDependencies` out of the root `package.json`, so it now governs
-that single `@plannotator/ui` patch. It governs nothing Nimbus-shaped. The
-gate's own header still narrates the `@nimbus-sh/core` patch incident it was
-written for, because that incident is why the gate exists.
+`patches/` holds two patch files and neither is a Nimbus patch:
+`@plannotator%2Fui@0.30.0.patch` and `@cloudflare%2Fsandbox@0.12.8.patch`. The
+second makes the SDK's handler-map assignments MERGE, so configuring a bucket
+mount cannot unbind an outbound handler the host installed
+(`KinuSandbox.outboundHandlers`, `cf-backend/src/kinu-sandbox.ts`). `bun run gate:patch-parity`
+(`scripts/patch-parity.ts`) reads `patchedDependencies` out of the root
+`package.json` (`package.json:129-132`), so it governs both. It governs nothing
+Nimbus-shaped. The gate's own header still narrates the `@nimbus-sh/core` patch
+incident it was written for, because that incident is why the gate exists.
 
 ## Ownership
 
@@ -51,7 +58,7 @@ through any one of them is immediately visible through the others.
 
 ## Runtime composition
 
-`createCFRuntime()` (`runtime.ts:312`) adapts the Nimbus SDK handle into the
+`createCFRuntime()` (`cf-backend/src/runtime.ts`) adapts the Nimbus SDK handle into the
 Core interfaces:
 
 | Kinu surface | Nimbus authority |
@@ -63,8 +70,8 @@ Core interfaces:
 | live previews | `box.ports`, wrapped by the Kinu capability host |
 | runtime install and list | `box.runtimes` when `NIMBUS_RUNTIME_CACHE` is bound |
 
-The Cloudflare backend registers the provider only as `workspace`
-(`runtime.ts:433`). There is no product `nimbus` row and no `nimbus.*`
+The Cloudflare backend registers the provider only as `workspace`, through
+`createNimbusWorkspaceExecutor`. There is no product `nimbus` row and no `nimbus.*`
 namespace. The optional `sandbox` and `laptop` providers stay different machines
 with their own filesystems.
 
@@ -76,11 +83,11 @@ with their own filesystems.
 The orchestrator, its durable subordinates, and exploration heads share the
 workspace's files, processes, and ports. They do not share mutable shell cwd or
 exported environment state. `ActorRuntimeIdentity.shellId`
-(`runtime.ts:131-140`) supplies a stable actor-specific key on every exec,
+(`cf-backend/src/runtime.ts`) supplies a stable actor-specific key on every exec,
 process, and run-code call. It is `agent:<name>` for the orchestrator
-(`cf-backend/src/actor-agent.ts:407`), `subordinate:<name>` for a durable
-subordinate (`cf-backend/src/subordinate-agent.ts:148`), and `<scope>:<name>`
-for an exploration facet (`cf-backend/src/exploration.ts:187`). The published
+(`cf-backend/src/actor-agent.ts:491`), `subordinate:<name>` for a durable
+subordinate (`cf-backend/src/subordinate-agent.ts:176`), and `<scope>:<name>`
+for an exploration facet (`cf-backend/src/exploration.ts:282`). The published
 SDK accepts that key on every exec option (`NimbusExecOptions.shellId`) and
 keeps each keyed shell's state separately. The filesystem and the process
 registry stay shared.
@@ -133,9 +140,13 @@ separate site. A Worker-only flag cannot deliver it honestly.
   (`user/workspace-fork.ts`).
 - Export streams Nimbus files into the workspace archive. A SQL-only archive
   does not count as complete.
-- Deletion destroys the optional Sandbox first, then the authoritative Nimbus
-  session, then the actor and owner registry. A failure before Nimbus
-  destruction preserves the authoritative workspace.
+- Deletion tears the optional container down first, then destroys the
+  authoritative Nimbus session, then the actor and owner registry
+  (`destroyAgent`, `cf-backend/src/orchestrator.ts:2574-2596`). The container
+  half is two calls in order: `discardState()` drops its durable bytes and the
+  record naming them, and `destroy()` follows, because once the container
+  object's storage is gone nothing knows which R2 objects were its. A failure
+  before Nimbus destruction preserves the authoritative workspace.
 - A same-name recreation never reconnects to an undeleted Nimbus session.
 
 These are fresh-state invariants. The code holds no migration path and no
@@ -152,5 +163,5 @@ Core, SDK, and Worker versions exactly, and `bun install --frozen-lockfile` in
 which versions ship.
 
 The generic Core Nimbus factory stays reusable by another backend, which is why
-`ExecutorKind` (`core/src/execution/types.ts:59`) can still represent `nimbus`.
+`ExecutorKind` (`core/src/execution/types.ts`) can still represent `nimbus`.
 That reusable type is not a second Cloudflare product environment.

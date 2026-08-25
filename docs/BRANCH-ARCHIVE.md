@@ -1,4 +1,4 @@
-# Branch Archive — what makes a branch safe to delete
+# Branch Archive: what makes a branch safe to delete
 
 Some unmerged branches hold file content that exists nowhere in `main`'s history.
 Deleting those branches is safe only because an `archive/*` tag pins the same
@@ -193,18 +193,21 @@ will not find it.
 
 | Blob | Tag that reaches it | Path inside the tag | Verdict |
 |---|---|---|---|
-| `127f460c` | `archive/latency-instrumentation` | `packages/cf-backend/src/orchestrator.ts` | Superseded, proven. The only source file in the set. Its commit added first-chunk latency instrumentation through `console.log`. `main`'s own `70307e10`, an ancestor of `main` 88 minutes later, landed the same feature through a trace helper that also broadcasts to the UI, plus three more trace points. The whole diff is 29 branch-only lines, every one a `console.log` timing call. The feature lives today at `cf-backend/src/actor-agent.ts:3210`, which calls `onFirstChunk()` at `core/src/orchestrator/turn-accumulator.ts:182`. Landing the branch version would also regress the anti-slop gate: it carries an empty `catch` and `(err as Error).message`. |
-| `4fa27d58` | `archive/stability-audit` | `docs/STABILITY-AUDIT.md` | Superseded snapshot. A real 18-finding forensic audit from 2026-04-24, and its findings landed. `main`'s source cites the audit's finding IDs by name: A1, A2, A3 and D5 in `cf-backend/src/hooks/use-kinu.ts` (`:564`, `:620`, `:768`, `:1174`), A1 and D2 in `cf-backend/src/pages/WorkspacePage.tsx`, D2 in `cf-backend/src/components/ErrorBoundary.tsx`, B4 in `cf-backend/src/orchestrator.ts:3030`, and B2/B3 in `core/src/execution/sandbox.ts:86`. The audit's own `file:line` citations are months stale, so landing it would ship a document whose every pointer is wrong. |
+| `127f460c` | `archive/latency-instrumentation` | `packages/cf-backend/src/orchestrator.ts` | Superseded, proven. The only source file in the set. Its commit added first-chunk latency instrumentation through `console.log`. `main`'s own `70307e10`, an ancestor of `main` 88 minutes later, landed the same feature through a trace helper that also broadcasts to the UI, plus three more trace points. The whole diff is 29 branch-only lines, every one a `console.log` timing call. The feature lives today at `cf-backend/src/actor-agent.ts:4188`, which calls `onFirstChunk()` at `core/src/orchestrator/turn-accumulator.ts:190`. Landing the branch version would also regress the anti-slop gate: it carries an empty `catch` and `(err as Error).message`. |
+| `4fa27d58` | `archive/stability-audit` | `docs/STABILITY-AUDIT.md` | Superseded snapshot. A real 18-finding forensic audit from 2026-04-24, and its findings landed. `main`'s source cites the audit's finding IDs by name: A1, A2, A3 and D5 in `cf-backend/src/hooks/use-kinu.ts` (`:635`, `:725`, `:926`, `:1339`), A1 and D2 in `cf-backend/src/pages/WorkspacePage.tsx`, D2 in `cf-backend/src/components/ErrorBoundary.tsx`, B4 in `cf-backend/src/orchestrator.ts:3073`, and B2/B3 in `core/src/execution/sandbox.ts:136`. The audit's own `file:line` citations are months stale, so landing it would ship a document whose every pointer is wrong. |
 | `6a7dec61` `859726b7` `174d731b` `f6f19ee2` | `archive/stability-audit` | `docs/REQUIREMENTS-AUDIT.md`, four revisions | Superseded session bookkeeping, and now contradictory. A per-conversation request tracker from 2026-04-24. Item 9 records Nimbus as deferred and item 11 asks to remove `workspace` from the user-facing executor list, which inverts the current architecture where `workspace` is the one canonical file and execution plane. It also cites `docs/EXECUTOR-V2.md`, deleted from the working tree; two commits in `main`'s history still touch that path, so that one file needs no tag to recover. The tracker cites pre-rewrite SHAs that are not `main` ancestors as well. Landing it would assert false current state. |
 
-The A4 finding is the one case where the code itself records the loss.
-`cf-backend/src/hooks/use-kinu.ts:634-643` ships a 25-second WebSocket
-heartbeat and says in the comment that the `STABILITY-AUDIT §A4` it used to cite
-is not in the working tree, that only the recovered text survives, and that the
-figure the recovered text asserts is uncited. `core/src/platform-catalog.ts:1940`
-carries the same provenance under `edge.websocket_idle_reap_ms`, labelled
-SPECULATIVE, and `scripts/platform-catalog.ts` fails any provenance string that
-points at the deleted file.
+The A4 finding is the one case where the code itself records the loss. The
+25-second WebSocket heartbeat it justified still ships, at
+`cf-backend/src/hooks/use-kinu.ts:832-845`, and that code no longer names A4.
+The account of the loss sits in `core/src/platform-catalog.ts:1979`, under
+`edge.websocket_idle_reap_ms`. That entry is labelled speculative, and its notes
+record the whole chain: the heartbeat cited a bare `STABILITY-AUDIT §A4`, the
+document is not in the working tree, only its recovered text survives, and the
+recovered text asserts a documented 100 s reap while citing no URL.
+`scripts/platform-catalog.ts:139` is what keeps that citation followable. It
+refuses a provenance string naming a repo path that is gone, and accepts the
+same path written `git <sha>:<path>`, because a pinned blob cannot drift.
 
 `archive/nimbus-measure` is the only tag holding a file worth keeping, its
 measurement write-up. That write-up is deliberately out of this repository.
@@ -214,7 +217,11 @@ startup range measured 2026-08-04 against Cloudflare's 1-second startup limit,
 and the 6,254.64 KiB gzip bundle reading of the same date that later readings
 are compared against. Both stand there on their own dates.
 
-The throwaway probe Worker beside it was left tag-only on purpose. None of
-`spike-nimbus-probe/`, `packages/cf-backend/src/nimbus-measure.ts` or
-`packages/cf-backend/scripts/merge-nimbus-assets.mjs` exists in the working
-tree. All three are in `archive/nimbus-measure`.
+The throwaway probe Worker beside it was left tag-only on purpose. Its three
+paths were deleted from the working tree, so read them out of the tag rather
+than looking for them in a checkout:
+
+```sh
+git ls-tree -r --name-only archive/nimbus-measure | grep -E \
+  'spike-nimbus-probe/|packages/cf-backend/src/nimbus-measure.ts|packages/cf-backend/scripts/merge-nimbus-assets.mjs'
+```

@@ -149,7 +149,7 @@ green or not.
 
 **`bun run gate:infra`** checks that every declared resource exists **and that
 the deployed Worker is bound to it**, and exits non-zero when it is not. It is
-the last of the 53 required gates `scripts/deploy.sh` runs, the only one that
+the last of the 54 required gates `scripts/deploy.sh` runs, the only one that
 talks to Cloudflare, and the only one that runs alone. It checks the environment
 being deployed: `KINU_DEPLOY_ENV` when `scripts/deploy.sh` sets it, an explicit
 argv otherwise, production by default. So a staging deploy is not refused for a
@@ -243,12 +243,49 @@ re-checks each one.
 - **The cron trigger.** `wrangler deploy` writes it from `triggers.crons`. No
   wrangler command reads it back. A declared blind spot.
 - **The container image being pullable and matching `@cloudflare/sandbox` in
-  `package.json`.** A container image is only reconciled by a deploy of that
-  environment, so the two can disagree for as long as one of them has not been
-  deployed since the version moved. Neither has been deployed yet.
-- **An R2 lifecycle rule on the `backups/` prefix.** Not expressible in
-  `wrangler.jsonc`. Without it the bucket grows without bound, since the Sandbox
-  SDK enforces snapshot TTL at restore time only.
+  `packages/cf-backend/package.json`.** The pair moves together: at this writing
+  both are `0.12.8` (image `docker.io/cloudflare/sandbox:0.12.8`). A container
+  image is only reconciled by a deploy of that environment, so the two can
+  disagree for as long as one of them has not been deployed since the version
+  moved.
+- **Reclamation of the `backups/` prefix, which must NOT be a lifecycle rule.**
+  Kinu stores each workspace as one immutable base layer plus one cumulative
+  delta (`backups/<uuid>/data.sqsh`, `…/delta.sqsh`). The base is written once
+  and never rewritten, so an age-based lifecycle rule on that prefix deletes the
+  base of every workspace older than the rule and bricks it. Do not set one. The
+  delta replaces in place, so per-workspace growth is bounded by base plus
+  changed set, and deleting a workspace discards both objects before the Durable
+  Object is destroyed. That discard is the reclamation path. A workspace whose
+  Durable Object dies without reaching it leaves its two objects behind, and
+  nothing collects them today. Restore-time TTL applies to the extraction path
+  only, which is local development.
+- **A committed patch on `@cloudflare/sandbox@0.12.8`.**
+  `patches/@cloudflare%2Fsandbox@0.12.8.patch` makes SDK mount-handler
+  registration MERGE with subclass handlers instead of replacing them, so an
+  R2-binding bucket mount can never unbind KinuSandbox's egress/event
+  interception. `bun scripts/patch-parity.ts` (a required gate) proves the
+  installed tree still matches every committed patch; bumping the SDK means
+  regenerating the patch and moving BOTH pins plus the wrangler image tag in
+  the same commit.
+- **A committed patch on `@nimbus-sh/core@0.6.0`.**
+  `patches/@nimbus-sh%2Fcore@0.6.0.patch` carries Nimbus commit `ceb3b736`
+  (merged upstream, unreleased to npm at patch time): `esbuild-service`
+  imported the bare specifier `esbuild-wasm`, and every resolver that
+  ignores esbuild-wasm's legacy `browser` field picked its Node CJS build,
+  which rejects the wasm-module initialization option, the only form a
+  Worker has, so every `.mjs` transform in a workspace failed with
+  `The "wasmModule" option only works in the browser`. The patch names
+  `esbuild-wasm/esm/browser.js` in both shipped shapes (`src/`, which Bun's
+  export condition resolves; `dist/`, which wrangler bundles). REMOVE IT
+  when `@nimbus-sh/core` pins a version whose own `esbuild-service` imports
+  `esm/browser.js`; until then, a core version bump means regenerating the
+  patch against the new artifact in the same commit.
+- **Workspace storage mode.** With the `BACKUP_BUCKET` binding present,
+  `/workspace` restores by mounting lazy layers (fixed cost regardless of size).
+  Where the platform lacks container outbound interception, as local docker dev
+  does,
+  a workspace with no data yet records extraction mode instead; a workspace that
+  already HAS chain layers refuses to start rather than silently degrade.
 - **The Workers Paid plan**, and **the account**.
 - **The feedback R2 lifecycle rule.** Both feedback buckets expire the
   `feedback/` prefix after 90 days. This was set and read back on 2026-08-24.
@@ -487,11 +524,27 @@ relying on it.
 
 Every provider fetch goes through `withRateLimitRetry`
 (`core/src/providers/rate-limit-retry.ts`), so a 429 becomes a retry and the
-turn keeps running. It retries 429, 529 and overload-shaped 503s up to 6 attempts
-within a 180-second budget. It honors `Retry-After` verbatim when present, and
-otherwise waits a full-jitter draw under a ceiling that doubles from 2 s to a
-60 s cap. Requests whose body cannot be replayed pass through untouched, and an
-exhausted budget returns the original response rather than throwing.
+turn keeps running. The retry is patient rather than budgeted: neither elapsed
+time nor an attempt count ever ends it. A rate-limited request keeps following
+the provider's `Retry-After` responses until it succeeds, fails definitively, or
+the caller cancels it.
+
+What counts as a rate limit is narrow. 429 and 529 always do. A 503 counts only
+when its status text, its `x-error-code` header or its body matches overload,
+capacity, too many requests, or rate limit, and a 503 whose body cannot be read
+propagates rather than being reported healthy. Without a `Retry-After` the wait
+is a full-jitter draw under a ceiling that doubles from 2 s to a 60 s cap
+(`DEFAULT_BASE_DELAY_MS`, `DEFAULT_MAX_DELAY_MS`). A request whose body cannot
+be replayed passes through untouched. The transport retry the SDK itself
+performs is separate and pinned at `PROVIDER_SDK_RETRIES = 2`, stated
+explicitly at the `streamText` call so a vendor default cannot move it in
+silence.
+
+`ProviderPacer` (`core/src/providers/pacing.ts`) spaces request starts per host,
+because the provider is shared. It holds the lane only while a request awaits
+headers, so a request sleeping out a `Retry-After` frees capacity for a sibling
+instead of blocking it, and `declareWait` makes siblings join one cooldown
+rather than each starting a fresh request into a limit that is already refusing.
 
 ## Environment Variables
 
@@ -523,7 +576,7 @@ exhausted budget returns the original response rather than throwing.
 | `KINU_MODEL` | CLI shell env | Override local agent model |
 | `KINU_SOURCE_TARBALL` | CLI shell env | Advanced installer/update source override (`cli/routes.ts:957`) |
 | `KINU_SOURCE_SHA256` | CLI shell env | Pin a SHA-256 for the source tarball (default: published `.sha256` asset, always verified) |
-| Per-call timeout tuning | CLI shell env / wrangler env var | None exposed. Core fixes the silence window at 600 s with 3 retries (`LLM_CALL_TIMEOUT_MS` and `LLM_CALL_MAX_RETRIES` in `core/src/config.ts`). |
+| Per-call timeout tuning | CLI shell env / wrangler env var | None exposed, and none exists to expose. There is no per-call silence window and no per-turn step or time bound. What ends a call is the provider answering, failing definitively, or the caller cancelling; what ends a turn is the model finishing without tool calls, the mission budget, or an abort. The SDK transport retry is pinned at `PROVIDER_SDK_RETRIES = 2` (`core/src/providers/rate-limit-retry.ts`). |
 
 `SANDBOX_TRANSPORT` is the one `vars` entry `Env` in `env.d.ts` does not
 declare. Read it from `wrangler.jsonc`, not from the type.
@@ -537,6 +590,7 @@ declare. Read it from `wrangler.jsonc`, not from the type.
 | `MonitorDO` | Durable Object | Synthetic monitoring: open incidents + the alert outbox (one instance, `site`) |
 | `NIMBUS_SESSION` | Durable Object | `NimbusSession` from `@nimbus-sh/sdk`; built-in lightweight sandbox (local DO class, deployed with this Worker) |
 | `Sandbox` | Durable Object + Container | `KinuSandbox` (@cloudflare/sandbox); one container per agent |
+| `ControlPlaneDO` | Durable Object | The admin surface's singleton (one instance, `site`): a fleet index and an audit log. It holds no business logic, and every action it exposes proxies an existing `@callable` on the object that already owns that state |
 | `AUTH_KV` | KV namespace | Sessions, one-time OAuth state, and CLI browser approval state, all of it expiring on its own; identities live in `UserDO`. `kinu-auth`, and `kinu-auth-staging` in staging |
 | `LOADER` | Worker Loader | Sandboxed code execution (codemode) |
 | `AI` | Workers AI | Platform-side embeddings (chat models use the user's OAuth credential) |
@@ -544,6 +598,8 @@ declare. Read it from `wrangler.jsonc`, not from the type.
 | `EMAIL` | `send_email` | Outbound Mission Inbox replies and owner notifications |
 | `BACKUP_BUCKET` | R2 bucket | Sandbox `/workspace` backups (squashfs archives). `kinu-backups`, and `kinu-backups-staging` in staging, so eval snapshots never land beside real archives |
 | `NIMBUS_RUNTIME_CACHE` | R2 bucket | `nimbus-runtime-cache`, the artifact store a hosted workspace installs its toolchain from. Absent means a hosted `python3`, `ruby` or `clang` exits 127 |
+| `FEEDBACK_BUCKET` | R2 bucket | `kinu-feedback`, and `kinu-feedback-staging` in staging. Feedback screenshot bytes. A PNG is megabytes, so it never enters a Durable Object row or an analytics blob; the control-plane row carries the object key only |
+| `AGENT_METRICS`, `FEEDBACK_MARKERS`, `CONTROL_PLANE_OPS` | Analytics Engine | Fleet metrics, feedback markers, and admin operations. Staging writes `*_staging` datasets, so its panels cannot answer with production's numbers |
 | `ASSETS` | Static assets | `dist/client` SPA bundle + CLI source archive downloads |
 
 Two agent classes have no binding of their own. `ExplorationAgent` (MCTS
@@ -553,12 +609,11 @@ branches and heads) and `SubordinateAgent` both exist only as facets of
 registration and a binding are separate things.
 
 `compatibility_date` is `2025-12-01` with `nodejs_compat`. Durable Object
-migrations are three tags in production (`v1` registering `OrchestratorAgent`,
-`ExplorationAgent`, `KinuSandbox`, `UserDO`; `v2` adding `NimbusSession`;
-`v3` adding `MonitorDO`) and a **different five-tag sequence** under
-`env.staging`, because the two deployments registered their classes in a
-different order. Wrangler does not inherit `env.*` config, so every binding is
-re-specified there.
+migrations are two tags, and both environments now carry the same two: `v1`
+registers `OrchestratorAgent`, `ExplorationAgent`, `KinuSandbox`, `UserDO`,
+`NimbusSession` and `MonitorDO`, and `v2` adds `ControlPlaneDO`. Wrangler does
+not inherit `env.*` config, so every binding is re-specified under
+`env.staging` even where the two environments agree.
 
 ## Deploy Script
 
@@ -571,7 +626,7 @@ is a local DO class deployed with it, so there is no separate Nimbus deploy.
 bash scripts/deploy.sh <production|staging>
 ```
 
-The environments differ in four values — the route, the wrangler `--env` flag,
+The environments differ in four values: the route, the wrangler `--env` flag,
 the infrastructure scope and the label. An unknown name exits 2 and runs nothing.
 
 ### Order of operations
@@ -582,21 +637,23 @@ environment preflight, verifies Wrangler authentication, and installs the locked
 dependency graph with `bun install --frozen-lockfile` when a checkout has no
 root `node_modules`.
 
-1. **Required pre-deploy gates.** 53 gates, every one unconditional. Each is a
+1. **Required pre-deploy gates.** 54 gates, every one unconditional. Each is a
    `run_required_gate` line in `scripts/deploy.sh`, which is the full list. Those
    lines enqueue; `flush_gates` runs the queue, up to `nproc / 2` at a time. Two
    gates run alone, and `SERIAL_GATES` in `scripts/ladder.ts` names them with the
-   reason: the environment preflight first, `gate:infra` last. The other 51 run
+   reason: the environment preflight first, `gate:infra` last. The other 52 run
    in one wave. They cover `bun run check`; the deploy contract test; the
-   agent-utils, core,
-   compaction, test-utils, Cloudflare-backend, workerd, CLI-backend, full
+   agent-utils, core, compaction, devbox, test-utils, Cloudflare-backend,
+   workerd, CLI-backend, full
    production CLI, local-device daemon and root end-to-end suites; the
-   exploration policy mutation suite; the deterministic eval and benchmark
+   exploration policy mutation suite; the deterministic eval, eval-triage,
+   staging-preflight and benchmark
    tests; the secret-scanner self-test and its scan; every gate's own
    self-test; the static gates for dead code, duplication, capability parity,
    policy drift, silently dropped failures, reachability, typecheck coverage,
    skip ratchet, set equality, citation registers, commit hygiene, dependency
-   policy and committed-patch parity; Layergate conformance and its
+   policy, analytics dataset parity and committed-patch parity; Layergate
+   conformance and its
    fault-localization matrix; behavioural evals; and the full Lean proof,
    consistency and traceability gate. `gate:computed-style` is deliberately
    absent. It boots Vite and Chrome over 19 gallery frames and would fail this
@@ -640,7 +697,10 @@ memory.
 - **Worker bundle, gzipped.** The cap is 10 MB on Workers Paid, and 64 MB
   uncompressed. The repository encodes that cap as 10,000,000 bytes
   (`MB = 1000 * 1000`, `core/src/platform-catalog.ts:217`). Last reading:
-  **7,091.83 KiB gzip, measured 2026-08-19**, about 73% of it. Measure it with
+  **7,259.24 KiB gzip, measured 2026-08-24**, 70.9% of it, against a raw upload
+  of 27,965.43 KiB. The control plane, the three Analytics Engine datasets, the
+  feedback flow and profile routing added 120.90 KiB gzip over the 2026-08-20
+  reading of 7,138.34 KiB. Measure it with
   `bunx wrangler deploy --dry-run` in `packages/cf-backend` after a vite build.
   That prints the `Total Upload / gzip` figure the deploy API enforces. Vite's
   per-chunk `gzip:` line covers one chunk and understates the total by more
@@ -705,6 +765,26 @@ It rebuilds with `CLOUDFLARE_ENV=staging` so the Vite plugin generates the
 staging config the deploy redirect points at, builds the CLI source archive,
 deploys, then rebuilds for production so the working tree is left holding a
 production bundle.
+
+Staging is the only target tests and evals may run against, so before an eval
+arm spends anything, check that staging runs the branch you think it does:
+
+```bash
+bun scripts/staging-preflight.ts            # refuses on a mismatch
+bun scripts/staging-preflight.ts --allow-stale
+```
+
+It compares `git rev-parse --short HEAD` against `build.sha` from
+`GET https://staging.kinu.run/api/health`, the same pair the deploy asserts
+after publishing. A mismatch refuses and names `bun run deploy:staging`. The
+reason it exists is measured: on 2026-08-24 the deployed sha was `17abc2980`
+while the checkout was 27 commits ahead, so an arm run that day would have
+graded code nobody had written. `--allow-stale` downgrades the refusal to a
+warning for the one legitimate case, measuring a deployment on purpose during a
+bisect or a production repro. The flag is required so that choice sits in the
+command somebody ran. A dirty tree is a warning and never a refusal: uncommitted
+work cannot be deployed, so it cannot be measured, and a preflight that refused
+every dirty tree would refuse every developer.
 
 ### Synthetic monitoring
 

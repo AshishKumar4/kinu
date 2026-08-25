@@ -1,9 +1,11 @@
 # Formal Specification
 
 The `lean/` project contains hand-maintained abstract models for selected agent,
-evolution, execution, exploration, MCTS, safety and storage behavior. `lake
-build` checks their theorem declarations. These checks do not establish that the
-deployed TypeScript and SQLite implementation refines the models.
+evolution, execution, exploration, MCTS, safety and storage behavior. Run
+`bash scripts/verify-lean.sh` to check them; `lake build` alone compiles the
+declarations and skips the three audits below it. None of these checks
+establishes that the deployed TypeScript and SQLite implementation refines the
+models.
 
 **Cite a theorem by name, never by line number.** A line citation slides onto
 different code the moment anything above it moves, and one rotted inside a single
@@ -25,23 +27,24 @@ running system.
 | Agent | 18 | lifecycle counters, an abstract turn queue, durable-fiber budget fields | The production queue and SDK persistence semantics are not refined from these models |
 | Execution | 18 | an executor capability lattice, action-to-tool mapping, workspace-call isolation | The capability lattice and tool vocabulary are stale relative to the current provider and the eight-tool builtin surface |
 | MCTS | 11 | exact scaled-integer backpropagation, storage isolation, a natural-number budget measure | SQLite backpropagation uses IEEE-754 REAL values, and transition postconditions are hand-maintained |
-| Storage | 9 | index/list properties, byte-chunk reassembly, and a list-backed filesystem | SQLite tokenization, ranking, concurrency, and table-to-model correspondence remain external evidence obligations |
+| Storage | 84 | index/list properties, byte-chunk reassembly, a list-backed filesystem, and the SQLite filesystem's own correctness obligations | SQLite tokenization, ranking, concurrency, and table-to-model correspondence remain external evidence obligations |
 | Safety | 6 | the shape of operations constructible from modeled provider names | These are constructor witnesses, not a proof of the deployed sandbox boundary |
 
 Counts are `#print axioms` entries in `lean/Proteus/Axioms.lean` grouped by
-namespace, measured 2026-08-19. Every one of the 330 is claimed by a requirement
-in the traceability map, which the checker holds in both directions.
+top-level namespace, re-measured 2026-08-25. The corpus grew from 330 to 405 on
+2026-08-25, almost all of it Storage. Every one of the 405 is claimed by a
+requirement in the traceability map, which the checker holds in both directions.
 
 **Two denominators.** A status is declared on a REQUIREMENT and inherited by
 every theorem that requirement claims, so the same four words count twice over
 two different totals. Name the denominator every time.
 
-By theorem, over 330: **256 `proved-in-abstract-model`** and **74
+By theorem, over 405: **316 `proved-in-abstract-model`** and **89
 `by-construction-witness`**. Near-definitional statements such as nonnegativity of
 a `Nat` EMA score, and the inability of a constructor to produce `SQLWrite`, are
 witnesses rather than deep safety proofs.
 
-By requirement, over 43: **25 `proved-in-abstract-model`**, **12
+By requirement, over 47: **28 `proved-in-abstract-model`**, **13
 `by-construction-witness`**, **5 `specified-not-modeled`** and **1
 `trusted-model-assumption`**. The requirement total carries two statuses the
 theorem total cannot, because five requirements claim no theorem at all.
@@ -76,13 +79,13 @@ candidate quality. Each says so in its own `remainingEvidence`.
 ## Axiom boundary
 
 [`lean/Proteus/Axioms.lean`](../lean/Proteus/Axioms.lean) runs `#print axioms`
-for all 330 published theorems. Their reports contain only Lean's kernel axioms
+for all 405 published theorems. Their reports contain only Lean's kernel axioms
 `propext`, `Classical.choice`, and `Quot.sound`.
 
 The corpus declares one separate domain axiom,
 `Proteus.Storage.FTS5Search.fts5_indexed_findable`. It is an explicit trusted
 assumption about SQLite FTS5 completeness, enrolled by `PR-STORE-002`, and none of
-the 330 published theorems depends on it. There is no covering
+the 405 published theorems depends on it. There is no covering
 `MemoryStore.indexFile` plus `search` integration test, so that gap is recorded
 rather than implied away.
 
@@ -123,9 +126,10 @@ The traceability checker has no package dependencies. It fails when:
 ### What the citation gate cannot verify
 
 The gate prints its own blind spots on every pass, and they are the numbers a
-reader needs to decide how much a citation is worth. Measured 2026-08-19 over
-1,461 files, against 93 module citations, 46 theorem citations and 1 line
-citation:
+reader needs to decide how much a citation is worth. Run
+`bun scripts/lean-citations.ts` for the current figures; the counts below are a
+snapshot and the corpus moves. Measured 2026-08-24 over 1,740 files, against 95
+module citations, 47 theorem citations and 1 line citation:
 
 - **A theorem name is the only shape this gate can verify.** It resolves the name
   against the declaration, so a rename turns the gate red.

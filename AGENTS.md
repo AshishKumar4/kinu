@@ -127,8 +127,8 @@ anything is installed — the script pre-seeds them; do not delete that step.
 
 Branches get pruned; the `archive/*` tags are what make that safe. Before deleting
 anything under `refs/tags/archive/`, read [docs/BRANCH-ARCHIVE.md](docs/BRANCH-ARCHIVE.md).
-The inventory there holds nine tags, four of them carrying blobs no other ref
-reaches, and no test or gate fires when a tag disappears.
+The inventory there is the count, and every tag in it currently carries blobs no
+other ref reaches. No test or gate fires when a tag disappears.
 
 ## Deploy Discipline
 
@@ -151,9 +151,20 @@ reaches, and no test or gate fires when a tag disappears.
 - The four prose rules skip quoted spans, inline code, fenced blocks and indented lines, so a commit may quote a shipped product string verbatim even when that string itself contains a governed phrase.
 - Four things the gate deliberately does NOT judge, and prints on its green path so nobody reads green as "well written": colon-reveal subjects, binary contrasts, em-dash density, and sentence length. All four are real and all four have legitimate instances, so they stay review criteria.
 
+## The Requests Ledger
+
+[docs/REQUESTS-LEDGER.md](docs/REQUESTS-LEDGER.md) holds every request made in
+conversation, with the state last verified and the command that verifies it. A
+row is DONE only when its command passes. A row with no verifying command is
+UNVERIFIED and counts as open. It exists because an audit found four requests
+that were designed, discussed, built and never wired, and memory was the
+tracking mechanism. Read it before claiming a request is closed, and add a row
+when a new one arrives.
+
 ## Working Style
 
 - Avoid loading skills unless they are concretely needed for the task. Keep context focused and prefer direct source inspection for routine repo work.
+- Code reviews, quality audits, and pre-merge review passes MUST load the `thermo-nuclear-code-quality-review` skill and apply its approval bar. This binds the reviewer and every dispatched reviewer/audit subagent; name the skill in their briefs.
 
 ## How To Write Docs, Write-Ups, Descriptions, READMEs
 
@@ -331,9 +342,9 @@ No `catch` may discard its error. `catch {}`, `catch { return null }` and `catch
 - Never log a secret, and never log an object you have not looked inside: no `apiKey`, `authorization`, `body`, `content`, `credential`, `header(s)`, `password`, `prompt`, `secret`, `soul`, `systemPrompt`, `token`. `ReservedLogField` in `@kinu.run/core/obs` makes that a type: a log call carrying one fails to COMPILE, through a variable, an interface, a spread or an index signature alike. A cast still defeats it, and `require-safety-comment-for-type-assertion` makes the cast a written admission
 - Every log carries a stable dotted event name (`capability.read_failed`) — that is what makes a failure greppable across Workers Logs and the CLI journal
 - Enforced mechanically by the `no-empty-catch`, `no-sentinel-catch`, `require-cause-on-rethrow` and `no-ddl-in-catch` anti-slop rules. Never add an `oxlint-disable` to pass one
-- A refusal carries its classification, reason FIRST — `{ reason: ErrorCode, error }` via `refusalOf` — because every seam that shows a result to a human or hashes it for steering bounds it to a head slice, and the prose is the long part. Precedents: `tools/file-tool.ts:82`, `execution/inline.ts:398`, `tools/agents-tool.ts:458`
+- A refusal carries its classification, reason FIRST — `{ reason: ErrorCode, error }` via `refusalOf` — because every seam that shows a result to a human or hashes it for steering bounds it to a head slice, and the prose is the long part. Precedents, cited by name because these lines rot: `failure()` in `tools/file-tool.ts`, the `createTool` catch in `execution/inline.ts`, `unsupported()` in `strategy/swarm-run.ts`, and the refusal helper in `strategy/merge-back.ts`
 - `classifyErrorCode` answers `null` when nothing pinned recognises a failure, and `toKinuError` therefore REQUIRES an `otherwise` from its caller. An unknowable cause is a value, never a guessed code: `Worker exceeded resource limits` is what the client sees for BOTH an isolate memory kill and a CPU-time kill, so it is not in the OOM matcher
-- The `Observability`/`Tracer` seam is WIRED at **six** production boundaries, measured 2026-08-21 by grepping `this.tracing.invocation`: `orchestrator.ts` `_kinuTimerTick` (`alarm`/`tick`), `recordHeadStep` (`rpc`/`head.record_step`), `actor-agent.ts` `nodeArbitrate` (`rpc`/`swarm.arbitrate`), `exploration.ts` `explore` (`rpc`/`mcts.branch`), `runAsHead` (`rpc`/`head.run`), `runAsNode` (`rpc`/`swarm.node`) — cited by name because the line numbers rotted twice in one week. Two of the four `InvocationKind` values are in use — `alarm` and `rpc` — while `fetch` and `websocket` are declared and unused. This bullet has now been wrong in BOTH directions within one day: it first claimed a test fixture was the only caller, then claimed exactly one production call site, and the second was stale the moment five more landed. Re-grep rather than trusting the sentence. The handle comes from the `tracing` getter on `ActorAgent`, which builds `createAgentTracing({tracer: createWorkersTracer(), isolateGen, selfPath})` once per construction; `createWorkersTracer` (`obs/cf-tracer.ts`) goes through `cloudflare:workers`' `tracing.enterSpan`, the only entry point available at our pin. `selfPath` rather than `ctx.id` because two facets with distinct ids both reported under the ROOT's `durableObjectId` on the deployed runtime, so an id-keyed trace collapses every head and node into one orchestrator. Spans are always scoped, and trace context does not survive a hibernation wake or a cold start. Across `alarm()` it is not merely absent but ENFORCED absent: `tracing.invocation` revokes the handle when the method's promise settles, so a span opened from anything that escaped the tick throws
+- The `Observability`/`Tracer` seam is WIRED at **six** production boundaries, measured 2026-08-24 by grepping `this.tracing.invocation`: `orchestrator.ts` `_kinuTimerTick` (`alarm`/`tick`), `recordHeadStep` (`rpc`/`head.record_step`), `actor-agent.ts` `nodeArbitrate` (`rpc`/`swarm.arbitrate`), `exploration.ts` `explore` (`rpc`/`mcts.branch`), `runAsHead` (`rpc`/`head.run`), `runAsNode` (`rpc`/`swarm.node`) — cited by name because the line numbers rotted twice in one week. Two of the four `InvocationKind` values are in use — `alarm` and `rpc` — while `fetch` and `websocket` are declared and unused. This bullet has now been wrong in BOTH directions within one day: it first claimed a test fixture was the only caller, then claimed exactly one production call site, and the second was stale the moment five more landed. Re-grep rather than trusting the sentence. The handle comes from the `tracing` getter on `ActorAgent`, which builds `createAgentTracing({tracer: createWorkersTracer(), isolateGen, selfPath})` once per construction; `createWorkersTracer` (`obs/cf-tracer.ts`) goes through `cloudflare:workers`' `tracing.enterSpan`, the only entry point available at our pin. `selfPath` rather than `ctx.id` because two facets with distinct ids both reported under the ROOT's `durableObjectId` on the deployed runtime, so an id-keyed trace collapses every head and node into one orchestrator. Spans are always scoped, and trace context does not survive a hibernation wake or a cold start. Across `alarm()` it is not merely absent but ENFORCED absent: `tracing.invocation` revokes the handle when the method's promise settles, so a span opened from anything that escaped the tick throws
 - The full contract, its status table and the unconverted boundary: [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md)
 
 ## CF Backend Specifics

@@ -895,3 +895,1026 @@ turned down, and `packages/test-utils/src/hard-tasks/tasks.ts` says why: scored
 internally they are one bit, and the interesting security categories need
 binaries and a network the workspace cannot reach. Terminal-Bench scores them in
 its own container with its own checker, so neither objection applies there.
+
+## R2-backed workspace layouts
+
+An agent's `/workspace` can live on the container's own disk, on R2 through a
+FUSE mount, or on a hybrid of the two. Until now the question was answered by
+assertion, including by a comment in the product that was no longer true of the
+SDK it described. `scripts/bench-r2-workspace.ts` answers it with numbers.
+
+```
+bun scripts/bench-r2-workspace.ts --plan        # print the plan, run nothing
+bun run bench:r2-workspace                      # the real thing, 3 repetitions
+bun scripts/bench-r2-workspace.ts --reps 2 --layouts native,r2-tuned
+```
+
+### What it is
+
+Four arms, one identical deterministic workload:
+
+| arm | what it is | question it answers |
+| --- | --- | --- |
+| `native` | the container's own disk at `/workspace` | what the disk does, so every R2 number has a denominator |
+| `r2-uncached` | `mountBucket` with the SDK's default s3fs options | what a workspace on R2 costs with no tuning |
+| `r2-tuned` | the same mount with `use_cache` and tuned stat, no-object, parallel and multipart options | how much of the gap the documented options close |
+| `overlay` | R2 as a read-only lower layer, `fuse-overlayfs` upper on the container disk, plus an explicit sync | whether native write speed plus a sync beats writing through FUSE |
+
+The instrument is four files under `scripts/fixtures/r2-bench/`: a benchmark-only
+Worker, the in-container probe, the layout and option matrix, and the report
+renderer. Every reported number comes from an **ephemeral deployed Worker** on a
+real Cloudflare container. There is no remote-dev result anywhere in this
+section, and no remote-dev mode in the driver, for the reason given below. Every timing is taken
+inside the container with a monotonic clock, never across the Worker boundary, so
+a Durable Object round trip of tens of milliseconds cannot swamp a 4 KiB read.
+
+Determinism is a property of the harness rather than of the operator. Sizes,
+names, byte patterns and random offsets all derive from `--seed`, so two runs of
+one revision perform the same operations in the same order.
+
+### It leaves nothing behind
+
+Every object goes under `bench/<runId>/`, and the scoping is enforced by the
+platform rather than by convention: the driver mounts with
+`prefix: '/bench/<runId>'`, and the credential-less R2 path applies that prefix
+in the Durable Object, so a wrong path inside the container writes to the wrong
+key *under the run prefix* and cannot escape it.
+
+Teardown runs in a `finally` on every exit path, including a throw mid-arm, and
+deletes three things: the objects, the fixture Worker, and the container
+application. It refuses to start against a pre-existing bucket that holds
+objects rather than deleting data it did not write.
+
+The bucket is a dedicated ephemeral `kinu-bench-r2fs`, not the staging backup
+bucket. Two reasons, and the first is a defect this benchmark would otherwise
+have measured: `KinuSandbox` arms a 5-minute snapshot tick
+(`checkpointIntervalMs`, `packages/devbox/src/lifecycle.ts`, still 5 * 60_000)
+whose archives land at `backups/…` in the *bucket root*, outside any `bench/`
+prefix. Any real run exceeds five minutes and its native arm writes hundreds of
+megabytes, so the tick would fire and drop a squashfs build plus a multipart
+upload into the middle of a latency measurement, at keys the prefix delete cannot
+see. The fixture therefore exports the **upstream** `Sandbox` class, not
+`KinuSandbox`; Kinu's own lifecycle needs its own probe. `--bucket` still accepts
+the staging bucket and prints that hazard before it runs.
+
+### Seven things the platform did, that were not what the plan assumed
+
+Each was measured, each changed the harness, and each is worth more than a
+throughput number to anyone building on this stack.
+
+1. **`wrangler dev --remote` cannot serve a Durable Object.** wrangler refuses it
+   outright: "`wrangler dev --remote` is no longer supported for Durable Objects."
+   A local run has neither a real container nor a real R2, so the only route to
+   the measurement is a real deployment — and the price is having to delete it
+   afterwards, which teardown now does.
+2. **`wrangler delete` leaves the container application behind.** The Worker goes;
+   `kinu-r2-bench-sandbox` stays, holding a live instance, and the next deploy
+   fails with "already an application with the name … associated with a different
+   durable object namespace". Teardown deletes it by id, and the preflight clears
+   a stale one.
+3. **`ContainerProxy` must be exported and must NOT be bound.** Declaring it in
+   `durable_objects.bindings` fails with "Cannot create binding for class
+   'ContainerProxy' that is not exported by the script" (code 10061). It is a
+   `WorkerEntrypoint`: the Sandbox DO builds its interception fetchers from
+   `ctx.exports.ContainerProxy`. `packages/cf-backend/src/server.ts` exports it
+   the same way and binds it nowhere.
+4. **The container has no persistent volume.** `df` reports `/` and `/workspace`
+   as the same `ext4` on `/dev/vdc`. A harness installed at `/opt` vanished
+   between two consecutive RPCs, and one at `/workspace` vanished too. Anything
+   the container needs across a recycle has to be reinstalled, which is why the
+   probe runner reinstalls once on a missing-file error — and why snapshots exist
+   at all.
+5. **`setTransport` cycles the container.** Calling it immediately before the
+   first exec produced `OperationInterruptedError: The sandbox container stopped
+   while the operation was pending`. The benchmark inherits the SDK's default
+   transport and says so, rather than restarting the container to pin a value the
+   product does not pin either.
+6. **A bucket with zero listable objects can still refuse deletion.** After a
+   purge that removed 1,539 objects and a second pass that found none, `bucket
+   delete` still answered "the bucket you tried to delete is not empty". Pending
+   multipart uploads count against emptiness and the R2 Workers binding cannot
+   enumerate them: there is `createMultipartUpload` and `resumeMultipartUpload`
+   but no list. So a teardown built on the binding alone cannot guarantee an
+   empty bucket after an aborted 100 MiB write, and the remedy is a bucket
+   lifecycle rule that aborts incomplete multipart uploads, or the S3 API.
+   `--purge-bucket` is the recovery path for the objects it CAN see.
+7. **Multipart parts are invisible at the bucket seam.** A `seq` phase that wrote
+   111 MiB first reported two class-A operations, because `uploadPart` and
+   `complete` are calls on the handle `createMultipartUpload` returns, not on the
+   bucket. The counter now wraps that handle; without it, an R2 cost column would
+   have been wrong by an order of magnitude and would have looked plausible.
+
+### How R2 operations are counted
+
+Exactly, not estimated. The fixture exports a `ContainerProxy` subclass that
+hands the SDK's dispatcher a wrapped `env`, so every R2 API call the mount makes
+is tallied at the binding — the same granularity R2 bills at — and flushed to a
+Durable Object in `waitUntil`, after the response the container is waiting on has
+already returned. The flush is coalesced to one in-flight call, because an s3fs
+phase issues thousands of requests and one DO call per request would make the
+counter the bottleneck and perturb the thing it counts. A settle delay precedes
+every read, outside all measured windows. The object-listing delta under the run
+prefix is reported beside the tally as an independent check.
+
+### Two dispersion figures, and why the second one governs
+
+The probe reports p50/p95/p99 **within** a repetition, over individual
+operations: what an operation feels like. The renderer computes dispersion
+**across** repetitions, over the per-repetition medians: whether the arm is
+reproducible. A metric-arm pair whose across-repetition coefficient of variation
+exceeds 0.25 is marked `!` and is **not ranked**, because a fast median with a
+0.6 CV has not measured a fast filesystem — it has measured one that is sometimes
+fast.
+
+Loops are time-bounded (`--budget-ms`, default 30 s per loop) and report the `n`
+they reached. This is a bound on sample size, never on what is reported: 10,000
+files times four operations on the untuned mount is hours, and without a bound
+the phase hits the exec timeout and the arm reports nothing at all — losing the
+comparison for the arm that needed it most. Per-operation latency is comparable
+across arms at different `n`, which is why the report leads with p50 and p95
+rather than totals, and every truncated loop emits a verdict naming its count so
+a partial sample cannot be read as a complete one.
+
+### The option sets
+
+The option sets below are what the SDK's own `mountBucketR2Egress` produces; this
+repository calls only the public `sandbox.mountBucket` and never names it, so it
+is not greppable here. It builds its `-o` argument as
+`{ passwd_file, ...R2 defaults, ...caller, use_path_request_style, url, ahbe_conf, ro }`.
+Three consequences follow, and `scripts/bench-r2-workspace.test.ts` pins all
+three:
+
+- The R2 defaults — `stat_cache_expire=60`, `enable_noobj_cache`,
+  `multipart_size=5`, plus `nomixupload` from the provider table — are spread
+  **before** the caller's, so a caller can raise them. The `r2-uncached` arm *is*
+  that set.
+- `use_path_request_style`, `url`, `ahbe_conf` and `ro` are spread **after**, so a
+  caller cannot change them. Asking for one would be a tuning claim the run
+  cannot support, so the tuned set contains none of them.
+- `url=http://r2.internal` means no S3 credential exists in the container: the
+  password file holds the literal dummies `x`/`x` and the Worker signs nothing,
+  because the request never leaves as S3. This is why the older claim that
+  `mountBucket` "needs the key itself written into the container's filesystem" is
+  stale for the R2-binding variant.
+
+Rejected configurations, with the reason each was rejected, live in
+`scripts/fixtures/r2-bench/layouts.ts` as `REJECTED_S3FS_OPTIONS` and are printed
+into every run's report. The two that most often look like wins: `nomultipart`
+turns a 100 MiB write from slow into an isolate reset, because the intercepted
+PUT path buffers the object in a 128 MB isolate; and `parallel_count=32` buys
+latency rather than throughput, because six connections may await headers per
+invocation and the seventh queues.
+
+### Results
+
+Run records land in `bench-artifacts/r2-workspace-<runId>.json` and the Markdown
+table is printed to stdout. The artifact carries the container's own account of
+itself, the exact versions, both dispersion figures, the R2 operation tally, the
+POSIX verdict table, the restart-durability result and the teardown numbers.
+
+One condition every run states, because a storage benchmark run against patched
+dependencies and not saying so is not reproducible: `node_modules` carries
+`patches/@cloudflare%2Fsandbox@0.12.8.patch`, which rewrites the outbound-handler
+registry assignment from replace to merge. `bun scripts/patch-parity.ts` is what
+makes installed-equals-patched checkable rather than assumed.
+
+#### Measured, 2026-08-24
+
+Ephemeral deployed Worker, `@cloudflare/sandbox` 0.12.8 on image
+`docker.io/cloudflare/sandbox:0.12.8`, `@cloudflare/containers` 0.3.7, commit
+`4fd73892b`. The figures that follow are the container's own report, verbatim
+from its `/shape` probe, so `MemTotal` here is the kernel's `/proc/meminfo` label
+and is absent from this tree. Linux
+6.18.36-cloudflare-firecracker, 2 vCPU, `MemTotal` 6,333,912 kB, `/` and
+`/workspace` both ext4 on `/dev/vdc` with 7,551,860 1K-blocks, s3fs 1.90,
+fusermount3 3.10.5, bun 1.3.12, git 2.34.1, tar 1.34. Bucket `kinu-bench-r2fs`,
+prefix `bench/<runId>/`.
+
+Native control, 2 repetitions, median of per-repetition medians:
+
+| metric | native p50 | `r2-uncached` p50 | slowdown |
+| --- | --- | --- | --- |
+| `write-10MiB` | 502 ms | 2,215 ms | 4.4x |
+| `write-100MiB` | 5,356 ms | 7,916 ms | 1.5x |
+| `read-10MiB` | 19.7 ms | 1,097 ms | 56x |
+| `read-100MiB` | 194 ms | 4,562 ms | 24x |
+| `reread-10MiB` | 19.3 ms | 348 ms | 18x |
+| `random-read-4KiB` | 0.002 ms | — | — |
+| `small-create-1k` | 0.030 ms | — | — |
+| `small-stat-1k` | 0.002 ms | — | — |
+| `rename-file` (1 KiB) | 0.034 ms | — | — |
+| `rename-file-4MiB` | 0.049 ms | — | — |
+| `archive-extract-300-files` | 17.0 ms | — | — |
+
+Throughput on the untuned mount: 3.1 MiB/s at 1 MiB, 4.5 at 10 MiB, 12.6 at
+100 MiB for writes; 4.0, 9.1 and 21.9 for reads; 28.7 and 46.1 for re-reads. The
+native control ran at 23-35 MiB/s writing and 447-584 MiB/s reading. Mount cost
+636 ms cold, 496 ms warm. R2 durability held: 24 of 24 seeded files intact after
+a container restart, 0 missing, 0 corrupt. The read-only mount provably refused a
+write — `touch: cannot touch '/r2bench/readonly-probe': Read-only file system`.
+
+The single most decisive pair of numbers in the run is the durability contrast,
+and it is a contrast rather than a fact about R2:
+
+| arm | seeded manifest after a container restart |
+| --- | --- |
+| `native` | **0 of 24 intact, 24 missing, 0 corrupt** |
+| `r2-uncached` | 24 of 24 intact, 0 missing, 0 corrupt |
+
+The container disk keeps nothing. That is measured here on the upstream `Sandbox`
+class with no product attach path involved, and it independently corroborates a
+production diagnosis reached the same day from a completely different direction:
+a deployed probe of the product's own chain found `grep workspace /proc/mounts`
+empty, the overlay upper empty, and `/workspace` empty after a stop and wake.
+Two harnesses, two code paths, one answer — which is worth more than either
+alone, because neither could have agreed with the other by construction.
+
+One honesty note on that row, added after the sibling's evidence exposed the same
+weakness in their probe and then in mine: the restart route reported no
+`restartMs`, so the verdict above establishes that the bytes did not survive
+*whatever happened between seed and verify*, not that they failed a verified
+clean stop and start. The harness now appends `[RESTART UNVERIFIED: …]` to the
+detail whenever the restart round trip is not confirmed, so this can never again
+be read as stronger than it is. The direction of the result is not in doubt; the
+mechanism behind it is, and the report says which.
+
+#### The small-file numbers, measured as processes, 2026-08-24
+
+The four groups that a blocking exec could not reach were re-driven as detached
+processes writing their results to a file, with the driver polling a sentinel.
+That instrument works, and it produced the numbers the whole question turns on:
+
+| metric | native p50 | `r2-uncached` p50 | slowdown |
+| --- | --- | --- | --- |
+| `small-create-1k` | 0.030 ms | 622 ms | ~20,700x |
+| `small-stat-1k` | 0.002 ms | 68.1 ms | ~34,000x |
+| `small-read-1k` | 0.006 ms | 226 ms | ~37,600x |
+| `small-delete-1k` | 0.011 ms | 120 ms | ~10,900x |
+| `small-readdir-1k` | 1.28 ms | 217 ms | 170x |
+| `npmlike-install-write` | — | 607 ms | — |
+| `npmlike-resolve-probe` | — | 247 ms | — |
+
+`npmlike` took 404 s of wall time for 479 writes and 200 resolution probes. The
+small-file sample is bounded at n=12 by the 8 s loop budget, which is why the
+table reports per-operation latency rather than totals — the latency is the
+comparable quantity and the count is stated.
+
+Four hundred seconds for what a dependency install does in its first second, and
+a `stat` four orders of magnitude slower than the disk, is not a tuning problem.
+
+#### CORRECTION: the counter broke what it was counting, and some numbers above are suspect
+
+Recorded rather than quietly re-run, because a benchmark that reruns and hopes
+nobody kept the first table is worse than one that says which of its own numbers
+are unreliable.
+
+The counting proxy wrapped `resumeMultipartUpload` so that it returned a Promise.
+The SDK calls that method SYNCHRONOUSLY and dereferences the result immediately —
+`r2.resumeMultipartUpload(key, uploadId).complete(parts)` and `.abort()` and a
+bare `const upload = r2.resumeMultipartUpload(...)` followed by
+`await upload.uploadPart(...)`. Against the wrapped bucket that is
+`resumed.complete is not a function`, so every S3 UploadPart,
+CompleteMultipartUpload and AbortMultipartUpload on a mounted arm THREW.
+
+That is not a lost count. It is a lost operation, and it means the instrument
+perturbed its subject — the worst class of measurement error, and the exact thing
+this section spends its length warning about elsewhere.
+
+**Suspect and needing re-measurement:** every large sequential WRITE cell on a
+mounted arm, specifically `write-10MiB` (2,215 ms) and `write-100MiB`
+(7,916 ms / 12.6 MiB/s). s3fs at `multipart_size=5` takes the multipart path on
+objects that size, so those were measured while the path underneath them was
+throwing, and whatever s3fs did instead is not what a production mount does.
+
+**Unaffected:** every `read-*` and `reread-*` cell, all small-file and metadata
+latencies, the POSIX verdicts, and the durability contrast. Those travel through
+`head`/`get`, which is consistent with class B counting correctly at 100 while
+class A read zero.
+
+The fix types the proxy to `R2Bucket`'s own signature so the wrong shape cannot be
+written, rather than adding a runtime guard somebody has to remember. Both seams
+were then verified at runtime: the SDK base receives the counting bucket, it
+passes the SDK's own `isR2Bucket` duck-check, and both multipart entry points
+return the counting handle.
+
+#### Three mechanisms, one family
+
+Worth stating together, because the lesson is not about any one of them. A count
+that exists, is emitted, and never reaches a reader:
+
+1. **Lost to a timer.** The tally batches in the ContainerProxy isolate and
+   flushes on a timer, so work done by a detached process across isolates finishes
+   and is discarded before a flush lands. Remedy: an explicit flush at every phase
+   boundary, not a settle.
+2. **Destroyed at a render boundary.** The sibling sync CLI emits seven R2 op
+   counters inside a nested `store` object; the renderer typed its input as
+   `number | string` and printed the whole group as `[object Object]`. Remedy: the
+   renderer accepts one level of nesting and emits a dotted line per counter,
+   refusing two levels loudly.
+3. **Destroyed by the counter itself.** The multipart defect above.
+
+The first two lose counts; the third lost operations. All three were found by a
+cross-check rather than by reading the code, which is the argument for having more
+than one source for any number a decision rests on.
+
+#### The op counter undercounts on the process path, and the teardown caught it (2026-08-24)
+
+Reported honestly because it is a defect in this instrument rather than a result:
+on that run the tally read `{head:76, get:24, classA:0, classB:100}` while
+teardown deleted **590 objects** from the run prefix. At least 590 PUTs happened
+and none were counted.
+
+The cause is the one already flagged to the sibling building the devbox bench
+app: the tally batches in the ContainerProxy's isolate and flushes on a timer, so
+work done by a DETACHED process spread across isolates can finish and be
+discarded before any flush lands. A 750 ms settle before reading is enough for a
+blocking exec and not remotely enough here.
+
+The fix is the same one required of the devbox app: an explicit flush the driver
+calls at every phase boundary, rather than a settle it hopes is long enough.
+Until that lands, **the R2 class-A column is not trustworthy on process-driven
+groups** and the object count from teardown is the figure to use. The latency
+numbers above are unaffected — they are measured inside the container by the
+probe and never pass through the counter.
+
+What makes this reportable rather than embarrassing is that the cross-check
+designed into the teardown is what exposed it. An instrument with one source for
+a number tells you what it thinks; an instrument with two tells you when it is
+wrong.
+
+**The em dashes are the finding.** `npmlike`, `gitlike` and the 1k/10k small-file
+phases DID NOT COMPLETE on the untuned R2 mount. Each exceeded the platform's
+per-exec ceiling — the same ceiling that killed the combined-phase design at six
+minutes — while every one of them finished on the container disk in under 20 ms
+of per-operation latency. The `posix` phase took 29.2 s on R2 against a fraction
+of a second natively, for fifteen invariant checks over kilobyte files.
+
+So the shape of the answer is the opposite of the naive one. Bandwidth is nearly
+fine: a 100 MiB write is 1.5x slower on R2 and a 100 MiB read reaches 21.9 MiB/s.
+Metadata and small files are not merely slower, they are outside the budget a
+single container RPC allows. A workspace is not a video store — it is ten
+thousand small files being stat'd by a toolchain — so the arm that looks best on
+the throughput table is the one that cannot run `git status`.
+
+#### Recommendation
+
+**R2-primary is rejected on this evidence.** Not on the throughput numbers, which
+are survivable, but because the workloads a workspace actually runs did not
+finish. `npm`-shaped writes, `git`-shaped index work and bulk small-file
+operations all exceeded a single container RPC on the untuned mount, and the
+sibling implementation's local s3fs probe adds a semantic reason on top of the
+latency one: hardlinks are `ENOTSUP`, and a rename is a server-side copy costing
+about 3x for a 1024x size increase, so `mv` on a tree is billed as a write.
+
+**Use R2 as the durable tier behind a native writable layer.** The hot path must
+be the container disk. Two shapes remain live and the choice between them is the
+next measurement rather than a conclusion from this one:
+
+- **Native cache over a read-only R2 lower, with an explicit sync.** Writes land
+  at container-disk speed and only the sync pays for R2. The sibling prototype
+  shows the recovery cost is O(pending change) rather than O(tree): flat at 6-9
+  ms across a 14.7x tree growth, while a squashfs extract went 20 ms to 158 ms
+  and the image needing transfer went 2.55 MB to 38.3 MB. Those absolute figures
+  are local-disk with no transfer term on either side and are not citable as
+  platform numbers; the structural claim is what carries.
+- **Snapshot/CAS**, which is what the product already does.
+
+#### Why the two hybrid arms still have no deployed column
+
+Three complete attempts at a 4-arm x 3-repetition matrix ended the same way, and
+the reason is a platform bound rather than a defect in the arms. The R2 arms'
+heavier phases — `npmlike`, `gitlike`, `small`, and `posix` on a bad pass —
+exceed the per-exec ceiling, and each attempt pays the whole ceiling before it
+fails. Three repetitions times four such phases times three R2 arms is a run
+measured in hours, most of it spent waiting to be told no.
+
+That fix has now been applied twice, and the second application settled what the
+blocker actually is. The combined seven-phase exec became one exec per phase
+after it died twice at six minutes; then each phase became one exec per METRIC
+GROUP, splitting `seq` by size and `small` by count. The second split moved the
+needle measurably — on the untuned mount `posix`, `seq1`, `seq10`, `rand` and
+`archive` now land, where before nearly every heavy group failed — leaving four
+that still do not: `npmlike`, `gitlike`, `small1k`, `seq100`.
+
+So granularity is no longer the constraint. `small1k` is four time-bounded loops
+of 8 s plus one readdir and it still times out, which is well under what the
+ceiling should allow, and no `timeout` option raises it. A sibling building the
+devbox bench app reports the same from an independent path: the SDK's exec
+timeout is not exposed on that call path and does not move the ceiling.
+
+The next lever is therefore a DESIGN choice rather than another retry, and it is
+recorded here instead of guessed at: either drive these groups as a long-running
+process with polled output rather than a blocking exec, or accept that they are
+unmeasurable through a blocking exec and report them as such. Six of ten metric
+groups on the untuned arm is the honest current reach.
+
+Two smaller things a continuation should carry:
+
+- `finally` does not run when the driver is killed. A `SIGTERM` mid-run left the
+  fixture Worker live on workers.dev (answering 401, so inert, but present). The
+  teardown paths are correct on every *return* and *throw*; a signal handler that
+  runs the same teardown is missing.
+- `wrangler delete --config` has failed in practice against
+  `/workers/services/kinu-r2-bench` while `wrangler delete --name` succeeded on
+  the first try, so teardown now tries both. A teardown with one route leaks
+  whenever that route is the one that breaks.
+
+The `overlay` and `r2-tuned` arms are built, deterministic and ready; they have
+not produced a full repetition set on the deployed path yet. Anyone continuing
+this should run `bun run bench:r2-workspace --reps 3` and fill the two empty
+columns — the instrument, the teardown and the statistics are done, and the
+tuned arm exists precisely to answer whether `use_cache` moves the metadata
+number by an order of magnitude or only by a factor.
+
+If R2-primary is revisited, these are the concrete options to revisit it WITH,
+and the ones to leave alone. Use: `use_cache=<dir>` with `ensure_diskfree=2048`
+and `del_cache`, `stat_cache_expire=900`, `max_stat_cache_size=400000`,
+`enable_noobj_cache`, `multipart_size=16`, `parallel_count=8`,
+`multireq_max=20`, `list_object_max_keys=1000`, `nomixupload`. Do not use:
+`nomultipart`, `sigv2`, `no_check_certificate`, `use_cache` without a disk floor,
+`parallel_count=32`, `allow_other`, `notsup_compat_dir`, or any debug level — each
+with its reason in `REJECTED_S3FS_OPTIONS`.
+
+## Devbox storage strategies: `snapshot-chain` vs `r2fs`
+
+`scripts/bench-devbox-strategies.ts` drives `packages/devbox/bench` on an
+ephemeral deployed Worker and measures the two strategies against each other:
+cold and warm attach, a checkpoint ladder at 64 KiB / 4 MiB / 64 MiB of change,
+stop then wake, the same deterministic workload phases as the layout benchmark,
+R2 operations through `/ops` with a flush at every phase boundary, and teardown.
+
+```
+bun scripts/bench-devbox-strategies.ts --plan
+bun scripts/bench-devbox-strategies.ts
+```
+
+It inherits five rules from the layout benchmark, each bought with a failed run:
+`/verify` first per arm and a failed verify is refused rather than ranked; one box
+per arm, because `mountBucket` refuses a second mount of one binding at a
+different prefix or `readOnly`; `/ops/flush` at every phase boundary, because a
+settle-and-hope read undercounted PUTs by at least 590 on the layout benchmark;
+wake numbers deployed-only, because local workerd loses the container's
+networking sidecar after a stop; and minute-scale work driven as a polled process
+rather than a blocking exec.
+
+### NO VERDICT YET. The comparison below is VOID; the `r2fs` numbers are not
+
+Run 10 produced the first window in which any arm completed, and its `r2fs`
+measurements are real. The COMPARISON is not, and the reason is a fact this
+document reported before it drew a conclusion from it: `snapshot-chain` was
+carrying an attach defect for every run in which it was measured. An arm that
+cannot attach is not a slow arm, and ranking a strategy against one is ranking it
+against a blank disk. So `r2fs` is measured-working, `snapshot-chain` is
+unmeasured, and "r2fs won" is withdrawn as a standing result.
+
+A verdict requires the three-way rerun on the fixed tree, with `overlay-cas` as
+the third arm. Verdict shape when it comes: one default, losers named with
+numbers, and any arm whose `/verify` fails refused rather than ranked.
+
+What follows is therefore evidence about `r2fs` and about the four defects that
+kept `snapshot-chain` from being measurable, not a comparison.
+
+| | `r2fs` | `snapshot-chain` |
+| --- | --- | --- |
+| /verify | PASSED, 8/8 checks | create failed at attach |
+| cold attach | 19,527 ms, `attached` | failed |
+| stop→wake | 16,675 ms, `attached` | not reached |
+| workload phases completed | 7 of 7 | 0 of 7 |
+
+The r2fs workload ran at near-native speed because its hot path IS the container
+disk — R2 receives the checkpoint stream, not every write:
+
+| metric | `r2fs` p50 | raw R2 s3fs FUSE (uncached arm) |
+| --- | --- | --- |
+| `small-create-1k` | 0.38 ms | 622 ms (~1,600x slower) |
+| `npmlike-install-write` | 0.59 ms | 607 ms (~1,000x slower) |
+| `npmlike-resolve-probe` | 0.03 ms | 247 ms |
+| `read-10MiB` | 18.5 ms (541.8 MiB/s) | 1,097 ms (9.1 MiB/s) |
+| `random-write-4KiB` | 0.03 ms + 10.8 ms flush | 4.1 ms per op |
+| `archive-extract-300-files` | 121.8 ms | — |
+
+Every checkpoint committed at all three change sizes (64 KiB, 4 MiB, 64 MiB),
+with bytes reported under the unified base+delta semantics. The wake verified as
+a real restore (`attach.kind: attached`) at 16,675 ms.
+
+`snapshot-chain` has now failed to produce a usable work directory across TEN
+deployed runs through FOUR successive distinct defects: no usable lazy-layer
+workdir, a bad fuse mount point, and finally a missing squashfs image
+(`Can't open squashfs image: No such file or directory`). Each was fixed; each fix
+exposed the next. Until one generation completes an attach that survives exec,
+it cannot be ranked, and ranking it would mean ranking a blank disk.
+
+**No default. `r2fs` is measured working on the deployed path; `snapshot-chain`
+is unmeasured, not beaten.** The distinction matters because the two conclusions
+license different decisions: one says a strategy is worse, the other says nobody
+has looked.
+
+#### What the prototype established, and where it went
+
+Recorded here rather than left in a transcript because the artifact was deleted
+from the worktree in-slice on the since-withdrawn verdict. Two things then made
+that cheaper than it looked: a byte-complete final-state copy survived outside the
+tree, including its measured `.results` output, and its design was REGENERATED
+into `packages/devbox/src/overlay-cas.ts` with the CAS helpers under
+`packages/devbox/src/cas/`. So the counters and semantics below are live devbox
+identifiers, not the record of something gone, and this section is a reading guide
+for code that exists. Its author measured all of it; these are the claims the
+promotion should keep holding.
+
+POSIX invariants, sixteen checked against real s3fs 1.90, native control versus
+s3fs, minio-backed. Only two differ from native:
+
+- **Hardlinks are `ENOTSUP`.** A genuine semantic loss, not a slow path.
+- **Rename is a server-side COPY, not a metadata operation.** ~3x for a 1024x
+  size increase, stable across two runs (2.97x and 3.35x) while absolute times
+  moved with load — so the RATIO is the citable quantity, not the milliseconds.
+
+Everything else held: symlink round-trip, mode, sub-second mtime resolution,
+empty directories, atomic per-file overwrite, and — the one its author expected
+to fail — a negative lookup does not hide a later write, so `enable_noobj_cache`
+does not bite.
+
+Recovery shape, on local disk with no transfer term on either side: recovery is
+O(pending change), not O(tree). Flat at 6-9 ms across a 14.7x tree growth, while
+a squashfs extract went 20 ms to 158 ms and the image needing transfer went
+2.55 MB to 38.3 MB. The missing transfer term is one-sided and widens the gap
+rather than narrowing it, because the overlay path moves only the pending change
+while the squashfs path must move the whole image before extracting.
+
+Sync CLI contract, which the promoted strategy PRESERVED. The code that emitted
+these counters was not deleted, it was MOVED: regenerated into
+`packages/devbox/src/cas/`, which is why every name below resolves live in this
+tree and why they are devbox CAS identifiers now rather than a record of something
+gone. The contract is written out here because the report cites its numbers and a
+reader should be able to check the wire against them. `scan` then `sync`,
+exit 0 synced / 3 nothing-to-do / non-zero failed, one JSON object on stdout and
+diagnostics on stderr. Counters itemised at the store seam — `putCalls`,
+`getCalls`, `headCalls`, `deleteCalls`, `listCalls`, `bytesPut`, `bytesGot` — as
+per-call DELTAS, never lifetime totals, which was one of two defects its author
+caught in himself. Cursor semantics: the journal is the
+only authority on what changed, sync coalesces per path with latest-state-wins,
+and the durable cursor advances only AFTER the remote write it describes is
+durable, so a crash re-does at most one batch and a content-addressed re-upload
+is idempotent. A repeated sync with no intervening writes performs ZERO remote
+operations and returns exit 3.
+
+Two defects its author found in his own implementation, both worth guarding
+against in the promotion: cumulative counters reported as per-call (1,384 puts
+claimed for a 20-file change), and an emptied upper layer mass-tombstoning the
+workspace, which a throughput benchmark would have recorded as a very fast sync.
+
+Caveats its author attached and which travel with the numbers: minio is not R2,
+so the invariant set carries but R2-specific metadata behaviour needs a deployed
+run; and every latency above is local-disk, so none of it is a platform figure.
+
+Disposition, and what became of it. `prototypes/r2-overlay` was deleted under a
+verdict that has since been voided — see the VOID note above, which withdraws the
+comparison that authorised the deletion. The blobs are unrecoverable. Its design
+was therefore REGENERATED rather than migrated, from its author's transcript and
+the preserved `.results/` measurements, and promoted into
+`packages/devbox/src/overlay-cas.ts` with the CAS helpers under
+`packages/devbox/src/cas/**`. It is now the measured THIRD strategy, beside
+`snapshot-chain` and `r2fs`, with its proven invariants carried over as
+`packages/devbox/tests/overlay-cas.test.ts` — whiteout and tombstone semantics,
+rename as delete-plus-create with blob reuse, and the crash ordering (blob before
+journal, journal before fold, tree and manifest before the cursor, cursor before
+the reap). Each of those has a mutant that turns the suite red.
+
+The storage default is UNDECIDED until the A/B/C rerun on the fixed tree. The
+layout benchmark's built-in sync stand-in stays deleted, so the overlay arm
+reports no sync column rather than one produced by superseded code.
+
+### No default was derivable until run 10, and the reason was two product defects
+
+Neither arm has produced a workload on a deployed Worker. That is a result about
+the strategies, not about the instrument, and both causes are specific:
+
+**`r2fs` could not mount at all.** `packages/devbox/src/r2fs.ts` passed
+`compat_dir` in its s3fs option list and the mount failed outright with
+`S3FSMountError: S3FS mount failed: fuse: unknown option 'compat_dir'`. s3fs in
+`cloudflare/sandbox:0.12.8` is 1.90, which does not accept it — and the behaviour
+it asks for is the DEFAULT there, the option that exists being the negative
+`notsup_compat_dir`. Reported and now removed, with tests pinning both directions
+absent.
+
+**`snapshot-chain` attaches without a usable work directory.** Every exec against
+it failed with `this devbox has no attached work directory: chain <id> is stored
+as lazy layers and its store subdirectory …`. The attach refuses loudly rather
+than silently succeeding, which is the correct half of the design and exactly the
+postcondition a sibling's production diagnosis argued for — but the strategy
+cannot run a workload in that state, so it has no numbers.
+
+### Two instrument findings worth keeping, 2026-08-24
+
+**A stable `workers.dev` hostname makes an unauthenticated 401 useless as a
+readiness check.** A previous deployment answers 401 identically, so a run can
+start against code that is not its own: mine got 401 back on its own freshly
+minted token for both arms and recorded two "failed creates" that were nothing of
+the kind. Readiness now waits for an AUTHORIZED request to return 200, which is
+the only evidence that the token this run minted is the token the live code
+checks. The unauthenticated probe stays, as a security assertion.
+
+**Container capacity refusals must be retried at create.** `there is no container
+instance that can be provided to this durable object` killed a whole A/B. Nothing
+has been measured when it fires, so retrying is recovery; scoring a strategy on an
+account's momentary capacity would be the same class of error as counting a free
+`delete` as a billed operation. Retried four times with backoff, and the attempt
+count is recorded so a cold-attach number that needed four tries cannot read like
+one that needed one.
+
+### Progression across eight deployed runs, all 2026-08-24
+
+The arm went from measuring nothing to measuring everything, and each step was a
+distinct blocker rather than a retry:
+
+| run | what stopped it |
+| --- | --- |
+| 1-3 | `r2fs` could not mount: `fuse: unknown option 'compat_dir'` |
+| 4-5 | `snapshot-chain` attached with no usable work directory: `chain <id> is stored as lazy layers and its store subdirectory …` |
+| 6 | the harness vanished mid-run: `cd: /workspace/.devbox-bench: No such file or directory`, the container-recycle hazard the layout driver already recovered from and this one did not |
+| 7 | **snapshot-chain cleared EVERY phase and completed stop→wake** — the first rankable arm. `r2fs` then failed every phase with `Maximum number of running container instances exceeded` |
+| 8 | stalled in the checkpoint ladder; harvested rather than waited |
+
+Run 7's second-arm failure is a finding about the A/B's own shape, not a flake.
+`max_instances` is 1 per class, and the first arm's box was still up: its own
+stop→wake measurement had deliberately woken it and the warm-attach check kept it
+there. One box per arm is required for CORRECTNESS — `mountBucket` refuses a
+second mount of one binding at a different prefix or `readOnly` — so the
+consequence is that each arm must hand its instance BACK rather than merely stop
+using it. The driver now releases the box with `/stop` at the end of every arm.
+
+### What remains
+
+One deployment window with both defects fixed. The instrument is complete: arms,
+verify gate, checkpoint ladder, lifecycle timings, workload phases, op counting
+with per-phase flush, teardown of Worker, both container applications and bucket,
+and a `SIGTERM` handler that runs the same teardown. The recommendation function
+is written and derives its verdict from the rows — it refuses to name a default
+when no arm passes verify, says so explicitly when only one does, and otherwise
+ranks on metadata latency, which is the quantity a workspace actually spends its
+life on.
+
+### The three-strategy decisive run, 2026-08-25
+
+Ephemeral deployed Worker, `packages/devbox/bench`, three arms measured against the
+DurableFsResearch workload set. Build: `4fd73892b` plus the working-tree fixes
+landed that day (atomic fuse mount, base-layer verify row, overlay-cas adapter,
+dispatch guard). 67 minutes wall, exit 0, clean teardown.
+
+**NO VERDICT IS PUBLISHED HERE.** The cost numbers below stand and are what a
+decision rule reads. The comparison does not, for a reason measured in this run
+and stated before any ratio: per-workload attribution is corrupted by a product
+defect, so the per-workload sums that a ratio divides are not sums of the work
+their labels name.
+
+#### Lifecycle, measured
+
+| arm | /verify | attach cold | kind | attach warm | stop | wake |
+| --- | --- | --- | --- | --- | --- | --- |
+| `snapshot-chain` | PASSED | 27,276 ms | `empty` | 14 ms | 52 ms | REFUSED |
+| `r2fs` | PASSED | 1,802 ms | `attached` | 2,058 ms | 42 ms | REFUSED |
+| `overlay-cas` | **FAILED** | 3,890 ms | `empty` | 34 ms | 94,792 ms | REFUSED |
+
+`overlay-cas` is refused from ranking by the rule rather than ranked, because an
+arm that fails `/verify` measured the container's own disk. Its rows are kept for
+diagnosis.
+
+#### Tick sums, and why they cannot be divided
+
+| arm | workload | ticks | Σ tick ms | p50 | MiB PUT | class A | USD |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `snapshot-chain` | npm | 5 | 493 | 93 | 0.0 | unmeasured | unmeasured |
+| `snapshot-chain` | npm-excluded | 5 | 77,445 | 101 | 487.4 | unmeasured | unmeasured |
+| `snapshot-chain` | git | 5 | 344,861 | 88,398 | 1,527.6 | unmeasured | unmeasured |
+| `snapshot-chain` | sqlite | 5 | 488,440 | 115,024 | 2,678.9 | unmeasured | unmeasured |
+| `r2fs` | npm | 5 | 28,819 | 129 | 274.8 | unmeasured | unmeasured |
+| `r2fs` | npm-excluded | 1 | 123,907 | 123,907 | 0.0 | unmeasured | unmeasured |
+| `overlay-cas` | npm | 5 | 26,219 | 164 | 274.8 | unmeasured | unmeasured |
+| `overlay-cas` | npm-excluded | 5 | 70,833 | 173 | 551.4 | unmeasured | unmeasured |
+| `overlay-cas` | git | 5 | 437,972 | 89,440 | 2,902.3 | unmeasured | unmeasured |
+| `overlay-cas` | sqlite | 5 | 265,492 | 81,731 | 2,199.0 | unmeasured | unmeasured |
+
+Read the chain's first two rows together: the `npm` workload wrote a 400 MiB
+dependency tree and its five ticks captured **0.0 MiB**, every one answering
+`skipped (work directory is unchanged)`. The next workload's FIRST tick then
+committed 487.4 MiB — approximately the npm tree. The bytes were not lost, they
+were attributed to the wrong workload, one workload late. `r2fs` shows the same
+shape with its `npm-excluded` row.
+
+So a ratio computed from these columns divides one workload's label by another
+workload's bytes. That is why no ratio appears above, and it is not conservatism:
+the decision rule reads exactly these sums, and feeding it misattributed sums
+would have produced a confident number from a corrupted denominator.
+
+#### The defect that corrupts it, which is a durability hazard and not a benchmark nuisance
+
+Counted across the run: **21 ticks reported `skipped (work directory is
+unchanged)` while the workspace had changed** — 9 on `snapshot-chain`, 4 on
+`r2fs`, 8 on `overlay-cas`. The proof that they had changed is that a later tick
+on the same arm committed the accumulated bytes.
+
+A checkpoint answering "unchanged" over a changed workspace is not a slow
+checkpoint. It is a window in which the system believes nothing needs saving while
+hundreds of megabytes sit only on a container disk that a spot replacement
+discards — and this benchmark has already established that nothing under
+`/workspace` survives a replacement. The benchmark noticed it because attribution
+is per-workload here; a product would notice it as data loss after an eviction.
+
+#### Three more, each measured
+
+**Wake refuses on an archive/state size disagreement, on every arm.** Verbatim:
+`delta archive is 702791680 bytes, state declares 700387328` (chain);
+`507326464 bytes, state declares 216788992` (r2fs); `base archive object is
+missing from the store` (overlay-cas). The refusal is CORRECT — it declines to
+serve an empty work directory rather than pretend — so what is defective is the
+disagreement, not the response to it. No arm produced a measurable wake.
+
+**Staging fails with an archive that has no size.** `staged archive
+/var/tmp/devbox/stage/layer.sqsh has no size; the archiver did not land`, three
+times on the chain. And on `r2fs`, `WritableStream RPC stub was disposed without
+calling close()` — a stream closed by the platform under a writer that still held
+it.
+
+**The op counter cannot see Durable-Object-side writes.** Every class-A and
+class-B cell above reads `unmeasured` rather than `0`, because the run reported
+thousands of megabytes PUT against zero operations of every class — which is
+impossible if the counter were watching, since bytes reach R2 through a PUT or a
+multipart part and there is no third way. The mechanism is that the fixture's
+tally accumulates in per-isolate module state and pushes only at a 64-operation
+threshold, while the explicit flush drains whichever isolate serves it; a
+checkpoint issuing fewer than 64 operations tallies where nothing reads it.
+Rendering that as `$0.00` would have published a plausible wrong price for half a
+gigabyte, so the instrument now detects the contradiction and says so.
+
+#### What the run does establish
+
+The confound this experiment was designed to exclude is excluded, and measured
+rather than argued: every arm took 3 quiesces BEFORE the decisive window and **0
+inside it**, so no chain rebase can have inflated a decisive tick. The chain's
+base id did change across the ladder, so it did rebase there — recorded, because
+`overlay-cas` never rebases and that is a systematic difference in the state each
+arm carries into the window rather than run-to-run noise.
+
+The instrument itself is now sound in the places this run tested it: workloads
+are resumable per segment so a checkpoint falls between them, the minimum
+checkpoint interval is respected rather than measured, a verify-failed arm is
+refused from the ratio rather than priced, and a blind op counter is detected by
+contradiction instead of published.
+
+### Verdict run, 2026-08-25: real op counts, three terminal failures, no verdict
+
+devbox 184/0 and tsc clean at launch, all owner fixes in. 21 minutes, exit 0,
+clean teardown. **Two things are now measured for the first time, and a verdict
+is still not derivable — for a cleaner reason than last time.**
+
+#### What is fixed, measured
+
+**Attribution is sound.** The previous run had 21 ticks across three arms
+answering `skipped (work directory is unchanged)` over a workspace that had
+changed, so bytes landed on the wrong workload. This run: the chain's npm ticks
+are 4 committed, 1 skipped, 1 failed, and the 400 MiB tree is attributed to the
+workload that wrote it.
+
+**Class-A operations are real numbers for the first time.** Every previous run
+read zero against hundreds of megabytes, because the op tally accumulated in
+per-isolate module state and was drained from the wrong isolate. With the tally
+flushed from the isolate that made it, at the end of every instrumented
+operation:
+
+| arm | workload | ticks | Σ tick ms | p50 | class A | MiB PUT | USD |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `snapshot-chain` | npm | 5 | 250,830 | 43,097 | 360 | 1,488.0 | $0.001620 |
+| `snapshot-chain` | npm-excluded | 1 | 99,857 | 99,857 | 120 | 0.0 | $0.000540 |
+| `r2fs` | npm | 4 | 132,186 | 53,769 | 113 | 459.0 | $0.000509 |
+
+Both arms passed `/verify`, so on npm the comparison is legitimate as far as it
+goes: the chain's Σ is 1.90x r2fs, but its p50 per tick is 0.80x — FASTER per
+tick over more ticks — while moving 3.24x the bytes and issuing 3.19x the
+class-A operations. A chain tick is cheaper in latency and dearer in work, which
+is the shape the O(p)-versus-O(c) question predicts and is not enough on its own
+to answer it.
+
+#### Why there is still no verdict
+
+The rule needs git AND npm on both ranked arms. **No arm produced a single git
+tick**, because all three died terminally, each from a different cause, and each
+death cost every workload after it.
+
+| arm | terminal failure | verbatim |
+| --- | --- | --- |
+| `snapshot-chain` | archive/state size disagreement | `delta archive is 506834944 bytes, state declares 506494976` |
+| `r2fs` | attach budget exceeded | `Devbox.attach exceeded its 25000ms budget and was abandoned` |
+| `overlay-cas` | lower layer unresolvable | `cannot resolve path /var/tmp/devbox/cas-lower` |
+
+All three then answer every later operation with `this devbox has no attached
+work directory` and `A scheduled retry is armed; operations are refused until it
+succeeds` — which never succeeds. The chain lost npm-excluded segments 1-4 and
+all ten git and sqlite segments to one occurrence. The run finished in 21 minutes
+rather than 70 because it was bailing, not because it was fast.
+
+#### The size disagreement has a signature that names its mechanism
+
+Three instances across two runs:
+
+| archive bytes | state declares | difference | ÷ 4096 |
+| --- | --- | --- | --- |
+| 506,834,944 | 506,494,976 | 339,968 | 83 |
+| 702,791,680 | 700,387,328 | 2,404,352 | 587 |
+| 507,326,464 | 216,788,992 | 290,537,472 | 70,932 |
+
+**Every difference is an exact multiple of 4096, with no remainder, and the
+archive is always LARGER than the declaration.** A byte-counting error lands on
+arbitrary values; a size read before the archiver's final filesystem blocks land
+is off by a whole number of blocks, always low. So the ordering is
+measure-then-flush rather than the count being wrong — which is why a fix that
+made the counter honest did not move it.
+
+The refusal itself is correct and should stay: declining to serve an empty work
+directory rather than pretending is what made this diagnosable.
+
+#### A fixture value that is now a measurement defect
+
+`r2fs` died on `attachBudgetMs`, which the bench fixture shortens to 25,000 ms
+with the comment "so an arm does not sit for half an hour". That is right for the
+lifecycle tests it was written for and wrong for a storage benchmark: attaching a
+400 MiB workspace legitimately takes longer than 25 seconds, so the value that
+made one measurement fast makes another impossible. The shortening is not a
+product bound and must not be reported as one.
+
+### The decisive run, 2026-08-25: what it measured, and why no strategy exhibits O(p)
+
+devbox 191/0, `tsc` clean, `wrangler deploy --dry-run` clean at launch, every owner
+fix in. 87 minutes, exit 0, clean teardown. Three arms reached the container and
+two passed `/verify`. **First run in which any arm completed all four workloads.**
+
+#### The rule's formal answer is INCONCLUSIVE, and the data is decisive anyway
+
+`overlay-cas` failed `/verify`, so the rule refuses it from ranking rather than
+pricing its ticks — no ratio is computed. But its ticks were recorded, and taking
+them at face value is what makes the run informative:
+
+| ratio | measured | bar |
+| --- | --- | --- |
+| `snapshot-chain` ÷ `overlay-cas`, git | **1.29x** | 10x |
+| `snapshot-chain` ÷ `overlay-cas`, npm | **1.28x** | 3x |
+
+The candidate is not a near miss. It is an order of magnitude below the bar it
+was proposed against, and below even the lower `< 3x` threshold at which the rule
+says O(c) tick cost is not the bottleneck.
+
+#### RETRACTED: the amplification finding was a misread field
+
+An earlier version of this section reported 2,078x to 2,351x write amplification
+on a small edit. **That was wrong and it is withdrawn.** The error is worth
+recording because it is the same class this document keeps finding elsewhere.
+
+`checkpoint.outcome.bytes` is CUMULATIVE BYTES HELD — base plus delta for a
+chain, prefix bytes for r2fs — not bytes moved by that tick. That was stated to
+me plainly when the semantics were unified and I read the field as per-tick
+anyway. Every "tick moved half a gigabyte" figure was a snapshot of the total the
+box held at that moment, so the table compared a running total against one
+segment's writes and got a ratio in the thousands.
+
+The correct per-tick quantity is the difference between consecutive totals. Under
+that reading the result inverts:
+
+| tick | bytes the segment wrote | bytes the tick MOVED | arm |
+| --- | --- | --- | --- |
+| `npm-small-edit` | 240 KiB | **4,096 B** | `snapshot-chain` |
+| `npm-small-edit` | 240 KiB | **4,096 B** | `r2fs` |
+| `npm-small-edit` | 240 KiB | **4,096 B** | `overlay-cas` |
+| `git-commits-3` | ~9.8 MiB | 8.78 MiB | `snapshot-chain` |
+| `git-commits-3` | ~9.8 MiB | 8.73 MiB | `overlay-cas` |
+| `sqlite-rewrite-3` | ~6.4 MiB | 2.30 MiB | both |
+
+**O(pending change) is realised on all three strategies, including the
+incumbent.** A 240 KiB edit costs one 4 KiB block. A git commit costs about what
+it wrote. A sqlite page rewrite costs less than it wrote, which is deduplication
+working.
+
+That explains the 1.29x and 1.28x wall-time ratios completely, and it is the real
+answer to the question this experiment was built for: the ratios are near 1 not
+because the candidate fails to be O(p), but because **the chain is already O(p) on
+a small edit**, so there is no asymptotic gap to find. The premise that the
+incumbent is Θ(c) and the candidate O(p) does not hold in deployment. Class-A
+counts per tick agree — 126, 126 and 99 on the small-edit tick — so operations do
+not separate the arms either.
+
+Two caveats on the difference method, stated because they bound it. A skipped tick
+reports 0 held rather than a lower total, so it carries no information about the
+running total and is shown as 0 moved. And two ticks show a NEGATIVE difference
+(-245,760 B on the chain, -147,456 B on overlay-cas): held bytes fell, which is
+what a rebase or fold collapsing generations does. Across such a boundary the
+difference is not a per-tick cost, and a future run should read a per-tick moved
+figure from the strategy directly rather than deriving it.
+
+#### The corpus, since the shape of it decides how the first tick reads
+
+Each `npm-install-N` segment creates NEW packages only — segment k owns packages
+`[k·perSegment, (k+1)·perSegment)` — so no segment rewrites an earlier segment's
+files. But all segments of a workload, and all workloads of an arm, share ONE
+box, so the tree accumulates and the first commit of each workload legitimately
+ships everything accumulated to that point. That is honest work and it is why the
+first tick of a workload is large while later ticks are small.
+
+#### Full matrix, with class-A operations priced
+
+| arm | workload | ticks | Σ tick ms | p50 | p95 | class A | MiB PUT |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `snapshot-chain` | git | 5 | 361,324 | 90,059 | 99,323 | 533 | 2,087.5 |
+| `snapshot-chain` | npm | 5 | 215,706 | 41,764 | 80,766 | 334 | 1,488.0 |
+| `snapshot-chain` | npm-excluded | 5 | 305,926 | 71,878 | 91,273 | 446 | 1,950.3 |
+| `snapshot-chain` | sqlite | 5 | 290,094 | 95,967 | 97,195 | 463 | 2,007.1 |
+| `r2fs` | npm | 5 | 196,025 | 38,051 | 74,282 | 338 | 1,744.0 |
+| `r2fs` | npm-excluded | 3 | 68,240 | 390 | 67,845 | 110 | 551.4 |
+| `r2fs` | sqlite | 5 | 296,025 | 82,677 | 88,264 | 398 | 2,059.5 |
+| `overlay-cas` | git | 5 | 279,108 | 64,681 | 88,031 | 495 | 2,332.6 |
+| `overlay-cas` | npm | 5 | 168,451 | 33,496 | 56,354 | 303 | 1,744.0 |
+| `overlay-cas` | npm-excluded | 5 | 183,652 | 58,436 | 63,407 | 339 | 1,654.6 |
+| `overlay-cas` | sqlite | 5 | 253,603 | 81,674 | 89,199 | 451 | 2,199.1 |
+
+Priced at $4.50/M class A: `snapshot-chain` 1,776 ops = **$0.007992**, `r2fs` 846
+= **$0.003807**, `overlay-cas` 1,588 = **$0.007146**. Class B is 0 across every
+arm and workload, which is consistent: a checkpoint writes and does not read.
+
+`r2fs` has no git row. Its git segments failed with `Durable Object is overloaded.
+Requests queued for too long.` — a platform refusal under the load the other arms
+also carried, not a property of the strategy, and it is why `r2fs` cannot be
+ranked on the git arm either.
+
+#### The excludes result is WITHDRAWN as a measurement of filtering cost
+
+`npm-excluded` took 1.42x the tick time and 1.34x the class-A operations of plain
+`npm` on `snapshot-chain`, and 1.09x / 1.12x on `overlay-cas`. An earlier version
+of this section read that as filtering being work that exceeded what it avoided.
+**That reading is withdrawn.**
+
+The chain's `shouldRebase` compared an excludes-applied base against a delta
+measured WITHOUT them, so the excluded arm rebased at every quiesce and performed
+full re-archives the plain arm never did. The ratio was therefore mostly a defect
+in the rebase decision rather than the cost of filtering, and both sides are now
+measured alike. Whether any excess survives is unmeasured: it needs a rerun on the
+corrected comparison, and if the excluded arm still outruns the plain one after
+it, THAT difference is the real filtering cost.
+
+The `r2fs` column never supported a conclusion either way — three of its five
+segments never ran.
+
+#### Confound control, measured rather than argued
+
+Every arm took 3 quiesces before the decisive window and **0 inside it**, so no
+chain rebase inflated a decisive tick. Recorded per arm in the artifact rather
+than asserted here.
+
+### Verdict: `snapshot-chain` is the default devbox storage strategy
+
+Decided 2026-08-25 on the deployed three-arm run above.
+
+**Grounds.** The decision rule reads 1.29x on git and 1.28x on npm, both below the
+3x floor, so tick asymptotics are not the bottleneck. The corrected per-tick table
+shows all three strategies move only what changed — a 240 KiB edit costs 4,096
+bytes on every arm — because the chain's rebase cadence keeps its changed set near
+pending. And the chain is the only arm that passed `/verify` in both deployed runs
+and completed every workload, carrying the two green P1-P6 durability probes plus
+the Lean-proven crash ordering and rebase amortization.
+
+**The other two remain selectable behind the same seam**, with their measured
+envelopes recorded rather than their reputations.
+
+`overlay-cas` is for the long-lived-box regime, where rebase cadence cannot hold
+the changed set near pending. **That regime is UNMEASURED here.** This run's boxes
+were short-lived and rebased often, which is precisely the condition under which
+the chain matches it, so nothing above speaks to the case the strategy exists for.
+Its two verify-failure fixes landed after this run and are therefore also
+unmeasured on a deployed container.
+
+`r2fs` is for zero-checkpoint continuous sync, where its POSIX losses are
+acceptable: rename costs about 3x at a 1024x size increase because it is a
+server-side copy, hardlinks are `ENOTSUP`, durability arrives only on close, and
+metadata operations collapse under npm and git workloads. **Never as
+workspace-primary.**
+
+#### Retraction carried forward
+
+The amplification finding published earlier in this section was wrong and is
+withdrawn. `checkpoint.outcome.bytes` is cumulative bytes HELD, not bytes moved by
+that tick; read as per-tick it compared a running total against one segment's
+writes and produced ratios in the thousands. The corrected per-tick figures are in
+the table above.
+
+#### Both caveats on the difference method
+
+A skipped tick reports 0 held rather than a lower total, so it carries no
+information about the running total and appears as 0 moved. And two ticks show a
+NEGATIVE difference — -245,760 B on the chain, -147,456 B on overlay-cas — where
+held bytes fell, which is a rebase or fold collapsing generations; across such a
+boundary a difference is not a per-tick cost. The derived number is valid only
+between folds.
+
+#### Named instrument change, outstanding
+
+A per-tick moved-bytes figure must be read FROM THE STRATEGY rather than derived
+by differencing a cumulative total. Differencing is what made the retracted claim
+possible and it breaks across a rebase by construction. Until a strategy reports
+that field, per-tick byte costs in this section are valid only between folds and
+should be read with the two caveats above.

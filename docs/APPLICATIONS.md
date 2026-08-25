@@ -9,13 +9,8 @@ Kinu is an agent platform with durable adaptation mechanisms. It:
 - evaluates reversible changes to its scaffold;
 - keeps persistent notes and searchable conversation text.
 
-```mermaid
-graph LR
-    B1[Crafted tools] --> B2[Persistent notes]
-    B2 --> B3[Tree swarms]
-    B3 --> B4[Versioned scaffold]
-```
-
+Those four are independent. None feeds the next, and a workspace can use any one
+of them without the others.
 
 Adaptation runs at four timescales:
 
@@ -88,12 +83,13 @@ The CLI version runs locally on POSIX with bun:sqlite, and provides the same cor
 ```bash
 kinu create dev-helper --purpose "A TypeScript development assistant"
 kinu chat dev-helper
-# Agent has access to execute_tools, run, file, agents, memory, tasks, web
+# Agent has access to execute_tools, run, file, agents, memory, tasks, web, report
 # Evolution happens locally; crafted tools persist in ~/.kinu/dev-helper/agent.db
 ```
 
 The CLI agent can:
-- Execute code in a sandboxed subprocess (30s timeout, sanitized env)
+- Execute code in a sandboxed subprocess with a sanitized environment. A caller
+  may pass a timeout. Nothing imposes one, so long work runs to completion
 - Read/write files in its virtual filesystem
 - Search memory with FTS5 full-text search
 - Learn tool patterns that persist across sessions
@@ -104,14 +100,17 @@ The CLI agent can:
 # Night job: run evolution cycle
 kinu evolve dev-helper --budget 5
 
-# Export agent state for sharing
-kinu export dev-helper -o dev-helper-v2.agent.db
+# Export the workspace to a portable archive
+kinu export dev-helper -o dev-helper-v2.kinu.jsonl
 
 # Import on another machine
-kinu import dev-helper-v2.agent.db --name dev-helper
+kinu import dev-helper-v2.kinu.jsonl --name dev-helper
 ```
 
-Agent state is a single SQLite file, so you can export it, back it up, put it in version control, and share it.
+A local workspace keeps its whole state in one SQLite file, and `kinu export`
+writes that state as a `.kinu.jsonl` archive. Cloud and local workspaces produce
+the same archive, and `import` restores either one as a local workspace. So you
+can back a workspace up, put the archive in version control, and share it.
 
 ### Research Experimentation
 
@@ -158,33 +157,44 @@ output is not. Nothing measures whether decomposition beats a single long turn,
 how often subordinates duplicate each other's work, or what coordination costs
 the orchestrator.
 
-### Evolution is Slow in Practice
+### Evolution is slow in practice
 
 - **Turn-level** works well; pattern extraction fires reliably after an accepted turn that used tools
 - **Session-level** needs 5 turns *and* a turn that errored or drew negative feedback; scaffold mutation additionally needs 3+ conversations
-- **Lifetime** fires every 5 closed session windows (`lifetimeEvolutionInterval: 5`), which is 25 turns; `kinu evolve` runs a search on demand
+- **Lifetime** fires every 5 closed session windows (`lifetimeEvolutionInterval: 5`, `core/src/evolution/types.ts:154`), which is 25 turns; `kinu evolve` runs a search on demand
 - The LLM's ability to generalize tool patterns into reusable code is inconsistent
 
 ### Evaluation exists; coverage is thin
 
-There is now a runnable quality benchmark (`scripts/eval.ts` over
-`core/src/eval/`) that scores a candidate model against a baseline with an LLM
-judge and exits non-zero below a committed floor, plus a replay eval
-(`runReplayEval`) that re-runs labeled past turns through the live scaffold to
-produce a loss curve. That is a real measurable signal, and the shadow-veto
-promotion decision leans on it. Breadth is still missing. The seed corpus is
-small, and these metrics remain unmeasured:
+`scripts/eval.ts` runs one A/B over `core/src/eval/`: one `generateText` call per
+model per case, on the corpus cases a model with no tools can answer, scored by a
+third model as judge, exiting non-zero below a committed floor. That is the whole
+claim it makes. It does not measure the agent, because it uses no tools, no system
+prompt and no loop, and it runs only when somebody asks for it. `docs/BENCH.md` is
+the instrument that runs real agent solvers against this repository's own checks.
+
+A replay eval (`runReplayEval`) re-runs labelled past turns through the live
+scaffold and reports a loss curve. It is on demand only. It used to run on the
+lifetime cadence and was removed from it, because it re-executed the same graded
+turns GEPA's seed scoring already re-executes for a curve no decision reads. The
+shadow-veto promotion decision does not read it either; that decision runs its own
+shadow trials.
+
+Breadth is still missing. The seed corpus is small, and these metrics remain
+unmeasured:
 
 - Task completion rate before vs after evolution
 - Tool reuse frequency
 - How much of stored memory a turn actually reads
 
-### Scaffold Mutation Rarely Triggers
+### Scaffold mutation rarely triggers
 
-The scaffold mutation pipeline exists and is fully implemented (4-gate validation, version history, rollback), but in practice:
-- Requires 3+ session reflections to trigger
-- The LLM often produces scaffolds that fail structural validation (forbidden patterns like `import`)
-- Successful mutations are rare; most conversations don't generate enough data for meaningful scaffold improvements
+The scaffold mutation pipeline is fully implemented, with four-gate validation,
+version history and rollback. In practice it fires rarely:
+
+- It needs 3 or more session reflections to trigger
+- The LLM often writes scaffolds that fail structural validation, usually on a forbidden pattern such as `import`
+- Most conversations do not produce enough data for a scaffold change worth keeping
 
 ### The search explorer
 

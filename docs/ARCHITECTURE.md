@@ -29,7 +29,7 @@ graph TB
         Files["Workspace filesystem, authoritative NIMBUS_SESSION<br/>(runtime.ts + execution/nimbus.ts), durable, real shell"]
         subgraph Execs["ExecutionRouter, target-native exec, each its own filesystem"]
             W["workspace.*: the file plane above (default runtime)"]
-            S["sandbox.*: full Linux container (when configured)"]
+            S["sandbox.*: Linux container, KinuSandbox (when configured)"]
             P["laptop.*: the user's own machine (connect + consent)"]
         end
         State["Actor SQL: sessions · plans · task/evolution/search ledgers<br/>Nimbus files: SOUL.md · memory · actor scaffolds"]
@@ -47,8 +47,15 @@ returns one row per executor that has a filesystem, with its namespace prefix,
 whether it is live, and its declared policy (`readOnly`, `rootPath`, and a
 `durable | ephemeral | live-shared` consistency). The `laptop` environment is
 served by the `pc-agent` reverse-WebSocket daemon (`packages/pc-agent`) running
-on the user's machine. See
-[WORKSPACES.md](./WORKSPACES.md) for the full noun model.
+on the user's machine. The `sandbox` environment is a Cloudflare container. A
+container is spot capacity, so `@kinu.run/devbox` (`packages/devbox`) presents
+one as a machine that stays: files survive, supervised processes come back, and a
+preview URL keeps its hostname. `KinuSandbox`
+(`cf-backend/src/kinu-sandbox.ts`) is a thin subclass. It supplies only the four
+things that are Kinu's own: the backup bucket, the preview zone, the two
+questions Devbox asks the owning workspace, and Kinu's egress interception. See
+[WORKSPACES.md](./WORKSPACES.md) for the full noun model and
+[EXECUTION-LAYER-SPEC.md](./EXECUTION-LAYER-SPEC.md) for the execution planes.
 
 ## The actor hierarchy
 
@@ -76,10 +83,13 @@ graph TB
 `ActorAgent` owns everything a full-loop actor needs once: the CF runtime
 assembly, the `BackendHost`, the shared `AgentOrchestrator`, `ExtensionHost` +
 compaction, the dynamic-context ledger, the prompt/model/tool caches, and the Think
-hook bridge. A subclass supplies a seven-member profile (`getOwnerUserId`,
-`ensureSchema`, `actorToolDeps`, `engine`, `notifyOwner`, `delegationBudget` and
-`subordinateFacet`) plus three optional hooks (`workspaceName`,
-`extraCodemodeProviders`, `isClientRpcMethodDenied`).
+hook bridge. A subclass supplies ten abstract members (`getOwnerUserId`,
+`actorKind`, `ensureSchema`, `actorToolDeps`, `engine`, `notifyOwner`,
+`delegationBudget`, `subordinateFacet`, `ownMission` and `persistAutoTitle`)
+plus three optional hooks (`workspaceName`, `extraCodemodeProviders`,
+`isClientRpcMethodDenied`). `persistAutoTitle` is the backend half of the
+auto-title seam: core decides a workspace needs a name, and the subclass stores
+it where that backend keeps workspace state.
 
 **Tool gating is structural.** A prompt never decides it. Every full-loop actor
 gets the ordinary built-ins, and the `agents` schema is derived from the
@@ -128,7 +138,7 @@ worker-held parent stub can create one.
 A subordinate is a *durable* teammate. It has its own
 SQLite turn/history state, full loop, and evolution engine, and survives
 hibernation. Its runtime is keyed to the parent's workspace name, so it uses the
-same authoritative Nimbus files, processes, ports, Sandbox, and device consent.
+same authoritative Nimbus files, processes, ports, container, and device consent.
 Its `shellId` and scaffold path are actor-private; its rendered identity comes
 from `subordinate_identity` rather than overwriting the workspace `SOUL.md`.
 
@@ -140,6 +150,19 @@ on the parent. If a subordinate finishes an assigned turn without calling
 private and has no report tool. `dismiss` deletes the facet
 unless `keep_history` is set, in which case only the roster row is marked
 dismissed.
+
+The local backend hires too, through `LocalAgentHost`
+(`cli-backend/src/agent-host/host.ts`). The daemon holds one
+`LocalAgentSession` per bound agent for its whole process lifetime: every root
+agent it has a ref for, and every live subordinate beneath one. A root is not the
+workspace. Several roots share one virtual workspace as equal peers, and the
+workspace is the `{ cwd, workspaceId }` pair on their refs. The host installs
+three dependency sets after construction, and each one decides whether a tool
+exists. `setTeam` gives an agent a subordinate roster. `setPeers` gives a root
+the peer transport that makes `reply` reachable. `setReport` gives a subordinate
+the tool it reports to its parent with. The durable work stays in the
+same `EventLog`, `background_jobs`, fiber and `outbox_peer` tables both backends
+use. The host adds no second queue and no second turn loop.
 
 The system prompt (`core/src/prompt.ts`) carries the matching doctrine. Its
 delegation ladder steers the agent to decompose multi-part or multi-hour work,
@@ -164,6 +187,25 @@ abort, the step-boundary pruning and the unpaired-tool-call repair for both. The
 cloud actor is the exception because its loop belongs to Think. The vendor
 drives the steps and Kinu binds to the hooks below. A node registers no
 extensions, so compaction and signal delivery belong to an actor's turn alone.
+
+**No turn carries a step cap.** Think OR-s `stepCountIs(this.maxSteps)` ahead of
+anything a caller passes, and the vendor default of 10 cut production turns with
+the model still emitting tool calls. `ActorAgent` therefore sets
+`UNBOUNDED_MAX_STEPS` and `UNBOUNDED_STEPS` on the Think config
+(`cf-backend/src/actor-agent.ts`), and `runChat` hands its `stopWhen` straight to
+`streamText` with `UNBOUNDED_STEPS` as the default (`core/src/chat.ts`). Heads
+and swarm nodes still run bounded stop conditions of their own, because a node is
+one graded attempt rather than a conversation.
+
+A finished run is named rather than guessed. Each backend passes facts to
+`classifyRunEnd` (`core/src/orchestrator/turn-lifecycle.ts`) and gets back the
+`RunEndReason`. A cut turn is `aborted` even when it also threw, because a user
+who pressed Stop caused no failure. A throw is `error`. A clean end is
+`completed`. One state stays impossible: a turn that reached its own end cannot
+have tool calls pending. The completed arm checks for it and fires the
+`turn.ended_mid_work` tripwire as a diagnostic failure rather than adding a
+fourth word to the ledger, because the step ceiling was the only thing that ever
+produced that state. The tripwire says when that stops being true.
 
 ```mermaid
 flowchart TB
@@ -377,7 +419,7 @@ inside a single long turn; the other three are conversational and belong to the
   (`core/src/orchestrator/craft-cycle.ts` over `core/src/craft/in-episode.ts`).
 - **Turn-level.** `reviewTurn()` assesses the just-finished turn; a negative
   outcome gates a reflection into memory, a strong one extracts a reusable
-  CraftStore tool.
+  crafted tool into the CraftStore.
 - **Session-level.** `onSessionReflection()` consolidates patterns and may call
   `maybeEvolveScaffold()` to propose a new `agent.js`.
 - **Lifetime.** `onLifetimeEvolution()` runs replay eval, craft consolidation,
@@ -402,9 +444,10 @@ and [MCTS.md](./MCTS.md).
 ```mermaid
 graph TB
     subgraph pkgs["packages/"]
-        Core["core/<br/>turn pipeline + ExtensionHost, canonical VFS,<br/>ExecutionRouter, swarm engine, MCTS, EvolutionEngine,<br/>CraftStore, scaffold, eight builtin tools, EventLog"]
+        Core["core/<br/>turn pipeline + ExtensionHost, workspace filesystem,<br/>ExecutionRouter, swarm engine, MCTS, EvolutionEngine,<br/>CraftStore, scaffold, eight builtin tools, EventLog"]
         Utils["agent-utils/<br/>MemoryStore (FTS5) · CraftStore (FTS5)<br/>VFS types · path addressing · abort helpers"]
         Compact["compaction/<br/>vendored better-compact ladder + Kinu codec"]
+        Devbox["devbox/<br/>@kinu.run/devbox: an ephemeral container<br/>presented as a machine that stays<br/>(snapshot-chain · r2fs · overlay-cas · supervision · ports)"]
         CF["cf-backend/<br/>ActorAgent → OrchestratorAgent + SubordinateAgent,<br/>ExplorationAgent (Facets), UserDO, React UI"]
         CLI["cli/<br/>kinu create/chat/exec/evolve/…"]
         CLIB["cli-backend/<br/>LocalAgentSession, bun:sqlite,<br/>subprocess sandbox, child_process branches"]
@@ -415,6 +458,7 @@ graph TB
     CF --> Core
     CF --> Utils
     CF --> Compact
+    CF --> Devbox
     CLI --> Core
     CLI --> CLIB
     CLIB --> Core
@@ -425,13 +469,15 @@ graph TB
         Think["@cloudflare/think 0.15.1 (^0.15.1)"]
         Agents["agents (Agents SDK)"]
         AISDK["ai (Vercel AI SDK v6)"]
-        Nimbus["@nimbus-sh/core 0.5.0: the workspace filesystem"]
+        Nimbus["@nimbus-sh/core 0.6.0: the workspace filesystem"]
+        Sandbox["@cloudflare/sandbox 0.12.8 + @cloudflare/containers 0.3.7"]
     end
 
     CF --> Think
     CF --> Agents
     Core --> AISDK
     Core --> Nimbus
+    Devbox --> Sandbox
 ```
 
 ## Backends and the AgentRuntime contract
@@ -455,11 +501,16 @@ process.
 | Turn driver | `OrchestratorAgent` (Think hooks) | `LocalAgentSession` (`runChat`) |
 | Swarm nodes | `ExplorationAgent` Facets (`spawnNodeFacet`) | the search's own process (no host wired) |
 | MCTS branches | `ExplorationAgent` Facets (`subAgent`) | `child_process.fork` |
-| Subordinates | `SubordinateAgent` Facets (`subAgent`) | not available (one agent per process) |
+| Subordinates | `SubordinateAgent` Facets (`subAgent`) | `LocalAgentSession` per agent, held by `LocalAgentHost` |
 
-The full contract and the four "plug in a new idea" extension points (ModelProvider,
-ExplorationStrategy, InferenceLoop, CredentialStore) are in
+The full contract and the four extension points (`ModelProvider`,
+`ExplorationStrategy`, `ActorAgent`, `KinuExtension`) are in
 [EXTENSIBILITY.md](./EXTENSIBILITY.md).
+
+A chat surface reaches either backend through one client contract, `AgentClient`.
+[AGENT-CLIENT-ARCHITECTURE-SPEC.md](./AGENT-CLIENT-ARCHITECTURE-SPEC.md) holds
+that contract: which side owns which state, the connect-ticket exchange, the
+`AGENT_RPC_ACCESS` scope policy, and the designs that were rejected.
 
 ## Model providers
 
@@ -467,10 +518,15 @@ Model choice is per workspace and resolved through a provider registry
 (`core/src/providers/registry.ts`) that both backends build differently and then
 use identically. The cloud registers `workers-ai`, the user's own `my-gateway`,
 the platform `ai-gateway` fallback, `codex`, `openai`, `anthropic`,
-`openrouter`, `openai-compat`, plus a dynamic source backed by the live
-models.dev catalog; the CLI registers the same minus the dynamic catalog, plus
-`claude` (the local Claude Code binary) and `opencode`. Registration order is
-the default-preference order.
+`openrouter` and `openai-compat`, then a dynamic source backed by the live
+models.dev catalog (`cf-backend/src/providers/agent-registry.ts`). The CLI
+registers the same set and the same dynamic source, and adds `claude` (the local
+Claude Code binary), `opencode`, and one `openai-compat:<name>` entry per
+extra compatible credential the user configured
+(`cli-backend/src/model-resolver.ts`). Its `workers-ai` and `my-gateway` entries
+resolve three ways: a local gateway endpoint, a proxy through the owner's cloud
+account, or a signed-out placeholder that says what is missing. Registration
+order is the default-preference order.
 
 Two policies apply to every provider:
 
@@ -479,18 +535,28 @@ Two policies apply to every provider:
   context window and capabilities from it. The static per-provider lists
   (`WORKERS_AI_FALLBACK_MODEL_CATALOG`, each provider's `FALLBACK_MODELS`) serve
   as the fallback when that fetch fails or filters to nothing.
-- **Every model fetch retries rate limits.** `withRateLimitRetry`
-  (`core/src/providers/rate-limit-retry.ts`) wraps the fetch of every provider:
-  the shared `createAuthedFetch`, the Workers AI path, the AI Gateway path, and
-  codex. It retries 429/529 (and overload-shaped 503s) up to 6 attempts inside a
-  180 s budget, honoring `Retry-After` verbatim when the server sends one and
-  otherwise waiting a full-jitter draw under an exponentially growing ceiling
-  (2 s doubling to a 60 s cap). Requests whose body isn't replayable pass through
-  untouched, and an exhausted budget returns the original response rather than
-  throwing.
+- **Every model fetch waits out rate limits, and the wait has no ceiling.**
+  `withRateLimitRetry` (`core/src/providers/rate-limit-retry.ts`) wraps the fetch
+  of every provider: the shared `createAuthedFetch`, the Workers AI path, the AI
+  Gateway path, and codex. A rate-limited request keeps following the provider's
+  `Retry-After` until it succeeds, fails for another reason, or the caller
+  cancels it. Elapsed time and attempt count never end it. It treats 429 and 529
+  as rate limits always, and a 503 only when the status text, `x-error-code` or
+  body reads as overload, capacity or too many requests; a 503 whose body it
+  cannot read propagates rather than being called healthy. Without a
+  `Retry-After` it draws a full-jitter wait under a ceiling that doubles from 2 s
+  to a 60 s cap. Requests whose body is not replayable pass through untouched.
+  Two things ride beside the retry because a provider is shared. `ProviderPacer`
+  (`core/src/providers/pacing.ts`) spaces request starts per host and holds the
+  lane only while a request awaits headers, so a request sleeping out a
+  `Retry-After` frees capacity a sibling can use and streaming bodies are
+  untouched. Every wait is declared before it is taken, so siblings join one
+  provider cooldown instead of each starting a fresh request. The AI SDK's own
+  transport retry stays at its default of 2, stated explicitly at `streamText`
+  as `PROVIDER_SDK_RETRIES` so a vendor update cannot move it in silence.
 
 **Reasoning effort** is yours to set. `/effort` in chat or
-`kinu effort <workspace> <level>` stores `reasoning_effort` in the workspace's
+`kinu effort <name> [level]` stores `reasoning_effort` in the workspace's
 `agent_config`, with `~/.kinu/config.json` holding the CLI-side default for
 new workspaces. `core/src/strategy/effort.ts` maps the level onto each provider
 family's native knob: `reasoning_effort` for Workers AI, `reasoningEffort` for
@@ -505,13 +571,14 @@ Workspace state has two explicit authorities. The Nimbus session owns files,
 including `SOUL.md`, memory markdown, and scaffolds. The workspace actor's
 SQLite owns relational state: plans, messages, memory/craft indexes, MCTS,
 search records, evolution, event logs, and Think session tables. The schema and
-boundaries are documented in [STORAGE.md](./STORAGE.md).
+boundaries are documented in [STORAGE.md](./STORAGE.md), and the vendored
+filesystem itself in [NIMBUS-INTEGRATION.md](./NIMBUS-INTEGRATION.md).
 
-Selected core algorithms are modeled in Lean 4 (`lean/`). The corpus has 330
+Selected core algorithms are modeled in Lean 4 (`lean/`). The corpus has 405
 named theorems over hand-maintained abstract models of agent, evolution,
 execution, exploration, MCTS, safety, and storage properties, enrolled against
-43 requirements with no `sorry` (counted 2026-08-19 by
-`lean/check-traceability.mjs --list-declarations`).
+47 requirements with no `sorry` (counted 2026-08-25 by
+`lean/check-traceability.mjs`).
 Their axiom reports use only Lean's three kernel axioms; one
 separate SQLite FTS5 assumption is documented and enrolled. CI
 (`.github/workflows/lean-verify.yml` → `scripts/verify-lean.sh`) gates

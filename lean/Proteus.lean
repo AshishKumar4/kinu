@@ -42,6 +42,9 @@ import Proteus.Agent.TurnQueue
 -- Storage proofs
 import Proteus.Storage.FTS5Search
 import Proteus.Storage.SqliteFSCorrectness
+import Proteus.Storage.CostModel
+import Proteus.Storage.SnapshotChain
+import Proteus.Storage.OverlayCas
 
 -- Execution layer proofs (5-tool architecture + capability routing)
 import Proteus.Execution.Capabilities

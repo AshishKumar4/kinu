@@ -9,6 +9,14 @@ crafted-tool fitness (`core/src/orchestrator/craft-cycle.ts` over
 (`core/src/evolution/recovery.ts`, detected by the failure ledger in
 `core/src/orchestrator/turn-steering.ts`).
 
+Two files this page names live in the workspace filesystem, not in this
+repository. Do not grep the tree for them. The curated memory note is
+`MemoryStore.curatedFile` (`agent-utils/src/memory/store.ts:93`), which
+resolves to memory/MEMORY.md inside a workspace. The live scaffold is each
+actor's `scaffoldPath()` (`cf-backend/src/actor-agent.ts:495`), which resolves
+to scaffold/agent.js there and is seeded by `createWorkspace`
+(`core/src/identity/create.ts:115`).
+
 ## In-episode evolution (the step clock)
 
 The other three timescales are conversational. The next user message grades a
@@ -24,7 +32,7 @@ in-episode loop is the only clock that ticks inside it.
 | **Timescale** | One synchronous SQL update as the block settles. No model call, no await, no turn boundary. A tool that keeps raising drops out of the callable set for the rest of the same episode, because both backends re-read the store per execute. |
 
 Observations land in `craft_scores` through the same `updateCraftScores` EMA the
-turn clock uses (`core/src/craft/ema.ts:68`). One score per tool.
+turn clock uses (`core/src/craft/ema.ts:70`). One score per tool.
 Invocations are priced on their own band, `CRAFT_INVOCATION_QUALITY`
 (`core/src/craft/in-episode.ts:93`), which is 0.7 for ran and 0.1 for raised.
 The positive pole sits strictly inside what a person's verdict reaches, 0.9 for
@@ -122,14 +130,14 @@ sequenceDiagram
 
 ## Turn-level evolution
 
-`reviewTurn()` (`core/src/evolution/engine.ts:325`) fires after every chat
+`reviewTurn()` (`core/src/evolution/engine.ts:469`) fires after every chat
 response, via `onChatResponse()`. It runs fire-and-forget, so it never blocks
 the Think TurnQueue.
 
 There is no length or duration quality heuristic. Quality comes from a real turn
 outcome, one of `accepted`, `corrected`, `frustrated` or `abandoned`, recorded
 in the `turn_outcomes` table. Outcomes arrive from five sources, named in
-canonical order at `core/src/evolution/outcomes.ts:76`:
+canonical order in `TURN_OUTCOME_SOURCES` (`core/src/evolution/outcomes.ts:80`):
 
 | Source | What produced it |
 |---|---|
@@ -144,7 +152,7 @@ canonical order at `core/src/evolution/outcomes.ts:76`:
 opinion must say so. `core/src/evolution/alignment.ts` does.
 
 The quality constants live in `outcomeQuality()`
-(`core/src/evolution/outcomes.ts:118`). A thumbs verdict is 0.9 or 0.2,
+(`core/src/evolution/outcomes.ts:122`). A thumbs verdict is 0.9 or 0.2,
 `frustrated` is 0.1, `abandoned` is a neutral 0.5, and an execution-sourced row
 is priced on its own narrower band of 0.7 or 0.3 because it is a proxy.
 `reviewTurn` adds one case of its own. An abandoned or ungraded turn that
@@ -154,7 +162,7 @@ still recorded, as a `turn_complete` event with `graded: false`.
 
 **Reflection** fires on any negative outcome, and on an abandoned or ungraded
 turn that also errored. An LLM call generates a lesson, which is always recorded
-in the `lessons` table. It is appended to `memory/MEMORY.md` only when the
+in the `lessons` table. It is appended to the curated memory note only when the
 lesson is corroborated, and corroboration requires a negative verdict from a
 user source. An `execution` verdict deliberately does not corroborate, because
 "the turn hit an error" is not a reader confirming the lesson drawn from it. An
@@ -162,7 +170,7 @@ uncorroborated lesson stays `provisional` until a later user outcome
 corroborates it.
 
 **Pattern extraction** fires when the outcome is `accepted` and the turn made
-tool calls. `extractPattern()` (`core/src/evolution/engine.ts:976`) asks the LLM
+tool calls. `extractPattern()` (`core/src/evolution/engine.ts:1174`) asks the LLM
 to generalize the tool-call pattern into a reusable async arrow function with
 JSON Schema parameters. `upsertCraftedTool` then stores it in `crafted_tools`,
 after compiling it to a callable and running the misevolution veto. Conflict
@@ -264,23 +272,24 @@ grounds to draw the next set with the panel and hand-audit a slice.
 
 The cadence lives in `AgentOrchestrator` rather than the engine. Every five
 turns it calls `engine.onSessionComplete()` with the accumulated turns. Five is
-not a per-backend option: nothing a host can read chooses it, so both backends
-take the one constant in
-`core/src/orchestrator/agent-orchestrator.ts`.
+not a per-backend option. Nothing a host can read chooses it, so both backends
+take one constant, `DEFAULT_SESSION_REFLECTION_INTERVAL`
+(`core/src/orchestrator/agent-orchestrator.ts:105`).
 
-`onSessionComplete` is selective. It needs at least 3 turns in the window, and
+`onSessionComplete` is selective. It needs at least 3 turns in the window
+(`core/src/evolution/engine.ts:828`), and
 `sessionWarrantsReflection()` requires that some turn errored, drew negative
 feedback, or has a negative recorded outcome. A clean session produces no
 reflection. When it does reflect, an LLM call analyzes the window's recent
 lessons and records the result as a `session_reflection` lesson. As with a turn
-reflection, it is appended to `memory/MEMORY.md` only when a turn in the window
+reflection, it is appended to the curated memory note only when a turn in the window
 carries a negative outcome.
 
 **Scaffold mutation** runs inside that reflection path, so it needs the window
 to have reflected at all. It is then gated on at least 3 closed session windows,
 and skipped outright if a proposal is already pending. `selectEvolutionBase()`
 picks the proposal's base from the DGM archive. With probability
-`1 − scaffold_explore_share` (default 0.2) it branches
+`1 − scaffold_explore_share` (default 0.2, `core/src/config/store.ts:427`) it branches
 from the live `current`; otherwise it samples an archived `historical` or
 `rolled_back` variant, weighted by its
 **clade-metaproductivity** and inverse trial count. The clade score is the
@@ -292,22 +301,24 @@ version descends from is the one worth branching off again. A candidate with no
 descendants pools over itself alone and scores exactly its own win rate, so a
 shallow archive reproduces the pre-clade policy term for term. The engine reads
 12 archive entries and renders the newest 8 into the proposal prompt
-(`core/src/evolution/engine.ts:123, 770`).
+(`core/src/evolution/engine.ts:131, 992`).
 
 `modifyScaffold()` then validates through 4 gates:
 
 1. **Structural gate.** The rationale must reach `minRationaleLength` (50
-   characters). None of the four forbidden patterns may appear (`require` or
-   `import`, `globalThis`, `eval(`, `Function(`). The required signature is
-   `async function* run(rt, task)`. Then the misevolution veto below runs.
+   characters). None of the four `SCAFFOLD_FORBIDDEN_PATTERNS` may appear
+   (`require` or `import`, `globalThis`, `eval(`, `Function(`), and the code must
+   match `SCAFFOLD_REQUIRED_SIGNATURE`, `async function* run(rt, task)`
+   (`core/src/scaffold/safety-patterns.ts:13-21`). Then the misevolution veto
+   below runs.
 2. **Parse gate.** The code is compiled through `rt.executor` as a syntax check.
 3. **Version checkpoint.** A single-pending invariant refuses a second
    `pending` version. The base is taken from `status = 'current'` rather than
    `MAX(version)`. `newVersion = MAX(version) + 1`. The DGM base must exist in
    the archive. Backing up the current version falls out of this step.
-4. **Write gate.** The proposal is written to the **versioned** file
-   `scaffold/agent.js.v{N}` and never to the live `scaffold/agent.js`, so
-   shadow evaluation is never comparing new code against itself.
+4. **Write gate.** The proposal is written to a versioned file beside the live
+   scaffold, never over it, so shadow evaluation never compares new code
+   against itself. Both names come from `scaffoldPath()`.
 
 ### Misevolution gate
 
@@ -318,12 +329,12 @@ row to `evolution_events`.
 | Criterion | Rejects |
 |---|---|
 | `network-egress` | `fetch(`, `XMLHttpRequest`, `new WebSocket`, `sendBeacon(`, `EventSource` |
-| `version-machinery-tamper` | `scaffold_versions`, `scaffold_evaluations`, `scaffold_trial_queue`, a quoted `scaffold/agent.js` path, `agent.js.v<N>` |
+| `version-machinery-tamper` | `scaffold_versions`, `scaffold_evaluations`, `scaffold_trial_queue`, the live scaffold path in quoted form, a versioned scaffold filename |
 | `rollout-config-tamper` | `auto_promote_scaffold`, `shadow_sample_rate`, `scaffold_explore_share`, `auto_gepa_every_n_turns`, `changelog_seen_at` |
 | `self-modification-reentry` | `proposeScaffold`, `modifyScaffold`, `applyPromotionDecision`, `applyScaffoldDecision`, `rollbackScaffold`, `checkMisevolution` |
 | `consent-weakening` | `shell_approval_mode`, `setShellApprovalMode`, `allow_all`, `device_consent` |
 
-`version-machinery-tamper` matches `scaffold/agent.js` only in quoted-path form,
+`version-machinery-tamper` matches the scaffold path only in quoted-path form,
 because the v0 bootstrap header legitimately mentions the path in a comment.
 
 The check runs at five call sites over four declared surfaces
@@ -332,10 +343,10 @@ The check runs at five call sites over four declared surfaces
 | Surface | Call site | Criteria enforced |
 |---|---|---|
 | `scaffold` | The proposal gate, `core/src/scaffold/modify.ts:56` | all five |
-| `scaffold` | The promotion decision, re-checked against the on-disk pending file, `core/src/scaffold/shadow.ts:607` | all five |
+| `scaffold` | The promotion decision, re-checked against the on-disk pending file, `core/src/scaffold/shadow.ts:624` | all five |
 | `craft` | Extracted crafted-tool upsert, `core/src/craft/conflict.ts:82` | all five |
 | `craft_tool` | `workspace.createTool`, `core/src/execution/inline.ts:337` | the four safety-machinery criteria |
-| `import` | Experience-library import, `core/src/experience/imports.ts:125` | all five |
+| `import` | Experience-library import, `core/src/experience/imports.ts:160` | all five |
 
 `craft_tool` is the one documented exception. It does not enforce
 `network-egress`, because the codemode Worker exposes raw network globals, so
@@ -347,9 +358,9 @@ full.
 ### Shadow evaluation
 
 A validated proposal is sampled into real turns at `shadow_sample_rate`
-(default 0.25, `core/src/config/store.ts:356`) and judged against the incumbent
+(default 0.25, `core/src/config/store.ts:421`) and judged against the incumbent
 before it can take effect. `DEFAULT_SHADOW_CONFIG`
-(`core/src/scaffold/shadow.ts:186-192`) is:
+(`core/src/scaffold/shadow.ts:185-193`) is:
 
 ```
 minTrials 5 · maxTrials 20 · promoteThreshold 0.6 · rollbackThreshold 0.4
@@ -367,7 +378,7 @@ only as the single-vendor fallback.
 
 The regression veto runs first. More than `maxRegressions` losses rolls the
 proposal back regardless of win rate. At `maxTrials` the decision is forced, and
-only `winRate > 0.5` promotes (`core/src/scaffold/shadow.ts:575`), so a tie
+only `winRate > 0.5` promotes (`core/src/scaffold/shadow.ts:592`), so a tie
 rolls back to current. Every constant here comes from binomial Monte Carlo
 rather than taste, in `scripts/shadow-veto-monte-carlo.ts`, which models the
 judging protocol itself. At the shipping settings that script reports a
@@ -414,7 +425,7 @@ remains available as a future stepping stone.
 
 `onLifetimeEvolution()` fires from `onSessionComplete` when the count of closed
 session windows is a multiple of `lifetimeEvolutionInterval`, which is 5
-(`core/src/evolution/types.ts:127`, gate at `core/src/evolution/engine.ts:611`).
+(`core/src/evolution/types.ts:154`, gate at `core/src/evolution/engine.ts:833`).
 With a 5-turn window that is every 25 turns. There is no separate manual-trigger
 RPC.
 
@@ -434,7 +445,7 @@ interval around it (`core/src/utils/stats.ts`). The changelog calls a move
 "improved" or "declined" only when the two intervals do not overlap.
 
 **GEPA train/val split** (`buildOutcomeEvalSplit`,
-`core/src/evolution/outcomes.ts:823`). The reflection minibatch draws from older
+`core/src/evolution/outcomes.ts:1017`). The reflection minibatch draws from older
 corrected and frustrated turns, while the newest failures are held out and
 scored on alongside the accepted-turn regression guards. The two sets are
 disjoint, so a winning candidate was never optimised against the instances that
@@ -443,15 +454,18 @@ returns a `degeneracy` reason and the caller reports the selection as
 exploratory rather than quietly overlapping the sets.
 
 **Full MCTS exploration** runs a smaller search than the tool's default, at
-budget 2 and branches 2 (`core/src/evolution/types.ts:128-129`, called at
-`core/src/evolution/engine.ts:862`). See [MCTS.md](./MCTS.md).
+budget 2 and branches 2 (`DEFAULT_EVOLUTION_CONFIG`,
+`core/src/evolution/types.ts:152-157`, called at
+`core/src/evolution/engine.ts:1088`). An operator MCTS override replaces the
+branch count; the budget stays the lifetime cadence cap. See
+[MCTS.md](./MCTS.md).
 
 ## Evolution Changelog
 
 Every self-modification surfaces as a human-readable card
 (`core/src/evolution/changelog.ts`). It is a pure read model over the durable
 ledgers, and the only state it owns is a `changelog_seen_at` marker.
-`ChangelogEntryKind` (`core/src/evolution/changelog.ts:38`) has seven kinds:
+`ChangelogEntryKind` (`core/src/evolution/changelog.ts:42`) has eight kinds:
 
 | Kind | Source | Revertable via |
 |---|---|---|
@@ -462,11 +476,12 @@ ledgers, and the only state it owns is a `changelog_seen_at` marker.
 | `gepa` | completed GEPA runs | not revertable |
 | `replay` | replay-eval scores with their intervals, plus the direction against the previous run when the intervals separate | not revertable |
 | `outcomes` | aggregated `turn_outcomes` counts | not revertable |
+| `prompt_section` | `prompt_section_versions`, keyed `<sectionId>:<version>` because versions are numbered per section | `prompt_section_rollback` |
 
 Reverts dispatch to the real code paths rather than to a separate undo log
-(`executeChangelogRevert`, `core/src/evolution/changelog.ts:497`):
+(`executeChangelogRevert`, `core/src/evolution/changelog.ts:589`):
 `revertScaffoldVersion`, `craftStore.delete` with the matching `craft_scores`
-row, `revertView`, and `facts.forget`.
+row, `revertView`, `facts.forget`, and the prompt-section rollback.
 
 ## CraftStore lifecycle
 
@@ -483,7 +498,7 @@ graph LR
 ```
 
 The scoring constants live in `DEFAULT_CONFIG.craftStore`
-(`core/src/config.ts:142-147`):
+(`core/src/config.ts:108-115`):
 
 - EMA update: `newScore = 0.7 * oldScore + 0.3 * observation`, so α = 0.3.
 - Time decay: `effectiveScore = score * 0.5^(daysSinceLastUse / 30)`.
@@ -496,8 +511,9 @@ turn clock writes the turn's outcome once the turn is graded. The in-episode
 clock writes each observed invocation as the episode runs.
 
 Extraction happens from three places: an accepted turn (`extractPattern`), an
-MCTS iteration scoring above `craftExtractionThreshold` (0.8,
-`core/src/mcts/engine.ts:468`), and MCTS convergence when the winner scores
+MCTS iteration scoring above `craftExtractionThreshold` (0.8 at
+`core/src/config.ts:100`, applied at `core/src/mcts/engine.ts:483`), and MCTS
+convergence when the winner scores
 above the same threshold (`core/src/mcts/convergence.ts:135`). Only the MCTS
 paths carry a size gate, and it is a floor. `maybeStoreCraftedTool` returns
 early below 50 characters (`core/src/craft/discovery.ts:49`). There is no upper
@@ -519,14 +535,15 @@ Evolution activity is persisted to the `evolution_events` SQL table:
 | `data` | TEXT | JSON payload (optional) |
 | `created_at` | INTEGER | Epoch milliseconds |
 
-The engine emits ten types (`core/src/evolution/types.ts:69`): `reflection`,
+The engine emits eleven types (`core/src/evolution/types.ts:85`): `reflection`,
 `craft_discovered`, `scaffold_proposed`, `consolidation`, `mcts_started`,
-`mcts_complete`, `turn_complete`, `replay_eval`, `changelog_digest` and
-`experience_import`. `recordMisevolutionVeto` writes an eleventh,
-`misevolution_veto`, directly (`core/src/scaffold/misevolution.ts:173`).
+`mcts_complete`, `turn_complete`, `replay_eval`, `changelog_digest`,
+`experience_import` and `advisor_note`. `recordMisevolutionVeto` writes a
+twelfth, `misevolution_veto`, directly
+(`core/src/scaffold/misevolution.ts:169`).
 
 This table is one of four sources the Run Timeline read model merges
-(`core/src/read-models/timeline.ts:147-194`). The others are the per-run
+(`getRunTimeline`, `core/src/read-models/timeline.ts`). The others are the per-run
 `run_events` log, the MCTS `search_nodes` tree, and detached background jobs.
 The merge is server-side and platform agnostic, so the timeline is a capability
 every backend has. `kinu status` reads the same table locally.

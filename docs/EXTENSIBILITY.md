@@ -15,10 +15,13 @@ altitude.
 | **`ActorAgent`** | `cf-backend/src/actor-agent.ts` | `packages/cf-backend/src/` | A new *kind of agent* running the full turn loop | OrchestratorAgent, SubordinateAgent |
 | **`KinuExtension`** | `core/extension.ts` | any package | Per-turn observation and light rewriting | compaction, event injection, CLI steering |
 
-The first two are registries. They hold implementations and stay stateless.
-Per-call state flows through `ProviderDeps` and `StrategyContext`.
-`ActorAgent` is class-level. `KinuExtension` is per-turn, and
-[EXTENSIONS.md](./EXTENSIONS.md) documents it on its own.
+Only the first is a registry in production. `AgentProviderRegistry` holds
+`ModelProvider` implementations and stays stateless; per-call state flows
+through `ProviderDeps`. `createStrategyRegistry` exists in
+`core/strategy/types.ts`, but no production path calls it, so an
+`ExplorationStrategy` reaches work through the dispatcher that owns its engine.
+The next section says which. `ActorAgent` is class-level. `KinuExtension` is
+per-turn, and [EXTENSIONS.md](./EXTENSIONS.md) documents it on its own.
 
 ## Registration is not reachability
 
@@ -33,10 +36,11 @@ Production reaches each engine through its owning path:
 - The model-facing `agents.swarm()` path calls `runSwarm` and resolves a named
   preset before it spends anything.
 
-There is no production `StrategyRegistry`. Each backend constructs
-`AgentsForkDeps` directly. That contract carries the runtime, the caller model,
-the tier-model resolver, pricing, node isolation, and shared-prefix compaction.
-It carries no strategy objects.
+No production path builds a `StrategyRegistry`. Each backend constructs
+`AgentsForkDeps` (`core/src/tools/agents-tool.ts:296`) directly, and its seven
+members are the runtime, the caller's own model, the tier-model resolver, the
+cost model, the swarm-node loop host, the swarm-node private home, and
+shared-prefix compaction. It carries no strategy objects.
 
 To make another search policy model-facing, add it to the closed swarm preset
 and validity system, then add the engine dispatch that executes the resolved
@@ -52,7 +56,6 @@ delegation action.
 `buildBuiltinTools`, but no backend passes it. A caller must wire the option
 before its policy affects an agent.
 
-
 ## Two extension points that no longer exist
 
 There is no `InferenceLoop` and no `packages/core/src/loops/`. Replacing the
@@ -67,25 +70,31 @@ credential.
 
 ## Adding a new actor kind
 
-`ActorAgent` (`cf-backend/src/actor-agent.ts:392`) is the base class for a new
-kind of agent. Extend it and supply seven members:
+`ActorAgent` (`cf-backend/src/actor-agent.ts:464`) is the base class for a new
+kind of agent. Extend it and supply ten abstract members:
 
 ```ts
 export class MyAgent extends ActorAgent {
   protected getOwnerUserId(): string | null { /* identity bootstrap */ }
+  protected actorKind(): AgentKind { /* which kind you are, for the roster */ }
   protected ensureSchema(): void { /* your tables */ }
   protected actorToolDeps(): ActorToolDeps { /* which gated tools you get */ }
   protected get engine(): EvolutionEngine { /* your evolution engine */ }
   protected notifyOwner(subject: string, body: string): void { /* … */ }
   protected delegationBudget(): DelegationBudget { /* depth and spend below you */ }
   protected subordinateFacet(): SubAgentClass<SubordinateAgent> { /* what you hire */ }
+  protected ownMission(): string { /* the mission text titling names you after */ }
+  protected persistAutoTitle(displayName: string): Promise<boolean> { /* where a title lands */ }
 }
 ```
 
+The last two carry the auto-title path. Core plans the name and this class
+stores it. See *Where a backend plugs into core* below.
+
 Three hooks are optional, each with a default on the base class:
-`workspaceName()` returns `this.name` (line 405), `extraCodemodeProviders()`
-returns `[]` (line 511), and `isClientRpcMethodDenied(method)` returns `false`
-(line 535). Override `extraCodemodeProviders()` for extra sandbox namespaces,
+`workspaceName()` returns `this.name` (line 489), `extraCodemodeProviders()`
+returns `[]` (line 595), and `isClientRpcMethodDenied(method)` returns `false`
+(line 619). Override `extraCodemodeProviders()` for extra sandbox namespaces,
 which is how the orchestrator gets `agent.*` and a subordinate does not.
 Override `isClientRpcMethodDenied` for RPCs a browser socket must not reach.
 
@@ -93,29 +102,35 @@ Everything else is inherited: the CF runtime assembly, the `BackendHost`, the
 shared `AgentOrchestrator`, `ExtensionHost` plus compaction, the dynamic-context
 ledger, the prompt, model and tool caches, and the whole Think hook bridge.
 
-The tool surface follows from `actorToolDeps()` alone. `DEPS_GATED_TOOLS`
-(`cf-backend/src/actor-agent.ts:372`) is `['report']`, the one native tool name
-whose presence depends on which deps group an actor wires, and
-`actorActiveTools()` drops it when `report` is unwired. `team` and `peers` gate
-the `agents` tool's actions rather than a tool name, through
-`actorAgentsActions()` (line 388), which always passes a `fork` marker, so every
-cf actor advertises `swarm`. `release` left the native surface, so
+The tool surface follows from `actorToolDeps()` alone. `DEPS_GATED_TOOLS` moved
+to core, at `core/src/tools/registry.ts:137`, so a rename of the builtin moves
+the gate with it; the old cf-local copy was a bare `['report']` matching
+nothing after a rename. It still holds one name, `report`, and
+`actorActiveTools()` (line 437) drops that name when `report` is unwired.
+`team` and `peers` gate the `agents` tool's actions rather than a tool name,
+through `actorAgentsActions()` (line 448), which always passes a `fork` marker,
+so every cf actor advertises `swarm`. `release` left the native surface, so
 `deps.releases` now feeds only the `release.*` codemode namespace and gates
 nothing in `actorActiveTools()`. No flag and no allowlist decides any of this.
 
-A subordinate can hire below itself. `teamProfile()` (line 581) returns
+`ActorToolDeps` (line 405) has five members: `team`, `peers`, `report`,
+`releases` and `submitPlan`.
+
+A subordinate can hire below itself. `teamProfile()` (line 798) returns
 `{ team }` for every actor with tree left below it and `{}` at the depth cap, so
 the recursion stops on the delegation budget rather than on the class.
 `SubordinateAgent.actorToolDeps()`
-(`cf-backend/src/subordinate-agent.ts:180-193`) adds `report` on top of that
-profile, and only on a parent-assigned turn.
+(`cf-backend/src/subordinate-agent.ts:250`) adds one tool on top of that
+profile, and which one depends on whose turn it is: `report` on a
+parent-assigned turn, `submitPlan` on an owner turn.
 
 Per-actor model and provider state lives in `OwnedModelServices`
-(`cf-backend/src/owned-model-services.ts`) by composition: `providerRegistry()`,
-`resolveModel(spec)`, `getWebSearchProvider()` and `invalidate()`. `ActorAgent`
-constructs it with `ownerRequired: true` (`cf-backend/src/actor-agent.ts:787`).
-`ExplorationAgent` is not an `ActorAgent`, and constructs its own with
-`ownerRequired: false` (`cf-backend/src/exploration.ts:115`).
+(`cf-backend/src/owned-model-services.ts:33`) by composition:
+`providerRegistry()`, `resolveModel(spec)`, `getWebSearchProvider()` and
+`invalidate()`. `ActorAgent` constructs it with `ownerRequired: true`
+(`cf-backend/src/actor-agent.ts:1031`). `ExplorationAgent` is not an
+`ActorAgent`, and constructs its own with `ownerRequired: false`
+(`cf-backend/src/exploration.ts:127`).
 
 ## Adding a new ModelProvider
 
@@ -125,6 +140,7 @@ constructs it with `ownerRequired: true` (`cf-backend/src/actor-agent.ts:787`).
      return {
        id: 'anthropic',
        defaultModel: ANTHROPIC_DEFAULT_MODEL,        // 'claude-opus-4-7'
+       fastModel: ANTHROPIC_FAST_MODEL,              // 'claude-haiku-4-5'
        async isAvailable(deps) { /* check stored credential */ },
        async listModels(deps) { /* live catalog, static list as fallback */ },
        createModel(modelId, deps): LanguageModel {
@@ -141,6 +157,13 @@ constructs it with `ownerRequired: true` (`cf-backend/src/actor-agent.ts:787`).
 3. Optionally add a credential UI section in
    `cf-backend/src/pages/SettingsPage.tsx`, so users can store the API key.
 
+Declare `fastModel` when the vendor has a genuinely smaller tier. The
+mechanical jobs run on it: outcome classification, pathology labels, short
+reflections, pattern extraction and sleep-time compression. It reuses the same
+credential, so it adds no provider path. Omit it where naming one tier would be
+arbitrary, as for `openai-compat` and `openrouter`, and those jobs then run on
+the chat model.
+
 Keep `createModel` synchronous. All auth and refresh work belongs inside the
 `customFetch` you pass to the AI SDK, which keeps Think's synchronous
 `getModel()` working unchanged. See `core/providers/codex.ts` for the
@@ -152,7 +175,7 @@ Do not hardcode `listModels`. Hydrate from the live models.dev catalog
 fails, returns a non-200, or filters to nothing. The Anthropic and OpenAI
 providers both do exactly that. If your provider already appears in models.dev,
 skip the hand-written provider. `registry.registerDynamic`
-(`cf-backend/src/providers/agent-registry.ts:125`) makes every catalog id usable
+(`cf-backend/src/providers/agent-registry.ts:131`) makes every catalog id usable
 once the user stores a `<id>.bearer` credential. Wrap your fetch in
 `withRateLimitRetry`, or build it with the shared `createAuthedFetch`, which
 already does.
@@ -174,9 +197,12 @@ export function createToTStrategy(): ExplorationStrategy {
 }
 ```
 
-The strategy returns a `StrategyResult`, which carries `strategy`, `best`,
-`all`, an optional `trace`, and `cost`. Always respect `ctx.signal` for
-cancellation and `ctx.budget` for budget enforcement.
+The interface is `id`, an optional `label` and `description`, an optional
+`advertised` flag, and `explore`. Set `advertised: false` for a strategy that
+programmatic and eval callers dispatch by id but a chat model never needs, as
+the single-shot baseline does. The strategy returns a `StrategyResult`, which
+carries `strategy`, `best`, `all`, an optional `trace`, and `cost`. Always
+respect `ctx.signal` for cancellation and `ctx.budget` for budget enforcement.
 
 Then read *Registration is not reachability* above and decide which dispatcher
 will call yours. Adding a value to a tool field is not one of the options,
@@ -187,7 +213,7 @@ because no tool field selects a strategy today.
 There is no `InferenceLoop` registry. Think's `_runInferenceLoop` is private, so
 the hook is `_transformInferenceResult`
 (`core/src/scaffold/inference-transform.ts`, overridden at
-`cf-backend/src/actor-agent.ts:1424`). When the workspace has an evolved
+`cf-backend/src/actor-agent.ts:1987`). When the workspace has an evolved
 `scaffold/agent.js` at a version above 0, that generator becomes the turn's
 inference loop. An un-evolved agent gets the default result back untouched, the
 same object, with zero overhead.
@@ -238,11 +264,15 @@ handicap, and a context-discipline scaffold would lose every trial.
 
 ## Reasoning-effort budgets
 
-`low | medium | high` is the one dial. It is user-settable per workspace through
-the `/effort` slash command or `kinu effort <name> [level]`, stored as
-`agent_config.reasoning_effort`, with a CLI-side default in
-`~/.kinu/config.json`. `reasoningEffortOptions(effort, providerFamily)` in
-`core/strategy/effort.ts` translates it to each family's native knob.
+`low | medium | high` is the one dial, and two commands set it at two different
+altitudes. `kinu effort <name> [level]` sets one workspace, stored as
+`agent_config.reasoning_effort`, and mirrors the value into
+`~/.kinu/config.json` as the CLI-side default. The `/effort` slash command sets
+the active profile's default tier, stored as `tiers.default.reasoningEffort` in
+the local profile file or the cloud profile. So `/effort` moves every workspace
+that has not been set on its own, and `kinu effort` moves exactly one.
+`reasoningEffortOptions(effort, providerFamily)` in `core/strategy/effort.ts`
+translates the resolved level to each family's native knob.
 
 | Family | Emitted `providerOptions` |
 |---|---|
@@ -295,24 +325,33 @@ Inside `execute_tools`, the LLM additionally sees:
   shell, memory, `createTool` and `createView`. It is always available, and it
   is where `run` and `file` project to.
 - `sandbox.*`, Linux container exec and port preview, when bound.
-- `codemode.*`, every crafted tool, dispatched through the preamble.
-- `agents.*`, `memory.*`, `tasks.*` and `report.*`, codemode projections of the
-  same-named native tool. Each shares one dispatcher with its native side, so a
-  script and a direct tool call see identical state.
+- `agents.*`, `memory.*`, `tasks.*`, `web.*` and `report.*`, codemode
+  projections of the same-named native tool. Each shares one dispatcher with
+  its native side, so a script and a direct tool call see identical state.
 - `release.*` and `agent.*`, which have no native tool at all. The orchestrator
   gets both from its `extraCodemodeProviders()`
-  (`cf-backend/src/orchestrator.ts:769-774`); a subordinate returns only a
+  (`cf-backend/src/orchestrator.ts:798-803`); a subordinate returns only a
   report provider, so it gets neither.
 - `llm.query(text, opts?)`, Recursive Language Models. A sub-call has no
   `llm.query` in scope, so depth is bounded at 1 by construction.
-- Crafted tools, as `tools.<name>(...)` literals in lexical scope, injected
+- Crafted tools, as `tools.<name>(args)` literals in lexical scope, injected
   through the preamble. See `cf-backend/src/crafted-tool-registry.ts`.
+
+`tools.<name>(args)` is the one callable form for a crafted tool, on every
+backend. `core/src/tools/sandbox-contract.ts` states it and both sandboxes
+build from its two constants. `codemode.<name>` stays declared, so the tool
+appears in the generated types the model reads and can be discovered, but it is
+a refusing alias: calling it THROWS `craftedNamespaceCorrection(name)`, which
+names the right form. It throws rather than returning `{ error }` because a
+returned error is a value the model reads as a result and the runtime reads as
+a successful call, and an in-episode fitness observation could then be taken on
+a call that never ran.
 
 ## The agent's persistent state
 
 - `agent_facts`, a typed, idempotent, keyed world model, driven by the `memory`
   tool's remember, recall and forget actions. `renderFactsForTurn`
-  (`core/src/orchestrator/turn-surface.ts:119`) renders the 20 most recent
+  (`core/src/orchestrator/turn-surface.ts:123`) renders the 20 most recent
   facts into the turn's dynamic-context block, capped at 2,000 characters.
 - `MEMORY.md`, unstructured prose with FTS5 and Vectorize hybrid search.
 - Dynamic context, held by the `DynamicContextLedger`
@@ -339,14 +378,24 @@ the keyed-fact write rejects legitimate values. Crafted-tool description
 sanitization was rejected because tools are agent-self-authored, there is no
 external attacker, and the cap truncates useful "when to use" guidance.
 
-- **Rate-limit resilience on every model fetch.** `withRateLimitRetry`
-  (`core/src/providers/rate-limit-retry.ts`) wraps the fetch of every
-  provider: the shared `createAuthedFetch`, Workers AI, the AI Gateway, codex
-  and opencode. It allows up to 6 attempts inside a 180 s budget on 429, 529
-  and overload-shaped 503s. It honours `Retry-After` when the server sends one,
-  and otherwise waits a full-jitter draw under a ceiling that doubles from 2 s
-  to a 60 s cap. Non-replayable bodies pass through. An exhausted budget
-  returns the original response rather than throwing.
+- **Rate-limit patience on every model fetch.** `withRateLimitRetry`
+  (`core/src/providers/rate-limit-retry.ts`) wraps the fetch of every provider:
+  the shared `createAuthedFetch`, Workers AI, the AI Gateway, codex and
+  opencode. On a 429, a 529 or an overload-shaped 503 it waits and retries. It
+  honours `Retry-After` when the server sends one, and otherwise waits a
+  full-jitter draw under a ceiling that doubles from 2 s to a 60 s cap. Neither
+  elapsed time nor attempt count ends the loop: it stops on success, on a
+  definitive failure, or when the caller cancels. Non-replayable bodies pass
+  through untouched. Do not add an attempt cap here expecting the SDK to cover
+  the rest; `PROVIDER_SDK_RETRIES` is 2, and a cap under a real provider
+  cooldown turns a wait into a failed turn.
+- **Request starts are paced per provider host.** Every attempt goes out
+  through `ProviderPacer.admit` (`core/src/providers/pacing.ts`), which spaces
+  starts against one host and holds each caller behind any cooldown that host
+  has already mandated. A whole swarm level used to arrive as N simultaneous
+  first requests on one credential. The lane is held only while a request
+  awaits headers, so a request sleeping out a `Retry-After` frees capacity a
+  sibling can use, and streaming bodies are not throttled.
 - **OAuth error sanitization.** `sanitizeErrorBody` in
   `core/src/providers/codex-oauth.ts` strips token-shaped substrings from
   upstream error bodies before they are attached to thrown errors. It defends
@@ -366,7 +415,7 @@ external attacker, and the cap truncates useful "when to use" guidance.
   (`core/src/config/store.ts`) with known-key getters and setters. Adding a
   tunable means adding one accessor.
 - **Provider and model cache invalidation.** `invalidateModelCaches()`
-  (`cf-backend/src/actor-agent.ts:3421`) calls
+  (`cf-backend/src/actor-agent.ts:4606`) calls
   `ownedModelServices.invalidate()`, which drops the resolved model and the
   owner-bound provider registry together, so a disconnected provider stops
   being marked available. It fires on owner claim, `setModel`, subordinate
@@ -376,8 +425,8 @@ external attacker, and the cap truncates useful "when to use" guidance.
   pre-filters non-serializable upsert values, so a partial write cannot leave
   the facts store inconsistent.
 - **`decidePromotion` breaks ties toward the incumbent.** At `maxTrials`, only
-  `winRate > 0.5` promotes (`core/src/scaffold/shadow.ts:575`). A tie rolls
-  back to current.
+  `winRate > 0.5` promotes (`core/src/scaffold/shadow.ts:560`, the rule at
+  `:592`). A tie rolls back to current.
 - **SSE resume validates `Last-Event-ID`.** `resumeIndexFromLastEventId`
   (`cf-backend/src/lib/orchestrator-wire.ts:59`) accepts an integer at or above
   the `-1` sentinel. Every other value replays from the start, including a
@@ -392,10 +441,29 @@ external attacker, and the cap truncates useful "when to use" guidance.
   prose. `readProposalCode` in the same file selects the last runnable block
   and preserves the language of an unrunnable one.
 
+## Where a backend plugs into core
+
+A backend used to reimplement parts of a turn. Six of those parts now live in
+`packages/core` and each backend calls in. Before you write one of these in a
+backend, check whether core already owns it.
+
+| What | Core owns | A backend supplies |
+|---|---|---|
+| The `model_call` event | `buildModelCallEvent(report, opts)` (`core/src/events/model-call-event.ts:43`) over a `ModelCallReport` (`core/src/events/model-call.ts:114`) | the sink that writes the row |
+| Turn settle | `AgentOrchestrator.settleTurn` (`core/src/orchestrator/agent-orchestrator.ts:640`) | the driver's verdict; cf calls it from `ActorAgent.settleTurnSpine` (`cf-backend/src/actor-agent.ts:1742`), the CLI from `cli-backend/src/local-session.ts:2353` |
+| Steer provenance | `STEER_METADATA_KEY` and `STEER_STEP_METADATA_KEY` (`core/src/orchestrator/user-steer.ts:175-180`) | nothing; both backends stamp the same two keys |
+| Auto-title | `planWorkspaceTitle` and `applyWorkspaceTitle` (`core/src/identity/naming.ts:192`, `:211`) | `ownMission()` and `persistAutoTitle()`; the CLI wraps them in `autoTitleLocalWorkspace` (`cli/src/local-agent-client.ts:168`) |
+| Provider snapshot cache | `ProviderListingCache` and `buildProviderCatalogSnapshot` (`core/src/profiles/provider-catalog.ts:106`, `:53`) | the sweep that lists providers |
+| The default role | `DEFAULT_ROLE_ID`, which is `general` (`core/src/profiles/catalog.ts:43`) | nothing; a backend compares against it rather than spelling the string |
+
+One `model_call` builder means a spend census reads one row shape. One
+`DEFAULT_ROLE_ID` means a backend that hardcoded `'general'` cannot drift from
+the catalog that defines it.
+
 ## Worked example: Recursive Language Models
 
 This one is already built. The provider is `packages/core/src/rlm.ts`, 165 lines
-measured 2026-08-19. The shape was:
+measured 2026-08-24. The shape was:
 
 1. Build a codemode provider exposing `query(text, opts?)`
    (`createRLMProvider`, `core/src/rlm.ts:94`).
@@ -403,11 +471,14 @@ measured 2026-08-19. The shape was:
    `model` override.
 3. Register the provider alongside the crafted-tool provider and the executor
    providers. The cloud backend does that in
-   `cf-backend/src/execute-tools.ts:102`; the CLI backend does it in
-   `cli-backend/src/local-session.ts:991`. For an actor-specific namespace,
+   `cf-backend/src/execute-tools.ts:88`; the CLI backend does it in
+   `cli-backend/src/local-session.ts:1158`. For an actor-specific namespace,
    return your provider from that actor's `extraCodemodeProviders()` instead.
-4. Teach the LLM about it in `core/src/prompt.ts`, where line 329 emits the
-   `llm.query` paragraph behind the `rlmAvailable` gate.
+4. Teach the LLM about it through the prompt template, not a literal. The
+   `llm.query` paragraph lives in `CODE_EXECUTION_SECTION`
+   (`core/src/prompting/section-templates.ts:210`) behind an
+   `{{#if rlmAvailable}}` conditional, and `core/src/prompt.ts:233` renders that
+   section with the flag each backend wired.
 
 The same template applies to any new tool that LLM-authored code can call inside
 the codemode sandbox.
@@ -442,7 +513,7 @@ the codemode sandbox.
   "barely succeeds" band, with predicted success in [0.3, 0.7] by default, then
   persists them to `proposed_tasks`. The RPCs are `proposeCurriculumTasks`,
   `listCurriculumTasks` and `setCurriculumTaskStatus`
-  (`cf-backend/src/orchestrator.ts:3104-3112`).
+  (`cf-backend/src/orchestrator.ts:3147-3155`).
 - **Sleep-time compute**, `core/memory/sleep-time-compute.ts`. Background
   memory compression over the facts store and nothing else. A
   `SleepTimeUpdate` is exactly `{ upserts, decay }`, and `applySleepTimeUpdate`
