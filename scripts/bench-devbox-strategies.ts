@@ -211,6 +211,9 @@ interface Options {
   /** Arms to run, from `--arms a,b`. Defaults to all three; an unknown name
    *  refuses rather than measuring an empty run. */
   arms: readonly Strategy[];
+  /** Unique Durable Object suffix. A Worker redeploy does not delete DO
+   * storage, so fixed box names contaminate a later run with prior state. */
+  runId: string;
   out: string;
 }
 
@@ -259,7 +262,10 @@ export function addressArmRequest(
 ): AddressedArmRequest {
   const url = new URL(path, 'https://bench.invalid');
   const box = url.searchParams.get('box');
-  const inferred = STRATEGIES.find(strategy => box === `ab-${strategy}`);
+  const inferred = STRATEGIES.find((strategy) => {
+    const base = `ab-${strategy}`;
+    return box === base || box?.startsWith(`${base}-`) === true;
+  });
   const strategy = body?.strategy ?? inferred;
   if (method === 'GET') {
     if (strategy !== undefined) url.searchParams.set('strategy', strategy);
@@ -746,7 +752,7 @@ async function measureArm(
 ): Promise<ArmResult> {
   // ONE BOX PER ARM: mountBucket refuses a second mount of one binding at a
   // different prefix or readOnly value, so the arms cannot share an instance.
-  const box = `ab-${strategy}`;
+  const box = `ab-${strategy}-${options.runId}`;
   const notes: string[] = [];
   const result: ArmResult = {
     strategy, box, verifyPassed: false, verifyChecks: [],
@@ -1262,6 +1268,7 @@ function parseOptions(argv: readonly string[]): Options {
   };
   const runId = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
   return {
+    runId,
     seed: Number.parseInt(value('seed', '20260824'), 10),
     budgetMs: Number.parseInt(value('budget-ms', '8000'), 10),
     decisive: argv.includes('--decisive'),

@@ -46,6 +46,10 @@ describe('arm request addressing', () => {
   test('every box request carries the arm instead of defaulting to chain', () => {
     expect(addressArmRequest('GET', '/ops?box=ab-overlay-cas'))
       .toEqual({ path: '/ops?box=ab-overlay-cas&strategy=overlay-cas' });
+    expect(addressArmRequest('GET', '/ops?box=ab-overlay-cas-20260825230000'))
+      .toEqual({
+        path: '/ops?box=ab-overlay-cas-20260825230000&strategy=overlay-cas',
+      });
     expect(addressArmRequest('POST', '/checkpoint?box=ab-r2fs', { kind: 'tick' }))
       .toEqual({
         path: '/checkpoint?box=ab-r2fs',
