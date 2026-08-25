@@ -1,0 +1,12 @@
+{
+  "//": "The benchmark fixture Worker is the one file under scripts/ that is not a bun/node program: it runs on workerd and needs R2Bucket, DurableObjectNamespace, ExportedHandler and `scheduler`. `scripts/tsconfig.scripts.json` compiles the folder with types [bun, node], where none of those exist, so worker.ts is excluded there and compiled here instead — the same split packages/cf-backend/tests/workerd already uses. Every other file in this directory stays in the scripts project, because probe.ts, sync.ts, stats.ts, layouts.ts and report.ts really are bun programs and the driver imports three of them.",
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "lib": ["ES2022"],
+    "types": ["@cloudflare/workers-types"],
+    "allowImportingTsExtensions": true,
+    "moduleDetection": "force"
+  },
+  "include": ["worker.ts"]
+}

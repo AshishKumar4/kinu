@@ -310,15 +310,30 @@ const DOCUMENTED_ABSENCE: readonly Absence[] = [
     reason: 'The same pattern table, same reason.',
   },
   {
-    file: 'docs/CRAFT-ARCHITECTURE.md',
-    cites: 'helperA',
-    reason: 'An invented tool name in a sentence about composition. Two names are'
-      + ' needed to say that one crafted tool can call another.',
+    file: 'docs/BENCH.md',
+    cites: 'mountBucketR2Egress',
+    reason: 'A function inside @cloudflare/sandbox, not in this repository. The'
+      + ' benchmark calls the public `sandbox.mountBucket`; the document names the'
+      + ' SDK internal because how it assembles the s3fs `-o` argument is what'
+      + ' distinguishes one arm from another, so a reader who cannot see that name'
+      + ' cannot check the arm definitions against the option sets.',
   },
   {
-    file: 'docs/CRAFT-ARCHITECTURE.md',
-    cites: 'helperB',
-    reason: 'The other half of the same example.',
+    file: 'docs/BENCH.md',
+    cites: 'isR2Bucket',
+    reason: 'The duck-check inside @cloudflare/sandbox that gates which object'
+      + ' reaches its egress handler. Named in the correction note because it is'
+      + ' the reason the counting bucket must expose own-property members, and'
+      + ' therefore the reason the multipart fix works at all. Nothing here'
+      + ' declares it and nothing should.',
+  },
+  {
+    file: 'docs/BENCH.md',
+    cites: 'MemTotal',
+    reason: 'A Linux `/proc/meminfo` field label, quoted inside verbatim container'
+      + ' output. It is a kernel name rather than a code name; this tree only ever'
+      + ' passes it as text to `grep`, so no file uses it as an identifier and'
+      + ' renaming it would misquote what the container reported.',
   },
 ];
 

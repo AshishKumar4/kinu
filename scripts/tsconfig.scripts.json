@@ -20,11 +20,14 @@
   "include": [
     "**/*.ts"
   ],
+  "//exclude": "The first five have PRE-EXISTING type errors and are debt: that list only shrinks. The two fixture workers are a DIFFERENT kind of entry and are not debt — each is a workerd Worker, not a bun program, so it needs @cloudflare/workers-types instead of [bun, node]. Each is compiled by the tsconfig.json beside it, which `bun run check` runs, so nothing here goes unchecked. Excluding them from this project is layering, not an exemption.",
   "exclude": [
     "eval.ts",
     "eval.test.ts",
     "layergate.ts",
     "cli-test-runner.ts",
-    "schema-drift.ts"
+    "schema-drift.ts",
+    "fixtures/r2-bench/worker.ts",
+    "fixtures/kinu-durability/worker.ts"
   ]
 }

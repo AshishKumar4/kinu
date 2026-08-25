@@ -1,6 +1,5 @@
 [
   "cross-file packages/cf-backend/src/auth/routes.ts#readJsonObject | packages/cf-backend/src/lib/cloudflare-oauth.ts#readJsonObject",
-  "cross-file packages/cf-backend/src/components/FilesPane.tsx#onListDrop > useCallback | packages/cf-backend/src/pages/WorkspacePage.tsx#onChatDrop > useCallback",
   "cross-file packages/cli-backend/src/claude-cli-provider.ts#readAll | packages/cli-backend/src/opencode-provider.ts#readAll",
   "cross-file packages/cli/src/commands/control.ts#normalizeWebhookAuthMode | packages/cli/src/commands/inspect.ts#normalizeWebhookAuthMode",
   "cross-file packages/cli/src/commands/control.ts#parsePositiveInt | packages/cli/src/commands/debug.ts#parsePositiveInt | packages/cli/src/commands/inspect.ts#parsePositiveInt",

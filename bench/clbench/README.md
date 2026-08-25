@@ -40,7 +40,7 @@ clbench inspect system kinu     # confirms registration + every parameter
 
 Point it at a checkout that will still be there. `clbench inspect system kinu`
 fails on a dangling link, and a symlink into a throwaway agent worktree under
-`.claude/worktrees/` dies the moment that worktree is removed — which is how the
+`.claude/worktrees/` dies the moment that worktree is removed. That is how the
 first install of this adapter was wired. Repoint with `ln -sfn` rather than
 re-cloning CL-Bench.
 
@@ -74,19 +74,25 @@ Every run gets a throwaway `KINU_HOME`, so your own workspaces are never
 opened, mutated, or measured. `_env()` strips every `KINU_*` variable the
 operator's shell holds and re-adds exactly six: `HOME` and `KINU_HOME` (both,
 so the child cannot fall back to `~/.kinu` even if it ignored the latter),
-`KINU_BASE_URL`, `KINU_MODEL`, `KINU_AUTH` — the resolved bearer, via
-the environment rather than argv, because a command line is world-readable — and
-`CI=1`. Anything else named `KINU_*` cannot reach a measured run at all,
-which is worth knowing before blaming one for a result: `KINU_MAX_STEPS` was
-suspected of causing the first run's one-step turns and was ruled out on exactly
-this filter, leaving the default of 500 steps against 1 used. That home goes through `bench/isolation.py`, the
+`KINU_BASE_URL`, `KINU_MODEL`, `KINU_AUTH`, the resolved bearer, passed through
+the environment rather than argv because a command line is world-readable, and
+`CI=1`. Anything else named `KINU_*` cannot reach a measured run at all.
+
+That is worth knowing before you blame the environment for a result. The first
+run's one-step turns were blamed on a step ceiling, and no step ceiling exists:
+`UNBOUNDED_STEPS` is the stop condition a turn runs under when its caller names
+none (`packages/core/src/chat.ts:170`), and the one loop whose vendor demands a
+number gets `Number.MAX_SAFE_INTEGER`. So a one-step turn is the model choosing
+to stop, or a tool failing, and neither is something the harness configured.
+
+The throwaway home goes through `bench/isolation.py`, the
 one rule both benchmark adapters share: it refuses an unset or relative home,
 your real `~/.kinu`, and anything inside the Kinu checkout.
 
 ## Running
 
 ```bash
-# Wiring check — one interaction, no trace, no baseline.
+# Wiring check: one interaction, no trace, no baseline.
 clbench smoke exploitable_poker --system kinu
 
 # The smallest slice with a real reward and a real baseline: 5 hands.
@@ -110,8 +116,8 @@ The configs separate them.
 | `*_kinu_no_evolve.json` | on | off | memory without evolution |
 | `*_kinu_fresh_workspace.json` | off | on | evolution without carried state |
 
-**Workspace persistence.** One durable workspace — memory, lessons, CraftStore,
-the evolved scaffold — carried across the sequence. CL-Bench already drives half
+**Workspace persistence.** One durable workspace, carrying memory, lessons, the
+CraftStore and the evolved scaffold across the sequence. CL-Bench already drives half
 of this itself: the stateless baseline builds a fresh system per instance, and
 each system gets its own throwaway home, so "stateless" really is a v0
 workspace. `persist_workspace=False` covers the *within-run* case, resetting the
@@ -130,8 +136,8 @@ latest observation.
 ## How a turn actually works
 
 One benchmark turn is one `kinu exec --json`. Kinu runs its full agentic
-loop inside that turn — its own tools, memory, and scaffold, in its own
-throwaway working directory — and returns one structured action.
+loop inside that turn, with its own tools, memory, and scaffold, in its own
+throwaway working directory, and returns one structured action.
 
 Worth being clear about, because it is easy to expect otherwise: **no CL-Bench
 task hands a system a live handle on its environment.** `Query` carries a

@@ -85,6 +85,7 @@
   "movable packages/cf-backend/src/lib/public-pages.ts",
   "movable packages/cf-backend/src/lib/public-shell.ts",
   "movable packages/cf-backend/src/lib/security-headers.ts",
+  "movable packages/cf-backend/src/lib/terminal-lane.ts",
   "movable packages/cf-backend/src/lib/user-api.ts",
   "movable packages/cf-backend/src/lib/web-provider.ts",
   "movable packages/cf-backend/src/memory-sync.ts",

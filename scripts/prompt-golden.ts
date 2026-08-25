@@ -3,9 +3,14 @@
  *
  * Writes `packages/core/tests/fixtures/prompt-golden.json` from the matrix in
  * `packages/core/tests/fixtures/prompt-surface-matrix.ts`, which
- * `unit-prompt-sections.test.ts` reads back. The fixture is what the builder
- * rendered before its prose moved into `prompting/section-templates.ts`, so it
- * is the evidence that the move changed representation and nothing else.
+ * `unit-prompt-sections.test.ts` reads back. The fixture is the last DELIBERATE
+ * rendering of every surface: the baseline any later source edit is compared
+ * against, byte for byte.
+ *
+ * It was originally the pre-sectionisation builder's output, held to prove that
+ * move changed representation only. It was re-cut on 2026-08-25 by a measured
+ * slimming pass (135,116 → 120,952 bytes over 27 surfaces, −10.5%), which
+ * retires that particular claim and leaves the drift gate intact.
  *
  * Run this ONLY when a prompt change is the intended change, and say so in the
  * commit. Regenerating it to quiet a red test erases the only record of what the

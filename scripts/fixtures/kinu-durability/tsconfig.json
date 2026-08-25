@@ -1,0 +1,13 @@
+{
+  "//": "The durability-probe fixture Worker runs on workerd and imports the PRODUCT KinuSandbox, so it needs cf-backend's type environment (workers-types plus the generated Env in env.d.ts), not the scripts project's [bun, node]. Same layering split as fixtures/r2-bench: worker.ts is excluded from scripts/tsconfig.scripts.json and compiled here, and `bun run check` runs this project so nothing goes unchecked.",
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": ["bun", "node", "@cloudflare/workers-types", "vite/client"],
+    "allowImportingTsExtensions": true,
+    "moduleDetection": "force"
+  },
+  "include": ["worker.ts", "../../../packages/cf-backend/env.d.ts"]
+}

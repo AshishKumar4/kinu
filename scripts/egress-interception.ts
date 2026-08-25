@@ -131,18 +131,51 @@ export function wranglerContainerClasses(declared: v.InferOutput<typeof Wrangler
  * class that extends Sandbox is a container whether or not it is bound yet, so
  * the two sources fail in opposite directions and the union survives both.
  *
+ * THE LINEAGE, not one hop. `KinuSandbox extends Devbox extends Sandbox` after
+ * the devbox extraction, and a matcher reading only the direct superclass lost
+ * the deployment's ONLY container class — it failed closed, loudly, which is
+ * how this sentence got written. The lineage is computed repo-wide to a
+ * fixpoint (Devbox lives in another package), but the DECLARED set stays
+ * scoped to this deployment's own source: the bench app's Devbox subclasses
+ * ship under their own wrangler with their own posture, and auditing them here
+ * would claim a set this gate does not govern.
+ *
  * Read from the AST rather than by the regex this replaces: `class X<T> extends
  * Sandbox` has a token between the name and `extends`, so a generic container
  * class silently left this denominator, and a mention inside a comment or a
  * string counted as a declaration. The `includes` prefilter is sound — an
  * identifier cannot reach the AST without its token appearing in the text.
  */
+export function sandboxLineage(sources: ReadonlyMap<string, string>): ReadonlySet<string> {
+  const lineage = new Set<string>(['Sandbox']);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const [file, text] of sources) {
+      if (!text.includes('Sandbox') && !text.includes('Devbox')) continue;
+      walk(parse(file, text).root, (node) => {
+        const base = superClassName(node);
+        if (base === undefined || !lineage.has(base)) return;
+        const name = declaredName(node);
+        if (name !== undefined && !lineage.has(name)) {
+          lineage.add(name);
+          grew = true;
+        }
+      });
+    }
+  }
+  return lineage;
+}
+
 export function declaredSandboxClasses(sources: ReadonlyMap<string, string>): string[] {
+  const lineage = sandboxLineage(sources);
   const names = new Set<string>();
   for (const [file, text] of sources) {
-    if (!text.includes('Sandbox')) continue;
+    if (!file.startsWith('packages/cf-backend/')) continue;
+    if (!text.includes('Sandbox') && !text.includes('Devbox')) continue;
     walk(parse(file, text).root, (node) => {
-      if (superClassName(node) !== 'Sandbox') return;
+      const base = superClassName(node);
+      if (base === undefined || !lineage.has(base)) return;
       const name = declaredName(node);
       if (name !== undefined) names.add(name);
     });
@@ -254,7 +287,7 @@ if (import.meta.main) {
     problems.push(`parsed no "containers" class_name out of ${WRANGLER} — nothing is bound to a container image`);
   }
   if (fromSource.length === 0) {
-    problems.push('found no `class X extends Sandbox` in the source — the matcher is not matching');
+    problems.push('found no class extending the Sandbox lineage in the deployment source — the matcher is not matching');
   }
   if (inspected.length === 0) {
     problems.push(`found none of the container classes (${classes.join(', ') || 'none'}) in the source`);
@@ -264,7 +297,7 @@ if (import.meta.main) {
   // stops a corrected binding from silently shrinking the corpus.
   for (const name of classes) {
     if (!fromSource.includes(name)) {
-      problems.push(`${name} is bound to a container in ${WRANGLER} but no \`class ${name} extends Sandbox\` was found`);
+      problems.push(`${name} is bound to a container in ${WRANGLER} but no class ${name} extending the Sandbox lineage was found`);
     }
   }
   if (problems.length > 0) {

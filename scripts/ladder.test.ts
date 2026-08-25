@@ -68,6 +68,7 @@ const NON_BUN_RUNNERS = {
  * that nobody is tempted by `--no-verify`.
  */
 const ROOT_TEST_OMISSIONS = {
+  'packages/devbox': 'bun test packages/devbox/',
   'packages/test-utils': 'bun test packages/test-utils/',
   'packages/cf-backend': 'bun test --parallel=4 packages/cf-backend/',
   'packages/cli-backend': 'bun test --parallel=4 packages/cli-backend/',
@@ -130,11 +131,19 @@ describe('the ladder measures something', () => {
     // deliberate edit here rather than a silently absorbed number.
     expect(claims('bun test scripts/bench*.test.ts', tracked).sort()).toEqual([
       'scripts/bench-corpus-gate.test.ts',
+      'scripts/bench-devbox-decision.test.ts',
       'scripts/bench-external.test.ts',
       'scripts/bench-inference-proxy.test.ts',
       'scripts/bench-pi-worker.test.ts',
+      'scripts/bench-r2-workspace.test.ts',
       'scripts/bench.test.ts',
     ]);
+    const durabilityProbeGate = LADDER.find(gate =>
+      gate.run.includes('scripts/sandbox-durability-probe.test.ts'));
+    expect(durabilityProbeGate?.tier).toBe('ci');
+    expect(durabilityProbeGate?.run).toBe(
+      'bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts scripts/sandbox-durability-probe.test.ts',
+    );
     // `bun run test` fans out through package.json into three package suites.
     expect(claims('bun run test', tracked).length).toBeGreaterThan(200);
     // The workerd layer resolves from its own command text, so it is
@@ -325,7 +334,7 @@ describe('every test file is claimed by some runner', () => {
 
   test('the root test script covers every package or names the omission and its gate', () => {
     // `bun run test` is the most-typed command in the repo and it covers 3 of
-    // the 8 workspace packages. Making it cover all 8 was measured and rejected
+    // the 9 workspace packages. Making it cover all 9 was measured and rejected
     // twice: as one process, `bun test packages/` is 4,839 tests in 126s with
     // 10 failures from cross-suite interference (bun keeps ONE module mock per
     // specifier for a whole run — see mockAgentsSdk's own docstring); as eight
@@ -337,7 +346,7 @@ describe('every test file is claimed by some runner', () => {
       tracked.flatMap((path) => path.split('/').slice(0, 2).join('/'))
         .filter((prefix) => prefix.startsWith('packages/')),
     );
-    expect(packages.size).toBe(8);
+    expect(packages.size).toBe(9);
 
     const byRootScript = new Set(claims('bun run test', tracked));
     const atCi = gatesFor('ci', deploy);
