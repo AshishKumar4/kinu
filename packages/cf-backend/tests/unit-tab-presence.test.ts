@@ -13,12 +13,11 @@
 import './helpers/ui-module-globals';
 import { describe, expect, test } from 'bun:test';
 import type { ForkNode, TabPresence } from '../src/lib/protocol';
+import { SURFACES } from '../src/components/surfaces/WorkSurface';
 import {
-  DEFAULT_SURFACE,
-  SURFACES,
   resolveGatedSurface,
   surfaceHasContent,
-} from '../src/components/surfaces/WorkSurface';
+} from '../src/components/surfaces/presence';
 
 const EMPTY_TREES: ReadonlyMap<string, ForkNode> = new Map();
 const oneTree = (): ReadonlyMap<string, ForkNode> => new Map([
@@ -67,13 +66,12 @@ describe('the gated tabs appear only with content', () => {
 });
 
 describe('an active tab whose content vanishes falls back', () => {
-  test('being on Releases when the lane empties lands on the default surface', () => {
-    expect(resolveGatedSurface('Releases', FRESH, EMPTY_TREES)).toBe(DEFAULT_SURFACE);
-    expect(DEFAULT_SURFACE).toBe('Work');
+  test('being on Releases when the lane empties lands on Work', () => {
+    expect(resolveGatedSurface('Releases', FRESH, EMPTY_TREES)).toBe('Work');
   });
 
-  test('being on Explore when the last run goes away lands on the default surface', () => {
-    expect(resolveGatedSurface('Exploration', FRESH, EMPTY_TREES)).toBe(DEFAULT_SURFACE);
+  test('being on Explore when the last run goes away lands on Work', () => {
+    expect(resolveGatedSurface('Exploration', FRESH, EMPTY_TREES)).toBe('Work');
   });
 
   test('a live tree keeps an active Explore tab exactly where it is', () => {
