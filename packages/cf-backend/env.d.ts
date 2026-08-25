@@ -54,18 +54,10 @@ declare global {
     /** Browser sessions, one-time OAuth state, and CLI browser-approval state.
      *  Everything in it expires on its own; nothing in it is a source of truth. */
     AUTH_KV: KVNamespace;
-    /** R2 bucket holding sandbox /workspace snapshots. Read directly by
-     *  KinuSandbox to verify a snapshot before restoring from it. */
+    /** R2 bucket holding sandbox /workspace snapshots; bytes stream
+     *  container → Durable Object → R2 through this binding, and no
+     *  credential ever enters the container. */
     BACKUP_BUCKET?: R2Bucket;
-    /** Presigned-URL credentials for the container↔R2 transfer. Present ⇒ the
-     *  SDK moves snapshot bytes over presigned URLs and restores by MOUNTING the
-     *  archive; absent ⇒ bytes move through the BACKUP_BUCKET binding and the
-     *  restore extracts. Neither path puts a credential in the container: the
-     *  presigned URL is minted in the Durable Object. All four are required
-     *  together — see the BACKUP_BUCKET note in wrangler.jsonc. */
-    R2_ACCESS_KEY_ID?: string;
-    R2_SECRET_ACCESS_KEY?: string;
-    BACKUP_BUCKET_NAME?: string;
     /** In-product feedback screenshots. The metadata row in ControlPlaneDO
      *  carries the object key; the bytes never enter a DO row or an analytics
      *  blob. Absent ⇒ note-only feedback still lands and a screenshot
@@ -89,7 +81,6 @@ declare global {
      *  for one: '' in production, `_staging` under `env.staging`. Read path
      *  only — writes go through the three bindings above. */
     ANALYTICS_DATASET_SUFFIX?: string;
-    CLOUDFLARE_R2_ACCOUNT_ID?: string;
     AI_GATEWAY_URL: string;
     /** Zone isolated previews are served under, one capability hostname per
      *  exposed Workspace or Sandbox port. Empty disables previews. */

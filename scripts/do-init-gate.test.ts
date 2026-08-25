@@ -172,8 +172,8 @@ describe('DO init-gate purity, against the real tree', () => {
     // narrowing had quietly become an exemption over nothing.
     const { inspected } = audit(SOURCES);
     expect(inspected.map((i) => `${i.owner}:${i.hook}`).sort()).toEqual([
+      'Devbox:container-start',
       'ExplorationAgent:per-request',
-      'KinuSandbox:container-start',
       'OrchestratorAgent:per-request',
       'SubordinateAgent:per-request',
     ]);
@@ -197,9 +197,10 @@ describe('DO init-gate purity, against the real tree', () => {
   });
 
   test('cut the wire: unbounding the real container hook goes red', () => {
-    // The restore is the reason this hook may hold the gate at all. Take its
-    // budget away against the real file and the gate must say so.
-    const file = 'packages/cf-backend/src/kinu-sandbox.ts';
+    // The per-start arming is the reason this hook may hold the gate at all.
+    // Take its budget away against the real file and the gate must say so.
+    // The hook lives on Devbox since the extraction; KinuSandbox inherits it.
+    const file = 'packages/devbox/src/devbox.ts';
     const real = SOURCES.get(file);
     expect(real).toBeDefined();
 
@@ -208,12 +209,12 @@ describe('DO init-gate purity, against the real tree', () => {
     );
     expect(unbounded).not.toBe(real);
     const { violations } = auditFile(file, unbounded);
-    expect(violations.map((v) => v.owner)).toEqual(['KinuSandbox']);
+    expect(violations.map((v) => v.owner)).toEqual(['Devbox']);
     expect(violations[0]!.reason).toContain('must route its work through');
   });
 
   test('cut the wire: detaching the real container hook goes red', () => {
-    const file = 'packages/cf-backend/src/kinu-sandbox.ts';
+    const file = 'packages/devbox/src/devbox.ts';
     const real = SOURCES.get(file);
     const detached = real!.replace('onStart(): Promise<void> {', 'onStart(): void {');
     expect(detached).not.toBe(real);
