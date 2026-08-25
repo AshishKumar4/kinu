@@ -4149,7 +4149,7 @@ function FeedbackFrame({ noise }: { noise: boolean }) {
           <input
             data-secret-input
             type="password"
-            defaultValue="sk-ant-api03-REDACTION-MUST-REMOVE-THIS"
+            defaultValue="gallery-placeholder-not-a-key"
             className={inputCls}
           />
         </label>
