@@ -232,7 +232,7 @@ describe("deploy gate", () => {
 
   test("every gate has a process-tree deadline", () => {
     const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
-    expect(source).toContain("GATE_DEADLINE_SECONDS=180");
+    expect(source).toContain("GATE_DEADLINE_SECONDS=480");
     expect(source).toContain(
       'timeout --signal=TERM --kill-after=5s "$GATE_DEADLINE_SECONDS" ${GATE_CMDS[pick]}',
     );
