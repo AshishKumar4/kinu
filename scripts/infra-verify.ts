@@ -65,6 +65,10 @@ export interface Row {
   readonly detail: string;
   readonly required: boolean;
   readonly purpose: string;
+  /** How the resource comes to exist — 'wrangler-deploy' means the deploy
+   *  itself creates it, which is what lets the audit tell a pre-first-deploy
+   *  absence from a provisioning gap. */
+  readonly origin: Resource['origin'];
 }
 
 /** Which binding types on the deployed Worker satisfy which manifest kind. The
@@ -82,7 +86,7 @@ const DEPLOYED_TYPE = new Map<string, string>([
 ]);
 
 function row(resource: Resource, observation: Observation): Row {
-  const base = { id: resource.id, required: resource.required, purpose: resource.purpose };
+  const base = { id: resource.id, required: resource.required, purpose: resource.purpose, origin: resource.origin };
   if (observation.state === 'present') return { ...base, verdict: 'present', detail: observation.detail };
   if (observation.state === 'unknown') return { ...base, verdict: 'unknown', detail: observation.reason };
   // An absent row is the one an operator acts on, so it carries the action: the
@@ -108,6 +112,7 @@ function unobservableRow(resource: Resource): Row {
       + 'UNOBSERVABLE says why or how a human should check it',
     required: resource.required,
     purpose: resource.purpose,
+    origin: resource.origin,
   };
 }
 
@@ -263,10 +268,18 @@ export function supplyDrift(infrastructure: Infrastructure): readonly string[] {
   ];
 }
 
-/** `UNOBSERVABLE` must name exactly the rows that came back unobservable. */
+/** Stale blind-spot entries, scoped to the rows THIS run declared. Runs are
+ *  one-environment (see main), so an entry owned by another environment's
+ *  resource is that run's business — demanding it here failed every staging
+ *  run on production's cron entry. An entry matching NO declared resource in
+ *  any run is caught by the run that owns its environment prefix going stale;
+ *  entries for resources deleted from the manifest entirely are caught by the
+ *  self-test, which audits UNOBSERVABLE against the derived manifest. */
 export function unobservableDrift(rows: readonly Row[]): readonly string[] {
   const seen = rows.filter((entry) => entry.verdict === 'unobservable').map((entry) => entry.id);
+  const declared = new Set(rows.map((entry) => entry.id));
   return [...UNOBSERVABLE.keys()]
+    .filter((id) => declared.has(id))
     .filter((id) => !seen.includes(id))
     .map((id) =>
       `${id} is declared UNOBSERVABLE and was not reported as one — either it is now observable `
@@ -280,6 +293,9 @@ export interface Audit {
   readonly rows: readonly Row[];
   readonly secrets: readonly SecretRow[];
   readonly findings: readonly string[];
+  /** True statements the verdict tolerates but must not swallow — printed on
+   *  the success path so a pass never reads as "nothing to say". */
+  readonly notes: readonly string[];
 }
 
 /** Pure, so the self-test drives every branch without a Cloudflare account. */
@@ -290,6 +306,7 @@ export function audit(
   unreadFields: readonly string[],
 ): Audit {
   const findings: string[] = [];
+  const notes: string[] = [];
 
   for (const entry of rows) {
     if (entry.verdict === 'unknown') {
@@ -315,6 +332,17 @@ export function audit(
         fix: 'add an UNOBSERVABLE entry in scripts/infra-manifest.ts naming the manual check, or '
           + 'give the resource an observation in scripts/infra-cloudflare.ts.',
       }));
+      continue;
+    }
+    if (entry.verdict === 'absent' && entry.required && entry.origin === 'wrangler-deploy') {
+      // The deploy being gated is itself the provisioner for this resource
+      // (a DO namespace lands with its migration), so pre-deploy absence is
+      // the expected first-deploy state, not a gap this gate can act on. The
+      // note keeps it visible: a reader of a green run still sees which
+      // resources ride on the deploy about to run, and absence AFTER that
+      // deploy is the real defect to chase.
+      notes.push(`${entry.id} is absent and is created by the deploy itself — expected before `
+        + 'the first deploy carrying its migration; verify it exists after this deploy lands');
       continue;
     }
     if (entry.verdict === 'absent' && entry.required) {
@@ -388,7 +416,7 @@ export function audit(
     }));
   }
 
-  return { rows, secrets, findings };
+  return { rows, secrets, findings, notes };
 }
 
 /* ── Reporting ────────────────────────────────────────────────────────── */
@@ -497,6 +525,8 @@ async function main(): Promise<number> {
     + `${String(rows.filter((entry) => entry.verdict === 'unknown').length)} unreadable, `
     + `${String(rows.filter((entry) => entry.verdict === 'unobservable').length)} unobservable by any CLI.`,
   );
+
+  for (const note of verdict.notes) console.log(`${GATE}: NOTE — ${note}`);
 
   if (verdict.findings.length > 0) {
     console.error(`\n${GATE}: ${String(verdict.findings.length)} finding(s)\n`);
