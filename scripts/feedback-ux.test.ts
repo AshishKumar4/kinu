@@ -535,7 +535,17 @@ async function run(): Promise<Observed> {
     await bare.goto(`${origin}/gallery.html?frame=feedback`, { waitUntil: 'networkidle0' });
     await openDialog(bare);
     await bare.click('[data-feedback-include-shot]');
-    await bare.waitForFunction(() => document.querySelector('[data-feedback-shot]') === null);
+    // Clearing the shot is a trivial synchronous state flip, but it shares
+    // the renderer's one JS thread with the capture/decode work elsewhere on
+    // this page — under real CPU contention the whole thread stalls, not
+    // just the CPU-heavy parts. 90s matches the recapture wait just below,
+    // which waits on the same renderer for work that IS CPU-heavy; the
+    // Puppeteer-default 30s this call carried was inconsistent with that
+    // and it flaked under a deploy-load reproduction (44.2s observed).
+    await bare.waitForFunction(
+      () => document.querySelector('[data-feedback-shot]') === null,
+      { timeout: 90_000 },
+    );
     const shotSectionPresent = await bare.$('[data-feedback-shot]') !== null;
     await bare.type('[data-feedback-note]', 'no screenshot for this one');
     await bare.click('[data-feedback-send]');
@@ -600,7 +610,10 @@ async function run(): Promise<Observed> {
     // The failed state's retry affordance is the checkbox: off, then on again.
     await broken.evaluate(() => window.__restoreCapture?.());
     await broken.click('[data-feedback-include-shot]');
-    await broken.waitForFunction(() => document.querySelector('[data-feedback-shot]') === null);
+    await broken.waitForFunction(
+      () => document.querySelector('[data-feedback-shot]') === null,
+      { timeout: 90_000 },
+    );
     await broken.click('[data-feedback-include-shot]');
     await broken.waitForFunction(
       () => document.querySelector('[data-feedback-canvas][data-feedback-painted]') !== null,
@@ -629,7 +642,10 @@ async function run(): Promise<Observed> {
     await diagnosticsSettled(decodeDiagnostics, 1);
     await undecodable.evaluate(() => window.__restoreDecode?.());
     await undecodable.click('[data-feedback-include-shot]');
-    await undecodable.waitForFunction(() => document.querySelector('[data-feedback-shot]') === null);
+    await undecodable.waitForFunction(
+      () => document.querySelector('[data-feedback-shot]') === null,
+      { timeout: 90_000 },
+    );
     await undecodable.click('[data-feedback-include-shot]');
     await undecodable.waitForFunction(
       () => document.querySelector('[data-feedback-canvas][data-feedback-painted]') !== null,
