@@ -92,9 +92,6 @@ export interface FilesSurfaceProps {
 export function FilesSurface({ rpc, executors, jump }: FilesSurfaceProps) {
   const agentName = useParams().agentId ?? "";
   const [path, setPath] = useState("/");
-  const [entries, setEntries] = useState<DirEntry[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
   /** One failure line for row operations (rename/delete/download prep). */
   const [notice, setNotice] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
@@ -128,25 +125,32 @@ export function FilesSurface({ rpc, executors, jump }: FilesSurfaceProps) {
     return listed;
   }, [rpc]);
 
-  const refresh = useCallback(async (dir: string) => {
-    setLoading(true);
-    setErr(null);
+  // Keyed on `path`: a listing for the OLD directory must never render under
+  // the NEW one's breadcrumb. `useAsyncResource`'s identity check forces the
+  // rendered value to "loading" the instant `path` changes, in the SAME
+  // render as the navigation — closing the window a `useEffect`-driven fetch
+  // otherwise leaves open between the crumb bar updating and the listing
+  // arriving. A slow scheduler widens that window; it cannot reopen this one.
+  const loadListing = useCallback(async (): Promise<DirEntry[]> => {
     try {
-      setEntries(await listDir(dir));
-      setSelected(0);
+      return await listDir(path);
     } catch (e) {
-      setErr(renderThrownChain({ cause: e }));
-      setEntries([]);
-    } finally {
-      setLoading(false);
+      throw new Error(renderThrownChain({ cause: e }), { cause: e });
     }
-  }, [listDir]);
+  }, [listDir, path]);
+  const { resource: listing, reload: reloadListing } = useAsyncResource(loadListing, undefined, path);
+  const entries = lastValue(listing) ?? [];
+  const loading = listing.status === "loading";
+  const err = listing.status === "error" ? listing.message : null;
+
+  useEffect(() => {
+    if (listing.status === "ready") setSelected(0);
+  }, [listing]);
 
   useEffect(() => {
     setRenaming(null);
     setConfirmDelete(null);
-    void refresh(path).then(undefined, (error: Error) => setErr(renderThrownChain({ cause: error })));
-  }, [path, refresh]);
+  }, [path]);
 
   // A jump is consumed exactly once per nonce.
   const lastJump = useRef(0);
@@ -195,8 +199,8 @@ export function FilesSurface({ rpc, executors, jump }: FilesSurfaceProps) {
           : u));
       }
     }
-    await refresh(path);
-  }, [path, rawUrl, refresh]);
+    await reloadListing();
+  }, [path, rawUrl, reloadListing]);
 
   const commitRename = useCallback((from: string, draft: string) => run(async () => {
     const name = draft.trim();
@@ -207,16 +211,16 @@ export function FilesSurface({ rpc, executors, jump }: FilesSurfaceProps) {
     const out = await rpc<WriteResult>("renameExecutorFile", [PLANE, from, to]);
     if ("error" in out) throw new Error(out.error);
     if (preview === from) setPreview(to);
-    await refresh(path);
-  }), [path, preview, refresh, rpc, run]);
+    await reloadListing();
+  }), [preview, reloadListing, rpc, run]);
 
   const deletePath = useCallback((full: string) => run(async () => {
     setConfirmDelete(null);
     const out = await rpc<WriteResult>("deleteExecutorFile", [PLANE, full]);
     if ("error" in out) throw new Error(out.error);
     if (preview === full) setPreview(null);
-    await refresh(path);
-  }), [path, preview, refresh, rpc, run]);
+    await reloadListing();
+  }), [preview, reloadListing, rpc, run]);
 
   const onListDragOver = useCallback((e: ReactDragEvent) => {
     if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setDragOver(true); }
@@ -334,7 +338,7 @@ export function FilesSurface({ rpc, executors, jump }: FilesSurfaceProps) {
             <button onClick={() => uploadInputRef.current?.click()}
               className="flex items-center gap-1 p-text-3 hover:p-text p-1"
               title={`Upload files to ${path}`}><UploadSimpleIcon size={11} />Upload</button>
-            <button onClick={() => run(async () => { await refresh(path); reloadMounts(); })}
+            <button onClick={() => run(async () => { await reloadListing(); reloadMounts(); })}
               className="p-text-3 hover:p-text p-1"
               title="Refresh" aria-label="Refresh"><ArrowsClockwiseIcon size={11} /></button>
           </div>

@@ -73,7 +73,7 @@ describe('an active tab whose content vanishes falls back', () => {
   });
 
   test('being on Explore when the last run goes away lands on the default surface', () => {
-    expect(resolveGatedSurface('Exploration', FULL, EMPTY_TREES)).toBe(DEFAULT_SURFACE);
+    expect(resolveGatedSurface('Exploration', FRESH, EMPTY_TREES)).toBe(DEFAULT_SURFACE);
   });
 
   test('a live tree keeps an active Explore tab exactly where it is', () => {
