@@ -158,7 +158,10 @@ const SHARED_TRANSPORTS = {
   makeScaffoldLLMStream: 'createScaffoldLLMStream',
   markChangelogSeen: 'markChangelogSeen',
   pickAlternateTake: 'pickAlternateTake',
-  profileInputs: 'loadProfileAuthorityInputs',
+  // Core builds the durable steer rows (fallback id + both metadata keys,
+  // inseparable); what stays per backend is transport — DO messages vs SQLite
+  // rows — and each side's own broadcast channel.
+  recordLandedSteers: 'describeLandedSteers',
   previewScaffoldLive: 'previewScaffoldLive',
   proposeCurriculumTasks: 'proposeCurriculumTasks',
   proposeScaffold: 'proposeScaffold',
@@ -172,6 +175,9 @@ const SHARED_TRANSPORTS = {
   // completion gate exists at all (it is the one-shot CLI surface's mechanism,
   // so cf passes `gateOpen: false` by construction).
   reviewTurnInBackground: 'runAdvisorLane',
+  // The prompt pair and the parse are core's; each body states only which
+  // model answers (its routed 'fast' lane) and its own spend/operation framing.
+  suggestTitle: 'suggestWorkspaceTitle',
   runScaffoldGepaOptimization: 'runScaffoldGepaOptimization',
   runScaffoldOnce: 'runScaffoldOnce',
   // Accessors over ONE core object (ModelCatalogSession), three lines each.

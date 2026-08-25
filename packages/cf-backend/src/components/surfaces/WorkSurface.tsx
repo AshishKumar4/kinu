@@ -16,7 +16,7 @@
  * The gauge at the right is deliberately apart and deliberately unchanged: the
  * run's meters are about the run rather than a place to work in it.
  */
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   GaugeIcon, SparkleIcon,
 } from "@phosphor-icons/react";
@@ -31,11 +31,12 @@ import { AgentSurface } from "./AgentSurface";
 import { ExplorationSurface } from "./ExplorationSurface";
 import { WorkTab } from "./WorkTab";
 import { EnvironmentSurface } from "./EnvironmentSurface";
+import { FilesSurface } from "./FilesSurface";
 import { ReleasesSurface } from "./ReleasesSurface";
 import { ActivitySurface } from "./ActivitySurface";
 import { AgentViewSurface } from "./AgentViewSurface";
 
-export const SURFACES = ["Output", "Work", "Releases", "Exploration", "Agent", "Environment"] as const;
+export const SURFACES = ["Output", "Work", "Files", "Releases", "Exploration", "Agent", "Environment"] as const;
 /** Not one of the segmented work surfaces: Activity is about the run rather
  *  than a place to work in it, so it sits apart at the right of the strip and
  *  carries no label. */
@@ -53,6 +54,7 @@ export const agentViewSlug = (surface: SurfaceKind): string | null =>
 const SURFACE_LABEL = {
   Output: "Output",
   Work: "Work",
+  Files: "Files",
   Releases: "Releases",
   Exploration: "Explore",
   Agent: "Agent",
@@ -104,6 +106,13 @@ export interface WorkSurfaceProps {
 export function WorkSurface(props: WorkSurfaceProps) {
   const { surface, onSurface } = props;
   const strip = useRef<HTMLDivElement>(null);
+  // A one-shot cross-surface intent: an Environment card's Files action lands
+  // the Files tab at that environment's own root on the composite plane.
+  const [filesJump, setFilesJump] = useState<{ path: string; nonce: number } | null>(null);
+  const openFiles = useCallback((path: string) => {
+    setFilesJump((prev) => ({ path, nonce: (prev?.nonce ?? 0) + 1 }));
+    onSurface("Files");
+  }, [onSurface]);
 
   // A surface can be selected without being clicked (a deep link, a restored
   // tab) — keep the current one in view when the strip has to scroll.
@@ -195,6 +204,9 @@ export function WorkSurface(props: WorkSurfaceProps) {
               rpc={props.rpc}
             />
           )}
+          {surface === "Files" && (
+            <FilesSurface rpc={props.rpc} executors={props.executors} jump={filesJump} />
+          )}
           {surface === "Releases" && <ReleasesSurface rpc={props.rpc} executors={props.executors} />}
           {surface === "Exploration" && (
             <ExplorationSurface
@@ -219,6 +231,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
               executorOutputs={props.executorOutputs}
               lastActiveExecutor={props.lastActiveExecutor}
               onExecute={props.onExecute}
+              onOpenFiles={openFiles}
             />
           )}
           {surface === ACTIVITY_SURFACE && <ActivitySurface rpc={props.rpc} isStreaming={props.isStreaming} />}

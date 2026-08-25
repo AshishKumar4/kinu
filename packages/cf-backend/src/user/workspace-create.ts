@@ -1,7 +1,8 @@
 import { generateText } from 'ai';
 import {
   WORKSPACE_TITLE_SYSTEM_PROMPT,
-  DEFAULT_WORKERS_AI_MODEL_SPEC,
+  DEFAULT_ROLE_ID,
+  defaultSpecFor,
   effortFor,
   workspaceTitlePrompt,
   fallbackWorkspaceIdentity,
@@ -16,7 +17,7 @@ import type { OrchestratorAgent } from '../orchestrator';
 import { createAgentProviderRegistry } from '../providers/agent-registry';
 import type { UserCredentialClient } from '../providers/agent-registry';
 import type { UserCaller } from './workspace-capability';
-import { listAvailableModels, type ModelMenuEntry } from './available-models';
+import { listAvailableModels } from './available-models';
 import type { WorkspaceEntry } from './user-do';
 import { indexNewWorkspace, unindexWorkspace } from '../control-plane/index-feed';
 
@@ -63,7 +64,15 @@ export async function createCloudWorkspaceForUser(
     throw new Error(`Invalid reasoning effort: ${String(input.reasoningEffort)}`);
   }
   const menu = await listAvailableModels(env, userId, caller);
-  const model = pickInitialModel(input.model ?? await userDO.getConfig(caller, 'default_model'), menu.models);
+  // The CHOICE is core's (`defaultSpecFor`): a configured default wins only if
+  // the account can actually serve it, else the native Workers AI model, else
+  // nothing — never the first entry in the menu, which used to sign new
+  // workspaces up to a paid BYO provider. The COPY below stays here, because the
+  // remedy is this surface's: the CLI's counterpart names `kinu auth`.
+  const model = defaultSpecFor(
+    input.model ?? await userDO.getConfig(caller, 'default_model'),
+    menu.models.map((entry) => entry.spec),
+  );
   if (!model) {
     throw new Error('Cloudflare Workers AI is not connected. Reconnect Cloudflare with Workers AI permissions, or choose a default model in your user settings, then create the workspace again.');
   }
@@ -328,18 +337,10 @@ async function initializeOrchestrator(input: InitializeOrchestratorInput): Promi
   await orchestrator.resetWorkspaceBaseline();
   if (model) await orchestrator.setModel(model);
   if (reasoningEffort) await orchestrator.setReasoningEffort(reasoningEffort);
-  if (role && role !== 'general') await orchestrator.setRole(role);
+  if (role && role !== DEFAULT_ROLE_ID) await orchestrator.setRole(role);
   // The agent takes the first turn. Last, so the soul, model and effort it runs
   // under are all already durable — and the mission it reads is the one the row
   // holds, not a second copy passed down this call.
   await orchestrator.beginGenesisTurn();
 }
 
-/** The model a new workspace starts on. An explicit choice wins; with none, the
- *  native Workers AI default is the only automatic answer. Falling through to
- *  whatever model happened to be first in the menu silently put new workspaces
- *  on a paid BYO provider. */
-export function pickInitialModel(defaultModel: string | null, models: ModelMenuEntry[]): string | null {
-  if (defaultModel && models.some((model) => model.spec === defaultModel)) return defaultModel;
-  return models.find((model) => model.spec === DEFAULT_WORKERS_AI_MODEL_SPEC)?.spec ?? null;
-}

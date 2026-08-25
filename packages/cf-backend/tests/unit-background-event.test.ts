@@ -294,7 +294,11 @@ describe('the cloud backend selects its background policy per turn', () => {
   const actor = readFileSync(join(import.meta.dir, '..', 'src', 'actor-agent.ts'), 'utf8');
 
   test('the job runner reads the policy through a thunk, not a captured value', () => {
-    expect(actor).toContain('policy: () => BACKGROUND_POLICY[this.turnSurface()]');
+    // Still a per-turn read (the runner is cached across turns), and now the
+    // canonical composition: the surface picks the thresholds, this host's
+    // durability answers the wake question once for every surface.
+    expect(actor).toContain('policy: () => invocationBackgroundPolicy(this.turnSurface(), true)');
+    expect(actor).not.toContain('BACKGROUND_POLICY[this.turnSurface()]');
   });
 
   test('both unwatched populations are one-shot; only real chat is interactive', () => {

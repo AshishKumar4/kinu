@@ -106,8 +106,8 @@ function renderNotReadyPage(host: string): Response {
   <h1><span class="dot"></span> Preview not ready</h1>
   <p>Port <code>${safePort}</code> is exposed publicly but the container did not accept the connection.</p>
   <p>Usually that means nothing is listening on it yet: the agent exposed the port before starting a server. Ask the agent:</p>
-  <pre>You exposed port ${safePort} but the container isn't serving anything on it. Please start a server first (e.g. <code>nohup python3 -m http.server ${safePort} --directory /workspace/&lt;app&gt; &gt; /tmp/srv.log 2>&amp;1 &amp;</code> for static sites, or <code>nohup node server.js &gt; /tmp/srv.log 2&gt;&amp;1 &amp;</code> for Node), wait ~1s for it to bind, then verify with <code>sandbox.listPorts()</code>.</pre>
-  <p class="hint">If a server was running, the sandbox may have restarted. Re-run it, call <code>sandbox.exposePort(${safePort})</code> again, and refresh this page once something is listening.</p>
+  <pre>You exposed port ${safePort} but the container isn't serving anything on it. Start a SUPERVISED server first &mdash; in chat: <code>sandbox.startProcess("python3 -m http.server ${safePort} --directory /workspace/&lt;app&gt;")</code> for a static site, or <code>sandbox.startProcess("node server.js", {cwd:"/workspace/&lt;app&gt;"})</code> for Node &mdash; then call <code>sandbox.exposePort(${safePort})</code> again.</pre>
+  <p class="hint">Supervised processes come back by themselves after a container restart; bare nohup jobs do not. If a supervised server was running, restart is already underway &mdash; refresh this page in a moment.</p>
   <button onclick="location.reload()">Reload preview</button>
   <div class="meta">sandbox=${safeSandboxId} · port=${safePort}</div>
 </div>

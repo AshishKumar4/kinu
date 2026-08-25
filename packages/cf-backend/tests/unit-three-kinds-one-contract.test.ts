@@ -714,10 +714,12 @@ async function requestOnMarkerFamily(fixture: KindFixture, spec: string): Promis
 // ── C10 — the terminal vocabulary, three stores ───────────────────────────────
 
 /**
- * The actor kinds' terminal record is `run_end.reason` (the settle spine writes
- * `result.status` verbatim); a node's is `head_journal.status`. The words a
- * supervisor reads are therefore a CONTRACT between two stores — shared where
- * they are shared, declared where they are not.
+ * The actor kinds' terminal record is `run_end.reason` (core's `classifyRunEnd`,
+ * fed the driver's raw facts — it used to be the driver's `result.status`
+ * verbatim on one backend and a hand-picked string on the other); a node's is
+ * `head_journal.status`. The words a supervisor reads are therefore a CONTRACT
+ * between two stores — shared where they are shared, declared where they are
+ * not.
  */
 describe('C10 a finished turn leaves a terminal record, in a mostly shared vocabulary', () => {
   for (const kind of KINDS) {

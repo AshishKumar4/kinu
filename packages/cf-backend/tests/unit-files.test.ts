@@ -1,7 +1,11 @@
 // Behavior tests for the file-manager plumbing: each executor's own file view
 // and the writeExecutorFileOp seam over it.
 import { describe, test, expect } from "bun:test";
-import { sortDirEntries, writeExecutorFileOp, type VFS } from "@kinu.run/core";
+import {
+  deleteExecutorPathOp, getExecutorFiles, readExecutorFileBytes, renameExecutorPathOp,
+  sortDirEntries, writeExecutorFileOp, type VFS,
+} from "@kinu.run/core";
+import { fileResponseHeaders } from "../src/lib/http";
 
 describe("sortDirEntries", () => {
   test("dirs before files, alphabetical within each group", () => {
@@ -105,6 +109,202 @@ describe("writeExecutorFileOp", () => {
     const stored = written.get("/uploads/big.bin");
     if (!(stored instanceof Uint8Array)) throw new Error("binary upload was not stored as bytes");
     expect(stored.length).toBe(big.length);
+  });
+});
+
+/** A tree-shaped file view with real directory semantics, plus recorders for
+ *  the native mutations a plane may declare — what the file-manager ops probe. */
+function makeTree(seed: Record<string, string>, opts: { native?: boolean } = {}) {
+  const files = new Map<string, string | Uint8Array>(Object.entries(seed));
+  const dirs = new Set<string>();
+  for (const path of files.keys()) {
+    for (let at = path.indexOf("/", 1); at !== -1; at = path.indexOf("/", at + 1)) {
+      dirs.add(path.slice(0, at));
+    }
+  }
+  const renames: Array<[string, string]> = [];
+  const removed: string[] = [];
+  const vfs: VFS = {
+    readFile: async (path) => {
+      const data = files.get(path);
+      if (data === undefined) throw new Error(`ENOENT: ${path}`);
+      return data;
+    },
+    writeFile: async (path, data) => { files.set(path, data); },
+    readdir: async (path) => {
+      const names = new Set<string>();
+      const prefix = path === "/" ? "/" : `${path}/`;
+      for (const key of [...files.keys(), ...dirs]) {
+        if (key.startsWith(prefix)) names.add(key.slice(prefix.length).split("/")[0]!);
+      }
+      return [...names];
+    },
+    stat: async (path) => {
+      if (files.has(path)) return { size: files.get(path)!.length, mtimeMs: 1_724_500_000_000, isDir: false };
+      return dirs.has(path) ? { size: 0, mtimeMs: 0, isDir: true } : null;
+    },
+    unlink: async (path) => { files.delete(path); dirs.delete(path); },
+    mkdir: async (path) => { dirs.add(path); },
+    exists: async (path) => files.has(path) || dirs.has(path),
+  };
+  const native = opts.native
+    ? {
+      rename: async (oldPath: string, newPath: string) => {
+        renames.push([oldPath, newPath]);
+        files.set(newPath, files.get(oldPath) ?? "");
+        files.delete(oldPath);
+      },
+      removeRecursive: async (path: string) => { removed.push(path); dirs.delete(path); },
+    }
+    : {};
+  const deps = { getProvider: () => ({ files: { ...vfs, ...native }, homeDir: async () => "/home/user" }) };
+  return { deps, files, dirs, renames, removed };
+}
+
+describe("renameExecutorPathOp", () => {
+  test("uses the plane's native rename where it declares one", async () => {
+    const { deps, renames } = makeTree({ "/home/user/a.txt": "x" }, { native: true });
+    const out = await renameExecutorPathOp(deps, "workspace", "/home/user/a.txt", "/home/user/b.txt");
+    expect(out).toEqual({ ok: true });
+    expect(renames).toEqual([["/home/user/a.txt", "/home/user/b.txt"]]);
+  });
+
+  test("carries a file's bytes on a plane with no native rename", async () => {
+    const { deps, files } = makeTree({ "/home/user/a.txt": "carried" });
+    const out = await renameExecutorPathOp(deps, "workspace", "/home/user/a.txt", "/home/user/b.txt");
+    expect(out).toEqual({ ok: true });
+    expect(files.get("/home/user/b.txt")).toBe("carried");
+    expect(files.has("/home/user/a.txt")).toBe(false);
+  });
+
+  test("refuses a directory where only bytes could carry it", async () => {
+    const { deps, files } = makeTree({ "/home/user/src/app.ts": "export {};" });
+    const out = await renameExecutorPathOp(deps, "workspace", "/home/user/src", "/home/user/moved");
+    expect("error" in out && out.error).toContain("directory");
+    expect(files.has("/home/user/src/app.ts")).toBe(true);
+  });
+
+  test("never overwrites: an existing target is a stated refusal", async () => {
+    const { deps, files } = makeTree({ "/home/user/a.txt": "keep me", "/home/user/b.txt": "target" }, { native: true });
+    const out = await renameExecutorPathOp(deps, "workspace", "/home/user/a.txt", "/home/user/b.txt");
+    expect("error" in out && out.error).toContain("already exists");
+    expect(files.get("/home/user/b.txt")).toBe("target");
+  });
+
+  test("a missing source is a typed error, not a throw", async () => {
+    const { deps } = makeTree({});
+    const out = await renameExecutorPathOp(deps, "workspace", "/home/user/gone.txt", "/home/user/b.txt");
+    expect("error" in out).toBe(true);
+  });
+});
+
+describe("deleteExecutorPathOp", () => {
+  test("a file is one unlink", async () => {
+    const { deps, files } = makeTree({ "/home/user/a.txt": "x" });
+    const out = await deleteExecutorPathOp(deps, "workspace", "/home/user/a.txt");
+    expect(out).toEqual({ ok: true });
+    expect(files.has("/home/user/a.txt")).toBe(false);
+  });
+
+  test("a directory uses the native tree removal where one exists", async () => {
+    const { deps, removed } = makeTree({ "/home/user/build/out.js": "x" }, { native: true });
+    const out = await deleteExecutorPathOp(deps, "workspace", "/home/user/build");
+    expect(out).toEqual({ ok: true });
+    expect(removed).toEqual(["/home/user/build"]);
+  });
+
+  test("a directory on a plane without native removal goes entry by entry", async () => {
+    const { deps, files, dirs } = makeTree({
+      "/home/user/build/out.js": "x",
+      "/home/user/build/deep/two.js": "y",
+    });
+    const out = await deleteExecutorPathOp(deps, "workspace", "/home/user/build");
+    expect(out).toEqual({ ok: true });
+    expect(files.size).toBe(0);
+    expect(dirs.has("/home/user/build")).toBe(false);
+  });
+
+  test("a missing path and the root both refuse", async () => {
+    const { deps } = makeTree({});
+    expect("error" in await deleteExecutorPathOp(deps, "workspace", "/gone")).toBe(true);
+    expect("error" in await deleteExecutorPathOp(deps, "workspace", "/")).toBe(true);
+  });
+});
+
+describe("readExecutorFileBytes", () => {
+  test("binary bytes round-trip untouched — the text viewer's refusal does not apply here", async () => {
+    const { deps } = makeTree({});
+    const bytes = new Uint8Array([0, 1, 2, 255, 0, 128]);
+    await writeExecutorFileOp(deps, "workspace", "/home/user/blob.bin", bytes);
+    const out = await readExecutorFileBytes(deps, "workspace", "/home/user/blob.bin");
+    if ("error" in out) throw new Error(out.error);
+    expect([...out.bytes]).toEqual([...bytes]);
+  });
+
+  test("a string-answering plane still yields bytes", async () => {
+    const { deps } = makeTree({ "/home/user/notes.md": "text" });
+    const out = await readExecutorFileBytes(deps, "workspace", "/home/user/notes.md");
+    if ("error" in out) throw new Error(out.error);
+    expect(new TextDecoder().decode(out.bytes)).toBe("text");
+  });
+
+  test("a directory refuses instead of answering garbage", async () => {
+    const { deps } = makeTree({ "/home/user/src/app.ts": "x" });
+    expect("error" in await readExecutorFileBytes(deps, "workspace", "/home/user/src")).toBe(true);
+  });
+});
+
+describe("getExecutorFiles", () => {
+  test("entries carry the stat they were typed from: kind, size and mtime", async () => {
+    const { deps } = makeTree({ "/home/user/notes.md": "12345" });
+    const out = await getExecutorFiles(deps, "workspace", "/home/user");
+    expect(out.path).toBe("/home/user");
+    expect(out.entries).toEqual([
+      { name: "notes.md", type: "file", size: 5, mtimeMs: 1_724_500_000_000 },
+    ]);
+  });
+
+  test("every ancestor of the canonical home names the next segment down, even where the box lists nothing", async () => {
+    // A fresh workspace's physical root has no directory entries at all, so
+    // '/' listed only the mounts and the whole tree was unreachable.
+    const { deps } = makeTree({});
+    const root = await getExecutorFiles(deps, "workspace", "/");
+    expect(root.entries).toEqual([{ name: "home", type: "dir" }]);
+    const mid = await getExecutorFiles(deps, "workspace", "/home");
+    expect(mid.entries).toEqual([{ name: "user", type: "dir" }]);
+    // …and a real entry set is left alone: no duplicate, no phantom.
+    const seeded = await getExecutorFiles(deps, "workspace", "/home/user");
+    expect(seeded.entries).toEqual([]);
+  });
+});
+
+describe("fileResponseHeaders — the download route's security posture", () => {
+  test("an image previews inline, nosniffed, under a sandbox CSP", () => {
+    const h = fileResponseHeaders("/home/user/shot.PNG", false);
+    expect(h.get("content-type")).toBe("image/png");
+    expect(h.get("content-disposition")).toContain("inline");
+    expect(h.get("x-content-type-options")).toBe("nosniff");
+    expect(h.get("content-security-policy")).toBe("sandbox");
+  });
+
+  test("a PDF previews inline in the platform viewer without the sandbox CSP", () => {
+    const h = fileResponseHeaders("/home/user/report.pdf", false);
+    expect(h.get("content-type")).toBe("application/pdf");
+    expect(h.get("content-disposition")).toContain("inline");
+    expect(h.get("content-security-policy")).toBeNull();
+  });
+
+  test("anything else downloads as opaque bytes — html never renders on this origin", () => {
+    const h = fileResponseHeaders("/home/user/index.html", false);
+    expect(h.get("content-type")).toBe("application/octet-stream");
+    expect(h.get("content-disposition")).toContain("attachment");
+  });
+
+  test("download=1 forces attachment even for an image, and the filename is carried encoded", () => {
+    const h = fileResponseHeaders("/home/user/résumé shot.png", true);
+    expect(h.get("content-type")).toBe("application/octet-stream");
+    expect(h.get("content-disposition")).toContain("attachment");
+    expect(h.get("content-disposition")).toContain(encodeURIComponent("résumé shot.png"));
   });
 });
 

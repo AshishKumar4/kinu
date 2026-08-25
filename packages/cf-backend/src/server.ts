@@ -43,6 +43,7 @@ import { handleAuthRequest } from "./auth/routes";
 import { handleLandingRequest } from "./landing-route";
 import { handleHubRequest } from "./events/routes";
 import { handleFilesRequest } from "./files-routes";
+import { handleTerminalRequest } from "./terminal-route";
 import { handleInboundEmail } from "./email/handler";
 import { MONITOR_SINGLETON } from "./monitor/monitor-do";
 import { handleNimbusPreviewHostRequest } from "./nimbus-route";
@@ -538,6 +539,11 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     // is the chat WebSocket and its frame ceiling is below ordinary files.
     const filesResp = await handleFilesRequest(reqWithId, env, agentName);
     if (filesResp) return filesResp;
+    // The interactive terminal's own WebSocket. Same reason files are HTTP: the
+    // agents SDK's RPC rail is the chat socket, which carries JSON text under a
+    // 1 MiB frame ceiling, and PTY bytes are neither.
+    const terminalResp = await handleTerminalRequest(reqWithId, env, agentName);
+    if (terminalResp) return terminalResp;
     const agentResp = await routeAgentRequest(reqWithId, env);
     if (agentResp) return agentResp;
   }

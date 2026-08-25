@@ -14,17 +14,18 @@
  * needs workerd) or execute codemode (env.LOADER is a stub that throws). This
  * harness is for observing composition output, not for driving inference.
  */
-
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
-import type { AgentContext } from 'agents';
+import type { AgentContext, FiberRecoveryContext, FiberRecoveryResult } from 'agents';
 import type { ToolSet } from 'ai';
 import {
   BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest,
-  type AgentOrchestrator, type AgentRuntime, type IngressDescriptor, type ProfileCatalogEnvelope,
-  type ProviderCatalogSnapshot, type SqlExecRow, type SqlValue, type SubordinateRosterStore,
+  type AgentOrchestrator, type AgentRuntime, type CompletedTurn, type IngressDescriptor,
+  type ProfileCatalogEnvelope, type ProviderCatalogSnapshot, type RunEndReason,
+  type SqlExecRow, type SqlValue, type SubordinateRosterStore, type BackgroundJobStore,
+  type JsonValue,
 } from '@kinu.run/core';
 import * as v from 'valibot';
-import { mockAgentsSdk } from './agents-sdk';
+import { joinHarnessFibers, mockAgentsSdk, seedOrphanFiberRow } from './agents-sdk';
 import { platformGatewayEnv } from './platform-gateway';
 
 mockAgentsSdk();
@@ -86,6 +87,78 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   publishHarnessEvent(descriptor: IngressDescriptor, now: number): void {
     this.eventLog.publish({ descriptor, now });
   }
+
+  // ── Durable execution, as an eviction test observes it ──────────────
+  // The lanes and the recovery hook are `protected`/`private` on the actor
+  // because nothing in production calls them from outside; an eviction test has
+  // to reach the SAME entry points the platform uses, so each is exposed by
+  // name here rather than reconstructed.
+
+  /** The background-job registry, so a test can seed the durable row an
+   *  interrupted job leaves behind. The production store, not an INSERT: the
+   *  lease epoch and the resume counter are its policy. */
+  harnessJobs(): BackgroundJobStore { return this.jobs; }
+  /** One post-turn evolution lane, started exactly as a completed turn does. */
+  harnessSettleEvolution(): void { this.settleEvolutionInBackground(); }
+  /** One activation's alarm housekeeping — the entry point that runs the
+   *  interrupted-fiber scan when nothing is connected. The public half of the
+   *  no-client recovery path, so a test drives what the platform drives. */
+  harnessAlarmHousekeeping(): Promise<void> { return this._onAlarmHousekeeping(); }
+
+  /** The recovery hook, for the one thing the scan hides: what it decided. */
+  harnessRecoverFiber(ctx: FiberRecoveryContext): Promise<void | FiberRecoveryResult> {
+    return this.onFiberRecovered(ctx);
+  }
+
+  /** The settled turn's spine, driven exactly as both actor classes drive it.
+   *  The mode is not an argument: core derives it from the same beginTurn
+   *  metadata it derived the recording rule from. */
+  harnessSettleSpine(input: { status: RunEndReason; turn: CompletedTurn }): Promise<boolean> {
+    return this.settleTurnSpine(input);
+  }
+
+  /** Switch the advisor on the way an owner does (durable config row) and
+   *  replace the reviewer with a scripted one, so a lane assertion observes
+   *  recorded notes rather than a live model. */
+  harnessAdvisorsOn(reviewReply: string): void {
+    this.config.setAdvisorEnabled(true);
+    Object.defineProperty(this.rt, 'advisorLlm', {
+      value: {
+        stream: async function* () { yield ''; },
+        complete: async () => reviewReply,
+      },
+      configurable: true,
+    });
+  }
+
+  /** Advisor rows on the audit stream — what a fed lane leaves behind. */
+  harnessAdvisorNotes(): number {
+    return this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM evolution_events
+      WHERE type = 'advisor_note'`[0]?.n ?? 0;
+  }
+
+  /** Join the durable lanes a completed turn detaches, so an assertion reads
+   *  settled storage rather than racing a fire-and-forget fiber. */
+  harnessJoinDetachedFibers(): Promise<void> { return joinHarnessFibers(); }
+
+  /** Durable fiber rows this activation would hand to recovery. */
+  harnessOpenFiberRows(): { id: string; name: string }[] {
+    return this.sql<{ id: string; name: string }>`SELECT id, name FROM cf_agents_runs ORDER BY created_at`;
+  }
+
+  /** Advisor notes durably recorded for one turn — the row a re-entered lane
+   *  guards on, counted from storage rather than from a spy, because the guard
+   *  reads storage. */
+  harnessNotesForTurn(turnId: string): number {
+    return this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM evolution_events
+      WHERE type = 'advisor_note' AND json_extract(data, '$.turnId') = ${turnId}`[0]?.n ?? 0;
+  }
+  /** The row a dead activation left, in this actor's own storage. */
+  harnessSeedOrphanFiber(name: string, snapshot: JsonValue): string {
+    return seedOrphanFiberRow(this.ctx.storage, name, snapshot);
+  }
+  /** A live turn, which no test can produce without a model. */
+  declareTurnInFlight(inFlight: boolean): void { this._inFlight = inFlight; }
 }
 
 /** An actor's stored naming state as a test reads it — the same two rows

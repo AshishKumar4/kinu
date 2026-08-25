@@ -254,17 +254,25 @@ describe('every Durable Object that holds something worth stealing is sealed', (
     // sandbox is where untrusted code was always meant to run. Sealing it
     // would mean pinning a third-party API we do not own.
     const src = source('kinu-sandbox.ts');
-    expect(src).toContain('export class KinuSandbox extends Sandbox<Env>');
+    expect(src).toContain('export class KinuSandbox extends Devbox<Env>');
     expect(src).not.toContain('sealRpcSurface');
   });
 
   test('no other Durable Object class slipped in unsealed', () => {
+    // `Devbox<` is in the alternation because KinuSandbox stopped extending
+    // `Sandbox<` directly: without it the class this guard was written for
+    // dropped out of the scan entirely, and so would any future Durable Object
+    // built on the same base.
     const known = new Set([...SEALED_CLASSES.map((c) => c.klass), 'ActorAgent', 'KinuSandbox']);
     const classes = readdirSync(SRC, { recursive: true, encoding: 'utf8' })
       .filter((f) => f.endsWith('.ts'))
-      .flatMap((f) => [...source(f).matchAll(/^export (?:abstract )?class ([A-Za-z0-9_$]+) extends (Agent<|ActorAgent|Think<|Sandbox<)/gm)]
+      .flatMap((f) => [...source(f).matchAll(/^export (?:abstract )?class ([A-Za-z0-9_$]+) extends (Agent<|ActorAgent|Think<|Sandbox<|Devbox<)/gm)]
         .map((m) => m[1]));
     expect(classes.filter((name) => !known.has(name))).toEqual([]);
+    // The scan must actually SEE the class it was written for. An alternation
+    // that no longer matches any base is a guard that passes by finding
+    // nothing.
+    expect(classes).toContain('KinuSandbox');
   });
 });
 
@@ -362,10 +370,22 @@ describe('the agent surfaces cannot drift from their classes', () => {
  * `parent.foo(...)` in the facet is either on the surface or this is red.
  */
 describe('a facet reaches its root only through the sealed surface', () => {
+  /**
+   * Every file that can hold a cross-DO call on the root stub.
+   *
+   * `exploration.ts` acquires the stub, and one acquisition HANDS IT AWAY: the
+   * `modelOperations` field passes a thunk to `forwardFacetModelOperations`,
+   * which is where that stub's only call actually happens. So a scan confined to
+   * the acquiring file cannot see it — precisely the hole this describe block
+   * exists to close — and the receiving file is in the corpus for the same
+   * reason `stepSink`'s parameter is pinned below.
+   */
+  const REACHING_FILES = ['exploration.ts', 'obs/facet-operations.ts'] as const;
+
   /** `const parent = this.getSharedParentStub()` is the only way a head obtains
-   *  its root's stub, so every `parent.x(` in the file is a cross-DO call. */
-  const parentCalls = [...source('exploration.ts').matchAll(/\bparent\.(\w+)\(/g)]
-    .map(([, name]) => name!)
+   *  its root's stub, so every `parent.x(` in these files is a cross-DO call. */
+  const parentCalls = REACHING_FILES
+    .flatMap((file) => [...source(file).matchAll(/\bparent\.(\w+)\(/g)].map(([, name]) => name!))
     .filter((name, i, all) => all.indexOf(name) === i)
     .sort();
 
@@ -380,14 +400,21 @@ describe('a facet reaches its root only through the sealed surface', () => {
    * derived list has that a hand-written one does not.
    */
   test('every acquisition of the root stub binds it to the name the scan reads', () => {
-    const bindings = [...source('exploration.ts').matchAll(/this\.getSharedParentStub\(\)/g)];
-    const named = [...source('exploration.ts').matchAll(/const (\w+) = this\.getSharedParentStub\(\)/g)]
+    const source_ = source('exploration.ts');
+    const bindings = [...source_.matchAll(/this\.getSharedParentStub\(\)/g)];
+    const named = [...source_.matchAll(/const (\w+) = this\.getSharedParentStub\(\)/g)]
       .map(([, name]) => name!);
-    expect(named).toHaveLength(bindings.length);
+    // The ONE acquisition that is not a local: it hands the thunk to another
+    // module, which is why that module is in REACHING_FILES. Counted here so a
+    // second hand-off cannot be added without extending the corpus too.
+    const handedOff = [...source_.matchAll(/forwardFacetModelOperations\(\(\) => this\.getSharedParentStub\(\)\)/g)];
+    expect(handedOff).toHaveLength(1);
+    expect(named).toHaveLength(bindings.length - handedOff.length);
     expect(named.filter((name, i, all) => all.indexOf(name) === i)).toEqual(['parent']);
-    // And the one seam that takes the stub as an argument instead of acquiring
+    // And the two seams that take the stub as an argument instead of acquiring
     // it, for the same reason: a renamed parameter hides its calls too.
-    expect(source('exploration.ts')).toContain('private stepSink(parent: DurableObjectStub<OrchestratorAgent>');
+    expect(source_).toContain('private stepSink(parent: DurableObjectStub<OrchestratorAgent>');
+    expect(source('obs/facet-operations.ts')).toContain('const parent = parentOf();');
   });
 
   test('the scan found the calls it exists to check (denominator)', () => {

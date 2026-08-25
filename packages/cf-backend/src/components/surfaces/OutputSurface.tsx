@@ -17,6 +17,7 @@ import { PreviewFrame } from "@/components/PreviewFrame";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { tabCls } from "@/components/ui/form";
 import { describeError, lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import { useToggledSet } from "@/hooks/use-toggled-set";
 import { EmptyState, EMPTY_HINTS, DiffLines } from "./shared";
 
 export interface PinnedPort { executor: string; port: number; url: string; name?: string }
@@ -146,7 +147,7 @@ function DiffView({ executors, lastActiveExecutor, rpc }: {
   lastActiveExecutor?: string | null;
   rpc: Rpc;
 }) {
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const { set: expanded, toggle, clear: clearExpanded } = useToggledSet();
   const [busy, setBusy] = useState(false);
   const [actionErr, setActionErr] = useState<string | null>(null);
 
@@ -189,16 +190,11 @@ function DiffView({ executors, lastActiveExecutor, rpc }: {
   const markReviewed = useCallback(async () => {
     setBusy(true);
     setActionErr(null);
-    try { await rpc("resetWorkspaceBaseline", []); setExpanded(new Set()); reload(); }
+    try { await rpc("resetWorkspaceBaseline", []); clearExpanded(); reload(); }
     catch (e) { setActionErr(`Couldn't mark reviewed: ${describeError(e)}`); }
     finally { setBusy(false); }
-  }, [rpc, reload]);
+  }, [rpc, reload, clearExpanded]);
 
-  const toggle = (path: string) => setExpanded((prev) => {
-    const next = new Set(prev);
-    if (next.has(path)) next.delete(path); else next.add(path);
-    return next;
-  });
 
   const files = result?.files ?? [];
 

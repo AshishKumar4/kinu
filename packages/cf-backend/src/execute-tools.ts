@@ -20,6 +20,8 @@ import type { AgentsToolDeps, SqlExecutor } from "@kinu.run/core";
 import {
   createAgentsCodemodeProvider, createWebCodemodeProvider, createRLMProvider,
   renderExecuteToolsDescription,
+  CRAFTED_TOOL_ALIAS_NAMESPACE, craftedDispatcherEntry,
+  type CraftedDispatcherEntry,
   type WebSearchProvider, type CodemodeProvider,
 } from "@kinu.run/core";
 import { PreambleCraftedExecutor, selectInjectableCraftedTools } from "./crafted-tool-registry";
@@ -53,34 +55,18 @@ export interface ExecuteToolsOptions {
   onExecutorUsed?: (name: string) => void;
 }
 
-export interface CraftedDispatcherEntry {
-  description: string;
-  execute: () => Promise<never>;
-}
-
 /**
- * What `codemode.<name>` resolves to for a crafted tool on this backend.
+ * What `codemode.<name>` resolves to for a crafted tool.
  *
- * The callable body is the `tools.<name>` literal the preamble splices into
- * the sandbox; this entry exists so createCodeTool DECLARES the name in the
- * types the model reads. But the dispatcher is genuinely reachable — nothing
- * shadows `codemode.<name>` — so it must THROW rather than return an error
- * object: a returned `{error}` is a value the model reads as a result and the
- * runtime reads as a successful call, which is a wrong answer twice over, and
- * it would let an in-episode fitness observation be taken on a call that never
- * ran. The throw says which form works instead.
+ * Both the entry and the sentence it raises are core's
+ * (tools/sandbox-contract.ts): the callable form is `tools.<name>`, spliced in
+ * by the preamble, and `codemode.<name>` merely DECLARES the name in the types
+ * the model reads. This backend used to spell that correction itself, and the
+ * CLI sandbox bound the crafted set under both names — so code the model wrote
+ * against the alias ran locally and threw in the cloud. One declaration now
+ * answers for both substrates; all that is left here is the compile substrate
+ * (worker-loader preamble vs `new Function`).
  */
-export function craftedDispatcherEntry(name: string, description?: string): CraftedDispatcherEntry {
-  return {
-    description: description || `Crafted tool: ${name}`,
-    execute: async () => {
-      throw new Error(
-        `Crafted tools are callable as tools.${name}(args) in this sandbox, not codemode.${name}(args).`,
-      );
-    },
-  };
-}
-
 export function createExecuteToolsTool(options: ExecuteToolsOptions) {
   const { loader, rt, sql, registry, modelSpec, webSearch } = options;
   if (!loader) throw new Error("CF runtime missing LOADER binding");
@@ -96,7 +82,7 @@ export function createExecuteToolsTool(options: ExecuteToolsOptions) {
     seededCraftedTools[t.name] = craftedDispatcherEntry(t.name, t.description);
   }
 
-  const craftedProvider = { name: 'codemode', tools: seededCraftedTools };
+  const craftedProvider = { name: CRAFTED_TOOL_ALIAS_NAMESPACE, tools: seededCraftedTools };
   // Recursive Language Models — `llm.query(text, opts?)` in the sandbox.
   // Sub-call has no llm.query in scope, so depth is bounded at 1.
   const rlmProvider = createRLMProvider(registry, () => registry.normalizeSpecSync(modelSpec()));

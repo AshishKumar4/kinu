@@ -414,8 +414,10 @@ describe('the README demo film', () => {
       `src="docs/assets/kinu-bugfix-demo.webp" width="${String(film.width)}" height="${String(film.height)}">`,
     );
     expect(README).toMatch(/<img alt="[^"]+" src="docs\/assets\/kinu-bugfix-demo\.webp"/);
+    // The install steps live under "Ways to use it" since the flagship
+    // restructure; the invariant is unchanged — the film shows first.
     expect(README.indexOf('kinu-bugfix-demo.webp'))
-      .toBeLessThan(README.indexOf('## Install'));
+      .toBeLessThan(README.indexOf('## Ways to use it'));
   });
 });
 

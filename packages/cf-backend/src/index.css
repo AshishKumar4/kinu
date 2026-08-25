@@ -1011,6 +1011,13 @@ body > .annotation-toolbar {
   font-family: var(--font-ui);
 }
 
+[data-kinu-plan-review] {
+  --plan-measure: 70ch;
+  --plan-rail-width: 20rem;
+  container-name: plan-review;
+  container-type: inline-size;
+}
+
 @layer components {
   [data-kinu-plan-review] .annotation-highlight { border-radius: var(--radius-xs); padding: 0 2px; margin: 0 -2px; }
   [data-kinu-plan-review] .annotation-highlight.math-inline-annotation { display: inline-flex; align-items: center; line-height: 1; }
@@ -1051,4 +1058,251 @@ body > .annotation-toolbar {
   [data-kinu-plan-review] .directive-warning { border-color: color-mix(in srgb, var(--c-warning) 40%, transparent); background: color-mix(in srgb, var(--c-warning) 10%, transparent); }
   [data-kinu-plan-review] .directive-danger,
   [data-kinu-plan-review] .directive-caution { border-color: color-mix(in srgb, var(--c-danger) 40%, transparent); background: color-mix(in srgb, var(--c-danger) 10%, transparent); }
+}
+
+/* Kinu owns the document composition around Plannotator. These rules sit
+   outside Tailwind's layers because they intentionally retone utilities in the
+   patched viewer; the annotation engine and Markdown parser remain unchanged. */
+[data-plan-title] [data-print-region="article"] {
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+[data-plan-title] [data-print-region="article"] > [data-print-hide] {
+  display: none;
+}
+
+[data-plan-title] h1[data-block-id] {
+  margin: 0;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  letter-spacing: inherit;
+}
+
+[data-plan-title] code {
+  padding: 0.05em 0.25em;
+  border-radius: var(--r-control);
+  background: var(--c-neutral-tint);
+  color: var(--c-code);
+  font-family: var(--font-mono);
+  font-size: 0.82em;
+}
+
+.plan-review-document {
+  width: 100%;
+  max-width: var(--plan-measure);
+}
+
+.plan-review-document [data-print-region="article"] {
+  padding-block: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.plan-review-document [data-print-region="article"] > [data-print-hide] {
+  float: none;
+  justify-content: flex-end;
+  margin: 0 0 1rem;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+/* Copy belongs in the document header. The viewer keeps its global-comment
+   control here because that action owns Plannotator's internal popover. */
+.plan-review-document [data-print-region="article"] > [data-print-hide] > button:last-child {
+  display: none;
+}
+
+/* Read-only leaves the strip its one HIDDEN copy button, so `:empty` never
+   matched: the strip stayed a zero-height flex box still spending its margin
+   above the first block. One remaining child is exactly the read-only case. */
+.plan-review-document [data-print-region="article"] > [data-print-hide]:has(> button:only-child) {
+  display: none;
+}
+
+.plan-review-document [data-block-id] a {
+  color: var(--c-accent-fg);
+  text-decoration-color: color-mix(in srgb, var(--c-accent-fg) 45%, transparent);
+  text-underline-offset: 0.2em;
+}
+
+.plan-review-document [data-block-id] a:hover {
+  text-decoration-line: underline;
+}
+
+.plan-review-document [data-print-region="article"] > p[data-block-id] {
+  margin-block: 0 1rem;
+  color: var(--c-text-2);
+  font-size: 1rem;
+  line-height: 1.75;
+  letter-spacing: -0.006em;
+}
+
+.plan-review-document [data-print-region="article"] > h2[data-block-id] {
+  margin-block: 2.5rem 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--c-border);
+  color: var(--c-text);
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: -0.015em;
+}
+
+.plan-review-document [data-print-region="article"] > :is(h3, h4, h5, h6)[data-block-id] {
+  margin-block: 2rem 0.75rem;
+  color: var(--c-text);
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.45;
+  letter-spacing: -0.01em;
+}
+
+.plan-review-document [data-print-region="article"] > div > div[data-block-id] {
+  margin-block: 0.5rem;
+  gap: 0.75rem;
+  color: var(--c-text-2);
+  font-size: 1rem;
+  line-height: 1.65;
+}
+
+.plan-review-document [data-print-region="article"] > div > div[data-block-id] > span:first-child {
+  min-width: 1.25rem;
+  color: var(--c-accent-fg);
+  font-family: var(--font-mono);
+  text-align: right;
+}
+
+.plan-review-document [data-block-id] :not(pre) > code {
+  padding: 0.1em 0.35em;
+  border-radius: var(--r-control);
+  background: var(--c-neutral-tint);
+  color: var(--c-code);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  overflow-wrap: anywhere;
+}
+
+.plan-review-document pre[data-block-id] {
+  position: relative;
+  min-width: 0;
+  margin-block: 2rem;
+  padding: 3rem 1rem 1rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  background: var(--c-code-bg);
+  color: var(--c-code);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.65;
+}
+
+.plan-review-document pre[data-block-id]::before {
+  content: "Code";
+  position: absolute;
+  inset: 0 0 auto;
+  display: flex;
+  height: 2rem;
+  align-items: center;
+  padding-inline: 1rem;
+  border-bottom: 1px solid var(--c-border);
+  color: var(--c-text-3);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.plan-review-document pre[data-block-id]:has(code.language-tree)::before {
+  content: "File tree";
+}
+
+.plan-review-document [data-print-region="article"] > blockquote[data-block-id] {
+  margin-block: 1.5rem;
+  padding: 0.75rem 0 0.75rem 1rem;
+  border-left-width: 2px;
+  color: var(--c-text-2);
+  font-size: 1rem;
+  line-height: 1.65;
+}
+
+.plan-review-document [data-print-region="article"] > div[data-block-id]:has(table) {
+  margin-block: 2rem;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+}
+
+/* Shown only where the rail OVERLAYS the document — the container query below.
+   Beside it, there is nothing to dim. */
+[data-plan-scrim] {
+  display: none;
+}
+
+@media (min-width: 48rem) {
+  @container plan-review (max-width: 48rem) {
+    /* A real element, not a `::before`: the rail covers the document here and
+       the panel's own backdrop is viewport-gated, so this is the only in-place
+       way out. A scrim that dims without closing is a dead end for the reader. */
+    [data-plan-scrim] {
+      display: block;
+      position: absolute;
+      inset: 0;
+      z-index: 55;
+    }
+
+    [data-annotation-panel="true"] {
+      position: absolute;
+      inset-block: 0;
+      inset-inline-end: 0;
+      z-index: 60;
+      box-shadow: var(--shadow-overlay);
+    }
+  }
+}
+
+@container plan-review (max-width: 32rem) {
+  [data-plan-header] {
+    padding: 1rem;
+  }
+
+  [data-plan-header] > div {
+    flex-direction: column;
+  }
+
+  [data-plan-title] {
+    font-size: 1.5rem;
+  }
+
+  [data-plan-actions] {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  [data-plan-scroll] {
+    padding: 1.5rem 1rem;
+  }
+
+  [data-plan-footer] > div {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  [data-plan-decisions] {
+    display: grid;
+    width: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  [data-plan-decisions] > * {
+    width: 100%;
+  }
 }

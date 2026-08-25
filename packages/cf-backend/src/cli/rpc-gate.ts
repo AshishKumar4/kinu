@@ -195,6 +195,10 @@ export const AGENT_RPC_ACCESS = {
   previewScaffoldLive: 'interactive',
   proposeCurriculumTasks: 'interactive',
   readExecutorFile: 'interactive',
+  // The file manager's mutations. Interactive like every other mutation: a
+  // scoped CI token may run a task, not reshape the owner's drive.
+  renameExecutorFile: 'interactive',
+  deleteExecutorFile: 'interactive',
   recordOutcomeLabeling: 'interactive',
   resetWorkspaceBaseline: 'interactive',
   resolveDeviceConsent: 'interactive',

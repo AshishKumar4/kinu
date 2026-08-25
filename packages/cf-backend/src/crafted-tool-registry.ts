@@ -25,7 +25,10 @@
  */
 
 import { DynamicWorkerExecutor, normalizeCode } from '@cloudflare/codemode';
-import { craftFailureMarker, filterByEffectiveScore, explainNativeToolReferenceError } from '@kinu.run/core';
+import {
+  wrapCraftedBodyWithAttribution, filterByEffectiveScore, explainNativeToolReferenceError,
+  NO_TIMER_DEADLINE_MS,
+} from '@kinu.run/core';
 import type { CraftStore, SqlExecutor } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
@@ -58,28 +61,21 @@ export function selectInjectableCraftedTools(
  * Empty → empty string (preamble is only spliced if non-empty, see
  * `injectPreamble`).
  *
- * Each body is wrapped so a failure leaves the sandbox stamped with the tool
- * that raised it (`craftFailureMarker`, core craft/in-episode.ts) — the model
- * otherwise gets a bare message with no idea which of its own tools broke, and
- * the in-episode fitness signal scores an artifact only when the failure names
- * it. The wrapper is an IIFE, so the body keeps the lexical scope of the
- * sandbox arrow it is spliced into (`workspace.*`, the `tools` literal itself)
- * exactly as an unwrapped body did.
+ * Each body goes through core's `wrapCraftedBodyWithAttribution` so a failure
+ * leaves the sandbox stamped with the tool that raised it — the model otherwise
+ * gets a bare message with no idea which of its own tools broke, and the
+ * in-episode fitness signal scores an artifact only when the failure names it.
+ * The wrapper lived here, so the CLI's `new Function` substrate compiled bodies
+ * bare and a local crafted failure never named its artifact: the same tool
+ * earned different fitness per backend. Core owns the wrapper now; this file
+ * owns only the preamble it is spliced into.
  */
 export function buildToolsPreamble(tools: ReadonlyArray<{ name: string; code: string }>): string {
   if (tools.length === 0) return '';
-  const entries = tools.map(t => `    ${t.name}: ${attributedBody(t.name, t.code.trim())}`);
+  const entries = tools.map(
+    t => `    ${t.name}: ${wrapCraftedBodyWithAttribution(t.name, t.code.trim())}`,
+  );
   return `const tools = {\n${entries.join(',\n')}\n  };\n  `;
-}
-
-function attributedBody(name: string, code: string): string {
-  const marker = JSON.stringify(`${craftFailureMarker(name)} `);
-  // The stored body sits alone between parentheses on its own lines. It is
-  // model-authored and routinely ends in a `//` comment, which on one line
-  // would swallow the rest of the wrapper and make the whole preamble — spliced
-  // into EVERY execute — a syntax error that no crafted tool could survive.
-  return `(() => { const __impl = (\n${code}\n); return async (...__a) => { try { return await __impl(...__a); } ` +
-    `catch (__e) { throw new Error(${marker} + (__e && __e.message ? __e.message : String(__e)), { cause: __e }); } }; })()`;
 }
 
 /**
@@ -179,7 +175,16 @@ export class PreambleCraftedExecutor {
   #sql: SqlExecutor;
 
   constructor(loader: WorkerLoader, craftStore: CraftStore, sql: SqlExecutor) {
-    this.#inner = new DynamicWorkerExecutor({ loader });
+    // NO WORK DEADLINE. Codemode's own default is 60s (its
+    // DEFAULT_DYNAMIC_WORKER_EXECUTION_TIMEOUT_MS), raced against the program as
+    // a generated `setTimeout(… "Execution timed out")` inside the dynamic
+    // Worker. A program here is mostly AWAITING host tool calls — a sandbox exec,
+    // a delegated agent, an LLM call — so that deadline killed the caller of
+    // long work rather than the long work itself, and it killed it after the
+    // 30s detach had already promised the model the run was "still running, not
+    // cancelled". The window that bounds this program is the detach window; a
+    // runaway program is stopped by the platform's CPU limit, not by us.
+    this.#inner = new DynamicWorkerExecutor({ loader, timeout: NO_TIMER_DEADLINE_MS });
     this.#craftStore = craftStore;
     this.#sql = sql;
   }

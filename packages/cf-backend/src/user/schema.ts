@@ -158,12 +158,23 @@ export function initUserTables(sql: SqlExec, tagged: SqlExecutor): void {
     )
   `);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_devices_token_hash ON user_devices (token_hash)`);
-  // Device tokens expire on IDLENESS, not on a wall clock: every successful
-  // verification pushes `expires_at` out again, so a machine that keeps
-  // connecting is never re-linked, and one that stopped connecting stops being
-  // a live credential. NULL on rows that predate the column — stamped on their
-  // next verification rather than locked out.
-  reconcileColumns(tagged, (ddl) => { sql.exec(ddl); }, 'user_devices', { expires_at: 'INTEGER' });
+  // Device tokens are rotated ON EVERY CONNECT and expire on an ABSOLUTE
+  // window measured from the last rotation. A machine that keeps connecting
+  // keeps rotating and never lapses; a COPY of `device.json` goes stale as
+  // soon as the real daemon reconnects, which is what turns theft of that file
+  // from an indefinite credential into a race. `prev_token_hash` holds the
+  // superseded secret until the new one is first used, so a rotation message
+  // lost with the socket does not brick the machine. `last_ip`/`last_agent`
+  // are the provenance of the newest accept, and `replaced_at` records that a
+  // second socket took the slot — both rendered in Account settings, because a
+  // silent takeover is the shape this whole column set exists to expose.
+  reconcileColumns(tagged, (ddl) => { sql.exec(ddl); }, 'user_devices', {
+    expires_at: 'INTEGER',
+    prev_token_hash: 'TEXT',
+    last_ip: 'TEXT',
+    last_agent: 'TEXT',
+    replaced_at: 'INTEGER',
+  });
 
   // CLI bearer tokens minted by the browser device-code approval flow. Tokens
   // include the UserDO id as a routing hint, but only their SHA-256 hash is

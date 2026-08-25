@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { memberBody } from '@kinu.run/test-utils';
 import {
   BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, effectiveRoleCatalog, profileCatalogDigest,
-  type ProfileCatalog, type ProfileCatalogEnvelope,
+  type CompletedTurn, type ProfileCatalog, type ProfileCatalogEnvelope,
 } from '@kinu.run/core';
 import {
   orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent,
@@ -20,6 +20,7 @@ const RoleResultSchema = v.object({ role: v.string() });
 // the orchestrator (onChatResponse sequencing, schema, callables).
 const actor = readFileSync(join(import.meta.dir, '..', 'src', 'actor-agent.ts'), 'utf8');
 const source = readFileSync(join(import.meta.dir, '..', 'src', 'orchestrator.ts'), 'utf8');
+const subordinate = readFileSync(join(import.meta.dir, '..', 'src', 'subordinate-agent.ts'), 'utf8');
 const headRuntime = readFileSync(join(import.meta.dir, '..', 'src', 'head-runtime.ts'), 'utf8');
 const takePick = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'read-models', 'evolution-views.ts'), 'utf8');
 const exploration = readFileSync(join(import.meta.dir, '..', 'src', 'exploration.ts'), 'utf8');
@@ -349,6 +350,35 @@ describe('turn-pipeline correctness wiring', () => {
     expect(rows[1]!.content).toBe('partial answer');
   });
 
+  test('an ABORTED turn is still recorded as evidence', async () => {
+    // The drift this closes: `onChatResponse` early-returned on any status but
+    // 'completed', so a failed cloud turn reached neither the outcome-review
+    // buffer nor `extensions.onTurnEnd`, while the identical turn on the CLI
+    // reached both. Failures are the most informative evidence the evolution
+    // loop has, and the comment justifying that early return covered only the
+    // alternate-takes purge beside it. Core's `AgentOrchestrator.settleTurn` is
+    // the one entry now, and it fires the extension end BEFORE recording; the
+    // extension half is core's (it runs unconditionally inside settleTurn), so
+    // what THIS asserts is the half that was unprovable here — the durable row.
+    const harness = orchestratorHarness();
+
+    await harness.agent.onChatResponse({
+      message: {
+        id: 'a-cut', role: 'assistant', parts: [{ type: 'text', text: 'partial' }],
+      } satisfies UIMessage,
+      requestId: 'req-cut', continuation: false, status: 'aborted',
+    });
+
+    // The outcome-review buffer core's recordTurn appends to, and the turn's own
+    // partial answer inside it — a row for some other turn would pass a bare
+    // count.
+    const recorded = harness.db.prepare<{ turn: string }, []>(
+      `SELECT turn FROM session_window`,
+    ).all();
+    expect(recorded, 'an aborted turn left no evidence row').toHaveLength(1);
+    expect(recorded[0]!.turn).toContain('partial');
+  });
+
   // The credit decision, behaviourally, on this backend. Core's
   // `creditedTurnId` decides it for both; what THIS suite pins is that the
   // orchestrator asks it and honours the answer.
@@ -487,8 +517,25 @@ describe('turn-pipeline correctness wiring', () => {
     expect(logRow).toBeGreaterThan(errorCapture);
     expect(runEnd).toBeGreaterThan(logRow);
     const closeArgs = spine.slice(runEnd, spine.indexOf('});', runEnd));
-    expect(closeArgs).toContain('error: errorText');
-    expect(closeArgs).toContain('reason: result.status');
+    // `reason` and `error` are core's `classifyRunEnd` now, fed the driver's raw
+    // facts. They used to be `reason: result.status` and `error: errorText`
+    // chosen here, which is how the identical user Stop came to seal 'aborted'
+    // on this backend and 'error' on the CLI. The error text still has to REACH
+    // the classifier — that is what this pins — and which arm keeps it is core's
+    // rule, behaviourally covered by unit-three-kinds-one-contract's abort arm.
+    //
+    // The classification is hoisted to a local now, because the fleet analytics
+    // row beside this seal reads it too; the spread is what carries it in.
+    expect(closeArgs).toContain('...end');
+    expect(closeArgs).not.toContain('reason: result.status');
+    // And the FACTS the classifier is fed, including the one this backend was
+    // missing entirely: Think reports status 'completed' for a turn its own stop
+    // condition cut, so `completed` alone cannot tell a finished turn from one
+    // that stopped mid-work. `lastFinishReason` is what makes that observable —
+    // dropping it makes core's mid-work tripwire permanently silent.
+    expect(spine).toContain('const end = classifyRunEnd({');
+    expect(spine).toContain("interrupted: result.status === 'aborted'");
+    expect(spine).toContain('lastFinishReason: this.acc.lastFinishReason');
     // The per-turn records the spine is the only writer of. Dropping either
     // leaves the mechanism running and its durable trail silently empty.
     expect(closeArgs).toContain('steering: this.orch.steering.snapshot()');
@@ -606,41 +653,97 @@ describe('turn-pipeline correctness wiring', () => {
       .toEqual(Object.keys(effectiveRoleCatalog(CUSTOM_CATALOG)));
   });
 
-  test('the DO holds a keepAlive heartbeat until BOTH evolution lanes settle', () => {
+  test('both post-turn lanes are DURABLE fibers, not bare heartbeats', () => {
     // Parity with the CLI, which awaits orch.settleEvolution() before the
     // process exits. Evolution is detached so it never blocks the TurnQueue —
     // but Think's own keepAliveWhile disposes when onChatResponse returns, so
-    // without a settle heartbeat the detached LLM calls race DO eviction.
+    // without a hold of its own the detached LLM calls race DO eviction.
+    //
+    // A HOLD IS NOT ENOUGH, and that is what this test now says. `keepAlive`
+    // resets the idle timer and nothing more: a deploy, a runtime restart or an
+    // alarm-boundary reset took the whole lane with it, leaving no row, no
+    // event and no way to resume — the durable window it had claimed simply sat
+    // un-drained. `runFiber` holds the SAME heartbeat AND writes the
+    // `cf_agents_runs` row that hands the lane to onFiberRecovered on the next
+    // activation, so the fiber is the load-bearing half and the heartbeat is a
+    // consequence of it.
     //
     // The DO holds BOTH lanes: the turn lane (settleEvolution) and the
     // cadence-heavy session pass (runDueSessionEvolution). It is the host that
-    // CAN afford the heavy pass — keepAlive is exactly what a one-shot
-    // `kinu exec` process lacks, which is why that one defers it instead.
+    // CAN afford the heavy pass, which is why a one-shot `kinu exec` defers it.
     const settle = actor.slice(
       actor.indexOf('protected settleEvolutionInBackground(): void'),
-      actor.indexOf("   * The completed turn's evolution spine"),
+      actor.indexOf("   * The settled turn's spine"),
     );
     expect(settle).toContain('if (this._evolutionSettling) return;');
     expect(settle).toContain('await this.orch.settleEvolution();');
     expect(settle).toContain('await this.orch.runDueSessionEvolution();');
     expect(settle).toContain('.finally(() => { this._evolutionSettling = false; });');
-    // Detached — awaiting it in onChatResponse would re-block the TurnQueue.
-    expect(settle).toContain('void this.keepAliveWhile');
+    // Detached — awaiting it in onChatResponse would re-block the TurnQueue —
+    // and durable, which a bare keepAliveWhile is not.
+    expect(settle).toContain('void this.runFiber(EVOLUTION_LANE_FIBER');
+    expect(settle).toContain('ctx.stash({ lane: EVOLUTION_LANE_FIBER });');
+    expect(settle).not.toContain('keepAliveWhile');
 
-    // …and the shared post-turn spine actually calls it, after recordTurn
-    // dispatched — for EVERY actor, not just the orchestrator.
-    const spine = actor.slice(
-      actor.indexOf('protected settleCompletedTurn('),
+    // The advisor lane is the same shape, and its stash carries the WHOLE
+    // review rather than a pointer to it — the complete turn plus the three
+    // decisions taken at turn end. A pointer is what made the lane
+    // unrecoverable: the review's input is not stored anywhere else, so a
+    // snapshot that named the turn without carrying it could only report the
+    // loss. Typed, so a field dropped from the snapshot is a build error rather
+    // than a review that silently re-runs against different inputs.
+    const advisor = actor.slice(
+      actor.indexOf('private reviewTurnInBackground(turn: CompletedTurn): void'),
       actor.indexOf('protected get scaffoldControl()'),
     );
-    const recordTurn = spine.indexOf('this.orch.recordTurn(turn, this._turnContinuity);');
+    expect(advisor).toContain('void this.runFiber(ADVISOR_LANE_FIBER');
+    expect(advisor).toContain('const snapshot: AdvisorRecoverySnapshot = {');
+    expect(advisor).toContain('ctx.stash(snapshot);');
+    expect(advisor).not.toContain('keepAliveWhile');
+    // ONE body for the live lane and its recovery. Two would drift on exactly
+    // the fields that matter: a recovery re-deriving `reachable` or `recent`
+    // would review the turn against a world it did not run in. The body lives
+    // on the actor; the RECOVERY arm consumes it through the transports seam,
+    // which is what keeps the re-drive from re-deriving anything.
+    expect(advisor).toContain('await this.runAdvisorReview(snapshot);');
+    const roster = readFileSync(join(import.meta.dir, '..', 'src', 'fiber-recovery.ts'), 'utf8');
+    const advisorRecovery = roster.slice(
+      roster.indexOf('async function recoverAdvisorLane('),
+      roster.indexOf('async function recordInterruptedSearch('),
+    );
+    expect(advisorRecovery).toContain('transports.reviewAdvisorSnapshot(snapshot)');
+    expect(advisorRecovery).toContain('transports.hasAdvisorNoteForTurn(turnId)');
+
+    // …and the shared post-turn spine actually calls it, after the settle
+    // dispatched the recording — for EVERY actor, not just the orchestrator.
+    const spine = actor.slice(
+      actor.indexOf('protected async settleTurnSpine('),
+      actor.indexOf('private reviewTurnInBackground(turn: CompletedTurn): void'),
+    );
+    const record = spine.indexOf('await this.orch.settleTurn({');
     const settleCall = spine.indexOf('this.settleEvolutionInBackground();');
-    expect(recordTurn).toBeGreaterThan(-1);
-    expect(settleCall).toBeGreaterThan(recordTurn);
+    expect(record).toBeGreaterThan(-1);
+    expect(spine).not.toContain('this.orch.recordTurn(');
+    expect(settleCall).toBeGreaterThan(record);
+    // WHICH lanes may run is not spelled here at all: core's `settleTurn`
+    // returns the completed-and-build verdict, derived from the beginTurn
+    // metadata its recording gate already used, so neither backend can answer
+    // the question independently (the CLI once queued shadow trials for turns
+    // that FAILED while this spine did not).
+    expect(spine).toContain('if (!improvementLanesOpen) return false;');
+    expect(spine).not.toContain("input.workMode === 'plan'");
+    expect(subordinate).not.toContain('workMode: turnMode');
+    // The ROOT still computes turnMode — creditedTurnId legitimately takes it
+    // — so the pin is the settle call itself, not the whole file.
+    const rootSettle = source.slice(
+      source.indexOf('const settle = () => this.settleTurnSpine({'),
+      source.indexOf('if (result.status !== "completed")'),
+    );
+    expect(rootSettle).not.toContain('workMode');
     // The promotion gate's trial is queued THROUGH the engine, which holds the
     // one auto-evolution gate. Calling core's queueTurnShadowTrial from here
     // instead is how a `--no-auto-evolve` run came to leave trial rows behind.
-    expect(spine).toContain('this.engine.queueShadowTrial(turn,');
+    expect(spine).toContain('this.engine.queueShadowTrial(input.turn,');
     expect(spine).not.toContain('queueTurnShadowTrial(');
   });
 
@@ -653,5 +756,54 @@ describe('turn-pipeline correctness wiring', () => {
     expect(pick).toContain("continuationQueued = outcome !== 'undelivered'");
     expect(pick).not.toContain('continuationQueued = true');
     expect(source).toContain('await pickAlternateTake(');
+  });
+});
+
+describe('settleTurnSpine — one verdict gates the improvement lanes', () => {
+  // Behavioral, not source-shaped: the spine is driven the way both actor
+  // classes drive it, and what each verdict leaves behind is read from
+  // storage. A FAILED build turn has no subject to replay and no answer to
+  // review; a plan turn belongs in neither evidence set. Both facts are ONE
+  // core decision (settleTurn's verdict) — these arms fail independently on
+  // any backend that starts spelling its own condition again.
+  const NOTE = JSON.stringify({
+    note: 'the staging cluster was never named', severity: 'nit', class: 'wrong-work',
+  });
+  const turnOf = (): CompletedTurn => ({
+    userMessage: 'q', assistantResponse: 'a', toolCalls: [], durationMs: 1, steps: 1,
+    hadError: false, feedback: null, turnId: 'spine-turn', sessionId: 'default', origin: 'user',
+  });
+  function advisorHarness() {
+    const harness = orchestratorHarness();
+    harness.agent.harnessAdvisorsOn(NOTE);
+    return harness;
+  }
+
+  test('a completed build turn earns its review', async () => {
+    const { agent } = advisorHarness();
+    await agent.harnessSettleSpine({ status: 'completed', turn: turnOf() });
+    // The review rides a detached durable fiber by contract; join the mock
+    // runtime's live fibers rather than guessing at its clock.
+    await agent.harnessJoinDetachedFibers();
+    expect(agent.harnessAdvisorNotes()).toBe(1);
+  });
+
+  test('a FAILED build turn feeds no lane', async () => {
+    const { agent } = advisorHarness();
+    await agent.harnessSettleSpine({ status: 'error', turn: turnOf() });
+    expect(agent.harnessAdvisorNotes()).toBe(0);
+  });
+
+  test('a completed PLAN turn feeds no lane', async () => {
+    const { agent } = advisorHarness();
+    agent.observeOrch().beginTurn(Date.now(), { kinuMode: 'plan' });
+    await agent.harnessSettleSpine({ status: 'completed', turn: turnOf() });
+    expect(agent.harnessAdvisorNotes()).toBe(0);
+  });
+
+  test('an ABORTED build turn feeds no lane', async () => {
+    const { agent } = advisorHarness();
+    await agent.harnessSettleSpine({ status: 'aborted', turn: turnOf() });
+    expect(agent.harnessAdvisorNotes()).toBe(0);
   });
 });

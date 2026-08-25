@@ -30,7 +30,7 @@ type Entry = { readonly type: 'file' | 'directory'; readonly bytes?: Uint8Array 
 type HarnessAgent = ReturnType<typeof orchestratorHarness>['agent'];
 interface SandboxNamespaceProbe {
   idFromName(name: string): string;
-  get(id: string): { discardWorkspaceSnapshot?(): Promise<void>; destroy(): Promise<void> };
+  get(id: string): { discardState?(): Promise<void>; destroy(): Promise<void> };
 }
 
 function contentBytes(content: string | Uint8Array): Uint8Array {
@@ -163,7 +163,7 @@ describe('canonical Nimbus workspace lifecycle', () => {
       get: () => ({
         // The container object owns its /workspace snapshot, so the snapshot has
         // to go before the object that knows which R2 objects were its.
-        async discardWorkspaceSnapshot() { nimbus.events.push('sandbox.snapshot.discard'); },
+        async discardState() { nimbus.events.push('sandbox.snapshot.discard'); },
         async destroy() { nimbus.events.push('sandbox.destroy'); },
       }),
     });
@@ -205,7 +205,7 @@ describe('canonical Nimbus workspace lifecycle', () => {
     installSandbox(harness.agent, {
       idFromName: (name: string) => name,
       get: () => ({
-        async discardWorkspaceSnapshot() {},
+        async discardState() {},
         async destroy() { throw new Error('Sandbox destroy failed'); },
       }),
     });

@@ -10,8 +10,14 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import {
-  EGRESS_PLACEHOLDER_PREFIX, type EgressSecretBinding, type SandboxHandle,
+  EGRESS_PLACEHOLDER_PREFIX, type EgressSecretBinding,
 } from '@kinu.run/core';
+import type { KinuSandbox } from '../src/kinu-sandbox';
+// Static: neither module reaches `cloudflare:email`, so neither needs the mock
+// below. That `sandbox-exec-lane` can be imported here without one is the point
+// of it living outside `runtime.ts`.
+import { kinuEgressParams } from '../src/egress/configure';
+import { adaptCloudflareSandbox } from '../src/sandbox-exec-lane';
 import type { EgressInjectionResult } from '../src/user/egress-vault';
 import type { OutboundHandlerContext } from '@cloudflare/containers';
 import type { KinuEgressParams } from '../src/egress/outbound';
@@ -26,10 +32,9 @@ mockAgentsSdk();
 
 const { ORCHESTRATOR_RPC_SURFACE } = await import('../src/rpc-surface');
 const {
-  CONTAINER_EVENT_HOST, CONTAINER_EVENT_PATH, EGRESS_HANDLER, EVENT_HANDLER,
+  CONTAINER_EVENT_HOST, CONTAINER_EVENT_PATH,
   handleContainerEgress, parseEgressParams,
 } = await import('../src/egress/outbound');
-const { configureContainerEgress, withConfiguredEgress } = await import('../src/egress/configure');
 
 const root = new URL('../', import.meta.url).pathname;
 
@@ -91,15 +96,22 @@ function captureFetch(response: () => Response): FetchCapture {
   return { seen, restore: () => { globalThis.fetch = original; } };
 }
 
-/** A handle whose only exercised member is `exec` — `withConfiguredEgress`
- *  spreads the rest through untouched. */
-function execOnlyHandle(): SandboxHandle {
-  const view: Partial<SandboxHandle> = {};
-  Object.assign(view, { exec: async () => ({ stdout: 'done', stderr: '', exitCode: 0 }) });
-  // SAFETY: `exec` is constructed above and is the only member these two tests
-  // invoke; `withConfiguredEgress` preserves the rest of the handle by spreading
-  // it rather than enumerating it, so no unassigned member is reachable.
-  return view as SandboxHandle;
+/** A box whose only exercised members are the readiness gate and one operation.
+ *  Unchecked and named: `KinuSandbox` is a Durable Object class, so a test
+ *  cannot construct one; the double rides the prototype the way
+ *  helpers/jsrpc-stub.ts builds stubs, and implements exactly what the
+ *  adapter's preflight reaches. */
+function execOnlyBox(): KinuSandbox {
+  return Object.create({
+    ensureReady: async () => {},
+    startProcess: async () => ({
+      id: 'p1',
+      exitCode: 0,
+      waitForExit: async () => ({ exitCode: 0 }),
+      getStatus: async () => 'exited',
+    }),
+    getProcessLogs: async () => ({ stdout: 'done', stderr: '' }),
+  });
 }
 
 describe('the secret reaches the upstream and comes back scrubbed', () => {
@@ -182,35 +194,39 @@ describe('the secret reaches the upstream and comes back scrubbed', () => {
 });
 
 describe('what the container is configured with', () => {
-  test('only GRANTED bindings are passed, so an ungranted placeholder is never learned', async () => {
-    const calls: { host?: string; method: string; params: KinuEgressParams }[] = [];
-    const params = await configureContainerEgress({
-      setOutboundHandler: async (method, p) => { calls.push({ method, params: p }); },
-      setOutboundByHost: async (host, method, p) => { calls.push({ host, method, params: p }); },
-    }, {
+  test('only GRANTED bindings are passed, so an ungranted placeholder is never learned', () => {
+    const params = kinuEgressParams({
       workspaceName: 'kinu-main',
       ownerUserId: 'user-1',
       vault: [BINDING, { id: 'prod-db', label: 'Prod DB', host: 'db.internal', placeholder: `${EGRESS_PLACEHOLDER_PREFIX}${'Z'.repeat(43)}` }],
       grants: [{ rule: 'egress-secret:stripe', executor: 'sandbox' }],
     });
     expect(params.bindings.map((b) => b.id)).toEqual(['stripe']);
-    // The event host is bound BEFORE the catch-all, so no container event ever
-    // takes the egress path.
-    expect(calls[0]).toMatchObject({ host: CONTAINER_EVENT_HOST, method: EVENT_HANDLER });
-    expect(calls[1]).toMatchObject({ method: EGRESS_HANDLER });
     expect(JSON.stringify(params)).not.toContain('prod-db');
   });
 
-  test('a grant on another executor does not widen the container', async () => {
-    const params = await configureContainerEgress(
-      { setOutboundHandler: async () => {}, setOutboundByHost: async () => {} },
-      {
-        workspaceName: 'w', ownerUserId: 'u', vault: [BINDING],
-        grants: [{ rule: 'egress-secret:stripe', executor: 'laptop' }],
-      },
-    );
+  test('a grant on another executor does not widen the container', () => {
+    const params = kinuEgressParams({
+      workspaceName: 'w', ownerUserId: 'u', vault: [BINDING],
+      grants: [{ rule: 'egress-secret:stripe', executor: 'laptop' }],
+    });
     expect(params.bindings).toEqual([]);
   });
+
+  test('the event host is bound BEFORE the catch-all, by the object that owns the container',
+    () => {
+      // Per-host handlers take precedence over the catch-all, so binding the
+      // catch-all first would leave a window in which a container event went to
+      // the egress handler, found no placeholder in it, and was forwarded to a
+      // `.internal` name that resolves nowhere. Read from the source of the one
+      // writer: this ordering used to exist in TWO places, and the one the live
+      // path actually called was the one that did not pin the workspace name.
+      const sandbox = read('src/kinu-sandbox.ts');
+      const body = sandbox.slice(sandbox.indexOf('async configureEgress('));
+      expect(body.indexOf('setOutboundByHost')).toBeLessThan(body.indexOf('setOutboundHandler'));
+      // And the name is pinned in the same call, because both host hooks read it.
+      expect(body.indexOf('WORKSPACE_NAME_KEY')).toBeLessThan(body.indexOf('setOutboundByHost'));
+    });
 
   test('params are parsed, so a malformed configuration reads as unconfigured', () => {
     expect(parseEgressParams(ctx(PARAMS))).toEqual(PARAMS);
@@ -224,8 +240,8 @@ describe('configuration is awaited before the container runs', () => {
     let configured = 0;
     let released: () => void = () => {};
     const gate = new Promise<void>((resolve) => { released = resolve; });
-    const handle = withConfiguredEgress(
-      execOnlyHandle(),
+    const handle = adaptCloudflareSandbox(
+      execOnlyBox(),
       async () => { configured += 1; await gate; },
     );
     const both = Promise.all([handle.exec('a'), handle.exec('b')]);
@@ -236,14 +252,45 @@ describe('configuration is awaited before the container runs', () => {
 
   test('a failed configuration is not cached, so the next call retries', async () => {
     let attempts = 0;
-    const handle = withConfiguredEgress(
-      execOnlyHandle(),
+    const handle = adaptCloudflareSandbox(
+      execOnlyBox(),
       async () => { attempts += 1; if (attempts === 1) throw new Error('root unreachable'); },
     );
     await expect(handle.exec('a')).rejects.toThrow('root unreachable');
     expect((await handle.exec('a')).stdout).toBe('done');
     expect(attempts).toBe(2);
   });
+
+  test('EVERY operation that can start the container waits for it — including the file lanes',
+    async () => {
+      // The old wrapper carried a hand-maintained allowlist that the file lanes
+      // were never added to, so a cold `readFile` started the container itself
+      // and read a blank disk, and a `writeFile` landed under the overlay a
+      // moment later — written by the caller, invisible to the caller and to
+      // every checkpoint after it.
+      const order: string[] = [];
+      const box: KinuSandbox = Object.create({
+        ensureReady: async () => { order.push('ensureReady'); },
+        readFile: async () => { order.push('readFile'); return { content: '' }; },
+        writeFile: async () => { order.push('writeFile'); return undefined; },
+        listFiles: async () => { order.push('listFiles'); return { files: [] }; },
+        deleteFile: async () => { order.push('deleteFile'); return undefined; },
+      });
+      const handle = adaptCloudflareSandbox(box, async () => { order.push('configureEgress'); });
+
+      await handle.readFile('/workspace/a');
+      await handle.writeFile('/workspace/a', 'x');
+      await handle.listFiles('/workspace');
+      await handle.deleteFile('/workspace/a');
+
+      // Egress once, then readiness before each operation, never after.
+      expect(order).toEqual([
+        'configureEgress', 'ensureReady', 'readFile',
+        'ensureReady', 'writeFile',
+        'ensureReady', 'listFiles',
+        'ensureReady', 'deleteFile',
+      ]);
+    });
 });
 
 describe('reachability of the container event channel', () => {

@@ -7,11 +7,11 @@ import {
   buildSystemPromptSync,
   DEFAULT_WORKERS_AI_MODEL_ID,
   DEFAULT_WORKERS_AI_MODEL_SPEC,
+  defaultSpecFor,
   parseModelSpec,
 } from '@kinu.run/core';
 import { createTestRuntime } from '@kinu.run/test-utils';
 import { createAgentProviderRegistry, type AgentProviderRegistry } from '../src/providers/agent-registry';
-import { pickInitialModel } from '../src/user/workspace-create';
 import type { ModelMenuEntry } from '../src/user/available-models';
 import type { CredentialSummary } from '../src/user/user-do';
 import { platformGatewayEnv, stubAiBinding, TEST_GATEWAY_URL } from './helpers/platform-gateway';
@@ -255,21 +255,27 @@ describe('default-agent prompt model context', () => {
 });
 
 describe('the model a new workspace starts on', () => {
+  // The RULE is core's `defaultSpecFor` now; what is asserted here is what this
+  // backend hands it — the specs of the models the ACCOUNT can serve, projected
+  // off the credential menu exactly as `createCloudWorkspaceForUser` projects
+  // them. The rule used to be a cf-local `pickInitialModel` while the CLI
+  // answered the same question its own way.
   const native: ModelMenuEntry = {
     spec: DEFAULT_WORKERS_AI_MODEL_SPEC, label: 'DeepSeek V4 Pro 0813', provider: 'workers-ai',
   };
   const byo: ModelMenuEntry = { spec: 'openai/gpt-5.5', label: 'GPT-5.5', provider: 'openai' };
+  const servable = (models: ModelMenuEntry[]) => models.map((entry) => entry.spec);
 
   test('no configured default → the native Workers AI model', () => {
-    expect(pickInitialModel(null, [native, byo])).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
+    expect(defaultSpecFor(null, servable([native, byo]))).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
   });
 
   test('the native model is chosen even when a BYO provider lists first', () => {
-    expect(pickInitialModel(null, [byo, native])).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
+    expect(defaultSpecFor(null, servable([byo, native]))).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
   });
 
   test('a configured default wins when the account can serve it', () => {
-    expect(pickInitialModel('openai/gpt-5.5', [native, byo])).toBe('openai/gpt-5.5');
+    expect(defaultSpecFor('openai/gpt-5.5', servable([native, byo]))).toBe('openai/gpt-5.5');
   });
 
   // Regression: this used to fall through to `models[0]`, so a user who signed
@@ -277,7 +283,7 @@ describe('the model a new workspace starts on', () => {
   // created on that paid provider. No native model available and nothing
   // chosen is now an error the caller reports, not a guess.
   test('no native model and no choice resolves to nothing rather than a BYO guess', () => {
-    expect(pickInitialModel(null, [byo])).toBeNull();
-    expect(pickInitialModel('workers-ai/@cf/meta/llama-4', [byo])).toBeNull();
+    expect(defaultSpecFor(null, servable([byo]))).toBeNull();
+    expect(defaultSpecFor('workers-ai/@cf/meta/llama-4', servable([byo]))).toBeNull();
   });
 });

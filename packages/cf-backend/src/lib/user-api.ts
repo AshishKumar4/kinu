@@ -165,10 +165,17 @@ export interface UserDevice {
   connected: boolean;
   createdAt: number;
   lastSeenAt: number | null;
-  /** When this device's link lapses if it does not connect again. Renewed on
-   *  every successful connect, so an active machine never reaches it. Null on
-   *  links made before the window existed, until their next connect. */
+  /** When this device's link lapses. Measured from its last ROTATION, which
+   *  happens on every accepted connect, so a machine in use never reaches it
+   *  and a copy that stopped connecting does. */
   expiresAt: number | null;
+  /** Where the newest accepted connection came from, and whether a SECOND
+   *  socket ever took this device's slot. A stolen `device.json` shows up
+   *  here: an address the owner does not recognise, or a replacement they did
+   *  not cause. */
+  lastIp: string | null;
+  lastAgent: string | null;
+  replacedAt: number | null;
 }
 export interface RegisteredDevice {
   origin: string;
@@ -177,11 +184,14 @@ export interface RegisteredDevice {
 const UserDeviceSchema = v.object({
   id: v.string(), label: v.string(), os: v.nullable(v.string()), hostname: v.nullable(v.string()),
   connected: v.boolean(), createdAt: v.number(), lastSeenAt: v.nullable(v.number()), expiresAt: v.nullable(v.number()),
+  lastIp: v.nullable(v.string()), lastAgent: v.nullable(v.string()), replacedAt: v.nullable(v.number()),
 });
 const RegisteredDeviceSchema = v.object({ origin: v.string(), installCommand: v.string() });
 export const listDevices    = () => api(v.array(UserDeviceSchema), 'GET', '/devices');
 export const registerDevice = (label?: string) =>
   api(RegisteredDeviceSchema, 'POST', '/devices', { label });
+export const renameDevice   = (id: string, name: string) =>
+  api(OkSchema, 'PATCH', `/devices/${encodeURIComponent(id)}`, { name });
 export const revokeDevice   = (id: string) =>
   api(OkSchema, 'DELETE', `/devices/${encodeURIComponent(id)}`);
 
@@ -203,6 +213,10 @@ const DeviceConsentSchema = v.object({
 export const listDeviceConsents = () => api(v.array(DeviceConsentSchema), 'GET', '/devices/consents');
 export const setDeviceConsentScope = (deviceId: string, agentName: string, scope: DeviceConsentScope) =>
   api(OkSchema, 'PUT', `/devices/${encodeURIComponent(deviceId)}/consent`, { agentName, scope });
+/** Revoke a workspace's grant on a device. The row is deleted, so the next
+ *  device call asks again rather than reading as a standing refusal. */
+export const revokeDeviceConsent = (deviceId: string, agentName: string) =>
+  api(OkSchema, 'DELETE', `/devices/${encodeURIComponent(deviceId)}/consent?agentName=${encodeURIComponent(agentName)}`);
 
 // ── Credentials ────────────────────────────────────────────────────
 export const listCredentials  = () => api(v.array(CredentialSummarySchema), 'GET', '/credentials');

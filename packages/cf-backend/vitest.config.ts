@@ -14,6 +14,13 @@
  * SQL shapes, protocol encoding, prompt assembly, reducers — those stay in
  * `bun test`, which is faster and is where the other ~450 test files live.
  *
+ * "SQL shapes" means our arithmetic, not the database's feature set. A query
+ * whose METHOD is a platform capability belongs here: `do-spend-aggregate` runs
+ * the workspace-spend aggregate because `WITH` and `json_extract` over a Durable
+ * Object's SQLite are the platform's to provide, and `bun:sqlite` having them
+ * says nothing about workerd. Its arithmetic is asserted under `bun test`, where
+ * it belongs.
+ *
  * The boundary is MECHANICAL, not a convention:
  *   - `include` below is exactly `tests/workerd/**`, so vitest cannot reach a
  *     bun test.
@@ -56,6 +63,11 @@ export default defineConfig({
           SOCKET: { className: 'SocketDO', useSQLite: true },
           ALARMED: { className: 'AlarmDO', useSQLite: true },
           STEER_PROBE: { className: 'SteerProbeDO', useSQLite: true },
+          EVICTION_PROBE: { className: 'EvictionProbeDO', useSQLite: true },
+          WITNESS: { className: 'WitnessDO', useSQLite: true },
+          CAPPED_TURN_PROBE: { className: 'CappedTurnProbeDO', useSQLite: true },
+          UNBOUNDED_TURN_PROBE: { className: 'UnboundedTurnProbeDO', useSQLite: true },
+          SPEND_PROBE: { className: 'SpendProbeDO', useSQLite: true },
         },
       },
     }),
@@ -66,8 +78,12 @@ export default defineConfig({
     // default per-file parallelism would have two of them contend for the same
     // runtime and turn a latency assertion into a flake.
     fileParallelism: false,
-    // steer-chain's condition-bound waits carry a 15s diagnostic deadline that
-    // must expire INSIDE the test to name what the client saw; 5s cut it off.
-    testTimeout: 30_000,
+    // Condition-bound diagnostic deadlines have to expire INSIDE the test so the
+    // assertion can name the state actually reached: steer-chain waits 15s for a
+    // client frame, and do-eviction-recovery waits 90s for chat recovery, which
+    // the SDK schedules on the object's own alarm with backoff rather than
+    // immediately. A passing run spends neither — every wait stops at its
+    // condition.
+    testTimeout: 120_000,
   },
 });

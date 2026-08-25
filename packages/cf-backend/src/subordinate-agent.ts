@@ -8,7 +8,8 @@ import {
   initWorkspaceSchema,
   renderSoulMarkdown,
   snapshotCompletedTurn,
-  type CompletedTurn,
+  // Names how this turn ended, from facts. Never a string chosen here.
+  classifyRunEnd,
   type SubordinateHandoff,
   type WorkMode,
   type SubordinateReportStatus,
@@ -508,13 +509,8 @@ export class SubordinateAgent extends ActorAgent {
   }
 
   async onChatResponse(result: ChatResponseResult): Promise<void> {
-    const turnMode = this.turnWorkMode();
     const { programmaticUserMessage, errorText, completed } = this.settleTurnEvents(result);
     this.recordTurnTelemetry(result, { errorText, completed, programmaticUserMessage });
-    if (!completed) {
-      this.reportedThisTurn = false;
-      return;
-    }
 
     const userMessages = this.messages.filter((message) => message.role === 'user');
     const lastUserMessage = programmaticUserMessage ?? userMessages.at(-1);
@@ -527,11 +523,6 @@ export class SubordinateAgent extends ActorAgent {
       .map((part) => part.text)
       .join('') ?? '';
 
-    await this.extensions.emitTurnEnd({
-      text: assistantText,
-      responseMessages: await convertToModelMessages([result.message], { ignoreIncompleteToolCalls: true }),
-    });
-
     // One read of who drove this turn, feeding both the turn's recorded origin
     // and whether its answer is the parent's to hear.
     const ownerDriven = !programmaticUserMessage && !this.lastUserTurnIsProgrammatic();
@@ -543,8 +534,35 @@ export class SubordinateAgent extends ActorAgent {
       origin: ownerDriven ? 'user' : 'programmatic',
     };
     if (result.message.id) completedTurn.turnId = result.message.id;
-    const turn: CompletedTurn = snapshotCompletedTurn(this.acc, completedTurn);
-    if (turnMode !== 'plan') this.settleCompletedTurn(turn);
+    // The same settle spine the root uses, on every status. This method used to
+    // early-return on a turn that did not complete, so a cut or errored
+    // subordinate turn reached neither the outcome review nor its extensions —
+    // the identical drop the root had, one class down. Plan turns still record
+    // nothing; core's `turnEvolutionEnabled` gate owns that. The spine hands
+    // back the SAME verdict core returned — whether the completed-build
+    // improvement lanes may run — and the auto-title below consumes that, not
+    // its own spelling of the condition.
+    const improvementLanesOpen = await this.settleTurnSpine({
+      status: classifyRunEnd({
+        completed, interrupted: result.status === 'aborted', errorText,
+        // Think reports 'completed' for a turn its own stop condition cut, so
+        // the model's last word is the only thing that can tell the two apart.
+        lastFinishReason: this.acc.lastFinishReason,
+      }).reason,
+      turn: snapshotCompletedTurn(this.acc, completedTurn),
+      onTurnEnd: async () => {
+        await this.extensions.emitTurnEnd({
+          text: assistantText,
+          responseMessages: await convertToModelMessages(
+            [result.message], { ignoreIncompleteToolCalls: true },
+          ),
+        });
+      },
+    });
+    if (!completed) {
+      this.reportedThisTurn = false;
+      return;
+    }
 
     // Title this agent from the first thing its OWNER said to it.
     //
@@ -559,13 +577,12 @@ export class SubordinateAgent extends ActorAgent {
     // Fire-and-forget and once-only: persisting marks `name_origin`, after
     // which the shared policy no longer matches. A programmatic turn is not a
     // trigger — a parent's assignment is not the owner talking.
-    if (ownerDriven && turnMode !== 'plan') void this.maybeAutoTitle(userText);
+    if (ownerDriven && improvementLanesOpen) void this.maybeAutoTitle(userText);
 
     if (subordinateRelaysTurnEnd({ reportedThisTurn: this.reportedThisTurn, ownerDriven, assistantText })) {
       void this.sendReport('progress', assistantText, 'turn_end')
         .catch(reportSubordinateFailure('turn_end'));
     }
     this.reportedThisTurn = false;
-    void this.orch.drainPendingEvents();
   }
 }

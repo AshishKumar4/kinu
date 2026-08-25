@@ -302,7 +302,7 @@ describe('/pc/connect upgrade wiring', () => {
   });
 });
 
-describe('device tokens expire on idleness', () => {
+describe('device links expire on an absolute window, renewed by rotation', () => {
   const day = 24 * 60 * 60 * 1000;
 
   function ageDevice(harness: TestUserDO, deviceId: string, expiresAt: number | null): void {
@@ -317,16 +317,19 @@ describe('device tokens expire on idleness', () => {
     return row.e;
   }
 
-  test('a freshly linked device carries a window, and using it pushes the window out', async () => {
+  test('a freshly linked device carries a window, and USE alone does not extend it', async () => {
     const harness = createTestUserDO();
-    const { deviceId, token } = await harness.userDO.registerDevice(await testOwner(), 'laptop');
+    const { deviceId, token } = await harness.userDO.registerDevice(await testOwner(), 'studio tower');
     expect(storedExpiry(harness, deviceId)).toBeGreaterThan(Date.now());
 
-    ageDevice(harness, deviceId, Date.now() + day);
+    // The window is anchored to the last ROTATION, which is what a real daemon
+    // does on every connect. Verification is not rotation: an idle-sliding
+    // window kept a copied device.json alive for as long as someone kept using
+    // it, which is exactly the credential a copy should not be.
+    const anchor = Date.now() + day;
+    ageDevice(harness, deviceId, anchor);
     expect(await harness.userDO.verifyDeviceToken(await testOwner(), token)).toEqual({ ok: true, deviceId });
-    const expiry = storedExpiry(harness, deviceId);
-    expect(expiry).not.toBeNull();
-    expect(expiry ?? 0).toBeGreaterThan(Date.now() + 100 * day);
+    expect(storedExpiry(harness, deviceId)).toBe(anchor);
     harness.close();
   });
 
@@ -340,13 +343,15 @@ describe('device tokens expire on idleness', () => {
     harness.close();
   });
 
-  test('a link made before the window existed is stamped on next use, not locked out', async () => {
+  test('a link made before the window existed is honoured until its next rotation', async () => {
     const harness = createTestUserDO();
-    const { deviceId, token } = await harness.userDO.registerDevice(await testOwner(), 'laptop');
+    const { deviceId, token } = await harness.userDO.registerDevice(await testOwner(), 'studio tower');
     ageDevice(harness, deviceId, null);
 
+    // A null window is "never measured", not "expired": the row keeps working
+    // and gets its absolute window stamped the next time the daemon connects.
     expect(await harness.userDO.verifyDeviceToken(await testOwner(), token)).toEqual({ ok: true, deviceId });
-    expect(storedExpiry(harness, deviceId)).toBeGreaterThan(Date.now());
+    expect(storedExpiry(harness, deviceId)).toBeNull();
     harness.close();
   });
 
@@ -361,16 +366,22 @@ describe('device tokens expire on idleness', () => {
 
   test('the runtime status separates "no device" from "registered but away", with nothing claimed', async () => {
     const harness = createTestUserDO();
-    // Nothing registered: the agent's laptop row is not configured at all.
+    // Nothing registered: the agent's laptop row is not configured at all, and
+    // the fleet it can see is empty rather than unknown.
     expect(await harness.userDO.deviceRuntimeStatus(await testOwner()))
-      .toEqual({ connected: false, registered: false, toolchain: null });
+      .toEqual({ connected: false, registered: false, toolchain: null, devices: [] });
 
-    await harness.userDO.registerDevice(await testOwner(), 'laptop');
+    const { deviceId } = await harness.userDO.registerDevice(await testOwner(), 'studio tower');
     // Registered and offline. `toolchain: null` is the honest answer for a
     // machine that is not there to be asked — never an empty capability set,
-    // which would tell the model the user's laptop runs nothing.
-    expect(await harness.userDO.deviceRuntimeStatus(await testOwner()))
-      .toEqual({ connected: false, registered: true, toolchain: null });
+    // which would tell the model the user's machine runs nothing. The row is
+    // still NAMED, because an agent that cannot see it cannot ask for it.
+    expect(await harness.userDO.deviceRuntimeStatus(await testOwner())).toEqual({
+      connected: false,
+      registered: true,
+      toolchain: null,
+      devices: [{ id: deviceId, name: 'studio tower', os: null, hostname: null, connected: false }],
+    });
     harness.close();
   });
 });
