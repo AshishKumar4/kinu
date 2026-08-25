@@ -164,6 +164,7 @@ gate_jobs() {
 # leaked worker processes.
 GATE_DEADLINE_SECONDS=480
 
+
 # Run everything enqueued, then clear the queue. Each gate's output goes to its
 # own file and is printed ONLY if it fails: 52 concurrent streams interleaved
 # into one terminal is not a log anybody can read, and the output a reader wants
@@ -222,8 +223,14 @@ flush_gates() {
       group="${GATE_GROUP[${GATE_CMDS[pick]}]:-}"
       if [ -n "$group" ]; then busy[$group]=1; fi
       launched[pick]=1
-      # `timeout` owns a process group and escalates after five seconds, so a
-      # worker that keeps an open handle cannot outlive its gate or the deploy.
+      # `timeout` signals the gate's process group and escalates after five
+      # seconds. That kills the gate command tree, and no more: a child that
+      # calls setsid (a detached dev server, a daemonized browser helper)
+      # leaves the group and can outlive the kill — headless browsers and
+      # workerd accumulated exactly that way across repeated walls until this
+      # box ran out of memory on 2026-08-25. The box carries swap now; if
+      # orphan accumulation returns, the fix is cgroup scopes at the suite
+      # layer, not a longer deadline.
       # shellcheck disable=SC2086
       ( timeout --signal=TERM --kill-after=5s "$GATE_DEADLINE_SECONDS" ${GATE_CMDS[pick]} > "$dir/$pick.log" 2>&1; echo $? > "$dir/$pick.status" ) &
     done
