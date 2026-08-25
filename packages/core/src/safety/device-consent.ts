@@ -50,6 +50,12 @@ export const DEVICE_CONSENT_UNANSWERED =
   'device use is still unapproved: the consent prompt expired with no answer, so nobody has decided yet. '
   + 'This is NOT a refusal — the owner was away. Carry on with what does not need the device, and ask again later.';
 
+/** The pseudo-method a device request carries when there is no machine to
+ *  act on yet — the card asks the owner to LINK one (the `kinu connect`
+ *  flow) rather than to allow one action. Approval grants nothing by itself;
+ *  execution stays impossible until a daemon is actually connected. */
+export const DEVICE_PROVISION_METHOD = 'connect';
+
 /** Narrow a stored scope string; unknown values mean the base tier. */
 export function parseConsentScope(raw: string | null | undefined): DeviceConsentScope {
   return raw === DEVICE_CONSENT_SCOPE_FULL_FS ? DEVICE_CONSENT_SCOPE_FULL_FS : DEVICE_CONSENT_SCOPE;
@@ -81,13 +87,19 @@ function summarizeParam<Value>(value: Value): string {
   return (rendered ?? String(value)).slice(0, 120);
 }
 
-/** What the agent is asking permission for. */
+/** What the agent is asking permission for.
+ *
+ *  `workspaceName` names the workspace whose access is being decided when the
+ *  caller is a workspace — the grant is per-(workspace, device), and a card
+ *  that cannot say which workspace asks cannot be answered once with
+ *  understanding. Absent for non-workspace callers. */
 export interface DeviceConsentRequest {
   readonly deviceId: string;
   readonly deviceLabel: string;
   readonly method: string;
   readonly command: string;
   readonly scope: string;
+  readonly workspaceName?: string;
 }
 
 /** One waiting prompt, as a surface renders it. Carries the id the answer is

@@ -287,7 +287,7 @@ describe('entry zero is the worked example, and its numbers are the corpus\'s', 
 });
 
 describe('validity over entry zero, as far as the document defines it', () => {
-  test('*Accepted and ignored*: optimise requires objective and prohibits key, config, from, label', () => {
+  test('*Accepted and ignored*: optimise prohibits key, config, from, label — and TAKES an optional objective', () => {
     const entry = swarmCall();
     expect(SWARM_PRESETS).toContain(entry.preset);
     expect(PARSED.objective).toBeDefined();
@@ -312,14 +312,27 @@ describe('validity over entry zero, as far as the document defines it', () => {
     const keyed = resolveSwarm({ ...entry, key: 'coverage' });
     if ('reason' in keyed) throw new Error('a named preset must resolve, and this one refused');
     expect(swarmValidity(keyed)).toMatchObject({ reason: 'bad_input' });
-    // And the one field it REQUIRES, missing. Checked on the RESOLVED configuration
-    // for `key`'s exact reason, and that MOVED here in the preset fix: `objective` is
-    // required by `score:'verify'`, which is now four presets rather than `optimise`
-    // alone, so requiring it by preset name would be four names spelling a rule the
-    // validity table already states once.
+    // AND THE FIELD IT USED TO REQUIRE, MISSING — which is now a legal call rather
+    // than a refusal, and that is the ergonomics fix in one assertion.
+    //
+    // The rule never was "optimise requires `objective`"; it was "`score:'verify'`
+    // requires one", and five of six rows scored by `verify`. So `{preset, task}` — the
+    // call the whole surface is meant to make trivial — refused on every row but
+    // `ideate`, and a live incident spent five of a model's ten steps discovering that
+    // one refusal at a time. A named preset now resolves to its UNMEASURED point when
+    // no objective was named: `verify` needs an instrument, none was supplied, so the
+    // row's judged sweep is what actually runs.
     const unmeasured = resolveSwarm({ preset: 'optimise', task: entry.task });
     if ('reason' in unmeasured) throw new Error('a named preset must resolve, and this one refused');
-    expect(swarmValidity(unmeasured)).toMatchObject({ reason: 'bad_input' });
+    expect(swarmValidity(unmeasured)).toBeNull();
+    expect(unmeasured.config.score.kind).toBe('judge');
+    expect(unmeasured.config.advance).toEqual({ kind: 'none' });
+    // The measured row is still what an objective buys, and it is unchanged.
+    const measured = resolveSwarm({ preset: 'optimise', task: entry.task, objective: OBJECTIVE });
+    if ('reason' in measured) throw new Error(measured.error);
+    expect(swarmValidity(measured)).toBeNull();
+    expect(measured.config.score.kind).toBe('verify');
+    expect(measured.config.advance).toEqual({ kind: 'uct' });
   });
 
   test('*Validity over the resolved configuration*: entry zero is LEGAL', () => {
@@ -485,9 +498,15 @@ describe('the implementation, asserted where absences used to be pinned', () => 
     // rule unreachable from `swarmValidity` without closing an import cycle, so the
     // registry could only be consulted once a run had started — while
     // `VerifierSpec.kind`'s own docstring promised a CALL-TIME refusal.
+    // GROWN BY ONE AGAIN: `VERIFIER_KIND_DOC` joined for the same reason
+    // `VERIFIER_KINDS` did. A refusal that wants to name a kind's WHOLE spec at call
+    // time has to read the field list from somewhere `swarmValidity` can import, and
+    // the registry is not that place. Without it a caller learned the shape one field
+    // per round trip from the bound instrument, which is the incident this pin's
+    // neighbours describe.
     expect(Object.keys(objectiveModule).sort()).toEqual([
-      'PUBLICATION_SURFACES', 'PUBLISHING_CARRIES', 'VERIFIER_KINDS', 'admitsPublication',
-      'carrySuppression', 'floorMargin', 'isBetter', 'normalisedScore',
+      'PUBLICATION_SURFACES', 'PUBLISHING_CARRIES', 'VERIFIER_KINDS', 'VERIFIER_KIND_DOC',
+      'admitsPublication', 'carrySuppression', 'floorMargin', 'isBetter', 'normalisedScore',
     ]);
     // GROWN BY FOUR since *Arbitration*'s arbiter landed. `arbitrateBranch` is the executable
     // port of `Exploration/Arbitration.lean`'s `arbitrate`, and two of the constants are
@@ -516,14 +535,24 @@ describe('the implementation, asserted where absences used to be pinned', () => 
     // undeclared arm it guarded is gone. `judgeCallPool` ARRIVED: the per-evaluation
     // call pool a judged run funds, derived from the ensemble validity admitted rather
     // than borrowed from the MCTS engine's dial.
+    // GROWN BY THREE in the ergonomics fix, and all three are one idea: a named preset
+    // must be callable as `{preset, task}`. `unmeasuredPoint` is the row a verifying
+    // preset takes when the call named no `objective`, `UNMEASURED_JUDGE_SAMPLES` the
+    // ensemble that sweep runs at, and `SWARM_PRESET_DOCTRINE` the prose MOVED here
+    // from tools/registry.ts so it is rendered from these rows instead of written
+    // beside them — it had drifted into claiming `optimise` "requires `objective`"
+    // while the table decided whether it did.
     expect(Object.keys(swarmModule).sort()).toEqual([
       'BRANCH_PROPOSAL_WIDTH', 'BRANCH_REFUSAL_POLICIES',
       'JUDGE_MARGINALISATION_MIN', 'NAMED_SWARM_PRESETS', 'SWARM_ADVANCES', 'SWARM_CARRIES',
       'SWARM_CONTEXTS', 'SWARM_EXPANDS',
-      'SWARM_PRESETS', 'SWARM_PRESET_POINTS', 'SWARM_SCORES', 'SWARM_TREE_ADVANCES',
-      'SWARM_UNITS', 'arbitrateBranch', 'archiveRegionRefusal', 'configDigestOf',
+      'SWARM_PRESETS', 'SWARM_PRESET_DOCTRINE', 'SWARM_PRESET_POINTS', 'SWARM_SCORES',
+      'SWARM_TREE_ADVANCES',
+      'SWARM_UNITS', 'UNMEASURED_JUDGE_SAMPLES', 'arbitrateBranch', 'archiveRegionRefusal',
+      'configDigestOf',
       'isTreeAdvance', 'judgeCallPool',
       'judgeMarginalisationRefusal', 'resolveSwarm', 'settleOf', 'swarmValidity',
+      'unmeasuredPoint',
     ]);
   });
 
@@ -566,11 +595,24 @@ describe('the implementation, asserted where absences used to be pinned', () => 
     for (const preset of NAMED_SWARM_PRESETS) {
       expect(SWARM_PRESET_POINTS[preset].config).toBeDefined();
     }
+    // THE ARCHIVE IS WHAT AN `objective` BUYS, so the call that asks for one has to
+    // name it. `{preset, task}` alone now resolves to the row's unmeasured point — a
+    // judged sweep at `advance:'none'` — because `verify` needs an instrument and a
+    // bare call named none. The row under test here is the MEASURED one, which is
+    // reached by declaring the objective that makes an archive binnable at all.
     for (const preset of ['research', 'audit', 'redteam'] as const) {
-      const resolved = resolveSwarm({ preset, task: 'x', key: 'k' });
+      const resolved = resolveSwarm({ preset, task: 'x', key: 'k', objective: OBJECTIVE });
       expect(resolved).not.toMatchObject({ reason: 'bad_input' });
       if ('reason' in resolved) throw new Error(resolved.error);
       expect(resolved.config.advance).toEqual({ kind: 'archive', novelty: 0.4 });
+    }
+    // And a bare call takes the fallback instead of refusing, which is the whole
+    // ergonomics contract: `preset` + `task` is a complete call on every row.
+    for (const preset of ['research', 'audit', 'redteam'] as const) {
+      const bare = resolveSwarm({ preset, task: 'x' });
+      if ('reason' in bare) throw new Error(bare.error);
+      expect(bare.config.advance).toEqual({ kind: 'none' });
+      expect(bare.config.score.kind).toBe('judge');
     }
     // And the carry split that separates them: a research finding is for publication,
     // an exploit corpus is not.

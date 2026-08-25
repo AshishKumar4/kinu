@@ -102,6 +102,40 @@ export function isBuiltinToolName(value: string): value is BuiltinToolName {
   return BUILTIN_TOOL_NAMES.has(value);
 }
 
+/**
+ * The subordinate → parent progress spine's tool id.
+ *
+ * A constant because the name has to agree across places no compiler was
+ * joining: the actor's advertised tool list, the deps that wire it, the
+ * `report.*` codemode gate, and one backend's deps-gate array. Typed
+ * `BuiltinToolName`, so deleting or renaming the capability in TOOL_REACH
+ * breaks every one of them at once instead of silently disabling a gate.
+ */
+export const REPORT_TOOL: BuiltinToolName = 'report';
+
+/**
+ * Plan mode's one completion surface.
+ *
+ * NOT a `BuiltinToolName`: it is not in TOOL_REACH and never joins the standing
+ * eight, because it exists only on a Plan turn whose actor owns the submission
+ * boundary (`buildBuiltinTools` adds it there). It is declared here anyway so
+ * the backends that filter and allow-list it stop doing so through bare
+ * literals with nothing linking them to this declaration.
+ */
+export const SUBMIT_PLAN_TOOL = 'submit_plan';
+
+/**
+ * Builtins dropped from the advertised surface when an actor's profile wires no
+ * deps for them.
+ *
+ * Derived from the ids above rather than spelled as strings: the array is a
+ * gate, and a gate keyed on a literal that no longer names a real tool stops
+ * gating without failing. `agents` is deliberately absent — every actor has the
+ * delegation substrate, so it is never dropped; its ACTIONS gate separately on
+ * the same profile.
+ */
+export const DEPS_GATED_TOOLS: readonly BuiltinToolName[] = [REPORT_TOOL];
+
 /** One capability and the codemode namespace it owns. */
 interface CapabilityReach {
   readonly name: CapabilityName;
@@ -294,7 +328,7 @@ export type AgentsToolAction = (typeof AGENTS_TOOL_ACTIONS)[number];
 
 /** The one question the ladder asks. Prefixes the doctrine in both surfaces. */
 export const DELEGATION_FRAME =
-  'One delegation ladder, two rungs, and they differ on lifetime and on who decides: a search is ephemeral and its candidates are MEASURED against a number you declare, settling into this turn; a subordinate is persistent, starts from a blank context, and answers in its own words.';
+  'One delegation ladder, two rungs, and they differ on lifetime and on who decides: a search is ephemeral and its candidates are SCORED against each other and ranked — by your own verifier running in this workspace when you declare an `objective`, and by a judge ensemble when you do not — settling into this turn; a subordinate is persistent, starts from a blank context, and answers in its own words.';
 
 /**
  * The CONTEXT axis, one entry per rung — the half of the ladder that decides
@@ -370,11 +404,20 @@ export const DELEGATION_RUNGS = {
     + `${DELEGATION_INHERITANCE.swarm.rung} `
     // What separates this from every other way of spawning several things and
     // picking one: WHO DECIDES. A judge has an opinion; a verifier runs.
-    + 'You name the shape with `preset` and what counts with `objective`, and every candidate is scored by your own verifier running in this workspace — not by a model\'s opinion of it. '
+    //
+    // WHICH scorer runs when is DELEGATION_FRAME's sentence, and the frame
+    // always prefixes this rung (renderAgentsToolDescription composes it
+    // first, unconditionally), so this line stopped restating it: the two
+    // carried "by your own verifier running in this workspace when you declare
+    // an `objective` … and by a judge ensemble when you do not" verbatim, ~150
+    // chars twice in the largest tool description on the surface. What is only
+    // here is who NAMES the shape, and that a verifier is a mechanism rather
+    // than an opinion.
+    + 'You name the shape with `preset`, and a verifier is CODE that runs here rather than a model\'s opinion of the answer. '
     // The preset enumeration is NOT here. Which presets exist is read at the
-    // moment `preset` is filled, so it rides that field (SWARM_PRESET_DOCTRINE);
-    // the rung carries only what decides whether to search at all.
-    + '`objective` states what is measured, in what unit, which direction is better, the target that counts as done, and `verify` as {kind, spec} naming a registered instrument — a verifier is CODE that runs, so a metric nothing can execute is not an objective. '
+    // moment `preset` is filled, so it rides that field (SWARM_PRESET_DOCTRINE in
+    // strategy/swarm.ts); the rung carries only what decides whether to search at all.
+    + '`preset` and `task` are the whole call: every preset runs from those two alone. `objective` is the OPTIONAL upgrade that turns a judged sweep into a measured search — it states what is measured, in what unit, which direction is better, the target that counts as done, and `verify` as {kind, spec} naming a registered instrument. A verifier is CODE that runs, so a metric nothing can execute is not an objective: leave it out and take the judged sweep. '
     + 'A floor is optional and is a PROOF: declare one and a candidate that measures past it is reported as a breach with the measurement kept, never as a score, because the bound may be what is wrong. '
     // A production deliberation burned ~4k reasoning tokens on what an omitted budget means.
     + 'Spend: `budget_tokens`/`budget_usd` cap everything the search transitively spawns and nest under your own mission scope; omitted means uncapped within that scope, so omit unless the caller gave you a number to enforce. '
@@ -399,30 +442,17 @@ export const DELEGATION_CONVERSE =
   // no waiting for a helper to free up, and no reason to hold work back.
   'A busy agent is never blocked on — your message is queued immediately for its own mode-homogeneous turn, so send follow-ups as soon as you have them.';
 
-/**
- * What each preset IS and when to reach for it.
- *
- * ONE enumeration, rendered by every surface a model can learn the preset set
- * from — the `preset` property, the missing-`preset` refusal, and the
- * `agents.swarm` codemode declaration. Four hand-written copies of it is how
- * `prove` came to be reachable in the enum and named in none of them, while
- * three presets that stopped resolving went on being described as working.
- *
- * IT USED TO CARRY A LINE ABOUT THREE PRESETS THAT COULD NOT RUN. `research`,
- * `audit` and `redteam` were advertised and refused, so the honest thing was to
- * say so and spend one line rather than one of the model's turns. All six
- * resolve now, and the line is gone rather than reworded: doctrine describes
- * the surface, and describing an absence that no longer exists is the drift
- * this constant was made one copy to prevent.
- */
-export const SWARM_PRESET_DOCTRINE = [
-  'optimise climbs one number you can measure — a cost, a runtime, a count. It requires `objective`.',
-  'prove drives a checker that accepts a candidate or does not. `objective` names that checker, and the name must be a registered verifier kind. It searches deepest, because a checker refutes a wrong branch instead of letting a plausible score carry it down.',
-  'ideate is deliberately flat: no value signal, so no `objective`, and it returns a set of distinct approaches, unranked. Reach for it when the thing you want is not measurable.',
-  'research, audit and redteam COVER a space instead of climbing it. Each keeps one cell per value of the coverage `key` and keeps the best member of each, so ten variants of one finding stay one finding. All three require `objective` and `key`, and all three run one level — the grid is written at the end of the run, and a later run starts from this one\'s occupants.',
-  'The three differ in what `key` means to you — a subject, a finding class, a tactic — and in where survivors go: research and audit publish theirs, redteam keeps its corpus in this workspace.',
-  'custom states all six axes in `config` under a `label`, optionally seeded from `from`. Reach for it when no preset names the shape you want.',
-] as const;
+// The preset doctrine USED TO BE HERE, as `SWARM_PRESET_DOCTRINE`. It now lives in
+// strategy/swarm.ts, beside the preset table it describes, and is rendered from those
+// rows rather than written alongside them.
+//
+// The distance was the defect. This module is import-free by design, so the prose here
+// could not read the table there: it asserted that `optimise` "requires `objective`"
+// and that research/audit/redteam "require `objective` and `key`" while the table and
+// the validator were what actually decided, and the two were free to disagree. They
+// did — a live incident spent five of a model's ten steps on a call the doctrine
+// described as legal. Only the clause a renderer cannot derive is still hand-written,
+// and it sits on the row itself (`SwarmPresetPoint.doctrine`).
 
 // ── Durable-state doctrine (single source) ──────────────────────────────────
 // `memory` is ONE tool because it is one concept — state this agent writes down
@@ -578,12 +608,17 @@ export function releaseToolActions(hasEngine: boolean): readonly ReleaseToolActi
  *   - `workspace.*` — filesystem / shell / memory primitives, including
  *     `editFile` — the exact-match edit reachable natively as `file`'s `edit`
  *     action (tools/file-tool.ts's createFileDispatcher, shared by both).
- *   - `codemode.*` — every provider exposed via createCodeTool, including
- *     crafted tools once they have been type-declared at construction time.
- *   - `tools.<name>` — crafted tools are ALSO reachable as local object
- *     properties inside the execute_tools async arrow, injected by the
- *     preamble. Crafted-tool bodies may call `workspace.*`, `codemode.*`,
- *     and `tools.<other>` interchangeably.
+ *   - `codemode.*` — every provider exposed via createCodeTool. Crafted tools
+ *     are type-DECLARED in this namespace so the model can discover them, but
+ *     the alias REFUSES at call time with one shared correction (tools/
+ *     sandbox-contract.ts). Declaring a name the model cannot call is
+ *     deliberate: a crafted tool absent from these types is a tool it cannot
+ *     find, and a refusal that throws is readable where a returned error
+ *     object would read as a successful call twice over.
+ *   - `tools.<name>` — the ONE callable form for a crafted tool, on every
+ *     backend, injected as a local object property inside the execute_tools
+ *     async arrow. Crafted-tool bodies may call `workspace.*`, the
+ *     `codemode.*` PROVIDERS, and `tools.<other>` interchangeably.
  *   - `agents.*` / `memory.*` / `tasks.*` / `report.*` — the same-named
  *     native tool, projected into the sandbox over its own dispatcher
  *     (tools/agents-codemode.ts, memory-codemode.ts, tasks-codemode.ts,

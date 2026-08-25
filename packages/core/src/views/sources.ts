@@ -65,6 +65,7 @@ export const RESERVED_VIEW_TITLES: readonly string[] = [
   // Live host surfaces.
   'output',
   'work',
+  'files',
   'releases',
   'exploration',
   'agent',

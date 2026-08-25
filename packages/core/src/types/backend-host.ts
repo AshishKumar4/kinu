@@ -43,6 +43,10 @@ export interface BroadcastEvent {
   readonly message?: string;
   /** `workspace_renamed`: the agent's new shown title. */
   readonly displayName?: string;
+  /** `steer_status`: which steer this is about. */
+  readonly steerId?: string;
+  /** `steer_status`: the step index a landed steer was spliced into. */
+  readonly atStep?: number;
   readonly jobId?: string;
 }
 

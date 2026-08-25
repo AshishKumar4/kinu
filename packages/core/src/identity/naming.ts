@@ -263,6 +263,31 @@ export function parseWorkspaceTitle(raw: string): string | null {
   return cleanTitle(title.output.title) || null;
 }
 
+/**
+ * Ask a model for a workspace title, and read its answer.
+ *
+ * The three pieces — the system prompt, the user prompt, and the parse — were
+ * already core; the COMPOSITION of them was not, so each backend assembled the
+ * same three in its own order and a fourth caller would have assembled them
+ * again.
+ *
+ * `complete` takes the system half separately rather than this seam taking an
+ * {@link LLM}, because `LLM.complete(prompt)` has no system channel: one
+ * backend passes it as `generateText`'s `system`, the other through its routed
+ * lane factory. That difference is genuinely per backend; which prompts to send
+ * is not.
+ *
+ * Returns null when the model returned nothing usable. A model that THROWS is
+ * not caught here — whether a failed title is fatal is the caller's policy, and
+ * on both backends it is not.
+ */
+export async function suggestWorkspaceTitle(
+  complete: (system: string, prompt: string) => Promise<string>,
+  mission: string,
+): Promise<string | null> {
+  return parseWorkspaceTitle(await complete(WORKSPACE_TITLE_SYSTEM_PROMPT, workspaceTitlePrompt(mission)));
+}
+
 function extractPersonaName(mission: string): string | null {
   const match = mission.match(/\b(?:you are|call you|named)\s+([A-Za-z][A-Za-z0-9_-]{1,30})\b/i);
   return match?.[1] ?? null;

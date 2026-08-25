@@ -29,45 +29,42 @@
  * known callers reported" and "92%, with the embedder silent" are different
  * facts and the owner has to be able to tell them apart.
  *
- * WINDOWED, AND IT SAYS SO. `step_finish` and `model_call` are read over the
- * same bounded recent-rows window the step telemetry uses, because the event log
- * is a log and not a roll-up. `windowLimit` comes back on the result for the
- * same reason it does there: a total whose window you cannot see is a total you
- * cannot check. Heads are per-run rather than per-step, so the journal is read
- * whole — a workspace has orders of magnitude fewer heads than steps.
+ * COMPLETE, NOT WINDOWED. The producer totals are summed IN SQL over every
+ * `step_finish` and `model_call` row the log holds (`spendByProducer`), so no
+ * bound stands between the owner and what the workspace spent. They used to be
+ * folded over the same recent-rows window the step telemetry samples, which made
+ * every total a floor as soon as the log outgrew the window — and the panel that
+ * rendered it said "newest 2000 rows" in text a reader could pass over. A
+ * percentile needs a sample; a sum does not. The step telemetry beside this keeps
+ * its window and its `windowLimit`, because a cache-hit rate over the whole of
+ * history answers nobody's question. Heads are read whole from their journal for
+ * the same reason: a workspace has orders of magnitude fewer heads than steps.
  *
  * TWO AXES OVER ONE SUM. `producers` groups the spend by what KIND of work made
  * the call; `missions` groups it by which declared piece of work it was made
- * FOR, read out of the same ledger the budget caps are enforced against. They
- * cover different scopes on purpose — a producer row is windowed, a mission row
- * is the label's whole life — and the surface that renders them says so.
+ * FOR, read out of the same ledger the budget caps are enforced against. Both
+ * are now cumulative over the workspace's whole life, so they answer at the same
+ * scope — but they still must not be added together, because one call appears in
+ * exactly one producer row and in every mission label above it.
  */
 
 import type { RunEventRecorder } from '../events/recorder';
-import { SPEND_SOURCES, type SpendSource } from '../events/model-call';
+import { SPEND_SOURCES, type SpendSource, type SpendTally } from '../events/model-call';
 import type { SqlExecutor } from '../types/primitives';
 import { addUsage, usageReported, usageTotal, type Usage } from '../usage';
 import { storedUsage } from '../heads/journal';
 import type { StoredHeadUsage } from '../heads/schema';
 import { listMissionSpend, type MissionBudgetSnapshot } from '../mission-budget';
 
-/** What one producer spent, and what it could not account for. */
-export interface ProducerSpend {
+/**
+ * What one producer spent, and what it could not account for.
+ *
+ * The five numbers are {@link SpendTally}'s, declared once so a producer row,
+ * the workspace total and the SQL aggregate cannot describe the same fold in
+ * three shapes.
+ */
+export interface ProducerSpend extends SpendTally {
   readonly source: SpendSource;
-  /** Model calls attributed to this producer in the window. */
-  readonly calls: number;
-  /** Of those, how many the provider reported no usage at all for. Their spend
-   *  is real and unmeasured; `usage` below omits them entirely. */
-  readonly callsWithoutUsage: number;
-  /** Accumulated field by field, so a field no call reported stays ABSENT
-   *  rather than summing to a zero that reads as measured. */
-  readonly usage: Usage;
-  /** Catalog-priced spend over the calls that carried a rate. Absent when none
-   *  did — unpriced, never free. */
-  readonly usd?: number;
-  /** Calls with a usage report but no catalog rate: measured in tokens,
-   *  invisible in dollars. This is why `usd` is a floor. */
-  readonly unpricedCalls: number;
 }
 
 /** Whether the total can be trusted, stated in the total's own terms. */
@@ -94,11 +91,11 @@ export interface WorkspaceSpend {
    *  every producer reports through the same seam, so no rows means it never
    *  ran, not that it is unwired. */
   readonly producers: readonly ProducerSpend[];
-  /** Every producer summed. Same absence rules as a producer row. */
-  readonly total: Omit<ProducerSpend, 'source'>;
+  /** Every producer summed, over the whole log. Same absence rules as a producer
+   *  row. There is no truncation state beside it any more: this IS the total, and
+   *  a field saying so could never vary. */
+  readonly total: SpendTally;
   readonly coverage: SpendCoverage;
-  /** The bound on `step_finish` and `model_call` rows read. */
-  readonly windowLimit: number;
   /**
    * Share of the measured tokens no turn of this agent spent — everything the
    * owner did not watch happen: judges, the fast tier, the evolution engine,
@@ -119,24 +116,12 @@ export interface WorkspaceSpend {
    * this figure and a refusal can never disagree. Empty on the workspace that
    * declared no budget, which is every ordinary session.
    *
-   * TWO SCOPES IN ONE RESULT, and this is the second: the rows above are the
-   * window named by `windowLimit`, these are cumulative over the label's whole
-   * life. A cap is cumulative, so a windowed mission figure would be a number
-   * no cap is ever read against. The surface says which is which; do not add
-   * the two axes together.
+   * ONE SCOPE, TWO AXES: these and the producer rows are both cumulative over
+   * the workspace's whole life, so neither is a floor. They still must not be
+   * added, because a call sits in exactly one producer row and in every mission
+   * label above it.
    */
   readonly missions: readonly MissionBudgetSnapshot[];
-  /**
-   * The window reached the end of the log rather than filling up.
-   *
-   * `windowLimit` alone says how much this was willing to read, not whether it
-   * ran out of rows first, and those are the two states a reader has to tell
-   * apart before trusting the total. Earned rather than inferred: the read asks
-   * for `windowLimit + 1` rows and drops the extra, so a full window is direct
-   * evidence that more exists. Comparing `rows.length` to `windowLimit` cannot
-   * do this — an exactly-full log and a truncated one look identical that way.
-   */
-  readonly complete: boolean;
 }
 
 /** A producer's running tally. Mutable inside this module only. */
@@ -181,45 +166,32 @@ function tallyFor(tallies: Tallies, source: SpendSource): Tally {
   return fresh;
 }
 
+/** The aggregate's finished row as a fold still in progress, so the head journal
+ *  can be added to it without a second accumulator shape. */
+function openTally(tally: SpendTally): Tally {
+  return { ...tally, usd: tally.usd };
+}
+
 export interface WorkspaceSpendDeps {
   readonly events: RunEventRecorder;
   readonly sql: SqlExecutor;
 }
 
 /**
- * Every model call this workspace can account for, grouped by producer.
+ * Every model call this workspace can account for, grouped by producer, over the
+ * whole log.
  *
- * `windowLimit` bounds the `step_finish` and `model_call` reads INDEPENDENTLY, so
- * a workspace whose turn loop has run 10k steps does not push its judge calls
- * out of the window: they are different row types and each gets the same depth.
- *
- * Each read asks for one row more than it will use. The extra row is never
- * counted — it exists only so `complete` is a fact about a read that actually
- * ran off the end of the data, rather than a guess from a row count that cannot
- * distinguish an exactly-full log from a truncated one.
+ * Two reads, both unbounded, and neither is a sample. `spendByProducer` sums the
+ * `step_finish` and `model_call` rows in SQL — one pass over the table for every
+ * producer at once, rather than a fold over rows carried into memory a window at
+ * a time. The head journal is then folded in through the same accumulator: a
+ * head's usage never reaches the parent's event log (it comes back inside a
+ * `HeadReport` from another Durable Object), so the journal is its one durable
+ * cost record and the two sources meet here rather than in two totals.
  */
-export function workspaceSpend(
-  deps: WorkspaceSpendDeps,
-  opts: { windowLimit: number },
-): WorkspaceSpend {
+export function workspaceSpend(deps: WorkspaceSpendDeps): WorkspaceSpend {
   const tallies: Tallies = new Map();
-  const probe = opts.windowLimit + 1;
-  let complete = true;
-
-  const steps = deps.events.readRecentByType('step_finish', probe);
-  complete = complete && steps.length < probe;
-  for (const e of steps.slice(-opts.windowLimit)) {
-    if (e.type !== 'step_finish') continue;
-    record(tallyFor(tallies, 'agent'), e.usage ?? {}, e.usd);
-  }
-
-  const calls = deps.events.readRecentByType('model_call', probe);
-  complete = complete && calls.length < probe;
-  for (const e of calls.slice(-opts.windowLimit)) {
-    if (e.type !== 'model_call') continue;
-    record(tallyFor(tallies, e.source), e.usage ?? {}, e.usd);
-  }
-
+  for (const [source, tally] of deps.events.spendByProducer()) tallies.set(source, openTally(tally));
   for (const head of readHeadSpend(deps.sql)) record(tallyFor(tallies, 'head'), head, undefined);
 
   // Largest measured token total first: the panel's first job is to show where
@@ -263,12 +235,10 @@ export function workspaceSpend(
       ? null
       : (measuredTokens - turnTokens) / measuredTokens,
     missions: listMissionSpend(deps.sql),
-    windowLimit: opts.windowLimit,
-    complete,
   };
 }
 
-function finishTotal(tally: Tally): Omit<ProducerSpend, 'source'> {
+function finishTotal(tally: Tally): SpendTally {
   const out = {
     calls: tally.calls,
     callsWithoutUsage: tally.callsWithoutUsage,

@@ -31,6 +31,17 @@ const BUILTIN_ROLE_IDS = [
 ] as const;
 export type BuiltinRoleId = (typeof BUILTIN_ROLE_IDS)[number];
 
+/**
+ * The role an agent runs as when nobody has chosen one.
+ *
+ * Declared, not derived from the array's first slot: reordering the builtins
+ * would then silently move the default. `satisfies` still makes removing this
+ * role from the builtins a compile error, so the constant cannot outlive the
+ * role it names. Two adapters carried this sentinel as a bare `'general'` with
+ * nothing tying either to this declaration.
+ */
+export const DEFAULT_ROLE_ID = 'general' as const satisfies BuiltinRoleId;
+
 /** Kebab-case, lowercase-first: the same discipline skill names follow. */
 export const ROLE_ID_RE = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
 const ROLE_ID_MAX_LEN = 64;

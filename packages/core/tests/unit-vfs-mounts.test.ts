@@ -9,7 +9,7 @@ import { describe, expect, test } from 'bun:test';
 import type { VFS } from '../src/types/primitives';
 import { walkRecursive } from '@kinu.run/agent-utils/vfs';
 import { isVfsError } from '../src/vfs/errno';
-import { EXECUTOR_MOUNTS, standardMounts, withMountTable, type VfsMount } from '../src/vfs/mounts';
+import { EXECUTOR_MOUNTS, removeTreeWithVfsOps, standardMounts, withMountTable, type VfsMount } from '../src/vfs/mounts';
 import { deviceFiles, type DeviceTransport } from '../src/execution/device-tunnel-executor';
 
 /** A map-backed tree with honest directory semantics: readdir returns entry
@@ -43,7 +43,7 @@ function fakeTree(entries: Record<string, string>): VFS {
 			if (files.has(path)) return { size: files.get(path)!.length, mtimeMs: 0, isDir: false };
 			return dirs.has(path) ? { size: 0, mtimeMs: 0, isDir: true } : null;
 		},
-		unlink: async (path) => { files.delete(path); },
+		unlink: async (path) => { files.delete(path); dirs.delete(path); },
 		mkdir: async (path) => { dirs.add(path); },
 		exists: async (path) => files.has(path) || dirs.has(path),
 	};
@@ -189,5 +189,105 @@ describe('the workspace plane mount table', () => {
 		expect(await mounted.readFile('/sandbox/workspace/b.txt', { encoding: 'utf8' })).toBe('y');
 		expect(EXECUTOR_MOUNTS.laptop).toBe('/pc');
 		expect(EXECUTOR_MOUNTS.sandbox).toBe('/sandbox');
+	});
+});
+
+describe('the one plane, mutated: rename and removeRecursive route like every other op', () => {
+	test('a workspace rename uses the native implementation without reading the bytes', async () => {
+		const base = fakeTree({ '/big.bin': 'gigabytes, notionally' });
+		const renames: Array<[string, string]> = [];
+		let bytesRead = 0;
+		const native = {
+			...base,
+			readFile: async (path: string, opts?: { encoding?: string }) => { bytesRead += 1; return base.readFile(path, opts); },
+			rename: async (oldPath: string, newPath: string) => { renames.push([oldPath, newPath]); },
+		};
+		const mounted = withMountTable(native, [mountOf('pc', fakeTree({}))]);
+
+		await mounted.rename('/big.bin', '/renamed.bin');
+		expect(renames).toEqual([['/big.bin', '/renamed.bin']]);
+		expect(bytesRead).toBe(0);
+	});
+
+	test('a file rename inside a mount without native rename moves the bytes and drops the source', async () => {
+		const device = fakeTree({ '/home/dev/notes.txt': 'from the machine' });
+		const mounted = withMountTable(fakeTree({}), [mountOf('pc', device)]);
+
+		await mounted.rename('/pc/home/dev/notes.txt', '/pc/home/dev/renamed.txt');
+		expect(await device.readFile('/home/dev/renamed.txt', { encoding: 'utf8' })).toBe('from the machine');
+		expect(await device.exists('/home/dev/notes.txt')).toBe(false);
+	});
+
+	test('a cross-plane file rename carries the bytes over the boundary', async () => {
+		const base = fakeTree({ '/report.txt': 'workspace copy' });
+		const device = fakeTree({ '/home/dev/keep.txt': 'x' });
+		const mounted = withMountTable(base, [mountOf('pc', device)]);
+
+		await mounted.rename('/report.txt', '/pc/home/dev/report.txt');
+		expect(await device.readFile('/home/dev/report.txt', { encoding: 'utf8' })).toBe('workspace copy');
+		expect(await base.exists('/report.txt')).toBe(false);
+	});
+
+	test('a directory refuses to rename where only bytes could carry it', async () => {
+		const device = fakeTree({ '/home/dev/src/app.ts': 'export {};' });
+		const mounted = withMountTable(fakeTree({}), [mountOf('pc', device)]);
+
+		await expect(mounted.rename('/pc/home/dev/src', '/pc/home/dev/moved'))
+			.rejects.toMatchObject({ code: 'EPERM' });
+	});
+
+	test('a mount point is part of this plane: it cannot be renamed or removed', async () => {
+		const mounted = withMountTable(fakeTree({}), [mountOf('pc', fakeTree({ '/a.txt': 'x' }))]);
+
+		await expect(mounted.rename('/pc', '/laptop')).rejects.toMatchObject({ code: 'EPERM' });
+		await expect(mounted.removeRecursive('/pc')).rejects.toMatchObject({ code: 'EPERM' });
+	});
+
+	test('removeRecursive delegates to the native tree removal where one exists', async () => {
+		const base = fakeTree({ '/node_modules/a/index.js': 'x' });
+		const removed: string[] = [];
+		const native = { ...base, removeRecursive: async (path: string) => { removed.push(path); } };
+		const mounted = withMountTable(native, [mountOf('pc', fakeTree({}))]);
+
+		await mounted.removeRecursive('/node_modules');
+		expect(removed).toEqual(['/node_modules']);
+	});
+
+	test('removeRecursive on a mount without native support removes the tree entry by entry', async () => {
+		const device = fakeTree({ '/home/dev/build/out.js': 'x', '/home/dev/build/deep/two.js': 'y' });
+		const mounted = withMountTable(fakeTree({}), [mountOf('pc', device)]);
+
+		await mounted.removeRecursive('/pc/home/dev/build');
+		expect(await device.exists('/home/dev/build/out.js')).toBe(false);
+		expect(await device.exists('/home/dev/build/deep/two.js')).toBe(false);
+		expect(await device.exists('/home/dev/build')).toBe(false);
+	});
+
+	test('removeTreeWithVfsOps names an absent path instead of quietly succeeding', async () => {
+		await expect(removeTreeWithVfsOps(fakeTree({}), '/gone')).rejects.toMatchObject({ code: 'ENOENT' });
+	});
+
+	test('an absent mount refuses mutations with its stated absence', async () => {
+		const mounted = withMountTable(fakeTree({}), [mountOf('pc', null, 'no device connected')]);
+
+		await expect(mounted.rename('/pc/a', '/pc/b')).rejects.toMatchObject({ code: 'ENXIO' });
+		await expect(mounted.removeRecursive('/pc/a')).rejects.toMatchObject({ code: 'ENXIO' });
+	});
+});
+
+describe('a live mount point is a directory of this plane', () => {
+	test('stat answers structurally even where the mounted tree cannot stat its own root', async () => {
+		const container = fakeTree({ '/workspace/build.log': 'ok' });
+		// The container's own stat('/') answers null — the real sandbox view
+		// derives stat from the parent listing, and '/' has no parent entry.
+		const blindRoot = { ...container, stat: async (path: string) => path === '/' ? null : container.stat(path) };
+		const mounted = withMountTable(fakeTree({}), [mountOf('sandbox', blindRoot)]);
+
+		expect(await mounted.stat('/sandbox')).toMatchObject({ isDir: true });
+	});
+
+	test('an absent mount still stats as nothing', async () => {
+		const mounted = withMountTable(fakeTree({}), [mountOf('pc', null, 'no device connected')]);
+		expect(await mounted.stat('/pc')).toBeNull();
 	});
 });

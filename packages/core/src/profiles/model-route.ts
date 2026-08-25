@@ -68,6 +68,20 @@ export type ProfileRoutedSource = {
   [K in SpendSource]: (typeof MODEL_ROUTE_POLICY)[K] extends { kind: 'platform' } ? never : K
 }[SpendSource];
 
+/**
+ * Producers whose model comes from ONE named tier slot, whatever the turn
+ * resolved — the lanes a fixed-tier factory may be asked to build.
+ *
+ * Derived from the table because it was hand-mirrored: one backend declared
+ * `'judge' | 'fast' | 'advisor'` beside its lane factory, which is a SUBSET of
+ * the fixed rows and therefore both a duplicate and quietly wrong — moving a
+ * producer to a fixed tier here left that union unable to name it, with nothing
+ * failing to say so.
+ */
+export type FixedTierSource = {
+  [K in SpendSource]: (typeof MODEL_ROUTE_POLICY)[K] extends { kind: 'fixed' } ? K : never
+}[SpendSource];
+
 function isProfileRouted(source: SpendSource): source is ProfileRoutedSource {
   return MODEL_ROUTE_POLICY[source].kind !== 'platform';
 }

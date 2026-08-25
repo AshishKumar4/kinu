@@ -26,6 +26,7 @@ import {
   type SandboxHandle,
 } from '../src/index';
 import { makeSqlExec } from './helpers';
+import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
 
 // ── Fake sandbox exec seam ─────────────────────────────────────────────────
 
@@ -731,6 +732,7 @@ describe('createSandboxReleaseExec', () => {
       exposePort: async () => ({ url: 'x', port: 0 }),
       unexposePort: async () => ({}),
       getExposedPorts: async () => [],
+      ...sandboxHandleLifecycle,
     };
   }
 

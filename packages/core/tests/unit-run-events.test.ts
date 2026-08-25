@@ -5,8 +5,8 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
-  initRunEventTables, RunEventRecorder, WORKSPACE_RUN_ID,
-  type RunEvent,
+  initRunEventTables, RunEventRecorder, USAGE_FIELDS, WORKSPACE_RUN_ID,
+  type RunEvent, type Usage,
 } from '../src/index';
 import { makeSql, makeExecRaw } from './helpers';
 
@@ -297,5 +297,107 @@ describe('RunEventRecorder.readRecentByType', () => {
     const [step] = recorder.readRecentByType('step_finish');
     expect(step?.type === 'step_finish' && step.usage?.cacheRead).toBe(700);
     expect(step?.type === 'step_finish' && step.context?.measuredChars).toBe(400);
+  });
+});
+
+describe('RunEventRecorder.spendByProducer', () => {
+  test('sums every row in the log, not a window of them', () => {
+    const { recorder } = setup();
+    // Past `readRecentByType`'s 200-row default and past every window this read
+    // used to be folded over. A total is a sum, and a sum has no sample size.
+    for (let i = 0; i < 450; i++) {
+      recorder.emit('run-1', {
+        type: 'step_finish', stepIndex: i, usage: { input: 10, output: 1 }, usd: 0.001,
+      });
+    }
+    const agent = recorder.spendByProducer().get('agent');
+    expect(agent).toMatchObject({ calls: 450, callsWithoutUsage: 0, unpricedCalls: 0 });
+    expect(agent?.usage).toEqual({ input: 4_500, output: 450 });
+    expect(agent?.usd).toBeCloseTo(0.45, 10);
+  });
+
+  test('step_finish is the turn loop; every other producer names itself', () => {
+    const { recorder } = setup();
+    recorder.emit('run-1', { type: 'step_finish', stepIndex: 0, usage: { input: 100, output: 10 } });
+    recorder.emit(WORKSPACE_RUN_ID, {
+      type: 'model_call', source: 'judge', usage: { input: 20, output: 2 },
+    });
+    recorder.emit(WORKSPACE_RUN_ID, {
+      type: 'model_call', source: 'fast', usage: { input: 5, output: 1 },
+    });
+    // The lifecycle mirror of a direct call, which must NOT be counted again.
+    recorder.emit(WORKSPACE_RUN_ID, {
+      type: 'model_operation', operationId: 'op-1', source: 'fast', op: 'complete',
+      phase: 'end', outcome: 'ok', usage: { input: 5, output: 1 },
+    });
+
+    const spend = recorder.spendByProducer();
+    expect([...spend.keys()].sort()).toEqual(['agent', 'fast', 'judge']);
+    expect(spend.get('agent')?.usage).toEqual({ input: 100, output: 10 });
+    expect(spend.get('fast')).toMatchObject({ calls: 1 });
+  });
+
+  test('a field no call reported is absent from the sum, never a zero', () => {
+    const { recorder } = setup();
+    recorder.emit('run-1', { type: 'step_finish', stepIndex: 0, usage: { input: 100, output: 10 } });
+    recorder.emit('run-1', { type: 'step_finish', stepIndex: 1, usage: { input: 200, output: 20 } });
+
+    const agent = recorder.spendByProducer().get('agent');
+    expect(agent?.usage).toEqual({ input: 300, output: 30 });
+    // Nobody mentioned caching, so the workspace has no cache figure at all —
+    // which is a different claim from every step reading nothing from cache.
+    expect('cacheRead' in (agent?.usage ?? {})).toBe(false);
+    expect(agent?.usd).toBeUndefined();
+  });
+
+  test('every Usage field survives the sum', () => {
+    const { recorder } = setup();
+    // The aggregate reads `payload` with `json_extract`, so a column it forgot
+    // would read as a field nobody reported. One call carrying all of them is
+    // what makes a forgotten alias fail here instead of on the owner's panel.
+    const every: Required<Usage> = {
+      input: 11, output: 7, cacheRead: 5, cacheWrite: 3, cacheWrite1h: 2, reasoning: 1,
+      neurons: 0.5,
+    };
+    recorder.emit('run-1', { type: 'step_finish', stepIndex: 0, usage: every, usd: 0.02 });
+
+    const agent = recorder.spendByProducer().get('agent');
+    expect(agent?.usage).toEqual(every);
+    expect(USAGE_FIELDS.filter((field) => agent?.usage[field] === undefined)).toEqual([]);
+  });
+
+  test('a silent provider is counted in calls and absent from tokens', () => {
+    const { recorder } = setup();
+    recorder.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'platform' });
+    recorder.emit(WORKSPACE_RUN_ID, {
+      type: 'model_call', source: 'platform', usage: { input: 0, output: 0 },
+    });
+
+    const platform = recorder.spendByProducer().get('platform');
+    // Two calls, one of which the provider said nothing for — and the one that
+    // reported genuine zeros is a report, so it is not counted as silence.
+    expect(platform).toMatchObject({ calls: 2, callsWithoutUsage: 1, unpricedCalls: 1 });
+    expect(platform?.usage).toEqual({ input: 0, output: 0 });
+  });
+
+  test('a priced call and an unpriced one are told apart', () => {
+    const { recorder } = setup();
+    recorder.emit(WORKSPACE_RUN_ID, {
+      type: 'model_call', source: 'judge', usage: { input: 100, output: 10 }, usd: 0.004,
+    });
+    recorder.emit(WORKSPACE_RUN_ID, {
+      type: 'model_call', source: 'judge', usage: { input: 200, output: 20 },
+    });
+
+    const judge = recorder.spendByProducer().get('judge');
+    expect(judge).toMatchObject({ calls: 2, callsWithoutUsage: 0, unpricedCalls: 1 });
+    // The dollars are a floor over the calls a catalog could price; the tokens
+    // are not, and both facts sit on the same row.
+    expect(judge?.usd).toBeCloseTo(0.004, 10);
+    expect(judge?.usage).toEqual({ input: 300, output: 30 });
+  });
+
+  test('an empty log has no producers at all', () => {
+    expect(setup().recorder.spendByProducer().size).toBe(0);
   });
 });

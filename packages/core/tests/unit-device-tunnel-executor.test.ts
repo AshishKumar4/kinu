@@ -30,6 +30,44 @@ describe('createDeviceTunnelExecutor', () => {
     expect(t.calls).toEqual([{ method: 'exec', params: ['echo one; echo two'] }]);
   });
 
+  test('the row carries the machine\'s own name and this agent\'s grant state', () => {
+    const named = staticTransport({
+      connected: true,
+      registered: true,
+      toolchain: null,
+      devices: [
+        { id: 'dev-2', name: 'spare box', os: 'linux', hostname: 'spare', connected: false },
+        { id: 'dev-1', name: 'ashish@studio', os: 'darwin', hostname: 'studio', connected: true },
+      ],
+      workspaceGranted: true,
+    }, async () => undefined);
+
+    // The CONNECTED machine names the row, not whichever was registered first.
+    expect(createDeviceTunnelExecutor(named).getStatus?.()).toEqual({
+      configured: true, available: true, active: true, status: 'active',
+      label: 'ashish@studio', granted: true,
+    });
+
+    // Offline but registered: still named, so the model can ask for it by name,
+    // and still ungranted, so it does not predict a prompt-free call.
+    const offline = staticTransport({
+      connected: false,
+      registered: true,
+      toolchain: null,
+      devices: [{ id: 'dev-1', name: 'ashish@studio', os: null, hostname: null, connected: false }],
+      workspaceGranted: false,
+    }, async () => undefined);
+    expect(createDeviceTunnelExecutor(offline).getStatus?.()).toMatchObject({
+      status: 'disconnected', label: 'ashish@studio', granted: false,
+    });
+
+    // A hub that says nothing about names claims nothing: no label, no grant.
+    const bare = staticTransport({ connected: true, registered: true, toolchain: null }, async () => undefined);
+    expect(createDeviceTunnelExecutor(bare).getStatus?.()).toEqual({
+      configured: true, available: true, active: true, status: 'active',
+    });
+  });
+
   test('file helpers use structured daemon RPCs instead of shell interpolation', async () => {
     const t = transport((method) => {
       if (method === 'readFile') return 'contents';

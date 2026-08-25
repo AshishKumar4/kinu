@@ -81,7 +81,8 @@ import { TurnContextBudget } from '../context-budget';
 import { isMcpToolKey } from './mcp-naming';
 import type { CraftedToolExecute, CraftedToolExecuteFn } from './crafted-executor';
 import { filterByEffectiveScore } from '../craft/ema';
-import { craftInvocationError } from '../craft/in-episode';
+import { attributeCraftedFailure } from '../craft/attribution';
+import { craftedToolDescription } from './sandbox-contract';
 import { DEFAULT_CONFIG } from '../config';
 import { formatExecResult, isFailingResultText, refusalText } from '../execution/exec-result';
 import { TurnEscalationLedger } from '../execution/escalation';
@@ -288,20 +289,19 @@ function buildCraftedToolSetFromExecute(
     if (!t.code || t.code.startsWith('//')) continue;
     if (relevantNames && !relevantNames.has(t.name)) continue;
     if (!scorePassing.has(t.name)) continue;
-    const description = t.description || `Crafted tool: ${t.name}`;
+    const description = craftedToolDescription(t.name, t.description);
     try {
       const execute = factory({ name: t.name, description, code: t.code });
       out[t.name] = {
         description,
         // Stamped with the tool's identity so a failure is attributable to the
-        // artifact rather than to the code around it (craft/in-episode.ts).
-        execute: async (arg: JsonValue) => {
-          try {
-            return await execute(arg);
-          } catch (err) {
-            throw craftInvocationError(t.name, err instanceof Error ? err : String(err));
-          }
-        },
+        // artifact rather than to the code around it (craft/attribution.ts).
+        // THIS is the runtime attribution point for every crafted tool on every
+        // backend — both the native and the sandbox surfaces resolve through
+        // here — so a substrate must NOT wrap its own compile as well. Doing so
+        // double-stamps, and since blame matches on the marker, one failure then
+        // reads as several.
+        execute: attributeCraftedFailure(t.name, execute),
       };
     } catch (err) {
       diagnostics.failure(

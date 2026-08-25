@@ -72,6 +72,31 @@ export const BACKGROUND_POLICY = {
   'one-shot': { detachAfterMs: 300_000, settleGraceMs: 120_000, wakesAfterTurn: false },
 } as const satisfies Record<InvocationSurface, BackgroundPolicy>;
 
+/**
+ * The policy for ONE invocation, from its two independent facts.
+ *
+ * The SURFACE owns the foreground half — who watches the stream decides what
+ * detaching a slow call costs, so it picks the row's `detachAfterMs` and
+ * `settleGraceMs`. SESSION DURABILITY owns the wake half — whether a wake can
+ * arrive after this turn is the only thing {@link BackgroundPolicy.wakesAfterTurn}
+ * has ever meant, and a Durable Object answers YES even on its unwatched turns:
+ * it holds itself open and its alarms deliver wakes with nobody connected. A CLI
+ * one-shot process answers NO — the process exits after the answer.
+ *
+ * Keying both halves off the surface string alone is what gave cloud
+ * programmatic turns `wakesAfterTurn: false` on the very turn that proved a
+ * wake had arrived: a swarm spawned during a wake turn ran inline to completion,
+ * with eviction re-running the whole conversation instead of re-entering the
+ * durable job row.
+ */
+export function invocationBackgroundPolicy(
+  surface: InvocationSurface,
+  wakesAfterTurn: boolean,
+): BackgroundPolicy {
+  const base = BACKGROUND_POLICY[surface];
+  return base.wakesAfterTurn === wakesAfterTurn ? base : { ...base, wakesAfterTurn };
+}
+
 /** Returned to the model when a tool call is moved to the background. */
 export interface BackgroundHandle {
   readonly background: true;

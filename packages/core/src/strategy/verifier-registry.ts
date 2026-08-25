@@ -38,11 +38,15 @@
  * "Comparability", "The floor" and "Refusals".
  */
 import * as v from 'valibot';
-import { SOLUTION_FILE, execRatioImplementation, runRatioMeasurement } from './exec-ratio';
+import {
+  SOLUTION_FILE, REFERENCE_SOLVE_DECLARATION,
+  execRatioImplementation, preflightRatioHarness, runRatioMeasurement,
+} from './exec-ratio';
 import { KinuError, refusalOf } from '../obs/error';
 import {
   VERIFIER_KINDS,
-  type Measurement, type Verifier, type VerifierKind, type VerifierSpec,
+  type Measurement, type MeasurementContext, type Verifier, type VerifierKind,
+  type VerifierSpec,
 } from './objective';
 import { renderIssues, type JsonValue } from '../utils/json';
 import type { SwarmRefusal } from './swarm';
@@ -72,7 +76,16 @@ export { VERIFIER_KINDS, type VerifierKind };
  */
 const ExecRatioSpecSchema = v.strictObject({
   params: v.record(v.string(), v.pipe(v.number(), v.finite())),
-  reference: v.pipe(v.string(), v.minLength(1)),
+  // The declaration the harness converts. Checked HERE, with the other field
+  // complaints, because it used to be enforced only at measurement time — so a
+  // caller iterating on its spec passed validation, started a run, and learned
+  // about this requirement from a faulted baseline one round trip later. A rule
+  // the schema can state is a rule the schema should state.
+  reference: v.pipe(
+    v.string(), v.minLength(1),
+    v.includes(REFERENCE_SOLVE_DECLARATION,
+      'must declare `export function solve(input, oracle)` — the harness calls it by that name'),
+  ),
   body: v.pipe(v.string(), v.minLength(1)),
   targetOps: v.pipe(v.number(), v.finite()),
   lowerBoundOps: v.pipe(v.number(), v.finite()),
@@ -115,6 +128,17 @@ interface VerifierKindEntry {
    *  registry entry is built at module load — in a barrel the browser bundle
    *  imports. Resolving it here is what keeps the hash off the import path. */
   readonly implementation: () => string;
+  /**
+   * Can this instrument run in the given workspace AT ALL, independent of any
+   * `spec`? `null` when it can, otherwise why not, in the executor's own words.
+   *
+   * Separate from `bind` because the two answer different questions and a caller
+   * can only fix one of them. A `spec` complaint is worth reporting because
+   * correcting it leads somewhere; an instrument that cannot run in this
+   * workspace makes every `spec` irrelevant, and reporting the `spec` first is
+   * what sent a model iterating on its fields before it hit the wall.
+   */
+  readonly preflight: (ctx: MeasurementContext) => Promise<string | null>;
   /** The instrument bound to this `spec`, or the fields this kind rejected. */
   readonly bind: (spec: JsonValue) => { readonly verify: Verifier } | { readonly issues: string };
 }
@@ -123,6 +147,7 @@ const EXEC_RATIO: VerifierKindEntry = {
   artifact: SOLUTION_FILE,
   baselineKey: 'refOps',
   implementation: execRatioImplementation,
+  preflight: preflightRatioHarness,
   bind: (spec) => {
     const parsed = v.safeParse(ExecRatioSpecSchema, spec);
     // Named fields, not a shape complaint: the caller has to know WHICH one.
@@ -183,6 +208,44 @@ export function unregisteredKindRefusal(): string {
 }
 
 /**
+ * Resolve `kind` alone — membership, without touching `spec`.
+ *
+ * Split out because the accept path needs the kind BEFORE it validates the spec:
+ * knowing which instrument was named is what lets it ask whether that instrument
+ * can run here at all. `null` when the name is nobody's; the refusal is built by
+ * {@link unregisteredKindRefusalFor} so the message has one spelling.
+ */
+export function registeredVerifierKind(kind: string): VerifierKind | null {
+  return VERIFIER_KINDS.find((known) => known === kind) ?? null;
+}
+
+/** The refusal for a kind nobody registered, as a value — never a throw. */
+export function unregisteredKindRefusalFor(kind: string): SwarmRefusal {
+  return {
+    reason: 'bad_input',
+    error: refusalOf(new KinuError(
+      'bad_input',
+      `no verifier kind "${kind}" is registered. ${unregisteredKindRefusal()}`,
+    )).error,
+  };
+}
+
+/**
+ * Ask a registered instrument whether it can run in this workspace. `null` when it
+ * can, otherwise why not.
+ *
+ * ONE call, before a run is accepted. What it replaces: a model discovering the
+ * answer from faulted baselines, one throw per turn-step, having first been sent
+ * round the `spec` schema — measured at five of ten steps on a production turn,
+ * which is what cut that turn short.
+ */
+export async function preflightVerifier(
+  kind: VerifierKind, ctx: MeasurementContext,
+): Promise<string | null> {
+  return ENTRIES[kind].preflight(ctx);
+}
+
+/**
  * Resolve a `VerifierSpec` to the instrument it names, or refuse.
  *
  * This function IS *The closed verifier registry*'s guard: a name nobody registered
@@ -191,16 +254,8 @@ export function unregisteredKindRefusal(): string {
  * correct the call.
  */
 export function resolveVerifier(source: VerifierSpec): ResolvedVerifier | SwarmRefusal {
-  const kind = VERIFIER_KINDS.find((registered) => registered === source.kind);
-  if (!kind) {
-    return {
-      reason: 'bad_input',
-      error: refusalOf(new KinuError(
-        'bad_input',
-        `no verifier kind "${source.kind}" is registered. ${unregisteredKindRefusal()}`,
-      )).error,
-    };
-  }
+  const kind = registeredVerifierKind(source.kind);
+  if (kind === null) return unregisteredKindRefusalFor(source.kind);
   const entry = ENTRIES[kind];
   const bound = entry.bind(source.spec);
   if ('issues' in bound) {

@@ -2,24 +2,32 @@
 //
 // The defect this replaces was not a wrong number, it was a number with an
 // undeclared scope: the panel showed the orchestrator's own turns and read as
-// the whole workspace. So most of what is asserted here is about the SHAPE OF
+// the whole workspace. So much of what is asserted here is about the SHAPE OF
 // THE ADMISSION — that a silent producer is visible as unmeasured rather than
-// free, that an unpriced call keeps the dollar figure a floor, and that a
-// truncated window says so.
+// free, and that an unpriced call keeps the dollar figure a floor.
+//
+// The second defect was a CEILING on the answer: the producer totals were folded
+// over a bounded recent-rows read, so a workspace whose log outgrew the window
+// had its total silently replaced by a floor. `a total is not bounded by any
+// window' below is that defect's regression test and it is the point of the
+// suite: it seeds more rows than any window this repo ever used.
 //
 // The production schema, via `createTestWorkspace`: `head_journal` is one of the
 // three stores this reads, and a harness that created fewer tables than a real
 // workspace would be testing a shape no workspace has.
 import { describe, expect, test } from 'bun:test';
+import * as v from 'valibot';
 import { RunEventRecorder } from '../src/events/recorder';
 import { WORKSPACE_RUN_ID } from '../src/events/model-call';
 import { HeadJournal } from '../src/heads/journal';
 import { workspaceSpend } from '../src/read-models/workspace-spend';
 import { MissionGovernor } from '../src/mission-budget';
-import { usageTotal, type Usage } from '../src/usage';
+import { usageTotal, USAGE_FIELDS, UsageSchema, type Usage } from '../src/usage';
 import { createTestWorkspace } from './helpers';
 
-const WINDOW = 50;
+/** Big enough for the run-list read below, and deliberately NOT a bound on any
+ *  spend figure — nothing here passes a window to `workspaceSpend` any more. */
+const RUN_LIST_LIMIT = 50;
 
 function rig() {
   const ws = createTestWorkspace();
@@ -37,7 +45,7 @@ function step(events: RunEventRecorder, usage: Usage, usd?: number): void {
 describe('workspaceSpend', () => {
   test('an empty workspace has no producers and no coverage to report', () => {
     const { ws, events } = rig();
-    const spend = workspaceSpend({ events, sql: ws.sql }, { windowLimit: WINDOW });
+    const spend = workspaceSpend({ events, sql: ws.sql });
 
     expect(spend.producers).toEqual([]);
     expect(spend.total.usage).toEqual({});
@@ -45,7 +53,7 @@ describe('workspaceSpend', () => {
     // Null, not 0: a workspace that has made no calls has no measured SHARE.
     // Rendering that as 0% would claim every call went unreported.
     expect(spend.coverage.reported).toBeNull();
-    expect(spend.complete).toBe(true);
+    expect(spend.coverage.calls).toBe(0);
   });
 
   test('the turn loop lands as `agent`, and judges as themselves', () => {
@@ -56,7 +64,7 @@ describe('workspaceSpend', () => {
       type: 'model_call', source: 'judge', usage: { input: 400, output: 20 },
     });
 
-    const spend = workspaceSpend({ events, sql: ws.sql }, { windowLimit: WINDOW });
+    const spend = workspaceSpend({ events, sql: ws.sql });
     const bySource = Object.fromEntries(spend.producers.map((p) => [p.source, p]));
 
     expect(spend.producers.map((p) => p.source)).toEqual(['agent', 'judge']);
@@ -77,7 +85,7 @@ describe('workspaceSpend', () => {
       events.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'platform' });
     }
 
-    const spend = workspaceSpend({ events, sql: ws.sql }, { windowLimit: WINDOW });
+    const spend = workspaceSpend({ events, sql: ws.sql });
     const platform = spend.producers.find((p) => p.source === 'platform');
 
     expect(platform).toMatchObject({ calls: 3, callsWithoutUsage: 3 });
@@ -97,7 +105,7 @@ describe('workspaceSpend', () => {
       type: 'model_call', source: 'fast', usage: { input: 0, output: 0 },
     });
 
-    const spend = workspaceSpend({ events, sql: ws.sql }, { windowLimit: WINDOW });
+    const spend = workspaceSpend({ events, sql: ws.sql });
 
     expect(spend.producers[0]).toMatchObject({ calls: 1, callsWithoutUsage: 0 });
     expect(spend.producers[0]?.usage).toEqual({ input: 0, output: 0 });
@@ -114,7 +122,7 @@ describe('workspaceSpend', () => {
       type: 'model_call', source: 'judge', usage: { input: 5000, output: 400 },
     });
 
-    const spend = workspaceSpend({ events, sql: ws.sql }, { windowLimit: WINDOW });
+    const spend = workspaceSpend({ events, sql: ws.sql });
 
     expect(spend.total.usd).toBeCloseTo(0.01, 10);
     expect(spend.total.unpricedCalls).toBe(1);
@@ -130,7 +138,7 @@ describe('workspaceSpend', () => {
     });
     events.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'fast' });
 
-    const spend = workspaceSpend({ events, sql: ws.sql }, { windowLimit: WINDOW });
+    const spend = workspaceSpend({ events, sql: ws.sql });
 
     expect(spend.coverage.partial).toEqual(['fast']);
     expect(spend.coverage.silent).toEqual([]);
@@ -161,7 +169,7 @@ describe('workspaceSpend', () => {
       childHeadIds: [], toolCalls: [],
     });
 
-    const spend = workspaceSpend({ events, sql: ws.sql }, { windowLimit: WINDOW });
+    const spend = workspaceSpend({ events, sql: ws.sql });
     const head = spend.producers.find((p) => p.source === 'head');
 
     expect(head).toMatchObject({ calls: 2, callsWithoutUsage: 1 });
@@ -171,34 +179,98 @@ describe('workspaceSpend', () => {
     expect(spend.coverage.partial).toEqual(['head']);
   });
 
-  test('a full window is reported as partial, and the extra row is not counted', () => {
+  test('a total is not bounded by any window, however long the log gets', () => {
     const { ws, events } = rig();
-    for (let i = 0; i < 6; i++) step(events, { input: 10, output: 1 });
+    // WHAT THIS DEFENDS, measured rather than reasoned about. On a synthetic log
+    // of 8,000 turn steps and 2,000 judge calls, the shipped fold at the CLI's
+    // own SPEND_WINDOW of 2000 returned 2,001 of the 8,000 agent steps and
+    // printed the result as the workspace total: a 4x under-count on the row the
+    // owner reads first. Driven end to end against a real local workspace, a
+    // 2,600-step log reported 4,080,000 tokens and $4.20 where the truth was
+    // 5,304,000 and $5.46 — 20.8% of the tokens and 23% of the dollars behind a
+    // one-line caveat. The aggregate that replaced it costs 62 ms against 55 ms
+    // for those two windowed reads, so completeness was never the expensive
+    // option; it was only the un-asked-for one.
+    //
+    // 450 steps here: past `readRecentByType`'s 200-row default, past the cloud
+    // eval arm's 400 and the deployed panel's ACTIVITY_STEP_WINDOW. Every one of
+    // those numbers used to turn this total into a floor.
+    for (let i = 0; i < 450; i++) step(events, { input: 10, output: 1 }, 0.001);
+    for (let i = 0; i < 300; i++) {
+      events.emit(WORKSPACE_RUN_ID, {
+        type: 'model_call', source: 'judge', usage: { input: 20, output: 2 },
+      });
+    }
 
-    const full = workspaceSpend({ events, sql: ws.sql }, { windowLimit: 4 });
-    // 4 counted, not 5: the probe row exists only to prove more data follows.
-    expect(full.producers[0]?.calls).toBe(4);
-    expect(full.total.usage).toEqual({ input: 40, output: 4 });
-    expect(full.complete).toBe(false);
+    const spend = workspaceSpend({ events, sql: ws.sql });
+    const agent = spend.producers.find((p) => p.source === 'agent');
+    const judge = spend.producers.find((p) => p.source === 'judge');
 
-    // Exactly-at-the-bound is the case a row count cannot distinguish: 6 rows
-    // read with a window of 6 asks for 7, gets 6, and is therefore complete.
-    expect(workspaceSpend({ events, sql: ws.sql }, { windowLimit: 6 }).complete).toBe(true);
+    // Every row, not the newest window of them. Under the windowed fold this
+    // read 200 agent calls and 200 judge calls at the default, or 50 and 50 at
+    // the bound this suite used to pass around.
+    //
+    // The assertions are on the AGENT row as much as the total: the failure was
+    // per-producer, and a total that happened to be right while one row was
+    // short would still be the defect.
+    expect(agent).toMatchObject({ calls: 450, unpricedCalls: 0 });
+    expect(agent?.usage).toEqual({ input: 4_500, output: 450 });
+    expect(agent?.usd).toBeCloseTo(0.45, 10);
+    expect(judge).toMatchObject({ calls: 300, unpricedCalls: 300 });
+    expect(judge?.usage).toEqual({ input: 6_000, output: 600 });
+    expect(spend.total.usage).toEqual({ input: 10_500, output: 1_050 });
+    expect(spend.coverage).toMatchObject({ calls: 750, measured: 750, reported: 1 });
   });
 
-  test('the two row kinds get independent windows', () => {
+  test('one busy producer cannot crowd another out of the total', () => {
     const { ws, events } = rig();
-    // A busy turn loop must not push a rare judge call out of the total.
-    for (let i = 0; i < 10; i++) step(events, { input: 10, output: 1 });
+    // The window's worst failure was not the size of the under-count, it was
+    // which producer disappeared: a rare judge call behind a busy turn loop.
+    for (let i = 0; i < 400; i++) step(events, { input: 10, output: 1 });
     events.emit(WORKSPACE_RUN_ID, {
       type: 'model_call', source: 'judge', usage: { input: 700, output: 70 },
     });
 
-    const spend = workspaceSpend({ events, sql: ws.sql }, { windowLimit: 3 });
+    const spend = workspaceSpend({ events, sql: ws.sql });
 
-    expect(spend.producers.find((p) => p.source === 'agent')?.calls).toBe(3);
-    expect(spend.producers.find((p) => p.source === 'judge')?.calls).toBe(1);
-    expect(spend.complete).toBe(false);
+    expect(spend.producers.find((p) => p.source === 'agent')?.calls).toBe(400);
+    expect(spend.producers.find((p) => p.source === 'judge')?.usage)
+      .toEqual({ input: 700, output: 70 });
+  });
+
+  test('the stored payload really carries the fields the aggregate reads', () => {
+    const { ws, events } = rig();
+    const every: Required<Usage> = {
+      input: 11, output: 7, cacheRead: 5, cacheWrite: 3, cacheWrite1h: 2, reasoning: 1,
+      neurons: 0.5,
+    };
+    step(events, every, 0.02);
+
+    // The aggregate reads the payload with `json_extract`, which cannot be
+    // typechecked against the writer. So the paths are pinned against a row the
+    // real writer wrote, and pinned by PARSING it rather than asserting a shape
+    // onto it: `usage` must be a flat object under the canonical field names,
+    // with `usd` as its sibling. `UsageSchema` is the same declaration the JSON
+    // paths mirror, and valibot returns only its declared keys — so the key set
+    // below is proof that each canonical name was literally at `$.usage.<name>`.
+    // Move either and this fails here rather than as a silently absent count on
+    // the owner's panel.
+    const [row] = ws.sql<{ payload: string }>`
+      SELECT payload FROM run_events WHERE type = 'step_finish'`;
+    const payload = v.parse(
+      v.object({ usage: UsageSchema, usd: v.number() }),
+      JSON.parse(row!.payload),
+    );
+    expect(Object.keys(payload.usage).sort()).toEqual([...USAGE_FIELDS].sort());
+    expect(payload.usd).toBeCloseTo(0.02, 10);
+
+    // …and every one of those fields survives the sum. A column the SQL forgot
+    // would read as a field nobody reported, which is the absence this whole
+    // read model exists to keep honest.
+    const spend = workspaceSpend({ events, sql: ws.sql });
+    expect(spend.total.usage).toEqual(every);
+    expect(USAGE_FIELDS.filter((f) => spend.total.usage[f] === undefined)).toEqual([]);
+    expect(spend.total.usd).toBeCloseTo(0.02, 10);
   });
 
   test('producers are ordered by measured tokens, unmeasured ones last', () => {
@@ -209,7 +281,7 @@ describe('workspaceSpend', () => {
     });
     step(events, { input: 9000, output: 900 });
 
-    const spend = workspaceSpend({ events, sql: ws.sql }, { windowLimit: WINDOW });
+    const spend = workspaceSpend({ events, sql: ws.sql });
 
     expect(spend.producers.map((p) => p.source)).toEqual(['agent', 'fast', 'platform']);
   });
@@ -221,12 +293,12 @@ describe('workspaceSpend', () => {
     });
     step(events, { input: 9000, output: 900 });
 
-    expect(workspaceSpend({ events, sql: ws.sql }, { windowLimit: WINDOW }).total.usage)
+    expect(workspaceSpend({ events, sql: ws.sql }).total.usage)
       .toEqual({ input: 9800, output: 940 });
     // …and the owner's run history does not grow a run the agent never had. The
     // real run beside it is what makes this decidable: an empty list would read
     // the same whether the exclusion held or the query failed.
-    expect(events.listRunsBefore(null, WINDOW).map((r) => r.runId)).toEqual(['run-1']);
+    expect(events.listRunsBefore(null, RUN_LIST_LIMIT).map((r) => r.runId)).toEqual(['run-1']);
   });
 });
 
@@ -241,7 +313,7 @@ describe('workspaceSpend — the breakdown', () => {
       type: 'model_call', source: 'judge', usage: { input: 30, output: 10 },
     });
 
-    const spend = workspaceSpend({ events, sql: ws.sql }, { windowLimit: WINDOW });
+    const spend = workspaceSpend({ events, sql: ws.sql });
 
     expect(usageTotal(spend.total.usage)).toBe(1000);
     expect(spend.offTurnShare).toBeCloseTo(0.2, 10);
@@ -251,7 +323,7 @@ describe('workspaceSpend — the breakdown', () => {
     const { ws, events } = rig();
     step(events, { input: 700, output: 100 });
 
-    expect(workspaceSpend({ events, sql: ws.sql }, { windowLimit: WINDOW }).offTurnShare).toBe(0);
+    expect(workspaceSpend({ events, sql: ws.sql }).offTurnShare).toBe(0);
   });
 
   test('nothing measured has NO share — absent, never 0%', () => {
@@ -260,7 +332,7 @@ describe('workspaceSpend — the breakdown', () => {
 
     // The producer is counted, so this is a workspace that spent something and
     // measured none of it: 0% off-turn would read as "all of it was the agent".
-    const spend = workspaceSpend({ events, sql: ws.sql }, { windowLimit: WINDOW });
+    const spend = workspaceSpend({ events, sql: ws.sql });
     expect(spend.coverage.calls).toBe(1);
     expect(spend.offTurnShare).toBeNull();
   });
@@ -274,7 +346,7 @@ describe('workspaceSpend — the breakdown', () => {
     governor.debit(4_000, { labels: ['sweep'], calls: 2 });
     governor.debit(100, { labels: ['checkout-fixes'], calls: 1 });
 
-    const spend = workspaceSpend({ events, sql: ws.sql }, { windowLimit: WINDOW });
+    const spend = workspaceSpend({ events, sql: ws.sql });
 
     // The parent carries the child's debit as well as its own — the ledger rolls
     // a debit up the whole chain, which is exactly why it is the one figure a
@@ -286,8 +358,9 @@ describe('workspaceSpend — the breakdown', () => {
       ]);
     expect(spend.missions[1]!.remaining.tokens).toBe(1_000);
     expect(spend.missions[1]!.exhausted).toBe(false);
-    // The two axes are NOT the same sum: the mission rows are cumulative over
-    // the label's life, the producer rows are the window.
+    // The two axes are NOT the same sum, though both now cover the whole life of
+    // the workspace: a call sits in exactly one producer row and in every
+    // mission label above it, so adding them double-counts.
     expect(usageTotal(spend.total.usage)).toBe(800);
   });
 
@@ -297,6 +370,6 @@ describe('workspaceSpend — the breakdown', () => {
 
     // No governor was ever built here, so `mission_budget` does not exist. An
     // unbudgeted workspace is the common case and must not read as broken.
-    expect(workspaceSpend({ events, sql: ws.sql }, { windowLimit: WINDOW }).missions).toEqual([]);
+    expect(workspaceSpend({ events, sql: ws.sql }).missions).toEqual([]);
   });
 });

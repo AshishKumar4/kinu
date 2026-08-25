@@ -14,10 +14,11 @@
  * resume overlay, an offline laptop, a preview-capable executor, the empty
  * tool surface, and the delegation rungs one at a time.
  *
- * `fixtures/prompt-golden.json` holds what these rendered BEFORE the conversion,
- * generated from the pre-change builder. Regenerate it only when a prompt change
- * is the point (`bun run scripts/prompt-golden.ts`), never to make a red test
- * green.
+ * `fixtures/prompt-golden.json` holds the last deliberate rendering of these
+ * surfaces. Regenerate it only when a prompt change is the point
+ * (`bun run scripts/prompt-golden.ts`), never to make a red test green. It was
+ * re-cut on 2026-08-25 by a measured slimming pass; the reasoning and the
+ * before/after byte totals are recorded in `unit-prompt-sections.test.ts`.
  */
 
 import type { SystemPromptOptions } from '../../src/prompt';

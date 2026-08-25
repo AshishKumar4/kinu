@@ -34,7 +34,6 @@ import {
   DELEGATION_FRAME,
   DELEGATION_INHERITANCE,
   DELEGATION_RUNGS,
-  SWARM_PRESET_DOCTRINE,
   type AgentsToolAction,
 } from './registry';
 import { SwarmConfigSchema, SwarmObjectiveSchema } from './swarm-input';
@@ -42,7 +41,7 @@ import { runSwarm, type SwarmRunDeps } from '../strategy/swarm-run';
 import type { NodeLoopHost } from '../strategy/node-agent';
 import { readStartedSwarmProfile } from '../strategy/swarm-resume';
 import {
-  NAMED_SWARM_PRESETS, SWARM_PRESETS,
+  NAMED_SWARM_PRESETS, SWARM_PRESETS, SWARM_PRESET_DOCTRINE,
   resolveSwarm, swarmValidity,
   type NamedSwarmPreset, type SwarmConfig, type SwarmInput, type SwarmPreset,
 } from '../strategy/swarm';
@@ -53,6 +52,7 @@ import {
   type ProfileAuthorityInputs, type ProfileProvenance,
   type ResolvedTurnProfile, type RoleId, type TierId,
 } from '../profiles';
+import { VERIFIER_KIND_DOC, VERIFIER_KINDS } from '../strategy/objective';
 import type { Objective } from '../strategy/objective';
 import { readResumeRedrive, readSpawnStarted } from '../jobs/threshold';
 import {
@@ -502,8 +502,9 @@ export interface AgentsToolInput {
    *  mission; naming it lets a run keep one budget across several calls. */
   budget_label?: string;
   preset?: SwarmPreset;
-  /** What is measured, in what unit, which direction is better. Required for
-   *  `optimise`; refused on `ideate`, which has no value signal by design. */
+  /** What is measured, in what unit, which direction is better. OPTIONAL on every
+   *  preset — omitted, a preset takes its judged sweep; refused on `ideate`, which
+   *  has no value signal by design. */
   objective?: Objective;
   /** The coverage key an archive bins elites into. */
   key?: string;
@@ -1334,6 +1335,25 @@ function roleSummaryText(deps: AgentsToolDeps): string {
   return summaries ? ` Available roles: ${summaries}.` : '';
 }
 
+/**
+ * The registered instruments, each with what it measures and every key its `spec`
+ * needs — rendered from `VERIFIER_KIND_DOC` so the schema cannot advertise a shape
+ * `swarmValidity` would refuse, and cannot omit a field the caller then discovers one
+ * round trip at a time.
+ *
+ * Printing the field list HERE is the cheaper half of the same fix the refusals carry:
+ * a field description is read at the moment the field is filled, so a caller that sees
+ * the whole spec while typing it never reaches the refusal at all.
+ */
+function verifierKindSummary(): string {
+  return VERIFIER_KINDS
+    .map((kind) => {
+      const doc = VERIFIER_KIND_DOC[kind];
+      return `${kind} — ${doc.summary}; its spec needs {${doc.specFields.join(', ')}}`;
+    })
+    .join('. ');
+}
+
 function swarmProperties(deps: AgentsToolDeps): SwarmSchemaProperties {
   if (!deps.fork) return {};
   return {
@@ -1352,7 +1372,9 @@ function swarmProperties(deps: AgentsToolDeps): SwarmSchemaProperties {
     },
     objective: {
       type: 'object',
-      description: 'For action=swarm: what is measured. {kind:"scalar", metric, unit, direction:"minimise"|"maximise", scale:"linear"|"log", target, verify:{kind, spec}} and an optional floor:{value, kind:"certificate", proof, best_known_honest}. verify names a REGISTERED instrument and hands it its whole spec — a metric nothing can execute is not an objective, and a script path invented here is refused rather than run. kind:"witness" is a checkable certificate and needs a scalar `proxy` to be searchable. kind:"instanced" and kind:"vector" declare a FRONT, and this runner measures one number per candidate, so both are refused today — reduce what you want to one scalar. Field names are snake_case, like every field on this tool.',
+      description: 'For action=swarm: OPTIONAL, and the upgrade from a judged sweep to a MEASURED search — omit it and the preset runs its own judged sweep, which is already a complete call. Supply it as {kind:"scalar", metric, unit, direction:"minimise"|"maximise", scale:"linear"|"log", target, verify:{kind, spec}} with an optional floor:{value, kind:"certificate", proof, best_known_honest}. verify names a REGISTERED instrument and hands it its WHOLE spec in ONE call — the fields are checked together, so sending them one at a time costs a round trip each. '
+        + `Registered: ${verifierKindSummary()}. `
+        + 'A metric nothing can execute is not an objective, and a script path invented here is refused rather than run — if the thing you want cannot be measured by running code, leave this out. kind:"witness" is a checkable certificate and needs a scalar `proxy` to be searchable. kind:"instanced" and kind:"vector" declare a FRONT, and this runner measures one number per candidate, so both are refused today — reduce what you want to one scalar. Field names are snake_case, like every field on this tool.',
     },
     key: { type: 'string', description: 'For action=swarm with advance:"archive": the coverage descriptor elites are binned into, required there and refused under every other advance. It must name a quantity the objective\'s own verifier REPORTS beside its value, because the cell a candidate lands in is witnessed by the measurement rather than claimed by the candidate — a key naming nothing that instrument reports is refused before any candidate is expanded, and a key that can only say "distinct idea" means the task wants preset:"ideate".' },
     config: { type: 'object', description: 'For action=swarm with preset:"custom" only: the axes — unit, context, expand, score, advance, carry — as the OVERRIDE on `from`\'s shape, or all six when there is no `from`. Prohibited on a named preset, which is a tested path and cannot be refused.' },
@@ -1667,7 +1689,7 @@ export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
               // The line that says what this rung IS, on the field a model reads
               // FIRST. "Spawn several and pick the best" describes plenty of things;
               // the difference that matters is who decides, so it says so here.
-              'swarm = run a configured search over ephemeral nodes of yourself, whose candidates are measured by your own verifier instead of judged — it takes a preset and an objective.',
+              'swarm = run a configured search over ephemeral nodes of yourself — `preset` and `task` are the whole call, and naming an `objective` upgrades its judged sweep to a search measured by your own verifier.',
             ] : []),
             ...(team || peers ? [
               'hire = create a persistent named helper. ask = hand an agent work and get its answer back. send = fire-and-forget message. list = the unified roster.'

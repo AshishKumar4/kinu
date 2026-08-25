@@ -28,6 +28,8 @@ import {
   profileCatalogDigest, validateProfileCatalogEnvelope,
   type ProfileAuthority, type ProfileCatalogEnvelope, type RoleId, type TierId,
 } from './catalog';
+import type { RunEventInput } from '../events/types';
+import { diagnostics, toKinuError } from '../obs/index';
 
 /** Effort carried when a tier assignment omits one: the stage the rest of core
  *  turns user-visible work at. */
@@ -78,12 +80,63 @@ export interface ProfileAuthorityInputs {
   provider: ProviderCatalogSnapshot;
 }
 
+/** Where a snapshot came from — the cost half of the resolution evidence. */
+export type ProviderCacheOutcome = 'hit' | 'joined' | 'miss';
+
+/** A provider snapshot together with how it was obtained. The cache outcome
+ *  travels with the snapshot because it is not a fact about the producer's
+ *  plumbing, it is part of what this resolution cost. */
+export interface ProviderSnapshotRead {
+  readonly snapshot: ProviderCatalogSnapshot;
+  readonly cache: ProviderCacheOutcome;
+}
+
+/**
+ * Load both authority inputs, and record what it took.
+ *
+ * The two loads run concurrently because they are independent and both are on
+ * the turn's critical path.
+ *
+ * THE EVIDENCE ROW IS EMITTED HERE, not by the caller. It answers "why did this
+ * turn resolve this model, and what did resolution cost" — and it existed on
+ * one backend only, because each caller decided for itself whether to write it,
+ * so the question was answerable locally and unanswerable in production.
+ * Emitting it where resolution actually happens is what makes the answer follow
+ * the work instead of following whoever remembered.
+ *
+ * `record` is optional and takes the finished row: a caller routes it to its own
+ * recorder and run id, which is the only part that is genuinely per backend. A
+ * caller that passes nothing gets no row — stated, not guessed — and a failing
+ * sink must not fail a turn, so the emit is guarded.
+ */
 export async function loadProfileAuthorityInputs(input: {
   envelope(): ProfileCatalogEnvelope | Promise<ProfileCatalogEnvelope>;
-  provider(): ProviderCatalogSnapshot | Promise<ProviderCatalogSnapshot>;
+  provider(): ProviderSnapshotRead | Promise<ProviderSnapshotRead>;
+  record?: (event: Extract<RunEventInput, { type: 'profile_resolution' }>) => void;
 }): Promise<ProfileAuthorityInputs> {
-  const [envelope, provider] = await Promise.all([input.envelope(), input.provider()]);
-  return { envelope, provider };
+  const startedAt = Date.now();
+  const [envelope, read] = await Promise.all([input.envelope(), input.provider()]);
+  const inputs: ProfileAuthorityInputs = { envelope, provider: read.snapshot };
+  if (input.record) {
+    try {
+      input.record({
+        type: 'profile_resolution',
+        durationMs: Date.now() - startedAt,
+        providerCache: read.cache,
+        providerRevision: read.snapshot.revision,
+        unavailableProviders: read.snapshot.unavailableProviders?.length ?? 0,
+        catalogVersion: envelope.version,
+        authority: envelope.authority.kind,
+      });
+    } catch (err) {
+      diagnostics.failure('profile.resolution_event_failed', toKinuError({
+        doing: 'recording a profile_resolution run event',
+        cause: err,
+        otherwise: 'io',
+      }));
+    }
+  }
+  return inputs;
 }
 
 

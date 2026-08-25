@@ -59,7 +59,7 @@ export interface EscalationSnapshot {
 /** Model-supplied text going into a durable payload is unbounded on both
  *  cardinality and length; only the length is worth bounding here, because the
  *  distinct-decision count is already capped by the turn's own step limit. */
-const MAX_REASON_CHARS = 240;
+const ESCALATION_REASON_MAX_CHARS = 240;
 
 /**
  * The turn's escalation ledger. Same ownership rule as `TurnFileLedger` and
@@ -92,7 +92,7 @@ export class TurnEscalationLedger {
   observe(input: { runtime: string; reason: string | undefined; outcome: EscalationOutcome }): void {
     // Whitespace-only counts as none: a reason that is a space is not a reason.
     const stated = input.reason?.trim();
-    const reason = stated ? stated.slice(0, MAX_REASON_CHARS) : null;
+    const reason = stated ? stated.slice(0, ESCALATION_REASON_MAX_CHARS) : null;
     const key = `${input.runtime}\u0000${input.outcome}\u0000${reason ?? ''}`;
     const existing = this.decisions.get(key);
     if (existing) {

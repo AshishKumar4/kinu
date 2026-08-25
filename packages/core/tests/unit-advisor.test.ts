@@ -393,6 +393,51 @@ describe('the missed-capability class', () => {
   });
 });
 
+// R6, advisor half. THE MEASURED COUNTERFACTUAL. On the production turn, all 12
+// native calls were `execute_tools` and 5 of them ran `agents.swarm`. Reading
+// native names alone, this prompt would have listed `agents` among 14 unused
+// capabilities — so the likeliest note told the agent to delegate, which it had
+// just done five times. A note naming a capability the agent used is worse than
+// no note, for the same reason one naming a capability it never had is.
+describe('a capability reached through codemode counts as used', () => {
+  const swarmed = (code: string): CompletedTurn => aTurn({
+    toolCalls: [{ name: 'execute_tools', args: { code }, result: 'ok' }],
+  });
+
+  test('a codemode agents.swarm is never reported unused', () => {
+    const prompt = buildAdvisorPrompt(
+      swarmed("await agents.swarm({ preset: 'ideate', branches: 3 })"),
+      ['agents', 'memory'],
+    );
+    expect(prompt).toContain('did not use: memory');
+    expect(prompt).not.toContain('did not use: agents');
+  });
+
+  test('any member of the namespace counts — the action is not the capability', () => {
+    const prompt = buildAdvisorPrompt(swarmed('await agents.list({})'), ['agents']);
+    expect(prompt).toContain('did not use: (none recorded)');
+  });
+
+  test('the control — a sandbox program reaching nothing leaves the list intact', () => {
+    const prompt = buildAdvisorPrompt(swarmed('await workspace.list(".")'), ['agents']);
+    expect(prompt).toContain('did not use: agents');
+  });
+
+  test('a mention in a comment is not a use', () => {
+    const prompt = buildAdvisorPrompt(swarmed('// agents.swarm({}) would work here'), ['agents']);
+    expect(prompt).toContain('did not use: agents');
+  });
+
+  test('a shared namespace reports both its capabilities reached, never neither', () => {
+    // `run` and `file` both reach `workspace`, and over-reporting reach cannot
+    // produce the note this exists to stop. Stated so the behaviour is a
+    // decision rather than a surprise.
+    const prompt = buildAdvisorPrompt(swarmed('await workspace.exec("ls")'), ['run', 'file']);
+    expect(prompt).toContain('did not use: (none recorded)');
+  });
+});
+
+
 describe('the user-dissatisfaction class', () => {
   const prompt = buildAdvisorPrompt(aTurn());
 

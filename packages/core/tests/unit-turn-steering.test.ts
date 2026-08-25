@@ -593,6 +593,60 @@ describe('turn-start trigger', () => {
     expect(injected(step(orch, LONG_TURN_STEPS_BEFORE_STEER, [user(fresh)]))).toHaveLength(1);
   });
 
+  // R6. THE DEFECT. A codemode delegation is one native `execute_tools` call
+  // whose name is `execute_tools`, so a meter reading the name scored the
+  // production turn that delegated five times as `converted: false`. Every
+  // delegation-conversion figure was under-reported by however much of the
+  // surface the model reached through the sandbox.
+  test('a codemode agents.swarm converts the hint — the sandbox is not a different verb', () => {
+    const orch = newTurn();
+    step(orch, 0, [user(fresh)]);
+    expect(rows(orch)[0]?.converted).toBe(false);
+    orch.turnExtension.onToolCall!({
+      toolName: 'execute_tools',
+      args: { code: "const r = await agents.swarm({ preset: 'ideate', branches: 3 });" },
+    });
+    expect(rows(orch)).toEqual([{ trigger: 'turn_start_no_delegation', step: 0, converted: true }]);
+  });
+
+  test('the unprompted arm sees it too, so the autonomous denominator is not short either', () => {
+    const orch = newTurn();
+    orch.turnExtension.onToolCall!({
+      toolName: 'execute_tools',
+      args: { code: 'await agents.swarm({ objective })' },
+    });
+    expect(orch.steering.delegationSnapshot()[0]).toMatchObject({ surface: 'unprompted', converted: true });
+  });
+
+  // The controls. Without these, the arms above would pass on a predicate that
+  // called every sandbox program a delegation.
+  test('a sandbox program that delegates nowhere does not convert the hint', () => {
+    const orch = newTurn();
+    step(orch, 0, [user(fresh)]);
+    orch.turnExtension.onToolCall!({
+      toolName: 'execute_tools',
+      args: { code: 'const files = await workspace.list("."); return files.length;' },
+    });
+    expect(rows(orch)).toEqual([{ trigger: 'turn_start_no_delegation', step: 0, converted: false }]);
+  });
+
+  test('`agents` named in a comment or a string is not a call', () => {
+    const orch = newTurn();
+    step(orch, 0, [user(fresh)]);
+    orch.turnExtension.onToolCall!({
+      toolName: 'execute_tools',
+      args: { code: '// next time try agents.swarm({})\nreturn "agents.swarm(" + 1;' },
+    });
+    expect(rows(orch)[0]?.converted).toBe(false);
+  });
+
+  test('a sandbox call with no code argument is no program, never a throw', () => {
+    const orch = newTurn();
+    step(orch, 0, [user(fresh)]);
+    orch.turnExtension.onToolCall!({ toolName: 'execute_tools', args: {} });
+    expect(rows(orch)[0]?.converted).toBe(false);
+  });
+
   test('a new turn starts with a clean hint slot', () => {
     const orch = newTurn();
     step(orch, 0, [user(fresh)]);

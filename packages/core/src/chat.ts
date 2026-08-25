@@ -170,6 +170,26 @@ export interface ChatOptions {
 export const UNBOUNDED_STEPS: StopCondition<ToolSet> = () => false;
 
 /**
+ * The step count a turn runs under when no bound is wanted — for the loops that
+ * take a NUMBER rather than a condition.
+ *
+ * `runChat` needs none of this: it hands `stopWhen` straight to `streamText`, so
+ * {@link UNBOUNDED_STEPS} alone makes it unbounded. `@cloudflare/think` does
+ * not. It composes `[stepCountIs(config.maxSteps ?? this.maxSteps), ...caller]`
+ * and the array is OR-ed, so a caller's condition can only ever ADD a way to
+ * stop — it cannot widen the cap ahead of it, and the vendor's own type doc
+ * says so ("Think always keeps its `maxSteps` stop condition as a safety
+ * bound"). Its instance default is 10, which is how the cloud backend ran
+ * capped at ten steps for the whole time the CLI ran unbounded, with both
+ * loops' comments asserting parity.
+ *
+ * So the number IS the lever, and this is it. `stepCountIs` compares with
+ * `===`, so a step count no turn can reach never fires — an unreachable bound
+ * rather than a removed one, because the vendor gives no way to remove it.
+ */
+export const UNBOUNDED_MAX_STEPS = Number.MAX_SAFE_INTEGER;
+
+/**
  * THE TWO OPENINGS A SILENT TURN'S FAILURE WAS RECORDED WITH.
  *
  * Turns that ran under the removed silence watchdog recorded their endings as

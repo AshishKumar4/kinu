@@ -34,7 +34,11 @@
 import { readExecSignal } from '../execution/signal';
 import * as v from 'valibot';
 import type { CodemodeProvider } from '../rlm';
-import { SWARM_PRESET_DOCTRINE, TOOL_REACH, type AgentsToolAction } from './registry';
+import { TOOL_REACH, type AgentsToolAction } from './registry';
+// Beside the preset table it is rendered from, not beside the other doctrine: the
+// sandbox declaration and the native schema must show the same presets, and they can
+// only be the same if both read the rows.
+import { SWARM_PRESET_DOCTRINE } from '../strategy/swarm';
 import { isJsonObject, JsonValueSchema, type JsonObject } from '../utils/json';
 import {
   agentsActionsFor,

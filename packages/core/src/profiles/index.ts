@@ -1,5 +1,5 @@
 export {
-  TIER_IDS, ROLE_ID_RE,
+  TIER_IDS, ROLE_ID_RE, DEFAULT_ROLE_ID,
   isValidRoleId, validateProfileCatalog, validateProfileCatalogEnvelope,
   profileCatalogDigest, deriveRoleLabel, effectiveRoleCatalog,
   BUILTIN_ROLE_DEFINITIONS, BUILTIN_PROFILE_CATALOG,
@@ -15,12 +15,18 @@ export {
 } from './resolve';
 export type {
   ProfileAuthorityInputs, ProviderCatalogSnapshot, TierSource,
+  ProviderCacheOutcome, ProviderSnapshotRead,
   ResolveTurnProfileInput, ResolveAgentTurnProfileInput, ResolvedTurnProfile,
 } from './resolve';
 export {
   resolveModelRoute,
   type ModelRoutePolicy, type ProfileRoutedSource, type ModelRouteResolution,
+  type FixedTierSource,
 } from './model-route';
+export {
+  buildProviderCatalogSnapshot, ProviderListingCache,
+  type ProviderListing,
+} from './provider-catalog';
 export {
   changeActiveRole, roleChangeOutcomeText,
   type RoleChangeActor, type RoleChangePolicy, type RoleChangeOutcome,

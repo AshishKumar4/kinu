@@ -4,6 +4,7 @@ export * from './types';
 export * from './registry';
 export * from './util';
 export * from './workers-ai';
+export * from './default-spec';
 export * from './models-dev';
 export * from './catalog';
 export * from './openai-compat';

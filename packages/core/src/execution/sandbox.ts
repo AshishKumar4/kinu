@@ -28,11 +28,34 @@ import { shellQuote } from '../utils/shell';
 import { vfsDirname } from '../utils/vfs-helpers';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import type { JsonValue } from '../utils/json';
-import { WORKSPACE_BACKUP_DIR } from './workspace-snapshot';
+/** The container's working directory, and the executor's default cwd. Kinu's
+ *  own constant now: the durability machinery that used to define it moved to
+ *  @kinu.run/devbox, and core must not depend on a host package. */
+export const WORKSPACE_BACKUP_DIR = '/workspace';
+
+/** Shell probe deciding whether anything listens on a container port. Any HTTP
+ *  answer counts, even 4xx/5xx; curl exit 7 is a refused connection. */
+function healthProbeCommand(port: number): string {
+  return `curl -sS -o /dev/null -m 3 -w '%{http_code}|%{exitcode}' --connect-timeout 2 `
+    + `--head http://127.0.0.1:${port}/ 2>&1 || true`;
+}
+
+/** True when the probe says nothing is listening — or says nothing at all. An
+ *  unparsable answer is not evidence of a listener, and exposing a port on that
+ *  guess hands back a URL that 502s. */
+function healthProbeSilent(output: string): boolean {
+  const [codeStr, exitStr] = output.trim().split('|');
+  if (exitStr !== undefined && parseInt(exitStr, 10) === 7) return true;
+  const code = codeStr === undefined ? Number.NaN : parseInt(codeStr, 10);
+  return !Number.isFinite(code) || code === 0;
+}
 
 interface SandboxExposeOptions {
   hostname: string;
   name?: string;
+  /** The token the preview URL is built on. Supplied, never left to the SDK:
+   *  see {@link SandboxHandle.portToken}. */
+  token?: string;
 }
 
 /**
@@ -48,6 +71,26 @@ interface SandboxExposeOptions {
  * `proxyToSandbox` (packages/cf-backend/src/preview-proxy.ts).
  */
 export interface SandboxHandle {
+  /** Resolve once this container generation's post-start restoration has
+   *  settled (processes restarted, ports re-exposed). Every operation here
+   *  awaits it first so an agent never observes a half-restored workspace. */
+  ensureReady(): Promise<void>;
+  /**
+   * Run a command and resolve with what it produced.
+   *
+   * `timeout` ABSENT means the call carries NO WORK DEADLINE, and an adapter
+   * must honour that by choosing a transport that has none. For the Cloudflare
+   * SDK that is NOT its plain `exec`, which is bounded twice over — a command
+   * deadline the container enforces, and the SDK's non-streaming request
+   * ceiling, `sandbox.exec.request_ceiling_ms` in the platform catalog — so
+   * "no deadline" is the process lane rather than a bigger number. See
+   * `adaptCloudflareSandbox` in the cf runtime.
+   *
+   * `timeout` PRESENT means a caller asked for a deadline and wants the kill.
+   * Nothing in this module ever sets one. A detach window bounds a WAIT; a lane
+   * deadline silently outranks every window larger than itself, which is how a
+   * 30s detach that worked became a 60s kill on the 300s one-shot surface.
+   */
   exec(command: string, opts?: { cwd?: string; timeout?: number }):
     Promise<{ output?: string; stdout?: string; stderr?: string; exitCode?: number }>;
   /** The SDK auto-detects binary files and returns their content base64-
@@ -59,13 +102,35 @@ export interface SandboxHandle {
   listFiles(path: string, opts?: { recursive?: boolean }):
     Promise<{ files: Array<{ name?: string; path?: string; type?: string; size?: number; isDirectory?: boolean }> }>;
   deleteFile(path: string): Promise<JsonValue | void>;
-  /** Expose a port; `hostname` is the suffix the returned preview URL is built on. */
-  exposePort(port: number, opts: { hostname: string; name?: string }):
+  /** Expose a port; `hostname` is the suffix the returned preview URL is built
+   *  on, and `token` is the durable one from {@link SandboxHandle.portToken}. */
+  exposePort(port: number, opts: { hostname: string; name?: string; token?: string }):
     Promise<{ url: string; port: number; name?: string }>;
   unexposePort(port: number): Promise<JsonValue | void>;
   /** SDK method is `getExposedPorts(hostname)`; `hostname` builds each row's `url`. */
   getExposedPorts(hostname: string):
     Promise<Array<{ url: string; port: number; name?: string; status?: string }>>;
+  /** Start a SUPERVISED background process and record its restart spec — the
+   *  only kind of background process that survives container sleep. */
+  startSupervisedProcess(command: string, opts?: { cwd?: string }):
+    Promise<{ processId: string }>;
+  stopSupervisedProcess(processId: string): Promise<{ stopped: boolean }>;
+  listSupervisedProcesses(): Promise<Array<{
+    processId: string; pid?: number; status: string; command: string; restartable: boolean;
+  }>>;
+  /**
+   * The durable token this port's preview URL is built on, minted on first ask.
+   *
+   * ASKED BEFORE THE EXPOSURE, not recorded after it. The restart path
+   * re-exposes each port with its stored token, which is the whole reason a
+   * preview URL survives a container recycle byte for byte — so the FIRST
+   * exposure has to use that same token. Recording a freshly-minted one
+   * afterwards left the caller holding a URL built on the SDK's own token and
+   * the manifest holding a different one, and the URL died on the first
+   * recycle.
+   */
+  portToken(port: number, name?: string): Promise<{ urlToken: string }>;
+  notePortRemoved(port: number): Promise<void>;
 }
 
 const NOT_CONFIGURED =
@@ -86,6 +151,12 @@ const PREVIEWS_NOT_CONFIGURED =
  * any of these once with exponential-ish backoff. (STABILITY-AUDIT §B2/§B3.)
  */
 const TRANSIENT_MARKERS = [
+  // MEASURED on a real container (scripts/sandbox-durability-probe.ts, P2): the
+  // first call after a stop/eviction can land while the RPC session is tearing
+  // down. The container is coming back; surfacing this to the agent would make
+  // an ordinary restart look like a tool failure.
+  'while the runtime connection was closing',
+  'stopped while the operation was pending',
   'network connection lost',
   'container suddenly disconnected',
   'container is starting',
@@ -221,7 +292,13 @@ export function createSandboxExecutor(
 
   const tools: ExecutorProvider['tools'] = {
     exec: {
-      description: 'Run a shell command in the sandbox container.',
+      description: 'Run a shell command in the sandbox container. '
+        + 'BUN IS THE DEFAULT toolchain here (bun 1.3.12 ships in the image): use `bun install`, '
+        + '`bun run`, `bun x` and `bun test` rather than npm, npx, yarn or pnpm unless a project '
+        + 'genuinely requires one of those. '
+        + 'A workspace restored after the container slept keeps its source and its LOCKFILES but '
+        + 'not its regenerable trees (node_modules, .venv, build output): if an import fails after '
+        + 'a restore, run one `bun install` before concluding anything is missing.',
       execute: async (...args: unknown[]): Promise<string> => {
         if (!handle) return NOT_CONFIGURED_REFUSAL;
         const command = parseInput(StringSchema, { value: args[0] });
@@ -230,10 +307,21 @@ export function createSandboxExecutor(
         }
         const signal = readExecSignal({ context: args[1] });
         try {
-          // The sandbox SDK has no kill for an in-flight exec — abort stops
-          // the wait; the container-side command runs to its own timeout.
+          // NO WORK DEADLINE — see SandboxHandle.exec. This call used to send
+          // `timeout: 60_000`, and the container echoed that number back as
+          // `Command timeout after 60000ms`, which is why the string appears
+          // nowhere in this repository. A 60s lane ceiling outranks every
+          // detach window above it, so a long command on the 300s one-shot
+          // surface was killed where it should have detached.
+          //
+          // Abort still stops the WAIT; the sandbox SDK has no kill for work
+          // already in flight, so the command keeps running in the container.
           const res = await raceAbort(
-            () => withSandboxRetry(() => touch(() => handle.exec(command, { timeout: 60_000 }))),
+            () => withSandboxRetry(() => touch(() => handle.exec(command, {
+              // /workspace is the REAL default cwd — stated in the doctrine
+              // below and passed explicitly so the container cannot outvote it.
+              cwd: '/workspace',
+            }))),
             signal,
             'sandbox exec aborted — the command may still finish inside the container',
           );
@@ -350,11 +438,10 @@ export function createSandboxExecutor(
     exposePort: {
       description:
         'Expose a TCP port from the sandbox and return the public preview URL. ' +
-        'PRE-REQUISITE: a server must already be listening on the port BEFORE you call this. ' +
-        'The call verifies the port is responsive (HTTP HEAD against localhost) and returns a ' +
-        'clear error if nothing is listening — at which point start your server first ' +
-        '(e.g. `nohup python3 -m http.server <port> --directory /workspace/<app> > /tmp/srv.log 2>&1 &` ' +
-        'for static sites, or `nohup node server.js > /tmp/srv.log 2>&1 &` for Node) and retry.',
+        'PRE-REQUISITE: a SUPERVISED server must already be listening on the port — start it ' +
+        'with sandbox.startProcess, never a bare `nohup … &` (unsupervised children die with ' +
+        'the container and do not come back). The call verifies the port responds (HTTP HEAD ' +
+        'against localhost) and names the fix if nothing listens.',
       execute: async (...args: unknown[]): Promise<string> => {
         if (!handle) return NOT_CONFIGURED_REFUSAL;
         if (!previewHostSuffix) return PREVIEWS_REFUSAL;
@@ -370,18 +457,10 @@ export function createSandboxExecutor(
         // status, even 4xx/5xx) means a server is up. Connection refused
         // means no listener.
         try {
-          const probe = await withSandboxRetry(() => touch(() => handle.exec(
-            `curl -sS -o /dev/null -m 3 -w '%{http_code}|%{exitcode}' --connect-timeout 2 ` +
-            `--head http://127.0.0.1:${p}/ 2>&1 || true`,
-          )));
+          const probe = await withSandboxRetry(() => touch(() =>
+            handle.exec(healthProbeCommand(p), { cwd: '/workspace' })));
           const out = (probe.stdout ?? probe.output ?? '').toString().trim();
-          // Parse "<code>|<exit>" where exit=7 (CURLE_COULDNT_CONNECT) means
-          // nothing is listening. Any non-zero HTTP code means a server
-          // answered — even a 404 or 503 counts.
-          const [codeStr, exitStr] = out.split('|');
-          const httpCode = parseInt(codeStr ?? '0', 10);
-          const curlExit = parseInt(exitStr ?? '0', 10);
-          if (curlExit === 7 || httpCode === 0) {
+          if (healthProbeSilent(out)) {
             // `bad_input`, and it is the honest one of three near misses. Nothing
             // was tried, and what must change is the caller's own request — start
             // the server, then ask again. `unavailable` would file a container
@@ -391,12 +470,13 @@ export function createSandboxExecutor(
             // census (read-models/tool-failures.ts).
             return refusalText(new KinuError('bad_input',
               `nothing is listening on port ${p} inside the sandbox. `
-              + `Start your server FIRST, then call sandbox.exposePort. Examples:\n`
-              + `  • Static site (HTML/CSS/JS): `
-              + `await sandbox.exec("cd /workspace/<app-dir> && nohup python3 -m http.server ${p} > /tmp/srv-${p}.log 2>&1 &")\n`
-              + `  • Node:                       `
-              + `await sandbox.exec("cd /workspace/<app-dir> && nohup node server.js > /tmp/srv-${p}.log 2>&1 &")\n`
-              + `Then wait ~1s (await new Promise(r=>setTimeout(r,1000))) and call sandbox.exposePort(${p}) again.`,
+              + `Start your server FIRST with a SUPERVISED process, then call `
+              + `sandbox.exposePort again. Examples:\n`
+              + `  • Static site: await sandbox.startProcess(`
+              + `"python3 -m http.server ${p} --directory /workspace/<app-dir>")\n`
+              + `  • Node:        await sandbox.startProcess("node server.js", {cwd:"/workspace/<app-dir>"})\n`
+              + `Supervision is what makes the process survive a container restart; `
+              + `a bare \`nohup … &\` does not and will be lost.`,
             ));
           }
         } catch (err) {
@@ -411,7 +491,11 @@ export function createSandboxExecutor(
           );
         }
         try {
-          const opts: SandboxExposeOptions = { hostname: previewHostSuffix };
+          // The durable token FIRST, so the URL this call hands back is the URL
+          // the restart path rebuilds. Minting it afterwards published one token
+          // and stored another, and the caller's link died on the first recycle.
+          const { urlToken } = await handle.portToken(p, name != null ? String(name) : undefined);
+          const opts: SandboxExposeOptions = { hostname: previewHostSuffix, token: urlToken };
           if (name != null) opts.name = String(name);
           const exposed = await withSandboxRetry(() => touch(() => handle.exposePort(p, opts)));
           return exposed.url;
@@ -430,6 +514,7 @@ export function createSandboxExecutor(
         }
         try {
           await withSandboxRetry(() => touch(() => Promise.resolve(handle.unexposePort(port))));
+          await handle.notePortRemoved(port);
           return `unexposed ${port}`;
         } catch (err) {
           return refusalText(sandboxFailure({ doing: `sandbox unexposePort ${port}`, cause: err }));
@@ -448,6 +533,71 @@ export function createSandboxExecutor(
           return JSON.stringify((ports ?? []).map(p => ({ port: p.port, status: p.status, url: p.url })));
         } catch (err) {
           return refusalText(sandboxFailure({ doing: 'sandbox listPorts', cause: err }));
+        }
+      },
+    },
+    startProcess: {
+      description:
+        'Start a SUPERVISED background process in the sandbox. Supervision records a restart ' +
+        'spec, so the process COMES BACK when the container restarts; a bare `nohup … &` does ' +
+        'not and is lost. Returns JSON {processId}. Prefer this over `exec "cmd &"` for any ' +
+        'long-running server.',
+      execute: async (...args: unknown[]): Promise<string> => {
+        if (!handle) return NOT_CONFIGURED_REFUSAL;
+        const command = parseInput(StringSchema, { value: args[0] });
+        if (command === undefined) {
+          return refusalText(new KinuError('bad_input', 'sandbox startProcess: command must be a string'));
+        }
+        const rawOpts = parseInput(
+          v.union([v.string(), v.object({ cwd: v.optional(v.string()) })]),
+          { value: args[1] },
+        );
+        const cwd = parseInput(
+          OptionalStringSchema,
+          { value: v.is(v.string(), rawOpts) ? rawOpts : rawOpts?.cwd },
+        ) ?? WORKSPACE_BACKUP_DIR;
+        try {
+          const started = await withSandboxRetry(() => touch(async () => {
+            await handle.ensureReady();
+            return handle.startSupervisedProcess(command, { cwd });
+          }));
+          return JSON.stringify({ ...started, cwd, restartable: true });
+        } catch (err) {
+          return refusalText(sandboxFailure({ doing: `sandbox startProcess \`${command}\``, cause: err }));
+        }
+      },
+    },
+    stopProcess: {
+      description: 'Stop a supervised process by id and clear its restart spec.',
+      execute: async (...args: unknown[]): Promise<string> => {
+        if (!handle) return NOT_CONFIGURED_REFUSAL;
+        const processId = parseInput(StringSchema, { value: args[0] });
+        if (processId === undefined) {
+          return refusalText(new KinuError('bad_input', 'sandbox stopProcess: processId must be a string'));
+        }
+        try {
+          const result = await withSandboxRetry(() =>
+            touch(() => handle.stopSupervisedProcess(processId)));
+          return JSON.stringify({ processId, ...result });
+        } catch (err) {
+          return refusalText(sandboxFailure({ doing: `sandbox stopProcess ${processId}`, cause: err }));
+        }
+      },
+    },
+    listProcesses: {
+      description:
+        'List sandbox processes as JSON rows {processId,pid,status,restartable,command}. ' +
+        '`restartable:true` rows come back after a container restart.',
+      execute: async (): Promise<string> => {
+        if (!handle) return NOT_CONFIGURED_REFUSAL;
+        try {
+          const rows = await withSandboxRetry(() => touch(async () => {
+            await handle.ensureReady();
+            return handle.listSupervisedProcesses();
+          }));
+          return JSON.stringify(rows);
+        } catch (err) {
+          return refusalText(sandboxFailure({ doing: 'sandbox listProcesses', cause: err }));
         }
       },
     },
@@ -475,6 +625,13 @@ export function createSandboxExecutor(
  * bad_input, unavailable, unsupported, timeout, cancelled, oom, io — so branch on
  * it rather than matching prose. \`unavailable\` means this deployment has no
  * container; retrying a different runtime is the move.
+ *
+ * /workspace is the REAL working directory: every relative path in exec,
+ * processes and file calls resolves against it. Absolute paths are welcome.
+ *
+ * Background servers MUST be started with startProcess — supervision records a
+ * restart spec so the process comes back when the container restarts. A bare
+ * nohup-and-background job dies with the container and is NOT restorable.
  */
 declare namespace sandbox {
   function exec(command: string): Promise<string>;
@@ -485,6 +642,11 @@ declare namespace sandbox {
   function deleteFile(path: string): Promise<string>;
   /** "true" or "false" — or a refusal payload, if the container could not be asked. */
   function exists(path: string): Promise<string>;
+  /** Supervised background process: returns JSON {processId,restartable:true}. */
+  function startProcess(command: string, opts?: { cwd?: string }): Promise<string>;
+  function stopProcess(processId: string): Promise<string>;
+  /** JSON rows {processId,pid,status,restartable,command}. */
+  function listProcesses(): Promise<string>;
   function exposePort(port: number, name?: string): Promise<string>;
   function unexposePort(port: number): Promise<string>;
   function listPorts(): Promise<string>;
@@ -567,24 +729,21 @@ declare namespace sandbox {
       // `|| true`, leaving only "this container cannot execute a command", and
       // exposing a port on such a container has nothing left to mean.
       try {
-        const probe = await withSandboxRetry(() => touch(() => handle.exec(
-          `curl -sS -o /dev/null -m 3 -w '%{http_code}|%{exitcode}' --connect-timeout 2 ` +
-          `--head http://127.0.0.1:${port}/ 2>&1 || true`,
-        )));
+        const probe = await withSandboxRetry(() => touch(() =>
+          handle.exec(healthProbeCommand(Number(port)), { cwd: '/workspace' })));
         const out = (probe.stdout ?? probe.output ?? '').toString().trim();
-        const [codeStr, exitStr] = out.split('|');
-        const httpCode = parseInt(codeStr ?? '0', 10);
-        const curlExit = parseInt(exitStr ?? '0', 10);
-        if (curlExit === 7 || httpCode === 0) {
+        if (healthProbeSilent(out)) {
           return {
             supported: false,
             reason:
               `nothing is listening on port ${port} inside the sandbox. ` +
-              `Start a server first (e.g. \`nohup python3 -m http.server ${port} --directory /workspace/<app> > /tmp/srv-${port}.log 2>&1 &\` for static sites, ` +
-              `or \`nohup node server.js > /tmp/srv-${port}.log 2>&1 &\` for Node), wait ~1s for it to bind, then call exposePort again.`,
+              `Start a SUPERVISED server first — sandbox.startProcess("python3 -m http.server ${port}" +
+              " --directory /workspace/<app>") or sandbox.startProcess("node server.js") — ` +
+              `then call exposePort again. Supervision survives restarts; nohup does not.`,
           };
         }
-        const sdkOpts: SandboxExposeOptions = { hostname: previewHostSuffix };
+        const { urlToken } = await handle.portToken(port, opts?.name);
+        const sdkOpts: SandboxExposeOptions = { hostname: previewHostSuffix, token: urlToken };
         if (opts?.name) sdkOpts.name = opts.name;
         const exposed = await withSandboxRetry(() => touch(() => handle.exposePort(port, sdkOpts)));
         return {

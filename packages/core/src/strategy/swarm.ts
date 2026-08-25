@@ -27,12 +27,15 @@
 
 import { KinuError, refusalOf } from '../obs/error';
 import { argumentDigest } from '../safety/argument-digest';
-import { VERIFIER_KINDS, floorMargin } from './objective';
+import { isJsonObject, type JsonValue } from '../utils/json';
+import { VERIFIER_KIND_DOC, VERIFIER_KINDS, floorMargin } from './objective';
+import { DEFAULT_CONFIG } from '../config';
 import type {
   CarrySuppression, Floor, MeasuredValue, Objective, ObjectiveDirection, PublicationState,
-  VerifierSpec,
+  VerifierKind, VerifierSpec,
 } from './objective';
 import {
+  NAMED_SWARM_PRESETS,
   type NamedSwarmPreset,
   type SwarmPreset,
 } from './swarm-presets';
@@ -486,6 +489,24 @@ export interface SwarmPresetPoint {
   readonly config: SwarmConfig;
   readonly depth: number;
   readonly branches: number;
+  /**
+   * What this preset is FOR, in one clause — the only half of its doctrine a
+   * renderer cannot derive.
+   *
+   * It sits ON THE ROW because the alternative is what this table already paid for
+   * once: doctrine written beside the table drifted from it, `prove` became
+   * selectable while being named in none of the four hand-written copies, and three
+   * rows went on being described as working after they had stopped resolving. The
+   * MECHANICAL half of every sentence — the width, the depth, the selector, where
+   * survivors go, and what naming an `objective` changes — is derived from the axes
+   * beside it by {@link SWARM_PRESET_DOCTRINE}, so a row that changes shape changes
+   * its own description in the same edit.
+   *
+   * Written WITHOUT the preset's own name, which the renderer prefixes: a row that
+   * spelled its name in prose could be renamed in the vocabulary and go on
+   * introducing itself as the old one.
+   */
+  readonly doctrine: string;
 }
 
 /**
@@ -555,6 +576,8 @@ export const SWARM_PRESET_POINTS = {
     // selection step, so there is no second level to reach.
     depth: 1,
     branches: 5,
+    doctrine: 'returns a set of distinct approaches, unranked. Reach for it when the thing you '
+      + 'want is not measurable: it has no value signal by design and refuses an `objective`.',
   },
   /**
    * The three COVERAGE rows. They are archive runs and they differ on two things
@@ -568,9 +591,16 @@ export const SWARM_PRESET_POINTS = {
    * shape these rows were first drawn in. A cell is keyed by the objective's identity
    * and its population ordered by the objective's direction, so a judged archive has
    * nothing to bin under and nothing to rank by — {@link archiveRegionRefusal} refuses
-   * the pair. A coverage preset therefore needs a measurable objective. A caller who
-   * wants distinct approaches over a quantity nothing can measure wants `ideate`,
-   * which is honest about having no value signal.
+   * the pair, and `swarm-run.ts` confirms it end to end: a judged candidate carries no
+   * measurement, so the writer skips it and the run reports `records: null`. A COVERAGE
+   * GRID therefore needs a measurable objective.
+   *
+   * WHAT IT NO LONGER MEANS is that the preset needs one to be CALLABLE. A row scoring
+   * by `verify` resolves to {@link unmeasuredPoint} when the call named no `objective`,
+   * which drops the archive along with the instrument and leaves a judged sweep — so
+   * `{preset, task}` runs, and naming an objective is what buys the grid rather than
+   * what buys a non-refusal. That split is the whole of the ergonomics fix: the shape
+   * these rows describe still requires an instrument, and the CALL does not.
    *
    * Depth 1 BY CONSTRUCTION, the same way `ideate`'s is: an archive bins at the settle
    * barrier, so within one run there is nothing to select a second level from. The
@@ -589,6 +619,9 @@ export const SWARM_PRESET_POINTS = {
     },
     depth: 1,
     branches: 4,
+    // Where survivors GO is derived from `carry` below, so it is deliberately not said
+    // here as well: the two halves overlapping is how a row comes to contradict itself.
+    doctrine: 'covers a space instead of climbing it, over a subject dimension you choose.',
   },
   audit: {
     config: {
@@ -599,6 +632,8 @@ export const SWARM_PRESET_POINTS = {
     },
     depth: 1,
     branches: 4,
+    doctrine: 'is the same coverage shape over a finding CLASS rather than a subject, so ten '
+      + 'variants of one finding stay one finding.',
   },
   redteam: {
     config: {
@@ -613,6 +648,7 @@ export const SWARM_PRESET_POINTS = {
     },
     depth: 1,
     branches: 4,
+    doctrine: 'is the same coverage shape over a TACTIC.',
   },
   optimise: {
     config: {
@@ -628,6 +664,7 @@ export const SWARM_PRESET_POINTS = {
     // than at the shipped default of 20.
     depth: 5,
     branches: 3,
+    doctrine: 'climbs one number you can measure — a cost, a runtime, a count.',
   },
   prove: {
     config: {
@@ -653,8 +690,141 @@ export const SWARM_PRESET_POINTS = {
     // checker instead of being carried down by a plausible score.
     depth: 7,
     branches: 3,
+    doctrine: 'drives a checker that accepts a candidate or does not.',
   },
 } as const satisfies Record<NamedSwarmPreset, SwarmPresetRow>;
+
+/**
+ * The judge ensemble an unmeasured sweep runs at.
+ *
+ * `DEFAULT_CONFIG.mcts.judgeSamples`, READ rather than transcribed: it is already
+ * this repository's judged-ensemble size, and a second number answering the same
+ * question is how two of them come to disagree.
+ *
+ * The marginalisation floor of 20 is not being dodged here.
+ * {@link judgeMarginalisationRefusal} is stated over TREE selectors because what the
+ * measurement is about is a tree AMPLIFYING scorer noise; an unmeasured sweep has no
+ * selection step, so there is no amplification to marginalise against, and
+ * `swarm-run.ts` holds a flat judged run to an ensemble of 1 for that same reason.
+ */
+export const UNMEASURED_JUDGE_SAMPLES = DEFAULT_CONFIG.mcts.judgeSamples;
+
+/**
+ * The point a NAMED preset resolves to when the call named no `objective`.
+ *
+ * WHY A SECOND POINT EXISTS. Five of the six rows score by `verify`, `verify` means
+ * an instrument, and {@link swarmValidity} refuses a verifying composition that named
+ * none — so `{preset, task}`, the call this surface exists to make trivial, was a
+ * refusal on every row but `ideate`. A live incident measured what that costs: a model
+ * spent five of its ten steps learning, one refusal per round trip, that its first call
+ * was never going to run.
+ *
+ * WHY NOT A DEFAULT OBJECTIVE. An objective cannot be defaulted. `metric`, `unit`,
+ * `direction` and `target` are facts about the caller's task, and `verify` needs a
+ * `spec` whose fields ARE that task's data. What can be defaulted is the SCORER, so a
+ * call that named no instrument gets the one scorer that needs none.
+ *
+ * THREE AXES MOVE, AND EVERY ONE OF THEM READS A MEASUREMENT:
+ *  - `score` → `judge`, the only scorer that runs without an instrument.
+ *  - `advance` → `none`. An archive bins each candidate into the cell its INSTRUMENT
+ *    witnessed, and a judged candidate carries no measurement at all, so a judged
+ *    archive writes zero rows and would report coverage over a store it never wrote —
+ *    {@link archiveRegionRefusal} refuses that exact pair. The tree selectors go for a
+ *    different reason: a judged tree is legal only at an ensemble of 20, and that is a
+ *    scorer nobody asked for on a bare call.
+ *  - `carry` → `none`. A record is keyed by the objective's identity, so a run that
+ *    measured none has nothing to key one by and `elites`/`artifacts` would be accepted
+ *    and ignored — the one thing *Accepted and ignored* refuses.
+ * `depth` follows `advance` to 1, because `advance:'none'` has no selection step and a
+ * deeper cap is refused rather than silently flattened.
+ *
+ * The six axes are named EXPLICITLY rather than spread over the row, which drops the
+ * tree-only parameters (`explorationWeight`, `pruneThreshold`, `minVisitsForPrune`) by
+ * construction — under `advance:'none'` each of them is a refusal — and makes a new
+ * axis a compile error here rather than a silently inherited one.
+ *
+ * DERIVED FROM THE ROW, not declared per preset, so a preset added to the table cannot
+ * forget its unmeasured shape. A row that does not score by `verify` needs no fallback
+ * and is returned unchanged.
+ */
+export function unmeasuredPoint(row: SwarmPresetPoint): SwarmPresetPoint {
+  if (row.config.score.kind !== 'verify') return row;
+  return {
+    ...row,
+    config: {
+      unit: row.config.unit,
+      context: row.config.context,
+      expand: row.config.expand,
+      score: { kind: 'judge', samples: UNMEASURED_JUDGE_SAMPLES },
+      advance: { kind: 'none' },
+      carry: { kind: 'none' },
+    },
+    depth: 1,
+  };
+}
+
+/** How a MEASURED run of each `advance` reads, in one clause. Annotated `Record` over
+ *  the axis rather than inferred, so a new `advance` value must state its phrase
+ *  instead of rendering as another value's. */
+const ADVANCE_DOCTRINE = {
+  none: (row) => `a flat measured wave of ${String(row.branches)}`,
+  uct: (row) => `a depth-${String(row.depth)} UCT tree`,
+  'best-first': (row) => `a depth-${String(row.depth)} best-first tree`,
+  archive: () => 'a one-level coverage grid keyed by `key`, one elite per cell',
+  pareto: () => 'a Pareto front over an `instanced` or `vector` objective',
+} satisfies Record<SwarmAdvance, (row: SwarmPresetPoint) => string>;
+
+/** What each `carry` leaves for the next run, in one clause. */
+const CARRY_DOCTRINE = {
+  none: '',
+  reflections: ', reflections seeding the next run',
+  elites: ', its best kept in this workspace to seed the next run',
+  artifacts: ', its best published for a later run to read',
+} satisfies Record<SwarmCarry, string>;
+
+/**
+ * What each preset IS, what `{preset, task}` alone runs, and what naming an
+ * `objective` upgrades it to.
+ *
+ * ONE enumeration, rendered by every surface a model can learn the preset set from —
+ * the `preset` property, the missing-`preset` refusal, and the `agents.swarm` codemode
+ * declaration. Four hand-written copies of it is how `prove` came to be reachable in
+ * the enum and named in none of them, while three presets that had stopped resolving
+ * went on being described as working.
+ *
+ * IT LIVES BESIDE THE TABLE NOW, and that is the whole point. It used to sit in
+ * tools/registry.ts, one import-free module away from the rows it described, and the
+ * distance was the defect: the prose said `optimise` "requires `objective`" while the
+ * table decided whether it did, so the two could disagree and did. Only the clause a
+ * renderer cannot derive is written by hand, on the row itself
+ * ({@link SwarmPresetPoint.doctrine}); every number and every shape word below is read
+ * from the axes.
+ */
+export const SWARM_PRESET_DOCTRINE: readonly string[] = [
+  // THE RULE, STATED ONCE. It used to be five copies — one per verifying row — of the
+  // same sentence about what a bare call does, which is 550 characters of boilerplate
+  // in text that renders into three model-facing surfaces. Saying it here and letting
+  // each row print only `Sweep N` costs one line and says strictly more.
+  'Every preset is callable as `preset` + `task` alone, and nothing else is required. '
+    + 'With no `objective` a preset runs a JUDGED SWEEP at its own width: N candidates in '
+    + 'parallel, ranked by a judge ensemble, none selected down a tree and none published. '
+    + '"Sweep N" below is that width.',
+  ...NAMED_SWARM_PRESETS.map((preset) => {
+    const row = SWARM_PRESET_POINTS[preset];
+    // A row that does not score by `verify` has no measured/unmeasured split to
+    // explain, and `ideate`'s own clause already says it refuses an objective.
+    if (row.config.score.kind !== 'verify') return `${preset} ${row.doctrine}`;
+    const measured = ADVANCE_DOCTRINE[row.config.advance.kind](row)
+      + CARRY_DOCTRINE[row.config.carry.kind];
+    return `${preset} ${row.doctrine} Sweep ${String(row.branches)}; with an \`objective\`, ${measured}.`;
+  }),
+  'An `objective` is worth naming when the thing you want can be measured by RUNNING '
+    + `something: \`verify\` takes one of the registered instruments (${VERIFIER_KINDS.join(', ')}) `
+    + 'and hands it a whole `spec` in one call. Omit it and the sweep is a real ranked result, '
+    + 'not a refusal.',
+  'custom states all six axes in `config` under a `label`, optionally seeded from `from`. '
+    + 'Reach for it when no preset names the shape you want.',
+];
 
 /**
  * The `advance` values that select down a TREE, i.e. the region the tree refusals
@@ -891,7 +1061,21 @@ export function resolveSwarm(input: SwarmInput): ResolvedSwarm | SwarmRefusal {
   // decision, and the arm it chose between REFUSED — which reached `custom` too, so a
   // composition seeded from an undeclared row was refused for its base's gap rather
   // than judged on the axes the caller stated. See {@link SwarmPresetRow}.
-  const base: SwarmPresetPoint | null = baseName ? SWARM_PRESET_POINTS[baseName] : null;
+  const row: SwarmPresetPoint | null = baseName ? SWARM_PRESET_POINTS[baseName] : null;
+  // A NAMED preset that was handed no `objective` resolves to its UNMEASURED point:
+  // `verify` needs an instrument and the call named none, so the row's judged fallback
+  // is what it actually gets. See {@link unmeasuredPoint} for why this is a scorer
+  // substitution and not a defaulted objective.
+  //
+  // `custom` is excluded DELIBERATELY and not by oversight. A composition states its
+  // own axes — `config` is required on it — so a caller who composed `score:'verify'`
+  // asked for an instrument in as many words, and substituting a judge under them
+  // would be the surface deciding something they had already decided. `from` names a
+  // base to inherit, not a preset to be treated as one.
+  const base: SwarmPresetPoint | null = row !== null
+    && input.preset !== 'custom' && input.objective === undefined
+    ? unmeasuredPoint(row)
+    : row;
 
   const merged = { ...base?.config, ...input.config };
   if (!namesEveryAxis(merged)) {
@@ -999,6 +1183,47 @@ function verifierSpecsOf(objective: Objective): readonly VerifierSpec[] {
   // Narrowed on the DOMAIN and not on the representation: a `VerifierSpec` is the arm
   // that declares a `kind`, and the closure arm declares nothing.
   return named.filter((source): source is VerifierSpec => 'kind' in source);
+}
+
+/**
+ * The keys a kind's `spec` must carry and this one did not.
+ *
+ * A PRESENCE check and deliberately not a second copy of the kind's schema:
+ * `verifier-registry.ts` owns the types, the ranges and the cross-field rules, and
+ * duplicating them here would be the two-spellings defect this file argues against
+ * everywhere else. What this catches is the shape the incident actually produced — a
+ * `spec` sent partial, or sent as `{}` because the wire schema only asks for JSON —
+ * which used to pass validity, start a run, and come back as a bound instrument's
+ * complaint one round trip later.
+ *
+ * A non-object `spec` is reported as missing EVERY field rather than as a type error,
+ * because the correction is the same either way and one message beats two.
+ */
+function missingSpecFields(kind: VerifierKind, spec: JsonValue): readonly string[] {
+  const fields = VERIFIER_KIND_DOC[kind].specFields;
+  if (!isJsonObject(spec)) return fields;
+  return fields.filter((field) => !Object.hasOwn(spec, field));
+}
+/**
+ * The complete call that needs no instrument, named in a refusal that just rejected
+ * one.
+ *
+ * Every arm that refuses a verifier ends with this, because a refusal that names only
+ * the field it rejected teaches one field per round trip — and the transcript that
+ * motivated it spent five steps that way before learning the instrument could not have
+ * run in that workspace at all. A NAMED preset has a working call one deletion away, so
+ * the sentence prints it; `custom` composed its own axes and has to change the one it
+ * composed.
+ */
+function instrumentFreeAlternative(resolved: ResolvedSwarm): string {
+  if (resolved.preset === 'custom') {
+    return 'If nothing here can be measured by running code, set score:{kind:"none"} in `config` '
+      + 'and take an unranked flat run, or name a preset and drop `config` entirely.';
+  }
+  const row = SWARM_PRESET_POINTS[resolved.preset];
+  return 'If nothing here can be measured by running code, DROP `objective` and this same call '
+    + `works as it stands: {action:"swarm", preset:"${resolved.preset}", task:"…"} runs a judged `
+    + `sweep of ${String(row.branches)}, ranked, with no instrument and no other field required.`;
 }
 
 /**
@@ -1130,26 +1355,50 @@ export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
     }
   }
   if (config.score.kind === 'verify' && !objective) {
+    // ONLY `custom` REACHES THIS NOW. A named preset handed no `objective` resolves to
+    // its unmeasured point and scores by judge, so the composition that arrives here is
+    // one a caller SPELLED — which is why the way out named below is `config`, a field
+    // this caller has already used, and not the `score:"none"` the old text offered
+    // every preset. That offer was unreachable on five of the six: a named preset takes
+    // no `config`, so the one move its refusal recommended was refused by the next rule.
     return badInput('score:"verify" measures something and this composition did not say what. Supply '
       + '`objective` with a `metric`, a `unit`, a `direction`, a `target`, and `verify` as '
       + `{kind, spec} naming one of the registered instruments: ${VERIFIER_KINDS.join(', ')}. `
-      + 'Or score:"none" for a flat run with no value signal.');
+      + 'Or set score:{kind:"none"} in `config` for a flat run with no value signal — and note '
+      + 'that a NAMED preset needs neither: it falls back to a judged sweep on its own.');
   }
   // THE CHECKER IS NAMED AT CALL TIME, which is what `VerifierSpec.kind` already claims
   // ("an unregistered kind is a CALL-TIME `bad_input` naming the registered kinds") and
   // what nothing enforced: the registry was consulted at the top of `runSwarm`, so a
   // fabricated kind was a refusal a caller only met once the run had begun.
   //
-  // It is also what makes `prove` honest. That preset resolves to score:"verify" and
-  // promises a checker, and it used to resolve without one being nameable here — a
-  // preset resolving into a scoring path that cannot score it. Now a `prove` call
-  // states its instrument to be legal at all, and the closed set says which exist.
+  // BOTH ARMS BELOW NAME A COMPLETE CALL rather than the field they rejected, and that
+  // is the whole lesson of the incident. A refusal naming a field teaches one field per
+  // round trip; the caller in that transcript spent five steps collecting them and the
+  // fifth told it the instrument could never have run there at all. So each arm ends
+  // with a call that WORKS — which for a named preset is the same call minus
+  // `objective`, because the row's judged sweep needs nothing.
   if (objective) {
     for (const spec of verifierSpecsOf(objective)) {
-      if (!VERIFIER_KINDS.some((registered) => registered === spec.kind)) {
+      const registered = VERIFIER_KINDS.find((kind) => kind === spec.kind);
+      if (registered === undefined) {
         return badInput(`no verifier kind "${spec.kind}" is registered, so score:"verify" names an `
           + 'instrument that cannot run and this composition would measure nothing. `kind` must be one '
-          + `of: ${VERIFIER_KINDS.join(', ')}.`);
+          + `of: ${VERIFIER_KINDS.join(', ')}. ${instrumentFreeAlternative(resolved)}`);
+      }
+      const missing = missingSpecFields(registered, spec.spec);
+      if (missing.length > 0) {
+        const doc = VERIFIER_KIND_DOC[registered];
+        // "sent none of them" rather than re-listing every field it needs: the two lists
+        // are identical when the spec is empty, and printing one twice reads as two
+        // different requirements.
+        const shortfall = missing.length === doc.specFields.length
+          ? 'this one sent none of them'
+          : `this one is missing ${missing.join(', ')}`;
+        return badInput(`verify.kind:"${registered}" ${doc.summary}, and its \`spec\` is the whole `
+          + `problem statement rather than a pointer at one: it needs ${doc.specFields.join(', ')}, and `
+          + `${shortfall}. Send every field in one call — they are checked together, so adding them one `
+          + `at a time costs a round trip each. ${instrumentFreeAlternative(resolved)}`);
       }
     }
   }

@@ -431,6 +431,24 @@ export class EvolutionEngine {
     return rows.map((row) => normalizeNote(row.message));
   }
 
+  /**
+   * Has this turn's review already landed on the audit stream?
+   *
+   * The idempotency guard for a re-entered advisor lane. A lane evicted AFTER
+   * `recordAdvisorNote` but before its fiber row was released is offered to
+   * recovery again, and re-running the review would write a second note about
+   * one turn and speak it twice. The note row is the only durable evidence that
+   * the review completed, so it is what the guard reads — the same row a scorer
+   * joins back to the conversation, by the same `turnId`.
+   */
+  hasAdvisorNoteForTurn(turnId: string): boolean {
+    const rows = this.rt.storage.sql<{ n: number }>`
+      SELECT COUNT(*) AS n FROM evolution_events
+      WHERE type = ${ADVISOR_EVENT_TYPE}
+        AND json_extract(data, '$.turnId') = ${turnId}`;
+    return (rows[0]?.n ?? 0) > 0;
+  }
+
   // ── Timescale 1: Turn-level (outcome-driven forked review) ──────
 
   /**

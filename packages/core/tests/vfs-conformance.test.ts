@@ -26,6 +26,7 @@ import {
   type SandboxHandle,
 } from '../src/execution/index';
 import { createWorkspaceBundle } from './helpers';
+import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
 
 /** The byte corpus that must survive a write→read round trip on every mount:
  *  NUL, a UTF-8 BOM (the silent-3-byte-loss trap), high bytes and a lone 0x80
@@ -125,6 +126,7 @@ function sandboxHandle(fs: MemFs): SandboxHandle {
     },
     async unexposePort() {},
     async getExposedPorts() { return []; },
+    ...sandboxHandleLifecycle,
   };
   return handle;
 }

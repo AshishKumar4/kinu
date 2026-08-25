@@ -41,8 +41,9 @@ import {
 } from '../utils/json';
 
 const NOT_CONNECTED =
-  'No device connected. Connect your machine once at the user level ' +
-  '(Devices / Executors tab → "Connect a device", or run the Kinu CLI: `kinu connect`).';
+  'No device connected. Asking for one raised a request with your user: they are shown a card ' +
+  'that walks them through linking a machine (Devices / Executors tab, or `kinu connect`). ' +
+  'Nothing runs here until they do, so carry on with what does not need their machine.';
 
 /** True by construction rather than by probe — properties of this executor's
  *  own wiring, which no answer from the machine could confirm or deny. Read the
@@ -137,17 +138,25 @@ export function createDeviceTunnelExecutor(
     transport.rpc(method, params, opts);
 
   // Three-state lifecycle from the hub snapshot: connected, registered-but-
-  // offline (the user can reconnect), or no registered device at all.
+  // offline (the user can reconnect), or no registered device at all. The row
+  // carries the machine's own NAME and whether this agent already holds its
+  // grant, because "laptop" is an API namespace and no user ever called their
+  // computer that.
   const getStatus = (): ExecutorStatus => {
     const s = transport.status();
-    if (s.connected) return { configured: true, available: true, active: true, status: 'active' };
+    const named = s.devices?.find((d) => d.connected) ?? s.devices?.[0];
+    const identity: Partial<Pick<ExecutorStatus, 'label' | 'granted'>> = {};
+    if (named) identity.label = named.name;
+    if (s.workspaceGranted !== undefined) identity.granted = s.workspaceGranted;
+    if (s.connected) return { configured: true, available: true, active: true, status: 'active', ...identity };
     if (s.registered) {
       return {
         configured: true, available: false, active: false, status: 'disconnected',
         reason: 'Device registered but offline — the user can reconnect it with `kinu connect`.',
+        ...identity,
       };
     }
-    return { configured: false, available: false, active: false, status: 'not_configured' };
+    return { configured: false, available: false, active: false, status: 'not_configured', ...identity };
   };
 
   // Derived per read, not frozen at construction: a device that connects — or

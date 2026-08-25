@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { sandboxHandleLifecycle } from "./helpers/sandbox-handle-lifecycle";
 import {
   DefaultExecutionRouter,
   createNimbusExecutor,
@@ -44,6 +45,7 @@ function sandboxHandle(): SandboxHandle & { calls: string[]; execOptions: unknow
       calls.push(`ports:${hostname}`);
       return [];
     },
+    ...sandboxHandleLifecycle,
   };
 }
 
@@ -214,7 +216,11 @@ describe("executor lifecycle state", () => {
     const result = await executor.tools.exec.execute("echo ok", { signal });
 
     expect(result).toBe("ok");
-    expect(handle.execOptions).toEqual([{ timeout: 60_000 }]);
+    // /workspace is the executor's own default cwd, passed explicitly — and it
+    // is the ONLY option sent. No `timeout`: this lane carries no work deadline,
+    // because a lane deadline outranks every detach window above it (see
+    // unit-exec-detach-ceiling.test.ts).
+    expect(handle.execOptions).toEqual([{ cwd: "/workspace" }]);
   });
 
   test("sandbox port discovery preserves a real SDK failure", async () => {

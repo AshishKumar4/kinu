@@ -32,6 +32,16 @@ import { classify, diagnostics, renderThrownChain, toKinuError } from '../obs/in
 export const EVICTION_INTERRUPT_ERROR = 'interrupted by Durable Object eviction before completion';
 
 /**
+ * The prefix every background-job fiber's name carries.
+ *
+ * Exported because it is a PAIR: this module mints `bg:<kind>`, and each
+ * backend's fiber-recovery hook decides "is this a background job" by matching
+ * it. Two literals in two packages is how a rename leaves recovery silently
+ * routing detached tool calls into the wrong branch.
+ */
+export const BACKGROUND_FIBER_PREFIX = 'bg:';
+
+/**
  * The identity of ONE job's settle announcement.
  *
  * Recovery is at-least-once by construction: `recoverOrphans` sweeps the
@@ -327,7 +337,7 @@ export class BackgroundJobRunner {
    *  fiber start and stamped on the terminal write, so an executor fenced by a
    *  concurrent reclaim (evict-recovery) can no longer settle the job (§5.3). */
   private runToSettlement<T>(jobId: string, kind: string, exec: () => Promise<T>): void {
-    void this.deps.fiber(`bg:${kind}`, async (ctx) => {
+    void this.deps.fiber(`${BACKGROUND_FIBER_PREFIX}${kind}`, async (ctx) => {
       ctx.stash({ phase: 'running', jobId, kind });
       let settled: boolean;
       try {

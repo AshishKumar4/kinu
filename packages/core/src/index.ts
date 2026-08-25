@@ -55,6 +55,7 @@ export {
   parseWorkspaceTitle,
   planWorkspaceTitle,
   resolveWorkspaceTitle,
+  suggestWorkspaceTitle,
   slugifyName,
   workspaceSlug,
   workspaceTitleFromMission,
@@ -173,7 +174,7 @@ export {
 
 // Configuration
 export { DEFAULT_CONFIG } from './config';
-export { UNBOUNDED_STEPS } from './chat';
+export { UNBOUNDED_STEPS, UNBOUNDED_MAX_STEPS } from './chat';
 export type { AgentConfig, MCTSDefaults, CraftStoreDefaults, ScaffoldDefaults } from './config';
 
 // Typed accessors over the `agent_config` key/value table — collapses ~23
@@ -435,7 +436,6 @@ export {
   DELEGATION_INHERITANCE,
   DELEGATION_RUNGS,
   DELEGATION_CONVERSE,
-  SWARM_PRESET_DOCTRINE,
   renderToolSchemaDescription,
   renderExecuteToolsDescription,
   // The reach axis — which surfaces each capability is projected onto, and the
@@ -452,7 +452,14 @@ export {
   type AgentsToolAction,
   type BuiltinToolName,
   type BuiltinToolSpec,
+  REPORT_TOOL, SUBMIT_PLAN_TOOL, DEPS_GATED_TOOLS,
 } from './tools/registry';
+export {
+  CRAFTED_TOOL_NAMESPACE, CRAFTED_TOOL_ALIAS_NAMESPACE,
+  craftedNamespaceCorrection,
+  craftedToolDescription, craftedDispatcherEntry,
+  type CraftedDispatcherEntry,
+} from './tools/sandbox-contract';
 export { mcpToolKey, isMcpToolKey } from './tools/mcp-naming';
 export {
   createAgentsTool, agentsActionsFor, renderAgentsToolDescription, resumableAgentsInput,
@@ -685,7 +692,7 @@ export { collectDynamicContext } from './state/dynamic-context';
 export type { DynamicContextInput } from './state/dynamic-context';
 
 // MCTS engine
-export { runMCTS } from './mcts/engine';
+export { runMCTS, SEARCH_FIBER_NAME } from './mcts/engine';
 export { selectNode } from './mcts/uct';
 export { backpropagate } from './mcts/backpropagation';
 export { recordNode } from './mcts/record-node';
@@ -739,7 +746,9 @@ export {
 // reruns as a user-origin turn (see user-steer.ts).
 export {
   UserSteerDrain, steerUserMessage, STEER_METADATA_KEY, STEER_STEP_METADATA_KEY,
+  describeLandedSteers,
   type UserSteer, type UserSteerOutcome, type SteerStatusEvent, type SteerStatusDetail,
+  type LandedSteerRow,
 } from './orchestrator/user-steer';
 // Where a steer sits in the transcript — the read side of the same drain, and
 // pure, so both backends place it identically.
@@ -845,6 +854,9 @@ export {
 // CraftStore quality
 export { emaUpdate, effectiveScore, filterByEffectiveScore, updateCraftScores } from './craft/ema';
 export { craftFailureMarker, CRAFT_NEUTRAL_PRIOR } from './craft/in-episode';
+export {
+  attributeCraftedFailure, wrapCraftedBodyWithAttribution,
+} from './craft/attribution';
 export { maybeStoreCraftedTool } from './craft/discovery';
 export { periodicCraftConsolidation } from './craft/consolidation';
 export { checkConflictsBeforeAdding, upsertCraftedTool } from './craft/conflict';
@@ -855,31 +867,22 @@ export {
   createInlineExecutor,
   withApprovalGatedShell, gateProviderExec,
   createSandboxExecutor, type SandboxHandle, isSandboxTransientError,
-  createWorkspaceSnapshots, type WorkspaceSnapshots, type WorkspaceSnapshotPorts,
-  type WorkspaceSnapshotState, type WorkspaceRestoreOutcome, type WorkspaceSnapshotOutcome,
-  type WorkspaceRestoreOutcomeKind, type WorkspaceSnapshotOutcomeKind,
-  WORKSPACE_RESTORE_OUTCOMES, WORKSPACE_SNAPSHOT_OUTCOMES,
-  type BackupOptions, type DirectoryBackup, type WorkspaceChangeStatus,
-  shouldBackupWorkspace, workspaceBackupOptions, workspaceRestoreMode,
-  BACKUP_MIN_INTERVAL_MS, BACKUP_TTL_SECONDS, WORKSPACE_BACKUP_DIR,
-  WORKSPACE_RESTORE_DEADLINE_MS, isDirectoryOverlayMounted,
-  snapshotIntegrityFailure, snapshotObjectKeys, withContainerStartDeadline,
-  type SnapshotObjectKeys, type LateStartFailure,
+  WORKSPACE_BACKUP_DIR,
   createDeviceTunnelExecutor, type DeviceTransport,
   explainNativeToolReferenceError,
   devicePresence, parseDevicePresence, deviceChangeNotice, observeDevicePresence,
   deviceToolchainAnswer, freshDeviceToolchain,
   DEVICE_PRESENCE_CONFIG_KEY, DEVICE_TOOLCHAIN_TTL_MS,
   type DeviceStatus, type DevicePresence, type DevicePresenceStore,
-  type DeviceToolchain,
+  type DeviceToolchain, type DeviceFleetEntry,
   TOOLCHAIN_PROBE_BINARIES, TOOLCHAIN_PROBED_CAPABILITIES,
   TOOLCHAIN_UNPROBEABLE, toolchainCapabilities,
   DeviceTunnel, type TunnelSocket, TUNNEL_DISCONNECTED, NO_DEVICE_CONNECTED, isDeviceNotConnectedError,
-  DEVICE_UNKNOWN_METHOD, isDeviceUnknownMethodError,
+  DEVICE_UNKNOWN_METHOD, isDeviceUnknownMethodError, DEVICE_TOKEN_ROTATION,
   createNimbusExecutor, createNimbusWorkspaceExecutor, nimbusSessionShell,
   type NimbusExecutorOpts, type NimbusWorkspaceExecutorOpts, type NimbusSandboxHandle,
   type NimbusStartResult,
-  EXECUTOR_CAPABILITIES,
+  EXECUTOR_CAPABILITIES, NO_TIMER_DEADLINE_MS,
   type ExecutorCapability, type ExecutorKind, type ExecutorProvider,
   type ExecutorLifecycleStatus, type ExecutorStatus,
   type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps, type ResourceLimits,
@@ -1005,6 +1008,7 @@ export {
   FAILURE_WITHOUT_ERROR,
   initRunEventTables,
   parseStoredRunEvent,
+  RunEventSchema,
   recordModelOperations,
   RunEventRecorder,
   cacheHitRate,
@@ -1018,6 +1022,7 @@ export {
   MODEL_OPERATION_PHASES,
   MODEL_OPERATION_OUTCOMES,
   beginModelOperation,
+  buildModelCallEvent,
   type ModelCallReport,
   type ModelCallSpend,
   type ModelCallSink,
@@ -1028,6 +1033,7 @@ export {
   type ModelOperationPhase,
   type ModelOperationSink,
   type SpendSource,
+  type SpendTally,
   type RunEventListener,
   type RunEventQuery,
 } from './events/index';
@@ -1198,6 +1204,7 @@ export {
   DEVICE_CONSENT_DENIED,
   DEVICE_CONSENT_UNANSWERED,
   DEVICE_CONSENT_TIMEOUT_MS,
+  DEVICE_PROVISION_METHOD,
   parseConsentScope,
   mergeConsentScope,
   summarizeDeviceAction,
@@ -1259,7 +1266,8 @@ export {
   BackgroundJobStore, initBackgroundJobsTable, serializeJobResult, withBackgroundThreshold, withSpawnDetach,
   isBackgroundHandle, SPAWN_STARTED_OPTION, readSpawnStarted,
   BackgroundJobRunner, JobNotResumable, EVICTION_INTERRUPT_ERROR, BACKGROUND_POLICY, MAX_CONCURRENT_DETACHED_JOBS,
-  backgroundJobWakeTrigger,
+  invocationBackgroundPolicy,
+  backgroundJobWakeTrigger, BACKGROUND_FIBER_PREFIX,
   type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type BackgroundRefusal, type ThresholdDeps,
   type BackgroundPolicy, type DetachOutcome, type InvocationSurface,
   type BackgroundJobRunnerDeps, type JobResumer, type JobClaim,
@@ -1303,7 +1311,9 @@ export {
 export {
   openTurnRun, closeTurnRun, snapshotCompletedTurn,
   persistMeasuredPromptTokens, applyOverflowRecovery, creditedTurnId,
+  classifyRunEnd, RUN_END_REASONS, TOOL_CALLS_PENDING, TURN_ENDED_MID_WORK,
   type CompactionTriggerState, type SettledTurn,
+  type RunEndReason, type RunEndFacts,
 } from './orchestrator/turn-lifecycle';
 export {
   createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory,
@@ -1461,6 +1471,7 @@ export {
 export type { DiffLine, FileDiff, FileStatus, LineDiff } from './vfs/diff';
 export {
   getExecutorFiles, readExecutorFile, sortDirEntries, executorFiles, writeExecutorFileOp,
+  readExecutorFileBytes, renameExecutorPathOp, deleteExecutorPathOp,
   listEnvironments, normalizeDir, joinDir, parentDir,
 } from './read-models/files';
 export type {
@@ -1546,6 +1557,7 @@ export {
   ADVISOR_HEADER,
   advisorSignalText,
   runAdvisorLane,
+  AdvisorRecoverySnapshotSchema,
   buildAdvisorPrompt,
   isAdvisorSeverity,
   isContentFree,
@@ -1555,6 +1567,7 @@ export {
   parseAdvisorReply,
   reviewCompletedTurn,
   type AdvisorDisposition,
+  type AdvisorRecoverySnapshot,
   type AdvisorLaneDeps,
   type AdvisorNote,
   type AdvisorSeverity,
@@ -1588,6 +1601,10 @@ export {
   type ProfileAuthorityInputs, type ProviderCatalogSnapshot, type TierSource,
   type ResolveTurnProfileInput, type ResolveAgentTurnProfileInput, type ResolvedTurnProfile,
   type ModelRoutePolicy, type ProfileRoutedSource, type ModelRouteResolution,
+  type FixedTierSource,
+  DEFAULT_ROLE_ID,
+  buildProviderCatalogSnapshot, ProviderListingCache,
+  type ProviderListing, type ProviderCacheOutcome, type ProviderSnapshotRead,
   changeActiveRole, roleChangeOutcomeText,
   type RoleChangeActor, type RoleChangePolicy, type RoleChangeOutcome,
   type RoleChangeRefusal, type RoleStateStore,
@@ -1595,3 +1612,6 @@ export {
 export type { ReasoningEffort } from './strategy/effort';
 export { REASONING_EFFORTS } from './strategy/effort';
 export type { NamedSwarmPreset } from './strategy/swarm';
+// Rendered from the preset table in the same module, so a surface reading this cannot
+// describe a shape the resolver does not produce.
+export { SWARM_PRESET_DOCTRINE } from './strategy/swarm';

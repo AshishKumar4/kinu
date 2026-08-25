@@ -10,9 +10,27 @@
  * So the landing proof is three-part, and each part covers a hole the others
  * leave:
  *
- *   1. Byte-identity across a branch matrix. `fixtures/prompt-golden.json` was
- *      generated from the pre-change builder over `fixtures/prompt-surface-matrix.ts`,
- *      which takes every conditional in the nine sections in both directions.
+ *   1. Byte-identity across a branch matrix. `fixtures/prompt-golden.json` is
+ *      generated over `fixtures/prompt-surface-matrix.ts`, which takes every
+ *      conditional in the nine sections in both directions.
+ *
+ *      RE-CUT 2026-08-25. The fixture was originally the PRE-SECTIONISATION
+ *      builder's output, and part 1 read "the move changed representation and
+ *      nothing else". That claim has been retired because the prompt content
+ *      deliberately changed: a measured slimming pass took the matrix from
+ *      135,116 bytes to 120,952 across the same 27 surfaces, −14,164 (−10.5%).
+ *      What was removed was duplication, each piece of it shipping twice in one
+ *      request — every tool's `summary` (in the prompt index AND line 1 of its
+ *      own schema description), the `agent.*` API bullets (a weaker hand-copy of
+ *      the codemode type block carried in the execute_tools description), and
+ *      one of two paragraphs stating the mount doctrine in different words.
+ *      Placement changed too: `Runtime context` moved to the end of the prefix
+ *      and `Execution environments` ahead of the tool index.
+ *
+ *      Part 1 keeps its full drift-catching power either way: the fixture is
+ *      only ever regenerated deliberately (`bun run scripts/prompt-golden.ts`),
+ *      so any source edit that moves a prompt byte without that regeneration
+ *      still fails here. What changed is only which baseline it compares to.
  *   2. That comparison is SENSITIVE — one character of any one section's source
  *      moves the prompt. Without this, part 1 could be comparing two things that
  *      are equal for a reason other than correctness.
@@ -64,14 +82,28 @@ describe('the sectionised builder renders the pre-change bytes', () => {
     });
   }
 
-  test('the whole matrix is the same number of bytes it was', () => {
-    // The headline anti-bloat number: sectionisation is representation, so the
-    // delta over every surface is zero, not "about zero".
+  test('the whole matrix is the same number of bytes the fixture recorded', () => {
+    // Drift gate over every surface at once: a byte that moved without a
+    // deliberate regeneration shows up here as a nonzero delta.
     const before = Object.values(golden)
       .reduce((sum, text) => sum + Buffer.byteLength(text, 'utf8'), 0);
     const after = PROMPT_MATRIX
       .reduce((sum, c) => sum + Buffer.byteLength(buildSystemPromptSync(rt, c.opts), 'utf8'), 0);
     expect(after - before).toBe(0);
+  });
+
+  test('the matrix total stays under its recorded ceiling', () => {
+    // The per-section budgets in `unit-prompt.test.ts` gate ONE surface. This
+    // gates all 27, so growth that hides by spreading thinly across branches —
+    // a family overlay, a plan-mode arm, an executor row — still has to be a
+    // reviewed decision. Measured 120,952 on 2026-08-25 after the slimming pass
+    // (from 135,116); the ceiling is ~1% over, like the section budgets.
+    // Raise it only alongside an intentional content change, and say so.
+    const MATRIX_CEILING_BYTES = 122_200;
+    const total = PROMPT_MATRIX
+      .reduce((sum, c) => sum + Buffer.byteLength(buildSystemPromptSync(rt, c.opts), 'utf8'), 0);
+    expect({ total, over: total > MATRIX_CEILING_BYTES })
+      .toEqual({ total, over: false });
   });
 });
 

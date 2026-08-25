@@ -119,6 +119,34 @@ export interface ModelCallReport {
 }
 
 /**
+ * What a SET of model calls cost, and what it could not account for.
+ *
+ * One declaration for the fold, wherever the folding happens. A producer's row
+ * in the workspace total, that total itself, and the per-producer aggregate the
+ * recorder sums straight out of the event log are the same five numbers, and the
+ * two that make them trustworthy are absences: a `usage` field no call reported
+ * stays ABSENT rather than summing to a zero that reads as measured, and `usd`
+ * stays absent until some call carried a catalog rate, so "nothing here was
+ * priced" never renders as "all of this was free".
+ */
+export interface SpendTally {
+  /** Model calls attributed here. */
+  readonly calls: number;
+  /** Of those, how many the provider reported no usage at all for. Their spend
+   *  is real and unmeasured; `usage` below omits them entirely. */
+  readonly callsWithoutUsage: number;
+  /** Accumulated field by field, so a field no call reported stays ABSENT
+   *  rather than summing to a zero that reads as measured. */
+  readonly usage: Usage;
+  /** Catalog-priced spend over the calls that carried a rate. Absent when none
+   *  did — unpriced, never free. */
+  readonly usd?: number;
+  /** Calls with a usage report but no catalog rate: measured in tokens,
+   *  invisible in dollars. This is why `usd` is a floor. */
+  readonly unpricedCalls: number;
+}
+
+/**
  * Where a producer sends its report.
  *
  * Injected at construction rather than returned from `complete`, because the
