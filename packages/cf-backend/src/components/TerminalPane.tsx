@@ -28,6 +28,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { SandboxAddon } from "@cloudflare/sandbox/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { describeError } from "@/hooks/use-async-resource";
+import { renderThrownChain } from "@kinu.run/core/obs";
 import { useTheme, type ThemeMode } from "@/hooks/use-theme";
 import { terminalLane } from "@/lib/terminal-lane";
 import type { ExecutorCommandResult } from "@/lib/protocol";
@@ -129,7 +130,11 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
       if (!copyChord || event.type !== "keydown") return true;
       const selection = term.getSelection();
       if (!selection) return true;
-      void navigator.clipboard.writeText(selection);
+      navigator.clipboard.writeText(selection).catch((cause) => {
+        // The pane's failure line is the reader: the header advertises the
+        // chord, so a refused clipboard write must not vanish.
+        setFailure(`clipboard refused the copy: ${renderThrownChain({ cause })}`);
+      });
       return false;
     });
 
@@ -206,7 +211,9 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
         <span>·</span>
         <span>{state === "connected" ? "interactive shell" : state}</span>
         {failure !== null && <span className="p-danger truncate" title={failure}>{failure}</span>}
-        <button type="button" onClick={() => { void restart(); }}
+        <button type="button" onClick={() => {
+          restart().catch((cause) => { setFailure(renderThrownChain({ cause })); });
+        }}
           className="ml-auto shrink-0 underline decoration-dotted hover:p-text-2 cursor-pointer"
           title="Destroy this shell and open a new one. The only way back from a shell that exited.">
           restart shell

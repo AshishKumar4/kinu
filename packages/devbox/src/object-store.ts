@@ -11,6 +11,8 @@
  * reader that finds a delta object finds a whole delta.
  */
 
+import { describeThrown } from './lifecycle';
+
 /** Largest object moved through memory in one PUT before multipart takes over,
  *  and the part size above that threshold. Both 8 MiB — this package's own
  *  budget, not a platform number: one buffered copy of that size fits well
@@ -102,7 +104,7 @@ export async function putStream(
     } catch (abortFailure) {
       console.error(
         `[devbox] the abandoned multipart upload for ${key} was not aborted: `
-        + `${abortFailure instanceof Error ? abortFailure.message : String(abortFailure)}`,
+        + describeThrown({ cause: abortFailure }),
       );
     }
     throw error;

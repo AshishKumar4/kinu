@@ -2421,11 +2421,12 @@ export class LocalAgentSession implements BackendHost {
       mission,
     };
     if (planWorkspaceTitle(state) === null) return;
-    // Caught INSIDE the fiber body, not off the returned promise: trackFiber's
-    // own `fiber.settle_failed` is for a fiber that could not record its own
-    // outcome and states that it has no other reader, so letting this reject
-    // would report one titling failure twice under two names.
-    void this.trackFiber('workspace.auto_title', async () => {
+    // Caught INSIDE the fiber body: trackFiber's own `fiber.settle_failed` is
+    // for a fiber that could not record its own outcome, so letting this
+    // reject would report one titling failure twice under two names. The
+    // outer handler is reachable only if the body's own recorder threw —
+    // stated under its own name so the drop gate can read the chain end.
+    this.trackFiber('workspace.auto_title', async () => {
       try {
         await applyWorkspaceTitle(state, {
           persist: (name) => {
@@ -2444,6 +2445,10 @@ export class LocalAgentSession implements BackendHost {
           doing: 'deriving a title from the mission', cause: err, otherwise: 'unavailable',
         }));
       }
+    }).catch((cause) => {
+      diagnostics.failure('fiber.recorder_failed', toKinuError({
+        doing: 'recording an auto-title failure', cause, otherwise: 'io',
+      }), { fiber: 'workspace.auto_title' });
     });
   }
 
@@ -2539,7 +2544,7 @@ export class LocalAgentSession implements BackendHost {
     const llm = this.rt.advisorLlm;
     if (llm === undefined || !this.config.getAdvisorEnabled()) return;
     const labels = turn.missionLabels ?? [];
-    void this.trackFiber('advisor.review', async () => {
+    this.trackFiber('advisor.review', async () => {
       try {
         await runAdvisorLane({
           turn,
@@ -2559,6 +2564,10 @@ export class LocalAgentSession implements BackendHost {
           doing: 'reviewing the completed turn', cause: err, otherwise: 'unavailable',
         }));
       }
+    }).catch((cause) => {
+      diagnostics.failure('fiber.recorder_failed', toKinuError({
+        doing: 'recording an advisor-lane failure', cause, otherwise: 'io',
+      }), { fiber: 'advisor.review' });
     });
   }
 
