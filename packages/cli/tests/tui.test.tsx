@@ -1204,7 +1204,7 @@ const homeScreenPrelude = (width = 100, height = 40, fetchStub?: string) => `
       workspaces: ['shopbot'],
       config: {
         origin: 'https://kinu.test',
-        accessToken: 'ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz',
+        accessToken: 'ptc_test_fixture_token_not_real',
         tokenExpiresAt: '2099-01-01T00:00:00.000Z',
         user: { id: 'acc-a', email: 'a@example.com' },
         agents: {
