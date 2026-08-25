@@ -72,7 +72,7 @@ import { listRuns, RunEventRecorder } from '@kinu.run/core';
 import type {
   LLMProviderConfig, RunEvent, SeekCursor, VFS, WorkspaceSpend,
 } from '@kinu.run/core';
-import { diagnostics, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import { recordWorkspaceSpend } from './live-model';
 
 /**
@@ -201,7 +201,7 @@ export async function probeVerifier(workspace: EvalTargetWorkspace): Promise<Ver
   } catch (error) {
     return {
       kind: 'unavailable',
-      reason: `the workspace shell refused the probe outright: ${String(error)}`,
+      reason: `the workspace shell refused the probe outright: ${renderThrownChain({ cause: error })}`,
     };
   } finally {
     try {
