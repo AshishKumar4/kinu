@@ -127,6 +127,7 @@ export function DeviceConsentCard({ consent, onResolve }: {
   onResolve: (consentId: string, decision: "once" | "always" | "deny") => void;
 }) {
   const asking = consent.workspaceName ? `“${consent.workspaceName}”` : "This agent";
+  const fullFilesystem = consent.scope === "full_filesystem";
   if (consent.method === DEVICE_PROVISION_METHOD) {
     return (
       <div className="p-tint-warning rounded-xl border p-3 animate-fade-in">
@@ -161,12 +162,15 @@ export function DeviceConsentCard({ consent, onResolve }: {
         <DesktopTowerIcon size={16} className="p-warning shrink-0 mt-0.5" weight="fill" />
         <div className="min-w-0 flex-1">
           <div className="text-xs p-text">
-            {asking} wants to use <span className="font-medium">{consent.deviceLabel}</span> for a local action:
+            {asking} wants to use <span className="font-medium">{consent.deviceLabel}</span>
+            {fullFilesystem ? " with full filesystem and shell access:" : " inside its connected folder:"}
           </div>
           <code className="block mt-1 text-[11px] p-text-2 font-mono break-all p-fill rounded-sm px-2 py-1">{consent.command || "(command)"}</code>
           <div className="mt-1 text-[10px] p-text-3">
-            Always allow grants this workspace every local action on {consent.deviceLabel} until you revoke it
-            under Account settings → Devices.
+            {fullFilesystem
+              ? `Always allow grants this workspace full filesystem and shell access on ${consent.deviceLabel}.`
+              : `Always allow grants native file actions inside the connected folder on ${consent.deviceLabel}.`}
+            {" "}You can revoke it under Account settings → Devices.
           </div>
         </div>
       </div>
@@ -176,7 +180,9 @@ export function DeviceConsentCard({ consent, onResolve }: {
         <button onClick={() => onResolve(consent.consentId, "once")}
           className="px-2.5 py-1 text-[11px] p-card p-card-hover p-text-2">Allow once</button>
         <button onClick={() => onResolve(consent.consentId, "always")}
-          className="px-2.5 py-1 text-[11px] rounded-md font-medium p-accent-bg p-accent hover:opacity-90">Grant this workspace</button>
+          className="px-2.5 py-1 text-[11px] rounded-md font-medium p-accent-bg p-accent hover:opacity-90">
+          {fullFilesystem ? "Grant full access" : "Grant this workspace"}
+        </button>
       </div>
     </div>
   );

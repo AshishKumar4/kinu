@@ -20,6 +20,7 @@
 import { asFetchFunction } from './fetch-shim';
 import type { GatewayRunRequest, WorkersAIBinding } from './types';
 import { renderThrownChain } from '../obs/index';
+import { copyHeaders } from './util';
 
 /** An AI Gateway HTTPS base parsed into what the binding addresses it by.
  *  `AI_GATEWAY_URL` is the single source of truth for both. */
@@ -143,7 +144,7 @@ function collectHeaders(
   request: Request | undefined,
   init: RequestInit | undefined,
 ): GatewayRunRequest['headers'] {
-  const headers = new Headers(init?.headers === undefined ? request?.headers : init.headers);
+  const headers = copyHeaders(init?.headers === undefined ? request?.headers : init.headers);
   for (const name of STRIPPED_HEADERS) headers.delete(name);
   return Object.fromEntries(headers.entries());
 }

@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   DEVICE_CONSENT_SCOPE, DEVICE_CONSENT_SCOPE_FULL_FS,
   DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED,
-  mergeConsentScope, parseConsentScope, summarizeDeviceAction,
+  deviceConsentScopeForMethod, mergeConsentScope, parseConsentScope, summarizeDeviceAction,
   type JsonValue,
 } from '@kinu.run/core';
 import { handleUserRequest } from '../src/user/routes';
@@ -50,6 +50,13 @@ describe('consent tiers (the /pc mount scope)', () => {
     expect(parseConsentScope(null)).toBe(DEVICE_CONSENT_SCOPE);
     expect(parseConsentScope('garbage')).toBe(DEVICE_CONSENT_SCOPE);
     expect(parseConsentScope('full_filesystem')).toBe(DEVICE_CONSENT_SCOPE_FULL_FS);
+  });
+
+  test('unrestricted shell requests the full-machine tier', () => {
+    expect(deviceConsentScopeForMethod('exec')).toBe(DEVICE_CONSENT_SCOPE_FULL_FS);
+    expect(deviceConsentScopeForMethod('checkpointRestore')).toBe(DEVICE_CONSENT_SCOPE_FULL_FS);
+    expect(deviceConsentScopeForMethod('readFile')).toBe(DEVICE_CONSENT_SCOPE);
+    expect(deviceConsentScopeForMethod('writeFile')).toBe(DEVICE_CONSENT_SCOPE);
   });
 
   test('remembering a base action grant never downgrades full_filesystem', () => {

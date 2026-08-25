@@ -2,8 +2,8 @@
 // and the writeExecutorFileOp seam over it.
 import { describe, test, expect } from "bun:test";
 import {
-  deleteExecutorPathOp, getExecutorFiles, readExecutorFileBytes, renameExecutorPathOp,
-  sortDirEntries, writeExecutorFileOp, type VFS,
+  deleteExecutorPathOp, getExecutorFiles, inlineFileType, readExecutorFileBytes,
+  renameExecutorPathOp, sortDirEntries, writeExecutorFileOp, type VFS,
 } from "@kinu.run/core";
 import { fileResponseHeaders } from "../src/lib/http";
 
@@ -275,6 +275,14 @@ describe("getExecutorFiles", () => {
     // …and a real entry set is left alone: no duplicate, no phantom.
     const seeded = await getExecutorFiles(deps, "workspace", "/home/user");
     expect(seeded.entries).toEqual([]);
+  });
+});
+
+describe("inlineFileType", () => {
+  test("the Files surface and HTTP route share image and PDF classification", () => {
+    expect(inlineFileType("/home/user/shot.PNG")).toBe("image/png");
+    expect(inlineFileType("/home/user/report.pdf")).toBe("application/pdf");
+    expect(inlineFileType("/home/user/readme.txt")).toBeUndefined();
   });
 });
 

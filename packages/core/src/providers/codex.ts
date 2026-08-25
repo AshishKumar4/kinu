@@ -18,7 +18,7 @@ import type { AuthResolution, ModelProvider, ModelInfo, ModelInputModality } fro
 import { MODEL_INPUT_MODALITIES } from './types';
 import { asFetchFunction } from './fetch-shim';
 import { withRateLimitRetry } from './rate-limit-retry';
-import { authCacheKey, cloneModelInfos, nonEmptyString, positiveInteger } from './util';
+import { authCacheKey, cloneModelInfos, copyHeaders, nonEmptyString, positiveInteger } from './util';
 import * as v from 'valibot';
 import { CodexOAuthTokenError } from './codex-oauth';
 import { JsonArraySchema, JsonObjectSchema, JsonValueSchema, type JsonValue } from '../utils/json';
@@ -136,7 +136,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
         }
         const requestInit = normalizeCodexResponsesRequest(init);
         const send = async (headers: Record<string, string>) => {
-          const merged = new Headers(init?.headers);
+          const merged = copyHeaders(init?.headers);
           for (const [k, v] of Object.entries(headers)) merged.set(k, v);
           return baseFetch(input, { ...requestInit, headers: merged });
         };

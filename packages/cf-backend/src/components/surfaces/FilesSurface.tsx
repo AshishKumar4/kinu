@@ -29,7 +29,9 @@ import {
   WarningIcon, XIcon,
 } from "@phosphor-icons/react";
 import * as v from "valibot";
-import { joinDir, parentDir, EXECUTOR_MOUNTS, type DirEntry, type MountInfo } from "@kinu.run/core";
+import {
+  inlineFileType, joinDir, parentDir, EXECUTOR_MOUNTS, type DirEntry, type MountInfo,
+} from "@kinu.run/core";
 import { renderThrownChain, tolerate } from "@kinu.run/core/obs";
 import type { Rpc } from "@/lib/protocol";
 import { executorLabel, type ExecutorInfo } from "@/lib/executors";
@@ -53,14 +55,6 @@ const MOUNT_EXECUTOR: Record<string, string> = Object.fromEntries(
   Object.entries(EXECUTOR_MOUNTS).map(([executor, prefix]) => [prefix.slice(1), executor]),
 );
 
-const IMAGE_EXTENSIONS = new Set([
-  'png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'ico', 'svg',
-]);
-
-function extensionOf(path: string): string {
-  const name = path.slice(path.lastIndexOf("/") + 1);
-  return name.includes(".") ? name.slice(name.lastIndexOf(".") + 1).toLowerCase() : "";
-}
 
 /** Sizes at a glance, in the unit that keeps the column scannable. */
 function fmtSize(n: number): string {
@@ -629,8 +623,10 @@ function FilePreview({ path, rpc, inlineHref, downloadHref, onClose }: {
   onClose: () => void;
 }) {
   const name = path.slice(path.lastIndexOf("/") + 1);
-  const ext = extensionOf(path);
-  const kind = Object.hasOwn(IMAGE_EXTENSIONS, ext) ? "image" : ext === "pdf" ? "pdf" : "text";
+  const inlineType = inlineFileType(path);
+  const kind = inlineType?.startsWith("image/")
+    ? "image"
+    : inlineType === "application/pdf" ? "pdf" : "text";
   // `null` IS the loading state: the pre must never paint before the answer,
   // or a reader (and the browser gate) sees an empty file that is not empty.
   const [file, setFile] = useState<FileText | null>(null);

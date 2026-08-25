@@ -71,7 +71,7 @@ import {
   turnProvenanceForMetadata,
   workModeForTurnMetadata,
   DynamicContextLedger, turnLocalContextMessage, observeSystemPromptHash,
-  type DynamicContext, type MissingCapability,
+  type DynamicContext, type DynamicApproval, type MissingCapability,
   // Public extension seam — the SAME host contract runChat drives on the CLI
   ExtensionHost, composePrepareStep,
   UserSteerDrain, describeLandedSteers,
@@ -124,7 +124,7 @@ import {
   observeDevicePresence,
   // The stores every agent has, built once from its one SQL handle, and the
   // one binding of the live per-step planes to them.
-  createAgentStores, type AgentConfigStore, collectDynamicContext,
+  createAgentStores, type AgentConfigStore, collectDynamicContext, subordinateDelegatesOf,
   type SqlExecutor,
   // The agents tool's shared swarm substrate
   agentsActionsFor,
@@ -160,7 +160,6 @@ import {
   // The subordinate tree's depth cap — derived per child, never stated by one
   DELEGATION_MAX_DEPTH,
   delegationExhausted, deriveChildDelegationBudget, type DelegationBudget,
-  type DynamicDelegate,
   readSoul, bootstrapScaffold,
   // Automatic titling — one policy for every root that can be talked to
   applyWorkspaceTitle, suggestWorkspaceTitle,
@@ -454,6 +453,11 @@ export function actorAgentsActions(deps: ActorToolDeps): AgentsToolAction[] {
   return agentsActionsFor({ fork: {}, team: deps.team, peers: deps.peers });
 }
 
+
+export interface ActorDynamicContextExtras {
+  readonly approvals?: () => readonly DynamicApproval[];
+  readonly extraMissingCapabilities?: () => readonly MissingCapability[];
+}
 
 export abstract class ActorAgent extends Think<Env> {
   // ── The actor profile — what a concrete actor class supplies ─────────
@@ -804,13 +808,8 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /** This actor's hires, for the per-step dynamic context. */
-  protected subordinateDelegates(): DynamicDelegate[] {
-    return this.subordinateRoster.list().map((entry) => ({
-      kind: 'subordinate' as const,
-      name: entry.name,
-      phase: entry.status,
-      task: entry.currentTask,
-    }));
+  protected subordinateDelegates() {
+    return subordinateDelegatesOf(this.subordinateRoster.list());
   }
 
   protected broadcastSubordinatesChanged(event?: SubordinatesChangedEvent): void {
@@ -2504,6 +2503,7 @@ export abstract class ActorAgent extends Think<Env> {
     const fork: AgentsForkDeps = {
       rt: this.rt,
       model: this.getModel(),
+      originContext: () => this._turnOriginContext,
       resolveModel: (spec: string) => this.ownedModelServices.resolveModel(spec),
       // Same catalog session that answers the context window and prices the
       // mission ledger — so a search's pre-run estimate and the ledger that
@@ -3817,6 +3817,7 @@ export abstract class ActorAgent extends Think<Env> {
     this._cliCwd = readCliCwd(body);
     this._turnContinuity = readTurnContinuity(body);
     this._inFlight = true;
+    this._turnOriginContext = Object.freeze(structuredClone([...ctx.messages]));
     // Fresh splice coordinates for this streamText call. Steers already
     // buffered survive — they were typed for the turn that is about to run.
     this.userSteer.beginTurn();
@@ -4132,10 +4133,21 @@ export abstract class ActorAgent extends Think<Env> {
   /** The in-flight turn's resolved context window — set in beforeTurn, read
    *  by beforeStep's prune budget every step. */
   protected _turnContextWindow = 0;
+  private _turnOriginContext: readonly ModelMessage[] = [];
 
   /** The bounded MEMORY.md tail read at turn assembly — the one dynamic-context
    *  input behind an await, so the per-step snapshot closes over it. */
   private _turnMemoryTail: string | undefined;
+
+  /**
+   * The planes only a subclass's own stores can answer, as typed source
+   * callbacks read per step by the shared assembler. Empty here; the
+   * orchestrator supplies the decisions parked on its user and the notices only
+   * it learns.
+   */
+  protected extraDynamicContext(): ActorDynamicContextExtras {
+    return {};
+  }
 
   /**
    * The live state of this agent, read fresh for ONE model step.
@@ -4145,11 +4157,17 @@ export abstract class ActorAgent extends Think<Env> {
    * the block on every request and append a block per step.
    */
   protected dynamicContextSnapshot(): DynamicContext {
+    const extras = this.extraDynamicContext();
     return collectDynamicContext({
       rt: this.rt,
       stores: this.stores,
       memoryTail: this._turnMemoryTail,
-      missingCapabilities: this._mcpUnavailable,
+      missingCapabilities: [
+        ...this._mcpUnavailable,
+        ...(extras.extraMissingCapabilities?.() ?? []),
+      ],
+      subordinateDelegates: () => this.subordinateDelegates(),
+      approvals: extras.approvals,
     });
   }
 

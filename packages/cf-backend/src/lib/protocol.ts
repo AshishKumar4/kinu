@@ -3,8 +3,8 @@
  */
 
 import type {
-	ActivityLogEntry, ContextComposition, StepTelemetry, Usage,
-	WorkspaceSpend,
+	ActivityLogEntry, ContextComposition, DeviceConsentScope, StepTelemetry,
+	Usage, WorkspaceSpend,
 } from "@kinu.run/core";
 
 /**
@@ -247,7 +247,7 @@ export interface PendingConsent {
 	deviceLabel: string;
 	method: string;
 	command: string;
-	scope: "all_local_actions";
+	scope: DeviceConsentScope;
 	createdAt: number;
 	/** The workspace whose grant is being decided, when a workspace asked. */
 	workspaceName?: string;

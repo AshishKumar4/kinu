@@ -19,10 +19,12 @@ import type { AgentContext, FiberRecoveryContext, FiberRecoveryResult } from 'ag
 import type { ToolSet } from 'ai';
 import {
   BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest,
-  type AgentOrchestrator, type AgentRuntime, type CompletedTurn, type IngressDescriptor,
-  type ProfileCatalogEnvelope, type ProviderCatalogSnapshot, type RunEndReason,
-  type SqlExecRow, type SqlValue, type SubordinateRosterStore, type BackgroundJobStore,
-  type JsonValue,
+  type AgentOrchestrator, type AgentRuntime, type CompletedTurn, type DynamicContext,
+  type IngressDescriptor, type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
+  type RunEndReason, type SqlExecRow, type SqlValue, type SubordinateRosterStore,
+  type BackgroundJobStore, type JsonValue,
+  type DeviceConsentDecision, type DeviceConsentRequest,
+  type ShellApprovalRequest,
 } from '@kinu.run/core';
 import * as v from 'valibot';
 import { joinHarnessFibers, mockAgentsSdk, seedOrphanFiberRow } from './agents-sdk';
@@ -159,6 +161,18 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   }
   /** A live turn, which no test can produce without a model. */
   declareTurnInFlight(inFlight: boolean): void { this._inFlight = inFlight; }
+  /** The per-step dynamic context, assembled exactly as a model step sees it —
+   *  the shared core assembler over this actor's own stores. */
+  observeDynamicContext(): DynamicContext { return this.dynamicContextSnapshot(); }
+  /** Park one deferred shell approval, the way the run gate does. */
+  harnessParkShellApproval(req: ShellApprovalRequest) {
+    return this.deferrals.park(req);
+  }
+  /** Raise one device-consent prompt without awaiting its answer — the parked
+   *  state a dynamic-context approval row names. The caller owns the promise. */
+  harnessAwaitDeviceConsent(req: DeviceConsentRequest): Promise<DeviceConsentDecision> {
+    return this.awaitDeviceConsent(req);
+  }
 }
 
 /** An actor's stored naming state as a test reads it — the same two rows

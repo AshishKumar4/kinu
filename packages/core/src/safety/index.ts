@@ -82,6 +82,7 @@ export {
   DEVICE_PROVISION_METHOD,
   parseConsentScope,
   mergeConsentScope,
+  deviceConsentScopeForMethod,
   summarizeDeviceAction,
   type DeviceConsentScope,
   type DeviceConsentDecision,

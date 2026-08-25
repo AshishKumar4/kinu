@@ -17,6 +17,7 @@ import { normalizePath } from '@kinu.run/agent-utils';
 import { removeTreeWithVfsOps, type VfsNativeMutations } from '../vfs/mounts';
 import type { VFS } from '../types/primitives';
 import { renderThrownChain } from '../obs/index';
+import { PLATFORM_CATALOG } from '../platform-catalog';
 
 /** Just enough of the router to find one executor's files, and to ask that
  *  environment where its own relative paths resolve. */
@@ -94,6 +95,143 @@ export type ExecutorWriteResult = { ok: true } | { error: string };
  *  one constant in the tree that models peak resident bytes instead is
  *  `identity/archive.ts`'s page budget. */
 const MAX_VIEWABLE_BYTES = 512 * 1024;
+
+/** One Worker↔actor RPC payload of a chunked file transfer. A quarter of the
+ *  catalogued 32 MiB structured-clone ceiling (`do.facet.rpc_bytes`) — far
+ *  under it, with headroom for clone metadata, and small enough that one
+ *  chunk never dominates isolate memory. */
+export const FILE_CHUNK_BYTES = PLATFORM_CATALOG['do.facet.rpc_bytes'].limit.value / 4;
+
+/** Total bytes one file transfer may carry. The transfer's peak transient
+ *  footprint is roughly twice its total (accumulated parts plus the assembled
+ *  copy at finalize), so a quarter of the measured 128 MiB
+ *  `do.isolate.transient_alloc_reset` wall keeps that peak near half the wall
+ *  even at the limit. */
+export const FILE_TRANSFER_MAX_BYTES = PLATFORM_CATALOG['do.isolate.transient_alloc_reset'].limit.value / 4;
+
+/**
+ * Actor-side state for one chunked upload. Chunks must arrive in order —
+ * `offset` is checked against what has actually been buffered, never trusted —
+ * and an `offset === 0` chunk (re)starts the transfer, because the holder
+ * constructs a fresh instance there. With `final` the buffered parts assemble
+ * and write in one plane call.
+ */
+export class ExecutorFileUpload {
+  private parts: Uint8Array[] = [];
+  private received = 0;
+  private settled = false;
+
+  constructor(
+    private readonly router: ExecutorFileLookup,
+    private readonly executorId: string,
+    private readonly path: string,
+  ) {}
+
+  /** True once finalized or aborted — the holder must stop feeding it. */
+  get done(): boolean {
+    return this.settled;
+  }
+
+  async chunk(offset: number, chunk: Uint8Array, final: boolean): Promise<ExecutorWriteResult> {
+    if (this.settled) return { error: 'file transfer already settled' };
+    if (offset < 0) return { error: 'chunk offset must not be negative' };
+    if (offset !== this.received) {
+      return { error: `file transfer out of sync: expected offset ${String(this.received)}, got ${String(offset)}` };
+    }
+    if (chunk.byteLength > FILE_CHUNK_BYTES) {
+      return { error: `chunk exceeds ${String(FILE_CHUNK_BYTES)} bytes` };
+    }
+    if (this.received + chunk.byteLength > FILE_TRANSFER_MAX_BYTES) {
+      this.settled = true;
+      return { error: `file exceeds the ${String(Math.floor(FILE_TRANSFER_MAX_BYTES / (1024 * 1024)))} MiB transfer limit` };
+    }
+    this.parts.push(chunk);
+    this.received += chunk.byteLength;
+    if (!final) return { ok: true };
+    const assembled = new Uint8Array(this.received);
+    let at = 0;
+    for (const part of this.parts) {
+      assembled.set(part, at);
+      at += part.byteLength;
+    }
+    this.settled = true;
+    return writeExecutorFileOp(this.router, this.executorId, this.path, assembled);
+  }
+
+  abort(): void {
+    this.parts = [];
+    this.received = 0;
+    this.settled = true;
+  }
+}
+
+/** Actor-side snapshot behind one chunked download. `open` reads once, enforces
+ * the total, and returns that same snapshot's size; ranges can neither race a
+ * later stat nor observe a different file version. */
+export class ExecutorFileDownload {
+  private bytes: Uint8Array | null = null;
+
+  constructor(
+    private readonly router: ExecutorFileLookup,
+    private readonly executorId: string,
+    private readonly path: string,
+  ) {}
+
+  /** Whether this buffer already holds exactly this file. */
+  serves(executorId: string, path: string): boolean {
+    return this.bytes !== null && this.executorId === executorId && this.path === path;
+  }
+
+  completeAfter(end: number): boolean {
+    return this.bytes !== null && end >= this.bytes.byteLength;
+  }
+
+  /** Size before any byte moves, so the caller can refuse an over-budget
+   *  transfer instead of reading it. */
+  async size(): Promise<{ size: number } | { error: string }> {
+    return statExecutorFile(this.router, this.executorId, this.path);
+  }
+  async open(): Promise<
+    { size: number }
+    | { error: string; reason: 'too_large' | 'unavailable' }
+  > {
+    const stat = await this.size();
+    if ('error' in stat) return { ...stat, reason: 'unavailable' };
+    if (stat.size > FILE_TRANSFER_MAX_BYTES) {
+      return {
+        reason: 'too_large',
+        error: `file exceeds the ${String(Math.floor(FILE_TRANSFER_MAX_BYTES / (1024 * 1024)))} MiB transfer limit`,
+      };
+    }
+    const loaded = await this.load();
+    return 'error' in loaded ? loaded : { size: loaded.byteLength };
+  }
+
+  private async load(): Promise<
+    Uint8Array | { error: string; reason: 'too_large' | 'unavailable' }
+  > {
+    if (this.bytes !== null) return this.bytes;
+    const read = await readExecutorFileBytes(this.router, this.executorId, this.path);
+    if ('error' in read) return { ...read, reason: 'unavailable' };
+    if (read.bytes.byteLength > FILE_TRANSFER_MAX_BYTES) {
+      return {
+        reason: 'too_large',
+        error: `file exceeds the ${String(Math.floor(FILE_TRANSFER_MAX_BYTES / (1024 * 1024)))} MiB transfer limit`,
+      };
+    }
+    this.bytes = read.bytes;
+    return this.bytes;
+  }
+
+  async range(offset: number, length: number): Promise<{ bytes: Uint8Array } | { error: string }> {
+    if (offset < 0) return { error: 'chunk offset must not be negative' };
+    if (length <= 0) return { error: 'chunk length must be positive' };
+    const loaded = await this.load();
+    if ('error' in loaded) return loaded;
+    if (offset >= loaded.byteLength) return { error: 'chunk offset past end of file' };
+    return { bytes: loaded.subarray(offset, offset + length) };
+  }
+}
 
 /** The named executor's file view, or null when it has none (unknown id, or an
  *  environment with no browsable filesystem). */
@@ -245,6 +383,29 @@ export async function readExecutorFileBytes(
     if (stat?.isDir) return { error: 'path is a directory' };
     const raw = await vfs.readFile(path);
     return { bytes: raw instanceof Uint8Array ? raw : new TextEncoder().encode(raw) };
+  } catch (err) {
+    return { error: renderThrownChain({ cause: err }) };
+  }
+}
+
+/**
+ * Size of one file, before any byte is read — the download route's preflight.
+ * The HTTP layer refuses an over-budget transfer with this number instead of
+ * reading the file and discovering the size afterwards.
+ */
+export async function statExecutorFile(
+  router: ExecutorFileLookup,
+  executorId: string,
+  path: string,
+): Promise<{ size: number } | { error: string }> {
+  if (!path) return { error: 'path required' };
+  const vfs = executorFiles(router, executorId);
+  if (!vfs) return { error: `Executor "${executorId}" has no file plane` };
+  try {
+    const stat = await vfs.stat(path);
+    if (!stat) return { error: `no such file: ${path}` };
+    if (stat.isDir) return { error: 'path is a directory' };
+    return { size: stat.size };
   } catch (err) {
     return { error: renderThrownChain({ cause: err }) };
   }

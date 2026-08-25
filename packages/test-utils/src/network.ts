@@ -4,7 +4,7 @@
 //   1. assert what URL / headers / body the provider sent
 //   2. control the response shape (200/401/etc.)
 //   3. simulate refresh-on-401 flows by switching handlers between calls
-import { asFetchFunction } from '@kinu.run/core';
+import { asFetchFunction, copyHeaders } from '@kinu.run/core';
 import * as v from 'valibot';
 
 export interface RecordedRequest {
@@ -57,7 +57,7 @@ export function createMockFetch(handlers: MockFetchHandler[]): MockFetchHandle {
     const method = (init?.method ?? 'GET').toUpperCase();
     const headers: Record<string, string> = {};
     if (init?.headers) {
-      new Headers(init.headers).forEach((v, k) => { headers[k] = v; });
+      copyHeaders(init.headers).forEach((v, k) => { headers[k] = v; });
     }
     const bodyParse = v.safeParse(v.string(), init?.body);
     const body = bodyParse.success ? bodyParse.output : undefined;

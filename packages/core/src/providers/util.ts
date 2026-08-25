@@ -25,6 +25,34 @@ export interface AuthedFetchOptions {
   mutate?: (ctx: { url: string; headers: Headers; auth: AuthResolution }) => string | void;
 }
 
+function isHeaderIterable(value: HeadersInit): value is HeadersInit & Iterable<Iterable<string>> {
+  return Symbol.iterator in Object(value);
+}
+
+/** Copy every web-platform HeadersInit form without passing the DOM iterable
+ * union into Bun's narrower constructor overload. */
+export function copyHeaders(init: HeadersInit | undefined): Headers {
+  const headers = new Headers();
+  if (init === undefined) return headers;
+  if (init instanceof Headers) {
+    init.forEach((value, name) => { headers.append(name, value); });
+    return headers;
+  }
+  if (isHeaderIterable(init)) {
+    for (const pair of init) {
+      const [name, value] = pair;
+      if (name === undefined || value === undefined) {
+        throw new Error('header pair must contain a name and value');
+      }
+      headers.append(name, value);
+    }
+    return headers;
+  }
+  for (const [name, value] of Object.entries(init)) headers.append(name, value);
+  return headers;
+}
+
+
 /**
  * Build the resolve-auth → 401-if-missing → merge-headers → fetch wrapper
  * every API-key provider needs. Auth is re-resolved per request so credential
@@ -51,7 +79,7 @@ export function createAuthedFetch(deps: ProviderDeps, opts: AuthedFetchOptions):
       }
       auth = { ...auth, baseURL };
     }
-    const headers = new Headers(init?.headers);
+    const headers = copyHeaders(init?.headers);
     for (const [k, v] of Object.entries(auth.headers)) headers.set(k, v);
     const url = input instanceof Request ? input.url : input.toString();
     const rewritten = opts.mutate?.({ url, headers, auth });

@@ -223,6 +223,15 @@ describe("executor lifecycle state", () => {
     expect(handle.execOptions).toEqual([{ cwd: "/workspace" }]);
   });
 
+  test("sandbox exists shell-quotes command substitutions in paths", async () => {
+    const handle = sandboxHandle();
+    const executor = createSandboxExecutor(handle);
+    const path = "/tmp/$(touch /tmp/pwned)";
+
+    expect(await executor.tools.exists.execute(path)).toBe("false");
+    expect(handle.calls).toContain(`exec:test -e '${path}' && echo true || echo false`);
+  });
+
   test("sandbox port discovery preserves a real SDK failure", async () => {
     const handle = sandboxHandle();
     handle.getExposedPorts = async () => { throw new Error("preview registry unavailable"); };

@@ -78,9 +78,13 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     // message the daemon was asked to ignore.
     expect(harness.deviceFrames.filter((f) => f.method === 'exec')).toEqual([]);
     // And the card the owner saw names the workspace whose access it decides.
-    expect(harness.consentPrompts).toEqual([
-      { workspace: WORKSPACE, method: 'exec', command: 'rm -rf ~/work', workspaceName: WORKSPACE },
-    ]);
+    expect(harness.consentPrompts).toEqual([{
+      workspace: WORKSPACE,
+      method: 'exec',
+      command: 'rm -rf ~/work',
+      scope: 'full_filesystem',
+      workspaceName: WORKSPACE,
+    }]);
     harness.close();
   });
 
@@ -105,6 +109,21 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     harness.close();
   });
 
+
+  test('a base grant still asks before the unrestricted shell', async () => {
+    const harness = await deviceHarness();
+    await harness.userDO.setDeviceConsentScope(
+      await testOwner(), WORKSPACE, harness.deviceId, 'all_local_actions',
+    );
+    harness.consentDecision = 'deny';
+
+    await expect(harness.userDO.deviceRpc(
+      harness.workspace, 'exec', ['cat /etc/passwd'], { agentName: WORKSPACE },
+    )).rejects.toThrow(DEVICE_CONSENT_DENIED);
+    expect(harness.deviceFrames).toEqual([]);
+    expect(harness.consentPrompts[0]?.scope).toBe('full_filesystem');
+    harness.close();
+  });
   test('the grant covers file reads too — the whole device plane, not just exec', async () => {
     const harness = await deviceHarness();
     harness.consentDecision = 'deny';
@@ -155,6 +174,37 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     expect(harness.consentPrompts.map((p) => p.workspace)).toEqual([OTHER_WORKSPACE]);
     harness.close();
   });
+
+  test('omitting agentName cannot bypass consent for workspace operations', async () => {
+    const harness = await deviceHarness();
+    harness.consentDecision = 'deny';
+
+    await expect(harness.userDO.deviceRpc(harness.workspace, 'exec', ['cat /etc/passwd']))
+      .rejects.toThrow(DEVICE_CONSENT_DENIED);
+    await expect(harness.userDO.deviceRpc(
+      harness.workspace,
+      'checkpointRestore',
+      [WORKSPACE, '/home/me/project', 'cp-1'],
+    )).rejects.toThrow(DEVICE_CONSENT_DENIED);
+
+    expect(harness.deviceFrames).toEqual([]);
+    expect(harness.consentPrompts.map((prompt) => prompt.method))
+      .toEqual(['exec', 'checkpointRestore']);
+    expect(harness.consentPrompts.map((prompt) => prompt.scope))
+      .toEqual(['full_filesystem', 'full_filesystem']);
+    harness.close();
+  });
+
+  test('the closed checkpoint-read set stays consent-free', async () => {
+    const harness = await deviceHarness();
+    harness.consentDecision = 'deny';
+
+    await harness.userDO.deviceRpc(harness.workspace, 'checkpointStatus', []);
+
+    expect(harness.consentPrompts).toEqual([]);
+    expect(harness.deviceFrames.map((frame) => frame.method)).toEqual(['checkpointStatus']);
+    harness.close();
+  });
 });
 
 describe('a device is visible before it is usable', () => {
@@ -174,10 +224,11 @@ describe('a device is visible before it is usable', () => {
 
   test('the same read reports the grant once it exists', async () => {
     const harness = await deviceHarness();
-    await harness.userDO.setDeviceConsentScope(await testOwner(), WORKSPACE, harness.deviceId, 'all_local_actions');
+    await harness.userDO.setDeviceConsentScope(
+      await testOwner(), WORKSPACE, harness.deviceId, 'all_local_actions',
+    );
 
     expect((await harness.userDO.deviceRuntimeStatus(harness.workspace)).workspaceGranted).toBe(true);
-    // A sibling's view is its own: the grant is not a property of the device.
     expect((await harness.userDO.deviceRuntimeStatus(harness.sibling)).workspaceGranted).toBe(false);
     harness.close();
   });
@@ -190,11 +241,18 @@ describe('a device is visible before it is usable', () => {
     expect((await harness.userDO.listDevices(await testOwner()))[0].label).toBe('studio tower');
     expect((await harness.userDO.deviceRuntimeStatus(harness.workspace)).devices?.[0].name)
       .toBe('studio tower');
-
-    // An empty name is not a name, and an unknown device is not renamed.
-    expect(await harness.userDO.renameDevice(await testOwner(), harness.deviceId, '   ')).toEqual({ ok: false });
-    expect(await harness.userDO.renameDevice(await testOwner(), 'dev-nope', 'x')).toEqual({ ok: false });
+    expect(await harness.userDO.renameDevice(await testOwner(), harness.deviceId, '   '))
+      .toEqual({ ok: false });
+    expect(await harness.userDO.renameDevice(await testOwner(), 'dev-nope', 'x'))
+      .toEqual({ ok: false });
     expect((await harness.userDO.listDevices(await testOwner()))[0].label).toBe('studio tower');
+    harness.close();
+  });
+
+  test('registration bounds the name before any surface can render it', async () => {
+    const harness = await deviceHarness(`  ${'x'.repeat(120)}  `);
+    expect((await harness.userDO.listDevices(await testOwner()))[0].label)
+      .toBe('x'.repeat(80));
     harness.close();
   });
 });
@@ -212,6 +270,7 @@ describe('asking for a machine when there is none', () => {
       workspace: WORKSPACE,
       method: DEVICE_PROVISION_METHOD,
       command: expect.stringContaining('Connect this computer'),
+      scope: 'all_local_actions',
       workspaceName: WORKSPACE,
     }]);
     harness.close();
@@ -370,13 +429,11 @@ describe('a copied device.json goes stale', () => {
   });
 });
 
-describe('the owner-session device bypass stays unreachable from HTTP', () => {
+describe('device RPC stays unreachable from owner HTTP routes', () => {
   test('no /api/user route forwards an arbitrary method to deviceRpc', () => {
     const source = readFileSync(new URL('../src/user/routes.ts', import.meta.url).pathname, 'utf8');
-    // `deviceRpc` skips consent when the caller is the owner and no agentName
-    // is passed (user-do.ts). That is correct for DO-to-DO bookkeeping and
-    // catastrophic if an HTTP route ever exposes it: the owner's browser
-    // session would become a shell on their own machine, ungated.
+    // Checkpoint reads are the only consent-free methods. An HTTP pass-through
+    // would still widen the owner route into an undeclared device RPC surface.
     expect(source).not.toContain('deviceRpc');
   });
 });

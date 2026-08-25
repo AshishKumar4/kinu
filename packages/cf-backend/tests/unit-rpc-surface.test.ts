@@ -292,6 +292,17 @@ describe('the agent surfaces cannot drift from their classes', () => {
     expect(missing.sort()).toEqual([]);
   });
 
+  test('worker routes call only methods on the orchestrator surface', () => {
+    const called = ['terminal-route.ts', 'files-routes.ts'].flatMap((file) =>
+      [...source(file).matchAll(/\bagent\.([A-Za-z]\w*)\(/g)]
+        .map((match) => match[1])
+        .filter((name): name is string => name !== undefined));
+    expect(called).toContain('prepareTerminal');
+    expect(called).toContain('readExecutorFileChunk');
+    expect(called).toContain('writeExecutorFileChunk');
+    expect(called.filter((name) => !ORCHESTRATOR_RPC_SURFACE.includes(name))).toEqual([]);
+  });
+
   test('internal cross-DO wire methods stay sealed from client RPC', () => {
     expect(internalOrchestratorWire.filter((name) => !ORCHESTRATOR_RPC_SURFACE.includes(name)))
       .toEqual([]);

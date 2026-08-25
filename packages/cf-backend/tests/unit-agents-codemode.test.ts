@@ -150,6 +150,7 @@ function fullDeps(): AgentsToolDeps {
     ...searchOnlyDeps(),
     team: {
       delegation: ROOT_DELEGATION_BUDGET,
+      snapshot: () => [],
       list: async () => [],
       create: async () => ({
         name: 'n',

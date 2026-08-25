@@ -430,7 +430,7 @@ export function createSandboxExecutor(
         if (path === undefined) {
           return refusalText(new KinuError('bad_input', 'sandbox exists: path must be a string'));
         }
-        const res = await withSandboxRetry(() => touch(() => handle.exec(`test -e ${JSON.stringify(path)} && echo true || echo false`)));
+        const res = await withSandboxRetry(() => touch(() => handle.exec(`test -e ${shellQuote(path)} && echo true || echo false`)));
         const out = (res.stdout ?? res.output ?? '').trim();
         return out.includes('true') ? 'true' : 'false';
       },

@@ -20,6 +20,10 @@ const TOKEN_ROTATION = 'ROTATE';
  *  in cli-backend/src/runtime.ts — this daemon ships as one dependency-free
  *  file, so it carries its own copy rather than importing one. */
 const EXITED_COMMAND_DRAIN_MS = 250;
+/** Each exec stream stays far below the Worker WebSocket's documented 32 MiB
+ * receive ceiling even after worst-case JSON escaping. The daemon drains bytes
+ * past the cap without retaining them, so a noisy process cannot grow its heap. */
+const EXEC_STREAM_MAX_BYTES = 512 * 1024;
 
 function log(...a) { console.log(new Date().toISOString(), ...a); }
 
@@ -556,6 +560,49 @@ function whichAll(names) {
   const dirs = String(process.env.PATH || '').split(path.delimiter).filter(Boolean);
   return probeNames(names).filter((name) => onPath(dirs, name));
 }
+function withinDeviceRoot(realRoot, target) {
+  const relative = path.relative(realRoot, target);
+  return relative === ''
+    || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
+
+function confinedDevicePath(requested, root, allowMissing = false) {
+  if (!root) return requested;
+  const realRoot = fs.realpathSync(root);
+  let target;
+  if (fs.existsSync(requested)) {
+    target = fs.realpathSync(requested);
+  } else {
+    if (!allowMissing) throw new Error(`device path does not exist: ${requested}`);
+    let parent = path.dirname(path.resolve(requested));
+    while (!fs.existsSync(parent)) {
+      const next = path.dirname(parent);
+      if (next === parent) throw new Error(`device path has no existing parent: ${requested}`);
+      parent = next;
+    }
+    const realParent = fs.realpathSync(parent);
+    target = path.resolve(realParent, path.relative(parent, path.resolve(requested)));
+  }
+  if (!withinDeviceRoot(realRoot, target)) {
+    throw new Error(`device path '${requested}' resolves outside the consented directory '${root}'`);
+  }
+  return target;
+}
+
+/** Authorize the directory entry, not its symlink target. Reads follow a
+ * symlink only when its target stays inside the root; unlink removes the named
+ * entry itself, which is native unlink semantics and cannot touch the target. */
+function confinedDeviceEntry(requested, root) {
+  if (!root) return requested;
+  const realRoot = fs.realpathSync(root);
+  const requestedAbsolute = path.resolve(requested);
+  const realParent = fs.realpathSync(path.dirname(requestedAbsolute));
+  if (!withinDeviceRoot(realRoot, realParent)) {
+    throw new Error(`device path '${requested}' resolves outside the consented directory '${root}'`);
+  }
+  return path.join(realParent, path.basename(requestedAbsolute));
+}
+
 
 // ── RPC dispatch ───────────────────────────────────────────────────────
 
@@ -568,14 +615,39 @@ function handle(msg, ws, ctx) {
       // Pre-mutation snapshot (invisible; deduped per agent turn).
       if (checkpoints && msg.checkpoint) checkpoints.ensure(msg.checkpoint, process.cwd());
       const child = spawn('/bin/sh', ['-c', cmd], { stdio: ['ignore', 'pipe', 'pipe'] });
-      let stdout = '', stderr = '', answered = false;
+      const stdoutChunks = [], stderrChunks = [];
+      let stdoutBytes = 0, stderrBytes = 0, stdoutTruncated = false, stderrTruncated = false;
+      let answered = false;
+      const collect = (chunks, byteCount, data) => {
+        const chunk = Buffer.from(data);
+        const remaining = Math.max(0, EXEC_STREAM_MAX_BYTES - byteCount);
+        if (remaining > 0) chunks.push(chunk.subarray(0, remaining));
+        return {
+          bytes: byteCount + Math.min(chunk.length, remaining),
+          truncated: chunk.length > remaining,
+        };
+      };
+      const render = (chunks, truncated) => Buffer.concat(chunks).toString()
+        + (truncated ? `\n[output truncated at ${EXEC_STREAM_MAX_BYTES} bytes]\n` : '');
       const answer = (code) => {
         if (answered) return;
         answered = true;
-        rpc(ws, id, { stdout, stderr, exitCode: code ?? 0 });
+        rpc(ws, id, {
+          stdout: render(stdoutChunks, stdoutTruncated),
+          stderr: render(stderrChunks, stderrTruncated),
+          exitCode: code ?? 0,
+        });
       };
-      child.stdout.on('data', (d) => { stdout += d.toString(); });
-      child.stderr.on('data', (d) => { stderr += d.toString(); });
+      child.stdout.on('data', (data) => {
+        const next = collect(stdoutChunks, stdoutBytes, data);
+        stdoutBytes = next.bytes;
+        stdoutTruncated ||= next.truncated;
+      });
+      child.stderr.on('data', (data) => {
+        const next = collect(stderrChunks, stderrBytes, data);
+        stderrBytes = next.bytes;
+        stderrTruncated ||= next.truncated;
+      });
       // `close` waits for every inherited pipe to shut, so a command that
       // backgrounds a server (`./server &`) would not answer until the SERVER
       // exited. `exit` means the command itself is done; drain briefly for the
@@ -592,31 +664,53 @@ function handle(msg, ws, ctx) {
       });
       child.on('error', (e) => { if (!answered) { answered = true; rpc(ws, id, null, e.message); } });
     } else if (method === 'readFile') {
+      const options = params[1] || {};
+      const confined = confinedDevicePath(params[0], options.root);
       // { encoding: 'base64' } → binary-safe read, answered in a shape the
       // caller can distinguish from the plain-text default.
-      if (params[1] && params[1].encoding === 'base64') {
-        rpc(ws, id, { content: fs.readFileSync(params[0]).toString('base64'), encoding: 'base64' });
+      if (options.encoding === 'base64') {
+        rpc(ws, id, { content: fs.readFileSync(confined).toString('base64'), encoding: 'base64' });
       } else {
-        rpc(ws, id, fs.readFileSync(params[0], 'utf8'));
+        rpc(ws, id, fs.readFileSync(confined, 'utf8'));
       }
     } else if (method === 'writeFile') {
+      const options = params[2] || {};
+      const confined = confinedDevicePath(params[0], options.root, true);
       if (checkpoints && msg.checkpoint) {
         const hint = msg.checkpoint;
-        checkpoints.ensure(hint, hint.dir || checkpoints.workdirForPath(params[0]));
+        checkpoints.ensure(hint, hint.dir || checkpoints.workdirForPath(confined));
       }
-      fs.mkdirSync(path.dirname(params[0]), { recursive: true });
-      // { encoding: 'base64' } (3rd param) → binary-safe write.
-      const body = params[2] && params[2].encoding === 'base64'
+      fs.mkdirSync(path.dirname(confined), { recursive: true });
+      const body = options.encoding === 'base64'
         ? Buffer.from(String(params[1]), 'base64')
         : params[1];
-      fs.writeFileSync(params[0], body);
+      fs.writeFileSync(confined, body);
       rpc(ws, id, { success: true });
     } else if (method === 'listFiles') {
-      const p = params[0] || os.homedir();
-      const entries = fs.readdirSync(p, { withFileTypes: true });
+      const options = params[1] || {};
+      const confined = confinedDevicePath(params[0] || os.homedir(), options.root);
+      const entries = fs.readdirSync(confined, { withFileTypes: true });
       rpc(ws, id, entries.map((e) => ({ name: e.name, type: e.isDirectory() ? 'dir' : 'file' })));
+    } else if (method === 'statPath') {
+      const options = params[1] || {};
+      const confined = confinedDevicePath(params[0], options.root, true);
+      if (!fs.existsSync(confined)) return rpc(ws, id, null);
+      const stat = fs.statSync(confined);
+      rpc(ws, id, { size: stat.size, mtimeMs: stat.mtimeMs, isDir: stat.isDirectory() });
+    } else if (method === 'unlinkPath') {
+      const options = params[1] || {};
+      fs.unlinkSync(confinedDeviceEntry(params[0], options.root));
+      rpc(ws, id, { success: true });
+    } else if (method === 'mkdirPath') {
+      const options = params[1] || {};
+      fs.mkdirSync(confinedDevicePath(params[0], options.root, true), {
+        recursive: options.recursive === true,
+      });
+      rpc(ws, id, { success: true });
     } else if (method === 'exists') {
-      rpc(ws, id, fs.existsSync(params[0]));
+      const options = params[1] || {};
+      const confined = confinedDevicePath(params[0], options.root, true);
+      rpc(ws, id, fs.existsSync(confined));
     } else if (method === 'listPorts') {
       rpc(ws, id, listListeningPorts());
     } else if (method === 'which') {
@@ -642,9 +736,66 @@ function handle(msg, ws, ctx) {
 
 // ── Daemon startup ─────────────────────────────────────────────────────
 
+async function getConnectTicket(cfg, httpOrigin, fetchFn = fetch) {
+  const res = await fetchFn(httpOrigin + '/pc/connect-ticket', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ user: cfg.user, token: cfg.token }),
+  });
+  let body = {};
+  try { body = await res.json(); }
+  catch (err) {
+    // A gateway's non-JSON error page is diagnosed by the status check below;
+    // an unreadable body behind HTTP 200 is a real protocol failure.
+    if (res.ok) throw new Error(`ticket exchange returned an unreadable body: HTTP ${res.status}`, { cause: err });
+  }
+  if (!res.ok || !body.ticket) throw new Error(body.error || ('ticket exchange failed: HTTP ' + res.status));
+  return body.ticket;
+}
+
+function persistRotatedToken(cfg, token, configPath = CONFIG_PATH) {
+  const temporary = `${configPath}.rotate-${process.pid}-${Date.now()}`;
+  const next = { ...cfg, token };
+  let fileDescriptor;
+  try {
+    fileDescriptor = fs.openSync(temporary, 'wx', 0o600);
+    fs.writeFileSync(fileDescriptor, JSON.stringify(next, null, 2) + '\n');
+    fs.fsyncSync(fileDescriptor);
+    fs.closeSync(fileDescriptor);
+    fileDescriptor = undefined;
+    fs.renameSync(temporary, configPath);
+    cfg.token = token;
+    if (os.platform() !== 'win32') {
+      const directoryDescriptor = fs.openSync(path.dirname(configPath), 'r');
+      try { fs.fsyncSync(directoryDescriptor); }
+      finally { fs.closeSync(directoryDescriptor); }
+    }
+  } catch (err) {
+    if (fileDescriptor !== undefined) fs.closeSync(fileDescriptor);
+    fs.rmSync(temporary, { force: true });
+    throw new Error('persist rotated device token', { cause: err });
+  }
+}
+
+function handleTokenRotation(
+  cfg,
+  msg,
+  configPath = CONFIG_PATH,
+  logger = log,
+) {
+  if (!msg || msg.type !== TOKEN_ROTATION || msg.token == null || msg.token === '') return false;
+  try {
+    persistRotatedToken(cfg, msg.token, configPath);
+    logger('Device token rotated');
+  } catch (err) {
+    logger('Device token rotation failed:', err);
+  }
+  return true;
+}
+
 function main() {
   const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
-  const USER = cfg.user, TOKEN = cfg.token;
+  const USER = cfg.user;
   const HTTP_ORIGIN = (cfg.origin || 'https://kinu.run').replace(/\/+$/, '');
   const WS_ORIGIN = HTTP_ORIGIN.replace(/^http/, 'ws');
   const ctx = { checkpoints: createCheckpoints({ keep: cfg.checkpointKeep }) };
@@ -657,22 +808,7 @@ function main() {
   const mkWs = (url) => WS ? new WS(url) : new WebSocket(url);
 
   let backoff = 1000;
-  async function getTicket() {
-    const res = await fetch(HTTP_ORIGIN + '/pc/connect-ticket', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ user: USER, token: TOKEN }),
-    });
-    let body = {};
-    try { body = await res.json(); }
-    catch (err) {
-      // A gateway's non-JSON error page is diagnosed by the status check
-      // below; an unreadable body behind HTTP 200 is a real protocol failure.
-      if (res.ok) throw new Error(`ticket exchange returned an unreadable body: HTTP ${res.status}`, { cause: err });
-    }
-    if (!res.ok || !body.ticket) throw new Error(body.error || ('ticket exchange failed: HTTP ' + res.status));
-    return body.ticket;
-  }
+  const getTicket = () => getConnectTicket(cfg, HTTP_ORIGIN);
 
   async function connect() {
     let ticket;
@@ -692,25 +828,25 @@ function main() {
       ws.send(JSON.stringify({ type: 'HELLO', user: USER, os: os.platform(), hostname: os.hostname(), pid: process.pid }));
     });
     ws.addEventListener('message', (ev) => {
+      const payload = ev.data instanceof ArrayBuffer
+        ? new TextDecoder().decode(ev.data)
+        : String(ev.data);
+      let msg;
       try {
-        const payload = ev.data instanceof ArrayBuffer
-          ? new TextDecoder().decode(ev.data)
-          : String(ev.data);
-        const msg = JSON.parse(payload);
-        // The hub rotates this machine's long-lived token on every accepted
-        // connect and hands the next one down this socket. Persisting it is
-        // what makes a COPY of device.json stale: the copy keeps a secret the
-        // server has already superseded. Written before anything else is
-        // handled, and with the same 0600 the installer used.
-        if (msg && msg.type === TOKEN_ROTATION && msg.token != null && msg.token !== '') {
-          cfg.token = msg.token;
-          fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2) + '\n', { mode: 0o600 });
-          log('Device token rotated');
-          return;
-        }
-        handle(msg, ws, ctx);
+        msg = JSON.parse(payload);
+      } catch (err) {
+        log('Device message parse failed:', err);
+        return;
       }
-      catch (err) { log('parse error:', err); }
+      // The hub rotates this machine's long-lived token on every accepted
+      // connect. Rename a complete same-directory file before changing memory:
+      // a crash leaves either the old valid JSON or the complete new JSON.
+      if (handleTokenRotation(cfg, msg)) return;
+      try {
+        handle(msg, ws, ctx);
+      } catch (err) {
+        log('Device message failed:', err);
+      }
     });
     ws.addEventListener('close', () => {
       log('Disconnected, reconnecting in', backoff, 'ms');
@@ -724,4 +860,11 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { handle, createCheckpoints, listListeningPorts };
+module.exports = {
+  handle,
+  createCheckpoints,
+  listListeningPorts,
+  getConnectTicket,
+  persistRotatedToken,
+  handleTokenRotation,
+};

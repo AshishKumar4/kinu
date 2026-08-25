@@ -10,6 +10,5 @@
   "same-file packages/cf-backend/src/components/surfaces/changelog-entries.tsx#revert > useCallback | packages/cf-backend/src/components/surfaces/changelog-entries.tsx#revert > useCallback",
   "same-file packages/cf-backend/src/pages/WorkspacePage.tsx#SubordinateChatColumn > useLayoutEffect | packages/cf-backend/src/pages/WorkspacePage.tsx#WorkspacePage > useLayoutEffect",
   "same-file packages/cf-backend/src/user/mcp.ts#parseAllowedTools | packages/cf-backend/src/user/mcp.ts#parseMcpHeaders",
-  "same-file packages/core/src/execution/device-tunnel-executor.ts#execute > map | packages/core/src/execution/device-tunnel-executor.ts#readdir > map",
   "same-file packages/core/src/prompting/step-prune.ts#content > map | packages/core/src/prompting/step-prune.ts#content > map"
 ]

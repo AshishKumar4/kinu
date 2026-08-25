@@ -494,7 +494,7 @@ function DeviceAccessCard({ agentName }: { agentName: string }) {
     if (!connected) return null;
     const consents = await listDeviceConsents();
     const row = consents.find((c) => c.agentName === agentName && c.deviceId === connected.id);
-    return { device: connected, scope: row?.scope === "full_filesystem" ? "full_filesystem" : "all_local_actions" };
+    return { device: connected, scope: row?.scope ?? "all_local_actions" };
   }, [agentName]);
   const { resource, reload } = useAsyncResource(load);
   const current = lastValue(resource);
@@ -517,8 +517,8 @@ function DeviceAccessCard({ agentName }: { agentName: string }) {
   return (
     <Card title="Device access" icon={DesktopTowerIcon}>
       <p className="p-meta p-text-3">
-        How far this workspace's agent may reach through the connected laptop executor.
-        By default it sees only the folder you consented to when connecting.
+        By default this workspace can use native file actions only inside the
+        connected folder. Full access also enables the unrestricted shell.
       </p>
       {resource.status === "error" && !current ? (
         <LoadFailure what="your connected devices" message={resource.message} onRetry={reload} />
@@ -531,9 +531,9 @@ function DeviceAccessCard({ agentName }: { agentName: string }) {
         </p>
       ) : (
         <div className="flex items-center gap-2 text-xs">
-          <span className="p-text-3">File access on {current.device.label}:</span>
+          <span className="p-text-3">Access on {current.device.label}:</span>
           <span className={`font-medium ${full ? "p-warning" : "p-text-2"}`}>
-            {full ? "Full filesystem" : "Consented folder only"}
+            {full ? "Full filesystem + shell" : "Consented folder; no shell"}
           </span>
           {err && <span className="p-danger truncate">{err}</span>}
           <button
@@ -541,10 +541,10 @@ function DeviceAccessCard({ agentName }: { agentName: string }) {
             disabled={busy}
             className="ml-auto px-2 py-1 rounded-sm p-card p-card-hover p-text-2 disabled:opacity-50"
             title={full
-              ? "Restrict this agent back to the consented folder on this device"
-              : "Let this agent reach paths outside the consented folder on this device"}
+              ? "Restrict this agent to native file actions inside the consented folder"
+              : "Allow this agent to use the full filesystem and unrestricted shell"}
           >
-            {busy ? "…" : full ? "Restrict to folder" : "Allow full filesystem"}
+            {busy ? "…" : full ? "Restrict to folder" : "Allow full access"}
           </button>
         </div>
       )}

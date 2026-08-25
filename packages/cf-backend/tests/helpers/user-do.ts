@@ -9,7 +9,15 @@ import type { AgentContext } from 'agents';
 import { mockAgentsSdk } from './agents-sdk';
 import { sha256Hex } from '../../src/lib/crypto';
 import { ownerCaller, type UserCaller } from '../../src/user/workspace-capability';
-import { JsonValueSchema, type JsonValue, type SqlExec, type SqlExecRow, type SqlExecutor, type SqlValue } from '@kinu.run/core';
+import {
+  JsonValueSchema,
+  type DeviceConsentScope,
+  type JsonValue,
+  type SqlExec,
+  type SqlExecRow,
+  type SqlExecutor,
+  type SqlValue,
+} from '@kinu.run/core';
 import * as v from 'valibot';
 
 mockAgentsSdk();
@@ -73,7 +81,13 @@ export interface TestUserDO {
   destroyedWorkspaces: string[];
   /** Consent cards the UserDO raised, as raised — the workspace it asked on,
    *  the method, the words the owner would read. */
-  consentPrompts: Array<{ workspace: string; method: string; command: string; workspaceName?: string }>;
+  consentPrompts: Array<{
+    workspace: string;
+    method: string;
+    command: string;
+    scope: DeviceConsentScope;
+    workspaceName?: string;
+  }>;
   /** Cards a client would still be showing. The UserDO reads this before
    *  raising a provisioning request, so a test can prove the dedupe. */
   pendingConsents: Array<{ consentId: string; method: string }>;
@@ -269,11 +283,17 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
           const token = installed.get(name);
           return token ? sha256Hex(token) : null;
         },
-        async awaitDeviceConsent(request: { method: string; command: string; workspaceName?: string }) {
+        async awaitDeviceConsent(request: {
+          method: string;
+          command: string;
+          scope: DeviceConsentScope;
+          workspaceName?: string;
+        }) {
           const prompt: TestUserDO['consentPrompts'][number] = {
             workspace: name,
             method: request.method,
             command: request.command,
+            scope: request.scope,
           };
           if (request.workspaceName) prompt.workspaceName = request.workspaceName;
           consentPrompts.push(prompt);

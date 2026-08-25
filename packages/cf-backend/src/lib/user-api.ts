@@ -195,11 +195,12 @@ export const renameDevice   = (id: string, name: string) =>
 export const revokeDevice   = (id: string) =>
   api(OkSchema, 'DELETE', `/devices/${encodeURIComponent(id)}`);
 
-/** Per-(agent, device) remembered consent: base local-action grant, or the
- *  stronger full-filesystem tier that lifts the /pc subtree scope. */
+/** Per-(agent, device) remembered consent: native file actions inside the
+ *  connected folder, or full-filesystem plus unrestricted shell access. */
 export type DeviceConsentScope = 'all_local_actions' | 'full_filesystem';
 const DeviceConsentSchema = v.object({
-  agentName: v.string(), deviceId: v.string(), policy: v.string(), scope: v.string(),
+  agentName: v.string(), deviceId: v.string(), policy: v.string(),
+  scope: v.picklist(['all_local_actions', 'full_filesystem']),
   lastMethod: v.nullable(v.string()), lastSummary: v.nullable(v.string()),
 });
 export type DeviceConsent = v.InferOutput<typeof DeviceConsentSchema>;

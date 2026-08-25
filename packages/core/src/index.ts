@@ -688,7 +688,7 @@ export { buildRuntime } from './runtime-builder';
 export type { RuntimeComponents } from './runtime-builder';
 export { createAgentStores } from './state/agent-stores';
 export type { AgentStores } from './state/agent-stores';
-export { collectDynamicContext } from './state/dynamic-context';
+export { collectDynamicContext, subordinateDelegatesOf } from './state/dynamic-context';
 export type { DynamicContextInput } from './state/dynamic-context';
 
 // MCTS engine
@@ -1207,6 +1207,7 @@ export {
   DEVICE_PROVISION_METHOD,
   parseConsentScope,
   mergeConsentScope,
+  deviceConsentScopeForMethod,
   summarizeDeviceAction,
   type DeviceConsentScope,
   type DeviceConsentDecision,
@@ -1471,13 +1472,16 @@ export {
 export type { DiffLine, FileDiff, FileStatus, LineDiff } from './vfs/diff';
 export {
   getExecutorFiles, readExecutorFile, sortDirEntries, executorFiles, writeExecutorFileOp,
-  readExecutorFileBytes, renameExecutorPathOp, deleteExecutorPathOp,
+  readExecutorFileBytes, statExecutorFile, renameExecutorPathOp, deleteExecutorPathOp,
   listEnvironments, normalizeDir, joinDir, parentDir,
+  FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES,
+  ExecutorFileUpload, ExecutorFileDownload,
 } from './read-models/files';
 export type {
   DirEntry, ExecutorFileLookup, ExecutorRowLookup, ExecutorWriteResult,
   EnvironmentInfo, MountInfo,
 } from './read-models/files';
+export { inlineFileType } from './read-models/file-types';
 export {
   readLatestSearchTree, readSearchTree, readSearchNodeDetail,
   type SearchNodeDetail,

@@ -16,6 +16,7 @@
 
 import { describe, expect, mock, test } from 'bun:test';
 import * as v from 'valibot';
+import { readFileSync } from 'node:fs';
 import { terminalLane } from '../src/lib/terminal-lane';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { jsrpcStub } from './helpers/jsrpc-stub';
@@ -311,6 +312,24 @@ describe('attaching a terminal', () => {
     const response = await handleTerminalRequest(attachRequest('executor=sandbox'), env, WORKSPACE);
     expect(response?.status).toBe(503);
     expect(String((await body(response)).error)).toContain('not listening');
+  });
+});
+
+describe('line terminal executor switches', () => {
+  test('a new xterm resets per-terminal refs and fences old completions', () => {
+    const source = readFileSync(
+      new URL('../src/components/TerminalPane.tsx', import.meta.url),
+      'utf8',
+    );
+    const effect = source.slice(
+      source.indexOf('useEffect(() => {', source.indexOf('function LineTerminal')),
+      source.indexOf('}, [executor]);', source.indexOf('function LineTerminal')),
+    );
+    expect(effect).toContain('writtenIds.current.clear()');
+    expect(effect).toContain('lineBuffer.current = ""');
+    expect(effect).toContain('running.current = false');
+    expect(effect).toContain('busy.current = false');
+    expect(effect).toContain('if (termRef.current !== term) return');
   });
 });
 

@@ -182,6 +182,18 @@ function deviceTransport(fs: MemFs, calls: string[] = []): DeviceTransport {
       }
       if (method === 'listFiles') return fs.list(p).map((name) => ({ name }));
       if (method === 'exists') return fs.exists(p);
+      if (method === 'statPath') {
+        const stat = fs.stat(p);
+        return stat === null ? null : { ...stat, mtimeMs: fs.mtimeMs };
+      }
+      if (method === 'unlinkPath') {
+        if (!fs.del(p)) throw Object.assign(new Error(`ENOENT: no such file '${p}'`), { code: 'ENOENT' });
+        return { success: true };
+      }
+      if (method === 'mkdirPath') {
+        fs.mkdir(p);
+        return { success: true };
+      }
       if (method === 'exec') {
         const cmd = String(params[0] ?? ''), q = quoted(cmd);
         if (cmd.startsWith('stat -c')) { const r = fs.statLine(q); return { ...r, stderr: '' }; }

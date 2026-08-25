@@ -32,7 +32,7 @@ import type {
   HeadRuntime, HeadGrounding, SerializedMessage, AgentConfigStore, ShellApprovalMode,
   ShellApprovalRequest, ShellApprovalOutcome, RequestShellApproval,
   AgentsForkDeps, AgentsToolDeps, TeamToolDeps, PeersToolDeps,
-  IngressDescriptor, KinuEvent, EventVariant, MissingCapability,
+  IngressDescriptor, KinuEvent, EventVariant, MissingCapability, DynamicApproval,
   RunEvent, RunEventInput, RunEventQuery, StepLike,
   ReleaseStore, ReleaseToolDeps, BuiltinToolName,
   FileCheckpoints, FileCheckpointListing, FileRestorePlan, FileRestoreResult,
@@ -42,7 +42,7 @@ import type {
 import {
   AgentOrchestrator,
   type TurnSteering,
-  createAgentStores, type AgentStores, collectDynamicContext,
+  createAgentStores, type AgentStores, collectDynamicContext, subordinateDelegatesOf,
   type BackgroundJobStore, BackgroundJobRunner, type TaskListStore,
   wrapToolsForBackground, BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob,
   BACKGROUND_POLICY, type BackgroundPolicy,
@@ -438,6 +438,8 @@ export class LocalAgentSession implements BackendHost {
   private _headRuntime: HeadRuntime;
   private readonly onEvent: (event: SessionEvent) => void;
   private shellApprovalHandler: ShellApprovalHandler | null = null;
+  private pendingShellApproval: DynamicApproval | null = null;
+  private shellApprovalSequence = 0;
   private turnProfile: ResolvedTurnProfile | null = null;
   private turnProfileInputs: {
     envelope: ProfileCatalogEnvelope;
@@ -882,11 +884,21 @@ export class LocalAgentSession implements BackendHost {
    */
   private wrapShellApprovalHandler(handler: ShellApprovalHandler): RequestShellApproval {
     return async (req) => {
-      const outcome = await handler(req) ?? null;
-      if (outcome === 'allow_always') {
-        this.config.grantShellApproval(gatedGrants(req.review, req.executor));
+      const pending: DynamicApproval = {
+        id: `shell-${String(this.shellApprovalSequence += 1)}`,
+        kind: 'shell approval',
+        detail: `${req.executor}: ${req.command}`,
+      };
+      this.pendingShellApproval = pending;
+      try {
+        const outcome = await handler(req) ?? null;
+        if (outcome === 'allow_always') {
+          this.config.grantShellApproval(gatedGrants(req.review, req.executor));
+        }
+        return outcome;
+      } finally {
+        if (this.pendingShellApproval === pending) this.pendingShellApproval = null;
       }
-      return outcome;
     };
   }
 
@@ -2846,6 +2858,8 @@ export class LocalAgentSession implements BackendHost {
       stores: this.stores,
       memoryTail,
       missingCapabilities: this.mcpUnavailable,
+      subordinateDelegates: () => subordinateDelegatesOf(this.teamDeps?.snapshot() ?? []),
+      approvals: () => this.pendingShellApproval === null ? [] : [this.pendingShellApproval],
     });
   }
 
@@ -2874,6 +2888,7 @@ export class LocalAgentSession implements BackendHost {
     return {
       rt: this.rt,
       model: this.cachedModel ?? this.defaultModel("an agents fork"),
+      originContext: () => Object.freeze(structuredClone([...this.history])),
       // Same catalog session that answers the context window and prices the
       // mission ledger — so a search's pre-run estimate and the ledger that
       // later debits it read one rate.

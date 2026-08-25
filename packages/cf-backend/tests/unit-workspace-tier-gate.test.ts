@@ -571,7 +571,11 @@ describe('facets attenuate with their workspace', () => {
     await expect(harness.userDO.deviceRpc(sibling, 'exec', ['ls'], { agentName: WORKSPACE }))
       .rejects.toThrow('device use was not approved');
     expect(harness.consentPrompts).toEqual([{
-      workspace: OTHER_WORKSPACE, method: 'exec', command: 'ls', workspaceName: OTHER_WORKSPACE,
+      workspace: OTHER_WORKSPACE,
+      method: 'exec',
+      command: 'ls',
+      scope: 'full_filesystem',
+      workspaceName: OTHER_WORKSPACE,
     }]);
 
     // The remembered grant still belongs to workspace-a alone; being asked did

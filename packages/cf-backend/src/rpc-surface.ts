@@ -366,6 +366,8 @@ const ACTOR_AGENT_RPC_SURFACE = [
  * fork copy to another.
  */
 const ORCHESTRATOR_METHODS = [
+  'abortExecutorFileDownload',
+  'abortExecutorFileWrite',
   'acceptContainerEvent',
   'acceptEmailDelivery',
   'acceptSandboxLifecycleFailure',
@@ -385,8 +387,9 @@ const ORCHESTRATOR_METHODS = [
   'listRecentEventsWire',
   'listTriggersWire',
   'listRuns',
+  'prepareTerminal',
   'rawCopyFromFork',
-  'readExecutorFileBytes',
+  'readExecutorFileChunk',
   'receivePeerMessage',
   'recordHeadStep',
   'runScaffoldOnce',
@@ -398,8 +401,9 @@ const ORCHESTRATOR_METHODS = [
   'setEmailAllowlist',
   'setEmailNotifications',
   'setInitialDisplayName',
+  'startExecutorFileDownload',
   'transitionReleaseChange',
-  'writeExecutorFile',
+  'writeExecutorFileChunk',
 ] as const satisfies readonly (keyof OrchestratorAgent)[];
 
 export const ORCHESTRATOR_RPC_SURFACE: readonly string[] = [

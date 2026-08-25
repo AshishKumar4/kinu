@@ -30,6 +30,32 @@ describe('createDeviceTunnelExecutor', () => {
     expect(t.calls).toEqual([{ method: 'exec', params: ['echo one; echo two'] }]);
   });
 
+  test('base consent cannot escape its subtree through native file tools', async () => {
+    const t = transport(() => 'contents');
+    const provider = createDeviceTunnelExecutor(t, {
+      consentedRoot: () => '/home/dev/project',
+      hasFullFilesystem: async () => false,
+    });
+
+    const read = await provider.tools.readFile.execute('/etc/passwd');
+    const write = await provider.tools.writeFile.execute('/tmp/out', 'x');
+    const list = await provider.tools.readdir.execute('/');
+    const exists = await provider.tools.exists.execute('/root/.ssh/id_ed25519');
+
+    for (const answer of [read, write, list, exists]) {
+      expect(String(answer)).toContain('outside the consented device directory');
+    }
+    expect(t.calls).toEqual([]);
+    expect(await provider.tools.readFile.execute('/home/dev/project/readme.md')).toBe('contents');
+    expect(t.calls).toEqual([{
+      method: 'readFile',
+      params: ['/home/dev/project/readme.md', {
+        encoding: 'base64',
+        root: '/home/dev/project',
+      }],
+    }]);
+  });
+
   test('the row carries the machine\'s own name and this agent\'s grant state', () => {
     const named = staticTransport({
       connected: true,
@@ -85,10 +111,10 @@ describe('createDeviceTunnelExecutor', () => {
     await provider.tools.exists.execute(path);
 
     expect(t.calls).toEqual([
-      { method: 'readFile', params: [path] },
-      { method: 'writeFile', params: [path, 'hello'] },
-      { method: 'listFiles', params: [path] },
-      { method: 'exists', params: [path] },
+      { method: 'readFile', params: [path, { encoding: 'base64', root: null }] },
+      { method: 'writeFile', params: [path, 'hello', { root: null }] },
+      { method: 'listFiles', params: [path, { root: null }] },
+      { method: 'exists', params: [path, { root: null }] },
     ]);
   });
 
@@ -172,6 +198,28 @@ describe('createDeviceTunnelExecutor', () => {
     // that dropped its error. An unreachable read and an absent path are different
     // facts and the boolean channel cannot hold both.
     expect(answer).not.toBe(false);
+    expect(JSON.parse(String(answer))).toMatchObject({ reason: 'io' });
+  });
+
+  test('an unanswered or string-valued exists RPC never asserts absence', async () => {
+    for (const wire of [undefined, 'false']) {
+      const t = staticTransport(
+        { connected: true, registered: true, toolchain: null },
+        async () => wire,
+      );
+      const answer = await createDeviceTunnelExecutor(t).tools.exists.execute('/tmp/a');
+      expect(answer).not.toBe(false);
+      expect(JSON.parse(String(answer))).toMatchObject({ reason: 'io' });
+    }
+  });
+
+  test('a malformed base64 frame never becomes an empty file', async () => {
+    const t = staticTransport(
+      { connected: true, registered: true, toolchain: null },
+      async () => ({ encoding: 'base64', content: 42 }),
+    );
+    const answer = await createDeviceTunnelExecutor(t).tools.readFile.execute('/tmp/a');
+    expect(answer).not.toBe('');
     expect(JSON.parse(String(answer))).toMatchObject({ reason: 'io' });
   });
 });

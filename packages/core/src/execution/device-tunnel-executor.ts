@@ -20,9 +20,8 @@ import * as v from 'valibot';
 import { isAbortError, raceAbort } from '@kinu.run/agent-utils';
 import type { VFS } from '../types/primitives';
 import { makeVfsError } from '../vfs/errno';
-import { shellQuote } from '../utils/shell';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
-import { formatExecResult, parseStatLine, refusalText } from './exec-result';
+import { formatExecResult, refusalText } from './exec-result';
 import { KinuError, toKinuError } from '../obs/index';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './types';
 import {
@@ -115,6 +114,11 @@ const DeviceExecResultSchema = v.object({
   exitCode: v.number(),
 });
 const DeviceListResultSchema = v.array(JsonValueSchema);
+const DeviceStatSchema = v.nullable(v.object({
+  size: v.number(),
+  mtimeMs: v.number(),
+  isDir: v.boolean(),
+}));
 
 function parseInput<TSchema extends v.GenericSchema>(
   schema: TSchema,
@@ -185,6 +189,8 @@ export function createDeviceTunnelExecutor(
     return memo;
   };
 
+  const files = deviceFiles(transport, consent);
+
   const tools: ExecutorProvider['tools'] = {
     exec: {
       description: 'Execute a command on the user\'s local machine via the device tunnel.',
@@ -225,7 +231,7 @@ export function createDeviceTunnelExecutor(
           return refusalText(new KinuError('bad_input', 'laptop readFile: path must be a string'));
         }
         try {
-          return v.parse(v.string(), await rpc('readFile', [path]));
+          return v.parse(v.string(), await files.readFile(path, { encoding: 'utf8' }));
         } catch (err) {
           if (isDeviceNotConnectedError(err)) return NOT_CONNECTED_REFUSAL;
           return refusalText(deviceFailure({ doing: `laptop readFile ${path}`, cause: err }));
@@ -245,18 +251,7 @@ export function createDeviceTunnelExecutor(
           return refusalText(new KinuError('bad_input', 'laptop writeFile: content must be a string'));
         }
         try {
-          const result = await rpc('writeFile', [path, content]);
-          if (result !== 'ok' && !(result !== undefined && isJsonObject(result) && result.success === true)) {
-            const parsedError = result !== undefined && isJsonObject(result)
-              ? v.safeParse(v.string(), result.error)
-              : undefined;
-            const error = parsedError?.success ? parsedError.output : 'unknown error';
-            // The daemon answered, and what it answered is that the write did not
-            // happen — its own filesystem said no. `io`, and never `denied`: the
-            // daemon reports a refused path and a full disk through the same
-            // field, and `denied` is what the approval ladder means.
-            return refusalText(new KinuError('io', `laptop writeFile ${path}: ${error}`));
-          }
+          await files.writeFile(path, content);
           return `Written ${content.length} bytes to ${path}`;
         } catch (err) {
           if (isDeviceNotConnectedError(err)) return NOT_CONNECTED_REFUSAL;
@@ -273,14 +268,7 @@ export function createDeviceTunnelExecutor(
           return refusalText(new KinuError('bad_input', 'laptop readdir: path must be a string'));
         }
         try {
-          const result = v.parse(DeviceListResultSchema, await rpc('listFiles', [path || '/']));
-          return result.map((entry) => {
-            if (isJsonObject(entry)) {
-              const name = v.safeParse(v.string(), entry.name);
-              if (name.success) return name.output;
-            }
-            return JSON.stringify(entry);
-          });
+          return await files.readdir(path ?? await files.homeDir());
         } catch (err) {
           if (isDeviceNotConnectedError(err)) return NOT_CONNECTED_REFUSAL;
           return refusalText(deviceFailure({ doing: `laptop readdir ${path || '/'}`, cause: err }));
@@ -300,7 +288,7 @@ export function createDeviceTunnelExecutor(
           return refusalText(new KinuError('bad_input', 'laptop exists: path must be a string'));
         }
         try {
-          return v.parse(v.boolean(), await rpc('exists', [path]));
+          return await files.exists(path);
         } catch (err) {
           if (isDeviceNotConnectedError(err)) return NOT_CONNECTED_REFUSAL;
           return refusalText(deviceFailure({ doing: `laptop exists ${path}`, cause: err }));
@@ -309,7 +297,6 @@ export function createDeviceTunnelExecutor(
     },
   };
 
-  const files = deviceFiles(transport, consent);
   const provider: ExecutorProvider = {
     name: 'laptop',
     files,
@@ -427,10 +414,11 @@ export type DeviceVFS = VFS & Pick<ExecutorProvider, 'homeDir'>;
 /**
  * The user's machine, in the machine's own absolute paths.
  *
- * The daemon speaks readFile/writeFile/listFiles/exists natively; stat, mkdir
- * and unlink are synthesized through `exec` (GNU stat, falling back to BSD).
+ * The daemon speaks every file operation natively. Each call carries the
+ * consented root, which the daemon resolves together with the path before the
+ * filesystem sink; this client guard rejects obvious lexical escapes first.
  * Every call still crosses the hub's per-(agent, device) action-consent
- * chokepoint; this view adds the path-scope layer on top.
+ * chokepoint, and this view adds the path-scope layer on top.
  *
  * `homeDir` is the same directory the path-scope guard measures against — the
  * consented root, or `$HOME` asked of the device once and cached. The host
@@ -456,16 +444,21 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
     return cachedHome;
   };
 
-  const guard = async (path: string, op: string): Promise<void> => {
-    if (await consent.hasFullFilesystem()) return;
+  const guard = async (path: string, op: string): Promise<string | null> => {
+    if (await consent.hasFullFilesystem()) return null;
     const root = await effectiveRoot();
-    if (path === root || root === '/' || path.startsWith(`${root}/`)) return;
-    throw makeVfsError(
-      'EACCES',
-      `'${path}' is outside the consented device directory '${root}' — `
-      + `grant this agent the full-filesystem consent tier to reach it, ${op} '${path}'`,
-      path,
-    );
+    if (!(path === root || root === '/' || path.startsWith(`${root}/`))) {
+      throw makeVfsError(
+        'EACCES',
+        `'${path}' is outside the consented device directory '${root}' — `
+        + `grant this agent the full-filesystem consent tier to reach it, ${op} '${path}'`,
+        path,
+      );
+    }
+    // The daemon resolves both root and path through realpath before the sink.
+    // That is the authoritative traversal/symlink check; this lexical check
+    // rejects obvious escapes before they cross the tunnel.
+    return root;
   };
 
   /** Bytes that survive a utf-8 decode→encode round-trip byte-exactly may ride
@@ -486,11 +479,11 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
   return {
     homeDir: effectiveRoot,
     async readFile(path, opts) {
-      await guard(path, 'open');
-      const raw = await transport.rpc('readFile', [path, { encoding: 'base64' }]);
+      const root = await guard(path, 'open');
+      const raw = await transport.rpc('readFile', [path, { encoding: 'base64', root }]);
       if (raw !== undefined && isJsonObject(raw) && raw.encoding === 'base64') {
-        const content = v.safeParse(v.string(), raw.content);
-        const bytes = base64ToBytes(content.success ? content.output : '');
+        const content = v.parse(v.string(), raw.content);
+        const bytes = base64ToBytes(content);
         return opts?.encoding === 'utf8' ? new TextDecoder().decode(bytes) : bytes;
       }
       const text = v.parse(v.string(), raw);
@@ -498,15 +491,15 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
     },
 
     async writeFile(path, data) {
-      await guard(path, 'open');
+      const root = await guard(path, 'open');
       let result: JsonValue | undefined;
       if (v.is(v.string(), data)) {
-        result = await transport.rpc('writeFile', [path, data]);
+        result = await transport.rpc('writeFile', [path, data, { root }]);
       } else {
         const text = asLosslessText(data);
         result = text !== null
-          ? await transport.rpc('writeFile', [path, text])
-          : await transport.rpc('writeFile', [path, bytesToBase64(data), { encoding: 'base64' }]);
+          ? await transport.rpc('writeFile', [path, text, { root }])
+          : await transport.rpc('writeFile', [path, bytesToBase64(data), { encoding: 'base64', root }]);
       }
       const ok = result === 'ok'
         || (result !== undefined && isJsonObject(result) && result.success === true);
@@ -514,8 +507,8 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
     },
 
     async readdir(path) {
-      await guard(path, 'scandir');
-      const entries = v.parse(DeviceListResultSchema, await transport.rpc('listFiles', [path]));
+      const root = await guard(path, 'scandir');
+      const entries = v.parse(DeviceListResultSchema, await transport.rpc('listFiles', [path, { root }]));
       return entries.map((entry) => {
         if (isJsonObject(entry)) {
           const name = v.safeParse(v.string(), entry.name);
@@ -526,28 +519,23 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
     },
 
     async stat(path) {
-      await guard(path, 'stat');
-      const q = shellQuote(path);
-      const r = await exec(`stat -c '%s %Y %F' ${q} 2>/dev/null || stat -f '%z %m %HT' ${q}`);
-      if (r.exitCode !== 0) return null;
-      return parseStatLine(r.stdout);
+      const root = await guard(path, 'stat');
+      return v.parse(DeviceStatSchema, await transport.rpc('statPath', [path, { root }]));
     },
 
     async unlink(path) {
-      await guard(path, 'unlink');
-      const r = await exec(`rm -- ${shellQuote(path)}`);
-      if (r.exitCode !== 0) throw makeVfsError('EIO', `${r.stderr.trim() || 'operation failed'}, unlink '${path}'`, path);
+      const root = await guard(path, 'unlink');
+      await transport.rpc('unlinkPath', [path, { root }]);
     },
 
     async mkdir(path, opts) {
-      await guard(path, 'mkdir');
-      const r = await exec(`mkdir ${opts?.recursive ? '-p ' : ''}-- ${shellQuote(path)}`);
-      if (r.exitCode !== 0) throw makeVfsError('EIO', `${r.stderr.trim() || 'operation failed'}, mkdir '${path}'`, path);
+      const root = await guard(path, 'mkdir');
+      await transport.rpc('mkdirPath', [path, { root, recursive: opts?.recursive ?? false }]);
     },
 
     async exists(path) {
-      await guard(path, 'stat');
-      return Boolean(await transport.rpc('exists', [path]));
+      const root = await guard(path, 'stat');
+      return v.parse(v.boolean(), await transport.rpc('exists', [path, { root }]));
     },
   };
 }

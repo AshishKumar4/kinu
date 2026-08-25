@@ -29,6 +29,7 @@ import { OPENAI_BASE_URL, OPENAI_CRED_KEY } from './openai';
 import { OPENROUTER_BASE_URL, OPENROUTER_CRED_KEY } from './openrouter';
 import { asFetchFunction } from './fetch-shim';
 import type { AuthResolution, ProviderDeps } from './types';
+import { copyHeaders } from './util';
 
 /** Names the credential the server must attach. Present on a request means
  *  "this one is proxied"; absent means the caller resolved real auth and the
@@ -212,7 +213,7 @@ export function createProviderProxyFetch(opts: ProviderProxyFetchOptions): typeo
     const credKey = request.headers.get(PROXY_CRED_HEADER);
     if (!credKey) return baseFetch(input, init);
 
-    const headers = new Headers(request.headers);
+    const headers = copyHeaders(request.headers);
     headers.set('authorization', opts.authorization);
     headers.set(PROXY_TARGET_HEADER, request.url);
     for (const [name, value] of Object.entries(opts.headers ?? {})) headers.set(name, value);
@@ -230,6 +231,6 @@ function describeRequest(input: RequestInfo | URL, init?: RequestInit) {
   return {
     url: fromRequest ? fromRequest.url : String(input),
     method: init?.method ?? fromRequest?.method ?? 'GET',
-    headers: new Headers(init?.headers ?? fromRequest?.headers),
+    headers: copyHeaders(init?.headers ?? fromRequest?.headers),
   };
 }

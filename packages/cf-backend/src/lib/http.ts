@@ -1,6 +1,6 @@
 // Shared HTTP helpers for cf-backend route modules — one home instead of a
 // per-route-file clone of json/err/safeJson/escapeHtml.
-import { projectJsonValue } from '@kinu.run/core';
+import { inlineFileType, projectJsonValue } from '@kinu.run/core';
 import { tolerateAsync } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
@@ -31,23 +31,6 @@ export function escapeHtml(value: string): string {
     .replace(/'/g, '&#039;');
 }
 
-/** The inline-previewable types, by extension. Everything else downloads. */
-// Extensions arrive from untrusted request paths, so the lookup is keyed at
-// runtime — a Map rather than an object table.
-const INLINE_TYPES = new Map<string, string>(
-  Object.entries({
-    png: 'image/png',
-    jpg: 'image/jpeg',
-    jpeg: 'image/jpeg',
-    gif: 'image/gif',
-    webp: 'image/webp',
-    avif: 'image/avif',
-    bmp: 'image/bmp',
-    ico: 'image/x-icon',
-    svg: 'image/svg+xml',
-    pdf: 'application/pdf',
-  }),
-);
 
 /**
  * The file-download route's header policy, split out so the security posture
@@ -59,8 +42,7 @@ const INLINE_TYPES = new Map<string, string>(
  */
 export function fileResponseHeaders(path: string, download: boolean): Headers {
   const name = path.slice(path.lastIndexOf('/') + 1) || 'file';
-  const ext = name.includes('.') ? name.slice(name.lastIndexOf('.') + 1).toLowerCase() : '';
-  const inlineType = download ? undefined : INLINE_TYPES.get(ext);
+  const inlineType = download ? undefined : inlineFileType(path);
   const headers = new Headers({
     'content-type': inlineType ?? 'application/octet-stream',
     'content-disposition': `${inlineType ? 'inline' : 'attachment'}; filename="${encodeURIComponent(name)}"`,

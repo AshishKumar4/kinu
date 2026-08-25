@@ -3,12 +3,11 @@
  * registry of prompts waiting on an answer.
  *
  * Two tiers:
- *   'all_local_actions' — the base grant: the agent may run device actions
- *     (exec/read/write/…). Laptop file access is scoped
- *     to the consented subtree (the device connect dir / home).
- *   'full_filesystem'   — the stronger tier: additionally lifts the laptop
- *     subtree scope so absolute paths outside the consented directory are
- *     reachable. Implies the base grant. Never the default.
+ *   'all_local_actions' — the base grant: native file actions are confined to
+ *     the device connect directory / home. An unrestricted shell is excluded:
+ *     shell syntax can address any path and cannot honor a subtree boundary.
+ *   'full_filesystem'   — the stronger tier: lifts the subtree scope and
+ *     enables the shell executor. Implies the base grant. Never the default.
  *
  * A prompt that nobody answered is not one of them. It used to resolve as
  * `deny`, so the model was told its request had been refused when the owner
@@ -32,6 +31,13 @@ export const DEVICE_CONSENT_SCOPE_FULL_FS = 'full_filesystem';
 
 export type DeviceConsentScope = typeof DEVICE_CONSENT_SCOPE | typeof DEVICE_CONSENT_SCOPE_FULL_FS;
 
+/** Shell execution and checkpoint restore can write any device path, so both
+ * require the full-machine tier. Native file actions remain subtree-confined. */
+export function deviceConsentScopeForMethod(method: string): DeviceConsentScope {
+  return method === 'exec' || method === 'checkpointRestore'
+    ? DEVICE_CONSENT_SCOPE_FULL_FS
+    : DEVICE_CONSENT_SCOPE;
+}
 /** How a consent prompt settled. `timeout` is NOT a decision — nobody made
  *  one. It is never remembered, and it never becomes a stored policy. */
 export type DeviceConsentDecision = 'once' | 'always' | 'deny' | 'timeout';
@@ -98,7 +104,7 @@ export interface DeviceConsentRequest {
   readonly deviceLabel: string;
   readonly method: string;
   readonly command: string;
-  readonly scope: string;
+  readonly scope: DeviceConsentScope;
   readonly workspaceName?: string;
 }
 

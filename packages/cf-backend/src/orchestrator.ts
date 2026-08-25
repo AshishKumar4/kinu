@@ -19,7 +19,6 @@ import { getSandbox } from "@cloudflare/sandbox";
 import { convertToModelMessages } from "ai";
 import type {
   ActivitySnapshot,
-  TabPresence,
   WorkspaceAgent,
 } from "./lib/protocol";
 import { buildWorkspaceAgents, teamPeers } from "./lib/workspace-roster";
@@ -120,7 +119,6 @@ import {
   snapshotCompletedTurn, creditedTurnId,
   // The session tree — `messages` as a projection of the SDK's message DAG
   reconcileSessionTree,
-  type DynamicContext,
   // Ingress — core owns the gates; this actor owns the transports in front
   // of them (the DO alarm, the Worker's webhook + email routes, cross-DO RPC).
   acceptWebhookDelivery, registerDurableWebhook, createWebhookSecretStore,
@@ -148,8 +146,9 @@ import {
   getWorkspaceDiff, getExecutorDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceDiffResult,
   diffLines, type DiffLine,
-  getExecutorFiles, readExecutorFile, writeExecutorFileOp, listEnvironments,
-  readExecutorFileBytes, renameExecutorPathOp, deleteExecutorPathOp,
+  getExecutorFiles, readExecutorFile, listEnvironments,
+  renameExecutorPathOp, deleteExecutorPathOp,
+  ExecutorFileUpload, ExecutorFileDownload,
   type DirEntry, type ExecutorWriteResult,
   cancelBackgroundJob, clearBackgroundJobs, dismissBackgroundJob,
   jobResult, listBackgroundJobs, retryBackgroundJob, reconcileInterruptedForks,
@@ -170,7 +169,11 @@ import {
   resolveModelRoute, type ResolvedTurnProfile,
 } from "@kinu.run/core";
 import * as v from 'valibot';
-import { ActorAgent, type ActorToolDeps } from "./actor-agent";
+import {
+  ActorAgent,
+  type ActorDynamicContextExtras,
+  type ActorToolDeps,
+} from "./actor-agent";
 import { recordJobSettled, type AgentKind } from "./analytics/record";
 import { resolveEnsembleJudgeSelection } from "./providers/judge-model";
 import { SubordinateAgent } from "./subordinate-agent";
@@ -351,24 +354,21 @@ export class OrchestratorAgent extends ActorAgent {
     return this._emailOutbox;
   }
 
-  /** The orchestrator's half of the per-step dynamic context: the delegates it
-   *  alone can have (spawned subordinates, listed before the forked head runs
-   *  the base class contributes) and the decisions parked on the user. */
-  protected override dynamicContextSnapshot(): DynamicContext {
-    const base = super.dynamicContextSnapshot();
-    const subordinates = this.subordinateDelegates();
-    const deafInbox = this.emailInbox.dropNotice(Date.now());
-    const context: DynamicContext = {
-      ...base,
-      delegates: [...subordinates, ...(base.delegates ?? [])],
-      // Both kinds of decision parked on the human, in one roster: a consent
-      // prompt someone may still answer in the next minutes, and a command
-      // parked for hours. The second is also the structural reminder that its
-      // effect has NOT happened — restated on every step until it is decided.
-      approvals: [...this._consents.approvals(), ...this.deferrals.approvals()],
+  /** The orchestrator's own planes, as source callbacks the shared assembler
+   *  reads per step — no second assembly to drift from the base class's.
+   *
+   * APPROVALS are both kinds of decision parked on the human in one roster: a
+   * consent prompt someone may still answer in the next minutes, and a command
+   * parked for hours. The second is also the structural reminder that its
+   * effect has NOT happened — restated on every step until it is decided. */
+  protected override extraDynamicContext(): ActorDynamicContextExtras {
+    return {
+      approvals: () => [...this._consents.approvals(), ...this.deferrals.approvals()],
+      extraMissingCapabilities: () => {
+        const deafInbox = this.emailInbox.dropNotice(Date.now());
+        return deafInbox ? [deafInbox] : [];
+      },
     };
-    if (deafInbox) context.missingCapabilities = [...(base.missingCapabilities ?? []), deafInbox];
-    return context;
   }
 
 
@@ -1245,8 +1245,8 @@ export class OrchestratorAgent extends ActorAgent {
   // and keeps working (or ends its turn), and the owner's decision wakes it
   // through the same signal seam a settled background job uses. Nothing is
   // ever reported as having run — see core's safety/deferred-approval.ts.
-  private _deferrals: DeferredApprovalQueue | null = null;
-  private get deferrals(): DeferredApprovalQueue {
+  protected _deferrals: DeferredApprovalQueue | null = null;
+  protected get deferrals(): DeferredApprovalQueue {
     if (!this._deferrals) {
       this._deferrals = new DeferredApprovalQueue({
         store: new DeferredApprovalStore(this.boundSql),
@@ -3000,27 +3000,6 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /**
-   * Whether the gated right-pane tabs have anything to show. Both answers are
-   * one cheap read over a ledger a surface already renders: the release lane's
-   * changes (the same board `listPendingActions` already crosses to the owner
-   * for, asked for one row instead of twenty) and the exploration run list the
-   * Exploration surface opens on (`listForkRuns`, page of one). An unclaimed
-   * workspace has no release hub, so its release answer is false by
-   * construction rather than by failure.
-   */
-  @callable()
-  async getWorkspaceTabPresence(): Promise<TabPresence> {
-    const [releases, explorations] = await Promise.all([
-      this.getOwnerUserId()
-        ? this.getReleaseBoard(1).then((board) => board.changes.length > 0)
-        : Promise.resolve(false),
-      Promise.resolve(listForkRuns(this.boundSql, null, 1).items.length > 0),
-    ]);
-    return { releases, explorations };
-  }
-
-
-  /**
    * One-round-trip initial load: what the workspace IS (status, tools, memory),
    * what it can run (executors and their recent output), and whether a plan is
    * waiting on the owner. A read that fails fails the snapshot — an empty tool
@@ -3042,15 +3021,12 @@ export class OrchestratorAgent extends ActorAgent {
    */
   @callable()
   async getWorkspaceSnapshot() {
-    const [status, tools, memoryContent, executors, activePlan, tabPresence] = await Promise.all([
+    const [status, tools, memoryContent, executors, activePlan] = await Promise.all([
       this.getAgentStatus(),
       this.getToolDescriptions(),
       this.getMemoryContent(),
       this.getExecutors(),
       this.getActivePlanReview(),
-      // Seeded so the gated tabs are right from the first paint; the live
-      // cycle re-reads just this slice afterwards.
-      this.getWorkspaceTabPresence(),
     ]);
     const executorOutputs = await Promise.all(
       executors.map(async (e) => ({
@@ -3059,7 +3035,7 @@ export class OrchestratorAgent extends ActorAgent {
       })),
     );
     const lastActiveExecutor = this.config.getLastActiveExecutor();
-    return { status, tools, memoryContent, executors, executorOutputs, lastActiveExecutor, activePlan, tabPresence };
+    return { status, tools, memoryContent, executors, executorOutputs, lastActiveExecutor, activePlan };
   }
 
   @callable() async executeInExecutor(executorId: string, command: string) {
@@ -3118,15 +3094,6 @@ export class OrchestratorAgent extends ActorAgent {
     return readExecutorFile(this.rt.executionRouter, executorId, path);
   }
 
-  /** Upload one file into an executor (file-manager drop/Upload).
-   *
-   *  Reached over HTTP (files-routes.ts), not over the chat WebSocket: an RPC
-   *  upload has to base64 its payload into a frame with a 1 MiB ceiling, so
-   *  ordinary files died at the socket as an opaque connection failure. */
-  async writeExecutorFile(executorId: string, path: string, bytes: Uint8Array): Promise<ExecutorWriteResult> {
-    if (!this.rt.executionRouter) return { error: 'no execution router' };
-    return writeExecutorFileOp(this.rt.executionRouter, executorId, path, bytes);
-  }
 
   /** Rename one entry for the file manager — native where the plane renames
    *  natively, a byte carry for a file elsewhere, a stated refusal for a
@@ -3143,13 +3110,102 @@ export class OrchestratorAgent extends ActorAgent {
     return deleteExecutorPathOp(this.rt.executionRouter, executorId, path);
   }
 
-  /** Raw bytes of one file — the download/preview half of the HTTP route that
-   *  writeExecutorFile is the upload half of, and off the same plane. Not a
-   *  @callable for the same reason: bytes belong in a response body, not
-   *  base64-inflated into a 1 MiB WebSocket frame. */
-  async readExecutorFileBytes(executorId: string, path: string): Promise<{ bytes: Uint8Array } | { error: string }> {
-    if (!this.rt.executionRouter) return { error: 'no execution router' };
-    return readExecutorFileBytes(this.rt.executionRouter, executorId, path);
+
+  // ── Chunked file transfer for the files HTTP route (files-routes.ts).
+  //
+  // No single Worker↔actor payload of that route approaches the catalogued
+  // `do.facet.rpc_bytes` ceiling: uploads arrive as bounded chunks the actor
+  // assembles, downloads leave as bounded chunks cut from one read. The actor
+  // is single-threaded, so the maps below need no lock. HTTP routes close each
+  // transfer on final chunk, error, or stream cancellation.
+  private executorFileUploads = new Map<string, {
+    readonly executorId: string;
+    readonly path: string;
+    readonly upload: ExecutorFileUpload;
+  }>();
+  private executorFileDownloads = new Map<string, ExecutorFileDownload>();
+
+  async startExecutorFileDownload(
+    executorId: string,
+    path: string,
+    transferId: string,
+  ): Promise<
+    { size: number }
+    | { error: string; reason: 'too_large' | 'unavailable' }
+  > {
+    const router = this.rt.executionRouter;
+    if (!router) return { error: 'no execution router', reason: 'unavailable' };
+    if (!transferId) return { error: 'download transfer id required', reason: 'unavailable' };
+    const download = new ExecutorFileDownload(router, executorId, path);
+    this.executorFileDownloads.set(transferId, download);
+    const opened = await download.open();
+    if ('error' in opened) this.executorFileDownloads.delete(transferId);
+    return opened;
+  }
+
+  /** One chunk of one HTTP download. The route supplies a fresh transfer id,
+   * so a second GET of the same path cannot reuse stale bytes and concurrent
+   * readers cannot replace each other's snapshot. */
+  async readExecutorFileChunk(
+    executorId: string,
+    path: string,
+    transferId: string,
+    offset: number,
+    length: number,
+  ): Promise<{ bytes: Uint8Array } | { error: string }> {
+    const router = this.rt.executionRouter;
+    if (!router) return { error: 'no execution router' };
+    if (!transferId) return { error: 'download transfer id required' };
+    const download = this.executorFileDownloads.get(transferId);
+    if (!download || !download.serves(executorId, path)) {
+      return { error: 'file transfer out of sync: no matching open download' };
+    }
+    const result = await download.range(offset, length);
+    if ('error' in result || download.completeAfter(offset + result.bytes.byteLength)) {
+      this.executorFileDownloads.delete(transferId);
+    }
+    return result;
+  }
+
+  async abortExecutorFileDownload(transferId: string): Promise<void> {
+    this.executorFileDownloads.delete(transferId);
+  }
+
+  /** One chunk of a chunked upload. An `offset === 0` chunk (re)starts the
+   *  transfer for its path, so a retry after any failure self-heals instead
+   *  of appending to stale bytes; ordering and continuity are enforced inside
+   *  the transfer itself, never trusted from the caller. */
+  async writeExecutorFileChunk(
+    executorId: string,
+    path: string,
+    transferId: string,
+    offset: number,
+    chunk: Uint8Array,
+    final: boolean,
+  ): Promise<ExecutorWriteResult> {
+    const router = this.rt.executionRouter;
+    if (!router) return { error: 'no execution router' };
+    if (!path) return { error: 'file path required' };
+    if (!transferId) return { error: 'upload transfer id required' };
+    let row = this.executorFileUploads.get(transferId);
+    if (offset === 0) {
+      row = {
+        executorId,
+        path,
+        upload: new ExecutorFileUpload(router, executorId, path),
+      };
+      this.executorFileUploads.set(transferId, row);
+    } else if (!row || row.executorId !== executorId || row.path !== path) {
+      return { error: 'file transfer out of sync: no matching open upload' };
+    }
+    const result = await row.upload.chunk(offset, chunk, final);
+    if (row.upload.done) this.executorFileUploads.delete(transferId);
+    return result;
+  }
+
+  async abortExecutorFileWrite(transferId: string): Promise<void> {
+    this.executorFileUploads.get(transferId)?.upload.abort();
+    this.executorFileUploads.delete(transferId);
   }
 
   /** The preflight an interactive terminal needs before a shell is opened onto

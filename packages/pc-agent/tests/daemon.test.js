@@ -5,11 +5,17 @@
  * degraded mode when git is missing.
  */
 'use strict';
-const { describe, expect, test } = require('bun:test');
+const { describe, expect, spyOn, test } = require('bun:test');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { handle, createCheckpoints } = require('../src/index.js');
+const {
+  handle,
+  createCheckpoints,
+  getConnectTicket,
+  persistRotatedToken,
+  handleTokenRotation,
+} = require('../src/index.js');
 
 function fakeWs() {
   const frames = [];
@@ -36,6 +42,150 @@ function setup(opts = {}) {
   const ctx = { checkpoints: createCheckpoints({ base: path.join(root, 'shadow'), keep: opts.keep, gitBin: opts.gitBin }) };
   return { root, work, ctx, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
+
+describe('daemon token rotation', () => {
+  test('the next ticket exchange uses the atomically persisted token', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-token-'));
+    const configPath = path.join(root, 'device.json');
+    const cfg = { user: 'user-1', token: 'T0' };
+    fs.writeFileSync(configPath, JSON.stringify(cfg), { mode: 0o600 });
+    const seen = [];
+    const fetchTicket = async (_url, init) => {
+      seen.push(JSON.parse(init.body));
+      return new Response(JSON.stringify({ ticket: 'pct_ticket' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    };
+    try {
+      await getConnectTicket(cfg, 'https://kinu.run', fetchTicket);
+      persistRotatedToken(cfg, 'T1', configPath);
+      await getConnectTicket(cfg, 'https://kinu.run', fetchTicket);
+
+      expect(seen.map((body) => body.token)).toEqual(['T0', 'T1']);
+      expect(JSON.parse(fs.readFileSync(configPath, 'utf8')).token).toBe('T1');
+      expect(fs.statSync(configPath).mode & 0o777).toBe(0o600);
+      expect(fs.readdirSync(root)).toEqual(['device.json']);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('a failed persist leaves memory and the old file unchanged', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-token-'));
+    const configPath = path.join(root, 'missing', 'device.json');
+    const cfg = { user: 'user-1', token: 'T0' };
+    try {
+      expect(() => persistRotatedToken(cfg, 'T1', configPath))
+        .toThrow('persist rotated device token');
+      expect(cfg.token).toBe('T0');
+      expect(fs.existsSync(configPath)).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('a failed atomic rename preserves config and reports rotation failure', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-token-'));
+    const configPath = path.join(root, 'device.json');
+    const cfg = { user: 'user-1', token: 'T0' };
+    const messages = [];
+    fs.writeFileSync(configPath, JSON.stringify(cfg), { mode: 0o600 });
+    const rename = spyOn(fs, 'renameSync').mockImplementationOnce(() => {
+      throw new Error('rename failed');
+    });
+    try {
+      expect(handleTokenRotation(
+        cfg,
+        { type: 'ROTATE', token: 'T1' },
+        configPath,
+        (...args) => messages.push(args),
+      )).toBe(true);
+      expect(cfg.token).toBe('T0');
+      expect(JSON.parse(fs.readFileSync(configPath, 'utf8')).token).toBe('T0');
+      expect(fs.readdirSync(root)).toEqual(['device.json']);
+      expect(messages[0]?.[0]).toBe('Device token rotation failed:');
+    } finally {
+      rename.mockRestore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('daemon exec output bound', () => {
+  test('a noisy command drains after the retained response is truncated', async () => {
+    const ws = fakeWs();
+    handle({
+      id: 'noisy',
+      method: 'exec',
+      params: [`${JSON.stringify(process.execPath)} -e "process.stdout.write('x'.repeat(600000))"`],
+    }, ws, {});
+
+    const result = (await ws.response('noisy')).result;
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('[output truncated at 524288 bytes]');
+    expect(Buffer.byteLength(result.stdout)).toBeLessThan(525_000);
+  });
+});
+
+describe('daemon device path confinement', () => {
+  test('dot-dot and symlink paths cannot escape the consented root', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-root-'));
+    const project = path.join(root, 'project');
+    const outside = path.join(root, 'outside.txt');
+    fs.mkdirSync(project);
+    fs.writeFileSync(outside, 'secret');
+    fs.symlinkSync(outside, path.join(project, 'link'));
+    const ws = fakeWs();
+    try {
+      handle({
+        id: 'traversal',
+        method: 'readFile',
+        params: [path.join(project, '..', 'outside.txt'), { root: project }],
+      }, ws, {});
+      handle({
+        id: 'symlink',
+        method: 'readFile',
+        params: [path.join(project, 'link'), { root: project }],
+      }, ws, {});
+
+      expect((await ws.response('traversal')).error).toContain('resolves outside');
+      expect((await ws.response('symlink')).error).toContain('resolves outside');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('scoped native mutations stay inside the resolved root', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-root-'));
+    const project = path.join(root, 'project');
+    fs.mkdirSync(project);
+    const ws = fakeWs();
+    try {
+      const dir = path.join(project, 'nested');
+      const file = path.join(dir, 'data.txt');
+      handle({ id: 'mkdir', method: 'mkdirPath', params: [dir, { root: project, recursive: true }] }, ws, {});
+      expect((await ws.response('mkdir')).result).toEqual({ success: true });
+      handle({ id: 'write', method: 'writeFile', params: [file, 'ok', { root: project }] }, ws, {});
+      expect((await ws.response('write')).result).toEqual({ success: true });
+      handle({ id: 'stat', method: 'statPath', params: [file, { root: project }] }, ws, {});
+      expect((await ws.response('stat')).result).toMatchObject({ size: 2, isDir: false });
+      handle({ id: 'unlink', method: 'unlinkPath', params: [file, { root: project }] }, ws, {});
+      expect((await ws.response('unlink')).result).toEqual({ success: true });
+      const target = path.join(project, 'target.txt');
+      const link = path.join(project, 'target-link');
+      fs.writeFileSync(target, 'keep');
+      fs.symlinkSync(target, link);
+      handle({ id: 'unlink-link', method: 'unlinkPath', params: [link, { root: project }] }, ws, {});
+      expect((await ws.response('unlink-link')).result).toEqual({ success: true });
+      expect(fs.existsSync(target)).toBe(true);
+      expect(fs.existsSync(link)).toBe(false);
+      expect(fs.existsSync(file)).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('daemon checkpoint protocol', () => {
   test('an exec frame with a checkpoint hint snapshots before running; restore round-trips', async () => {

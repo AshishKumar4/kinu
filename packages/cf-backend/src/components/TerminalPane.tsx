@@ -261,6 +261,10 @@ function LineTerminal(
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
+    writtenIds.current.clear();
+    lineBuffer.current = "";
+    running.current = false;
+    busy.current = false;
     const term = newTerminal(theme.mode);
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -291,6 +295,7 @@ function LineTerminal(
           // the boundary, and the handler below takes that message rather than
           // an unparsed value. `undefined` is the success arm.
           void Promise.resolve(run(cmd)).then(() => undefined, describeError).then((message) => {
+            if (termRef.current !== term) return;
             running.current = false;
             if (message === undefined) return;
             // A rejected exec produces no output row, so nothing else would

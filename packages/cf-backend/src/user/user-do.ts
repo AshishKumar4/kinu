@@ -122,7 +122,7 @@ import { openAnalyticsWindow } from '../analytics/writer';
 import {
   DEVICE_CONSENT_SCOPE, DEVICE_CONSENT_SCOPE_FULL_FS,
   DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED, DEVICE_PROVISION_METHOD, DEVICE_TOKEN_ROTATION,
-  mergeConsentScope, parseConsentScope, summarizeDeviceAction,
+  deviceConsentScopeForMethod, mergeConsentScope, parseConsentScope, summarizeDeviceAction,
   type DeviceConsentScope, type DeviceConsentDecision, type DeviceStatus,
   type DeviceFleetEntry,
 } from '@kinu.run/core';
@@ -160,6 +160,13 @@ const DEVICE_CONNECT_TICKET_TTL_MS = 60 * 1000;
 /** A device name is a display label, not a hostname — bounded so a UI row
  *  cannot be blown out by one paste. */
 const DEVICE_NAME_MAX_LENGTH = 80;
+/** Owner-facing checkpoint reads do not execute or write on the device. Every
+ * other workspace call, including restore, crosses the consent chokepoint. */
+const CONSENT_FREE_DEVICE_METHODS = {
+  checkpointStatus: true,
+  checkpointList: true,
+  checkpointPlan: true,
+} as const satisfies Record<string, true>;
 const CLI_AGENT_CONNECT_TICKET_TTL_MS = 60 * 1000;
 const CLI_AGENT_WEBSOCKET_CAPABILITY = 'agent.websocket' as const;
 
@@ -1039,9 +1046,10 @@ export class UserDO extends Agent<Env> {
     const token = `pdt_${randomToken(32)}`;
     const tokenHash = await sha256Hex(token);
     const now = Date.now();
+    const trimmedLabel = label?.trim().slice(0, DEVICE_NAME_MAX_LENGTH);
     this.sqlx(
       `INSERT INTO user_devices (id, token_hash, label, created_at, expires_at) VALUES (?, ?, ?, ?, ?)`,
-      deviceId, tokenHash, (label && label.trim()) || 'Your PC', now, now + DEVICE_TOKEN_TTL_MS,
+      deviceId, tokenHash, trimmedLabel || 'Your PC', now, now + DEVICE_TOKEN_TTL_MS,
     );
     return { deviceId, token };
   }
@@ -1148,26 +1156,24 @@ export class UserDO extends Agent<Env> {
     opts?: { deviceId?: string; agentName?: string; checkpoint?: DeviceCheckpointHint; timeoutMs?: number },
   ): Promise<string | undefined> {
     const resolved = await this.requireTier(caller, 'device.rpc');
+    const ownerRead = opts?.agentName === undefined && Object.hasOwn(CONSENT_FREE_DEVICE_METHODS, method);
+    const consentAgent = resolved.kind === 'workspace'
+      ? (ownerRead ? undefined : resolved.workspace)
+      : opts?.agentName;
     const deviceId = this._devices.connectedDeviceId(opts?.deviceId);
     if (!deviceId) {
-      // No machine attached at all is not a dead end for an agent that needs
-      // one: the same rail that carries per-action consent carries a
-      // provisioning request, so the owner sees ONE card saying their
-      // computer was asked for — approve surfaces the connect flow, deny ends
-      // the asking. Execution stays impossible either way until a daemon is
-      // actually linked.
-      if (opts?.agentName) {
-        await this.raiseProvisioningRequest(
-          resolved.kind === 'workspace' ? resolved.workspace : opts.agentName,
-        );
+      // A workspace operation that needs a machine raises one provisioning
+      // request. Owner-facing checkpoint reads stay consent-free and simply
+      // report that no machine is connected.
+      if (consentAgent !== undefined) {
+        await this.raiseProvisioningRequest(consentAgent);
       }
       throw new Error(NO_DEVICE_CONNECTED);
     }
-    if (opts?.agentName) {
+    if (consentAgent !== undefined) {
       // Consent is keyed on the PROVEN workspace, never the claimed name — an
-      // agent cannot ride a sibling workspace's remembered grant. Calls that
-      // pass no agentName (checkpoint bookkeeping) stay consent-free as before.
-      const consentAgent = resolved.kind === 'workspace' ? resolved.workspace : opts.agentName;
+      // agent cannot ride a sibling workspace's remembered grant. The three
+      // closed checkpoint reads above are the only consent-free methods.
       const consent = await this.checkDeviceConsent(
         consentAgent, deviceId, method, params,
         resolved.kind === 'workspace' ? resolved.workspace : undefined,
@@ -1245,8 +1251,11 @@ export class UserDO extends Agent<Env> {
      *  asks for THE WORKSPACE's grant, which is what "always" records. */
     workspaceName?: string,
   ): Promise<{ allowed: true } | { allowed: false; reason: string }> {
+    const requiredScope = deviceConsentScopeForMethod(method);
     const policy = this.getDeviceConsentPolicy(agentName, deviceId);
-    if (policy?.policy === 'allow') return { allowed: true };
+    const rememberedScopeCovers = requiredScope === DEVICE_CONSENT_SCOPE
+      || policy?.scope === DEVICE_CONSENT_SCOPE_FULL_FS;
+    if (policy?.policy === 'allow' && rememberedScopeCovers) return { allowed: true };
     if (policy?.policy === 'deny') return { allowed: false, reason: DEVICE_CONSENT_DENIED };
     const action = summarizeDeviceAction(method, params);
     let decision: DeviceConsentDecision;
@@ -1257,7 +1266,7 @@ export class UserDO extends Agent<Env> {
         deviceLabel: this.deviceLabel(deviceId),
         method: action.method,
         command: action.command,
-        scope: DEVICE_CONSENT_SCOPE,
+        scope: requiredScope,
       };
       const request: DeviceConsentRequest = workspaceName
         ? { ...base, workspaceName }
@@ -1272,7 +1281,9 @@ export class UserDO extends Agent<Env> {
     // Only "always" is remembered; "once", "deny" and "timeout" are per-call.
     if (decision === 'deny') return { allowed: false, reason: DEVICE_CONSENT_DENIED };
     if (decision === 'timeout') return { allowed: false, reason: DEVICE_CONSENT_UNANSWERED };
-    if (decision === 'always') this.setDeviceConsentPolicy(agentName, deviceId, 'allow', action);
+    if (decision === 'always') {
+      this.setDeviceConsentPolicy(agentName, deviceId, 'allow', action, requiredScope);
+    }
     return { allowed: true };
   }
 
@@ -1307,7 +1318,7 @@ export class UserDO extends Agent<Env> {
     agentName: string;
     deviceId: string;
     policy: string;
-    scope: string;
+    scope: DeviceConsentScope;
     lastMethod: string | null;
     lastSummary: string | null;
   }>> {
@@ -1322,7 +1333,7 @@ export class UserDO extends Agent<Env> {
       agentName: r.agent_name,
       deviceId: r.device_id,
       policy: r.policy,
-      scope: r.scope,
+      scope: parseConsentScope(r.scope),
       lastMethod: r.last_method,
       lastSummary: r.last_summary,
     }));
