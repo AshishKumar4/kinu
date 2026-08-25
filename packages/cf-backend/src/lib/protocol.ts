@@ -46,6 +46,22 @@ export interface ForkNode {
 	createdAt?: number;
 }
 
+/**
+ * Whether the workspace HAS anything for the gated right-pane tabs to show
+ * (server: `getWorkspaceTabPresence`, also seeded into
+ * `getWorkspaceSnapshot`). Both facts ride data the client already carries —
+ * the release ledger and the exploration run list — never a second fetcher:
+ * a tab earns its place only when it has content, so its presence is a fact
+ * about the ledger it renders, checked before it renders rather than after
+ * it mounts.
+ */
+export interface TabPresence {
+	/** The release lane holds at least one change. */
+	releases: boolean;
+	/** At least one exploration run exists in the run list. */
+	explorations: boolean;
+}
+
 export interface ToolInfo {
 	name: string;
 	/** The one-line headline — what a list row shows. For a builtin this is the

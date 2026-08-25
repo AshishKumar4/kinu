@@ -1257,6 +1257,7 @@ export default function WorkspacePage() {
             pendingActions={state.pendingActions}
             onChangelogSeen={state.clearChangelogUnseen}
             agentViews={state.agentViews}
+            tabPresence={state.tabPresence}
             rpc={state.rpc}
           />
         </Panel>

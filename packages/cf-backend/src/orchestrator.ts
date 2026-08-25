@@ -19,6 +19,7 @@ import { getSandbox } from "@cloudflare/sandbox";
 import { convertToModelMessages } from "ai";
 import type {
   ActivitySnapshot,
+  TabPresence,
   WorkspaceAgent,
 } from "./lib/protocol";
 import { buildWorkspaceAgents, teamPeers } from "./lib/workspace-roster";
@@ -2999,6 +3000,27 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /**
+   * Whether the gated right-pane tabs have anything to show. Both answers are
+   * one cheap read over a ledger a surface already renders: the release lane's
+   * changes (the same board `listPendingActions` already crosses to the owner
+   * for, asked for one row instead of twenty) and the exploration run list the
+   * Exploration surface opens on (`listForkRuns`, page of one). An unclaimed
+   * workspace has no release hub, so its release answer is false by
+   * construction rather than by failure.
+   */
+  @callable()
+  async getWorkspaceTabPresence(): Promise<TabPresence> {
+    const [releases, explorations] = await Promise.all([
+      this.getOwnerUserId()
+        ? this.getReleaseBoard(1).then((board) => board.changes.length > 0)
+        : Promise.resolve(false),
+      Promise.resolve(listForkRuns(this.boundSql, null, 1).items.length > 0),
+    ]);
+    return { releases, explorations };
+  }
+
+
+  /**
    * One-round-trip initial load: what the workspace IS (status, tools, memory),
    * what it can run (executors and their recent output), and whether a plan is
    * waiting on the owner. A read that fails fails the snapshot — an empty tool
@@ -3020,12 +3042,15 @@ export class OrchestratorAgent extends ActorAgent {
    */
   @callable()
   async getWorkspaceSnapshot() {
-    const [status, tools, memoryContent, executors, activePlan] = await Promise.all([
+    const [status, tools, memoryContent, executors, activePlan, tabPresence] = await Promise.all([
       this.getAgentStatus(),
       this.getToolDescriptions(),
       this.getMemoryContent(),
       this.getExecutors(),
       this.getActivePlanReview(),
+      // Seeded so the gated tabs are right from the first paint; the live
+      // cycle re-reads just this slice afterwards.
+      this.getWorkspaceTabPresence(),
     ]);
     const executorOutputs = await Promise.all(
       executors.map(async (e) => ({
@@ -3034,7 +3059,7 @@ export class OrchestratorAgent extends ActorAgent {
       })),
     );
     const lastActiveExecutor = this.config.getLastActiveExecutor();
-    return { status, tools, memoryContent, executors, executorOutputs, lastActiveExecutor, activePlan };
+    return { status, tools, memoryContent, executors, executorOutputs, lastActiveExecutor, activePlan, tabPresence };
   }
 
   @callable() async executeInExecutor(executorId: string, command: string) {
