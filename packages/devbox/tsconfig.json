@@ -1,0 +1,11 @@
+{
+  "//": "`@cloudflare/workers-types` because src IS a Durable Object: R2Bucket, DurableObjectState and the Workers ReadableStream come from that runtime, not from Node. `bun` alongside it because the suites run under `bun test`. The one excluded file is the shared workspace-resolution guard, which is reached by relative path (see its own header) and therefore pulls @kinu.run/core into this program; core's own lib and type settings are not this package's, and this package must not acquire them — it declares no dependency on core at all, which `tests/independence.test.ts` pins. The guard is three lines with no types anyone depends on, and it RUNS in `bun test` like every other package's copy.",
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "lib": ["ES2022"],
+    "types": ["bun", "@cloudflare/workers-types"]
+  },
+  "include": ["src", "tests", "bench"],
+  "exclude": ["tests/workspace-resolution.test.ts"]
+}
