@@ -60,8 +60,6 @@
  * possessives survive it, 14 are subagent names, 5 are external proper nouns
  * (`NAMES_WITHOUT_CODE` below), and 3 are identifiers the tree no longer holds.
  * Nothing about the derivation is a list of agents, so it does not rot.
- *
- * @see docs/BENCH.md for the audit's method. Nothing here reads a commit's diff.
  */
 
 import { execFileSync } from 'node:child_process';
