@@ -1866,9 +1866,19 @@ Every arm took 3 quiesces before the decisive window and **0 inside it**, so no
 chain rebase inflated a decisive tick. Recorded per arm in the artifact rather
 than asserted here.
 
-### Verdict: `snapshot-chain` is the default devbox storage strategy
+### Verdict: `snapshot-chain` is the INTERIM default devbox storage strategy
 
-Decided 2026-08-25 on the deployed three-arm run above.
+Decided 2026-08-25 on the deployed three-arm run above; RE-OPENED the same day.
+The overlay-cas arm ran with defects this very run discovered (the skipped-tick
+accumulation, the replay-ownership window, the lost pre-stop write), all fixed
+after it — so its tick ratio, attach wall and verify record are measurements of
+a broken implementation and are not ranking inputs against a healthy one. The
+chain's own numbers stand: its arm was green in both deployed runs. The final
+ranking waits on run 4 — the same deployed three-arm ladder on the fixed tree,
+every arm verify-gated. If overlay-cas comes back verify-green within the cost
+floor, the default moves to it: a workspace user never selects a storage
+strategy, so the default has to be the architecture we believe in for
+long-lived boxes, not the incumbent that happened to be measured healthy first.
 
 **Grounds.** The decision rule reads 1.29x on git and 1.28x on npm, both below the
 3x floor, so tick asymptotics are not the bottleneck. The corrected per-tick table
