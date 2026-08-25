@@ -1,5 +1,4 @@
 [
-  "packages/cf-backend/src/lib/user-api.ts#DeviceConsent (unreferenced)",
   "packages/cf-backend/src/lib/user-api.ts#PollResult (unreferenced)",
   "packages/cf-backend/src/lib/user-api.ts#RegisteredDevice (unreferenced)",
   "packages/cf-backend/src/lib/user-api.ts#TriggerSummary (unreferenced)",
@@ -7,10 +6,12 @@
   "packages/cf-backend/src/lib/user-api.ts#listConnectedProviders (unreferenced)",
   "packages/cf-backend/src/lib/user-api.ts#listTriggers (unreferenced)",
   "packages/cf-backend/src/lib/user-api.ts#updateMcpServer (unreferenced)",
+  "packages/cf-backend/src/sandbox-lifecycle.ts#SandboxLifecycleStage (unreferenced)",
   "packages/cf-backend/src/user/credential-envelope.ts#isSealedCredential (test-only)",
   "packages/cf-backend/src/user/mcp.ts#McpServerConfig (unreferenced)",
   "packages/cf-backend/src/user/workspace-capability.ts#setWorkspaceTier (test-only)",
   "packages/core/src/config.ts#mergeConfig (unreferenced)",
   "packages/core/src/evolution/index.ts (unreachable-file)",
-  "packages/core/src/vfs/index.ts (unreachable-file)"
+  "packages/core/src/vfs/index.ts (unreachable-file)",
+  "packages/devbox/src/cas/hash.ts#digestBytes (test-only)"
 ]

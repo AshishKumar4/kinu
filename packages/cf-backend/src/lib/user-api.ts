@@ -198,18 +198,11 @@ export const revokeDevice   = (id: string) =>
 /** Per-(agent, device) remembered consent: base local-action grant, or the
  *  stronger full-filesystem tier that lifts the /pc subtree scope. */
 export type DeviceConsentScope = 'all_local_actions' | 'full_filesystem';
-export interface DeviceConsent {
-  agentName: string;
-  deviceId: string;
-  policy: string;
-  scope: string;
-  lastMethod: string | null;
-  lastSummary: string | null;
-}
 const DeviceConsentSchema = v.object({
   agentName: v.string(), deviceId: v.string(), policy: v.string(), scope: v.string(),
   lastMethod: v.nullable(v.string()), lastSummary: v.nullable(v.string()),
 });
+export type DeviceConsent = v.InferOutput<typeof DeviceConsentSchema>;
 export const listDeviceConsents = () => api(v.array(DeviceConsentSchema), 'GET', '/devices/consents');
 export const setDeviceConsentScope = (deviceId: string, agentName: string, scope: DeviceConsentScope) =>
   api(OkSchema, 'PUT', `/devices/${encodeURIComponent(deviceId)}/consent`, { agentName, scope });
