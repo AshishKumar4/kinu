@@ -24,7 +24,7 @@
  */
 import { describe, test, expect, afterAll, beforeAll, beforeEach } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import * as v from 'valibot';
@@ -42,7 +42,8 @@ import { createWorkspace } from '../../packages/core/src/identity/index';
 import { makeSql, makeWorkspaceSchemaSql, type CLIRuntime } from '../../packages/cli-backend/src/runtime';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import {
-  AdoptedSpendMeter, HARD_TASKS, caseKey, findResumableEvalDir, formatAdoptedSpend,
+  AdoptedSpendMeter, HARD_TASKS, INFRA_FAILURE_MARKER, caseKey, findResumableEvalDir,
+  formatAdoptedSpend,
   liveModelSpend, openEvalProgress, recordLiveModelEpisode, resetLiveModelSpend,
   hardTaskCases, toolExecute, type EvalArmState, type EvalObservation,
 } from '@kinu.run/test-utils';
@@ -52,10 +53,12 @@ import { REFERENCE_FILE, SOLUTION_FILE } from '../../packages/core/src/index';
 
 import {
   buildEvalAgentSurface, recordRequestSurface,
-  DegenerateRunError, DegenerateRuntimeError, requireExecutorSurface,
+  DegenerateRuntimeError, requireExecutorSurface,
   requireSandboxedExecutors, runBehaviourTask, UnsandboxedRuntimeError,
   type BehaviourScoreJson, type EvalAgentSurface,
 } from './harness';
+import { DegenerateRunError, disposeFailedCase, environmentFailure } from './episode-failure';
+import { createCliWorkspace } from './cli-driver';
 
 import { parseSpend, renderSpend } from '../../scripts/eval-spend';
 
@@ -1141,5 +1144,204 @@ describe('adopted spend — a resumed run pays for the cases it adopted, exactly
     // resumed nothing would teach a reader to skip it on the run that did.
     expect(formatAdoptedSpend(new AdoptedSpendMeter().summary())).toBeNull();
     expect(liveModelSpend().episodesUnmeasured).toBe(0);
+  });
+});
+
+/**
+ * AN OUTAGE IS NOT AN OBSERVATION ABOUT THE AGENT.
+ *
+ * A degenerate trajectory — one closed turn, zero tool calls — is recorded as
+ * `inert`, meaning the agent produced nothing gradable. An upstream failure
+ * produces the identical shape, and until these tests existed the two were the
+ * same row.
+ *
+ * The strings below are VERBATIM from the live run of 2026-08-24 against
+ * staging, in which 4 of 34 behaviour cases ended this way after roughly 712
+ * seconds each and the skip ratchet reported "17 behavioural, 0
+ * infrastructure" over them. They are fixtures rather than a live outage
+ * because an outage cannot be summoned on demand, and the classification is a
+ * pure function of the text the ledger already stored.
+ */
+describe('infra-vs-behavioural — a provider failure is not the agent doing nothing', () => {
+  const UPSTREAM_500 = 'run_end: Failed after 3 attempts. Last error: Internal Server Error';
+
+  test('an upstream 5xx on the turn is labelled the environment, with the marker', () => {
+    const labelled = environmentFailure([UPSTREAM_500]);
+    expect(labelled, 'a turn error the provider raised must be attributed to the environment')
+      .not.toBeNull();
+    // The MARKER is what `scripts/skip-ratchet.ts` counts, so its presence is the
+    // whole mechanism and not a cosmetic prefix.
+    expect(labelled).toContain(INFRA_FAILURE_MARKER);
+    // And the upstream's own sentence survives: a label that hid the cause would
+    // trade one unreadable failure for another.
+    expect(labelled).toContain('Internal Server Error');
+  });
+
+  test('a rate limit and a refused credential are the environment too', () => {
+    expect(environmentFailure(['run_end: Failed after 3 attempts. Last error: Too Many Requests']))
+      .toContain('(rate_limit)');
+    expect(environmentFailure(['run_end: 401 Unauthorized'])).toContain('(auth)');
+  });
+
+  test('a TOOL failure is the agent\'s episode, never the environment', () => {
+    // The distinction the prefix exists for: `readLedgerTotals` stamps the turn's
+    // own provider error, and a tool that failed mid-episode is something the run
+    // did rather than something done to it.
+    expect(environmentFailure(['run: Internal Server Error'])).toBeNull();
+    expect(environmentFailure([])).toBeNull();
+  });
+
+  test('an overflowed request stays the episode\'s own, not the environment\'s', () => {
+    // `context_length` is the one provider class that IS about what the run did.
+    expect(environmentFailure(['run_end: request exceeds the maximum context length']))
+      .toBeNull();
+  });
+
+  test('a PRODUCT defect that killed the turn is never the environment', () => {
+    // THE RED DIRECTION, and the one the first version of this rule had backwards.
+    // `classifyTurnFailure` returns `transient` as its FALL-THROUGH, so labelling
+    // everything-but-`context_length` as infrastructure stamped INFRA on any
+    // internal throw sealed into a `run_end` — and a regression that kills turns
+    // then reads as an outage in the tier's report, which is the gate-blindness
+    // direction of the same defect.
+    //
+    // These three are verbatim shapes this repository has actually shipped: an
+    // executor lifetime bug, a dangling tool call, and a plain programming error.
+    // Each is a finding about the product, so each must come back null.
+    for (const productDefect of [
+      'run_end: TypeError: x is not a function',
+      'run_end: no executor: settled at start of life, having outlived the activation that spawned it',
+      'run_end: Tool result is missing for tool call call_ed15d29f352a4735e6b01b5',
+    ]) {
+      expect(
+        environmentFailure([productDefect]),
+        `"${productDefect}" is the product failing, and an infra label over it would tell the `
+        + 'tier to stop counting a real behavioural failure',
+      ).toBeNull();
+    }
+
+    // AND THE POSITIVE HALF IN THE SAME TEST, because the two together are the
+    // rule: the retry-exhausted 5xx must still be the environment. A fix that
+    // returned null for everything would pass the loop above on its own.
+    expect(environmentFailure([UPSTREAM_500])).toContain('(provider_server)');
+  });
+
+  test('DegenerateRunError carries the verdict, so the suite need not re-derive it', () => {
+    const outage = new DegenerateRunError('hard-select-kth', 1, 0, [UPSTREAM_500]);
+    expect(outage.environment, 'the error must know it was an outage').not.toBeNull();
+    expect(outage.message).toContain(INFRA_FAILURE_MARKER);
+
+    // The control, and the reason this is two tests rather than one: the ordinary
+    // degenerate run must NOT acquire an infra label, or the ratchet would stop
+    // counting real behavioural failures.
+    const lazy = new DegenerateRunError('ws-inventory', 1, 0, []);
+    expect(lazy.environment).toBeNull();
+    expect(lazy.message).not.toContain(INFRA_FAILURE_MARKER);
+  });
+
+  test('an outage-killed case is RESUMABLE; a case the agent lost is terminal', () => {
+    // THE DISPOSITION IS ONE DECISION, and this is the half that was missing.
+    // The outage cases were recorded `errored` AND settled, so a resumed run
+    // skipped them and inherited a verdict the environment produced — for a
+    // failure that is transient by definition. `incomplete` is the phase whose
+    // own contract is "began and never settled, and this run owes it", and
+    // `eval-progress.test.ts` already proves a restart retries that phase and
+    // skips a settled one. So this asserts the choice, and the store's own suite
+    // asserts what the choice buys.
+    expect(disposeFailedCase(new DegenerateRunError('hard-select-kth', 1, 0, [UPSTREAM_500])))
+      .toEqual({ kind: 'resumable', outcome: 'incomplete' });
+
+    // The agent doing nothing IS a verdict about the agent, so it settles: a
+    // restart that retried it would pay twice for the same finding.
+    expect(disposeFailedCase(new DegenerateRunError('ws-inventory', 1, 0, [])))
+      .toEqual({ kind: 'settled', outcome: 'inert' });
+
+    // A PRODUCT defect that killed the turn settles too, and it must never become
+    // resumable: retrying it would spend money on a failure that will repeat.
+    //
+    // It lands in `inert` rather than `errored`, which is imprecise and knowingly
+    // left alone: `inert` reads as "the agent did nothing" while the cause here
+    // was the product throwing. What the tier needs is unaffected — no INFRA
+    // marker, so the ratchet counts it behavioural, and the observation's reason
+    // carries the whole message including `run_end: TypeError: …`. Separating
+    // "the model declined to act" from "the turn died" would mean asking whether
+    // a degenerate run has any turn error at all, which changes what published
+    // records count as inert and belongs to a ticket that owns that number.
+    expect(disposeFailedCase(
+      new DegenerateRunError('ws-fix-broken', 1, 0, ['run_end: TypeError: x is not a function']),
+    )).toEqual({ kind: 'settled', outcome: 'inert' });
+
+    // Anything that is not a degenerate run never consulted a turn error at all —
+    // a harness guard, a schema refusal — so it cannot be resumable.
+    expect(disposeFailedCase(new DegenerateRuntimeError('t', 'rt.executionRouter is absent')))
+      .toEqual({ kind: 'settled', outcome: 'errored' });
+    expect(disposeFailedCase(new Error('boom'))).toEqual({ kind: 'settled', outcome: 'errored' });
+  });
+});
+
+
+/**
+ * THE SPAWNED CLI DOES NOT GET THIS REPOSITORY AS ITS WORKSPACE.
+ *
+ * `createCLIRuntime` roots the host `laptop` executor at `cwd ?? process.cwd()`
+ * unless a caller passes `hostRoot: null` (`cli-backend/src/runtime.ts:545`), and
+ * a spawned CLI has no flag for that — so the driver's `cwd` IS the child
+ * agent's own filesystem. Both spawns used `cwd: REPO_ROOT`, and the eval runs of
+ * 2026-08-24 left `reference.mjs`, `solution.mjs` and `test-eval.mjs` (a corpus
+ * task's seed files and the agent's own harness) plus core's spill directories
+ * `.kinu/tool-output/` and `attachments/` in the repository root. The in-process
+ * suites had closed the same hazard with `hostRoot: null`; the spawned families
+ * reopened it.
+ *
+ * `kinu create --mode local` RECORDS the placement it was given
+ * (`cli/src/config.ts` `placedRef`: "the directory its file and shell plane binds
+ * to"), so the config the child writes is a durable statement of which
+ * filesystem the agent got. That makes this assertable without a credential and
+ * without a model: the child really runs, and the recorded directory is the
+ * whole fact.
+ */
+describe('the spawned-CLI driver roots its child outside the repository', () => {
+  test('kinu create records a scratch project directory, never the repo root', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'kinu-driver-cwd-'));
+    try {
+      await createCliWorkspace({
+        home,
+        workspace: 'cwd-probe',
+        purpose: 'a workspace whose recorded placement is the subject of the test',
+        // A fake credential: `create` persists the provider config it is given and
+        // calls no model, so this reaches the real birth path offline.
+        llm: {
+          name: 'fake', baseURL: 'http://127.0.0.1:9/v1', model: 'fake-model',
+          headers: { Authorization: 'Bearer fake' },
+        },
+      });
+
+      const config = v.parse(
+        v.object({
+          agents: v.record(v.string(), v.object({ cwd: v.string(), mode: v.string() })),
+        }),
+        JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')),
+      );
+      const agent = config.agents['cwd-probe'];
+      if (agent === undefined) throw new Error('`kinu create` recorded no agent to read');
+
+      // THE DEFECT FIRST, so a regression reads as itself rather than as a
+      // missing directory. `realpathSync` on both sides because the child
+      // canonicalises what it records, so comparing raw strings could pass for the
+      // wrong reason.
+      expect(agent.mode).toBe('local');
+      expect(
+        agent.cwd,
+        'the child agent was placed in THIS REPOSITORY, so a corpus task that writes files '
+        + 'writes them into the tree the harness was launched from — the debris defect',
+      ).not.toBe(realpathSync(join(import.meta.dirname, '../..')));
+      expect(
+        agent.cwd,
+        'the child agent must be placed inside the scratch home it was given, because that '
+        + 'directory becomes its host executor root',
+      ).toStartWith(realpathSync(home));
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

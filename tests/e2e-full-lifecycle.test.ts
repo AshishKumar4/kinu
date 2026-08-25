@@ -17,6 +17,7 @@ import * as v from 'valibot';
 import {
   BUILTIN_TOOLS,
   collectStepText,
+  createFactsStore,
   initWorkspaceSchema,
   readSoul,
   JsonObjectSchema,
@@ -28,8 +29,12 @@ import {
 } from '../packages/core/src/index';
 import { createWorkspace, openWorkspace } from '../packages/core/src/identity/index';
 import { openWorkspaceCLI } from '../packages/cli-backend/src/open';
-import { makeWorkspaceSchemaSql, type CLIRuntime } from '../packages/cli-backend/src/runtime';
-import { buildEvalAgentSurface, requireSandboxedExecutors } from './evals/harness';
+import {
+  makeSql, makeWorkspaceSchemaSql, type CLIRuntime,
+} from '../packages/cli-backend/src/runtime';
+import {
+  buildEvalAgentSurface, installPreTurnProfile, requireSandboxedExecutors,
+} from './evals/harness';
 import {
   liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, toolExecute,
   UNCONFIGURED_LLM,
@@ -45,6 +50,40 @@ const LLM_CONFIG: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;
 
 const TEST_DIR = join(tmpdir(), 'kinu-e2e-full-' + Date.now());
 const DB_PATH = join(TEST_DIR, 'agent.db');
+
+/** The note steps 5 and 6 write and then read back. One constant, because a
+ *  second copy of the string is a second thing that can drift out of step with
+ *  the assertion that looks for it. */
+const MEMORY_FACT = 'the project uses bun:sqlite for its database layer';
+
+/**
+ * WHERE the fact actually landed, across both memory write surfaces.
+ *
+ * `memory` offers two legitimate ways to store one: `save` appends to
+ * `memory/MEMORY.md`, `remember` upserts a keyed row in `agent_facts`
+ * (core/src/tools/memory-tool.ts:158-170). A prompt that says "save this fact"
+ * admits either, so an assertion pinned to one of them measures which branch the
+ * model picked and calls the other branch a failure.
+ *
+ * Measured 2026-08-24 against staging on `@cf/deepseek-ai/deepseek-v4-pro-0813`:
+ * the model called `remember`, answered "stored under the key `project.database`
+ * ... the result confirms `ok: true`", and step 5 failed on `action === 'save'`
+ * having done exactly what it was asked. Step 6 then cascaded on the same
+ * MEMORY.md read, and step 7 died with a `bun:sqlite` prepare error because step
+ * 6 closes `db` before its own assertions run.
+ *
+ * So durability is asserted over BOTH surfaces and the chosen one is REPORTED,
+ * never required. This suite's subject is that the note survives a close and
+ * reopen; which tool action an agent reaches for is measured by the behaviour
+ * arm's scorers, over a corpus, where one model's choice is a data point rather
+ * than a gate.
+ */
+function storedMemoryFact(db: Database, memoryFile: string | null): string | null {
+  if (memoryFile?.includes(MEMORY_FACT)) return 'memory/MEMORY.md';
+  const fact = createFactsStore(makeSql(db)).all()
+    .find((row) => JSON.stringify(row.value).includes(MEMORY_FACT));
+  return fact ? `agent_facts[${fact.key}]` : null;
+}
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -146,6 +185,9 @@ describe('E2E Full Lifecycle', () => {
     // from; the next line asserts that rather than trusting it.
     ({ rt } = await openWorkspaceCLI(db, DB_PATH, { llm: LLM_CONFIG, hostRoot: null }));
     requireSandboxedExecutors('e2e-full-lifecycle', rt);
+    // The wiring `LocalAgentSession` does for every turn-driving surface; this
+    // suite drives the inner API, so it installs it itself.
+    installPreTurnProfile(rt, LLM_CONFIG);
 
     // Model first: the production actor root builds `agents` from deps carrying
     // the model a search expands with, so a surface built before it would be the
@@ -247,20 +289,24 @@ describe('E2E Full Lifecycle', () => {
   // ── Step 5: Chat turn 3 — persist a memory note ───────────────
 
   liveTest('5. chat turn 3: save note to memory', async () => {
-    const fact = 'the project uses bun:sqlite for its database layer';
     const turn = await chatTurn(
       model, rt, tools,
-      `Use the memory tool to save this exact fact: ${fact}`,
+      `Use the memory tool to save this exact fact: ${MEMORY_FACT}`,
     );
     console.log(`  Response (${turn.assistantResponse.length} chars): ${turn.assistantResponse.slice(0, 200)}`);
     console.log(`  Steps: ${turn.steps}, Tools: ${turn.toolCalls.map(t => t.name).join(', ') || 'none'}`);
 
-    const save = turn.toolCalls.find((call) => call.name === 'memory' && call.args.action === 'save');
-    expect(save, 'the model did not call memory.save').toBeDefined();
-    const memory = await rt.memory.read('memory/MEMORY.md');
-    if (!memory) throw new Error('memory note was not persisted');
-    expect(memory).toContain(fact);
-    console.log(`  Memory size: ${memory.length} chars`);
+    const wrote = turn.toolCalls.find((call) => call.name === 'memory'
+      && (call.args.action === 'save' || call.args.action === 'remember'));
+    expect(wrote, 'the model never wrote through the memory tool — it called '
+      + (turn.toolCalls.map((call) => `${call.name}.${String(call.args.action ?? '?')}`).join(', ')
+        || 'nothing'))
+      .toBeDefined();
+    const where = storedMemoryFact(db, await rt.memory.read('memory/MEMORY.md'));
+    expect(where, 'the memory tool reported a write but neither memory/MEMORY.md nor agent_facts '
+      + 'holds the fact, so nothing was persisted for step 6 to find')
+      .not.toBeNull();
+    console.log(`  Stored via memory.${String(wrote?.args.action)} in ${String(where)}`);
   }, 120_000);
 
   // ── Step 6: Close and reopen with openWorkspace ──────────────────
@@ -270,6 +316,13 @@ describe('E2E Full Lifecycle', () => {
 
     const db2 = new Database(DB_PATH);
     const { rt: rt2, info } = await openWorkspace(db2, { llm: LLM_CONFIG });
+    // Handed over BEFORE the assertions below, not after them. `db` is already
+    // closed, so a failing assertion used to leave every later step holding a
+    // dead handle: step 7 reported `bun:sqlite` prepare errors that had nothing
+    // to do with what it asserts, and the run showed three failures for one
+    // cause.
+    db = db2;
+    rt = rt2;
 
     // Identity survived
     expect(info.name).toBe(agentName);
@@ -286,8 +339,10 @@ describe('E2E Full Lifecycle', () => {
     // Messages survived (at minimum: turns that completed × 2 messages each)
     const msgCount = db2.query<{ c: number }, []>('SELECT COUNT(*) as c FROM messages').get()?.c ?? 0;
     expect(msgCount).toBeGreaterThanOrEqual(2); // at least 1 turn completed
-    expect(await rt2.memory.read('memory/MEMORY.md'))
-      .toContain('the project uses bun:sqlite for its database layer');
+    expect(storedMemoryFact(db2, await rt2.memory.read('memory/MEMORY.md')),
+      'the memory note did not survive the close and reopen — neither memory/MEMORY.md nor '
+      + 'agent_facts holds it in the reopened workspace')
+      .not.toBeNull();
 
     // SOUL.md survived
     expect(info.soul).toContain('JavaScript');
@@ -300,10 +355,6 @@ describe('E2E Full Lifecycle', () => {
     console.log(`  Tasks: ${info.taskCount}`);
     console.log(`  Memory size: ${info.memorySize} bytes`);
     console.log(`  Messages: ${msgCount}`);
-
-    // Replace db reference for cleanup
-    db = db2;
-    rt = rt2;
   });
 
   // ── Step 7: Print full DB state summary ──────────────────────

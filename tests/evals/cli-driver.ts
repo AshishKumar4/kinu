@@ -27,7 +27,9 @@
  * ambiguous in a measurement. PATH crosses over because the workspace shell
  * and the MCP fixture spawn real processes; KINU_SKIP_DAEMON=1 because a
  * one-shot eval that leaves a daemon behind per run is a process leak, not an
- * agent behaviour.
+ * agent behaviour. The child's CWD is scratch too, for the reason
+ * {@link childProjectRoot} records: it is where the child's host executor gets
+ * rooted, and it used to be this repository.
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -37,6 +39,31 @@ import type { LLMProviderConfig } from '../../packages/core/src/index';
 
 const REPO_ROOT = join(import.meta.dirname, '../..');
 const CLI_BIN = join(REPO_ROOT, 'packages/cli/bin/cli.ts');
+
+/**
+ * The spawned agent's own project root, and it is NOT this repository.
+ *
+ * MEASURED. Both calls below used `cwd: REPO_ROOT`, and
+ * `createCLIRuntime` roots the `laptop` executor at `cwd ?? process.cwd()`
+ * unless told otherwise (`cli-backend/src/runtime.ts:545`) — so the child's host
+ * plane WAS the repository, and an episode reaches every registered provider
+ * through `execute_tools`. The eval runs of 2026-08-24 left `reference.mjs`,
+ * `solution.mjs` and `test-eval.mjs` (a corpus task's seed files and the agent's
+ * own harness) plus core's spill directories `.kinu/tool-output/` and
+ * `attachments/` in the repository root.
+ *
+ * The in-process suites close this with `hostRoot: null`, which a spawned CLI has
+ * no flag for; the equivalent is to hand the child a cwd it may own. A
+ * subdirectory of the scratch home rather than the home itself, so the agent's
+ * files cannot land beside `config.json` and the workspace stores the driver
+ * reads its ledgers from — and because `canonicalProjectRoot` derives a project
+ * identity from cwd, which should be scratch too.
+ */
+function childProjectRoot(home: string): string {
+  const root = join(home, 'project');
+  mkdirSync(root, { recursive: true });
+  return root;
+}
 
 /** One stdio MCP server entry, as ~/.kinu/config.json spells it. */
 export interface CliMcpServer {
@@ -148,7 +175,7 @@ export async function createCliWorkspace(opts: CliWorkspaceOptions): Promise<voi
   const proc = Bun.spawn({
     cmd: [process.execPath, CLI_BIN, 'create', opts.workspace,
       '--mode', 'local', '--purpose', opts.purpose, '--no-alias-shim'],
-    cwd: REPO_ROOT,
+    cwd: childProjectRoot(opts.home),
     env: childEnv(opts),
     stdin: 'ignore', stdout: 'pipe', stderr: 'pipe',
   });
@@ -175,7 +202,7 @@ export async function execCliTask(opts: CliExecOptions): Promise<CliExecOutcome>
   cmd.push('--', opts.prompt);
   const proc = Bun.spawn({
     cmd,
-    cwd: REPO_ROOT,
+    cwd: childProjectRoot(opts.home),
     env: childEnv(opts),
     stdin: 'ignore', stdout: 'pipe', stderr: 'pipe',
   });

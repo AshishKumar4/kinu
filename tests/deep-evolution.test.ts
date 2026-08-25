@@ -28,7 +28,9 @@ import {
 import { createWorkspace } from '../packages/core/src/identity/index';
 import { openWorkspaceCLI } from '../packages/cli-backend/src/open';
 import { makeWorkspaceSchemaSql, type CLIRuntime } from '../packages/cli-backend/src/runtime';
-import { buildEvalAgentSurface, requireSandboxedExecutors } from './evals/harness';
+import {
+  buildEvalAgentSurface, installPreTurnProfile, requireSandboxedExecutors,
+} from './evals/harness';
 import {
   finalIntegerAnswer,
   liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, UNCONFIGURED_LLM,
@@ -163,6 +165,9 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     ({ rt } = await openWorkspaceCLI(db, DB_PATH, { llm: LLM_CONFIG, hostRoot: null }));
     requireSandboxedExecutors('deep-evolution', rt);
+    // The wiring `LocalAgentSession` does for every turn-driving surface; this
+    // suite drives the inner API, so it installs it itself.
+    installPreTurnProfile(rt, LLM_CONFIG);
 
     events = [];
     engine = new EvolutionEngine(rt, { enabled: true });

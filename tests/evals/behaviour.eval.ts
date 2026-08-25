@@ -65,7 +65,8 @@ import {
   type CaseActivity, type EvalArmState, type EvalObservation, type EvalProgressCase,
   type EvalTier,
 } from '@kinu.run/test-utils';
-import { DegenerateRunError, runBehaviourTask, type BehaviourOutput } from './harness';
+import { runBehaviourTask, type BehaviourOutput } from './harness';
+import { disposeFailedCase } from './episode-failure';
 import { resolveArtifactRoot } from '../../scripts/bench-retention';
 
 /** One observation's input: the task and which repetition of it. That pair IS
@@ -374,10 +375,14 @@ for (const { task, repetition } of CASES) {
       reason: record.reason ?? 'case did not settle',
     };
     upsertObservation(observation);
-    // A crash record is adopted for its spend too, and it has none to give: the
-    // attempt that died stored no totals. Registering it is what turns the
-    // omission into a stated one — this process will retry the case and pay for
-    // it again, and the first attempt's cost stays outside the published figure.
+    // A record with no verdict is adopted for its spend too, and it has none to
+    // give: the attempt stored activity but no totals. Registering it is what
+    // turns the omission into a stated one — this process will retry the case and
+    // pay for it again, and the first attempt's cost stays outside the published
+    // figure. THREE causes reach here now: an operator cancellation, a process
+    // that died mid-case, and a turn the ENVIRONMENT killed. The third is the one
+    // this file used to settle terminally, which made a transient outage a
+    // permanent verdict; the accounting is identical for all three.
     adoptedSpend.adopt(observation, record.activity);
   }
 }
@@ -671,23 +676,49 @@ describeEval('Agent behaviour over the run-event ledger', {
         // operator cancelled. Do not overwrite `incomplete` with `errored` as
         // the aborted model promise unwinds.
         if (progress.record(key)?.phase !== 'incomplete') {
-          const inert = error instanceof DegenerateRunError;
+          // THREE causes, not two, and ONE value that names which. `inert` is the
+          // AGENT producing nothing gradable; `errored` is the run's own failure;
+          // a degenerate trajectory whose own turn error came from the
+          // ENVIRONMENT is neither, and filing it as the first is how a run that
+          // lost 4 of 34 cases to `Failed after 3 attempts. Last error: Internal
+          // Server Error` reported "17 behavioural, 0 infrastructure" to the skip
+          // ratchet.
+          //
+          // AN OUTAGE IS NOT A VERDICT, so `disposeFailedCase` also decides
+          // whether the case SETTLES. Both halves used to be derived here and the
+          // pair `errored` + `markSettled` was the defect: a resumed run skipped
+          // the outage-killed cases and inherited a result the environment
+          // produced, permanently, for a failure that is transient by definition.
+          //
+          // The thrown error still fails THIS run's test with INFRA_FAILURE_MARKER
+          // in its message, so the ratchet's infrastructure count is unchanged.
+          // The retried case's SPEND is not carried, which the resume loop states
+          // rather than hides: an `incomplete` record has activity but no totals,
+          // so the dead attempt's tokens stay outside the published figure.
+          // The classifier owns the `Error` domain; a non-Error throw becomes
+          // one here so it classifies as the terminal failure it is.
+          const thrown = error instanceof Error ? error : new Error(String(error));
+          const disposition = disposeFailedCase(thrown);
           const observation: EvalObservation = {
             taskId: input.task.id,
             repetition: input.repetition,
-            outcome: inert ? 'inert' : 'errored',
-            reason: error instanceof Error ? error.message : String(error),
+            outcome: disposition.outcome,
+            reason: thrown.message,
           };
           upsertObservation(observation);
-          const durableProgress = v.parse(
-            JsonValueSchema,
-            v.parse(StoredCaseProgressSchema, { observation } satisfies StoredCaseProgress),
-          );
-          progress.markProgress(key, durableProgress, inert ? 'inert' : 'errored');
-          // Terminal: an episode that threw has produced its verdict, and no
-          // judge reads a failed case. A restart skips it rather than paying
-          // for the same failure twice.
-          progress.markSettled(key);
+          if (disposition.kind === 'resumable') {
+            progress.markIncomplete(key, observation.reason);
+          } else {
+            const durableProgress = v.parse(
+              JsonValueSchema,
+              v.parse(StoredCaseProgressSchema, { observation } satisfies StoredCaseProgress),
+            );
+            progress.markProgress(key, durableProgress, disposition.outcome);
+            // Terminal: an episode that produced its own verdict has produced one,
+            // and no judge reads a failed case. A restart skips it rather than
+            // paying for the same failure twice.
+            progress.markSettled(key);
+          }
         }
         throw error;
       }
