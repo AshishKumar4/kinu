@@ -942,6 +942,7 @@ export function createTeamToolDeps(deps: {
   return {
     delegation: deps.delegation,
 
+    snapshot: () => deps.roster.list(),
     list: async () => deps.roster.list(),
 
     create: async (input) => {

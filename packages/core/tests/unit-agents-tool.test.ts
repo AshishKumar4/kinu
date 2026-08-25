@@ -115,10 +115,13 @@ const handoff = (delivery: SubordinateDelivery, busy: boolean): SubordinateHando
   phase: { busy, lastActivityAt: 1234, workingOn: busy ? 'reading src/auth.ts' : null },
 });
 
-function makeTeam(overrides: Partial<TeamToolDeps> = {}) {
+function makeTeam(
+  overrides: Partial<Pick<TeamToolDeps, 'assign' | 'message' | 'list'>> = {},
+) {
   const calls: Call[] = [];
   const deps: TeamToolDeps = {
     delegation: ROOT_DELEGATION_BUDGET,
+    snapshot: () => [rosterEntry],
     list: async () => [rosterEntry],
     create: async (input) => ({
       name: input.name ?? 'researcher',
@@ -697,14 +700,48 @@ describe('agents tool — subordinate actions', () => {
     expect(calls[1].input).toEqual({ name: 'researcher', keepHistory: false });
   });
 
-  test('missing required args are sharp errors, not deps calls', async () => {
+  test('missing required args are sharp refusals, classified bad_input — not deps calls, not defects', async () => {
+    // The ledger (read-models/tool-failures.ts) reads a bare {error} as
+    // `returned_error`: a correct refusal counted the tool as broken. A caller
+    // mistake is bad_input and lands in `refused`.
     const { deps, calls } = makeTeam();
     const t = agentsTool({ team: deps });
-    expect(await t.execute({ action: 'hire', role: 'r' })).toEqual({ error: 'hire requires role and mission' });
-    expect(await t.execute({ action: 'ask', agent: 'x' })).toEqual({ error: 'ask requires agent and message' });
-    expect(await t.execute({ action: 'send', message: 'x' })).toEqual({ error: 'send requires agent and message' });
-    expect(await t.execute({ action: 'dismiss' })).toEqual({ error: 'dismiss requires agent' });
+    expect(await t.execute({ action: 'hire', role: 'r' }))
+      .toEqual({ reason: 'bad_input', error: 'hire requires role and mission' });
+    expect(await t.execute({ action: 'ask', agent: 'x' }))
+      .toEqual({ reason: 'bad_input', error: 'ask requires agent and message' });
+    expect(await t.execute({ action: 'send', message: 'x' }))
+      .toEqual({ reason: 'bad_input', error: 'send requires agent and message' });
+    expect(await t.execute({ action: 'dismiss' }))
+      .toEqual({ reason: 'bad_input', error: 'dismiss requires agent' });
     expect(calls).toEqual([]);
+  });
+
+  test('a peers-only actor that asks to hire a SUBORDINATE is denied, not indicted', async () => {
+    // The one capability-absence arm the enum gating lets through: `hire` is
+    // present whenever either surface is wired, so a peers-only actor can name
+    // the subordinate scope and must land in `refused`, not `broke`. The
+    // dismiss/reply guards beside it are shadowed by the same gating (dismiss
+    // needs team, reply needs peers — the arm runs only when both are absent,
+    // which the enum never admits) and stay classified for whoever loosens the
+    // gate first.
+    const t = agentsTool({ peers: makePeers().deps });
+    expect(await t.execute({ action: 'hire', role: 'r', mission: 'm' })).toEqual({
+      reason: 'denied',
+      error: 'hiring subordinates is not available on this actor',
+    });
+  });
+
+  test('a name on neither roster is a caller mistake, not an unknown transport state', async () => {
+    const t = agentsTool({ team: makeTeam().deps });
+    expect(await t.execute({ action: 'ask', agent: 'ghost', message: 'x' })).toEqual({
+      reason: 'bad_input',
+      error: 'unknown agent "ghost" — check the roster with action:"list"',
+    });
+    expect(await t.execute({ action: 'send', agent: 'ghost', message: 'x' })).toEqual({
+      reason: 'bad_input',
+      error: 'unknown agent "ghost" — check the roster with action:"list"',
+    });
   });
 
   test('deps exceptions surface as tool error objects (never throw into the turn)', async () => {
@@ -791,11 +828,14 @@ describe('agents tool — peer workspace actions', () => {
   test('missing required args are sharp errors, not deps calls', async () => {
     const { deps, calls } = makePeers();
     const t = agentsTool({ peers: deps });
-    expect(await t.execute({ action: 'ask', agent: 'scout' })).toEqual({ error: 'ask requires agent and message' });
-    expect(await t.execute({ action: 'send', message: 'x' })).toEqual({ error: 'send requires agent and message' });
-    expect(await t.execute({ action: 'reply', message: 'x' })).toEqual({ error: 'reply requires event_id and message' });
+    expect(await t.execute({ action: 'ask', agent: 'scout' }))
+      .toEqual({ reason: 'bad_input', error: 'ask requires agent and message' });
+    expect(await t.execute({ action: 'send', message: 'x' }))
+      .toEqual({ reason: 'bad_input', error: 'send requires agent and message' });
+    expect(await t.execute({ action: 'reply', message: 'x' }))
+      .toEqual({ reason: 'bad_input', error: 'reply requires event_id and message' });
     expect(await t.execute({ action: 'hire', scope: 'workspace', message: 'x' }))
-      .toEqual({ error: 'hire scope=workspace requires mission and message' });
+      .toEqual({ reason: 'bad_input', error: 'hire scope=workspace requires mission and message' });
     expect(calls).toEqual([]);
   });
 

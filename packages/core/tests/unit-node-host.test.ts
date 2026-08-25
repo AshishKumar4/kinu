@@ -104,6 +104,51 @@ function scriptedReporter(answer: string, offered?: Set<string>): MockLanguageMo
   });
 }
 
+function doubleProposer(): MockLanguageModelV3 {
+  let call = 0;
+  const proposal = (suffix: string) => ({
+    rationale: `split ${suffix}`,
+    branches: [
+      { task: `left ${suffix}`, rationale: 'left', context: 'fresh' },
+      { task: `right ${suffix}`, rationale: 'right', context: 'fresh' },
+    ],
+  });
+  return scriptedTurnModel({
+    provider: 'fake',
+    modelId: 'fake-double-proposer',
+    doGenerate: async () => {
+      call += 1;
+      const content: LanguageModelV3Content[] = call === 1
+        ? [
+            {
+              type: 'tool-call', toolCallId: 'propose-1', toolName: PROPOSE_BRANCH_TOOL,
+              input: JSON.stringify(proposal('one')),
+            },
+            {
+              type: 'tool-call', toolCallId: 'propose-2', toolName: PROPOSE_BRANCH_TOOL,
+              input: JSON.stringify(proposal('two')),
+            },
+          ]
+        : call === 2
+          ? [{
+              type: 'tool-call', toolCallId: 'report-1', toolName: 'report',
+              input: JSON.stringify({ status: 'completed', content: 'done' }),
+            }]
+          : [{ type: 'text', text: 'Reported.' }];
+      return {
+        content,
+        finishReason: { unified: call < 3 ? 'tool-calls' : 'stop', raw: undefined },
+        usage: {
+          inputTokens: { total: 2, noCache: 2, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 2, text: 2, reasoning: undefined },
+        },
+        warnings: [],
+      };
+    },
+  });
+}
+
+
 interface Fixture {
   readonly input: NodeAgentInput;
   readonly deps: NodeAgentDeps;
@@ -122,6 +167,7 @@ function fixture(opts?: {
   /** How the search this node belongs to settles. Defaults to `best`, which is what
    *  every other test here wants; varied by the label derivation's own test. */
   readonly settle?: SwarmSettle;
+  readonly model?: MockLanguageModelV3;
 }): Fixture {
   const { rt } = createTestRuntime();
   const journal = new HeadJournal(rt.storage.sql);
@@ -142,7 +188,8 @@ function fixture(opts?: {
   };
   const deps: NodeAgentDeps = {
     rt,
-    model: scriptedReporter(opts?.answer ?? 'sort once instead of comparing every pair', opts?.offered),
+    model: opts?.model
+      ?? scriptedReporter(opts?.answer ?? 'sort once instead of comparing every pair', opts?.offered),
     journal,
 
     // Required, and derived rather than picked, for the reason the type now enforces:
@@ -472,6 +519,28 @@ describe('the arbiter is offered only when a branch could be granted', () => {
     // resolving it, or a node would pay for a branch it never asked for.
     expect(asked).toBe(false);
   });
+
+  test('same-step proposals share one arbitration and one budget debit', async () => {
+    let calls = 0;
+    const { input, deps } = fixture({
+      model: doubleProposer(),
+      arbitrate: async () => {
+        calls += 1;
+        return {
+          ...grant(),
+          nodeIds: [`first-${String(calls)}-a`, `first-${String(calls)}-b`],
+        };
+      },
+    });
+
+    const run = await runNodeAgent(input, deps);
+
+    expect(calls).toBe(1);
+    expect(run.granted).toMatchObject({
+      kind: 'granted',
+      nodeIds: ['first-1-a', 'first-1-b'],
+    });
+  });
 });
 
 /** The four values of the settle axis, so the label table below is walked rather than
@@ -562,5 +631,79 @@ describe("what a node's run derives, and where each derivation lands", () => {
       report: reportWithSummary(summary), reported: null, languages: ['javascript'],
     });
     expect(unreported.conclusion).toBe(summary);
+  });
+});
+
+describe('a proposal is answered at most once', () => {
+  test('a second propose_branch is refused before the arbiter, and the first grant stands', async () => {
+    // The engine reads only the LAST grant, so a second arbitrate would debit
+    // the shared budget again and strand the first grant's width — children paid
+    // for and never created. The refusal must happen BEFORE arbitration runs.
+    let asked = 0;
+    let firstDecision: BranchDecision | null = null;
+    const { input, deps } = fixture({
+      arbitrate: (proposal) => {
+        asked += 1;
+        const decision: BranchDecision = {
+          kind: 'granted', width: 2, nodeIds: ['c1', 'c2'], proposal,
+        };
+        if (asked === 1) firstDecision = decision;
+        return decision;
+      },
+    });
+    let call = 0;
+    const usage = {
+      inputTokens: { total: 11, noCache: 11, cacheRead: undefined, cacheWrite: undefined },
+      outputTokens: { total: 7, text: 7, reasoning: undefined },
+    };
+    const propose = (id: string) => ({
+      type: 'tool-call' as const,
+      toolCallId: id,
+      toolName: PROPOSE_BRANCH_TOOL,
+      input: JSON.stringify({
+        rationale: 'two angles genuinely diverge',
+        branches: [
+          { task: 'sort once', rationale: 'fewer comparisons', context: 'fresh' },
+          { task: 'tournament', rationale: 'linear in n', context: 'fresh' },
+        ],
+      }),
+    });
+    deps.model = scriptedTurnModel({
+      provider: 'fake',
+      modelId: 'fake-double-propose',
+      doGenerate: async () => {
+        call += 1;
+        if (call <= 2) {
+          return {
+            content: [propose(`propose-${String(call)}`)],
+            finishReason: { unified: 'tool-calls' as const, raw: undefined },
+            usage, warnings: [],
+          };
+        }
+        if (call === 3) {
+          return {
+            content: [{
+              type: 'tool-call' as const,
+              toolCallId: 'report-1',
+              toolName: 'report',
+              input: JSON.stringify({ status: 'completed', content: 'sort once instead of comparing every pair' }),
+            }],
+            finishReason: { unified: 'tool-calls' as const, raw: undefined },
+            usage, warnings: [],
+          };
+        }
+        return {
+          content: [{ type: 'text' as const, text: 'Reported.' }],
+          finishReason: { unified: 'stop' as const, raw: undefined },
+          usage, warnings: [],
+        };
+      },
+    });
+
+    const run = await runNodeAgent(input, deps);
+
+    expect(run.report.status).toBe('completed');
+    expect(asked).toBe(1);
+    expect(run.granted).toEqual(firstDecision);
   });
 });

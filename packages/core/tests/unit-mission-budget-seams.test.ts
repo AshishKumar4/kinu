@@ -100,6 +100,7 @@ function searchableDeps(opts: {
     },
     team: {
       delegation: ROOT_DELEGATION_BUDGET,
+      snapshot: () => [],
       list: async () => [],
       create: async (input) => ({
         name: input.name ?? 'helper',

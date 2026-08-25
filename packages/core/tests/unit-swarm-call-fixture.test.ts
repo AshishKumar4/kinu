@@ -506,7 +506,8 @@ describe('the implementation, asserted where absences used to be pinned', () => 
     // neighbours describe.
     expect(Object.keys(objectiveModule).sort()).toEqual([
       'PUBLICATION_SURFACES', 'PUBLISHING_CARRIES', 'VERIFIER_KINDS', 'VERIFIER_KIND_DOC',
-      'admitsPublication', 'carrySuppression', 'floorMargin', 'isBetter', 'normalisedScore',
+      'admitsPublication', 'carrySuppression', 'floorMargin', 'isBetter', 'measuredHalf',
+      'normalisedScore',
     ]);
     // GROWN BY FOUR since *Arbitration*'s arbiter landed. `arbitrateBranch` is the executable
     // port of `Exploration/Arbitration.lean`'s `arbitrate`, and two of the constants are

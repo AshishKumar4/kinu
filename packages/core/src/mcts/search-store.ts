@@ -12,6 +12,7 @@
 // SDK's recovery hook returns, so it can't drive a cross-activation resume; this
 // store is the source of truth when injected, keyed by the search's root id.
 
+import { modelMessageSchema, type ModelMessage } from 'ai';
 import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import { reconcileColumns } from '../identity/columns';
@@ -37,8 +38,12 @@ const PersistedMCTSConfigSchema: v.GenericSchema<PersistedMCTSConfig> = v.object
   maxEvalLLMCalls: v.optional(v.number()),
   takesEpsilon: v.optional(v.number()),
 });
+const StoredModelMessageSchema: v.GenericSchema<ModelMessage> =
+  v.custom<ModelMessage>((value) => modelMessageSchema.safeParse(value).success);
+
 const StoredSwarmConfigSchema = v.looseObject({
   profile: v.optional(v.unknown()),
+  originContext: v.optional(v.array(StoredModelMessageSchema)),
 });
 
 /**
@@ -83,6 +88,8 @@ export interface PersistedSearchKnobs {
    * catalog edits are for later turns, never an in-flight tree.
    */
   readonly profile?: SwarmProfileSnapshot;
+  /** The caller conversation frozen when this swarm began. */
+  readonly originContext?: readonly ModelMessage[];
 }
 
 /** A resumable (interrupted) search: enough to continue the loop from checkpoint. */
@@ -328,15 +335,9 @@ export class MctsSearchStore {
       }));
   }
 
-  /**
-   * The durable profile snapshot ONE swarm row carries, or null when the row
-   * has none (a run started before profiles existed, or one whose caller
-   * wired no catalog). Validated on the way out: a blob this engine wrote that
-   * no longer parses is corruption, and resuming under a half-read profile is
-   * exactly the silent substitution the snapshot exists to prevent — so a bad
-   * blob THROWS rather than degrades.
-   */
-  readSwarmProfile(rootId: string): SwarmProfileSnapshot | null {
+  private readStoredSwarmConfig(
+    rootId: string,
+  ): v.InferOutput<typeof StoredSwarmConfigSchema> | null {
     const row = this.sql<{ config_json: string }>`
       SELECT config_json FROM mcts_search_runs WHERE root_id = ${rootId} LIMIT 1`[0];
     if (!row) return null;
@@ -346,13 +347,21 @@ export class MctsSearchStore {
     } catch (error) {
       throw new Error(`swarm run ${rootId}: its ledger config_json will not parse`, { cause: error });
     }
-    let stored: v.InferOutput<typeof StoredSwarmConfigSchema>;
     try {
-      stored = v.parse(StoredSwarmConfigSchema, raw);
+      return v.parse(StoredSwarmConfigSchema, raw);
     } catch (error) {
       throw new Error(`swarm run ${rootId}: its ledger config_json is not an object`, { cause: error });
     }
-    return stored.profile === undefined ? null : validateSwarmProfileSnapshot(stored.profile);
+  }
+
+  readSwarmProfile(rootId: string): SwarmProfileSnapshot | null {
+    const stored = this.readStoredSwarmConfig(rootId);
+    return stored?.profile === undefined ? null : validateSwarmProfileSnapshot(stored.profile);
+  }
+
+  readSwarmOriginContext(rootId: string): readonly ModelMessage[] | null {
+    const stored = this.readStoredSwarmConfig(rootId);
+    return stored?.originContext ?? null;
   }
   /** How many SWARM rows still claim a live executor. The start-of-life
    *  reconciliation reads this so a dead search's row reaches its closer even

@@ -1131,11 +1131,13 @@ describe('carry admission', () => {
     })).toEqual({ kind: 'admitted' });
   });
 
-  // *The publication seal*, over the real shape rather than a cast: `carry:'artifacts'`
-  // routes through `experience_library`, which is the widest-blast-radius surface in the
-  // governed set and exactly the hole that seal closed. A sealed run must not publish
-  // there however well the candidate scored, so the seal is checked BEFORE the
-  // threshold — a high score is not evidence about which hypothesis was true.
+  // *The publication seal*, over the surface the settle path actually WRITES: both
+  // publishing carries land in the records store (`swarm-run.ts`'s settle block), so
+  // that is the surface `admitCarry` names — the writer census decides the routing, not
+  // a declaration. A sealed run must not publish however well the candidate scored, so
+  // the seal is checked BEFORE the threshold: a high score is not evidence about which
+  // hypothesis was true. An earlier revision named `experience_library` here while the
+  // run never wrote there; `admitCarry`'s doc carries the correction.
   test('a sealed store refuses the carry before the threshold is even consulted', () => {
     const sealed: PublicationState = {
       kind: 'sealed',
@@ -1154,6 +1156,37 @@ describe('carry admission', () => {
     expect(admitCarry({
       carry: { kind: 'artifacts', threshold: 0.1 }, score: 1, publication: sealed,
     })).toEqual({ kind: 'refused', cause: 'sealed' });
+    expect(admitCarry({
+      carry: { kind: 'elites' }, score: 1, publication: sealed,
+    })).toEqual({ kind: 'refused', cause: 'sealed' });
+  });
+
+  test('a recorded re-derivation reopens publication for the carry', () => {
+    // The one edge out of a seal: a floor re-derived with its own proof, not a
+    // retry and not a later candidate that happened to score inside the bound.
+    const cleared: PublicationState = {
+      kind: 'sealed',
+      breach: {
+        floor: {
+          value: 100, kind: 'certificate', bestKnownHonest: 120,
+          proof: 'every correct answer must compare each pair at least once on this instance',
+        },
+        measured: { kind: 'measured', value: 40, detail: 'comparisons counted by the meter' },
+        margin: 0.2,
+        hypotheses: ['floor_wrong', 'verifier_gameable'],
+      },
+      clearedBy: {
+        floor: {
+          value: 40, kind: 'adversary', bestKnownHonest: 41,
+          proof: 'an adversary holding one duplicate halves every comparison bound',
+        },
+        adjudication: 'floor_wrong — the original proof ignored duplicated keys',
+        at: Date.now(),
+      },
+    };
+    expect(admitCarry({
+      carry: { kind: 'artifacts', threshold: 0.5 }, score: 0.9, publication: cleared,
+    })).toEqual({ kind: 'admitted' });
   });
 
   test('settleCarry emits one named event per member with its score and threshold', () => {

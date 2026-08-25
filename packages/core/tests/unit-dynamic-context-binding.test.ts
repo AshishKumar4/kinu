@@ -14,7 +14,9 @@ import { initWorkspaceSchema } from '../src/identity/workspace-schema';
 import { makeSqlExec } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { AgentStores } from '../src/state/agent-stores';
-import type { DynamicContext, MissingCapability } from '../src/prompting/volatile-context';
+import type {
+  DynamicContext, DynamicApproval, DynamicDelegate, MissingCapability,
+} from '../src/prompting/volatile-context';
 
 interface Fixture {
   readonly rt: AgentRuntime;
@@ -32,6 +34,9 @@ function setup(): Fixture {
 interface Overrides {
   readonly memoryTail?: string;
   readonly missingCapabilities?: readonly MissingCapability[];
+  /** The backend-only planes, as the source callbacks a backend supplies. */
+  readonly subordinateDelegates?: () => readonly DynamicDelegate[];
+  readonly approvals?: () => readonly DynamicApproval[];
 }
 
 function collect(o: Fixture, over: Overrides = {}): DynamicContext {
@@ -39,6 +44,8 @@ function collect(o: Fixture, over: Overrides = {}): DynamicContext {
     rt: o.rt, stores: o.stores,
     memoryTail: over.memoryTail,
     missingCapabilities: over.missingCapabilities ?? [],
+    subordinateDelegates: over.subordinateDelegates,
+    approvals: over.approvals,
   });
 }
 
@@ -98,5 +105,50 @@ describe('collectDynamicContext', () => {
     expect(collect(o).jobs).toEqual([]);
     o.stores.jobs.create({ id: 'j1', kind: 'run', workMode: 'build', now: 1 });
     expect(collect(o).jobs).toHaveLength(1);
+  });
+});
+
+describe('the backend-only planes ride the typed source callbacks', () => {
+  test('a backend without them renders nothing and invents no rows', () => {
+    // The CLI wires no consent registry and no roster store; absence must stay
+    // absent, not become an empty roster that reads as "no helpers".
+    const ctx = collect(setup());
+    expect(ctx.approvals).toBeUndefined();
+    expect(ctx.delegates).toEqual([]);
+  });
+
+  test('subordinates list ahead of the search roster both backends contribute', () => {
+    const { rt, stores } = setup();
+    const ctx = collect({ rt, stores }, {
+      subordinateDelegates: () => [{
+        kind: 'subordinate', name: 'scout', phase: 'working', task: 'map it',
+      }],
+    });
+    expect(ctx.delegates?.[0]).toEqual({
+      kind: 'subordinate', name: 'scout', phase: 'working', task: 'map it',
+    });
+  });
+
+  test('approvals and backend-provided capability notices pass through per step', () => {
+    let parked = 0;
+    const { rt, stores } = setup();
+    const ctx = collect({ rt, stores }, {
+      approvals: () => {
+        parked += 1;
+        return [{ id: 'cons-1', kind: 'device consent', detail: 'laptop: git push' }];
+      },
+      missingCapabilities: [{ source: 'inbox', reason: 'no transport bound' }],
+    });
+    expect(ctx.approvals).toEqual([
+      { id: 'cons-1', kind: 'device consent', detail: 'laptop: git push' },
+    ]);
+    expect(ctx.missingCapabilities).toContainEqual({ source: 'inbox', reason: 'no transport bound' });
+    // A callback, not a value: the block is re-read per step, so what the
+    // backend's store answers NOW is what renders.
+    expect(parked).toBe(1);
+    collect({ rt, stores }, {
+      approvals: () => { parked += 1; return []; },
+    });
+    expect(parked).toBe(2);
   });
 });

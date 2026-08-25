@@ -18,7 +18,9 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { AgentStores } from './agent-stores';
 import {
   agentDynamicContext,
+  type DynamicApproval,
   type DynamicContext,
+  type DynamicDelegate,
   type MissingCapability,
 } from '../prompting/volatile-context';
 import { renderFactsForTurn } from '../orchestrator/turn-surface';
@@ -32,6 +34,35 @@ export interface DynamicContextInput {
   readonly memoryTail: string | undefined;
   /** MCP servers this backend's connect path could not reach. */
   readonly missingCapabilities: readonly MissingCapability[];
+  /**
+   * The planes only the backend's own stores can answer, passed as typed source
+   * callbacks so the assembler stays the ONE place a plane is bound and no
+   * backend re-splices fields over the assembled result.
+   *
+   * - `subordinateDelegates` — this actor's own hires, listed ahead of the
+   *   search roster `HeadJournal.listLive()` contributes.
+   * - `approvals` — decisions currently parked on the user.
+   *
+   * Backend-only capability notices join `missingCapabilities` at the adapter
+   * boundary instead of widening this shared contract with a one-sided field.
+   */
+  readonly subordinateDelegates?: () => readonly DynamicDelegate[];
+  readonly approvals?: () => readonly DynamicApproval[];
+}
+
+export function subordinateDelegatesOf(
+  entries: readonly {
+    readonly name: string;
+    readonly status: string;
+    readonly currentTask: string | null;
+  }[],
+): DynamicDelegate[] {
+  return entries.map((entry) => ({
+    kind: 'subordinate',
+    name: entry.name,
+    phase: entry.status,
+    task: entry.currentTask,
+  }));
 }
 
 /**
@@ -51,6 +82,9 @@ export function collectDynamicContext(input: DynamicContextInput): DynamicContex
     runningJobs: stores.jobs.listRunning(),
     openTasks: stores.taskList.listOpen(),
     liveHeadRuns: stores.headJournal.listLive(),
+    subordinateDelegates: input.subordinateDelegates?.(),
+    approvals: input.approvals?.(),
     missingCapabilities: input.missingCapabilities,
   });
 }
+

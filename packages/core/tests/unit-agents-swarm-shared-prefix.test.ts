@@ -121,6 +121,24 @@ function forkCall(branches: number) {
 }
 
 describe('compactShared wiring through runSwarmAction', () => {
+  test('context:fork carries the caller conversation through the agents tool bridge', async () => {
+    const { rt } = createTestRuntime();
+    await rt.storage.vfs.writeFile(SOLUTION_FILE, REFERENCE);
+    const prompts: TurnPrompt[] = [];
+    const origin = [{ role: 'user' as const, content: 'ORIGIN-CONTEXT-MARKER' }];
+    const tool = agentsTool({
+      mode: 'build',
+      fork: forkDeps(rt, capturingModel(prompts), {
+        originContext: () => origin,
+      }),
+    });
+
+    await tool.execute(forkCall(1));
+
+    expect(prompts.length).toBeGreaterThan(0);
+    expect(JSON.stringify(prompts[0])).toContain('ORIGIN-CONTEXT-MARKER');
+  }, 120_000);
+
   test('a fork parent past the threshold reaches its child compacted, not verbatim', async () => {
     const { rt } = createTestRuntime();
     await rt.storage.vfs.writeFile(SOLUTION_FILE, REFERENCE);

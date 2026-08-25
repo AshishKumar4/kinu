@@ -1702,6 +1702,9 @@ export interface SwarmCandidate {
    */
   readonly incomplete: string | null;
   readonly score: number | null;
+  /** Whether this candidate satisfied the witness side-condition. Null when
+   * this run has no witness predicate or the candidate was not measured. */
+  readonly witnessFound: boolean | null;
 }
 
 /**

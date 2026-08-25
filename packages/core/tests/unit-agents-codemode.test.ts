@@ -127,6 +127,7 @@ function makeTeam() {
     calls,
     deps: {
       delegation: ROOT_DELEGATION_BUDGET,
+      snapshot: () => [rosterEntry],
       list: async () => [rosterEntry],
       create: async (input) => ({
         name: input.name ?? 'researcher',
@@ -438,7 +439,8 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
 
   test('missing required fields stay the tool\'s own sharp errors', async () => {
     const ns = namespaceOf(() => fullDeps());
-    expect(await member(ns, 'ask').execute({ agent: 'researcher' })).toEqual({ error: 'ask requires agent and message' });
+    expect(await member(ns, 'ask').execute({ agent: 'researcher' }))
+      .toEqual({ reason: 'bad_input', error: 'ask requires agent and message' });
     // The refusal carries its classification, exactly as the declared type promises.
     expect(await member(ns, 'swarm').execute({})).toEqual({ reason: 'bad_input', error: expect.stringContaining('swarm needs `preset`') });
   });

@@ -338,6 +338,7 @@ export interface NodeLoopDeps {
 interface NodeScratch {
   reported: CapturedReport | null;
   granted: BranchDecision | null;
+  proposal: Promise<BranchDecision> | null;
   produced: readonly ModelMessage[];
 }
 
@@ -390,24 +391,44 @@ function buildProposeTool(
         },
       }),
       execute: async ({ rationale, branches }): Promise<string> => {
+        // ONCE PER NODE, enforced here and not left to the docstring. The engine
+        // reads only the LAST grant, so a second arbitrate would debit the shared
+        // budget again and strand the first grant's width — children paid for and
+        // never created. Refusing BEFORE the arbiter runs keeps the first grant
+        // the only one and the debit the only one.
+        const priorAttempt = scratch.proposal;
+        if (priorAttempt !== null) {
+          const prior = await priorAttempt;
+          if (prior.kind === 'granted') {
+            return `Refused (already granted): ${String(prior.width)} children were reserved `
+              + `(${prior.nodeIds.join(', ')}) when you proposed earlier. Finish and report — `
+              + 'they are created from your report, so put in it what they will need.';
+          }
+          return `Refused (already proposed; ${prior.policy}): ${prior.error}`;
+        }
         // The band is enforced by the arbiter and not by this schema, for
         // `BRANCH_PROPOSAL_WIDTH`'s own reason: an out-of-range request must
         // produce a reason-coded refusal the node can act on rather than being
         // unrepresentable and therefore unexplainable. `minItems`/`maxItems` are a
         // hint to the provider, and the AI SDK does not validate a `jsonSchema`
         // tool input at all.
-        const decision = await arbitrate({
+        const attempt = Promise.resolve(arbitrate({
           rationale,
           branches: branches.map((branch) => ({
             task: branch.task,
             rationale: branch.rationale,
             // An absent `context` NARROWS. A node that did not say what its child
-            // starts from has not asked for the parent's whole conversation, and
-            // defaulting the other way would widen inheritance on silence.
+            // starts from has not asked for the parent's whole conversation.
             context: branch.context ?? 'fresh',
           })),
-        });
-        if (decision.kind === 'refused') return `Refused (${decision.policy}): ${decision.error}`;
+        }));
+        // Reserved before the first await: AI SDK executes same-step tool calls
+        // concurrently, so both calls must observe one shared arbitration.
+        scratch.proposal = attempt;
+        const decision = await attempt;
+        if (decision.kind === 'refused') {
+          return `Refused (${decision.policy}): ${decision.error}`;
+        }
         scratch.granted = decision;
         return `Granted: ${String(decision.width)} children reserved (${decision.nodeIds.join(', ')}). `
           + 'They are created when you finish and report, and they receive your report as their seed, '
@@ -594,7 +615,6 @@ export function nodeSystemPrompt(input: {
  * actor has, its tool surface threads it, and a TURN MAY END WITH WORK STILL
  * RUNNING. The node then takes another turn when the result lands. The runner's
  * default policy is the interactive one, which is the correct one here and is why
- * nothing declares it.
  *
  * It journals NOTHING. The ledger belongs to the search, which is on the other
  * side of the boundary when a host is in play, and a loop that wrote to its own
@@ -605,7 +625,12 @@ export async function runNodeLoop(
   deps: NodeLoopDeps,
 ): Promise<NodeLoopResult> {
   const capture = new HeadCapture();
-  const scratch: NodeScratch = { reported: null, granted: null, produced: [] };
+  const scratch: NodeScratch = {
+    reported: null,
+    granted: null,
+    proposal: null,
+    produced: [],
+  };
   // The node's wake path: the in-process counterpart of the actor's durable
   // message queue, behind the SAME `SignalDeliverer` seam, so the runner neither
   // knows nor can tell which kind of agent it is settling a job for.

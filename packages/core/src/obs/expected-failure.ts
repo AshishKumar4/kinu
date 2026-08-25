@@ -18,6 +18,7 @@ export type ExpectedFailure =
   | 'sqlite-duplicate-column'
   | 'sqlite-table-exists'
   | 'enoent'
+  | 'eexist'
   | 'esrch'
   | 'malformed-input';
 
@@ -59,9 +60,11 @@ export function classify(options: { cause: unknown }): ExpectedFailure | null {
   const caught = options.cause;
   if (caught instanceof SyntaxError) return 'malformed-input';
   if (!(caught instanceof Error)) return null;
-
   const code = errnoCode(caught);
   if (code === 'ENOENT') return 'enoent';
+  // `EEXIST` is the idempotent-creation failure: both engines that raise it —
+  // node's fs and the workspace file plane's VfsError — carry it on `code`.
+  if (code === 'EEXIST') return 'eexist';
   if (code === 'ESRCH') return 'esrch';
   if (code === 'ERR_INVALID_URL') return 'malformed-input';
 

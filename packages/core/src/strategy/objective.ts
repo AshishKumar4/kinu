@@ -447,8 +447,11 @@ export type PublicationState =
  * - `records` — the one new table, shared by *The records store* and this seal;
  *   {@link ExplorationRecord} is its row and `recordExploration`
  *   (`strategy/records.ts`) is its writer.
- * - `experience_library` — `experience/library.ts` `publish()`. CROSS-WORKSPACE,
- *   the widest blast radius in the set, and `carry:'artifacts'` routes here.
+ * - `experience_library` — `experience/library.ts` `publish()`. CROSS-WORKSPACE, the
+ *   widest blast radius in the set. Governed as defence in depth rather than because a
+ *   run writes it directly today: the two-hop egress below reaches it, while
+ *   `carry:'artifacts'` — whose admission names a surface — routes to `records`, the
+ *   write the settle path actually performs (see `admitCarry`).
  * - `craft` — `craft/discovery.ts` `maybeStoreCraftedTool`, called from
  *   `mcts/convergence.ts` and admitted by `winner.value > craftExtractionThreshold`.
  *   Its admission gate is the very value a breach makes suspect.
@@ -897,4 +900,53 @@ export interface ExplorationRecord {
   /** How many times this cell's best has moved since this row was written.
    *  A counter, not a history: the trajectory is reconstructible from the trees. */
   readonly displacements: number;
+}
+
+/**
+ * The scalar half of an objective — the metric, direction, scale, target, floor and
+ * instrument a measured run needs. A `witness` hunt supplies its `proxy`'s, which is
+ * the rule in *Witness objectives* that the proxy is what the search optimises.
+ *
+ * Lives beside {@link Objective} rather than in the runner that consumed it: both the
+ * runner and the settle / fan-in modules it composes take this shape as their
+ * vocabulary, and a type the whole measurement path speaks belongs to the module that
+ * defines objectives, not to one of its consumers.
+ */
+export interface MeasuredObjective {
+  readonly metric: string;
+  readonly unit: string;
+  readonly direction: ObjectiveDirection;
+  readonly scale: ObjectiveScale;
+  readonly target: number;
+  readonly verify: VerifierSource;
+  readonly floor: Floor | undefined;
+  /** The witness predicate, when this run is a bounded hunt with a proxy. Evaluated
+   *  as a SIDE CONDITION on every candidate, never as the thing being optimised. */
+  readonly witness: VerifierSource | null;
+}
+
+/** The measurable reduction of an objective, or null when none exists. */
+export function measuredHalf(objective: Objective): MeasuredObjective | null {
+  if (objective.kind === 'witness') {
+    if (!objective.proxy) return null;
+    const proxy = measuredHalf(objective.proxy);
+    return proxy && { ...proxy, witness: objective.check };
+  }
+  // BOTH multi-axis kinds return null, and `instanced` was the one that did not. It
+  // carries every field a scalar does, so it fell through this function and was measured
+  // as though its `instances` were not there — the refusal below already said "measured
+  // per component or per instance" while only the component half was reachable. A run
+  // that reduces a declared front to one aggregate number is the accepted-and-ignored
+  // axis *Accepted and ignored* refuses, so the objective's own kind is what refuses.
+  if (objective.kind === 'vector' || objective.kind === 'instanced') return null;
+  return {
+    metric: objective.metric,
+    unit: objective.unit,
+    direction: objective.direction,
+    scale: objective.scale,
+    target: objective.target,
+    verify: objective.verify,
+    floor: objective.floor,
+    witness: null,
+  };
 }

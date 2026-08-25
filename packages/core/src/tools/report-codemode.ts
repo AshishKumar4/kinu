@@ -7,6 +7,7 @@ import * as v from 'valibot';
 import type { CodemodeProvider } from '../rlm';
 import type { ReportToolDeps } from './builtins';
 import { dispatchReport } from './report-tool';
+import { SUBORDINATE_REPORT_STATUSES } from '../events/hub/types';
 import { TOOL_REACH } from './registry';
 
 /** Positional args arrive untyped from the sandbox; narrowing them to two
@@ -15,12 +16,14 @@ import { TOOL_REACH } from './registry';
  *  to a second picklist here, which is what they used to disagree over. */
 const PositionalSchema = v.tuple([v.string(), v.string()]);
 
+const STATUS_UNION = SUBORDINATE_REPORT_STATUSES.map((s) => `"${s}"`).join(' | ');
+
 const TYPES = `export declare const report: {
   /** Report progress, completion, or a blocker on your current assignment
    *  to the workspace orchestrator. completed = the assignment is done;
    *  blocked = you need input to continue; progress = a significant
    *  mid-task update worth surfacing. */
-  send(status: "progress" | "completed" | "blocked", content: string): Promise<unknown>;
+  send(status: ${STATUS_UNION}, content: string): Promise<unknown>;
 };
 `;
 

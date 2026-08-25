@@ -190,7 +190,8 @@ describe('toolCallEffect — consequence controls activity density', () => {
     expect(toolCallEffect('tasks', { action: 'update', id: 't3', status: 'done' })).toBe('mutate');
     expect(toolCallEffect('memory', { action: 'remember', key: 'deploy.target' })).toBe('mutate');
     expect(toolCallEffect('agents', { action: 'swarm', task: 'audit it' })).toBe('mutate');
-    expect(toolCallEffect('tasks', { action: 'mode', stance: 'build' })).toBe('mutate');
+    // `mode` with a role durably mutates agent_config via changeActiveRole.
+    expect(toolCallEffect('tasks', { action: 'mode', role: 'researcher' })).toBe('mutate');
     expect(toolCallEffect('tasks', { action: 'mode' })).toBe('observe');
 
   });

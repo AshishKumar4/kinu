@@ -63,11 +63,12 @@
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 import { KinuError } from '../obs/error';
-import { tolerate } from '../obs/index';
+import { diagnostics, renderThrownChain } from '../obs/index';
 import type { HeadJournal } from '../heads/journal';
 import type { HeadStep } from '../heads/types';
 import { initMctsSearchTable, MctsSearchStore } from '../mcts/search-store';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import { JsonValueSchema, type JsonValue } from '../utils/json';
 import type { FloorBreach, MeasuredValue, PublicationState } from './objective';
 import type { SwarmProfileSnapshot } from '../profiles';
 
@@ -81,7 +82,7 @@ import type { SwarmProfileSnapshot } from '../profiles';
  */
 export type ChildOutcome =
   | { readonly kind: 'instrument-faulted'; readonly error: string }
-  | { readonly kind: 'unmeasurable'; readonly detail: string }
+  | { readonly kind: 'unmeasurable'; readonly detail: string; readonly witnessFound?: boolean | null }
   | {
     /**
      * THE NODE NEVER FINISHED, so nothing was measured and nothing may be inferred.
@@ -104,12 +105,14 @@ export type ChildOutcome =
     readonly kind: 'sealed';
     readonly measurement: MeasuredValue;
     readonly breach: FloorBreach;
+    readonly witnessFound?: boolean | null;
   }
   | {
     readonly kind: 'scored';
     readonly measurement: MeasuredValue;
     /** Null where the objective's own range admits no score for this value. */
     readonly score: number | null;
+    readonly witnessFound?: boolean | null;
   }
   | {
     /**
@@ -183,19 +186,25 @@ const FloorBreachSchema: v.GenericSchema<FloorBreach> = v.object({
  * back by code that has moved on since it was written, and a schema that merely
  * happens to match the type today is a schema that stops matching it silently.
  */
-const SwarmNodeRecordSchema: v.GenericSchema<SwarmNodeRecord> = v.object({
+const SwarmNodeRecordEntries = {
   outcome: v.nullable(v.variant('kind', [
-    v.object({ kind: v.literal('unmeasurable'), detail: v.string() }),
+    v.object({
+      kind: v.literal('unmeasurable'),
+      detail: v.string(),
+      witnessFound: v.optional(v.nullable(v.boolean())),
+    }),
     v.object({ kind: v.literal('incomplete'), detail: v.string() }),
     v.object({
       kind: v.literal('sealed'),
       measurement: MeasuredValueSchema,
       breach: FloorBreachSchema,
+      witnessFound: v.optional(v.nullable(v.boolean())),
     }),
     v.object({
       kind: v.literal('scored'),
       measurement: MeasuredValueSchema,
       score: v.nullable(v.number()),
+      witnessFound: v.optional(v.nullable(v.boolean())),
     }),
     v.object({
       kind: v.literal('judged'),
@@ -207,7 +216,23 @@ const SwarmNodeRecordSchema: v.GenericSchema<SwarmNodeRecord> = v.object({
   conclusion: v.nullable(v.string()),
   aggregated: v.array(v.string()),
   tokens: v.nullable(v.number()),
+};
+
+const SwarmNodeRecordSchema: v.GenericSchema<SwarmNodeRecord> =
+  v.object(SwarmNodeRecordEntries);
+const SwarmNodeRecordV1Schema = v.object({
+  v: v.literal(1),
+  ...SwarmNodeRecordEntries,
 });
+const RecordVersionSchema = v.object({ v: v.number() });
+
+/**
+ * The schema version this engine stamps into every record envelope, beside
+ * {@link SwarmNodeRecordSchema}. A reader must be able to tell a row THIS engine
+ * wrote from one a FUTURE engine wrote: an unknown version refuses by name instead
+ * of being quietly reshaped into something it is not.
+ */
+export const RECORD_SCHEMA_VERSION = 1;
 
 /** The DDL, once. No `reconcileColumns`: the table ships whole, so there is no
  *  post-release column for a workspace to be missing. */
@@ -234,7 +259,8 @@ export function recordSwarmNode(sql: SqlExecutor, input: {
 }): void {
   void sql`INSERT OR REPLACE INTO swarm_node_records
     (node_id, root_id, record_json, merged_at, created_at)
-    VALUES (${input.nodeId}, ${input.rootId}, ${JSON.stringify(input.record)},
+    VALUES (${input.nodeId}, ${input.rootId},
+            ${JSON.stringify({ v: RECORD_SCHEMA_VERSION, ...input.record })},
             (SELECT merged_at FROM swarm_node_records WHERE node_id = ${input.nodeId}),
             ${input.now})`;
 }
@@ -281,6 +307,8 @@ export interface SwarmReentry {
   /** The resolved profile the search STARTED under, off its ledger row. Null
    *  for a run whose caller wired no catalog or that predates snapshots. */
   readonly profile: SwarmProfileSnapshot | null;
+  /** The caller conversation frozen when the first attempt began. */
+  readonly originContext: readonly ModelMessage[];
 }
 
 interface NodeRow {
@@ -365,6 +393,7 @@ export function reenterSwarm(deps: {
     // attempt froze before it detached, so the tree continues under the role,
     // tier and preset it began with. Null for a row that predates profiles.
     profile: deps.ledger.readSwarmProfile(newest.rootId),
+    originContext: deps.ledger.readSwarmOriginContext(newest.rootId) ?? [],
     nodes,
     superseded,
     abandoned: abandoned.reduce((total, run) => total + run.abandoned, 0),
@@ -416,15 +445,55 @@ export function readStartedSwarmProfile(storage: {
  * could publish under a floor it had breached. The throw reaches the job runner, which
  * fails the attempt with the cause intact and bounds the retries.
  */
+
+/** One reader per envelope version this build understands. A reader parses the WHOLE
+ *  decoded envelope under its own schema, so a future arm added at v2 cannot be
+ *  silently stripped down to the fields v1 happened to name. */
+const RECORD_READERS = {
+  1(nodeId: string, decoded: JsonValue): SwarmNodeRecord {
+    const parsed = v.safeParse(SwarmNodeRecordV1Schema, decoded);
+    if (!parsed.success) {
+      throw new KinuError('io',
+        `the durable record for node ${nodeId} of this search will not read back under its own `
+        + 'schema version 1: '
+        + `${parsed.issues.map((issue) => issue.message).join('; ')}. This engine writes that `
+        + 'version itself, so it is corruption rather than an old shape.');
+    }
+    const { v: _version, ...record } = parsed.output;
+    return record;
+  },
+} satisfies Record<number, (nodeId: string, decoded: JsonValue) => SwarmNodeRecord>;
+
 function parseRecord(nodeId: string, json: string): SwarmNodeRecord {
-  const parsed = v.safeParse(SwarmNodeRecordSchema, JSON.parse(json));
-  if (parsed.success) return parsed.output;
-  throw new KinuError('io',
-    `the durable record for node ${nodeId} of this search will not read back, so the run `
-    + 'cannot be continued faithfully: '
-    + `${parsed.issues.map((issue) => issue.message).join('; ')}. This engine wrote that row, `
-    + 'so it is corruption rather than an old shape, and continuing would rank candidates '
-    + 'against a measurement nobody can see.');
+  const decoded = v.parse(JsonValueSchema, JSON.parse(json));
+  const stamped = v.safeParse(RecordVersionSchema, decoded);
+  const version = stamped.success ? stamped.output.v : null;
+  if (version !== null) {
+    const reader = version === RECORD_SCHEMA_VERSION ? RECORD_READERS[1] : undefined;
+    // A row THIS build did not write is refused by NAME, not reshaped: continuing past
+    // one would rank candidates against measurements this build cannot see.
+    if (reader === undefined) {
+      throw new KinuError('io',
+        `the durable record for node ${nodeId} of this search carries schema version `
+        + `${String(version)}, which this build does not know: it was written by a newer engine, `
+        + 'and continuing would rank candidates against rows this build cannot read.');
+    }
+    return reader(nodeId, decoded);
+  }
+  // No stamp: the row predates stamping. Every unstamped row was written in the shape
+  // `RECORD_SCHEMA_VERSION` 1 names, which is what the schema checks — and an honest
+  // failure says exactly that, rather than claiming no older spelling ever existed.
+  const parsed = v.safeParse(SwarmNodeRecordSchema, decoded);
+  if (!parsed.success) {
+    throw new KinuError('io',
+      `the durable record for node ${nodeId} of this search will not read back, so the run `
+      + 'cannot be continued faithfully: '
+      + `${parsed.issues.map((issue) => issue.message).join('; ')}. The row predates schema `
+      + 'stamping, so it is corruption or an unknown older spelling, not a shape this build '
+      + 'can reconstruct — and continuing would rank candidates against a measurement '
+      + 'nobody can see.');
+  }
+  return parsed.output;
 }
 
 /**
@@ -475,6 +544,7 @@ export interface HarvestedCandidate {
   /** What the outcome was, in the engine's own vocabulary. */
   readonly outcome: SettledChildOutcome['kind'] | 'unrecorded';
   readonly breach: FloorBreach | null;
+  readonly witnessFound: boolean | null;
 }
 
 /** Everything an unfinished search can hand its caller. */
@@ -497,6 +567,8 @@ export interface SwarmHarvest {
    *  normalised [0,1] the tree climbs, so no objective direction is needed here —
    *  the engine already resolved it when it wrote the record. */
   readonly best: HarvestedCandidate | null;
+  /** Aggregate witness verdict when candidate records contain one. */
+  readonly witnessFound: boolean | null;
 }
 
 /**
@@ -537,14 +609,15 @@ export function harvestSwarm(deps: {
     // A harvest is the last thing that will ever be said about this search, and
     // dropping one unreadable candidate to deliver four readable ones is strictly
     // better than delivering none.
-    const decoded = tolerate<unknown>(() => JSON.parse(row.record_json), 'malformed-input');
-    if (decoded === undefined) {
+    try {
+      records.set(row.node_id, parseRecord(row.node_id, row.record_json));
+    } catch (error) {
+      diagnostics.event('swarm.harvest_record_unreadable', {
+        nodeId: row.node_id,
+        error: renderThrownChain({ cause: error }),
+      });
       unreadable.add(row.node_id);
-      continue;
     }
-    const parsed = v.safeParse(SwarmNodeRecordSchema, decoded);
-    if (parsed.success) records.set(row.node_id, parsed.output);
-    else unreadable.add(row.node_id);
   }
 
   const candidates: HarvestedCandidate[] = [];
@@ -563,6 +636,11 @@ export function harvestSwarm(deps: {
       score: outcome?.kind === 'scored' || outcome?.kind === 'judged' ? outcome.score : null,
       outcome: outcome?.kind ?? 'unrecorded',
       breach: outcome?.kind === 'sealed' ? outcome.breach : null,
+      witnessFound: outcome?.kind === 'scored'
+        || outcome?.kind === 'sealed'
+        || outcome?.kind === 'unmeasurable'
+        ? outcome.witnessFound ?? null
+        : null,
     });
   }
   if (candidates.length === 0 && unreadable.size > 0) {
@@ -587,6 +665,10 @@ export function harvestSwarm(deps: {
         state: { kind: 'sealed', breach: firstBreach, clearedBy: null },
         caveat: 'At least one candidate crossed the objective floor. Harvested artifacts are not publishable until the floor is re-derived.',
       };
+  const witnessed = candidates
+    .map((candidate) => candidate.witnessFound)
+    .filter((found): found is boolean => found !== null);
+  const witnessFound = witnessed.length === 0 ? null : witnessed.some(Boolean);
 
   return {
     rootId: running.rootId,
@@ -596,5 +678,6 @@ export function harvestSwarm(deps: {
     best,
     unreadableNodes: [...unreadable],
     publication,
+    witnessFound,
   };
 }

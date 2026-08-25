@@ -55,8 +55,10 @@ import {
 } from '../src/heads/reconcile';
 import { runSwarm } from '../src/strategy/swarm-run';
 import { resolveSwarm, swarmValidity } from '../src/strategy/swarm';
+import type { SwarmNodeRecord } from '../src/strategy/swarm-resume';
 import {
   harvestSwarm, initSwarmNodeRecords, recordSwarmNode,
+  reenterSwarm, RECORD_SCHEMA_VERSION,
 } from '../src/strategy/swarm-resume';
 import type { ResolvedSwarm, SwarmConfig } from '../src/strategy/swarm';
 import type { Objective } from '../src/strategy/objective';
@@ -133,6 +135,28 @@ describe('the swarm-scoped resume lookup, and what it does about a collision', (
     store.supersede('root', 3_000);
     expect(store.get('root')?.status).toBe('converged');
   });
+
+  test('the caller context round-trips through the swarm ledger', () => {
+    const store = ledgerOnly();
+    store.begin({
+      rootId: 'context-root',
+      task: TASK,
+      engine: 'swarm',
+      rootMsgId: null,
+      config: {
+        budget: 1,
+        branches: 1,
+        mode: 'build',
+        originContext: [{ role: 'user', content: 'frozen caller context' }],
+      },
+      budget: 1,
+      now: 1_000,
+    });
+
+    expect(store.readSwarmOriginContext('context-root')).toEqual([
+      { role: 'user', content: 'frozen caller context' },
+    ]);
+  });
 });
 
 describe('harvesting a capped swarm', () => {
@@ -189,6 +213,28 @@ describe('harvesting a capped swarm', () => {
     expect(harvest?.publication).toEqual({ state: { kind: 'open' }, caveat: null });
   });
 
+  test('an unknown record version is unreadable during harvest', () => {
+    const { sql, ledger } = setupHarvest();
+    void sql`INSERT INTO search_nodes (id, parent_id, root_id, task, observation, depth)
+      VALUES
+        ('future', 'harvest-root', 'harvest-root', ${TASK}, 'future answer', 1),
+        ('good', 'harvest-root', 'harvest-root', ${TASK}, 'usable answer', 1)`;
+    void sql`INSERT INTO swarm_node_records (node_id, root_id, record_json, created_at)
+      VALUES ('future', 'harvest-root', ${JSON.stringify({
+        v: 99, outcome: null, conclusion: null, aggregated: [], tokens: null,
+      })}, 2_000)`;
+    recordSwarmNode(sql, {
+      rootId: 'harvest-root',
+      nodeId: 'good',
+      record: { outcome: null, conclusion: null, aggregated: [], tokens: null },
+      now: 2_000,
+    });
+
+    const harvest = harvestSwarm({ sql, ledger }, TASK);
+    expect(harvest?.candidates.map((candidate) => candidate.nodeId)).toEqual(['good']);
+    expect(harvest?.unreadableNodes).toEqual(['future']);
+  });
+
   test('an all-corrupt harvest fails distinctly from an empty search', () => {
     const { sql, ledger } = setupHarvest();
     void sql`INSERT INTO search_nodes (id, parent_id, root_id, task, observation, depth)
@@ -232,6 +278,96 @@ describe('harvesting a capped swarm', () => {
     expect(harvest?.candidates[0]?.breach).toEqual(breach);
     expect(harvest?.publication.state).toEqual({ kind: 'sealed', breach, clearedBy: null });
     expect(harvest?.publication.caveat).toContain('not publishable');
+  });
+});
+
+/* ── the record envelope: stamped, legacy, and refused ───────────────────── */
+
+describe('the durable record envelope is versioned', () => {
+  /** The exact shape every row has been written in since the table's introduction:
+   *  with a `v` stamp it is the current envelope, without one it is the legacy row. */
+  const A_RECORD: SwarmNodeRecord = {
+    outcome: {
+      kind: 'scored',
+      measurement: { kind: 'measured', value: N - 1, detail: 'oracle calls' },
+      score: 0.5,
+    },
+    conclusion: 'a single scan',
+    aggregated: ['child-b'],
+    tokens: CALL_TOKENS,
+  };
+
+  function resumeFixture() {
+    // The production workspace schema, so head_journal exists for the re-entry's
+    // start-of-life sweep; the search tables are re-initialised idempotently.
+    const { rt } = createTestRuntime();
+    const sql = rt.storage.sql;
+    initSearchTables(rt.storage.execRaw, sql);
+    initMctsSearchTable(rt.storage.execRaw, sql);
+    initSwarmNodeRecords(rt.storage.execRaw);
+    const ledger = new MctsSearchStore(sql);
+    const journal = new HeadJournal(sql);
+    beganSwarm(ledger, 'root', 1_000);
+    void sql`INSERT INTO search_nodes (id, root_id, task, observation)
+      VALUES ('root', 'root', ${TASK}, 'root')`;
+    void sql`INSERT INTO search_nodes (id, parent_id, root_id, task, observation, depth)
+      VALUES ('n1', 'root', 'root', ${TASK}, 'answer one', 1)`;
+    return { sql, ledger, journal };
+  }
+
+  interface Fixture {
+    readonly sql: SqlExecutor;
+    readonly ledger: MctsSearchStore;
+    readonly journal: HeadJournal;
+  }
+
+  function reenter(fixture: Fixture) {
+    return reenterSwarm(fixture, { task: TASK, reason: 'test re-entry', now: 3_000 });
+  }
+
+  test('the writer stamps v1 and the reader round-trips it', () => {
+    const fixture = resumeFixture();
+    recordSwarmNode(fixture.sql, {
+      rootId: 'root', nodeId: 'n1', record: A_RECORD, now: 2_000,
+    });
+    const [stored] = fixture.sql<{ record_json: string }>`
+      SELECT record_json FROM swarm_node_records WHERE node_id = 'n1'`;
+    expect(JSON.parse(stored.record_json).v).toBe(RECORD_SCHEMA_VERSION);
+    expect(reenter(fixture)?.nodes.find((node) => node.id === 'n1')?.record).toEqual(A_RECORD);
+  });
+
+  test('an unstamped creation-era record reads back without the corruption claim', () => {
+    const fixture = resumeFixture();
+    void fixture.sql`INSERT INTO swarm_node_records (node_id, root_id, record_json, created_at)
+      VALUES ('n1', 'root', ${JSON.stringify(A_RECORD)}, 2_000)`;
+    expect(reenter(fixture)?.nodes.find((node) => node.id === 'n1')?.record).toEqual(A_RECORD);
+  });
+
+  test('an unknown envelope version refuses and names the version', () => {
+    const fixture = resumeFixture();
+    void fixture.sql`INSERT INTO swarm_node_records (node_id, root_id, record_json, created_at)
+      VALUES ('n1', 'root', ${JSON.stringify({ v: 99, ...A_RECORD })}, 2_000)`;
+    expect(() => reenter(fixture)).toThrow(/schema version 99/);
+  });
+
+  test('genuinely corrupt rows still refuse, each naming its own cause', () => {
+    // A wrong outcome arm in an UNSTAMPED row: corruption or an unknown older
+    // spelling — and the refusal says which, not "this engine wrote that row".
+    const unstamped = resumeFixture();
+    void unstamped.sql`INSERT INTO swarm_node_records (node_id, root_id, record_json, created_at)
+      VALUES ('n1', 'root', ${JSON.stringify({
+        ...A_RECORD,
+        outcome: { ...A_RECORD.outcome, kind: 'teleported' },
+      })}, 2_000)`;
+    expect(() => reenter(unstamped)).toThrow('predates schema stamping');
+
+    // A STAMPED v1 row missing a field this build's own schema requires.
+    const stampedBroken = resumeFixture();
+    void stampedBroken.sql`INSERT INTO swarm_node_records (node_id, root_id, record_json, created_at)
+      VALUES ('n1', 'root', ${JSON.stringify({
+        v: RECORD_SCHEMA_VERSION, outcome: null, conclusion: null, aggregated: [],
+      })}, 2_000)`;
+    expect(() => reenter(stampedBroken)).toThrow('under its own schema version 1');
   });
 });
 
@@ -1076,5 +1212,42 @@ describe('a second search over a task already running is refused', () => {
     beganSwarm(store, 'other-root', Date.now());
     store.converge('other-root', 0, Date.now());
     expect(store.findRunningSwarms(TASK)).toEqual([]);
+  });
+});
+
+describe('harvested witness verdict', () => {
+  test('per-candidate and aggregate witness evidence survive bounded harvest', () => {
+    const db = new Database(':memory:');
+    const sql = makeSql(db);
+    const execRaw = makeExecRaw(db);
+    initSearchTables(execRaw, sql);
+    initMctsSearchTable(execRaw, sql);
+    initSwarmNodeRecords(execRaw);
+    const ledger = new MctsSearchStore(sql);
+    beganSwarm(ledger, 'harvest-root', 1_000);
+    void sql`INSERT INTO search_nodes (id, root_id, task, observation)
+      VALUES ('harvest-root', 'harvest-root', ${TASK}, 'root')`;
+    void sql`INSERT INTO search_nodes (id, parent_id, root_id, task, observation, depth)
+      VALUES ('witness', 'harvest-root', 'harvest-root', ${TASK}, 'certificate', 1)`;
+    recordSwarmNode(sql, {
+      rootId: 'harvest-root',
+      nodeId: 'witness',
+      record: {
+        outcome: {
+          kind: 'scored',
+          measurement: { kind: 'measured', value: 0.3, detail: 'proxy' },
+          score: 0.3,
+          witnessFound: true,
+        },
+        conclusion: null,
+        aggregated: [],
+        tokens: 1,
+      },
+      now: 2_000,
+    });
+
+    const harvest = harvestSwarm({ sql, ledger }, TASK);
+    expect(harvest?.witnessFound).toBe(true);
+    expect(harvest?.candidates[0]?.witnessFound).toBe(true);
   });
 });

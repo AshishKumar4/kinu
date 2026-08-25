@@ -8,7 +8,8 @@
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
+import { scratchDir } from '@kinu.run/test-utils';
 
 import { classify, tolerate, tolerateAsync, type ExpectedFailure } from '../src/obs/expected-failure';
 
@@ -124,12 +125,13 @@ describe('tolerate', () => {
       { name: 'sqlite-duplicate-column', cause: thrown(() => db.run('ALTER TABLE t ADD COLUMN a TEXT')) },
       { name: 'sqlite-table-exists', cause: thrown(() => db.run('ALTER TABLE u RENAME TO t')) },
       { name: 'enoent', cause: thrown(() => readFileSync('/proc/self/absent-91827364')) },
+      { name: 'eexist', cause: thrown(() => mkdirSync(scratchDir('expected-failure-eexist'))) },
       { name: 'esrch', cause: thrown(() => process.kill(0x7fffffff, 0)) },
       { name: 'malformed-input', cause: thrown(() => JSON.parse('{oops')) },
     ];
     // A registry whose names outnumber the errors anyone can provoke is a list of guesses. Asserting
     // the count here means adding a name without a provoked error fails this test.
-    expect(provoked.length).toBe(6);
+    expect(provoked.length).toBe(7);
     for (const { name, cause } of provoked) {
       expect(classify({ cause })).toBe(name);
     }

@@ -981,6 +981,17 @@ export type CarryVerdict =
  * the one enumerated surface each carry writes. Checked here rather than trusted to
  * the writer, because the hole that rule names was exactly a publication path that
  * called itself separate and unchanged.
+ *
+ * THAT SURFACE IS `records` for both publishing carries, named after the writer census
+ * and not the other way round. An earlier revision routed `artifacts` through
+ * `experience_library` because objective.ts's declaration said so — but the settle path
+ * never wrote there: the library is owner-scoped behind an RPC client this engine does
+ * not hold, and its `publish` contract takes a candidate that EARNED publication through
+ * `experience/publishable.ts`'s gates (a corroborated lesson, a promoted scaffold), which
+ * a raw node artifact is not. Declaring a surface the run never writes made the seal's
+ * own disclosure name a channel that did not exist while the records write it does gate
+ * went unnamed. If artifacts ever do route to the library, the routing lands in BOTH
+ * places in one change, with the wiring to show for it.
  */
 export function admitCarry(input: {
   readonly carry: SwarmCarrySetting;
@@ -992,8 +1003,7 @@ export function admitCarry(input: {
   // publication surface and neither is this function's business.
   if (carry.kind !== 'elites' && carry.kind !== 'artifacts') return { kind: 'admitted' };
 
-  const surface = carry.kind === 'artifacts' ? 'experience_library' : 'records';
-  if (admitsPublication(publication, surface).kind === 'refused') {
+  if (admitsPublication(publication, 'records').kind === 'refused') {
     return { kind: 'refused', cause: 'sealed' };
   }
   if (score === null) return { kind: 'refused', cause: 'unmeasurable' };

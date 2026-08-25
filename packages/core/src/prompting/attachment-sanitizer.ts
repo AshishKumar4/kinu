@@ -27,7 +27,7 @@ import type { AssistantModelMessage, FilePart, ImagePart, ModelMessage, TextPart
 import type { VFS } from '../types/primitives';
 import type { ModelInputModality } from '../providers/types';
 import { SPILL_DIRS, type TurnContextBudget } from '../context-budget';
-import { diagnostics, renderThrownChain } from '../obs/index';
+import { classify, diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 import { fnv1a64Bytes } from './volatile-context';
 
 /** Media kinds an attachment can be — the input-modality vocabulary minus
@@ -300,8 +300,9 @@ async function storeContentAddressed(
     try {
       await policy.vfs.mkdir(ATTACHMENTS_DIR, { recursive: true });
     } catch (err) {
-      const msg = err instanceof Error ? err.message.toLowerCase() : '';
-      if (!msg.includes('exist')) throw err;
+      if (classify({ cause: err }) !== 'eexist') {
+        throw toKinuError({ doing: 'creating the attachments spill directory', cause: err, otherwise: 'io' });
+      }
     }
     await policy.vfs.writeFile(path, bytes);
   }

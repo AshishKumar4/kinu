@@ -194,7 +194,15 @@ export interface DynamicContextSources {
     subtasks: ReadonlyArray<{ id: string; title: string; status: string }>;
   }>;
   readonly liveHeadRuns: ReadonlyArray<{ rootId: string; rationale: string; running: number; total: number }>;
-  readonly missingCapabilities: readonly MissingCapability[];
+  /** Subordinates THIS backend alone knows about — its own hires, before the
+   *  search roster below is added. Absent where a backend has no roster store;
+   *  an absent plane renders nothing rather than inventing an empty one. */
+  readonly subordinateDelegates?: readonly DynamicDelegate[];
+  /** Decisions parked on the user — consents awaiting an answer and deferred
+   *  approvals parked for later. The plane that tells a blocked agent whether
+   *  it is stuck on itself or stuck on the human. */
+  readonly approvals?: readonly DynamicApproval[];
+   readonly missingCapabilities: readonly MissingCapability[];
 }
 
 /**
@@ -215,8 +223,12 @@ export function agentDynamicContext(sources: DynamicContextSources): DynamicCont
     executors: sources.executors,
     jobs: sources.runningJobs.map((job) => ({ id: job.id, kind: job.kind, label: job.label })),
     tasks: flattenTaskList(sources.openTasks),
-    delegates: searchDelegates(sources.liveHeadRuns),
+    delegates: [
+      ...(sources.subordinateDelegates ?? []),
+      ...searchDelegates(sources.liveHeadRuns),
+    ],
   };
+  if (sources.approvals && sources.approvals.length > 0) context.approvals = sources.approvals;
   if (sources.factsBlock) context.factsBlock = sources.factsBlock;
   if (sources.memoryTail) context.memoryTail = sources.memoryTail;
   if (sources.recoveryFindings.length > 0) context.recoveries = sources.recoveryFindings;

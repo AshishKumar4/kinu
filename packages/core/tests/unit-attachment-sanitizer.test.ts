@@ -17,6 +17,7 @@ import {
 import type { VFS } from '../src/types/primitives';
 import { TurnContextBudget } from '../src/context-budget';
 import { createMemoryVFS } from './helpers';
+import { KinuError, renderCauseChain } from '../src/obs/index';
 
 interface CountingVfs {
   vfs: VFS;
@@ -320,6 +321,39 @@ describe('message-borne bulk (pasted text and oversize accepted documents)', () 
     const out = await sanitizeAttachmentsForModel([bigImage], { accepts: accepts('image', 'pdf'), vfs });
     expect(out[0]).toBe(bigImage);
     expect(writes()).toBe(0);
+  });
+});
+
+describe('the spill-directory mkdir failure is classified, not substring-matched', () => {
+  /** A VFS whose mkdir always fails with `failure` — the shape both the
+   *  workspace file plane and node fs raise: a code on an Error. */
+  function vfsWhoseMkdirThrows(failure: Error): VFS {
+    const inner = createMemoryVFS(new Database(':memory:'));
+    return {
+      ...inner,
+      readFile: (p, o) => inner.readFile(p, o),
+      writeFile: (p, d) => inner.writeFile(p, d),
+      mkdir: async () => { throw failure; },
+      exists: (p) => inner.exists(p),
+    };
+  }
+
+  test('an EEXIST-shaped mkdir failure is tolerated and the sanitize flow proceeds', async () => {
+    const vfs = vfsWhoseMkdirThrows(Object.assign(new Error('EEXIST: file already exists'), { code: 'EEXIST' }));
+    const out = await sanitizeAttachmentsForModel([pdfMessage()], { accepts: accepts(), vfs });
+    const stored = await vfs.readFile(savedPath(textParts(out[0]!)[0]!.text));
+    expect(stored instanceof Uint8Array ? Array.from(stored) : stored).toEqual(Array.from(PDF_BYTES));
+  });
+
+  test('a parent-directory mkdir failure propagates with its cause, not as a later writeFile error', async () => {
+    const cause = Object.assign(new Error('parent directory does not exist'), { code: 'ENOENT' });
+    const vfs = vfsWhoseMkdirThrows(cause);
+    const err: unknown = await sanitizeAttachmentsForModel([pdfMessage()], { accepts: accepts(), vfs })
+      .then(() => null, (e) => e);
+    if (!(err instanceof KinuError)) throw new Error(`expected a classified KinuError, got ${String(err)}`);
+    expect(err.message).toBe('creating the attachments spill directory');
+    expect(err.cause).toBe(cause);
+    expect(renderCauseChain(err)).toContain('parent directory does not exist');
   });
 });
 

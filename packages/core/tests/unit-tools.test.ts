@@ -162,6 +162,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     };
     const stubTeam: TeamToolDeps = {
       delegation: ROOT_DELEGATION_BUDGET,
+      snapshot: () => [],
       list: async () => [],
       create: async () => ({
         name: 's',

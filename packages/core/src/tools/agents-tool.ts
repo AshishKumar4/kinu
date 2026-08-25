@@ -25,7 +25,7 @@
  * "Validity over the resolved configuration" and "Accepted and ignored".
  */
 import { tool, jsonSchema } from 'ai';
-import type { LanguageModel, ToolSet } from 'ai';
+import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
 import * as v from 'valibot';
 import {
   AGENTS_TOOL_ACTIONS,
@@ -147,6 +147,8 @@ export interface TeamToolDeps {
   readonly delegation: DelegationBudget;
   /** The workspace's subordinate roster (dismissed entries excluded). */
   list(): Promise<SubordinateRosterEntry[]>;
+  /** Synchronous roster snapshot for the per-step dynamic context. */
+  snapshot(): SubordinateRosterEntry[];
   /** Create an idle durable subordinate identity. This is the owner-facing
    *  operation: a mission defines the agent, but does not become a task until
    *  the owner explicitly messages or assigns it.
@@ -320,6 +322,9 @@ export interface AgentsForkDeps {
    * `model`.
    */
   resolveModel?: (spec: string) => LanguageModel;
+  /** The caller conversation at dispatch. Frozen into the search ledger so
+   * `context:'fork'` survives background re-drive and DO eviction. */
+  originContext?: () => readonly ModelMessage[];
   /** What the resolved model charges, for gates on projected spend before
    *  starting. Backends wire the ModelCatalogSession they already hold;
    *  absence makes the gate blend and say so. */
@@ -1218,6 +1223,12 @@ async function runSwarmAction(
     rt = { ...fork.rt, llm: mission.governor.govern(fork.rt.llm, mission.scope.labels) };
   }
   const runDeps: SwarmRunDeps = { rt, model: fork.model, mode };
+  const origin = fork.originContext?.();
+  if (origin !== undefined) {
+    Object.assign(runDeps, {
+      originContext: Object.freeze(structuredClone([...origin])),
+    });
+  }
   // THE TIER'S OWN MODEL. Forwarded, never pre-resolved here: a re-drive's
   // profile comes off the claimed ledger row INSIDE the runner, so the runner
   // is the only place that can see both cases, and resolving one of them here
@@ -1450,10 +1461,10 @@ function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
  * read like a field of every action — the exact shape that lets a field be
  * accepted where nothing acts on it.
  */
-function requestedTopic(input: AgentsToolInput): { topic: string } | { error: string } {
+function requestedTopic(input: AgentsToolInput): { topic: string } | BadInputRefusal {
   const topic = input.topic?.trim() || 'message';
   return topic === PEER_REPLY_TOPIC
-    ? { error: `topic "${PEER_REPLY_TOPIC}" is reserved for transport reply envelopes` }
+    ? badInput(`topic "${PEER_REPLY_TOPIC}" is reserved for transport reply envelopes`)
     : { topic };
 }
 
@@ -1539,7 +1550,7 @@ export async function dispatchAgentsAction(
                 + 'hire a subordinate here instead (omit scope), or run a search.',
             } satisfies DelegationDepthRefusal;
           }
-          if (!input.mission || !input.message) return { error: 'hire scope=workspace requires mission and message' };
+          if (!input.mission || !input.message) return badInput('hire scope=workspace requires mission and message');
           const request: Parameters<PeersToolDeps['spawnWorkspace']>[0] = {
             purpose: input.mission,
             message: input.message,
@@ -1549,8 +1560,15 @@ export async function dispatchAgentsAction(
           if (toolOptions?.abortSignal) Object.assign(request, { signal: toolOptions.abortSignal });
           return await peers.spawnWorkspace(request);
         }
-        if (!team) return { error: 'hiring subordinates is not available on this actor' };
-        if (!input.role || !input.mission) return { error: 'hire requires role and mission' };
+        if (!team) {
+          // Capability absence, and `denied` is what that is: the call is
+          // well-formed and this actor does not wire the surface it needs.
+          return {
+            reason: 'denied',
+            error: 'hiring subordinates is not available on this actor',
+          } satisfies DelegationDepthRefusal;
+        }
+        if (!input.role || !input.mission) return badInput('hire requires role and mission');
         // The role is a CATALOG id here — validated, spawn-checked and carried
         // onto the subordinate's durable identity with its tier override.
         // Without a catalog the freeform text still hires (the legacy path),
@@ -1586,7 +1604,7 @@ export async function dispatchAgentsAction(
       }
 
       case 'ask': {
-        if (!input.agent || !input.message) return { error: 'ask requires agent and message' };
+        if (!input.agent || !input.message) return badInput('ask requires agent and message');
         const asked = requestedTopic(input);
         if ('error' in asked) return asked;
         if (team && await isSubordinate(input.agent)) {
@@ -1612,11 +1630,11 @@ export async function dispatchAgentsAction(
           if (toolOptions?.abortSignal) Object.assign(request, { signal: toolOptions.abortSignal });
           return await peers.ask(request);
         }
-        return { error: `unknown agent "${input.agent}" — check the roster with action:"list"` };
+        return badInput(`unknown agent "${input.agent}" — check the roster with action:"list"`);
       }
 
       case 'send': {
-        if (!input.agent || !input.message) return { error: 'send requires agent and message' };
+        if (!input.agent || !input.message) return badInput('send requires agent and message');
         const sent = requestedTopic(input);
         if ('error' in sent) return sent;
         if (team && await isSubordinate(input.agent)) {
@@ -1633,12 +1651,17 @@ export async function dispatchAgentsAction(
         if (peers) {
           return await peers.send({ agent: input.agent, topic: sent.topic, message: input.message, mode });
         }
-        return { error: `unknown agent "${input.agent}" — check the roster with action:"list"` };
+        return badInput(`unknown agent "${input.agent}" — check the roster with action:"list"`);
       }
 
       case 'reply':
-        if (!peers) return { error: 'reply needs the peer transport, which this actor does not have' };
-        if (!input.event_id || !input.message) return { error: 'reply requires event_id and message' };
+        if (!peers) {
+          return {
+            reason: 'denied',
+            error: 'reply needs the peer transport, which this actor does not have',
+          } satisfies DelegationDepthRefusal;
+        }
+        if (!input.event_id || !input.message) return badInput('reply requires event_id and message');
         return await peers.reply({ eventId: input.event_id, message: input.message });
 
       case 'list': {
@@ -1656,8 +1679,13 @@ export async function dispatchAgentsAction(
       }
 
       case 'dismiss':
-        if (!team) return { error: 'dismiss applies to subordinates, which this actor does not have' };
-        if (!input.agent) return { error: 'dismiss requires agent' };
+        if (!team) {
+          return {
+            reason: 'denied',
+            error: 'dismiss applies to subordinates, which this actor does not have',
+          } satisfies DelegationDepthRefusal;
+        }
+        if (!input.agent) return badInput('dismiss requires agent');
         return await team.dismiss({
           name: input.agent,
           keepHistory: input.keep_history ?? true,
