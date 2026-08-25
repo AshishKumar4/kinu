@@ -79,6 +79,7 @@ export {
   DEVICE_CONSENT_DENIED,
   DEVICE_CONSENT_UNANSWERED,
   DEVICE_CONSENT_TIMEOUT_MS,
+  DEVICE_PROVISION_METHOD,
   parseConsentScope,
   mergeConsentScope,
   summarizeDeviceAction,

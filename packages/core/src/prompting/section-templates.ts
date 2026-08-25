@@ -19,16 +19,32 @@
  */
 
 import { definePromptSection, type PromptSection } from './template';
+import { CRAFTED_TOOL_NAMESPACE } from '../tools/sandbox-contract';
 
 /**
- * One built-in tool's index entry: its name, what it is for, and one real call.
+ * One built-in tool's index entry: its name and one real call.
  *
  * The builder maps this over the turn's tool list, so the iteration is typed
  * TypeScript and only the line's wording lives here.
+ *
+ * NO `summary` slot. The summary is already the first line of the tool's own
+ * JSON-schema description (registry.ts renderToolSchemaDescription), which
+ * ships in the SAME request, so rendering it here sent every summary twice per
+ * turn — 942 chars across the eight builtins, measured 2026-08-25. OpenAI
+ * measured the general case of hand-copying schema text into the prompt: "a 2%
+ * increase in SWE-bench Verified pass rate when using API-parsed tool
+ * descriptions versus manually injecting the schemas"
+ * (developers.openai.com/cookbook/examples/gpt4-1_prompting_guide, § Tool
+ * calls), so the second copy was not free-but-harmless.
+ *
+ * What survives is the `example`, which the schema description does NOT carry
+ * and which has no other route to a model. That split is the shape the same
+ * guide prescribes: put examples in "an `# Examples` section in your system
+ * prompt ... rather than adding them into the \"description\" field".
  */
 export const BUILTIN_TOOL_LINE = definePromptSection(
   'tools/builtin-line',
-  '- **{{name}}** — {{summary}}\n  `{{example}}`',
+  '- **{{name}}** — `{{example}}`',
 );
 
 /** One connected provider's tool. The source label and the description suffix
@@ -135,14 +151,14 @@ export const SANDBOX_EXECUTOR_LINE = definePromptSection(
 
 export const LAPTOP_EXECUTOR_LINE = definePromptSection(
   'executors/laptop',
-  '- **laptop.*** / `runtime: "laptop"`: {{#if cliLocal}}the local machine the Kinu CLI is running on — direct access, no tunnel or consent prompt.{{else}}the user\'s OWN PC, connected through the Kinu device tunnel. Use it when the task targets local files, local commands, or the user\'s desktop environment. Its first use asks the user for consent — that prompt is expected, not an error.{{/if}}',
+  '- **laptop.*** / `runtime: "laptop"` — {{deviceName}}: {{#if cliLocal}}the local machine the Kinu CLI is running on — direct access, no tunnel or consent prompt.{{else}}your user\'s own computer, reached through the Kinu device tunnel. Use it when the task targets their local files, local commands, or desktop environment.{{#if granted}} This workspace holds its access grant already.{{else}} This workspace has NO grant yet: your first call asks them to grant it once, for this workspace — that prompt is expected, not an error.{{/if}}{{/if}}',
 );
 
-/** A registered-but-offline laptop is still listed (the user can bring it
+/** A registered-but-offline device is still listed (the user can bring it
  *  back), unlike other unavailable executors, which are omitted entirely. */
 export const OFFLINE_LAPTOP_LINE = definePromptSection(
   'executors/laptop-offline',
-  '- **laptop** / `runtime: "laptop"` (registered, currently OFFLINE): the user\'s own PC is registered but not connected right now. Do not call it; if the user wants it used, tell them to run `kinu connect` on their machine.',
+  '- **laptop** / `runtime: "laptop"` — {{deviceName}} (registered, currently OFFLINE): your user\'s computer is registered but not connected right now. Calling it asks them to bring it back; you can also just tell them to run `kinu connect` on it.',
 );
 
 export const GENERIC_EXECUTOR_LINE = definePromptSection(
@@ -169,6 +185,17 @@ export const GENERIC_EXECUTOR_LINE = definePromptSection(
  * stays a shell over workspace bytes only — commands do not see mount points,
  * and that limit is stated so the model routes commands by namespace.
  *
+ * It is stated ONCE. Two paragraphs used to carry it — one gated on
+ * `manyRuntimes`, one on `hasDevices` — and they restated the same three facts
+ * (separate machines, commands through their own namespace, mounts showing
+ * native paths) in different words, 724 chars for 600 chars of content. The
+ * surviving gate is `hasDevices`, which is the WEAKER condition and therefore
+ * loses no surface: `manyRuntimes` was `executors.length > 1`, and with two or
+ * more executors at most one is `workspace`, so a device always remained —
+ * manyRuntimes implied hasDevices. The reverse does not hold, so a lone
+ * non-workspace executor (a sandbox with no workspace beside it) now reads the
+ * doctrine it used to miss.
+ *
  * The approvals doctrine is stated ONCE, and only on turns that have a shell. A
  * parked tool result used to repeat all of it on every call (222 tokens each);
  * it is a standing fact about this surface, so it lives here and the result is
@@ -182,12 +209,10 @@ The environments listed here are the ones selectable in this turn; a namespace i
 This list reflects live state at the start of THIS turn — trust it over assumptions or earlier turns; it can change when the user connects or disconnects a device.
 Choose the runtime that matches the task; keep reads/writes in the same runtime unless you intentionally copy data between runtimes.
 
-{{executorLines}}{{#if manyRuntimes}}
-
-These runtimes are separate machines. Run each machine's commands through its own namespace. A live machine's files also appear in your own file plane under a mount point — the user's device at \`/pc\`, a bound container at \`/sandbox\` — where the \`file\` tool and \`workspace.*\` reach them directly. Your workspace shell sees only your own tree; it cannot see mount points.{{/if}}
+{{executorLines}}
 
 Your own workspace is a durable POSIX filesystem at {{workspaceRoot}}, and the \`workspace\` runtime is a real shell over it — the same bytes the \`file\` tool and \`workspace.*\` file ops read, by the same paths. Relative paths resolve there; \`cd\` persists between commands.{{#if hasDevices}}
-The environments above are separate machines. Their commands run only through their own namespaces ({{deviceNamespaces}}), in paths native to each machine. Under the mount point those native paths appear whole: \`/pc/home/user/file\` on the device is the device's own \`/home/user/file\`. To move a file between two machines, read it from one and write it to the other.{{/if}}{{#if hasPreview}}
+The environments above are separate machines: run each machine's commands through its own namespace ({{deviceNamespaces}}), in paths native to each machine. A live machine's files also appear in your own file plane under a mount point — the user's device at \`/pc\`, a bound container at \`/sandbox\` — where the \`file\` tool and \`workspace.*\` reach them directly, and a native path appears whole there: \`/pc/home/user/file\` is the device's own \`/home/user/file\`. To move a file between two machines, read it from one and write it to the other. Your workspace shell sees only your own tree; it cannot see mount points.{{/if}}{{#if hasPreview}}
 
 ### Showing a running app
 For a user-visible web app, keep its files and server in one preview-capable environment, start the server bound to 0.0.0.0 in the background, wait for it to bind, then call {{exposeCalls}} for the environment you chose. If exposePort fails, inspect that environment's server log and retry after the server is actually listening.{{/if}}
@@ -205,19 +230,47 @@ Your context window is automatically compacted as it approaches its limit, so wo
 Your self-changes (crafted tools, learned facts, scaffold promotions) are recorded in an Evolution Changelog the user can review and revert line-by-line — evolve freely and report honestly; nothing you change about yourself is hidden or permanent.`,
 );
 
-/** `llm.query` gates on surface.rlmAvailable (wired by both backends); the
- *  scaffold self-provider ships on both since the shared-spine parity. */
+/**
+ * `llm.query` gates on surface.rlmAvailable (wired by both backends); the
+ * scaffold self-provider ships on both since the shared-spine parity.
+ *
+ * The six `agent.*` API bullets that used to be here are GONE, and this is the
+ * SWARM_PRESET_DOCTRINE lesson applied a second time: prose describing a
+ * declaration it cannot read is free to disagree with it, and did. Every one of
+ * those symbols — proposeCurriculum, listCurriculum, acceptCurriculumTask,
+ * proposeScaffold, scaffoldVersions, schedule, budget, jobResult,
+ * backgroundJobs, compactNow — is declared WITH ITS DOC COMMENT in the
+ * `agent.*` codemode type block (tools/agent-self.ts TYPES), and that block
+ * ships to the model in the same request, inside the execute_tools description
+ * (registry.ts renderExecuteToolsDescription). So this section was a second,
+ * hand-maintained copy, 1,250 chars of it.
+ *
+ * It was also the WEAKER copy, which is what makes deleting it a fix rather
+ * than a saving: the bullet for `proposeScaffold` said it "must pass the
+ * validation gates and win shadow evaluation", while the declaration it
+ * shadowed also names the misevolution gate, the required
+ * `async function* run(rt, task)` export, the host-bridge restriction and the
+ * 50-char rationale floor — the parts a model actually gets wrong.
+ *
+ * And the copy was UNGATED where the declaration is not: these bullets
+ * advertised `agent.*` on any surface holding execute_tools, while the type
+ * block is assembled from the providers a backend really wired. Both backends
+ * do wire agent-self unconditionally today (cf orchestrator.ts, cli
+ * local-session.ts), so nothing is lost now, and a backend that stops wiring it
+ * can no longer leave the prompt lying.
+ *
+ * What stays is the half no declaration carries: the two HABITS (look before
+ * building, save what you built), the `llm.query` decomposition PATTERN, which
+ * is a multi-step recipe rather than a signature, and one pointer at the
+ * namespace so the model knows where the contracts are.
+ */
 export const CODE_EXECUTION_SECTION = definePromptSection(
   'state/code-execution',
   `## Code execution and learned capabilities
 - Before building from scratch, check \`workspace.listTools()\` and \`memory\` search for existing tools and prior lessons.
-- When you have built a reusable routine, save it with \`workspace.createTool\` — saved tools become callable as \`codemode.<name>(args)\` / \`tools.<name>(args)\` on your next execute_tools call.{{#if rlmAvailable}}
+- When you have built a reusable routine, save it with \`workspace.createTool\` — saved tools become callable as \`${CRAFTED_TOOL_NAMESPACE}.<name>(args)\` on your next execute_tools call.{{#if rlmAvailable}}
 - \`llm.query(text, { model?, reasoning_effort? })\` is available inside execute_tools for one-level decomposition over large inputs: read the file, slice it, \`llm.query\` each slice (cheap at low reasoning_effort), aggregate in code. Handle either a string result or \`{ error }\`. For slices that themselves need decomposition, delegate the whole shape instead (\`agents\` action=swarm) — its nodes run their own full tool loops.{{/if}}
-- \`agent.proposeCurriculum(count?)\` proposes self-improvement tasks; \`agent.listCurriculum(status?)\` / \`agent.acceptCurriculumTask(id)\` manage them.
-- \`agent.proposeScaffold(rationale, code, baseVersion?)\` proposes a new version of your own agentic-loop scaffold; it must pass the validation gates and win shadow evaluation before going live. \`agent.scaffoldVersions(limit?)\` lists your scaffold archive (lineage + shadow record) — you may branch from any archived version via \`baseVersion\`.
-- \`agent.schedule({ cron | atMs, label?, payload? })\` can create a future autonomous wake; use it only when the user or task genuinely calls for recurrence or a reminder. Add \`budget_usd\`/\`budget_tokens\` when the owner names a spending limit — the host then caps that whole run cumulatively; \`agent.budget()\` reads what is left.
-- \`agent.jobResult(jobId)\` reads a settled background job's full result — the wake that announces a job settled names the id to read; \`agent.backgroundJobs(limit?)\` lists recent jobs.
-- \`agent.compactNow()\` folds the conversation at a phase boundary instead of waiting for the token trigger: the finished range is archived verbatim and stays listed in the checkpoint's Compaction Archive manifest, so you can still read it back.`,
+- Your own lifecycle is the \`agent.*\` namespace inside execute_tools: curriculum, scaffold proposals and their archive, scheduled autonomous wakes and their cumulative budgets, settled background-job results, and on-demand compaction. Every call is declared with its full contract in the namespace listing on the execute_tools description — read the signature there rather than guessing one. Schedule a wake only when the task genuinely calls for recurrence or a reminder.`,
 );
 
 /**

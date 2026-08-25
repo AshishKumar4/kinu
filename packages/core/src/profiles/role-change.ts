@@ -12,7 +12,7 @@
 // Every applied move records provenance (actor, previous id, catalog version),
 // which is exactly what the typed run event and the changelog row carry.
 import {
-  effectiveRoleCatalog, isValidRoleId, validateProfileCatalogEnvelope,
+  DEFAULT_ROLE_ID, effectiveRoleCatalog, isValidRoleId, validateProfileCatalogEnvelope,
   type ProfileCatalogEnvelope, type RoleDefinition, type RoleId,
 } from './catalog';
 
@@ -138,7 +138,7 @@ export function changeActiveRole(input: {
   actor: RoleChangeActor;
 }): RoleChangeOutcome {
   const envelope = validateProfileCatalogEnvelope(input.envelope);
-  const from = input.config.get(ACTIVE_ROLE_KEY) ?? 'general';
+  const from = input.config.get(ACTIVE_ROLE_KEY) ?? DEFAULT_ROLE_ID;
   if (!isValidRoleId(input.to)) return { kind: 'refused', reason: 'invalid-role-id' };
   const target = roleOf(envelope, input.to);
   if (!target) return { kind: 'refused', reason: 'unknown-role' };

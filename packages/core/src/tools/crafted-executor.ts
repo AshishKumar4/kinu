@@ -52,6 +52,13 @@ export type CraftedToolExecute = (tool: CraftedToolSource) => CraftedToolExecute
 /**
  * Lift a storage-row CraftedTool into the narrow CraftedToolSource shape.
  * Filters null/comment-only code so the executor never has to special-case.
+ *
+ * `??`, NOT the `||` that {@link craftedToolDescription} applies, and the
+ * difference is deliberate (pinned by unit-crafted-executor.test.ts). This is a
+ * CODEC: a description stored as `''` is carried as `''`, because a row is
+ * reported as written. The label helper answers a different question — what to
+ * SHOW a model that has nothing useful to read — and there an empty string is
+ * worth replacing. Unifying them would have quietly made the codec lossy.
  */
 export function toCraftedToolSource(t: CraftedTool): CraftedToolSource | null {
   if (!t.code || t.code.startsWith('//')) return null;

@@ -12,7 +12,7 @@ export type {
   ResourceLimits,
   ExecutionRouter,
 } from './types';
-export { EXECUTOR_CAPABILITIES } from './types';
+export { EXECUTOR_CAPABILITIES, NO_TIMER_DEADLINE_MS } from './types';
 
 export {
   formatExecResult, isFailingResultText, parseRefusal, type ExecOutcome,
@@ -27,19 +27,8 @@ export { createInlineExecutor, type InlineExecutorDeps } from './inline';
 export { withApprovalGatedShell, gateProviderExec } from './approval';
 export {
   createSandboxExecutor, type SandboxHandle, isSandboxTransientError,
+  WORKSPACE_BACKUP_DIR,
 } from './sandbox';
-export {
-  createWorkspaceSnapshots, type WorkspaceSnapshots, type WorkspaceSnapshotPorts,
-  type WorkspaceSnapshotState, type WorkspaceRestoreOutcome, type WorkspaceSnapshotOutcome,
-  type WorkspaceRestoreOutcomeKind, type WorkspaceSnapshotOutcomeKind,
-  WORKSPACE_RESTORE_OUTCOMES, WORKSPACE_SNAPSHOT_OUTCOMES,
-  type BackupOptions, type DirectoryBackup, type WorkspaceChangeStatus,
-  shouldBackupWorkspace, workspaceBackupOptions, workspaceRestoreMode,
-  BACKUP_MIN_INTERVAL_MS, BACKUP_TTL_SECONDS, WORKSPACE_BACKUP_DIR,
-  WORKSPACE_RESTORE_DEADLINE_MS, isDirectoryOverlayMounted,
-  snapshotIntegrityFailure, snapshotObjectKeys, withContainerStartDeadline,
-  type SnapshotObjectKeys, type LateStartFailure,
-} from './workspace-snapshot';
 export { createDeviceTunnelExecutor, type DeviceTransport } from './device-tunnel-executor';
 export { explainNativeToolReferenceError } from './sandbox-errors';
 export {
@@ -47,7 +36,7 @@ export {
   deviceToolchainAnswer, freshDeviceToolchain,
   DEVICE_PRESENCE_CONFIG_KEY, DEVICE_TOOLCHAIN_TTL_MS,
   type DeviceStatus, type DevicePresence, type DevicePresenceStore,
-  type DeviceToolchain,
+  type DeviceToolchain, type DeviceFleetEntry,
 } from './device-status';
 export {
   TOOLCHAIN_PROBE_BINARIES, TOOLCHAIN_PROBED_CAPABILITIES,
@@ -56,7 +45,7 @@ export {
 export {
   DeviceTunnel, type TunnelSocket,
   TUNNEL_DISCONNECTED, NO_DEVICE_CONNECTED, isDeviceNotConnectedError,
-  DEVICE_UNKNOWN_METHOD, isDeviceUnknownMethodError,
+  DEVICE_UNKNOWN_METHOD, isDeviceUnknownMethodError, DEVICE_TOKEN_ROTATION,
 } from './device-tunnel';
 
 // Reusable Nimbus adapter. Cloudflare composes the session as its authoritative

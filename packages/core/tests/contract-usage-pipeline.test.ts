@@ -120,7 +120,10 @@ function runOneTurn(recorder: RunEventRecorder, runId: string, steps: readonly U
   for (const usage of steps) {
     acc.recordStep({ usage, response: { messages: [] }, finishReason: 'stop' });
   }
-  closeTurnRun(recorder, runId, { turnIndex: 0, usage: acc.reportedUsage(), reason: 'stop' });
+  // `'stop'` here was a model step's finishReason copied into the RUN's reason —
+  // a fourth spelling of a three-value vocabulary, which is what typing
+  // closeTurnRun's `reason` caught. This harness closes a turn that finished.
+  closeTurnRun(recorder, runId, { turnIndex: 0, usage: acc.reportedUsage(), reason: 'completed' });
   recorder.emit(runId, { type: 'run_end', reason: 'done' });
 }
 

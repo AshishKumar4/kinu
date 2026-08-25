@@ -15,6 +15,7 @@ import {
 import { createTestRuntime } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { Shell } from '../src/types/primitives';
+import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
 
 function hangingPromise<T>(): Promise<T> {
   return new Promise<T>(() => {});
@@ -64,6 +65,7 @@ describe('remote executor exec abort', () => {
       exposePort: async (port) => ({ url: `https://preview.example.com/${port}`, port }),
       unexposePort: async () => {},
       getExposedPorts: async () => [],
+  ...sandboxHandleLifecycle,
     };
     const provider = createSandboxExecutor(handle, 'preview.example.com');
     const controller = new AbortController();

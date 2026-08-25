@@ -65,6 +65,19 @@ export function deviceToolchainAnswer(
   };
 }
 
+/** One registered machine, as an agent may see it BEFORE any grant: its
+ *  identity and liveness, never its contents. Visibility without reach is the
+ *  whole point — the agent must know asking is possible, and nothing here
+ *  grants a single call. */
+export interface DeviceFleetEntry {
+  readonly id: string;
+  /** The user-chosen name (default `user@hostname`). */
+  readonly name: string;
+  readonly os: string | null;
+  readonly hostname: string | null;
+  readonly connected: boolean;
+}
+
 /** Hub snapshot of the user's device fleet, from the transport's perspective. */
 export interface DeviceStatus {
   /** A live daemon socket is open on the user's device hub right now. */
@@ -73,8 +86,17 @@ export interface DeviceStatus {
   registered: boolean;
   /** The attached machine's toolchain answer, or null when it was never asked
    *  or could not answer — an old daemon with no probe method is not a machine
-   *  without python. */
+   *   without python. */
   toolchain: DeviceToolchain | null;
+  /** Every registered device with name, platform and live state. Present only
+   *  when the hub serves the enriched snapshot; absent reads as "unknown",
+   *  never as "no devices". */
+  devices?: readonly DeviceFleetEntry[];
+  /** Whether THIS caller's workspace holds an action grant on the connected
+   *  device — what the executor row renders so the model knows whether its
+   *  first call raises the consent card or just runs. Absent = unknown /
+   *  no device / non-workspace caller. */
+  workspaceGranted?: boolean;
 }
 
 /** What the turn context says about the user's PC. */

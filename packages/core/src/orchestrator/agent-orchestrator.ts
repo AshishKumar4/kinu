@@ -55,6 +55,7 @@
 
 import type { ModelMessage } from 'ai';
 import { TurnAccumulator, type TurnSinks } from './turn-accumulator';
+import type { RunEndReason } from './turn-lifecycle';
 import { TurnSteering } from './turn-steering';
 import { CraftCycle } from './craft-cycle';
 import { DrainScheduler } from './drain-scheduler';
@@ -526,7 +527,7 @@ export class AgentOrchestrator {
   /**
    * Ingress trigger: a fresh external event was admitted (webhook, email,
    * peer message, timer). Debounced (~250ms fixed window) so a burst drains
-   * into ONE turn — the post-turn drain path stays immediate (completeTurn /
+   * into ONE turn — the post-turn drain path stays immediate (settleTurn /
    * the backend's post-turn hook) because it is already serialized behind a
    * just-finished turn and coalesced everything that arrived during it.
    */
@@ -599,9 +600,77 @@ export class AgentOrchestrator {
     await this.signals.deliver(signal);
   }
 
-  /** Convenience for backends that don't need to interleave: cadence + drain. */
-  async completeTurn(turn: CompletedTurn, continuity: TurnContinuity): Promise<void> {
-    this.recordTurn(turn, continuity);
+  // `completeTurn` used to sit here as a status-blind record+drain pair. It was
+  // replaced by `settleTurn`, which takes the driver's verdict: the old shape
+  // could not express "record this failed turn" without the caller deciding,
+  // and one caller decided not to.
+
+  /**
+   * Settle a finished turn, whatever it finished as.
+   *
+   * THE RULE, which is why this exists: a turn that aborted or errored is still
+   * evidence, and its extensions still see its end. One backend already did
+   * both; the other early-returned on any status but `'completed'`, so a failed
+   * cloud turn reached neither the outcome-review buffer nor the session
+   * cadence, and its extensions never got `onTurnEnd`. Failures are the most
+   * informative turns the evolution loop has — dropping them left the
+   * classifier grading successes against successes on one backend and the whole
+   * distribution on the other. The comment justifying that early return covered
+   * only the alternate-takes purge beside it, never the recording, so it read as
+   * an accident rather than a decision. This method is the decision.
+   *
+   * `status` is the driver's own verdict, not a flag the caller chose: backends
+   * hand it the same value they seal the run with (see `classifyRunEnd`) and
+   * this method decides what follows from it.
+   *
+   * `hadError` is corrected ONLY on the `'error'` arm. A turn can throw outside
+   * the accumulator's view — that is why one backend had to set `acc.hadError`
+   * by hand in its catch — so the status is the more reliable witness there. An
+   * ABORT is deliberately left alone: the user pressing Stop did not make the
+   * agent fail, and stamping their turn as an error would feed the outcome
+   * classifier a negative label nothing earned, which is the fabricated signal
+   * this codebase refuses everywhere else.
+   *
+   * Ordering is turn-end, then record, then drain. The extension hook runs
+   * first because its effects (memory writes, compaction state) are part of the
+   * turn the review then reads, and because that is already the order both
+   * drivers produce — one fires it inside `runChat` before settling, the other
+   * right after the response.
+   *
+   * The RETURN VALUE is the second rule this method owns: whether the
+   * COMPLETED-only improvement lanes (shadow trial, advisor review,
+   * auto-title) may run. A completed BUILD turn opens them; every other
+   * combination closes them — a cut or aborted turn has no subject to replay
+   * or review, and plan deliberation belongs in neither evidence set. The mode
+   * comes from `beginTurn`, so it is the same derivation the recording gate
+   * above used, and a backend cannot answer the question differently without
+   * bypassing the settle entry itself. Backends supply only transports past
+   * this point.
+   */
+  async settleTurn(input: {
+    status: RunEndReason;
+    turn: CompletedTurn;
+    continuity: TurnContinuity;
+    /**
+     * Fire this turn's extension end.
+     *
+     * A callback rather than a payload because the two drivers differ in who
+     * already fired it: `runChat` emits `onTurnEnd` itself for every turn it
+     * drives, including a cut one, and it also drives heads and swarm nodes
+     * that never settle through an orchestrator — so it must keep doing so, and
+     * a backend built on it passes nothing here. A backend driving its own loop
+     * passes the emit, and gets the guarantee that it runs on failed turns too.
+     */
+    onTurnEnd?: () => void | Promise<void>;
+  }): Promise<{ improvementLanesOpen: boolean }> {
+    if (input.onTurnEnd) await input.onTurnEnd();
+    const turn = input.status === 'error' && !input.turn.hadError
+      ? { ...input.turn, hadError: true }
+      : input.turn;
+    this.recordTurn(turn, input.continuity);
     await this.drainPendingEvents();
+    const improvementLanesOpen = input.status === 'completed'
+      && this.activeWorkMode !== 'plan';
+    return { improvementLanesOpen };
   }
 }

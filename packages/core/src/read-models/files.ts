@@ -14,6 +14,7 @@
  */
 
 import { normalizePath } from '@kinu.run/agent-utils';
+import { removeTreeWithVfsOps, type VfsNativeMutations } from '../vfs/mounts';
 import type { VFS } from '../types/primitives';
 import { renderThrownChain } from '../obs/index';
 
@@ -81,6 +82,8 @@ export interface DirEntry {
   name: string;
   type: 'file' | 'dir';
   size?: number;
+  /** Last-modified time (ms since epoch), where the plane's stat carried one. */
+  mtimeMs?: number;
 }
 
 export type ExecutorWriteResult = { ok: true } | { error: string };
@@ -154,7 +157,19 @@ export async function getExecutorFiles(
       // file plane itself failing, and a listing that reported every entry as a
       // sizeless file would hide that behind a plausible directory.
       const s = await vfs.stat(joinDir(dir, name));
-      entries.push({ name, type: s?.isDir ? 'dir' : 'file', size: s?.size });
+      entries.push({ name, type: s?.isDir ? 'dir' : 'file', size: s?.size, mtimeMs: s?.mtimeMs });
+    }
+    // The canonical home is always reachable by walking down from the root.
+    // The workspace box enumerates directory ENTRIES, and on a fresh
+    // workspace nothing above the home has any — so `/` listed only the
+    // mounts and the whole workspace tree was unreachable by browsing. Each
+    // ancestor of the home names the next segment down, structurally.
+    const home = await provider.homeDir();
+    if (home.startsWith('/') && (dir === '/' || home.startsWith(`${dir}/`))) {
+      const next = home.slice(dir === '/' ? 1 : dir.length + 1).split('/')[0];
+      if (next && next !== '' && !entries.some((entry) => entry.name === next)) {
+        entries.push({ name: next, type: 'dir' });
+      }
     }
     return { path: dir, entries: sortDirEntries(entries) };
   } catch (err) {
@@ -205,6 +220,103 @@ export async function writeExecutorFileOp(
   if (!vfs) return { error: `Executor "${executorId}" has no file plane` };
   try {
     await vfs.writeFile(path, bytes);
+    return { ok: true };
+  } catch (err) {
+    return { error: renderThrownChain({ cause: err }) };
+  }
+}
+
+
+/**
+ * Raw bytes of one file, for the download/preview HTTP route. No text/binary
+ * refusal and no view cap: the caller sends the answer as a response body,
+ * and the transport's own payload ceiling is the honest bound.
+ */
+export async function readExecutorFileBytes(
+  router: ExecutorFileLookup,
+  executorId: string,
+  path: string,
+): Promise<{ bytes: Uint8Array } | { error: string }> {
+  if (!path) return { error: 'path required' };
+  const vfs = executorFiles(router, executorId);
+  if (!vfs) return { error: `Executor "${executorId}" has no file plane` };
+  try {
+    const stat = await vfs.stat(path);
+    if (stat?.isDir) return { error: 'path is a directory' };
+    const raw = await vfs.readFile(path);
+    return { bytes: raw instanceof Uint8Array ? raw : new TextEncoder().encode(raw) };
+  } catch (err) {
+    return { error: renderThrownChain({ cause: err }) };
+  }
+}
+
+/** The plane's native mutations, where it declares them. A widening
+ *  assignment, not a cast: the extras are optional, and the workspace plane
+ *  (vfs/nimbus-workspace.ts, vfs/mounts.ts) produces exactly these members. */
+function nativeMutations(vfs: VFS): Partial<VfsNativeMutations> {
+  const probed: VFS & Partial<VfsNativeMutations> = vfs;
+  return probed;
+}
+
+/**
+ * Rename one entry inside an executor's plane. Native where the plane renames
+ * natively (the workspace does, without reading the bytes); a byte carry for
+ * a file on a plane that cannot; a stated refusal for a directory there — a
+ * tree copy wearing a rename's name is not a rename. Never overwrites.
+ */
+export async function renameExecutorPathOp(
+  router: ExecutorFileLookup,
+  executorId: string,
+  from: string,
+  to: string,
+): Promise<ExecutorWriteResult> {
+  if (!from || !to || to.endsWith('/')) return { error: 'both source and target paths are required' };
+  if (from === to) return { ok: true };
+  const vfs = executorFiles(router, executorId);
+  if (!vfs) return { error: `Executor "${executorId}" has no file plane` };
+  try {
+    if (await vfs.exists(to)) return { error: `${to} already exists` };
+    const native = nativeMutations(vfs).rename;
+    if (native) {
+      await native.call(vfs, from, to);
+      return { ok: true };
+    }
+    const stat = await vfs.stat(from);
+    if (!stat) return { error: `no such file or directory: ${from}` };
+    if (stat.isDir) return { error: 'this environment cannot rename a directory in place' };
+    const raw = await vfs.readFile(from);
+    await vfs.writeFile(to, raw);
+    await vfs.unlink(from);
+    return { ok: true };
+  } catch (err) {
+    return { error: renderThrownChain({ cause: err }) };
+  }
+}
+
+/**
+ * Delete one entry inside an executor's plane. A file is one unlink; a
+ * directory uses the plane's native tree removal where it has one and goes
+ * entry by entry where it does not, so a plane whose unlink refuses
+ * directories fails naming its own refusal.
+ */
+export async function deleteExecutorPathOp(
+  router: ExecutorFileLookup,
+  executorId: string,
+  path: string,
+): Promise<ExecutorWriteResult> {
+  if (!path || normalizeDir(path) === '/') return { error: 'a real path is required' };
+  const vfs = executorFiles(router, executorId);
+  if (!vfs) return { error: `Executor "${executorId}" has no file plane` };
+  try {
+    const stat = await vfs.stat(path);
+    if (!stat) return { error: `no such file or directory: ${path}` };
+    if (!stat.isDir) {
+      await vfs.unlink(path);
+      return { ok: true };
+    }
+    const native = nativeMutations(vfs).removeRecursive;
+    if (native) await native.call(vfs, path);
+    else await removeTreeWithVfsOps(vfs, path);
     return { ok: true };
   } catch (err) {
     return { error: renderThrownChain({ cause: err }) };

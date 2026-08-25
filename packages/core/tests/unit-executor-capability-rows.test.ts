@@ -19,6 +19,7 @@ import {
   deviceToolchainAnswer, DEVICE_TOOLCHAIN_TTL_MS,
 } from '../src/index';
 import { createTestRuntime } from '@kinu.run/test-utils';
+import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
 
 /** The rows the real projection (`DefaultExecutionRouter.listExecutors`) hands
  *  the prompt for one real provider. */
@@ -54,6 +55,7 @@ const boundContainer: SandboxHandle = (() => {
     exec: unreachable, readFile: unreachable, writeFile: unreachable,
     listFiles: unreachable, deleteFile: unreachable, exposePort: unreachable,
     unexposePort: unreachable, getExposedPorts: unreachable,
+    ...sandboxHandleLifecycle,
   };
 })();
 

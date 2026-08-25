@@ -30,6 +30,24 @@ import {
   type SwarmInput,
 } from '../src/strategy/swarm';
 import { createTestRuntime } from '@kinu.run/test-utils';
+import { createAgentSelfProvider, type AgentSelfHost } from '../src/tools/agent-self';
+
+/**
+ * The ONE declaration of the `agent.*` contract — the codemode type block that
+ * reaches the model inside the execute_tools description.
+ *
+ * The prompt's Code-execution section points at this namespace instead of
+ * restating its signatures, so the tests that used to assert a signature in the
+ * prompt assert it HERE, against the declaration that actually ships. The host
+ * is never called: only `types` is read, so a proxy that answers every method is
+ * enough and cannot rot as `AgentSelfHost` grows.
+ */
+function agentSelfTypes(): string {
+  const host: AgentSelfHost = new Proxy(Object.create(null), {
+    get: () => async () => null,
+  });
+  return createAgentSelfProvider(host).types ?? '';
+}
 
 describe('buildSystemPromptSync', () => {
   test('uses fallback SOUL.md when SOUL.md is missing', () => {
@@ -152,8 +170,13 @@ describe('buildSystemPromptSync', () => {
     expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toMatch(
       /Use when: One delegation ladder, two rungs, and they differ on lifetime and on who decides/,
     );
+    // The frame states BOTH scorers now. It used to promise that a search's candidates
+    // "are MEASURED against a number you declare", which described the shape a preset
+    // reaches WITH an `objective` and not the call a model actually makes: a bare
+    // `{preset, task}` takes the row's judged sweep. One sentence covering only the
+    // upgraded half is how a model came to believe its first call would run.
     expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toMatch(
-      /candidates are MEASURED against a number you declare/,
+      /candidates are SCORED against each other and ranked — by your own verifier running in this workspace when you declare an `objective`, and by a judge ensemble when you do not/,
     );
     expect(BUILTIN_TOOL_DESCRIPTIONS.agents.indexOf('one subordinate per independent workstream'))
       .toBeLessThan(BUILTIN_TOOL_DESCRIPTIONS.agents.indexOf('full turn'));
@@ -222,10 +245,34 @@ describe('buildSystemPromptSync', () => {
   test('the search rung says who decides, stated as a mechanism and not a preference', () => {
     // What replaced the settle doctrine, and then the fork/swarm boundary after
     // it: with one ephemeral rung left, the thing a caller has to get right is
-    // that its candidates are MEASURED rather than judged, and the line states
-    // the fact that decides it rather than a preference.
+    // WHO SCORES its candidates, and the line states the fact that decides it
+    // rather than a preference.
+    //
+    // IT NAMES BOTH SCORERS NOW. The rung used to promise a verifier
+    // unconditionally, which was true of the shape and false of the call: five of
+    // the six presets refused without an `objective`, so the surface the sentence
+    // described was one a bare call could not reach. A named preset falls back to a
+    // judged sweep, so the sentence has to say which scorer runs when.
+    //
+    // 2026-08-25: the WHICH-SCORER-WHEN clause is asserted ONCE, on the whole
+    // rendered description, because that is where it has to be true. It used to
+    // be pinned twice because it was WRITTEN twice — DELEGATION_FRAME and
+    // DELEGATION_RUNGS.swarm both carried "by your own verifier running in this
+    // workspace when you declare an `objective` … and by a judge ensemble when
+    // you do not" verbatim. The frame always prefixes the rung
+    // (renderAgentsToolDescription composes it unconditionally), so the rung's
+    // copy was redundant, and the assertion below is STRONGER than the pair it
+    // replaces: it proves the clause reaches the model AND that exactly one
+    // source states it, which the old pins could not distinguish from drift.
     const agents = BUILTIN_TOOL_DESCRIPTIONS.agents;
-    expect(agents).toMatch(/scored by your own verifier running in this workspace — not by a model's opinion of it/);
+    const scorers = /by your own verifier running in this workspace when you declare an `objective`/g;
+    expect(agents).toMatch(scorers);
+    expect(agents.match(scorers)).toHaveLength(1);
+    expect(agents).toMatch(/and by a judge ensemble when you do not/);
+    expect(agents.match(/and by a judge ensemble when you do not/g)).toHaveLength(1);
+    // The rung still says who NAMES the shape, and that scoring is a mechanism
+    // rather than an opinion — the half the frame does not carry.
+    expect(agents).toMatch(/You name the shape with `preset`, and a verifier is CODE that runs here rather than a model's opinion of the answer/);
     expect(agents).toMatch(/a metric nothing can execute is not an objective/);
     // Payoff before limitation, the ordering this test was written for: what a
     // search buys the caller comes before what it refuses to do for them.
@@ -449,8 +496,17 @@ describe('buildSystemPromptSync', () => {
     expect(kimi).toEqual(section('anthropic/claude-sonnet-4.5'));
     expect(kimi).toEqual(section('codex/gpt-5.5'));
 
-    expect(kimi).toContain(`- **run** — ${BUILTIN_TOOL_SPECS.run.summary}`);
-    expect(kimi).toContain(`- **memory** — ${BUILTIN_TOOL_SPECS.memory.summary}`);
+    // The index carries the EXAMPLE, which nothing else carries — not the
+    // summary, which is line 1 of the same tool's schema description in the same
+    // request. Pinning the summary here (as this test did until 2026-08-25) was
+    // pinning the duplicate: 942 chars of it across the eight builtins. Both
+    // directions are asserted, so neither the example going missing nor the
+    // summary coming back is silent.
+    expect(kimi).toContain(`- **run** — \`${BUILTIN_TOOL_SPECS.run.example}\``);
+    expect(kimi).toContain(`- **memory** — \`${BUILTIN_TOOL_SPECS.memory.example}\``);
+    for (const name of BUILTIN_TOOLS) {
+      expect(kimi).not.toContain(BUILTIN_TOOL_SPECS[name].summary);
+    }
     expect(kimi).toContain('**tool_docs_search** (MCP) — Search docs.');
     expect(kimi).toContain('Call the tools listed here');
   });
@@ -469,7 +525,17 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toContain('workspace.createTool');
     expect(prompt).toContain('workspace.listTools()');
     expect(prompt).toMatch(/next execute_tools call/);            // freshness, not "when injected"
-    expect(prompt).toContain('agent.proposeCurriculum');
+    // The self-improvement lane is REACHABLE and named, but its signatures are
+    // not restated here. Until 2026-08-25 this asserted `agent.proposeCurriculum`
+    // in the prompt, which pinned a hand-written copy of a declaration that
+    // ships in the same request (tools/agent-self.ts TYPES, carried into the
+    // execute_tools description by renderExecuteToolsDescription) — and the copy
+    // was the weaker of the two. The pin now proves the same capability is
+    // discoverable AND that its contract has exactly one home.
+    expect(prompt).toContain('`agent.*` namespace inside execute_tools');
+    expect(prompt).toMatch(/curriculum/);
+    expect(prompt).not.toContain('agent.proposeCurriculum(');
+    expect(agentSelfTypes()).toContain('proposeCurriculum');
     // The lesson loop is a standing fact about what is IN the memory store,
     // not a usage rule, so it rides the memory spec's doctrine field — the one
     // line of `## Memory and facts` the memory schema did not already carry.
@@ -509,7 +575,14 @@ describe('buildSystemPromptSync', () => {
     const withoutRlm = buildSystemPromptSync(rt, { backend: 'cli-local' });
     expect(withoutRlm).toMatch(/Code execution and learned capabilities/);
     expect(withoutRlm).not.toMatch(/llm\.query/);
-    expect(withoutRlm).toContain('agent.proposeScaffold');
+    // The scaffold lane is still advertised where llm.query is not — that is
+    // what this half of the test is for. It is advertised as the NAMESPACE now
+    // rather than as a copied signature (see the note in the craft test above);
+    // the signature itself is asserted against its one declaration.
+    expect(withoutRlm).toContain('`agent.*` namespace inside execute_tools');
+    expect(withoutRlm).toMatch(/scaffold proposals/);
+    expect(withoutRlm).not.toContain('agent.proposeScaffold(');
+    expect(agentSelfTypes()).toContain('proposeScaffold');
     const cliWithRlm = buildSystemPromptSync(rt, { backend: 'cli-local', rlmAvailable: true });
     expect(cliWithRlm).toMatch(/llm\.query/);
   });
@@ -690,24 +763,67 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).not.toContain('Worker isolate');
   });
 
-  test('a registered-but-offline laptop stays visible with the reconnect instruction', () => {
+  test('a registered-but-offline device stays visible, by name, with the way back', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt, {
       backend: 'cf',
       executors: [
         { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
-        { name: 'laptop', kind: 'laptop', available: false, configured: true, active: false, status: 'disconnected' },
+        {
+          name: 'laptop', kind: 'laptop', available: false, configured: true, active: false,
+          status: 'disconnected', label: 'ashish@studio',
+        },
       ],
     });
 
     expect(prompt).toContain('currently OFFLINE');
+    // The row names the machine its owner named. "laptop" is the namespace.
+    expect(prompt).toContain('ashish@studio');
+    // Calling an offline device is how the owner gets ASKED for it — the hub
+    // raises a connect request on that call — so the row no longer forbids it.
+    expect(prompt).toContain('asks them to bring it back');
     expect(prompt).toContain('kinu connect');
-    expect(prompt).toContain('Do not call it');
     // Offline ≠ selectable: no laptop.* namespace advertised for calls.
     expect(prompt).not.toContain('laptop.***');
   });
 
-  test('a connected laptop teaches that first use asks for consent (tunnel backends)', () => {
+  test('an ungranted device teaches that the first call asks for this workspace', () => {
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt, {
+      backend: 'cf',
+      executors: [
+        {
+          name: 'laptop', kind: 'laptop', available: true, configured: true, active: true,
+          status: 'active', label: 'ashish@studio', granted: false,
+        },
+      ],
+    });
+
+    expect(prompt).toContain('laptop.*');
+    expect(prompt).toContain('ashish@studio');
+    expect(prompt).toContain('NO grant yet');
+    expect(prompt).toContain('expected, not an error');
+    // The live-state framing replaces "assume absent forever".
+    expect(prompt).toContain('live state at the start of THIS turn');
+  });
+
+  test('a granted device says so, so the model does not predict a prompt that will not come', () => {
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt, {
+      backend: 'cf',
+      executors: [
+        {
+          name: 'laptop', kind: 'laptop', available: true, configured: true, active: true,
+          status: 'active', label: 'ashish@studio', granted: true,
+        },
+      ],
+    });
+
+    expect(prompt).toContain('holds its access grant already');
+    expect(prompt).not.toContain('NO grant yet');
+  });
+
+  test('an unnamed device is described, never called "laptop", to the user', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt, {
       backend: 'cf',
@@ -716,12 +832,7 @@ describe('buildSystemPromptSync', () => {
       ],
     });
 
-    expect(prompt).toContain('laptop.*');
-    expect(prompt).toContain("the user's OWN PC");
-    expect(prompt).toContain('consent');
-    expect(prompt).toContain('expected, not an error');
-    // The live-state framing replaces "assume absent forever".
-    expect(prompt).toContain('live state at the start of THIS turn');
+    expect(prompt).toContain("your user's PC");
   });
 
   test('the cli-local laptop is the CLI host machine — direct, no consent prompt', () => {
@@ -1090,7 +1201,15 @@ describe('buildSystemPromptSync', () => {
       // one summary + one example per tool (237 chars here, measured 2081 →
       // 2318); the tool's own when-to-use doctrine is schema-only, as every
       // other tool's is, so none of it lands in this section.
-      'Tools available this turn': 2350,
+      // 2026-08-25: LOWERED 2350 → 1020, measured 990 (−1328 from the 2318 this
+      //   ceiling was set against). The index stopped rendering each tool's
+      //   `summary`, which is line 1 of that tool's own schema description in
+      //   the SAME request — 942 chars of pure duplication across the eight
+      //   builtins. What remains is the name and the one real call, which is the
+      //   only place BUILTIN_TOOL_SPECS.example reaches a model, and which is
+      //   the split OpenAI's GPT-4.1 guide prescribes: examples in the prompt,
+      //   contract in the description field.
+      'Tools available this turn': 1020,
       // +2 lines of file doctrine: the workspace filesystem is named by where
       // it is, and every other environment is a separate machine whose commands
       // stay behind its own namespace — stated once here for all of them.
@@ -1102,7 +1221,20 @@ describe('buildSystemPromptSync', () => {
       //     (/pc, /sandbox) with the shell limit that keeps commands routed by
       //     namespace, and the hasDevices block maps a mounted native path.
       //     The owner's ruling made the mounts product surface (#36/#142/#143).
-      'Execution environments': 3100,
+      // 2026-08-25: LOWERED 3100 → 3050, measured 3001. Two changes landed on
+      //   this section in the same pass, and the number is the sum of both:
+      //     −123 (slimming) the mount doctrine was stated TWICE — one paragraph
+      //       gated on `manyRuntimes`, one on `hasDevices` — restating
+      //       separate-machines, commands-through-their-own-namespace and
+      //       mounts-show-native-paths in different words. One paragraph now
+      //       carries every fact both did. `hasDevices` is the weaker gate and
+      //       therefore loses no surface (manyRuntimes implied it: with 2+
+      //       executors at most one is `workspace`), so a lone sandbox now reads
+      //       doctrine it used to miss. 3051 → 2928.
+      //     +73 (device identity) the laptop rows now name the machine the user
+      //       named it and say whether this workspace already holds its access
+      //       grant. 2928 → 3001.
+      'Execution environments': 3050,
       'Persistence': 700,
       // 2026-08: −1 line. `execute_tools runs JavaScript against the active
       // executor/codemode namespaces` was the tool's own summary, restated.
@@ -1111,7 +1243,16 @@ describe('buildSystemPromptSync', () => {
       // settled job is what it reads, and that the wake already named the id
       // — the same "you don't need to check, you'll be told" doctrine as the
       // Background work section, stated where this tool is introduced.
-      'Code execution and learned capabilities': 1610,
+      // 2026-08-25: LOWERED 1610 → 830, measured 801 (−425 on this surface,
+      //   −777 with llm.query present). The six `agent.*` API bullets were a
+      //   hand-maintained second copy of the `agent.*` codemode type block,
+      //   which ships to the model inside the execute_tools description — and
+      //   the weaker copy: the proposeScaffold bullet omitted the required
+      //   `async function* run(rt, task)` export, the host-bridge restriction
+      //   and the rationale floor that the declaration states. One pointer at
+      //   the namespace replaced all six. Same lesson as SWARM_PRESET_DOCTRINE:
+      //   prose that cannot read the declaration it describes will drift from it.
+      'Code execution and learned capabilities': 830,
       // 2026-08: the old Research (1049) + Team (1435) sections collapsed into
       // ONE lifetime-keyed ladder.
       // 2026-08: +1 line naming the turn-cumulative tool-output budget — the

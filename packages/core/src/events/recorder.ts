@@ -16,12 +16,12 @@ import { modelMessageSchema, type ModelMessage } from 'ai';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { RunEvent, RunEventInput, RunEventType } from './types';
 import { JsonValueSchema } from '../utils/json';
-import { UsageSchema } from '../usage';
+import { USAGE_FIELDS, UsageSchema, type Usage } from '../usage';
 import { ESCALATION_OUTCOMES } from '../execution/escalation';
 import {
   SPEND_SOURCES, WORKSPACE_RUN_ID,
   MODEL_OPERATION_KINDS, MODEL_OPERATION_PHASES, MODEL_OPERATION_OUTCOMES,
-  type ModelOperationSink,
+  type ModelOperationSink, type SpendSource, type SpendTally,
 } from './model-call';
 import { diagnostics, toKinuError } from '../obs/index';
 
@@ -55,7 +55,19 @@ const HeadFileChangeSetSchema = v.object({
     binary: v.optional(v.boolean()),
   })),
 });
-const RunEventSchema = v.variant('type', [
+/**
+ * The canonical run-event union, as valibot.
+ *
+ * Exported for the SAME reason {@link parseStoredRunEvent} is: a reader outside
+ * this class must parse through this declaration rather than re-declare event
+ * shapes. Two entry points, one schema — `parseStoredRunEvent` for a stored
+ * `payload` string, this for a value that arrived already decoded, which is what
+ * a caller reading `getRunEvents` over RPC holds. Re-serialising such a value
+ * just to reach the string entry point would allocate a round trip to satisfy a
+ * signature, and re-declaring the union beside the caller is the drift this
+ * comment has always been about.
+ */
+export const RunEventSchema = v.variant('type', [
   v.object({ ...BaseFields, type: v.literal('run_start'), agentId: v.string(),
     userMessage: v.optional(v.string()), caused_by: v.optional(v.string()),
     ingress_kind: v.optional(v.string()), trigger_id: v.optional(v.string()) }),
@@ -185,6 +197,46 @@ export function initRunEventTables(execRaw: RawSqlExec): void {
   execRaw(`CREATE INDEX IF NOT EXISTS idx_run_events_type ON run_events(type)`);
 }
 
+/**
+ * One producer's row as SQL summed it, before absence is restored.
+ *
+ * The usage columns are `Record<keyof Usage, …>` rather than a list of names,
+ * so a field added to {@link Usage} widens this row and {@link spendTallyOf}
+ * reads it without a second list to keep in step. What the SQL cannot type is
+ * that it SELECTed all seven aliases; `unit-run-events.test.ts` seeds a call
+ * carrying every field and asserts the aggregate reports each one, which is what
+ * makes a forgotten column fail loudly instead of reading as an absent count.
+ *
+ * `source` is `string | null` because the column is whatever the payload held:
+ * the picklist is enforced on the way IN, and narrowing on the way out is how a
+ * corrupt row gets named rather than silently attributed.
+ */
+type SpendAggregateRow = Readonly<Record<keyof Usage, number | null>> & {
+  readonly source: string | null;
+  readonly calls: number;
+  readonly callsWithoutUsage: number;
+  readonly unpricedCalls: number;
+  readonly usd: number | null;
+};
+
+/** Restore absence. SQL says NULL where the fold said undefined: no call in this
+ *  group reported the field, which is not the same fact as every call reporting
+ *  zero, and only one of the two may be printed as a number. */
+function spendTallyOf(row: SpendAggregateRow): SpendTally {
+  const usage: { -readonly [K in keyof Usage]: number } = {};
+  for (const field of USAGE_FIELDS) {
+    const summed = row[field];
+    if (summed !== null) usage[field] = summed;
+  }
+  const tally = {
+    calls: row.calls,
+    callsWithoutUsage: row.callsWithoutUsage,
+    usage,
+    unpricedCalls: row.unpricedCalls,
+  };
+  return row.usd === null ? tally : { ...tally, usd: row.usd };
+}
+
 export class RunEventRecorder {
   // Cached next-index per runId. Loaded lazily from the table on first emit.
   private nextIndex = new Map<string, number>();
@@ -262,9 +314,16 @@ export class RunEventRecorder {
    * to an unrelated turn's timeline would be worse than leaving it out.
    *
    * Matched client-side over the `type` index for the same reason {@link read}
-   * filters client-side: `payload` is opaque TEXT to every SqlExecutor this
-   * runs on, and no production query has ever depended on SQLite's JSON
-   * functions being available on both of them.
+   * filters client-side: the match is on ONE field of a bounded window, and
+   * `parseStoredRunEvent` has to run over those rows anyway to return a typed
+   * event. Pushing the predicate into SQL would buy nothing and would still
+   * parse every row it kept.
+   *
+   * That is a cost argument and no longer a capability one. This method's
+   * docstring used to say no production query had ever depended on SQLite's JSON
+   * functions being available on both SqlExecutors; {@link spendByProducer} now
+   * does, deliberately, and `tests/workerd/do-spend-aggregate.test.ts` runs it on
+   * real Durable Object SQLite so the claim is measured rather than assumed.
    */
   runForHeadSplit(rootId: string, window = 500): string | null {
     const rows = this.sql<{ run_id: string; payload: string }>`
@@ -293,9 +352,9 @@ export class RunEventRecorder {
    * and is why this is a start-of-life read: an activation that has just started
    * is executing none of these, so every one of them was left by an earlier one.
    *
-   * Newest first, bounded, and matched client-side over the `type` index for the
-   * reason {@link read} gives: `payload` is opaque TEXT to every SqlExecutor this
-   * runs on.
+   * Newest first, bounded, and paired client-side over the `type` index for the
+   * reason {@link read} gives: the pairing is over a bounded window whose rows a
+   * caller reads anyway.
    */
   unterminatedRuns(window = 500): string[] {
     const rows = this.sql<{ run_id: string; type: string }>`
@@ -331,9 +390,9 @@ export class RunEventRecorder {
    * a long call and a dead process are different facts, and only one of them is
    * observable from this table.
    *
-   * Newest first, bounded, matched client-side over the `type` index for the
-   * reason {@link read} gives: `payload` is opaque TEXT to every SqlExecutor
-   * this runs on.
+   * Newest first, bounded, paired client-side over the `type` index for the
+   * reason {@link read} gives: every row it keeps is returned as a typed event,
+   * so it is parsed either way.
    */
   unterminatedModelOperations(window = 500): Array<Extract<RunEvent, { type: 'model_operation' }>> {
     const rows = this.sql<{ payload: string }>`
@@ -405,6 +464,105 @@ export class RunEventRecorder {
       ORDER BY ts DESC, rowid DESC
       LIMIT ${limit}`;
     return rows.map((r) => parseStoredRunEvent(r.payload)).reverse();
+  }
+
+  /**
+   * What every model call in the log cost, summed per producer — the WHOLE log.
+   *
+   * NOT A SAMPLE, and that is the point. {@link readRecentByType} above is the
+   * retained sample a percentile needs; a TOTAL read the same way is a floor
+   * presented as a measurement, and the ceiling was invisible on the surface
+   * that rendered it. A sum is what SQL is for, so the sum happens in SQL over
+   * every row and no window bounds it. `spend`'s producer rows are complete
+   * however long the log grows; the step telemetry beside them stays windowed,
+   * because a cache-hit percentile over the whole of history is not the question
+   * anyone asked.
+   *
+   * TWO ROW KINDS, ONE GROUPING. `step_finish` is the turn loop and is filed
+   * under `agent`; every other producer writes `model_call` and names itself.
+   * That mapping is the same one the read model applied when it folded these
+   * rows by hand, and it lives in the CASE so one pass over the table answers
+   * for both. `model_operation` is deliberately absent: it mirrors the same
+   * calls for lifecycle purposes, and counting it would double every direct
+   * call. No run filter, for the reason `readRecentByType` has none — spend is a
+   * workspace question, and a call made between runs is filed under
+   * {@link WORKSPACE_RUN_ID} and belongs in the total.
+   *
+   * THREE PARSES PER ROW, NOT NINE. `payload` is opaque TEXT, so each field
+   * costs a JSON walk of the whole row — and a `step_finish` payload carries the
+   * step's messages, which makes it the expensive kind. The `call` CTE therefore
+   * lifts `$.usage` out ONCE per row and `field` splits that small object, so the
+   * seven counts cost seven walks of a usage object rather than seven of a
+   * transcript. It is still strictly cheaper than the read it replaces, which
+   * ran `JSON.parse` plus a valibot validation of the entire union per row.
+   *
+   * Reported absences survive the sum: `SUM` skips NULLs and returns NULL when
+   * every row was NULL, which is exactly "no call reported this field" and is
+   * why {@link spendTallyOf} maps NULL to absent rather than to 0. `usd` is
+   * summed only over calls that reported usage, matching the fold this replaced —
+   * a call the provider said nothing for cannot be priced either, and is already
+   * counted as unmeasured.
+   */
+  spendByProducer(): ReadonlyMap<SpendSource, SpendTally> {
+    const rows = this.sql<SpendAggregateRow>`
+      WITH call AS (
+        SELECT CASE type
+                 WHEN ${'step_finish' satisfies RunEventType} THEN ${'agent' satisfies SpendSource}
+                 ELSE json_extract(payload, '$.source')
+               END AS source,
+               json_extract(payload, '$.usage') AS usage,
+               json_extract(payload, '$.usd') AS usd
+        FROM run_events
+        WHERE type = ${'step_finish' satisfies RunEventType}
+           OR type = ${'model_call' satisfies RunEventType}
+      ),
+      field AS (
+        SELECT source, usd,
+               json_extract(usage, '$.input') AS input,
+               json_extract(usage, '$.output') AS output,
+               json_extract(usage, '$.cacheRead') AS cacheRead,
+               json_extract(usage, '$.cacheWrite') AS cacheWrite,
+               json_extract(usage, '$.cacheWrite1h') AS cacheWrite1h,
+               json_extract(usage, '$.reasoning') AS reasoning,
+               json_extract(usage, '$.neurons') AS neurons
+        FROM call
+      ),
+      measured AS (
+        SELECT *, COALESCE(input, output, cacheRead, cacheWrite, cacheWrite1h,
+                           reasoning, neurons) IS NOT NULL AS reported
+        FROM field
+      )
+      SELECT source,
+             COUNT(*) AS calls,
+             SUM(CASE WHEN reported THEN 0 ELSE 1 END) AS callsWithoutUsage,
+             SUM(CASE WHEN reported AND usd IS NULL THEN 1 ELSE 0 END) AS unpricedCalls,
+             SUM(CASE WHEN reported THEN usd END) AS usd,
+             SUM(input) AS input, SUM(output) AS output, SUM(cacheRead) AS cacheRead,
+             SUM(cacheWrite) AS cacheWrite, SUM(cacheWrite1h) AS cacheWrite1h,
+             SUM(reasoning) AS reasoning, SUM(neurons) AS neurons
+      FROM measured
+      GROUP BY source`;
+    const byProducer = new Map<SpendSource, SpendTally>();
+    for (const row of rows) {
+      const source = SPEND_SOURCES.find((known) => known === row.source);
+      if (source === undefined) {
+        // Unwritable through this recorder: `RunEventSchema` validates `source`
+        // against the same picklist on the way in. So a row here is a corrupt
+        // one, and it says so rather than vanishing from a total silently.
+        diagnostics.failure(
+          'event.spend_source_unknown',
+          toKinuError({
+            doing: 'attributing a stored model call to a producer',
+            cause: `source ${JSON.stringify(row.source)} is not one of ${SPEND_SOURCES.join(', ')}`,
+            otherwise: 'bad_input',
+          }),
+          { calls: row.calls },
+        );
+        continue;
+      }
+      byProducer.set(source, spendTallyOf(row));
+    }
+    return byProducer;
   }
 
   /** Subscribe to future events; returns an unsubscribe function. */

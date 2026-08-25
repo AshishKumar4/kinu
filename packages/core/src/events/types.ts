@@ -145,10 +145,16 @@ export type RunEvent =
    *  turn loop's prefix-cache EMA, and a judge's cold prompt in that window
    *  would read as a cache regression the agent never had.
    *
-   *  `usage` is absent when the provider reported nothing — a row still lands,
+   *  `usage` is ALWAYS written, `{}` when the provider reported nothing,
    *  because the honest reading of a silent call is unmeasured spend, not free
    *  spend, and the workspace total's coverage fraction is built out of exactly
-   *  these. `usd` is that report at the CALL'S OWN model's catalog rate, absent
+   *  these. It stays OPTIONAL on the type only so rows written before that rule
+   *  still read back; every producer goes through `buildModelCallEvent`, which
+   *  is what makes the field present in practice. One backend used to omit it
+   *  instead, which left a reader unable to tell "unmeasured" from "not
+   *  recorded" — the one distinction this row exists to carry.
+   *
+   *  `usd` is that report at the CALL'S OWN model's catalog rate, absent
    *  when unpriced; a judge deliberately runs on a different model from the
    *  actor, so pricing it at the actor's rate would be a fabricated number. */
   | (RunEventBase & {

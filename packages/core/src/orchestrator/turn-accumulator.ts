@@ -95,6 +95,13 @@ export class TurnAccumulator {
    *  which is what keeps it distinguishable from a reported 0. Backends persist
    *  it at turn end as the next turn's measured compaction-trigger signal. */
   lastPromptTokens: number | undefined = undefined;
+  /** The `finishReason` the turn's LAST step reported, or `undefined` until a
+   *  step reports one. Read at settle by `classifyRunEnd`: a step that reported
+   *  `'tool-calls'` had its tool results delivered and a further step due, so a
+   *  turn whose last step says that stopped while the model was still working.
+   *  Four of four capped production runs sealed as `'completed'` because
+   *  nothing carried this fact out of the loop. */
+  lastFinishReason: string | undefined = undefined;
   hadError = false;
   firstChunkSeen = false;
   startedAt = 0;
@@ -148,6 +155,7 @@ export class TurnAccumulator {
     this.stepCount = 0;
     this.usage = {};
     this.lastPromptTokens = undefined;
+    this.lastFinishReason = undefined;
     this.hadError = false;
     this.firstChunkSeen = false;
     this.startedAt = now;
@@ -279,7 +287,15 @@ export class TurnAccumulator {
       stepIndex: this.stepCount,
     };
     const reason = v.safeParse(StringSchema, ctx.finishReason);
-    if (reason.success) stepEvent.reason = reason.output;
+    // Kept on the accumulator as well as on the step's own row: the settle
+    // classifier needs the LAST one, and the rows are durable but not readable
+    // from inside the turn that is ending. A step that reported nothing
+    // nameable leaves the last real reason standing, exactly as
+    // `lastPromptTokens` above leaves the last real measurement standing.
+    if (reason.success) {
+      stepEvent.reason = reason.output;
+      this.lastFinishReason = reason.output;
+    }
     if (produced.length > 0) stepEvent.messages = [...produced];
     if (composition) stepEvent.context = composition;
     // The provider's own report of this request, priced at the catalog rate the

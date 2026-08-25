@@ -11,6 +11,22 @@
 import type { VFS } from '../types/primitives';
 import type { JsonValue } from '../utils/json';
 
+/**
+ * How "this call carries no work deadline" is spelled for a mechanism that
+ * insists on a timer: the largest delay a `setTimeout` honours, 2^31-1 ms
+ * (~24.8 days). A larger number is clamped to a 32-bit int and the timer fires
+ * IMMEDIATELY, which is why "no deadline" cannot simply be a bigger number.
+ *
+ * NOT a policy bound. Nothing here decides how long work may take: an HTTP- or
+ * RPC-triggered Worker has no wall clock at all while its caller stays
+ * connected (PLATFORM_CATALOG `worker.wall.http_unlimited`), and a runaway
+ * program is stopped by the platform's own CPU limit rather than by a number
+ * one of us chose. The RPC lanes spell the same thing as `timeoutMs: 0` — see
+ * execution/device-tunnel-executor.ts, which has said "no work deadline" that
+ * way since it was written.
+ */
+export const NO_TIMER_DEADLINE_MS = 2_147_483_647;
+
 export type ExecutorToolResult = JsonValue | undefined;
 
 export interface ExecutorTool {
@@ -90,6 +106,14 @@ export interface ExecutorStatus {
   active: boolean;
   status: ExecutorLifecycleStatus;
   reason?: string;
+  /** The environment's own name, when it HAS one the user chose — a linked
+   *  device is "ashish@studio", not "laptop". Absent where the namespace is
+   *  the only name there is (workspace, sandbox). */
+  label?: string;
+  /** Whether this agent already holds the environment's access grant. Only a
+   *  consent-gated environment answers; absent means the question does not
+   *  arise. */
+  granted?: boolean;
 }
 
 /**
@@ -249,6 +273,12 @@ export interface ExecutorInfo {
   status: ExecutorLifecycleStatus;
   reason?: string;
   resourceLimits?: ResourceLimits;
+  /** The user-chosen name of the machine behind this row, when there is one
+   *  (a linked device). Every user-facing surface renders this, never the
+   *  namespace. */
+  label?: string;
+  /** Whether the reading agent holds this environment's access grant. */
+  granted?: boolean;
 }
 
 /**

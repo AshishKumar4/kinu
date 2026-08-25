@@ -2046,6 +2046,25 @@ export const PLATFORM_CATALOG = {
       + 'mistake for a platform number. A workspace command hitting exactly 30 s could be any '
       + 'of the three, and only the observable tells them apart.',
   },
+
+  'sandbox.exec.request_ceiling_ms': {
+    subject: "The Sandbox SDK's ceiling on one non-streaming container request, exec included",
+    limit: { value: 120_000, unit: 'ms' },
+    origin: 'platform',
+    bounds: 'duration',
+    evidence: 'proven-by-source',
+    provenance: 'node_modules/@cloudflare/sandbox/dist/sandbox-CPj2jsbz.js:961 DEFAULT_REQUEST_TIMEOUT_MS, @cloudflare/sandbox 0.12.8',
+    date: '2026-08-25',
+    trigger: 'one exec-style request still unanswered 120 s after dispatch',
+    onBreach: 'the SDK HTTP client abandons the request; the container-side command may keep running',
+    observable: [{ context: 'the caller', message: 'Request failed' }],
+    firstPartySignal: true,
+    notes:
+      "The VENDOR SDK's shipped default, not a Cloudflare runtime bound and not ours — filed "
+      + 'under platform because Kinu cannot widen it per call. It is why "no deadline" work '
+      + 'rides the process lane (startProcess + waitForExit installs no timer) instead of a '
+      + 'bigger exec timeout: execution/sandbox.ts routes on exactly this entry.',
+  },
 } as const satisfies Readonly<Record<string, PlatformFact>>;
 
 export type PlatformFactId = keyof typeof PLATFORM_CATALOG;

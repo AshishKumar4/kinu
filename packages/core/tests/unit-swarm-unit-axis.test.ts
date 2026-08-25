@@ -33,6 +33,27 @@ import {
 import { runSwarm } from '../src/strategy/swarm-run';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 
+/**
+ * A bindable objective naming the one registered instrument.
+ *
+ * Needed wherever a test wants a preset's MEASURED row: `verify` means an instrument,
+ * so a call that names none resolves to the row's judged sweep instead — the archive,
+ * the tree and the depth cap all arrive with the objective rather than with the name.
+ */
+const MEASURED = {
+  kind: 'scalar' as const, metric: 'oracle calls', unit: 'count',
+  direction: 'minimise' as const, scale: 'linear' as const, target: 8,
+  verify: {
+    kind: 'exec-ratio' as const,
+    spec: {
+      params: { n: 8 },
+      reference: 'export function solve(input, oracle) { return oracle(input); }',
+      body: 'export function solve(input, oracle) { return oracle(input); }',
+      targetOps: 8,
+      lowerBoundOps: 4,
+    },
+  },
+};
 /** A composition legal in every respect except the axis under test, so a refusal can
  *  only ever be about `unit` or `context`. */
 function unitCall(over: { unit: SwarmUnitSetting; context: BranchContext }) {
@@ -167,7 +188,9 @@ describe('the surface has SIX axes, and each cut value is refused by its own nam
     // so the row states 1 − 0.6 — and the presets resolve. The conversion is the point:
     // 0.6 written here unconverted is a stricter archive than the evidence describes.
     for (const preset of ['research', 'audit', 'redteam'] as const) {
-      const resolved = resolveSwarm({ preset, task: 'probe it', key: 'behaviour' });
+      const resolved = resolveSwarm({
+        preset, task: 'probe it', key: 'behaviour', objective: MEASURED,
+      });
       if ('reason' in resolved) throw new Error(`${preset} must resolve: ${resolved.error}`);
       expect(resolved.config.advance).toEqual({ kind: 'archive', novelty: 0.4 });
       expect(resolved.settle).toBe('archive');
@@ -192,15 +215,32 @@ describe('the surface has SIX axes, and each cut value is refused by its own nam
     expect(resolved.settle).toBe('best');
   });
 
-  test('`prove` without a checker is refused — the objective IS the checker', () => {
-    // Two steps, as shipped: the preset row resolves (*Presets*), then the resolved
-    // tuple is checked (*Validity over the resolved configuration*).
-    // `prove` scores by `verify`, and `verify` with nothing to measure is the refusal.
+  test('`prove` without a checker takes the judged sweep rather than refusing', () => {
+    // FLIPPED. This used to assert that a `prove` call with no `objective` was
+    // refused, which was true and was the defect: `prove` scores by `verify`, `verify`
+    // needs an instrument, so the shortest legal `prove` call was unreachable without
+    // authoring a whole spec — and five of the six presets had the same property. A
+    // measured incident spent five of a model's ten steps collecting those refusals
+    // one at a time, and the last of them said the instrument could not have run in
+    // that workspace at all.
+    //
+    // The checker is still what `prove` IS, and naming one still buys the depth-7
+    // best-first tree below. What changed is that omitting it yields a run instead of
+    // a scolding.
     const resolved = resolveSwarm({ preset: 'prove', task: 'show it' });
     if ('reason' in resolved) throw new Error(`prove must RESOLVE: ${resolved.error}`);
-    const illegal = swarmValidity(resolved);
-    if (!illegal) throw new Error('a prove call with no objective must be refused');
-    expect(illegal.error).toContain('objective');
+    expect(swarmValidity(resolved)).toBeNull();
+    expect(resolved.config.score.kind).toBe('judge');
+    expect(resolved.config.advance).toEqual({ kind: 'none' });
+    expect(resolved.caps.depth?.value).toBe(1);
+
+    // And with a checker it is the preset the doctrine describes.
+    const checked = resolveSwarm({ preset: 'prove', task: 'show it', objective: MEASURED });
+    if ('reason' in checked) throw new Error(checked.error);
+    expect(swarmValidity(checked)).toBeNull();
+    expect(checked.config.score).toEqual({ kind: 'verify' });
+    expect(checked.config.advance).toEqual({ kind: 'best-first' });
+    expect(checked.caps.depth?.value).toBe(7);
   });
 });
 

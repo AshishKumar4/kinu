@@ -91,6 +91,18 @@ export const TUNNEL_DISCONNECTED = 'device tunnel not connected';
  *  the throw sites without it. */
 export const NO_DEVICE_CONNECTED = 'no device connected';
 
+/**
+ * The frame the hub sends immediately after accepting a daemon socket, carrying
+ * that device's NEXT long-lived token: `{ type: 'ROTATE', token }`.
+ *
+ * Rotation rides the socket rather than an HTTP response because this is the
+ * one moment the machine has just proved possession of the current secret, and
+ * a secret in a URL is a secret in a log. The daemon persists it over its own
+ * `device.json`; the previous secret is honoured once more so a rotation lost
+ * with the socket cannot brick the machine.
+ */
+export const DEVICE_TOKEN_ROTATION = 'ROTATE';
+
 /** Both the hub's "no socket" rejection and the tunnel's "socket dropped"
  *  rejection mean the same thing to callers: the device is not connected. */
 export function isDeviceNotConnectedError<T>(err: T): boolean {

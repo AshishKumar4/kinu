@@ -79,14 +79,56 @@ function absentError(mount: VfsMount, path: string): Error {
 }
 
 /**
+ * Mutations some planes implement natively past the base VFS contract: Nimbus
+ * renames without reading the bytes and removes a tree in one bounded
+ * statement. The composite plane forwards them where the routed tree has
+ * them, so a workspace rename through the mount table stays free.
+ */
+export interface VfsNativeMutations {
+	rename(oldPath: string, newPath: string): Promise<void>;
+	removeRecursive(path: string): Promise<void>;
+}
+
+/** The routed tree's native mutations, where it declares them. A widening
+ *  assignment, not a cast: the extras are optional, and vfs/nimbus-workspace.ts
+ *  is the producer whose members carry exactly these signatures. */
+function nativeMutations(files: VFS): Partial<VfsNativeMutations> {
+	const probed: VFS & Partial<VfsNativeMutations> = files;
+	return probed;
+}
+
+/**
+ * Depth-first tree removal spelled in base VFS ops, for planes with no native
+ * removal. Children first, the directory itself last via `unlink`, so a plane
+ * whose unlink refuses directories fails naming its own refusal instead of
+ * half-working silently.
+ */
+export async function removeTreeWithVfsOps(files: VFS, path: string): Promise<void> {
+	const st = await files.stat(path);
+	if (!st) throw makeVfsError('ENOENT', 'no such file or directory', path);
+	if (st.isDir) {
+		for (const name of await files.readdir(path)) {
+			await removeTreeWithVfsOps(files, path === '/' ? `/${name}` : `${path}/${name}`);
+		}
+	}
+	await files.unlink(path);
+}
+
+/**
  * `base`, extended by `mounts`. Base routes pass through untouched — relative
  * paths, absolute paths, everything the workspace owns. A mount route
  * delegates with the mount prefix stripped (`/pc/home/me.txt` reads the
  * machine's `/home/me.txt`), and an absent mount refuses every reading or
  * mutating call with ENXIO carrying the stated absence, answers `exists`
  * false and `stat` null.
+ *
+ * Beyond the base contract the plane carries `rename` and `removeRecursive`:
+ * native where the routed tree has them, spelled in base ops where it does
+ * not. A rename that would need to carry a directory's bytes across planes
+ * refuses (EPERM) rather than half-copying a tree; a mount point itself is an
+ * entry of THIS plane and refuses both mutations.
  */
-export function withMountTable(base: VFS, mounts: readonly VfsMount[]): VFS {
+export function withMountTable(base: VFS, mounts: readonly VfsMount[]): VFS & VfsNativeMutations {
 	const byName = new Map(mounts.map((m) => [m.name, m]));
 
 	/** Split a path into its mount route (`/pc/a/b` → pc, `/a/b`) or a base
@@ -132,7 +174,13 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): VFS {
 			const files = routed.mount.files();
 			// An absent mount names nothing: null, the VFS contract for absent,
 			// rather than an error that would fail a mere existence probe.
-			return files ? files.stat(routed.native) : null;
+			if (!files) return null;
+			// The mount point itself is a directory of this plane by construction.
+			// Some trees cannot stat their own root (the container derives stat
+			// from the parent listing, and '/' has no parent entry), which typed
+			// /sandbox as a file in the root listing.
+			if (routed.native === '/') return { size: 0, mtimeMs: 0, isDir: true };
+			return files.stat(routed.native);
 		},
 		unlink(path) {
 			return delegate(path, (files, native) => files.unlink(native));
@@ -145,6 +193,43 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): VFS {
 			if (!('mount' in routed)) return base.exists(path);
 			const files = routed.mount.files();
 			return files ? files.exists(routed.native) : false;
+		},
+		async rename(oldPath, newPath) {
+			const from = routeOf(oldPath);
+			const to = routeOf(newPath);
+			if (('mount' in from && from.native === '/') || ('mount' in to && to.native === '/')) {
+				throw makeVfsError('EPERM', 'a mount point cannot be renamed', oldPath);
+			}
+			if ('mount' in from && 'mount' in to && from.mount === to.mount) {
+				const files = from.mount.files();
+				if (!files) throw absentError(from.mount, oldPath);
+				const native = nativeMutations(files).rename;
+				if (native) return native.call(files, from.native, to.native);
+			} else if (!('mount' in from) && !('mount' in to)) {
+				const native = nativeMutations(base).rename;
+				if (native) return native.call(base, oldPath, newPath);
+			}
+			// No native rename on this route, or the rename crosses planes: bytes
+			// can carry a file, and only a file — a directory move here would be
+			// an unbounded tree copy wearing a rename's name.
+			const st = await delegate(oldPath, (files, native) => files.stat(native));
+			if (!st) throw makeVfsError('ENOENT', 'no such file or directory', oldPath);
+			if (st.isDir) {
+				throw makeVfsError('EPERM', 'a directory cannot be renamed here — this route has no native rename, and only a file\'s bytes can be carried', oldPath);
+			}
+			const bytes = await delegate(oldPath, (files, native) => files.readFile(native));
+			await delegate(newPath, (files, native) => files.writeFile(native, bytes));
+			await delegate(oldPath, (files, native) => files.unlink(native));
+		},
+		async removeRecursive(path) {
+			const routed = routeOf(path);
+			if ('mount' in routed && routed.native === '/') {
+				throw makeVfsError('EPERM', 'a mount point cannot be removed', path);
+			}
+			return delegate(path, (files, native) => {
+				const native0 = nativeMutations(files).removeRecursive;
+				return native0 ? native0.call(files, native) : removeTreeWithVfsOps(files, native);
+			});
 		},
 	};
 }

@@ -6,7 +6,6 @@
 // of whether its duration was genuinely unknown (`run`, `execute_tools`) or
 // long by construction (`agents` fork). This file pins the fix at the wiring
 // layer: `agents` fork is 'spawn'-shaped and detaches the moment its spawn is
-// confirmed — but ONLY on a surface whose session outlives the turn to
 // receive the wake (policy.wakesAfterTurn); `run`/`execute_tools` stay
 // 'result'-shaped and always ride the timed race, on every surface.
 import { describe, test, expect } from 'bun:test';
@@ -14,7 +13,7 @@ import { jsonSchema, tool, type ToolSet } from 'ai';
 import { toolExecute } from '@kinu.run/test-utils';
 import { BACKGROUNDABLE_TOOLS } from '../src/orchestrator/background-tools';
 import { wrapToolsForBackground } from '../src/jobs/background-wrap';
-import { readSpawnStarted, BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome } from '../src/jobs/index';
+import { readSpawnStarted, BACKGROUND_POLICY, invocationBackgroundPolicy, type BackgroundPolicy, type DetachOutcome } from '../src/jobs/index';
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 type TestToolResult = object | string;
@@ -179,5 +178,35 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
     const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
     const out = await executeTool<RunInput>(wrapped, 'run')({ command: 'ls' });
     expect(out).toBe('command output');
+  });
+});
+
+describe('invocationBackgroundPolicy — the surface and session durability compose', () => {
+  // Two independent facts decide one invocation's policy. The SURFACE says who
+  // watches the stream, which is what the detach threshold costs. SESSION
+  // DURABILITY says whether a wake can arrive after the turn, which is the only
+  // thing `wakesAfterTurn` has ever meant. They come apart on a Durable Object:
+  // its unwatched turns (a drain, a wake itself, a timer) have no exit — alarms
+  // deliver wakes with nobody connected — so it takes the one-shot thresholds
+  // with wakes enabled. Keying both halves off one string is what gave cloud
+  // programmatic turns `wakesAfterTurn: false` on the very turn that proved a
+  // wake had arrived.
+  test('the CLI one-shot process keeps its measured no-wake policy', () => {
+    expect(invocationBackgroundPolicy('one-shot', false)).toEqual(BACKGROUND_POLICY['one-shot']);
+  });
+
+  test('a durable host on an unwatched surface detaches spawns — their wakes have a reader', () => {
+    const policy = invocationBackgroundPolicy('one-shot', true);
+    // Only the wake half moves: an unwatched turn still runs foreground work to
+    // the one-shot threshold, because truncating it buys nothing.
+    expect(policy.detachAfterMs).toBe(BACKGROUND_POLICY['one-shot'].detachAfterMs);
+    expect(policy.settleGraceMs).toBe(BACKGROUND_POLICY['one-shot'].settleGraceMs);
+    expect(policy.wakesAfterTurn).toBe(true);
+  });
+
+  test('the interactive rows pass through unchanged in both answers', () => {
+    expect(invocationBackgroundPolicy('interactive', true)).toEqual(BACKGROUND_POLICY.interactive);
+    expect(invocationBackgroundPolicy('interactive', true).detachAfterMs)
+      .toBe(BACKGROUND_POLICY.interactive.detachAfterMs);
   });
 });

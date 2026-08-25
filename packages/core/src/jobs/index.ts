@@ -11,6 +11,7 @@ export {
   withSpawnDetach,
   isBackgroundHandle,
   BACKGROUND_POLICY,
+  invocationBackgroundPolicy,
   SPAWN_STARTED_OPTION,
   readSpawnStarted,
   RESUME_REDRIVE_OPTION,
@@ -24,6 +25,7 @@ export {
 } from './threshold';
 export {
   BackgroundJobRunner,
+  BACKGROUND_FIBER_PREFIX,
   JobNotResumable,
   EVICTION_INTERRUPT_ERROR,
   backgroundJobWakeTrigger,

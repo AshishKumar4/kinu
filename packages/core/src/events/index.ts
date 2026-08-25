@@ -22,6 +22,7 @@ export { FAILURE_WITHOUT_ERROR } from './types';
 export {
   initRunEventTables,
   parseStoredRunEvent,
+  RunEventSchema,
   recordModelOperations,
   RunEventRecorder,
   type RunEventListener,
@@ -55,6 +56,8 @@ export {
   MODEL_OPERATION_PHASES,
   MODEL_OPERATION_OUTCOMES,
   beginModelOperation,
+  // buildModelCallEvent lives in a sibling module — see its header for why the
+  // pricing edge cannot sit in model-call.ts.
   type ModelCallReport,
   type ModelCallSpend,
   type ModelCallSink,
@@ -65,4 +68,6 @@ export {
   type ModelOperationPhase,
   type ModelOperationSink,
   type SpendSource,
+  type SpendTally,
 } from './model-call';
+export { buildModelCallEvent } from './model-call-event';

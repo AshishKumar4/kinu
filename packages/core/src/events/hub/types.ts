@@ -73,20 +73,31 @@ export type IngressKind =
 
 // ── Event variants ───────────────────────────────────────────────
 
-export type EventVariant =
-  | 'chat'             // operator message via chat_ws
-  | 'webhook'          // external HTTP push
-  | 'process_done'     // sandbox process completion
-  | 'timer'            // alarm fired
-  | 'peer_agent'       // cross-agent message
-  | 'subordinate_task'    // parent → subordinate assignment / conversational injection
-  | 'subordinate_report'  // subordinate → parent progress/completion report
-  | 'file_changed'     // sandbox FS event
-  | 'email'            // inbound email (Mission Inbox)
-  | 'internal'         // tool-emitted within the agent's own turn
-  | 'reply_request'    // pending owner-confirmation question
-  | 'mcp_chat'         // owner-authenticated MCP call
-  | 'mcp_third_party'; // third-party MCP call
+/**
+ * Every event variant, as an ARRAY — because a route validator needs the
+ * picklist and a reader needs the type, and hand-keeping the two in step failed:
+ * one backend mirrored these thirteen literals into its own valibot schema, so a
+ * fourteenth variant added here compiled in core and was silently rejected at
+ * that route. Derive both from this and a new variant reaches every surface or
+ * none.
+ */
+export const EVENT_VARIANTS = [
+  'chat',              // operator message via chat_ws
+  'webhook',           // external HTTP push
+  'process_done',      // sandbox process completion
+  'timer',             // alarm fired
+  'peer_agent',        // cross-agent message
+  'subordinate_task',    // parent → subordinate assignment / conversational injection
+  'subordinate_report',  // subordinate → parent progress/completion report
+  'file_changed',      // sandbox FS event
+  'email',             // inbound email (Mission Inbox)
+  'internal',          // tool-emitted within the agent's own turn
+  'reply_request',     // pending owner-confirmation question
+  'mcp_chat',          // owner-authenticated MCP call
+  'mcp_third_party',   // third-party MCP call
+] as const;
+
+export type EventVariant = (typeof EVENT_VARIANTS)[number];
 
 // ── Causality / identity ─────────────────────────────────────────
 

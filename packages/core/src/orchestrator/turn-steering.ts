@@ -108,6 +108,7 @@ import type { TurnSteeringRecord, TurnSteeringTrigger } from '../events/types';
 import type { PrepareStepContext, ToolCallContext, ToolResultContext } from '../extension';
 import type { AgentSignal } from '../types/signals';
 import type { BuiltinToolName } from '../tools/registry';
+import { codemodeProgramOf, codemodeReaches } from '../tools/codemode-reach';
 import type { RecoveryFinding } from '../evolution/recovery';
 import { fnv1a64 } from '../prompting/volatile-context';
 import { nanoid } from '../utils/nanoid';
@@ -174,6 +175,22 @@ const ARGS_ECHO_MAX_CHARS = 200;
 
 /** The tool the delegation steers name — the whole delegation ladder is one tool. */
 const DELEGATION_TOOL: BuiltinToolName = 'agents';
+
+/**
+ * Did this call delegate?
+ *
+ * Two ways to do it and both count. `agents(…)` is the native call. A codemode
+ * `agents.swarm({…})` arrives as one `execute_tools` call whose NAME is
+ * `execute_tools`, so reading the name alone scored it as no delegation at all —
+ * measured on the production turn that prompted this: five sandbox `agents.swarm`
+ * calls, and a durable `turn_steering` row reading `converted: false`. Every
+ * delegation-conversion number was under-reported by however much of the surface
+ * the model reached through the sandbox, which is most of it.
+ */
+function isDelegating(ctx: ToolCallContext): boolean {
+  return ctx.toolName === DELEGATION_TOOL
+    || codemodeReaches(codemodeProgramOf(ctx.toolName, ctx.args), DELEGATION_TOOL);
+}
 
 /** Marks the line as runtime-authored, exactly as the ephemeral context and
  *  turn context blocks do: the model must never read a harness steer as
@@ -455,7 +472,7 @@ export class TurnSteering {
   }
 
   onToolCall(ctx: ToolCallContext): void {
-    const delegating = ctx.toolName === DELEGATION_TOOL;
+    const delegating = isDelegating(ctx);
     if (delegating) this.delegated = true;
     if (this.startFired && delegating) this.startConverted = true;
     if (delegating) {
@@ -688,7 +705,7 @@ export class TurnSteering {
     const signature = callSignature(ctx.toolName, ctx.args);
     if (this.fired?.trigger === 'repeated_call') return signature !== this.repeating;
     if (this.fired?.trigger === 'no_progress') return !this.repeats.has(signature);
-    return ctx.toolName === DELEGATION_TOOL;
+    return isDelegating(ctx);
   }
 }
 

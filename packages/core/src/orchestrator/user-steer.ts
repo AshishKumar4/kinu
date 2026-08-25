@@ -27,6 +27,8 @@ import type { ModelMessage } from 'ai';
 import type { PrepareStepContext } from '../extension';
 import { StepInjections } from '../prompting/step-injections';
 import type { PromptFile } from '../types/backend-host';
+import type { JsonObject } from '../utils/json';
+import { nanoid } from '../utils/nanoid';
 
 /** One thing the user typed mid-turn, with any attachments it carried. */
 export interface UserSteer {
@@ -194,3 +196,46 @@ export type SteerStatusDetail =
  *  or an interrupt handed it back. Compatible with BroadcastEvent's
  *  `{ type: string; … }` shape. */
 export type SteerStatusEvent = SteerStatusDetail & { type: 'steer_status' };
+
+/** One landed steer as a durable user row, before a backend writes it. */
+export interface LandedSteerRow {
+  readonly id: string;
+  readonly text: string;
+  readonly atStep: number;
+  /** Both steer keys, always together — see {@link describeLandedSteers}. */
+  readonly metadata: JsonObject;
+}
+
+/**
+ * The durable rows one drain of landed steers becomes.
+ *
+ * Thin on purpose, and a seam anyway, because it holds two invariants that a
+ * hand-written loop breaks silently:
+ *
+ * BOTH KEYS OR NEITHER. A row carrying {@link STEER_METADATA_KEY} without
+ * {@link STEER_STEP_METADATA_KEY} reads as a steer whose position in the turn is
+ * unknown, which is the one thing the step index exists to state — and at rest
+ * that row is indistinguishable from an ordinary user turn, which is exactly the
+ * drift found on one backend.
+ *
+ * ONE ID SCHEME. A steer that reached a surface already has an id, and the queued
+ * and landed announcements must be the same object to that surface, so a
+ * pre-assigned id is kept. Only a steer that never had one is named here. That
+ * fallback was spelled twice inside one backend and about to be spelled a third
+ * time in the other.
+ *
+ * What stays per backend is genuinely irreducible: one appends Durable Object
+ * messages, the other inserts SQLite rows, and each broadcasts on its own
+ * channel.
+ */
+export function describeLandedSteers(
+  steers: readonly UserSteer[],
+  atStep: number,
+): readonly LandedSteerRow[] {
+  return steers.map((steer) => ({
+    id: steer.id ?? `steer-${nanoid(12)}`,
+    text: steer.text,
+    atStep,
+    metadata: { [STEER_METADATA_KEY]: true, [STEER_STEP_METADATA_KEY]: atStep },
+  }));
+}

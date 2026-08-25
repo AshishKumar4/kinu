@@ -332,6 +332,58 @@ export interface RatioMeasurement {
 const RESULT_LINE = /^RESULT (.*)$/m;
 
 /**
+ * The declaration a reference module must carry for {@link referenceAsExpression}
+ * to convert it.
+ *
+ * Exported so the registry's `spec` schema can REFUSE a reference without it,
+ * beside the other field complaints. It used to be enforced only here, at
+ * measurement time, which put it after `spec` validation had already passed: a
+ * model iterating on its spec fixed the shape complaints, got a clean parse, and
+ * only then learned about this one — one more round trip, in a production turn
+ * that had ten steps to spend.
+ */
+export const REFERENCE_SOLVE_DECLARATION = 'export function solve(';
+
+/**
+ * Can this instrument run in this workspace's shell AT ALL? `null` when it can,
+ * otherwise why not.
+ *
+ * Independent of any `spec`, and that is the point. `exec-ratio` runs
+ * `node <file>.mjs` in the workspace shell, and in a cloud workspace that shell's
+ * `node` shim resolves `esbuild-wasm` to its Node entry, which rejects the
+ * `wasmModule` option outright — so EVERY `.mjs` transform fails, no RESULT line
+ * is ever printed, and every `score:'verify'` search is dead on arrival for a
+ * reason no `spec` can fix. Measured in production: a model spent five of its ten
+ * steps discovering that one throw at a time, and the last two throws were this.
+ *
+ * The probe is the smallest program that exercises the same path a measurement
+ * does — write a module, run it under `node`, read a RESULT line off stdout — so a
+ * shell that passes it can run the harness, and a shell that fails it says why in
+ * the executor's own words.
+ */
+export async function preflightRatioHarness(ctx: MeasurementContext): Promise<string | null> {
+  verifications += 1;
+  const probeFile = `${MEASURE_PREFIX}probe_${String(Date.now())}_${String(verifications)}.mjs`;
+  try {
+    await ctx.vfs.writeFile(probeFile, `console.log('RESULT ' + JSON.stringify({ ok: 1 }));\n`);
+  } catch (error) {
+    return `the workspace filesystem would not accept the harness file ${probeFile}: `
+      + renderThrownChain({ cause: error });
+  }
+  let run: ExecOutcome;
+  try {
+    run = await ctx.exec(`node ${probeFile}`);
+  } catch (error) {
+    return `\`node ${probeFile}\` could not be run in this workspace's shell: `
+      + renderThrownChain({ cause: error });
+  }
+  const stdout = run.stdout ?? '';
+  if (RESULT_LINE.test(stdout)) return null;
+  return `\`node ${probeFile}\` printed no RESULT line (exit ${String(run.exitCode)}). `
+    + `stdout: ${stdout.slice(0, 400)} | stderr: ${(run.stderr ?? '').slice(0, 400)}`;
+}
+
+/**
  * Snapshot the agent's solution under a fresh name, write the harness beside it,
  * run it, and read the numbers off stdout.
  *
@@ -396,12 +448,17 @@ export async function runRatioMeasurement(
  * keyword is the whole conversion, and the shape is asserted rather than assumed
  * so a reference written differently fails here instead of being measured as
  * something it is not.
+ *
+ * Still a throw, and still reachable: the registry's `spec` schema now refuses a
+ * reference without the declaration, so a caller cannot get here through the tool
+ * surface — but an in-process caller passing a `RatioProblem` directly can, and a
+ * broken instrument must be red rather than measured.
  */
 function referenceAsExpression(reference: string): string {
-  if (!reference.includes('export function solve(')) {
+  if (!reference.includes(REFERENCE_SOLVE_DECLARATION)) {
     throw new Error('a RatioProblem reference must declare `export function solve(input, oracle)`');
   }
-  return `(() => { ${reference.replace('export function solve(', 'function solve(')}\nreturn solve; })()`;
+  return `(() => { ${reference.replace(REFERENCE_SOLVE_DECLARATION, 'function solve(')}\nreturn solve; })()`;
 }
 
 /**

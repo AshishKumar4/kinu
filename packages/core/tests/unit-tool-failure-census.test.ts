@@ -45,6 +45,7 @@ import { refusalText } from '../src/execution/exec-result';
 import { JsonObjectSchema, parseJsonValue } from '../src/utils/json';
 import { createTestRuntime } from './helpers';
 import type { RunEvent } from '../src/events/types';
+import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
 type ToolCallEnd = Extract<RunEvent, { type: 'tool_call_end' }>;
 
 let nextIndex = 0;
@@ -617,6 +618,7 @@ describe('each executor tool files its own failure in the right part', () => {
       readFile: async () => ({}), writeFile: async () => {}, listFiles: async () => ({ files: [] }),
       deleteFile: async () => {}, exposePort: async () => ({ url: '', port: 0 }),
       unexposePort: async () => {}, getExposedPorts: async () => [],
+        ...sandboxHandleLifecycle,
     })));
     expect(census.byKey).toEqual([['run·unavailable', 1]]);
     expect(parts(census)).toEqual(onlyPart('runtimeMissing'));
@@ -631,6 +633,7 @@ describe('each executor tool files its own failure in the right part', () => {
       readFile: async () => ({}), writeFile: async () => {}, listFiles: async () => ({ files: [] }),
       deleteFile: async () => {}, exposePort: async () => ({ url: '', port: 0 }),
       unexposePort: async () => {}, getExposedPorts: async () => [],
+        ...sandboxHandleLifecycle,
     })));
     expect(census.byKey).toEqual([['run·io', 1]]);
     expect(parts(census)).toEqual(onlyPart('broke'));

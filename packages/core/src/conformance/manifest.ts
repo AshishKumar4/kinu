@@ -357,6 +357,18 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-subordinate': { absent: SUBORDINATE_SCOPED('the workspace VFS baseline snapshot') },
       cli: WIRED,
     },
+    // One row per container lifecycle incident the workspace has been told
+    // about, carrying only whether that incident's announcement landed — the
+    // dedupe that makes a retrying container produce one turn rather than one
+    // per retry. Keyed to the WORKSPACE's container: a subordinate rides its
+    // parent's, so it has none of its own to be told about, and the CLI's
+    // executor is the host machine rather than a container that can be
+    // restored, snapshotted or discarded.
+    sandbox_lifecycle_incidents: {
+      'cf-orchestrator': WIRED,
+      'cf-subordinate': { absent: SUBORDINATE_SCOPED('the workspace container\'s lifecycle') },
+      cli: { absent: 'the local executor is the host machine, which has no snapshot, restore or discard stage to fail at' },
+    },
     turn_feedback: {
       'cf-orchestrator': WIRED,
       'cf-subordinate': { absent: SUBORDINATE_SCOPED('operator feedback capture') },

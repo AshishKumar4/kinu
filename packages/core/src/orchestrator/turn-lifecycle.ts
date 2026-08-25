@@ -39,6 +39,140 @@ export interface TurnRunRecorder {
   emit(runId: string, input: RunEventInput): void;
 }
 
+/**
+ * How a run ended, as the durable ledger names it.
+ *
+ * Three values, and they are the same three the CF turn driver already reports,
+ * so nothing here invents a vocabulary. It is a TYPE because it was a bare
+ * string: one backend sealed a user Stop as `'aborted'` and the other sealed the
+ * identical action as `'error'`, and every cross-backend reader of the run
+ * ledger — Supervise, eval triage — counted local stops as failures. Nothing
+ * mechanical held the two spellings together.
+ *
+ * DELIBERATELY STILL THREE. A fourth word for a turn cut mid-work was designed
+ * and dropped: the cloud loop's step ceiling was the only thing that could
+ * produce that state, and removing the ceiling removes the state. See
+ * {@link TURN_ENDED_MID_WORK} for what guards it instead, and why a ledger word
+ * no run can carry would have been worse than none.
+ */
+export const RUN_END_REASONS = ['completed', 'aborted', 'error'] as const;
+export type RunEndReason = (typeof RUN_END_REASONS)[number];
+
+/**
+ * The finish reason a step reports when it emitted tool calls.
+ *
+ * The AI SDK's own word (`ai`'s `FinishReason`), not ours. A step that ends this
+ * way had its tool results delivered and a further step due: the model was
+ * mid-work. So a turn whose LAST step says this did not reach an end of its
+ * own — something stopped it.
+ */
+export const TOOL_CALLS_PENDING = 'tool-calls';
+
+/**
+ * THE INVARIANT: a turn that reached its own end never has tool calls pending.
+ *
+ * Reported as a DEFECT rather than named in the ledger, and that is a decision
+ * with an argument behind it.
+ *
+ * The state was real and it shipped: `@cloudflare/think` OR-s
+ * `stepCountIs(this.maxSteps)` — default 10 — ahead of anything a caller passes,
+ * so four of four production turns that reached ten steps were cut with the model
+ * still emitting tool calls, and all four sealed `'completed'`. The obvious fix
+ * is a fourth ledger word. It is the wrong one, because the ceiling was the ONLY
+ * producer. Once the bound is a step count no turn can reach, nothing else can
+ * end a clean loop mid-work: Think's other stop condition
+ * (`hasToolCall(finalAnswerToolName)`) fires only for structured output, which no
+ * actor here requests — and would be a legitimate end if one did; every tool on
+ * the surface executes server-side, so no client-side tool can suspend the loop;
+ * a user Stop seals `'aborted'` and a throw seals `'error'`, both ahead of this
+ * check; a turn killed with its host writes no `run_end` row at all, which
+ * `RunEventRecorder.unterminatedModelOperations` already detects. Heads and swarm
+ * nodes DO run bounded stop conditions, and they journal rather than sealing a
+ * run, so they never reach here.
+ *
+ * A fourth word would therefore have been vocabulary no run could carry, spread
+ * across a union, a valibot mirror, two read models, a status dot and an
+ * analytics arm — every one of them a branch nothing reaches, and each one a
+ * thing a reader has to understand before concluding it never happens.
+ *
+ * What is owed instead is a tripwire. If this fires, one of the facts above
+ * stopped being true — a vendor release re-introducing a cap, an actor that
+ * starts asking for structured output, a client-side tool — and it is a defect in
+ * the loop, not a status for a user. It is `failure` and not `event` for exactly
+ * that reason: the run still seals `'completed'` because that is what the driver
+ * observed, and the diagnostic is the only thing that says the observation is
+ * impossible.
+ */
+export const TURN_ENDED_MID_WORK = 'turn.ended_mid_work';
+
+/** What the driver knows when a turn stops, before anyone has named it. */
+export interface RunEndFacts {
+  /** The turn reached its own end. */
+  readonly completed: boolean;
+  /** The turn was CUT — the user pressed Stop, or the host cancelled it. On the
+   *  CLI this is the `INTERRUPTED_TURN` identity check on the thrown error; on
+   *  CF it is the driver reporting status `'aborted'`. */
+  readonly interrupted: boolean;
+  /** The failure text, when the turn ended by throwing something that was not
+   *  an interruption. */
+  readonly errorText?: string | undefined;
+  /** The `finishReason` of the turn's LAST step (`acc.lastFinishReason`), or
+   *  absent when no step reported one. Carried for one purpose: a clean end whose
+   *  last word was {@link TOOL_CALLS_PENDING} is impossible, and this is the fact
+   *  that lets {@link TURN_ENDED_MID_WORK} say so. */
+  readonly lastFinishReason?: string | undefined;
+}
+
+/** A named run end, ready for {@link closeTurnRun}. Named rather than an
+ *  anonymous shape so the two fields travel as one decision — a caller cannot
+ *  take the reason and re-source the text from somewhere else. */
+export interface RunEndClassification {
+  readonly reason: RunEndReason;
+  /** The failure text, present only on an arm that HAS one. */
+  readonly error?: string;
+}
+
+/**
+ * Name a finished run from what the driver observed.
+ *
+ * Backends pass FACTS, never a chosen string — that is the whole point. The
+ * precedence is `interrupted` first: a cut turn is `'aborted'` even though it
+ * also threw, because a user who stopped the work did not cause a failure, and
+ * a ledger that records their Stop as an error makes the agent look broken
+ * every time somebody changes their mind.
+ *
+ * The interruption's own text is DROPPED on that arm. It is not evidence being
+ * discarded: the two arms are mutually exclusive at the throw site — a driver
+ * throws either the interruption or the provider's failure, and whichever it
+ * threw is what sets `interrupted` — so on this arm `errorText` can only ever be
+ * the interruption sentence restating the flag beside it. A run sealed
+ * `'aborted'` that still carries a failure sentence is the same drift wearing a
+ * new label.
+ *
+ * The completed arm additionally CHECKS its own impossibility — see
+ * {@link TURN_ENDED_MID_WORK}. The reason it reports is unchanged: this function
+ * names what the driver saw, and a defect in the loop is not a status for a user.
+ */
+export function classifyRunEnd(facts: RunEndFacts): RunEndClassification {
+  if (facts.interrupted) return { reason: 'aborted' };
+  if (facts.errorText) return { reason: 'error', error: facts.errorText };
+  // Neither finished nor threw anything nameable: still a failure, and saying
+  // so without inventing a cause is the honest row.
+  if (!facts.completed) return { reason: 'error' };
+  if (facts.lastFinishReason === TOOL_CALLS_PENDING) {
+    diagnostics.failure(TURN_ENDED_MID_WORK, toKinuError({
+      doing: 'seal a turn that reported a clean end',
+      cause: new Error(
+        'the turn\'s last step still had tool calls pending, so something stopped the loop '
+        + 'mid-work while reporting that it finished. The only thing that could do that was a '
+        + 'step ceiling the caller cannot widen; if this fired, a bound is back.',
+      ),
+      otherwise: 'unavailable',
+    }));
+  }
+  return { reason: 'completed' };
+}
+
 /** Open the turn's run in the durable event log: run_start (provenance) then
  *  turn_start (session turn index). Never throws — losing a history row must
  *  not fail a turn. */
@@ -78,7 +212,9 @@ export function closeTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
    *  Absent when no step reported anything — then `turn_end` carries no usage
    *  rather than a row of zeros nothing measured. */
   usage?: Usage | undefined;
-  reason: string;
+  /** From {@link classifyRunEnd}, never hand-picked — a bare string here is
+   *  what let one backend seal a user Stop as `'error'`. */
+  reason: RunEndReason;
   error?: string | undefined;
   /** The turn's bulk-ingestion budget (acc.context). A turn that neither
    *  admitted nor spilled bulk writes no row — `turn_end` is the denominator. */

@@ -37,6 +37,16 @@ import { isoDate } from '../utils/date';
 import * as v from 'valibot';
 import { UsageSchema } from '../usage';
 
+/**
+ * The durable fiber one search runs in.
+ *
+ * Exported for the same reason `BACKGROUND_FIBER_PREFIX` is: this module mints
+ * the name and each backend's fiber-recovery hook matches on it, so two
+ * literals in two packages would let a rename route an interrupted search into
+ * the "no recovery is defined for this lane" branch.
+ */
+export const SEARCH_FIBER_NAME = 'mcts';
+
 const BranchExplorationSchema = v.object({
   text: v.string(),
   usage: v.optional(UsageSchema),
@@ -154,7 +164,7 @@ export async function runMCTS(
   // than per branch per iteration.
   const reportedClampedEnsembles = new Set<number>();
 
-  return rt.schedule.fiber<ConvergenceResult>('mcts', async (ctx) => {
+  return rt.schedule.fiber<ConvergenceResult>(SEARCH_FIBER_NAME, async (ctx) => {
     // The durable search store is the resume source of truth when injected; the
     // fiber snapshot is the fallback for the inline/no-store path (tests).
     const snapshot = v.safeParse(MCTSPhaseSchema, ctx.snapshot);

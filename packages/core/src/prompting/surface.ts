@@ -101,6 +101,11 @@ export interface PromptExecutorInfo {
   /** Measured limits of the environment this executor's processes run in,
    *  when its environment declares any. Rendered as a live status suffix. */
   resourceLimits?: ResourceLimits;
+  /** The machine's own user-chosen name, when the environment has one. */
+  label?: string;
+  /** Whether this agent holds the environment's access grant already — what
+   *  tells the model whether its first call runs or raises a consent card. */
+  granted?: boolean;
 }
 
 export interface PromptExternalToolInfo {

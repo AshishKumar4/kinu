@@ -142,6 +142,37 @@ export const VERIFIER_KINDS = ['exec-ratio'] as const;
 export type VerifierKind = (typeof VERIFIER_KINDS)[number];
 
 /**
+ * What each registered kind measures and what its `spec` must carry — the ONE
+ * model-facing statement of both.
+ *
+ * IT LIVES HERE FOR THE REASON {@link VERIFIER_KINDS} DOES, one line up: the
+ * vocabulary is reachable from {@link swarmValidity} and the registry is not, so a
+ * refusal that wants to name the whole shape at CALL time has to read it from here.
+ * Without it the caller learned the shape one field at a time from the registry's own
+ * `bind`, which runs after the run has started — the measured incident this table
+ * exists to end: five round trips, four of them spent discovering a field.
+ *
+ * `specFields` is the field LIST and deliberately not a second copy of the schema.
+ * `verifier-registry.ts` owns the types, the ranges and the cross-field rules; this
+ * says which keys a caller has to send, which is the half a refusal has to print. The
+ * two are held together behaviourally rather than by comment: a test binds a spec
+ * carrying exactly these keys through the real registry and fails if the registry
+ * wants a key this list omits, or ignores one it names.
+ */
+export const VERIFIER_KIND_DOC = {
+  'exec-ratio': {
+    summary: 'counts the oracle calls a candidate spends against a reference solution run on the '
+      + 'same instance, so it fits a task whose cost you can count by RUNNING code',
+    specFields: ['params', 'reference', 'body', 'targetOps', 'lowerBoundOps'],
+  },
+} satisfies Record<VerifierKind, {
+  /** When this instrument is the right one, in the caller's terms. */
+  readonly summary: string;
+  /** Every key the kind's own schema requires inside `spec`. */
+  readonly specFields: readonly string[];
+}>;
+
+/**
  * A verifier declared as DATA, which is what makes {@link ObjectiveIdentity}'s
  * digest definable at all.
  *

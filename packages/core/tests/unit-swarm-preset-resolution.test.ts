@@ -15,20 +15,42 @@
  */
 import { describe, expect, test } from 'bun:test';
 import {
-  JUDGE_MARGINALISATION_MIN, NAMED_SWARM_PRESETS, SWARM_PRESET_POINTS, judgeCallPool,
+  JUDGE_MARGINALISATION_MIN, NAMED_SWARM_PRESETS, SWARM_PRESET_POINTS,
+  UNMEASURED_JUDGE_SAMPLES, judgeCallPool,
   resolveSwarm, swarmValidity,
   type ResolvedSwarm, type SwarmInput,
 } from '../src/strategy/swarm';
 import { judgeCallBudget } from '../src/mcts/evaluation';
 import { DEFAULT_CONFIG } from '../src/config';
-import type { Objective } from '../src/strategy/objective';
+import { resolveVerifier } from '../src/strategy/verifier-registry';
+import { VERIFIER_KIND_DOC, VERIFIER_KINDS } from '../src/strategy/objective';
+import type { ScalarObjective } from '../src/strategy/objective';
+import type { JsonObject } from '../src/utils/json';
 
-/** A measurable objective naming a REGISTERED instrument, which is what every
- *  verifying preset requires and what the archive presets bin their cells by. */
-const MEASURED: Objective = {
+/**
+ * A measurable objective naming a REGISTERED instrument, which is what every verifying
+ * preset requires and what the archive presets bin their cells by.
+ *
+ * ITS `spec` USED TO BE `{}`, and that passed because nothing checked a spec until the
+ * instrument was bound — one round trip into a started run. `swarmValidity` now names
+ * every field the kind needs at CALL time, so the fixture has to be an instrument that
+ * could actually run: an empty spec described a verifier that would have faulted the
+ * moment it was asked to measure anything.
+ */
+const EXEC_RATIO_SPEC: JsonObject = {
+  params: { n: 8 },
+  // The harness calls the reference by this exact name, which its own schema rule
+  // enforces — see `REFERENCE_SOLVE_DECLARATION`.
+  reference: 'export function solve(input, oracle) { return oracle(input); }',
+  body: 'export function solve(input, oracle) { return oracle(input); }',
+  targetOps: 8,
+  lowerBoundOps: 4,
+};
+
+const MEASURED: ScalarObjective = {
   kind: 'scalar', metric: 'oracle calls', unit: 'count', direction: 'minimise',
   scale: 'linear', target: 23,
-  verify: { kind: 'exec-ratio', spec: {} },
+  verify: { kind: 'exec-ratio', spec: EXEC_RATIO_SPEC },
 };
 
 /** The call each preset needs to be legal, and nothing beyond it. A preset that
@@ -211,5 +233,147 @@ describe('a judged tree is funded at the ensemble it was admitted at', () => {
     // stronger one's 28.5%, and SC(1)→SC(20) is worth +8.5. The number stays; what
     // changed is that a run admitted at it now runs at it.
     expect(JUDGE_MARGINALISATION_MIN).toBe(20);
+  });
+});
+
+describe('`{preset, task}` is a complete call on every row', () => {
+  // THE ERGONOMICS CONTRACT, and the reason it is a contract rather than a nicety.
+  //
+  // Five of the six rows score by `verify`, `verify` needs an instrument, and only one
+  // instrument is registered. So the shortest call the surface advertises refused on
+  // every row but `ideate`, and a live incident measured what that costs: a model spent
+  // five of its ten available steps collecting one refusal per round trip — a missing
+  // objective, an invented verifier kind, an empty spec, a missing coverage key — and
+  // the fifth told it the instrument could not have run in that workspace at all.
+  //
+  // The engine is deliberately NOT run here. What is under test is the call boundary:
+  // resolution and validity, which is where all five of those refusals were issued.
+
+  test('every declared preset resolves AND validates from `preset` and `task` alone', () => {
+    for (const preset of NAMED_SWARM_PRESETS) {
+      const resolved = resolveSwarm({ preset, task: 'work out what to do here' });
+      if ('reason' in resolved) {
+        throw new Error(`${preset} refused a bare call at resolve: ${resolved.error}`);
+      }
+      const invalid = swarmValidity(resolved);
+      if (invalid) throw new Error(`${preset} refused a bare call at validity: ${invalid.error}`);
+    }
+  });
+
+  test('a bare call on a verifying row is a judged sweep that selects and publishes nothing', () => {
+    // Each of the three axes that move reads a MEASUREMENT, so each of them is a lie
+    // without one: an archive bins by the instrument's witness, a tree selects on the
+    // value, and a record is keyed by the objective's identity. The fallback drops all
+    // three rather than accepting them and ignoring them.
+    for (const preset of NAMED_SWARM_PRESETS) {
+      const row = SWARM_PRESET_POINTS[preset];
+      if (row.config.score.kind !== 'verify') continue;
+      const resolved = resolveSwarm({ preset, task: 'x' });
+      if ('reason' in resolved) throw new Error(resolved.error);
+      expect(resolved.config.score).toEqual({ kind: 'judge', samples: UNMEASURED_JUDGE_SAMPLES });
+      expect(resolved.config.advance).toEqual({ kind: 'none' });
+      expect(resolved.config.carry).toEqual({ kind: 'none' });
+      expect(resolved.caps.depth?.value).toBe(1);
+      // The width is the row's own: the fallback changes the scorer, not the shape's
+      // breadth, so a bare `optimise` still fans the 3 its row declares.
+      expect(resolved.caps.branches?.value).toBe(row.branches);
+      // And the axes it did NOT touch stay the row's.
+      expect(resolved.config.unit).toEqual(row.config.unit);
+      expect(resolved.config.context).toBe(row.config.context);
+    }
+  });
+
+  test('naming an `objective` restores the row the doctrine describes', () => {
+    // The fallback is a fallback and not a replacement: everything a preset IS comes
+    // back the moment there is an instrument to measure with.
+    for (const preset of NAMED_SWARM_PRESETS) {
+      const row = SWARM_PRESET_POINTS[preset];
+      if (row.config.score.kind !== 'verify') continue;
+      const resolved = legal(callFor(preset));
+      expect(resolved.config).toEqual(row.config);
+      expect(resolved.caps.depth?.value).toBe(row.depth);
+    }
+  });
+
+  test('`custom` is NOT given the fallback — a composed `verify` still asks for its instrument', () => {
+    // The exclusion is deliberate. `custom` requires `config`, so a caller who wrote
+    // `score:{kind:'verify'}` asked for an instrument in as many words, and substituting
+    // a judge under them would be the surface overruling a decision they had made.
+    const composed = resolveSwarm({
+      preset: 'custom', label: 'composed-verify', task: 'x',
+      config: {
+        unit: { kind: 'answer' }, context: 'fresh', expand: 'sample',
+        score: { kind: 'verify' }, advance: { kind: 'none' }, carry: { kind: 'none' },
+      },
+    });
+    if ('reason' in composed) throw new Error(composed.error);
+    const refusal = swarmValidity(composed);
+    if (!refusal) throw new Error('a composed score:"verify" with no objective must be refused');
+    expect(refusal.error).toContain('score:"verify"');
+    // And the way out it names has to be one `custom` can actually take. The old text
+    // offered `score:"none"` to every preset, which a NAMED preset cannot set at all.
+    expect(refusal.error).toContain('`config`');
+  });
+
+  test("the incident's call sequence collapses to one refusal, and it names a working call", () => {
+    const task = 'reduce the oracle calls our solver spends';
+    // CALL 1, the one the model actually made. It used to be refusal #1 of 5.
+    const bare = resolveSwarm({ preset: 'optimise', task });
+    if ('reason' in bare) throw new Error(bare.error);
+    expect(swarmValidity(bare)).toBeNull();
+
+    // A caller who volunteers an instrument anyway gets ONE refusal per mistake, and
+    // each one ends with a call that works rather than with the field it rejected —
+    // which is what turns five round trips into a choice between two.
+    const invented = resolveSwarm({
+      preset: 'optimise', task,
+      objective: { ...MEASURED, verify: { kind: 'script', spec: { path: 'measure.py' } } },
+    });
+    if ('reason' in invented) throw new Error(invented.error);
+    const kindRefusal = swarmValidity(invented);
+    if (!kindRefusal) throw new Error('an unregistered kind must be refused');
+    expect(kindRefusal.error).toContain('exec-ratio');
+    expect(kindRefusal.error).toContain('{action:"swarm", preset:"optimise", task:"…"}');
+
+    // An empty spec is refused ONCE naming every field, rather than one field per
+    // round trip — the shape that consumed three of the incident's five steps.
+    const empty = resolveSwarm({
+      preset: 'optimise', task,
+      objective: { ...MEASURED, verify: { kind: 'exec-ratio', spec: {} } },
+    });
+    if ('reason' in empty) throw new Error(empty.error);
+    const specRefusal = swarmValidity(empty);
+    if (!specRefusal) throw new Error('an empty spec must be refused');
+    for (const field of VERIFIER_KIND_DOC['exec-ratio'].specFields) {
+      expect(specRefusal.error).toContain(field);
+    }
+    expect(specRefusal.error).toContain('{action:"swarm", preset:"optimise", task:"…"}');
+  });
+
+  test('the documented spec fields are exactly the fields the registry binds', () => {
+    // THE ANTI-DRIFT PIN. `VERIFIER_KIND_DOC` lives in objective.ts because the
+    // registry cannot be imported from `swarmValidity` without closing a cycle, so the
+    // field list a refusal prints is not the schema that enforces it. This holds the
+    // two together behaviourally, in both directions.
+    for (const kind of VERIFIER_KINDS) {
+      const fields = VERIFIER_KIND_DOC[kind].specFields;
+      const full: JsonObject = Object.fromEntries(
+        fields.map((field) => [field, EXEC_RATIO_SPEC[field]]),
+      );
+      // SUFFICIENT: a spec built from the documented fields ALONE binds. A field the
+      // schema requires and this list omits would fail here.
+      const bound = resolveVerifier({ kind, spec: full });
+      if ('reason' in bound) throw new Error(`${kind}: documented fields did not bind: ${bound.error}`);
+      // NECESSARY: dropping any one of them refuses. A field this list names that the
+      // schema does not actually require would survive its own removal.
+      for (const omitted of fields) {
+        const partial: JsonObject = { ...full };
+        delete partial[omitted];
+        const refused = resolveVerifier({ kind, spec: partial });
+        if (!('reason' in refused)) {
+          throw new Error(`${kind}: spec bound without "${omitted}", so the doc names a field the schema ignores`);
+        }
+      }
+    }
   });
 });

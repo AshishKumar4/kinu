@@ -143,7 +143,10 @@ function renderRoleSection(surface: PromptSurface, render: RenderSection): strin
 
 function renderBuiltinToolLine(name: BuiltinToolName, render: RenderSection): string {
   const spec = BUILTIN_TOOL_SPECS[name];
-  return render(BUILTIN_TOOL_LINE, { name, summary: spec.summary, example: spec.example });
+  // No `summary`: it is line 1 of this tool's own schema description, which
+  // rides the same request (BUILTIN_TOOL_LINE says why). The index renders the
+  // name and the one real call, which nothing else carries.
+  return render(BUILTIN_TOOL_LINE, { name, example: spec.example });
 }
 
 function renderExternalToolLine(tool: PromptExternalToolInfo, render: RenderSection): string {
@@ -167,6 +170,13 @@ function renderToolsSection(surface: PromptSurface, render: RenderSection): stri
  *  drift the catalog exists to stop. */
 const WORKSPACE_MEMORY_MB = PLATFORM_CATALOG['worker.isolate.memory'].limit.value / (1000 * 1000);
 
+/** How the device row names the machine. The user's own name for it when they
+ *  gave one; otherwise the neutral phrase, because a row that says "laptop"
+ *  names an API namespace and not a computer anyone owns. */
+function deviceDisplayName(exec: PromptExecutorInfo): string {
+  return exec.label?.trim() || "your user's PC";
+}
+
 /** Which namespace's prose a selectable executor gets. The switch is here rather
  *  than in the template because the arms are four different sections, not four
  *  values of one. */
@@ -182,7 +192,11 @@ function renderExecutorLine(
       case 'sandbox':
         return render(SANDBOX_EXECUTOR_LINE, {});
       case 'laptop':
-        return render(LAPTOP_EXECUTOR_LINE, { cliLocal });
+        return render(LAPTOP_EXECUTOR_LINE, {
+          cliLocal,
+          deviceName: deviceDisplayName(exec),
+          granted: exec.granted === true,
+        });
       default:
         return render(GENERIC_EXECUTOR_LINE, { name: exec.name });
   }
@@ -205,14 +219,13 @@ function renderExecutorSection(surface: PromptSurface, render: RenderSection): s
   const devices = executors.filter((exec) => exec.name !== 'workspace');
   const lines = [
     ...devices.map((exec) => renderExecutorLine(exec, render, surface.backend)),
-    ...(laptopOffline ? [render(OFFLINE_LAPTOP_LINE, {})] : []),
+    ...(laptopOffline ? [render(OFFLINE_LAPTOP_LINE, { deviceName: deviceDisplayName(laptopOffline) })] : []),
     ...(workspace ? [renderExecutorLine(workspace, render, surface.backend)] : []),
   ];
   const previewExecutors = executors.filter((exec) => exec.capabilities?.includes('net_inbound'));
 
   return render(EXECUTORS_SECTION, {
     executorLines: lines.join('\n'),
-    manyRuntimes: executors.length > 1,
     workspaceRoot: WORKSPACE_ROOT,
     hasDevices: devices.length > 0,
     deviceNamespaces: devices.map((exec) => `\`${exec.name}.*\``).join(', '),
@@ -298,15 +311,37 @@ export function buildSystemPromptSync(
   const surface = compilePromptSurface(opts);
   const render = sectionRenderer(opts.sectionOverrides);
   return [
+    // Identity, then the hard rules, then the doctrine that bounds every tool
+    // call — in that order, at the front, where the model reads them first.
     readSoulForPrompt(opts.soulOverride),
     renderRoleSection(surface, render),
-    renderRuntimeContext(opts),
     renderOperatingGuidance(surface, render),
-    renderToolsSection(surface, render),
+    // Execution doctrine BEFORE the tool index: it is the constraint on every
+    // call the index then lists, and a rule read after the menu is a rule
+    // applied late. OpenAI's own ordering for a developer message is Identity
+    // → Instructions → Examples → Context
+    // (developers.openai.com/api/docs/guides/prompt-engineering, § Message
+    // formatting with Markdown and XML); the index is the Examples block (one
+    // real call per tool), so it follows the instructions rather than leading
+    // them.
     renderExecutorSection(surface, render),
+    renderToolsSection(surface, render),
     renderAgentStateSection(surface, render),
     opts.agentsMd?.length ? renderAgentsMdSection(opts.agentsMd) : '',
     opts.availableSkills?.length ? renderSkillsIndexSection(opts.availableSkills).trim() : '',
     opts.activeSkills ? renderActiveSkillsSection(stableActiveSkills(opts.activeSkills)).trim() : '',
+    // LAST, and this is the placement that matters most for cost. These four
+    // key-value pairs are the only VOLATILE bytes in an otherwise stable
+    // prefix: `Current date` turns over daily, `Model` per turn profile, `cwd`
+    // per session. Rendered third, as it was, a date rollover invalidated
+    // every byte after position ~350 — about 11.5 KB of prefix on a full cloud
+    // surface — because prefix caching matches a common PREFIX and stops at
+    // the first difference. Rendered last it invalidates only itself. Same
+    // reasoning the Turn-mode line was deleted for (see the note above
+    // `renderRuntimeContext`), applied to the section that note did not cover,
+    // and the same advice OpenAI gives directly: "keep content that you expect
+    // to use over and over in your API requests at the beginning of your
+    // prompt" and put Context "near the end".
+    renderRuntimeContext(opts),
   ].filter(Boolean).join('\n\n');
 }

@@ -146,7 +146,10 @@ import type { NodeWorkspaceProvisioner } from './node-workspace';
 import type { HeadReport, SerializedMessage } from '../heads/types';
 import { missionMeter, type MissionScope } from '../mission-budget';
 import type { WebSearchProvider } from '../web/index';
-import { resolveVerifier, type ResolvedVerifier } from './verifier-registry';
+import {
+  preflightVerifier, registeredVerifierKind, resolveVerifier, unregisteredKindRefusalFor,
+  type ResolvedVerifier,
+} from './verifier-registry';
 import {
   carrySuppression, floorMargin, isBetter, normalisedScore, PUBLISHING_CARRIES,
 } from './objective';
@@ -1692,6 +1695,37 @@ export async function runSwarm(
         + 'candidate is written to, so this run cannot place one for it to measure. Register a '
         + 'verifier kind and pass verify as {kind, spec}.');
     }
+    // ORDER MATTERS HERE, and it used to be wrong.
+    //
+    // Old order: validate `spec`, then build the measurement context, then
+    // measure the baseline. So a caller learned about its spec's fields first and
+    // about an instrument that cannot run in this workspace at all LAST — one
+    // refusal per attempt, each one a real turn step. Measured in production: a
+    // model spent five of its ten steps on that sequence (an unregistered kind, two
+    // spec-shape complaints, then two faulted baselines) and the turn was cut
+    // before it ever ran a search.
+    //
+    // New order: the kind, the shell, then whether THIS instrument can run in THIS
+    // shell, and only then the spec. Every refusal above the spec is one no spec
+    // could have avoided, so a caller is never sent to correct a field while the
+    // instrument behind it is unrunnable.
+    const kind = registeredVerifierKind(measured.verify.kind);
+    if (kind === null) return unregisteredKindRefusalFor(measured.verify.kind);
+    ctx = measurementContext(deps.rt);
+    if (!ctx) {
+      return unavailable('this workspace has no shell, so nothing can run a measurement in it — a '
+        + 'verifier is given a filesystem and a shell and this actor was wired neither. The call is '
+        + 'well-formed; the instrument is absent.');
+    }
+    const instrumentFault = await preflightVerifier(kind, ctx);
+    if (instrumentFault !== null) {
+      return unavailable(`the "${kind}" instrument cannot run in this workspace's shell, so no `
+        + `score:"verify" search can start here — and no \`spec\` would change that: ${instrumentFault}. `
+        + 'That is the instrument breaking rather than a candidate failing. Either take an objective '
+        + 'this workspace can measure, or DROP `objective` and re-issue the same preset: without one '
+        + 'a named preset runs a judged sweep at its own width, which needs no instrument at all. '
+        + 'Switching preset is not required and would cost you this one\'s width and unit.');
+    }
     const resolvedVerifier = resolveVerifier(measured.verify);
     if ('reason' in resolvedVerifier) return resolvedVerifier;
     verifier = resolvedVerifier;
@@ -1707,12 +1741,6 @@ export async function runSwarm(
       scale: measured.scale,
       verifierDigest: verifierDigestOf(measured.verify, resolvedVerifier.implementation),
     };
-    ctx = measurementContext(deps.rt);
-    if (!ctx) {
-      return unavailable('this workspace has no shell, so nothing can run a measurement in it — a '
-        + 'verifier is given a filesystem and a shell and this actor was wired neither. The call is '
-        + 'well-formed; the instrument is absent.');
-    }
     // *Measured baseline*: the baseline is measured on the workspace AS FOUND, before
     // any candidate exists. A fault here MUST NOT start the run — there is nothing to
     // normalise against and nothing to compare to.

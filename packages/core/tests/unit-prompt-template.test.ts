@@ -354,23 +354,37 @@ describe('templateContract — what a candidate must declare', () => {
 });
 
 describe('BUILTIN_TOOL_LINE — live in the system prompt', () => {
-  // Byte-identity is the whole landing condition: the template replaced a
-  // hand-written template literal and the prompt must not have moved one byte,
-  // so the layergate `system-prefix` digest is untouched by this conversion.
-  // `expected` is derived from the specs WITHOUT the engine, so it fails if the
-  // template's wording, spacing, em-dash or backticks drift.
+  // `expectedLine` is derived from the specs WITHOUT the engine, so this fails
+  // if the template's wording, spacing, em-dash or backticks drift.
+  //
+  // 2026-08-25: the line lost its `{{summary}}`. The summary is line 1 of the
+  // same tool's schema description, which ships in the same request, so the
+  // index was sending all eight of them twice (942 chars). The example is what
+  // only the index carries. The derivation is unchanged in kind — it just
+  // describes the one-line shape now — and the second test below makes the
+  // removal a PROVEN property rather than a note, so the duplicate cannot
+  // quietly come back.
   function expectedLine(name: BuiltinToolName): string {
     const spec = BUILTIN_TOOL_SPECS[name];
-    return `- **${name}** — ${spec.summary}\n  \`${spec.example}\``;
+    return `- **${name}** — \`${spec.example}\``;
   }
 
-  test('renders every built-in tool exactly as the hand-written literal did', () => {
+  test('renders every built-in tool as its name and its one real call', () => {
     for (const name of BUILTIN_TOOLS) {
       const spec = BUILTIN_TOOL_SPECS[name];
-      const rendered = BUILTIN_TOOL_LINE.render({
-        name, summary: spec.summary, example: spec.example,
-      });
+      const rendered = BUILTIN_TOOL_LINE.render({ name, example: spec.example });
       expect(rendered).toBe(expectedLine(name));
+    }
+  });
+
+  test('the line never carries the summary the schema description already ships', () => {
+    // The duplication this template was slimmed to remove. Asserted on the
+    // rendered line rather than on the source, so re-adding it through a
+    // promoted section override fails here too.
+    for (const name of BUILTIN_TOOLS) {
+      const spec = BUILTIN_TOOL_SPECS[name];
+      expect(BUILTIN_TOOL_LINE.render({ name, example: spec.example }))
+        .not.toContain(spec.summary);
     }
   });
 

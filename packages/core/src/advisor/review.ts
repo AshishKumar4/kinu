@@ -26,6 +26,8 @@ import * as v from 'valibot';
 import type { LLM } from '../types/primitives';
 import type { AgentSignal, SignalOutcome } from '../types/signals';
 import type { CompletedTurn, ToolCallRecord } from '../evolution/types';
+import { CompletedTurnSchema } from '../evolution/session-window';
+import { codemodeProgramOf, codemodeReaches } from '../tools/codemode-reach';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
 import { stableStringify } from '../safety/argument-digest';
@@ -296,13 +298,24 @@ function renderToolCall(call: ToolCallRecord): string {
  * was available, and a note naming a capability the actor never had is worse
  * than no note. Empty means the caller could not say, and then the class is
  * simply not offered.
+ *
+ * A capability is USED whether it was called natively or reached through the
+ * sandbox. Both matter here because the unused list is the ONLY input to the
+ * missed-capability class: with `called` read off native names alone, the
+ * production turn that delegated five times through codemode would have been
+ * told `agents` went unused, and the likeliest note was one instructing the
+ * agent to delegate — which it had just done, five times, unsuccessfully.
  */
 export function buildAdvisorPrompt(turn: CompletedTurn, reachable: readonly string[] = []): string {
   const tools = turn.toolCalls.length === 0
     ? '  (none)'
     : turn.toolCalls.map(renderToolCall).join('\n');
   const called = new Set(turn.toolCalls.map((call) => call.name));
-  const unused = reachable.filter((name) => !called.has(name));
+  const programs = turn.toolCalls
+    .map((call) => codemodeProgramOf(call.name, call.args))
+    .filter((program) => program !== '');
+  const unused = reachable.filter((name) => !called.has(name)
+    && !programs.some((program) => codemodeReaches(program, name)));
   return [
     'You are reviewing one finished turn of an autonomous coding agent, for the agent itself.',
     '',
@@ -459,6 +472,39 @@ export interface AdvisorLaneDeps {
    *  exactly like one that works. */
   readonly record: (note: AdvisorNote, turnId: string | undefined) => void;
 }
+
+/**
+ * Everything one review needs, durably.
+ *
+ * The advisor lane's input is the completed turn plus three decisions taken at
+ * turn end, and none of it was recoverable: a lane interrupted by eviction used
+ * to terminalize as lost, so a turn that happened to end near a deploy silently
+ * got no advice. This is the snapshot that makes it re-enterable.
+ *
+ * A MIRROR OF THE LANE'S OWN DEPS, field for field, and that is deliberate: a
+ * snapshot carrying anything less would re-run the review against different
+ * inputs and produce advice about a turn that never happened. `llm`, `deliver`
+ * and `record` are the three deps NOT here, because each is a live seam the
+ * recovering host re-resolves for itself; `enabled` and `gateOpen` are absent
+ * for the same reason they are constants at the call site.
+ *
+ * `recent` is snapshotted rather than re-read, so the dedupe window the verdict
+ * is judged against is the one the TURN saw. Re-reading it on recovery would
+ * judge this turn's note against notes written after it, which is a different
+ * question and one nobody asked.
+ *
+ * Serializable by construction: {@link CompletedTurnSchema} is the same mirror
+ * `session_window` and `turn_review_queue` already persist a turn through, so a
+ * turn that cannot be snapshotted here could not have been stored there either.
+ */
+export const AdvisorRecoverySnapshotSchema = v.object({
+  turn: CompletedTurnSchema,
+  reachable: v.array(v.string()),
+  minSeverity: v.picklist(ADVISOR_SEVERITIES),
+  recent: v.array(v.string()),
+});
+
+export type AdvisorRecoverySnapshot = v.InferOutput<typeof AdvisorRecoverySnapshotSchema>;
 
 /**
  * One turn's review, end to end: the ONE turn-end policy, called by every

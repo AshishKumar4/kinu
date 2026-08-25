@@ -330,19 +330,25 @@ describe('a re-drive continues under the profile it started under', () => {
     // byte-identical — same task, no `preset`, no `objective`, same re-drive
     // marker — and differ ONLY in the role on the interrupted row they claim.
     //
-    // `lead`'s default is `ideate`, which is scored `none` and settles.
-    // `auditor`'s is `audit`, which is scored `verify` and REFUSES a composition
-    // with nothing to measure. So the outcome names which preset was resolved,
-    // and before this fix both calls took `ideate` and both ran.
+    // `lead`'s default is `ideate`, scored `none`. `auditor`'s is `audit`, which is
+    // scored `verify` and, with nothing to measure, resolves to its judged sweep. So
+    // the outcome names which preset was resolved, and before this fix both calls took
+    // `ideate` and both ran.
+    //
+    // THE DISCRIMINATOR MOVED and the property did not. It used to be `audit`'s
+    // `score:"verify"` REFUSAL, which is gone: a named preset with no objective is a
+    // legal call now, so `audit` re-drives into a judged sweep instead of a scolding.
+    // What still separates the two presets is that one of them ASKS A JUDGE — this
+    // harness scripts a model that returns nothing parseable, so the ensemble comes
+    // back empty and the run faults on its scorer. `ideate` is scored `none` and can
+    // never produce that, which is exactly the asymmetry the pair needs.
     const stored = harness({ envelope: envelopeOf(TIERS_V2, 2), roleId: 'lead' });
     seedInterruptedRun({ rt: stored.rt, task, roleId: 'auditor' });
     const refusal = v.parse(RefusalSchema, await stored.execute({
       action: 'swarm', task,
     }, REDRIVE));
-    expect(refusal.reason).toBe('bad_input');
-    // The refusal is `audit`'s own scoring axis asking for its instrument. An
-    // `ideate` re-drive cannot produce this message: it is scored `none`.
-    expect(refusal.error).toContain('score:"verify"');
+    expect(refusal.reason).toBe('unavailable');
+    expect(refusal.error).toContain('the judge faulted while scoring');
 
     const flat = harness({ envelope: envelopeOf(TIERS_V2, 2), roleId: 'lead' });
     seedInterruptedRun({ rt: flat.rt, task, roleId: 'lead' });
