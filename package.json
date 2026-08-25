@@ -19,7 +19,7 @@
     "test": "bun test --parallel=4 packages/agent-utils/ packages/core/ packages/compaction/",
     "test:cli": "bun scripts/test-cli.ts",
     "test:workerd": "vitest run --root packages/cf-backend tests/workerd/",
-    "check": "bun run lint && tsc --noEmit -p packages/agent-utils && tsc --noEmit -p packages/core && tsc --noEmit -p packages/compaction && tsc --noEmit -p packages/cf-backend && tsc --noEmit -p packages/cf-backend/tests/workerd && tsc --noEmit -p packages/cli-backend && tsc --noEmit -p packages/cli && tsc --noEmit -p packages/test-utils && tsc --noEmit -p tests && tsc --noEmit -p scripts/tsconfig.scripts.json && node --check packages/pc-agent/src/index.js",
+    "check": "bun run lint && tsc --noEmit -p packages/agent-utils && tsc --noEmit -p packages/core && tsc --noEmit -p packages/compaction && tsc --noEmit -p packages/cf-backend && tsc --noEmit -p packages/cf-backend/tests/workerd && tsc --noEmit -p packages/cli-backend && tsc --noEmit -p packages/cli && tsc --noEmit -p packages/devbox && tsc --noEmit -p packages/test-utils && tsc --noEmit -p tests && tsc --noEmit -p scripts/tsconfig.scripts.json && tsc --noEmit -p scripts/fixtures/r2-bench && tsc --noEmit -p scripts/fixtures/kinu-durability && node --check packages/pc-agent/src/index.js",
     "test:anti-slop": "tsc --noEmit -p tools/oxlint/anti-slop && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/rules.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/drift.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-swallow.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-wait-until.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-ambient-git.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-copy-rpc-stub.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-untyped-console.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/import-extension.gate.test.ts",
     "lint": "bun run test:anti-slop && oxlint",
     "deploy": "bash scripts/deploy.sh production",
@@ -50,6 +50,7 @@
     "smoke:workspace": "bun run --cwd packages/cf-backend smoke:workspace",
     "verify:lean": "bash scripts/verify-lean.sh",
     "bench": "bun scripts/bench.ts",
+    "bench:r2-workspace": "bun scripts/bench-r2-workspace.ts",
     "gate:install-scripts": "bun scripts/install-scripts-gate.ts",
     "gate:dependency-advisories": "bun scripts/dependency-advisory-gate.ts",
     "gate:patch-parity": "bun scripts/patch-parity.ts",
@@ -62,7 +63,9 @@
     "gate:infra": "bun scripts/infra-verify.ts",
     "infra:provision": "bun scripts/infra-provision.ts",
     "infra:teardown": "bun scripts/infra-teardown.ts",
-    "evals:full": "bash scripts/eval-tier.sh"
+    "evals:full": "bash scripts/eval-tier.sh",
+    "evals:cloud": "bash scripts/eval-tier.sh --backend cloud",
+    "staging:preflight": "bun scripts/staging-preflight.ts"
   },
   "knip": {
     "ignoreExportsUsedInFile": true,
@@ -124,7 +127,9 @@
     "wrangler": "^4.125.0"
   },
   "patchedDependencies": {
-    "@plannotator/ui@0.30.0": "patches/@plannotator%2Fui@0.30.0.patch"
+    "@plannotator/ui@0.30.0": "patches/@plannotator%2Fui@0.30.0.patch",
+    "@cloudflare/sandbox@0.12.8": "patches/@cloudflare%2Fsandbox@0.12.8.patch",
+    "@nimbus-sh/core@0.6.0": "patches/@nimbus-sh%2Fcore@0.6.0.patch"
   },
   "overrides": {
     "fast-uri": "^3.1.3"
