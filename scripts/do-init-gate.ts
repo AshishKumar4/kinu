@@ -81,6 +81,7 @@
 import { readFileSync } from 'node:fs';
 
 import { readSources } from './sources';
+import { sandboxLineage } from './egress-interception';
 import {
   blockBodyOf, classMembers, declaredName, functionOf, identifierCalleeName, isAsync,
   isFunctionLike, memberCalleeName, parse, returnTypeOf, superClassName,
@@ -165,7 +166,11 @@ function boundedStart(body: SyntaxNode): SyntaxNode | undefined {
   return undefined;
 }
 
-export function auditFile(file: string, text: string): InitGateAudit {
+export function auditFile(
+  file: string,
+  text: string,
+  containerLineage: ReadonlySet<string> = new Set(CONTAINER_START_BASES),
+): InitGateAudit {
   const parsed = parse(file, text);
   const inspected: { file: string; owner: string; hook: HookKind }[] = [];
   const violations: Violation[] = [];
@@ -174,7 +179,7 @@ export function auditFile(file: string, text: string): InitGateAudit {
     if (node.type !== 'ClassDeclaration') return;
     const owner = declaredName(node) ?? '(anonymous class)';
     const base = superClassName(node);
-    const hook: HookKind = base !== undefined && CONTAINER_START_BASES.includes(base)
+    const hook: HookKind = base !== undefined && containerLineage.has(base)
       ? 'container-start'
       : 'per-request';
     for (const member of classMembers(node)) {
@@ -226,9 +231,10 @@ export function auditFile(file: string, text: string): InitGateAudit {
 export function audit(sources: ReadonlyMap<string, string>): InitGateAudit {
   const inspected: { file: string; owner: string; hook: HookKind }[] = [];
   const violations: Violation[] = [];
+  const lineage = sandboxLineage(sources);
   for (const [file, text] of sources) {
     if (!text.includes('onStart')) continue;
-    const one = auditFile(file, text);
+    const one = auditFile(file, text, lineage);
     inspected.push(...one.inspected);
     violations.push(...one.violations);
   }
@@ -265,7 +271,7 @@ if (import.meta.main) {
     if (inspected.some((i) => i.hook === hook)) continue;
     problems.push(`found 0 ${hook} \`onStart\` implementations — `
       + (hook === 'container-start'
-        ? `no class extends any of: ${CONTAINER_START_BASES.join(', ')}`
+        ? 'no class belongs to the Sandbox lineage'
         : 'the matcher is not matching'));
   }
   if (problems.length > 0) {

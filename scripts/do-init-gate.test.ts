@@ -159,6 +159,21 @@ describe('DO init-gate purity — container-start hook', () => {
     expect(reasons(impostor))
       .toEqual([expect.stringContaining('must annotate `: void`')]);
   });
+
+  test('the Sandbox lineage holds indirect subclasses to the container rule', () => {
+    const sources = new Map([
+      ['devbox.ts', 'export class Devbox extends Sandbox {}'],
+      ['kinu-sandbox.ts', `export class KinuSandbox extends Devbox {
+        onStart(): Promise<void> { return this.restoreWorkspace(); }
+      }`],
+    ]);
+    const result = audit(sources);
+    expect(result.inspected).toEqual([
+      { file: 'kinu-sandbox.ts', owner: 'KinuSandbox', hook: 'container-start' },
+    ]);
+    expect(result.violations[0]?.reason)
+      .toContain('must route its work through `withContainerStartDeadline`');
+  });
 });
 
 describe('DO init-gate purity, against the real tree', () => {

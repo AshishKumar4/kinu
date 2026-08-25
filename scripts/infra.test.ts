@@ -195,17 +195,25 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
     expect(optional.findings).toEqual([]);
   });
 
-  test('a required absence the deploy itself creates is a voiced note, not a deadlock', () => {
-    // ControlPlaneDO's namespace lands with this deploy's migration; a gate
-    // that fails on its absence blocks the only thing that creates it. The
-    // tolerance is NOT silence: the note names the row on the green path.
-    const preDeploy = audit(
-      infrastructure, [...clean, row('durable-object.x:New', 'absent', true, 'wrangler-deploy')], [], [],
-    );
+  test('a deploy-created absence is tolerated only before the Worker exists', () => {
+    const missing = row('durable-object.x:New', 'absent', true, 'wrangler-deploy');
+    const preDeploy = audit(infrastructure, [
+      ...clean,
+      row('worker.kinu', 'absent', true, 'wrangler-deploy'),
+      missing,
+    ], [], []);
     expect(preDeploy.findings).toEqual([]);
-    expect(preDeploy.notes.length).toBe(1);
-    expect(preDeploy.notes[0]).toContain('durable-object.x:New');
-    expect(preDeploy.notes[0]).toContain('created by the deploy itself');
+    expect(preDeploy.notes.map((note) => note.includes('created by the deploy itself')))
+      .toEqual([true, true]);
+
+    const deployed = audit(infrastructure, [
+      ...clean,
+      row('worker.kinu', 'present', true, 'wrangler-deploy'),
+      missing,
+    ], [], []);
+    expect(deployed.notes).toEqual([]);
+    expect(deployed.findings).toHaveLength(1);
+    expect(deployed.findings[0]).toContain('durable-object.x:New');
   });
 
   test('a failed lookup fails even though nothing was observed missing', () => {

@@ -238,6 +238,15 @@ describe("deploy gate", () => {
     );
   });
 
+  test("gate status publication is atomic and a dead reporter fails closed", () => {
+    const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
+    expect(source).toContain('> "$dir/$pick.status.$BASHPID.tmp"');
+    expect(source).toContain('mv "$dir/$pick.status.$BASHPID.tmp" "$dir/$pick.status"');
+    expect(source).toContain('! kill -0 "${pids[index]}"');
+    expect(source).toContain("printf '%s\\n' '125'");
+    expect(source).toContain('gate process exited without reporting a status');
+  });
+
   test("the exclusion table in the runner is the one the ladder declares", () => {
     // Written twice because the runner is bash and cannot import the
     // declaration, so it is asserted once. Without this the measured reason

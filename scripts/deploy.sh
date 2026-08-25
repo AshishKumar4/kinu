@@ -182,7 +182,7 @@ flush_gates() {
   local dir; dir="$(mktemp -d "${TMPDIR:-/tmp}/kinu-gates.XXXXXX")"
   local settled=0 failures=0 index status
   local -a reported=()
-
+  local -a pids=()
   echo "Running $total gate(s), up to $jobs at once"
   for ((index = 0; index < total; index++)); do
     reported[index]=0
@@ -231,8 +231,15 @@ flush_gates() {
       # box ran out of memory on 2026-08-25. The box carries swap now; if
       # orphan accumulation returns, the fix is cgroup scopes at the suite
       # layer, not a longer deadline.
-      # shellcheck disable=SC2086
-      ( timeout --signal=TERM --kill-after=5s "$GATE_DEADLINE_SECONDS" ${GATE_CMDS[pick]} > "$dir/$pick.log" 2>&1; echo $? > "$dir/$pick.status" ) &
+      (
+        set +e
+        # shellcheck disable=SC2086
+        timeout --signal=TERM --kill-after=5s "$GATE_DEADLINE_SECONDS" ${GATE_CMDS[pick]} > "$dir/$pick.log" 2>&1
+        gate_status=$?
+        printf '%s\n' "$gate_status" > "$dir/$pick.status.$BASHPID.tmp"
+        mv "$dir/$pick.status.$BASHPID.tmp" "$dir/$pick.status"
+      ) &
+      pids[pick]=$!
     done
 
     # WAIT ONLY IF SOMETHING IS RUNNING, and never break before settling. An
@@ -246,6 +253,11 @@ flush_gates() {
 
     for ((index = 0; index < total; index++)); do
       if [ "${launched[index]}" -eq 0 ] || [ "${reported[index]}" -eq 1 ]; then continue; fi
+      if [ ! -f "$dir/$index.status" ] && ! kill -0 "${pids[index]}" 2>/dev/null; then
+        printf '%s\n' '125' > "$dir/$index.status.unreported.tmp"
+        mv "$dir/$index.status.unreported.tmp" "$dir/$index.status"
+        printf '%s\n' 'gate process exited without reporting a status' >> "$dir/$index.log"
+      fi
       if [ ! -f "$dir/$index.status" ]; then continue; fi
       reported[index]=1
       settled=$((settled + 1))

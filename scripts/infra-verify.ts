@@ -307,6 +307,9 @@ export function audit(
 ): Audit {
   const findings: string[] = [];
   const notes: string[] = [];
+  const workerDeployed = rows.some(
+    (entry) => entry.id.startsWith('worker.') && entry.verdict === 'present',
+  );
 
   for (const entry of rows) {
     if (entry.verdict === 'unknown') {
@@ -334,13 +337,15 @@ export function audit(
       }));
       continue;
     }
-    if (entry.verdict === 'absent' && entry.required && entry.origin === 'wrangler-deploy') {
-      // The deploy being gated is itself the provisioner for this resource
-      // (a DO namespace lands with its migration), so pre-deploy absence is
-      // the expected first-deploy state, not a gap this gate can act on. The
-      // note keeps it visible: a reader of a green run still sees which
-      // resources ride on the deploy about to run, and absence AFTER that
-      // deploy is the real defect to chase.
+    if (
+      entry.verdict === 'absent'
+      && entry.required
+      && entry.origin === 'wrangler-deploy'
+      && !workerDeployed
+    ) {
+      // The Worker is not deployed yet, and this deploy is itself the
+      // provisioner. Once the Worker exists, every absent required binding is
+      // a regression and falls through to the finding below.
       notes.push(`${entry.id} is absent and is created by the deploy itself — expected before `
         + 'the first deploy carrying its migration; verify it exists after this deploy lands');
       continue;
