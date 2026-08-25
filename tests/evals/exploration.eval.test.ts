@@ -49,7 +49,8 @@ import { createWorkspace } from '../../packages/core/src/identity/index';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import { makeWorkspaceSchemaSql, type CLIRuntime } from '../../packages/cli-backend/src/runtime';
 import {
-  buildEvalAgentSurface, recordRequestSurface, requireSandboxedExecutors,
+  buildEvalAgentSurface, installPreTurnProfile, recordRequestSurface,
+  requireSandboxedExecutors,
   type EvalAgentSurface,
 } from './harness';
 import {
@@ -156,6 +157,10 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     // trusted, because this suite spends real money to find out.
     ({ rt } = await openWorkspaceCLI(db, DB_PATH, { llm: LLM_CONFIG, hostRoot: null }));
     requireSandboxedExecutors('exploration-eval', rt);
+    // The wiring `LocalAgentSession` does for every turn-driving surface. The
+    // driven search's judge ensemble takes `rt.judgeModel ?? rt.llm`, so without
+    // it every rollout scores zero on an unwired runtime.
+    installPreTurnProfile(rt, LLM_CONFIG);
     // The model first, then the surface through the shared production
     // construction (`buildEvalAgentSurface`, harness.ts): same factory, same
     // craftedToolExecute, same codemode providers, same fork-deps shape.

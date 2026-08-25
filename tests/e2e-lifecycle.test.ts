@@ -20,7 +20,6 @@
 
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -32,7 +31,6 @@ import * as v from 'valibot';
 import {
   collectStepText,
   EvolutionEngine,
-  initWorkspaceSchema,
   type AgentRuntime,
   type LLMProviderConfig,
   type CompletedTurn,
@@ -46,20 +44,50 @@ import {
   JsonObjectSchema,
   projectJsonValue,
 } from '../packages/core/src/index';
-import { createWorkspace, openWorkspace } from '../packages/core/src/identity/index';
-import { openWorkspaceCLI } from '../packages/cli-backend/src/open';
-import { makeWorkspaceSchemaSql, type CLIRuntime } from '../packages/cli-backend/src/runtime';
-import { buildEvalAgentSurface, requireSandboxedExecutors } from './evals/harness';
+import { openWorkspace } from '../packages/core/src/identity/index';
+import type { CLIRuntime } from '../packages/cli-backend/src/runtime';
+import { buildEvalAgentSurface } from './evals/harness';
+import { provisionLocalTarget, type LocalAgentEvalTarget } from './evals/target-local';
 import {
-  liveChatModel, liveModelCallSink, liveModelTarget, recordLiveModelEpisode,
-  recordLiveModelSpend, reportLiveModelSpend, UNCONFIGURED_LLM,
+  EVAL_BACKEND_ENV, liveChatModel, liveModelCallSink, liveModelTarget, recordLiveModelEpisode,
+  recordLiveModelSpend, reportLiveModelSpend, resolveEvalBackend, UNCONFIGURED_LLM,
 } from '@kinu.run/test-utils';
+
+/**
+ * THIS SUITE IS THE IN-PROCESS LOOP, and it reads the target knob to say so.
+ *
+ * `chatTurn` below calls `generateText` over a `CLIRuntime` and drives
+ * `EvolutionEngine` and `runMCTS` directly, so every assertion here is about the
+ * inner API. A deployed workspace hands out no runtime, so this suite cannot
+ * answer the cloud target's questions at all — and running it under
+ * `KINU_EVAL_BACKEND=cloud` would report an in-process measurement inside a
+ * cloud arm's banner, with a `-cloud` report filename to match. That is the one
+ * error `tests/evals/target.ts` exists to remove, so the refusal is here rather
+ * than only in the tier's arm list: `scripts/eval-tier.sh` does not name this
+ * file on the cloud arm, and a shell that exports the variable by hand gets a
+ * named skip instead of a mislabelled green.
+ *
+ * The cross-target claim about `@cloudflare/think` belongs to
+ * `tests/evals/swarm.eval.ts`, whose cross-target arm provisions through the
+ * seam and drives whichever loop the plan named.
+ */
+const BACKEND = resolveEvalBackend();
+if (BACKEND.kind === 'refused') throw new Error(`E2E Lifecycle: ${BACKEND.reason}`);
+const IN_PROCESS = BACKEND.backend === 'local';
+if (!IN_PROCESS) {
+  console.warn(`[skip] E2E Lifecycle — ${EVAL_BACKEND_ENV}=cloud, and this suite certifies the `
+    + 'in-process turn loop over a CLIRuntime, which a deployed workspace does not hand out. '
+    + 'Unset it to run this suite; tests/evals/swarm.eval.ts is the arm that runs on both.');
+}
 
 // Proof against a real model, so a target is required. `liveModelTarget` states
 // which target and cost basis this run used, or why it is skipping — and throws
 // on a half-configured environment rather than skipping green.
-const TARGET = liveModelTarget('E2E Lifecycle');
+const TARGET = IN_PROCESS ? liveModelTarget('E2E Lifecycle') : null;
 const liveTest = test.skipIf(!TARGET);
+/** The credential-free arm still needs the in-process store, so it is gated on
+ *  the knob rather than on a credential. */
+const inProcessTest = test.skipIf(!IN_PROCESS);
 
 const LLM_CONFIG: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;
 
@@ -189,28 +217,34 @@ describe('E2E Lifecycle', () => {
   let events: EvolutionEvent[];
   let turns: CompletedTurn[];
   let model: LanguageModel;
+  let target: LocalAgentEvalTarget;
 
   beforeAll(async () => {
-    mkdirSync(TEST_DIR, { recursive: true });
-    db = new Database(DB_PATH);
-    db.exec('PRAGMA journal_mode = WAL');
-    // BIRTH, then OPEN. `createWorkspace` returns the birth runtime, whose
-    // `spawnBranch` throws by design (identity/create.ts:80) because a stub
-    // result would be indistinguishable from a real exploration — so `MCTS
-    // evolution` below could never pass on it, and did not, for as long as this
-    // suite had a credential. `openWorkspaceCLI` builds `createCLIRuntime`,
-    // which registers the real branch spawner, and is the same spine
-    // `kinu exec` runs.
-    await createWorkspace(db, { name: 'e2e-test', purpose: 'A coding assistant that helps write TypeScript.', llm: LLM_CONFIG });
-    // The whole schema from the one function that declares it, replacing three
-    // hand-picked init calls. They omitted `initShadowTables`, so
-    // `scaffold_evaluations` was absent — which is what a sibling suite died on
-    // mid-run. A hand-maintained subset of a schema drifts from it by default.
-    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    // `hostRoot: null` keeps every registered executor off the repo this suite
-    // was launched from, and the next line asserts it rather than trusting it.
-    ({ rt } = await openWorkspaceCLI(db, DB_PATH, { llm: LLM_CONFIG, hostRoot: null }));
-    requireSandboxedExecutors('e2e-lifecycle', rt);
+    // Nothing is provisioned on the cloud knob: a local workspace opened here
+    // would be an in-process store standing inside a cloud-labelled run, which
+    // is the mislabelling the skip above refuses.
+    if (!IN_PROCESS) return;
+    // PROVISIONED THROUGH THE SEAM. Birth, the whole-schema init, `openWorkspaceCLI`
+    // with `hostRoot: null`, the executor-surface and sandbox guards and
+    // `installPreTurnProfile` were spelled out here and identically in three sibling
+    // suites. Each step has a measured failure behind it — a hand-picked schema
+    // subset that omitted `initShadowTables` and killed a sibling mid-run, a birth
+    // runtime whose `spawnBranch` throws by design so `MCTS evolution` below could
+    // never pass, a default executor plane rooted at the repo this suite was
+    // launched from, and an unwired runtime whose every routed lane is dead so
+    // `reviewTurn`/`converge` throw before reaching a model. All four now live in
+    // ONE place instead of four, which is the point: a step learned once had to be
+    // remembered four times.
+    target = await provisionLocalTarget({
+      dir: TEST_DIR,
+      workspace: 'e2e-test',
+      purpose: 'A coding assistant that helps write TypeScript.',
+      llm: LLM_CONFIG,
+      model: liveChatModel(LLM_CONFIG),
+      evolution: true,
+    });
+    rt = target.runtime;
+    db = target.db;
     events = [];
     engine = new EvolutionEngine(rt, { enabled: true });
     engine.onEvent(e => events.push(e));
@@ -223,13 +257,21 @@ describe('E2E Lifecycle', () => {
     tools = buildEvalAgentSurface({ rt, model, llm: LLM_CONFIG }).tools;
   });
 
-  afterAll(() => {
+  afterAll(async () => {
+    // NOT recorded here, and the reason is measured rather than stylistic. This
+    // suite already records its episode inside the arm that drives one, at the
+    // moment that call returns. Recording again in teardown double-counted every
+    // live figure — and on a CREDENTIAL-FREE run, where the target is provisioned
+    // but no arm ever drives it, it reported `1 episode(s) UNMEASURED`: a suite
+    // announcing it drove work whose cost it could not account for, when it had
+    // driven none. An honest meter must not fire on a run that spent nothing.
     reportLiveModelSpend('E2E Lifecycle');
-    db.close();
-    rmSync(TEST_DIR, { recursive: true, force: true });
+    // Teardown owns the store and the directory. On a cloud target the same call
+    // DELETES the workspace, which is why it belongs to the target.
+    await target?.teardown();
   });
 
-  test('agent created with correct tables', async () => {
+  inProcessTest('agent created with correct tables', async () => {
     const tables = db.query<{ name: string }, []>(
       "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
     ).all().map(t => t.name);

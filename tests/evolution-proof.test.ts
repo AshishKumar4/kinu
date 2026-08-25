@@ -39,7 +39,7 @@ import { createWorkspace } from '../packages/core/src/identity/index';
 import { openWorkspaceCLI } from '../packages/cli-backend/src/open';
 import { makeWorkspaceSchemaSql, type CLIRuntime } from '../packages/cli-backend/src/runtime';
 import {
-  buildEvalAgentSurface, recordRequestSurface, requireSandboxedExecutors,
+  buildEvalAgentSurface, installPreTurnProfile, recordRequestSurface, requireSandboxedExecutors,
   type EvalAgentSurface, type RequestSurfaceEvidence,
 } from './evals/harness';
 import {
@@ -425,6 +425,10 @@ describe('Evolution Proof', () => {
     // branch spawner, and `hostRoot: null` keeps its executors off this repo.
     ({ rt } = await openWorkspaceCLI(db, DB_PATH, { llm: LLM_CONFIG, hostRoot: null }));
     requireSandboxedExecutors('evolution-proof', rt);
+    // The wiring `LocalAgentSession` does for every turn-driving surface. Every
+    // `reviewTurn` in this proof routes a reflection lane, so without it the
+    // whole cross-session comparison dies on the second turn.
+    installPreTurnProfile(rt, LLM_CONFIG);
     model = liveChatModel(LLM_CONFIG);
     engine = new EvolutionEngine(rt, { enabled: true });
     surface = buildEvalAgentSurface({ rt, model, llm: LLM_CONFIG });

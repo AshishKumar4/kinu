@@ -52,13 +52,15 @@ import * as v from 'valibot';
 
 import type {
   AgentRuntime, AgentsToolAction, AgentsForkDeps, AgentsToolDeps, BuiltinToolName,
-  EvalCase, LLMProviderConfig, RunEvent, SeekCursor, Shell,
+  EvalCase, LLMProviderConfig, ProfileCatalog, ProfileCatalogEnvelope,
+  ProviderCatalogSnapshot, Shell,
 } from '../../packages/core/src/index';
 import {
   RunEventRecorder, activePromptSectionOverrides, agentsActionsFor, buildActorTools,
   buildSystemPromptSync, classifyToolFailure, createAgentConfigStore, createFactsStore,
   createAgentsCodemodeProvider, createMemoryCodemodeProvider, createTasksCodemodeProvider,
-  currentDateForPrompt, initWorkspaceSchema, isBuiltinToolName, listRuns, TaskListStore,
+  currentDateForPrompt, initWorkspaceSchema, isBuiltinToolName, TaskListStore,
+  BUILTIN_PROFILE_CATALOG, profileCatalogDigest, resolveAgentTurnProfile,
 } from '../../packages/core/src/index';
 import {
   createDefaultWebSearchProvider, createWebCodemodeProvider,
@@ -72,9 +74,13 @@ import {
 import { createNodeExecuteToolFactory } from '../../packages/cli-backend/src/execute-tools-factory';
 import { createNodeCraftedExecute } from '../../packages/cli-backend/src/craft-executor';
 import {
-  hardTaskFor, recordLiveModelEpisode, scoreTrajectory, seedHardTask, verifyHardTask,
-  type EvalArmState, type EvalScoreRow, type HardTask,
+  hardTaskFor, ledgerTotalsFromEvents, recordLiveModelEpisode,
+  scoreTrajectory, seedHardTask, verifyHardTask, walkRunEvents,
+  type EvalArmState, type EvalScoreRow, type HardTask, type LedgerTotals,
 } from '@kinu.run/test-utils';
+import { DegenerateRunError } from './episode-failure';
+
+export type { LedgerTotals };
 
 /**
  * THE EVAL AGENT'S SURFACE, BUILT BY THE PRODUCTION ROOTS.
@@ -479,78 +485,22 @@ export async function seedWorkspaceTree(rt: AgentRuntime): Promise<void> {
   ].join('\n') + '\n');
 }
 
-/** Turn and tool-call counts plus token usage, read through the recorder so
- *  every payload is validated by the canonical union rather than by a shape
- *  written here. Limits are far above any corpus: the defaults (50 runs, 200
- *  events) would silently truncate a multi-turn task into a smaller
- *  denominator, which reads as an agent that acted less rather than a reader
- *  that stopped looking. */
-/** What the ledger says one episode did. EXPORTED because the research and
- *  optimization families read the same episode facts off their own stores, and
- *  a second walk would be a second thing to keep in step with the recorder. */
-export interface LedgerTotals {
-  turns: number;
-  toolCalls: number;
-  toolNames: string[];
-  tokensIn: number;
-  tokensOut: number;
-  reasoningOut: number;
-  /** Model steps the episode closed, counted from `step_finish`. Compared against
-   *  the pre-registered step cap to decide whether the episode was TRUNCATED —
-   *  which is the one number that keeps a cap from silently changing what a run
-   *  measured. */
-  steps: number;
-  /** Why a turn produced nothing. A degenerate run that cannot say why is a dead
-   *  end for whoever reads the record: "0 tool calls" is equally consistent with
-   *  a model that declined to act and a provider that rejected every request. */
-  failures: string[];
-}
-
+/**
+ * What one episode's ledger says it did, off a LOCAL store.
+ *
+ * ONE REDUCER AND ONE WALK, both the seam's. This function used to declare its
+ * own `LedgerTotals` interface and its own field-for-field copy of
+ * `walkRunEvents` + `ledgerTotalsFromEvents` — two reducers feeding every
+ * denominator in the corpus, which is exactly the drift the seam was written to
+ * remove, and the copies had already diverged in their commentary. The
+ * store-to-events step is the only thing that was ever local, so it is the only
+ * thing left here.
+ *
+ * `LedgerTotals` is re-exported rather than redeclared because the research and
+ * optimization families import it from this module.
+ */
 export function readLedgerTotals(db: Database): LedgerTotals {
-  const recorder = new RunEventRecorder(makeSql(db));
-  // A WALK, not a window. This is the whole ledger of a trial and a truncated
-  // one would understate the trial's own totals — the previous `listRuns(10_000)`
-  // was a guess that it would never be reached, which is the assumption the page
-  // contract exists to stop anyone having to make.
-  const events: RunEvent[] = [];
-  let cursor: SeekCursor | null = null;
-  for (;;) {
-    const page = listRuns(recorder, cursor);
-    for (const run of page.items) events.push(...recorder.read(run.runId, { limit: 100_000 }));
-    if (page.status === 'end') break;
-    cursor = page.next;
-  }
-  let turns = 0, toolCalls = 0, tokensIn = 0, tokensOut = 0, reasoningOut = 0, steps = 0;
-  const toolNames: string[] = [];
-  // Why a turn produced nothing. A degenerate run that cannot say why is a dead
-  // end for whoever reads the record: "0 tool calls" is equally consistent with
-  // a model that declined to act and a provider that rejected every request.
-  const failures: string[] = [];
-  for (const event of events) {
-    if (event.type === 'turn_end') {
-      turns += 1;
-      // FIELD RENAME ONLY (turn_end.tokenUsage -> turn_end.usage). The `?? 0`
-      // collapse is EvalsInfra's to remove: it makes "the turn reported no usage"
-      // indistinguishable from "the turn used zero tokens". The agreed
-      // replacement is addUsage/usageReported over a `Usage`, plus a count of
-      // unreported turns. Left in place because these records are theirs and
-      // mid-flight; this edit only keeps the build green.
-      tokensIn += event.usage?.input ?? 0;
-      tokensOut += event.usage?.output ?? 0;
-      reasoningOut += event.usage?.reasoning ?? 0;
-    } else if (event.type === 'tool_call_end') {
-      toolCalls += 1;
-      toolNames.push(event.name);
-      if (event.error != null && event.error !== '') failures.push(`${event.name}: ${event.error}`);
-    } else if (event.type === 'step_finish') {
-      steps += 1;
-    } else if (event.type === 'error') {
-      failures.push(event.message);
-    } else if (event.type === 'run_end' && event.error != null && event.error !== '') {
-      failures.push(`run_end: ${event.error}`);
-    }
-  }
-  return { turns, toolCalls, toolNames, tokensIn, tokensOut, reasoningOut, steps, failures };
+  return ledgerTotalsFromEvents(walkRunEvents(new RunEventRecorder(makeSql(db))));
 }
 
 /** How many run events one observation's provenance may carry. A long episode
@@ -578,15 +528,13 @@ const PROVENANCE_EVENT_BOUND = 500;
  * `threw`, `denied`, …) so a record can be triaged without reopening anything.
  */
 export function collectRunEventProvenance(db: Database): BehaviourProvenanceJson {
-  const recorder = new RunEventRecorder(makeSql(db));
-  const events: RunEvent[] = [];
-  let cursor: SeekCursor | null = null;
-  for (;;) {
-    const page = listRuns(recorder, cursor);
-    for (const run of page.items) events.push(...recorder.read(run.runId, { limit: 100_000 }));
-    if (page.status === 'end') break;
-    cursor = page.next;
-  }
+  // The seam's walk, for the reason `readLedgerTotals` uses it: this was the
+  // second of the two local copies the seam's own docstring names, and a third
+  // thing to keep in step with the recorder is how a reader gets a smaller
+  // denominator than the episode had. The SORT stays here because it is this
+  // record's own requirement — the walk is per-run and a published trail is read
+  // in time order.
+  const events = walkRunEvents(new RunEventRecorder(makeSql(db)));
   events.sort((a, b) =>
     a.timestamp.localeCompare(b.timestamp)
     || a.runId.localeCompare(b.runId)
@@ -629,23 +577,6 @@ export interface BehaviourHarnessOptions {
    *  reports what that case got through instead of losing it. Defaults to a
    *  no-op, which is what every non-resumable caller wants. */
   readonly onEvent?: (event: SessionEvent) => void;
-}
-
-/** Thrown when a trajectory recorded nothing gradable. A distinct type so the
- *  suite can record the observation as `inert` rather than `errored` — "the
- *  agent did nothing" and "the harness broke" are different facts and the run
- *  record must not conflate them. */
-export class DegenerateRunError extends Error {
-  constructor(
-    readonly taskId: string, readonly turns: number, readonly toolCalls: number,
-    readonly failures: readonly string[],
-  ) {
-    super(`degenerate run for ${taskId}: ${String(turns)} closed turns, `
-      + `${String(toolCalls)} tool calls — not a result. No mechanism could have been `
-      + 'exercised, so this contributes no score.'
-      + (failures.length > 0 ? ` Recorded failures: ${failures.join(' | ')}` : ''));
-    this.name = 'DegenerateRunError';
-  }
 }
 
 /**
@@ -747,6 +678,79 @@ export function requireSandboxedExecutors(taskId: string, rt: AgentRuntime): voi
       throw new UnsandboxedRuntimeError(taskId, executor.name);
     }
   }
+}
+
+/**
+ * Pin the model this suite ANNOUNCED as the profile its routed lanes resolve.
+ *
+ * WHAT A ROUTED LANE NEEDS. Every model lane on a local runtime reads a turn
+ * profile: `rt.judgeModel` / `rt.fastLlm` / `rt.advisorLlm` come from
+ * `resolveRoutedLane` (core/src/runtime-builder.ts:115-121) and `rt.llm.complete`
+ * routes `reflection` through `ensureProfile()` (cli-backend/src/runtime.ts:
+ * 395-420). A runtime with no profile and no resolver leaves all three lanes
+ * undefined and throws on the fourth.
+ *
+ * THAT HOLE IS NOW CLOSED IN THE PRODUCT, and this function is no longer what
+ * keeps a lane alive. `createCLIRuntime` installs its own authority
+ * (cli-backend/src/profile-authority.ts, wired at runtime.ts:405-426), so every
+ * runtime from `openWorkspaceCLI` routes by default and `setProfileResolver` has
+ * ZERO callers in the product — it survives on `CLIRuntime` as this override.
+ *
+ * WHY THE OVERRIDE SURVIVES ANYWAY: the cost basis has to be the model the run
+ * NAMED. Each live suite announces exactly one model through `liveModelTarget`
+ * and prints it as what the run is billed as. The runtime's own default derives
+ * its tier from the workspace's `agent_config` — which `createWorkspace` does not
+ * seed — and normalizes the spec through the local resolver, so it spells the
+ * same model differently (`workers-ai/@cf/...` rather than `@cf/...`). This pin
+ * makes the announced string the tier's string, and makes substitution impossible
+ * rather than merely unlikely: the catalog declares ONE tier and the provider
+ * snapshot lists ONE model, so every other tier aliases `default`
+ * (profiles/resolve.ts:5) and a model the banner never named cannot resolve.
+ *
+ * WHAT IT COST TO LEARN. Measured 2026-08-24 against staging, before the product
+ * default existed and before this function did: `E2E Lifecycle > 5-turn
+ * conversation` died in `engine.reviewTurn -> extractPattern`, `E2E Lifecycle >
+ * MCTS evolution` died 220s in at `converge` (`judge: rt.judgeModel ?? rt.llm`),
+ * and `Evolution Proof` lost all six of its tests the same way — eight failures
+ * on an unwired harness runtime rather than on anything an agent did. Every one
+ * of them is a locked skip, so no credential-free run could ever have seen it.
+ *
+ * The shape mirrors what a pinned-model session builds rather than inventing a
+ * policy: role read live from the workspace's own config so a role change lands
+ * on the next lane, work mode `build` as a session starts, and an empty tool
+ * surface because these lanes resolve TIERS and never call a tool.
+ */
+export function installPreTurnProfile(rt: CLIRuntime, llm: LLMProviderConfig): void {
+  const catalog: ProfileCatalog = {
+    roles: BUILTIN_PROFILE_CATALOG.roles,
+    tiers: { default: { model: llm.model } },
+  };
+  const envelope: ProfileCatalogEnvelope = {
+    authority: { kind: 'local' },
+    version: 0,
+    digest: profileCatalogDigest(catalog),
+    catalog,
+  };
+  // `revision` must change when the availability picture does
+  // (profiles/resolve.ts:46-53). This picture is one pinned model for the life
+  // of the suite, so the model id IS the revision.
+  const provider: ProviderCatalogSnapshot = {
+    revision: `eval-pinned:${llm.model}`,
+    availableModels: [llm.model],
+  };
+  const config = createAgentConfigStore(rt.storage.sql);
+  if (!rt.setProfileResolver) {
+    throw new Error('this runtime exposes no setProfileResolver, so its model lanes cannot be '
+      + 'wired and every judge, fast and reflection call would fail before reaching a model');
+  }
+  rt.setProfileResolver(() => Promise.resolve(resolveAgentTurnProfile({
+    envelope,
+    provider,
+    activeRoleId: config.getActiveRoleId(),
+    workMode: 'build',
+    availableTools: [],
+    activeSkills: [],
+  })));
 }
 
 /**

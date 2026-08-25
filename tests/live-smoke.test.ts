@@ -48,13 +48,15 @@ import { createWorkspace } from '../packages/core/src/identity/index';
 import { LocalAgentSession, type SessionEvent } from '../packages/cli-backend/src/local-session';
 import { openWorkspaceCLI } from '../packages/cli-backend/src/open';
 import { makeSql, makeWorkspaceSchemaSql } from '../packages/cli-backend/src/runtime';
-import { createCloudAgent, deleteCloudAgent } from '../packages/cli/src/cloud-api';
+import {
+  ActivitySpendSchema, callAgentRpc, createCloudAgent, deleteCloudAgent,
+} from '../packages/cli/src/cloud-api';
 import { CloudAgentClient } from '../packages/cli/src/cloud-agent-client';
 import { requireSandboxedExecutors } from './evals/harness';
 import {
   evalWorkspaceName, infraBoundary, liveChatModel, liveModelTarget, recordLiveModelEpisode,
-  recordLiveModelSpend, reportLiveModelSpend, scratchDir, UNCONFIGURED_LLM,
-  type LiveModelSession,
+  recordWorkspaceSpend, reportLiveModelSpend, scratchDir, UNCONFIGURED_LLM,
+  workerSession,
 } from '@kinu.run/test-utils';
 
 const TARGET = liveModelTarget('Live Smoke');
@@ -135,7 +137,7 @@ describe('Live Smoke — one real turn per backend', () => {
     // The error is reported and the loop continues: one undeletable agent must
     // not strand the rest, and it must never pass unmentioned.
     if (HOSTED) {
-      const { origin, token } = workerCredentials(HOSTED.llm);
+      const { origin, token } = workerSession(HOSTED.llm);
       for (const name of createdCloudAgents) {
         try {
           await deleteCloudAgent(origin, token, name);
@@ -150,7 +152,7 @@ describe('Live Smoke — one real turn per backend', () => {
 
   hostedTest('hosted backend: one real turn through the deployed worker', async () => {
     if (!HOSTED) throw new Error('unreachable: hostedTest runs only with a worker target');
-    const { origin, token } = workerCredentials(HOSTED.llm);
+    const { origin, token } = workerSession(HOSTED.llm);
 
     // `eval-…`, so a row that survives teardown says what made it. The account
     // this suite ran against once held 22 `drill*` workspaces and a
@@ -187,10 +189,25 @@ describe('Live Smoke — one real turn per backend', () => {
       );
       const elapsedMs = Date.now() - startedAt;
 
-      // One call per model step, usage unreported — see the header. Recorded
-      // before the assertions so a turn that fails an assertion still reports
-      // what it spent getting there.
-      for (let step = 0; step < turn.steps; step += 1) recordLiveModelSpend();
+      // WHAT THIS TURN COST, from the DEPLOYMENT'S OWN read model.
+      //
+      // `getActivitySnapshot().spend` is `workspaceSpend({events, sql})` computed
+      // inside the Durable Object (`orchestrator.ts:2711`), so the hosted arm now
+      // reports through the same seam every other arm does — one definition of
+      // what a workspace spent, real tokens included. What stood here counted one
+      // call per model step with usage UNREPORTED, because
+      // `AgentTurnResult.usage` is documented local-only: the websocket protocol
+      // carries no per-turn usage. That was honest but it was a call count where
+      // a reader takes a cost, and the tokens were reachable over RPC all along.
+      //
+      // Recorded before the assertions so a turn that fails one still reports
+      // what it spent getting there, and inside the boundary because a spend read
+      // that 5xx's is the deployment failing, not the agent.
+      recordWorkspaceSpend(
+        (await infraBoundary('reading the workspace spend read model', () => callAgentRpc(
+          origin, token, created.name, 'getActivitySnapshot', ActivitySpendSchema,
+        ))).spend,
+      );
 
       console.log(`    hosted turn: ${String(elapsedMs)}ms, ${String(turn.steps)} step(s), `
         + `tools [${turn.toolCalls.map((c) => c.name).join(', ')}]`);
@@ -230,7 +247,7 @@ describe('Live Smoke — one real turn per backend', () => {
 
   hostedTest('signed-in web app: create, rename, run, inspect, and use mobile panels', async () => {
     if (!HOSTED) throw new Error('unreachable: hostedTest runs only with a worker target');
-    const { origin } = workerCredentials(HOSTED.llm);
+    const { origin, token } = workerSession(HOSTED.llm);
     const browser = await puppeteer.launch(browserLaunchOptions());
     try {
       const page = await browser.newPage();
@@ -289,8 +306,16 @@ describe('Live Smoke — one real turn per backend', () => {
         'button',
         (buttons) => buttons.filter((button) => button.textContent?.includes('Wrote web-ui-smoke.txt')).length,
       )).toBe(1);
-      recordLiveModelSpend();
-      recordLiveModelSpend();
+      // Same read model as the hosted arm above, for the same reason: two
+      // hand-counted calls with no tokens is a call count standing where a
+      // reader takes a cost, and this workspace's real spend is one RPC away.
+      // The browser created it, so its name comes off the URL rather than from a
+      // create call, but the workspace is the same kind of workspace.
+      recordWorkspaceSpend(
+        (await infraBoundary('reading the web workspace spend read model', () => callAgentRpc(
+          origin, token, name, 'getActivitySnapshot', ActivitySpendSchema,
+        ))).spend,
+      );
 
       await clickAriaPrefix(page, 'Environment');
       await page.waitForFunction(
@@ -444,20 +469,3 @@ describe('Live Smoke — one real turn per backend', () => {
   }, 300_000);
 });
 
-/**
- * The worker origin and bearer behind a resolved worker-proxy target.
- *
- * Recovered from the target rather than re-read from `process.env`, so this file
- * cannot reach a different deployment than the one `liveModelTarget` announced
- * and the tier's banner printed.
- */
-function workerCredentials(llm: LLMProviderConfig): LiveModelSession {
-  const origin = llm.baseURL.replace(/\/api\/user\/ai\/v1$/, '');
-  if (origin === llm.baseURL) {
-    throw new Error(`live smoke: ${llm.baseURL} is not a worker AI-proxy base URL, so no worker `
-      + 'origin can be recovered from it');
-  }
-  const header = llm.headers['Authorization'];
-  if (!header) throw new Error('live smoke: the resolved worker target carries no Authorization header');
-  return { origin, token: header.replace(/^Bearer /, '') };
-}

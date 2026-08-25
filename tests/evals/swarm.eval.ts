@@ -59,35 +59,30 @@
  *
  * WHAT ONE RUN COSTS: see docs/TESTING.md, which carries the measurement.
  */
-import { mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
-import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import type { LanguageModel, ToolSet } from 'ai';
 
 import {
-  buildActorTools, execRatioImplementation, initWorkspaceSchema,
+  buildActorTools, execRatioImplementation,
   type AgentRuntime, type Floor, type JsonValue, type LLMProviderConfig,
   type ObjectiveIdentity,
 } from '../../packages/core/src/index';
-import { createWorkspace } from '../../packages/core/src/identity/index';
 import {
   bestInCell, floorDigestOf, recordsFor, verifierDigestOf,
 } from '../../packages/core/src/strategy/records';
-import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
-import { makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime';
-import { requireSandboxedExecutors, requireVerifierShell } from './harness';
+import { provisionLocalTarget, type LocalAgentEvalTarget } from './target-local';
+import { resolveEvalTarget } from './target';
 import {
-  EVAL_MODELS, HARD_TASKS, liveChatModel, liveModelTarget, recordLiveModelEpisode,
-  reportLiveModelSpend, toolExecute, UNCONFIGURED_LLM,
+  EVAL_MODELS, HARD_TASKS, ledgerTotalsFromEvents, liveChatModel,
+  recordTargetEpisodeSpend, reportLiveModelSpend, stepBoundEvidence, toolExecute,
+  UNCONFIGURED_LLM,
   type EvalTier, type HardTask,
 } from '@kinu.run/test-utils';
 
 const SUITE = 'Swarm Evals';
-const TARGET = liveModelTarget(SUITE);
-const liveTest = test.skipIf(!TARGET);
 
 /**
  * Which arm this process is. Flash is the volume arm, pro the small arm that
@@ -97,28 +92,45 @@ const liveTest = test.skipIf(!TARGET);
 const TIER: EvalTier = process.env.KINU_EVAL_TIER === 'pro' ? 'pro' : 'flash';
 
 /**
- * The model this run DRIVES, and it is the tier's.
+ * WHERE this run's agent lives, resolved once, and the model it DRIVES.
  *
- * `TARGET?.llm ?? UNCONFIGURED_LLM` stood here and read no tier at all, so
- * `resolveLiveModel`'s fallback decided the model: `DEFAULT_WORKERS_AI_MODEL_ID`
- * (`packages/core/src/providers/workers-ai.ts:6`), which is the PRO id. So
- * `KINU_EVAL_TIER=flash` billed this arm at pro and said nothing — the one arm
- * of four whose cost the tier switch did not reach, while `eval-tier.sh` gives
- * it its own spend file precisely so its cost can be read on its own.
+ * `liveModelTarget` alone stood here, so this suite could only ever measure the
+ * in-process runtime — while `eval-tier.sh` exported `KINU_EVAL_BACKEND=cloud`,
+ * named every report file `-cloud`, printed a CLOUD banner and ran this arm
+ * against the local loop anyway. The cross-target arm below states that it
+ * reaches `@cloudflare/think` under `=cloud`; the plan is what makes that true
+ * rather than aspirational.
  *
- * ONE id, spread from the tier, and every disclosure below reads it off THIS
- * config rather than re-deriving it from `EVAL_MODELS`. That is the half that
- * matters: the behaviour arm's own note records a run whose config carried one
- * id while its record wrote another, and two sources for "which model" is how a
- * reader is shown the cheaper one. `KINU_MODEL` is deliberately not honoured —
- * an arm chosen by two knobs is an arm that can be half-changed.
+ * ONE id, spread from the tier, read back off the PLAN. The model used to be
+ * spread here from a separately resolved target: `resolveLiveModel`'s fallback
+ * then decided it — `DEFAULT_WORKERS_AI_MODEL_ID`, the PRO id — so
+ * `KINU_EVAL_TIER=flash` billed this arm at pro in silence, the one arm of four
+ * whose cost the tier switch did not reach. `KINU_MODEL` is deliberately not
+ * honoured: an arm chosen by two knobs is an arm that can be half-changed.
  */
-const LLM_CONFIG: LLMProviderConfig = TARGET === null
-  ? UNCONFIGURED_LLM
-  : { ...TARGET.llm, model: EVAL_MODELS[TIER] };
+const PLAN = resolveEvalTarget(SUITE, EVAL_MODELS[TIER]);
+const LLM_CONFIG: LLMProviderConfig = PLAN?.llm ?? UNCONFIGURED_LLM;
+
+/**
+ * Which arms this target can carry.
+ *
+ * The IN-PROCESS arms call `tools.agents.execute` and read the settled result —
+ * the report, the caps, the candidate list — which is the richest thing this
+ * suite can assert and is expressible only over a `CLIRuntime`. They are local
+ * BY NATURE, not by omission, so on the cloud plan they skip and say so instead
+ * of provisioning a local workspace under a cloud banner. With no plan at all
+ * (no credential) they still run: the parse assertion below is a property of the
+ * shipped tool schema and costs nothing.
+ *
+ * `liveTest` gates on the plan rather than on a target, because the cross-target
+ * arm runs on either.
+ */
+const IN_PROCESS = PLAN === null || PLAN.backend === 'local';
+const liveTest = test.skipIf(PLAN === null);
+const inProcessTest = test.skipIf(!IN_PROCESS);
+const liveInProcessTest = test.skipIf(PLAN === null || !IN_PROCESS);
 
 const TEST_DIR = join(tmpdir(), 'kinu-eval-swarm-' + String(Date.now()));
-const DB_PATH = join(TEST_DIR, 'agent.db');
 
 /**
  * The instrument, taken from the SHIPPED CORPUS rather than written here.
@@ -442,35 +454,56 @@ type SwarmOutcome =
   | { readonly kind: 'ran'; readonly result: v.InferOutput<typeof SwarmResultSchema> };
 
 describe('Swarm evals — a live measured search through the settled tool surface', () => {
-  let db: InstanceType<typeof Database>;
+  let target: LocalAgentEvalTarget;
   let rt: AgentRuntime;
   let model: LanguageModel;
   let tools: ToolSet;
   let callSwarm: (args: SwarmCall, signal: AbortSignal) => Promise<SwarmOutcome>;
 
   beforeAll(async () => {
-    mkdirSync(TEST_DIR, { recursive: true });
-    db = new Database(DB_PATH);
-    db.exec('PRAGMA journal_mode = WAL');
-    // Birth, then OPEN — the two steps production takes, for the reason `harness.ts`
-    // states at length: the runtime `createWorkspace` returns is the degraded inline
-    // one with no `ExecutorProvider`, and a swarm on it would measure nothing
-    // because the verifier's `exec` is what runs the harness.
-    await createWorkspace(db, {
-      name: 'swarm-eval',
+    console.warn(`[swarm] ${PLAN?.describe ?? 'no live target — credential-free arms only'}`);
+    if (!IN_PROCESS) {
+      // NOT provisioned, and that is the fix rather than an omission. The arms
+      // below this block drive the INNER API, so on the cloud plan they cannot
+      // run at all — and opening a local workspace here would be a local
+      // measurement standing under a cloud banner, which is the one error the
+      // target seam exists to remove. The cross-target arm provisions its own.
+      console.warn(`[swarm/cloud] the in-process arms are SKIPPED: they call `
+        + 'tools.agents.execute and read the settled result over a CLIRuntime, which a '
+        + 'deployed workspace does not hand out. Run them with KINU_EVAL_BACKEND unset. '
+        + 'The cross-target arm below runs here and is what reaches @cloudflare/think.');
+      return;
+    }
+
+    // PROVISIONED THROUGH THE SEAM. Birth, `initWorkspaceSchema`, `openWorkspaceCLI`
+    // with `hostRoot: null`, the executor-surface and sandbox guards and
+    // `installPreTurnProfile` were all spelled out here, and identically in three
+    // sibling suites — so a step learned in one place had to be remembered in four.
+    // `provisionLocalTarget` is that sequence, once. Nothing about what this suite
+    // measures changes; the setup simply stopped being a fourth copy.
+    target = await provisionLocalTarget({
+      dir: TEST_DIR,
+      workspace: 'swarm-eval',
       purpose: 'An optimisation engineer who beats a measured baseline and proves it by running it.',
       llm: LLM_CONFIG,
+      model: liveChatModel(LLM_CONFIG),
+      evolution: false,
     });
-    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    // `hostRoot: null`: no `laptop` plane, so the only filesystem the nodes and the
-    // instrument can reach is this workspace's. The default plane is rooted at the
-    // repo this suite was launched from, and a node here writes files.
-    ({ rt } = await openWorkspaceCLI(db, DB_PATH, { llm: LLM_CONFIG, hostRoot: null }));
-    requireSandboxedExecutors('swarm-eval', rt);
-    // Asserted BEFORE anything is spent: this eval's ground truth is a command, so a
-    // shell-less runtime would score every candidate zero for a reason that has
-    // nothing to do with the model.
-    requireVerifierShell('swarm-eval', rt);
+    rt = target.runtime;
+
+    // THE VERIFIER PROBE, and this is the assertion that changed rather than moved.
+    // What stood here was `requireVerifierShell`, which asserts a shell EXISTS. The
+    // production incident was a shell that existed and could not run the only
+    // registered verifier kind: `exec-ratio` writes a `.mjs` harness and runs `node`
+    // on it, and the deployed Nimbus shim rejects esbuild-wasm's `wasmModule` option
+    // outside a browser, so every `score:'verify'` search there is dead on arrival.
+    // The old check passed throughout. This one RUNS the instrument's own shape and
+    // refuses on the verdict, which is the fact this eval's ground truth depends on.
+    const probe = await target.probe();
+    if (probe.verifier.kind !== 'runs') {
+      throw new Error(`swarm-eval cannot measure anything on this target: ${probe.verifier.reason}`);
+    }
+
     // The corpus task's own files, through the OPENED runtime's filesystem: the
     // reference the nodes read and the stub the instrument measures. Sequential
     // because two writes to one VFS are not independent.
@@ -506,13 +539,21 @@ describe('Swarm evals — a live measured search through the settled tool surfac
     };
   });
 
-  afterAll(() => {
+  afterAll(async () => {
+    // NOT recorded here. Each measured arm records its own episode the moment its
+    // call returns, however it returned — see the ordering note at the first one.
+    // Recording again in teardown would double every figure this arm publishes,
+    // and a per-arm liveness gate reading a doubled total is worse than one
+    // reading none.
     reportLiveModelSpend(SUITE);
-    db.close();
-    rmSync(TEST_DIR, { recursive: true, force: true });
+    // Teardown owns the store and the directory of the IN-PROCESS target only.
+    // The cross-target arm owns its own target's teardown in its own `finally`,
+    // because on the cloud plan that call deletes a workspace on the account and
+    // a run that threw must not leave a row behind waiting for this hook.
+    await target?.teardown();
   });
 
-  test('the settled surface is the path: swarm is offered, and an unknown field is refused by name', async () => {
+  inProcessTest('the settled surface is the path: swarm is offered, and an unknown field is refused by name', async () => {
     // CREDENTIAL-FREE, and the precondition every live assertion rests on. Both
     // halves are about the SAME tool instance the live run drives:
     //
@@ -542,7 +583,7 @@ describe('Swarm evals — a live measured search through the settled tool surfac
     expect(outcome.refusal.error).toContain('unknown field "budgetUsd" — did you mean "budget_usd"?');
   });
 
-  test('the arm drives the tier it declared', () => {
+  inProcessTest('the arm drives the tier it declared', () => {
     // CREDENTIAL-FREE, and the reason it exists: this arm read no tier at all,
     // so `resolveLiveModel`'s fallback chose the model and `KINU_EVAL_TIER=flash`
     // was billed at pro in silence. A default that a knob does not reach is not
@@ -558,10 +599,10 @@ describe('Swarm evals — a live measured search through the settled tool surfac
     // target cannot pass this vacuously.
     const driven = v.parse(v.object({ modelId: v.string() }), model);
     expect(driven.modelId).toBe(LLM_CONFIG.model);
-    expect(LLM_CONFIG.model).toBe(TARGET === null ? UNCONFIGURED_LLM.model : EVAL_MODELS[TIER]);
+    expect(LLM_CONFIG.model).toBe(PLAN === null ? UNCONFIGURED_LLM.model : EVAL_MODELS[TIER]);
   });
 
-  liveTest('MEASURED: a live swarm crowns a winner that beats its own measured baseline', async () => {
+  liveInProcessTest('MEASURED: a live swarm crowns a winner that beats its own measured baseline', async () => {
     const startedAt = Date.now();
     const outcome = await callSwarm({
       action: 'swarm',
@@ -582,6 +623,32 @@ describe('Swarm evals — a live measured search through the settled tool surfac
     }, AbortSignal.timeout(ENVELOPE_MS));
     const wallSeconds = (Date.now() - startedAt) / 1000;
 
+    // SPEND FIRST, BEFORE ANY PATH THAT CAN THROW. This line used to sit below
+    // the refusal check and the destructuring, so a swarm that ran and then
+    // refused reported ZERO model calls — and this arm's whole reason for being
+    // its own arm is that its zero has to be its own failure.
+    //
+    // Measured 2026-08-24 against staging: three nodes ran (7, 14 and 9 model
+    // steps; 9, 14 and 12 tool calls), one died on an upstream 500 after
+    // 711,990 ms, one was cut by the envelope at 1,199,641 ms, the call came
+    // back a refusal, the throw below fired, and the arm published
+    // `0 model call(s), unreported in / unreported out tokens`. The tier's
+    // per-arm liveness gate then correctly called the arm UNPROVEN — for a
+    // reason that was this ordering rather than an absent model, which is the
+    // worst kind of true alarm: it accuses the target and indicts nothing.
+    //
+    // `recordLiveModelEpisode` reads the store, so it is meaningful the moment
+    // the call returns however it returned, and it can be called on a workspace
+    // that spent nothing — an episode that reached no model increments
+    // `episodesUnmeasured` instead of adding a silent zero. So there is no exit
+    // path on which recording early is wrong, and one on which recording late
+    // loses the whole arm's cost.
+    // Through the SEAM rather than the store: `recordTargetEpisodeSpend` reads
+    // `workspaceSpend` on a local target and the deployment's own copy of the same
+    // read model on a cloud one, so this line keeps its meaning on either arm and
+    // there is still exactly one definition of what a workspace spent.
+    await recordTargetEpisodeSpend(target);
+
     // A REFUSAL IS REPORTED VERBATIM. The two shapes are different on purpose, and a
     // refusal's one sentence names what the call got wrong — which is worth more than
     // any assertion that could be made about it here.
@@ -592,16 +659,11 @@ describe('Swarm evals — a live measured search through the settled tool surfac
     const { result } = outcome;
     const { report, config, caps, best, candidates } = result;
 
-    // WHAT THIS RUN COST AND WHAT IT FOUND, printed unconditionally. The tier's own
-    // spend line is a total over suites; these are this run's numbers, and a
-    // measurement nobody printed is a measurement nobody can check.
-    //
-    // The ARM comes first, read off the config the run actually drove. This suite
-    // publishes no run record — no `publishRunRecord`, unlike the three
-    // vitest-evals arms — so this line is where the tier and the model id are
-    // disclosed, and a cost read without them is a cost that cannot be compared
-    // with yesterday's.
-    recordLiveModelEpisode(rt.storage.sql);
+    // WHAT THIS RUN FOUND. The ARM comes first, read off the config the run
+    // actually drove: this suite publishes no run record — no `publishRunRecord`,
+    // unlike the three vitest-evals arms — so this line is where the tier and the
+    // model id are disclosed, and a cost read without them is a cost that cannot
+    // be compared with yesterday's.
     console.log(`    arm ${TIER}, model ${LLM_CONFIG.model}`);
     console.log(`    wall ${wallSeconds.toFixed(1)}s, engine ${(report.durationMs / 1000).toFixed(1)}s, `
       + `${String(report.tokens ?? 'unreported')} tokens, ${String(report.expansions)} expansions, `
@@ -798,5 +860,124 @@ describe('Swarm evals — a live measured search through the settled tool surfac
     expect(report.durationMs).toBeGreaterThan(0);
     // 25 minutes: five above the 20-minute abort envelope, so the run ends through the
     // seam under test and a red says `stop:'aborted'` rather than `test timed out`.
+  }, 1_500_000);
+
+  /**
+   * THE CROSS-TARGET ARM: a real user turn asking for a search, graded over the
+   * ledger rather than over a tool's return value.
+   *
+   * WHY IT IS SEPARATE FROM THE ARM ABOVE, and not a replacement for it. That arm
+   * calls `tools.agents.execute` and reads the settled result — the report, the
+   * caps, the candidate list — which is the richest thing this suite can assert
+   * and is expressible only in-process. This one asks the AGENT to run a search
+   * and then reads what the workspace recorded, which is expressible on both
+   * targets. Neither substitutes for the other: the first proves the search
+   * MEASURES, the second proves the agent can REACH it through the loop it
+   * actually runs on.
+   *
+   * WHY IT IS THE ARM THAT MATTERS ON CLOUD. `agent://SwarmNoopRootCause` measured
+   * a production turn that reached the swarm tool five times, burned all ten of
+   * its steps on instrument refusals, and was cut with the model still emitting
+   * tool calls — reported as `run_end: 'completed'`. Every ledger row that could
+   * have shown it was empty, and no suite in this tree could reach the loop that
+   * did it: the LOCAL target's driver is core `runChat`, which is genuinely
+   * unbounded, and the cap lives in `@cloudflare/think`. Run this arm with
+   * `KINU_EVAL_BACKEND=cloud` and `plan.provision` hands it a real staging
+   * workspace, so it drives the capped loop instead.
+   *
+   * ITS OWN WORKSPACE, for two reasons that are one reason. It used to share the
+   * in-process arm's target, and the seam's own rule says why that cannot stand
+   * ("a suite runs many cases and each needs its own workspace: one workspace
+   * reused across cases would let case N's ledger rows be read as case N+1's"):
+   *
+   *   1. THE REACHABILITY ASSERTION WAS PRE-SATISFIED. The first arm's
+   *      `tools.agents.execute` call writes real search rows into that store, so
+   *      `searchRuns + canvasNodes + forkRuns > 0` held over the SAME store
+   *      whether or not this arm's agent ever reached the rung — the central
+   *      claim could pass while the agent declined.
+   *   2. ITS SPEND WAS UNACCOUNTABLE. `workspaceSpend` is a cumulative read over
+   *      a whole log, so recording a second episode on one workspace would
+   *      double the first arm's figures and recording nothing loses this arm's
+   *      multi-minute turn. Exactly-once is only expressible per workspace, and
+   *      that is what makes this a separate target rather than a tidier call.
+   *
+   * WHAT IT ASSERTS, and every one can fail. The step count is the primary
+   * instrument, so it is asserted as a NUMBER rather than as a bound: a run that
+   * stops at exactly ten with tool calls pending is the signature, and printing
+   * the count means a reader sees it whether or not the threshold moves.
+   */
+  liveTest('MEASURED: the agent reaches a search through the turn loop it runs on', async () => {
+    // `liveTest` already skips without a plan; this is what narrows the type, and
+    // a throw rather than an early return so a gating mistake is a red and not a
+    // pass over nothing.
+    if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
+    const arm = await PLAN.provision({
+      subject: 'reaches-search',
+      purpose: 'An optimisation engineer who beats a measured baseline and proves it by running it.',
+      evolution: false,
+    });
+    console.warn(`[swarm/${arm.backend}] cross-target arm on ${arm.describe}`);
+    try {
+      // The reference the agent is asked about, written through the target's own
+      // file plane — the same seed the in-process arm gets, on the cloud arm over
+      // the deployment's executor. Sequential: two writes to one plane are not
+      // independent.
+      const files = arm.workspaceFiles();
+      for (const file of TASK.seed) await files.vfs.writeFile(file.path, file.content);
+
+      await arm.sendTurn(
+        'Use your search capability to explore two different approaches to speeding up the '
+        + 'reference implementation in this workspace, then tell me which you would take. '
+        + 'Run the search rather than describing one.',
+      );
+
+      // SPEND FIRST, BEFORE ANY ASSERTION THAT CAN THROW, for the reason the arm
+      // above records early: a turn that ran and then failed an assertion must
+      // still publish what it cost. Exactly once, on this arm's OWN store, so the
+      // figure is this episode's and not a second reading of the other arm's.
+      await recordTargetEpisodeSpend(arm);
+
+      const events = await arm.runEvents();
+      const totals = ledgerTotalsFromEvents(events);
+      const bound = stepBoundEvidence(events);
+      const ledger = await arm.searchLedger();
+      console.warn(`[swarm/${arm.backend}] ${String(totals.steps)} step(s), `
+        + `${String(totals.toolCalls)} tool call(s), last step reason `
+        + `${String(bound.lastStepReason)}, run_end [${bound.runEndReasons.join(', ')}], `
+        + `search rows ${JSON.stringify(ledger)}`);
+
+      // THE TURN RAN. A zero here is an unmeasured episode, not an agent that
+      // declined, and the two must never read alike.
+      expect(totals.turns).toBeGreaterThan(0);
+      expect(totals.toolCalls).toBeGreaterThan(0);
+
+      // THE STEP-CAP PROBE. Ten steps ending on `tool-calls` is the production
+      // signature; a turn cut that way must not also claim it completed. This is the
+      // assertion the repo had nowhere: `unit-call-bounds.test.ts` measured a
+      // one-clause lambda in isolation and stayed true while the composed condition
+      // was capped at ten.
+      if (bound.truncated) {
+        expect(
+          bound.runEndReasons,
+          `the loop stopped after ${String(bound.steps)} step(s) with the model still calling `
+          + 'tools, and the run reported itself completed — that is an invisible cut, which is '
+          + 'the exact defect this arm exists to surface',
+        ).not.toContain('completed');
+      }
+
+      // THE AGENT REACHED THE SEARCH, on a store no other arm has written. Read
+      // through the same five rows the root-cause investigation used to establish
+      // that nothing had spawned — all five empty is how it ruled out "the swarm
+      // started and died silently".
+      expect(
+        ledger.searchRuns + ledger.canvasNodes + ledger.forkRuns,
+        'no search row of any kind exists, so the agent never reached the rung: either it '
+        + 'declined, or the tool refused before a node spawned. The run events above say which.',
+      ).toBeGreaterThan(0);
+    } finally {
+      // On the cloud plan this DELETES the workspace, so it is a `finally` and not
+      // a teardown hook: a run that threw must not leave a row on the account.
+      await arm.teardown();
+    }
   }, 1_500_000);
 });
