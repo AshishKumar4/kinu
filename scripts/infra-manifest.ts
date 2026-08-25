@@ -537,30 +537,6 @@ export const SUPPLY = new Map<string, Supply>([
     absent: 'nothing — CLOUDFLARE_WORKERS_AI_SCOPES in lib/cloudflare-oauth.ts is the one source '
       + 'of truth and this only overrides it.',
   }],
-  ['R2_ACCESS_KEY_ID', {
-    handling: 'out-of-band',
-    required: false,
-    absent: 'sandbox snapshots move through the BACKUP_BUCKET binding and restore by EXTRACTING '
-      + 'the archive — correct, and a full pass over every byte. Present (all four together) '
-      + 'switches to presigned URLs and a copy-on-write MOUNT.',
-    source: 'an R2 API token from the Cloudflare dashboard. Not mintable by wrangler.',
-  }],
-  ['R2_SECRET_ACCESS_KEY', {
-    handling: 'out-of-band',
-    required: false,
-    absent: 'see R2_ACCESS_KEY_ID — the four presigned-mode values are all-or-nothing.',
-    source: 'the same R2 API token.',
-  }],
-  ['BACKUP_BUCKET_NAME', {
-    handling: 'config-var',
-    required: false,
-    absent: 'see R2_ACCESS_KEY_ID. A plain var (`kinu-backups`), not a secret.',
-  }],
-  ['CLOUDFLARE_R2_ACCOUNT_ID', {
-    handling: 'config-var',
-    required: false,
-    absent: 'see R2_ACCESS_KEY_ID. A plain var (the account id), not a secret.',
-  }],
 ]);
 
 /* ── Derivation ───────────────────────────────────────────────────────── */

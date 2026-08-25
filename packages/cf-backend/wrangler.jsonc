@@ -292,19 +292,11 @@
   // archives past their TTL — the SDK enforces TTL at restore time only and
   // never deletes anything itself.
   //
-  // Two transports exist and NEITHER puts a credential in the container:
-  //  * binding mode (today, no setup): bytes stream container → this object →
-  //    R2. Restore EXTRACTS the archive with `unsquashfs`, so it costs a full
-  //    pass over every byte and room for a second copy.
-  //  * presigned mode: this object mints a presigned URL and the container
-  //    curls it. Restore MOUNTS the archive (`squashfuse` + `fuse-overlayfs`)
-  //    with copy-on-write, which is constant work regardless of archive size.
-  //    OWNER SETUP to switch: `wrangler secret put R2_ACCESS_KEY_ID`,
-  //    `wrangler secret put R2_SECRET_ACCESS_KEY`, and add
-  //    "BACKUP_BUCKET_NAME": "kinu-backups" plus "CLOUDFLARE_ACCOUNT_ID"
-  //    to `vars` below. KinuSandbox picks the mode up from their presence —
-  //    no flag — and the mode is recorded per snapshot, so handles taken in one
-  //    mode keep restoring in that mode.
+  // The devbox strategies stream bytes container → this object → R2 through
+  // the bucket BINDING; no credential ever enters the container. The old
+  // presigned-URL mode and its four env values (R2_ACCESS_KEY_ID and friends)
+  // were retired when storage moved to @kinu.run/devbox: no product source
+  // reads them, and the secret census now refuses stale entries.
   // NIMBUS_RUNTIME_CACHE is the artifact store a HOSTED workspace installs its
   // toolchain from: `catalog/v1.json`, `manifests/<name>-<version>.json` and
   // content-addressed blobs under `blobs/<name>-<version>/<file>`
