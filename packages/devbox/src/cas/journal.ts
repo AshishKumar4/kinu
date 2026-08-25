@@ -24,7 +24,6 @@ import {
   journalKey,
   seqFromJournalKey,
   type CasStore,
-  type DeleteEntry,
   type JournalEntry,
   type NewJournalEntry,
 } from './types';
@@ -51,29 +50,6 @@ export function stampEntries(
   return entries.map((entry): JournalEntry => ({ ...entry, seq: seq++ }));
 }
 
-
-/**
- * What the previous generation owned that the current scan no longer does.
- *
- * Only a path this generation owns can vanish into a deletion. A folded path
- * is served by the lower layer and its absence from the upper means nothing —
- * treating it as a tombstone is how an emptied upper once mass-deleted the
- * workspace.
- */
-export function vanishedTombstones(
-  previous: ReadonlyMap<string, { readonly folded?: boolean }>,
-  currentPaths: ReadonlySet<string>,
-  alreadyTombstoned: ReadonlySet<string>,
-): readonly Omit<DeleteEntry, 'seq'>[] {
-  const vanished: Omit<DeleteEntry, 'seq'>[] = [];
-  for (const [path, signature] of previous) {
-    if (currentPaths.has(path) || alreadyTombstoned.has(path)) continue;
-    if (signature.folded === true) continue;
-    vanished.push({ kind: 'delete', path });
-  }
-  vanished.sort((a, b) => (a.path < b.path ? -1 : 1));
-  return vanished;
-}
 
 /**
  * The seq through which `tree/` has been folded.

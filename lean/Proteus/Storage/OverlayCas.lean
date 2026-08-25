@@ -401,9 +401,10 @@ theorem tick_does_not_fold
 /-! ## Discard and the orphan sweep
 
   `discard` deletes the prefix: O(1) logical delete of a prefix.
-  The GC sweep lists the prefix and removes what the manifest does not
-  reach. It is O(prefix listing) and it runs off the hot path — never
-  inside attach or tick. -/
+  The GC sweep lists the prefix and removes what neither the manifest
+  nor a pending journal entry reaches. It is O(prefix listing) and runs
+  off the hot path — never inside attach or tick. The cost theorems
+  below do not prove that reachable-set calculation; source and tests do. -/
 
 def discardCost : Cost :=
   { classA := 1
@@ -497,22 +498,21 @@ theorem the_hot_path_lists_only_the_journal_prefix
   unstaged blob. Rule 4 adds the one the source states in its own
   words: nothing is reaped that the cursor has not passed. -/
 
-/-- The store's ordering-relevant state. Counters rather than sets: the
-    ordering is a property of the COUNTS reaching each stage, and the
-    identity of a blob adds nothing to it. `staged` counts blobs
-    durably PUT, `journalled` counts entries appended, `folded` counts
-    entries written into `tree/` and the manifest, `cursor` counts
-    entries `cursor.json` declares done, `reaped` counts journal
-    objects deleted.
+/-- The store's ordering-relevant state. Counters rather than sets:
+    `staged` counts ENTRIES ready to journal. A file reaches readiness
+    after every chunk blob is durable; a directory, symlink, tombstone
+    or fully deduplicated file reaches it without a blob PUT.
+    `journalled` counts entries appended, `folded` counts entries
+    written into `tree/` and the manifest, `cursor` counts entries
+    `cursor.json` declares done, and `reaped` counts journal objects
+    deleted.
 
-    BATCH GRANULARITY IS DISCARDED, and the direction matters. The
-    shipped cursor advances past WHOLE batches only, so a half-folded
-    batch is unrepresentable there. This model counts ENTRIES, so it
-    admits cursor values the real store cannot hold. A coarser state
-    space admits MORE traces, so an invariant proved here holds a
-    fortiori under the batch-granular refinement — the discard is safe
-    in the only direction that matters. What is lost is the ability to
-    state the stronger property, not the weaker one. -/
+    BATCH GRANULARITY IS DISCARDED. The shipped cursor advances past
+    whole batches only; this entry model admits MORE cursor values than
+    the real store, so an invariant proved here holds under the
+    batch-granular refinement. Logical blobless readiness also admits a
+    state with no corresponding R2 PUT; it adds traces and no durable
+    claim. -/
 structure Store where
   staged : Nat
   journalled : Nat
@@ -524,13 +524,13 @@ structure Store where
 def empty : Store :=
   { staged := 0, journalled := 0, folded := 0, cursor := 0, reaped := 0 }
 
-/-- The actions the strategy can take. Each is the durable effect of
-    one helper. -/
+/-- Ordering transitions. `stage` is entry readiness, not necessarily
+    an object-store effect. -/
 inductive Action where
-  /-- `stageBlobs`: one more blob durably PUT. -/
+  /-- One entry is safe to journal: its blobs landed, it reused durable
+      blobs, or its kind carries no blobs. -/
   | stage
-  /-- `appendJournalBatch`. Legal only for entries whose blobs are
-      staged: blob-before-journal. -/
+  /-- `appendJournalBatch`, after entry readiness. -/
   | journal
   /-- `foldJournalIntoTree`'s tree and manifest writes. Legal only for
       entries already journalled: journal-before-fold. -/
@@ -630,12 +630,18 @@ theorem no_cursor_ahead_of_its_fold (as : List Action) :
     (runOf empty as).cursor ≤ (runOf empty as).folded :=
   (ordering_is_invariant as).2.1
 
-/-- **No interleaving admits a journal entry naming an unstaged
-    blob.** Blob-before-journal, over every trace and every crash
-    point. -/
+/-- **No interleaving journals an entry before it is ready.** For a
+    blob-bearing file this is blob-before-journal; blobless entries are
+    ready without a PUT. -/
 theorem no_journal_entry_names_an_unstaged_blob (as : List Action) :
     (runOf empty as).journalled ≤ (runOf empty as).staged :=
   (ordering_is_invariant as).2.2.2
+
+/-- A blobless entry is a real legal trace: logical readiness then a
+    journal append, with no claim that readiness moved bytes. -/
+theorem blobless_entry_can_be_journalled :
+    (runOf empty [.stage, .journal]).journalled = 1 := by
+  decide
 
 /-- **And nothing folds an entry that was never journalled.** -/
 theorem no_fold_precedes_its_journal_entry (as : List Action) :
@@ -793,102 +799,87 @@ theorem a_fresh_write_stages_its_bytes (bytes : Nat) :
     stagedBytes .write false bytes = bytes :=
   rfl
 
-/-! ### The loss window
 
-  What a crash loses, in wall-clock terms: exactly the writes since
-  the last completed tick. The tick's model is the fingerprint gate
-  as shipped (packages/devbox/src/devbox.ts checkChanges): a tick
-  that completes saves EVERYTHING written before it, because the gate
-  commits whenever it cannot prove "unchanged" — it never skips a
-  changed tree. The red direction models the deployed 2026-08-25
-  defect exactly: a tick that misclassifies a changed tree as
-  unchanged saves nothing, and no number of such ticks closes the
-  window. -/
+/-! ### The in-flight batch loss bound
 
-/-- Workload writes against tick-saved progress. `written` counts
-    writes the container accepted; `saved` counts what a completed
-    tick has made durable. -/
-structure Backlog where
-  written : Nat
-  saved : Nat
+  After a completed tick, accepted writes start at zero. Overlay-cas may
+  durably journal a prefix before the tick returns; that can only make
+  crash loss SMALLER than the writes accepted since the last completed
+  tick. One `batch` step below commits one member of that prefix. -/
 
-def Backlog.start : Backlog := ⟨0, 0⟩
+structure BatchBacklog where
+  accepted : Nat
+  durable : Nat
 
-/-- What a crash loses right now: accepted and not yet durable. -/
-def Backlog.loss (b : Backlog) : Nat := b.written - b.saved
+def BatchBacklog.start : BatchBacklog := ⟨0, 0⟩
+def BatchBacklog.loss (b : BatchBacklog) : Nat := b.accepted - b.durable
 
-/-- A workload beat: one write lands, or one tick completes. -/
-inductive Beat
+inductive BatchBeat
   | write
-  | tick
+  | batch
 
-/-- One beat. A completed tick saves everything written — the
-    fingerprint gate's contract, not an optimistic assumption. -/
-def beatOf (b : Backlog) : Beat → Backlog
-  | .write => { b with written := b.written + 1 }
-  | .tick => { b with saved := b.written }
+def batchStep (b : BatchBacklog) : BatchBeat → BatchBacklog
+  | .write => { b with accepted := b.accepted + 1 }
+  | .batch =>
+      if b.durable < b.accepted
+      then { b with durable := b.durable + 1 }
+      else b
 
-/-- A workload trace, folded. A crash is a stop at any prefix. -/
-def replayBeats (b : Backlog) : List Beat → Backlog :=
-  List.foldl beatOf b
+def batchRun (b : BatchBacklog) : List BatchBeat → BatchBacklog :=
+  List.foldl batchStep b
 
-/-- Writes in a trace segment. -/
-def writesIn : List Beat → Nat
+def batchWrites : List BatchBeat → Nat
   | [] => 0
-  | .write :: bs => writesIn bs + 1
-  | .tick :: bs => writesIn bs
+  | .write :: bs => batchWrites bs + 1
+  | .batch :: bs => batchWrites bs
 
-/-- **A completed tick closes the window**: loss is zero the moment it
-    lands. -/
-theorem a_completed_tick_closes_the_window (b : Backlog) :
-    (beatOf b .tick).loss = 0 := by
-  simp [beatOf, Backlog.loss]
-
-/-- A tick-free trace segment only accumulates writes: written grows
-    by exactly the segment's writes and saved does not move. -/
-theorem a_tick_free_segment_only_writes (bs : List Beat)
-    (h : ∀ x ∈ bs, x = Beat.write) (b : Backlog) :
-    replayBeats b bs
-      = { written := b.written + writesIn bs, saved := b.saved } := by
-  induction bs generalizing b with
-  | nil => simp [replayBeats, writesIn]
-  | cons x bs ih =>
-    have hx : x = Beat.write := h x (List.mem_cons_self x bs)
-    have hrest : ∀ y ∈ bs, y = Beat.write :=
-      fun y hy => h y (List.mem_cons_of_mem x hy)
-    subst hx
-    rw [replayBeats, List.foldl_cons, ← replayBeats, ih hrest]
-    simp [beatOf, writesIn]
+theorem batch_step_preserves_order (b : BatchBacklog) (beat : BatchBeat)
+    (h : b.durable ≤ b.accepted) :
+    (batchStep b beat).durable ≤ (batchStep b beat).accepted := by
+  cases beat with
+  | write =>
+    simp [batchStep]
     omega
+  | batch =>
+    by_cases hlt : b.durable < b.accepted
+    · simp [batchStep, hlt]
+      omega
+    · simp [batchStep, hlt, h]
 
-/-- **The loss window, exactly.** Split any trace at its last
-    completed tick: whatever ran before it, a crash after a tick-free
-    suffix loses exactly that suffix's writes — never a byte from
-    before the tick. -/
-theorem loss_is_the_writes_since_the_last_tick
-    (before : List Beat) (since : List Beat)
-    (h : ∀ x ∈ since, x = Beat.write) :
-    (replayBeats Backlog.start (before ++ Beat.tick :: since)).loss
-      = writesIn since := by
-  rw [replayBeats, List.foldl_append, List.foldl_cons]
-  rw [← replayBeats, ← replayBeats,
-    a_tick_free_segment_only_writes since h]
-  simp [beatOf, Backlog.loss]
-  omega
+theorem batch_trace_from (b : BatchBacklog)
+    (h : b.durable ≤ b.accepted) (bs : List BatchBeat) :
+    (batchRun b bs).durable ≤ (batchRun b bs).accepted
+    ∧ (batchRun b bs).accepted = b.accepted + batchWrites bs := by
+  induction bs generalizing b with
+  | nil => simp [batchRun, batchWrites, h]
+  | cons beat bs ih =>
+    rw [batchRun, List.foldl_cons, ← batchRun]
+    obtain ⟨horder, hwrites⟩ :=
+      ih (batchStep b beat) (batch_step_preserves_order b beat h)
+    refine ⟨horder, ?_⟩
+    rw [hwrites]
+    cases beat with
+    | write =>
+      simp [batchStep, batchWrites]
+      omega
+    | batch =>
+      by_cases hlt : b.durable < b.accepted
+      · simp [batchStep, batchWrites, hlt]
+      · simp [batchStep, batchWrites, hlt]
 
-/-- The tick with cannot-decide-commits REMOVED: a changed tree
-    misclassified as unchanged saves nothing. This is the deployed
-    2026-08-25 defect (21 "unchanged" ticks over changed workspaces)
-    as a step function. -/
-def beatSkipping (b : Backlog) : Beat → Backlog
-  | .write => { b with written := b.written + 1 }
-  | .tick => b
+theorem batch_trace_invariant (bs : List BatchBeat) :
+    (batchRun BatchBacklog.start bs).durable
+      ≤ (batchRun BatchBacklog.start bs).accepted
+    ∧ (batchRun BatchBacklog.start bs).accepted = batchWrites bs := by
+  simpa [BatchBacklog.start] using
+    batch_trace_from BatchBacklog.start (by simp [BatchBacklog.start]) bs
 
-/-- **Remove the gate and the window never closes**: a write followed
-    by a completed-but-skipping tick still shows loss, so no tick
-    cadence bounds what a crash costs. -/
-theorem a_skipping_tick_leaves_the_window_open :
-    (beatSkipping (beatSkipping Backlog.start .write) .tick).loss = 1 := by
-  decide
+/-- **Overlay-cas crash loss is at most the writes since the last
+    completed tick.** A partial durable journal prefix only tightens
+    the bound; it never widens it. -/
+theorem batch_crash_loss_le_writes_since_tick (bs : List BatchBeat) :
+    (batchRun BatchBacklog.start bs).loss ≤ batchWrites bs := by
+  obtain ⟨horder, hwrites⟩ := batch_trace_invariant bs
+  simp [BatchBacklog.loss, hwrites]
 
 end Proteus.Storage.OverlayCas

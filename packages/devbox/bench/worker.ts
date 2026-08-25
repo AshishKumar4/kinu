@@ -52,6 +52,7 @@ import {
   baseObjectKey,
   deltaObjectKey,
   describeThrown,
+  parseDevboxStrategyName,
   type AttachOutcome,
   type CheckpointKind,
   type DevboxPolicy,
@@ -347,6 +348,24 @@ class BenchBox extends Devbox<BenchEnv> {
     await flushOps(this.env);
   }
 
+  /**
+   * The DRIVER owns every measured tick.
+   *
+   * With the production schedule armed, an ambient tick can fire inside a
+   * workload segment or inside the driver's interval wait, commit the pending
+   * change, and reset the last-checkpoint stamp — so the driver's own measured
+   * tick answers `skipped (within the minimum checkpoint interval)` or
+   * `skipped (unchanged)` and the segment's real ops land outside the
+   * flush-bounded window. docs/research/BENCH-RUNS.md records 21 such
+   * mis-attributed skips in one run. With the schedule off,
+   * `checkpointNow` is the only tick source; `policy.checkpointIntervalMs`
+   * stays as the guard the driver waits out before ticking, because the gate
+   * itself is product behaviour under test.
+   */
+  protected override get ambientCheckpoints(): boolean {
+    return false;
+  }
+
   protected override get store(): DevboxStore {
     return { binding: 'BACKUP_BUCKET', bucket: countingBucket(this.env.BACKUP_BUCKET) };
   }
@@ -546,6 +565,17 @@ async function verify(
     pass: first.exitCode === 0 && first.stdout.includes(marker),
     detail: `exit ${first.exitCode}, cwd default ${DEVBOX_WORKDIR}`,
   });
+  if (strategy === 'overlay-cas') {
+    const upper = await box.exec(
+      `find ${DEVBOX_RUNTIME_DIR}/cas-upper -maxdepth 2 -printf '%P\\n' 2>&1`,
+    );
+    add({
+      name: 'the workspace write reached overlay-cas upper',
+      pass: upper.exitCode === 0 && upper.stdout.split('\n').includes('verify-a.txt'),
+      detail: `exit ${upper.exitCode}: ${upper.stdout.trim().slice(0, 200)} `
+        + `${upper.stderr.trim().slice(0, 200)}`.trim(),
+    });
+  }
 
   // Base layer. `quiesce` rather than `tick` so the interval gate cannot
   // decline it — the gate is an efficiency rule and this is a proof.
@@ -737,8 +767,9 @@ export default {
   async fetch(request: Request, env: BenchEnv): Promise<Response> {
     if (!authorized(request, env.BENCH_TOKEN)) return json({ ok: false, error: 'unauthorized' }, 401);
 
-    flushEnv = env;
     const url = new URL(request.url);
+    if (request.method === 'GET' && url.pathname === '/health') return json({ ok: true });
+    flushEnv = env;
     const name = url.searchParams.get('box') ?? 'devbox-bench';
     let input: DriverBody;
     try {
@@ -747,11 +778,13 @@ export default {
       return json({ ok: false, error: `malformed body: ${describeThrown({ cause: error })}` }, 400);
     }
     const requested = input.strategy ?? url.searchParams.get('strategy');
-    const strategy: DevboxStrategyName = requested === 'r2fs'
-      ? 'r2fs'
-      : requested === 'overlay-cas'
-        ? 'overlay-cas'
-        : 'snapshot-chain';
+    const strategy = parseDevboxStrategyName(requested);
+    if (strategy === null) {
+      return json({
+        ok: false,
+        error: 'strategy is required: snapshot-chain, r2fs, or overlay-cas',
+      }, 400);
+    }
 
     const box = boxOf(env, strategy, name);
     const counter = env.BenchOpCounter.get(env.BenchOpCounter.idFromName('bench-ops'));

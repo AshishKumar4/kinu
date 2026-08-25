@@ -6,7 +6,13 @@
 // in the counting; it was in trusting a size measured before the upload.
 import { describe, expect, test } from 'bun:test';
 
-import { deletePrefix, prefixInventory, putStream } from '../src/object-store';
+import {
+  MULTIPART_PART_BYTES,
+  SMALL_PUT_BYTES,
+  deletePrefix,
+  prefixInventory,
+  putStream,
+} from '../src/object-store';
 
 /** Enough of an R2 bucket to observe what an upload actually wrote. */
 function fakeBucket() {
@@ -93,5 +99,46 @@ describe('prefix helpers page rather than reporting a first page as a total', ()
     const store = fakeBucket();
     expect(await prefixInventory(store.bucket, 'boxes/x/')).toEqual({ objects: 0, bytes: 0 });
     expect(await deletePrefix(store.bucket, 'boxes/x/')).toBe(0);
+  });
+});
+
+describe('putStream promotes when the small hint lies, and parts stay uniform', () => {
+  test('a stale small hint over a huge stream PROMOTES instead of buffering unbounded', async () => {
+    // The hint routes; the stream decides. Buffering past SMALL_PUT_BYTES on
+    // the strength of the caller's stale measurement is the memory blowup this
+    // bound exists to prevent.
+    const store = fakeBucket();
+    const big = MULTIPART_PART_BYTES;
+    const landed = await putStream(
+      store.bucket, 'k', streamOf([big, big, big / 2]), 4096,
+    );
+    expect(landed).toBe(big * 2 + big / 2);
+    // Promoted, not single-put: the object went out as multipart parts.
+    expect(store.parts.length).toBe(3);
+    expect(store.objects.has('k')).toBe(false);
+  });
+
+  test('one read spanning several part sizes yields uniform non-final parts', async () => {
+    // R2 refuses a complete() whose non-final parts disagree. A single read of
+    // 3.5 part-sizes must therefore come out as three exact parts plus one
+    // short final — never as one oversized part.
+    const store = fakeBucket();
+    const chunk = Math.floor(MULTIPART_PART_BYTES * 3.5);
+    const landed = await putStream(store.bucket, 'k', streamOf([chunk]), chunk);
+    expect(landed).toBe(chunk);
+    const nonFinal = store.parts.slice(0, -1);
+    expect(nonFinal.length).toBe(3);
+    for (const size of nonFinal) expect(size).toBe(MULTIPART_PART_BYTES);
+    expect(store.parts.at(-1)).toBe(Math.floor(MULTIPART_PART_BYTES / 2));
+  });
+
+  test('the small route still holds for streams that fit the hint', async () => {
+    const store = fakeBucket();
+    const landed = await putStream(
+      store.bucket, 'k', streamOf([SMALL_PUT_BYTES]), SMALL_PUT_BYTES,
+    );
+    expect(landed).toBe(SMALL_PUT_BYTES);
+    expect(store.parts.length).toBe(0);
+    expect(store.objects.get('k')).toBe(SMALL_PUT_BYTES);
   });
 });

@@ -8,6 +8,8 @@
  * it twice. Nothing in this file touches a container, a bucket or a clock.
  */
 
+import type { CheckpointKind, CheckpointOutcome } from './storage';
+
 // ── policy ──────────────────────────────────────────────────────────────────
 
 /**
@@ -337,7 +339,57 @@ export function needsArming(
   return !rows.some(row => row.time > nowSeconds);
 }
 
+
+// ── one checkpoint at a time ────────────────────────────────────────────────
+
+export interface CheckpointLane {
+  /**
+   * Run one strategy checkpoint under the instance-wide gate.
+   *
+   * A Durable Object interleaves requests at every container and store await,
+   * so two overlapping checkpoints would share the chain's staging directory,
+   * race its delta PUT against its state write, and stamp overlapping journal
+   * sequences — one batch object overwriting another under the same key while
+   * both blobs stay. The rules:
+   *
+   *   same kind already running → JOIN it: the callers share one operation and
+   *     one outcome.
+   *   a different kind is running → QUEUE behind it: a quiesce that joined an
+   *     in-flight tick could inherit a `skipped` answer and stop the container
+   *     over work that only just landed; it runs its own final commit instead.
+   *
+   * Rejections travel to every caller of the failed run; the gate itself
+   * survives and the next caller starts clean.
+   */
+  run(kind: CheckpointKind, op: () => Promise<CheckpointOutcome>): Promise<CheckpointOutcome>;
+}
+
+export function createCheckpointLane(): CheckpointLane {
+  const inFlight: Partial<Record<CheckpointKind, Promise<CheckpointOutcome>>> = {};
+  let tail: Promise<unknown> = Promise.resolve();
+  return {
+    run(kind, op) {
+      const pending = inFlight[kind];
+      if (pending !== undefined) return pending;
+      const run = tail.then(() => op());
+      inFlight[kind] = run;
+      const settled = run.then(
+        () => undefined,
+        (cause) => {
+          console.error(`[devbox] ${kind} checkpoint rejected: ${describeThrown({ cause })}`);
+        },
+      );
+      tail = settled;
+      void settled.then(() => {
+        if (inFlight[kind] === run) inFlight[kind] = undefined;
+      });
+      return run;
+    },
+  };
+}
+
 // ── incidents ───────────────────────────────────────────────────────────────
+
 
 /**
  * Which part of the lifecycle failed. A host routing an incident cares about

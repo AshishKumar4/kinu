@@ -292,7 +292,7 @@ than shipping an unearned answer.
 
 ## Formal properties (Lean 4)
 
-Eleven of the corpus's 409 published theorems live in `lean/Proteus/MCTS/`
+Eleven of the corpus's 417 published theorems live in `lean/Proteus/MCTS/`
 (counted 2026-08-25). The model uses exact scaled-integer arithmetic; SQLite
 uses IEEE-754 `REAL`. [FORMAL-SPEC.md](./FORMAL-SPEC.md) defines claim status.
 

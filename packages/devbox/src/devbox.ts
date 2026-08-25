@@ -70,6 +70,7 @@ import {
   type LateStartFailure,
   incidentRetryDelayMs,
   needsArming,
+  createCheckpointLane,
   quiesceStep,
   restartPlan,
   type DevboxIncident,
@@ -83,12 +84,12 @@ import {
 } from './lifecycle';
 import { r2fsStorage, type R2fsPorts } from './r2fs';
 import { deletePrefix, prefixInventory, putStream } from './object-store';
-import { emptyCounters } from './cas';
+import { emptyCounters, type CasPutMeta } from './cas';
 import {
   CAS_TREE_MOUNT, normalizeOverlayCasState, overlayCasStorage, type OverlayCasPorts,
 } from './overlay-cas';
 import {
-  deliverIncidents, INCIDENT_PREFIX, incidentTotals,
+  deliverIncidents, INCIDENT_PREFIX, incidentTotals, recordIncident,
   type IncidentRow,
 } from './incidents';
 import {
@@ -240,6 +241,9 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   #attachFailure: string | undefined;
   #lastInteraction: number | undefined;
   #lastInteractionPersisted = 0;
+  /** Every strategy checkpoint on this instance runs through one gate, so two
+   *  overlapping entry points can never interleave inside a strategy. */
+  #lane = createCheckpointLane();
 
   // ── the override surface ─────────────────────────────────────────────────
 
@@ -337,6 +341,24 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   // ── container start ──────────────────────────────────────────────────────
 
   /**
+   * Whether this box arms its own periodic checkpoint schedule.
+   *
+   * TRUE for a product box: the schedule is what makes the durable state
+   * converge without a caller asking. A benchmark box overrides this to
+   * `false`, because during a driver-owned measurement an ambient tick can
+   * commit the pending change and reset the last-checkpoint stamp, so the
+   * driver's own measured tick then answers `skipped (within the minimum
+   * checkpoint interval)` or `skipped (unchanged)` — the measured ops land
+   * outside the flush window and the arm reports a skip class that depends on
+   * alarm phase. With the schedule off, the DRIVER's checkpoint is the only
+   * tick source; the interval gate itself still applies to it, which is the
+   * guard a driver waits out before ticking.
+   */
+  protected get ambientCheckpoints(): boolean {
+    return true;
+  }
+
+  /**
    * The filesystem attach, and nothing else, under a hard budget.
    *
    * See the class header for why the other three phases are not here.
@@ -397,7 +419,9 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       async () => {
         await super.onStart();
         await this.#arm(STARTUP_CALLBACK, 1);
-        await this.#arm(CHECKPOINT_CALLBACK, Math.ceil(this.policy.checkpointIntervalMs / 1000));
+        if (this.ambientCheckpoints) {
+          await this.#arm(CHECKPOINT_CALLBACK, Math.ceil(this.policy.checkpointIntervalMs / 1000));
+        }
         await this.#arm(HEARTBEAT_CALLBACK, this.policy.heartbeatSeconds);
       },
       (failure) => {
@@ -656,7 +680,17 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   /** Commit now and report what it did. */
   async checkpointNow(kind: CheckpointKind): Promise<CheckpointOutcome> {
     this.stampInteraction();
-    return await this.#requireStorage().checkpoint(kind);
+    return await this.#checkpoint(kind);
+  }
+
+  /**
+   * The one serialization point for every strategy checkpoint this instance
+   * can be asked to run: `checkpointNow`, the scheduled tick, the quiesce and
+   * activity expiry. See {@link createCheckpointLane} for why two overlapping
+   * runs must never interleave inside a strategy.
+   */
+  #checkpoint(kind: CheckpointKind): Promise<CheckpointOutcome> {
+    return this.#lane.run(kind, () => this.#requireStorage().checkpoint(kind));
   }
 
   /**
@@ -671,7 +705,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * the platform reclaims anyway.
    */
   async quiesce(): Promise<CheckpointOutcome> {
-    const outcome = await this.#requireStorage().checkpoint('quiesce');
+    const outcome = await this.#checkpoint('quiesce');
     if (outcome.kind === 'failed') {
       await this.#record('checkpoint', `final checkpoint failed: ${outcome.reason ?? 'unknown'}`);
       return outcome;
@@ -892,10 +926,15 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * start arms this again.
    */
   async devboxCheckpoint(): Promise<void> {
+    // The ambient schedule is the ONLY writer this row has. A box with it
+    // disabled (a benchmark during driver-owned measurement) never arms the
+    // row, so a call here can only be stray; ending the chain keeps nothing
+    // ticking that the host did not ask for.
+    if (!this.ambientCheckpoints) return;
     const period = Math.ceil(this.policy.checkpointIntervalMs / 1000);
     await this.#scheduled(CHECKPOINT_CALLBACK, period, async () => {
       if (this.ctx.container?.running !== true) return null;
-      const outcome = await this.#requireStorage().checkpoint('tick');
+      const outcome = await this.#checkpoint('tick');
       if (outcome.kind === 'failed') {
         await this.#record('checkpoint', outcome.reason ?? 'unknown');
       }
@@ -1020,7 +1059,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * alarm chain is already ending and refusing would only lose the stop as well.
    */
   override async onActivityExpired(): Promise<void> {
-    const outcome = await this.#requireStorage().checkpoint('quiesce');
+    const outcome = await this.#checkpoint('quiesce');
     await this.#tick({
       running: this.ctx.container?.running === true,
       ping: `activity expired, final checkpoint ${outcome.kind}`,
@@ -1108,16 +1147,12 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     reason: string,
     extra?: { readonly processId?: string; readonly port?: number },
   ): Promise<string> {
+    // THE SHARED WRITER, not a copy of it: `recordIncident` owns the row shape
+    // and the reason bound (INCIDENT_REASON_MAX_CHARS), which the inline copy
+    // here once hardcoded as a bare 2000 and would have drifted from the host
+    // validator's bound. The id is minted here; this side arms delivery.
     const incidentId = crypto.randomUUID();
-    await this.ctx.storage.put(`${INCIDENT_PREFIX}${incidentId}`, {
-      incidentId,
-      stage,
-      reason: reason.slice(0, 2000),
-      processId: extra?.processId,
-      port: extra?.port,
-      at: Date.now(),
-      attempts: 0,
-    } satisfies IncidentRow);
+    await recordIncident(this.ctx.storage, stage, reason, extra);
     await this.#arm(INCIDENT_CALLBACK, Math.ceil(incidentRetryDelayMs(0) / 1000));
     return incidentId;
   }
@@ -1212,11 +1247,23 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     const prefix = this.#boxPrefix();
     const counters = emptyCounters();
     const key = (relative: string): string => `${prefix}/${relative}`;
+    const objectOptions = (meta: CasPutMeta | undefined): R2PutOptions | undefined =>
+      meta === undefined ? undefined : {
+        customMetadata: {
+          mode: String(meta.mode),
+          uid: '0',
+          gid: '0',
+          mtime: String(Math.floor((meta.mtimeMs ?? Date.now()) / 1000)),
+        },
+      };
     return {
       containerRunning: () => this.ctx.container?.running === true,
       exec: async (command) => await this.#rawExec(command),
       writeFileBase64: async (path, base64) => {
         await this.writeFile(path, base64, { encoding: 'base64' });
+      },
+      writeFileStream: async (path, stream) => {
+        await this.writeFile(path, stream);
       },
       mountTree: async () => {
         await this.mountBucket(store.binding, CAS_TREE_MOUNT, {
@@ -1239,16 +1286,21 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         put: async (relative, bytes, meta) => {
           counters.putCalls += 1;
           counters.bytesPut += bytes.byteLength;
-          // customMetadata is LOAD-BEARING: s3fs reads x-amz-meta-mode as the
-          // DECIMAL st_mode when this same object is later mounted as the
-          // read-only lower. Without it the lower has no modes and no symlinks.
-          const options = meta === undefined ? undefined : {
-            customMetadata: {
-              mode: String(meta.mode), uid: '0', gid: '0',
-              mtime: String(Math.floor((meta.mtimeMs ?? Date.now()) / 1000)),
-            },
-          };
-          await store.bucket.put(key(relative), bytes, options);
+          await store.bucket.put(key(relative), bytes, objectOptions(meta));
+        },
+        putStream: async (relative, stream, size, meta) => {
+          counters.putCalls += 1;
+          const landed = await putStream(
+            store.bucket,
+            key(relative),
+            stream,
+            size,
+            objectOptions(meta),
+          );
+          counters.bytesPut += landed;
+          if (landed !== size) {
+            throw new Error(`${relative} streamed ${landed} bytes, expected ${size}`);
+          }
         },
         get: async (relative) => {
           counters.getCalls += 1;

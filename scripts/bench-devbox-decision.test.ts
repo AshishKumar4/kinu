@@ -15,6 +15,11 @@ import {
   R2_CLASS_A_USD_PER_MILLION, R2_CLASS_B_USD_PER_MILLION, decide, opsAreBlind, priceOps,
   sqliteFinding, totalsFor, type TickRecord,
 } from './fixtures/r2-bench/decision';
+import {
+  addressArmRequest,
+  isTransientContainerCreateError,
+  rankableTicks,
+} from './bench-devbox-strategies';
 
 const tick = (
   arm: string, workload: string, wallMs: number,
@@ -37,6 +42,30 @@ const tick = (
   unitLabel: extra.unitLabel ?? 'delta bytes',
   outcome: extra.outcome ?? 'committed',
 });
+describe('arm request addressing', () => {
+  test('every box request carries the arm instead of defaulting to chain', () => {
+    expect(addressArmRequest('GET', '/ops?box=ab-overlay-cas'))
+      .toEqual({ path: '/ops?box=ab-overlay-cas&strategy=overlay-cas' });
+    expect(addressArmRequest('POST', '/checkpoint?box=ab-r2fs', { kind: 'tick' }))
+      .toEqual({
+        path: '/checkpoint?box=ab-r2fs',
+        body: { kind: 'tick', strategy: 'r2fs' },
+      });
+    expect(addressArmRequest('GET', '/state')).toEqual({ path: '/state' });
+  });
+
+  test('an explicit strategy is not rewritten', () => {
+    expect(addressArmRequest(
+      'POST',
+      '/create?box=ab-overlay-cas',
+      { strategy: 'snapshot-chain' },
+    )).toEqual({
+      path: '/create?box=ab-overlay-cas',
+      body: { strategy: 'snapshot-chain' },
+    });
+  });
+});
+
 
 /** Ratios of exactly 12x on git and 4x on npm: comfortably over the bar. */
 const clearsTheBar: TickRecord[] = [
@@ -130,8 +159,10 @@ describe('the verify gate at the rule', () => {
     const withFailedArm = clearsTheBar;
     expect(decide(withFailedArm, 'snapshot-chain', 'overlay-cas').kind).toBe('o-p-wins');
 
-    const ranked = ['snapshot-chain'];
-    const filtered = withFailedArm.filter((tick) => ranked.includes(tick.arm));
+    const filtered = rankableTicks([
+      { strategy: 'snapshot-chain', verifyPassed: true },
+      { strategy: 'overlay-cas', verifyPassed: false },
+    ], withFailedArm);
     const verdict = decide(filtered, 'snapshot-chain', 'overlay-cas');
     expect(verdict.kind).toBe('inconclusive');
     expect(verdict.kind === 'inconclusive' ? verdict.reason : '').toContain('overlay-cas produced no');
@@ -306,5 +337,17 @@ describe('the sqlite finding', () => {
       tick('overlay-cas', 'sqlite', 5000, { segment: 'sqlite-fill', bytesPut: 64 * 1024 * 1024 }),
     ], 64 * 1024 * 1024);
     expect(finding).toContain('no sqlite rewrite ticks');
+  });
+});
+
+describe('container create retry classification', () => {
+  test('the two deployed transient signatures are retried', () => {
+    expect(isTransientContainerCreateError(
+      'There is no container instance that can be provided to this durable object',
+    )).toBe(true);
+    expect(isTransientContainerCreateError(
+      'The container service is unreachable, try again later',
+    )).toBe(true);
+    expect(isTransientContainerCreateError('invalid strategy')).toBe(false);
   });
 });

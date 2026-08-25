@@ -529,7 +529,7 @@ event logs, Think session tables. Schema and boundaries:
 [STORAGE.md](./STORAGE.md); the vendored filesystem:
 [NIMBUS-INTEGRATION.md](./NIMBUS-INTEGRATION.md).
 
-Selected core algorithms are modeled in Lean 4 (`lean/`): 409 named theorems
+Selected core algorithms are modeled in Lean 4 (`lean/`): 417 named theorems
 over abstract models of agent, evolution, execution, exploration, MCTS,
 safety, and storage properties, enrolled against 48 requirements with no
 `sorry` (counted 2026-08-25 by `lean/check-traceability.mjs`). Axiom reports

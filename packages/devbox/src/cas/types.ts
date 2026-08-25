@@ -189,6 +189,12 @@ export interface CasPutMeta {
 export interface CasStore {
   readonly counters: StoreCounters;
   put(key: string, bytes: Uint8Array, meta?: CasPutMeta): Promise<void>;
+  putStream(
+    key: string,
+    stream: ReadableStream<Uint8Array>,
+    size: number,
+    meta?: CasPutMeta,
+  ): Promise<void>;
   get(key: string): Promise<Uint8Array | null>;
   head(key: string): Promise<{ size: number } | null>;
   delete(key: string): Promise<void>;

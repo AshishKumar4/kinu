@@ -10,7 +10,6 @@
  * `packages/devbox/bench`.
  *
  *   bun scripts/bench-devbox-strategies.ts --plan
- *   bun scripts/bench-devbox-strategies.ts --reps 2
  *
  * Five rules it inherits from the layout benchmark, each one bought with a
  * failed run:
@@ -202,7 +201,6 @@ type Strategy = 'snapshot-chain' | 'r2fs' | 'overlay-cas';
 const STRATEGIES: readonly Strategy[] = ['snapshot-chain', 'r2fs', 'overlay-cas'];
 
 interface Options {
-  reps: number;
   seed: number;
   budgetMs: number;
   /** Run the decisive experiment's three workloads and apply its decision rule.
@@ -246,6 +244,33 @@ interface DriverRequest {
   readonly whole?: boolean;
 }
 
+export interface AddressedArmRequest {
+  readonly path: string;
+  readonly body?: DriverRequest;
+}
+
+/** Bind every box-addressed request to its arm. GET carries it in the query;
+ * POST carries it in JSON. A GET body is invalid in fetch and caused run 9 to
+ * fail before the first arm. */
+export function addressArmRequest(
+  method: 'GET' | 'POST',
+  path: string,
+  body?: DriverRequest,
+): AddressedArmRequest {
+  const url = new URL(path, 'https://bench.invalid');
+  const box = url.searchParams.get('box');
+  const inferred = STRATEGIES.find(strategy => box === `ab-${strategy}`);
+  const strategy = body?.strategy ?? inferred;
+  if (method === 'GET') {
+    if (strategy !== undefined) url.searchParams.set('strategy', strategy);
+    return { path: `${url.pathname}${url.search}` };
+  }
+  if (strategy === undefined) {
+    return body === undefined ? { path } : { path, body };
+  }
+  return { path, body: { ...body, strategy } };
+}
+
 /**
  * One driver call, decoded through the schema its route answers with.
  *
@@ -259,11 +284,12 @@ interface DriverRequest {
 async function call<TSchema extends v.GenericSchema>(
   fixture: Fixture, method: 'GET' | 'POST', path: string, schema: TSchema, body?: DriverRequest,
 ): Promise<v.InferOutput<TSchema>> {
+  const addressed = addressArmRequest(method, path, body);
   const headers = new Headers({ authorization: `Bearer ${fixture.token}` });
-  if (body !== undefined) headers.set('content-type', 'application/json');
+  if (addressed.body !== undefined) headers.set('content-type', 'application/json');
   const init: RequestInit = { method, signal: AbortSignal.timeout(3_600_000), headers };
-  if (body !== undefined) init.body = JSON.stringify(body);
-  const response = await fetch(`${fixture.origin}${path}`, init);
+  if (addressed.body !== undefined) init.body = JSON.stringify(addressed.body);
+  const response = await fetch(`${fixture.origin}${addressed.path}`, init);
   const text = await response.text();
   let decoded: unknown;
   try {
@@ -344,7 +370,7 @@ async function deployFixture(token: string): Promise<{ fixture: Fixture; stop: (
   // assertion stays, and readiness now waits for an AUTHORIZED request to
   // succeed — which is the only thing that proves the token this run minted is
   // the token the live code is checking.
-  const unauth = await fetch(`${origin}/state`, { signal: AbortSignal.timeout(10_000) })
+  const unauth = await fetch(`${origin}/health`, { signal: AbortSignal.timeout(10_000) })
     .then((r) => r.status)
     .catch((error) => {
       log(`the unauthenticated probe did not answer: ${describeThrown({ cause: error })}`);
@@ -354,7 +380,7 @@ async function deployFixture(token: string): Promise<{ fixture: Fixture; stop: (
 
   const deadline = Date.now() + 180_000;
   for (;;) {
-    const authed = await fetch(`${origin}/state`, {
+    const authed = await fetch(`${origin}/health`, {
       headers: { authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(15_000),
     }).then((r) => r.status).catch((error) => {
@@ -710,6 +736,11 @@ async function runDecisive(
   return { ticks, treeBytes, notes };
 }
 
+export function isTransientContainerCreateError(error: string | undefined): boolean {
+  return /no container instance|container service is unreachable|try again later|ContainerUnavailable|OperationInterrupted/i
+    .test(error ?? '');
+}
+
 async function measureArm(
   fixture: Fixture, strategy: Strategy, options: Options,
 ): Promise<ArmResult> {
@@ -742,9 +773,9 @@ async function measureArm(
       if (attempt > 1) notes.push(`cold attach needed ${attempt} attempts (container capacity)`);
       break;
     }
-    const capacity = /no container instance|ContainerUnavailable|OperationInterrupted/i.test(created.error ?? '');
-    if (!capacity || attempt === attempts) break;
-    log(`${strategy}: create attempt ${attempt}/${attempts} hit container capacity; retrying`);
+    const transient = isTransientContainerCreateError(created.error);
+    if (!transient || attempt === attempts) break;
+    log(`${strategy}: create attempt ${attempt}/${attempts} hit a transient container error; retrying`);
     await delay(attempt * 15_000);
   }
   if (created.error !== undefined || created.ok !== true) {
@@ -888,12 +919,20 @@ async function measureArm(
 
 function metricSummary(arm: ArmResult, name: string): Summary | null {
   const medians: number[] = [];
+
   for (const run of arm.phases) {
     for (const phase of run.phases) {
       for (const metric of phase.metrics) if (metric.name === name) medians.push(metric.summary.p50);
     }
   }
   return medians.length === 0 ? null : summarize(medians);
+}
+export function rankableTicks(
+  arms: readonly { readonly strategy: string; readonly verifyPassed: boolean }[],
+  ticks: readonly TickRecord[],
+): TickRecord[] {
+  const ranked = new Set(arms.filter((arm) => arm.verifyPassed).map((arm) => arm.strategy));
+  return ticks.filter((tick) => ranked.has(tick.arm));
 }
 
 const num = (value: number | null, digits = 2): string => {
@@ -1008,21 +1047,13 @@ function render(arms: readonly ArmResult[], meta: RunMeta): string {
       for (const spec of DECISIVE_WORKLOADS) {
         const totals = totalsFor(arm.decisiveTicks, spec.id);
         if (totals.ticks === 0) continue;
-        // A tick that moved bytes must have issued a class-A operation. Zero ops
-        // against non-zero bytes is a blind counter, and printing $0.00 there
-        // would be the most expensive kind of wrong number: a plausible one.
         const blind = opsAreBlind(arm.decisiveTicks, spec.id);
         const opsCell = blind ? 'unmeasured' : String(totals.classA);
         const bCell = blind ? 'unmeasured' : String(totals.classB);
         const usdCell = blind ? 'unmeasured' : `$${totals.usd.toFixed(6)}`;
-        // NOT MEASURABLE is not zero. r2fs uploads when the last handle closes,
-        // so no bytes attribute to a sync and it reports no moved figure at all.
-        // A summed absence is 0, and 0 would claim it moved nothing.
         const movedCell = !totals.movedReported
           ? 'not measurable'
           : totals.unanswerable > 0
-            // A partial total is disclosed as partial. Printing it bare would
-            // imply it is the workload's cost when it is the cost of a subset.
             ? `${(totals.bytesPut / 1024 / 1024).toFixed(1)} (${totals.unanswerable} tick(s) could not answer)`
             : (totals.bytesPut / 1024 / 1024).toFixed(1);
         out.push(
@@ -1047,8 +1078,7 @@ function render(arms: readonly ArmResult[], meta: RunMeta): string {
       // and it would have published a confident `chain stays default` from an
       // arm that never attached. The gate is enforced here, at the rule, rather
       // than trusted to have been enforced earlier.
-      const ranked = new Set<string>(arms.filter((arm) => arm.verifyPassed).map((arm) => arm.strategy));
-      const rankableTicks = ticks.filter((tick) => ranked.has(tick.arm));
+      const rankable = rankableTicks(arms, ticks);
       const refused = arms.filter((arm) => !arm.verifyPassed).map((arm) => arm.strategy);
       if (refused.length > 0) {
         out.push(
@@ -1058,7 +1088,7 @@ function render(arms: readonly ArmResult[], meta: RunMeta): string {
         );
         out.push('');
       }
-      const verdict: DecisionVerdict = decide(rankableTicks, 'snapshot-chain', candidate);
+      const verdict: DecisionVerdict = decide(rankable, 'snapshot-chain', candidate);
       out.push('#### Decision rule');
       out.push('');
       out.push(
@@ -1228,7 +1258,6 @@ function parseOptions(argv: readonly string[]): Options {
   };
   const runId = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
   return {
-    reps: Number.parseInt(value('reps', '1'), 10),
     seed: Number.parseInt(value('seed', '20260824'), 10),
     budgetMs: Number.parseInt(value('budget-ms', '8000'), 10),
     decisive: argv.includes('--decisive'),

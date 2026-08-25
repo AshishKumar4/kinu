@@ -13,14 +13,13 @@
   THE FINDING, and it is the reason the tick theorems exist in this shape.
   ================================================================
 
-  A tick archives the overlay's upper with no excludes (`commitChain`'s
-  non-fresh branch: `stageAndPut` of `deltaObjectKey` over `upperDir`).
-  The upper is the whole cumulative changed-set since the base, which is
-  c. The upload is therefore exactly c, even when p ≪ c. Both the upper
-  bound and the lower bound are c. That is Θ(c). It is the proven
-  weakness overlay-cas exists to fix. Reported as
-  `chain_tick_is_theta_c` and `a_pending_only_tick_would_be_strictly_cheaper`,
-  not weakened into O(p).
+  A tick archives the cumulative overlay upper with the configured
+  excludes. If c is the whole changed set and x is excluded, it uploads
+  exactly c - x and never more than c. This is still O(c), not O(p):
+  whenever p ≪ c - x, a pending-only archive is strictly cheaper.
+  `chain_tick_uploads_unexcluded_bytes`,
+  `chain_tick_exact_after_excludes`, and
+  `a_pending_only_tick_would_be_strictly_cheaper` state that result.
 
   A second finding sits next to it, because the brief asked for attach
   cost as a function of (L, p). Chain-mode attach mounts L layers
@@ -65,7 +64,7 @@
   them, where c only grows. `rebase_amortizes_at_a_quiesce` takes the
   `shouldRebase` predicate itself as its hypothesis rather than the
   bare ratio, so it cannot be misread as per-checkpoint, and
-  `a_tick_past_the_ratio_still_uploads_the_whole_delta` states the gap.
+  `a_tick_past_the_ratio_still_uploads_unexcluded_delta` states the gap.
   The honest bound is per-box-lifetime with a quiesce boundary.
 
   -- WHAT THIS ABSTRACTION KEEPS: the two-layer cap, the lazy mount,
@@ -205,49 +204,53 @@ theorem the_changed_set_can_reach_the_whole_tree (n : Nat) :
     ∃ c : Nat, c = n ∧ attachSeed true c = n :=
   ⟨n, rfl, rfl⟩
 
-/-! ## Tick checkpoint — Θ(c)
+/-! ## Tick checkpoint — O(c)
 
-  `commitChain` on a later checkpoint archives `upperDir` with no
-  excludes. The upper is the cumulative changed-set. The first
-  checkpoint of a fresh box archives the whole work directory as the
-  base, which is n. -/
+  `commitChain` archives the cumulative upper with the configured
+  excludes. If c is every changed byte and x of those bytes is
+  excluded, the upload is c - x. The first checkpoint uses the same
+  excludes over the whole work directory. -/
 
-def tickUpload (c : Nat) : Nat := c
+def tickUpload (c excluded : Nat) : Nat := c - excluded
 
-/-- **A tick re-ships the cumulative changed-set.** Equal, not an upper
-    bound someone might still read as "about p". -/
-theorem chain_tick_is_theta_c (c : Nat) : tickUpload c = c := rfl
+theorem chain_tick_uploads_unexcluded_bytes (c excluded : Nat) :
+    tickUpload c excluded = c - excluded := rfl
 
-theorem chain_tick_upper_bound (c : Nat) : tickUpload c ≤ c :=
-  Nat.le_refl c
+theorem chain_tick_upper_bound (c excluded : Nat) :
+    tickUpload c excluded ≤ c := by
+  simp [tickUpload]
 
-theorem chain_tick_lower_bound (c : Nat) : c ≤ tickUpload c :=
-  Nat.le_refl c
+theorem chain_tick_exact_after_excludes (c excluded : Nat)
+    (h : excluded ≤ c) :
+    tickUpload c excluded + excluded = c := by
+  exact Nat.sub_add_cancel h
 
-/-- **Finding.** A pending-only archive would be strictly cheaper
-    whenever p ≪ c. The algorithm does not take that archive. This is
-    the weakness overlay-cas fixes, not a bound we pretend is O(p). -/
+/-- A pending-only archive is cheaper whenever p is smaller than the
+    cumulative changed set that remains after excludes. -/
 theorem a_pending_only_tick_would_be_strictly_cheaper
-    (p c : Nat) (h : p < c) : p < tickUpload c :=
-  h
+    (p c excluded : Nat) (h : p < c - excluded) :
+    p < tickUpload c excluded := h
 
-def tickCost (c : Nat) : Cost :=
+def tickCost (c excluded : Nat) : Cost :=
   { classA := 1
     classB := 0
-    bytes := c
+    bytes := tickUpload c excluded
     journalScanned := 0
     layersMounted := 0 }
 
-def firstBaseCost (n : Nat) : Cost :=
+def firstBaseCost (n excluded : Nat) : Cost :=
   { classA := 1
     classB := 0
-    bytes := n
+    bytes := n - excluded
     journalScanned := 0
     layersMounted := 0 }
 
-theorem first_base_is_linear_in_n (n : Nat) :
-    (firstBaseCost n).bytes = n :=
-  rfl
+theorem first_base_uploads_unexcluded_bytes (n excluded : Nat) :
+    (firstBaseCost n excluded).bytes = n - excluded := rfl
+
+theorem first_base_upper_bound (n excluded : Nat) :
+    (firstBaseCost n excluded).bytes ≤ n := by
+  simp [firstBaseCost]
 
 /-! ## Rebase
 
@@ -294,14 +297,12 @@ theorem rebase_amortizes_at_a_quiesce (base c n k : Nat)
       rw [Nat.mul_comm k c, Nat.add_comm c (c * k)]
       exact (Nat.mul_succ c k).symm
 
-/-- **And the gap the amortization does NOT cover.** A tick whose delta
-    has already outgrown k·base does not collapse — it appends, and
-    uploads the whole cumulative set anyway. So between two quiesces the
-    amortization is silent and c only grows. The bound is per-box-
-    lifetime with a quiesce boundary, never per-checkpoint. -/
-theorem a_tick_past_the_ratio_still_uploads_the_whole_delta
-    (c base k : Nat) (_htrig : k * base < c) :
-    shouldRebase .tick true c base k = false ∧ tickUpload c = c :=
+/-- A tick whose delta has outgrown k·base does not collapse. It
+    uploads the cumulative changed bytes that remain after excludes. -/
+theorem a_tick_past_the_ratio_still_uploads_unexcluded_delta
+    (c excluded base k : Nat) (_htrig : k * base < c) :
+    shouldRebase .tick true c base k = false
+      ∧ tickUpload c excluded = c - excluded :=
   ⟨rfl, rfl⟩
 
 /-! ## Generations and the orphan sweep
@@ -469,4 +470,122 @@ theorem unchanged_tick_uploads_nothing :
     shouldCheckpoint true = false :=
   rfl
 
+/-! ### The loss window
+
+  What a crash loses, in wall-clock terms: exactly the writes since
+  the last completed tick. The tick's model is the fingerprint gate
+  as shipped (packages/devbox/src/devbox.ts checkChanges): a tick
+  that completes saves EVERYTHING written before it, because the gate
+  commits whenever it cannot prove "unchanged" — it never skips a
+  changed tree. The red direction models the deployed 2026-08-25
+  defect exactly: a tick that misclassifies a changed tree as
+  unchanged saves nothing, and no number of such ticks closes the
+  window. -/
+
+/-- Workload writes against tick-saved progress. `written` counts
+    writes the container accepted; `saved` counts what a completed
+    tick has made durable. -/
+structure Backlog where
+  written : Nat
+  saved : Nat
+
+def Backlog.start : Backlog := ⟨0, 0⟩
+
+/-- What a crash loses right now: accepted and not yet durable. -/
+def Backlog.loss (b : Backlog) : Nat := b.written - b.saved
+
+/-- A workload beat: one write lands, or one tick completes. -/
+inductive Beat
+  | write
+  | tick
+
+/-- One beat. A completed tick saves everything written — the
+    fingerprint gate's contract, not an optimistic assumption. -/
+def beatOf (b : Backlog) : Beat → Backlog
+  | .write => { b with written := b.written + 1 }
+  | .tick => { b with saved := b.written }
+
+/-- A workload trace, folded. A crash is a stop at any prefix. -/
+def replayBeats (b : Backlog) : List Beat → Backlog :=
+  List.foldl beatOf b
+
+/-- Writes in a trace segment. -/
+def writesIn : List Beat → Nat
+  | [] => 0
+  | .write :: bs => writesIn bs + 1
+  | .tick :: bs => writesIn bs
+
+/-- **A completed tick closes the window**: loss is zero the moment it
+    lands. -/
+theorem a_completed_tick_closes_the_window (b : Backlog) :
+    (beatOf b .tick).loss = 0 := by
+  simp [beatOf, Backlog.loss]
+
+/-- A tick-free trace segment only accumulates writes: written grows
+    by exactly the segment's writes and saved does not move. -/
+theorem a_tick_free_segment_only_writes (bs : List Beat)
+    (h : ∀ x ∈ bs, x = Beat.write) (b : Backlog) :
+    replayBeats b bs
+      = { written := b.written + writesIn bs, saved := b.saved } := by
+  induction bs generalizing b with
+  | nil => simp [replayBeats, writesIn]
+  | cons x bs ih =>
+    have hx : x = Beat.write := h x (List.mem_cons_self x bs)
+    have hrest : ∀ y ∈ bs, y = Beat.write :=
+      fun y hy => h y (List.mem_cons_of_mem x hy)
+    subst hx
+    rw [replayBeats, List.foldl_cons, ← replayBeats, ih hrest]
+    simp [beatOf, writesIn]
+    omega
+
+/-- **The loss window, exactly.** Split any trace at its last
+    completed tick: whatever ran before it, a crash after a tick-free
+    suffix loses exactly that suffix's writes — never a byte from
+    before the tick. -/
+theorem loss_is_the_writes_since_the_last_tick
+    (before : List Beat) (since : List Beat)
+    (h : ∀ x ∈ since, x = Beat.write) :
+    (replayBeats Backlog.start (before ++ Beat.tick :: since)).loss
+      = writesIn since := by
+  rw [replayBeats, List.foldl_append, List.foldl_cons]
+  rw [← replayBeats, ← replayBeats,
+    a_tick_free_segment_only_writes since h]
+  simp [beatOf, Backlog.loss]
+  omega
+
+/-- The tick with cannot-decide-commits REMOVED: a changed tree
+    misclassified as unchanged saves nothing. This is the deployed
+    2026-08-25 defect (21 "unchanged" ticks over changed workspaces)
+    as a step function. -/
+def beatSkipping (b : Backlog) : Beat → Backlog
+  | .write => { b with written := b.written + 1 }
+  | .tick => b
+
+def replaySkipping (b : Backlog) : List Beat → Backlog :=
+  List.foldl beatSkipping b
+
+/-- Any number of skipping ticks leaves the crash loss unchanged. -/
+theorem skipped_ticks_preserve_loss (b : Backlog) (ticks : Nat) :
+    (replaySkipping b (List.replicate ticks Beat.tick)).loss = b.loss := by
+  induction ticks with
+  | zero => simp [replaySkipping]
+  | succ ticks ih =>
+    rw [List.replicate_succ, replaySkipping, List.foldl_cons, ← replaySkipping]
+    exact ih
+
+/-- **No cadence of skipping ticks closes the window.** Once one write
+    is accepted, any finite number of ticks that lie about unchanged
+    state leave that write exposed to a crash. -/
+theorem no_number_of_skipping_ticks_closes_the_window (ticks : Nat) :
+    (replaySkipping (beatSkipping Backlog.start .write)
+      (List.replicate ticks Beat.tick)).loss = 1 := by
+  rw [skipped_ticks_preserve_loss]
+  decide
+
+/-- **Remove the gate and the window never closes**: a write followed
+    by a completed-but-skipping tick still shows loss, so no tick
+    cadence bounds what a crash costs. -/
+theorem a_skipping_tick_leaves_the_window_open :
+    (beatSkipping (beatSkipping Backlog.start .write) .tick).loss = 1 := by
+  decide
 end Proteus.Storage.SnapshotChain

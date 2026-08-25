@@ -18,6 +18,7 @@ export {
   CHECKPOINT_OUTCOME_KINDS,
   DEVBOX_RUNTIME_DIR,
   DEVBOX_WORKDIR,
+  parseDevboxStrategyName,
 } from './storage';
 export type {
   AttachOutcome,

@@ -13,101 +13,139 @@
 
 import { describeThrown } from './lifecycle';
 
-/** Largest object moved through memory in one PUT before multipart takes over,
- *  and the part size above that threshold. Both 8 MiB — this package's own
- *  budget, not a platform number: one buffered copy of that size fits well
- *  under the isolate ceiling (`worker.isolate.memory` in the platform
- *  catalog), and a part that size keeps the part count low for an archive of
- *  any realistic workspace. */
-const SINGLE_PUT_MAX_BYTES = 8 * 1024 * 1024;
-const MULTIPART_PART_BYTES = 8 * 1024 * 1024;
+/** Largest object moved through memory in one PUT before multipart takes over.
+ *  This package's own budget, not a platform number: one buffered copy of that
+ *  size fits well under the isolate ceiling (`worker.isolate.memory` in the
+ *  platform catalog). */
+export const SMALL_PUT_BYTES = 8 * 1024 * 1024;
+/** The size of every non-final part of a multipart upload. R2 rejects a
+ *  `complete()` whose parts are not uniform except for the last, so every part
+ *  but the final short one is exactly this many bytes. */
+export const MULTIPART_PART_BYTES = 8 * 1024 * 1024;
 
 /**
  * Move staged bytes into the store.
  *
- * A small object is one atomic PUT. A larger one streams through bounded-memory
- * multipart parts.
+ * A small object is one atomic PUT. A larger one streams through multipart
+ * parts of exactly {@link MULTIPART_PART_BYTES}, except the final short one.
  *
- * ANSWERS WHAT LANDED, which is not always what the caller expected. `size` is
- * the caller's measurement taken before the read, and a file still settling on
- * disk yields MORE than it claimed: a deployed run recorded a delta as
- * 700387328 bytes and landed 702791680, after which every wake refused because
- * the integrity probe compares the record against the object. The count
- * returned here is the one a durable record may carry.
+ * `size` ROUTES, IT DOES NOT BOUND. It is the caller's measurement of a file
+ * the caller no longer controls, and it has been wrong in production: a
+ * deployed run recorded a delta as 700387328 bytes and landed 702791680. So
+ * the small route buffers at most {@link SMALL_PUT_BYTES} and then PROMOTES the
+ * buffer into a multipart upload rather than trusting the hint — a stale small
+ * hint over a huge stream stays bounded in memory and still lands every byte.
+ * The count returned here is the one a durable record may carry.
  */
 export async function putStream(
   bucket: R2Bucket,
   key: string,
   stream: ReadableStream<Uint8Array>,
   size: number,
+  options?: R2PutOptions,
 ): Promise<number> {
-  if (size <= SINGLE_PUT_MAX_BYTES) {
-    // `size` ROUTES, IT DOES NOT BOUND. It is the caller's measurement of a file
-    // the caller no longer controls, and a short one must not truncate the
-    // upload or overflow the buffer — `Uint8Array.set` past the end throws, so
-    // trusting it for capacity turns a stale number into a failed checkpoint.
-    // The chunks decide the length; the hint only picks the lane.
-    const chunks: Uint8Array[] = [];
-    const reader = stream.getReader();
-    let offset = 0;
+  const reader = stream.getReader();
+  const buffered: Uint8Array[] = [];
+  let held = 0;
+  let multipart: R2MultipartUpload | undefined;
+  let slicer: PartSlicer | undefined;
+  try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done === true || value === undefined) break;
-      chunks.push(value);
-      offset += value.byteLength;
+      if (slicer === undefined) {
+        // The small route holds at most SMALL_PUT_BYTES in memory. `size`
+        // ROUTES, IT DOES NOT BOUND: it is a measurement of a file the caller
+        // no longer controls, and it has been wrong in production (a deployed
+        // run recorded 700387328 bytes and landed 702791680). When the stream
+        // crosses the line the buffer PROMOTES into a multipart upload —
+        // seeding it with everything already read — so a stale small hint over
+        // a huge stream stays bounded and still lands every byte.
+        if (size <= SMALL_PUT_BYTES && held + value.byteLength <= SMALL_PUT_BYTES) {
+          buffered.push(value);
+          held += value.byteLength;
+          continue;
+        }
+        const multipartOptions: R2MultipartOptions = {};
+        if (options?.customMetadata !== undefined) {
+          multipartOptions.customMetadata = options.customMetadata;
+        }
+        if (options?.httpMetadata !== undefined) {
+          multipartOptions.httpMetadata = options.httpMetadata;
+        }
+        multipart = await bucket.createMultipartUpload(key, multipartOptions);
+        slicer = new PartSlicer(multipart);
+        for (const chunk of buffered) await slicer.push(chunk);
+      }
+      await slicer.push(value);
     }
-    const buffer = new Uint8Array(offset);
+    if (slicer !== undefined) return await slicer.finish();
+    const buffer = new Uint8Array(held);
     let at = 0;
-    for (const chunk of chunks) {
+    for (const chunk of buffered) {
       buffer.set(chunk, at);
       at += chunk.byteLength;
     }
-    await bucket.put(key, buffer);
-    return offset;
-  }
-  const multipart = await bucket.createMultipartUpload(key);
-  try {
-    const reader = stream.getReader();
-    const parts: R2UploadedPart[] = [];
-    let carry = new Uint8Array(0);
-    let partNumber = 1;
-    let landed = 0;
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done === true || value === undefined) break;
-      const merged = new Uint8Array(carry.byteLength + value.byteLength);
-      merged.set(carry);
-      merged.set(value, carry.byteLength);
-      if (merged.byteLength < MULTIPART_PART_BYTES) {
-        carry = merged;
-        continue;
-      }
-      const whole = Math.floor(merged.byteLength / MULTIPART_PART_BYTES) * MULTIPART_PART_BYTES;
-      parts.push(await multipart.uploadPart(partNumber, merged.subarray(0, whole)));
-      landed += whole;
-      partNumber += 1;
-      carry = merged.slice(whole);
-    }
-    if (carry.byteLength > 0) {
-      parts.push(await multipart.uploadPart(partNumber, carry));
-      landed += carry.byteLength;
-    }
-    await multipart.complete(parts);
-    return landed;
+    await bucket.put(key, buffer, options);
+    return held;
   } catch (error) {
     // THE ORIGINAL ERROR IS THE ONE THAT MATTERS. Abandoning the upload is
     // best-effort cleanup: if the abort itself fails, saying so must not
     // replace the reason the upload failed, which is what an unguarded
     // `await multipart.abort()` here did.
-    try {
-      await multipart.abort();
-    } catch (abortFailure) {
-      console.error(
-        `[devbox] the abandoned multipart upload for ${key} was not aborted: `
-        + describeThrown({ cause: abortFailure }),
-      );
+    if (multipart !== undefined) {
+      try {
+        await multipart.abort();
+      } catch (abortFailure) {
+        console.error(
+          `[devbox] the abandoned multipart upload for ${key} was not aborted: `
+          + describeThrown({ cause: abortFailure }),
+        );
+      }
     }
     throw error;
+  }
+}
+
+/** One multipart upload fed by a part slicer that never emits an oversized or
+ *  non-uniform non-final part. R2 refuses a `complete()` whose parts disagree,
+ *  so one read spanning several part sizes must come out as SEVERAL exact
+ *  parts, never as one big one. */
+class PartSlicer {
+  readonly #parts: R2UploadedPart[] = [];
+  #carry: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
+  #partNumber = 1;
+  #landed = 0;
+
+  constructor(private readonly upload: R2MultipartUpload) {}
+
+  /** Feed one chunk; uploads every whole {@link MULTIPART_PART_BYTES} window
+   *  it completes, keeping only the tail in memory. */
+  async push(value: Uint8Array): Promise<void> {
+    let merged = value;
+    if (this.#carry.byteLength > 0) {
+      merged = new Uint8Array(this.#carry.byteLength + value.byteLength);
+      merged.set(this.#carry);
+      merged.set(value, this.#carry.byteLength);
+    }
+    while (merged.byteLength >= MULTIPART_PART_BYTES) {
+      const part = merged.subarray(0, MULTIPART_PART_BYTES);
+      this.#parts.push(await this.upload.uploadPart(this.#partNumber, part));
+      this.#landed += MULTIPART_PART_BYTES;
+      this.#partNumber += 1;
+      merged = merged.slice(MULTIPART_PART_BYTES);
+    }
+    this.#carry = merged;
+  }
+
+  async finish(): Promise<number> {
+    if (this.#carry.byteLength > 0) {
+      this.#parts.push(await this.upload.uploadPart(this.#partNumber, this.#carry));
+      this.#landed += this.#carry.byteLength;
+      this.#carry = new Uint8Array(0);
+    }
+    await this.upload.complete(this.#parts);
+    return this.#landed;
   }
 }
 

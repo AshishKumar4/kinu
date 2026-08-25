@@ -13,13 +13,13 @@ export {
   pendingBatches,
   readFoldedSeq,
   stampEntries,
-  vanishedTombstones,
 } from './journal';
 export {
-  assembleFile,
+  fileChunkStream,
   foldJournalIntoTree,
   replayPending,
   stageBlobs,
+  sweepOrphanBlobs,
   type FoldResult,
   type StageBlobsOptions,
   type StageBlobsResult,

@@ -8,11 +8,13 @@
 // The last two tests assert the denominator: every outcome kind the
 // implementation enumerates has to be produced above.
 import { describe, expect, test } from 'bun:test';
+import { Buffer } from 'node:buffer';
 
 import {
   appendJournalBatch,
   blobKey,
   coalesce,
+  CHUNK_SIZE,
   digestBytes,
   emptyCounters,
   foldJournalIntoTree,
@@ -25,16 +27,20 @@ import {
   replayPending,
   sha256Hex,
   stageBlobs,
-  vanishedTombstones,
+  sweepOrphanBlobs,
   type CasStore,
   type FileEntry,
   type JournalEntry,
   type StoreCounters,
 } from '../src/cas';
 import {
+  capSignatures,
   CAS_TREE_MOUNT,
   normalizeOverlayCasState,
+  OVERLAY_CAS_STATE_MAX_BYTES,
   overlayCasStorage,
+  overlayCasStateBytes,
+  SIGNATURE_ROWS_MAX,
   type OverlayCasPorts,
   type OverlayCasState,
   type UpperSignature,
@@ -57,6 +63,8 @@ class MemoryStore implements CasStore {
   /** Every mutating call, in order. The crash-ordering assertions read this:
    *  an end-state check cannot tell a safe order from an unsafe one. */
   readonly writes: string[] = [];
+  requireBlobGetsInsideStream = false;
+  private insidePutStream = false;
 
   async put(key: string, bytes: Uint8Array): Promise<void> {
     this.counters.putCalls += 1;
@@ -65,7 +73,38 @@ class MemoryStore implements CasStore {
     this.objects.set(key, bytes);
   }
 
+  async putStream(
+    key: string,
+    stream: ReadableStream<Uint8Array>,
+    size: number,
+  ): Promise<void> {
+    const reader = stream.getReader();
+    const parts: Uint8Array[] = [];
+    let total = 0;
+    this.insidePutStream = true;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        parts.push(value);
+        total += value.byteLength;
+      }
+    } finally {
+      this.insidePutStream = false;
+    }
+    expect(total).toBe(size);
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const part of parts) {
+      bytes.set(part, offset);
+      offset += part.byteLength;
+    }
+    await this.put(key, bytes);
+  }
   async get(key: string): Promise<Uint8Array | null> {
+    if (this.requireBlobGetsInsideStream && key.startsWith('blobs/') && !this.insidePutStream) {
+      throw new Error(`eager blob read outside putStream: ${key}`);
+    }
     const value = this.objects.get(key);
     this.counters.getCalls += 1;
     if (value === undefined) return null;
@@ -88,6 +127,22 @@ class MemoryStore implements CasStore {
   async list(prefix: string): Promise<string[]> {
     this.counters.listCalls += 1;
     return [...this.objects.keys()].filter(key => key.startsWith(prefix)).sort();
+  }
+}
+
+class FailSecondJournalStore extends MemoryStore {
+  private journalPuts = 0;
+  private failed = false;
+
+  override async put(key: string, bytes: Uint8Array): Promise<void> {
+    if (key.startsWith('journal/')) {
+      this.journalPuts += 1;
+      if (this.journalPuts === 2 && !this.failed) {
+        this.failed = true;
+        throw new Error('second journal batch failed');
+      }
+    }
+    await super.put(key, bytes);
   }
 }
 
@@ -169,32 +224,6 @@ describe('coalesce — latest state per path, sequence order', () => {
   });
 });
 
-describe('tombstones — whiteout of upper-only paths, never of folded ones', () => {
-  test('a vanished upper-only path becomes a delete', () => {
-    const previous = new Map<string, { folded?: boolean }>([['old', {}], ['kept', {}]]);
-    const current = new Set(['kept']);
-    expect(vanishedTombstones(previous, current, new Set())).toEqual([
-      { kind: 'delete', path: 'old' },
-    ]);
-  });
-
-  test('a folded path that is absent from the upper is not a deletion', () => {
-    // The mass-tombstone defect: an emptied upper after fold treated every
-    // previously-folded path as vanished and deleted the workspace.
-    const previous = new Map<string, { folded?: boolean }>([
-      ['folded.txt', { folded: true }],
-      ['pending.txt', {}],
-    ]);
-    expect(vanishedTombstones(previous, new Set(), new Set())).toEqual([
-      { kind: 'delete', path: 'pending.txt' },
-    ]);
-  });
-
-  test('an already-emitted whiteout is not doubled', () => {
-    const previous = new Map<string, { folded?: boolean }>([['gone', {}]]);
-    expect(vanishedTombstones(previous, new Set(), new Set(['gone']))).toEqual([]);
-  });
-});
 
 describe('crash ordering — blob before journal, journal before fold, fold before cursor', () => {
   test('a crash after blobs land but before the journal entry leaves no dangling entry', async () => {
@@ -385,15 +414,6 @@ describe('rename — delete plus create, blob reuse', () => {
     expect(store.counters.putCalls).toBe(putsBefore);
   });
 
-  test('an upper-only rename is a vanished tombstone plus a create', () => {
-    const previous = new Map<string, UpperSignature>([
-      ['old.txt', { kind: 'file', mode: 0o644, mtimeMs: 1, size: 4, hash: 'abc' }],
-    ]);
-    const current = new Set(['new.txt']);
-    expect(vanishedTombstones(previous, current, new Set())).toEqual([
-      { kind: 'delete', path: 'old.txt' },
-    ]);
-  });
 });
 
 describe('replay — O(pending), never the tree', () => {
@@ -415,15 +435,47 @@ describe('replay — O(pending), never the tree', () => {
     const store = new MemoryStore();
     const first = fileEntry(1, 'a.txt', 'one');
     const second = fileEntry(2, 'b.txt', 'two');
-    await stageBlobs({ store, entries: [first, second], readChunk: readerFor(new Map([['a.txt', fileBytes('one')], ['b.txt', fileBytes('two')]])) });
+    await stageBlobs({
+      store,
+      entries: [first, second],
+      readChunk: readerFor(new Map([
+        ['a.txt', fileBytes('one')],
+        ['b.txt', fileBytes('two')],
+      ])),
+    });
     await appendJournalBatch(store, [first]);
     await foldJournalIntoTree(store);
     await appendJournalBatch(store, [second]);
+
     const replayed = await replayPending(store);
     expect(replayed.foldedSeq).toBe(1);
-    expect(replayed.pending.map(e => e.path)).toEqual(['b.txt']);
+    expect(replayed.pending.map(entry => entry.path)).toEqual(['b.txt']);
     expect(replayed.replayed).toHaveLength(1);
     expect(replayed.replayed[0]?.entry.path).toBe('b.txt');
+  });
+
+  test('replay returns a lazy stream before it reads one blob', async () => {
+    const store = new MemoryStore();
+    const entry = fileEntry(1, 'lazy.txt', 'streamed');
+    await stageBlobs({
+      store,
+      entries: [entry],
+      readChunk: readerFor(new Map([['lazy.txt', fileBytes('streamed')]])),
+    });
+    await appendJournalBatch(store, [entry]);
+    store.requireBlobGetsInsideStream = true;
+
+    const replayed = await replayPending(store);
+    store.requireBlobGetsInsideStream = false;
+    const reader = replayed.replayed[0]?.stream?.getReader();
+    if (reader === undefined) throw new Error('file replay returned no stream');
+    const chunks: Uint8Array[] = [];
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+    }
+    expect(new TextDecoder().decode(chunks[0])).toBe('streamed');
   });
 
   test('a delete entry replays as a whiteout instruction, not as tree bytes', async () => {
@@ -431,7 +483,7 @@ describe('replay — O(pending), never the tree', () => {
     const gone: JournalEntry = { kind: 'delete', seq: 1, path: 'gone.txt' };
     await appendJournalBatch(store, [gone]);
     const replayed = await replayPending(store);
-    expect(replayed.replayed).toEqual([{ entry: gone, bytes: null }]);
+    expect(replayed.replayed).toEqual([{ entry: gone, stream: null }]);
   });
 });
 
@@ -442,12 +494,11 @@ describe('the stored record is untrusted input', () => {
     knownBlobs: ['b'.repeat(64)],
   };
 
-  test('a row this code wrote round-trips with its optional fields present', () => {
+  test('a legacy knownBlobs cache is ignored while the state still parses', () => {
     const state = normalizeOverlayCasState(sound);
     expect(state?.lastCheckpointAt).toBe(5);
     expect(state?.signatures['a.txt']?.hash).toBe('a'.repeat(64));
-    expect(state?.knownBlobs).toEqual(['b'.repeat(64)]);
-    // Declared-and-undefined rather than missing: every reader checks it.
+    expect(Object.hasOwn(state ?? {}, 'knownBlobs')).toBe(false);
     expect(state !== null && 'lastFailure' in state).toBe(true);
     expect(state?.lastFailure).toBeUndefined();
   });
@@ -532,7 +583,6 @@ type UpperNode =
 
 const UPPER_DIR = `${DEVBOX_RUNTIME_DIR}/cas-upper`;
 
-/** Strip one level of the single-quote shell quoting `shellPath` applies. */
 function unquote(token: string): string {
   return token.startsWith("'") && token.endsWith("'")
     ? token.slice(1, -1).replaceAll(`'\\''`, "'")
@@ -582,7 +632,7 @@ function fakeContainer(upper: Map<string, UpperNode>, calls: string[]) {
     if (command.startsWith('cat /proc/mounts')) return ok('');
     if (command.includes('UPPER-GONE')) {
       calls.push('scanUpper');
-      return ok(`UPPER-OK\0${findOutput()}`);
+      return ok(`UPPER-OK:${Buffer.from(findOutput()).toString('base64')}`);
     }
     if (command.startsWith('sh ') && command.includes('cas-digest.sh')) {
       calls.push('digest');
@@ -599,6 +649,14 @@ function fakeContainer(upper: Map<string, UpperNode>, calls: string[]) {
       let binary = '';
       for (const byte of view) binary += String.fromCharCode(byte);
       return ok(btoa(binary));
+    }
+    const touch = /touch (?:-h )?-m -d @([0-9.]+) -- (.+)$/.exec(command);
+    if (touch?.[1] && touch[2]) {
+      const absolute = unquote(touch[2]);
+      const node = upper.get(absolute.slice(UPPER_DIR.length + 1));
+      if (node !== undefined && node.kind !== 'whiteout') {
+        node.mtimeMs = Number(touch[1]) * 1000;
+      }
     }
     return ok('');
   };
@@ -618,6 +676,7 @@ function harness(overrides: {
   upper?: Map<string, UpperNode>;
   signatures?: OverlayCasState['signatures'];
   mkdirFails?: boolean;
+  writeStateFails?: boolean;
   /** Reuse a prior box's store across a recycle. */
   store?: MemoryStore;
   /** Reuse a prior box's durable state across a recycle. */
@@ -637,7 +696,6 @@ function harness(overrides: {
       : {
         lastCheckpointAt: overrides.lastCheckpointAt ?? 0,
         signatures: overrides.signatures ?? {},
-        knownBlobs: [],
         lastFailure: undefined,
       };
   let objects = overrides.objects ?? 0;
@@ -685,11 +743,11 @@ function harness(overrides: {
           // New shape: absent exits 0 via marker; a failed find keeps the
           // already-printed marker on stdout and carries a non-zero exit.
           if (overrides.upperExists === false) {
-            return Promise.resolve({ stdout: 'UPPER-GONE\0', stderr: '', exitCode: 0 });
+            return Promise.resolve({ stdout: 'UPPER-GONE', stderr: '', exitCode: 0 });
           }
           if (overrides.findFailsMidWalk === true) {
             return Promise.resolve({
-              stdout: 'UPPER-OK\0',
+              stdout: 'UPPER-OK:',
               stderr: findErr,
               exitCode: 1,
             });
@@ -736,6 +794,27 @@ function harness(overrides: {
       });
       return Promise.resolve();
     },
+    writeFileStream: async (path, stream) => {
+      calls.push(`writeFile:${path}`);
+      const reader = stream.getReader();
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        size += value.byteLength;
+      }
+      const content = new Uint8Array(size);
+      let offset = 0;
+      for (const chunk of chunks) {
+        content.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      upper.set(path.slice(UPPER_DIR.length + 1), {
+        kind: 'file', mode: 0o644, mtimeMs: 0, content,
+      });
+    },
     mountTree: () => {
       calls.push('mountTree');
       if (overrides.mountLands === false) return Promise.reject(new Error('mount refused'));
@@ -751,12 +830,16 @@ function harness(overrides: {
       calls.push('clearPrefix');
       const deleted = objects;
       objects = 0;
+      store.objects.clear();
       bytes = 0;
       return Promise.resolve(deleted);
     },
     readState: () => Promise.resolve(state),
     writeState: (next) => {
       calls.push('writeState');
+      if (overrides.writeStateFails === true) {
+        return Promise.reject(new Error('state write failed'));
+      }
       state = next;
       return Promise.resolve();
     },
@@ -817,7 +900,7 @@ describe('attach — the mount must be observed to have landed', () => {
     // unrepresentable rather than repaired, so the early return is correct for
     // free and needs no marker.
     const record = harness({ objects: 2, bytes: 40 });
-    const entry = fileEntry(1, 'pending.txt', 'body');
+    const entry = { ...fileEntry(1, 'pending.txt', 'body'), mtimeMs: 123_456 };
     await stageBlobs({
       store: record.store,
       entries: [entry],
@@ -833,6 +916,8 @@ describe('attach — the mount must be observed to have landed', () => {
     expect(wrote).toBeGreaterThanOrEqual(0);
     expect(mount).toBeGreaterThanOrEqual(0);
     expect(wrote).toBeLessThan(mount);
+    const replayedNode = record.upper.get('pending.txt');
+    expect(replayedNode?.kind === 'file' ? replayedNode.mtimeMs : null).toBe(123_456);
   });
 
   test('an already-mounted box does NOT replay again, because the mount proves it happened', async () => {
@@ -1207,6 +1292,35 @@ describe('a pre-stop write survives the recycle', () => {
     expect(await pendingBatches(box.store, await readFoldedSeq(box.store))).toHaveLength(0);
     expect([...box.store.objects.keys()].some(key => key.startsWith('tree/'))).toBe(true);
   });
+
+  test('a crash after fold and cursor cannot tombstone the folded file', async () => {
+    const first = harness({ mountedAtStart: true, objects: 0, bytes: 0 });
+    first.upper.set('committed.txt', {
+      kind: 'file', mode: 0o644, mtimeMs: 9, content: fileBytes('kept'),
+    });
+    expect((await checkpointOf(first, 'tick')).kind).toBe('committed');
+    const oldState = first.stateNow();
+
+    const folding = harness({
+      mountedAtStart: true,
+      store: first.store,
+      state: oldState,
+      upper: first.upper,
+      writeStateFails: true,
+    });
+    await expect(checkpointOf(folding, 'quiesce')).rejects.toThrow('state write failed');
+    expect(first.store.objects.has('tree/committed.txt')).toBe(true);
+    expect(await readFoldedSeq(first.store)).toBeGreaterThan(0);
+
+    const recovered = harness({
+      mountedAtStart: true,
+      store: first.store,
+      state: oldState,
+      upper: new Map(),
+    });
+    await checkpointOf(recovered, 'quiesce');
+    expect(first.store.objects.has('tree/committed.txt')).toBe(true);
+  });
 });
 
 describe('movedBytes says what this checkpoint moved', () => {
@@ -1229,5 +1343,356 @@ describe('movedBytes says what this checkpoint moved', () => {
     const outcome = await checkpointOf(record, 'quiesce');
     expect(outcome.kind).toBe('failed');
     expect(outcome.movedBytes).toBeUndefined();
+  });
+});
+
+// ── accepted review findings ────────────────────────────────────────────────
+
+describe('the stale bystander rule — unjournalled paths stay detectable', () => {
+  function bystanderHarness() {
+    const record = harness({ mountedAtStart: true, objects: 0, bytes: 0 });
+    record.upper.set('a-fresh.txt', {
+      kind: 'file', mode: 0o644, mtimeMs: 100, content: fileBytes('AAAA'),
+    });
+    record.upper.set('m-stale.txt', {
+      kind: 'file', mode: 0o644, mtimeMs: 100, content: fileBytes('BBBBBB'),
+    });
+    record.upper.set('z-fresh.txt', {
+
+      kind: 'file', mode: 0o644, mtimeMs: 100, content: fileBytes('CCCCCC'),
+    });
+    // THE STALE EVENT: the middle file's bytes change between the digest and
+    // the chunk read, which is exactly what a writer mid-tick produces.
+    const inner = record.ports.exec;
+    let stale = true;
+    record.ports.exec = async (command) => {
+      if (stale && command.includes('| head -c ') && command.includes('/m-stale.txt')) {
+        return { stdout: btoa('XXXXXX'), stderr: '', exitCode: 0 };
+      }
+      return await inner(command);
+    };
+    return { record, clearStale: () => { stale = false; } };
+  }
+
+  test('a stale entry stops staging and NOTHING unjournalled is recorded', async () => {
+    const { record } = bystanderHarness();
+    const outcome = await checkpointOf(record, 'quiesce');
+    // The stale file aborts its WHOLE batch (stageBlobs stops there), so this
+    // quiesce journalled none of the three changes.
+    expect(outcome.kind).toBe('committed');
+    // The sweep reclaimed the blob staging uploaded before the stale stop;
+    // nothing durable names any of the three changes.
+    expect([...record.store.objects.keys()].filter(k => k.startsWith('blobs/'))).toEqual([]);
+    // AND THE FIX ITSELF: no path carries a fresh signature (a fresh box has
+    // none to carry forward), so the next scan re-detects all three instead
+    // of believing they were saved. The OLD code persisted every scanned
+    // signature here, and these three asserts are what failed.
+    const state = record.stateNow();
+    expect(state?.signatures['a-fresh.txt']).toBeUndefined();
+    expect(state?.signatures['m-stale.txt']).toBeUndefined();
+    expect(state?.signatures['z-fresh.txt']).toBeUndefined();
+  });
+
+  test('every non-stale change survives the next checkpoint AND a recycle', async () => {
+    const { record, clearStale } = bystanderHarness();
+    await checkpointOf(record, 'quiesce');
+    clearStale();
+
+    // THE RE-DETECTION TICK. Carried-back signatures mean all three files are
+    // seen as changed again and journalled. Under the old persist-everything
+    // behaviour this quiesce saw fresh signatures for unchanged-looking paths
+    // and committed nothing — the silent loss on recycle.
+    const second = await checkpointOf(record, 'quiesce');
+    expect(second.kind).toBe('committed');
+
+    // THE RECYCLE. Fresh container, fresh isolate; only the store and the
+    const journalPutsBefore = record.store.writes
+      .filter(write => write.startsWith('put:journal/')).length;
+    const unchanged = await checkpointOf(record, 'tick');
+    expect(unchanged.kind).toBe('skipped');
+    expect(record.store.writes.filter(write => write.startsWith('put:journal/')))
+      .toHaveLength(journalPutsBefore);
+    // durable state cross. Every non-stale change must be readable again.
+    const recycled = harness({
+      mountedAtStart: false,
+      store: record.store,
+      state: record.stateNow(),
+    });
+    await attachOf(recycled);
+
+    for (const [path, text] of [
+      ['a-fresh.txt', 'AAAA'], ['m-stale.txt', 'BBBBBB'], ['z-fresh.txt', 'CCCCCC'],
+    ] as const) {
+      const inTree = record.store.objects.get(`tree/${path}`);
+      expect(inTree !== undefined || recycled.upper.has(path)).toBe(true);
+      if (inTree !== undefined) {
+        expect(new TextDecoder().decode(inTree)).toBe(text);
+      }
+    }
+  });
+});
+  test('a failed later batch reloads ownership and sequence before retry', async () => {
+    const store = new FailSecondJournalStore();
+    const record = harness({ mountedAtStart: true, objects: 0, bytes: 0, store });
+    for (let at = 0; at < 65; at += 1) {
+      record.upper.set(`batch-${String(at).padStart(2, '0')}.txt`, {
+        kind: 'file', mode: 0o644, mtimeMs: at + 1, content: fileBytes(String(at)),
+      });
+    }
+    const storage = overlayCasStorage(record.ports);
+    const first = await storage.checkpoint('tick');
+    expect(first.kind).toBe('failed');
+    expect(first.reason).toContain('second journal batch failed');
+
+    record.upper.delete('batch-00.txt');
+    const retry = await storage.checkpoint('quiesce');
+
+    expect(retry.kind).toBe('committed');
+    expect(store.objects.has('tree/batch-00.txt')).toBe(false);
+    const journalPuts = store.writes.filter(write => write.startsWith('put:journal/'));
+    expect(new Set(journalPuts).size).toBe(journalPuts.length);
+  });
+
+describe('durable state bounds — named ceilings at the bound and one past', () => {
+
+  test('capSignatures keeps the newest cache rows regardless of fold state', () => {
+    const sig = (folded?: boolean): UpperSignature => {
+      const signature: UpperSignature = {
+        kind: 'file', mode: 0o644, mtimeMs: 1, size: 1, hash: 'a'.repeat(64),
+      };
+      return folded === undefined ? signature : { ...signature, folded };
+    };
+    const rows = new Map<string, UpperSignature>();
+    rows.set('old-folded', sig(true));
+    for (let at = 0; at < SIGNATURE_ROWS_MAX; at += 1) rows.set(`p${at}`, sig());
+
+    const capped = capSignatures(rows);
+    expect(capped.size).toBe(SIGNATURE_ROWS_MAX);
+    expect(capped.has('old-folded')).toBe(false);
+    expect(capped.has('p0')).toBe(true);
+    expect(capped.has(`p${SIGNATURE_ROWS_MAX - 1}`)).toBe(true);
+  });
+
+  test('evicting a signature cannot resurrect an upper-only file after delete', async () => {
+    const record = harness({ mountedAtStart: true, objects: 0, bytes: 0 });
+    for (let at = 0; at <= SIGNATURE_ROWS_MAX; at += 1) {
+      record.upper.set(`p${at}`, {
+        kind: 'file', mode: 0o644, mtimeMs: at + 1, content: fileBytes('x'),
+      });
+    }
+    const tick = await checkpointOf(record, 'tick');
+    expect(tick.kind).toBe('committed');
+    expect(record.stateNow()?.signatures['p0']).toBeUndefined();
+    const journalPutsBefore = record.store.writes
+      .filter(write => write.startsWith('put:journal/')).length;
+    const unchanged = await checkpointOf(record, 'tick');
+    expect(unchanged.kind).toBe('skipped');
+    expect(record.store.writes.filter(write => write.startsWith('put:journal/')))
+      .toHaveLength(journalPutsBefore);
+
+    record.upper.delete('p0');
+    const quiesce = await checkpointOf(record, 'quiesce');
+
+    expect(quiesce.kind).toBe('committed');
+    expect(record.store.objects.has('tree/p0')).toBe(false);
+    expect(await listJournalAfter(record.store, await readFoldedSeq(record.store)))
+      .toEqual([]);
+  }, 30_000);
+
+  test('overlayCasStateBytes crosses OVERLAY_CAS_STATE_MAX_BYTES at a measurable boundary',
+    () => {
+      const row = (pathChars: number): OverlayCasState['signatures'] => ({
+        [`${'x'.repeat(pathChars)}`]: {
+          kind: 'file', mode: 0o644, mtimeMs: 1, size: 1, hash: 'a'.repeat(64),
+        },
+      });
+      // Grow the single row's path until the serialized row passes the ceiling;
+      // one step back is the last shape that still fits. At the bound it fits;
+      // one past, it does not.
+      let low = 0;
+      let high = 0;
+      for (let chars = 100; chars <= 2_000_000; chars += 100) {
+        const bytes = overlayCasStateBytes(new Map(Object.entries(row(chars))));
+        if (bytes > OVERLAY_CAS_STATE_MAX_BYTES) {
+          high = chars;
+          break;
+        }
+        low = chars;
+      }
+      expect(low).toBeGreaterThan(0);
+      expect(overlayCasStateBytes(new Map(Object.entries(row(low)))))
+        .toBeLessThanOrEqual(OVERLAY_CAS_STATE_MAX_BYTES);
+      expect(overlayCasStateBytes(new Map(Object.entries(row(high)))))
+        .toBeGreaterThan(OVERLAY_CAS_STATE_MAX_BYTES);
+      // And the measurement is the payload's own byte length, so the gate
+      // cannot drift from what writeState actually puts.
+      expect(overlayCasStateBytes(new Map())).toBe(
+        new TextEncoder().encode(JSON.stringify({
+          lastCheckpointAt: 0, signatures: {},
+        })).byteLength,
+      );
+    });
+
+  test('a state row past the ceiling refuses BEFORE any journal effect', async () => {
+    // Long-path rows keep the row count far under SIGNATURE_ROWS_MAX while the
+    // serialized size blows past the byte ceiling — the shape the count cap
+    // cannot fix and the byte bound exists for.
+    const signatures: Record<string, UpperSignature> = {};
+    for (let at = 0; at < 400; at += 1) {
+      signatures[`${String(at).padStart(4, '0')}${'p'.repeat(3000)}`] = {
+        kind: 'file', mode: 0o644, mtimeMs: 1, size: 1, hash: 'a'.repeat(64),
+      };
+    }
+    const record = harness({ mountedAtStart: true, signatures });
+    const outcome = await checkpointOf(record, 'quiesce');
+    expect(outcome.kind).toBe('failed');
+    expect(outcome.reason ?? '').toMatch(/state row would hold/);
+    expect(outcome.reason ?? '').toContain(String(OVERLAY_CAS_STATE_MAX_BYTES));
+    // Nothing was staged, nothing was journalled: the refusal landed before
+    // any durable effect.
+    expect(record.store.objects.size).toBe(0);
+    expect(record.stateNow()?.lastFailure?.reason).toMatch(/state row would hold/);
+  });
+});
+
+describe('the off-hot-path orphan blob sweep', () => {
+  test('superseded versions go; manifest-reachable and pending blobs stay', async () => {
+    const store = new MemoryStore();
+    const v1 = fileEntry(1, 'doc.txt', 'version-one');
+    const v2 = fileEntry(2, 'doc.txt', 'version-two!');
+    const contents = new Map([
+      ['doc.txt', fileBytes('version-one')],
+    ]);
+    await stageBlobs({ store, entries: [v1], readChunk: readerFor(contents) });
+    await appendJournalBatch(store, [v1]);
+    await foldJournalIntoTree(store);
+    contents.set('doc.txt', fileBytes('version-two!'));
+    await stageBlobs({ store, entries: [v2], readChunk: readerFor(contents) });
+    await appendJournalBatch(store, [v2]);
+    await foldJournalIntoTree(store);
+
+    // v1's chunks are unreachable: the manifest names only v2 now, and no
+    // journal is pending.
+    const swept = await sweepOrphanBlobs(store);
+    expect(swept.deleted).toBeGreaterThanOrEqual(1);
+    expect(store.objects.has(blobKey(v1.hash))).toBe(false);
+    expect(store.objects.has(blobKey(v2.hash))).toBe(true);
+
+    // A tombstone folds: its target's blobs become unreachable too.
+    const gone: JournalEntry = { kind: 'delete', seq: 3, path: 'doc.txt' };
+    await appendJournalBatch(store, [gone]);
+    await foldJournalIntoTree(store);
+    await sweepOrphanBlobs(store);
+    expect(store.objects.has(blobKey(v2.hash))).toBe(false);
+
+    // PENDING entries reach their blobs without a fold: a sweep between ticks
+    // must never delete what an attach replay would need.
+    const kept = fileEntry(4, 'new.txt', 'pending-bytes');
+    await stageBlobs({
+      store, entries: [kept],
+      readChunk: readerFor(new Map([['new.txt', fileBytes('pending-bytes')]])),
+    });
+    await appendJournalBatch(store, [kept]);
+    const afterPending = await sweepOrphanBlobs(store);
+    expect(afterPending.deleted).toBe(0);
+    expect(store.objects.has(blobKey(kept.hash))).toBe(true);
+  });
+
+  test('a quiesce sweeps superseded blobs; reachable ones survive', async () => {
+    const box = harness({ mountedAtStart: true, objects: 0, bytes: 0 });
+    box.upper.set('m.txt', {
+      kind: 'file', mode: 0o644, mtimeMs: 5, content: fileBytes('generation-one'),
+    });
+    expect((await checkpointOf(box, 'quiesce')).kind).toBe('committed');
+    box.upper.set('m.txt', {
+      kind: 'file', mode: 0o644, mtimeMs: 9, content: fileBytes('generation-two'),
+    });
+    expect((await checkpointOf(box, 'quiesce')).kind).toBe('committed');
+
+    const blobKeys = [...box.store.objects.keys()].filter(key => key.startsWith('blobs/'));
+    expect(blobKeys).toEqual([blobKey(digestBytes(fileBytes('generation-two')).hash)]);
+    // The fold's own tree copy of the current version is intact.
+    expect(box.store.objects.has('tree/m.txt')).toBe(true);
+  });
+
+  test('the sweep never runs on a tick', async () => {
+    const record2 = harness({
+      mountedAtStart: true, objects: 3, bytes: 90,
+      lastCheckpointAt: 900_000, now: 10_000_000,
+      upper: new Map([['n.txt', {
+        kind: 'file' as const, mode: 0o644, mtimeMs: 5, content: fileBytes('tick-me'),
+      }]]),
+    });
+    const tick = await checkpointOf(record2, 'tick');
+    expect(tick.kind).toBe('committed');
+    // A tick folds nothing and therefore sweeps nothing.
+    expect(record2.calls.filter(call => call.includes('log:quiesce folded'))).toEqual([]);
+  });
+});
+
+describe('large file assembly stays on the streaming path', () => {
+  test('a file above the old 16 MiB ceiling folds byte-exactly', async () => {
+    const record = harness({ mountedAtStart: true, objects: 0, bytes: 0 });
+    record.store.requireBlobGetsInsideStream = true;
+    const size = 20 * 1024 * 1024 + 123;
+    const content = Uint8Array.from({ length: size }, (_, i) => (i % 251) + 1);
+    record.upper.set('large.bin', {
+      kind: 'file', mode: 0o644, mtimeMs: 1, content,
+    });
+
+    const outcome = await checkpointOf(record, 'quiesce');
+
+    expect(outcome.kind).toBe('committed');
+    expect(outcome.movedBytes).toBe(size);
+    expect(record.store.objects.get('tree/large.bin')).toEqual(content);
+    expect([...record.store.objects.keys()].filter(key => key.startsWith('blobs/')))
+      .toHaveLength(Math.ceil(size / CHUNK_SIZE));
+  }, 30_000);
+});
+
+describe('movedBytes counts blob bytes, not staged file sizes', () => {
+  test('a rename moves zero bytes into the store', async () => {
+    const record = harness({ mountedAtStart: true, objects: 0, bytes: 0 });
+    record.upper.set('old.txt', {
+      kind: 'file', mode: 0o644, mtimeMs: 5, content: fileBytes('payload'),
+    });
+    const first = await checkpointOf(record, 'quiesce');
+    expect(first.kind).toBe('committed');
+    expect(first.movedBytes).toBe(fileBytes('payload').byteLength);
+
+    // RENAME: whiteout the folded path, create the new one with the SAME
+    // bytes. Content addressing dedups the chunk; the only PUTs this
+    // checkpoint makes are journal objects, and those are subtracted out.
+    record.upper.delete('old.txt');
+    record.upper.set('old.txt', { kind: 'whiteout' });
+    record.upper.set('new.txt', {
+      kind: 'file', mode: 0o644, mtimeMs: 9, content: fileBytes('payload'),
+    });
+    const renamed = await checkpointOf(record, 'quiesce');
+    expect(renamed.kind).toBe('committed');
+    expect(renamed.movedBytes).toBe(0);
+    // And the fold still published both halves of the rename.
+    expect(record.store.objects.has('tree/new.txt')).toBe(true);
+    expect(record.store.objects.has('tree/old.txt')).toBe(false);
+  });
+});
+
+describe('discard clears activation caches', () => {
+  test('reusing one DO instance after discard cannot suppress the next PUT', async () => {
+    const record = harness({ mountedAtStart: true, objects: 0, bytes: 0 });
+    record.upper.set('same.txt', {
+      kind: 'file', mode: 0o644, mtimeMs: 1, content: fileBytes('same'),
+    });
+    const storage = overlayCasStorage(record.ports);
+    expect((await storage.checkpoint('tick')).kind).toBe('committed');
+    await storage.discard();
+
+    record.upper.clear();
+    record.upper.set('same.txt', {
+      kind: 'file', mode: 0o644, mtimeMs: 1, content: fileBytes('same'),
+    });
+    const after = await storage.checkpoint('tick');
+    expect(after.kind).toBe('committed');
+    expect(after.movedBytes).toBeGreaterThan(0);
   });
 });

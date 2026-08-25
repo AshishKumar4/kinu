@@ -47,9 +47,26 @@ export interface IncidentRow extends DevboxIncident {
   readonly rejectedAt?: number;
 }
 
-/** The durable rows this module reads and writes. Narrowed to the four
- *  operations it uses, so a caller can see the whole reach at a glance. */
-export type IncidentStore = Pick<DurableObjectStorage, 'get' | 'put' | 'delete' | 'list'>;
+/** How many rows the ledger may hold.
+ *
+ * A broken box records roughly one incident per heartbeat-armed retry, so an
+ * uncapped ledger grows without bound on exactly the box that fails most —
+ * and every delivery pass and every `devboxState()` materializes all of it.
+ * One hundred rows is several days of a persistently failing stage at the
+ * heartbeat cadence, which is far more history than a reader can act on, and
+ * it bounds each pass to a few hundred kilobytes of rows. Only DELIVERED rows
+ * are reaped, oldest first; pending ones are never dropped, because they are
+ * the reason the ledger exists.
+ */
+export const INCIDENT_LEDGER_MAX_ROWS = 100;
+
+/** The exact durable operations and value type this ledger owns. */
+export interface IncidentStore {
+  get(key: string): Promise<IncidentRow | undefined>;
+  put(key: string, value: IncidentRow): Promise<void>;
+  delete(key: string): Promise<boolean>;
+  list(options: { prefix: string }): Promise<Map<string, IncidentRow>>;
+}
 
 /** Durable BEFORE anyone is told. An eviction between recording and delivering
  *  loses nothing, because delivery is itself a schedule row. */
@@ -82,7 +99,7 @@ export async function deliverIncidents(
   store: IncidentStore,
   deliver: (incident: DevboxIncident) => Promise<IncidentDisposition>,
 ): Promise<number | null> {
-  const rows = await store.list<IncidentRow>({ prefix: INCIDENT_PREFIX });
+  const rows = await store.list({ prefix: INCIDENT_PREFIX });
   let nextDelayMs: number | undefined;
   for (const [key, row] of rows) {
     if (row.deliveredAt !== undefined || row.rejectedAt !== undefined) continue;
@@ -112,7 +129,27 @@ export async function deliverIncidents(
       ...(disposition === 'queued' ? { deliveredAt: Date.now() } : { rejectedAt: Date.now() }),
     });
   }
+  await reapDeliveredIncidents(store);
   return nextDelayMs === undefined ? null : Math.max(1, Math.ceil(nextDelayMs / 1000));
+}
+
+/**
+ * Hold the ledger to {@link INCIDENT_LEDGER_MAX_ROWS}.
+ *
+ * Delivered and rejected rows go oldest-settled first; a pending row is never
+ * a candidate, so a host that is slow to accept loses nothing it has not seen.
+ * Answers how many rows were deleted.
+ */
+export async function reapDeliveredIncidents(store: IncidentStore): Promise<number> {
+  const rows = await store.list({ prefix: INCIDENT_PREFIX });
+  const settled = [...rows.entries()]
+    .filter(([, row]) => row.deliveredAt !== undefined || row.rejectedAt !== undefined)
+    .sort(([, a], [, b]) => (a.deliveredAt ?? a.rejectedAt ?? a.at)
+      - (b.deliveredAt ?? b.rejectedAt ?? b.at));
+  const excess = rows.size - Math.max(0, INCIDENT_LEDGER_MAX_ROWS);
+  if (excess <= 0) return 0;
+  for (const [key] of settled.slice(0, excess)) await store.delete(key);
+  return excess;
 }
 
 /** What the ledger holds, for a box's own report. `undelivered` is the number

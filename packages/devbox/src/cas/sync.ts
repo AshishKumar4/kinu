@@ -9,6 +9,7 @@
  * step of that redo is idempotent.
  */
 
+import { createHash } from 'node:crypto';
 import { sha256Hex } from './hash';
 import {
   DEFAULT_BATCH_SIZE,
@@ -21,6 +22,7 @@ import {
 import {
   JournalBatchSchema,
   KEY_MANIFEST,
+  PREFIX_BLOBS,
   PresentEntrySchema,
   blobKey,
   decodeJson,
@@ -134,6 +136,11 @@ async function uploadChunks(
 
 export interface FoldResult {
   readonly foldedEntries: number;
+  /** The winning entry per path this fold consumed, from `coalesce`. The
+   *  quiesce layer stamps signatures and drops tombstoned rows from exactly
+   *  this set, so "folded" means what the fold actually read — never a guess
+   *  from the scan. */
+  readonly foldedPaths: ReadonlyMap<string, JournalEntry>;
   readonly treeWrites: number;
   readonly treeDeletes: number;
   readonly journalObjectsReaped: number;
@@ -141,6 +148,7 @@ export interface FoldResult {
   readonly cursorAfter: number;
   readonly store: StoreCounters;
 }
+
 
 /**
  * Fold pushed journal entries into `tree/` and advance the durable cursor.
@@ -157,6 +165,7 @@ export async function foldJournalIntoTree(store: CasStore): Promise<FoldResult> 
   if (pendingSeqs.length === 0) {
     return {
       foldedEntries: 0,
+      foldedPaths: new Map(),
       treeWrites: 0,
       treeDeletes: 0,
       journalObjectsReaped: 0,
@@ -182,6 +191,10 @@ export async function foldJournalIntoTree(store: CasStore): Promise<FoldResult> 
     entries.push(...decodeJson(JournalBatchSchema, row.key, bytes));
   }
 
+  // The winning entry per path, which is what the fold actually consumes and
+  // what a caller needs to know was folded.
+  const foldedPaths = new Map(coalesce(entries).map(entry => [entry.path, entry]));
+
   const manifest = await readManifest(store);
   let treeWrites = 0;
   let treeDeletes = 0;
@@ -189,7 +202,7 @@ export async function foldJournalIntoTree(store: CasStore): Promise<FoldResult> 
   for (const entry of coalesce(entries)) {
     switch (entry.kind) {
       case 'file': {
-        await store.put(treeKey(entry.path), await assembleFile(store, entry), {
+        await store.putStream(treeKey(entry.path), fileChunkStream(store, entry), entry.size, {
           mode: S_IFREG | (entry.mode & 0o7777),
           mtimeMs: entry.mtimeMs,
         });
@@ -260,6 +273,7 @@ export async function foldJournalIntoTree(store: CasStore): Promise<FoldResult> 
 
   return {
     foldedEntries: entries.length,
+    foldedPaths,
     treeWrites,
     treeDeletes,
     journalObjectsReaped,
@@ -276,30 +290,99 @@ export async function foldJournalIntoTree(store: CasStore): Promise<FoldResult> 
 export async function replayPending(store: CasStore): Promise<{
   readonly foldedSeq: number;
   readonly pending: readonly JournalEntry[];
-  readonly replayed: readonly { entry: JournalEntry; bytes: Uint8Array | null }[];
+  readonly replayed: readonly {
+    entry: JournalEntry;
+    stream: ReadableStream<Uint8Array> | null;
+  }[];
 }> {
   const foldedSeq = await readFoldedSeq(store);
   const pending = await listJournalAfter(store, foldedSeq);
-  const replayed: { entry: JournalEntry; bytes: Uint8Array | null }[] = [];
-  for (const entry of coalesce(pending)) {
-    const bytes = entry.kind === 'file' ? await assembleFile(store, entry) : null;
-    replayed.push({ entry, bytes });
-  }
+  const replayed = coalesce(pending).map(entry => ({
+    entry,
+    stream: entry.kind === 'file' ? fileChunkStream(store, entry) : null,
+  }));
   return { foldedSeq, pending, replayed };
 }
 
-export async function assembleFile(store: CasStore, entry: FileEntry): Promise<Uint8Array> {
-  const out = new Uint8Array(entry.size);
-  let offset = 0;
-  for (const chunk of entry.chunks) {
-    const bytes = await store.get(blobKey(chunk.hash));
-    if (bytes === null) throw new Error(`blob missing for ${entry.path}: ${chunk.hash}`);
-    out.set(bytes, offset);
-    offset += bytes.byteLength;
+/** One file reconstructed as a bounded stream. Every chunk is checked before
+ * it leaves, and the whole digest is checked before close. A failed stream
+ * aborts R2 multipart or the container write, so no partial object becomes
+ * visible. */
+export function fileChunkStream(
+  store: CasStore,
+  entry: FileEntry,
+): ReadableStream<Uint8Array> {
+  let index = 0;
+  let total = 0;
+  const whole = createHash('sha256');
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (index >= entry.chunks.length) {
+        if (total !== entry.size) {
+          controller.error(new Error(`streamed ${total} bytes, expected ${entry.size} for ${entry.path}`));
+          return;
+        }
+        const digest = whole.digest('hex');
+        if (digest !== entry.hash) {
+          controller.error(new Error(`streamed bytes fail digest for ${entry.path}`));
+          return;
+        }
+        controller.close();
+        return;
+      }
+      const chunk = entry.chunks[index]!;
+      const bytes = await store.get(blobKey(chunk.hash));
+      if (bytes === null) {
+        controller.error(new Error(`blob missing for ${entry.path}: ${chunk.hash}`));
+        return;
+      }
+      if (bytes.byteLength !== chunk.size || sha256Hex(bytes) !== chunk.hash) {
+        controller.error(new Error(`blob fails size or digest for ${entry.path}: ${chunk.hash}`));
+        return;
+      }
+      index += 1;
+      total += bytes.byteLength;
+      whole.update(bytes);
+      controller.enqueue(bytes);
+    },
+  }, { highWaterMark: 0 });
+}
+
+/**
+ * Delete every blob nothing reaches.
+ *
+ * THE OFF-HOT-PATH SWEEP the Lean model states (`gcCost`,
+ * `gc_is_off_the_hot_path`): reachable set = every chunk the manifest names
+ * plus every chunk any still-pending journal entry names; everything else
+ * under `blobs/` is a superseded version or a tombstoned file's remains.
+ * Content addressing makes the delete safe — a live reference can only name a
+ * hash its entry carries, and that hash is in the reachable set by
+ * construction.
+ * Runs at quiesce only, after fold and cursor advance, NEVER on tick or
+ * attach: it lists the whole `blobs/` prefix, which is exactly the cost the
+ * model bills to the sweep and keeps off the hot path.
+ */
+export async function sweepOrphanBlobs(store: CasStore): Promise<{
+  readonly listed: number;
+  readonly deleted: number;
+  /** The full keys of every deleted blob, so a caller holding a content-hash
+   *  cache can evict exactly those entries — a cached hash for a swept blob
+   *  would make the next tick believe bytes are durable that are not. */
+  readonly deletedKeys: readonly string[];
+}> {
+  const reachable = new Set<string>();
+  for (const entry of (await readManifest(store)).values()) {
+    if (entry.kind !== 'file') continue;
+    for (const chunk of entry.chunks) reachable.add(blobKey(chunk.hash));
   }
-  if (offset !== entry.size) throw new Error(`assembled ${offset} bytes, expected ${entry.size}`);
-  if (sha256Hex(out) !== entry.hash) throw new Error(`assembled bytes fail digest for ${entry.path}`);
-  return out;
+  for (const entry of await listJournalAfter(store, await readFoldedSeq(store))) {
+    if (entry.kind !== 'file') continue;
+    for (const chunk of entry.chunks) reachable.add(blobKey(chunk.hash));
+  }
+  const listed = await store.list(PREFIX_BLOBS);
+  const orphans = listed.filter(key => !reachable.has(key));
+  for (const key of orphans) await store.delete(key);
+  return { listed: listed.length, deleted: orphans.length, deletedKeys: orphans };
 }
 
 function deepestFirst(

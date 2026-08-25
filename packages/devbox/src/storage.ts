@@ -184,6 +184,11 @@ export interface DevboxStore {
  *  not to a call. */
 export type DevboxStrategyName = 'snapshot-chain' | 'r2fs' | 'overlay-cas';
 
+export function parseDevboxStrategyName(value: string | null | undefined): DevboxStrategyName | null {
+  if (value === 'snapshot-chain' || value === 'r2fs' || value === 'overlay-cas') return value;
+  return null;
+}
+
 /**
  * The directory a devbox makes durable, and the default working directory for
  * every command it runs.

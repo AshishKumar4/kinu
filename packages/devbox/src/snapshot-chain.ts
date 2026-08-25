@@ -625,10 +625,7 @@ function chainShell(exec: ContainerExec) {
      * O(bytes).
      */
     upperFingerprint: async (): Promise<string> => {
-      const measured = await exec(
-        `find ${shellPath(upperDir)} -mindepth 1 -printf '%s %T@\\n' 2>/dev/null `
-        + `| awk '{n++; b+=$1; if ($2>m) m=$2} END {printf "%d:%d:%d", n+0, b+0, m+0}'`,
-      );
+      const measured = await exec(upperFingerprintCommand(upperDir));
       return measured.exitCode === 0 ? measured.stdout.trim() : '';
     },
     /** Byte length of a container file, or undefined when it does not exist. */
@@ -636,9 +633,13 @@ function chainShell(exec: ContainerExec) {
       const raw = (await exec(`stat -c %s ${shellPath(path)} 2>/dev/null || echo ''`)).stdout.trim();
       return raw.length > 0 ? Number.parseInt(raw, 10) : undefined;
     },
-    /** Reset a set of directories to empty, and make sure each exists. */
+    /** Reset a set of directories to empty, and make sure each exists.
+     *  THROUGH must(): a failed reset used to pass silently — its exit code
+     *  was discarded — so the attach then ran against whatever the container
+     *  happened to still hold, one reorder away from serving a stale tree. */
     resetDirs: async (paths: readonly string[]): Promise<void> => {
-      await exec(`rm -rf ${shellPaths(paths)} && mkdir -p ${shellPaths(paths)}`);
+      await must('resetting directories',
+        `rm -rf ${shellPaths(paths)} && mkdir -p ${shellPaths(paths)}`);
     },
   };
 }
@@ -737,7 +738,13 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     await shell.unmountPath(DEVBOX_WORKDIR);
     await shell.unmountPath(lowerBase);
     await shell.unmountPath(lowerDelta);
-    await shell.resetDirs([lowerBase, lowerDelta, upperDir, workDir, CHAIN_STORE_MOUNT]);
+    // CHAIN_STORE_MOUNT is deliberately NOT here. mountStore owns that
+    // mountpoint, and it is already mounted read-only by the time this runs:
+    // `rm -rf` on it exits non-zero, which used to short-circuit the `&&` so
+    // NO directory was recreated — correctness hung on every later command
+    // re-creating its own path. Worse, had the mount ever been read-write,
+    // rm -rf would have deleted the chain's archives through it.
+    await shell.resetDirs([lowerBase, lowerDelta, upperDir, workDir]);
     await shell.mountLayer(baseObjectKey(state.base.id), lowerBase);
 
     // An unreferenced but complete delta — a previous run crashed between the
@@ -1249,11 +1256,17 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     if (state === null) return;
     // Objects first, then the pointer. Reversed, a crash orphans both: nothing
     // would name the objects and nothing would delete them.
-    await ports.deleteObjects([
-      baseObjectKey(state.base.id),
-      deltaObjectKey(state.base.id),
-      metadataObjectKey(state.base.id),
-    ]);
+    // Every generation the record still NAMES goes with it — the orphans a
+    // rebase crash left behind included. clearState erases the only record
+    // naming them, and `backups/<uuid>/` is shared by every box, so a leak
+    // here was permanent by construction: no sweep may ever list them.
+    await ports.deleteObjects([state.base.id, ...(state.orphans ?? [])].flatMap(
+      (generation) => [
+        baseObjectKey(generation),
+        deltaObjectKey(generation),
+        metadataObjectKey(generation),
+      ],
+    ));
     await ports.clearState();
   };
 
@@ -1266,4 +1279,23 @@ function shellPath(path: string): string {
 
 function shellPaths(paths: readonly string[]): string {
   return paths.map(shellPath).join(' ');
+}
+
+/**
+ * The skip-gate fingerprint command over `sourceDir`.
+ *
+ * SUB-SECOND MTIME, deliberately. The gate exists because the SDK's change
+ * check once said `unchanged` about 400 MiB of writes; truncating `%T@` to a
+ * whole second left that same lie a narrower door: a same-length in-place edit
+ * landing in the same second as the recorded mark, with nothing else changed,
+ * matched the fingerprint forever. `%.6f` keeps the fraction, shrinking the
+ * window to the filesystem's own timestamp resolution.
+ *
+ * Exported as a command builder rather than inlined so the suite can run the
+ * real `find | awk` pipeline against a real directory and prove the boundary,
+ * instead of pinning the format string by eye.
+ */
+export function upperFingerprintCommand(sourceDir: string): string {
+  return `find ${shellPath(sourceDir)} -mindepth 1 -printf '%s %T@\\n' 2>/dev/null `
+    + `| awk '{n++; b+=$1; if ($2>m) m=$2} END {printf "%d:%d:%.6f", n+0, b+0, m+0}'`;
 }

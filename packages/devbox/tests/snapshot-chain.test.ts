@@ -7,17 +7,10 @@
 // says so.
 //
 // TWO TESTS HERE COME FROM A LIVE FAILURE, and they are the reason the rest is
-// worth having. On a real container, run 9cdda407: every step of the chain
-// reported success, `/proc/mounts` held no overlay line for the work directory,
-// a forced checkpoint answered "unchanged", and after a restart the work
-// directory was empty. Nothing threw. So this suite asserts that an attach
-// whose mount did not land FAILS, and that a checkpoint against an unattached
-// directory cannot answer `skipped` or `committed`.
-//
-// The last two tests assert the denominator: every outcome kind the
-// implementation enumerates has to be produced above, so adding one without
-// exercising it turns this suite red.
 import { describe, expect, test } from 'bun:test';
+import { rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { scratchDir } from '@kinu.run/test-utils';
 
 import {
   baseObjectKey,
@@ -28,6 +21,7 @@ import {
   metadataObjectKey,
   shouldRebase,
   snapshotChainStorage,
+  upperFingerprintCommand,
   type ChainState,
   type ChangeStatus,
   type SnapshotChainPorts,
@@ -1347,5 +1341,112 @@ describe('denominator', () => {
 
   test('every checkpoint outcome kind was produced above', () => {
     expect([...seenCheckpoint].sort()).toEqual([...CHECKPOINT_OUTCOME_KINDS].sort());
+  });
+});
+
+
+// ── accepted review findings ────────────────────────────────────────────────
+
+describe('discard sweeps every generation the record still names', () => {
+  test('orphaned generations go with the referenced one, before clearState', async () => {
+    // A rebase crash between the state flip and the sweep leaves ids in
+    // `orphans`. clearState erases the only record naming them and
+    // `backups/<uuid>/` is shared by every box — so a discard that ignored the
+    // list leaked those objects permanently.
+    const stranded = 'a1b2c3d4-0000-4000-8000-0000000000ff';
+    const record = harness({ state: chainState({ orphans: [stranded] }) });
+    for (const id of [CHAIN_ID, stranded]) {
+      record.objects.set(baseObjectKey(id), BASE_BYTES);
+      record.objects.set(deltaObjectKey(id), DELTA_BYTES);
+      record.objects.set(metadataObjectKey(id), 64);
+    }
+
+    await snapshotChainStorage(record.ports).discard();
+
+    const deleted = record.calls.findIndex(call => call.startsWith('deleteObjects:'));
+    const cleared = record.calls.indexOf('clearState');
+    expect(deleted).toBeLessThan(cleared);
+    expect(record.calls).toContain('deleteObjects:6');
+    for (const id of [CHAIN_ID, stranded]) {
+      for (const key of [baseObjectKey(id), deltaObjectKey(id), metadataObjectKey(id)]) {
+        expect(record.objects.has(key)).toBe(false);
+      }
+    }
+    expect(record.state).toBeNull();
+  });
+});
+
+describe('attachChain resets only its OWN directories', () => {
+  test('no rm -rf ever names the read-only store mount', async () => {
+    const calls: string[] = [];
+    const record = harness({ state: chainState(), mounts: mountsAfterAttach(calls), calls });
+    const raw: string[] = [];
+    const inner = record.ports.exec;
+    record.ports.exec = async (command) => {
+      raw.push(command);
+      return await inner(command);
+    };
+
+    expect((await attachOf(record)).kind).toBe('attached');
+
+    const resets = raw.filter(command => command.startsWith('rm -rf'));
+    expect(resets.length).toBeGreaterThan(0);
+    for (const command of resets) {
+      expect(command).not.toContain(CHAIN_STORE_MOUNT);
+    }
+  });
+
+  test('a failed reset is a NAMED failure, never a silent pass', async () => {
+    const calls: string[] = [];
+    const record = harness({ state: chainState(), mounts: mountsAfterAttach(calls), calls });
+    const inner = record.ports.exec;
+    record.ports.exec = async (command) => {
+      if (command.startsWith('rm -rf')) {
+        return { stdout: '', stderr: 'rm: cannot remove: Read-only file system', exitCode: 1 };
+      }
+      return await inner(command);
+    };
+
+    await expect(attachOf(record)).rejects.toThrow(/resetting directories/);
+    // And nothing ran on top of an unreset container: no layer was mounted.
+    expect(calls.filter(call => call.startsWith('mountLayer'))).toEqual([]);
+  });
+});
+
+
+/** The whole second both fingerprint marks land in. */
+const T_SAME = 1_700_000_000;
+
+describe('the skip-gate fingerprint keeps sub-second mtime', () => {
+  test('a same-size same-second rewrite changes the mark', () => {
+    // THE RED PROOF, against the real find|awk pipeline. The old `%d` format
+    // truncated both marks below to the same whole second and matched — the
+    // narrow unchanged-lie window this gate exists to keep shut. The integer
+    // parts agree here on purpose: that is exactly the case the fraction
+    // decides.
+    const dir = scratchDir('devbox-fingerprint');
+    try {
+      const file = join(dir, 'w.txt');
+      writeFileSync(file, 'aaaaaaaaaa');
+      utimesSync(file, T_SAME + 0.25, T_SAME + 0.25);
+      const run = (): string => {
+        const proc = Bun.spawnSync(['sh', '-c', upperFingerprintCommand(dir)]);
+        if (proc.exitCode !== 0) throw new Error(proc.stderr.toString());
+        return proc.stdout.toString().trim();
+      };
+      const first = run();
+
+      writeFileSync(file, 'bbbbbbbbbb'); // SAME SIZE
+      utimesSync(file, T_SAME + 0.25, T_SAME + 0.75); // SAME SECOND, later fraction
+      const second = run();
+
+      const m1 = Number(first.split(':')[2]);
+      const m2 = Number(second.split(':')[2]);
+      expect(Math.trunc(m1)).toBe(T_SAME);
+      expect(Math.trunc(m2)).toBe(T_SAME);
+      expect(first).not.toBe(second);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -65,7 +65,6 @@
  * did not exist.
  */
 
-import * as v from 'valibot';
 
 import { describeThrown as describe, findMount } from './lifecycle';
 import { isOverlayMounted, shouldCheckpoint } from './snapshot-chain';
@@ -76,24 +75,30 @@ import {
   type CheckpointKind,
   type CheckpointOutcome,
   type DevboxStorage,
-  type StoredValue,
   recordCheckpointFailure,
 } from './storage';
 import {
   CHUNK_SIZE,
   appendJournalBatch,
   foldJournalIntoTree,
-  readFoldedSeq,
   replayPending,
-  seqFromJournalKey,
   stageBlobs,
   stampEntries,
-  vanishedTombstones,
+  sweepOrphanBlobs,
   type CasStore,
   type FileDigest,
   type JournalEntry,
   type NewJournalEntry,
 } from './cas';
+import {
+  OVERLAY_CAS_STATE_MAX_BYTES,
+  capSignatures,
+  overlayCasStateBytes,
+  type OverlayCasState,
+  type UpperSignature,
+} from './cas/state';
+import { byApplyOrder, PendingJournalState } from './cas/pending-state';
+
 
 /** Base64 both ways. The exec rail carries text, so every byte that crosses it
  *  is framed; raw binary in stdout is silently corrupted on the way back. */
@@ -116,84 +121,6 @@ export const CAS_TREE_MOUNT = `${DEVBOX_RUNTIME_DIR}/cas-lower`;
 const upperDir = `${DEVBOX_RUNTIME_DIR}/cas-upper`;
 const workDir = `${DEVBOX_RUNTIME_DIR}/cas-work`;
 
-export interface UpperSignature {
-  readonly kind: 'file' | 'dir' | 'symlink';
-  readonly mode: number;
-  readonly mtimeMs: number;
-  readonly mtimeNs?: string;
-  readonly size: number;
-  readonly hash?: string;
-  readonly target?: string;
-  readonly folded?: boolean;
-}
-
-export interface OverlayCasState {
-  readonly lastCheckpointAt: number;
-  readonly signatures: { readonly [path: string]: UpperSignature };
-  readonly knownBlobs: readonly string[];
-  readonly lastFailure: { readonly at: number; readonly reason: string } | undefined;
-}
-
-/**
- * The stored record, as a schema.
- *
- * A durable row is untrusted input: it was written by some release of this
- * package, and the reader has to establish what it is rather than assume. A row
- * this code did not write reads as ABSENT, which makes a fresh box whose first
- * checkpoint rebuilds the signatures from the upper, rather than as a state
- * whose signatures cannot be trusted, which would make a box that either
- * refuses forever or — far worse — treats every path it cannot recognise as
- * vanished and tombstones the workspace.
- *
- * `knownBlobs` is deliberately permissive about content: losing it costs
- * operations, never correctness, because a re-PUT under a content-addressed
- * key is a no-op and an unknown hash is simply re-HEADed.
- */
-const UpperSignatureSchema = v.object({
-  kind: v.picklist(['file', 'dir', 'symlink']),
-  mode: v.number(),
-  mtimeMs: v.number(),
-  mtimeNs: v.optional(v.string()),
-  size: v.number(),
-  hash: v.optional(v.pipe(v.string(), v.length(64))),
-  target: v.optional(v.string()),
-  folded: v.optional(v.boolean()),
-});
-
-const OverlayCasStateSchema = v.object({
-  lastCheckpointAt: v.number(),
-  signatures: v.record(v.string(), UpperSignatureSchema),
-  knownBlobs: v.array(v.pipe(v.string(), v.length(64))),
-  lastFailure: v.optional(v.object({ at: v.number(), reason: v.string() })),
-});
-
-export function normalizeOverlayCasState(raw: StoredValue): OverlayCasState | null {
-  const parsed = v.safeParse(OverlayCasStateSchema, raw);
-  if (!parsed.success) return null;
-  // Written out rather than spread, so the parse produces EXACTLY the contract.
-  // The schema's optional fields become present-and-undefined here, which is
-  // what the record declares and what every reader checks.
-  const row = parsed.output;
-  const signatures: Record<string, UpperSignature> = {};
-  for (const [path, signature] of Object.entries(row.signatures)) {
-    signatures[path] = {
-      kind: signature.kind,
-      mode: signature.mode,
-      mtimeMs: signature.mtimeMs,
-      mtimeNs: signature.mtimeNs,
-      size: signature.size,
-      hash: signature.hash,
-      target: signature.target,
-      folded: signature.folded,
-    };
-  }
-  return {
-    lastCheckpointAt: row.lastCheckpointAt,
-    signatures,
-    knownBlobs: row.knownBlobs,
-    lastFailure: row.lastFailure,
-  };
-}
 
 export interface OverlayCasPorts {
   containerRunning(): boolean;
@@ -215,6 +142,9 @@ export interface OverlayCasPorts {
    * DO-to-container byte rail.
    */
   writeFileBase64(path: string, base64: string): Promise<void>;
+  /** Write a replayed file as a raw binary stream. The SDK's stream transport
+   * keeps memory at one CAS chunk and avoids base64 expansion. */
+  writeFileStream(path: string, stream: ReadableStream<Uint8Array>): Promise<void>;
   /**
    * Mount this box's `tree/` prefix read-only at {@link CAS_TREE_MOUNT}.
    * Credentials never leave the Durable Object. Release through the SDK
@@ -462,25 +392,30 @@ function casShell(ports: OverlayCasPorts) {
       // symptom, abc-3: every checkpoint refused while a later probe answered
       // yes. test -d failing means vanished; find failing means the walk must
       // be redone, and its own words say why.
+      const walkCommand = `find ${shellPath(upperDir)} -mindepth 1 `
+        + `-printf '%y\\0%m\\0%s\\0%T@\\0%n\\0%l\\0%p\\0' | base64 -w0`;
       const walked = await ports.exec(
-        `if ! test -d ${shellPath(upperDir)}; then printf 'UPPER-GONE\\0'; exit 0; fi; `
-        + `printf 'UPPER-OK\\0'; `
-        + `find ${shellPath(upperDir)} -mindepth 1 `
-        + `-printf '%y\\0%m\\0%s\\0%T@\\0%n\\0%l\\0%p\\0'`,
+        `if ! test -d ${shellPath(upperDir)}; then printf 'UPPER-GONE'; exit 0; fi; `
+        + `encoded=$(bash -o pipefail -c ${shellPath(walkCommand)}) || exit $?; `
+        + `printf 'UPPER-OK:%s' "$encoded"`,
       );
-      // CLASSIFICATION ORDER MATTERS: GONE is decided by its own marker, an
-      // unsuccessful exit is a failed walk even when partial records came back,
-      // and only a zero exit may be parsed. Checking the OK marker first would
-      // let an exec-level failure lie about an upper it never saw.
-      if (walked.stdout.startsWith('UPPER-GONE\0')) throw new UpperVanished(upperDir);
+      // The executor's stdout channel is text and the deployed container
+      // transport terminates a string at NUL. Base64 crosses that boundary;
+      // NUL remains the path-safe delimiter only INSIDE the decoded payload.
+      if (walked.stdout.startsWith('UPPER-GONE')) throw new UpperVanished(upperDir);
       if (walked.exitCode !== 0) {
         throw new Error(
-          `walk of ${upperDir} failed (${walked.exitCode}) after `
-          + `${parseUpperWalk(walked.stdout.replace(/^UPPER-OK\0/, '')).length} records: `
+          `walk of ${upperDir} failed (${walked.exitCode}): `
           + `${walked.stderr.trim() || walked.stdout.trim() || 'no diagnostic'}`,
         );
       }
-      const records = parseUpperWalk(walked.stdout.slice('UPPER-OK\0'.length));
+      if (!walked.stdout.startsWith('UPPER-OK:')) {
+        throw new Error(`walk of ${upperDir} returned no transport marker`);
+      }
+      const encodedWalk = walked.stdout.slice('UPPER-OK:'.length).trim();
+      const records = parseUpperWalk(
+        new TextDecoder().decode(decodeBase64(encodedWalk)),
+      );
 
       const relative = (absolute: string): string => absolute.slice(upperDir.length + 1);
       const opaqueDirs = new Set<string>();
@@ -526,7 +461,9 @@ function casShell(ports: OverlayCasPorts) {
           continue;
         }
         if (record.type === 'd') continue;
-        if (record.type === 'f') files.push(record);
+        if (record.type === 'f') {
+          files.push(record);
+        }
         // Sockets, fifos and real device nodes are skipped: an object store has
         // no representation for them and inventing one would be a silent lie.
       }
@@ -620,7 +557,10 @@ function casShell(ports: OverlayCasPorts) {
     },
 
     /** Write one replayed entry into the upper. A delete becomes a whiteout. */
-    materialize: async (entry: JournalEntry, bytes: Uint8Array | null): Promise<void> => {
+    materialize: async (
+      entry: JournalEntry,
+      stream: ReadableStream<Uint8Array> | null,
+    ): Promise<void> => {
       const absolute = `${upperDir}/${entry.path}`;
       const parent = absolute.slice(0, absolute.lastIndexOf('/'));
       switch (entry.kind) {
@@ -636,12 +576,13 @@ function casShell(ports: OverlayCasPorts) {
           return;
         }
         case 'file': {
-          if (bytes === null) throw new Error(`file entry replayed without bytes: ${entry.path}`);
+          if (stream === null) throw new Error(`file entry replayed without a stream: ${entry.path}`);
           await must(`preparing ${entry.path}`, `mkdir -p ${shellPath(parent)}`);
-          await ports.writeFileBase64(absolute, encodeBase64(bytes));
+          await ports.writeFileStream(absolute, stream);
           await must(
-            `setting mode on ${entry.path}`,
-            `chmod ${entry.mode.toString(8)} ${shellPath(absolute)}`,
+            `setting metadata on ${entry.path}`,
+            `chmod ${entry.mode.toString(8)} ${shellPath(absolute)} && touch -m -d `
+              + `@${String(entry.mtimeMs / 1000)} -- ${shellPath(absolute)}`,
           );
           return;
         }
@@ -649,7 +590,8 @@ function casShell(ports: OverlayCasPorts) {
           await must(
             `materializing symlink ${entry.path}`,
             `mkdir -p ${shellPath(parent)} && ln -sfn ${shellPath(entry.target)} `
-            + shellPath(absolute),
+              + `${shellPath(absolute)} && touch -h -m -d @${String(entry.mtimeMs / 1000)} `
+              + `-- ${shellPath(absolute)}`,
           );
           return;
         }
@@ -676,31 +618,21 @@ function casShell(ports: OverlayCasPorts) {
         }
       }
     },
+    restampDirectory: async (entry: Extract<JournalEntry, { kind: 'dir' }>): Promise<void> => {
+      const absolute = `${upperDir}/${entry.path}`;
+      await must(
+        `restamping directory ${entry.path}`,
+        `chmod ${entry.mode.toString(8)} ${shellPath(absolute)} && touch -m -d `
+          + `@${String(entry.mtimeMs / 1000)} -- ${shellPath(absolute)}`,
+      );
+    },
   };
-}
-
-/** Parents before children, deletes last within a level, so a replay never
- *  writes into a directory it has not created. */
-function byApplyOrder(a: NewJournalEntry, b: NewJournalEntry): number {
-  const depth = a.path.split('/').length - b.path.split('/').length;
-  if (depth !== 0) return depth;
-  const rank = kindRank(a) - kindRank(b);
-  if (rank !== 0) return rank;
-  return a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
-}
-
-function kindRank(entry: NewJournalEntry): number {
-  switch (entry.kind) {
-    case 'dir': return 0;
-    case 'file': return 1;
-    case 'symlink': return 2;
-    default: return 3;
-  }
 }
 
 
 export function overlayCasStorage(ports: OverlayCasPorts): DevboxStorage {
   const shell = casShell(ports);
+  const pendingState = new PendingJournalState();
 
   /**
    * Did the overlay really land, with both of its layers on THIS container's
@@ -758,8 +690,13 @@ export function overlayCasStorage(ports: OverlayCasPorts): DevboxStorage {
   const replayOntoUpper = async (): Promise<number> => {
     const replayed = await replayPending(ports.store());
     for (const item of replayed.replayed) {
-      await shell.materialize(item.entry, item.bytes);
+      await shell.materialize(item.entry, item.stream);
     }
+    const directories = replayed.replayed
+      .map(item => item.entry)
+      .filter((entry): entry is Extract<JournalEntry, { kind: 'dir' }> => entry.kind === 'dir')
+      .sort((a, b) => b.path.split('/').length - a.path.split('/').length);
+    for (const directory of directories) await shell.restampDirectory(directory);
     return replayed.pending.length;
   };
 
@@ -847,23 +784,24 @@ export function overlayCasStorage(ports: OverlayCasPorts): DevboxStorage {
       );
     }
     const signatures = new Map(Object.entries(previous?.signatures ?? {}));
+    const store = ports.store();
 
-    // The scan is INSIDE the failure boundary. It reaches the container, so it
-    // can refuse — an absent upper means this is not the container that was
-    // attached — and this seam's contract is that an ordinary failure travels
-    // as a value. A throw here would reach a scheduled callback, which reduces
-    // it to a console line and loses the incident.
+    // The journal, not the signature cache, is the correctness record for an
+    // upper-only path. A cached row may be evicted; a pending create may not.
     let fresh: readonly NewJournalEntry[];
     let scanned: ReadonlyMap<string, UpperSignature>;
     try {
+      await pendingState.load(store);
       const scan = await shell.scanUpper(signatures);
+      const currentPaths = new Set(scan.signatures.keys());
       const tombstoned = new Set(
         scan.entries.filter(entry => entry.kind === 'delete').map(entry => entry.path),
       );
-      const vanished = vanishedTombstones(signatures, new Set(scan.signatures.keys()), tombstoned);
-      fresh = [...scan.entries, ...vanished];
+      const changed = pendingState.filterChanged(scan.entries);
+      fresh = [...changed, ...pendingState.vanished(currentPaths, tombstoned)];
       scanned = scan.signatures;
     } catch (error) {
+      pendingState.invalidate();
       return await recordCheckpointFailure(ports, previous, describe({ cause: error }));
     }
 
@@ -895,48 +833,100 @@ export function overlayCasStorage(ports: OverlayCasPorts): DevboxStorage {
     }
 
     try {
-      const store = ports.store();
-      const foldedSeq = await readFoldedSeq(store);
-      const pending = await store.list('journal/');
-      let nextSeq = foldedSeq + 1;
-      for (const key of pending) {
-        const seq = seqFromJournalKey(key);
-        if (seq !== null && seq + 1 > nextSeq) nextSeq = seq + 1;
+      const stamped = stampEntries(fresh, pendingState.sequence());
+
+      const worstSignatures = new Map<string, UpperSignature>();
+      for (const [path, signature] of Object.entries(previous?.signatures ?? {})) {
+        worstSignatures.set(path, signature);
       }
-      const stamped = stampEntries(fresh, nextSeq);
-      const known = new Set(previous?.knownBlobs ?? []);
+      for (const [path, signature] of scanned) worstSignatures.set(path, signature);
+      const boundedWorstSignatures = capSignatures(worstSignatures);
+      const worstBytes = overlayCasStateBytes(boundedWorstSignatures);
+      if (worstBytes > OVERLAY_CAS_STATE_MAX_BYTES) {
+        return await recordCheckpointFailure(
+          ports,
+          previous,
+          `the bounded overlay-cas state row would hold ${worstBytes} bytes across `
+            + `${boundedWorstSignatures.size} cached paths; this strategy refuses one state `
+            + `value over ${OVERLAY_CAS_STATE_MAX_BYTES} bytes (half the Durable Object `
+            + 'per-value ceiling). Nothing was journalled.',
+        );
+      }
+
+      // Per-checkpoint only. Durable known-blob state can outlive a GC delete
+      // across a crash and falsely suppress the next PUT; HEAD/PUT is the
+      // authority across checkpoints, while this set deduplicates one batch.
+      const known = new Set<string>();
+      const countersBefore = { ...store.counters };
+      let journalBytesPut = 0;
       // Journal objects are written PER BATCH, inside commitBatch, so they land
       // only after that batch's blobs are durable. A crash therefore redoes one
-      // batch rather than losing the whole change set.
+      // batch rather than losing the whole change set. The counter capture
+      // around each append lets movedBytes report BLOB bytes alone below.
       const staged = await stageBlobs({
         store,
         entries: stamped,
         readChunk: (entry, index, size) => shell.readUpperChunk(entry.path, index, size),
         known,
         commitBatch: async (batch) => {
+          const beforeBatch = store.counters.bytesPut;
           await appendJournalBatch(store, batch);
+          journalBytesPut += store.counters.bytesPut - beforeBatch;
         },
       });
-      // A stale file (bytes no longer match the digest) must not become a
-      // journal object. Drop its signature so the next scan re-hashes it.
-      const nextSignatures = new Map(scanned);
-      for (const path of staged.stalePaths) nextSignatures.delete(path);
+      pendingState.record(staged.staged);
+      // Captured HERE, before the fold: the fold's tree, manifest and cursor
+      // PUTs are the fold's own traffic, not bytes this staging moved.
+      const movedBytes = store.counters.bytesPut - countersBefore.bytesPut - journalBytesPut;
+
+      // THE STALE BYSTANDER RULE. stageBlobs stops at the first stale file —
+      // everything after it in the order was scanned but NEVER journalled.
+      // Persisting those fresh signatures (the old code did) told the next scan
+      // the change was already committed, and it was silently lost on recycle.
+      // So: keep the PREVIOUS signature for every un-journalled path — the next
+      // scan re-detects and re-journals it; take the SCANNED signature only for
+      // paths whose entries reached staged.staged. A tombstone drops its row:
+      // the path no longer exists to be detected.
+      const stagedPaths = new Set(staged.staged.map(entry => entry.path));
+      const tombstonedPaths = new Set(
+        staged.staged.filter(entry => entry.kind === 'delete').map(entry => entry.path),
+      );
+      const nextSignatures = new Map<string, UpperSignature>();
+      for (const [path, signature] of Object.entries(previous?.signatures ?? {})) {
+        if (!tombstonedPaths.has(path)) nextSignatures.set(path, signature);
+      }
+      for (const path of stagedPaths) {
+        const signature = scanned.get(path);
+        if (signature !== undefined) nextSignatures.set(path, signature);
+      }
 
       if (kind === 'quiesce') {
         const folded = await foldJournalIntoTree(store);
-        for (const [path, signature] of nextSignatures) {
-          nextSignatures.set(path, { ...signature, folded: true });
+        // `folded` names what the fold actually consumed. Stamp folded:true on
+        // exactly those rows — never on an un-journalled carried row, which the
+        // lower does NOT yet serve — and drop the row a folded tombstone removed.
+        for (const [path, entry] of folded.foldedPaths) {
+          if (entry.kind === 'delete') {
+            nextSignatures.delete(path);
+            continue;
+          }
+          const signature = nextSignatures.get(path);
+          if (signature !== undefined) nextSignatures.set(path, { ...signature, folded: true });
         }
+        // The off-hot-path sweep, exactly as the Lean model states it: list the
+        // prefix, delete what neither the manifest nor a pending entry reaches.
+        const swept = await sweepOrphanBlobs(store);
+        pendingState.folded();
         ports.log(
           `${DEVBOX_WORKDIR} quiesce folded ${folded.foldedEntries} entries `
-          + `(${folded.treeWrites} writes, ${folded.treeDeletes} deletes)`,
+          + `(${folded.treeWrites} writes, ${folded.treeDeletes} deletes); swept `
+          + `${swept.deleted} orphan blobs of ${swept.listed} listed`,
         );
       }
 
       await ports.writeState({
         lastCheckpointAt: ports.now(),
-        signatures: Object.fromEntries(nextSignatures),
-        knownBlobs: [...known],
+        signatures: Object.fromEntries(capSignatures(nextSignatures)),
         lastFailure: undefined,
       });
 
@@ -951,30 +941,28 @@ export function overlayCasStorage(ports: OverlayCasPorts): DevboxStorage {
       // verdict2 that is what let a box stop believing a marker was never
       // written: `skipped 0B /workspace holds no objects yet` was returned
       // AFTER the blob, the journal batch, the fold and the cursor had all
-      // landed. The bytes below come from the staging that actually happened.
-      // `bytes` MEANS HELD-AFTER-COMMIT, per storage.ts. That field was
-      // unified across strategies precisely because it once meant two things
-      // and a caller comparing two strategies compared nothing; reporting
-      // staged-this-checkpoint here would re-open that. The staged figure is
-      // still computed, because it is what proves the checkpoint did work and
-      // it is the honest per-tick cost a caller cannot get by differencing
-      // held bytes across a fold — that derivation goes NEGATIVE at a rebase.
-      const committedBytes = staged.staged.reduce(
-        (sum, entry) => sum + (entry.kind === 'file' ? entry.size : 0),
-        0,
-      );
+      // landed.
+      //
+      // movedBytes IS THE STORE COUNTERS' bytesPut delta with the journal
+      // objects subtracted back out — what this checkpoint moved as BLOBS. The
+      // staged entries' file sizes were the old figure, and content-hash dedup
+      // makes them lie: a pure rename stages a whole file's size while moving
+      // zero bytes, which is the property the header advertises and the figure
+      // must show.
       ports.log(
         `${DEVBOX_WORKDIR} ${kind} checkpoint committed (overlay-cas, `
-        + `${staged.staged.length} entries, ${committedBytes}B staged this checkpoint; `
+        + `${staged.staged.length} entries, ${movedBytes}B moved into blobs; `
         + `store view ${held.objects} objects ${held.bytes}B)`,
       );
-      return { kind: 'committed', reason: undefined, bytes: held.bytes, movedBytes: committedBytes };
+      return { kind: 'committed', reason: undefined, bytes: held.bytes, movedBytes };
     } catch (error) {
+      pendingState.invalidate();
       return await recordCheckpointFailure(ports, previous, describe({ cause: error }));
     }
   };
 
   const discard = async (): Promise<void> => {
+    pendingState.invalidate();
     if (ports.containerRunning() && isOverlayMounted(await shell.readMounts(), DEVBOX_WORKDIR)) {
       await ports.exec(`fusermount3 -u ${shellPath(DEVBOX_WORKDIR)} || true`);
     }
@@ -996,3 +984,12 @@ export {
   replayPending,
   stageBlobs,
 } from './cas';
+export {
+  OVERLAY_CAS_STATE_MAX_BYTES,
+  SIGNATURE_ROWS_MAX,
+  capSignatures,
+  normalizeOverlayCasState,
+  overlayCasStateBytes,
+  type OverlayCasState,
+  type UpperSignature,
+} from './cas/state';

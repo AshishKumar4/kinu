@@ -20,7 +20,7 @@ import { join } from 'node:path';
 // decisions are reachable without the platform is the point of separating them,
 // so this import is the property rather than a workaround. The barrel's own
 // coherence is checked by `tsc`.
-import { DEVBOX_RUNTIME_DIR } from '../src/storage';
+import { DEVBOX_RUNTIME_DIR, parseDevboxStrategyName } from '../src/storage';
 import {
   DEFAULT_DEVBOX_POLICY,
   describeThrown,
@@ -620,6 +620,22 @@ describe('thrown values', () => {
   });
 });
 
+describe('bench arm selection fails closed', () => {
+  test('missing and unknown strategy names never become snapshot-chain', () => {
+    expect(parseDevboxStrategyName(undefined)).toBeNull();
+    expect(parseDevboxStrategyName(null)).toBeNull();
+    expect(parseDevboxStrategyName('unknown')).toBeNull();
+    expect(parseDevboxStrategyName('overlay-cas')).toBe('overlay-cas');
+  });
+
+  test('the deployed worker routes through the fail-closed parser', () => {
+    const worker = readFileSync(join(import.meta.dir, '../bench/worker.ts'), 'utf8');
+    expect(worker).toContain('const strategy = parseDevboxStrategyName(requested);');
+    expect(worker).toContain('if (strategy === null)');
+    expect(worker).not.toContain(": 'snapshot-chain';");
+  });
+});
+
 describe('the storage dispatch is exhaustive over the strategy union', () => {
   // A Durable Object cannot be constructed in a unit test, so this is pinned as
   // source shape for the same reason `onStart`'s arming is. The rule is what
@@ -663,5 +679,176 @@ describe('the storage dispatch is exhaustive over the strategy union', () => {
     expect(dispatch).toContain('${String(this.strategy)}');
     // And no arm is reachable by falling through to it.
     expect(dispatch).not.toContain(': snapshotChainStorage(');
+  });
+});
+
+// ── accepted review findings ────────────────────────────────────────────────
+
+import { createCheckpointLane } from '../src/lifecycle';
+import {
+  INCIDENT_LEDGER_MAX_ROWS,
+  reapDeliveredIncidents,
+  type IncidentRow,
+  type IncidentStore,
+} from '../src/incidents';
+import type { CheckpointOutcome } from '../src/storage';
+
+describe('the checkpoint lane — one strategy checkpoint at a time', () => {
+  const ok = (): Promise<CheckpointOutcome> => Promise.resolve({
+    kind: 'committed', reason: undefined, bytes: 1, movedBytes: 1,
+  });
+
+  test('concurrent callers of the SAME kind JOIN one operation', async () => {
+    const lane = createCheckpointLane();
+    let calls = 0;
+    const op = async (): Promise<CheckpointOutcome> => {
+      calls += 1;
+      await new Promise(resolve => setTimeout(resolve, 5));
+      return Promise.resolve(ok());
+    };
+    const [a, b] = await Promise.all([lane.run('tick', op), lane.run('tick', op)]);
+    expect(calls).toBe(1);
+    expect(a).toBe(b); // the same run, not two interleaved ones
+  });
+
+  test('a different kind QUEUES behind the running one; nothing interleaves', async () => {
+    const lane = createCheckpointLane();
+    const events: string[] = [];
+    const slowTick = async (): Promise<CheckpointOutcome> => {
+      events.push('tick:start');
+      await new Promise(resolve => setTimeout(resolve, 10));
+      events.push('tick:end');
+      return Promise.resolve(ok());
+    };
+    const quiesce = async (): Promise<CheckpointOutcome> => {
+      events.push('quiesce:start');
+      events.push('quiesce:end');
+      return Promise.resolve(ok());
+    };
+    await Promise.all([lane.run('tick', slowTick), lane.run('quiesce', quiesce)]);
+    // A quiesce that joined an in-flight tick could inherit a `skipped` answer
+    // and stop the container over work that only just landed; it waits and
+    // runs its own final commit instead.
+    expect(events).toEqual([
+      'tick:start', 'tick:end', 'quiesce:start', 'quiesce:end',
+    ]);
+  });
+
+  test('a rejected run rejects its joiners and leaves the gate usable', async () => {
+    const lane = createCheckpointLane();
+    const failing = (): Promise<CheckpointOutcome> =>
+      Promise.reject(new Error('store unreachable'));
+    const joiner = lane.run('tick', failing);
+    await expect(lane.run('tick', failing)).rejects.toThrow('store unreachable');
+    await expect(joiner).rejects.toThrow('store unreachable');
+    await expect(lane.run('tick', ok)).resolves.toHaveProperty('kind', 'committed');
+  });
+});
+
+// ── incident ledger retention ───────────────────────────────────────────────
+
+function fakeIncidentStore() {
+  const rows = new Map<string, IncidentRow>();
+  const store: IncidentStore = {
+    get: (key) => Promise.resolve(rows.get(key)),
+    put: (key, value) => {
+      rows.set(key, value);
+      return Promise.resolve();
+    },
+    delete: (key) => Promise.resolve(rows.delete(key)),
+    list: (options) => Promise.resolve(
+      new Map([...rows].filter(([key]) => key.startsWith(options.prefix))
+        .sort(([a], [b]) => (a < b ? -1 : 1))),
+    ),
+  };
+  return { store, rows };
+}
+
+function seedIncident(store: ReturnType<typeof fakeIncidentStore>, id: string): void {
+  store.rows.set(`devbox:incident:${id}`, {
+    incidentId: id, stage: 'checkpoint', reason: 'r',
+    processId: undefined, port: undefined, at: 0, attempts: 0,
+  });
+}
+
+describe('incident ledger retention — delivered rows are bounded, pending never dropped', () => {
+  test('reaping keeps the newest settled rows within the cap and every pending row', async () => {
+    const box = fakeIncidentStore();
+    for (let at = 0; at < INCIDENT_LEDGER_MAX_ROWS + 50; at += 1) {
+      seedIncident(box, `d${String(at).padStart(4, '0')}`);
+      const row = box.rows.get(`devbox:incident:d${String(at).padStart(4, '0')}`)!;
+      box.rows.set(row.incidentId && `devbox:incident:${row.incidentId}`, {
+        ...row, deliveredAt: at,
+      });
+    }
+    for (let p = 0; p < 5; p += 1) seedIncident(box, `pending${p}`);
+
+    const deleted = await reapDeliveredIncidents(box.store);
+
+    expect(deleted).toBe(55);
+    expect(box.rows.size).toBe(INCIDENT_LEDGER_MAX_ROWS);
+    // Oldest DELIVERED go first...
+    expect(box.rows.has('devbox:incident:d0000')).toBe(false);
+    expect(box.rows.has('devbox:incident:d0054')).toBe(false);
+    expect(box.rows.has(`devbox:incident:d${String(55).padStart(4, '0')}`)).toBe(true);
+    // ...and PENDING is never a candidate, however far over the cap they push.
+    for (let p = 0; p < 5; p += 1) {
+      expect(box.rows.has(`devbox:incident:pending${p}`)).toBe(true);
+    }
+  });
+
+  test('recording goes through the shared writer bound to INCIDENT_REASON_MAX_CHARS', () => {
+    // The producer once hardcoded its own literal here while the exported
+    // constant claimed producer and validator "cannot drift". The class now
+    // calls recordIncident itself.
+    const source = readFileSync(join(import.meta.dir, '..', 'src', 'devbox.ts'), 'utf8');
+    const from = source.indexOf('async #record(');
+    const body = source.slice(from, source.indexOf('\n  }', from));
+    expect(body).toContain('recordIncident(this.ctx.storage');
+    expect(body).not.toContain('.slice(0, 2000)');
+    expect(source).not.toContain('reason.slice(0, 2000)');
+  });
+});
+
+// ── ambient checkpoints and the serialization point ─────────────────────────
+
+describe('ambient checkpoints belong to product boxes, never the bench fixture', () => {
+  const devboxSource = readFileSync(join(import.meta.dir, '..', 'src', 'devbox.ts'), 'utf8');
+  const workerSource = readFileSync(
+    join(import.meta.dir, '..', 'bench', 'worker.ts'), 'utf8',
+  );
+
+  test('the schedule is armed and re-armed only behind the seam', () => {
+    const onStart = devboxSource.slice(
+      devboxSource.indexOf('override onStart('),
+      devboxSource.indexOf('\n  }', devboxSource.indexOf('override onStart(')),
+    );
+    expect(onStart).toContain('if (this.ambientCheckpoints)');
+    const scheduled = devboxSource.slice(
+      devboxSource.indexOf('async devboxCheckpoint('),
+      devboxSource.indexOf('\n  }', devboxSource.indexOf('async devboxCheckpoint(')),
+    );
+    expect(scheduled).toContain('if (!this.ambientCheckpoints) return;');
+  });
+
+  test('the bench box disables it; the interval gate still guards driver ticks', () => {
+    expect(workerSource).toContain('protected override get ambientCheckpoints(): boolean');
+    expect(workerSource).toContain('return false;');
+    // policy.checkpointIntervalMs stays — it is the guard the driver waits out.
+    expect(devboxSource).toContain('this.policy.checkpointIntervalMs / 1000');
+  });
+
+  test('every strategy checkpoint funnels through ONE lane call site', () => {
+    // Two overlapping runs would share staging directories and stamp
+    // overlapping journal sequences; the funnel makes that unrepresentable.
+    const direct = [...devboxSource.matchAll(/#requireStorage\(\)\.checkpoint\(/g)].length;
+    expect(direct).toBe(1);
+    expect(devboxSource).toContain('#lane.run(kind, () => this.#requireStorage().checkpoint(kind))');
+    for (const entry of ['async checkpointNow(', 'async quiesce(', 'async devboxCheckpoint(',
+      'override async onActivityExpired(']) {
+      const at = devboxSource.indexOf(entry);
+      const body = devboxSource.slice(at, at + 2_000);
+      expect(body).toContain('#checkpoint(');
+    }
   });
 });
