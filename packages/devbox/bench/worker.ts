@@ -550,11 +550,17 @@ async function verify(
   env: BenchEnv,
   strategy: DevboxStrategyName,
   name: string,
-): Promise<{ checks: Check[]; passed: boolean }> {
+): Promise<{
+  checks: Check[];
+  passed: boolean;
+  transient?: 'container_replaced';
+}> {
   const box = boxOf(env, strategy, name);
   const checks: Check[] = [];
   const add = (check: Check): void => { checks.push(check); };
 
+  const generationBefore = (await box.exec('cat /tmp/devbox-boot-id 2>/dev/null || true'))
+    .stdout.trim();
   // A marker written through the box's own default working directory. If the
   // default is wrong, the marker lands somewhere no checkpoint archives, and
   // every later check fails for the right reason.
@@ -592,6 +598,14 @@ async function verify(
       && (base.movedBytes === undefined || base.movedBytes > 0),
     detail: `${base.kind} moved=${base.movedBytes ?? 'n/a'} held=${base.bytes ?? 0}B `
       + `${base.reason ?? ''}`.trim(),
+  });
+  const generationAfter = (await box.exec('cat /tmp/devbox-boot-id 2>/dev/null || true'))
+    .stdout.trim();
+  const generationStable = generationBefore.length > 0 && generationAfter === generationBefore;
+  add({
+    name: 'one container generation spanned the first checkpoint',
+    pass: generationStable,
+    detail: `${generationBefore || '(missing)'} -> ${generationAfter || '(missing)'}`,
   });
 
   // A real recycle. Everything on the container's disk goes away here, which is
@@ -760,7 +774,11 @@ async function verify(
     });
   }
 
-  return { checks, passed: checks.every(check => check.pass) };
+  return {
+    checks,
+    passed: checks.every(check => check.pass),
+    transient: generationStable ? undefined : 'container_replaced',
+  };
 }
 
 export default {

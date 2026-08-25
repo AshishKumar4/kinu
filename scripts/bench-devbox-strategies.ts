@@ -435,7 +435,12 @@ const OpTallySchema: v.GenericSchema<OpTally> = v.looseObject({
  *  arm's notes and again in the report. */
 interface VerifyCheck { name: string; pass: boolean; detail: string }
 
-interface VerifyReply { ok?: boolean; checks?: VerifyCheck[]; passed?: boolean }
+interface VerifyReply {
+  ok?: boolean;
+  checks?: VerifyCheck[];
+  passed?: boolean;
+  transient?: 'container_replaced';
+}
 
 const VerifyReplySchema: v.GenericSchema<VerifyReply> = v.looseObject({
   ok: v.optional(v.boolean()),
@@ -445,6 +450,7 @@ const VerifyReplySchema: v.GenericSchema<VerifyReply> = v.looseObject({
     detail: v.string(),
   }))),
   passed: v.optional(v.boolean()),
+  transient: v.optional(v.literal('container_replaced')),
 });
 
 /** What an attach did. `kind` stays a free string rather than the fixture's
@@ -805,6 +811,11 @@ async function measureArm(
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
       verified = await call(fixture, 'POST', `/verify?box=${box}`, VerifyReplySchema, { strategy });
+      if (verified.transient === 'container_replaced' && attempt < attempts) {
+        log(`${strategy}: verify attempt ${attempt}/${attempts} crossed a container replacement; retrying`);
+        await delay(attempt * 15_000);
+        continue;
+      }
       if (attempt > 1) notes.push(`verify needed ${attempt} attempts (cold container window)`);
       break;
     } catch (error) {
