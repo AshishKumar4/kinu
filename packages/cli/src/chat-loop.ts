@@ -21,6 +21,7 @@ import { describePromptAttachment, resolvePromptAttachments } from './attachment
 import { watchTerminalConsents } from './consent-watch';
 import {
   connectDevice,
+  defaultDeviceName,
   describeConnectOutcome,
   deviceStatusLine,
   dismissDeviceConnectPrompt,
@@ -353,8 +354,10 @@ async function maybeOfferDeviceConnect(rl: readline.Interface, tty: boolean): Pr
     return;
   }
   console.log(`${WARN('Let this agent use this PC?')}`);
-  console.log(MUTED('  No PC is connected to your account yet. Cloud agents run local commands'));
-  console.log(MUTED('  through the Kinu daemon, asking consent per command.'));
+  console.log(MUTED(`  No PC is connected to your account yet. Linking installs the Kinu daemon`));
+  console.log(MUTED(`  and registers this machine as "${defaultDeviceName()}". A workspace you grant`));
+  console.log(MUTED('  access to can then run commands and read files here, as you — you approve'));
+  console.log(MUTED('  each workspace once, and can revoke it in Account settings → Devices.'));
   await promptDeviceConnect(rl, { allowDismiss: true });
   console.log('');
 }
@@ -385,6 +388,7 @@ async function runDeviceConnect(session: boolean): Promise<void> {
     let waiting = false;
     const result = await connectDevice(auth, {
       session,
+      label: defaultDeviceName(),
       onPoll: () => {
         if (!waiting) {
           process.stdout.write(DIM('  Waiting for the daemon to connect'));

@@ -5,6 +5,7 @@ import {
   WORKSPACE_TITLE_SYSTEM_PROMPT,
   workspaceTitlePrompt,
   changeActiveRole, createAgentConfigStore,
+  DEFAULT_ROLE_ID,
   fallbackWorkspaceIdentity,
   initWorkspaceSchema,
   parseWorkspaceTitle,
@@ -17,7 +18,7 @@ import {
 import { loadActiveProfile } from './profiles';
 import { createWorkspace } from '@kinu.run/core/identity';
 import { diagnostics, renderThrownChain } from '@kinu.run/core/obs';
-import { makeSql, makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
+import { defaultSpecForEndpoint, makeSql, makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
 import {
   agentDbPath,
   agentDir,
@@ -226,7 +227,7 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
     // Title and whose it is, in one write. The origin is what the title policy
     // reads to decide whether it may ever name this agent itself.
     agentConfig.setDisplayNameOrigin(displayName, input.nameOrigin ?? 'user');
-    if (input.role && input.role !== 'general') {
+    if (input.role && input.role !== DEFAULT_ROLE_ID) {
       const changed = changeActiveRole({
         config: agentConfig,
         envelope: await loadActiveProfile(),
@@ -391,13 +392,20 @@ async function resolveCloudAuth(origin: string | undefined, allowInteractiveAuth
   }
 }
 
+/**
+ * The spec a fresh local workspace's `agent_config.model` is seeded with.
+ *
+ * An explicitly named model wins, then the operator's configured default, then
+ * the endpoint's own spec. That last step used to be a SECOND copy of
+ * cli-backend's `defaultProviderFor` table, and the copy had never gained the
+ * `opencode`, `claude` or `@cf/` rows — so creating a workspace against a Claude
+ * subscription wrote `openai-compat/<model>` and its first turn resolved the
+ * wrong provider. One table, in the adapter that owns the endpoint.
+ */
 function modelSpecForAgentConfig(llm: LLMProviderConfig, rawModel: string | undefined): string {
   const configured = rawModel ?? loadConfigFile().model;
   if (configured) return configured;
-  if (llm.name === 'workers-ai') return `workers-ai/${llm.model}`;
-  if (llm.name === 'codex') return llm.model.startsWith('codex/') ? llm.model : `codex/${llm.model}`;
-  if (llm.name === 'openai') return `openai/${llm.model}`;
-  if (llm.name === 'openrouter') return `openrouter/${llm.model}`;
-  if (llm.name === 'anthropic') return `anthropic/${llm.model}`;
-  return `openai-compat/${llm.model}`;
+  const derived = defaultSpecForEndpoint(llm);
+  if (derived) return derived;
+  throw new Error(`No model for "${llm.name}": name one with --model, or run kinu setup.`);
 }

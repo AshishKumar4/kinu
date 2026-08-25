@@ -81,15 +81,25 @@ export const EVAL_WORKSPACE_PREFIX = 'eval-';
 type EnvSource = Record<string, string | undefined>;
 
 /**
+ * A name reduced to what a workspace name and a directory name can both hold.
+ *
+ * Exported because the LOCAL target needs the same reduction for its scratch
+ * directory and its workspace row, and two spellings of "make this safe" is how
+ * a suite ends up with one name in the store and another on disk.
+ */
+export function evalNameSlug(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+}
+
+/**
  * A workspace name an eval may create, prefixed and suffixed so it is both
  * attributable and unique.
  *
- * `subject` names the suite, not the case: the point of the name is that a row
+ * `subject` names the suite and the case: the point of the name is that a row
  * surviving teardown says what made it.
  */
 export function evalWorkspaceName(subject: string): string {
-  const slug = subject.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-  return `${EVAL_WORKSPACE_PREFIX}${slug}-${Math.random().toString(36).slice(2, 8)}`;
+  return `${EVAL_WORKSPACE_PREFIX}${evalNameSlug(subject)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 /** Why an origin was allowed. Reported rather than inferred, because "this ran

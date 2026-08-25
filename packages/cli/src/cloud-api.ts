@@ -3,10 +3,15 @@ import {
   decodeJsonValue,
   JsonValueSchema,
   ProfileCatalogEnvelopeSchema,
+  SPEND_SOURCES,
+  UsageSchema,
   type JsonValue,
+  type MissionBudgetSnapshot,
+  type ProducerSpend,
   type ProfileCatalog,
   type ProfileCatalogEnvelope,
   type ReasoningEffort,
+  type WorkspaceSpend,
 } from '@kinu.run/core';
 import { tolerateAsync } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -207,6 +212,50 @@ const CloudAccessTokenSchema: v.GenericSchema<CloudAccessToken> = v.object({
 const OkSchema = v.object({ ok: v.boolean() });
 const WhoamiSchema = v.object({ user: v.object({ id: v.string(), email: v.string(), displayName: v.optional(v.nullable(v.string())) }) });
 const CreatedAccessTokenSchema = v.object({ token: v.string(), name: v.string(), scopes: v.array(v.string()), createdAt: v.number() });
+
+/** The cost half of `getActivitySnapshot`, as a CLI-plane caller parses it off
+ *  the wire.
+ *
+ *  `v.GenericSchema<T>` against core's own types is what stops this drifting:
+ *  a field added to `WorkspaceSpend` fails to compile here until it is parsed,
+ *  rather than being silently dropped from a caller's copy of the panel.
+ *  Only `spend` is declared — the snapshot's other halves are the web panel's
+ *  and parsing them here would be a second mirror of them with no reader.
+ *
+ *  It lives with the other wire schemas rather than beside the one command that
+ *  used to hold it, because there are now two readers of the same RPC: `kinu
+ *  inspect spend` and the cloud eval target, which reports an episode's cost
+ *  through the same meter every other arm uses. Two copies of a
+ *  `GenericSchema<WorkspaceSpend>` would compile independently and disagree
+ *  about the same wire. */
+export const ProducerSpendSchema: v.GenericSchema<ProducerSpend> = v.object({
+  source: v.picklist(SPEND_SOURCES), calls: v.number(), callsWithoutUsage: v.number(),
+  usage: UsageSchema, usd: v.optional(v.number()), unpricedCalls: v.number(),
+});
+export const MissionBudgetSnapshotSchema: v.GenericSchema<MissionBudgetSnapshot> = v.object({
+  label: v.string(), parent: v.nullable(v.string()),
+  limits: v.object({ usd: v.optional(v.number()), tokens: v.optional(v.number()) }),
+  spent: v.object({ tokens: v.number(), usd: v.number() }),
+  remaining: v.object({ tokens: v.optional(v.number()), usd: v.optional(v.number()) }),
+  pricing: v.object({
+    blendedTokens: v.number(), source: v.picklist(['catalog', 'blended', 'mixed']),
+  }),
+  calls: v.number(), spawns: v.number(), exhausted: v.boolean(),
+});
+export const WorkspaceSpendSchema: v.GenericSchema<WorkspaceSpend> = v.object({
+  producers: v.array(ProducerSpendSchema),
+  total: v.object({
+    calls: v.number(), callsWithoutUsage: v.number(), usage: UsageSchema,
+    usd: v.optional(v.number()), unpricedCalls: v.number(),
+  }),
+  coverage: v.object({
+    calls: v.number(), measured: v.number(), reported: v.nullable(v.number()),
+    silent: v.array(v.picklist(SPEND_SOURCES)), partial: v.array(v.picklist(SPEND_SOURCES)),
+  }),
+  offTurnShare: v.nullable(v.number()),
+  missions: v.array(MissionBudgetSnapshotSchema),
+});
+export const ActivitySpendSchema = v.object({ spend: WorkspaceSpendSchema });
 
 /**
  * Invoke a named agent method over the generic RPC transport —

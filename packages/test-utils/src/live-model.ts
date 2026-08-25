@@ -41,6 +41,7 @@ import {
   addUsage, cloudProxyBaseURL, createChatModel, DEFAULT_WORKERS_AI_MODEL_ID, normalizeUsage,
   RunEventRecorder, usageReported, workspaceSpend, WORKSPACE_RUN_ID,
   type LLMProviderConfig, type ModelCallSink, type SqlExecutor, type Usage,
+  type WorkspaceSpend,
 } from '@kinu.run/core';
 import type { LanguageModel, LanguageModelUsage } from 'ai';
 import { appendFileSync } from 'node:fs';
@@ -174,6 +175,33 @@ export function resolveLiveModel(env: EnvSource = process.env): LiveModelResolut
 export interface LiveModelSession {
   readonly origin: string;
   readonly token: string;
+}
+
+/**
+ * The worker origin and bearer behind a resolved worker-proxy target.
+ *
+ * RECOVERED FROM THE TARGET, never re-read from `process.env`, so a caller
+ * cannot reach a different deployment than the one `liveModelTarget` announced
+ * and the tier's banner printed. That is the whole point of deriving it: two
+ * readings of the environment are two answers to "where did this run go", and a
+ * measurement may not be vague about that.
+ *
+ * Lives here beside {@link LiveModelSession} because there are two callers — the
+ * live smoke test and the cloud eval target, which creates and deletes a
+ * workspace with this pair. It throws rather than returning null: a caller
+ * asking for the deployment's own API has already decided it needs one, and an
+ * AI-gateway target has no origin to give.
+ */
+export function workerSession(llm: LLMProviderConfig): LiveModelSession {
+  const origin = llm.baseURL.replace(/\/api\/user\/ai\/v1$/, '');
+  if (origin === llm.baseURL) {
+    throw new Error(`${llm.baseURL} is not a worker AI-proxy base URL, so no worker origin can be `
+      + 'recovered from it. This target fronts a model and no Kinu deployment, so there is no '
+      + 'workspace API to reach.');
+  }
+  const header = llm.headers['Authorization'];
+  if (!header) throw new Error('the resolved worker target carries no Authorization header');
+  return { origin, token: header.replace(/^Bearer /, '') };
 }
 
 /**
@@ -399,18 +427,6 @@ export function liveModelCallSink(sql: SqlExecutor): ModelCallSink {
 }
 
 /**
- * The bound on model-call rows read out of one episode's store.
- *
- * An episode is capped at `KINU_MAX_STEPS` model steps (500 by default), and
- * every other producer in a workspace fires at most a few times per step, so
- * this is three orders of magnitude above anything one episode can write. It
- * exists so `workspaceSpend`'s window cannot silently truncate an episode into a
- * floor — a total whose window you cannot see is a total you cannot check — and
- * `complete` below is what proves the window was not the binding constraint.
- */
-const EPISODE_SPEND_WINDOW = 100_000;
-
-/**
  * Record what ONE driven episode spent, read off the store its session wrote.
  *
  * WHY THE STORE AND NOT A SINK. A suite that calls `generateText` itself holds
@@ -424,25 +440,37 @@ const EPISODE_SPEND_WINDOW = 100_000;
  * gap was made of. `workspaceSpend` is the one seam that unions both row kinds
  * plus the head journal, so it is what this reads. No second meter, no second
  * definition of what a workspace spent.
+ */
+export function recordLiveModelEpisode(sql: SqlExecutor): void {
+  recordWorkspaceSpend(workspaceSpend({ events: new RunEventRecorder(sql), sql }));
+}
+
+/**
+ * Record an episode's spend from a `WorkspaceSpend` somebody else read.
+ *
+ * THE SAME METER, ONE STEP LOWER. `recordLiveModelEpisode` above reads the store
+ * it is handed; a CLOUD episode's store is inside a Durable Object and is
+ * reachable only as a read model over RPC. Both arrive at the same
+ * `WorkspaceSpend` — the deployed side returns it verbatim from
+ * `getActivitySnapshot`, whose `spend` field IS `workspaceSpend({ events, sql })`
+ * — so the only thing that was ever backend-specific is who does the reading.
+ * This is the accounting half, shared, and it is why the cloud arm cannot grow a
+ * second definition of what a workspace spent.
+ *
+ * IT NO LONGER HAS A WINDOW TO REFUSE. A truncation guard stood here, and it was
+ * load-bearing while the total was read over a bounded window: a windowed figure
+ * printed where a reader takes an episode's cost is a floor wearing a
+ * measurement's clothes. `workspaceSpend` now aggregates over the whole log, so
+ * `complete` and `windowLimit` are gone from the read model and the guard has
+ * nothing left to check. Deleted rather than kept as a tautology — a check that
+ * cannot fire is the shape this repository keeps finding.
  *
  * AN EPISODE ALWAYS COUNTS. A store that accounts for no call at all does not
  * add a silent zero: it increments `episodesUnmeasured`, because an episode that
  * ran and cannot say what it cost is a hole in the measurement and has to read
  * as one.
  */
-export function recordLiveModelEpisode(sql: SqlExecutor): void {
-  const spend = workspaceSpend({ events: new RunEventRecorder(sql), sql }, {
-    windowLimit: EPISODE_SPEND_WINDOW,
-  });
-  // Unreachable at this window for a step-capped episode, and a throw rather
-  // than a shrug because the alternative is publishing a floor as a total —
-  // the exact confusion this function exists to remove.
-  if (!spend.complete) {
-    throw new Error(
-      `episode spend truncated at ${String(EPISODE_SPEND_WINDOW)} rows, so its total would be a `
-      + 'floor reported as a measurement — raise EPISODE_SPEND_WINDOW',
-    );
-  }
+export function recordWorkspaceSpend(spend: WorkspaceSpend): void {
   if (spend.total.calls === 0) {
     spendEpisodesUnmeasured += 1;
     return;

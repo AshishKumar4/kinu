@@ -336,7 +336,6 @@ export function buildProgram(): Command {
     .command('spend <name>')
     .helpGroup(INSPECT)
     .description('Show what the whole workspace spent, by producer and by mission')
-    .option('--limit <n>', 'Event rows read per row type (default 2000)')
     .option('--json', 'Print raw JSON')
     .action(wrapAction(spendCommand));
 
@@ -440,14 +439,14 @@ export function buildProgram(): Command {
     .command('connect')
     .helpGroup(THIS_COMPUTER)
     .description('Link this computer as the desktop execution daemon (the link renews itself while the daemon connects; re-run this after 180 idle days)')
-    .option('--label <name>', 'Device label')
+    .option('--label <name>', 'Name for this device (default: user@hostname); skips the name prompt')
     .action(wrapAction((opts: { label?: string }) => desktopCommand('connect', opts)));
 
   program
     .command('desktop [action]')
     .helpGroup(THIS_COMPUTER)
     .description('Connect or inspect the local desktop execution daemon')
-    .option('--label <name>', 'Device label')
+    .option('--label <name>', 'Name for this device (default: user@hostname); skips the name prompt')
     .action(wrapAction(desktopCommand));
 
   program

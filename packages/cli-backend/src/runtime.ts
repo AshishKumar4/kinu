@@ -56,8 +56,13 @@ import { createCwdPlaneVFS, createHostMountVFS } from './host-mount';
 import { createLinuxFiber, initFiberTable, detectOrphanedFibers } from './fiber';
 import { createBranchSpawner } from './branch-process';
 import {
-  createLocalProviderLLM, type LocalProviderCredentials,
+  createLocalModelResolver, createLocalProviderLLM,
+  type LocalModelResolver, type LocalProviderCredentials,
 } from './model-resolver';
+import {
+  createLocalProfileAuthority,
+  type LocalProfileAuthority, type LocalProfileModelPlane,
+} from './profile-authority';
 import type { LocalCodexAuthStore } from './codex-auth-store';
 import type { OAuthCredential, FileCheckpoints } from '@kinu.run/core';
 import { diagnostics, KinuError } from '@kinu.run/core/obs';
@@ -132,11 +137,24 @@ export interface CLIRuntime extends AgentRuntime {
   turnProfile?(): ResolvedTurnProfile | null;
   modelForRoute?(resolution: ModelRouteResolution): LLM;
   /**
-   * The live resolver every routed lane falls back to when no turn has
-   * installed a profile. Bound after construction like the two sinks above,
-   * because the session owns the role/tier authority and the runtime is built
-   * before it. Re-invoked per resolution, so a catalog written since the last
-   * one is observed rather than cached.
+   * The turn-profile authority every routed lane resolves through when no turn
+   * has installed a profile. Built by {@link createCLIRuntime}, so a runtime
+   * opened WITHOUT a session — `kinu evolve`, a fixture, any future
+   * session-less surface — still routes its judge, explorer, fast and advisor
+   * lanes. A session REFINES its inputs (its own provider plane, its own
+   * catalog authority, its own run-event recorder) rather than installing a
+   * second resolver, which is how the two came to disagree.
+   */
+  profiles?: LocalProfileAuthority;
+  /**
+   * Replace the resolver every routed lane falls back to.
+   *
+   * No product caller: {@link createCLIRuntime} installs one over
+   * {@link profiles} at construction and a session refines that. This stays as
+   * the override seam a measurement harness needs — `tests/evals/harness.ts`
+   * pins one fixed profile so an episode resolves nothing per turn — and
+   * `null` withholds resolution entirely, which is what makes an unrouted lane
+   * say so rather than invent a model.
    */
   setProfileResolver?(resolve: (() => Promise<ResolvedTurnProfile>) | null): void;
   /**
@@ -384,7 +402,34 @@ export function createCLIRuntime(
   initAgentConfigTable(execRaw);
   const agentConfig = createAgentConfigStore(sql);
   let turnProfile: ResolvedTurnProfile | null = null;
-  let profileResolver: (() => Promise<ResolvedTurnProfile>) | null = null;
+  // The model plane a PROFILE resolves against: how a stored spec is spelled in
+  // full, and what the account can reach. Built from the same endpoint and
+  // credentials the routed-lane factory below uses, so a tier's model and the
+  // model that lane runs cannot be spelled two different ways. Lazy because a
+  // registry costs a construction and a runtime that never resolves a profile
+  // never needs one.
+  let specResolver: LocalModelResolver | null = null;
+  const profilePlane: LocalProfileModelPlane = {
+    normalizeSpec: (spec) => {
+      specResolver ??= createLocalModelResolver({
+        llm: config.llm,
+        credentials: config.providerCredentials,
+        codexAuthStore: config.codexAuthStore,
+        onCodexRefresh: config.onCodexRefresh,
+      });
+      return specResolver.normalizeSpecSync(spec);
+    },
+    // Nothing beyond the configured model, which the snapshot folds in itself.
+    // This plane never asked a provider what it carries, so it claims nothing
+    // it did not look up — and a session that CAN list refines it.
+    listModels: () => Promise.resolve({ models: [], failures: [] }),
+  };
+  const profiles = createLocalProfileAuthority({ config: agentConfig, plane: profilePlane });
+  // THE installation. Every local runtime is born here, so every local runtime
+  // routes — a session-less one included. `kinu evolve` used to spend a whole
+  // search against lanes that threw for want of this line.
+  let profileResolver: (() => Promise<ResolvedTurnProfile>) | null =
+    () => profiles.resolvePreTurn();
   /**
    * The profile a routed lane runs against. A turn's own resolution wins; with
    * no turn open the live resolver supplies one and it is installed, so the
@@ -535,6 +580,7 @@ export function createCLIRuntime(
     setModelOperations: (sink: ModelOperationSink | null) => { modelOperations = sink; },
     setTurnProfile: (profile: ResolvedTurnProfile) => { turnProfile = profile; },
     turnProfile: () => turnProfile,
+    profiles,
     modelForRoute,
     setModelForRoute: (factory: (resolution: ModelRouteResolution) => LLM) => {
       modelRouteFactory = factory;

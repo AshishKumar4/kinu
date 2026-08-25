@@ -85,9 +85,12 @@ export const FULL_TOOL_SURFACE: readonly string[] = [...BUILTIN_TOOLS];
  *  property that makes `0` distinguishable from "never ran" in the type system
  *  rather than in a reviewer's memory.
  *
- *  `incomplete` is the operator-cancellation outcome: the run was stopped while
- *  this case was in flight, so there is no verdict to record — neither pass nor
- *  fail, and never a score. */
+ *  `incomplete` is the NO-VERDICT outcome: the case began and never settled, so
+ *  there is neither pass nor fail nor score. Three causes reach it — an operator
+ *  cancelled the run, the process died mid-case, or the ENVIRONMENT killed the
+ *  turn (an upstream 5xx, a rate limit, a refused credential). All three mean the
+ *  run still owes the case, which is why a restart retries it and why the phase
+ *  is not settled. */
 export type EvalOutcome = 'scored' | 'inert' | 'errored' | 'skipped' | 'incomplete';
 
 /** One scorer's verdict, flattened for persistence. */

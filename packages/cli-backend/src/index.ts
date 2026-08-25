@@ -21,9 +21,14 @@ export { createNodeCraftedExecute } from './craft-executor';
 export { discoverAgentsMd } from './agents-md';
 export { createNodeExecuteToolFactory, type NodeExecuteToolFactoryDeps } from './execute-tools-factory';
 export {
+  createLocalProfileAuthority, resolverModelPlane, staticModelPlane, STATIC_MODEL_SPEC,
+  type LocalProfileAuthority, type LocalProfileModelPlane,
+  type ProfileAuthorityRefinement, type ProfileEnvelopeSource,
+} from './profile-authority';
+export {
   LocalAgentSession, LOCAL_MAX_INLINE_ATTACHMENT_BYTES,
   type LocalAgentSessionOpts, type SessionEvent, type LocalSessionDb,
-  type ShellApprovalHandler, type ProfileEnvelopeSource,
+  type ShellApprovalHandler,
 } from './local-session';
 export {
   LocalAgentHost,
@@ -40,6 +45,7 @@ export {
 } from './agent-host';
 export {
   createLocalModelResolver, cloudProxyBaseURL, CLOUD_PROXY_PROVIDER_IDS,
+  defaultProviderFor, defaultSpecForEndpoint,
   type LocalModelResolver, type LocalModelResolverConfig, type LocalCloudSession,
   type LocalProviderCredentials, type LocalOpenAICompatCredential,
 } from './model-resolver';

@@ -750,7 +750,7 @@ describe('CLI TUI layout', () => {
       root.render(
         <box style={{ width: '100%', height: '100%' }}>
           <DeviceConnectOverlay
-            prompt={{ phase: 'ask', statusLine: 'No PC is connected to your account yet.' }}
+            prompt={{ phase: 'ask', statusLine: 'No PC is connected to your account yet.', deviceName: 'ashish@studio' }}
             terminal={{ width: 96, height: 24 }}
           />
         </box>,

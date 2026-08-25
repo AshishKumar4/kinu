@@ -41,6 +41,9 @@ import {
   writeSoul,
   TIER_IDS,
   type AdmittedSubordinateReport,
+  type ReportToolDeps,
+  type SubordinateReportOrigin,
+  type SubordinateReportStatus,
   type AgentConfigStore,
   type JsonObject,
   type HostedAgentRef,
@@ -69,13 +72,13 @@ import {
   type LocalAgentSessionOpts,
   type LocalPublishEventInput,
   type LocalPublishEventResult,
-  type ProfileEnvelopeSource,
   type SessionEvent,
 } from '../local-session';
 import type { LocalModelResolver } from '../model-resolver';
+import type { ProfileEnvelopeSource } from '../profile-authority';
 import type { McpServerConfig } from '../mcp';
 
-const REPORT_TOOL_NAME = 'report';
+/** The one key a subordinate's own depth is read from. */
 const CHILD_DEPTH_KEY = 'subordinate.depth';
 
 /** Runtime inputs fixed for one bound agent while this host process is alive. */
@@ -478,11 +481,19 @@ export class LocalAgentHost {
     // The pump consults it before every turn, so an interactive process takes
     // the lease from a daemon at that boundary rather than interleaving with it.
     entry.session.setDriverGate(() => this.driverHold(entry).acquire()?.refused ?? null);
-    // THE REAL PEER TRANSPORT, roots only. Same reason it lands here: the
-    // endpoint's inbox wakes this session, and the session has to exist first.
+    // The two transports that split on the same fact, installed here for the
+    // same reason as the team deps: both close over this entry's session.
+    //
+    // Roots get PEER MAIL — their inbox wakes this session, so the session has
+    // to exist first. Subordinates get the REPORT SPINE instead. Without it a
+    // local child could only ever be relayed as `progress`, so its parent's
+    // roster never left `working` on the child's own signal and every
+    // delegation decision above it ran on a permanently-busy helper.
     if (input.parentKey === null) {
       entry.peers = this.buildPeerEndpoint(entry, hubSql);
       entry.session.setPeers(entry.peers.deps);
+    } else {
+      entry.session.setReport(this.buildReport(entry));
     }
 
     try {
@@ -724,30 +735,47 @@ export class LocalAgentHost {
       child.pendingMode = 'build';
       return;
     }
-    if (event.type === 'tool-call' && event.toolName === REPORT_TOOL_NAME) {
-      state.reportedThisTurn = true;
-      return;
-    }
+    // No `tool-call` branch here any more. The flag is set by the report dep
+    // itself (see buildEntry), which is the only place that sees BOTH the
+    // native `report` tool and its `report.*` codemode twin — and which sees
+    // them when they actually publish rather than when a call starts.
     if (event.type !== 'turn-end') return;
     if (!subordinateRelaysTurnEnd({
       reportedThisTurn: state.reportedThisTurn,
       ownerDriven: state.ownerDriven,
       assistantText: event.turn.assistantResponse,
     })) return;
-    void this.relayToParent(child, event.turn.assistantResponse, state.mode).catch((error) => {
-      diagnostics.failure(
-        'host.subordinate_relay_failed',
-        toKinuError({ doing: 'relaying a subordinate report', cause: error, otherwise: 'io' }),
-        { subordinate: child.key },
-      );
-    });
+    void this.relayToParent(child, event.turn.assistantResponse, state.mode, 'progress', 'turn_end')
+      .catch((error) => {
+        diagnostics.failure(
+          'host.subordinate_relay_failed',
+          toKinuError({ doing: 'relaying a subordinate report', cause: error, otherwise: 'io' }),
+          { subordinate: child.key },
+        );
+      });
   }
 
-  private async relayToParent(child: HostEntry, content: string, mode: WorkMode): Promise<void> {
-    if (!child.parentKey) return;
+  /**
+   * Publish one report from a child into its parent's event rail.
+   *
+   * `status` is the child's own word, never this host's. It decides where the
+   * parent's roster row moves — core `applyReport` takes `completed` to idle and
+   * `blocked` to awaiting_input — so hardcoding `progress` here left every local
+   * subordinate permanently working in its parent's eyes, whatever it said.
+   * The automatic turn-end relay still passes `progress`, because an answer
+   * nobody was asked for is progress and nothing stronger.
+   */
+  private async relayToParent(
+    child: HostEntry,
+    content: string,
+    mode: WorkMode,
+    status: SubordinateReportStatus,
+    origin: SubordinateReportOrigin,
+  ): Promise<{ id: string; admitted: boolean }> {
+    if (!child.parentKey) return { id: '', admitted: false };
     const parent = this.entries.get(child.parentKey);
     if (!parent) throw new Error(`parent "${child.parentKey}" is not hosted`);
-    await receiveSubordinateEvent({
+    return receiveSubordinateEvent({
       log: parent.eventLog,
       roster: parent.roster,
       vfs: parent.ws.rt.storage.vfs,
@@ -769,11 +797,35 @@ export class LocalAgentHost {
       onAdmitted: () => this.wake(parent, 'subordinate report'),
     }, {
       fromSubordinate: child.name,
-      status: 'progress',
+      status,
       content,
-      origin: 'turn_end',
+      origin,
       mode,
     }, Date.now());
+  }
+
+  /**
+   * The report spine for one subordinate — the CLI peer of SubordinateAgent's
+   * `report` wiring.
+   *
+   * Roots get none: a root has no parent to report to, so the tool is
+   * structurally absent rather than present and refusing. The session gates it
+   * further to parent-ASSIGNED turns only, because an owner-driven chat with a
+   * subordinate is private to that chat.
+   */
+  private buildReport(child: HostEntry): ReportToolDeps {
+    return {
+      report: async ({ status, content }) => {
+        const relayed = await this.relayToParent(
+          child, content, child.relay?.mode ?? 'build', status, 'report_tool',
+        );
+        // Set HERE rather than off a `tool-call` event: this is the one seam
+        // both the native tool and the `report.*` codemode namespace publish
+        // through, and it fires when the report actually landed.
+        if (child.relay) child.relay.reportedThisTurn = true;
+        return { admitted: relayed.admitted, id: relayed.id };
+      },
+    };
   }
 
   // ── local SubordinateRuntime ────────────────────────────────────────

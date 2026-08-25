@@ -5,7 +5,7 @@
  * stdout, picker overlay vs printed list).
  */
 
-import { ADVISOR_SEVERITIES, isAdvisorSeverity, isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type BranchStatusEvent, type EvolutionConfigView, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu.run/core';
+import { ADVISOR_SEVERITIES, DEFAULT_ROLE_ID, isAdvisorSeverity, isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type BranchStatusEvent, type EvolutionConfigView, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu.run/core';
 import type { AgentChangelogView, AgentClient, AgentClientStatus, AgentSearchNode } from './agent-client';
 import { loadActiveProfile, updateDefaultTier } from './profiles';
 
@@ -219,7 +219,7 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
     case '/role': {
       if (!arg) {
         const status = await client.status();
-        return { kind: 'text', text: `Role: ${status.roleId ?? 'general'}` };
+        return { kind: 'text', text: `Role: ${status.roleId ?? DEFAULT_ROLE_ID}` };
       }
       const result = await client.setRole(arg);
       return { kind: 'role-set', role: result.role };

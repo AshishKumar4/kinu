@@ -239,7 +239,12 @@ describe('LocalAgentClient', () => {
 
     client.stop();
     const result = await turn;
-    expect(result.hadError).toBe(true);
+    // A user's Stop is a choice, not an agent failure. `hadError` is what grades
+    // the turn, and folding an interruption into it is the same drift that
+    // sealed the durable run 'error' here and 'aborted' in the cloud — pinned
+    // now in cli-backend local-session.test.ts, "a user's Stop seals the run
+    // 'aborted'". The turn still ENDS abruptly, and the surface is still told.
+    expect(result.hadError).toBe(false);
     expect(events.some((event) => event.type === 'error')).toBe(true);
     await client.close();
   });

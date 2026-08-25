@@ -19,6 +19,7 @@ import {
   listModelsDevProviderModels,
   normalizeUsage,
   parseModelSpec,
+  workersAiSpec, WORKERS_AI_MODEL_ID_PREFIX,
   PROXY_DENIED_CRED_KEYS,
   providerProxyCredentialsURL,
   providerProxyForwardURL,
@@ -303,7 +304,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     registry.register(createGatewayBackedProvider({
       id: 'ai-gateway',
       label: 'Cloudflare AI Gateway (local)',
-      defaultModel: localEndpoint.model.startsWith('workers-ai/') ? localEndpoint.model : `workers-ai/${localEndpoint.model}`,
+      defaultModel: workersAiSpec(localEndpoint.model),
       llm: localEndpoint,
       catalogProviderId: 'cloudflare-workers-ai',
       catalogModelPrefix: 'workers-ai/',
@@ -404,7 +405,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
       if (!fallback) throw new Error(noDefaultModelMessage());
       return `${fallback.provider}/${fallback.model}`;
     }
-    if (s.startsWith('@cf/')) return `workers-ai/${s}`;
+    if (s.startsWith(WORKERS_AI_MODEL_ID_PREFIX)) return workersAiSpec(s);
 
     const slash = s.indexOf('/');
     if (slash > 0) {
@@ -711,7 +712,10 @@ function createSignedOutCloudProvider(id: CloudProxyProviderId, label: string): 
   };
 }
 
-/** Why a bare model id has nowhere to go, with every fix named. */
+/** Why a bare model id has nowhere to go, with every fix named. The COPY is
+ *  deliberately per backend — core's `defaultSpecFor` returns null rather than a
+ *  sentence, because "run kinu auth" and the cloud's "reconnect Workers AI"
+ *  name different remedies on different surfaces. */
 function noDefaultModelMessage(): string {
   return 'No default model configured.'
     + ' Run kinu auth to use your Cloudflare AI, run kinu setup to configure a local provider,'
@@ -719,7 +723,25 @@ function noDefaultModelMessage(): string {
     + ' (for example --model claude/claude-sonnet-4-x after signing in to Claude Code).';
 }
 
-function defaultProviderFor(llm: LLMProviderConfig | null): 'workers-ai' | 'codex' | 'openai' | 'anthropic' | 'openrouter' | 'openai-compat' | 'opencode' | 'claude' | null {
+/** The providers a configured local endpoint can stand for. Named so the
+ *  derivation below and the spec it composes cannot drift apart. */
+type CliProviderId =
+  | 'workers-ai' | 'codex' | 'openai' | 'anthropic'
+  | 'openrouter' | 'openai-compat' | 'opencode' | 'claude';
+
+/**
+ * Which provider a BARE model id belongs to, given the configured endpoint.
+ *
+ * This half is genuinely local: it reads adapter state — an endpoint, and below
+ * a registry — that core has no business reading, which is why
+ * `providers/default-spec.ts` declares it platform-specific at the seam rather
+ * than hoisting it. Exported so it is the adapter's ONE answer: the create path
+ * carried a second copy of this table that had never gained the `opencode`,
+ * `claude` or `@cf/` rows, so creating a workspace against a Claude
+ * subscription wrote `openai-compat/<model>` into its config and the first turn
+ * resolved the wrong provider.
+ */
+export function defaultProviderFor(llm: LLMProviderConfig | null): CliProviderId | null {
   if (llm === null) return null;
   if (llm.name === 'workers-ai' || llm.model.startsWith('@cf/')) return 'workers-ai';
   if (llm.name === 'codex') return 'codex';
@@ -729,6 +751,23 @@ function defaultProviderFor(llm: LLMProviderConfig | null): 'workers-ai' | 'code
   if (llm.name === 'opencode') return 'opencode';
   if (llm.name === 'claude') return 'claude';
   return 'openai-compat';
+}
+
+/**
+ * The full `provider/model` spec a configured endpoint stands for.
+ *
+ * What `agent_config.model` is seeded with when the operator named no model, and
+ * what a bare id falls to. Null when no endpoint derives one, which is the
+ * caller's cue to say `noDefaultModelMessage()` — the same shape core's
+ * `defaultSpecFor` uses for the half it owns.
+ */
+export function defaultSpecForEndpoint(llm: LLMProviderConfig | null): string | null {
+  const provider = defaultProviderFor(llm);
+  if (provider === null || llm === null) return null;
+  // `codex` is the one provider whose configured model already carries its own
+  // prefix in some configs, so prefixing again would name `codex/codex/…`.
+  const model = llm.model.startsWith(`${provider}/`) ? llm.model.slice(provider.length + 1) : llm.model;
+  return `${provider}/${model}`;
 }
 
 interface LocalAuthStore {

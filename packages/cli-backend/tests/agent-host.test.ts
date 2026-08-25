@@ -11,6 +11,8 @@ import {
   backgroundJobWakeTrigger,
   createAgentConfigStore,
   initWorkspaceSchema,
+  REPORT_TOOL,
+  SUBORDINATE_REPORT_STATUSES,
   type HostedAgentRef,
   type LLMProviderConfig,
 } from '@kinu.run/core';
@@ -121,6 +123,61 @@ function gatedFirstModel(): GatedModel {
     },
   });
   return { model, started, release, calls: () => callCount };
+}
+
+/** A subordinate that answers its assignment with a TERMINAL report: one
+ *  `report` tool call declaring `completed`, then its closing text.
+ *
+ *  The status is the child's own word, which is the whole point. `relayToParent`
+ *  used to hardcode `'progress'`, so every local subordinate stayed permanently
+ *  `working` in its parent's eyes whatever it said, and the tool the cloud
+ *  backend gives a child was not wired here at all. */
+function reportingChildModel(content: string) {
+  const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+  let calls = 0;
+  const model = new TestLanguageModelV2({
+    provider: 'fake',
+    modelId: 'fake-model',
+    // The detached review pass calls this one; without it every turn reports a
+    // failure that belongs to the fixture rather than to the product.
+    doGenerate: async () => ({
+      content: [{ type: 'text', text: 'acknowledged' }],
+      finishReason: 'stop' as const,
+      usage,
+      warnings: [],
+    }),
+    doStream: async () => {
+      calls += 1;
+      // Call 1 is the child's assigned turn; 2 is its continuation past the
+      // tool result; the rest are the parent's wake turn.
+      const reporting = calls === 1;
+      return {
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: 'stream-start', warnings: [] });
+            if (reporting) {
+              controller.enqueue({
+                type: 'tool-call',
+                toolCallId: 'report-1',
+                toolName: REPORT_TOOL,
+                input: JSON.stringify({ status: 'completed', content }),
+              });
+            } else {
+              controller.enqueue({ type: 'text-start', id: '0' });
+              controller.enqueue({ type: 'text-delta', id: '0', delta: 'acknowledged' });
+              controller.enqueue({ type: 'text-end', id: '0' });
+            }
+            controller.enqueue({
+              type: 'finish', finishReason: reporting ? 'tool-calls' : 'stop', usage,
+            });
+            controller.close();
+          },
+        }),
+        response: { headers: {} },
+      };
+    },
+  });
+  return { model, calls: () => calls };
 }
 
 async function seedAgent(state: string, name: string): Promise<string> {
@@ -473,6 +530,82 @@ describe('LocalAgentHost', () => {
     await team.dismiss({ name: 'temporary', requestedBy: 'user', keepHistory: false });
     expect(existsSync(dirname(temporaryPath))).toBe(false);
     await host.close();
+  });
+
+  test("a subordinate's terminal report moves its parent's roster row off working", async () => {
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+    const CONTENT = 'root cause: the callback URL was never registered';
+    const child = reportingChildModel(CONTENT);
+    const { host } = makeHost(state, child.model, [
+      { name: 'root', cwd: project, workspaceId: 'proj' },
+    ]);
+    // Resolved on the first REPORT — the assignment rides the same
+    // `subordinate_event` channel under status 'task' — and then asserted, so a
+    // host that published the wrong status fails by naming it rather than by
+    // hanging on a status-filtered wait that never arrives.
+    const reported = Promise.withResolvers<{ status: string; text: string }>();
+    const childTurnEnded = Promise.withResolvers<void>();
+    const parentTurnEnded = Promise.withResolvers<void>();
+    host.subscribe((agent, event) => {
+      if (
+        event.type === 'broadcast'
+        && event.event.type === 'subordinate_event'
+        && SUBORDINATE_REPORT_STATUSES.some((known) => known === event.event.status)
+      ) {
+        reported.resolve({ status: event.event.status ?? '', text: event.event.text ?? '' });
+      }
+      if (event.type === 'turn-end') {
+        if (agent === 'root/researcher') childTurnEnded.resolve();
+        if (agent === 'root') parentTurnEnded.resolve();
+      }
+    });
+
+    const team = await host.team('root');
+    await team.create({
+      name: 'researcher', role: 'researcher', mission: 'Investigate the incident.',
+    });
+    const assigned = await team.assign({
+      name: 'researcher', task: 'Find the root cause and report it.', mode: 'build',
+    });
+    expect(assigned.delivery).toBe('starts_now');
+
+    // The child's own word — and its body — cross into the parent's rail.
+    // `relayToParent` hardcoded 'progress' here, so a child could say
+    // `completed` and its parent would still be told it was mid-work.
+    expect(await reported.promise).toEqual({ status: 'completed', text: CONTENT });
+    // Both turns are over, so the child's turn-end relay has had its chance to
+    // fire and the roster below is the settled state rather than a mid-flight one.
+    await childTurnEnded.promise;
+    await parentTurnEnded.promise;
+
+    // `applyReport` takes 'completed' to idle and clears the task. The automatic
+    // turn-end relay passes 'progress', which leaves the row 'working' with its
+    // task intact — the state the sibling test above pins, and the only state
+    // this backend could reach before the report tool existed here.
+    const status = v.parse(TeamStatusSchema, await team.status({ name: 'researcher' }));
+    expect(status.roster.status).toBe('idle');
+    expect(status.roster.currentTask).toBeNull();
+
+    // ONE report, not two — counted after close(), which joins every relay still
+    // in flight; counting before it races the child's own turn-end.
+    //
+    // TWO guards hold this, and measurably either one alone is enough: a
+    // terminal report clears `current_task`, and `parentAdmitsSubordinateReport`
+    // refuses a relay to a parent with no outstanding task, because a parent
+    // that asked for nothing is not the audience for unsolicited work; the
+    // report dep also sets `reportedThisTurn`, which suppresses the turn-end
+    // relay within the same turn whatever the status was. Defeating both — a
+    // report published as 'progress' that does not record that it spoke — is
+    // what produces the duplicate, and a duplicate would push the row this
+    // report just cleared straight back to 'working'.
+    await host.close();
+    const view = new Database(dbPath, { readonly: true });
+    const reports = view.query<{ n: number }, []>(
+      "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subordinate_report'",
+    ).get()?.n ?? 0;
+    view.close();
+    expect(reports).toBe(1);
   });
 });
 
