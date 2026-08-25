@@ -97,7 +97,7 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
   test('crafted at one step, called at the next, scored on the call — inside one turn', async () => {
     const { db, session, events } = episode([
       CREATE_DOUBLE,
-      'return await codemode.doubleIt(21);',
+      'return await tools.doubleIt(21);',
     ]);
 
     await session.send('go');
@@ -129,12 +129,12 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
   test('a tool that keeps raising stops being callable before the turn is over', async () => {
     const create =
       'await workspace.createTool("brokenIt", "always throws", "async () => { throw new Error(\\"nope\\"); }"); return "made";';
-    const call = 'return await codemode.brokenIt();';
+    const call = 'return await tools.brokenIt();';
     const { db, session, events } = episode([
       create, call, call, call, call,
       // By now the tool is under the injection floor: the sandbox no longer
       // binds it at all, which is a DIFFERENT failure from the tool throwing.
-      'return typeof codemode.brokenIt;',
+      'return typeof tools.brokenIt;',
     ]);
 
     await session.send('go');
@@ -179,7 +179,7 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
         events: evs,
         session: new LocalAgentSession({
           rt, db: dbOff, noAutoEvolve: true, onEvent: (e) => evs.push(e),
-          model: scriptedEpisode([CREATE_DOUBLE, 'return await codemode.doubleIt(21);']),
+          model: scriptedEpisode([CREATE_DOUBLE, 'return await tools.doubleIt(21);']),
         }),
       };
     })();

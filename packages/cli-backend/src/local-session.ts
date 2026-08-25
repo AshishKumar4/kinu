@@ -66,12 +66,14 @@ import {
   ModelCatalogSession,
   BUILTIN_TOOL_NAMES, isMcpToolKey,
   buildActorTools, withClampedToolResults, buildSystemPromptSync, currentDateForPrompt,
+  type ActorToolsetDeps,
   activePromptSectionOverrides,
   turnProvenanceForMetadata, workModeForTurnMetadata,
-  runChat, estimateTokens,
+  runChat, estimateTokens, INTERRUPTED_TURN,
   parseModelSpec, agentAffinityKey,
   OVERFLOW_RETRY_EVENT,
   openTurnRun, closeTurnRun, snapshotCompletedTurn, creditedTurnId,
+  classifyRunEnd, type RunEndFacts, type RunEndReason,
   normalizeUsage,
   persistMeasuredPromptTokens, applyOverflowRecovery, measureCompactionTrigger,
   CompletionGate, observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
@@ -79,9 +81,12 @@ import {
   PROGRAMMATIC_MESSAGE_ID_PREFIX, stampTurnAuthor,
   type JsonObject,
   ExtensionHost, UserSteerDrain,
+  STEER_METADATA_KEY, STEER_STEP_METADATA_KEY, describeLandedSteers,
+  type UserSteer, type SteerStatusDetail, type SteerStatusEvent,
   createDefaultWebSearchProvider, createWebCodemodeProvider, createRLMProvider, type WebSearchProvider,
   createAgentsCodemodeProvider, createReleaseCodemodeProvider, type CodemodeProvider,
   createMemoryCodemodeProvider, createTasksCodemodeProvider,
+  createReportCodemodeProvider, REPORT_TOOL, type ReportToolDeps,
   MissionGovernor,
   DynamicContextLedger, turnLocalContextMessage, observeSystemPromptHash,
   type DynamicContext,
@@ -110,13 +115,16 @@ import {
   type TimerTrigger, type TimerTriggerOpts, type TriggerView,
   type WebhookDelivery, type WebhookDeliveryResult, type WebhookSecretStore,
   reasoningEffortOptions,
-  BUILTIN_PROFILE_CATALOG, TIER_IDS, effectiveRoleCatalog, profileCatalogDigest,
+  BUILTIN_PROFILE_CATALOG, TIER_IDS, effectiveRoleCatalog,
   changeActiveRole, agentsProfileContext, canonicalConversationId,
-  loadProfileAuthorityInputs, resolveAgentTurnProfile, sha256Hex,
+  resolveAgentTurnProfile, resolveModelRoute,
+  buildModelCallEvent,
+  applyWorkspaceTitle, planWorkspaceTitle, suggestWorkspaceTitle,
+  isPlaceholderMission, readMission, type WorkspaceTitleState,
   roleChangeOutcomeText, narrowToolSurface, codemodeCapabilitiesFor,
   readSoul,
-  type ProfileCatalog, type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
-  type ProviderFailure, type ResolvedTurnProfile, type TierId,
+  type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
+  type ResolvedTurnProfile, type TierId,
   decodeJsonValue, projectJsonValue,
   createAgentSelfProvider,
   // ── Read models: the same implementations the cloud backend's RPCs call ──
@@ -127,7 +135,7 @@ import {
   getEvolutionChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
   type EvolutionChangelogView,
   getRunEvents, listRuns, type RunListEntry, type Page, type PageRequest,
-  priceCall, WORKSPACE_RUN_ID,
+  WORKSPACE_RUN_ID,
   recordModelOperations, type ModelOperationSink,
 } from '@kinu.run/core';
 import { diagnostics, KinuError, renderThrownChain, toKinuError, type Refusal } from '@kinu.run/core/obs';
@@ -139,6 +147,10 @@ import { createCLIHeadRuntime } from './head-runtime';
 import { detectOrphanedFibers } from './fiber';
 import { connectMcpServers, type McpServerConfig } from './mcp';
 import type { LocalModelResolver } from './model-resolver';
+import {
+  STATIC_MODEL_SPEC, resolverModelPlane, staticModelPlane,
+  type LocalProfileAuthority, type ProfileAuthorityRefinement, type ProfileEnvelopeSource,
+} from './profile-authority';
 
 
 /**
@@ -194,17 +206,9 @@ export const LOCAL_MAX_INLINE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 /** The minimal bun:sqlite handle the EventsHub SqlExec adapter needs. */
 export type LocalSessionDb = Pick<Database, 'prepare'>;
 
-/**
- * The spec a session with no `modelResolver` reports for its one model.
- *
- * Fixed rather than an option, because a static session is a TEST shape: every
- * production surface resolves through the registry. The interactive client
- * REQUIRES a resolver (`LocalAgentClientDeps.modelResolver`, cli/src/local-agent
- * -client.ts) and the daemon's host always builds one (cli/src/commands/
- * daemon.ts, `openDaemonAgent`), so a caller free to name its own static spec
- * would be naming it for nobody.
- */
-const STATIC_MODEL_SPEC = 'local/static';
+// The spec a session with no `modelResolver` reports for its one model lives
+// with the plane that answers it (profile-authority.ts); it is re-exported
+// below because callers of this module name it.
 
 /** What the frontends render. A superset of runChat's ChatEvent with the
  *  lifecycle + side-channel (evolution, broadcast, background) events. */
@@ -244,23 +248,6 @@ export interface LocalDurableWebhook {
   auth_mode: 'hmac' | 'bearer' | 'mtls';
   secret: string | null;
 }
-
-/**
- * Where a local agent's role/tier catalog comes from, read LIVE.
- *
- * Re-invoked at every resolution rather than captured once, so a catalog
- * written after this session started — the signed-out `/model` that creates the
- * local authority mid-session, an account catalog pushed while a daemon is
- * resident — is observed by the next turn instead of the next process.
- *
- * `null` means "no explicit authority is configured", which is NOT the same as
- * "no authority": the session falls back to its own bootstrap envelope, built
- * from this workspace's stored model. A caller that cannot answer must return
- * null rather than invent a catalog, because substituting one silently swaps
- * the model every producer resolves (profiles/resolve.ts:5-8).
- */
-export type ProfileEnvelopeSource =
-  () => ProfileCatalogEnvelope | null | Promise<ProfileCatalogEnvelope | null>;
 
 export interface LocalAgentSessionOpts {
   rt: CLIRuntime;
@@ -406,22 +393,15 @@ export class LocalAgentSession implements BackendHost {
    * the line that received it — so a workspace total read off `step_finish`
    * alone was the orchestrator's turns while looking like it was everything.
    *
-   * One row per COMPLETED call, `usage` included even when the provider said
-   * nothing (`{}`): unmeasured spend is visible as unmeasured, never as free.
+   * The row itself — usage always present, `usd` only when the rate belongs to
+   * the model that served the call — is built by core, because it was built
+   * twice and the two copies disagreed about exactly that field.
    */
   private readonly modelCallSink: ModelCallSink = (report) => {
-    const event: Extract<RunEventInput, { type: 'model_call' }> = {
-      type: 'model_call', source: report.source, usage: report.usage,
-    };
-    if (report.spec !== undefined) event.spec = report.spec;
-    if (report.modelId !== undefined) event.modelId = report.modelId;
-    // Priced only when the call ran on the model the catalog session has
-    // actually resolved. A judge deliberately runs on a DIFFERENT model from the
-    // actor, so charging it the actor's rate would invent a number; an absent
-    // `usd` says "not priced here", which the workspace total reads as such.
-    const pricing = report.spec === this.effectiveModelSpec() ? this.modelCatalog.pricing() : null;
-    const usd = pricing ? priceCall(report.usage, pricing) : undefined;
-    if (usd !== undefined) event.usd = usd;
+    const event = buildModelCallEvent(report, {
+      effectiveSpec: this.effectiveModelSpec(),
+      pricing: this.modelCatalog.pricing(),
+    });
     // Half of these producers fire BETWEEN runs — an evolution pass on a fiber,
     // a workspace title before the first turn exists — and the log is keyed by
     // run, so those calls are filed under the reserved workspace run rather than
@@ -458,12 +438,6 @@ export class LocalAgentSession implements BackendHost {
   private _headRuntime: HeadRuntime;
   private readonly onEvent: (event: SessionEvent) => void;
   private shellApprovalHandler: ShellApprovalHandler | null = null;
-  private readonly profileAuthority: () => Promise<ProfileCatalogEnvelope>;
-  private readonly readProviderRevision: (() => number) | null;
-  /** The provider revision the cached listing was measured under. Null until
-   *  the first resolution reads one: the first read establishes the baseline,
-   *  it never invalidates. */
-  private observedProviderRevision: number | null = null;
   private turnProfile: ResolvedTurnProfile | null = null;
   private turnProfileInputs: {
     envelope: ProfileCatalogEnvelope;
@@ -486,6 +460,11 @@ export class LocalAgentSession implements BackendHost {
   private readonly cwd: string;
   private readonly history: ModelMessage[] = [];
   private turnWorkMode: WorkMode = 'build';
+  /** Whether the message driving THIS turn came from this agent's parent
+   *  rather than from whoever is chatting with it. A parent assignment is
+   *  admitted as an event and drains as a programmatic turn, so the turn's own
+   *  kind is the fact — and it is what gates the `report` surface. */
+  private turnIsParentAssigned = false;
 
   /** Dynamic-context blocks for this CLI session (core volatile-context.ts),
    *  re-read and re-woven at every model step by the shared step pipeline.
@@ -526,8 +505,20 @@ export class LocalAgentSession implements BackendHost {
   private currentAbort: AbortController | null = null;
   /** Mid-turn steers awaiting the next step boundary — the shared core
    *  drain, whose USER semantics (persist verbatim, hand back on interrupt,
-   *  rerun as a user-origin turn) both backends now get from one place. */
-  private readonly userSteer = new UserSteerDrain({ turnInFlight: () => this.pumping });
+   *  rerun as a user-origin turn) both backends now get from one place.
+   *
+   *  `onDrain` is the moment a steer stops being queued and becomes something
+   *  the model has, and both halves of saying so hang off it: the live
+   *  `steer_status` every open surface renders from, and the step index the
+   *  durable row is stamped with. */
+  private readonly userSteer = new UserSteerDrain({
+    turnInFlight: () => this.pumping,
+    onDrain: (steers, atStep) => this.recordLandedSteers(steers, atStep),
+  });
+  /** The steers this turn's drains actually delivered, with the step each
+   *  landed at — what `persist` writes the durable rows from. Reset per turn
+   *  by `beginTurn`, so a row is never stamped with a previous turn's index. */
+  private landedSteers: Array<{ id: string; text: string; atStep: number }> = [];
   /** Steer-as-Branch redirects launched against the in-flight turn — each runs
    *  as one budgeted head and settles into Alternate Takes at turn end. */
   private pendingBranches: PendingBranch[] = [];
@@ -610,19 +601,23 @@ export class LocalAgentSession implements BackendHost {
     this.mctsSearchStore = stores.mctsSearchStore;
     this.config = stores.config;
     this.sessionId = canonicalConversationId(this.config);
-    // Awaited BEFORE the `??`: an async source returns a Promise, which is
-    // truthy, so coalescing on the unawaited call made the bootstrap fallback
-    // unreachable for every async authority. Awaiting first is also what makes
-    // a `null` return meaningful — "no explicit authority, use the bootstrap" —
-    // so the source can stay installed and answer live instead of being
-    // omitted at construction and never seeing an authority created later.
-    this.profileAuthority = async () =>
-      (await opts.profileAuthority?.()) ?? this.bootstrapProfileEnvelope();
-    this.readProviderRevision = opts.providerRevision ?? null;
-    // Routed lanes that begin outside a chat turn (review, evolution cadence,
-    // reflection, advisor) resolve through this rather than finding every lane
-    // unset. Live: it re-reads the authority and the provider snapshot.
-    this.rt.setProfileResolver?.(() => this.resolvePreTurnProfile());
+    // The runtime already resolves profiles — that is what makes a session-less
+    // workspace routable. What a session adds is a RICHER set of inputs to the
+    // same authority: a provider registry that can list an account, the caller's
+    // catalog authority, and a durable log for the resolution evidence. Refining
+    // rather than installing a second resolver is what keeps a routed lane and a
+    // turn on one answer.
+    const refinement: ProfileAuthorityRefinement = {
+      plane: this.modelResolver
+        ? resolverModelPlane(this.modelResolver, opts.providerRevision)
+        : staticModelPlane(),
+      record: (event) => { this.recordRunEvent(event); },
+    };
+    if (opts.profileAuthority) refinement.envelope = opts.profileAuthority;
+    // Not optional-chained: a runtime with no authority cannot resolve a model
+    // for anything, and saying so here costs one line where saying it at the
+    // first lane costs a turn.
+    this.profiles().refine(refinement);
     this.factsStore = stores.facts;
     this.eventRecorder = stores.eventRecorder;
 
@@ -902,7 +897,7 @@ export class LocalAgentSession implements BackendHost {
 
   /** Effective normalized model spec used for new turns. */
   getEffectiveModelSpec(): string {
-    return this.turnProfile?.tier.model ?? this.normalizeModelSpec(this.config.getModel());
+    return this.turnProfile?.tier.model ?? this.profiles().normalizeSpec(this.config.getModel());
   }
 
   getActiveRoleId(): string {
@@ -925,7 +920,7 @@ export class LocalAgentSession implements BackendHost {
    * landed.
    */
   async setRole(roleId: string): Promise<{ role: string }> {
-    const envelope = await this.profileAuthority();
+    const envelope = await this.profiles().envelope();
     const changed = changeActiveRole({
       config: this.config,
       envelope,
@@ -943,7 +938,7 @@ export class LocalAgentSession implements BackendHost {
   setModel(spec: string): ReturnType<typeof setModel> {
     return setModel({
       config: this.config,
-      normalize: (s) => this.normalizeModelSpec(s),
+      normalize: (s) => this.profiles().normalizeSpec(s),
       onChanged: () => this.rebuildToolSurface(),
     }, spec);
   }
@@ -1289,7 +1284,14 @@ export class LocalAgentSession implements BackendHost {
    * Returns false when no turn is active — callers should send() normally.
    */
   steer(input: string | { text: string; files: ReadonlyArray<PromptFile> }): boolean {
-    return this.userSteer.accept(normalizePromptInput(input)) === 'mid-turn';
+    const parts = normalizePromptInput(input);
+    // Identity is assigned on ACCEPTANCE, so the queued announcement, the
+    // landed one and the durable row are all the same steer to a surface —
+    // which is what stops one steer being rendered twice under two names.
+    const id = `steer-${crypto.randomUUID().slice(0, 12)}`;
+    if (this.userSteer.accept({ ...parts, id }) !== 'mid-turn') return false;
+    this.announceSteer({ status: 'queued', steerId: id, text: parts.text });
+    return true;
   }
 
   /**
@@ -1320,9 +1322,39 @@ export class LocalAgentSession implements BackendHost {
    *  user (the composer restore), never lose them silently: the chat already
    *  rendered them as sent. */
   interrupt(): string[] {
-    const dropped = this.userSteer.interrupt().map((steer) => steer.text);
+    const dropped = this.userSteer.interrupt();
+    for (const steer of dropped) {
+      if (steer.id) this.announceSteer({ status: 'returned', steerId: steer.id, text: steer.text });
+    }
     this.currentAbort?.abort();
-    return dropped;
+    return dropped.map((steer) => steer.text);
+  }
+
+  /**
+   * A drain happened: the model has these steers as of the step now starting.
+   *
+   * The step index is the whole reason this is recorded rather than derived at
+   * persist time. A turn is ONE assistant message, so a row appended beside it
+   * can only sort before or after the entire turn; the index is the position
+   * INSIDE it, and it is what lets a reloaded transcript draw the bubble where
+   * the model actually read it.
+   */
+  private recordLandedSteers(steers: readonly UserSteer[], atStep: number): void {
+    // Core builds the rows: it assigns the fallback id and stamps BOTH metadata
+    // keys together, which is the point — a row carrying the steer key without
+    // the step key is indistinguishable from an ordinary user turn. What is left
+    // here is transport: this session's ledger and its broadcast channel.
+    for (const row of describeLandedSteers(steers, atStep)) {
+      this.landedSteers.push(row);
+      this.announceSteer({ status: 'landed', steerId: row.id, text: row.text, atStep: row.atStep });
+    }
+  }
+
+  /** The one place a steer's lifecycle reaches connected surfaces — the same
+   *  `steer_status` union the cloud backend broadcasts (core user-steer.ts). */
+  private announceSteer(detail: SteerStatusDetail): void {
+    const event: SteerStatusEvent = { type: 'steer_status', ...detail };
+    this.broadcast(event);
   }
 
   /** Fold the history at this point: the next turn's context transform runs
@@ -1785,10 +1817,20 @@ export class LocalAgentSession implements BackendHost {
     }
   }
 
-  /** Seal the in-flight run via the shared core turn-lifecycle bracket.
-   *  Idempotent per run — clearing the id makes a second call a no-op. */
-  private closeRun(error: string | null): void {
-    if (!this.currentRunId) return;
+  /**
+   * Seal the in-flight run via the shared core turn-lifecycle bracket.
+   * Idempotent per run — clearing the id makes a second call a no-op.
+   *
+   * FACTS in, name out. This used to compute `hadError ? 'error' : 'completed'`
+   * itself, and since an interrupt throws `INTERRUPTED_TURN` and the catch folds
+   * that into `hadError`, pressing Stop sealed the run `'error'` here and
+   * `'aborted'` in the cloud — the same user action counted as a failure on one
+   * backend and a choice on the other. `classifyRunEnd` owns the vocabulary now;
+   * this method reports what it saw and returns the reason it was given.
+   */
+  private closeRun(facts: RunEndFacts): RunEndReason {
+    const end = classifyRunEnd(facts);
+    if (!this.currentRunId) return end.reason;
     const outcome: Parameters<typeof closeTurnRun>[2] = {
       turnIndex: this.orch.sessionTurnIndex,
       usage: this.orch.acc.reportedUsage(),
@@ -1800,11 +1842,12 @@ export class LocalAgentSession implements BackendHost {
       completionGate: this.completionGate.take(),
       craft: this.orch.craft.snapshot(),
       recoveries: this.orch.recoverySnapshot(),
-      reason: this.orch.acc.hadError ? 'error' : 'completed',
+      reason: end.reason,
     };
-    if (error) outcome.error = error;
+    if (end.error) outcome.error = end.error;
     closeTurnRun(this.eventRecorder, this.currentRunId, outcome);
     this.currentRunId = null;
+    return end.reason;
   }
 
   /** A single run's durable events — the local peer of the DO's getRunEvents,
@@ -1854,8 +1897,10 @@ export class LocalAgentSession implements BackendHost {
       await this.runTurn(item, event, startedAt);
     } catch (error) {
       const message = renderThrownChain({ cause: error });
+      // Assembly threw before the stream existed, so there is nothing here a
+      // user could have interrupted: this arm is always a genuine failure.
       this.orch.acc.hadError = true;
-      this.closeRun(message.slice(0, 500));
+      this.closeRun({ completed: false, interrupted: false, errorText: message.slice(0, 500) });
       this.emit({ type: 'error', message });
       this.emit({ type: 'turn-end', turn: this.snapshotTurn(item, '') });
     } finally {
@@ -1889,7 +1934,11 @@ export class LocalAgentSession implements BackendHost {
   private async runTurn(item: QueueItem, event: string | undefined, startedAt: number): Promise<void> {
     // substrate — see core checkpoints/types.ts).
     this.rt.checkpoints?.beginTurn({ turnId: crypto.randomUUID(), sessionId: this.sessionId });
-    const profileInputs = await this.profileInputs();
+    // Before anything reads the tool surface: the report gate is a property of
+    // THIS turn, and both the profile resolution below and the toolset rebuild
+    // after it consult it.
+    this.turnIsParentAssigned = item.kind === 'programmatic';
+    const profileInputs = await this.profiles().inputs();
     const activeRoleId = this.config.getActiveRoleId();
     const roleSkills = effectiveRoleCatalog(profileInputs.envelope.catalog)[activeRoleId]?.skills ?? [];
     // A real user message grades the previous turn — dispatch the detached
@@ -1916,6 +1965,13 @@ export class LocalAgentSession implements BackendHost {
       availableTools: [
         ...candidateBuiltinNames,
         ...candidateExternalNames,
+        // `report` is wired for a parent-assigned turn only, and the toolset it
+        // lives in is rebuilt AFTER this resolution — so the candidate list
+        // cannot see it yet. Named here for the same reason the codemode
+        // capabilities are: without it the intersection drops the tool from any
+        // role that declares a tool list, and the child silently loses the one
+        // surface that can end its assignment.
+        ...(this.reportGateOpen() ? [REPORT_TOOL] : []),
         // `release` / `agent` / `llm` are reachable only inside the sandbox, so
         // no native tool id names them. Without them here the intersection
         // drops every one from a role that declares a tool list, and a narrowed
@@ -2021,13 +2077,19 @@ export class LocalAgentSession implements BackendHost {
     /** The turn's terminal failure text, persisted on run_end so a post-hoc
      *  read of the log carries the same evidence the cf run_end does. */
     let runError: string | null = null;
+    /** Whether the turn was CUT rather than failed. Kept apart from `runError`
+     *  because an interrupt throws too, and folding the two together is what
+     *  made a user's Stop read as an agent failure in the local run ledger. */
+    let interrupted = false;
     const abort = new AbortController();
     this.currentAbort = abort;
 
     // Steer-drain bookkeeping (Hermes conversation_loop pattern) is the shared
     // core UserSteerDrain — a fresh turn resets its splice coordinates while
-    // keeping steers typed for the turn that is about to run.
+    // keeping steers typed for the turn that is about to run. The landed ledger
+    // resets with it: its step indices are coordinates INSIDE this turn.
     this.userSteer.beginTurn();
+    this.landedSteers = [];
 
     // The compaction extension + the steer-drain ride the public extension
     // seam — the same host external plugins register on. One hook path, not
@@ -2170,8 +2232,12 @@ export class LocalAgentSession implements BackendHost {
       // live context (their exact splice positions died with the stream, so
       // they append in drain order).
       for (const msg of this.userSteer.recordedMessages()) this.history.push(msg);
-      this.orch.acc.hadError = true;
       const message = renderThrownChain({ cause: err });
+      // `runChat` yields `done` and THEN throws this, so a cut turn arrives here
+      // carrying its partial answer. It is not a failure: the accumulator's
+      // error flag stays down, and `classifyRunEnd` seals the run 'aborted'.
+      interrupted = err instanceof Error && err.message === INTERRUPTED_TURN;
+      if (!interrupted) this.orch.acc.hadError = true;
       runError = message.slice(0, 500);
       this.emit({ type: 'error', message });
       // Overflow recovery — the shared core policy, APPLIED by the shared
@@ -2232,10 +2298,11 @@ export class LocalAgentSession implements BackendHost {
           ? `${PROGRAMMATIC_MESSAGE_ID_PREFIX}${item.idempotencyKey ?? crypto.randomUUID()}`
           : crypto.randomUUID(),
         item.text,
-        // `drainedTexts()` IS the `injections.recorded.flatMap(…)` this line used
-        // to spell out (user-steer.ts:115-117): the drain OWNS that buffer now,
-        // so the local `StepInjections` it read from no longer exists here.
-        this.userSteer.drainedTexts(),
+        // The landed ledger, not `drainedTexts()`: same steers in the same
+        // order, but each still carrying the id its queued/landed announcements
+        // used and the step index it was spliced into — which is what the
+        // durable row is stamped with.
+        this.landedSteers,
         fullText,
         item.kind === 'programmatic' ? item.metadata : undefined,
       );
@@ -2270,23 +2337,58 @@ export class LocalAgentSession implements BackendHost {
       }
 
       const turn = this.snapshotTurn(item, fullText, assistantMsgId);
-      this.closeRun(runError);
-      // Cadence (turn + session evolution) + the reactor drain — may enqueue more.
-      await this.orch.completeTurn(turn, this.turnContinuity);
-      // The turn's contribution to the promotion gate: one row recording the
-      // task, the answer, and the conversation it was asked in. The rollout it
-      // pays for runs on the cadence lane, which is why this is not tracked —
-      // a `kinu exec` process no longer waits out a candidate turn before
-      // it can exit.
-      if (this.turnWorkMode !== 'plan') this.engine.queueShadowTrial(turn, liveTurnOpts.history);
-      if (this.turnWorkMode !== 'plan') {
+      const status = this.closeRun({
+        completed: runError === null, interrupted, errorText: runError ?? undefined,
+        // Unbounded here (runChat hands `stopWhen` straight to streamText), so
+        // this reads 'stop' on a turn that finished by itself. Reported anyway:
+        // a caller that does pass a real stop condition gets the same honest
+        // 'truncated' seal the cloud loop gets, from the same classifier.
+        lastFinishReason: this.orch.acc.lastFinishReason,
+      });
+      // The settle rule — which turns are recorded, whether a failure is graded
+      // evidence, whether extensions see a turn that did not finish — is ONE
+      // core decision taken from the run's own verdict. `runChat` already fired
+      // this turn's extension end, including for a cut turn, so no `onTurnEnd`
+      // is passed. Cadence (turn + session evolution) and the reactor drain
+      // happen inside; either may enqueue more.
+      // The verdict — completed AND build, ONE core decision read from the
+      // beginTurn metadata this session already handed the orchestrator — is
+      // what gates every improvement lane below. This backend used to spell
+      // its own `!== 'plan'` beside each lane, which is how a turn that FAILED
+      // still queued a shadow trial and requested advice while a failed cloud
+      // turn fed nothing.
+      const { improvementLanesOpen } = await this.orch.settleTurn({
+        status, turn, continuity: this.turnContinuity,
+      });
+      if (improvementLanesOpen) {
+        // The turn's contribution to the promotion gate: one row recording the
+        // task, the answer, and the conversation it was asked in. The rollout it
+        // pays for runs on the cadence lane, which is why this is not tracked —
+        // a `kinu exec` process no longer waits out a candidate turn before
+        // it can exit.
+        this.engine.queueShadowTrial(turn, liveTurnOpts.history);
         this.reviewTurnInBackground(turn, Object.keys(liveTurnOpts.tools ?? {}));
+        // Title the workspace from what it is FOR — its mission — falling back
+        // to the opening request when it has no mission of its own. Same core
+        // policy the cloud backend runs, and one-shot by construction: persisting
+        // a title marks `name_origin`, after which the plan can no longer match.
+        // Without this call a local workspace showed its raw slug forever while
+        // the same workspace on cloud named itself.
+        const mission = readMission(this.rt.storage.sql);
+        this.autoTitleInBackground(isPlaceholderMission(mission) ? item.text : mission ?? '');
       }
       this.emit({ type: 'turn-end', turn });
     } catch (err) {
       const message = renderThrownChain({ cause: err });
       this.orch.acc.hadError = true;
-      this.closeRun(runError ?? message.slice(0, 500));
+      // Finalization threw, so whatever the stream reported is superseded by a
+      // turn that could not be closed out — and an interrupt does not reach
+      // here, since `interrupted` is sealed on the arm above.
+      this.closeRun({
+        completed: false,
+        interrupted: false,
+        errorText: runError ?? message.slice(0, 500),
+      });
       diagnostics.failure(
         'turn.finalization_failed',
         toKinuError({ doing: 'finalizing the turn', cause: err, otherwise: 'io' }),
@@ -2298,6 +2400,73 @@ export class LocalAgentSession implements BackendHost {
       this.emit({ type: 'error', message });
       this.emit({ type: 'turn-end', turn: this.snapshotTurn(item, fullText, assistantMsgId) });
     }
+  }
+
+  /**
+   * Auto-title this workspace from what it is FOR — the shared core policy
+   * (identity/naming.ts), which both the cloud backend and the create path
+   * already run. The CLI called none of it, so a `kinu chat` workspace kept its
+   * raw slug forever while the same workspace on cloud named itself.
+   *
+   * The plan is asked for SYNCHRONOUSLY and first. A titled workspace is the
+   * steady state, so every later turn would otherwise pay for a fiber row just
+   * to be told there is nothing to do. Once there IS something to do, the fiber
+   * is what keeps a one-shot process from exiting through the model call.
+   */
+  private autoTitleInBackground(mission: string): void {
+    const state: WorkspaceTitleState = {
+      slug: this.agentName(),
+      displayName: this.config.getDisplayName(),
+      nameOrigin: this.config.getNameOrigin(),
+      mission,
+    };
+    if (planWorkspaceTitle(state) === null) return;
+    // Caught INSIDE the fiber body, not off the returned promise: trackFiber's
+    // own `fiber.settle_failed` is for a fiber that could not record its own
+    // outcome and states that it has no other reader, so letting this reject
+    // would report one titling failure twice under two names.
+    void this.trackFiber('workspace.auto_title', async () => {
+      try {
+        await applyWorkspaceTitle(state, {
+          persist: (name) => {
+            // A manual rename claimed the title while the model was thinking.
+            // The owner's choice wins the race, and `false` says so to core.
+            if (this.config.getNameOrigin() === 'user') return false;
+            this.config.setDisplayNameOrigin(name, 'auto');
+            this.broadcast({ type: 'workspace_renamed', displayName: name });
+            return true;
+          },
+          suggest: (text) => this.suggestTitle(text),
+        });
+      } catch (err) {
+        // The deterministic title has already landed by here, so it stands.
+        diagnostics.failure('agent.auto_title_failed', toKinuError({
+          doing: 'deriving a title from the mission', cause: err, otherwise: 'unavailable',
+        }));
+      }
+    });
+  }
+
+  /**
+   * The naming round-trip: the same prompt and parser the create path and the
+   * cloud backend use, on the routed `fast` lane.
+   *
+   * Naming is mechanical work, so it is filed as `fast` and RUN as `fast` — one
+   * source name feeds both the route and the spend label through
+   * `localRouteLlm`, so what it cost and which model it cost it on cannot
+   * disagree.
+   */
+  private async suggestTitle(mission: string): Promise<string | null> {
+    const profile = this.turnProfile ?? await this.profiles().resolvePreTurn();
+    const resolution = resolveModelRoute('fast', profile);
+    if (!resolution) return null;
+    // The prompt pair and the parse are core's; the only local part is which
+    // model answers. Not caught here — a failed title is non-fatal, and
+    // `autoTitleInBackground` is where that policy is stated.
+    return suggestWorkspaceTitle(
+      (system, prompt) => this.localRouteLlm(resolution, system).complete(prompt),
+      mission,
+    );
   }
 
   /**
@@ -2349,6 +2518,13 @@ export class LocalAgentSession implements BackendHost {
    * Detached, so a reviewer never delays the prompt, and never throws at the
    * turn — a review that failed is a turn with no advice.
    *
+   * TRACKED, though. The review is a 5-30s model call that starts after
+   * `turn-end`, and a one-shot `kinu exec` used to exit straight through it:
+   * no note row, no signal, no event, and no statement that anything had been
+   * dropped. Running it as a durable fiber gives it the two things it lacked —
+   * a row saying it was in flight, and membership in the set `end()` and
+   * `settleBackgroundWork()` join before the database closes.
+   *
    * `gateOpen` is the one thing this backend has and the cloud one does not.
    * The completion gate is the other harness-authored message at a turn
    * boundary, and it lives on this surface only. While it is waiting for its
@@ -2363,21 +2539,27 @@ export class LocalAgentSession implements BackendHost {
     const llm = this.rt.advisorLlm;
     if (llm === undefined || !this.config.getAdvisorEnabled()) return;
     const labels = turn.missionLabels ?? [];
-    void runAdvisorLane({
-      turn,
-      llm: labels.length === 0 ? llm : this.budget.govern(llm, labels),
-      enabled: true,
-      minSeverity: this.config.getAdvisorMinSeverity(),
-      recent: this.engine.recentAdvisorNotes(),
-      gateOpen: this.completionGate.open,
-      reachable,
-      deliver: (signal) => this.orch.signals.deliver(signal),
-      record: (note, turnId) => { this.engine.recordAdvisorNote(note, turnId); },
-    }).catch((err) => diagnostics.failure('advisor.review_failed', toKinuError({
-      doing: 'reviewing the completed turn',
-      cause: err,
-      otherwise: 'unavailable',
-    })));
+    void this.trackFiber('advisor.review', async () => {
+      try {
+        await runAdvisorLane({
+          turn,
+          llm: labels.length === 0 ? llm : this.budget.govern(llm, labels),
+          enabled: true,
+          minSeverity: this.config.getAdvisorMinSeverity(),
+          recent: this.engine.recentAdvisorNotes(),
+          gateOpen: this.completionGate.open,
+          reachable,
+          deliver: (signal) => this.orch.signals.deliver(signal),
+          record: (note, turnId) => { this.engine.recordAdvisorNote(note, turnId); },
+        });
+      } catch (err) {
+        // Reported here rather than off the returned promise, for the reason
+        // autoTitleInBackground states: one failure, one name.
+        diagnostics.failure('advisor.review_failed', toKinuError({
+          doing: 'reviewing the completed turn', cause: err, otherwise: 'unavailable',
+        }));
+      }
+    });
   }
 
   /** Settle every branch launched during the just-finished turn (detached —
@@ -2715,6 +2897,11 @@ export class LocalAgentSession implements BackendHost {
    *  of its virtual workspace; absent, `reply` does not exist and ask/send
    *  reach subordinates only. A subordinate never gets one. */
   private peersDeps: PeersToolDeps | null = null;
+  /** Report transport, injected by the owning LocalAgentHost for a SUBORDINATE.
+   *  Present, this agent can tell its parent it finished or is blocked, and the
+   *  parent's roster moves off `working` on that signal; absent — every root —
+   *  the tool does not exist. */
+  private reportDeps: ReportToolDeps | null = null;
 
   /** The host installs these right after construction — a subordinate roster
    *  and a peer inbox both need the session's own broadcast, which does not
@@ -2725,6 +2912,24 @@ export class LocalAgentSession implements BackendHost {
 
   setPeers(deps: PeersToolDeps): void {
     this.peersDeps = deps;
+  }
+
+  setReport(deps: ReportToolDeps): void {
+    this.reportDeps = deps;
+  }
+
+  /**
+   * Whether THIS turn may report to a parent.
+   *
+   * Two conditions, with different lifetimes. Having a parent at all is a
+   * property of the agent; being on a turn the parent DROVE is a property of
+   * the turn — an owner-driven chat with a subordinate is private to that chat,
+   * so a report from it would publish the owner's conversation upward. A
+   * parent's assignment arrives as an admitted event and drains as a
+   * programmatic turn, which is exactly what distinguishes the two here.
+   */
+  private reportGateOpen(): boolean {
+    return this.reportDeps !== null && this.turnIsParentAssigned;
   }
 
   private agentsToolDeps(mode: WorkMode): AgentsToolDeps {
@@ -2766,11 +2971,16 @@ export class LocalAgentSession implements BackendHost {
    *  at the one seam every durable CLI turn is written through, so authorship
    *  and event kind live in the row itself. The `programmatic:` id prefix
    *  remains only as the read-side fallback for rows written before the stamp
-   *  existed — never the thing a new row leans on. */
+   *  existed — never the thing a new row leans on.
+   *
+   *  A steer row states its provenance the same way, under the two keys core
+   *  declares for both backends: that it WAS a steer, and the step it was
+   *  spliced into. Without them a landed steer is indistinguishable at rest
+   *  from an ordinary user turn, and only the parent chain says where it sat. */
   private persist(
     turnId: string,
     userText: string,
-    steeredTexts: ReadonlyArray<string>,
+    steers: ReadonlyArray<{ id: string; text: string; atStep: number }>,
     assistantText: string,
     metadata?: JsonObject,
   ): string {
@@ -2779,18 +2989,28 @@ export class LocalAgentSession implements BackendHost {
     void this.rt.storage.sql`INSERT OR IGNORE INTO messages (id, session_id, role, content, metadata)
       VALUES (${turnId}, ${this.sessionId}, ${'user'}, ${userText}, ${stamp})`;
     let parentId = turnId;
-    for (const steered of steeredTexts) {
-      const steerId = crypto.randomUUID();
-      void this.rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content)
-        VALUES (${steerId}, ${this.sessionId}, ${parentId}, ${'user'}, ${steered})`;
-      parentId = steerId;
+    for (const steer of steers) {
+      const steerStamp = JSON.stringify({
+        [STEER_METADATA_KEY]: true,
+        [STEER_STEP_METADATA_KEY]: steer.atStep,
+      });
+      void this.rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content, metadata)
+        VALUES (${steer.id}, ${this.sessionId}, ${parentId}, ${'user'}, ${steer.text}, ${steerStamp})`;
+      parentId = steer.id;
     }
     void this.rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content)
       VALUES (${assistantId}, ${this.sessionId}, ${parentId}, ${'assistant'}, ${assistantText})`;
 
     return assistantId;
   }
-  private localRouteLlm(resolution: ModelRouteResolution): LLM {
+  /** One routed non-turn lane as an {@link LLM}: the tier's model, its effort,
+   *  and its spend filed under the lane's own source name.
+   *
+   *  `system` is for the lanes whose prompt is a core-declared pair rather than
+   *  one string — workspace titling is the first — so the CLI issues the same
+   *  request the cloud backend does instead of folding the system half into the
+   *  user half and hoping the model reads it the same way. */
+  private localRouteLlm(resolution: ModelRouteResolution, system?: string): LLM {
     const model = this.modelResolver
       ? this.modelResolver.resolveModel(resolution.model)
       : this.defaultModel(`${resolution.source} model lane`);
@@ -2802,6 +3022,7 @@ export class LocalAgentSession implements BackendHost {
           parseModelSpec(resolution.model).provider,
         );
         const request: Parameters<typeof generateText>[0] = { model, prompt };
+        if (system !== undefined) request.system = system;
         if (providerOptions) request.providerOptions = providerOptions;
         const result = await generateText(request);
         const report = {
@@ -2858,228 +3079,31 @@ export class LocalAgentSession implements BackendHost {
     this.history.push(...restored.reverse());
   }
 
-  private bootstrapProfileEnvelope(): ProfileCatalogEnvelope {
-    const defaultModel = this.normalizeModelSpec(this.config.getModel());
-    const catalog: ProfileCatalog = {
-      roles: BUILTIN_PROFILE_CATALOG.roles,
-      tiers: { default: { model: defaultModel } },
-    };
-    return {
-      authority: { kind: 'local' },
-      version: 0,
-      digest: profileCatalogDigest(catalog),
-      catalog,
-    };
+  /**
+   * The runtime's turn-profile authority, which this session refined at
+   * construction. Every catalog read, every provider listing and every
+   * resolution goes through it — the session holding its own second copy of
+   * that machinery is what let a routed lane and a turn resolve different
+   * models, and what left a session-less runtime with no resolution at all.
+   */
+  private profiles(): LocalProfileAuthority {
+    const profiles = this.rt.profiles;
+    if (!profiles) {
+      throw new Error(
+        'this runtime carries no profile authority: build it with createCLIRuntime '
+        + '(openWorkspaceCLI) so its model lanes can route',
+      );
+    }
+    return profiles;
   }
-
-  /**
-   * The provider listing — the one expensive half of a profile resolution. It
-   * sweeps every configured provider, network included, and it sits on the
-   * turn's critical path ahead of the first token, so it is cached.
-   *
-   * Invalidated by SIGNAL, never by elapsed time. A configured model the
-   * listing does not carry is an ERROR (profiles/resolve.ts:5-8), and a TTL
-   * would let that model reappear by waiting — the silent substitution the
-   * resolver exists to refuse. `refreshProviderListing` is the signal.
-   *
-   * Only a COMPLETE listing is stored. A listing with failures describes a
-   * partial view of what exists, which makes every configured model
-   * admitted-unverified rather than checked; caching that would hold the
-   * unverified window open past the fault and freeze `revision` at a degraded
-   * value. So a failing provider costs a sweep per resolution until it recovers,
-   * which is the right price for not serving a known-partial picture.
-   *
-   * The CONFIGURED spec is deliberately not part of what is cached: it is read
-   * per call below, so `setModel` changes the snapshot's identity with no
-   * invalidation to miss.
-   */
-  private providerListing: { models: readonly string[]; failures: readonly ProviderFailure[] } | null = null;
-  /** One sweep serves every caller that arrives while it is running. A one-shot
-   *  process opens its turn and its review lane together, and without this each
-   *  starts its own provider refresh. */
-  private providerListingSweep: Promise<{ models: readonly string[]; failures: readonly ProviderFailure[] }> | null = null;
-
-  /**
-   * Bumped by every invalidation. A sweep that was already in flight when the
-   * signal arrived measured the world BEFORE the change, so it must not install
-   * its answer as the cache — otherwise a credential the user just connected
-   * stays invisible for the life of the session, which is the whole defect this
-   * signal exists to prevent.
-   */
-  private providerListingGeneration = 0;
 
   /**
    * Drop the cached provider listing. The caller has changed something the
    * listing depends on and this session cannot observe: a credential added or
    * revoked, a provider connected, a sign-in. The next resolution sweeps again.
-   *
-   * The in-flight sweep goes too. Leaving it would hand its pre-change answer
-   * to every caller that joined it, and re-cache it on the way out.
    */
   refreshProviderListing(): void {
-    this.providerListing = null;
-    this.providerListingSweep = null;
-    this.providerListingGeneration += 1;
-  }
-
-  /**
-   * What the resolver could list, and what it could not reach.
-   *
-   * The two halves travel together because they answer one question. An empty
-   * `unavailableProviders` asserts the listing was COMPLETE, which is what lets
-   * the resolver treat a configured-but-unlisted model as an error instead of
-   * guessing. A non-empty one declares the view partial, so the same model is
-   * admitted unverified rather than reported absent — a provider that was
-   * unreachable is not a provider that dropped the model.
-   *
-   * The failure set is folded into `revision` for the same reason: a provider
-   * going away changes what this snapshot means, so it must not present the
-   * same identity as the clean listing it came from.
-   */
-  private async providerSnapshot(): Promise<{ snapshot: ProviderCatalogSnapshot; cache: 'hit' | 'joined' | 'miss' }> {
-    let cache: 'hit' | 'joined' | 'miss';
-    let listing: { models: readonly string[]; failures: readonly ProviderFailure[] };
-    if (this.providerListing) {
-      listing = this.providerListing;
-      cache = 'hit';
-    } else if (this.providerListingSweep) {
-      listing = await this.providerListingSweep;
-      cache = 'joined';
-    } else {
-      const generation = this.providerListingGeneration;
-      const sweep = this.sweepProviderListing();
-      this.providerListingSweep = sweep;
-      try {
-        listing = await sweep;
-      } finally {
-        // Only if it is still OURS: an invalidation mid-sweep replaced it with
-        // null, and clearing unconditionally would also discard a newer sweep
-        // that started after that.
-        if (this.providerListingSweep === sweep) this.providerListingSweep = null;
-      }
-      if (listing.failures.length === 0 && generation === this.providerListingGeneration) {
-        this.providerListing = listing;
-      }
-      cache = 'miss';
-    }
-    const configured = this.normalizeModelSpec(this.config.getModel());
-    const availableModels = [...new Set([configured, ...listing.models])].sort();
-    const unavailableProviders = listing.failures
-      .map((failure) => ({
-        provider: failure.provider,
-        label: failure.label ?? failure.provider,
-        reason: failure.reason,
-      }))
-      .sort((a, b) => (a.provider === b.provider ? a.reason.localeCompare(b.reason) : a.provider.localeCompare(b.provider)));
-    const snapshot: ProviderCatalogSnapshot = {
-      // `!` cannot begin a model spec, so a failure line never collides with one.
-      revision: sha256Hex([
-        ...availableModels,
-        ...unavailableProviders.map((f) => `!${f.provider}\t${f.reason}`),
-      ].join('\n')),
-      availableModels,
-      unavailableProviders,
-    };
-    return { snapshot, cache };
-  }
-
-  private async sweepProviderListing(): Promise<{ models: readonly string[]; failures: readonly ProviderFailure[] }> {
-    if (!this.modelResolver) return { models: [STATIC_MODEL_SPEC], failures: [] };
-    const menu = await this.modelResolver.listModels();
-    return { models: menu.models.map((model) => `${model.provider}/${model.id}`), failures: menu.failures };
-  }
-
-  /**
-   * The cross-process half of listing invalidation: read the published provider
-   * revision and, when it differs from the one the cached listing was measured
-   * under, drop that listing.
-   *
-   * Compared BEFORE the resolution rather than after, because the envelope and
-   * the listing are loaded together (`loadProfileAuthorityInputs` runs both at
-   * once) and an invalidation that landed after the snapshot was taken would
-   * apply to the turn after this one. That off-by-one turn is the whole bug: a
-   * tier that moved to a model a newly connected provider exposes fails
-   * resolution until the session restarts.
-   *
-   * Compared, never expired. A revision that did not change means nothing
-   * changed, so there is nothing here a clock could usefully do — and a model
-   * an account stopped offering must keep failing rather than come back by
-   * waiting.
-   */
-  private observeProviderRevision(): void {
-    if (!this.readProviderRevision) return;
-    const revision = this.readProviderRevision();
-    const previous = this.observedProviderRevision;
-    this.observedProviderRevision = revision;
-    if (previous === null || previous === revision) return;
-    diagnostics.event('provider.listing_invalidated', { from: previous, to: revision });
-    this.refreshProviderListing();
-  }
-
-  /**
-   * The two inputs every resolution needs, with evidence for what each cost.
-   *
-   * The envelope is read LIVE on purpose and the listing is cached on purpose,
-   * and those are opposite decisions about the same call, so the event records
-   * which half was paid for. `providerCache` distinguishes the three cases that
-   * matter: `hit` is free, `joined` means a concurrent lane was already paying,
-   * and `miss` is a provider sweep on this turn's critical path — a run of
-   * turns all reporting `miss` means either an invalidation is firing that
-   * should not, or a provider is failing and the listing is deliberately not
-   * being cached.
-   */
-  private async profileInputs(): Promise<{
-    envelope: ProfileCatalogEnvelope;
-    provider: ProviderCatalogSnapshot;
-  }> {
-    const startedAt = Date.now();
-    // Before the loads below, so a provider mutation made in another process
-    // reaches THIS resolution rather than the next one.
-    this.observeProviderRevision();
-    let providerCache: 'hit' | 'joined' | 'miss' = 'hit';
-    const inputs = await loadProfileAuthorityInputs({
-      envelope: this.profileAuthority,
-      provider: async () => {
-        const resolved = await this.providerSnapshot();
-        providerCache = resolved.cache;
-        return resolved.snapshot;
-      },
-    });
-    this.recordRunEvent({
-      type: 'profile_resolution',
-      durationMs: Date.now() - startedAt,
-      providerCache,
-      providerRevision: inputs.provider.revision,
-      unavailableProviders: inputs.provider.unavailableProviders?.length ?? 0,
-      catalogVersion: inputs.envelope.version,
-      authority: inputs.envelope.authority.kind,
-    });
-    return inputs;
-  }
-
-  /**
-   * A profile for work that starts outside a chat turn. Same authority, same
-   * provider snapshot, same role and tier as a turn — only the tool surface is
-   * empty, because these lanes resolve TIERS and never call a tool. Resolving
-   * it here rather than reusing whatever a past turn left behind is what lets a
-   * fresh runtime run the review and evolution lanes at all.
-   */
-  private async resolvePreTurnProfile(): Promise<ResolvedTurnProfile> {
-    return resolveAgentTurnProfile({
-      ...(await this.profileInputs()),
-      activeRoleId: this.config.getActiveRoleId(),
-      workMode: this.turnWorkMode,
-      availableTools: [],
-      activeSkills: [],
-      explicitTier: this.config.getAssignedTier() ?? undefined,
-    });
-  }
-
-  private normalizeModelSpec(spec: string | null): string {
-    if (this.modelResolver) return this.modelResolver.normalizeSpecSync(spec);
-    const s = (spec ?? '').trim();
-    if (!s || s === STATIC_MODEL_SPEC) return STATIC_MODEL_SPEC;
-    throw new Error('Model switching is unavailable for this local session; construct it with a modelResolver.');
+    this.profiles().refreshListing();
   }
 
   /**
@@ -3090,7 +3114,7 @@ export class LocalAgentSession implements BackendHost {
    */
   private resolveModelForSpec(spec: string): LanguageModel {
     if (this.modelResolver) return this.modelResolver.resolveModel(spec);
-    if (this.normalizeModelSpec(spec) === STATIC_MODEL_SPEC) {
+    if (this.profiles().normalizeSpec(spec) === STATIC_MODEL_SPEC) {
       return this.defaultModel(`the ${spec} model`);
     }
     throw new Error(
@@ -3132,7 +3156,7 @@ export class LocalAgentSession implements BackendHost {
   }
 
   private ensureModelState(): LanguageModel {
-    const spec = this.turnProfile?.tier.model ?? this.normalizeModelSpec(this.config.getModel());
+    const spec = this.turnProfile?.tier.model ?? this.profiles().normalizeSpec(this.config.getModel());
     if (this.cachedModel && this.cachedModelSpec === spec) return this.cachedModel;
     const model = this.modelResolver ? this.modelResolver.resolveModel(spec) : this.defaultModel("this static-model session");
     this.cachedModel = model;
@@ -3165,6 +3189,7 @@ export class LocalAgentSession implements BackendHost {
    * turn and a static-model session each genuinely offer less.
    */
   private codemodeProviders(mode: WorkMode): CodemodeProvider[] {
+    const report = this.reportGateOpen() ? this.reportDeps : null;
     return [
       createAgentSelfProvider(this),
       // `agents.*` — the delegation tool projected into the sandbox, over
@@ -3194,6 +3219,10 @@ export class LocalAgentSession implements BackendHost {
       ...(this.modelResolver
         ? [createRLMProvider(this.modelResolver, () => this.getEffectiveModelSpec())]
         : []),
+      // `report.*` — the native report surface projected into the sandbox, on
+      // the same gate. Both surfaces of one capability, so a child that reaches
+      // for it in code finds it exactly when it finds the tool.
+      ...(report ? [createReportCodemodeProvider(() => report)] : []),
     ];
   }
 
@@ -3217,7 +3246,7 @@ export class LocalAgentSession implements BackendHost {
       journal: () => this.headJournal,
     });
     for (const mode of ['build'] as const) {
-      const raw = buildActorTools({
+      const deps: ActorToolsetDeps = {
         rt: this.rt,
       // No shellApprovalMode/requestShellApproval here — the gate lives at
       // the execution seam now (rt.shell / rt.executionRouter, wired once in
@@ -3245,7 +3274,15 @@ export class LocalAgentSession implements BackendHost {
         roleAuthority: () => this.turnProfileInputs?.envelope ?? null,
         facts: this.factsStore,
         webSearch: this.getWebSearchProvider(),
-      });
+        // Structural absence is the gate, and the toolset is rebuilt per turn,
+        // so a subordinate carries `report` on the turns its parent drove and
+        // on no others.
+      };
+      // Structural absence is the gate, and the toolset is rebuilt per turn,
+      // so a subordinate carries `report` on the turns its parent drove and
+      // on no others.
+      if (this.reportGateOpen() && this.reportDeps) deps.report = this.reportDeps;
+      const raw = buildActorTools(deps);
       this.toolSets[mode] = { raw, wrapped: this.wrapToolsForBackground(raw) };
     }
     this.activateToolMode(this.turnWorkMode);

@@ -44,7 +44,7 @@ const PROJECT_MARKERS = ['.git', 'package.json', 'pyproject.toml', 'Cargo.toml',
  * rather than re-reason about when someone reports a checkpoint timing out on a
  * project two orders of magnitude larger.
  */
-const GIT_TIMEOUT_MS = 30_000;
+const GIT_TIMEOUT_MS = 30_000; // Coincides with device-tunnel.ts DEFAULT_RPC_TIMEOUT_MS; separate policies — a local git op and a device round trip drift independently.
 /**
  * Directories that are not a work tree, so a whole-tree snapshot of one is
  * never what the caller meant. The filesystem root and the user's home were

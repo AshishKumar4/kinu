@@ -25,6 +25,7 @@ import {
   backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage,
   JsonObjectSchema, WORKSPACE_RUN_ID, BACKGROUND_POLICY,
   profileCatalogDigest, BUILTIN_PROFILE_CATALOG, effectiveRoleCatalog,
+  STEER_METADATA_KEY, STEER_STEP_METADATA_KEY,
   type AgentsToolDeps, type ModelInfo, type JsonObject, type JsonValue,
   type ModelCallSink, type ProfileCatalogEnvelope,
   createAgentSelfProvider,
@@ -344,6 +345,24 @@ async function captureSettleTimings(run: () => Promise<void>): Promise<{ evoluti
   return timings;
 }
 
+/** The lines one named `diagnostics.failure` wrote while `run` ran — the same
+ *  door captureSettleTimings uses, because a lane that reports its failure
+ *  nowhere else is only provable from the stream it actually writes to. */
+async function captureFailures(event: string, run: () => Promise<void>): Promise<string[]> {
+  const original = console.error;
+  const lines: string[] = [];
+  console.error = (...args: unknown[]) => {
+    const line = v.safeParse(v.string(), args[0]);
+    if (line.success && line.output.includes(`"${event}"`)) lines.push(line.output);
+  };
+  try {
+    await run();
+  } finally {
+    console.error = original;
+  }
+  return lines;
+}
+
 function jobColumn(db: Database, id: string, column: 'status' | 'error' | 'result'): string {
   const row = db.query<{ v: string | null }, [string]>(
     `SELECT ${column} v FROM background_jobs WHERE id=?`,
@@ -357,6 +376,12 @@ const jobResult = (db: Database, id: string) => jobColumn(db, id, 'result');
 const kinds = (events: SessionEvent[]) => events.map((e) => e.type);
 const turnStarts = (events: SessionEvent[]) =>
   events.filter((e): e is Extract<SessionEvent, { type: 'turn-start' }> => e.type === 'turn-start');
+
+/** Every `steer_status` the session broadcast, in arrival order. Read off
+ *  BroadcastEvent's own typed `steerId`/`atStep` fields, which core added for
+ *  exactly this reader — a surface cannot render a lifecycle it has to guess. */
+const steerStatuses = (events: SessionEvent[]) => events.flatMap((event) =>
+  event.type === 'broadcast' && event.event.type === 'steer_status' ? [event.event] : []);
 
 describe('LocalAgentSession.send — a user turn', () => {
   test('streams text, persists the exchange, and ends the turn', async () => {
@@ -2036,6 +2061,163 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
   });
 });
 
+describe('LocalAgentSession — mission-derived auto-titling', () => {
+  /** What `kinu list` shows and where the title came from, read from the same
+   *  two `agent_config` rows both backends keep it in. */
+  const naming = (db: Database) => {
+    const rows = db.query<{ key: string; value: string }, []>(
+      `SELECT key, value FROM agent_config WHERE key IN ('display_name', 'name_origin')`,
+    ).all();
+    return {
+      displayName: rows.find((row) => row.key === 'display_name')?.value ?? null,
+      origin: rows.find((row) => row.key === 'name_origin')?.value ?? null,
+    };
+  };
+
+  test('a fresh workspace titles itself from its first request, and survives an unusable upgrade', async () => {
+    // The CLI called none of the shared naming policy, so a `kinu chat`
+    // workspace kept its raw slug forever while the same workspace on cloud
+    // named itself.
+    //
+    // The deterministic title is persisted FIRST and the generated one only
+    // upgrades it, which is the ORDER that makes a bad model answer survivable.
+    // Both halves are exercised here: the routed `fast` call really is made, and
+    // this fixture answers prose where parseWorkspaceTitle needs JSON, so the
+    // upgrade yields null and the title already on disk stands.
+    const base = fakeModel('done');
+    const asked: string[] = [];
+    const model = new TestLanguageModelV2({
+      provider: base.provider,
+      modelId: base.modelId,
+      doStream: base.doStream,
+      doGenerate: async (options) => {
+        asked.push(JSON.stringify(options.prompt));
+        return base.doGenerate(options);
+      },
+    });
+    const { db, session } = setup('unused', model);
+    expect(naming(db)).toEqual({ displayName: null, origin: null });
+
+    await session.send('Audit the OAuth callback flow');
+    // end() joins the titling fiber — the lane is tracked precisely so a
+    // one-shot process cannot exit through the model call.
+    await session.end();
+
+    expect(asked.some((prompt) => prompt.includes('Title a Kinu workspace'))).toBe(true);
+    expect(naming(db)).toEqual({
+      displayName: 'Audit the OAuth callback flow',
+      origin: 'auto',
+    });
+  });
+
+  test('a title the owner chose is never overwritten', async () => {
+    const { db, session } = setup('done');
+    db.query<unknown, [string]>(
+      `INSERT OR REPLACE INTO agent_config (key, value) VALUES ('display_name', ?), ('name_origin', 'user')`,
+    ).run('Keys Rotation');
+
+    await session.send('Audit the OAuth callback flow');
+    await session.end();
+
+    // Two independent refusals guard this and both matter: planWorkspaceTitle
+    // declines a 'user' origin up front, and `persist` answers false when a
+    // manual rename lands while the model is still thinking — so the owner wins
+    // the race as well as the decision.
+    expect(naming(db)).toEqual({ displayName: 'Keys Rotation', origin: 'user' });
+  });
+});
+
+describe('LocalAgentSession — the advisor lane joins the exit', () => {
+  /** A session whose reviewer is `reply`, with the advisor switched on the way
+   *  an owner switches it on: the durable `agent_config` row both backends read. */
+  function setupWithAdvisor(reply: () => Promise<string>) {
+    const { db, rt, session, events } = setup('rotated the staging keys');
+    db.query(`INSERT OR REPLACE INTO agent_config (key, value) VALUES ('advisor_enabled', 'true')`).run();
+    rt.advisorLlm = { stream: async function* () { yield ''; }, complete: reply };
+    return { db, rt, session, events };
+  }
+
+  const notes = (db: Database) => db.query<{ message: string }, []>(
+    `SELECT message FROM evolution_events WHERE type = 'advisor_note'`,
+  ).all().map((row) => row.message);
+
+  /** A `nit` against the default `concern` floor: recorded as a Changelog row
+   *  and deliberately not spoken, so these tests measure the join rather than a
+   *  signal delivery's own follow-on turn. */
+  const NOTE = 'the staging cluster was never named';
+  const nit = JSON.stringify({ note: NOTE, severity: 'nit', class: 'wrong-work' });
+
+  test('a review still in flight at end() lands its note before the database closes', async () => {
+    // The hold lives inside the fixture's model call, which is how the sibling
+    // join above is proven too ("end() waits for a detached job to settle
+    // instead of closing the database under it"). A fake clock cannot do this
+    // job: the property IS that a real promise is still open when end() is
+    // called, and advancing a clock the session does not read would only move
+    // the race. 50ms against a 300s settle grace, and an exit that does NOT
+    // join returns in about a millisecond.
+    let reviewedAt = 0;
+    const { db, session } = setupWithAdvisor(async () => {
+      await Bun.sleep(50);
+      reviewedAt = performance.now();
+      return nit;
+    });
+
+    await session.send('rotate the keys');
+    // The review is a model call that STARTS after turn-end, so nothing is
+    // recorded yet: what follows measures the join, not a race already won.
+    expect(notes(db)).toEqual([]);
+
+    await session.end();
+    const endedAt = performance.now();
+
+    // A bare `void runAdvisorLane(...)` gave this lane no durable fiber row and
+    // no membership in the set end() and settleBackgroundWork() join, so a
+    // one-shot `kinu exec` exited straight through the review: no note, no
+    // signal, and no statement that anything had been dropped.
+    expect(notes(db)).toEqual([NOTE]);
+    expect(reviewedAt).toBeGreaterThan(0);
+    expect(endedAt).toBeGreaterThanOrEqual(reviewedAt);
+  });
+
+  test('a reviewer that throws is reported by name, and is never a failed exit', async () => {
+    const { db, session } = setupWithAdvisor(async () => { throw new Error('reviewer is on fire'); });
+
+    const failures = await captureFailures('advisor.review_failed', async () => {
+      await session.send('rotate the keys');
+      await session.end();
+    });
+
+    // Never silently lost: no note, and ONE diagnostic naming the cause. The
+    // catch sits inside the fiber body on purpose — letting the body reject
+    // would report one failure twice, under this name and under trackFiber's
+    // own `fiber.settle_failed`.
+    expect(notes(db)).toEqual([]);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toContain('reviewer is on fire');
+  });
+
+  test('a FAILED build turn feeds no improvement lane', async () => {
+    // The parity arm for the settle verdict: a turn the provider killed has no
+    // subject to replay and no answer to review, so it requests no advice —
+    // exactly what the cloud spine already did. The condition is ONE core
+    // decision now (settleTurn's verdict), not this backend's own spelling of
+    // completed-and-build beside core's recording rule.
+    const exploding = new TestLanguageModelV2({
+      provider: 'fake', modelId: 'fake-model',
+      doStream: async () => { throw new Error('upstream is on fire'); },
+    });
+    const { db, rt, session } = setup('unused', exploding);
+    db.query(`INSERT OR REPLACE INTO agent_config (key, value) VALUES ('advisor_enabled', 'true')`).run();
+    rt.advisorLlm = {
+      stream: async function* () { yield ''; },
+      complete: async () => JSON.stringify({ note: NOTE, severity: 'nit', class: 'wrong-work' }),
+    };
+    await session.send('rotate the keys');
+    await session.end();
+    expect(notes(db)).toEqual([]);
+  });
+});
+
 describe('LocalAgentSession — AGENTS.md + session transcript recall', () => {
   test('injects the cwd AGENTS.md chain into the turn system prompt', async () => {
     const root = scratchDir('local-session-agentsmd');
@@ -2324,6 +2506,112 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
 
     expect(turnStarts(events)).toHaveLength(1);
     expect(events.some((e) => e.type === 'error')).toBe(true);
+    await session.end();
+  });
+
+  test('a landed steer persists as its own stamped user row, and every status is broadcast', async () => {
+    // Steer PROVENANCE and LIFECYCLE were cloud-only. Locally a steer was
+    // written as a bare user row, so the thread could not say why a user bubble
+    // appeared inside another turn's work, and no surface was ever told the
+    // model had seen it. Both halves are asserted here because they are one fact
+    // at two timescales: `steer_status` live, the two metadata keys after a reload.
+    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+    const toolStep = Promise.withResolvers<void>();
+    let calls = 0;
+    // Call #1 announces a tool call and withholds its step boundary — the drain
+    // window. Call #2 streams one delta then stays open until the abort, which is
+    // a steer window with no boundary left in front of it.
+    const model = new TestLanguageModelV2({
+      provider: 'fake',
+      modelId: 'fake-model',
+      doStream: async ({ abortSignal }) => {
+        calls += 1;
+        if (calls === 1) {
+          return {
+            stream: new ReadableStream({
+              async start(controller) {
+                controller.enqueue({ type: 'stream-start', warnings: [] });
+                controller.enqueue({
+                  type: 'tool-call', toolCallId: 'call-1', toolName: 'fact',
+                  input: JSON.stringify({ action: 'recall', key: 'probe' }),
+                });
+                await toolStep.promise;
+                controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+                controller.close();
+              },
+            }),
+            response: { headers: {} },
+          };
+        }
+        return {
+          stream: new ReadableStream({
+            start(controller) {
+              controller.enqueue({ type: 'stream-start', warnings: [] });
+              controller.enqueue({ type: 'text-start', id: '1' });
+              controller.enqueue({ type: 'text-delta', id: '1', delta: 'on it' });
+              abortSignal?.addEventListener('abort', () => {
+                controller.error(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+              }, { once: true });
+            },
+          }),
+          response: { headers: {} },
+        };
+      },
+    });
+
+    const { db, session, events } = setup('unused', model);
+    const turn = session.send('main question');
+    await waitFor(() => events.some((e) => e.type === 'tool-call'));
+
+    expect(session.steer('also check X')).toBe(true);
+    // Accepted but not yet seen. The id is assigned at ACCEPTANCE, so the queued
+    // event and the durable row it later becomes carry the same one.
+    expect(steerStatuses(events).map((s) => [s.status, s.text]))
+      .toEqual([['queued', 'also check X']]);
+    const steerId = steerStatuses(events)[0]?.steerId;
+    expect(steerId).toBeTruthy();
+
+    toolStep.resolve();
+    await waitFor(() => steerStatuses(events).some((s) => s.status === 'landed'));
+    const landed = steerStatuses(events).find((s) => s.status === 'landed');
+    if (!landed) throw new Error('the landed steer was never announced');
+    expect(landed.steerId).toBe(steerId);
+    expect(landed.text).toBe('also check X');
+    // The step index is what lets a surface draw the steer INSIDE the assistant
+    // message the turn is still writing rather than under it.
+    expect(landed.atStep).toBeDefined();
+    expect(landed.atStep).toBeGreaterThanOrEqual(0);
+
+    // A second steer with no boundary left goes back to the composer.
+    await waitFor(() => events.some((e) => e.type === 'text-delta'));
+    expect(session.steer('and Y')).toBe(true);
+    expect(session.interrupt()).toEqual(['and Y']);
+    await turn;
+
+    expect(steerStatuses(events).map((s) => s.status))
+      .toEqual(['queued', 'landed', 'queued', 'returned']);
+    const returned = steerStatuses(events).filter((s) => s.status === 'returned');
+    expect(returned.map((s) => s.text)).toEqual(['and Y']);
+    expect(returned[0]?.steerId).not.toBe(steerId);
+
+    // The durable half. A row carrying the steer key WITHOUT the step key is
+    // indistinguishable from an ordinary user turn, which is why core's
+    // describeLandedSteers stamps the two together and this asserts both.
+    const row = db.query<{ role: string; content: string; metadata: string | null }, [string]>(
+      `SELECT role, content, metadata FROM messages WHERE id = ?`,
+    ).get(steerId ?? '');
+    if (!row) throw new Error('the landed steer left no durable row');
+    expect(row.role).toBe('user');
+    expect(row.content).toBe('also check X');
+    expect(v.parse(JsonObjectSchema, JSON.parse(row.metadata ?? 'null'))).toMatchObject({
+      [STEER_METADATA_KEY]: true,
+      [STEER_STEP_METADATA_KEY]: landed.atStep,
+    });
+    // The returned steer was never seen by the model, so it left nothing behind.
+    expect(db.query<{ c: number }, [string]>(
+      `SELECT count(*) AS c FROM messages WHERE content = ?`,
+    ).get('and Y')?.c).toBe(0);
+
     await session.end();
   });
 
@@ -3157,6 +3445,50 @@ describe('LocalAgentSession — the durable run-event log', () => {
     const end = session.getRunEvents(run.runId).at(-1);
     expect(end?.type).toBe('run_end');
     expect(end).toMatchObject({ reason: 'error', error: expect.stringContaining('upstream is on fire') });
+
+    await session.end();
+  });
+
+  test("a user's Stop seals the run 'aborted', with no error sentence", async () => {
+    // The same user action was counted differently on each backend. An interrupt
+    // throws INTERRUPTED_TURN, the stream catch folded that into `hadError`, and
+    // closeRun computed `hadError ? 'error' : 'completed'` — so pressing Stop was
+    // filed as an agent failure here and as a choice in the cloud. closeRun
+    // reports FACTS now and classifyRunEnd owns the vocabulary; this pins that an
+    // interruption is reported as one. The test above is the control: a genuine
+    // provider failure still seals 'error' WITH its text.
+    const stalling = new TestLanguageModelV2({
+      provider: 'fake', modelId: 'fake-model',
+      doStream: async ({ abortSignal }) => ({
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: 'stream-start', warnings: [] });
+            controller.enqueue({ type: 'text-start', id: '0' });
+            controller.enqueue({ type: 'text-delta', id: '0', delta: 'partial ' });
+            abortSignal?.addEventListener('abort', () => {
+              controller.error(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+            }, { once: true });
+          },
+        }),
+        response: { headers: {} },
+      }),
+    });
+
+    const { session, events } = setup('unused', stalling);
+    const turn = session.send('long task');
+    await waitFor(() => events.some((e) => e.type === 'text-delta'));
+    session.interrupt();
+    await turn;
+
+    const run = session.listRuns().items[0];
+    if (!run) throw new Error('the interrupted turn recorded no run');
+    const end = session.getRunEvents(run.runId).at(-1);
+    if (!end || end.type !== 'run_end') throw new Error('run_end event is missing');
+    expect(end.reason).toBe('aborted');
+    // There is no failure to describe, so nothing is invented to describe it.
+    expect(end.error).toBeUndefined();
+    // The surface is still told the turn was cut short — that half never changed.
+    expect(events.some((e) => e.type === 'error')).toBe(true);
 
     await session.end();
   });

@@ -20,7 +20,7 @@ import { createRoot, useKeyboard, useRenderer, useTerminalDimensions } from '@op
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 
 import {
-  TIER_IDS, effectiveRoleCatalog,
+  DEFAULT_ROLE_ID, TIER_IDS, effectiveRoleCatalog,
   type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry, type TierId,
 } from '@kinu.run/core';
 import {
@@ -1530,7 +1530,7 @@ function welcomeMessage(agentName: string): DisplayMessage {
 async function loadHubData(client: AgentClient, workspace: string): Promise<TuiHubData> {
   const [envelope, status] = await Promise.all([loadActiveProfile(), client.status()]);
   const roles = effectiveRoleCatalog(envelope.catalog);
-  const activeRoleId = status.roleId && roles[status.roleId] ? status.roleId : 'general';
+  const activeRoleId = status.roleId && roles[status.roleId] ? status.roleId : DEFAULT_ROLE_ID;
   const tierId = TIER_IDS.find((id) => id === status.tierId) ?? roles[activeRoleId]?.tier ?? 'default';
   return {
     agents: [{

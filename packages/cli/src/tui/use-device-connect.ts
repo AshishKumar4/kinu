@@ -9,6 +9,7 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import { requireAuthConfig } from '../config';
 import {
   connectDevice,
+  defaultDeviceName,
   describeConnectOutcome,
   deviceStatusLine,
   dismissDeviceConnectPrompt,
@@ -18,7 +19,7 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 import { createKeyDispatcher, useKeybindingRegistry, type TuiKeyEvent } from './actions';
 
 export type DeviceConnectPromptState =
-  | { phase: 'ask'; statusLine: string }
+  | { phase: 'ask'; statusLine: string; deviceName: string }
   | { phase: 'connecting'; session: boolean; ticks: number }
   | { phase: 'result'; ok: boolean; message: string };
 
@@ -61,7 +62,7 @@ export function useDeviceConnectPrompt(): DeviceConnectPrompt {
   const beginAsk = useCallback((statusLine: string) => {
     const { promise, resolve } = Promise.withResolvers<void>();
     doneRef.current = resolve;
-    update({ phase: 'ask', statusLine });
+    update({ phase: 'ask', statusLine, deviceName: defaultDeviceName() });
     return promise;
   }, [update]);
 
@@ -83,6 +84,7 @@ export function useDeviceConnectPrompt(): DeviceConnectPrompt {
         const auth = requireAuthConfig();
         const result = await connectDevice(auth, {
           session,
+          label: defaultDeviceName(),
           onPoll: () => {
             const current = stateRef.current;
             if (current?.phase === 'connecting') update({ ...current, ticks: current.ticks + 1 });

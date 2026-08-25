@@ -725,8 +725,8 @@ export function DeviceConnectOverlay({ prompt, terminal }: DeviceConnectOverlayP
       {prompt.phase === 'ask' ? (
         <>
           <PaletteLine text={prompt.statusLine} width={innerWidth} color={colors.text.primary} />
-          <PaletteLine text="Cloud agents run local commands through the Kinu daemon," width={innerWidth} color={colors.text.muted} />
-          <PaletteLine text="asking consent per command." width={innerWidth} color={colors.text.muted} />
+          <PaletteLine text={`Links this machine as "${prompt.deviceName}".`} width={innerWidth} color={colors.text.muted} />
+          <PaletteLine text="A workspace you grant runs commands here as you; revoke any time." width={innerWidth} color={colors.text.muted} />
           <PaletteLine text={`${keybindings.hint('device.connect')} connect and keep connected`} width={innerWidth} color={colors.intent.accentStrong} />
           <PaletteLine text={`${keybindings.hint('device.ssh')} use this session only`} width={innerWidth} color={colors.intent.accentStrong} />
           <PaletteLine text={`${keybindings.hint('device.dismiss')} don't ask again · ${keybindings.hint('device.not-now')} not now`} width={innerWidth} color={colors.text.muted} />

@@ -184,14 +184,14 @@ export function getLocalAgentState(name: string): LocalAgentState {
  * What this local workspace spent, on both axes, from the same read model the
  * cloud panel renders — never a second query written here.
  *
- * The window matches the panel's default so the two surfaces answer the same
- * question about the same rows. A workspace with a longer log than that reports
- * `complete: false`, which is the surface's job to print.
+ * No window on either surface: `workspaceSpend` sums the whole log, so the two
+ * answer the same question about the same rows by construction rather than by
+ * both being handed the same bound.
  */
-export function getLocalWorkspaceSpend(name: string, windowLimit: number): WorkspaceSpend {
+export function getLocalWorkspaceSpend(name: string): WorkspaceSpend {
   return withLocalDb(name, (db) => {
     const sql = makeSql(db);
-    return workspaceSpend({ events: new RunEventRecorder(sql), sql }, { windowLimit });
+    return workspaceSpend({ events: new RunEventRecorder(sql), sql });
   });
 }
 

@@ -9,6 +9,7 @@
  */
 
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { hostname, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { classify, renderThrownChain, tolerate } from '@kinu.run/core/obs';
@@ -21,6 +22,35 @@ export const DAEMON_LOG_PATH = join(AGENT_HOME, 'pc-agent.log');
 export const DEVICE_CONFIG_PATH = join(AGENT_HOME, 'device.json');
 export const DEVICE_CONNECT_DEADLINE_MS = 20_000;
 const CONNECT_POLL_MS = 1_000;
+
+/** The name a machine has when nobody named it. */
+export const UNNAMED_DEVICE_NAME = 'Your PC';
+
+/**
+ * What this machine offers as its own name: `user@hostname`, which is what a
+ * person recognises in a device list. `os.userInfo()` is the POSIX answer and
+ * raises ENOENT when the uid has no passwd entry (a container built without
+ * one), so the environment answers second and the neutral name last.
+ */
+export function defaultDeviceName(): string {
+  const user = (tolerate(() => userInfo().username, 'enoent') ?? process.env.USER ?? '').trim();
+  const host = hostname().trim();
+  return user && host ? `${user}@${host}` : UNNAMED_DEVICE_NAME;
+}
+
+/**
+ * What linking this machine actually means, in the words a person needs before
+ * they say yes. Stated by every connect surface BEFORE the daemon is installed:
+ * the install is the moment an agent gains reach into this machine, and it must
+ * never happen as a side effect of typing a command.
+ */
+export const DEVICE_CONNECT_DISCLOSURE: readonly string[] = [
+  'Connecting installs the Kinu daemon on this machine and links it to your account.',
+  'A workspace you grant access to can then run commands, read and write files here,',
+  'as you — not root. Access is per workspace: you approve each one once, and you can',
+  'revoke it any time under Account settings → Devices.',
+  'The daemon dials out over one WebSocket; it opens no inbound ports.',
+];
 
 export interface DeviceAuth {
   origin: string;

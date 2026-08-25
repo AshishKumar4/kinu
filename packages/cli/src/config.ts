@@ -15,6 +15,7 @@ import {
   CODEX_BASE_URL,
   CODEX_DEFAULT_MODEL,
   DEFAULT_WORKERS_AI_MODEL_ID,
+  WORKERS_AI_PROVIDER_ID, WORKERS_AI_MODEL_ID_PREFIX,
   OPENAI_BASE_URL,
   OPENAI_DEFAULT_MODEL,
   OPENROUTER_BASE_URL,
@@ -933,16 +934,15 @@ function stripProvider(model: string, provider: string): string {
  *  workers-ai model is honored; anything else falls to the platform default
  *  (non-workers-ai specs still resolve per-spec through the registry). */
 function workersAIModelId(model: string | undefined): string {
-  if (model?.startsWith('workers-ai/')) {
-    return model.slice('workers-ai/'.length) || DEFAULT_WORKERS_AI_MODEL_ID;
-  }
-  return model?.startsWith('@cf/') ? model : DEFAULT_WORKERS_AI_MODEL_ID;
+  const stripped = stripProvider(model ?? '', WORKERS_AI_PROVIDER_ID);
+  if (stripped !== (model ?? '')) return stripped || DEFAULT_WORKERS_AI_MODEL_ID;
+  return model?.startsWith(WORKERS_AI_MODEL_ID_PREFIX) ? model : DEFAULT_WORKERS_AI_MODEL_ID;
 }
 
 /** Specs the signed-in account serves: the proxy's own provider ids plus the
  *  bare Workers AI wire form. */
 function isNativeCloudSpec(model: string): boolean {
-  return model.startsWith('@cf/')
+  return model.startsWith(WORKERS_AI_MODEL_ID_PREFIX)
     || CLOUD_PROXY_PROVIDER_IDS.some((id) => model.startsWith(`${id}/`));
 }
 

@@ -2,7 +2,12 @@
  * Local code executor for CLI backend using Bun subprocess.
  *
  * Runs user code in a separate Bun process, under the caller's declared
- * wall-clock budget (30s by default — a scaffold turn declares minutes).
+ * wall-clock budget — and under NO budget when the caller declared none. This
+ * used to default to 30 seconds, which is the same number as the foreground
+ * detach window: a program that outran the window was killed at the very moment
+ * the window would have handed the model a handle, so the detach could never be
+ * observed. A deadline here is a kill; the window is not.
+ *
  * This is a local convenience boundary, not a security sandbox: code executes
  * with the user's OS permissions. Tool-backed execution runs in-process because
  * provider functions cannot be passed across process boundaries.
@@ -16,7 +21,6 @@ import { writeFileSync, unlinkSync } from 'node:fs';
 import * as v from 'valibot';
 import { classify, renderThrownChain } from '@kinu.run/core/obs';
 
-const TIMEOUT_MS = 30_000;
 const subprocessResultSchema = v.variant('ok', [
   v.object({ ok: v.literal(true), result: v.optional(JsonValueSchema) }),
   v.object({ ok: v.literal(false), error: v.optional(v.string()) }),
@@ -67,7 +71,7 @@ export function createSandboxedExecutor(): Executor {
     get languages() { return detectedLanguages ??= detectLanguages(); },
     async execute(code, providers, opts): Promise<ExecuteResult> {
       const providerList: ResolvedProvider[] = normalizeProviders(providers);
-      const timeoutMs = opts?.timeoutMs ?? TIMEOUT_MS;
+      const timeoutMs = opts?.timeoutMs;
       const language = opts?.language ?? 'javascript';
 
       if (!this.languages.includes(language)) {
@@ -95,7 +99,7 @@ export function createSandboxedExecutor(): Executor {
 async function executeWithInterpreter(
   code: string,
   interpreter: { readonly command: string; readonly extension: string },
-  timeoutMs: number,
+  timeoutMs?: number,
 ): Promise<ExecuteResult> {
   const run = await runToCompletion([interpreter.command], code, interpreter.extension, timeoutMs);
   if (run.error) return { result: undefined, error: run.error };
@@ -116,7 +120,7 @@ async function runToCompletion(
   argv: string[],
   code: string,
   extension: string,
-  timeoutMs: number,
+  timeoutMs?: number,
 ): Promise<{ exitCode: number; stdout: string; stderr: string; error?: string }> {
   const stem = join(tmpdir(), `kinu-exec-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const tmpFile = `${stem}${extension}`;
@@ -132,11 +136,17 @@ async function runToCompletion(
       env: { PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin', HOME: '/tmp' },
     });
     let killedByTimeout = false;
-    const timeout = setTimeout(() => { killedByTimeout = true; proc.kill(); }, timeoutMs);
+    // No deadline asked for, no kill armed. The process ends when it ends.
+    const timeout = timeoutMs === undefined
+      ? undefined
+      : setTimeout(() => { killedByTimeout = true; proc.kill(); }, timeoutMs);
     const exitCode = await proc.exited;
     clearTimeout(timeout);
     if (killedByTimeout) {
-      return { exitCode, stdout: '', stderr: '', error: `Execution timeout (${Math.round(timeoutMs / 1000)}s)` };
+      return {
+        exitCode, stdout: '', stderr: '',
+        error: `Execution timeout (${Math.round((timeoutMs ?? 0) / 1000)}s)`,
+      };
     }
     return {
       exitCode,
@@ -151,7 +161,7 @@ async function runToCompletion(
 }
 
 /** Execute in a Bun subprocess with timeout. */
-async function executeInSubprocess(code: string, timeoutMs: number): Promise<ExecuteResult> {
+async function executeInSubprocess(code: string, timeoutMs?: number): Promise<ExecuteResult> {
   // LLMs often send bare expressions (e.g., "7 * 13") without return.
   // Strategy: try as expression first, fall back to statements with
   // auto-return on the last line if it looks like an expression.
@@ -202,7 +212,7 @@ function normalizeProviders(
 
 /** In-process execution for when tool providers are needed */
 async function executeInProcess(
-  code: string, providers: ResolvedProvider[], timeoutMs: number,
+  code: string, providers: ResolvedProvider[], timeoutMs?: number,
 ): Promise<ExecuteResult> {
   const context: Record<string, ExecutorNamespace> = {};
 
@@ -229,16 +239,18 @@ async function executeInProcess(
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const fn = new Function(wrapped);
-    const result = await Promise.race([
-      Promise.resolve(fn(...argValues)).then((value) =>
-        value === undefined ? undefined : decodeJsonValue({ value })),
-      // Cleared in the finally — a scaffold turn's budget is minutes, and a
-      // live timer would hold the process open long after the code settled.
-      new Promise<JsonValue>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error(`Execution timeout (${Math.round(timeoutMs / 1000)}s)`)), timeoutMs);
-      }),
-    ]);
+    const settled = Promise.resolve(fn(...argValues)).then((value) =>
+      value === undefined ? undefined : decodeJsonValue({ value }));
+    if (timeoutMs === undefined) return { result: await settled };
+    // A caller that ASKED for a deadline gets one. Cleared in the finally — a
+    // scaffold turn's budget is minutes, and a live timer would hold the
+    // process open long after the code settled.
+    const deadline = Promise.withResolvers<JsonValue>();
+    timer = setTimeout(
+      () => deadline.reject(new Error(`Execution timeout (${Math.round(timeoutMs / 1000)}s)`)),
+      timeoutMs,
+    );
+    const result = await Promise.race([settled, deadline.promise]);
     return { result };
   } catch (error) {
     return {

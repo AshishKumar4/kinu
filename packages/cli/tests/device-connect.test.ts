@@ -39,15 +39,21 @@ interface StubCloud {
 }
 
 /** Minimal cloud origin: device register/list plus /pc/daemon.js. */
-function startStubCloud(opts: { devices?: () => CloudDevice[]; daemonScript?: string; onRegister?: () => void } = {}): StubCloud {
+function startStubCloud(opts: {
+  devices?: () => CloudDevice[];
+  daemonScript?: string;
+  /** The registration body, so a test can assert the NAME the CLI sent. */
+  onRegister?: (body: { label?: string }) => void;
+} = {}): StubCloud {
   const hits = { register: 0, list: 0, daemonScript: 0 };
   const server = Bun.serve({
     port: 0,
-    fetch(req: Request): Response {
+    async fetch(req: Request): Promise<Response> {
       const url = new URL(req.url);
       if (url.pathname === '/api/cli/devices' && req.method === 'POST') {
         hits.register += 1;
-        opts.onRegister?.();
+        const body = v.safeParse(v.object({ label: v.optional(v.string()) }), await req.json());
+        opts.onRegister?.(body.success ? body.output : {});
         return Response.json({
           deviceId: 'dev_1',
           token: 'device-token',
@@ -365,6 +371,130 @@ describe('classic cloud chat connect prompt', () => {
     expect(exitCode).toBe(0);
     expect(stdout).toContain('No PC is connected for device access. Connect one with: kinu connect');
     expect(stub.hits.register).toBe(0);
+  });
+});
+
+describe('kinu connect states its terms, takes a name, and waits for a yes', () => {
+  /** The real `kinu connect`, under a PTY so its /dev/tty prompts are reachable. */
+  function spawnConnectInPty(home: string) {
+    const cliBin = resolve(repoRoot, 'packages/cli/bin/cli.ts');
+    const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+    const command = [
+      `KINU_HOME=${quote(home)}`,
+      quote(process.execPath),
+      quote(cliBin),
+      'connect',
+    ].join(' ');
+    const proc = Bun.spawn({
+      cmd: ['script', '-qefc', command, '/dev/null'],
+      cwd: newProjectDir(),
+      stdin: 'pipe',
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: process.env,
+    });
+    let output = '';
+    const drained = (async () => {
+      for await (const chunk of proc.stdout) output += new TextDecoder().decode(chunk);
+    })();
+    return {
+      proc,
+      output: () => output,
+      drained,
+      // A separate process writes to a PTY; there is no event to await, so the
+      // wait polls the buffer the reader fills.
+      async waitFor(text: string, timeoutMs = 15_000): Promise<void> {
+        const deadline = Date.now() + timeoutMs;
+        while (!output.includes(text)) {
+          if (Date.now() > deadline) throw new Error(`timed out waiting for ${JSON.stringify(text)} in:\n${output}`);
+          await Bun.sleep(25);
+        }
+      },
+      send(line: string): void {
+        proc.stdin.write(`${line}\n`);
+        proc.stdin.flush();
+      },
+    };
+  }
+
+  const IDLE_DAEMON = `
+    const fs = require('node:fs');
+    const path = require('node:path');
+    fs.writeFileSync(path.join(process.env.KINU_HOME, 'fake-daemon.pid'), String(process.pid));
+    setInterval(() => {}, 1000);
+  `;
+
+  test('it states what access it grants, registers under the name given, and links', async () => {
+    let registered = false;
+    let label: string | undefined;
+    const stub = startStubCloud({
+      devices: () => (registered ? [connectedDevice(true)] : []),
+      daemonScript: IDLE_DAEMON,
+      onRegister: (body) => { registered = true; label = body?.label; },
+    });
+    const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+
+    const connect = spawnConnectInPty(home);
+    // The terms come BEFORE anything is installed.
+    await connect.waitFor('Connecting installs the Kinu daemon on this machine');
+    await connect.waitFor('revoke it any time under Account settings');
+    await connect.waitFor('Name this device');
+    expect(stub.hits.register).toBe(0);
+    expect(stub.hits.daemonScript).toBe(0);
+
+    connect.send('studio tower');
+    await connect.waitFor('Link this machine as "studio tower" and start the daemon?');
+    expect(stub.hits.register).toBe(0); // still nothing, the question is unanswered
+
+    connect.send('y');
+    await connect.waitFor('Connected this machine as');
+    await connect.proc.exited;
+    await connect.drained;
+
+    expect(connect.output()).toContain('studio tower');
+    expect(stub.hits.register).toBe(1);
+    expect(label).toBe('studio tower');
+    expect(existsSync(join(home, 'device.json'))).toBe(true);
+
+    const daemonPid = Number(readFileSync(join(home, 'fake-daemon.pid'), 'utf-8').trim());
+    process.kill(daemonPid, 'SIGTERM');
+    expect(await waitForPidExit(daemonPid)).toBe(true);
+  }, 30_000);
+
+  test('answering no installs nothing at all', async () => {
+    const stub = startStubCloud({ devices: () => [], daemonScript: IDLE_DAEMON });
+    const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+
+    const connect = spawnConnectInPty(home);
+    await connect.waitFor('Name this device');
+    connect.send(''); // take the suggested user@hostname
+    await connect.waitFor('and start the daemon?');
+    connect.send('n');
+    await connect.proc.exited;
+    await connect.drained;
+
+    expect(connect.output()).toContain('Nothing was installed');
+    expect(stub.hits.register).toBe(0);
+    expect(stub.hits.daemonScript).toBe(0);
+    expect(existsSync(join(home, 'device.json'))).toBe(false);
+    expect(existsSync(join(home, 'pc-agent.pid'))).toBe(false);
+  }, 30_000);
+
+  test('the suggested name is this machine, not a generic label', async () => {
+    const home = makeHome({ origin: 'https://example.invalid', accessToken: 'ptc_test' });
+    const out = await runScript(home, `
+      import { hostname } from 'node:os';
+      import { defaultDeviceName, UNNAMED_DEVICE_NAME } from './packages/cli/src/device-connect.ts';
+      console.log(JSON.stringify({ name: defaultDeviceName(), host: hostname(), fallback: UNNAMED_DEVICE_NAME }));
+    `);
+    const { name, host, fallback } = v.parse(v.object({
+      name: v.string(), host: v.string(), fallback: v.string(),
+    }), JSON.parse(out.trim()));
+    expect(fallback).toBe('Your PC');
+    // On any POSIX box with a passwd entry this is user@host; the fallback is
+    // the only other legal answer, and it is never the empty string.
+    expect(name === fallback || name.endsWith(`@${host}`)).toBe(true);
+    expect(name.length).toBeGreaterThan(0);
   });
 });
 

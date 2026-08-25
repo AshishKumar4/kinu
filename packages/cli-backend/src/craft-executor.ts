@@ -13,6 +13,17 @@
  * fn via a closure variable, so a tool called repeatedly inside one block
  * compiles once.
  *
+ * Failure attribution is NOT applied here, and that is deliberate. Core's
+ * `buildCraftedTools` (tools/builtins.ts) already wraps every crafted execute it
+ * hands out with `craftInvocationError(name, …)`, on BOTH backends and on both
+ * the native and sandbox surfaces — so the audit finding that local crafted
+ * failures reach the fitness signal unmarked is refuted by that wrapper.
+ * Stamping again here produced a doubly-marked message
+ * (`[crafted:x] [crafted:x] nope: nope: …`), which is worse than the drift it
+ * was meant to fix: `craftFailureBlame` matches the marker, so one failure read
+ * as several. Core's `attributeCraftedFailure` exists for a substrate whose
+ * compile step sits OUTSIDE that builder; this one does not.
+ *
  * Errors are re-thrown — codemode's ToolDispatcher wraps them into a
  * JSON-serializable error the sandbox converts into a thrown Error in
  * user code. That is the same path the CF LOADER executor produces.

@@ -21,8 +21,17 @@ export type ModelStreamPart =
   Awaited<ReturnType<MockLanguageModelV3['doStream']>>['stream'] extends ReadableStream<infer Part>
     ? Part
     : never;
-type ModelGenerateResult = Awaited<ReturnType<MockLanguageModelV3['doGenerate']>>;
-type ModelCallOptions = Parameters<MockLanguageModelV3['doGenerate']>[0];
+/**
+ * What ONE scripted step answers with, and what its script receives.
+ *
+ * Exported because a script with more than one branch needs the name. A function
+ * returning several literal shapes has its `finishReason` widened to `string` by
+ * the union, so the callback stops being assignable and the error lands on the
+ * whole script rather than on the branch that is wrong. Annotating each branch
+ * against this fixes both.
+ */
+export type ScriptedTurnResult = Awaited<ReturnType<MockLanguageModelV3['doGenerate']>>;
+export type ScriptedTurnOptions = Parameters<MockLanguageModelV3['doGenerate']>[0];
 
 /**
  * A fake model that answers BOTH ways from ONE script: `doGenerate` for a
@@ -54,7 +63,7 @@ type ModelCallOptions = Parameters<MockLanguageModelV3['doGenerate']>[0];
 export function scriptedTurnModel(config: {
   provider?: string;
   modelId?: string;
-  doGenerate: (options: ModelCallOptions) => PromiseLike<ModelGenerateResult> | ModelGenerateResult;
+  doGenerate: (options: ScriptedTurnOptions) => PromiseLike<ScriptedTurnResult> | ScriptedTurnResult;
 }): MockLanguageModelV3 {
   const { doGenerate } = config;
   return new MockLanguageModelV3({

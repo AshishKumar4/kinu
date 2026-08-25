@@ -13,6 +13,7 @@ export * from './ambient-env';
 export * from './answer-oracle';
 export * from './eval-identity';
 export * from './live-model';
+export * from './eval-target';
 export * from './agent-evals';
 export * from './facts';
 export * from './source';
