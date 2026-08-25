@@ -124,7 +124,7 @@
   "containers": [
     {
       "class_name": "KinuSandbox",
-      "image": "docker.io/cloudflare/sandbox:0.12.7",
+      "image": "docker.io/cloudflare/sandbox:0.12.8",
       "max_instances": 10,
       "instance_type": {
         "vcpu": 2,
@@ -412,7 +412,7 @@
       "containers": [
         {
           "class_name": "KinuSandbox",
-          "image": "docker.io/cloudflare/sandbox:0.12.7",
+          "image": "docker.io/cloudflare/sandbox:0.12.8",
           "max_instances": 5,
           "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 }
         }

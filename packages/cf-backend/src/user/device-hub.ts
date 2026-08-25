@@ -102,11 +102,21 @@ export class DeviceSocketHub {
 
   constructor(private readonly ctx: DeviceSocketCtx) {}
 
-  /** Accept a daemon socket for a device, replacing any previous connection. */
+  /**
+   * Accept a daemon socket for a device, replacing any previous connection.
+   *
+   * A replacement is REPORTED, never silent: one device id with two live
+   * claimants is either a redialling daemon or somebody holding a copy of that
+   * machine's `device.json`, and the second case is invisible unless this says
+   * so. The UserDO stamps `replaced_at` on the row for the same reason — a
+   * diagnostic the owner never opens is not a notification.
+   */
   accept(deviceId: string, server: DeviceSocket): void {
     this.dropTunnel(deviceId);
     for (const old of this.ctx.getWebSockets(deviceTag(deviceId))) {
-      if (old.readyState === WS_OPEN) old.close(1000, 'replaced by a new connection');
+      if (old.readyState !== WS_OPEN) continue;
+      diagnostics.event('device.socket_replaced', { device: deviceId });
+      old.close(1000, 'replaced by a new connection');
     }
     this.ctx.acceptWebSocket(server, [deviceTag(deviceId)]);
     server.serializeAttachment({ device: deviceId });

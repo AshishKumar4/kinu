@@ -390,11 +390,13 @@ function CostBlock({ snap }: { snap: ActivitySnapshot }) {
  * obeys the same rule one axis over: a workspace whose providers never bill in
  * neurons gets no column at all, instead of a column of dashes.
  *
- * FOUR THINGS CAN QUALIFY THESE TOTALS and they arrive independently, so they
+ * THREE THINGS CAN QUALIFY THESE TOTALS and they arrive independently, so they
  * are composed into one caveat line by {@link spendCaveat} rather than stacked as
- * four warnings a reader learns to skip. `spend.complete` is the one that is easy
- * to miss: `windowLimit` says how deep the read went, `complete` says whether it
- * reached the end, and only the second decides whether a total is the total.
+ * three warnings a reader learns to skip. A fourth used to sit above them — the
+ * read having stopped at a row bound with the log running on past it — and it is
+ * gone because the producer rows are now summed in SQL over every row. The
+ * figure above this block is still the windowed one; these are the whole life of
+ * the workspace, and the header says which.
  */
 function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
   const { producers, total, coverage } = spend;
@@ -408,12 +410,9 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
         <h4 className="text-[11px] font-semibold p-text-2">Workspace spend</h4>
         <span
           className="ml-auto text-[10px] p-text-3"
-          title={spend.complete
-            ? "The read reached the end of the event log, so nothing was left outside it."
-            : `The read stopped at ${spend.windowLimit} rows of each kind with rows still behind it, so older spend is outside this table.`}
+          title="Every step_finish and model_call row this workspace ever wrote, summed. No row bound stands between this table and the log."
         >
-          {coverage.calls} call{coverage.calls === 1 ? "" : "s"} ·{" "}
-          {spend.complete ? "whole log" : `newest ${spend.windowLimit} rows`}
+          {coverage.calls} call{coverage.calls === 1 ? "" : "s"} · whole log
         </span>
       </div>
 
@@ -584,26 +583,24 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
 }
 
 /**
- * Everything qualifying the totals, as one sentence instead of four warnings.
+ * Everything qualifying the totals, as one sentence instead of three warnings.
  *
- * Four qualifiers arrive independently — a window that did not reach the end of
- * the log, producers that measured nothing, producers that measured only some of
- * their calls, and calls no catalog could price — and four stacked warning
- * paragraphs is a panel a reader learns to skip. Each clause is pushed by its own
- * condition, so a live qualifier cannot be lost to the composition and an
- * inapplicable one says nothing at all.
+ * Three qualifiers arrive independently — producers that measured nothing,
+ * producers that measured only some of their calls, and calls no catalog could
+ * price — and three stacked warning paragraphs is a panel a reader learns to
+ * skip. Each clause is pushed by its own condition, so a live qualifier cannot be
+ * lost to the composition and an inapplicable one says nothing at all.
  *
- * Widest scope first: the window bounds every figure in the table, a silent
- * producer bounds the tokens, and a missing rate bounds only the dollars. Null
- * when the totals need no qualifying, which is the one case the panel is allowed
- * to state positively.
+ * A fourth clause used to lead the list: the read having stopped at a row bound
+ * with the log running on behind it. It is gone because the totals are summed in
+ * SQL over every row, so the widest qualifier a reader now faces is a silent
+ * producer bounding the tokens, and a missing rate bounding only the dollars.
+ * Null when the totals need no qualifying, which is the one case the panel is
+ * allowed to state positively.
  */
 function spendCaveat(spend: WorkspaceSpend): string | null {
   const { total, coverage } = spend;
   const clauses: string[] = [];
-  if (!spend.complete) {
-    clauses.push("the log is longer than the window named above, so these are the workspace's newest calls and not its life");
-  }
   // Passive, so one producer and four read the same. `Judges measured nothing`
   // and `Judges, MCTS rollouts measured nothing` cannot both be grammatical with
   // a pronoun in the clause, and a list this short is not worth an Oxford comma

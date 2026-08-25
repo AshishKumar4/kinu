@@ -994,8 +994,8 @@ function actorFixture(
     terminalOnCompletion: async () => {
       await openActorTurn(agent);
       // The success arm of the same settle spine the failure and abort arms
-      // above ride: `run_end.reason` is `result.status`, so a completed turn
-      // is recorded with the loop's own completed word.
+      // above ride: `run_end.reason` comes from core's `classifyRunEnd`, so a
+      // completed turn is recorded with the shared completed word.
       await agent.onChatResponse({
         status: 'completed',
         requestId: 'req-complete', continuation: false,

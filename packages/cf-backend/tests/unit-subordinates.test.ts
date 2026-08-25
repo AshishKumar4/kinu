@@ -1,12 +1,23 @@
 // How the Cloudflare backend WIRES core's subordinate module. The module's own
 // behaviour is covered in core (core/tests/unit-subordinates.test.ts); what is
-// backend-specific is which names this backend's source exposes where, so these
-// read that source directly.
+// backend-specific is which names this backend's source exposes where, so most
+// of these read that source directly. The exception is the deps gate, which is
+// a function and is exercised as one.
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { DEPS_GATED_TOOLS, REPORT_TOOL, type ReportToolDeps } from '@kinu.run/core';
+import { mockAgentsSdk } from './helpers/agents-sdk';
 
 const source = (path: string) => readFileSync(join(import.meta.dir, '..', 'src', path), 'utf8');
+
+mockAgentsSdk();
+// Dynamic on purpose: the real `agents` dist reaches `cloudflare:*`, so the SDK
+// mock must be registered before actor-agent evaluates.
+const { actorActiveTools } = await import('../src/actor-agent');
+
+/** A wired report dep. Only its PRESENCE is read by the gate. */
+const REPORT_DEPS: ReportToolDeps = { report: async () => undefined };
 
 describe('subordinate wiring', () => {
   test('all user-level gates present the parent workspace name, never the facet name', () => {
@@ -92,9 +103,28 @@ describe('subordinate wiring', () => {
     // …and absence is structural: a deps-gated name is dropped from the
     // advertised surface too, not just from the ToolSet. `release` is not a
     // native tool at all anymore (release.* is codemode-only), so it no
-    // longer needs a gate here.
-    expect(source('actor-agent.ts'))
-      .toContain("const DEPS_GATED_TOOLS = ['report'] as const;");
+    // longer needs a gate here. Asserted on the function rather than on the
+    // text of its table: the old pin quoted `const DEPS_GATED_TOOLS =
+    // ['report'] as const;` verbatim, so it broke the moment that array moved
+    // to core, and it would have passed against a gate that dropped nothing.
+    expect(actorActiveTools({})).not.toContain(REPORT_TOOL);
+    expect(actorActiveTools({ report: REPORT_DEPS })).toContain(REPORT_TOOL);
+    // Gating one name costs no other name.
+    expect(actorActiveTools({}).filter((name) => name !== REPORT_TOOL))
+      .toEqual(actorActiveTools({ report: REPORT_DEPS }).filter((name) => name !== REPORT_TOOL));
+  });
+
+  test('every deps-gated tool core declares is answered by this backend', () => {
+    // The compiler cannot hold this: core declares the set as
+    // `readonly BuiltinToolName[]`, which is the right type for a shared list
+    // and cannot key an exhaustive table. So a name added to DEPS_GATED_TOOLS
+    // with no dep check here would silently stay advertised on every actor —
+    // which is the whole failure the gate exists to prevent. This is that check.
+    const ungated = DEPS_GATED_TOOLS.filter((name) => actorActiveTools({}).includes(name));
+    expect(ungated).toEqual([]);
+    // And the set is not vacuously empty, which would make the line above pass
+    // for the wrong reason.
+    expect(DEPS_GATED_TOOLS.length).toBeGreaterThan(0);
   });
 
   test('browser subordinate callables reuse the team policy and are not exposed by the facet', () => {

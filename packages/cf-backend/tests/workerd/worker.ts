@@ -17,6 +17,13 @@ import { DurableObject } from 'cloudflare:workers';
 
 // The one production class hosted here — see steer-probe.ts for the charter exception.
 export { SteerProbeDO } from './steer-probe';
+// The eviction probes — the same charter exception, for the recovery machinery.
+export { EvictionProbeDO, WitnessDO } from './eviction-probe';
+// The step-cap probes — the same charter exception, for the turn loop's bound.
+export { CappedTurnProbeDO, UnboundedTurnProbeDO } from './step-cap-probe';
+// The spend aggregate — the same charter exception, for the one production read
+// whose method is platform SQLite features (`WITH`, `json_extract`).
+export { SpendProbeDO } from './spend-probe';
 import * as v from 'valibot';
 
 /** The storage key `armTimer` commits. Named after the real one so a reader of
@@ -327,7 +334,7 @@ export class SocketDO extends DurableObject<Cloudflare.Env> {
    *  hub has instead of a connection registry. */
   private liveSocket(deviceId: string): WebSocket | null {
     for (const ws of this.ctx.getWebSockets(`device:${deviceId}`)) {
-      if (ws.readyState === WebSocket.READY_STATE_OPEN) return ws;
+      if (ws.readyState === WebSocket.OPEN) return ws;
     }
     return null;
   }

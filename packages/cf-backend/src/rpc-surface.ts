@@ -250,12 +250,14 @@ const USER_DO_METHODS = [
   'registerWorkspace',
   'releaseWorkspaceReservation',
   'removeWorkspace',
+  'renameDevice',
   'reserveWorkspace',
   'requestReleaseApproval',
   'resolveEgressInjection',
   'revokeAccessToken',
   'revokeCliTokenHash',
   'revokeDevice',
+  'revokeDeviceConsent',
   'revokeEgressSecret',
   'searchExperience',
   'selectAIGateway',
@@ -325,6 +327,11 @@ const ACTOR_AGENT_RPC_SURFACE = [
   'headJournalInsertSpawn',
   'headJournalRecordReport',
   'headJournalRecordSplit',
+  // The container's own Durable Object asks the workspace root whether work it
+  // could disturb is still live, and a root asks the same of each subordinate
+  // in its subtree — a subordinate rides its PARENT's container, so both
+  // directions of the tree are reached on a stub.
+  'hasSandboxBackgroundWork',
   'installWorkspaceCapability',
   'listWorkspaceFiles',
   'missionDebit',
@@ -361,6 +368,7 @@ const ACTOR_AGENT_RPC_SURFACE = [
 const ORCHESTRATOR_METHODS = [
   'acceptContainerEvent',
   'acceptEmailDelivery',
+  'acceptSandboxLifecycleFailure',
   'acceptWebhookDelivery',
   'awaitDeviceConsent',
   'beginGenesisTurn',
@@ -378,6 +386,7 @@ const ORCHESTRATOR_METHODS = [
   'listTriggersWire',
   'listRuns',
   'rawCopyFromFork',
+  'readExecutorFileBytes',
   'receivePeerMessage',
   'recordHeadStep',
   'runScaffoldOnce',

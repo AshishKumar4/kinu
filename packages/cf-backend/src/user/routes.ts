@@ -15,8 +15,10 @@
  *   GET    /api/user/credentials                   — key/kind/timestamps only; no secret is readable back
  *   POST   /api/user/credentials/:key              — set
  *   DELETE /api/user/credentials/:key              — delete
- *   GET    /api/user/devices/consents              — per-(agent, device) consent tiers
- *   PUT    /api/user/devices/:id/consent           — set an agent's consent tier on a device
+ *   PATCH  /api/user/devices/:id                   — rename a device (the name every surface shows)
+ *   GET    /api/user/devices/consents              — per-(workspace, device) grants
+ *   PUT    /api/user/devices/:id/consent           — set a workspace's consent tier on a device
+ *   DELETE /api/user/devices/:id/consent           — revoke a workspace's grant on a device
  *   GET    /api/user/codex                         — Codex status
  *   POST   /api/user/codex/start                   — start device flow
  *   POST   /api/user/codex/poll                    — poll device flow
@@ -203,8 +205,17 @@ export async function handleUserRequest(
     try { await stub.revokeDevice(await ownerCaller(env), decodeURIComponent(deviceMatch[1])); return json({ ok: true }); }
     catch (e) { return err(400, renderThrownChain({ cause: e })); }
   }
+  if (deviceMatch && method === 'PATCH') {
+    const body = await safeJson(request, v.object({ name: v.optional(v.string()) }));
+    const name = body?.name?.trim();
+    if (!name) return err(400, 'Body must be { name }');
+    const result = await stub.renameDevice(await ownerCaller(env), decodeURIComponent(deviceMatch[1]), name);
+    if (!result.ok) return err(404, 'device not found');
+    return json({ ok: true });
+  }
 
-  // ── Device consents (per-(agent, device) tier: base vs full filesystem) ──
+  // ── Device grants (per-(workspace, device): may this workspace act, and how
+  //    far into the filesystem) ─────────────────────────────────────────────
   if (path === '/devices/consents' && method === 'GET') {
     return json(await stub.listDeviceConsents(await ownerCaller(env)));
   }
@@ -221,6 +232,15 @@ export async function handleUserRequest(
     }
     const result = await stub.setDeviceConsentScope(await ownerCaller(env), agentName, decodeURIComponent(consentMatch[1]), scope);
     if (!result.ok) return err(400, 'consent scope not updated');
+    return json({ ok: true });
+  }
+  if (consentMatch && method === 'DELETE') {
+    const agentName = url.searchParams.get('agentName')?.trim();
+    if (!agentName) return err(400, 'Query must carry ?agentName=');
+    const result = await stub.revokeDeviceConsent(
+      await ownerCaller(env), agentName, decodeURIComponent(consentMatch[1]),
+    );
+    if (!result.ok) return err(400, 'grant not revoked');
     return json({ ok: true });
   }
 

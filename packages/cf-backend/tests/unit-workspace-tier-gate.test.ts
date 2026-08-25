@@ -113,10 +113,12 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'device.consent', name: 'getDeviceFsConsent', run: (u, c) => u.getDeviceFsConsent(c, WORKSPACE) },
   { capability: 'device.consent', name: 'setDeviceConsentScope', run: (u, c) => u.setDeviceConsentScope(c, WORKSPACE, 'dev-1', 'all_local_actions') },
   { capability: 'device.consent', name: 'listDeviceConsents', run: (u, c) => u.listDeviceConsents(c) },
+  { capability: 'device.consent', name: 'revokeDeviceConsent', run: (u, c) => u.revokeDeviceConsent(c, WORKSPACE, 'dev-1') },
 
   { capability: 'device.manage', name: 'listDevices', run: (u, c) => u.listDevices(c) },
   { capability: 'device.manage', name: 'registerDevice', run: (u, c) => u.registerDevice(c, 'laptop') },
   { capability: 'device.manage', name: 'revokeDevice', run: (u, c) => u.revokeDevice(c, 'dev-1') },
+  { capability: 'device.manage', name: 'renameDevice', run: (u, c) => u.renameDevice(c, 'dev-1', 'studio tower') },
   { capability: 'device.manage', name: 'verifyDeviceToken', run: (u, c) => u.verifyDeviceToken(c, 'pdt_x') },
   { capability: 'device.manage', name: 'issueDeviceConnectTicket', run: (u, c) => u.issueDeviceConnectTicket(c, 'pdt_x') },
   { capability: 'device.manage', name: 'verifyDeviceConnectTicket', run: (u, c) => u.verifyDeviceConnectTicket(c, 'pct_x') },
@@ -568,7 +570,9 @@ describe('facets attenuate with their workspace', () => {
     // this harness's workspace refuses.
     await expect(harness.userDO.deviceRpc(sibling, 'exec', ['ls'], { agentName: WORKSPACE }))
       .rejects.toThrow('device use was not approved');
-    expect(harness.consentPrompts).toEqual([{ workspace: OTHER_WORKSPACE, method: 'exec' }]);
+    expect(harness.consentPrompts).toEqual([{
+      workspace: OTHER_WORKSPACE, method: 'exec', command: 'ls', workspaceName: OTHER_WORKSPACE,
+    }]);
 
     // The remembered grant still belongs to workspace-a alone; being asked did
     // not create one for the caller that tried to borrow it.

@@ -11,7 +11,7 @@ import {
 import { convertFileListToFileUIParts } from "ai";
 import type { FileUIPart } from "ai";
 import {
-  buildTranscript, CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
+  buildTranscript, CLOUD_MAX_INLINE_ATTACHMENT_BYTES, DEVICE_PROVISION_METHOD,
   isPlaceholderMission, planReviewAwaitingDecision, summarizeRestorePlan,
 } from "@kinu.run/core";
 import type {
@@ -113,22 +113,60 @@ export function ConversationSkeleton() {
   );
 }
 
-/** Consent card: an agent wants to use a connected device. */
+/**
+ * Device card. Two shapes, one rail:
+ *   - a device is connected and this workspace has no grant yet, so the agent's
+ *     action is waiting on the owner. "Always allow" IS the grant, per
+ *     workspace, revocable under Account settings → Devices.
+ *   - no device is connected at all (`DEVICE_PROVISION_METHOD`), so the agent
+ *     is asking for one to exist. Approving cannot grant anything by itself —
+ *     it points the owner at the connect flow, which states its own terms.
+ */
 export function DeviceConsentCard({ consent, onResolve }: {
   consent: PendingConsent;
   onResolve: (consentId: string, decision: "once" | "always" | "deny") => void;
 }) {
+  const asking = consent.workspaceName ? `“${consent.workspaceName}”` : "This agent";
+  if (consent.method === DEVICE_PROVISION_METHOD) {
+    return (
+      <div className="p-tint-warning rounded-xl border p-3 animate-fade-in">
+        <div className="flex items-start gap-2">
+          <DesktopTowerIcon size={16} className="p-warning shrink-0 mt-0.5" weight="fill" />
+          <div className="min-w-0 flex-1">
+            <div className="text-xs p-text">
+              {asking} needs a computer of yours and none is connected.
+            </div>
+            <div className="mt-1 text-[11px] p-text-2">{consent.command}</div>
+            <Link to="/user/settings#devices"
+              className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md p-accent-bg p-accent text-[11px] font-medium hover:opacity-90">
+              Connect a device
+            </Link>
+            <div className="mt-1 text-[10px] p-text-3">
+              Connecting states what access it grants and asks you to confirm. Nothing runs here until you do.
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 mt-2.5 justify-end">
+          <button onClick={() => onResolve(consent.consentId, "deny")}
+            className="px-2.5 py-1 text-[11px] rounded-md p-text-3 hover:p-text">Not now</button>
+          <button onClick={() => onResolve(consent.consentId, "once")}
+            className="px-2.5 py-1 text-[11px] p-card p-card-hover p-text-2">Dismiss</button>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="p-tint-warning rounded-xl border p-3 animate-fade-in">
       <div className="flex items-start gap-2">
         <DesktopTowerIcon size={16} className="p-warning shrink-0 mt-0.5" weight="fill" />
         <div className="min-w-0 flex-1">
           <div className="text-xs p-text">
-            This agent wants to use <span className="font-medium">{consent.deviceLabel}</span> for a local action:
+            {asking} wants to use <span className="font-medium">{consent.deviceLabel}</span> for a local action:
           </div>
           <code className="block mt-1 text-[11px] p-text-2 font-mono break-all p-fill rounded-sm px-2 py-1">{consent.command || "(command)"}</code>
           <div className="mt-1 text-[10px] p-text-3">
-            Always allow grants this agent all future local actions on this device until revoked.
+            Always allow grants this workspace every local action on {consent.deviceLabel} until you revoke it
+            under Account settings → Devices.
           </div>
         </div>
       </div>
@@ -138,7 +176,7 @@ export function DeviceConsentCard({ consent, onResolve }: {
         <button onClick={() => onResolve(consent.consentId, "once")}
           className="px-2.5 py-1 text-[11px] p-card p-card-hover p-text-2">Allow once</button>
         <button onClick={() => onResolve(consent.consentId, "always")}
-          className="px-2.5 py-1 text-[11px] rounded-md font-medium p-accent-bg p-accent hover:opacity-90">Always allow local</button>
+          className="px-2.5 py-1 text-[11px] rounded-md font-medium p-accent-bg p-accent hover:opacity-90">Grant this workspace</button>
       </div>
     </div>
   );

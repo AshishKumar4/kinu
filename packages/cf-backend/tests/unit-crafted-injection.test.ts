@@ -8,13 +8,12 @@
 // disappears from the sandbox preamble too.
 import { describe, test, expect, mock } from "bun:test";
 import type { CraftedTool, CraftStore } from "@kinu.run/core";
-import { craftFailureMarker, initCraftScoreTables } from "@kinu.run/core";
+import { craftFailureMarker, craftedDispatcherEntry, initCraftScoreTables } from "@kinu.run/core";
 import { createTestSql } from "@kinu.run/test-utils";
 
 // @cloudflare/codemode (the DWE import) needs the workerd-only module.
 mock.module("cloudflare:workers", () => ({ RpcTarget: class {}, WorkerEntrypoint: class {}, DurableObject: class {} }));
 const { selectInjectableCraftedTools, buildToolsPreamble, injectPreamble } = await import("../src/crafted-tool-registry");
-const { craftedDispatcherEntry } = await import("../src/execute-tools");
 
 function makeCraftStore(tools: Array<{ name: string; code: string; description?: string }>): CraftStore {
   const rows: CraftedTool[] = tools.map((t) => ({
@@ -147,10 +146,18 @@ describe("selectInjectableCraftedTools — one policy with core", () => {
   });
 
   test("codemode.<name> raises and names the form that works", async () => {
-    // The dispatcher entry exists so the sandbox TYPES declare the crafted
-    // name; the callable body is the preamble's `tools.<name>`. Returning an
-    // error object here would read as a successful call to both the model and
-    // the runtime — including the in-episode fitness observer.
+    // The entry this sandbox seeds its `codemode` namespace with, and therefore
+    // the contract this backend's crafted surface stands on. It exists so the
+    // sandbox TYPES declare the crafted name; the callable body is the
+    // preamble's `tools.<name>` built above. Returning an error object instead
+    // of throwing would read as a successful call to both the model and the
+    // runtime — including the in-episode fitness observer.
+    //
+    // The entry and its sentence moved to core (tools/sandbox-contract.ts)
+    // because this backend threw its own copy while the CLI sandbox bound the
+    // crafted set under BOTH names, so the same model-authored code ran locally
+    // and failed in the cloud. Asserted here as consumption: if the shared
+    // correction stops naming the working form, this sandbox's contract breaks.
     const entry = craftedDispatcherEntry("doubleIt", "doubles");
     expect(entry.description).toBe("doubles");
     const err = await rejectionOf(entry.execute());

@@ -10,6 +10,11 @@ const { spawn, spawnSync, execFileSync } = require('node:child_process');
 
 const CONFIG_PATH = path.join(os.homedir(), '.kinu', 'device.json');
 
+/** The hub's token-rotation frame type. Pinned against core's
+ *  DEVICE_TOKEN_ROTATION in cf-backend's device-hub test: this daemon ships as
+ *  one dependency-free file and cannot import the constant. */
+const TOKEN_ROTATION = 'ROTATE';
+
 /** Drain window after an exec'd command's own exit, before we stop reading the
  *  pipes an orphaned grandchild may still hold. Mirrors EXITED_COMMAND_DRAIN_MS
  *  in cli-backend/src/runtime.ts — this daemon ships as one dependency-free
@@ -691,7 +696,19 @@ function main() {
         const payload = ev.data instanceof ArrayBuffer
           ? new TextDecoder().decode(ev.data)
           : String(ev.data);
-        handle(JSON.parse(payload), ws, ctx);
+        const msg = JSON.parse(payload);
+        // The hub rotates this machine's long-lived token on every accepted
+        // connect and hands the next one down this socket. Persisting it is
+        // what makes a COPY of device.json stale: the copy keeps a secret the
+        // server has already superseded. Written before anything else is
+        // handled, and with the same 0600 the installer used.
+        if (msg && msg.type === TOKEN_ROTATION && msg.token != null && msg.token !== '') {
+          cfg.token = msg.token;
+          fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2) + '\n', { mode: 0o600 });
+          log('Device token rotated');
+          return;
+        }
+        handle(msg, ws, ctx);
       }
       catch (err) { log('parse error:', err); }
     });

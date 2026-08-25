@@ -38,9 +38,16 @@
  *   /gallery.html?frame=releases → the Releases board with a pending approval
  *   /gallery.html?frame=work     → the Work surface: needs-you, the plan and
  *                                  running jobs, and the settled journal
+ *   /gallery.html?frame=planreview → the active plan document, with the real
+ *                                  Plannotator viewer and annotation rail
  *   /gallery.html?frame=workempty → the same column before anything has happened
  *   /gallery.html?frame=environment → the Environment surface: every place the
  *                                  agent can act, as one row set
+ *   /gallery.html?frame=files    → the Files tab: the composite drive (the
+ *                                  workspace tree with /pc and /sandbox as
+ *                                  mounted folders), stateful, so rename and
+ *                                  delete are provable; `&offline=laptop`
+ *                                  photographs the disconnected-device row
  *   /gallery.html?frame=supervise → the Supervise altitude, every block populated
  *   /gallery.html?frame=settings → the per-agent Settings page
  *   /gallery.html?frame=forks    → Exploration on a real 106-node, depth-6
@@ -90,6 +97,7 @@ import { WorkspaceBar, InlineRenameTitle } from "@/components/WorkspaceBar";
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { BranchRunChip } from "@/components/AlternateTakes";
 import { WorkSurface, ACTIVITY_SURFACE, type SurfaceKind } from "@/components/surfaces/WorkSurface";
+import PlanReviewView from "@/components/surfaces/PlanReviewView";
 import { AgentViewSurface } from "@/components/surfaces/AgentViewSurface";
 import { ReleasesSurface } from "@/components/surfaces/ReleasesSurface";
 import { AgentSurface } from "@/components/surfaces/AgentSurface";
@@ -112,8 +120,8 @@ import { AddServerCard } from "@/pages/UserMcpPage";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
 import {
   BUILTIN_TOOLS, BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS, CHARS_PER_TOKEN, TOOL_REACH,
-  JsonObjectSchema, JsonValueSchema, mergeTranscript, seekPage,
-  type JsonValue, type PlanReview,
+  JsonObjectSchema, JsonValueSchema, mergeTranscript, seekPage, sortDirEntries,
+  type JsonValue, type PlanReview, type PlanReviewAnnotation,
 } from "@kinu.run/core";
 import type { ActivitySnapshot, BackgroundJob, ForkNode, Rpc, ToolInfo } from "@/lib/protocol";
 import { buildTree, type MctsRow } from "@/lib/fork-tree-rows";
@@ -588,13 +596,90 @@ const GALLERY_SUBS: {
   status: string; currentTask: string | null; createdAt: number; dismissedAt: number | null;
 }[] = [];
 let gallerySubSeq = 0;
+const GALLERY_PLAN_MARKDOWN = `# Repair the \`applyCoupon\` eligibility guard
+
+The checkout accepts archived coupons because the eligibility guard reads the campaign state after the discount has already been applied. This plan moves the guard ahead of mutation and keeps the current response contract.
+
+## Scope
+
+- Read the coupon and campaign in one transaction.
+- Reject archived or expired campaigns before any cart row changes.
+- Keep the existing error code for clients that already handle an ineligible coupon.
+
+## Files
+
+\`\`\`text
+packages/
+├── core/
+│   ├── src/checkout/apply-coupon.ts
+│   └── tests/checkout/apply-coupon.test.ts
+└── cf-backend/
+    └── src/routes/checkout.ts
+\`\`\`
+
+## Implementation
+
+1. Move the eligibility check before the cart update in \`applyCoupon\`.
+2. Return the existing \`coupon_ineligible\` result when the campaign is archived or expired.
+3. Keep the route adapter unchanged; it already maps that result to the public response.
+
+## Verification
+
+- Run the focused checkout test with active, archived, and expired campaigns.
+- Exercise the route with the existing gallery fixture.
+- Confirm that a refused coupon leaves the cart total and discount rows unchanged.
+
+## Expected result
+
+The same request either applies one valid coupon atomically or returns \`coupon_ineligible\` without changing the cart.`;
+
+/* `?plan=late-heading` puts the plan's only h1 mid-document, where the agent
+   wrote it. `?plan=annotated-heading` anchors a stored annotation to the
+   LEADING h1. The header must refuse to promote either: the first would
+   silently reorder the document, and the second would strand an anchor the
+   highlighter can only resolve inside the viewer's own article.
+   `?plan=read-only` is a settled plan, where the viewer's floating action strip
+   holds nothing the reader may still press. All three are reachable so a
+   browser can measure them rather than a reader finding them. */
+const GALLERY_PLAN_VARIANT = new URLSearchParams(location.search).get("plan");
+
+const GALLERY_PLAN_LATE_HEADING = `The guard runs after the discount lands, so an archived coupon still applies.
+
+# Rejected: map the failure at the edge
+
+Mapping it in the route hides the defect and leaves the cart already mutated.
+
+## Scope
+
+- Read the coupon and campaign in one transaction.`;
+
+const GALLERY_PLAN_TITLE_NOTE: PlanReviewAnnotation = {
+  id: "gallery-plan-title-note",
+  blockId: "block-0",
+  startOffset: 0,
+  endOffset: 10,
+  type: "COMMENT",
+  text: "Name the guard this repairs.",
+  originalText: "Repair the",
+  createdA: NOW,
+  author: "Owner",
+};
+
+const GALLERY_PLAN_CONTENT = GALLERY_PLAN_VARIANT === "late-heading"
+  ? GALLERY_PLAN_LATE_HEADING
+  : GALLERY_PLAN_MARKDOWN;
+const GALLERY_PLAN_ANNOTATIONS: readonly PlanReviewAnnotation[] =
+  GALLERY_PLAN_VARIANT === "annotated-heading" ? [GALLERY_PLAN_TITLE_NOTE] : [];
+const GALLERY_PLAN_STATUS: PlanReview["status"] =
+  GALLERY_PLAN_VARIANT === "read-only" ? "superseded" : "pending";
+
 let galleryAgentPlan: PlanReview = {
   id: "gallery-agent-plan",
   sessionId: "default",
   revision: 1,
-  content: "# Additional agent plan\n\n1. Inspect the checkout path.\n2. Fix the coupon guard.\n3. Run the focused tests.",
-  status: "pending",
-  annotations: [],
+  content: GALLERY_PLAN_CONTENT,
+  status: GALLERY_PLAN_STATUS,
+  annotations: GALLERY_PLAN_ANNOTATIONS,
   feedback: null,
   handoffAccepted: false,
   createdAt: NOW,
@@ -615,7 +700,7 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
     galleryAgentPlan = {
       ...galleryAgentPlan,
       status: "pending",
-      annotations: [],
+      annotations: GALLERY_PLAN_ANNOTATIONS,
       feedback: null,
       handoffAccepted: false,
       updatedAt: NOW,
@@ -3082,6 +3167,14 @@ const workRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
   if (method === "getEvolutionChangelog") return rpcResult(CHANGELOG).json<T>();
   return stubRpc<T>(method, args);
 };
+function PlanReviewFrame() {
+  return (
+    <div data-gallery-plan-review className="p-bg p-text h-screen">
+      <PlanReviewView plan={galleryAgentPlan} rpc={workspacePageRpc} />
+    </div>
+  );
+}
+
 
 function WorkFrame() {
   return (
@@ -3182,6 +3275,9 @@ function WorkEmptyFrame() {
 const ENVIRONMENT_EXECUTORS: ExecutorInfo[] = [
   {
     name: "laptop", kind: "laptop", available: true, configured: true, active: true, status: "active",
+    // The user's own name for the device, exactly as the consent contract
+    // carries it — the card renders THIS, never "laptop".
+    label: "Ashish's MacBook",
     capabilities: ["shell", "npm", "git", "docker", "fs_owned", "process_spawn"],
   },
   {
@@ -3194,71 +3290,164 @@ const ENVIRONMENT_EXECUTORS: ExecutorInfo[] = [
   },
 ];
 
-const ENVIRONMENT_MOUNTS: MountInfo[] = ENVIRONMENT_EXECUTORS.map((exec) => ({
-  name: exec.name,
-  prefix: `${exec.name}.*`,
-  live: true,
-  policy: {
-    readOnly: false,
-    consistency: exec.name === "workspace" ? "durable"
-      : exec.name === "laptop" ? "live-shared" : "ephemeral",
-  },
-  reason: null,
-}));
 
-/** The workspace's real shape: a home under a real root, so the frame
- *  photographs the breadcrumb and the walk-up affordances with something to
- *  walk up TO. A frame that only ever shows one directory cannot show that
- *  the parent button is broken — which is how it stayed broken. */
-const ENVIRONMENT_HOME = "/home/user";
-const ENVIRONMENT_TREE = {
-  "/": [{ name: "home", type: "dir" }, { name: "etc", type: "dir" }, { name: "tmp", type: "dir" }],
-  "/home": [{ name: "user", type: "dir" }],
-  "/home/user": [
-    { name: "head-3-scratch", type: "dir" },
-    { name: "head-4-scratch", type: "dir" },
-    { name: "memory", type: "dir" },
-    { name: "skills", type: "dir" },
-    { name: "AGENTS.md", type: "file", size: 2_148 },
-    { name: "SOUL.md", type: "file", size: 913 },
-    { name: "notes.md", type: "file", size: 4_402 },
-    { name: "ranked.txt", type: "file", size: 4_089_446 },
-  ],
-} satisfies Record<string, DirEntry[]>;
+/* ── Files — the composite drive ────────────────────────────────── */
 
-function EnvironmentFrame() {
-  // Answers only for the executor that actually owns these files. A stub that
-  // returned the same listing for every argument would photograph a pane
-  // asking the wrong environment as though it worked.
-  const envRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-    if (method === "listMounts") return rpcResult(ENVIRONMENT_MOUNTS).json<T>();
+/**
+ * The drive's scripted composite plane: the workspace tree with /pc and
+ * /sandbox mounted, held MUTABLE inside the frame so the browser gate can
+ * prove rename and delete against the real components. Contents feed the
+ * text preview; `binary-weights.bin` exercises the honest binary refusal.
+ */
+function seedCompositeTree(offlineLaptop: boolean): Map<string, DirEntry[]> {
+  const tree = new Map<string, DirEntry[]>([
+    ["/", [
+      { name: "home", type: "dir", mtimeMs: NOW - 4 * 36e5 },
+      ...(offlineLaptop ? [] : [{ name: "pc", type: "dir" as const, mtimeMs: NOW - 60e3 }]),
+      { name: "sandbox", type: "dir", mtimeMs: NOW - 30 * 60e3 },
+    ]],
+    ["/home", [{ name: "user", type: "dir", mtimeMs: NOW - 4 * 36e5 }]],
+    ["/home/user", [
+      { name: "memory", type: "dir", mtimeMs: NOW - 26e5 },
+      { name: "skills", type: "dir", mtimeMs: NOW - 20 * 864e5 },
+      { name: "AGENTS.md", type: "file", size: 2_148, mtimeMs: NOW - 3 * 864e5 },
+      { name: "SOUL.md", type: "file", size: 913, mtimeMs: NOW - 9 * 864e5 },
+      { name: "notes.md", type: "file", size: 4_402, mtimeMs: NOW - 42e5 },
+      { name: "binary-weights.bin", type: "file", size: 4_089_446, mtimeMs: NOW - 6 * 864e5 },
+    ]],
+    ["/home/user/memory", [{ name: "MEMORY.md", type: "file", size: 1_204, mtimeMs: NOW - 26e5 }]],
+    ["/home/user/skills", [{ name: "sql-triage.md", type: "file", size: 2_010, mtimeMs: NOW - 20 * 864e5 }]],
+    ["/sandbox", [{ name: "workspace", type: "dir", mtimeMs: NOW - 30 * 60e3 }]],
+    ["/sandbox/workspace", [
+      { name: "build.log", type: "file", size: 18_211, mtimeMs: NOW - 31 * 60e3 },
+      { name: "dist", type: "dir", mtimeMs: NOW - 30 * 60e3 },
+    ]],
+    ["/sandbox/workspace/dist", [{ name: "app.js", type: "file", size: 220_114, mtimeMs: NOW - 30 * 60e3 }]],
+  ]);
+  if (!offlineLaptop) {
+    tree.set("/pc", [{ name: "home", type: "dir", mtimeMs: NOW - 60e3 }]);
+    tree.set("/pc/home", [{ name: "dev", type: "dir", mtimeMs: NOW - 60e3 }]);
+    tree.set("/pc/home/dev", [
+      { name: "quarterly-report.txt", type: "file", size: 8_412, mtimeMs: NOW - 2 * 36e5 },
+      { name: "shot.png", type: "file", size: 1_204_002, mtimeMs: NOW - 5 * 36e5 },
+    ]);
+  }
+  return tree;
+}
+
+const FILES_TEXT = {
+  "/home/user/notes.md": "# Checkout coupon regression\n\n- kind:null rows come from the 0412 migration\n- the serializer guards only percentage coupons\n- fix drafted in packages/checkout/src/apply-coupon.ts\n",
+  "/home/user/SOUL.md": "I keep this workspace's changes small and proven.\n",
+  "/home/user/AGENTS.md": "## Working agreements\n\nRun the checkout suite before claiming a fix.\n",
+  "/pc/home/dev/quarterly-report.txt": "Q3 numbers, draft 2 — do not circulate.\n",
+  "/sandbox/workspace/build.log": "$ bun run build\nbundled 412 modules in 1.9s\nok\n",
+} satisfies Record<string, string>;
+
+/**
+ * ONE stateful frame for both the Environment tab and the Files drive: the
+ * surface strip is live (`onSurface` is real state), so an Environment card's
+ * Files action genuinely lands the drive — the exact wiring the browser gate
+ * proves. `frame=environment` and `frame=files` differ only in where they
+ * start and how wide they photograph.
+ */
+function DriveFrame({ initialSurface, offlineLaptop, width }: {
+  initialSurface: SurfaceKind;
+  offlineLaptop: boolean;
+  width: string;
+}) {
+  const [surface, setSurface] = useState<SurfaceKind>(initialSurface);
+  const executors = useMemo<ExecutorInfo[]>(() => offlineLaptop
+    ? ENVIRONMENT_EXECUTORS.map((exec) => exec.name === "laptop"
+      ? { ...exec, available: false, active: false, status: "disconnected" as const, reason: "no device connected" }
+      : exec)
+    : ENVIRONMENT_EXECUTORS, [offlineLaptop]);
+  const tree = useRef<Map<string, DirEntry[]> | null>(null);
+  if (tree.current === null) tree.current = seedCompositeTree(offlineLaptop);
+  const text = useRef<Map<string, string> | null>(null);
+  if (text.current === null) text.current = new Map(Object.entries(FILES_TEXT));
+
+  const mounts: MountInfo[] = [
+    { name: "workspace", prefix: "workspace.*", live: true, policy: { readOnly: false, consistency: "durable" }, reason: null },
+    offlineLaptop
+      ? { name: "laptop", prefix: "laptop.*", live: false, policy: { readOnly: false, consistency: "live-shared" }, reason: "no device connected" }
+      : { name: "laptop", prefix: "laptop.*", live: true, policy: { readOnly: false, consistency: "live-shared" }, reason: null },
+    { name: "sandbox", prefix: "sandbox.*", live: true, policy: { readOnly: false, consistency: "ephemeral" }, reason: null },
+  ];
+
+  const filesRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+    const store = tree.current!;
+    const contents = text.current!;
+    const dirOf = (p: string) => p.slice(0, p.lastIndexOf("/")) || "/";
+    const nameOf = (p: string) => p.slice(p.lastIndexOf("/") + 1);
+    if (method === "listMounts") return rpcResult(mounts).json<T>();
     if (method === "getExecutorFiles") {
-      const parsedArgs = v.parse(v.tuple([v.string(), v.string()]), args ?? []);
-      const [execName, path] = parsedArgs;
-      if (execName !== "workspace") {
-        return rpcResult({ error: `Executor "${execName}" has no listing for ${path} in this frame` }).json<T>();
+      const [execName, path] = v.parse(v.tuple([v.string(), v.string()]), args ?? []);
+      if (execName !== "workspace") return rpcResult({ error: `Executor "${execName}" has no listing here` }).json<T>();
+      const dir = path === "" ? "/" : path;
+      const entries = store.get(dir);
+      return rpcResult(entries === undefined ? { error: `ENOENT: ${dir}` } : { path: dir, entries }).json<T>();
+    }
+    if (method === "readExecutorFile") {
+      const [, path] = v.parse(v.tuple([v.string(), v.string()]), args ?? []);
+      const content = contents.get(path);
+      return rpcResult(content === undefined
+        ? { error: "binary file — not previewable" }
+        : { content }).json<T>();
+    }
+    if (method === "renameExecutorFile") {
+      const [, from, to] = v.parse(v.tuple([v.string(), v.string(), v.string()]), args ?? []);
+      const listing = store.get(dirOf(from)) ?? [];
+      const entry = listing.find((e) => e.name === nameOf(from));
+      if (!entry) return rpcResult({ error: `no such file or directory: ${from}` }).json<T>();
+      if ((store.get(dirOf(to)) ?? []).some((e) => e.name === nameOf(to))) {
+        return rpcResult({ error: `${to} already exists` }).json<T>();
       }
-      // The environment resolves an empty path to its own home and names what
-      // it listed — the real contract, so navigation is exercised here.
-      const dir = path === "" ? ENVIRONMENT_HOME : path;
-      const entries = Object.entries(ENVIRONMENT_TREE).find(([key]) => key === dir)?.[1];
-      return rpcResult(entries === undefined
-        ? { error: `ENOENT: ${dir}` }
-        : { path: dir, entries }).json<T>();
+      store.set(dirOf(from), sortDirEntries([
+        ...listing.filter((e) => e !== entry),
+        ...(dirOf(from) === dirOf(to) ? [{ ...entry, name: nameOf(to) }] : []),
+      ]));
+      // Collect first, mutate after: setting new keys while iterating a Map
+      // visits them (spec), and a rename-into-own-subtree shape would loop.
+      const moved = new Map<string, DirEntry[]>();
+      for (const key of store.keys()) {
+        if (key === from || key.startsWith(`${from}/`)) {
+          moved.set(to + key.slice(from.length), store.get(key)!);
+        }
+      }
+      for (const key of moved.keys()) store.delete(from + key.slice(to.length));
+      for (const [key, entries] of moved) store.set(key, entries);
+      const content = contents.get(from);
+      if (content !== undefined) { contents.set(to, content); contents.delete(from); }
+      return rpcResult({ ok: true }).json<T>();
+    }
+    if (method === "deleteExecutorFile") {
+      const [, path] = v.parse(v.tuple([v.string(), v.string()]), args ?? []);
+      const listing = store.get(dirOf(path)) ?? [];
+      if (!listing.some((e) => e.name === nameOf(path))) {
+        return rpcResult({ error: `no such file or directory: ${path}` }).json<T>();
+      }
+      store.set(dirOf(path), listing.filter((e) => e.name !== nameOf(path)));
+      // Map iterators are deletion-safe by spec; no snapshot needed.
+      for (const key of store.keys()) {
+        if (key === path || key.startsWith(`${path}/`)) store.delete(key);
+      }
+      contents.delete(path);
+      return rpcResult({ ok: true }).json<T>();
     }
     return stubRpc<T>(method, args);
   };
+
   return (
     <div className="p-bg min-h-screen flex justify-center">
-      <div className="w-[720px] h-screen border-x p-border">
+      <div className={`${width} h-screen border-x p-border`}>
         <WorkSurface
-          surface="Environment" onSurface={() => {}}
+          surface={surface} onSurface={setSurface}
           pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} agentStatus={null} tools={[]} memory={[]} memoryContent=""
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
-          executors={ENVIRONMENT_EXECUTORS} executorOutputs={new Map()}
+          executors={executors} executorOutputs={new Map()}
           onExecute={async () => ({})} lastActiveExecutor="workspace"
           backgroundJobs={[]} onRefreshJobs={() => {}} pendingActions={[]}
-          rpc={envRpc}
+          rpc={filesRpc}
         />
       </div>
     </div>
@@ -3536,15 +3725,12 @@ const ACTIVITY_SNAPSHOT: ActivitySnapshot = {
     // (23_551_044 + 671_350 - 21_480_312 - 512_884) / (23_551_044 + 671_350)
     offTurnShare: 0.09203045743537984,
     missions: ACTIVITY_MISSIONS,
-    windowLimit: 2000,
-    complete: false,
   },
   log: [],
 };
 
 /** The same workspace on a provider that reports no neurons, with nothing left
- *  to qualify: 100% of known callers reported, every call priced, and the read
- *  reached the end of the log. */
+ *  to qualify: 100% of known callers reported and every call priced. */
 const ACTIVITY_CLEAN: ActivitySnapshot = {
   ...ACTIVITY_SNAPSHOT,
   latest: { ...ACTIVITY_LATEST, usage: { input: 148_204, output: 1_842, cacheRead: 131_072, reasoning: 604 } },
@@ -3561,8 +3747,6 @@ const ACTIVITY_CLEAN: ActivitySnapshot = {
     // (23_166_830 + 627_444 - 21_480_312 - 512_884) / (23_166_830 + 627_444)
     offTurnShare: 0.07569375724596598,
     missions: [],
-    windowLimit: 2000,
-    complete: true,
   },
 };
 
@@ -3583,8 +3767,6 @@ const ACTIVITY_FRESH: ActivitySnapshot = {
     coverage: { calls: 0, measured: 0, reported: null, silent: [], partial: [] },
     offTurnShare: null,
     missions: [],
-    windowLimit: 2000,
-    complete: true,
   },
   log: [],
 };
@@ -4148,9 +4330,28 @@ async function mount() {
   else if (frame === "releases") node = <ReleasesFrame />;
   else if (frame === "releasesoffline") node = <ReleasesFrame executors={RELEASE_EXECUTORS_OFFLINE} />;
   else if (frame === "work") node = <WorkFrame />;
+  else if (frame === "planreview") node = <PlanReviewFrame />;
   else if (frame === "workempty") node = <WorkEmptyFrame />;
   else if (frame === "approvals") node = <ApprovalsFrame />;
-  else if (frame === "environment") node = <EnvironmentFrame />;
+  // The Environment tab and the composite drive share one stateful frame, so
+  // an Environment card's Files action genuinely lands the drive. Routed: the
+  // Files surface reads `agentId` off the route to address the raw-bytes HTTP
+  // route. `&offline=laptop` photographs the stated-absence row for a
+  // disconnected device; `&wide=1` the ≥64rem side-panel preview.
+  else if (frame === "environment" || frame === "files") {
+    const params = new URLSearchParams(location.search);
+    entries = ["/workspace/checkout-fixes"];
+    node = (
+      <Routes>
+        <Route path="/workspace/:agentId"
+          element={<DriveFrame
+            initialSurface={frame === "files" ? "Files" : "Environment"}
+            offlineLaptop={params.get("offline") === "laptop"}
+            width={params.get("wide") === null ? (frame === "files" ? "w-[860px]" : "w-[720px]") : "w-[1240px]"}
+          />} />
+      </Routes>
+    );
+  }
   else if (frame === "supervise") node = <SuperviseFrame />;
   // Three states of one block: every qualifier live, nothing left to qualify,
   // and a workspace that has spent nothing at all.

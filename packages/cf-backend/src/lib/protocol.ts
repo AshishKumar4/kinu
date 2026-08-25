@@ -222,8 +222,10 @@ export interface ReleaseBoard {
 	deployments: ReleaseDeployment[];
 }
 
-/** A pending device-consent request — an agent wants to run a command on a
- *  connected device; the user decides (Allow once / Always / Deny). */
+/** A pending device request — either an agent wants to act on a connected
+ *  device, or (method `connect`) it is asking for a device to exist at all.
+ *  The user decides (Allow once / Always / Deny); `always` IS the per-workspace
+ *  grant. */
 export interface PendingConsent {
 	consentId: string;
 	deviceLabel: string;
@@ -231,6 +233,8 @@ export interface PendingConsent {
 	command: string;
 	scope: "all_local_actions";
 	createdAt: number;
+	/** The workspace whose grant is being decided, when a workspace asked. */
+	workspaceName?: string;
 }
 
 /**

@@ -148,6 +148,7 @@ import {
   type ExecutorDiffResult, type WorkspaceDiffResult,
   diffLines, type DiffLine,
   getExecutorFiles, readExecutorFile, writeExecutorFileOp, listEnvironments,
+  readExecutorFileBytes, renameExecutorPathOp, deleteExecutorPathOp,
   type DirEntry, type ExecutorWriteResult,
   cancelBackgroundJob, clearBackgroundJobs, dismissBackgroundJob,
   jobResult, listBackgroundJobs, retryBackgroundJob, reconcileInterruptedForks,
@@ -161,6 +162,9 @@ import {
   getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
   planReviewAwaitingDecision,
   JsonValueSchema, type JsonValue, type KinuEvent,
+  // The one declaration of the event-variant set, and the one classifier that
+  // names how a run ended. Both were hand-mirrored here.
+  EVENT_VARIANTS, classifyRunEnd,
   type WorkMode,
   resolveModelRoute, type ResolvedTurnProfile,
 } from "@kinu.run/core";
@@ -181,7 +185,7 @@ import {
   TURN_AUTHOR_METADATA_KEY,
 } from "@kinu.run/core";
 import type { CodemodeProvider, MctsSearchRunSummary } from "@kinu.run/core";
-import { classify, diagnostics, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
+import { classify, diagnostics, renderCauseChain, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import { deliverCloudFork } from "./user/workspace-fork";
 import { createNimbusWorkspaceSandbox, nimbusWorkspaceArchiveFiles } from './nimbus-route';
@@ -190,6 +194,10 @@ import {
   createEmailThreadDispatcher, dispatchEmailRepliesForTurn, sendOwnerEmail,
 } from "./email/outbound";
 import { EmailOutbox } from "./email/outbox";
+import {
+  acceptSandboxLifecycleFailure, initSandboxLifecycleTable,
+  type SandboxLifecycleFailureResult,
+} from "./sandbox-lifecycle";
 
 const STALE_EVENT_DELIVERY_MS = 10 * 60 * 1000;
 
@@ -248,11 +256,13 @@ const FileRestoreResultSchema = v.object({
 const CheckpointAvailabilitySchema = v.object({
   available: v.boolean(), reason: v.optional(v.string()),
 });
-const EventVariantSchema = v.picklist([
-  'chat', 'webhook', 'process_done', 'timer', 'peer_agent', 'subordinate_task',
-  'subordinate_report', 'file_changed', 'email', 'internal', 'reply_request',
-  'mcp_chat', 'mcp_third_party',
-]);
+/** The route validator for `?variant=`, built FROM core's array rather than
+ *  beside it. The thirteen literals used to be hand-listed here: a fourteenth
+ *  variant compiled in core and then silently failed validation on this route,
+ *  because a picklist of strings cannot be checked against a union of strings.
+ *  `EVENT_VARIANTS` is now the one declaration and `EventVariant` derives from
+ *  it, so the two cannot disagree. */
+const EventVariantSchema = v.picklist(EVENT_VARIANTS);
 /** One row of the events read: the log's row minus its own plumbing
  *  (`schema_version`, `dedupe_key`, `reply_channel`), which no operator surface
  *  shows. Derived from core's event so a field renamed there fails here rather
@@ -873,15 +883,9 @@ export class OrchestratorAgent extends ActorAgent {
     // before the early return is the point: an interrupted turn is exactly the
     // one whose messages were being lost.
     reconcileSessionTree(this.boundSql);
-    if (result.status !== "completed") {
-      // An aborted/errored live turn leaves nothing to compare a branch
-      // against — and any takes its think-mcts runs captured competed for an
-      // answer that no longer exists, so the next turn must not claim them.
-      purgeUnclaimedAlternateTakes(this.boundSql);
-      this.settlePendingBranches(null, '');
-      return;
-    }
-
+    // Everything the settle needs, read BEFORE the status branch: an aborted
+    // turn carries a message too (partial chunks are persisted, so `parts` is
+    // simply empty), and its text and its user turn are what make it evidence.
     const userMessages = this.messages.filter(m => m.role === "user");
     const lastUserMsg = programmaticUserMessage ?? userMessages[userMessages.length - 1];
     const userText = lastUserMsg?.parts
@@ -894,13 +898,55 @@ export class OrchestratorAgent extends ActorAgent {
       .map(p => p.text)
       .join("") ?? "";
 
-    // Extension seam: the turn settled and was durably persisted — the same
-    // onTurnEnd contract runChat fires on the CLI (final text + the turn's
-    // response messages in ModelMessage shape).
-    await this.extensions.emitTurnEnd({
-      text: assistantText,
-      responseMessages: await convertToModelMessages([result.message], { ignoreIncompleteToolCalls: true }),
+    // The turn record, for every status. `hadError` comes off the accumulator's
+    // per-step flag, and core's settle corrects it on the `'error'` arm — a turn
+    // can throw outside the accumulator's view, and the driver's own verdict is
+    // the better witness there.
+    const turn: CompletedTurn = snapshotCompletedTurn(this.acc, {
+      userMessage: userText,
+      assistantResponse: assistantText,
+      turnId: result.message.id,
+      sessionId: 'default',
+      origin: programmaticUserMessage || this.lastUserTurnIsProgrammatic() ? 'programmatic' : 'user',
     });
+    // The actor-generic settle spine (ActorAgent.settleTurnSpine over core's
+    // AgentOrchestrator.settleTurn) decides what follows from HOW the turn
+    // ended: the outcome review buffers it, the session cadence counts it, the
+    // extension turn-end fires, and pending events drain — on a failed turn as
+    // much as a settled one. This used to early-return on any status but
+    // 'completed', so a failed cloud turn reached none of those while the same
+    // turn on the CLI reached all of them, and failures are the most informative
+    // evidence the evolution loop has. The comment that justified the early
+    // return covered only the takes purge beside it, never the recording.
+    const settle = () => this.settleTurnSpine({
+      status: classifyRunEnd({
+        completed, interrupted: result.status === 'aborted', errorText,
+        // Think reports 'completed' for a turn its own stop condition cut, so
+        // the model's last word is the only thing that can tell the two apart.
+        lastFinishReason: this.acc.lastFinishReason,
+      }).reason,
+      turn,
+      // The same onTurnEnd contract runChat fires on the CLI: final text plus
+      // the turn's response messages in ModelMessage shape.
+      onTurnEnd: async () => {
+        await this.extensions.emitTurnEnd({
+          text: assistantText,
+          responseMessages: await convertToModelMessages(
+            [result.message], { ignoreIncompleteToolCalls: true },
+          ),
+        });
+      },
+    });
+
+    if (result.status !== "completed") {
+      // An aborted/errored live turn leaves nothing to compare a branch
+      // against — and any takes its think-mcts runs captured competed for an
+      // answer that no longer exists, so the next turn must not claim them.
+      purgeUnclaimedAlternateTakes(this.boundSql);
+      this.settlePendingBranches(null, '');
+      await settle();
+      return;
+    }
 
     const msgId = result.message.id;
     // Alternate Takes and steer branches were both captured mid-turn, before
@@ -965,26 +1011,17 @@ export class OrchestratorAgent extends ActorAgent {
       if (injected.replyTurnId) void this.completeEventBatch(injected.replyTurnId, assistantText);
     }
 
-    // status is "completed" here (the !== "completed" early-return above), so
-    // turn errors are tracked via the accumulator's per-step hadError flag.
-    const turn: CompletedTurn = snapshotCompletedTurn(this.acc, {
-      userMessage: userText,
-      assistantResponse: assistantText,
-      turnId: msgId,
-      sessionId: 'default',
-      origin: programmaticUserMessage || this.lastUserTurnIsProgrammatic() ? 'programmatic' : 'user',
-    });
+    // The settle spine, on the completed path: it fires the extension turn-end,
+    // buffers the turn for the outcome review the NEXT user message grades,
+    // counts the session-reflection cadence, holds the DO open for the detached
+    // evolution work, queues the sampled shadow trial the promotion gate draws
+    // on, dispatches the advisor — and drains the pending events this method
+    // used to drain on its own last line. A PLAN turn reaches it too and records
+    // nothing: core's `turnEvolutionEnabled` gate owns that rule, so plan mode
+    // is no longer a condition spelled here.
+    await settle();
 
-    // The shared evolution spine (ActorAgent.settleCompletedTurn): the core
-    // AgentOrchestrator's cadence — session-reflection counter (firing
-    // engine.onSessionComplete every N turns) + this turn buffered for its
-    // outcome review, which the NEXT user message grades — plus the keepAlive
-    // that outlives Think's turn wrapper, plus the sampled shadow trial that
-    // gives the promotion gate its evidence about whatever that cadence
-    // proposed.
     if (turnMode !== 'plan') {
-      this.settleCompletedTurn(turn);
-
       // Sleep-time compute — between-turn background memory compression.
       // Reads recent turn, asks a judge to upsert/decay the agent_facts world
       // model. Letta-style; ~50% test-time token reduction reported. Gated by
@@ -1003,13 +1040,6 @@ export class OrchestratorAgent extends ActorAgent {
       // enough new turns have accrued. Fire-and-forget; no-op when disabled.
       this.maybeRunAutoGepa();
     }
-
-    // Reactor drain-then-stop: handle any external events still pending (arrived
-    // during this turn, or queued before a chat turn). No-op when none — so this
-    // self-terminates once the external event backlog is empty. Deliberately
-    // IMMEDIATE (not scheduleDrain): the just-finished turn already coalesced
-    // everything that arrived during it, so there is no burst left to debounce.
-    void this.orch.drainPendingEvents();
   }
 
   /** Background memory compression. Reads recent turn, updates agent_facts.
@@ -1178,6 +1208,7 @@ export class OrchestratorAgent extends ActorAgent {
           method: consent.method,
           command: consent.command,
           scope: consent.scope,
+          workspaceName: consent.workspaceName ?? null,
         }));
         return;
       }
@@ -1315,6 +1346,11 @@ export class OrchestratorAgent extends ActorAgent {
       tool_names TEXT NOT NULL,
       created_at INTEGER NOT NULL
     )`);
+    // The container's own lifecycle failures, so an incident is announced once
+    // and stays readable afterwards. Owned by this root because the container
+    // is the WORKSPACE's — a subordinate rides its parent's and has none of
+    // its own to report.
+    initSandboxLifecycleTable(execRaw);
 
     this._schemaReady = true;
   }
@@ -2550,7 +2586,7 @@ export class OrchestratorAgent extends ActorAgent {
       });
       // Before destroy(): the container object owns its /workspace snapshot, and
       // once its storage is gone nothing knows which R2 objects were its.
-      await sb.discardWorkspaceSnapshot();
+      await sb.discardState();
       await sb.destroy();
     }
     await createNimbusWorkspaceSandbox(this.env, ownerUserId, this.name).destroy({
@@ -2629,10 +2665,14 @@ export class OrchestratorAgent extends ActorAgent {
    * The Activity surface: what the newest request cost, what it was made of,
    * how the recent ones have behaved — and what the WHOLE workspace spent.
    *
-   * The retained sample is the run-event log itself — `step_finish` rows are
-   * durable and indexed by type, so the percentile has a real window without a
-   * second store. `steps` bounds it, and the bound is reported back on the
-   * result so the reader can see what the numbers are over.
+   * `steps` bounds the SAMPLE and nothing else. `telemetry` is a distribution
+   * over recent steps — a cache-hit EMA and a p95 — so it needs a window, and
+   * the bound comes back on the result so a reader can see what the rates are
+   * over. `spend` is a SUM and takes no window at all: it is summed in SQL over
+   * every row the log holds, so no `steps` a caller passes can turn the
+   * workspace total into a floor. That used to be possible and it was invisible:
+   * a caller asking for 2000 got 400, and the panel said "newest 400 rows" in
+   * small text beside a figure the owner decides on.
    *
    * `telemetry` and `spend` answer two different questions and are deliberately
    * not merged. `telemetry` is THIS AGENT'S OWN TURNS: its prefix-cache EMA only
@@ -2673,8 +2713,10 @@ export class OrchestratorAgent extends ActorAgent {
       // per-mission rows. `this.budget.snapshot()` is deliberately NOT read
       // beside it — it answers a narrower question (the labels the turn in
       // flight is under) out of the same ledger, and two mission figures on one
-      // panel is how a reader learns to distrust both.
-      spend: workspaceSpend({ events: this.eventRecorder, sql: this.boundSql }, { windowLimit }),
+      // panel is how a reader learns to distrust both. No window: the producer
+      // rows are summed over the whole log, so this is the total rather than the
+      // newest slice of it.
+      spend: workspaceSpend({ events: this.eventRecorder, sql: this.boundSql }),
       log: readActivityLog(this.boundSql, logLimit),
     };
   }
@@ -3061,6 +3103,59 @@ export class OrchestratorAgent extends ActorAgent {
     return writeExecutorFileOp(this.rt.executionRouter, executorId, path, bytes);
   }
 
+  /** Rename one entry for the file manager — native where the plane renames
+   *  natively, a byte carry for a file elsewhere, a stated refusal for a
+   *  directory that only bytes could carry. Never overwrites. */
+  @callable() async renameExecutorFile(executorId: string, from: string, to: string): Promise<ExecutorWriteResult> {
+    if (!this.rt.executionRouter) return { error: 'no execution router' };
+    return renameExecutorPathOp(this.rt.executionRouter, executorId, from, to);
+  }
+
+  /** Delete one entry for the file manager. A directory rides the plane's
+   *  native tree removal where one exists and goes entry by entry elsewhere. */
+  @callable() async deleteExecutorFile(executorId: string, path: string): Promise<ExecutorWriteResult> {
+    if (!this.rt.executionRouter) return { error: 'no execution router' };
+    return deleteExecutorPathOp(this.rt.executionRouter, executorId, path);
+  }
+
+  /** Raw bytes of one file — the download/preview half of the HTTP route that
+   *  writeExecutorFile is the upload half of, and off the same plane. Not a
+   *  @callable for the same reason: bytes belong in a response body, not
+   *  base64-inflated into a 1 MiB WebSocket frame. */
+  async readExecutorFileBytes(executorId: string, path: string): Promise<{ bytes: Uint8Array } | { error: string }> {
+    if (!this.rt.executionRouter) return { error: 'no execution router' };
+    return readExecutorFileBytes(this.rt.executionRouter, executorId, path);
+  }
+
+  /** The preflight an interactive terminal needs before a shell is opened onto
+   *  this workspace's container: egress interception installed with THIS
+   *  workspace's grants, and /workspace attached. Both are the sandbox lane's
+   *  own `ensureReady`, so a terminal waits on exactly what an exec waits on
+   *  rather than starting the container down a second path. Not a @callable:
+   *  the caller is the terminal's HTTP route, which then upgrades the socket
+   *  the chat rail cannot carry (see terminal-route.ts). */
+  async prepareTerminal(executorId: string): Promise<{ ok: true } | { error: string }> {
+    if (executorId !== 'sandbox') return { error: `${executorId} has no terminal` };
+    const handle = this.rt.sandboxHandle;
+    if (!handle) return { error: 'the sandbox container is not configured for this workspace' };
+    try {
+      await handle.ensureReady();
+      return { ok: true };
+    } catch (cause) {
+      // The chain, so the pane can show WHY: an attach that overran its budget
+      // and a container the platform could not start are different problems
+      // with different answers, and the outermost message tells them apart from
+      // neither.
+      return {
+        error: renderCauseChain(toKinuError({
+          doing: 'preparing the sandbox container for a terminal',
+          cause,
+          otherwise: 'unavailable',
+        })),
+      };
+    }
+  }
+
   /** Return exposed ports for one executor. Workspace registrations live in
    * Nimbus, so they remain authoritative after this actor restarts. */
   @callable() async getExposedPorts(executorId: string): Promise<{
@@ -3441,6 +3536,37 @@ export class OrchestratorAgent extends ActorAgent {
       vfs: this.rt.storage.vfs,
       launchingHeadTrust: 'self',
       onAdmitted: () => { this.orch.scheduleDrain(); },
+    }, body, Date.now());
+  }
+
+  /**
+   * The container's Durable Object reports that its own persistence failed.
+   *
+   * Beside `acceptContainerEvent` and deliberately NOT the same path. That one
+   * is the container's own processes reporting what they did, admitted into the
+   * event hub and debounced into one turn with everything else that happened.
+   * This one is the container's HOST saying its filesystem cannot be trusted,
+   * which is a blocker: it must not be batched behind a build notification, and
+   * the agent has to hear it before it writes anything else into that
+   * filesystem. So it goes through the signal seam, whose own policy gives a
+   * blocker its own turn.
+   *
+   * Reachable on the root stub and nowhere else — a plain method rather than a
+   * `@callable`, exactly as `acceptContainerEvent` is: the caller is another
+   * Durable Object in this Worker, and a browser socket has no business
+   * announcing container incidents.
+   *
+   * Not awaited past the response, and not deferred either: the ledger write
+   * and the delivery both happen inside this invocation, because `waitUntil` is
+   * a no-op in a Durable Object. The caller's retry is the recovery, and the
+   * incident id is what makes that retry safe.
+   */
+  async acceptSandboxLifecycleFailure(body: JsonValue): Promise<SandboxLifecycleFailureResult> {
+    this.ensureSchema();
+    return acceptSandboxLifecycleFailure({
+      sql: this.boundSql,
+      signals: this.orch.signals,
+      logActivity: (event, detail) => this.logActivity(event, detail),
     }, body, Date.now());
   }
 

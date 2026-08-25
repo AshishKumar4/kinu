@@ -250,6 +250,7 @@ const SocketMessageSchema = v.variant("type", [
   v.object({
     type: v.literal("device_consent"), consentId: v.string(), deviceLabel: v.string(),
     method: v.optional(v.string()), command: v.string(),
+    workspaceName: v.optional(v.nullable(v.string())),
   }),
   v.object({ type: v.literal("device_consent_resolved"), consentId: v.string() }),
   v.object({ type: v.literal("work_cancelled") }),
@@ -934,16 +935,20 @@ export function useKinu(target?: string | KinuActorAddress) {
         } else if (msg.type === "mcts-progress") {
           setMctsTreeFromRows(msg.rootId, msg.nodes);
         } else if (msg.type === "device_consent") {
-          setPendingConsents((prev) => prev.some((c) => c.consentId === msg.consentId) ? prev
-            : [...prev, {
+          setPendingConsents((prev) => {
+            if (prev.some((c) => c.consentId === msg.consentId)) return prev;
+            const card: PendingConsent = {
               consentId: msg.consentId,
               deviceLabel: msg.deviceLabel,
               method: msg.method ?? "exec",
               command: msg.command,
               // The hub grants exactly one scope today (device-consent.ts).
-              scope: "all_local_actions",
+              scope: "all_local_actions" as const,
               createdAt: Date.now(),
-            }]);
+            };
+            if (msg.workspaceName) card.workspaceName = msg.workspaceName;
+            return [...prev, card];
+          });
         } else if (msg.type === "device_consent_resolved") {
           setPendingConsents((prev) => prev.filter((c) => c.consentId !== msg.consentId));
           setConsentResolutionError(msg.consentId, null);

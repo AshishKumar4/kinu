@@ -1,20 +1,23 @@
 /**
  * The canonical executor metadata module — the ONE place that names, orders,
- * and filters execution devices. Every surface that renders an executor
- * (Environment mounts, Output diff chips, terminals) reads labels/order from
- * here so the vocabulary never drifts across tabs.
+ * and describes environments for the user surfaces.
+ *
+ * Capability doctrine (what runs where, in the provider's own ids) is
+ * model-facing and lives in core's execution-status block; the user surfaces
+ * describe environments in user terms only.
  */
-
-import { EXECUTOR_CAPABILITIES, type ExecutorCapability } from "@kinu.run/core";
 
 /** Live executor row as reported by the orchestrator's getExecutors RPC. */
 export interface ExecutorInfo {
   name: string;
   kind: string;
   capabilities: string[];
-  /** Capabilities the environment could not answer for either way. Rendered
-   *  apart from real absences: "Not here" is a measurement, and this is not. */
+  /** Capabilities the environment could not answer for either way. Part of
+   *  the wire payload; consumed by the agent's own execution-status block. */
   unmeasuredCapabilities?: string[];
+  /** The user's own display name for the environment, where one exists —
+   *  a registered device's chosen name on the laptop row. */
+  label?: string;
   available: boolean;
   configured?: boolean;
   active?: boolean;
@@ -43,42 +46,23 @@ export function executorLabel(name: string): string {
 }
 
 /**
- * What each declared capability MEANS, for the one question this vocabulary
- * answers: can I do this job here, or do I need a different environment?
- *
- * The ids themselves are the contract — `ExecutorProvider.capabilities`, now
- * also rendered into the agent's own execution-status block — so this is
- * strictly the reading of them, and every id in EXECUTOR_CAPABILITIES has one.
- * A raw strip of `fs_shared net_inbound process_signal` is data the reader has
- * to already know to use; that is what made it look like decoration.
+ * What each environment IS, in one user-facing line — the card description on
+ * the Environment tab. What it can RUN is the agent's business (the
+ * execution-status block); what the user needs is what lives there and what
+ * happens to files they put in it.
  */
-export const CAPABILITY_LABELS = {
-  javascript:     "Runs JavaScript",
-  typescript:     "Runs TypeScript",
-  python:         "Runs Python",
-  native_binary:  "Runs compiled binaries",
-  shell:          "Real POSIX shell",
-  npm:            "Installs npm packages",
-  git:            "git",
-  docker:         "Docker",
-  fs_shared:      "Files shared with the agent",
-  fs_owned:       "Its own private files",
-  net_outbound:   "Reaches the internet",
-  net_inbound:    "Can serve a port you can open",
-  process_spawn:  "Starts background processes",
-  process_long:   "Keeps them running between turns",
-  process_signal: "Can signal and stop them",
-  gpu:            "GPU",
-} satisfies Record<ExecutorCapability, string>;
+export const EXECUTOR_DESCRIPTIONS = {
+  workspace: "The agent's own files and shell — everything it makes lives here.",
+  sandbox: "A full Linux container for builds, servers and heavy work, with live previews.",
+  laptop: "Your own machine over the device tunnel — commands and files run there with your consent.",
+  parent: "The workspace this fork branched from, reached read-mostly over RPC.",
+};
 
-/** Capability ids arrive over RPC as plain strings; only a declared one has a
- *  reading, and an unknown one is shown as it came rather than dropped. */
-function isCapability(value: string): value is ExecutorCapability {
-  return Object.hasOwn(CAPABILITY_LABELS, value);
-}
-
-export function capabilityLabel(capability: string): string {
-  return isCapability(capability) ? CAPABILITY_LABELS[capability] : capability;
+/** The description beside a row's namespace, with the fallback the tab shows
+ *  for an environment this build predates. Same contract as executorLabel. */
+export function executorDescription(name: string): string {
+  return Object.entries(EXECUTOR_DESCRIPTIONS).find(([key]) => key === name)?.[1]
+    ?? "An execution environment with its own filesystem.";
 }
 
 export const EXECUTOR_ORDER = ["laptop", "sandbox", "workspace", "parent"];
@@ -158,67 +142,3 @@ export function pickDefaultExecutor(executors: ExecutorAvailability[], lastActiv
   return "workspace";
 }
 
-/** The two capabilities that say WHICH filesystem an environment has rather
- *  than whether it can do something. Never rendered as an absence: every
- *  environment has a filesystem, so "its own private files — Your PC" against
- *  the workspace reads as a deficiency when sharing the agent's files is the
- *  whole point of the workspace. */
-const FILESYSTEM_TOPOLOGY = {
-  fs_owned: true,
-  fs_shared: true,
-} satisfies Partial<Record<ExecutorCapability, true>>;
-
-function isFilesystemTopology(capability: ExecutorCapability): boolean {
-  return Object.hasOwn(FILESYSTEM_TOPOLOGY, capability);
-}
-
-/** One absence, and the reachable environments that cover it. */
-export interface CapabilityAbsence {
-  capability: ExecutorCapability;
-  where: string[];
-}
-
-/** One environment's capability row, in the three readings a user gets. */
-export interface CapabilityRow {
-  /** Declared present. */
-  has: ExecutorCapability[];
-  /** Measured absent here, and available somewhere reachable. */
-  missing: CapabilityAbsence[];
-  /** Not answerable either way by this environment. */
-  unknown: ExecutorCapability[];
-}
-
-/**
- * How one environment's capability row reads: what it has, what it lacks and
- * can point elsewhere for, and what it could not answer for at all.
- *
- * Three buckets rather than two, and the third is the whole point. A capability
- * missing from `capabilities` is either measured absent or never measured, and
- * only the first is an absence — rendering the second under "Not here" told the
- * user their own laptop does not run Python when nothing had ever asked it.
- * Disjoint by construction, so no capability can be claimed and denied at once.
- */
-export function partitionCapabilities(
-  selected: ExecutorInfo,
-  all: readonly ExecutorInfo[],
-): CapabilityRow {
-  const here = new Set(selected.capabilities);
-  const unmeasured = new Set(selected.unmeasuredCapabilities ?? []);
-  const reachable = all.filter((exec) => exec.available && exec.name !== selected.name);
-  return {
-    has: EXECUTOR_CAPABILITIES.filter((capability) => here.has(capability)),
-    unknown: EXECUTOR_CAPABILITIES.filter((capability) => unmeasured.has(capability)),
-    // Only absences somewhere reachable can cover: an absence you cannot act on
-    // is not information, and listing all sixteen would bury the ones you can.
-    missing: EXECUTOR_CAPABILITIES
-      .filter((capability) => !(
-        here.has(capability) || unmeasured.has(capability) || isFilesystemTopology(capability)))
-      .map((capability) => ({
-        capability,
-        where: reachable
-          .filter((exec) => exec.capabilities.includes(capability))
-          .map((exec) => executorLabel(exec.name)),
-      }))
-      .filter((row) => row.where.length > 0),
-  };
-}

@@ -16,7 +16,11 @@
  * no hiring actions on its `agents` tool. No flags.
  */
 
-import { callable, type AgentContext, type Connection, type ConnectionContext, type SubAgentClass } from "agents";
+import {
+  callable,
+  type AgentContext, type Connection, type ConnectionContext, type SubAgentClass,
+  type FiberRecoveryContext, type FiberRecoveryResult,
+} from "agents";
 import { ExplorationAgent } from './exploration';
 // Type-only, so it is erased and the base class carries no runtime import of
 // its own subclass. The VALUE comes from `subordinateFacet()`, which each
@@ -54,8 +58,9 @@ import {
   scaffoldInferenceTransform, type ScaffoldRunOptions,
   createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory,
   queueTurnShadowTrial, runQueuedShadowTrials, createJsonJudge, type ScaffoldControl,
-  effortFor, type CompletedTurn, type TurnContinuity, UNBOUNDED_STEPS,
+  effortFor, type CompletedTurn, type TurnContinuity, UNBOUNDED_STEPS, UNBOUNDED_MAX_STEPS,
   runAdvisorLane,
+  type AdvisorRecoverySnapshot, type AdvisorDisposition,
   // canonical tool + prompt surface — single source of truth
   buildActorTools,
   withClampedToolResults,
@@ -69,12 +74,15 @@ import {
   type DynamicContext, type MissingCapability,
   // Public extension seam — the SAME host contract runChat drives on the CLI
   ExtensionHost, composePrepareStep,
-  UserSteerDrain, STEER_METADATA_KEY, STEER_STEP_METADATA_KEY,
+  UserSteerDrain, describeLandedSteers,
   type UserSteer, type UserSteerOutcome, type SteerStatusEvent, type SteerStatusDetail,
   // Overflow recovery — the shared turn-failure policy (see turn-failure.ts)
   OVERFLOW_RETRY_EVENT,
   // Shared turn lifecycle (run bracket, prompt-token trigger, overflow apply)
-  openTurnRun, closeTurnRun, persistMeasuredPromptTokens, applyOverflowRecovery,
+  // plus the run_end vocabulary and the classifier that derives it from raw
+  // facts, so neither backend chooses the string.
+  openTurnRun, closeTurnRun, classifyRunEnd, persistMeasuredPromptTokens, applyOverflowRecovery,
+  type RunEndReason,
   // backend-agnostic per-turn accounting + orchestration (shared by cf + cli)
   TurnAccumulator, AgentOrchestrator, type BackendHost,
   type SettledSignals,
@@ -99,12 +107,14 @@ import {
   // Cumulative, label-scoped spend governor (opt-in; no label = no cap)
   MissionGovernor, type MissionSeam, type MissionBudgetRefusal,
   // The one normalized provider usage report
-  normalizeUsage, usageReported, type Usage,
+  normalizeUsage, type Usage,
   // Non-turn model calls: the row type, its sink, and where a call with no run
   // open is filed. The other 25 producers of workspace spend arrive this way.
   WORKSPACE_RUN_ID, type ModelCallReport, type ModelOperationSink, type ModelOperationEvent,
-  type RunEventInput,
   recordModelOperations,
+  // The one builder for a model_call row: its shape AND the price-only-when-the
+  // -rate-is-this-call's-own guard, which used to be spelled three times.
+  buildModelCallEvent,
   // The ONE catalog pricing, so a model_call row prices exactly as the ledger
   // debits — and only when the rate belongs to the model that served it.
   priceCall,
@@ -119,7 +129,8 @@ import {
   // The agents tool's shared swarm substrate
   agentsActionsFor,
   // Background-job system (#173 — auto-background past the surface threshold)
-  BackgroundJobRunner, BACKGROUND_POLICY, type InvocationSurface,
+  BackgroundJobRunner, type InvocationSurface,
+  invocationBackgroundPolicy,
   type BackgroundJobStore, type TaskListStore,
   wrapToolsForBackground, BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob,
   // The control plane both roots expose over the same core implementations.
@@ -152,8 +163,7 @@ import {
   type DynamicDelegate,
   readSoul, bootstrapScaffold,
   // Automatic titling — one policy for every root that can be talked to
-  applyWorkspaceTitle, parseWorkspaceTitle,
-  WORKSPACE_TITLE_SYSTEM_PROMPT, workspaceTitlePrompt,
+  applyWorkspaceTitle, suggestWorkspaceTitle,
   parseModelSpec, catalogModelInfo,
   // Model-capability attachment sanitization (the PDF-400 fix)
   type MediaModality,
@@ -175,10 +185,19 @@ import {
   resolveAgentTurnProfile, createMemoryCodemodeProvider, createTasksCodemodeProvider,
   resolveModelRoute, roleChangeOutcomeText, narrowToolSurface, codemodeCapabilitiesFor,
   beginModelOperation,
-  type JsonObject, type JsonValue, type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
+  // Plan mode's one completion surface and the deps-gated report tool. Both sat
+  // outside BUILTIN_TOOLS as bare strings with no link to the tools they name.
+  SUBMIT_PLAN_TOOL, REPORT_TOOL,
+  type JsonObject, type JsonValue, type ProfileAuthorityInputs,
   type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend,
 } from "@kinu.run/core";
 import { bindAgentSql, createCFRuntime, type CFRuntime } from "./runtime";
+import {
+  // The durable lanes' recovery roster — dispatch, four arms, terminal-result
+  // discipline — and this backend's two cf-minted lane names.
+  recoverLaneFiber, EVOLUTION_LANE_FIBER, ADVISOR_LANE_FIBER,
+  type FiberLaneTransports,
+} from "./fiber-recovery";
 import { createExecuteToolsTool } from "./execute-tools";
 import { createHeadRuntime } from "./head-runtime";
 import { spawnNodeFacet } from "./facet-spawn";
@@ -405,23 +424,26 @@ export interface ActorToolDeps {
   submitPlan?: SubmitPlanToolDeps;
 }
 
-/** The deps-gated builtins: names dropped from the advertised tool surface
- *  when the actor profile wires no deps for them. The `agents` tool is never
- *  dropped on cf — every actor has the fork substrate — but its ACTIONS gate
- *  on the same profile (see actorAgentsActions). `release` is not a native
- *  tool anymore (release.* is codemode-only — see extraCodemodeProviders
- *  above), so `deps.releases` no longer gates anything here; it still feeds
- *  that codemode namespace directly. */
-const DEPS_GATED_TOOLS = ['report'] as const;
-
 /** ACTIVE_TOOLS filtered to what this actor's deps actually wire — the prompt
- *  and the activeTools whitelist must not advertise structurally absent
- *  tools. */
+ *  and the activeTools whitelist must not advertise structurally absent tools.
+ *
+ *  WHICH names are deps-gated is core's `DEPS_GATED_TOOLS`, and each is spelled
+ *  by its registry constant. This file used to declare the set itself, as a bare
+ *  `['report']` with no link to the tool it named, so renaming the builtin left
+ *  a gate matching nothing. The `agents` tool is never dropped on cf — every
+ *  actor has the fork substrate — but its ACTIONS gate on the same profile (see
+ *  actorAgentsActions). `release` is not a native tool anymore (release.* is
+ *  codemode-only), so `deps.releases` gates nothing here; it feeds that codemode
+ *  namespace directly.
+ *
+ *  That every gated name is answered here is asserted by test, not by the
+ *  compiler: core declares the set as `readonly BuiltinToolName[]`, which is the
+ *  right type for a shared list and cannot key an exhaustive table. */
 export function actorActiveTools(deps: ActorToolDeps): BuiltinToolName[] {
-  const present = {
-    report: !!deps.report,
-  } satisfies Record<(typeof DEPS_GATED_TOOLS)[number], boolean>;
-  return ACTIVE_TOOLS.filter((name) => name !== 'report' || present.report);
+  const gate = {
+    [REPORT_TOOL]: !!deps.report,
+  } satisfies Partial<Record<BuiltinToolName, boolean>>;
+  return ACTIVE_TOOLS.filter((name) => gate[name] ?? true);
 }
 
 /** The `agents` actions this actor profile supports, for the prompt's
@@ -431,6 +453,7 @@ export function actorActiveTools(deps: ActorToolDeps): BuiltinToolName[] {
 export function actorAgentsActions(deps: ActorToolDeps): AgentsToolAction[] {
   return agentsActionsFor({ fork: {}, team: deps.team, peers: deps.peers });
 }
+
 
 export abstract class ActorAgent extends Think<Env> {
   // ── The actor profile — what a concrete actor class supplies ─────────
@@ -1006,6 +1029,22 @@ export abstract class ActorAgent extends Think<Env> {
 
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
+    // NO PER-TURN STEP BOUND — owner ruling, and until now it held on the CLI
+    // only. `Think` sets `this.maxSteps = 10` in its own constructor and every
+    // inference it drives composes `stepCountIs(config.maxSteps ?? this.maxSteps)`
+    // as element 0 of an OR-ed stop-condition array, so a caller's `stopWhen`
+    // can only add a way to stop and can never widen that cap. The result was a
+    // cloud turn hard-capped at ten steps while `core/chat.ts` and
+    // `core/config.ts` both documented no cap: four of four production runs that
+    // reached ten steps were cut with the model still emitting tool calls, and
+    // all four sealed 'completed'.
+    //
+    // Set on the INSTANCE as well as on each turn's `TurnConfig` (see
+    // `beforeTurn`) because the resolution is `config.maxSteps ?? this.maxSteps`:
+    // the per-turn value is what production reads, and this is what any Think
+    // inference path that does not run through our `beforeTurn` reads. One
+    // constant, applied at both seams Think resolves through.
+    this.maxSteps = UNBOUNDED_MAX_STEPS;
     // Before any read or write of it can happen — see initCapabilitySchema.
     this.initCapabilitySchema();
     // A Durable Object is a DIFFERENT ISOLATE from the Worker that routes to it,
@@ -1163,14 +1202,19 @@ export abstract class ActorAgent extends Think<Env> {
    * the live splice and the reloaded transcript place the bubble from it.
    */
   private recordLandedSteers(steers: readonly UserSteer[], atStep: number): void {
-    for (const steer of steers) {
-      if (steer.id) this.broadcastSteerStatus({ status: 'landed', steerId: steer.id, text: steer.text, atStep });
+    // Core builds the rows: it assigns the fallback id and stamps BOTH metadata
+    // keys together — a row carrying the steer key without the step key is
+    // indistinguishable from an ordinary user turn at rest. What stays here is
+    // transport: Durable Object messages and this class's broadcast channel.
+    const rows = describeLandedSteers(steers, atStep);
+    for (const row of rows) {
+      this.broadcastSteerStatus({ status: 'landed', steerId: row.id, text: row.text, atStep: row.atStep });
     }
-    void this.addMessages(steers.map((steer) => ({
-      id: steer.id ?? `steer-${nanoid(12)}`,
+    void this.addMessages(rows.map((row) => ({
+      id: row.id,
       role: 'user' as const,
-      parts: [{ type: 'text' as const, text: steer.text }],
-      metadata: { [STEER_METADATA_KEY]: true, [STEER_STEP_METADATA_KEY]: atStep },
+      parts: [{ type: 'text' as const, text: row.text }],
+      metadata: row.metadata,
     }))).catch((err) =>
       diagnostics.failure('steer.persist_failed', toKinuError({
         doing: 'persisting a mid-turn steer as a durable user row',
@@ -1253,6 +1297,26 @@ export abstract class ActorAgent extends Think<Env> {
       }
     }
     // Seal the durable run: turn_end + run_end (core turn-lifecycle).
+    //
+    // `reason` used to be Think's `result.status` passed straight through, and
+    // `reason` was typed as a bare string, so the two backends spelled the same
+    // user action differently: a Stop sealed 'aborted' here and 'error' on the
+    // CLI, and every cross-backend reader of run ledgers counted local stops as
+    // failures. The vocabulary is core's now and the classifier takes RAW FACTS,
+    // so neither backend picks a string. It returns the error text too: a run
+    // sealed 'aborted' must not still carry an interruption sentence in `error`,
+    // which is the same drift wearing a new label.
+    //
+    // `lastFinishReason` is the fourth fact, and it is the one this backend was
+    // missing entirely: Think reports status 'completed' for a turn its own stop
+    // condition cut, so `completed` alone cannot tell a finished turn from a
+    // truncated one. The model's last word can.
+    const end = classifyRunEnd({
+      completed,
+      interrupted: result.status === 'aborted',
+      errorText,
+      lastFinishReason: this.acc.lastFinishReason,
+    });
     if (this._currentRunId) {
       closeTurnRun(this.eventRecorder, this._currentRunId, {
         turnIndex: this.orch.sessionTurnIndex,
@@ -1264,8 +1328,7 @@ export abstract class ActorAgent extends Think<Env> {
         steering: this.orch.steering.snapshot(),
         craft: this.orch.craft.snapshot(),
         recoveries: this.orch.recoverySnapshot(),
-        reason: result.status,
-        error: errorText,
+        ...end,
       });
     }
     // The fleet row. Separate from the durable run above and deliberately not a
@@ -1593,36 +1656,48 @@ export abstract class ActorAgent extends Think<Env> {
     this.headJournal.cacheMerge(rootId, result, strategy);
   }
 
-  /** True while a keepAlive heartbeat is holding the DO open for evolution. */
+  /** True while this activation's evolution recovery fiber is live. */
   private _evolutionSettling = false;
 
   /**
-   * Hold the Durable Object open until the evolution this turn dispatched has
-   * settled — the cf peer of the CLI's `await orch.settleEvolution()` before
-   * process exit.
+   * Settle the evolution this turn dispatched, inside a DURABLE fiber — the cf
+   * peer of the CLI's `await orch.settleEvolution()` before process exit.
    *
    * Evolution is deliberately detached so it never blocks Think's TurnQueue,
    * but its LLM calls (outcome classification, reflection, session reflection)
-   * take 5-30s and outlive the request that woke the DO. A DO with no pending
-   * request and no alarm is evicted, which kills them mid-call — the exact bug
-   * that was fixed for headless CLI runs. keepAlive() (agents-SDK) keeps a
-   * heartbeat alarm armed while the ref is held, so the activation survives.
+   * take 5-30s and outlive the request that woke the DO.
+   *
+   * A FIBER RATHER THAN A BARE `keepAliveWhile`, and that is the whole of this
+   * change. `keepAlive` only resets the idle timer: it holds the object open
+   * against inactivity and buys nothing against a deploy, a runtime restart or
+   * an alarm-boundary reset, which are the evictions nobody schedules. When one
+   * of those landed here the lane simply vanished — no row, no event, nothing to
+   * resume from, and the durable window it had claimed sat un-drained until some
+   * later turn happened to fill it again. `runFiber` holds the SAME heartbeat
+   * (it takes `keepAlive()` for the duration) AND writes a `cf_agents_runs` row
+   * with the stashed lane identity, so an interrupted lane is handed to
+   * {@link onFiberRecovered} on the next activation — alarm-driven, with no
+   * client and no request required.
+   *
+   * The stash carries the lane name and nothing else, because nothing else is
+   * needed: every unit of work below is driven by a DURABLE queue or window
+   * (the shadow-trial queue, the session window), so re-entry reads its input
+   * from storage rather than from a snapshot of an in-memory turn.
    *
    * Fire-and-forget by construction: awaiting it here would re-block the queue.
-   * One watcher at a time — settleEvolution() drains whatever is in flight when
-   * it runs, so a turn that completes while a watcher is live is already
-   * covered by it.
+   * One lane at a time — settleEvolution() drains whatever is in flight when it
+   * runs, so a turn that completes while a lane is live is already covered.
    *
-   * BOTH evolution lanes are held open here (core's exit contract): the turn
-   * lane via settleEvolution(), and the cadence session-evolution pass via
+   * BOTH evolution lanes run here (core's exit contract): the turn lane via
+   * settleEvolution(), and the cadence session pass via
    * runDueSessionEvolution(). The DO is the host that CAN afford the heavy
-   * pass — keepAlive is exactly the mechanism a one-shot CLI process lacks —
-   * so unlike `kinu exec` it waits for it rather than carrying it forward.
+   * pass, so unlike `kinu exec` it waits for it rather than carrying it forward.
    */
   protected settleEvolutionInBackground(): void {
     if (this._evolutionSettling) return;
     this._evolutionSettling = true;
-    void this.keepAliveWhile(async () => {
+    void this.runFiber(EVOLUTION_LANE_FIBER, async (ctx) => {
+      ctx.stash({ lane: EVOLUTION_LANE_FIBER });
       await this.orch.settleEvolution();
       await this.orch.runDueSessionEvolution();
     })
@@ -1635,37 +1710,86 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /**
-   * The completed turn's evolution spine — the SINGLE place a settled turn
-   * feeds the agent's self-improvement loop, for every actor.
+   * The settled turn's spine — the SINGLE place a finished turn feeds the
+   * agent's self-improvement loop, for every actor.
    *
-   * `orch.recordTurn` opens the outcome review + session cadence (which is
-   * what eventually proposes a new scaffold), `settleEvolutionInBackground`
-   * holds the DO open for that detached work, `engine.queueShadowTrial`
-   * records this turn as evidence the promotion gate may draw on, and
-   * `reviewTurnInBackground` is the advisor. Split across subclasses these
-   * drift: a facet that recorded turns but never settled or queued them
-   * proposes exactly one scaffold and then stalls forever on it.
+   * `orch.settleTurn` is core's one settle entry: it fires the extension
+   * turn-end, buffers the turn for its outcome review, counts the session
+   * cadence (which is what eventually proposes a new scaffold) and drains
+   * pending events — and it does that WHATEVER the turn finished as. Recording
+   * used to be `orch.recordTurn` called from here and reachable only from the
+   * completed path, so a failed cloud turn was invisible to the classifier while
+   * the same turn on the CLI was graded evidence. Core owns that recording rule:
+   * plan turns do not enter evolution's outcome window.
+   *
+   * The lanes AFTER it are the completed-only, build-only improvement lanes. A
+   * shadow trial replays the turn's prepared messages, and an advisor reviews
+   * an implementation answer — plan deliberation belongs in neither evidence
+   * set, and a cut turn has no subject for either. WHETHER they run is not
+   * decided here: `settleTurn` returns the verdict, derived from the same
+   * beginTurn metadata its recording gate used, so this spine — and the CLI's
+   * post-turn sequence — cannot spell their own conditions beside it.
+   * `settleEvolutionInBackground` holds the DO open for the detached work the
+   * settle scheduled, `engine.queueShadowTrial` records this turn as evidence
+   * the promotion gate may draw on, and `reviewTurnInBackground` is the advisor.
+   * Split across subclasses these drift: a facet that recorded turns but never
+   * settled or queued them proposes exactly one scaffold and then stalls forever.
    */
-  protected settleCompletedTurn(turn: CompletedTurn): void {
+  protected async settleTurnSpine(input: {
+    status: RunEndReason;
+    turn: CompletedTurn;
+    /** Fired by core before the recording, on every status. */
+    onTurnEnd?: () => Promise<void>;
+  }): Promise<boolean> {
+    const { improvementLanesOpen } = await this.orch.settleTurn({
+      status: input.status,
+      turn: input.turn,
+      continuity: this._turnContinuity,
+      // Truthiness-guarded at the seam, so an absent emit and a present-but-
+      // undefined one are the same call.
+      onTurnEnd: input.onTurnEnd,
+    });
+    if (!improvementLanesOpen) return false;
     // Evolution hooks make 5-30s LLM calls and onChatResponse runs INSIDE
     // Think's TurnQueue — everything here is detached so the next message is
-    // never blocked, and held open by the keepAlive heartbeat instead.
-    this.orch.recordTurn(turn, this._turnContinuity);
+    // never blocked, and carried by a durable fiber rather than a heartbeat.
     this.settleEvolutionInBackground();
     // One row, no inference: the trial itself runs on the cadence lane. The
     // turn's prepared messages are read synchronously (before any await) so a
     // later turn's stash can never bleed into this one's replay.
-    this.engine.queueShadowTrial(turn, this._lastTurnOpts?.messages ?? []);
-    this.reviewTurnInBackground(turn);
+    this.engine.queueShadowTrial(input.turn, this._lastTurnOpts?.messages ?? []);
+    this.reviewTurnInBackground(input.turn);
+    // Handed back for the caller's own build-only lanes (the subordinate's
+    // auto-title) — the SAME verdict, never a second spelling of it.
+    return true;
   }
 
   /**
    * The advisor lane: one review of the turn that just ended.
    *
-   * Detached for the same reason the evolution lanes are — it is a model call
-   * on a path the turn queue is holding — and held open by the same keepalive.
-   * A reviewer that fails leaves a turn with no advice, never a failed turn, so
+   * Detached for the same reason the evolution lane is — it is a model call on
+   * a path the turn queue is holding — and durable for the same reason: a
+   * deploy or an alarm-boundary reset used to take the review with it, leaving
+   * no row and no event, so a turn silently got no advice and nothing said so.
+   * A reviewer that FAILS leaves a turn with no advice, never a failed turn, so
    * nothing here can reach the caller.
+   *
+   * The stash carries the WHOLE review, not a pointer to it: the completed
+   * turn, the tool names it ran with, the severity floor and the dedupe window.
+   * That snapshot is what makes {@link recoverAdvisorLane} a re-drive rather
+   * than an obituary — a lane interrupted near a deploy used to terminalize as
+   * lost, so a turn that ended at the wrong moment silently got no advice.
+   * Nothing is truncated to fit: `AdvisorRecoverySnapshotSchema` mirrors the
+   * lane's own deps through the same `CompletedTurnSchema` that `session_window`
+   * and `turn_review_queue` already persist a turn with, so a turn that could
+   * not be snapshotted here could not have been stored there either — the size
+   * policy lives upstream where the turn's parts are clamped, and a second
+   * weaker copy of it here would be the bound nobody measured.
+   *
+   * Both reads off `_lastTurnOpts` happen BEFORE the fiber starts. `runFiber`
+   * awaits `keepAlive()` before it runs the body, so reading them inside would
+   * be reading them after an await — which is how a later turn's tool set
+   * bleeds into this turn's review.
    *
    * Governed off the TURN's labels rather than the governor's active scope, the
    * same way the engine's own review is: this runs after the turn ended, when
@@ -1677,27 +1801,66 @@ export abstract class ActorAgent extends Think<Env> {
    * than by omission.
    */
   private reviewTurnInBackground(turn: CompletedTurn): void {
-    const llm = this.rt.advisorLlm;
-    if (llm === undefined || !this.config.getAdvisorEnabled()) return;
-    const labels = turn.missionLabels ?? [];
-    void this.keepAliveWhile(() => runAdvisorLane({
+    if (this.rt.advisorLlm === undefined || !this.config.getAdvisorEnabled()) return;
+    const snapshot: AdvisorRecoverySnapshot = {
       turn,
-      llm: labels.length === 0 ? llm : this.budget.govern(llm, labels),
-      enabled: true,
-      minSeverity: this.config.getAdvisorMinSeverity(),
-      recent: this.engine.recentAdvisorNotes(),
-      gateOpen: false,
-      // The turn's OWN ToolSet keys, read synchronously with the messages beside
-      // them: what the actor demonstrably had, not what this actor class can
-      // have. A capability the turn never carried must never be named at it.
+      // The turn's OWN ToolSet keys: what the actor demonstrably had, not what
+      // this actor class can have. A capability the turn never carried must
+      // never be named at it.
       reachable: Object.keys(this._lastTurnOpts?.tools ?? {}),
-      deliver: (signal) => this.orch.signals.deliver(signal),
-      record: (note, turnId) => { this.engine.recordAdvisorNote(note, turnId); },
-    })).catch((err) => diagnostics.failure('advisor.review_failed', toKinuError({
+      minSeverity: this.config.getAdvisorMinSeverity(),
+      recent: [...this.engine.recentAdvisorNotes()],
+    };
+    void this.runFiber(ADVISOR_LANE_FIBER, async (ctx) => {
+      // Caught, not propagated: a checkpoint this lane cannot write costs it
+      // RECOVERABILITY, and failing the review over that would trade "might not
+      // be resumable" for "definitely did not run". The failure is named, so a
+      // lane that stopped being recoverable is visible rather than assumed.
+      try {
+        ctx.stash(snapshot);
+      } catch (cause) {
+        diagnostics.failure('advisor.snapshot_failed', toKinuError({
+          doing: 'checkpointing the advisor review so an eviction can resume it',
+          cause,
+          otherwise: 'io',
+        }), { turnId: turn.turnId ?? '(none)' });
+      }
+      await this.runAdvisorReview(snapshot);
+    }).catch((err) => diagnostics.failure('advisor.review_failed', toKinuError({
       doing: 'reviewing the completed turn',
       cause: err,
       otherwise: 'unavailable',
     })));
+  }
+
+  /**
+   * One review, from a snapshot — the single body both the live lane and its
+   * recovery run.
+   *
+   * Shared rather than duplicated because the two would drift on exactly the
+   * fields that matter: a recovery that re-derived `reachable` from the CURRENT
+   * tool set, or `recent` from the CURRENT dedupe window, would be reviewing a
+   * turn against a world it did not run in. The three deps NOT in the snapshot
+   * are the three that must be re-resolved by whoever is running: the advisor
+   * model (through `rt.advisorLlm`, which resolves the 'advisor' lane off the
+   * routing profile — a fixed tier, so it is answerable on a cold activation
+   * with no turn), the signal seam, and the note store.
+   */
+  private async runAdvisorReview(snapshot: AdvisorRecoverySnapshot): Promise<AdvisorDisposition | null> {
+    const llm = this.rt.advisorLlm;
+    if (llm === undefined) return null;
+    const labels = snapshot.turn.missionLabels ?? [];
+    return await runAdvisorLane({
+      turn: snapshot.turn,
+      llm: labels.length === 0 ? llm : this.budget.govern(llm, labels),
+      enabled: true,
+      minSeverity: snapshot.minSeverity,
+      recent: snapshot.recent,
+      gateOpen: false,
+      reachable: snapshot.reachable,
+      deliver: (signal) => this.orch.signals.deliver(signal),
+      record: (note, turnId) => { this.engine.recordAdvisorNote(note, turnId); },
+    });
   }
 
   /**
@@ -2028,20 +2191,22 @@ export abstract class ActorAgent extends Think<Env> {
    * the actor's rate would put a fabricated number in the ledger, so `usd` stays
    * absent unless the call ran on the very model the catalog resolved — and an
    * absent `usd` already means unpriced, never free.
+   *
+   * BOTH RULES ARE CORE'S NOW (`buildModelCallEvent`). The row shape and that
+   * pricing guard were hand-written here, again in the fleet row below, and a
+   * third time on the CLI — where the usage-field policy had drifted the other
+   * way: this backend omitted `usage` when the provider reported nothing, so an
+   * unmeasured call was indistinguishable from an unrecorded one to any reader
+   * of both backends' ledgers. Core's rule is the CLI's stated one: `usage` is
+   * always present, `{}` when unmeasured, because unmeasured spend must read as
+   * unmeasured and never as free.
    */
   protected reportModelCall(report: ModelCallReport): void {
+    const event = buildModelCallEvent(report, {
+      effectiveSpec: this.effectiveModelSpec(),
+      pricing: this.modelCatalog.pricing(),
+    });
     try {
-      const event: Extract<RunEventInput, { type: 'model_call' }> = {
-        type: 'model_call', source: report.source,
-      };
-      if (usageReported(report.usage)) event.usage = report.usage;
-      if (report.spec !== undefined) event.spec = report.spec;
-      if (report.modelId !== undefined) event.modelId = report.modelId;
-      const pricing = report.spec === this.effectiveModelSpec()
-        ? this.modelCatalog.pricing()
-        : null;
-      const usd = pricing ? priceCall(report.usage, pricing) : undefined;
-      if (usd !== undefined) event.usd = usd;
       this.eventRecorder.emit(this._currentRunId || WORKSPACE_RUN_ID, event);
     } catch (err) {
       diagnostics.failure('event.model_call_emit_failed', toKinuError({
@@ -2050,11 +2215,11 @@ export abstract class ActorAgent extends Think<Env> {
         otherwise: 'io',
       }), { source: report.source });
     }
-    // Every producer, not just the turn loop: a judge, the fast tier, an
-    // evolution pass, a compaction fold. `spec` is what the caller resolved and
-    // is absent on the seams that never had one, so the actor's own effective
-    // model stands in — an absent model column would make the row uncountable
-    // against the provider it actually reached.
+    // The fleet row. Every producer, not just the turn loop: a judge, the fast
+    // tier, an evolution pass, a compaction fold. `spec` is what the caller
+    // resolved and is absent on the seams that never had one, so the actor's own
+    // effective model stands in — an absent model column would make the row
+    // uncountable against the provider it actually reached.
     const dimensions = report.spec === undefined
       ? this.analyticsModel()
       : this.analyticsModelOf(report.spec);
@@ -2065,9 +2230,10 @@ export abstract class ActorAgent extends Think<Env> {
       model: report.modelId ?? dimensions.model,
       source: report.source,
       usage: report.usage,
-      // Only where the rate was this call's own — the same guard the durable row
-      // above applies, for the same reason.
-      usd: report.spec === this.effectiveModelSpec() ? this.priceAt(report.usage) : undefined,
+      // The durable row's own number, not a second application of the guard —
+      // this line used to re-derive it and could disagree with the ledger if the
+      // catalog resolved a rate between the two reads.
+      usd: event.usd,
     });
   }
 
@@ -2208,12 +2374,13 @@ export abstract class ActorAgent extends Think<Env> {
     if (!this._jobRunner) {
       this._jobRunner = new BackgroundJobRunner({
         store: this.jobs,
-        // The background policy follows the TURN's surface, not the DO: one
-        // workspace serves human-watched web chat, one-shot `kinu exec`
-        // invocations, and autonomous drains, and the detach threshold has to
-        // match the caller. 30s keeps chat responsive; anything with nobody
-        // watching wants its work finished in-turn.
-        policy: () => BACKGROUND_POLICY[this.turnSurface()],
+        // The surface decides the FOREGROUND half — who watches the stream
+        // decides what detaching costs. 30s keeps chat responsive; anything
+        // with nobody watching wants its work finished in-turn. The WAKE half
+        // never varies here: a DO outlives every turn (its alarms deliver
+        // wakes with nobody connected, which is the whole recovery design), so
+        // spawn-shaped work detaches on unwatched turns too.
+        policy: () => invocationBackgroundPolicy(this.turnSurface(), true),
         fiber: this.rt.schedule.fiber,
         signals: this.orch.signals,
         eventLog: this.eventLog,
@@ -2243,6 +2410,69 @@ export abstract class ActorAgent extends Think<Env> {
       });
     }
     return this._jobRunner;
+  }
+
+  /**
+   * Is there work in this actor's SUBTREE that may still touch the container?
+   *
+   * Asked by the sandbox's own Durable Object before it does anything a live
+   * user of the container would notice. It is a question about safety, so it is
+   * answered conservatively in one direction only: a wrong `true` costs a warm
+   * container, a wrong `false` pulls the filesystem out from under running work.
+   * Every source below is therefore admitted on "may use", never on "will use" —
+   * a `run` and an `execute_tools` reach the container directly, and every other
+   * kind of work can call one.
+   *
+   * Four durable sources plus one in-memory one, and each answers a question
+   * the others cannot:
+   *   • detached tool calls  — `background_jobs` rows still `running`, which is
+   *     the only record of work whose executor may be in another activation;
+   *   • queued turns         — Think submissions `pending`/`running`, i.e. turns
+   *     admitted but not yet answered, including the ones a wake queued while
+   *     nothing was connected;
+   *   • managed fibers       — anything durably accepted through the fiber
+   *     ledger and not yet settled, `interrupted` included: an interrupted row
+   *     is work a recovery is about to re-drive, not work that has stopped;
+   *   • the live turn        — in memory by nature, and the single most likely
+   *     caller of a container tool;
+   *   • the subtree          — a subordinate rides its PARENT's container
+   *     (`workspaceName()` resolves to the parent), so a root that answered only
+   *     for itself would declare the container idle while a hire was building in
+   *     it. Recursive, so depth is bounded by the delegation cap rather than by
+   *     anything here.
+   *
+   * A subordinate that cannot be reached counts as busy: its facet is
+   * registered, so the honest reading of a failed call is "unknown", and unknown
+   * resolves the same way every other ambiguity here does.
+   */
+  async hasSandboxBackgroundWork(): Promise<boolean> {
+    if (this._inFlight) return true;
+    if (this.jobs.countRunning() > 0) return true;
+    const submissions = await this.listSubmissions({ status: ['pending', 'running'] });
+    if (submissions.length > 0) return true;
+    const fibers = await this.listFibers({ status: ['pending', 'running', 'interrupted'] });
+    if (fibers.length > 0) return true;
+    return await this.subtreeHasSandboxBackgroundWork();
+  }
+
+  /** The recursive half, split out so the local answer above reads as one list
+   *  of sources rather than one list plus a fan-out. */
+  private async subtreeHasSandboxBackgroundWork(): Promise<boolean> {
+    const facet = this.subordinateFacet();
+    for (const entry of this.subordinateRoster.list()) {
+      try {
+        const stub = await this.subAgent(facet, entry.name);
+        if (await stub.hasSandboxBackgroundWork()) return true;
+      } catch (err) {
+        diagnostics.failure('sandbox.subordinate_work_probe_failed', toKinuError({
+          doing: 'asking a subordinate whether it still holds container work',
+          cause: err,
+          otherwise: 'unavailable',
+        }), { subordinate: entry.name });
+        return true;
+      }
+    }
+    return false;
   }
   /** Foreground long-tool controllers before they cross the background
    *  threshold. Once detached, BackgroundJobRunner owns cancellation. */
@@ -2336,10 +2566,7 @@ export abstract class ActorAgent extends Think<Env> {
   /** Resolved active set for the current turn. Built in beforeTurn, read by
    *  the system-prompt assembly via TurnConfig.system override. */
   /** Immutable role/tier/tool profile resolved once for the active turn. */
-  private _turnProfileInputs: {
-    envelope: ProfileCatalogEnvelope;
-    provider: ProviderCatalogSnapshot;
-  } | null = null;
+  private _turnProfileInputs: ProfileAuthorityInputs | null = null;
   private _turnProfile: ResolvedTurnProfile | null = null;
   private _turnActiveSkills: ActiveSkillSet | null = null;
   /** Lazy SkillsVfs shim around rt.storage.vfs — built once, reused. */
@@ -2680,17 +2907,26 @@ export abstract class ActorAgent extends Think<Env> {
     return { stub: this.requireOwnerUserDO(), caller: await this.userCaller() };
   }
 
-  protected async profileInputs(): Promise<{
-    envelope: ProfileCatalogEnvelope;
-    provider: ProviderCatalogSnapshot;
-  }> {
+  /**
+   * The two authority inputs a turn profile resolves against.
+   *
+   * `record` is handed down so core emits the `profile_resolution` run event
+   * from inside `loadProfileAuthorityInputs`. The event was declared in core and
+   * emitted by the CLI only, so "why did this turn resolve this model, and what
+   * did resolution cost" was answerable on a laptop and unanswerable in
+   * production. Whether the row exists is not a per-backend choice, so this
+   * backend no longer makes it — it only says WHERE the row goes, which is the
+   * one genuinely per-backend part: the same recorder and the same
+   * run-or-workspace fallback every other non-turn row here uses.
+   */
+  protected async profileInputs(): Promise<ProfileAuthorityInputs> {
     const { stub, caller } = await this.userHub();
     return loadProfileAuthorityInputs({
       envelope: () => stub.getWorkspaceProfileCatalog(caller),
       provider: () => this.ownedModelServices.profileProviderSnapshot(),
+      record: (event) => this.eventRecorder.emit(this._currentRunId || WORKSPACE_RUN_ID, event),
     });
   }
-
 
   protected resolvedTurnProfile(): ResolvedTurnProfile | null {
     return this._turnProfile;
@@ -2903,10 +3139,13 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /**
-   * Delegates to @kinu.run/core's canonical prompt builder (F1 fix: documents
-   * `codemode.*` — the real namespace crafted tools land in — instead of the
-   * former `tools.*` lie). Cached across turns; invalidated when the soul
-   * text or the registered executor set changes.
+   * Delegates to @kinu.run/core's canonical prompt builder, which documents the
+   * crafted-tool call form core's sandbox contract declares — `tools.<name>`,
+   * the preamble-injected object literal spliced into the sandbox arrow. This
+   * comment used to assert the opposite, that `codemode.*` was "the real
+   * namespace crafted tools land in", which contradicted the correction this
+   * backend's own crafted dispatcher raises. Cached across turns; invalidated
+   * when the soul text or the registered executor set changes.
    */
   protected _cachedSystemPrompt: string | null = null;
   protected _cachedSystemPromptKey: string = "";
@@ -2998,42 +3237,46 @@ export abstract class ActorAgent extends Think<Env> {
    */
   protected async suggestTitle(mission: string): Promise<string | null> {
     const { model, spec, providerOptions } = await this.modelForSource('fast');
-    // The frame opens BEFORE the request, so a call that never returns leaves
-    // a start row naming the naming pass rather than nothing at all.
-    const operation = beginModelOperation(
-      { source: 'fast', operations: this.modelOperations },
-      'complete',
-      { spec },
-    );
-    let result;
-    try {
-      const request: Parameters<typeof generateText>[0] = {
-        model,
-        system: WORKSPACE_TITLE_SYSTEM_PROMPT,
-        prompt: workspaceTitlePrompt(mission),
-        // No output cap: reasoning models spend their budget thinking before
-        // the JSON, and a cap starves them into empty text.
-      };
-      if (providerOptions) request.providerOptions = providerOptions;
-      result = await generateText(request);
-    } catch (err) {
-      operation.failed({ cause: err });
-      throw err;
-    }
-    // `spec` came back with the model it built, so it is the exact string the
-    // call was priced against rather than a second resolution that could
-    // disagree; `modelId` is what the provider says served it, and the two are
-    // worth keeping apart. The OPERATION closes here too — completed before
-    // the parse, like every seam that bills first and judges the answer after.
-    const modelId = result.response?.modelId;
-    const usage = normalizeUsage(result.usage);
-    operation.completed({ usage, modelId: modelId ?? spec });
-    this.reportModelCall(
-      modelId
-        ? { source: 'fast', usage, spec, modelId }
-        : { source: 'fast', usage, spec },
-    );
-    return parseWorkspaceTitle(result.text);
+    // The prompt pair and the parse are core's (suggestWorkspaceTitle); what
+    // stays here is which model answers and the operation/spend framing.
+    return suggestWorkspaceTitle(async (system, prompt) => {
+      // The frame opens BEFORE the request, so a call that never returns leaves
+      // a start row naming the naming pass rather than nothing at all.
+      const operation = beginModelOperation(
+        { source: 'fast', operations: this.modelOperations },
+        'complete',
+        { spec },
+      );
+      let result;
+      try {
+        const request: Parameters<typeof generateText>[0] = {
+          model,
+          system,
+          prompt,
+          // No output cap: reasoning models spend their budget thinking before
+          // the JSON, and a cap starves them into empty text.
+        };
+        if (providerOptions) request.providerOptions = providerOptions;
+        result = await generateText(request);
+      } catch (err) {
+        operation.failed({ cause: err });
+        throw err;
+      }
+      // `spec` came back with the model it built, so it is the exact string the
+      // call was priced against rather than a second resolution that could
+      // disagree; `modelId` is what the provider says served it, and the two are
+      // worth keeping apart. The OPERATION closes here too — completed before
+      // the parse, like every seam that bills first and judges the answer after.
+      const modelId = result.response?.modelId;
+      const usage = normalizeUsage(result.usage);
+      operation.completed({ usage, modelId: modelId ?? spec });
+      this.reportModelCall(
+        modelId
+          ? { source: 'fast', usage, spec, modelId }
+          : { source: 'fast', usage, spec },
+      );
+      return result.text;
+    }, mission);
   }
 
   getSystemPrompt(): string {
@@ -3129,7 +3372,7 @@ export abstract class ActorAgent extends Think<Env> {
 
     try {
       // No registry sync: PreambleCraftedExecutor reads craftStore.list()
-      // fresh at every execute. See docs/CRAFT-ARCHITECTURE.md §5.6.
+      // fresh at every execute. See docs/CRAFT-ARCHITECTURE.md §3.
 
       const builtinDeps: Parameters<typeof buildActorTools>[0] = {
         rt: this.rt,
@@ -3662,7 +3905,7 @@ export abstract class ActorAgent extends Think<Env> {
       ...activeTools,
       ...mcpToolNames,
       ...extensionToolNames,
-      ...(turnActorDeps.submitPlan ? ['submit_plan'] : []),
+      ...(turnActorDeps.submitPlan ? [SUBMIT_PLAN_TOOL] : []),
       ...codemodeCapabilitiesFor(turnCodemodeProviders),
     ];
     const profile = resolveAgentTurnProfile({
@@ -3684,8 +3927,8 @@ export abstract class ActorAgent extends Think<Env> {
     const toolAllowed = (name: string): boolean => allowedTools.has(name);
     const promptActiveTools = activeTools.filter(toolAllowed);
     const resolvedAgentActions = toolAllowed('agents') ? availableAgentActions : [];
-    const planToolNames = workMode === 'plan' && turnActorDeps.submitPlan && toolAllowed('submit_plan')
-      ? ['submit_plan']
+    const planToolNames = workMode === 'plan' && turnActorDeps.submitPlan && toolAllowed(SUBMIT_PLAN_TOOL)
+      ? [SUBMIT_PLAN_TOOL]
       : [];
     const effectiveActiveTools = [
       ...promptActiveTools,
@@ -3843,6 +4086,23 @@ export abstract class ActorAgent extends Think<Env> {
     const providerOptions = mergeProviderOptions(cacheOptions, reasoningOptions);
     if (providerOptions) cfg.providerOptions = providerOptions;
 
+    // THE TURN'S STEP BOUND, on the config Think actually consumes.
+    //
+    // `UNBOUNDED_STEPS` used to be set on `_lastTurnOpts` alone — a mirror only
+    // the shadow-eval replay reads, and only ever for its `messages` and
+    // `tools`. So the one place the words "unbounded steps" appeared in this
+    // backend was a field the live loop never sees, and `git grep maxSteps --
+    // packages/cf-backend/src` returned nothing at all. Reading either was
+    // enough to conclude the cloud loop was unbounded. It was capped at ten.
+    //
+    // `maxSteps` is the lever: Think resolves `config.maxSteps ?? this.maxSteps`
+    // and OR-s `stepCountIs(...)` of it ahead of anything the caller passes.
+    // `stopWhen` rides beside it so the caller's slot is declared where the live
+    // config is assembled — a future real stop condition composes here, and a
+    // grep for the name now lands on the loop instead of the mirror.
+    cfg.maxSteps = UNBOUNDED_MAX_STEPS;
+    cfg.stopWhen = UNBOUNDED_STEPS;
+
     // Shadow-eval context parity + the evolved-scaffold task source (see the
     // _lastTurnOpts field doc): the effective opts the streamText Think runs
     // next will see — final system/messages/merged tools/model. Think only
@@ -3854,7 +4114,6 @@ export abstract class ActorAgent extends Think<Env> {
       messages: cfg.messages,
       tools: { ...ctx.tools, ...cfg.tools },
       activeTools: cfg.activeTools,
-      stopWhen: UNBOUNDED_STEPS,
     };
     if (providerOptions) lastTurnOpts.providerOptions = providerOptions;
     this._lastTurnOpts = lastTurnOpts;
@@ -4134,61 +4393,68 @@ export abstract class ActorAgent extends Think<Env> {
     return (await this.modelForSource('judge')).model;
   }
 
-  // ── Fiber recovery — durable execution surviving DO eviction ──
+  // ── Durable execution — surviving Durable Object eviction ─────────
   //
-  // The MCTS engine (mcts/engine.ts) calls rt.schedule.fiber('mcts', fn) which
-  // delegates to agent.runFiber(). Per-iteration ctx.stash(phase) checkpoints
-  // progress to cf_agents_runs. If the DO is evicted mid-MCTS, the Agent SDK
-  // re-invokes onFiberRecovered with the last snapshot on cold-start.
-  //
-  // The default base implementation just warns; we override to:
-  //   • log the recovery into evolution_events for the UI
-  //   • broadcast a "recovered" event so the chat panel can show the resume
-  //   • write a memory note so future turns know about the interruption
-  override async onFiberRecovered(ctx: {
-    id: string;
-    name: string;
-    snapshot: unknown;
-    createdAt: number;
-  }): Promise<void> {
-    try {
-      const snapshot = ctx.snapshot === null || ctx.snapshot === undefined
-        ? null
-        : projectJsonValue({ value: ctx.snapshot });
-      const summary = JSON.stringify(snapshot).slice(0, 400);
-      diagnostics.event('fiber.recovered', { fiber: ctx.name, fiberId: ctx.id });
-      // Background-job fiber (bg:*) is operational plumbing, not an evolution
-      // event: the runner re-fails + wakes an orphaned 'running' job (a 'settled'
-      // one already recorded its outcome + woke), skipping the MEMORY.md note +
-      // evolution_events INSERT that the user-facing recovery path emits.
-      if (ctx.name.startsWith('bg:')) {
-        await this.jobRunner.recover(snapshot);
-        // A cold start is also the moment to settle jobs whose fiber row did
-        // NOT survive with them: nothing in this isolate owns a job yet, so any
-        // other row still marked `running` is an orphan no recovery callback
-        // will ever arrive for.
-        await this.jobRunner.recoverOrphans();
-        return;
-      }
-      // Persist for the UI's evolution-events stream.
-      void this.sql`INSERT INTO evolution_events (id, type, message, data, created_at)
-        VALUES (${nanoid()}, 'fiber_recovered',
-                ${`Fiber "${ctx.name}" recovered after interruption`},
-                ${JSON.stringify({ name: ctx.name, fiberId: ctx.id, snapshot, createdAt: ctx.createdAt })},
-                ${Date.now()})`;
-      await this.rt.memory.append(
-        'memory/MEMORY.md',
-        `\n### Fiber recovery (${new Date().toISOString().split('T')[0]})\n` +
-        `Fiber "${ctx.name}" was interrupted (likely DO eviction) and recovered. ` +
-        `Snapshot at interruption: ${summary}\n`,
-      );
-    } catch (err) {
-      diagnostics.failure('fiber.recovery_failed', toKinuError({
-        doing: 'handling a fiber recovered after eviction',
-        cause: err,
-        otherwise: 'io',
-      }), { fiber: ctx.name, fiberId: ctx.id });
-    }
+  // Three kinds of work outlive the request that started them: a search
+  // (`mcts`, from mcts/engine.ts via rt.schedule.fiber), a detached tool call
+  // (`bg:<kind>`, from the core BackgroundJobRunner), and the two post-turn
+  // lanes above. All four go through `runFiber`, so each writes a
+  // `cf_agents_runs` row with its stashed identity before it runs. What an
+  // interrupted row BECOMES is the recovery roster's business, and that lives
+  // in ./fiber-recovery.ts beside this backend's two cf-minted lane names;
+  // `onFiberRecovered` hands it this actor's transports and nothing else.
+
+  /**
+   * Wrap every chat turn in a recovery fiber, so an interrupted turn resumes
+   * after eviction with nobody watching.
+   *
+   * Set EXPLICITLY, and as a class field rather than in `onStart`, for two
+   * separate reasons the SDK states. It defaults to `true` today, and a default
+   * is not a decision: every owner turn and every subordinate turn on this
+   * substrate depends on it, so it is declared here rather than inherited. And
+   * the SDK evaluates recovery budgets on every wake — it may seal an
+   * interrupted turn before `onStart` runs — so a value assigned there would
+   * arrive after the recovery it was meant to configure.
+   */
+  override chatRecovery = true;
+
+  /**
+   * No stall watchdog, stated as a value rather than left to a default.
+   *
+   * The watchdog measures the gap between UI-message-stream chunks, and no
+   * chunks flow while a server-side tool runs — so any finite value is a
+   * wall-clock bound on a TURN wearing a transport timeout, and this project
+   * does not bound a turn by elapsed time (core/src/chat.ts: a turn runs until
+   * its work is done, the caller cancels it, or the provider or a tool fails
+   * definitively). A hung provider is caught by the same recovery path above,
+   * which is bounded by attempts rather than by seconds.
+   */
+  override chatStreamStallTimeoutMs = 0;
+
+  /**
+   * Hand each interrupted fiber to the recovery roster with this activation's
+   * own transports. The roster (./fiber-recovery.ts) owns the dispatch, the
+   * per-lane semantics and the terminal-result discipline — it never throws,
+   * because a thrown hook re-offers the row for a day; this override only
+   * supplies what a fresh activation can re-resolve.
+   */
+  override async onFiberRecovered(ctx: FiberRecoveryContext): Promise<FiberRecoveryResult> {
+    return recoverLaneFiber(this.fiberLanes, ctx);
+  }
+
+  /** The transports {@link onFiberRecovered}'s arms re-drive through: stub
+   *  calls, a fresh model route, this activation's own storage. Built fresh
+   *  per recovery rather than captured at interruption time — the whole point
+   *  of a wake is that the world moved. */
+  private get fiberLanes(): FiberLaneTransports {
+    return {
+      jobs: this.jobRunner,
+      runDueSessionEvolution: () => this.orch.runDueSessionEvolution(),
+      hasAdvisorNoteForTurn: (turnId) => this.engine.hasAdvisorNoteForTurn(turnId),
+      reviewAdvisorSnapshot: (snapshot) => this.runAdvisorReview(snapshot),
+      sql: this.boundSql,
+      appendMemory: (path, text) => this.rt.memory.append(path, text),
+    };
   }
 
   /** Invalidate every cache that depends on the resolved model so the next

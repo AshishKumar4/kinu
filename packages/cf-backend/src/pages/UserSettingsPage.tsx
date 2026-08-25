@@ -16,7 +16,7 @@ import { Combobox, Loader } from "@cloudflare/kumo";
 import {
   PlugIcon, KeyIcon, GearSixIcon, CheckIcon, CopyIcon,
   UserCircleIcon, ArrowSquareOutIcon, TrashIcon, ArrowLeftIcon,
-  DesktopTowerIcon, WarningIcon,
+  DesktopTowerIcon, WarningIcon, PencilSimpleIcon, XIcon,
 } from "@phosphor-icons/react";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
 import { ModelPicker } from "@/components/ModelPicker";
@@ -26,10 +26,12 @@ import {
   listAvailableModels, listProviderCatalog, getConfig, setConfig, getCliSetup,
   listCloudflareGateways, selectCloudflareGateway,
   listCloudflareAccounts, selectCloudflareAccount,
-  listDevices, registerDevice, revokeDevice,
+  listDevices, registerDevice, renameDevice, revokeDevice,
+  listDeviceConsents, revokeDeviceConsent,
   type UserProfile, type CredentialSummary, type CodexStatus,
   type ModelMenu, type ProviderCatalogEntry, type DeviceFlowStart, type CliSetup,
   type CloudflareGatewayStatus, type CloudflareAccountStatus, type UserDevice,
+  type DeviceConsent,
 } from "../lib/user-api";
 import { Card, inputCls } from "@/components/ui/form";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -253,6 +255,7 @@ function lapsingDevices(devices: UserDevice[] | null): UserDevice[] {
 
 function DevicesCard() {
   const [devices, setDevices] = useState<UserDevice[] | null>(null);
+  const [grants, setGrants] = useState<DeviceConsent[] | null>(null);
   const [install, setInstall] = useState<string | null>(null);
   const [issuing, setIssuing] = useState(false);
   const { status: copyStatus, copy } = useCopy();
@@ -278,6 +281,17 @@ function DevicesCard() {
     const t = setInterval(refreshDevices, 5000); // running daemon flips connected within seconds
     return () => clearInterval(t);
   }, [refreshDevices]);
+
+  // The grants themselves — which workspace may act on which device. Read
+  // beside the roster because revoking one is the answer to "who has reach
+  // into this machine", and that question is asked here, not per workspace.
+  const refreshGrants = useCallback(() => {
+    listDeviceConsents().then(
+      (rows) => { setGrants(rows); },
+      (e) => { setRosterErr(`Could not list device grants: ${renderThrownChain({ cause: e })}`); },
+    );
+  }, []);
+  useEffect(() => { refreshGrants(); }, [refreshGrants]);
 
   // Deep-link target: the Environment tab's "Connect your PC" CTA points at
   // /user/settings#devices.
@@ -307,21 +321,23 @@ function DevicesCard() {
     <div ref={anchorRef} id="devices">
       <Card title="Devices" icon={DesktopTowerIcon}>
         <p className="text-xs p-text-2">
-          Link a laptop or PC to your account. Once connected, every one of your agents can use it
-          (with your consent). The daemon opens one outbound WebSocket; no inbound ports, runs as
-          your user, never root.
+          Link a computer to your account and give it a name. A workspace can run commands and read
+          files on it only after you grant that workspace access — once, revocably. The daemon opens
+          one outbound WebSocket; no inbound ports, runs as your user, never root.
         </p>
 
         {devices && devices.length > 0 && (
           <div className="rounded-md border p-border overflow-hidden text-xs">
             {devices.map((d) => (
-              <div key={d.id} className="flex items-center gap-2 px-3 py-2 border-b p-border last:border-0">
-                <span className={`size-1.5 rounded-full shrink-0 ${d.connected ? "p-dot-success" : "p-dot-neutral"}`} />
-                <span className="font-medium p-text">{d.label}</span>
-                {d.hostname && <span className="p-text-3 font-mono">{d.hostname}{d.os ? ` · ${d.os}` : ""}</span>}
-                <span className="p-text-3 ml-auto">{d.connected ? "connected" : "offline"}</span>
-                <button onClick={() => revoke(d.id, d.label)} title="Revoke device" className="p-text-3 hover:p-danger"><TrashIcon size={13} /></button>
-              </div>
+              <DeviceRow
+                key={d.id}
+                device={d}
+                grants={grants?.filter((g) => g.deviceId === d.id && g.policy === "allow") ?? []}
+                onRenamed={refreshDevices}
+                onGrantsChanged={refreshGrants}
+                onError={setErr}
+                onRevoke={() => revoke(d.id, d.label)}
+              />
             ))}
           </div>
         )}
@@ -370,6 +386,97 @@ function DevicesCard() {
           in that workspace's settings.
         </p>
       </Card>
+    </div>
+  );
+}
+
+/**
+ * One linked machine: its name (editable — this is the name every surface
+ * shows, from the agent's executor row to a consent card), its platform, its
+ * liveness, and the workspaces that hold a grant on it. The grants sit here
+ * because "who can reach this machine" is a question about the machine.
+ */
+function DeviceRow({ device, grants, onRenamed, onGrantsChanged, onError, onRevoke }: {
+  device: UserDevice;
+  grants: DeviceConsent[];
+  onRenamed: () => void;
+  onGrantsChanged: () => void;
+  onError: (message: string) => void;
+  onRevoke: () => void;
+}) {
+  const [editing, setEditing] = useState<string | null>(null);
+
+  const save = async () => {
+    const name = (editing ?? "").trim();
+    setEditing(null);
+    if (!name || name === device.label) return;
+    try { await renameDevice(device.id, name); }
+    catch (e) { onError(`Could not rename device: ${renderThrownChain({ cause: e })}`); }
+    onRenamed();
+  };
+
+  const dropGrant = async (agentName: string) => {
+    try { await revokeDeviceConsent(device.id, agentName); }
+    catch (e) { onError(`Could not revoke the grant: ${renderThrownChain({ cause: e })}`); }
+    onGrantsChanged();
+  };
+
+  return (
+    <div className="px-3 py-2 border-b p-border last:border-0">
+      <div className="flex items-center gap-2">
+        <span className={`size-1.5 rounded-full shrink-0 ${device.connected ? "p-dot-success" : "p-dot-neutral"}`} />
+        {editing === null ? (
+          <>
+            <span className="font-medium p-text">{device.label}</span>
+            <button onClick={() => setEditing(device.label)} title="Rename this device" className="p-text-3 hover:p-text">
+              <PencilSimpleIcon size={12} />
+            </button>
+          </>
+        ) : (
+          <input
+            autoFocus
+            value={editing}
+            onChange={(e) => setEditing(e.target.value)}
+            onBlur={save}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void save();
+              if (e.key === "Escape") setEditing(null);
+            }}
+            aria-label="Device name"
+            className="px-1.5 py-0.5 rounded-sm border p-border p-fill p-text text-xs w-44"
+          />
+        )}
+        {device.hostname && <span className="p-text-3 font-mono">{device.hostname}{device.os ? ` · ${device.os}` : ""}</span>}
+        <span className="p-text-3 ml-auto">{device.connected ? "connected" : "offline"}</span>
+        <button onClick={onRevoke} title="Revoke device" className="p-text-3 hover:p-danger"><TrashIcon size={13} /></button>
+      </div>
+      <div className="mt-1 flex flex-wrap items-center gap-1.5 p-meta p-text-3">
+        {grants.length === 0 ? (
+          <span>No workspace has access yet — the first one to ask will prompt you.</span>
+        ) : (
+          <>
+            <span>Granted:</span>
+            {grants.map((g) => (
+              <span key={g.agentName} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm p-fill">
+                {g.agentName}
+                {g.scope === "full_filesystem" && <span className="p-text-3">· full filesystem</span>}
+                <button onClick={() => void dropGrant(g.agentName)} title={`Revoke ${g.agentName}'s access`} className="p-text-3 hover:p-danger">
+                  <XIcon size={10} />
+                </button>
+              </span>
+            ))}
+          </>
+        )}
+      </div>
+      <div className="mt-1 flex flex-wrap items-center gap-1.5 p-meta p-text-3">
+        {device.lastIp && <span>Last connected from <code className="font-mono">{device.lastIp}</code></span>}
+        {device.replacedAt !== null && (
+          <span className="p-danger">
+            Another connection took this device's place on {new Date(device.replacedAt).toLocaleString()} —
+            if that was not you, revoke it and run <code className="font-mono">kinu connect</code> again.
+          </span>
+        )}
+      </div>
     </div>
   );
 }

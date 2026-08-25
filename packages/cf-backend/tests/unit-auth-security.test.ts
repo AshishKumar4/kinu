@@ -498,7 +498,7 @@ describe('auth and desktop security invariants', () => {
     const createAgent = source('src/user/workspace-create.ts');
     expect(routes).toContain('listAvailableModels(env, identity.userId, await ownerCaller(env))');
     expect(createAgent).toContain('Cloudflare Workers AI is not connected');
-    expect(createAgent).toContain('pickInitialModel');
+    expect(createAgent).toContain('defaultSpecFor');
     expect(createAgent).toContain('await orchestrator.setModel(model)');
   });
 

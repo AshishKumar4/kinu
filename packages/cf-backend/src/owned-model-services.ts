@@ -1,7 +1,9 @@
 import type { LanguageModel } from 'ai';
 import {
-  agentAffinityKey, parseModelSpec, reasoningEffortOptions, sha256Hex,
-  type ProviderCatalogSnapshot, type ReasoningEffort, type WebSearchProvider,
+  agentAffinityKey, parseModelSpec, reasoningEffortOptions,
+  buildProviderCatalogSnapshot, ProviderListingCache,
+  type ProviderListing, type ProviderSnapshotRead, type ReasoningEffort,
+  type WebSearchProvider,
 } from '@kinu.run/core';
 import { diagnostics } from '@kinu.run/core/obs';
 import { buildCfWebSearchProvider } from './lib/web-provider';
@@ -36,18 +38,22 @@ export class OwnedModelServices {
   /**
    * The last COMPLETE provider listing, and the sweep currently in flight.
    *
-   * Held here rather than at the callers because this is the only place that
-   * knows when it stops being true: `invalidate()` is already the hook every
-   * credential mutation, model rebind and owner claim reaches, so the cache
-   * expires on CHANGE and never on elapsed time. A turn used to pay a full
-   * credential sweep — models.dev, Codex, every connected provider — before it
-   * could stream a single byte.
+   * The cache POLICY is core's (`ProviderListingCache`): one sweep at a time
+   * with concurrent callers joining it, complete listings only, a generation
+   * guard so an invalidation landing mid-sweep still answers its caller without
+   * poisoning the cache, and expiry by signal rather than by clock. Every one of
+   * those four rules used to be written here and again in the CLI, holding the
+   * key — `revision` — that every other cache is kept against.
+   *
+   * What stays here is the SWEEP and its trigger: `invalidate()` is the hook
+   * every credential mutation, model rebind and owner claim already reaches, and
+   * that is genuinely this platform's half. A turn used to pay a full credential
+   * sweep — models.dev, Codex, every connected provider — before it could stream
+   * a single byte.
    */
-  private providerSnapshotCache: ProviderCatalogSnapshot | null = null;
-  private providerSnapshotPending: Promise<ProviderCatalogSnapshot> | null = null;
-  /** Bumped by `invalidate()`. A sweep that started under an older generation
-   *  may answer its own caller but may never populate the cache. */
-  private providerSnapshotGeneration = 0;
+  private readonly providerListings = new ProviderListingCache(
+    () => this.sweepProviderListing(),
+  );
 
   constructor(private readonly options: OwnedModelServicesOptions) {}
 
@@ -106,7 +112,7 @@ export class OwnedModelServices {
 
   /**
    * Credential-aware model set used by profile resolution, plus the providers
-   * that could not be asked.
+   * that could not be asked, plus where the answer came from.
    *
    * The failure set is load-bearing, not diagnostics. `listAllModels` never
    * rejects for one provider — a revoked credential or a 503 costs only that
@@ -118,94 +124,43 @@ export class OwnedModelServices {
    * same `p.id` that prefixes `availableModels`, so the resolver can match a
    * tier's spec against it without a mapping that could drift.
    *
-   * `revision` covers the failures too. It is the key other caches are held
-   * against, and a snapshot taken while a provider was down would otherwise be
-   * revision-identical to a healthy one — serving a degraded model set as if it
-   * were the whole picture.
+   * The `cache` outcome travels WITH the snapshot because it is not plumbing —
+   * it is half of what the resolution cost, and it is what core writes into the
+   * `profile_resolution` evidence row.
    */
-  async profileProviderSnapshot(): Promise<ProviderCatalogSnapshot> {
-    if (this.providerSnapshotCache) {
-      diagnostics.event('profile.provider_snapshot.cache_hit', {
-        cache: 'hit', revision: this.providerSnapshotCache.revision,
-      });
-      return this.providerSnapshotCache;
-    }
-    // Concurrent turns share ONE sweep. Every stream that opened before the
-    // first finished used to start its own credential listing, so the cost was
-    // paid per stream rather than per change — and a models.dev or Codex
-    // refresh landing inside that window blocked all of them.
-    if (this.providerSnapshotPending) {
-      diagnostics.event('profile.provider_snapshot.request_joined', { cache: 'joined' });
-      return this.providerSnapshotPending;
-    }
-    const pending = this.buildProviderSnapshot();
-    this.providerSnapshotPending = pending;
-    try {
-      return await pending;
-    } finally {
-      if (this.providerSnapshotPending === pending) this.providerSnapshotPending = null;
-    }
-  }
-
-  /**
-   * One credential sweep, measured, and memoized only when it was COMPLETE.
-   *
-   * A degraded listing is deliberately not cached. Under the resolver's rule a
-   * non-empty failure set admits every configured model unverified, so caching
-   * one would hold that window open past the fault it came from and freeze
-   * `revision` at a degraded value — which is the exact thing folding failures
-   * into the revision exists to prevent. The inverse hazard closes with it: a
-   * cached snapshot always carries an empty failure set that was TRUE when
-   * taken, so a provider going unreachable produces a fresh sweep rather than a
-   * stale hard-refusal of a model the owner just connected.
-   *
-   * Cost, accepted: while a provider is failing the sweep is paid every turn.
-   * That is the right trade against serving a known-partial availability
-   * picture indefinitely, and it needs no timeout to expire — nothing here
-   * expires by elapsed time, only by `invalidate()`.
-   */
-  private async buildProviderSnapshot(): Promise<ProviderCatalogSnapshot> {
-    const startedAt = Date.now();
-    // Captured before the await. A credential change landing mid-sweep bumps
-    // the generation, and the result below is then returned to its caller but
-    // NOT cached — a listing of the world before the change must not become the
-    // answer for every turn after it.
-    const generation = this.providerSnapshotGeneration;
-    const { registry, deps } = this.providerRegistry();
-    const menu = await registry.listAllModels(deps);
-    const availableModels = [...new Set(
-      menu.models.map((model) => `${model.provider}/${model.id}`),
-    )].sort();
-    // Sorted so the revision is stable across listings that differ only in the
-    // order providers happened to fail in. `ProviderFailure.label` is optional;
-    // the id is the honest fallback, so the snapshot's rows are total and a
-    // reader never has to render a blank label.
-    const unavailableProviders = menu.failures
-      .map(({ provider, label, reason }) => ({ provider, label: label ?? provider, reason }))
-      .sort((a, b) => a.provider.localeCompare(b.provider) || a.reason.localeCompare(b.reason));
-    const snapshot: ProviderCatalogSnapshot = {
-      revision: sha256Hex([
-        ...availableModels,
-        // `!` cannot begin a model spec, so a failure line never collides with
-        // one — two snapshots differing only by a failure hash differently.
-        ...unavailableProviders.map(({ provider, reason }) => `!${provider}\t${reason}`),
-      ].join('\n')),
-      availableModels,
-      unavailableProviders,
-    };
-    const stale = generation !== this.providerSnapshotGeneration;
-    const complete = unavailableProviders.length === 0;
-    if (complete && !stale) this.providerSnapshotCache = snapshot;
+  async profileProviderSnapshot(): Promise<ProviderSnapshotRead> {
+    const { listing, cache } = await this.providerListings.read();
+    // The assembly — dedupe, sort, `label ?? provider`, and the failure fold
+    // into `revision` — is core's. `revision` is the key every other cache is
+    // held against, so the formula deciding when profiles re-resolve had to stop
+    // being a twin of the CLI's.
+    const snapshot = buildProviderCatalogSnapshot(listing.models, listing.failures);
     diagnostics.event('profile.provider_snapshot.resolved', {
-      cache: 'miss',
-      ms: Date.now() - startedAt,
-      models: availableModels.length,
-      unavailable: unavailableProviders.length,
-      cached: complete && !stale,
-      stale,
+      cache,
+      models: snapshot.availableModels.length,
+      unavailable: listing.failures.length,
       revision: snapshot.revision,
     });
-    return snapshot;
+    return { snapshot, cache };
+  }
+
+  /** One credential sweep, measured. Everything about WHEN this runs and
+   *  whether its answer is kept is core's cache policy; this is only the
+   *  platform call it wraps. */
+  private async sweepProviderListing(): Promise<ProviderListing> {
+    const startedAt = Date.now();
+    const { registry, deps } = this.providerRegistry();
+    const menu = await registry.listAllModels(deps);
+    const listing: ProviderListing = {
+      models: menu.models.map((model) => `${model.provider}/${model.id}`),
+      failures: menu.failures,
+    };
+    diagnostics.event('profile.provider_listing.swept', {
+      ms: Date.now() - startedAt,
+      models: listing.models.length,
+      unavailable: listing.failures.length,
+    });
+    return listing;
   }
 
   /**
@@ -236,17 +191,17 @@ export class OwnedModelServices {
 
   /** Drop owner-bound provider/auth state; the web provider resolves it per call.
    *
-   *  This is the provider snapshot's ONLY expiry. Every credential mutation,
-   *  model rebind and owner claim already reaches here, so the listing is
-   *  rebuilt when it stops being true rather than on a clock. The in-flight
-   *  sweep is dropped too: one started before a credential changed would
-   *  otherwise resolve into the cache describing the world before the change. */
+   *  This is the provider listing's ONLY expiry, and the trigger is the half of
+   *  the cache that genuinely belongs to this platform: every credential
+   *  mutation, model rebind and owner claim already reaches here, so the listing
+   *  is rebuilt when it stops being true rather than on a clock. What dropping
+   *  it MEANS — including that the in-flight sweep goes with it, since one
+   *  started before a credential changed would otherwise be handed to everyone
+   *  who joined it — is core's rule now. */
   invalidate(): void {
     this.providerRegistryCache = null;
     this.judgeSpecCache = null;
     this.modelCache = null;
-    this.providerSnapshotCache = null;
-    this.providerSnapshotPending = null;
-    this.providerSnapshotGeneration += 1;
+    this.providerListings.invalidate();
   }
 }

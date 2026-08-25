@@ -236,10 +236,17 @@ function catalogDown() {
 }
 
 describe('OwnedModelServices — the provider snapshot', () => {
+  // `profileProviderSnapshot()` now answers with core's `ProviderSnapshotRead`:
+  // the snapshot AND how it was obtained. The cache outcome is what core writes
+  // into the `profile_resolution` evidence row, and it is also what these tests
+  // assert on — the previous ones compared object identity as a proxy for "was
+  // the sweep re-run", which stopped meaning that once the snapshot became a
+  // pure function of a cached LISTING. Asserting the reported outcome states the
+  // claim directly.
   test('a failed provider listing is preserved, never dropped into model absence', async () => {
     catalogDown();
 
-    const snapshot = await degradedServices().profileProviderSnapshot();
+    const { snapshot } = await degradedServices().profileProviderSnapshot();
 
     expect(snapshot.unavailableProviders?.map((p) => p.provider)).toEqual(['catalog']);
     // The row is carried whole: a reader has the provider, a human label and the
@@ -254,8 +261,8 @@ describe('OwnedModelServices — the provider snapshot', () => {
   test('revision moves when only the failure set moves', async () => {
     catalogDown();
 
-    const degraded = await degradedServices().profileProviderSnapshot();
-    const clean = await snapshotServices(null).profileProviderSnapshot();
+    const degraded = (await degradedServices().profileProviderSnapshot()).snapshot;
+    const clean = (await snapshotServices(null).profileProviderSnapshot()).snapshot;
 
     // Identical positive listings...
     expect(degraded.availableModels).toEqual(clean.availableModels);
@@ -270,14 +277,15 @@ describe('OwnedModelServices — the provider snapshot', () => {
     const services = snapshotServices(null);
 
     const first = await services.profileProviderSnapshot();
-    expect(await services.profileProviderSnapshot()).toBe(first);
+    expect(first.cache).toBe('miss');
+    expect((await services.profileProviderSnapshot()).cache).toBe('hit');
 
     services.invalidate();
     const afterChange = await services.profileProviderSnapshot();
-    expect(afterChange).not.toBe(first);
-    // Re-swept, not merely re-wrapped — and the world had not changed, so the
-    // revision is identical. Nothing here expires on a clock.
-    expect(afterChange.revision).toBe(first.revision);
+    // Re-swept, and the world had not changed, so the revision is identical.
+    // Nothing here expires on a clock.
+    expect(afterChange.cache).toBe('miss');
+    expect(afterChange.snapshot.revision).toBe(first.snapshot.revision);
   });
 
   test('a degraded listing is never memoized, so recovery lands on the next turn', async () => {
@@ -287,10 +295,11 @@ describe('OwnedModelServices — the provider snapshot', () => {
     const first = await services.profileProviderSnapshot();
     const second = await services.profileProviderSnapshot();
 
-    expect(first.unavailableProviders).toHaveLength(1);
-    // A fresh object each time: caching this would hold the unverified-admission
-    // window open past the fault and freeze `revision` at a degraded value.
-    expect(second).not.toBe(first);
+    expect(first.snapshot.unavailableProviders).toHaveLength(1);
+    // Swept again: caching this would hold the unverified-admission window open
+    // past the fault and freeze `revision` at a degraded value.
+    expect(first.cache).toBe('miss');
+    expect(second.cache).toBe('miss');
   });
 
   test('concurrent callers share one sweep instead of racing their own', async () => {
@@ -310,8 +319,12 @@ describe('OwnedModelServices — the provider snapshot', () => {
       services.profileProviderSnapshot(),
     ]);
 
-    expect(b).toBe(a);
-    expect(c).toBe(a);
+    // One sweep, and the two that arrived while it ran say so rather than
+    // reporting a cache hit they never had.
+    expect([a.cache, b.cache, c.cache].filter((outcome) => outcome === 'miss')).toHaveLength(1);
+    expect([a.cache, b.cache, c.cache].filter((outcome) => outcome === 'joined')).toHaveLength(2);
+    expect(b.snapshot.revision).toBe(a.snapshot.revision);
+    expect(c.snapshot.revision).toBe(a.snapshot.revision);
     // This is the TTFT half: three streams opening together used to start three
     // credential sweeps, each one a models.dev and Codex refresh deep.
     expect(mock.matching('models.dev/api.json')).toHaveLength(oneSweep);
@@ -327,9 +340,9 @@ describe('OwnedModelServices — the provider snapshot', () => {
 
     // Its own caller is answered — the listing really happened — but the result
     // describes the world before the change, so it must not become the answer
-    // for every turn after it.
-    expect(answered.availableModels.length).toBeGreaterThan(0);
-    expect(await services.profileProviderSnapshot()).not.toBe(answered);
+    // for every turn after it: the next read sweeps again rather than hitting.
+    expect(answered.snapshot.availableModels.length).toBeGreaterThan(0);
+    expect((await services.profileProviderSnapshot()).cache).toBe('miss');
   });
 });
 
@@ -380,7 +393,7 @@ describe('a degraded listing versus a confirmed-missing model', () => {
 
   test('one provider listing 503 does not classify its pinned tier as confirmed missing', async () => {
     catalogDown();
-    const degraded = await degradedServices().profileProviderSnapshot();
+    const degraded = (await degradedServices().profileProviderSnapshot()).snapshot;
     expect(degraded.unavailableProviders).toHaveLength(1);
 
     const profile = resolveWith(degraded);
@@ -395,7 +408,7 @@ describe('a degraded listing versus a confirmed-missing model', () => {
 
   test('a provider that answers without the model still refuses', async () => {
     catalogDown();
-    const clean = await snapshotServices(null).profileProviderSnapshot();
+    const clean = (await snapshotServices(null).profileProviderSnapshot()).snapshot;
     expect(clean.unavailableProviders).toEqual([]);
 
     // An empty failure set ASSERTS the listing was complete, so absence is proof

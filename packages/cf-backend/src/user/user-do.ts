@@ -121,9 +121,10 @@ import { recordReleaseTransition } from '../analytics/record';
 import { openAnalyticsWindow } from '../analytics/writer';
 import {
   DEVICE_CONSENT_SCOPE, DEVICE_CONSENT_SCOPE_FULL_FS,
-  DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED,
+  DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED, DEVICE_PROVISION_METHOD, DEVICE_TOKEN_ROTATION,
   mergeConsentScope, parseConsentScope, summarizeDeviceAction,
   type DeviceConsentScope, type DeviceConsentDecision, type DeviceStatus,
+  type DeviceFleetEntry,
 } from '@kinu.run/core';
 import {
   validateMcpServerInput, parseAllowedTools, mapConnectionStatus,
@@ -150,13 +151,15 @@ import {
 } from '../lib/cloudflare-oauth';
 
 const CLI_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days
-/** How long a device token survives without being used. Renewal is automatic
- *  and needs no client support: every successful verification pushes the
- *  window out again (see `verifyDeviceToken`), so this is an idle timeout —
- *  a machine that stops connecting for this long must be re-linked with
- *  `kinu connect`, and one that keeps connecting never is. */
-const DEVICE_TOKEN_IDLE_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days
+/** How long a device link lives from its last ROTATION. Rotation happens on
+ *  every accepted connect, so a machine in use renews itself and never has to
+ *  be re-linked; a copy of `device.json` that stops rotating dies on this wall
+ *  clock rather than living as long as someone keeps using it. */
+const DEVICE_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days
 const DEVICE_CONNECT_TICKET_TTL_MS = 60 * 1000;
+/** A device name is a display label, not a hostname — bounded so a UI row
+ *  cannot be blown out by one paste. */
+const DEVICE_NAME_MAX_LENGTH = 80;
 const CLI_AGENT_CONNECT_TICKET_TTL_MS = 60 * 1000;
 const CLI_AGENT_WEBSOCKET_CAPABILITY = 'agent.websocket' as const;
 
@@ -930,9 +933,15 @@ export class UserDO extends Agent<Env> {
     return super.fetch(request);
   }
 
-  /** Verify + consume the daemon's connect ticket and accept its WebSocket.
-   *  Ticket verification lives HERE (not in the worker) so the upgrade is
-   *  safe no matter how the request reached this DO. */
+  /** Verify + consume the daemon's connect ticket, accept its WebSocket, and
+   *  ROTATE the device's long-lived token over that socket.
+   *
+   *  Ticket verification lives HERE (not in the worker) so the upgrade is safe
+   *  no matter how the request reached this DO. Rotation lives here for the
+   *  same reason it exists: this is the one moment the real machine has proved
+   *  possession of the current secret, so it is the only moment a copy of
+   *  `device.json` can be made stale. The new secret rides the socket that was
+   *  just authenticated — it never appears in a URL or a log line. */
   private async acceptDeviceSocket(request: Request, url: URL): Promise<Response> {
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
       return new Response('Expected WebSocket', { status: 426 });
@@ -943,11 +952,40 @@ export class UserDO extends Agent<Env> {
 
     const pair = new WebSocketPair();
     const [client, server] = [pair[0], pair[1]];
+    // A second socket taking the slot is never silent: the owner reads it on
+    // the device row, and it is the signal a stolen device.json produces.
+    if (this._devices.isConnected(verified.deviceId)) {
+      this.sqlx(`UPDATE user_devices SET replaced_at = ? WHERE id = ?`, Date.now(), verified.deviceId);
+    }
     this._devices.accept(verified.deviceId, server);
     const now = Date.now();
-    this.sqlx(`UPDATE user_devices SET connected_at = ?, last_seen_at = ? WHERE id = ?`, now, now, verified.deviceId);
+    this.sqlx(
+      `UPDATE user_devices SET connected_at = ?, last_seen_at = ?, last_ip = ?, last_agent = ? WHERE id = ?`,
+      now, now,
+      request.headers.get('cf-connecting-ip') ?? request.headers.get('x-forwarded-for'),
+      (request.headers.get('user-agent') ?? '').slice(0, 200) || null,
+      verified.deviceId,
+    );
+    server.send(JSON.stringify({ type: DEVICE_TOKEN_ROTATION, token: await this.rotateDeviceToken(verified.deviceId) }));
     const init: ResponseInit & { webSocket: WebSocket } = { status: 101, webSocket: client };
     return new Response(null, init);
+  }
+
+  /** Mint this device's next long-lived token, keeping the superseded hash as
+   *  a one-use grace: a rotation message lost with the socket must not brick
+   *  the machine, and the grace ends the moment the new token is first used
+   *  (see {@link verifyDeviceToken}). The absolute window restarts here, so a
+   *  machine that keeps connecting never lapses and a copy that stops
+   *  rotating expires on a wall clock. */
+  private async rotateDeviceToken(deviceId: string): Promise<string> {
+    const token = `pdt_${randomToken(32)}`;
+    this.sqlx(
+      `UPDATE user_devices
+          SET prev_token_hash = token_hash, token_hash = ?, expires_at = ?
+        WHERE id = ?`,
+      await sha256Hex(token), Date.now() + DEVICE_TOKEN_TTL_MS, deviceId,
+    );
+    return token;
   }
 
   override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer | ArrayBufferView): Promise<void> {
@@ -993,7 +1031,8 @@ export class UserDO extends Agent<Env> {
 
   /** Mint a device + connect token. The authenticated CLI receives the raw
    *  token once and writes it to the local daemon config; only its hash is
-   *  stored here. */
+   *  stored here. The label is the user-chosen name the CLI prompts for
+   *  (default `user@hostname`); 'Your PC' covers a caller that sent nothing. */
   async registerDevice(caller: UserCaller, label?: string): Promise<{ deviceId: string; token: string }> {
     await this.requireTier(caller, 'device.manage');
     const deviceId = `dev-${nanoid(10)}`;
@@ -1002,27 +1041,54 @@ export class UserDO extends Agent<Env> {
     const now = Date.now();
     this.sqlx(
       `INSERT INTO user_devices (id, token_hash, label, created_at, expires_at) VALUES (?, ?, ?, ?, ?)`,
-      deviceId, tokenHash, (label && label.trim()) || 'My device', now, now + DEVICE_TOKEN_IDLE_TTL_MS,
+      deviceId, tokenHash, (label && label.trim()) || 'Your PC', now, now + DEVICE_TOKEN_TTL_MS,
     );
     return { deviceId, token };
   }
 
-  /** Verify a presented device token against the stored hash, and renew its
-   *  idle window. A device that has gone `DEVICE_TOKEN_IDLE_TTL_MS` without a
-   *  successful verification is refused and must be re-linked; rows written
-   *  before the column existed carry a null window and get stamped here rather
-   *  than being locked out. */
+  /** Rename a registered device. Every surface renders this name; the id and
+   *  credentials are untouched. */
+  async renameDevice(caller: UserCaller, deviceId: string, name: string): Promise<{ ok: boolean }> {
+    await this.requireTier(caller, 'device.manage');
+    const trimmed = name.trim().slice(0, DEVICE_NAME_MAX_LENGTH);
+    const row = trimmed ? this.sqlx<{ id: string }>(
+      `SELECT id FROM user_devices WHERE id = ? AND revoked_at IS NULL LIMIT 1`, deviceId,
+    )[0] : undefined;
+    if (!row) return { ok: false };
+    this.sqlx(`UPDATE user_devices SET label = ? WHERE id = ?`, trimmed, deviceId);
+    return { ok: true };
+  }
+
+  /**
+   * Verify a presented device token.
+   *
+   * The window is ABSOLUTE, measured from the last rotation — verification does
+   * not extend it. That is the point: an idle-sliding window kept a copied
+   * `device.json` alive forever as long as the thief kept connecting, while a
+   * real machine renews by ROTATING on every accept.
+   *
+   * The superseded secret is accepted once more, so a rotation message lost
+   * with its socket does not brick the machine; presenting the CURRENT token
+   * proves the rotation landed and clears the grace, which is what makes the
+   * old copy dead rather than merely older.
+   *
+   * Rows written before the window existed carry a null `expires_at` and are
+   * stamped on their next rotation rather than being locked out.
+   */
   async verifyDeviceToken(caller: UserCaller, token: string): Promise<{ ok: boolean; deviceId?: string }> {
     await this.requireTier(caller, 'device.manage');
     if (!/^pdt_[A-Za-z0-9_-]{32,}$/.test(token)) return { ok: false };
     const tokenHash = await sha256Hex(token);
-    const row = this.sqlx<{ id: string; expires_at: number | null }>(
-      `SELECT id, expires_at FROM user_devices WHERE token_hash = ? AND revoked_at IS NULL LIMIT 1`, tokenHash,
+    const row = this.sqlx<{ id: string; expires_at: number | null; current: number }>(
+      `SELECT id, expires_at, (token_hash = ?) AS current
+         FROM user_devices
+        WHERE (token_hash = ? OR prev_token_hash = ?) AND revoked_at IS NULL
+        LIMIT 1`,
+      tokenHash, tokenHash, tokenHash,
     )[0];
     if (!row) return { ok: false };
-    const now = Date.now();
-    if (row.expires_at !== null && row.expires_at <= now) return { ok: false };
-    this.sqlx(`UPDATE user_devices SET expires_at = ? WHERE id = ?`, now + DEVICE_TOKEN_IDLE_TTL_MS, row.id);
+    if (row.expires_at !== null && row.expires_at <= Date.now()) return { ok: false };
+    if (row.current) this.sqlx(`UPDATE user_devices SET prev_token_hash = NULL WHERE id = ?`, row.id);
     return { ok: true, deviceId: row.id };
   }
 
@@ -1083,13 +1149,29 @@ export class UserDO extends Agent<Env> {
   ): Promise<string | undefined> {
     const resolved = await this.requireTier(caller, 'device.rpc');
     const deviceId = this._devices.connectedDeviceId(opts?.deviceId);
-    if (!deviceId) throw new Error(NO_DEVICE_CONNECTED);
+    if (!deviceId) {
+      // No machine attached at all is not a dead end for an agent that needs
+      // one: the same rail that carries per-action consent carries a
+      // provisioning request, so the owner sees ONE card saying their
+      // computer was asked for — approve surfaces the connect flow, deny ends
+      // the asking. Execution stays impossible either way until a daemon is
+      // actually linked.
+      if (opts?.agentName) {
+        await this.raiseProvisioningRequest(
+          resolved.kind === 'workspace' ? resolved.workspace : opts.agentName,
+        );
+      }
+      throw new Error(NO_DEVICE_CONNECTED);
+    }
     if (opts?.agentName) {
       // Consent is keyed on the PROVEN workspace, never the claimed name — an
       // agent cannot ride a sibling workspace's remembered grant. Calls that
       // pass no agentName (checkpoint bookkeeping) stay consent-free as before.
       const consentAgent = resolved.kind === 'workspace' ? resolved.workspace : opts.agentName;
-      const consent = await this.checkDeviceConsent(consentAgent, deviceId, method, params);
+      const consent = await this.checkDeviceConsent(
+        consentAgent, deviceId, method, params,
+        resolved.kind === 'workspace' ? resolved.workspace : undefined,
+      );
       if (!consent.allowed) throw new Error(consent.reason);
     }
     const tunnel = this._devices.tunnel(deviceId);
@@ -1159,6 +1241,9 @@ export class UserDO extends Agent<Env> {
    */
   private async checkDeviceConsent(
     agentName: string, deviceId: string, method: string, params: JsonValue[],
+    /** Present when the caller is the named workspace itself — the card then
+     *  asks for THE WORKSPACE's grant, which is what "always" records. */
+    workspaceName?: string,
   ): Promise<{ allowed: true } | { allowed: false; reason: string }> {
     const policy = this.getDeviceConsentPolicy(agentName, deviceId);
     if (policy?.policy === 'allow') return { allowed: true };
@@ -1167,13 +1252,16 @@ export class UserDO extends Agent<Env> {
     let decision: DeviceConsentDecision;
     try {
       const stub = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(agentName));
-      const request: DeviceConsentRequest = {
+      const base: DeviceConsentRequest = {
         deviceId,
         deviceLabel: this.deviceLabel(deviceId),
         method: action.method,
         command: action.command,
         scope: DEVICE_CONSENT_SCOPE,
       };
+      const request: DeviceConsentRequest = workspaceName
+        ? { ...base, workspaceName }
+        : base;
       decision = await stub.awaitDeviceConsent(request);
     } catch (error) {
       // The agent could not be reached to raise the card at all — nobody was
@@ -1186,6 +1274,31 @@ export class UserDO extends Agent<Env> {
     if (decision === 'timeout') return { allowed: false, reason: DEVICE_CONSENT_UNANSWERED };
     if (decision === 'always') this.setDeviceConsentPolicy(agentName, deviceId, 'allow', action);
     return { allowed: true };
+  }
+
+  /**
+   * The agent reached for its owner's computer and none was connected. Raise
+   * ONE provisioning card on the same rail per-action consent rides — approve
+   * surfaces the connect flow, deny ends the asking — and fail the call
+   * either way: nothing executes until a daemon is actually linked.
+   * Deduped against prompts still waiting, so a retry loop cannot stack cards.
+   */
+  private async raiseProvisioningRequest(workspaceOrAgent: string): Promise<void> {
+    try {
+      const stub = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspaceOrAgent));
+      if ((await stub.listPendingConsents()).some((c) => c.method === DEVICE_PROVISION_METHOD)) return;
+      await stub.awaitDeviceConsent({
+        deviceId: '',
+        deviceLabel: 'this computer',
+        method: DEVICE_PROVISION_METHOD,
+        command: `Connect this computer so "${workspaceOrAgent}" can run commands on it — you will be walked through \`kinu connect\`.`,
+        scope: DEVICE_CONSENT_SCOPE,
+        workspaceName: workspaceOrAgent,
+      });
+    } catch (error) {
+      // No one to show the card to is the unanswered case, never a refusal.
+      diagnostics.event('device.provision_request_unreachable', { error: renderThrownChain({ cause: error }) });
+    }
   }
 
   /** The remembered consent policies (Account settings → Devices — see/revoke which agents may
@@ -1237,7 +1350,19 @@ export class UserDO extends Agent<Env> {
     return { ok: true };
   }
 
-  /** The laptop executor's path-scope check: does this agent hold the
+  /** Revoke a workspace's grant on a device (Account settings → Devices).
+   *  The row is deleted rather than flipped to 'deny', so the next call asks
+   *  again instead of reading as a standing refusal — and it takes effect on
+   *  that next call, because the chokepoint reads this table every time. */
+  async revokeDeviceConsent(caller: UserCaller, agentName: string, deviceId: string): Promise<{ ok: boolean }> {
+    const resolved = await this.requireTier(caller, 'device.consent');
+    const target = resolved.kind === 'workspace' ? resolved.workspace : agentName;
+    if (!target || !deviceId) return { ok: false };
+    this.sqlx(`DELETE FROM device_consent WHERE agent_name = ? AND device_id = ?`, target, deviceId);
+    return { ok: true };
+  }
+
+  /** The device file view's path-scope check: does this workspace hold the
    *  full-filesystem tier on the currently connected device? */
   async getDeviceFsConsent(caller: UserCaller, agentName: string): Promise<{ fullFilesystem: boolean }> {
     const resolved = await this.requireTier(caller, 'device.consent');
@@ -1251,22 +1376,29 @@ export class UserDO extends Agent<Env> {
     };
   }
 
-  /** The user's devices for Account settings → Devices (live-connected flag from the
-   *  hibernatable-socket tags). */
+  /** The user's devices for Account settings → Devices (live-connected flag from
+   *  the hibernatable-socket tags, plus the provenance of the newest accept and
+   *  whether a second socket ever took the slot — the two facts that make a
+   *  stolen `device.json` visible rather than silent). */
   async listDevices(caller: UserCaller): Promise<Array<{
     id: string; label: string; os: string | null; hostname: string | null;
     connected: boolean; createdAt: number; lastSeenAt: number | null; expiresAt: number | null;
+    lastIp: string | null; lastAgent: string | null; replacedAt: number | null;
   }>> {
     await this.requireTier(caller, 'device.manage');
     return this.sqlx<{
       id: string; label: string; os: string | null; hostname: string | null;
       created_at: number; last_seen_at: number | null; expires_at: number | null;
-    }>(`SELECT id, label, os, hostname, created_at, last_seen_at, expires_at FROM user_devices
-        WHERE revoked_at IS NULL ORDER BY created_at DESC`)
+      last_ip: string | null; last_agent: string | null; replaced_at: number | null;
+    }>(`SELECT id, label, os, hostname, created_at, last_seen_at, expires_at,
+               last_ip, last_agent, replaced_at
+          FROM user_devices
+         WHERE revoked_at IS NULL ORDER BY created_at DESC`)
       .map((r) => ({
         id: r.id, label: r.label, os: r.os, hostname: r.hostname,
         connected: this._devices.isConnected(r.id),
         createdAt: r.created_at, lastSeenAt: r.last_seen_at, expiresAt: r.expires_at,
+        lastIp: r.last_ip, lastAgent: r.last_agent, replacedAt: r.replaced_at,
       }));
   }
 
@@ -1288,15 +1420,42 @@ export class UserDO extends Agent<Env> {
    * device round-trip to render a settings page.
    */
   async deviceRuntimeStatus(caller: UserCaller): Promise<DeviceStatus> {
-    await this.requireTier(caller, 'device.rpc');
+    const resolved = await this.requireTier(caller, 'device.rpc');
+    const workspace = resolved.kind === 'workspace' ? resolved.workspace : null;
     const deviceId = this._devices.connectedDeviceId();
+    // Names and liveness are visible BEFORE any grant: an agent that cannot
+    // see the machine cannot ask for it by name, and seeing it grants nothing —
+    // every call still goes through the consent chokepoint above.
+    const devices = this.deviceFleet();
     if (deviceId) {
-      return { connected: true, registered: true, toolchain: await this._devices.probeToolchain(deviceId, Date.now()) };
+      const granted = workspace
+        ? this.getDeviceConsentPolicy(workspace, deviceId)?.policy === 'allow'
+        : undefined;
+      const status: DeviceStatus = {
+        connected: true,
+        registered: true,
+        toolchain: await this._devices.probeToolchain(deviceId, Date.now()),
+        devices,
+      };
+      if (granted !== undefined) status.workspaceGranted = granted;
+      return status;
     }
-    const registered = this.sqlx<{ n: number }>(
-      `SELECT COUNT(*) AS n FROM user_devices WHERE revoked_at IS NULL`,
-    )[0]?.n ?? 0;
-    return { connected: false, registered: registered > 0, toolchain: null };
+    return { connected: false, registered: devices.length > 0, toolchain: null, devices };
+  }
+
+  /** Every registered device with its user-chosen name, platform and live
+   *  state — the pre-grant view both the agent's executor row and the UI read. */
+  private deviceFleet(): DeviceFleetEntry[] {
+    return this.sqlx<{ id: string; label: string; os: string | null; hostname: string | null }>(
+      `SELECT id, label, os, hostname FROM user_devices
+        WHERE revoked_at IS NULL ORDER BY created_at DESC`,
+    ).map((r) => ({
+      id: r.id,
+      name: r.label,
+      os: r.os,
+      hostname: r.hostname,
+      connected: this._devices.isConnected(r.id),
+    }));
   }
 
   /** Revoke a device: drop its live socket + mark the row revoked. */

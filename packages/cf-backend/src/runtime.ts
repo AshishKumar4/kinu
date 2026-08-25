@@ -40,12 +40,14 @@ import {
   decodeJsonValue, effortFor,
   createAgentConfigStore, initAgentConfigTable, initActorTables,
   parseModelSpec, reasoningEffortOptions, resolveModelRoute,
+  type FixedTierSource,
   type VectorStore,
 } from "@kinu.run/core";
 import type { SandboxHandle } from "@kinu.run/core";
 import { diagnostics, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
 import { getSandbox } from "@cloudflare/sandbox";
-import { configureContainerEgress, withConfiguredEgress } from "./egress/configure";
+import { kinuEgressParams } from "./egress/configure";
+import { adaptCloudflareSandbox } from "./sandbox-exec-lane";
 import { previewHostSuffix } from "./lib/preview-origin";
 import { MemoryStore } from "@kinu.run/agent-utils/memory";
 import { CraftStore as AgentUtilsCraftStore } from "@kinu.run/agent-utils/stores";
@@ -67,7 +69,6 @@ import {
 import { ownerCaller, type UserCaller } from "./user/workspace-capability";
 import { adaptMemory, backfillMemoryVectors } from "./memory-sync";
 import { agentAffinityKey, explorePrompt, formatInheritedContext, normalizeUsage, reflectionPrompt } from "@kinu.run/core";
-import type { KinuSandbox } from "./kinu-sandbox";
 import {
   createNimbusWorkspaceSandbox,
   nimbusPreviewConfigured,
@@ -499,25 +500,30 @@ export function createCFRuntime(
       // getSandbox that forgets this option inherits `rpc` rather than the
       // SDK's `http` field default.
       const sdk = getSandbox(env.Sandbox, sandboxId, { normalizeId: true, transport: "rpc" });
-      // Egress interception is configured before the container can run anything,
-      // and awaited inside the operation that needed it. Not in `onStart`: the
-      // Container base re-applies its persisted outbound configuration
-      // immediately BEFORE `container.start()`, and `onStart` runs after the
-      // container is already up, so the hook is too late to install it. Until it
-      // lands the container has no network at all — `enableInternet = false` with
-      // no handler bound means the platform denies everything — so the window
-      // before configuration fails closed rather than leaking an unintercepted
+      // Egress interception is configured before the container can run
+      // anything, by the Durable Object that owns it, and awaited inside the
+      // operation that needed it. Not in `onStart`: the Container base
+      // re-applies its persisted outbound configuration immediately BEFORE
+      // `container.start()`, and `onStart` runs after the container is already
+      // up, so the hook is too late to install it. Until it lands the container
+      // has no network at all — `enableInternet = false` with no handler bound
+      // means the platform denies everything — so the window before
+      // configuration fails closed rather than leaking an unintercepted
       // request. Only the workspace that OWNS the grants configures; a facet
       // rides the configuration its root installed.
-      const handle = withConfiguredEgress(adaptCloudflareSandbox(sdk), async () => {
+      //
+      // `sdk.configureEgress` rather than binding the handlers from here: that
+      // call is also what pins WHICH workspace owns the container, which is how
+      // a lifecycle incident reaches its agent from a cold, evicted object.
+      const handle = adaptCloudflareSandbox(sdk, async () => {
         const userId = actor.ownerUserId();
         if (!userId) return;
-        await configureContainerEgress(sdk, {
+        await sdk.configureEgress(kinuEgressParams({
           workspaceName: actor.workspaceName,
           ownerUserId: userId,
           vault: await listOwnerEgressVault(env, actor),
           grants: memoryConfig.getShellApprovalGrants(),
-        });
+        }));
       });
       sandboxHandle = handle;
       // No restore wrapper here, deliberately. Restoring /workspace is the
@@ -689,27 +695,6 @@ function createAgentNimbusHandle(env: Env, actor: ActorRuntimeIdentity): NimbusS
         url: previewUrl(entry.port, entry.capability),
       })),
     },
-  };
-}
-
-async function jsonResultOrVoid<Result>(result: Promise<Result>) {
-  const value = await result;
-  return value === undefined ? undefined : decodeJsonValue({ value });
-}
-
-/** The SDK's response classes are serializable but intentionally do not carry
- * JsonObject index signatures. Rebuild the small portable SandboxHandle at the
- * boundary and validate opaque mutation responses before core observes them. */
-function adaptCloudflareSandbox(handle: KinuSandbox): SandboxHandle {
-  return {
-    exec: (command, opts) => handle.exec(command, opts),
-    readFile: (path, opts) => handle.readFile(path, opts),
-    writeFile: (path, content, opts) => jsonResultOrVoid(handle.writeFile(path, content, opts)),
-    listFiles: (path, opts) => handle.listFiles(path, opts),
-    deleteFile: (path) => jsonResultOrVoid(handle.deleteFile(path)),
-    exposePort: (port, opts) => handle.exposePort(port, opts),
-    unexposePort: (port) => jsonResultOrVoid(handle.unexposePort(port)),
-    getExposedPorts: (hostname) => handle.getExposedPorts(hostname),
   };
 }
 
@@ -921,16 +906,19 @@ function reportCall(
     : { source, spec, usage });
 }
 
-type ProfileLaneSource = 'judge' | 'fast' | 'advisor';
-
-/** Build one fixed-tier lane from the active immutable profile. */
+/** Build one fixed-tier lane from the active immutable profile.
+ *
+ *  `source` is core's `FixedTierSource`, derived from MODEL_ROUTE_POLICY's
+ *  fixed rows. It used to be a local `'judge' | 'fast' | 'advisor'` union — a
+ *  hand-mirror of a SUBSET of those rows, so moving a producer onto a fixed tier
+ *  in core left this factory unable to name it and nothing said so. */
 function createProfileLaneLLM(
   agent: AgentHost,
   env: Env,
   actor: ActorRuntimeIdentity,
   turnProfile: (() => ResolvedTurnProfile | null) | undefined,
   resolveProfile: (() => Promise<ResolvedTurnProfile>) | undefined,
-  source: ProfileLaneSource,
+  source: FixedTierSource,
   report?: ModelCallSink,
 ): LLM | undefined {
   if (!turnProfile && !resolveProfile) return undefined;
