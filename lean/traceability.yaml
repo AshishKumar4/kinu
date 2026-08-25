@@ -831,3 +831,147 @@ requirements:
       - The digests are modelled as the argument tuples argumentDigest hashes, so every result reads up to a SHA-256 collision rather than ruling one out
       - Rule 4 is proved to have teeth but its precedence over rule 6 is not modelled, and the source records that the opposite order would leave this comparison as dead code
       - The re-verifier is a parameter, so a verifier that lies satisfies every theorem here and no gate ordering reaches it
+  PR-DEVBOX-001:
+    statement: Snapshot-chain attach mounts at most two layers and moves no payload bytes so its cost never mentions the tree size, while its periodic checkpoint re-ships the cumulative changed-set exactly and is therefore bounded below as well as above by that set.
+    status: by-construction-witness
+    theorems:
+      - Proteus.Storage.SnapshotChain.layers_le_two
+      - Proteus.Storage.SnapshotChain.chain_attach_mounts_its_layers
+      - Proteus.Storage.SnapshotChain.chain_attach_independent_of_n
+      - Proteus.Storage.SnapshotChain.chain_attach_independent_of_pending
+      - Proteus.Storage.SnapshotChain.attach_seed_is_the_committed_delta
+      - Proteus.Storage.SnapshotChain.attach_seed_absent_without_delta
+      - Proteus.Storage.SnapshotChain.a_pending_seed_would_differ
+      - Proteus.Storage.SnapshotChain.extract_attach_is_linear_in_n
+      - Proteus.Storage.SnapshotChain.the_changed_set_can_reach_the_whole_tree
+      - Proteus.Storage.SnapshotChain.chain_tick_is_theta_c
+      - Proteus.Storage.SnapshotChain.chain_tick_upper_bound
+      - Proteus.Storage.SnapshotChain.chain_tick_lower_bound
+      - Proteus.Storage.SnapshotChain.a_pending_only_tick_would_be_strictly_cheaper
+      - Proteus.Storage.SnapshotChain.first_base_is_linear_in_n
+      - Proteus.Storage.SnapshotChain.unchanged_tick_uploads_nothing
+    tsRefs:
+      - packages/devbox/src/snapshot-chain.ts:580
+      - packages/devbox/src/snapshot-chain.ts:314
+      - packages/devbox/src/snapshot-chain.ts:81
+      - packages/devbox/src/storage.ts:95
+      - packages/devbox/src/storage.ts:98
+    remainingEvidence:
+      - The tick bound is Theta(c) rather than O(p), so a box whose pending change is far smaller than its cumulative changed-set pays the whole set on every commit, and no theorem here weakens that into a pending-shaped bound
+      - Uploaded bytes are modelled as the upper directory's size while the real archive is squashfs-compressed, so the constant relating the two is the deployed bench's and not this model's
+      - Lean proves the complexity class of the modelled algorithm and says nothing about wall-clock, request latency or the container-start budget the attach must fit inside
+      - Extraction-mode attach is linear in the tree and is proved so rather than excluded, but which hosts take that path is a deployment fact outside the model
+      - Independence from the tree size names which parameter a cost reads and never claims the cost is small: the changed-set is not bounded away from the tree, because a box is born over an empty lower and archives its base only at the first checkpoint, so a fresh workspace accumulates everything written since birth into the delta
+  PR-DEVBOX-002:
+    statement: A snapshot-chain rebase fires only at a quiesce once the cumulative delta has outgrown k times the base, its linear fold then amortizes to fewer than one plus one over k uploaded bytes per changed byte, a tick past that ratio still uploads the whole delta, and every stored generation is either the referenced one or named in the record so the unconditional sweep drains them without a listing.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.Storage.SnapshotChain.tick_never_rebases
+      - Proteus.Storage.SnapshotChain.rebase_requires_the_delta_to_outgrow_k_base
+      - Proteus.Storage.SnapshotChain.rebase_amortizes_at_a_quiesce
+      - Proteus.Storage.SnapshotChain.a_tick_past_the_ratio_still_uploads_the_whole_delta
+      - Proteus.Storage.SnapshotChain.referenced_generations_le_two
+      - Proteus.Storage.SnapshotChain.fresh_is_bounded
+      - Proteus.Storage.SnapshotChain.genStep_preserves_bound
+      - Proteus.Storage.SnapshotChain.stored_is_bounded_by_the_named_orphans
+      - Proteus.Storage.SnapshotChain.a_rebase_names_one_generation
+      - Proteus.Storage.SnapshotChain.a_completed_sweep_leaves_one_generation
+      - Proteus.Storage.SnapshotChain.a_partial_sweep_is_re_runnable
+      - Proteus.Storage.SnapshotChain.without_a_sweep_the_population_grows
+    tsRefs:
+      - packages/devbox/src/snapshot-chain.ts:133
+      - packages/devbox/src/snapshot-chain.ts:117
+      - packages/devbox/src/snapshot-chain.ts:278
+      - packages/devbox/src/snapshot-chain.ts:876
+      - packages/devbox/src/snapshot-chain.ts:981
+      - packages/devbox/src/storage.ts:30
+    remainingEvidence:
+      - The amortization is stated with the rebase predicate itself as its hypothesis, so it holds at a quiesce and is silent between two of them; a tick past the ratio provably still uploads the whole cumulative set, which makes the honest bound per-box-lifetime with a quiesce boundary rather than per-checkpoint
+      - REBASE_DELTA_RATIO is derived from a break-even argument and not measured, so the k every theorem quantifies over has no production value behind it yet
+      - The sweep runs on a successful commit, so a box that rebases and then never commits again keeps both the recorded ids and the bytes; without_a_sweep_the_population_grows states that residual, and the bytes are reclaimable rather than lost because the record still names them
+      - The earlier revision of this requirement proved the stored count UNBOUNDED, which was true of the code before the orphan list existed; that theorem is deleted rather than kept, because a theorem whose failure mode has been removed from the code cannot fail and would read as coverage
+      - The sweep is proved complete against the recorded ids, not against the store: whether the three object keys per generation are the only bytes a generation owns is a key-layout fact outside the model
+      - The hypothesis that the merged view is at most base plus delta assumes every delta byte is new, which compression and overwritten paths can only make truer but which nothing here measures
+  PR-DEVBOX-003:
+    statement: Overlay-cas attach, replay, read and periodic checkpoint each have a cost independent of the tree size, the quiesce fold carries the design's single linear term, batching bounds what a crash redoes to one batch that re-uploads nothing, and the sweep's whole-prefix listing never happens on the attach or checkpoint path.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.Storage.OverlayCas.overlay_mounts_two_layers
+      - Proteus.Storage.OverlayCas.overlay_layers_le_two
+      - Proteus.Storage.OverlayCas.replay_is_linear_in_pending
+      - Proteus.Storage.OverlayCas.overlay_attach_independent_of_n
+      - Proteus.Storage.OverlayCas.overlay_attach_independent_of_cumulative
+      - Proteus.Storage.OverlayCas.overlay_attach_scans_only_pending
+      - Proteus.Storage.OverlayCas.read_is_one_lookup_and_one_chunk
+      - Proteus.Storage.OverlayCas.overlay_read_independent_of_n
+      - Proteus.Storage.OverlayCas.tick_is_blobs_plus_one_put_per_batch
+      - Proteus.Storage.OverlayCas.batching_the_journal_beats_one_put_per_entry
+      - Proteus.Storage.OverlayCas.one_entry_costs_one_journal_put
+      - Proteus.Storage.OverlayCas.batches_cover_the_pending_change
+      - Proteus.Storage.OverlayCas.a_crash_redoes_at_most_one_batch
+      - Proteus.Storage.OverlayCas.a_redone_batch_stages_no_bytes
+      - Proteus.Storage.OverlayCas.overlay_tick_independent_of_n
+      - Proteus.Storage.OverlayCas.overlay_tick_independent_of_cumulative
+      - Proteus.Storage.OverlayCas.overlay_tick_beats_the_chain_when_pending_is_small
+      - Proteus.Storage.OverlayCas.quiesce_fold_carries_the_one_linear_term
+      - Proteus.Storage.OverlayCas.the_fold_operation_count_is_not_linear_in_the_tree
+      - Proteus.Storage.OverlayCas.quiesce_minus_the_fold_is_the_tick
+      - Proteus.Storage.OverlayCas.tick_does_not_fold
+      - Proteus.Storage.OverlayCas.discard_is_one_prefix_delete
+      - Proteus.Storage.OverlayCas.gc_is_bounded_by_listing_and_orphans
+      - Proteus.Storage.OverlayCas.gc_is_off_the_hot_path
+      - Proteus.Storage.OverlayCas.the_sweep_does_read_the_listing
+      - Proteus.Storage.OverlayCas.the_hot_path_lists_only_the_journal_prefix
+      - Proteus.Storage.OverlayCas.a_tombstone_stages_no_bytes
+      - Proteus.Storage.OverlayCas.a_rename_stages_no_bytes
+      - Proteus.Storage.OverlayCas.a_fresh_write_stages_its_bytes
+    tsRefs:
+      - packages/devbox/src/overlay-cas.ts:128
+      - packages/devbox/src/cas/sync.ts:58
+      - packages/devbox/src/cas/sync.ts:128
+      - packages/devbox/src/cas/sync.ts:237
+      - packages/devbox/src/cas/journal.ts:97
+      - packages/devbox/src/cas/types.ts:142
+      - packages/devbox/src/object-store.ts:18
+      - packages/devbox/src/storage.ts:98
+    remainingEvidence:
+      - The quiesce fold rewrites the manifest over every path and is linear in the tree, which is the one term in this design that is not sub-linear and is proved rather than excluded
+      - Class-A operations are counted as staged blobs while the real count is the pending change divided by the eight-megabyte single-put ceiling, so the divisor is the deployed bench's constant
+      - Chunk identity is a natural number here, so whether two versions of a file really share chunks is a property of the chunker that no theorem reaches
+      - The sweep is proved to sit off the attach and checkpoint paths but its completeness, which rests on a prefix listing minus the reachable set, is the sweep's own correctness and is not modelled
+      - The tree write per folded entry is counted as one operation per entry while a directory tombstone deletes every path beneath it, so a recursive delete costs more operations than the entry count this model charges
+      - Attach itself spends one write-class LIST of the journal prefix, so the sub-linear claim is that the hot path lists only a prefix whose size is the pending change and never the whole box prefix, not that it lists nothing
+  PR-DEVBOX-004:
+    statement: No finite interleaving of overlay-cas checkpoint effects reaches a state whose cursor is ahead of its fold, whose journal names an unstaged blob, or whose reap has passed the cursor, and removing any one of the four ordering rules makes a forbidden state reachable in a single step.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.Storage.OverlayCas.runOf_nil
+      - Proteus.Storage.OverlayCas.runOf_cons
+      - Proteus.Storage.OverlayCas.runOf_append
+      - Proteus.Storage.OverlayCas.empty_is_ordered
+      - Proteus.Storage.OverlayCas.step_preserves_ordering
+      - Proteus.Storage.OverlayCas.ordering_is_invariant
+      - Proteus.Storage.OverlayCas.no_cursor_ahead_of_its_fold
+      - Proteus.Storage.OverlayCas.no_journal_entry_names_an_unstaged_blob
+      - Proteus.Storage.OverlayCas.no_fold_precedes_its_journal_entry
+      - Proteus.Storage.OverlayCas.no_reap_precedes_its_cursor
+      - Proteus.Storage.OverlayCas.the_cursor_never_passes_a_staged_blob
+      - Proteus.Storage.OverlayCas.the_reap_never_passes_a_staged_blob
+      - Proteus.Storage.OverlayCas.dropping_blob_before_journal_names_an_unstaged_blob
+      - Proteus.Storage.OverlayCas.dropping_fold_before_cursor_advances_past_the_fold
+      - Proteus.Storage.OverlayCas.dropping_journal_before_fold_folds_an_unrecorded_entry
+      - Proteus.Storage.OverlayCas.dropping_cursor_before_reap_leaves_a_hole
+      - Proteus.Storage.OverlayCas.a_tick_journals_without_folding
+      - Proteus.Storage.OverlayCas.a_quiesce_folds_and_advances
+      - Proteus.Storage.OverlayCas.the_reversed_order_does_nothing
+    tsRefs:
+      - packages/devbox/src/cas/sync.ts:128
+      - packages/devbox/src/cas/sync.ts:211
+      - packages/devbox/src/cas/journal.ts:119
+      - packages/devbox/src/storage.ts:30
+    remainingEvidence:
+      - A crash is modelled as stopping at a prefix of one sequential action list, so two writers racing on one prefix is outside the model exactly as it is in every other file of this corpus
+      - The state is counters rather than named blobs, so the invariant is about how many effects reached each stage and not about which blob a particular journal entry names
+      - That a replay hard-stops on a missing blob rather than fabricating a read is a source-shape property Lean cannot see, and the invariant only makes that stop unreachable on a legal trace
+      - Journal-before-fold is structural in the source because the fold reads only stored journal objects, so the guard modelled here is stronger than the code needs and its mutant proves the property rather than the code path
+      - The fold writes the tree and the manifest as separate operations while the model counts one fold step, so an interleaving that crashes between a tree write and the manifest write is inside one modelled step

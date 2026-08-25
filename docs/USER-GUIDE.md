@@ -39,8 +39,8 @@ workspace can use Workers AI without a separate API key. Inference bills the
 connected Cloudflare account. To bring your own provider instead:
 
 ```bash
-kinu providers list                 # what's connected, and where each key lives
-kinu providers connect openai       # or anthropic, openrouter, codex, openai-compatible
+kinu provider list                 # what's connected, and where each key lives
+kinu provider connect openai       # or anthropic, openrouter, codex, openai-compatible
 ```
 
 Signed in, the key goes to your Kinu account rather than this disk, and this
@@ -111,6 +111,18 @@ deliberate switch in the web app's workspace settings, under Device access.
 canonical workspace, a sandbox container, or your connected machine), and
 `kinu executors <name> <executor> <command…>` runs one directly.
 
+A long command is not killed for being long. Nothing puts a deadline on the work
+itself. In a live session a call still running after 30 seconds moves to the
+background and hands the agent a handle, and the agent is woken when it settles;
+under `kinu exec` that threshold is 300 seconds, because a one-shot process exits
+after the answer and a handle nobody reads is worse than waiting. A 60-second
+ceiling used to sit inside the container and kill work the layer above meant to
+detach. It is gone.
+
+In the sandbox container, commands run in `/workspace`, which is the directory
+that survives the container being recycled. Write outside it and the bytes are
+gone the next time the platform hands the workspace a fresh instance.
+
 ## 5. Making it work while you're away
 
 Cloud workspaces take work three ways with nobody at the keyboard:
@@ -138,10 +150,18 @@ admits the message without blocking the sender.
 ```bash
 kinu status jarvis     # state, evolution history
 kinu timeline jarvis   # runs, evolution events, MCTS activity
+kinu spend jarvis      # what the workspace spent, by producer and by mission
 kinu memory jarvis     # read or search what it remembers
 kinu events jarvis     # recent events (email, webhook, timer, peer)
 kinu jobs jarvis       # background jobs, and cancel them
 ```
+
+`kinu spend` is the whole workspace, not the chat. It counts the judges, the fast
+tier, the evolution engine, exploration heads, search nodes, compaction and the
+embedder, and it sums every row the log holds rather than a recent window. It also
+reports what it could NOT account for: calls the provider reported nothing for, and
+calls no catalog could price. "Everything reported" and "92%, with the embedder
+silent" are different facts, and you can tell them apart.
 
 The web app at [kinu.run](https://kinu.run)
 has the same information, split across six surfaces named for what you go there
@@ -160,11 +180,13 @@ release awaiting approval, a rewrite of its own scaffold sitting under trial, a
 failed job, or changes to itself you have not read.
 
 **Exploration** is where I go when the agent tried more than one thing. The
-`agents` tool's `swarm` action grows a configured tree of full agent nodes. The
-agent chooses a preset and objective from the task. A measured search uses a
-registered verifier. A judged search uses an ensemble. Ideation returns
-unranked candidates. Local nodes receive private homes; hosted nodes share the
-workspace file plane.
+`agents` tool's `swarm` action grows a configured tree of swarm nodes, and every
+node is a whole tool-calling agent. The agent picks a preset from the task, and a
+preset plus a task is a complete call. Name an objective as well and the search is
+measured by a registered verifier; name none and it falls back to a judged sweep
+instead of refusing. Ideation returns unranked candidates. Local nodes receive
+private homes; hosted nodes share the workspace file plane. A node takes as many
+steps as its budget allows, because no turn here carries a step cap.
 
 Every search is a row, newest first, and the canvas draws its tree. Score sits
 in a node's fill, rollouts in its radius, and a ring marks the settled answer.

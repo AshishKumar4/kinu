@@ -30,9 +30,9 @@ From here, [docs/USER-GUIDE.md](docs/USER-GUIDE.md) covers daily use,
 ## Providers & models
 
 ```bash
-kinu auth                              # browser sign-in: attaches Cloudflare (Workers AI + AI Gateway)
-kinu providers list                    # see what's connected, with status inline
-kinu providers connect openai          # or: anthropic, openrouter, codex, openai-compatible
+kinu auth                             # browser sign-in: attaches Cloudflare (Workers AI + AI Gateway)
+kinu provider list                    # see what's connected, with status inline
+kinu provider connect openai          # or: anthropic, openrouter, codex, openai-compatible
 ```
 
 Signed in, a **local** workspace gets Workers AI with no separate key (it defaults to
@@ -45,13 +45,13 @@ scope. Run `kinu auth` again if you connected before it was added.
 
 ```bash
 claude                                    # one-time: sign in to your Claude subscription
-kinu providers connect claude          # status check + next steps (no key is stored)
+kinu provider connect claude          # status check + next steps (no key is stored)
 kinu create jarvis --mode local --model claude/claude-opus-4-x
 ```
 
 Kinu drives the official `claude` binary, which owns its own login. Kinu never
 reads your credentials. The subscription is local only; a cloud workspace runs on
-an Anthropic API key (`kinu providers connect anthropic`).
+an Anthropic API key (`kinu provider connect anthropic`).
 
 **Web search**: the `web` tool's `search` and `fetch` actions work with zero keys,
 over DuckDuckGo and Cloudflare's markdown service. For ranked, answer-augmented

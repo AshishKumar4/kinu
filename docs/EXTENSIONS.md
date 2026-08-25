@@ -7,9 +7,11 @@ Durable Object's Think hook bridge on `ActorAgent`. Internal consumers and
 external plugins ride the same mechanism, and no private callback path runs
 beside it.
 
-For the wider extension points (model provider, exploration strategy, actor
-kind), see [EXTENSIBILITY.md](./EXTENSIBILITY.md). This document covers the
-per-turn hooks.
+[EXTENSIBILITY.md](./EXTENSIBILITY.md) covers the four places a new kind of
+thing plugs in: a model provider, an exploration strategy, an actor kind and
+this hook contract. It names `KinuExtension` in one table row and stops. This
+document owns the hooks themselves: their signatures, their firing order, the
+three internal registrants and the cloud bridge.
 
 Source: `packages/core/src/extension.ts`, exported from `@kinu.run/core`.
 
@@ -92,10 +94,11 @@ onTurnEnd
 ```
 
 `registerTools` sits outside that sequence. Each backend calls it once while it
-assembles the turn's tool set. `runChat` calls it before `onTurnStart`
-(`core/src/chat.ts:204`); the cloud bridge calls it after
-(`cf-backend/src/actor-agent.ts:3093`). Do not depend on its position relative
-to the observation hooks.
+assembles the turn's tool set, and both call it before `onTurnStart`: `runChat`
+at `core/src/chat.ts:251`, the cloud bridge at
+`cf-backend/src/actor-agent.ts:3880`, ahead of the `assembleTurnMessages` call
+that fires the observation hooks. Do not depend on that position. It is where
+each backend happens to build its tool set, not a guarantee.
 
 Within one hook, every registered extension runs in registration order.
 `prepareStep` and `transformContext` both chain their outputs.
@@ -116,15 +119,20 @@ Both backends register the same three extensions, in the same order.
    byte-stable replay keeps the frozen block positions valid, so it resets
    nothing.
 2. **The user steer drain.** It is registered as `kinu.steering` on the CLI
-   (`cli-backend/src/local-session.ts:1715`) and as `kinu.user-steer` in
-   the cloud (`cf-backend/src/actor-agent.ts:846`). Both are one `prepareStep`
+   (`cli-backend/src/local-session.ts:2100`) and as `kinu.user-steer` in
+   the cloud (`cf-backend/src/actor-agent.ts:1121`). Both are one `prepareStep`
    hook over the same `UserSteerDrain`. It drains pending steers into a single
-   user message appended after the latest tool results.
+   user message appended after the latest tool results. Core owns the
+   provenance: a drained steer is stamped with `STEER_METADATA_KEY`
+   (`kinuSteer`) and `STEER_STEP_METADATA_KEY` (`kinuSteerAtStep`), declared in
+   `core/src/orchestrator/user-steer.ts:175-180`, so a surface can tell a
+   steered user row from one the owner typed.
 3. **`kinu.signals`**, the orchestrator's own turn extension
-   (`core/src/orchestrator/agent-orchestrator.ts:161`). It observes tool calls
-   for the turn's mechanical steering, and it drains every signal delivered
-   for the live turn into that turn's next step. A background event and a
-   steer both arrive this way.
+   (`core/src/orchestrator/agent-orchestrator.ts:165`, registered on the cloud
+   at `cf-backend/src/actor-agent.ts:1129`). It observes tool calls for the
+   turn's mechanical steering, and it drains every signal delivered for the
+   live turn into that turn's next step. A background event and a steer both
+   arrive this way.
 
 The steer drain registers before the signal extension on purpose. A signal
 splice must not shift the indices the steer drain replays into durable history.
@@ -141,9 +149,9 @@ above. `packages/cf-backend/package.json` depends on `@cloudflare/think` at
 
 | Think hook | ExtensionHost |
 | --- | --- |
-| `beforeTurn` (`cf-backend/src/actor-agent.ts:2894`) | `emitTurnStart`, then awaited `runTransformContext`; `ExtensionHost.tools()` folded into `TurnConfig.tools` and `activeTools` |
-| `beforeStep` (`cf-backend/src/actor-agent.ts:3180`) | `composePrepareStep`: the extension chain, then the turn's cache-breakpoint plan |
-| `beforeToolCall` / `afterToolCall` (`cf-backend/src/actor-agent.ts:3281`, `:3290`) | `emitToolCall` / `emitToolResult` |
+| `beforeTurn` (`cf-backend/src/actor-agent.ts:3787`) | `emitTurnStart`, then awaited `runTransformContext`; `ExtensionHost.tools()` folded into `TurnConfig.tools` and `activeTools` |
+| `beforeStep` (`cf-backend/src/actor-agent.ts:4144`) | `composePrepareStep`: the extension chain, then the turn's cache-breakpoint plan |
+| `beforeToolCall` / `afterToolCall` (`cf-backend/src/actor-agent.ts:4259`, `:4268`) | `emitToolCall` / `emitToolResult` |
 | `onChatResponse`, on a completed turn | `emitTurnEnd` |
 
 `emitTurnStart` and `runTransformContext` fire from
@@ -151,13 +159,15 @@ above. `packages/cf-backend/package.json` depends on `@cloudflare/think` at
 `assembleTurnMessages` that `runChat` calls too. The ordering cannot drift per
 backend.
 
-An actor's `activeTools` whitelist is
-`[...effectiveActiveTools, ...extensionToolNames]`, and `actorActiveTools()`
-has already narrowed `effectiveActiveTools` to the deps that actor's profile
-wired. Extension tools are additive on top of the narrowed set and never widen
-it. A contributed tool whose name is already in the turn's tools or its MCP
-tools is dropped before the merge
-(`cf-backend/src/actor-agent.ts:3092-3101`).
+A contributed tool has to clear two filters before it reaches the model. The
+first drops collisions: a name already in the turn's tools or its MCP tools is
+removed before the merge (`cf-backend/src/actor-agent.ts:3879-3882`). The
+second is the turn profile's allowlist. `actorActiveTools()` narrows the native
+list to the deps that actor's profile wired, `resolveAgentTurnProfile()`
+resolves the active role and work mode into `profile.allowedTools`, and the
+turn's `activeTools` keeps only the extension names that set contains
+(`cf-backend/src/actor-agent.ts:3921-3925`). So extension tools are additive on
+top of the narrowed native set, and a narrowed role can still drop one.
 
 ## Notes
 

@@ -204,12 +204,118 @@ handshake through the product's own `connectMcpServers` client. The optimization
 arm's credential-free half asserts the threshold is a bar something can clear
 and something can miss.
 
+### Which agent an arm runs against: `--backend local | cloud`
+
+Tests and evals are ONE suite. Which agent the suite drives is configuration, and
+`packages/test-utils/src/eval-target.ts` is that configuration's type.
+
+```bash
+bun run test:eval                        # local target: the in-process cli-backend runtime
+bun run evals:cloud                      # cloud target: a real workspace on staging
+bun run staging:preflight                # does staging run this branch? (the cloud arm's gate)
+```
+
+The two targets are two turn loops. The local target runs core `runChat`
+(`packages/core/src/chat.ts`), which passes its stop condition straight to
+`streamText`. The cloud target runs `@cloudflare/think` inside the deployed
+Durable Object, which keeps its own `stepCountIs(maxSteps)` condition and appends
+the caller's rather than substituting it. So "the behaviour eval passed" is two
+different claims, and until this seam existed the tier could only make the first
+one.
+
+That mattered. Production turns were capped at ten model steps, four of four
+capped runs across two workspaces reported `run_end: 'completed'` with the model
+still emitting tool calls, and nothing in the tree could see it. The live swarm
+eval could not: it opens its workspace with `openWorkspaceCLI`, so the capped
+loop was structurally unreachable from the one suite whose header claims to prove
+the search works. Two holes, one shape:
+
+| Hole | What the local target has | What the deployment has |
+|---|---|---|
+| wrong loop | core `runChat`, genuinely unbounded | `@cloudflare/think`, which keeps its own step bound |
+| wrong executor | the CLI's local shell with a real `node` | the Nimbus `node` shim, which cannot transform `.mjs` — so `exec-ratio`, the only registered verifier kind, returns `unavailable` |
+
+**What the seam exposes,** and nothing wider — every member is there because a
+shipped assertion reads it: the run-event log, the workspace's spend, a
+capability probe, the workspace filesystem and shell, the five search-ledger
+reads, the additional-agent roster, and teardown. There is no `sql`: a deployed
+workspace's SQLite lives inside its Durable Object and is reachable only as read
+models over RPC, and a seam with a member one target cannot honour teaches a
+suite to branch on its target.
+
+**The probe RUNS the instrument, and it is one instrument.** `VerifierProbe`
+answers whether an `exec-ratio` measurement harness can execute here, by writing
+a module and running `node` on it. The eval it replaces asserted that a verifier
+shell EXISTS, which is a different fact and the reason the deployed breakage was
+invisible. `probeVerifier` lives in the seam, so both arms run the same code
+rather than two copies that claim to match.
+
+**Spend has one definition on both targets.** `getActivitySnapshot().spend` is
+`workspaceSpend({ events, sql })` computed inside the Durable Object
+(`packages/cf-backend/src/orchestrator.ts`), so the cloud arm reports the same
+read model as every other arm rather than folding `run_end` usage itself. It
+aggregates the whole log on both targets, so there is no window to disclose and
+no floor to refuse; `recordWorkspaceSpend` is the one accumulator, and an episode
+that accounted for nothing counts as UNMEASURED rather than as a zero.
+
+**A platform-specific assertion says so inline.** `platformSpecific(plan, only,
+reason, assert)` in `tests/evals/target.ts` makes a one-target assertion a
+declared value with a printed reason. A bare `if (backend === 'local')` around an
+expectation is indistinguishable from an assertion somebody quietly turned off
+for the arm it kept failing on.
+
+#### The cloud arm is explicit, manual, and cleans up after itself
+
+It requires `--backend cloud` on top of everything the live tier already
+requires, so no gate tier can reach it and a credential sitting in a shell cannot
+make a commit hook create workspaces on a shared account. It refuses politely and
+names the fix when it cannot run:
+
+| State | What it says |
+|---|---|
+| no eval credential | mint one: `kinu auth --origin https://staging.kinu.run`, then `kinu tokens create --name evals --scopes ai.proxy`, export as `KINU_EVAL_TOKEN`. The local arm needs none |
+| staging runs another build | both shas and `bun run deploy:staging`. `--allow-stale` measures the deployed build on purpose |
+| staging has no build stamp | its asset bundle is incomplete, so its CLI downloads are broken too: re-run `bun run deploy:staging` |
+| staging unreachable | the transport failure verbatim, because the status code is the whole evidence for calling it infrastructure |
+| credential fronts a model, not a deployment | an AI Gateway creates nothing, so there is no workspace API — mint an eval-service credential |
+
+Workspaces carry the `eval-` prefix so a survivor is attributable by name, and
+`teardown` deletes them; the suites call it in a `finally`. Every network step is
+wrapped by `infraBoundary`, so a cold start or a 5xx is labelled `INFRA FAILURE`
+and never read as "the agent stopped calling tools" — `scripts/skip-ratchet.ts`
+reads the same marker, so the classification survives into the tier's report.
+
+**The cloud arm runs a named subset, and the list names what READS THE KNOB.** A
+suite can answer both targets' questions only once it provisions through
+`resolveEvalTarget`; a suite that calls `provisionLocalTarget` itself is local
+whatever the variable says. Naming one on the cloud arm anyway is worse than
+omitting it, because the run gets a CLOUD banner and `-cloud` filenames over an
+in-process measurement. So an arm that cannot read the knob is skipped and NAMED.
+
+Today the cloud arm is `tests/live-smoke.test.ts` plus the swarm suite's
+cross-target arm, which provisions its own staging workspace and is the only arm
+in the tree that reaches `@cloudflare/think`. `tests/e2e-lifecycle.test.ts` is
+NOT on it: every assertion in it drives `generateText`, `EvolutionEngine` and
+`runMCTS` over a `CLIRuntime`, so it reads the knob and skips itself under
+`=cloud` rather than standing under that banner. The swarm suite's in-process
+arms do the same. The list lives in `scripts/eval-tier.sh` and grows in the same
+commit that migrates a suite. Reports and spend files carry the backend in their
+filenames, so a cloud run cannot overwrite a local run's evidence and liveness is
+still asserted per arm.
+
 #### The two new families drive the SPAWNED CLI
 
 Both arms run `kinu create <name> --mode local`, then `kinu exec --workspace
 <name> --json`, in a scratch `KINU_HOME`, and judge the child's own event
 stream plus the ledgers in `$home/<workspace>/agent.db`. The glue is
 `tests/evals/cli-driver.ts`; the precedent is `bench/harbor/kinu_agent.py`.
+
+The child's CWD is scratch too. `createCLIRuntime` roots the host `laptop`
+executor at `cwd ?? process.cwd()` unless a caller passes `hostRoot: null`, and a
+spawned CLI has no flag for that — so the driver's `cwd` IS the child agent's
+filesystem. It was this repository, and the eval runs of 2026-08-24 left
+`reference.mjs`, `solution.mjs`, `test-eval.mjs`, `.kinu/tool-output/` and
+`attachments/` in the repository root. Each child now gets `<home>/project`.
 
 That is the rule. An eval drives the WHOLE agent through a shipped surface.
 Driving `LocalAgentSession` in-process would skip the CLI's turn assembly, its
@@ -462,13 +568,22 @@ their derived default (`core/src/strategy/swarm-run.ts:1776-1785`):
 - **Steps.** None — no per-turn step cap exists (owner ruling 2026-08-21);
   `runNodeLoop` ends when its model stops calling tools.
 - **Wall clock.** `deps.maxWallClockMs` when the caller declares one;
-  otherwise absent — a node runs to completion under the shared loop's
-  per-call silence window (`LLM_CALL_TIMEOUT_MS`). The caller-declared
-  deadline is observed between steps by `runHeadInference`'s `stopWhen`.
+  otherwise absent. The caller-declared deadline is observed between steps by
+  `runHeadInference`'s `stopWhen`.
 
-The binding bound inside one step is the call's silence window:
-`LLM_CALL_TIMEOUT_MS`, 600,000 ms (`core/src/chat.ts`), and it fires only
-when nothing flows. A node inside one long step observes no other bound.
+With neither declared, nothing inside a node's turn is bounded by elapsed time
+at all. `LLM_CALL_TIMEOUT_MS` and `LLM_CALL_MAX_RETRIES` are GONE — they left
+with the per-turn bounds ruling, and the only references left in the tree are
+two tests asserting their absence (`core/tests/unit-call-bounds.test.ts:35-36`,
+`unit-swarm-node-envelope.test.ts:33-34`). There is no per-call silence window:
+a rate-limited request waits, and neither elapsed time nor attempt count ends it
+(`core/src/providers/rate-limit-retry.ts:69` is `for (let attempt = 1; ;
+attempt++)`). The separate lever is the SDK's transport retry,
+`PROVIDER_SDK_RETRIES = 2` (`rate-limit-retry.ts:13`), stated at `streamText` so
+a vendor bump cannot move it silently. A call ends when the provider answers,
+fails definitively, or the caller cancels; a turn ends when the model finishes,
+the user stops it, or it throws, and `classifyRunEnd`
+(`core/src/orchestrator/turn-lifecycle.ts`) names which.
 
 `AGENTS_ACTION_FIELDS.swarm` (`core/src/tools/agents-tool.ts:440-446`) records
 that an iteration cap and a wall-clock cap are absent from the tool's INPUT
@@ -480,8 +595,8 @@ tool calls per node; 1,216-1,337 s each; ~2.45M input tokens between them; and
 not one measurable candidate. No node in that run finished, so 26 steps is a
 floor on the demand rather than a typical cost, and how many steps a node needs
 to FINISH on this model is not measured. `depth × branches` bounds the shape of
-the search; each request inside a node's turn is bounded by the per-call
-silence window, and nothing bounds the step count.
+the search; nothing inside a node's turn bounds elapsed time or the step count,
+so the caller's `abortSignal` is the only bound in force.
 
 The caller's `abortSignal` is a bound, and it works. All three nodes settled
 `status:'aborted'` with their step counts recorded when the 20-minute envelope

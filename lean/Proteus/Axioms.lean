@@ -142,6 +142,87 @@ import Proteus
 #print axioms Proteus.Storage.SqliteFSCorrectness.chunk_reassembly
 #print axioms Proteus.Storage.SqliteFSCorrectness.writes_commute
 
+/-! ## Proteus/Storage/SnapshotChain.lean -/
+
+#print axioms Proteus.Storage.SnapshotChain.layers_le_two
+#print axioms Proteus.Storage.SnapshotChain.chain_attach_mounts_its_layers
+#print axioms Proteus.Storage.SnapshotChain.chain_attach_independent_of_n
+#print axioms Proteus.Storage.SnapshotChain.chain_attach_independent_of_pending
+#print axioms Proteus.Storage.SnapshotChain.attach_seed_is_the_committed_delta
+#print axioms Proteus.Storage.SnapshotChain.attach_seed_absent_without_delta
+#print axioms Proteus.Storage.SnapshotChain.a_pending_seed_would_differ
+#print axioms Proteus.Storage.SnapshotChain.extract_attach_is_linear_in_n
+#print axioms Proteus.Storage.SnapshotChain.chain_tick_is_theta_c
+#print axioms Proteus.Storage.SnapshotChain.chain_tick_upper_bound
+#print axioms Proteus.Storage.SnapshotChain.chain_tick_lower_bound
+#print axioms Proteus.Storage.SnapshotChain.a_pending_only_tick_would_be_strictly_cheaper
+#print axioms Proteus.Storage.SnapshotChain.first_base_is_linear_in_n
+#print axioms Proteus.Storage.SnapshotChain.tick_never_rebases
+#print axioms Proteus.Storage.SnapshotChain.rebase_requires_the_delta_to_outgrow_k_base
+#print axioms Proteus.Storage.SnapshotChain.rebase_amortizes_at_a_quiesce
+#print axioms Proteus.Storage.SnapshotChain.a_tick_past_the_ratio_still_uploads_the_whole_delta
+#print axioms Proteus.Storage.SnapshotChain.the_changed_set_can_reach_the_whole_tree
+#print axioms Proteus.Storage.SnapshotChain.referenced_generations_le_two
+#print axioms Proteus.Storage.SnapshotChain.fresh_is_bounded
+#print axioms Proteus.Storage.SnapshotChain.genStep_preserves_bound
+#print axioms Proteus.Storage.SnapshotChain.stored_is_bounded_by_the_named_orphans
+#print axioms Proteus.Storage.SnapshotChain.a_rebase_names_one_generation
+#print axioms Proteus.Storage.SnapshotChain.a_completed_sweep_leaves_one_generation
+#print axioms Proteus.Storage.SnapshotChain.a_partial_sweep_is_re_runnable
+#print axioms Proteus.Storage.SnapshotChain.without_a_sweep_the_population_grows
+#print axioms Proteus.Storage.SnapshotChain.unchanged_tick_uploads_nothing
+
+/-! ## Proteus/Storage/OverlayCas.lean -/
+
+#print axioms Proteus.Storage.OverlayCas.overlay_mounts_two_layers
+#print axioms Proteus.Storage.OverlayCas.overlay_layers_le_two
+#print axioms Proteus.Storage.OverlayCas.replay_is_linear_in_pending
+#print axioms Proteus.Storage.OverlayCas.overlay_attach_independent_of_n
+#print axioms Proteus.Storage.OverlayCas.overlay_attach_independent_of_cumulative
+#print axioms Proteus.Storage.OverlayCas.overlay_attach_scans_only_pending
+#print axioms Proteus.Storage.OverlayCas.read_is_one_lookup_and_one_chunk
+#print axioms Proteus.Storage.OverlayCas.overlay_read_independent_of_n
+#print axioms Proteus.Storage.OverlayCas.tick_is_blobs_plus_one_put_per_batch
+#print axioms Proteus.Storage.OverlayCas.batching_the_journal_beats_one_put_per_entry
+#print axioms Proteus.Storage.OverlayCas.one_entry_costs_one_journal_put
+#print axioms Proteus.Storage.OverlayCas.batches_cover_the_pending_change
+#print axioms Proteus.Storage.OverlayCas.a_crash_redoes_at_most_one_batch
+#print axioms Proteus.Storage.OverlayCas.a_redone_batch_stages_no_bytes
+#print axioms Proteus.Storage.OverlayCas.overlay_tick_independent_of_n
+#print axioms Proteus.Storage.OverlayCas.overlay_tick_independent_of_cumulative
+#print axioms Proteus.Storage.OverlayCas.overlay_tick_beats_the_chain_when_pending_is_small
+#print axioms Proteus.Storage.OverlayCas.quiesce_fold_carries_the_one_linear_term
+#print axioms Proteus.Storage.OverlayCas.the_fold_operation_count_is_not_linear_in_the_tree
+#print axioms Proteus.Storage.OverlayCas.quiesce_minus_the_fold_is_the_tick
+#print axioms Proteus.Storage.OverlayCas.tick_does_not_fold
+#print axioms Proteus.Storage.OverlayCas.discard_is_one_prefix_delete
+#print axioms Proteus.Storage.OverlayCas.gc_is_bounded_by_listing_and_orphans
+#print axioms Proteus.Storage.OverlayCas.gc_is_off_the_hot_path
+#print axioms Proteus.Storage.OverlayCas.the_sweep_does_read_the_listing
+#print axioms Proteus.Storage.OverlayCas.the_hot_path_lists_only_the_journal_prefix
+#print axioms Proteus.Storage.OverlayCas.runOf_nil
+#print axioms Proteus.Storage.OverlayCas.runOf_cons
+#print axioms Proteus.Storage.OverlayCas.runOf_append
+#print axioms Proteus.Storage.OverlayCas.empty_is_ordered
+#print axioms Proteus.Storage.OverlayCas.step_preserves_ordering
+#print axioms Proteus.Storage.OverlayCas.ordering_is_invariant
+#print axioms Proteus.Storage.OverlayCas.no_cursor_ahead_of_its_fold
+#print axioms Proteus.Storage.OverlayCas.no_journal_entry_names_an_unstaged_blob
+#print axioms Proteus.Storage.OverlayCas.no_fold_precedes_its_journal_entry
+#print axioms Proteus.Storage.OverlayCas.the_cursor_never_passes_a_staged_blob
+#print axioms Proteus.Storage.OverlayCas.no_reap_precedes_its_cursor
+#print axioms Proteus.Storage.OverlayCas.the_reap_never_passes_a_staged_blob
+#print axioms Proteus.Storage.OverlayCas.dropping_blob_before_journal_names_an_unstaged_blob
+#print axioms Proteus.Storage.OverlayCas.dropping_fold_before_cursor_advances_past_the_fold
+#print axioms Proteus.Storage.OverlayCas.dropping_journal_before_fold_folds_an_unrecorded_entry
+#print axioms Proteus.Storage.OverlayCas.dropping_cursor_before_reap_leaves_a_hole
+#print axioms Proteus.Storage.OverlayCas.a_tick_journals_without_folding
+#print axioms Proteus.Storage.OverlayCas.a_quiesce_folds_and_advances
+#print axioms Proteus.Storage.OverlayCas.the_reversed_order_does_nothing
+#print axioms Proteus.Storage.OverlayCas.a_tombstone_stages_no_bytes
+#print axioms Proteus.Storage.OverlayCas.a_rename_stages_no_bytes
+#print axioms Proteus.Storage.OverlayCas.a_fresh_write_stages_its_bytes
+
 /-! ## Proteus/Exploration -- docs/EXPLORATION.md — "The Lean invariants" -/
 
 /-! ### Proteus/Exploration/Objective.lean -/

@@ -68,7 +68,7 @@ bun run infra:provision      # the secrets; `wrangler secret put` needs the Work
 
 Provisioning runs twice because `wrangler secret put` refuses on a Worker that
 does not exist yet. The first run says so; the second creates nothing the first
-created. `bun run deploy` runs the repository's 53 required gates before it
+created. `bun run deploy` runs the repository's 54 required gates before it
 uploads anything. A failed gate exits before Wrangler runs.
 
 The fresh deployment does not have hosted Python, Bash, Ruby, or Clang until an
@@ -117,6 +117,8 @@ Each surface is off until its owner step is done, and absence is treated as
 | Chat billed to each user's account | the Cloudflare OAuth application and its secret |
 | Previews | a proxied wildcard DNS record under `PREVIEW_HOST_SUFFIX` |
 | Email to workspaces | Email Routing onboarding; [docs/EMAIL-INGRESS.md](EMAIL-INGRESS.md) |
+| Fleet metrics on the control plane | an Account Analytics Read token in `ANALYTICS_SQL_API_TOKEN` |
+| The control plane at `/control` | `CONTROL_PLANE_ADMINS` names at least one operator |
 
 Unset values fail toward silence by design: no `EMAIL_DOMAIN` means no mail,
 an empty `PREVIEW_HOST_SUFFIX` means no previews, and a missing root secret

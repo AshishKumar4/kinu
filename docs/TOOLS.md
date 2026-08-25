@@ -1,6 +1,17 @@
 # Agent Tools: Built-in Tool Architecture
 
-The agent exposes a small set of **built-in top-level tools** to the LLM. `BUILTIN_TOOLS` in `packages/core/src/tools/registry.ts` is the canonical list of 8 names. The list stays short to keep the model's *decision surface* small. Every native tool is a standing choice the model weighs on every turn it is not the answer to, and selection accuracy degrades with choice count. Files are read and changed through the `file` tool; the same operations are also available as `workspace.*` APIs inside the `execute_tools` codemode sandbox. Crafted tools from the CraftStore are injected into the same sandbox as `codemode.*` (the default namespace exposed by `@cloudflare/codemode`'s `createCodeTool`) and, via the preamble, as `tools.<name>`.
+The agent gives the model a small set of built-in top-level tools. `BUILTIN_TOOLS`
+in `packages/core/src/tools/registry.ts` is the canonical list, and it holds 8
+names.
+
+The list stays short to keep the model's decision surface small. Every native
+tool is a standing choice the model weighs on every turn it is not the answer
+to, and selection accuracy degrades with choice count.
+
+Files are read and changed through the `file` tool. The same operations are
+available as `workspace.*` APIs inside the `execute_tools` codemode sandbox.
+Crafted tools from the CraftStore are callable in that sandbox as
+`tools.<name>(args)`, on every backend.
 
 Both surfaces (Cloudflare Workers and CLI) consume the same factory
 `buildBuiltinTools` from `@kinu.run/core/tools`. The registry and descriptions
@@ -14,7 +25,7 @@ subordinate gets `report` and never gets the `reply` action of `agents`.
 
 | Tool | Purpose |
 |------|---------|
-| `execute_tools` | Codemode sandbox. The LLM writes JS with `workspace.*`, `codemode.*`, `agents.*`, `memory.*`, `tasks.*`, `report.*`, `release.*`, and `tools.<name>` crafted-tool APIs |
+| `execute_tools` | The codemode sandbox. The model writes JavaScript against `workspace.*`, `agents.*`, `memory.*`, `tasks.*`, `report.*`, `release.*`, `web.*`, `agent.*`, `llm.*`, and `tools.<name>` for crafted tools |
 | `run` | One shell command in one explicitly selected runtime |
 | `file` | The one file plane, over the same workspace filesystem every other surface addresses. `read` a file, `edit` exact text inside it, `write` it whole |
 | `agents` | The whole delegation surface: `swarm \| hire \| ask \| send \| reply \| list \| dismiss` |
@@ -23,10 +34,10 @@ subordinate gets `report` and never gets the `reply` action of `agents`.
 | `web` | Live web access: `search` returns ranked results (title, url, snippet, date), `fetch` returns one URL as clean, citation-ready markdown. Key-less via DuckDuckGo + the Cloudflare markdown service; a stored `tavily` credential upgrades search |
 | `report` | A subordinate's progress spine back to its orchestrator: `progress \| completed \| blocked` |
 
-### The reach axis: declared, not derived
+### The reach axis is declared
 
-How the model reaches a capability is a **declared property** of that
-capability, in `TOOL_REACH` (`packages/core/src/tools/registry.ts`):
+`TOOL_REACH` (`packages/core/src/tools/registry.ts`) declares how the model
+reaches each capability:
 
 ```ts
 report: { native: true,  codemode: 'report' }   // both surfaces
@@ -98,35 +109,35 @@ than instruments it reaches for:
 
 ## file: the file plane
 
-There is **one** file tool, with three actions, for the same reason `memory` is
-one tool. Reading a file, replacing text inside it and creating it are one
-concept, and which action a call needs follows from what the agent is doing
-rather than from a comparison it has to make. The action names mirror the
-codemode calls (`workspace.readFile` / `writeFile`), so there is one vocabulary
-across the tool surface and the sandbox.
+The file plane is one tool with three actions, for the same reason `memory` is
+one tool. `FILE_TOOL_ACTIONS` in `packages/core/src/tools/registry.ts` declares
+them: `read`, `write`, `edit`. Reading a file, replacing text inside it and
+creating it are one concept, and which action a call needs follows from what the
+agent is doing rather than from a comparison it has to make. The action names
+mirror the codemode calls (`workspace.readFile` / `writeFile`), so there is one
+vocabulary across the tool surface and the sandbox.
 
 Everything goes through `rt.storage.vfs`. On the hosted backend that is the
 authoritative `NIMBUS_SESSION`. On the CLI it is the plane the runtime binds:
 the stored working directory when one is set (`CLIRuntimeConfig.cwd`), otherwise
-the agent's own in-SQLite tree. The
-same bytes are addressed by `file`, `run { runtime: "workspace" }`, and
-`workspace.*`. There is no second Nimbus filesystem. Optional containers and
-devices keep their own files and are reached through `sandbox.*` and
-`laptop.*`.
+the agent's own in-SQLite tree. The same bytes are addressed by `file`,
+`run { runtime: "workspace" }`, and `workspace.*`. There is no second Nimbus
+filesystem. Optional containers and devices keep their own files and are reached
+through `sandbox.*` and `laptop.*`.
 
 ### Why it exists
 
 Before it, the agent had no read/write/edit primitive at all, so file work went
 through `run`. Over the preserved Terminal-Bench trajectories the split was
-**789 `run` calls against 6 `execute_tools` calls**, and of the 374 `run` commands
+789 `run` calls against 6 `execute_tools` calls, and of the 374 `run` commands
 in the 2.1 set, 65 were inline `python3 -c`, 55 were heredocs, 23 were shell
 redirects and 14 were `sed -i`. Roughly two in five shell calls were the model
 hand-rolling a file mutation through the three most failure-prone mechanisms
 available. None of them can report that the text they aimed at was not there.
 `sed -i` exits 0 either way.
 
-**Those seven counts came from one local bench run and no reader can reproduce
-them here.** The trajectories live in `bench-artifacts/`, which
+Those seven counts came from one local bench run and no reader can reproduce
+them here. The trajectories live in `bench-artifacts/`, which
 `scripts/bench-retention.ts` treats as gitignored run output, so a fresh checkout
 has none of it. No date is recorded for the run either. The counts are kept
 because they are the reason this tool exists, and they are labelled because a
@@ -136,20 +147,20 @@ number nobody can re-derive is evidence about one machine.
 
 | Property | What it means |
 |---|---|
-| **Exact match** | `old_text` must occur in the file **exactly once**. Absent → fail. Repeated → fail, with the occurrence count and the instruction to widen it. Occurrences are counted at every position, overlapping ones included, so `aa` in `aaa` is ambiguous rather than a silent first-match. Nothing is written either way. |
+| **Exact match** | `old_text` must occur in the file exactly once. Absent → fail. Repeated → fail, with the occurrence count and the instruction to widen it. Occurrences are counted at every position, overlapping ones included, so `aa` in `aaa` is ambiguous rather than a silent first-match. Nothing is written either way. |
 | **Atomic batches** | Every edit in a call matches the file *as it was read*, never a sibling's result; offsets are applied back-to-front. One bad anchor applies none of them. Overlapping edits are refused by name. |
-| **Read-before-write** | `edit`, and `write` over an existing file, are refused unless the file has been read, and refused again (`stale`) if it changed after that read. The refusal names the exact call to make next. Authorization is keyed on the **content digest**, so a different spelling of the same path is not a spurious refusal, and a write authorizes the edits that follow it. |
+| **Read-before-write** | `edit`, and `write` over an existing file, are refused unless the file has been read, and refused again (`stale`) if it changed after that read. The refusal names the exact call to make next. Authorization is keyed on the content digest, so a different spelling of the same path is not a spurious refusal, and a write authorizes the edits that follow it. |
 | **Seen depth** | How much was read matters. A capped or paged read authorizes an `edit`, where the anchor still has to be exactly and uniquely present, but not a `write` that discards lines the model never saw. Coverage is the contiguous prefix the turn has paged through, which is exactly the shape the read's own `offset=N` recipe produces, so paging to the end earns the overwrite and the gate is never a dead end. |
 | **No silent truncation** | A capped or limited `read` always names the offset that continues it, and no read is ever a bare empty string. An empty file says so, an offset past the end says so, and a single line too large to show at all hands over the `workspace.readFile`-inside-`execute_tools` recipe. A trailing newline ends the last line rather than creating a phantom one, so the offsets it hands back always resolve. Reads are counted against the same per-turn bulk budget as every other tool result (`context-budget.ts`). |
 | **Nothing invisible** | A BOM is stripped from what the read shows, so the first line can be copied back as `old_text` and match. Restored on write. |
-| **Faithful round-trip** | Matching happens on LF text with the BOM stripped, so an anchor typed with `\n` matches a CRLF file. The splice lands on the **original** string at mapped indices, so a file with mixed endings keeps every ending it had outside the replaced span. Only the inserted text takes the file's ending. |
+| **Faithful round-trip** | Matching happens on LF text with the BOM stripped, so an anchor typed with `\n` matches a CRLF file. The splice lands on the original string at mapped indices, so a file with mixed endings keeps every ending it had outside the replaced span. Only the inserted text takes the file's ending. |
 | **A gradable outcome** | Every attempt is counted by outcome into the turn's `TurnFileLedger`, and the settle spine writes one `file_edit` run event per turn: `attempts` and `applied` (calls), `failures` by reason, `recoveredPaths` and `abandonedPaths` (paths, because recovery is a property of a file rather than of a call). |
 
-Reads are **not** line-numbered. `old_text` is built by copying out of a read,
+Reads carry no line numbers. `old_text` is built by copying out of a read,
 and a line-number gutter is the most reliable way to make a model copy
 something that is not in the file.
 
-There is deliberately **no fuzzy fallback**. pi's editor, when its exact match
+There is deliberately no fuzzy fallback. pi's editor, when its exact match
 misses, re-matches in a normalized space (NFKC, smart quotes, dashes, per-line
 `trimEnd`) and then writes the whole file back *from that normalized space*, so
 one tolerated smart quote in the anchor silently rewrites every unrelated line.
@@ -165,7 +176,7 @@ prompt cost.
 
 ## agents: the delegation surface
 
-There is **one** delegation tool. `think`, `team` and `peers` were three tools
+Delegation is one tool. `think`, `team` and `peers` were three tools
 for one decision; they are now three groups of actions on `agents`, gated by
 the deps a backend wires (`agentsActionsFor`).
 
@@ -178,21 +189,22 @@ doctrine no schema does; each rung's *triggers* live in `BUILTIN_TOOL_SPECS`
 (`registry.ts`, the single source) and reach the model through the `agents`
 schema description, which providers weight for selection.
 
-The section opens on a **default**: *"Delegate once the shape of the work is
-settled: naming the parts is yours, running them is theirs."* The three
-exemptions come last, and are stated as things to *do*: a single coherent change
-in one file, a direct answer that needs no change, a command the user asked you
-to run.
+The section opens on the default it ships with: *"Delegate once the shape of the
+work is settled: naming the parts is yours, running them is theirs."* The three
+exemptions come last, and each is stated as something to do: a single coherent
+change in one file, a direct answer that needs no change, a command the user
+asked you to run.
 
 That ordering is the point, and it replaced a first bullet reading *"Do it
 yourself — a single short coherent change"* (2026-08-17). Naming the zeroth
 rung first made the section a *classification*, and the correct classification
 of "I am not sure" is to do it alone, so every ambiguous turn failed closed.
-The doctrine converted **0%** of eligible turns where the mechanical splice in
+The doctrine converted 0% of eligible turns where the mechanical splice in
 `orchestrator/turn-steering.ts` converted 24%. An exemption list fails the
-other way. The same file now also states the shape test at **step 0** of the
-conversation's first ask (`turn_start_no_delegation`), because the 25-step steer
-beside it can only ever be recovery from a shape already chosen serially.
+other way. The same file now also states the shape test at step 0 of the
+conversation's first ask (`turn_start_no_delegation`), because the steer beside
+it fires at `LONG_TURN_STEPS_BEFORE_STEER`, which is 25 steps in, and can only
+ever be recovery from a shape already chosen serially.
 
 The rungs themselves:
 
@@ -218,7 +230,7 @@ ensemble sized with the tagged `samples` parameter, under the marginalisation
 floor (`JUDGE_MARGINALISATION_MIN`); `score:"none"` returns unranked
 candidates. A measured search needs an `objective`; an ideation does not.
 
-**The `fork` action is gone.** It took 2-6 briefs the caller wrote, ran one copy
+The `fork` action is gone. It took 2-6 briefs the caller wrote, ran one copy
 of the agent per brief, and merged what they reported. `AGENTS_TOOL_ACTIONS`
 lists seven actions now and `fork` is not one of them, so the call is refused by
 the action picklist. No field carries a brief and nothing on the surface selects
@@ -288,8 +300,8 @@ The declared relation, action by action:
 A verifier is not a field of its own. `verify` is `{kind, spec}` nested inside
 `objective`, so a metric and the instrument that measures it arrive together.
 
-**A swarm takes no iteration cap and no wall-clock cap, and the absence is the
-design.** Nothing in the runner cuts a search off on either one. A surface that
+A swarm takes no iteration cap and no wall-clock cap, and the absence is the
+design. Nothing in the runner cuts a search off on either one. A surface that
 takes a cap it never applies is the defect this repository is written against, so
 neither field is declared, and a caller who sends one is told which actions read
 it. `depth`, `branches`, `budget_usd` and `budget_tokens` are the caps that are
@@ -302,7 +314,7 @@ through `role` and `tier` now. The resolver turns them into one immutable
 profile before the first node runs.
 
 The contract exists because the schema was one flat `v.object`, and valibot's
-`object` **excludes** an unknown entry instead of rejecting it. Measured against
+`object` EXCLUDES an unknown entry instead of rejecting it. Measured against
 the shipped parser on 2026-08-18, `{ action:'fork', task:'x', budgetUsd:5,
 wallClockMs:1000 }` parsed to `{ action:'fork', task:'x' }`. Two spend caps were
 asked for, neither applied, no error and nothing in the run record saying the
@@ -358,7 +370,11 @@ next serialized turn with that same mode.
 
 ## execute_tools: Codemode Sandbox
 
-The primary tool. The LLM writes JavaScript code that runs in an isolated Worker via the `LOADER` binding (`@cloudflare/codemode`).
+This is the tool the model reaches for most often. It takes JavaScript and runs
+it in an isolated sandbox. On the Cloudflare backend that sandbox is a child
+Worker started through the `LOADER` binding (`@cloudflare/codemode`); on the CLI
+it is an in-process evaluation from `createNodeExecuteToolFactory`. Both bind
+the same namespaces.
 
 ### workspace.* APIs (always available)
 
@@ -373,11 +389,20 @@ The primary tool. The LLM writes JavaScript code that runs in an isolated Worker
 | `workspace.searchMemory` | `(query: string) → results` | FTS5 search over long-term memory |
 | `workspace.saveNote` | `(content: string) → "ok"` | Append note to MEMORY.md with FTS indexing |
 | `workspace.listTools` | `() → Array<{name, description, qualityScore}>` | List crafted tools with their EMA scores |
-| `workspace.createTool` | `(name, description, code) → {ok, name, action}` | Create/update a crafted tool in CraftStore; callable on the next `execute_tools` call in the same turn |
+| `workspace.createTool` | `(name, description, code) → {ok, name, action}` | Create or update a crafted tool in CraftStore. Callable as `tools.<name>(args)` on the NEXT `execute_tools` call in the same turn, because the sandbox that created it is already built |
 
-These come from `InlineExecutor` in `packages/core/src/execution/inline.ts`, registered as the `workspace` provider in the `ExecutionRouter`. `readFile`/`writeFile` observe into the SAME `TurnFileLedger` `editFile` gates against (a read/write on either surface is known to the other). Both backends bind that live turn ledger into the executor after their loop exists, so a read or write through native `file` is immediately known to `workspace.*`, and vice versa.
+These come from `createInlineExecutor` in
+`packages/core/src/execution/inline.ts`, registered as the `workspace` provider
+in the `ExecutionRouter`. `readFile` and `writeFile` observe into the SAME
+`TurnFileLedger` that `editFile` gates against, so a read or a write on either
+surface is known to the other. Both backends bind that live turn ledger into the
+executor after their loop exists, so a read or write through the native `file`
+tool is immediately known to `workspace.*`, and the reverse holds too.
 
-`/workspace/skills/*.md` is an ordinary path on this same VFS. `workspace.readFile`/`writeFile`/`readdir`/`exec('rm …')` are how skill CRUD happens now that there is no `skills` tool.
+`/workspace/skills/*.md` is an ordinary path on this same VFS, and `SKILLS_DIR`
+(`packages/core/src/skills/types.ts`) declares that prefix.
+`workspace.readFile`/`writeFile`/`readdir`/`exec('rm …')` are how skill CRUD
+happens now that there is no `skills` tool.
 
 ### memory.* / tasks.* / report.* / release.* APIs (codemode projections)
 
@@ -395,22 +420,68 @@ two callers, the same pattern `agents.*`/`web.*` established:
 `memory.*`/`tasks.*` are unconditional (every ActorAgent); `report.*` is
 subordinate-only.
 
-### codemode.* APIs (dynamically learned)
+### Crafted tools: one callable form
 
-Crafted tools from the CraftStore are injected into the codemode sandbox as `codemode.*`, the default namespace exposed by `@cloudflare/codemode`'s unnamed provider (`createCodeTool`). The preamble also splices a `const tools = {…}` binding into the sandbox arrow, so the same tool answers to `tools.<name>` and crafted-tool bodies can call `workspace.*`, `codemode.*`, and each other in one lexical scope. See [CRAFT-ARCHITECTURE.md](./CRAFT-ARCHITECTURE.md).
+`packages/core/src/tools/sandbox-contract.ts` holds the whole contract. It is a
+CROSS-BACKEND contract because the experience library carries a crafted tool
+between workspaces, and therefore between backends, so the shape the model must
+write to call one cannot be a per-sandbox detail.
+
+`CRAFTED_TOOL_NAMESPACE` is `tools`. That is the form the model writes,
+`tools.<name>(args)`, on the Cloudflare backend and on the CLI alike.
+
+`CRAFTED_TOOL_ALIAS_NAMESPACE` is `codemode`, and it is DECLARED rather than
+callable. `createCodeTool` builds the sandbox types the model reads out of the
+provider namespaces, so a crafted tool that appears in none of them is a tool
+the model cannot discover. The alias keeps the name visible and refuses the
+call.
+
+The alias refuses by THROWING. `craftedDispatcherEntry(name)` returns an
+`execute` that raises `craftedNamespaceCorrection(name)`:
+
+```
+Crafted tools are callable as tools.summarize(args) in this sandbox, not codemode.summarize(args).
+```
+
+It throws rather than returning an `{error}` value, and that is deliberate. A
+returned error is a value the model reads as a result and the runtime reads as a
+successful call, so it is a wrong answer twice over, and it would let an
+in-episode fitness observation be taken on a call that never ran. Every
+model-visible string here is built from the two namespace constants, so no
+prompt line, docstring or correction sentence can name a namespace the module
+does not declare.
 
 ```javascript
 // Inside execute_tools:
-const result = await codemode.my_custom_parser({ input: "data" });
+const result = await tools.my_custom_parser({ input: "data" });
 ```
 
-**How injection works** (`buildCraftedToolSetFromExecute` in
-`@kinu.run/core/tools/builtins.ts`):
-1. `craftStore.list()` reads all crafted tools from SQLite.
-2. Each row is filtered by effective score (`DEFAULT_CONFIG.craftStore.minEffectiveScoreForInjection`, default 0.2) so decayed or low-quality tools never reach the LLM.
-3. Each passing tool dispatches through `deps.craftedToolExecute`, which is the LOADER Worker on CF and a Node adapter on the CLI. There is no host-side codegen. Nothing is compiled inside `builtins.ts`, because a `new Function()` would break in a V8 isolate.
-4. The resulting `craftedToolSet` is passed as the `tools` parameter to `createExecuteTool`; codemode wraps it as an unnamed provider → `codemode.*`.
-5. Inside the sandbox, the LLM calls `codemode.name(args)` or `tools.name(args)`.
+The two backends reach that contract through different compile substrates:
+
+| Backend | Callable `tools.<name>` | Declared `codemode.<name>` |
+|---|---|---|
+| Cloudflare | `PreambleCraftedExecutor` wraps the model's program in an arrow that declares `const tools = {…}` (`packages/cf-backend/src/crafted-tool-registry.ts`) | a named provider whose entries are `craftedDispatcherEntry` (`packages/cf-backend/src/execute-tools.ts`) |
+| CLI | the crafted bindings are passed as the `tools` parameter of the evaluated function (`packages/cli-backend/src/execute-tools-factory.ts`) | a sibling parameter of stubs raising the same `craftedNamespaceCorrection` |
+
+The two declaration halves are not symmetric. On Cloudflare the alias is a real
+named provider, so `createCodeTool` writes every crafted name into the type
+block the model reads, and `packages/cf-backend/src/execute-tools.ts` seeds that
+provider at construction for exactly that reason. The CLI never calls
+`createCodeTool` at all. It composes its type block from the providers' declared
+`types` alone (`renderExecuteToolsDescription`) and injects the crafted set as
+sandbox arguments rather than as a provider, so on that backend the alias is a
+refusing binding that never reaches the types.
+
+See [CRAFT-ARCHITECTURE.md](./CRAFT-ARCHITECTURE.md).
+
+How the set is assembled (`buildCraftedToolSetFromExecute` in
+`packages/core/src/tools/builtins.ts`):
+
+1. `craftStore.list()` reads every crafted tool from SQLite.
+2. `filterByEffectiveScore` drops each row below `DEFAULT_CONFIG.craftStore.minEffectiveScoreForInjection`, 0.2 by default, so decayed or low-quality tools never reach the model.
+3. Each passing tool dispatches through `deps.craftedToolExecute`, the LOADER Worker on Cloudflare and a Node adapter on the CLI. There is no host-side codegen. Nothing is compiled inside `builtins.ts`, because a `new Function()` would break in a V8 isolate.
+4. `buildBuiltinTools` hands the result to the backend as the `craftedTools` resolver of `createExecuteTool`. The resolver is re-read on every call, so a tool crafted one step ago is callable on the next.
+5. The Cloudflare preamble selects its own copy of the set through `selectInjectableCraftedTools`, which applies the same score filter, so the advertised set and the callable set cannot disagree.
 
 ### agents.* APIs (delegation, dep-gated)
 
@@ -475,7 +546,7 @@ async () => {
 ```javascript
 // Use a crafted tool
 async () => {
-  const result = await codemode.parse_csv({ input: await workspace.readFile("data.csv") });
+  const result = await tools.parse_csv({ input: await workspace.readFile("data.csv") });
   await workspace.saveNote(`Parsed ${result.rows} rows from data.csv`);
   return result;
 }
@@ -500,7 +571,7 @@ CF passes `@cloudflare/codemode`'s `{{types}}` placeholder and lets
 `createCodeTool` substitute (it can generate a declaration from a tool's input
 schema, which the CLI cannot); the CLI joins its providers' declared `types`.
 
-Both halves were previously missing, in opposite directions. CF passed **no**
+Both halves were previously missing, in opposite directions. CF passed NO
 description to `createCodeTool`, so production shipped the vendor's generic
 `"Execute code to achieve a goal."` and none of
 `BUILTIN_TOOL_SPECS.execute_tools` (no when-to-use, no `workspace.*` doctrine,
@@ -516,18 +587,18 @@ Promise<SearchOutput>` from its absent input schema, an object-argument
 signature beside a member description stating the positional shape, so a model
 following the declared type searched for the literal `"[object Object]"`.
 
-### The crafted-tool preamble reaches every code shape
+### The Cloudflare preamble reaches every code shape
 
-Crafted tools are callable as `tools.<name>` because `PreambleCraftedExecutor`
-splices a `const tools = { … }` preamble into the model's program before the
-sandbox runs it. That is what makes a tool crafted in step 1 callable in step 2
-of the same turn. The splice used to be a regex against the head of
-`async (...) => {` on the model's **raw** code, and it dropped the preamble
-silently when the code did not have that head. A bare statement body never does,
-and that is what this tool's own worked example teaches, and what codemode
-itself wraps for you (`normalizeCode`, called later inside
-`DynamicWorkerExecutor`). So on those calls every `tools.<name>` was
-`undefined`, with nothing naming why.
+On the Cloudflare backend, `tools.<name>` is callable because
+`PreambleCraftedExecutor` wraps the model's program in an arrow that declares
+`const tools = { … }` before the sandbox runs it. That is what makes a tool
+crafted in step 1 callable in step 2 of the same turn. It used to SPLICE
+instead: a regex against the head of `async (...) => {` on the model's raw code,
+which dropped the preamble silently when the code had no such head. A bare
+statement body never does, and a bare statement body is what this tool's own
+worked example teaches, and what codemode itself wraps for you (`normalizeCode`,
+called later inside `DynamicWorkerExecutor`). So on those calls every
+`tools.<name>` was `undefined`, with nothing naming why.
 
 `injectPreamble` now normalizes first and wraps rather than splices:
 `async () => { const tools = {…}; return await (<normalized>)(); }`. The
@@ -562,10 +633,13 @@ without saying how to continue it) with faults that model each being lost.
 
 ## run: Shell Command
 
-Direct POSIX shell execution over the workspace **file plane**. This is Nimbus's
+Direct POSIX shell execution over the workspace file plane. This is Nimbus's
 own shell over the same bytes the `file` tool and `workspace.*` address, so a
-path means the same thing on every surface. Pipelines, redirects, chaining,
-variables, loops, a persistent working directory, and ~95 coreutils.
+path means the same thing on every surface. It gives the model pipelines,
+redirects, chaining, variables, loops, a persistent working directory, and the
+coreutils set the provider advertises to the model as "~95 coreutils"
+(`packages/core/src/execution/inline.ts`). That figure is the executor's own
+declared description, not a count measured for this document.
 
 On the hosted backend this is the Nimbus workspace shell and supports the
 runtimes the live execution-status block declares, including native processes,
@@ -580,6 +654,22 @@ filesystems; anything other than `workspace` dispatches through the
 that isn't provisioned returns a structured `runtime_not_provisioned` error the
 UI turns into an install card, rather than silently routing elsewhere and
 letting the model believe it has more access than it does.
+
+**Working directory**: `workspacePath` resolves a relative path against
+`WORKSPACE_ROOT`, which is `/home/user`
+(`packages/core/src/vfs/workspace-path.ts`). Inside the container the default
+working directory is `/workspace`, passed explicitly on every exec so the image
+cannot outvote it (`packages/core/src/execution/sandbox.ts`).
+
+**No work deadline**: `run` puts no elapsed limit on the command itself. It is
+one of the two backgroundable tools, with `execute_tools`
+(`CONFINED_BACKGROUNDABLE_TOOLS` in `packages/core/src/jobs/background-wrap.ts`),
+so a call still running when the surface's detach threshold passes moves to the
+background and the turn gets a handle instead of a result. `BACKGROUND_POLICY`
+(`packages/core/src/jobs/threshold.ts`) sets `detachAfterMs` to 30,000 on an
+interactive surface and 300,000 on a one-shot. A detached call then runs with no
+elapsed deadline at all: teardown waits `settleGraceMs`, 300,000 interactive and
+120,000 one-shot, and leaves the work running rather than joining it.
 
 **Approval gate**: every command is pre-flighted through
 `core/src/safety/approval-gate.ts` before it runs, on every runtime. A `deny`
@@ -620,7 +710,8 @@ that did not start returns a refusal. Those are two shapes on purpose. A caller
 branching on `reason` asks a different question from one reading a report.
 
 [EXPLORATION.md](./EXPLORATION.md) is the normative document for the search
-itself: the six axes, the seven presets, what a node is, and the rules a call
+itself: the six axes, the six named presets and `custom`, what a node is, and
+the rules a call
 must satisfy.
 
 ## experience: cross-workspace transfer
@@ -668,9 +759,13 @@ Importing reuses the two mechanisms the agent already trusts
 An imported scaffold is the one kind whose adoption is not the end of its
 journey. Promoting it hands the code to `modifyScaffold`, the same 4-gate
 pipeline a locally-proposed mutation takes, so it lands as a PENDING version and
-the live `scaffold/agent.js` is untouched. This workspace's own shadow trials
-and promotion gate then decide whether it ever runs. There is no other route: an
-imported loop is a proposal here, whatever it proved elsewhere.
+the live scaffold is untouched. The live scaffold is a file inside the workspace
+rather than a file in this repository: `scaffoldPath`
+(`packages/cf-backend/src/actor-agent.ts`) returns where it sits, and
+`applyPromotionDecision` (`packages/core/src/scaffold/shadow.ts`) is the only
+promotion path that writes it. This workspace's own shadow trials and promotion
+gate then decide whether it ever runs. There is no other route: an imported loop
+is a proposal here, whatever it proved elsewhere.
 
 ## CraftStore Lifecycle
 
@@ -679,12 +774,12 @@ Crafted tools are discovered, scored, and retired automatically:
 1. **Extract**: `EvolutionEngine.extractPattern()` asks the LLM to generalize successful tool-call patterns (`evolution/engine.ts`)
 2. **Score**: `updateCraftScores()` updates EMA scores (α=0.3) after each turn that uses crafted tools (`craft/ema.ts`)
 3. **Filter**: `filterByEffectiveScore()` drops anything below `minEffectiveScoreForInjection` (0.2), so decayed tools never reach the LLM
-4. **Inject**: The surviving set is passed to `createExecuteTool` as the `tools` parameter
+4. **Inject**: `buildBuiltinTools` hands the surviving set to `createExecuteTool` as its `craftedTools` resolver, and the model calls each member as `tools.<name>(args)`
 5. **Consolidate**: `periodicCraftConsolidation()` (`craft/consolidation.ts`) retires tools with `effectiveScore < 0.1` after at least 2 uses, and never retires the last one
 
 ## Why so few tools
 
-The tool roster is deliberately small because of the **decision surface**. Every
+The tool roster is deliberately small because of the decision surface. Every
 native tool is a standing choice the model weighs on every turn it is not the
 answer to, and selection accuracy degrades with choice count; that is the whole
 argument, independent of what anything costs to render. File work is one tool
@@ -705,12 +800,12 @@ of all) cannot be done any other way (spawning is not something a shell can do),
 and `file`'s exact-match edit is enforcement no shell command performs.
 
 The schema surface the model sees natively is the 8 names plus their docstrings.
-That is **11,823 characters of description text (`BUILTIN_TOOL_DESCRIPTIONS`),
-about 2,956 tokens at the chars/4 estimate, measured 2026-08-19.** `agents` is
+That is 11,823 characters of description text (`BUILTIN_TOOL_DESCRIPTIONS`),
+about 2,956 tokens at the chars/4 estimate, measured 2026-08-19. `agents` is
 4,805 of those characters on its own, `tasks` 1,704 and `file` 1,331.
 
-**That is larger than the surface it replaced, and the earlier claim that it
-shrank is withdrawn.** On 2026-08-12 the eight names measured 9,034 chars and the
+That is larger than the surface it replaced, and the earlier claim that it
+shrank is withdrawn. On 2026-08-12 the eight names measured 9,034 chars and the
 ten names before them measured 10,201, so the count fell and this document said
 so. A week of docstring work put it above both. The argument is the decision
 surface, which is eight standing choices instead of ten, whatever the

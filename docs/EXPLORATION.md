@@ -23,15 +23,18 @@ either side.
 ## What a tree swarm is
 
 A swarm is a tree search whose nodes are agents. One of those agents is a
-**swarm node**, and this document calls it a node for short. The caller states
-two things. `preset` fixes the shape of the search, and `objective` names what is
-measured. Every candidate is then scored by the caller's own registered verifier,
-running in this workspace.
+**swarm node**, and this document calls it a node for short.
+
+`preset` and `task` are a complete call. A named preset that scores by `verify`
+and names no `objective` runs a judged sweep at the row's own width: N candidates
+in parallel, ranked by a judge ensemble, none selected down a tree and none
+published. Naming an `objective` upgrades that to the measured shape the row
+describes.
 
 A verifier is code. It runs, and it reports a raw number in its own unit, so the
-number decides which candidate wins. A caller who asks for `score:'judge'`
-instead gets the median of a model ensemble. An ensemble ranks candidates and
-measures nothing, so a judged run writes no record.
+number decides which candidate wins. `score:'judge'` takes the median of a model
+ensemble instead. An ensemble ranks candidates and measures nothing, so a judged
+run writes no record.
 
 Six axes describe the search (`unit`, `context`, `expand`, `score`, `advance`,
 `carry`), and a preset is one point in them. `advance` selects down the tree.
@@ -40,8 +43,8 @@ Six axes describe the search (`unit`, `context`, `expand`, `score`, `advance`,
 run reaches persists in `exploration_records`, so a later search of the same
 objective starts from it rather than rediscovering it.
 
-Read *The six axes* for what each axis buys, then *Presets* for the seven shapes
-and which one to reach for.
+Read *The six axes* for what each axis buys, then *Presets* for the six named
+shapes, `custom`, and which one to reach for.
 
 ## The six axes
 
@@ -120,21 +123,29 @@ Implemented by `strategy/swarm.ts`.
 
 ## Presets
 
-A preset fixes the search. The caller supplies the objective. Those are the two
-halves of a call and they never mix. A `config` is axes only, and a named preset
+A preset fixes the search. The caller supplies the task. `{preset, task}` is a
+complete call on every named preset. A `config` is axes only, and a named preset
 does not accept one at all.
 
-All seven presets resolve:
+Six named presets, plus `custom`:
 
 | preset | reach for it when | `objective` |
 | --- | --- | --- |
-| `ideate` | you want a set of distinct approaches and nothing has to rank them | refused, because there is no value signal |
-| `optimise` | you can measure the quantity you want to improve | required |
-| `prove` | a checker accepts a candidate or it does not, and that verdict is the score | required, and it names the checker |
-| `research` | you want coverage of a subject rather than one best answer | required, with a coverage `key` |
-| `audit` | you want coverage of a class of findings | required, with a coverage `key` |
-| `redteam` | you want coverage of a set of tactics | required, with a coverage `key` |
-| `custom` | none of the six fits, so state all six axes in `config` under a `label`, optionally seeded from `from` | as the axes require |
+| `ideate` | you want a set of distinct approaches and nothing has to rank them | refused, because the row has no value signal |
+| `optimise` | you can measure the quantity you want to improve | optional; it buys the UCT tree |
+| `prove` | a checker accepts a candidate or it does not, and that verdict is the score | optional; it names the checker and buys the best-first tree |
+| `research` | you want coverage of a subject rather than one best answer | optional; with a coverage `key` it buys the grid |
+| `audit` | you want coverage of a class of findings | optional; with a coverage `key` it buys the grid |
+| `redteam` | you want coverage of a set of tactics | optional; with a coverage `key` it buys the grid |
+| `custom` | none of the six fits, so state all six axes in `config` under a `label`, optionally seeded from `from` | as the resolved axes require |
+
+**A bare call runs a judged sweep.** Five of the six named rows score by `verify`,
+and `verify` needs an instrument. Called with no `objective`, each of those rows
+resolves to its unmeasured point instead of refusing: `score` becomes `judge`,
+`advance` and `carry` become `none`, and depth follows `advance` to 1. The call
+then runs a flat ranked wave at the row's own width. `custom` is excluded
+deliberately, because a composition states its own axes, so a verifying
+composition still needs an objective.
 
 `ideate` is flat by construction. `advance:'none'` expands the root once and
 stops, so the search stays at one level. Its row is depth 1 and 5 branches.
@@ -148,13 +159,11 @@ differ from each other in what their `key` means and in where survivors go:
 `research` and `audit` carry `artifacts`, which publishes; `redteam` carries
 `elites`, which keeps its corpus in the workspace that asked for it.
 
-Three of these rows did not resolve until the parameters their tagged arms require
-were stated. Neither number is this table's own. The archive novelty floor is
-Rainbow Teaming's τ=0.6 CONVERTED — τ is a similarity ceiling and this axis is a
-distance floor, so the row states 0.4 — and the artifacts threshold is
+Neither number those three rows carry is this table's own. The archive novelty
+floor converts Rainbow Teaming's τ=0.6. τ is a similarity ceiling and this axis is
+a distance floor, so the row states 0.4. The artifacts threshold is
 `craftExtractionThreshold`, the pass-band midpoint this repository already
-publishes search artifacts at. A preset never implicitly declares a threshold it
-does not state; it states one it can derive, or it does not resolve.
+publishes search artifacts at.
 
 A named preset is never modified. Resolution maps a preset name to a full axis
 tuple (`resolve(preset) -> SwarmConfig`) with every row fully specified, and a
@@ -163,8 +172,10 @@ preset never implicitly declares a threshold it does not state.
 Mission caps live on the outer call surface and are never duplicated onto the
 search input. An inner cap may only ever be tighter than its outer one.
 
-Implemented by `SWARM_PRESETS` and `SWARM_PRESET_POINTS` in
-`strategy/swarm.ts`; the resolver is `resolveSwarm`.
+The vocabulary is `SWARM_PRESETS` in `strategy/swarm-presets.ts`, with
+`NAMED_SWARM_PRESETS` filtering `custom` out. The rows are `SWARM_PRESET_POINTS`
+in `strategy/swarm.ts`, the resolver is `resolveSwarm`, and the judged fallback is
+`unmeasuredPoint`.
 
 ## Validity over the resolved configuration
 
@@ -187,8 +198,10 @@ Implemented by `swarmValidity` in `strategy/swarm.ts`.
 A parameter that is accepted and silently ignored is a lie. Every axis a call
 names is either honoured or refused by name.
 
-`objective` is REQUIRED on a measured search. A search that optimises without
-saying what counts has nothing to optimise.
+`objective` is REQUIRED exactly when the resolved `score` is `verify`, and a
+coverage `key` exactly when the resolved `advance` is `archive`. Both rules are
+stated over the resolved configuration rather than over a preset name, so a
+composition earns the same verdict for the same reason.
 
 Implemented by the refusals in `resolveSwarm` (`strategy/swarm.ts`) and the
 field-level refusals in `tools/agents-tool.ts`.
@@ -260,21 +273,33 @@ registered is a fabricated script wearing a type. It cannot resolve, so the run
 faults before it can publish, and that is the one real guard against
 fabrication.
 
+The set has exactly one member today, `exec-ratio`. A refusal prints the set, so
+an unregistered kind is told which kinds exist. A kind joins the set only by being
+declared there, never by a caller naming it.
+
 A verifier `spec` must carry every field the floor needs, or the floor has
 nowhere to live.
 
-Implemented by `strategy/verifier-registry.ts`.
+Implemented by `VERIFIER_KINDS` in `strategy/objective.ts`, resolved by
+`resolveVerifier` in `strategy/verifier-registry.ts`, whose refusal text is
+`unregisteredKindRefusal`.
 
 ## Comparability
 
 Two runs are comparable only if their verifier `kind` resolves to the same
-implementation. The registry's digest is therefore part of the objective's
+implementation. The instrument's own digest is therefore part of the objective's
 identity. Without it, a rename silently compares incomparable runs.
+
+`exec-ratio` discloses that digest itself. `execRatioImplementation` hashes the
+metering code rather than a hand-written revision token, so it changes exactly
+when what a call costs changes, and nobody has to remember to bump it.
 
 The identity is taken over the wire form a caller sends.
 
-Implemented by `verifierDigest` in `strategy/verifier-registry.ts` and
-`ObjectiveIdentity` in `strategy/objective.ts`.
+Implemented by `ObjectiveIdentity.verifierDigest` in `strategy/objective.ts`,
+computed by `verifierDigestOf` and keyed by `objectiveIdOf` in
+`strategy/records.ts`, over `ResolvedVerifier.implementation` from
+`strategy/verifier-registry.ts`.
 
 ## The floor
 
@@ -420,10 +445,9 @@ transcript, and its own workspace.
 
 A node runs the same loop as the orchestrator and as a subordinate. The turn
 body is `runChat`, reached through `runHeadInference`. That is the one place a
-model request is issued, tools are dispatched, the stream is watched for a stall,
-the step context is pruned and an unpaired tool call is repaired. A second loop
-beside it would be a parallel implementation, and it would be the version without
-the mid-flight guard.
+model request is issued, tools are dispatched, the step context is pruned and an
+unpaired tool call is repaired. A second loop beside it would be a parallel
+implementation, and it would be the version without the mid-flight guard.
 
 A node takes many turns. Work that crosses 30 s detaches to the background
 wherever a wake can arrive, and a node is such a place, so a node's turn may end
@@ -445,37 +469,50 @@ Implemented by `strategy/node-agent.ts` over `heads/head-inference.ts` and
 `chat.ts`; the tool surface is `heads/head-tools.ts`, and the background policy is
 `BACKGROUND_POLICY.interactive` in `jobs/threshold.ts`.
 
-## The node envelope
+## What bounds a node
 
-A node's wall clock is derived from its step cap, never chosen. A node is
-`maxSteps` steps, and the measured turn envelope bounds one step, so the node's
-clock is the product. A node is many turns, so pinning its whole clock at one
-turn envelope is as wrong as pinning a turn at 120 s was. One live run's three
-nodes were still working at 1,216,358 / 1,310,061 / 1,336,833 ms across
-22 / 25 / 26 steps, and their mean steps were 55,289 / 52,403 / 51,417 ms.
+A node has no step cap and no default wall clock (owner ruling, 2026-08-21).
+`runChat` puts no cap on the agentic loop. Where a caller names no stop condition
+the turn runs under `UNBOUNDED_STEPS`, which never fires, and a caller's own
+condition can only add a reason to stop rather than restore a cap. A node's budget
+is `maxDepth: 1`, which means "this node itself may run". That is the whole of
+what a node's budget governs, because the arbiter owns depth.
 
-Every node has one. It used to be opt-in and no caller opted in, which left the
-search's abort signal as a node's only clock. That signal is a run-level bound.
-It cuts a whole wave mid-step at once, so three nodes each inside their own step
-budget were stopped together and the search crowned nothing.
+Four things end a node. The last three are read between steps, so none of them
+interrupts one:
 
-A cooperative deadline cannot pre-empt a step. It is read between steps, so
-the step that is running when the deadline passes runs to completion however long
-that takes; on one measurement a single step held the runner at 91% CPU for 26
-minutes and neither this deadline nor a caller's `AbortSignal` had any effect on
-it. That is a documented limit rather than a solved problem. Bounding it would
-mean bounding what one step may request, and nothing in the measurement fixes
-that bound. A many-step node IS bounded, and a node is many steps.
+- the model stops calling tools and the node holds nothing, per *A node is an
+  agent*;
+- the search aborts it;
+- its mission governor declines the next request;
+- a deadline the caller declared passes. `maxWallClockMs` is opt-in, and a shipped
+  dispatch declares none.
 
-No default wall clock exists any more (owner ruling 2026-08-21): a node runs
-to completion, bounded from inside by the shared loop's per-call silence window
-(`LLM_CALL_TIMEOUT_MS`) and whatever deadline a caller explicitly declares
-(`maxWallClockMs`, honoured by `budgetExhausted`).
+A node is many turns, so a bound derived from one turn's cost was never a bound on
+a node. Three tool-using nodes were still working at 1,216,358 / 1,310,061 /
+1,336,833 ms across 22 / 25 / 26 steps when the run's 1,200,000 ms abort signal
+fired, which puts a node's mean step at 55,289 / 52,403 / 51,417 ms. Every one of
+those figures is a lower bound, because no node finished. Measured 2026-08-19 at
+`8afd45e8d`, on one credentialed depth-2 width-3 run of `tests/evals/swarm.eval.ts`
+against the shipped default model.
+
+A declared deadline cannot pre-empt a step. It is read between steps, so the step
+running when it passes runs to completion however long that takes. One measured
+step held the runner at 91% CPU for 26 minutes, and neither the deadline nor the
+caller's `AbortSignal` reached it. That is a stated limit rather than a solved
+problem. Bounding it would mean bounding what one step may request, and nothing in
+the measurement fixes that bound.
+
+Implemented by `runNodeAgent` and `runNodeLoop` in `strategy/node-agent.ts` over
+`runHeadInference`; the stop condition is `budgetExhausted` (`heads/types.ts`) and
+`UNBOUNDED_STEPS` (`chat.ts`). Held in both directions by
+`packages/core/tests/unit-swarm-node-envelope.test.ts`, which is where the figures
+above live.
 
 ## A node that did not finish is not a node that measured badly
 
-An unfinished node still returns a report, whether it was aborted, ran out of
-steps or errored. That report's summary is a status line. Nothing measures it.
+An unfinished node still returns a report, whether it was aborted, exhausted its
+budget or errored. That report's summary is a status line. Nothing measures it.
 The engine skips the instrument and the ensemble, so no score exists to rank it
 by, and the candidate carries the status, the step count and the clock instead.
 
