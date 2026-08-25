@@ -172,11 +172,11 @@ const SEGMENTS_PER_WORKLOAD = 4;
  * not suppress it. Measured, not chosen: without this every tick after the first
  * answered `skipped (within the minimum checkpoint interval)`. Read from the
  * bench fixture's OWN policy override rather than from the shipped default: the
- * fixture sets `checkpointIntervalMs: 30_000` so an arm does not sit for half an
- * hour, and reading the shipped 5-minute value instead would have idled this
- * driver for ten times longer than the guard actually requires.
+ * fixture sets `checkpointIntervalMs: 2_000`, so the guard needs three seconds,
+ * and reading the shipped 5-minute value would idle this driver a hundredfold
+ * longer than the guard requires.
  */
-const MIN_CHECKPOINT_INTERVAL_MS = 31_000;
+const MIN_CHECKPOINT_INTERVAL_MS = 3_000;
 
 /** Groups a blocking exec cannot reach; backgrounded and polled instead. */
 const PROCESS_PHASES = new Set<string>([
@@ -210,6 +210,9 @@ interface Options {
   decisive: boolean;
   plan: boolean;
   keep: boolean;
+  /** Arms to run, from `--arms a,b`. Defaults to all three; an unknown name
+   *  refuses rather than measuring an empty run. */
+  arms: readonly Strategy[];
   out: string;
 }
 
@@ -753,8 +756,27 @@ async function measureArm(
 
   // VERIFY FIRST. A strategy whose verify fails measured the container's own
   // blank disk; its numbers are recorded but refused for ranking.
+  //
+  // Retried through the cold window, same shape as the create retries above:
+  // the driver deletes the container applications at start, so the first
+  // verify can ride a container boot plus an image pull, and Bun's fetch
+  // carries its own socket timeout near 300s that no AbortSignal raises (run
+  // 20260825163259 died exactly there, arms empty). Verify is read-only, so a
+  // retry is recovery, not a re-roll; the attempt count is recorded.
   log(`${strategy}: verify`);
-  const verified = await call(fixture, 'POST', `/verify?box=${box}`, VerifyReplySchema, { strategy });
+  let verified: v.InferOutput<typeof VerifyReplySchema> | undefined;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      verified = await call(fixture, 'POST', `/verify?box=${box}`, VerifyReplySchema, { strategy });
+      if (attempt > 1) notes.push(`verify needed ${attempt} attempts (cold container window)`);
+      break;
+    } catch (error) {
+      const timeout = error instanceof Error && /timed out|TimeoutError/i.test(`${error.name} ${error.message}`);
+      if (!timeout || attempt === attempts) throw error;
+      log(`${strategy}: verify attempt ${attempt}/${attempts} timed out on the cold container; retrying`);
+    }
+  }
+  if (verified === undefined) throw new Error(`${strategy}: verify returned nothing after ${attempts} attempts`);
   result.verifyChecks = verified.checks ?? [];
   result.verifyPassed = verified.passed === true;
   if (!result.verifyPassed) {
@@ -1212,6 +1234,13 @@ function parseOptions(argv: readonly string[]): Options {
     decisive: argv.includes('--decisive'),
     plan: argv.includes('--plan'),
     keep: argv.includes('--keep'),
+    arms: value('arms', STRATEGIES.join(',')).split(',').map((raw): Strategy => {
+      const arm = STRATEGIES.find((s) => s === raw.trim());
+      if (arm === undefined) {
+        throw new Error(`--arms names "${raw.trim()}"; known arms: ${STRATEGIES.join(', ')}`);
+      }
+      return arm;
+    }),
     out: value('out', join('bench-artifacts', `devbox-strategies-${runId}.json`)),
   };
 }
@@ -1254,7 +1283,7 @@ async function main(): Promise<number> {
           : 'bucket deleted');
       }
     });
-    for (const strategy of STRATEGIES) {
+    for (const strategy of options.arms) {
       arms.push(await measureArm(started.fixture, strategy, options));
     }
   } catch (error) {

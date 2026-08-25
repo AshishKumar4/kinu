@@ -367,7 +367,10 @@ class BenchBox extends Devbox<BenchEnv> {
       heartbeatSeconds: 30,
       idleMs: 60_000,
       quietConfirmMs: 30_000,
-      checkpointIntervalMs: 30_000,
+      // 2s, not the shipped 5 minutes: the bench measures checkpoint COST,
+      // not cadence, and every measured tick waits this interval out first.
+      // At 30s a three-arm run slept ~20 minutes doing nothing.
+      checkpointIntervalMs: 2_000,
       // A BUDGET IS A CEILING, NOT A DELAY.
       //
       // MEASURED: at 25_000 the r2fs arm died with `Devbox.attach exceeded its

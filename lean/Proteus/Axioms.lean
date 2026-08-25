@@ -222,6 +222,10 @@ import Proteus
 #print axioms Proteus.Storage.OverlayCas.a_tombstone_stages_no_bytes
 #print axioms Proteus.Storage.OverlayCas.a_rename_stages_no_bytes
 #print axioms Proteus.Storage.OverlayCas.a_fresh_write_stages_its_bytes
+#print axioms Proteus.Storage.OverlayCas.a_completed_tick_closes_the_window
+#print axioms Proteus.Storage.OverlayCas.a_tick_free_segment_only_writes
+#print axioms Proteus.Storage.OverlayCas.loss_is_the_writes_since_the_last_tick
+#print axioms Proteus.Storage.OverlayCas.a_skipping_tick_leaves_the_window_open
 
 /-! ## Proteus/Exploration -- docs/EXPLORATION.md — "The Lean invariants" -/
 

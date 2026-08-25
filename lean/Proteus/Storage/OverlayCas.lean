@@ -793,4 +793,102 @@ theorem a_fresh_write_stages_its_bytes (bytes : Nat) :
     stagedBytes .write false bytes = bytes :=
   rfl
 
+/-! ### The loss window
+
+  What a crash loses, in wall-clock terms: exactly the writes since
+  the last completed tick. The tick's model is the fingerprint gate
+  as shipped (packages/devbox/src/devbox.ts checkChanges): a tick
+  that completes saves EVERYTHING written before it, because the gate
+  commits whenever it cannot prove "unchanged" — it never skips a
+  changed tree. The red direction models the deployed 2026-08-25
+  defect exactly: a tick that misclassifies a changed tree as
+  unchanged saves nothing, and no number of such ticks closes the
+  window. -/
+
+/-- Workload writes against tick-saved progress. `written` counts
+    writes the container accepted; `saved` counts what a completed
+    tick has made durable. -/
+structure Backlog where
+  written : Nat
+  saved : Nat
+
+def Backlog.start : Backlog := ⟨0, 0⟩
+
+/-- What a crash loses right now: accepted and not yet durable. -/
+def Backlog.loss (b : Backlog) : Nat := b.written - b.saved
+
+/-- A workload beat: one write lands, or one tick completes. -/
+inductive Beat
+  | write
+  | tick
+
+/-- One beat. A completed tick saves everything written — the
+    fingerprint gate's contract, not an optimistic assumption. -/
+def beatOf (b : Backlog) : Beat → Backlog
+  | .write => { b with written := b.written + 1 }
+  | .tick => { b with saved := b.written }
+
+/-- A workload trace, folded. A crash is a stop at any prefix. -/
+def replayBeats (b : Backlog) : List Beat → Backlog :=
+  List.foldl beatOf b
+
+/-- Writes in a trace segment. -/
+def writesIn : List Beat → Nat
+  | [] => 0
+  | .write :: bs => writesIn bs + 1
+  | .tick :: bs => writesIn bs
+
+/-- **A completed tick closes the window**: loss is zero the moment it
+    lands. -/
+theorem a_completed_tick_closes_the_window (b : Backlog) :
+    (beatOf b .tick).loss = 0 := by
+  simp [beatOf, Backlog.loss]
+
+/-- A tick-free trace segment only accumulates writes: written grows
+    by exactly the segment's writes and saved does not move. -/
+theorem a_tick_free_segment_only_writes (bs : List Beat)
+    (h : ∀ x ∈ bs, x = Beat.write) (b : Backlog) :
+    replayBeats b bs
+      = { written := b.written + writesIn bs, saved := b.saved } := by
+  induction bs generalizing b with
+  | nil => simp [replayBeats, writesIn]
+  | cons x bs ih =>
+    have hx : x = Beat.write := h x (List.mem_cons_self x bs)
+    have hrest : ∀ y ∈ bs, y = Beat.write :=
+      fun y hy => h y (List.mem_cons_of_mem x hy)
+    subst hx
+    rw [replayBeats, List.foldl_cons, ← replayBeats, ih hrest]
+    simp [beatOf, writesIn]
+    omega
+
+/-- **The loss window, exactly.** Split any trace at its last
+    completed tick: whatever ran before it, a crash after a tick-free
+    suffix loses exactly that suffix's writes — never a byte from
+    before the tick. -/
+theorem loss_is_the_writes_since_the_last_tick
+    (before : List Beat) (since : List Beat)
+    (h : ∀ x ∈ since, x = Beat.write) :
+    (replayBeats Backlog.start (before ++ Beat.tick :: since)).loss
+      = writesIn since := by
+  rw [replayBeats, List.foldl_append, List.foldl_cons]
+  rw [← replayBeats, ← replayBeats,
+    a_tick_free_segment_only_writes since h]
+  simp [beatOf, Backlog.loss]
+  omega
+
+/-- The tick with cannot-decide-commits REMOVED: a changed tree
+    misclassified as unchanged saves nothing. This is the deployed
+    2026-08-25 defect (21 "unchanged" ticks over changed workspaces)
+    as a step function. -/
+def beatSkipping (b : Backlog) : Beat → Backlog
+  | .write => { b with written := b.written + 1 }
+  | .tick => b
+
+/-- **Remove the gate and the window never closes**: a write followed
+    by a completed-but-skipping tick still shows loss, so no tick
+    cadence bounds what a crash costs. -/
+theorem a_skipping_tick_leaves_the_window_open :
+    (beatSkipping (beatSkipping Backlog.start .write) .tick).loss = 1 := by
+  decide
+
 end Proteus.Storage.OverlayCas

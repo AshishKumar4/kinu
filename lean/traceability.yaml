@@ -975,3 +975,18 @@ requirements:
       - That a replay hard-stops on a missing blob rather than fabricating a read is a source-shape property Lean cannot see, and the invariant only makes that stop unreachable on a legal trace
       - Journal-before-fold is structural in the source because the fold reads only stored journal objects, so the guard modelled here is stronger than the code needs and its mutant proves the property rather than the code path
       - The fold writes the tree and the manifest as separate operations while the model counts one fold step, so an interleaving that crashes between a tree write and the manifest write is inside one modelled step
+  PR-DEVBOX-005:
+    statement: A crash loses exactly the writes accepted since the last completed checkpoint tick and never a byte from before it, under the shipped cannot-decide-commits gate, and removing that gate reopens the window so that no tick cadence bounds the loss.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.Storage.OverlayCas.a_completed_tick_closes_the_window
+      - Proteus.Storage.OverlayCas.a_tick_free_segment_only_writes
+      - Proteus.Storage.OverlayCas.loss_is_the_writes_since_the_last_tick
+      - Proteus.Storage.OverlayCas.a_skipping_tick_leaves_the_window_open
+    tsRefs:
+      - packages/devbox/src/snapshot-chain.ts:1200
+      - packages/devbox/src/devbox.ts:1319
+    remainingEvidence:
+      - The tick is one modelled step that saves everything written, so the wall-clock width of the window is the tick cadence plus one in-flight tick, a scheduling fact the counters cannot see
+      - A write is one unit; the model bounds the count of lost writes, and bytes follow only because the implementation stages whole files whose fingerprints changed
+      - The gate's own reads (an unreadable fingerprint, an absent baseline) are modelled as the tick committing, which is what the source does after the 2026-08-25 fix and exactly what the skipping mutant removes
