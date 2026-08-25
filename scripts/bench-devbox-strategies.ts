@@ -861,6 +861,10 @@ async function measureArm(
     for (const spec of DECISIVE_WORKLOADS) {
       log(`${strategy}: decisive ${spec.id}`);
       try {
+        // A timed-out container operation can stop the spot container and lose
+        // the harness with it. Reinstall through the box before each workload;
+        // this is also the attach/replay probe for the replacement generation.
+        await installHarness(fixture, box);
         const run = await runDecisive(fixture, box, strategy, spec, options.seed);
         result.decisiveTicks.push(...run.ticks);
         result.treeBytes[spec.id] = run.treeBytes;

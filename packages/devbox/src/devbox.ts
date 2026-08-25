@@ -60,6 +60,7 @@ import { Sandbox } from '@cloudflare/sandbox';
 import type {
   BackupOptions, CheckChangesOptions, ExecOptions, ExecResult,
 } from '@cloudflare/sandbox';
+import * as v from 'valibot';
 
 import {
   DEFAULT_DEVBOX_POLICY,
@@ -124,6 +125,11 @@ const LAST_INTERACTION_KEY = 'devbox:last-interaction';
 const QUIET_SINCE_KEY = 'devbox:quiet-since';
 const PROC_SPEC_PREFIX = 'devbox:proc:';
 const PORT_SPEC_PREFIX = 'devbox:port:';
+const MULTIPART_UPLOAD_PREFIX = 'devbox:multipart-upload:';
+const MultipartUploadSchema = v.object({
+  key: v.string(),
+  uploadId: v.string(),
+});
 
 const LAST_ATTACH_KEY = 'devbox:last-attach';
 const LAST_TICK_KEY = 'devbox:last-tick';
@@ -1202,9 +1208,36 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
   /** This box's own key prefix in the store. The Durable Object's id is the
    *  box's identity and it is already a hex string, so it needs no escaping and
+
    *  cannot collide with another box's prefix. */
   #boxPrefix(): string {
     return `boxes/${this.ctx.id.toString()}`;
+  }
+  /** Abort multipart uploads whose initiating isolate did not survive. The
+   * upload id is durable before the first part, then removed after complete or
+   * abort. A stale row is safe to retry and is always consumed. */
+  async #abortPendingMultipartUploads(store: DevboxStore): Promise<void> {
+    const rows = await this.ctx.storage.list<unknown>({ prefix: MULTIPART_UPLOAD_PREFIX });
+    for (const [storageKey, raw] of rows) {
+      const parsed = v.safeParse(MultipartUploadSchema, raw);
+      if (!parsed.success) {
+        console.error(`[devbox] unreadable multipart upload row ${storageKey} removed`);
+        await this.ctx.storage.delete(storageKey);
+        continue;
+      }
+      try {
+        await store.bucket
+          .resumeMultipartUpload(parsed.output.key, parsed.output.uploadId)
+          .abort();
+      } catch (error) {
+        console.log(
+          `[devbox] multipart ${parsed.output.uploadId} was already settled or could not abort: `
+          + describe({ cause: error }),
+        );
+      } finally {
+        await this.ctx.storage.delete(storageKey);
+      }
+    }
   }
 
   #r2fsPorts(store: DevboxStore): R2fsPorts {
@@ -1256,6 +1289,17 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
           mtime: String(Math.floor((meta.mtimeMs ?? Date.now()) / 1000)),
         },
       };
+    const multipartLifecycle = {
+      started: async (objectKey: string, uploadId: string): Promise<void> => {
+        await this.ctx.storage.put(
+          `${MULTIPART_UPLOAD_PREFIX}${uploadId}`,
+          { key: objectKey, uploadId },
+        );
+      },
+      finished: async (_objectKey: string, uploadId: string): Promise<void> => {
+        await this.ctx.storage.delete(`${MULTIPART_UPLOAD_PREFIX}${uploadId}`);
+      },
+    };
     return {
       containerRunning: () => this.ctx.container?.running === true,
       exec: async (command) => await this.#rawExec(command),
@@ -1266,6 +1310,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         await this.writeFile(path, stream);
       },
       mountTree: async () => {
+        await this.#abortPendingMultipartUploads(store);
         await this.mountBucket(store.binding, CAS_TREE_MOUNT, {
           prefix: `/${prefix}/tree`, readOnly: true,
         });
@@ -1296,6 +1341,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
             stream,
             size,
             objectOptions(meta),
+            multipartLifecycle,
           );
           counters.bytesPut += landed;
           if (landed !== size) {
@@ -1334,7 +1380,10 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         },
       }),
       inventory: async () => await prefixInventory(store.bucket, `${prefix}/`),
-      clearPrefix: async () => await deletePrefix(store.bucket, `${prefix}/`),
+      clearPrefix: async () => {
+        await this.#abortPendingMultipartUploads(store);
+        return await deletePrefix(store.bucket, `${prefix}/`);
+      },
       // PARSED, never cast. A durable row was written by some release of this
       // package and the reader has to establish what it is: a row this code did
       // not write reads as ABSENT, which makes a fresh box, rather than as a

@@ -25,6 +25,8 @@ function fakeBucket() {
       return Promise.resolve();
     },
     createMultipartUpload: () => Promise.resolve({
+      key: 'k',
+      uploadId: 'upload-1',
       uploadPart: (partNumber: number, chunk: Uint8Array) => {
         parts.push(chunk.byteLength);
         return Promise.resolve({ partNumber, etag: `e${partNumber}` });
@@ -140,5 +142,31 @@ describe('putStream promotes when the small hint lies, and parts stay uniform', 
     expect(landed).toBe(SMALL_PUT_BYTES);
     expect(store.parts.length).toBe(0);
     expect(store.objects.get('k')).toBe(SMALL_PUT_BYTES);
+  });
+});
+
+describe('multipart lifecycle registry', () => {
+  test('the durable upload id spans every part and clears after complete', async () => {
+    const store = fakeBucket();
+    const events: string[] = [];
+    const lifecycle = {
+      started: (key: string, uploadId: string) => {
+        events.push(`start:${key}:${uploadId}`);
+        return Promise.resolve();
+      },
+      finished: (key: string, uploadId: string) => {
+        events.push(`finish:${key}:${uploadId}`);
+        return Promise.resolve();
+      },
+    };
+    await putStream(
+      store.bucket,
+      'k',
+      streamOf([MULTIPART_PART_BYTES + 1]),
+      MULTIPART_PART_BYTES + 1,
+      undefined,
+      lifecycle,
+    );
+    expect(events).toEqual(['start:k:upload-1', 'finish:k:upload-1']);
   });
 });

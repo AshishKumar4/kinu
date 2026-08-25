@@ -37,12 +37,18 @@ export const MULTIPART_PART_BYTES = 8 * 1024 * 1024;
  * hint over a huge stream stays bounded in memory and still lands every byte.
  * The count returned here is the one a durable record may carry.
  */
+export interface MultipartLifecycle {
+  started(key: string, uploadId: string): Promise<void>;
+  finished(key: string, uploadId: string): Promise<void>;
+}
+
 export async function putStream(
   bucket: R2Bucket,
   key: string,
   stream: ReadableStream<Uint8Array>,
   size: number,
   options?: R2PutOptions,
+  lifecycle?: MultipartLifecycle,
 ): Promise<number> {
   const reader = stream.getReader();
   const buffered: Uint8Array[] = [];
@@ -74,12 +80,26 @@ export async function putStream(
           multipartOptions.httpMetadata = options.httpMetadata;
         }
         multipart = await bucket.createMultipartUpload(key, multipartOptions);
+        await lifecycle?.started(key, multipart.uploadId);
         slicer = new PartSlicer(multipart);
         for (const chunk of buffered) await slicer.push(chunk);
       }
       await slicer.push(value);
     }
-    if (slicer !== undefined) return await slicer.finish();
+    if (slicer !== undefined) {
+      const landed = await slicer.finish();
+      if (multipart !== undefined) {
+        try {
+          await lifecycle?.finished(key, multipart.uploadId);
+        } catch (finishFailure) {
+          console.error(
+            `[devbox] completed multipart registry cleanup failed for ${key}: `
+            + describeThrown({ cause: finishFailure }),
+          );
+        }
+      }
+      return landed;
+    }
     const buffer = new Uint8Array(held);
     let at = 0;
     for (const chunk of buffered) {
@@ -100,6 +120,14 @@ export async function putStream(
         console.error(
           `[devbox] the abandoned multipart upload for ${key} was not aborted: `
           + describeThrown({ cause: abortFailure }),
+        );
+      }
+      try {
+        await lifecycle?.finished(key, multipart.uploadId);
+      } catch (finishFailure) {
+        console.error(
+          `[devbox] abandoned multipart registry cleanup failed for ${key}: `
+          + describeThrown({ cause: finishFailure }),
         );
       }
     }
