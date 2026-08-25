@@ -1,0 +1,138 @@
+// BENCHMARK FIXTURE CONFIG. Not part of any product deploy: no deploy script
+// names this file, and it exists so a driver can raise a real container with a
+// real R2 mount, run both durability strategies against one workload, and then
+// delete the Worker and the bucket.
+//
+// Everything that could change a measurement is pinned to the product's own
+// value, with the reason beside it.
+{
+  "$schema": "../../../node_modules/wrangler/config-schema.json",
+  "name": "kinu-devbox-bench",
+
+  // The same account as the product's own config. This credential can see more
+  // than one account and wrangler refuses to choose in non-interactive mode, so
+  // naming it here is what makes the fixture runnable from a script instead of
+  // from a prompt — which is also true of `wrangler dev`, because it builds the
+  // container image.
+  "account_id": "f44999d1ddda7012e9a87729eba250f1",
+  "main": "worker.ts",
+
+  // ≥ 2025-12-01 is REQUIRED, not preferred: `ctx.exports` — which is how the
+  // Sandbox object reaches `ContainerProxy` to build its interception fetchers —
+  // does not exist before it. Without interception there is no credential-less
+  // R2 binding mount, so BOTH strategies lose their production path: the chain
+  // cannot mount a layer and r2fs cannot mount at all.
+  "compatibility_date": "2025-12-01",
+  // `nodejs_compat` for the same reason the product sets it. A different runtime
+  // is a different measurement.
+  "compatibility_flags": ["nodejs_compat"],
+
+  // One reachable origin and nothing else: no custom domain, no route.
+  // `wrangler dev --remote` is not an option — wrangler refuses it for Durable
+  // Objects, so a container and a SQLite object are local-only there — and a
+  // purely local run has neither a real container nor real R2 latency. A real
+  // deployment is the only route to a number.
+  "workers_dev": true,
+
+  // On, because a mount refusal surfaces through logs, and a run that cannot
+  // explain a failed arm has already spent the container time.
+  "observability": { "enabled": true },
+
+  "durable_objects": {
+    "bindings": [
+      // One class per strategy. A box's strategy cannot change once it holds
+      // bytes — the two write different things — so the arm is chosen by
+      // choosing a namespace rather than by a runtime switch that could be
+      // pointed at bytes written the other way.
+      { "class_name": "SnapshotChainBox", "name": "SnapshotChainBox" },
+      { "class_name": "R2fsBox", "name": "R2fsBox" },
+      { "class_name": "OverlayCasBox", "name": "OverlayCasBox" },
+      // Accumulates R2 operation counts flushed from the ContainerProxy. A
+      // Durable Object rather than module state because the proxy and the fetch
+      // handler are separate entrypoints with no guarantee of sharing an
+      // isolate, so module state reads short from the other side.
+      { "class_name": "BenchOpCounter", "name": "BenchOpCounter" }
+      //
+      // ContainerProxy is EXPORTED by worker.ts and deliberately NOT bound here.
+      // It is a WorkerEntrypoint, not a Durable Object: the Sandbox object
+      // builds its interception fetchers from `ctx.exports.ContainerProxy`, so
+      // the export is what matters, and declaring a durable-object binding for
+      // it is refused outright — "Cannot create binding for class
+      // 'ContainerProxy' that is not exported by the script" [code 10061].
+    ]
+  },
+
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["SnapshotChainBox", "R2fsBox", "OverlayCasBox", "BenchOpCounter"]
+    }
+  ],
+
+  // Image tag, vCPU, memory and disk all equal to the product's own container
+  // block. The image tag MUST equal the @cloudflare/sandbox version in
+  // package.json: the SDK asks the container for its own SANDBOX_VERSION on
+  // every start and logs a mismatch.
+  //
+  // `max_instances` is 1 per class because a run drives one box at a time; a
+  // second would compete for account capacity while a measurement is running.
+  "containers": [
+    {
+      "class_name": "SnapshotChainBox",
+      "image": "docker.io/cloudflare/sandbox:0.12.8",
+      "max_instances": 1,
+      "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 }
+    },
+    {
+      "class_name": "R2fsBox",
+      "image": "docker.io/cloudflare/sandbox:0.12.8",
+      "max_instances": 1,
+      "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 }
+    },
+    {
+      "class_name": "OverlayCasBox",
+      "image": "docker.io/cloudflare/sandbox:0.12.8",
+      "max_instances": 1,
+      "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 }
+    }
+  ],
+
+  // REQUIRED, and pinned to the product's own value. The snapshot chain streams
+  // a staged archive out of the container with `readFile(…, { encoding: 'none' })`
+  // to avoid base64 framing, and the SDK refuses that on every transport but
+  // `rpc`: "readFile with encoding: 'none' requires the rpc transport". Measured
+  // here — without this var the very first checkpoint fails with exactly that
+  // text. The route-based transports are deprecated upstream and are dropped in
+  // the next major, so `rpc` is both the only working and the only surviving
+  // path.
+  "vars": {
+    "SANDBOX_TRANSPORT": "rpc"
+  },
+
+  // The driver creates this bucket before a run and deletes it after, and
+  // refuses to run against a non-empty pre-existing one. Bound as
+  // BACKUP_BUCKET because that is the binding NAME both strategies hand to
+  // `mountBucket`, and the egress handler resolves the bucket out of the Worker
+  // env by that name.
+  //
+  // A dedicated bucket, not a real backup bucket: benchmark traffic does not
+  // belong in a keyspace holding real archives, and an ephemeral bucket makes
+  // "leaves no resources" a property of teardown rather than of prefix
+  // arithmetic.
+  //
+  // GIVE IT THE LIFECYCLE RULE THAT ABORTS INCOMPLETE MULTIPART UPLOADS WHEN YOU
+  // CREATE IT, not after the first failure. A purge cannot promise an empty
+  // bucket: pending multipart uploads count towards emptiness and the Workers
+  // binding cannot enumerate them, so a bucket can report zero listable objects
+  // and still refuse deletion. Once that happens the only remedy is the rule
+  // plus waiting. Kept separate from any other run's bucket so two runs cannot
+  // block each other's teardown.
+  "r2_buckets": [
+    { "binding": "BACKUP_BUCKET", "bucket_name": "kinu-devbox-bench" }
+  ]
+
+  // BENCH_TOKEN is supplied per run through `wrangler deploy --var`, never
+  // committed and never written to disk. An absent token makes every request
+  // 401, so a fixture that outlives its run is inert rather than an open exec
+  // endpoint on the public edge.
+}
