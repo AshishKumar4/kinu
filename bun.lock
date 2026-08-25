@@ -55,12 +55,14 @@
         "@ai-sdk/openai-compatible": "^2.0.41",
         "@cloudflare/ai-chat": "^0.10.1",
         "@cloudflare/codemode": "^0.5.1",
+        "@cloudflare/containers": "0.3.7",
         "@cloudflare/kumo": "^1.18.0",
-        "@cloudflare/sandbox": "0.12.7",
+        "@cloudflare/sandbox": "0.12.8",
         "@cloudflare/think": "^0.15.1",
         "@kinu.run/agent-utils": "workspace:*",
         "@kinu.run/compaction": "workspace:*",
         "@kinu.run/core": "workspace:*",
+        "@kinu.run/devbox": "workspace:*",
         "@modelcontextprotocol/sdk": "^1.29.0",
         "@nimbus-sh/core": "0.6.0",
         "@nimbus-sh/sdk": "0.3.1",
@@ -161,6 +163,18 @@
         "@kinu.run/test-utils": "workspace:*",
       },
     },
+    "packages/devbox": {
+      "name": "@kinu.run/devbox",
+      "version": "0.1.0",
+      "dependencies": {
+        "@cloudflare/containers": "0.3.7",
+        "@cloudflare/sandbox": "0.12.8",
+        "valibot": "^1.4.1",
+      },
+      "devDependencies": {
+        "@cloudflare/workers-types": "^4.20260414.1",
+      },
+    },
     "packages/pc-agent": {
       "name": "@kinu.run/pc-agent",
       "version": "0.1.0",
@@ -178,6 +192,8 @@
     },
   },
   "patchedDependencies": {
+    "@nimbus-sh/core@0.6.0": "patches/@nimbus-sh%2Fcore@0.6.0.patch",
+    "@cloudflare/sandbox@0.12.8": "patches/@cloudflare%2Fsandbox@0.12.8.patch",
     "@plannotator/ui@0.30.0": "patches/@plannotator%2Fui@0.30.0.patch",
   },
   "overrides": {
@@ -324,13 +340,13 @@
 
     "@cloudflare/codemode": ["@cloudflare/codemode@0.5.1", "", { "dependencies": { "@types/json-schema": "^7.0.15", "acorn": "^8.17.0" }, "peerDependencies": { "@modelcontextprotocol/sdk": "^1.25.0", "@tanstack/ai": ">=0.8.0 <1.0.0", "ai": "^6.0.0 || ^7.0.0", "zod": "^4.0.0" }, "optionalPeers": ["@modelcontextprotocol/sdk", "@tanstack/ai", "ai", "zod"] }, "sha512-PcX5+qAvupi8p1bMLKhqvPHziZpDubbrxDIvVH+iuuNUaFyOxxWNS9HplfFqIULqUzDPdFf1w7IiSCKHp7GDgg=="],
 
-    "@cloudflare/containers": ["@cloudflare/containers@0.3.6", "", {}, "sha512-8RrbK/Et165gjvXccui3pgkUuySVWysTC6bJRXfgqmbCA2vAmh8pm7cAKDh2nZFR/GSjW4BgxeKpffCTD8SJEg=="],
+    "@cloudflare/containers": ["@cloudflare/containers@0.3.7", "", {}, "sha512-DM9dm3FnIBSyiSJ1FLavKwl/lk3oAmTaynCzZQ9pZR0ncRPquSxkxd8Nu2MFILxmDDsPkxKsSNEh9mHHMty4Fw=="],
 
     "@cloudflare/kumo": ["@cloudflare/kumo@1.19.0", "", { "dependencies": { "@base-ui/react": "^1.2.0", "@shikijs/langs": "^4.0.0", "@shikijs/themes": "^4.0.0", "clsx": "^2.1.1", "motion": "^12.34.1", "react-day-picker": "^9.13.2", "shiki": "^4.0.0", "tailwind-merge": "^3.4.0" }, "peerDependencies": { "@phosphor-icons/react": "^2.1.10", "echarts": "^6.0.0", "react": "^18.0.0 || ^19.0.0", "react-dom": "^18.0.0 || ^19.0.0", "zod": "^4.0.0" }, "optionalPeers": ["zod"], "bin": { "kumo": "bin/kumo.js" } }, "sha512-Ob91fqIbVwXMk/DTrod8oqs/uLiHOA1AbddJxfoPAuKRSjvVeImck34aow6ZJhWrfJi3uxLFOAI3569r5QFE0A=="],
 
     "@cloudflare/kv-asset-handler": ["@cloudflare/kv-asset-handler@0.5.0", "", {}, "sha512-jxQYkj8dSIzc0cD6cMMNdOc1UVjqSqu8BZdor5s8cGjW2I8BjODt/kWPVdY+u9zj3ms75Q5qaZgnxUad83+eAg=="],
 
-    "@cloudflare/sandbox": ["@cloudflare/sandbox@0.12.7", "", { "dependencies": { "@cloudflare/containers": "^0.3.5", "aws4fetch": "^1.0.20", "capnweb": "^0.8.0", "hono": "^4.13.0" }, "peerDependencies": { "@openai/agents": "^0.3.3", "@opencode-ai/sdk": "^1.1.40", "@xterm/xterm": ">=5.0.0" }, "optionalPeers": ["@openai/agents", "@opencode-ai/sdk", "@xterm/xterm"] }, "sha512-7nDEiqrxZfBuUc2y1RxWJMTPe+5q5+QZlZ5k+KXaQRv/Tgimdu4XyFGzMQuQYuI9IFXiPJVfMMPLKUmPg0VWpA=="],
+    "@cloudflare/sandbox": ["@cloudflare/sandbox@0.12.8", "", { "dependencies": { "@cloudflare/containers": "^0.3.5", "aws4fetch": "^1.0.20", "capnweb": "^0.8.0", "hono": "^4.13.0" }, "peerDependencies": { "@openai/agents": "^0.3.3", "@opencode-ai/sdk": "^1.1.40", "@xterm/xterm": ">=5.0.0" }, "optionalPeers": ["@openai/agents", "@opencode-ai/sdk", "@xterm/xterm"] }, "sha512-xrmVqqfCBN6jNIRthICs/AwF2uUL9eH4yavjXHr9cFWpKalcPFsZY85CGddAG58Anx5WcEWTKHcM9w7Imf1eKA=="],
 
     "@cloudflare/shell": ["@cloudflare/shell@0.4.3", "", { "dependencies": { "@cloudflare/codemode": "^0.5.0", "isomorphic-git": "^1.38.5" } }, "sha512-6ZMKQZqdZeommh8LGFK5C2rep4byJfCuyjR4NBdMqn2wW9tbeDJORfDhP/No75MLx8nJeWdgeXvq3D2Ijpa0XA=="],
 
@@ -625,6 +641,8 @@
     "@kinu.run/compaction": ["@kinu.run/compaction@workspace:packages/compaction"],
 
     "@kinu.run/core": ["@kinu.run/core@workspace:packages/core"],
+
+    "@kinu.run/devbox": ["@kinu.run/devbox@workspace:packages/devbox"],
 
     "@kinu.run/pc-agent": ["@kinu.run/pc-agent@workspace:packages/pc-agent"],
 
@@ -2465,6 +2483,8 @@
     "@babel/helper-compilation-targets/semver": ["semver@6.3.1", "", { "bin": { "semver": "bin/semver.js" } }, "sha512-BR7VvDCVHO+q2xBEWskxS6DJE1qRnb7DxzUrogb71CWoSficBxYsiAGd+Kl0mmq/MprG9yArRkyrQxTO6XjMzA=="],
 
     "@babel/helper-create-class-features-plugin/semver": ["semver@6.3.1", "", { "bin": { "semver": "bin/semver.js" } }, "sha512-BR7VvDCVHO+q2xBEWskxS6DJE1qRnb7DxzUrogb71CWoSficBxYsiAGd+Kl0mmq/MprG9yArRkyrQxTO6XjMzA=="],
+
+    "@cloudflare/sandbox/@cloudflare/containers": ["@cloudflare/containers@0.3.6", "", {}, "sha512-8RrbK/Et165gjvXccui3pgkUuySVWysTC6bJRXfgqmbCA2vAmh8pm7cAKDh2nZFR/GSjW4BgxeKpffCTD8SJEg=="],
 
     "@cloudflare/shell/isomorphic-git": ["isomorphic-git@1.40.0", "", { "dependencies": { "async-lock": "^1.4.1", "clean-git-ref": "^2.0.1", "crc-32": "^1.2.0", "diff3": "0.0.3", "ignore": "^5.1.4", "minimisted": "^2.0.0", "pako": "^1.0.10", "pify": "^4.0.1", "readable-stream": "^4.0.0", "sha.js": "^2.4.12", "simple-get": "^4.0.1" }, "bin": { "isogit": "cli.cjs" } }, "sha512-/CbnxwZqIm17y3c/z0INbkgEKSvFerXtO/NGgaRxZ8nvL3eoMtbjuAS7f4Pj7lZzj8HaultvDD1ClJTBVDl89g=="],
 

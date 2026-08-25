@@ -1,0 +1,48 @@
+diff --git a/dist/runtime/esbuild-service.d.ts b/dist/runtime/esbuild-service.d.ts
+index d07f6ea2dd282ecd8b761d8861d5a6108251fa2f..691b3064c5c446ca80b72b681194f9b4930a7429 100644
+--- a/dist/runtime/esbuild-service.d.ts
++++ b/dist/runtime/esbuild-service.d.ts
+@@ -100,7 +100,7 @@ export declare function getSharedRuntimeExternals(specifier: string): string[];
+  * Unicode identifier tables.
+  */
+ export declare function hasTopLevelAwait(src: string): boolean;
+-import type * as esbuild from 'esbuild-wasm';
++import type * as esbuild from 'esbuild-wasm/esm/browser.js';
+ export interface TransformResult {
+     code: string;
+     map: string;
+diff --git a/dist/runtime/esbuild-service.js b/dist/runtime/esbuild-service.js
+index 3f3fb83bd240e98247945f044983cd0bfc8e7bb7..57d6cef1361d34fc05c619da12e432384b23182a 100644
+--- a/dist/runtime/esbuild-service.js
++++ b/dist/runtime/esbuild-service.js
+@@ -823,7 +823,7 @@ async function loadEsbuild() {
+     if (_esbuildLoadPromise)
+         return _esbuildLoadPromise;
+     _esbuildLoadPromise = (async () => {
+-        const mod = await import('esbuild-wasm');
++        const mod = await import('esbuild-wasm/esm/browser.js');
+         _esbuildMod = mod;
+         return _esbuildMod;
+     })();
+diff --git a/src/runtime/esbuild-service.ts b/src/runtime/esbuild-service.ts
+index 3d58d8c5d8e35f2da06771cd7f5a24b7ff1893b7..bc72758f2bc01c4d1e1819c1c07f16dc7dd54883 100644
+--- a/src/runtime/esbuild-service.ts
++++ b/src/runtime/esbuild-service.ts
+@@ -761,7 +761,7 @@ function convertEsmImportsToRequire(src: string): { requires: string; body: stri
+ // The .wasm import is a compile-time asset binding (wrangler resolves
+ // it to a WebAssembly.Module) — it does NOT execute esbuild-wasm's
+ // main.js, so it's safe to keep at the top level.
+-import type * as esbuild from 'esbuild-wasm';
++import type * as esbuild from 'esbuild-wasm/esm/browser.js';
+ import esbuildWasmUrl from 'esbuild-wasm/esbuild.wasm';
+ 
+ /**
+@@ -784,7 +784,7 @@ async function loadEsbuild(): Promise<typeof esbuild> {
+   if (_esbuildMod) return _esbuildMod;
+   if (_esbuildLoadPromise) return _esbuildLoadPromise;
+   _esbuildLoadPromise = (async () => {
+-    const mod = await import('esbuild-wasm');
++    const mod = await import('esbuild-wasm/esm/browser.js');
+     _esbuildMod = mod as unknown as typeof esbuild;
+     return _esbuildMod;
+   })();
