@@ -35,8 +35,8 @@ function authStore(environment: string): Resource {
   return found;
 }
 
-function row(id: string, verdict: Row['verdict'], required: boolean): Row {
-  return { id, verdict, detail: 'fixture', required, purpose: 'fixture' };
+function row(id: string, verdict: Row['verdict'], required: boolean, origin: Row['origin'] = 'manual'): Row {
+  return { id, verdict, detail: 'fixture', required, purpose: 'fixture', origin };
 }
 
 describe('the inventory is derived from the manifest, not written beside it', () => {
@@ -195,6 +195,19 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
     expect(optional.findings).toEqual([]);
   });
 
+  test('a required absence the deploy itself creates is a voiced note, not a deadlock', () => {
+    // ControlPlaneDO's namespace lands with this deploy's migration; a gate
+    // that fails on its absence blocks the only thing that creates it. The
+    // tolerance is NOT silence: the note names the row on the green path.
+    const preDeploy = audit(
+      infrastructure, [...clean, row('durable-object.x:New', 'absent', true, 'wrangler-deploy')], [], [],
+    );
+    expect(preDeploy.findings).toEqual([]);
+    expect(preDeploy.notes.length).toBe(1);
+    expect(preDeploy.notes[0]).toContain('durable-object.x:New');
+    expect(preDeploy.notes[0]).toContain('created by the deploy itself');
+  });
+
   test('a failed lookup fails even though nothing was observed missing', () => {
     // The whole reason for the third state. `unknown` on an OPTIONAL resource
     // still fails: "we could not look" is not softened by the resource being
@@ -209,10 +222,20 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
     expect(undeclared.findings.length).toBe(1);
     expect(undeclared.findings[0]).toContain('nothing declares that');
 
-    // UNOBSERVABLE names rows that did not come back unobservable.
-    const stale = audit(infrastructure, [row(authStore('production').id, 'present', true)], [], []);
-    expect(stale.findings.length).toBe(UNOBSERVABLE.size);
+    // UNOBSERVABLE names rows that did not come back unobservable. Scoped to
+    // the rows THIS run declared: an entry owned by another environment's
+    // resource must NOT fail a run that never declares that row (staging runs
+    // failed on production's cron entry), while an entry whose row IS declared
+    // and observable is stale and fails.
+    const gatewayId = [...UNOBSERVABLE.keys()].find((id) => id.startsWith('ai-gateway.'));
+    if (gatewayId === undefined) throw new Error('fixture expects the ai-gateway blind entry');
+    const stale = audit(infrastructure, [row(gatewayId, 'present', true)], [], []);
+    expect(stale.findings.length).toBe(1);
     expect(stale.findings.join('\n')).toContain('ai-gateway.kinu-ai-gateway');
+
+    // Out of scope, out of verdict: the same entry with its row undeclared.
+    const scoped = audit(infrastructure, [row(authStore('production').id, 'present', true)], [], []);
+    expect(scoped.findings).toEqual([]);
   });
 
   test('the declared blind spots are exactly the ones observation reports', () => {

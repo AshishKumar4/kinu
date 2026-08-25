@@ -846,10 +846,19 @@ export function deriveInfrastructure(
     environmentRow('production', topName, config),
     ...Object.entries(config.env ?? {}).map(([key, section]) => environmentRow(key, `${topName}-${key}`, section)),
   ];
+  // Raw env blocks are right for bindings and vars, which wrangler does NOT
+  // inherit into named environments — but `triggers` IS inheritable
+  // (developers.cloudflare.com/workers/wrangler/configuration, checked
+  // 2026-08-25), so an env without its own block runs the top-level cron and
+  // must own a cron resource. Without this line the staging cron existed on
+  // the deployed Worker and in UNOBSERVABLE while no run ever declared it.
   const sections: readonly (readonly [InfraEnvironment, WranglerEnvironment])[] = [
     [environments[0] ?? environmentRow('production', topName, config), config],
     ...Object.entries(config.env ?? {}).map(([key, section], index) =>
-      [environments[index + 1] ?? environmentRow(key, `${topName}-${key}`, section), section] as const),
+      [
+        environments[index + 1] ?? environmentRow(key, `${topName}-${key}`, section),
+        { ...section, triggers: section.triggers ?? config.triggers },
+      ] as const),
   ];
 
   const optionality = new Map(envFields().map((field) => [field.name, field.optional]));
