@@ -25,7 +25,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { tabCls } from "@/components/ui/form";
 import type { AgentStatus, ExecutorOutput } from "@/hooks/use-kinu";
 import type { ExecutorInfo } from "@/lib/executors";
-import type { ToolInfo, MemoryEntry, ForkNode, BackgroundJob, ExecutorCommandResult, Rpc } from "@/lib/protocol";
+import type { ToolInfo, MemoryEntry, ForkNode, BackgroundJob, ExecutorCommandResult, Rpc, TabPresence } from "@/lib/protocol";
 import { OutputSurface, type PinnedPort } from "./OutputSurface";
 import { AgentSurface } from "./AgentSurface";
 import { ExplorationSurface } from "./ExplorationSurface";
@@ -37,6 +37,44 @@ import { ActivitySurface } from "./ActivitySurface";
 import { AgentViewSurface } from "./AgentViewSurface";
 
 export const SURFACES = ["Output", "Work", "Files", "Releases", "Exploration", "Agent", "Environment"] as const;
+
+/** Where selection lands when the surface it was on loses its content. */
+export const DEFAULT_SURFACE: SurfaceKind = "Work";
+
+/**
+ * Whether a surface currently has content to show.
+ *
+ * Releases and Exploration are GATED: hidden until their ledger has a row.
+ * Everything else is unconditional, and an absent `tabPresence` (the gallery
+ * frames that mount this surface against fixtures) keeps both tabs visible —
+ * unknown is not empty, and a fixture frame is not a claim about a ledger.
+ * Exploration also reads the live tree map directly: a search in flight
+ * appears the moment its first broadcast lands, without waiting for the next
+ * presence refresh.
+ */
+export function surfaceHasContent(
+  surface: SurfaceKind,
+  tabPresence: TabPresence | undefined,
+  mctsTrees: ReadonlyMap<string, ForkNode>,
+): boolean {
+  if (surface === "Releases") return tabPresence?.releases ?? true;
+  if (surface === "Exploration") return (tabPresence?.explorations ?? true) || mctsTrees.size > 0;
+  return true;
+}
+
+/**
+ * The surface to actually be on. An ACTIVE tab whose content just became
+ * empty must not strand the reader on a tab that no longer exists: selection
+ * falls back to {@link DEFAULT_SURFACE}. Only the two gated surfaces can
+ * vanish under the reader; everything else always has content.
+ */
+export function resolveGatedSurface(
+  surface: SurfaceKind,
+  tabPresence: TabPresence | undefined,
+  mctsTrees: ReadonlyMap<string, ForkNode>,
+): SurfaceKind {
+  return surfaceHasContent(surface, tabPresence, mctsTrees) ? surface : DEFAULT_SURFACE;
+}
 /** Not one of the segmented work surfaces: Activity is about the run rather
  *  than a place to work in it, so it sits apart at the right of the strip and
  *  carries no label. */
@@ -100,12 +138,21 @@ export interface WorkSurfaceProps {
   /** Dashboards Kinu published for this workspace. Appended after the host
    *  surfaces, in their own marked group. */
   agentViews?: AgentViewSummary[];
+  /** Whether the gated surfaces have content. Absent in fixture frames,
+   *  which keeps every tab visible — unknown is not empty. */
+  tabPresence?: TabPresence;
   rpc: Rpc;
 }
-
 export function WorkSurface(props: WorkSurfaceProps) {
   const { surface, onSurface } = props;
   const strip = useRef<HTMLDivElement>(null);
+  // Gated tabs render only while their ledger has a row, and a reader left on
+  // one whose content just emptied is moved back before the pane can show a
+  // tab that is no longer in the strip.
+  useEffect(() => {
+    const resolved = resolveGatedSurface(surface, props.tabPresence, props.mctsTrees);
+    if (resolved !== surface) onSurface(resolved);
+  }, [surface, onSurface, props.tabPresence, props.mctsTrees]);
   // A one-shot cross-surface intent: an Environment card's Files action lands
   // the Files tab at that environment's own root on the composite plane.
   const [filesJump, setFilesJump] = useState<{ path: string; nonce: number } | null>(null);
@@ -132,7 +179,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
             The longer route names stay internal; the visible words are
             Explore and Env, as in the owner's surface switcher. */}
         <div ref={strip} className="p-tabstrip [--scroll-ground:var(--c-sidebar)] flex items-center min-w-0 flex-1 px-3 gap-0.5 -mb-px">
-          {SURFACES.map((s) => {
+          {SURFACES.filter((s) => surfaceHasContent(s, props.tabPresence, props.mctsTrees)).map((s) => {
             // Two signals, two homes, two encodings: live ports light Output
             // green, and decisions waiting on the owner light Work in accent.
             // Liveness gets no digit — something merely running needs nobody,

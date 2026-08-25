@@ -22,6 +22,7 @@ import type {
   Rpc,
   SubordinateActivityEvent,
   SubordinateRosterEntry,
+  TabPresence,
 } from "../lib/protocol";
 import type { ExecutorInfo } from "../lib/executors";
 import { applySignalCard, parseSignalCardEvent, type SignalCard } from "../components/background-event";
@@ -144,6 +145,9 @@ export interface WorkspaceSnapshot {
    *  the composer's mode and the opening surface: fetching it a beat later made
    *  a plan-gated workspace paint in build mode and then jump. */
   activePlan: unknown;
+  /** Whether the gated right-pane tabs have content. On the snapshot so the
+   *  strip is right from the first paint; re-read by the live cycle. */
+  tabPresence: TabPresence;
 }
 
 const PlanAnnotationTextPositionSchema = v.object({
@@ -297,12 +301,12 @@ export function parsePlanReview<Value>(value: Value): PlanReview | null {
   const parsed = v.safeParse(PlanReviewSchema, value);
   return parsed.success ? parsed.output : null;
 }
-
 /** Where a surfaced failure came from — each source owns (and clears) its own
  *  message so a recovery in one never hides a still-broken other. */
 export type LiveRefreshSource =
   | "jobs"
   | "pendingActions"
+  | "presence"
   | "mcts"
   | "memoryContent"
   | "tools"
@@ -325,6 +329,7 @@ const LIVE_REFRESH_DESCRIPTORS: readonly LiveRefreshDescriptor[] = [
   { source: "mcts", label: "MCTS" },
   { source: "memoryContent", label: "memory content" },
   { source: "tools", label: "tools" },
+  { source: "presence", label: "tab presence" },
   { source: "executors", label: "executors" },
   { source: "views", label: "agent views" },
   { source: "consents", label: "device consents" },
@@ -568,6 +573,10 @@ export function useKinu(target?: string | KinuActorAddress) {
   // accent badge on the strip, so the badge can never say something the queue
   // does not show. Host-owned: see the RPC's note on VIEW_DATA_SOURCES.
   const [pendingActions, setPendingActions] = useState<PendingAction[]>([]);
+  // Whether the gated right-pane tabs (Releases, Exploration) have content.
+  // Seeded by the snapshot, refreshed with the live cycle; a fresh workspace
+  // starts with neither tab until its first release change or search run.
+  const [tabPresence, setTabPresence] = useState<TabPresence>({ releases: false, explorations: false });
   // Unseen self-changes, kept only for the sidebar roster's dot — the tab badge
   // is the queue's length now.
   const [changelogUnseen, setChangelogUnseen] = useState(0);
@@ -885,6 +894,16 @@ export function useKinu(target?: string | KinuActorAddress) {
     },
   ), [refreshCurrentLiveResource, rpc]);
 
+  // The gated tabs' presence rides the same live cycle as every other
+  // workspace read — no loop of its own. A release created or a search run
+  // started mid-session therefore surfaces within one refresh tick (and at
+  // once when the turn that created it ends).
+  const refreshTabPresence = useCallback(() => refreshCurrentLiveResource(
+    "presence",
+    () => rpc<TabPresence>("getWorkspaceTabPresence", []),
+    setTabPresence,
+  ), [refreshCurrentLiveResource, rpc]);
+
   // Stable identity: it is an effect dependency in the changelog hook, which
   // re-reads on a timer now — an inline arrow re-armed that effect on every
   // render and fired a markChangelogSeen RPC with it.
@@ -1048,7 +1067,6 @@ export function useKinu(target?: string | KinuActorAddress) {
       return next.ports;
     });
   }, [rpc]);
-
   const refreshLiveData = useCallback((): Promise<void> => {
     void refreshExposedPorts();
     return Promise.all([
@@ -1062,6 +1080,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       refreshBackgroundJobs(),
       refreshCurrentLiveResource("views", () => rpc<AgentViewSummary[]>("listAgentViews", []), setAgentViews),
       refreshPendingActions(),
+      refreshTabPresence(),
       refreshCurrentLiveResource(
         "consents",
         () => rpc<PendingConsent[]>("listPendingConsents", []),
@@ -1078,6 +1097,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     refreshCurrentLiveResource,
     refreshExposedPorts,
     refreshPendingActions,
+    refreshTabPresence,
     rpc,
   ]);
 
@@ -1132,6 +1152,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     for (const eo of snap.executorOutputs) outputs.set(eo.name, eo.outputs.slice().reverse());
     setExecutorOutputs(outputs);
     setActivePlan(parsePlanReview(snap.activePlan));
+    setTabPresence(snap.tabPresence);
     void refreshExposedPorts();
     void refreshPendingActions();
   }
@@ -1417,6 +1438,8 @@ export function useKinu(target?: string | KinuActorAddress) {
     refreshBackgroundJobs,
     /** Everything waiting on the owner: the Work queue and its strip badge. */
     pendingActions,
+    /** Whether the gated tabs (Releases, Exploration) have content. */
+    tabPresence,
     /** Agent-authored dashboards, as tabs. */
     agentViews,
     /** Pending device-consent requests + the resolver (chat consent cards). */
