@@ -336,13 +336,14 @@ run_required_gate "Strict lint and TypeScript" bun run check
 run_required_gate "Production deploy contract" bun test scripts/deploy.test.ts
 run_required_gate "Agent-utils, Core, and compaction suites" bun run test
 run_required_gate "Exploration policy mutations" bun run test:mutation
+run_required_gate "Devbox durability decisions" bun test packages/devbox/
 run_required_gate "Test-utils suite" bun test packages/test-utils/
 run_required_gate "Cloudflare backend and conformance suite" bun test --parallel=4 packages/cf-backend/
 run_required_gate "Durable Object semantics under workerd" bun run test:workerd
 run_required_gate "CLI backend and conformance suite" bun test --parallel=4 packages/cli-backend/
 run_required_gate "Full production CLI suite" bun run test:cli
-run_required_gate "Evaluation gate logic" bun test scripts/eval.test.ts scripts/eval-triage.test.ts
-run_required_gate "Benchmark harness guarantees" bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts
+run_required_gate "Evaluation gate logic" bun test scripts/eval.test.ts scripts/eval-triage.test.ts scripts/staging-preflight.test.ts
+run_required_gate "Benchmark harness guarantees" bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts scripts/sandbox-durability-probe.test.ts
 run_required_gate "Secret scanner self-test" bun test scripts/secret-scan.test.ts scripts/sources.test.ts
 run_required_gate "Secret scan" bun scripts/secret-scan.ts
 run_required_gate "Schema drift" bun scripts/schema-drift.ts
@@ -362,7 +363,7 @@ run_required_gate "Gate self-tests" bun test scripts/gates.test.ts scripts/reach
 run_required_gate "Skip ratchet and typecheck coverage self-tests" bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts
 run_required_gate "Set-equality gate self-tests" bun test scripts/gate-set-equality.test.ts
 run_required_gate "Wired gate self-tests" bun test scripts/wired.test.ts
-run_required_gate "UI gate self-tests" bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts
+run_required_gate "UI gate self-tests" bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/plan-review-ux.test.ts
 run_required_gate "Public pages render" bun test scripts/public-pages.test.ts
 run_required_gate "Swarm-tree geometry" bun test scripts/swarm-tree-geometry.test.ts
 run_required_gate "Chat infinite scroll" bun test scripts/chat-scroll.test.ts

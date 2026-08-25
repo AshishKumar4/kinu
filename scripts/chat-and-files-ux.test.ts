@@ -25,7 +25,7 @@
  * every assertion here reads from the same two frames.
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
-import type { Browser, Page } from 'puppeteer';
+import { TimeoutError, type Browser, type Page } from 'puppeteer';
 
 import { diagnosticsSettled, recordDiagnostics, withGallery } from './gallery-harness';
 
@@ -93,11 +93,28 @@ interface Observed {
   readonly forkInterruptedAfterClick: ChatRow;
   /** The failed-turn card's headline, keyed by whether it is a replay. */
   readonly chatErrorHeadings: Record<string, string>;
-  readonly filesHome: string;
+  /** The drive at its root: crumb text, row names, and the origin badges the
+   *  mounted folders wear. */
+  readonly filesRoot: { crumbs: string; entries: string[]; badges: string[] };
+  /** The same drive inside the /pc mount — the composite plane crossing. */
+  readonly filesInMount: { crumbs: string; entries: string[] };
   readonly filesAfterUp: string;
-  readonly filesAfterUpEntries: string[];
-  readonly capabilityChips: string[];
-  readonly capabilityAbsences: string;
+  /** The text preview's rendered content for a workspace file. */
+  readonly filesPreviewText: string;
+  /** /home/user rows after renaming SOUL.md → CREDO.md, then after deleting
+   *  AGENTS.md — both against the frame's stateful fixture. */
+  readonly filesAfterRename: string[];
+  readonly filesAfterDelete: string[];
+  /** Rows visible while the filter says "credo". */
+  readonly filesFiltered: string[];
+  /** The stated-absence row for a disconnected device, on &offline=laptop. */
+  readonly filesOfflineRow: string;
+  /** The Environment tab, reworked: cards, and NO capability doctrine. */
+  readonly envCards: Array<{ name: string; status: string; durability: string }>;
+  readonly envCapabilityChips: number;
+  readonly envCapabilityAbsences: number;
+  /** An Environment card's Files action lands the Files surface. */
+  readonly envFilesJumpLandsOnDrive: boolean;
   /** Exploration's run-node rows on the mixed-status run, by node id. */
   readonly runNodes: Record<string, RunNode>;
   readonly toolActivity: {
@@ -268,7 +285,7 @@ async function run(): Promise<Observed> {
 
     const files = await browser.newPage();
     await files.setViewport({ width: 1280, height: 1100 });
-    await files.goto(`${origin}/gallery.html?frame=environment`, { waitUntil: 'networkidle0' });
+    await files.goto(`${origin}/gallery.html?frame=files`, { waitUntil: 'networkidle0' });
     // A first load can trip vite's dependency optimizer, which answers with a
     // full page reload and destroys the execution context of anything waiting.
     // The second load has the deps already, so every wait below is on a page
@@ -279,38 +296,115 @@ async function run(): Promise<Observed> {
       '[data-files-crumb]',
       (bs) => bs.map((b) => b.textContent ?? '').join('/'),
     );
-    // The pane opens by asking for nothing and is TOLD where it is, so the
-    // breadcrumb only fills in once that answer has landed.
-    await files.waitForFunction(
-      () => document.querySelectorAll('[data-files-crumb]').length === 3,
-      { timeout: 20_000 },
-    );
-    const filesHome = await crumbs();
-
-    await files.waitForSelector('[data-files-up-row]');
-    await files.click('[data-files-up-row]');
-    // The breadcrumb flips on click; the LISTING lands when the environment
-    // answers. Reading between the two would assert the old directory.
-    await files.waitForFunction(
-      () => document.querySelectorAll('[data-files-crumb]').length === 2
-        && !document.body.innerText.includes('SOUL.md'),
-      { timeout: 20_000 },
-    );
-    const filesAfterUp = await crumbs();
-    const filesAfterUpEntries = await files.$$eval(
+    const rowNames = () => files.$$eval(
       '[data-files-entry]',
       (rows) => rows.map((r) => r.getAttribute('title') ?? ''),
     );
+    const rowSelector = (name: string) => `[data-files-entry][title="${name}"]`;
+    const waitForRow = (name: string) => files.waitForSelector(rowSelector(name), { timeout: 20_000 });
+    const waitForRowGone = (name: string) => files.waitForFunction(
+      (sel: string) => document.querySelector(sel) === null,
+      { timeout: 20_000 }, rowSelector(name),
+    );
 
-    const capabilityChips = await files.$$eval(
-      '[data-capability-chip]',
-      (chips) => chips.map((c) => c.textContent ?? ''),
+    // The drive opens at the plane's root: the workspace tree beside the
+    // mounted folders, each mount wearing its origin badge.
+    await waitForRow('sandbox');
+    const filesRoot = {
+      crumbs: await crumbs(),
+      entries: await rowNames(),
+      badges: await files.$$eval('[data-files-entry] [data-mount-badge]', (els) => els.map((el) => el.textContent ?? '')),
+    };
+
+    // Crossing into a mount is ordinary navigation.
+    await files.click(rowSelector('pc'));
+    await waitForRow('home');
+    await files.waitForFunction(
+      () => document.querySelectorAll('[data-files-crumb]').length === 2,
+      { timeout: 20_000 },
     );
-    const capabilityAbsences = await files.$$eval(
-      '[data-capability-absences]',
-      (els) => els.map((el) => el.textContent ?? '').join(' '),
+    const filesInMount = { crumbs: await crumbs(), entries: await rowNames() };
+
+    // The parent row goes UP ONE LEVEL — back to the root, not past it.
+    await files.waitForSelector('[data-files-up-row]');
+    await files.click('[data-files-up-row]');
+    await waitForRow('sandbox');
+    const filesAfterUp = await crumbs();
+
+    // Into the workspace's own tree for preview, rename and delete.
+    await files.click(rowSelector('home'));
+    await waitForRow('user');
+    await files.click(rowSelector('user'));
+    await waitForRow('notes.md');
+
+    await files.click(rowSelector('notes.md'));
+    await files.waitForSelector('[data-files-preview] pre', { timeout: 20_000 });
+    const filesPreviewText = await files.$eval('[data-files-preview] pre', (el) => el.textContent ?? '');
+    await files.click('[aria-label="Close preview"]');
+    await files.waitForFunction(
+      () => document.querySelector('[data-files-preview]') === null,
+      { timeout: 20_000 },
     );
+
+    // Rename rides the real RPC against the frame's stateful fixture.
+    await files.hover(rowSelector('SOUL.md'));
+    await files.click(`${rowSelector('SOUL.md')} [data-files-rename]`);
+    await files.waitForSelector('[data-files-rename-input]');
+    const renameInput = await files.$('[data-files-rename-input]');
+    await renameInput!.evaluate((el) => { if (el instanceof HTMLInputElement) el.value = ''; });
+    await renameInput!.type('CREDO.md');
+    await renameInput!.press('Enter');
+    await waitForRow('CREDO.md');
+    const filesAfterRename = await rowNames();
+
+    // Delete asks inline, then the row is gone.
+    await files.hover(rowSelector('AGENTS.md'));
+    await files.click(`${rowSelector('AGENTS.md')} [data-files-delete]`);
+    await files.click(`${rowSelector('AGENTS.md')} [data-files-delete-confirm]`);
+    await waitForRowGone('AGENTS.md');
+    const filesAfterDelete = await rowNames();
+
+    // The search box is a filter over the folder in view.
+    await files.type('[data-files-filter]', 'credo');
+    await waitForRowGone('notes.md');
+    const filesFiltered = await rowNames();
     await files.close();
+
+    // A disconnected device is a stated absence, not a missing row.
+    const offline = await browser.newPage();
+    await offline.setViewport({ width: 1280, height: 1100 });
+    await offline.goto(`${origin}/gallery.html?frame=files&offline=laptop`, { waitUntil: 'networkidle0' });
+    await offline.reload({ waitUntil: 'networkidle0' });
+    await offline.waitForSelector('[data-files-offline-mount]', { timeout: 20_000 });
+    const filesOfflineRow = await offline.$eval('[data-files-offline-mount]', (el) => el.textContent ?? '');
+    await offline.close();
+
+    // The Environment tab, reworked: user cards, no capability doctrine, and
+    // a Files action that lands the drive.
+    const env = await browser.newPage();
+    await env.setViewport({ width: 1280, height: 1100 });
+    await env.goto(`${origin}/gallery.html?frame=environment`, { waitUntil: 'networkidle0' });
+    await env.reload({ waitUntil: 'networkidle0' });
+    await env.waitForSelector('[data-env-card]', { timeout: 20_000 });
+    const envCards = await env.$$eval('[data-env-card]', (cards) => cards.map((card) => ({
+      name: card.querySelector('.font-medium')?.textContent ?? '',
+      status: card.querySelector('[data-env-status]')?.textContent ?? '',
+      durability: card.querySelector('[data-env-durability]')?.textContent ?? '',
+    })));
+    const envCapabilityChips = await env.$$eval('[data-capability-chip]', (els) => els.length);
+    const envCapabilityAbsences = await env.$$eval('[data-capability-absences]', (els) => els.length);
+    await env.click('[data-env-card="workspace"] [data-env-files]');
+    // Tolerate exactly the timeout (the boolean under test); anything else is
+    // a broken instrument, not a "did not land" — plan-review-ux.test.ts idiom.
+    let envFilesJumpLandsOnDrive: boolean;
+    try {
+      await env.waitForSelector('[data-files-surface]', { timeout: 20_000 });
+      envFilesJumpLandsOnDrive = true;
+    } catch (cause) {
+      if (!(cause instanceof TimeoutError)) throw cause;
+      envFilesJumpLandsOnDrive = false;
+    }
+    await env.close();
 
     const explore = await browser.newPage();
     await explore.setViewport({ width: 1280, height: 1100 });
@@ -322,8 +416,10 @@ async function run(): Promise<Observed> {
 
     return {
       tails, chat, forkInterruptedAfterClick, chatErrorHeadings, toolActivity,
-      filesHome, filesAfterUp, filesAfterUpEntries,
-      capabilityChips, capabilityAbsences, runNodes,
+      filesRoot, filesInMount, filesAfterUp, filesPreviewText,
+      filesAfterRename, filesAfterDelete, filesFiltered, filesOfflineRow,
+      envCards, envCapabilityChips, envCapabilityAbsences, envFilesJumpLandsOnDrive,
+      runNodes,
     };
   });
 }
@@ -471,36 +567,63 @@ describe('a turn the harness wrote, as the browser attributes it', () => {
   });
 });
 
-describe('the file pane, navigating a real tree', () => {
-  test('the pane opens where the environment says it starts, and says so', () => {
-    // It asked for nothing and was told. Stop `getExecutorFiles` returning the
-    // path it listed and this breadcrumb never leaves the root.
-    expect(observed.filesHome).toBe('//home/user');
+describe('the drive, browsing the one composite plane', () => {
+  test('the root is the workspace tree beside the mounts, badges on the mounted folders', () => {
+    expect(observed.filesRoot.crumbs).toBe('/');
+    expect(observed.filesRoot.entries).toEqual(expect.arrayContaining(['home', 'pc', 'sandbox']));
+    // The origin badge names the machine, not the executor id — the laptop
+    // wears the user's own device name, per the consent naming contract.
+    expect(observed.filesRoot.badges).toEqual(expect.arrayContaining(["Ashish's MacBook", 'Sandbox']));
   });
 
-  test('the parent row goes UP ONE LEVEL, not to the filesystem root', () => {
-    // The reported bug, measured. With every environment reporting its working
-    // directory as `'.'`, the pane's own breadcrumb held the single segment
-    // `['.']` and this computed `/`.
-    expect(observed.filesAfterUp).toBe('//home');
-    expect(observed.filesAfterUpEntries).toEqual(['user']);
+  test('crossing into /pc is ordinary navigation on the same plane', () => {
+    expect(observed.filesInMount.crumbs).toBe('//pc');
+    expect(observed.filesInMount.entries).toEqual(['home']);
+  });
+
+  test('the parent row goes UP ONE LEVEL, not past the root', () => {
+    expect(observed.filesAfterUp).toBe('/');
+  });
+
+  test('a text file previews its own content through the viewer RPC', () => {
+    expect(observed.filesPreviewText).toContain('Checkout coupon regression');
+  });
+
+  test('rename and delete land on the plane and the listing says so', () => {
+    expect(observed.filesAfterRename).toContain('CREDO.md');
+    expect(observed.filesAfterRename).not.toContain('SOUL.md');
+    expect(observed.filesAfterDelete).not.toContain('AGENTS.md');
+  });
+
+  test('the search box filters the folder in view', () => {
+    expect(observed.filesFiltered).toEqual(['CREDO.md']);
+  });
+
+  test('a disconnected device is a stated absence with its reason, not a missing row', () => {
+    expect(observed.filesOfflineRow).toContain('pc');
+    expect(observed.filesOfflineRow).toContain('no device connected');
   });
 });
 
-describe('the capability row, as something to act on', () => {
-  test('every chip reads as English, and none is a raw identifier', () => {
-    expect(observed.capabilityChips.length).toBeGreaterThan(0);
-    for (const chip of observed.capabilityChips) {
-      expect(chip).not.toMatch(/^[a-z]+(_[a-z]+)+$/);
-    }
+describe('the Environment tab, as a user reads it', () => {
+  test('one card per environment: status, durability, and the device wears its own name', () => {
+    const byName = Object.fromEntries(observed.envCards.map((card) => [card.name, card]));
+    expect(byName["Ashish's MacBook"]?.status).toBe('active');
+    expect(byName["Ashish's MacBook"]?.durability).toContain('Your machine');
+    expect(byName['Workspace']?.durability).toContain('Durable');
+    expect(byName['Sandbox']?.durability).toContain('Ephemeral');
   });
 
-  test('what this environment cannot do names the environment that can', () => {
-    // The workspace mock declares javascript/typescript/shell/fs_shared; the
-    // sandbox and the laptop both declare docker. An absence with nowhere to
-    // go is omitted, so naming one is the whole point of the line.
-    expect(observed.capabilityAbsences).toContain('Docker');
-    expect(observed.capabilityAbsences).toMatch(/Sandbox|Your PC/);
+  test('capability doctrine is model-facing and renders NOWHERE in user UI', () => {
+    // The chips block ("Sandbox can: Runs JavaScript … Not here: Runs Python")
+    // was the agent's routing vocabulary leaked into the owner's surface. It
+    // stays in the execution-status block the model reads, and only there.
+    expect(observed.envCapabilityChips).toBe(0);
+    expect(observed.envCapabilityAbsences).toBe(0);
+  });
+
+  test("a card's Files action lands the drive", () => {
+    expect(observed.envFilesJumpLandsOnDrive).toBe(true);
   });
 });
 

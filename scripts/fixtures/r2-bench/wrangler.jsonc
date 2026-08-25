@@ -1,0 +1,101 @@
+// BENCHMARK FIXTURE CONFIG. Not part of the product deploy: `scripts/deploy.sh`
+// never names this file and `bun run deploy` cannot reach it. It exists so
+// `scripts/bench-r2-workspace.ts` can raise a real Cloudflare container with a
+// real R2 mount, run its workloads, and then delete the Worker and the bucket.
+//
+// Everything that could change a measurement is pinned to the product's own
+// value, with the reason stated beside it.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "kinu-r2-bench",
+
+  // The same account as packages/cf-backend/wrangler.jsonc:3. This credential
+  // can see more than one account and wrangler refuses to choose in
+  // non-interactive mode, so naming it here is what makes the benchmark
+  // runnable from a script rather than from a prompt.
+  "account_id": "f44999d1ddda7012e9a87729eba250f1",
+  "main": "worker.ts",
+
+  // Identical to packages/cf-backend/wrangler.jsonc:10,14. A different
+  // compatibility date is a different runtime, and a storage benchmark run on a
+  // different runtime than the product is not a benchmark of the product.
+  "compatibility_date": "2025-12-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // The fixture needs one reachable origin and nothing else: no custom domain,
+  // no route. `wrangler dev --remote` is not an option — wrangler refuses it for
+  // Durable Objects — and a local run has neither a real container nor a real
+  // R2, so a real deployment is the only route to the measurement.
+  "workers_dev": true,
+
+  // On, because a mount refusal surfaces through logs and a benchmark that
+  // cannot explain a failed arm has wasted the container time it already spent.
+  "observability": { "enabled": true },
+
+  "durable_objects": {
+    "bindings": [
+      // UPSTREAM @cloudflare/sandbox Sandbox, deliberately NOT KinuSandbox.
+      // KinuSandbox arms a 5-minute snapshot tick (BACKUP_MIN_INTERVAL_MS) that
+      // would upload a squashfs archive into the middle of a latency
+      // measurement, at keys outside the run's own prefix. The binding is named
+      // `Sandbox` because the SDK's proxyToSandbox resolves `env.Sandbox`.
+      { "class_name": "Sandbox", "name": "Sandbox" },
+      // Accumulates R2 op counts flushed from the ContainerProxy. A Durable
+      // Object rather than module state because the proxy and the fetch handler
+      // are separate entrypoints with no guarantee of sharing an isolate.
+      { "class_name": "BenchOpCounter", "name": "BenchOpCounter" }
+      //
+      // ContainerProxy is EXPORTED by worker.ts but deliberately NOT bound here.
+      // It is a WorkerEntrypoint, not a Durable Object: the Sandbox DO builds
+      // its interception fetchers from `ctx.exports.ContainerProxy`, so the
+      // export is what matters and a durable-object binding for it is refused
+      // outright — "Cannot create binding for class 'ContainerProxy' that is not
+      // exported by the script" [code 10061], which is what declaring it here
+      // produced. packages/cf-backend/src/server.ts:87 exports it the same way
+      // and binds it nowhere either.
+    ]
+  },
+
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["Sandbox", "BenchOpCounter"]
+    }
+  ],
+
+  // Image tag, vCPU, memory and disk all equal to
+  // packages/cf-backend/wrangler.jsonc:117-127. The image tag MUST equal the
+  // @cloudflare/sandbox version in package.json: the SDK asks the container for
+  // its own SANDBOX_VERSION on every start and logs a mismatch. max_instances
+  // is 1 because the benchmark drives exactly one container, and a second would
+  // compete for account capacity while a measurement is running.
+  "containers": [
+    {
+      "class_name": "Sandbox",
+      "image": "docker.io/cloudflare/sandbox:0.12.8",
+      "max_instances": 1,
+      "instance_type": {
+        "vcpu": 2,
+        "memory_mib": 6144,
+        "disk_mb": 8000
+      }
+    }
+  ],
+
+  // The driver creates this bucket before the run and deletes it after, and
+  // refuses to run against a non-empty pre-existing one. Bound as
+  // BACKUP_BUCKET because that is the binding name the driver passes to
+  // mountBucket, and the egress handler resolves the bucket out of the Worker
+  // env by that name. NOT the staging backup bucket: benchmark traffic does not
+  // belong in a keyspace holding real archives, and an ephemeral bucket makes
+  // "leaves no resources" a property of teardown rather than of prefix
+  // arithmetic.
+  "r2_buckets": [
+    { "binding": "BACKUP_BUCKET", "bucket_name": "kinu-bench-r2fs" }
+  ]
+
+  // BENCH_TOKEN is supplied per run through `wrangler deploy --var`, never
+  // committed and never written to disk. An absent token makes every request
+  // 401, so a fixture that outlives its run is inert rather than an open exec
+  // endpoint on the public edge.
+}

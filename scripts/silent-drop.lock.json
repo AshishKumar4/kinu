@@ -32,8 +32,6 @@
   "logged_default/wire packages/core/src/strategy/swarm-run.ts#spawnMergeNode",
   "logged_default/wire packages/core/src/vfs/observe.ts#baselineFor",
   "message_only/other packages/agent-utils/src/vfs/addressing.ts#vfsAddressingHint",
-  "voided_promise/wire packages/cf-backend/src/components/FilesPane.tsx#FilesPane",
-  "voided_promise/wire packages/cf-backend/src/components/FilesPane.tsx#onListDrop",
   "voided_promise/wire packages/cf-backend/src/components/surfaces/AgentViewSurface.tsx#timer",
   "voided_promise/wire packages/cf-backend/src/components/surfaces/PlanReviewView.tsx#changeAnnotations",
   "voided_promise/wire packages/cf-backend/src/device-transport.ts#status",

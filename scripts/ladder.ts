@@ -615,6 +615,19 @@ export const LADDER: readonly Gate[] = [
       + 'which pins the other 5 by equality with the gate that does run each.',
   },
   {
+    run: 'bun test packages/devbox/',
+    tier: 'push',
+    seconds: 0.3,
+    catches: 'a durability decision that silently does nothing. Thirteen defects in this '
+      + 'package were only findable on a real deployed container, and nine of them looked '
+      + 'like success from inside the code: an attach that reported landing while nothing '
+      + 'was mounted, a checkpoint that answered `unchanged` seconds after a write, a '
+      + 'self-re-arming schedule that deleted its own successor. Every one is pinned here.',
+    blind: 'anything that needs a real container: the mounts themselves, the object store, '
+      + 'and the platform lifecycle. Those are the bench app under `packages/devbox/bench` '
+      + 'and an ephemeral deployed Worker, not this gate.',
+  },
+  {
     run: 'bun test packages/test-utils/',
     tier: 'push',
     seconds: 0.2,
@@ -808,7 +821,7 @@ export const LADDER: readonly Gate[] = [
       + '`detached_work_failed / Request Timeout` signature as an outage.',
   },
   {
-    run: 'bun test scripts/eval.test.ts scripts/eval-triage.test.ts',
+    run: 'bun test scripts/eval.test.ts scripts/eval-triage.test.ts scripts/staging-preflight.test.ts',
     tier: 'ci',
     seconds: 1,
     catches: 'the eval gate\'s own logic, credential-free, plus how the triage instrument '
@@ -829,30 +842,35 @@ export const LADDER: readonly Gate[] = [
     // `scripts/bench*` glob while deploy.sh also passed the core bench units, so
     // the wider command matched no LADDER entry, `gatesFor('deploy')` synthesized
     // it at a declared cost of ZERO, and the four core bench suites were governed
-    // by an entry that did not name them.
-    run: 'bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts',
+    // by an entry that did not name them. The durability probe is explicit rather
+    // than absorbed by that glob because its name is a contract: a real container
+    // measurement that remains only in stdout is not evidence.
+    run: 'bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts scripts/sandbox-durability-probe.test.ts',
     tier: 'ci',
-    // 4.4s: 218 tests over 9 files, median of 4.33 / 4.39 / 4.54 on the 24-thread
-    // box, 2026-08-21 — re-measured after the Terminal-Bench pre-flight brought
-    // the count here. That is the corpus-absent basis every fresh clone sees; a
-    // checkout with terminal-bench-2.1 on disk also pays the sampler over the real
-    // corpus in bench-external.test.ts.
-    seconds: 4.4,
+    // 3.97s: 257 tests over 11 files, median of 3.94 / 3.97 / 3.99 on the
+    // 24-thread box, measured 2026-08-24 after durability-artifact evidence
+    // joined. That is the corpus-absent basis every fresh clone sees; a checkout
+    // with terminal-bench-2.1 on disk also pays the sampler over the real corpus
+    // in bench-external.test.ts.
+    seconds: 3.97,
     catches: 'the bench harness guarantees — sandbox isolation, the seal, '
-      + 'anti-self-scoring, budget enforcement, corpus well-formedness — plus the '
-      + 'census `gate:bench-corpus` runs at commit tier proven able to FAIL, which the '
-      + 'committed assertion over a healthy corpus cannot do by itself: a patch whose '
-      + 'anchor moved, and a patch file no tasks.jsonl line names, each driven from a '
-      + 'fixture. No model, no credentials.',
+      + 'anti-self-scoring, budget enforcement, corpus well-formedness, and the '
+      + 'durability probe retaining complete or failed JSON evidence without '
+      + 'overwriting a prior run — plus the census `gate:bench-corpus` runs at '
+      + 'commit tier proven able to FAIL, which the committed assertion over a '
+      + 'healthy corpus cannot do by itself: a patch whose anchor moved, and a '
+      + 'patch file no tasks.jsonl line names, each driven from a fixture. No '
+      + 'model, no credentials.',
     blind: 'anything about what the bench measures. It only guards the instrument, '
       + 'which is what four independent instrument bugs cost us to learn.',
   },
   {
-    run: 'bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts',
+    run: 'bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/plan-review-ux.test.ts',
     tier: 'ci',
-    // Measured 2026-08-24 after plan review, control and redaction checks: 150.98s.
-    seconds: 160,
-    catches: 'the four UI gates\' own decision logic, including the one that would have '
+    // Measured 2026-08-24 after the six plan checks joined this row:
+    // 177.63s and 175.02s over two runs.
+    seconds: 190,
+    catches: 'the five UI gates\' own decision logic, including the one that would have '
       + 'caught `--radius` being undefined at `:root` while 191 `rounded-*` sites '
       + 'computed 0px. The original two self-tests ran in NO tier until this line: the gates were '
       + 'built, deliberately kept off the deploy path for their Chrome cost, and their '
@@ -869,7 +887,18 @@ export const LADDER: readonly Gate[] = [
       + '(`index.css:389-589`). Each is a structurally distinct palette rather than a '
       + 'filter over another, umber light carries its own record of "three passes of '
       + 'complaint, all the same one", and in any of them an unmapped role token renders '
-      + 'as Kumo\'s uncustomised brand colour instead of throwing.',
+      + 'as Kumo\'s uncustomised brand colour instead of throwing. And the plan '
+      + 'document AS A BROWSER LAYS IT OUT, which was authored and then run by '
+      + 'nothing: `scripts/plan-review-ux.test.ts` was untracked and claimed by no row '
+      + 'while this same table was edited for three other new suites, so the headline '
+      + 'UI change of its slice shipped with its acceptance evidence never executed. It '
+      + 'measures the two refusals the header owes the document — a later h1 stays '
+      + 'where the agent wrote it, and an ANNOTATED h1 keeps its block, because the '
+      + 'highlighter resolves an anchor inside the viewer\'s own article and a promoted '
+      + 'block leaves the rail an entry that can never draw — plus the '
+      + 'narrow-container scrim actually CLOSING the rail rather than dimming a '
+      + 'document with no way back, and the action strip collapsing on a settled plan '
+      + 'instead of spending a margin on buttons nobody can press.',
     blind: 'the gallery render itself. `gate:computed-style` boots vite and Chrome over '
       + '21 frames × 4 themes and stays a standalone run — a gate that fails because '
       + 'Chrome is missing fails for a reason unrelated to the change under test. Also '
@@ -878,7 +907,9 @@ export const LADDER: readonly Gate[] = [
       + 'to mount and nothing more. The three non-default themes are audited on `shell` '
       + 'alone. The control-plane and feedback frames use authenticated gallery fixtures, not '
       + 'a deployed OAuth flow. Browser capture fidelity outside those fixed frames remains '
-      + 'unmeasured rather than green.',
+      + 'unmeasured rather than green. For the plan document: one gallery plan and '
+      + 'three variants of it, so the annotation ENGINE — selection, offsets, save, '
+      + 'export — is exercised only as far as one stored anchor painting.',
   },
   {
     run: 'bun test scripts/public-pages.test.ts',
@@ -1410,7 +1441,14 @@ export function runnableArgv(run: string, tracked: readonly string[]): string[] 
   if (!words.some((word) => word.includes('*'))) return words;
   const files = claims(run, tracked);
   if (files.length === 0) throw new Error(`${run} — glob matched no tracked test file`);
-  return [...words.filter((word) => !word.includes('*')), ...files];
+  // Every path word is dropped and re-supplied from `claims()`, in that
+  // resolution's own order. Hoisting literals ahead of the expansion instead
+  // both REORDERED argv against the credited set and spawned an explicitly
+  // named suite TWICE, once as the literal and once from the glob that also
+  // matched it — so a row mixing a glob with a named file ran one suite twice
+  // and compared unequal to the set it is measured as.
+  const flags = words.filter((word) => !word.includes('/'));
+  return [...flags, ...files];
 }
 
 function printMatrix(deploy: readonly string[]): void {

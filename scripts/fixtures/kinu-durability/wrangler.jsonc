@@ -1,0 +1,37 @@
+// BENCHMARK FIXTURE config — sibling of scripts/fixtures/r2-bench/. Not product
+// surface, not deployed by `bun run deploy`.
+//
+// Containers and SQLite Durable Objects are LOCAL-ONLY under `wrangler dev
+// --remote` (wrangler says so on startup), so a real container cannot be raised
+// that way. scripts/sandbox-durability-probe.ts therefore generates a per-run
+// copy of this file with a unique Worker name and its own ephemeral R2 bucket,
+// `wrangler deploy`s it, drives the workers.dev URL, and deletes the Worker and
+// the bucket in a finally.
+//
+// `nodejs_compat` is required: the probe exports the PRODUCT KinuSandbox class,
+// whose module graph reaches node built-ins through @kinu.run/core.
+{
+  "name": "kinu-durability-probe",
+  "main": "worker.ts",
+  "compatibility_date": "2025-12-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "observability": { "enabled": true },
+  "r2_buckets": [
+    { "binding": "BACKUP_BUCKET", "bucket_name": "kinu-durability-probe" }
+  ],
+  "durable_objects": {
+    "bindings": [{ "class_name": "KinuSandbox", "name": "Sandbox" }]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["KinuSandbox"] }
+  ],
+  "containers": [
+    {
+      "class_name": "KinuSandbox",
+      "image": "docker.io/cloudflare/sandbox:0.12.8",
+      "max_instances": 2,
+      "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 }
+    }
+  ]
+}

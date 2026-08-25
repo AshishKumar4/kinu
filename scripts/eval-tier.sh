@@ -87,6 +87,62 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# ── WHICH TARGET THIS RUN MEASURES ────────────────────────────────────────────
+#
+# `--backend local` (the default) drives the in-process cli-backend runtime.
+# `--backend cloud` drives a real workspace on the staging deployment, through
+# the shipped CloudAgentClient and the AGENT_RPC_ACCESS RPC surface. Tests and
+# evals are ONE suite; which of the two an arm runs against is configuration,
+# and `packages/test-utils/src/eval-target.ts` is that configuration's type.
+#
+# CLOUD IS EXPLICIT AND MANUAL, never reached by a gate tier. It costs model
+# calls AND creates workspaces on a shared account, so it is named on the
+# command line (`bun run evals:cloud`) on top of everything the live tier
+# already requires. Nothing here changes what the default invocation does.
+#
+# IT ADDS AN ARM, IT DOES NOT FOLD INTO ONE. Every report and spend file below
+# carries the backend in its name, so a cloud run cannot overwrite a local run's
+# evidence and `eval-spend.ts --expect-live` still asserts liveness per arm — a
+# flag that merged the two would let a silent zero in one target hide behind the
+# other's spend.
+#
+# WHY THE CLOUD ARM RUNS A NAMED SUBSET. Only the suites that provision through
+# `resolveEvalTarget` can answer both targets' questions; the rest are local by
+# construction (they open a `bun:sqlite` store or a `CLIRuntime` directly).
+# Running one of those under a cloud banner would report a local measurement as a
+# cloud one, which is the error the seam exists to remove. The list is the
+# `TARGETS` / `RUN_*_ARM` block below, and it is the ONE list.
+BACKEND=local
+ALLOW_STALE=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --backend)
+      BACKEND="${2:-}"
+      shift 2
+      ;;
+    --backend=*)
+      BACKEND="${1#*=}"
+      shift
+      ;;
+    # Measure the DEPLOYED build on purpose — a bisect, or reproducing a
+    # production report — rather than this branch. Passed through to the
+    # preflight so the choice is recorded in the command somebody ran.
+    --allow-stale)
+      ALLOW_STALE=(--allow-stale)
+      shift
+      ;;
+    *)
+      echo "eval-tier: unknown argument '$1' — expected --backend local|cloud [--allow-stale]" >&2
+      exit 2
+      ;;
+  esac
+done
+if [[ "$BACKEND" != local && "$BACKEND" != cloud ]]; then
+  echo "eval-tier: --backend must be 'local' or 'cloud', not '$BACKEND'" >&2
+  exit 2
+fi
+export KINU_EVAL_BACKEND="$BACKEND"
+
 # Root-relative on purpose. `bun test --cwd <dir>` does NOT read the root
 # bunfig.toml, so it loses both scripts/test-preload.ts (the throwaway
 # KINU_HOME that keeps a suite out of the developer's real ~/.kinu) and
@@ -126,23 +182,71 @@ SWARM_EVAL=tests/evals/swarm.eval.ts
 RESEARCH_EVAL=tests/evals/research.eval.ts
 OPTIMIZATION_EVAL=tests/evals/optimization.eval.ts
 
+# ── WHICH ARMS THIS BACKEND CAN MEASURE ───────────────────────────────────────
+#
+# THE ONE LIST, and it is a list of what READS THE KNOB rather than of what is
+# affordable. A suite can answer both targets' questions only once it provisions
+# through `resolveEvalTarget` and asserts over `AgentEvalTarget`; a suite that
+# calls `provisionLocalTarget` itself is local whatever this variable says.
+# Naming one here anyway is worse than omitting it: the run gets a CLOUD banner,
+# `-cloud` report and spend filenames, and an in-process measurement inside all
+# three. That is the confusion the seam exists to remove, so an arm that cannot
+# read the knob is SKIPPED and named, never run and relabelled.
+#
+# `tests/e2e-lifecycle.test.ts` WAS named here and could not honour it: every
+# assertion in it drives `generateText`, `EvolutionEngine` and `runMCTS` over a
+# `CLIRuntime`, and a deployed workspace hands out no runtime. It now reads the
+# knob and skips itself under `=cloud`, so removing it here and the refusal there
+# say the same thing from both ends.
+#
+# The bun arm's cloud target is a FILE LIST rather than `./tests/`: that
+# directory is ~54 minutes of suites that cannot read the knob, and paying for a
+# deployment while running them would buy nothing.
+#
+# Add a migrated suite here in the same commit that migrates it, and only once
+# its own provisioning goes through the plan. A suite on the seam that nobody
+# added is a target the tier never exercises.
+if [[ "$BACKEND" == cloud ]]; then
+  TARGETS=(tests/live-smoke.test.ts)
+  RUN_EVALS_ARM=0
+  # The swarm arm's CROSS-TARGET test provisions through the plan, so it drives a
+  # real staging workspace here — the only arm in the tree that reaches
+  # `@cloudflare/think`, the loop that carries the step cap. That suite's
+  # in-process arms skip themselves under this backend and print why.
+  RUN_SWARM_ARM=1
+  RUN_RESEARCH_ARM=0
+  RUN_OPTIMIZATION_ARM=0
+  SKIPPED_ARMS="behaviour evals, research, optimization (not on the target seam yet); \
+e2e-lifecycle and the swarm suite's in-process arms (they drive a CLIRuntime, which no \
+deployed workspace hands out)"
+else
+  RUN_EVALS_ARM=1
+  RUN_SWARM_ARM=1
+  RUN_RESEARCH_ARM=1
+  RUN_OPTIMIZATION_ARM=1
+  SKIPPED_ARMS=""
+fi
+
 # Per ARM, because "what did the tier cost" is not one number and reporting it as
 # one hides the arm that dominates it: measured here, the bun arm is ~54 minutes
 # and the vitest behaviour arm is the larger half, and until each was timed
 # separately the tier's declared cost carried "add roughly an hour" for the second
 # — a guess standing in for a measurement.
+# The backend is in every filename, so a cloud run cannot overwrite a local
+# run's evidence in the same tree and `eval-spend.ts --expect-live` keeps
+# asserting liveness per arm rather than over a merged total.
 REPORT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/kinu-eval-tier-XXXXXX")"
-JUNIT="$REPORT_DIR/junit-bun.xml"
-JUNIT_EVALS="$REPORT_DIR/junit-vitest.xml"
-JUNIT_SWARM="$REPORT_DIR/junit-swarm.xml"
-JUNIT_RESEARCH="$REPORT_DIR/junit-research.xml"
-JUNIT_OPTIMIZATION="$REPORT_DIR/junit-optimization.xml"
-SPEND_BUN="$REPORT_DIR/spend-bun.jsonl"
-SPEND_EVALS="$REPORT_DIR/spend-vitest.jsonl"
-SPEND_SWARM="$REPORT_DIR/spend-swarm.jsonl"
-SPEND_RESEARCH="$REPORT_DIR/spend-research.jsonl"
-SPEND_OPTIMIZATION="$REPORT_DIR/spend-optimization.jsonl"
-SPEND="$REPORT_DIR/spend.jsonl"
+JUNIT="$REPORT_DIR/junit-bun-$BACKEND.xml"
+JUNIT_EVALS="$REPORT_DIR/junit-vitest-$BACKEND.xml"
+JUNIT_SWARM="$REPORT_DIR/junit-swarm-$BACKEND.xml"
+JUNIT_RESEARCH="$REPORT_DIR/junit-research-$BACKEND.xml"
+JUNIT_OPTIMIZATION="$REPORT_DIR/junit-optimization-$BACKEND.xml"
+SPEND_BUN="$REPORT_DIR/spend-bun-$BACKEND.jsonl"
+SPEND_EVALS="$REPORT_DIR/spend-vitest-$BACKEND.jsonl"
+SPEND_SWARM="$REPORT_DIR/spend-swarm-$BACKEND.jsonl"
+SPEND_RESEARCH="$REPORT_DIR/spend-research-$BACKEND.jsonl"
+SPEND_OPTIMIZATION="$REPORT_DIR/spend-optimization-$BACKEND.jsonl"
+SPEND="$REPORT_DIR/spend-$BACKEND.jsonl"
 : > "$SPEND_BUN"
 : > "$SPEND_EVALS"
 : > "$SPEND_SWARM"
@@ -176,12 +280,55 @@ if [[ ${#RESOLVED[@]} -eq 2 ]]; then
   export KINU_TOKEN="${RESOLVED[1]}"
 fi
 
+# THE CLOUD ARM'S PREFLIGHT, before anything spends and before any workspace is
+# created. A cloud run's whole claim is that it measures the product, so which
+# BUILD it measures is the first thing that has to be true: a run against a
+# week-old deployment reports that deployment's behaviour under this branch's
+# name, and the branch is where a reader will look for the cause. Measured on
+# 2026-08-24, the deployed sha was 27 commits behind the checkout.
+#
+# It REFUSES rather than warning, because the alternative is a paid run whose
+# subject nobody can establish afterwards. `--allow-stale` is the recorded way to
+# measure the deployed build on purpose. `set -e` is still in force: like the
+# credential refusal above, this must abort before anything writes.
+#
+# A CREDENTIAL IS REQUIRED for this arm and only this arm. The local arm runs and
+# passes with no credential anywhere — every live test skips and the ratchet
+# proves the skips are declared — but a cloud arm with nothing to authenticate as
+# cannot create the workspace it exists to drive, and reporting that as a skip
+# would let `evals:cloud` exit 0 having measured nothing.
+if [[ "$BACKEND" == cloud ]]; then
+  if [[ -z "${KINU_TOKEN:-}" || -z "${KINU_ORIGIN:-}" ]]; then
+    echo "eval-tier: REFUSED — --backend cloud needs an eval-service credential for a Kinu" >&2
+    echo "  deployment, and none resolved. Mint one against staging:" >&2
+    echo "    kinu auth --origin https://staging.kinu.run" >&2
+    echo "    kinu tokens create --name evals --scopes ai.proxy" >&2
+    echo "  then export it as KINU_EVAL_TOKEN. The local arm needs none:" >&2
+    echo "    bun run test:eval" >&2
+    exit 1
+  fi
+  bun scripts/staging-preflight.ts "${ALLOW_STALE[@]}" "$KINU_ORIGIN"
+fi
+
 # EXPECT_LIVE is this script's answer to the only question `scripts/eval-spend.ts`
 # cannot answer for itself: was a target resolved. It is set beside the banner
 # rather than recomputed later, so the line a reader sees and the assertion the
 # run is held to can never disagree.
 EXPECT_LIVE=0
 echo "── eval tier ─────────────────────────────────────────────"
+# WHICH AGENT RAN, printed first. "The behaviour eval passed" is a different
+# claim about the local runtime than about the deployed Worker — they are two
+# turn loops, and one of them carried a ten-step cap the other did not for weeks
+# while every suite in the tree stayed green. A run whose output does not say
+# which agent it drove is not evidence.
+if [[ "$BACKEND" == cloud ]]; then
+  echo "agent:   CLOUD — a real workspace on the staging deployment, driven"
+  echo "         through the shipped CloudAgentClient (the @cloudflare/think loop)"
+  echo "         workspaces are eval-prefixed and deleted in teardown"
+  echo "         arms that drive a CLIRuntime skip themselves here and print why"
+else
+  echo "agent:   LOCAL — the in-process cli-backend runtime (the core runChat loop)"
+fi
 if [[ -n "${KINU_TOKEN:-}" && -n "${KINU_ORIGIN:-}" ]]; then
   echo "target:  worker proxy ${KINU_ORIGIN}/api/user/ai/v1"
   echo "identity: eval-service — no person's session is ever borrowed"
@@ -233,17 +380,21 @@ BUN_SECONDS=$((SECONDS - ARM_STARTED))
 # default reporter is named alongside it because a JUnit-only run prints no
 # progress at all, and this arm takes hours.
 ARM_STARTED=$SECONDS
+EVAL_STATUS=0
+EVALS_SECONDS=0
 export KINU_EVAL_SPEND_FILE="$SPEND_EVALS"
-# `--exclude` PER SINGLE-FAMILY FILE: each is a `*.eval.ts` too, so this config's
-# own `include` selects them, and without the exclusions each would run in this
-# arm as well as its own — one episode, two bills, and a spend file per arm that
-# double-counts. The arms below are where they run.
-bun --bun ./node_modules/.bin/vitest run --config vitest.evals.config.ts \
-  --exclude "$SWARM_EVAL" --exclude "$RESEARCH_EVAL" --exclude "$OPTIMIZATION_EVAL" \
-  --reporter=default --reporter=junit --outputFile="$JUNIT_EVALS"
-EVAL_STATUS=$?
-EVALS_SECONDS=$((SECONDS - ARM_STARTED))
-if [[ $TEST_STATUS -eq 0 ]]; then TEST_STATUS=$EVAL_STATUS; fi
+if [[ $RUN_EVALS_ARM -eq 1 ]]; then
+  # `--exclude` PER SINGLE-FAMILY FILE: each is a `*.eval.ts` too, so this
+  # config's own `include` selects them, and without the exclusions each would
+  # run in this arm as well as its own — one episode, two bills, and a spend file
+  # per arm that double-counts. The arms below are where they run.
+  bun --bun ./node_modules/.bin/vitest run --config vitest.evals.config.ts \
+    --exclude "$SWARM_EVAL" --exclude "$RESEARCH_EVAL" --exclude "$OPTIMIZATION_EVAL" \
+    --reporter=default --reporter=junit --outputFile="$JUNIT_EVALS"
+  EVAL_STATUS=$?
+  EVALS_SECONDS=$((SECONDS - ARM_STARTED))
+  if [[ $TEST_STATUS -eq 0 ]]; then TEST_STATUS=$EVAL_STATUS; fi
+fi
 
 # The live swarm arm: `agents({action:'swarm'})` through the real tool surface,
 # graded by the caller's own verifier. One file, selected by path, so the arm's
@@ -257,120 +408,136 @@ if [[ $TEST_STATUS -eq 0 ]]; then TEST_STATUS=$EVAL_STATUS; fi
 # captured and never allowed to abort for the reason both arms above are: what a
 # failed run cost before it failed is what a reader needs.
 ARM_STARTED=$SECONDS
+SWARM_STATUS=0
+SWARM_SECONDS=0
 export KINU_EVAL_SPEND_FILE="$SPEND_SWARM"
-bun --bun ./node_modules/.bin/vitest run --config vitest.evals.config.ts "$SWARM_EVAL" \
-  --reporter=default --reporter=junit --outputFile="$JUNIT_SWARM"
-SWARM_STATUS=$?
-SWARM_SECONDS=$((SECONDS - ARM_STARTED))
-if [[ $TEST_STATUS -eq 0 ]]; then TEST_STATUS=$SWARM_STATUS; fi
+if [[ $RUN_SWARM_ARM -eq 1 ]]; then
+  bun --bun ./node_modules/.bin/vitest run --config vitest.evals.config.ts "$SWARM_EVAL" \
+    --reporter=default --reporter=junit --outputFile="$JUNIT_SWARM"
+  SWARM_STATUS=$?
+  SWARM_SECONDS=$((SECONDS - ARM_STARTED))
+  if [[ $TEST_STATUS -eq 0 ]]; then TEST_STATUS=$SWARM_STATUS; fi
+fi
 
 # The research arm: one agent episode against the controlled MCP archive,
 # scored by exact match on what that archive plants. Same runner and config as
 # the arms above for the same reasons; its own invocation so its spend file
 # holds exactly this family's lines.
 ARM_STARTED=$SECONDS
+RESEARCH_STATUS=0
+RESEARCH_SECONDS=0
 export KINU_EVAL_SPEND_FILE="$SPEND_RESEARCH"
-bun --bun ./node_modules/.bin/vitest run --config vitest.evals.config.ts "$RESEARCH_EVAL" \
-  --reporter=default --reporter=junit --outputFile="$JUNIT_RESEARCH"
-RESEARCH_STATUS=$?
-RESEARCH_SECONDS=$((SECONDS - ARM_STARTED))
-if [[ $TEST_STATUS -eq 0 ]]; then TEST_STATUS=$RESEARCH_STATUS; fi
+if [[ $RUN_RESEARCH_ARM -eq 1 ]]; then
+  bun --bun ./node_modules/.bin/vitest run --config vitest.evals.config.ts "$RESEARCH_EVAL" \
+    --reporter=default --reporter=junit --outputFile="$JUNIT_RESEARCH"
+  RESEARCH_STATUS=$?
+  RESEARCH_SECONDS=$((SECONDS - ARM_STARTED))
+  if [[ $TEST_STATUS -eq 0 ]]; then TEST_STATUS=$RESEARCH_STATUS; fi
+fi
 
 # The optimization arm: one agent episode against the metered corpus instrument,
 # held to its pre-registered threshold, with swarm use recorded rather than
 # dictated.
 ARM_STARTED=$SECONDS
+OPTIMIZATION_STATUS=0
+OPTIMIZATION_SECONDS=0
 export KINU_EVAL_SPEND_FILE="$SPEND_OPTIMIZATION"
-bun --bun ./node_modules/.bin/vitest run --config vitest.evals.config.ts "$OPTIMIZATION_EVAL" \
-  --reporter=default --reporter=junit --outputFile="$JUNIT_OPTIMIZATION"
-OPTIMIZATION_STATUS=$?
-OPTIMIZATION_SECONDS=$((SECONDS - ARM_STARTED))
-if [[ $TEST_STATUS -eq 0 ]]; then TEST_STATUS=$OPTIMIZATION_STATUS; fi
+if [[ $RUN_OPTIMIZATION_ARM -eq 1 ]]; then
+  bun --bun ./node_modules/.bin/vitest run --config vitest.evals.config.ts "$OPTIMIZATION_EVAL" \
+    --reporter=default --reporter=junit --outputFile="$JUNIT_OPTIMIZATION"
+  OPTIMIZATION_STATUS=$?
+  OPTIMIZATION_SECONDS=$((SECONDS - ARM_STARTED))
+  if [[ $TEST_STATUS -eq 0 ]]; then TEST_STATUS=$OPTIMIZATION_STATUS; fi
+fi
 
-for arm in "bun suites:$JUNIT" "behaviour evals:$JUNIT_EVALS" "live swarm:$JUNIT_SWARM" \
-  "research:$JUNIT_RESEARCH" "optimization:$JUNIT_OPTIMIZATION"; do
-  if [[ ! -f "${arm#*:}" ]]; then
-    echo "eval-tier: the ${arm%%:*} arm produced no JUnit report (exit $TEST_STATUS) — nothing to" \
+# THE ACTIVE ARMS, as one indexed list.
+#
+# Five arms used to be spelled five times each in the three blocks below — a
+# report check, a timing line and a liveness assertion — so adding an arm meant
+# four edits and forgetting one meant an arm nobody measured. That is the shape
+# of the hole this tier was built to close, one level up: the set the assertions
+# govern and the set the run produced must be the same set. Now they are one
+# array, and an arm this backend cannot measure is simply absent from it.
+#
+# `SKIPPED_ARMS` is printed rather than left implicit: an arm missing from the
+# report because it was never run and one missing because it crashed look
+# identical afterwards, and only one of them is fine.
+ARM_NAMES=()
+ARM_JUNITS=()
+ARM_SPENDS=()
+ARM_SECONDS=()
+
+arm() {
+  ARM_NAMES+=("$1")
+  ARM_JUNITS+=("$2")
+  ARM_SPENDS+=("$3")
+  ARM_SECONDS+=("$4")
+}
+
+arm 'bun suites' "$JUNIT" "$SPEND_BUN" "$BUN_SECONDS"
+if [[ $RUN_EVALS_ARM -eq 1 ]]; then arm 'behaviour evals' "$JUNIT_EVALS" "$SPEND_EVALS" "$EVALS_SECONDS"; fi
+if [[ $RUN_SWARM_ARM -eq 1 ]]; then arm 'live swarm' "$JUNIT_SWARM" "$SPEND_SWARM" "$SWARM_SECONDS"; fi
+if [[ $RUN_RESEARCH_ARM -eq 1 ]]; then arm 'research' "$JUNIT_RESEARCH" "$SPEND_RESEARCH" "$RESEARCH_SECONDS"; fi
+if [[ $RUN_OPTIMIZATION_ARM -eq 1 ]]; then arm 'optimization' "$JUNIT_OPTIMIZATION" "$SPEND_OPTIMIZATION" "$OPTIMIZATION_SECONDS"; fi
+
+for index in "${!ARM_NAMES[@]}"; do
+  if [[ ! -f "${ARM_JUNITS[$index]}" ]]; then
+    echo "eval-tier: the ${ARM_NAMES[$index]} arm produced no JUnit report (exit $TEST_STATUS) — nothing to" \
       "measure, and an unmeasured arm is what this tier exists to make impossible" >&2
     exit 1
   fi
 done
 
 echo
-# BOTH reports, and `--expect-live` when a target was resolved. One report
-# governed one arm; the flag is what stops a locked skip that RAN — which is the
-# tier working — from being read as the lock owing an update, a verdict that made
-# this script unable to exit 0 on any machine holding a credential.
-RATCHET_ARGS=(--junit "$JUNIT" --junit "$JUNIT_EVALS" --junit "$JUNIT_SWARM"
-  --junit "$JUNIT_RESEARCH" --junit "$JUNIT_OPTIMIZATION")
+# EVERY ACTIVE ARM'S REPORT, and `--expect-live` when a target was resolved. One
+# report governed one arm; the flag is what stops a locked skip that RAN — which
+# is the tier working — from being read as the lock owing an update, a verdict
+# that made this script unable to exit 0 on any machine holding a credential.
+RATCHET_ARGS=()
+for junit in "${ARM_JUNITS[@]}"; do RATCHET_ARGS+=(--junit "$junit"); done
 if [[ $EXPECT_LIVE -eq 1 ]]; then RATCHET_ARGS+=(--expect-live); fi
 bun scripts/skip-ratchet.ts "${RATCHET_ARGS[@]}"
 RATCHET_STATUS=$?
 
 echo
-echo "── per arm ───────────────────────────────────────────────"
-printf 'bun suites       %5ds  %s\n' "$BUN_SECONDS" "$(bun scripts/eval-spend.ts "$SPEND_BUN" \
-  | sed -n 's/^  TOTAL: //p')"
-printf 'behaviour evals  %5ds  %s\n' "$EVALS_SECONDS" "$(bun scripts/eval-spend.ts "$SPEND_EVALS" \
-  | sed -n 's/^  TOTAL: //p')"
-printf 'live swarm       %5ds  %s\n' "$SWARM_SECONDS" "$(bun scripts/eval-spend.ts "$SPEND_SWARM" \
-  | sed -n 's/^  TOTAL: //p')"
-printf 'research         %5ds  %s\n' "$RESEARCH_SECONDS" "$(bun scripts/eval-spend.ts "$SPEND_RESEARCH" \
-  | sed -n 's/^  TOTAL: //p')"
-printf 'optimization     %5ds  %s\n' "$OPTIMIZATION_SECONDS" "$(bun scripts/eval-spend.ts "$SPEND_OPTIMIZATION" \
-  | sed -n 's/^  TOTAL: //p')"
-printf 'tier             %5ds\n' \
-  "$((BUN_SECONDS + EVALS_SECONDS + SWARM_SECONDS + RESEARCH_SECONDS + OPTIMIZATION_SECONDS))"
+echo "── per arm ($BACKEND) ────────────────────────────────────"
+TIER_SECONDS=0
+for index in "${!ARM_NAMES[@]}"; do
+  printf '%-16s %5ds  %s\n' "${ARM_NAMES[$index]}" "${ARM_SECONDS[$index]}" \
+    "$(bun scripts/eval-spend.ts "${ARM_SPENDS[$index]}" | sed -n 's/^  TOTAL: //p')"
+  TIER_SECONDS=$((TIER_SECONDS + ARM_SECONDS[index]))
+done
+printf '%-16s %5ds\n' 'tier' "$TIER_SECONDS"
+if [[ -n "$SKIPPED_ARMS" ]]; then echo "not run:         $SKIPPED_ARMS"; fi
 echo "──────────────────────────────────────────────────────────"
 
-echo
 # EACH ARM'S OWN LIVENESS, before the tier-wide one. A tier-wide total cannot
 # fail on one arm's behalf because another arm's spend can hide it. The same
 # `EXPECT_LIVE` value controls the banner and every assertion.
-echo "── bun suites arm ─────────────────────────────────────────"
-BUN_SPEND_ARGS=("$SPEND_BUN")
-if [[ $EXPECT_LIVE -eq 1 ]]; then BUN_SPEND_ARGS+=(--expect-live); fi
-bun scripts/eval-spend.ts "${BUN_SPEND_ARGS[@]}"
-BUN_SPEND_STATUS=$?
-echo "──────────────────────────────────────────────────────────"
-
-echo
-echo "── behaviour evals arm ────────────────────────────────────"
-EVALS_SPEND_ARGS=("$SPEND_EVALS")
-if [[ $EXPECT_LIVE -eq 1 ]]; then EVALS_SPEND_ARGS+=(--expect-live); fi
-bun scripts/eval-spend.ts "${EVALS_SPEND_ARGS[@]}"
-EVALS_SPEND_STATUS=$?
-echo "──────────────────────────────────────────────────────────"
-
-echo
-echo "── live swarm arm ────────────────────────────────────────"
-SWARM_SPEND_ARGS=("$SPEND_SWARM")
-if [[ $EXPECT_LIVE -eq 1 ]]; then SWARM_SPEND_ARGS+=(--expect-live); fi
-bun scripts/eval-spend.ts "${SWARM_SPEND_ARGS[@]}"
-SWARM_SPEND_STATUS=$?
-echo "──────────────────────────────────────────────────────────"
-
-echo
-echo "── research arm ──────────────────────────────────────────"
-RESEARCH_SPEND_ARGS=("$SPEND_RESEARCH")
-if [[ $EXPECT_LIVE -eq 1 ]]; then RESEARCH_SPEND_ARGS+=(--expect-live); fi
-bun scripts/eval-spend.ts "${RESEARCH_SPEND_ARGS[@]}"
-RESEARCH_SPEND_STATUS=$?
-echo "──────────────────────────────────────────────────────────"
-
-echo
-echo "── optimization arm ──────────────────────────────────────"
-OPTIMIZATION_SPEND_ARGS=("$SPEND_OPTIMIZATION")
-if [[ $EXPECT_LIVE -eq 1 ]]; then OPTIMIZATION_SPEND_ARGS+=(--expect-live); fi
-bun scripts/eval-spend.ts "${OPTIMIZATION_SPEND_ARGS[@]}"
-OPTIMIZATION_SPEND_STATUS=$?
-echo "──────────────────────────────────────────────────────────"
+ARM_SPEND_STATUS=0
+FAILED_ARM=''
+for index in "${!ARM_NAMES[@]}"; do
+  echo
+  echo "── ${ARM_NAMES[$index]} arm ───────────────────────────────"
+  SPEND_ARGS=("${ARM_SPENDS[$index]}")
+  if [[ $EXPECT_LIVE -eq 1 ]]; then SPEND_ARGS+=(--expect-live); fi
+  bun scripts/eval-spend.ts "${SPEND_ARGS[@]}"
+  STATUS=$?
+  echo "──────────────────────────────────────────────────────────"
+  # FIRST failing arm, kept: "the research arm reached no model" is a sharper
+  # sentence than "the tier reached no model", and every arm still reports so a
+  # reader sees all of them before the exit.
+  if [[ $STATUS -ne 0 && $ARM_SPEND_STATUS -eq 0 ]]; then
+    ARM_SPEND_STATUS=$STATUS
+    FAILED_ARM="${ARM_NAMES[$index]}"
+  fi
+done
 
 echo
 # `--expect-live` turns a resolved target into an obligation: the tier must show
 # a model call and a token count or exit non-zero. Without it, this reports and
 # returns 0 — which is what let `TOTAL: 0 model call(s)` pass a deploy gate.
-cat "$SPEND_BUN" "$SPEND_EVALS" "$SPEND_SWARM" "$SPEND_RESEARCH" "$SPEND_OPTIMIZATION" > "$SPEND"
+cat "${ARM_SPENDS[@]}" > "$SPEND"
 SPEND_ARGS=("$SPEND")
 if [[ $EXPECT_LIVE -eq 1 ]]; then SPEND_ARGS+=(--expect-live); fi
 bun scripts/eval-spend.ts "${SPEND_ARGS[@]}"
@@ -381,35 +548,17 @@ SPEND_STATUS=$?
 # passed every assertion it made without reaching a model is last only because
 # the two above already explain themselves.
 if [[ $TEST_STATUS -ne 0 ]]; then
-  echo "eval-tier: suites failed (exit $TEST_STATUS)" >&2
+  echo "eval-tier: suites failed on the $BACKEND target (exit $TEST_STATUS)" >&2
   exit "$TEST_STATUS"
 fi
 if [[ $RATCHET_STATUS -ne 0 ]]; then exit "$RATCHET_STATUS"; fi
-# The per-arm verdicts before the tier-wide one: "the research arm reached no model"
-# is a sharper sentence than "the tier reached no model", and each is the only one
-# a paid behaviour arm cannot mask.
-if [[ $BUN_SPEND_STATUS -ne 0 ]]; then
-  echo "eval-tier: the bun suites arm proved no liveness (exit $BUN_SPEND_STATUS)" >&2
-  exit "$BUN_SPEND_STATUS"
-fi
-if [[ $EVALS_SPEND_STATUS -ne 0 ]]; then
-  echo "eval-tier: the behaviour evals arm proved no liveness (exit $EVALS_SPEND_STATUS)" >&2
-  exit "$EVALS_SPEND_STATUS"
-fi
-if [[ $SWARM_SPEND_STATUS -ne 0 ]]; then
-  echo "eval-tier: the live swarm arm proved no liveness (exit $SWARM_SPEND_STATUS)" >&2
-  exit "$SWARM_SPEND_STATUS"
-fi
-if [[ $RESEARCH_SPEND_STATUS -ne 0 ]]; then
-  echo "eval-tier: the research arm proved no liveness (exit $RESEARCH_SPEND_STATUS)" >&2
-  exit "$RESEARCH_SPEND_STATUS"
-fi
-if [[ $OPTIMIZATION_SPEND_STATUS -ne 0 ]]; then
-  echo "eval-tier: the optimization arm proved no liveness (exit $OPTIMIZATION_SPEND_STATUS)" >&2
-  exit "$OPTIMIZATION_SPEND_STATUS"
+if [[ $ARM_SPEND_STATUS -ne 0 ]]; then
+  echo "eval-tier: the $FAILED_ARM arm proved no liveness on the $BACKEND target" \
+    "(exit $ARM_SPEND_STATUS)" >&2
+  exit "$ARM_SPEND_STATUS"
 fi
 if [[ $SPEND_STATUS -ne 0 ]]; then
-  echo "eval-tier: the run proved no liveness (exit $SPEND_STATUS)" >&2
+  echo "eval-tier: the run proved no liveness on the $BACKEND target (exit $SPEND_STATUS)" >&2
   exit "$SPEND_STATUS"
 fi
 exit 0

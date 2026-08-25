@@ -16,6 +16,7 @@ const BENCH_GATE_FILES = [
   "packages/core/tests/unit-bench-report.test.ts",
   "packages/core/tests/unit-bench-split.test.ts",
   "packages/core/tests/unit-bench-stats.test.ts",
+  "scripts/sandbox-durability-probe.test.ts",
 ] as const;
 
 const REQUIRED_GATES = [
@@ -24,12 +25,13 @@ const REQUIRED_GATES = [
   "bun test scripts/deploy.test.ts",
   "bun run test",
   "bun run test:mutation",
+  "bun test packages/devbox/",
   "bun test packages/test-utils/",
   "bun test --parallel=4 packages/cf-backend/",
   "bun run test:workerd",
   "bun test --parallel=4 packages/cli-backend/",
   "bun run test:cli",
-  "bun test scripts/eval.test.ts scripts/eval-triage.test.ts",
+  "bun test scripts/eval.test.ts scripts/eval-triage.test.ts scripts/staging-preflight.test.ts",
   `bun test ${BENCH_GATE_FILES.join(" ")}`,
   "bun test scripts/secret-scan.test.ts scripts/sources.test.ts",
   "bun scripts/secret-scan.ts",
@@ -39,7 +41,7 @@ const REQUIRED_GATES = [
   "bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts",
   "bun test scripts/gate-set-equality.test.ts",
   "bun test scripts/wired.test.ts",
-  "bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts",
+  "bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/plan-review-ux.test.ts",
   "bun test scripts/public-pages.test.ts",
       "bun test scripts/swarm-tree-geometry.test.ts",
   "bun test scripts/chat-scroll.test.ts",
@@ -224,7 +226,7 @@ describe("deploy gate", () => {
     // pipeline serial, so pin the middle size.
     expect(waves.length).toBe(3);
     expect(waves[0]).toEqual(["bun scripts/preflight.ts"]);
-    expect(waves[1]?.length).toBe(51);
+    expect(waves[1]?.length).toBe(52);
     expect(waves[2]).toEqual(["bun run gate:infra"]);
   });
 
