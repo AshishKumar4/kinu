@@ -1,0 +1,38 @@
+// EPHEMERAL PAYLOAD-TRANSPORT FIXTURE. The driver rewrites name and bucket per
+// run, deploys this Worker, raises a real sandbox container under it, and then
+// requires container destruction, Worker deletion, and bucket deletion.
+//
+// The Text rule bundles the harness source INTO the Worker so the owning DO's
+// idempotent onStart can install it — there is no second install path to drift.
+{
+  "$schema": "../../../node_modules/wrangler/config-schema.json",
+  "name": "kinu-payload-bench-placeholder",
+  "account_id": "f44999d1ddda7012e9a87729eba250f1",
+  "main": "worker.ts",
+  "compatibility_date": "2025-12-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "observability": { "enabled": true },
+  "rules": [
+    { "type": "Text", "globs": ["**/container-harness.bundle.txt"], "fallthrough": true }
+  ],
+  "durable_objects": {
+    "bindings": [
+      // ONE owner class: container lifecycle + base64 arm + grants + ops.
+      { "class_name": "PayloadBenchSandbox", "name": "PayloadBenchSandbox" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["PayloadBenchSandbox"] }],
+  // ContainerProxy is EXPORTED by worker.ts but deliberately NOT bound: the
+  // Sandbox base builds the r2.internal interception fetcher from
+  // `ctx.exports.ContainerProxy`.
+  "containers": [
+    {
+      "class_name": "PayloadBenchSandbox",
+      "image": "docker.io/cloudflare/sandbox:0.12.8",
+      "max_instances": 1,
+      "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 }
+    }
+  ],
+  "r2_buckets": [{ "binding": "BACKUP_BUCKET", "bucket_name": "kinu-payload-bench-placeholder" }]
+}

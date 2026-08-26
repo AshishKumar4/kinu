@@ -1,0 +1,13 @@
+{
+  "//": "The benchmark fixture Worker is the one entry that runs on workerd and needs R2Bucket, DurableObjectNamespace and ExportedHandler, so it compiles here with @cloudflare/workers-types instead of [bun, node] (same split as r2-bench). container-harness.ts is excluded because it is a bun PROGRAM executed inside the container — the scripts project typechecks it with bun/node types, and wrangler bundles it into worker.ts as raw TEXT via the Text rule in wrangler.jsonc.",
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "lib": ["ES2022"],
+    "types": ["@cloudflare/workers-types"],
+    "allowImportingTsExtensions": true,
+    "moduleDetection": "force"
+  },
+  "include": ["worker.ts"],
+  "exclude": ["container-harness.ts"]
+}
