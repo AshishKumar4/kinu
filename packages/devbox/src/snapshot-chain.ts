@@ -405,6 +405,12 @@ export interface SnapshotChainPorts {
   exec(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }>;
   /** Ephemeral generation id, when the host can observe one. */
   containerGeneration?(): Promise<string | undefined>;
+  /** Wait until an object appears through the store mount, or report that the
+   * container generation changed while the mount warmed. */
+  waitForPath?(
+    path: string,
+    generation: string | undefined,
+  ): Promise<'ready' | 'replaced'>;
   /** Mount this chain's store subtree read-only at `CHAIN_STORE_MOUNT`.
    *  Credentials never leave the Durable Object. */
   mountStore(chainId: string): Promise<void>;
@@ -750,10 +756,12 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       throw new ContainerChangedDuringAttach();
     }
     const mountedBase = `${CHAIN_STORE_MOUNT}/data.sqsh`;
-    if (!(await shell.pathExists(mountedBase))) {
-      throw new Error(
-        `chain ${state.base.id} store mount does not expose ${mountedBase}`,
-      );
+    const visible = ports.waitForPath === undefined
+      ? (await shell.pathExists(mountedBase)) ? 'ready' : 'missing'
+      : await ports.waitForPath(mountedBase, mountedGeneration);
+    if (visible === 'replaced') throw new ContainerChangedDuringAttach();
+    if (visible !== 'ready') {
+      throw new Error(`chain ${state.base.id} store mount does not expose ${mountedBase}`);
     }
     await shell.unmountPath(DEVBOX_WORKDIR);
     await shell.unmountPath(lowerBase);

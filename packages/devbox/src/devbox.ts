@@ -1434,6 +1434,15 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       },
       exec: async (command) => await this.#rawExec(command),
       containerGeneration: async () => await this.#readBootId(),
+      waitForPath: async (path, generation) => {
+        for (;;) {
+          if (await this.#pathExists(path)) return 'ready';
+          if (generation !== undefined && await this.#readBootId() !== generation) {
+            return 'replaced';
+          }
+          await scheduler.wait(100);
+        }
+      },
       mountStore: async (chainId) => {
         await this.mountBucket(store.binding, CHAIN_STORE_MOUNT, {
           prefix: `/backups/${assertChainId(chainId)}`,
