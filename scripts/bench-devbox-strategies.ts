@@ -801,7 +801,8 @@ async function measureArm(
 ): Promise<ArmResult> {
   // ONE BOX PER ARM: mountBucket refuses a second mount of one binding at a
   // different prefix or readOnly value, so the arms cannot share an instance.
-  const box = `ab-${strategy}-${options.runId}`;
+  const boxBase = `ab-${strategy}-${options.runId}`;
+  let box = boxBase;
   const notes: string[] = [];
   const result: ArmResult = {
     strategy, box, verifyPassed: false, verifyChecks: [],
@@ -822,6 +823,35 @@ async function measureArm(
       );
     }
     return result;
+  };
+  const replaceVerifyBox = async (attempt: number): Promise<boolean> => {
+    try {
+      await call(
+        fixture,
+        'POST',
+        `/teardown?box=${box}`,
+        TeardownReplySchema,
+        { purge: true, prefix: '', whole: true },
+      );
+    } catch (error) {
+      notes.push(`verify attempt cleanup failed: ${describeThrown({ cause: error }).slice(0, 160)}`);
+    }
+    box = `${boxBase}-verify-${String(attempt)}`;
+    result.box = box;
+    try {
+      const replacement = await call(
+        fixture,
+        'POST',
+        `/create?box=${box}`,
+        AttachReplySchema,
+        { strategy },
+      );
+      if (replacement.ok === true && replacement.error === undefined) return true;
+      notes.push(`verify replacement create failed: ${replacement.error ?? 'no ok'}`);
+    } catch (error) {
+      notes.push(`verify replacement create failed: ${describeThrown({ cause: error }).slice(0, 160)}`);
+    }
+    return false;
   };
 
   log(`${strategy}: create (cold attach)`);
@@ -876,6 +906,10 @@ async function measureArm(
       if (verified.transient !== undefined && attempt < attempts) {
         log(`${strategy}: verify attempt ${attempt}/${attempts} hit ${verified.transient}; retrying`);
         await delay(attempt * 15_000);
+        if (!(await replaceVerifyBox(attempt + 1))) {
+          verified = undefined;
+          break;
+        }
         continue;
       }
       if (verified.ok !== true || verified.checks === undefined) {
@@ -885,6 +919,10 @@ async function measureArm(
         if (transient && attempt < attempts) {
           log(`${strategy}: verify attempt ${attempt}/${attempts} returned a transient error; retrying`);
           await delay(attempt * 15_000);
+          if (!(await replaceVerifyBox(attempt + 1))) {
+            verified = undefined;
+            break;
+          }
           continue;
         }
         notes.push(`verify did not complete: ${error.slice(0, 240)}`);
@@ -899,6 +937,10 @@ async function measureArm(
       if (timeout && attempt < attempts) {
         log(`${strategy}: verify attempt ${attempt}/${attempts} timed out; retrying`);
         await delay(attempt * 15_000);
+        if (!(await replaceVerifyBox(attempt + 1))) {
+          verified = undefined;
+          break;
+        }
         continue;
       }
       notes.push(`verify did not complete: ${detail.slice(0, 240)}`);
