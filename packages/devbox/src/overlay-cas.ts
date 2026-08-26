@@ -974,21 +974,24 @@ export function overlayCasStorage(ports: OverlayCasPorts): DevboxStorage {
     }
   };
 
-  const discard = async (): Promise<void> => {
-    pendingState.invalidate();
-    if (ports.containerRunning() && isOverlayMounted(await shell.readMounts(), DEVBOX_WORKDIR)) {
+  const detach = async (): Promise<void> => {
+    if (!ports.containerRunning()) return;
+    if (isOverlayMounted(await shell.readMounts(), DEVBOX_WORKDIR)) {
       await ports.exec(`fusermount3 -u ${shellPath(DEVBOX_WORKDIR)} || true`);
     }
-    if (ports.containerRunning()) {
-      const line = findMount(await shell.readMounts(), CAS_TREE_MOUNT);
-      if (line !== undefined) await ports.unmountTree();
-    }
+    const line = findMount(await shell.readMounts(), CAS_TREE_MOUNT);
+    if (line !== undefined) await ports.unmountTree();
+  };
+
+  const discard = async (): Promise<void> => {
+    pendingState.invalidate();
+    await detach();
     const deleted = await ports.clearPrefix();
     await ports.clearState();
     ports.log(`${DEVBOX_WORKDIR} discarded (overlay-cas, ${deleted} objects deleted)`);
   };
 
-  return { attach, checkpoint, discard };
+  return { attach, checkpoint, detach, discard };
 }
 
 export {

@@ -161,6 +161,8 @@ export interface DevboxStorage {
   /** Commit what changed. Returns its outcome; does not throw for an ordinary
    *  failure. */
   checkpoint(kind: CheckpointKind): Promise<CheckpointOutcome>;
+  /** Release live mounts that the host SDK tracks before the container stops. */
+  detach?(): Promise<void>;
   /** Drop the durable bytes and the record pointing at them. Called when the
    *  box itself is deleted. */
   discard(): Promise<void>;

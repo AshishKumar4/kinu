@@ -716,6 +716,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       await this.#record('checkpoint', `final checkpoint failed: ${outcome.reason ?? 'unknown'}`);
       return outcome;
     }
+    await this.#requireStorage().detach?.();
     this.#ready = false;
     this.#attachFailure = undefined;
     await this.stop('SIGTERM');

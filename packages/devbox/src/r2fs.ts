@@ -246,6 +246,12 @@ export function r2fsStorage(ports: R2fsPorts): DevboxStorage {
     return { kind: 'committed', reason: undefined, bytes: held.bytes, movedBytes: undefined };
   };
 
+  const detach = async (): Promise<void> => {
+    if (ports.containerRunning() && isS3fsMounted(await ports.readMounts(), DEVBOX_WORKDIR)) {
+      await ports.unmount();
+    }
+  };
+
   const discard = async (): Promise<void> => {
     // Unmount first. Deleting objects under a live mount leaves s3fs holding
     // cached metadata for keys that no longer exist, and its next write would
@@ -254,12 +260,10 @@ export function r2fsStorage(ports: R2fsPorts): DevboxStorage {
     // Only ask the container when there IS one: reading /proc/mounts on a
     // stopped box wakes it, or fails, purely to check a mount that cannot
     // exist. A container that is down holds no mount by definition.
-    if (ports.containerRunning() && isS3fsMounted(await ports.readMounts(), DEVBOX_WORKDIR)) {
-      await ports.unmount();
-    }
+    await detach();
     const deleted = await ports.clearPrefix();
     ports.log(`${DEVBOX_WORKDIR} discarded (r2fs, ${deleted} objects deleted)`);
   };
 
-  return { attach, checkpoint, discard };
+  return { attach, checkpoint, detach, discard };
 }
