@@ -524,7 +524,8 @@ function chainShell(exec: ContainerExec) {
      *  DID make this way leaves its registry claiming the path forever. */
     unmountPath: async (path: string): Promise<void> => {
       await exec(
-        `while grep -qs ${shellPath(` ${path} `)} /proc/mounts; do `
+        `/usr/bin/fusermount3 -u ${shellPath(path)} 2>/dev/null || true; `
+          + `while grep -qs ${shellPath(` ${path} `)} /proc/mounts; do `
           + `/usr/bin/fusermount3 -u ${shellPath(path)} 2>/dev/null || true; sleep 0.1; done`,
       );
     },
