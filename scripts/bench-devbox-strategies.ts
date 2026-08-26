@@ -904,6 +904,14 @@ async function measureArm(
         { strategy },
       );
       if (verified.transient !== undefined && attempt < attempts) {
+        const failed = verified.checks
+          ?.filter((check) => !check.pass)
+          .map((check) => `${check.name}: ${check.detail}`)
+          .slice(0, 2)
+          .join('; ');
+        if (failed !== undefined && failed.length > 0) {
+          notes.push(`verify attempt ${attempt} transient: ${failed}`);
+        }
         log(`${strategy}: verify attempt ${attempt}/${attempts} hit ${verified.transient}; retrying`);
         await delay(attempt * 15_000);
         if (!(await replaceVerifyBox(attempt + 1))) {
@@ -913,10 +921,12 @@ async function measureArm(
         continue;
       }
       if (verified.ok !== true || verified.checks === undefined) {
-        const error = verified.error ?? 'verify returned no checks';
+        const error = verified.error
+          ?? `verify returned no checks (fields: ${Object.keys(verified).sort().join(', ')})`;
         const transient = /OperationInterrupted|container service is unreachable|no container instance|timed out|TimeoutError|squashfuse mount failed.*No such file|lower .*does not exist/i
           .test(error);
         if (transient && attempt < attempts) {
+          notes.push(`verify attempt ${attempt} transient: ${error.slice(0, 200)}`);
           log(`${strategy}: verify attempt ${attempt}/${attempts} returned a transient error; retrying`);
           await delay(attempt * 15_000);
           if (!(await replaceVerifyBox(attempt + 1))) {
@@ -935,6 +945,7 @@ async function measureArm(
       const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
       const timeout = /timed out|TimeoutError/i.test(detail);
       if (timeout && attempt < attempts) {
+        notes.push(`verify attempt ${attempt} transient: ${detail.slice(0, 200)}`);
         log(`${strategy}: verify attempt ${attempt}/${attempts} timed out; retrying`);
         await delay(attempt * 15_000);
         if (!(await replaceVerifyBox(attempt + 1))) {
