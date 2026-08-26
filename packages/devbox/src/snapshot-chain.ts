@@ -539,13 +539,15 @@ function chainShell(exec: ContainerExec) {
      * them — measured live at roughly once per phase under churn — leaving the
      * next command on a blank disk. A mountpoint prepared by an earlier exec
      * then does not exist, and fuse refuses with `bad mount point`. One
-     * `mkdir -p &&` inside the command has no gap to lose.
+     * `mkdir -p &&` inside the command has no gap to lose. `nonempty` is safe
+     * here because this private runtime directory is reset before every mount;
+     * it tolerates kernel-delayed FUSE cleanup and never hides user files.
      */
     mountLayer: async (objectKey: string, mountPoint: string): Promise<void> => {
       const layerName = objectKey.split('/').pop() ?? objectKey;
       await must('squashfuse mount', `mkdir -p ${shellPath(mountPoint)} && /usr/bin/squashfuse `
         + `${shellPath(`${CHAIN_STORE_MOUNT}/${layerName}`)} ${shellPath(mountPoint)} `
-        + '-o allow_other,ro');
+        + '-o allow_other,ro,nonempty');
     },
     /** Attach `lowers` (first entry is newest) with a fresh writable upper. Its
      *  upper and work directories are created in the same command, for the same
