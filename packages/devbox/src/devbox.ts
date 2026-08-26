@@ -719,6 +719,11 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     this.#ready = false;
     this.#attachFailure = undefined;
     await this.stop('SIGTERM');
+    // Sandbox.stop acknowledges the signal before the platform flips
+    // `container.running`. Returning in that window let an immediate wake reuse
+    // the old mount, then lose it underneath the next operation. Completion of
+    // quiesce means stopped, so wait on the provider's own state transition.
+    while (this.ctx.container?.running === true) await scheduler.wait(100);
     return outcome;
   }
 

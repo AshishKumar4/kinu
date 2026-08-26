@@ -512,24 +512,6 @@ async function body(request: Request): Promise<DriverBody> {
   return parsed.output;
 }
 
-/** Drive the first operation after a stop until the runtime has finished
- *  closing. Bounded, so a genuinely dead box still fails rather than spinning. */
-async function settleAfterStop(box: BenchStub): Promise<void> {
-  let last: unknown;
-  for (let attempt = 0; attempt < 6; attempt += 1) {
-    try {
-      await box.exec('true');
-      return;
-    } catch (error) {
-      last = error;
-      await scheduler.wait(1_000 * (attempt + 1));
-    }
-  }
-  throw new Error(
-    `the box never answered after being stopped: ${describeThrown({ cause: last })}`,
-    { cause: last },
-  );
-}
 
 /**
  * The four assertions, run as the lifecycle that produces them.
@@ -611,16 +593,11 @@ async function verify(
     detail: `${generationBefore || '(missing)'} -> ${generationAfter || '(missing)'}`,
   });
 
-  // A real recycle. Everything on the container's disk goes away here, which is
-  // the fact the whole package exists for.
+  // A real recycle. `quiesce` now resolves only after the provider reports the
+  // old container stopped; `attachNow` starts and restores the next generation.
   await box.quiesce();
-  // The first call after a stop races the runtime's own teardown and answers
-  // `OperationInterruptedError: ... while the runtime connection was closing`.
-  // That is transient by construction, not a result, so it is retried rather
-  // than reported. Measured on both the local and the deployed path.
-  await settleAfterStop(box);
+  const attach = await box.attachNow();
   const woken = await box.devboxState();
-  const attach: AttachOutcome | undefined = woken.lastAttach;
   add({
     name: 'the wake attached durable bytes',
     pass: attach?.kind === 'attached',
@@ -904,12 +881,12 @@ export default {
           // attaches before the operation runs. The outcome is read back from
           // durable state, so a wake that restored nothing cannot look like one
           // that did. Retried past the runtime's own teardown window.
-          await settleAfterStop(box);
+          const attach = await box.attachNow();
           const state = await box.devboxState();
           await box.flushOpTally();
           return json({
             ok: true,
-            attach: state.lastAttach,
+            attach,
             running: state.running,
             ms: Date.now() - started,
           });
