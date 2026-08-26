@@ -14,6 +14,7 @@ import {
   type TeardownStep,
 } from './fixtures/capture-probe/live-run';
 
+const LIVE_RUN_SOURCE = readFileSync(new URL('./fixtures/capture-probe/live-run.ts', import.meta.url), 'utf8');
 const WORKER_SOURCE = readFileSync(new URL('./fixtures/capture-probe/worker.ts', import.meta.url), 'utf8');
 
 describe('the ephemeral live probe run', () => {
@@ -120,6 +121,8 @@ describe('the ephemeral live probe run', () => {
     expect(WORKER_SOURCE).toContain('await this.destroy()');
     expect(WORKER_SOURCE).toContain('await this.ctx.storage.deleteAll()');
     expect(WORKER_SOURCE).not.toContain('await box.stop()');
+    expect(WORKER_SOURCE).toContain('probe RPC failed');
+    expect(LIVE_RUN_SOURCE).toContain('responseText.slice(0, 500)');
   });
 
   test('the in-container probe reply contract is parsed, not cast', () => {

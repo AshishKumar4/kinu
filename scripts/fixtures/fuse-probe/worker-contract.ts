@@ -101,12 +101,11 @@ export interface ProbeBox {
   writeFile(path: string, content: string, options?: { encoding?: string }): Promise<ProbeWriteReceipt | void>;
   stop(signal?: "SIGTERM" | "SIGINT" | "SIGKILL"): Promise<void>;
   destroy(): Promise<void>;
-  runIdentity(): Promise<RunIdentity | undefined>;
+  prepare(): Promise<RunIdentity>;
 }
 
-/** One route, one SDK method. `/destroy` is teardown's entry point;
- *  `/stop` stays solely for the restart-evidence stage. Lives in the neutral
- *  contract so the test suite exercises the exact dispatch the Worker runs. */
+/** One route, one SDK method. `/prepare` proves runtime identity outside
+ *  Durable Object startup; `/destroy` tears down and `/stop` is restart-only. */
 export function handleProbeOp(pathname: string, box: ProbeBox, command: ProbeCommand): Promise<Response> {
   switch (pathname) {
     case "/exec": {
@@ -124,8 +123,8 @@ export function handleProbeOp(pathname: string, box: ProbeBox, command: ProbeCom
       return box.stop("SIGTERM").then(() => Response.json({ ok: true }));
     case "/destroy":
       return box.destroy().then(() => Response.json({ ok: true }));
-    case "/identity":
-      return box.runIdentity().then((identity) => Response.json({ identity: identity ?? null }));
+    case "/prepare":
+      return box.prepare().then((identity) => Response.json(identity));
     default:
       return Promise.resolve(Response.json({ error: "unknown op" }, { status: 404 }));
   }

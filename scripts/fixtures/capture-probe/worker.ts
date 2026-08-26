@@ -146,8 +146,13 @@ export default {
       if (!parsed.success) {
         return Response.json({ error: 'body.source must be non-empty probe source text' }, { status: 400 });
       }
-      const reply = await box.runProbe(parsed.output.source);
-      return Response.json(reply);
+      try {
+        return Response.json(await box.runProbe(parsed.output.source));
+      } catch (error) {
+        const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+        console.warn(`[capture-probe] probe RPC failed: ${detail}`);
+        return Response.json({ error: detail }, { status: 500 });
+      }
     }
 
     return Response.json({ error: `no route for ${request.method} ${url.pathname}` }, { status: 404 });

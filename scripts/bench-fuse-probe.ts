@@ -23,8 +23,9 @@ import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 
 import {
-  armSignalTeardown, containerAppIds, delay, deleteContainerApps, describeThrown,
-  publishTeardown, runTeardownOnce, runWrangler, WRANGLER_FAILED,
+  armSignalTeardown, containerAppIds, containerApplicationName, delay,
+  deleteContainerApps, deleteFixtureWorker, describeThrown, publishTeardown,
+  runTeardownOnce, runWrangler, WRANGLER_FAILED,
 } from './fixtures/r2-bench/deploy-substrate';
 import {
   classifyMaterialization, classifyRun, imageMismatchVerdict, RunIdentitySchema,
@@ -51,6 +52,7 @@ export const PHASES = [
 
 export interface Deployment {
   readonly workerName: string;
+  readonly containerAppName: string;
   readonly configPath: string;
   readonly origin: string;
   /** Process-local only: reaches /destroy during teardown, never persisted. */
@@ -66,7 +68,6 @@ const ExecResponseSchema = v.looseObject({
 type ExecResponse = v.InferOutput<typeof ExecResponseSchema>;
 
 const OkSchema = v.object({ ok: v.boolean() });
-const IdentityAnswerSchema = v.object({ identity: v.union([RunIdentitySchema, v.null()]) });
 
 export function stripWholeLineComments(jsonc: string): string {
   return jsonc.split('\n').filter((line) => !line.trimStart().startsWith('//')).join('\n');
@@ -273,21 +274,18 @@ export async function destroyRuntime(
 
 async function deploy(runId: string, token: string): Promise<Deployment> {
   const workerName = `kinu-fuse-probe-${runId}`;
+  const containerAppName = containerApplicationName(workerName, 'FuseProbeBox');
   const configPath = join(FIXTURE_DIR, `wrangler.${runId}.jsonc`);
   const template = await readFile(join(FIXTURE_DIR, 'wrangler.jsonc'), 'utf8');
   await writeFile(configPath, `${JSON.stringify(deriveFixtureConfig(template, workerName, token), null, 2)}\n`, 'utf8');
   const deployed = runWrangler(REPO_ROOT, ['deploy', '--config', configPath], { allowFailure: true });
   if (deployed.startsWith(WRANGLER_FAILED)) {
-    // `wrangler deploy` can fail after the control plane has allocated the
-    // Worker/container application. Same application-before-Worker order as
-    // teardown — deleting the Worker first is what leaks the application and
-    // blocks the next deploy.
-    await releaseResources(liveReleaseHooks(configPath, workerName));
+    await releaseResources(liveReleaseHooks(configPath, workerName, containerAppName));
     throw new Error(`wrangler deploy failed: ${deployed.slice(0, 2_000)}`);
   }
   const origin = /https:\/\/[a-z0-9-]+\.[a-z0-9-]+\.workers\.dev/.exec(deployed)?.[0];
   if (origin === undefined) throw new Error('wrangler deploy printed no workers.dev URL');
-  return { workerName, configPath, origin, token };
+  return { workerName, containerAppName, configPath, origin, token };
 }
 
 async function wake(origin: string, token: string): Promise<void> {
@@ -326,14 +324,7 @@ export interface TeardownHooks extends ReleaseHooks {
   destroyRuntime(): Promise<void>;
 }
 
-/** The API answers a missing script with a not-found error; for cleanup that
- *  IS success, so a replayed pass finds an absent Worker and succeeds. */
-const WORKER_ALREADY_ABSENT = /(workers\.api\.error|not found|does not exist|could not find)/i;
-
-/** Both documented routes, tolerant of absence. MEASURED (deploy-substrate):
- *  `delete --config` has failed while `delete --name` removed the Worker, so
- *  a teardown with one route is a teardown that leaks whenever it is the one
- *  that breaks. */
+/** Compatibility-free wrapper over the shared two-route deletion policy. */
 export function deleteWorkerBothRoutes(
   repoRoot: string,
   configPath: string,
@@ -341,19 +332,7 @@ export function deleteWorkerBothRoutes(
   log: (message: string) => void,
   wrangle: typeof runWrangler = runWrangler,
 ): boolean {
-  let output = wrangle(repoRoot, ['delete', '--config', configPath, '--force'], { allowFailure: true });
-  if (output.startsWith(WRANGLER_FAILED)) {
-    if (WORKER_ALREADY_ABSENT.test(output)) return true;
-    log(`delete --config failed, falling back to --name: ${output.slice(0, 160)}`);
-    output = wrangle(repoRoot, ['delete', '--name', workerName, '--force'], { allowFailure: true });
-    if (output.startsWith(WRANGLER_FAILED)) {
-      if (WORKER_ALREADY_ABSENT.test(output)) return true;
-      log(`WARNING: the fixture Worker was NOT deleted. Remove it by hand: ${output.slice(0, 300)}`);
-      return false;
-    }
-  }
-  log('fixture Worker deleted');
-  return true;
+  return deleteFixtureWorker(repoRoot, configPath, workerName, log, wrangle);
 }
 
 export const CONTAINER_APP_ABSENCE_ATTEMPTS = 12;
@@ -374,10 +353,14 @@ export async function awaitContainerAppAbsent(
   return false;
 }
 
-function liveReleaseHooks(configPath: string, workerName: string): ReleaseHooks {
+function liveReleaseHooks(
+  configPath: string,
+  workerName: string,
+  containerAppName: string,
+): ReleaseHooks {
   return {
-    listContainerApps: () => containerAppIds(REPO_ROOT, [workerName], console.log),
-    deleteContainerApps: () => deleteContainerApps(REPO_ROOT, [workerName], console.log),
+    listContainerApps: () => containerAppIds(REPO_ROOT, [containerAppName], console.log),
+    deleteContainerApps: () => deleteContainerApps(REPO_ROOT, [containerAppName], console.log),
     deleteWorker: () => deleteWorkerBothRoutes(REPO_ROOT, configPath, workerName, console.log),
     removeConfig: () => rm(configPath, { force: true }).then(() => undefined),
     sleep: delay,
@@ -386,7 +369,11 @@ function liveReleaseHooks(configPath: string, workerName: string): ReleaseHooks 
 
 function liveTeardownHooks(deployment: Deployment): TeardownHooks {
   return {
-    ...liveReleaseHooks(deployment.configPath, deployment.workerName),
+    ...liveReleaseHooks(
+      deployment.configPath,
+      deployment.workerName,
+      deployment.containerAppName,
+    ),
     destroyRuntime: () => destroyRuntime(deployment.origin, deployment.token, console.log),
   };
 }
@@ -500,11 +487,14 @@ export async function run(): Promise<FuseProbeArtifact> {
     // while the new deployment propagates.
     await awaitFixtureReady(deployment.origin, token);
     await setupExec(deployment.origin, token, 'mkdir -p /tmp/fuse-probe');
-    // Identity before measurement: what this boot proved about its own image
-    // and runtime is part of the run's immutable identity, and a boot that
-    // cannot prove it must not cost minutes of probing on the wrong platform.
-    identity = (await request(deployment.origin, token, '/identity', {}, IdentityAnswerSchema)).identity ?? undefined;
-    if (identity === undefined) throw new Error('the fixture reported no start identity; onStart evidence was never captured');
+    // Verify image and bun outside the Durable Object startup window.
+    identity = await request(
+      deployment.origin,
+      token,
+      '/prepare',
+      {},
+      RunIdentitySchema,
+    );
     if (identity.actualVersion !== SANDBOX_IMAGE_VERSION) {
       throw new Error(`container identity mismatch: reports SANDBOX_VERSION ${identity.actualVersion}, configured ${SANDBOX_IMAGE_VERSION}`);
     }

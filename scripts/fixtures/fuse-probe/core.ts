@@ -792,8 +792,8 @@ export interface FuseProbeArtifact {
   readonly workerName: string;
   readonly verdict: ProbeVerdict;
   readonly materialization: ProbeVerdict;
-  /** The runtime identity this run proved about itself before measuring.
-   *  Absent only when failure preceded the first /identity answer. */
+  /** The runtime identity this run proved before measuring.
+   *  Absent only when failure preceded the first /prepare answer. */
   readonly identity?: RunIdentity;
   /** Absent when deployment/runtime failed before the probe emitted one byte
    *  of evidence, or censored because the run's image identity mismatched.

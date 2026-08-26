@@ -10,20 +10,18 @@
  * latency measurements. The reasoning is fixtures/r2-bench/worker.ts's,
  * unchanged. FuseProbeBox adds only lifecycle proof:
  *
- *   - onStart awaits super.onStart(), then re-proves on EVERY boot (first
- *     start and every post-stop wake) that the running container reports the
- *     SANDBOX_VERSION of the configured image (SANDBOX_IMAGE_VERSION from
- *     ./worker-contract) and can actually run bun. A mismatch throws the
- *     typed ImageIdentityError, not a warning: measurements from the wrong
- *     image are worse than none.
+ *   - onStart runs the SDK hook only. Container probes cannot run inside its
+ *     blockConcurrencyWhile window without risking a forced DO reset.
+ *   - `/prepare` verifies the image and bun after startup, before measurement.
+ *     A mismatch throws ImageIdentityError.
  *   - destroy() is the one disposable method: the SDK's own teardown
  *     (mounts, tunnels, container instance) followed by clearing this
  *     ephemeral DO's storage, so nothing outlives the run.
  *
  * The token-guarded JSON API is a thin forwarder: every route maps onto one
  * SDK method via handleProbeOp from ./worker-contract, so what the probe
- * measures is the platform, not this file. Routes: `/exec`, `/put`, `/stop`
- * (restart-evidence stage ONLY), `/destroy` (teardown), `/identity`.
+ * measures is the platform, not this file. Routes: `/exec`, `/put`, `/prepare`,
+ * `/stop` (restart only), and `/destroy` (teardown).
  * Everything measured lives in probe.ts, which the driver uploads through
  * `/put` and runs through `/exec`. Lifecycle wiring is pinned by source-text
  * assertions in bench-fuse-probe.test.ts plus the fixture workers-types tsc;
@@ -65,29 +63,25 @@ interface ProbeEnv {
 const SANDBOX_ID = "fuse-probe";
 
 class FuseProbeBox extends Sandbox<ProbeEnv> {
-  /** Process-local evidence from the most recent onStart. Never persisted —
-   *  every boot re-derives it, and destroy() clears the DO anyway. */
-  private lastStartEvidence: RunIdentity | undefined;
-
   override async onStart(): Promise<void> {
+    // Container startup runs under Durable Object blockConcurrencyWhile.
+    // Keep it bounded; the explicit prepare RPC performs container probes.
     await super.onStart();
+  }
+
+  async prepare(): Promise<RunIdentity> {
     const actualVersion = await this.containerVersion();
     if (actualVersion !== SANDBOX_IMAGE_VERSION) {
       throw new ImageIdentityError(SANDBOX_IMAGE, actualVersion);
     }
     const bunVersion = await this.bunVersion();
-    this.lastStartEvidence = {
+    return {
       configuredImage: SANDBOX_IMAGE,
       expectedVersion: SANDBOX_IMAGE_VERSION,
       actualVersion,
       actualVersionDigest: await sha256Hex(actualVersion),
       bunVersion,
     };
-  }
-
-  /** What onStart proved about the current boot; undefined before it. */
-  async runIdentity(): Promise<RunIdentity | undefined> {
-    return this.lastStartEvidence;
   }
 
   /** The SANDBOX_VERSION the container itself reports. A transport failure
@@ -131,10 +125,7 @@ export default {
     if (request.method === 'GET' && pathname === '/health') {
       return Response.json({ ok: true });
     }
-
-
-    // getSandbox returns the typed FuseProbeBox; its RPC proxy serves the
-    // public DO surface (including runIdentity) straight to handleProbeOp.
+    // getSandbox returns the typed FuseProbeBox RPC surface.
     const sandbox = getSandbox(env.Sandbox, SANDBOX_ID, { normalizeId: true, transport: "rpc" });
     let command: ProbeCommand;
     try {

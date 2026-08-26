@@ -38,10 +38,12 @@ import { JsonObjectSchema } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import {
   accountId, armSignalTeardown, awaitTokenAccepted, containerAppIds,
-  delay, deleteContainerApps, publishTeardown, runTeardownOnce, runWrangler, WRANGLER_FAILED,
+  containerApplicationName, delay, deleteContainerApps, deleteFixtureWorker,
+  publishTeardown, runTeardownOnce, runWrangler, wranglerProvesAbsence,
+  WRANGLER_FAILED,
 } from './fixtures/r2-bench/deploy-substrate';
 import { PAYLOAD_ARMS, PAYLOAD_SIZES_MIB, type PayloadArmId } from './fixtures/payload-transport/arms';
-import { CLEANUP_GATES, evaluateCleanup, exitFor, provesAbsence, type CleanupEvidence } from './fixtures/payload-transport/cleanup';
+import { CLEANUP_GATES, evaluateCleanup, exitFor, type CleanupEvidence } from './fixtures/payload-transport/cleanup';
 import { decideAll, judgeImage } from './fixtures/payload-transport/decision';
 import { isValidResourceName, runIdentity, type RunIdentity } from './fixtures/payload-transport/payload';
 import { renderMarkdown } from './fixtures/payload-transport/report';
@@ -64,7 +66,6 @@ import { summarize } from './fixtures/r2-bench/stats';
 const ROOT = dirname(dirname(new URL(import.meta.url).pathname));
 const FIXTURE_DIR = join(ROOT, 'scripts/fixtures/payload-transport');
 const ARTIFACT_ROOT = join(ROOT, 'bench-artifacts/payload-transport');
-const CONTAINER_APP_SUFFIX = '-sandbox';
 
 const log = (message: string): void => {
   process.stderr.write(`[payload-transport] ${message}\n`);
@@ -347,7 +348,7 @@ async function main(): Promise<number> {
   const configPath = join(runDir, 'wrangler.json');
   const token = `payload-${crypto.randomUUID()}`;
   const artifactPath = opts.out ?? join(ARTIFACT_ROOT, `${identity.runId}.json`);
-  const containerApp = `${identity.workerName}${CONTAINER_APP_SUFFIX}`;
+  const containerApp = containerApplicationName(identity.workerName, 'PayloadBenchSandbox');
   writeLedger(ledgerPath, { ...identity, createdAt: new Date().toISOString() });
   mkdirSync(runDir, { recursive: true });
   writeFileSync(configPath, configFor(identity));
@@ -428,16 +429,20 @@ async function main(): Promise<number> {
         detail: runtimeOk ? appDetail : `${destroyFailures.join('; ')}; ${appDetail}`,
       });
 
-      const workerDelete = wrangler(['delete', '--name', identity.workerName, '--force'], true);
-      const workerOk = provesAbsence(workerDelete);
+      const workerOk = deleteFixtureWorker(
+        ROOT,
+        configPath,
+        identity.workerName,
+        log,
+      );
       cleanup.push({
         gate: 'fixture-worker-absent',
         ok: workerOk,
-        detail: workerDelete.slice(0, 240),
+        detail: `worker deletion proof ${workerOk ? 'passed' : 'failed'}`,
       });
 
       const bucketDelete = wrangler(['r2', 'bucket', 'delete', identity.bucketName], true);
-      const bucketOk = provesAbsence(bucketDelete);
+      const bucketOk = wranglerProvesAbsence(bucketDelete);
       bucketProofs.push(bucketOk);
       cleanup.push({
         gate: 'bucket-deleted',

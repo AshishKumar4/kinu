@@ -29,6 +29,7 @@ import type { CaptureCapabilityReport } from '../../../packages/devbox/src/captu
 import {
   accountId,
   awaitTokenAccepted,
+  containerApplicationName,
   containerAppIds,
   delay,
   deleteContainerApps,
@@ -76,7 +77,7 @@ export function planLiveRun(): LiveRunPlan {
     workerName,
     image: PROBE_SANDBOX_IMAGE,
     imageRunIdentity: `${runId}:${PROBE_SANDBOX_IMAGE}`,
-    containerAppName: `${workerName}-captureprobebox`,
+    containerAppName: containerApplicationName(workerName, 'CaptureProbeBox'),
     token: `capture-probe-${crypto.randomUUID()}`,
     configPath: join(dir, 'wrangler.json'),
   };
@@ -340,8 +341,11 @@ async function measure(deps: LiveRunDeps, plan: LiveRunPlan, origin: string): Pr
     body: JSON.stringify({ source: deps.readProbeSource() }),
     signal: AbortSignal.timeout(240_000),
   });
-  if (!response.ok) throw new Error(`probe request failed with status ${response.status}`);
-  const reply = parseProbeReply(await response.text());
+  const responseText = await response.text();
+  if (!response.ok) {
+    throw new Error(`probe request failed with status ${response.status}: ${responseText.slice(0, 500)}`);
+  }
+  const reply = parseProbeReply(responseText);
   if (reply.exitCode !== 0) {
     throw new Error(`in-container probe exited ${reply.exitCode}: ${reply.stderr.slice(-400)}`);
   }

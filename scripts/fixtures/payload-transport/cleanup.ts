@@ -78,19 +78,6 @@ export interface CleanupVerdict {
   readonly steps: readonly CleanupEvidence[];
 }
 
-/**
- * Whether a wrangler deletion output PROVES absence. Only an explicit
- * not-found/already-deleted response counts. A WRANGLER_FAILED prefix alone
- * proves NOTHING — it wraps auth errors, network failures, and API faults
- * identically — so treating it as "gone" would let a live resource read as
- * clean. Callers pass the full output; the explicit phrases below are the ones
- * Cloudflare's CLI actually prints for absent resources.
- */
-export function provesAbsence(output: string): boolean {
-  if (!output.startsWith('WRANGLER_FAILED')) return true; // success output = deleted
-  const lowered = output.toLowerCase();
-  return lowered.includes('not found') || lowered.includes('could not find') || lowered.includes('already deleted') || lowered.includes('does not exist');
-}
 
 /**
  * Evaluate the teardown evidence against the gate list. AGGREGATION RULE: a

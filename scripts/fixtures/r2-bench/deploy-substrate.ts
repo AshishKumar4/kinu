@@ -86,6 +86,14 @@ export interface WranglerOptions {
  *  without a second error channel. */
 export const WRANGLER_FAILED = 'WRANGLER_FAILED';
 
+const EXPLICIT_ABSENCE = /(?:not found|could not find|already deleted|does not exist|script_not_found|code:\s*100(?:07|21))/i;
+
+/** A successful deletion or an explicit not-found response proves absence.
+ * Authentication, account-selection, transport and server failures do not. */
+export function wranglerProvesAbsence(output: string): boolean {
+  return !output.startsWith(WRANGLER_FAILED) || EXPLICIT_ABSENCE.test(output);
+}
+
 export function runWrangler(
   repoRoot: string,
   args: readonly string[],
@@ -105,6 +113,11 @@ export function runWrangler(
     throw new Error(`wrangler ${args.join(' ')} failed: ${detail}`, { cause: error });
   }
 }
+/** Cloudflare derives a container application name from Worker and DO class. */
+export function containerApplicationName(workerName: string, className: string): string {
+  return `${workerName}-${className.toLowerCase()}`;
+}
+
 
 /**
  * Container applications matching `names`, by id.
@@ -154,11 +167,11 @@ export function deleteContainerApps(
   if (found.length === 0) return ['absent'];
   return found.map((app) => {
     const deleted = runWrangler(repoRoot, ['containers', 'delete', app.id], { allowFailure: true });
-    if (deleted.startsWith(WRANGLER_FAILED)) {
+    if (!wranglerProvesAbsence(deleted)) {
       log(`WARNING: container application ${app.name} (${app.id}) was NOT deleted`);
       return `${app.name}: FAILED`;
     }
-    return `${app.name}: deleted`;
+    return `${app.name}: absent`;
   });
 }
 
@@ -175,17 +188,28 @@ export function deleteFixtureWorker(
   configPath: string,
   workerName: string,
   log: (message: string) => void,
+  wrangle: typeof runWrangler = runWrangler,
 ): boolean {
-  let deleted = runWrangler(repoRoot, ['delete', '--config', configPath, '--force'], { allowFailure: true });
-  if (deleted.startsWith(WRANGLER_FAILED)) {
-    log(`delete --config failed, falling back to --name: ${deleted.slice(0, 160)}`);
-    deleted = runWrangler(repoRoot, ['delete', '--name', workerName, '--force'], { allowFailure: true });
+  const configured = wrangle(
+    repoRoot,
+    ['delete', '--config', configPath, '--force'],
+    { allowFailure: true },
+  );
+  if (!configured.startsWith(WRANGLER_FAILED)) {
+    log('fixture Worker deleted');
+    return true;
   }
-  if (deleted.startsWith(WRANGLER_FAILED)) {
-    log(`WARNING: the fixture Worker was NOT deleted. Remove it by hand: ${deleted.slice(0, 300)}`);
+  log(`delete --config failed, falling back to --name: ${configured.slice(0, 160)}`);
+  const named = wrangle(
+    repoRoot,
+    ['delete', '--name', workerName, '--force'],
+    { allowFailure: true },
+  );
+  if (!wranglerProvesAbsence(named)) {
+    log(`WARNING: the fixture Worker was NOT deleted. Remove it by hand: ${named.slice(0, 300)}`);
     return false;
   }
-  log('fixture Worker deleted');
+  log('fixture Worker deleted or absent');
   return true;
 }
 

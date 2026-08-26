@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 import { PAYLOAD_ARMS, type PayloadArmId } from './fixtures/payload-transport/arms';
-import { CLEANUP_GATES, evaluateCleanup, EXIT_RESIDUE, exitFor, provesAbsence } from './fixtures/payload-transport/cleanup';
+import { CLEANUP_GATES, evaluateCleanup, EXIT_RESIDUE, exitFor } from './fixtures/payload-transport/cleanup';
 import { decideAll, judgeImage, LOOPBACK_RESIDENCY_NOTE, operationNeedsStart, SDK_THROUGHPUT_CLAIM_NOTE } from './fixtures/payload-transport/decision';
 import { isValidResourceName, runIdentity } from './fixtures/payload-transport/payload';
 import { renderMarkdown } from './fixtures/payload-transport/report';
@@ -16,6 +16,7 @@ import {
   type Cell,
 } from './fixtures/payload-transport/schema';
 import { mulberry32 } from './fixtures/payload-transport/container-harness';
+import { wranglerProvesAbsence } from './fixtures/r2-bench/deploy-substrate';
 
 const ROOT = join(dirname(new URL(import.meta.url).pathname));
 const FIXTURE_DIR = join(ROOT, 'fixtures/payload-transport');
@@ -84,6 +85,8 @@ describe('one owning DO with container lifecycle', () => {
     expect(workerSource).toContain("process.env.SANDBOX_VERSION ?? null");
     expect(workerSource).toContain(`'${EXPECTED_IMAGE}'`);
     expect(workerSource).toContain('writeFile(HARNESS_PATH, HARNESS_TS)');
+    expect(workerSource).toContain("{ prefix: '/' }");
+    expect(workerSource).toContain('await this.reconcileContainer()');
   });
   test('the bundled harness twin is byte-identical to the typed source', () => {
     const twin = readFileSync(join(FIXTURE_DIR, 'container-harness.bundle.txt'), 'utf8');
@@ -181,7 +184,7 @@ describe('disposable shutdown destroys and orders teardown', () => {
     const destroyLoop = driverSource.indexOf('for (const attempt of [1, 2]');
     const destroyCall = driverSource.indexOf("await call(origin, token, '/destroy'");
     const appDelete = driverSource.indexOf('deleteContainerApps(ROOT');
-    const workerDelete = driverSource.indexOf("'delete', '--name'");
+    const workerDelete = driverSource.indexOf('deleteFixtureWorker(');
     const bucketDelete = driverSource.indexOf("'r2', 'bucket', 'delete'");
     const configClear = driverSource.indexOf('rmSync(configPath');
     const twoPassLoop = driverSource.indexOf('for (let pass = 1; pass <= 2; pass += 1)');
@@ -285,10 +288,10 @@ describe('report honesty and cleanup admission', () => {
     expect(verdict.failedGates).toContain('container-application-absent');
   });
   test('only explicit absence proves a failed wrangler delete is clean', () => {
-    expect(provesAbsence('WRANGLER_FAILED: Authentication error')).toBe(false);
-    expect(provesAbsence('WRANGLER_FAILED: network timeout')).toBe(false);
-    expect(provesAbsence('WRANGLER_FAILED: Worker not found')).toBe(true);
-    expect(provesAbsence('deleted')).toBe(true);
+    expect(wranglerProvesAbsence('WRANGLER_FAILED: Authentication error')).toBe(false);
+    expect(wranglerProvesAbsence('WRANGLER_FAILED: network timeout')).toBe(false);
+    expect(wranglerProvesAbsence('WRANGLER_FAILED: Worker not found')).toBe(true);
+    expect(wranglerProvesAbsence('deleted')).toBe(true);
   });
   test('destroy or account-listing failure makes C3 residue even if another C3 row passes', () => {
     const base = CLEANUP_GATES.map((gate) => ({ gate: gate.name, ok: true, detail: 'clean' }));

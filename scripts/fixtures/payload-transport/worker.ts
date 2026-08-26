@@ -130,6 +130,10 @@ export class PayloadBenchSandbox extends Sandbox<Env> {
    */
   override async onStart(): Promise<void> {
     await super.onStart();
+    await this.reconcileContainer();
+  }
+
+  private async reconcileContainer(): Promise<void> {
     await this.exec('mkdir -p /tmp/payload-bench');
     const probe = await this.exec(
       `bun -e 'console.log(JSON.stringify({ imageVersion: process.env.SANDBOX_VERSION ?? null }))'`,
@@ -140,13 +144,13 @@ export class PayloadBenchSandbox extends Sandbox<Env> {
     if (actualVersion !== EXPECTED_IMAGE_VERSION) {
       throw new Error(`stale container image: running ${actualVersion ?? 'unreported'}, pinned ${EXPECTED_IMAGE_VERSION}`);
     }
-    this.runningImageVersion = actualVersion;
     await this.writeFile(HARNESS_PATH, HARNESS_TS);
     const ready = await this.exec('cd /tmp/payload-bench && bun --version', { timeout: 60_000 });
     if (ready.exitCode !== 0) throw new Error(`harness runtime not ready: ${ready.stderr.slice(0, 200)}`);
     const bucketName = this.env.BUCKET_NAME;
     if (bucketName === undefined) throw new Error('BUCKET_NAME is not configured');
-    await this.mountBucket(bucketName, `/mnt/${bucketName}`, { prefix: '' });
+    await this.mountBucket(bucketName, `/mnt/${bucketName}`, { prefix: '/' });
+    this.runningImageVersion = actualVersion;
   }
 
   async runtimeImageVersion(): Promise<string> {
@@ -155,8 +159,10 @@ export class PayloadBenchSandbox extends Sandbox<Env> {
     }
     return this.runningImageVersion;
   }
+
   async prepare(): Promise<string> {
     await this.exec('true', { timeout: 60_000 });
+    if (this.runningImageVersion === undefined) await this.reconcileContainer();
     return this.runtimeImageVersion();
   }
 

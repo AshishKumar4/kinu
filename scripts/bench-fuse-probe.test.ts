@@ -187,6 +187,7 @@ test('artifact writes are immutable and plan names the openat2 and cleanup proof
 
 const unitDeployment: Deployment = {
   workerName: 'kinu-fuse-probe-unittest',
+  containerAppName: 'kinu-fuse-probe-unittest-fuseprobebox',
   configPath: '/tmp/unittest-wrangler.jsonc',
   origin: 'https://kinu-fuse-probe-unittest.workers.dev',
   token: 'unit-token',
@@ -226,7 +227,7 @@ test('FuseProbeBox wiring: super-first onStart proof, typed mismatch, disposable
 test('driver waits for authenticated propagation before container setup', () => {
   const readiness = DRIVER_SOURCE.indexOf('await awaitFixtureReady(deployment.origin, token)');
   const setup = DRIVER_SOURCE.indexOf("await setupExec(deployment.origin, token, 'mkdir -p /tmp/fuse-probe')");
-  const identity = DRIVER_SOURCE.indexOf("'/identity'");
+  const identity = DRIVER_SOURCE.indexOf("'/prepare'");
   expect(readiness).toBeGreaterThan(-1);
   expect(setup).toBeGreaterThan(readiness);
   expect(identity).toBeGreaterThan(setup);
@@ -271,7 +272,12 @@ test('/destroy is the teardown route and /stop stays restart-evidence-only', asy
     writeFile: async () => undefined,
     stop: async () => { calls.push('stop'); },
     destroy: async () => { calls.push('destroy'); },
-    runIdentity: async () => undefined,
+    prepare: async () => ({
+      configuredImage: SANDBOX_IMAGE,
+      expectedVersion: SANDBOX_IMAGE_VERSION,
+      actualVersion: SANDBOX_IMAGE_VERSION,
+      actualVersionDigest: sha256Hex(new TextEncoder().encode(SANDBOX_IMAGE_VERSION)),
+    }),
   };
   expect((await handleProbeOp('/destroy', box, {})).status).toBe(200);
   expect(calls).toEqual(['destroy']);
@@ -279,7 +285,7 @@ test('/destroy is the teardown route and /stop stays restart-evidence-only', asy
   expect(calls).toEqual(['destroy', 'stop']);
 });
 
-test('/identity returns start evidence under the shared RunIdentity contract', async () => {
+test('/prepare returns evidence under the shared RunIdentity contract', async () => {
   const evidence = {
     configuredImage: SANDBOX_IMAGE,
     expectedVersion: SANDBOX_IMAGE_VERSION,
@@ -292,13 +298,13 @@ test('/identity returns start evidence under the shared RunIdentity contract', a
     writeFile: async () => undefined,
     stop: async () => undefined,
     destroy: async () => undefined,
-    runIdentity: async () => evidence,
+    prepare: async () => evidence,
   };
   const body = v.parse(
-    v.object({ identity: v.union([RunIdentitySchema, v.null()]) }),
-    await handleProbeOp('/identity', box, {}).then((response) => response.json()),
+    RunIdentitySchema,
+    await handleProbeOp('/prepare', box, {}).then((response) => response.json()),
   );
-  expect(v.parse(RunIdentitySchema, body.identity)).toEqual(evidence);
+  expect(body).toEqual(evidence);
 });
 
 test('/destroy tolerates only explicit absence; transport and server failures propagate', async () => {
@@ -433,7 +439,7 @@ test('a mismatched image identity censors every measured cell and names the mism
   // censorship, which exists for evidence captured on the WRONG platform.
   const unproven = composeFuseProbeArtifact({
     runId: 'unproven', startedAt: '2026-08-26T00:00:00.000Z', finishedAt: '2026-08-26T00:05:00.000Z',
-    workerName: 'kinu-fuse-probe-unproven', stage1: stage1(), failure: 'deploy died before /identity',
+    workerName: 'kinu-fuse-probe-unproven', stage1: stage1(), failure: 'deploy died before /prepare',
   });
   expect(unproven.identity).toBeUndefined();
   expect(unproven.stage1).toBeDefined();
