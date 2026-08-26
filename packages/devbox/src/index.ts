@@ -109,6 +109,7 @@ export {
   DURABILITY_OPERATION_PHASES,
   DURABLE_ROOT_FORMATS,
   ImmutableObjectRefSchema,
+  HeadPointerV1Schema,
   ObjectReceiptSchema,
   OperationRecordSchema,
   PayloadGrantSchema,
@@ -120,6 +121,7 @@ export {
 export type {
   DurabilityAwaitPoint,
   CapturedCut,
+  HeadPointerV1,
   ImmutableObjectRef,
   ObjectReceipt,
   OperationRecord,

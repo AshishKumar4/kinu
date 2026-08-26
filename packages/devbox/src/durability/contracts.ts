@@ -43,6 +43,13 @@ export const RootEnvelopeV1Schema = v.strictObject({
   rootObject: ImmutableObjectRefSchema,
 });
 export type RootEnvelopeV1 = v.InferOutput<typeof RootEnvelopeV1Schema>;
+export const HeadPointerV1Schema = v.strictObject({
+  version: v.literal(1),
+  rootEnvelopeId: Sha256Schema,
+  lastOperationId: IdSchema,
+});
+export type HeadPointerV1 = v.InferOutput<typeof HeadPointerV1Schema>;
+
 
 export const RestoreWorkSchema = v.strictObject({
   serialRemoteOps: CountSchema,
@@ -104,19 +111,40 @@ export const DURABILITY_OPERATION_KINDS = [
   'tick', 'barrier', 'gc', 'cleanup',
 ] as const;
 export const DURABILITY_OPERATION_PHASES = [
-  'intent', 'transferring', 'sealed', 'published', 'acknowledged', 'failed',
+  'intent', 'transferring', 'sealed', 'published', 'failed',
 ] as const;
-export const OperationRecordSchema = v.strictObject({
+const OperationBaseEntries = {
   operationId: IdSchema,
   kind: v.picklist(DURABILITY_OPERATION_KINDS),
   epoch: DecimalSchema,
   bootId: IdSchema,
   baseRevision: DecimalSchema,
   expectedParent: v.nullable(Sha256Schema),
-  phase: v.picklist(DURABILITY_OPERATION_PHASES),
-  currentAttemptId: v.nullable(IdSchema),
-  resultRootId: v.nullable(Sha256Schema),
-});
+};
+export const OperationRecordSchema = v.variant('phase', [
+  v.strictObject({ ...OperationBaseEntries, phase: v.literal('intent') }),
+  v.strictObject({
+    ...OperationBaseEntries,
+    phase: v.literal('transferring'),
+    attemptId: IdSchema,
+  }),
+  v.strictObject({
+    ...OperationBaseEntries,
+    phase: v.literal('sealed'),
+    attemptId: IdSchema,
+    resultRootId: Sha256Schema,
+  }),
+  v.strictObject({
+    ...OperationBaseEntries,
+    phase: v.literal('published'),
+    resultRootId: Sha256Schema,
+  }),
+  v.strictObject({
+    ...OperationBaseEntries,
+    phase: v.literal('failed'),
+    failureCode: IdSchema,
+  }),
+]);
 export type OperationRecord = v.InferOutput<typeof OperationRecordSchema>;
 
 /** Every external await where reset/re-drive behavior must be fault-injected. */

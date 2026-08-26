@@ -2,8 +2,10 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
   DURABILITY_AWAIT_POINTS,
+  DURABILITY_OPERATION_PHASES,
   CapturedCutSchema,
   ImmutableObjectRefSchema,
+  HeadPointerV1Schema,
   ObjectReceiptSchema,
   OperationRecordSchema,
   PayloadGrantSchema,
@@ -140,8 +142,8 @@ describe('durability v1 wire contracts', () => {
     }).cut).toBe('42');
   });
 
-  test('operation state is durable before its first external await', () => {
-    expect(v.parse(OperationRecordSchema, {
+  test('operation state stores only information independent of its phase', () => {
+    const intent = v.parse(OperationRecordSchema, {
       operationId: 'op-1',
       kind: 'tick',
       epoch: '7',
@@ -149,15 +151,88 @@ describe('durability v1 wire contracts', () => {
       baseRevision: '8',
       expectedParent: SHA,
       phase: 'intent',
-      currentAttemptId: null,
-      resultRootId: null,
-    }).phase).toBe('intent');
+    });
+    expect(intent.phase).toBe('intent');
+    expect(Object.keys(intent).sort()).toEqual([
+      'baseRevision', 'bootId', 'epoch', 'expectedParent', 'kind', 'operationId', 'phase',
+    ]);
+
+    const published = v.parse(OperationRecordSchema, {
+      operationId: 'op-1',
+      kind: 'tick',
+      epoch: '7',
+      bootId: 'boot-1',
+      baseRevision: '8',
+      expectedParent: SHA,
+      phase: 'published',
+      resultRootId: SHA,
+    });
+    expect(published.phase).toBe('published');
+    expect(v.parse(HeadPointerV1Schema, {
+      version: 1,
+      rootEnvelopeId: SHA,
+      lastOperationId: 'op-1',
+    })).toEqual({
+      version: 1,
+      rootEnvelopeId: SHA,
+      lastOperationId: 'op-1',
+    });
+    expect(() => v.parse(HeadPointerV1Schema, {
+      version: 1,
+      rootEnvelopeId: SHA,
+      lastOperationId: 'op-1',
+      parentRootId: SHA,
+    })).toThrow();
   });
 
-  test('the reset fault register has one unique name per external await', () => {
+  test('operation phase rejects redundant and impossible state', () => {
+    expect(() => v.parse(OperationRecordSchema, {
+      operationId: 'op-1',
+      kind: 'tick',
+      epoch: '7',
+      bootId: 'boot-1',
+      baseRevision: '8',
+      expectedParent: SHA,
+      phase: 'intent',
+      attemptId: 'unused-attempt',
+    })).toThrow();
+    expect(() => v.parse(OperationRecordSchema, {
+      operationId: 'op-1',
+      kind: 'tick',
+      epoch: '7',
+      bootId: 'boot-1',
+      baseRevision: '8',
+      expectedParent: SHA,
+      phase: 'sealed',
+      attemptId: 'attempt-1',
+    })).toThrow();
+  });
+
+  test('durable operation phases contain no response-only acknowledgement state', () => {
+    expect(DURABILITY_OPERATION_PHASES).toEqual([
+      'intent', 'transferring', 'sealed', 'published', 'failed',
+    ]);
+  });
+
+  test('the reset fault register exactly names every external await', () => {
+    expect(DURABILITY_AWAIT_POINTS).toEqual([
+      'issue-payload-grant',
+      'create-multipart',
+      'upload-multipart-part',
+      'complete-multipart',
+      'verify-upload',
+      'upload-root',
+      'publish-head',
+      'create-pin',
+      'renew-pin',
+      'release-pin',
+      'read-mark-page',
+      'complete-mark',
+      'retire-object',
+      'delete-retired-object',
+      'mount-root',
+      'cleanup-resource',
+    ]);
     expect(new Set(DURABILITY_AWAIT_POINTS).size).toBe(DURABILITY_AWAIT_POINTS.length);
-    expect(DURABILITY_AWAIT_POINTS).toContain('publish-head');
-    expect(DURABILITY_AWAIT_POINTS).toContain('delete-retired-object');
-    expect(DURABILITY_AWAIT_POINTS).toContain('cleanup-resource');
   });
 });
