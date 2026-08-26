@@ -634,10 +634,12 @@ function fakeContainer(upper: Map<string, UpperNode>, calls: string[]) {
       calls.push('scanUpper');
       return ok(`UPPER-OK:${Buffer.from(findOutput()).toString('base64')}`);
     }
-    if (command.startsWith('sh ') && command.includes('cas-digest.sh')) {
+    if (command.includes('cas-digest.sh')) {
       calls.push('digest');
-      const paths = command.split(' ').slice(2).map(unquote);
-      return ok(digestOutput(paths));
+      const paths = [...upper]
+        .filter(([, node]) => node.kind === 'file')
+        .map(([path]) => `${UPPER_DIR}/${path}`);
+      return ok(Buffer.from(digestOutput(paths)).toString('base64'));
     }
     if (command.includes('| head -c ') && command.includes('base64')) {
       const absolute = unquote(/test -f (\S+) &&/.exec(command)?.[1] ?? '');

@@ -355,10 +355,13 @@ function casShell(ports: OverlayCasPorts) {
     ));
     for (let at = 0; at < paths.length; at += DIGEST_BATCH) {
       const batch = paths.slice(at, at + DIGEST_BATCH);
-      const stdout = await must(
+      const digestCommand = `sh ${shellPath(DIGEST_SCRIPT_PATH)} `
+        + `${batch.map(shellPath).join(' ')} | base64 -w0`;
+      const encoded = await must(
         'digesting changed upper files',
-        `sh ${shellPath(DIGEST_SCRIPT_PATH)} ${batch.map(shellPath).join(' ')}`,
+        `bash -o pipefail -c ${shellPath(digestCommand)}`,
       );
+      const stdout = new TextDecoder().decode(decodeBase64(encoded.trim()));
       for (const [path, digest] of parseDigestStream(stdout)) digests.set(path, digest);
     }
     return digests;
