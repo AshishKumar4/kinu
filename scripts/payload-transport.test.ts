@@ -89,6 +89,8 @@ describe('one owning DO with container lifecycle', () => {
     expect(workerSource).toContain("mountBucket('BACKUP_BUCKET'");
     expect(workerSource).toContain('await this.reconcileContainer()');
     expect(workerSource).toContain('v.union([v.string(), v.number(), v.boolean()])');
+    expect(driverSource).toContain('http://r2.internal/BACKUP_BUCKET/');
+    expect(configSource).toContain('"SANDBOX_TRANSPORT": "rpc"');
     expect(workerSource).toContain('invalid request body');
   });
   test('the bundled harness twin is byte-identical to the typed source', () => {

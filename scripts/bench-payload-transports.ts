@@ -586,7 +586,7 @@ async function main(): Promise<number> {
           return judge(base, file, key, measured, 'owner-do');
         }
         if (arm === 'loopback-entrypoint') {
-          const url = `http://r2.internal/${identity.bucketName}/${key}`;
+          const url = `http://r2.internal/BACKUP_BUCKET/${key}`;
           const result = singleResult(
             await runOperation(liveOrigin, token, operationId, 'transfer', {
               mode: 'loopback', file: file.path, url, op,

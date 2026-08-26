@@ -751,6 +751,11 @@ interface MountSession {
   readonly bringUpMs: number;
   readonly attempts: AttemptRow[];
 }
+interface MountResult {
+  readonly session?: MountSession;
+  readonly attempts: AttemptRow[];
+}
+
 
 function awaitFile(path: string, timeoutMs: number): string {
   const deadline = Date.now() + timeoutMs;
@@ -761,7 +766,7 @@ function awaitFile(path: string, timeoutMs: number): string {
   throw new Error(`daemon did not publish ${path} within ${timeoutMs}ms`);
 }
 
-function mountReference(parent: string, wideEntries: number, options: { poisonChunk?: number; poisonDigest?: boolean } = {}): MountSession | undefined {
+function mountReference(parent: string, wideEntries: number, options: { poisonChunk?: number; poisonDigest?: boolean } = {}): MountResult {
   const root = mkdtempSync(join(parent, 'mount-'));
   const mountpoint = join(root, 'mnt');
   mkdirSync(mountpoint);
@@ -773,12 +778,36 @@ function mountReference(parent: string, wideEntries: number, options: { poisonCh
   });
   child.unref();
   const state = v.parse(DaemonStartSchema, JSON.parse(awaitFile(join(root, 'daemon-start.json'), 15_000)));
-  if (!state.mounted || state.pid === undefined) return undefined;
+  const attempts = state.attempts ?? [];
+  if (!state.mounted || state.pid === undefined) return { attempts };
+  const session: MountSession = {
+    root,
+    mountpoint,
+    pid: state.pid,
+    bringUpMs: nowMs() - bringUpStarted,
+    attempts,
+  };
   // A real first syscall proves the daemon answers; a successful mount table
   // entry alone could be a stuck mount whose server died before INIT.
-  const check = spawnSync('sh', ['-c', `ls ${JSON.stringify(mountpoint)} >/dev/null`], { timeout: 3_000 });
-  if (check.status !== 0) throw new Error(`mounted FUSE path did not answer ls (${check.status ?? 'signal'})`);
-  return { root, mountpoint, pid: state.pid, bringUpMs: nowMs() - bringUpStarted, attempts: state.attempts ?? [] };
+  const check = spawnSync('sh', ['-c', `ls ${JSON.stringify(mountpoint)} >/dev/null`], {
+    timeout: 3_000,
+    encoding: 'utf8',
+  });
+  if (check.status !== 0) {
+    removeSession(session, true);
+    return {
+      attempts: [
+        ...attempts,
+        {
+          label: 'first-ls',
+          route: 'direct-syscall',
+          ok: false,
+          detail: `status=${check.status ?? 'signal'} stderr=${check.stderr.slice(0, 300)}`,
+        },
+      ],
+    };
+  }
+  return { session, attempts };
 }
 
 function unmount(session: MountSession, forced = false): UnmountOutcome {
@@ -792,8 +821,8 @@ function unmount(session: MountSession, forced = false): UnmountOutcome {
   };
 }
 
-function removeSession(session: MountSession): UnmountOutcome {
-  const result = unmount(session);
+function removeSession(session: MountSession, forced = false): UnmountOutcome {
+  const result = unmount(session, forced);
   try {
     process.kill(session.pid, 'SIGTERM');
   } catch (error) {
@@ -944,8 +973,9 @@ function stage1(): Stage1Report {
   const parent = mkdtempSync(join(tmpdir(), 'fuse-probe-'));
   const censusResult = census();
   const openat2Result = runOpenat2();
-  const base = mountReference(parent, 2_000);
-  const mountAttempts = base?.attempts ?? [];
+  const baseResult = mountReference(parent, 2_000);
+  const base = baseResult.session;
+  const mountAttempts = baseResult.attempts;
   if (base === undefined) {
     const finishedAt = new Date().toISOString();
     const report: Stage1Report = {
@@ -972,7 +1002,7 @@ function stage1(): Stage1Report {
     const read = timed(() => readFileSync(join(base.mountpoint, 'hello.txt'))).ms;
     firstStatRead.push({ statMs: stat, readMs: read, bytes: 11 });
     for (const entries of [200, 2_000, 8_000]) {
-      const session: MountSession | undefined = entries === 2_000 ? base : mountReference(parent, entries);
+      const session: MountSession | undefined = entries === 2_000 ? base : mountReference(parent, entries).session;
       if (session === undefined) continue;
       bootstrapSamples.push({ entries, ms: session.bringUpMs });
       if (session !== base) removeSession(session);
@@ -1009,7 +1039,7 @@ function stage1(): Stage1Report {
     const overlayRead = overlayComposed ? readFileSync(join(overlayRoot, 'merged', 'hello.txt'), 'utf8') === 'fuse probe\n' : undefined;
     if (overlayComposed) umount2(join(overlayRoot, 'merged'), 0);
 
-    const poisoned = mountReference(parent, 2_000, { poisonChunk: 3 });
+    const poisoned = mountReference(parent, 2_000, { poisonChunk: 3 }).session;
     let refused = false; let servedWrongBytes = false; let poisonErrno: string | undefined;
     if (poisoned !== undefined) {
       try {
@@ -1018,7 +1048,7 @@ function stage1(): Stage1Report {
       } catch (error) { refused = true; poisonErrno = error instanceof Error ? errorCode(error) : undefined; }
       removeSession(poisoned);
     }
-    const badDigest = mountReference(parent, 2_000, { poisonDigest: true });
+    const badDigest = mountReference(parent, 2_000, { poisonDigest: true }).session;
     let digestRefused = false; let digestErrno: string | undefined;
     if (badDigest !== undefined) {
       try { readFileSync(join(badDigest.mountpoint, 'bad-digest.bin')); } catch (error) { digestRefused = true; digestErrno = error instanceof Error ? errorCode(error) : undefined; }
@@ -1048,7 +1078,8 @@ function stage2(): Stage2Report {
   const startedAt = new Date().toISOString(); const attemptId = randomUUID();
   const parent = mkdtempSync(join(tmpdir(), 'fuse-probe-restart-'));
   const priorInstanceMountLines = mountLines('fuse-probe');
-  const session = mountReference(parent, 1_000);
+  const sessionResult = mountReference(parent, 1_000);
+  const session = sessionResult.session;
   if (session === undefined) {
     return {
       stage: 'stage2', attemptId, startedAt, finishedAt: new Date().toISOString(),

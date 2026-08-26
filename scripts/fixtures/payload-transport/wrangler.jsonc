@@ -12,6 +12,7 @@
   "compatibility_date": "2025-12-01",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
+  "vars": { "SANDBOX_TRANSPORT": "rpc" },
   "observability": { "enabled": true },
   "rules": [
     { "type": "Text", "globs": ["**/container-harness.bundle.txt"], "fallthrough": true }

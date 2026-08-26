@@ -98,7 +98,7 @@ export function parseReport(raw: string): CaptureCapabilityReport {
 
 function decideFromReport(report: CaptureCapabilityReport): ProbeVerdict {
   const decision = decideCaptureMechanism(report);
-  console.log(JSON.stringify(decision, null, 2));
+  console.log(JSON.stringify({ report, decision }, null, 2));
   return { verdict: decision.verdict === 'no-go' ? 'no-go' : 'capable' };
 }
 
