@@ -17,6 +17,7 @@ export {
 export {
   fileChunkStream,
   foldJournalIntoTree,
+  readManifest,
   replayPending,
   stageBlobs,
   sweepOrphanBlobs,

@@ -1478,7 +1478,7 @@ describe('durable state bounds — named ceilings at the bound and one past', ()
 
   test('evicting a signature cannot resurrect an upper-only file after delete', async () => {
     const record = harness({ mountedAtStart: true, objects: 0, bytes: 0 });
-    for (let at = 0; at <= SIGNATURE_ROWS_MAX; at += 1) {
+    for (let at = 0; at <= SIGNATURE_ROWS_MAX + 1; at += 1) {
       record.upper.set(`p${at}`, {
         kind: 'file', mode: 0o644, mtimeMs: at + 1, content: fileBytes('x'),
       });
@@ -1500,6 +1500,12 @@ describe('durable state bounds — named ceilings at the bound and one past', ()
     expect(record.store.objects.has('tree/p0')).toBe(false);
     expect(await listJournalAfter(record.store, await readFoldedSeq(record.store)))
       .toEqual([]);
+    const journalPutsAfterFold = record.store.writes
+      .filter(write => write.startsWith('put:journal/')).length;
+    const unchangedAfterFold = await checkpointOf(record, 'tick');
+    expect(unchangedAfterFold.kind).toBe('skipped');
+    expect(record.store.writes.filter(write => write.startsWith('put:journal/')))
+      .toHaveLength(journalPutsAfterFold);
   }, 30_000);
 
   test('overlayCasStateBytes crosses OVERLAY_CAS_STATE_MAX_BYTES at a measurable boundary',
@@ -1697,5 +1703,25 @@ describe('discard clears activation caches', () => {
     const after = await storage.checkpoint('tick');
     expect(after.kind).toBe('committed');
     expect(after.movedBytes).toBeGreaterThan(0);
+  });
+});
+
+describe('manifest-backed blob reuse', () => {
+  test('a metadata-only rewrite skips R2 HEAD for a manifest-reachable blob', async () => {
+    const record = harness({ mountedAtStart: true, objects: 0, bytes: 0 });
+    record.upper.set('reuse.txt', {
+      kind: 'file', mode: 0o644, mtimeMs: 1, content: fileBytes('same bytes'),
+    });
+    expect((await checkpointOf(record, 'quiesce')).kind).toBe('committed');
+    const headCalls = record.store.counters.headCalls;
+
+    record.upper.set('reuse.txt', {
+      kind: 'file', mode: 0o644, mtimeMs: 2, content: fileBytes('same bytes'),
+    });
+    const quiesce = await checkpointOf(record, 'quiesce');
+
+    expect(quiesce.kind).toBe('committed');
+    expect(quiesce.movedBytes).toBe(0);
+    expect(record.store.counters.headCalls).toBe(headCalls);
   });
 });

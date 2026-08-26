@@ -32,37 +32,6 @@
  *   After fold, a restore replayed 0 entries and fetched 720 B (cursor +
  *   manifest). A rename uploaded 0 content bytes (blob reuse).
  *
- * ── THE VERDICT, DEPLOYED, 2026-08-25 ───────────────────────────────────────
- *
- * NOT THE DEFAULT. `snapshot-chain` is. This strategy is RETAINED as a
- * selectable one, and the honest reason is narrow: on the measured corpus it
- * wins nothing.
- *
- * The O(pending) claim HELD in deployment — and so did the incumbent's. Same
- * corpus, same segment, bytes moved per tick:
- *
- *     240 KiB edit      chain 4,096 B | r2fs 4,096 B | overlay-cas 4,096 B
- *     ~9.8 MiB commits  chain 8.78 MiB           | overlay-cas 8.73 MiB
- *     ~6.4 MiB rewrite  chain 2.30 MiB           | overlay-cas 2.30 MiB
- *
- * A 240 KiB edit costs one block here, which is the property this design was
- * built for. The chain reaches the same number to the byte, so wall time came
- * out at ~1.29x against a 10x bar. There is no asymptotic gap to find, not
- * because this arm fails to be O(p) but because the thing it was meant to
- * improve on is already O(p) once its rebase cadence keeps c near p.
- *
- * WHERE IT IS STILL THE RIGHT CHOICE, and this is UNMEASURED — recorded as a
- * hypothesis, not a result: the long-lived box, where rebase cadence CANNOT
- * hold c near p. The chain's attach pays the cumulative changed-set since its
- * base; this one pays the pending set since the last fold, and a fold is
- * cheap and frequent. That difference only appears in a regime this corpus
- * never entered, so nobody should cite these numbers as evidence for it.
- *
- * An earlier reading of the bench reported a 2,351x write amplification here.
- * It was an artifact of differencing a CUMULATIVE held-bytes field as though
- * it were per-tick, retracted by the instrument's owner. Recorded because the
- * retraction is the reason this file was not rewritten to chase a defect that
- * did not exist.
  */
 
 
@@ -856,10 +825,9 @@ export function overlayCasStorage(ports: OverlayCasPorts): DevboxStorage {
         );
       }
 
-      // Per-checkpoint only. Durable known-blob state can outlive a GC delete
-      // across a crash and falsely suppress the next PUT; HEAD/PUT is the
-      // authority across checkpoints, while this set deduplicates one batch.
-      const known = new Set<string>();
+      // The manifest plus pending journal is the exact reachable set. Fold
+      // invalidates this cache before GC can delete anything it names.
+      const known = pendingState.blobHashes();
       const countersBefore = { ...store.counters };
       let journalBytesPut = 0;
       // Journal objects are written PER BATCH, inside commitBatch, so they land
@@ -928,8 +896,8 @@ export function overlayCasStorage(ports: OverlayCasPorts): DevboxStorage {
         }
         // The off-hot-path sweep, exactly as the Lean model states it: list the
         // prefix, delete what neither the manifest nor a pending entry reaches.
-        const swept = await sweepOrphanBlobs(store);
         pendingState.folded();
+        const swept = await sweepOrphanBlobs(store);
         ports.log(
           `${DEVBOX_WORKDIR} quiesce folded ${folded.foldedEntries} entries `
           + `(${folded.treeWrites} writes, ${folded.treeDeletes} deletes); swept `

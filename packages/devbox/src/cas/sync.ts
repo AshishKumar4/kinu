@@ -396,7 +396,7 @@ function deepestFirst(
     .sort((a, b) => b.split('/').length - a.split('/').length || (a < b ? 1 : -1));
 }
 
-async function readManifest(store: CasStore): Promise<Map<string, PresentEntry>> {
+export async function readManifest(store: CasStore): Promise<Map<string, PresentEntry>> {
   const bytes = await store.get(KEY_MANIFEST);
   const manifest = new Map<string, PresentEntry>();
   if (bytes === null) return manifest;
