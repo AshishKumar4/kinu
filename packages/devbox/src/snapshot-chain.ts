@@ -525,7 +525,7 @@ function chainShell(exec: ContainerExec) {
     unmountPath: async (path: string): Promise<void> => {
       await exec(
         `while grep -qs ${shellPath(` ${path} `)} /proc/mounts; do `
-          + `/usr/bin/fusermount3 -uz ${shellPath(path)} 2>/dev/null || true; sleep 0.1; done`,
+          + `/usr/bin/fusermount3 -u ${shellPath(path)} 2>/dev/null || true; sleep 0.1; done`,
       );
     },
     /**

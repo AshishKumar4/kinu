@@ -115,7 +115,7 @@ function shellLabel(
       stdout: missingPaths.includes(exists) ? 'no' : 'yes',
     };
   }
-  const unmounted = /fusermount3 -uz '(?<path>[^']+)'/.exec(command)?.groups?.path;
+  const unmounted = /fusermount3 -u(?:z)? '(?<path>[^']+)'/.exec(command)?.groups?.path;
   if (unmounted !== undefined) return { call: `unmountPath:${unmounted}`, stdout: '' };
   const layer = /squashfuse '(?<archive>[^']+)' '(?<point>[^']+)'/.exec(command)?.groups;
   if (layer !== undefined) {
