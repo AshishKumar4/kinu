@@ -1379,7 +1379,8 @@ describe('the stale bystander rule — unjournalled paths stay detectable', () =
     const outcome = await checkpointOf(record, 'quiesce');
     // The stale file aborts its WHOLE batch (stageBlobs stops there), so this
     // quiesce journalled none of the three changes.
-    expect(outcome.kind).toBe('committed');
+    expect(outcome.kind).toBe('failed');
+    expect(outcome.reason).toContain('changed while their checkpoint chunks were read');
     // The sweep reclaimed the blob staging uploaded before the stale stop;
     // nothing durable names any of the three changes.
     expect([...record.store.objects.keys()].filter(k => k.startsWith('blobs/'))).toEqual([]);

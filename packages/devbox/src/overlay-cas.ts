@@ -875,6 +875,16 @@ export function overlayCasStorage(ports: OverlayCasPorts): DevboxStorage {
         },
       });
       pendingState.record(staged.staged);
+      if (staged.stalePaths.length > 0) {
+        if (kind === 'quiesce') await sweepOrphanBlobs(store);
+        pendingState.invalidate();
+        return await recordCheckpointFailure(
+          ports,
+          previous,
+          `${String(staged.stalePaths.length)} path(s) changed while their checkpoint `
+            + `chunks were read: ${staged.stalePaths.slice(0, 3).join(', ')}`,
+        );
+      }
       // Captured HERE, before the fold: the fold's tree, manifest and cursor
       // PUTs are the fold's own traffic, not bytes this staging moved.
       const movedBytes = store.counters.bytesPut - countersBefore.bytesPut - journalBytesPut;

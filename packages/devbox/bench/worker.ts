@@ -553,7 +553,7 @@ async function verify(
 ): Promise<{
   checks: Check[];
   passed: boolean;
-  transient?: 'container_replaced';
+  transient?: 'container_replaced' | 'checkpoint_changed';
 }> {
   const box = boxOf(env, strategy, name);
   const checks: Check[] = [];
@@ -599,6 +599,9 @@ async function verify(
     detail: `${base.kind} moved=${base.movedBytes ?? 'n/a'} held=${base.bytes ?? 0}B `
       + `${base.reason ?? ''}`.trim(),
   });
+  const checkpointChanged = (base.kind === 'failed'
+    && base.reason?.includes('changed while their checkpoint chunks were read') === true)
+    || (base.kind === 'committed' && base.movedBytes === 0);
   const generationAfter = (await box.exec('cat /tmp/devbox-boot-id 2>/dev/null || true'))
     .stdout.trim();
   const generationStable = generationBefore.length > 0 && generationAfter === generationBefore;
@@ -777,7 +780,9 @@ async function verify(
   return {
     checks,
     passed: checks.every(check => check.pass),
-    transient: generationStable ? undefined : 'container_replaced',
+    transient: !generationStable
+      ? 'container_replaced'
+      : checkpointChanged ? 'checkpoint_changed' : undefined,
   };
 }
 

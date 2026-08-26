@@ -439,7 +439,7 @@ interface VerifyReply {
   ok?: boolean;
   checks?: VerifyCheck[];
   passed?: boolean;
-  transient?: 'container_replaced';
+  transient?: 'container_replaced' | 'checkpoint_changed';
 }
 
 const VerifyReplySchema: v.GenericSchema<VerifyReply> = v.looseObject({
@@ -450,7 +450,7 @@ const VerifyReplySchema: v.GenericSchema<VerifyReply> = v.looseObject({
     detail: v.string(),
   }))),
   passed: v.optional(v.boolean()),
-  transient: v.optional(v.literal('container_replaced')),
+  transient: v.optional(v.picklist(['container_replaced', 'checkpoint_changed'])),
 });
 
 /** What an attach did. `kind` stays a free string rather than the fixture's
@@ -811,8 +811,8 @@ async function measureArm(
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
       verified = await call(fixture, 'POST', `/verify?box=${box}`, VerifyReplySchema, { strategy });
-      if (verified.transient === 'container_replaced' && attempt < attempts) {
-        log(`${strategy}: verify attempt ${attempt}/${attempts} crossed a container replacement; retrying`);
+      if (verified.transient !== undefined && attempt < attempts) {
+        log(`${strategy}: verify attempt ${attempt}/${attempts} hit ${verified.transient}; retrying`);
         await delay(attempt * 15_000);
         continue;
       }
