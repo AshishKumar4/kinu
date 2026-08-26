@@ -245,6 +245,8 @@ interface Options {
   /** Run the decisive experiment's three workloads and apply its decision rule.
    *  Off by default because it writes hundreds of megabytes per arm. */
   decisive: boolean;
+  /** Run durability verification and cleanup, without performance workloads. */
+  verifyOnly: boolean;
   plan: boolean;
   /** Arms to run, from `--arms a,b`. Defaults to all three; an unknown name
    *  refuses rather than measuring an empty run. */
@@ -807,6 +809,18 @@ async function measureArm(
     generationBeforeLadder: null, generationAfterLadder: null,
     treeBytes: {}, ops: null, teardown: null, notes,
   };
+  const teardown = async (): Promise<ArmResult> => {
+    if (result.teardown === null) {
+      result.teardown = await call(
+        fixture,
+        'POST',
+        `/teardown?box=${box}`,
+        TeardownReplySchema,
+        { purge: true, prefix: '', whole: true },
+      );
+    }
+    return result;
+  };
 
   log(`${strategy}: create (cold attach)`);
   let created: AttachReply = {};
@@ -858,12 +872,18 @@ async function measureArm(
       if (attempt > 1) notes.push(`verify needed ${attempt} attempts (cold container window)`);
       break;
     } catch (error) {
-      const timeout = error instanceof Error && /timed out|TimeoutError/i.test(`${error.name} ${error.message}`);
-      if (!timeout || attempt === attempts) throw error;
-      log(`${strategy}: verify attempt ${attempt}/${attempts} timed out on the cold container; retrying`);
+      const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+      const timeout = /timed out|TimeoutError/i.test(detail);
+      if (timeout && attempt < attempts) {
+        log(`${strategy}: verify attempt ${attempt}/${attempts} timed out; retrying`);
+        await delay(attempt * 15_000);
+        continue;
+      }
+      notes.push(`verify did not complete: ${detail.slice(0, 240)}`);
+      break;
     }
   }
-  if (verified === undefined) throw new Error(`${strategy}: verify returned nothing after ${attempts} attempts`);
+  if (verified === undefined) return await teardown();
   result.verifyChecks = verified.checks ?? [];
   result.verifyPassed = verified.passed === true;
   if (!result.verifyPassed) {
@@ -871,6 +891,7 @@ async function measureArm(
     const failed = result.verifyChecks.filter((c) => !c.pass).map((c) => `${c.name}: ${c.detail}`);
     notes.push(...failed.slice(0, 6));
   }
+  if (options.verifyOnly) return await teardown();
 
   await installHarness(fixture, box);
   await call(fixture, 'POST', `/ops/reset?box=${box}`, AckReplySchema);
@@ -954,9 +975,7 @@ async function measureArm(
 
   await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
   result.ops = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
-  result.teardown = await call(
-    fixture, 'POST', `/teardown?box=${box}`, TeardownReplySchema, { purge: true, prefix: '', whole: true },
-  );
+  await teardown();
 
   // RELEASE THE CONTAINER before the next arm starts.
   //
@@ -1322,6 +1341,7 @@ function parseOptions(argv: readonly string[]): Options {
     seed: Number.parseInt(value('seed', '20260824'), 10),
     budgetMs: Number.parseInt(value('budget-ms', '8000'), 10),
     decisive: argv.includes('--decisive'),
+    verifyOnly: argv.includes('--verify-only'),
     plan: argv.includes('--plan'),
     arms: value('arms', STRATEGIES.join(',')).split(',').map((raw): Strategy => {
       const arm = STRATEGIES.find((s) => s === raw.trim());
