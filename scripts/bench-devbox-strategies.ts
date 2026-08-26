@@ -480,6 +480,7 @@ interface VerifyReply {
   ok?: boolean;
   checks?: VerifyCheck[];
   passed?: boolean;
+  error?: string;
   transient?: 'container_replaced' | 'checkpoint_changed';
 }
 
@@ -491,6 +492,7 @@ const VerifyReplySchema: v.GenericSchema<VerifyReply> = v.looseObject({
     detail: v.string(),
   }))),
   passed: v.optional(v.boolean()),
+  error: v.optional(v.string()),
   transient: v.optional(v.picklist(['container_replaced', 'checkpoint_changed'])),
 });
 
@@ -862,12 +864,32 @@ async function measureArm(
   log(`${strategy}: verify`);
   let verified: v.InferOutput<typeof VerifyReplySchema> | undefined;
   for (let attempt = 1; attempt <= attempts; attempt++) {
+    verified = undefined;
     try {
-      verified = await call(fixture, 'POST', `/verify?box=${box}`, VerifyReplySchema, { strategy });
+      verified = await call(
+        fixture,
+        'POST',
+        `/verify?box=${box}`,
+        VerifyReplySchema,
+        { strategy },
+      );
       if (verified.transient !== undefined && attempt < attempts) {
         log(`${strategy}: verify attempt ${attempt}/${attempts} hit ${verified.transient}; retrying`);
         await delay(attempt * 15_000);
         continue;
+      }
+      if (verified.ok !== true || verified.checks === undefined) {
+        const error = verified.error ?? 'verify returned no checks';
+        const transient = /OperationInterrupted|container service is unreachable|no container instance|timed out|TimeoutError/i
+          .test(error);
+        if (transient && attempt < attempts) {
+          log(`${strategy}: verify attempt ${attempt}/${attempts} returned a transient error; retrying`);
+          await delay(attempt * 15_000);
+          continue;
+        }
+        notes.push(`verify did not complete: ${error.slice(0, 240)}`);
+        verified = undefined;
+        break;
       }
       if (attempt > 1) notes.push(`verify needed ${attempt} attempts (cold container window)`);
       break;
