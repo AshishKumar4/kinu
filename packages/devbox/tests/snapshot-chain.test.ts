@@ -161,6 +161,7 @@ function harness(overrides: {
   state?: ChainState | null;
   mounts?: string | (() => string);
   missingPaths?: readonly string[];
+  generations?: string[];
   entriesAfterExtract?: number;
   running?: boolean;
   change?: { status: ChangeStatus; version: string } | Error;
@@ -186,6 +187,7 @@ function harness(overrides: {
    *  the calls made so far without a forward reference to the harness. */
   calls?: string[];
 } = {}): Harness {
+  const generations = [...(overrides.generations ?? [])];
   const calls = overrides.calls ?? [];
   const objects = new Map<string, number>();
   let state = overrides.state ?? null;
@@ -251,6 +253,10 @@ function harness(overrides: {
         return Promise.reject(new Error('S3FS mount failed: fuse: device not found'));
       }
       return Promise.resolve({ stdout: label.stdout, stderr: '', exitCode: 0 });
+    },
+    containerGeneration: async () => {
+      if (generations.length > 1) return generations.shift();
+      return generations[0];
     },
     mountStore: (chainId) => {
       calls.push(`mountStore:${chainId}`);
@@ -1448,5 +1454,20 @@ describe('the skip-gate fingerprint keeps sub-second mtime', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('container replacement during chain attach', () => {
+  test('restarts the whole mount sequence on the replacement generation', async () => {
+    const calls: string[] = [];
+    const record = harness({
+      state: chainState(),
+      mounts: mountsAfterAttach(calls),
+      calls,
+      generations: ['generation-a', 'generation-b'],
+    });
+
+    expect((await attachOf(record)).kind).toBe('attached');
+    expect(record.calls.filter((call) => call.startsWith('mountStore:'))).toHaveLength(2);
   });
 });

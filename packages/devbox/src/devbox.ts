@@ -1433,6 +1433,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         return { status: checked.status as ChangeStatus, version: checked.version };
       },
       exec: async (command) => await this.#rawExec(command),
+      containerGeneration: async () => await this.#readBootId(),
       mountStore: async (chainId) => {
         await this.mountBucket(store.binding, CHAIN_STORE_MOUNT, {
           prefix: `/backups/${assertChainId(chainId)}`,

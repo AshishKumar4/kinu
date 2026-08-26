@@ -66,6 +66,13 @@ import {
  *  the container can see its own layers and nothing else. */
 export const CHAIN_STORE_MOUNT = '/backups';
 
+class ContainerChangedDuringAttach extends Error {
+  constructor() {
+    super('the container generation changed while snapshot-chain attached its lower layers');
+    this.name = 'ContainerChangedDuringAttach';
+  }
+}
+
 /**
  * Archive lifetime for the EXTRACTION path, and nowhere else.
  *
@@ -396,6 +403,8 @@ export interface SnapshotChainPorts {
    * run is not its business.
    */
   exec(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }>;
+  /** Ephemeral generation id, when the host can observe one. */
+  containerGeneration?(): Promise<string | undefined>;
   /** Mount this chain's store subtree read-only at `CHAIN_STORE_MOUNT`.
    *  Credentials never leave the Durable Object. */
   mountStore(chainId: string): Promise<void>;
@@ -716,7 +725,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     return { kind: 'attached', detail: `extract ${state.base.id}` };
   };
 
-  const attachChain = async (state: ChainState): Promise<AttachOutcome> => {
+  const attachChainOnce = async (state: ChainState): Promise<AttachOutcome> => {
+    const generation = await ports.containerGeneration?.();
     // Release any mount the SDK still believes it holds at this path before
     // asking for a new one. A previous container generation's entry survives in
     // that registry, and it refuses the mount rather than replacing it.
@@ -735,6 +745,16 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
         { cause: error },
       );
     }
+    const mountedGeneration = await ports.containerGeneration?.();
+    if (generation !== undefined && mountedGeneration !== generation) {
+      throw new ContainerChangedDuringAttach();
+    }
+    const mountedBase = `${CHAIN_STORE_MOUNT}/data.sqsh`;
+    if (!(await shell.pathExists(mountedBase))) {
+      throw new Error(
+        `chain ${state.base.id} store mount does not expose ${mountedBase}`,
+      );
+    }
     await shell.unmountPath(DEVBOX_WORKDIR);
     await shell.unmountPath(lowerBase);
     await shell.unmountPath(lowerDelta);
@@ -745,7 +765,15 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // re-creating its own path. Worse, had the mount ever been read-write,
     // rm -rf would have deleted the chain's archives through it.
     await shell.resetDirs([lowerBase, lowerDelta, upperDir, workDir]);
-    await shell.mountLayer(baseObjectKey(state.base.id), lowerBase);
+    try {
+      await shell.mountLayer(baseObjectKey(state.base.id), lowerBase);
+    } catch (error) {
+      const failedGeneration = await ports.containerGeneration?.();
+      if (mountedGeneration !== undefined && failedGeneration !== mountedGeneration) {
+        throw new ContainerChangedDuringAttach();
+      }
+      throw error;
+    }
 
     // An unreferenced but complete delta — a previous run crashed between the
     // atomic PUT and the state write — is adopted. See this file's header.
@@ -798,6 +826,17 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       kind: 'attached',
       detail: `chain ${state.base.id} ${bytes}B ${restored}`,
     };
+  };
+
+  const attachChain = async (state: ChainState): Promise<AttachOutcome> => {
+    for (;;) {
+      try {
+        return await attachChainOnce(state);
+      } catch (error) {
+        if (!(error instanceof ContainerChangedDuringAttach)) throw error;
+        ports.log(`container changed while chain ${state.base.id} attached; retrying on its replacement`);
+      }
+    }
   };
 
   /**
