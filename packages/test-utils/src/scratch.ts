@@ -65,6 +65,9 @@ import { join } from 'node:path';
 export const SCRATCH_PREFIXES = [
   'kinu-',
   'agent-core-',
+  'capture-probe-',
+  'devbox-digest-',
+  'fuse-probe-',
   'bench-external-',
   'cc-corpus-',
   'deploy-isolation-',
