@@ -36,14 +36,15 @@
  *   and polled for a sentinel.
  */
 
+import { execFileSync } from 'node:child_process';
 import {
   existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
-  WRANGLER_FAILED, armSignalTeardown, delay, deleteContainerApps, describeThrown,
-  publishTeardown, runTeardownOnce, runWrangler,
+  WRANGLER_FAILED, armSignalTeardown, containerAppIds, delay, deleteContainerApps,
+  describeThrown, publishTeardown, runTeardownOnce, runWrangler,
 } from './fixtures/r2-bench/deploy-substrate';
 import * as v from 'valibot';
 import { summarize, type Summary } from './fixtures/r2-bench/stats';
@@ -52,9 +53,16 @@ import {
   R2_CLASS_A_USD_PER_MILLION, R2_CLASS_B_USD_PER_MILLION, decide, opsAreBlind, sqliteFinding,
   totalsFor, type DecisionVerdict, type TickRecord,
 } from './fixtures/r2-bench/decision';
-
+import {
+  R2_OP_VOCABULARY, cleanupEvidenceFromReport, evaluateRun, findCredentialLeaks, refusalText,
+  requireAdmitted, type AdmissionVerdict, type ArmEvidence, type CleanupEvidence,
+  type StorageRunRecord,
+} from './fixtures/storage-matrix/admission';
+import {
+  checkCleanup, createManifest, replayTeardown, writeManifest,
+  type CleanupReport, type DeleteOutcome,
+} from './fixtures/storage-matrix/cleanup';
 /**
- * What `decisive.ts` prints. Parsed rather than cast, for the reason the whole
  * instrument now follows: a payload that disagreed with its contract used to
  * become a silent `undefined` and take a later segment down with it.
  */
@@ -251,8 +259,11 @@ interface Options {
   /** Arms to run, from `--arms a,b`. Defaults to all three; an unknown name
    *  refuses rather than measuring an empty run. */
   arms: readonly Strategy[];
-  /** Unique Durable Object suffix. A Worker redeploy does not delete DO
-   * storage, so fixed box names contaminate a later run with prior state. */
+  /** Leave every external resource in place for inspection. Deliberate, but
+   *  it means cleanup did not complete, so the run cannot recommend. */
+  keep: boolean;
+   /** Unique Durable Object suffix. A Worker redeploy does not delete DO
+    * storage, so fixed box names contaminate a later run with prior state. */
   runId: string;
   out: string;
 }
@@ -1114,7 +1125,7 @@ interface RunMeta {
   INCOMPLETE?: string;
 }
 
-function render(arms: readonly ArmResult[], meta: RunMeta): string {
+function render(arms: readonly ArmResult[], meta: RunMeta, admission: AdmissionVerdict): string {
   const out: string[] = [];
   out.push(`### Devbox storage strategies: ${STRATEGIES.map((id) => `\`${id}\``).join(' vs ')}`);
   out.push('');
@@ -1351,7 +1362,7 @@ function render(arms: readonly ArmResult[], meta: RunMeta): string {
 
   out.push('#### Recommendation');
   out.push('');
-  out.push(recommend(arms));
+  out.push(admission.admitted ? recommend(arms, admission) : refusalText(admission));
   out.push('');
   return out.join('\n');
 }
@@ -1364,7 +1375,8 @@ function render(arms: readonly ArmResult[], meta: RunMeta): string {
  * and a failed verify or an unverified wake disqualifies an arm outright, because
  * a fast number from a blank disk is worse than no number.
  */
-export function recommend(arms: readonly ArmResult[]): string {
+export function recommend(arms: readonly ArmResult[], admission: AdmissionVerdict): string {
+  requireAdmitted(admission);
   const ranked = arms.filter((arm) => arm.verifyPassed);
   if (ranked.length === 0) {
     return 'NO DEFAULT IS DERIVABLE FROM THIS RUN. No arm passed /verify, which means every arm '
@@ -1403,6 +1415,104 @@ export function recommend(arms: readonly ArmResult[]): string {
     + wakeNote;
 }
 
+/**
+ * The three shipped strategies are MANDATORY HISTORICAL CONTROLS, never
+ * production winners, so each preregisters the red witnesses its known defects
+ * must produce once the scaling/semantic cells exist. Observed witnesses may
+ * only come from those explicit cells — never from source assertions — and
+ * until they run, `observedRedChecks` stays empty and admission refuses.
+ */
+const CONTROL_WITNESSES = {
+  'snapshot-chain': ['cumulative-delta-seed', 'mutable-delta'],
+  'overlay-cas': ['unbounded-pending-replay', 'O(u)-scan'],
+  r2fs: ['open-write-loss', 'non-atomic-rename', 'POSIX-gap'],
+} as const satisfies Record<Strategy, readonly string[]>;
+
+/** The admission evidence one devbox arm contributes. Exported so the gate's
+ *  red tests can prove a current-only run cannot recommend without a deploy. */
+export function devboxArmEvidence(
+  arm: Pick<ArmResult, 'strategy' | 'verifyPassed' | 'verifyChecks' | 'phases' | 'checkpoints' | 'decisiveTicks'>,
+): ArmEvidence {
+  return {
+    arm: arm.strategy,
+    kind: 'control',
+    rankEligible: false,
+    expectedRedChecks: [...CONTROL_WITNESSES[arm.strategy]],
+    observedRedChecks: [],
+    attachedVerified: arm.verifyPassed,
+    semanticsPassed: arm.verifyPassed,
+    failedChecks: arm.verifyChecks.filter((check) => !check.pass).map((check) => check.name),
+    producedMeasurements: arm.phases.length > 0 || arm.checkpoints.length > 0 || arm.decisiveTicks.length > 0,
+  };
+}
+function devboxAdmission(
+  arms: readonly ArmResult[],
+  meta: RunMeta,
+  token: string,
+  cleanup: CleanupEvidence,
+): AdmissionVerdict {
+  const calls: Record<string, number> = {};
+  let classA = 0;
+  let classB = 0;
+  let classFree = 0;
+  let total = 0;
+  for (const arm of arms) {
+    if (arm.ops === null) continue;
+    classA += arm.ops.classA ?? 0;
+    classB += arm.ops.classB ?? 0;
+    classFree += arm.ops.classFree ?? 0;
+    total += arm.ops.total ?? 0;
+    for (const [name, count] of Object.entries(arm.ops.calls ?? {})) calls[name] = (calls[name] ?? 0) + count;
+  }
+  const accounting = arms.some((arm) => arm.ops !== null)
+    ? { source: 'fixture /ops tallies summed over arms', calls, classA, classB, classFree, total }
+    : null;
+  const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: REPO_ROOT, encoding: 'utf8' }).trim();
+  const record: StorageRunRecord = {
+    schema: 'storage-matrix/run@1',
+    provenance: {
+      runId: meta.worker,
+      commit,
+      startedAt: `${meta.date}T00:00:00.000Z`,
+      finishedAt: `${meta.date}T00:00:01.000Z`,
+      seed: meta.seed,
+      image: meta.image,
+      versions: { '@cloudflare/sandbox': meta.image },
+      containerFacts: `fixture Worker ${meta.worker}; per-arm lifecycle rows are in the artifact`,
+    },
+    arms: arms.map(devboxArmEvidence),
+    // This driver runs no fault-cut or security-cell instrumentation yet, so
+    // every G3/G4 field carries its REFUSING default: missing evidence is a
+    // refusal, never an implicit pass.
+    publication: {
+      readOnlyDeclared: false,
+      readOnlyRefusedWrites: null,
+      faultCutCompleted: false,
+      allOldOrAllNew: null,
+      barrierAckLoss: null,
+      absentReferences: null,
+      rollbackOrPhantomRoot: null,
+    },
+    security: {
+      credentialLeaks: findCredentialLeaks(JSON.stringify({ meta, arms }), [token]),
+      securityCellsComplete: false,
+      prefixEscapes: 0,
+      capabilityEscapesOrReplays: 0,
+      staleWriterAccepted: false,
+      hostileMetadataAccepted: false,
+    },
+    restore: [],
+    declaredStages: [],
+    cells: [],
+    confirmatoryPlan: null,
+    accounting,
+    cleanup,
+    deciding: [],
+    decidingBudgetMs: Number(meta['loop budget ms']),
+  };
+  return evaluateRun(record);
+}
+
 // ── main ────────────────────────────────────────────────────────────────────
 
 function parseOptions(argv: readonly string[]): Options {
@@ -1418,6 +1528,7 @@ function parseOptions(argv: readonly string[]): Options {
     decisive: argv.includes('--decisive'),
     verifyOnly: argv.includes('--verify-only'),
     plan: argv.includes('--plan'),
+    keep: argv.includes('--keep'),
     arms: value('arms', STRATEGIES.join(',')).split(',').map((raw): Strategy => {
       const arm = STRATEGIES.find((s) => s === raw.trim());
       if (arm === undefined) {
@@ -1453,28 +1564,93 @@ async function main(): Promise<number> {
   }
 
   const resources = createFixtureResources(options.runId);
+  const teardownManifest = createManifest(options.runId, [
+    { kind: 'worker', name: resources.worker, detail: 'per-run fixture Worker' },
+    ...resources.containerApps.map((name) => ({ kind: 'container-app' as const, name, detail: 'fixture container application' })),
+    { kind: 'r2-bucket', name: resources.bucket, detail: 'dedicated benchmark bucket' },
+    ...options.arms.flatMap((strategy) => {
+      const box = `ab-${strategy}-${options.runId}`;
+      return [
+        { kind: 'do-state' as const, name: box, detail: 'per-arm durable box state' },
+        { kind: 'alarm' as const, name: box, detail: 'per-arm durable alarm' },
+        { kind: 'mount' as const, name: box, detail: 'per-arm mounted workspace' },
+      ];
+    }),
+    { kind: 'local-path', name: dirname(resources.configPath), detail: 'generated Wrangler config directory' },
+  ]);
+  writeManifest(REPO_ROOT, teardownManifest);
   const token = `devbox-${crypto.randomUUID()}`;
   const arms: ArmResult[] = [];
   let stop: (() => readonly string[]) | null = null;
+  let cleanupReport: CleanupReport | null = null;
+  const cleanupErrors: string[] = [];
   let failure: string | null = null;
   publishTeardown(async (): Promise<void> => {
-    const statuses = (stop ?? (() => deleteFixtureResources(resources)))();
-    if (statuses.length > 0) log(`fixture resources: ${statuses.join(', ')}`);
-    if (statuses.some((status) => /failed/i.test(status))) {
-      failure ??= `Worker or container application cleanup failed: ${statuses.join(', ')}`;
+    if (options.keep) {
+      teardownManifest.kept = true;
+      writeManifest(REPO_ROOT, teardownManifest);
+      log('--keep left the Worker, container applications, bucket, and generated config in place');
+      return;
     }
-    const deleted = wrangler([
-      'r2', 'bucket', 'delete', resources.bucket,
-    ], { allowFailure: true });
-    const absent = /not found|does not exist/i.test(deleted);
-    if (deleted.startsWith(WRANGLER_FAILED) && !absent) {
-      const message = `bucket cleanup failed: ${deleted.slice(0, 240)}`;
-      failure ??= message;
-      log(message);
-    } else {
-      log(absent ? 'bucket already absent' : 'bucket deleted');
+    let workerStopped = false;
+    const replay = await replayTeardown(REPO_ROOT, teardownManifest, async (entry): Promise<DeleteOutcome> => {
+      if (entry.kind === 'worker') {
+        const statuses = (stop ?? (() => deleteFixtureResources(resources)))();
+        workerStopped = true;
+        if (statuses.length > 0) log(`fixture resources: ${statuses.join(', ')}`);
+        const failed = statuses.find((status) => /failed/i.test(status));
+        return failed === undefined ? { ok: true } : { ok: false, error: failed };
+      }
+      if (entry.kind === 'container-app') {
+        if (containerAppIds(REPO_ROOT, [entry.name], log).length === 0) return { ok: true, absent: true };
+        const statuses = deleteContainerApps(REPO_ROOT, [entry.name], log);
+        const failed = statuses.find((status) => /failed/i.test(status));
+        return failed === undefined ? { ok: true } : { ok: false, error: failed };
+      }
+      if (entry.kind === 'r2-bucket') {
+        const deleted = wrangler(['r2', 'bucket', 'delete', entry.name], { allowFailure: true });
+        if (!deleted.startsWith(WRANGLER_FAILED)) return { ok: true };
+        if (/not found|does not exist/i.test(deleted)) return { ok: true, absent: true };
+        return { ok: false, error: deleted.slice(0, 240) };
+      }
+      if (entry.kind === 'do-state' || entry.kind === 'alarm' || entry.kind === 'mount') {
+        return workerStopped ? { ok: true } : { ok: false, error: 'Worker must be deleted before its durable state' };
+      }
+      if (entry.kind === 'local-path') {
+        resources.disposeConfig();
+        return { ok: true };
+      }
+      return { ok: false, error: `unsupported teardown resource ${entry.kind}` };
+    });
+    if (replay.failures.length > 0) {
+      cleanupErrors.push(...replay.failures);
+      failure ??= `cleanup failed: ${replay.failures.join('; ')}`;
     }
-    resources.disposeConfig();
+    const cleanupCheck = await checkCleanup(REPO_ROOT, teardownManifest, {
+      workerAbsent: async (name) => {
+        const deleted = wrangler(['delete', '--name', name, '--force'], { allowFailure: true });
+        return !deleted.startsWith(WRANGLER_FAILED) || /not found|does not exist/i.test(deleted);
+      },
+      containerAppAbsent: async (name) => containerAppIds(REPO_ROOT, [name], log).length === 0,
+      bucketState: async (name) => {
+        const deleted = wrangler(['r2', 'bucket', 'delete', name], { allowFailure: true });
+        return !deleted.startsWith(WRANGLER_FAILED) || /not found|does not exist/i.test(deleted)
+          ? { absent: true, objects: 0, multipartResidue: 0 }
+          : { absent: false, objects: 1, multipartResidue: 0 };
+      },
+      boxStateEmpty: async () => workerStopped,
+      alarmAbsent: async () => workerStopped,
+      mountAbsent: async () => workerStopped,
+      localPathAbsent: async (path) => !existsSync(path),
+      processAbsent: async () => true,
+      counters: async () => ({ ...teardownManifest.counters }),
+    }, R2_OP_VOCABULARY);
+    cleanupReport = cleanupCheck;
+    if (!cleanupCheck.passed) {
+      cleanupErrors.push(...cleanupCheck.checks.filter((row) => !row.ok).map((row) => `${row.gate}: ${row.detail}`));
+      failure ??= 'cleanup admission checks failed';
+    }
+    if (!workerStopped) resources.disposeConfig();
   });
 
   try {
@@ -1482,7 +1658,12 @@ async function main(): Promise<number> {
     const started = await deployFixture(token, resources);
     stop = started.stop;
     for (const strategy of options.arms) {
-      arms.push(await measureArm(started.fixture, strategy, options));
+      const arm = await measureArm(started.fixture, strategy, options);
+      arms.push(arm);
+      for (const [name, count] of Object.entries(arm.ops?.calls ?? {})) {
+        teardownManifest.counters[name] = (teardownManifest.counters[name] ?? 0) + count;
+      }
+      writeManifest(REPO_ROOT, teardownManifest);
     }
   } catch (error) {
     failure = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
@@ -1499,12 +1680,31 @@ async function main(): Promise<number> {
     seed: String(options.seed),
     'loop budget ms': String(options.budgetMs),
   };
-  if (failure !== null) meta['INCOMPLETE'] = failure;
+  const multipartResidue = arms.some((arm) => arm.teardown?.emptyBucketGuaranteed === false) ? 1 : 0;
+  const cleanup: CleanupEvidence = options.keep || cleanupReport === null
+    ? {
+        attempted: !options.keep,
+        kept: options.keep,
+        workerAbsent: false,
+        runtimeAbsent: false,
+        bucketAndMultipartEmpty: false,
+        boxDurableStateEmpty: false,
+        localSecretsProcessesAbsent: false,
+        countersReconciled: false,
+        replayIdempotent: false,
+        multipartResidue,
+        errors: cleanupErrors,
+      }
+    : (() => {
+        const fromReport = cleanupEvidenceFromReport(cleanupReport);
+        return { ...fromReport, errors: [...fromReport.errors, ...cleanupErrors] };
+      })();
+  const admission = devboxAdmission(arms, meta, token, cleanup);
   mkdirSync(dirname(join(REPO_ROOT, options.out)), { recursive: true });
-  writeFileSync(join(REPO_ROOT, options.out), `${JSON.stringify({ meta, arms }, null, 2)}\n`);
-  process.stdout.write(`${render(arms, meta)}\n`);
+  writeFileSync(join(REPO_ROOT, options.out), `${JSON.stringify({ meta, arms, admission }, null, 2)}\n`);
+  process.stdout.write(`${render(arms, meta, admission)}\n`);
   log(`artifact written to ${options.out}`);
-  return failure === null ? 0 : 1;
+  return failure === null && (admission.admitted || options.keep) ? 0 : 1;
 }
 
 if (import.meta.main) process.exit(await main());

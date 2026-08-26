@@ -32,6 +32,8 @@ import {
   REJECTED_S3FS_OPTIONS, SDK_DEFAULT_R2_S3FS_OPTIONS, SDK_FORCED_S3FS_OPTIONS,
   TUNED_S3FS_OPTIONS, type LayoutId,
 } from './layouts';
+import { refusalText, requireAdmitted, type AdmissionVerdict } from '../storage-matrix/admission';
+
 
 export interface ProbeMetric {
   readonly name: string;
@@ -315,6 +317,8 @@ export interface RunArtifact {
   readonly layouts: readonly LayoutResult[];
   readonly teardown: Readonly<Record<string, number | string | boolean>>;
   readonly conditions: readonly string[];
+  /** The G0–G9 decision taken by the driver after its cleanup replay. */
+  readonly admission: AdmissionVerdict;
 }
 
 /** One metric, aggregated over every repetition of one arm. */
@@ -689,11 +693,16 @@ export function renderMarkdown(artifact: RunArtifact): string {
   lines.push('### Teardown');
   lines.push('');
   for (const [key, value] of Object.entries(artifact.teardown)) lines.push(`- ${key}: ${String(value)}`);
-  lines.push('');
 
   lines.push('### Recommendation');
   lines.push('');
-  lines.push(recommend(artifact, aggregates));
+  lines.push(
+    artifact.admission?.admitted === true
+      ? recommend(artifact, aggregates)
+      : artifact.admission === undefined
+        ? 'RECOMMENDATION REFUSED. This artifact carries no G0–G9 admission decision.'
+        : refusalText(artifact.admission),
+  );
   lines.push('');
   return lines.join('\n');
 }
@@ -711,6 +720,10 @@ export function recommend(
   artifact: RunArtifact,
   aggregates: LayoutAggregates,
 ): string {
+  if (artifact.admission === undefined) {
+    throw new Error('RECOMMENDATION REFUSED. This artifact carries no G0–G9 admission decision.');
+  }
+  requireAdmitted(artifact.admission);
   const native = aggregates.get('native');
   const uncached = aggregates.get('r2-uncached');
   const tuned = aggregates.get('r2-tuned');

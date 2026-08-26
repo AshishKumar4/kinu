@@ -1,0 +1,10 @@
+{
+  "schema": "storage-matrix/confirmatory@1",
+  "frozenAt": "2026-08-25",
+  "metric": "small-stat-1k-p50",
+  "direction": "lower-is-better",
+  "cells": [
+    { "tree": "T2", "change": "C4", "cache": "K2" },
+    { "tree": "T2", "change": "C10", "cache": "K3" }
+  ]
+}

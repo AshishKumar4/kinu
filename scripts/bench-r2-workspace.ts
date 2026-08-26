@@ -60,6 +60,7 @@ import {
   parseProbeRun, renderMarkdown, syncMeasurements, type DurabilityVerdict, type LayoutResult,
   type OpTally, type ProbeRun, type RunArtifact, type SyncMeasurement, type SyncOutcome,
 } from './fixtures/r2-bench/report';
+import { evaluateRun, recordFromR2Artifact } from './fixtures/storage-matrix/admission';
 
 const FIXTURE_DIR = join(dirname(new URL(import.meta.url).pathname), 'fixtures', 'r2-bench');
 const REPO_ROOT = dirname(dirname(new URL(import.meta.url).pathname));
@@ -1204,8 +1205,8 @@ async function main(): Promise<number> {
     );
   }
 
-  const artifact: RunArtifact = {
-    schema: 'r2-bench/run@1',
+  const artifactDraft = {
+    schema: 'r2-bench/run@1' as const,
     runId,
     startedAt,
     finishedAt: new Date().toISOString(),
@@ -1220,12 +1221,59 @@ async function main(): Promise<number> {
     teardown,
     conditions,
   };
+  // This driver observes only the bucket half of cleanup and the read-only
+  // probe; every other C-gate and fault-cut field has no instrumentation here,
+  // so it carries its REFUSING default rather than an assumed pass.
+  const readOnlyRefusedWrites = conditions.some((row) => row.includes('readOnly mount refuses writes: yes'));
+  const artifact: RunArtifact = {
+    ...artifactDraft,
+    admission: evaluateRun(recordFromR2Artifact(artifactDraft, {
+      declaredStages: [],
+      confirmatoryPlan: null,
+      cleanup: {
+        attempted: true,
+        kept: options.keep,
+        workerAbsent: false,
+        runtimeAbsent: false,
+        bucketAndMultipartEmpty: teardown.bucketDeleted === true
+          && teardown.objectsRemaining === 0
+          && teardown.purgeError === undefined
+          && !options.keep,
+        boxDurableStateEmpty: false,
+        localSecretsProcessesAbsent: teardown.generatedConfigRemoved === true,
+        countersReconciled: false,
+        replayIdempotent: false,
+        multipartResidue: 0,
+        errors: teardown.purgeError === undefined ? [] : [String(teardown.purgeError)],
+      },
+      deciding: [],
+      decidingBudgetMs: options.timeoutMs,
+      publication: {
+        readOnlyDeclared: true,
+        readOnlyRefusedWrites,
+        faultCutCompleted: false,
+        allOldOrAllNew: null,
+        barrierAckLoss: null,
+        absentReferences: null,
+        rollbackOrPhantomRoot: null,
+      },
+      security: {
+        credentialLeaks: [],
+        securityCellsComplete: false,
+        prefixEscapes: 0,
+        capabilityEscapesOrReplays: 0,
+        staleWriterAccepted: false,
+        hostileMetadataAccepted: false,
+      },
+      restore: [],
+    })),
+  };
 
   mkdirSync(dirname(join(REPO_ROOT, options.out)), { recursive: true });
   writeFileSync(join(REPO_ROOT, options.out), `${JSON.stringify(artifact, null, 2)}\n`);
   process.stdout.write(`${renderMarkdown(artifact)}\n`);
   log(`artifact written to ${options.out}`);
-  return failure === null ? 0 : 1;
+  return failure === null && (artifact.admission.admitted || options.keep) ? 0 : 1;
 }
 
 /** The provenance stamp on every number in the artifact: what produced them. */

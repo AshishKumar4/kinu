@@ -59,6 +59,14 @@ import {
   type DevboxStore,
   type DevboxStrategyName,
 } from '../src/index';
+import {
+  R2_CLASS_A_OPERATIONS as CLASS_A,
+  R2_CLASS_B_OPERATIONS as CLASS_B,
+  R2_CLASS_FREE_OPERATIONS as CLASS_FREE,
+  R2_OPERATION_NAMES as OP_NAMES,
+  type R2OperationName as OpName,
+  type R2OperationTally as OpTally,
+} from './r2-operations';
 
 interface BenchEnv {
   BACKUP_BUCKET: R2Bucket;
@@ -91,29 +99,6 @@ interface BenchEnv {
 //   `createMultipartUpload` RETURNED, not on the bucket. A wrapper that stops at
 //   the bucket reported two class-A operations for a phase that wrote 111 MiB.
 
-/** The R2 calls this fixture can make, by name. A closed set rather than an
- *  open dictionary: a name that is not here is a call nobody wrapped, and an
- *  open map would hide it instead of failing to compile. */
-const OP_NAMES = [
-  'head', 'get', 'put', 'delete', 'list',
-  'createMultipartUpload', 'resumeMultipartUpload', 'uploadPart', 'abort', 'complete',
-] as const;
-type OpName = (typeof OP_NAMES)[number];
-type OpTally = Partial<Record<OpName, number>>;
-
-/**
- * R2 operation classes, all three of them.
- *
- * Deletes and multipart aborts are free to bill, and that is exactly why they
- * get a class of their own rather than being counted and left out of the totals.
- * The small-file phases are dominated by create, stat, read and DELETE, and the
- * decision this benchmark feeds turns on small-file churn, so a free operation
- * has to be visible even though it costs nothing. `total` sums all three.
- */
-const CLASS_A: readonly OpName[] = ['put', 'list', 'createMultipartUpload',
-  'resumeMultipartUpload', 'uploadPart', 'complete'];
-const CLASS_B: readonly OpName[] = ['get', 'head'];
-const CLASS_FREE: readonly OpName[] = ['delete', 'abort'];
 
 /** How many counted calls may accumulate before the tally is pushed.
  *
@@ -256,13 +241,10 @@ function summarize(calls: OpTally): OpSummary {
   let classB = 0;
   let classFree = 0;
   let total = 0;
-  for (const name of OP_NAMES) {
-    const count = calls[name] ?? 0;
-    total += count;
-    if (CLASS_A.includes(name)) classA += count;
-    if (CLASS_B.includes(name)) classB += count;
-    if (CLASS_FREE.includes(name)) classFree += count;
-  }
+  for (const name of OP_NAMES) total += calls[name] ?? 0;
+  for (const name of CLASS_A) classA += calls[name] ?? 0;
+  for (const name of CLASS_B) classB += calls[name] ?? 0;
+  for (const name of CLASS_FREE) classFree += calls[name] ?? 0;
   return { calls, classA, classB, classFree, total };
 }
 

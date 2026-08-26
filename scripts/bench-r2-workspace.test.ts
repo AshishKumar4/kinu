@@ -21,6 +21,7 @@ import {
   HEADLINE_METRICS, aggregate, recommend, renderMarkdown, verdictTable,
   type LayoutAggregates, type LayoutResult, type ProbeRun, type RunArtifact,
 } from './fixtures/r2-bench/report';
+import { evaluateRun, recordFromR2Artifact } from './fixtures/storage-matrix/admission';
 
 describe('statistics the report is allowed to make', () => {
   test('an empty sample reports zero observations rather than a number', () => {
@@ -208,8 +209,7 @@ describe('the option sets say what they do', () => {
 });
 
 // ── renderer fixtures ───────────────────────────────────────────────────────
-
-function probeRun(values: { create: number; stat: number; p95?: number }): ProbeRun {
+function probeRun(values: { create: number; stat: number; p95?: number; fsync?: boolean }): ProbeRun {
   return {
     schema: 'r2-bench/probe@1',
     root: '/x',
@@ -237,7 +237,7 @@ function probeRun(values: { create: number; stat: number; p95?: number }): Probe
       ],
       verdicts: [
         { name: 'rename-file', holds: true, detail: 'moved' },
-        { name: 'fsync-directory', holds: values.stat < 5, detail: 'ENOTSUP' },
+        { name: 'fsync-directory', holds: values.fsync ?? values.stat < 5, detail: 'ENOTSUP' },
       ],
     }],
   };
@@ -266,8 +266,8 @@ function layout(id: LayoutResult['id'], reps: readonly ProbeRun[], extra: Partia
 }
 
 function artifactOf(layouts: readonly LayoutResult[]): RunArtifact {
-  return {
-    schema: 'r2-bench/run@1',
+  const artifact = {
+    schema: 'r2-bench/run@1' as const,
     runId: '20260824120000',
     startedAt: '2026-08-24T12:00:00.000Z',
     finishedAt: '2026-08-24T12:40:00.000Z',
@@ -276,11 +276,35 @@ function artifactOf(layouts: readonly LayoutResult[]): RunArtifact {
     mode: 'dev-remote',
     bucket: 'kinu-bench-r2fs',
     keyPrefix: 'bench/20260824120000/',
-    versions: { commit: 'abc1234', '@cloudflare/sandbox': '0.12.8' },
+    versions: { commit: 'abc1234', '@cloudflare/sandbox': '0.12.8', image: 'docker.io/cloudflare/sandbox:0.12.8' },
     containerFacts: 'Linux 6.6 x86_64\n2\nMemTotal: 6333952 kB',
     layouts,
     teardown: { objectsDeleted: 42, objectsRemaining: 0, bucketDeleted: true },
     conditions: ['readOnly mount refuses writes: yes'],
+  };
+  return {
+    ...artifact,
+    admission: evaluateRun(recordFromR2Artifact(artifact, {
+      declaredStages: [],
+      confirmatoryPlan: null,
+      cleanup: {
+        attempted: true, kept: false, workerAbsent: true, runtimeAbsent: true,
+        bucketAndMultipartEmpty: true, boxDurableStateEmpty: true,
+        localSecretsProcessesAbsent: true, countersReconciled: true,
+        replayIdempotent: true, multipartResidue: 0, errors: [],
+      },
+      deciding: [],
+      decidingBudgetMs: 30_000,
+      publication: {
+        readOnlyDeclared: false, readOnlyRefusedWrites: null, faultCutCompleted: true,
+        allOldOrAllNew: true, barrierAckLoss: 0, absentReferences: 0, rollbackOrPhantomRoot: false,
+      },
+      security: {
+        credentialLeaks: [], securityCellsComplete: true, prefixEscapes: 0,
+        capabilityEscapesOrReplays: 0, staleWriterAccepted: false, hostileMetadataAccepted: false,
+      },
+      restore: [],
+    })),
   };
 }
 
@@ -397,8 +421,8 @@ describe('the recommendation follows the numbers', () => {
   test('a metadata gap of orders of magnitude rejects R2-primary', () => {
     const layouts = [
       layout('native', [probeRun({ create: 1, stat: 0.5 })]),
-      layout('r2-uncached', [probeRun({ create: 400, stat: 60 })]),
-      layout('r2-tuned', [probeRun({ create: 200, stat: 30 })]),
+      layout('r2-uncached', [probeRun({ create: 400, stat: 60, fsync: true })]),
+      layout('r2-tuned', [probeRun({ create: 200, stat: 30, fsync: true })]),
     ];
     const verdict = recommend(artifactOf(layouts), aggregatesOf(layouts));
     expect(verdict).toContain('R2-PRIMARY IS REJECTED');
@@ -416,7 +440,7 @@ describe('the recommendation follows the numbers', () => {
   });
 
   test('without a native control nothing is recommended, because nothing has a denominator', () => {
-    const layouts = [layout('r2-uncached', [probeRun({ create: 400, stat: 60 })])];
+    const layouts = [layout('r2-uncached', [probeRun({ create: 400, stat: 60, fsync: true })])];
     const verdict = recommend(artifactOf(layouts), aggregatesOf(layouts));
     expect(verdict).toContain('no recommendation');
   });
@@ -427,8 +451,54 @@ describe('the recommendation follows the numbers', () => {
       // stat >= 5 makes the fixture's fsync-directory verdict false.
       layout('r2-uncached', [probeRun({ create: 400, stat: 60 })]),
     ];
-    const verdict = recommend(artifactOf(layouts), aggregatesOf(layouts));
-    expect(verdict).toContain('fsync-directory');
-    expect(verdict).toMatch(/incorrectly/);
+    expect(() => recommend(artifactOf(layouts), aggregatesOf(layouts))).toThrow('fsync-directory');
+  });
+
+  test('missing provenance and dirty teardown cannot call recommend', () => {
+    const layouts = [
+      layout('native', [probeRun({ create: 1, stat: 1 })]),
+      layout('r2-uncached', [probeRun({ create: 3, stat: 2 })]),
+    ];
+    const base = artifactOf(layouts);
+    const extras = {
+      declaredStages: [] as const,
+      confirmatoryPlan: null,
+      deciding: [],
+      decidingBudgetMs: 30_000,
+      publication: {
+        readOnlyDeclared: false, readOnlyRefusedWrites: null, faultCutCompleted: true,
+        allOldOrAllNew: true, barrierAckLoss: 0, absentReferences: 0, rollbackOrPhantomRoot: false,
+      },
+      security: {
+        credentialLeaks: [], securityCellsComplete: true, prefixEscapes: 0,
+        capabilityEscapesOrReplays: 0, staleWriterAccepted: false, hostileMetadataAccepted: false,
+      },
+      restore: [],
+    };
+    const cleanCleanup = {
+      attempted: true, kept: false, workerAbsent: true, runtimeAbsent: true,
+      bucketAndMultipartEmpty: true, boxDurableStateEmpty: true,
+      localSecretsProcessesAbsent: true, countersReconciled: true,
+      replayIdempotent: true, multipartResidue: 0, errors: [],
+    };
+    const missingDraft = { ...base, versions: { ...base.versions, commit: '' } };
+    const missingProvenance = {
+      ...missingDraft,
+      admission: evaluateRun(recordFromR2Artifact(missingDraft, {
+        ...extras,
+        cleanup: cleanCleanup,
+      })),
+    };
+    expect(() => recommend(missingProvenance, aggregatesOf(layouts))).toThrow('not a git revision');
+    expect(renderMarkdown(missingProvenance)).toContain('RECOMMENDATION REFUSED');
+
+    const dirtyTeardown = {
+      ...base,
+      admission: evaluateRun(recordFromR2Artifact(base, {
+        ...extras,
+        cleanup: { ...cleanCleanup, bucketAndMultipartEmpty: false, multipartResidue: 1 },
+      })),
+    };
+    expect(() => recommend(dirtyTeardown, aggregatesOf(layouts))).toThrow('multipart upload');
   });
 });
