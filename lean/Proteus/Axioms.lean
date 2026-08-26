@@ -15,6 +15,7 @@
 -/
 
 import Proteus
+import Proteus.Storage.DurableRoot
 
 /-! ## Proteus/Agent/FiberDurability.lean -/
 
@@ -515,3 +516,57 @@ import Proteus
 #print axioms Proteus.Exploration.Rebase.the_base_key_ignores_untouched_paths
 #print axioms Proteus.Exploration.Rebase.the_rebase_stops_at_the_stale_member
 #print axioms Proteus.Exploration.Rebase.re_verification_lets_the_whole_rebase_land
+
+/-! ## Proteus/Storage/DurableRoot.lean -/
+
+#print axioms Proteus.Storage.DurableRoot.await_point_register_is_total
+#print axioms Proteus.Storage.DurableRoot.await_point_register_has_sixteen
+#print axioms Proteus.Storage.DurableRoot.runOf_nil
+#print axioms Proteus.Storage.DurableRoot.runOf_cons
+#print axioms Proteus.Storage.DurableRoot.initial_safe
+#print axioms Proteus.Storage.DurableRoot.step_preserves_safe
+#print axioms Proteus.Storage.DurableRoot.run_preserves_safe
+#print axioms Proteus.Storage.DurableRoot.published_root_closure
+#print axioms Proteus.Storage.DurableRoot.monotone_fenced_head
+#print axioms Proteus.Storage.DurableRoot.run_monotone_fenced_head
+#print axioms Proteus.Storage.DurableRoot.single_operation_row
+#print axioms Proteus.Storage.DurableRoot.redrive_preserves_safe
+#print axioms Proteus.Storage.DurableRoot.redrive_idempotent
+#print axioms Proteus.Storage.DurableRoot.reset_at_every_await
+#print axioms Proteus.Storage.DurableRoot.reset_discards_activation_memory
+#print axioms Proteus.Storage.DurableRoot.redrive_after_every_reset_is_idempotent
+#print axioms Proteus.Storage.DurableRoot.stale_completion_garbage_only
+#print axioms Proteus.Storage.DurableRoot.on_start_idempotent
+#print axioms Proteus.Storage.DurableRoot.on_start_once_per_generation
+#print axioms Proteus.Storage.DurableRoot.restore_exact_head
+#print axioms Proteus.Storage.DurableRoot.restore_ignores_activation_memory
+#print axioms Proteus.Storage.DurableRoot.container_crash_preserves_durable_outcome
+#print axioms Proteus.Storage.DurableRoot.crash_during_sweep_leaks_only
+#print axioms Proteus.Storage.DurableRoot.pin_gc_noninterference
+#print axioms Proteus.Storage.DurableRoot.root_set_change_aborts_mark_sweep
+#print axioms Proteus.Storage.DurableRoot.idempotent_deletion
+#print axioms Proteus.Storage.DurableRoot.delete_preserves_closure
+#print axioms Proteus.Storage.DurableRoot.barrier_prefix_survives_crash
+#print axioms Proteus.Storage.DurableRoot.async_suffix_loss
+#print axioms Proteus.Storage.DurableRoot.payload_excluded_from_durable_view
+#print axioms Proteus.Storage.DurableRoot.payload_excluded_from_restore
+#print axioms Proteus.Storage.DurableRoot.unbounded_wait_counterexample
+#print axioms Proteus.Storage.DurableRoot.safety_has_no_unconditional_wall_clock_bound
+#print axioms Proteus.Storage.DurableRoot.collision_resistance_separates_objects
+#print axioms Proteus.Storage.DurableRoot.capture_sound_is_explicit
+#print axioms Proteus.Storage.DurableRoot.acknowledge_is_event_only
+#print axioms Proteus.Storage.DurableRoot.retry_reads_head
+#print axioms Proteus.Storage.DurableRoot.durable_intent_before_external_await
+#print axioms Proteus.Storage.DurableRoot.sealed_carries_only_verified_root_id
+#print axioms Proteus.Storage.DurableRoot.published_and_acknowledged_bind
+#print axioms Proteus.Storage.DurableRoot.gc_candidates_derive_from_two_manifests
+#print axioms Proteus.Storage.DurableRoot.unique_attempt_fence
+#print axioms Proteus.Storage.DurableRoot.container_mount_is_envelope_identity
+#print axioms Proteus.Storage.DurableRoot.omitted_intent_has_unsafe_witness
+#print axioms Proteus.Storage.DurableRoot.omitted_fence_has_unsafe_witness
+#print axioms Proteus.Storage.DurableRoot.omitted_pin_has_gc_witness
+#print axioms Proteus.Storage.DurableRoot.parent_before_child_has_unsafe_witness
+#print axioms Proteus.Storage.DurableRoot.acknowledgement_before_head_has_unsafe_witness
+#print axioms Proteus.Storage.DurableRoot.receipt_release_too_early_witness
+#print axioms Proteus.Storage.DurableRoot.root_set_race_witness
+#print axioms Proteus.Storage.DurableRoot.container_onstart_activation_memory_witness

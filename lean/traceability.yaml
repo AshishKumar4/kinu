@@ -999,3 +999,73 @@ requirements:
       - Snapshot-chain's tick is modelled as one atomic pointer commit; overlay-cas is modelled separately as a durable per-batch prefix, so exact equality is claimed only for the chain and an upper bound for overlay-cas
       - The wall-clock width is checkpoint cadence plus one in-flight operation, a scheduling fact the counter models do not see
       - A write is one unit; the models bound lost writes, and bytes follow from the implementation's whole-file fingerprints and fixed-size chunks
+  PR-DURABLE-001:
+    statement: The durable-root model separates external R2 state, one minimal DO control row, container lifecycle and activation memory; it covers all sixteen await points, reset-safe total actions, a HeadPointer resolving an immutable envelope, manifest-derived two-cycle GC candidacy, pin reachability, payload exclusion and the absence of a wall-clock safety theorem.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.Storage.DurableRoot.await_point_register_is_total
+      - Proteus.Storage.DurableRoot.await_point_register_has_sixteen
+      - Proteus.Storage.DurableRoot.runOf_nil
+      - Proteus.Storage.DurableRoot.runOf_cons
+      - Proteus.Storage.DurableRoot.initial_safe
+      - Proteus.Storage.DurableRoot.step_preserves_safe
+      - Proteus.Storage.DurableRoot.run_preserves_safe
+      - Proteus.Storage.DurableRoot.published_root_closure
+      - Proteus.Storage.DurableRoot.monotone_fenced_head
+      - Proteus.Storage.DurableRoot.run_monotone_fenced_head
+      - Proteus.Storage.DurableRoot.single_operation_row
+      - Proteus.Storage.DurableRoot.redrive_preserves_safe
+      - Proteus.Storage.DurableRoot.redrive_idempotent
+      - Proteus.Storage.DurableRoot.reset_at_every_await
+      - Proteus.Storage.DurableRoot.reset_discards_activation_memory
+      - Proteus.Storage.DurableRoot.redrive_after_every_reset_is_idempotent
+      - Proteus.Storage.DurableRoot.stale_completion_garbage_only
+      - Proteus.Storage.DurableRoot.on_start_idempotent
+      - Proteus.Storage.DurableRoot.on_start_once_per_generation
+      - Proteus.Storage.DurableRoot.restore_exact_head
+      - Proteus.Storage.DurableRoot.restore_ignores_activation_memory
+      - Proteus.Storage.DurableRoot.container_crash_preserves_durable_outcome
+      - Proteus.Storage.DurableRoot.crash_during_sweep_leaks_only
+      - Proteus.Storage.DurableRoot.pin_gc_noninterference
+      - Proteus.Storage.DurableRoot.root_set_change_aborts_mark_sweep
+      - Proteus.Storage.DurableRoot.idempotent_deletion
+      - Proteus.Storage.DurableRoot.delete_preserves_closure
+      - Proteus.Storage.DurableRoot.barrier_prefix_survives_crash
+      - Proteus.Storage.DurableRoot.async_suffix_loss
+      - Proteus.Storage.DurableRoot.payload_excluded_from_durable_view
+      - Proteus.Storage.DurableRoot.payload_excluded_from_restore
+      - Proteus.Storage.DurableRoot.unbounded_wait_counterexample
+      - Proteus.Storage.DurableRoot.safety_has_no_unconditional_wall_clock_bound
+      - Proteus.Storage.DurableRoot.collision_resistance_separates_objects
+      - Proteus.Storage.DurableRoot.capture_sound_is_explicit
+      - Proteus.Storage.DurableRoot.acknowledge_is_event_only
+      - Proteus.Storage.DurableRoot.retry_reads_head
+      - Proteus.Storage.DurableRoot.durable_intent_before_external_await
+      - Proteus.Storage.DurableRoot.sealed_carries_only_verified_root_id
+      - Proteus.Storage.DurableRoot.published_and_acknowledged_bind
+      - Proteus.Storage.DurableRoot.gc_candidates_derive_from_two_manifests
+      - Proteus.Storage.DurableRoot.unique_attempt_fence
+      - Proteus.Storage.DurableRoot.container_mount_is_envelope_identity
+      - Proteus.Storage.DurableRoot.omitted_intent_has_unsafe_witness
+      - Proteus.Storage.DurableRoot.omitted_fence_has_unsafe_witness
+      - Proteus.Storage.DurableRoot.omitted_pin_has_gc_witness
+      - Proteus.Storage.DurableRoot.parent_before_child_has_unsafe_witness
+      - Proteus.Storage.DurableRoot.acknowledgement_before_head_has_unsafe_witness
+      - Proteus.Storage.DurableRoot.receipt_release_too_early_witness
+      - Proteus.Storage.DurableRoot.root_set_race_witness
+      - Proteus.Storage.DurableRoot.container_onstart_activation_memory_witness
+    tsRefs:
+      - packages/devbox/src/durability/contracts.ts:17
+      - packages/devbox/src/durability/contracts.ts:24
+      - packages/devbox/src/durability/contracts.ts:35
+      - packages/devbox/src/durability/contracts.ts:58
+      - packages/devbox/src/durability/contracts.ts:101
+      - packages/devbox/src/durability/contracts.ts:119
+      - scripts/fixtures/storage-matrix/manifest.ts:43
+      - scripts/fixtures/storage-matrix/manifest.ts:44
+      - scripts/fixtures/storage-matrix/manifest.ts:50
+    remainingEvidence:
+      - The model is a single durable owner, so concurrent writers need a production conditional-write proof and fault test
+      - Atomic R2 PUT, read-after-write, atomic SQL transaction, capture soundness, collision resistance and grant confinement remain explicit premises rather than kernel axioms
+      - The await-name register is copied from the frozen contract because the current traceability gate has no registered mirror for DURABILITY_AWAIT_POINTS
+      - The model proves no unconditional deadline exists in its transition system, while deployment latency and provider limits require measured evidence

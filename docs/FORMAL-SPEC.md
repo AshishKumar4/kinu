@@ -34,12 +34,12 @@ requirements, checked in both directions.
 theorem it claims, so the same four words count twice over two totals. Name the
 denominator every time.
 
-By theorem, over 417: **327 `proved-in-abstract-model`**, **90
+By theorem, over 468: **378 `proved-in-abstract-model`**, **90
 `by-construction-witness`**. Near-definitional statements (nonnegativity of a
 `Nat` EMA score; a constructor cannot produce `SQLWrite`) are witnesses, not
 deep safety proofs.
 
-By requirement, over 47: **28 `proved-in-abstract-model`**, **13
+By requirement, over 49: **30 `proved-in-abstract-model`**, **13
 `by-construction-witness`**, **5 `specified-not-modeled`**, **1
 `trusted-model-assumption`**. Two statuses exist only in this total, because
 five requirements claim no theorem.
@@ -70,7 +70,7 @@ its `remainingEvidence`.
 ## Axiom boundary
 
 [`lean/Proteus/Axioms.lean`](../lean/Proteus/Axioms.lean) prints axioms for all
-417 published theorems; reports contain only kernel `propext`,
+468 published theorems; reports contain only kernel `propext`,
 `Classical.choice`, `Quot.sound`. One separate domain axiom,
 `Proteus.Storage.FTS5Search.fts5_indexed_findable`: an explicit trusted
 assumption about SQLite FTS5 completeness, enrolled by `PR-STORE-002`; no
