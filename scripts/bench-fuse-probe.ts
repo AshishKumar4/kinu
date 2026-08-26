@@ -261,6 +261,7 @@ export async function destroyRuntime(
   doFetch: FetchLike = fetch,
 ): Promise<void> {
   let detail: string;
+
   try {
     const raw = await sendJson(origin, token, '/destroy', {}, doFetch);
     if (raw.status >= 200 && raw.status < 300) return;
@@ -270,6 +271,23 @@ export async function destroyRuntime(
     detail = `/destroy unreachable: ${describeThrown({ cause: error })}`;
   }
   throw new Error(detail);
+}
+function parseExecReport<T>(
+  phase: 'stage1' | 'stage2',
+  result: ExecResponse,
+  schema: v.GenericSchema<T>,
+): T {
+  if (result.exitCode !== 0) {
+    throw new Error(`${phase} exited ${result.exitCode}: ${(result.stderr ?? '').slice(-800)}`);
+  }
+  try {
+    return parseProbeOutput(result.stdout ?? '', schema);
+  } catch (error) {
+    throw new Error(
+      `${phase} result invalid: ${describeThrown({ cause: error })}; stderr: ${(result.stderr ?? '').slice(-800)}`,
+      { cause: error },
+    );
+  }
 }
 
 async function deploy(runId: string, token: string): Promise<Deployment> {
@@ -502,14 +520,14 @@ export async function run(): Promise<FuseProbeArtifact> {
     await upload(deployment.origin, token, 'probe.ts');
 
     const first = await exec(deployment.origin, token, 'bun /tmp/fuse-probe/probe.ts stage1', 300_000);
-    stage1 = parseProbeOutput(first.stdout ?? '', Stage1ReportSchema);
+    stage1 = parseExecReport('stage1', first, Stage1ReportSchema);
     // The shared RangeReadIntent contract is parsed inside Stage1ReportSchema.
     // Reading this field makes the dependency explicit at the evidence boundary.
     if (stage1.rangeReads.some((record) => !record.verified)) throw new Error('reference range read returned bytes that failed its shared-contract digest');
 
     await stopAndProveRestart(deployment.origin, token);
     const second = await exec(deployment.origin, token, 'bun /tmp/fuse-probe/probe.ts stage2', 180_000);
-    stage2 = parseProbeOutput(second.stdout ?? '', Stage2ReportSchema);
+    stage2 = parseExecReport('stage2', second, Stage2ReportSchema);
   } catch (error) {
     failure = describeThrown({ cause: error });
   } finally {

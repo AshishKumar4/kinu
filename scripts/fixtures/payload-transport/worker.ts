@@ -149,7 +149,7 @@ export class PayloadBenchSandbox extends Sandbox<Env> {
     if (ready.exitCode !== 0) throw new Error(`harness runtime not ready: ${ready.stderr.slice(0, 200)}`);
     const bucketName = this.env.BUCKET_NAME;
     if (bucketName === undefined) throw new Error('BUCKET_NAME is not configured');
-    await this.mountBucket(bucketName, `/mnt/${bucketName}`, { prefix: '/' });
+    await this.mountBucket('BACKUP_BUCKET', `/mnt/${bucketName}`, { prefix: '/' });
     this.runningImageVersion = actualVersion;
   }
 

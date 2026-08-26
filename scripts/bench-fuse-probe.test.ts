@@ -232,6 +232,7 @@ test('driver waits for authenticated propagation before container setup', () => 
   expect(setup).toBeGreaterThan(readiness);
   expect(identity).toBeGreaterThan(setup);
   expect(DRIVER_SOURCE).toContain('did not return JSON: ${raw.text.slice(0, 300)}');
+  expect(DRIVER_SOURCE).toContain("stderr ?? '').slice(-800)");
 });
 
 

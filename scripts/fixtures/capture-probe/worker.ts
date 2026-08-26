@@ -89,7 +89,7 @@ export class CaptureProbeBox extends Sandbox<ProbeEnv> {
       `mkdir -p ${PROBE_DIR}`,
       `printf '%s' '${encoded}' | base64 -d > ${PROBE_DIR}/probe.ts`,
       `cd ${PROBE_DIR}`,
-      'exec bun probe.ts',
+      'bun probe.ts',
     ].join('\n'));
     const imageLine = result.stdout.split('\n').find((line) => line.startsWith('CAPTURE_IMAGE_VERSION:'));
     return {

@@ -86,6 +86,7 @@ describe('one owning DO with container lifecycle', () => {
     expect(workerSource).toContain(`'${EXPECTED_IMAGE}'`);
     expect(workerSource).toContain('writeFile(HARNESS_PATH, HARNESS_TS)');
     expect(workerSource).toContain("{ prefix: '/' }");
+    expect(workerSource).toContain("mountBucket('BACKUP_BUCKET'");
     expect(workerSource).toContain('await this.reconcileContainer()');
   });
   test('the bundled harness twin is byte-identical to the typed source', () => {

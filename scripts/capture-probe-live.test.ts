@@ -121,6 +121,7 @@ describe('the ephemeral live probe run', () => {
     expect(WORKER_SOURCE).toContain('await this.destroy()');
     expect(WORKER_SOURCE).toContain('await this.ctx.storage.deleteAll()');
     expect(WORKER_SOURCE).not.toContain('await box.stop()');
+    expect(WORKER_SOURCE).not.toContain('exec bun probe.ts');
     expect(WORKER_SOURCE).toContain('probe RPC failed');
     expect(LIVE_RUN_SOURCE).toContain('responseText.slice(0, 500)');
   });
