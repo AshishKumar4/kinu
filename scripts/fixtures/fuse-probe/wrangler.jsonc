@@ -1,0 +1,59 @@
+// BENCHMARK FIXTURE config — sibling of scripts/fixtures/r2-bench/ and
+// scripts/fixtures/kinu-durability/. Not product surface, never deployed by
+// `bun run deploy`. scripts/bench-fuse-probe.ts generates a per-run copy of
+// this file with a unique Worker name and its own token, `wrangler deploy`s
+// it, drives the workers.dev URL, and deletes the Worker and its container in
+// a finally.
+//
+// No R2 binding: this probe mounts no bucket. Its whole subject is what a
+// Linux container inside this platform does with a custom read-only FUSE
+// filesystem, so the fixture carries exactly one container and one Durable
+// Object and nothing else.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "kinu-fuse-probe",
+  "main": "worker.ts",
+
+  // The same account as packages/cf-backend/wrangler.jsonc:3. This credential
+  // can see more than one account and wrangler refuses to choose in
+  // non-interactive mode, so naming it here is what makes the probe runnable
+  // from a script rather than from a prompt.
+  "account_id": "f44999d1ddda7012e9a87729eba250f1",
+  "compatibility_date": "2025-12-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "observability": { "enabled": true },
+
+  "durable_objects": {
+    "bindings": [
+      // FuseProbeBox extends the UPSTREAM @cloudflare/sandbox Sandbox —
+      // deliberately NOT KinuSandbox. KinuSandbox arms a snapshot tick whose
+      // archives land inside latency measurements at keys outside the run's
+      // own prefix; the same reasoning fixtures/r2-bench records. The binding
+      // is named `Sandbox` because getSandbox resolves `env.Sandbox`. The
+      // subclass adds only lifecycle proof: onStart re-verifies the running
+      // image's SANDBOX_VERSION on every boot, destroy() clears the DO's
+      // storage after the SDK teardown.
+      { "class_name": "FuseProbeBox", "name": "Sandbox" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["FuseProbeBox"] }],
+
+  // Image tag equals the @cloudflare/sandbox version in package.json: the SDK
+  // asks the container for its own SANDBOX_VERSION on every start. Instance
+  // type equals packages/cf-backend/wrangler.jsonc's container block, because
+  // capabilities that depend on kernel/seccomp configuration are measured on
+  // the platform shape the product actually runs.
+  "containers": [
+    {
+      "class_name": "FuseProbeBox",
+      "image": "docker.io/cloudflare/sandbox:0.12.8",
+      "max_instances": 1,
+      "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 }
+    }
+  ]
+
+  // FUSE_PROBE_TOKEN is supplied per run through the generated config's vars,
+  // never committed. An absent or wrong token makes every request 401, so a
+  // fixture that outlives its run is inert rather than an open exec endpoint.
+}

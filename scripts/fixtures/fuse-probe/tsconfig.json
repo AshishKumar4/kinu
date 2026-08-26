@@ -1,0 +1,12 @@
+{
+  "//": "The fuse-probe fixture Worker is the one file in this directory that is not a bun program: it runs on workerd and needs DurableObjectNamespace and the SDK's workers-typed surface. `scripts/tsconfig.scripts.json` compiles the rest of scripts/ with types [bun, node], so worker.ts must be excluded there (Main applies that one-line exclude) and compiled here instead — the same split fixtures/r2-bench and fixtures/kinu-durability already use. core.ts and probe.ts stay in the scripts project: they are bun programs (FFI syscalls, child processes) and both the driver and the tests import from them.",
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "lib": ["ES2022"],
+    "types": ["@cloudflare/workers-types"],
+    "allowImportingTsExtensions": true,
+    "moduleDetection": "force"
+  },
+  "include": ["worker.ts"]
+}
