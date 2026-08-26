@@ -11,7 +11,7 @@ import { Database } from 'bun:sqlite';
 import { mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { createCliAgent, type CreatedCliAgent } from '../src/agent-create';
+import { createCliAgent, renameLocalAgent, type CreatedCliAgent } from '../src/agent-create';
 import { resolveAgentTarget } from '../src/agent-target';
 import {
   AGENT_HOME,
@@ -24,6 +24,7 @@ import {
   listLocalRefsAllProjects,
   loadConfigFile,
   localWorkspaceMembers,
+  readWorkspaceDisplayName,
   readWorkspaceIdentityId,
   resolveLocalAgent,
   saveConfigFile,
@@ -222,12 +223,15 @@ describe('renaming changes no identity and moves no database', () => {
     // turn the mismatch guard off and say nothing.
     expect(loadConfigFile().agents?.['renamed-label']?.identityId).toBe(identity);
 
-    // The rename a user actually performs: the workspace's human name. `kinu
-    // create` writes it and auto-titling rewrites it after the first turn.
-    upsertAgentConfig({ name: 'renamed-label', mode: 'local', displayName: 'Second Thoughts' });
+    // The rename a user actually performs: the workspace's human name,
+    // written into the workspace's own database — never mirrored into
+    // config.json. `kinu create` writes it and auto-titling rewrites it
+    // after the first turn.
+    renameLocalAgent('renamed-label', 'Second Thoughts');
+    expect(loadConfigFile().agents?.['renamed-label']?.displayName).toBeUndefined();
 
     const resolved = resolveLocalAgent('renamed-label', { cwd });
-    expect(resolved.displayName).toBe('Second Thoughts');
+    expect(readWorkspaceDisplayName(dbPath)).toBe('Second Thoughts');
     expect(resolved.placement).toBe('recorded');
     expect(resolved.workspaceId).toBe('bound');
     expect(resolved.dbPath).toBe(dbPath);

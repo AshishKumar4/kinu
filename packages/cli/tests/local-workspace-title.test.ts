@@ -58,9 +58,9 @@ const suggests = (title: string) => ({
 });
 
 describe('local workspace auto-titling on open', () => {
-  test('a legacy slug title heals into the agent db and the CLI config, once', async () => {
+  test('a legacy slug title heals in the agent db while its config ref stays placement-only', async () => {
     const { rt, config } = workspace('workspace-1a4e20');
-
+    const refTitle = loadConfigFile().agents?.['workspace-1a4e20']?.displayName;
     autoTitleLocalWorkspace('workspace-1a4e20', rt, { mission: MISSION, trigger: 'legacy-heal' }, suggests('OAuth Callback Audit'));
     // The deterministic title is in place synchronously — opening never waits.
     expect(config.getDisplayName()).toBe(MISSION);
@@ -68,7 +68,7 @@ describe('local workspace auto-titling on open', () => {
 
     await Bun.sleep(20);
     expect(config.getDisplayName()).toBe('OAuth Callback Audit');
-    expect(loadConfigFile().agents?.['workspace-1a4e20']?.displayName).toBe('OAuth Callback Audit');
+    expect(loadConfigFile().agents?.['workspace-1a4e20']?.displayName).toBe(refTitle);
 
     // Opening it again is a no-op: the title is no longer a placeholder.
     autoTitleLocalWorkspace('workspace-1a4e20', rt, { mission: MISSION, trigger: 'legacy-heal' }, suggests('Something Else'));
@@ -89,6 +89,7 @@ describe('local workspace auto-titling on open', () => {
 
   test('a failing model call leaves the deterministic title and never throws', async () => {
     const { rt, config } = workspace('workspace-7f159a');
+    const refTitle = loadConfigFile().agents?.['workspace-7f159a']?.displayName;
 
     autoTitleLocalWorkspace('workspace-7f159a', rt, { mission: MISSION, trigger: 'legacy-heal' }, {
       generate: async () => { throw new Error('no provider configured'); },
@@ -97,7 +98,7 @@ describe('local workspace auto-titling on open', () => {
 
     expect(config.getDisplayName()).toBe(MISSION);
     expect(config.getNameOrigin()).toBe('auto');
-    expect(loadConfigFile().agents?.['workspace-7f159a']?.displayName).toBe(MISSION);
+    expect(loadConfigFile().agents?.['workspace-7f159a']?.displayName).toBe(refTitle);
   });
 
   test('a workspace with nothing to title from is left alone', async () => {
@@ -121,6 +122,7 @@ describe('local workspace auto-titling on open', () => {
 describe('local agent auto-titling on its first owner message', () => {
   test('an agent added without a name is titled by that first message, once', async () => {
     const { rt, config } = workspace('quiet-harbor-1a4e20', { displayName: '', nameOrigin: 'auto' });
+    const refTitle = loadConfigFile().agents?.['quiet-harbor-1a4e20']?.displayName;
 
     // The mission it inherited must NOT name it: the legacy heal, which is the
     // only mission-sourced pass, skips a deliberately blank title.
@@ -141,7 +143,7 @@ describe('local agent auto-titling on its first owner message', () => {
     expect(config.getDisplayName()).toBe('Audit the OAuth callback flow');
     await Bun.sleep(20);
     expect(config.getDisplayName()).toBe('Callback Audit');
-    expect(loadConfigFile().agents?.['quiet-harbor-1a4e20']?.displayName).toBe('Callback Audit');
+    expect(loadConfigFile().agents?.['quiet-harbor-1a4e20']?.displayName).toBe(refTitle);
 
     // The next message is not a second naming pass.
     autoTitleLocalWorkspace(

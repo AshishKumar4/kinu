@@ -2,6 +2,7 @@ import { mkdtempSync, realpathSync, rmSync, writeFileSync, mkdirSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
 import { agentWorkspaceKey, groupAgentWorkspaces, reconcileAgentRefs, type ListedAgent } from '../src/agent-list';
 import * as v from 'valibot';
 
@@ -40,8 +41,10 @@ describe('CLI cloud agent registry sync', () => {
       ],
     );
 
+    // A local row's label comes from its workspace database; this fixture
+    // seeds none, so the directory name stands in until something names it.
     expect(reconciled.map(({ name, label, mode }) => ({ name, label, mode }))).toEqual([
-      { name: 'localbot', label: 'Local Bot', mode: 'local' },
+      { name: 'localbot', label: 'localbot', mode: 'local' },
       { name: 'web-agent', label: 'Web Agent', mode: 'cloud' },
     ]);
     expect(reconciled.some((agent) => agent.name === 'stale')).toBeFalse();
@@ -278,20 +281,27 @@ describe('the sidebar roster for one directory', () => {
     const otherDir = realpathSync(mkdtempSync(join(tmpdir(), 'kinu-agent-other-')));
     tempDirs.push(home, projectDir, otherDir);
     const stamp = '2026-06-08T00:00:00.000Z';
-    const localRef = (name: string, cwd?: string, workspaceId?: string, displayName?: string) => ({
-      name, mode: 'local', localName: name, cwd, workspaceId, displayName, createdAt: stamp, updatedAt: stamp,
+    const localRef = (name: string, cwd?: string, workspaceId?: string) => ({
+      name, mode: 'local', localName: name, cwd, workspaceId, createdAt: stamp, updatedAt: stamp,
     });
     for (const name of ['lead', 'fixer', 'writer', 'faraway', 'oldbot', 'audit', 'stray']) {
       mkdirSync(join(home, name));
       writeFileSync(join(home, name, 'agent.db'), '');
     }
+    // oldbot's title lives in its own workspace database — the one label
+    // source for a local agent. The other fixtures carry no title row, so
+    // they list under their directory names.
+    const oldbotDb = new Database(join(home, 'oldbot', 'agent.db'));
+    oldbotDb.exec('CREATE TABLE agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+    oldbotDb.exec(`INSERT INTO agent_config VALUES ('display_name', 'Old Bot')`);
+    oldbotDb.close();
     writeFileSync(join(home, 'config.json'), JSON.stringify({
       agents: {
         lead: localRef('lead', projectDir, 'shop'),
         fixer: localRef('fixer', projectDir, 'shop'),
-        writer: localRef('writer', projectDir, 'docs', 'Writer'),
+        writer: localRef('writer', projectDir, 'docs'),
         faraway: localRef('faraway', otherDir, 'other'),
-        oldbot: localRef('oldbot', undefined, undefined, 'Old Bot'),
+        oldbot: localRef('oldbot'),
         audit: { name: 'audit', mode: 'cloud', cloudName: 'audit', displayName: 'Audit', createdAt: stamp, updatedAt: stamp },
         jarvis: { name: 'jarvis', mode: 'cloud', cloudName: 'jarvis', displayName: 'Jarvis', createdAt: stamp, updatedAt: stamp },
       },

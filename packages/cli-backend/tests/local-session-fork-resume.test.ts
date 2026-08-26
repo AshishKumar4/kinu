@@ -99,14 +99,15 @@ describe('resuming a workspace whose fork was interrupted', () => {
     });
 
     // Before: the roster the per-step dynamic context reads is lying.
-    expect(journal.listLive()).toEqual([
-      { rootId: ROOT, rationale: RATIONALE, running: HEADS, total: HEADS },
-    ]);
+    expect(journal.listLive()).toEqual({
+      items: [{ rootId: ROOT, rationale: RATIONALE, running: HEADS, total: HEADS }],
+      total: 1,
+    });
 
     await session.recoverBackgroundJobs();
 
     // After: nothing claims to be running, and every head carries why.
-    expect(journal.listLive()).toEqual([]);
+    expect(journal.listLive()).toEqual({ items: [], total: 0 });
     for (const head of journal.readTree(ROOT)) {
       expect(head.status).toBe('aborted');
       expect(head.error_message).toContain('no executor');

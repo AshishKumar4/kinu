@@ -482,7 +482,7 @@ describe('the turn profile authority reader', () => {
     expect(resolved?.fields.durationMs).toBeTypeOf('number');
   });
 
-  test('repeated turn setup re-reads the cache file instead of the server, and sees a write to it', () => {
+  test('revalidates the account authority on every turn setup and refreshes its cache', () => {
     const steps = runScenario(`
       ${signedIn('acc-a', 'https://kinu.test')}
       ${RECORD_DIAGNOSTICS}
@@ -521,18 +521,17 @@ describe('the turn profile authority reader', () => {
         .filter((line) => line.event === 'profile.authority_read')
         .map((line) => line.fields.source));
     `);
-    // The server answered once. Turns two and three cost a file read.
+    // A resident reader never latches an earlier server answer: every turn
+    // checks the account authority, so edits from another machine are visible.
     expect(v.parse(
       v.object({ fetches: v.number(), versions: v.array(v.number()) }),
       expectOk(steps.firstThenRepeat),
-    )).toEqual({ fetches: 1, versions: [4, 4, 4] });
-    // The reader asked the server for none of it: the newer version reached it
-    // through the FILE, not through an object it captured in memory.
+    )).toEqual({ fetches: 3, versions: [4, 4, 4] });
     expect(v.parse(
       v.object({ readFetches: v.number(), version: v.number(), roles: v.array(v.string()) }),
       expectOk(steps.afterCacheWrite),
-    )).toEqual({ readFetches: 0, version: 5, roles: ['auditor'] });
-    expect(expectOk(steps.sources)).toEqual(['server', 'cache', 'cache', 'cache']);
+    )).toEqual({ readFetches: 1, version: 5, roles: ['auditor'] });
+    expect(expectOk(steps.sources)).toEqual(['server', 'server', 'server', 'server']);
   });
 
   test('another account\u2019s cache never answers for this one', () => {
@@ -874,3 +873,145 @@ describe('cloud-api profile methods', () => {
     }
   });
 });
+
+/**
+ * The `kinu model` / `kinu effort` commands are the user-facing half of the
+ * same authority rule the reader tests above pin: whichever store is
+ * canonical for this machine's session state receives the write, and a turn
+ * started afterwards resolves it.
+ */
+describe('control commands route model/effort by session state', () => {
+  /** A bare local workspace: enough for `resolveAgentTarget` to answer
+   *  local — an existing database, no configured ref. */
+  const SEED_LOCAL_AGENT = `
+    {
+      const { mkdirSync, writeFileSync } = await import('node:fs');
+      mkdirSync(process.env.KINU_HOME + '/probe-agent', { recursive: true });
+      writeFileSync(process.env.KINU_HOME + '/probe-agent/agent.db', '');
+    }
+  `;
+
+  /** The control commands print for the operator; a scenario captures one
+   *  JSON document on stdout, so their output is muted while they run. */
+  const QUIET = `
+    async function quiet(fn) {
+      const log = console.log;
+      console.log = () => {};
+      try { return await fn(); } finally { console.log = log; }
+    }
+  `;
+
+  const ParsedControlTier = v.object({
+    version: v.number(),
+    catalog: v.object({
+      tiers: v.object({
+        default: v.looseObject({ model: v.string(), reasoningEffort: v.optional(v.string()) }),
+      }),
+    }),
+  });
+
+  test('signed out, kinu model and kinu effort land in the local authority and the next turn reads them', async () => {
+    const steps = runScenario(`
+      ${SEED_LOCAL_AGENT}
+      ${QUIET}
+      await step('model', async () => {
+        const { modelCommand } = await import('./packages/cli/src/commands/control.ts');
+        await quiet(() => modelCommand('probe-agent', 'openai/gpt-4o-mini', {}));
+        return 'set';
+      });
+      await step('effort', async () => {
+        const { effortCommand } = await import('./packages/cli/src/commands/control.ts');
+        await quiet(() => effortCommand('probe-agent', 'high'));
+        return 'set';
+      });
+      await step('nextTurn', async () => {
+        const { createProfileAuthorityReader } = await import('./packages/cli/src/profiles.ts');
+        return await createProfileAuthorityReader()();
+      });
+      await step('localSlot', async () => {
+        const { loadConfigFile } = await import('./packages/cli/src/config.ts');
+        return loadConfigFile().localProfile?.catalog.tiers.default ?? null;
+      });
+    `);
+    expect(expectOk(steps.model)).toBe('set');
+    expect(expectOk(steps.effort)).toBe('set');
+    const tier = v.parse(ParsedControlTier, expectOk(steps.nextTurn)).catalog.tiers.default;
+    expect(tier.model).toBe('openai/gpt-4o-mini');
+    expect(tier.reasoningEffort).toBe('high');
+    // The signed-out slot owns what the commands wrote — nothing else does.
+    expect(expectOk(steps.localSlot)).toEqual({ model: 'openai/gpt-4o-mini', reasoningEffort: 'high' });
+  }, 20_000);
+
+  test('signed in, kinu model goes to the account store, never into config.json; the next turn revalidates it', async () => {
+    const steps = runScenario(`
+      ${SEED_LOCAL_AGENT}
+      ${QUIET}
+      let accountServer = null;
+      {
+        const { mkdirSync, writeFileSync } = await import('node:fs');
+        const { profileCatalogDigest, BUILTIN_PROFILE_CATALOG } = await import('@kinu.run/core');
+        let version = 3;
+        let current = {
+          roles: BUILTIN_PROFILE_CATALOG.roles,
+          tiers: { default: { model: 'server-model-v3' } },
+        };
+        const envelope = (catalog) => ({
+          authority: { kind: 'account', accountId: 'acc-a' },
+          version, digest: profileCatalogDigest(catalog), catalog,
+        });
+        // A stand-in account server: GET answers the current catalog, PUT
+        // applies the whole-catalog edit and bumps the version.
+        accountServer = Bun.serve({ port: 0, fetch: async (req) => {
+          if (req.method === 'PUT') {
+            const body = await req.json();
+            if (body.expectedVersion !== version) {
+              return Response.json({ error: 'profile catalog changed underneath you', currentVersion: version, currentDigest: profileCatalogDigest(current) }, { status: 409 });
+            }
+            current = body.catalog;
+            version += 1;
+            return Response.json({ ok: true, envelope: envelope(current) });
+          }
+          return Response.json(envelope(current));
+        }});
+        mkdirSync(process.env.KINU_HOME, { recursive: true });
+        writeFileSync(process.env.KINU_HOME + '/config.json', JSON.stringify({
+          origin: 'http://127.0.0.1:' + accountServer.port,
+          accessToken: 'ptc_session',
+          tokenExpiresAt: new Date(Date.now() + 3600_000).toISOString(),
+          user: { id: 'acc-a', email: 'a@example.com' },
+        }), { mode: 0o600 });
+      }
+      await step('model', async () => {
+        // The CAS write itself proves the account round trip: it only lands
+        // when the server answered a GET first (expectedVersion) and accepted
+        // the PUT after.
+        const { modelCommand } = await import('./packages/cli/src/commands/control.ts');
+        await quiet(() => modelCommand('probe-agent', 'openai/gpt-4o-mini', {}));
+        return 'set';
+      });
+      await step('nextTurn', async () => {
+        const { createProfileAuthorityReader } = await import('./packages/cli/src/profiles.ts');
+        return await createProfileAuthorityReader()();
+      });
+      await step('localSlot', async () => {
+        const { loadConfigFile } = await import('./packages/cli/src/config.ts');
+        return loadConfigFile().localProfile ?? null;
+      });
+      await step('cacheSlot', async () => {
+        const { loadCachedAccountProfile } = await import('./packages/cli/src/profiles.ts');
+        return loadCachedAccountProfile('acc-a')?.catalog.tiers.default ?? null;
+      });
+      await step('done', async () => {
+        accountServer.stop(true);
+        return 'stopped';
+      });
+    `);
+    const tier = v.parse(ParsedControlTier, expectOk(steps.nextTurn)).catalog.tiers.default;
+    expect(tier.model).toBe('openai/gpt-4o-mini');
+    // The signed-out slot stayed untouched: the account store is canonical.
+    expect(expectOk(steps.localSlot)).toBeNull();
+    // And the cache a next offline read would fall back to carries it too.
+    expect(expectOk(steps.cacheSlot)).toMatchObject({ model: 'openai/gpt-4o-mini' });
+  }, 20_000);
+});
+

@@ -75,7 +75,7 @@ function episode(blocks: readonly string[]) {
 
 function craftScore(db: Database, name: string): { score: number; uses: number } | null {
   return db.query<{ score: number; uses: number }, [string]>(
-    'SELECT score, uses FROM craft_scores WHERE tool_name = ?',
+    'SELECT score, uses FROM crafted_tools WHERE name = ?',
   ).get(name);
 }
 

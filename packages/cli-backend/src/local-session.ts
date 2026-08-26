@@ -213,7 +213,7 @@ export type LocalSessionDb = Pick<Database, 'prepare'>;
 /** What the frontends render. A superset of runChat's ChatEvent with the
  *  lifecycle + side-channel (evolution, broadcast, background) events. */
 export type SessionEvent =
-  | { type: 'turn-start'; kind: 'user' | 'programmatic'; text: string; event?: string }
+  | { type: 'turn-start'; kind: 'user' | 'programmatic'; text: string; event?: string; workMode: WorkMode }
   | { type: 'text-delta'; delta: string }
   | { type: 'tool-call'; toolName: string; toolCallId: string; args: ToolCallArguments }
   | { type: 'tool-result'; toolName: string; toolCallId: string; result: string; success: boolean }
@@ -912,19 +912,23 @@ export class LocalAgentSession implements BackendHost {
     return this.turnProfile?.tier.model ?? this.profiles().normalizeSpec(this.config.getModel());
   }
 
+  /** The catalog role id this agent resolves under. A legacy freeform
+   *  selection has no id; the honest structural answer is `general`. */
   getActiveRoleId(): string {
-    return this.turnProfile?.role.id ?? this.config.getActiveRoleId();
+    if (this.turnProfile) return this.turnProfile.role.id;
+    const selection = this.config.getRoleSelection();
+    return selection.kind === 'catalog' ? selection.roleId : 'general';
   }
 
   getEffectiveTierId(): string {
     if (this.turnProfile) return this.turnProfile.tier.id;
-    const roleId = this.config.getActiveRoleId();
+    const roleId = this.getActiveRoleId();
     return effectiveRoleCatalog(BUILTIN_PROFILE_CATALOG)[roleId]?.tier ?? 'default';
   }
 
   /**
    * Change the durable active role. Takes effect on the NEXT resolved turn —
-   * `runTurn` re-reads `config.getActiveRoleId()` every time, so there is no
+   * `runTurn` re-reads `config.getRoleSelection()` every time, so there is no
    * cache to invalidate here and the running turn keeps the profile it already
    * resolved (core profiles/role-change.ts:1-5). Clearing the memo instead
    * would mutate a turn that had already resolved its model and tools, and
@@ -940,7 +944,7 @@ export class LocalAgentSession implements BackendHost {
       actor: 'user',
     });
     if (changed.kind !== 'applied') {
-      throw new Error(roleChangeOutcomeText(roleId, changed, this.config.getActiveRoleId()));
+      throw new Error(roleChangeOutcomeText(roleId, changed, this.getActiveRoleId()));
     }
     return { role: changed.to };
   }
@@ -1006,7 +1010,7 @@ export class LocalAgentSession implements BackendHost {
   }
 
   cancelTrigger(trigger_id: string): ReturnType<typeof cancelTrigger> {
-    const result = cancelTrigger(this.triggerRegistry, trigger_id, Date.now());
+    const result = cancelTrigger(this.triggerRegistry, trigger_id, Date.now(), this.webhookSecrets);
     this.rearmLocalAlarm();
     return result;
   }
@@ -1554,7 +1558,7 @@ export class LocalAgentSession implements BackendHost {
    * machine-readable stdout stream can be corrupted by.
    */
   private announceAbandonedJobs(): void {
-    const interrupted = this.jobs.listRunning();
+    const interrupted = this.jobs.listRunning().items;
     const roster = interrupted
       .map((job) => `${job.id} (${job.kind}${job.label ? `: ${job.label}` : ''})`)
       .join(', ');
@@ -1654,7 +1658,9 @@ export class LocalAgentSession implements BackendHost {
   ) {
     return resumeBackgroundJob((resumeMode) => {
       this.ensureModelState();
-      return this.toolSets[resumeMode]?.raw ?? {};
+      const surface = this.toolSets[resumeMode];
+      if (!surface) throw new Error(`tool surface for ${resumeMode} mode is unavailable`);
+      return surface.raw;
     }, kind, decodeJsonValue({ value: input.value }), mode, signal).then((value) =>
       value === undefined ? undefined : decodeJsonValue({ value }));
   }
@@ -1857,7 +1863,7 @@ export class LocalAgentSession implements BackendHost {
       reason: end.reason,
     };
     if (end.error) outcome.error = end.error;
-    closeTurnRun(this.eventRecorder, this.currentRunId, outcome);
+    closeTurnRun(this.eventRecorder, this.currentRunId, { ...outcome, workMode: this.turnWorkMode });
     this.currentRunId = null;
     return end.reason;
   }
@@ -1889,7 +1895,7 @@ export class LocalAgentSession implements BackendHost {
     const parsedEvent = v.safeParse(v.string(), item.metadata?.kinuEvent);
     const event = parsedEvent.success ? parsedEvent.output : undefined;
     this.turnWorkMode = workModeForTurnMetadata(item.metadata);
-    this.emit({ type: 'turn-start', kind: item.kind, text: item.text, event });
+    this.emit({ type: 'turn-start', kind: item.kind, text: item.text, event, workMode: this.turnWorkMode });
 
     const startedAt = Date.now();
     // Per-turn accounting reset + the turn's mission scope, together: what the
@@ -1951,7 +1957,7 @@ export class LocalAgentSession implements BackendHost {
     // after it consult it.
     this.turnIsParentAssigned = item.kind === 'programmatic';
     const profileInputs = await this.profiles().inputs();
-    const activeRoleId = this.config.getActiveRoleId();
+    const activeRoleId = this.getActiveRoleId();
     const roleSkills = effectiveRoleCatalog(profileInputs.envelope.catalog)[activeRoleId]?.skills ?? [];
     // A real user message grades the previous turn — dispatch the detached
     // outcome review (same core pipeline as the DO's beforeTurn hook). In a
@@ -1972,7 +1978,7 @@ export class LocalAgentSession implements BackendHost {
     const candidateAgentActions = agentsActionsFor(this.agentsToolDeps(this.turnWorkMode));
     const profile = resolveAgentTurnProfile({
       ...profileInputs,
-      activeRoleId: this.config.getActiveRoleId(),
+      activeRoleId: this.getActiveRoleId(),
       workMode: this.turnWorkMode,
       availableTools: [
         ...candidateBuiltinNames,
@@ -2859,7 +2865,10 @@ export class LocalAgentSession implements BackendHost {
       memoryTail,
       missingCapabilities: this.mcpUnavailable,
       subordinateDelegates: () => subordinateDelegatesOf(this.teamDeps?.snapshot() ?? []),
-      approvals: () => this.pendingShellApproval === null ? [] : [this.pendingShellApproval],
+      approvals: () => {
+        const items = this.pendingShellApproval === null ? [] : [this.pendingShellApproval];
+        return { items, total: items.length };
+      },
     });
   }
 
@@ -3269,7 +3278,7 @@ export class LocalAgentSession implements BackendHost {
       governor: () => this.budget,
       journal: () => this.headJournal,
     });
-    for (const mode of ['build'] as const) {
+    for (const mode of ['build', 'plan'] as const) {
       const deps: ActorToolsetDeps = {
         rt: this.rt,
       // No shellApprovalMode/requestShellApproval here — the gate lives at

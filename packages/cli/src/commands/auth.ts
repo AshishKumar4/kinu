@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { hostname, platform } from 'node:os';
 import { defaultOrigin, logout, pollCliAuth, startCliAuth, whoami } from '../cloud-api';
-import { bumpProviderRevision, loadConfigFile, saveConfigFile } from '../config';
+import { bumpProviderRevision, loadConfigFile, updateConfigFile } from '../config';
 import { ACCENT, DIM, OK, WARN } from '../display';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
@@ -30,13 +30,11 @@ export async function authenticateCli(
     }
     if (status.status === 'expired') throw new Error(status.message ?? 'CLI auth expired.');
     if (!status.token || !status.user) throw new Error('Auth approved but no token returned.');
-    const config = loadConfigFile();
-    saveConfigFile({
-      ...config,
-      origin: status.origin ?? origin,
-      accessToken: status.token,
-      tokenExpiresAt: status.expiresAt,
-      user: status.user,
+    updateConfigFile((config) => {
+      config.origin = status.origin ?? origin;
+      config.accessToken = status.token;
+      config.tokenExpiresAt = status.expiresAt;
+      config.user = status.user;
     });
     // Signing in changes which providers a model resolution can reach — the
     // account's credentials become available through the proxy — so a resident
@@ -86,7 +84,11 @@ export async function logoutCommand(opts: { origin?: string }): Promise<void> {
       console.error(`${WARN('!')} Could not revoke the session at ${origin} (${reason}); it may still be valid.`);
     }
   }
-  saveConfigFile({ ...config, accessToken: undefined, tokenExpiresAt: undefined, user: undefined });
+  updateConfigFile((current) => {
+    delete current.accessToken;
+    delete current.tokenExpiresAt;
+    delete current.user;
+  });
   // The inverse of sign-in: every account-held provider just became unreachable.
   bumpProviderRevision();
   console.log(`${OK('✓')} Logged out`);

@@ -13,6 +13,7 @@ export {
   writeSecretFile, enforceOwnerOnly, ensureSecretDir, SECRET_FILE_MODE, SECRET_DIR_MODE,
 } from './secret-file';
 export { openWorkspaceCLI, type WorkspaceInfo, type CLIOpenConfig } from './open';
+export { withConfigLock } from './config-lock';
 export { createSandboxedExecutor } from './executor';
 export { hostToolchainCapabilities } from './host-toolchain';
 export { createLinuxFiber, detectOrphanedFibers } from './fiber';

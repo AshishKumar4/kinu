@@ -1,12 +1,15 @@
 import {
+  agentDbPath,
   listAgentDirs,
   listConfiguredAgentRefs,
   listLegacyAgentNames,
+  readWorkspaceDisplayName,
   requireAuthConfig,
   updateConfigFile,
   type AgentMode,
   type KinuAgentConfig,
 } from './config';
+import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import { listCloudAgents, type CloudAgent } from './cloud-api';
 
 export interface ListedAgent {
@@ -96,13 +99,29 @@ export function groupAgentWorkspaces<T extends ListedAgent>(
   return { projectRoot, workspaces: ordered, unplaced, remote };
 }
 
+function localDisplayLabel(dirName: string): string {
+  try {
+    return readWorkspaceDisplayName(agentDbPath(dirName)) ?? dirName;
+  } catch (error) {
+    const reason = renderThrownChain({ cause: error });
+    diagnostics.failure(
+      'workspace.read_failed',
+      toKinuError({ doing: 'reading a local workspace title', cause: error, otherwise: 'io' }),
+      { workspace: dirName },
+    );
+    return `(unreadable: ${reason})`;
+  }
+}
+
 /** A local agent's row. `dirName` is the `~/.kinu/<name>` directory; the row
  *  opens under the ref's config name when a ref exists, so aliases and cloud
- *  links stay attached. */
+ *  links stay attached. The label is the workspace database's own title — the
+ *  one place a rename or auto-title lands — falling back to the directory name
+ *  until something names it. */
 function localRow(configured: KinuAgentConfig | undefined, dirName: string): ListedAgent {
   return {
     name: configured?.name ?? dirName,
-    label: configured?.displayName ?? dirName,
+    label: localDisplayLabel(dirName),
     mode: 'local',
     localName: dirName,
     cloudName: configured?.cloudName,

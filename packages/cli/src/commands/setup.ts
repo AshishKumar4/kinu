@@ -8,7 +8,7 @@ import {
 import { renderThrownChain, tolerate } from '@kinu.run/core/obs';
 import { checkClaudeAvailability, checkOpenCodeAvailability, createOpenCodeProvider } from '@kinu.run/cli-backend';
 import { setCloudCredential } from '../cloud-api';
-import { bumpProviderRevision, loadConfigFile, resolveCloudSession, saveConfigFile, setDefaultModel, updateConfigFile, type KinuConfig } from '../config';
+import { bumpProviderRevision, loadConfigFile, resolveCloudSession, setDefaultModel, updateConfigFile, type KinuConfig } from '../config';
 import { ACCENT, DIM, OK, WARN } from '../display';
 import { ask, askSecret, canPrompt, confirm } from '../prompt';
 import { authCommand, openBrowser } from './auth';
@@ -178,10 +178,9 @@ export async function setupCommand(opts: {
   if (provider === 'codex') {
     const model = stripProviderPrefix(opts.model ?? await ask('Default Codex model', next.model?.startsWith('codex/') ? next.model.slice('codex/'.length) : 'gpt-5.5'), 'codex');
     const credential = await runCodexDeviceFlow();
-    saveConfigFile(withProvider(next, {
+    updateConfigFile((config) => withProvider(config, {
       model: `codex/${model}`,
       providers: {
-        ...next.providers,
         codex: {
           accessToken: credential.accessToken,
           refreshToken: credential.refreshToken,
@@ -202,9 +201,9 @@ export async function setupCommand(opts: {
       local: opts.local ?? false,
       credKey: 'openai.bearer',
       credential: { kind: 'bearer', token: key },
-      storeLocally: () => saveConfigFile(withProvider(next, {
+      storeLocally: () => updateConfigFile((config) => withProvider(config, {
         model: spec,
-        providers: { ...next.providers, openai: { apiKey: key } },
+        providers: { openai: { apiKey: key } },
       })),
       clearLocally: () => updateConfigFile((config) => { delete config.providers?.openai; }),
       model: spec,
@@ -220,9 +219,9 @@ export async function setupCommand(opts: {
       local: opts.local ?? false,
       credKey: 'openrouter.bearer',
       credential: { kind: 'bearer', token: key },
-      storeLocally: () => saveConfigFile(withProvider(next, {
+      storeLocally: () => updateConfigFile((config) => withProvider(config, {
         model: spec,
-        providers: { ...next.providers, openrouter: { apiKey: key } },
+        providers: { openrouter: { apiKey: key } },
       })),
       clearLocally: () => updateConfigFile((config) => { delete config.providers?.openrouter; }),
       model: spec,
@@ -238,9 +237,9 @@ export async function setupCommand(opts: {
       local: opts.local ?? false,
       credKey: 'anthropic.bearer',
       credential: { kind: 'bearer', token: key },
-      storeLocally: () => saveConfigFile(withProvider(next, {
+      storeLocally: () => updateConfigFile((config) => withProvider(config, {
         model: spec,
-        providers: { ...next.providers, anthropic: { apiKey: key } },
+        providers: { anthropic: { apiKey: key } },
       })),
       clearLocally: () => updateConfigFile((config) => { delete config.providers?.anthropic; }),
       model: spec,
@@ -257,12 +256,10 @@ export async function setupCommand(opts: {
       local: opts.local ?? false,
       credKey: 'openai-compat.default',
       credential: { kind: 'openai-compat', baseURL, apiKey },
-      storeLocally: () => saveConfigFile(withProvider(next, {
+      storeLocally: () => updateConfigFile((config) => withProvider(config, {
         model: spec,
         providers: {
-          ...next.providers,
           openaiCompat: {
-            ...next.providers?.openaiCompat,
             default: { baseURL, apiKey },
           },
         },
@@ -314,7 +311,7 @@ export async function setupCommand(opts: {
         return;
       }
     }
-    saveConfigFile(withProvider(next, {
+    updateConfigFile((config) => withProvider(config, {
       model: `opencode/${model}`,
       providers: {},
     }));

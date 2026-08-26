@@ -254,9 +254,10 @@ export function createLocalProfileAuthority(deps: {
     envelope,
     inputs,
     async resolvePreTurn() {
+      const role = deps.config.getRoleSelection();
       return resolveAgentTurnProfile({
         ...(await inputs()),
-        activeRoleId: deps.config.getActiveRoleId(),
+        activeRoleId: role.kind === 'catalog' ? role.roleId : 'general',
         workMode: 'build',
         availableTools: [],
         activeSkills: [],

@@ -109,6 +109,7 @@ function setup(model: LanguageModel) {
     refreshInfo: async () => info,
     model,
     modelResolver: fakeResolver(model),
+    profileAuthority: async () => null,
     mcpServers: {},
     noAutoEvolve: true,
     transcript: { transcriptDir: join(home, 'sessions') },
@@ -142,6 +143,7 @@ function openPersistentClient(
     refreshInfo: async () => info,
     model,
     modelResolver: fakeResolver(model),
+    profileAuthority: async () => null,
     mcpServers: {},
     noAutoEvolve: true,
     transcript: transcriptOptions,
@@ -158,7 +160,7 @@ describe('LocalAgentClient', () => {
     await client.connect();
 
     const result = await client.send('hi', { cwd: '/work' });
-    expect(result.text).toBe('hello there');
+    expect(result.text, JSON.stringify(events)).toBe('hello there');
     expect(result.hadError).toBe(false);
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
 

@@ -190,7 +190,7 @@ describe("legacy workspaces stay readable", () => {
     createLegacyLocalAgent(home, "jarvis-d03e0a");
 
     const status = runCli(home, ["status", "jarvis-d03e0a"]);
-    expect(status.exitCode).toBe(0);
+    expect(status.exitCode, status.stderr.toString()).toBe(0);
     expect(status.stdout.toString()).toContain("Run the household and the lab.");
     // Absent tables read as zero rather than taking the whole workspace down.
     expect(status.stdout.toString()).toContain("Scaffold:");
@@ -304,7 +304,7 @@ describe("CLI inspection commands", () => {
     expect(globalModel).toBeUndefined();
   }, CLI_SPAWN_TIMEOUT_MS);
 
-  test("kinu effort sets workspace and global defaults and appears in status", () => {
+  test("kinu effort updates the active profile authority and appears in status", () => {
     const home = mkdtempSync(join(tmpdir(), "kinu-cli-effort-"));
     tempDirs.push(home);
     createLocalAgent(home, "localtest");
@@ -316,12 +316,23 @@ describe("CLI inspection commands", () => {
     const set = runCli(home, ["effort", "localtest", "high"]);
     expect(set.exitCode).toBe(0);
     expect(set.stdout.toString()).toContain("set high");
-    expect(JSON.parse(readFileSync(join(home, "config.json"), "utf8")).reasoningEffort).toBe("high");
+    const saved = v.parse(v.object({
+      reasoningEffort: v.optional(v.string()),
+      localProfile: v.object({
+        catalog: v.object({
+          tiers: v.object({
+            default: v.object({ reasoningEffort: v.string() }),
+          }),
+        }),
+      }),
+    }), JSON.parse(readFileSync(join(home, "config.json"), "utf8")));
+    expect(saved.reasoningEffort).toBeUndefined();
+    expect(saved.localProfile.catalog.tiers.default.reasoningEffort).toBe("high");
 
     const stored = runCli(home, ["effort", "localtest"]);
     expect(stored.stdout.toString()).toContain("high");
     const status = runCli(home, ["status", "localtest"]);
-    expect(status.exitCode).toBe(0);
+    expect(status.exitCode, status.stderr.toString()).toBe(0);
     expect(status.stdout.toString()).toContain("Effort:");
     expect(status.stdout.toString()).toContain("high");
 

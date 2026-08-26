@@ -31,11 +31,11 @@ import {
 } from '@kinu.run/core';
 import * as v from 'valibot';
 import {
-  ensureSecretDir, writeSecretFile, type ProfileEnvelopeSource,
+  ensureSecretDir, withConfigLock, writeSecretFile, type ProfileEnvelopeSource,
 } from '@kinu.run/cli-backend';
 import {
   AGENT_HOME, loadConfigFile, requireStoredAuthConfig, resolveLLMConfig,
-  saveConfigFile, sessionExpired,
+  updateConfigFile, sessionExpired,
 } from './config';
 import { getCloudProfile, updateCloudProfile } from './cloud-api';
 import { diagnostics, toKinuError } from '@kinu.run/core/obs';
@@ -82,14 +82,16 @@ export function loadLocalProfileAuthority(): ProfileCatalogEnvelope | null {
  */
 function writeLocalProfile(catalog: ProfileCatalog): ProfileCatalogEnvelope {
   const validated = validateProfileCatalog(catalog);
-  const config = loadConfigFile();
-  const envelope: ProfileCatalogEnvelope = {
-    authority: { kind: 'local' },
-    version: (config.localProfile?.version ?? 0) + 1,
-    digest: profileCatalogDigest(validated),
-    catalog: validated,
-  };
-  saveConfigFile({ ...config, localProfile: envelope });
+  let envelope!: ProfileCatalogEnvelope;
+  updateConfigFile((config) => {
+    envelope = {
+      authority: { kind: 'local' },
+      version: (config.localProfile?.version ?? 0) + 1,
+      digest: profileCatalogDigest(validated),
+      catalog: validated,
+    };
+    config.localProfile = envelope;
+  });
   return envelope;
 }
 
@@ -141,9 +143,20 @@ export function loadCachedAccountProfile(accountId: string): ProfileCatalogEnvel
  */
 function cacheAccountProfile(accountId: string, envelope: ProfileCatalogEnvelope): void {
   assertCachedEntry(accountId, envelope);
-  const cache = readAccountCache();
-  ensureSecretDir(AGENT_HOME);
-  writeSecretFile(profileCachePath(), `${JSON.stringify({ accounts: { ...cache.accounts, [accountId]: envelope } }, null, 2)}\n`);
+  const path = profileCachePath();
+  withConfigLock(path, () => {
+    const cache = readAccountCache();
+    const existing = cache.accounts[accountId];
+    if (existing) {
+      assertCachedEntry(accountId, existing);
+      if (existing.version > envelope.version) return;
+      if (existing.version === envelope.version && existing.digest !== envelope.digest) {
+        throw new Error(`profile cache received two catalogs for account ${accountId} at version ${envelope.version}`);
+      }
+    }
+    ensureSecretDir(AGENT_HOME);
+    writeSecretFile(path, `${JSON.stringify({ accounts: { ...cache.accounts, [accountId]: envelope } }, null, 2)}\n`);
+  });
 }
 
 function assertCachedEntry(accountId: string, envelope: ProfileCatalogEnvelope): void {
@@ -214,31 +227,7 @@ export async function loadActiveProfile(): Promise<ProfileCatalogEnvelope> {
   return (await readAccountProfile(authority.accountId)).envelope;
 }
 
-/**
- * The one authority read a turn resolves through, shared by the interactive
- * clients and the daemon so the same agent resolves the same catalog whichever
- * process drives it.
- *
- * Nothing is memoized. Signed out, `config.json` is re-read every call, so a
- * `/model` or `/effort` edit lands on the next turn of a live session. Signed
- * in, the first resolution asks the server and the rest re-read the cache
- * FILE that fetch wrote, so repeated turn setup costs a file read instead of
- * a round trip — and because it is the file rather than an object in memory,
- * an edit this process CASes back, or one another process makes, is seen on
- * the next turn.
- *
- * There is no expiry. A model the account stopped offering must keep failing
- * resolution, so nothing here may bring one back by waiting. A failed fetch
- * does not count as the authoritative read either: the next turn tries again
- * rather than pinning the session to what the cache happened to hold.
- *
- * `null` means no authority is configured for this machine yet, the signed-out
- * state before any import. The session's own workspace config decides then —
- * this must not seed one from the global default model, because that would
- * swap the model an agent was created with.
- */
 export function createProfileAuthorityReader(): ProfileEnvelopeSource {
-  const askedServer = new Set<string>();
   return async () => {
     const startedAt = Date.now();
     const authority = resolveProfileAuthority();
@@ -247,16 +236,7 @@ export function createProfileAuthorityReader(): ProfileEnvelopeSource {
       if (local) reportResolution('local', startedAt);
       return local;
     }
-    const { accountId } = authority;
-    if (askedServer.has(accountId)) {
-      const cached = loadCachedAccountProfile(accountId);
-      if (cached) {
-        reportResolution('cache', startedAt);
-        return cached;
-      }
-    }
-    const read = await readAccountProfile(accountId);
-    if (read.source === 'server') askedServer.add(accountId);
+    const read = await readAccountProfile(authority.accountId);
     reportResolution(read.source, startedAt);
     return read.envelope;
   };

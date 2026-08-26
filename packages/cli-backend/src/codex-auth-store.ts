@@ -10,17 +10,9 @@ import {
   type OAuthCredential,
 } from '@kinu.run/core';
 import * as v from 'valibot';
-import {
-  closeSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  statSync,
-  unlinkSync,
-  writeFileSync,
-} from 'node:fs';
-import { dirname } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { tolerate } from '@kinu.run/core/obs';
+import { withConfigLock } from './config-lock';
 import { writeSecretFile } from './secret-file';
 
 const storedCodexCredentialSchema = v.object({
@@ -61,7 +53,7 @@ export function createFileCodexAuthStore(configPath: string, opts: { fetch?: typ
     },
 
     save(credential: OAuthCredential): void {
-      withLock(configPath, () => {
+      withConfigLock(configPath, () => {
         const config = readConfig(configPath);
         writeConfig(configPath, {
           ...config,
@@ -80,7 +72,7 @@ async function refreshUnderLock(
   original: OAuthCredential,
   fetchFn?: typeof fetch,
 ): Promise<OAuthCredential> {
-  return withLock(configPath, async () => {
+  return withConfigLock(configPath, async () => {
     const latest = readCredential(configPath);
     if (latest?.accessToken && latest.accessToken !== original.accessToken && !needsRefresh(latest)) {
       return latest;
@@ -152,43 +144,5 @@ function writeConfig(configPath: string, config: KinuConfigFile): void {
   writeSecretFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
 }
 
-function withLock<T>(configPath: string, fn: () => T): T {
-  mkdirSync(dirname(configPath), { recursive: true });
-  const lockPath = `${configPath}.lock`;
-  const fd = acquireLock(lockPath);
-  try {
-    return fn();
-  } finally {
-    closeSync(fd);
-    // The stale-lock breaker in acquireLock can unlink a lock another process
-    // still holds, so the lock being gone already is a real outcome here.
-    tolerate(() => unlinkSync(lockPath), 'enoent');
-  }
-}
-
-function acquireLock(lockPath: string): number {
-  const started = Date.now();
-  while (true) {
-    try {
-      const fd = openSync(lockPath, 'wx', 0o600);
-      writeFileSync(fd, `${process.pid}\n${Date.now()}\n`);
-      return fd;
-    } catch (err) {
-      if (!isAlreadyExists({ error: err })) throw err;
-      tolerate(() => {
-        const ageMs = Date.now() - statSync(lockPath).mtimeMs;
-        if (ageMs > 30_000) unlinkSync(lockPath);
-      }, 'enoent');
-      if (Date.now() - started > 30_000) {
-        throw new Error(`Timed out waiting for Codex auth lock: ${lockPath}`, { cause: err });
-      }
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
-    }
-  }
-}
-
-function isAlreadyExists(input: { error: unknown }): boolean {
-  return v.safeParse(v.object({ code: v.literal('EEXIST') }), input.error).success;
-}
 
 export { CODEX_CRED_KEY };

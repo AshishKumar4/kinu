@@ -245,7 +245,6 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   upsertAgentConfig({
     name,
     mode: 'local',
-    displayName,
     localName: name,
     alias: input.alias || undefined,
     cwd,
@@ -334,12 +333,10 @@ export interface RenamedLocalAgent {
 
 /**
  * Retitle a local agent on the owner's behalf.
- *
- * Writes the agent's own naming state and the `~/.kinu/config.json` ref
- * together, and marks the title the OWNER'S — which is what permanently stops
- * `autoTitleLocalWorkspace` from replacing it, since the shared
- * `planWorkspaceTitle` refuses a `user` origin.
- */
+ * Writes the agent's own naming state — the one title store — and marks it
+ * the OWNER'S, which is what permanently stops `autoTitleLocalWorkspace`
+ * from replacing it, since the shared `planWorkspaceTitle` refuses a `user`
+ * origin. */
 export function renameLocalAgent(name: string, displayName: string): RenamedLocalAgent {
   const title = displayName.trim();
   if (!title) throw new Error('A name is required.');
@@ -351,11 +348,6 @@ export function renameLocalAgent(name: string, displayName: string): RenamedLoca
   } finally {
     db.close();
   }
-  const configured = resolveAgentRef(name);
-  upsertAgentConfig({
-    ...(configured ?? { name, mode: 'local', localName: name }),
-    displayName: title,
-  });
   return { name, displayName: title };
 }
 

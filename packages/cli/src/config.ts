@@ -33,6 +33,7 @@ import {
   createFileCodexAuthStore,
   ensureSecretDir,
   kinuHome,
+  withConfigLock,
   writeSecretFile,
   type LocalCloudSession,
   type LocalCodexAuthStore,
@@ -84,6 +85,9 @@ export type AgentMode = 'local' | 'cloud';
 export interface KinuAgentConfig {
   name: string;
   mode: AgentMode;
+  /** Cloud workspaces only: the server-side title cache. A local agent's
+   *  title lives in its own database (`agent_config.display_name`) and is
+   *  never mirrored here. */
   displayName?: string;
   alias?: string;
   localName?: string;
@@ -271,7 +275,6 @@ export function agentDbPath(name: string): string {
  *  binds to, and the virtual workspace grouping it with its peers. */
 export interface LocalAgentRef {
   name: string;
-  displayName?: string;
   cwd: string;
   workspaceId: string;
   dbPath: string;
@@ -300,7 +303,6 @@ function placedRef(agent: KinuAgentConfig): LocalAgentRef | null {
   if (!AGENT_NAME_RE.test(name)) return null;
   return {
     name,
-    displayName: agent.displayName,
     cwd: agent.cwd,
     workspaceId: agent.workspaceId,
     dbPath: agentDbPath(name),
@@ -365,6 +367,26 @@ export function readWorkspaceIdentityId(dbPath: string): string | null {
   }
 }
 
+/** The visible title a local workspace's own database carries, or null when it
+ *  has none yet. The one label source for local agents: config.json holds no
+ *  copy of it, so a rename or auto-title cannot drift from the roster. */
+export function readWorkspaceDisplayName(dbPath: string): string | null {
+  if (!existsSync(dbPath)) return null;
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    const present = db.query<{ n: number }, []>(
+      `SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'agent_config'`,
+    ).get();
+    if (!present || present.n === 0) return null;
+    const row = db.query<{ value: string }, [string]>(
+      `SELECT value FROM agent_config WHERE key = 'display_name'`,
+    ).get('display_name');
+    return row?.value ?? null;
+  } finally {
+    db.close();
+  }
+}
+
 export interface AdoptLegacyAgentOptions {
   cwd?: string;
   workspaceId?: string;
@@ -389,17 +411,16 @@ export function adoptLegacyLocalAgent(name: string, opts: AdoptLegacyAgentOption
   if (already) return already;
   const cwd = canonicalProjectRoot(opts.cwd);
   const workspaceId = opts.workspaceId ?? defaultVirtualWorkspaceId(cwd);
-  const saved = upsertAgentConfig({
+  upsertAgentConfig({
     ...existing,
     name,
     mode: 'local',
-    displayName: existing?.displayName ?? name,
     localName: name,
     cwd,
     workspaceId,
     identityId: readWorkspaceIdentityId(dbPath) ?? undefined,
   });
-  return { name, displayName: saved.displayName, cwd, workspaceId, dbPath };
+  return { name, cwd, workspaceId, dbPath };
 }
 
 /** A named local workspace has no database. Carries the remedy separately so
@@ -444,7 +465,7 @@ export function resolveLocalAgent(input: string, opts: ResolveLocalAgentOptions 
   const cwd = canonicalProjectRoot(opts.cwd);
   const workspaceId = opts.workspaceId ?? defaultVirtualWorkspaceId(cwd);
   if (opts.adopt === false) {
-    return { name, displayName: ref?.displayName, cwd, workspaceId, dbPath, placement: 'unplaced' };
+    return { name, cwd, workspaceId, dbPath, placement: 'unplaced' };
   }
   return { ...adoptLegacyLocalAgent(name, { cwd, workspaceId }), placement: 'adopted' };
 }
@@ -485,16 +506,22 @@ export function setDefaultReasoningEffort(effort: ReasoningEffort): ReasoningEff
   return effort;
 }
 
-export function saveConfigFile(config: KinuConfig): void {
+function writeConfigFileUnlocked(config: KinuConfig): void {
   ensureAgentHome();
   writeSecretFile(CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`);
 }
 
+export function saveConfigFile(config: KinuConfig): void {
+  withConfigLock(CONFIG_PATH, () => writeConfigFileUnlocked(config));
+}
+
 export function updateConfigFile(mutator: (config: KinuConfig) => KinuConfig | void): KinuConfig {
-  const config = loadConfigFile();
-  const next = mutator(config) ?? config;
-  saveConfigFile(next);
-  return next;
+  return withConfigLock(CONFIG_PATH, () => {
+    const config = loadConfigFile();
+    const next = mutator(config) ?? config;
+    writeConfigFileUnlocked(next);
+    return next;
+  });
 }
 
 /**

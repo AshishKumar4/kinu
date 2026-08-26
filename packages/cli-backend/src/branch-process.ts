@@ -11,7 +11,7 @@ import type {
 } from '@kinu.run/core';
 import type { CraftedTool, LLMProviderConfig, WorkMode } from '@kinu.run/core';
 import { fork, type ChildProcess } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
 import type { LocalProviderCredentials } from './model-resolver';
@@ -123,6 +123,7 @@ export function createBranchSpawner(
     activeBranches.set(branchId, child);
     child.once('exit', () => {
       activeBranches.delete(branchId);
+      disposeBranchFiles(dbPath);
     });
 
     const rpc = <T>(method: string, args: BranchRpcArgs): Promise<T> => {
@@ -160,22 +161,26 @@ export function createBranchSpawner(
       return promise;
     };
 
-    // Wait for child to signal readiness
-    await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('Branch worker startup timeout')), 30_000);
-      const handler = (msg: { method: string }) => {
-        if (msg.method === 'ready') {
-          clearTimeout(timeout);
-          child.off('message', handler);
-          resolve();
-        }
-      };
-      child.on('message', handler);
-      child.on('error', (err) => { clearTimeout(timeout); reject(err); });
-      child.on('exit', (code) => {
-        if (code !== 0) { clearTimeout(timeout); reject(new Error(`Branch worker exited with code ${code}`)); }
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Branch worker startup timeout')), 30_000);
+        const handler = (msg: { method: string }) => {
+          if (msg.method === 'ready') {
+            clearTimeout(timeout);
+            child.off('message', handler);
+            resolve();
+          }
+        };
+        child.on('message', handler);
+        child.on('error', (err) => { clearTimeout(timeout); reject(err); });
+        child.on('exit', (code) => {
+          if (code !== 0) { clearTimeout(timeout); reject(new Error(`Branch worker exited with code ${code}`)); }
+        });
       });
-    });
+    } catch (error) {
+      child.kill('SIGTERM');
+      throw error;
+    }
 
     return {
       explore: (history: Array<{ role: string; content: string }>, tools: CraftedTool[], languages: readonly [string, ...string[]], mode: WorkMode, siblings: readonly string[] = []) =>
@@ -197,6 +202,12 @@ export function createBranchSpawner(
   };
 
   return { spawn, abort };
+}
+
+/** The branch database is live-worker trace state, including every possible
+ * SQLite sidecar. No post-exit reader exists, so its worker's exit releases it. */
+function disposeBranchFiles(dbPath: string): void {
+  for (const suffix of ['', '-wal', '-shm', '-journal']) rmSync(dbPath + suffix, { force: true });
 }
 
 function branchSafeCredentials(credentials: LocalProviderCredentials | undefined): LocalProviderCredentials {

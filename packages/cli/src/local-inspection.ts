@@ -13,8 +13,8 @@ import {
   type AlarmScheduler,
   createAgentConfigStore,
   createFactsStore,
-  initAgentConfigTable,
   initEventsHubTables,
+  initAgentConfigTable,
   alignmentConvergence,
   calibrationReport,
   createCompletionLLM,
@@ -53,6 +53,7 @@ import {
   type LabelingItem,
   type JsonObject,
   type JsonValue,
+  type TierId,
   type OutcomeLabel,
   type EventVariant,
   type KinuEvent,
@@ -220,6 +221,25 @@ export function getLocalAgentInfo(name: string): LocalAgentInfoSnapshot {
     };
   });
 }
+export interface LocalProfileCoordinates {
+  readonly roleId: string;
+  readonly assignedTier: TierId | null;
+}
+
+export function getLocalProfileCoordinates(name: string): LocalProfileCoordinates {
+  return withLocalDb(name, (db) => {
+    if (!tableExists(db, 'agent_config')) {
+      return { roleId: 'general', assignedTier: null };
+    }
+    const config = createAgentConfigStore(makeSql(db));
+    const selection = config.getRoleSelection();
+    return {
+      roleId: selection.kind === 'catalog' ? selection.roleId : 'general',
+      assignedTier: config.getAssignedTier(),
+    };
+  });
+}
+
 
 /**
  * The curated memory document, reassembled from its indexed chunks.
@@ -677,38 +697,6 @@ export function getLocalToolSurface(name: string): {
   }));
 }
 
-export function getLocalStoredModel(name: string): { spec: string | null } {
-  return withLocalDb(name, (db) => ({
-    spec: tableExists(db, 'agent_config')
-      ? get<{ value: string | null }>(db, `SELECT value FROM agent_config WHERE key = 'model' LIMIT 1`)?.value ?? null
-      : null,
-  }));
-}
-
-export async function setLocalStoredModel(name: string, spec: string): Promise<{ ok: true; spec: string }> {
-  if (!spec.trim()) throw new Error('model spec required');
-  // One normalizer: the same provider-registry resolution the live session uses.
-  const normalized = createConfiguredLocalModelResolver().resolver.normalizeSpecSync(spec);
-  return withLocalWritableDb(name, (db) => {
-    initAgentConfigTable((ddl) => db.exec(ddl));
-    createAgentConfigStore(makeSql(db)).setModel(normalized);
-    return { ok: true, spec: normalized };
-  });
-}
-
-export function getLocalReasoningEffort(name: string): { effort: ReasoningEffort | null } {
-  return withLocalDb(name, (db) => ({
-    effort: tableExists(db, 'agent_config') ? createAgentConfigStore(makeSql(db)).getReasoningEffort() : null,
-  }));
-}
-
-export async function setLocalReasoningEffort(name: string, effort: ReasoningEffort): Promise<{ ok: true; effort: ReasoningEffort }> {
-  return withLocalWritableDb(name, (db) => {
-    initAgentConfigTable((ddl) => db.exec(ddl));
-    createAgentConfigStore(makeSql(db)).setReasoningEffort(effort);
-    return { ok: true, effort };
-  });
-}
 
 export function listLocalTriggers(name: string): { triggers: TriggerRow[] } {
   return withLocalDb(name, (db) => {

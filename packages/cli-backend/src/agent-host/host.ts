@@ -17,7 +17,6 @@ import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel, ModelMessage } from 'ai';
-import * as v from 'valibot';
 import {
   EventLog,
   ReplyChannelStore,
@@ -37,9 +36,9 @@ import {
   readMission,
   renderSoulMarkdown,
   slugifyName,
+  subordinateDescriptorSource,
   subordinateRelaysTurnEnd,
   writeSoul,
-  TIER_IDS,
   type AdmittedSubordinateReport,
   type ReportToolDeps,
   type SubordinateReportOrigin,
@@ -50,9 +49,11 @@ import {
   type LocalPeerEndpoint,
   type PeerMessage,
   type ReceiveResult,
+  type RoleSelection,
   type SqlExec,
   type SubordinateHandoff,
   type TeamToolDeps,
+  type TierId,
   type SerializedMessage,
   type WorkMode,
 } from '@kinu.run/core';
@@ -196,9 +197,7 @@ interface HostEntry {
    *  of another tree and leave its own depth cap behind in one call. */
   peers: LocalPeerEndpoint | null;
   children: Map<string, HostEntry>;
-  childrenRecovered: boolean;
   relay: { ownerDriven: boolean; reportedThisTurn: boolean; mode: WorkMode } | null;
-  pendingMode: WorkMode;
 }
 
 export type AgentEventListener = (agent: string, event: SessionEvent) => void;
@@ -439,7 +438,7 @@ export class LocalAgentHost {
   }): Promise<HostEntry> {
     const config = createAgentConfigStore(input.ws.rt.storage.sql);
     const hubSql = makeSqlExec(input.db);
-    const roster = new SubordinateRosterStore(hubSql, input.ws.rt.storage.sql);
+    const roster = new SubordinateRosterStore(hubSql);
     roster.ensureSchema();
     const sessionId = canonicalConversationId(config);
     const sessionOpts: LocalAgentSessionOpts = {
@@ -466,11 +465,9 @@ export class LocalAgentHost {
       team: null,
       peers: null,
       children: new Map(),
-      childrenRecovered: false,
       relay: input.parentKey === null
         ? null
         : { ownerDriven: false, reportedThisTurn: false, mode: 'build' },
-      pendingMode: 'build',
     };
     this.entries.set(input.key, entry);
     // THE REAL TEAM TRANSPORT. The roster needs the session's broadcast, which
@@ -527,9 +524,8 @@ export class LocalAgentHost {
   }
 
   private async recoverChildren(parent: HostEntry): Promise<void> {
-    if (parent.childrenRecovered) return;
-    parent.childrenRecovered = true;
     for (const roster of parent.roster.list()) {
+      if (parent.children.has(roster.name) || this.opening.has(`${parent.key}/${roster.name}`)) continue;
       try {
         await this.openChildEntry(parent, roster.name);
       } catch (error) {
@@ -731,8 +727,7 @@ export class LocalAgentHost {
     if (event.type === 'turn-start') {
       state.ownerDriven = event.kind === 'user';
       state.reportedThisTurn = false;
-      state.mode = child.pendingMode;
-      child.pendingMode = 'build';
+      state.mode = event.workMode;
       return;
     }
     // No `tool-call` branch here any more. The flag is set by the report dep
@@ -888,8 +883,8 @@ export class LocalAgentHost {
   }
 
   /** Birth + seed the child before its LocalAgentSession becomes reachable.
-   *  The spawn input carries the ONE role story: a catalog roleId (with its
-   *  optional tier override and catalog version) or the legacy freeform line. */
+   *  The role is one tagged selection, so catalog and legacy roles never
+   *  become independent parent-side mirrors. */
   private async birthChild(
     parent: HostEntry,
     input: Parameters<LocalAgentHost['birthChildEntry']>[1],
@@ -915,10 +910,8 @@ export class LocalAgentHost {
       /** Empty when nothing the caller said can name this agent yet. */
       displayName: string;
       nameOrigin: 'user' | 'auto';
-      roleId?: string;
-      legacyRole?: string;
-      tier?: string;
-      catalogVersion?: number;
+      role: RoleSelection;
+      tier?: TierId;
       mission: string;
     },
     key: string,
@@ -947,22 +940,11 @@ export class LocalAgentHost {
       const opened = await openWorkspaceCLI(db, dbPath, openConfig);
       const rt = shareLocalWorkspacePlane(opened.rt, parent.ws.rt);
       const config = createAgentConfigStore(rt.storage.sql);
-      // Title and whose it is, together — the title policy reads `name_origin`
-      // to decide whether it may name this agent on its first interaction.
       config.setDisplayNameOrigin(input.displayName, input.nameOrigin);
-      // The hire's role and tier become DURABLE state on the child, because
-      // that is what its own turn boundary reads. Prose in SOUL.md tells the
-      // model who it is; only these two rows make its turns actually resolve
-      // the assigned role's prompt, tools, skills and tier. Writing only the
-      // prose is what made a hired auditor resolve `general` on every turn.
-      if (input.roleId) config.setActiveRoleId(input.roleId);
-      // An absent or unknown tier CLEARS the pin, which is the instruction to
-      // derive from the role rather than a tier of its own. PARSED, not asserted:
-      // `tier` is the hiring caller's input, so this is its I/O boundary and a
-      // bad value must never become a stored row a later read has to tolerate.
-      // Same schema the turn resolver uses (profiles/resolve.ts).
-      const pinnedTier = v.safeParse(v.picklist(TIER_IDS), input.tier);
-      config.setAssignedTier(pinnedTier.success ? pinnedTier.output : null);
+      config.setRoleSelection(input.role);
+      config.setAssignedTier(input.tier ?? null);
+      const descriptor = subordinateDescriptorSource(config).read();
+      if (!descriptor) throw new Error(`subordinate "${input.name}" has no readable descriptor after creation`);
       // The child keeps the parent's model only as its STARTING point; its
       // tier (when it has one) resolves at its own turn boundary. No model
       // spec travels with a hire — tier is the one routing input.
@@ -978,15 +960,15 @@ export class LocalAgentHost {
         rt.agentStateVfs ?? rt.storage.vfs,
         rt.storage.sql,
         [
-          renderSoulMarkdown({ name: input.displayName || input.name, mission: input.mission }),
+          renderSoulMarkdown({ name: descriptor.displayName || input.name, mission: input.mission }),
           '',
           '## Role',
           '',
-          input.roleId
-            ? `Role: ${input.roleId}${input.tier ? ` (tier ${input.tier})` : ''}`
+          descriptor.role.kind === 'catalog'
+            ? `Role: ${descriptor.role.roleId}${descriptor.tier ? ` (tier ${descriptor.tier})` : ''}`
             : [
               'Legacy role (assigned before this workspace had a role catalog):',
-              input.legacyRole ?? '',
+              descriptor.role.text,
               'You keep these instructions until you are explicitly assigned a catalog role.',
             ].join('\n'),
         ].join('\n'),
@@ -1027,7 +1009,6 @@ export class LocalAgentHost {
     },
   ): SubordinateHandoff {
     if (this.closed) throw new Error('LocalAgentHost is closed.');
-    child.pendingMode = input.mode;
     const admission = admitSubordinateTask(child.eventLog, {
       fromWorkspace: parent.name,
       kind: input.kind,

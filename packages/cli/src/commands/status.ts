@@ -1,4 +1,5 @@
 import { statSync } from 'node:fs';
+import { effectiveRoleCatalog } from '@kinu.run/core';
 import { requireAuthConfig } from '../config';
 import {
   callAgentRpc,
@@ -12,7 +13,8 @@ import * as v from 'valibot';
 import { ACCENT, DIM, OK, printAgentStatus } from '../display';
 import { resolveAgentTarget } from '../agent-target';
 import { requireLocalAgent } from '../local-target';
-import { getLocalAgentInfo } from '../local-inspection';
+import { getLocalAgentInfo, getLocalProfileCoordinates } from '../local-inspection';
+import { createProfileAuthorityReader } from '../profiles';
 
 export async function statusCommand(name: string): Promise<void> {
   const target = resolveAgentTarget(name);
@@ -36,11 +38,25 @@ export async function statusCommand(name: string): Promise<void> {
   }
   const local = requireLocalAgent(target.requestedName, { adopt: false });
   const info = getLocalAgentInfo(local.name);
+  const coordinates = getLocalProfileCoordinates(local.name);
+  const envelope = await createProfileAuthorityReader()();
+  if (envelope === null) {
+    printAgentStatus(info, statSync(local.dbPath).size, {
+      conversationCount: info.conversationCount,
+      model: info.model,
+      reasoningEffort: info.reasoningEffort,
+    });
+    return;
+  }
+  const roles = effectiveRoleCatalog(envelope.catalog);
+  const role = roles[coordinates.roleId] ?? roles.general;
+  const tierId = coordinates.assignedTier ?? role?.tier ?? 'default';
+  const tier = envelope.catalog.tiers[tierId] ?? envelope.catalog.tiers.default;
   const dbSize = statSync(local.dbPath).size;
   printAgentStatus(info, dbSize, {
     conversationCount: info.conversationCount,
-    model: info.model,
-    reasoningEffort: info.reasoningEffort,
+    model: tier?.model ?? info.model,
+    reasoningEffort: tier?.reasoningEffort ?? info.reasoningEffort,
   });
 }
 

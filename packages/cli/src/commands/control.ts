@@ -1,21 +1,15 @@
-import {
-  requireAuthConfig,
-  setDefaultReasoningEffort,
-} from '../config';
+import { requireAuthConfig } from '../config';
 import { isReasoningEffort, type ModelMenu, type ReasoningEffort } from '@kinu.run/core';
 import { resolveAgentTarget } from '../agent-target';
 import {
   cancelLocalJob,
   cancelLocalTrigger,
   createLocalTimerTrigger,
-  getLocalStoredModel,
-  getLocalReasoningEffort,
   getLocalToolSurface,
   listLocalJobs,
   listLocalTriggers,
-  setLocalStoredModel,
-  setLocalReasoningEffort,
 } from '../local-inspection';
+import { loadActiveProfile, updateDefaultTier } from '../profiles';
 import {
   callAgentRpc,
   CloudBackgroundJobSchema,
@@ -85,8 +79,16 @@ export async function modelCommand(name: string, spec: string | undefined, opts:
     const catalog = await loadModelCatalog(() => configured.resolver.listModels());
     validateModelSelection(catalog, resolvedSpec, spec, name);
   }
-  const result = resolvedSpec ? await setLocalStoredModel(target.localName, resolvedSpec) : getLocalStoredModel(target.localName);
+  const envelope = resolvedSpec
+    ? await updateDefaultTier({ model: resolvedSpec })
+    : await loadActiveProfile();
+  const result = { spec: envelope.catalog.tiers.default.model };
   console.log(spec ? `${OK('set')} ${result.spec}` : `${DIM('model')} ${result.spec ?? '(default)'}`);
+}
+
+/** One effort reading: what a set/get round trip resolved to for an agent. */
+interface EffortResult {
+  readonly effort: ReasoningEffort | null;
 }
 
 export async function effortCommand(name: string, level: string | undefined): Promise<void> {
@@ -94,18 +96,18 @@ export async function effortCommand(name: string, level: string | undefined): Pr
   if (level !== undefined && !isReasoningEffort(level)) {
     throw new Error('Reasoning effort must be low, medium, or high.');
   }
-  let result: { effort: ReasoningEffort | null };
+  let result: EffortResult;
   if (target.mode === 'cloud') {
     const auth = requireAuthConfig();
     result = level
       ? await callAgentRpc(auth.origin, auth.token, target.cloudName, 'setReasoningEffort', EffortSetResultSchema, [level])
       : await callAgentRpc(auth.origin, auth.token, target.cloudName, 'getReasoningEffort', StoredEffortSchema);
   } else {
-    result = level
-      ? await setLocalReasoningEffort(target.localName, level)
-      : getLocalReasoningEffort(target.localName);
+    const envelope = level
+      ? await updateDefaultTier({ reasoningEffort: level })
+      : await loadActiveProfile();
+    result = { effort: envelope.catalog.tiers.default.reasoningEffort ?? null };
   }
-  if (level && result.effort) setDefaultReasoningEffort(result.effort);
   console.log(level
     ? `${OK('set')} ${result.effort}`
     : `${DIM('reasoning effort')} ${result.effort ?? 'medium (chat default)'}`);

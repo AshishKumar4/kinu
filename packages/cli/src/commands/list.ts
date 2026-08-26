@@ -30,6 +30,16 @@ export async function listCommand(): Promise<void> {
     }
 
     const name = agent.localName ?? agent.name;
+    if (agent.label.startsWith('(unreadable:')) {
+      return {
+        name,
+        mode: agent.mode,
+        purpose: agent.label,
+        scaffoldVersion: 0,
+        toolCount: 0,
+        dbSize: statSync(agentDbPath(name)).size,
+      };
+    }
     try {
       // getLocalAgentInfo degrades field by field (a workspace predating a
       // table still reports everything else), so only an unopenable database

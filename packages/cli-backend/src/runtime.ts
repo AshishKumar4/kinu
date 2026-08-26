@@ -33,7 +33,7 @@ import {
   DefaultExecutionRouter, createInlineExecutor, formatExecResult,
   withMountTable, standardMounts,
   withApprovalGatedShell,
-  createAgentConfigStore, initActorTables, initAgentConfigTable,
+  createAgentConfigStore, initActorTables, initAgentConfigTable, initScaffoldTables,
   resolveModelRoute,
   type ModelCallSink, type ModelOperationSink, type NodeHomeHost,
 } from '@kinu.run/core';
@@ -400,6 +400,10 @@ export function createCLIRuntime(
   // WITHOUT `initWorkspaceSchema` (a branch worker, `kinu evolve`, a fixture)
   // still reads the table on its first gated command.
   initAgentConfigTable(execRaw);
+  // Same reason the agent-config DDL runs here: a runtime built without
+  // `initWorkspaceSchema` (a branch worker, `kinu evolve`, a fixture) still
+  // reads and writes scaffold tables on its first identity.scaffold touch.
+  initScaffoldTables(execRaw, sql);
   const agentConfig = createAgentConfigStore(sql);
   let turnProfile: ResolvedTurnProfile | null = null;
   // The model plane a PROFILE resolves against: how a stored spec is spelled in
@@ -675,12 +679,17 @@ export function buildCLIHeadRuntime(
   // lineage of its own. `initActorTables` is exactly that distinction, and the
   // three stores below are not the whole of what a head reads. The inline
   // executor registered on this same `sql` quotes the crafted-tool EMA from
-  // `craft_scores` in `listTools`, seeds it in `createTool`, files a
+  // `crafted_tools quality columns` in `listTools`, seeds it in `createTool`, files a
   // misevolution veto in `evolution_events` and publishes to `agent_views`;
   // with only the VFS, memory and craft schemas below, a head raised
-  // `no such table: craft_scores` on its first `workspace.listTools()` and a
+  // `no such table: crafted_tools` on its first `workspace.listTools()` and a
   // tool it crafted was written and then reported as a failure.
   initActorTables(execRaw, sql);
+  // A head's scaffold is private to it ("its own scaffold" below), so its
+  // tables live in the same scratch database — without them, the first
+  // `identity.scaffold` touch on a fresh head raised `no such table:
+  // scaffold_versions`.
+  initScaffoldTables(execRaw, sql);
 
   const workspace = createWorkspaceFilesystem({
     sql: nimbusSql(db),

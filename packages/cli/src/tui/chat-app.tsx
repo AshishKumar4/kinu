@@ -205,12 +205,13 @@ function ChatScene({
   const commandPalette = activeSurface?.kind === 'commands';
   const hubView = activeSurface?.kind === 'hub' ? activeSurface.view : null;
   const settingsOpen = activeSurface?.kind === 'settings';
-  // The hub was loaded once for the client this scene STARTED with; a switch
-  // or a fork re-points the client, and a hub describing the old workspace's
-  // role/tier would be a stale screenshot. Refreshed per client, kept on
-  // failure — a hub one beat old beats no hub at all.
-  const [hub, setHub] = useState(hubData);
-  const hubClientRef = useRef(initialClient);
+  // The hub describes ONE open workspace, so its state carries that
+  // workspace's identity: a switch resets it synchronously alongside every
+  // other per-client piece, and the refresh effect re-derives it from the
+  // same active target — no second record of which workspace it describes.
+  const [hub, setHub] = useState<{ identity: string; data: TuiHubData } | null>(
+    hubData ? { identity: `${initialClient.mode}:${initialClient.agentName}`, data: hubData } : null,
+  );
   const [draft, setDraft] = useState('');
   // Each conversation keeps its own composer draft across switches — leaving
   // saves under the OLD client's key, arriving restores under the new one's.
@@ -507,13 +508,15 @@ function ChatScene({
       skipHydrationRef.current = true;
       clientGenerationRef.current += 1;
       activeSegmentRef.current = null;
-      stream.clear();
       setTurnPhase(null);
       setStatus(null);
       setModelSpec('');
       setModelCatalog([]);
       setBranchTasks({});
-      machineRef.current = initialInputState;
+      // A pending next-turn tier belongs to the conversation being left; the
+      // hub is re-derived from the target below. Neither survives a switch.
+      setNextTier(null);
+      setHub(null);
       setInputState(initialInputState);
       setInputText(draftsRef.current.get(`${candidate.mode}:${candidate.agentName}`) ?? '');
       setMessages([
@@ -583,14 +586,12 @@ function ChatScene({
       addError({ cause: error });
     }
   }, [addError, addMessage, client, onNewAgent, roster, switchWorkspace]);
-
   useEffect(() => {
-    if (hubClientRef.current === client) return;
-    hubClientRef.current = client;
-    if (hubData === undefined) return;
+    const identity = `${client.mode}:${client.agentName}`;
+    if (hub !== null && hub.identity === identity) return;
     let cancelled = false;
     loadHubData(client, client.agentName)
-      .then((fresh) => { if (!cancelled) setHub(fresh); })
+      .then((fresh) => { if (!cancelled) setHub({ identity, data: fresh }); })
       .catch((error) => {
         diagnostics.failure(
           'tui.hub_refresh_failed',
@@ -599,24 +600,24 @@ function ChatScene({
         );
       });
     return () => { cancelled = true; };
-  }, [client, hubData]);
+  }, [client, hub]);
 
   // The hub's agent rows, live: the current virtual workspace's members from
   // the same roster the navigator reads, with the open agent's role/tier from
   // its loaded profile row and its status from this scene.
   const projectRoot = useMemo(() => canonicalProjectRoot(), []);
-  const hubLive = useMemo<TuiHubData | undefined>(() => hub && {
-    ...hub,
+  const hubLive = useMemo<TuiHubData | undefined>(() => !hub ? undefined : {
+    ...hub.data,
     agents: buildAgentHubEntries({
       items: roster.page.items,
       current: { name: client.agentName, mode: client.mode },
       currentEntry: {
-        ...(hub.agents[0] ?? { kind: 'main' as const }),
+        ...(hub.data.agents[0] ?? { kind: 'main' as const }),
         id: `${client.mode}:${client.agentName}`,
         label: status?.name ?? client.agentName,
         kind: 'main',
         status: isProcessing ? 'running' : 'idle',
-        workspace: hub.agents[0]?.workspace ?? client.agentName,
+        workspace: hub.data.agents[0]?.workspace ?? client.agentName,
       },
       projectRoot,
     }),
@@ -1232,7 +1233,7 @@ function ChatScene({
     }
     if (actionId === 'hub.agents' || actionId === 'hub.roles' || actionId === 'hub.tiers'
       || actionId === 'tier.quick') {
-      if (hub === undefined) return;
+      if (hub === null) return;
       key.preventDefault();
       const view: TuiHubView = actionId === 'hub.agents'
         ? 'agents'
@@ -1356,7 +1357,7 @@ function ChatScene({
         contextTokens={contextTokens}
         contextWindow={contextWindow}
         branchCount={Object.keys(branchTasks).length}
-        profile={hub?.profile.resolved}
+        profile={hub?.data.profile.resolved}
       />
 
       <scrollbox

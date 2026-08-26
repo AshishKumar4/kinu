@@ -1950,7 +1950,7 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
     expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM turn_outcomes`).get()?.c).toBe(0);
     // …and the turn is still in the window, still waiting for its verdict.
     expect(db.query<{ c: number }, []>(
-      `SELECT count(*) AS c FROM session_window WHERE in_window = 1`,
+      `SELECT count(*) AS c FROM completed_turns WHERE in_window = 1`,
     ).get()?.c).toBe(1);
 
     // A second run against the same workspace: its prompt IS the follow-up.
@@ -1964,7 +1964,7 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
     ).get();
     expect(row).toEqual({ outcome: 'corrected', source: 'classifier' });
     expect(db.query<{ c: number }, []>(
-      `SELECT count(*) AS c FROM session_window WHERE in_window = 1`,
+      `SELECT count(*) AS c FROM completed_turns WHERE in_window = 1`,
     ).get()?.c).toBe(2);
   });
 
@@ -1991,7 +1991,7 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
     // Nothing was graded here, and the review is owed — durably, to whoever
     // opens this workspace next.
     expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM turn_outcomes`).get()?.c).toBe(0);
-    expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM turn_review_queue`).get()?.c)
+    expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM completed_turns WHERE review = 'queued'`).get()?.c)
       .toBeGreaterThanOrEqual(1);
   });
 
@@ -2003,7 +2003,7 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
       { oneShot: true, model: runThenAnswerModel() });
     await session.send('run the build and report');
     await session.end();
-    const owed = db.query<{ c: number }, []>(`SELECT count(*) AS c FROM turn_review_queue`).get()?.c ?? 0;
+    const owed = db.query<{ c: number }, []>(`SELECT count(*) AS c FROM completed_turns WHERE review = 'queued'`).get()?.c ?? 0;
     expect(owed).toBeGreaterThanOrEqual(1);
     expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM turn_outcomes`).get()?.c).toBe(0);
 
@@ -2019,15 +2019,15 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
       `SELECT outcome, source, followup FROM turn_outcomes`,
     ).get();
     expect(row).toEqual({ outcome: 'accepted', source: 'execution', followup: null });
-    expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM turn_review_queue`).get()?.c).toBe(0);
+    expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM completed_turns WHERE review = 'queued'`).get()?.c).toBe(0);
     expect(events.some((e) => e.type === 'evolution' && e.event === 'deferred_reviews_drained')).toBe(true);
     await next.end();
   });
 
   test('a corrupt deferred row is refused at the next open — no verdict is invented', async () => {
     const { db, rt } = setupWithEvolution('{"outcome":"accepted","confidence":0.9,"evidence":"x"}');
-    db.query(`INSERT INTO turn_review_queue (id, turn, followup, queued_at) VALUES (?, ?, ?, ?)`)
-      .run('rev-corrupt', '{truncated', null, 1);
+    db.query(`INSERT INTO completed_turns (id, turn, followup, in_window, review, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
+      .run('rev-corrupt', '{truncated', null, 0, 'queued', 1);
 
     const events: SessionEvent[] = [];
     const next = new LocalAgentSession({
@@ -2036,7 +2036,7 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
     await next.recoverBackgroundJobs();
 
     expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM turn_outcomes`).get()?.c).toBe(0);
-    expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM turn_review_queue`).get()?.c).toBe(0);
+    expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM completed_turns WHERE review = 'queued'`).get()?.c).toBe(0);
     const drained = events.flatMap((e) =>
       e.type === 'evolution' && e.event === 'deferred_reviews_drained' ? [e.message] : []);
     expect(drained).toEqual(['0 deferred turn review(s) run, 1 unreadable row(s) dropped']);
@@ -2048,14 +2048,14 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
       { oneShot: true });
     await session.send('write the report');
     await session.end();
-    expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM turn_review_queue`).get()?.c).toBe(1);
+    expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM completed_turns WHERE review = 'queued'`).get()?.c).toBe(1);
 
     const nextExec = new LocalAgentSession({
       rt, db, model: fakeModel('ok'), onEvent: () => {}, oneShot: true,
       backgroundPolicy: BACKGROUND_POLICY['one-shot'],
     });
     await nextExec.recoverBackgroundJobs();
-    expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM turn_review_queue`).get()?.c).toBe(1);
+    expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM completed_turns WHERE review = 'queued'`).get()?.c).toBe(1);
     expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM turn_outcomes`).get()?.c).toBe(0);
     await nextExec.end();
   });

@@ -22,12 +22,10 @@ import {
   CONFIG_PATH,
   agentDbPath,
   createCodexAuthStore,
-  listConfiguredAgentRefs,
   loadConfigFile,
   readProviderRevision,
   resolveMcpServers,
   resolveProviderCredentials,
-  upsertAgentConfig,
 } from './config';
 import {
   renameLocalAgent,
@@ -185,17 +183,14 @@ export function autoTitleLocalWorkspace(
         persist: (title) => {
           if (config.getNameOrigin() === 'user') return false;
           config.setDisplayNameOrigin(title, 'auto');
-          const configured = listConfiguredAgentRefs()
-            .find((agent) => agent.mode === 'local' && (agent.localName ?? agent.name) === name);
-          upsertAgentConfig({ ...(configured ?? { name, mode: 'local', localName: name }), displayName: title });
           return true;
         },
         suggest: async (text) => (await suggestAgentIdentityFromMission(text, opts)).displayName,
       });
     } catch (error) {
-      // The naming model refusing, or our database/config.json refusing the write:
-      // `applyWorkspaceTitle` absorbs neither, and the deterministic title has landed
-      // by the time either can happen.
+      // The naming model refusing, or the database refusing the write:
+      // `applyWorkspaceTitle` absorbs neither, and the deterministic title
+      // has landed by the time either can happen.
       diagnostics.failure(
         'workspace.title_save_failed',
         toKinuError({ doing: 'saving the workspace title', cause: error, otherwise: 'io' }),
@@ -219,6 +214,9 @@ export interface LocalAgentClientDeps {
    *  interactive client always wires a resolver, so this stays undefined. */
   model?: LanguageModel;
   modelResolver: LocalModelResolver;
+  /** Override only at composition/test boundaries. Production reads the one
+   *  profile authority through createProfileAuthorityReader(). */
+  profileAuthority?: LocalAgentSessionOpts['profileAuthority'];
   mcpServers: Record<string, McpServerConfig>;
   noAutoEvolve: boolean;
   transcript: CliSessionOptions;
@@ -620,7 +618,7 @@ export class LocalAgentClient implements AgentClient {
       // resolves one catalog whichever process drives it. Read per turn, not
       // captured: `/model` and `/effort` write the authority, and the turn
       // after one runs under what it wrote.
-      profileAuthority: createProfileAuthorityReader(),
+      profileAuthority: this.deps.profileAuthority ?? createProfileAuthorityReader(),
       // Same reason, other file: a chat session that stays open for hours must
       // see a provider connected in another process on its next turn.
       providerRevision: readProviderRevision,
