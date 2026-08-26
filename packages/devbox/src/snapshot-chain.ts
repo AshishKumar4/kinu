@@ -523,7 +523,10 @@ function chainShell(exec: ContainerExec) {
      *  those and has no registry entry for them, and releasing a mount the SDK
      *  DID make this way leaves its registry claiming the path forever. */
     unmountPath: async (path: string): Promise<void> => {
-      await exec(`/usr/bin/fusermount3 -uz ${shellPath(path)} 2>/dev/null || true`);
+      await exec(
+        `while grep -qs ${shellPath(` ${path} `)} /proc/mounts; do `
+          + `/usr/bin/fusermount3 -uz ${shellPath(path)} 2>/dev/null || true; sleep 0.1; done`,
+      );
     },
     /**
      * Mount one squashfs layer read-only. squashfuse reads lazily THROUGH the
