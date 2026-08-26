@@ -348,6 +348,13 @@ class BenchBox extends Devbox<BenchEnv> {
     await flushOps(this.env);
   }
 
+  /** Release the benchmark container without preserving state. The caller is
+   * deleting that state and must free the class's only instance first. */
+  async stopForTeardown(): Promise<void> {
+    await this.stop('SIGTERM');
+    while (this.ctx.container?.running === true) await scheduler.wait(100);
+  }
+
   /**
    * The DRIVER owns every measured tick.
    *
@@ -943,6 +950,7 @@ export default {
         }
 
         case 'POST /teardown': {
+          await box.stopForTeardown();
           await box.discardState();
           let purged = 0;
           // An empty prefix means the whole store, which is only ever correct
