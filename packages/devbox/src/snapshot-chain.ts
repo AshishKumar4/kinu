@@ -1337,18 +1337,22 @@ function shellPaths(paths: readonly string[]): string {
 /**
  * The skip-gate fingerprint command over `sourceDir`.
  *
- * SUB-SECOND MTIME, deliberately. The gate exists because the SDK's change
- * check once said `unchanged` about 400 MiB of writes; truncating `%T@` to a
- * whole second left that same lie a narrower door: a same-length in-place edit
- * landing in the same second as the recorded mark, with nothing else changed,
- * matched the fingerprint forever. `%.6f` keeps the fraction, shrinking the
- * window to the filesystem's own timestamp resolution.
+ * The prior count/bytes/newest-mtime summary could collide for distinct trees:
+ * a rename preserved every field, and a same-path rewrite whose mtime was
+ * restored preserved them too — both skipped forever while content changed.
+ * This hashes a canonical per-path record of inode, type, mode, size,
+ * sub-second mtime, sub-second CHANGE time, symlink target and path instead.
+ * It stays O(entries), not O(bytes), while any of those moves changes the mark;
+ * an mtime restoration cannot hide a write, because the write itself moved
+ * ctime.
  *
- * Exported as a command builder rather than inlined so the suite can run the
- * real `find | awk` pipeline against a real directory and prove the boundary,
- * instead of pinning the format string by eye.
+ * A failed walk returns no mark. Callers must treat that as undecidable and
+ * checkpoint; `pipefail` prevents `sort` or `sha256sum` from hiding `find`'s
+ * failure.
  */
 export function upperFingerprintCommand(sourceDir: string): string {
-  return `find ${shellPath(sourceDir)} -mindepth 1 -printf '%s %T@\\n' 2>/dev/null `
-    + `| awk '{n++; b+=$1; if ($2>m) m=$2} END {printf "%d:%d:%.6f", n+0, b+0, m+0}'`;
+  const walk = `find ${shellPath(sourceDir)} -mindepth 1 `
+    + `-printf '%i\\0%y\\0%m\\0%s\\0%T@\\0%C@\\0%l\\0%p\\0' 2>/dev/null `
+    + '| LC_ALL=C sort -z | sha256sum | cut -c1-64';
+  return `bash -o pipefail -c ${shellPath(walk)}`;
 }

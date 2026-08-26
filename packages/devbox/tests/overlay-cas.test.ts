@@ -8,6 +8,9 @@
 // The last two tests assert the denominator: every outcome kind the
 // implementation enumerates has to be produced above.
 import { describe, expect, test } from 'bun:test';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Buffer } from 'node:buffer';
 
 import {
@@ -36,6 +39,8 @@ import {
 import {
   capSignatures,
   CAS_TREE_MOUNT,
+  DIGEST_SCRIPT,
+  parseDigestStream,
   normalizeOverlayCasState,
   OVERLAY_CAS_STATE_MAX_BYTES,
   overlayCasStorage,
@@ -545,6 +550,52 @@ describe('the stored record is untrusted input', () => {
 });
 
 describe('digest identity', () => {
+
+  test('captures whole and chunk digests from the same source bytes', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'devbox-digest-'));
+    try {
+      const source = join(dir, 'source.txt');
+      const script = join(dir, 'digest.sh');
+      const bin = join(dir, 'bin');
+      const marker = join(dir, 'mutated');
+      const oldBytes = fileBytes('before');
+      const newBytes = fileBytes('after!');
+      mkdirSync(bin);
+      writeFileSync(source, oldBytes);
+      writeFileSync(script, DIGEST_SCRIPT);
+      writeFileSync(join(bin, 'sha256sum'), [
+        '#!/bin/sh',
+        'if [ ! -e "$MARKER" ]; then',
+        '  : > "$MARKER"',
+        '  /usr/bin/sha256sum "$@"',
+        '  rc=$?',
+        '  printf "%s" "$REPLACEMENT" > "$TARGET"',
+        '  exit "$rc"',
+        'fi',
+        'exec /usr/bin/sha256sum "$@"',
+      ].join('\n'));
+      chmodSync(script, 0o755);
+      chmodSync(join(bin, 'sha256sum'), 0o755);
+
+      const proc = Bun.spawnSync({
+        cmd: ['sh', script, source],
+        env: {
+          ...process.env,
+          MARKER: marker,
+          PATH: `${bin}:${process.env.PATH ?? ''}`,
+          REPLACEMENT: new TextDecoder().decode(newBytes),
+          TARGET: source,
+        },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      expect(proc.exitCode).toBe(0);
+      const digest = parseDigestStream(new TextDecoder().decode(proc.stdout)).get(source);
+      expect(digest).toEqual(digestBytes(oldBytes));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
   test('the same bytes produce the same hash, so a rename can reuse them', () => {
     expect(sha256Hex(fileBytes('x'))).toBe(digestBytes(fileBytes('x')).hash);
     expect(digestBytes(fileBytes('x')).hash).not.toBe(digestBytes(fileBytes('y')).hash);
@@ -686,6 +737,7 @@ function harness(overrides: {
   /** Simulate GNU find failing MID-WALK: the upper exists but traversal hit
    *  an error, e.g. a file the workload deleted between listing and stat. */
   findFailsMidWalk?: boolean;
+  materializeRefusal?: (entry: JournalEntry) => string | undefined;
 } = {}): Harness {
   const calls: string[] = [];
   let mounted = overrides.mountedAtStart ?? false;
@@ -796,26 +848,41 @@ function harness(overrides: {
       });
       return Promise.resolve();
     },
-    writeFileStream: async (path, stream) => {
-      calls.push(`writeFile:${path}`);
-      const reader = stream.getReader();
-      const chunks: Uint8Array[] = [];
-      let size = 0;
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-        size += value.byteLength;
+    materializeBeneath: async ({ root, entry, stream }) => {
+      calls.push(`materialize:${entry.kind}:${entry.path}`);
+      if (root !== UPPER_DIR) return { kind: 'refused', reason: `unexpected root ${root}` };
+      const refusal = overrides.materializeRefusal?.(entry);
+      if (refusal !== undefined) return { kind: 'refused', reason: refusal };
+      if (entry.kind === 'file') {
+        if (stream === null) return { kind: 'refused', reason: 'file stream missing' };
+        const reader = stream.getReader();
+        const chunks: Uint8Array[] = [];
+        let size = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+          size += value.byteLength;
+        }
+        const content = new Uint8Array(size);
+        let offset = 0;
+        for (const chunk of chunks) {
+          content.set(chunk, offset);
+          offset += chunk.byteLength;
+        }
+        upper.set(entry.path, {
+          kind: 'file', mode: entry.mode, mtimeMs: entry.mtimeMs, content,
+        });
+      } else if (entry.kind === 'dir') {
+        upper.set(entry.path, { kind: 'dir', mode: entry.mode, mtimeMs: entry.mtimeMs });
+      } else if (entry.kind === 'symlink') {
+        upper.set(entry.path, {
+          kind: 'symlink', mode: entry.mode, mtimeMs: entry.mtimeMs, target: entry.target,
+        });
+      } else {
+        upper.set(entry.path, { kind: 'whiteout' });
       }
-      const content = new Uint8Array(size);
-      let offset = 0;
-      for (const chunk of chunks) {
-        content.set(chunk, offset);
-        offset += chunk.byteLength;
-      }
-      upper.set(path.slice(UPPER_DIR.length + 1), {
-        kind: 'file', mode: 0o644, mtimeMs: 0, content,
-      });
+      return { kind: 'materialized' };
     },
     mountTree: () => {
       calls.push('mountTree');
@@ -913,7 +980,7 @@ describe('attach — the mount must be observed to have landed', () => {
     await attachOf(record);
 
     // The bytes really landed, and they landed BEFORE the mount command ran.
-    const wrote = record.calls.findIndex(call => call.endsWith('cas-upper/pending.txt'));
+    const wrote = record.calls.findIndex(call => call === 'materialize:file:pending.txt');
     const mount = record.calls.indexOf('exec:overlayAttach');
     expect(wrote).toBeGreaterThanOrEqual(0);
     expect(mount).toBeGreaterThanOrEqual(0);
@@ -1189,7 +1256,25 @@ class HollowStore extends MemoryStore {
   }
 }
 
+
 describe('stored rows are parsed, never cast', () => {
+  test('rejects every noncanonical stored path before it touches the container', async () => {
+    const paths = [
+      '', '/absolute', '.', '..', 'a//b', 'a/./b', 'a/../b', 'trailing/',
+      `nul\0path`, 'x'.repeat(4_096), `dir/${'x'.repeat(256)}`,
+    ];
+    for (const path of paths) {
+      const store = new MemoryStore();
+      await store.put(journalKey(1), new TextEncoder().encode(`${JSON.stringify([{
+        kind: 'file', seq: 1, path, mode: 0o644, mtimeMs: 0,
+        size: 0, hash: sha256Hex(new Uint8Array()), chunks: [],
+      }])}\n`));
+      const record = harness({ store });
+      await expect(overlayCasStorage(record.ports).attach()).rejects.toThrow(/does not match its schema/);
+      expect(record.calls).toEqual([]);
+    }
+  });
+
   test('a journal batch that is valid JSON but the wrong shape refuses, naming the key', async () => {
     const store = new MemoryStore();
     await store.put(journalKey(1), new TextEncoder().encode('{"notABatch":true}\n'));
@@ -1214,6 +1299,26 @@ describe('stored rows are parsed, never cast', () => {
     }];
     await store.put(journalKey(1), new TextEncoder().encode(`${JSON.stringify(bad)}\n`));
     await expect(listJournalAfter(store, 0)).rejects.toThrow(/does not match its schema/);
+  });
+
+  test('a beneath-only refusal blocks a symlink-ancestor write without materializing it', async () => {
+    const store = new MemoryStore();
+    await appendJournalBatch(store, [{
+      kind: 'file', seq: 1, path: 'escape/payload', mode: 0o644, mtimeMs: 0,
+      size: 0, hash: sha256Hex(new Uint8Array()), chunks: [],
+    }]);
+    const record = harness({
+      store,
+      // This is the host boundary's observation. It can only be made safely
+      // during an fd-relative write, not by testing a path before that write.
+      materializeRefusal: (entry) => entry.path === 'escape/payload'
+        ? 'an ancestor resolves through a symlink'
+        : undefined,
+    });
+    await expect(overlayCasStorage(record.ports).attach())
+      .rejects.toThrow(/ancestor resolves through a symlink/);
+    expect(record.upper.has('escape/payload')).toBe(false);
+    expect(record.calls).toContain('materialize:file:escape/payload');
   });
 
   test('a zero-byte FILE is accepted, because an empty file is ordinary', async () => {

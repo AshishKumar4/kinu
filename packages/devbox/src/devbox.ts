@@ -1312,9 +1312,10 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       writeFileBase64: async (path, base64) => {
         await this.writeFile(path, base64, { encoding: 'base64' });
       },
-      writeFileStream: async (path, stream) => {
-        await this.writeFile(path, stream);
-      },
+      materializeBeneath: async () => ({
+        kind: 'refused',
+        reason: 'atomic beneath-only materialization is unavailable until the deployed openat2 probe passes',
+      }),
       mountTree: async () => {
         await this.#abortPendingMultipartUploads(store);
         await this.mountBucket(store.binding, CAS_TREE_MOUNT, {

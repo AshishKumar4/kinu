@@ -91,15 +91,28 @@ const upperDir = `${DEVBOX_RUNTIME_DIR}/cas-upper`;
 const workDir = `${DEVBOX_RUNTIME_DIR}/cas-work`;
 
 
+export type MaterializeBeneathRequest = {
+  /** The only directory the host may modify. */
+  readonly root: string;
+  /** A validated stored journal entry. */
+  readonly entry: JournalEntry;
+  /** Present exactly for file entries. */
+  readonly stream: ReadableStream<Uint8Array> | null;
+};
+
+export type MaterializeBeneathOutcome =
+  | { readonly kind: 'materialized' }
+  | { readonly kind: 'refused'; readonly reason: string };
+
 export interface OverlayCasPorts {
   containerRunning(): boolean;
   /**
    * Run one shell command container-side.
    *
    * THE ONLY CONTAINER-SHELL PORT, for the reason the chain gives: the upper
-   * walk, the whiteout form and the chunk read are this strategy's own
-   * vocabulary, so it builds them itself rather than handing a host a set of
-   * templates that host would then have to keep correct.
+   * walk and the chunk read are this strategy's own vocabulary, so it builds
+   * them itself rather than handing a host a set of templates that host would
+   * then have to keep correct.
    *
    * NEVER carries raw binary. Non-UTF-8 bytes in stdout are corrupted silently
    * on the way back, so every byte this strategy reads through here is base64.
@@ -111,9 +124,14 @@ export interface OverlayCasPorts {
    * DO-to-container byte rail.
    */
   writeFileBase64(path: string, base64: string): Promise<void>;
-  /** Write a replayed file as a raw binary stream. The SDK's stream transport
-   * keeps memory at one CAS chunk and avoids base64 expansion. */
-  writeFileStream(path: string, stream: ReadableStream<Uint8Array>): Promise<void>;
+  /**
+   * Apply one replay entry below `request.root` without resolving symlinks.
+   *
+   * The host must use fd-relative operations with a beneath-only resolution
+   * policy. A path string checked before a later write is not safe: a symlink
+   * can be substituted between those operations.
+   */
+  materializeBeneath(request: MaterializeBeneathRequest): Promise<MaterializeBeneathOutcome>;
   /**
    * Mount this box's `tree/` prefix read-only at {@link CAS_TREE_MOUNT}.
    * Credentials never leave the Durable Object. Release through the SDK
@@ -219,22 +237,26 @@ const DIGEST_SCRIPT_PATH = `${DEVBOX_RUNTIME_DIR}/cas-digest.sh`;
 const DIGEST_BATCH = 64;
 
 /**
- * Emit, per readable file: `F\0<path>\0<size>\0<whole-hash>\0` then one
- * `C\0<chunk-hash>\0<chunk-size>\0` per {@link CHUNK_SIZE} chunk, in order.
+ * Emit a complete `FileDigest` from one captured byte sequence.
  *
- * NUL-delimited with a leading tag per record, so a variable number of chunks
- * needs no length prefix and a path containing any legal byte cannot be
- * mis-split. `split --filter` runs the command once per chunk with the chunk
- * on stdin, which is how the per-chunk hashes are produced in ONE pass over
- * the bytes rather than one pass per chunk.
+ * Reading `f` twice admits a false entry when the first whole-file hash sees
+ * old bytes and the later chunk hashes see new bytes. The temporary file is a
+ * stable capture of the only read from `f`; both representations derive from
+ * it. A changed file later fails chunk staging and is not journalled.
  */
-const DIGEST_SCRIPT = `#!/bin/sh
+export const DIGEST_SCRIPT = `#!/bin/sh
 for f in "$@"; do
   [ -f "$f" ] || continue
-  size=$(wc -c < "$f")
-  whole=$(sha256sum -- "$f" | cut -c1-64)
+  captured=$(mktemp "\${TMPDIR:-/tmp}/cas-digest.XXXXXXXX") || exit 1
+  if ! cat -- "$f" > "$captured"; then
+    rm -f -- "$captured"
+    continue
+  fi
+  size=$(wc -c < "$captured")
+  whole=$(sha256sum -- "$captured" | cut -c1-64)
   printf 'F\\0%s\\0%s\\0%s\\0' "$f" "$size" "$whole"
-  split -b ${CHUNK_SIZE} --filter='h=$(sha256sum | cut -c1-64); printf "C\\0%s\\0" "$h"' -- "$f"
+  split -b ${CHUNK_SIZE} --filter='h=$(sha256sum | cut -c1-64); printf "C\\0%s\\0" "$h"' -- "$captured"
+  rm -f -- "$captured"
 done
 `;
 
@@ -528,78 +550,9 @@ function casShell(ports: OverlayCasPorts) {
       return decoded.byteLength === size ? decoded : null;
     },
 
-    /** Write one replayed entry into the upper. A delete becomes a whiteout. */
-    materialize: async (
-      entry: JournalEntry,
-      stream: ReadableStream<Uint8Array> | null,
-    ): Promise<void> => {
-      const absolute = `${upperDir}/${entry.path}`;
-      const parent = absolute.slice(0, absolute.lastIndexOf('/'));
-      switch (entry.kind) {
-        case 'dir': {
-          const opaque = entry.opaque
-            ? ` && : > ${shellPath(`${absolute}/${OPAQUE_MARKER}`)}`
-            : '';
-          await must(
-            `materializing directory ${entry.path}`,
-            `mkdir -p ${shellPath(absolute)} && chmod ${entry.mode.toString(8)} `
-            + `${shellPath(absolute)}${opaque}`,
-          );
-          return;
-        }
-        case 'file': {
-          if (stream === null) throw new Error(`file entry replayed without a stream: ${entry.path}`);
-          await must(`preparing ${entry.path}`, `mkdir -p ${shellPath(parent)}`);
-          await ports.writeFileStream(absolute, stream);
-          await must(
-            `setting metadata on ${entry.path}`,
-            `chmod ${entry.mode.toString(8)} ${shellPath(absolute)} && touch -m -d `
-              + `@${String(entry.mtimeMs / 1000)} -- ${shellPath(absolute)}`,
-          );
-          return;
-        }
-        case 'symlink': {
-          await must(
-            `materializing symlink ${entry.path}`,
-            `mkdir -p ${shellPath(parent)} && ln -sfn ${shellPath(entry.target)} `
-              + `${shellPath(absolute)} && touch -h -m -d @${String(entry.mtimeMs / 1000)} `
-              + `-- ${shellPath(absolute)}`,
-          );
-          return;
-        }
-        case 'delete': {
-          const name = entry.path.slice(entry.path.lastIndexOf('/') + 1);
-          // mknod first, marker second. Which form the kernel and this mount
-          // accept is not knowable from here, and one command that tries both
-          // is one RPC rather than a probe plus a write.
-          await must(
-            `whiting out ${entry.path}`,
-            `mkdir -p ${shellPath(parent)} && rm -rf ${shellPath(absolute)} && `
-            + `{ mknod ${shellPath(absolute)} c 0 0 2>/dev/null || `
-            + `: > ${shellPath(`${parent}/${WHITEOUT_PREFIX}${name}`)}; }`,
-          );
-          return;
-        }
-        default: {
-          // A kind with no arm here would be silently NOT replayed, so the
-          // upper would come back missing a change the journal recorded.
-          const unknown: never = entry;
-          throw new Error(
-            `journal entry has a kind this replay does not handle: ${JSON.stringify(unknown)}`,
-          );
-        }
-      }
-    },
-    restampDirectory: async (entry: Extract<JournalEntry, { kind: 'dir' }>): Promise<void> => {
-      const absolute = `${upperDir}/${entry.path}`;
-      await must(
-        `restamping directory ${entry.path}`,
-        `chmod ${entry.mode.toString(8)} ${shellPath(absolute)} && touch -m -d `
-          + `@${String(entry.mtimeMs / 1000)} -- ${shellPath(absolute)}`,
-      );
-    },
   };
 }
+
 
 
 export function overlayCasStorage(ports: OverlayCasPorts): DevboxStorage {
@@ -659,20 +612,44 @@ export function overlayCasStorage(ports: OverlayCasPorts): DevboxStorage {
    * overlay is mounted" imply "the replay finished", so the early return below
    * is correct by construction and needs no marker and no re-check.
    */
-  const replayOntoUpper = async (): Promise<number> => {
-    const replayed = await replayPending(ports.store());
+  type PendingReplay = {
+    readonly pending: readonly JournalEntry[];
+    readonly replayed: readonly {
+      readonly entry: JournalEntry;
+      readonly stream: ReadableStream<Uint8Array> | null;
+    }[];
+  };
+
+  const replayOntoUpper = async (replayed: PendingReplay): Promise<number> => {
     for (const item of replayed.replayed) {
-      await shell.materialize(item.entry, item.stream);
+      const outcome = await ports.materializeBeneath({
+        root: upperDir,
+        entry: item.entry,
+        stream: item.stream,
+      });
+      if (outcome.kind === 'refused') {
+        throw new Error(`materializing ${item.entry.path} was refused: ${outcome.reason}`);
+      }
     }
     const directories = replayed.replayed
       .map(item => item.entry)
       .filter((entry): entry is Extract<JournalEntry, { kind: 'dir' }> => entry.kind === 'dir')
       .sort((a, b) => b.path.split('/').length - a.path.split('/').length);
-    for (const directory of directories) await shell.restampDirectory(directory);
+    for (const directory of directories) {
+      const outcome = await ports.materializeBeneath({
+        root: upperDir,
+        entry: directory,
+        stream: null,
+      });
+      if (outcome.kind === 'refused') {
+        throw new Error(`restamping ${directory.path} was refused: ${outcome.reason}`);
+      }
+    }
     return replayed.pending.length;
   };
 
   const attach = async (): Promise<AttachOutcome> => {
+    const replayed = await replayPending(ports.store());
     if (isOverlayMounted(await shell.readMounts(), DEVBOX_WORKDIR)) {
       // Nothing to replay: the overlay only lands after the replay finishes,
       // so a mounted overlay is itself the evidence that it did.
@@ -699,7 +676,7 @@ export function overlayCasStorage(ports: OverlayCasPorts): DevboxStorage {
         + `${prepared.stderr.trim() || prepared.stdout.trim() || `exit ${prepared.exitCode}`}`,
       );
     }
-    const pending = await replayOntoUpper();
+    const pending = await replayOntoUpper(replayed);
     try {
       await ports.mountTree();
     } catch (error) {

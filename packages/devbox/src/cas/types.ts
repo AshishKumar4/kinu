@@ -85,8 +85,32 @@ export type NewJournalEntry = Unstamped<JournalEntry>;
 // hash fields are length-checked: a truncated string must not name a blob.
 
 const SeqSchema = v.pipe(v.number(), v.safeInteger(), v.minValue(0));
-const PathSchema = v.pipe(v.string(), v.minLength(1));
-const HashSchema = v.pipe(v.string(), v.length(64), v.regex(/^[0-9a-f]{64}$/));
+const HashSchema = v.pipe(
+  v.string(),
+  v.regex(/^[0-9a-f]{64}$/, 'Expected a lowercase SHA-256 digest'),
+);
+
+// Same POSIX limits as NAME_MAX_BYTES and PATH_MAX_BYTES in
+// packages/cli/src/attachments.ts. Devbox stays independent of the CLI.
+const MAX_JOURNAL_PATH_BYTES = 4_095;
+const MAX_JOURNAL_PATH_COMPONENT_BYTES = 255;
+const journalPathEncoder = new TextEncoder();
+
+/** A journal path is a canonical relative POSIX path, never a host path. */
+export function isCanonicalJournalPath(path: string): boolean {
+  if (path.length === 0 || path.startsWith('/') || path.includes('\0')) return false;
+  if (journalPathEncoder.encode(path).byteLength > MAX_JOURNAL_PATH_BYTES) return false;
+  for (const component of path.split('/')) {
+    if (component.length === 0 || component === '.' || component === '..') return false;
+    if (journalPathEncoder.encode(component).byteLength > MAX_JOURNAL_PATH_COMPONENT_BYTES) return false;
+  }
+  return true;
+}
+
+const PathSchema = v.pipe(
+  v.string(),
+  v.check(isCanonicalJournalPath, 'Expected a canonical relative journal path'),
+);
 /** A CHUNK's size. Integral because it is a byte count, and at least 1 because
  *  a zero-length chunk is meaningless — it would name a blob holding nothing.
  *  Deliberately a different bound from a FILE's size below, which may be 0. */

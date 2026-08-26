@@ -8,7 +8,7 @@
 //
 // TWO TESTS HERE COME FROM A LIVE FAILURE, and they are the reason the rest is
 import { describe, expect, test } from 'bun:test';
-import { rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { scratchDir } from '@kinu.run/test-utils';
 
@@ -142,7 +142,7 @@ function shellLabel(
       stdout: stagedSize,
     };
   }
-  if (command.includes("-printf '%s %T@")) {
+  if (command.includes('sort -z') && command.includes('sha256sum')) {
     return { call: 'upperFingerprint', stdout: upperMark };
   }
   if (command.startsWith('stat -c %s')) return { call: 'statBytes', stdout: String(DELTA_BYTES) };
@@ -1424,12 +1424,31 @@ describe('attachChain resets only its OWN directories', () => {
 const T_SAME = 1_700_000_000;
 
 describe('the skip-gate fingerprint keeps sub-second mtime', () => {
+  test('a same-size rename changes the per-path mark', () => {
+    const dir = scratchDir('devbox-fingerprint-rename');
+    try {
+      const firstPath = join(dir, 'before.txt');
+      const secondPath = join(dir, 'after.txt');
+      writeFileSync(firstPath, 'same-size');
+      utimesSync(firstPath, T_SAME + 0.5, T_SAME + 0.5);
+      const run = (): string => {
+        const proc = Bun.spawnSync(['sh', '-c', upperFingerprintCommand(dir)]);
+        if (proc.exitCode !== 0) throw new Error(proc.stderr.toString());
+        return proc.stdout.toString().trim();
+      };
+      const first = run();
+      renameSync(firstPath, secondPath);
+      utimesSync(secondPath, T_SAME + 0.5, T_SAME + 0.5);
+      expect(run()).not.toBe(first);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('a same-size same-second rewrite changes the mark', () => {
-    // THE RED PROOF, against the real find|awk pipeline. The old `%d` format
-    // truncated both marks below to the same whole second and matched — the
-    // narrow unchanged-lie window this gate exists to keep shut. The integer
-    // parts agree here on purpose: that is exactly the case the fraction
-    // decides.
+    // THE ORIGINAL RED PROOF. The old `%d` format truncated both marks below
+    // to the same whole second and matched — the narrow unchanged-lie window
+    // this gate exists to keep shut.
     const dir = scratchDir('devbox-fingerprint');
     try {
       const file = join(dir, 'w.txt');
@@ -1444,13 +1463,36 @@ describe('the skip-gate fingerprint keeps sub-second mtime', () => {
 
       writeFileSync(file, 'bbbbbbbbbb'); // SAME SIZE
       utimesSync(file, T_SAME + 0.25, T_SAME + 0.75); // SAME SECOND, later fraction
-      const second = run();
 
-      const m1 = Number(first.split(':')[2]);
-      const m2 = Number(second.split(':')[2]);
-      expect(Math.trunc(m1)).toBe(T_SAME);
-      expect(Math.trunc(m2)).toBe(T_SAME);
-      expect(first).not.toBe(second);
+      expect(run()).not.toBe(first);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a same-path rewrite with the mtime RESTORED still changes the mark', () => {
+    // THE METADATA COLLISION Main named. Same path, same size, and the writer
+    // restores the old mtime after the write — every field the summary
+    // fingerprint hashed agreed, so the gate skipped forever while content
+    // drifted. The write itself moved ctime, which the per-path record hashes;
+    // only an mtime restoration cannot undo that.
+    const dir = scratchDir('devbox-fingerprint-restored-mtime');
+    try {
+      const file = join(dir, 'w.txt');
+      const at = T_SAME + 0.5;
+      writeFileSync(file, 'aaaaaaaaaa');
+      utimesSync(file, at, at);
+      const run = (): string => {
+        const proc = Bun.spawnSync(['sh', '-c', upperFingerprintCommand(dir)]);
+        if (proc.exitCode !== 0) throw new Error(proc.stderr.toString());
+        return proc.stdout.toString().trim();
+      };
+      const first = run();
+
+      writeFileSync(file, 'bbbbbbbbbb'); // SAME SIZE, SAME INODE
+      utimesSync(file, at, at); // MTIME PUT BACK EXACTLY
+
+      expect(run()).not.toBe(first);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
