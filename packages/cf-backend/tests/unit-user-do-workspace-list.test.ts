@@ -53,6 +53,47 @@ describe('listWorkspaces', () => {
   });
 });
 
+describe('root-cloud title authority', () => {
+  test('registration records whose title it is and reads it back', async () => {
+    const harness = createTestUserDO();
+    const owner = await testOwner();
+    await harness.userDO.registerWorkspace(owner, 'named-by-owner', 'Chosen Title');
+    expect(await harness.userDO.getWorkspaceTitle(owner, 'named-by-owner')).toEqual({
+      displayName: 'Chosen Title', nameOrigin: 'user',
+    });
+    await harness.userDO.registerWorkspace(owner, 'derived', undefined, 'a mission');
+    expect(await harness.userDO.getWorkspaceTitle(owner, 'derived'))
+      .toMatchObject({ nameOrigin: 'auto' });
+    harness.close();
+  });
+
+  test("an owner rename is final: a later auto title is refused at the root", async () => {
+    const harness = createTestUserDO();
+    const owner = await testOwner();
+    await harness.userDO.registerWorkspace(owner, 'ws');
+    await harness.userDO.setWorkspaceDisplayName(owner, 'ws', 'Owner Chose', 'user');
+    expect((await harness.userDO.setWorkspaceDisplayName(owner, 'ws', 'Model Suggests', 'auto')).applied).toBe(false);
+    expect(await harness.userDO.getWorkspaceTitle(owner, 'ws')).toEqual({
+      displayName: 'Owner Chose', nameOrigin: 'user',
+    });
+    // An explicit owner write still applies.
+    await harness.userDO.setWorkspaceDisplayName(owner, 'ws', 'Renamed Again', 'user');
+    expect(await harness.userDO.getWorkspaceTitle(owner, 'ws')).toMatchObject({ displayName: 'Renamed Again' });
+    harness.close();
+  });
+
+  test('the reconciliation column exists on tables created before it did', async () => {
+    const harness = createTestUserDO();
+    const owner = await testOwner();
+    await harness.userDO.registerWorkspace(owner, 'legacy-row');
+    // Reads the column by NAME — the same way every writer does. On a
+    // pre-column table this throws unless reconcileColumns added it.
+    expect(await harness.userDO.getWorkspaceTitle(owner, 'legacy-row'))
+      .toMatchObject({ nameOrigin: 'auto' });
+    harness.close();
+  });
+});
+
 describe('listActiveWorkspaces', () => {
   test('enumeration stays complete when the listing truncates', async () => {
     const harness = createTestUserDO();

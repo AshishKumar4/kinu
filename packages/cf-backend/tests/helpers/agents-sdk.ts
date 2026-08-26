@@ -418,6 +418,17 @@ export function mockAgentsSdk(): void {
           },
         });
       }
+      listSubAgents(cls: { name: string }): Array<{ className: string; name: string; createdAt: number }> {
+        return this.#subAgentRegistry().exec(
+          `SELECT class, name, created_at FROM cf_agents_sub_agents
+           WHERE class = ? ORDER BY created_at, name`,
+          cls.name,
+        ).toArray().map((row) => ({
+          className: String(row.class),
+          name: String(row.name),
+          createdAt: Number(row.created_at),
+        }));
+      }
       /** The SDK declares a second overload taking the class, and reduces it
        *  to `cls.name` (:5868); the registry key is the class NAME either way.
        *  Only the name form is modelled, because that is the form the code

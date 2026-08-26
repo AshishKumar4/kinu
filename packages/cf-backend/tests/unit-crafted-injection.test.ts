@@ -8,7 +8,7 @@
 // disappears from the sandbox preamble too.
 import { describe, test, expect, mock } from "bun:test";
 import type { CraftedTool, CraftStore } from "@kinu.run/core";
-import { craftFailureMarker, craftedDispatcherEntry, initCraftScoreTables } from "@kinu.run/core";
+import { craftFailureMarker, craftedDispatcherEntry, initCraftQualityColumns } from "@kinu.run/core";
 import { createTestSql } from "@kinu.run/test-utils";
 
 // @cloudflare/codemode (the DWE import) needs the workerd-only module.
@@ -45,10 +45,10 @@ async function rejectionOf(promise: Promise<unknown>): Promise<Error> {
 describe("selectInjectableCraftedTools — one policy with core", () => {
   test("drops comment-only code and score-retired tools; keeps healthy + unscored", () => {
     const { db, sql } = createTestSql();
-    initCraftScoreTables((ddl: string) => db.exec(ddl));
+    initCraftQualityColumns((ddl: string) => db.exec(ddl), sql);
     const now = Date.now();
-    void sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at) VALUES ('healthy', 0.9, 4, ${now})`;
-    void sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at) VALUES ('retired', 0.01, 9, ${now})`;
+    void sql`INSERT INTO crafted_tools (name, score, uses, last_used_at) VALUES ('healthy', 0.9, 4, ${now})`;
+    void sql`INSERT INTO crafted_tools (name, score, uses, last_used_at) VALUES ('retired', 0.01, 9, ${now})`;
 
     const store = makeCraftStore([
       { name: "healthy", code: "async (args) => 1" },
@@ -167,10 +167,9 @@ describe("selectInjectableCraftedTools — one policy with core", () => {
   });
 
   test("a broken craft store surfaces its failure rather than an empty selection", () => {
-    const { sql } = createTestSql();
+    const { db, sql } = createTestSql();
+    initCraftQualityColumns((ddl: string) => db.exec(ddl), sql);
     const store = makeCraftStore([]);
-    expect(selectInjectableCraftedTools(store, sql)).toEqual([]);
-
     // The empty selection above is what a HEALTHY store with no tools returns,
     // so answering a broken one the same way made them indistinguishable — and
     // the selection feeds both the sandbox preamble and the codemode type

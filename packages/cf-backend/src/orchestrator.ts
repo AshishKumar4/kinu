@@ -19,6 +19,7 @@ import { getSandbox } from "@cloudflare/sandbox";
 import { convertToModelMessages } from "ai";
 import type {
   ActivitySnapshot,
+  SubordinateRosterEntry,
   WorkspaceAgent,
 } from "./lib/protocol";
 import { buildWorkspaceAgents, teamPeers } from "./lib/workspace-roster";
@@ -74,7 +75,7 @@ import {
   type ReasoningEffort, type ShellApprovalMode,
   type AlarmScheduler, type ReplyDispatcher, type ReplyChannelRow,
   // GEPA run lineage (the pass itself is core's evolution control plane)
-  listGepaRuns, loadGepaCandidates, type GepaRunSummary,
+  listGepaRuns, loadGepaCandidates, loadGepaParetoFront, type GepaRunSummary,
   // Replay-eval loss curve (audit R3)
   listReplayEvals, type ReplayEvalSummary,
   // K_align — the correction-rate trend over the same outcome ledger
@@ -99,7 +100,6 @@ import {
   type ExperienceActionInput,
   // Release execution engine — the driver beneath the governance ledger
   ReleaseEngine, createSandboxReleaseExec,
-  type SubordinateRosterEntry,
   // Peer-agent teams (the agents tool's team deps contract)
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult,
@@ -167,6 +167,7 @@ import {
   EVENT_VARIANTS, classifyRunEnd,
   type WorkMode,
   resolveModelRoute, type ResolvedTurnProfile,
+  WORKSPACE_RUN_ID,
 } from "@kinu.run/core";
 import * as v from 'valibot';
 import {
@@ -193,6 +194,7 @@ import { classify, diagnostics, renderCauseChain, renderThrownChain, toKinuError
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import { deliverCloudFork } from "./user/workspace-fork";
 import { createNimbusWorkspaceSandbox, nimbusWorkspaceArchiveFiles } from './nimbus-route';
+import { deleteExplorationFacet, reconcileExplorationFacets, type ExplorationFacetLedgerStatus } from "./facet-spawn";
 import { agentEmailAddress } from "./email/inbound";
 import {
   createEmailThreadDispatcher, dispatchEmailRepliesForTurn, sendOwnerEmail,
@@ -363,7 +365,10 @@ export class OrchestratorAgent extends ActorAgent {
    * effect has NOT happened — restated on every step until it is decided. */
   protected override extraDynamicContext(): ActorDynamicContextExtras {
     return {
-      approvals: () => [...this._consents.approvals(), ...this.deferrals.approvals()],
+      approvals: () => {
+        const items = [...this._consents.approvals(), ...this.deferrals.approvals()];
+        return { items, total: items.length };
+      },
       extraMissingCapabilities: () => {
         const deafInbox = this.emailInbox.dropNotice(Date.now());
         return deafInbox ? [deafInbox] : [];
@@ -372,18 +377,6 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
 
-  /** Turns of new execution traces since the last auto-GEPA pass (in-memory
-   *  cadence; resets on eviction, which just delays the next pass — measured
-   *  below at `advancePromptSections`, and it is a real delay on a workspace
-   *  whose turns are further apart than the eviction window). */
-  private _turnsSinceGepa = 0;
-  // The rotation cursor that stood here is gone. It was in-memory, and a probe
-  // over the real actor measured what that cost: `agent_config` held one key
-  // (the cadence) and no table named the cursor, so every activation restarted
-  // the rotation at the first section. `nextPromptSectionTarget` derives the
-  // answer from the `gepa_runs` rows each pass already writes.
-  // Session-reflection cadence (_sessionTurnCount/Turns/StartedAt) now lives on
-  // the core AgentOrchestrator; read the turn index via this.orch.sessionTurnIndex.
 
   // Steer-as-Branch redirects launched against the in-flight turn — each runs
   // as one budgeted head (ExplorationAgent Facet) and settles into Alternate
@@ -458,7 +451,7 @@ export class OrchestratorAgent extends ActorAgent {
 
   /** Display name for outbound email From headers — never throws pre-schema. */
   private safeDisplayName(): string {
-    try { return this.config.getDisplayName() ?? this.name; }
+    try { return this.titleState().displayName || this.name; }
     catch (error) {
       diagnostics.event('orchestrator.display_name_unreadable', { error: renderThrownChain({ cause: error }) });
       return this.name;
@@ -981,7 +974,7 @@ export class OrchestratorAgent extends ActorAgent {
       // them. Not "every tool name that is not built in": a crafted tool is
       // codemode-only and never appears as a tool-call name, so that filter
       // only ever matched MCP and extension tools — and the thumbs re-score
-      // below reads this row to write craft_scores.
+      // below reads this row to update the crafted tool's quality columns.
       const craftNames = this.acc.craftedToolsUsed();
       if (craftNames.length > 0) {
         void this.sql`INSERT INTO turn_craft_usage (message_id, tool_names, created_at)
@@ -1086,25 +1079,60 @@ export class OrchestratorAgent extends ActorAgent {
 
   /** UserDO is authoritative for a workspace's shown name, so an auto title
    *  commits through the same propagation an owner rename does — which is
-   *  also where the "a manual rename claimed it first" refusal lives. */
+   *  also where the "a manual rename claimed it first" refusal lives (in
+   *  UserDO's `name_origin`, not a local copy of it). */
   protected async persistAutoTitle(displayName: string): Promise<boolean> {
     return (await this.setAutoDisplayName(displayName)).applied;
   }
 
-  /** Commit one display name to the owner roster, actor config and live clients.
-   *  UserDO is authoritative. An auto-title is refused if a manual rename has
-   *  claimed the title before or during the cross-DO write. */
+  /**
+   * The workspace title, cached PER ACTIVATION from the root registry. UserDO
+   * owns the row; this actor holds no `agent_config` mirror — a mirror would
+   * drift the moment another writer (the owner rename route, the generated-title
+   * scheduler) commits to the root. Sync readers use whatever is hydrated;
+   * every mutation path hydrates BEFORE deciding.
+   */
+  private _titleCache: { displayName: string; nameOrigin: 'user' | 'auto' } | null = null;
+  private async hydrateTitle(): Promise<void> {
+    if (!this.getOwnerUserId()) return;
+    try {
+      const { stub, caller } = await this.userHub();
+      const row = await stub.getWorkspaceTitle(caller, this.name);
+      if (row) this._titleCache = row;
+    } catch (err) {
+      diagnostics.failure('workspace.title_hydration_failed', toKinuError({
+        doing: 'reading the root registry title for this workspace',
+        cause: err,
+        otherwise: 'unavailable',
+      }), { workspace: this.name });
+    }
+  }
+
+  private titleState(): { displayName: string; nameOrigin: 'user' | 'auto' } {
+    return this._titleCache ?? { displayName: this.name, nameOrigin: 'auto' as const };
+  }
+
+  /** The root decides against UserDO's naming state, not its own config. */
+  protected override titleInputs() {
+    const state = this.titleState();
+    return { displayName: state.displayName === this.name ? null : state.displayName, nameOrigin: state.nameOrigin };
+  }
+
+  /** Commit one display name to the ROOT registry, then refresh the activation
+   *  cache and live clients. An auto-title is refused if the owner has claimed
+   *  the naming — decided at the root, in the same write. */
   private async propagateDisplayName(
     displayName: string,
     origin: 'user' | 'auto',
   ): Promise<boolean> {
-    if (origin === 'auto' && this.config.getNameOrigin() === 'user') return false;
+    await this.hydrateTitle();
+    let applied = true;
     if (this.getOwnerUserId()) {
       const { stub, caller } = await this.userHub();
-      await stub.setWorkspaceDisplayName(caller, this.name, displayName);
+      applied = (await stub.setWorkspaceDisplayName(caller, this.name, displayName, origin)).applied;
     }
-    if (origin === 'auto' && this.config.getNameOrigin() === 'user') return false;
-    this.config.setDisplayNameOrigin(displayName, origin);
+    if (!applied) return false;
+    this._titleCache = { displayName, nameOrigin: origin };
     this.broadcast(JSON.stringify({ type: 'workspace_renamed', displayName }));
     return true;
   }
@@ -1256,6 +1284,23 @@ export class OrchestratorAgent extends ActorAgent {
         // Where an 'always' answer lands: the same agent_config the approval
         // MODE lives in, read live by the gate on the very next command.
         remember: (grants) => { this.config.grantShellApproval(grants); },
+        // A spent grant's row is DELETED, so this run event is the only
+        // durable record that the owner's approval was consumed. Written into
+        // the spending turn's own run log; outside any turn it falls back to
+        // the workspace run so the audit still lands.
+        audit: (record) => {
+          try {
+            this.eventRecorder.emit(this._currentRunId || WORKSPACE_RUN_ID, {
+              type: 'approval_consumed', ...record,
+            });
+          } catch (err) {
+            diagnostics.failure('approval.audit_emit_failed', toKinuError({
+              doing: 'recording an approval_consumed run event',
+              cause: err,
+              otherwise: 'io',
+            }));
+          }
+        },
         announce: (notice) => this.announceDeferral(notice),
       });
     }
@@ -1357,6 +1402,7 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /** Activation init, synchronous by contract: partyserver runs `onStart()`
+
    *  inside `ctx.blockConcurrencyWhile()` (its `#ensureInitialized`), and
    *  `fetch`, `webSocketMessage`, `webSocketClose` and `alarm` all await that
    *  same gate. So anything awaited here stalls EVERY request on this object,
@@ -1454,7 +1500,7 @@ export class OrchestratorAgent extends ActorAgent {
         ),
       }),
       logActivity: (event, detail) => this.logActivity(event, detail),
-    }).catch((err) => {
+    }).then(() => this.reclaimSettledExplorationFacets()).catch((err) => {
       diagnostics.failure('head.journal_reconcile_failed', toKinuError({
         doing: 'reconciling fork-journal heads a dead activation left running',
         cause: err,
@@ -1468,11 +1514,17 @@ export class OrchestratorAgent extends ActorAgent {
 
     // Workspaces created before mission-derived titling still show their raw
     // slug. Title them from SOUL.md's mission the first time one is opened —
-    // every other workspace is already titled, so it costs a config read.
-    // Fire-and-forget: boot never waits on a model call.
-    if (this.getOwnerUserId() && isPlaceholderWorkspaceTitle(this.config.getDisplayName(), this.name)) {
-      void readSoul(this.rt.storage.vfs)
-        .then((soul) => this.maybeAutoTitle(summarizeSoul(soul ?? '')))
+    // every other workspace is already titled, so it costs a registry read.
+    // The placeholder check runs against the ROOT's naming state once the
+    // activation cache has hydrated from it. Fire-and-forget: boot never
+    // waits on a model call.
+    if (this.getOwnerUserId()) {
+      void this.hydrateTitle()
+        .then(() => {
+          if (!isPlaceholderWorkspaceTitle(this.getDisplayName(), this.name)) return;
+          return readSoul(this.rt.storage.vfs)
+            .then((soul) => this.maybeAutoTitle(summarizeSoul(soul ?? '')));
+        })
         .catch((error) => {
           diagnostics.failure('workspace.auto_title_soul_read_failed', toKinuError({
             doing: 'reading SOUL.md to title a legacy workspace',
@@ -1481,6 +1533,55 @@ export class OrchestratorAgent extends ActorAgent {
           }), { workspace: this.name });
         });
     }
+  }
+  /**
+   * Reclaim exploration facets a reset left behind, against the ledgers the
+   * fork reconciliation just settled (S13). Runs AFTER
+   * `reconcileInterruptedForks` so a head it marked `interrupted` reads as
+   * resumable here, never terminal — only rows whose work is provably finished
+   * or taken over lose their facet storage.
+   */
+  private async reclaimSettledExplorationFacets(): Promise<void> {
+    try {
+      const { reclaimed } = await reconcileExplorationFacets(
+        {
+          list: () => this.listSubAgents(this.explorationFacet()),
+          delete: async (id) => deleteExplorationFacet(this, id),
+        },
+        (id) => this.explorationFacetLedgerStatus(id),
+        () => this.hasLiveExploration(),
+      );
+      if (reclaimed > 0) diagnostics.event('facet.settled_reclaimed', { reclaimed });
+    } catch (err) {
+      diagnostics.failure('facet.reconciliation_failed', toKinuError({
+        doing: 'reclaiming exploration facets left behind by a reset',
+        cause: err,
+        otherwise: 'unavailable',
+      }), { workspace: this.name });
+    }
+  }
+
+  /** The lifecycle ledgers are the ONLY status authority — no per-facet copy. */
+  private explorationFacetLedgerStatus(id: string): ExplorationFacetLedgerStatus {
+    const head = this.sql<{ status: string }>`
+      SELECT status FROM head_journal WHERE id = ${id} LIMIT 1
+    `[0];
+    if (!head) return 'unknown';
+    return head.status === 'completed' || head.status === 'aborted'
+      ? 'terminal'
+      : 'resumable';
+  }
+
+  private hasLiveExploration(): boolean {
+    const heads = this.sql<{ x: number }>`
+      SELECT 1 AS x FROM head_journal
+      WHERE status IN ('running', 'interrupted')
+      LIMIT 1
+    `;
+    if (heads.length > 0) return true;
+    return this.sql<{ x: number }>`
+      SELECT 1 AS x FROM mcts_search_runs WHERE status = 'running' LIMIT 1
+    `.length > 0;
   }
 
   // ── Timer ingress ──────────────────────────────────────────────
@@ -1600,7 +1701,7 @@ export class OrchestratorAgent extends ActorAgent {
   // ── Callable RPC methods ───────────────────────────────────────
 
   private getDisplayName(): string {
-    return this.config.getDisplayName() ?? this.name;
+    return this.titleState().displayName || this.name;
   }
 
   @callable()
@@ -1647,7 +1748,7 @@ export class OrchestratorAgent extends ActorAgent {
     const profile = this.resolvedTurnProfile();
     return {
       ...status,
-      roleId: profile?.role.id ?? this.config.getActiveRoleId(),
+      roleId: profile?.role.id ?? this.activeRoleLabel(),
       tierId: profile?.tier.id ?? 'default',
     };
   }
@@ -2409,9 +2510,9 @@ export class OrchestratorAgent extends ActorAgent {
         scores: Object.fromEntries(c.scores), feedback: Object.fromEntries(c.feedback),
         aggregateScore: c.aggregateScore, createdAt: c.createdAt,
       }));
-      const pareto = this.sql<{ candidate_id: string; instance_id: string; score: number }>`
-        SELECT candidate_id, instance_id, score FROM gepa_pareto_membership WHERE run_id = ${runId}`
-        .map((r) => ({ candidateId: r.candidate_id, instanceId: r.instance_id, score: r.score }));
+      // The membership table is core's; its loader derives the front from the
+      // rows that persist. No raw SELECT across the package boundary.
+      const pareto = loadGepaParetoFront(this.boundSql, runId);
       return { run, candidates, pareto };
     } catch (error) {
       if (classify({ cause: error }) !== 'sqlite-missing-table') throw error;
@@ -2842,8 +2943,11 @@ export class OrchestratorAgent extends ActorAgent {
     }));
     const craftedRaw = this.rt.craftStore.list();
     const crafted = craftedRaw.map(t => {
+      // Quality lives ON the crafted-tools row now (score/uses/last_used_at
+      // columns, backfilled by core's initCraftQualityColumns) — there is no
+      // separate craft_scores table to join.
       const scoreRow = this.sql<{ score: number; uses: number }>`
-        SELECT score, uses FROM craft_scores WHERE tool_name = ${t.name} LIMIT 1`;
+        SELECT score, uses FROM crafted_tools WHERE name = ${t.name} LIMIT 1`;
       return {
         name: t.name,
         description: t.description || "Crafted tool",
@@ -2864,20 +2968,20 @@ export class OrchestratorAgent extends ActorAgent {
   // setModel moved below — validates spec via the provider registry before storing.
 
   @callable() async setDisplayName(displayName: string) {
-    // Lock before the cross-DO write. A concurrent auto-title must not pass its
-    // pre-commit check while the owner's rename is in flight.
-    this.config.setNameOrigin('user');
     await this.propagateDisplayName(displayName, 'user');
     return { displayName };
   }
 
   async setAutoDisplayName(displayName: string) {
     const applied = await this.propagateDisplayName(displayName, 'auto');
-    return { displayName: applied ? displayName : this.config.getDisplayName(), applied };
+    return { displayName: applied ? displayName : this.getDisplayName(), applied };
   }
 
   async setInitialDisplayName(displayName: string, nameOrigin: 'user' | 'auto') {
-    this.config.setDisplayNameOrigin(displayName, nameOrigin);
+    // Genesis only, right after the create path registered the row in the
+    // root registry. The activation cache is seeded from what was just
+    // written; the root remains the authority.
+    this._titleCache = { displayName, nameOrigin };
     return { displayName, nameOrigin };
   }
 
@@ -2922,7 +3026,7 @@ export class OrchestratorAgent extends ActorAgent {
   @callable() async getWorkspaceAgents(): Promise<WorkspaceAgent[]> {
     const self = { name: this.name, displayName: this.getDisplayName() };
     try {
-      return buildWorkspaceAgents(self, this.subordinateRoster.list());
+      return buildWorkspaceAgents(self, await this.subordinateViews());
     } catch (error) {
       diagnostics.event('orchestrator.roster_unreadable', { error: renderThrownChain({ cause: error }) });
       return buildWorkspaceAgents(self, []);
@@ -2933,7 +3037,7 @@ export class OrchestratorAgent extends ActorAgent {
    * orchestration policy as the model's agents tool, including rollback and the
    * authoritative roster broadcast. */
   @callable() async listSubordinates(): Promise<SubordinateRosterEntry[]> {
-    return this.getTeamToolDeps().list();
+    return this.subordinateViews();
   }
 
 
@@ -2952,7 +3056,11 @@ export class OrchestratorAgent extends ActorAgent {
     displayName: string;
     subordinate: SubordinateRosterEntry;
   }> {
-    return this.getTeamToolDeps().create({});
+    const result = await this.getTeamToolDeps().create({});
+    return {
+      ...result,
+      subordinate: await this.subordinateView(result.subordinate.name),
+    };
   }
 
   /** Retitle one of this workspace's agents. Writes the child and this
@@ -2964,7 +3072,11 @@ export class OrchestratorAgent extends ActorAgent {
     displayName: string;
     subordinate: SubordinateRosterEntry;
   }> {
-    return this.getTeamToolDeps().rename({ name, displayName });
+    const result = await this.getTeamToolDeps().rename({ name, displayName });
+    return {
+      ...result,
+      subordinate: await this.subordinateView(result.subordinate.name),
+    };
   }
 
   @callable() async dismissSubordinate(name: string): Promise<{
@@ -3336,7 +3448,7 @@ export class OrchestratorAgent extends ActorAgent {
    * Fork this agent at a specific message, producing a new agent DO with:
    *   - SOUL.md copied, messages 0..N copied, crafted tools snapshotted,
    *     memory copied, agent_config copied (display_name overwritten)
-   *   - search tree, evolution events, scaffold, craft_scores RESET
+   *   - search tree, evolution events, scaffold, crafted-tool quality RESET
    *
    * The driver is core's (identity/fork-driver.ts); what a Durable Object
    * contributes is the transport below — addressing a workspace that does not
@@ -3493,9 +3605,10 @@ export class OrchestratorAgent extends ActorAgent {
     };
   }
 
-  /** Cancel a trigger (revoke). Idempotent. */
+  /** Cancel a trigger (revoke), deleting its plaintext secret in the same
+   *  host call — the revoked webhook leaves no live credential behind. */
   async cancelTrigger(trigger_id: string) {
-    return cancelTrigger(this.triggerRegistry, trigger_id, Date.now());
+    return cancelTrigger(this.triggerRegistry, trigger_id, Date.now(), this.webhookSecrets);
   }
 
   /** Register a timer trigger — the `agent.schedule` tool's and the auto-GEPA
@@ -3508,9 +3621,13 @@ export class OrchestratorAgent extends ActorAgent {
 
   /**
    * Trace-driven auto-GEPA tick — called once per completed turn. When enough
-   * new turns have accrued since the last pass AND no pending scaffold is
-   * mid-shadow, kick GEPA in the background. The counter keeps growing while a
-   * pending is in flight, so a pass fires as soon as the shadow slot frees.
+   * COMPLETED NON-PLAN TURNS have accrued since the last pass AND no pending
+   * scaffold is mid-shadow, kick GEPA in the background. The count is a SOURCE
+   * QUERY over the durable `turn_end` rows (`workMode` is what makes a turn
+   * count), not an activation-local counter: it survives every eviction, so a
+   * workspace whose turns are further apart than the eviction window still
+   * reaches its cadence. While a pending is in flight the count keeps growing,
+   * so a pass fires as soon as the shadow slot frees.
    */
   protected maybeRunAutoGepa(): void {
     const everyN = this.config.getAutoGepaEveryNTurns();
@@ -3529,10 +3646,10 @@ export class OrchestratorAgent extends ActorAgent {
           `superseded by this default — run setAutoGepa(0) to disable again.`
         }, ${Date.now()})`;
     }
-    this._turnsSinceGepa += 1;
-    if (this._turnsSinceGepa < everyN) return;
-    if (getPendingScaffold(this.boundSql)) return;  // wait for the slot; keep the counter
-    this._turnsSinceGepa = 0;
+    const lastPass = listGepaRuns(this.boundSql, 1)[0];
+    const sinceTs = lastPass ? new Date(lastPass.startedAt).toISOString() : null;
+    if (this.eventRecorder.completedWorkTurns(sinceTs) < everyN) return;
+    if (getPendingScaffold(this.boundSql)) return;  // wait for the slot; the count keeps growing
     // The prompt-section lane rides the same cadence and the same switch. It is
     // judge-only where a scaffold pass is a rollout PLUS a judge call, so the
     // two share a tick rather than competing for one, and neither needs a

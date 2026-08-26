@@ -21,8 +21,6 @@ describe('the orchestrator dynamic context reads its own planes', () => {
     const agent = harness().agent;
     agent.harnessRoster().create({
       name: 'scout',
-      displayName: 'Scout',
-      role: 'specialist',
       createdBy: 'orchestrator',
       status: 'working',
       currentTask: 'map the failure surface',
@@ -30,8 +28,8 @@ describe('the orchestrator dynamic context reads its own planes', () => {
       dismissedAt: null,
     });
 
-    const delegates = agent.observeDynamicContext().delegates ?? [];
-    expect(delegates).toContainEqual({
+    const delegates = agent.observeDynamicContext().delegates;
+    expect(delegates?.items).toContainEqual({
       kind: 'subordinate',
       name: 'scout',
       phase: 'working',
@@ -48,9 +46,9 @@ describe('the orchestrator dynamic context reads its own planes', () => {
     });
     expect(parked.outcome).toBe('queued');
 
-    const approvals = agent.observeDynamicContext().approvals ?? [];
-    expect(approvals).toHaveLength(1);
-    expect(approvals[0]?.detail).toContain('bun run deploy');
+    const approvals = agent.observeDynamicContext().approvals;
+    expect(approvals?.total).toBe(1);
+    expect(approvals?.items[0]?.detail).toContain('bun run deploy');
   });
 
   test('a raised device consent waits on the user in the block', async () => {
@@ -65,8 +63,8 @@ describe('the orchestrator dynamic context reads its own planes', () => {
       scope: 'full_filesystem',
     });
 
-    const approvals = agent.observeDynamicContext().approvals ?? [];
-    expect(approvals.some((approval) => approval.kind === 'device consent'
+    const approvals = agent.observeDynamicContext().approvals;
+    expect(approvals?.items.some((approval) => approval.kind === 'device consent'
       && approval.detail.includes('git push origin main'))).toBe(true);
   });
 });

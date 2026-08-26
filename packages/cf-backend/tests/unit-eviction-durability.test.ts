@@ -513,7 +513,7 @@ describe('whether the container may be disturbed', () => {
   test('an unreachable subordinate counts, because unknown is not idle', async () => {
     const { agent } = orchestratorHarness();
     agent.harnessRoster().create({
-      name: 'helper', displayName: 'Helper', nameOrigin: 'auto', role: 'specialist',
+      name: 'helper',
       createdBy: 'orchestrator', status: 'working', currentTask: 'building in the container',
       createdAt: Date.now(), dismissedAt: null,
     });

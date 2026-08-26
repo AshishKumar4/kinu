@@ -43,12 +43,20 @@ export function initUserTables(sql: SqlExec, tagged: SqlExecutor): void {
     CREATE TABLE IF NOT EXISTS user_workspaces (
       name          TEXT PRIMARY KEY,
       display_name  TEXT NOT NULL,
+      name_origin   TEXT NOT NULL DEFAULT 'user' CHECK (name_origin IN ('auto', 'user')),
       created_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
       last_visited  INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
       archived_at   INTEGER
     )
   `);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_workspaces_last_visited ON user_workspaces (last_visited DESC)`);
+  // Existing rows predate provenance. Treat their shown title as owner state:
+  // an automatic title must never overwrite an origin we cannot reconstruct.
+  // New rows always write their measured origin.
+  reconcileColumns(tagged, (ddl) => { sql.exec(ddl); }, 'user_workspaces', {
+    name_origin: "TEXT NOT NULL DEFAULT 'user' CHECK (name_origin IN ('auto', 'user'))",
+  });
+  sql.exec(`UPDATE user_workspaces SET name_origin = 'user' WHERE name_origin IS NULL`);
 
   // Per-workspace capability tokens + the taint registry — the caller boundary
   // every privileged method below is gated on. Table shape owned by the module

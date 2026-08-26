@@ -425,9 +425,9 @@ describe('a head forks its parent workspace', () => {
    * A head's SQL ledgers are its FACET's own storage, and `initWorkspaceSchema`
    * runs on no facet that only explores — so the runtime that builds the head's
    * `workspace.*` plane is the only thing that can provision what that plane
-   * reads. `listTools` quotes the crafted-tool EMA out of `craft_scores` and
-   * `createTool` seeds it, so with the memory and craft stores alone a head
-   * raised `no such table: craft_scores` on its first call. Pinned on both
+   * reads. `listTools` reads the crafted-tool quality columns ON `crafted_tools`
+   * and `createTool` seeds them, so with the memory and craft stores alone a
+   * head raised `no such table: crafted_tools` on its first call. Pinned on both
    * backends: the CLI head hit exactly this inside a paid delegation run.
    */
   test("the head's own workspace plane scores the tools it crafts", async () => {

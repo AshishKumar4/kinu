@@ -178,7 +178,7 @@ describe('turn-pipeline correctness wiring', () => {
     );
     expect(snapshot).toContain('collectDynamicContext({');
     expect(snapshot).toContain('memoryTail: this._turnMemoryTail');
-    expect(snapshot).toContain('missingCapabilities: this._mcpUnavailable');
+    expect(snapshot).toContain('...this._mcpUnavailable');
     // Passed, not re-derived: a backend that rebuilt its own store handles here
     // would be back to stating the binding twice.
     expect(snapshot).toContain('stores: this.stores');
@@ -373,7 +373,7 @@ describe('turn-pipeline correctness wiring', () => {
     // partial answer inside it — a row for some other turn would pass a bare
     // count.
     const recorded = harness.db.prepare<{ turn: string }, []>(
-      `SELECT turn FROM session_window`,
+      `SELECT turn FROM completed_turns`,
     ).all();
     expect(recorded, 'an aborted turn left no evidence row').toHaveLength(1);
     expect(recorded[0]!.turn).toContain('partial');

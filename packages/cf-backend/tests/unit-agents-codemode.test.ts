@@ -29,6 +29,7 @@ import {
   createAgentsCodemodeProvider,
   createProviderRegistry,
   parseJsonValue,
+  initCraftQualityColumns,
   type AgentsToolDeps,
   type JsonValue,
   type SubordinateHandoff,
@@ -98,6 +99,7 @@ function webSearchProvider(): WebSearchProvider {
  *  a craft store with nothing in it, no executors, and stub model/web seams. */
 function executeToolsDescription(agents?: () => AgentsToolDeps): string {
   const { rt, testSql } = createTestRuntime();
+  initCraftQualityColumns(testSql.execRaw, testSql.sql);
   const options = {
     loader: workerLoader(),
     rt,

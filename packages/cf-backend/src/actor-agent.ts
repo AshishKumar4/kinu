@@ -26,7 +26,10 @@ import { ExplorationAgent } from './exploration';
 // its own subclass. The VALUE comes from `subordinateFacet()`, which each
 // concrete root supplies.
 import type { SubordinateAgent } from './subordinate-agent';
-import type { SubordinateActivityEvent } from './lib/protocol';
+import type {
+  SubordinateActivityEvent,
+  SubordinateRosterEntry as SubordinateView,
+} from './lib/protocol';
 import { parseProtocolMessage } from "agents/chat";
 import { CLI_SCOPES_HEADER, cliScopesConnectionTag, rejectOutOfScopeRpc } from "./cli/rpc-gate";
 import { createWorkersTracer } from "./obs/cf-tracer";
@@ -40,9 +43,9 @@ import { Think, Session } from "@cloudflare/think";
 import { streamText, generateText, tool, jsonSchema } from "ai";
 import type { LanguageModel, ModelMessage, SystemModelMessage, ToolSet, UIMessage } from "ai";
 import {
-  SerializableToolDescriptorSchema,
-  type SerializableToolDescriptor,
+  McpToolSurfaceCache,
 } from "./user/mcp";
+
 import type {
   TurnContext, TurnConfig,
   ToolCallResultContext, StepContext, ChunkContext,
@@ -187,7 +190,7 @@ import {
   // Plan mode's one completion surface and the deps-gated report tool. Both sat
   // outside BUILTIN_TOOLS as bare strings with no link to the tools they name.
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
-  type JsonObject, type JsonValue, type ProfileAuthorityInputs,
+  type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs,
   type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend,
 } from "@kinu.run/core";
 import { bindAgentSql, createCFRuntime, type CFRuntime } from "./runtime";
@@ -267,6 +270,7 @@ interface UserHubCoreClient {
   readonly getAuthHeaders: UserDO['getAuthHeaders'];
   readonly listCredentials: UserDO['listCredentials'];
   readonly getCredentialBaseURL: UserDO['getCredentialBaseURL'];
+  readonly getWorkspaceTitle: UserDO['getWorkspaceTitle'];
   readonly setWorkspaceDisplayName: UserDO['setWorkspaceDisplayName'];
   readonly deviceRpc: UserDO['deviceRpc'];
   readonly getProfile: UserDO['getProfile'];
@@ -280,8 +284,8 @@ interface UserHubCoreClient {
 }
 
 export interface UserHubClient extends UserHubCoreClient {
-  userMcp_updatedAt(caller: UserCaller): Promise<number>;
   userMcp_toolDescriptors(caller: UserCaller): Promise<string>;
+
   userMcp_callTool(
     caller: UserCaller,
     serverId: string,
@@ -293,10 +297,6 @@ export interface UserHubClient extends UserHubCoreClient {
 type UserHubRpcClient = UserHubClient & Pick<Fetcher, 'fetch'>;
 const ClientRpcFrameSchema = v.object({
   type: v.literal('rpc'), id: v.string(), method: v.string(), args: v.array(JsonValueSchema),
-});
-const McpToolSurfaceSchema = v.object({
-  descriptors: v.array(SerializableToolDescriptorSchema),
-  unavailable: v.array(v.object({ server: v.string(), reason: v.string() })),
 });
 
 function parseClientRpcFrame<Message>(message: Message): ClientRpcFrame | null {
@@ -455,8 +455,13 @@ export function actorAgentsActions(deps: ActorToolDeps): AgentsToolAction[] {
 
 
 export interface ActorDynamicContextExtras {
-  readonly approvals?: () => readonly DynamicApproval[];
+  readonly approvals?: () => ActiveRoster<DynamicApproval>;
   readonly extraMissingCapabilities?: () => readonly MissingCapability[];
+}
+
+interface WorkspaceTitleInputs {
+  readonly displayName: string | null;
+  readonly nameOrigin: 'user' | 'auto' | null;
 }
 
 export abstract class ActorAgent extends Think<Env> {
@@ -548,6 +553,25 @@ export abstract class ActorAgent extends Think<Env> {
           cause: err,
           otherwise: 'unavailable',
         }), { subordinate: entry.name });
+      }
+    }
+    // Exploration facets read the token at SPAWN time, so a reissued token
+    // reaches future spawns for free — but a LONG-RUNNING head or node would
+    // otherwise keep presenting the revoked one until it finished. Push it
+    // down over the SDK's own facet registry; same secret, no second copy.
+    const ownerUserId = this.getOwnerUserId();
+    if (ownerUserId !== null) {
+      for (const entry of this.listSubAgents(this.explorationFacet())) {
+        try {
+          const stub = await this.subAgent(this.explorationFacet(), entry.name);
+          await stub.setOwner(ownerUserId, token);
+        } catch (err) {
+          diagnostics.failure('capability.exploration_push_failed', toKinuError({
+            doing: 'pushing the workspace capability token to an exploration facet',
+            cause: err,
+            otherwise: 'unavailable',
+          }), { facet: entry.name });
+        }
       }
     }
     return { ok: true };
@@ -801,7 +825,7 @@ export abstract class ActorAgent extends Think<Env> {
 
   protected get subordinateRoster(): SubordinateRosterStore {
     if (!this._subordinateRoster) {
-      this._subordinateRoster = new SubordinateRosterStore(this.ctx.storage.sql, this.boundSql);
+      this._subordinateRoster = new SubordinateRosterStore(this.ctx.storage.sql);
       this._subordinateRoster.ensureSchema();
     }
     return this._subordinateRoster;
@@ -812,11 +836,41 @@ export abstract class ActorAgent extends Think<Env> {
     return subordinateDelegatesOf(this.subordinateRoster.list());
   }
 
-  protected broadcastSubordinatesChanged(event?: SubordinatesChangedEvent): void {
-    this.broadcast(JSON.stringify(event ?? {
-      type: 'subordinates_changed',
-      subordinates: this.subordinateRoster.list(),
-    }));
+  protected async subordinateView(name: string): Promise<SubordinateView> {
+    const entry = this.subordinateRoster.get(name);
+    if (entry === null) throw new Error(`Subordinate "${name}" is not in the roster`);
+    try {
+      const snapshot = await (await this.subAgent(this.subordinateFacet(), name)).getSubordinateSnapshot();
+      const role = snapshot.role.kind === 'catalog' ? snapshot.role.roleId : snapshot.role.text;
+      return { ...entry, displayName: snapshot.displayName, role };
+    } catch (error) {
+      diagnostics.failure('subordinate.descriptor_unavailable', toKinuError({
+        doing: 'reading a subordinate descriptor from its agent config',
+        cause: error,
+        otherwise: 'unavailable',
+      }), { subordinate: name });
+      return { ...entry, displayName: name, role: 'Unavailable' };
+    }
+  }
+
+  protected async subordinateViews(): Promise<SubordinateView[]> {
+    return Promise.all(this.subordinateRoster.list().map(
+      async (entry) => this.subordinateView(entry.name),
+    ));
+  }
+
+  protected broadcastSubordinatesChanged(_event?: SubordinatesChangedEvent): void {
+    void this.subordinateViews()
+      .then((subordinates) => {
+        this.broadcast(JSON.stringify({ type: 'subordinates_changed', subordinates }));
+      })
+      .catch((error) => {
+        diagnostics.failure('subordinate.roster_broadcast_failed', toKinuError({
+          doing: 'building the subordinate roster read model',
+          cause: error,
+          otherwise: 'unavailable',
+        }));
+      });
   }
 
   protected broadcastSubordinateEvent(
@@ -878,11 +932,9 @@ export abstract class ActorAgent extends Think<Env> {
               name: input.name,
               displayName: input.displayName,
               nameOrigin: input.nameOrigin,
-              role: input.roleId ?? input.legacyRole ?? '',
+              role: input.role,
               mission: input.mission,
-              roleId: input.roleId,
               tier: input.tier,
-              catalogVersion: input.catalogVersion,
               capabilityToken: capabilityToken ?? undefined,
             };
             await stub.setSubordinateIdentity(identity);
@@ -936,8 +988,10 @@ export abstract class ActorAgent extends Think<Env> {
    * Record a title one of this actor's own children settled on.
    *
    * Called BY that child, over the facet spine, right after it wrote its own
-   * naming state — so it writes this roster row and nothing else. Calling the
-   * child back from here would re-enter a Durable Object that is mid-turn.
+   * naming state — so it refreshes this roster's listeners and nothing else.
+   * Calling the child back from here would re-enter a Durable Object that is
+   * mid-turn. The parent holds NO title mirror (core owns the one-writer
+   * contract): this only fans the `subordinates_changed` broadcast.
    *
    * Not a `@callable`: the browser renames through `rename`, which writes
    * both sides. This is worker-side facet RPC, in the same trust domain as
@@ -947,12 +1001,23 @@ export abstract class ActorAgent extends Think<Env> {
   async recordSubordinateTitle(
     name: string,
     displayName: string,
-  ): Promise<{ ok: true; applied: boolean }> {
+  ): Promise<{ ok: true }> {
     this.ensureSchema();
-    const result = await this.getTeamToolDeps().recordTitle({ name, displayName });
-    return { ok: true, applied: result.applied };
+    await this.getTeamToolDeps().recordTitle({ name, displayName });
+    return { ok: true };
   }
 
+  /** This actor's role as ONE label: the catalog id of a catalog hire, or the
+   *  freeform line a pre-catalog hire carries — core's one `role_selection`
+   *  row, read through getRoleSelection(). Surfaces that key into the catalog
+   *  match only the catalog arm; a legacy line matches nothing, exactly as an
+   *  unknown id did. */
+  protected activeRoleLabel(): string {
+    const selection = this.config.getRoleSelection();
+    // A legacy line is prompt prose, not a catalog key. Its tool/tier policy
+    // is the general role until the owner assigns a catalog role.
+    return selection.kind === 'catalog' ? selection.roleId : 'general';
+  }
   /**
    * Facet bootstrap authority. Worker-side DO RPC only. The child verifies its
    * supplied owner/workspace against this source before persisting its immutable
@@ -1327,6 +1392,7 @@ export abstract class ActorAgent extends Think<Env> {
         steering: this.orch.steering.snapshot(),
         craft: this.orch.craft.snapshot(),
         recoveries: this.orch.recoverySnapshot(),
+        workMode: this.turnWorkMode(),
         ...end,
       });
     }
@@ -1779,8 +1845,8 @@ export abstract class ActorAgent extends Think<Env> {
    * than an obituary — a lane interrupted near a deploy used to terminalize as
    * lost, so a turn that ended at the wrong moment silently got no advice.
    * Nothing is truncated to fit: `AdvisorRecoverySnapshotSchema` mirrors the
-   * lane's own deps through the same `CompletedTurnSchema` that `session_window`
-   * and `turn_review_queue` already persist a turn with, so a turn that could
+   * lane's own deps through the same `CompletedTurnSchema` that the unified
+   * `completed_turns` table already persists a turn with, so a turn that could
    * not be snapshotted here could not have been stored there either — the size
    * policy lives upstream where the turn's parts are clamped, and a second
    * weaker copy of it here would be the bound nobody measured.
@@ -2107,17 +2173,44 @@ export abstract class ActorAgent extends Think<Env> {
   // ── Tool cache: avoid rebuilding the built-in ToolSet + codemode types every turn ──
   protected _cachedTools: ToolSet | null = null;
   protected _cachedToolsKey: string = "";
-
   // ── User MCP tools cache ─────────────────────────────────────────────
-  // Per-user MCP tools live in UserDO. Per turn we ask UserDO for the
-  // current tool descriptors (cheap RPC) and cache them against UserDO's
-  // monotonic mcp_updated_at watermark so we only rebuild closures when
-  // the user has actually added/removed/edited a server.
-  private _cachedMcpTools: ToolSet = {};
-  private _cachedMcpToolsKey: number = -1;
+  // Per-user MCP tools live in UserDO. Per turn we fetch the canonical
+  // descriptor surface and cache the rebuilt closures against ITS CONTENT
+  // HASH, so we rebuild exactly when the durable rows differ from what this
+  // activation last served — across cold starts, edits, deletions and OAuth
+  // completions alike. No watermark exists to lose or misread.
+  private _mcpToolsCache: McpToolSurfaceCache<ToolSet> | null = null;
   /** Configured MCP servers whose tools did not make it onto this surface —
    *  rendered into the turn's dynamic context so their absence is legible. */
   private _mcpUnavailable: MissingCapability[] = [];
+
+  private get mcpToolsCache(): McpToolSurfaceCache<ToolSet> {
+    this._mcpToolsCache ??= new McpToolSurfaceCache<ToolSet>(async (descriptors) => {
+      const tools: ToolSet = {};
+      for (const d of descriptors) {
+        const serverId = d.serverId;
+        const mcpName = d.name;
+        tools[d.toolKey] = tool({
+          description: d.description ?? `${d.serverName}/${mcpName}`,
+          inputSchema: jsonSchema<JsonObject>(d.inputSchema ?? { type: 'object' }),
+          execute: async (args) => {
+            try {
+              const rawResult = await this.requireOwnerUserDO()
+                .userMcp_callTool(await this.userCaller(), serverId, mcpName, args);
+              return projectJsonValue({ value: v.parse(JsonValueSchema, JSON.parse(rawResult)) });
+            } catch (err) { return { isError: true, error: renderThrownChain({ cause: err }) }; }
+          },
+        });
+      }
+      // An MCP server is a bulk producer like any other. Apply the same result
+      // clamp and spill path as built-in tools.
+      return withClampedToolResults(tools, {
+        vfs: this.rt.storage.vfs, budget: this.acc.context, producer: 'external_tool',
+      });
+    });
+    return this._mcpToolsCache;
+  }
+
 
   // Preamble-injection: the codemode tool is built once per DO lifetime.
   // Its executor (PreambleCraftedExecutor) reads craftStore.list() on every
@@ -3056,14 +3149,12 @@ export abstract class ActorAgent extends Think<Env> {
    *  available-models list comes from /api/user/models so it stays user-scoped. */
   @callable()
   async getStoredModelSpec(): Promise<{ spec: string | null }> {
-    this.ensureSchema();
     return getStoredModelSpec(this.config);
   }
 
   /**
    * Change the durable active role. Takes effect on the NEXT resolved turn —
-   * `beforeTurn` re-reads `config.getActiveRoleId()` every time, so there is no
-   * cache to invalidate here and the running turn keeps the profile it already
+   * `beforeTurn` re-reads `config.getRoleSelection()` every time, so there is no
    * resolved (core profiles/role-change.ts:1-5). Clearing the memo instead
    * mutated a turn that had already resolved its model and tools, and clearing
    * it before the outcome check did that even for a change that never landed.
@@ -3077,7 +3168,7 @@ export abstract class ActorAgent extends Think<Env> {
       actor: 'user',
     });
     if (changed.kind !== 'applied') {
-      throw new Error(roleChangeOutcomeText(roleId, changed, this.config.getActiveRoleId()));
+      throw new Error(roleChangeOutcomeText(roleId, changed, this.activeRoleLabel()));
     }
     return { role: changed.to };
   }
@@ -3197,8 +3288,7 @@ export abstract class ActorAgent extends Think<Env> {
     try {
       const title = await applyWorkspaceTitle({
         slug: this.name,
-        displayName: this.config.getDisplayName(),
-        nameOrigin: this.config.getNameOrigin(),
+        ...this.titleInputs(),
         mission,
       }, {
         persist: (name) => this.persistAutoTitle(name),
@@ -3223,6 +3313,16 @@ export abstract class ActorAgent extends Think<Env> {
    *  `false` means a manual rename claimed the title first, which is what
    *  makes the owner's choice win a race with the model call above. */
   protected abstract persistAutoTitle(displayName: string): Promise<boolean>;
+
+  /** The naming state the title policy decides against. The base reads the
+   *  actor's own config — which IS the authority for a subordinate's
+   *  descriptor — while the workspace root overrides it with its activation
+   *  cache of the ROOT registry row (UserDO), where an agent_config mirror
+   *  would drift against every other writer of that row. */
+  protected titleInputs(): WorkspaceTitleInputs {
+    return { displayName: this.config.getDisplayName(), nameOrigin: this.config.getNameOrigin() };
+  }
+
 
   /**
    * The shared naming round-trip: the same prompt and parser the create path
@@ -3324,19 +3424,18 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /**
-   * Compute a lightweight cache key from CraftStore + score state.
-   * Includes craft_scores.MAX(last_used_at) because effective-score filtering
-   * depends on recency — without it, the cached ToolSet would keep re-using a
-   * stale score-filtered view across turns even as usage shifts.
+   * Compute a lightweight cache key from CraftStore + quality state. Quality
+   * lives on the crafted_tools row itself (score/uses/last_used_at), and
+   * effective-score filtering depends on recency — without MAX(last_used_at)
+   * in the key, the cached ToolSet would keep re-using a stale score-filtered
+   * view across turns even as usage shifts.
    */
   private _craftCacheKey(): string {
-    const craft = this.sql<{ cnt: number; latest: number }>`
-      SELECT COUNT(*) as cnt, COALESCE(MAX(updated_at), 0) as latest FROM crafted_tools`;
-    const scores = this.sql<{ lastUsed: number }>`
-      SELECT COALESCE(MAX(last_used_at), 0) as lastUsed FROM craft_scores`;
-    const { cnt, latest } = craft[0] ?? { cnt: 0, latest: 0 };
-    const lastUsed = scores[0]?.lastUsed ?? 0;
-    return `${cnt}:${latest}:${lastUsed}`;
+    const row = this.sql<{ cnt: number; latest: number; lastUsed: number }>`
+      SELECT COUNT(*) as cnt, COALESCE(MAX(updated_at), 0) as latest,
+             COALESCE(MAX(last_used_at), 0) as lastUsed
+      FROM crafted_tools`[0] ?? { cnt: 0, latest: 0, lastUsed: 0 };
+    return `${row.cnt}:${row.latest}:${row.lastUsed}`;
   }
 
   getTools(): ToolSet {
@@ -3360,7 +3459,7 @@ export abstract class ActorAgent extends Think<Env> {
   protected getRawToolsForWorkMode(mode: WorkMode): ToolSet {
     const actorDeps = this.actorToolDeps();
     const profileKey = actorActiveTools(actorDeps).join(',');
-    // Cache key includes CraftStore updated_at AND craft_scores last_used_at
+    // Cache key includes CraftStore updated_at AND the crafted_tools quality
     // because effective-score filtering depends on recency. The actor profile
     // is turn-sensitive for subordinate reporting: an owner chat must never
     // reuse an assigned turn's upward-reporting surface.
@@ -3620,12 +3719,11 @@ export abstract class ActorAgent extends Think<Env> {
    * Fetch the user's MCP tool descriptors and reconstruct AI-SDK Tool
    * adapters whose `execute` closures dispatch back to UserDO via RPC.
    *
-   * Cache invalidation:
-   *   - UserDO holds a monotonic `mcp_updated_at` watermark, bumped on
-   *     add/remove/edit + on OAuth-callback completion.
-   *   - We cache descriptors + closures by that integer; rebuild only when
-   *     it changes. Result is stable across turns until the user actually
-   *     reconfigures something.
+   * Cache invalidation is the descriptor surface's CONTENT HASH (see
+   * `McpToolSurfaceCache`): cold reconstruction, add/remove/edit and OAuth
+   * completion each invalidate exactly when the durable rows differ from what
+   * this activation last served. A failed read keeps the last good build — an
+   * actor mid-turn must not lose its tools because one RPC failed.
    *
    * Closure boundary: the descriptor that crosses RPC carries only the JSON
    * Schema + name + serverId; we re-construct the AI-SDK `Tool` here so the
@@ -3636,7 +3734,6 @@ export abstract class ActorAgent extends Think<Env> {
   private async buildUserMcpTools(): Promise<ToolSet> {
     const userId = this.getOwnerUserId();
     if (!userId) return {};
-    const userDOStub = this.env.UserDO.get(this.env.UserDO.idFromName(userId));
 
     // No identity, no user-level tools: advertising descriptors the actor can
     // no longer dispatch just spends context on calls that will be refused.
@@ -3645,73 +3742,26 @@ export abstract class ActorAgent extends Think<Env> {
     if (!(await this.workspaceCapabilityToken())) return {};
     const caller = await this.userCaller();
 
-    let watermark: number;
-    try { watermark = await userDOStub.userMcp_updatedAt(caller); }
-    catch (err) {
-      diagnostics.failure('mcp.watermark_fetch_failed', toKinuError({
-        doing: 'reading the user MCP configuration watermark from UserDO',
-        cause: err,
-        otherwise: 'unavailable',
-      }), { userId });
-      return this._cachedMcpTools;
-    }
-    if (watermark === this._cachedMcpToolsKey && Object.keys(this._cachedMcpTools).length > 0) {
-      return this._cachedMcpTools;
-    }
-    // Watermark = 0 means UserDO has never seen an MCP mutation. Skip the
-    // descriptor fetch entirely so cold UserDOs don't pay for MCP plumbing.
-    if (watermark === 0) {
-      this._cachedMcpTools = {};
-      this._cachedMcpToolsKey = 0;
-      return this._cachedMcpTools;
-    }
-
-    let descriptors: SerializableToolDescriptor[];
     try {
-      const answer = v.parse(
-        McpToolSurfaceSchema,
-        JSON.parse(await userDOStub.userMcp_toolDescriptors(caller)),
-      );
-      descriptors = answer.descriptors;
-      // A configured server whose tools never arrived is stated in the turn's
-      // dynamic context, not just logged: the model is otherwise left planning
-      // around a capability it was promised and cannot see.
-      this._mcpUnavailable = answer.unavailable.map((u) => ({
+      const tools = await this.mcpToolsCache.refresh(() =>
+        this.requireOwnerUserDO().userMcp_toolDescriptors(caller));
+      this._mcpUnavailable = this.mcpToolsCache.unavailable.map((u) => ({
         source: `MCP server "${u.server}"`, reason: u.reason,
       }));
+      this.logActivity('mcp_tools_served', `${Object.keys(tools).length} tools`);
+      return tools;
     } catch (err) {
-      diagnostics.failure('mcp.descriptor_fetch_failed', toKinuError({
+      diagnostics.failure('mcp.surface_fetch_failed', toKinuError({
         doing: 'fetching the user MCP tool descriptors from UserDO',
         cause: err,
         otherwise: 'unavailable',
-      }), { userId, watermark });
-      return this._cachedMcpTools;
+      }), { userId });
+      this._mcpUnavailable = [{
+        source: 'MCP catalog',
+        reason: 'The descriptor read failed. No MCP tool is available for this turn.',
+      }];
+      return {};
     }
-
-    const tools: ToolSet = {};
-    for (const d of descriptors) {
-      const serverId = d.serverId;
-      const mcpName = d.name;
-      tools[d.toolKey] = tool({
-        description: d.description ?? `${d.serverName}/${mcpName}`,
-        inputSchema: jsonSchema<JsonObject>(d.inputSchema ?? { type: 'object' }),
-        execute: async (args) => {
-          try {
-            const rawResult = await userDOStub.userMcp_callTool(caller, serverId, mcpName, args);
-            return projectJsonValue({ value: v.parse(JsonValueSchema, JSON.parse(rawResult)) });
-          } catch (err) { return { isError: true, error: renderThrownChain({ cause: err }) }; }
-        },
-      });
-    }
-    // An MCP server is a bulk producer like any other. Apply the same result
-    // clamp and spill path as built-in tools.
-    const clamped = withClampedToolResults(tools, {
-      vfs: this.rt.storage.vfs, budget: this.acc.context, producer: 'external_tool',
-    });
-    this._cachedMcpTools = clamped;
-    this._cachedMcpToolsKey = watermark;
-    this.logActivity('mcp_tools_rebuilt', `${Object.keys(clamped).length} tools @ wm=${watermark}`);
-    return clamped;
   }
 
   configureSession(session: Session): Session {
@@ -3803,8 +3853,8 @@ export abstract class ActorAgent extends Think<Env> {
     if (this._cachedSoulText === null) await this.refreshSoulText();
     this._turnProfile = null;
     const profileInputs = await this.profileInputs();
-    const activeRoleId = this.config.getActiveRoleId();
     this._turnProfileInputs = profileInputs;
+    const activeRoleId = this.activeRoleLabel();
     const roleSkills = effectiveRoleCatalog(profileInputs.envelope.catalog)[activeRoleId]?.skills ?? [];
     // Per-turn accounting reset + the turn's mission scope, together: what the
     // turn is allowed to spend is part of what the turn is.
@@ -3911,7 +3961,7 @@ export abstract class ActorAgent extends Think<Env> {
     ];
     const profile = resolveAgentTurnProfile({
       ...profileInputs,
-      activeRoleId: this.config.getActiveRoleId(),
+      activeRoleId: this.activeRoleLabel(),
       workMode: requestedWorkMode,
       availableTools,
       activeSkills: activeSetForPrompt?.active.map((skill) => skill.name) ?? [],
@@ -4367,8 +4417,8 @@ export abstract class ActorAgent extends Think<Env> {
     if (this._turnProfile) return this._turnProfile;
     return resolveAgentTurnProfile({
       ...(await this.profileInputs()),
-      activeRoleId: this.config.getActiveRoleId(),
-      workMode: 'build',
+      activeRoleId: this.activeRoleLabel(),
+      workMode: this.turnWorkMode(),
       availableTools: [],
       activeSkills: [],
       explicitTier: this.config.getAssignedTier() ?? undefined,

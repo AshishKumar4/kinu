@@ -10,9 +10,11 @@
  *   locally and dispatches each call back to `UserDO.callMcpTool(...)`.
  */
 
+import { sha256Hex } from '../lib/crypto';
 import { JsonArraySchema, JsonObjectSchema, type JsonObject } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
+
 
 export type McpTransport = 'auto' | 'sse' | 'streamable-http';
 
@@ -51,6 +53,57 @@ export const SerializableToolDescriptorSchema = v.object({
   inputSchema: v.optional(JsonObjectSchema),
   outputSchema: v.optional(JsonObjectSchema),
 });
+/** The whole descriptor surface `userMcp_toolDescriptors` serializes. */
+export const McpToolSurfaceSchema = v.object({
+  descriptors: v.array(SerializableToolDescriptorSchema),
+  unavailable: v.array(v.object({ server: v.string(), reason: v.string() })),
+});
+
+/**
+ * The orchestrator's per-activation MCP tool cache, keyed by the HASH OF THE
+ * DESCRIPTOR CONTENT — never by a mutation watermark. UserDO previously
+ * carried a `_userMcpUpdatedAt` integer that reset to zero on every cold start
+ * while its durable server rows and OAuth state survived; a reader that treated
+ * zero as "never configured" silently stripped every MCP tool after an
+ * eviction, and any revision mirror can miss a deletion. Deriving the key from
+ * what was actually fetched has neither failure mode: cold reconstruction,
+ * update, deletion and OAuth completion each invalidate exactly when the
+ * durable surface differs from the cached one.
+ *
+ * `refresh` PROPAGATES a failed fetch or parse: the host decides what an
+ * unreadable surface means (keep serving the last build, report, retry). The
+ * cache itself never hides an I/O failure.
+ */
+export class McpToolSurfaceCache<Tools> {
+  private key: string | null = null;
+  private built: Tools | null = null;
+  private lastUnavailable: readonly { server: string; reason: string }[] = [];
+
+  constructor(
+    private readonly build: (
+      descriptors: readonly SerializableToolDescriptor[],
+    ) => Promise<Tools>,
+  ) {}
+
+  /** Configured servers that produced no tools in the last served surface. */
+  get unavailable(): readonly { server: string; reason: string }[] {
+    return this.lastUnavailable;
+  }
+
+  /** Fetch the canonical descriptor JSON and rebuild only when its content
+   *  hash changed. The unavailable list follows every successfully READ
+   *  surface, cached or not: it describes the durable rows, not the build. */
+  async refresh(fetchSurface: () => Promise<string>): Promise<Tools> {
+    const raw = await fetchSurface();
+    const answer = v.parse(McpToolSurfaceSchema, JSON.parse(raw));
+    const key = await sha256Hex(raw);
+    this.lastUnavailable = answer.unavailable;
+    if (this.built !== null && key === this.key) return this.built;
+    this.built = await this.build(answer.descriptors);
+    this.key = key;
+    return this.built;
+  }
+}
 
 /** What the HTTP layer accepts when the user adds a server. */
 export interface McpServerInput {

@@ -157,7 +157,7 @@ export const DeferredApprovalRowSchema = v.object({
   command: v.string(),
   executor: v.string(),
   reason: v.string(),
-  status: v.picklist(['queued', 'approved', 'denied', 'used']),
+  status: v.picklist(['queued', 'approved', 'denied']),
   requestedAt: v.number(),
   decidedAt: v.nullable(v.number()),
 });

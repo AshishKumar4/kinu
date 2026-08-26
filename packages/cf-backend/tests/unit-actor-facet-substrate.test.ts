@@ -117,8 +117,6 @@ describe('actor substrate — facet feasibility contract', () => {
     const roster = agent.harnessRoster();
     const hire = (name: string) => roster.create({
       name,
-      displayName: name,
-      role: 'specialist',
       createdBy: 'orchestrator',
       status: 'idle',
       currentTask: null,

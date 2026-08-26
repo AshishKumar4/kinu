@@ -7,6 +7,7 @@ import { useAgent } from "agents/react";
 import {
   ORCHESTRATOR_AGENT_SLUG, SUBORDINATE_AGENT_SLUG,
   type AgentViewSummary, type PendingAction, type PlanReview,
+  type RoleSelection,
 } from "@kinu.run/core";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import type { FileUIPart, UIMessage } from "ai";
@@ -1161,8 +1162,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     const snapshot = await rpc<{
       name: string;
       displayName: string;
-      roleId: string | null;
-      legacyRole: string | null;
+      role: RoleSelection;
       mission: string;
       model: string | null;
       activePlan: unknown;
@@ -1171,7 +1171,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     setAgentStatus({
       name: snapshot.name,
       displayName: snapshot.displayName,
-      purpose: snapshot.roleId ?? snapshot.legacyRole ?? "general",
+      purpose: snapshot.role.kind === 'catalog' ? snapshot.role.roleId : snapshot.role.text,
       soul: snapshot.mission,
       createdAt: 0,
       scaffoldVersion: 0,

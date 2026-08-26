@@ -28,7 +28,7 @@ describe('subordinate wiring', () => {
     // MCP now identifies its caller by the workspace capability token rather
     // than by a name argument, so a facet dispatches as its parent workspace
     // and there is no name left to spoof.
-    expect(actor).toContain('userDOStub.userMcp_callTool(caller, serverId, mcpName, args)');
+    expect(actor).toContain('.userMcp_callTool(await this.userCaller(), serverId, mcpName, args)');
     expect(actor).not.toContain('callerAgentName');
     expect(runtime).toContain('agentName: actor.workspaceName');
     expect(subordinate).toContain('const bootstrap = await parent.getSubordinateBootstrapIdentity();');
@@ -130,9 +130,9 @@ describe('subordinate wiring', () => {
   test('browser subordinate callables reuse the team policy and are not exposed by the facet', () => {
     const orchestrator = source('orchestrator.ts');
     const subordinate = source('subordinate-agent.ts');
-    expect(orchestrator).toContain('return this.getTeamToolDeps().list();');
-    expect(orchestrator).toContain('return this.getTeamToolDeps().create({});');
-    expect(orchestrator).toContain('return this.getTeamToolDeps().rename({ name, displayName });');
+    expect(orchestrator).toContain('return this.subordinateViews();');
+    expect(orchestrator).toContain('const result = await this.getTeamToolDeps().create({});');
+    expect(orchestrator).toContain('const result = await this.getTeamToolDeps().rename({ name, displayName });');
     expect(orchestrator).toContain("return this.getTeamToolDeps().dismiss({ name, requestedBy: 'user' });");
     expect(subordinate).not.toContain('spawnSubordinate(');
     expect(subordinate).not.toContain('dismissSubordinate(');

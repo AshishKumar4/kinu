@@ -96,7 +96,7 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'ai_gateway.admin', name: 'listCloudflareAccounts', run: (u, c) => u.listCloudflareAccounts(c) },
   { capability: 'ai_gateway.admin', name: 'selectCloudflareAccount', run: (u, c) => u.selectCloudflareAccount(c, 'aaa111aaa111aaa111aaa111aaa111aa') },
 
-  { capability: 'mcp.tools', name: 'userMcp_updatedAt', run: (u, c) => u.userMcp_updatedAt(c) },
+  { capability: 'workspaces.read', name: 'getWorkspaceTitle', run: (u, c) => u.getWorkspaceTitle(c, WORKSPACE) },
   { capability: 'mcp.tools', name: 'userMcp_toolDescriptors', run: (u, c) => u.userMcp_toolDescriptors(c) },
   { capability: 'mcp.tools', name: 'userMcp_callTool', run: (u, c) => u.userMcp_callTool(c, 'srv', 'tool', {}) },
 
@@ -133,7 +133,7 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'workspaces.write', name: 'touchWorkspace', run: (u, c) => u.touchWorkspace(c, WORKSPACE) },
   { capability: 'workspaces.write', name: 'removeWorkspace', run: (u, c) => u.removeWorkspace(c, OTHER_WORKSPACE, USER_ID) },
 
-  { capability: 'workspaces.rename_self', name: 'setWorkspaceDisplayName', run: (u, c) => u.setWorkspaceDisplayName(c, WORKSPACE, 'Renamed') },
+  { capability: 'workspaces.rename_self', name: 'setWorkspaceDisplayName', run: (u, c) => u.setWorkspaceDisplayName(c, WORKSPACE, 'Renamed', 'user') },
 
   { capability: 'peers.grants', name: 'hasPeerGrant', run: (u, c) => u.hasPeerGrant(c, 'scout', 'b'.repeat(32)) },
 
@@ -287,8 +287,8 @@ describe('a tainted workspace loses exactly the capabilities the matrix cuts', (
     setWorkspaceTier(harness.sql, WORKSPACE, 'shared');
     const caller: UserCaller = { workspaceToken: harness.fullToken };
 
-    await harness.userDO.setWorkspaceDisplayName(caller, WORKSPACE, 'Renamed by itself');
-    await expect(harness.userDO.setWorkspaceDisplayName(caller, OTHER_WORKSPACE, 'Hijacked'))
+    await harness.userDO.setWorkspaceDisplayName(caller, WORKSPACE, 'Renamed by itself', 'user');
+    await expect(harness.userDO.setWorkspaceDisplayName(caller, OTHER_WORKSPACE, 'Hijacked', 'user'))
       .rejects.toThrow('may only rename itself');
 
     const names = (await harness.userDO.listWorkspaces(await testOwner())).entries;
@@ -607,8 +607,7 @@ describe('facets attenuate with their workspace', () => {
     const facetCaller: UserCaller = { workspaceToken: harness.fullToken };
 
     // Every remaining name argument is either scoped to the proven workspace
-    // or gated outright; none of them lends a facet another workspace's reach.
-    await expect(harness.userDO.setWorkspaceDisplayName(facetCaller, OTHER_WORKSPACE, 'Hijacked'))
+    await expect(harness.userDO.setWorkspaceDisplayName(facetCaller, OTHER_WORKSPACE, 'Hijacked', 'user'))
       .rejects.toThrow('may only rename itself');
     await expect(harness.userDO.getDeviceFsConsent(facetCaller, OTHER_WORKSPACE))
       .rejects.toThrow(CapabilityDeniedError);

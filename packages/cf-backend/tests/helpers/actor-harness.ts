@@ -404,8 +404,14 @@ export function subordinateHarness(): ActorHarness<HarnessSubordinateAgent> {
   ).run();
   harness.db.prepare(
     `INSERT OR REPLACE INTO subordinate_identity
-       (id, name, display_name, role, mission, parent_workspace, owner_user_id)
-     VALUES (1, 'harness-sub', 'Harness Sub', 'specialist', 'observe conformance', 'harness-parent', 'harness-owner')`,
+       (id, name, mission, parent_workspace, owner_user_id, depth)
+     VALUES (1, 'harness-sub', 'observe conformance', 'harness-parent', 'harness-owner', 1)`,
+  ).run();
+  harness.db.prepare(
+    `INSERT OR REPLACE INTO agent_config (key, value) VALUES
+      ('display_name', 'Harness Sub'),
+      ('name_origin', 'user'),
+      ('role_selection', '{"kind":"legacy","text":"specialist"}')`,
   ).run();
   harness.agent.declareScaffoldPresent();
   return harness;
@@ -445,7 +451,13 @@ export async function hiredSubordinateHarness(
   Object.defineProperty(harness.agent, 'messages', { value: [], configurable: true });
   ensureActorSchema(harness.agent);
   harness.agent.declareScaffoldPresent();
-  await harness.agent.setSubordinateIdentity(identity);
+  const { roleId, role, ...seed } = identity;
+  await harness.agent.setSubordinateIdentity({
+    ...seed,
+    role: roleId === undefined
+      ? { kind: 'legacy', text: role }
+      : { kind: 'catalog', roleId },
+  });
   // The parent addresses its children through `subAgent`, which needs a facet.
   // Resolve that ONE name to the real child instead, so both directions of the
   // handshake — the parent renaming a child, the child recording its title —

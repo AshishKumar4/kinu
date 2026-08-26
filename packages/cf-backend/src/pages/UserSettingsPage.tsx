@@ -291,7 +291,13 @@ function DevicesCard() {
       (e) => { setRosterErr(`Could not list device grants: ${renderThrownChain({ cause: e })}`); },
     );
   }, []);
-  useEffect(() => { refreshGrants(); }, [refreshGrants]);
+  // Grants ride the SAME 5s cycle as the roster: revoking one changes both
+  // what the machine may do and who has reach, so one clock keeps them honest.
+  useEffect(() => {
+    refreshGrants();
+    const t = setInterval(refreshGrants, 5000);
+    return () => clearInterval(t);
+  }, [refreshGrants]);
 
   // Deep-link target: the Environment tab's "Connect your PC" CTA points at
   // /user/settings#devices.

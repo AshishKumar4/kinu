@@ -748,6 +748,18 @@ export default function WorkspacePage() {
     }));
   }, [agentId, state.isStreaming, state.backgroundJobs, state.changelogUnseen, state.subordinates]);
 
+  // The sidebar has no socket of its own. Once this page unmounts, its last
+  // activity snapshot is no longer live; clear it rather than leaving a green
+  // "working now" dot on a workspace whose connection has gone away.
+  useEffect(() => {
+    if (!agentId) return;
+    return () => {
+      window.dispatchEvent(new CustomEvent("kinu:workspace-activity", {
+        detail: { name: agentId, running: false, unseenChangelog: 0, agents: [] },
+      }));
+    };
+  }, [agentId]);
+
   // The ONE rule that steers the surface on its own: a newly exposed sandbox
   // port switches to Output, where the running app is. Environment used to run
   // a second, competing rule over the same signal — two owners of one decision,

@@ -63,6 +63,7 @@ export interface FacetHost extends Pick<Agent<Env>, "subAgent" | "abortSubAgent"
   explorationFacet(): SubAgentClass<ExplorationAgent>;
 }
 
+
 /** The stub `subAgent` hands back, named once so the bootstrap seam can take a
  *  mode's own init RPC as an argument. */
 type ExplorationStub = SubAgentStub<ExplorationAgent>;
@@ -122,6 +123,47 @@ export function abortExplorationFacet(host: FacetHost, id: string, reason?: stri
  */
 export async function deleteExplorationFacet(host: FacetHost, id: string): Promise<void> {
   await host.deleteSubAgent(host.explorationFacet(), id);
+}
+
+/** Where a facet stands in the ledgers that own its lifecycle. Derived by the
+ *  caller from the EXISTING head journal and search-run tables; this module
+ *  owns no registry of its own. */
+export type ExplorationFacetLedgerStatus = 'resumable' | 'terminal' | 'unknown';
+export interface ExplorationFacetRegistry {
+  list(): readonly { name: string }[];
+  delete(id: string): Promise<void>;
+}
+
+
+/**
+ * Reclaim exploration facets a DO reset left behind, over the SDK's own facet
+ * registry (`listSubAgents`).
+ *
+ * A terminal ledger row proves its facet has no reader left, so its storage is
+ * reclaimed. A resumable row is preserved whatever the host is doing — the job
+ * sweep, not this sweep, decides whether interrupted work re-drives. An
+ * unledgered facet is reclaimed only when nothing live claims exploration
+ * work: MCTS creates a branch facet BEFORE it writes the child node, so
+ * treating every missing row as an orphan would destroy an active rollout.
+ */
+export async function reconcileExplorationFacets(
+  registry: ExplorationFacetRegistry,
+  ledgerStatus: (id: string) => ExplorationFacetLedgerStatus,
+  hasLiveExploration: () => boolean,
+): Promise<{ reclaimed: number; retained: number }> {
+  let reclaimed = 0;
+  let retained = 0;
+  const live = hasLiveExploration();
+  for (const facet of registry.list()) {
+    const status = ledgerStatus(facet.name);
+    if (status === 'terminal' || (status === 'unknown' && !live)) {
+      await registry.delete(facet.name);
+      reclaimed += 1;
+    } else {
+      retained += 1;
+    }
+  }
+  return { reclaimed, retained };
 }
 
 /**

@@ -96,8 +96,6 @@ async function addedAgent(seed: {
   const child = await hiredSubordinateHarness(parent, identity);
   parent.agent.harnessRoster().create({
     name,
-    displayName: seed.displayName,
-    role: seed.role,
     createdBy: 'user',
     status: 'idle',
     currentTask: null,
@@ -117,6 +115,17 @@ async function addedAgent(seed: {
   });
   return { parent, child, name, suggested };
 }
+interface ParentRosterReader {
+  readonly agent: {
+    listSubordinates(): Promise<Array<{ name: string; displayName: string }>>;
+  };
+}
+
+async function displayedName(parent: ParentRosterReader, name: string): Promise<string> {
+  return (await parent.agent.listSubordinates()).find((entry) => entry.name === name)?.displayName
+    ?? '';
+}
+
 
 interface Deferred {
   readonly promise: Promise<void>;
@@ -159,7 +168,7 @@ describe('an agent the owner added without naming it', () => {
     });
     // The roster row is the one every reader shows, so a title only the facet
     // knows about is a title nobody can see.
-    expect(parent.agent.harnessRoster().requireActive(name).displayName).toBe('Callback Audit');
+    expect(await displayedName(parent, name)).toBe('Callback Audit');
     expect(suggested).toEqual([TINY_MODEL]);
 
     // A second owner message is not a second naming pass: persisting the title
@@ -178,12 +187,12 @@ describe('an agent the owner added without naming it', () => {
     await parent.agent.renameSubordinateAgent(name, 'Jarvis');
 
     expect(child.agent.observeNaming()).toEqual({ displayName: 'Jarvis', nameOrigin: 'user' });
-    expect(parent.agent.harnessRoster().requireActive(name).displayName).toBe('Jarvis');
+    expect(await displayedName(parent, name)).toBe('Jarvis');
 
     await child.agent.titleFromFirstMessage('Audit the OAuth callback flow');
 
     expect(child.agent.observeNaming()).toEqual({ displayName: 'Jarvis', nameOrigin: 'user' });
-    expect(parent.agent.harnessRoster().requireActive(name).displayName).toBe('Jarvis');
+    expect(await displayedName(parent, name)).toBe('Jarvis');
     // Not merely "the title survived": the model was never asked, so the
     // refusal happened before the spend rather than after it.
     expect(suggested).toEqual([]);
@@ -200,7 +209,7 @@ describe('an agent the owner added without naming it', () => {
     await child.agent.titleFromFirstMessage('Something else entirely');
 
     expect(child.agent.observeNaming()).toEqual({ displayName: 'Jarvis', nameOrigin: 'user' });
-    expect(parent.agent.harnessRoster().requireActive(name).displayName).toBe('Jarvis');
+    expect(await displayedName(parent, name)).toBe('Jarvis');
     expect(suggested).toEqual([TINY_MODEL]);
   });
 
@@ -228,7 +237,7 @@ describe('an agent the owner added without naming it', () => {
     await titling;
 
     expect(child.agent.observeNaming()).toEqual({ displayName: 'Jarvis', nameOrigin: 'user' });
-    expect(parent.agent.harnessRoster().requireActive(name).displayName).toBe('Jarvis');
+    expect(await displayedName(parent, name)).toBe('Jarvis');
   });
 
   test('a rename waiting on the child also blocks an auto title from reclaiming the parent row', async () => {
@@ -255,7 +264,7 @@ describe('an agent the owner added without naming it', () => {
     await renaming;
 
     expect(child.agent.observeNaming()).toEqual({ displayName: 'Jarvis', nameOrigin: 'user' });
-    expect(parent.agent.harnessRoster().requireActive(name).displayName).toBe('Jarvis');
+    expect(await displayedName(parent, name)).toBe('Jarvis');
   });
 });
 
@@ -272,7 +281,7 @@ describe('an agent the model hired', () => {
     await child.agent.titleFromFirstMessage('What did you find?');
 
     expect(child.agent.observeNaming()).toEqual({ displayName: 'Auditor', nameOrigin: 'auto' });
-    expect(parent.agent.harnessRoster().requireActive(name).displayName).toBe('Auditor');
+    expect(await displayedName(parent, name)).toBe('Auditor');
     expect(suggested).toEqual([]);
   });
 });

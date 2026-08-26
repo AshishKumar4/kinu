@@ -107,9 +107,10 @@ function makeHost(
       if (options.deleteSubAgentThrows) throw new Error('facet storage is unreachable');
     },
     explorationFacet: () => FakeExplorationFacet,
+    listSubAgents: () => [],
   };
-  // SAFETY: this locally constructed host implements all four members FacetHost
-  // owns — the three SDK verbs plus `explorationFacet` — and every returned
+  // SAFETY: this locally constructed host implements every member FacetHost
+  // owns — the four SDK verbs plus `explorationFacet` — and every returned
   // exploration stub method is present and records its exact argument list
   // before returning the owner-shaped result above.
   return { host: host as FacetHost, calls };

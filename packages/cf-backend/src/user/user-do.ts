@@ -384,10 +384,6 @@ export class UserDO extends Agent<Env> {
    *  This one is per-user and stores its config in `user_mcp_servers`. */
   private _userMcp: MCPClientManager | null = null;
 
-  /** Monotonic watermark bumped on every MCP config mutation. The
-   *  orchestrator's per-turn cache compares this against its last-seen value
-   *  to decide whether to refetch tool descriptors. */
-  private _userMcpUpdatedAt = 0;
 
   private ensureInit(): void {
     if (this._initialized) return;
@@ -558,30 +554,29 @@ export class UserDO extends Agent<Env> {
     await this.requireTier(caller, 'workspaces.write');
     validateWorkspaceName(name);
     const now = Date.now();
-    const existing = this.sqlx<{ display_name: string }>(
-      `SELECT display_name FROM user_workspaces WHERE name = ?`, name,
+    const explicit = displayName?.trim() ?? '';
+    const existing = this.sqlx<{ display_name: string; name_origin: 'user' | 'auto' | null }>(
+      `SELECT display_name, name_origin FROM user_workspaces WHERE name = ?`, name,
     )[0];
     const title = resolveWorkspaceTitle({
-      explicit: displayName, existing: existing?.display_name, purpose, slug: name,
+      explicit, existing: existing?.display_name, purpose, slug: name,
     });
+    const origin: 'user' | 'auto' = explicit !== '' ? 'user' : (existing?.name_origin ?? 'auto');
     this.sqlx(
-      `INSERT INTO user_workspaces (name, display_name, created_at, last_visited)
-       VALUES (?, ?, ?, ?)
+      `INSERT INTO user_workspaces (name, display_name, name_origin, created_at, last_visited)
+       VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(name) DO UPDATE SET
          display_name = excluded.display_name,
+         name_origin  = excluded.name_origin,
          last_visited = excluded.last_visited,
          archived_at  = NULL`,
-      name, title, now, now,
+      name, title, origin, now, now,
     );
     return {
       entry: { name, displayName: title, createdAt: now, lastVisited: now, archivedAt: null },
       existed: !!existing,
     };
   }
-
-  /** Reserve a previously unused name without changing an existing row. Fork
-   * creation uses this stricter operation so a conflict cannot unarchive or
-   * retitle the workspace that already owns the name. */
   async reserveWorkspace(caller: UserCaller, name: string, displayName?: string): Promise<{ entry: WorkspaceEntry; reserved: boolean }> {
     await this.requireTier(caller, 'workspaces.write');
     validateWorkspaceName(name);
@@ -610,11 +605,12 @@ export class UserDO extends Agent<Env> {
     }
 
     const now = Date.now();
-    const title = resolveWorkspaceTitle({ explicit: displayName, slug: name });
+    const explicit = displayName?.trim() ?? '';
+    const title = resolveWorkspaceTitle({ explicit, slug: name });
     this.sqlx(
-      `INSERT INTO user_workspaces (name, display_name, created_at, last_visited)
-       VALUES (?, ?, ?, ?)`,
-      name, title, now, now,
+      `INSERT INTO user_workspaces (name, display_name, name_origin, created_at, last_visited)
+       VALUES (?, ?, ?, ?, ?)`,
+      name, title, explicit !== '' ? 'user' : 'auto', now, now,
     );
     return {
       entry: { name, displayName: title, createdAt: now, lastVisited: now, archivedAt: null },
@@ -669,9 +665,19 @@ export class UserDO extends Agent<Env> {
     revokeWorkspaceCapability(this.ctx.storage.sql, name);
   }
 
-  /** Update the authoritative roster title. The workspace actor mirrors this
-   *  value only after the cross-DO write succeeds. */
-  async setWorkspaceDisplayName(caller: UserCaller, name: string, displayName: string): Promise<void> {
+  /**
+   * ROOT title authority. Commits the shown name AND whose it is; an 'auto'
+   * write is REFUSED when the owner has named this workspace, so a generated
+   * title can never displace a chosen one — the refusal lives here where the
+   * state is, not in a per-actor mirror that resets with its process.
+   * Returns whether the write applied.
+   *
+   * The workspace actor mirrors this value only after the cross-DO write
+   * succeeds.
+   */
+  async setWorkspaceDisplayName(
+    caller: UserCaller, name: string, displayName: string, origin: 'user' | 'auto',
+  ): Promise<{ applied: boolean }> {
     const resolved = await this.requireTier(caller, 'workspaces.rename_self');
     validateWorkspaceName(name);
     // Workspace-scoped by construction: an agent renames itself, never a
@@ -679,7 +685,28 @@ export class UserDO extends Agent<Env> {
     if (resolved.kind === 'workspace' && resolved.workspace !== name) {
       throw new Error(`Workspace "${resolved.workspace}" may only rename itself.`);
     }
-    this.sqlx(`UPDATE user_workspaces SET display_name = ? WHERE name = ?`, displayName, name);
+    const current = this.sqlx<{ name_origin: 'user' | 'auto' | null }>(
+      `SELECT name_origin FROM user_workspaces WHERE name = ?`, name,
+    )[0];
+    if (!current) return { applied: false };
+    if (origin === 'auto' && current.name_origin !== 'auto') return { applied: false };
+    this.sqlx(
+      `UPDATE user_workspaces SET display_name = ?, name_origin = ? WHERE name = ?`,
+      displayName, origin, name,
+    );
+    return { applied: true };
+  }
+
+  /** The root's current naming state for one workspace, or null when it holds
+   *  no such row. This is what an actor hydrates its activation cache from. */
+  async getWorkspaceTitle(caller: UserCaller, name: string): Promise<{ displayName: string; nameOrigin: 'user' | 'auto' } | null> {
+    await this.requireTier(caller, 'workspaces.read');
+    validateWorkspaceName(name);
+    const row = this.sqlx<{ display_name: string; name_origin: 'user' | 'auto' | null }>(
+      `SELECT display_name, name_origin FROM user_workspaces WHERE name = ?`, name,
+    )[0];
+    if (!row) return null;
+    return { displayName: row.display_name, nameOrigin: row.name_origin ?? 'user' };
   }
 
   async hasWorkspace(caller: UserCaller, name: string): Promise<boolean> {
@@ -2464,7 +2491,6 @@ export class UserDO extends Agent<Env> {
       id, cfg.name, cfg.serverUrl, cfg.transport ?? 'auto',
       await this.sealMcpHeaders(id, headersJson), allowedJson, now, now,
     );
-    this._userMcpUpdatedAt = now;
 
     const callbackUrl = `${publicOrigin.replace(/\/+$/, '')}${MCP_OAUTH_CALLBACK_PATH}`;
     const authProvider = new DurableObjectOAuthClientProvider(
@@ -2510,7 +2536,6 @@ export class UserDO extends Agent<Env> {
       // Rollback both our row AND the SDK's storage entry so the user can
       // retry with a corrected URL rather than have a stuck failed entry.
       this.sqlx(`DELETE FROM user_mcp_servers WHERE id = ?`, id);
-      this._userMcpUpdatedAt = Date.now();
       await this.userMcp().removeServer(id);
       throw new Error(`MCP connect failed: ${renderThrownChain({ cause: err })}`, { cause: err });
     }
@@ -2529,7 +2554,6 @@ export class UserDO extends Agent<Env> {
       }), { serverId: id });
     }
     this.sqlx(`DELETE FROM user_mcp_servers WHERE id = ?`, id);
-    this._userMcpUpdatedAt = Date.now();
   }
 
   /** Server names address the tools (`mcp_<server>_<tool>`), so two servers
@@ -2587,7 +2611,6 @@ export class UserDO extends Agent<Env> {
     sets.push('updated_at = ?'); args.push(now);
     args.push(id);
     this.sqlx(`UPDATE user_mcp_servers SET ${sets.join(', ')} WHERE id = ?`, ...args);
-    this._userMcpUpdatedAt = now;
 
     // A headers patch must re-register the live transport (and the SDK's
     // stored snapshot) — writing the SQL column alone never reaches the wire.
@@ -2649,11 +2672,6 @@ export class UserDO extends Agent<Env> {
     await mgr.establishConnection(id);
   }
 
-  /** Monotonic watermark — the orchestrator caches by this value. */
-  async userMcp_updatedAt(caller: UserCaller): Promise<number> {
-    await this.requireTier(caller, 'mcp.tools');
-    return this._userMcpUpdatedAt;
-  }
 
   /** Serializable tool descriptors for every connected MCP server, filtered
    *  by per-server `allowed_tools`. The orchestrator wraps each into an
@@ -2767,7 +2785,6 @@ export class UserDO extends Agent<Env> {
     try {
       const req = new Request(url);
       const result = await this.userMcp().handleCallbackRequest(req);
-      this._userMcpUpdatedAt = Date.now();
       if (result.authSuccess) {
         // Awaited, and in its own try: the tokens ARE saved by this point, so a
         // connect failure must not be reported as an auth failure. Detaching it

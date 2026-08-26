@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@cloudflare/kumo";
 import { FilledButton } from "./ui/FilledButton";
 import { HouseIcon, PlusIcon, TrashIcon } from "@phosphor-icons/react";
-import type { SubordinateRosterEntry } from "@kinu.run/core";
+import type { SubordinateRosterEntry } from "../lib/protocol";
 import { Modal } from "./ui/Modal";
 import { diagnostics, toKinuError, renderThrownChain } from "@kinu.run/core/obs";
 

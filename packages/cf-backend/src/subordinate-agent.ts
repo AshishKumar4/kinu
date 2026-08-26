@@ -16,8 +16,11 @@ import {
   // report.* — codemode projection of the native `report` tool.
   createReportCodemodeProvider, type CodemodeProvider,
   type DelegationBudget,
-  planReviewAwaitingDecision,
   type PlanReview,
+  planReviewAwaitingDecision,
+  subordinateDescriptorSource,
+  type RoleSelection,
+  type TierId,
   TIER_IDS,
 } from '@kinu.run/core';
 import {
@@ -52,15 +55,10 @@ export interface SetSubordinateIdentityInput {
    *  `user` for one the owner typed. `user` is what makes auto-titling
    *  refuse for good (`planWorkspaceTitle`). */
   nameOrigin: 'user' | 'auto';
-  /** Catalog role id, when the hiring actor resolved one; else null/absent
-   *  and `role` carries the legacy freeform line. */
-  roleId?: string | null;
-  /** The freeform role text — the labelled legacy block for a pre-catalog
-   *  hire, cleared by any explicit catalog assignment. */
-  role: string;
-  /** Optional tier override (`tiny|fast|default|slow|deep`) for catalog hires. */
-  tier?: string | null;
-  catalogVersion?: number | null;
+  /** Current role selection. The child's agent_config row is authoritative. */
+  role: RoleSelection;
+  /** Optional tier override for this child. */
+  tier?: TierId | null;
   mission: string;
   /** The PARENT workspace's capability token, pushed down at spawn so this
    *  facet reaches the owner's UserDO as its workspace — and is attenuated
@@ -183,13 +181,11 @@ export class SubordinateAgent extends ActorAgent {
 
   protected async loadSoulText(): Promise<string> {
     const identity = this.identity.read();
-    return identity
+    const descriptor = subordinateDescriptorSource(this.config).read();
+    return identity && descriptor
       ? renderSoulMarkdown({
-        // A title nobody has chosen yet is blank; the slug is the name this
-        // agent is genuinely addressed by, so that is what it calls itself
-        // until the first interaction titles it.
-        name: identity.displayName || identity.name,
-        mission: `${this.identityRoleBlock(identity)}\n\n${identity.mission}`,
+        name: descriptor.displayName || identity.name,
+        mission: `${this.identityRoleBlock(descriptor.role)}\n\n${identity.mission}`,
       })
       : '';
   }
@@ -201,11 +197,11 @@ export class SubordinateAgent extends ActorAgent {
    * no user prose silently changes shape or place, until an explicit catalog
    * assignment replaces and clears it.
    */
-  private identityRoleBlock(identity: { roleId: string | null; legacyRole: string | null }): string {
-    if (identity.roleId) return `Role: ${identity.roleId}`;
+  private identityRoleBlock(role: RoleSelection): string {
+    if (role.kind === 'catalog') return `Role: ${role.roleId}`;
     return [
       'Legacy role (assigned before this workspace had a role catalog):',
-      identity.legacyRole ?? '(none)',
+      role.text,
       'You keep these instructions until you are explicitly assigned a catalog role.',
     ].join('\n');
   }
@@ -310,7 +306,7 @@ export class SubordinateAgent extends ActorAgent {
     // `displayName` is deliberately NOT required: blank is the honest state of
     // an agent the owner added without naming, and the title policy fills it
     // on the first interaction.
-    if (!input.name || !input.role || !input.mission) {
+    if (!input.name || !input.mission) {
       throw new Error('complete subordinate identity is required');
     }
     this.ensureSchema();
@@ -329,11 +325,6 @@ export class SubordinateAgent extends ActorAgent {
     // subordinate cannot be seeded past it however it was asked for.
     this.identity.seed({
       name: input.name,
-      displayName: input.displayName,
-      roleId: input.roleId ?? null,
-      legacyRole: input.roleId ? null : input.role,
-      tier: input.tier ?? null,
-      catalogVersion: input.catalogVersion ?? null,
       mission: input.mission,
       parentWorkspace: bootstrap.parentWorkspace,
       ownerUserId: bootstrap.ownerUserId,
@@ -344,13 +335,8 @@ export class SubordinateAgent extends ActorAgent {
     // titled" — so a role-derived name a parent chose was eligible to be
     // replaced by a model call the owner never asked for.
     this.config.setDisplayNameOrigin(input.displayName, input.nameOrigin);
-    // The identity row above is what this subordinate IS — its prompt reads
-    // `roleId` from it. These two rows are what its TURNS resolve against, and
-    // they live in a different store (`agent_config`), so seeding only the
-    // identity left every turn resolving the workspace-default role: a hired
-    // auditor got the auditor prose in its soul and the general role's prompt,
-    // tools, skills and tier at inference time.
-    if (input.roleId) this.config.setActiveRoleId(input.roleId);
+    // The child config is the one current presentation authority.
+    this.config.setRoleSelection(input.role);
     // An absent or unrecognised tier CLEARS the pin, which is the instruction to
     // derive from the role rather than a tier of its own. PARSED, not asserted:
     // `tier` arrives over RPC from the hiring actor, so this is its I/O boundary
@@ -462,26 +448,21 @@ export class SubordinateAgent extends ActorAgent {
   async getSubordinateSnapshot(): Promise<{
     name: string;
     displayName: string;
-    /** Catalog role id, or null for a legacy hire. */
-    roleId: string | null;
-    /** The freeform line a pre-catalog hire carries; cleared on reassignment. */
-    legacyRole: string | null;
-    tier: string | null;
-    catalogVersion: number | null;
+    role: RoleSelection;
+    tier: TierId | null;
     mission: string;
     model: string | null;
     activePlan: PlanReview | null;
   }> {
     this.ensureSchema();
     const identity = this.identity.read();
-    if (!identity) throw new Error('Subordinate identity is not initialized.');
+    const descriptor = subordinateDescriptorSource(this.config).read();
+    if (!identity || !descriptor) throw new Error('Subordinate identity is not initialized.');
     return {
       name: identity.name,
-      displayName: identity.displayName,
-      roleId: identity.roleId,
-      legacyRole: identity.legacyRole,
-      tier: identity.tier,
-      catalogVersion: identity.catalogVersion,
+      displayName: descriptor.displayName,
+      role: descriptor.role,
+      tier: descriptor.tier,
       mission: identity.mission,
       model: this.getStoredModelId(),
       activePlan: await this.getActivePlanReview(),

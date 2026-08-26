@@ -21,7 +21,7 @@
 import { describe, test, expect, mock } from "bun:test";
 import type { CraftedTool, CraftStore } from "@kinu.run/core";
 import type { KinuSandbox } from "../src/kinu-sandbox";
-import { initCraftScoreTables, NO_TIMER_DEADLINE_MS } from "@kinu.run/core";
+import { initCraftQualityColumns, NO_TIMER_DEADLINE_MS } from "@kinu.run/core";
 import { createTestSql } from "@kinu.run/test-utils";
 import { adaptCloudflareSandbox } from "../src/sandbox-exec-lane";
 
@@ -174,7 +174,7 @@ function emptyCraftStore(): CraftStore {
 describe("the codemode program carries no execution deadline of its own", () => {
   test("the generated dynamic Worker gets no 60s kill", async () => {
     const { db, sql } = createTestSql();
-    initCraftScoreTables((ddl: string) => db.exec(ddl));
+    initCraftQualityColumns((ddl: string) => db.exec(ddl), sql);
     let generated = "";
     // The real generated program is the evidence: codemode races it against a
     // `setTimeout(… "Execution timed out")` built from its `timeout` option.

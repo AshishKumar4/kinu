@@ -40,6 +40,7 @@ import {
   decodeJsonValue, effortFor,
   createAgentConfigStore, initAgentConfigTable, initActorTables,
   parseModelSpec, reasoningEffortOptions, resolveModelRoute,
+  createScaffoldSurface,
   type FixedTierSource,
   type VectorStore,
 } from "@kinu.run/core";
@@ -74,7 +75,6 @@ import {
   nimbusPreviewConfigured,
   nimbusPreviewUrl,
 } from "./nimbus-route";
-import * as v from 'valibot';
 
 /**
  * The agent surface these runtime builders need — the bare agents-SDK `Agent`
@@ -357,9 +357,9 @@ export function createCFRuntime(
   // by the same measurement: `agent_config` was the first table an exploration
   // facet was found to be missing, not the only one. The workspace executor
   // registered below is handed this same `sql`, and its `listTools` quotes the
-  // crafted-tool EMA from `craft_scores`, its `createTool` seeds that row and
-  // files a refused one in `evolution_events`, and its view tools write
-  // `agent_views` — so a head raised `no such table: craft_scores` on its first
+  // crafted-tool quality columns ON `crafted_tools`, its `createTool` seeds
+  // that row and files a refused one in `evolution_events`, and its view tools
+  // write `agent_views` — so a head missing those tables on its first
   // `workspace.listTools()`, and a tool it crafted was written and then
   // reported to the model as a failure. `initActorTables` is the declared set
   // for storage that belongs to one full-loop actor and carries no workspace
@@ -451,7 +451,8 @@ export function createCFRuntime(
     inboundNetwork: nimbusPreviewConfigured(env),
     inline: {
       vfs: agentVfs, memory, craftStore, shell,
-      // sql is used by workspace.listTools() to look up EMA craft_scores.
+      // sql is used by workspace.listTools() to read the crafted tools' EMA
+      // quality columns.
       sql,
       // Optional eager notification; PreambleCraftedExecutor live-reads CraftStore.
       onToolRegistered: hooks.onToolRegistered,
@@ -975,22 +976,11 @@ function createIdentity(
   return {
     id: ctx.id.toString(),
     name: agent.name,
-    scaffold: {
-      path: scaffoldPath,
-      exists: () => vfs.exists(scaffoldPath),
-      read: async () => {
-        const content = await vfs.readFile(scaffoldPath, { encoding: "utf8" });
-        if (!v.is(v.string(), content)) throw new Error(`Scaffold ${scaffoldPath} did not decode as UTF-8 text`);
-        return content;
-      },
-      write: async (code: string) => {
-        const slash = scaffoldPath.lastIndexOf('/');
-        if (slash > 0) await vfs.mkdir(scaffoldPath.slice(0, slash), { recursive: true });
-        await vfs.writeFile(scaffoldPath, code);
-      },
-      version: async () =>
-        (sql<{ v: number }>`SELECT COALESCE(MAX(version), 0) as v FROM scaffold_versions`)[0]?.v ?? 0,
-    },
+    // Core's ONE scaffold surface (scaffold/surface.ts): `.vN` files are the
+    // canonical source, `scaffold_versions.status='current'` is the single
+    // current pointer, and exists()/read() resolve POINTER-FIRST so a stale
+    // live view is healed by the next activation instead of served.
+    scaffold: createScaffoldSurface({ vfs, sql, path: scaffoldPath }),
   };
 }
 
