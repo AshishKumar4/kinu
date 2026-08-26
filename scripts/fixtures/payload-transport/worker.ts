@@ -139,20 +139,15 @@ function harnessResults(stdout: string): readonly HarnessResult[] {
  */
 
 export class PayloadBenchSandbox extends Sandbox<Env> {
-  private runningImageVersion: string | undefined;
-
   /**
-   * Idempotent readiness: reconnect/start the container daemon, verify the
-   * RUNNING image version against the pinned one, install the harness from the
-   * bundled source, and prove bun can execute it. Safe to call again after any
-   * DO reset; nothing here assumes prior local state.
+   * Container startup runs under Durable Object blockConcurrencyWhile. Keep
+   * it bounded; prepare performs container probes, installation, and mounts.
    */
   override async onStart(): Promise<void> {
     await super.onStart();
-    await this.reconcileContainer();
   }
 
-  private async reconcileContainer(): Promise<void> {
+  private async reconcileContainer(): Promise<string> {
     await this.exec('mkdir -p /tmp/payload-bench');
     const probe = await this.exec(
       `bun -e 'console.log(JSON.stringify({ imageVersion: process.env.SANDBOX_VERSION ?? null }))'`,
@@ -169,20 +164,11 @@ export class PayloadBenchSandbox extends Sandbox<Env> {
     const bucketName = this.env.BUCKET_NAME;
     if (bucketName === undefined) throw new Error('BUCKET_NAME is not configured');
     await this.mountBucket('BACKUP_BUCKET', `/mnt/${bucketName}`, { prefix: '/' });
-    this.runningImageVersion = actualVersion;
-  }
-
-  async runtimeImageVersion(): Promise<string> {
-    if (this.runningImageVersion === undefined) {
-      throw new Error('container onStart did not record image identity');
-    }
-    return this.runningImageVersion;
+    return actualVersion;
   }
 
   async prepare(): Promise<string> {
-    await this.exec('true', { timeout: 60_000 });
-    if (this.runningImageVersion === undefined) await this.reconcileContainer();
-    return this.runtimeImageVersion();
+    return this.reconcileContainer();
   }
 
 

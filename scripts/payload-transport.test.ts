@@ -80,20 +80,27 @@ describe('one owning DO with container lifecycle', () => {
     expect(workerSource).toContain('class PayloadBenchSandbox extends Sandbox');
     expect(workerSource).not.toContain('PayloadBox');
   });
-  test('onStart is idempotent readiness: super.onStart first, image verified, harness installed', () => {
-    expect(workerSource).toContain('override async onStart(): Promise<void> {\n    await super.onStart();');
-    expect(workerSource).toContain("process.env.SANDBOX_VERSION ?? null");
-    expect(workerSource).toContain(`'${EXPECTED_IMAGE}'`);
-    expect(workerSource).toContain('writeFile(HARNESS_PATH, HARNESS_TS)');
-    expect(workerSource).toContain("{ prefix: '/' }");
+  test('onStart stays bounded and prepare owns image, harness, and mount proof', () => {
+    const onStart = workerSource.slice(
+      workerSource.indexOf('override async onStart'),
+      workerSource.indexOf('private async reconcileContainer'),
+    );
+    const prepare = workerSource.slice(
+      workerSource.indexOf('async prepare()'),
+      workerSource.indexOf('async control()'),
+    );
+    expect(onStart).toContain('await super.onStart()');
+    expect(onStart).not.toContain('reconcileContainer');
+    expect(prepare).toContain('return this.reconcileContainer()');
+    expect(workerSource).toContain('process.env.SANDBOX_VERSION');
     expect(workerSource).toContain("mountBucket('BACKUP_BUCKET'");
-    expect(workerSource).toContain('await this.reconcileContainer()');
+    expect(workerSource).toContain("{ prefix: '/' }");
     expect(workerSource).toContain('v.union([v.string(), v.number(), v.boolean()])');
     expect(driverSource).toContain('http://r2.internal/BACKUP_BUCKET/');
     expect(configSource).toContain('"SANDBOX_TRANSPORT": "rpc"');
     expect(workerSource).toContain('invalid request body');
   });
-  test('the bundled harness twin is byte-identical to the typed source', () => {
+  test('the harness source is bundled once and matches its typed source', () => {
     const twin = readFileSync(join(FIXTURE_DIR, 'container-harness.bundle.txt'), 'utf8');
     expect(twin).toBe(harnessSource);
     expect(configSource).toContain('"type": "Text"');
@@ -308,4 +315,3 @@ describe('report honesty and cleanup admission', () => {
   });
 });
 
-const EXPECTED_IMAGE = '0.12.8';

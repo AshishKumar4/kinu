@@ -108,16 +108,23 @@ test('FUSE ABI packers preserve the kernel-required layouts and alignment', () =
   expect(getattr.length).toBe(104);
   expect(getattr.readUInt32LE(16 + 60)).toBe(0o100755);
 
-  // linux/fuse.h `fuse_init_out`: the u16 fields at 16/18 and 28/30
-  // cannot be widened without shifting every negotiated limit.
+  // linux/fuse.h `fuse_init_out`: u32 head at 0..15, u16 pairs at
+  // 16/18 and 28/30, then the negotiated extension tail.
   const init = packInitOut(38, 0, 4096);
   expect(init.length).toBe(64);
+  expect(init.readUInt32LE(0)).toBe(7);
+  expect(init.readUInt32LE(4)).toBe(38);
+  expect(init.readUInt32LE(8)).toBe(4096);
+  expect(init.readUInt32LE(12)).not.toBe(0);
   expect(init.readUInt16LE(16)).toBe(0);
   expect(init.readUInt16LE(18)).toBe(0);
   expect(init.readUInt32LE(20)).toBe(1024 * 1024);
   expect(init.readUInt32LE(24)).toBe(1);
   expect(init.readUInt16LE(28)).toBe(256);
   expect(init.readUInt16LE(30)).toBe(0);
+  expect(init.readUInt32LE(32)).toBe(0);
+  expect(init.readUInt32LE(36)).toBe(0);
+  expect(init.readUInt16LE(40)).toBe(0);
 
   const header = packOutHeader(64, 99n, -5);
   expect(header.readUInt32LE(0)).toBe(80);
