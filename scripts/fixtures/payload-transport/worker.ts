@@ -74,7 +74,28 @@ interface JsonReply {
   readonly passes?: number;
 }
 
-const RequestBodySchema = v.record(v.string(), v.string());
+const RequestBodySchema = v.record(
+  v.string(),
+  v.union([v.string(), v.number(), v.boolean()]),
+);
+type RequestBody = v.InferOutput<typeof RequestBodySchema>;
+const SeedOperationSpecSchema = v.looseObject({
+  files: v.string(),
+  seed: v.number(),
+});
+
+const TransferOperationSpecSchema = v.looseObject({
+  mode: v.picklist(['loopback', 'direct', 'sigv4']),
+  op: v.picklist(['put', 'get']),
+  file: v.string(),
+  url: v.optional(v.string()),
+  endpoint: v.optional(v.string()),
+  key: v.optional(v.string()),
+  accessKeyId: v.optional(v.string()),
+  secretAccessKey: v.optional(v.string()),
+  sessionToken: v.optional(v.string()),
+});
+
 
 
 function json(body: JsonReply): Response {
@@ -116,8 +137,6 @@ function harnessResults(stdout: string): readonly HarnessResult[] {
  * The ONE owner Durable Object: container lifecycle + base64 arm + grants +
  * supervised operations, matching product Devbox ownership.
  */
-const OperationSpecSchema = v.record(v.string(), v.string());
-type OperationSpec = v.InferOutput<typeof OperationSpecSchema>;
 
 export class PayloadBenchSandbox extends Sandbox<Env> {
   private runningImageVersion: string | undefined;
@@ -248,41 +267,43 @@ export class PayloadBenchSandbox extends Sandbox<Env> {
    * autoCleanup:false keeps the record pollable until the driver drains it.
    * CREDENTIALS ride in ProcessOptions.env, never argv or command strings.
    */
-  async startOperation(operationId: string, kind: 'seed' | 'transfer', spec: OperationSpec): Promise<{ started: boolean; exitCode: number | null }> {
+  async startOperation(operationId: string, kind: 'seed' | 'transfer', spec: RequestBody): Promise<{ started: boolean; exitCode: number | null }> {
     // DETERMINISTIC REDRIVE: the process table lives in the container daemon,
     // not in this DO. A RUNNING process is read, never duplicated; an EXITED
     // process is final — its result stays pollable instead of being rerun.
     const existing = await this.getProcess(operationId).catch((error) => { throw new Error(`process lookup failed: ${describeThrown(error instanceof Error ? error : String(error))}`, { cause: error }); });
-    if (!operationNeedsStart(existing)) {
-      return { started: false, exitCode: existing!.exitCode ?? null };
+    if (existing !== null && !operationNeedsStart(existing)) {
+      return { started: false, exitCode: existing.exitCode ?? null };
     }
     let command: string;
     let env: Record<string, string | undefined> | undefined;
     if (kind === 'seed') {
-      const files = v.parse(v.array(v.object({ path: v.string(), sizeMiB: v.number() })), JSON.parse(spec['files']!));
+      const input = v.parse(SeedOperationSpecSchema, spec);
+      const files = v.parse(
+        v.array(v.object({ path: v.string(), sizeMiB: v.number() })),
+        JSON.parse(input.files),
+      );
       command = [
         'cd /tmp/payload-bench',
         ...files.map((file) =>
-          `bun harness.ts seed --path ${JSON.stringify(file.path)} --size-mib ${file.sizeMiB} --seed ${spec['seed']}`),
+          `bun harness.ts seed --path ${JSON.stringify(file.path)} --size-mib ${file.sizeMiB} --seed ${input.seed}`),
       ].join(' && ');
     } else {
-      const mode = spec['mode']!;
-      if (mode !== 'loopback' && mode !== 'direct' && mode !== 'sigv4') throw new Error(`unknown transfer mode ${mode}`);
+      const input = v.parse(TransferOperationSpecSchema, spec);
       const parts = [
         'cd /tmp/payload-bench && bun harness.ts transfer',
-        `--mode ${mode}`,
-        `--op ${spec['op']}`,
-        `--path ${JSON.stringify(spec['file']!)}`,
+        `--mode ${input.mode}`,
+        `--op ${input.op}`,
+        `--path ${JSON.stringify(input.file)}`,
       ];
-      if (spec['url'] !== undefined) parts.push(`--url ${JSON.stringify(spec['url'])}`);
-      if (spec['endpoint'] !== undefined) parts.push(`--endpoint ${JSON.stringify(spec['endpoint'])}`);
-      if (spec['key'] !== undefined) parts.push(`--key ${JSON.stringify(spec['key'])}`);
+      if (input.url !== undefined) parts.push(`--url ${JSON.stringify(input.url)}`);
+      if (input.endpoint !== undefined) parts.push(`--endpoint ${JSON.stringify(input.endpoint)}`);
+      if (input.key !== undefined) parts.push(`--key ${JSON.stringify(input.key)}`);
       command = parts.join(' ');
-      // Credential values travel ONLY here — never into the command string.
       env = {
-        BENCH_R2_ACCESS_KEY_ID: spec['accessKeyId'],
-        BENCH_R2_SECRET_ACCESS_KEY: spec['secretAccessKey'],
-        BENCH_R2_SESSION_TOKEN: spec['sessionToken'],
+        BENCH_R2_ACCESS_KEY_ID: input.accessKeyId,
+        BENCH_R2_SECRET_ACCESS_KEY: input.secretAccessKey,
+        BENCH_R2_SESSION_TOKEN: input.sessionToken,
       };
     }
     await this.startProcess(command, {
@@ -371,9 +392,15 @@ export default {
     if (!authorized(request, env.BENCH_TOKEN)) return jsonWithStatus({ error: 'unauthorized' }, 401);
     const url = new URL(request.url);
     const box = env.PayloadBenchSandbox.get(env.PayloadBenchSandbox.idFromName('owner'));
-    const body = request.method === 'POST' && request.body !== null
-      ? v.parse(RequestBodySchema, await request.json())
-      : v.parse(RequestBodySchema, {});
+    let body: RequestBody;
+    try {
+      body = request.method === 'POST' && request.body !== null
+        ? v.parse(RequestBodySchema, await request.json())
+        : v.parse(RequestBodySchema, {});
+    } catch (error) {
+      const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+      return jsonWithStatus({ error: `invalid request body: ${detail}` }, 400);
+    }
 
     if (url.pathname === '/shape') return json({ ok: true });
 

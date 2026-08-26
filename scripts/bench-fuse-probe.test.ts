@@ -15,9 +15,10 @@ import {
 import type { ProbeBox, RunIdentity, Stage1Report, Stage2Report } from './fixtures/fuse-probe/core';
 import type { Deployment, TeardownHooks } from './bench-fuse-probe';
 import {
-  awaitContainerAppAbsent, composeFuseProbeArtifact, deleteWorkerBothRoutes,
-  deriveFixtureConfig, destroyRuntime, fuseProbeArtifactPath, parseProbeOutput,
-  persistFuseProbeArtifact, planText, releaseResources, stripWholeLineComments, teardown,
+  awaitContainerAppAbsent, bundleFuseProbeSource, composeFuseProbeArtifact,
+  deleteWorkerBothRoutes, deriveFixtureConfig, destroyRuntime,
+  fuseProbeArtifactPath, parseProbeOutput, persistFuseProbeArtifact, planText,
+  releaseResources, stripWholeLineComments, teardown,
 } from './bench-fuse-probe';
 
 const attemptId = 'fuse-attempt';
@@ -164,6 +165,13 @@ test('parser takes only the marked final JSON evidence after progress output', (
   const report = stage1();
   const output = `daemon started\nmount measurements\n__FUSE_PROBE_RESULT__\n${JSON.stringify(report)}\n`;
   expect(parseProbeOutput(output, Stage1ReportSchema)).toEqual(report);
+});
+
+test('runtime bundle closes every repository-relative import', async () => {
+  const source = await bundleFuseProbeSource();
+  expect(source).toContain('__FUSE_PROBE_RESULT__');
+  expect(source).not.toContain('../../../packages/');
+  expect(source).not.toContain("from './core'");
 });
 
 test('artifact writes are immutable and plan names the openat2 and cleanup proof', async () => {

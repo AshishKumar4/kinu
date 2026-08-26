@@ -88,6 +88,8 @@ describe('one owning DO with container lifecycle', () => {
     expect(workerSource).toContain("{ prefix: '/' }");
     expect(workerSource).toContain("mountBucket('BACKUP_BUCKET'");
     expect(workerSource).toContain('await this.reconcileContainer()');
+    expect(workerSource).toContain('v.union([v.string(), v.number(), v.boolean()])');
+    expect(workerSource).toContain('invalid request body');
   });
   test('the bundled harness twin is byte-identical to the typed source', () => {
     const twin = readFileSync(join(FIXTURE_DIR, 'container-harness.bundle.txt'), 'utf8');
@@ -122,7 +124,7 @@ describe('credentials never reach a command line or the artifact', () => {
     }
   });
   test('SigV4 credentials ride in ProcessOptions.env under reserved names only', () => {
-    expect(workerSource).toContain('BENCH_R2_ACCESS_KEY_ID: spec[');
+    expect(workerSource).toContain('BENCH_R2_ACCESS_KEY_ID: input.accessKeyId');
     expect(harnessSource).toContain("process.env['BENCH_R2_ACCESS_KEY_ID']");
     expect(harnessSource).toContain('world-readable in the container; an\n * environment variable is not');
   });

@@ -231,10 +231,25 @@ async function setupExec(
 }
 
 
-async function upload(origin: string, token: string, localName: string): Promise<void> {
-  const content = await readFile(join(FIXTURE_DIR, localName));
+export async function bundleFuseProbeSource(): Promise<string> {
+  const built = await Bun.build({
+    entrypoints: [join(FIXTURE_DIR, 'probe.ts')],
+    target: 'bun',
+    format: 'esm',
+    minify: false,
+  });
+  if (!built.success) {
+    throw new Error(`FUSE probe bundle failed: ${built.logs.map((entry) => entry.message).join('; ')}`);
+  }
+  const output = built.outputs[0];
+  if (output === undefined) throw new Error('FUSE probe bundle produced no output');
+  return output.text();
+}
+
+async function uploadProbeBundle(origin: string, token: string): Promise<void> {
+  const content = Buffer.from(await bundleFuseProbeSource(), 'utf8');
   await request(origin, token, '/put', {
-    path: `/tmp/fuse-probe/${localName}`,
+    path: '/tmp/fuse-probe/probe.mjs',
     contentBase64: content.toString('base64'),
   }, OkSchema);
 }
@@ -516,17 +531,16 @@ export async function run(): Promise<FuseProbeArtifact> {
     if (identity.actualVersion !== SANDBOX_IMAGE_VERSION) {
       throw new Error(`container identity mismatch: reports SANDBOX_VERSION ${identity.actualVersion}, configured ${SANDBOX_IMAGE_VERSION}`);
     }
-    await upload(deployment.origin, token, 'core.ts');
-    await upload(deployment.origin, token, 'probe.ts');
+    await uploadProbeBundle(deployment.origin, token);
 
-    const first = await exec(deployment.origin, token, 'bun /tmp/fuse-probe/probe.ts stage1', 300_000);
+    const first = await exec(deployment.origin, token, 'bun /tmp/fuse-probe/probe.mjs stage1', 300_000);
     stage1 = parseExecReport('stage1', first, Stage1ReportSchema);
     // The shared RangeReadIntent contract is parsed inside Stage1ReportSchema.
     // Reading this field makes the dependency explicit at the evidence boundary.
     if (stage1.rangeReads.some((record) => !record.verified)) throw new Error('reference range read returned bytes that failed its shared-contract digest');
 
     await stopAndProveRestart(deployment.origin, token);
-    const second = await exec(deployment.origin, token, 'bun /tmp/fuse-probe/probe.ts stage2', 180_000);
+    const second = await exec(deployment.origin, token, 'bun /tmp/fuse-probe/probe.mjs stage2', 180_000);
     stage2 = parseExecReport('stage2', second, Stage2ReportSchema);
   } catch (error) {
     failure = describeThrown({ cause: error });

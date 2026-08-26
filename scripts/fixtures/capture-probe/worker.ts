@@ -55,23 +55,11 @@ export class CaptureProbeBox extends Sandbox<ProbeEnv> {
   declare readonly ctx: { readonly storage: DisposableProbeStorage };
 
   /**
-   * Called once per CONTAINER start, not per DO activation. This fixture has no
-   * durable Head to mount — it is Wave-0 capability evidence — but it still
-   * follows the ownership boundary: create/reconnect the container-local probe
-   * daemon state idempotently and prove bun is runnable before control RPCs.
-   * A DO reset while the container lives does not run this again and cannot
-   * duplicate the process or interfere with it.
+   * Container startup runs inside the Durable Object blockConcurrencyWhile
+   * window. Keep it bounded; runProbe verifies image and bun after startup.
    */
   override async onStart(): Promise<void> {
     await super.onStart();
-    const ready = await this.exec([
-      'set -eu',
-      `test "${'${SANDBOX_VERSION:-unknown}'}" = "${EXPECTED_SANDBOX_VERSION}"`,
-      `mkdir -p ${PROBE_DIR}`,
-      'command -v bun >/dev/null',
-      `printf ready > ${PROBE_DIR}/daemon.ready`,
-    ].join('\n'));
-    if (ready.exitCode !== 0) throw new Error(`probe daemon readiness failed: ${ready.stderr}`);
   }
 
   /**
